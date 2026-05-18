@@ -326,11 +326,11 @@ This continues the same webhook-validator example from the standard walkthrough 
 
 #### 1. Pick MVP at init
 
-```
+```bash
 /gsd-new-project
 ```
 
-```
+```text
 > What are you building?
   A webhook signature validator middleware for Express apps.
 
@@ -345,11 +345,11 @@ This continues the same webhook-validator example from the standard walkthrough 
 
 #### 2. Frame the phase as a user story
 
-```
+```bash
 /gsd-mvp-phase 1
 ```
 
-```
+```text
 > As a [user role]?
   Backend developer
 
@@ -372,7 +372,7 @@ The command then auto-delegates to `/gsd-plan-phase 1` — the planner sees `**M
 
 Because this is Phase 1 of a new project under MVP mode, the planner emits `SKELETON.md` alongside the usual `01-PLAN.md`:
 
-```
+```text
 .planning/phases/01-validate-signatures/
   SKELETON.md         # Walking skeleton: Express app + crypto + one route + one test + dev deploy
   01-01-PLAN.md       # First slice of the user story
@@ -393,13 +393,13 @@ gsd-sdk query task.is-behavior-adding ./.planning/phases/01-validate-signatures/
 
 #### 5. Verify with user-flow-first UAT
 
-```
+```bash
 /gsd-verify-work 1
 ```
 
 The UAT script under MVP mode asks user-action steps **before** technical checks:
 
-```
+```text
 1. Open a fresh terminal in your example app's directory.
 2. Send a request with a valid HMAC signature header.
 3. Observe a 200 response.
