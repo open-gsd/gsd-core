@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, writeFile, mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { isPhaseUatPassed, REASON_CODE } from './phase-uat-passed.js';
+import { isPhaseUatPassed, REASON_CODE, PhaseUatPassedError, ERROR_CODE } from './phase-uat-passed.js';
 
 const UAT_PASS_CONTENT = `---
 status: complete
@@ -304,6 +304,18 @@ result: pass
     } finally {
       await rm(localTmp, { recursive: true, force: true });
     }
+  });
+
+  it("throws PhaseUatPassedError with PROJECT_DIR_MISSING code when projectDir does not exist", async () => {
+    const missingPath = `/nonexistent/path/that/should/never/be/real-${Date.now()}`;
+    let thrown: unknown;
+    try {
+      await isPhaseUatPassed(missingPath, '5');
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(PhaseUatPassedError);
+    expect((thrown as PhaseUatPassedError).code).toBe(ERROR_CODE.PROJECT_DIR_MISSING);
   });
 
   it("emits NO_ITEMS_EXTRACTED reason when UAT file has no parseable items, orphans, or placeholders", async () => {

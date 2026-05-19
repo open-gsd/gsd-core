@@ -5,11 +5,12 @@
  * Non-pass items (result not literally 'pass') emit a typed NON_PASS_RESULT reason.
  */
 
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { resolvePhaseDir } from './phase-list-queries.js';
 import { extractFrontmatter } from './frontmatter.js';
 import { parseVerificationFrontmatterItems } from './uat.js';
+import { GSDError, ErrorClassification } from '../errors.js';
 
 export const REASON_CODE = Object.freeze({
   NON_PASS_RESULT: 'non_pass_result',
@@ -23,6 +24,17 @@ export const REASON_CODE = Object.freeze({
 } as const);
 
 export type ReasonCode = typeof REASON_CODE[keyof typeof REASON_CODE];
+
+export const ERROR_CODE = Object.freeze({
+  PROJECT_DIR_MISSING: 'project_dir_missing',
+} as const);
+export type ErrorCode = typeof ERROR_CODE[keyof typeof ERROR_CODE];
+
+export class PhaseUatPassedError extends GSDError {
+  constructor(message: string, public readonly code: ErrorCode) {
+    super(message, ErrorClassification.Validation);
+  }
+}
 
 export type UatReason = {
   code: ReasonCode;
@@ -115,6 +127,18 @@ export async function isPhaseUatPassed(
   reasonsHuman: string[];
   items: Record<string, unknown>[];
 }> {
+  try {
+    await stat(projectDir);
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new PhaseUatPassedError(
+        `projectDir does not exist: ${projectDir}`,
+        ERROR_CODE.PROJECT_DIR_MISSING,
+      );
+    }
+    throw err;
+  }
+
   const dir = await resolvePhaseDir(phase, projectDir, workstream);
   if (!dir) {
     return {
