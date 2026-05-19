@@ -22,6 +22,7 @@ import { writeProfile, generateClaudeProfile, generateDevPreferences, generateCl
 import { phaseMvpMode, phaseTddMode, taskIsBehaviorAdding, userStoryValidate, phaseWalkingSkeletonTrigger, taskTddGateCheck, phaseSkeletonStatus } from './mvp.js';
 import { worktreeCleanupWave, worktreeReapOrphans } from './worktree.js';
 import { promptBudget } from './prompt-budget.js';
+import { workflowParse } from './workflow.js';
 
 export const DOMAIN_STATIC_CATALOG: ReadonlyArray<readonly [string, QueryHandler]> = [
   ['agent-skills', agentSkills],
@@ -116,4 +117,7 @@ export const DOMAIN_STATIC_CATALOG: ReadonlyArray<readonly [string, QueryHandler
   ['task tdd-gate-check', taskTddGateCheck],
   ['phase.skeleton-status', phaseSkeletonStatus],
   ['phase skeleton-status', phaseSkeletonStatus],
+  // ── Workflow structural parse (#2826 audit — foundation for 11 retrofit commits) ──
+  ['workflow.parse', workflowParse],
+  ['workflow parse', workflowParse],
 ] as const;

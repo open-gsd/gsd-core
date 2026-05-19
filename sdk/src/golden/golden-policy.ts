@@ -67,6 +67,8 @@ const NO_CJS_SUBPROCESS_REASON: Record<string, string> = {
     'SDK-only: combines phase-mode, tdd-mode, behavior-adding, and git log inspection. No CJS port — git operations are environment-dependent and parity-tested via the in-process integration tests in sdk/src/query/mvp.test.ts.',
   'phase.skeleton-status':
     'SDK-only filesystem probe returning {exists, path, last_modified_ms, size_bytes} for the Walking Skeleton re-emission gate (E8 from #2826 audit). No CJS mirror — statSync over a live project tree is not representable as a gsd-tools.cjs parity test. Covered in sdk/src/query/mvp.test.ts.',
+  'workflow.parse':
+    'SDK-only structural markdown parser for workflow/agent/reference files. Foundation for retrofitting 11 source-grep tests in the #2826 audit. Covered in sdk/src/query/workflow.test.ts.',
 };
 
 const READ_HANDLER_ONLY_REASON = (cmd: string) =>
