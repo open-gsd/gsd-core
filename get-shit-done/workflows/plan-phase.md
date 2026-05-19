@@ -148,6 +148,18 @@ The verbs return `true|false`. Full result also exposes `source` (`cli_no_flag` 
 WALKING_SKELETON_JSON=$(gsd-sdk query phase.walking-skeleton-trigger "${PHASE}" $MVP_FLAG_ARG --json 2>/dev/null || echo '{"data":{"active":false}}')
 WALKING_SKELETON=$(echo "$WALKING_SKELETON_JSON" | jq -r '.data.active // false')
 WALKING_SKELETON_REASON=$(echo "$WALKING_SKELETON_JSON" | jq -r '.data.reason // empty')
+
+# SKELETON.md re-emission gate (E8): detect whether an existing SKELETON.md is present
+SKELETON_EXISTS="false"
+if [ "$WALKING_SKELETON" = "true" ]; then
+  SKELETON_EXISTS=$(gsd-sdk query phase.skeleton-status "${PHASE}" --pick exists 2>/dev/null || echo "false")
+fi
+
+# --regenerate-skeleton override: explicit user intent to overwrite existing SKELETON.md
+REGEN_SKELETON="false"
+if [[ "$ARGUMENTS" =~ (^|[[:space:]])--regenerate-skeleton([[:space:]]|$) ]]; then
+  REGEN_SKELETON="true"
+fi
 ```
 
 When `WALKING_SKELETON=true`:
@@ -922,6 +934,8 @@ Each TDD plan gets one feature with RED/GREEN/REFACTOR gate sequence.
 
 **MVP_MODE:** ${MVP_MODE} (when true, follow vertical-slice rules from `@~/.claude/get-shit-done/references/planner-mvp-mode.md`; when false, ignore MVP guidance entirely.)
 **WALKING_SKELETON:** ${WALKING_SKELETON} (when true, the first deliverable must be a Walking Skeleton — produce SKELETON.md alongside PLAN.md.)
+**SKELETON_EXISTS:** ${SKELETON_EXISTS} (when true, a SKELETON.md already exists from a prior planning/execution pass — see SKELETON.md preservation rules in `@~/.claude/get-shit-done/references/planner-mvp-mode.md`.)
+**REGEN_SKELETON:** ${REGEN_SKELETON} (when true, user explicitly passed --regenerate-skeleton; overwrite existing SKELETON.md is permitted.)
 
 ${MVP_MODE === 'true' ? `
 <mvp_mode_active>

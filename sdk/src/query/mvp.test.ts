@@ -22,6 +22,7 @@ import {
   USER_STORY_REGEX,
   phaseWalkingSkeletonTrigger,
   taskTddGateCheck,
+  phaseSkeletonStatus,
 } from './mvp.js';
 import { roadmapGetPhase } from './roadmap.js';
 
@@ -778,6 +779,61 @@ describe('phase.tdd-mode', () => {
       expect(result.data.active).toBe(true);
       expect(result.data.source).toBe('config');
       expect(result.data.config_tdd_mode).toBe(true);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+// ─── phase.skeleton-status ───────────────────────────────────────────────────
+
+describe('phase.skeleton-status', () => {
+  it('reports exists=true with per-phase SKELETON.md path', async () => {
+    const dir = tmpProject();
+    try {
+      const phaseDir = join(dir, '.planning', 'phase-01');
+      mkdirSync(phaseDir, { recursive: true });
+      const skeletonPath = join(phaseDir, 'SKELETON.md');
+      writeFileSync(skeletonPath, '# Walking Skeleton\n\nArchitectural baseline.\n');
+      const result = await phaseSkeletonStatus(['1'], dir);
+      expect(result.data.exists).toBe(true);
+      expect(result.data.path).toBe(skeletonPath);
+      expect(result.data.size_bytes).toBeGreaterThan(0);
+      expect(result.data.last_modified_ms).toBeGreaterThan(0);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('reports exists=false when no SKELETON.md present', async () => {
+    const dir = tmpProject();
+    try {
+      const result = await phaseSkeletonStatus(['1'], dir);
+      expect(result.data.exists).toBe(false);
+      expect(result.data.size_bytes).toBe(0);
+      expect(result.data.last_modified_ms).toBe(0);
+      expect(result.data.path).toMatch(/SKELETON\.md$/); // path is set even when file absent
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('falls back to root SKELETON.md when per-phase absent', async () => {
+    const dir = tmpProject();
+    try {
+      const rootSkeleton = join(dir, 'SKELETON.md');
+      writeFileSync(rootSkeleton, '# Legacy Skeleton\n');
+      const result = await phaseSkeletonStatus(['1'], dir);
+      expect(result.data.exists).toBe(true);
+      expect(result.data.path).toBe(rootSkeleton);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('per-phase SKELETON.md takes precedence over root', async () => {
+    const dir = tmpProject();
+    try {
+      writeFileSync(join(dir, 'SKELETON.md'), '# Root\n');
+      const phaseDir = join(dir, '.planning', 'phase-01');
+      mkdirSync(phaseDir, { recursive: true });
+      const phaseSkel = join(phaseDir, 'SKELETON.md');
+      writeFileSync(phaseSkel, '# Phase 1\n');
+      const result = await phaseSkeletonStatus(['1'], dir);
+      expect(result.data.exists).toBe(true);
+      expect(result.data.path).toBe(phaseSkel);  // per-phase wins
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });

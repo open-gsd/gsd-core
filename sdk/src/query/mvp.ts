@@ -604,6 +604,87 @@ export const phaseWalkingSkeletonTrigger: QueryHandler<WalkingSkeletonTriggerRes
   };
 };
 
+// ─── phase.skeleton-status ───────────────────────────────────────────────────
+
+interface SkeletonStatusResult {
+  /** True when a SKELETON.md file exists at the resolved path. */
+  exists: boolean;
+  /** Canonical SKELETON.md path (set even when the file is absent — points to where it would be). */
+  path: string;
+  /** Epoch milliseconds of last modification; 0 when the file is absent. */
+  last_modified_ms: number;
+  /** File size in bytes; 0 when the file is absent. */
+  size_bytes: number;
+}
+
+/**
+ * Resolve whether a SKELETON.md already exists for a given phase.
+ *
+ * Resolution order (first found wins):
+ *   1. `.planning/phase-<padded>/SKELETON.md` (per-phase, canonical)
+ *   2. `<projectDir>/SKELETON.md` (repo-root legacy)
+ *
+ * When absent, `path` is still set to the per-phase candidate so callers can
+ * write there without re-computing the convention.
+ *
+ * @example
+ *   gsd-sdk query phase.skeleton-status 1
+ *   gsd-sdk query phase.skeleton-status 1 --pick exists
+ */
+export const phaseSkeletonStatus: QueryHandler<SkeletonStatusResult> = async (
+  args,
+  projectDir,
+) => {
+  const phaseArg = args[0];
+  if (!phaseArg) {
+    throw new GSDError(
+      'Usage: phase.skeleton-status <phase-number>',
+      ErrorClassification.Validation,
+    );
+  }
+
+  const phaseNum = parseInt(phaseArg, 10);
+  if (isNaN(phaseNum)) {
+    throw new GSDError(
+      `phase.skeleton-status: invalid phase number "${phaseArg}"`,
+      ErrorClassification.Validation,
+    );
+  }
+
+  const root = projectDir ?? process.cwd();
+  const padded = String(phaseNum).padStart(2, '0');
+
+  const perPhasePath = join(root, '.planning', `phase-${padded}`, 'SKELETON.md');
+  const rootPath = join(root, 'SKELETON.md');
+
+  // Prefer per-phase; fall back to root
+  for (const candidate of [perPhasePath, rootPath]) {
+    try {
+      const st = statSync(candidate);
+      return {
+        data: {
+          exists: true,
+          path: candidate,
+          last_modified_ms: Math.round(st.mtimeMs),
+          size_bytes: st.size,
+        },
+      };
+    } catch {
+      // ENOENT or permission error — try next candidate
+    }
+  }
+
+  // Neither exists — return absent result pointing at per-phase candidate
+  return {
+    data: {
+      exists: false,
+      path: perPhasePath,
+      last_modified_ms: 0,
+      size_bytes: 0,
+    },
+  };
+};
+
 // ─── task.tdd-gate-check ─────────────────────────────────────────────────────
 
 interface RedCommitInfo {
