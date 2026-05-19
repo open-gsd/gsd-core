@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -171,6 +171,106 @@ describe('phase.mvp-mode', () => {
       const result = await phaseMvpMode(['1'], dir);
       expect(result.data.active).toBe(false);
       expect(result.data.roadmap_mode).toBe('spike');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('**Mode:** mvp is preserved when the **Goal:** field is mutated in-place', async () => {
+    const dir = tmpProject();
+    try {
+      writeRoadmap(dir, `## Phase 1: Alpha\n\n**Goal:** Original goal text\n\n**Mode:** mvp\n\nSome description\n`);
+      writeConfig(dir, { workflow: {} });
+
+      // Sanity: before mutation, mode resolves correctly
+      const beforeMode = await phaseMvpMode(['1'], dir);
+      expect(beforeMode.data).toEqual({
+        active: true,
+        source: 'roadmap',
+        roadmap_mode: 'mvp',
+        config_mvp_mode: false,
+        cli_flag_present: false,
+      });
+
+      // Mutate the Goal line — simulates what mvp-phase.md:161-173 does (in-place replace)
+      const roadmapPath = join(dir, '.planning', 'ROADMAP.md');
+      let content = readFileSync(roadmapPath, 'utf-8');
+      content = content.replace(/\*\*Goal:\*\*\s*[^\n]*/m, '**Goal:** Mutated goal text');
+      writeFileSync(roadmapPath, content);
+
+      // Sanity: file still has **Mode:** mvp and mutated Goal on disk
+      const afterDisk = readFileSync(roadmapPath, 'utf-8');
+      expect(afterDisk).toMatch(/\*\*Mode:\*\*\s*mvp/);
+      expect(afterDisk).toMatch(/\*\*Goal:\*\*\s*Mutated goal text/);
+
+      // THE contract assertion: mode still resolves after goal mutation
+      const afterMode = await phaseMvpMode(['1'], dir);
+      expect(afterMode.data).toEqual({
+        active: true,
+        source: 'roadmap',
+        roadmap_mode: 'mvp',
+        config_mvp_mode: false,
+        cli_flag_present: false,
+      });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('**Mode:** field is unaffected when an unrelated phase\'s Goal is mutated', async () => {
+    const dir = tmpProject();
+    try {
+      writeRoadmap(dir, [
+        '## Phases',
+        '',
+        '### Phase 1: Alpha',
+        '',
+        '**Goal:** Phase 1 original goal',
+        '',
+        '**Mode:** mvp',
+        '',
+        'Phase 1 description',
+        '',
+        '### Phase 2: Beta',
+        '',
+        '**Goal:** Phase 2 original goal',
+        '',
+        'Phase 2 description',
+        '',
+      ].join('\n'));
+      writeConfig(dir, { workflow: {} });
+
+      // Sanity: Phase 1 mode resolves before any mutation
+      const beforeMode = await phaseMvpMode(['1'], dir);
+      expect(beforeMode.data).toEqual({
+        active: true,
+        source: 'roadmap',
+        roadmap_mode: 'mvp',
+        config_mvp_mode: false,
+        cli_flag_present: false,
+      });
+
+      // Mutate Phase 2's Goal only — Phase 1's **Mode:** line must be untouched
+      const roadmapPath = join(dir, '.planning', 'ROADMAP.md');
+      let content = readFileSync(roadmapPath, 'utf-8');
+      // Target the second Goal occurrence (Phase 2's)
+      let count = 0;
+      content = content.replace(/\*\*Goal:\*\*\s*[^\n]*/gm, (match) => {
+        count++;
+        return count === 2 ? '**Goal:** Phase 2 mutated goal' : match;
+      });
+      writeFileSync(roadmapPath, content);
+
+      // Sanity: Phase 2's Goal was changed, Phase 1's was not
+      const afterDisk = readFileSync(roadmapPath, 'utf-8');
+      expect(afterDisk).toMatch(/\*\*Goal:\*\*\s*Phase 1 original goal/);
+      expect(afterDisk).toMatch(/\*\*Goal:\*\*\s*Phase 2 mutated goal/);
+
+      // THE contract assertion: Phase 1 mode is still active after Phase 2 mutation
+      const afterMode = await phaseMvpMode(['1'], dir);
+      expect(afterMode.data).toEqual({
+        active: true,
+        source: 'roadmap',
+        roadmap_mode: 'mvp',
+        config_mvp_mode: false,
+        cli_flag_present: false,
+      });
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
