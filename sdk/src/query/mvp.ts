@@ -36,7 +36,7 @@ import type { QueryHandler } from './utils.js';
 
 // ─── phase.mvp-mode ─────────────────────────────────────────────────────────
 
-export type MvpModeSource = 'cli_flag' | 'roadmap' | 'config' | 'none';
+export type MvpModeSource = 'cli_no_flag' | 'cli_flag' | 'roadmap' | 'config' | 'none';
 
 interface MvpModeResult {
   /** True when MVP mode applies to the phase. */
@@ -49,27 +49,35 @@ interface MvpModeResult {
   config_mvp_mode: boolean;
   /** True when the caller indicated the `--mvp` CLI flag was present. */
   cli_flag_present: boolean;
+  /** True when the caller indicated the `--no-mvp` CLI flag was present (deactivation override). */
+  cli_no_flag_present: boolean;
 }
 
 /**
  * Resolve MVP mode for a phase. Precedence (first hit wins):
- *   1. `--cli-flag` arg on this verb (caller asserts the user passed `--mvp`)
- *   2. ROADMAP.md `**Mode:** mvp` for the phase
- *   3. `workflow.mvp_mode` config (project-wide default)
- *   4. false
+ *   1. `--cli-no-flag` arg on this verb (caller asserts the user passed `--no-mvp`) — deactivates
+ *   2. `--cli-flag` arg on this verb (caller asserts the user passed `--mvp`) — activates
+ *   3. ROADMAP.md `**Mode:** mvp` for the phase
+ *   4. `workflow.mvp_mode` config (project-wide default)
+ *   5. false
+ *
+ * Conflict: if BOTH `--cli-no-flag` and `--cli-flag` are passed, `--cli-no-flag` wins
+ * (restrictive-wins, consistent with conventional CLI patterns like `--verbose` vs `--quiet`).
  *
  * @example
  *   gsd-sdk query phase.mvp-mode 1                    # roadmap + config check
  *   gsd-sdk query phase.mvp-mode 1 --cli-flag         # caller saw --mvp on CLI
+ *   gsd-sdk query phase.mvp-mode 1 --cli-no-flag      # caller saw --no-mvp on CLI (opt-out)
  */
 export const phaseMvpMode: QueryHandler<MvpModeResult> = async (args, projectDir, workstream) => {
   const phaseNum = args[0];
   if (!phaseNum) {
     throw new GSDError(
-      'Usage: phase.mvp-mode <phase-number> [--cli-flag]',
+      'Usage: phase.mvp-mode <phase-number> [--cli-flag] [--cli-no-flag]',
       ErrorClassification.Validation,
     );
   }
+  const cliNoFlagPresent = args.includes('--cli-no-flag');
   const cliFlagPresent = args.includes('--cli-flag');
 
   // Precedence #2: ROADMAP.md
@@ -86,7 +94,11 @@ export const phaseMvpMode: QueryHandler<MvpModeResult> = async (args, projectDir
 
   let active = false;
   let source: MvpModeSource = 'none';
-  if (cliFlagPresent) {
+  if (cliNoFlagPresent) {
+    // Highest priority: explicit deactivation opt-out. Wins over cli_flag, roadmap, and config.
+    active = false;
+    source = 'cli_no_flag';
+  } else if (cliFlagPresent) {
     active = true;
     source = 'cli_flag';
   } else if (roadmapMode === 'mvp') {
@@ -104,6 +116,7 @@ export const phaseMvpMode: QueryHandler<MvpModeResult> = async (args, projectDir
       roadmap_mode: roadmapMode,
       config_mvp_mode: configMvpMode,
       cli_flag_present: cliFlagPresent,
+      cli_no_flag_present: cliNoFlagPresent,
     },
   };
 };

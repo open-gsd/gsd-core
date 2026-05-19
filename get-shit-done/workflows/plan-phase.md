@@ -121,15 +121,17 @@ fi
 
 Set `TEXT_MODE=true` if `--text` is present in $ARGUMENTS OR `text_mode` from init JSON is `true`. When `TEXT_MODE` is active, replace every `AskUserQuestion` call with a plain-text numbered list and ask the user to type their choice number. This is required for Claude Code remote sessions (`/rc` mode) where TUI menus don't work through the Claude App.
 
-**MVP_MODE resolution.** Resolve `MVP_MODE` once via the centralized `phase.mvp-mode` query verb. Precedence (first hit wins): CLI flag → ROADMAP.md `**Mode:** mvp` → `workflow.mvp_mode` config → false. The verb is the single source of truth — do not re-implement the chain.
+**MVP_MODE resolution.** Resolve `MVP_MODE` once via the centralized `phase.mvp-mode` query verb. Precedence (first hit wins): CLI no-flag → CLI flag → ROADMAP.md `**Mode:** mvp` → `workflow.mvp_mode` config → false. The verb is the single source of truth — do not re-implement the chain.
 
 ```bash
 MVP_FLAG_ARG=""
-if [[ "$ARGUMENTS" =~ (^|[[:space:]])--mvp([[:space:]]|$) ]]; then MVP_FLAG_ARG="--cli-flag"; fi
+# IMPORTANT: check --no-mvp BEFORE --mvp; use word-boundary regex to avoid --mvp matching inside --no-mvp
+if [[ "$ARGUMENTS" =~ (^|[[:space:]])--no-mvp([[:space:]]|$) ]]; then MVP_FLAG_ARG="--cli-no-flag";
+elif [[ "$ARGUMENTS" =~ (^|[[:space:]])--mvp([[:space:]]|$) ]]; then MVP_FLAG_ARG="--cli-flag"; fi
 ```
 
 Defer the `phase.mvp-mode` query until `PHASE` is finalized (after explicit argument parsing/fallback phase detection + validation).
-The verb returns `true|false`. Full result also exposes `source` (`cli_flag` | `roadmap` | `config` | `none`) for diagnostics. The mode is **all-or-nothing per phase** (PRD decision Q1) — never selective per task.
+The verb returns `true|false`. Full result also exposes `source` (`cli_no_flag` | `cli_flag` | `roadmap` | `config` | `none`) for diagnostics. The mode is **all-or-nothing per phase** (PRD decision Q1) — never selective per task.
 
 **Walking Skeleton gate.** When `MVP_MODE=true` AND `phase_number == 1` AND there are zero prior phase summaries AND no existing source files (new project, not brownfield), the planner runs in **Walking Skeleton mode** (per PRD decision Q2 — new projects only, per ADR `docs/adr/2826-vertical-mvp-slice-planning-mode.md:34`). Detect with:
 

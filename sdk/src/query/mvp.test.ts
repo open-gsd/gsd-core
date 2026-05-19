@@ -190,6 +190,7 @@ describe('phase.mvp-mode', () => {
         roadmap_mode: 'mvp',
         config_mvp_mode: false,
         cli_flag_present: false,
+        cli_no_flag_present: false,
       });
 
       // Mutate the Goal line — simulates what mvp-phase.md:161-173 does (in-place replace)
@@ -211,6 +212,7 @@ describe('phase.mvp-mode', () => {
         roadmap_mode: 'mvp',
         config_mvp_mode: false,
         cli_flag_present: false,
+        cli_no_flag_present: false,
       });
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
@@ -246,6 +248,7 @@ describe('phase.mvp-mode', () => {
         roadmap_mode: 'mvp',
         config_mvp_mode: false,
         cli_flag_present: false,
+        cli_no_flag_present: false,
       });
 
       // Mutate Phase 2's Goal only — Phase 1's **Mode:** line must be untouched
@@ -272,7 +275,58 @@ describe('phase.mvp-mode', () => {
         roadmap_mode: 'mvp',
         config_mvp_mode: false,
         cli_flag_present: false,
+        cli_no_flag_present: false,
       });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('--cli-no-flag deactivates mvp even when roadmap mode is mvp', async () => {
+    const dir = tmpProject();
+    try {
+      writeFileSync(join(dir, '.planning', 'ROADMAP.md'),
+        `## Phase 1: Test\n\n**Goal:** ...\n\n**Mode:** mvp\n`);
+      const result = await phaseMvpMode(['1', '--cli-no-flag'], dir);
+      expect(result.data.active).toBe(false);
+      expect(result.data.source).toBe('cli_no_flag');
+      expect(result.data.roadmap_mode).toBe('mvp');  // roadmap STATE preserved in signals
+      expect(result.data.cli_no_flag_present).toBe(true);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('--cli-no-flag with no roadmap mvp returns inactive (no-op)', async () => {
+    const dir = tmpProject();
+    try {
+      writeFileSync(join(dir, '.planning', 'ROADMAP.md'),
+        `## Phase 1: Test\n\n**Goal:** ...\n`);  // No **Mode:** line at all
+      const result = await phaseMvpMode(['1', '--cli-no-flag'], dir);
+      expect(result.data.active).toBe(false);
+      expect(result.data.source).toBe('cli_no_flag');  // still cli_no_flag — explicit deactivation, even if it was already false
+      expect(result.data.cli_no_flag_present).toBe(true);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('--cli-no-flag wins over --cli-flag (restrictive-wins)', async () => {
+    const dir = tmpProject();
+    try {
+      writeFileSync(join(dir, '.planning', 'ROADMAP.md'),
+        `## Phase 1: Test\n\n**Goal:** ...\n`);
+      const result = await phaseMvpMode(['1', '--cli-flag', '--cli-no-flag'], dir);
+      expect(result.data.active).toBe(false);
+      expect(result.data.source).toBe('cli_no_flag');
+      expect(result.data.cli_flag_present).toBe(true);
+      expect(result.data.cli_no_flag_present).toBe(true);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('without --cli-no-flag, roadmap mvp still activates normally', async () => {
+    const dir = tmpProject();
+    try {
+      writeFileSync(join(dir, '.planning', 'ROADMAP.md'),
+        `## Phase 1: Test\n\n**Goal:** ...\n\n**Mode:** mvp\n`);
+      const result = await phaseMvpMode(['1'], dir);
+      expect(result.data.active).toBe(true);
+      expect(result.data.source).toBe('roadmap');
+      expect(result.data.cli_no_flag_present).toBe(false);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
