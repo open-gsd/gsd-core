@@ -153,6 +153,76 @@ const INJECTION_PATTERNS = [
 ];
 
 /**
+ * Patterns that flag hostile markdown link targets.
+ *
+ * These address browser-side and agent-side risks when GSD plan files containing
+ * markdown links are rendered or consumed by agents:
+ *
+ *  MD-LINK-JS-SCHEME — javascript: URI in link target.
+ *    Source: OWASP Cross-Site Scripting Prevention Cheat Sheet
+ *    https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html
+ *
+ *  MD-LINK-DATA-SCHEME — data: URI that is NOT in the explicit safe-list.
+ *    Safe-list: image/(png|jpeg|gif|webp|bmp|ico|avif|heic) and font/(woff2?|otf|ttf).
+ *    data:image/svg+xml is UNSAFE — SVG can host <script> tags.
+ *    Source: OWASP File Upload Cheat Sheet — SVG Files
+ *    https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html#svg-files
+ *
+ *  MD-LINK-USERINFO — https?://user:pass@host (RFC 3986 userinfo in HTTP(S) URL).
+ *    Source: RFC 3986 §3.2.1 (userinfo syntax)
+ *    https://www.rfc-editor.org/rfc/rfc3986#section-3.2.1
+ *    RFC 9110 §4.2.4 (HTTP deprecates userinfo in request URIs)
+ *    https://www.rfc-editor.org/rfc/rfc9110#section-4.2.4
+ *    Must NOT fire on: mailto:user@host (no : before @), https://host:443/path (port, not userinfo).
+ *
+ *  MD-LINK-TOKEN-IN-QUERY — sensitive key name in query string regardless of value.
+ *    Source: RFC 9700 OAuth 2.0 Security BCP §4.3.1
+ *    https://www.rfc-editor.org/rfc/rfc9700#section-4.3.1
+ *    "tokens MUST NOT be passed in URI query parameters"
+ *
+ * Each entry: { pattern: RegExp, ruleId: string }
+ */
+
+// Explicit safe-list for data: MIME types that are benign in link targets.
+// Note: image/svg+xml is intentionally NOT in this list (SVG can host <script>).
+const DATA_URI_SAFE_MIME_RE = /^data:(image\/(png|jpe?g|gif|webp|bmp|ico|avif|heic)|font\/(woff2?|otf|ttf))(;[^,]*)?,/i;
+
+const MARKDOWN_LINK_PATTERNS = [
+  {
+    // MD-LINK-JS-SCHEME: javascript: URI in markdown link target
+    // Matches [text](javascript:...) — case-insensitive
+    pattern: /\]\(\s*javascript:/i,
+    ruleId: 'MD-LINK-JS-SCHEME',
+  },
+  {
+    // MD-LINK-DATA-SCHEME: data: URI not in safe-list
+    // Checked via custom function (safe-list requires lookahead beyond a simple regex)
+    pattern: /\]\(\s*data:/i,
+    ruleId: 'MD-LINK-DATA-SCHEME',
+    safePredicate: (line) => {
+      // Extract the data: URI from the markdown link target
+      const m = line.match(/\]\(\s*(data:[^)]*)/i);
+      if (!m) return false; // pattern matched but no URI found — flag it
+      return DATA_URI_SAFE_MIME_RE.test(m[1]);
+    },
+  },
+  {
+    // MD-LINK-USERINFO: https?://user:pass@host in markdown link target
+    // Flags ://anything:anything@  — must have a colon+non-slash before the @
+    // Does NOT match mailto:user@host (mailto has no :// before the user part)
+    // Does NOT match https://host:443/path (port has no @ after the colon)
+    pattern: /\]\(\s*https?:\/\/[^/\s]+:[^/@\s]+@/i,
+    ruleId: 'MD-LINK-USERINFO',
+  },
+  {
+    // MD-LINK-TOKEN-IN-QUERY: sensitive parameter key in query string
+    // Fires on key NAME regardless of value, per RFC 9700 §4.3.1
+    pattern: /[?&](token|access_token|id_token|refresh_token|api_key|apikey|secret|password|client_secret|code)=/i,
+    ruleId: 'MD-LINK-TOKEN-IN-QUERY',
+  },
+];
+
+/**
  * Layer 2: Encoding-obfuscation patterns with custom finding messages.
  * Each entry: { pattern: RegExp, message: string }
  */
@@ -178,14 +248,16 @@ const OBFUSCATION_PATTERN_ENTRIES = [
  * @param {string} text - The text to scan
  * @param {object} [opts] - Options
  * @param {boolean} [opts.strict=false] - Enable stricter matching (more false positives)
- * @returns {{ clean: boolean, findings: string[] }}
+ * @param {string} [opts.file] - Optional file path for structured finding context
+ * @returns {{ clean: boolean, findings: string[], structuredFindings: Array<{ruleId: string, file: string|undefined, line: number, match: string}> }}
  */
 function scanForInjection(text, opts = {}) {
   if (!text || typeof text !== 'string') {
-    return { clean: true, findings: [] };
+    return { clean: true, findings: [], structuredFindings: [] };
   }
 
   const findings = [];
+  const structuredFindings = [];
 
   for (const pattern of INJECTION_PATTERNS) {
     if (pattern.test(text)) {
@@ -200,6 +272,29 @@ function scanForInjection(text, opts = {}) {
     }
   }
 
+  // Layer 5: Markdown link patterns (issue #113)
+  // Scans line-by-line to provide file+line context in structured findings.
+  const lines = text.split('\n');
+  for (const entry of MARKDOWN_LINK_PATTERNS) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const m = line.match(entry.pattern);
+      if (!m) continue;
+
+      // If the entry has a safePredicate, skip flagging when the predicate returns true
+      if (entry.safePredicate && entry.safePredicate(line)) continue;
+
+      const matchText = m[0];
+      findings.push(`Matched markdown link pattern [${entry.ruleId}]: ${matchText}`);
+      structuredFindings.push({
+        ruleId: entry.ruleId,
+        file: opts.file,
+        line: i + 1, // 1-based line number
+        match: matchText,
+      });
+    }
+  }
+
   if (opts.strict) {
     // Check for suspicious Unicode that could hide instructions
     // (zero-width chars, RTL override, homoglyph attacks)
@@ -207,21 +302,21 @@ function scanForInjection(text, opts = {}) {
       findings.push('Contains suspicious zero-width or invisible Unicode characters');
     }
 
-    // Layer 1: Unicode tag block U+E0000–U+E007F (2025 supply-chain attack vector)
+    // Layer 1: Unicode tag block U+E0000\u2013E007F (2025 supply-chain attack vector)
     // These characters are invisible and can embed hidden instructions
     if (/[\uDB40\uDC00-\uDB40\uDC7F]/u.test(text) || /[\u{E0000}-\u{E007F}]/u.test(text)) {
-      findings.push('Contains Unicode tag block characters (U+E0000–E007F) — invisible instruction injection vector');
+      findings.push('Contains Unicode tag block characters (U+E0000\u2013E007F) \u2014 invisible instruction injection vector');
     }
 
     // Check for extremely long strings that could be prompt stuffing.
-    // Normalize CRLF → LF before measuring so Windows checkouts don't inflate the count.
+    // Normalize CRLF \u2192 LF before measuring so Windows checkouts don't inflate the count.
     const normalizedLength = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').length;
     if (normalizedLength > 50000) {
       findings.push(`Suspicious text length: ${normalizedLength} chars (potential prompt stuffing)`);
     }
   }
 
-  return { clean: findings.length === 0, findings };
+  return { clean: findings.length === 0, findings, structuredFindings };
 }
 
 /**
@@ -482,6 +577,7 @@ module.exports = {
 
   // Prompt injection
   INJECTION_PATTERNS,
+  MARKDOWN_LINK_PATTERNS,
   scanForInjection,
   sanitizeForPrompt,
   sanitizeForDisplay,

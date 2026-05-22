@@ -27,6 +27,45 @@ const SUMMARISATION_PATTERNS = [
   /(?:retain|keep)\s+(?:this|these)\s+(?:in|through|after)\s+(?:summar|compress|compact)/i,
 ];
 
+// Markdown link patterns — mirrors scripts/security.cjs MARKDOWN_LINK_PATTERNS, inlined for hook independence.
+// Issue #113: detect javascript:, data: (non-safe-list), userinfo credentials, and token-in-query.
+//
+// Sources:
+//   MD-LINK-JS-SCHEME: OWASP XSS Prevention
+//     https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html
+//   MD-LINK-DATA-SCHEME: OWASP File Upload (SVG unsafe)
+//     https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html#svg-files
+//   MD-LINK-USERINFO: RFC 3986 §3.2.1, RFC 9110 §4.2.4
+//     https://www.rfc-editor.org/rfc/rfc3986#section-3.2.1
+//     https://www.rfc-editor.org/rfc/rfc9110#section-4.2.4
+//   MD-LINK-TOKEN-IN-QUERY: RFC 9700 §4.3.1
+//     https://www.rfc-editor.org/rfc/rfc9700#section-4.3.1
+const DATA_URI_SAFE_MIME_RE = /^data:(image\/(png|jpe?g|gif|webp|bmp|ico|avif|heic)|font\/(woff2?|otf|ttf))(;[^,]*)?,/i;
+
+const MARKDOWN_LINK_PATTERNS = [
+  {
+    pattern: /\]\(\s*javascript:/i,
+    ruleId: 'MD-LINK-JS-SCHEME',
+  },
+  {
+    pattern: /\]\(\s*data:/i,
+    ruleId: 'MD-LINK-DATA-SCHEME',
+    safePredicate: (line) => {
+      const m = line.match(/\]\(\s*(data:[^)]*)/i);
+      if (!m) return false;
+      return DATA_URI_SAFE_MIME_RE.test(m[1]);
+    },
+  },
+  {
+    pattern: /\]\(\s*https?:\/\/[^/\s]+:[^/@\s]+@/i,
+    ruleId: 'MD-LINK-USERINFO',
+  },
+  {
+    pattern: /[?&](token|access_token|id_token|refresh_token|api_key|apikey|secret|password|client_secret|code)=/i,
+    ruleId: 'MD-LINK-TOKEN-IN-QUERY',
+  },
+];
+
 // Standard injection patterns — mirrors gsd-prompt-guard.js, inlined for hook independence.
 const INJECTION_PATTERNS = [
   /ignore\s+(all\s+)?previous\s+instructions/i,
@@ -106,6 +145,18 @@ process.stdin.on('end', () => {
       if (pattern.test(content)) {
         // Trim pattern source for readable output
         findings.push(pattern.source.replace(/\\s\+/g, '-').replace(/[()\\]/g, '').substring(0, 50));
+      }
+    }
+
+    // Markdown link patterns (issue #113)
+    const lines = content.split('\n');
+    for (const entry of MARKDOWN_LINK_PATTERNS) {
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const m = line.match(entry.pattern);
+        if (!m) continue;
+        if (entry.safePredicate && entry.safePredicate(line)) continue;
+        findings.push(`${entry.ruleId}:${m[0].substring(0, 40)}`);
       }
     }
 

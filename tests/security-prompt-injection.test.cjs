@@ -846,8 +846,10 @@ describe('MARKDOWN_LINK_PATTERNS parity: hook inline list is superset of canonic
 
     const hookSource = fs.readFileSync(READ_SCANNER_HOOK, 'utf-8');
 
-    for (const pattern of MARKDOWN_LINK_PATTERNS) {
-      const src = pattern.source;
+    for (const entry of MARKDOWN_LINK_PATTERNS) {
+      // Each entry is { pattern: RegExp, ruleId: string, safePredicate?: Function }
+      assert.ok(entry.pattern instanceof RegExp, `entry must have a RegExp .pattern`);
+      const src = entry.pattern.source;
       assert.ok(
         hookSource.includes(src),
         `Hook gsd-read-injection-scanner.js must contain pattern source: ${src}`,
