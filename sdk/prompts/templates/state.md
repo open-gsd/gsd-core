@@ -7,6 +7,17 @@ Template for `.planning/STATE.md` — the project's living memory.
 ## File Template
 
 ```markdown
+---
+gsd_state_version: '1.0'
+status: planning
+progress:
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
+---
+
 # Project State
 
 ## Project Reference
