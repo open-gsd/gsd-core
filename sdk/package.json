@@ -1,6 +1,6 @@
 {
   "name": "@opengsd/gsd-sdk",
-  "version": "1.50.0-canary.0",
+  "version": "2.0.0",
   "description": "GSD SDK — programmatic interface for running GSD plans via the Agent SDK",
   "type": "module",
   "main": "dist/index.js",

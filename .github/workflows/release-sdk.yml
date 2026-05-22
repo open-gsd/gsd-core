@@ -1,22 +1,16 @@
 # Release SDK Bundle
 #
-# Stopgap workflow_dispatch publish path: builds get-shit-done-redux with the
+# workflow_dispatch publish path: builds get-shit-done-redux with the
 # compiled SDK and the SDK .tgz bundled inside the CC tarball, then
 # publishes the CC package to ONE chosen dist-tag (dev | next | latest)
 # per run.
 #
-# Why this exists: @opengsd/gsd-sdk publishes from canary.yml and release.yml
-# fail because the @opengsd npm token is currently unavailable. CC users
-# do not consume @opengsd/gsd-sdk directly — bin/gsd-sdk.js resolves
+# CC users do not consume @opengsd/gsd-sdk directly — bin/gsd-sdk.js resolves
 # sdk/dist/cli.js from inside the installed CC package, so the bundled
 # copy is sufficient for full functionality. This workflow ships CC alone
 # (no separate @opengsd/gsd-sdk publish attempt) and additionally bakes a
 # bundled gsd-sdk-<version>.tgz at sdk-bundle/gsd-sdk.tgz inside the CC
 # tarball as a recoverable npm-installable artifact.
-#
-# Existing canary.yml and release.yml are intentionally untouched. They
-# remain the canonical two-package publish path; restore them to primary
-# use once @opengsd/gsd-sdk ownership is recovered.
 #
 # Tracking issues: #2925 (initial workflow), #2929 (CI-gate parity with release.yml)
 
