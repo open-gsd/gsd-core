@@ -101,12 +101,13 @@ fi
 
 # ---- Run npm ls -------------------------------------------------------------
 
-# Capture stdout (JSON) and exit code separately.
+# Capture stdout (JSON) regardless of npm exit code.
 # npm ls exits non-zero on invalid/missing but exits 0 on extraneous --
 # we always parse the JSON to catch the extraneous case ourselves.
+# The npm exit code is deliberately ignored here: our Node.js parser
+# re-derives the verdict from the JSON "problems" / field flags.
 NPM_JSON=""
-NPM_EXIT=0
-NPM_JSON=$(npm ls --all --json 2>/dev/null) || NPM_EXIT=$?
+NPM_JSON=$(npm ls --all --json 2>/dev/null) || true
 
 if [ -z "$NPM_JSON" ]; then
   echo "ERROR: npm ls produced no output (is node_modules present?)" >&2

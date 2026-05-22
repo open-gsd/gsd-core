@@ -61,6 +61,7 @@
     "fallow": "^2.70.0"
   },
   "scripts": {
+    "check:integrity": "./scripts/check-npm-integrity.sh",
     "build:hooks": "node scripts/build-hooks.js",
     "build:sdk": "cd sdk && npm ci && npm run build",
     "check:alias-drift": "cd sdk && npm run check:alias-drift",

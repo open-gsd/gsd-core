@@ -180,6 +180,8 @@ jobs:
       - name: Install and test
         run: |
           npm ci
+          chmod +x scripts/check-npm-integrity.sh
+          scripts/check-npm-integrity.sh
           npm run test:coverage
 
       - name: Commit pre-release version bump
@@ -331,6 +333,8 @@ jobs:
       - name: Install and test
         run: |
           npm ci
+          chmod +x scripts/check-npm-integrity.sh
+          scripts/check-npm-integrity.sh
           npm run test:coverage
 
       - name: Build SDK dist for tarball
