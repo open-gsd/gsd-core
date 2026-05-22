@@ -33,7 +33,7 @@ jobs:
   lint-tests:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "doc-only PR: skipping lint-tests"
+      - run: "echo 'doc-only PR: skipping lint-tests'"
         shell: bash
 
   test:
@@ -44,5 +44,5 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         node-version: [22, 24]
     steps:
-      - run: echo "doc-only PR: skipping test on node ${{ matrix.node-version }} / ${{ matrix.os }}"
+      - run: "echo 'doc-only PR: skipping test on node ${{ matrix.node-version }} / ${{ matrix.os }}'"
         shell: bash
