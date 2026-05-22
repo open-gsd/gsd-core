@@ -1,6 +1,6 @@
 {
   "name": "@opengsd/get-shit-done-redux",
-  "version": "2.0.0",
+  "version": "1.0.0",
   "description": "A meta-prompting, context engineering and spec-driven development system for Claude Code, OpenCode, Gemini and Codex by TÂCHES.",
   "bin": {
     "get-shit-done-redux": "bin/install.js",
