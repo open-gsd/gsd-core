@@ -32,7 +32,6 @@ set -euo pipefail
 # exits 0 and strips the high bytes cleanly.
 export LC_ALL=C
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MIN_BLOB_LENGTH=40
 # Lines longer than this byte count are skipped with a partial-scan warning.
 # This prevents `grep -oE` from spending unbounded time on e.g. minified JS or
@@ -47,6 +46,7 @@ MAX_LINE_BYTES=1048576
 # Both are treated as timeout exits by is_timeout_exit() below.
 # Usage: run_with_timeout <seconds> <command> [args...]
 _TIMEOUT_CMD=""
+# shellcheck disable=SC2329  # intentionally defined for use by callers; not called in main loop
 _init_timeout_cmd() {
   if [[ -n "$_TIMEOUT_CMD" ]]; then return; fi
   if command -v timeout >/dev/null 2>&1; then
@@ -58,6 +58,7 @@ _init_timeout_cmd() {
   fi
 }
 
+# shellcheck disable=SC2329  # intentionally defined for use by callers; not called in main loop
 run_with_timeout() {
   local secs="$1"; shift
   _init_timeout_cmd
@@ -78,6 +79,7 @@ run_with_timeout() {
 }
 
 # is_timeout_exit: returns 0 (true) if rc indicates a timeout kill.
+# shellcheck disable=SC2329  # intentionally defined for use by callers; not called in main loop
 is_timeout_exit() { [[ "$1" -eq 124 || "$1" -eq 142 ]]; }
 
 
@@ -253,7 +255,6 @@ extract_and_check_blobs() {
       fi
 
       # Check if decoded content is mostly printable text (not random binary)
-      local printable_ratio
       local total_chars=${#decoded}
       if [[ $total_chars -eq 0 ]]; then
         continue
