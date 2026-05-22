@@ -48,4 +48,4 @@ Future direction (deferred): the hub should consult `manifest` to detect per-sub
 ## References
 
 - Extends ADR-0001 (Dispatch Policy Module) — the hub implements the no-throw + structured-result contract ADR-0001 established for the SDK query layer, applying it to the CJS adapter layer.
-- Issue: [#3788](https://github.com/GSD-redux/get-shit-done-redux/issues/3788)
+- Issue: [#3788](https://github.com/open-gsd/get-shit-done-redux/issues/3788)

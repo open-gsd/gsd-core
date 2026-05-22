@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="${REPO:-GSD-redux/get-shit-done-redux}"
+REPO="${REPO:-open-gsd/get-shit-done-redux}"
 ENFORCEMENT="${ENFORCEMENT:-evaluate}"
 
 case "$ENFORCEMENT" in

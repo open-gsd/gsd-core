@@ -2,7 +2,7 @@
 
 - **Status:** Reference
 - **Date:** 2026-05-14
-- **Tracking issue:** [#3524](https://github.com/GSD-redux/get-shit-done-redux/issues/3524)
+- **Tracking issue:** [#3524](https://github.com/open-gsd/get-shit-done-redux/issues/3524)
 - **Related ADR:** [`docs/adr/3524-cjs-sdk-hard-seam.md`](../adr/3524-cjs-sdk-hard-seam.md)
 
 ## Why this PRD exists
@@ -11,7 +11,7 @@ The ADR defines the target architecture — one source of truth per Shared Modul
 
 ## Problem statement
 
-The CJS↔SDK boundary in `GSD-redux/get-shit-done-redux` is structurally permeable. Multiple Shared Modules — STATE.md Document Module, Workstream Inventory Module, and several others — exist today as **hand-synced pairs** of `.cjs` and `.ts` files with character-identical implementations. Constants (`CONFIG_DEFAULTS`, `VALID_CONFIG_KEYS`) are likewise defined twice. The boundary is policed only by:
+The CJS↔SDK boundary in `open-gsd/get-shit-done-redux` is structurally permeable. Multiple Shared Modules — STATE.md Document Module, Workstream Inventory Module, and several others — exist today as **hand-synced pairs** of `.cjs` and `.ts` files with character-identical implementations. Constants (`CONFIG_DEFAULTS`, `VALID_CONFIG_KEYS`) are likewise defined twice. The boundary is policed only by:
 
 - A naming-parity test (`tests/config-schema-sdk-parity.test.cjs`)
 - Output-parity golden tests for read-only handlers (`sdk/src/golden/read-only-parity.integration.test.ts`)

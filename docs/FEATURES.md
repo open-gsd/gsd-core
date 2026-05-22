@@ -2644,7 +2644,7 @@ Users who run a memory / knowledge-base MCP server (for example, ExoCortex-style
 - REQ-CONSOLIDATE-03: Deleted micro-skill slash forms (the bare `gsd-add-todo`, `gsd-add-backlog`, `gsd-plant-seed`, `gsd-check-todos`, `gsd-add-phase`, `gsd-insert-phase`, `gsd-remove-phase`, `gsd-edit-phase`, `gsd-new-workspace`, `gsd-list-workspaces`, `gsd-remove-workspace`, `gsd-settings-advanced`, `gsd-settings-integrations`, `gsd-set-profile`, `gsd-sketch-wrap-up`, `gsd-spike-wrap-up`, `gsd-reapply-patches`, `gsd-code-review-fix`, …) MUST resolve to "Unknown command" — no shadow stubs.
 - REQ-CONSOLIDATE-04: `autonomous.md` invokes `/gsd-code-review --fix` (was previously calling the deleted `gsd-code-review-fix`).
 
-**Reference issue:** [#2790](https://github.com/GSD-redux/get-shit-done-redux/issues/2790)
+**Reference issue:** [#2790](https://github.com/open-gsd/get-shit-done-redux/issues/2790)
 
 ---
 
@@ -2672,7 +2672,7 @@ Users who run a memory / knowledge-base MCP server (for example, ExoCortex-style
 - REQ-NS-02: Existing sub-skills are unchanged and still invocable directly — namespace skills are additive, not a replacement for direct slash forms.
 - REQ-NS-03: The body of each namespace router contains a routing table that maps user intent to the correct concrete sub-skill on the post-#2790 consolidated surface.
 
-**Reference issue:** [#2792](https://github.com/GSD-redux/get-shit-done-redux/issues/2792)
+**Reference issue:** [#2792](https://github.com/open-gsd/get-shit-done-redux/issues/2792)
 
 ---
 
@@ -2687,7 +2687,7 @@ Users who run a memory / knowledge-base MCP server (for example, ExoCortex-style
 - REQ-CTX-GUARD-02: The same triage is exposed as `gsd-sdk query validate.context --tokens-used <int> --context-window <int>` — a structured envelope for status-line and hook callers (#125). Both flags are required; the handler returns the same `{ percent, state }` envelope as the pure classifier in REQ-CTX-GUARD-03.
 - REQ-CTX-GUARD-03: The classifier (`bin/lib/context-utilization.cjs`) is pure: input `(tokensUsed, contextWindow)`, output `{ percent, state }`. Easy to unit-test, easy to reuse from any caller.
 
-**Reference issue:** [#2792](https://github.com/GSD-redux/get-shit-done-redux/issues/2792)
+**Reference issue:** [#2792](https://github.com/open-gsd/get-shit-done-redux/issues/2792)
 
 ---
 
@@ -2704,7 +2704,7 @@ Users who run a memory / knowledge-base MCP server (for example, ExoCortex-style
 - REQ-LIFECYCLE-02: `formatGsdState()` checks the lifecycle fields in priority order and emits the first matching scene (Phase active → Idle next-recommended → Milestone complete → Default fallback).
 - REQ-LIFECYCLE-03: All four fields default to undefined; existing STATE.md files render byte-for-byte identically.
 
-**Reference issue:** [#2833](https://github.com/GSD-redux/get-shit-done-redux/issues/2833) — see [`docs/STATE-MD-LIFECYCLE.md`](STATE-MD-LIFECYCLE.md) for the full field reference and rendering rules.
+**Reference issue:** [#2833](https://github.com/open-gsd/get-shit-done-redux/issues/2833) — see [`docs/STATE-MD-LIFECYCLE.md`](STATE-MD-LIFECYCLE.md) for the full field reference and rendering rules.
 
 ---
 
@@ -2744,7 +2744,7 @@ Users who run a memory / knowledge-base MCP server (for example, ExoCortex-style
 - REQ-PHASE-MODELS-02: Configs without a `models` block behave byte-for-byte identically to pre-v1.41 behavior.
 - REQ-PHASE-MODELS-03: `discuss` and `completion` are accepted by the schema for forward compatibility; setting them today is a no-op until a subagent maps to each.
 
-**Reference issue:** [#3023](https://github.com/GSD-redux/get-shit-done-redux/pull/3030)
+**Reference issue:** [#3023](https://github.com/open-gsd/get-shit-done-redux/pull/3030)
 
 ---
 
@@ -2765,7 +2765,7 @@ Users who run a memory / knowledge-base MCP server (for example, ExoCortex-style
 - REQ-DYNROUTE-02: New resolver `resolveModelForTier(cwd, agent, attempt)` in `core.cjs` is the single call-site for orchestrator integration.
 - REQ-DYNROUTE-03: `max_escalations` caps the escalation chain to prevent runaway cost.
 
-**Reference issue:** [#3024](https://github.com/GSD-redux/get-shit-done-redux/pull/3031)
+**Reference issue:** [#3024](https://github.com/open-gsd/get-shit-done-redux/pull/3031)
 
 ---
 
@@ -2785,7 +2785,7 @@ Users who run a memory / knowledge-base MCP server (for example, ExoCortex-style
 - REQ-BANNER-02: No additional network requests — reuses the existing background update-check cache.
 - REQ-BANNER-03: Uninstall path removes the banner hook.
 
-**Reference issue:** [#2795](https://github.com/GSD-redux/get-shit-done-redux/pull/2795)
+**Reference issue:** [#2795](https://github.com/open-gsd/get-shit-done-redux/pull/2795)
 
 ---
 
@@ -2804,7 +2804,7 @@ Users who run a memory / knowledge-base MCP server (for example, ExoCortex-style
 
 No new commands or daemon process — purely a documentation artifact that maps existing primitives onto a tracker-driven workflow.
 
-**Reference issue:** [#2840](https://github.com/GSD-redux/get-shit-done-redux/pull/2840)
+**Reference issue:** [#2840](https://github.com/open-gsd/get-shit-done-redux/pull/2840)
 
 ---
 
@@ -2832,7 +2832,7 @@ Source commit: abc1234 (3 commits behind HEAD)
 
 **Fallback:** pre-v0.7 graphs and non-git checkouts return `commit_stale: null`; callers fall back to the existing mtime-based `stale` flag. No behavior change for existing users.
 
-**Reference issue:** [#3170](https://github.com/GSD-redux/get-shit-done-redux/issues/3170)
+**Reference issue:** [#3170](https://github.com/open-gsd/get-shit-done-redux/issues/3170)
 
 ---
 
@@ -2853,7 +2853,7 @@ CLI flag → ROADMAP `**Mode:** mvp` → `workflow.mvp_mode` config → `false`
 
 **Bug fix:** `roadmap.get-phase --pick mode` in the SDK's `roadmap.ts` previously returned `null` for phases with `**Mode:** mvp`, causing MVP_MODE to silently fall through to false on the native dispatch path. Restores parity with the CJS implementation.
 
-**Reference issue:** [#3178](https://github.com/GSD-redux/get-shit-done-redux/pull/3178)
+**Reference issue:** [#3178](https://github.com/open-gsd/get-shit-done-redux/pull/3178)
 
 ---
 

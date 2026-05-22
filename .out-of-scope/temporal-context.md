@@ -1,6 +1,6 @@
 # Temporal context as a first-class GSD signal
 
-**Source:** [#2756](https://github.com/GSD-redux/get-shit-done-redux/issues/2756)
+**Source:** [#2756](https://github.com/open-gsd/get-shit-done-redux/issues/2756)
 **Decision:** wontfix — closed without further engagement
 **Date:** 2026-05-02
 

@@ -6,7 +6,7 @@
 # per run.
 #
 # Why this exists: @gsd-redux/sdk publishes from canary.yml and release.yml
-# fail because the @gsd-build npm token is currently unavailable. CC users
+# fail because the @open-gsd npm token is currently unavailable. CC users
 # do not consume @gsd-redux/sdk directly — bin/gsd-sdk.js resolves
 # sdk/dist/cli.js from inside the installed CC package, so the bundled
 # copy is sufficient for full functionality. This workflow ships CC alone
@@ -579,8 +579,8 @@ jobs:
           set -e
           cd sdk
           npm pack
-          # npm pack emits gsd-build-sdk-<version>.tgz in the cwd
-          TARBALL="gsd-build-sdk-${VERSION}.tgz"
+          # npm pack emits open-gsd-sdk-<version>.tgz in the cwd
+          TARBALL="open-gsd-sdk-${VERSION}.tgz"
           if [ ! -f "$TARBALL" ]; then
             echo "::error::Expected $TARBALL but npm pack did not produce it. Listing sdk/:"
             ls -la

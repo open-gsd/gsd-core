@@ -256,14 +256,14 @@ If actionable anomalies were found (HIGH or MEDIUM confidence):
 If confirmed:
 ```bash
 # Check if "bug" label exists before using it
-BUG_LABEL=$(gh label list --repo GSD-redux/get-shit-done-redux --search "bug" --json name -q '.[0].name' 2>/dev/null)
+BUG_LABEL=$(gh label list --repo open-gsd/get-shit-done-redux --search "bug" --json name -q '.[0].name' 2>/dev/null)
 LABEL_FLAG=""
 if [ -n "$BUG_LABEL" ]; then
   LABEL_FLAG="--label bug"
 fi
 
 gh issue create \
-  --repo GSD-redux/get-shit-done-redux \
+  --repo open-gsd/get-shit-done-redux \
   --title "bug: {concise description from anomaly}" \
   $LABEL_FLAG \
   --body "{formatted findings from report}"

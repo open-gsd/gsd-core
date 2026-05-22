@@ -11,14 +11,14 @@ Paste this document (or `@sdk/HANDOVER-PARITY-DOCS.md`) at the start of a new ch
 
 ## Parent tracking
 
-- **Issue:** [GSD-redux/get-shit-done-redux#2302](https://github.com/GSD-redux/get-shit-done-redux/issues/2302) — Phase 3 SDK query parity, registry, docs (parent umbrella #2007).
+- **Issue:** [open-gsd/get-shit-done-redux#2302](https://github.com/open-gsd/get-shit-done-redux/issues/2302) — Phase 3 SDK query parity, registry, docs (parent umbrella #2007).
 - **Acceptance criteria touched here:** parity coverage/exceptions documented; registry audit reflected in a **matrix** (issue wording: “every required CJS surface either has a handler or appears in the CJS-only matrix with justification”).
 
 ## Repo / branch
 
 - **Workspace:** `D:\Repos\get-shit-done` (PBR backport); adjust path if different machine.
 - **Feature branch (typical):** `feat/sdk-phase3-query-layer` — confirm with `git branch` before editing.
-- **Upstream:** `GSD-redux/get-shit-done-redux`.
+- **Upstream:** `open-gsd/get-shit-done-redux`.
 
 ## What already exists (do not duplicate blindly)
 

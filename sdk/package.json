@@ -21,12 +21,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/GSD-redux/get-shit-done-redux.git",
+    "url": "git+https://github.com/open-gsd/get-shit-done-redux.git",
     "directory": "sdk"
   },
-  "homepage": "https://github.com/GSD-redux/get-shit-done-redux/tree/main/sdk",
+  "homepage": "https://github.com/open-gsd/get-shit-done-redux/tree/main/sdk",
   "bugs": {
-    "url": "https://github.com/GSD-redux/get-shit-done-redux/issues"
+    "url": "https://github.com/open-gsd/get-shit-done-redux/issues"
   },
   "author": "TÂCHES",
   "license": "MIT",

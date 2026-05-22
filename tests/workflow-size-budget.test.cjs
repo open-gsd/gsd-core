@@ -21,8 +21,8 @@
  * pattern introduced by #2551).
  *
  * See:
- *   - https://github.com/GSD-redux/get-shit-done-redux/issues/2551 (this test)
- *   - https://github.com/GSD-redux/get-shit-done-redux/issues/2361 (agent budget)
+ *   - https://github.com/open-gsd/get-shit-done-redux/issues/2551 (this test)
+ *   - https://github.com/open-gsd/get-shit-done-redux/issues/2361 (agent budget)
  */
 
 const { test, describe } = require('node:test');

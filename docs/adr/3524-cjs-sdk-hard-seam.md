@@ -2,7 +2,7 @@
 
 - **Status:** Proposed
 - **Date:** 2026-05-14
-- **Tracking issue:** [#3524](https://github.com/GSD-redux/get-shit-done-redux/issues/3524)
+- **Tracking issue:** [#3524](https://github.com/open-gsd/get-shit-done-redux/issues/3524)
 - **Related PRD:** [`docs/prd/3524-cjs-sdk-hard-seam.md`](../prd/3524-cjs-sdk-hard-seam.md)
 - **Extends:** ADR-0005 (seam map) — adds the **Shared-Module Source Policy** to the seam family
 - **Defers to:** ADR-0001 (Dispatch Policy Module), ADR-0003 (Model Catalog Module), ADR-0004 (Planning Workspace Module), ADR-0006 (Planning Path Projection Module), ADR-0009 (Shell Command Projection Module — post-Phase 3–4, also subsuming superseded ADR-0010)

@@ -40,9 +40,9 @@
 
 [![npm version](https://img.shields.io/npm/v/get-shit-done-redux?style=for-the-badge&logo=npm&logoColor=white&color=CB3837)](https://www.npmjs.com/package/get-shit-done-redux)
 [![npm downloads](https://img.shields.io/npm/dm/get-shit-done-redux?style=for-the-badge&logo=npm&logoColor=white&color=CB3837)](https://www.npmjs.com/package/get-shit-done-redux)
-[![Tests](https://img.shields.io/github/actions/workflow/status/GSD-redux/get-shit-done-redux/test.yml?branch=main&style=for-the-badge&logo=github&label=Tests)](https://github.com/GSD-redux/get-shit-done-redux/actions/workflows/test.yml)
+[![Tests](https://img.shields.io/github/actions/workflow/status/open-gsd/get-shit-done-redux/test.yml?branch=main&style=for-the-badge&logo=github&label=Tests)](https://github.com/open-gsd/get-shit-done-redux/actions/workflows/test.yml)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/mYgfVNfA2r)
-[![GitHub stars](https://img.shields.io/github/stars/GSD-redux/get-shit-done-redux?style=for-the-badge&logo=github&color=181717)](https://github.com/GSD-redux/get-shit-done-redux)
+[![GitHub stars](https://img.shields.io/github/stars/open-gsd/get-shit-done-redux?style=for-the-badge&logo=github&color=181717)](https://github.com/open-gsd/get-shit-done-redux)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)](LICENSE)
 
 <br>
@@ -277,11 +277,11 @@ Full troubleshooting and uninstall instructions in **[docs/USER-GUIDE.md](docs/U
 
 ## Star History
 
-<a href="https://star-history.com/#GSD-redux/get-shit-done-redux&Date">
+<a href="https://star-history.com/#open-gsd/get-shit-done-redux&Date">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=GSD-redux/get-shit-done-redux&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=GSD-redux/get-shit-done-redux&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=GSD-redux/get-shit-done-redux&type=Date" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=open-gsd/get-shit-done-redux&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=open-gsd/get-shit-done-redux&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=open-gsd/get-shit-done-redux&type=Date" />
  </picture>
 </a>
 

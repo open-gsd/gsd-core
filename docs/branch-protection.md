@@ -36,13 +36,13 @@ immutable once created. Tag creation is unrestricted.
 
 ```bash
 # Dry-run (evaluate mode — logs violations, does not block)
-REPO=GSD-redux/get-shit-done-redux ENFORCEMENT=evaluate bash scripts/sync-rulesets.sh
+REPO=open-gsd/get-shit-done-redux ENFORCEMENT=evaluate bash scripts/sync-rulesets.sh
 
 # Activate protection
-REPO=GSD-redux/get-shit-done-redux ENFORCEMENT=active bash scripts/sync-rulesets.sh
+REPO=open-gsd/get-shit-done-redux ENFORCEMENT=active bash scripts/sync-rulesets.sh
 
 # Roll back to disabled
-REPO=GSD-redux/get-shit-done-redux ENFORCEMENT=disabled bash scripts/sync-rulesets.sh
+REPO=open-gsd/get-shit-done-redux ENFORCEMENT=disabled bash scripts/sync-rulesets.sh
 ```
 
 The script is idempotent: running it twice with the same `ENFORCEMENT` value
@@ -53,7 +53,7 @@ is a no-op semantically (PUT with identical body).
 After applying with `evaluate`, check which PRs/pushes would have been blocked:
 
 ```bash
-REPO=GSD-redux/get-shit-done-redux
+REPO=open-gsd/get-shit-done-redux
 RULESET_ID=$(gh api repos/$REPO/rulesets --jq '.[] | select(.name=="main-protection") | .id')
 gh api repos/$REPO/rulesets/$RULESET_ID/rule-suites
 ```

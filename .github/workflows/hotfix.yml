@@ -18,7 +18,7 @@ name: Hotfix Release
 #   - install-smoke gate (cross-platform, parity with release.yml/release-sdk.yml)
 #   - Bundles SDK as both loose tree (sdk/dist/cli.js) and recoverable tarball
 #     (sdk-bundle/gsd-sdk.tgz) — parity with release-sdk.yml so a hotfix shipped
-#     during the @gsd-build-token outage carries the same payload shape.
+#     during the @open-gsd-token outage carries the same payload shape.
 #   - Publishes to @latest, tags vX.YY.Z, re-points @next → vX.YY.Z, opens
 #     merge-back PR.
 
@@ -332,7 +332,7 @@ jobs:
           set -e
           cd sdk
           npm pack
-          TARBALL="gsd-build-sdk-${VERSION}.tgz"
+          TARBALL="open-gsd-sdk-${VERSION}.tgz"
           if [ ! -f "$TARBALL" ]; then
             echo "::error::Expected $TARBALL but npm pack did not produce it."
             ls -la

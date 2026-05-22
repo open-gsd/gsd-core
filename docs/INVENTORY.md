@@ -60,7 +60,7 @@ Full roster at `commands/gsd/*.md`. The groupings below mirror `docs/COMMANDS.md
 
 ### Namespace Meta-Skills
 
-These six routers are descriptor-only entries that the model picks first; the body of each contains a routing table that points at the correct concrete sub-skill. They exist to keep the eager skill-listing token cost low while the full surface remains reachable. See [#2792](https://github.com/GSD-redux/get-shit-done-redux/issues/2792) for the rationale; the routing tables target the post-[#2790](https://github.com/GSD-redux/get-shit-done-redux/issues/2790) consolidated surface.
+These six routers are descriptor-only entries that the model picks first; the body of each contains a routing table that points at the correct concrete sub-skill. They exist to keep the eager skill-listing token cost low while the full surface remains reachable. See [#2792](https://github.com/open-gsd/get-shit-done-redux/issues/2792) for the rationale; the routing tables target the post-[#2790](https://github.com/open-gsd/get-shit-done-redux/issues/2790) consolidated surface.
 
 | Command | Role | Source |
 |---------|------|--------|

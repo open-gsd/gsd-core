@@ -1,6 +1,6 @@
 # Triage Labels
 
-Maps the five canonical triage roles to the actual label strings in `GSD-redux/get-shit-done-redux`.
+Maps the five canonical triage roles to the actual label strings in `open-gsd/get-shit-done-redux`.
 
 | Canonical role    | Label in this repo       | Notes                                                          |
 |-------------------|--------------------------|----------------------------------------------------------------|

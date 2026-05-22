@@ -16,7 +16,7 @@ The hyphen and colon forms are *runtime-specific spellings of the same command*.
 
 ## Namespace Meta-Skills
 
-Six namespace routers ship as the first-stage entry points in v1.40. They keep the eager skill-listing token cost low (~120 tokens for 6 routers vs ~2,150 for a flat 86-skill listing) while the full surface remains directly invocable. The model selects a namespace, then routes to the concrete sub-skill. See [#2792](https://github.com/GSD-redux/get-shit-done-redux/issues/2792).
+Six namespace routers ship as the first-stage entry points in v1.40. They keep the eager skill-listing token cost low (~120 tokens for 6 routers vs ~2,150 for a flat 86-skill listing) while the full surface remains directly invocable. The model selects a namespace, then routes to the concrete sub-skill. See [#2792](https://github.com/open-gsd/get-shit-done-redux/issues/2792).
 
 | Command | Routes to |
 |---------|-----------|
@@ -757,7 +757,7 @@ Generate a developer behavioral profile from Claude Code session analysis across
 
 Validate `.planning/` directory integrity. With `--context`, probes the
 context-window utilization guard against the 60 % / 70 % thresholds (added
-v1.40.0, [#2792](https://github.com/GSD-redux/get-shit-done-redux/issues/2792)).
+v1.40.0, [#2792](https://github.com/open-gsd/get-shit-done-redux/issues/2792)).
 
 | Flag | Description |
 |------|-------------|

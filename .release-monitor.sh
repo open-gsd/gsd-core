@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Release monitor for GSD-redux/get-shit-done-redux
+# Release monitor for open-gsd/get-shit-done-redux
 # Checks every 15 minutes, writes new release info to a signal file
 
-REPO="GSD-redux/get-shit-done-redux"
+REPO="open-gsd/get-shit-done-redux"
 SIGNAL_FILE="/tmp/gsd-new-release.json"
 STATE_FILE="/tmp/gsd-monitor-last-tag"
 LOG_FILE="/tmp/gsd-monitor.log"

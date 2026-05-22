@@ -57,10 +57,10 @@ If you have a local project that interacted with canary-only features (for insta
 
 ## Reporting issues against canary
 
-File against the [issue tracker](https://github.com/GSD-redux/get-shit-done-redux/issues) with the `bug` template. Include the exact canary version (`get-shit-done-redux --version` reports it) so triage can route the report back into the `dev` stream rather than the stable stream.
+File against the [issue tracker](https://github.com/open-gsd/get-shit-done-redux/issues) with the `bug` template. Include the exact canary version (`get-shit-done-redux --version` reports it) so triage can route the report back into the `dev` stream rather than the stable stream.
 
 ## Where to look next
 
 - Active canary release notes: [`docs/RELEASE-v1.50.0-canary.1.md`](RELEASE-v1.50.0-canary.1.md)
 - Stable release notes: [`CHANGELOG.md`](../CHANGELOG.md)
-- Stream architecture rationale: discussed across [#2727](https://github.com/GSD-redux/get-shit-done-redux/issues/2727), [#2773](https://github.com/GSD-redux/get-shit-done-redux/issues/2773) (codex schema-break and the resulting promotion bottleneck that motivated explicit stream isolation)
+- Stream architecture rationale: discussed across [#2727](https://github.com/open-gsd/get-shit-done-redux/issues/2727), [#2773](https://github.com/open-gsd/get-shit-done-redux/issues/2773) (codex schema-break and the resulting promotion bottleneck that motivated explicit stream isolation)

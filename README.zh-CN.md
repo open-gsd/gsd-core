@@ -12,9 +12,9 @@
 
 [![npm version](https://img.shields.io/npm/v/get-shit-done-redux?style=for-the-badge&logo=npm&logoColor=white&color=CB3837)](https://www.npmjs.com/package/get-shit-done-redux)
 [![npm downloads](https://img.shields.io/npm/dm/get-shit-done-redux?style=for-the-badge&logo=npm&logoColor=white&color=CB3837)](https://www.npmjs.com/package/get-shit-done-redux)
-[![Tests](https://img.shields.io/github/actions/workflow/status/GSD-redux/get-shit-done-redux/test.yml?branch=main&style=for-the-badge&logo=github&label=Tests)](https://github.com/GSD-redux/get-shit-done-redux/actions/workflows/test.yml)
+[![Tests](https://img.shields.io/github/actions/workflow/status/open-gsd/get-shit-done-redux/test.yml?branch=main&style=for-the-badge&logo=github&label=Tests)](https://github.com/open-gsd/get-shit-done-redux/actions/workflows/test.yml)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/mYgfVNfA2r)
-[![GitHub stars](https://img.shields.io/github/stars/GSD-redux/get-shit-done-redux?style=for-the-badge&logo=github&color=181717)](https://github.com/GSD-redux/get-shit-done-redux)
+[![GitHub stars](https://img.shields.io/github/stars/open-gsd/get-shit-done-redux?style=for-the-badge&logo=github&color=181717)](https://github.com/open-gsd/get-shit-done-redux)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)](LICENSE)
 
 <br>
@@ -75,7 +75,7 @@ GSD 解决的就是这个问题。它是让 Claude Code 变得可靠的上下文
 
 ### v1.39.0 亮点
 
-完整列表请参阅 [v1.39.0 发行说明](https://github.com/GSD-redux/get-shit-done-redux/releases/tag/v1.39.0)。
+完整列表请参阅 [v1.39.0 发行说明](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.39.0)。
 
 - **`--minimal` 安装档** — 别名 `--core-only`。仅安装主循环的 6 个核心技能（`new-project`、`discuss-phase`、`plan-phase`、`execute-phase`、`help`、`update`），不安装任何 `gsd-*` 子代理。将冷启动系统提示开销从 ~12k token 降至 ~700 token（≥94% 减少）。适合 32K–128K 上下文的本地 LLM 和按 token 计费的 API。
 - **`/gsd-phase --edit`** — 就地修改 `ROADMAP.md` 中已有阶段的任意字段，不改变其编号或位置。`--force` 跳过确认 diff，验证 `depends_on` 引用，并在写入时更新 `STATE.md`。
@@ -182,7 +182,7 @@ npx get-shit-done-redux --all --global      # 安装到所有目录
 克隆仓库并在本地运行安装器：
 
 ```bash
-git clone https://github.com/GSD-redux/get-shit-done-redux.git
+git clone https://github.com/open-gsd/get-shit-done-redux.git
 cd get-shit-done
 node bin/install.js --claude --local
 ```
@@ -819,11 +819,11 @@ OpenCode、Gemini CLI、Kilo 和 Codex 现在都已经通过 `npx get-shit-done-
 
 ## Star History
 
-<a href="https://star-history.com/#GSD-redux/get-shit-done-redux&Date">
+<a href="https://star-history.com/#open-gsd/get-shit-done-redux&Date">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=GSD-redux/get-shit-done-redux&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=GSD-redux/get-shit-done-redux&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=GSD-redux/get-shit-done-redux&type=Date" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=open-gsd/get-shit-done-redux&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=open-gsd/get-shit-done-redux&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=open-gsd/get-shit-done-redux&type=Date" />
  </picture>
 </a>
 

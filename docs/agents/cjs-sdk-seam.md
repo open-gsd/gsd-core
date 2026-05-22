@@ -9,13 +9,13 @@ The CJS↔SDK hard-seam migration (#3524) eliminates a class of config-schema dr
 
 | Phase | PR | Summary |
 |-------|----|---------|
-| Phase 1 | [#3531](https://github.com/GSD-redux/get-shit-done-redux/pull/3531) | `state-document` Shared Module — source-of-truth at `sdk/src/state-document/`, generator, freshness check, CJS Adapter (`state-document.generated.cjs`). Worked example for the pattern. |
-| Phase 2 | [#3540](https://github.com/GSD-redux/get-shit-done-redux/pull/3540) | `configuration` Shared Module — `sdk/shared/config-schema.manifest.json` + `sdk/shared/config-defaults.manifest.json` as data manifests; generator + freshness check + CJS Adapter. |
-| Phase 3 | [#3548](https://github.com/GSD-redux/get-shit-done-redux/pull/3548) | `workstream-inventory` Shared Module — source-of-truth at `sdk/src/workstream-inventory/`, builder, generator, freshness check, CJS Adapter. |
-| Phase 4 | [#3554](https://github.com/GSD-redux/get-shit-done-redux/pull/3554) | `project-root` Shared Module — source-of-truth at `sdk/src/project-root/`, generator, freshness check, CJS Adapter. |
-| Phase 5.0 | [#3558](https://github.com/GSD-redux/get-shit-done-redux/pull/3558) | `runtime-bridge-sync` worker — enables CJS-side execution of SDK native handlers; state.* family initial router delegation via `executeForCjs`. |
-| Phase 5.1 | [#3574](https://github.com/GSD-redux/get-shit-done-redux/pull/3574) | `state.*` router delegation complete — all known state subcommands delegated via `executeForCjs`; Phase 5.0 worker bug fix. |
-| Phase 6 | [#3577](https://github.com/GSD-redux/get-shit-done-redux/pull/3577) (closes [#3575](https://github.com/GSD-redux/get-shit-done-redux/issues/3575)) | Enforcement hardening + Final completion — hand-sync drift lint, CODEOWNERS, 6 family-router migrations, 5 Shared Module migrations (plan-scan, secrets, schema-detect, decisions, workstream-name-policy), workstream native support, parity fixes. Migration feature-complete: 22 cooperating siblings, 0 backlog pairs. |
+| Phase 1 | [#3531](https://github.com/open-gsd/get-shit-done-redux/pull/3531) | `state-document` Shared Module — source-of-truth at `sdk/src/state-document/`, generator, freshness check, CJS Adapter (`state-document.generated.cjs`). Worked example for the pattern. |
+| Phase 2 | [#3540](https://github.com/open-gsd/get-shit-done-redux/pull/3540) | `configuration` Shared Module — `sdk/shared/config-schema.manifest.json` + `sdk/shared/config-defaults.manifest.json` as data manifests; generator + freshness check + CJS Adapter. |
+| Phase 3 | [#3548](https://github.com/open-gsd/get-shit-done-redux/pull/3548) | `workstream-inventory` Shared Module — source-of-truth at `sdk/src/workstream-inventory/`, builder, generator, freshness check, CJS Adapter. |
+| Phase 4 | [#3554](https://github.com/open-gsd/get-shit-done-redux/pull/3554) | `project-root` Shared Module — source-of-truth at `sdk/src/project-root/`, generator, freshness check, CJS Adapter. |
+| Phase 5.0 | [#3558](https://github.com/open-gsd/get-shit-done-redux/pull/3558) | `runtime-bridge-sync` worker — enables CJS-side execution of SDK native handlers; state.* family initial router delegation via `executeForCjs`. |
+| Phase 5.1 | [#3574](https://github.com/open-gsd/get-shit-done-redux/pull/3574) | `state.*` router delegation complete — all known state subcommands delegated via `executeForCjs`; Phase 5.0 worker bug fix. |
+| Phase 6 | [#3577](https://github.com/open-gsd/get-shit-done-redux/pull/3577) (closes [#3575](https://github.com/open-gsd/get-shit-done-redux/issues/3575)) | Enforcement hardening + Final completion — hand-sync drift lint, CODEOWNERS, 6 family-router migrations, 5 Shared Module migrations (plan-scan, secrets, schema-detect, decisions, workstream-name-policy), workstream native support, parity fixes. Migration feature-complete: 22 cooperating siblings, 0 backlog pairs. |
 
 ---
 
@@ -203,13 +203,13 @@ If the module affects `CONTEXT.md`'s module inventory, update that section. Also
 
 Add the new source-of-truth path to `.github/CODEOWNERS` under the Phase 6 block to make the architectural ownership explicit.
 
-**Reference:** Phase 1 PR [#3531](https://github.com/GSD-redux/get-shit-done-redux/pull/3531) — `state-document` migration.
+**Reference:** Phase 1 PR [#3531](https://github.com/open-gsd/get-shit-done-redux/pull/3531) — `state-document` migration.
 
 ---
 
 ## Guide: Adding a new canonical command
 
-Use this when adding a new `gsd-sdk query <family>.<subcommand>` that should be handled natively in the SDK (not delegated to CJS). Phase 5.1's `state.update` migration (PR [#3574](https://github.com/GSD-redux/get-shit-done-redux/pull/3574)) is the worked example.
+Use this when adding a new `gsd-sdk query <family>.<subcommand>` that should be handled natively in the SDK (not delegated to CJS). Phase 5.1's `state.update` migration (PR [#3574](https://github.com/open-gsd/get-shit-done-redux/pull/3574)) is the worked example.
 
 **Step 1 — Declare in the command manifest**
 
@@ -232,7 +232,7 @@ Add a test in `tests/<family>-command-router.test.cjs` (or a new file if the fam
 
 This test enforces that the delegate and the native handler stay aligned.
 
-**Reference:** Phase 5.1 PR [#3574](https://github.com/GSD-redux/get-shit-done-redux/pull/3574) — `state.update` delegation.
+**Reference:** Phase 5.1 PR [#3574](https://github.com/open-gsd/get-shit-done-redux/pull/3574) — `state.update` delegation.
 
 ---
 

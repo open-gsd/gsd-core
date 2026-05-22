@@ -2,7 +2,7 @@
 
 This project's `tests/` directory uses **filename suffix markers** to group tests into named suites. The harness `scripts/run-tests.cjs` filters by suite when given `--suite <name>`. Without a flag it runs every `*.test.cjs` file (the historical default — unchanged).
 
-> Tracked by issue [#3597](https://github.com/GSD-redux/get-shit-done-redux/issues/3597).
+> Tracked by issue [#3597](https://github.com/open-gsd/get-shit-done-redux/issues/3597).
 
 ## Suites
 

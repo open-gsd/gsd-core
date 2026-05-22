@@ -38,11 +38,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/GSD-redux/get-shit-done-redux.git"
+    "url": "git+https://github.com/open-gsd/get-shit-done-redux.git"
   },
-  "homepage": "https://github.com/GSD-redux/get-shit-done-redux",
+  "homepage": "https://github.com/open-gsd/get-shit-done-redux",
   "bugs": {
-    "url": "https://github.com/GSD-redux/get-shit-done-redux/issues"
+    "url": "https://github.com/open-gsd/get-shit-done-redux/issues"
   },
   "engines": {
     "node": ">=22.0.0"

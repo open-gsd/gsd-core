@@ -377,8 +377,8 @@ Exit.
 
 ```bash
 CHANGELOG_TMP="/tmp/gsd-changelog-$$.md"
-curl -fsSL "https://raw.githubusercontent.com/gsd-build/get-shit-done/main/CHANGELOG.md" -o "$CHANGELOG_TMP" 2>/dev/null \
-  || wget -qO "$CHANGELOG_TMP" "https://raw.githubusercontent.com/gsd-build/get-shit-done/main/CHANGELOG.md" 2>/dev/null
+curl -fsSL "https://raw.githubusercontent.com/open-gsd/get-shit-done-redux/main/CHANGELOG.md" -o "$CHANGELOG_TMP" 2>/dev/null \
+  || wget -qO "$CHANGELOG_TMP" "https://raw.githubusercontent.com/open-gsd/get-shit-done-redux/main/CHANGELOG.md" 2>/dev/null
 
 EXTRACT_JSON=$(node "$GSD_DIR/get-shit-done/scripts/changeset/cli.cjs" extract \
   --from "$INSTALLED_VERSION" \
@@ -631,7 +631,7 @@ Format completion message (changelog was already shown in confirmation step):
 
 ⚠️  Restart your runtime to pick up the new commands.
 
-[View full changelog](https://github.com/GSD-redux/get-shit-done-redux/blob/main/CHANGELOG.md)
+[View full changelog](https://github.com/open-gsd/get-shit-done-redux/blob/main/CHANGELOG.md)
 ```
 </step>
 

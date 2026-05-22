@@ -28,7 +28,7 @@ Currently, Grok Build is only supported via its Claude compatibility layer. This
 ## 2. Current Multi-Runtime Setup (as of May 2026)
 
 ### Development Source (Single Source of Truth)
-- **Path:** `/home/cristian/bum/get-shit-done` (this repo — your working fork of `GSD-redux/get-shit-done-redux`)
+- **Path:** `/home/cristian/bum/get-shit-done` (this repo — your working fork of `open-gsd/get-shit-done-redux`)
 
 ### Installed Locations
 - `~/.agents/get-shit-done/` — Core workflows, references, templates, `gsd-tools.cjs`, `bin/`

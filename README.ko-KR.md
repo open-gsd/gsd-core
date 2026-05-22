@@ -12,9 +12,9 @@
 
 [![npm version](https://img.shields.io/npm/v/get-shit-done-redux?style=for-the-badge&logo=npm&logoColor=white&color=CB3837)](https://www.npmjs.com/package/get-shit-done-redux)
 [![npm downloads](https://img.shields.io/npm/dm/get-shit-done-redux?style=for-the-badge&logo=npm&logoColor=white&color=CB3837)](https://www.npmjs.com/package/get-shit-done-redux)
-[![Tests](https://img.shields.io/github/actions/workflow/status/GSD-redux/get-shit-done-redux/test.yml?branch=main&style=for-the-badge&logo=github&label=Tests)](https://github.com/GSD-redux/get-shit-done-redux/actions/workflows/test.yml)
+[![Tests](https://img.shields.io/github/actions/workflow/status/open-gsd/get-shit-done-redux/test.yml?branch=main&style=for-the-badge&logo=github&label=Tests)](https://github.com/open-gsd/get-shit-done-redux/actions/workflows/test.yml)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/mYgfVNfA2r)
-[![GitHub stars](https://img.shields.io/github/stars/GSD-redux/get-shit-done-redux?style=for-the-badge&logo=github&color=181717)](https://github.com/GSD-redux/get-shit-done-redux)
+[![GitHub stars](https://img.shields.io/github/stars/open-gsd/get-shit-done-redux?style=for-the-badge&logo=github&color=181717)](https://github.com/open-gsd/get-shit-done-redux)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)](LICENSE)
 
 <br>
@@ -77,7 +77,7 @@ GSD가 그걸 고칩니다. Claude Code를 신뢰할 수 있게 만드는 컨텍
 
 ### v1.39.0 하이라이트
 
-전체 목록은 [v1.39.0 릴리스 노트](https://github.com/GSD-redux/get-shit-done-redux/releases/tag/v1.39.0)를 참고하세요.
+전체 목록은 [v1.39.0 릴리스 노트](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.39.0)를 참고하세요.
 
 - **`--minimal` 설치 프로파일** — 별칭 `--core-only`. 메인 루프 6개 스킬(`new-project`, `discuss-phase`, `plan-phase`, `execute-phase`, `help`, `update`)만 설치하고 `gsd-*` 서브에이전트는 설치하지 않음. 콜드 스타트 시스템 프롬프트 오버헤드를 ~12k 토큰에서 ~700 토큰으로 축소(≥94% 감소). 32K–128K 컨텍스트의 로컬 LLM이나 토큰 과금 API에 유용.
 - **`/gsd-phase --edit`** — `ROADMAP.md`에 있는 기존 단계의 임의 필드를 그 자리에서 수정(번호와 위치는 변경되지 않음). `--force`는 확인 diff를 건너뛰고, `depends_on` 참조를 검증하며 쓰기 시 `STATE.md`도 갱신.
@@ -180,7 +180,7 @@ npx get-shit-done-redux --all --global      # 모든 디렉터리에 설치
 저장소를 클론하고 설치 프로그램을 로컬에서 실행합니다:
 
 ```bash
-git clone https://github.com/GSD-redux/get-shit-done-redux.git
+git clone https://github.com/open-gsd/get-shit-done-redux.git
 cd get-shit-done
 node bin/install.js --claude --local
 ```
@@ -838,11 +838,11 @@ OpenCode, Gemini CLI, Kilo, Codex는 이제 `npx get-shit-done-redux`를 통해 
 
 ## 스타 히스토리
 
-<a href="https://star-history.com/#GSD-redux/get-shit-done-redux&Date">
+<a href="https://star-history.com/#open-gsd/get-shit-done-redux&Date">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=GSD-redux/get-shit-done-redux&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=GSD-redux/get-shit-done-redux&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=GSD-redux/get-shit-done-redux&type=Date" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=open-gsd/get-shit-done-redux&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=open-gsd/get-shit-done-redux&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=open-gsd/get-shit-done-redux&type=Date" />
  </picture>
 </a>
 

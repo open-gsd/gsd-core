@@ -145,7 +145,7 @@ function serializeGithubReleaseNotes({
   ir,
   fromRef,
   toRef,
-  repoSlug = 'GSD-redux/get-shit-done-redux',
+  repoSlug = 'open-gsd/get-shit-done-redux',
   installCommand = 'npx get-shit-done-redux@latest',
 }) {
   if (installCommand.includes('`')) {

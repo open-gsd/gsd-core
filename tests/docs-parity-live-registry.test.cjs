@@ -105,9 +105,9 @@ const INTERNAL_COMPONENT_SLUGS = new Set([
   // a real command token.
   'init-',
 
-  // gsd-build — GitHub organization name: "github.com/GSD-redux/get-shit-done-redux".
+  // gsd-build — GitHub organization name: "github.com/open-gsd/get-shit-done-redux".
   // Every occurrence of "/gsd-build" in docs is the path component of a GitHub URL
-  // (e.g., "[#2792](https://github.com/GSD-redux/get-shit-done-redux/issues/2792)").
+  // (e.g., "[#2792](https://github.com/open-gsd/get-shit-done-redux/issues/2792)").
   // The regex captures "/gsd-build" from the URL path. Not a slash command.
   'build',
 

@@ -14,7 +14,7 @@
  * 4. findProjectRoot detects .git at same level as .planning/
  * 5. @file: handoff present in all workflows that call init
  *
- * Regression tests for: https://github.com/GSD-redux/get-shit-done-redux/issues/1343
+ * Regression tests for: https://github.com/open-gsd/get-shit-done-redux/issues/1343
  */
 
 const { test, describe } = require('node:test');

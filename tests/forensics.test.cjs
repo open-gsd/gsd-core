@@ -143,25 +143,25 @@ describe('forensics workflow', () => {
     );
   });
 
-  test('workflow submits issues to GSD-redux/get-shit-done-redux, not the current repo', () => {
+  test('workflow submits issues to open-gsd/get-shit-done-redux, not the current repo', () => {
     const content = fs.readFileSync(workflowPath, 'utf-8');
     // Scope check to the gh issue create invocation — a whole-file search would
     // pass even if gh issue create lacked --repo, because gh label list also
     // contains the repo string.
     assert.match(
       content,
-      /gh issue create[\s\S]{0,250}--repo\s+GSD-redux\/get-shit-done-redux/,
-      'gh issue create must use --repo GSD-redux/get-shit-done-redux to avoid submitting to the user\'s current project repo'
+      /gh issue create[\s\S]{0,250}--repo\s+open-gsd/get-shit-done-redux/,
+      'gh issue create must use --repo open-gsd/get-shit-done-redux to avoid submitting to the user\'s current project repo'
     );
   });
 
-  test('workflow checks bug label in GSD-redux/get-shit-done-redux, not the current repo', () => {
+  test('workflow checks bug label in open-gsd/get-shit-done-redux, not the current repo', () => {
     const content = fs.readFileSync(workflowPath, 'utf-8');
     // Regex is more robust than a fixed-length slice to formatting changes
     assert.match(
       content,
-      /gh label list[\s\S]{0,250}--repo\s+GSD-redux\/get-shit-done-redux/,
-      'gh label list must target GSD-redux/get-shit-done-redux'
+      /gh label list[\s\S]{0,250}--repo\s+open-gsd/get-shit-done-redux/,
+      'gh label list must target open-gsd/get-shit-done-redux'
     );
   });
 

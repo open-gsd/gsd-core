@@ -120,7 +120,7 @@ User-facing entry points. Each file contains YAML frontmatter (name, description
 
 **Total commands:** see [`docs/INVENTORY.md`](INVENTORY.md#commands) for the authoritative count and full roster.
 
-#### Two-stage hierarchical routing (v1.40, [#2792](https://github.com/GSD-redux/get-shit-done-redux/issues/2792))
+#### Two-stage hierarchical routing (v1.40, [#2792](https://github.com/open-gsd/get-shit-done-redux/issues/2792))
 
 To keep the eager skill-listing token cost low, v1.40 introduces six namespace **meta-skills** (`gsd-workflow`, `gsd-project`, `gsd-quality`, `gsd-context`, `gsd-manage`, `gsd-ideate` — sourced from `commands/gsd/ns-*.md`, but the invocable `name:` is the bare form shown here) layered above the concrete sub-skills. The model sees 6 namespace routers (~120 tokens) instead of a flat 86-skill listing (~2,150 tokens), selects a namespace, then routes to the concrete sub-skill via a routing table embedded in the namespace router's body. Namespace skills are **additive** — every concrete command is still directly invocable.
 

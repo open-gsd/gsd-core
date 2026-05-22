@@ -4,17 +4,17 @@ Paste this document (or `@sdk/HANDOVER-QUERY-LAYER.md`) at the start of a new se
 
 ## Parent tracking
 
-- **Issue:** [GSD-redux/get-shit-done-redux#2302](https://github.com/GSD-redux/get-shit-done-redux/issues/2302) — Phase 3 SDK query parity, registry, docs (umbrella #2007).
-- **Workspace:** `D:\Repos\get-shit-done` (PBR backport). **Upstream:** `GSD-redux/get-shit-done-redux`. Confirm branch with `git branch` (typical: `feat/sdk-phase3-query-layer`).
+- **Issue:** [open-gsd/get-shit-done-redux#2302](https://github.com/open-gsd/get-shit-done-redux/issues/2302) — Phase 3 SDK query parity, registry, docs (umbrella #2007).
+- **Workspace:** `D:\Repos\get-shit-done` (PBR backport). **Upstream:** `open-gsd/get-shit-done-redux`. Confirm branch with `git branch` (typical: `feat/sdk-phase3-query-layer`).
 
 ### Scope anchors (do not confuse issues)
 
 
 | Role                                    | GitHub                                                                                 | Notes                                                                                                                                                                                                                                       |
 | --------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Product / requirements anchor**       | [#2007](https://github.com/GSD-redux/get-shit-done-redux/issues/2007)                        | Problem statement, user stories, and target architecture for the SDK-first migration. **Do not** treat its original acceptance-checklist boxes as proof of what is merged upstream; work was split into phased PRs after maintainer review. |
-| **Phase 3 execution scope**             | [#2302](https://github.com/GSD-redux/get-shit-done-redux/issues/2302) **+ this handover**    | What this branch is actually doing now: registry/CLI parity, docs, harness gaps, runner alignment follow-ups as listed below.                                                                                                               |
-| **Patch mine (if local tree is short)** | [PR #2008](https://github.com/GSD-redux/get-shit-done-redux/pull/2008) and matching branches | Large pre-phasing PR; cherry-pick or compare when something looks missing vs that line of work.                                                                                                                                             |
+| **Product / requirements anchor**       | [#2007](https://github.com/open-gsd/get-shit-done-redux/issues/2007)                        | Problem statement, user stories, and target architecture for the SDK-first migration. **Do not** treat its original acceptance-checklist boxes as proof of what is merged upstream; work was split into phased PRs after maintainer review. |
+| **Phase 3 execution scope**             | [#2302](https://github.com/open-gsd/get-shit-done-redux/issues/2302) **+ this handover**    | What this branch is actually doing now: registry/CLI parity, docs, harness gaps, runner alignment follow-ups as listed below.                                                                                                               |
+| **Patch mine (if local tree is short)** | [PR #2008](https://github.com/open-gsd/get-shit-done-redux/pull/2008) and matching branches | Large pre-phasing PR; cherry-pick or compare when something looks missing vs that line of work.                                                                                                                                             |
 
 
 ---

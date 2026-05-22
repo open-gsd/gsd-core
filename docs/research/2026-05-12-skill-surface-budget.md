@@ -1,7 +1,7 @@
 # Skill surface budget — research memo
 
 **Date:** 2026-05-12
-**Author:** triage analysis for issue [#3408](https://github.com/GSD-redux/get-shit-done-redux/issues/3408)
+**Author:** triage analysis for issue [#3408](https://github.com/open-gsd/get-shit-done-redux/issues/3408)
 **Status:** Research input for ADR-0010
 **Reading time:** ~15 min
 
@@ -260,7 +260,7 @@ Phase 2 — runtime surface command (follow-up ADR or amendment):
 
 ## 10. References
 
-- Issue: [#3408](https://github.com/GSD-redux/get-shit-done-redux/issues/3408)
+- Issue: [#3408](https://github.com/open-gsd/get-shit-done-redux/issues/3408)
 - Existing seam: `get-shit-done/bin/lib/install-profiles.cjs`
 - Description lint: `scripts/lint-descriptions.cjs`
 - Install dispatcher: `bin/install.js:123` (mode parsing), `bin/install.js:8167-8207` (minimal staging)

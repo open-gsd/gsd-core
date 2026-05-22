@@ -32,7 +32,7 @@ function parseArgs(argv) {
     toRef: null,
     changelog: null,
     output: null,
-    repoSlug: 'GSD-redux/get-shit-done-redux',
+    repoSlug: 'open-gsd/get-shit-done-redux',
     installCommand: 'npx get-shit-done-redux@latest',
     json: false,
   };

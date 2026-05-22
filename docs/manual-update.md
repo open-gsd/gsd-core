@@ -5,7 +5,7 @@ Use this procedure when `npx get-shit-done-redux@latest` is unavailable — e.g.
 ## Prerequisites
 
 - Node.js installed
-- This repo cloned locally (`git clone https://github.com/GSD-redux/get-shit-done-redux`)
+- This repo cloned locally (`git clone https://github.com/open-gsd/get-shit-done-redux`)
 
 ## Steps
 

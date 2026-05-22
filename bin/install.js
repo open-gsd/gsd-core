@@ -8553,7 +8553,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   // Copy agents to agents directory.
   // Skipped under --minimal: gsd-* subagent descriptions are eagerly loaded
   // into the runtime's Agent tool schema, costing ~6k tokens per turn even
-  // when no GSD workflow is active. See GSD-redux/get-shit-done-redux#2762.
+  // when no GSD workflow is active. See open-gsd/get-shit-done-redux#2762.
   // Note: agentsSrc is declared as let before the enclosing try block so it
   // is accessible by installCodexConfig() in the Codex config section below.
   agentsSrc = _stageAgents(path.join(src, 'agents'));
@@ -10425,14 +10425,14 @@ function renderSdkFailFastReport(ir) {
     console.error(`  Or, if you prefer a one-shot run, clear the npx cache first:`);
     console.error(`    ${cyan}npx --yes get-shit-done-redux@latest${reset}`);
     console.error(`  Or build from source (git clone):`);
-    console.error(`    ${cyan}git clone https://github.com/GSD-redux/get-shit-done-redux && cd get-shit-done/sdk && npm install && npm run build${reset}`);
+    console.error(`    ${cyan}git clone https://github.com/open-gsd/get-shit-done-redux && cd get-shit-done/sdk && npm install && npm run build${reset}`);
   } else if (ir.context === 'tarball') {
     console.error(`  The published tarball appears to be missing sdk/dist/ (see #2647).`);
     console.error('');
     console.error(`  Fix: install a version that ships sdk/dist/ globally:`);
     console.error(`    ${cyan}${ir.fix_command}${reset}`);
     console.error(`  Or build from source (git clone):`);
-    console.error(`    ${cyan}git clone https://github.com/GSD-redux/get-shit-done-redux && cd get-shit-done/sdk && npm install && npm run build${reset}`);
+    console.error(`    ${cyan}git clone https://github.com/open-gsd/get-shit-done-redux && cd get-shit-done/sdk && npm install && npm run build${reset}`);
   } else {
     console.error(`  Running from a git clone — build the SDK first:`);
     console.error(`    ${cyan}${ir.fix_command}${reset}`);
@@ -10688,7 +10688,7 @@ function formatStaleStandaloneSdkWarning(info) {
     '     npm uninstall -g @gsd-redux/sdk',
     '     npx -y get-shit-done-redux@latest --<runtime> --global',
     '',
-    '   Tracking: #3406 — https://github.com/GSD-redux/get-shit-done-redux/issues/3406',
+    '   Tracking: #3406 — https://github.com/open-gsd/get-shit-done-redux/issues/3406',
   ].join('\n');
 }
 
