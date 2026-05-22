@@ -643,6 +643,131 @@ objective: Manual review needed
       `Error output must mention 'collision', got: ${result.error ?? result.output}`,
     );
   });
+
+  // #3785 — all-uppercase depends_on value resolves to an all-lowercase plan ID
+  test('#3785: all-uppercase depends_on ref resolves to lowercase plan ID', () => {
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '22-uppercase-dep');
+    fs.mkdirSync(phaseDir, { recursive: true });
+
+    // Plan A: all-lowercase plan ID
+    fs.writeFileSync(
+      path.join(phaseDir, '22-01-setup-PLAN.md'),
+      `---\nwave: 1\nautonomous: true\ndepends_on: []\n---\n<objective>Plan A.</objective>\n`,
+    );
+    // Plan B: depends_on uses ALL-UPPERCASE — must still route the DAG edge to Plan A
+    fs.writeFileSync(
+      path.join(phaseDir, '22-02-PLAN.md'),
+      `---\nwave: 2\nautonomous: true\ndepends_on:\n  - 22-01-SETUP\n---\n<objective>Plan B.</objective>\n`,
+    );
+
+    const result = runGsdTools('phase-plan-index 22', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    const waves = output.waves;
+
+    const wave01 = Object.keys(waves).find(w => waves[w].some(id => id.startsWith('22-01')));
+    const wave02 = Object.keys(waves).find(w => waves[w].some(id => id.startsWith('22-02')));
+    assert.ok(wave01 !== undefined, 'plan 22-01-setup should appear in waves');
+    assert.ok(wave02 !== undefined, 'plan 22-02 should appear in waves');
+    assert.ok(
+      Number(wave01) < Number(wave02),
+      `22-02 must be in a later wave than 22-01 — all-uppercase dep should route correctly (got wave01=${wave01}, wave02=${wave02})`,
+    );
+    // depends_on output must use canonical plan ID (lowercase as-on-disk), not the uppercase ref
+    const planB = output.plans.find(p => p.id === '22-02');
+    assert.deepStrictEqual(planB.depends_on, ['22-01-setup'], 'depends_on output must resolve to canonical lowercase ID');
+  });
+
+  // #3785 — external (cross-phase) depends_on reference is kept as-is in output
+  // The Pass 3 mapping must return the original dep string when planMap has no entry for it.
+  test('#3785: external cross-phase depends_on ref is preserved as-is in output', () => {
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '23-external-dep');
+    fs.mkdirSync(phaseDir, { recursive: true });
+
+    // Plan A: references a plan in a different phase (01-some-other-phase) — planMap won't have it
+    fs.writeFileSync(
+      path.join(phaseDir, '23-01-PLAN.md'),
+      `---\nwave: 1\nautonomous: true\ndepends_on:\n  - 01-01-prereq\n---\n<objective>Plan A.</objective>\n`,
+    );
+
+    const result = runGsdTools('phase-plan-index 23', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    const planA = output.plans.find(p => p.id.startsWith('23-01'));
+    assert.ok(planA !== undefined, 'plan 23-01 should appear in output');
+    // External dep must be preserved verbatim — not dropped, not resolved
+    assert.deepStrictEqual(planA.depends_on, ['01-01-prereq'], 'external cross-phase dep must be kept as-is in output');
+  });
+
+  // #3785 — mixed-case canonical prefix in depends_on resolves via canonicalToId lookup
+  // e.g. depends_on: '22-01-SETUP' where extractCanonicalPlanId gives '22-01' keyed lowercase
+  test('#3785: mixed-case short canonical prefix in depends_on resolves via canonicalToId', () => {
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '24-canon-case');
+    fs.mkdirSync(phaseDir, { recursive: true });
+
+    // Plan A: descriptive filename — id becomes '24-01-auth-hardening'
+    fs.writeFileSync(
+      path.join(phaseDir, '24-01-auth-hardening-PLAN.md'),
+      `---\nwave: 1\nautonomous: true\ndepends_on: []\n---\n<objective>Plan A.</objective>\n`,
+    );
+    // Plan B: depends_on uses an uppercase short prefix '24-01' — canonicalToId maps '24-01' → '24-01-auth-hardening'
+    fs.writeFileSync(
+      path.join(phaseDir, '24-02-followup-PLAN.md'),
+      `---\nwave: 2\nautonomous: true\ndepends_on:\n  - '24-01'\n---\n<objective>Plan B.</objective>\n`,
+    );
+
+    const result = runGsdTools('phase-plan-index 24', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    const waves = output.waves;
+
+    const wave01 = Object.keys(waves).find(w => waves[w].some(id => id.startsWith('24-01')));
+    const wave02 = Object.keys(waves).find(w => waves[w].some(id => id.startsWith('24-02')));
+    assert.ok(wave01 !== undefined, '24-01-auth-hardening should appear in waves');
+    assert.ok(wave02 !== undefined, '24-02-followup should appear in waves');
+    assert.ok(
+      Number(wave01) < Number(wave02),
+      `24-02 must be in a later wave than 24-01 via canonicalToId lookup (got wave01=${wave01}, wave02=${wave02})`,
+    );
+    // depends_on output: '24-01' is the canonical prefix, not in planMap directly, so falls back to dep as-is
+    const planB = output.plans.find(p => p.id === '24-02-followup');
+    assert.ok(planB !== undefined, '24-02-followup plan must be in output');
+    // The dep '24-01' is not a planMap key (full id is '24-01-auth-hardening'), so output keeps '24-01'
+    assert.deepStrictEqual(planB.depends_on, ['24-01'], 'short canonical prefix dep falls through to as-is in Pass 3 output');
+  });
+
+  // #3785 — plans with no depends_on (empty array) still emit correct output without errors
+  test('#3785: plans with undefined/empty depends_on emit empty array without errors', () => {
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '25-no-deps');
+    fs.mkdirSync(phaseDir, { recursive: true });
+
+    // Plan with no depends_on key at all
+    fs.writeFileSync(
+      path.join(phaseDir, '25-01-PLAN.md'),
+      `---\nwave: 1\nautonomous: true\n---\n<objective>Plan A, no deps.</objective>\n`,
+    );
+    // Plan with explicit empty depends_on array
+    fs.writeFileSync(
+      path.join(phaseDir, '25-02-PLAN.md'),
+      `---\nwave: 1\nautonomous: true\ndepends_on: []\n---\n<objective>Plan B, explicit empty deps.</objective>\n`,
+    );
+
+    const result = runGsdTools('phase-plan-index 25', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    const plan01 = output.plans.find(p => p.id === '25-01');
+    const plan02 = output.plans.find(p => p.id === '25-02');
+    assert.ok(plan01 !== undefined, 'plan 25-01 should appear in output');
+    assert.ok(plan02 !== undefined, 'plan 25-02 should appear in output');
+    assert.deepStrictEqual(plan01.depends_on, [], 'plan with no depends_on key must emit empty array');
+    assert.deepStrictEqual(plan02.depends_on, [], 'plan with explicit empty depends_on must emit empty array');
+    // Both independent plans land in the same wave
+    assert.deepStrictEqual(output.waves['1'], ['25-01', '25-02'], 'both no-dep plans should be in wave 1');
+  });
 });
 
 
