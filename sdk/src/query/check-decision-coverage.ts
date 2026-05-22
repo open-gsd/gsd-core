@@ -214,7 +214,17 @@ function extractPlanSections(planContent: string): PlanSections {
     if (inDesignated) bodyParts.push(line);
   }
 
-  return { designated: [...fmParts, bodyParts.join('\n')].join('\n\n') };
+  // gsd-planner emits XML <action>…</action> elements inside <tasks> blocks.
+  // These are directive prose where the agent explicitly cites decision IDs.
+  // The heading-based scan above misses them because <tasks> is an XML tag,
+  // not a markdown heading. Extract all <action> bodies as designated text
+  // so that D-NN citations inside action directives count as covered (bug #5).
+  const actionParts: string[] = [];
+  for (const m of body.matchAll(/<action>([\s\S]*?)<\/action>/gi)) {
+    if (m[1]) actionParts.push(m[1]);
+  }
+
+  return { designated: [...fmParts, bodyParts.join('\n'), actionParts.join('\n')].join('\n\n') };
 }
 
 async function loadPlanSections(phaseDir: string): Promise<PlanSections[]> {

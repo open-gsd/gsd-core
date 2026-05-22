@@ -517,3 +517,71 @@ describe('config-type validation (review F16)', () => {
     expect(warnings.some((w) => /context_coverage_gate.*invalid type/.test(w))).toBe(true);
   });
 });
+
+// ─── Bug #5: decision IDs inside XML <action> bodies (gsd-planner output) ────
+
+describe('decision IDs inside gsd-planner XML <action> bodies (bug #5)', () => {
+  it('counts a D-NN citation inside an <action> tag as covered (plan gate)', async () => {
+    // gsd-planner emits PLAN.md bodies with <tasks><task><action>…</action></task></tasks>.
+    // Decision IDs are cited inside <action> directives. Before the fix this was invisible
+    // to the gate because the body-section extractor only recognized markdown headings,
+    // not XML element names, so the <tasks> block was never treated as a designated section.
+    const planBody = `<tasks>
+<task type="auto">
+<name>Implement decision enforcement</name>
+<files>src/foo.ts</files>
+<action>Implement D-42 per the architecture: use strict type narrowing everywhere.</action>
+<verify>tsc --noEmit</verify>
+<done>D-42 is enforced</done>
+</task>
+</tasks>
+`;
+    await setupPhase(
+      `<decisions>
+### Architecture
+- **D-42:** Use strict type narrowing everywhere in the implementation
+</decisions>`,
+      {
+        '17-01-PLAN.md': planFile(
+          `  truths: []\n  artifacts: []\n  key_links: []`,
+          planBody,
+        ),
+      },
+    );
+    const result = await checkDecisionCoveragePlan([phaseDir, contextPath], tmp);
+    expect(result.data.passed).toBe(true);
+    expect(result.data.covered).toBe(1);
+    expect(result.data.uncovered).toEqual([]);
+  });
+
+  it('counts multiple D-NN citations across several <action> tags in the same plan', async () => {
+    const planBody = `<tasks>
+<task type="auto">
+<name>Task one</name>
+<action>Apply D-10: disable legacy fallback paths in the router.</action>
+</task>
+<task type="auto">
+<name>Task two</name>
+<action>Apply D-11: require explicit error types, not generic Error.</action>
+</task>
+</tasks>
+`;
+    await setupPhase(
+      `<decisions>
+### Architecture
+- **D-10:** Disable legacy fallback paths in the router
+- **D-11:** Require explicit error types, not generic Error
+</decisions>`,
+      {
+        '17-01-PLAN.md': planFile(
+          `  truths: []\n  artifacts: []\n  key_links: []`,
+          planBody,
+        ),
+      },
+    );
+    const result = await checkDecisionCoveragePlan([phaseDir, contextPath], tmp);
+    expect(result.data.passed).toBe(true);
+    expect(result.data.covered).toBe(2);
+    expect(result.data.uncovered).toEqual([]);
+  });
+});
