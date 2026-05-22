@@ -90,9 +90,10 @@ async function sortedMilestoneArchiveDirs(
       if (a === currentArchiveName) return -1;
       if (b === currentArchiveName) return 1;
     }
-    // Remaining dirs in descending lexicographic order (newest version last
-    // in name → largest string first, same as the previous .reverse() logic).
-    return b.localeCompare(a, undefined, { numeric: true });
+    // Remaining dirs in ascending version order (oldest milestone first).
+    // v1.2-phases sorts before v1.10-phases so the earliest archive is
+    // searched first — deterministic and predictable for callers (#3816).
+    return a.localeCompare(b, undefined, { numeric: true });
   });
 }
 
