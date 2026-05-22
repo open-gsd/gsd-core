@@ -26,15 +26,34 @@ const EXECUTE_PHASE = path.join(
   __dirname, '..', 'get-shit-done', 'workflows', 'execute-phase.md'
 );
 
+/**
+ * Parse execute-phase.md into a structured contract object.
+ * Returns typed boolean fields so tests can assert on structure
+ * rather than raw text.
+ */
+function parseExecutePhaseContract(filePath) {
+  const lines = fs.readFileSync(filePath, 'utf-8').split(/\r?\n/);
+  return {
+    // Does the workflow call the worktree.cleanup-wave SDK command?
+    delegatesToCleanupWave: lines.some(l => l.includes('worktree.cleanup-wave')),
+    // Does the cleanup-wave invocation use || exit 1 (fail-closed)?
+    cleanupWaveFailClosed: lines.some(
+      l => /\$GSD_SDK query worktree\.cleanup-wave.*\|\| exit 1/.test(l),
+    ),
+    // Does the workflow export/reference WAVE_WORKTREE_MANIFEST for the SDK?
+    passesWaveManifest: lines.some(l => l.includes('WAVE_WORKTREE_MANIFEST')),
+  };
+}
+
 describe('execute-phase.md — post-merge deletion audit (#2384)', () => {
-  const content = fs.readFileSync(EXECUTE_PHASE, 'utf-8');
+  const contract = parseExecutePhaseContract(EXECUTE_PHASE);
 
   test('execute-phase delegates to worktree.cleanup-wave (which handles deletion audit)', () => {
     // After #3797: worktree.cleanup-wave in worktree-safety.cjs performs
     // diff --diff-filter=D checks (blocks branches with deletions) before merge.
     // The workflow delegates to the SDK rather than duplicating the check inline.
     assert.ok(
-      content.includes('worktree.cleanup-wave'),
+      contract.delegatesToCleanupWave,
       'execute-phase.md must delegate to $GSD_SDK query worktree.cleanup-wave (#2384/#3797)',
     );
   });
@@ -42,9 +61,8 @@ describe('execute-phase.md — post-merge deletion audit (#2384)', () => {
   test('execute-phase cleanup-wave uses || exit 1 (fail-closed for blocked deletions)', () => {
     // If worktree.cleanup-wave detects deletions, it exits 1 (blocked).
     // The || exit 1 in the workflow propagates that refusal rather than swallowing it.
-    assert.match(
-      content,
-      /\$GSD_SDK query worktree\.cleanup-wave.*\|\| exit 1/,
+    assert.ok(
+      contract.cleanupWaveFailClosed,
       'execute-phase.md must use || exit 1 so deletion-blocked cleanups surface to the orchestrator',
     );
   });
@@ -54,7 +72,7 @@ describe('execute-phase.md — post-merge deletion audit (#2384)', () => {
     // The workflow must still enforce WAVE_WORKTREE_MANIFEST so the SDK
     // has the info it needs to validate branches.
     assert.ok(
-      content.includes('WAVE_WORKTREE_MANIFEST'),
+      contract.passesWaveManifest,
       'execute-phase.md must pass WAVE_WORKTREE_MANIFEST to worktree.cleanup-wave',
     );
   });
