@@ -6,23 +6,8 @@ on:
       - main
       - 'release/**'
       - 'hotfix/**'
-  pull_request:
-    branches:
-      - main
-    paths:
-      - 'bin/**'
-      - 'get-shit-done/**'
-      - 'agents/**'
-      - 'commands/**'
-      - 'hooks/**'
-      - 'sdk/**'
-      - 'tests/**'
-      - 'scripts/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'tsconfig*.json'
-      - '.github/workflows/test.yml'
-      - '.github/workflows/test-skip.yml'
+  pull_request_review:
+    types: [submitted]
   workflow_dispatch:
 
 concurrency:
@@ -34,6 +19,7 @@ jobs:
   # Runs once (not per matrix node version) since it is a file-content check.
   lint-tests:
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request_review' || (github.event.review.state == 'approved' && github.event.pull_request.base.ref == 'main')
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
@@ -56,6 +42,7 @@ jobs:
 
   test:
     runs-on: ${{ matrix.os }}
+    if: github.event_name != 'pull_request_review' || (github.event.review.state == 'approved' && github.event.pull_request.base.ref == 'main')
     timeout-minutes: 15
     strategy:
       # fail-fast disabled so a single lane failure doesn't cancel the rest;
@@ -81,7 +68,7 @@ jobs:
       # on main in between. Explicitly merge current origin/main here so tests
       # always run against the latest trunk.
       - name: Rebase check — merge origin/main into PR head
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review'
         shell: bash
         run: |
           set -euo pipefail
@@ -212,13 +199,14 @@ jobs:
   # Replaces main's per-matrix `Run tests with coverage` step.
   coverage:
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request_review' || (github.event.review.state == 'approved' && github.event.pull_request.base.ref == 'main')
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           fetch-depth: 0
       - name: Rebase check — merge origin/main into PR head
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review'
         shell: bash
         run: |
           set -euo pipefail

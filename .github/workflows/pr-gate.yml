@@ -1,8 +1,8 @@
 name: PR Gate
 
 on:
-  pull_request:
-    types: [opened, synchronize]
+  pull_request_review:
+    types: [submitted]
 
 permissions:
   pull-requests: write
@@ -11,6 +11,7 @@ permissions:
 jobs:
   size-check:
     runs-on: ubuntu-latest
+    if: github.event.review.state == 'approved'
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2

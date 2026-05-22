@@ -1,11 +1,8 @@
 name: Security Scan
 
 on:
-  pull_request:
-    branches:
-      - main
-      - 'release/**'
-      - 'hotfix/**'
+  pull_request_review:
+    types: [submitted]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
@@ -14,6 +11,7 @@ concurrency:
 jobs:
   security:
     runs-on: ubuntu-latest
+    if: github.event.review.state == 'approved' && contains(fromJSON('["main"]'), github.event.pull_request.base.ref) || github.event.review.state == 'approved' && startsWith(github.event.pull_request.base.ref, 'release/') || github.event.review.state == 'approved' && startsWith(github.event.pull_request.base.ref, 'hotfix/')
     timeout-minutes: 5
 
     steps:
@@ -24,28 +22,28 @@ jobs:
 
       - name: Prompt injection scan
         env:
-          BASE_REF: ${{ github.base_ref }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           chmod +x scripts/prompt-injection-scan.sh
           scripts/prompt-injection-scan.sh --diff "origin/$BASE_REF"
 
       - name: Base64 obfuscation scan
         env:
-          BASE_REF: ${{ github.base_ref }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           chmod +x scripts/base64-scan.sh
           scripts/base64-scan.sh --diff "origin/$BASE_REF"
 
       - name: Secret scan
         env:
-          BASE_REF: ${{ github.base_ref }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           chmod +x scripts/secret-scan.sh
           scripts/secret-scan.sh --diff "origin/$BASE_REF"
 
       - name: Planning directory check
         env:
-          BASE_REF: ${{ github.base_ref }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           # Ensure .planning/ runtime data is not committed in PRs
           # (The GSD repo itself has .planning/ in .gitignore, but PRs

@@ -14,19 +14,8 @@ name: Install Smoke
 # - workflow_call: invoked from release.yml as a pre-publish gate.
 
 on:
-  pull_request:
-    branches:
-      - main
-    paths:
-      - 'bin/install.js'
-      - 'bin/gsd-sdk.js'
-      - 'sdk/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'scripts/release-tarball-smoke.cjs'
-      - 'tests/release-tarball-smoke.install.test.cjs'
-      - '.github/workflows/install-smoke.yml'
-      - '.github/workflows/release.yml'
+  pull_request_review:
+    types: [submitted]
   push:
     branches:
       - main
@@ -51,6 +40,7 @@ jobs:
   # ---------------------------------------------------------------------------
   smoke:
     runs-on: ${{ matrix.os }}
+    if: github.event_name != 'pull_request_review' || (github.event.review.state == 'approved' && github.event.pull_request.base.ref == 'main')
     timeout-minutes: 12
 
     strategy:
@@ -77,7 +67,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           FULL_ONLY: ${{ matrix.full_only }}
         run: |
-          if [ "$EVENT" = "pull_request" ] && [ "$FULL_ONLY" = "true" ]; then
+          if { [ "$EVENT" = "pull_request" ] || [ "$EVENT" = "pull_request_review" ]; } && [ "$FULL_ONLY" = "true" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -98,7 +88,7 @@ jobs:
       # latest trunk. If the merge conflicts, emit a clear "rebase onto main"
       # diagnostic instead of a downstream build error that looks unrelated.
       - name: Rebase check — merge origin/main into PR head
-        if: steps.skip.outputs.skip != 'true' && github.event_name == 'pull_request'
+        if: steps.skip.outputs.skip != 'true' && (github.event_name == 'pull_request' || github.event_name == 'pull_request_review')
         shell: bash
         run: |
           set -euo pipefail
@@ -229,6 +219,7 @@ jobs:
   # ---------------------------------------------------------------------------
   smoke-unpacked:
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request_review' || (github.event.review.state == 'approved' && github.event.pull_request.base.ref == 'main')
     timeout-minutes: 10
 
     steps:
@@ -241,7 +232,7 @@ jobs:
       # against the recorded merge-base, not current main. Explicitly merge
       # origin/main so smoke-unpacked also runs against the latest trunk.
       - name: Rebase check — merge origin/main into PR head
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review'
         shell: bash
         run: |
           set -euo pipefail
