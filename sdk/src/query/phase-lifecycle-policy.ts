@@ -153,7 +153,7 @@ export function buildPhaseRoadmapEntry(
   const dependsOn = namingMode === 'custom' || prevPhase === null || prevPhase < 1
     ? ''
     : `\n**Depends on:** Phase ${prevPhase}`;
-  return `\n### Phase ${phaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run /gsd:plan-phase ${phaseId} to break down)\n`;
+  return `\n### Phase ${phaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run /gsd-plan-phase ${phaseId} to break down)\n`;
 }
 
 export function collectDecimalSuffixesFromDirNames(basePhase: string, dirNames: string[]): Set<number> {
