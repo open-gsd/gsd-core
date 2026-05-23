@@ -1,5 +1,15 @@
 /**
  * Phase — Phase CRUD, query, and lifecycle operations
+ *
+ * Re-export shim note (issue #4 / ADR-3524):
+ *   The phase lifecycle pure-computation helpers live in phase-lifecycle.generated.cjs
+ *   (generated from sdk/src/query/phase-lifecycle.ts). cmdPhaseComplete uses
+ *   deriveProgressFromRoadmap + clampPercent from that module to fix the
+ *   non-idempotent Completed Phases blind-increment bug.
+ *
+ *   The async mutation handlers (phaseAdd, phaseInsert, phaseRemove, phaseComplete)
+ *   in phase-lifecycle.ts are I/O-bound and remain per-side per ADR-3524 Section 4.
+ *   This file provides the CJS (sync) implementations of those handlers.
  */
 
 const fs = require('fs');
@@ -10,6 +20,9 @@ const { planningDir, withPlanningLock } = require('./planning-workspace.cjs');
 const { extractFrontmatter } = require('./frontmatter.cjs');
 const { writeStateMd, readModifyWriteStateMd, stateExtractField, stateReplaceField, stateReplaceFieldWithFallback, updatePerformanceMetricsSection } = require('./state.cjs');
 const { formatGsdSlash, resolveRuntime } = require('./runtime-slash.cjs');
+// Generated pure-computation helpers for cmdPhaseComplete (issue #4 fix).
+// Source: sdk/src/query/phase-lifecycle.ts. Regenerate: node sdk/scripts/gen-phase-lifecycle.mjs
+const { deriveProgressFromRoadmap, clampPercent } = require('./phase-lifecycle.generated.cjs');
 
 // #2893 — strict canonical filter: `{padded_phase}-{NN}-PLAN.md` or `PLAN.md`.
 // Documented in agents/gsd-planner.md (write_phase_prompt step). The wider
@@ -1454,24 +1467,39 @@ function cmdPhaseComplete(cwd, phaseNum, raw) {
       stateContent = stateReplaceFieldWithFallback(stateContent, 'Last Activity Description', null,
         `Phase ${phaseNum} complete${nextPhaseNum ? `, transitioned to Phase ${nextPhaseNum}` : ''}`);
 
-      // Increment Completed Phases counter (#956)
+      // Update Completed Phases counter — derive from ROADMAP instead of blind +1.
+      // Fix for issue #4: the original code did parseInt(completedRaw, 10) + 1 on every
+      // call, making phase complete non-idempotent (double-call = double-increment).
+      // Now we read the freshly-updated ROADMAP to count Complete rows, then use
+      // deriveProgressFromRoadmap() from phase-lifecycle.generated.cjs (generated from
+      // sdk/src/query/phase-lifecycle.ts "Root cause 1 fix" block).
+      // References: issue #4, ADR-3524, gen-phase-lifecycle.mjs.
       const completedRaw = stateExtractField(stateContent, 'Completed Phases');
-      if (completedRaw) {
-        const newCompleted = parseInt(completedRaw, 10) + 1;
+      if (completedRaw !== null) {
+        // Derive from ROADMAP if available (idempotent); fall back to existing value.
+        let newCompleted = parseInt(completedRaw, 10);
+        let derivedTotalPhases = null;
+        if (fs.existsSync(roadmapPath)) {
+          try {
+            const freshRoadmap = fs.readFileSync(roadmapPath, 'utf-8');
+            const derived = deriveProgressFromRoadmap(freshRoadmap);
+            if (derived.completedPhases !== null) newCompleted = derived.completedPhases;
+            if (derived.totalPhases !== null) derivedTotalPhases = derived.totalPhases;
+          } catch { /* fall through to existing value */ }
+        }
         stateContent = stateReplaceField(stateContent, 'Completed Phases', String(newCompleted)) || stateContent;
 
-        // Recalculate percent based on completed / total (#956)
+        // Recalculate percent — use clampPercent to prevent >100% (#4 unclamped bug).
         const totalRaw = stateExtractField(stateContent, 'Total Phases');
-        if (totalRaw) {
-          const totalPhases = parseInt(totalRaw, 10);
-          if (totalPhases > 0) {
-            const newPercent = Math.round((newCompleted / totalPhases) * 100);
-            stateContent = stateReplaceField(stateContent, 'Progress', `${newPercent}%`) || stateContent;
-            stateContent = stateContent.replace(
-              /(percent:\s*)\d+/,
-              `$1${newPercent}`
-            );
-          }
+        const totalPhases = derivedTotalPhases
+          || (totalRaw ? parseInt(totalRaw, 10) : null);
+        if (totalPhases && totalPhases > 0) {
+          const newPercent = clampPercent(newCompleted, totalPhases);
+          stateContent = stateReplaceField(stateContent, 'Progress', `${newPercent}%`) || stateContent;
+          stateContent = stateContent.replace(
+            /(percent:\s*)\d+/,
+            `$1${newPercent}`
+          );
         }
       }
 
