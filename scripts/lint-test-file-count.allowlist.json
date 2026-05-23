@@ -11,7 +11,7 @@
     "state":                  { "current": 10, "issue": "21" },
     "config":                 { "current": 8,  "issue": "TBD" },
     "graphify":               { "current": 7,  "issue": "TBD" },
-    "progress":               { "current": 5,  "issue": "TBD" },
+    "progress":               { "current": 6,  "issue": "14"  },
     "cli":                    { "current": 5,  "issue": "TBD" },
     "surface":                { "current": 5,  "issue": "TBD" },
     "commit":                 { "current": 4,  "issue": "TBD" },

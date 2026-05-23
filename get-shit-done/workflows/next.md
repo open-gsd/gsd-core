@@ -219,6 +219,18 @@ Display the determination:
 
 Then immediately invoke the determined command via SlashCommand.
 Do not ask for confirmation — the whole point of `/gsd:progress --next` is zero-friction advancement.
+
+**If `--auto` was passed:** after the determined command completes, automatically re-invoke `/gsd:progress --next --auto` to continue chaining to the next step. Repeat until one of:
+- A milestone completes (`/gsd:complete-milestone` is reached)
+- A blocking decision is required (safety gate triggers, prior-phase completeness prompt, user input needed)
+- An error or paused state is detected
+
+When stopping due to a blocker, display:
+```
+⛔ Auto-chain stopped: [reason — e.g. safety gate, blocking decision required]
+
+Resume with: `/gsd:progress --next --auto` once resolved.
+```
 </step>
 
 </process>
