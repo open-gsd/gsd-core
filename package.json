@@ -62,7 +62,7 @@
     "fallow": "^2.70.0"
   },
   "scripts": {
-    "check:env": "./scripts/check-env.sh",
+    "check:env": "bash scripts/check-env.sh",
     "check:integrity": "./scripts/check-npm-integrity.sh",
     "build:hooks": "node scripts/build-hooks.js",
     "build:sdk": "cd sdk && npm ci && npm run build",
