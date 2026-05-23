@@ -24,17 +24,24 @@ describe('#14: /gsd:progress --next --auto flag must be documented and propagate
     );
   });
 
-  test('progress.md <process> block passes --auto through to next workflow', () => {
+  test('progress.md <process> block explicitly passes --auto through to next workflow', () => {
     const command = fs.readFileSync(
       path.join(ROOT, 'commands', 'gsd', 'progress.md'),
       'utf8'
     );
 
-    // The process block must explicitly mention --auto as a passthrough flag
-    // so agents don't silently drop it at the handoff boundary.
+    // Extract only the <process>…</process> block so this assertion is
+    // scoped to the handoff wiring, not just any occurrence in the file.
+    const processMatch = command.match(/<process>([\s\S]*?)<\/process>/);
     assert.ok(
-      command.includes('--auto'),
-      'progress.md must mention --auto so it is not silently stripped at the --next handoff'
+      processMatch,
+      'progress.md must contain a <process> block'
+    );
+    const processBlock = processMatch[1];
+
+    assert.ok(
+      processBlock.includes('--auto'),
+      'progress.md <process> block must explicitly mention --auto so it is not silently stripped at the --next handoff'
     );
   });
 
