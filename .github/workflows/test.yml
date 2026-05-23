@@ -195,6 +195,11 @@ jobs:
         shell: bash
         run: node sdk/scripts/check-workstream-name-policy-fresh.mjs
 
+      - name: SDK generated validate artifact drift check
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == 24
+        shell: bash
+        run: node sdk/scripts/check-validate-fresh.mjs
+
       - name: Shared Module hand-sync drift check
         if: matrix.os == 'ubuntu-latest' && matrix.node-version == 24
         shell: bash
