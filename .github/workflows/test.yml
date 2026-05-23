@@ -78,8 +78,12 @@ jobs:
       # On Windows git 2.54, the gitdir conditional include is unreliable for a
       # freshly-initialised repo being fetched for the first time: the path
       # comparison (forward-slash vs backslash, case sensitivity) can fail to
-      # match, leaving the fetch unauthenticated.  Pre-seeding the global config
-      # with the extraheader bypasses includeIf entirely and is idempotent.
+      # match, leaving the fetch unauthenticated.
+      #
+      # Fix: pre-seed the global git config with the extraheader on Windows and
+      # use persist-credentials: false so checkout does NOT also write an
+      # includeIf entry. The Rebase check step already sets its own remote URL
+      # (x-access-token:${GITHUB_TOKEN}@github.com) for subsequent fetches.
       - name: Seed git auth header (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -93,7 +97,12 @@ jobs:
         with:
           # Fetch full history so we can merge origin/main for stale-base detection.
           fetch-depth: 0
-          persist-credentials: true
+          # Windows: persist-credentials is set to false because the global git
+          # config was pre-seeded above. Using true here would cause checkout to
+          # also write an includeIf entry, resulting in duplicate Authorization
+          # headers on Windows git 2.54 (HTTP 400). On Linux/macOS the
+          # includeIf mechanism works correctly, so true is safe there.
+          persist-credentials: ${{ runner.os != 'Windows' }}
           token: ${{ github.token }}
 
       - name: Guard — require GitHub-hosted runner
