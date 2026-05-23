@@ -153,6 +153,13 @@ const INTERNAL_COMPONENT_SLUGS = new Set([
   // docs/discussions/grok-build-support-2026-05.md. The regex captures
   // "/gsd-sync-skills" from the path. Invoked via Skill(skill="gsd-sync-skills").
   'sync-skills',
+
+  // gsd-test-runner — GitHub repository name: "github.com/open-gsd/gsd-test-runner".
+  // docs/contributing/bootstrap.md references it as a hyperlink target:
+  //   [gsd-test-runner](https://github.com/open-gsd/gsd-test-runner)
+  // The regex captures "/gsd-test-runner" from the URL path component. This is
+  // an external tool repo, not a user-typable slash command in this product.
+  'test-runner',
 ]);
 
 /**
