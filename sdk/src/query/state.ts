@@ -47,7 +47,13 @@ export async function getMilestonePhaseFilter(projectDir: string, workstream?: s
   try {
     const roadmapContent = await readFile(planningPaths(projectDir, workstream).roadmap, 'utf-8');
     const roadmap = await extractCurrentMilestone(roadmapContent, projectDir, workstream);
-    const phasePattern = /#{2,4}\s*Phase\s+([\w][\w.-]*)\s*:/gi;
+    // Match both heading-style (### Phase N:) and GFM task-list bullet-style
+    // (- [ ] **Phase N: title**) declarations.
+    // GFM § ATX headings: https://github.github.com/gfm/#atx-headings
+    // GFM § Task list items: https://github.github.com/gfm/#task-list-items-extension-
+    // #3 defect-2: the original regex matched only heading-style declarations;
+    // bullet-only ROADMAPs caused milestonePhaseNums.size === 0 -> passAll -> phase 99 leakage.
+    const phasePattern = /(?:#{2,4}\s*|-\s*(?:\[[x ]\]\s*)?\*{0,2}\s*)Phase\s+([\w][\w.-]*)\s*:/gi;
     let m: RegExpExecArray | null;
     while ((m = phasePattern.exec(roadmap)) !== null) {
       milestonePhaseNums.add(m[1]);
