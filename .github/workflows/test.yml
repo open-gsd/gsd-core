@@ -232,6 +232,21 @@ jobs:
         shell: bash
         run: node sdk/scripts/check-validate-fresh.mjs
 
+      - name: SDK generated phase artifact drift check
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == 24
+        shell: bash
+        run: node sdk/scripts/check-phase-fresh.mjs
+
+      - name: SDK generated phase-lifecycle artifact drift check
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == 24
+        shell: bash
+        run: node sdk/scripts/check-phase-lifecycle-fresh.mjs
+
+      - name: SDK generated phase-lifecycle-policy artifact drift check
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == 24
+        shell: bash
+        run: node sdk/scripts/check-phase-lifecycle-policy-fresh.mjs
+
       - name: Shared Module hand-sync drift check
         if: matrix.os == 'ubuntu-latest' && matrix.node-version == 24
         shell: bash
