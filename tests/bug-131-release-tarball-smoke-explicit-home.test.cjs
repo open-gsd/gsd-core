@@ -8,6 +8,12 @@
 // Fix: runNpm() must inject an explicit HOME, npm_config_cache, and
 // npm_config_userconfig that point into a temp directory it owns, so that npm
 // never reads from or writes to the caller's HOME.
+//
+// Test 3 (added in the second fix pass) verifies that isolatedNpmEnv() — the
+// companion export that lets runSmoke() apply the same isolation — also redirects
+// HOME away from the caller's HOME. Without this, subtests A-F of
+// release-tarball-smoke.install.test.cjs still fail because runSmoke() calls
+// spawnSync('npm', ...) internally and was not covered by the runNpm() fix.
 
 'use strict';
 
@@ -18,8 +24,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
-// The helper under test.
-const { runNpm } = require('./helpers.cjs');
+// The helpers under test.
+const { runNpm, isolatedNpmEnv } = require('./helpers.cjs');
 
 describe('bug-131: runNpm isolates HOME from the caller environment', () => {
   // ── Test 1 — runNpm works with an unwritable HOME ────────────────────────
@@ -28,7 +34,7 @@ describe('bug-131: runNpm isolates HOME from the caller environment', () => {
   // HOME/.npmrc and HOME/.npm, fails with EACCES, and runNpm throws.
   // With the fix, runNpm injects its own isolated HOME and npm succeeds.
   test('runNpm succeeds even when process HOME is unwritable', () => {
-    // Create an unwritable dir to act as a poisoned HOME.
+    // Create an unwritable dir to serve as a poisoned HOME.
     const poisonedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-bug131-poison-'));
     try {
       fs.chmodSync(poisonedHome, 0o500); // r-x only — not writable
@@ -38,6 +44,7 @@ describe('bug-131: runNpm isolates HOME from the caller environment', () => {
       // to the unwritable dir. The script exits 0 on success, non-zero on throw.
       const script = `
         process.env.HOME = ${JSON.stringify(poisonedHome)};
+        process.env.USERPROFILE = ${JSON.stringify(poisonedHome)};
         const { runNpm } = require(${JSON.stringify(path.join(__dirname, 'helpers.cjs'))});
         try {
           const out = runNpm(['--version']);
@@ -135,13 +142,73 @@ describe('bug-131: runNpm isolates HOME from the caller environment', () => {
     );
 
     // It must be somewhere under the system tmp dir, confirming isolation.
+    // Use realpathSync on both sides so that macOS /var→/private/var symlinks
+    // do not cause a false mismatch when os.tmpdir() and the resolved cache
+    // path differ only in symlink expansion. The cache sub-directory (.npm) may
+    // not exist yet, so resolve the nearest existing ancestor and reconstruct.
     const sysTmp = fs.realpathSync(os.tmpdir());
     const realCacheDir = (() => {
-      try { return fs.realpathSync(effectiveCacheDir); } catch (_) { return effectiveCacheDir; }
+      try {
+        return fs.realpathSync(effectiveCacheDir);
+      } catch (_) {
+        // .npm sub-dir may not exist yet; resolve its parent (the isolated HOME
+        // temp dir) which always exists, then re-append the basename.
+        try {
+          return path.join(
+            fs.realpathSync(path.dirname(effectiveCacheDir)),
+            path.basename(effectiveCacheDir),
+          );
+        } catch (__) {
+          return effectiveCacheDir;
+        }
+      }
     })();
     assert.ok(
       realCacheDir.startsWith(sysTmp),
       `npm cache dir ${realCacheDir} should be under tmpdir ${sysTmp}`,
+    );
+  });
+
+  // ── Test 3 — isolatedNpmEnv() redirects HOME away from the caller's HOME ──
+  // runSmoke() calls spawnSync('npm', ...) with npmEnv from isolatedNpmEnv().
+  // If isolatedNpmEnv() didn't redirect HOME, subtests A-F would still fail on
+  // Docker hosts with an unwritable HOME (the original bug #131 root cause,
+  // manifesting via the sibling runSmoke() path). (#131)
+  test('isolatedNpmEnv() HOME is distinct from the caller HOME and lives under tmpdir', () => {
+    const env = isolatedNpmEnv();
+
+    // Must expose a HOME key.
+    assert.ok(
+      typeof env.HOME === 'string' && env.HOME.length > 0,
+      'isolatedNpmEnv() must set HOME',
+    );
+
+    // Must not be the caller's HOME.
+    const callerHome = os.homedir();
+    assert.notEqual(
+      env.HOME,
+      callerHome,
+      `isolatedNpmEnv() HOME must differ from caller HOME ${callerHome}`,
+    );
+
+    // Must live under the system tmpdir, confirming it is an isolated temp directory.
+    const sysTmp = fs.realpathSync(os.tmpdir());
+    const realHome = (() => {
+      try { return fs.realpathSync(env.HOME); } catch (_) { return env.HOME; }
+    })();
+    assert.ok(
+      realHome.startsWith(sysTmp),
+      `isolatedNpmEnv() HOME ${realHome} should be under tmpdir ${sysTmp}`,
+    );
+
+    // npm_config_cache and npm_config_userconfig must also be set and under the isolated HOME.
+    assert.ok(
+      typeof env.npm_config_cache === 'string' && env.npm_config_cache.startsWith(env.HOME),
+      `npm_config_cache ${env.npm_config_cache} should be under isolated HOME ${env.HOME}`,
+    );
+    assert.ok(
+      typeof env.npm_config_userconfig === 'string' && env.npm_config_userconfig.startsWith(env.HOME),
+      `npm_config_userconfig ${env.npm_config_userconfig} should be under isolated HOME ${env.HOME}`,
     );
   });
 });
