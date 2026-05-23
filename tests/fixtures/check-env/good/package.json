@@ -1,0 +1,8 @@
+{
+  "name": "check-env-fixture-good",
+  "version": "1.0.0",
+  "engines": {
+    "node": ">=22.0.0",
+    "npm": ">=9.0.0"
+  }
+}
