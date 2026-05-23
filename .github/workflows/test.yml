@@ -74,7 +74,25 @@ jobs:
         # A dedicated windows-compat workflow runs on a weekly schedule.
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      # actions/checkout@v6 uses includeIf.gitdir: to inject auth on Windows.
+      # On Windows git 2.54, the gitdir path comparison (forward-slash key vs
+      # backslash-resolved gitdir) is unreliable, so the conditional include
+      # intermittently fails to fire and the fetch proceeds unauthenticated.
+      #
+      # Fix: use actions/checkout@v4 on Windows only. v4 writes the auth token
+      # directly to .git/config (http.extraheader) instead of using includeIf,
+      # which is reliable across all git versions and platforms.
+      # Linux/macOS continue using v6 (includeIf works correctly there).
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2 (Windows)
+        if: runner.os == 'Windows'
+        with:
+          # Fetch full history so we can merge origin/main for stale-base detection.
+          fetch-depth: 0
+          persist-credentials: true
+          token: ${{ github.token }}
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2 (Linux/macOS)
+        if: runner.os != 'Windows'
         with:
           # Fetch full history so we can merge origin/main for stale-base detection.
           fetch-depth: 0
