@@ -31,12 +31,18 @@ const LIVE_ROOT = path.resolve(__dirname, '..');
 /**
  * Run check-env.sh synchronously in `cwd` with optional extra args.
  * Returns { status, stdout, stderr }.
+ * @param {string} cwd
+ * @param {string[]} args
+ * @param {Record<string,string>} [envOverrides] - optional env vars to overlay
+ *   on process.env.  Pass { CI: '' } to suppress GitHub Actions CI detection
+ *   so that version-manager-pin is exercised even inside CI runners.
  */
-function runScript(cwd, args = []) {
+function runScript(cwd, args = [], envOverrides = {}) {
   const result = spawnSync('bash', [SCRIPT, ...args], {
     cwd,
     encoding: 'utf8',
     timeout: 30_000,
+    env: { ...process.env, ...envOverrides },
   });
   return {
     status: result.status ?? 1,
@@ -121,7 +127,10 @@ describe('check-env.sh', () => {
     const cwd = path.join(FIXTURE_ROOT, 'bad-nvmrc');
     // Fixture .nvmrc is set to (activeNodeMajor + 99) by the before() hook above,
     // guaranteeing a mismatch regardless of the CI matrix Node version.
-    const { status, stdout } = runScript(cwd);
+    // Override CI='' so the version-manager-pin check is not skipped even when
+    // this test runs inside a CI runner (GitHub Actions sets CI=true, which
+    // would otherwise turn the pin check into a skip and exit 0).
+    const { status, stdout } = runScript(cwd, [], { CI: '' });
     assert.equal(
       status, 1,
       `Expected exit 1 (nvmrc mismatch), got ${status}.\nstdout: ${stdout}`

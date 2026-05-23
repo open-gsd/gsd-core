@@ -138,9 +138,18 @@ satisfies_constraint() {
 }
 
 # Read a field from package.json using node (avoids requiring jq).
+# Uses fs.readFileSync + JSON.parse instead of require() so that Windows
+# backslash paths in PACKAGE_JSON are not silently mangled inside the JS
+# string literal passed via -e.
 pkg_field() {
+  # Normalise backslashes to forward-slashes for the inline JS string so
+  # require-via-fs works on Windows (Git-bash / mingw) without treating
+  # "\a", "\n", etc. as escape sequences.
+  local json_path="${PACKAGE_JSON//\\//}"
   node -e "
-    const pkg = require('${PACKAGE_JSON}');
+    const fs = require('fs');
+    let pkg;
+    try { pkg = JSON.parse(fs.readFileSync('${json_path}', 'utf8')); } catch(e) { process.exit(0); }
     const val = '${1}'.split('.').reduce((o, k) => (o && o[k] !== undefined ? o[k] : null), pkg);
     if (val !== null) process.stdout.write(String(val));
   " 2>/dev/null || true
@@ -243,6 +252,11 @@ fi
 
 if [[ -z "${PINNED_MAJOR}" ]]; then
   add_check "version-manager-pin" "skip" "no .nvmrc, .node-version, or .tool-versions found — skipping"
+elif [[ "${CI:-}" == "true" ]]; then
+  # In CI the matrix explicitly tests multiple Node majors, so a pin-mismatch
+  # is expected and intentional.  Skip rather than fail to avoid blocking the
+  # non-22 matrix rows (Node 24, 26, …) while still exercising all other checks.
+  add_check "version-manager-pin" "skip" "CI=true — version-manager pin check skipped (matrix tests multiple Node majors)"
 else
   ACTIVE_MAJOR="${CURRENT_NODE%%.*}"
   if [[ "${ACTIVE_MAJOR}" == "${PINNED_MAJOR}" ]]; then
