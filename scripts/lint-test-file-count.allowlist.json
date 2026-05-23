@@ -8,7 +8,7 @@
     "verify":                 { "current": 10, "issue": "3767" },
     "install":                { "current": 9,  "issue": "TBD" },
     "init":                   { "current": 8,  "issue": "TBD" },
-    "state":                  { "current": 9,  "issue": "TBD" },
+    "state":                  { "current": 10, "issue": "21" },
     "config":                 { "current": 8,  "issue": "TBD" },
     "graphify":               { "current": 7,  "issue": "TBD" },
     "progress":               { "current": 5,  "issue": "TBD" },
