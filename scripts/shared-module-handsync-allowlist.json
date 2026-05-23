@@ -30,7 +30,7 @@
       "cjs": "get-shit-done/bin/lib/phase.cjs",
       "ts": "sdk/src/query/phase.ts",
       "classification": "cooperating-sibling",
-      "justification": "CJS phase.cjs is the full phase lifecycle implementation; SDK phase.ts provides the native query handler. The SDK delegates to CJS for most subcommands. Phase 5.2+ candidate for further migration."
+      "justification": "CJS phase.cjs implements sync mutation handlers (phaseAdd, phaseInsert, phaseRemove, phaseComplete) and query handlers with sync I/O; SDK phase.ts provides the native async query handler. The async mutation handlers (phase-lifecycle.ts) and pure policy helpers (phase-lifecycle-policy.ts) are I/O-bound or pure and remain per-side (ADR-3524 §4). Issue #4 fix: phase.cjs cmdPhaseComplete now consumes pure helpers from phase-lifecycle.generated.cjs (generated from sdk/src/query/phase-lifecycle.ts) for idempotent Completed Phases counting and clamped percent. *.generated.cjs files are excluded from lint scanner; see sdk/scripts/check-phase-lifecycle-fresh.mjs for freshness enforcement."
     },
     {
       "cjs": "get-shit-done/bin/lib/profile-output.cjs",
