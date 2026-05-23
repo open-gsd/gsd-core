@@ -2,7 +2,12 @@
  * Verify — Verification suite, consistency, and health validation
  */
 
-const { phaseVariants, buildRoadmapPhaseVariants, buildNotStartedPhaseVariants } = require('./validate.generated.cjs');
+const {
+  // Issue #6 exports (W006/W007 phase variant helpers)
+  phaseVariants, buildRoadmapPhaseVariants, buildNotStartedPhaseVariants,
+  // Issue #26 exports (W005 regex, W006-archived regex constants, I001 helper)
+  phaseDirNameRe, PHASE_TOKEN_FROM_DIR_RE, MILESTONE_ARCHIVE_DIR_RE, canonicalPlanStem,
+} = require('./validate.generated.cjs');
 
 const fs = require('fs');
 const path = require('path');
@@ -400,8 +405,8 @@ function cmdVerifyKeyLinks(cwd, planFilePath, raw) {
   }, raw, verified === results.length ? 'valid' : 'invalid');
 }
 
-const PHASE_TOKEN_FROM_DIR_RE = /^(?:[A-Z]{1,6}-)?(\d+[A-Z]?(?:\.\d+)*)(?:-|$)/i;
-const MILESTONE_ARCHIVE_DIR_RE = /^v\d+.*-phases$/i;
+// PHASE_TOKEN_FROM_DIR_RE and MILESTONE_ARCHIVE_DIR_RE are sourced from
+// validate.generated.cjs (issue #26, ADR-3524). No inline copies.
 
 function listMilestoneArchiveDirs(planBase) {
   const milestonesDir = path.join(planBase, 'milestones');
@@ -596,15 +601,8 @@ function cmdValidateConsistency(cwd, raw) {
   output({ passed, errors, warnings, warning_count: warnings.length }, raw, passed ? 'passed' : 'failed');
 }
 
-/**
- * Canonical plan stem used for PLAN/SUMMARY matching.
- * Mirrors canonicalPlanStem in sdk/src/query/validate.ts (#3479 / #3806).
- * Example: `68-01-scaffolding` -> `68-01`.
- */
-function canonicalPlanStem(stem) {
-  const m = stem.match(/^(\d+[A-Z]?(?:\.\d+)*-\d+)/i);
-  return m ? m[1] : stem;
-}
+// canonicalPlanStem is sourced from validate.generated.cjs (issue #26, ADR-3524).
+// No inline copy — see top-of-file require() for the import.
 
 function cmdValidateHealth(cwd, options, raw) {
   // Guard: detect if CWD is the home directory (likely accidental)
@@ -787,8 +785,9 @@ function cmdValidateHealth(cwd, options, raw) {
   } catch { /* intentionally empty */ }
 
   // ─── Check 6: Phase directory naming (NN-name format) ─────────────────────
+  // phaseDirNameRe sourced from validate.generated.cjs (issue #26, ADR-3524).
   for (const e of phaseDirEntries) {
-    if (!e.name.match(/^\d{2,}(?:\.\d+)*-[\w-]+$/)) {
+    if (!e.name.match(phaseDirNameRe)) {
       addIssue('warning', 'W005', `Phase directory "${e.name}" doesn't follow NN-name format`, 'Rename to match pattern (e.g., 01-setup)');
     }
   }
