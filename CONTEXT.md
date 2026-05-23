@@ -608,4 +608,42 @@ Migration plan: Phase 1 (#3465) seam additions complete; Phase 2 (#3466) targets
 
 `PROC.TRIAGE.routing-incoming=stale-bug-already-fixed to close as duplicate of originating issue + cite fix PR + first stable tag; release-publish-or-backport to ready-for-human; reporter-can-self-test to awaiting-retest`
 `PROC.TRIAGE.comment-shape=lead with "duplicate of #NNNN, fixed by PR #MMMM, in v1.X.Y"; show current code snippet proving bug-surface gone; give @latest and @next upgrade commands; close`
+
+---
+
+## Slash-command form: /gsd-<cmd> (current) vs /gsd:<cmd> (legacy)
+
+The canonical slash-command form across this project is `/gsd-<cmd>` (hyphen).
+The codebase migrated AWAY from `/gsd:<cmd>` (colon, legacy) at some point — see git history for the exact ADR / migration commit if needed.
+
+### What's correct now
+- **ROADMAP persistence**: run-commands persisted in ROADMAP files use `/gsd-<cmd>` (hyphen). Enforced by `tests/bug-3584-runtime-slash-emitters.test.cjs`.
+- **Generated CJS surface (`bin/lib/*.generated.cjs`)**: any emitted strings that reference a slash command use the hyphen form.
+- **TS source** (`sdk/src/query/phase-lifecycle-policy.ts:156` and similar runtime-emitter sites): hyphen form.
+- **Runtime-emitter module**: `get-shit-done/bin/lib/runtime-slash.cjs` — `formatGsdSlash(commandName, runtime)` produces `/gsd-<cmd>` for skills-based runtimes (Claude/Cursor/OpenCode/Kilo/etc.) and `$gsd-<cmd>` for Codex. This is the single source of truth for runtime-emitted slash-command strings.
+
+### What was WRONG previously
+- `tests/bug-2543-gsd-slash-namespace.test.cjs` enforced the OPPOSITE invariant ("no `/gsd-<cmd>` hyphen form anywhere in source files"). That invariant was OUTDATED — it codified the pre-migration state (commit `73c1af51`, 2026-05-12).
+- Bug-3584 introduced `runtime-slash.cjs` on 2026-05-15 (three days AFTER bug-2543 was last updated), creating a two-tier model. Bug-2543 was never updated to reflect the new model.
+- An agent fix on PR #154 misread bug-2543 and changed `/gsd-plan-phase` → `/gsd:plan-phase` in `sdk/src/query/phase-lifecycle-policy.ts:156`, breaking bug-3584's runtime contract. A 2nd-pass agent reverted.
+- Bug-2543's "no /gsd-<cmd>" scan has been invalidated (test.skip) to prevent recurrence (see `tests/bug-2543-gsd-slash-namespace.test.cjs` header comment, 2026-05-23).
+
+### Two-tier model (current)
+| Context | Correct form | Authority |
+|---|---|---|
+| Claude-facing SOURCE TEXT (commands/, agents/, workflows/, references/, templates/, hooks/, .clinerules) | `/gsd:<cmd>` (colon) | `fix-slash-commands.cjs` transformer; #3443 invariant |
+| Runtime-emitted strings (ROADMAP.md persistence, recommended_actions, fix hints, STATE.md notes) | `/gsd-<cmd>` (hyphen) | `runtime-slash.cjs`; `bug-3584-runtime-slash-emitters.test.cjs` |
+| Gemini runtime (all surfaces) | `/gsd:<cmd>` (colon) | Gemini namespaces all commands under `gsd:` — colon is correct |
+
+### How to write a new patch that touches a slash-command reference
+1. If the reference is a ROADMAP/STATE persistence string or any other runtime-emitter context: use `/gsd-<cmd>` (hyphen).
+2. If the reference is Claude-facing source text (a workflow .md, agent .md, command .md, template, etc.): use `/gsd:<cmd>` (colon).
+3. If unsure, check `tests/bug-3584-runtime-slash-emitters.test.cjs` for the canonical runtime-emitter invariant.
+4. If you see colon form in `get-shit-done/bin/lib/runtime-slash.cjs` or adjacent runtime CJS emitters, treat it as suspicious — flag in code review.
+5. Generated CJS files (`*.generated.cjs`) are NEVER edited by hand — fix the TS source or the gen-*.mjs script.
+
+### Context for AI agents
+This section was added on 2026-05-23 after the PR #154 incident where an agent applied an outdated invariant from bug-2543. If a future patch is influenced by bug-2543 (e.g., proposing colon form because "the namespace test demands it"), STOP and re-read this section before proceeding.
+
+The DEFECT predicates below (`DEFECT.AGENT-RETIRED-SLASH-SYNTAX-DRIFT.*`) were written before the two-tier model and refer to bug-2543 as the authoritative invariant test. That predicate is now STALE for runtime-emitter contexts. The "fix-forward" in those predicates applies only to Claude-facing source text drift, not to runtime-slash.cjs or other emitter modules.
 `PROC.TRIAGE.no-duplicate-label=this repo has no duplicate label; framing lives in comment text + closing the issue`
