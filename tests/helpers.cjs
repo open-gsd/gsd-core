@@ -288,4 +288,23 @@ function runNpm(args, options = {}) {
   return execFileSync(npmCmd, args, { ...defaults, ...otherOptions, env: mergedEnv }).trim();
 }
 
-module.exports = { runGsdTools, createTempDir, createTempProject, createTempGitProject, cleanup, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, runNpm, TOOLS_PATH };
+/**
+ * Returns the isolated npm environment dict used by runNpm().
+ *
+ * Callers (e.g. runSmoke()) can spread this into a spawnSync env so that npm
+ * never reads from or writes to the caller's $HOME — the same guarantee
+ * runNpm() already provides. (#131)
+ *
+ * @returns {object} env dict with HOME, npm_config_cache, npm_config_userconfig
+ *   pointing into a process-scoped temp directory.
+ */
+function isolatedNpmEnv() {
+  return {
+    ...process.env,
+    HOME: _npmIsolatedHome,
+    npm_config_cache: path.join(_npmIsolatedHome, '.npm'),
+    npm_config_userconfig: path.join(_npmIsolatedHome, '.npmrc'),
+  };
+}
+
+module.exports = { runGsdTools, createTempDir, createTempProject, createTempGitProject, cleanup, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, runNpm, isolatedNpmEnv, TOOLS_PATH };
