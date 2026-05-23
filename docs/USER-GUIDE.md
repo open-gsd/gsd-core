@@ -1257,6 +1257,44 @@ GSD will resolve each agent's tier (`opus`/`sonnet`/`haiku`) to the Codex-native
 
 See the [Configuration Reference](CONFIGURATION.md#non-claude-runtimes-codex-opencode-gemini-cli-kilo) for the full explanation.
 
+### Manual install / no-Node.js setup
+
+If you cannot run the GSD installer (e.g., Windows machine without Node.js or npm), you cannot use the source files in `agents/` directly. The source files are in Claude Code's native frontmatter format; each supported runtime requires a different shape. Copying them as-is into another runtime's config directory will produce schema validation errors.
+
+> The installer function responsible for OpenCode conversion is `convertClaudeToOpencodeFrontmatter` at `bin/install.js:5208`. It is the canonical reference for what must be transformed.
+
+#### OpenCode — required transformations
+
+OpenCode validates agent frontmatter against its own schema ([opencode.ai/docs/agents](https://opencode.ai/docs/agents)). The GSD source format is incompatible in two ways:
+
+| Field | GSD source format | OpenCode-valid format | Action |
+|---|---|---|---|
+| `tools:` | `Read, Bash, Grep` (comma-string) | Not a frontmatter field in OpenCode | Remove the `tools:` line entirely |
+| `color:` | Plain CSS color name (e.g., `steelblue`) | Hex (`#4682b4`) or semantic name from OpenCode's fixed set | Convert to hex or remove |
+
+The minimum viable manual transformation for a single agent file:
+
+1. Open the `.md` file from `agents/` in a text editor.
+2. Remove any `tools:` line from the YAML frontmatter block.
+3. Change `color:` to a hex value, or remove it.
+4. Save the file into `~/.config/opencode/agents/<agent-name>.md`.
+
+All other frontmatter fields (`description:`, `system:`, `model:`) are accepted by OpenCode without modification.
+
+#### Alternative: use a machine with Node.js to run the installer
+
+If you have access to any machine with Node.js — including WSL, a Linux VM, a CI runner, or a Docker container — you can run:
+
+```bash
+npx @opengsd/get-shit-done-redux@latest --opencode --global
+```
+
+This produces a correctly converted `~/.config/opencode/agents/` directory. Copy that directory to your Windows machine.
+
+#### Other runtimes
+
+The same principle applies to all non-Claude-Code runtimes. Each runtime has its own schema, and the installer handles each conversion. If you are manually installing for a runtime not covered above, review the relevant installer converter in `bin/install.js` (search for `convert*Frontmatter`) for the exact field transformations needed.
+
 ### Installing for Cline
 
 Cline uses a rules-based integration — GSD installs as `.clinerules` rather than slash commands.
