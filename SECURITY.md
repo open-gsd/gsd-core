@@ -39,3 +39,37 @@ org-wide security posture — scanner controls, incident-audit checklists,
 ownership model, and rollout plan — see:
 
 [`docs/security/baseline.md`](docs/security/baseline.md)
+
+## Secret-Scan Exclusion Governance
+
+Secret-scanning exclusions (`.secretscanignore`) require structured annotations. Bare paths are accepted in default mode with a deprecation warning but are rejected in strict mode. The lint runs on every PR.
+
+### Annotation format
+
+```
+# allow: <pattern>  reason="..."  owner="..."  expires="YYYY-MM-DD"  [rule-id="..."]
+<pattern>
+```
+
+Required keys: `reason`, `owner`, `expires`. Wildcard patterns (`**`, `*.ext`) also require `rule-id`.
+
+Lint locally: `scripts/secret-scan-lint.sh --file .secretscanignore`
+
+### Periodic reduced-exclusion scan (release and security-review lanes)
+
+Run this during every release and scheduled security review:
+
+```bash
+scripts/secret-scan.sh --diff origin/main --strict
+```
+
+The `--strict` flag:
+- Does **not** honour grandfathered (un-annotated) exclusions — those files are scanned.
+- Skips any exclusion whose `expires` date is in the past — those files are scanned.
+- Is intended to surface accumulated exclusion debt that default mode masks.
+
+If `--strict` finds findings that default mode does not, those findings represent either (a) an entry that should have been annotated and renewed, or (b) an actual secret that was only hidden by a stale exclusion. In both cases: investigate, remediate, and update the exclusion annotation.
+
+References:
+- GitGuardian exclusion annotation convention: https://docs.gitguardian.com/internal-repositories-monitoring/integrations/cli/secrets
+- CNCF Security TAG threat-model exception lifecycle: https://github.com/cncf/tag-security/blob/main/community/working-groups/threat-modeling/templates/threats.md

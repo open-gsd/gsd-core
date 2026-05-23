@@ -2,15 +2,45 @@
 # secret-scan.sh — Check files for accidentally committed secrets/credentials
 #
 # Usage:
-#   scripts/secret-scan.sh --diff origin/main   # CI mode: scan changed files
-#   scripts/secret-scan.sh --file path/to/file   # Scan a single file
-#   scripts/secret-scan.sh --dir agents/          # Scan all files in a directory
+#   scripts/secret-scan.sh --diff origin/main       # CI mode: scan changed files
+#   scripts/secret-scan.sh --file path/to/file      # Scan a single file
+#   scripts/secret-scan.sh --dir agents/            # Scan all files in a directory
+#   scripts/secret-scan.sh --diff origin/main --strict  # Strict/release mode
+#
+# Flags:
+#   --strict   Reduced-exclusion mode for release and security-audit CI lanes.
+#              Under --strict:
+#                - Grandfathered (un-annotated) .secretscanignore entries are
+#                  treated as FAILURES rather than silently honoured.
+#                - Exclusions whose 'expires' date is in the past are ignored
+#                  (the file IS scanned, not skipped).
+#              This flag does not change secret-detection logic — only which
+#              exclusions are applied.
 #
 # Exit codes:
 #   0 = clean
 #   1 = findings detected
 #   2 = usage error
+#
+# Annotation format for .secretscanignore (required for --strict compliance):
+#   # allow: <pattern>  reason="..."  owner="..."  expires="YYYY-MM-DD"  [rule-id="..."]
+#   <pattern>
+#
+# Design references:
+#   - GitGuardian exclusion annotation convention:
+#     https://docs.gitguardian.com/internal-repositories-monitoring/integrations/cli/secrets
+#   - CNCF Security TAG threat-model exception lifecycle:
+#     https://github.com/cncf/tag-security/blob/main/community/working-groups/threat-modeling/templates/threats.md
+#
+# Periodic reduced-exclusion scan procedure:
+#   Run this script with --strict on every release branch and during scheduled
+#   security reviews. This mode intentionally skips grandfathered entries and
+#   expired exclusions so that accumulated technical debt in the ignore-list
+#   cannot permanently hide secrets. See SECURITY.md for the audit runbook.
 set -euo pipefail
+
+# ─── Global mode flag ─────────────────────────────────────────────────────────
+STRICT_MODE=false
 
 # ─── Secret Patterns ─────────────────────────────────────────────────────────
 # Format: "LABEL:::REGEX"
@@ -57,18 +87,100 @@ SECRET_PATTERNS=(
 )
 
 # ─── Ignorelist ──────────────────────────────────────────────────────────────
+#
+# Entries in IGNORED_FILES are loaded from .secretscanignore.
+# In --strict mode, only fully-annotated entries with a future 'expires' date
+# are loaded. Grandfathered entries and expired entries are skipped (the
+# corresponding files ARE scanned, not excluded).
+#
+# Annotation format (structured comment must immediately precede the path):
+#   # allow: <pattern>  reason="..."  owner="..."  expires="YYYY-MM-DD"  [rule-id="..."]
+#   <pattern>
+#
+# Entries without a structured annotation are grandfathered:
+#   - Default mode: accepted (file excluded), deprecation warning emitted
+#   - Strict mode: rejected (file scanned, no exclusion applied)
 
 IGNOREFILE=".secretscanignore"
 IGNORED_FILES=()
 
+# Returns value of key="value" annotation pair from a string
+_extract_annotation_key() {
+  local str="$1"
+  local key="$2"
+  echo "$str" | grep -oE "${key}=['\"][^'\"]+['\"]" | head -1 | sed "s/${key}=['\"]//;s/['\"]$//" || true
+}
+
+# Returns today as YYYY-MM-DD
+_today() {
+  date +%Y-%m-%d
+}
+
+# Returns 0 (true) if a date string YYYY-MM-DD is strictly in the past
+_date_is_past() {
+  local d="$1"
+  [[ "$d" < "$(_today)" ]]
+}
+
 load_ignorelist() {
-  if [[ -f "$IGNOREFILE" ]]; then
-    while IFS= read -r line; do
-      [[ "$line" =~ ^[[:space:]]*# ]] && continue
-      [[ -z "${line// }" ]] && continue
-      IGNORED_FILES+=("$line")
-    done < "$IGNOREFILE"
+  if [[ ! -f "$IGNOREFILE" ]]; then
+    return
   fi
+
+  local prev_comment=""
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    # Empty line resets context
+    if [[ -z "${line// }" ]]; then
+      prev_comment=""
+      continue
+    fi
+
+    # Accumulate comment
+    if [[ "$line" =~ ^[[:space:]]*# ]]; then
+      prev_comment="$line"
+      continue
+    fi
+
+    # This is a path entry
+    local pattern="$line"
+
+    # Determine if preceding comment is a structured annotation
+    local is_structured=false
+    if [[ "$prev_comment" =~ ^#[[:space:]]+allow:[[:space:]] ]]; then
+      is_structured=true
+    fi
+
+    if [[ "$is_structured" == true ]]; then
+      # Parse structured annotation
+      local expires
+      expires=$(_extract_annotation_key "$prev_comment" "expires")
+
+      if [[ -n "$expires" ]] && _date_is_past "$expires"; then
+        # Expired exclusion — never apply, regardless of mode
+        echo "secret-scan: WARNING: exclusion '$pattern' has expired (expires=$expires) — entry ignored" >&2
+        prev_comment=""
+        continue
+      fi
+
+      # Valid structured annotation — always apply
+      IGNORED_FILES+=("$pattern")
+
+    else
+      # Grandfathered (plain comment or no comment)
+      if [[ "$STRICT_MODE" == true ]]; then
+        # Strict mode: do NOT apply grandfathered exclusion
+        echo "secret-scan: WARNING (--strict): grandfathered exclusion '$pattern' not applied" >&2
+      else
+        # Default mode: apply but warn
+        echo "secret-scan: DEPRECATION WARNING: '$pattern' has no structured annotation — grandfather applied" >&2
+        echo "  Migrate to: # allow: $pattern  reason=\"...\"  owner=\"...\"  expires=\"YYYY-MM-DD\"" >&2
+        IGNORED_FILES+=("$pattern")
+      fi
+    fi
+
+    prev_comment=""
+  done < "$IGNOREFILE"
 }
 
 is_ignored() {
@@ -106,6 +218,7 @@ should_skip_file() {
   # Skip the scan scripts themselves and test files
   case "$file" in
     */secret-scan.sh) return 0 ;;
+    */secret-scan-lint.test.cjs) return 0 ;;
     */security-scan.test.cjs) return 0 ;;
     */security-prompt-injection.test.cjs) return 0 ;;
     tests/fixtures/adversarial/security/*|*/tests/fixtures/adversarial/security/*) return 0 ;;
@@ -186,7 +299,23 @@ scan_file() {
 
 main() {
   if [[ $# -eq 0 ]]; then
-    echo "Usage: $0 --diff [base] | --file <path> | --dir <path>" >&2
+    echo "Usage: $0 --diff [base] | --file <path> | --dir <path> [--strict]" >&2
+    exit 2
+  fi
+
+  # Parse --strict flag first (may appear anywhere in argv)
+  local remaining_args=()
+  for arg in "$@"; do
+    if [[ "$arg" == "--strict" ]]; then
+      STRICT_MODE=true
+    else
+      remaining_args+=("$arg")
+    fi
+  done
+  set -- "${remaining_args[@]}"
+
+  if [[ $# -eq 0 ]]; then
+    echo "Usage: $0 --diff [base] | --file <path> | --dir <path> [--strict]" >&2
     exit 2
   fi
 

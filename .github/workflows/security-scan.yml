@@ -43,6 +43,11 @@ jobs:
           chmod +x scripts/secret-scan.sh
           scripts/secret-scan.sh --diff "origin/$BASE_REF"
 
+      - name: Secret scan exclusion lint
+        run: |
+          chmod +x scripts/secret-scan-lint.sh
+          scripts/secret-scan-lint.sh --file .secretscanignore
+
       - name: Planning directory check
         env:
           BASE_REF: ${{ github.base_ref }}
