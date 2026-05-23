@@ -157,12 +157,6 @@ Five-axis story decomposition discipline (**S**pike, **P**aths, **I**nterfaces, 
 `RULESET.TESTS.boundary-coverage.fixtures=for any code with budget/limit/quota/threshold parameter, test suite MUST include: (a) input where SUT estimate == limit exactly, (b) input where estimate == limit - 1, (c) input where estimate == limit + 1, (d) input where any internal reserve/safety constant pushes baseline within reserve-distance of limit (catches early-pressure firing)`
 `RULESET.TESTS.boundary-coverage.anti-pattern=test suites that pair budget:1_000_000 (trivially fits) with budget:1 (trivially overflows) and skip the boundary region; failure mode that shipped PR #3708 UNNEEDED_TRIM + FALSE_HARDFAIL regressions (commit 2df566ed, fixed bde1ae8f)`
 `LEARNING.prompt-budget.boundary-gap=PR #3708 commit 2df566ed reserved NOTE_RESERVE_TOKENS in pressure-threshold AND in minSet pre-check; both buggy paths only fire when baseTokens ∈ (effectiveBudget - NOTE_RESERVE_TOKENS, effectiveBudget]; original test suite used budgets far from that band so neither path was exercised; fix bde1ae8f confines NOTE_RESERVE accounting to post-trim assembly path only; future budget/limit code MUST add boundary fixtures per RULESET.TESTS.boundary-coverage.fixtures`
-`RULESET.TESTS.async-side-effects=no synchronous assertion on fire-and-forget subprocess side-effects; assert launch sentinel synchronously and verify persisted side-effects with bounded polling or explicit synchronization`
-`RULESET.TESTS.lock-contention-avoidance=tests must not invoke a second lock-taking writer against the same state file while a detached writer may still hold the lock unless lock contention is the behavior under test`
-`RULESET.TESTS.windows-transient-retry=for windows-prone filesystem/process transients (EPERM|EBUSY|EACCES|ENOTEMPTY|resource busy) use bounded retry wrappers in test helpers rather than one-shot assertions`
-`RULESET.TESTS.prepush-targeted=before push, run targeted node --test for every touched flaky-prone suite (context monitor, config idempotence, lock-sensitive state paths) to catch platform regressions early`
-`LEARNING.CI.PR143.2026-05-23.failure-modes=PR #143 failed from test reliability not product regression: tests/bug-1974-context-exhaustion-record.test.cjs raced two record-session writers on STATE.md lock (status=null/ETIMEDOUT on windows), and tests/config.test.cjs idempotence case saw transient second-call failure on windows`
-`LEARNING.CI.PR143.2026-05-23.fix-pattern=split hook-side-effect assertion into sentinel-now + bounded-poll persistence check, isolate direct record-session verification into a separate non-racing test, and harden config-ensure-section idempotence with transient retry wrapper`
 
 `RULESET.WORKFLOW_MARKDOWN.FENCES=preserve opening language fence when editing shell snippets in workflow markdown; malformed fence creates fresh CR threads (MD040)`
 `RULESET.WORKFLOW_SIZE_BUDGET=workflow-size-budget can fail otherwise-valid review fixes; XL workflows <=1800 lines or trim prose before final checks`
@@ -617,45 +611,70 @@ Migration plan: Phase 1 (#3465) seam additions complete; Phase 2 (#3466) targets
 
 `PROC.TRIAGE.routing-incoming=stale-bug-already-fixed to close as duplicate of originating issue + cite fix PR + first stable tag; release-publish-or-backport to ready-for-human; reporter-can-self-test to awaiting-retest`
 `PROC.TRIAGE.comment-shape=lead with "duplicate of #NNNN, fixed by PR #MMMM, in v1.X.Y"; show current code snippet proving bug-surface gone; give @latest and @next upgrade commands; close`
+`PROC.TRIAGE.no-duplicate-label=this repo has no duplicate label; framing lives in comment text + closing the issue`
 
 ---
 
-## Slash-command form: directory-level matrix
+## PR fix discipline — patterns observed 2026-05-23
 
-There is NO single global canonical form. The form depends on the directory and runtime context. Use this table:
+Full detail in `~/.claude/skills/gsd-pr-fix-discipline/SKILL.md`. AI agents MUST check this section before pushing to `open-gsd/get-shit-done-redux`.
 
-| Surface | Form | Source of truth | Enforced by |
-|---|---|---|---|
-| `agents/*.md` (Claude Code agent definitions) | `/gsd:<cmd>` (colon) | Claude Code agent file convention | (Claude Code runtime) |
-| `commands/gsd/*.md` (Claude Code slash commands) | `/gsd:<cmd>` (colon) | Claude Code slash-command convention | (Claude Code runtime) |
-| `get-shit-done/workflows/**/*.md` (workflow docs read by Claude Code) | `/gsd:<cmd>` (colon, when invoking commands) | Claude Code slash-command convention | Live command registry (`tests/helpers/live-command-registry.cjs`) |
-| `get-shit-done/bin/lib/runtime-slash.cjs` and runtime-emitter contexts | `/gsd-<cmd>` (hyphen) | bug-3584 invariant | `tests/bug-3584-runtime-slash-emitters.test.cjs` |
-| ROADMAP.md / STATE.md persistence strings | `/gsd-<cmd>` (hyphen) | bug-3584 invariant | `tests/bug-3584-runtime-slash-emitters.test.cjs` |
-| `*.generated.cjs` files | matches the TS source's emitted form | Generator | Freshness checks per ADR-3524 |
-| CHANGELOG.md / .changeset / ADRs | whichever form was used at the time | Historical record | (no enforcement) |
+### INVENTORY / manifest drift
 
-### How to choose
+- **Symptom:** `inventory-counts.test.cjs` fails — `"<dir> (N shipped)" disagrees with filesystem (N+1)`
+- **Affected this session:** #154, #156, #143, #155, #169
+- **Fix:** Add row to `docs/INVENTORY.md` CLI Modules table + increment headline count + `node scripts/gen-inventory-manifest.cjs --write`
 
-1. Are you writing a slash-command reference that a Claude Code session will execute? → `/gsd:<cmd>` (colon).
-2. Are you writing a string that will be persisted to ROADMAP.md or returned by a runtime emitter (recommended_actions, fix hints)? → `/gsd-<cmd>` (hyphen).
-3. Is it a generated CJS file? Don't hand-edit; fix the generator's source.
-4. Unsure? Check both `tests/bug-2543-gsd-slash-namespace.test.cjs` (Claude-facing colon contract) and `tests/bug-3584-runtime-slash-emitters.test.cjs` (runtime-emitter hyphen contract).
+### Stale sdk/dist consumed by gen scripts
 
-### What was WRONG previously
+- **Symptom:** `gen-*.mjs` emits stale CJS; correct fixes appear to be reverted by subsequent regeneration passes
+- **Affected this session:** #154 (2nd-pass agent reverted a correct slash-form fix)
+- **Fix:** Always `npm run build:sdk &&` before `node sdk/scripts/gen-*.mjs`; PR #169 adds staleness check
 
-- `tests/bug-2543-gsd-slash-namespace.test.cjs` originally enforced the OPPOSITE invariant ("no `/gsd-<cmd>` hyphen form anywhere in source files"), which was OUTDATED — it codified the pre-migration state (commit `73c1af51`, 2026-05-12).
-- Bug-3584 introduced `runtime-slash.cjs` on 2026-05-15 (three days AFTER bug-2543 was last updated), creating a two-tier model. Bug-2543 was never updated to reflect the new model.
-- An agent fix on PR #154 misread bug-2543 and changed `/gsd-plan-phase` → `/gsd:plan-phase` in `sdk/src/query/phase-lifecycle-policy.ts:156`, breaking bug-3584's runtime contract. A 2nd-pass agent reverted.
-- The first version of this CONTEXT.md section (2026-05-23 first push) claimed `/gsd-<cmd>` was globally canonical. That was incorrect — the project has a two-tier model. Codex adversarial review of PR #164 surfaced the contradiction; this rewrite corrects it.
-- Bug-2543's content scan was `test.skip` from 2026-05-23 to avoid the PR #154 incident. The Codex adversarial review of PR #164 flagged that skip as leaving a vacuous test surface. The scan was re-activated as a scoped invariant (excluding `get-shit-done/bin/lib/` entirely) in the PR #164 follow-up commits.
+### Slash command two-tier confusion
 
-### Context for AI agents
+- **Symptom:** `tests/bug-2543-gsd-slash-namespace.test.cjs` or `tests/bug-3584-runtime-slash-emitters.test.cjs` fails
+- **Affected this session:** #154 (three passes), #164 (added the authoritative matrix)
+- **Fix:** Consult `## Slash-command form` section of this file before touching any `/gsd-` or `/gsd:` token — colon for `agents/`/`commands/`, hyphen for runtime emitters
 
-If you see a slash-command reference and aren't sure which form is right:
-- Default to the table above.
-- If the context isn't covered, ask before changing it.
-- DO NOT mass-rewrite slash forms based on a single test failure — both bug-2543 and bug-3584 are active and they enforce opposite rules in opposite contexts.
-- PR #154 first-pass incident illustrates the failure mode of getting this wrong.
+### Concurrency cancel-in-progress masking real CI state
 
-The DEFECT predicates below (`DEFECT.AGENT-RETIRED-SLASH-SYNTAX-DRIFT.*`) were written before the two-tier model and refer to bug-2543 as the authoritative invariant test. That predicate is now STALE for runtime-emitter contexts. The "fix-forward" in those predicates applies only to Claude-facing source text drift, not to `runtime-slash.cjs` or other emitter modules.
-`PROC.TRIAGE.no-duplicate-label=this repo has no duplicate label; framing lives in comment text + closing the issue`
+- **Symptom:** `gh pr checks` shows failures but the latest commit SHA's run was cancelled before Tests even started
+- **Affected this session:** #154, #136
+- **Fix:** `gh workflow run Tests --repo open-gsd/get-shit-done-redux --ref <branch>`; verify with `gh run list --branch <branch> --workflow Tests --limit 1 --json status,conclusion,headSha`
+
+### Missing changeset fragment
+
+- **Symptom:** `changeset-lint` fails with `fail_missing_fragment` (~5s)
+- **Affected this session:** #156, #143, #164
+- **Fix:** `node scripts/changeset/new.cjs --type <Type> --pr <N> --body "..."` or apply `no-changelog` label for doc-only PRs
+
+### Cross-platform Windows / Node 24 hazards
+
+- **Symptom:** Windows CI leg fails; Mac/Linux green — POSIX paths in `node -e`, hardcoded `.nvmrc` fixtures, 2000ms wall-clock budget flakes, `synckit` uncaught Worker exception
+- **Affected this session:** #157
+- **Fix:** Use `./package.json` not `$PWD/package.json`; write `.nvmrc` dynamically in `before()` hook; use 5000ms budget; wrap `getExecuteForCjs()` in `try/catch`
+
+### Sub-agent rubber-duck stall
+
+- **Symptom:** Sub-agent returns a question list and halts; no commits or push in the worktree
+- **Affected this session:** Multiple agents mid-session
+- **Fix:** Every sub-agent brief must include: `Skill rubber-duck is BANNED in this sub-agent. Convert to internal monologue and proceed.`
+
+### Stacked PR squash-merge breakage
+
+- **Symptom:** After base PR squash-merges, stacked PR shows conflicts or wrong diff; GitHub auto-retarget fails
+- **Affected this session:** #158 stacked on #156
+- **Fix:** `git rebase --onto main <old-base> <stacked-branch>` then force-push and `gh pr edit --base main`
+
+### `tee` pipe swallowing exit codes
+
+- **Symptom:** `gsd-test-summary --both 2>&1 | tee /tmp/log` returns `0` even when Docker reports failures
+- **Affected this session:** Session-wide risk
+- **Fix:** Run un-piped, or `set -o pipefail` before the pipe
+
+### Auto-merge disabled
+
+- **Symptom:** `gh pr merge --auto` returns `GraphQL: Auto merge is not allowed for this repository`
+- **Affected this session:** All stacked PRs
+- **Fix:** Merge manually by hand in dependency order once CI greens; `gh pr merge <N> --squash --repo open-gsd/get-shit-done-redux`
