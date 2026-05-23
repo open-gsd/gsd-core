@@ -517,3 +517,197 @@ describe('config-type validation (review F16)', () => {
     expect(warnings.some((w) => /context_coverage_gate.*invalid type/.test(w))).toBe(true);
   });
 });
+
+// ─── XML tag body parsing (issue #5) ──────────────────────────────────────
+
+/**
+ * Regression tests for issue #5: the translation gate must parse decision IDs
+ * from <objective>, <tasks>, <task>, and <action> tag bodies.
+ *
+ * The gsd-planner spec (agents/gsd-planner.md line 66) says:
+ *   "Task actions reference the decision ID they implement (e.g., 'per D-03')"
+ * Plans produced by that spec put D-NN citations inside <action> bodies,
+ * which the gate was blind to before this fix.
+ *
+ * Maintainer acceptance criteria (verbatim from issue #5):
+ *   "Gate parses <action> tag bodies for decision ID citations; regression test
+ *    with XML-tag plan body covers all decision IDs."
+ */
+describe('XML tag body citation parsing (issue #5)', () => {
+  /** Five locked decisions, D-01..D-05. */
+  const FIVE_DECISIONS = `<decisions>
+### Architecture
+- **D-01:** Use strict TypeScript everywhere
+- **D-02:** Prefer functional composition over class inheritance
+- **D-03:** All public APIs must have JSDoc
+- **D-04:** Errors are typed, never thrown as plain strings
+- **D-05:** Async functions always return explicit Promises
+</decisions>`;
+
+  /**
+   * Plan whose D-NN citations are ONLY inside XML tag bodies —
+   * no front-matter must_haves/truths/objective entries.
+   */
+  const XML_PLAN = `---
+phase: 17
+plan: 1
+type: implementation
+wave: 1
+depends_on: []
+files_modified: []
+autonomous: true
+must_haves:
+  - thing-a
+objective: |
+  Build the foo.
+---
+
+<objective>Implement foo per D-01 and D-02 design</objective>
+
+<tasks>
+  <task>
+    <action>Apply D-03 mitigation to the bar module</action>
+  </task>
+  <task>
+    <action>Refactor per D-04 — ensures D-05 invariant</action>
+  </task>
+</tasks>
+`;
+
+  it('RED: gate is blind to D-NN citations inside XML tag bodies (before fix)', async () => {
+    // This test is expected to FAIL on origin/main (gate returns covered: 0).
+    // After fix it should pass (covered: 5).
+    await setupPhase(FIVE_DECISIONS, { '17-01-PLAN.md': XML_PLAN });
+
+    const result = await checkDecisionCoveragePlan([phaseDir, contextPath], tmp);
+
+    // GREEN assertion (what we want AFTER the fix):
+    expect(result.data.passed).toBe(true);
+    expect(result.data.covered).toBe(5);
+    expect(result.data.uncovered).toEqual([]);
+    expect(result.data.total).toBe(5);
+  });
+
+  it('does NOT count D-NN inside a non-canonical XML tag like <comment>', async () => {
+    // <comment> is not one of the four canonical tags; must not count.
+    const planWithComment = `---
+phase: 17
+plan: 1
+type: implementation
+wave: 1
+depends_on: []
+files_modified: []
+autonomous: true
+must_haves:
+  - thing-a
+---
+
+<comment>D-01 not implemented yet</comment>
+`;
+    await setupPhase(
+      `<decisions>
+### Cat
+- **D-01:** A trackable decision six words or more
+</decisions>`,
+      { '17-01-PLAN.md': planWithComment },
+    );
+
+    const result = await checkDecisionCoveragePlan([phaseDir, contextPath], tmp);
+    expect(result.data.passed).toBe(false);
+    expect(result.data.uncovered.map((u: { id: string }) => u.id)).toContain('D-01');
+  });
+
+  it('does NOT count D-NN mentioned in regular prose outside any XML tag', async () => {
+    // Prose outside designated headings and XML tags must not count.
+    const planWithProse = `---
+phase: 17
+plan: 1
+type: implementation
+wave: 1
+depends_on: []
+files_modified: []
+autonomous: true
+must_haves:
+  - thing-a
+---
+
+This section mentions D-01 in plain prose under an undesignated heading.
+
+## Design Notes
+
+D-01 appears here too but this heading is not designated.
+`;
+    await setupPhase(
+      `<decisions>
+### Cat
+- **D-01:** A trackable decision six words or more
+</decisions>`,
+      { '17-01-PLAN.md': planWithProse },
+    );
+
+    const result = await checkDecisionCoveragePlan([phaseDir, contextPath], tmp);
+    expect(result.data.passed).toBe(false);
+    expect(result.data.uncovered.map((u: { id: string }) => u.id)).toContain('D-01');
+  });
+
+  it('does not crash on self-closing <action/> tags', async () => {
+    const planWithSelfClosing = `---
+phase: 17
+plan: 1
+type: implementation
+wave: 1
+depends_on: []
+files_modified: []
+autonomous: true
+must_haves:
+  - thing-a
+---
+
+<tasks>
+  <task>
+    <action/>
+  </task>
+</tasks>
+`;
+    await setupPhase(
+      `<decisions>
+### Cat
+- **D-01:** A trackable decision six words or more
+</decisions>`,
+      { '17-01-PLAN.md': planWithSelfClosing },
+    );
+
+    // Should not throw; D-01 is uncovered (no citation in self-closing tag)
+    const result = await checkDecisionCoveragePlan([phaseDir, contextPath], tmp);
+    expect(result.data.passed).toBe(false);
+    expect(result.data.uncovered.map((u: { id: string }) => u.id)).toContain('D-01');
+  });
+
+  it('counts D-NN in <objective> tag body', async () => {
+    const planWithObjective = `---
+phase: 17
+plan: 1
+type: implementation
+wave: 1
+depends_on: []
+files_modified: []
+autonomous: true
+must_haves:
+  - thing-a
+---
+
+<objective>Implement D-01 as the core type system</objective>
+`;
+    await setupPhase(
+      `<decisions>
+### Cat
+- **D-01:** A trackable decision six words or more
+</decisions>`,
+      { '17-01-PLAN.md': planWithObjective },
+    );
+
+    const result = await checkDecisionCoveragePlan([phaseDir, contextPath], tmp);
+    expect(result.data.passed).toBe(true);
+    expect(result.data.covered).toBe(1);
+  });
+});
