@@ -148,6 +148,14 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
 
+      # Environment check - validates Node/npm version against engines constraints
+      # and confirms package-lock.json is present before npm ci runs.
+      # Catches env drift in CI itself (contributor parity check, issue #117).
+      # Source: https://docs.npmjs.com/cli/v10/configuring-npm/package-json#engines
+      - name: Environment check
+        shell: bash
+        run: npm run check:env
+
       - name: Install dependencies
         shell: bash
         run: npm ci
