@@ -59,6 +59,29 @@ describe('summaryExtract', () => {
     expect(Array.isArray(data.decisions)).toBe(true);
   });
 
+  it('summaryExtract: one-liner extraction is bounded to first heading scope', async () => {
+    const rel = '.planning/phases/01-x/01-SUMMARY.md';
+    const fixture = [
+      '# Phase Summary',
+      '',
+      '> Blockquote intro — should NOT be picked up.',
+      '',
+      '**Real one-liner: shipped the foo system.**',
+      '',
+      '### Deviation 1 — bar',
+      '',
+      '**This bold MUST NOT be picked up by the bounded extractor.**',
+    ].join('\n');
+    await writeFile(
+      join(tmpDir, '.planning', 'phases', '01-x', '01-SUMMARY.md'),
+      fixture,
+      'utf-8',
+    );
+    const r = await summaryExtract([rel], tmpDir);
+    const data = r.data as Record<string, unknown>;
+    expect(data.one_liner).toBe('Real one-liner: shipped the foo system.');
+  });
+
   it('filters with --fields', async () => {
     const rel = '.planning/phases/01-x/01-SUMMARY.md';
     await writeFile(
