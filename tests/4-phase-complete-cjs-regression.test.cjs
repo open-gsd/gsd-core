@@ -121,7 +121,7 @@ function extractField(stateContent, fieldName) {
 
 function extractFrontmatterField(stateContent, fieldName) {
   // Extract from YAML frontmatter block
-  const fmMatch = stateContent.match(/^---\n([\s\S]*?)\n---/);
+  const fmMatch = stateContent.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!fmMatch) return null;
   const fm = fmMatch[1];
   // Handle both scalar and nested (progress.completed_phases)
