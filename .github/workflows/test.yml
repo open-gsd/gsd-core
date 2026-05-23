@@ -74,6 +74,21 @@ jobs:
         # A dedicated windows-compat workflow runs on a weekly schedule.
 
     steps:
+      # actions/checkout@v6 uses includeIf.gitdir: to inject auth on Windows.
+      # On Windows git 2.54, the gitdir conditional include is unreliable for a
+      # freshly-initialised repo being fetched for the first time: the path
+      # comparison (forward-slash vs backslash, case sensitivity) can fail to
+      # match, leaving the fetch unauthenticated.  Pre-seeding the global config
+      # with the extraheader bypasses includeIf entirely and is idempotent.
+      - name: Seed git auth header (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("x-access-token:$env:GH_TOKEN"))
+          git config --global "http.https://github.com/.extraheader" "AUTHORIZATION: basic $encoded"
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           # Fetch full history so we can merge origin/main for stale-base detection.
