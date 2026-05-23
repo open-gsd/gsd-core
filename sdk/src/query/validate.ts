@@ -33,6 +33,16 @@ const PHASE_TOKEN_FROM_DIR_RE = /^(?:[A-Z]{1,6}-)?(\d+[A-Z]?(?:\.\d+)*)(?:-|$)/i
 const MILESTONE_ARCHIVE_DIR_RE = /^v\d+.*-phases$/i;
 
 /**
+ * Phase directory naming regex for Check 6 (W005).
+ * Matches valid phase directory names: two-or-more digit prefix, optional dot-separated
+ * sub-phase suffixes, a hyphen, and a word-character name.
+ * Examples: 01-setup, 999-longphase, 999.1-foo.
+ * Extracted into validate.generated.cjs as phaseDirNameRe so verify.cjs
+ * is not a hand-synced copy (issue #26, ADR-3524).
+ */
+export const PHASE_DIR_NAME_RE = /^\d{2,}(?:\.\d+)*-[\w-]+$/;
+
+/**
  * List milestone-archive directories under `.planning/milestones/`, sorted by
  * version (numeric — `v1.10` after `v1.2`).  Mirrors `listMilestoneArchiveDirs`
  * in verify.cjs.
@@ -648,7 +658,7 @@ export const validateHealth: QueryHandler = async (args, projectDir, workstream)
   try {
     const entries = await readdir(phasesDir, { withFileTypes: true });
     for (const e of entries) {
-      if (e.isDirectory() && !e.name.match(/^\d{2,}(?:\.\d+)*-[\w-]+$/)) {
+      if (e.isDirectory() && !e.name.match(PHASE_DIR_NAME_RE)) {
         addIssue('warning', 'W005', `Phase directory "${e.name}" doesn't follow NN-name format`, 'Rename to match pattern (e.g., 01-setup)');
       }
     }
