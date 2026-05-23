@@ -14,6 +14,9 @@
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { requireFreshDist } from './_gen-helpers.mjs';
+
+requireFreshDist('sdk/dist/query/decisions.js', 'sdk/src/query/decisions.ts');
 
 export const BANNER = `'use strict';
 

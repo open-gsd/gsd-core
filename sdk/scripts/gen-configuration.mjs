@@ -15,6 +15,9 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve, dirname } from 'node:path';
+import { requireFreshDist } from './_gen-helpers.mjs';
+
+requireFreshDist('sdk/dist/configuration/index.js', 'sdk/src/configuration/index.ts');
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..');
@@ -22,11 +25,6 @@ const repoRoot = resolve(here, '..', '..');
 // ─── Read the compiled dist file for function extraction ─────────────────────
 
 const distPath = resolve(here, '..', 'dist', 'configuration', 'index.js');
-if (!existsSync(distPath)) {
-  throw new Error(
-    `Missing compiled configuration module at ${distPath}. Run "cd sdk && npm run build" first.`,
-  );
-}
 const distSrc = readFileSync(distPath, 'utf-8');
 
 /**

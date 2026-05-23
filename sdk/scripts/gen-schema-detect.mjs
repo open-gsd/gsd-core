@@ -13,6 +13,9 @@
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { requireFreshDist } from './_gen-helpers.mjs';
+
+requireFreshDist('sdk/dist/query/schema-detect.js', 'sdk/src/query/schema-detect.ts');
 
 export const BANNER = `'use strict';
 

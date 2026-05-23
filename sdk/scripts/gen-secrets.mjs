@@ -12,6 +12,9 @@
 
 import { writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { requireFreshDist } from './_gen-helpers.mjs';
+
+requireFreshDist('sdk/dist/query/secrets.js', 'sdk/src/query/secrets.ts');
 
 export const BANNER = `'use strict';
 

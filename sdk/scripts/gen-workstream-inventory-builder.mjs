@@ -13,6 +13,9 @@
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { requireFreshDist } from './_gen-helpers.mjs';
+
+requireFreshDist('sdk/dist/workstream-inventory/builder.js', 'sdk/src/workstream-inventory/builder.ts');
 
 export const BANNER = `'use strict';
 

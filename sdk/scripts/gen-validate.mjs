@@ -55,6 +55,9 @@
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { requireFreshDist } from './_gen-helpers.mjs';
+
+requireFreshDist('sdk/dist/query/validate.js', 'sdk/src/query/validate.ts');
 
 export const BANNER = `'use strict';
 
