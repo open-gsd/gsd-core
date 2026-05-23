@@ -40,6 +40,13 @@ describe('assertRuntimeSupportsAutoMode', () => {
     expect(() => assertRuntimeSupportsAutoMode({ runtime: 'claude' })).toThrow(/codex/);
   });
 
+  it('throws for GSD_RUNTIME codex alias values', () => {
+    process.env.GSD_RUNTIME = 'codex-app';
+    expect(() => assertRuntimeSupportsAutoMode({ runtime: 'claude' })).toThrow(/codex/);
+    process.env.GSD_RUNTIME = 'codex_cli';
+    expect(() => assertRuntimeSupportsAutoMode({ runtime: 'claude' })).toThrow(/codex/);
+  });
+
   it('error message references issue #2832 and slash-command workaround', () => {
     let caught: Error | undefined;
     try {
@@ -80,5 +87,17 @@ describe('assertRuntimeSupportsAutoMode', () => {
     expect(caught).toBeDefined();
     expect(caught!.message).toMatch(/config\.runtime="codex"/);
     expect(caught!.message).not.toMatch(/GSD_RUNTIME=unsupported-env/);
+  });
+
+  it('attributes source to GSD_RUNTIME when env uses a supported codex alias', () => {
+    process.env.GSD_RUNTIME = 'codex-cli';
+    let caught: Error | undefined;
+    try {
+      assertRuntimeSupportsAutoMode({ runtime: 'claude' });
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught).toBeDefined();
+    expect(caught!.message).toMatch(/GSD_RUNTIME=codex-cli/);
   });
 });

@@ -55,11 +55,22 @@ describe('formatGsdSlash — runtime-aware slash command formatter', () => {
       assert.strictEqual(formatGsdSlash('new-milestone', null), '/gsd-new-milestone');
       assert.strictEqual(formatGsdSlash('new-milestone', undefined), '/gsd-new-milestone');
     });
+
+    test('runtime aliases for non-codex runtimes still emit hyphen form', () => {
+      assert.strictEqual(formatGsdSlash('new-project', 'claude-code'), '/gsd-new-project');
+      assert.strictEqual(formatGsdSlash('new-project', 'gemini-cli'), '/gsd-new-project');
+      assert.strictEqual(formatGsdSlash('new-project', 'opencode-cli'), '/gsd-new-project');
+    });
   });
 
   describe('codex shell-var form', () => {
     test('emits $gsd-<cmd> for codex', () => {
       assert.strictEqual(formatGsdSlash('execute-phase', 'codex'), '$gsd-execute-phase');
+    });
+
+    test('emits $gsd-<cmd> for codex aliases (app/cli)', () => {
+      assert.strictEqual(formatGsdSlash('execute-phase', 'codex-app'), '$gsd-execute-phase');
+      assert.strictEqual(formatGsdSlash('execute-phase', 'codex_cli'), '$gsd-execute-phase');
     });
 
     test('codex output is lowercased', () => {
@@ -196,6 +207,19 @@ describe('resolveRuntime — env > config > default', () => {
     }
   });
 
+  test('canonicalizes codex env aliases', () => {
+    const saved = process.env.GSD_RUNTIME;
+    try {
+      process.env.GSD_RUNTIME = 'codex-app';
+      assert.strictEqual(resolveRuntime(null), 'codex');
+      process.env.GSD_RUNTIME = 'codex_cli';
+      assert.strictEqual(resolveRuntime('/nonexistent'), 'codex');
+    } finally {
+      if (saved === undefined) delete process.env.GSD_RUNTIME;
+      else process.env.GSD_RUNTIME = saved;
+    }
+  });
+
   test('defaults to claude when env is unset and projectDir missing', () => {
     const saved = process.env.GSD_RUNTIME;
     try {
@@ -223,6 +247,48 @@ describe('resolveRuntime — env > config > default', () => {
     try {
       delete process.env.GSD_RUNTIME;
       assert.strictEqual(resolveRuntime(tmp), 'codex');
+    } finally {
+      if (saved !== undefined) process.env.GSD_RUNTIME = saved;
+    }
+  });
+
+  test('canonicalizes codex config aliases', (t) => {
+    const fs = require('fs');
+    const os = require('os');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3584-'));
+    t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+    fs.mkdirSync(path.join(tmp, '.planning'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmp, '.planning', 'config.json'),
+      JSON.stringify({ runtime: 'codex-cli' }),
+    );
+
+    const saved = process.env.GSD_RUNTIME;
+    try {
+      delete process.env.GSD_RUNTIME;
+      assert.strictEqual(resolveRuntime(tmp), 'codex');
+    } finally {
+      if (saved !== undefined) process.env.GSD_RUNTIME = saved;
+    }
+  });
+
+  test('canonicalizes non-codex config aliases', (t) => {
+    const fs = require('fs');
+    const os = require('os');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3584-'));
+    t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+    fs.mkdirSync(path.join(tmp, '.planning'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmp, '.planning', 'config.json'),
+      JSON.stringify({ runtime: 'claude-code' }),
+    );
+
+    const saved = process.env.GSD_RUNTIME;
+    try {
+      delete process.env.GSD_RUNTIME;
+      assert.strictEqual(resolveRuntime(tmp), 'claude');
     } finally {
       if (saved !== undefined) process.env.GSD_RUNTIME = saved;
     }

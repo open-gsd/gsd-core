@@ -403,8 +403,57 @@ describe('detectRuntime', () => {
     expect(detectRuntime()).toBe('codex');
   });
 
+  it('normalizes Codex env aliases to canonical codex runtime', () => {
+    process.env.GSD_RUNTIME = 'codex-app';
+    expect(detectRuntime()).toBe('codex');
+    process.env.GSD_RUNTIME = 'codex_cli';
+    expect(detectRuntime()).toBe('codex');
+  });
+
+  it('normalizes common runtime env aliases to canonical runtime IDs', () => {
+    const cases: Array<[string, Runtime]> = [
+      ['claude-code', 'claude'],
+      ['gemini-cli', 'gemini'],
+      ['opencode-cli', 'opencode'],
+      ['qwen-code', 'qwen'],
+      ['hermes-agent', 'hermes'],
+      ['github-copilot', 'copilot'],
+      ['cursor-nightly', 'cursor'],
+      ['windsurf-next', 'windsurf'],
+      ['augment-code', 'augment'],
+      ['codebuddy-cli', 'codebuddy'],
+      ['cline-cli', 'cline'],
+    ];
+
+    for (const [alias, runtime] of cases) {
+      process.env.GSD_RUNTIME = alias;
+      expect(detectRuntime()).toBe(runtime);
+    }
+  });
+
   it('falls back to config.runtime when GSD_RUNTIME unset', () => {
     expect(detectRuntime({ runtime: 'gemini' })).toBe('gemini');
+  });
+
+  it('normalizes Codex config aliases to canonical codex runtime', () => {
+    expect(detectRuntime({ runtime: 'codex-cli' })).toBe('codex');
+    expect(detectRuntime({ runtime: 'codex app' })).toBe('codex');
+  });
+
+  it('normalizes common runtime config aliases to canonical runtime IDs', () => {
+    const cases: Array<[string, Runtime]> = [
+      ['claude-cli', 'claude'],
+      ['gemini-code', 'gemini'],
+      ['open code', 'opencode'],
+      ['hermes_cli', 'hermes'],
+      ['antigravity-agent', 'antigravity'],
+      ['trae-cli', 'trae'],
+      ['kilo-cli', 'kilo'],
+    ];
+
+    for (const [alias, runtime] of cases) {
+      expect(detectRuntime({ runtime: alias })).toBe(runtime);
+    }
   });
 
   it('GSD_RUNTIME wins over config.runtime', () => {

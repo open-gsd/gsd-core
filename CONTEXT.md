@@ -100,6 +100,9 @@ Module owning SDK-to-`get-shit-done-redux` compatibility policy: legacy asset di
 ### Runtime-Global Skills Policy Module
 Module owning runtime-aware global skills directory policy for SDK query surfaces. Resolves runtime-global skills bases/skill paths from runtime + env precedence, renders display paths for warnings/manifests, and reports unsupported runtimes with no skills directory.
 
+### Runtime Name Policy Module
+Shared CJS/SDK Module owning runtime identity normalization at runtime-selection seams. Canonicalizes alias signals from env/config (`GSD_RUNTIME`, `.planning/config.json:runtime`) to supported runtime IDs so output emitters and query runtime gates stay consistent across naming variants (for example `codex-app`/`codex-cli` -> `codex`). Sources: `get-shit-done/bin/lib/runtime-name-policy.cjs`, `sdk/src/runtime-name-policy.ts`, alias manifest `sdk/shared/runtime-aliases.manifest.json`.
+
 ### Installer Migration Authoring Guard Module
 Module owning validation for Installer Migration Module records and planned actions. It enforces migration metadata, explicit install scopes, ownership evidence for destructive/config actions, and runtime contract citations for runtime config rewrites before a migration can enter planning or apply.
 

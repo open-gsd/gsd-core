@@ -13,6 +13,7 @@
  * for non-Claude runtimes.
  */
 import { detectRuntime, SUPPORTED_RUNTIMES, type Runtime } from './query/helpers.js';
+import { canonicalizeRuntimeName } from './runtime-name-policy.js';
 
 /**
  * Throw a clear error when the active runtime is not Claude.
@@ -33,8 +34,9 @@ export function assertRuntimeSupportsAutoMode(config?: Record<string, unknown> |
   // a `GSD_RUNTIME` value that isn't in SUPPORTED_RUNTIMES falls through to
   // the config tier, so reporting it as the source would be misleading.
   const env = process.env.GSD_RUNTIME;
+  const envCanonical = canonicalizeRuntimeName(env);
   const envIsSupported =
-    typeof env === 'string' && (SUPPORTED_RUNTIMES as readonly string[]).includes(env);
+    typeof envCanonical === 'string' && (SUPPORTED_RUNTIMES as readonly string[]).includes(envCanonical);
   const source = envIsSupported
     ? `GSD_RUNTIME=${env}`
     : `config.runtime="${String(cfg.runtime ?? '')}"`;

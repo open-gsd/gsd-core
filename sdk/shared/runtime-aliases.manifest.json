@@ -1,0 +1,75 @@
+{
+  "claude": [
+    "claude",
+    "claude-code",
+    "claude-cli"
+  ],
+  "opencode": [
+    "opencode",
+    "open-code",
+    "opencode-cli"
+  ],
+  "kilo": [
+    "kilo",
+    "kilo-cli"
+  ],
+  "gemini": [
+    "gemini",
+    "gemini-cli",
+    "gemini-code"
+  ],
+  "codex": [
+    "codex",
+    "codex-app",
+    "codex-cli",
+    "codex_desktop",
+    "codex-desktop"
+  ],
+  "copilot": [
+    "copilot",
+    "copilot-cli",
+    "github-copilot"
+  ],
+  "antigravity": [
+    "antigravity",
+    "antigravity-cli",
+    "antigravity-agent"
+  ],
+  "cursor": [
+    "cursor",
+    "cursor-cli",
+    "cursor-nightly"
+  ],
+  "windsurf": [
+    "windsurf",
+    "windsurf-cli",
+    "windsurf-next"
+  ],
+  "augment": [
+    "augment",
+    "augment-code",
+    "augment-cli"
+  ],
+  "trae": [
+    "trae",
+    "trae-cli"
+  ],
+  "qwen": [
+    "qwen",
+    "qwen-code",
+    "qwen-cli"
+  ],
+  "hermes": [
+    "hermes",
+    "hermes-agent",
+    "hermes-cli"
+  ],
+  "codebuddy": [
+    "codebuddy",
+    "codebuddy-cli"
+  ],
+  "cline": [
+    "cline",
+    "cline-cli"
+  ]
+}

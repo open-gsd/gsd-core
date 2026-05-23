@@ -132,6 +132,26 @@ describe('bug-3584: init manager recommendedActions emit hyphen form', () => {
       );
     }
   });
+
+  test('codex alias runtime emits $gsd-<cmd> in recommended_actions[].command', () => {
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-foundation');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+
+    const result = runGsdTools('init manager', tmpDir, { GSD_RUNTIME: 'codex-app' });
+    assert.ok(result.success, `init manager (codex-app) failed: ${result.error || result.output}`);
+
+    const payload = JSON.parse(result.output);
+    const commands = collectCommandFields(payload.recommended_actions || []);
+    assert.ok(commands.length > 0);
+
+    for (const cmd of commands) {
+      assert.ok(
+        cmd.startsWith('$gsd-'),
+        `codex alias recommended_actions command must use $gsd- shell-var form, got ${cmd}`,
+      );
+    }
+  });
 });
 
 describe('bug-3584: phase add persists hyphen form into ROADMAP.md', () => {

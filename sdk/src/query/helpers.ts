@@ -24,6 +24,7 @@ import { homedir } from 'node:os';
 import { GSDError, ErrorClassification } from '../errors.js';
 export { SUPPORTED_RUNTIMES, type Runtime } from '../model-catalog.js';
 import { SUPPORTED_RUNTIMES, type Runtime } from '../model-catalog.js';
+import { canonicalizeRuntimeName } from '../runtime-name-policy.js';
 import { workspacePlanningPaths, resolveWorkspaceContext, type PlanningPaths } from './workspace.js';
 export { stateExtractField } from './state-document.js';
 import { relPlanningPath, validateWorkstreamName } from '../workstream-utils.js';
@@ -93,14 +94,12 @@ export function getRuntimeConfigDir(runtime: Runtime): string {
  * stale env values don't hard-block workflows.
  */
 export function detectRuntime(config?: { runtime?: unknown }): Runtime {
-  const envValue = process.env.GSD_RUNTIME;
-  if (envValue && (SUPPORTED_RUNTIMES as readonly string[]).includes(envValue)) {
-    return envValue as Runtime;
-  }
-  const configValue = config?.runtime;
-  if (typeof configValue === 'string' && (SUPPORTED_RUNTIMES as readonly string[]).includes(configValue)) {
-    return configValue as Runtime;
-  }
+  const envRuntime = canonicalizeRuntimeName(process.env.GSD_RUNTIME);
+  if (envRuntime) return envRuntime;
+
+  const configRuntime = canonicalizeRuntimeName(config?.runtime);
+  if (configRuntime) return configRuntime;
+
   return 'claude';
 }
 

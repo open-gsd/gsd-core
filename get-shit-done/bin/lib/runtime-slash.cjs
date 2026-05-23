@@ -1,5 +1,7 @@
 'use strict';
 
+const { canonicalizeRuntimeName } = require('./runtime-name-policy.cjs');
+
 /**
  * runtime-slash.cjs — single source of truth for emitting GSD slash-command
  * references in user-facing runtime output (recommended-actions JSON, persisted
@@ -43,7 +45,8 @@ function formatGsdSlash(commandName, runtime) {
   const token = wsMatch ? wsMatch[1] : bare;
   const tail = wsMatch && wsMatch[2] ? wsMatch[2] : '';
 
-  const rt = String(runtime || 'claude').toLowerCase();
+  const runtimeText = String(runtime || 'claude').toLowerCase();
+  const rt = canonicalizeRuntimeName(runtimeText) || runtimeText;
   if (rt === 'codex') {
     // Codex skills are invoked as $gsd-<cmd> (shell-var syntax). The command
     // token is lowercased because shell-var identifiers are conventionally
@@ -67,7 +70,8 @@ function formatGsdSlash(commandName, runtime) {
  */
 function resolveRuntime(projectDir) {
   if (process.env.GSD_RUNTIME) {
-    return String(process.env.GSD_RUNTIME).toLowerCase();
+    const rawRuntime = String(process.env.GSD_RUNTIME).toLowerCase();
+    return canonicalizeRuntimeName(rawRuntime) || rawRuntime;
   }
   if (projectDir) {
     try {
@@ -83,7 +87,8 @@ function resolveRuntime(projectDir) {
         const raw = fs.readFileSync(configPath, 'utf-8');
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object' && parsed.runtime) {
-          return String(parsed.runtime).toLowerCase();
+          const rawRuntime = String(parsed.runtime).toLowerCase();
+          return canonicalizeRuntimeName(rawRuntime) || rawRuntime;
         }
       }
     } catch {
