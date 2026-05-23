@@ -203,3 +203,28 @@ No new behavioral fix is required — the generator pattern extension is the del
 the W005/W006-archived/I001 check paths. The artifact `validate.generated.cjs` now covers all
 six drift surfaces originally identified across both issues. This completes the validate.ts ↔
 verify.cjs migration scope for generator-pattern coverage.
+
+### 2026-05-23: Phase * cooperating-sibling retirement — I/O adapter pattern for phase lifecycle (issue #4)
+
+**Context:** Issue #4 revealed that `phase.cjs:cmdPhaseComplete` was non-idempotent: every call blindly incremented `Completed Phases` by 1 and computed Progress without a 100% clamp. The SDK's `phase-lifecycle.ts` already contained the correct idempotent implementation ("Root cause 1 fix" block ~line 1644), but CJS had no way to share it because the mutation handlers are async I/O-bound and Section 4's "I/O stays per-side" rule prevents direct sharing.
+
+**Decision:** Apply the I/O adapter pattern (Section 4) to the pure-computation kernel inside `phase-lifecycle.ts`:
+
+1. **Three new generator scripts** extract pure helpers from the phase family:
+   - `sdk/scripts/gen-phase.mjs` → `get-shit-done/bin/lib/phase.generated.cjs`
+     (pure helpers: `isCanonicalPlanFile`, `describeNonCanonicalPlans`)
+   - `sdk/scripts/gen-phase-lifecycle.mjs` → `get-shit-done/bin/lib/phase-lifecycle.generated.cjs`
+     (pure helpers: `deriveProgressFromRoadmap`, `clampPercent`)
+   - `sdk/scripts/gen-phase-lifecycle-policy.mjs` → `get-shit-done/bin/lib/phase-lifecycle-policy.generated.cjs`
+     (14 pure policy helpers: `generatePhaseSlug`, `computePhaseDirectory`, `buildPhaseRoadmapEntry`, etc.)
+
+2. **`phase.cjs:cmdPhaseComplete`** is migrated to use `deriveProgressFromRoadmap` + `clampPercent` from the generated artifact. It reads the freshly-updated ROADMAP synchronously, derives the completed-phase count from Complete-row matching (idempotent), and passes it through `clampPercent` to prevent >100% Progress.
+
+3. **Freshness checks:** `check-phase-fresh.mjs`, `check-phase-lifecycle-fresh.mjs`, `check-phase-lifecycle-policy-fresh.mjs` added. CI adds three corresponding drift-check steps alongside the existing generated-artifact drift checks.
+
+4. **Allowlist:** `phase.cjs ↔ phase.ts` remains `cooperating-sibling` because `phase.cjs` still owns the CJS sync mutation handlers (phaseAdd, phaseInsert, phaseRemove, phaseComplete) that are legitimately I/O-bound and cannot be extracted via `.toString()`. The allowlist justification is updated to reflect the new generator consumption.
+
+**What this is NOT:** The full async mutation handlers (`phaseAdd`, `phaseInsert`, `phaseRemove`, `phaseComplete`) are inherently async I/O-bound and are NOT generated — per Section 4. This amendment only extracts the pure-computation kernel.
+
+**Open drift bugs remaining:** Issue #6 (phasePlanIndex drift) and issue #26 (phase.add inline ROADMAP update drift) are separate bug reports; they are referenced here for traceability but not fixed in this amendment. Future amendments should note when those are resolved.
+
