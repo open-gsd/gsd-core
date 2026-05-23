@@ -101,3 +101,48 @@ A top-of-file banner is auto-inserted by each generator into the emitted `.gener
 ## Amendments
 
 _(Append-only. Use a dated header when the decision evolves.)_
+
+### 2026-05-23 — validate.ts → verify.cjs generator pattern (issue #6)
+
+Three pure helpers from `sdk/src/query/validate.ts` Check 8 are now generated into
+`get-shit-done/bin/lib/validate.generated.cjs` via `sdk/scripts/gen-validate.mjs`,
+following the same I/O adapter pattern established by PR #154 (issue #4):
+
+**Generator:** `sdk/scripts/gen-validate.mjs`
+**Artifact:** `get-shit-done/bin/lib/validate.generated.cjs`
+**Freshness check:** `sdk/scripts/check-validate-fresh.mjs`
+**CI:** `.github/workflows/test.yml` — "SDK generated validate artifact drift check"
+
+**Three drift items resolved (issue #6):**
+
+1. **W007 `activeDiskPhases`** — `verify.cjs` Check 8 previously iterated `diskPhases`
+   (which includes archived milestone phases via `forEachArchivedPhaseToken`) for the W007
+   check. Archived phases absent from the current ROADMAP produced false W007 warnings.
+   Fix: W007 now iterates `activeDiskPhases` (from `collectDiskPhases()` only, without
+   `forEachArchivedPhaseToken`), matching `validate.ts` Check 8 behavior.
+
+2. **`phaseVariants()` normalization** — `verify.cjs` Check 8 used `parseInt(p).padStart(2,'0')`
+   for disk-existence and roadmap-membership checks, which drops letter suffixes (e.g. "3B" →
+   "03" instead of "03B"). Phase dirs with letter-suffix padding mismatches (ROADMAP "3B",
+   disk "03B-foo") produced false W006 and W007. Fix: both checks now use `phaseVariants(p)`
+   from the generated module, which returns the full normalized Set including letter-suffix forms.
+
+3. **W006 unchecked-phase variant skip** — `verify.cjs` Check 8 built `notStartedPhases` with
+   raw + `parseInt`-padded forms (drops letter suffix). `phaseVariants()` is now used instead,
+   so unchecked entries like "3B" correctly suppress W006 for "03B" (and vice versa).
+
+**`phaseVariants` extraction note:** `phaseVariants` is defined as a closure inside `validateHealth`
+in the compiled output (not a module-level export). It is extracted via brace-balanced source-text
+parsing from `sdk/dist/query/validate.js`, the same technique used for `escapeRegex` extraction in
+`gen-phase-lifecycle-policy.mjs`. The function is deterministic and pure: no closures over external
+state, no side effects.
+
+**Parity tests:** `tests/6-validate-cjs-drift-regression.test.cjs` — 5 tests (all GREEN after fix,
+all RED on pre-fix `origin/main`). Covers each drift item with concrete fixtures:
+- Drift 1: two milestone archives (v1.0 old, v1.1 active); v1.0 phase absent from ROADMAP.
+- Drift 2: ROADMAP "01A", disk "1A-foo" — padding mismatch.
+- Drift 3: ROADMAP "3B", disk "03B-foo" — zero-padded letter-suffix mismatch.
+
+**Allowlist:** `scripts/shared-module-handsync-allowlist.json` — `verify.cjs` entry updated to
+reference the generator and freshness check. Classification remains `cooperating-sibling` (verify.cjs
+is still a full implementation; only Check 8 helpers are generated).
