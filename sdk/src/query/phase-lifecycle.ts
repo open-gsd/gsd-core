@@ -2039,7 +2039,11 @@ export const milestoneComplete: QueryHandler = async (args, projectDir, workstre
   const archiveDir = join(paths.planning, 'milestones');
   const phasesDir = paths.phases;
   const today = new Date().toISOString().split('T')[0]!;
-  const milestoneName = nameOpt || version;
+  // #3 defect-1: preserve version in header, append optional name only when
+  // explicitly provided. Historical template: `## v1.8.0 Quick Mode (Shipped: ...)`.
+  // When no --name is given, milestoneName is undefined so the header is
+  // `## ${version} (Shipped: ...)` — version appears exactly once.
+  const milestoneName = nameOpt ?? undefined;
 
   await mkdir(archiveDir, { recursive: true });
 
@@ -2095,8 +2099,10 @@ export const milestoneComplete: QueryHandler = async (args, projectDir, workstre
 
   if (existsSync(reqPath)) {
     const reqContent = await readFile(reqPath, 'utf-8');
+    // #3 defect-1: canonical header: version + optional name appended only when provided.
+    const reqTitle = milestoneName ? `${version} ${milestoneName}` : version;
     const archiveHeader =
-      `# Requirements Archive: ${version} ${milestoneName}\n\n` +
+      `# Requirements Archive: ${reqTitle}\n\n` +
       `**Archived:** ${today}\n**Status:** SHIPPED\n\n` +
       `For current requirements, see \`.planning/REQUIREMENTS.md\`.\n\n---\n\n`;
     await writeFile(join(archiveDir, `${version}-REQUIREMENTS.md`), archiveHeader + reqContent, 'utf-8');
@@ -2108,8 +2114,12 @@ export const milestoneComplete: QueryHandler = async (args, projectDir, workstre
   }
 
   const accomplishmentsList = accomplishments.map((a) => `- ${a}`).join('\n');
+  // #3 defect-1 (GFM § ATX headings: https://github.github.com/gfm/#atx-headings)
+  // Canonical template: `## ${version}${nameOpt ? ` ${nameOpt}` : ''} (Shipped: ${today})`
+  // Historical evidence: `## v1.8.0 Quick Mode (Shipped: 2026-01-19)`
+  const milestoneTitle = milestoneName ? `${version} ${milestoneName}` : version;
   const milestoneEntry =
-    `## ${version} ${milestoneName} (Shipped: ${today})\n\n` +
+    `## ${milestoneTitle} (Shipped: ${today})\n\n` +
     `**Phases completed:** ${phaseCount} phases, ${totalPlans} plans, ${totalTasks} tasks\n\n` +
     `**Key accomplishments:**\n${accomplishmentsList || '- (none recorded)'}\n\n---\n\n`;
 
