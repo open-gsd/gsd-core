@@ -157,12 +157,40 @@ interface PlanSections {
 
 const DESIGNATED_HEADINGS_RE = /^#{1,6}\s+(?:must[_ ]haves?|truths?|tasks?|objective)\b/i;
 
+/**
+ * Extracts text from the four canonical XML tags that gsd-planner emits for
+ * decision citations: <objective>, <tasks>, <task>, <action>.
+ *
+ * Uses a deliberately narrow regex (D2) — no XML parser library — because the
+ * planner's XML convention is a project-internal convention, not formal XML.
+ * Self-closing tags (e.g., <action/>) are harmlessly skipped (no capture group
+ * match). Non-canonical tags (e.g., <comment>) are NOT matched.
+ *
+ * Reference: agents/gsd-planner.md line 66:
+ *   "Task actions reference the decision ID they implement (e.g., 'per D-03')"
+ */
+const XML_DECISION_TAGS_RE =
+  /<(?:objective|tasks?|action)(?:\s[^>]*)?>([\s\S]*?)<\/(?:objective|tasks?|action)>/gi;
+
 /** Strip HTML comments AND fenced code blocks from `text`. */
 function stripCommentsAndFences(text: string): string {
   return text
     .replace(/<!--[\s\S]*?-->/g, ' ')
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/~~~[\s\S]*?~~~/g, ' ');
+}
+
+/**
+ * Extract the inner text of all canonical XML tag bodies from `text`.
+ * Returns a concatenated string of all matched inner bodies, or '' if none.
+ * Called on the cleaned (comments+fences stripped) plan body.
+ */
+function extractXmlTagBodies(text: string): string {
+  const parts: string[] = [];
+  for (const m of text.matchAll(XML_DECISION_TAGS_RE)) {
+    if (m[1]) parts.push(m[1]);
+  }
+  return parts.join('\n');
 }
 
 /** Extract a YAML block scalar (key followed by indented continuation lines). */
@@ -214,7 +242,14 @@ function extractPlanSections(planContent: string): PlanSections {
     if (inDesignated) bodyParts.push(line);
   }
 
-  return { designated: [...fmParts, bodyParts.join('\n')].join('\n\n') };
+  // Also include the inner text of canonical XML tag bodies (<objective>, <tasks>,
+  // <task>, <action>). The planner spec (agents/gsd-planner.md line 66) directs
+  // agents to cite D-NN inside <action> bodies; the gate must honour those citations.
+  // extractXmlTagBodies is called on the full cleaned content (not just the body
+  // portion) so that <objective> blocks at the top of the document are also caught.
+  const xmlParts = extractXmlTagBodies(cleaned);
+
+  return { designated: [...fmParts, bodyParts.join('\n'), xmlParts].join('\n\n') };
 }
 
 async function loadPlanSections(phaseDir: string): Promise<PlanSections[]> {
