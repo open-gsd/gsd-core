@@ -175,7 +175,7 @@ OpenSSF Scorecard's "Pinned-Dependencies" check measures this directly.
 
 **Implementation in pilot:** PR for issue
 [#117](https://github.com/gsd-build/get-shit-done/issues/117)
-(PR number TBD — maintainer to update link once PR is open).
+(see PR #136).
 
 **Verify locally:**
 
@@ -402,7 +402,7 @@ Responsibilities:
 | Prompt-injection scanning (#113) | In progress | `@open-gsd/maintainers` | TBD: maintainer | PR #133 merged; CI passes |
 | Secret scanning (#115) | In progress | `@open-gsd/maintainers` | TBD: maintainer | PR #134 merged; CI passes; 0 un-annotated entries |
 | Dependency integrity (#114) | In progress | `@open-gsd/maintainers` | TBD: maintainer | PR #135 merged; `npm audit` clean |
-| Reproducible env bootstrap (#117) | In progress | `@open-gsd/maintainers` | TBD: maintainer | PR for #117 merged; `npm ci` passes cleanly |
+| Reproducible env bootstrap (#117) | In progress | `@open-gsd/maintainers` | TBD: maintainer | PR #136 merged; `npm ci` passes cleanly |
 | Baseline doc approved | Draft | `@open-gsd/maintainers` | TBD: maintainer | At least one maintainer approves this document |
 
 ### Phase 2 — Sibling repo alignment
@@ -468,7 +468,7 @@ based on historical data after the first quarterly review.
 - [ ] Quarterly review calendar entry created (link to be added here)
 - [ ] Per-control adoption tracking issue opened for each Phase 2 sibling repo
 - [ ] Phase 2 rollout PR(s) opened per sibling repo (one PR per repo)
-- [ ] PR for issue #117 (reproducible env bootstrap) opened and linked in § 2.5
+- [x] PR #136 for issue #117 (reproducible env bootstrap) opened and linked in § 2.5
 - [ ] RFC status field (§ 1) updated to `Approved` after maintainer review
 - [ ] RFC status field (§ 1) updated to `Adopted` after Phase 3 completion
 - [ ] OpenSSF Scorecard integration evaluated for org-level adoption tracking
