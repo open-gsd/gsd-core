@@ -34,9 +34,9 @@ See **[CONTRIBUTING.md — "Proposing an ADR or PRD"](../../CONTRIBUTING.md#prop
 | [0002-command-contract-validation-module.md](0002-command-contract-validation-module.md) | Command Contract Validation Module | Accepted |
 | [0003-model-catalog-module.md](0003-model-catalog-module.md) | Model Catalog Module as single source of truth for agent profiles and runtime tier defaults | Accepted |
 | [0004-worktree-workstream-seam-module.md](0004-worktree-workstream-seam-module.md) | Planning Workspace Module as single seam for worktree and workstream state | Accepted |
-| [0005-sdk-architecture-seam-map.md](0005-sdk-architecture-seam-map.md) | SDK Architecture seam map for query/runtime surfaces | Accepted |
+| [0005-sdk-architecture-seam-map.md](0005-sdk-architecture-seam-map.md) | SDK Architecture seam map for query/runtime surfaces | Superseded by ADR-0174 |
 | [0006-planning-path-projection-module.md](0006-planning-path-projection-module.md) | Planning Path Projection Module for SDK query handlers | Accepted |
-| [0007-sdk-package-seam-module.md](0007-sdk-package-seam-module.md) | SDK Package Seam Module owns SDK-to-get-shit-done-redux compatibility | Accepted |
+| [0007-sdk-package-seam-module.md](0007-sdk-package-seam-module.md) | SDK Package Seam Module owns SDK-to-get-shit-done-redux compatibility | Superseded by ADR-0174 |
 | [0008-installer-migration-module.md](0008-installer-migration-module.md) | Installer Migration Module owns install-time upgrade safety | Accepted |
 | [0009-shell-command-projection-module.md](0009-shell-command-projection-module.md) | Shell Command Projection Module owns runtime-aware OS command rendering | Accepted |
 | [0010-file-operation-engine-module.md](0010-file-operation-engine-module.md) | File Operation Engine Module owns safe runtime/config file mutations | Proposed |
@@ -44,9 +44,10 @@ See **[CONTRIBUTING.md — "Proposing an ADR or PRD"](../../CONTRIBUTING.md#prop
 | [0011-skill-surface-budget-module.md](0011-skill-surface-budget-module.md) | Skill Surface Budget Module owns install-time profile staging and runtime surface control | Accepted |
 | [0011-review-default-reviewers.md](0011-review-default-reviewers.md) | Review default-reviewers selection policy for /gsd:review | Accepted |
 | [0011-review-default-reviewers-prd.md](0011-review-default-reviewers-prd.md) | PRD for review.default_reviewers feature (#3464) | Reference |
-| [0012-command-routing-hub.md](0012-command-routing-hub.md) | CommandRoutingHub as single dispatch seam for CJS command families | Accepted |
-| [3524-cjs-sdk-hard-seam.md](3524-cjs-sdk-hard-seam.md) | CJS↔SDK hard seam — single canonical owner per responsibility (#3524) | Proposed |
+| [0012-command-routing-hub.md](0012-command-routing-hub.md) | CommandRoutingHub as single dispatch seam for CJS command families | Superseded by ADR-0174 |
+| [3524-cjs-sdk-hard-seam.md](3524-cjs-sdk-hard-seam.md) | CJS↔SDK hard seam — single canonical owner per responsibility (#3524) | Superseded by ADR-0174 |
 | [3660-runtime-artifact-layout-module.md](3660-runtime-artifact-layout-module.md) | Runtime Artifact Layout Module owns per-runtime artifact placement | Proposed |
+| [0174-retire-gsd-sdk-package-boundary.md](0174-retire-gsd-sdk-package-boundary.md) | Retire @opengsd/gsd-sdk package boundary — single-runtime collapse | Accepted |
 
 ## Seam map
 
