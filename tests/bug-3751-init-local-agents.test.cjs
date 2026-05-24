@@ -152,11 +152,14 @@ describe('#3751: resolveAgentsDir() repo-local fallback — runtime behaviour', 
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3751-'));
     savedEnv = {
       GSD_AGENTS_DIR: process.env.GSD_AGENTS_DIR,
+      GSD_RUNTIME: process.env.GSD_RUNTIME,
       CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
       HOME: process.env.HOME,
     };
     // Clear explicit overrides so we exercise the fallback path
     delete process.env.GSD_AGENTS_DIR;
+    // Make runtime deterministic: this suite validates Claude local-agent semantics.
+    process.env.GSD_RUNTIME = 'claude';
   });
 
   afterEach(() => {
@@ -166,6 +169,11 @@ describe('#3751: resolveAgentsDir() repo-local fallback — runtime behaviour', 
       process.env.GSD_AGENTS_DIR = savedEnv.GSD_AGENTS_DIR;
     } else {
       delete process.env.GSD_AGENTS_DIR;
+    }
+    if (savedEnv.GSD_RUNTIME !== undefined) {
+      process.env.GSD_RUNTIME = savedEnv.GSD_RUNTIME;
+    } else {
+      delete process.env.GSD_RUNTIME;
     }
     if (savedEnv.CLAUDE_CONFIG_DIR !== undefined) {
       process.env.CLAUDE_CONFIG_DIR = savedEnv.CLAUDE_CONFIG_DIR;
@@ -314,15 +322,20 @@ describe('#3799: resolveAgentsDir() local-first resolution — runtime behaviour
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3799-'));
     savedEnv = {
       GSD_AGENTS_DIR: process.env.GSD_AGENTS_DIR,
+      GSD_RUNTIME: process.env.GSD_RUNTIME,
       CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
     };
     delete process.env.GSD_AGENTS_DIR;
+    // Keep runtime fixed across suite-order changes and leaked test env.
+    process.env.GSD_RUNTIME = 'claude';
   });
 
   afterEach(() => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
     if (savedEnv.GSD_AGENTS_DIR !== undefined) process.env.GSD_AGENTS_DIR = savedEnv.GSD_AGENTS_DIR;
     else delete process.env.GSD_AGENTS_DIR;
+    if (savedEnv.GSD_RUNTIME !== undefined) process.env.GSD_RUNTIME = savedEnv.GSD_RUNTIME;
+    else delete process.env.GSD_RUNTIME;
     if (savedEnv.CLAUDE_CONFIG_DIR !== undefined) process.env.CLAUDE_CONFIG_DIR = savedEnv.CLAUDE_CONFIG_DIR;
     else delete process.env.CLAUDE_CONFIG_DIR;
   });
