@@ -87,3 +87,7 @@ git push origin --delete release/1.03.0
 - **Leading-zero inputs fail in under 5 seconds** at the `validate-version` job before any branch, install, or publish operation runs.
 - **Duplicate-version inputs fail in under 5 seconds** at `validate-version` rather than after a full install-and-test cycle.
 - **The late dry-run check in `finalize` is unchanged.** It remains a belt-and-suspenders guard; the new precheck does not remove it.
+
+## See also
+
+- ADR 227 (`docs/adr/227-input-validation-shape-not-just-type.md`) generalises the principle this ADR documents in the narrower release-validation context: input validation at trust boundaries must check both type and semantic shape, with silent coercion on failure.
