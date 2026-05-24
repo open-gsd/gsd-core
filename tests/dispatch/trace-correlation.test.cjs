@@ -147,6 +147,73 @@ describe('trace correlation — end-to-end parentTraceId propagation', () => {
       'the root event must not appear in the children filter result');
   });
 
+  test('invalid parentTraceId in a child dispatch breaks the correlation tree for that child but does not poison sibling traces', () => {
+    // This test uses its own isolated Hub + audit file to avoid interfering with
+    // the shared capturedEvents fixture above.
+    const isolatedTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-poison-test-'));
+    let isolatedSavedAudit;
+    try {
+      isolatedSavedAudit = process.env.GSD_AUDIT;
+      process.env.GSD_AUDIT = '1';
+
+      const logger = createDefaultLogger({ cwd: isolatedTmp });
+      const hub = createHub({
+        cjsRegistry: makeRegistry(),
+        manifest: makeManifest(),
+        logger,
+      });
+
+      // Root dispatch — no parentTraceId
+      hub.dispatch({ family: 'plan', subcommand: '' });
+
+      const isolatedAuditPath = path.join(isolatedTmp, '.planning', '.gsd-trace.jsonl');
+      const afterRoot = readJsonl(isolatedAuditPath);
+      assert.equal(afterRoot.length, 1, 'setup: one root event');
+      const rootTraceId = afterRoot[0].traceId;
+
+      // Valid child: passes rootTraceId as parentTraceId
+      hub.dispatch({ family: 'discuss', subcommand: '', parentTraceId: rootTraceId });
+
+      // Invalid child: passes 'junk' as parentTraceId
+      hub.dispatch({ family: 'test', subcommand: '', parentTraceId: 'junk' });
+
+      const allEvents = readJsonl(isolatedAuditPath);
+      assert.equal(allEvents.length, 3, 'must have 3 events total (root + valid child + invalid child)');
+
+      const [root, validChild, invalidChild] = allEvents;
+
+      // Valid child carries the correct parentTraceId
+      assert.strictEqual(validChild.parentTraceId, rootTraceId,
+        'valid child must carry parentTraceId === rootTraceId');
+
+      // Invalid child has parentTraceId coerced to undefined (absent from JSON)
+      const invalidChildHasNoParent =
+        !('parentTraceId' in invalidChild) ||
+        invalidChild.parentTraceId === undefined ||
+        invalidChild.parentTraceId === null;
+      assert.ok(invalidChildHasNoParent,
+        'invalid child must have parentTraceId dropped to undefined — not "junk"');
+
+      // Sibling relations are unaffected: filtering by rootTraceId yields only the valid child
+      const correlatedChildren = allEvents.filter(e => e.parentTraceId === rootTraceId);
+      assert.equal(correlatedChildren.length, 1,
+        'only the valid child must appear when filtering by rootTraceId — invalid child must not contaminate');
+      assert.strictEqual(correlatedChildren[0].traceId, validChild.traceId,
+        'the correlated child must be the valid one');
+
+      // All three events still have unique traceIds
+      const ids = allEvents.map(e => e.traceId);
+      assert.equal(new Set(ids).size, 3, 'all 3 events must have unique traceIds');
+    } finally {
+      if (isolatedSavedAudit === undefined) {
+        delete process.env.GSD_AUDIT;
+      } else {
+        process.env.GSD_AUDIT = isolatedSavedAudit;
+      }
+      fs.rmSync(isolatedTmp, { recursive: true, force: true });
+    }
+  });
+
   test('JS filter on traceId returns only the root event', () => {
     const rootTraceId = capturedEvents[0].traceId;
     // Simulates: jq 'select(.traceId == $rootTraceId)'
