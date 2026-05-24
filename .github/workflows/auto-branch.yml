@@ -67,18 +67,31 @@ jobs:
               if (e.status !== 404) throw e;
             }
 
-            // Create branch from main HEAD
-            const mainRef = await github.rest.git.getRef({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              ref: 'heads/main',
-            });
+            // Create branch from next HEAD (the integration branch under the
+            // next-branch model). Fall back to main if next doesn't exist —
+            // covers the brief transition window when this workflow was first
+            // deployed and any legacy single-branch state.
+            let baseRef;
+            try {
+              baseRef = await github.rest.git.getRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: 'heads/next',
+              });
+            } catch (e) {
+              if (e.status !== 404) throw e;
+              baseRef = await github.rest.git.getRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: 'heads/main',
+              });
+            }
 
             await github.rest.git.createRef({
               owner: context.repo.owner,
               repo: context.repo.repo,
               ref: `refs/heads/${branch}`,
-              sha: mainRef.data.object.sha,
+              sha: baseRef.data.object.sha,
             });
 
             await github.rest.issues.createComment({

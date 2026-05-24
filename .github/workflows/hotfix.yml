@@ -37,7 +37,7 @@ on:
         required: true
         type: string
       auto_cherry_pick:
-        description: 'Auto-cherry-pick fix:/chore: commits from origin/main since base tag (create only)'
+        description: 'Auto-cherry-pick fix:/chore: commits from origin/next (fallback origin/main) since base tag (create only)'
         required: false
         type: boolean
         default: true
@@ -141,7 +141,7 @@ jobs:
             git push -u origin "$BRANCH"
           fi
 
-      - name: Cherry-pick fix/chore commits from origin/main since base tag
+      - name: Cherry-pick fix/chore commits from origin/next since base tag
         if: ${{ inputs.auto_cherry_pick }}
         env:
           BRANCH: ${{ needs.validate-version.outputs.branch }}
@@ -149,23 +149,35 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
-          git fetch origin main:refs/remotes/origin/main
 
-          # `git cherry $BASE_TAG origin/main` lists every commit on main not
+          # Under the next-branch model, day-to-day fixes land on `next` first
+          # and only reach `main` via release back-merge. So `next` is the
+          # canonical cherry-pick source. Fall back to `main` if `next` doesn't
+          # exist yet (legacy single-branch repos) or as a transition guard.
+          if git ls-remote --exit-code origin next >/dev/null 2>&1; then
+            git fetch origin next:refs/remotes/origin/next
+            SOURCE="origin/next"
+          else
+            git fetch origin main:refs/remotes/origin/main
+            SOURCE="origin/main"
+          fi
+          echo "Cherry-pick source: $SOURCE"
+
+          # `git cherry $BASE_TAG $SOURCE` lists every commit on the source not
           # patch-equivalent in BASE_TAG. + means needs picking, - means
           # already applied (skipped silently).
-          CANDIDATES=$(git cherry "$BASE_TAG" origin/main | awk '/^\+ / {print $2}')
+          CANDIDATES=$(git cherry "$BASE_TAG" "$SOURCE" | awk '/^\+ / {print $2}')
 
           if [ -z "$CANDIDATES" ]; then
-            echo "No commits on origin/main beyond $BASE_TAG."
+            echo "No commits on $SOURCE beyond $BASE_TAG."
             echo "## Cherry-pick summary" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "Base: \`$BASE_TAG\` — no commits to consider." >> "$GITHUB_STEP_SUMMARY"
+            echo "Base: \`$BASE_TAG\` (source: \`$SOURCE\`) — no commits to consider." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
           # Re-order chronologically (oldest first) for predictable application.
-          ORDERED=$(git log --reverse --format='%H' "$BASE_TAG..origin/main" \
+          ORDERED=$(git log --reverse --format='%H' "$BASE_TAG..$SOURCE" \
             | grep -F -f <(echo "$CANDIDATES") || true)
 
           INCLUDED=""
