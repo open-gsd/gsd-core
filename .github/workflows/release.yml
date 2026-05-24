@@ -202,7 +202,7 @@ jobs:
           npm publish --dry-run --tag next
           cd sdk && npm publish --dry-run --tag next
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GETSHITDONEREDUXNPMTOKEN }}
 
       - name: Tag and push
         if: ${{ !inputs.dry_run }}
@@ -227,13 +227,13 @@ jobs:
         if: ${{ !inputs.dry_run }}
         run: npm publish --provenance --access public --tag next
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GETSHITDONEREDUXNPMTOKEN }}
 
       - name: Publish SDK to npm (next)
         if: ${{ !inputs.dry_run }}
         run: cd sdk && npm publish --provenance --access public --tag next
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GETSHITDONEREDUXNPMTOKEN }}
 
       - name: Create GitHub pre-release
         if: ${{ !inputs.dry_run }}
@@ -350,7 +350,7 @@ jobs:
           npm publish --dry-run
           cd sdk && npm publish --dry-run
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GETSHITDONEREDUXNPMTOKEN }}
 
       - name: Create PR to merge release back to main
         if: ${{ !inputs.dry_run }}
@@ -405,13 +405,13 @@ jobs:
         if: ${{ !inputs.dry_run }}
         run: npm publish --provenance --access public
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GETSHITDONEREDUXNPMTOKEN }}
 
       - name: Publish SDK to npm (latest)
         if: ${{ !inputs.dry_run }}
         run: cd sdk && npm publish --provenance --access public
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GETSHITDONEREDUXNPMTOKEN }}
 
       - name: Create GitHub Release
         if: ${{ !inputs.dry_run }}
@@ -428,7 +428,7 @@ jobs:
         if: ${{ !inputs.dry_run }}
         env:
           VERSION: ${{ inputs.version }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GETSHITDONEREDUXNPMTOKEN }}
         run: |
           # Point next to the stable release so @next never returns something
           # older than @latest. This prevents stale pre-release installs.

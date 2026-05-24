@@ -376,7 +376,7 @@ jobs:
 
       - name: Dry-run publish validation
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GETSHITDONEREDUXNPMTOKEN }}
         run: npm publish --dry-run --tag latest
 
       - name: Tag and push
@@ -400,14 +400,14 @@ jobs:
       - name: Publish to npm (latest)
         if: ${{ !inputs.dry_run && steps.prior_publish.outputs.skip_publish != 'true' }}
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GETSHITDONEREDUXNPMTOKEN }}
         run: npm publish --provenance --access public --tag latest
 
       - name: Re-point next dist-tag at this hotfix
         if: ${{ !inputs.dry_run }}
         env:
           VERSION: ${{ inputs.version }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GETSHITDONEREDUXNPMTOKEN }}
         run: |
           npm dist-tag add "get-shit-done-redux@${VERSION}" next
           echo "✅ next dist-tag re-pointed to v${VERSION} (matches latest)"

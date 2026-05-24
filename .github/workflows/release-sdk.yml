@@ -632,7 +632,7 @@ jobs:
         if: ${{ steps.prior_publish.outputs.skip_publish != 'true' }}
         env:
           TAG: ${{ steps.ver.outputs.tag }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GETSHITDONEREDUXNPMTOKEN }}
         run: npm publish --dry-run --tag "$TAG"
 
       - name: Tag and push
@@ -651,7 +651,7 @@ jobs:
         if: ${{ !inputs.dry_run && steps.prior_publish.outputs.skip_publish != 'true' }}
         env:
           TAG: ${{ steps.ver.outputs.tag }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GETSHITDONEREDUXNPMTOKEN }}
         run: npm publish --provenance --access public --tag "$TAG"
 
       # Keep `next` from going stale relative to `latest`. When publishing a
@@ -662,7 +662,7 @@ jobs:
         if: ${{ !inputs.dry_run && steps.ver.outputs.tag == 'latest' }}
         env:
           VERSION: ${{ steps.ver.outputs.version }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GETSHITDONEREDUXNPMTOKEN }}
         run: |
           npm dist-tag add "@opengsd/get-shit-done-redux@${VERSION}" next
           echo "✅ next dist-tag re-pointed to v${VERSION} (matches latest)"
