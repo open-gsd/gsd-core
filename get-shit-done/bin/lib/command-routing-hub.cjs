@@ -261,14 +261,15 @@ function createHub({ cjsRegistry, manifest, logger } = {}) {
    * Emit a DispatchEvent to the injected logger.
    * Logger errors NEVER propagate — they are caught and emitted as a warn line to stderr.
    *
-   * @param {string}  command - The dispatched command string.
-   * @param {unknown} args    - The raw args from the request.
-   * @param {object}  hubResult  - The HubResult.
+   * @param {string}  command       - The dispatched command string.
+   * @param {unknown} args          - The raw args from the request.
+   * @param {object}  hubResult     - The HubResult.
+   * @param {string}  [parentTraceId] - Optional parent trace ID from the request (P1.4).
    */
-  function _notifyLogger(command, args, hubResult) {
+  function _notifyLogger(command, args, hubResult, parentTraceId) {
     try {
       const eventResult = _normaliseResult(hubResult);
-      const event = makeDispatchEvent({ command, args, result: eventResult });
+      const event = makeDispatchEvent({ command, args, result: eventResult, parentTraceId });
       _logger.onEvent(event);
     } catch (logErr) {
       // Logger must never break dispatch. Emit a degraded warn line.
@@ -293,7 +294,7 @@ function createHub({ cjsRegistry, manifest, logger } = {}) {
    * @returns {HubResult}
    */
   function dispatch(req) {
-    const { family, subcommand, args = [] } = req || {};
+    const { family, subcommand, args = [], parentTraceId } = req || {};
     const command = subcommand ? `${family} ${subcommand}` : String(family);
 
     let result;
@@ -310,7 +311,7 @@ function createHub({ cjsRegistry, manifest, logger } = {}) {
       }
     }
 
-    _notifyLogger(command, args, result);
+    _notifyLogger(command, args, result, parentTraceId);
     return result;
   }
 
