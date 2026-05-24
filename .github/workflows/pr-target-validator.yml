@@ -26,7 +26,7 @@ jobs:
     timeout-minutes: 2
     env:
       # Phase-1: warn only. Phase-2: set to 'false' to enforce.
-      WARN_ONLY: 'true'
+      WARN_ONLY: 'false'
     steps:
       - name: Validate PR target branch
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0

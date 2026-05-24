@@ -27,7 +27,7 @@ permissions:
 jobs:
   backmerge:
     # Phase-1 gate: leave false until `next` exists. Flip to `true` in Phase 2.
-    if: false
+    if: true
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
