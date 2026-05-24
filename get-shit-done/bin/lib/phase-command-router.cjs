@@ -1,37 +1,28 @@
 'use strict';
 
 const { PHASE_SUBCOMMANDS } = require('./command-aliases.generated.cjs');
-const { output } = require('./core.cjs');
 
-// ─── SDK bridge (Phase 6) — shared loader via cjs-sdk-bridge.cjs ──────────────
-const { tryLoadSdk, getExecuteForCjs } = require('./cjs-sdk-bridge.cjs');
-
-// ─── CommandRoutingHub (issue #3788) ──────────────────────────────────────────
+// ─── CommandRoutingHub (issue #3788, simplified in #175) ──────────────────────
 const { createHub, ERROR_KINDS } = require('./command-routing-hub.cjs');
 
 /**
  * Manifest-backed phase subcommand router.
  * Keeps gsd-tools.cjs thin while preserving existing command semantics.
  *
- * Phase 6: all CJS-handled phase subcommands are dispatched via executeForCjs
- * when the SDK is available. CJS fallback retained when:
- * - GSD_WORKSTREAM is active (workstream-scoped requests fall through to CJS).
- * - SDK is unavailable (build not present).
+ * #175: Hub is CJS-only. The SDK bridge is still separately invokable via
+ * bin/lib/cjs-sdk-bridge.cjs, but the Hub no longer routes to it.
  *
- * SDK-only (unsupported in CJS router):
+ * SDK-only (unsupported in CJS router — error returned before dispatch):
  * - list-plans: SDK-only.
  * - list-artifacts: SDK-only.
  * - scaffold: routed through top-level scaffold command.
  *
- * CJS-only subcommands: none.
+ * CJS-only subcommands: mvp-mode (dispatched directly, before hub).
  *
- * #3788: dispatch is now mediated by CommandRoutingHub. The public entry point
+ * #3788: dispatch is mediated by CommandRoutingHub. The public entry point
  * and observable CLI behaviour are unchanged.
  */
 function routePhaseCommand({ phase, args, cwd, raw, error }) {
-  const activeWorkstream = process.env.GSD_WORKSTREAM;
-  const sdkAvailable = !activeWorkstream && tryLoadSdk();
-
   // ── Unsupported / SDK-only subcommands ─────────────────────────────────────
   // Resolved before dispatch so the error message matches the pre-#3788 text.
   const UNSUPPORTED = {
@@ -58,12 +49,11 @@ function routePhaseCommand({ phase, args, cwd, raw, error }) {
     return;
   }
 
-  // ── CJS-only subcommands (always bypass SDK path) ──────────────────────────
+  // ── CJS-only subcommands (dispatched directly, before hub) ─────────────────
   // `mvp-mode` has a CJS-native implementation in phase.cmdPhaseMvpMode that
   // differs from the SDK query layer (different ROADMAP scan + error codes).
-  // Dispatch it early so the SDK hub path is never reached for this subcommand,
-  // preserving the pre-migration observable behaviour (correct exit code,
-  // correct JSON error reason code, correct ROADMAP scan).
+  // Dispatch it early to preserve pre-migration observable behaviour (correct
+  // exit code, correct JSON error reason code, correct ROADMAP scan).
   if (subcommand === 'mvp-mode') {
     phase.cmdPhaseMvpMode(cwd, args.slice(2), raw);
     return;
@@ -157,15 +147,6 @@ function routePhaseCommand({ phase, args, cwd, raw, error }) {
     },
   };
 
-  // ── Build the SDK loader ────────────────────────────────────────────────────
-  function sdkLoader() {
-    const execute = getExecuteForCjs();
-    if (!execute) return null;
-    // Wrap executeForCjs to match the hub's sdkLoader contract:
-    // hub calls sdkLoader() -> returns the execute function itself.
-    return execute;
-  }
-
   // ── Build manifest (available subcommands for UnknownCommand detection) ─────
   // `availableSubcommands` is what the error message shows. It excludes
   // SDK-only unsupported commands (already handled above) but does NOT include
@@ -179,14 +160,9 @@ function routePhaseCommand({ phase, args, cwd, raw, error }) {
   const manifestSubcommands = ['mvp-mode', ...availableSubcommands];
   const manifest = { phase: manifestSubcommands };
 
-  // ── Construct hub (mode fixed at call time based on env + SDK availability) ─
-  const mode = sdkAvailable ? 'sdk' : 'cjs';
-  const hub = createHub({
-    mode,
-    sdkLoader: mode === 'sdk' ? sdkLoader : undefined,
-    cjsRegistry: mode === 'cjs' ? cjsRegistry : undefined,
-    manifest,
-  });
+  // ── Construct hub ──────────────────────────────────────────────────────────
+  // #175: Hub is CJS-only — no mode param, no sdkLoader.
+  const hub = createHub({ cjsRegistry, manifest });
 
   // ── Dispatch ────────────────────────────────────────────────────────────────
   const result = hub.dispatch({
@@ -198,26 +174,17 @@ function routePhaseCommand({ phase, args, cwd, raw, error }) {
   });
 
   // ── Translate result → CLI output / error (adapter responsibility) ──────────
+  // CJS handlers call output() themselves (inside phase.cmdPhase*()).
+  // No further output call is needed here.
   if (!result.ok) {
     if (result.errorKind === ERROR_KINDS.UnknownCommand) {
       const available = availableSubcommands.join(', ');
       error(`Unknown phase subcommand. Available: ${available}`);
       return;
     }
-    // InvalidArgs, HandlerRefusal, HandlerFailure, SdkLoadFailed, SdkDispatchFailed
+    // InvalidArgs, HandlerRefusal, HandlerFailure
     error(result.message);
     return;
-  }
-
-  // SDK path: the hub wraps executeForCjs; data projection is the adapter's job.
-  // CJS handlers call output() themselves (inside phase.cmdPhase*()), so no
-  // further output call is needed for cjs mode.
-  if (mode === 'sdk') {
-    if (raw) {
-      output(null, true, typeof result.data === 'string' ? result.data : String(result.data ?? ''));
-    } else {
-      output(result.data);
-    }
   }
 }
 

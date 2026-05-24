@@ -1,33 +1,32 @@
 'use strict';
 
 /**
- * Command Routing Hub — issue #3788.
+ * Command Routing Hub — issue #3788, simplified in #175.
  *
- * A pure-result dispatch hub that centralizes the mode decision (SDK vs CJS),
+ * A pure-result dispatch hub that centralizes CJS routing,
  * the error taxonomy, and the no-throw contract that all command-family routers
  * currently duplicate independently.
  *
  * Design:
- *   createHub({ mode, sdkLoader, cjsRegistry, manifest }) -> hub
+ *   createHub({ cjsRegistry, manifest }) -> hub
  *   hub.dispatch({ family, subcommand, args, cwd, raw })  -> Result
  *
  *   Result = { ok: true, data }
  *           | { ok: false, errorKind, message, details? }
  *
  * Invariants:
- *   - `mode` is fixed at construction; never re-evaluated per dispatch.
+ *   - Hub always routes through CJS handlers. There is no SDK path (#175).
  *   - Hub never prints to stdout/stderr, never calls process.exit.
  *   - Hub never throws — all internal throws are caught and converted to
  *     { ok: false, errorKind: 'HandlerFailure', message, details }.
- *   - No transparent fallback: an SDK-mode hub that encounters an SDK crash
- *     returns { ok: false, errorKind: 'SdkDispatchFailed' }; it does NOT
- *     silently retry via the CJS registry.
  *   - The errorKind taxonomy is closed. Callers switch on ERROR_KINDS values.
  */
 
 /**
  * Closed errorKind enum. Export as a frozen object so callers can switch on
  * ERROR_KINDS.UnknownCommand etc. without relying on bare string literals.
+ *
+ * #175: SdkLoadFailed and SdkDispatchFailed removed — Hub is CJS-only.
  *
  * @readonly
  */
@@ -40,10 +39,6 @@ const ERROR_KINDS = Object.freeze({
   HandlerRefusal: 'HandlerRefusal',
   /** A handler threw an unexpected exception. */
   HandlerFailure: 'HandlerFailure',
-  /** The sdkLoader function threw or returned a falsy value at dispatch time. */
-  SdkLoadFailed: 'SdkLoadFailed',
-  /** The SDK was loaded but threw or returned ok:false during execution. */
-  SdkDispatchFailed: 'SdkDispatchFailed',
 });
 
 /**
@@ -54,13 +49,10 @@ const ERROR_KINDS = Object.freeze({
 
 /**
  * @typedef {object} HubOptions
- * @property {'sdk' | 'cjs'} mode - Dispatch mode, fixed at construction.
- * @property {() => unknown} [sdkLoader] - Callable that returns the SDK execute
- *   function (or throws). Only used when mode === 'sdk'.
  * @property {Record<string, Record<string, (ctx: object) => HubResult>>} [cjsRegistry] -
- *   Nested map of family -> subcommand -> handler. Only used when mode === 'cjs'.
+ *   Nested map of family -> subcommand -> handler.
  * @property {Record<string, string[]>} [manifest] - Map of family -> known subcommands.
- *   Used for UnknownCommand detection regardless of mode.
+ *   Used for UnknownCommand detection.
  */
 
 /**
@@ -69,14 +61,7 @@ const ERROR_KINDS = Object.freeze({
  * @param {HubOptions} options
  * @returns {{ dispatch: (req: object) => HubResult }}
  */
-function createHub({ mode, sdkLoader, cjsRegistry, manifest }) {
-  if (mode !== 'sdk' && mode !== 'cjs') {
-    throw new TypeError(`CommandRoutingHub: mode must be 'sdk' or 'cjs', got ${JSON.stringify(mode)}`);
-  }
-
-  // Validate mode once at construction; never re-check per dispatch.
-  const _mode = mode;
-  const _sdkLoader = sdkLoader;
+function createHub({ cjsRegistry, manifest } = {}) {
   const _cjsRegistry = cjsRegistry;
   const _manifest = manifest;
 
@@ -102,7 +87,7 @@ function createHub({ mode, sdkLoader, cjsRegistry, manifest }) {
   function _dispatch(req) {
     const { family, subcommand, args = [], cwd, raw } = req;
 
-    // ── manifest check (applies to both modes) ──────────────────────────────
+    // ── manifest check ────────────────────────────────────────────────────────
     if (_manifest) {
       const knownSubcommands = _manifest[family];
       if (!knownSubcommands) {
@@ -121,68 +106,7 @@ function createHub({ mode, sdkLoader, cjsRegistry, manifest }) {
       }
     }
 
-    if (_mode === 'sdk') {
-      return _dispatchSdk({ family, subcommand, args, cwd, raw });
-    }
-
     return _dispatchCjs({ family, subcommand, args, cwd, raw });
-  }
-
-  function _dispatchSdk({ family, subcommand, args, cwd, raw }) {
-    // Load the SDK execute function (or return SdkLoadFailed).
-    let executeForCjs;
-    try {
-      executeForCjs = _sdkLoader ? _sdkLoader() : null;
-    } catch (err) {
-      return {
-        ok: false,
-        errorKind: ERROR_KINDS.SdkLoadFailed,
-        message: `SDK load failed: ${err instanceof Error ? err.message : String(err)}`,
-        details: { originalError: err },
-      };
-    }
-
-    if (!executeForCjs || typeof executeForCjs !== 'function') {
-      return {
-        ok: false,
-        errorKind: ERROR_KINDS.SdkLoadFailed,
-        message: 'SDK loader did not return a callable execute function',
-      };
-    }
-
-    // Call the SDK. No transparent fallback — any error becomes SdkDispatchFailed.
-    let result;
-    try {
-      result = executeForCjs({
-        registryCommand: subcommand ? `${family}.${subcommand}` : family,
-        registryArgs: args,
-        legacyCommand: family,
-        legacyArgs: [subcommand, ...args].filter(Boolean),
-        mode: raw ? 'raw' : 'json',
-        projectDir: cwd,
-      });
-    } catch (err) {
-      return {
-        ok: false,
-        errorKind: ERROR_KINDS.SdkDispatchFailed,
-        message: err instanceof Error ? err.message : String(err),
-        details: { originalError: err },
-      };
-    }
-
-    if (!result || !result.ok) {
-      const message = (result && result.errorDetails && result.errorDetails.message)
-        ? result.errorDetails.message
-        : `${family}${subcommand ? ' ' + subcommand : ''} failed (${result && result.errorKind})`;
-      return {
-        ok: false,
-        errorKind: ERROR_KINDS.SdkDispatchFailed,
-        message,
-        details: result || {},
-      };
-    }
-
-    return { ok: true, data: result.data };
   }
 
   function _dispatchCjs({ family, subcommand, args, cwd, raw }) {
