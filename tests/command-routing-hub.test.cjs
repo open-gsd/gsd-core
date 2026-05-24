@@ -18,7 +18,14 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createHub, ERROR_KINDS } = require('../get-shit-done/bin/lib/command-routing-hub.cjs');
+const {
+  createHub,
+  ERROR_KINDS,
+  makeUnknownCommand,
+  makeInvalidArgs,
+  makeHandlerRefusal,
+  makeHandlerFailure,
+} = require('../get-shit-done/bin/lib/command-routing-hub.cjs');
 
 // ─── Frozen taxonomy lock ─────────────────────────────────────────────────────
 // #175: SdkDispatchFailed and SdkLoadFailed are removed from the closed enum.
@@ -556,5 +563,286 @@ describe('CommandRoutingHub — single CJS dispatch invariant (#175)', () => {
     assert.ok(known.ok);
     assert.ok(!unknown.ok);
     assert.equal(unknown.kind, ERROR_KINDS.UnknownCommand);
+  });
+});
+
+// ─── P1.2 Review Finding 1: Hub runtime-validates ok:false handler returns ────
+// A handler that returns { ok: false, kind: 'InvalidArgs', message: 'oops' }
+// (missing `reason`, has stray `message`) must NOT pass through unchanged.
+// Hub must coerce it to a HandlerFailure with a contract-violation message.
+
+describe('CommandRoutingHub — Finding 1: runtime-validation of handler ok:false returns', () => {
+  test('malformed InvalidArgs return (missing reason, has stray message) is coerced to HandlerFailure', () => {
+    const hub = createHub({
+      cjsRegistry: {
+        phase: {
+          add: (_ctx) => ({
+            ok: false,
+            kind: 'InvalidArgs',
+            message: 'oops',  // wrong: should be reason, not message
+            // missing: arg, reason
+          }),
+        },
+      },
+    });
+
+    const result = hub.dispatch({ family: 'phase', subcommand: 'add', args: [], cwd: '/', raw: false });
+
+    assert.ok(!result.ok, 'result must be an error');
+    assert.equal(result.kind, ERROR_KINDS.HandlerFailure,
+      `Expected HandlerFailure but got kind: ${result.kind}`);
+    assert.ok(
+      result.message.includes('malformed') || result.message.includes('contract') ||
+      result.message.includes('InvalidArgs') || result.message.includes('reason'),
+      `Expected contract-violation message, got: ${result.message}`
+    );
+  });
+
+  test('malformed HandlerRefusal return (missing reason) is coerced to HandlerFailure', () => {
+    const hub = createHub({
+      cjsRegistry: {
+        phase: {
+          add: (_ctx) => ({
+            ok: false,
+            kind: 'HandlerRefusal',
+            message: 'refuse',  // wrong: should be reason
+            // missing: reason
+          }),
+        },
+      },
+    });
+
+    const result = hub.dispatch({ family: 'phase', subcommand: 'add', args: [], cwd: '/', raw: false });
+
+    assert.ok(!result.ok);
+    assert.equal(result.kind, ERROR_KINDS.HandlerFailure);
+    assert.ok(typeof result.message === 'string' && result.message.length > 0);
+  });
+
+  test('malformed HandlerFailure return (missing message) is coerced to HandlerFailure', () => {
+    const hub = createHub({
+      cjsRegistry: {
+        phase: {
+          add: (_ctx) => ({
+            ok: false,
+            kind: 'HandlerFailure',
+            // missing: message
+            details: 'something',  // extraneous
+          }),
+        },
+      },
+    });
+
+    const result = hub.dispatch({ family: 'phase', subcommand: 'add', args: [], cwd: '/', raw: false });
+
+    assert.ok(!result.ok);
+    assert.equal(result.kind, ERROR_KINDS.HandlerFailure);
+    assert.ok(typeof result.message === 'string' && result.message.length > 0);
+  });
+
+  test('well-formed InvalidArgs return is NOT coerced — passes through unchanged', () => {
+    const hub = createHub({
+      cjsRegistry: {
+        phase: {
+          add: (_ctx) => ({
+            ok: false,
+            kind: 'InvalidArgs',
+            arg: '--dry-run',
+            reason: 'not supported',
+          }),
+        },
+      },
+    });
+
+    const result = hub.dispatch({ family: 'phase', subcommand: 'add', args: [], cwd: '/', raw: false });
+
+    assert.ok(!result.ok);
+    assert.equal(result.kind, ERROR_KINDS.InvalidArgs);
+    assert.equal(result.arg, '--dry-run');
+    assert.equal(result.reason, 'not supported');
+  });
+
+  test('unknown kind in ok:false return is coerced to HandlerFailure', () => {
+    const hub = createHub({
+      cjsRegistry: {
+        phase: {
+          add: (_ctx) => ({
+            ok: false,
+            kind: 'SomeLegacyKind',
+            errorKind: 'SomeLegacyKind',
+          }),
+        },
+      },
+    });
+
+    const result = hub.dispatch({ family: 'phase', subcommand: 'add', args: [], cwd: '/', raw: false });
+
+    assert.ok(!result.ok);
+    assert.equal(result.kind, ERROR_KINDS.HandlerFailure);
+  });
+});
+
+// ─── P1.2 Review Finding 2: Non-Error throws preserve the original throwable ──
+// When a handler throws a non-Error (plain object, string, number), the Hub must
+// wrap it in an Error and attach .thrown = originalValue.
+
+describe('CommandRoutingHub — Finding 2: non-Error throws preserve original throwable', () => {
+  test('handler throwing a plain object → HandlerFailure with cause.thrown === original', () => {
+    const thrown = { custom: 'payload', code: 42 };
+    const hub = createHub({
+      cjsRegistry: {
+        phase: {
+          add: (_ctx) => { throw thrown; },
+        },
+      },
+    });
+
+    const result = hub.dispatch({ family: 'phase', subcommand: 'add', args: [], cwd: '/', raw: false });
+
+    assert.ok(!result.ok);
+    assert.equal(result.kind, ERROR_KINDS.HandlerFailure);
+    assert.ok(result.cause instanceof Error,
+      `result.cause must be an Error, got: ${typeof result.cause}`);
+    assert.strictEqual(result.cause.thrown, thrown,
+      'cause.thrown must be the original thrown object');
+  });
+
+  test('handler throwing a string → HandlerFailure with cause.thrown === original string', () => {
+    const hub = createHub({
+      cjsRegistry: {
+        phase: {
+          add: (_ctx) => { throw 'just a string'; },
+        },
+      },
+    });
+
+    const result = hub.dispatch({ family: 'phase', subcommand: 'add', args: [], cwd: '/', raw: false });
+
+    assert.ok(!result.ok);
+    assert.equal(result.kind, ERROR_KINDS.HandlerFailure);
+    assert.ok(result.cause instanceof Error,
+      `result.cause must be an Error, got: ${typeof result.cause}`);
+    assert.strictEqual(result.cause.thrown, 'just a string',
+      'cause.thrown must be the original thrown string');
+  });
+
+  test('handler throwing a number → HandlerFailure with cause.thrown === original number', () => {
+    const hub = createHub({
+      cjsRegistry: {
+        phase: {
+          add: (_ctx) => { throw 404; },
+        },
+      },
+    });
+
+    const result = hub.dispatch({ family: 'phase', subcommand: 'add', args: [], cwd: '/', raw: false });
+
+    assert.ok(!result.ok);
+    assert.equal(result.kind, ERROR_KINDS.HandlerFailure);
+    assert.ok(result.cause instanceof Error);
+    assert.strictEqual(result.cause.thrown, 404);
+  });
+
+  test('handler throwing a real Error still works — cause is the Error itself (no .thrown wrapping)', () => {
+    const original = new Error('real error');
+    const hub = createHub({
+      cjsRegistry: {
+        phase: {
+          add: (_ctx) => { throw original; },
+        },
+      },
+    });
+
+    const result = hub.dispatch({ family: 'phase', subcommand: 'add', args: [], cwd: '/', raw: false });
+
+    assert.ok(!result.ok);
+    assert.equal(result.kind, ERROR_KINDS.HandlerFailure);
+    assert.strictEqual(result.cause, original, 'Error throws must have cause === original Error');
+    // No .thrown on real Error cause
+    assert.equal(result.cause.thrown, undefined);
+  });
+});
+
+// ─── P1.2 Review Finding 3: Factory returns are Object.frozen ─────────────────
+// Each makeXxx factory must return a frozen object so callers cannot mutate
+// the variant invariant.
+
+describe('CommandRoutingHub — Finding 3: factory returns are Object.frozen', () => {
+  test('makeUnknownCommand returns a frozen object', () => {
+    const result = makeUnknownCommand('phase bogus');
+    assert.ok(Object.isFrozen(result),
+      'makeUnknownCommand must return a frozen object');
+  });
+
+  test('makeInvalidArgs returns a frozen object', () => {
+    const result = makeInvalidArgs('--dry-run', 'not supported');
+    assert.ok(Object.isFrozen(result),
+      'makeInvalidArgs must return a frozen object');
+  });
+
+  test('makeHandlerRefusal returns a frozen object', () => {
+    const result = makeHandlerRefusal('SDK-only');
+    assert.ok(Object.isFrozen(result),
+      'makeHandlerRefusal must return a frozen object');
+  });
+
+  test('makeHandlerFailure returns a frozen object', () => {
+    const result = makeHandlerFailure('something broke', new Error('orig'));
+    assert.ok(Object.isFrozen(result),
+      'makeHandlerFailure must return a frozen object');
+  });
+
+  test('frozen factory results cannot be mutated', () => {
+    const result = makeUnknownCommand('phase bogus');
+    // In strict mode, mutation of a frozen object throws TypeError
+    assert.throws(
+      () => { result.command = 'tampered'; },
+      TypeError,
+      'Mutating a frozen factory result must throw TypeError'
+    );
+  });
+});
+
+// ─── P1.2 Review Finding 4: makeHandlerFailure wraps non-Error causes ─────────
+// If cause is provided but is not an Error, wrap it so .cause instanceof Error.
+// Attach .thrown = originalCause so it is not silently dropped.
+
+describe('CommandRoutingHub — Finding 4: makeHandlerFailure wraps non-Error causes', () => {
+  test('makeHandlerFailure("msg", "string-cause") → cause instanceof Error', () => {
+    const result = makeHandlerFailure('msg', 'string-cause');
+    assert.ok(result.cause instanceof Error,
+      `cause must be an Error, got: ${typeof result.cause}`);
+  });
+
+  test('makeHandlerFailure("msg", "string-cause") → cause.thrown === "string-cause"', () => {
+    const result = makeHandlerFailure('msg', 'string-cause');
+    assert.strictEqual(result.cause.thrown, 'string-cause',
+      'cause.thrown must be the original non-Error cause');
+  });
+
+  test('makeHandlerFailure with a plain object cause → cause instanceof Error with .thrown', () => {
+    const obj = { code: 42, detail: 'bad' };
+    const result = makeHandlerFailure('msg', obj);
+    assert.ok(result.cause instanceof Error);
+    assert.strictEqual(result.cause.thrown, obj);
+  });
+
+  test('makeHandlerFailure with a real Error cause → cause is the original Error (no wrapping)', () => {
+    const original = new Error('real');
+    const result = makeHandlerFailure('msg', original);
+    assert.strictEqual(result.cause, original,
+      'Real Error causes must not be wrapped');
+  });
+
+  test('makeHandlerFailure without cause → result.cause is undefined', () => {
+    const result = makeHandlerFailure('msg');
+    assert.equal(result.cause, undefined);
+  });
+
+  test('makeHandlerFailure with null cause → behaves as no cause (undefined)', () => {
+    // null is not an Error, but "not provided" — treat as absent
+    const result = makeHandlerFailure('msg', null);
+    // null should not be wrapped into an Error — it's equivalent to "no cause"
+    assert.equal(result.cause, undefined);
   });
 });
