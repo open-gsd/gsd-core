@@ -28,11 +28,16 @@
  * surface the cause directly rather than silently masking under fallback.
  */
 
-const { test, describe } = require('node:test');
+const { test, describe, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 
 const BRIDGE_PATH = path.join(__dirname, '..', 'get-shit-done', 'bin', 'lib', 'cjs-sdk-bridge.cjs');
+const initialExitCode = process.exitCode;
+
+afterEach(() => {
+  process.exitCode = initialExitCode;
+});
 
 describe('cjs-sdk-bridge: SDK runtime bridge integration', () => {
   test('tryLoadSdk() resolves the bundled SDK on the current checkout', () => {
