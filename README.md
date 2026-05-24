@@ -1,30 +1,25 @@
-> # ⚠️ This is the active fork
+> # Project Continuity Notice
 >
-> 📢 **Read the announcement: [why the fork, what changed, what's next →](https://github.com/gsd-redux/get-shit-done-redux/discussions/109)**
+> GSD is maintained by the **open-gsd** team at:
+> **`open-gsd/get-shit-done-redux`**
 >
-> The original repo at [gsd-build/get-shit-done](https://github.com/gsd-build/get-shit-done) appears compromised or abandoned. The maintainer (TÂCHES) has not been reachable since **2026-04-01**. TÂCHES social accounts appear deleted, and a **`$GSD` token associated with the project has been linked publicly to a rug-pull**.
+> Use only these package names:
 >
-> I have **no inside information** beyond what is publicly visible. I am stating absence-of-information deliberately — absence of news is not the same as evidence.
+> - npm (main): `@opengsd/get-shit-done-redux`
+> - npm (sdk): `@opengsd/gsd-sdk`
 >
-> ### What I can confirm
+> The legacy upstream (`gsd-build/*`) is outside open-gsd control. Based on public transition announcements and repository ownership reality, we strongly recommend removing `gsd-build` organization packages and migrating to `@opengsd/*`.
 >
-> - No contact with the original maintainer since 2026-04-01.
-> - TÂCHES social accounts appear deleted or unreachable.
-> - The `$GSD` token has been linked publicly to a rug-pull.
-> - The repo at `gsd-build/get-shit-done` continues to exist but I cannot vouch for any changes pushed there from this point forward.
+> Security status:
 >
-> ### What changed
+> - maintainers completed an internal security audit
+> - maintainers report an independent review pass
+> - no known active exploit was found in tracked source during those passes
 >
-> | | Before | After |
-> |---|---|---|
-> | GitHub | `gsd-build/get-shit-done` | `open-gsd/get-shit-done-redux` |
-> | npm (main) | `get-shit-done-cc` → `get-shit-done-redux` | `@opengsd/get-shit-done-redux` |
-> | npm (sdk) | `@gsd-build/sdk` → `@gsd-redux/sdk` | `@opengsd/gsd-sdk` |
-> | Issue numbers | per source | renumbered; original is in body as `[from gsd-build/get-shit-done#N]` |
+> See:
 >
-> If you can reach the original maintainer, please open an issue here and CC them. If you have technical evidence that materially changes the picture above, please share it in an issue.
->
-> — trek-e, fork maintainer
+> - continuity announcement: https://github.com/open-gsd/get-shit-done-redux/discussions/109
+> - audit transparency report: https://github.com/open-gsd/get-shit-done-redux/discussions/119
 >
 > ---
 
@@ -80,17 +75,15 @@ npx @opengsd/get-shit-done-redux@latest
 
 ---
 
-## Why I Built This
+## Why We Continue Building GSD
 
-I'm a solo developer. I don't write code — Claude Code does.
+GSD exists to help solo builders and small teams ship reliably with AI: clear specs, controlled context, and verification before release.
 
-Other spec-driven tools exist, but they're all built for 50-person engineering orgs — sprint ceremonies, story points, stakeholder syncs, Jira workflows. I'm not that. I'm a creative person trying to build great things consistently.
+In May 2026, maintainers published a continuity announcement and migrated active development to `open-gsd/get-shit-done-redux` after trust and ownership concerns around the former upstream, including a meme-coin rug-pull incident publicly associated with that ecosystem.
 
-So I built GSD. The complexity is in the system, not in your workflow. Behind the scenes: context engineering, XML prompt formatting, subagent orchestration, state management. What you see: a few commands that just work.
+The former creator and the `gsd-build` lineage are no longer part of this program. This repository is the maintained continuation under open-gsd governance.
 
-The system gives Claude everything it needs to do the work *and* verify it. I trust the workflow. It just does a good job.
-
-— **TÂCHES**
+The current team continues release operations, triage, and security hardening in public. Audit status and follow-up security work are documented in Discussion #119 and linked issues.
 
 ---
 
