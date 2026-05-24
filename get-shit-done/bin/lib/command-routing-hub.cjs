@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Command Routing Hub — issue #3788, simplified in #175, typed in #176.
+ * Command Routing Hub — issue #3788, simplified in #175, typed in #176, observability in #177.
  *
  * A pure-result dispatch hub that centralizes CJS routing,
  * the error taxonomy, and the no-throw contract that all command-family routers
@@ -46,6 +46,10 @@ const ERROR_KINDS = Object.freeze({
   /** A handler threw an unexpected exception. */
   HandlerFailure: 'HandlerFailure',
 });
+
+// ─── Observability imports ────────────────────────────────────────────────────
+const { makeDispatchEvent } = require('./observability/event.cjs');
+const { createNoOpLogger } = require('./observability/logger.cjs');
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -202,7 +206,24 @@ function _validateErrResult(result) {
  *   Nested map of family -> subcommand -> handler.
  * @property {Record<string, string[]>} [manifest] - Map of family -> known subcommands.
  *   Used for UnknownCommand detection.
+ * @property {{ onEvent(event: object): void }} [logger] -
+ *   DispatchLogger to receive a DispatchEvent after every dispatch.
+ *   Defaults to a no-op logger (silent). Use createDefaultLogger() for the
+ *   reference implementation (stderr on error, opt-in file audit).
  */
+
+/**
+ * Safe stringify for logger-failure warnings — avoids circular-ref crashes.
+ * @param {unknown} value
+ * @returns {string}
+ */
+function _safeJsonForWarn(value) {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
 
 /**
  * Construct a CommandRoutingHub.
@@ -210,9 +231,60 @@ function _validateErrResult(result) {
  * @param {HubOptions} options
  * @returns {{ dispatch: (req: object) => HubResult }}
  */
-function createHub({ cjsRegistry, manifest } = {}) {
+function createHub({ cjsRegistry, manifest, logger } = {}) {
   const _cjsRegistry = cjsRegistry;
   const _manifest = manifest;
+  // Default to no-op so callers that don't inject a logger get pure-silent behaviour.
+  // Consumers can opt into the reference impl by importing createDefaultLogger.
+  const _logger = (logger && typeof logger.onEvent === 'function')
+    ? logger
+    : createNoOpLogger();
+
+  /**
+   * Normalise a HubResult into the DispatchEvent result shape.
+   *
+   * HubResult ok path:   { ok: true, data }        → { kind: 'ok', data }
+   * HubResult err paths: { ok: false, kind, ...payload } → { kind, ...payload }
+   *
+   * @param {object} hubResult
+   * @returns {object}
+   */
+  function _normaliseResult(hubResult) {
+    if (hubResult.ok) {
+      return { kind: 'ok', data: hubResult.data };
+    }
+    // err variant: already has kind + typed payload
+    return hubResult;
+  }
+
+  /**
+   * Emit a DispatchEvent to the injected logger.
+   * Logger errors NEVER propagate — they are caught and emitted as a warn line to stderr.
+   *
+   * @param {string}  command - The dispatched command string.
+   * @param {unknown} args    - The raw args from the request.
+   * @param {object}  hubResult  - The HubResult.
+   */
+  function _notifyLogger(command, args, hubResult) {
+    try {
+      const eventResult = _normaliseResult(hubResult);
+      const event = makeDispatchEvent({ command, args, result: eventResult });
+      _logger.onEvent(event);
+    } catch (logErr) {
+      // Logger must never break dispatch. Emit a degraded warn line.
+      try {
+        process.stderr.write(
+          _safeJsonForWarn({
+            level: 'warn',
+            source: 'DispatchLogger',
+            message: 'logger.onEvent failed: ' + String(logErr && logErr.message || logErr),
+          }) + '\n'
+        );
+      } catch {
+        // If even stderr.write fails, swallow silently — dispatch result is returned below.
+      }
+    }
+  }
 
   /**
    * Dispatch a command through the hub.
@@ -221,17 +293,25 @@ function createHub({ cjsRegistry, manifest } = {}) {
    * @returns {HubResult}
    */
   function dispatch(req) {
+    const { family, subcommand, args = [] } = req || {};
+    const command = subcommand ? `${family} ${subcommand}` : String(family);
+
+    let result;
     try {
-      return _dispatch(req);
+      result = _dispatch(req);
     } catch (err) {
       if (err instanceof Error) {
-        return makeHandlerFailure(err.message, err);
+        result = makeHandlerFailure(err.message, err);
+      } else {
+        // Finding 2: preserve non-Error throwables via a wrapper Error with .thrown
+        const wrapper = new Error('non-Error thrown: ' + _safeJson(err));
+        wrapper.thrown = err;
+        result = makeHandlerFailure(String(err), wrapper);
       }
-      // Finding 2: preserve non-Error throwables via a wrapper Error with .thrown
-      const wrapper = new Error('non-Error thrown: ' + _safeJson(err));
-      wrapper.thrown = err;
-      return makeHandlerFailure(String(err), wrapper);
     }
+
+    _notifyLogger(command, args, result);
+    return result;
   }
 
   function _dispatch(req) {
