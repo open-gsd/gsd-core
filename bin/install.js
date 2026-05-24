@@ -1137,6 +1137,25 @@ function removeCodexHooksJsonSessionStart(targetDir) {
  */
 function buildHookCommand(configDir, hookName, opts) {
   if (!opts) opts = {};
+  const platform = opts.platform || process.platform;
+  const runtime = opts.runtime || 'generic';
+  const isShellHook = hookName.endsWith('.sh');
+
+  // #166: Claude Code executes these hook commands inside a bash context on
+  // Windows, so wrapping `.sh` hooks with an explicit `bash.exe` path can
+  // trigger `bash.exe: ... cannot execute binary file`. Emit only the quoted
+  // script path for Claude on Windows.
+  if (platform === 'win32' && runtime === 'claude' && isShellHook) {
+    if (opts.portableHooks) {
+      const portableBaseDir = projectPortableHookBaseDir({
+        configDir,
+        homeDir: os.homedir(),
+      });
+      return JSON.stringify(`${portableBaseDir}/hooks/${hookName}`);
+    }
+    return JSON.stringify(configDir.replace(/\\/g, '/') + '/hooks/' + hookName);
+  }
+
   // POSIX .sh hooks run under PATH-resolved `bash`: POSIX guarantees /bin/sh
   // but not /bin/bash, and distros like NixOS do not ship /bin/bash by default.
   // Windows Codex launches hooks from PowerShell/cmd environments where bare
@@ -1146,7 +1165,7 @@ function buildHookCommand(configDir, hookName, opts) {
   // start with a minimal PATH that may not include nvm/Homebrew/Volta node
   // binaries (#2979).
   const nodeRunner = resolveNodeRunner();
-  const runner = hookName.endsWith('.sh') ? resolveBashRunner(opts) : nodeRunner;
+  const runner = isShellHook ? resolveBashRunner(opts) : nodeRunner;
   // Runner resolvers return null when the executable path is unavailable.
   // Fall through with null so callers can skip registration with a warning
   // instead of emitting a command that recreates the original hook failure.
@@ -1161,7 +1180,7 @@ function buildHookCommand(configDir, hookName, opts) {
       absoluteRunner: runner,
       scriptPath: `${portableBaseDir}/hooks/${hookName}`,
       runtime: opts.runtime || 'generic',
-      platform: opts.platform || process.platform,
+      platform,
     });
   }
 
@@ -1170,8 +1189,8 @@ function buildHookCommand(configDir, hookName, opts) {
   return projectManagedHookCommand({
     absoluteRunner: runner,
     scriptPath: hooksPath,
-    runtime: opts.runtime || 'generic',
-    platform: opts.platform || process.platform,
+    runtime,
+    platform,
   });
 }
 

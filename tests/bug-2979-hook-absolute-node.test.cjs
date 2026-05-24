@@ -178,6 +178,20 @@ describe('Bug #2979: buildHookCommand for .sh hooks still uses bare "bash" (POSI
     });
     assert.equal(cmd, null);
   });
+
+  test('Windows Claude .sh hook omits explicit bash.exe wrapper (#166)', () => {
+    const cmd = buildHookCommand('C:/Users/me/.claude', 'gsd-session-state.sh', {
+      platform: 'win32',
+      runtime: 'claude',
+      env: { ProgramFiles: 'C:\\Program Files' },
+      existsSync: (candidate) => candidate === 'C:\\Program Files\\Git\\bin\\bash.exe',
+    });
+    assert.equal(
+      cmd,
+      '"C:/Users/me/.claude/hooks/gsd-session-state.sh"',
+      'Claude win32 .sh hooks should serialize as script-only commands'
+    );
+  });
 });
 
 // ─── #3002 CR follow-up: legacy-bare-node migration ─────────────────────────
