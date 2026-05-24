@@ -62,10 +62,18 @@ function runGsdTools(args, cwd = process.cwd(), env = {}) {
     }
     return { success: true, output: result.trim(), exitCode: 0 };
   } catch (err) {
+    const stderrRaw = err.stderr?.toString().trim() || '';
+    // Prefer actual stderr content; fall back to err.message (which contains
+    // the command invocation). If stderr is empty, append a note so CI logs
+    // show "stderr: (empty)" rather than silently losing the fact that the
+    // child process produced no error output — empty stderr with a non-zero
+    // exit code is a signal of OS-level crash (OOM kill, worker thread fatal
+    // error) rather than a gsd-tools application error.
+    const error = stderrRaw || `${err.message} [stderr: (empty) exit:${err.status ?? 1}]`;
     return {
       success: false,
       output: err.stdout?.toString().trim() || '',
-      error: err.stderr?.toString().trim() || err.message,
+      error,
       exitCode: err.status ?? 1,
     };
   }

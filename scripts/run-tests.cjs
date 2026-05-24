@@ -126,9 +126,23 @@ function main() {
       .join(' ')}`,
   );
 
+  // Default concurrency: 4 on Linux/macOS, 2 on Windows.
+  //
+  // Windows has significantly higher per-subprocess overhead than Linux/macOS:
+  //   - Windows Defender scans each spawned process
+  //   - NTFS has higher file-system latency under concurrent access
+  //   - synckit worker_threads (used by the SDK bridge in gsd-tools.cjs) spawn
+  //     native threads that contend on SharedArrayBuffer + Atomics.wait; under
+  //     Node 24 on Windows, 4-way concurrent gsd-tools invocations (each spawning
+  //     a synckit worker) caused intermittent process crashes with empty stderr —
+  //     a signature of OS-level resource exhaustion killing worker threads before
+  //     they could flush. Reducing to 2 halves the peak concurrent worker count.
+  //
+  // Operator override via TEST_CONCURRENCY env var for local debugging.
+  const defaultConcurrency = process.platform === 'win32' ? 2 : 4;
   const concurrency = process.env.TEST_CONCURRENCY
     ? `--test-concurrency=${process.env.TEST_CONCURRENCY}`
-    : '--test-concurrency=4';
+    : `--test-concurrency=${defaultConcurrency}`;
 
   // Windows `CreateProcess` caps the full command line at 32,767 chars
   // (lpCommandLine). With 500+ test paths the spawn fails instantly with no
