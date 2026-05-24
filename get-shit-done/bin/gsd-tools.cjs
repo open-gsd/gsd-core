@@ -419,6 +419,13 @@ async function main() {
 
   let command = args[0];
 
+  // Accept `query` meta-prefix parity with `gsd-sdk query ...`.
+  // Workflows may call `node gsd-tools.cjs query <command>` directly.
+  if (command === 'query') {
+    args.shift();
+    command = args[0];
+  }
+
   // #3243: accept dotted canonical form (e.g. `state.update`) as well as the
   // spaced form (`state update`). Workflow files and stale SDK binaries pass
   // the dotted canonical form directly; any caller that bypasses the SDK
