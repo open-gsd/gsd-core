@@ -117,6 +117,25 @@ describe('bug #3126: runtime-homes env-var overrides', () => {
       });
     });
   });
+
+  test('antigravity detects 2.x IDE dir when legacy dir is absent', () => {
+    const home = require('node:fs').mkdtempSync(path.join(os.tmpdir(), 'gsd-antigravity-home-'));
+    try {
+      require('node:fs').mkdirSync(path.join(home, '.gemini', 'antigravity-ide'), { recursive: true });
+      const savedHome = process.env.HOME;
+      process.env.HOME = home;
+      withEnv('ANTIGRAVITY_CONFIG_DIR', undefined, () => {
+        assert.strictEqual(
+          getGlobalConfigDir('antigravity'),
+          path.join(home, '.gemini', 'antigravity-ide'),
+        );
+      });
+      if (savedHome === undefined) delete process.env.HOME;
+      else process.env.HOME = savedHome;
+    } finally {
+      require('node:fs').rmSync(home, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('bug #3126: runtime-homes getGlobalSkillsBase', () => {

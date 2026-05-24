@@ -95,6 +95,62 @@ describe('getGlobalDir — all runtimes default paths', () => {
   }
 });
 
+describe('getGlobalDir/getConfigDirFromHome — antigravity 2.x layout detection', () => {
+  const saved = {};
+  beforeEach(() => {
+    saved.HOME = process.env.HOME;
+    saved.USERPROFILE = process.env.USERPROFILE;
+    saved.ANTIGRAVITY_CONFIG_DIR = process.env.ANTIGRAVITY_CONFIG_DIR;
+    delete process.env.ANTIGRAVITY_CONFIG_DIR;
+  });
+  afterEach(() => {
+    if (saved.HOME !== undefined) process.env.HOME = saved.HOME;
+    else delete process.env.HOME;
+    if (saved.USERPROFILE !== undefined) process.env.USERPROFILE = saved.USERPROFILE;
+    else delete process.env.USERPROFILE;
+    if (saved.ANTIGRAVITY_CONFIG_DIR !== undefined) process.env.ANTIGRAVITY_CONFIG_DIR = saved.ANTIGRAVITY_CONFIG_DIR;
+    else delete process.env.ANTIGRAVITY_CONFIG_DIR;
+  });
+
+  test('uses ~/.gemini/antigravity-ide when legacy dir is absent and ide dir exists', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-antigravity-ide-'));
+    try {
+      fs.mkdirSync(path.join(home, '.gemini', 'antigravity-ide'), { recursive: true });
+      process.env.HOME = home;
+      process.env.USERPROFILE = home;
+      assert.strictEqual(
+        getGlobalDir('antigravity'),
+        path.join(home, '.gemini', 'antigravity-ide'),
+      );
+      assert.strictEqual(
+        getConfigDirFromHome('antigravity', true),
+        "'.gemini', 'antigravity-ide'",
+      );
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test('uses ~/.gemini/antigravity-cli when only cli dir exists', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-antigravity-cli-'));
+    try {
+      fs.mkdirSync(path.join(home, '.gemini', 'antigravity-cli'), { recursive: true });
+      process.env.HOME = home;
+      process.env.USERPROFILE = home;
+      assert.strictEqual(
+        getGlobalDir('antigravity'),
+        path.join(home, '.gemini', 'antigravity-cli'),
+      );
+      assert.strictEqual(
+        getConfigDirFromHome('antigravity', true),
+        "'.gemini', 'antigravity-cli'",
+      );
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('getGlobalDir — explicit configDir overrides env for all runtimes', () => {
   test('explicit dir overrides any env var for hermes', () => {
     const savedHome = process.env.HERMES_HOME;
@@ -195,9 +251,26 @@ describe('getConfigDirFromHome — spot-checks', () => {
     assert.strictEqual(getConfigDirFromHome('trae', true), "'.trae'");
   });
 
-  test('antigravity returns .agent (local) and .gemini, antigravity (global)', () => {
-    assert.strictEqual(getConfigDirFromHome('antigravity', false), "'.agent'");
-    assert.strictEqual(getConfigDirFromHome('antigravity', true), "'.gemini', 'antigravity'");
+  test('antigravity returns .agent (local) and legacy fallback global path when no 2.x dirs exist', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-antigravity-empty-'));
+    const savedHome = process.env.HOME;
+    const savedUserProfile = process.env.USERPROFILE;
+    const savedAntigravityConfig = process.env.ANTIGRAVITY_CONFIG_DIR;
+    delete process.env.ANTIGRAVITY_CONFIG_DIR;
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    try {
+      assert.strictEqual(getConfigDirFromHome('antigravity', false), "'.agent'");
+      assert.strictEqual(getConfigDirFromHome('antigravity', true), "'.gemini', 'antigravity'");
+    } finally {
+      if (savedHome === undefined) delete process.env.HOME;
+      else process.env.HOME = savedHome;
+      if (savedUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = savedUserProfile;
+      if (savedAntigravityConfig === undefined) delete process.env.ANTIGRAVITY_CONFIG_DIR;
+      else process.env.ANTIGRAVITY_CONFIG_DIR = savedAntigravityConfig;
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 
   test('kilo returns .kilo (local) and .config, kilo (global)', () => {

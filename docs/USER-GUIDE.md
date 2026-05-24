@@ -1354,7 +1354,7 @@ Select the corresponding stable runtime in the installer prompt. Skills land in 
 | Copilot | `~/.copilot` | `COPILOT_CONFIG_DIR` |
 | Cursor | `~/.cursor` | `CURSOR_CONFIG_DIR` |
 | Windsurf | `~/.codeium/windsurf` | `WINDSURF_CONFIG_DIR` |
-| Antigravity | `~/.gemini/antigravity` | `ANTIGRAVITY_CONFIG_DIR` |
+| Antigravity | auto-detected: `~/.gemini/antigravity` (legacy), `~/.gemini/antigravity-ide`, or `~/.gemini/antigravity-cli` | `ANTIGRAVITY_CONFIG_DIR` |
 | Augment | `~/.augment` | `AUGMENT_CONFIG_DIR` |
 | Trae | `~/.trae` | `TRAE_CONFIG_DIR` |
 | Qwen Code | `~/.qwen` | `QWEN_CONFIG_DIR` |

@@ -28,6 +28,9 @@ const {
   transformContentToHyphen,
   readCmdNames: readGsdCommandNames,
 } = require(path.join(__dirname, '..', 'scripts', 'fix-slash-commands.cjs'));
+const {
+  resolveAntigravityGlobalDir,
+} = require('../get-shit-done/bin/lib/runtime-homes.cjs');
 
 /**
  * Runtimes that register hyphen-form `name:` per #2808 AND copy agent bodies
@@ -325,6 +328,14 @@ function getConfigDirFromHome(runtime, isGlobal) {
   if (runtime === 'codex') return "'.codex'";
   if (runtime === 'antigravity') {
     if (!isGlobal) return "'.agent'";
+    const antigravityDir = resolveAntigravityGlobalDir();
+    const rel = path.relative(os.homedir(), antigravityDir);
+    const segments = rel.split(path.sep).filter(Boolean);
+    if (segments.length > 0 && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+      return segments.map((seg) => `'${seg}'`).join(', ');
+    }
+    // If resolution points outside HOME (e.g. via env override), keep the
+    // stable legacy template so generated path.join() calls remain valid.
     return "'.gemini', 'antigravity'";
   }
   if (runtime === 'cursor') return "'.cursor'";
@@ -444,14 +455,12 @@ function getGlobalDir(runtime, explicitDir = null) {
   }
 
   if (runtime === 'antigravity') {
-    // Antigravity: --config-dir > ANTIGRAVITY_CONFIG_DIR > ~/.gemini/antigravity
+    // Antigravity: --config-dir > ANTIGRAVITY_CONFIG_DIR > auto-detected
+    // ~/.gemini/{antigravity,antigravity-ide,antigravity-cli}
     if (explicitDir) {
       return expandTilde(explicitDir);
     }
-    if (process.env.ANTIGRAVITY_CONFIG_DIR) {
-      return expandTilde(process.env.ANTIGRAVITY_CONFIG_DIR);
-    }
-    return path.join(os.homedir(), '.gemini', 'antigravity');
+    return resolveAntigravityGlobalDir();
   }
 
   if (runtime === 'cursor') {

@@ -35,6 +35,24 @@ function expandTilde(p: string): string {
   return p.startsWith('~/') || p === '~' ? join(homedir(), p.slice(1)) : p;
 }
 
+function resolveAntigravityConfigDir(): string {
+  if (process.env.ANTIGRAVITY_CONFIG_DIR) {
+    return expandTilde(process.env.ANTIGRAVITY_CONFIG_DIR);
+  }
+
+  const home = homedir();
+  const base = join(home, '.gemini');
+  const candidates = [
+    join(base, 'antigravity'),
+    join(base, 'antigravity-ide'),
+    join(base, 'antigravity-cli'),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return join(base, 'antigravity');
+}
+
 /**
  * Resolve the per-runtime config directory, mirroring
  * `bin/install.js:getGlobalDir()`. Agents live at `<configDir>/agents`.
@@ -62,7 +80,7 @@ export function getRuntimeConfigDir(runtime: Runtime): string {
     case 'copilot':
       return process.env.COPILOT_CONFIG_DIR ? expandTilde(process.env.COPILOT_CONFIG_DIR) : join(homedir(), '.copilot');
     case 'antigravity':
-      return process.env.ANTIGRAVITY_CONFIG_DIR ? expandTilde(process.env.ANTIGRAVITY_CONFIG_DIR) : join(homedir(), '.gemini', 'antigravity');
+      return resolveAntigravityConfigDir();
     case 'cursor':
       return process.env.CURSOR_CONFIG_DIR ? expandTilde(process.env.CURSOR_CONFIG_DIR) : join(homedir(), '.cursor');
     case 'windsurf':

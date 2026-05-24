@@ -71,17 +71,23 @@ describe('bug #3608: update.md models Antigravity as a first-class runtime', () 
     );
   });
 
-  test('RUNTIME_DIRS antigravity entry points at .gemini/antigravity', () => {
+  test('RUNTIME_DIRS includes antigravity entries for 2.x + legacy dirs', () => {
     const entries = parseBashArray(content, 'RUNTIME_DIRS');
     assert.ok(entries);
 
-    const ant = entries.find((e) => e.startsWith('antigravity:'));
-    assert.ok(ant, 'antigravity entry missing');
-    assert.strictEqual(
-      ant,
-      'antigravity:.gemini/antigravity',
-      `antigravity entry must be exactly "antigravity:.gemini/antigravity" to match the installer ` +
-        `(bin/install.js line ~404: ~/.gemini/antigravity)`,
+    const antEntries = entries.filter((e) => e.startsWith('antigravity:'));
+    assert.ok(antEntries.length >= 1, 'antigravity entry missing');
+    assert.ok(
+      antEntries.includes('antigravity:.gemini/antigravity-ide'),
+      'RUNTIME_DIRS must include antigravity:.gemini/antigravity-ide',
+    );
+    assert.ok(
+      antEntries.includes('antigravity:.gemini/antigravity-cli'),
+      'RUNTIME_DIRS must include antigravity:.gemini/antigravity-cli',
+    );
+    assert.ok(
+      antEntries.includes('antigravity:.gemini/antigravity'),
+      'RUNTIME_DIRS must include legacy antigravity:.gemini/antigravity fallback',
     );
   });
 
@@ -125,7 +131,7 @@ describe('bug #3608: update.md models Antigravity as a first-class runtime', () 
     );
   });
 
-  test('local-scope scan dir list includes .gemini/antigravity before .gemini', () => {
+  test('local-scope scan dir list includes 2.x antigravity dirs before .gemini', () => {
     // Lines like:  for dir in .claude .config/opencode .opencode .gemini ...
     // The first iteration of the local scan ranges over a hardcoded list.
     const forLoops = [...content.matchAll(/for dir in ([^;]+); do/g)];
@@ -133,38 +139,66 @@ describe('bug #3608: update.md models Antigravity as a first-class runtime', () 
 
     for (const m of forLoops) {
       const tokens = m[1].trim().split(/\s+/);
-      const antIdx = tokens.indexOf('.gemini/antigravity');
+      const antLegacyIdx = tokens.indexOf('.gemini/antigravity');
+      const antIdeIdx = tokens.indexOf('.gemini/antigravity-ide');
+      const antCliIdx = tokens.indexOf('.gemini/antigravity-cli');
       const gemIdx = tokens.indexOf('.gemini');
       if (gemIdx === -1) continue; // scan loop without .gemini — irrelevant
       assert.notStrictEqual(
-        antIdx,
+        antIdeIdx,
         -1,
-        `scan loop "for dir in ${m[1].trim()}" mentions .gemini but not .gemini/antigravity — ` +
-          `the more-specific Antigravity dir must be present`,
+        `scan loop "for dir in ${m[1].trim()}" mentions .gemini but not .gemini/antigravity-ide — ` +
+          `the more-specific Antigravity 2.x dir must be present`,
       );
       assert.ok(
-        antIdx < gemIdx,
-        `scan loop "for dir in ${m[1].trim()}": .gemini/antigravity (idx ${antIdx}) must precede .gemini (idx ${gemIdx})`,
+        antIdeIdx < gemIdx,
+        `scan loop "for dir in ${m[1].trim()}": .gemini/antigravity-ide (idx ${antIdeIdx}) must precede .gemini (idx ${gemIdx})`,
+      );
+      assert.notStrictEqual(
+        antCliIdx,
+        -1,
+        `scan loop "for dir in ${m[1].trim()}" must include .gemini/antigravity-cli for Antigravity 2.x CLI installs`,
+      );
+      assert.ok(
+        antCliIdx < gemIdx,
+        `scan loop "for dir in ${m[1].trim()}": .gemini/antigravity-cli (idx ${antCliIdx}) must precede .gemini (idx ${gemIdx})`,
+      );
+      assert.notStrictEqual(
+        antLegacyIdx,
+        -1,
+        `scan loop "for dir in ${m[1].trim()}" must retain .gemini/antigravity legacy fallback`,
       );
     }
   });
 
-  test('path-to-runtime classification documents /.gemini/antigravity/ before /.gemini/', () => {
+  test('path-to-runtime classification documents antigravity 2.x and legacy paths before /.gemini/', () => {
     // The markdown bullet list near the top of get_installed_version step.
     // We assert the antigravity bullet exists and appears before the gemini bullet
     // in the file (textual order = evaluation order in the prose contract).
-    const antBullet = content.search(/Path contains `\/\.gemini\/antigravity\/?` -> `antigravity`/);
+    const antIdeBullet = content.search(/Path contains `\/\.gemini\/antigravity-ide\/?` -> `antigravity`/);
+    const antCliBullet = content.search(/Path contains `\/\.gemini\/antigravity-cli\/?` -> `antigravity`/);
+    const antLegacyBullet = content.search(/Path contains `\/\.gemini\/antigravity\/?` -> `antigravity`/);
     const gemBullet = content.search(/Path contains `\/\.gemini\/` -> `gemini`/);
 
     assert.notStrictEqual(
-      antBullet,
+      antIdeBullet,
+      -1,
+      'classification bullet for /.gemini/antigravity-ide/ -> antigravity is missing',
+    );
+    assert.notStrictEqual(
+      antCliBullet,
+      -1,
+      'classification bullet for /.gemini/antigravity-cli/ -> antigravity is missing',
+    );
+    assert.notStrictEqual(
+      antLegacyBullet,
       -1,
       'classification bullet for /.gemini/antigravity/ -> antigravity is missing',
     );
     assert.notStrictEqual(gemBullet, -1, 'classification bullet for /.gemini/ -> gemini is missing');
     assert.ok(
-      antBullet < gemBullet,
-      'antigravity bullet must precede gemini bullet in path-classification list',
+      antIdeBullet < gemBullet && antCliBullet < gemBullet && antLegacyBullet < gemBullet,
+      'all antigravity bullets must precede gemini bullet in path-classification list',
     );
   });
 });

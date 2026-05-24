@@ -308,10 +308,18 @@ const RUNTIME_ENV_VARS = [
 
 describe('getRuntimeConfigDir', () => {
   const saved: Record<string, string | undefined> = {};
+  let savedHome: string | undefined;
+  let savedUserProfile: string | undefined;
   beforeEach(() => {
+    savedHome = process.env.HOME;
+    savedUserProfile = process.env.USERPROFILE;
     for (const k of RUNTIME_ENV_VARS) { saved[k] = process.env[k]; delete process.env[k]; }
   });
   afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    if (savedUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = savedUserProfile;
     for (const k of RUNTIME_ENV_VARS) {
       if (saved[k] === undefined) delete process.env[k];
       else process.env[k] = saved[k];
@@ -379,6 +387,15 @@ describe('getRuntimeConfigDir', () => {
   it('kilo uses XDG_CONFIG_HOME when direct vars unset', () => {
     process.env.XDG_CONFIG_HOME = '/xdg';
     expect(getRuntimeConfigDir('kilo')).toBe(join('/xdg', 'kilo'));
+  });
+
+  it('antigravity detects 2.x IDE dir when present and legacy dir is absent', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'gsd-antigravity-sdk-'));
+    await mkdir(join(home, '.gemini', 'antigravity-ide'), { recursive: true });
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    expect(getRuntimeConfigDir('antigravity')).toBe(join(home, '.gemini', 'antigravity-ide'));
+    await rm(home, { recursive: true, force: true });
   });
 });
 
