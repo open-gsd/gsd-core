@@ -1,8 +1,8 @@
-# ADR-XXXX: Retire @opengsd/gsd-sdk package boundary — single-runtime collapse
+# ADR-0174: Retire @opengsd/gsd-sdk package boundary — single-runtime collapse
 
 - **Status:** Accepted (2026-05-23)
 - **Date:** 2026-05-23
-- **Tracking issue:** [#UMBRELLA] — to be linked once the umbrella issue is opened
+- **Tracking issue:** [#174](https://github.com/open-gsd/get-shit-done-redux/issues/174) — sub-issues #175–#197
 
 ## Supersedes
 
@@ -146,4 +146,4 @@ Seven phases, ~15–18 PRs total. Each phase is a coherent slice that leaves the
 | 6 — Docs cleanup | Update CONTEXT.md, `docs/`, workflow markdown, and localized docs to remove SDK references. | ~4 |
 | 7 — Land this ADR's PR | The PR for this ADR closes the umbrella tracking issue. | 1 (this PR) |
 
-Implementation is tracked in [#UMBRELLA] — to be filled once the umbrella issue is opened.
+Implementation is tracked in [#174 — sub-issues #175–#197](https://github.com/open-gsd/get-shit-done-redux/issues/174).
