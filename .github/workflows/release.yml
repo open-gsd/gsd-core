@@ -331,6 +331,8 @@ jobs:
           git diff --cached --quiet || git commit -m "chore: finalize v${VERSION}"
 
       - name: Install and test
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
         run: |
           npm ci
           chmod +x scripts/check-npm-integrity.sh
