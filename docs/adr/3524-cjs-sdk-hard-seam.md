@@ -1,6 +1,6 @@
 # CJS↔SDK hard seam — one source of truth per Shared Module
 
-- **Status:** Proposed
+- **Status:** Superseded by ADR-XXXX (2026-05-23); originally Proposed (2026-05-14)
 - **Date:** 2026-05-14
 - **Tracking issue:** [#3524](https://github.com/open-gsd/get-shit-done-redux/issues/3524)
 - **Related PRD:** [`docs/prd/3524-cjs-sdk-hard-seam.md`](../prd/3524-cjs-sdk-hard-seam.md)

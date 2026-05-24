@@ -1,6 +1,6 @@
 # SDK Architecture seam map for query/runtime surfaces
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-XXXX (2026-05-23); originally Accepted (2026-05-09)
 - **Date:** 2026-05-09
 
 We decided to keep SDK architecture explicitly module-seamed rather than allow feature logic to spread across query handlers, runtime adapters, and compatibility shims. This ADR is the top-level map for SDK seams and their ownership boundaries.
