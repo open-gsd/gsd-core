@@ -178,6 +178,12 @@ describe('stage: formatting', () => {
     expect(formatSuccess({ nested: { value: 3 } }, 'json', 'nested.value')).toBe('3\n');
   });
 
+  it('formatSuccess emits raw scalar for picked string fields', () => {
+    expect(formatSuccess({ slug: 'cli-agent-transcript-persistence' }, 'json', 'slug')).toBe(
+      'cli-agent-transcript-persistence\n',
+    );
+  });
+
   it('formatPick returns input unchanged when no pickField provided', () => {
     const input = { ok: true };
     expect(formatPick(input)).toBe(input);
@@ -359,6 +365,23 @@ describe('end-to-end IR contract', () => {
     expect(out.ok).toBe(true);
     if (!out.ok) throw new Error('expected success');
     expect(out.stdout).toBe('7\n');
+    expect(out.exit_code).toBe(0);
+  });
+
+  it('applies --pick to native json string output without quote wrapping', async () => {
+    const registry = createRegistry();
+    const out = await runQueryDispatch({
+      registry,
+      projectDir: tmpDir,
+      cjsFallbackEnabled: true,
+      resolveGsdToolsPath: () => '',
+      dispatchNative: async () => ({ data: { slug: 'cli-agent-transcript-persistence' } }),
+      topology: createCommandTopology(registry),
+    }, ['generate-slug', 'CLI agent transcript persistence', '--pick', 'slug']);
+
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error('expected success');
+    expect(out.stdout).toBe('cli-agent-transcript-persistence\n');
     expect(out.exit_code).toBe(0);
   });
 
