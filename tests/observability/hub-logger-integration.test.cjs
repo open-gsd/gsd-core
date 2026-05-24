@@ -223,6 +223,48 @@ describe('Hub + logger — event shape', () => {
   });
 });
 
+// ─── Invalid parentTraceId silently dropped at the Hub seam ─────────────────
+
+describe('Hub + logger — invalid parentTraceId handling', () => {
+  test('dispatch with invalid parentTraceId still emits event with parentTraceId: undefined', () => {
+    const tracking = makeTrackingLogger();
+    const hub = makeHub(tracking);
+
+    // Send an invalid parentTraceId — not a UUID v4
+    hub.dispatch({ family: 'plan', subcommand: '', parentTraceId: 'junk' });
+
+    assert.equal(tracking.calls.length, 1, 'onEvent must still be called once');
+    const event = tracking.calls[0];
+    // Factory must coerce invalid parentTraceId to undefined — logger never sees the bad value
+    assert.strictEqual(event.parentTraceId, undefined,
+      'event.parentTraceId must be undefined when an invalid value was passed');
+  });
+
+  test('dispatch with invalid parentTraceId does NOT trigger the logger-failure warn path', () => {
+    // The _notifyLogger warn path fires only when logger.onEvent throws.
+    // Silent coercion in the factory means the invalid parentTraceId never reaches
+    // the logger — so the throwing/warn code path must stay dormant.
+    const stderrOutput = captureStderr(() => {
+      const throwingLogger = {
+        // This logger would throw if it ever saw a non-UUID parentTraceId value, but it
+        // must never be reached — the factory drops it before calling the logger.
+        onEvent(event) {
+          if (event.parentTraceId !== undefined) {
+            throw new Error('factory passed invalid parentTraceId to logger');
+          }
+        },
+      };
+      const hub = makeHub(throwingLogger);
+      hub.dispatch({ family: 'plan', subcommand: '', parentTraceId: '' });
+    });
+
+    // If the logger had thrown, the Hub would have emitted a level:warn to stderr.
+    // Empty stderr confirms the factory silently dropped the bad value before calling onEvent.
+    assert.equal(stderrOutput, '',
+      'no stderr warn must appear — factory coerces invalid parentTraceId without involving logger');
+  });
+});
+
 // ─── Logger errors do not break dispatch ────────────────────────────────────
 
 describe('Hub + logger — logger errors are contained', () => {
