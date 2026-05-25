@@ -10,7 +10,8 @@
  * Bounded by FIND_PROJECT_ROOT_MAX_DEPTH ancestors. Sync I/O.
  *
  * Source of truth for `findProjectRoot` — the CJS artifact at
- * get-shit-done/bin/lib/project-root.generated.cjs is generated from this file.
+ * get-shit-done/bin/lib/project-root.generated.cjs is generated from
+ * sdk/src/runtime/project-root.ts.
  */
 
 import { dirname, resolve, sep, relative, parse as parsePath } from 'node:path';

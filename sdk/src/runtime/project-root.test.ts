@@ -1,5 +1,5 @@
 /**
- * Pinning tests for sdk/src/project-root/index.ts
+ * Pinning tests for sdk/src/runtime/project-root.ts
  *
  * These tests pin the behaviour of findProjectRoot before the CJS refactor
  * in Cycle 2. They must remain GREEN throughout (never bend the implementation
@@ -14,7 +14,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { findProjectRoot } from './index.js';
+import { findProjectRoot } from './project-root.js';
 
 describe('findProjectRoot (project-root module)', () => {
   let workspace: string;

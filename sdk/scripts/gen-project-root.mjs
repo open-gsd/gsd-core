@@ -2,7 +2,7 @@
 /**
  * Generator for the Project-Root Resolution Module CJS artifact.
  *
- * Imports the compiled ESM output from sdk/dist/project-root/index.js,
+ * Imports the compiled ESM output from sdk/dist/runtime/project-root.js,
  * captures findProjectRoot via Function.prototype.toString(), then emits
  * get-shit-done/bin/lib/project-root.generated.cjs.
  *
@@ -14,14 +14,14 @@ import { writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { requireFreshDist } from './_gen-helpers.mjs';
 
-requireFreshDist('sdk/dist/project-root/index.js', 'sdk/src/project-root/index.ts');
+requireFreshDist('sdk/dist/runtime/project-root.js', 'sdk/src/runtime/project-root.ts');
 
 const BANNER = `'use strict';
 
 /**
  * GENERATED FILE — DO NOT EDIT.
  *
- * Source: sdk/src/project-root/index.ts
+ * Source: sdk/src/runtime/project-root.ts
  * Regenerate: cd sdk && npm run gen:project-root
  *
  * Project-Root Resolution Module — resolves a project root from a starting
@@ -41,7 +41,7 @@ const BANNER = `'use strict';
  * duplicating the logic.
  */
 export async function buildProjectRootCjs() {
-  const distUrl = new URL('../dist/project-root/index.js', import.meta.url);
+  const distUrl = new URL('../dist/runtime/project-root.js', import.meta.url);
   const { findProjectRoot, FIND_PROJECT_ROOT_MAX_DEPTH } = await import(distUrl.href);
 
   const findProjectRootBody = findProjectRoot.toString();

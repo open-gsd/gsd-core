@@ -502,9 +502,9 @@ export function planningPaths(projectDir: string, workstream?: string): Planning
 }
 
 // ─── findProjectRoot (multi-repo .planning resolution) ─────────────────────
-// Implementation lives in sdk/src/project-root/index.ts — re-exported here
+// Implementation lives in sdk/src/runtime/project-root.ts — re-exported here
 // so that existing consumers of helpers.ts continue to work unchanged.
-export { findProjectRoot } from '../project-root/index.js';
+export { findProjectRoot } from '../runtime/project-root.js';
 
 // ─── resolvePathUnderProject ───────────────────────────────────────────────
 

@@ -2,7 +2,7 @@
 /**
  * CJS parity test — project-root module
  *
- * For every fixture from sdk/src/project-root/index.test.ts, asserts that
+ * For every fixture from sdk/src/runtime/project-root.test.ts, asserts that
  * both the SDK (ESM, via dynamic import) and the generated CJS artifact
  * return identical paths. This confirms that the generator correctly
  * captures the function body and that all dependencies (sep, dirname,
@@ -21,7 +21,7 @@ const { findProjectRoot: findProjectRootCjs } = require('../get-shit-done/bin/li
 // SDK ESM — loaded once before all tests via dynamic import
 let findProjectRootSdk;
 before(async () => {
-  const mod = await import('../sdk/dist/project-root/index.js');
+  const mod = await import('../sdk/dist/runtime/project-root.js');
   findProjectRootSdk = mod.findProjectRoot;
 });
 

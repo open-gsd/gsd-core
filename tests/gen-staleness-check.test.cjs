@@ -53,8 +53,8 @@ const GENERATORS = [
   },
   {
     script: 'gen-project-root.mjs',
-    dist: 'sdk/dist/project-root/index.js',
-    ts: 'sdk/src/project-root/index.ts',
+    dist: 'sdk/dist/runtime/project-root.js',
+    ts: 'sdk/src/runtime/project-root.ts',
   },
   {
     script: 'gen-workstream-inventory-builder.mjs',
