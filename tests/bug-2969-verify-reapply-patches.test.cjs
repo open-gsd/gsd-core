@@ -210,4 +210,35 @@ describe('Bug #2969: deterministic Step 5 verification gate', () => {
     assert.ok(report.results[0].missing.includes(droppedLine));
     assert.ok(!report.results[0].missing.includes(presentLine));
   });
+
+  test('treats gsd-hook-version install-time substitution as upstream-owned, not missing user content (#229)', () => {
+    resetFixture();
+    const rel = path.join('hooks', 'gsd-statusline.js');
+    const pristine = [
+      '// gsd-hook-version: {{GSD_VERSION}}',
+      'console.log("statusline hook");',
+      '',
+    ].join('\n');
+    const backup = [
+      '// gsd-hook-version: 1.41.0',
+      'console.log("statusline hook");',
+      '',
+    ].join('\n');
+    const installed = [
+      '// gsd-hook-version: 1.42.3',
+      'console.log("statusline hook");',
+      '',
+    ].join('\n');
+
+    writeFile(path.join(pristineDir, rel), pristine);
+    writeFile(path.join(patchesDir, rel), backup);
+    writeFile(path.join(configDir, rel), installed);
+
+    const { status, report } = runVerifier();
+    assert.equal(status, 0, `expected pass for upstream-owned version substitution; report=${JSON.stringify(report)}`);
+    assert.equal(report.failures, 0);
+    assert.equal(report.checked, 1);
+    assert.equal(report.results[0].status, 'ok');
+    assert.deepStrictEqual(report.results[0].missing, []);
+  });
 });
