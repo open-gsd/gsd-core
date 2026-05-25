@@ -5,25 +5,25 @@
  * Query handlers should render outputs from this inventory instead of
  * rescanning workstream directories directly.
  *
- * Pure projection logic lives in ../workstream-inventory/builder.ts.
+ * Pure projection logic lives in ../workstream/builder.ts.
  * This module handles I/O orchestration only.
  */
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { scanPhasePlans } from './plan-scan.js';
-import { stateExtractField } from './state-document.js';
+import { stateExtractField } from '../state/index.js';
 import { readActiveWorkstream } from './active-workstream-store.js';
-import { buildWorkstreamInventory } from '../workstream-inventory/builder.js';
+import { buildWorkstreamInventory } from '../workstream/builder.js';
 
 // Re-export types from the builder so downstream consumers can import from here.
 export type {
   WorkstreamPhaseInventory,
   WorkstreamInventory,
   WorkstreamInventoryList,
-} from '../workstream-inventory/builder.js';
+} from '../workstream/builder.js';
 
-import type { WorkstreamInventory, WorkstreamInventoryList } from '../workstream-inventory/builder.js';
+import type { WorkstreamInventory, WorkstreamInventoryList } from '../workstream/builder.js';
 
 export const planningRoot = (projectDir: string): string =>
   join(projectDir, '.planning');

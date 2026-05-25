@@ -13,7 +13,7 @@
  * for non-Claude runtimes.
  */
 import { detectRuntime, SUPPORTED_RUNTIMES, type Runtime } from './query/helpers.js';
-import { canonicalizeRuntimeName } from './runtime-name-policy.js';
+import { canonicalizeRuntimeName } from './runtime/name-policy.js';
 
 /**
  * Throw a clear error when the active runtime is not Claude.

@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, writeFile, mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { initNewProject, initProgress, initManager } from './init-complex.js';
+import { initNewProject, initProgress, initManager } from '../handlers/init/complex.js';
 
 let tmpDir: string;
 let previousGsdAgentsDir: string | undefined;

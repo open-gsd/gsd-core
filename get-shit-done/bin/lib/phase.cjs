@@ -1011,7 +1011,7 @@ function renameIntegerPhases(phasesDir, removedInt) {
       const m = dir.match(/^(\d+)([A-Z])?(?:\.(\d+))?-(.+)$/i);
       if (!m) return null;
       const dirInt = parseInt(m[1], 10);
-      return (dirInt > removedInt && dirInt < 999) ? { dir, oldInt: dirInt, letter: m[2] ? m[2].toUpperCase() : '', decimal: m[3] ? parseInt(m[3], 10) : null, slug: m[4] } : null;
+      return (dirInt > removedInt && dirInt !== 999) ? { dir, oldInt: dirInt, letter: m[2] ? m[2].toUpperCase() : '', decimal: m[3] ? parseInt(m[3], 10) : null, slug: m[4] } : null;
     })
     .filter(Boolean)
     .sort((a, b) => a.oldInt !== b.oldInt ? b.oldInt - a.oldInt : (b.decimal || 0) - (a.decimal || 0));
@@ -1040,7 +1040,7 @@ function renameIntegerPhases(phasesDir, removedInt) {
 
 function decrementRoadmapPhaseNumber(raw, removedInt) {
   const num = parseInt(raw, 10);
-  if (!Number.isInteger(num) || num <= removedInt || num >= 999) return raw;
+  if (!Number.isInteger(num) || num <= removedInt || num === 999) return raw;
   return String(num - 1);
 }
 
@@ -1048,13 +1048,13 @@ function decrementRoadmapPhaseToken(raw, removedInt) {
   const match = String(raw).match(/^(\d+)(\.\d+)?$/);
   if (!match) return raw;
   const num = parseInt(match[1], 10);
-  if (!Number.isInteger(num) || num <= removedInt || num >= 999) return raw;
+  if (!Number.isInteger(num) || num <= removedInt || num === 999) return raw;
   return `${num - 1}${match[2] || ''}`;
 }
 
 function decrementRoadmapPaddedPhaseNumber(raw, removedInt) {
   const num = parseInt(raw, 10);
-  if (!Number.isInteger(num) || num <= removedInt || num >= 999) return raw;
+  if (!Number.isInteger(num) || num <= removedInt || num === 999) return raw;
   return String(num - 1).padStart(raw.length, '0');
 }
 

@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Parity test: configuration.generated.cjs (CJS) vs sdk/dist/configuration/index.js (ESM).
+ * Parity test: configuration.generated.cjs (CJS) vs sdk/dist/config/index.js (ESM).
  *
  * For every fixture in the vitest pinning tests, asserts that both sides produce
  * identical output. This ensures the generator faithfully replicates the TS source.
@@ -44,7 +44,7 @@ function cleanup(dir) {
 let esm;
 
 before(async () => {
-  esm = await import('../sdk/dist/configuration/index.js');
+  esm = await import('../sdk/dist/config/index.js');
 });
 
 // ─── Parity helper ────────────────────────────────────────────────────────────

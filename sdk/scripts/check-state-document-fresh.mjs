@@ -20,7 +20,7 @@ const BANNER = `'use strict';
 /**
  * GENERATED FILE — DO NOT EDIT.
  *
- * Source: sdk/src/query/state-document.ts
+ * Source: sdk/src/state/index.ts
  * Regenerate: cd sdk && npm run gen:state-document
  *
  * STATE.md Document Module — pure transforms for STATE.md text.
@@ -50,7 +50,7 @@ function extractFunctionFromSource(source, name) {
   return source.slice(start, i + 1);
 }
 
-const distUrl = new URL('../dist/query/state-document.js', import.meta.url);
+const distUrl = new URL('../dist/state/index.js', import.meta.url);
 const {
   stateExtractField,
   stateReplaceField,

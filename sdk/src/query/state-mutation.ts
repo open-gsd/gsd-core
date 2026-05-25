@@ -36,7 +36,7 @@ import {
 } from './helpers.js';
 import { buildStateFrontmatter, getMilestonePhaseFilter } from './state.js';
 import { scanPhasePlans } from './plan-scan.js';
-import { stateExtractField, stateReplaceField, stateReplaceFieldWithFallback, computeProgressPercent } from './state-document.js';
+import { stateExtractField, stateReplaceField, stateReplaceFieldWithFallback, computeProgressPercent } from '../state/index.js';
 import type { QueryHandler } from './utils.js';
 
 const PROGRESS_FRONTMATTER_FIELDS = new Set(['Progress', 'Total Plans in Phase', 'Total Phases']);

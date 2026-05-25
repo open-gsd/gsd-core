@@ -11,7 +11,7 @@ import {
   computeProgressPercent,
   shouldPreserveExistingProgress,
   normalizeProgressNumbers,
-} from './state-document.js';
+} from './index.js';
 
 describe('stateExtractField', () => {
   it('extracts value from bold pattern', () => {

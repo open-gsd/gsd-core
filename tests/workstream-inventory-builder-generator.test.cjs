@@ -125,7 +125,7 @@ describe('workstream-inventory-builder generator parity (ESM dist vs generated C
     // Dynamic import of the ESM SDK dist (use pathToFileURL since we're in CJS context)
     const path = require('path');
     const { pathToFileURL } = require('url');
-    const distPath = path.resolve(__dirname, '..', 'sdk', 'dist', 'workstream-inventory', 'builder.js');
+    const distPath = path.resolve(__dirname, '..', 'sdk', 'dist', 'workstream', 'builder.js');
     sdkBuild = await import(pathToFileURL(distPath).href);
     // CJS require of the generated artifact
     cjsModule = require('../get-shit-done/bin/lib/workstream-inventory-builder.generated.cjs');

@@ -53,13 +53,13 @@ const GENERATORS = [
   },
   {
     script: 'gen-project-root.mjs',
-    dist: 'sdk/dist/project-root/index.js',
-    ts: 'sdk/src/project-root/index.ts',
+    dist: 'sdk/dist/runtime/project-root.js',
+    ts: 'sdk/src/runtime/project-root.ts',
   },
   {
     script: 'gen-workstream-inventory-builder.mjs',
-    dist: 'sdk/dist/workstream-inventory/builder.js',
-    ts: 'sdk/src/workstream-inventory/builder.ts',
+    dist: 'sdk/dist/workstream/builder.js',
+    ts: 'sdk/src/workstream/builder.ts',
   },
   {
     script: 'gen-workstream-name-policy.mjs',
@@ -73,8 +73,8 @@ const GENERATORS = [
   },
   {
     script: 'gen-configuration.mjs',
-    dist: 'sdk/dist/configuration/index.js',
-    ts: 'sdk/src/configuration/index.ts',
+    dist: 'sdk/dist/config/index.js',
+    ts: 'sdk/src/config/index.ts',
   },
 ];
 

@@ -2,7 +2,7 @@
 /**
  * Generator for the STATE.md Document Module CJS artifact.
  *
- * Reads the compiled ESM output from sdk/dist/query/state-document.js,
+ * Reads the compiled ESM output from sdk/dist/state/index.js,
  * extracts function source via Function.prototype.toString() for exports
  * and via source-text extraction for internal helpers, then emits
  * get-shit-done/bin/lib/state-document.generated.cjs.
@@ -19,7 +19,7 @@ const BANNER = `'use strict';
 /**
  * GENERATED FILE — DO NOT EDIT.
  *
- * Source: sdk/src/query/state-document.ts
+ * Source: sdk/src/state/index.ts
  * Regenerate: cd sdk && npm run gen:state-document
  *
  * STATE.md Document Module — pure transforms for STATE.md text.
@@ -63,7 +63,7 @@ function extractFunctionFromSource(source: string, name: string): string {
 
 export async function buildStateDocumentCjs(): Promise<string> {
   // Load the compiled ESM module to get exports via Function.prototype.toString()
-  const distUrl = new URL('../dist/query/state-document.js', import.meta.url);
+  const distUrl = new URL('../dist/state/index.js', import.meta.url);
   const {
     stateExtractField,
     stateReplaceField,

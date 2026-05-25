@@ -12,6 +12,10 @@
  * `bin/lib/foo.cjs` and ts `sdk/src/foo.ts` only allow-throughs that exact
  * pair — a sibling at `sdk/src/query/foo.ts` is still flagged.
  *
+ * Cross-name pairs are also supported when declared in the allowlist
+ * (for example `verify.cjs` <-> `validate.ts`), so cooperating siblings are
+ * observable even when basenames differ.
+ *
  * If a pair is found:
  *   - cooperatingSiblings (matching cjs + ts): accepted silently (exit 0).
  *   - migrateMeBacklog (matching cjs + ts): emits a WARNING only when
@@ -95,6 +99,17 @@ const cooperatingPairs = new Set(
 const migrateMap = new Map(
   (allowlist.migrateMeBacklog || []).map((e) => [`${e.cjs}::${e.ts}`, e])
 );
+
+/** @type {Map<string, Set<string>>} cjs rel path -> explicit declared ts rel paths */
+const explicitTsByCjs = new Map();
+for (const entry of [
+  ...(allowlist.cooperatingSiblings || []),
+  ...(allowlist.migrateMeBacklog || []),
+]) {
+  if (!entry || typeof entry.cjs !== 'string' || typeof entry.ts !== 'string') continue;
+  if (!explicitTsByCjs.has(entry.cjs)) explicitTsByCjs.set(entry.cjs, new Set());
+  explicitTsByCjs.get(entry.cjs).add(entry.ts);
+}
 
 // ---------------------------------------------------------------------------
 // Build SDK name index: name -> array of absolute TS paths
@@ -212,13 +227,36 @@ function main() {
   const errors = [];
   const warnings = [];
 
-  for (const { name, absPath } of cjsFiles) {
-    // Is there a matching TS file?
-    if (!sdkIndex.has(name)) continue;
+  function candidateTsPathsFor(relCjs, name) {
+    const byName = sdkIndex.has(name)
+      ? sdkIndex
+          .get(name)
+          .map((p) => path.relative(ROOT, p).replace(/\\/g, '/'))
+      : [];
 
-    // Compute the relative paths the allowlist uses
+    const declared = explicitTsByCjs.has(relCjs)
+      ? Array.from(explicitTsByCjs.get(relCjs))
+      : [];
+
+    const declaredExisting = declared.filter((relTs) => {
+      const abs = path.join(ROOT, relTs);
+      return (
+        relTs.endsWith('.ts') &&
+        !relTs.endsWith('.generated.ts') &&
+        !relTs.endsWith('.test.ts') &&
+        fs.existsSync(abs) &&
+        fs.statSync(abs).isFile()
+      );
+    });
+
+    return Array.from(new Set([...byName, ...declaredExisting]));
+  }
+
+  for (const { name, absPath } of cjsFiles) {
+    // Compute relative CJS path and all declared/discovered TS candidates.
     const relCjs = path.relative(ROOT, absPath).replace(/\\/g, '/');
-    const tsPaths = sdkIndex.get(name).map((p) => path.relative(ROOT, p).replace(/\\/g, '/'));
+    const tsPaths = candidateTsPathsFor(relCjs, name);
+    if (tsPaths.length === 0) continue;
 
     // Pair-aware matching, per ts sibling. Each ts candidate is classified
     // independently against the allowlist so a partially-allowlisted set of
@@ -247,12 +285,10 @@ function main() {
   // Count cjs files whose pair identity (cjs+ts) is on cooperatingSiblings.
   // A file with multiple ts candidates is counted once if any pair matches.
   const cooperatingCount = cjsFiles.filter((f) => {
-    if (!sdkIndex.has(f.name)) return false;
     const relCjs = path.relative(ROOT, f.absPath).replace(/\\/g, '/');
-    return sdkIndex.get(f.name).some((tsAbs) => {
-      const relTs = path.relative(ROOT, tsAbs).replace(/\\/g, '/');
-      return cooperatingPairs.has(`${relCjs}::${relTs}`);
-    });
+    return candidateTsPathsFor(relCjs, f.name).some((relTs) =>
+      cooperatingPairs.has(`${relCjs}::${relTs}`)
+    );
   }).length;
 
   // -------------------------------------------------------------------------

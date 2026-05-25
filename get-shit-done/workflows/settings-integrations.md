@@ -108,9 +108,7 @@ AskUserQuestion([
       { label: "Leave (**** already set)", description: "Keep current value" },
       { label: "Replace", description: "Enter a new API key" },
       { label: "Clear", description: "Remove the stored key" }
-      // When unset:
-      // { label: "Skip", description: "Leave unset" },
-      // { label: "Set", description: "Enter an API key" }
+      // When unset, use the two-option shape: Skip / Set.
     ]
   },
   {
@@ -164,6 +162,22 @@ shell command to invoke for a given reviewer flavor. Supported flavors:
 ```text
 AskUserQuestion([
   {
+    question: "Review model CLI mapping — what next?",
+    header: "Review",
+    multiSelect: false,
+    options: [
+      { label: "Configure CLI", description: "Pick a reviewer flavor and set/clear its command" },
+      { label: "Done", description: "Finish this section" }
+    ]
+  }
+])
+```
+
+If "Configure CLI" is selected, ask:
+
+```text
+AskUserQuestion([
+  {
     question: "Which reviewer CLI do you want to configure?",
     header: "CLI",
     multiSelect: false,
@@ -171,8 +185,7 @@ AskUserQuestion([
       { label: "Claude", description: "review.models.claude — defaults to session model when unset" },
       { label: "Codex", description: "review.models.codex — e.g. 'codex exec --model gpt-5'" },
       { label: "Gemini", description: "review.models.gemini — e.g. 'gemini -m gemini-2.5-pro'" },
-      { label: "OpenCode", description: "review.models.opencode — e.g. 'opencode run --model claude-sonnet-4'" },
-      { label: "Done", description: "Skip — finish this section" }
+      { label: "OpenCode", description: "review.models.opencode — e.g. 'opencode run --model claude-sonnet-4'" }
     ]
   }
 ])
@@ -186,6 +199,7 @@ string. Write via:
 $GSD_SDK query config-set review.models.<cli> "<command string>"
 ```
 
+After each update, return to the "Review model CLI mapping — what next?" question.
 Loop until the user selects "Done".
 
 The `review.models.<cli>` key is validated by the dynamic pattern
@@ -203,6 +217,22 @@ metacharacters are rejected.
 ```text
 AskUserQuestion([
   {
+    question: "Agent skills mapping — what next?",
+    header: "Agent Skills",
+    multiSelect: false,
+    options: [
+      { label: "Configure agent", description: "Pick an agent type and set/clear skills" },
+      { label: "Done", description: "Finish this section" }
+    ]
+  }
+])
+```
+
+If "Configure agent" is selected, ask:
+
+```text
+AskUserQuestion([
+  {
     question: "Configure agent_skills for which agent type?",
     header: "Agent Type",
     multiSelect: false,
@@ -210,8 +240,7 @@ AskUserQuestion([
       { label: "gsd-executor", description: "Skills injected when spawning executor agents" },
       { label: "gsd-planner", description: "Skills injected when spawning planner agents" },
       { label: "gsd-verifier", description: "Skills injected when spawning verifier agents" },
-      { label: "Custom…", description: "Enter a custom agent-type slug" },
-      { label: "Done", description: "Skip — finish this section" }
+      { label: "Custom…", description: "Enter a custom agent-type slug" }
     ]
   }
 ])
@@ -234,6 +263,7 @@ Show the current value if any, offer Leave / Replace / Clear. Write via:
 $GSD_SDK query config-set agent_skills.<slug> "<skill-a,skill-b,skill-c>"
 ```
 
+After each update, return to the "Agent skills mapping — what next?" question.
 Loop until "Done".
 </step>
 

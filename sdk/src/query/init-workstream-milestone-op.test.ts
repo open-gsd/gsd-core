@@ -11,7 +11,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { initMilestoneOp } from './init.js';
+import { initMilestoneOp } from '../handlers/init/composer.js';
 import { roadmapAnalyze } from './roadmap.js';
 import { resolveQueryRuntimeContext } from './query-runtime-context.js';
 

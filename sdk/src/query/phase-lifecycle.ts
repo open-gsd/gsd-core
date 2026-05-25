@@ -41,7 +41,7 @@ import {
   releaseStateLock,
   stateReplaceField,
 } from './state-mutation.js';
-import { stateExtractField, stateReplaceFieldWithFallback } from './state-document.js';
+import { stateExtractField, stateReplaceFieldWithFallback } from '../state/index.js';
 import type { QueryHandler } from './utils.js';
 import {
   assertNoNullBytes,
@@ -901,7 +901,7 @@ async function renameIntegerPhases(
       // numbering convention that lives outside the active sequence; renumbering
       // them would clobber the convention and corrupt downstream lookups.
       // (bug-2434)
-      if (dirInt <= removedInt || dirInt >= 999) return null;
+      if (dirInt <= removedInt || dirInt === 999) return null;
       return {
         dir,
         oldInt: dirInt,
@@ -951,14 +951,14 @@ async function renameIntegerPhases(
  * Skips when:
  *   • not an integer
  *   • num <= removedInt (already-renumbered phases stay put)
- *   • num >= 999 (backlog/parked-idea numbering range)
+ *   • num === 999 (backlog/parked-idea sentinel)
  *
  * Returns the original raw string when the guards trip so the regex pass
  * leaves dates and unrelated numerics intact.
  */
 function decrementRoadmapPhaseNumber(raw: string, removedInt: number): string {
   const num = parseInt(raw, 10);
-  if (!Number.isInteger(num) || num <= removedInt || num >= 999) return raw;
+  if (!Number.isInteger(num) || num <= removedInt || num === 999) return raw;
   return String(num - 1);
 }
 
@@ -971,7 +971,7 @@ function decrementRoadmapPhaseToken(raw: string, removedInt: number): string {
   const match = String(raw).match(/^(\d+)(\.\d+)?$/);
   if (!match) return raw;
   const num = parseInt(match[1]!, 10);
-  if (!Number.isInteger(num) || num <= removedInt || num >= 999) return raw;
+  if (!Number.isInteger(num) || num <= removedInt || num === 999) return raw;
   return `${num - 1}${match[2] || ''}`;
 }
 
@@ -981,7 +981,7 @@ function decrementRoadmapPhaseToken(raw: string, removedInt: number): string {
  */
 function decrementRoadmapPaddedPhaseNumber(raw: string, removedInt: number): string {
   const num = parseInt(raw, 10);
-  if (!Number.isInteger(num) || num <= removedInt || num >= 999) return raw;
+  if (!Number.isInteger(num) || num <= removedInt || num === 999) return raw;
   return String(num - 1).padStart(raw.length, '0');
 }
 
@@ -999,7 +999,7 @@ function decrementRoadmapPaddedPhaseNumber(raw: string, removedInt: number): str
  *     overlap (bug-3355 — phase 7 → 6 → 5 → ...).
  *
  * The CJS pattern uses negative lookbehind/ahead on the padded-prefix regex
- * to skip dates and decrement helpers that guard against `num >= 999`. Keep
+ * to skip dates and decrement helpers that guard against `num === 999`. Keep
  * this implementation byte-for-byte in lockstep with phase.cjs:880-922 —
  * deviations are how the three bugs above slipped in.
  *

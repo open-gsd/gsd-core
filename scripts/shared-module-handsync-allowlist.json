@@ -52,9 +52,9 @@
     },
     {
       "cjs": "get-shit-done/bin/lib/state-document.cjs",
-      "ts": "sdk/src/query/state-document.ts",
-      "classification": "cooperating-sibling",
-      "justification": "CJS state-document.cjs is the generated Adapter reading from sdk/src/state-document/ Shared Module (Phase 1/#3531). SDK state-document.ts is the corresponding source-of-truth query handler. Freshness check enforces alignment."
+      "ts": "sdk/src/state/index.ts",
+      "classification": "ADAPTER-OVER-MODULE",
+      "justification": "CJS state-document.cjs is a thin Adapter over get-shit-done/bin/lib/state-document.generated.cjs. That generated artifact is emitted from sdk/src/state/index.ts by sdk/scripts/gen-state-document.ts; freshness is enforced by sdk/scripts/check-state-document-fresh.mjs."
     },
     {
       "cjs": "get-shit-done/bin/lib/template.cjs",
@@ -91,6 +91,18 @@
       "ts": "sdk/src/config.ts",
       "classification": "CJS-CLI-ONLY",
       "justification": "Phase 2 (#3536) already migrated CONFIG_DEFAULTS and loadConfig/mergeDefaults to the Configuration Module and sdk/src/config.ts. What remains in config.cjs is exclusively CLI command handlers (cmdConfigGet, cmdConfigSet, cmdConfigNewProject, cmdConfigEnsureSection, cmdConfigSetModelProfile, cmdConfigPath, cmdMigrateConfig, buildNewProjectConfig, setConfigValue, ensureConfigFile) that depend on CJS-only APIs (withPlanningLock, platformWriteSync/ReadSync/EnsureDir, sync fs ops, process.exit). sdk/src/config.ts provides only the async loadConfig/mergeDefaults SDK layer. The two files serve disjoint surfaces with no logical overlap — not a hand-sync drift anti-pattern."
+    },
+    {
+      "cjs": "get-shit-done/bin/lib/config.cjs",
+      "ts": "sdk/src/config/index.ts",
+      "classification": "ADAPTER-OVER-MODULE",
+      "justification": "sdk/src/config/index.ts is the Configuration Module source-of-truth; CJS config.cjs consumes its generated Adapter through core/config-schema integration. This is an intentional seam relationship, not manual hand-sync."
+    },
+    {
+      "cjs": "get-shit-done/bin/lib/state.cjs",
+      "ts": "sdk/src/state/index.ts",
+      "classification": "ADAPTER-OVER-MODULE",
+      "justification": "sdk/src/state/index.ts is the STATE.md Document Module source-of-truth that emits get-shit-done/bin/lib/state-document.generated.cjs. state.cjs consumes that generated module as an Adapter dependency; basename overlap is intentional and not a duplicated implementation."
     },
     {
       "cjs": "get-shit-done/bin/lib/intel.cjs",
@@ -147,5 +159,13 @@
       "justification": "CJS prompt-budget.cjs provides the applyBudget implementation used by gsd-tools.cjs case 'prompt-budget'. SDK prompt-budget.ts is the native QueryHandler port for gsd-sdk query dispatch (#3081). The SDK handler ports the pure budget logic and adds CLI arg parsing / file I/O directly, satisfying the registry-integration drift-guard without duplicating shared state."
     }
   ],
-  "migrateMeBacklog": []
+  "migrateMeBacklog": [
+    {
+      "cjs": "get-shit-done/bin/lib/verify.cjs",
+      "ts": "sdk/src/query/validate.ts",
+      "classification": "drift-anti-pattern",
+      "justification": "Cross-name cooperating pair where validate policy changes can drift from verify checks; keep explicitly visible until Shared Module extraction removes hand-sync risk.",
+      "trackedIn": "#11"
+    }
+  ]
 }

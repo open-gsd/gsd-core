@@ -1878,6 +1878,80 @@ describe('phase remove command', () => {
     );
   });
 
+  test('bug-16: integer phase remove renumbers canonical phases above 999 while preserving 999.x backlog', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+### Phase 1199: Baseline
+**Goal:** Before removal
+Plans:
+- [x] 1199-01-PLAN.md
+
+### Phase 1200: Remove Me
+**Goal:** Target phase
+Plans:
+- [ ] 1200-01-PLAN.md
+
+### Phase 1201: Follow Up A
+**Goal:** First phase after target
+**Depends on:** Phase 1200
+Plans:
+- [ ] 1201-01-PLAN.md
+
+### Phase 1202: Follow Up B
+**Goal:** Second phase after target
+**Depends on:** Phase 1201
+Plans:
+- [ ] 1202-01-PLAN.md
+
+### Phase 999.1: Backlog Item
+**Goal:** Parked backlog item
+`
+    );
+
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '1199-baseline'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '1200-remove-me'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '1201-follow-up-a'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '1202-follow-up-b'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '999.1-backlog-item'), { recursive: true });
+
+    const result = runGsdTools('phase remove 1200', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    // On-disk phase directories should be decremented by one above removedInt.
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, '.planning', 'phases', '1200-follow-up-a')),
+      '1201-follow-up-a should be renamed to 1200-follow-up-a',
+    );
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, '.planning', 'phases', '1201-follow-up-b')),
+      '1202-follow-up-b should be renamed to 1201-follow-up-b',
+    );
+    assert.ok(
+      !fs.existsSync(path.join(tmpDir, '.planning', 'phases', '1201-follow-up-a')),
+      'old 1201-follow-up-a directory should not remain',
+    );
+    assert.ok(
+      !fs.existsSync(path.join(tmpDir, '.planning', 'phases', '1202-follow-up-b')),
+      'old 1202-follow-up-b directory should not remain',
+    );
+
+    // Backlog 999.x must remain untouched.
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, '.planning', 'phases', '999.1-backlog-item')),
+      'backlog directory 999.1-backlog-item must not be renamed',
+    );
+
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(!roadmap.includes('### Phase 1200: Remove Me'), 'removed phase 1200 section must be gone');
+    assert.ok(roadmap.includes('### Phase 1200: Follow Up A'), 'phase 1201 should be renumbered to 1200');
+    assert.ok(roadmap.includes('### Phase 1201: Follow Up B'), 'phase 1202 should be renumbered to 1201');
+    assert.ok(!roadmap.includes('### Phase 1202: Follow Up B'), 'old phase 1202 heading must not remain');
+    assert.ok(roadmap.includes('**Depends on:** Phase 1200'), 'depends-on reference above removed phase should be decremented');
+    assert.ok(roadmap.includes('### Phase 999.1: Backlog Item'), 'backlog phase 999.1 heading must not be renumbered');
+  });
+
   test('bug-2435: integer phase remove does not corrupt YYYY-MM-DD dates in ROADMAP.md', () => {
     // Setup: removing phase 4 from a roadmap containing 2026-04-14 date strings
     fs.writeFileSync(

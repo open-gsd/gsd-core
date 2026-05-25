@@ -12,22 +12,11 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { isSemverNewer } = require('../get-shit-done/bin/lib/semver-compare.cjs');
 
 const cacheFile = process.env.GSD_CACHE_FILE;
 const projectVersionFile = process.env.GSD_PROJECT_VERSION_FILE;
 const globalVersionFile = process.env.GSD_GLOBAL_VERSION_FILE;
-
-// Compare semver: true if a > b (a is strictly newer than b)
-// Strips pre-release suffixes (e.g. '3-beta.1' → '3') to avoid NaN from Number()
-function isNewer(a, b) {
-  const pa = (a || '').split('.').map(s => Number(s.replace(/-.*/, '')) || 0);
-  const pb = (b || '').split('.').map(s => Number(s.replace(/-.*/, '')) || 0);
-  for (let i = 0; i < 3; i++) {
-    if (pa[i] > pb[i]) return true;
-    if (pa[i] < pb[i]) return false;
-  }
-  return false;
-}
 
 // Check project directory first (local install), then global
 let installed = '0.0.0';
@@ -75,7 +64,7 @@ if (configDir) {
           const versionMatch = content.match(/(?:\/\/|#) gsd-hook-version:\s*(.+)/);
           if (versionMatch) {
             const hookVersion = versionMatch[1].trim();
-            if (isNewer(installed, hookVersion) && !hookVersion.includes('{{')) {
+            if (isSemverNewer(installed, hookVersion) && !hookVersion.includes('{{')) {
               staleHooks.push({ file: hookFile, hookVersion, installedVersion: installed });
             }
           } else {
@@ -105,7 +94,7 @@ try {
 } catch (e) {}
 
 const result = {
-  update_available: latest && isNewer(latest, installed),
+  update_available: latest && isSemverNewer(latest, installed),
   installed,
   latest: latest || 'unknown',
   checked: Math.floor(Date.now() / 1000),

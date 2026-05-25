@@ -24,9 +24,9 @@ import { homedir } from 'node:os';
 import { GSDError, ErrorClassification } from '../errors.js';
 export { SUPPORTED_RUNTIMES, type Runtime } from '../model-catalog.js';
 import { SUPPORTED_RUNTIMES, type Runtime } from '../model-catalog.js';
-import { canonicalizeRuntimeName } from '../runtime-name-policy.js';
+import { canonicalizeRuntimeName } from '../runtime/name-policy.js';
 import { workspacePlanningPaths, resolveWorkspaceContext, type PlanningPaths } from './workspace.js';
-export { stateExtractField } from './state-document.js';
+export { stateExtractField } from '../state/index.js';
 import { relPlanningPath, validateWorkstreamName } from '../workstream-utils.js';
 
 // ─── Runtime-aware agents directory resolution ─────────────────────────────
@@ -502,9 +502,9 @@ export function planningPaths(projectDir: string, workstream?: string): Planning
 }
 
 // ─── findProjectRoot (multi-repo .planning resolution) ─────────────────────
-// Implementation lives in sdk/src/project-root/index.ts — re-exported here
+// Implementation lives in sdk/src/runtime/project-root.ts — re-exported here
 // so that existing consumers of helpers.ts continue to work unchanged.
-export { findProjectRoot } from '../project-root/index.js';
+export { findProjectRoot } from '../runtime/project-root.js';
 
 // ─── resolvePathUnderProject ───────────────────────────────────────────────
 

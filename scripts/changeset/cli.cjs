@@ -21,6 +21,10 @@ const { parseFragment, FRAGMENT_ERROR } = require('./parse.cjs');
 const { renderChangelog } = require('./render.cjs');
 const { serializeChangelog, parseChangelog } = require('./serialize.cjs');
 const { renderGithubReleaseNotes } = require('./github-release-notes.cjs');
+const {
+  compareSemverCore,
+  isStableTripletSemver,
+} = require('../../get-shit-done/bin/lib/semver-compare.cjs');
 
 function parseArgs(argv) {
   const opts = {
@@ -205,15 +209,14 @@ function cmdExtract(opts) {
   // Validate that both bounds are strict semver (N.N.N, digits only).
   // Coercing a malformed bound like "1.41.x" to "1.41.0" makes range
   // selection silently wrong; reject early with a structured error.
-  const SEMVER_RE = /^\d+\.\d+\.\d+$/;
-  if (!SEMVER_RE.test(from)) {
+  if (!isStableTripletSemver(from)) {
     return {
       exitCode: 1,
       report: { error: `invalid semver for --from: "${from}" (expected N.N.N)`, releases: [] },
       textOutput: null,
     };
   }
-  if (!SEMVER_RE.test(to)) {
+  if (!isStableTripletSemver(to)) {
     return {
       exitCode: 1,
       report: { error: `invalid semver for --to: "${to}" (expected N.N.N)`, releases: [] },
@@ -236,37 +239,17 @@ function cmdExtract(opts) {
   const text = fs.readFileSync(changelogPath, 'utf8');
   const { releases } = parseChangelog(text);
 
-  // Walk the releases in document order (newest-first in a standard
-  // Keep-a-Changelog file).  Collect every release whose version is
-  // strictly after `from` and up to and including `to`.
-  //
-  // The comparison is semver-aware via the standard numeric-tuple approach
-  // so that "1.5.9" < "1.5.10" (string comparison would fail here).
-  function parseSemver(v) {
-    const parts = String(v).split('.').map(Number);
-    return [parts[0] || 0, parts[1] || 0, parts[2] || 0];
-  }
-
-  function semverCmp(a, b) {
-    const [a0, a1, a2] = parseSemver(a);
-    const [b0, b1, b2] = parseSemver(b);
-    return a0 !== b0 ? a0 - b0 : a1 !== b1 ? a1 - b1 : a2 - b2;
-  }
-
   const matched = releases.filter((rel) => {
     if (rel.version === 'Unreleased') return false;
-    // Skip pre-release entries (e.g. 1.0.0-rc.1, 1.0.0-beta.2) — they cannot
-    // be range-compared via numeric tuples without implementing full pre-release
-    // ordering (semver §11).  Exclude them silently for now; a consolidation
-    // issue (#F8) will address pre-release ordering across all comparators.
-    if (!SEMVER_RE.test(rel.version)) {
+    // Extract mode intentionally operates on stable releases only.
+    if (!isStableTripletSemver(rel.version)) {
       process.stderr.write(`[extract] skipping pre-release/non-semver entry: ${rel.version}\n`);
       return false;
     }
     // from is exclusive: cmp > 0 means rel.version > from
-    const afterFrom = semverCmp(rel.version, from) > 0;
+    const afterFrom = compareSemverCore(rel.version, from) > 0;
     // to is inclusive: cmp <= 0 means rel.version <= to
-    const upToTo = semverCmp(rel.version, to) <= 0;
+    const upToTo = compareSemverCore(rel.version, to) <= 0;
     return afterFrom && upToTo;
   });
 

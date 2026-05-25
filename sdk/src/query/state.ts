@@ -30,7 +30,7 @@ import {
   normalizeStateStatus,
   shouldPreserveExistingProgress,
   stateExtractField,
-} from './state-document.js';
+} from '../state/index.js';
 import { getMilestoneInfo, extractCurrentMilestone } from './roadmap.js';
 import { scanPhasePlans } from './plan-scan.js';
 import type { QueryHandler } from './utils.js';

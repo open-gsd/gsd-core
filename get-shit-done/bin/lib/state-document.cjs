@@ -3,7 +3,7 @@
 /**
  * STATE.md Document Module — CJS adapter.
  *
- * The implementation is generated from sdk/src/query/state-document.ts and
+ * The implementation is generated from sdk/src/state/index.ts and
  * lives in state-document.generated.cjs. This file is a thin re-export so
  * that existing call sites (state.cjs, workstream-inventory.cjs, init.cjs,
  * and tests) can continue to require('./state-document') unchanged.

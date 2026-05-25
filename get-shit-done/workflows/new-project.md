@@ -567,19 +567,66 @@ Which settings do you want to change? (enter numbers, comma-separated)
   8. Verifier — Currently: [Yes|No]
 ```
 
-**Otherwise** (Claude runtime with AskUserQuestion): use multiSelect:
+**Otherwise** (Claude runtime with AskUserQuestion): use a two-block split
+to stay within the 4-option runtime cap.
 
 ```text
 AskUserQuestion([
   {
-    question: "Which settings do you want to change?",
-    header: "Change Settings",
+    question: "Do you want to change any core workflow settings (Mode, Granularity, Execution, Git Tracking)?",
+    header: "Core Settings",
+    multiSelect: false,
+    options: [
+      { label: "Yes", description: "Choose from core workflow settings" },
+      { label: "No", description: "Skip core workflow settings" }
+    ]
+  }
+])
+```
+
+If "Yes", ask:
+
+```text
+AskUserQuestion([
+  {
+    question: "Which core workflow settings do you want to change?",
+    header: "Core Select",
     multiSelect: true,
     options: [
       { label: "Mode", description: "Currently: [value]" },
       { label: "Granularity", description: "Currently: [value]" },
       { label: "Execution", description: "Currently: [Parallel|Sequential]" },
-      { label: "Git Tracking", description: "Currently: [Yes|No]" },
+      { label: "Git Tracking", description: "Currently: [Yes|No]" }
+    ]
+  }
+])
+```
+
+Then ask:
+
+```text
+AskUserQuestion([
+  {
+    question: "Do you want to change any model/agent settings (AI Models, Research, Plan Check, Verifier)?",
+    header: "Agent Settings",
+    multiSelect: false,
+    options: [
+      { label: "Yes", description: "Choose from model/agent settings" },
+      { label: "No", description: "Skip model/agent settings" }
+    ]
+  }
+])
+```
+
+If "Yes", ask:
+
+```text
+AskUserQuestion([
+  {
+    question: "Which model/agent settings do you want to change?",
+    header: "Agent Select",
+    multiSelect: true,
+    options: [
       { label: "AI Models", description: "Currently: [value]" },
       { label: "Research", description: "Currently: [Yes|No]" },
       { label: "Plan Check", description: "Currently: [Yes|No]" },
@@ -589,7 +636,10 @@ AskUserQuestion([
 ])
 ```
 
-For each selected setting, ask only that question using the option set from Round 1 / Round 2 below. Merge user answers over the saved defaults — unchanged settings retain their saved values. Then skip to **Commit config.json**.
+For each selected setting across both blocks, ask only that question using the
+option set from Round 1 / Round 2 below. Merge user answers over the saved
+defaults — unchanged settings retain their saved values. Then skip to
+**Commit config.json**.
 
 **If "Configure fresh" or `~/.gsd/defaults.json` doesn't exist:** proceed with the questions below.
 

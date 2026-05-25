@@ -12,7 +12,7 @@ import {
   CONFIG_DEFAULTS as CANONICAL_CONFIG_DEFAULTS,
   mergeDefaults as canonicalMergeDefaults,
   normalizeLegacyKeys,
-} from './configuration/index.js';
+} from './config/index.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 

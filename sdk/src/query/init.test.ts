@@ -25,7 +25,7 @@ import {
   initListWorkspaces,
   initRemoveWorkspace,
   initIngestDocs,
-} from './init.js';
+} from '../handlers/init/composer.js';
 
 let tmpDir: string;
 

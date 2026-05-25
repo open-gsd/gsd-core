@@ -3,7 +3,7 @@
 /**
  * GENERATED FILE — DO NOT EDIT.
  *
- * Source: sdk/src/query/state-document.ts
+ * Source: sdk/src/state/index.ts
  * Regenerate: cd sdk && npm run gen:state-document
  *
  * STATE.md Document Module — pure transforms for STATE.md text.

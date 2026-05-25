@@ -4,7 +4,7 @@
  * Parity test — verifies that state-document.generated.cjs produces identical
  * results to the compiled SDK ESM output for all exported functions.
  *
- * SDK side: require('../sdk/dist/query/state-document.js') via createRequire
+ * SDK side: require('../sdk/dist/state/index.js') via createRequire
  * CJS side: require('../get-shit-done/bin/lib/state-document.generated.cjs')
  */
 
@@ -20,7 +20,7 @@ const requireFromRoot = createRequire(__filename);
 const cjs = requireFromRoot('../get-shit-done/bin/lib/state-document.generated.cjs');
 
 describe('state-document-generator parity: stateReplaceFieldWithFallback', async () => {
-  const sdk = await import('../sdk/dist/query/state-document.js');
+  const sdk = await import('../sdk/dist/state/index.js');
 
   const fixtures = [
     {
@@ -61,7 +61,7 @@ describe('state-document-generator parity: stateReplaceFieldWithFallback', async
 });
 
 describe('state-document-generator parity: normalizeStateStatus', async () => {
-  const sdk = await import('../sdk/dist/query/state-document.js');
+  const sdk = await import('../sdk/dist/state/index.js');
 
   const fixtures = [
     { label: 'paused via "paused"', status: 'paused', expected: 'paused' },
@@ -91,7 +91,7 @@ describe('state-document-generator parity: normalizeStateStatus', async () => {
 });
 
 describe('state-document-generator parity: computeProgressPercent', async () => {
-  const sdk = await import('../sdk/dist/query/state-document.js');
+  const sdk = await import('../sdk/dist/state/index.js');
 
   const fixtures = [
     { label: 'only plans data', cp: 3, tp: 10, cf: null, tf: null, expected: 30 },
@@ -113,7 +113,7 @@ describe('state-document-generator parity: computeProgressPercent', async () => 
 });
 
 describe('state-document-generator parity: shouldPreserveExistingProgress', async () => {
-  const sdk = await import('../sdk/dist/query/state-document.js');
+  const sdk = await import('../sdk/dist/state/index.js');
 
   const fixtures = [
     {
@@ -154,7 +154,7 @@ describe('state-document-generator parity: shouldPreserveExistingProgress', asyn
 });
 
 describe('state-document-generator parity: normalizeProgressNumbers', async () => {
-  const sdk = await import('../sdk/dist/query/state-document.js');
+  const sdk = await import('../sdk/dist/state/index.js');
 
   const fixtures = [
     {
@@ -188,7 +188,7 @@ describe('state-document-generator parity: normalizeProgressNumbers', async () =
 // SDK ESM side — dynamically import so we can test both; wrap in a top-level
 // async test suite.
 describe('state-document-generator parity: stateExtractField', async () => {
-  const sdk = await import('../sdk/dist/query/state-document.js');
+  const sdk = await import('../sdk/dist/state/index.js');
 
   const fixtures = [
     {
@@ -223,7 +223,7 @@ describe('state-document-generator parity: stateExtractField', async () => {
 });
 
 describe('state-document-generator parity: stateReplaceField', async () => {
-  const sdk = await import('../sdk/dist/query/state-document.js');
+  const sdk = await import('../sdk/dist/state/index.js');
 
   const fixtures = [
     {

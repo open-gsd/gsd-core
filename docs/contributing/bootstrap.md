@@ -217,5 +217,10 @@ gsd-test-summary
 ```
 
 `gsd-test-summary` runs the full suite in a Docker container and emits a concise
-`Mac: N failed / Docker: N failed` summary. Both lines must show `0 failed` before
-a PR is opened. See [CLAUDE.md](../../CLAUDE.md) for the required PR-flow ordering.
+`Mac: N failed / Docker: N failed` summary.
+
+- **Default rule (code changes):** both lines must show `0 failed` before a PR is opened.
+- **Exception (ADR/doc-only PRs):** if the diff is documentation-only (for example `docs/adr/*.md`, `docs/**/*.md`, `README*.md`) and contains no executable-code or test changes, `gsd-test-summary` is optional.
+
+When using the doc-only exception, note it explicitly in the PR body (for example:
+"Doc-only PR; gsd-test-summary not required by docs-only exception in `docs/contributing/bootstrap.md`").

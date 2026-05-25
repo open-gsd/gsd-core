@@ -3,7 +3,7 @@
 /**
  * GENERATED FILE — DO NOT EDIT.
  *
- * Source: sdk/src/workstream-inventory/builder.ts
+ * Source: sdk/src/workstream/builder.ts
  * Regenerate: cd sdk && npm run gen:workstream-inventory-builder
  *
  * Workstream Inventory Builder — pure projection from pre-collected

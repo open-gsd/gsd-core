@@ -1,5 +1,5 @@
 {
-  "generated": "2026-05-23",
+  "generated": "2026-05-24",
   "families": {
     "agents": [
       "gsd-advisor-researcher",
@@ -321,6 +321,7 @@
       "secrets.cjs",
       "secrets.generated.cjs",
       "security.cjs",
+      "semver-compare.cjs",
       "shell-command-projection.cjs",
       "state-command-router.cjs",
       "state-document.cjs",

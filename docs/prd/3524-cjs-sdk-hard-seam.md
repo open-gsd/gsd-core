@@ -62,10 +62,10 @@ Phases are sized to ship in one to two PRs each. Each phase has its own GitHub i
 
 ### Phase 1 — STATE.md Document Module (smallest possible proof)
 
-**Why first.** `bin/lib/state-document.cjs` and `sdk/src/query/state-document.ts` are already a character-identical hand-synced pair of pure transforms (the file headers explicitly say "Pure transforms for STATE.md text. This module does not read the filesystem and does not own persistence or locking."). Deletion test passes on contact: one side can be deleted as soon as the other becomes the generated artifact. This is the safest possible first step and the canonical proof that the generator pattern works for executable logic, not just alias tables.
+**Why first.** `bin/lib/state-document.cjs` and `sdk/src/state/index.ts` are already a character-identical hand-synced pair of pure transforms (the file headers explicitly say "Pure transforms for STATE.md text. This module does not read the filesystem and does not own persistence or locking."). Deletion test passes on contact: one side can be deleted as soon as the other becomes the generated artifact. This is the safest possible first step and the canonical proof that the generator pattern works for executable logic, not just alias tables.
 
 **Scope:**
-- Promote `sdk/src/query/state-document.ts` to a source under `sdk/src/state-document/index.ts` (or keep in place — decided in implementation).
+- Promote `sdk/src/query/state-document.ts` to `sdk/src/state/index.ts` (implemented).
 - Write `sdk/scripts/gen-state-document.ts` that emits `get-shit-done/bin/lib/state-document.generated.cjs` (and optionally re-exports the TS form at its existing location).
 - Write `sdk/scripts/check-state-document-fresh.mjs` modeled on `check-command-aliases-fresh.mjs`.
 - Replace `bin/lib/state-document.cjs` content with a thin re-export from `state-document.generated.cjs`. Keep the existing filename so callers (e.g. `workstream-inventory.cjs:16`) don't need to update imports.
@@ -89,7 +89,7 @@ Phases are sized to ship in one to two PRs each. Each phase has its own GitHub i
 **Scope:**
 - Add a **Configuration Module** entry to `CONTEXT.md` first. Definition: "Module owning config load, legacy-key normalization, defaults merge, and explicit on-disk migration for `.planning/config.json`." Interface and invariants per ADR §6.
 - Extract `CONFIG_DEFAULTS`, `VALID_CONFIG_KEYS`, `DYNAMIC_KEY_PATTERNS`, `RUNTIME_STATE_KEYS` to two data manifests: `sdk/shared/config-schema.manifest.json` and `sdk/shared/config-defaults.manifest.json`. Precedent: `sdk/shared/model-catalog.json`.
-- Write the Configuration Module source at `sdk/src/configuration/index.ts`. Implementation imports the two manifests and exports `loadConfig`, `normalizeLegacyKeys`, `mergeDefaults`, `migrateOnDisk`.
+- Write the Configuration Module source at `sdk/src/config/index.ts`. Implementation imports the two manifests and exports `loadConfig`, `normalizeLegacyKeys`, `mergeDefaults`, `migrateOnDisk`.
 - Write `sdk/scripts/gen-configuration.ts` to emit `get-shit-done/bin/lib/configuration.generated.cjs` and (if needed) `sdk/src/query/config-schema.generated.ts`.
 - Write `sdk/scripts/check-configuration-fresh.mjs`.
 - Replace the inline implementations in `bin/lib/core.cjs:loadConfig` (lines 220–243, 434–449, 485) and `bin/lib/config.cjs` (the validation surface) with thin Adapters over the generated Module. Delete the inline `CONFIG_DEFAULTS`, the false-positive warning at `core.cjs:444-449`, and the duplicated `_deepMergeConfig`.
@@ -112,7 +112,7 @@ Phases are sized to ship in one to two PRs each. Each phase has its own GitHub i
 **Why third.** Phase 1 proves the pattern for pure transforms. Phase 2 proves it for data-manifest-backed logic. Phase 3 generalizes across the remaining hand-synced pairs surfaced by the audit. The Workstream Inventory Module is the headline because it requires the **Builder/Reader split** — the projection logic is pure and shareable, but the directory traversal is legitimately sync (CJS) vs async (SDK). This is the pattern for every paired Module with mixed pure-and-I/O concerns.
 
 **Scope:**
-- Write the Workstream Inventory Builder source at `sdk/src/workstream-inventory/builder.ts`. Pure function: takes a list of directory entries plus per-workstream STATE.md text plus plan-scan results and returns the typed `WorkstreamPhaseInventory`/`WorkstreamInventory` projection. No fs reads.
+- Write the Workstream Inventory Builder source at `sdk/src/workstream/builder.ts`. Pure function: takes a list of directory entries plus per-workstream STATE.md text plus plan-scan results and returns the typed `WorkstreamPhaseInventory`/`WorkstreamInventory` projection. No fs reads.
 - Write `sdk/scripts/gen-workstream-inventory-builder.ts` to emit `get-shit-done/bin/lib/workstream-inventory-builder.generated.cjs` and `sdk/src/query/workstream-inventory-builder.generated.ts`.
 - Write `sdk/scripts/check-workstream-inventory-builder-fresh.mjs`.
 - Refactor `bin/lib/workstream-inventory.cjs` to a sync Reader Adapter: does `fs.readdirSync` + `readFileSync` of STATE.md, calls the Builder. The projection logic is removed.
@@ -228,7 +228,7 @@ Phase 5 specifically preserves the in-process model: `QueryRuntimeBridge.execute
 
 ### Open questions (resolved before the phase that depends on them)
 
-1. **Phase 1 source location** — `sdk/src/state-document/index.ts` (move) vs `sdk/src/query/state-document.ts` (in place). Decided when Phase 1 PR is drafted.
+1. **Phase 1 source location** — resolved to `sdk/src/state/index.ts` (migrated from `sdk/src/query/state-document.ts`).
 2. **Phase 2 manifest format** — JSON vs JSONC vs TypeScript-as-source. Decided in Phase 2. JSON wins unless we need comments for invariants documentation.
 3. **Phase 3 sibling-Module audit** — exact list of pairs that get Builder-split vs deferred. Decided as a deliverable of Phase 3's spike.
 4. **Phase 5 synchronous-bridging mechanism** — `executeForCjs` implementation strategy: `deasync` native module (battle-tested but C++ binding), `Atomics.wait` on a worker channel (zero-binding but spins a Worker), or refactor every async SDK handler to expose a sync entry point (cleanest but largest scope). Decided in the Phase 5 spike issue before any family migration begins.

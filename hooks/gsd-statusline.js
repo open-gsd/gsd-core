@@ -6,6 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { isSemverNewer } = require('../get-shit-done/bin/lib/semver-compare.cjs');
 
 // --- Config + last-command readers ------------------------------------------
 
@@ -403,13 +404,12 @@ function runStatusline() {
         if (cache.stale_hooks && cache.stale_hooks.length > 0) {
           // If installed version is ahead of npm latest, this is a dev install.
           // Running /gsd:update would downgrade — show a contextual warning instead.
-          const isDevInstall = (() => {
-            if (!cache.installed || !cache.latest || cache.latest === 'unknown') return false;
-            const parseV = v => v.replace(/^v/, '').split('.').map(Number);
-            const [ai, bi, ci] = parseV(cache.installed);
-            const [an, bn, cn] = parseV(cache.latest);
-            return ai > an || (ai === an && bi > bn) || (ai === an && bi === bn && ci > cn);
-          })();
+          const isDevInstall = (
+            cache.installed &&
+            cache.latest &&
+            cache.latest !== 'unknown' &&
+            isInstalledAheadOfLatest(cache.installed, cache.latest)
+          );
           if (isDevInstall) {
             gsdUpdate += '\x1b[33m⚠ dev install — re-run installer to sync hooks\x1b[0m │ ';
           } else {
@@ -497,11 +497,16 @@ function composeStatusline({
   return `${gsdUpdate}${modelSeg} │ ${dirSeg}${ctx}${lastCmdSuffix}`;
 }
 
+function isInstalledAheadOfLatest(installed, latest) {
+  return isSemverNewer(installed, latest);
+}
+
 // Export helpers for unit tests. Harmless when run as a script.
 module.exports = {
   readGsdState, parseStateMd, formatGsdState,
   readGsdConfig, getConfigValue, readLastSlashCommand,
   composeStatusline,
+  isInstalledAheadOfLatest,
 };
 
 /**

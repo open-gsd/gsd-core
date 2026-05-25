@@ -63,12 +63,12 @@ const helpersTs = fs.readFileSync(
 );
 
 const initTs = fs.readFileSync(
-  path.join(__dirname, '../sdk/src/query/init.ts'),
+  path.join(__dirname, '../sdk/src/handlers/init/composer.ts'),
   'utf-8',
 );
 
 const initComplexTs = fs.readFileSync(
-  path.join(__dirname, '../sdk/src/query/init-complex.ts'),
+  path.join(__dirname, '../sdk/src/handlers/init/complex.ts'),
   'utf-8',
 );
 
@@ -140,8 +140,8 @@ describe('#3751: resolveAgentsDir() repo-local fallback — structural contracts
     );
   });
 
-  // ─── Contract 5: init.ts passes projectDir to resolveAgentsDir ──────────
-  test('init.ts checkAgentsInstalled passes projectDir to resolveAgentsDir', () => {
+  // ─── Contract 5: init composer passes projectDir to resolveAgentsDir ─────
+  test('init composer checkAgentsInstalled passes projectDir to resolveAgentsDir', () => {
     // After fix: resolveAgentsDir must be called with projectDir (not just runtime)
     // The call site at init.ts must thread projectDir through.
     // We verify either checkAgentsInstalled gains projectDir param or
@@ -151,12 +151,12 @@ describe('#3751: resolveAgentsDir() repo-local fallback — structural contracts
     const checkFnBody = initTs.slice(checkFnStart, checkFnEnd === -1 ? undefined : checkFnEnd);
     assert.ok(
       checkFnBody.includes('projectDir') || checkFnBody.includes('resolveAgentsDir(runtime, '),
-      'checkAgentsInstalled in init.ts must pass projectDir to resolveAgentsDir (#3751)',
+      'checkAgentsInstalled in init composer must pass projectDir to resolveAgentsDir (#3751)',
     );
   });
 
-  // ─── Contract 6: init-complex.ts passes projectDir to resolveAgentsDir ──
-  test('init-complex.ts initNewProject passes projectDir to resolveAgentsDir', () => {
+  // ─── Contract 6: init complex passes projectDir to resolveAgentsDir ──────
+  test('init complex initNewProject passes projectDir to resolveAgentsDir', () => {
     const callIdx = initComplexTs.indexOf('resolveAgentsDir(runtime)');
     assert.strictEqual(
       callIdx,

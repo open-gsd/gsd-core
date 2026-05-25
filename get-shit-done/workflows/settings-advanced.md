@@ -382,25 +382,55 @@ For Group B runtimes (those without a built-in default), show `(no built-in defa
 ```text
 AskUserQuestion([
   {
-    question: "Which runtime do you want to configure tier overrides for? (current: <runtime or 'claude'>)",
-    header: "Runtime Selection",
+    question: "Which runtime group do you want to configure tier overrides for? (current: <runtime or 'claude'>)",
+    header: "Runtime Group",
     multiSelect: false,
     options: [
       { label: "Keep current (<runtime>)", description: "Configure overrides for the current runtime." },
-      { label: "claude", description: "Claude Code / Anthropic CLI." },
-      { label: "codex", description: "OpenAI Codex CLI." },
-      { label: "gemini", description: "Gemini CLI." },
-      { label: "qwen", description: "Qwen CLI." },
-      { label: "opencode", description: "OpenCode (uses anthropic/ prefix)." },
-      { label: "copilot", description: "GitHub Copilot." },
-      { label: "hermes", description: "Hermes (uses anthropic/ prefix)." },
-      { label: "Other (Group B or custom)", description: "kilo, cline, cursor, windsurf, augment, trae, codebuddy, antigravity, or a custom runtime string. Overrides are honored even though no built-in map exists." }
+      { label: "Common runtimes", description: "claude, codex, gemini, qwen" },
+      { label: "Additional runtimes", description: "opencode, copilot, hermes" },
+      { label: "Other (Group B or custom)", description: "kilo, cline, cursor, windsurf, augment, trae, codebuddy, antigravity, or a custom runtime string." }
     ]
   }
 ])
 ```
 
-If "Other" is selected, prompt the user to enter the runtime name as a free-text string.
+If "Common runtimes" is selected, ask:
+
+```text
+AskUserQuestion([
+  {
+    question: "Choose the runtime:",
+    header: "Common",
+    multiSelect: false,
+    options: [
+      { label: "claude", description: "Claude Code / Anthropic CLI." },
+      { label: "codex", description: "OpenAI Codex CLI." },
+      { label: "gemini", description: "Gemini CLI." },
+      { label: "qwen", description: "Qwen CLI." }
+    ]
+  }
+])
+```
+
+If "Additional runtimes" is selected, ask:
+
+```text
+AskUserQuestion([
+  {
+    question: "Choose the runtime:",
+    header: "Additional",
+    multiSelect: false,
+    options: [
+      { label: "opencode", description: "OpenCode (uses anthropic/ prefix)." },
+      { label: "copilot", description: "GitHub Copilot." },
+      { label: "hermes", description: "Hermes (uses anthropic/ prefix)." }
+    ]
+  }
+])
+```
+
+If "Other (Group B or custom)" is selected, prompt the user to enter the runtime name as a free-text string.
 If the selected runtime differs from the stored `runtime` key, update `runtime` via
 `gsd-sdk query config-set runtime <value>` before proceeding to Step C.
 

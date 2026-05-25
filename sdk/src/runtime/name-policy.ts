@@ -1,12 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { SUPPORTED_RUNTIMES, type Runtime } from './model-catalog.js';
+import { SUPPORTED_RUNTIMES, type Runtime } from '../model-catalog.js';
 
 interface RuntimeAliasManifest {
   [canonicalRuntime: string]: string[];
 }
 
-const MANIFEST_PATH = new URL('../shared/runtime-aliases.manifest.json', import.meta.url);
+const MANIFEST_PATH = new URL('../../shared/runtime-aliases.manifest.json', import.meta.url);
 const manifest: RuntimeAliasManifest = JSON.parse(readFileSync(fileURLToPath(MANIFEST_PATH), 'utf-8'));
 
 function normalizeRuntimeToken(value: string): string {
@@ -29,4 +29,3 @@ export function canonicalizeRuntimeName(value: unknown): Runtime | null {
   if (typeof value !== 'string') return null;
   return aliasToCanonical.get(normalizeRuntimeToken(value)) ?? null;
 }
-

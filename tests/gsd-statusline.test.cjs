@@ -15,7 +15,12 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { parseStateMd, formatGsdState, readGsdState } = require('../hooks/gsd-statusline.js');
+const {
+  parseStateMd,
+  formatGsdState,
+  readGsdState,
+  isInstalledAheadOfLatest,
+} = require('../hooks/gsd-statusline.js');
 
 // ─── parseStateMd ───────────────────────────────────────────────────────────
 
@@ -214,6 +219,16 @@ describe('formatGsdState', () => {
 
   test('returns only available parts when everything else is missing', () => {
     assert.equal(formatGsdState({ status: 'planning' }), 'planning');
+  });
+});
+
+describe('isInstalledAheadOfLatest', () => {
+  test('treats prerelease patch increment as ahead of prior stable', () => {
+    assert.equal(isInstalledAheadOfLatest('1.2.1-beta.1', '1.2.0'), true);
+  });
+
+  test('treats equal base version prerelease as not ahead', () => {
+    assert.equal(isInstalledAheadOfLatest('1.2.0-rc.1', '1.2.0'), false);
   });
 });
 

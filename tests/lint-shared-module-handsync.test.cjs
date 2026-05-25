@@ -367,3 +367,44 @@ describe('lint-shared-module-handsync: allowlist entry honored', () => {
     }
   });
 });
+
+describe('lint-shared-module-handsync: cross-name pair support', () => {
+  test('surfaces declared cross-name migrateMeBacklog pair in warnings', () => {
+    const cjsName = 'verify';
+    const tsName = 'validate';
+    const tmpDir = createFixture({
+      cjsName,
+      tsName,
+      tsInQuery: true,
+      allowlistExtra: {
+        migrateMeBacklog: [
+          {
+            cjs: `get-shit-done/bin/lib/${cjsName}.cjs`,
+            ts: `sdk/src/query/${tsName}.ts`,
+            classification: 'drift-anti-pattern',
+            justification: 'Test fixture: cross-name pair should be observable by lint.',
+            trackedIn: 'issue-11-test',
+          },
+        ],
+      },
+    });
+
+    try {
+      const { status, payload } = runLintJson(['--root', tmpDir]);
+      assert.strictEqual(status, 0);
+      assert.ok(payload);
+      assert.strictEqual(payload.ok, true);
+      assert.ok(Array.isArray(payload.warnings));
+      assert.ok(
+        payload.warnings.some((w) =>
+          /verify\.cjs$/.test(w.relCjs) &&
+          Array.isArray(w.tsPaths) &&
+          w.tsPaths.some((p) => /sdk\/src\/query\/validate\.ts$/.test(p))
+        ),
+        `expected cross-name verify.cjs <-> validate.ts warning, got: ${JSON.stringify(payload.warnings)}`
+      );
+    } finally {
+      cleanupFixture(tmpDir);
+    }
+  });
+});
