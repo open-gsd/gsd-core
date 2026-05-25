@@ -2,7 +2,7 @@
 /**
  * Generator for the Workstream Inventory Builder CJS artifact.
  *
- * Reads the compiled ESM output from sdk/dist/workstream-inventory/builder.js,
+ * Reads the compiled ESM output from sdk/dist/workstream/builder.js,
  * extracts function source via Function.prototype.toString() for exports
  * and via source-text extraction for internal helpers, then emits
  * get-shit-done/bin/lib/workstream-inventory-builder.generated.cjs.
@@ -15,14 +15,14 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { requireFreshDist } from './_gen-helpers.mjs';
 
-requireFreshDist('sdk/dist/workstream-inventory/builder.js', 'sdk/src/workstream-inventory/builder.ts');
+requireFreshDist('sdk/dist/workstream/builder.js', 'sdk/src/workstream/builder.ts');
 
 export const BANNER = `'use strict';
 
 /**
  * GENERATED FILE — DO NOT EDIT.
  *
- * Source: sdk/src/workstream-inventory/builder.ts
+ * Source: sdk/src/workstream/builder.ts
  * Regenerate: cd sdk && npm run gen:workstream-inventory-builder
  *
  * Workstream Inventory Builder — pure projection from pre-collected
@@ -66,7 +66,7 @@ export function extractFunctionFromSource(source, name) {
 
 export async function buildWorkstreamInventoryBuilderCjs() {
   // Load the compiled ESM module to get exports via Function.prototype.toString()
-  const distUrl = new URL('../dist/workstream-inventory/builder.js', import.meta.url);
+  const distUrl = new URL('../dist/workstream/builder.js', import.meta.url);
   const {
     buildWorkstreamInventory,
     isCompletedInventory,

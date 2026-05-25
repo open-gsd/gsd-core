@@ -112,7 +112,7 @@ Phases are sized to ship in one to two PRs each. Each phase has its own GitHub i
 **Why third.** Phase 1 proves the pattern for pure transforms. Phase 2 proves it for data-manifest-backed logic. Phase 3 generalizes across the remaining hand-synced pairs surfaced by the audit. The Workstream Inventory Module is the headline because it requires the **Builder/Reader split** — the projection logic is pure and shareable, but the directory traversal is legitimately sync (CJS) vs async (SDK). This is the pattern for every paired Module with mixed pure-and-I/O concerns.
 
 **Scope:**
-- Write the Workstream Inventory Builder source at `sdk/src/workstream-inventory/builder.ts`. Pure function: takes a list of directory entries plus per-workstream STATE.md text plus plan-scan results and returns the typed `WorkstreamPhaseInventory`/`WorkstreamInventory` projection. No fs reads.
+- Write the Workstream Inventory Builder source at `sdk/src/workstream/builder.ts`. Pure function: takes a list of directory entries plus per-workstream STATE.md text plus plan-scan results and returns the typed `WorkstreamPhaseInventory`/`WorkstreamInventory` projection. No fs reads.
 - Write `sdk/scripts/gen-workstream-inventory-builder.ts` to emit `get-shit-done/bin/lib/workstream-inventory-builder.generated.cjs` and `sdk/src/query/workstream-inventory-builder.generated.ts`.
 - Write `sdk/scripts/check-workstream-inventory-builder-fresh.mjs`.
 - Refactor `bin/lib/workstream-inventory.cjs` to a sync Reader Adapter: does `fs.readdirSync` + `readFileSync` of STATE.md, calls the Builder. The projection logic is removed.

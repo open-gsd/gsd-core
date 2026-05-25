@@ -58,8 +58,8 @@ const GENERATORS = [
   },
   {
     script: 'gen-workstream-inventory-builder.mjs',
-    dist: 'sdk/dist/workstream-inventory/builder.js',
-    ts: 'sdk/src/workstream-inventory/builder.ts',
+    dist: 'sdk/dist/workstream/builder.js',
+    ts: 'sdk/src/workstream/builder.ts',
   },
   {
     script: 'gen-workstream-name-policy.mjs',
