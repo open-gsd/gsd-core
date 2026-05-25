@@ -94,11 +94,24 @@ describe('plan-phase decision-coverage gate (#2492)', () => {
     assert.ok(gateIdx !== -1);
     const snippet = md.slice(gateIdx, gateIdx + 800);
     // Accept either an inline `|| exit 1` or a `|| { ...; exit 1; }` group.
-    const hasJqGuard = /jq[^\n]*passed\s*==\s*true/.test(snippet);
+    const hasJqGuard =
+      /jq[^\n]*\.data\.passed\s*==\s*true/.test(snippet) ||
+      /jq[^\n]*\(\.passed\s*\/\/\s*\.data\.passed\)\s*==\s*true/.test(snippet);
     const hasExitOne = /\|\|\s*(?:exit\s+1|\{[\s\S]{0,200}?exit\s+1)/.test(snippet);
     assert.ok(
       hasJqGuard && hasExitOne,
       'plan-phase gate must guard with `jq -e .passed == true || exit 1` (or `|| { ...; exit 1; }`) to actually block',
+    );
+  });
+
+  test('plan-phase gate accepts top-level .passed field from CLI output (#275)', () => {
+    const gateIdx = md.indexOf('check.decision-coverage-plan');
+    assert.ok(gateIdx !== -1, 'check.decision-coverage-plan invocation must exist');
+    const snippet = md.slice(gateIdx, gateIdx + 800);
+    assert.ok(
+      /\.(?:passed)\s*==\s*true\s*\|\|\s*\.data\.passed\s*==\s*true/.test(snippet) ||
+      /\(\.passed\s*\/\/\s*\.data\.passed\)\s*==\s*true/.test(snippet),
+      'plan-phase gate must explicitly check top-level .passed with a compatibility fallback to .data.passed',
     );
   });
 });

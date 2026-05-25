@@ -236,6 +236,26 @@ describe('checkAgentsInstalled: Copilot .agent.md format (#1512)', () => {
       'missing_agents must be empty when all .agent.md files are present');
   });
 
+  test('agents_installed=true when agents exist as .toml (Codex format) (#278)', () => {
+    const agentsDir = path.join(tmpDir, 'codex-agents');
+    fs.mkdirSync(agentsDir, { recursive: true });
+    for (const name of EXPECTED_AGENTS) {
+      fs.writeFileSync(
+        path.join(agentsDir, `${name}.toml`),
+        `name = "${name}"\ndescription = "Test agent"\n`
+      );
+    }
+
+    const result = runGsdTools('validate agents --raw', tmpDir, { GSD_AGENTS_DIR: agentsDir });
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.agents_found, true,
+      'agents_found must be true when agents exist as .toml (Codex format)');
+    assert.deepStrictEqual(output.missing, [],
+      'missing must be empty when all agents exist as .toml');
+  });
+
   test('GSD_AGENTS_DIR env var overrides default agents directory', () => {
     // Create a custom agents dir in a subdirectory
     const customAgentsDir = path.join(tmpDir, 'custom-agents');

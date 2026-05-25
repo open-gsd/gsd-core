@@ -34,6 +34,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 
 const SIGNIFICANT_MIN_CHARS = 12;
+const GSD_HOOK_VERSION_LINE_RE = /^(?:\/\/|#)\s*gsd-hook-version:\s*\S+\s*$/i;
 
 function parseArgs(argv) {
   const opts = { patchesDir: null, configDir: null, pristineDir: null, json: false };
@@ -65,6 +66,16 @@ function isSignificantLine(line) {
   // Generic decorative comments like `// ----` similarly fail the test.
   if (/^[\s\-=#*/]+$/.test(trimmed)) return false;
   return true;
+}
+
+function normalizeUpstreamOwnedLine(line) {
+  const trimmed = line.trim();
+  if (!trimmed) return line;
+  if (GSD_HOOK_VERSION_LINE_RE.test(trimmed)) {
+    const prefix = trimmed.startsWith('#') ? '#' : '//';
+    return `${prefix} gsd-hook-version: __GSD_VERSION_TOKEN__`;
+  }
+  return line;
 }
 
 /**
@@ -124,8 +135,13 @@ function computeUserAddedLines(backupContent, pristineContent) {
   if (!pristineContent) {
     return backupLines.filter(isSignificantLine);
   }
-  const pristineSet = new Set(pristineContent.split(/\r?\n/));
-  return backupLines.filter((line) => isSignificantLine(line) && !pristineSet.has(line));
+  const pristineSet = new Set(
+    pristineContent.split(/\r?\n/).map(normalizeUpstreamOwnedLine),
+  );
+  return backupLines.filter((line) => {
+    if (!isSignificantLine(line)) return false;
+    return !pristineSet.has(normalizeUpstreamOwnedLine(line));
+  });
 }
 
 /**
