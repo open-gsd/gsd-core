@@ -619,18 +619,20 @@ increases monotonically across waves. `{status}` is `complete` (success),
        </execution_context>
 
        <files_to_read>
-       Read these files at execution start using the Read tool:
-       - {phase_dir}/{plan_file} (Plan)
-       - .planning/PROJECT.md (Project context — core value, requirements, evolution rules)
-       - .planning/STATE.md (State)
-       - .planning/config.json (Config, if exists)
+       Read these files at execution start using the Read tool.
+       First resolve repo root so every path is anchored:
+       \`PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)\`
+       - ${PROJECT_ROOT}/{phase_dir}/{plan_file} (Plan)
+       - ${PROJECT_ROOT}/.planning/PROJECT.md (Project context — core value, requirements, evolution rules)
+       - ${PROJECT_ROOT}/.planning/STATE.md (State)
+       - ${PROJECT_ROOT}/.planning/config.json (Config, if exists)
        ${CONTEXT_WINDOW >= 500000 ? `
-       - ${phase_dir}/*-CONTEXT.md (User decisions from discuss-phase — honors locked choices)
-       - ${phase_dir}/*-RESEARCH.md (Technical research — pitfalls and patterns to follow)
-       - ${prior_wave_summaries} (SUMMARY.md files from earlier waves in this phase — what was already built)
+       - ${PROJECT_ROOT}/${phase_dir}/*-CONTEXT.md (User decisions from discuss-phase — honors locked choices)
+       - ${PROJECT_ROOT}/${phase_dir}/*-RESEARCH.md (Technical research — pitfalls and patterns to follow)
+       - ${PROJECT_ROOT}/${prior_wave_summaries} (SUMMARY.md files from earlier waves in this phase — what was already built)
        ` : ''}
-       - ./CLAUDE.md (Project instructions, if exists — follow project-specific guidelines and coding conventions)
-       - .claude/skills/ or .agents/skills/ (Project skills, if either exists — list skills, read SKILL.md for each, follow relevant rules during implementation)
+       - ${PROJECT_ROOT}/CLAUDE.md (Project instructions, if exists — follow project-specific guidelines and coding conventions)
+       - ${PROJECT_ROOT}/.claude/skills/ or ${PROJECT_ROOT}/.agents/skills/ (Project skills, if either exists — list skills, read SKILL.md for each, follow relevant rules during implementation)
        </files_to_read>
 
        ${AGENT_SKILLS}

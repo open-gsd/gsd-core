@@ -84,6 +84,20 @@ describe('bug #3099: absolute-path safety guidance in gsd-executor.md', () => {
     );
   });
 
+  test('execute-phase prompt anchors subagent file paths to project_root before files_to_read (#280)', () => {
+    const filesIdx = executePhaseSrc.indexOf('<files_to_read>');
+    assert.ok(filesIdx !== -1, 'files_to_read block not found in execute-phase.md');
+    const dispatchSnippet = executePhaseSrc.slice(filesIdx, filesIdx + 1800);
+    assert.ok(
+      dispatchSnippet.includes('PROJECT_ROOT=$(git rev-parse --show-toplevel'),
+      'executor dispatch must compute PROJECT_ROOT in the prompt before file reads',
+    );
+    assert.ok(
+      dispatchSnippet.includes('${PROJECT_ROOT}/'),
+      'executor files_to_read paths must be anchored to ${PROJECT_ROOT}/',
+    );
+  });
+
   test('worktree-path-safety.md reference file exists', () => {
     assert.ok(
       fs.existsSync(path.join(ROOT, 'get-shit-done', 'references', 'worktree-path-safety.md')),
