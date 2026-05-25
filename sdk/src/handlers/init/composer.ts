@@ -6,11 +6,11 @@
  * follows the QueryHandler signature and returns { data: <flat JSON> }.
  *
  * Port of get-shit-done/bin/lib/init.cjs (13 of 16 handlers).
- * The 3 complex handlers (new-project, progress, manager) are in init-complex.ts.
+ * The 3 complex handlers (new-project, progress, manager) are in complex.ts.
  *
  * @example
  * ```typescript
- * import { initExecutePhase, withProjectRoot } from './init.js';
+ * import { initExecutePhase, withProjectRoot } from './composer.js';
  *
  * const result = await initExecutePhase(['9'], '/project');
  * // { data: { executor_model: 'opus', phase_found: true, ... } }
@@ -22,18 +22,18 @@ import { readFile, readdir } from 'node:fs/promises';
 import { join, relative, basename } from 'node:path';
 import { execSync } from 'node:child_process';
 import { homedir } from 'node:os';
-import { GSDError, ErrorClassification } from '../errors.js';
+import { GSDError, ErrorClassification } from '../../errors.js';
 
-import { loadConfig, type GSDConfig } from '../config.js';
-import { resolveModel, MODEL_PROFILES } from './config-query.js';
-import { maskIfSecret } from './secrets.js';
-import { findPhase } from './phase.js';
-import { getMilestonePhaseFilter } from './state.js';
-import { roadmapGetPhase, getMilestoneInfo, extractCurrentMilestone, extractPhasesFromSection } from './roadmap.js';
-import { determinePhaseStatus } from './progress.js';
-import { planningPaths, normalizePhaseName, toPosixPath, resolveAgentsDir, detectRuntime } from './helpers.js';
-import { generatePhaseSlug, assertSafeProjectCode } from './phase-lifecycle-policy.js';
-import type { QueryHandler } from './utils.js';
+import { loadConfig, type GSDConfig } from '../../config.js';
+import { resolveModel, MODEL_PROFILES } from '../../query/config-query.js';
+import { maskIfSecret } from '../../query/secrets.js';
+import { findPhase } from '../../query/phase.js';
+import { getMilestonePhaseFilter } from '../../query/state.js';
+import { roadmapGetPhase, getMilestoneInfo, extractCurrentMilestone, extractPhasesFromSection } from '../../query/roadmap.js';
+import { determinePhaseStatus } from '../../query/progress.js';
+import { planningPaths, normalizePhaseName, toPosixPath, resolveAgentsDir, detectRuntime } from '../../query/helpers.js';
+import { generatePhaseSlug, assertSafeProjectCode } from '../../query/phase-lifecycle-policy.js';
+import type { QueryHandler } from '../../query/utils.js';
 
 // ─── Internal helpers ──────────────────────────────────────────────────────
 

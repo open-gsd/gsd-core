@@ -34,8 +34,8 @@ import {
   initIngestDocs, initResume, initVerifyWork, initPhaseOp, initTodos,
   initMilestoneOp, initMapCodebase, initNewWorkspace,
   initListWorkspaces, initRemoveWorkspace,
-} from './init.js';
-import { initNewProject, initProgress, initManager } from './init-complex.js';
+} from '../handlers/init/composer.js';
+import { initNewProject, initProgress, initManager } from '../handlers/init/complex.js';
 
 export const FAMILY_HANDLERS: Record<string, Readonly<Record<string, QueryHandler>>> = {
   state: {

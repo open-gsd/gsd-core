@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { SUPPORTED_RUNTIMES, type Runtime } from './model-catalog.js';
+import { SUPPORTED_RUNTIMES, type Runtime } from '../model-catalog.js';
 
 interface RuntimeAliasManifest {
   [canonicalRuntime: string]: string[];
@@ -29,4 +29,3 @@ export function canonicalizeRuntimeName(value: unknown): Runtime | null {
   if (typeof value !== 'string') return null;
   return aliasToCanonical.get(normalizeRuntimeToken(value)) ?? null;
 }
-

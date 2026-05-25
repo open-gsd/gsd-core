@@ -11,7 +11,7 @@
  *
  * @example
  * ```typescript
- * import { initProgress, initManager } from './init-complex.js';
+ * import { initProgress, initManager } from './complex.js';
  *
  * const result = await initProgress([], '/project');
  * // { data: { phases: [...], milestone_version: 'v3.0', ... } }
@@ -24,8 +24,8 @@ import { readFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { homedir } from 'node:os';
 
-import { loadConfig } from '../config.js';
-import { resolveModel } from './config-query.js';
+import { loadConfig } from '../../config.js';
+import { resolveModel } from '../../query/config-query.js';
 import {
   detectRuntime,
   planningPaths,
@@ -33,16 +33,16 @@ import {
   phaseTokenMatches,
   resolveAgentsDir,
   toPosixPath,
-} from './helpers.js';
+} from '../../query/helpers.js';
 import {
   getMilestoneInfo,
   extractCurrentMilestone,
   extractNextMilestoneSection,
   extractPhasesFromSection,
-} from './roadmap.js';
-import { agentSkills } from './skills.js';
-import { withProjectRoot } from './init.js';
-import type { QueryHandler } from './utils.js';
+} from '../../query/roadmap.js';
+import { agentSkills } from '../../query/skills.js';
+import { withProjectRoot } from './composer.js';
+import type { QueryHandler } from '../../query/utils.js';
 
 // ─── Internal helpers ──────────────────────────────────────────────────────
 
