@@ -1522,8 +1522,8 @@ if [ "$GATE_CFG" != "false" ]; then
   # `passed: true` covers both real-pass and skipped cases (gate disabled / no CONTEXT.md /
   # no trackable decisions). Verify-phase counterpart deliberately omits this exit-1 — that
   # gate is non-blocking by design (review finding F15).
-  echo "$GATE_RESULT" | jq -e '.data.passed == true' >/dev/null || {
-    echo "$GATE_RESULT" | jq -r '.data.message'
+  echo "$GATE_RESULT" | jq -e '(.passed // .data.passed) == true' >/dev/null || {
+    echo "$GATE_RESULT" | jq -r '(.message // .data.message // "Decision coverage gate failed.")'
     exit 1
   }
 fi
