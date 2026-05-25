@@ -2,7 +2,7 @@
  * Pinning tests for the Configuration Module (ADR-3524 §6).
  *
  * These tests pin the public interface contract. They are RED until
- * sdk/src/configuration/index.ts is created (Cycle 2).
+ * sdk/src/config/index.ts is created (Cycle 2).
  *
  * Test precedent: sdk/src/config.test.ts (vitest + fs fixtures).
  */

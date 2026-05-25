@@ -2,7 +2,7 @@
 /**
  * Generator for get-shit-done/bin/lib/configuration.generated.cjs.
  *
- * Reads the compiled Configuration Module from sdk/dist/configuration/index.js
+ * Reads the compiled Configuration Module from sdk/dist/config/index.js
  * and emits a CJS file that:
  *   1. Requires the two JSON manifests from sdk/shared/
  *   2. Exports loadConfig, normalizeLegacyKeys, mergeDefaults, migrateOnDisk,
@@ -17,14 +17,14 @@ import { fileURLToPath } from 'node:url';
 import { resolve, dirname } from 'node:path';
 import { requireFreshDist } from './_gen-helpers.mjs';
 
-requireFreshDist('sdk/dist/configuration/index.js', 'sdk/src/configuration/index.ts');
+requireFreshDist('sdk/dist/config/index.js', 'sdk/src/config/index.ts');
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..');
 
 // ─── Read the compiled dist file for function extraction ─────────────────────
 
-const distPath = resolve(here, '..', 'dist', 'configuration', 'index.js');
+const distPath = resolve(here, '..', 'dist', 'config', 'index.js');
 const distSrc = readFileSync(distPath, 'utf-8');
 
 /**
@@ -85,7 +85,7 @@ export function buildConfigurationCjs() {
     `/**`,
     ` * GENERATED FILE — DO NOT EDIT.`,
     ` *`,
-    ` * Source: sdk/src/configuration/index.ts`,
+    ` * Source: sdk/src/config/index.ts`,
     ` * Regenerate: cd sdk && npm run gen:configuration`,
     ` *`,
     ` * Configuration Module — single source of truth for config loading,`,

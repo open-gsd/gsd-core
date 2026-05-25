@@ -90,15 +90,15 @@ test('CJS DYNAMIC_KEY_PATTERNS .source fields match manifest dynamicKeyPatterns'
 
 // ─── SDK side: verify config-schema.ts re-exports from configuration module ─
 
-test('SDK config-schema.ts re-exports from configuration module (not inline literals)', () => {
+test('SDK config-schema.ts re-exports from config module (not inline literals)', () => {
   const SDK_SCHEMA_PATH = path.join(ROOT, 'sdk', 'src', 'query', 'config-schema.ts');
   const src = fs.readFileSync(SDK_SCHEMA_PATH, 'utf8');
 
   // After Cycle 5, the file must NOT contain inline key literals.
-  // It should import/re-export from '../configuration/index.js'.
+  // It should import/re-export from '../config/index.js'.
   assert.ok(
-    src.includes("from '../configuration/index.js'"),
-    'sdk/src/query/config-schema.ts must re-export from ../configuration/index.js (not inline literals)',
+    src.includes("from '../config/index.js'"),
+    'sdk/src/query/config-schema.ts must re-export from ../config/index.js (not inline literals)',
   );
 
   // Must NOT contain a standalone new Set([...]) block with key literals.
