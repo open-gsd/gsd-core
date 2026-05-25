@@ -2,10 +2,6 @@
 
 const { INIT_SUBCOMMANDS } = require('./command-aliases.cjs');
 const { routeCjsCommandFamily } = require('./cjs-command-router-adapter.cjs');
-const { output } = require('./core.cjs');
-
-// ─── SDK bridge (Phase 6) — shared loader via cjs-sdk-bridge.cjs ──────────────
-const { tryLoadSdk, getExecuteForCjs } = require('./cjs-sdk-bridge.cjs');
 
 /**
  * Manifest-backed init subcommand router.
@@ -20,44 +16,8 @@ const { tryLoadSdk, getExecuteForCjs } = require('./cjs-sdk-bridge.cjs');
  * SDK-only (unsupported in CJS router): none.
  */
 function routeInitCommand({ init, args, cwd, raw, parseNamedArgs, error }) {
-  const activeWorkstream = process.env.GSD_WORKSTREAM;
-  const sdkAvailable = !activeWorkstream && tryLoadSdk();
-
-  function sdkHandler(registryCommand, registryArgs, legacyArgs, cjsFallback) {
-    if (!sdkAvailable) return cjsFallback;
-    return () => {
-      let result;
-      try {
-        result = getExecuteForCjs()({
-          registryCommand,
-          registryArgs,
-          legacyCommand: 'init',
-          legacyArgs,
-          // #3631: under --raw, request mode:'raw' so the bridge runs the SDK's
-          // raw projection (formatQueryRawOutput) and returns the scalar string
-          // CJS callers used to print. We then bypass output()'s JSON-stringify
-          // path by passing rawValue (the third positional). With mode:'json',
-          // output() emits the JSON IR as before.
-          mode: raw ? 'raw' : 'json',
-          projectDir: cwd,
-        });
-      } catch {
-        // Bridge threw (e.g. synckit worker crash, Atomics failure on Windows).
-        // Fall through to CJS handler — the CJS path is the designed safety net.
-        return cjsFallback();
-      }
-      if (!result.ok) {
-        error(result.errorDetails && result.errorDetails.message
-          ? result.errorDetails.message
-          : `init ${registryCommand} failed (${result.errorKind})`);
-        return;
-      }
-      if (raw) {
-        output(null, true, typeof result.data === 'string' ? result.data : String(result.data ?? ''));
-      } else {
-        output(result.data);
-      }
-    };
+  function sdkHandler(_registryCommand, _registryArgs, _legacyArgs, cjsFallback) {
+    return cjsFallback;
   }
 
   routeCjsCommandFamily({

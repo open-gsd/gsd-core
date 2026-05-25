@@ -199,19 +199,10 @@ const { routePhasesCommand } = require('./lib/phases-command-router.cjs');
 const { routeValidateCommand } = require('./lib/validate-command-router.cjs');
 const { routeRoadmapCommand } = require('./lib/roadmap-command-router.cjs');
 
-// ─── SDK bridge (Phase 6 inline family / non-family delegation) ───────────────
-// For inline case blocks that have SDK counterparts (frontmatter, config, and
-// non-family commands), we attempt to dispatch via executeForCjs (the sync
-// bridge). CJS handlers are retained as fallback when SDK is unavailable.
-//
-// NOTE: migrate-config, detect-custom-files, config-path, and find-phase
-// are CJS-native special cases; see comments inline.
-
-// Shared loader for the synchronous SDK runtime bridge; see
-// `bin/lib/cjs-sdk-bridge.cjs`. All canonical-command CJS dispatchers (the
-// per-family routers and the non-family helper below) consume the same loader
-// so a change to the SDK-load contract lands in one place.
-const { tryLoadSdk: _tryLoadSdkBridge, getExecuteForCjs } = require('./lib/cjs-sdk-bridge.cjs');
+// ─── Bridge collapsed (Phase 4) ────────────────────────────────────────────────
+// Non-family commands now run through their CJS handlers directly. Keep the
+// helper contract so existing call sites remain unchanged during the phase
+// sequence; it always returns false so callers fall through to CJS.
 
 /**
  * Attempt SDK dispatch for a non-family command.
@@ -231,55 +222,15 @@ const { tryLoadSdk: _tryLoadSdkBridge, getExecuteForCjs } = require('./lib/cjs-s
  * @param {Function} opts.output - output emitter (core.output)
  */
 function _dispatchNonFamily({ registryCommand, registryArgs, legacyCommand, legacyArgs, cwd, raw, error, output }) {
-  if (!_tryLoadSdkBridge()) return false;
-  let result;
-  try {
-    result = getExecuteForCjs()({
-      registryCommand,
-      registryArgs,
-      legacyCommand,
-      legacyArgs,
-      // Always request typed JSON from the bridge; CJS `output(data, raw)` handles
-      // user-facing rendering. Passing `mode: 'raw'` would make the bridge
-      // pre-render result.data to a JSON string that the CJS output path then
-      // double-stringifies (returning a JSON string of a JSON string).
-      mode: 'json',
-      projectDir: cwd,
-      workstream: process.env.GSD_WORKSTREAM || undefined,
-    });
-  } catch {
-    // Bridge threw (e.g. synckit worker crash, Atomics failure on Windows).
-    // Return false so the caller falls through to the CJS handler.
-    return false;
-  }
-  if (!result.ok) {
-    const message = (result.errorDetails && result.errorDetails.message)
-      || `${legacyCommand} (${registryCommand}) failed (${result.errorKind})`;
-    // Propagate the structured reason code through to CJS `error()` so the
-    // `--json-errors` JSON-shaped stderr carries the typed reason (e.g.
-    // 'config_key_not_found') instead of the generic 'unknown'.  Handlers
-    // tag the GSDError with `.reason` and the worker forwards it via
-    // errorDetails.reason. (Bugs #2943, #3086.)
-    const reason = result.errorDetails && result.errorDetails.reason;
-    if (reason) {
-      error(message, reason);
-    } else {
-      error(message);
-    }
-    return true; // handled (error reported)
-  }
-  // CJS parity for --raw output (config.cjs:525 `output(value, raw, String(value))`):
-  // when the caller asked for --raw and the SDK returned a scalar, pass that
-  // scalar through as `rawValue` so core.output() emits the bare string
-  // representation instead of JSON-stringifying it.  Non-scalar shapes fall
-  // through to the structured JSON path, matching `output(obj, raw)`.
-  const data = result.data;
-  if (raw && (typeof data === 'string' || typeof data === 'number' || typeof data === 'boolean')) {
-    output(data, raw, String(data));
-  } else {
-    output(data, raw);
-  }
-  return true;
+  void registryCommand;
+  void registryArgs;
+  void legacyCommand;
+  void legacyArgs;
+  void cwd;
+  void raw;
+  void error;
+  void output;
+  return false;
 }
 
 // ─── Arg parsing helpers ──────────────────────────────────────────────────────

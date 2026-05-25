@@ -2,138 +2,6 @@
 
 const { STATE_SUBCOMMANDS } = require('./command-aliases.cjs');
 const { routeCjsCommandFamily } = require('./cjs-command-router-adapter.cjs');
-const { output } = require('./core.cjs');
-const {
-  tryLoadSdk,
-  getExecuteForCjs,
-  getFormatStateLoadRawStdout,
-} = require('./cjs-sdk-bridge.cjs');
-
-// Subcommands whose CJS contract is exit-non-zero (stderr) ONLY when the
-// underlying STATE.md is missing — not for in-state errors like
-// "field not found". CJS `cmdStateGet` calls `error('STATE.md not found')` →
-// exit 1 for the missing-file case but `output({ error: 'Section or field
-// "X" not found' }, raw)` → exit 0 for the missing-field case. Mutation
-// commands always use output() (exit 0) even when STATE.md is missing, so
-// they are absent from this set entirely.
-const EXIT_ON_STATE_MD_MISSING = new Set(['state.get']);
-const STATE_MD_MISSING_MESSAGE = 'STATE.md not found';
-
-// Subcommands whose CJS contract is always exit-0 — they emit
-// { error: '...' } JSON via output() for every failure case (missing STATE.md,
-// missing required args, validation failures).  When the SDK returns
-// result.ok === false for these subcommands we must NOT call error() (exit 1);
-// instead we surface the SDK error message as exit-0 JSON so callers can
-// JSON.parse the response and branch on the error field.
-const OUTPUT_ON_SDK_ERROR = new Set([
-  'state.record-metric',
-  'state.advance-plan',
-  'state.record-session',
-  'state.add-decision',
-  'state.add-blocker',
-  'state.resolve-blocker',
-  'state.update-progress',
-]);
-
-// The bridge loader verifies both `executeForCjs` and `formatStateLoadRawStdout`
-// are present before returning success, so this router can call `tryLoadSdk()`
-// directly without an additional capability check.
-
-/**
- * Dispatch a subcommand via the SDK sync bridge.
- *
- * Returns true if dispatched successfully, false if the SDK is unavailable.
- * The caller must still handle result.ok=false as a hard error.
- *
- * @param {string} registryCommand - Registry command name (e.g. 'state.json')
- * @param {string[]} registryArgs - Args for the registry handler
- * @param {string} cwd - Project directory
- * @param {boolean} raw - Raw output mode
- * @param {Function} error - Error reporter
- * @param {Function} [rawFormatter] - Optional raw output formatter (for state.load)
- * @returns {boolean} true if handled, false to fall through to CJS
- */
-function dispatchViaSdk(registryCommand, registryArgs, legacyArgs, cwd, raw, error, rawFormatter) {
-  if (!tryLoadSdk()) return false;
-
-  // When a CJS-side rawFormatter is supplied (e.g. state.load --raw → key=value
-  // lines), always request 'json' from the bridge so the SDK returns the typed
-  // data object. Passing mode: 'raw' would make the bridge pre-render to a
-  // string and the formatter would no-op. For subcommands without a rawFormatter,
-  // honor the user's --raw flag and let the bridge do default rendering.
-  const bridgeMode = rawFormatter ? 'json' : (raw ? 'raw' : 'json');
-
-  let result;
-  try {
-    result = getExecuteForCjs()({
-      registryCommand,
-      registryArgs,
-      legacyCommand: 'state',
-      legacyArgs,
-      mode: bridgeMode,
-      projectDir: cwd,
-      // Phase 6 fix: workstream is now threaded through to the native handler.
-      // GSDTransport no longer forces subprocess for workstream-scoped requests —
-      // the worker's dispatchNative closure correctly passes workstream to
-      // registry.dispatch() (Phase 5.1 fix), enabling native workstream dispatch.
-      workstream: process.env.GSD_WORKSTREAM || undefined,
-    });
-  } catch {
-    // Bridge threw (e.g. synckit worker crash, Atomics failure on Windows).
-    // Return false so the caller falls through to the CJS handler.
-    return false;
-  }
-
-  if (!result.ok) {
-    // Mutation subcommands whose CJS contract is always exit-0: surface the SDK
-    // error as JSON output (exit 0) rather than calling error() (exit 1).  This
-    // preserves the CJS contract for callers that JSON.parse stdout and branch on
-    // the error field — particularly important on Windows/Node 24 where the SDK
-    // bridge returns result.ok===false for validation failures (e.g. missing
-    // required args) instead of propagating them as result.data.error objects.
-    if (OUTPUT_ON_SDK_ERROR.has(registryCommand)) {
-      const msg = result.errorDetails && result.errorDetails.message
-        ? result.errorDetails.message
-        : `state ${registryCommand} failed (${result.errorKind})`;
-      output({ error: msg });
-      return true;
-    }
-    error(result.errorDetails && result.errorDetails.message
-      ? result.errorDetails.message
-      : `state ${registryCommand} failed (${result.errorKind})`);
-    return true; // handled (error was reported)
-  }
-
-  // Surface STATE.md-missing as a CJS-style fatal error (exit non-zero,
-  // stderr) for the specific subcommands whose CJS contract uses error() not
-  // output() for that case. The exact "STATE.md not found" message is the
-  // canonical signal both CJS and SDK use — other "error" shapes (e.g.
-  // "Section or field X not found" from state.get with present STATE.md)
-  // stay as exit-0 JSON output so shell-script consumers JSON.parse the
-  // output and branch on the error field without process-exit handling.
-  if (
-    EXIT_ON_STATE_MD_MISSING.has(registryCommand)
-    && result.data
-    && typeof result.data === 'object'
-    && result.data.error === STATE_MD_MISSING_MESSAGE
-  ) {
-    error(result.data.error);
-    return true;
-  }
-
-  if (raw && rawFormatter) {
-    const rawText = rawFormatter(result.data);
-    const fs = require('fs');
-    fs.writeSync(1, rawText);
-  } else if (raw) {
-    // #3631: bridge was called with mode:'raw', so result.data is the scalar
-    // string the CJS path would have printed. Bypass output()'s JSON path.
-    output(null, true, typeof result.data === 'string' ? result.data : String(result.data ?? ''));
-  } else {
-    output(result.data);
-  }
-  return true;
-}
 
 /**
  * Manifest-backed state subcommand router.
@@ -156,22 +24,8 @@ function routeStateCommand({ state, args, cwd, raw, parseNamedArgs, error }) {
     return parsedPlans;
   };
 
-  // Phase 6 fix: workstream commands are now handled natively in the sync bridge
-  // worker. GSDTransport no longer forces subprocess for workstream-scoped requests;
-  // the worker threads workstream through to registry.dispatch() correctly.
-  const sdkAvailable = tryLoadSdk();
-
-  // Helper: build SDK-backed handler that falls through to CJS on SDK failure.
-  // cjsFallback is called when SDK is unavailable or when the subcommand has no
-  // SDK counterpart.
-  function sdkHandler(registryCommand, registryArgs, legacyArgs, rawFormatter, cjsFallback) {
-    if (!sdkAvailable) return cjsFallback;
-    return () => {
-      const handled = dispatchViaSdk(
-        registryCommand, registryArgs, legacyArgs, cwd, raw, error, rawFormatter,
-      );
-      if (!handled) cjsFallback();
-    };
+  function sdkHandler(_registryCommand, _registryArgs, _legacyArgs, _rawFormatter, cjsFallback) {
+    return cjsFallback;
   }
 
   routeCjsCommandFamily({
@@ -188,11 +42,7 @@ function routeStateCommand({ state, args, cwd, raw, parseNamedArgs, error }) {
         'state.load',
         [],
         args.slice(1),
-        // Resolved lazily — the formatter getter returns null until
-        // tryLoadSdk() runs inside dispatchViaSdk. sdkHandler only invokes
-        // this formatter when SDK dispatch succeeds, so by then the bridge
-        // has cached the formatter and the getter returns the real function.
-        (...formatterArgs) => getFormatStateLoadRawStdout()(...formatterArgs),
+        null,
         () => state.cmdStateLoad(cwd, raw),
       ),
       json: sdkHandler(
