@@ -3,7 +3,7 @@
 /**
  * GENERATED FILE — DO NOT EDIT.
  *
- * Source: sdk/src/configuration/index.ts
+ * Source: sdk/src/config/index.ts
  * Regenerate: cd sdk && npm run gen:configuration
  *
  * Configuration Module — single source of truth for config loading,

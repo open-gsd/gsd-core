@@ -24,7 +24,7 @@ import { join } from 'node:path';
 import { GSDError, ErrorClassification } from '../errors.js';
 import { VALID_PROFILES, getAgentToModelMapForProfile } from './config-query.js';
 import { VALID_CONFIG_KEYS, RUNTIME_STATE_KEYS, DYNAMIC_KEY_PATTERNS } from './config-schema.js';
-import { CONFIG_DEFAULTS } from '../configuration/index.js';
+import { CONFIG_DEFAULTS } from '../config/index.js';
 import { planningPaths } from './helpers.js';
 import { acquireStateLock, releaseStateLock } from './state-mutation.js';
 import { maskIfSecret } from './secrets.js';
@@ -569,7 +569,7 @@ export const configNewProject: QueryHandler = async (args, projectDir, workstrea
 
   // Build default config. Source is the canonical Configuration Module manifest
   // at sdk/shared/config-defaults.manifest.json (CONFIG_DEFAULTS from
-  // sdk/src/configuration/index.ts) — but ONLY a subset is materialized at
+  // sdk/src/config/index.ts) — but ONLY a subset is materialized at
   // init time. Legacy CJS `buildNewProjectConfig` (bin/lib/config.cjs:155-210)
   // intentionally omits keys whose value is meaningful only when set
   // explicitly so config-get returns "Key not found" and workflows fall back

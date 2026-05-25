@@ -1,6 +1,6 @@
 /**
  * Thin re-export adapter — sources schema data from the Configuration Module
- * (sdk/src/configuration/index.ts), which reads from the manifest at
+ * (sdk/src/config/index.ts), which reads from the manifest at
  * sdk/shared/config-schema.manifest.json.
  *
  * All inline literals have been removed. The manifest is the single source
@@ -18,14 +18,14 @@ import {
   VALID_CONFIG_KEYS,
   RUNTIME_STATE_KEYS,
   DYNAMIC_KEY_PATTERNS,
-} from '../configuration/index.js';
+} from '../config/index.js';
 
 export {
   VALID_CONFIG_KEYS,
   RUNTIME_STATE_KEYS,
   DYNAMIC_KEY_PATTERNS,
   type DynamicKeyPattern,
-} from '../configuration/index.js';
+} from '../config/index.js';
 
 /** Returns true if keyPath is a valid config key (exact, runtime-state, or dynamic pattern). */
 export function isValidConfigKeyPath(keyPath: string): boolean {

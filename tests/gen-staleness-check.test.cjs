@@ -73,8 +73,8 @@ const GENERATORS = [
   },
   {
     script: 'gen-configuration.mjs',
-    dist: 'sdk/dist/configuration/index.js',
-    ts: 'sdk/src/configuration/index.ts',
+    dist: 'sdk/dist/config/index.js',
+    ts: 'sdk/src/config/index.ts',
   },
 ];
 

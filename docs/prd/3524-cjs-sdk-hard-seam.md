@@ -89,7 +89,7 @@ Phases are sized to ship in one to two PRs each. Each phase has its own GitHub i
 **Scope:**
 - Add a **Configuration Module** entry to `CONTEXT.md` first. Definition: "Module owning config load, legacy-key normalization, defaults merge, and explicit on-disk migration for `.planning/config.json`." Interface and invariants per ADR §6.
 - Extract `CONFIG_DEFAULTS`, `VALID_CONFIG_KEYS`, `DYNAMIC_KEY_PATTERNS`, `RUNTIME_STATE_KEYS` to two data manifests: `sdk/shared/config-schema.manifest.json` and `sdk/shared/config-defaults.manifest.json`. Precedent: `sdk/shared/model-catalog.json`.
-- Write the Configuration Module source at `sdk/src/configuration/index.ts`. Implementation imports the two manifests and exports `loadConfig`, `normalizeLegacyKeys`, `mergeDefaults`, `migrateOnDisk`.
+- Write the Configuration Module source at `sdk/src/config/index.ts`. Implementation imports the two manifests and exports `loadConfig`, `normalizeLegacyKeys`, `mergeDefaults`, `migrateOnDisk`.
 - Write `sdk/scripts/gen-configuration.ts` to emit `get-shit-done/bin/lib/configuration.generated.cjs` and (if needed) `sdk/src/query/config-schema.generated.ts`.
 - Write `sdk/scripts/check-configuration-fresh.mjs`.
 - Replace the inline implementations in `bin/lib/core.cjs:loadConfig` (lines 220–243, 434–449, 485) and `bin/lib/config.cjs` (the validation surface) with thin Adapters over the generated Module. Delete the inline `CONFIG_DEFAULTS`, the false-positive warning at `core.cjs:444-449`, and the duplicated `_deepMergeConfig`.
