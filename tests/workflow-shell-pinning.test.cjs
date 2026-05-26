@@ -10,11 +10,11 @@ process.env.GSD_TEST_MODE = '1';
  *   step.shell ?? job.defaults.run.shell ?? workflow.defaults.run.shell
  *
  * Without an effective shell, GitHub Actions defaults to pwsh on
- * windows-latest.  The npm.cmd → node.exe → npm-cli.js child-process chain
+ * windows-latest / windows-2025.  The npm.cmd → node.exe → npm-cli.js child-process chain
  * under pwsh can swallow stderr, making `npm ci` / `npm run` failures
  * invisible in CI logs.
  *
- * Scope: only workflow files that reference windows-latest (directly as a
+ * Scope: only workflow files that reference a Windows hosted runner label
  * literal `runs-on:` value, or as a member of a `strategy.matrix.os` list).
  * Steps in jobs that cannot run on Windows cannot trigger the class of failure
  * described above, but the file must still be scanned once any job in it
@@ -35,8 +35,8 @@ const WORKFLOWS_DIR = path.join(REPO_ROOT, '.github', 'workflows');
 /**
  * Collect all .yml / .yaml files under the workflows directory.
  *
- * Only files that reference "windows-latest" (as a literal runs-on value or
- * inside a matrix.os list) are returned — the pwsh-stderr-swallow failure
+ * Only files that reference a Windows hosted label (`windows-latest` or
+ * `windows-2025`, as a literal runs-on value or inside a matrix.os list) are
  * class can only manifest in workflows that target Windows runners.
  */
 function listWorkflowFiles() {
@@ -45,17 +45,17 @@ function listWorkflowFiles() {
     .filter((e) => /\.ya?ml$/.test(e))
     .map((e) => path.join(WORKFLOWS_DIR, e));
 
-  // Filter to files that have at least one windows-latest reference.
+  // Filter to files that have at least one Windows hosted-runner reference.
   // allow-test-rule: file-scope prefilter, not a test assertion — we need to
   // detect whether a workflow file targets Windows runners at all. The pwsh
   // stderr-swallow class is windows-only, so files that never mention
-  // windows-latest are out of scope. Exposing a typed IR from production
+  // windows-hosted labels are out of scope. Exposing a typed IR from production
   // code is not appropriate here because the source-of-truth is the YAML
   // itself; the actual test assertions below ARE structural (parse runs-on,
   // strategy.matrix.os, defaults.run.shell, etc.).
   return all.filter((f) => {
     const raw = fs.readFileSync(f, 'utf8');
-    return raw.indexOf('windows-latest') !== -1;
+    return raw.includes('windows-latest') || raw.includes('windows-2025');
   });
 }
 
@@ -332,7 +332,7 @@ describe('GitHub Actions workflow shell pinning', () => {
       ).join('\n');
       assert.fail(
         `${allViolations.length} npm run/ci step(s) are missing an explicit shell: directive.\n` +
-        `On windows-latest, steps without shell: default to pwsh, which can swallow npm stderr.\n` +
+        `On Windows hosted runners, steps without shell: default to pwsh, which can swallow npm stderr.\n` +
         `Add  shell: bash  (or another explicit shell) to each listed step:\n\n` +
         details,
       );

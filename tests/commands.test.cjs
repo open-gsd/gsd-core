@@ -892,7 +892,7 @@ describe('current-timestamp command', () => {
   test('dispatches directly to CJS handler (no SDK bridge) to avoid Windows native crash path', () => {
     const sourcePath = path.join(__dirname, '..', 'get-shit-done', 'bin', 'gsd-tools.cjs');
     const source = fs.readFileSync(sourcePath, 'utf8');
-    const match = source.match(/case 'current-timestamp':\s*\{[\s\S]*?\n\s*break;\n\s*\}/);
+    const match = source.match(/case 'current-timestamp':\s*\{[\s\S]*?\r?\n\s*break;\r?\n\s*\}/);
 
     assert.ok(match, 'current-timestamp case block must exist in gsd-tools.cjs');
 
