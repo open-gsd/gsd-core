@@ -66,6 +66,44 @@ const SMOKE = Object.freeze({
 });
 
 // ---------------------------------------------------------------------------
+// Exported helper: binInvocation
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the { command, args, shell } descriptor needed to spawn an installed
+ * npm bin correctly on both Windows and POSIX.
+ *
+ * On Windows, npm installs a `.cmd` (or `.bat`) shim in .bin/.  Node ≥18.20.2
+ * / ≥20.12.2 throws EINVAL when you try to spawnSync a .cmd/.bat without
+ * shell:true (CVE-2024-27980 mitigation).  With shell:true, Node does NOT
+ * auto-quote argv, so a bin path that contains spaces must be wrapped in
+ * double-quotes to arrive at the shell as one token.
+ *
+ * On POSIX the bin is a regular shebang JS file; we invoke it directly via
+ * process.execPath (the same Node binary) without a shell.
+ *
+ * @param {string}   binPath  - Absolute path to the resolved bin file.
+ * @param {string[]} [args]   - Additional arguments (e.g. ['--help']).
+ * @returns {{ command: string, args: string[], shell: boolean }}
+ */
+function binInvocation(binPath, args = []) {
+  const lower = binPath.toLowerCase();
+  // Note: .ps1 shims are intentionally NOT handled here.  The bin-resolution
+  // helpers (findGsdToolsBin / findInstallerBin) only ever surface a .cmd path
+  // on Windows — npm does not write .ps1 shims into .bin/ by default — so a
+  // .ps1 path never reaches this function in practice.
+  if (lower.endsWith('.cmd') || lower.endsWith('.bat')) {
+    // Quote the path if it contains a space so the Windows shell treats it as
+    // a single token.  Simple double-quote wrap is sufficient because npm-
+    // generated shim paths don't contain embedded double-quotes.
+    const command = binPath.includes(' ') ? `"${binPath}"` : binPath;
+    return { command, args: [...args], shell: true };
+  }
+  // POSIX: invoke via node, no shell needed.
+  return { command: process.execPath, args: [binPath, ...args], shell: false };
+}
+
+// ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
@@ -278,10 +316,11 @@ function runSmoke({
   // --- Invoke `gsd-tools --help` to assert the shipped binary is callable ---
   // Use effectiveNpmEnv so the installed binary sees an isolated HOME on Docker
   // hosts where HOME may be unwritable (same isolation as the npm install). (#131)
+  const versionInvocation = binInvocation(actualBin, ['--help']);
   const versionResult = spawnSync(
-    process.execPath,
-    [actualBin, '--help'],
-    { encoding: 'utf-8', timeout: CHILD_TIMEOUT_MS, env: effectiveNpmEnv },
+    versionInvocation.command,
+    versionInvocation.args,
+    { encoding: 'utf-8', timeout: CHILD_TIMEOUT_MS, env: effectiveNpmEnv, shell: versionInvocation.shell },
   );
 
   if (versionResult.status !== 0) {
@@ -341,9 +380,10 @@ function runSmoke({
     const initEnv = { ...process.env };
     delete initEnv.GSD_TEST_MODE;
 
+    const initInvocation = binInvocation(installerBin, ['--local', '--claude']);
     const initResult = spawnSync(
-      process.execPath,
-      [installerBin, '--local', '--claude'],
+      initInvocation.command,
+      initInvocation.args,
       {
         encoding: 'utf-8',
         cwd: fixtureDir,
@@ -351,6 +391,7 @@ function runSmoke({
         stdio: ['pipe', 'pipe', 'pipe'],
         env: initEnv,
         timeout: CHILD_TIMEOUT_MS,
+        shell: initInvocation.shell,
       },
     );
 
@@ -556,7 +597,7 @@ function cleanup(...dirs) {
 // Exports
 // ---------------------------------------------------------------------------
 
-module.exports = { SMOKE, runSmoke };
+module.exports = { SMOKE, runSmoke, binInvocation };
 
 if (require.main === module) {
   cliMain();
