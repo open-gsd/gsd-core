@@ -73,11 +73,28 @@ function routeStateCommand({ state, args, cwd, raw, error }) {
         null,
         () => {
           const patches = {};
-          for (let i = 2; i < args.length; i += 2) {
-            const key = args[i].replace(/^--/, '');
-            const value = args[i + 1];
-            if (key && value !== undefined) {
-              patches[key] = value;
+          if (args.length === 3 && typeof args[2] === 'string' && args[2].trim().startsWith('{')) {
+            let parsed;
+            try {
+              parsed = JSON.parse(args[2]);
+            } catch (err) {
+              error(`state patch: invalid JSON object: ${err.message}`);
+            }
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+              error('state patch: JSON input must be an object of field/value pairs.');
+            }
+            for (const [key, value] of Object.entries(parsed)) {
+              if (key && value !== undefined) {
+                patches[key] = String(value);
+              }
+            }
+          } else {
+            for (let i = 2; i < args.length; i += 2) {
+              const key = args[i].replace(/^--/, '');
+              const value = args[i + 1];
+              if (key && value !== undefined) {
+                patches[key] = value;
+              }
             }
           }
           state.cmdStatePatch(cwd, patches, raw);

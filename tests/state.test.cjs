@@ -922,6 +922,27 @@ describe('cmdStatePatch and cmdStateUpdate (state patch, state update)', () => {
     assert.ok(updated.includes('**Last Activity:** 2024-01-15'), 'Last Activity should be unchanged');
   });
 
+  test('state patch accepts JSON object input from workflows', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), stateMd);
+
+    const result = runGsdTools([
+      'query',
+      'state.patch',
+      JSON.stringify({
+        Status: 'Complete',
+        'Current Phase': '04',
+      }),
+    ], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.deepEqual(output.updated.sort(), ['Current Phase', 'Status'].sort());
+
+    const updated = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    assert.ok(updated.includes('**Status:** Complete'), 'Status should be updated to Complete');
+    assert.ok(updated.includes('**Current Phase:** 04'), 'Current Phase should be updated to 04');
+  });
+
   test('state patch reports failed fields that do not exist', () => {
     fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), stateMd);
 
