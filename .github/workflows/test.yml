@@ -1,4 +1,5 @@
 name: Tests
+# CI process note: SDK package boundary retired via ADR-0174.
 
 on:
   push:
