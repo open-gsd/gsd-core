@@ -170,7 +170,7 @@ const path = require('path');
 const core = require('./lib/core.cjs');
 const { error, findProjectRoot, ERROR_REASON } = core;
 const { getActiveWorkstream } = require('./lib/planning-workspace.cjs');
-const { resolveActiveWorkstreamContext, applyResolvedWorkstreamEnv } = require('./lib/active-workstream-store.cjs');
+const { resolveActiveWorkstream, applyResolvedWorkstreamEnv } = require('./lib/active-workstream-store.cjs');
 const state = require('./lib/state.cjs');
 const phase = require('./lib/phase.cjs');
 const roadmap = require('./lib/roadmap.cjs');
@@ -290,7 +290,7 @@ async function main() {
   let ws = null;
   let workstreamContext = null;
   try {
-    workstreamContext = resolveActiveWorkstreamContext(cwd, args, process.env, {
+    workstreamContext = resolveActiveWorkstream(cwd, args, process.env, {
       getStored: getActiveWorkstream,
     });
     ws = workstreamContext.ws;

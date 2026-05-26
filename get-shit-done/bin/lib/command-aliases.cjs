@@ -230,6 +230,14 @@ const VERIFY_COMMAND_ALIASES = [
     ],
     "subcommand": "schema-drift",
     "mutation": false
+  },
+  {
+    "canonical": "verify.codebase-drift",
+    "aliases": [
+      "verify codebase-drift"
+    ],
+    "subcommand": "codebase-drift",
+    "mutation": false
   }
 ];
 
