@@ -174,6 +174,16 @@ describe('generate-claude-md command', () => {
     assert.ok(content.includes('.codex/skills/'));
     assert.ok(!content.includes('get-shit-done/skills'));
   });
+
+  test('codex runtime aliases default output to AGENTS.md', () => {
+    const result = runGsdTools(
+      ['generate-claude-md', '--auto', '--raw'],
+      tmpDir,
+      { GSD_RUNTIME: 'codex-cli' }
+    );
+    assert.ok(result.success, `Failed: ${result.error}`);
+    assert.ok(fs.existsSync(path.join(tmpDir, 'AGENTS.md')), 'AGENTS.md should be generated for codex aliases');
+  });
 });
 
 // ─── generate-dev-preferences ─────────────────────────────────────────────────
@@ -236,6 +246,27 @@ describe('generate-dev-preferences command', () => {
     const out = JSON.parse(result.output);
     assert.strictEqual(out.command_path, path.join(codexHome, 'skills', 'gsd-dev-preferences', 'SKILL.md'));
     assert.ok(fs.existsSync(out.command_path), 'runtime-aware output should be written');
+  });
+
+  test('canonicalizes codex runtime aliases for skills output path', () => {
+    const analysis = {
+      profile_version: '1.0',
+      dimensions: {
+        communication_style: { rating: 'terse-direct', confidence: 'HIGH' },
+      },
+    };
+    const analysisPath = path.join(tmpDir, 'analysis.json');
+    const codexHome = path.join(tmpDir, 'codex-home');
+    fs.writeFileSync(analysisPath, JSON.stringify(analysis));
+
+    const result = runGsdTools(
+      ['generate-dev-preferences', '--analysis', analysisPath, '--raw'],
+      tmpDir,
+      { CODEX_HOME: codexHome, GSD_RUNTIME: 'codex-app' }
+    );
+    assert.ok(result.success, `Failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.command_path, path.join(codexHome, 'skills', 'gsd-dev-preferences', 'SKILL.md'));
   });
 
   test('errors for cline unless --output is supplied', () => {

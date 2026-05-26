@@ -57,6 +57,27 @@ function canonicalizeRuntimeName(value) {
   return aliasToCanonical.get(normalizeRuntimeToken(value)) || null;
 }
 
+/**
+ * Resolve runtime from a precedence list of candidate values.
+ *
+ * - First non-empty string candidate wins.
+ * - Known aliases are canonicalized (codex-cli -> codex).
+ * - Unknown values are normalized and returned (future-runtime tolerance).
+ *
+ * @param {...string} candidates
+ * @returns {string|null}
+ */
+function resolveRuntimeNameFromCandidates(...candidates) {
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string') continue;
+    const normalized = normalizeRuntimeToken(candidate);
+    if (!normalized) continue;
+    return canonicalizeRuntimeName(normalized) || normalized;
+  }
+  return null;
+}
+
 module.exports = {
   canonicalizeRuntimeName,
+  resolveRuntimeNameFromCandidates,
 };

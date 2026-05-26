@@ -1,6 +1,6 @@
 'use strict';
 
-const { canonicalizeRuntimeName } = require('./runtime-name-policy.cjs');
+const { canonicalizeRuntimeName, resolveRuntimeNameFromCandidates } = require('./runtime-name-policy.cjs');
 
 /**
  * runtime-slash.cjs — single source of truth for emitting GSD slash-command
@@ -69,10 +69,8 @@ function formatGsdSlash(commandName, runtime) {
  * @returns {string}
  */
 function resolveRuntime(projectDir) {
-  if (process.env.GSD_RUNTIME) {
-    const rawRuntime = String(process.env.GSD_RUNTIME).toLowerCase();
-    return canonicalizeRuntimeName(rawRuntime) || rawRuntime;
-  }
+  const envRuntime = resolveRuntimeNameFromCandidates(process.env.GSD_RUNTIME);
+  if (envRuntime) return envRuntime;
   if (projectDir) {
     try {
       // Read config.json directly (not via loadConfig). loadConfig has a side
@@ -87,8 +85,8 @@ function resolveRuntime(projectDir) {
         const raw = fs.readFileSync(configPath, 'utf-8');
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object' && parsed.runtime) {
-          const rawRuntime = String(parsed.runtime).toLowerCase();
-          return canonicalizeRuntimeName(rawRuntime) || rawRuntime;
+          const configRuntime = resolveRuntimeNameFromCandidates(parsed.runtime);
+          if (configRuntime) return configRuntime;
         }
       }
     } catch {
