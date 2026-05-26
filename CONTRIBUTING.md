@@ -688,7 +688,16 @@ node --test tests/core.test.cjs
 npm run test:coverage
 ```
 
-For examples of required negative matrices, parser fixtures, filesystem fault injection, security abuse tests, generated-file checks, and runtime/SDK parity tests, see [`TEST-EXAMPLES.md`](TEST-EXAMPLES.md).
+For examples of required negative matrices, parser fixtures, filesystem fault injection, security abuse tests, generated-file checks, and runtime/SDK parity tests, see [`TEST-EXAMPLES.md`](./TEST-EXAMPLES.md).
+
+### Preferred local benchmark runner (before PR)
+
+When you can, run the local test bench harness before opening a PR — especially for Windows-sensitive changes.
+
+- Setup guide: [gsd-test-runner getting started](https://github.com/open-gsd/gsd-test-runner/blob/main/docs/getting-started.md)
+- Preferred PR evidence: include the bench results summary (or artifact link) in your PR body.
+
+This gives maintainers a faster, higher-confidence signal than CI-only validation.
 
 ### Pre-PR Seam Checks (Manifest/Alias Routing)
 
