@@ -93,7 +93,7 @@ Agent(
 
 Resolve the debugger model before spawning:
 ```bash
-debugger_model=$(gsd-sdk query resolve-model gsd-debugger 2>/dev/null | jq -r '.model' 2>/dev/null || true)
+debugger_model=$(gsd-tools query resolve-model gsd-debugger 2>/dev/null | jq -r '.model' 2>/dev/null || true)
 ```
 
 ## Step 3: Handle Agent Return

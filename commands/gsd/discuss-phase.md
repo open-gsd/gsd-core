@@ -47,7 +47,7 @@ Context files are resolved in-workflow using `init phase-op` and roadmap/state t
 <process>
 **Mode routing:**
 ```bash
-DISCUSS_MODE=$(gsd-sdk query config-get workflow.discuss_mode 2>/dev/null || echo "discuss")
+DISCUSS_MODE=$(gsd-tools query config-get workflow.discuss_mode 2>/dev/null || echo "discuss")
 ```
 
 If `--assumptions` is in $ARGUMENTS:

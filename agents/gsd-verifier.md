@@ -101,7 +101,7 @@ Set `is_re_verification = false`, proceed with Step 1.
 ```bash
 ls "$PHASE_DIR"/*-PLAN.md 2>/dev/null
 ls "$PHASE_DIR"/*-SUMMARY.md 2>/dev/null
-gsd-sdk query roadmap.get-phase "$PHASE_NUM"
+gsd-tools query roadmap.get-phase "$PHASE_NUM"
 grep -E "^| $PHASE_NUM" .planning/REQUIREMENTS.md 2>/dev/null
 ```
 
@@ -114,7 +114,7 @@ In re-verification mode, must-haves come from Step 0.
 **Step 2a: Always load ROADMAP Success Criteria**
 
 ```bash
-PHASE_DATA=$(gsd-sdk query roadmap.get-phase "$PHASE_NUM" --raw)
+PHASE_DATA=$(gsd-tools query roadmap.get-phase "$PHASE_NUM" --raw)
 ```
 
 Parse the `success_criteria` array from the JSON output. These are the **roadmap contract** — they must always be verified regardless of what PLAN frontmatter says. Store them as `roadmap_truths`.
@@ -216,10 +216,10 @@ overrides:
 
 ## Step 4: Verify Artifacts (Three Levels)
 
-Use `gsd-sdk query` for artifact verification against must_haves in PLAN frontmatter:
+Use `gsd-tools query` for artifact verification against must_haves in PLAN frontmatter:
 
 ```bash
-ARTIFACT_RESULT=$(gsd-sdk query verify.artifacts "$PLAN_PATH")
+ARTIFACT_RESULT=$(gsd-tools query verify.artifacts "$PLAN_PATH")
 ```
 
 Parse JSON result: `{ all_passed, passed, total, artifacts: [{path, exists, issues, passed}] }`
@@ -322,10 +322,10 @@ grep -r -A 3 "<${COMPONENT_NAME}" "${search_path:-src/}" --include="*.tsx" 2>/de
 
 Key links are critical connections. If broken, the goal fails even with all artifacts present.
 
-Use `gsd-sdk query` for key link verification against must_haves in PLAN frontmatter:
+Use `gsd-tools query` for key link verification against must_haves in PLAN frontmatter:
 
 ```bash
-LINKS_RESULT=$(gsd-sdk query verify.key-links "$PLAN_PATH")
+LINKS_RESULT=$(gsd-tools query verify.key-links "$PLAN_PATH")
 ```
 
 Parse JSON result: `{ all_verified, verified, total, links: [{from, to, via, verified, detail}] }`
@@ -407,12 +407,12 @@ Identify files modified in this phase from SUMMARY.md key-files section, or extr
 
 ```bash
 # Option 1: Extract from SUMMARY frontmatter
-SUMMARY_FILES=$(gsd-sdk query summary-extract "$PHASE_DIR"/*-SUMMARY.md --fields key-files)
+SUMMARY_FILES=$(gsd-tools query summary-extract "$PHASE_DIR"/*-SUMMARY.md --fields key-files)
 
 # Option 2: Verify commits exist (if commit hashes documented)
 COMMIT_HASHES=$(grep -oE "[a-f0-9]{7,40}" "$PHASE_DIR"/*-SUMMARY.md | head -10)
 if [ -n "$COMMIT_HASHES" ]; then
-  COMMITS_VALID=$(gsd-sdk query verify.commits $COMMIT_HASHES)
+  COMMITS_VALID=$(gsd-tools query verify.commits $COMMIT_HASHES)
 fi
 
 # Fallback: grep for files
@@ -581,7 +581,7 @@ Before reporting gaps, check if any identified gaps are explicitly addressed in 
 **Load the full milestone roadmap:**
 
 ```bash
-ROADMAP_DATA=$(gsd-sdk query roadmap.analyze --raw)
+ROADMAP_DATA=$(gsd-tools query roadmap.analyze --raw)
 ```
 
 Parse the JSON to extract all phases. Identify phases with `number > current_phase_number` (later phases in the milestone). For each later phase, extract its `goal` and `success_criteria`.
@@ -656,7 +656,7 @@ Deferred items are informational only — they do not require closure plans.
 **User Story format guard:** Apply via the centralized verb instead of inlining the regex:
 
 ```bash
-USER_STORY_VALID=$(gsd-sdk query user-story.validate --story "$PHASE_GOAL" --pick valid)
+USER_STORY_VALID=$(gsd-tools query user-story.validate --story "$PHASE_GOAL" --pick valid)
 ```
 
 If `valid != true`, refuse to verify. Surface the discrepancy and ask the user to run `/gsd mvp-phase ${PHASE}` to set a proper User Story goal. The verb owns the canonical regex `/^As a .+, I want to .+, so that .+\.$/` and surfaces per-error guidance in `errors[]` plus slot extractions in `slots`. Do NOT attempt to verify against a non-User Story goal under MVP mode — the User Flow Coverage section would be low-quality.

@@ -128,7 +128,7 @@ Use multiple query variations. Mark WebSearch-only findings as LOW confidence. D
 Check `brave_search` from orchestrator context. If `true`, use Brave Search for higher quality results:
 
 ```bash
-gsd-sdk query websearch "your query" --limit 10
+gsd-tools query websearch "your query" --limit 10
 ```
 
 **Options:**

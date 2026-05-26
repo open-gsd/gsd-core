@@ -12,7 +12,7 @@ requires: [thread]
 <objective>
 Validate `.planning/` directory integrity and report actionable issues. Checks for missing files, invalid configurations, inconsistent state, and orphaned plans.
 
-`--context` runs an orthogonal check: the running session's context utilization. The workflow asks for the model's tokensUsed + contextWindow, calls `gsd-sdk query validate.context`, and renders one of three states:
+`--context` runs an orthogonal check: the running session's context utilization. The workflow asks for the model's tokensUsed + contextWindow, calls `gsd-tools query validate.context`, and renders one of three states:
 
 | Utilization | State    | Action                                                |
 |-------------|----------|-------------------------------------------------------|
