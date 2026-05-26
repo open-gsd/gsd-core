@@ -703,6 +703,27 @@ describe('CLUSTERS data structure', () => {
 // ─── listSurface ─────────────────────────────────────────────────────────────
 
 describe('listSurface', () => {
+  test('accepts parsed gsd-file-manifest JSON objects without crashing (#322)', () => {
+    const dir = tmpDir('gsd-surface-list-');
+    try {
+      fs.writeFileSync(path.join(dir, '.gsd-source'), REAL_COMMANDS_DIR, 'utf8');
+      writeActiveProfile(dir, 'core');
+      const diskManifestShape = {
+        version: '1.0.0',
+        timestamp: new Date().toISOString(),
+        mode: 'core',
+        files: {},
+      };
+      const result = listSurface(dir, diskManifestShape, CLUSTERS);
+
+      assert.ok(Array.isArray(result.enabled), 'enabled must be array');
+      assert.ok(Array.isArray(result.disabled), 'disabled must be array');
+      assert.ok(typeof result.tokenCost === 'number', 'tokenCost must be number');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('returns { enabled, disabled, tokenCost } structure', () => {
     const dir = tmpDir('gsd-surface-list-');
     try {
