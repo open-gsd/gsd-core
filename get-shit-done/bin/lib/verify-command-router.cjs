@@ -6,14 +6,6 @@ const { routeCjsCommandFamily } = require('./cjs-command-router-adapter.cjs');
 /**
  * Manifest-backed verify subcommand router.
  * Keeps gsd-tools.cjs thin while preserving existing command semantics.
- *
- * Phase 6: all verify.* subcommands have SDK equivalents and are dispatched
- * via executeForCjs (the sync bridge). CJS fallback retained when:
- * - GSD_WORKSTREAM is active (workstream-scoped requests fall through to CJS).
- * - SDK is unavailable (build not present).
- *
- * CJS-only subcommands: none.
- * SDK-only (unsupported in CJS router): none.
  */
 function routeVerifyCommand({ verify, args, cwd, raw, error }) {
   routeCjsCommandFamily({
@@ -37,9 +29,7 @@ function routeVerifyCommand({ verify, args, cwd, raw, error }) {
       },
       // verify codebase-drift dispatches direct to CJS — drift is out-of-seam
       // per ADR/PRD 3524 §3 / L160 (CJS-only by design). Routing through
-      // sdkHandler would re-enter the SDK bridge, and Phase 6's removed
-      // verifyCodebaseDrift stub used to execFileSync back to the CLI,
-      // creating an infinite spawn loop.
+      // recursive dispatch would re-enter this router path.
       'codebase-drift': () => verify.cmdVerifyCodebaseDrift(cwd, raw),
     },
   });

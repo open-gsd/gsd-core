@@ -5,11 +5,7 @@ const assert = require('node:assert/strict');
 
 const { routePhasesCommand } = require('../get-shit-done/bin/lib/phases-command-router.cjs');
 
-// These tests exercise the CJS dispatch path of the router. Since #3577 the
-// router prefers the SDK bridge when sdk/dist is present, which would bypass
-// the mocked `phase`/`milestone` handlers below. The router gates SDK
-// dispatch on `process.env.GSD_WORKSTREAM` being unset, so set it for these
-// tests to deterministically take the CJS path that the mocks model.
+// These tests exercise router dispatch with a deterministic runtime context.
 let _prevWorkstream;
 before(() => {
   _prevWorkstream = process.env.GSD_WORKSTREAM;

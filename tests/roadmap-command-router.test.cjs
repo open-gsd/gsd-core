@@ -5,11 +5,7 @@ const assert = require('node:assert/strict');
 
 const { routeRoadmapCommand } = require('../get-shit-done/bin/lib/roadmap-command-router.cjs');
 
-// These tests exercise the CJS dispatch path of the router. Since #3577 the
-// router prefers the SDK bridge when sdk/dist is present, which would bypass
-// the mocked `roadmap` handlers below. The router gates SDK dispatch on
-// `process.env.GSD_WORKSTREAM` being unset, so set it here to deterministically
-// take the CJS path that the mocks model.
+// These tests exercise router dispatch with a deterministic runtime context.
 let _prevWorkstream;
 before(() => {
   _prevWorkstream = process.env.GSD_WORKSTREAM;

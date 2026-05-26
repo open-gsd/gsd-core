@@ -7,25 +7,14 @@ const { routeCjsCommandFamily } = require('./cjs-command-router-adapter.cjs');
  * Manifest-backed phases subcommand router.
  * Keeps gsd-tools.cjs thin while preserving current CJS semantics.
  *
- * Phase 6: phases.list and phases.clear are dispatched via executeForCjs when
- * the SDK is available. CJS fallback retained when:
- * - GSD_WORKSTREAM is active (workstream-scoped requests fall through to CJS).
- * - SDK is unavailable (build not present).
- *
- * SDK-only (not in CJS router, treated as unknown):
- * - archive: `phases archive` is SDK-only (`phases.archive` handler in SDK
- *   query registry). CJS `gsd-tools phases` intentionally supports list/clear only.
- *   `archive` is excluded from the subcommands list so it falls through to the
- *   "unknown subcommand" error path (matching pre-Phase 6 behavior).
- *
- * CJS-only subcommands: none.
+ * Unsupported in this router (treated as unknown):
+ * - archive: `phases archive` is excluded from the subcommands list so it
+ *   falls through to the unknown-subcommand error path.
  */
 function routePhasesCommand({ phase, milestone, args, cwd, raw, error }) {
   routeCjsCommandFamily({
     args,
-    // Exclude 'archive' — it's SDK-only and not supported in CJS. Excluding
-    // from this list causes it to hit the unknownMessage path, preserving the
-    // pre-Phase 6 error message for callers that pass 'archive'.
+    // Exclude 'archive' so it hits the unknownMessage path.
     subcommands: PHASES_SUBCOMMANDS.filter((s) => s !== 'archive'),
     error,
     unknownMessage: (_subcommand, available) => `Unknown phases subcommand. Available: ${available.join(', ')}`,
