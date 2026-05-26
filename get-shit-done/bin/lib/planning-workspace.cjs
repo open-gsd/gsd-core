@@ -12,7 +12,10 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { probeTty, platformWriteSync, platformReadSync, platformEnsureDir } = require('./shell-command-projection.cjs');
-const { isValidActiveWorkstreamName } = require('./workstream-name-policy.cjs');
+const {
+  validateWorkstreamName,
+  assertValidActiveWorkstreamName,
+} = require('./workstream-name-policy.cjs');
 
 const WORKSTREAM_SESSION_ENV_KEYS = [
   'GSD_SESSION_KEY',
@@ -241,10 +244,6 @@ function pickActiveWorkstreamAdapter(cwd, opts = {}) {
   return createSharedPointerAdapter(cwd);
 }
 
-function validateWorkstreamName(name) {
-  return isValidActiveWorkstreamName(name);
-}
-
 function withPlanningLock(cwd, fn) {
   const lockPath = path.join(planningDir(cwd), '.lock');
   const lockTimeout = 10000; // 10 seconds
@@ -346,9 +345,7 @@ function createPlanningWorkspace(cwd, opts = {}) {
           adapter.clear();
           return;
         }
-        if (!validateWorkstreamName(name)) {
-          throw new Error('Invalid workstream name: must be alphanumeric, hyphens, underscores, or dots');
-        }
+        assertValidActiveWorkstreamName(name);
 
         const wsDir = path.join(planningRoot(cwd), 'workstreams', name);
         platformEnsureDir(wsDir);

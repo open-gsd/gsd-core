@@ -13,7 +13,12 @@ const path = require('path');
 const { output, error, toPosixPath, getMilestoneInfo, generateSlugInternal } = require('./core.cjs');
 const { platformWriteSync, platformEnsureDir } = require('./shell-command-projection.cjs');
 const { planningRoot, setActiveWorkstream, getActiveWorkstream } = require('./planning-workspace.cjs');
-const { toWorkstreamSlug, hasInvalidPathSegment, isValidActiveWorkstreamName } = require('./workstream-name-policy.cjs');
+const {
+  toWorkstreamSlug,
+  assertValidActiveWorkstreamName,
+  isValidActiveWorkstreamName,
+  INVALID_ACTIVE_WORKSTREAM_NAME_MESSAGE,
+} = require('./workstream-name-policy.cjs');
 const { formatGsdSlash, resolveRuntime } = require('./runtime-slash.cjs');
 const {
   getOtherActiveWorkstreamInventories,
@@ -30,7 +35,9 @@ const {
  * milestones/, research/, codebase/, todos/) stay in place.
  */
 function migrateToWorkstreams(cwd, workstreamName) {
-  if (!workstreamName || hasInvalidPathSegment(workstreamName)) {
+  try {
+    assertValidActiveWorkstreamName(workstreamName, 'Invalid workstream name for migration');
+  } catch (err) {
     throw new Error('Invalid workstream name for migration');
   }
 
@@ -207,7 +214,11 @@ function cmdWorkstreamList(cwd, raw) {
 
 function cmdWorkstreamStatus(cwd, name, raw) {
   if (!name) error('workstream name required. Usage: workstream status <name>');
-  if (hasInvalidPathSegment(name)) error('Invalid workstream name');
+  try {
+    assertValidActiveWorkstreamName(name, INVALID_ACTIVE_WORKSTREAM_NAME_MESSAGE);
+  } catch {
+    error(INVALID_ACTIVE_WORKSTREAM_NAME_MESSAGE);
+  }
 
   const wsDir = path.join(planningRoot(cwd), 'workstreams', name);
   if (!fs.existsSync(wsDir)) {
@@ -233,7 +244,11 @@ function cmdWorkstreamStatus(cwd, name, raw) {
 
 function cmdWorkstreamComplete(cwd, name, options, raw) {
   if (!name) error('workstream name required. Usage: workstream complete <name>');
-  if (hasInvalidPathSegment(name)) error('Invalid workstream name');
+  try {
+    assertValidActiveWorkstreamName(name, INVALID_ACTIVE_WORKSTREAM_NAME_MESSAGE);
+  } catch {
+    error(INVALID_ACTIVE_WORKSTREAM_NAME_MESSAGE);
+  }
 
   const root = planningRoot(cwd);
   const wsRoot = path.join(root, 'workstreams');

@@ -6,11 +6,10 @@
  */
 
 const { getActiveWorkstream } = require('./planning-workspace.cjs');
-const { isValidActiveWorkstreamName } = require('./workstream-name-policy.cjs');
-
-function validateWorkstreamName(name) {
-  return isValidActiveWorkstreamName(name);
-}
+const {
+  validateWorkstreamName,
+  assertValidActiveWorkstreamName,
+} = require('./workstream-name-policy.cjs');
 
 function parseCliWorkstream(args) {
   const wsEqArg = args.find(arg => arg.startsWith('--ws='));
@@ -61,8 +60,8 @@ function resolveActiveWorkstream(cwd, args, env = process.env, deps = {}) {
     source = ws ? 'store' : 'none';
   }
 
-  if (ws && !validateWorkstreamName(ws)) {
-    throw new Error('Invalid workstream name: must be alphanumeric, hyphens, underscores, or dots');
+  if (ws) {
+    assertValidActiveWorkstreamName(ws);
   }
 
   return {

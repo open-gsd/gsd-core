@@ -794,6 +794,26 @@ describe('path traversal rejection', () => {
     }
   });
 
+  describe('cmdWorkstreamStatus rejects invalid names consistently', () => {
+    for (const name of maliciousNames) {
+      test(`rejects status ${name}`, () => {
+        const result = runGsdTools(['workstream', 'status', name, '--raw'], tmpDir);
+        assert.ok(!result.success, `status should reject invalid name: ${name}`);
+        assert.ok(result.error.includes('Invalid workstream name'), `error should mention invalid name for: ${name}`);
+      });
+    }
+  });
+
+  describe('cmdWorkstreamComplete rejects invalid names consistently', () => {
+    for (const name of maliciousNames) {
+      test(`rejects complete ${name}`, () => {
+        const result = runGsdTools(['workstream', 'complete', name, '--raw'], tmpDir);
+        assert.ok(!result.success, `complete should reject invalid name: ${name}`);
+        assert.ok(result.error.includes('Invalid workstream name'), `error should mention invalid name for: ${name}`);
+      });
+    }
+  });
+
   describe('getActiveWorkstream rejects poisoned active-workstream file', () => {
     for (const name of maliciousNames) {
       test(`rejects poisoned file containing ${name}`, () => {

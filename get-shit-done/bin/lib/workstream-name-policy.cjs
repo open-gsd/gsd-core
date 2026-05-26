@@ -11,6 +11,35 @@
  */
 
 const ACTIVE_WORKSTREAM_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
+const INVALID_ACTIVE_WORKSTREAM_NAME_MESSAGE = 'Invalid workstream name: must be alphanumeric, hyphens, underscores, or dots';
+
+function normalizeWorkstreamNameInput(name) {
+    const value = String(name || '').trim();
+    return value || null;
+}
+
+function validateActiveWorkstreamName(name) {
+    const value = normalizeWorkstreamNameInput(name);
+    if (!value) {
+        return {
+            ok: false,
+            reason: 'empty',
+            value: null,
+        };
+    }
+    if (hasInvalidPathSegment(value) || !ACTIVE_WORKSTREAM_RE.test(value)) {
+        return {
+            ok: false,
+            reason: 'invalid',
+            value,
+        };
+    }
+    return {
+        ok: true,
+        reason: null,
+        value,
+    };
+}
 /**
  * Validate a workstream name.
  * Allowed: alphanumeric, hyphens, underscores, dots.
@@ -47,15 +76,24 @@ function hasInvalidPathSegment(name) {
  * - Must not contain path traversal sequences (..)
  */
 function isValidActiveWorkstreamName(name) {
-    const value = String(name || '');
-    if (value === '..' || value.startsWith('../') || value.includes('..'))
-        return false;
-    return ACTIVE_WORKSTREAM_RE.test(value);
+    return validateActiveWorkstreamName(name).ok;
+}
+
+function assertValidActiveWorkstreamName(name, errorMessage = INVALID_ACTIVE_WORKSTREAM_NAME_MESSAGE) {
+    const validation = validateActiveWorkstreamName(name);
+    if (!validation.ok) {
+        throw new Error(errorMessage);
+    }
+    return validation.value;
 }
 
 module.exports = {
+  INVALID_ACTIVE_WORKSTREAM_NAME_MESSAGE,
+  normalizeWorkstreamNameInput,
+  validateActiveWorkstreamName,
   validateWorkstreamName,
   toWorkstreamSlug,
   hasInvalidPathSegment,
   isValidActiveWorkstreamName,
+  assertValidActiveWorkstreamName,
 };
