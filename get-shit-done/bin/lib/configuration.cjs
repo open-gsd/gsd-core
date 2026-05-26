@@ -158,7 +158,7 @@ function normalizeLegacyKeys(parsed) {
 
 function mergeDefaults(parsed) {
     // Start with a deep clone of defaults, then overlay parsed
-    const defaults = JSON.parse(JSON.stringify(CONFIG_DEFAULTS));
+    const defaults = structuredClone(CONFIG_DEFAULTS);
     return deepMergeConfig(defaults, parsed);
 }
 
