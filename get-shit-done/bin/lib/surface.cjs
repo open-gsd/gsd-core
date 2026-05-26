@@ -109,6 +109,43 @@ function clustersToSkills(clusterNames, clusterMap) {
 }
 
 /**
+ * Normalize manifest inputs to the skill-dependency Map shape expected by
+ * resolveProfile/computeClosure.
+ *
+ * Supports:
+ *  - canonical Map<string, string[]>
+ *  - legacy plain object map: { [stem]: string[] }
+ *  - parsed gsd-file-manifest.json object ({ files: { ... } }) by rebuilding
+ *    the dependency manifest from the install source tree
+ *
+ * @param {string} runtimeConfigDir
+ * @param {Map<string, string[]>|Object} manifest
+ * @returns {Map<string, string[]>}
+ */
+function normalizeSkillManifest(runtimeConfigDir, manifest) {
+  if (manifest instanceof Map) {
+    return manifest;
+  }
+  if (!manifest || typeof manifest !== 'object') {
+    return new Map();
+  }
+
+  // Legacy/ad-hoc object map: stem -> requires[]
+  const arrayEntries = Object.entries(manifest).filter(([, value]) => Array.isArray(value));
+  if (arrayEntries.length > 0) {
+    return new Map(arrayEntries.map(([stem, deps]) => [stem, deps]));
+  }
+
+  // Parsed gsd-file-manifest.json shape: rebuild the dependency map from source.
+  if (manifest.files && typeof manifest.files === 'object') {
+    const srcCommandsDir = findInstallSourceRoot(runtimeConfigDir);
+    return loadSkillsManifest(srcCommandsDir);
+  }
+
+  return new Map();
+}
+
+/**
  * Resolve the effective surface to a typed profile-like object.
  * Shape: { name, skills: Set<string>|'*', agents: Set<string> }
  *
@@ -125,6 +162,7 @@ function clustersToSkills(clusterNames, clusterMap) {
  */
 function resolveSurface(runtimeConfigDir, manifest, clusterMap) {
   const cm = clusterMap || CLUSTERS;
+  const skillManifest = normalizeSkillManifest(runtimeConfigDir, manifest);
   const surface = readSurface(runtimeConfigDir);
 
   // Determine base profile name: from surface state or from .gsd-profile marker
@@ -135,7 +173,7 @@ function resolveSurface(runtimeConfigDir, manifest, clusterMap) {
   // Resolve base profile
   const baseResolved = resolveProfile({
     modes: baseProfileName.split(',').map(s => s.trim()),
-    manifest,
+    manifest: skillManifest,
   });
 
   // If full, we need to enumerate all skills from the manifest
@@ -143,7 +181,7 @@ function resolveSurface(runtimeConfigDir, manifest, clusterMap) {
   if (baseResolved.skills === '*') {
     // Materialize all skill stems from manifest
     skills = new Set();
-    for (const [key] of manifest) {
+    for (const [key] of skillManifest) {
       if (!key.startsWith('_calls_agents_')) skills.add(key);
     }
   } else {
@@ -163,7 +201,7 @@ function resolveSurface(runtimeConfigDir, manifest, clusterMap) {
       const visited = new Set(addSet);
       while (queue.length > 0) {
         const stem = queue.pop();
-        const deps = manifest.get(stem) || [];
+        const deps = skillManifest.get(stem) || [];
         for (const dep of deps) {
           if (!visited.has(dep)) {
             visited.add(dep);
@@ -183,7 +221,7 @@ function resolveSurface(runtimeConfigDir, manifest, clusterMap) {
   // Derive agents from skills
   const agents = new Set();
   for (const skillStem of skills) {
-    const agentRefs = manifest.get(`_calls_agents_${skillStem}`) || [];
+    const agentRefs = skillManifest.get(`_calls_agents_${skillStem}`) || [];
     for (const agentStem of agentRefs) agents.add(agentStem);
   }
 
@@ -208,11 +246,12 @@ function applySurface(runtimeConfigDir, layout, manifest, clusterMap) {
   if (path.resolve(runtimeConfigDir) !== path.resolve(layout.configDir)) {
     throw new TypeError('applySurface runtimeConfigDir must match layout.configDir');
   }
-  const resolved = resolveSurface(layout.configDir, manifest, clusterMap);
+  const skillManifest = normalizeSkillManifest(layout.configDir, manifest);
+  const resolved = resolveSurface(layout.configDir, skillManifest, clusterMap);
   for (const kind of layout.kinds) {
     const staged = kind.stage(resolved);
     const dest = path.join(layout.configDir, kind.destSubpath);
-    _syncGsdDir(staged, dest, kind, manifest);
+    _syncGsdDir(staged, dest, kind, skillManifest);
   }
   return resolved;
 }
@@ -384,11 +423,12 @@ function _syncGsdDir(stagedDir, destDir, kind, manifest) {
  * @returns {{ enabled: string[], disabled: string[], tokenCost: number }}
  */
 function listSurface(runtimeConfigDir, manifest, clusterMap) {
-  const resolved = resolveSurface(runtimeConfigDir, manifest, clusterMap);
+  const skillManifest = normalizeSkillManifest(runtimeConfigDir, manifest);
+  const resolved = resolveSurface(runtimeConfigDir, skillManifest, clusterMap);
 
   // All known stems from manifest (exclude _calls_agents_ meta keys)
   const allStems = [];
-  for (const [key] of manifest) {
+  for (const [key] of skillManifest) {
     if (!key.startsWith('_calls_agents_')) allStems.push(key);
   }
 
