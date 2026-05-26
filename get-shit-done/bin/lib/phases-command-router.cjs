@@ -21,10 +21,6 @@ const { routeCjsCommandFamily } = require('./cjs-command-router-adapter.cjs');
  * CJS-only subcommands: none.
  */
 function routePhasesCommand({ phase, milestone, args, cwd, raw, error }) {
-  function sdkHandler(_registryCommand, _registryArgs, _legacyArgs, cjsFallback) {
-    return cjsFallback;
-  }
-
   routeCjsCommandFamily({
     args,
     // Exclude 'archive' — it's SDK-only and not supported in CJS. Excluding
@@ -34,27 +30,17 @@ function routePhasesCommand({ phase, milestone, args, cwd, raw, error }) {
     error,
     unknownMessage: (_subcommand, available) => `Unknown phases subcommand. Available: ${available.join(', ')}`,
     handlers: {
-      list: sdkHandler(
-        'phases.list',
-        args.slice(2),
-        args.slice(1),
-        () => {
-          const typeIndex = args.indexOf('--type');
-          const phaseIndex = args.indexOf('--phase');
-          const options = {
-            type: typeIndex !== -1 ? args[typeIndex + 1] : null,
-            phase: phaseIndex !== -1 ? args[phaseIndex + 1] : null,
-            includeArchived: args.includes('--include-archived'),
-          };
-          phase.cmdPhasesList(cwd, options, raw);
-        },
-      ),
-      clear: sdkHandler(
-        'phases.clear',
-        args.slice(2),
-        args.slice(1),
-        () => milestone.cmdPhasesClear(cwd, raw, args.slice(2)),
-      ),
+      list: () => {
+        const typeIndex = args.indexOf('--type');
+        const phaseIndex = args.indexOf('--phase');
+        const options = {
+          type: typeIndex !== -1 ? args[typeIndex + 1] : null,
+          phase: phaseIndex !== -1 ? args[phaseIndex + 1] : null,
+          includeArchived: args.includes('--include-archived'),
+        };
+        phase.cmdPhasesList(cwd, options, raw);
+      },
+      clear: () => milestone.cmdPhasesClear(cwd, raw, args.slice(2)),
     },
   });
 }

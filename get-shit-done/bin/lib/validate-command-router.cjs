@@ -3,6 +3,7 @@
 const { VALIDATE_SUBCOMMANDS } = require('./command-aliases.cjs');
 const { formatGsdSlash, resolveRuntime } = require('./runtime-slash.cjs');
 const { routeCjsCommandFamily } = require('./cjs-command-router-adapter.cjs');
+const { parseNamedArgs } = require('./command-arg-projection.cjs');
 
 /**
  * Manifest-backed validate subcommand router.
@@ -20,11 +21,7 @@ const { routeCjsCommandFamily } = require('./cjs-command-router-adapter.cjs');
  *
  * SDK-only (unsupported in CJS router): none.
  */
-function routeValidateCommand({ verify, args, cwd, raw, parseNamedArgs, output: outputFn, error }) {
-  function sdkHandler(_registryCommand, _registryArgs, _legacyArgs, cjsFallback) {
-    return cjsFallback;
-  }
-
+function routeValidateCommand({ verify, args, cwd, raw, output: outputFn, error }) {
   routeCjsCommandFamily({
     args,
     subcommands: VALIDATE_SUBCOMMANDS,
@@ -32,12 +29,7 @@ function routeValidateCommand({ verify, args, cwd, raw, parseNamedArgs, output: 
     error,
     unknownMessage: (_subcommand, available) => `Unknown validate subcommand. Available: ${available.join(', ')}`,
     handlers: {
-      consistency: sdkHandler(
-        'validate.consistency',
-        args.slice(2),
-        args.slice(1),
-        () => verify.cmdValidateConsistency(cwd, raw),
-      ),
+      consistency: () => verify.cmdValidateConsistency(cwd, raw),
       // Keep health on CJS for now so fix hints are rendered via runtime-slash
       // helpers (codex expects $gsd-* command shape).
       health: () => {
@@ -45,12 +37,7 @@ function routeValidateCommand({ verify, args, cwd, raw, parseNamedArgs, output: 
         const backfillFlag = args.includes('--backfill');
         verify.cmdValidateHealth(cwd, { repair: repairFlag, backfill: backfillFlag }, raw);
       },
-      agents: sdkHandler(
-        'validate.agents',
-        args.slice(2),
-        args.slice(1),
-        () => verify.cmdValidateAgents(cwd, raw),
-      ),
+      agents: () => verify.cmdValidateAgents(cwd, raw),
       // context: CJS-only — complex inline logic using classifyContextUtilization
       // with custom output formatting that has no direct SDK counterpart.
       context: () => {

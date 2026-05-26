@@ -16,10 +16,6 @@ const { routeCjsCommandFamily } = require('./cjs-command-router-adapter.cjs');
  * SDK-only (unsupported in CJS router): none.
  */
 function routeRoadmapCommand({ roadmap, args, cwd, raw, error }) {
-  function sdkHandler(_registryCommand, _registryArgs, _legacyArgs, cjsFallback) {
-    return cjsFallback;
-  }
-
   routeCjsCommandFamily({
     args,
     subcommands: ROADMAP_SUBCOMMANDS,
@@ -27,30 +23,10 @@ function routeRoadmapCommand({ roadmap, args, cwd, raw, error }) {
     error,
     unknownMessage: (_subcommand, available) => `Unknown roadmap subcommand. Available: ${available.join(', ')}`,
     handlers: {
-      'get-phase': sdkHandler(
-        'roadmap.get-phase',
-        args.slice(2),
-        args.slice(1),
-        () => roadmap.cmdRoadmapGetPhase(cwd, args[2], raw),
-      ),
-      analyze: sdkHandler(
-        'roadmap.analyze',
-        args.slice(2),
-        args.slice(1),
-        () => roadmap.cmdRoadmapAnalyze(cwd, raw),
-      ),
-      'update-plan-progress': sdkHandler(
-        'roadmap.update-plan-progress',
-        args.slice(2),
-        args.slice(1),
-        () => roadmap.cmdRoadmapUpdatePlanProgress(cwd, args[2], raw),
-      ),
-      'annotate-dependencies': sdkHandler(
-        'roadmap.annotate-dependencies',
-        args.slice(2),
-        args.slice(1),
-        () => roadmap.cmdRoadmapAnnotateDependencies(cwd, args[2], raw),
-      ),
+      'get-phase': () => roadmap.cmdRoadmapGetPhase(cwd, args[2], raw),
+      analyze: () => roadmap.cmdRoadmapAnalyze(cwd, raw),
+      'update-plan-progress': () => roadmap.cmdRoadmapUpdatePlanProgress(cwd, args[2], raw),
+      'annotate-dependencies': () => roadmap.cmdRoadmapAnnotateDependencies(cwd, args[2], raw),
     },
   });
 }

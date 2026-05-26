@@ -55,6 +55,7 @@
   },
   "scripts": {
     "check:env": "bash scripts/check-env.sh",
+    "check:alias-drift": "node scripts/check-alias-drift.cjs",
     "check:integrity": "./scripts/check-npm-integrity.sh",
     "build": "npm run build:hooks",
     "build:hooks": "node scripts/build-hooks.js",

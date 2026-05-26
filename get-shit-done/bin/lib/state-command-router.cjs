@@ -1,7 +1,8 @@
 'use strict';
 
 const { STATE_SUBCOMMANDS } = require('./command-aliases.cjs');
-const { routeCjsCommandFamily } = require('./cjs-command-router-adapter.cjs');
+const { routeHubCommandFamily, cjsFallbackHandler } = require('./cjs-command-router-adapter.cjs');
+const { parseNamedArgs } = require('./command-arg-projection.cjs');
 
 /**
  * Manifest-backed state subcommand router.
@@ -14,7 +15,7 @@ const { routeCjsCommandFamily } = require('./cjs-command-router-adapter.cjs');
  *   for workstream requests; subprocess is disabled in the sync bridge worker).
  * - Any command when the SDK is not available (build not present).
  */
-function routeStateCommand({ state, args, cwd, raw, parseNamedArgs, error }) {
+function routeStateCommand({ state, args, cwd, raw, error }) {
   const parsePlans = (plans) => {
     const parsedPlans = plans == null ? null : Number.parseInt(plans, 10);
     if (plans != null && Number.isNaN(parsedPlans)) {
@@ -24,11 +25,8 @@ function routeStateCommand({ state, args, cwd, raw, parseNamedArgs, error }) {
     return parsedPlans;
   };
 
-  function sdkHandler(_registryCommand, _registryArgs, _legacyArgs, _rawFormatter, cjsFallback) {
-    return cjsFallback;
-  }
-
-  routeCjsCommandFamily({
+  routeHubCommandFamily({
+    family: 'state',
     args,
     subcommands: ['load', 'complete-phase', ...STATE_SUBCOMMANDS.filter((s) => s !== 'load')],
     defaultSubcommand: 'load',
@@ -36,37 +34,39 @@ function routeStateCommand({ state, args, cwd, raw, parseNamedArgs, error }) {
       'add-roadmap-evolution': 'state add-roadmap-evolution is SDK-only. Use: gsd-sdk query state.add-roadmap-evolution ...',
     },
     error,
+    cwd,
+    raw,
     unknownMessage: (subcommand, available) => `Unknown state subcommand: "${subcommand}". Available: ${available.join(', ')}`,
     handlers: {
-      load: sdkHandler(
+      load: cjsFallbackHandler(
         'state.load',
         [],
         args.slice(1),
         null,
         () => state.cmdStateLoad(cwd, raw),
       ),
-      json: sdkHandler(
+      json: cjsFallbackHandler(
         'state.json',
         [],
         args.slice(1),
         null,
         () => state.cmdStateJson(cwd, raw),
       ),
-      get: sdkHandler(
+      get: cjsFallbackHandler(
         'state.get',
         args.slice(2),
         args.slice(1),
         null,
         () => state.cmdStateGet(cwd, args[2], raw),
       ),
-      update: sdkHandler(
+      update: cjsFallbackHandler(
         'state.update',
         args.slice(2),
         args.slice(1),
         null,
         () => state.cmdStateUpdate(cwd, args[2], args[3]),
       ),
-      patch: sdkHandler(
+      patch: cjsFallbackHandler(
         'state.patch',
         args.slice(2),
         args.slice(1),
@@ -83,14 +83,14 @@ function routeStateCommand({ state, args, cwd, raw, parseNamedArgs, error }) {
           state.cmdStatePatch(cwd, patches, raw);
         },
       ),
-      'advance-plan': sdkHandler(
+      'advance-plan': cjsFallbackHandler(
         'state.advance-plan',
         [],
         args.slice(1),
         null,
         () => state.cmdStateAdvancePlan(cwd, raw),
       ),
-      'record-metric': sdkHandler(
+      'record-metric': cjsFallbackHandler(
         'state.record-metric',
         args.slice(2),
         args.slice(1),
@@ -100,14 +100,14 @@ function routeStateCommand({ state, args, cwd, raw, parseNamedArgs, error }) {
           state.cmdStateRecordMetric(cwd, { phase: p, plan, duration, tasks, files }, raw);
         },
       ),
-      'update-progress': sdkHandler(
+      'update-progress': cjsFallbackHandler(
         'state.update-progress',
         [],
         args.slice(1),
         null,
         () => state.cmdStateUpdateProgress(cwd, raw),
       ),
-      'add-decision': sdkHandler(
+      'add-decision': cjsFallbackHandler(
         'state.add-decision',
         args.slice(2),
         args.slice(1),
@@ -117,7 +117,7 @@ function routeStateCommand({ state, args, cwd, raw, parseNamedArgs, error }) {
           state.cmdStateAddDecision(cwd, { phase: p, summary, summary_file, rationale: rationale || '', rationale_file }, raw);
         },
       ),
-      'add-blocker': sdkHandler(
+      'add-blocker': cjsFallbackHandler(
         'state.add-blocker',
         args.slice(2),
         args.slice(1),
@@ -127,14 +127,14 @@ function routeStateCommand({ state, args, cwd, raw, parseNamedArgs, error }) {
           state.cmdStateAddBlocker(cwd, { text, text_file }, raw);
         },
       ),
-      'resolve-blocker': sdkHandler(
+      'resolve-blocker': cjsFallbackHandler(
         'state.resolve-blocker',
         args.slice(2),
         args.slice(1),
         null,
         () => state.cmdStateResolveBlocker(cwd, parseNamedArgs(args, ['text']).text, raw),
       ),
-      'record-session': sdkHandler(
+      'record-session': cjsFallbackHandler(
         'state.record-session',
         args.slice(2),
         args.slice(1),
@@ -144,7 +144,7 @@ function routeStateCommand({ state, args, cwd, raw, parseNamedArgs, error }) {
           state.cmdStateRecordSession(cwd, { stopped_at, resume_file: resume_file || 'None' }, raw);
         },
       ),
-      'begin-phase': sdkHandler(
+      'begin-phase': cjsFallbackHandler(
         'state.begin-phase',
         args.slice(2),
         args.slice(1),
@@ -154,7 +154,7 @@ function routeStateCommand({ state, args, cwd, raw, parseNamedArgs, error }) {
           state.cmdStateBeginPhase(cwd, p, name, parsePlans(plans), raw);
         },
       ),
-      'signal-waiting': sdkHandler(
+      'signal-waiting': cjsFallbackHandler(
         'state.signal-waiting',
         args.slice(2),
         args.slice(1),
@@ -164,14 +164,14 @@ function routeStateCommand({ state, args, cwd, raw, parseNamedArgs, error }) {
           state.cmdSignalWaiting(cwd, type, question, options, p, raw);
         },
       ),
-      'signal-resume': sdkHandler(
+      'signal-resume': cjsFallbackHandler(
         'state.signal-resume',
         [],
         args.slice(1),
         null,
         () => state.cmdSignalResume(cwd, raw),
       ),
-      'planned-phase': sdkHandler(
+      'planned-phase': cjsFallbackHandler(
         'state.planned-phase',
         args.slice(2),
         args.slice(1),
@@ -181,14 +181,14 @@ function routeStateCommand({ state, args, cwd, raw, parseNamedArgs, error }) {
           state.cmdStatePlannedPhase(cwd, p, parsePlans(plans), raw);
         },
       ),
-      validate: sdkHandler(
+      validate: cjsFallbackHandler(
         'state.validate',
         [],
         args.slice(1),
         null,
         () => state.cmdStateValidate(cwd, raw),
       ),
-      sync: sdkHandler(
+      sync: cjsFallbackHandler(
         'state.sync',
         args.slice(2),
         args.slice(1),
@@ -198,7 +198,7 @@ function routeStateCommand({ state, args, cwd, raw, parseNamedArgs, error }) {
           state.cmdStateSync(cwd, { verify }, raw);
         },
       ),
-      prune: sdkHandler(
+      prune: cjsFallbackHandler(
         'state.prune',
         args.slice(2),
         args.slice(1),
@@ -213,7 +213,7 @@ function routeStateCommand({ state, args, cwd, raw, parseNamedArgs, error }) {
         const { phase: p } = parseNamedArgs(args, ['phase']);
         state.cmdStateCompletePhase(cwd, raw, p || args[2]);
       },
-      'milestone-switch': sdkHandler(
+      'milestone-switch': cjsFallbackHandler(
         'state.milestone-switch',
         args.slice(2),
         args.slice(1),
