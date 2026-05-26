@@ -26,13 +26,16 @@ Wait for response before continuing.
 **Check if project exists.**
 
 ```bash
-# SDK resolution: prefer local node shim, fail if local gsd-tools.cjs is missing (#3668)
+# SDK resolution: prefer local node shim, fall back to installed gsd-tools (#3668)
 _GSD_SHIM_NAME="gsd-tools.cjs"
 GSD_TOOLS="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/get-shit-done/bin/${_GSD_SHIM_NAME}"
 if [ -f "$GSD_TOOLS" ]; then
   GSD_SDK="node $GSD_TOOLS"
+elif command -v gsd-tools >/dev/null 2>&1; then
+  GSD_TOOLS="$(command -v gsd-tools)"
+  GSD_SDK="$GSD_TOOLS"
 else
-  echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS." >&2
+  echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and gsd-tools is not on PATH." >&2
   echo "Run: npx -y @opengsd/get-shit-done-redux@latest --claude --local" >&2
   exit 1
 fi

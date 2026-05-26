@@ -109,7 +109,7 @@ Phase: "API documentation"       → Structure/navigation, Code examples depth, 
 Phase number from argument (required).
 
 ```bash
-GSD_TOOLS="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/get-shit-done/bin/gsd-tools.cjs"; [ -f "$GSD_TOOLS" ] && GSD_SDK="node $GSD_TOOLS" || { echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS." >&2; exit 1; }
+GSD_TOOLS="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/get-shit-done/bin/gsd-tools.cjs"; if [ -f "$GSD_TOOLS" ]; then GSD_SDK="node $GSD_TOOLS"; elif command -v gsd-tools >/dev/null 2>&1; then GSD_TOOLS="$(command -v gsd-tools)"; GSD_SDK="$GSD_TOOLS"; else echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and gsd-tools is not on PATH." >&2; exit 1; fi
 INIT=$($GSD_SDK query init.phase-op "${PHASE}"); [[ "$INIT" == @file:* ]] && INIT=$(cat "${INIT#@file:}")
 AGENT_SKILLS_ADVISOR=$($GSD_SDK query agent-skills gsd-advisor-researcher)
 ```

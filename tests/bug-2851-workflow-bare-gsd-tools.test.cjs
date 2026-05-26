@@ -1,7 +1,9 @@
 /**
  * Bug #2851: plan-phase.md §13e calls bare `gsd-tools` — incomplete fix of #2245
  *
- * `gsd-tools` is NOT a published bin entry. The shipped invocation pattern is:
+ * Workflow bodies should not call `gsd-tools` as an unguarded bare command.
+ * Use the resolver snippets for SDK calls, or an explicit local CJS path when
+ * a command intentionally targets the checked-in legacy script:
  *
  *   node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" <subcommand> [args]
  *
@@ -136,7 +138,7 @@ describe('bug-2851: workflow files must not call bare `gsd-tools` (#2245 sweep r
       violations,
       [],
       'Bare `gsd-tools` invocations found in workflow shell blocks. ' +
-        'Use `node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" <subcommand>` instead.\n' +
+        'Use a resolver snippet or `node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" <subcommand>` instead.\n' +
         violations.join('\n'),
     );
   });
