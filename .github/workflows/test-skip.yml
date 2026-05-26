@@ -10,6 +10,7 @@ name: Test (skip-noop)
 on:
   pull_request:
     branches:
+      - next
       - main
     paths-ignore:
       - 'bin/**'
@@ -17,7 +18,6 @@ on:
       - 'agents/**'
       - 'commands/**'
       - 'hooks/**'
-      - 'sdk/**'
       - 'tests/**'
       - 'scripts/**'
       - 'package.json'

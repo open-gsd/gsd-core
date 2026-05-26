@@ -3,11 +3,13 @@ name: Tests
 on:
   push:
     branches:
+      - next
       - main
       - 'release/**'
       - 'hotfix/**'
   pull_request:
     branches:
+      - next
       - main
     paths:
       - 'bin/**'
@@ -15,7 +17,6 @@ on:
       - 'agents/**'
       - 'commands/**'
       - 'hooks/**'
-      - 'sdk/**'
       - 'tests/**'
       - 'scripts/**'
       - 'package.json'
@@ -109,12 +110,8 @@ jobs:
           fi
 
       # GitHub's `refs/pull/N/merge` is cached against the recorded merge-base.
-      # When main advances after a PR is opened, the cache stays stale and CI
-      # runs against the pre-advance state — hiding bugs that are already fixed
-      # on trunk and surfacing type errors that were introduced and then patched
-      # on main in between. Explicitly merge current origin/main here so tests
-      # always run against the latest trunk.
-      - name: Rebase check — merge origin/main into PR head
+      # Explicitly merge the PR base branch so tests run against the latest target.
+      - name: Rebase check — merge PR base branch into PR head
         if: github.event_name == 'pull_request'
         shell: bash
         env:
@@ -124,18 +121,19 @@ jobs:
           git config user.email "ci@gsd-redux"
           git config user.name "CI Rebase Check"
           git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          BASE_BRANCH="${GITHUB_BASE_REF:-main}"
           for attempt in 1 2 3; do
-            if git fetch origin main; then
+            if git fetch origin "$BASE_BRANCH"; then
               break
             fi
             if [ "$attempt" -eq 3 ]; then
-              echo "::error::git fetch origin main failed after 3 attempts."
+              echo "::error::git fetch origin $BASE_BRANCH failed after 3 attempts."
               exit 1
             fi
             sleep $((attempt * 4))
           done
-          if ! git merge --no-edit --no-ff origin/main; then
-            echo "::error::This PR cannot cleanly merge origin/main. Rebase your branch onto current main and push again."
+          if ! git merge --no-edit --no-ff "origin/$BASE_BRANCH"; then
+            echo "::error::This PR cannot cleanly merge origin/$BASE_BRANCH. Rebase your branch onto current $BASE_BRANCH and push again."
             echo "::error::Conflicting files:"
             git diff --name-only --diff-filter=U
             git merge --abort
@@ -166,17 +164,6 @@ jobs:
           chmod +x scripts/check-npm-integrity.sh
           scripts/check-npm-integrity.sh
 
-      - name: Build SDK dist (required by installer)
-        shell: bash
-        run: npm run build:sdk
-
-      # Seam contract gate: keep manifest -> generated aliases -> registry/CJS adapters aligned.
-      # Run once per workflow on the primary Linux node to avoid redundant matrix cost.
-      - name: SDK seam coverage tests
-        if: matrix.os == 'ubuntu-latest' && matrix.node-version == 24
-        shell: bash
-        run: cd sdk && npx vitest run src/query/command-seam-coverage.test.ts
-
       # Split lanes (issue #3597). Unit is the fast default lane; integration
       # and security run alongside it on every PR. `install` and `slow` are
       # skipped on PR CI by design — they run on the weekly windows-compat
@@ -193,20 +180,15 @@ jobs:
         shell: bash
         run: npm run test:security
 
-      # Install + slow lanes only on main-branch push (not PR CI) so PRs stay fast.
-      # Windows is excluded from the install lane: `npm install -g <tarball>` runs
-      # 7× per release-tarball-smoke.install.test.cjs invocation (1× before-hook
-      # + 6× per-test) and each takes 60–90 s on windows-latest (NTFS + Defender),
-      # so the lane alone consumes ~10 min and blows the 15-min job budget after
-      # earlier steps. Linux + macOS coverage stays here; Windows tarball install
-      # coverage is provided by the weekly windows-compat workflow.
+      # Full-suite gates run on a single canonical lane to keep matrix cost bounded.
+      # This ensures install + slow tests are always executed in PR CI.
       - name: Run install tests
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.os != 'windows-latest'
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == 24
         shell: bash
         run: npm run test:install
 
       - name: Run slow tests
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.os != 'windows-latest'
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == 24
         shell: bash
         run: npm run test:slow
 
@@ -232,7 +214,7 @@ jobs:
             echo "::error::Expected github-hosted runner. RUNNER_ENVIRONMENT=${RUNNER_ENVIRONMENT:-unset}"
             exit 1
           fi
-      - name: Rebase check — merge origin/main into PR head
+      - name: Rebase check — merge PR base branch into PR head
         if: github.event_name == 'pull_request'
         shell: bash
         env:
@@ -242,18 +224,19 @@ jobs:
           git config user.email "ci@gsd-redux"
           git config user.name "CI Rebase Check"
           git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          BASE_BRANCH="${GITHUB_BASE_REF:-main}"
           for attempt in 1 2 3; do
-            if git fetch origin main; then
+            if git fetch origin "$BASE_BRANCH"; then
               break
             fi
             if [ "$attempt" -eq 3 ]; then
-              echo "::error::git fetch origin main failed after 3 attempts."
+              echo "::error::git fetch origin $BASE_BRANCH failed after 3 attempts."
               exit 1
             fi
             sleep $((attempt * 4))
           done
-          if ! git merge --no-edit --no-ff origin/main; then
-            echo "::error::This PR cannot cleanly merge origin/main. Rebase your branch onto current main and push again."
+          if ! git merge --no-edit --no-ff "origin/$BASE_BRANCH"; then
+            echo "::error::This PR cannot cleanly merge origin/$BASE_BRANCH. Rebase your branch onto current $BASE_BRANCH and push again."
             git merge --abort
             exit 1
           fi
@@ -270,9 +253,6 @@ jobs:
         run: |
           chmod +x scripts/check-npm-integrity.sh
           scripts/check-npm-integrity.sh
-      - name: Build SDK dist
-        shell: bash
-        run: npm run build:sdk
       - name: Unit coverage
         shell: bash
         env:
