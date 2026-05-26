@@ -374,22 +374,6 @@ const INIT_COMMAND_ALIASES = [
 
 const PHASE_COMMAND_ALIASES = [
   {
-    "canonical": "phase.list-plans",
-    "aliases": [
-      "phase list-plans"
-    ],
-    "subcommand": "list-plans",
-    "mutation": false
-  },
-  {
-    "canonical": "phase.list-artifacts",
-    "aliases": [
-      "phase list-artifacts"
-    ],
-    "subcommand": "list-artifacts",
-    "mutation": false
-  },
-  {
     "canonical": "phase.uat-passed",
     "aliases": [
       "phase uat-passed"

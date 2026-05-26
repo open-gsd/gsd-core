@@ -6,7 +6,7 @@
  * Shape:
  *   1. Adapter translation — CLI args → hub dispatch shape
  *   2. Result translation — hub result → stdout / error callback
- *   3. Unsupported subcommands — unsupported commands produce the documented error
+ *   3. Unsupported subcommands — scaffold produces the documented redirect
  *   4. Unknown subcommand — unmapped subcommands produce a well-formed error
  *   5. Integration — real hub + real CJS phase handler invocation
  *
@@ -22,7 +22,8 @@ const assert = require('node:assert/strict');
 
 const { routePhaseCommand } = require('../get-shit-done/bin/lib/phase-command-router.cjs');
 
-// Set GSD_WORKSTREAM for deterministic routing context in tests.
+// Force CJS path throughout: set GSD_WORKSTREAM so tryLoadSdk() is bypassed.
+// This makes unit-level assertions deterministic regardless of SDK build state.
 let _prevWorkstream;
 before(() => {
   _prevWorkstream = process.env.GSD_WORKSTREAM;
@@ -281,10 +282,10 @@ describe('phase-command-router — result translation (error path)', () => {
   });
 });
 
-// ─── 3. Unsupported subcommands ───────────────────────────────────────────────
+// ─── 3. Unsupported subcommands ────────────────────────────────────────────────
 
 describe('phase-command-router — unsupported subcommands', () => {
-  test('phase list-plans calls error() with unsupported message', () => {
+  test('phase list-plans resolves as unknown subcommand', () => {
     let msg = null;
     routePhaseCommand({
       phase: makePhase(),
@@ -295,11 +296,11 @@ describe('phase-command-router — unsupported subcommands', () => {
     });
 
     assert.ok(msg !== null);
-    assert.ok(msg.includes('not supported'), `expected unsupported text in: ${msg}`);
-    assert.ok(msg.includes('list-plans'));
+    assert.ok(msg.includes('Unknown phase subcommand'));
+    assert.ok(msg.includes('Available:'), `expected "Available:" in: ${msg}`);
   });
 
-  test('phase list-artifacts calls error() with unsupported message', () => {
+  test('phase list-artifacts resolves as unknown subcommand', () => {
     let msg = null;
     routePhaseCommand({
       phase: makePhase(),
@@ -310,8 +311,8 @@ describe('phase-command-router — unsupported subcommands', () => {
     });
 
     assert.ok(msg !== null);
-    assert.ok(msg.includes('not supported'));
-    assert.ok(msg.includes('list-artifacts'));
+    assert.ok(msg.includes('Unknown phase subcommand'));
+    assert.ok(msg.includes('Available:'), `expected "Available:" in: ${msg}`);
   });
 
   test('phase scaffold calls error() with redirect message', () => {
@@ -362,7 +363,7 @@ describe('phase-command-router — unknown subcommand', () => {
 
     assert.ok(msg.includes('add'), `expected add in available list: ${msg}`);
     assert.ok(msg.includes('complete'), `expected complete in available list: ${msg}`);
-    assert.ok(!msg.includes('list-plans'), `list-plans (unsupported) must not appear in available list: ${msg}`);
+    assert.ok(!msg.includes('list-plans'), `list-plans must not appear in available list: ${msg}`);
   });
 });
 

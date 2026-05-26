@@ -1,11 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * @deprecated The supported programmatic surface is `gsd-sdk query` (SDK query registry)
- * and the `@opengsd/gsd-sdk` package. This Node CLI remains the compatibility implementation
- * for shell scripts and older workflows; prefer calling the SDK from agents and automation.
- *
- * GSD Tools — CLI utility for GSD workflow operations
+ * GSD Tools — CLI utility for GSD workflow operations.
  *
  * Replaces repetitive inline bash patterns across ~50 GSD command/workflow/agent files.
  * Centralizes: config parsing, model resolution, phase lookup, git commits, summary verification.
@@ -206,17 +202,16 @@ const { parseNamedArgs, parseMultiwordArg } = require('./lib/command-arg-project
 // sequence; it always returns false so callers fall through to CJS.
 
 /**
- * Attempt SDK dispatch for a non-family command.
+ * Retired bridge-era shim for non-family dispatch.
  *
- * Returns true when the SDK was available and handled the command (success or
- * typed error). Returns false when the SDK is unavailable, signalling the
- * caller to fall through to the CJS handler.
+ * Always returns false so command handlers continue down the CJS path.
+ * Kept only to avoid churn while legacy call sites are being deleted.
  *
  * @param {object} opts
- * @param {string} opts.registryCommand - canonical command name in the SDK registry
- * @param {string[]} opts.registryArgs - args to pass to the SDK handler
- * @param {string} opts.legacyCommand - original gsd-tools command name (for error messages)
- * @param {string[]} opts.legacyArgs - original args (for error messages)
+ * @param {string} opts.registryCommand - legacy bridge placeholder
+ * @param {string[]} opts.registryArgs - legacy bridge placeholder
+ * @param {string} opts.legacyCommand - original gsd-tools command name
+ * @param {string[]} opts.legacyArgs - original args
  * @param {string} opts.cwd - project dir
  * @param {boolean} opts.raw - raw output mode
  * @param {Function} opts.error - error reporter
@@ -334,7 +329,7 @@ async function main() {
 
   let command = args[0];
 
-  // Accept `query` meta-prefix parity with `gsd-sdk query ...`.
+  // Accept `query` as a meta-prefix for canonical dotted/spaced commands.
   // Workflows may call `node gsd-tools.cjs query <command>` directly.
   if (command === 'query') {
     args.shift();
@@ -342,15 +337,11 @@ async function main() {
   }
 
   // #3243: accept dotted canonical form (e.g. `state.update`) as well as the
-  // spaced form (`state update`). Workflow files and stale SDK binaries pass
-  // the dotted canonical form directly; any caller that bypasses the SDK
-  // client-side split hit "Unknown command" before this shim.
+  // spaced form (`state update`). Some workflow callers pass the dotted
+  // canonical form directly; this normalization keeps both forms valid.
   //
   // Split on the FIRST dot only — `check.decision-coverage-plan` becomes
   // command='check', args=['check','decision-coverage-plan',...rest].
-  // Parallel to dottedCommandToCjsArgv in sdk/src/query/query-fallback-bridge-adapter.ts;
-  // kept separate here to avoid SDK coupling (see TODO: extract to shared helper).
-  //
   // Guard: head and rest must both be non-empty (rejects leading-dot args like
   // ".hidden" and bare-dot ".").
   const originalCommand = command; // preserved for "Unknown command" suggestion
@@ -396,11 +387,8 @@ async function main() {
   // and exit 0 — not error out with "Unknown flag". The previous shape
   // erred on agent-hallucinated flags, but it also blocked humans from
   // discovering the command surface via subcommand help requests routed
-  // here from the SDK CLI's query dispatcher (after the cli.ts fix that
-  // stops harvesting --help as a global flag). Rendering top-level usage
-  // on --help is strictly better UX than the old short-circuit, which
-  // printed the SDK-level usage that doesn't mention any of these
-  // subcommands.
+  // through this dispatcher. Rendering top-level usage on --help is strictly
+  // better UX than the old short-circuit that printed unrelated usage text.
   const HELP_FLAGS = new Set(['-h', '--help', '-?', '--h', '--usage']);
   if (args.some((a) => HELP_FLAGS.has(a))) {
     process.stdout.write(TOP_LEVEL_USAGE + '\n');
