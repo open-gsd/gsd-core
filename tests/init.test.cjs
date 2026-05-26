@@ -7,16 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { runGsdTools, cleanup } = require('./helpers.cjs');
-const { createFixture } = require('./fixtures/index.cjs');
-
-function seedPhase(tmpDir, phaseSlug, files = {}) {
-  const phaseDir = path.join(tmpDir, '.planning', 'phases', phaseSlug);
-  fs.mkdirSync(phaseDir, { recursive: true });
-  for (const [name, content] of Object.entries(files)) {
-    fs.writeFileSync(path.join(phaseDir, name), content);
-  }
-  return phaseDir;
-}
+const { createFixture, seedPhase } = require('./fixtures/index.cjs');
 
 describe('init commands', () => {
   let tmpDir;

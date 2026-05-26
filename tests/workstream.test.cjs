@@ -9,7 +9,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { runGsdTools, cleanup } = require('./helpers.cjs');
-const { createFixture } = require('./fixtures/index.cjs');
+const { createFixture, seedWorkstream, writeState } = require('./fixtures/index.cjs');
 const { migrateToWorkstreams, getOtherActiveWorkstreams } = require('../get-shit-done/bin/lib/workstream.cjs');
 
 // ─── Helper ──────────────────────────────────────────────────────────────────
@@ -19,7 +19,7 @@ function createProjectWithState(tmpDir, roadmap, state) {
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), roadmap, 'utf-8');
   }
   if (state) {
-    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), state, 'utf-8');
+    writeState(tmpDir, state);
   }
 }
 
@@ -77,12 +77,12 @@ describe('planningDir workstream awareness via env var', () => {
 
   before(() => {
     tmpDir = createFixture();
-    // Create workstream structure
-    const wsDir = path.join(tmpDir, '.planning', 'workstreams', 'alpha');
-    fs.mkdirSync(path.join(wsDir, 'phases'), { recursive: true });
-    fs.writeFileSync(path.join(wsDir, 'STATE.md'), '# State\n**Status:** In progress\n**Current Phase:** 1\n');
-    fs.writeFileSync(path.join(wsDir, 'ROADMAP.md'), '## Roadmap v1.0: Alpha\n### Phase 1: Setup\n');
-    fs.writeFileSync(path.join(tmpDir, '.planning', 'active-workstream'), 'alpha\n');
+    seedWorkstream(tmpDir, {
+      name: 'alpha',
+      state: '# State\n**Status:** In progress\n**Current Phase:** 1\n',
+      roadmap: '## Roadmap v1.0: Alpha\n### Phase 1: Setup\n',
+      active: true,
+    });
   });
 
   after(() => cleanup(tmpDir));

@@ -47,4 +47,55 @@ function createFixture(options = {}) {
   return tmpDir;
 }
 
-module.exports = { createFixture };
+/**
+ * Seed a canonical phase directory with files.
+ * @param {string} tmpDir
+ * @param {string} phaseSlug e.g. "03-api"
+ * @param {Record<string,string>} files map of filename->content
+ * @returns {string} phase directory path
+ */
+function seedPhase(tmpDir, phaseSlug, files = {}) {
+  const phaseDir = path.join(tmpDir, '.planning', 'phases', phaseSlug);
+  fs.mkdirSync(phaseDir, { recursive: true });
+  for (const [name, content] of Object.entries(files)) {
+    fs.writeFileSync(path.join(phaseDir, name), content);
+  }
+  return phaseDir;
+}
+
+/**
+ * Seed a canonical workstream tree and optionally set active pointer.
+ * @param {string} tmpDir
+ * @param {{name:string, state?:string, roadmap?:string, active?:boolean}} options
+ * @returns {string} workstream directory path
+ */
+function seedWorkstream(tmpDir, options) {
+  const { name, state = '', roadmap = '', active = false } = options || {};
+  if (!name || /[^a-zA-Z0-9._-]/.test(name) || name.includes('..')) {
+    throw new Error(`seedWorkstream: invalid name "${name}"`);
+  }
+  const wsDir = path.join(tmpDir, '.planning', 'workstreams', name);
+  fs.mkdirSync(path.join(wsDir, 'phases'), { recursive: true });
+  if (state) fs.writeFileSync(path.join(wsDir, 'STATE.md'), state);
+  if (roadmap) fs.writeFileSync(path.join(wsDir, 'ROADMAP.md'), roadmap);
+  if (active) {
+    fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'active-workstream'), `${name}\n`);
+  }
+  return wsDir;
+}
+
+/**
+ * Write STATE.md in canonical location.
+ * @param {string} tmpDir
+ * @param {string} content
+ * @returns {string} file path
+ */
+function writeState(tmpDir, content) {
+  const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+  fs.mkdirSync(path.dirname(statePath), { recursive: true });
+  fs.writeFileSync(statePath, content);
+  return statePath;
+}
+
+module.exports = { createFixture, seedPhase, seedWorkstream, writeState };
