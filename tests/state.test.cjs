@@ -10,13 +10,14 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, cleanup } = require('./helpers.cjs');
+const { createFixture } = require('./fixtures/index.cjs');
 
 describe('state-snapshot command', () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
   });
 
   afterEach(() => {
@@ -197,7 +198,7 @@ describe('state-snapshot — bug #3265 frontmatter precedence', () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
   });
 
   afterEach(() => {
@@ -287,7 +288,7 @@ describe('state mutation commands', () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
   });
 
   afterEach(() => {
@@ -408,7 +409,7 @@ describe('state json command', () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
   });
 
   afterEach(() => {
@@ -513,7 +514,7 @@ describe('STATE.md frontmatter sync', () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
   });
 
   afterEach(() => {
@@ -759,7 +760,7 @@ describe('cmdStateLoad (state load)', () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
   });
 
   afterEach(() => {
@@ -821,7 +822,7 @@ describe('cmdStateGet (state get)', () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
   });
 
   afterEach(() => {
@@ -903,7 +904,7 @@ describe('cmdStatePatch and cmdStateUpdate (state patch, state update)', () => {
   ].join('\n') + '\n';
 
   beforeEach(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
   });
 
   afterEach(() => {
@@ -990,7 +991,7 @@ describe('cmdStateAdvancePlan (state advance-plan)', () => {
   ].join('\n') + '\n';
 
   beforeEach(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
   });
 
   afterEach(() => {
@@ -1115,7 +1116,7 @@ describe('cmdStateRecordMetric (state record-metric)', () => {
   ].join('\n') + '\n';
 
   beforeEach(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
   });
 
   afterEach(() => {
@@ -1186,7 +1187,7 @@ describe('cmdStateUpdateProgress (state update-progress)', () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
   });
 
   afterEach(() => {
@@ -1280,7 +1281,7 @@ describe('cmdStateResolveBlocker (state resolve-blocker)', () => {
   ].join('\n') + '\n';
 
   beforeEach(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
   });
 
   afterEach(() => {
@@ -1374,7 +1375,7 @@ describe('cmdStateRecordSession (state record-session)', () => {
   ].join('\n') + '\n';
 
   beforeEach(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
   });
 
   afterEach(() => {
@@ -1462,7 +1463,7 @@ describe('milestone-scoped phase counting in frontmatter', () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
   });
 
   afterEach(() => {
@@ -1586,7 +1587,7 @@ describe('state begin-phase preserves Current Position fields (#1365)', () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
   });
 
   afterEach(() => {
@@ -1710,7 +1711,7 @@ describe('progress counters correct after plan execution (#1589)', () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
   });
 
   afterEach(() => {
@@ -1843,7 +1844,7 @@ describe('updatePerformanceMetricsSection', () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
   });
 
   afterEach(() => {
@@ -2013,7 +2014,7 @@ describe('state planned-phase command', () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
   });
 
   afterEach(() => {
@@ -2077,7 +2078,7 @@ describe('state validate command', () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
   });
 
   afterEach(() => {
@@ -2161,7 +2162,7 @@ describe('state sync command', () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
   });
 
   afterEach(() => {
@@ -2252,7 +2253,7 @@ describe('stopped_at frontmatter not overwritten by historical prose (bug #2444)
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
   });
 
   afterEach(() => {
@@ -2351,7 +2352,7 @@ describe('stale phase dirs do not corrupt phase counts (bug #2445)', () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
   });
 
   afterEach(() => {
@@ -2480,7 +2481,7 @@ describe('state complete-phase: decorated Phase fallback (#2761 nitpick)', () =>
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
   });
 
   afterEach(() => {

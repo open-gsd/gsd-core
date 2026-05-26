@@ -2,9 +2,10 @@
  * GSD Tools Test Helpers
  */
 
-const { execSync, execFileSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { createFixture } = require('./fixtures/index.cjs');
 
 const TOOLS_PATH = path.join(__dirname, '..', 'get-shit-done', 'bin', 'gsd-tools.cjs');
 const TEST_ENV_BASE = {
@@ -86,30 +87,12 @@ function createTempDir(prefix = 'gsd-test-') {
 
 // Create temp directory structure
 function createTempProject(prefix = 'gsd-test-') {
-  const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), prefix));
-  fs.mkdirSync(path.join(tmpDir, '.planning', 'phases'), { recursive: true });
-  return tmpDir;
+  return createFixture({ prefix, planning: true, git: false });
 }
 
 // Create temp directory with initialized git repo and at least one commit
 function createTempGitProject(prefix = 'gsd-test-') {
-  const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), prefix));
-  fs.mkdirSync(path.join(tmpDir, '.planning', 'phases'), { recursive: true });
-
-  execSync('git init', { cwd: tmpDir, stdio: 'pipe' });
-  execSync('git config user.email "test@test.com"', { cwd: tmpDir, stdio: 'pipe' });
-  execSync('git config user.name "Test"', { cwd: tmpDir, stdio: 'pipe' });
-  execSync('git config commit.gpgsign false', { cwd: tmpDir, stdio: 'pipe' });
-
-  fs.writeFileSync(
-    path.join(tmpDir, '.planning', 'PROJECT.md'),
-    '# Project\n\nTest project.\n'
-  );
-
-  execSync('git add -A', { cwd: tmpDir, stdio: 'pipe' });
-  execSync('git commit -m "initial commit"', { cwd: tmpDir, stdio: 'pipe' });
-
-  return tmpDir;
+  return createFixture({ prefix, planning: true, git: true, projectDoc: true });
 }
 
 function cleanup(tmpDir) {

@@ -1,0 +1,39 @@
+const { test, describe, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+const { execSync } = require('child_process');
+
+const { createFixture } = require('./fixtures/index.cjs');
+const { cleanup } = require('./helpers.cjs');
+
+const created = [];
+afterEach(() => {
+  while (created.length > 0) cleanup(created.pop());
+});
+
+describe('fixture builder module', () => {
+  test('creates canonical planning layout by default', () => {
+    const dir = createFixture();
+    created.push(dir);
+
+    assert.ok(fs.existsSync(path.join(dir, '.planning')), 'creates .planning directory');
+    assert.ok(fs.existsSync(path.join(dir, '.planning', 'phases')), 'creates .planning/phases directory');
+  });
+
+  test('initializes git fixture with initial commit', () => {
+    const dir = createFixture({ git: true });
+    created.push(dir);
+
+    const isWorkTree = execSync('git rev-parse --is-inside-work-tree', { cwd: dir, encoding: 'utf8' }).trim();
+    assert.strictEqual(isWorkTree, 'true', 'fixture should be a git worktree');
+
+    const head = execSync('git rev-parse HEAD', { cwd: dir, encoding: 'utf8' }).trim();
+    assert.ok(head.length > 0, 'fixture should include initial commit');
+
+    assert.ok(
+      fs.existsSync(path.join(dir, '.planning', 'PROJECT.md')),
+      'git fixture writes canonical PROJECT.md'
+    );
+  });
+});

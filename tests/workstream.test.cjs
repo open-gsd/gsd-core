@@ -8,7 +8,8 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, cleanup } = require('./helpers.cjs');
+const { createFixture } = require('./fixtures/index.cjs');
 const { migrateToWorkstreams, getOtherActiveWorkstreams } = require('../get-shit-done/bin/lib/workstream.cjs');
 
 // ─── Helper ──────────────────────────────────────────────────────────────────
@@ -75,7 +76,7 @@ describe('planningDir workstream awareness via env var', () => {
   let tmpDir;
 
   before(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
     // Create workstream structure
     const wsDir = path.join(tmpDir, '.planning', 'workstreams', 'alpha');
     fs.mkdirSync(path.join(wsDir, 'phases'), { recursive: true });
@@ -119,7 +120,7 @@ describe('session-scoped active workstream routing', () => {
   let tmpDir;
 
   before(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
 
     for (const [ws, status] of [['alpha', 'Alpha active'], ['beta', 'Beta active']]) {
       const wsDir = path.join(tmpDir, '.planning', 'workstreams', ws);
@@ -193,7 +194,7 @@ describe('session resolution hardening', () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
 
     for (const [ws, status] of [['alpha', 'Alpha active'], ['beta', 'Beta active']]) {
       const wsDir = path.join(tmpDir, '.planning', 'workstreams', ws);
@@ -254,7 +255,7 @@ describe('pointer lifecycle hardening', () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
 
     for (const [ws, status] of [['alpha', 'Alpha active'], ['beta', 'Beta active']]) {
       const wsDir = path.join(tmpDir, '.planning', 'workstreams', ws);
@@ -323,7 +324,7 @@ describe('workstream create', () => {
   let tmpDir;
 
   before(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
     fs.writeFileSync(path.join(tmpDir, '.planning', 'PROJECT.md'), '# Project\n');
   });
 
@@ -365,7 +366,7 @@ describe('workstream create with migration', () => {
   let tmpDir;
 
   before(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
     fs.writeFileSync(path.join(tmpDir, '.planning', 'PROJECT.md'), '# Project\n');
     // Existing flat-mode work
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '## Roadmap v1.0: Existing\n### Phase 1: A\n');
@@ -389,7 +390,7 @@ describe('workstream create with migration', () => {
   });
 
   test('normalizes --migrate-name to a valid workstream slug', () => {
-    const isolatedDir = createTempProject();
+    const isolatedDir = createFixture();
     try {
       fs.writeFileSync(path.join(isolatedDir, '.planning', 'PROJECT.md'), '# Project\n');
       fs.writeFileSync(path.join(isolatedDir, '.planning', 'ROADMAP.md'), '## Roadmap v1.0: Existing\n### Phase 1: A\n');
@@ -414,7 +415,7 @@ describe('workstream create with migration', () => {
 
 describe('migrateToWorkstreams', () => {
   test('rejects invalid workstream names for migration', () => {
-    const tmpDir = createTempProject();
+    const tmpDir = createFixture();
     try {
       assert.throws(
         () => migrateToWorkstreams(tmpDir, 'bad/name'),
@@ -426,7 +427,7 @@ describe('migrateToWorkstreams', () => {
   });
 
   test('fails when already in workstream mode', () => {
-    const tmpDir = createTempProject();
+    const tmpDir = createFixture();
     try {
       fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams', 'existing'), { recursive: true });
       assert.throws(
@@ -443,7 +444,7 @@ describe('workstream list', () => {
   let tmpDir;
 
   before(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
     // Create two workstreams
     for (const ws of ['alpha', 'beta']) {
       const wsDir = path.join(tmpDir, '.planning', 'workstreams', ws);
@@ -468,7 +469,7 @@ describe('workstream list', () => {
     let flatDir;
 
     beforeEach(() => {
-      flatDir = createTempProject();
+      flatDir = createFixture();
     });
 
     afterEach(() => {
@@ -488,7 +489,7 @@ describe('workstream status', () => {
   let tmpDir;
 
   before(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
     const wsDir = path.join(tmpDir, '.planning', 'workstreams', 'alpha');
     fs.mkdirSync(path.join(wsDir, 'phases', '01-setup'), { recursive: true });
     fs.writeFileSync(path.join(wsDir, 'phases', '01-setup', 'PLAN.md'), '# Plan\n');
@@ -521,7 +522,7 @@ describe('workstream complete', () => {
   let tmpDir;
 
   before(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
     const wsDir = path.join(tmpDir, '.planning', 'workstreams', 'done-ws');
     fs.mkdirSync(path.join(wsDir, 'phases'), { recursive: true });
     fs.writeFileSync(path.join(wsDir, 'STATE.md'), '# State\n**Status:** Complete\n');
@@ -549,7 +550,7 @@ describe('workstream set/get', () => {
   let tmpDir;
 
   before(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
     for (const ws of ['ws-a', 'ws-b']) {
       const wsDir = path.join(tmpDir, '.planning', 'workstreams', ws);
       fs.mkdirSync(path.join(wsDir, 'phases'), { recursive: true });
@@ -596,7 +597,7 @@ describe('getOtherActiveWorkstreams', () => {
   let tmpDir;
 
   before(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
     // Create 3 workstreams: alpha (active), beta (active), gamma (completed)
     for (const ws of ['alpha', 'beta', 'gamma']) {
       const wsDir = path.join(tmpDir, '.planning', 'workstreams', ws);
@@ -643,7 +644,7 @@ describe('workstream progress', () => {
   let tmpDir;
 
   before(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
     const wsDir = path.join(tmpDir, '.planning', 'workstreams', 'feature');
     fs.mkdirSync(path.join(wsDir, 'phases', '01-init'), { recursive: true });
     fs.writeFileSync(path.join(wsDir, 'phases', '01-init', 'PLAN.md'), '# Plan\n');
@@ -667,7 +668,7 @@ describe('workstream progress', () => {
   });
 
   test('clamps progress percent when completed phase dirs exceed roadmap count', () => {
-    const isolatedDir = createTempProject();
+    const isolatedDir = createFixture();
     try {
       const wsDir = path.join(isolatedDir, '.planning', 'workstreams', 'overflow');
       for (const phase of ['01-one', '02-two']) {
@@ -689,7 +690,7 @@ describe('workstream progress', () => {
   });
 
   test('returns flat mode when no workstreams exist', () => {
-    const emptyDir = createTempProject();
+    const emptyDir = createFixture();
     try {
       const result = runGsdTools(['workstream', 'progress', '--raw'], emptyDir);
       assert.ok(result.success, `progress in flat mode failed: ${result.error}`);
@@ -707,7 +708,7 @@ describe('gsd-tools --ws flag integration', () => {
   let tmpDir;
 
   before(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
     // Create a workstream with roadmap
     const wsDir = path.join(tmpDir, '.planning', 'workstreams', 'test-ws');
     fs.mkdirSync(path.join(wsDir, 'phases', '01-setup'), { recursive: true });
@@ -741,7 +742,7 @@ describe('path traversal rejection', () => {
   let tmpDir;
 
   before(() => {
-    tmpDir = createTempProject();
+    tmpDir = createFixture();
     fs.writeFileSync(path.join(tmpDir, '.planning', 'PROJECT.md'), '# Project\n');
     const wsDir = path.join(tmpDir, '.planning', 'workstreams', 'legit');
     fs.mkdirSync(path.join(wsDir, 'phases'), { recursive: true });
