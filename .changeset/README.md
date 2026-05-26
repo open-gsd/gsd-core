@@ -6,7 +6,7 @@ This directory holds **per-PR CHANGELOG fragments**. Every PR with user-facing c
 
 Two PRs that both edit the `### Fixed` block of `CHANGELOG.md` always conflict on merge — git can't pick a serialization order without human input. Two PRs that each add a fresh `.changeset/<unique-name>.md` never conflict because they don't share lines.
 
-See [#2975](https://github.com/gsd-build/get-shit-done/issues/2975) for the full rationale.
+See [#2975](https://github.com/open-gsd/get-shit-done-redux/issues/2975) for the full rationale.
 
 ## Adding a fragment
 

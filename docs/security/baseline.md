@@ -47,7 +47,7 @@ integrity as a prerequisite.
 **Implementation in pilot:** PR
 [#135](https://github.com/open-gsd/get-shit-done-redux/pull/135)
 (linked to issue
-[#114](https://github.com/gsd-build/get-shit-done/issues/114)).
+[#114](https://github.com/open-gsd/get-shit-done-redux/issues/114)).
 
 **Verify locally:**
 
@@ -81,7 +81,7 @@ mechanism.
 **Implementation in pilot:** PR
 [#134](https://github.com/open-gsd/get-shit-done-redux/pull/134)
 (linked to issue
-[#115](https://github.com/gsd-build/get-shit-done/issues/115)).
+[#115](https://github.com/open-gsd/get-shit-done-redux/issues/115)).
 Exclusion annotation files: `.secretscanignore` (top-level) and
 `.base64scanignore` (top-level, for base64-encoded values).
 
@@ -116,7 +116,7 @@ risks in automated pipelines.
 **Implementation in pilot:** PR
 [#133](https://github.com/open-gsd/get-shit-done-redux/pull/133)
 (linked to issue
-[#113](https://github.com/gsd-build/get-shit-done/issues/113)).
+[#113](https://github.com/open-gsd/get-shit-done-redux/issues/113)).
 
 **Verify locally:**
 
@@ -144,7 +144,7 @@ time prevents invisible payload injection in source and output files.
 **Implementation in pilot:** PR
 [#132](https://github.com/open-gsd/get-shit-done-redux/pull/132)
 (linked to issue
-[#116](https://github.com/gsd-build/get-shit-done/issues/116)).
+[#116](https://github.com/open-gsd/get-shit-done-redux/issues/116)).
 
 **Verify locally:**
 
@@ -174,7 +174,7 @@ OpenSSF Scorecard's "Pinned-Dependencies" check measures this directly.
 ([OpenSSF Scorecard](https://github.com/ossf/scorecard/blob/main/docs/checks.md))
 
 **Implementation in pilot:** PR for issue
-[#117](https://github.com/gsd-build/get-shit-done/issues/117)
+[#117](https://github.com/open-gsd/get-shit-done-redux/issues/117)
 (see PR #136).
 
 **Verify locally:**
@@ -232,7 +232,7 @@ Post-Incident Activity.
 
 | Phase | Action |
 |---|---|
-| Detection | Alert from secret scanner CI step, or external reporter via `security@gsd.build` |
+| Detection | Alert from secret scanner CI step, or external reporter via a private GitHub security advisory |
 | Containment | Immediately revoke the exposed credential in the issuing service (GitHub, npm, cloud, etc.) |
 | Containment | Force-push or rewrite history to remove the secret from Git history (if public) |
 | Containment | Rotate all credentials that shared the same scope as the exposed one |
@@ -284,8 +284,7 @@ Report security vulnerabilities via **private security advisory** on GitHub:
 
 Do not open public issues for security vulnerabilities.
 
-Fallback: email `security@gsd.build` (or DM `@glittercowboy` on Discord/Twitter
-if email bounces).
+If private advisory filing is unavailable, contact the open-gsd maintainers and include a link to this policy.
 
 **Source:** [GitHub Security Advisories](https://docs.github.com/en/code-security/security-advisories)
 

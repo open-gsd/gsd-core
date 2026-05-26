@@ -8,7 +8,7 @@
 > - npm (main): `@opengsd/get-shit-done-redux`
 > - npm (sdk): `@opengsd/gsd-sdk`
 >
-> The legacy upstream (`gsd-build/*`) is outside open-gsd control. Based on public transition announcements and repository ownership reality, we strongly recommend removing `gsd-build` organization packages and migrating to `@opengsd/*`.
+> The legacy upstream is outside open-gsd control. Based on public transition announcements and repository ownership reality, we strongly recommend removing legacy packages and migrating to `@opengsd/*`.
 >
 > Security status:
 >
@@ -81,7 +81,7 @@ GSD exists to help solo builders and small teams ship reliably with AI: clear sp
 
 In May 2026, maintainers published a continuity announcement and migrated active development to `open-gsd/get-shit-done-redux` after trust and ownership concerns around the former upstream, including a meme-coin rug-pull incident publicly associated with that ecosystem.
 
-The former creator and the `gsd-build` lineage are no longer part of this program. This repository is the maintained continuation under open-gsd governance.
+The former creator and legacy lineage are no longer part of this program. This repository is the maintained continuation under open-gsd governance.
 
 The current team continues release operations, triage, and security hardening in public. Audit status and follow-up security work are documented in Discussion #119 and linked issues.
 

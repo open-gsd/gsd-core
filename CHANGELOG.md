@@ -4,20 +4,20 @@ All notable changes to GSD will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased](https://github.com/gsd-build/get-shit-done/compare/v1.42.1...HEAD)
+## [Unreleased](https://github.com/open-gsd/get-shit-done-redux/compare/v1.42.1...HEAD)
 
-## [1.42.1](https://github.com/gsd-build/get-shit-done/compare/v1.41.0...v1.42.1) - 2026-05-15
+## [1.42.1](https://github.com/open-gsd/get-shit-done-redux/compare/v1.41.0...v1.42.1) - 2026-05-15
 
 ### Fixed
 
 - **`/gsd-discuss-phase` and `/gsd-plan-phase` first-touch creation now apply `project_code` prefix consistently with `phase.add`/`phase.insert`** — projects with `project_code` set in `.planning/config.json` no longer accumulate a two-headed naming convention (`01-foundation/` mixed with `XR-02.1-spike/`). `init.phase-op` and `init.plan-phase` now expose `expected_phase_dir` (with prefix) in their JSON bundle; workflow fallback mkdir calls use this value instead of constructing the path from `padded_phase`+`phase_slug`. `phase.scaffold phase-dir` (CJS and SDK) also fixed. (#3287)
 - **`buildStateFrontmatter` now counts nested `plans/<N>-PLAN-<NN>-<slug>.md` files** — repos using the nested layout (post-#3139) no longer get `progress.*` counters silently overwritten downward on every state mutation. Sibling fix to #3115/#3139/#3191. (#3261)
 
-## [1.41.0](https://github.com/gsd-build/get-shit-done/compare/v1.40.0...v1.41.0) - 2026-05-07
+## [1.41.0](https://github.com/open-gsd/get-shit-done-redux/compare/v1.40.0...v1.41.0) - 2026-05-07
 
 ### Fixed
 
-- **Atomic writes in `scripts/build-hooks.js` to fix flaky release CI** — nine test files invoke `build-hooks.js` from their `before()` hooks, and `scripts/run-tests.cjs` runs test files with `--test-concurrency=4`, so multiple builders raced to rewrite the same files in `hooks/dist/`. `fs.copyFileSync(src, dest)` truncates `dest` then writes it; a parallel `bin/install.js` subprocess (spawned by another install test) could `fs.readFileSync` between the truncate and the write and observe an empty file. install.js then wrote that empty content into the install target, so installed `.sh` hooks lacked their `# gsd-hook-version:` header. This surfaced as the release-blocking failure in `tests/bug-2136-sh-hook-version.test.cjs` part 4 even though the same SHA passed on every other Node-22/Node-24 install-smoke matrix run. `build-hooks.js` now stages each output to a sibling `hooks/.dist-staging/` directory (same filesystem as `hooks/dist/`) and uses `fs.renameSync` to swap into place — POSIX `rename(2)` is atomic, so concurrent readers always observe a complete file. (Failing run: https://github.com/gsd-build/get-shit-done/actions/runs/25472202941/job/74738276687)
+- **Atomic writes in `scripts/build-hooks.js` to fix flaky release CI** — nine test files invoke `build-hooks.js` from their `before()` hooks, and `scripts/run-tests.cjs` runs test files with `--test-concurrency=4`, so multiple builders raced to rewrite the same files in `hooks/dist/`. `fs.copyFileSync(src, dest)` truncates `dest` then writes it; a parallel `bin/install.js` subprocess (spawned by another install test) could `fs.readFileSync` between the truncate and the write and observe an empty file. install.js then wrote that empty content into the install target, so installed `.sh` hooks lacked their `# gsd-hook-version:` header. This surfaced as the release-blocking failure in `tests/bug-2136-sh-hook-version.test.cjs` part 4 even though the same SHA passed on every other Node-22/Node-24 install-smoke matrix run. `build-hooks.js` now stages each output to a sibling `hooks/.dist-staging/` directory (same filesystem as `hooks/dist/`) and uses `fs.renameSync` to swap into place — POSIX `rename(2)` is atomic, so concurrent readers always observe a complete file. (Failing run: https://github.com/open-gsd/get-shit-done-redux/actions/runs/25472202941/job/74738276687)
 - **Stable node path on Homebrew** — `resolveNodeRunner()` now maps versioned Homebrew Cellar paths (e.g. `/usr/local/Cellar/node/25.8.1/bin/node`) to the stable Homebrew symlinks (`/usr/local/bin/node` on Intel, `/opt/homebrew/bin/node` on Apple Silicon). `rewriteLegacyManagedNodeHookCommands()` applies the same normalization to baked Cellar paths in existing hook commands. This prevents `dyld: Library not loaded` errors after `brew upgrade node`. (#3181)
 - **Milestone-archive layout support** — `validate consistency`, `validate health`, and `find-phase` now scan `.planning/milestones/v*-phases/` directories in addition to the flat `.planning/phases/` layout. Projects that have graduated to milestone-archive layout no longer receive spurious W006 "Phase N in ROADMAP.md but no directory on disk" warnings for every active phase. (#3164)
 
@@ -63,7 +63,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (workstream wins on conflict). Explicit `null` in a workstream config now correctly
   overrides a root value. (#2714)
 - **Manual canary release workflow** — `.github/workflows/canary.yml` publishes
-  `{base}-canary.{N}` builds of `get-shit-done-cc` and `@gsd-build/sdk` under the
+  `{base}-canary.{N}` builds of `get-shit-done-cc` and `@opengsd/gsd-sdk` under the
   `canary` dist-tag on demand via `workflow_dispatch` (manual trigger only — auto-publish
   on every push to main was rejected because submission rate is too high). Includes an
   optional `dry_run` boolean and the same publish-verification gate as `release.yml`. (#2828)
@@ -123,9 +123,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **`/gsd-graphify build` now runs inline instead of spawning a sub-agent** — graphify v0.7+ split the build into a fast AST-extraction phase (cached) followed by a separate clustering + report-write phase. The cached extraction phase survived sub-agent isolation, but the post-extraction phase was SIGTERM'd when the agent exited, leaving the cache populated and no `graph.json` / `graph.html` / `GRAPH_REPORT.md` artifacts written to `.planning/graphs/`. The skill now runs `graphify update .`, the three artifact copies, the snapshot, and the status report as a single foreground Bash call so the entire pipeline survives to completion. The CLI's `graphify build` pre-flight still returns `action: "spawn_agent"` so external callers and existing tests keep working. Regression covered by `tests/bug-3166-graphify-inline-build.test.cjs` (4 structural assertions that parse `commands/gsd/graphify.md` YAML frontmatter and body to fence against re-introducing `Task` to `allowed-tools` or `Task(` invocation syntax). (#3166)
 - **`gsd-pristine/` is now populated by the installer when local patches are detected** — `saveLocalPatches` declared a `pristineDir` variable and JSDoc'd "saves pristine copies (from manifest) to gsd-pristine/ to enable three-way merge during reapply-patches", but no code ever wrote to that directory. Effect: the `/gsd-reapply-patches` Step 5 verifier (#2972) silently degraded to its over-broad fallback heuristic ("every significant backup line"), exactly the silent-success-on-lost-content failure mode #2969 was designed to prevent. Fix: new `populatePristineDir({ packageSrc, pristineDir, modified, runtime, pathPrefix, isGlobal })` helper runs the install transform pipeline (`copyWithPathReplacement`) into a tmp staging dir, then copies out only the modified-file paths into `gsd-pristine/`. `saveLocalPatches` now accepts a `pristineCtx` and calls the helper when local patches are detected; the install entry point passes the package source root, runtime, pathPrefix, and isGlobal so transforms produce byte-identical output to what `copyWithPathReplacement` would have written under normal install. Soft-fails on transform errors (logs a warning, continues with empty pristine — no worse than pre-fix behavior). Pristine reflects the about-to-install version's content, which is what the verifier needs as the "what would survive without the user's modifications" baseline. Regression covered by `tests/bug-2998-pristine-dir-populated.test.cjs` (6 tests across two suites): asserts the helper is exported, returns 0 for empty modified list, writes one pristine file per source-existing path, skips ghost paths without corrupting pristine, and produces deterministic output (two runs with same inputs yield byte-identical pristine — the property `pristine_hashes` in `backup-meta.json` depends on). (#2998)
-- **`release-sdk` hotfix re-run no longer fails at `Dry-run publish validation` when the version is already on npm** — the `Detect prior publish (reconciliation mode)` step sets `skip_publish=true` when the package version is already on the registry, and the actual publish step honors that gate. The `Dry-run publish validation` step was missing the same guard, so any operator re-run of an already-published hotfix (the typical recovery path when later steps fail mid-flight) hit `npm publish --dry-run` first and got `npm error You cannot publish over the previously published versions: X.Y.Z` — `npm publish --dry-run` contacts the registry and rejects existing-version targets even though it doesn't actually publish. The dry-run validation step is now gated on the same `steps.prior_publish.outputs.skip_publish != 'true'` condition as the publish step. The rehearsal still runs on first publishes (where it has value); it skips only in the specific reconciliation case where the publish itself would be skipped. Trigger run: [25233855236](https://github.com/gsd-build/get-shit-done/actions/runs/25233855236/job/73995605643). Regression covered by `tests/bug-2987-dry-run-validation-skip-on-reconciliation.test.cjs`. (#2987)
-- **`release-sdk` hotfix flow hardened against silent classifier failures, missing-classifier-at-base-tag, and a vestigial merge-back PR step** — three issues surfaced by CodeRabbit's post-merge review of #2981 plus a production failure on the v1.39.1 release run. **(1)** `scripts/diff-touches-shipped-paths.cjs` reused exit code `1` for both the legitimate "no shipped paths" classifier result and Node's default uncaught-throw exit, so any tooling failure was indistinguishable from a normal skip. The script now uses `0` (shipped), `1` (not shipped), `2` (classifier error) with `try`/`catch` + `uncaughtException`/`unhandledRejection` handlers routing all failure paths to exit `2`. **(2)** The workflow's `git checkout -b "$BRANCH" "$BASE_TAG"` overwrote the working tree with the base tag's contents *before* the cherry-pick loop ran the classifier — but base tags predating the classifier's introduction (notably v1.39.0) don't have the file in their tree, so `node scripts/diff-touches-shipped-paths.cjs` would exit non-zero and silently drop every commit, producing an empty hotfix release. The classifier is now staged into `$RUNNER_TEMP` at the top of `Prepare hotfix branch` (before any working-tree-mutating git command), and the loop references that staged copy. The cherry-pick loop snapshots `$PIPESTATUS` into a local array (`PIPE_RC=("${PIPESTATUS[@]}")`) immediately after the classifier pipeline — under bracketed `set +e`/`set -e` — and dispatches via explicit `case`: `0` proceeds, `1` skips into `NON_SHIPPED_SKIPPED`, anything else emits `::error::shipped-paths classifier failed for $SHA (exit N)` and fails the workflow. CodeRabbit on PR #2984 caught a subtler bug in the first iteration: `pipeline \|\| true; RC=${PIPESTATUS[1]}` is broken because `\|\| true` runs `true` as its own one-command pipeline on the failure paths, overwriting `PIPESTATUS` to `(0)` and leaving `${PIPESTATUS[1]}` unset. The array-snapshot form is invariant against this. The same hardening also surfaces `git diff-tree`'s exit code (via `PIPE_RC[0]`); a non-zero diff-tree result now also fails the workflow rather than feeding partial input to the classifier. **(3)** Removed the `Open merge-back PR (hotfix only)` step. The auto-cherry-pick hotfix flow only picks commits already on main (`git cherry HEAD origin/main` outputs the unmerged ones), so by construction every code commit on the hotfix branch is already on main. The only hotfix-branch-only commit is the version-bump chore, which would either no-op against main or rewind main's in-progress version. The step also failed in production with `GitHub Actions is not permitted to create or approve pull requests (createPullRequest)` (org policy) on run [25232968975](https://github.com/gsd-build/get-shit-done/actions/runs/25232968975). The `pull-requests: write` permission previously granted to the release job has been dropped in line with least-privilege. The run-summary line that previously echoed `Merge-back PR opened against main` has been replaced with `No merge-back PR (auto-picked commits are already on main)` so operators reading the summary see an accurate non-action statement (CodeRabbit on PR #2984). Regression covered by `tests/bug-2983-classifier-exit-codes-and-base-tag-staging.test.cjs` (15 assertions across exit-code semantics, classifier staging, error dispatch, PIPESTATUS-snapshot hardening, diff-tree fail-fast, merge-back removal, and run-summary accuracy). (#2983)
-- **`release-sdk` hotfix only cherry-picks commits that change what actually ships** — the `fix:`/`chore:` filter in `Prepare hotfix branch` was too broad: it picked any commit with that conventional-commit type regardless of whether the diff could affect the published npm package. CI-only fixes (release-sdk.yml itself, hotfix tooling, test-only commits) were getting cherry-picked into hotfix branches even though they cannot change the tarball — and the subset touching `.github/workflows/*` then caused the prepare job's `git push` to be rejected by GitHub because the default `GITHUB_TOKEN` lacks the `workflow` scope, aborting the run. v1.39.1 hit this on PR #2977 (run [25232010071](https://github.com/gsd-build/get-shit-done/actions/runs/25232010071)). The loop now pre-skips any candidate commit whose `git diff-tree` output doesn't intersect the npm tarball's shipped paths (entries in `package.json` `files`, plus `package.json` itself, which `npm pack` always includes). Skipped commits land in a new `NON_SHIPPED_SKIPPED` summary bucket framed as informational — non-shipping commits cannot affect the package, so the skip needs no operator action. The shipped-paths classifier lives in `scripts/diff-touches-shipped-paths.cjs` so its rules (file-OR-directory prefix matching `npm pack` semantics, the always-shipped rule for `package.json`, the lockfile-not-shipped rule) are unit-testable. Regression covered by `tests/bug-2980-hotfix-only-picks-shipping-changes.test.cjs`. (#2980)
+- **`release-sdk` hotfix re-run no longer fails at `Dry-run publish validation` when the version is already on npm** — the `Detect prior publish (reconciliation mode)` step sets `skip_publish=true` when the package version is already on the registry, and the actual publish step honors that gate. The `Dry-run publish validation` step was missing the same guard, so any operator re-run of an already-published hotfix (the typical recovery path when later steps fail mid-flight) hit `npm publish --dry-run` first and got `npm error You cannot publish over the previously published versions: X.Y.Z` — `npm publish --dry-run` contacts the registry and rejects existing-version targets even though it doesn't actually publish. The dry-run validation step is now gated on the same `steps.prior_publish.outputs.skip_publish != 'true'` condition as the publish step. The rehearsal still runs on first publishes (where it has value); it skips only in the specific reconciliation case where the publish itself would be skipped. Trigger run: [25233855236](https://github.com/open-gsd/get-shit-done-redux/actions/runs/25233855236/job/73995605643). Regression covered by `tests/bug-2987-dry-run-validation-skip-on-reconciliation.test.cjs`. (#2987)
+- **`release-sdk` hotfix flow hardened against silent classifier failures, missing-classifier-at-base-tag, and a vestigial merge-back PR step** — three issues surfaced by CodeRabbit's post-merge review of #2981 plus a production failure on the v1.39.1 release run. **(1)** `scripts/diff-touches-shipped-paths.cjs` reused exit code `1` for both the legitimate "no shipped paths" classifier result and Node's default uncaught-throw exit, so any tooling failure was indistinguishable from a normal skip. The script now uses `0` (shipped), `1` (not shipped), `2` (classifier error) with `try`/`catch` + `uncaughtException`/`unhandledRejection` handlers routing all failure paths to exit `2`. **(2)** The workflow's `git checkout -b "$BRANCH" "$BASE_TAG"` overwrote the working tree with the base tag's contents *before* the cherry-pick loop ran the classifier — but base tags predating the classifier's introduction (notably v1.39.0) don't have the file in their tree, so `node scripts/diff-touches-shipped-paths.cjs` would exit non-zero and silently drop every commit, producing an empty hotfix release. The classifier is now staged into `$RUNNER_TEMP` at the top of `Prepare hotfix branch` (before any working-tree-mutating git command), and the loop references that staged copy. The cherry-pick loop snapshots `$PIPESTATUS` into a local array (`PIPE_RC=("${PIPESTATUS[@]}")`) immediately after the classifier pipeline — under bracketed `set +e`/`set -e` — and dispatches via explicit `case`: `0` proceeds, `1` skips into `NON_SHIPPED_SKIPPED`, anything else emits `::error::shipped-paths classifier failed for $SHA (exit N)` and fails the workflow. CodeRabbit on PR #2984 caught a subtler bug in the first iteration: `pipeline \|\| true; RC=${PIPESTATUS[1]}` is broken because `\|\| true` runs `true` as its own one-command pipeline on the failure paths, overwriting `PIPESTATUS` to `(0)` and leaving `${PIPESTATUS[1]}` unset. The array-snapshot form is invariant against this. The same hardening also surfaces `git diff-tree`'s exit code (via `PIPE_RC[0]`); a non-zero diff-tree result now also fails the workflow rather than feeding partial input to the classifier. **(3)** Removed the `Open merge-back PR (hotfix only)` step. The auto-cherry-pick hotfix flow only picks commits already on main (`git cherry HEAD origin/main` outputs the unmerged ones), so by construction every code commit on the hotfix branch is already on main. The only hotfix-branch-only commit is the version-bump chore, which would either no-op against main or rewind main's in-progress version. The step also failed in production with `GitHub Actions is not permitted to create or approve pull requests (createPullRequest)` (org policy) on run [25232968975](https://github.com/open-gsd/get-shit-done-redux/actions/runs/25232968975). The `pull-requests: write` permission previously granted to the release job has been dropped in line with least-privilege. The run-summary line that previously echoed `Merge-back PR opened against main` has been replaced with `No merge-back PR (auto-picked commits are already on main)` so operators reading the summary see an accurate non-action statement (CodeRabbit on PR #2984). Regression covered by `tests/bug-2983-classifier-exit-codes-and-base-tag-staging.test.cjs` (15 assertions across exit-code semantics, classifier staging, error dispatch, PIPESTATUS-snapshot hardening, diff-tree fail-fast, merge-back removal, and run-summary accuracy). (#2983)
+- **`release-sdk` hotfix only cherry-picks commits that change what actually ships** — the `fix:`/`chore:` filter in `Prepare hotfix branch` was too broad: it picked any commit with that conventional-commit type regardless of whether the diff could affect the published npm package. CI-only fixes (release-sdk.yml itself, hotfix tooling, test-only commits) were getting cherry-picked into hotfix branches even though they cannot change the tarball — and the subset touching `.github/workflows/*` then caused the prepare job's `git push` to be rejected by GitHub because the default `GITHUB_TOKEN` lacks the `workflow` scope, aborting the run. v1.39.1 hit this on PR #2977 (run [25232010071](https://github.com/open-gsd/get-shit-done-redux/actions/runs/25232010071)). The loop now pre-skips any candidate commit whose `git diff-tree` output doesn't intersect the npm tarball's shipped paths (entries in `package.json` `files`, plus `package.json` itself, which `npm pack` always includes). Skipped commits land in a new `NON_SHIPPED_SKIPPED` summary bucket framed as informational — non-shipping commits cannot affect the package, so the skip needs no operator action. The shipped-paths classifier lives in `scripts/diff-touches-shipped-paths.cjs` so its rules (file-OR-directory prefix matching `npm pack` semantics, the always-shipped rule for `package.json`, the lockfile-not-shipped rule) are unit-testable. Regression covered by `tests/bug-2980-hotfix-only-picks-shipping-changes.test.cjs`. (#2980)
 - **`release-sdk` hotfix workflow fails on real run with `npm error Version not changed`** — the `release` job's `Bump in-tree version (not committed)` step ran `npm version "$VERSION"` without `--allow-same-version`, so it errored on real (non-dry-run) hotfix runs because `prepare` had already committed the bump on the hotfix branch. The release job's checkout `ref` is asymmetric — `BRANCH` (already bumped) on real runs vs `BASE_TAG` (older version) on dry-runs — which is why dry-run never caught the bug. Both `npm version` calls in that step now pass `--allow-same-version`, matching the existing pattern in `release.yml:326`. (#2976)
 - **Stale deleted command references updated across workflow files** — `help.md`, `do.md`, `settings.md`, `discuss-phase.md`, `new-project.md`, `plan-phase.md`, `spike.md`, and `sketch.md` referenced command names removed in #2790; updated to new consolidated equivalents. (#2950)
 - **`spike --wrap-up` now dispatches correctly** — `/gsd-spike --wrap-up` was silently no-oping because the flag dispatch wiring was omitted when the micro-skill entry point was absorbed in #2790. (#2948)
@@ -264,7 +264,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   previous body-only regex was too strict and missed valid UAT items declared in YAML
   frontmatter, surfacing false-positive open gaps at every `/gsd-complete-milestone`
   audit. (#2788)
-- **`gsd-sdk` binary collision with `@gsd-build/sdk` resolved** — workstream-aware
+- **`gsd-sdk` binary collision with `@opengsd/gsd-sdk` resolved** — workstream-aware
   query registry now respects `GSD_WORKSTREAM` env var; `gsd-tools` bin alias added so
   the two SDK packages no longer fight over the `gsd-sdk` name in `node_modules/.bin`.
   (#2791)
@@ -395,7 +395,7 @@ If you use GSD **as a workflow**—milestones, phases, `.planning/` artifacts, b
 - **SDK Phase 3 — runner hot path uses the registry directly** — When you run **phase lifecycle** or **new-project init** through the SDK, the common STATE/roadmap/plan-index/complete/commit/config calls **skip extra subprocess overhead** on the default path (workstreams and test overrides unchanged). *Contributors:* `GSDTools` → `initPhaseOp`, `phasePlanIndex`, `phaseComplete`, `initNewProject`, `configSet`, `commit` (#2302).
 - **Docs — `docs/CLI-TOOLS.md`** — New **SDK and programmatic access** section (registry-first guidance, CJS→`gsd-sdk query` examples, `GSDTools`/workstream behavior, `state load` vs registry state handlers, CLI-only commands); **See also** links to `QUERY-HANDLERS.md`, Architecture, and COMMANDS (#2302).
 - **Docs — `docs/USER-GUIDE.md`** — Programmatic CLI subsection: corrected CLI-only vs registry commands; anchor link to CLI-TOOLS SDK section; `state load` caveat cross-reference (#2302).
-- **CJS deprecation** — `get-shit-done/bin/gsd-tools.cjs` documents `@deprecated` in favor of `gsd-sdk query` and `@gsd-build/sdk` (#2302).
+- **CJS deprecation** — `get-shit-done/bin/gsd-tools.cjs` documents `@deprecated` in favor of `gsd-sdk query` and `@opengsd/gsd-sdk` (#2302).
 
 ### Fixed
 
@@ -418,7 +418,7 @@ If you use GSD **as a workflow**—milestones, phases, `.planning/` artifacts, b
 - **`gsd-read-injection-scanner` hook now ships to users** — the scanner was added in 1.37.0 (#2201) but was never added to `scripts/build-hooks.js`' `HOOKS_TO_COPY` allowlist, so it never landed in `hooks/dist/` and `install.js` skipped it with "Skipped read injection scanner hook — gsd-read-injection-scanner.js not found at target". Effectively disabled the read-time prompt-injection scanner for every user on 1.37.0/1.37.1. Added to the build allowlist and regression test. Also dropped a redundant non-absolute `.claude/hooks/` path check that was bypassing the installer's runtime-path templating and leaking `.claude/` references into non-Claude installs (#2406)
 - **SDK `checkAgentsInstalled` is now runtime-aware** — `sdk/src/query/init.ts::checkAgentsInstalled` only knew where Claude Code put agents (`~/.claude/agents`). Users running GSD on Codex, OpenCode, Gemini, Kilo, Copilot, Antigravity, Cursor, Windsurf, Augment, Trae, Qwen, CodeBuddy, or Cline got `agents_installed: false` even with a complete install, which hard-blocked any workflow that gates subagent spawning on that flag. `sdk/src/query/helpers.ts` now resolves the right directory via three-tier detection (`GSD_RUNTIME` env → `config.runtime` → `claude` fallback) and mirrors `bin/install.js::getGlobalDir()` for all 14 runtimes. `GSD_AGENTS_DIR` still short-circuits the chain. `init-runner.ts` stays Claude-only by design (#2402)
 - **`init` query agents-installed check looks at the correct directory** — `checkAgentsInstalled` in `sdk/src/query/init.ts` defaulted to `~/.claude/get-shit-done/agents/`, but the installer writes GSD agents to `~/.claude/agents/`. Every init query therefore reported `agents_installed: false` on clean installs, which made workflows refuse to spawn `gsd-executor` and other parallel subagents. The default now matches `sdk/src/init-runner.ts` and the installer (#2400)
-- **Installer now installs `@gsd-build/sdk` automatically** so `gsd-sdk` lands on PATH. Resolves `command not found: gsd-sdk` errors that affected every `/gsd-*` command after a fresh install or `/gsd-update` to 1.36+. Adds `--no-sdk` to opt out and `--sdk` to force reinstall. Implements the `--sdk` flag that was previously documented in README but never wired up (#2385)
+- **Installer now installs `@opengsd/gsd-sdk` automatically** so `gsd-sdk` lands on PATH. Resolves `command not found: gsd-sdk` errors that affected every `/gsd-*` command after a fresh install or `/gsd-update` to 1.36+. Adds `--no-sdk` to opt out and `--sdk` to force reinstall. Implements the `--sdk` flag that was previously documented in README but never wired up (#2385)
 
 ## [1.37.1] - 2026-04-17
 
@@ -470,7 +470,7 @@ If you use GSD **as a workflow**—milestones, phases, `.planning/` artifacts, b
 - **Installer custom files** — Restore detect-custom-files and backup_custom_files (#1997)
 - **Agent re-read loops** — Add no-re-read critical rules to ui-checker and planner (#2346)
 
-## [1.36.0](https://github.com/gsd-build/get-shit-done/releases/tag/v1.36.0) - 2026-04-14
+## [1.36.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.36.0) - 2026-04-14
 
 ### SDK query layer — Phases 1 & 2 (what you get)
 
@@ -485,7 +485,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - `**/gsd-graphify` integration** — Knowledge graph for planning agents, enabling richer context connections between project artifacts (#2164)
 - `**gsd-pattern-mapper` agent** — Codebase pattern analysis agent for identifying recurring patterns and conventions (#1861)
-- `**@gsd-build/sdk` — Phase 1 typed query foundation (#2118)** — Introduces `**gsd-sdk query`** and registry-backed handlers; see **SDK query layer — Phases 1 & 2** above for how that fits the workflow.
+- `**@opengsd/gsd-sdk` — Phase 1 typed query foundation (#2118)** — Introduces `**gsd-sdk query`** and registry-backed handlers; see **SDK query layer — Phases 1 & 2** above for how that fits the workflow.
 - **Opt-in TDD pipeline mode** — `tdd_mode` exposed in init JSON with `--tdd` flag override for test-driven development workflows (#2119, #2124)
 - **Stale/orphan worktree detection (W017)** — `validate-health` now detects stale and orphan worktrees (#2175)
 - **Seed scanning in new-milestone** — Planted seeds are scanned during milestone step 2.5 for automatic surfacing (#2177)
@@ -563,7 +563,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - **SDK query layer hardening** — Realpath-aware path containment, ReDoS mitigation, strict CLI parsing, phase directory sanitization (#2118)
 - **Prompt injection scan** — Allowlist plan-phase.md
 
-## [1.35.0](https://github.com/gsd-build/get-shit-done/releases/tag/v1.35.0) - 2026-04-10
+## [1.35.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.35.0) - 2026-04-10
 
 ### Added
 
@@ -596,20 +596,20 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - `**acceptance_criteria` hard gate** — Enforced as a hard gate in executor — plans missing acceptance criteria are rejected before execution begins. (#1958)
 - `**normalizePhaseName` preserves letter suffix case** — Phase names with letter suffixes (e.g., `1a`, `2B`) now preserve original case. (#1963)
 
-## [1.34.2](https://github.com/gsd-build/get-shit-done/releases/tag/v1.34.2) - 2026-04-06
+## [1.34.2](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.34.2) - 2026-04-06
 
 ### Changed
 
 - **Node.js minimum lowered to 22** — `engines.node` was raised to `>=24.0.0` based on a CI matrix change, but Node 22 is still in Active LTS until October 2026. Restoring Node 22 support eliminates the `EBADENGINE` warning for users on the previous LTS line. CI matrix now tests against both Node 22 and Node 24.
 
-## [1.34.1](https://github.com/gsd-build/get-shit-done/releases/tag/v1.34.1) - 2026-04-06
+## [1.34.1](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.34.1) - 2026-04-06
 
 ### Fixed
 
 - **npm publish catchup** — v1.33.0 and v1.34.0 were tagged but never published to npm; this release makes all changes available via `npx get-shit-done-cc@latest`
 - Removed npm v1.32.0 stuck notice from README
 
-## [1.34.0](https://github.com/gsd-build/get-shit-done/releases/tag/v1.34.0) - 2026-04-06
+## [1.34.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.34.0) - 2026-04-06
 
 ### Added
 
@@ -623,7 +623,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - **detectConfigDir priority** — `.claude` now searched first so Claude Code users don't see false update warnings when multiple runtimes are installed (#1860)
 - **Milestone backlog preservation** — `phases clear` no longer wipes 999.x backlog phases (#1858)
 
-## [1.33.0](https://github.com/gsd-build/get-shit-done/releases/tag/v1.33.0) - 2026-04-05
+## [1.33.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.33.0) - 2026-04-05
 
 ### Added
 
@@ -772,14 +772,14 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - **Windsurf trailing slash** — Removed from .windsurf/rules path
 - **Slug sanitization** — Added --raw flag, capped length to 60 chars
 
-## [1.30.0](https://github.com/gsd-build/get-shit-done/releases/tag/v1.30.0) - 2026-03-26
+## [1.30.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.30.0) - 2026-03-26
 
 ### Added
 
-- **GSD SDK** — Headless TypeScript SDK (`@gsd-build/sdk`) with `gsd-sdk init` and `gsd-sdk auto` CLI commands for autonomous project execution
+- **GSD SDK** — Headless TypeScript SDK (`@opengsd/gsd-sdk`) with `gsd-sdk init` and `gsd-sdk auto` CLI commands for autonomous project execution
 - `**--sdk` installer flag** — Optionally install the GSD SDK during setup (interactive prompt or `--sdk` flag)
 
-## [1.29.0](https://github.com/gsd-build/get-shit-done/releases/tag/v1.29.0) - 2026-03-25
+## [1.29.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.29.0) - 2026-03-25
 
 ### Added
 
@@ -793,7 +793,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 ### Changed
 
-- Repository references updated from `glittercowboy` to `gsd-build`
+- Repository references updated from `open-gsd` to `open-gsd`
 - Korean translations refined from formal -십시오 to natural -세요 style
 
 ### Fixed
@@ -813,7 +813,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Worktree agents get `permissionMode: acceptEdits`
 - Security scan self-detection and Windows test compatibility
 
-## [1.28.0](https://github.com/gsd-build/get-shit-done/releases/tag/v1.28.0) - 2026-03-22
+## [1.28.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.28.0) - 2026-03-22
 
 ### Added
 
@@ -856,7 +856,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Discuss-phase no longer ignores workflow instructions
 - Gemini CLI uses `BeforeTool` hook event instead of `PreToolUse`
 
-## [1.27.0](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.27.0) - 2026-03-20
+## [1.27.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.27.0) - 2026-03-20
 
 ### Added
 
@@ -911,7 +911,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Codex EOL preservation when enabling hooks
 - macOS `/var` symlink resolution in path validation
 
-## [1.26.0](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.26.0) - 2026-03-18
+## [1.26.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.26.0) - 2026-03-18
 
 ### Added
 
@@ -961,7 +961,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Profile template paths, field names, and evidence key corrections (#1095)
 - Duplicate variable declaration removed (#1101)
 
-## [1.25.0](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.25.0) - 2026-03-16
+## [1.25.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.25.0) - 2026-03-16
 
 ### Added
 
@@ -989,7 +989,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - **Antigravity skills** — `processAttribution` was missing from `copyCommandsAsAntigravitySkills`, causing SKILL.md files to be written without commit attribution metadata
 - Copilot install tests updated for UI agent count changes
 
-## [1.24.0](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.24.0) - 2026-03-15
+## [1.24.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.24.0) - 2026-03-15
 
 ### Added
 
@@ -1007,7 +1007,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - `gsd-tools.cjs` uses absolute paths in all install types (#820)
 - Invalid `skills:` frontmatter removed from UI agent files
 
-## [1.23.0](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.23.0) - 2026-03-15
+## [1.23.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.23.0) - 2026-03-15
 
 ### Added
 
@@ -1044,7 +1044,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Valid Codex agent TOML emitted by installer
 - Escape characters corrected in grep commands
 
-## [1.22.4](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.22.4) - 2026-03-03
+## [1.22.4](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.22.4) - 2026-03-03
 
 ### Added
 
@@ -1055,7 +1055,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Windows: `@file:` protocol resolution for large init payloads (>50KB) — all 32 workflow/agent files now resolve temp file paths instead of letting agents hallucinate `/tmp` paths (#841)
 - Missing `skills` frontmatter on gsd-nyquist-auditor agent
 
-## [1.22.3](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.22.3) - 2026-03-03
+## [1.22.3](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.22.3) - 2026-03-03
 
 ### Added
 
@@ -1069,7 +1069,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - Installer now replaces `$HOME/.claude/` paths (not just `~/.claude/`) for non-Claude runtimes — fixes broken commands on local installs and Gemini/OpenCode/Codex installs (#905, #909)
 
-## [1.22.2](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.22.2) - 2026-03-03
+## [1.22.2](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.22.2) - 2026-03-03
 
 ### Fixed
 
@@ -1104,7 +1104,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Deduplicated `extractField` and phase filter helpers into shared modules
 - Added 47 agent frontmatter and spawn consistency tests
 
-## [1.22.1](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.22.1) - 2026-03-02
+## [1.22.1](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.22.1) - 2026-03-02
 
 ### Added
 
@@ -1114,7 +1114,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - Shell snippets in workflows use `printf` instead of `echo` to prevent jq parse errors with special characters
 
-## [1.22.0](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.22.0) - 2026-02-27
+## [1.22.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.22.0) - 2026-02-27
 
 ### Added
 
@@ -1134,7 +1134,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - `model_overrides` and `nyquist_validation` correctly loaded from config
 - `phase-plan-index` no longer returns null/empty for `files_modified`, `objective`, and `task_count`
 
-## [1.21.1](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.21.1) - 2026-02-27
+## [1.21.1](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.21.1) - 2026-02-27
 
 ### Added
 
@@ -1151,7 +1151,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - JSON quoting and dollar sign handling in CLI arguments on Windows
 - `model_overrides` loaded from config and `resolveModelInternal` used in CLI
 
-## [1.21.0](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.21.0) - 2026-02-25
+## [1.21.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.21.0) - 2026-02-25
 
 ### Added
 
@@ -1178,7 +1178,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Progress bar percent clamping to prevent RangeError crashes
 - `--cwd` override support in state-snapshot command
 
-## [1.20.6](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.20.6) - 2025-02-23
+## [1.20.6](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.20.6) - 2025-02-23
 
 ### Added
 
@@ -1196,7 +1196,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Gemini CLI workflows and templates no longer incorrectly convert to TOML format
 - Universal phase number parsing handles all formats consistently (decimal phases, plain numbers)
 
-## [1.20.5](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.20.5) - 2026-02-19
+## [1.20.5](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.20.5) - 2026-02-19
 
 ### Fixed
 
@@ -1207,7 +1207,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Subagents now discover and load project CLAUDE.md and skills at spawn time for better project context (#671, #672)
 - Improved context loading reliability in spawned agents
 
-## [1.20.4](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.20.4) - 2026-02-17
+## [1.20.4](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.20.4) - 2026-02-17
 
 ### Fixed
 
@@ -1215,7 +1215,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - New `requirements mark-complete` CLI command enables per-plan requirement tracking instead of waiting for phase completion
 - Executor final commit includes ROADMAP.md and REQUIREMENTS.md
 
-## [1.20.3](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.20.3) - 2026-02-16
+## [1.20.3](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.20.3) - 2026-02-16
 
 ### Fixed
 
@@ -1226,7 +1226,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - `plan-milestone-gaps` updates REQUIREMENTS.md traceability table (phase assignments, checkbox resets, coverage count) and includes it in commit
 - Gemini CLI: escape `${VAR}` shell variables in agent bodies to prevent template validation failures
 
-## [1.20.2](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.20.2) - 2026-02-16
+## [1.20.2](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.20.2) - 2026-02-16
 
 ### Fixed
 
@@ -1242,7 +1242,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Phase requirement IDs extracted from ROADMAP and passed through full chain: researcher → planner → checker → executor → verifier
 - Verification report requirements table expanded with Source Plan, Description, and Evidence columns
 
-## [1.20.1](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.20.1) - 2026-02-16
+## [1.20.1](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.20.1) - 2026-02-16
 
 ### Fixed
 
@@ -1251,7 +1251,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Plan-phase now passes `--auto` flag when spawning execute-phase
 - Auto-advance clears on milestone complete to prevent runaway chains
 
-## [1.20.0](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.20.0) - 2026-02-15
+## [1.20.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.20.0) - 2026-02-15
 
 ### Added
 
@@ -1267,7 +1267,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - `/gsd:complete-milestone` respects `commit_docs` setting when merging branches
 - Phase directories tracked in git via `.gitkeep` files
 
-## [1.19.2](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.19.2) - 2026-02-15
+## [1.19.2](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.19.2) - 2026-02-15
 
 ### Added
 
@@ -1291,7 +1291,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Plan-phase autocomplete fixed by removing "execution" from description
 - Executor now has scope boundary and attempt limit to prevent runaway loops
 
-## [1.19.1](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.19.1) - 2026-02-15
+## [1.19.1](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.19.1) - 2026-02-15
 
 ### Added
 
@@ -1307,7 +1307,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - AskUserQuestion headers enforced to 12-char max to prevent UI truncation (#559)
 - Agent model resolution returns `inherit` instead of hardcoded `opus` (#558)
 
-## [1.19.0](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.19.0) - 2026-02-15
+## [1.19.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.19.0) - 2026-02-15
 
 ### Added
 
@@ -1325,7 +1325,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Use `{phase_num}` instead of ambiguous `{phase}` for filenames (#601)
 - Add package.json to prevent ESM inheritance issues (#602)
 
-## [1.18.0](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.18.0) - 2026-02-08
+## [1.18.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.18.0) - 2026-02-08
 
 ### Added
 
@@ -1337,7 +1337,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Windows: Replaced HEREDOC with literal newlines for git commit compatibility
 - Research decision from `/gsd:new-milestone` now persists to config.json
 
-## [1.17.0](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.17.0) - 2026-02-08
+## [1.17.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.17.0) - 2026-02-08
 
 ### Added
 
@@ -1357,7 +1357,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - Added workaround for Claude Code `classifyHandoffIfNeeded` bug that causes false agent failures — execute-phase and quick workflows now spot-check actual output before reporting failure
 
-## [1.16.0](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.16.0) - 2026-02-08
+## [1.16.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.16.0) - 2026-02-08
 
 ### Added
 
@@ -1389,13 +1389,13 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Execute-phase orchestrator no longer bloats context by embedding file content — passes paths instead, letting subagents read in their fresh context
 - Windows: Normalized backslash paths in gsd-tools invocations (contributed by @rmindel)
 
-## [1.15.0](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.15.0) - 2026-02-08
+## [1.15.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.15.0) - 2026-02-08
 
 ### Changed
 
 - Optimized workflow context loading to eliminate redundant file reads, reducing token usage by ~5,000-10,000 tokens per workflow execution
 
-## [1.14.0](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.14.0) - 2026-02-08
+## [1.14.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.14.0) - 2026-02-08
 
 ### Added
 
@@ -1405,7 +1405,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - Installer no longer deletes opencode.json on JSONC parse errors — now handles comments, trailing commas, and BOM correctly (#474)
 
-## [1.13.0](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.13.0) - 2026-02-08
+## [1.13.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.13.0) - 2026-02-08
 
 ### Added
 
@@ -1424,14 +1424,14 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Agents migrated from bash patterns to structured gsd-tools commands
 - Nested YAML frontmatter parsing now handles `dependency-graph.provides`, `tech-stack.added` correctly
 
-## [1.12.1](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.12.1) - 2026-02-08
+## [1.12.1](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.12.1) - 2026-02-08
 
 ### Changed
 
 - Consolidated workflow initialization into compound `init` commands, reducing token usage and improving startup performance
 - Updated 24 workflow and agent files to use single-call context gathering instead of multiple atomic calls
 
-## [1.12.0](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.12.0) - 2026-02-07
+## [1.12.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.12.0) - 2026-02-07
 
 ### Changed
 
@@ -1444,7 +1444,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - `gsd-tools.cjs` CLI utility with functions: state load/update, resolve-model, find-phase, commit, verify-summary, generate-slug, current-timestamp, list-todos, verify-path-exists, config-ensure-section
 
-## [1.11.2](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.11.2) - 2026-02-05
+## [1.11.2](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.11.2) - 2026-02-05
 
 ### Added
 
@@ -1468,7 +1468,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - ASCII box-drawing vs text content with diacritics (#289)
 - Removed broken gsd-gemini link (404)
 
-## [1.11.1](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.11.0) - 2026-01-31
+## [1.11.1](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.11.0) - 2026-01-31
 
 ### Added
 
@@ -1483,13 +1483,13 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - CONTEXT.md from `/gsd:discuss-phase` now properly flows to all downstream agents (researcher, planner, checker, revision loop)
 
-## [1.10.1](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.10.1) - 2025-01-30
+## [1.10.1](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.10.1) - 2025-01-30
 
 ### Fixed
 
 - Gemini CLI agent loading errors that prevented commands from executing
 
-## [1.10.0](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.10.0) - 2026-01-29
+## [1.10.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.10.0) - 2026-01-29
 
 ### Added
 
@@ -1500,7 +1500,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - Context bar now shows 100% at actual 80% limit (was scaling incorrectly)
 
-## [1.9.12](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.9.12) - 2025-01-23
+## [1.9.12](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.9.12) - 2025-01-23
 
 ### Removed
 
@@ -1510,7 +1510,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - Restored auto-release GitHub Actions workflow
 
-## [1.9.11](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.9.11) - 2026-01-23
+## [1.9.11](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.9.11) - 2026-01-23
 
 ### Changed
 
@@ -1520,19 +1520,19 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - Discord badge now uses static format for reliable rendering
 
-## [1.9.10](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.9.10) - 2026-01-23
+## [1.9.10](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.9.10) - 2026-01-23
 
 ### Added
 
 - Discord community link shown in installer completion message
 
-## [1.9.9](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.9.9) - 2026-01-23
+## [1.9.9](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.9.9) - 2026-01-23
 
 ### Added
 
 - `/gsd:join-discord` command to quickly access the GSD Discord community invite link
 
-## [1.9.8](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.9.8) - 2025-01-22
+## [1.9.8](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.9.8) - 2025-01-22
 
 ### Added
 
@@ -1542,7 +1542,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - Context file detection now matches filename variants (handles both `CONTEXT.md` and `{phase}-CONTEXT.md` patterns)
 
-## [1.9.7](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.9.7) - 2026-01-22
+## [1.9.7](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.9.7) - 2026-01-22
 
 ### Fixed
 
@@ -1550,7 +1550,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - OpenCode commands use flat structure (`command/gsd-help.md`) matching OpenCode's expected format
 - OpenCode permissions written to `~/.config/opencode/opencode.json`
 
-## [1.9.6](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.9.6) - 2026-01-22
+## [1.9.6](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.9.6) - 2026-01-22
 
 ### Added
 
@@ -1564,7 +1564,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Installation flow now asks for runtime first, then location
 - Updated README with new installation options
 
-## [1.9.5](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.9.5) - 2025-01-22
+## [1.9.5](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.9.5) - 2025-01-22
 
 ### Fixed
 
@@ -1578,7 +1578,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Condensed verbose documentation in templates and workflows (-170 lines)
 - Added CI/CD automation for releases
 
-## [1.9.4](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.9.4) - 2026-01-21
+## [1.9.4](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.9.4) - 2026-01-21
 
 ### Changed
 
@@ -1588,7 +1588,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Added pre-checkpoint failure recovery (fix broken environment before asking user to verify)
 - DRY refactor: checkpoints.md is now single source of truth for automation patterns
 
-## [1.9.2](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.9.2) - 2025-01-21
+## [1.9.2](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.9.2) - 2025-01-21
 
 ### Removed
 
@@ -1603,7 +1603,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - new-project now properly includes model_profile in config
 
-## [1.9.0](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.9.0) - 2025-01-20
+## [1.9.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.9.0) - 2025-01-20
 
 ### Added
 
@@ -1616,20 +1616,20 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Tech debt from milestone audit addressed
 - All hooks now use `gsd-` prefix for consistency (statusline.js → gsd-statusline.js)
 
-## [1.8.0](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.8.0) - 2026-01-19
+## [1.8.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.8.0) - 2026-01-19
 
 ### Added
 
 - Uncommitted planning mode: Keep `.planning/` local-only (not committed to git) via `planning.commit_docs: false` in config.json. Useful for OSS contributions, client work, or privacy preferences.
 - `/gsd:new-project` now asks about git tracking during initial setup, letting you opt out of committing planning docs from the start
 
-## [1.7.1](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.7.1) - 2026-01-19
+## [1.7.1](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.7.1) - 2026-01-19
 
 ### Fixed
 
 - Quick task PLAN and SUMMARY files now use numbered prefix (`001-PLAN.md`, `001-SUMMARY.md`) matching regular phase naming convention
 
-## [1.7.0](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.7.0) - 2026-01-19
+## [1.7.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.7.0) - 2026-01-19
 
 ### Added
 
@@ -1654,7 +1654,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - Added homepage and bugs fields to package.json
 
-## [1.6.4](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.6.4) - 2026-01-17
+## [1.6.4](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.6.4) - 2026-01-17
 
 ### Fixed
 
@@ -1662,13 +1662,13 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Installation now verifies files were actually copied before showing success checkmarks
 - Orphaned `gsd-notify.sh` hook from previous versions is now automatically removed during install (both file and settings.json registration)
 
-## [1.6.3](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.6.3) - 2025-01-17
+## [1.6.3](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.6.3) - 2025-01-17
 
 ### Added
 
 - `--gaps-only` flag for `/gsd:execute-phase` — executes only gap closure plans after verify-work finds issues, eliminating redundant state discovery
 
-## [1.6.2](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.6.2) - 2025-01-17
+## [1.6.2](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.6.2) - 2025-01-17
 
 ### Changed
 
@@ -1678,14 +1678,14 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Brownfield instructions consolidated into callout at top of "How It Works" instead of separate section
 - Phase directories now created at discuss/plan-phase instead of during roadmap creation
 
-## [1.6.1](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.6.1) - 2025-01-17
+## [1.6.1](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.6.1) - 2025-01-17
 
 ### Changed
 
 - Installer performs clean install of GSD folders, removing orphaned files from previous versions
 - `/gsd:update` shows changelog and asks for confirmation before updating, with clear warning about what gets replaced
 
-## [1.6.0](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.6.0) - 2026-01-17
+## [1.6.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.6.0) - 2026-01-17
 
 ### Changed
 
@@ -1703,14 +1703,14 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - `/gsd:verify-work` now includes next-step routing after verification completes
 
-## [1.5.30](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.30) - 2026-01-17
+## [1.5.30](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.30) - 2026-01-17
 
 ### Fixed
 
 - Output templates in `plan-phase`, `execute-phase`, and `audit-milestone` now render markdown correctly instead of showing literal backticks
 - Next-step suggestions now consistently recommend `/gsd:discuss-phase` before `/gsd:plan-phase` across all routing paths
 
-## [1.5.29](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.29) - 2025-01-16
+## [1.5.29](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.29) - 2025-01-16
 
 ### Changed
 
@@ -1722,7 +1722,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Phase input normalization at command entry points
 - Removed blocking notification popups (gsd-notify) on all platforms
 
-## [1.5.28](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.28) - 2026-01-16
+## [1.5.28](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.28) - 2026-01-16
 
 ### Changed
 
@@ -1735,33 +1735,33 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Phase directory matching now handles both zero-padded (05-*) and unpadded (5-*) folder names
 - Map-codebase agent output collection
 
-## [1.5.27](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.27) - 2026-01-16
+## [1.5.27](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.27) - 2026-01-16
 
 ### Fixed
 
 - Orchestrator corrections between executor completions are now committed (previously left uncommitted when orchestrator made small fixes between waves)
 
-## [1.5.26](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.26) - 2026-01-16
+## [1.5.26](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.26) - 2026-01-16
 
 ### Fixed
 
 - Revised plans now get committed after checker feedback (previously only initial plans were committed, leaving revisions uncommitted)
 
-## [1.5.25](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.25) - 2026-01-16
+## [1.5.25](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.25) - 2026-01-16
 
 ### Fixed
 
 - Stop notification hook no longer shows stale project state (now uses session-scoped todos only)
 - Researcher agent now reliably loads CONTEXT.md from discuss-phase
 
-## [1.5.24](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.24) - 2026-01-16
+## [1.5.24](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.24) - 2026-01-16
 
 ### Fixed
 
 - Stop notification hook now correctly parses STATE.md fields (was always showing "Ready for input")
 - Planner agent now reliably loads CONTEXT.md and RESEARCH.md files
 
-## [1.5.23](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.23) - 2025-01-16
+## [1.5.23](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.23) - 2025-01-16
 
 ### Added
 
@@ -1775,7 +1775,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Double-path bug in researcher git add command
 - Removed `/gsd:research-phase` from next-step suggestions (use `/gsd:plan-phase` instead)
 
-## [1.5.22](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.22) - 2025-01-16
+## [1.5.22](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.22) - 2025-01-16
 
 ### Added
 
@@ -1785,7 +1785,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - Planner now updates ROADMAP.md placeholders after planning completes
 
-## [1.5.21](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.21) - 2026-01-16
+## [1.5.21](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.21) - 2026-01-16
 
 ### Added
 
@@ -1807,7 +1807,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Project researcher agent can no longer commit (orchestrator handles commits)
 - Roadmap requires explicit user approval before committing
 
-## [1.5.20](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.20) - 2026-01-16
+## [1.5.20](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.20) - 2026-01-16
 
 ### Fixed
 
@@ -1819,7 +1819,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - `detect_research_needs` step from roadmap creation workflow
 - Roadmap-based research skip logic from planner agent
 
-## [1.5.19](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.19) - 2026-01-16
+## [1.5.19](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.19) - 2026-01-16
 
 ### Changed
 
@@ -1829,7 +1829,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Downstream awareness: discuss-phase now explicitly documents that CONTEXT.md feeds researcher and planner agents
 - `/gsd:plan-phase` now integrates research — spawns `gsd-phase-researcher` before planning unless research exists or `--skip-research` flag used
 
-## [1.5.18](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.18) - 2026-01-16
+## [1.5.18](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.18) - 2026-01-16
 
 ### Added
 
@@ -1861,13 +1861,13 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - Phase 99 throwaway test files
 
-## [1.5.17](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.17) - 2026-01-15
+## [1.5.17](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.17) - 2026-01-15
 
 ### Added
 
 - New `/gsd:update` command — check for updates, install, and display changelog of what changed (better UX than raw `npx get-shit-done-cc`)
 
-## [1.5.16](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.16) - 2026-01-15
+## [1.5.16](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.16) - 2026-01-15
 
 ### Added
 
@@ -1892,7 +1892,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - `references/debugging.md` — consolidated into gsd-debugger agent
 - `references/debug-investigation.md` — consolidated into gsd-debugger agent
 
-## [1.5.15](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.15) - 2025-01-15
+## [1.5.15](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.15) - 2025-01-15
 
 ### Fixed
 
@@ -1903,19 +1903,19 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Consolidated `/gsd:plan-fix` into `/gsd:plan-phase --gaps` for simpler workflow
 - UAT file writes now batched instead of per-response for better performance
 
-## [1.5.14](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.14) - 2025-01-15
+## [1.5.14](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.14) - 2025-01-15
 
 ### Fixed
 
 - Plan-phase now always routes to `/gsd:execute-phase` after planning, even for single-plan phases
 
-## [1.5.13](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.13) - 2026-01-15
+## [1.5.13](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.13) - 2026-01-15
 
 ### Fixed
 
 - `/gsd:new-milestone` now presents research and requirements paths as equal options, matching `/gsd:new-project` format
 
-## [1.5.12](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.12) - 2025-01-15
+## [1.5.12](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.12) - 2025-01-15
 
 ### Changed
 
@@ -1932,13 +1932,13 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - `MILESTONE-AUDIT.md` now versioned as `v{version}-MILESTONE-AUDIT.md` and archived on completion
 - `progress` now correctly routes to `/gsd:discuss-milestone` when between milestones (Route F)
 
-## [1.5.11](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.11) - 2025-01-15
+## [1.5.11](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.11) - 2025-01-15
 
 ### Changed
 
 - Verifier reuses previous must-haves on re-verification instead of re-deriving, focuses deep verification on failed items with quick regression checks on passed items
 
-## [1.5.10](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.10) - 2025-01-15
+## [1.5.10](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.10) - 2025-01-15
 
 ### Changed
 
@@ -1948,7 +1948,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - VERIFICATION.md now included in phase completion commit alongside ROADMAP.md, STATE.md, and REQUIREMENTS.md
 
-## [1.5.9](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.9) - 2025-01-15
+## [1.5.9](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.9) - 2025-01-15
 
 ### Added
 
@@ -1968,7 +1968,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - Domain expertise feature (`~/.claude/skills/expertise/`) - was personal tooling not available to other users
 
-## [1.5.8](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.8) - 2025-01-15
+## [1.5.8](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.8) - 2025-01-15
 
 ### Added
 
@@ -1978,7 +1978,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - `gsd-executor` subagent color changed from red to blue
 
-## [1.5.7](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.7) - 2025-01-15
+## [1.5.7](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.7) - 2025-01-15
 
 ### Added
 
@@ -2000,7 +2000,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - Updated remaining `general-purpose` subagent references to use `gsd-executor`
 
-## [1.5.6](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.6) - 2025-01-15
+## [1.5.6](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.6) - 2025-01-15
 
 ### Changed
 
@@ -2011,7 +2011,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - execute-phase: Phase metadata (timing, wave info) now bundled into single commit instead of separate commits
 
-## [1.5.5](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.5) - 2025-01-15
+## [1.5.5](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.5) - 2025-01-15
 
 ### Changed
 
@@ -2019,13 +2019,13 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Commands section reorganized into 7 grouped tables (Setup, Execution, Verification, Milestones, Phase Management, Session, Utilities) for easier scanning
 - Context Engineering table now includes `research/` and `REQUIREMENTS.md`
 
-## [1.5.4](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.4) - 2025-01-15
+## [1.5.4](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.4) - 2025-01-15
 
 ### Changed
 
 - Research phase now loads REQUIREMENTS.md to focus research on concrete requirements (e.g., "email verification") rather than just high-level roadmap descriptions
 
-## [1.5.3](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.3) - 2025-01-15
+## [1.5.3](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.3) - 2025-01-15
 
 ### Changed
 
@@ -2039,7 +2039,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Unused `agent-history.md` template
 - `_archive/` directory with old execute-phase version
 
-## [1.5.2](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.2) - 2026-01-15
+## [1.5.2](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.2) - 2026-01-15
 
 ### Added
 
@@ -2057,14 +2057,14 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - Requirements status now updated by orchestrator (commands) instead of subagent workflow, which couldn't determine phase completion
 
-## [1.5.1](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.1) - 2026-01-14
+## [1.5.1](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.1) - 2026-01-14
 
 ### Changed
 
 - Research agents write their own files directly (STACK.md, FEATURES.md, ARCHITECTURE.md, PITFALLS.md) instead of returning results to orchestrator
 - Slimmed principles.md and load it dynamically in core commands
 
-## [1.5.0](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.0) - 2026-01-14
+## [1.5.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.0) - 2026-01-14
 
 ### Added
 
@@ -2078,13 +2078,13 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Roadmap creation now requires REQUIREMENTS.md and validates all v1 requirements are mapped to phases
 - Simplified questioning in new-project to four essentials (vision, core priority, boundaries, constraints)
 
-## [1.4.29](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.29) - 2026-01-14
+## [1.4.29](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.29) - 2026-01-14
 
 ### Removed
 
 - Deleted obsolete `_archive/execute-phase.md` and `status.md` commands
 
-## [1.4.28](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.28) - 2026-01-14
+## [1.4.28](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.28) - 2026-01-14
 
 ### Fixed
 
@@ -2096,19 +2096,19 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - Slimmed execute-phase command to properly delegate checkpoint handling to workflow
 
-## [1.4.27](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.27) - 2025-01-14
+## [1.4.27](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.27) - 2025-01-14
 
 ### Fixed
 
 - Restored "what to do next" commands after plan/phase execution completes — orchestrator pattern conversion had inadvertently removed the copy/paste-ready next-step routing
 
-## [1.4.26](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.26) - 2026-01-14
+## [1.4.26](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.26) - 2026-01-14
 
 ### Added
 
 - Full changelog history backfilled from git (66 historical versions from 1.0.0 to 1.4.23)
 
-## [1.4.25](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.25) - 2026-01-14
+## [1.4.25](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.25) - 2026-01-14
 
 ### Added
 
@@ -2116,7 +2116,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - VERSION file written during installation for version tracking
 - CHANGELOG.md now included in package installation
 
-## [1.4.24](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.24) - 2026-01-14
+## [1.4.24](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.24) - 2026-01-14
 
 ### Added
 
@@ -2126,13 +2126,13 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - **BREAKING:** ISSUES.md system (replaced by phase-scoped UAT issues and TODOs)
 
-## [1.4.23](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.23) - 2026-01-14
+## [1.4.23](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.23) - 2026-01-14
 
 ### Changed
 
 - Removed dead ISSUES.md system code
 
-## [1.4.22](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.22) - 2026-01-14
+## [1.4.22](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.22) - 2026-01-14
 
 ### Added
 
@@ -2142,82 +2142,82 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - DEBUG_DIR path constant to prevent typos in debug workflow
 
-## [1.4.21](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.21) - 2026-01-14
+## [1.4.21](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.21) - 2026-01-14
 
 ### Fixed
 
 - SlashCommand tool added to plan-fix allowed-tools
 
-## [1.4.20](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.20) - 2026-01-14
+## [1.4.20](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.20) - 2026-01-14
 
 ### Fixed
 
 - Standardized debug file naming convention
 - Debug workflow now invokes execute-plan correctly
 
-## [1.4.19](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.19) - 2026-01-14
+## [1.4.19](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.19) - 2026-01-14
 
 ### Fixed
 
 - Auto-diagnose issues instead of offering choice in plan-fix
 
-## [1.4.18](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.18) - 2026-01-14
+## [1.4.18](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.18) - 2026-01-14
 
 ### Added
 
 - Parallel diagnosis before plan-fix execution
 
-## [1.4.17](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.17) - 2026-01-14
+## [1.4.17](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.17) - 2026-01-14
 
 ### Changed
 
 - Redesigned verify-work as conversational UAT with persistent state
 
-## [1.4.16](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.16) - 2026-01-13
+## [1.4.16](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.16) - 2026-01-13
 
 ### Added
 
 - Pre-execution summary for interactive mode in execute-plan
 - Pre-computed wave numbers at plan time
 
-## [1.4.15](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.15) - 2026-01-13
+## [1.4.15](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.15) - 2026-01-13
 
 ### Added
 
 - Context rot explanation to README header
 
-## [1.4.14](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.14) - 2026-01-13
+## [1.4.14](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.14) - 2026-01-13
 
 ### Changed
 
 - YOLO mode is now recommended default in new-project
 
-## [1.4.13](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.13) - 2026-01-13
+## [1.4.13](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.13) - 2026-01-13
 
 ### Fixed
 
 - Brownfield flow documentation
 - Removed deprecated resume-task references
 
-## [1.4.12](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.12) - 2026-01-13
+## [1.4.12](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.12) - 2026-01-13
 
 ### Changed
 
 - execute-phase is now recommended as primary execution command
 
-## [1.4.11](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.11) - 2026-01-13
+## [1.4.11](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.11) - 2026-01-13
 
 ### Fixed
 
 - Checkpoints now use fresh continuation agents instead of resume
 
-## [1.4.10](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.10) - 2026-01-13
+## [1.4.10](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.10) - 2026-01-13
 
 ### Changed
 
 - execute-plan converted to orchestrator pattern for performance
 
-## [1.4.9](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.9) - 2026-01-13
+## [1.4.9](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.9) - 2026-01-13
 
 ### Changed
 
@@ -2227,13 +2227,13 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - Removed "what's out of scope" question from discuss-phase
 
-## [1.4.8](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.8) - 2026-01-13
+## [1.4.8](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.8) - 2026-01-13
 
 ### Added
 
 - TDD reasoning explanation restored to plan-phase docs
 
-## [1.4.7](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.7) - 2026-01-13
+## [1.4.7](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.7) - 2026-01-13
 
 ### Added
 
@@ -2243,14 +2243,14 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - Parallel execution marked as recommended, not experimental
 
-## [1.4.6](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.6) - 2026-01-13
+## [1.4.6](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.6) - 2026-01-13
 
 ### Added
 
 - Checkpoint pause/resume for spawned agents
 - Deviation rules, commit rules, and workflow references to execute-phase
 
-## [1.4.5](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.5) - 2026-01-13
+## [1.4.5](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.5) - 2026-01-13
 
 ### Added
 
@@ -2262,25 +2262,25 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - execute-phase uses wave-based blocking execution
 
-## [1.4.4](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.4) - 2026-01-13
+## [1.4.4](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.4) - 2026-01-13
 
 ### Fixed
 
 - Inline listing for multiple active debug sessions
 
-## [1.4.3](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.3) - 2026-01-13
+## [1.4.3](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.3) - 2026-01-13
 
 ### Added
 
 - `/gsd:debug` command for systematic debugging with persistent state
 
-## [1.4.2](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.2) - 2026-01-13
+## [1.4.2](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.2) - 2026-01-13
 
 ### Fixed
 
 - Installation verification step clarification
 
-## [1.4.1](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.1) - 2026-01-13
+## [1.4.1](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.1) - 2026-01-13
 
 ### Added
 
@@ -2295,7 +2295,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Renamed `execute-phase.md` workflow to `execute-plan.md` for clarity
 - Plan frontmatter now includes `wave`, `depends_on`, `files_modified`, `autonomous`
 
-## [1.4.0](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.0) - 2026-01-12
+## [1.4.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.0) - 2026-01-12
 
 ### Added
 
@@ -2309,13 +2309,13 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Plans can now specify wave numbers and dependencies
 - execute-phase orchestrates multiple subagents in waves
 
-## [1.3.34](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.34) - 2026-01-11
+## [1.3.34](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.34) - 2026-01-11
 
 ### Added
 
 - `/gsd:add-todo` and `/gsd:check-todos` for mid-session idea capture
 
-## [1.3.33](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.33) - 2026-01-11
+## [1.3.33](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.33) - 2026-01-11
 
 ### Fixed
 
@@ -2325,26 +2325,26 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - Removed obsolete .claude-plugin directory
 
-## [1.3.32](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.32) - 2026-01-10
+## [1.3.32](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.32) - 2026-01-10
 
 ### Added
 
 - `/gsd:resume-task` for resuming interrupted subagent executions
 
-## [1.3.31](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.31) - 2026-01-08
+## [1.3.31](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.31) - 2026-01-08
 
 ### Added
 
 - Planning principles for security, performance, and observability
 - Pro patterns section in README
 
-## [1.3.30](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.30) - 2026-01-08
+## [1.3.30](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.30) - 2026-01-08
 
 ### Added
 
 - verify-work option surfaces after plan execution
 
-## [1.3.29](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.29) - 2026-01-08
+## [1.3.29](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.29) - 2026-01-08
 
 ### Added
 
@@ -2352,7 +2352,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - `/gsd:plan-fix` for fixing UAT issues
 - UAT issues template
 
-## [1.3.28](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.28) - 2026-01-07
+## [1.3.28](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.28) - 2026-01-07
 
 ### Added
 
@@ -2363,7 +2363,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - Validation for --config-dir edge cases
 
-## [1.3.27](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.27) - 2026-01-07
+## [1.3.27](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.27) - 2026-01-07
 
 ### Added
 
@@ -2373,7 +2373,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - Mandatory verification enforced before phase/milestone completion routing
 
-## [1.3.26](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.26) - 2026-01-06
+## [1.3.26](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.26) - 2026-01-06
 
 ### Added
 
@@ -2383,93 +2383,93 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - Phase artifacts now committed when created
 
-## [1.3.25](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.25) - 2026-01-06
+## [1.3.25](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.25) - 2026-01-06
 
 ### Fixed
 
 - Milestone discussion context persists across /clear
 
-## [1.3.24](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.24) - 2026-01-06
+## [1.3.24](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.24) - 2026-01-06
 
 ### Added
 
 - `CLAUDE_CONFIG_DIR` environment variable support
 
-## [1.3.23](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.23) - 2026-01-06
+## [1.3.23](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.23) - 2026-01-06
 
 ### Added
 
 - Non-interactive install flags (`--global`, `--local`) for Docker/CI
 
-## [1.3.22](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.22) - 2026-01-05
+## [1.3.22](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.22) - 2026-01-05
 
 ### Changed
 
 - Removed unused auto.md command
 
-## [1.3.21](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.21) - 2026-01-05
+## [1.3.21](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.21) - 2026-01-05
 
 ### Changed
 
 - TDD features use dedicated plans for full context quality
 
-## [1.3.20](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.20) - 2026-01-05
+## [1.3.20](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.20) - 2026-01-05
 
 ### Added
 
 - Per-task atomic commits for better AI observability
 
-## [1.3.19](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.19) - 2026-01-05
+## [1.3.19](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.19) - 2026-01-05
 
 ### Fixed
 
 - Clarified create-milestone.md file locations with explicit instructions
 
-## [1.3.18](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.18) - 2026-01-05
+## [1.3.18](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.18) - 2026-01-05
 
 ### Added
 
 - YAML frontmatter schema with dependency graph metadata
 - Intelligent context assembly via frontmatter dependency graph
 
-## [1.3.17](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.17) - 2026-01-04
+## [1.3.17](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.17) - 2026-01-04
 
 ### Fixed
 
 - Clarified depth controls compression, not inflation in planning
 
-## [1.3.16](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.16) - 2026-01-04
+## [1.3.16](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.16) - 2026-01-04
 
 ### Added
 
 - Depth parameter for planning thoroughness (`--depth=1-5`)
 
-## [1.3.15](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.15) - 2026-01-01
+## [1.3.15](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.15) - 2026-01-01
 
 ### Fixed
 
 - TDD reference loaded directly in commands
 
-## [1.3.14](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.14) - 2025-12-31
+## [1.3.14](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.14) - 2025-12-31
 
 ### Added
 
 - TDD integration with detection, annotation, and execution flow
 
-## [1.3.13](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.13) - 2025-12-29
+## [1.3.13](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.13) - 2025-12-29
 
 ### Fixed
 
 - Restored deterministic bash commands
 - Removed redundant decision_gate
 
-## [1.3.12](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.12) - 2025-12-29
+## [1.3.12](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.12) - 2025-12-29
 
 ### Fixed
 
 - Restored plan-format.md as output template
 
-## [1.3.11](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.11) - 2025-12-29
+## [1.3.11](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.11) - 2025-12-29
 
 ### Changed
 
@@ -2477,67 +2477,67 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Merged CLI automation into checkpoints
 - Compressed scope-estimation (74% reduction) and plan-phase.md (66% reduction)
 
-## [1.3.10](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.10) - 2025-12-29
+## [1.3.10](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.10) - 2025-12-29
 
 ### Fixed
 
 - Explicit plan count check in offer_next step
 
-## [1.3.9](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.9) - 2025-12-27
+## [1.3.9](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.9) - 2025-12-27
 
 ### Added
 
 - Evolutionary PROJECT.md system with incremental updates
 
-## [1.3.8](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.8) - 2025-12-18
+## [1.3.8](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.8) - 2025-12-18
 
 ### Added
 
 - Brownfield/existing projects section in README
 
-## [1.3.7](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.7) - 2025-12-18
+## [1.3.7](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.7) - 2025-12-18
 
 ### Fixed
 
 - Improved incremental codebase map updates
 
-## [1.3.6](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.6) - 2025-12-18
+## [1.3.6](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.6) - 2025-12-18
 
 ### Added
 
 - File paths included in codebase mapping output
 
-## [1.3.5](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.5) - 2025-12-17
+## [1.3.5](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.5) - 2025-12-17
 
 ### Fixed
 
 - Removed arbitrary 100-line limit from codebase mapping
 
-## [1.3.4](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.4) - 2025-12-17
+## [1.3.4](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.4) - 2025-12-17
 
 ### Fixed
 
 - Inline code for Next Up commands (avoids nesting ambiguity)
 
-## [1.3.3](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.3) - 2025-12-17
+## [1.3.3](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.3) - 2025-12-17
 
 ### Fixed
 
 - Check PROJECT.md not .planning/ directory for existing project detection
 
-## [1.3.2](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.2) - 2025-12-17
+## [1.3.2](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.2) - 2025-12-17
 
 ### Added
 
 - Git commit step to map-codebase workflow
 
-## [1.3.1](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.1) - 2025-12-17
+## [1.3.1](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.1) - 2025-12-17
 
 ### Added
 
 - `/gsd:map-codebase` documentation in help and README
 
-## [1.3.0](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.0) - 2025-12-17
+## [1.3.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.0) - 2025-12-17
 
 ### Added
 
@@ -2555,103 +2555,103 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Permission errors for non-DSP users (removed shell context)
 - First question is now freeform, not AskUserQuestion
 
-## [1.2.13](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.13) - 2025-12-17
+## [1.2.13](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.13) - 2025-12-17
 
 ### Added
 
 - Improved continuation UI with context and visual hierarchy
 
-## [1.2.12](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.12) - 2025-12-17
+## [1.2.12](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.12) - 2025-12-17
 
 ### Fixed
 
 - First question should be freeform, not AskUserQuestion
 
-## [1.2.11](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.11) - 2025-12-17
+## [1.2.11](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.11) - 2025-12-17
 
 ### Fixed
 
 - Permission errors for non-DSP users (removed shell context)
 
-## [1.2.10](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.10) - 2025-12-16
+## [1.2.10](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.10) - 2025-12-16
 
 ### Fixed
 
 - Inline command invocation replaced with clear-then-paste pattern
 
-## [1.2.9](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.9) - 2025-12-16
+## [1.2.9](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.9) - 2025-12-16
 
 ### Fixed
 
 - Git init runs in current directory
 
-## [1.2.8](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.8) - 2025-12-16
+## [1.2.8](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.8) - 2025-12-16
 
 ### Changed
 
 - Phase count derived from work scope, not arbitrary limits
 
-## [1.2.7](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.7) - 2025-12-16
+## [1.2.7](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.7) - 2025-12-16
 
 ### Fixed
 
 - AskUserQuestion mandated for all exploration questions
 
-## [1.2.6](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.6) - 2025-12-16
+## [1.2.6](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.6) - 2025-12-16
 
 ### Changed
 
 - Internal refactoring
 
-## [1.2.5](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.5) - 2025-12-16
+## [1.2.5](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.5) - 2025-12-16
 
 ### Changed
 
 - `<if mode>` tags for yolo/interactive branching
 
-## [1.2.4](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.4) - 2025-12-16
+## [1.2.4](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.4) - 2025-12-16
 
 ### Fixed
 
 - Stale CONTEXT.md references updated to new vision structure
 
-## [1.2.3](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.3) - 2025-12-16
+## [1.2.3](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.3) - 2025-12-16
 
 ### Fixed
 
 - Enterprise language removed from help and discuss-milestone
 
-## [1.2.2](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.2) - 2025-12-16
+## [1.2.2](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.2) - 2025-12-16
 
 ### Fixed
 
 - new-project completion presented inline instead of as question
 
-## [1.2.1](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.1) - 2025-12-16
+## [1.2.1](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.1) - 2025-12-16
 
 ### Fixed
 
 - AskUserQuestion restored for decision gate in questioning flow
 
-## [1.2.0](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.0) - 2025-12-15
+## [1.2.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.0) - 2025-12-15
 
 ### Changed
 
 - Research workflow implemented as Claude Code context injection
 
-## [1.1.2](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.1.2) - 2025-12-15
+## [1.1.2](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.1.2) - 2025-12-15
 
 ### Fixed
 
 - YOLO mode now skips confirmation gates in plan-phase
 
-## [1.1.1](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.1.1) - 2025-12-15
+## [1.1.1](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.1.1) - 2025-12-15
 
 ### Added
 
 - README documentation for new research workflow
 
-## [1.1.0](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.1.0) - 2025-12-15
+## [1.1.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.1.0) - 2025-12-15
 
 ### Added
 
@@ -2666,43 +2666,43 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - new-project split to only create PROJECT.md + config.json
 - Questioning rewritten as thinking partner, not interviewer
 
-## [1.0.11](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.0.11) - 2025-12-15
+## [1.0.11](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.0.11) - 2025-12-15
 
 ### Added
 
 - `/gsd:research-phase` for niche domain ecosystem discovery
 
-## [1.0.10](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.0.10) - 2025-12-15
+## [1.0.10](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.0.10) - 2025-12-15
 
 ### Fixed
 
 - Scope creep prevention in discuss-phase command
 
-## [1.0.9](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.0.9) - 2025-12-15
+## [1.0.9](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.0.9) - 2025-12-15
 
 ### Added
 
 - Phase CONTEXT.md loaded in plan-phase command
 
-## [1.0.8](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.0.8) - 2025-12-15
+## [1.0.8](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.0.8) - 2025-12-15
 
 ### Changed
 
 - PLAN.md included in phase completion commits
 
-## [1.0.7](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.0.7) - 2025-12-15
+## [1.0.7](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.0.7) - 2025-12-15
 
 ### Added
 
 - Path replacement for local installs
 
-## [1.0.6](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.0.6) - 2025-12-15
+## [1.0.6](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.0.6) - 2025-12-15
 
 ### Changed
 
 - Internal improvements
 
-## [1.0.5](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.0.5) - 2025-12-15
+## [1.0.5](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.0.5) - 2025-12-15
 
 ### Added
 
@@ -2713,31 +2713,31 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - Bin path fixed (removed ./)
 - .DS_Store ignored
 
-## [1.0.4](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.0.4) - 2025-12-15
+## [1.0.4](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.0.4) - 2025-12-15
 
 ### Fixed
 
 - Bin name and circular dependency removed
 
-## [1.0.3](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.0.3) - 2025-12-15
+## [1.0.3](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.0.3) - 2025-12-15
 
 ### Added
 
 - TDD guidance in planning workflow
 
-## [1.0.2](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.0.2) - 2025-12-15
+## [1.0.2](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.0.2) - 2025-12-15
 
 ### Added
 
 - Issue triage system to prevent deferred issue pile-up
 
-## [1.0.1](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.0.1) - 2025-12-15
+## [1.0.1](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.0.1) - 2025-12-15
 
 ### Added
 
 - Initial npm package release
 
-## [1.0.0](https://github.com/glittercowboy/get-shit-done/releases/tag/v1.0.0) - 2025-12-14
+## [1.0.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.0.0) - 2025-12-14
 
 ### Added
 
@@ -2748,196 +2748,196 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - YOLO mode for autonomous execution
 - Interactive mode with checkpoints
 
-[Unreleased]: https://github.com/gsd-build/get-shit-done/compare/v1.42.1...HEAD
-[1.42.1]: https://github.com/gsd-build/get-shit-done/compare/v1.41.0...v1.42.1
-[1.38.4]: https://github.com/gsd-build/get-shit-done/compare/v1.38.2...v1.38.4
-[1.38.2]: https://github.com/gsd-build/get-shit-done/compare/v1.37.1...v1.38.2
-[1.37.1]: https://github.com/gsd-build/get-shit-done/compare/v1.37.0...v1.37.1
-[1.37.0]: https://github.com/gsd-build/get-shit-done/compare/v1.36.0...v1.37.0
-[1.36.0]: https://github.com/gsd-build/get-shit-done/releases/tag/v1.36.0
-[1.35.0]: https://github.com/gsd-build/get-shit-done/releases/tag/v1.35.0
-[1.34.2]: https://github.com/gsd-build/get-shit-done/releases/tag/v1.34.2
-[1.34.1]: https://github.com/gsd-build/get-shit-done/releases/tag/v1.34.1
-[1.34.0]: https://github.com/gsd-build/get-shit-done/releases/tag/v1.34.0
-[1.33.0]: https://github.com/gsd-build/get-shit-done/releases/tag/v1.33.0
-[1.30.0]: https://github.com/gsd-build/get-shit-done/releases/tag/v1.30.0
-[1.29.0]: https://github.com/gsd-build/get-shit-done/releases/tag/v1.29.0
-[1.28.0]: https://github.com/gsd-build/get-shit-done/releases/tag/v1.28.0
-[1.27.0]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.27.0
-[1.26.0]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.26.0
-[1.25.0]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.25.0
-[1.24.0]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.24.0
-[1.23.0]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.23.0
-[1.22.4]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.22.4
-[1.22.3]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.22.3
-[1.22.2]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.22.2
-[1.22.1]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.22.1
-[1.22.0]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.22.0
-[1.21.1]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.21.1
-[1.21.0]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.21.0
-[1.20.6]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.20.6
-[1.20.5]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.20.5
-[1.20.4]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.20.4
-[1.20.3]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.20.3
-[1.20.2]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.20.2
-[1.20.1]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.20.1
-[1.20.0]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.20.0
-[1.19.2]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.19.2
-[1.19.1]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.19.1
-[1.19.0]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.19.0
-[1.18.0]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.18.0
-[1.17.0]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.17.0
-[1.16.0]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.16.0
-[1.15.0]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.15.0
-[1.14.0]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.14.0
-[1.13.0]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.13.0
-[1.12.1]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.12.1
-[1.12.0]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.12.0
-[1.11.2]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.11.2
-[1.11.1]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.11.0
-[1.10.1]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.10.1
-[1.10.0]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.10.0
-[1.9.12]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.9.12
-[1.9.11]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.9.11
-[1.9.10]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.9.10
-[1.9.9]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.9.9
-[1.9.8]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.9.8
-[1.9.7]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.9.7
-[1.9.6]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.9.6
-[1.9.5]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.9.5
-[1.9.4]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.9.4
-[1.9.2]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.9.2
-[1.9.0]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.9.0
-[1.8.0]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.8.0
-[1.7.1]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.7.1
-[1.7.0]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.7.0
-[1.6.4]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.6.4
-[1.6.3]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.6.3
-[1.6.2]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.6.2
-[1.6.1]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.6.1
-[1.6.0]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.6.0
-[1.5.30]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.30
-[1.5.29]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.29
-[1.5.28]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.28
-[1.5.27]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.27
-[1.5.26]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.26
-[1.5.25]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.25
-[1.5.24]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.24
-[1.5.23]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.23
-[1.5.22]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.22
-[1.5.21]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.21
-[1.5.20]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.20
-[1.5.19]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.19
-[1.5.18]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.18
-[1.5.17]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.17
-[1.5.16]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.16
-[1.5.15]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.15
-[1.5.14]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.14
-[1.5.13]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.13
-[1.5.12]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.12
-[1.5.11]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.11
-[1.5.10]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.10
-[1.5.9]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.9
-[1.5.8]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.8
-[1.5.7]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.7
-[1.5.6]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.6
-[1.5.5]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.5
-[1.5.4]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.4
-[1.5.3]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.3
-[1.5.2]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.2
-[1.5.1]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.1
-[1.5.0]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.5.0
-[1.4.29]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.29
-[1.4.28]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.28
-[1.4.27]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.27
-[1.4.26]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.26
-[1.4.25]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.25
-[1.4.24]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.24
-[1.4.23]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.23
-[1.4.22]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.22
-[1.4.21]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.21
-[1.4.20]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.20
-[1.4.19]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.19
-[1.4.18]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.18
-[1.4.17]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.17
-[1.4.16]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.16
-[1.4.15]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.15
-[1.4.14]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.14
-[1.4.13]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.13
-[1.4.12]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.12
-[1.4.11]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.11
-[1.4.10]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.10
-[1.4.9]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.9
-[1.4.8]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.8
-[1.4.7]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.7
-[1.4.6]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.6
-[1.4.5]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.5
-[1.4.4]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.4
-[1.4.3]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.3
-[1.4.2]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.2
-[1.4.1]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.1
-[1.4.0]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.4.0
-[1.3.34]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.34
-[1.3.33]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.33
-[1.3.32]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.32
-[1.3.31]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.31
-[1.3.30]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.30
-[1.3.29]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.29
-[1.3.28]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.28
-[1.3.27]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.27
-[1.3.26]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.26
-[1.3.25]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.25
-[1.3.24]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.24
-[1.3.23]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.23
-[1.3.22]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.22
-[1.3.21]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.21
-[1.3.20]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.20
-[1.3.19]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.19
-[1.3.18]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.18
-[1.3.17]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.17
-[1.3.16]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.16
-[1.3.15]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.15
-[1.3.14]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.14
-[1.3.13]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.13
-[1.3.12]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.12
-[1.3.11]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.11
-[1.3.10]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.10
-[1.3.9]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.9
-[1.3.8]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.8
-[1.3.7]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.7
-[1.3.6]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.6
-[1.3.5]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.5
-[1.3.4]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.4
-[1.3.3]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.3
-[1.3.2]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.2
-[1.3.1]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.1
-[1.3.0]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.3.0
-[1.2.13]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.13
-[1.2.12]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.12
-[1.2.11]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.11
-[1.2.10]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.10
-[1.2.9]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.9
-[1.2.8]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.8
-[1.2.7]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.7
-[1.2.6]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.6
-[1.2.5]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.5
-[1.2.4]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.4
-[1.2.3]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.3
-[1.2.2]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.2
-[1.2.1]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.1
-[1.2.0]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.2.0
-[1.1.2]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.1.2
-[1.1.1]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.1.1
-[1.1.0]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.1.0
-[1.0.11]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.0.11
-[1.0.10]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.0.10
-[1.0.9]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.0.9
-[1.0.8]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.0.8
-[1.0.7]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.0.7
-[1.0.6]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.0.6
-[1.0.5]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.0.5
-[1.0.4]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.0.4
-[1.0.3]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.0.3
-[1.0.2]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.0.2
-[1.0.1]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.0.1
-[1.0.0]: https://github.com/glittercowboy/get-shit-done/releases/tag/v1.0.0
+[Unreleased]: https://github.com/open-gsd/get-shit-done-redux/compare/v1.42.1...HEAD
+[1.42.1]: https://github.com/open-gsd/get-shit-done-redux/compare/v1.41.0...v1.42.1
+[1.38.4]: https://github.com/open-gsd/get-shit-done-redux/compare/v1.38.2...v1.38.4
+[1.38.2]: https://github.com/open-gsd/get-shit-done-redux/compare/v1.37.1...v1.38.2
+[1.37.1]: https://github.com/open-gsd/get-shit-done-redux/compare/v1.37.0...v1.37.1
+[1.37.0]: https://github.com/open-gsd/get-shit-done-redux/compare/v1.36.0...v1.37.0
+[1.36.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.36.0
+[1.35.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.35.0
+[1.34.2]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.34.2
+[1.34.1]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.34.1
+[1.34.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.34.0
+[1.33.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.33.0
+[1.30.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.30.0
+[1.29.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.29.0
+[1.28.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.28.0
+[1.27.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.27.0
+[1.26.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.26.0
+[1.25.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.25.0
+[1.24.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.24.0
+[1.23.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.23.0
+[1.22.4]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.22.4
+[1.22.3]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.22.3
+[1.22.2]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.22.2
+[1.22.1]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.22.1
+[1.22.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.22.0
+[1.21.1]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.21.1
+[1.21.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.21.0
+[1.20.6]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.20.6
+[1.20.5]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.20.5
+[1.20.4]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.20.4
+[1.20.3]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.20.3
+[1.20.2]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.20.2
+[1.20.1]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.20.1
+[1.20.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.20.0
+[1.19.2]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.19.2
+[1.19.1]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.19.1
+[1.19.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.19.0
+[1.18.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.18.0
+[1.17.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.17.0
+[1.16.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.16.0
+[1.15.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.15.0
+[1.14.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.14.0
+[1.13.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.13.0
+[1.12.1]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.12.1
+[1.12.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.12.0
+[1.11.2]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.11.2
+[1.11.1]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.11.0
+[1.10.1]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.10.1
+[1.10.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.10.0
+[1.9.12]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.9.12
+[1.9.11]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.9.11
+[1.9.10]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.9.10
+[1.9.9]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.9.9
+[1.9.8]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.9.8
+[1.9.7]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.9.7
+[1.9.6]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.9.6
+[1.9.5]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.9.5
+[1.9.4]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.9.4
+[1.9.2]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.9.2
+[1.9.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.9.0
+[1.8.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.8.0
+[1.7.1]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.7.1
+[1.7.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.7.0
+[1.6.4]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.6.4
+[1.6.3]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.6.3
+[1.6.2]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.6.2
+[1.6.1]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.6.1
+[1.6.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.6.0
+[1.5.30]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.30
+[1.5.29]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.29
+[1.5.28]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.28
+[1.5.27]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.27
+[1.5.26]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.26
+[1.5.25]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.25
+[1.5.24]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.24
+[1.5.23]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.23
+[1.5.22]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.22
+[1.5.21]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.21
+[1.5.20]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.20
+[1.5.19]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.19
+[1.5.18]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.18
+[1.5.17]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.17
+[1.5.16]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.16
+[1.5.15]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.15
+[1.5.14]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.14
+[1.5.13]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.13
+[1.5.12]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.12
+[1.5.11]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.11
+[1.5.10]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.10
+[1.5.9]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.9
+[1.5.8]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.8
+[1.5.7]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.7
+[1.5.6]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.6
+[1.5.5]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.5
+[1.5.4]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.4
+[1.5.3]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.3
+[1.5.2]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.2
+[1.5.1]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.1
+[1.5.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.5.0
+[1.4.29]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.29
+[1.4.28]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.28
+[1.4.27]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.27
+[1.4.26]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.26
+[1.4.25]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.25
+[1.4.24]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.24
+[1.4.23]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.23
+[1.4.22]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.22
+[1.4.21]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.21
+[1.4.20]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.20
+[1.4.19]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.19
+[1.4.18]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.18
+[1.4.17]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.17
+[1.4.16]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.16
+[1.4.15]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.15
+[1.4.14]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.14
+[1.4.13]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.13
+[1.4.12]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.12
+[1.4.11]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.11
+[1.4.10]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.10
+[1.4.9]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.9
+[1.4.8]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.8
+[1.4.7]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.7
+[1.4.6]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.6
+[1.4.5]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.5
+[1.4.4]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.4
+[1.4.3]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.3
+[1.4.2]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.2
+[1.4.1]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.1
+[1.4.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.4.0
+[1.3.34]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.34
+[1.3.33]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.33
+[1.3.32]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.32
+[1.3.31]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.31
+[1.3.30]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.30
+[1.3.29]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.29
+[1.3.28]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.28
+[1.3.27]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.27
+[1.3.26]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.26
+[1.3.25]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.25
+[1.3.24]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.24
+[1.3.23]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.23
+[1.3.22]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.22
+[1.3.21]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.21
+[1.3.20]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.20
+[1.3.19]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.19
+[1.3.18]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.18
+[1.3.17]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.17
+[1.3.16]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.16
+[1.3.15]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.15
+[1.3.14]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.14
+[1.3.13]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.13
+[1.3.12]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.12
+[1.3.11]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.11
+[1.3.10]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.10
+[1.3.9]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.9
+[1.3.8]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.8
+[1.3.7]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.7
+[1.3.6]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.6
+[1.3.5]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.5
+[1.3.4]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.4
+[1.3.3]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.3
+[1.3.2]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.2
+[1.3.1]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.1
+[1.3.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.3.0
+[1.2.13]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.13
+[1.2.12]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.12
+[1.2.11]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.11
+[1.2.10]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.10
+[1.2.9]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.9
+[1.2.8]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.8
+[1.2.7]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.7
+[1.2.6]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.6
+[1.2.5]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.5
+[1.2.4]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.4
+[1.2.3]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.3
+[1.2.2]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.2
+[1.2.1]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.1
+[1.2.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.0
+[1.1.2]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.1.2
+[1.1.1]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.1.1
+[1.1.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.1.0
+[1.0.11]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.0.11
+[1.0.10]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.0.10
+[1.0.9]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.0.9
+[1.0.8]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.0.8
+[1.0.7]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.0.7
+[1.0.6]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.0.6
+[1.0.5]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.0.5
+[1.0.4]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.0.4
+[1.0.3]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.0.3
+[1.0.2]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.0.2
+[1.0.1]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.0.1
+[1.0.0]: https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.0.0

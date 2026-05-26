@@ -75,7 +75,7 @@ describe('changeset serialize: multi-line bullet parsing (#3496)', () => {
 
   test('a multi-line bullet with linked release header is parsed correctly', () => {
     const text = [
-      '## [1.42.1](https://github.com/gsd-build/get-shit-done/compare/v1.41.0...v1.42.1) - 2026-05-15',
+      '## [1.42.1](https://github.com/open-gsd/get-shit-done-redux/compare/v1.41.0...v1.42.1) - 2026-05-15',
       '',
       '### Fixed',
       '',

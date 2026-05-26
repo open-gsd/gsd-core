@@ -4,7 +4,9 @@
 
 **Please do not report security vulnerabilities through public GitHub issues.**
 
-Instead, please report them via email to: **security@gsd.build** (or DM @glittercowboy on Discord/Twitter if email bounces)
+Instead, please report them via a **private GitHub security advisory**:
+
+**https://github.com/open-gsd/get-shit-done-redux/security/advisories/new**
 
 Include:
 - Description of the vulnerability

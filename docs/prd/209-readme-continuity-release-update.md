@@ -17,7 +17,7 @@ The top-level README still mixes legacy transition language, personal attributio
 
 1. Remove legacy personal maintainer attribution from README narrative sections.
 2. Present open-gsd continuity messaging in concise, team-owned language.
-3. Provide explicit migration guidance from legacy `gsd-build/*` packages to `@opengsd/*`.
+3. Provide explicit migration guidance from legacy packages to `@opengsd/*`.
 4. Reference public announcement and security-audit discussions directly.
 5. Keep changes docs-only and non-behavioral.
 
@@ -43,7 +43,7 @@ The top-level README still mixes legacy transition language, personal attributio
 
 1. README contains a continuity notice naming `open-gsd/get-shit-done-redux` as canonical.
 2. README removes personal legacy attribution in origin-story prose.
-3. README strongly recommends migration away from `gsd-build/*` artifacts.
+3. README strongly recommends migration away from legacy artifacts.
 4. README links to Discussions #109 and #119.
 5. README states current audit posture with "no known active exploit" language.
 
