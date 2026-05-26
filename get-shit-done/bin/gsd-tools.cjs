@@ -174,7 +174,7 @@ const path = require('path');
 const core = require('./lib/core.cjs');
 const { error, findProjectRoot, ERROR_REASON } = core;
 const { getActiveWorkstream } = require('./lib/planning-workspace.cjs');
-const { resolveActiveWorkstream, applyResolvedWorkstreamEnv } = require('./lib/active-workstream-store.cjs');
+const { resolveActiveWorkstreamContext, applyResolvedWorkstreamEnv } = require('./lib/active-workstream-store.cjs');
 const state = require('./lib/state.cjs');
 const phase = require('./lib/phase.cjs');
 const roadmap = require('./lib/roadmap.cjs');
@@ -293,14 +293,15 @@ async function main() {
   // Optional workstream override for parallel milestone work.
   // Priority: --ws flag > GSD_WORKSTREAM env var > session/shared pointer > null.
   let ws = null;
+  let workstreamContext = null;
   try {
-    const wsResolution = resolveActiveWorkstream(cwd, args, process.env, {
+    workstreamContext = resolveActiveWorkstreamContext(cwd, args, process.env, {
       getStored: getActiveWorkstream,
     });
-    ws = wsResolution.ws;
-    args = wsResolution.args;
+    ws = workstreamContext.ws;
+    args = workstreamContext.args;
     // Set env var so all modules (planningDir, planningPaths) auto-resolve workstream paths.
-    applyResolvedWorkstreamEnv(wsResolution, process.env);
+    applyResolvedWorkstreamEnv(workstreamContext, process.env);
   } catch (err) {
     error(err.message || String(err));
   }
@@ -431,7 +432,7 @@ async function main() {
   // When --pick is active, capture stdout and extract the requested field.
   if (pickField) {
     const captured = await captureStdoutSyncWrites(async () => {
-      await runCommand(command, args, cwd, raw, defaultValue, originalCommand);
+      await runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext);
     });
     const resolved = resolveAtFileOutput(captured);
     try {
@@ -451,7 +452,7 @@ async function main() {
   // every workflow to have a bash-specific `if [[ "$INIT" == @file:* ]]` check
   // that breaks on PowerShell and other non-bash shells.
   const captured = await captureStdoutSyncWrites(async () => {
-    await runCommand(command, args, cwd, raw, defaultValue, originalCommand);
+    await runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext);
   });
   fs.writeSync(1, resolveAtFileOutput(captured));
 }
@@ -518,7 +519,7 @@ function extractField(obj, fieldPath) {
   return current;
 }
 
-async function runCommand(command, args, cwd, raw, defaultValue, originalCommand) {
+async function runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext = null) {
   switch (command) {
     case 'state': {
       routeStateCommand({
@@ -801,7 +802,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       // The SDK handler (configPath) also exists but requires a projectDir that
       // is already resolved. Both produce identical output; keeping CJS here is
       // simpler and avoids sync-bridge overhead for a trivial path lookup.
-      config.cmdConfigPath(cwd, raw);
+      config.cmdConfigPath(cwd, raw, workstreamContext);
       break;
     }
 

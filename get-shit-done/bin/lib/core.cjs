@@ -280,6 +280,8 @@ function _deepMergeConfig(base, overlay) {
 function loadConfig(cwd, options = {}) {
   const activeWorkstream = Object.prototype.hasOwnProperty.call(options, 'workstream')
     ? options.workstream
+    : (options.workstreamContext && Object.prototype.hasOwnProperty.call(options.workstreamContext, 'ws'))
+      ? options.workstreamContext.ws
     : (process.env.GSD_WORKSTREAM || null);
   // When GSD_WORKSTREAM is set, load root config first so workstream config
   // can inherit from it. This prevents users from duplicating model_overrides,

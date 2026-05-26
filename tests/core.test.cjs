@@ -298,6 +298,19 @@ describe('loadConfig workstream config inheritance (#2714)', () => {
     assert.strictEqual(config.model_profile, 'quality');
     assert.strictEqual(process.env.GSD_WORKSTREAM, 'feature-f');
   });
+
+  test('loadConfig accepts workstreamContext.ws without requiring env mutation', () => {
+    writeRootConfig({ model_profile: 'balanced' });
+    writeWorkstreamConfig('feature-g', { model_profile: 'quality' });
+    delete process.env.GSD_WORKSTREAM;
+
+    const config = loadConfig(tmpDir, {
+      workstreamContext: { ws: 'feature-g' },
+    });
+
+    assert.strictEqual(config.model_profile, 'quality');
+    assert.strictEqual(process.env.GSD_WORKSTREAM, undefined);
+  });
 });
 
 // ─── loadConfig commit_docs gitignore auto-detection (#1250) ──────────────────
