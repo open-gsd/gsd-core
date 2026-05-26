@@ -1,11 +1,17 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 const {
   validateWorkstreamName,
   parseCliWorkstream,
   resolveActiveWorkstream,
   applyResolvedWorkstreamEnv,
+  createMemoryPointerAdapter,
+  getActiveWorkstream,
+  setActiveWorkstream,
 } = require('../get-shit-done/bin/lib/active-workstream-store.cjs');
 
 describe('active-workstream-store', () => {
@@ -93,5 +99,53 @@ describe('active-workstream-store', () => {
     applyResolvedWorkstreamEnv({ ws: 'new-ws' }, env);
     assert.equal(env.GSD_WORKSTREAM, 'new-ws');
   });
-});
 
+  test('getActiveWorkstream uses session adapter over shared adapter when session key exists', () => {
+    const savedSession = process.env.GSD_SESSION_KEY;
+    process.env.GSD_SESSION_KEY = 'session-123';
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-active-store-precedence-'));
+    try {
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams', 'session-ws'), { recursive: true });
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams', 'shared-ws'), { recursive: true });
+
+      const session = createMemoryPointerAdapter('session-ws');
+      const shared = createMemoryPointerAdapter('shared-ws');
+
+      const active = getActiveWorkstream(tmpDir, {
+        activeWorkstreamAdapters: { session, shared },
+      });
+      assert.equal(active, 'session-ws');
+    } finally {
+      if (savedSession !== undefined) process.env.GSD_SESSION_KEY = savedSession;
+      else delete process.env.GSD_SESSION_KEY;
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test('getActiveWorkstream self-heals invalid pointer names', () => {
+    const adapter = createMemoryPointerAdapter('bad/name');
+    const active = getActiveWorkstream('/fake/repo', { activeWorkstreamAdapter: adapter });
+    assert.equal(active, null);
+    assert.equal(adapter.read(), null);
+  });
+
+  test('getActiveWorkstream self-heals stale pointers', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-active-store-stale-'));
+    try {
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams'), { recursive: true });
+      const adapter = createMemoryPointerAdapter('ghost');
+      const active = getActiveWorkstream(tmpDir, { activeWorkstreamAdapter: adapter });
+      assert.equal(active, null);
+      assert.equal(adapter.read(), null);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test('setActiveWorkstream clears pointer on null value', () => {
+    const adapter = createMemoryPointerAdapter('alpha');
+    setActiveWorkstream('/fake/repo', null, { activeWorkstreamAdapter: adapter });
+    assert.equal(adapter.read(), null);
+  });
+});

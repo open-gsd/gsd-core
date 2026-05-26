@@ -3,37 +3,23 @@
  *
  * This module owns the planning workspace seam:
  * - planningDir/planningRoot/planningPaths
- * - active workstream pointer policy (session-scoped > shared)
- * - pointer storage adapters (session/shared/memory)
+ * - planning lock semantics
+ *
+ * Active workstream pointer policy/session identity lives in
+ * active-workstream-store.cjs and is consumed here via thin adapters.
  */
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
-const crypto = require('crypto');
-const { probeTty, platformWriteSync, platformReadSync, platformEnsureDir } = require('./shell-command-projection.cjs');
+const { platformEnsureDir } = require('./shell-command-projection.cjs');
 const {
-  validateWorkstreamName,
-  assertValidActiveWorkstreamName,
-} = require('./workstream-name-policy.cjs');
-
-const WORKSTREAM_SESSION_ENV_KEYS = [
-  'GSD_SESSION_KEY',
-  'CODEX_THREAD_ID',
-  'CLAUDE_SESSION_ID',
-  'CLAUDE_CODE_SSE_PORT',
-  'OPENCODE_SESSION_ID',
-  'GEMINI_SESSION_ID',
-  'CURSOR_SESSION_ID',
-  'WINDSURF_SESSION_ID',
-  'TERM_SESSION_ID',
-  'WT_SESSION',
-  'TMUX_PANE',
-  'ZELLIJ_SESSION_NAME',
-];
-
-let cachedControllingTtyToken = null;
-let didProbeControllingTtyToken = false;
+  createSharedPointerAdapter,
+  createSessionScopedPointerAdapter,
+  createMemoryPointerAdapter,
+  getActiveWorkstream: getStoredActiveWorkstream,
+  setActiveWorkstream: setStoredActiveWorkstream,
+  clearActiveWorkstream: clearStoredActiveWorkstream,
+} = require('./active-workstream-store.cjs');
 
 // Track .planning/.lock files held by this process so they can be removed on exit.
 const _heldPlanningLocks = new Set();
@@ -94,154 +80,6 @@ function planningPaths(cwd, ws) {
     phases: path.join(base, 'phases'),
     requirements: path.join(base, 'REQUIREMENTS.md'),
   };
-}
-
-function sanitizeWorkstreamSessionToken(value) {
-  if (value === null || value === undefined) return null;
-  const token = String(value).trim().replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '');
-  return token ? token.slice(0, 160) : null;
-}
-
-function probeControllingTtyToken() {
-  if (didProbeControllingTtyToken) return cachedControllingTtyToken;
-  didProbeControllingTtyToken = true;
-
-  // `tty` reads stdin. When stdin is already non-interactive, spawning it only
-  // adds avoidable failures on the routing hot path and cannot reveal a stable token.
-  if (!(process.stdin && process.stdin.isTTY)) {
-    return cachedControllingTtyToken;
-  }
-
-  const ttyPath = probeTty();
-  if (ttyPath) {
-    const token = sanitizeWorkstreamSessionToken(ttyPath.replace(/^\/dev\//, ''));
-    if (token) cachedControllingTtyToken = `tty-${token}`;
-  }
-
-  return cachedControllingTtyToken;
-}
-
-function getControllingTtyToken() {
-  for (const envKey of ['TTY', 'SSH_TTY']) {
-    const token = sanitizeWorkstreamSessionToken(process.env[envKey]);
-    if (token) return `tty-${token.replace(/^dev_/, '')}`;
-  }
-
-  return probeControllingTtyToken();
-}
-
-function getWorkstreamSessionKey() {
-  for (const envKey of WORKSTREAM_SESSION_ENV_KEYS) {
-    const raw = process.env[envKey];
-    const token = sanitizeWorkstreamSessionToken(raw);
-    if (token) return `${envKey.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${token}`;
-  }
-
-  return getControllingTtyToken();
-}
-
-function getSessionScopedWorkstreamFile(cwd, fixedSessionKey) {
-  const sessionKey = fixedSessionKey || getWorkstreamSessionKey();
-  if (!sessionKey) return null;
-
-  // Use realpathSync.native so the hash is derived from the canonical filesystem
-  // path. On Windows, path.resolve returns whatever case the caller supplied,
-  // while realpathSync.native returns the case the OS recorded — they differ on
-  // case-insensitive NTFS, producing different hashes and different tmpdir slots.
-  // Fall back to path.resolve when the directory does not yet exist.
-  let planningAbs;
-  try {
-    planningAbs = fs.realpathSync.native(planningRoot(cwd));
-  } catch {
-    planningAbs = path.resolve(planningRoot(cwd));
-  }
-  const projectId = crypto
-    .createHash('sha1')
-    .update(planningAbs)
-    .digest('hex')
-    .slice(0, 16);
-
-  const dirPath = path.join(os.tmpdir(), 'gsd-workstream-sessions', projectId);
-  return {
-    sessionKey,
-    dirPath,
-    filePath: path.join(dirPath, sessionKey),
-  };
-}
-
-function createSharedPointerAdapter(cwd) {
-  const filePath = path.join(planningRoot(cwd), 'active-workstream');
-  return {
-    read() {
-      const raw = platformReadSync(filePath);
-      return raw ? raw.trim() || null : null;
-    },
-    write(name) {
-      platformWriteSync(filePath, name + '\n');
-    },
-    clear() {
-      try { fs.unlinkSync(filePath); } catch {}
-    },
-  };
-}
-
-function createSessionScopedPointerAdapter(cwd, fixedSessionKey) {
-  const scoped = getSessionScopedWorkstreamFile(cwd, fixedSessionKey);
-  if (!scoped) return null;
-
-  return {
-    read() {
-      const raw = platformReadSync(scoped.filePath);
-      return raw ? raw.trim() || null : null;
-    },
-    write(name) {
-      platformEnsureDir(scoped.dirPath);
-      platformWriteSync(scoped.filePath, name + '\n');
-    },
-    clear() {
-      try { fs.unlinkSync(scoped.filePath); } catch {}
-      try {
-        const remaining = fs.readdirSync(scoped.dirPath);
-        if (remaining.length === 0) {
-          fs.rmdirSync(scoped.dirPath);
-        }
-      } catch {}
-    },
-  };
-}
-
-function createMemoryPointerAdapter(initialName = null) {
-  let value = initialName;
-  return {
-    read() {
-      return value;
-    },
-    write(name) {
-      value = name;
-    },
-    clear() {
-      value = null;
-    },
-  };
-}
-
-function pickActiveWorkstreamAdapter(cwd, opts = {}) {
-  if (opts.activeWorkstreamAdapter) {
-    return opts.activeWorkstreamAdapter;
-  }
-
-  const sessionKey = getWorkstreamSessionKey();
-  if (sessionKey) {
-    if (opts.activeWorkstreamAdapters && opts.activeWorkstreamAdapters.session) {
-      return opts.activeWorkstreamAdapters.session;
-    }
-    return createSessionScopedPointerAdapter(cwd, sessionKey);
-  }
-
-  if (opts.activeWorkstreamAdapters && opts.activeWorkstreamAdapters.shared) {
-    return opts.activeWorkstreamAdapters.shared;
-  }
-  return createSharedPointerAdapter(cwd);
 }
 
 function withPlanningLock(cwd, fn) {
@@ -320,52 +158,24 @@ function createPlanningWorkspace(cwd, opts = {}) {
     },
     activeWorkstream: {
       get() {
-        const adapter = pickActiveWorkstreamAdapter(cwd, opts);
-        if (!adapter) return null;
-
-        const name = adapter.read();
-        if (!name || !validateWorkstreamName(name)) {
-          adapter.clear();
-          return null;
-        }
-
-        const wsDir = path.join(planningRoot(cwd), 'workstreams', name);
-        if (!fs.existsSync(wsDir)) {
-          adapter.clear();
-          return null;
-        }
-
-        return name;
+        return getStoredActiveWorkstream(cwd, opts);
       },
       set(name) {
-        const adapter = pickActiveWorkstreamAdapter(cwd, opts);
-        if (!adapter) return;
-
-        if (!name) {
-          adapter.clear();
-          return;
-        }
-        assertValidActiveWorkstreamName(name);
-
-        const wsDir = path.join(planningRoot(cwd), 'workstreams', name);
-        platformEnsureDir(wsDir);
-        adapter.write(name);
+        setStoredActiveWorkstream(cwd, name, opts);
       },
       clear() {
-        const adapter = pickActiveWorkstreamAdapter(cwd, opts);
-        if (!adapter) return;
-        adapter.clear();
+        clearStoredActiveWorkstream(cwd, opts);
       },
     },
   };
 }
 
 function getActiveWorkstream(cwd) {
-  return createPlanningWorkspace(cwd).activeWorkstream.get();
+  return getStoredActiveWorkstream(cwd);
 }
 
 function setActiveWorkstream(cwd, name) {
-  createPlanningWorkspace(cwd).activeWorkstream.set(name);
+  setStoredActiveWorkstream(cwd, name);
 }
 
 /**
