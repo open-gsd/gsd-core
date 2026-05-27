@@ -120,18 +120,35 @@ function pkgRoot(installPrefix) {
 }
 
 /**
+ * Return the ordered list of candidate paths to check when locating an npm
+ * global bin named `name` under `installPrefix`.
+ *
+ * On Windows, `npm install -g --prefix X` writes shims (*.cmd, *.ps1, bare)
+ * to the PREFIX ROOT (X\), NOT to X\node_modules\.bin\.  We therefore probe
+ * the prefix root first, then fall back to node_modules\.bin in case a
+ * non-standard layout puts them there.
+ *
+ * On POSIX the shim lands in <prefix>/bin/ as a symlink; only one candidate.
+ */
+function binCandidates(installPrefix, name) {
+  if (process.platform === 'win32') {
+    return [
+      // npm global --prefix on Windows writes shims to the prefix ROOT
+      path.join(installPrefix, `${name}.cmd`),
+      path.join(installPrefix, name),
+      // fallback: some layouts use node_modules/.bin
+      path.join(installPrefix, 'node_modules', '.bin', `${name}.cmd`),
+      path.join(installPrefix, 'node_modules', '.bin', name),
+    ];
+  }
+  return [path.join(installPrefix, 'bin', name)];
+}
+
+/**
  * Locate the installed gsd-tools binary (symlink in <prefix>/bin/).
  */
 function findGsdToolsBin(installPrefix) {
-  const binDir = process.platform === 'win32'
-    ? path.join(installPrefix, 'node_modules', '.bin')
-    : path.join(installPrefix, 'bin');
-
-  const candidates = process.platform === 'win32'
-    ? [path.join(binDir, 'gsd-tools.cmd'), path.join(binDir, 'gsd-tools')]
-    : [path.join(binDir, 'gsd-tools')];
-
-  for (const c of candidates) {
+  for (const c of binCandidates(installPrefix, 'gsd-tools')) {
     if (fs.existsSync(c)) return c;
   }
   return null;
@@ -141,15 +158,7 @@ function findGsdToolsBin(installPrefix) {
  * Locate the get-shit-done-redux installer binary (the symlink in <prefix>/bin/).
  */
 function findInstallerBin(installPrefix) {
-  const binDir = process.platform === 'win32'
-    ? path.join(installPrefix, 'node_modules', '.bin')
-    : path.join(installPrefix, 'bin');
-
-  const candidates = process.platform === 'win32'
-    ? [path.join(binDir, 'get-shit-done-redux.cmd'), path.join(binDir, 'get-shit-done-redux')]
-    : [path.join(binDir, 'get-shit-done-redux')];
-
-  for (const c of candidates) {
+  for (const c of binCandidates(installPrefix, 'get-shit-done-redux')) {
     if (fs.existsSync(c)) return c;
   }
   return null;
@@ -304,12 +313,10 @@ function runSmoke({
   const actualBin = findGsdToolsBin(installPrefix);
 
   if (!actualBin) {
-    const binDir = process.platform === 'win32'
-      ? path.join(installPrefix, 'node_modules', '.bin')
-      : path.join(installPrefix, 'bin');
+    const searched = binCandidates(installPrefix, 'gsd-tools');
     return {
       code: SMOKE.BIN_NOT_CALLABLE,
-      details: { ...details, binDir, searched: [] },
+      details: { ...details, searched },
     };
   }
 
@@ -324,13 +331,6 @@ function runSmoke({
   );
 
   if (versionResult.status !== 0) {
-    console.error(
-      `release-tarball-smoke: BIN_NOT_CALLABLE bin=${actualBin} ` +
-      `invocation=${JSON.stringify(versionInvocation)} status=${versionResult.status} signal=${versionResult.signal} ` +
-      `error=${versionResult.error ? (versionResult.error.code + ': ' + versionResult.error.message) : 'none'}\n` +
-      `--- stderr ---\n${(versionResult.stderr || '').slice(0, 2000)}\n` +
-      `--- stdout ---\n${(versionResult.stdout || '').slice(0, 2000)}`,
-    );
     return {
       code: SMOKE.BIN_NOT_CALLABLE,
       details: {
@@ -352,14 +352,6 @@ function runSmoke({
   details.installedPackageJson = installedPkgPath;
 
   if (installedVersion !== expectedVersion) {
-    console.error(
-      `release-tarball-smoke: VERSION_MISMATCH bin=${actualBin} ` +
-      `invocation=${JSON.stringify(versionInvocation)} status=${versionResult.status} signal=${versionResult.signal} ` +
-      `error=${versionResult.error ? (versionResult.error.code + ': ' + versionResult.error.message) : 'none'}\n` +
-      `installedVersion=${installedVersion} expectedVersion=${expectedVersion}\n` +
-      `--- stderr ---\n${(versionResult.stderr || '').slice(0, 2000)}\n` +
-      `--- stdout ---\n${(versionResult.stdout || '').slice(0, 2000)}`,
-    );
     return {
       code: SMOKE.VERSION_MISMATCH,
       details: { ...details, installedVersion, expectedVersion },
@@ -411,13 +403,6 @@ function runSmoke({
     );
 
     if (initResult.status !== 0) {
-      console.error(
-        `release-tarball-smoke: INIT_FAILED bin=${installerBin} ` +
-        `invocation=${JSON.stringify(initInvocation)} status=${initResult.status} signal=${initResult.signal} ` +
-        `error=${initResult.error ? (initResult.error.code + ': ' + initResult.error.message) : 'none'}\n` +
-        `--- stderr ---\n${(initResult.stderr || '').slice(0, 2000)}\n` +
-        `--- stdout ---\n${(initResult.stdout || '').slice(0, 2000)}`,
-      );
       return {
         code: SMOKE.INIT_FAILED,
         details: {
