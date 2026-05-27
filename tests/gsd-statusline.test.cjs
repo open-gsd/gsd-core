@@ -386,3 +386,83 @@ describe('context meter respects CLAUDE_CODE_AUTO_COMPACT_WINDOW (#2219)', () =>
       'bridge used_pct must be raw (100-50=50) regardless of CLAUDE_CODE_AUTO_COMPACT_WINDOW');
   });
 });
+
+// ─── todo-resolution path (#305) ────────────────────────────────────────────
+
+describe('todo-resolution: resolves in_progress task from the newest matching todos file (#305)', () => {
+  const { execFileSync } = require('node:child_process');
+  const hookPath = path.join(__dirname, '..', 'hooks', 'gsd-statusline.js');
+
+  test('resolves in_progress task from the newest matching todos file (#305)', (t) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-305-'));
+    t.after(() => {
+      try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
+    });
+
+    const todosDir = path.join(tempDir, 'todos');
+    fs.mkdirSync(todosDir, { recursive: true });
+
+    const session = `sess-305-${Math.random().toString(36).slice(2)}`;
+    const now = Date.now() / 1000; // seconds for utimesSync
+
+    // Older matching file — should NOT be selected
+    const olderPath = path.join(todosDir, `${session}-agent-A.json`);
+    fs.writeFileSync(olderPath, JSON.stringify([
+      { content: 'old task', status: 'in_progress', activeForm: 'OLDER TASK 305' },
+    ]));
+    const olderTime = now - 10000;
+    fs.utimesSync(olderPath, olderTime, olderTime);
+
+    // Newer matching file — should be selected
+    const newerPath = path.join(todosDir, `${session}-agent-B.json`);
+    fs.writeFileSync(newerPath, JSON.stringify([
+      { content: 'new task', status: 'in_progress', activeForm: 'NEWER TASK 305' },
+    ]));
+    const newerTime = now - 1000;
+    fs.utimesSync(newerPath, newerTime, newerTime);
+
+    // Distractor: different session prefix — must be ignored even with very-new mtime
+    const wrongSessPath = path.join(todosDir, 'other-sess-agent-Z.json');
+    fs.writeFileSync(wrongSessPath, JSON.stringify([
+      { content: 'wrong session', status: 'in_progress', activeForm: 'WRONG SESSION 305' },
+    ]));
+    fs.utimesSync(wrongSessPath, now, now);
+
+    // Distractor: matches session + .json but lacks -agent- — must be ignored
+    const notAgentPath = path.join(todosDir, `${session}-notagent.json`);
+    fs.writeFileSync(notAgentPath, JSON.stringify([
+      { content: 'not agent', status: 'in_progress', activeForm: 'NOT AGENT 305' },
+    ]));
+    fs.utimesSync(notAgentPath, now, now);
+
+    const payload = JSON.stringify({
+      model: { display_name: 'Claude' },
+      workspace: { current_dir: os.tmpdir() },
+      session_id: session,
+      context_window: { remaining_percentage: 80, total_tokens: 1_000_000 },
+    });
+
+    const env = { ...process.env, CLAUDE_CONFIG_DIR: tempDir };
+
+    let stdout = '';
+    try {
+      stdout = execFileSync(process.execPath, [hookPath], {
+        input: payload,
+        env,
+        encoding: 'utf8',
+        timeout: 4000,
+      });
+    } catch (e) {
+      stdout = e.stdout || '';
+    }
+
+    assert.ok(stdout.includes('NEWER TASK 305'),
+      `expected stdout to contain "NEWER TASK 305", got: ${stdout}`);
+    assert.ok(!stdout.includes('OLDER TASK 305'),
+      `stdout must NOT contain "OLDER TASK 305", got: ${stdout}`);
+    assert.ok(!stdout.includes('WRONG SESSION 305'),
+      `stdout must NOT contain "WRONG SESSION 305", got: ${stdout}`);
+    assert.ok(!stdout.includes('NOT AGENT 305'),
+      `stdout must NOT contain "NOT AGENT 305", got: ${stdout}`);
+  });
+});

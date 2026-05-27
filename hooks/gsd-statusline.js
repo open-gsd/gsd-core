@@ -368,14 +368,20 @@ function runStatusline() {
     const todosDir = path.join(claudeDir, 'todos');
     if (session && fs.existsSync(todosDir)) {
       try {
-        const files = fs.readdirSync(todosDir)
-          .filter(f => f.startsWith(session) && f.includes('-agent-') && f.endsWith('.json'))
-          .map(f => ({ name: f, mtime: fs.statSync(path.join(todosDir, f)).mtime }))
-          .sort((a, b) => b.mtime - a.mtime);
+        // Single-pass max-by-mtime scan: only the newest matching todos file
+        // is needed, so the O(n log n) sort and the intermediate array from the
+        // prior `.filter().map(statSync).sort()` chain are unnecessary. Identical
+        // I/O (one statSync per match) and identical result. (#305)
+        let latest = null;
+        for (const entry of fs.readdirSync(todosDir)) {
+          if (!entry.startsWith(session) || !entry.includes('-agent-') || !entry.endsWith('.json')) continue;
+          const mtime = fs.statSync(path.join(todosDir, entry)).mtime;
+          if (!latest || mtime > latest.mtime) latest = { name: entry, mtime };
+        }
 
-        if (files.length > 0) {
+        if (latest) {
           try {
-            const todos = JSON.parse(fs.readFileSync(path.join(todosDir, files[0].name), 'utf8'));
+            const todos = JSON.parse(fs.readFileSync(path.join(todosDir, latest.name), 'utf8'));
             const inProgress = todos.find(t => t.status === 'in_progress');
             if (inProgress) task = inProgress.activeForm || '';
           } catch (e) {}
