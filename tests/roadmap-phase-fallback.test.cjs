@@ -310,3 +310,438 @@ This phase covers:
     assert.ok(!output.section.includes('Phase 11'), 'section does not include next phase');
   });
 });
+
+describe('extractCurrentMilestone — closed-sibling heading selection (#145)', () => {
+  let tmpDir;
+  const core = require('../get-shit-done/bin/lib/core.cjs');
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('(1) first-match-skip: active sub-milestone selected over closed sibling', () => {
+    writeState(tmpDir, 'v8.0');
+    const roadmap = `# Project Roadmap
+
+## v8.0 Overview — v8.0-F (CLOSED FAIL 2026-05-18)
+
+This is the closed milestone body with some text.
+
+### Phase 24: ARCHIVED
+**Goal:** This phase is done and archived.
+
+## v8.0-B Overview (STARTED 2026-05-18)
+
+This is the active milestone body.
+
+### Phase 31: EVAL
+**Goal:** Evaluate the new system.
+
+## v9.0 Future Milestone
+
+### Phase 40: FUTURE
+**Goal:** Future work.
+`;
+    const slice = core.extractCurrentMilestone(roadmap, tmpDir);
+    assert.ok(
+      slice.includes('Phase 31: EVAL'),
+      'slice must include Phase 31: EVAL from the active v8.0-B section'
+    );
+    assert.ok(
+      slice.includes('v8.0-B Overview'),
+      'slice must include the v8.0-B heading'
+    );
+    assert.ok(
+      !slice.includes('Phase 24: ARCHIVED'),
+      'slice must NOT include Phase 24: ARCHIVED from the closed section'
+    );
+    assert.ok(
+      !slice.includes('closed milestone body'),
+      'preamble must NOT contain closed v8.0-F body text (preamble boundary fix)'
+    );
+  });
+
+  test('(2) double-closed-skip: third sibling (active) selected when first two are closed', () => {
+    writeState(tmpDir, 'v9.0');
+    const roadmap = `# Project Roadmap
+
+## v9.0 Overview — v9.0 (CLOSED 2026-01-01)
+
+Closed first sibling body text.
+
+### Phase 1: OLD
+**Goal:** Old closed phase.
+
+## v9.0-A Overview (ARCHIVED 2026-03-01)
+
+Archived second sibling body text.
+
+### Phase 2: ALSO-OLD
+**Goal:** Another archived phase.
+
+## v9.0-C Overview (STARTED 2026-05-26)
+
+Active sibling body text.
+
+### Phase 5: GO
+**Goal:** Active phase to work on.
+
+## v10.0 Next Major
+
+### Phase 99: FUTURE
+**Goal:** Far future.
+`;
+    const slice = core.extractCurrentMilestone(roadmap, tmpDir);
+    assert.ok(
+      slice.includes('Phase 5: GO'),
+      'slice must include Phase 5: GO from active v9.0-C'
+    );
+    assert.ok(
+      !slice.includes('Phase 1: OLD'),
+      'slice must NOT include closed Phase 1: OLD'
+    );
+    assert.ok(
+      !slice.includes('Phase 2: ALSO-OLD'),
+      'slice must NOT include archived Phase 2: ALSO-OLD'
+    );
+  });
+
+  test('(3) explicit sub-milestone resolution: exact version v8.0-B in STATE.md', () => {
+    writeState(tmpDir, 'v8.0-B');
+    const roadmap = `# Project Roadmap
+
+## v8.0 Overview — v8.0-F (CLOSED FAIL 2026-05-18)
+
+Closed milestone body.
+
+### Phase 24: ARCHIVED
+**Goal:** This phase is archived.
+
+## v8.0-B Overview (STARTED 2026-05-18)
+
+Active milestone body.
+
+### Phase 31: EVAL
+**Goal:** Evaluate the new system.
+
+## v9.0 Future Milestone
+
+### Phase 40: FUTURE
+**Goal:** Future work.
+`;
+    const slice = core.extractCurrentMilestone(roadmap, tmpDir);
+    assert.ok(
+      slice.includes('Phase 31: EVAL'),
+      'slice must include Phase 31: EVAL when STATE has exact v8.0-B version'
+    );
+    assert.ok(
+      slice.includes('v8.0-B Overview'),
+      'slice must include the v8.0-B heading'
+    );
+  });
+
+  test('(4) all-closed fallback: returns first match when all candidates are closed', () => {
+    writeState(tmpDir, 'v7.0');
+    const roadmap = `# Project Roadmap
+
+## v7.0 Overview (CLOSED 2025-12-01)
+
+First closed milestone body with unique text: alpha-unique-content.
+
+### Phase 10: DONE
+**Goal:** Completed phase.
+
+## v7.0-A Overview (ARCHIVED 2025-12-15)
+
+Second archived milestone body.
+
+### Phase 11: ALSO-DONE
+**Goal:** Another completed phase.
+
+## v8.0 Next Milestone
+
+### Phase 20: NEXT
+**Goal:** Next milestone work.
+`;
+    let result;
+    assert.doesNotThrow(() => {
+      result = core.extractCurrentMilestone(roadmap, tmpDir);
+    }, 'must not throw when all candidates are closed');
+    assert.ok(
+      result.includes('v7.0 Overview (CLOSED'),
+      'fallback must return content including the first (closed) heading'
+    );
+    assert.ok(
+      result.includes('alpha-unique-content'),
+      'fallback must include content from the first closed section'
+    );
+  });
+
+  test('(5) marker variants: emoji and text closed markers are all recognized', () => {
+    writeState(tmpDir, 'v6.0');
+    const roadmap = `# Project Roadmap
+
+## ✅ v6.0 Foundation
+
+Completed foundation body text.
+
+### Phase 1: DONE-FOUNDATION
+**Goal:** Foundation work.
+
+## 🗄️ v6.0-B Storage
+
+Archived storage body text.
+
+### Phase 2: DONE-STORAGE
+**Goal:** Storage work.
+
+## v6.0-C Abandoned Experiment (FAILED)
+
+Failed experiment body text.
+
+### Phase 3: FAILED-EXPERIMENT
+**Goal:** This failed.
+
+## v6.0-D Overview (STARTED 2026-05-26)
+
+Active body text.
+
+### Phase 9: LIVE
+**Goal:** Live active phase.
+
+## v7.0 Next
+
+### Phase 50: NEXT
+**Goal:** Next milestone.
+`;
+    const slice = core.extractCurrentMilestone(roadmap, tmpDir);
+    assert.ok(
+      slice.includes('Phase 9: LIVE'),
+      'slice must include Phase 9: LIVE from the active v6.0-D section'
+    );
+    assert.ok(
+      !slice.includes('Phase 1: DONE-FOUNDATION'),
+      'slice must NOT include content from ✅ closed section'
+    );
+    assert.ok(
+      !slice.includes('Phase 2: DONE-STORAGE'),
+      'slice must NOT include content from 🗄️ archived section'
+    );
+    assert.ok(
+      !slice.includes('Phase 3: FAILED-EXPERIMENT'),
+      'slice must NOT include content from FAILED section'
+    );
+
+    // Sub-case: ABANDONED heading is also skipped
+    writeState(tmpDir, 'v6.0');
+    const roadmap2 = `# Project Roadmap
+
+## v6.0-X Abandoned Prototype (ABANDONED)
+
+Abandoned body text.
+
+### Phase 4: ABANDONED-PHASE
+**Goal:** Abandoned work.
+
+## v6.0-D Overview (STARTED 2026-05-26)
+
+Active sub-case body.
+
+### Phase 9: LIVE
+**Goal:** The active phase.
+`;
+    const slice2 = core.extractCurrentMilestone(roadmap2, tmpDir);
+    assert.ok(
+      slice2.includes('Phase 9: LIVE'),
+      'ABANDONED marker must be skipped and active section selected'
+    );
+    assert.ok(
+      !slice2.includes('Phase 4: ABANDONED-PHASE'),
+      'slice must NOT include content from ABANDONED section'
+    );
+  });
+
+  test('(6) single-milestone no-regression: behavior unchanged with one matching heading', () => {
+    writeState(tmpDir, 'v5.0');
+    const roadmap = `# Project Roadmap
+
+## Roadmap v5.0: Solo
+
+This is the only milestone.
+
+### Phase 1: Only
+**Goal:** The only phase in this roadmap.
+
+## v6.0 Future
+
+### Phase 2: FUTURE
+**Goal:** Future work.
+`;
+    const slice = core.extractCurrentMilestone(roadmap, tmpDir);
+    assert.ok(
+      slice.includes('Phase 1: Only'),
+      'slice must include Phase 1: Only when only one matching heading exists'
+    );
+  });
+});
+
+describe('extractCurrentMilestone — boundary / active-override hardening (#145 follow-up)', () => {
+  let tmpDir;
+  const core = require('../get-shit-done/bin/lib/core.cjs');
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('(a) BOUNDARY: v2.0-B in STATE must not match v2.0-Beta heading', () => {
+    writeState(tmpDir, 'v2.0-B');
+    const roadmap = `# Project Roadmap
+
+## v2.0-Beta Overview (STARTED)
+
+Beta milestone body.
+
+### Phase 1: BETA
+**Goal:** Beta phase work.
+
+## v2.0-B Overview (STARTED)
+
+Real milestone body.
+
+### Phase 2: REAL
+**Goal:** Real phase work.
+
+## v3.0 Future
+
+### Phase 99: FUTURE
+**Goal:** Future work.
+`;
+    const slice = core.extractCurrentMilestone(roadmap, tmpDir);
+    assert.ok(
+      slice.includes('Phase 2: REAL'),
+      'slice must include Phase 2: REAL from the v2.0-B section'
+    );
+    assert.ok(
+      slice.includes('v2.0-B Overview'),
+      'slice must include the v2.0-B heading'
+    );
+    assert.ok(
+      !slice.includes('Phase 1: BETA'),
+      'slice must NOT include Phase 1: BETA from the v2.0-Beta section'
+    );
+    assert.ok(
+      !slice.includes('v2.0-Beta Overview'),
+      'slice must NOT include the v2.0-Beta heading'
+    );
+  });
+
+  test('(b) SHIPPED-skip: v3.0 state picks v3.0-B over v3.0-A (SHIPPED)', () => {
+    writeState(tmpDir, 'v3.0');
+    const roadmap = `# Project Roadmap
+
+## v3.0 Overview — v3.0-A (SHIPPED)
+
+Shipped milestone body.
+
+### Phase 1: OLD
+**Goal:** Old shipped phase.
+
+## v3.0-B Overview (STARTED)
+
+Active milestone body.
+
+### Phase 2: NEW
+**Goal:** New active phase.
+
+## v4.0 Future
+
+### Phase 99: FUTURE
+**Goal:** Future work.
+`;
+    const slice = core.extractCurrentMilestone(roadmap, tmpDir);
+    assert.ok(
+      slice.includes('Phase 2: NEW'),
+      'slice must include Phase 2: NEW from the active v3.0-B section'
+    );
+    assert.ok(
+      !slice.includes('Phase 1: OLD'),
+      'slice must NOT include Phase 1: OLD from the SHIPPED v3.0-A section'
+    );
+  });
+
+  test('(c) ACTIVE-OVERRIDE: heading with "Shipped" in name but STARTED marker is not closed', () => {
+    writeState(tmpDir, 'v4.0');
+    const roadmap = `# Project Roadmap
+
+## v4.0-A Legacy (CLOSED)
+
+Closed milestone body.
+
+### Phase 1: GONE
+**Goal:** Closed phase.
+
+## v4.0-B Shipped logs pipeline (STARTED)
+
+Active milestone body.
+
+### Phase 2: LIVE
+**Goal:** Active live phase.
+
+## v5.0 Future
+
+### Phase 99: FUTURE
+**Goal:** Future work.
+`;
+    const slice = core.extractCurrentMilestone(roadmap, tmpDir);
+    assert.ok(
+      slice.includes('Phase 2: LIVE'),
+      'slice must include Phase 2: LIVE — STARTED overrides "Shipped" in name'
+    );
+    assert.ok(
+      !slice.includes('Phase 1: GONE'),
+      'slice must NOT include Phase 1: GONE from the CLOSED v4.0-A section'
+    );
+  });
+
+  test('(d) FAIL-SAFE naming: FAIL-safe in heading name is not a closed marker', () => {
+    writeState(tmpDir, 'v5.0');
+    const roadmap = `# Project Roadmap
+
+## v5.0-A Retired (ARCHIVED)
+
+Archived milestone body.
+
+### Phase 1: DEAD
+**Goal:** Archived phase.
+
+## v5.0-B FAIL-safe rollout (STARTED)
+
+Active milestone body.
+
+### Phase 2: GO
+**Goal:** Active rollout phase.
+
+## v6.0 Future
+
+### Phase 99: FUTURE
+**Goal:** Future work.
+`;
+    const slice = core.extractCurrentMilestone(roadmap, tmpDir);
+    assert.ok(
+      slice.includes('Phase 2: GO'),
+      'slice must include Phase 2: GO — FAIL-safe must not be treated as a closed marker'
+    );
+    assert.ok(
+      !slice.includes('Phase 1: DEAD'),
+      'slice must NOT include Phase 1: DEAD from the ARCHIVED v5.0-A section'
+    );
+  });
+});
