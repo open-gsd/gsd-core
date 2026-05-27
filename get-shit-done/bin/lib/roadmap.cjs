@@ -572,6 +572,14 @@ function cmdRoadmapAnnotateDependencies(cwd, phaseNum, raw) {
 
     if (listLines.length === 0) return;
 
+    // #314 perf: build a first-wins Map so per-line lookup is O(1) instead of O(plans).
+    // First-wins mirrors .find() semantics: if the same planId appears more than once
+    // in planData, the earlier entry wins — identical to what .find() returned before.
+    const planById = new Map();
+    for (const p of planData) {
+      if (!planById.has(p.planId)) planById.set(p.planId, p);
+    }
+
     // Build wave-annotated plan list
     const linesByWave = new Map();
     for (const line of listLines) {
@@ -586,7 +594,7 @@ function cmdRoadmapAnnotateDependencies(cwd, phaseNum, raw) {
       // (e.g. `.invalid-PLAN.md`) would silently default to wave 1 — defensively
       // skip the line instead so corrupted ROADMAP entries don't corrupt wave layout.
       if (planId && !/^\w[\w.-]*$/.test(planId)) continue;
-      const planEntry = planId ? planData.find(p => p.planId === planId) : null;
+      const planEntry = planId ? (planById.get(planId) || null) : null;
       const wave = planEntry ? planEntry.wave : 1;
       if (!linesByWave.has(wave)) linesByWave.set(wave, []);
       linesByWave.get(wave).push(line);
