@@ -509,7 +509,7 @@ function intelExtractExports(filePath) {
   if (content === null) {
     return { file: filePath, exports: [], method: 'none' };
   }
-  let exports = [];
+  const exports = new Set();
   let method = 'none';
 
   // Try module.exports = { ... } pattern (handle multi-line)
@@ -537,7 +537,7 @@ function intelExtractExports(filePath) {
       // Match identifier at start of line (before comma, colon, end of line)
       const keyMatch = trimmed.match(/^(\w+)\s*[,}:]/) || trimmed.match(/^(\w+)$/);
       if (keyMatch) {
-        exports.push(keyMatch[1]);
+        exports.add(keyMatch[1]);
       }
     }
   }
@@ -546,46 +546,46 @@ function intelExtractExports(filePath) {
   const individualPattern = /^exports\.(\w+)\s*=/gm;
   let im;
   while ((im = individualPattern.exec(content)) !== null) {
-    if (!exports.includes(im[1])) {
-      exports.push(im[1]);
+    if (!exports.has(im[1])) {
+      exports.add(im[1]);
       if (method === 'none') method = 'exports.X';
     }
   }
 
-  const hadCjs = exports.length > 0;
+  const hadCjs = exports.size > 0;
 
   // ESM patterns
-  const esmExports = [];
+  const esmExports = new Set();
 
   // export default function X / export default class X
   const defaultNamedPattern = /^export\s+default\s+(?:function|class)\s+(\w+)/gm;
   let em;
   while ((em = defaultNamedPattern.exec(content)) !== null) {
-    if (!esmExports.includes(em[1])) esmExports.push(em[1]);
+    esmExports.add(em[1]);
   }
 
   // export default (without named function/class)
   const defaultAnonPattern = /^export\s+default\s+(?!function\s|class\s)/gm;
-  if (defaultAnonPattern.test(content) && esmExports.length === 0) {
-    if (!esmExports.includes('default')) esmExports.push('default');
+  if (defaultAnonPattern.test(content) && esmExports.size === 0) {
+    esmExports.add('default');
   }
 
   // export function X( / export async function X(
   const exportFnPattern = /^export\s+(?:async\s+)?function\s+(\w+)\s*\(/gm;
   while ((em = exportFnPattern.exec(content)) !== null) {
-    if (!esmExports.includes(em[1])) esmExports.push(em[1]);
+    esmExports.add(em[1]);
   }
 
   // export const X = / export let X = / export var X =
   const exportVarPattern = /^export\s+(?:const|let|var)\s+(\w+)\s*=/gm;
   while ((em = exportVarPattern.exec(content)) !== null) {
-    if (!esmExports.includes(em[1])) esmExports.push(em[1]);
+    esmExports.add(em[1]);
   }
 
   // export class X
   const exportClassPattern = /^export\s+class\s+(\w+)/gm;
   while ((em = exportClassPattern.exec(content)) !== null) {
-    if (!esmExports.includes(em[1])) esmExports.push(em[1]);
+    esmExports.add(em[1]);
   }
 
   // export { X, Y, Z } — strip "as alias" parts
@@ -597,24 +597,24 @@ function intelExtractExports(filePath) {
       if (!trimmed) continue;
       // "foo as bar" -> extract "foo"
       const name = trimmed.split(/\s+as\s+/)[0].trim();
-      if (name && !esmExports.includes(name)) esmExports.push(name);
+      if (name) esmExports.add(name);
     }
   }
 
   // Merge ESM exports into the result
   for (const e of esmExports) {
-    if (!exports.includes(e)) exports.push(e);
+    exports.add(e);
   }
 
   // Determine method
-  const hadEsm = esmExports.length > 0;
+  const hadEsm = esmExports.size > 0;
   if (hadCjs && hadEsm) {
     method = 'mixed';
   } else if (hadEsm && !hadCjs) {
     method = 'esm';
   }
 
-  return { file: filePath, exports, method };
+  return { file: filePath, exports: [...exports], method };
 }
 
 // ─── Exports ─────────────────────────────────────────────────────────────────

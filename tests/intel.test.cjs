@@ -558,6 +558,105 @@ describe('intelExtractExports', () => {
     assert.deepStrictEqual(result.exports, []);
     assert.strictEqual(result.method, 'none');
   });
+
+  // ── Behavior-lock: dedup + order (green before AND after Set conversion) ──
+
+  test('dedup: duplicate exports.X assignments yield each name exactly once', () => {
+    // exports.foo appears twice — result must contain 'foo' exactly once
+    const filePath = path.join(tmpDir, 'dedup-exports-x.cjs');
+    fs.writeFileSync(filePath, [
+      "'use strict';",
+      'exports.foo = 1;',
+      'exports.bar = 2;',
+      'exports.foo = 3;',
+    ].join('\n'), 'utf8');
+
+    const result = intelExtractExports(filePath);
+    assert.strictEqual(result.method, 'exports.X');
+    assert.deepStrictEqual(result.exports, ['foo', 'bar']);
+  });
+
+  test('order: CJS exports.X preserves first-seen insertion order', () => {
+    // Names appear in source order: charlie, alpha, bravo
+    const filePath = path.join(tmpDir, 'order-cjs.cjs');
+    fs.writeFileSync(filePath, [
+      "'use strict';",
+      'exports.charlie = 1;',
+      'exports.alpha = 2;',
+      'exports.bravo = 3;',
+    ].join('\n'), 'utf8');
+
+    const result = intelExtractExports(filePath);
+    assert.strictEqual(result.method, 'exports.X');
+    assert.deepStrictEqual(result.exports, ['charlie', 'alpha', 'bravo']);
+  });
+
+  test('dedup: ESM export block with repeated name yields name exactly once', () => {
+    // export { foo, foo } — foo must appear once
+    const filePath = path.join(tmpDir, 'dedup-esm-block.mjs');
+    fs.writeFileSync(filePath, [
+      'function foo() {}',
+      'export { foo, foo };',
+    ].join('\n'), 'utf8');
+
+    const result = intelExtractExports(filePath);
+    assert.strictEqual(result.method, 'esm');
+    assert.deepStrictEqual(result.exports, ['foo']);
+  });
+
+  test('merge order: CJS exports appear before ESM exports, each name once', () => {
+    // exports.X = CJS side; export function / export const = ESM side
+    // Expected order: CJS-first then ESM additions
+    const filePath = path.join(tmpDir, 'merge-order.mjs');
+    fs.writeFileSync(filePath, [
+      "exports.cjsFirst = 1;",
+      "export function esmSecond() {}",
+      "export const esmThird = 3;",
+    ].join('\n'), 'utf8');
+
+    const result = intelExtractExports(filePath);
+    assert.strictEqual(result.method, 'mixed');
+    assert.deepStrictEqual(result.exports, ['cjsFirst', 'esmSecond', 'esmThird']);
+  });
+
+  test('export default collapse: only export default (anon) yields ["default"]', () => {
+    // A file with only `export default <value>` — no named exports, no default fn/class
+    // The collapse guard (esmExports.length === 0 at time of check) produces ["default"]
+    const filePath = path.join(tmpDir, 'default-only.mjs');
+    fs.writeFileSync(filePath, 'export default 42;', 'utf8');
+
+    const result = intelExtractExports(filePath);
+    assert.strictEqual(result.method, 'esm');
+    assert.deepStrictEqual(result.exports, ['default']);
+  });
+
+  test('export default collapse: export default fn + named exports — no "default" collapse', () => {
+    // export default function myFunc() {} → myFunc is extracted (named default fn)
+    // export const named → also extracted
+    // "default" literal does NOT appear because esmExports is not empty when anon-default check runs
+    const filePath = path.join(tmpDir, 'default-fn-plus-named.mjs');
+    fs.writeFileSync(filePath, [
+      'export default function myFunc() {}',
+      'export const named = 1;',
+    ].join('\n'), 'utf8');
+
+    const result = intelExtractExports(filePath);
+    assert.strictEqual(result.method, 'esm');
+    assert.deepStrictEqual(result.exports, ['myFunc', 'named']);
+  });
+
+  test('return shape: exports is a plain Array (callers use .includes/.length)', () => {
+    const filePath = path.join(tmpDir, 'shape-check.cjs');
+    fs.writeFileSync(filePath, [
+      "'use strict';",
+      'exports.foo = 1;',
+    ].join('\n'), 'utf8');
+
+    const result = intelExtractExports(filePath);
+    assert.ok(Array.isArray(result.exports), 'exports must be a plain Array');
+    assert.ok('file' in result, 'result must have file field');
+    assert.ok('method' in result, 'result must have method field');
+  });
 });
 
 // ─── CLI routing via gsd-tools ──────────────────────────────────────────────
