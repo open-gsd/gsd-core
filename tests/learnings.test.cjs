@@ -524,3 +524,108 @@ describe('CLI integration', () => {
     assert.ok(res.error.includes('Unknown learnings subcommand'));
   });
 });
+
+// ─── Dedupe Scaling (#306) ───────────────────────────────────────────────────
+
+/**
+ * Build a LEARNINGS.md string with k unique ## sections.
+ * Mirrors the ## heading format that learningsCopyFromProject parses.
+ */
+function makeLearningsMd(k) {
+  const sections = [];
+  for (let i = 1; i <= k; i++) {
+    sections.push(`## Title ${i}\n\nBody content for item ${i}, unique text.`);
+  }
+  return `# Project Learnings\n\n${sections.join('\n\n')}\n`;
+}
+
+describe('learnings dedupe scaling (#306)', () => {
+  test('store directory scan count is independent of imported item count', (t) => {
+    // Test A: assert readdirSync call count does NOT scale with K (regression guard for #306)
+    // BEFORE the fix: count scales 1:1 with K (one scan per learningsWrite call).
+    // AFTER the fix: count is constant (one index-build scan per learningsCopyFromProject call).
+
+    const storeDir2 = makeTempDir();
+    const projectDir2 = makeTempDir();
+    t.after(() => {
+      cleanupDir(storeDir2);
+      cleanupDir(projectDir2);
+    });
+
+    const storeDir6 = makeTempDir();
+    const projectDir6 = makeTempDir();
+    t.after(() => {
+      cleanupDir(storeDir6);
+      cleanupDir(projectDir6);
+    });
+
+    // K=2
+    fs.writeFileSync(path.join(projectDir2, 'LEARNINGS.md'), makeLearningsMd(2), 'utf-8');
+    const spy2 = t.mock.method(fs, 'readdirSync');
+    const before2 = spy2.mock.calls.length;
+    learningsCopyFromProject(projectDir2, { storeDir: storeDir2, sourceProject: 'proj-a' });
+    const c1 = spy2.mock.calls.length - before2;
+    spy2.mock.restore();
+
+    // K=6
+    fs.writeFileSync(path.join(projectDir6, 'LEARNINGS.md'), makeLearningsMd(6), 'utf-8');
+    const spy6 = t.mock.method(fs, 'readdirSync');
+    const before6 = spy6.mock.calls.length;
+    learningsCopyFromProject(projectDir6, { storeDir: storeDir6, sourceProject: 'proj-b' });
+    const c6 = spy6.mock.calls.length - before6;
+    spy6.mock.restore();
+
+    assert.strictEqual(c1, c6,
+      `store directory scan count must be independent of imported item count (#306) — got ${c1} for K=2 vs ${c6} for K=6`);
+  });
+
+  test('dedupe semantics preserved: duplicate entry in existing store is skipped', (t) => {
+    // Test B part 1: importing a section that duplicates an already-stored entry → skipped
+    const storeDir = makeTempDir();
+    const projectDir = makeTempDir();
+    t.after(() => {
+      cleanupDir(storeDir);
+      cleanupDir(projectDir);
+    });
+
+    // Pre-seed one entry that matches the first section of our LEARNINGS.md
+    learningsWrite({
+      source_project: 'my-proj',
+      learning: 'Body content for item 1, unique text.',
+      context: 'Title 1',
+      tags: ['title'],
+    }, { storeDir });
+
+    // LEARNINGS.md has 3 sections; section 1 duplicates the pre-seeded entry
+    fs.writeFileSync(path.join(projectDir, 'LEARNINGS.md'), makeLearningsMd(3), 'utf-8');
+    const result = learningsCopyFromProject(projectDir, { storeDir, sourceProject: 'my-proj' });
+
+    assert.strictEqual(result.created, 2, 'two new sections should be created');
+    assert.strictEqual(result.skipped, 1, 'one duplicate section should be skipped');
+
+    const all = learningsList({ storeDir });
+    assert.strictEqual(all.length, 3);
+  });
+
+  test('dedupe semantics preserved: two identical sections in same file → one created, one skipped', (t) => {
+    // Test B part 2: exercises the index.set during-loop dedup path
+    const storeDir = makeTempDir();
+    const projectDir = makeTempDir();
+    t.after(() => {
+      cleanupDir(storeDir);
+      cleanupDir(projectDir);
+    });
+
+    // Two identical ## sections in the same LEARNINGS.md
+    const md = `# Learnings\n\n## Duplicate Section\n\nExact same body text.\n\n## Duplicate Section\n\nExact same body text.\n`;
+    fs.writeFileSync(path.join(projectDir, 'LEARNINGS.md'), md, 'utf-8');
+
+    const result = learningsCopyFromProject(projectDir, { storeDir, sourceProject: 'my-proj' });
+
+    assert.strictEqual(result.created, 1, 'exactly one entry should be created');
+    assert.strictEqual(result.skipped, 1, 'the duplicate should be skipped');
+
+    const all = learningsList({ storeDir });
+    assert.strictEqual(all.length, 1);
+  });
+});

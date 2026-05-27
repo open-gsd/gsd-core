@@ -106,7 +106,33 @@ function learningsWrite(entry, opts) {
 
   const hash = contentHash(entry.learning, entry.source_project);
 
-  // Check for duplicate by scanning existing files
+  // #306: In bulk-import paths, callers may supply a pre-built dedupeIndex
+  // (Map<content_hash, id>) to avoid the per-write O(N) store scan.
+  // When present, use it for the dedupe check instead of scanning the directory.
+  // After writing a new record, add it to the index so subsequent items in the
+  // same bulk operation dedupe against it.
+  // When absent (single-write path), fall back to the existing full-store scan.
+  if (opts && opts.dedupeIndex) {
+    const dedupeIndex = opts.dedupeIndex;
+    if (dedupeIndex.has(hash)) {
+      return { id: dedupeIndex.get(hash), created: false, content_hash: hash };
+    }
+    const id = generateId();
+    const record = {
+      id,
+      source_project: entry.source_project,
+      date: new Date().toISOString(),
+      context: entry.context || '',
+      learning: entry.learning,
+      tags: entry.tags || [],
+      content_hash: hash,
+    };
+    platformWriteSync(path.join(dir, `${id}.json`), JSON.stringify(record, null, 2));
+    dedupeIndex.set(hash, id);
+    return { id, created: true, content_hash: hash };
+  }
+
+  // Check for duplicate by scanning existing files (single-write path, unchanged)
   const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
   for (const file of files) {
     const existing = readLearningFile(path.join(dir, file));
@@ -229,6 +255,22 @@ function learningsCopyFromProject(planningDir, opts) {
   const content = fs.readFileSync(learningsPath, 'utf-8');
   const sourceProject = (opts && opts.sourceProject) || path.basename(path.resolve(planningDir, '..'));
 
+  // #306: Build the content_hash -> id dedupe index once before the loop so
+  // that learningsWrite does not re-scan the entire store on every call —
+  // O(K*N) -> O(N+K).
+  const dir = getStoreDir(opts);
+  ensureStoreDir(dir);
+  const dedupeIndex = new Map();
+  for (const file of fs.readdirSync(dir).filter(f => f.endsWith('.json'))) {
+    const existing = readLearningFile(path.join(dir, file));
+    // First-seen-wins, matching the legacy scan path's first-match return so the
+    // dedupe-hit `id` is identical on both paths even if the store already holds
+    // duplicate content_hashes. (#306)
+    if (existing && existing.content_hash && !dedupeIndex.has(existing.content_hash)) {
+      dedupeIndex.set(existing.content_hash, existing.id);
+    }
+  }
+
   // Parse markdown: split on ## headings
   const sections = content.split(/^## /m).slice(1); // skip preamble before first ##
   let created = 0;
@@ -248,7 +290,7 @@ function learningsCopyFromProject(planningDir, opts) {
       learning: body,
       context: title,
       tags,
-    }, opts);
+    }, { ...opts, dedupeIndex });
 
     if (result.created) {
       created++;
