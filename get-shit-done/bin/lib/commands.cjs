@@ -366,6 +366,43 @@ function cmdCommit(cwd, message, files, raw, amend, noVerify) {
   output(result, raw, hash || 'committed');
 }
 
+/**
+ * Route a list of changed files to their sub-repo prefixes.
+ *
+ * Bucket sub-repos by their first path segment. Any file that matches a
+ * sub-repo prefix must share that sub-repo's first segment, so we only scan
+ * the (small) bucket for the file's first segment instead of all sub-repos
+ * — O(F + R) expected vs the prior O(F*R) find-in-loop. Candidates stay in
+ * sub-repo array order, preserving the original first-match semantics
+ * (incl. multi-segment sub-repos like "vendor/pkg", which resolve via the
+ * inner startsWith). (#311)
+ *
+ * @param {string[]} files    - changed file paths (relative to project root)
+ * @param {string[]} subRepos - sub-repo path prefixes from config.sub_repos
+ * @returns {{ grouped: Object<string,string[]>, unmatched: string[] }}
+ */
+function groupFilesBySubrepo(files, subRepos) {
+  const reposByFirstSeg = new Map();
+  for (const repo of subRepos) {
+    const firstSeg = String(repo).split('/')[0];
+    let bucket = reposByFirstSeg.get(firstSeg);
+    if (!bucket) { bucket = []; reposByFirstSeg.set(firstSeg, bucket); }
+    bucket.push(repo);
+  }
+  const grouped = {};
+  const unmatched = [];
+  for (const file of files) {
+    const candidates = reposByFirstSeg.get(file.split('/')[0]);
+    const match = candidates ? candidates.find(repo => file.startsWith(repo + '/')) : undefined;
+    if (match) {
+      (grouped[match] ||= []).push(file);
+    } else {
+      unmatched.push(file);
+    }
+  }
+  return { grouped, unmatched };
+}
+
 function cmdCommitToSubrepo(cwd, message, files, raw) {
   if (!message) {
     error('commit message required');
@@ -383,17 +420,7 @@ function cmdCommitToSubrepo(cwd, message, files, raw) {
   }
 
   // Group files by sub-repo prefix
-  const grouped = {};
-  const unmatched = [];
-  for (const file of files) {
-    const match = subRepos.find(repo => file.startsWith(repo + '/'));
-    if (match) {
-      if (!grouped[match]) grouped[match] = [];
-      grouped[match].push(file);
-    } else {
-      unmatched.push(file);
-    }
-  }
+  const { grouped, unmatched } = groupFilesBySubrepo(files, subRepos);
 
   if (unmatched.length > 0) {
     process.stderr.write(`Warning: ${unmatched.length} file(s) did not match any sub-repo prefix: ${unmatched.join(', ')}\n`);
@@ -1015,6 +1042,7 @@ function cmdCheckCommit(cwd, raw) {
 }
 
 module.exports = {
+  groupFilesBySubrepo,
   determinePhaseStatus,
   cmdGenerateSlug,
   cmdCurrentTimestamp,

@@ -1389,6 +1389,76 @@ describe('commit command', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// groupFilesBySubrepo tests (#311)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('groupFilesBySubrepo (#311)', () => {
+  const { groupFilesBySubrepo } = require('../get-shit-done/bin/lib/commands.cjs');
+
+  test('single-segment subrepos route files correctly and unmatched collected', () => {
+    const result = groupFilesBySubrepo(
+      ['packages/a.js', 'docs/x.md', 'README.md'],
+      ['packages', 'docs']
+    );
+    assert.deepStrictEqual(result.grouped, { packages: ['packages/a.js'], docs: ['docs/x.md'] });
+    assert.deepStrictEqual(result.unmatched, ['README.md']);
+  });
+
+  test('multi-segment subrepo matches deep files, not shallow sibling', () => {
+    const result = groupFilesBySubrepo(
+      ['vendor/pkg/x.js', 'vendor/other.js', 'vendor/pkg/y.js'],
+      ['vendor/pkg']
+    );
+    assert.deepStrictEqual(result.grouped, { 'vendor/pkg': ['vendor/pkg/x.js', 'vendor/pkg/y.js'] });
+    assert.deepStrictEqual(result.unmatched, ['vendor/other.js']);
+  });
+
+  test('first-match-in-array-order wins (not longest-prefix)', () => {
+    // 'app' comes before 'app/sub' in subRepos array; 'app/sub/f.js' matches 'app' first
+    const result = groupFilesBySubrepo(
+      ['app/sub/f.js'],
+      ['app', 'app/sub']
+    );
+    assert.deepStrictEqual(result.grouped, { app: ['app/sub/f.js'] });
+    assert.deepStrictEqual(result.unmatched, []);
+  });
+
+  test('file with no slash does not match a same-name subrepo', () => {
+    const result = groupFilesBySubrepo(['top'], ['top']);
+    assert.deepStrictEqual(result.grouped, {});
+    assert.deepStrictEqual(result.unmatched, ['top']);
+  });
+
+  test('file with slash after prefix routes correctly', () => {
+    const result = groupFilesBySubrepo(['top/a'], ['top']);
+    assert.deepStrictEqual(result.grouped, { top: ['top/a'] });
+    assert.deepStrictEqual(result.unmatched, []);
+  });
+
+  test('empty files list returns empty grouped and unmatched', () => {
+    const result = groupFilesBySubrepo([], ['a']);
+    assert.deepStrictEqual(result.grouped, {});
+    assert.deepStrictEqual(result.unmatched, []);
+  });
+
+  test('empty subRepos list puts all files in unmatched', () => {
+    const result = groupFilesBySubrepo(['a/b'], []);
+    assert.deepStrictEqual(result.grouped, {});
+    assert.deepStrictEqual(result.unmatched, ['a/b']);
+  });
+
+  test('non-string subRepos entry does not throw and string entries still route (#311)', () => {
+    // Old inline code coerced non-string repos via `repo + '/'` and never threw.
+    let result;
+    assert.doesNotThrow(() => {
+      result = groupFilesBySubrepo(['a/b', 'README.md'], [null, 'a']);
+    });
+    assert.deepStrictEqual(result.grouped, { a: ['a/b'] });
+    assert.deepStrictEqual(result.unmatched, ['README.md']);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // cmdWebsearch tests (CMD-05)
 // ─────────────────────────────────────────────────────────────────────────────
 
