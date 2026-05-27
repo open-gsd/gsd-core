@@ -4,6 +4,8 @@ const { execFileSync } = require('node:child_process');
 const { readdirSync, readFileSync, existsSync } = require('node:fs');
 const path = require('node:path');
 
+const { suiteOf } = require('./run-tests.cjs');
+
 const CRITICAL_PATHS = [
   '.github/workflows/',
   'package.json',
@@ -13,9 +15,11 @@ const CRITICAL_PATHS = [
   'scripts/run-affected-tests.cjs',
 ];
 
-const DEFAULT_SMOKE_TESTS = [
-  'tests/release-tarball-smoke.install.test.cjs',
-];
+// Suites that are push-only. PRs must never select or run these.
+const PR_EXCLUDED_SUITES = new Set(['install', 'slow']);
+
+// Suites run on every PR cell when the critical-path fallback fires.
+const PR_FULL_SUITES = ['unit', 'integration', 'security'];
 
 function toPosixPath(input) {
   return input.split(path.sep).join('/');
@@ -87,7 +91,7 @@ function listTestFiles(repoRoot) {
     .sort();
 }
 
-function pickAffectedTests(changedFiles, allTests, reverseIndex, smokeTests) {
+function pickAffectedTests(changedFiles, allTests, reverseIndex) {
   const selected = new Set();
 
   for (const file of changedFiles) {
@@ -108,12 +112,14 @@ function pickAffectedTests(changedFiles, allTests, reverseIndex, smokeTests) {
     }
   }
 
-  if (selected.size === 0) {
-    for (const smokeTest of smokeTests) {
-      if (allTests.includes(smokeTest)) selected.add(smokeTest);
-    }
+  // Drop any file whose suite is push-only. This is the single chokepoint —
+  // it catches direct-change, reverse-index, AND stem-match selections.
+  for (const file of selected) {
+    const suite = suiteOf(path.basename(file));
+    if (PR_EXCLUDED_SUITES.has(suite)) selected.delete(file);
   }
 
+  // When nothing maps, return an empty array. The caller decides the fallback.
   return [...selected].sort();
 }
 
@@ -182,14 +188,6 @@ function runSuite(repoRoot, suite) {
   });
 }
 
-function runAllSuites(repoRoot) {
-  execFileSync(process.execPath, ['scripts/run-tests.cjs'], {
-    cwd: repoRoot,
-    stdio: 'inherit',
-    env: { ...process.env },
-  });
-}
-
 function resolveBaseRef() {
   if (process.env.GSD_AFFECTED_BASE) return process.env.GSD_AFFECTED_BASE;
   if (process.env.GITHUB_BASE_REF) return `origin/${process.env.GITHUB_BASE_REF}`;
@@ -198,7 +196,6 @@ function resolveBaseRef() {
 
 function runAffectedTests(options = {}) {
   const repoRoot = options.repoRoot || path.resolve(__dirname, '..');
-  const smokeTests = options.smokeTests || DEFAULT_SMOKE_TESTS;
   const baseRef = options.baseRef || resolveBaseRef();
   const changed = changedFilesSinceBase(repoRoot, baseRef);
 
@@ -209,24 +206,33 @@ function runAffectedTests(options = {}) {
   }
 
   if (shouldRunFullSuite(changed)) {
-    console.error('affected-tests: critical CI/runtime files changed; running full suite');
-    runAllSuites(repoRoot);
+    console.error('affected-tests: critical CI/runtime files changed; running PR suites (unit, integration, security)');
+    for (const suite of PR_FULL_SUITES) {
+      runSuite(repoRoot, suite);
+    }
     return;
   }
 
   const allTests = listTestFiles(repoRoot);
   const reverseIndex = buildReverseIndex(repoRoot, allTests);
-  const selected = pickAffectedTests(changed, allTests, reverseIndex, smokeTests);
+  const selected = pickAffectedTests(changed, allTests, reverseIndex);
 
   console.error(`affected-tests: base=${baseRef} changed=${changed.length} selected=${selected.length}`);
   console.error(`affected-tests: ${selected.join(' ')}`);
+
+  if (selected.length === 0) {
+    console.error('affected-tests: no affected tests found; running unit suite as smoke');
+    runSuite(repoRoot, 'unit');
+    return;
+  }
 
   runNodeTestFiles(repoRoot, selected);
 }
 
 module.exports = {
   CRITICAL_PATHS,
-  DEFAULT_SMOKE_TESTS,
+  PR_EXCLUDED_SUITES,
+  PR_FULL_SUITES,
   buildReverseIndex,
   parseRelativeSpecifiers,
   pickAffectedTests,

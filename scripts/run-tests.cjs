@@ -275,4 +275,8 @@ function main() {
   if (firstFailureExit !== 0) process.exit(firstFailureExit);
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = { suiteOf };
