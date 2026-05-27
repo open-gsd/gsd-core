@@ -20,19 +20,8 @@ Read all files referenced by the invoking prompt's execution_context before star
 Ensure config exists and resolve the workstream-aware config path (mirrors `settings.md`):
 
 ```bash
-# SDK resolution: prefer local gsd-tools.cjs, fall back to installed gsd-tools (#3668)
-GSD_TOOLS="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/get-shit-done/bin/gsd-tools.cjs"
-if [ -f "$GSD_TOOLS" ]; then
-  GSD_SDK="node $GSD_TOOLS"
-elif command -v gsd-tools >/dev/null 2>&1; then
-  GSD_TOOLS="$(command -v gsd-tools)"
-  GSD_SDK="$GSD_TOOLS"
-else
-  echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and gsd-tools is not on PATH." >&2
-  echo "Run: npx -y @opengsd/get-shit-done-redux@latest --claude --local" >&2
-  exit 1
-fi
-$GSD_SDK query config-ensure-section
+_GSD_SHIM_NAME="gsd-tools.cjs"; GSD_TOOLS="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/get-shit-done/bin/${_GSD_SHIM_NAME}"; if [ -f "$GSD_TOOLS" ]; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif command -v gsd-tools >/dev/null 2>&1; then GSD_TOOLS="$(command -v gsd-tools)"; gsd_run() { "$GSD_TOOLS" "$@"; }; else echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and gsd-tools is not on PATH. Run: npx -y @opengsd/get-shit-done-redux@latest --claude --local" >&2; exit 1; fi
+gsd_run query config-ensure-section
 if [[ -z "${GSD_CONFIG_PATH:-}" ]]; then
   if [[ -f .planning/active-workstream ]]; then
     WS=$(tr -d '\n\r' < .planning/active-workstream)
@@ -476,12 +465,12 @@ AskUserQuestion([
 
 For each tier where the user chose "Enter model ID":
 ```bash
-$GSD_SDK query config-set model_profile_overrides.<runtime>.<tier> "<model-id>"
+gsd_run query config-set model_profile_overrides.<runtime>.<tier> "<model-id>"
 ```
 
 For each tier where the user chose "Clear override", remove the key by setting it to null:
 ```bash
-$GSD_SDK query config-set model_profile_overrides.<runtime>.<tier> null
+gsd_run query config-set model_profile_overrides.<runtime>.<tier> null
 ```
 
 "Keep current" selections are skipped entirely. Never write a key the user did not explicitly
@@ -499,14 +488,14 @@ keys and sibling sub-objects.
 
 ```bash
 # Example — only write keys the user changed. "Keep current" selections are skipped.
-$GSD_SDK query config-set workflow.plan_bounce_passes 5
-$GSD_SDK query config-set workflow.subagent_timeout 900
-$GSD_SDK query config-set git.base_branch main
-$GSD_SDK query config-set context_window 1000000
+gsd_run query config-set workflow.plan_bounce_passes 5
+gsd_run query config-set workflow.subagent_timeout 900
+gsd_run query config-set git.base_branch main
+gsd_run query config-set context_window 1000000
 # Runtime model tier examples:
-$GSD_SDK query config-set runtime gemini
-$GSD_SDK query config-set model_profile_overrides.gemini.opus gemini-3-ultra
-$GSD_SDK query config-set model_profile_overrides.gemini.haiku null
+gsd_run query config-set runtime gemini
+gsd_run query config-set model_profile_overrides.gemini.opus gemini-3-ultra
+gsd_run query config-set model_profile_overrides.gemini.haiku null
 ```
 
 Conceptual shape after merge (unchanged top-level keys like `model_profile`,

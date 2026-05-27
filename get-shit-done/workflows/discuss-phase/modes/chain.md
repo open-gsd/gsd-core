@@ -25,20 +25,21 @@
    interrupted `--auto` chain. This does NOT touch `workflow.auto_advance`
    (the user's persistent settings preference):
    ```bash
+_GSD_SHIM_NAME="gsd-tools.cjs"; GSD_TOOLS="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/get-shit-done/bin/${_GSD_SHIM_NAME}"; if [ -f "$GSD_TOOLS" ]; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif command -v gsd-tools >/dev/null 2>&1; then GSD_TOOLS="$(command -v gsd-tools)"; gsd_run() { "$GSD_TOOLS" "$@"; }; else echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and gsd-tools is not on PATH. Run: npx -y @opengsd/get-shit-done-redux@latest --claude --local" >&2; exit 1; fi
    if [[ ! "$ARGUMENTS" =~ --auto ]] && [[ ! "$ARGUMENTS" =~ --chain ]]; then
-     $GSD_SDK query config-set workflow._auto_chain_active false || true
+     gsd_run query config-set workflow._auto_chain_active false || true
    fi
    ```
 
 3. Read consolidated auto-mode (`active` = chain flag OR user preference):
    ```bash
-   AUTO_MODE=$($GSD_SDK query check auto-mode --pick active 2>/dev/null || echo "false")
+   AUTO_MODE=$(gsd_run query check auto-mode --pick active 2>/dev/null || echo "false")
    ```
 
 4. **If `--auto` or `--chain` flag present AND `AUTO_MODE` is not true:**
    Persist chain flag to config (handles direct usage without new-project):
    ```bash
-   $GSD_SDK query config-set workflow._auto_chain_active true
+   gsd_run query config-set workflow._auto_chain_active true
    ```
 
 5. **If `--auto` flag present OR `--chain` flag present OR `AUTO_MODE` is

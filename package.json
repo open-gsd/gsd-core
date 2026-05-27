@@ -54,6 +54,7 @@
     "fallow": "^2.70.0"
   },
   "scripts": {
+    "sync:launcher": "node scripts/sync-runtime-launcher.cjs",
     "check:env": "bash scripts/check-env.sh",
     "check:alias-drift": "node scripts/check-alias-drift.cjs",
     "check:integrity": "./scripts/check-npm-integrity.sh",

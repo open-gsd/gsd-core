@@ -12,19 +12,8 @@ Read all files referenced by the invoking prompt's execution_context before star
 Load todo context:
 
 ```bash
-# SDK resolution: prefer local gsd-tools.cjs, fall back to installed gsd-tools (#3668)
-GSD_TOOLS="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/get-shit-done/bin/gsd-tools.cjs"
-if [ -f "$GSD_TOOLS" ]; then
-  GSD_SDK="node $GSD_TOOLS"
-elif command -v gsd-tools >/dev/null 2>&1; then
-  GSD_TOOLS="$(command -v gsd-tools)"
-  GSD_SDK="$GSD_TOOLS"
-else
-  echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and gsd-tools is not on PATH." >&2
-  echo "Run: npx -y @opengsd/get-shit-done-redux@latest --claude --local" >&2
-  exit 1
-fi
-INIT=$($GSD_SDK query init.todos)
+_GSD_SHIM_NAME="gsd-tools.cjs"; GSD_TOOLS="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/get-shit-done/bin/${_GSD_SHIM_NAME}"; if [ -f "$GSD_TOOLS" ]; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif command -v gsd-tools >/dev/null 2>&1; then GSD_TOOLS="$(command -v gsd-tools)"; gsd_run() { "$GSD_TOOLS" "$@"; }; else echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and gsd-tools is not on PATH. Run: npx -y @opengsd/get-shit-done-redux@latest --claude --local" >&2; exit 1; fi
+INIT=$(gsd_run query init.todos)
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
 
@@ -98,7 +87,7 @@ Use values from init context: `timestamp` and `date` are already available.
 
 Generate slug for the title:
 ```bash
-slug=$($GSD_SDK query generate-slug "$title" --raw)
+slug=$(gsd_run query generate-slug "$title" --raw)
 ```
 
 Write to `.planning/todos/pending/${date}-${slug}.md`:
@@ -133,7 +122,7 @@ If `.planning/STATE.md` exists:
 Commit the todo and any updated state:
 
 ```bash
-$GSD_SDK query commit "docs: capture todo - [title]" --files .planning/todos/pending/[filename] .planning/STATE.md
+gsd_run query commit "docs: capture todo - [title]" --files .planning/todos/pending/[filename] .planning/STATE.md
 ```
 
 Tool respects `commit_docs` config and gitignore automatically.

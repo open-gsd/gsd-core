@@ -130,19 +130,8 @@ Display: "◆ Scanning sessions..."
 
 Run session scan:
 ```bash
-# SDK resolution: prefer local gsd-tools.cjs, fall back to installed gsd-tools (#3668)
-GSD_TOOLS="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/get-shit-done/bin/gsd-tools.cjs"
-if [ -f "$GSD_TOOLS" ]; then
-  GSD_SDK="node $GSD_TOOLS"
-elif command -v gsd-tools >/dev/null 2>&1; then
-  GSD_TOOLS="$(command -v gsd-tools)"
-  GSD_SDK="$GSD_TOOLS"
-else
-  echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and gsd-tools is not on PATH." >&2
-  echo "Run: npx -y @opengsd/get-shit-done-redux@latest --claude --local" >&2
-  exit 1
-fi
-SCAN_RESULT=$($GSD_SDK query scan-sessions --json 2>/dev/null)
+_GSD_SHIM_NAME="gsd-tools.cjs"; GSD_TOOLS="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/get-shit-done/bin/${_GSD_SHIM_NAME}"; if [ -f "$GSD_TOOLS" ]; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif command -v gsd-tools >/dev/null 2>&1; then GSD_TOOLS="$(command -v gsd-tools)"; gsd_run() { "$GSD_TOOLS" "$@"; }; else echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and gsd-tools is not on PATH. Run: npx -y @opengsd/get-shit-done-redux@latest --claude --local" >&2; exit 1; fi
+SCAN_RESULT=$(gsd_run query scan-sessions --json 2>/dev/null)
 ```
 
 Parse the JSON output to get session count and project count.
@@ -162,7 +151,7 @@ Display: "◆ Sampling messages..."
 
 Run profile sampling:
 ```bash
-SAMPLE_RESULT=$($GSD_SDK query profile-sample --json 2>/dev/null)
+SAMPLE_RESULT=$(gsd_run query profile-sample --json 2>/dev/null)
 ```
 
 Parse the JSON output to get the temp directory path and message count.
@@ -213,7 +202,7 @@ Display: "Using questionnaire to build your profile."
 
 **Get questions:**
 ```bash
-QUESTIONS=$($GSD_SDK query profile-questionnaire --json 2>/dev/null)
+QUESTIONS=$(gsd_run query profile-questionnaire --json 2>/dev/null)
 ```
 
 Parse the questions JSON. It contains 8 questions, one per dimension.
@@ -236,7 +225,7 @@ Write the answers JSON to `$ANSWERS_PATH`.
 
 **Convert answers to analysis:**
 ```bash
-ANALYSIS_RESULT=$($GSD_SDK query profile-questionnaire --answers "$ANSWERS_PATH" --json 2>/dev/null)
+ANALYSIS_RESULT=$(gsd_run query profile-questionnaire --answers "$ANSWERS_PATH" --json 2>/dev/null)
 ```
 
 Parse the analysis JSON from the result.
@@ -283,7 +272,7 @@ Write updated analysis JSON back to `$ANALYSIS_PATH`.
 Display: "◆ Writing profile..."
 
 ```bash
-$GSD_SDK query write-profile --input "$ANALYSIS_PATH" --json
+gsd_run query write-profile --input "$ANALYSIS_PATH" --json
 ```
 
 Display: "✓ Profile written to $HOME/.claude/get-shit-done/USER-PROFILE.md"
@@ -362,7 +351,7 @@ Generate selected artifacts sequentially (file I/O is fast, no benefit from para
 **For /gsd-dev-preferences (if selected):**
 
 ```bash
-$GSD_SDK query generate-dev-preferences --analysis "$ANALYSIS_PATH" --json
+gsd_run query generate-dev-preferences --analysis "$ANALYSIS_PATH" --json
 ```
 
 Display: "✓ Generated /gsd-dev-preferences at $HOME/.claude/skills/gsd-dev-preferences/SKILL.md"
@@ -370,7 +359,7 @@ Display: "✓ Generated /gsd-dev-preferences at $HOME/.claude/skills/gsd-dev-pre
 **For CLAUDE.md profile section (if selected):**
 
 ```bash
-$GSD_SDK query generate-claude-profile --analysis "$ANALYSIS_PATH" --json
+gsd_run query generate-claude-profile --analysis "$ANALYSIS_PATH" --json
 ```
 
 Display: "✓ Added profile section to CLAUDE.md"
@@ -378,7 +367,7 @@ Display: "✓ Added profile section to CLAUDE.md"
 **For Global CLAUDE.md (if selected):**
 
 ```bash
-$GSD_SDK query generate-claude-profile --analysis "$ANALYSIS_PATH" --global --json
+gsd_run query generate-claude-profile --analysis "$ANALYSIS_PATH" --global --json
 ```
 
 Display: "✓ Added profile section to $HOME/.claude/CLAUDE.md"

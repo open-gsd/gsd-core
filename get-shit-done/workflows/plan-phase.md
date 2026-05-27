@@ -31,26 +31,15 @@ Valid GSD subagent types (use exact names — do not fall back to 'general-purpo
 Load all context in one call (paths only to minimize orchestrator context):
 
 ```bash
-# SDK resolution: prefer local gsd-tools.cjs, fall back to installed gsd-tools (#3668)
-GSD_TOOLS="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/get-shit-done/bin/gsd-tools.cjs"
-if [ -f "$GSD_TOOLS" ]; then
-  GSD_SDK="node $GSD_TOOLS"
-elif command -v gsd-tools >/dev/null 2>&1; then
-  GSD_TOOLS="$(command -v gsd-tools)"
-  GSD_SDK="$GSD_TOOLS"
-else
-  echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and gsd-tools is not on PATH." >&2
-  echo "Run: npx -y @opengsd/get-shit-done-redux@latest --claude --local" >&2
-  exit 1
-fi
-INIT=$($GSD_SDK query init.plan-phase "$PHASE")
+_GSD_SHIM_NAME="gsd-tools.cjs"; GSD_TOOLS="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/get-shit-done/bin/${_GSD_SHIM_NAME}"; if [ -f "$GSD_TOOLS" ]; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif command -v gsd-tools >/dev/null 2>&1; then GSD_TOOLS="$(command -v gsd-tools)"; gsd_run() { "$GSD_TOOLS" "$@"; }; else echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and gsd-tools is not on PATH. Run: npx -y @opengsd/get-shit-done-redux@latest --claude --local" >&2; exit 1; fi
+INIT=$(gsd_run query init.plan-phase "$PHASE")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
-AGENT_SKILLS_RESEARCHER=$($GSD_SDK query agent-skills gsd-phase-researcher)
-AGENT_SKILLS_PLANNER=$($GSD_SDK query agent-skills gsd-planner)
-AGENT_SKILLS_CHECKER=$($GSD_SDK query agent-skills gsd-plan-checker)
-CONTEXT_WINDOW=$($GSD_SDK query config-get context_window 2>/dev/null || echo "200000")
-TDD_MODE=$($GSD_SDK query config-get workflow.tdd_mode 2>/dev/null || echo "false")
-MVP_MODE_CFG=$($GSD_SDK query config-get workflow.mvp_mode 2>/dev/null || echo "false")
+AGENT_SKILLS_RESEARCHER=$(gsd_run query agent-skills gsd-phase-researcher)
+AGENT_SKILLS_PLANNER=$(gsd_run query agent-skills gsd-planner)
+AGENT_SKILLS_CHECKER=$(gsd_run query agent-skills gsd-plan-checker)
+CONTEXT_WINDOW=$(gsd_run query config-get context_window 2>/dev/null || echo "200000")
+TDD_MODE=$(gsd_run query config-get workflow.tdd_mode 2>/dev/null || echo "false")
+MVP_MODE_CFG=$(gsd_run query config-get workflow.mvp_mode 2>/dev/null || echo "false")
 ```
 
 When `TDD_MODE` is `true`, the planner agent is instructed to apply `type: tdd` to eligible tasks using heuristics from `references/tdd.md`. The planner's `<required_reading>` is extended to include `@~/.claude/get-shit-done/references/tdd.md` so gate enforcement rules are available during planning.
@@ -148,7 +137,7 @@ The verb returns `true|false`. Full result also exposes `source` (`cli_flag` | `
 ```bash
 WALKING_SKELETON=false
 if [ "$MVP_MODE" = "true" ] && [ "$padded_phase" = "01" ]; then
-  PRIOR_SUMMARIES=$($GSD_SDK query phases.list --pick summaries_total 2>/dev/null || echo "0")
+  PRIOR_SUMMARIES=$(gsd_run query phases.list --pick summaries_total 2>/dev/null || echo "0")
   if [ "$PRIOR_SUMMARIES" = "0" ]; then WALKING_SKELETON=true; fi
 fi
 ```
@@ -177,7 +166,7 @@ Set `phase_dir="${expected_phase_dir}"` after creation.
 
 Set `CHUNKED_MODE` from flag or config:
 ```bash
-CHUNKED_CFG=$($GSD_SDK query config-get workflow.plan_chunked 2>/dev/null || echo "false")
+CHUNKED_CFG=$(gsd_run query config-get workflow.plan_chunked 2>/dev/null || echo "false")
 CHUNKED_MODE=false
 if [[ "$ARGUMENTS" =~ --chunked ]] || [[ "$CHUNKED_CFG" == "true" ]]; then
   CHUNKED_MODE=true
@@ -205,14 +194,14 @@ Exit workflow.
 ## 3. Validate Phase
 
 ```bash
-PHASE_INFO=$($GSD_SDK query roadmap.get-phase "${PHASE}")
+PHASE_INFO=$(gsd_run query roadmap.get-phase "${PHASE}")
 ```
 
 **If `found` is false:** Error with available phases. **If `found` is true:** Extract `phase_number`, `phase_name`, `goal` from JSON.
 
 Now that `PHASE` is finalized, resolve MVP mode:
 ```bash
-MVP_MODE=$($GSD_SDK query phase.mvp-mode "${PHASE}" $MVP_FLAG_ARG --pick active)
+MVP_MODE=$(gsd_run query phase.mvp-mode "${PHASE}" $MVP_FLAG_ARG --pick active)
 ```
 
 ## 3.5. Handle PRD Express Path
@@ -312,7 +301,7 @@ Use full relative paths. Group by topic area.]
 
 5. Commit:
 ```bash
-$GSD_SDK query commit "docs(${padded_phase}): generate context from PRD" --files "${phase_dir}/${padded_phase}-CONTEXT.md"
+gsd_run query commit "docs(${padded_phase}): generate context from PRD" --files "${phase_dir}/${padded_phase}-CONTEXT.md"
 ```
 
 6. Set `context_content` to the generated CONTEXT.md content and continue to step 5 (Handle Research).
@@ -346,7 +335,7 @@ If `context_path` is not null, display: `Using phase context from: ${context_pat
 
 Read discuss mode for context gate label:
 ```bash
-DISCUSS_MODE=$($GSD_SDK query config-get workflow.discuss_mode 2>/dev/null || echo "discuss")
+DISCUSS_MODE=$(gsd_run query config-get workflow.discuss_mode 2>/dev/null || echo "discuss")
 ```
 
 If `TEXT_MODE` is true, present as a plain-text numbered list:
@@ -390,7 +379,7 @@ If "Run discuss-phase first":
 
 ```bash
 AI_SPEC_FILE=$(ls "${PHASE_DIR}"/*-AI-SPEC.md 2>/dev/null | head -1)
-AI_PHASE_CFG=$($GSD_SDK query config-get workflow.ai_integration_phase 2>/dev/null || echo "true")
+AI_PHASE_CFG=$(gsd_run query config-get workflow.ai_integration_phase 2>/dev/null || echo "true")
 ```
 
 **Skip if `AI_PHASE_CFG` is `false`.**
@@ -497,7 +486,7 @@ Display banner:
 ### Spawn gsd-phase-researcher
 
 ```bash
-PHASE_DESC=$($GSD_SDK query roadmap.get-phase "${PHASE}" --pick section)
+PHASE_DESC=$(gsd_run query roadmap.get-phase "${PHASE}" --pick section)
 ```
 
 Research prompt:
@@ -598,9 +587,9 @@ test -f "${PHASE_DIR}/${PADDED_PHASE}-VALIDATION.md" && echo "VALIDATION_CREATED
 > Skip if `workflow.security_enforcement` is explicitly `false`. Absent = enabled.
 
 ```bash
-SECURITY_CFG=$($GSD_SDK query config-get workflow.security_enforcement --raw 2>/dev/null || echo "true")
-SECURITY_ASVS=$($GSD_SDK query config-get workflow.security_asvs_level --raw 2>/dev/null || echo "1")
-SECURITY_BLOCK=$($GSD_SDK query config-get workflow.security_block_on --raw 2>/dev/null || echo "high")
+SECURITY_CFG=$(gsd_run query config-get workflow.security_enforcement --raw 2>/dev/null || echo "true")
+SECURITY_ASVS=$(gsd_run query config-get workflow.security_asvs_level --raw 2>/dev/null || echo "1")
+SECURITY_BLOCK=$(gsd_run query config-get workflow.security_block_on --raw 2>/dev/null || echo "high")
 ```
 
 **If `SECURITY_CFG` is `false`:** Skip to step 5.6.
@@ -624,8 +613,8 @@ Continue to step 5.6. Security config is passed to the planner in step 8.
 > Skip if `workflow.ui_phase` is explicitly `false` AND `workflow.ui_safety_gate` is explicitly `false` in `.planning/config.json`. If keys are absent, treat as enabled.
 
 ```bash
-UI_PHASE_CFG=$($GSD_SDK query config-get workflow.ui_phase 2>/dev/null || echo "true")
-UI_GATE_CFG=$($GSD_SDK query config-get workflow.ui_safety_gate 2>/dev/null || echo "true")
+UI_PHASE_CFG=$(gsd_run query config-get workflow.ui_phase 2>/dev/null || echo "true")
+UI_GATE_CFG=$(gsd_run query config-get workflow.ui_safety_gate 2>/dev/null || echo "true")
 ```
 
 **If both are `false`:** Skip to step 6.
@@ -633,7 +622,7 @@ UI_GATE_CFG=$($GSD_SDK query config-get workflow.ui_safety_gate 2>/dev/null || e
 Check if phase has frontend indicators:
 
 ```bash
-PHASE_SECTION=$($GSD_SDK query roadmap.get-phase "${PHASE}" 2>/dev/null)
+PHASE_SECTION=$(gsd_run query roadmap.get-phase "${PHASE}" 2>/dev/null)
 # Shell-free word-boundary gate (#3718): Node.js helper — no locale env-var dependency.
 # Reads via stdin to avoid OS ARG_MAX limits on large phase text.
 # Path anchored to repo root; falls back to CWD if git is unavailable
@@ -658,7 +647,7 @@ UI_SPEC_FILE=$(ls "${PHASE_DIR}"/*-UI-SPEC.md 2>/dev/null | head -1)
 
 Read ephemeral chain flag (same field as `check.auto-mode` → `auto_chain_active`):
 ```bash
-AUTO_CHAIN=$($GSD_SDK query check auto-mode --pick auto_chain_active 2>/dev/null || echo "false")
+AUTO_CHAIN=$(gsd_run query check auto-mode --pick auto_chain_active 2>/dev/null || echo "false")
 ```
 
 **If `AUTO_CHAIN` is `true` (running inside a `--chain` or `--auto` pipeline):**
@@ -698,7 +687,7 @@ Also available:
 Check if any files in the phase scope match schema patterns:
 
 ```bash
-PHASE_SECTION=$($GSD_SDK query roadmap.get-phase "${PHASE}" --pick section 2>/dev/null)
+PHASE_SECTION=$(gsd_run query roadmap.get-phase "${PHASE}" --pick section 2>/dev/null)
 ```
 
 Scan `PHASE_SECTION`, `CONTEXT.md` (if loaded), and `RESEARCH.md` (if exists) for file paths matching these ORM patterns:
@@ -813,7 +802,7 @@ Proceed to Step 7.8 (or Step 8 if pattern mapper is disabled) only if user selec
 
 Check config:
 ```bash
-PATTERN_MAPPER_CFG=$($GSD_SDK query config-get workflow.pattern_mapper 2>/dev/null || echo "true")
+PATTERN_MAPPER_CFG=$(gsd_run query config-get workflow.pattern_mapper 2>/dev/null || echo "true")
 ```
 
 **If `PATTERN_MAPPER_CFG` is `false`:** Skip to step 8.
@@ -1106,7 +1095,7 @@ For each plan entry extracted from `PLAN-OUTLINE.md`:
 
 5. **Commit per-plan:**
    ```bash
-   $GSD_SDK query commit "docs(${PADDED_PHASE}): plan ${plan_id} (chunked)" --files "${PHASE_DIR}/${plan_id}-PLAN.md"
+   gsd_run query commit "docs(${PADDED_PHASE}): plan ${plan_id} (chunked)" --files "${PHASE_DIR}/${plan_id}-PLAN.md"
    ```
 
 After all N plans are written and committed, treat this as `## PLANNING COMPLETE` and continue
@@ -1398,8 +1387,8 @@ Skipping bounce step.
 
 **Read pass count:**
 ```bash
-BOUNCE_PASSES=$($GSD_SDK query config-get workflow.plan_bounce_passes 2>/dev/null || echo "2")
-BOUNCE_SCRIPT=$($GSD_SDK query config-get workflow.plan_bounce_script 2>/dev/null | jq -r '.' 2>/dev/null || true)
+BOUNCE_PASSES=$(gsd_run query config-get workflow.plan_bounce_passes 2>/dev/null || echo "2")
+BOUNCE_SCRIPT=$(gsd_run query config-get workflow.plan_bounce_script 2>/dev/null | jq -r '.' 2>/dev/null || true)
 ```
 
 Display banner:
@@ -1444,7 +1433,7 @@ After the script returns, check that the bounced file still has valid YAML front
 
 6. **Commit surviving bounced plans:** If at least one plan survived both the frontmatter validation and the checker re-run, commit the changes:
 ```bash
-$GSD_SDK query commit "refactor(${padded_phase}): bounce plans through external refinement" --files "${PHASE_DIR}/*-PLAN.md"
+gsd_run query commit "refactor(${padded_phase}): bounce plans through external refinement" --files "${PHASE_DIR}/*-PLAN.md"
 ```
 
 Display summary:
@@ -1518,9 +1507,9 @@ silently dropped on the way into the plans.
 (nothing to translate) or if its `<decisions>` block is empty.
 
 ```bash
-GATE_CFG=$($GSD_SDK query config-get workflow.context_coverage_gate 2>/dev/null || echo "true")
+GATE_CFG=$(gsd_run query config-get workflow.context_coverage_gate 2>/dev/null || echo "true")
 if [ "$GATE_CFG" != "false" ]; then
-  GATE_RESULT=$($GSD_SDK query check.decision-coverage-plan "${PHASE_DIR}" "${CONTEXT_PATH}")
+  GATE_RESULT=$(gsd_run query check.decision-coverage-plan "${PHASE_DIR}" "${CONTEXT_PATH}")
   # BLOCKING: refuse to mark phase planned when a trackable decision is uncovered.
   # `passed: true` covers both real-pass and skipped cases (gate disabled / no CONTEXT.md /
   # no trackable decisions). Verify-phase counterpart deliberately omits this exit-1 — that
@@ -1576,7 +1565,7 @@ after thousands of dollars of execution.
 After plans pass all gates, record that planning is complete so STATE.md reflects the new phase status:
 
 ```bash
-$GSD_SDK query state.planned-phase --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"
+gsd_run query state.planned-phase --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"
 ```
 
 This updates STATUS to "Ready to execute", sets the correct plan count, and timestamps Last Activity.
@@ -1590,7 +1579,7 @@ After plans are finalized, annotate the ROADMAP.md plan list for this phase with
 This step is derived entirely from existing PLAN frontmatter — no extra LLM pass is required.
 
 ```bash
-$GSD_SDK query roadmap.annotate-dependencies "${PHASE_NUMBER}"
+gsd_run query roadmap.annotate-dependencies "${PHASE_NUMBER}"
 ```
 
 This operation is idempotent: if wave headers or cross-cutting constraints already exist in the ROADMAP phase section, the command returns without modifying the file. Skip this step if `plan_count` is 0.
@@ -1600,7 +1589,7 @@ This operation is idempotent: if wave headers or cross-cutting constraints alrea
 If `commit_docs` is true (from the init JSON parsed in step 1), commit the generated plan artifacts (including any ROADMAP.md annotations from step 13c):
 
 ```bash
-$GSD_SDK query commit "docs(${PADDED_PHASE}): create phase plan" --files "${PHASE_DIR}"/*-PLAN.md .planning/STATE.md .planning/ROADMAP.md
+gsd_run query commit "docs(${PADDED_PHASE}): create phase plan" --files "${PHASE_DIR}"/*-PLAN.md .planning/STATE.md .planning/ROADMAP.md
 ```
 
 This commits all PLAN.md files for the phase plus the updated STATE.md and ROADMAP.md to version-control the planning artifacts. Skip this step if `commit_docs` is false.
@@ -1617,7 +1606,7 @@ one place before execution begins.
 **Skip if:** `workflow.post_planning_gaps` is `false`. Default is `true`.
 
 ```bash
-POST_PLANNING_GAPS=$($GSD_SDK query config-get workflow.post_planning_gaps --default true 2>/dev/null || echo true)
+POST_PLANNING_GAPS=$(gsd_run query config-get workflow.post_planning_gaps --default true 2>/dev/null || echo true)
 if [ "$POST_PLANNING_GAPS" = "true" ]; then
   node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" gap-analysis --phase-dir "${PHASE_DIR}"
 fi
@@ -1665,7 +1654,7 @@ Check for auto-advance trigger using values already loaded in step 1:
 3. **Sync chain flag with intent** — if user invoked manually (no `--auto` and no `--chain`), clear the ephemeral chain flag from any previous interrupted `--auto` chain. This does NOT touch `workflow.auto_advance` (the user's persistent settings preference):
    ```bash
    if [[ ! "$ARGUMENTS" =~ --auto ]] && [[ ! "$ARGUMENTS" =~ --chain ]]; then
-     $GSD_SDK query config-set workflow._auto_chain_active false || true
+     gsd_run query config-set workflow._auto_chain_active false || true
    fi
    ```
 
@@ -1676,7 +1665,7 @@ Set local variables from INIT (parsed once in step 1):
 **If `--auto` or `--chain` flag present AND `AUTO_CHAIN` is not true:** Persist chain flag to config (handles direct invocation without prior discuss-phase):
 ```bash
 if ([[ "$ARGUMENTS" =~ --auto ]] || [[ "$ARGUMENTS" =~ --chain ]]) && [[ "$AUTO_CHAIN" != "true" ]]; then
-  $GSD_SDK query config-set workflow._auto_chain_active true
+  gsd_run query config-set workflow._auto_chain_active true
 fi
 ```
 

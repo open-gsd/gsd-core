@@ -41,7 +41,7 @@ function parseWorkflowContract(filePath) {
     delegatesToCleanupWave: lines.some(l => l.includes('worktree.cleanup-wave')),
     // Does the cleanup-wave invocation use || exit 1 (fail-closed)?
     cleanupWaveFailClosed: lines.some(
-      l => /\$GSD_SDK query worktree\.cleanup-wave.*\|\| exit 1/.test(l),
+      l => /gsd_run query worktree\.cleanup-wave.*\|\| exit 1/.test(l),
     ),
     // Does the workflow still contain the broken ls-files --exclude-standard rescue form?
     hasBrokenLsFilesForm: lines.some(

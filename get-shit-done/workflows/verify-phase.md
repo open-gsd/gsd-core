@@ -29,19 +29,8 @@ Then verify each level against the actual codebase.
 Load phase operation context:
 
 ```bash
-# SDK resolution: prefer local gsd-tools.cjs, fall back to installed gsd-tools (#3668)
-GSD_TOOLS="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/get-shit-done/bin/gsd-tools.cjs"
-if [ -f "$GSD_TOOLS" ]; then
-  GSD_SDK="node $GSD_TOOLS"
-elif command -v gsd-tools >/dev/null 2>&1; then
-  GSD_TOOLS="$(command -v gsd-tools)"
-  GSD_SDK="$GSD_TOOLS"
-else
-  echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and gsd-tools is not on PATH." >&2
-  echo "Run: npx -y @opengsd/get-shit-done-redux@latest --claude --local" >&2
-  exit 1
-fi
-INIT=$($GSD_SDK query init.phase-op "${PHASE_ARG}")
+_GSD_SHIM_NAME="gsd-tools.cjs"; GSD_TOOLS="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/get-shit-done/bin/${_GSD_SHIM_NAME}"; if [ -f "$GSD_TOOLS" ]; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif command -v gsd-tools >/dev/null 2>&1; then GSD_TOOLS="$(command -v gsd-tools)"; gsd_run() { "$GSD_TOOLS" "$@"; }; else echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and gsd-tools is not on PATH. Run: npx -y @opengsd/get-shit-done-redux@latest --claude --local" >&2; exit 1; fi
+INIT=$(gsd_run query init.phase-op "${PHASE_ARG}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
 
@@ -49,14 +38,14 @@ Extract from init JSON: `phase_dir`, `phase_number`, `phase_name`, `has_plans`, 
 
 Then load phase details and list plans/summaries:
 ```bash
-$GSD_SDK query roadmap.get-phase "${phase_number}"
+gsd_run query roadmap.get-phase "${phase_number}"
 grep -E "^| ${phase_number}" .planning/REQUIREMENTS.md 2>/dev/null || true
 ls "$phase_dir"/*-SUMMARY.md "$phase_dir"/*-PLAN.md 2>/dev/null || true
 ```
 
 Load full milestone phases for deferred-item filtering (Step 9b):
 ```bash
-$GSD_SDK query roadmap.analyze
+gsd_run query roadmap.analyze
 ```
 
 Extract **phase goal** from ROADMAP.md (the outcome to verify, not tasks), **requirements** from REQUIREMENTS.md if it exists, and **all milestone phases** from roadmap analyze (for cross-referencing gaps against later phases).
@@ -69,7 +58,7 @@ Use `gsd-tools.cjs query` verify handlers (or legacy gsd-tools) to extract must_
 
 ```bash
 for plan in "$PHASE_DIR"/*-PLAN.md; do
-  MUST_HAVES=$($GSD_SDK query frontmatter.get "$plan" --field must_haves)
+  MUST_HAVES=$(gsd_run query frontmatter.get "$plan" --field must_haves)
   echo "=== $plan ===" && echo "$MUST_HAVES"
 done
 ```
@@ -83,7 +72,7 @@ Aggregate all must_haves across plans for phase-level verification.
 If no must_haves in frontmatter (MUST_HAVES returns error or empty), check for Success Criteria:
 
 ```bash
-PHASE_DATA=$($GSD_SDK query roadmap.get-phase "${phase_number}" --raw)
+PHASE_DATA=$(gsd_run query roadmap.get-phase "${phase_number}" --raw)
 ```
 
 Parse the `success_criteria` array from the JSON output. If non-empty:
@@ -119,7 +108,7 @@ Use `gsd-tools.cjs query verify.artifacts` (or legacy gsd-tools) for artifact ve
 
 ```bash
 for plan in "$PHASE_DIR"/*-PLAN.md; do
-  ARTIFACT_RESULT=$($GSD_SDK query verify.artifacts "$plan")
+  ARTIFACT_RESULT=$(gsd_run query verify.artifacts "$plan")
   echo "=== $plan ===" && echo "$ARTIFACT_RESULT"
 done
 ```
@@ -162,7 +151,7 @@ Use `gsd-tools.cjs query verify.key-links` (or legacy gsd-tools) for key link ve
 
 ```bash
 for plan in "$PHASE_DIR"/*-PLAN.md; do
-  LINKS_RESULT=$($GSD_SDK query verify.key-links "$plan")
+  LINKS_RESULT=$(gsd_run query verify.key-links "$plan")
   echo "=== $plan ===" && echo "$LINKS_RESULT"
 done
 ```
@@ -217,7 +206,7 @@ phase.
 no `<decisions>` block.
 
 ```bash
-GATE_CFG=$($GSD_SDK query config-get workflow.context_coverage_gate 2>/dev/null || echo "true")
+GATE_CFG=$(gsd_run query config-get workflow.context_coverage_gate 2>/dev/null || echo "true")
 if [ "$GATE_CFG" != "false" ]; then
   # Discover the phase CONTEXT.md via glob expansion rather than `ls | head`
   # (review F17 / ShellCheck SC2012). Globs preserve filenames containing
@@ -226,7 +215,7 @@ if [ "$GATE_CFG" != "false" ]; then
   for f in "${PHASE_DIR}"/*-CONTEXT.md; do
     [ -e "$f" ] && CONTEXT_PATH="$f" && break
   done
-  DECISION_RESULT=$($GSD_SDK query check.decision-coverage-verify "${PHASE_DIR}" "${CONTEXT_PATH}")
+  DECISION_RESULT=$(gsd_run query check.decision-coverage-verify "${PHASE_DIR}" "${CONTEXT_PATH}")
 fi
 ```
 
@@ -261,7 +250,7 @@ inspecting static artifacts.
 
 ```bash
 # Resolve test command: project config > Makefile > language sniff
-TEST_CMD=$($GSD_SDK query config-get workflow.test_command --default "" 2>/dev/null || true)
+TEST_CMD=$(gsd_run query config-get workflow.test_command --default "" 2>/dev/null || true)
 if [ -z "$TEST_CMD" ]; then
   if [ -f "Makefile" ] && grep -q "^test:" Makefile; then
     TEST_CMD="make test"

@@ -163,19 +163,8 @@ If found, delete them — phase is complete, handoffs are stale.
 **Delegate ROADMAP.md and STATE.md updates to `gsd-tools.cjs query phase.complete`:**
 
 ```bash
-# SDK resolution: prefer local gsd-tools.cjs, fall back to installed gsd-tools (#3668)
-GSD_TOOLS="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/get-shit-done/bin/gsd-tools.cjs"
-if [ -f "$GSD_TOOLS" ]; then
-  GSD_SDK="node $GSD_TOOLS"
-elif command -v gsd-tools >/dev/null 2>&1; then
-  GSD_TOOLS="$(command -v gsd-tools)"
-  GSD_SDK="$GSD_TOOLS"
-else
-  echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and gsd-tools is not on PATH." >&2
-  echo "Run: npx -y @opengsd/get-shit-done-redux@latest --claude --local" >&2
-  exit 1
-fi
-TRANSITION=$($GSD_SDK query phase.complete "${current_phase}")
+_GSD_SHIM_NAME="gsd-tools.cjs"; GSD_TOOLS="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/get-shit-done/bin/${_GSD_SHIM_NAME}"; if [ -f "$GSD_TOOLS" ]; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif command -v gsd-tools >/dev/null 2>&1; then GSD_TOOLS="$(command -v gsd-tools)"; gsd_run() { "$GSD_TOOLS" "$@"; }; else echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and gsd-tools is not on PATH. Run: npx -y @opengsd/get-shit-done-redux@latest --claude --local" >&2; exit 1; fi
+TRANSITION=$(gsd_run query phase.complete "${current_phase}")
 ```
 
 The CLI handles:
@@ -312,7 +301,7 @@ This step is fully delegated to `graduation.md`. It handles guard checks (featur
 Verify the updates are correct by reading STATE.md. If the progress bar needs updating, use:
 
 ```bash
-PROGRESS=$($GSD_SDK query progress.bar --raw)
+PROGRESS=$(gsd_run query progress.bar --raw)
 ```
 
 Update the progress bar line in STATE.md with the result.
@@ -421,7 +410,7 @@ The `next_phase` and `next_phase_name` fields give you the next phase details.
 
 If you need additional context, use:
 ```bash
-ROADMAP=$($GSD_SDK query roadmap.analyze)
+ROADMAP=$(gsd_run query roadmap.analyze)
 ```
 
 This returns all phases with goals, disk status, and completion info.
@@ -440,7 +429,7 @@ In flat mode, go directly to **Route B**.
 ```bash
 # Only check if we're in workstream mode
 if [ -n "$GSD_WORKSTREAM" ]; then
-  WS_LIST=$($GSD_SDK query workstream.list --raw)
+  WS_LIST=$(gsd_run query workstream.list --raw)
 fi
 ```
 
@@ -560,7 +549,7 @@ to the next milestone — other workstreams are still working.
 **Clear auto-advance chain flag** — workstream boundary is the natural stopping point:
 
 ```bash
-$GSD_SDK query config-set workflow._auto_chain_active false
+gsd_run query config-set workflow._auto_chain_active false
 ```
 
 <if mode="yolo">
@@ -614,7 +603,7 @@ Do NOT auto-invoke any further slash commands.
 **Clear auto-advance chain flag** — milestone boundary is the natural stopping point:
 
 ```bash
-$GSD_SDK query config-set workflow._auto_chain_active false
+gsd_run query config-set workflow._auto_chain_active false
 ```
 
 <if mode="yolo">

@@ -38,7 +38,7 @@ function parseExecutePhaseContract(filePath) {
     delegatesToCleanupWave: lines.some(l => l.includes('worktree.cleanup-wave')),
     // Does the cleanup-wave invocation use || exit 1 (fail-closed)?
     cleanupWaveFailClosed: lines.some(
-      l => /\$GSD_SDK query worktree\.cleanup-wave.*\|\| exit 1/.test(l),
+      l => /gsd_run query worktree\.cleanup-wave.*\|\| exit 1/.test(l),
     ),
     // Does the workflow export/reference WAVE_WORKTREE_MANIFEST for the SDK?
     passesWaveManifest: lines.some(l => l.includes('WAVE_WORKTREE_MANIFEST')),
@@ -54,7 +54,7 @@ describe('execute-phase.md — post-merge deletion audit (#2384)', () => {
     // The workflow delegates to the SDK rather than duplicating the check inline.
     assert.ok(
       contract.delegatesToCleanupWave,
-      'execute-phase.md must delegate to $GSD_SDK query worktree.cleanup-wave (#2384/#3797)',
+      'execute-phase.md must delegate to gsd_run query worktree.cleanup-wave (#2384/#3797)',
     );
   });
 

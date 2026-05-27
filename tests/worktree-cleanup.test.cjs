@@ -500,7 +500,7 @@ describe('worktree cleanup after executor completes (#1496)', () => {
     // deletion internally). The manual shell cleanup loop has been removed.
     assert.ok(
       content.includes('worktree.cleanup-wave'),
-      'quick cleanup must delegate to $GSD_SDK query worktree.cleanup-wave (#3797)',
+      'quick cleanup must delegate to gsd_run query worktree.cleanup-wave (#3797)',
     );
   });
 
@@ -510,7 +510,7 @@ describe('worktree cleanup after executor completes (#1496)', () => {
     // A soft || { warn } fallback would silently swallow blocked cleanups.
     assert.match(
       content,
-      /\$GSD_SDK query worktree\.cleanup-wave.*\|\| exit 1/,
+      /gsd_run query worktree\.cleanup-wave.*\|\| exit 1/,
       'quick.md cleanup-wave must use || exit 1 — SDK safety refusals must surface (#3797)',
     );
   });
@@ -535,8 +535,8 @@ describe('worktree merge: orchestrator file protection (#1756)', () => {
     // worktree.cleanup-wave handles STATE.md/ROADMAP.md backup + restore internally.
     assert.match(
       content,
-      /\$GSD_SDK query worktree\.cleanup-wave --manifest "\$WAVE_WORKTREE_MANIFEST" \|\| exit 1/,
-      'execute-phase.md must delegate to $GSD_SDK query worktree.cleanup-wave with || exit 1 (#3797)',
+      /gsd_run query worktree\.cleanup-wave --manifest "\$WAVE_WORKTREE_MANIFEST" \|\| exit 1/,
+      'execute-phase.md must delegate to gsd_run query worktree.cleanup-wave with || exit 1 (#3797)',
     );
   });
 
@@ -570,8 +570,8 @@ describe('worktree merge: orchestrator file protection (#1756)', () => {
     // backup code — that is handled internally by worktree.cleanup-wave.
     assert.match(
       content,
-      /\$GSD_SDK query worktree\.cleanup-wave --manifest "\$QUICK_WORKTREE_MANIFEST" \|\| exit 1/,
-      'quick.md must delegate to $GSD_SDK query worktree.cleanup-wave with || exit 1 (#3797)',
+      /gsd_run query worktree\.cleanup-wave --manifest "\$QUICK_WORKTREE_MANIFEST" \|\| exit 1/,
+      'quick.md must delegate to gsd_run query worktree.cleanup-wave with || exit 1 (#3797)',
     );
   });
 });
@@ -677,9 +677,9 @@ describe('bug #3384: worktree cleanup workflow contracts', () => {
     assert.match(content, /append its returned `\{agent_id, worktree_path, branch, expected_base\}`/);
     // After #3797 architectural fix: quick.md delegates entirely to the SDK's cleanup-wave
     // command (which handles manifest parsing internally). The shell fallback with manual
-    // QUICK_WORKTREE_MANIFEST node-e code is removed — the SDK call with || exit 1 is the
+    // QUICK_WORKTREE_MANIFEST node-e code is removed — the gsd_run call with || exit 1 is the
     // only cleanup path, enforcing safety-refusal semantics (#3174/#3384).
-    assert.match(content, /\$GSD_SDK query worktree\.cleanup-wave --manifest "\$QUICK_WORKTREE_MANIFEST" \|\| exit 1/);
+    assert.match(content, /gsd_run query worktree\.cleanup-wave --manifest "\$QUICK_WORKTREE_MANIFEST" \|\| exit 1/);
     assert.doesNotMatch(content, /done < <\(node -e 'const fs=require\("fs"\);const p=process\.env\.QUICK_WORKTREE_MANIFEST/);
     assert.doesNotMatch(content, /done < <\(git worktree list --porcelain \| grep "\^worktree " \| grep "\\\.claude\/worktrees\/agent-"/);
   });
@@ -696,8 +696,8 @@ test('#3425: helper cleanup path pins orchestrator CWD to primary worktree and c
   assert.match(content, /cd "\$PRIMARY_WT" \|\| \{ echo "FATAL: cannot cd to primary worktree \$PRIMARY_WT" >&2; exit 1; \}/);
   assert.match(content, /ORCH_BRANCH=\$\(git rev-parse --abbrev-ref HEAD\)/);
   assert.match(content, /FATAL: orchestrator on '\$ORCH_BRANCH' but expected '\$EXPECTED_BRANCH' before worktree cleanup — refusing to merge \(#3174-class drift\)/);
-  // After #3797 architectural fix, callsites use $GSD_SDK — accept either form
-  assert.match(content, /(?:\$GSD_SDK|gsd-sdk) query worktree\.cleanup-wave --manifest "\$WAVE_WORKTREE_MANIFEST"/);
+  // After #3797 architectural fix, callsites use gsd_run
+  assert.match(content, /gsd_run query worktree\.cleanup-wave --manifest "\$WAVE_WORKTREE_MANIFEST"/);
 });
 
 test('#3425: cleanup-tail snippet carries the same primary-worktree pin before removal', () => {

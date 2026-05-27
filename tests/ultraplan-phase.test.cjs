@@ -111,10 +111,10 @@ describe('ultraplan-phase workflow initialization', () => {
   const content = fs.readFileSync(WF_PATH, 'utf-8');
 
   test('loads GSD phase context via gsd-sdk query init.plan-phase', () => {
-    // After #3797 architectural fix, callsites use $GSD_SDK — accept either form
+    // After #3797 architectural fix, callsites use gsd_run
     assert.ok(
-      content.includes('$GSD_SDK query init.plan-phase') || content.includes('gsd-sdk query init.plan-phase'),
-      'workflow must load phase context via gsd-sdk query init.plan-phase',
+      content.includes('gsd_run query init.plan-phase'),
+      'workflow must load phase context via gsd_run query init.plan-phase',
     );
   });
 

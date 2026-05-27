@@ -42,19 +42,8 @@ Read all files referenced by the invoking prompt's execution_context before star
 Ensure config exists and resolve the active config path (flat vs workstream, #2282):
 
 ```bash
-# SDK resolution: prefer local gsd-tools.cjs, fall back to installed gsd-tools (#3668)
-GSD_TOOLS="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/get-shit-done/bin/gsd-tools.cjs"
-if [ -f "$GSD_TOOLS" ]; then
-  GSD_SDK="node $GSD_TOOLS"
-elif command -v gsd-tools >/dev/null 2>&1; then
-  GSD_TOOLS="$(command -v gsd-tools)"
-  GSD_SDK="$GSD_TOOLS"
-else
-  echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and gsd-tools is not on PATH." >&2
-  echo "Run: npx -y @opengsd/get-shit-done-redux@latest --claude --local" >&2
-  exit 1
-fi
-$GSD_SDK query config-ensure-section
+_GSD_SHIM_NAME="gsd-tools.cjs"; GSD_TOOLS="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/get-shit-done/bin/${_GSD_SHIM_NAME}"; if [ -f "$GSD_TOOLS" ]; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif command -v gsd-tools >/dev/null 2>&1; then GSD_TOOLS="$(command -v gsd-tools)"; gsd_run() { "$GSD_TOOLS" "$@"; }; else echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and gsd-tools is not on PATH. Run: npx -y @opengsd/get-shit-done-redux@latest --claude --local" >&2; exit 1; fi
+gsd_run query config-ensure-section
 if [[ -z "${GSD_CONFIG_PATH:-}" ]]; then
   if [[ -f .planning/active-workstream ]]; then
     WS=$(tr -d '\n\r' < .planning/active-workstream)
@@ -77,10 +66,10 @@ integration field, compute one of:
 - `<value>` — non-secret routing/skill string, shown as-is
 
 ```bash
-BRAVE=$($GSD_SDK query config-get brave_search --default null)
-FIRECRAWL=$($GSD_SDK query config-get firecrawl --default null)
-EXA=$($GSD_SDK query config-get exa_search --default null)
-SEARCH_GITIGNORED=$($GSD_SDK query config-get search_gitignored --default false)
+BRAVE=$(gsd_run query config-get brave_search --default null)
+FIRECRAWL=$(gsd_run query config-get firecrawl --default null)
+EXA=$(gsd_run query config-get exa_search --default null)
+SEARCH_GITIGNORED=$(gsd_run query config-get search_gitignored --default false)
 ```
 
 For each secret key (`brave_search`, `firecrawl`, `exa_search`) the displayed
@@ -141,16 +130,16 @@ key value. **The answer must not be echoed back** in subsequent question
 descriptions or confirmation text. Write the value via:
 
 ```bash
-$GSD_SDK query config-set brave_search "<value>"     # masked in output
-$GSD_SDK query config-set firecrawl "<value>"        # masked in output
-$GSD_SDK query config-set exa_search "<value>"       # masked in output
-$GSD_SDK query config-set search_gitignored true|false
+gsd_run query config-set brave_search "<value>"     # masked in output
+gsd_run query config-set firecrawl "<value>"        # masked in output
+gsd_run query config-set exa_search "<value>"       # masked in output
+gsd_run query config-set search_gitignored true|false
 ```
 
 For "Clear", write `null`:
 
 ```bash
-$GSD_SDK query config-set brave_search null
+gsd_run query config-set brave_search null
 ```
 </step>
 
@@ -197,7 +186,7 @@ Leave / Replace / Clear, followed by a text-input prompt for the new command
 string. Write via:
 
 ```bash
-$GSD_SDK query config-set review.models.<cli> "<command string>"
+gsd_run query config-set review.models.<cli> "<command string>"
 ```
 
 After each update, return to the "Review model CLI mapping — what next?" question.
@@ -261,7 +250,7 @@ For a selected slug, prompt for the comma-separated skill list (text input).
 Show the current value if any, offer Leave / Replace / Clear. Write via:
 
 ```bash
-$GSD_SDK query config-set agent_skills.<slug> "<skill-a,skill-b,skill-c>"
+gsd_run query config-set agent_skills.<slug> "<skill-a,skill-b,skill-c>"
 ```
 
 After each update, return to the "Agent skills mapping — what next?" question.
