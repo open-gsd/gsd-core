@@ -13,6 +13,9 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { isSemverNewer } = require('../get-shit-done/bin/lib/semver-compare.cjs');
+// Derive the published package name from package.json so this survives
+// future renames and always matches the actual registry entry (#378).
+const PACKAGE_NAME = require('../package.json').name;
 
 const cacheFile = process.env.GSD_CACHE_FILE;
 const projectVersionFile = process.env.GSD_PROJECT_VERSION_FILE;
@@ -79,7 +82,7 @@ if (configDir) {
 
 let latest = null;
 try {
-  latest = execFileSync('npm', ['view', 'get-shit-done-redux', 'version'], {
+  latest = execFileSync('npm', ['view', PACKAGE_NAME, 'version'], {
     encoding: 'utf8',
     timeout: 10000,
     windowsHide: true,
