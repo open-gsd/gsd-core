@@ -18,15 +18,22 @@
  * @returns {Record<string, string|boolean|null>}
  */
 function parseNamedArgs(args, valueFlags = [], booleanFlags = []) {
+  // Index each token's first position once (firstIndex.get(t) ?? -1 === args.indexOf(t),
+  // firstIndex.has(t) === args.includes(t)) so the flag loops below don't each re-scan
+  // argv — O(argv + flags) instead of O(flags * argv). Semantics are unchanged. (#312)
+  const firstIndex = new Map();
+  for (let i = 0; i < args.length; i++) {
+    if (!firstIndex.has(args[i])) firstIndex.set(args[i], i);
+  }
   const result = {};
   for (const flag of valueFlags) {
-    const idx = args.indexOf(`--${flag}`);
+    const idx = firstIndex.has(`--${flag}`) ? firstIndex.get(`--${flag}`) : -1;
     result[flag] = idx !== -1 && args[idx + 1] !== undefined && !args[idx + 1].startsWith('--')
       ? args[idx + 1]
       : null;
   }
   for (const flag of booleanFlags) {
-    result[flag] = args.includes(`--${flag}`);
+    result[flag] = firstIndex.has(`--${flag}`);
   }
   return result;
 }
