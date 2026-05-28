@@ -48,7 +48,8 @@
     "ws": "8.20.1"
   },
   "devDependencies": {
-    "c8": "^11.0.0"
+    "c8": "^11.0.0",
+    "js-yaml": "^4.1.1"
   },
   "optionalDependencies": {
     "fallow": "^2.70.0"
