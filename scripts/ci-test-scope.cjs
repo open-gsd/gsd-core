@@ -5,20 +5,6 @@ const { execFileSync } = require('child_process');
 const { existsSync, readdirSync, appendFileSync } = require('fs');
 const { join } = require('path');
 
-const DEFAULT_SMOKE_TESTS = [
-  'tests/command-contract.test.cjs',
-  'tests/commands.test.cjs',
-  'tests/core.test.cjs',
-  'tests/package-manifest.test.cjs',
-];
-
-const WINDOWS_SMOKE_TESTS = [
-  'tests/hardcoded-paths.test.cjs',
-  'tests/windows-robustness.test.cjs',
-  'tests/windows-test-parity-guard.test.cjs',
-  'tests/workflow-shell-pinning.test.cjs',
-];
-
 const RULES = [
   {
     name: 'workflow automation',
@@ -257,12 +243,14 @@ function classify(files) {
     }
   }
 
-  if (codeChanged) {
-    addAll(targeted, DEFAULT_SMOKE_TESTS);
-    addAll(windows, WINDOWS_SMOKE_TESTS);
+  const targetedTests = existingTests([...targeted].sort());
+
+  // When code changed but no rule matched any changed file, fall back to the
+  // unit suite so the targeted lane always runs something meaningful (#408).
+  if (codeChanged && targetedTests.length === 0) {
+    targetedTests.push('unit');
   }
 
-  const targetedTests = existingTests([...targeted].sort());
   const windowsTests = existingTests([...new Set([...windows, ...targetedTests.filter(t => /windows|path|shell|workflow|install|hook/i.test(t))])].sort());
 
   return {

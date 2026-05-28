@@ -68,4 +68,38 @@ describe('ci-test-scope.cjs', () => {
     // allow-test-rule: CLI usage banner presence is a user-facing contract.
     assert.match(r.stderr, /Usage:/);
   });
+
+  // bug-408: unconditional DEFAULT_SMOKE_TESTS injection removed; unit fallback added
+  test('bug-408: code change with matched rules produces exactly the rule-selected tests (no smoke list appended)', () => {
+    // commands/ matches the "command definitions" rule only — no smoke list should be added
+    const result = scopeFor(['commands/gsd/plan-phase.md']);
+    assert.strictEqual(result.code_changed, true);
+    const expectedTests = [
+      'tests/command-contract.test.cjs',
+      'tests/command-routing-hub.test.cjs',
+      'tests/commands.test.cjs',
+      'tests/phase-command-router.test.cjs',
+      'tests/roadmap-command-router.test.cjs',
+    ];
+    // Every expected test must be present
+    for (const t of expectedTests) {
+      assert.ok(result.targeted_tests.includes(t), `expected ${t} in targeted_tests`);
+    }
+    // No DEFAULT_SMOKE_TESTS files should be injected beyond what the rule selects.
+    // The former smoke list contained package-manifest.test.cjs and core.test.cjs —
+    // neither is in the "command definitions" rule, so they must not appear.
+    assert.ok(!result.targeted_tests.includes('tests/core.test.cjs'),
+      'tests/core.test.cjs must NOT be unconditionally injected for command changes');
+    assert.ok(!result.targeted_tests.includes('tests/package-manifest.test.cjs'),
+      'tests/package-manifest.test.cjs must NOT be unconditionally injected for command changes');
+  });
+
+  test('bug-408: code change with no rule match falls back to unit suite token', () => {
+    // A plain source file that matches no RULES entry but is under get-shit-done/ (code path)
+    const result = scopeFor(['get-shit-done/src/some-util.js']);
+    assert.strictEqual(result.code_changed, true);
+    // allow-test-rule: the unit-fallback contract is the exact subject of bug #408.
+    assert.deepStrictEqual(result.targeted_tests, ['unit'],
+      'targeted_tests must be [\'unit\'] when code changed but no rule matched');
+  });
 });
