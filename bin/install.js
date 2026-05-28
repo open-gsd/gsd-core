@@ -8745,9 +8745,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
         const srcFile = path.join(hooksSrc, entry);
         if (fs.statSync(srcFile).isFile()) {
           const destFile = path.join(hooksDest, entry);
-          // Template .js files to replace '.claude' with runtime-specific config dir
-          // and stamp the current GSD version into the hook version header
-          if (entry.endsWith('.js')) {
+          if (entry.endsWith('.js') || entry.endsWith('.cjs')) {
             let content = fs.readFileSync(srcFile, 'utf8');
             content = content.replace(/'\.claude'/g, configDirReplacement);
             content = content.replace(/\/\.claude\//g, `/${getDirName(runtime)}/`);
@@ -8760,20 +8758,15 @@ function install(isGlobal, runtime = 'claude', options = {}) {
               content = content.replace(/CLAUDE\.md/g, 'HERMES.md');
               content = content.replace(/\bClaude Code\b/g, 'Hermes Agent');
             }
-            // #376 — rewrite /gsd:<cmd> → /gsd-<cmd> in installed hook .js files
-            // for hyphen-namespace runtimes (claude, qwen, hermes). Mirrors the
-            // same rewrite applied to .md bodies by normalizeAgentBodyForRuntime
-            // and to .js files in copyWithPathReplacement for cursor/windsurf/trae.
+            // #376: rewrite gsd: → gsd- for hyphen-namespace runtimes
             if (shouldNormalizeHyphenNamespaceInAgentBody(runtime)) {
               content = content.replace(/gsd:/gi, 'gsd-');
             }
             content = content.replace(/\{\{GSD_VERSION\}\}/g, pkg.version);
             fs.writeFileSync(destFile, content);
-            // Ensure hook files are executable (fixes #1162 — missing +x permission)
-            try { fs.chmodSync(destFile, 0o755); } catch (e) { /* Windows doesn't support chmod */ }
+            try { fs.chmodSync(destFile, 0o755); } catch (e) { /* Windows */ }
           } else {
-            // .sh hooks carry a gsd-hook-version header so gsd-check-update.js can
-            // detect staleness after updates — stamp the version just like .js hooks.
+            // non-.js: .sh hooks need {{GSD_VERSION}} stamped; others are copied as-is
             if (entry.endsWith('.sh')) {
               let content = fs.readFileSync(srcFile, 'utf8');
               content = content.replace(/\{\{GSD_VERSION\}\}/g, pkg.version);
