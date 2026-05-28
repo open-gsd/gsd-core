@@ -8760,6 +8760,13 @@ function install(isGlobal, runtime = 'claude', options = {}) {
               content = content.replace(/CLAUDE\.md/g, 'HERMES.md');
               content = content.replace(/\bClaude Code\b/g, 'Hermes Agent');
             }
+            // #376 — rewrite /gsd:<cmd> → /gsd-<cmd> in installed hook .js files
+            // for hyphen-namespace runtimes (claude, qwen, hermes). Mirrors the
+            // same rewrite applied to .md bodies by normalizeAgentBodyForRuntime
+            // and to .js files in copyWithPathReplacement for cursor/windsurf/trae.
+            if (shouldNormalizeHyphenNamespaceInAgentBody(runtime)) {
+              content = content.replace(/gsd:/gi, 'gsd-');
+            }
             content = content.replace(/\{\{GSD_VERSION\}\}/g, pkg.version);
             fs.writeFileSync(destFile, content);
             // Ensure hook files are executable (fixes #1162 — missing +x permission)
