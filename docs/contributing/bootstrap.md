@@ -79,7 +79,7 @@ Run the environment validator before any test or audit run:
 npm run check:env
 ```
 
-This runs `scripts/check-env.sh` and reports pass/fail for each check:
+This runs `scripts/check-env.cjs` and reports pass/fail for each check:
 
 | Check | What it verifies |
 |---|---|

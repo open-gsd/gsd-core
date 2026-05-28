@@ -82,7 +82,7 @@ References:
 
 ### Purpose
 
-The `scripts/check-npm-integrity.sh` gate detects three classes of dependency
+The `scripts/check-npm-integrity.cjs` gate detects three classes of dependency
 drift that can silently introduce security or reliability risk:
 
 - **Invalid** — an installed package version does not satisfy the declared semver
@@ -100,7 +100,7 @@ OpenSSF Scorecard "Pinned-Dependencies" check
 ### Invoking locally
 
 ```bash
-./scripts/check-npm-integrity.sh
+node scripts/check-npm-integrity.cjs
 # or via npm script:
 npm run check:integrity
 ```
