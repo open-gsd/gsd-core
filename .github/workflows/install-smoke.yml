@@ -129,6 +129,7 @@ jobs:
 
       - name: Install root deps
         if: steps.skip.outputs.skip != 'true'
+        shell: bash
         run: npm ci
 
       - name: Pack root tarball
@@ -251,6 +252,7 @@ jobs:
           cache: 'npm'
 
       - name: Install root deps
+        shell: bash
         run: npm ci
 
       - name: Ensure npm global bin is on PATH
