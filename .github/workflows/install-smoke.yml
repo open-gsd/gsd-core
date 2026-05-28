@@ -59,7 +59,7 @@ jobs:
       fail-fast: false
       matrix:
         # PRs run the minimal path (ubuntu + LTS). Pushes / release branches
-        # and workflow_call add macOS + Node 24 coverage.
+        # and workflow_call add macOS + Windows + Node 24 coverage.
         include:
           - os: ubuntu-latest
             node-version: 22
@@ -68,6 +68,9 @@ jobs:
             node-version: 24
             full_only: true
           - os: macos-latest
+            node-version: 24
+            full_only: true
+          - os: windows-latest
             node-version: 24
             full_only: true
 
