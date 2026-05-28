@@ -10,56 +10,16 @@ const { createTempDir, cleanup } = require('./helpers.cjs');
 const ROOT = path.resolve(__dirname, '..');
 const HOOK_PATH = path.join(ROOT, '.githooks', 'pre-push');
 
-function writeExec(filePath, content) {
-  fs.writeFileSync(filePath, content, { mode: 0o755 });
-  if (process.platform === 'win32') {
-    // Node's fs.writeFileSync mode=0o755 is a no-op for the execute bit on NTFS
-    // per https://nodejs.org/docs/latest-v22.x/api/fs.html — "on Windows only
-    // the write permission can be changed". Bash's access(X_OK) skips the file.
-    // The canonical MSYS2/Cygwin pattern is to chmod via the POSIX emulation layer:
-    const posixPath = filePath.replace(/\\/g, '/');
-    execFileSync('bash', ['-c', `chmod +x "${posixPath}"`], { stdio: 'pipe' });
-  }
-}
-
 /**
- * Write a mock executable into binDir with cross-platform shims.
- *
- * On Windows, bash (Git Bash / MSYS2) PATH scanning finds extensionless files,
- * but cmd.exe and Win32 process creation use PATHEXT (.CMD, .EXE, etc.).
- * When a bash hook script calls `git` inside a Node `execFileSync('bash', ...)`
- * invocation on Windows, both resolution paths may fire depending on where the
- * shell delegates execution — so we need all three shim files.
- *
- * Pattern: npm/cmd-shim (https://github.com/npm/cmd-shim) — generates
- * <name>, <name>.cmd, <name>.ps1 per bin. Used for test mocking by
- * stevemao/mock-bin (https://github.com/stevemao/mock-bin), AppVeyor CI green.
- *
- * MSYS2_PATH_TYPE=inherit does NOT work here because it is only read in
- * /etc/profile (login shell path). `execFileSync('bash', ...)` launches bash
- * non-interactively without --login, so /etc/profile is never sourced:
- * https://github.com/msys2/MSYS2-packages/blob/master/filesystem/profile
+ * Write a mock bash script to a .sh file in tmpDir and return its absolute path.
+ * The hook invokes it via GIT_OVERRIDE — bash executes the path directly via the
+ * env-var seam, bypassing PATH entirely. No NTFS execute-ACL fight, no MSYS2
+ * PATH-type inheritance dance needed.
  */
-function writeMockBin(binDir, name, bashBody) {
-  // 1. Extensionless bash script — bash PATH scan picks this up.
-  writeExec(path.join(binDir, name), bashBody);
-
-  if (process.platform === 'win32') {
-    // 2. .cmd — cmd.exe / PATHEXT / Win32 spawn resolution.
-    //    Delegates to the extensionless script via bash so mock logic stays DRY.
-    //    cmd-shim pattern: https://github.com/npm/cmd-shim
-    fs.writeFileSync(
-      path.join(binDir, `${name}.cmd`),
-      `@SETLOCAL\r\n@bash "%~dp0${name}" %*\r\n`,
-      { encoding: 'utf-8' },
-    );
-    // 3. .ps1 — PowerShell PATH resolution (completeness, matches cmd-shim surface).
-    fs.writeFileSync(
-      path.join(binDir, `${name}.ps1`),
-      `#!/usr/bin/env pwsh\n& bash "$PSScriptRoot/${name}" $args\n`,
-      { encoding: 'utf-8' },
-    );
-  }
+function writeMock(tmpDir, name, content) {
+  const filePath = path.join(tmpDir, `${name}.sh`);
+  fs.writeFileSync(filePath, content, { mode: 0o755 });
+  return filePath;
 }
 
 describe('.githooks/pre-push enterprise email guard', () => {
@@ -67,10 +27,7 @@ describe('.githooks/pre-push enterprise email guard', () => {
     const tmpDir = createTempDir('gsd-prepush-hook-');
     t.after(() => cleanup(tmpDir));
 
-    const binDir = path.join(tmpDir, 'bin');
-    fs.mkdirSync(binDir, { recursive: true });
-
-    writeMockBin(binDir, 'git', `#!/usr/bin/env bash
+    const mockGit = writeMock(tmpDir, 'git', `#!/usr/bin/env bash
 set -euo pipefail
 if [[ "$1" == "rev-list" ]]; then
   echo "c1"
@@ -94,7 +51,7 @@ exit 1
         cwd: ROOT,
         env: {
           ...process.env,
-          PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
+          GIT_OVERRIDE: mockGit,
           GSD_BLOCKED_AUTHOR_REGEX: '@example-corp\\.com$',
         },
         input: 'refs/heads/pr refs-local-sha refs/heads/pr refs-remote-sha\n',
@@ -107,10 +64,7 @@ exit 1
     const tmpDir = createTempDir('gsd-prepush-hook-');
     t.after(() => cleanup(tmpDir));
 
-    const binDir = path.join(tmpDir, 'bin');
-    fs.mkdirSync(binDir, { recursive: true });
-
-    writeMockBin(binDir, 'git', `#!/usr/bin/env bash
+    const mockGit = writeMock(tmpDir, 'git', `#!/usr/bin/env bash
 set -euo pipefail
 if [[ "$1" == "rev-list" ]]; then
   echo "c1"
@@ -128,7 +82,7 @@ exit 1
       cwd: ROOT,
       env: {
         ...process.env,
-        PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
+        GIT_OVERRIDE: mockGit,
         GSD_BLOCKED_AUTHOR_REGEX: '@example-corp\\.com$',
       },
       input: 'refs/heads/pr refs-local-sha refs/heads/pr refs-remote-sha\n',
