@@ -209,6 +209,9 @@ jobs:
     if: needs.changes.outputs.code_changed == 'true' && needs.changes.outputs.full_matrix == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
     env:
       GSD_PLUGIN_ROOT: .ci-gsd-plugin-root-disabled
     strategy:
@@ -217,10 +220,13 @@ jobs:
         include:
           - os: windows-latest
             node-version: 22
+            shell: pwsh
           - os: macos-latest
             node-version: 22
+            shell: zsh
           - os: macos-latest
             node-version: 24
+            shell: zsh
 
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2 (Windows)

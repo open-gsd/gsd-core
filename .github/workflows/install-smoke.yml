@@ -54,6 +54,9 @@ jobs:
   smoke:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 12
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
 
     strategy:
       fail-fast: false
@@ -64,12 +67,15 @@ jobs:
           - os: ubuntu-latest
             node-version: 22
             full_only: false
+            shell: bash
           - os: ubuntu-latest
             node-version: 24
             full_only: true
+            shell: bash
           - os: macos-latest
             node-version: 24
             full_only: true
+            shell: zsh
 
     steps:
       - name: Skip full-only matrix entry on PR
