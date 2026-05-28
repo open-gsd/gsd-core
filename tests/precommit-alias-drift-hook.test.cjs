@@ -31,7 +31,7 @@ describe('.githooks/pre-commit alias drift guard', () => {
       cwd: ROOT,
       env: {
         ...process.env,
-        PATH: `${binDir}:${process.env.PATH}`,
+        PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
         GSD_TEST_NPM_MARKER: marker,
       },
       stdio: 'pipe',
@@ -56,7 +56,7 @@ describe('.githooks/pre-commit alias drift guard', () => {
       cwd: ROOT,
       env: {
         ...process.env,
-        PATH: `${binDir}:${process.env.PATH}`,
+        PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
         GSD_TEST_NPM_MARKER: marker,
       },
       stdio: 'pipe',
