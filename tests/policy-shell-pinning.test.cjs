@@ -493,6 +493,78 @@ jobs:
 });
 
 // ---------------------------------------------------------------------------
+// Test 8a — Counter-test: Cartesian matrix os × shell — dedup must not collapse rows by runner alone
+// (mechanism: matrix.os: [macos-latest, macos-latest] with matrix.shell: [zsh, bash]
+//  and runs-on: ${{ matrix.os }}, step shell: ${{ matrix.shell }}.
+//  The base-list path in expandRunsOn previously deduped by runner alone, collapsing
+//  both macos-latest rows into one. Post-fix: each entry is pushed unconditionally,
+//  producing 2 realizations from the base-list os array.
+//
+//  NOTE: Cartesian cross-product expansion (expanding the full os × shell grid so
+//  that each realization carries BOTH os and shell in its context) is not yet
+//  implemented in expandRunsOn. The base-list path only records { os: runner } in
+//  context, so ${{ matrix.shell }} on the step cannot be resolved and the linter
+//  emits UNRESOLVABLE_MATRIX. The ideal post-Cartesian-expansion behavior would be
+//  2 WRONG_SHELL_FOR_OS violations (the bash rows). That is a separate follow-up bug.
+//
+//  This test validates the dedupe fix only: 2 violations must be produced (not 1),
+//  proving the base-list path no longer collapses duplicate runner values.
+// ---------------------------------------------------------------------------
+describe('Cartesian matrix os × shell — dedup must not collapse rows by runner alone', () => {
+  const CARTESIAN_MATRIX_YAML = `
+name: Cartesian Matrix
+jobs:
+  build:
+    runs-on: \${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest, macos-latest]
+        shell: [zsh, bash]
+    steps:
+      - name: Run tests
+        shell: \${{ matrix.shell }}
+        run: echo hi
+`;
+
+  test('Cartesian matrix os × shell — dedup must not collapse rows by runner alone', () => {
+    const result = inspectWorkflow(CARTESIAN_MATRIX_YAML, { filePath: '<synthetic-cartesian-matrix>' });
+
+    const violations = result.jobs
+      .flatMap(j => j.steps)
+      .filter(s => s.violation !== null);
+
+    // The dedupe fix ensures both macos-latest entries in matrix.os are expanded
+    // independently, yielding 2 realizations — not 1 (as the old dedup-by-runner
+    // guard would produce). Each realization's ${{ matrix.shell }} is currently
+    // UNRESOLVABLE_MATRIX because the base-list path doesn't yet carry shell context
+    // (Cartesian cross-product is a separate follow-up fix).
+    assert.strictEqual(
+      violations.length,
+      2,
+      `Expected exactly 2 violations (dedup fix: both macos-latest rows preserved) but got ${violations.length}: ` +
+      violations.map(v => `runner=${v.runner} shell=${v.effectiveShell} type=${v.violation}`).join(', ')
+    );
+
+    for (const v of violations) {
+      assert.strictEqual(
+        v.runner,
+        'macos-latest',
+        `Expected violation runner to be macos-latest but got ${v.runner}`
+      );
+      // UNRESOLVABLE_MATRIX because Cartesian cross-product expansion is not yet
+      // implemented; ${{ matrix.shell }} cannot be resolved from base-list context.
+      // When Cartesian expansion is added, these will become WRONG_SHELL_FOR_OS
+      // (for the bash rows) and compliant (for the zsh rows).
+      assert.strictEqual(
+        v.violation,
+        VIOLATION.UNRESOLVABLE_MATRIX,
+        `Expected UNRESOLVABLE_MATRIX (shell key absent from base-list context) but got ${v.violation}`
+      );
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Test 8 — Counter-test: two macos-latest matrix.include rows where
 // row 1 has shell: zsh (compliant) and row 2 has shell: bash (violation).
 // Guards against the dedup bug where runner-label-only deduplication would

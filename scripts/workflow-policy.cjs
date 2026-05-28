@@ -90,12 +90,13 @@ function expandRunsOn(runsOnRaw, matrix) {
 
   // Collect values from matrix.<key> list (e.g. matrix.os: [ubuntu, macos])
   // These base-list entries have no extra context beyond the key itself.
+  // Each entry is pushed unconditionally — deduplicating by runner alone
+  // would collapse distinct Cartesian rows (e.g. duplicate os values paired
+  // with different shell values) and hide policy violations on later rows.
   if (Array.isArray(matrix[key])) {
     for (const val of matrix[key]) {
       const runner = String(val);
-      if (!realizations.find(r => r.runner === runner)) {
-        realizations.push({ runner, resolvable: true, context: { [key]: runner } });
-      }
+      realizations.push({ runner, resolvable: true, context: { [key]: runner } });
     }
   }
 
