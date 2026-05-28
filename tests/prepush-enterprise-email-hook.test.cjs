@@ -46,6 +46,18 @@ exit 1
         cwd: ROOT,
         env: {
           ...process.env,
+          // MSYS2_PATH_TYPE=inherit prevents Git Bash (MSYS2) on Windows from
+          // prepending its own system directories (/mingw64/bin, /usr/bin, /bin)
+          // ahead of the Windows PATH entries. Without this, the real git binary
+          // in MSYS2 system dirs takes priority over the mock git stub in binDir
+          // even though binDir is first in the Windows PATH we pass here. The
+          // real git rejects placeholder SHAs (refs-local-sha, refs-remote-sha)
+          // with a fatal "ambiguous argument" error instead of returning the
+          // fixture commit list from the mock stub.
+          // With inherit, MSYS2 uses only the converted Windows PATH, keeping
+          // binDir first. On macOS/Linux this variable is ignored.
+          // Source: https://www.msys2.org/wiki/MSYS2-introduction/#path
+          MSYS2_PATH_TYPE: 'inherit',
           PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
           GSD_BLOCKED_AUTHOR_REGEX: '@example-corp\\.com$',
         },
@@ -80,6 +92,9 @@ exit 1
       cwd: ROOT,
       env: {
         ...process.env,
+        // See comment above — same MSYS2 system-dir prepend fix applies here.
+        // Source: https://www.msys2.org/wiki/MSYS2-introduction/#path
+        MSYS2_PATH_TYPE: 'inherit',
         PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
         GSD_BLOCKED_AUTHOR_REGEX: '@example-corp\\.com$',
       },

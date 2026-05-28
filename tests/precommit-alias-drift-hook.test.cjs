@@ -31,6 +31,15 @@ describe('.githooks/pre-commit alias drift guard', () => {
       cwd: ROOT,
       env: {
         ...process.env,
+        // MSYS2_PATH_TYPE=inherit prevents Git Bash (MSYS2) on Windows from
+        // prepending its own system directories (/mingw64/bin, /usr/bin, /bin)
+        // ahead of the Windows PATH entries. Without this, the real git/npm
+        // binaries in MSYS2 system dirs take priority over the mock stubs in
+        // binDir even though binDir is first in the Windows PATH we pass here.
+        // With inherit, MSYS2 uses only the converted Windows PATH, keeping
+        // binDir first. On macOS/Linux this variable is ignored.
+        // Source: https://www.msys2.org/wiki/MSYS2-introduction/#path
+        MSYS2_PATH_TYPE: 'inherit',
         PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
         GSD_TEST_NPM_MARKER: marker,
       },
@@ -56,6 +65,9 @@ describe('.githooks/pre-commit alias drift guard', () => {
       cwd: ROOT,
       env: {
         ...process.env,
+        // See comment above — same MSYS2 system-dir prepend fix applies here.
+        // Source: https://www.msys2.org/wiki/MSYS2-introduction/#path
+        MSYS2_PATH_TYPE: 'inherit',
         PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
         GSD_TEST_NPM_MARKER: marker,
       },
