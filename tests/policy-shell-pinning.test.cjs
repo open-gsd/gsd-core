@@ -285,6 +285,154 @@ jobs:
 });
 
 // ---------------------------------------------------------------------------
+// Test 7a — Positive: matrix.include with shell key + defaults.run.shell: ${{ matrix.shell }}
+// (mechanism: each realization carries its own shell value; the linter resolves
+//  the matrix expression against the realization context before checking policy)
+// ---------------------------------------------------------------------------
+describe('matrix.shell: ${{ matrix.shell }} resolves per realization — zero violations', () => {
+  const MATRIX_SHELL_YAML = `
+name: Matrix Shell Positive
+jobs:
+  build:
+    runs-on: \${{ matrix.os }}
+    defaults:
+      run:
+        shell: \${{ matrix.shell }}
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            shell: zsh
+          - os: windows-2025
+            shell: pwsh
+    steps:
+      - name: Run tests
+        run: npm test
+`;
+
+  test('matrix.include with shell:zsh for macOS + shell:pwsh for Windows + defaults.run.shell: ${{ matrix.shell }} yields zero violations', () => {
+    const result = inspectWorkflow(MATRIX_SHELL_YAML, { filePath: '<synthetic-matrix-shell-positive>' });
+
+    const violations = result.jobs
+      .flatMap(j => j.steps)
+      .filter(s => s.violation !== null);
+
+    assert.strictEqual(
+      violations.length,
+      0,
+      'matrix.shell resolved per realization must produce zero violations. Got: ' +
+      violations.map(v => `runner=${v.runner} shell=${v.effectiveShell} type=${v.violation}`).join(', ')
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test 7b — Counter-test: matrix.include row with wrong shell value
+// (mechanism: if a row's shell value doesn't match its OS policy, WRONG_SHELL_FOR_OS fires)
+// ---------------------------------------------------------------------------
+describe('matrix.shell: ${{ matrix.shell }} with wrong value per row — WRONG_SHELL_FOR_OS', () => {
+  const MATRIX_SHELL_WRONG_YAML = `
+name: Matrix Shell Wrong Row
+jobs:
+  build:
+    runs-on: \${{ matrix.os }}
+    defaults:
+      run:
+        shell: \${{ matrix.shell }}
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            shell: bash
+          - os: windows-2025
+            shell: pwsh
+    steps:
+      - name: Run tests
+        run: npm test
+`;
+
+  test('matrix.include row with shell:bash for macOS produces WRONG_SHELL_FOR_OS (bash is wrong for macOS)', () => {
+    const result = inspectWorkflow(MATRIX_SHELL_WRONG_YAML, { filePath: '<synthetic-matrix-shell-wrong>' });
+
+    const violations = result.jobs
+      .flatMap(j => j.steps)
+      .filter(s => s.violation !== null);
+
+    // macOS realization: shell resolves to bash → WRONG_SHELL_FOR_OS
+    // Windows realization: shell resolves to pwsh → compliant
+    assert.strictEqual(
+      violations.length,
+      1,
+      `Expected exactly 1 violation (macos-latest bash→WRONG_SHELL_FOR_OS) but got ${violations.length}: ` +
+      violations.map(v => `runner=${v.runner} shell=${v.effectiveShell} type=${v.violation}`).join(', ')
+    );
+
+    assert.strictEqual(
+      violations[0].runner,
+      'macos-latest',
+      `Expected violation for macos-latest but got ${violations[0].runner}`
+    );
+
+    assert.strictEqual(
+      violations[0].violation,
+      VIOLATION.WRONG_SHELL_FOR_OS,
+      `Expected WRONG_SHELL_FOR_OS but got ${violations[0].violation}`
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test 7c — Counter-test: matrix.include row missing the shell key while
+// defaults.run.shell: ${{ matrix.shell }} references it → UNRESOLVABLE_MATRIX
+// ---------------------------------------------------------------------------
+describe('matrix.shell expression references missing key — UNRESOLVABLE_MATRIX', () => {
+  const MATRIX_SHELL_MISSING_KEY_YAML = `
+name: Matrix Shell Missing Key
+jobs:
+  build:
+    runs-on: \${{ matrix.os }}
+    defaults:
+      run:
+        shell: \${{ matrix.shell }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            node-version: 24
+    steps:
+      - name: Run tests
+        run: npm test
+`;
+
+  test('matrix.include row without shell key while defaults.run.shell: ${{ matrix.shell }} → UNRESOLVABLE_MATRIX', () => {
+    const result = inspectWorkflow(MATRIX_SHELL_MISSING_KEY_YAML, { filePath: '<synthetic-matrix-shell-missing-key>' });
+
+    const violations = result.jobs
+      .flatMap(j => j.steps)
+      .filter(s => s.violation !== null);
+
+    assert.strictEqual(
+      violations.length,
+      1,
+      `Expected exactly 1 UNRESOLVABLE_MATRIX violation but got ${violations.length}: ` +
+      violations.map(v => `runner=${v.runner} type=${v.violation}`).join(', ')
+    );
+
+    assert.strictEqual(
+      violations[0].violation,
+      VIOLATION.UNRESOLVABLE_MATRIX,
+      `Expected UNRESOLVABLE_MATRIX but got ${violations[0].violation}`
+    );
+
+    assert.strictEqual(
+      violations[0].runner,
+      'ubuntu-latest',
+      `Expected runner ubuntu-latest but got ${violations[0].runner}`
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Test 7 — Counter-test: workflow-level defaults.run.shell: zsh satisfies macOS H1
 // (mechanism: resolution order puts workflow defaults above runner default;
 //  zsh at workflow level means macOS steps inherit it without step-level pin)

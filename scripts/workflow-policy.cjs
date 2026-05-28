@@ -42,7 +42,9 @@ function runnerDefault(runner) {
 
 /**
  * Expand a runs-on expression against a job's strategy.matrix.
- * Returns an array of { runner: string, resolvable: boolean } objects.
+ * Returns an array of { runner: string, resolvable: boolean, context: object }
+ * objects where `context` holds ALL key→value pairs for the realization row
+ * (so shell expressions like ${{ matrix.shell }} can be resolved against it).
  * 'resolvable: false' means the expression was an unresolved matrix ref.
  */
 function expandRunsOn(runsOnRaw, matrix) {
@@ -56,33 +58,43 @@ function expandRunsOn(runsOnRaw, matrix) {
 
   if (!match) {
     // Literal runner label
-    return [{ runner: raw, resolvable: true }];
+    return [{ runner: raw, resolvable: true, context: {} }];
   }
 
   const key = match[1];
 
   if (!matrix) {
-    return [{ runner: raw, resolvable: false }];
+    return [{ runner: raw, resolvable: false, context: {} }];
   }
 
   const realizations = [];
 
-  // Collect values from matrix.os (or whatever key) — the explicit list
-  if (Array.isArray(matrix[key])) {
-    for (const val of matrix[key]) {
-      realizations.push({ runner: String(val), resolvable: true });
-    }
-  }
-
-  // matrix.include entries
+  // matrix.include entries carry complete row context — prefer them as they
+  // contain all keys (os, node-version, shell, full_only, etc.).
   if (Array.isArray(matrix.include)) {
     for (const entry of matrix.include) {
       if (entry && entry[key] != null) {
         const runner = String(entry[key]);
-        // Avoid duplicating runners already in the base list
+        // Avoid duplicating runners already added from base list
         if (!realizations.find(r => r.runner === runner)) {
-          realizations.push({ runner, resolvable: true });
+          // Clone all keys from include row as the realization context
+          const context = {};
+          for (const [k, v] of Object.entries(entry)) {
+            context[k] = v != null ? String(v) : '';
+          }
+          realizations.push({ runner, resolvable: true, context });
         }
+      }
+    }
+  }
+
+  // Collect values from matrix.<key> list (e.g. matrix.os: [ubuntu, macos])
+  // These base-list entries have no extra context beyond the key itself.
+  if (Array.isArray(matrix[key])) {
+    for (const val of matrix[key]) {
+      const runner = String(val);
+      if (!realizations.find(r => r.runner === runner)) {
+        realizations.push({ runner, resolvable: true, context: { [key]: runner } });
       }
     }
   }
@@ -100,10 +112,33 @@ function expandRunsOn(runsOnRaw, matrix) {
 
   if (realizations.length === 0) {
     // Could not resolve — no concrete values found
-    return [{ runner: raw, resolvable: false }];
+    return [{ runner: raw, resolvable: false, context: {} }];
   }
 
   return realizations;
+}
+
+// ---------------------------------------------------------------------------
+// Matrix expression resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * If `expr` is a `${{ matrix.<key> }}` expression, look up the value in
+ * `realizationContext` (a plain-object snapshot of one matrix.include row).
+ * Returns:
+ *   { resolved: true, value: string }   — expression resolved to a concrete value
+ *   { resolved: false, key: string }    — matrix key absent in this realization
+ *   null                                — `expr` is not a matrix expression
+ */
+function resolveMatrixExpr(expr, realizationContext) {
+  if (!expr || typeof expr !== 'string') return null;
+  const m = expr.match(/^\s*\$\{\{\s*matrix\.(\w+)\s*\}\}\s*$/);
+  if (!m) return null;
+  const key = m[1];
+  if (!realizationContext || !(key in realizationContext)) {
+    return { resolved: false, key };
+  }
+  return { resolved: true, value: String(realizationContext[key]) };
 }
 
 // ---------------------------------------------------------------------------
@@ -111,27 +146,57 @@ function expandRunsOn(runsOnRaw, matrix) {
 // ---------------------------------------------------------------------------
 
 /**
- * Given a step's shell, job defaults, workflow defaults, and runner,
- * return the effective shell that will actually execute.
+ * Given a step's shell, job defaults, workflow defaults, runner, and the
+ * current matrix realization context, return the effective shell that will
+ * actually execute.
+ *
+ * Matrix expressions (`${{ matrix.shell }}`) in any shell field are resolved
+ * against `realizationContext` (a plain object of key→value for the current
+ * matrix.include row).
+ *
+ * Returns:
+ *   { shell: string, unresolvable: false }  — concrete shell value
+ *   { shell: null,  unresolvable: true, key: string } — matrix expr present but key missing
  */
-function effectiveShell(stepShell, jobDefaultsShell, workflowDefaultsShell, runner) {
-  if (stepShell) return stepShell;
-  if (jobDefaultsShell) return jobDefaultsShell;
-  if (workflowDefaultsShell) return workflowDefaultsShell;
-  return runnerDefault(runner);
+function effectiveShell(stepShell, jobDefaultsShell, workflowDefaultsShell, runner, realizationContext) {
+  for (const raw of [stepShell, jobDefaultsShell, workflowDefaultsShell]) {
+    if (!raw) continue;
+    const mx = resolveMatrixExpr(raw, realizationContext);
+    if (mx !== null) {
+      // It's a matrix expression
+      if (!mx.resolved) {
+        return { shell: null, unresolvable: true, key: mx.key };
+      }
+      return { shell: mx.value, unresolvable: false };
+    }
+    // Literal value
+    return { shell: raw, unresolvable: false };
+  }
+  // Nothing set at any level — use runner default
+  return { shell: runnerDefault(runner), unresolvable: false };
 }
 
 // ---------------------------------------------------------------------------
 // Violation detection
 // ---------------------------------------------------------------------------
-function detectViolation(runner, resolvedShell, stepShell, jobDefaultsShell, workflowDefaultsShell) {
+/**
+ * Determines whether a step/runner combination violates shell policy.
+ *
+ * `rawStepShell`, `rawJobDefaultsShell`, `rawWorkflowDefaultsShell` are the
+ * raw (possibly matrix-expression) values before resolution. They're used
+ * only for the MACOS_MISSING_EXPLICIT_ZSH sub-classification: that violation
+ * fires only when nothing is set at any level (all three are null/empty AND
+ * the runner default is wrong).
+ */
+function detectViolation(runner, resolvedShell, rawStepShell, rawJobDefaultsShell, rawWorkflowDefaultsShell) {
   if (!(runner in POLICY)) {
     return VIOLATION.UNKNOWN_RUNNER;
   }
   const expected = POLICY[runner];
   if (resolvedShell !== expected) {
-    // Specific subtype for macOS missing explicit zsh
-    if (runner.startsWith('macos-') && !stepShell && !jobDefaultsShell && !workflowDefaultsShell) {
+    // Specific subtype for macOS missing explicit zsh:
+    // fires only when no shell is set at any level (inherited runner default).
+    if (runner.startsWith('macos-') && !rawStepShell && !rawJobDefaultsShell && !rawWorkflowDefaultsShell) {
       return VIOLATION.MACOS_MISSING_EXPLICIT_ZSH;
     }
     return VIOLATION.WRONG_SHELL_FOR_OS;
@@ -215,7 +280,7 @@ function inspectWorkflow(yamlText, { filePath = '<unknown>' } = {}) {
       const stepShell = step.shell ?? null;
       const stepName = step.name ?? `step-${stepIndex}`;
 
-      for (const { runner, resolvable } of runnerRealizations) {
+      for (const { runner, resolvable, context: realizationContext } of runnerRealizations) {
         if (!resolvable) {
           // Can't resolve runner — emit UNRESOLVABLE_MATRIX
           const lineNum = findLineNumber(yamlText, stepName !== `step-${stepIndex}` ? stepName : String(step.run).slice(0, 20));
@@ -234,7 +299,27 @@ function inspectWorkflow(yamlText, { filePath = '<unknown>' } = {}) {
           continue;
         }
 
-        const eff = effectiveShell(stepShell, jobDefaultsShell, workflowDefaultsShell, runner);
+        const effResult = effectiveShell(stepShell, jobDefaultsShell, workflowDefaultsShell, runner, realizationContext);
+
+        // If a matrix expression referenced a key not present in this realization row
+        if (effResult.unresolvable) {
+          const lineNum = findLineNumber(yamlText, stepName !== `step-${stepIndex}` ? stepName : String(step.run).slice(0, 20));
+          steps.push({
+            index: stepIndex,
+            name: stepName,
+            stepShell,
+            effectiveShell: null,
+            runner,
+            violation: VIOLATION.UNRESOLVABLE_MATRIX,
+            evidence: {
+              line: lineNum,
+              snippet: `matrix.${effResult.key} not present in realization for runner=${runner}`,
+            },
+          });
+          continue;
+        }
+
+        const eff = effResult.shell;
         const violation = detectViolation(runner, eff, stepShell, jobDefaultsShell, workflowDefaultsShell);
 
         // Find evidence line: prefer step name, then shell:, then run: content
