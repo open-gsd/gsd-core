@@ -194,7 +194,12 @@ function detectViolation(runner, resolvedShell, rawStepShell, rawJobDefaultsShel
     return VIOLATION.UNKNOWN_RUNNER;
   }
   const expected = POLICY[runner];
-  if (resolvedShell !== expected) {
+  // GHA accepts custom shells as a format string containing '{0}' (e.g. 'zsh {0}').
+  // Per https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions
+  // the shell name before the space is the executable; strip the format suffix before
+  // comparing against the policy so 'zsh {0}' satisfies the 'zsh' requirement.
+  const normalizedShell = resolvedShell ? resolvedShell.replace(/\s+\{0\}$/, '') : resolvedShell;
+  if (normalizedShell !== expected) {
     // Specific subtype for macOS missing explicit zsh:
     // fires only when no shell is set at any level (inherited runner default).
     if (runner.startsWith('macos-') && !rawStepShell && !rawJobDefaultsShell && !rawWorkflowDefaultsShell) {
