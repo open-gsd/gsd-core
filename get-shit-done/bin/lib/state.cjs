@@ -16,6 +16,9 @@ const {
   shouldPreserveExistingProgress,
   stateExtractField,
   stateReplaceField,
+  KNOWN_TEMPLATE_DEFAULTS,
+  KNOWN_STATUS_PATTERNS,
+  stateReplaceFieldIfTemplate,
 } = require('./state-document.cjs');
 
 // Cache disk scan results from buildStateFrontmatter per cwd per process (#1967).
@@ -256,12 +259,34 @@ function updateCurrentPositionFields(content, fields) {
   if (!posMatch) return content;
 
   let posBody = posMatch[2];
+  const statusDefaults = KNOWN_TEMPLATE_DEFAULTS['Status'];
+  const lastActivityDefaults = KNOWN_TEMPLATE_DEFAULTS['Last Activity'];
 
   if (fields.status && /^Status:/m.test(posBody)) {
-    posBody = posBody.replace(/^Status:.*$/m, `Status: ${fields.status}`);
+    // Only replace when the existing Current Position Status is a known template default.
+    const existingStatusMatch = posBody.match(/^Status:\s*(.+)$/m);
+    const existingStatus = existingStatusMatch ? existingStatusMatch[1].trim() : null;
+    const isInList = existingStatus && statusDefaults.some(d => d.toLowerCase() === existingStatus.toLowerCase());
+    const matchesPattern = existingStatus && KNOWN_STATUS_PATTERNS.some(p => p.test(existingStatus));
+    const isDefault = !existingStatus || isInList || matchesPattern;
+    if (isDefault) {
+      posBody = posBody.replace(/^Status:.*$/m, `Status: ${fields.status}`);
+    }
   }
   if (fields.lastActivity && /^Last activity:/im.test(posBody)) {
-    posBody = posBody.replace(/^Last activity:.*$/im, `Last activity: ${fields.lastActivity}`);
+    // Only replace when the existing Current Position Last activity is a known template
+    // default (a bare ISO date).  Executor-authored narrative prose is preserved.
+    const existingActivityMatch = posBody.match(/^Last activity:\s*(.+)$/im);
+    const existingActivity = existingActivityMatch ? existingActivityMatch[1].trim() : null;
+    // A bare ISO date (YYYY-MM-DD with nothing after) is handler-generated.
+    // A date with a narrative suffix (e.g. "2026-02-15 -- blocked by infra...")
+    // was authored by the executor and must be preserved.
+    const isDateShape = existingActivity && /^\d{4}-\d{2}-\d{2}$/.test(existingActivity);
+    const inList = existingActivity && lastActivityDefaults.some(d => d.toLowerCase() === existingActivity.toLowerCase());
+    const isDefault = !existingActivity || isDateShape || inList;
+    if (isDefault) {
+      posBody = posBody.replace(/^Last activity:.*$/im, `Last activity: ${fields.lastActivity}`);
+    }
   }
   if (fields.plan && /^Plan:/m.test(posBody)) {
     posBody = posBody.replace(/^Plan:.*$/m, `Plan: ${fields.plan}`);
@@ -302,9 +327,16 @@ function cmdStateAdvancePlan(cwd, raw) {
       return content;
     }
 
+    const statusDefaults = KNOWN_TEMPLATE_DEFAULTS['Status'];
+    const lastActivityDefaults = KNOWN_TEMPLATE_DEFAULTS['Last Activity'];
+
     if (currentPlan >= totalPlans) {
-      content = stateReplaceFieldWithFallback(content, 'Status', null, 'Phase complete — ready for verification');
-      content = stateReplaceFieldWithFallback(content, 'Last Activity', 'Last activity', today);
+      // Phase-complete branch — only replace Status/Last Activity when the existing
+      // value is a known template default (Knuth invariant: preserve executor-authored).
+      content = stateReplaceFieldIfTemplate(content, 'Status', statusDefaults, 'Phase complete — ready for verification');
+      content = stateReplaceFieldIfTemplate(content, 'Last Activity', lastActivityDefaults, today);
+      // stateReplaceFieldWithFallback tries 'Last activity' alias too
+      content = stateReplaceFieldIfTemplate(content, 'Last activity', lastActivityDefaults, today);
       content = updateCurrentPositionFields(content, { status: 'Phase complete — ready for verification', lastActivity: today });
       result = { advanced: false, reason: 'last_plan', current_plan: currentPlan, total_plans: totalPlans, status: 'ready_for_verification' };
     } else {
@@ -318,8 +350,11 @@ function cmdStateAdvancePlan(cwd, raw) {
         planDisplayValue = `${newPlan} of ${totalPlans}`;
         content = stateReplaceField(content, 'Current Plan', String(newPlan)) || content;
       }
-      content = stateReplaceFieldWithFallback(content, 'Status', null, 'Ready to execute');
-      content = stateReplaceFieldWithFallback(content, 'Last Activity', 'Last activity', today);
+      // Normal advance — only replace Status/Last Activity when the existing value is
+      // a known template default (Knuth invariant: preserve executor-authored).
+      content = stateReplaceFieldIfTemplate(content, 'Status', statusDefaults, 'Ready to execute');
+      content = stateReplaceFieldIfTemplate(content, 'Last Activity', lastActivityDefaults, today);
+      content = stateReplaceFieldIfTemplate(content, 'Last activity', lastActivityDefaults, today);
       content = updateCurrentPositionFields(content, { status: 'Ready to execute', lastActivity: today, plan: planDisplayValue });
       result = { advanced: true, previous_plan: currentPlan, current_plan: newPlan, total_plans: totalPlans };
     }
@@ -610,11 +645,32 @@ function cmdStateRecordSession(cwd, options, raw) {
       if (result) { content = result; updated.push('Stopped At'); }
     }
 
-    // Update Resume file
-    const resumeFile = options.resume_file || 'None';
-    result = stateReplaceField(content, 'Resume File', resumeFile);
-    if (!result) result = stateReplaceField(content, 'Resume file', resumeFile);
-    if (result) { content = result; updated.push('Resume File'); }
+    // Update Resume File — only when the caller explicitly passed a value OR the
+    // existing value is a known template default.  An executor-authored path must
+    // not be silently replaced with 'None' just because --resume-file was omitted
+    // (Knuth invariant: handler-owns-transition-between-known-template-defaults).
+    const resumeFileDefaults = KNOWN_TEMPLATE_DEFAULTS['Resume File'];
+    if (options.resume_file !== undefined && options.resume_file !== null) {
+      // Caller explicitly passed a value — always honour it.
+      result = stateReplaceField(content, 'Resume File', options.resume_file);
+      if (!result) result = stateReplaceField(content, 'Resume file', options.resume_file);
+      if (result) { content = result; updated.push('Resume File'); }
+    } else {
+      // No explicit value — only set 'None' when existing value is also a known default
+      // (i.e. not executor-authored).
+      const newRf = stateReplaceFieldIfTemplate(content, 'Resume File', resumeFileDefaults, 'None');
+      if (newRf !== content) {
+        content = newRf;
+        updated.push('Resume File');
+      } else {
+        // Try alternate capitalisation
+        const newRfAlt = stateReplaceFieldIfTemplate(content, 'Resume file', resumeFileDefaults, 'None');
+        if (newRfAlt !== content) {
+          content = newRfAlt;
+          updated.push('Resume File');
+        }
+      }
+    }
 
     return content;
   }, cwd);
@@ -1325,23 +1381,31 @@ function cmdStatePlannedPhase(cwd, phaseNumber, planCount, raw) {
   const today = new Date().toISOString().split('T')[0];
   const updated = [];
 
-  // Update Status
-  let result = stateReplaceField(content, 'Status', 'Ready to execute');
-  if (result) { content = result; updated.push('Status'); }
+  const statusDefaults = KNOWN_TEMPLATE_DEFAULTS['Status'];
+  const lastActivityDefaults = KNOWN_TEMPLATE_DEFAULTS['Last Activity'];
+
+  // Update Status — only when the existing value is a known template default
+  // (Knuth invariant: preserve executor-authored values).
+  const newContent = stateReplaceFieldIfTemplate(content, 'Status', statusDefaults, 'Ready to execute');
+  if (newContent !== content) { content = newContent; updated.push('Status'); }
 
   // Update Total Plans in Phase
   if (planCount !== null && planCount !== undefined) {
-    result = stateReplaceField(content, 'Total Plans in Phase', String(planCount));
+    let result = stateReplaceField(content, 'Total Plans in Phase', String(planCount));
     if (result) { content = result; updated.push('Total Plans in Phase'); }
   }
 
-  // Update Last Activity
-  result = stateReplaceField(content, 'Last Activity', today);
-  if (result) { content = result; updated.push('Last Activity'); }
+  // Update Last Activity — only when the existing value is a known template default
+  {
+    const after = stateReplaceFieldIfTemplate(content, 'Last Activity', lastActivityDefaults, today);
+    if (after !== content) { content = after; updated.push('Last Activity'); }
+  }
 
   // Update Last Activity Description
-  result = stateReplaceField(content, 'Last Activity Description', `Phase ${phaseNumber} planning complete — ${planCount || '?'} plans ready`);
-  if (result) { content = result; updated.push('Last Activity Description'); }
+  {
+    let result = stateReplaceField(content, 'Last Activity Description', `Phase ${phaseNumber} planning complete — ${planCount || '?'} plans ready`);
+    if (result) { content = result; updated.push('Last Activity Description'); }
+  }
 
   // Update Current Position section
   content = updateCurrentPositionFields(content, {

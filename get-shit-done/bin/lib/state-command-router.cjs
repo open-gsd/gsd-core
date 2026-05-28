@@ -158,7 +158,10 @@ function routeStateCommand({ state, args, cwd, raw, error }) {
         null,
         () => {
           const { 'stopped-at': stopped_at, 'resume-file': resume_file } = parseNamedArgs(args, ['stopped-at', 'resume-file']);
-          state.cmdStateRecordSession(cwd, { stopped_at, resume_file: resume_file || 'None' }, raw);
+          // Pass resume_file as-is (undefined when --resume-file was not provided) so
+          // cmdStateRecordSession can distinguish "caller explicitly passed a value" from
+          // "option was not supplied" and apply the template-default-only replacement guard.
+          state.cmdStateRecordSession(cwd, { stopped_at, resume_file }, raw);
         },
       ),
       'begin-phase': cjsFallbackHandler(
