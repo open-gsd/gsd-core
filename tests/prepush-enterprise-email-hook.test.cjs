@@ -10,8 +10,16 @@ const { createTempDir, cleanup } = require('./helpers.cjs');
 const ROOT = path.resolve(__dirname, '..');
 const HOOK_PATH = path.join(ROOT, '.githooks', 'pre-push');
 
-function writeExec(filePath, content) {
+/**
+ * Write a mock bash script to a .sh file in tmpDir and return its absolute path.
+ * The hook invokes it via GIT_OVERRIDE — bash executes the path directly via the
+ * env-var seam, bypassing PATH entirely. No NTFS execute-ACL fight, no MSYS2
+ * PATH-type inheritance dance needed.
+ */
+function writeMock(tmpDir, name, content) {
+  const filePath = path.join(tmpDir, `${name}.sh`);
   fs.writeFileSync(filePath, content, { mode: 0o755 });
+  return filePath;
 }
 
 describe('.githooks/pre-push enterprise email guard', () => {
@@ -19,10 +27,7 @@ describe('.githooks/pre-push enterprise email guard', () => {
     const tmpDir = createTempDir('gsd-prepush-hook-');
     t.after(() => cleanup(tmpDir));
 
-    const binDir = path.join(tmpDir, 'bin');
-    fs.mkdirSync(binDir, { recursive: true });
-
-    writeExec(path.join(binDir, 'git'), `#!/usr/bin/env bash
+    const mockGit = writeMock(tmpDir, 'git', `#!/usr/bin/env bash
 set -euo pipefail
 if [[ "$1" == "rev-list" ]]; then
   echo "c1"
@@ -46,7 +51,7 @@ exit 1
         cwd: ROOT,
         env: {
           ...process.env,
-          PATH: `${binDir}:${process.env.PATH}`,
+          GIT_OVERRIDE: mockGit,
           GSD_BLOCKED_AUTHOR_REGEX: '@example-corp\\.com$',
         },
         input: 'refs/heads/pr refs-local-sha refs/heads/pr refs-remote-sha\n',
@@ -59,10 +64,7 @@ exit 1
     const tmpDir = createTempDir('gsd-prepush-hook-');
     t.after(() => cleanup(tmpDir));
 
-    const binDir = path.join(tmpDir, 'bin');
-    fs.mkdirSync(binDir, { recursive: true });
-
-    writeExec(path.join(binDir, 'git'), `#!/usr/bin/env bash
+    const mockGit = writeMock(tmpDir, 'git', `#!/usr/bin/env bash
 set -euo pipefail
 if [[ "$1" == "rev-list" ]]; then
   echo "c1"
@@ -80,7 +82,7 @@ exit 1
       cwd: ROOT,
       env: {
         ...process.env,
-        PATH: `${binDir}:${process.env.PATH}`,
+        GIT_OVERRIDE: mockGit,
         GSD_BLOCKED_AUTHOR_REGEX: '@example-corp\\.com$',
       },
       input: 'refs/heads/pr refs-local-sha refs/heads/pr refs-remote-sha\n',

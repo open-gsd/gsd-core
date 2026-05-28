@@ -10,8 +10,15 @@ const { createTempDir, cleanup } = require('./helpers.cjs');
 const ROOT = path.resolve(__dirname, '..');
 const HOOK_PATH = path.join(ROOT, '.githooks', 'pre-commit');
 
-function writeExec(filePath, content) {
+/**
+ * Write a mock bash script to a .sh file in tmpDir and return its absolute path.
+ * The hook invokes it via GIT_OVERRIDE / NPM_OVERRIDE — bash executes the path
+ * directly, so no PATH manipulation or NTFS execute-ACL fight is needed.
+ */
+function writeMock(tmpDir, name, content) {
+  const filePath = path.join(tmpDir, `${name}.sh`);
   fs.writeFileSync(filePath, content, { mode: 0o755 });
+  return filePath;
 }
 
 describe('.githooks/pre-commit alias drift guard', () => {
@@ -19,11 +26,8 @@ describe('.githooks/pre-commit alias drift guard', () => {
     const tmpDir = createTempDir('gsd-precommit-hook-');
     t.after(() => cleanup(tmpDir));
 
-    const binDir = path.join(tmpDir, 'bin');
-    fs.mkdirSync(binDir, { recursive: true });
-
-    writeExec(path.join(binDir, 'git'), `#!/usr/bin/env bash\nprintf "%s\\n" "${'sdk/src/query/command-manifest.phase.ts'}"\n`);
-    writeExec(path.join(binDir, 'npm'), `#!/usr/bin/env bash\nprintf "called" > "$GSD_TEST_NPM_MARKER"\n`);
+    const mockGit = writeMock(tmpDir, 'git', `#!/usr/bin/env bash\nprintf "%s\\n" "${'sdk/src/query/command-manifest.phase.ts'}"\n`);
+    const mockNpm = writeMock(tmpDir, 'npm', `#!/usr/bin/env bash\nprintf "called" > "$GSD_TEST_NPM_MARKER"\n`);
 
     const marker = path.join(tmpDir, 'npm-called.txt');
 
@@ -31,7 +35,8 @@ describe('.githooks/pre-commit alias drift guard', () => {
       cwd: ROOT,
       env: {
         ...process.env,
-        PATH: `${binDir}:${process.env.PATH}`,
+        GIT_OVERRIDE: mockGit,
+        NPM_OVERRIDE: mockNpm,
         GSD_TEST_NPM_MARKER: marker,
       },
       stdio: 'pipe',
@@ -44,11 +49,8 @@ describe('.githooks/pre-commit alias drift guard', () => {
     const tmpDir = createTempDir('gsd-precommit-hook-');
     t.after(() => cleanup(tmpDir));
 
-    const binDir = path.join(tmpDir, 'bin');
-    fs.mkdirSync(binDir, { recursive: true });
-
-    writeExec(path.join(binDir, 'git'), `#!/usr/bin/env bash\nprintf "%s\\n" "README.md"\n`);
-    writeExec(path.join(binDir, 'npm'), `#!/usr/bin/env bash\nprintf "called" > "$GSD_TEST_NPM_MARKER"\n`);
+    const mockGit = writeMock(tmpDir, 'git', `#!/usr/bin/env bash\nprintf "%s\\n" "README.md"\n`);
+    const mockNpm = writeMock(tmpDir, 'npm', `#!/usr/bin/env bash\nprintf "called" > "$GSD_TEST_NPM_MARKER"\n`);
 
     const marker = path.join(tmpDir, 'npm-called.txt');
 
@@ -56,7 +58,8 @@ describe('.githooks/pre-commit alias drift guard', () => {
       cwd: ROOT,
       env: {
         ...process.env,
-        PATH: `${binDir}:${process.env.PATH}`,
+        GIT_OVERRIDE: mockGit,
+        NPM_OVERRIDE: mockNpm,
         GSD_TEST_NPM_MARKER: marker,
       },
       stdio: 'pipe',

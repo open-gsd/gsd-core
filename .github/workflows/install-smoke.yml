@@ -53,6 +53,9 @@ jobs:
   # ---------------------------------------------------------------------------
   smoke:
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
     timeout-minutes: 12
 
     strategy:
@@ -72,7 +75,7 @@ jobs:
           - os: macos-latest
             node-version: 24
             full_only: true
-            shell: zsh
+            shell: 'zsh {0}'
 
     steps:
       - name: Skip full-only matrix entry on PR
@@ -80,8 +83,12 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           FULL_ONLY: ${{ matrix.full_only }}
-        shell: ${{ matrix.shell }}
-        run: node scripts/ci-smoke-skip.cjs
+        run: |
+          if [ "$EVENT" = "pull_request" ] && [ "$FULL_ONLY" = "true" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         if: steps.skip.outputs.skip != 'true'
@@ -100,7 +107,6 @@ jobs:
       # instead of a downstream build error that looks unrelated.
       - name: Rebase check — merge PR base branch into PR head
         if: steps.skip.outputs.skip != 'true' && github.event_name == 'pull_request'
-        shell: ${{ matrix.shell }}
         run: node scripts/ci-rebase-check.cjs
 
       - name: Set up Node.js ${{ matrix.node-version }}
@@ -112,13 +118,11 @@ jobs:
 
       - name: Install root deps
         if: steps.skip.outputs.skip != 'true'
-        shell: ${{ matrix.shell }}
         run: npm ci
 
       - name: Pack root tarball
         if: steps.skip.outputs.skip != 'true'
         id: pack
-        shell: ${{ matrix.shell }}
         run: |
           set -euo pipefail
           TARBALL=$(npm pack --silent)
@@ -128,7 +132,6 @@ jobs:
 
       - name: Ensure npm global bin is on PATH (CI runner default may differ)
         if: steps.skip.outputs.skip != 'true'
-        shell: ${{ matrix.shell }}
         run: |
           NPM_BIN="$(npm config get prefix)/bin"
           echo "$NPM_BIN" >> "$GITHUB_PATH"
@@ -139,7 +142,6 @@ jobs:
         env:
           TARBALL: ${{ steps.pack.outputs.tarball }}
           WORKSPACE: ${{ github.workspace }}
-        shell: ${{ matrix.shell }}
         run: |
           set -euo pipefail
           TMPDIR_ROOT=$(mktemp -d)
@@ -157,7 +159,6 @@ jobs:
 
       - name: Assert gsd-tools resolves on PATH
         if: steps.skip.outputs.skip != 'true'
-        shell: ${{ matrix.shell }}
         run: |
           set -euo pipefail
           if ! command -v gsd-tools >/dev/null 2>&1; then
@@ -171,7 +172,6 @@ jobs:
 
       - name: Assert gsd-tools is executable
         if: steps.skip.outputs.skip != 'true'
-        shell: ${{ matrix.shell }}
         run: |
           set -euo pipefail
           gsd-tools --help
@@ -180,7 +180,6 @@ jobs:
       - name: Lifecycle smoke
         if: steps.skip.outputs.skip != 'true'
         id: lifecycle-smoke
-        shell: ${{ matrix.shell }}
         run: |
           set -euo pipefail
           node scripts/release-tarball-smoke.cjs --json | tee /tmp/release-smoke.json
@@ -245,7 +244,7 @@ jobs:
           if ! command -v gsd-tools >/dev/null 2>&1; then
             echo "::error::gsd-tools is not on PATH after unpacked install"
             NPM_BIN="$(npm config get prefix)/bin"
-            ls -la "$NPM_BIN" | grep -i gsd || true
+            for f in "$NPM_BIN"/*gsd* "$NPM_BIN"/*GSD*; do [ -e "$f" ] && ls -la "$f"; done || true
             exit 1
           fi
           echo "✓ gsd-tools resolves at: $(command -v gsd-tools)"

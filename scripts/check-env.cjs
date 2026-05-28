@@ -29,6 +29,10 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 
+// On Windows, npm ships as npm.cmd (a batch wrapper); spawnSync without
+// shell:true requires the exact filename including extension.
+const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+
 // ---------------------------------------------------------------------------
 // Argument parsing
 // ---------------------------------------------------------------------------
@@ -175,7 +179,7 @@ if (!currentNode) {
 const enginesNpm = pkgField('engines.npm');
 let currentNpm = '';
 try {
-  const res = spawnSync('npm', ['--version'], { encoding: 'utf8', timeout: 10_000 });
+  const res = spawnSync(npmCmd, ['--version'], { encoding: 'utf8', timeout: 10_000, shell: process.platform === 'win32' });
   if (res.status === 0 && res.stdout) {
     currentNpm = res.stdout.trim();
   }
@@ -208,9 +212,10 @@ if (fs.existsSync(LOCKFILE)) {
 // ---------------------------------------------------------------------------
 if (fs.existsSync(LOCKFILE)) {
   try {
-    const res = spawnSync('npm', ['ci', '--dry-run'], {
+    const res = spawnSync(npmCmd, ['ci', '--dry-run'], {
       cwd: PROJECT_ROOT,
       encoding: 'utf8',
+      shell: process.platform === 'win32',
     });
     if (res.status === 0) {
       addCheck('lockfile-sync', 'pass', 'package-lock.json is in sync with package.json');

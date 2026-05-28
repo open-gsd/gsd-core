@@ -47,10 +47,12 @@ jobs:
           set -euo pipefail
 
           if [ "$EVENT_NAME" != "pull_request" ]; then
-            echo "code_changed=true" >> "$GITHUB_OUTPUT"
-            echo "full_matrix=true" >> "$GITHUB_OUTPUT"
-            echo "targeted_tests=" >> "$GITHUB_OUTPUT"
-            echo "windows_tests=" >> "$GITHUB_OUTPUT"
+            {
+              echo "code_changed=true"
+              echo "full_matrix=true"
+              echo "targeted_tests="
+              echo "windows_tests="
+            } >> "$GITHUB_OUTPUT"
             {
               echo "## Test scope"
               echo ""
@@ -208,6 +210,9 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code_changed == 'true' && needs.changes.outputs.full_matrix == 'true'
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
     timeout-minutes: 15
     env:
       GSD_PLUGIN_ROOT: .ci-gsd-plugin-root-disabled
@@ -220,10 +225,10 @@ jobs:
             shell: pwsh
           - os: macos-latest
             node-version: 22
-            shell: zsh
+            shell: 'zsh {0}'
           - os: macos-latest
             node-version: 24
-            shell: zsh
+            shell: 'zsh {0}'
 
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2 (Windows)
@@ -241,14 +246,12 @@ jobs:
           token: ${{ github.token }}
 
       - name: Guard — require GitHub-hosted runner
-        shell: ${{ matrix.shell }}
         run: node scripts/ci-guard-runner.cjs
 
       - name: Rebase check — merge PR base branch into PR head
         if: github.event_name == 'pull_request'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        shell: ${{ matrix.shell }}
         run: node scripts/ci-rebase-check.cjs
 
       - name: Set up Node.js ${{ matrix.node-version }}
@@ -258,27 +261,21 @@ jobs:
           cache: 'npm'
 
       - name: Environment check
-        shell: ${{ matrix.shell }}
         run: npm run check:env
 
       - name: Install dependencies
-        shell: ${{ matrix.shell }}
         run: npm ci
 
       - name: Dependency integrity gate
-        shell: ${{ matrix.shell }}
         run: node scripts/check-npm-integrity.cjs
 
       - name: Run unit tests
-        shell: ${{ matrix.shell }}
         run: npm run test:unit
 
       - name: Run integration tests
-        shell: ${{ matrix.shell }}
         run: npm run test:integration
 
       - name: Run security tests
-        shell: ${{ matrix.shell }}
         run: npm run test:security
 
   coverage:

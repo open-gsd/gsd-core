@@ -45,7 +45,16 @@ const { execFileSync, spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const CHILD_TIMEOUT_MS = 120000;
+// 120 s proved too tight on Windows GitHub-hosted runners: cold-cache
+// `npm install -g` with a 1499-file tarball took ~120 s exactly, causing
+// spawnSync to fire SIGTERM and return { status: null, stdout: '', stderr: '' }
+// (Node docs: status is null when subprocess terminated due to a signal).
+// The INSTALL_FAILED branch checks `status !== 0`, which null satisfies, so the
+// test saw empty stdout/stderr and a spurious INSTALL_FAILED. Windows runners
+// are slower than Linux/macOS for filesystem-heavy operations (
+// https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners/about-github-hosted-runners#standard-github-hosted-runners-for-public-repositories
+// ). Raise to 600 s (the same ceiling the before() helper uses for pack+install).
+const CHILD_TIMEOUT_MS = process.platform === 'win32' ? 600_000 : 120_000;
 
 // ---------------------------------------------------------------------------
 // Frozen result-code enum
@@ -305,6 +314,10 @@ function runSmoke({
         ...details,
         stderr: installResult.stderr,
         stdout: installResult.stdout,
+        // Expose signal + error so a timeout (status=null, signal='SIGTERM',
+        // stdout='', stderr='') is immediately diagnosable in CI logs.
+        signal: installResult.signal ?? null,
+        installError: installResult.error ? String(installResult.error) : null,
       },
     };
   }

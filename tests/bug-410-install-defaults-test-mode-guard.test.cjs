@@ -20,8 +20,12 @@ const ROOT = path.join(__dirname, '..');
 
 // Point HOME at a temp dir so the defaults.json write can't reach the real
 // ~/.gsd/ even if the guard is missing.
+// On Windows, os.homedir() reads USERPROFILE (not HOME). Set both so
+// finishInstall's path.join(os.homedir(), '.gsd') resolves into FAKE_HOME
+// on every platform. Node docs: https://nodejs.org/docs/latest-v22.x/api/os.html#oshomedir
 const FAKE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-410-test-'));
 process.env.HOME = FAKE_HOME;
+process.env.USERPROFILE = FAKE_HOME;
 
 // The path that finishInstall would write to for a non-Claude runtime.
 const GSD_DIR = path.join(FAKE_HOME, '.gsd');
