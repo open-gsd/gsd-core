@@ -29,7 +29,6 @@ animation/
 
 # Internal planning documents
 reports/
-CODEBASE-HEALTH-MAP.md
 RAILROAD_ARCHITECTURE.md
 .planning/
 analysis/

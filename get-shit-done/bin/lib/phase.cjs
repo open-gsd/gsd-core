@@ -1221,6 +1221,10 @@ function writePlanningFileSet(writes) {
         platformWriteSync(write.filePath, write.before);
       } catch (rollbackErr) {
         err.rollbackError = rollbackErr;
+        err.message += `\nWARNING: rollback failed while restoring ${write.filePath} ` +
+          `(${rollbackErr.message}). Planning files under .planning/ may be left in an ` +
+          `inconsistent, partially rolled back state. Inspect ROADMAP.md / REQUIREMENTS.md / ` +
+          `STATE.md before re-running phase complete.`;
         break;
       }
     }
