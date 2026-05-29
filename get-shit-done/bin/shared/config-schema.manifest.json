@@ -1,5 +1,5 @@
 {
-  "_comment": "Canonical schema manifest for valid config key paths. validKeys is the union of CJS config-schema.cjs and SDK query/config-schema.ts (they are enforced set-equal by tests/config-schema-sdk-parity.test.cjs). runtimeStateKeys mirrors RUNTIME_STATE_KEYS. dynamicKeyPatterns mirrors DYNAMIC_KEY_PATTERNS from SDK (which includes the canonical 'source' regex strings). The .test function is reconstructed at runtime from new RegExp(source).",
+  "_comment": "Canonical schema manifest for valid config key paths. This manifest is the single CJS source of truth for valid config keys; dynamicKeyPatterns source strings are recompiled to RegExp at runtime by config-schema.cjs. runtimeStateKeys mirrors RUNTIME_STATE_KEYS.",
   "validKeys": [
     "mode",
     "granularity",
@@ -96,7 +96,9 @@
     "claude_md_path",
     "claude_md_assembly.mode",
     "runtime",
-    "resolve_model_ids"
+    "resolve_model_ids",
+    "effort.default",
+    "fast_mode.enabled"
   ],
   "runtimeStateKeys": [
     "workflow._auto_chain_active"
@@ -141,6 +143,26 @@
       "topLevel": "model_overrides",
       "source": "^model_overrides\\.[a-zA-Z0-9_-]+$",
       "description": "model_overrides.<agent-id>"
+    },
+    {
+      "topLevel": "effort",
+      "source": "^effort\\.routing_tier_defaults\\.(light|standard|heavy)$",
+      "description": "effort.routing_tier_defaults.<light|standard|heavy>"
+    },
+    {
+      "topLevel": "effort",
+      "source": "^effort\\.agent_overrides\\.[a-zA-Z0-9_-]+$",
+      "description": "effort.agent_overrides.<agent-id>"
+    },
+    {
+      "topLevel": "fast_mode",
+      "source": "^fast_mode\\.routing_tier_defaults\\.(light|standard|heavy)$",
+      "description": "fast_mode.routing_tier_defaults.<light|standard|heavy>"
+    },
+    {
+      "topLevel": "fast_mode",
+      "source": "^fast_mode\\.agent_overrides\\.[a-zA-Z0-9_-]+$",
+      "description": "fast_mode.agent_overrides.<agent-id>"
     },
     {
       "topLevel": "review",

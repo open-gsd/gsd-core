@@ -71,5 +71,23 @@
   "graphify": {
     "auto_update": false
   },
-  "agent_skills": {}
+  "agent_skills": {},
+  "effort": {
+    "default": "high",
+    "routing_tier_defaults": {
+      "light": "low",
+      "standard": "high",
+      "heavy": "xhigh"
+    },
+    "agent_overrides": {}
+  },
+  "fast_mode": {
+    "enabled": false,
+    "routing_tier_defaults": {
+      "light": true,
+      "standard": false,
+      "heavy": false
+    },
+    "agent_overrides": {}
+  }
 }

@@ -538,6 +538,28 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       break;
     }
 
+    case 'resolve-execution': {
+      // Parse flags: --effort <level>, --fast-mode <true|false>, --attempt <n>
+      const execArgs = args.slice(1);
+      const agentTypeArg = execArgs.find(a => !a.startsWith('-'));
+      const effortIdx = execArgs.indexOf('--effort');
+      const effortOverride = effortIdx !== -1 ? execArgs[effortIdx + 1] : undefined;
+      const fastModeIdx = execArgs.indexOf('--fast-mode');
+      const fastModeStr = fastModeIdx !== -1 ? execArgs[fastModeIdx + 1] : undefined;
+      const fastModeOverride = fastModeStr === 'true' ? true
+        : fastModeStr === 'false' ? false
+        : undefined;
+      const attemptIdx = execArgs.indexOf('--attempt');
+      const attemptStr = attemptIdx !== -1 ? execArgs[attemptIdx + 1] : undefined;
+      const attempt = attemptStr !== undefined ? parseInt(attemptStr, 10) : undefined;
+      commands.cmdResolveExecution(cwd, agentTypeArg, raw, {
+        effortOverride,
+        fastModeOverride,
+        attempt,
+      });
+      break;
+    }
+
     case 'find-phase': {
       // Phase 6 (#3575): dispatch via SDK executeForCjs when available.
       // SDK handler: findPhase in sdk/src/query/phase.ts.

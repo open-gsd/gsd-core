@@ -45,8 +45,9 @@ describe('#443 effort cascade', () => {
   beforeEach(() => { tmpDir = createTempProject(); });
   afterEach(() => { cleanup(tmpDir); });
 
-  test('no config -> defaults to "high"', () => {
-    assert.strictEqual(resolveEffortInternal(tmpDir, 'gsd-planner'), 'high');
+  test('no config -> gsd-planner (heavy) defaults to "xhigh" via tier default', () => {
+    // gsd-planner is heavy tier; manifest default for heavy is xhigh
+    assert.strictEqual(resolveEffortInternal(tmpDir, 'gsd-planner'), 'xhigh');
   });
 
   test('routing_tier_defaults: light (gsd-codebase-mapper) -> "low"', () => {
@@ -116,10 +117,11 @@ describe('#443 effort cascade', () => {
     assert.strictEqual(resolveEffortInternal(tmpDir, 'gsd-planner'), 'low');
   });
 
-  test('invalid effort.default falls through to hardcoded "high"', () => {
+  test('invalid effort.default falls through to hardcoded "high" (no routing_tier_defaults set)', () => {
     writeConfig(tmpDir, {
       effort: { default: 'turbo' },
     });
+    // effortCfg set but no routing_tier_defaults; turbo is invalid; fallback = hardcoded 'high'
     assert.strictEqual(resolveEffortInternal(tmpDir, 'gsd-planner'), 'high');
   });
 
@@ -131,12 +133,12 @@ describe('#443 effort cascade', () => {
     assert.strictEqual(resolveEffortInternal(tmpDir, 'unknown-agent-xyz'), 'medium');
   });
 
-  test('effort.default numeric value (123) ignored, hardcoded high fallback', () => {
+  test('effort.default numeric value (123) ignored, hardcoded "high" fallback', () => {
     writeConfig(tmpDir, {
       effort: { default: 123 },
     });
-    assert.strictEqual(resolveEffortInternal(tmpDir, 'gsd-planner'), 'xhigh');
-    // heavy tier default still applies (numeric default skipped, tier default works)
+    // effortCfg set, no routing_tier_defaults -> no tier default; numeric ignored -> 'high'
+    assert.strictEqual(resolveEffortInternal(tmpDir, 'gsd-planner'), 'high');
   });
 
   test('effort block missing entirely -> uses tier default', () => {
@@ -146,10 +148,10 @@ describe('#443 effort cascade', () => {
     assert.strictEqual(resolveEffortInternal(tmpDir, 'gsd-planner'), 'xhigh');
   });
 
-  test('effort block is non-object (string) -> falls through to hardcoded high', () => {
+  test('effort block is non-object (string) -> effortCfg=null -> uses manifest tier default xhigh', () => {
     writeConfig(tmpDir, { effort: 'bad' });
-    // falls through to hardcoded 'high'
-    assert.strictEqual(resolveEffortInternal(tmpDir, 'gsd-planner'), 'high');
+    // Non-object effort => effortCfg=null; gsd-planner heavy tier manifest default = xhigh
+    assert.strictEqual(resolveEffortInternal(tmpDir, 'gsd-planner'), 'xhigh');
   });
 
   test('effort.routing_tier_defaults empty object -> effort.default', () => {

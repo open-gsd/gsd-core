@@ -10,6 +10,9 @@ const {
   nextTier,
   formatAgentToModelMapAsTable,
   getAgentToModelMapForProfile,
+  EFFORT_RENDERING,
+  renderEffortForRuntime,
+  RUNTIMES_WITH_FAST_MODE,
 } = require('./model-catalog.cjs');
 
 module.exports = {
@@ -22,4 +25,7 @@ module.exports = {
   nextTier,
   formatAgentToModelMapAsTable,
   getAgentToModelMapForProfile,
+  EFFORT_RENDERING,
+  renderEffortForRuntime,
+  RUNTIMES_WITH_FAST_MODE,
 };

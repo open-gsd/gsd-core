@@ -7,7 +7,7 @@ const os = require('os');
 const path = require('path');
 const { execGit, platformWriteSync, platformReadSync, platformEnsureDir } = require('./shell-command-projection.cjs');
 const { MODEL_PROFILES, AGENT_TO_PHASE_TYPE, VALID_PHASE_TYPES, AGENT_DEFAULT_TIERS, VALID_AGENT_TIERS, nextTier } = require('./model-profiles.cjs');
-const { MODEL_ALIAS_MAP, RUNTIME_PROFILE_MAP, KNOWN_RUNTIMES, RUNTIMES_WITH_REASONING_EFFORT } = require('./model-catalog.cjs');
+const { MODEL_ALIAS_MAP, RUNTIME_PROFILE_MAP, KNOWN_RUNTIMES, RUNTIMES_WITH_REASONING_EFFORT, renderEffortForRuntime, RUNTIMES_WITH_FAST_MODE } = require('./model-catalog.cjs');
 const {
   resolveWorktreeContext,
   parseWorktreePorcelain: parseWorktreePorcelainPolicy,
@@ -410,7 +410,7 @@ function loadConfig(cwd, options = {}) {
       // Dynamic-pattern top-level containers (e.g. review, model_profile_overrides)
       ...DYNAMIC_KEY_PATTERNS.map(p => p.topLevel),
       // Internal keys loadConfig reads but config-set doesn't expose
-      'model_overrides', 'context_window', 'resolve_model_ids', 'claude_md_path',
+      'model_overrides', 'context_window', 'resolve_model_ids', 'claude_md_path', 'effort', 'fast_mode',
       // Deprecated keys (still accepted for migration, not in config-set)
       // 'branching_strategy' is kept here as a safety net: it is migrated to
       // git.branching_strategy above (#3523), but on the first read of a root
@@ -514,6 +514,10 @@ function loadConfig(cwd, options = {}) {
       // unknown runtime/tier names at load time, not silently (review finding #10).
       runtime: parsed.runtime || null,
       model_profile_overrides: parsed.model_profile_overrides || null,
+      // #443 — effort/fast_mode: pass through from config.json; resolvers handle
+      // defaults + tier lookups internally.
+      effort: parsed.effort || null,
+      fast_mode: parsed.fast_mode || null,
       agent_skills: parsed.agent_skills || {},
       manager: parsed.manager || {},
       response_language: get('response_language') || null,
@@ -558,6 +562,8 @@ function loadConfig(cwd, options = {}) {
         model_overrides: globalDefaults.model_overrides || null,
         models: globalDefaults.models || null,
         dynamic_routing: globalDefaults.dynamic_routing || null,
+        effort: globalDefaults.effort || null,
+        fast_mode: globalDefaults.fast_mode || null,
         agent_skills: globalDefaults.agent_skills || {},
         response_language: globalDefaults.response_language || null,
       };
@@ -1537,6 +1543,211 @@ function resolveReasoningEffortInternal(cwd, agentType) {
   return entry?.reasoning_effort || null;
 }
 
+// ─── #443 — Unified effort + fast_mode resolvers ─────────────────────────────
+//
+// Universal effort ladder (ordered):
+const VALID_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+const EFFORT_SET = new Set(VALID_EFFORTS);
+
+/**
+ * Walk one step up the effort ladder from `e`. Returns the next level, or
+ * the same level if already at the top.
+ */
+function nextEffort(e) {
+  const i = VALID_EFFORTS.indexOf(e);
+  if (i < 0) return null;
+  return VALID_EFFORTS[Math.min(i + 1, VALID_EFFORTS.length - 1)];
+}
+
+/**
+ * #443 — Resolve a universal effort string for (cwd, agentType).
+ *
+ * Precedence (first valid wins; invalid/wrong-type values are IGNORED and fall
+ * through — mirrors the VALID_TIERS gate pattern in resolveModelInternal):
+ *   1. opts.override (if in EFFORT_SET)
+ *   2. config.effort.agent_overrides[agentType] (if valid)
+ *   3. config.effort.routing_tier_defaults[ AGENT_DEFAULT_TIERS[agentType] ] (agent known + valid)
+ *   4. config.effort.default (if valid)
+ *   5. 'high' (Anthropic Opus 4.8 universal default)
+ *
+ * Handles: config.effort missing; effort.* non-object/malformed; unknown
+ * agentType skips step 3; numeric/boolean garbage ignored.
+ *
+ * @param {string} cwd - Project directory.
+ * @param {string} agentType - Agent name.
+ * @param {{ override?: string }} [opts]
+ * @returns {string} A valid effort string.
+ */
+function resolveEffortInternal(cwd, agentType, opts) {
+  // Step 1: invocation override
+  if (opts && typeof opts.override === 'string' && EFFORT_SET.has(opts.override)) {
+    return opts.override;
+  }
+
+  const config = loadConfig(cwd);
+  const effortCfg = (config.effort && typeof config.effort === 'object' && !Array.isArray(config.effort))
+    ? config.effort
+    : null;
+
+  // Step 2: agent_overrides
+  if (effortCfg) {
+    const ao = effortCfg.agent_overrides;
+    if (ao && typeof ao === 'object' && !Array.isArray(ao)) {
+      const v = ao[agentType];
+      if (typeof v === 'string' && EFFORT_SET.has(v)) return v;
+    }
+  }
+
+  // Step 3: routing_tier_defaults by agent's default tier.
+  // Manifest tier defaults are only used when there is NO effort config block at all
+  // (effortCfg === null). When the user explicitly sets an effort block, we respect
+  // their explicit routing_tier_defaults (if set) and fall through to effort.default
+  // if they didn't set them. This prevents the manifest tier defaults from silently
+  // overriding a user's `effort: { default: "medium" }`.
+  const agentTier = AGENT_DEFAULT_TIERS[agentType];
+  if (agentTier) {
+    if (effortCfg && effortCfg.routing_tier_defaults &&
+        typeof effortCfg.routing_tier_defaults === 'object' &&
+        !Array.isArray(effortCfg.routing_tier_defaults)) {
+      // User provided routing_tier_defaults — honor them
+      const v = effortCfg.routing_tier_defaults[agentTier];
+      if (typeof v === 'string' && EFFORT_SET.has(v)) return v;
+    } else if (!effortCfg) {
+      // No effort config at all — use manifest tier defaults
+      const manifestDefaults = CANONICAL_CONFIG_DEFAULTS.effort?.routing_tier_defaults;
+      if (manifestDefaults && typeof manifestDefaults === 'object') {
+        const v = manifestDefaults[agentTier];
+        if (typeof v === 'string' && EFFORT_SET.has(v)) return v;
+      }
+    }
+    // else: effortCfg exists but no routing_tier_defaults — fall through to effort.default
+  }
+
+  // Step 4: effort.default
+  if (effortCfg) {
+    const d = effortCfg.default;
+    if (typeof d === 'string' && EFFORT_SET.has(d)) return d;
+  }
+
+  // Step 5: hardcoded default
+  return 'high';
+}
+
+/**
+ * #443 — Resolve fast_mode boolean for (cwd, agentType).
+ *
+ * Accepts ONLY real booleans at each level. Strings like "true" are NOT accepted
+ * and fall through.
+ *
+ * Precedence:
+ *   1. opts.override (typeof boolean)
+ *   2. config.fast_mode.agent_overrides[agentType] (boolean)
+ *   3. config.fast_mode.routing_tier_defaults[ AGENT_DEFAULT_TIERS[agentType] ] (agent known + boolean)
+ *   4. config.fast_mode.enabled (boolean)
+ *   5. false
+ *
+ * @param {string} cwd
+ * @param {string} agentType
+ * @param {{ override?: boolean }} [opts]
+ * @returns {boolean}
+ */
+function resolveFastModeInternal(cwd, agentType, opts) {
+  // Step 1: invocation override
+  if (opts && typeof opts.override === 'boolean') {
+    return opts.override;
+  }
+
+  const config = loadConfig(cwd);
+  const fmCfg = (config.fast_mode && typeof config.fast_mode === 'object' && !Array.isArray(config.fast_mode))
+    ? config.fast_mode
+    : null;
+
+  // Step 2: agent_overrides
+  if (fmCfg) {
+    const ao = fmCfg.agent_overrides;
+    if (ao && typeof ao === 'object' && !Array.isArray(ao)) {
+      const v = ao[agentType];
+      if (typeof v === 'boolean') return v;
+    }
+  }
+
+  // Step 3: routing_tier_defaults by agent's default tier.
+  // Manifest tier defaults are only used when there is no fast_mode config block at all
+  // (fmCfg === null). When the user explicitly set a fast_mode block (even with just
+  // `enabled`), manifest routing_tier_defaults do not fire — we fall through to enabled (step 4).
+  // This ensures `fast_mode: { enabled: true }` works intuitively without the user having
+  // to also spell out all three tier defaults.
+  const agentTier = AGENT_DEFAULT_TIERS[agentType];
+  if (agentTier) {
+    if (fmCfg && fmCfg.routing_tier_defaults &&
+        typeof fmCfg.routing_tier_defaults === 'object' &&
+        !Array.isArray(fmCfg.routing_tier_defaults)) {
+      // User provided routing_tier_defaults — honor them
+      const v = fmCfg.routing_tier_defaults[agentTier];
+      if (typeof v === 'boolean') return v;
+    } else if (!fmCfg) {
+      // No fast_mode config at all — use manifest defaults for tier
+      const manifestDefaults = CANONICAL_CONFIG_DEFAULTS.fast_mode?.routing_tier_defaults;
+      if (manifestDefaults && typeof manifestDefaults === 'object') {
+        const v = manifestDefaults[agentTier];
+        if (typeof v === 'boolean') return v;
+      }
+    }
+    // else: fmCfg exists but no routing_tier_defaults — fall through to enabled
+  }
+
+  // Step 4: fast_mode.enabled
+  if (fmCfg && typeof fmCfg.enabled === 'boolean') {
+    return fmCfg.enabled;
+  }
+
+  // Step 5: hardcoded default
+  return false;
+}
+
+/**
+ * #443 — Resolve effort for a dynamic-routing attempt (with escalation).
+ *
+ * MUST NOT modify resolveModelForTier behavior.
+ * base = resolveEffortInternal(cwd, agentType).
+ * If config.dynamic_routing missing/enabled!==true OR escalate_on_failure===false
+ * -> return base (attempt ignored).
+ * Else: effectiveAttempt = min(max(0, attempt), max_escalations).
+ * Walk nextEffort effectiveAttempt times from base, clamp at 'max'.
+ *
+ * @param {string} cwd
+ * @param {string} agentType
+ * @param {number} [attempt=0]
+ * @returns {string}
+ */
+function resolveEffortForTier(cwd, agentType, attempt) {
+  const base = resolveEffortInternal(cwd, agentType);
+
+  const config = loadConfig(cwd);
+  const dr = config.dynamic_routing;
+  if (!dr || typeof dr !== 'object' || dr.enabled !== true) {
+    return base;
+  }
+  if (dr.escalate_on_failure === false) {
+    return base;
+  }
+
+  const maxEscalations = Number.isInteger(dr.max_escalations) && dr.max_escalations >= 0
+    ? dr.max_escalations
+    : 1;
+
+  const attemptN = Number.isInteger(attempt) && attempt > 0 ? attempt : 0;
+  const effectiveAttempt = Math.min(attemptN, maxEscalations);
+
+  let current = base;
+  for (let i = 0; i < effectiveAttempt; i++) {
+    const next = nextEffort(current);
+    if (!next || next === current) break; // already at max
+    current = next;
+  }
+  return current;
+}
+
 // ─── Summary body helpers ─────────────────────────────────────────────────
 
 /**
@@ -1914,8 +2125,15 @@ module.exports = {
   resolveModelInternal,
   resolveModelForTier,
   resolveReasoningEffortInternal,
+  resolveEffortInternal,
+  resolveFastModeInternal,
+  resolveEffortForTier,
+  VALID_EFFORTS,
+  EFFORT_SET,
+  nextEffort,
   RUNTIME_PROFILE_MAP,
   RUNTIMES_WITH_REASONING_EFFORT,
+  RUNTIMES_WITH_FAST_MODE,
   KNOWN_RUNTIMES,
   RUNTIME_OVERRIDE_TIERS,
   resolveTierEntry,
