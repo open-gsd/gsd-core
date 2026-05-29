@@ -1022,8 +1022,12 @@ describe('cmdStateAdvancePlan (state advance-plan)', () => {
   test('advances plan counter when not on last plan', () => {
     fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), advanceFixture);
 
-    const before = new Date().toISOString().split('T')[0];
-    const result = runGsdTools('state advance-plan', tmpDir);
+    const PINNED_MS = Date.parse('2020-06-15T12:00:00.000Z');
+    const PINNED_DATE = '2020-06-15';
+    const result = runGsdTools('state advance-plan', tmpDir, {
+      GSD_TEST_MODE: '1',
+      GSD_NOW_MS: String(PINNED_MS),
+    });
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -1035,10 +1039,9 @@ describe('cmdStateAdvancePlan (state advance-plan)', () => {
     const updated = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
     assert.ok(updated.includes('**Current Plan:** 2'), 'Current Plan should be updated to 2');
     assert.ok(updated.includes('**Status:** Ready to execute'), 'Status should be Ready to execute');
-    const after = new Date().toISOString().split('T')[0];
     assert.ok(
-      updated.includes(`**Last Activity:** ${before}`) || updated.includes(`**Last Activity:** ${after}`),
-      `Last Activity should be today (${before}) or next day if midnight boundary (${after})`
+      updated.includes(`**Last Activity:** ${PINNED_DATE}`),
+      `Last Activity should be the pinned date ${PINNED_DATE}`,
     );
   });
 
@@ -1406,9 +1409,12 @@ describe('cmdStateRecordSession (state record-session)', () => {
   test('updates session fields with stopped-at and resume-file', () => {
     fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), sessionFixture);
 
+    const PINNED_MS = Date.parse('2020-07-20T10:00:00.000Z');
+    const PINNED_ISO = '2020-07-20T10:00:00.000Z';
     const result = runGsdTools(
       'state record-session --stopped-at "Phase 3, Plan 2" --resume-file ".planning/phases/03/03-02-PLAN.md"',
-      tmpDir
+      tmpDir,
+      { GSD_TEST_MODE: '1', GSD_NOW_MS: String(PINNED_MS) },
     );
     assert.ok(result.success, `Command failed: ${result.error}`);
 
@@ -1419,23 +1425,25 @@ describe('cmdStateRecordSession (state record-session)', () => {
     const updated = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
     assert.ok(updated.includes('Phase 3, Plan 2'), 'Stopped at should be updated');
     assert.ok(updated.includes('.planning/phases/03/03-02-PLAN.md'), 'Resume file should be updated');
-
-    const today = new Date().toISOString().split('T')[0];
-    assert.ok(updated.includes(today), 'Last session should be updated to today');
+    assert.ok(updated.includes(PINNED_ISO), `Last session should be the pinned ISO timestamp ${PINNED_ISO}`);
   });
 
   test('updates Last session timestamp even with no other options', () => {
     fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), sessionFixture);
 
-    const result = runGsdTools('state record-session', tmpDir);
+    const PINNED_MS = Date.parse('2020-08-01T08:30:00.000Z');
+    const PINNED_ISO = '2020-08-01T08:30:00.000Z';
+    const result = runGsdTools('state record-session', tmpDir, {
+      GSD_TEST_MODE: '1',
+      GSD_NOW_MS: String(PINNED_MS),
+    });
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.recorded, true, 'recorded should be true');
 
     const updated = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
-    const today = new Date().toISOString().split('T')[0];
-    assert.ok(updated.includes(today), 'Last session should contain today\'s date');
+    assert.ok(updated.includes(PINNED_ISO), `Last session should contain the pinned ISO timestamp ${PINNED_ISO}`);
   });
 
   test('sets Resume file to None when not specified', () => {
@@ -2122,18 +2130,26 @@ describe('state planned-phase command', () => {
     assert.ok(stateContent.match(/Total Plans in Phase.*7/), 'Total Plans should be 7');
   });
 
-  test('after call: Last Activity is today\'s date', () => {
+  test('after call: Last Activity is the pinned date (deterministic via GSD_NOW_MS)', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'STATE.md'),
       `# Project State\n\n**Status:** Planning\n**Total Plans in Phase:** 0\n**Last Activity:** 2024-01-01\n**Current Phase:** 1\n`
     );
 
-    const result = runGsdTools(['state', 'planned-phase', '--phase', '1', '--name', 'Setup', '--plans', '3'], tmpDir);
+    const PINNED_MS = Date.parse('2020-09-10T15:00:00.000Z');
+    const PINNED_DATE = '2020-09-10';
+    const result = runGsdTools(
+      ['state', 'planned-phase', '--phase', '1', '--name', 'Setup', '--plans', '3'],
+      tmpDir,
+      { GSD_TEST_MODE: '1', GSD_NOW_MS: String(PINNED_MS) },
+    );
     assert.ok(result.success, `Command failed: ${result.error}`);
 
-    const today = new Date().toISOString().split('T')[0];
     const stateContent = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
-    assert.ok(stateContent.includes(today), `Last Activity should contain today's date (${today})`);
+    assert.ok(
+      stateContent.includes(PINNED_DATE),
+      `Last Activity should contain the pinned date ${PINNED_DATE}`,
+    );
   });
 
   test('missing STATE.md returns graceful error', () => {

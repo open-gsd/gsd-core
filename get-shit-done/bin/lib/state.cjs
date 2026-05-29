@@ -300,7 +300,7 @@ function cmdStateAdvancePlan(cwd, raw) {
   const statePath = planningPaths(cwd).state;
   if (!fs.existsSync(statePath)) { output({ error: 'STATE.md not found' }, raw); return; }
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = realClock.today();
   let result = null;
 
   readModifyWriteStateMd(statePath, (content) => {
@@ -629,7 +629,7 @@ function cmdStateRecordSession(cwd, options, raw) {
   const statePath = planningPaths(cwd).state;
   if (!fs.existsSync(statePath)) { output({ error: 'STATE.md not found' }, raw); return; }
 
-  const now = new Date().toISOString();
+  const now = realClock.nowIso();
   const updated = [];
 
   readModifyWriteStateMd(statePath, (content) => {
@@ -927,7 +927,7 @@ function buildStateFrontmatter(bodyContent, cwd) {
   fm.status = normalizedStatus;
   if (stoppedAt) fm.stopped_at = stoppedAt;
   if (pausedAt) fm.paused_at = pausedAt;
-  fm.last_updated = new Date().toISOString();
+  fm.last_updated = realClock.nowIso();
   if (lastActivity) fm.last_activity = lastActivity;
 
   const progress = {};
@@ -1176,7 +1176,7 @@ function cmdStateBeginPhase(cwd, phaseNumber, phaseName, planCount, raw) {
     return;
   }
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = realClock.today();
   const updated = [];
 
   readModifyWriteStateMd(statePath, (content) => {
@@ -1310,7 +1310,7 @@ function cmdSignalWaiting(cwd, type, question, options, phase, raw) {
     type: type || 'decision_point',
     question: question || null,
     options: options ? options.split('|').map(o => o.trim()) : [],
-    since: new Date().toISOString(),
+    since: realClock.nowIso(),
     phase: phase || null,
   };
 
@@ -1393,7 +1393,7 @@ function cmdStatePlannedPhase(cwd, phaseNumber, planCount, raw) {
   }
 
   let content = fs.readFileSync(statePath, 'utf-8');
-  const today = new Date().toISOString().split('T')[0];
+  const today = realClock.today();
   const updated = [];
 
   const statusDefaults = KNOWN_TEMPLATE_DEFAULTS['Status'];
@@ -1448,7 +1448,7 @@ function cmdStateMilestoneSwitch(cwd, version, name, raw) {
   }
   const resolvedName = (name && String(name).trim()) || 'milestone';
   const statePath = planningPaths(cwd).state;
-  const today = new Date().toISOString().split('T')[0];
+  const today = realClock.today();
 
   const lockPath = acquireStateLock(statePath);
   try {
@@ -1475,7 +1475,7 @@ function cmdStateMilestoneSwitch(cwd, version, name, raw) {
       milestone: version,
       milestone_name: resolvedName,
       status: 'planning',
-      last_updated: new Date().toISOString(),
+      last_updated: realClock.nowIso(),
       last_activity: today,
       progress: {
         total_phases: 0,
@@ -1581,7 +1581,7 @@ function cmdStateSync(cwd, options, raw) {
   const content = fs.readFileSync(statePath, 'utf-8');
   const changes = [];
   let modified = content;
-  const today = new Date().toISOString().split('T')[0];
+  const today = realClock.today();
 
   const phasesDir = planningPaths(cwd).phases;
   if (!fs.existsSync(phasesDir)) {
@@ -1856,7 +1856,7 @@ function cmdStatePrune(cwd, options, raw) {
 
   // Write archived entries to STATE-ARCHIVE.md
   if (archived.length > 0) {
-    const timestamp = new Date().toISOString().split('T')[0];
+    const timestamp = realClock.today();
     let archiveContent = platformReadSync(archivePath);
     if (archiveContent === null) {
       archiveContent = '# STATE Archive\n\nPruned entries from STATE.md. Recoverable but no longer loaded into agent context.\n\n';
@@ -1931,7 +1931,7 @@ function cmdStateCompletePhase(cwd, raw, overridePhase) {
     return;
   }
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = realClock.today();
   const updated = [];
 
   readModifyWriteStateMd(statePath, (content) => {

@@ -146,20 +146,32 @@ describe('bug #3127: state.begin-phase idempotency guard', () => {
     }
   });
 
-  test('begin-phase always updates Last Activity date (safe on resume)', () => {
+  test('begin-phase always updates Last Activity date (safe on resume, pinned via GSD_NOW_MS)', () => {
     const stateModule = requireStateCjs();
     const { cmdStateBeginPhase } = stateModule;
     if (!cmdStateBeginPhase) return;
     const dir = makeTempPlanning(MID_FLIGHT_STATE);
+
+    const PINNED_MS = Date.parse('2020-11-25T09:00:00.000Z');
+    const PINNED_DATE = '2020-11-25';
+    // Pin the in-process clock via env vars before calling the function directly.
+    const origTestMode = process.env.GSD_TEST_MODE;
+    const origNowMs = process.env.GSD_NOW_MS;
+    process.env.GSD_TEST_MODE = '1';
+    process.env.GSD_NOW_MS = String(PINNED_MS);
     try {
       cmdStateBeginPhase(dir, '5', 'test-phase', 8, false);
       const after = fs.readFileSync(path.join(dir, '.planning', 'STATE.md'), 'utf8');
-      const today = new Date().toISOString().split('T')[0];
       assert.ok(
-        after.includes(today),
-        'begin-phase must update Last Activity date even on resume (safe field)',
+        after.includes(PINNED_DATE),
+        `begin-phase must update Last Activity date to the pinned date ${PINNED_DATE} even on resume (safe field)`,
       );
     } finally {
+      // Restore env vars before cleanup to avoid leaking state to other tests.
+      if (origTestMode === undefined) delete process.env.GSD_TEST_MODE;
+      else process.env.GSD_TEST_MODE = origTestMode;
+      if (origNowMs === undefined) delete process.env.GSD_NOW_MS;
+      else process.env.GSD_NOW_MS = origNowMs;
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

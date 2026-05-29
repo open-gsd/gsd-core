@@ -70,6 +70,26 @@ function makeFakeClock(startMs) {
       _now += ms;
     },
 
+    /**
+     * Return the virtual instant as an ISO 8601 string (UTC).
+     * Mirrors realClock.nowIso() so fake clocks are drop-in substitutes.
+     *
+     * @returns {string} e.g. "2020-06-15T12:00:00.000Z"
+     */
+    nowIso() {
+      return new Date(_now).toISOString();
+    },
+
+    /**
+     * Return the virtual date as a YYYY-MM-DD string (UTC calendar day).
+     * Mirrors realClock.today() so fake clocks are drop-in substitutes.
+     *
+     * @returns {string} e.g. "2020-06-15"
+     */
+    today() {
+      return new Date(_now).toISOString().split('T')[0];
+    },
+
     /** Array of ms values passed to sleep() in call order. */
     get sleepCalls() {
       return _sleepCalls;

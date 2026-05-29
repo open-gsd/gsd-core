@@ -8,6 +8,7 @@ const {
   validateInstallerMigrationRecord,
 } = require('./installer-migration-authoring.cjs');
 const { platformWriteSync } = require('./shell-command-projection.cjs');
+const { realClock } = require('./clock.cjs');
 
 const MANIFEST_NAME = 'gsd-file-manifest.json';
 const INSTALL_STATE_NAME = 'gsd-install-state.json';
@@ -257,10 +258,10 @@ function readLockFile(lockPath) {
   }
 }
 
-function acquireInstallMigrationLock(configDir, { timeoutMs = DEFAULT_LOCK_TIMEOUT_MS } = {}) {
+function acquireInstallMigrationLock(configDir, { timeoutMs = DEFAULT_LOCK_TIMEOUT_MS } = {}, clock = realClock) {
   fs.mkdirSync(configDir, { recursive: true });
   const lockPath = path.join(configDir, INSTALL_MIGRATION_LOCK_NAME);
-  const started = Date.now();
+  const started = clock.now();
 
   while (true) {
     let fd = null;
@@ -324,11 +325,11 @@ function acquireInstallMigrationLock(configDir, { timeoutMs = DEFAULT_LOCK_TIMEO
             if (reclaimed) continue;
           }
         }
-        if (Date.now() - started >= timeoutMs) {
+        if (clock.now() - started >= timeoutMs) {
           const holderInfo = lockData ? ` (held by pid ${lockData.pid} since ${lockData.acquiredAt})` : '';
           throw new Error(`installer migration lock is held: ${lockPath}${holderInfo}`);
         }
-        sleepSync(Math.min(50, Math.max(1, timeoutMs - (Date.now() - started))));
+        clock.sleep(Math.min(50, Math.max(1, timeoutMs - (clock.now() - started))));
         continue;
       }
       throw error;
@@ -765,6 +766,7 @@ module.exports = {
   INSTALL_MIGRATION_LOCK_NAME,
   INSTALL_STATE_NAME,
   MANIFEST_NAME,
+  acquireInstallMigrationLock,
   applyInstallerMigrationPlan,
   classifyArtifact,
   discoverInstallerMigrations,
