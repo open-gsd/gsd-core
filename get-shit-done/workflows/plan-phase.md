@@ -859,24 +859,15 @@ PATTERNS_PATH="${PHASE_DIR}/${PADDED_PHASE}-PATTERNS.md"
 
 ## 7.9. Regenerate API-SURFACE.md (intel gate)
 
-**Skip if** `intel.enabled` is false (or absent — absent means false).
-
 ```bash
 INTEL_CFG=$(gsd_run query config-get intel.enabled 2>/dev/null || echo "false")
+# false (absent = false) → API_SURFACE_PATH stays empty; step-8 planner entry omitted
+if [ "$INTEL_CFG" = "true" ]; then
+  gsd_run intel api-surface
+  API_SURFACE_PATH=".planning/intel/API-SURFACE.md"
+  echo "✓ API surface regenerated: ${API_SURFACE_PATH}"  # injected into step 8 as HINT
+fi
 ```
-
-**If `INTEL_CFG` is `false`:** Skip to step 8.
-
-**If `INTEL_CFG` is `true`:**
-
-```bash
-gsd_run intel api-surface
-API_SURFACE_PATH=".planning/intel/API-SURFACE.md"
-```
-
-Display: `✓ API surface regenerated: ${API_SURFACE_PATH}`
-
-This path is injected into the planner's required reading in step 8 with the HINT instruction below. When `intel.enabled` is false, `API_SURFACE_PATH` is empty and the planner entry is omitted.
 
 ## 8. Spawn gsd-planner Agent
 
@@ -919,13 +910,11 @@ ${CONTEXT_WINDOW >= 500000 ? `
 - Skip all other prior phases to stay within context budget
 ` : ''}
 </files_to_read>
-
 ${API_SURFACE_PATH ? `
 <intel_surface_hint>
 **API Surface (HINT — may be incomplete):** When \`intel.enabled\` is true, \`.planning/intel/API-SURFACE.md\` lists symbols extracted from the codebase by regex/JS analysis. Prefer symbols listed there when referencing existing code. This surface is regex/JS-derived and MAY BE INCOMPLETE — a symbol's absence means *unknown*, not *nonexistent*. Never treat the surface as exhaustive. If you reference a symbol that is not in the surface and this phase creates it, list it under "Artifacts this phase produces".
 </intel_surface_hint>
 ` : ''}
-
 ${AGENT_SKILLS_PLANNER}
 
 **Phase requirement IDs (every ID MUST appear in a plan's `requirements` field):** {phase_req_ids}

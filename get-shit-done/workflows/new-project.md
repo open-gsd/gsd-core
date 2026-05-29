@@ -632,8 +632,23 @@ AskUserQuestion([
       { label: "AI Models", description: "Currently: [value]" },
       { label: "Research", description: "Currently: [Yes|No]" },
       { label: "Plan Check", description: "Currently: [Yes|No]" },
-      { label: "Verifier", description: "Currently: [Yes|No]" },
-      { label: "Drift Guard", description: "Currently: [Yes|No]" }
+      { label: "Verifier", description: "Currently: [Yes|No]" }
+    ]
+  }
+])
+```
+
+Then ask:
+
+```text
+AskUserQuestion([
+  {
+    question: "Do you want to change the Drift Guard setting (plan-review source-grounding)?",
+    header: "Drift Guard",
+    multiSelect: false,
+    options: [
+      { label: "Yes", description: "Toggle Drift Guard (currently: [Yes|No])" },
+      { label: "No", description: "Keep current Drift Guard setting" }
     ]
   }
 ])
