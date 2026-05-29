@@ -566,6 +566,47 @@ describe('plan-review-convergence local model config schema registration (#2306-
   });
 });
 
+// ─── Workflow: source-grounding pass (#22) ───────────────────────────────────
+
+describe('plan-review-convergence workflow: source-grounding reviewer pass (#22)', () => {
+  const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+
+  test('workflow documents plan_review.source_grounding config key (default on)', () => {
+    assert.ok(
+      workflow.includes('plan_review.source_grounding'),
+      'workflow must document the plan_review.source_grounding config key that gates the source-grounding pass (#22)'
+    );
+  });
+
+  test('workflow defines all four symbol verdicts: VERIFIED, MISSING, AMBIGUOUS, UNCHECKABLE', () => {
+    assert.ok(workflow.includes('VERIFIED'), 'workflow must define VERIFIED verdict');
+    assert.ok(workflow.includes('MISSING'), 'workflow must define MISSING verdict');
+    assert.ok(workflow.includes('AMBIGUOUS'), 'workflow must define AMBIGUOUS verdict');
+    assert.ok(workflow.includes('UNCHECKABLE'), 'workflow must define UNCHECKABLE verdict');
+  });
+
+  test('workflow specifies needs-acknowledgement gating for MISSING symbols', () => {
+    assert.ok(
+      workflow.includes('needs-acknowledgement'),
+      'workflow must specify needs-acknowledgement (not hard block) for MISSING at grep/intel authority (#22)'
+    );
+  });
+
+  test('workflow instructs reviewer to exclude symbols declared under "Artifacts this phase produces"', () => {
+    assert.ok(
+      workflow.includes('Artifacts this phase produces'),
+      'workflow must exclude new artifacts declared by the plan from symbol verification (#22)'
+    );
+  });
+
+  test('workflow requires "Verification coverage" section appended to REVIEWS.md', () => {
+    assert.ok(
+      workflow.includes('Verification coverage'),
+      'workflow must require a Verification coverage section in REVIEWS.md listing every UNCHECKABLE/skipped symbol (#22)'
+    );
+  });
+});
+
 describe('plan-review-convergence local model CONFIGURATION.md documentation (#2306-local)', () => {
   const configDoc = fs.readFileSync(CONFIG_DOC_PATH, 'utf8');
 
