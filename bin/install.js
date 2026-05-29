@@ -619,29 +619,48 @@ const banner = '\n' +
   '  A meta-prompting, context engineering and spec-driven\n' +
   '  development system for Claude Code, OpenCode, Gemini, Kilo, Codex, Copilot, Antigravity, Cursor, Windsurf, Augment, Trae, Qwen Code, Hermes Agent, Cline and CodeBuddy by TÂCHES.\n';
 
-// Parse --config-dir argument
-function parseConfigDirArg() {
-  const configDirIndex = args.findIndex(arg => arg === '--config-dir' || arg === '-c');
+// Pure seam: parse --config-dir / -c from an arbitrary args array.
+// Returns the path string, '' for an empty equals-form value, or null when the
+// flag is absent.  Space-separated form returns null (not an error string) when
+// the next token is missing or flag-looking — callers that want process.exit
+// behaviour must check after calling this function.
+// Exported via module.exports so unit tests can exercise it directly.
+function parseConfigDirFromArgs(argsArray) {
+  const configDirIndex = argsArray.findIndex(arg => arg === '--config-dir' || arg === '-c');
   if (configDirIndex !== -1) {
-    const nextArg = args[configDirIndex + 1];
-    // Error if --config-dir is provided without a value or next arg is another flag
+    const nextArg = argsArray[configDirIndex + 1];
+    // No value / next token is a flag → signal "missing" by returning null
     if (!nextArg || nextArg.startsWith('-')) {
-      console.error(`  ${yellow}--config-dir requires a path argument${reset}`);
-      process.exit(1);
+      return null;
     }
     return nextArg;
   }
-  // Also handle --config-dir=value format
-  const configDirArg = args.find(arg => arg.startsWith('--config-dir=') || arg.startsWith('-c='));
+  // Handle --config-dir=value and -c=value format.
+  // Use indexOf('=') + 1 so that = signs inside the path value are preserved.
+  const configDirArg = argsArray.find(arg => arg.startsWith('--config-dir=') || arg.startsWith('-c='));
   if (configDirArg) {
-    const value = configDirArg.split('=')[1];
-    if (!value) {
-      console.error(`  ${yellow}--config-dir requires a non-empty path${reset}`);
-      process.exit(1);
-    }
-    return value;
+    return configDirArg.slice(configDirArg.indexOf('=') + 1);
   }
   return null;
+}
+
+// Parse --config-dir argument
+function parseConfigDirArg() {
+  const result = parseConfigDirFromArgs(args);
+  if (result === null) {
+    // Check if the space-separated form was present but missing a value
+    const configDirIndex = args.findIndex(arg => arg === '--config-dir' || arg === '-c');
+    if (configDirIndex !== -1) {
+      console.error(`  ${yellow}--config-dir requires a path argument${reset}`);
+      process.exit(1);
+    }
+    return null;
+  }
+  if (result === '') {
+    console.error(`  ${yellow}--config-dir requires a non-empty path${reset}`);
+    process.exit(1);
+  }
+  return result;
 }
 const explicitConfigDir = parseConfigDirArg();
 const hasHelp = args.includes('--help') || args.includes('-h');
@@ -11799,6 +11818,7 @@ module.exports = {
     readGsdCommandNames,
     installRuntimeArtifacts,
     uninstallRuntimeArtifacts,
+    parseConfigDirFromArgs,
   };
 
 // Main logic — only run when not loaded as a module for testing
