@@ -1,4 +1,5 @@
 'use strict';
+// allow-test-rule: line 159 reads the STATE.md temp file written by readModifyWriteStateMd — this is a runtime output file assertion, not a source-grep; the API returns void so a file read-back is the only way to verify the transform was applied
 
 /**
  * Deterministic clock-seam tests for acquireStateLock / withPlanningLock (issue #453).
