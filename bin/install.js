@@ -146,10 +146,58 @@ const {
   RUNTIME_PROFILE_MAP: GSD_RUNTIME_PROFILE_MAP,
   resolveTierEntry: gsdResolveTierEntry,
 } = require(path.join(_gsdLibDir, 'core.cjs'));
-const {
-  AGENT_DEFAULT_TIERS: GSD_AGENT_DEFAULT_TIERS,
-  renderEffortForRuntime: gsdRenderEffortForRuntime,
-} = require(path.join(_gsdLibDir, 'model-catalog.cjs'));
+
+// #443 — model-catalog and config-defaults.manifest.json exports needed only
+// by effort-resolution code paths (resolveInstallTimeEffort /
+// generateCodexAgentToml / Claude .md effort injection).  Loaded lazily the
+// first time they are needed so that requiring install.js in test contexts that
+// never trigger an install does NOT produce module-load-time side effects (the
+// manifest read + hard throw) that could alter subprocess exit codes or stderr.
+let _gsdEffortCatalogCache = null;
+function _getGsdEffortCatalog() {
+  if (_gsdEffortCatalogCache) return _gsdEffortCatalogCache;
+
+  const { AGENT_DEFAULT_TIERS, renderEffortForRuntime } = require(path.join(_gsdLibDir, 'model-catalog.cjs'));
+
+  const manifestPath = path.join(
+    __dirname,
+    '..',
+    'get-shit-done',
+    'bin',
+    'shared',
+    'config-defaults.manifest.json'
+  );
+  let manifestData;
+  try {
+    manifestData = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+  } catch (_err) {
+    // Fail loudly — a missing manifest is a broken install, not a soft degradation.
+    throw new Error(
+      `gsd install: cannot load config-defaults.manifest.json at ${manifestPath}: ${_err.message}`
+    );
+  }
+
+  const tierDefaults =
+    (manifestData.effort &&
+      manifestData.effort.routing_tier_defaults &&
+      typeof manifestData.effort.routing_tier_defaults === 'object' &&
+      !Array.isArray(manifestData.effort.routing_tier_defaults))
+      ? manifestData.effort.routing_tier_defaults
+      : { light: 'low', standard: 'high', heavy: 'xhigh' }; // guard: unreachable if manifest is valid
+
+  const effortDefault =
+    (manifestData.effort && typeof manifestData.effort.default === 'string')
+      ? manifestData.effort.default
+      : 'high'; // guard: unreachable if manifest is valid
+
+  _gsdEffortCatalogCache = {
+    AGENT_DEFAULT_TIERS,
+    renderEffortForRuntime,
+    EFFORT_MANIFEST_TIER_DEFAULTS: tierDefaults,
+    EFFORT_MANIFEST_DEFAULT: effortDefault,
+  };
+  return _gsdEffortCatalogCache;
+}
 
 const {
   MINIMAL_SKILL_ALLOWLIST,
@@ -1443,40 +1491,6 @@ function readGsdEffectiveEffortConfig(targetDir = null) {
   };
 }
 
-// Manifest routing-tier defaults for effort — loaded from the canonical source
-// (config-defaults.manifest.json -> effort) so this file never drifts from it.
-// Resolved once at module init; install.js already ships this file and resolves
-// its path relative to __dirname just like the model-catalog/core.cjs requires above.
-const _GSD_CONFIG_DEFAULTS_MANIFEST = (() => {
-  const manifestPath = path.join(
-    __dirname,
-    '..',
-    'get-shit-done',
-    'bin',
-    'shared',
-    'config-defaults.manifest.json'
-  );
-  try {
-    return JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-  } catch (_err) {
-    // Fail loudly — a missing manifest is a broken install, not a soft degradation.
-    throw new Error(
-      `gsd install: cannot load config-defaults.manifest.json at ${manifestPath}: ${_err.message}`
-    );
-  }
-})();
-const _GSD_EFFORT_MANIFEST_TIER_DEFAULTS =
-  (_GSD_CONFIG_DEFAULTS_MANIFEST.effort &&
-    _GSD_CONFIG_DEFAULTS_MANIFEST.effort.routing_tier_defaults &&
-    typeof _GSD_CONFIG_DEFAULTS_MANIFEST.effort.routing_tier_defaults === 'object' &&
-    !Array.isArray(_GSD_CONFIG_DEFAULTS_MANIFEST.effort.routing_tier_defaults))
-    ? _GSD_CONFIG_DEFAULTS_MANIFEST.effort.routing_tier_defaults
-    : { light: 'low', standard: 'high', heavy: 'xhigh' }; // guard: unreachable if manifest is valid
-const _GSD_EFFORT_MANIFEST_DEFAULT =
-  (_GSD_CONFIG_DEFAULTS_MANIFEST.effort &&
-    typeof _GSD_CONFIG_DEFAULTS_MANIFEST.effort.default === 'string')
-    ? _GSD_CONFIG_DEFAULTS_MANIFEST.effort.default
-    : 'high'; // guard: unreachable if manifest is valid
 
 /**
  * #443 — Resolve install-time effort for a given agent, using the same
@@ -1505,7 +1519,8 @@ function resolveInstallTimeEffort(effortCfg, agentName) {
   }
 
   // Step 2: routing_tier_defaults keyed by the agent's catalog tier
-  const agentTier = GSD_AGENT_DEFAULT_TIERS[agentName];
+  const { AGENT_DEFAULT_TIERS, EFFORT_MANIFEST_TIER_DEFAULTS, EFFORT_MANIFEST_DEFAULT } = _getGsdEffortCatalog();
+  const agentTier = AGENT_DEFAULT_TIERS[agentName];
   if (agentTier) {
     if (effortCfg && effortCfg.routing_tier_defaults &&
         typeof effortCfg.routing_tier_defaults === 'object' &&
@@ -1514,7 +1529,7 @@ function resolveInstallTimeEffort(effortCfg, agentName) {
       if (typeof v === 'string') return v;
     } else if (!effortCfg) {
       // No effort config — use manifest tier defaults
-      const v = _GSD_EFFORT_MANIFEST_TIER_DEFAULTS[agentTier];
+      const v = EFFORT_MANIFEST_TIER_DEFAULTS[agentTier];
       if (typeof v === 'string') return v;
     }
     // effortCfg exists but has no routing_tier_defaults — fall through
@@ -1527,7 +1542,7 @@ function resolveInstallTimeEffort(effortCfg, agentName) {
   }
 
   // Step 4: manifest default (sourced from config-defaults.manifest.json effort.default)
-  return _GSD_EFFORT_MANIFEST_DEFAULT;
+  return EFFORT_MANIFEST_DEFAULT;
 }
 
 /**
@@ -2887,7 +2902,7 @@ function generateCodexAgentToml(agentName, agentContent, modelOverrides = null, 
   // config source. Codex does not support 'max' → clamped to 'xhigh' by
   // gsdRenderEffortForRuntime('codex', ...).
   const _universalEffortCodex = resolveInstallTimeEffort(effortCfg, resolvedName !== agentName ? resolvedName : agentName);
-  const _renderedEffortCodex = gsdRenderEffortForRuntime('codex', _universalEffortCodex).value;
+  const _renderedEffortCodex = _getGsdEffortCatalog().renderEffortForRuntime('codex', _universalEffortCodex).value;
   lines.push(`model_reasoning_effort = ${JSON.stringify(_renderedEffortCodex)}`);
 
   // Agent prompts contain raw backslashes in regexes and shell snippets.
@@ -8863,7 +8878,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
           const _effortCfg = readGsdEffectiveEffortConfig(targetDir);
           const _agentName = entry.name.replace(/\.md$/, '');
           const _universalEffort = resolveInstallTimeEffort(_effortCfg, _agentName);
-          const _renderedEffort = gsdRenderEffortForRuntime('claude', _universalEffort).value;
+          const _renderedEffort = _getGsdEffortCatalog().renderEffortForRuntime('claude', _universalEffort).value;
           // Insert effort: into frontmatter before the closing --- delimiter.
           content = content.replace(
             /^(---\n[\s\S]*?)(---)(\n|$)/,
@@ -11605,8 +11620,8 @@ module.exports = {
     readGsdEffectiveModelOverrides,
     readGsdEffectiveEffortConfig,
     resolveInstallTimeEffort,
-    _GSD_EFFORT_MANIFEST_TIER_DEFAULTS,
-    _GSD_EFFORT_MANIFEST_DEFAULT,
+    get _GSD_EFFORT_MANIFEST_TIER_DEFAULTS() { return _getGsdEffortCatalog().EFFORT_MANIFEST_TIER_DEFAULTS; },
+    get _GSD_EFFORT_MANIFEST_DEFAULT() { return _getGsdEffortCatalog().EFFORT_MANIFEST_DEFAULT; },
     install,
     installAllRuntimes,
     uninstall,
