@@ -136,6 +136,21 @@ Per-task runtime gate in `/gsd-execute-phase` that, when both `MVP_MODE` and `TD
 ### SPIDR Splitting
 Five-axis story decomposition discipline (**S**pike, **P**aths, **I**nterfaces, **D**ata, **R**ules) used by `/gsd-mvp-phase` when a User Story is too large for one phase. Full interactive flow per PRD #2826 Q3 (not a lightweight filter). Reference: `get-shit-done/references/spidr-splitting.md`.
 
+### Clock seam
+An injectable time abstraction accepted as an optional parameter by production code (`{ clock = Date } = {}`). Test code substitutes `node:test` `mock.timers` to control time deterministically without waiting for real OS scheduler events. Canonical pattern established by ADR 456 (`docs/adr/456-test-rigor-architecture.md`).
+
+### Deterministic scheduler
+Test-execution model in which all timing and concurrency outcomes are fully controlled by the test (via clock seam, explicit `await` ordering, or synchronous stepping) rather than by the OS thread scheduler. Opposed to real-race tests, which are non-deterministic on loaded CI runners.
+
+### Property-based test
+A test that generates many adversarial inputs automatically (via `fast-check`) and asserts that a stated invariant holds for all of them, rather than asserting on a fixed set of hand-chosen examples. Invariant categories used in this codebase: round-trip, monotonicity, boundary containment, idempotency. See `RULESET.TESTS.property-based-testing`.
+
+### Mutation testing / mutation score
+Stryker injects small code mutations (e.g., flipping a `>` to `>=`, deleting a `return` statement) and reruns the test suite for each. A mutation is "killed" if at least one test fails; "surviving" if all tests pass despite the mutation. Mutation score = killed / total. Score below 80 % on the changed scope blocks PR merge. See `RULESET.TESTS.mutation-score`.
+
+### ESLint harness
+The canonical lint infrastructure adopted in ADR 452 (`docs/adr/452-eslint-lint-harness.md`): ESLint flat config (`eslint.config.mjs`) with `typescript-eslint`, `eslint-plugin-n`, `eslint-plugin-no-only-tests`, and a local AST-rule plugin at `scripts/eslint-rules/`. Replaces the homegrown `scripts/lint-*.cjs` regex scanners. The three custom test-rigor rules (`local/no-source-grep`, `local/no-magic-sleep-in-tests`, `local/no-elapsed-assertion`) initially ship at `warn`; they become `error` after the cleanup sweep tracked at issue #453 merges.
+
 ---
 
 ## Test rules and lint
@@ -154,6 +169,13 @@ Five-axis story decomposition discipline (**S**pike, **P**aths, **I**nterfaces, 
 `RULESET.TESTS.boundary-coverage.fixtures=for any code with budget/limit/quota/threshold parameter, test suite MUST include: (a) input where SUT estimate == limit exactly, (b) input where estimate == limit - 1, (c) input where estimate == limit + 1, (d) input where any internal reserve/safety constant pushes baseline within reserve-distance of limit (catches early-pressure firing)`
 `RULESET.TESTS.boundary-coverage.anti-pattern=test suites that pair budget:1_000_000 (trivially fits) with budget:1 (trivially overflows) and skip the boundary region; failure mode that shipped PR #3708 UNNEEDED_TRIM + FALSE_HARDFAIL regressions (commit 2df566ed, fixed bde1ae8f)`
 `LEARNING.prompt-budget.boundary-gap=PR #3708 commit 2df566ed reserved NOTE_RESERVE_TOKENS in pressure-threshold AND in minSet pre-check; both buggy paths only fire when baseTokens ∈ (effectiveBudget - NOTE_RESERVE_TOKENS, effectiveBudget]; original test suite used budgets far from that band so neither path was exercised; fix bde1ae8f confines NOTE_RESERVE accounting to post-trim assembly path only; future budget/limit code MUST add boundary fixtures per RULESET.TESTS.boundary-coverage.fixtures`
+
+`RULESET.TESTS.no-timing-assertion=do not assert on wall-clock elapsed time (Date.now() delta, performance.now(), process.hrtime() comparison); such assertions test the host machine not the SUT and flake on loaded CI runners; enforcement: local/no-elapsed-assertion ESLint rule (warn → error after #453); canonical replacement: clock-seam pattern with node:test mock.timers`
+`RULESET.TESTS.clock-seam=concurrency logic must accept an optional {clock=Date} parameter; tests control time via t.mock.timers.enable(['Date']) + t.mock.timers.setTime(0) + t.mock.timers.tick(N); real OS scheduler races are not a permitted test pattern after ADR 456 (2026-05-28); real-race tests are deleted once deterministic seam tests cover the same logical path`
+`RULESET.TESTS.property-based-testing=modules implementing parsing / transformation / budget-limit / bijective contracts must include at least one fast-check (fc) property test asserting a domain invariant; invariant categories: round-trip, monotonicity, boundary-containment, idempotency; property tests live in *.test.cjs alongside unit tests; CI signal: Stryker mutation score below 80% blocks merge`
+`RULESET.TESTS.mutation-score=Stryker runs incremental (--since origin/next) on ubuntu-latest/Node24 CI leg; default threshold 80% killed/total; surviving mutants in scope block merge unless path is listed in stryker.config.mjs with documented reason; treat surviving mutant as a failing test specification`
+`RULESET.TESTS.delete-bad-tests=pass-always / vacuous-truth / source-grep / elapsed-time / real-race / permanent-allow-test-rule tests are DELETED and replaced with compliant tests in the same PR; not skipped, not commented out, not permanently exempted; replacement must cover the same logical path via typed-surface assertion or clock-seam pattern`
+`RULESET.TESTS.eslint-harness=ADR 452 (2026-05-28): ESLint flat config + typescript-eslint + eslint-plugin-n + eslint-plugin-no-only-tests + local plugin at scripts/eslint-rules/; replaces scripts/lint-*.cjs regex scanners; three test-rigor rules (local/no-source-grep, local/no-magic-sleep-in-tests, local/no-elapsed-assertion) ship at warn, promoted to error after #453 cleanup sweep merges`
 
 `RULESET.WORKFLOW_MARKDOWN.FENCES=preserve opening language fence when editing shell snippets in workflow markdown; malformed fence creates fresh CR threads (MD040)`
 `RULESET.WORKFLOW_SIZE_BUDGET=workflow-size-budget can fail otherwise-valid review fixes; XL workflows <=1800 lines or trim prose before final checks`
