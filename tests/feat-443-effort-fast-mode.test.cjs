@@ -32,6 +32,10 @@ const {
   RUNTIMES_WITH_FAST_MODE,
 } = require('../get-shit-done/bin/lib/model-catalog.cjs');
 
+const {
+  injectEffortFrontmatter,
+} = require('../bin/install.js');
+
 function writeConfig(dir, config) {
   const planningDir = path.join(dir, '.planning');
   fs.mkdirSync(planningDir, { recursive: true });
@@ -765,5 +769,94 @@ describe('#443 resolve-execution: deterministic arg parsing (flags-first orderin
     assert.ok(result.success, `Should succeed (unknown agent is valid input): ${result.error}`);
     const output = JSON.parse(result.output);
     assert.strictEqual(output.unknown_agent, true, 'unknown agent must emit unknown_agent:true');
+  });
+});
+
+// ─── injectEffortFrontmatter: newline-agnostic injection (#443 Windows fix) ──
+
+describe('#443 injectEffortFrontmatter: newline-agnostic YAML frontmatter injection', () => {
+  // LF source (macOS / Linux git checkout) — baseline
+  test('LF frontmatter: injects effort: before closing ---', () => {
+    const content = '---\nname: gsd-planner\ndescription: Creates plans\ncolor: blue\n---\nBody here\n';
+    const result = injectEffortFrontmatter(content, 'xhigh');
+    assert.notStrictEqual(result, content, 'content should be modified');
+    assert.match(result, /^effort:\s*xhigh$/m, 'effort: xhigh must be present');
+    assert.ok(result.includes('\neffort: xhigh\n---\n'), 'effort: must appear before closing --- with LF');
+    // Closing --- must still be present and intact
+    assert.ok(result.includes('\n---\n'), 'closing --- must remain with LF');
+  });
+
+  // CRLF source (Windows git checkout with core.autocrlf=true) — the actual bug
+  test('CRLF frontmatter: injects effort: with CRLF preserved (Windows fix)', () => {
+    const content = '---\r\nname: gsd-planner\r\ndescription: Creates plans\r\ncolor: blue\r\n---\r\nBody here\r\n';
+    const result = injectEffortFrontmatter(content, 'xhigh');
+    assert.notStrictEqual(result, content, 'content should be modified (CRLF source was silently skipped before fix)');
+    // effort: line must use CRLF, not LF (EOL consistency)
+    assert.ok(result.includes('effort: xhigh\r\n'), 'effort: line must use CRLF to match surrounding frontmatter');
+    // Closing --- must use CRLF and remain intact
+    assert.ok(result.includes('\r\neffort: xhigh\r\n---\r\n'), 'effort: must appear before closing ---\\r\\n with CRLF');
+    // The effort value must be readable via multiline regex (as the install-wiring assertions do)
+    assert.match(result, /^effort:\s*xhigh$/m, '/^effort:\\s*xhigh$/m must match in CRLF output');
+  });
+
+  // Idempotency: don't double-insert if effort: already exists
+  test('idempotent: does NOT insert a second effort: line when already present (LF)', () => {
+    const content = '---\nname: gsd-planner\neffort: high\n---\nBody\n';
+    const result = injectEffortFrontmatter(content, 'xhigh');
+    assert.strictEqual(result, content, 'content must be unchanged when effort: already present');
+    // Confirm no duplicate
+    const matches = [...result.matchAll(/^effort:/mg)];
+    assert.strictEqual(matches.length, 1, 'exactly one effort: key must exist');
+  });
+
+  test('idempotent: does NOT insert a second effort: line when already present (CRLF)', () => {
+    const content = '---\r\nname: gsd-planner\r\neffort: high\r\n---\r\nBody\r\n';
+    const result = injectEffortFrontmatter(content, 'xhigh');
+    assert.strictEqual(result, content, 'content must be unchanged when effort: already present (CRLF)');
+  });
+
+  // No frontmatter — leave unchanged
+  test('no YAML frontmatter: returns content unchanged', () => {
+    const content = 'Just a body\nNo frontmatter here\n';
+    const result = injectEffortFrontmatter(content, 'xhigh');
+    assert.strictEqual(result, content, 'content without frontmatter must be returned unchanged');
+  });
+
+  // Complex frontmatter with comment lines and color: key (mirrors real agent .md files)
+  test('complex LF frontmatter (# comment + color:) still injects effort: before ---', () => {
+    const content = [
+      '---',
+      'name: gsd-executor',
+      '# hooks: see .claude/settings.json',
+      'description: Executes tasks',
+      'color: green',
+      '---',
+      'Body content here',
+      '',
+    ].join('\n');
+    const result = injectEffortFrontmatter(content, 'high');
+    assert.match(result, /^effort:\s*high$/m, 'effort: high must be present');
+    assert.ok(result.includes('\neffort: high\n---\n'), 'effort: must appear immediately before closing ---');
+    // Other frontmatter fields must be untouched
+    assert.ok(result.includes('color: green'), 'color: must be preserved');
+    assert.ok(result.includes('# hooks:'), '# comment must be preserved');
+  });
+
+  test('complex CRLF frontmatter (# comment + color:) still injects effort: with CRLF before ---', () => {
+    const lines = [
+      '---',
+      'name: gsd-executor',
+      '# hooks: see .claude/settings.json',
+      'description: Executes tasks',
+      'color: green',
+      '---',
+      'Body content here',
+      '',
+    ];
+    const content = lines.join('\r\n');
+    const result = injectEffortFrontmatter(content, 'high');
+    assert.ok(result.includes('effort: high\r\n'), 'effort: must use CRLF in CRLF file');
+    assert.ok(result.includes('\r\neffort: high\r\n---\r\n'), 'effort: must appear before closing ---\\r\\n');
+    assert.ok(result.includes('color: green\r\n'), 'color: must be preserved with CRLF');
   });
 });

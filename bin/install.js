@@ -1555,6 +1555,65 @@ function resolveInstallTimeEffort(effortCfg, agentName) {
 }
 
 /**
+ * #443 — Inject `effort: <value>` into YAML frontmatter of a Claude .md agent
+ * file in a newline-agnostic way (LF and CRLF source files are both handled).
+ *
+ * The function:
+ *   - Detects the file's EOL (CRLF if the first `---` line ends with \r\n,
+ *     otherwise LF).
+ *   - Skips injection if an `effort:` key already exists in the frontmatter
+ *     (idempotent).
+ *   - Inserts `effort: <value>` immediately before the closing `---` delimiter,
+ *     using the same EOL as the surrounding frontmatter so the output file
+ *     stays EOL-consistent.
+ *   - Returns the original content unchanged when no YAML frontmatter is found.
+ *
+ * @param {string} content      Raw file content (may have LF or CRLF endings).
+ * @param {string} effortValue  Rendered effort string, e.g. "xhigh".
+ * @returns {string}            Updated content with `effort:` injected, or the
+ *                              original content when no frontmatter is found.
+ */
+function injectEffortFrontmatter(content, effortValue) {
+  // Detect the dominant EOL from the first line (the opening `---`).
+  // If the very first `---` is followed by \r\n, treat the whole file as CRLF.
+  const eol = /^---\r\n/.test(content) ? '\r\n' : '\n';
+
+  // Build a frontmatter-matching regex that tolerates an optional \r before
+  // each \n, so we handle both LF and CRLF files without needing to normalise
+  // the whole content.
+  //
+  // Breakdown:
+  //   ^---\r?\n        — opening delimiter (with optional \r)
+  //   ([\s\S]*?)       — frontmatter body (non-greedy)
+  //   ^---\r?$         — closing delimiter line (optional \r, $ before \n in
+  //                       multiline mode)
+  //   (\r?\n|$)        — newline after closing --- (or end of string)
+  //
+  // The `m` flag makes ^ / $ match at every line boundary.
+  const fmRe = /^---\r?\n([\s\S]*?)^---\r?$/m;
+  const match = fmRe.exec(content);
+  if (!match) return content; // no YAML frontmatter — leave unchanged
+
+  // Idempotency guard: don't insert a second effort: line.
+  const fmBody = match[1]; // content between the two `---` lines
+  if (/^effort:/m.test(fmBody)) return content;
+
+  // Locate the exact position of the closing `---` line so we can insert
+  // before it using a simple string splice (avoids re-running the regex and
+  // avoids any edge-cases with $ matching \r differently per engine).
+  const closeIdx = match.index + 4 + fmBody.length; // 4 = len("---\n") (opening)
+  // Actually compute based on the full match start + captured group length:
+  // match[0] = full frontmatter block; match.index = start of that block.
+  // The closing `---` starts at: match.index + ("---" + eol).length + fmBody.length
+  const openLen = 3 + eol.length; // "---" + eol
+  const closingStart = match.index + openLen + fmBody.length;
+
+  const before = content.slice(0, closingStart);
+  const after = content.slice(closingStart);
+  return `${before}effort: ${effortValue}${eol}${after}`;
+}
+
+/**
  * #2517 — Read a single GSD config file (defaults.json or per-project
  * config.json) into a plain object, returning null on missing/empty files
  * and warning to stderr on JSON parse failures so silent corruption can't
@@ -8888,11 +8947,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
           const _agentName = entry.name.replace(/\.md$/, '');
           const _universalEffort = resolveInstallTimeEffort(_effortCfg, _agentName);
           const _renderedEffort = _getGsdEffortCatalog().renderEffortForRuntime('claude', _universalEffort).value;
-          // Insert effort: into frontmatter before the closing --- delimiter.
-          content = content.replace(
-            /^(---\n[\s\S]*?)(---)(\n|$)/,
-            (_, fm, close, nl) => `${fm}effort: ${_renderedEffort}\n${close}${nl}`
-          );
+          content = injectEffortFrontmatter(content, _renderedEffort);
         }
         // #3677 — normalize retired `/gsd:<cmd>` colon refs in the agent body
         // to the canonical hyphen form `/gsd-<cmd>` for hyphen-`name:`
@@ -11629,6 +11684,7 @@ module.exports = {
     readGsdEffectiveModelOverrides,
     readGsdEffectiveEffortConfig,
     resolveInstallTimeEffort,
+    injectEffortFrontmatter,
     get _GSD_EFFORT_MANIFEST_TIER_DEFAULTS() { return _getGsdEffortCatalog().EFFORT_MANIFEST_TIER_DEFAULTS; },
     get _GSD_EFFORT_MANIFEST_DEFAULT() { return _getGsdEffortCatalog().EFFORT_MANIFEST_DEFAULT; },
     install,
