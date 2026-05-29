@@ -1443,10 +1443,40 @@ function readGsdEffectiveEffortConfig(targetDir = null) {
   };
 }
 
-// Manifest routing-tier defaults for effort (sourced from config-defaults.manifest.json).
-// Must match CANONICAL_CONFIG_DEFAULTS.effort.routing_tier_defaults in core.cjs.
-// light → low, standard → high, heavy → xhigh.
-const _GSD_EFFORT_MANIFEST_TIER_DEFAULTS = { light: 'low', standard: 'high', heavy: 'xhigh' };
+// Manifest routing-tier defaults for effort — loaded from the canonical source
+// (config-defaults.manifest.json -> effort) so this file never drifts from it.
+// Resolved once at module init; install.js already ships this file and resolves
+// its path relative to __dirname just like the model-catalog/core.cjs requires above.
+const _GSD_CONFIG_DEFAULTS_MANIFEST = (() => {
+  const manifestPath = path.join(
+    __dirname,
+    '..',
+    'get-shit-done',
+    'bin',
+    'shared',
+    'config-defaults.manifest.json'
+  );
+  try {
+    return JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+  } catch (_err) {
+    // Fail loudly — a missing manifest is a broken install, not a soft degradation.
+    throw new Error(
+      `gsd install: cannot load config-defaults.manifest.json at ${manifestPath}: ${_err.message}`
+    );
+  }
+})();
+const _GSD_EFFORT_MANIFEST_TIER_DEFAULTS =
+  (_GSD_CONFIG_DEFAULTS_MANIFEST.effort &&
+    _GSD_CONFIG_DEFAULTS_MANIFEST.effort.routing_tier_defaults &&
+    typeof _GSD_CONFIG_DEFAULTS_MANIFEST.effort.routing_tier_defaults === 'object' &&
+    !Array.isArray(_GSD_CONFIG_DEFAULTS_MANIFEST.effort.routing_tier_defaults))
+    ? _GSD_CONFIG_DEFAULTS_MANIFEST.effort.routing_tier_defaults
+    : { light: 'low', standard: 'high', heavy: 'xhigh' }; // guard: unreachable if manifest is valid
+const _GSD_EFFORT_MANIFEST_DEFAULT =
+  (_GSD_CONFIG_DEFAULTS_MANIFEST.effort &&
+    typeof _GSD_CONFIG_DEFAULTS_MANIFEST.effort.default === 'string')
+    ? _GSD_CONFIG_DEFAULTS_MANIFEST.effort.default
+    : 'high'; // guard: unreachable if manifest is valid
 
 /**
  * #443 — Resolve install-time effort for a given agent, using the same
@@ -1496,8 +1526,8 @@ function resolveInstallTimeEffort(effortCfg, agentName) {
     if (typeof d === 'string') return d;
   }
 
-  // Step 4: hardcoded default
-  return 'high';
+  // Step 4: manifest default (sourced from config-defaults.manifest.json effort.default)
+  return _GSD_EFFORT_MANIFEST_DEFAULT;
 }
 
 /**
@@ -11575,6 +11605,8 @@ module.exports = {
     readGsdEffectiveModelOverrides,
     readGsdEffectiveEffortConfig,
     resolveInstallTimeEffort,
+    _GSD_EFFORT_MANIFEST_TIER_DEFAULTS,
+    _GSD_EFFORT_MANIFEST_DEFAULT,
     install,
     installAllRuntimes,
     uninstall,
