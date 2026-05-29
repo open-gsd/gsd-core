@@ -857,6 +857,27 @@ After pattern mapper completes, update the path variable:
 PATTERNS_PATH="${PHASE_DIR}/${PADDED_PHASE}-PATTERNS.md"
 ```
 
+## 7.9. Regenerate API-SURFACE.md (intel gate)
+
+**Skip if** `intel.enabled` is false (or absent — absent means false).
+
+```bash
+INTEL_CFG=$(gsd_run query config-get intel.enabled 2>/dev/null || echo "false")
+```
+
+**If `INTEL_CFG` is `false`:** Skip to step 8.
+
+**If `INTEL_CFG` is `true`:**
+
+```bash
+gsd_run intel api-surface
+API_SURFACE_PATH=".planning/intel/API-SURFACE.md"
+```
+
+Display: `✓ API surface regenerated: ${API_SURFACE_PATH}`
+
+This path is injected into the planner's required reading in step 8 with the HINT instruction below. When `intel.enabled` is false, `API_SURFACE_PATH` is empty and the planner entry is omitted.
+
 ## 8. Spawn gsd-planner Agent
 
 Display banner:
@@ -888,6 +909,7 @@ Planner prompt:
 - {UI_SPEC_PATH} (UI Design Contract — visual/interaction specs, if exists)
 - {SPIKE_FINDINGS_PATH} (Spike Findings — validated patterns, constraints, landmines from experiments, if exists)
 - {SKETCH_FINDINGS_PATH} (Sketch Findings — validated design decisions, CSS patterns, visual direction, if exists)
+- {API_SURFACE_PATH} (API Surface — HINT ONLY, if intel.enabled; see <intel_surface_hint> below)
 ${CONTEXT_WINDOW >= 500000 ? `
 **Cross-phase context (1M model enrichment):**
 - CONTEXT.md files from the 3 most recent completed phases (locked decisions — maintain consistency)
@@ -897,6 +919,12 @@ ${CONTEXT_WINDOW >= 500000 ? `
 - Skip all other prior phases to stay within context budget
 ` : ''}
 </files_to_read>
+
+${API_SURFACE_PATH ? `
+<intel_surface_hint>
+**API Surface (HINT — may be incomplete):** When \`intel.enabled\` is true, \`.planning/intel/API-SURFACE.md\` lists symbols extracted from the codebase by regex/JS analysis. Prefer symbols listed there when referencing existing code. This surface is regex/JS-derived and MAY BE INCOMPLETE — a symbol's absence means *unknown*, not *nonexistent*. Never treat the surface as exhaustive. If you reference a symbol that is not in the surface and this phase creates it, list it under "Artifacts this phase produces".
+</intel_surface_hint>
+` : ''}
 
 ${AGENT_SKILLS_PLANNER}
 
@@ -932,6 +960,7 @@ Output consumed by /gsd:execute-phase. Plans need:
 - Tasks in XML format with read_first and acceptance_criteria fields (MANDATORY on every task)
 - Verification criteria
 - must_haves for goal-backward verification
+- **"Artifacts this phase produces" section (MANDATORY)** — list every symbol this phase creates: decorators, classes, functions, CLI flags, struct/dataclass fields, new file paths. The plan-review-convergence source-grounding pass reads this section to exclude newly-created symbols from drift verification; omitting it causes new symbols to be flagged for acknowledgement.
 </downstream_consumer>
 
 <deep_work_rules>
@@ -975,6 +1004,7 @@ Every task MUST include these fields — they are NOT optional:
 - [ ] Dependencies correctly identified
 - [ ] Waves assigned for parallel execution
 - [ ] must_haves derived from phase goal
+- [ ] Every PLAN.md includes an "Artifacts this phase produces" section listing symbols created by this phase (decorators, classes, functions, CLI flags, struct/dataclass fields, new file paths)
 </quality_gate>
 ```
 
