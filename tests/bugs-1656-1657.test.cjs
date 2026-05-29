@@ -90,4 +90,20 @@ describe('#1657 / #191: installer/package metadata retires sdk seam', () => {
       'root package.json files must not include sdk paths'
     );
   });
+
+  test('root tsconfig project references resolve to existing paths (#191)', () => {
+    const tsconfigPath = path.join(__dirname, '..', 'tsconfig.json');
+    if (!fs.existsSync(tsconfigPath)) return;
+
+    const tsconfig = JSON.parse(fs.readFileSync(tsconfigPath, 'utf-8'));
+    const references = tsconfig.references || [];
+    for (const ref of references) {
+      const refPath = String(ref.path || '');
+      assert.notEqual(refPath, 'sdk', 'root tsconfig must not reference retired sdk project');
+      assert.ok(
+        fs.existsSync(path.join(__dirname, '..', refPath)),
+        `root tsconfig reference must exist: ${refPath}`
+      );
+    }
+  });
 });

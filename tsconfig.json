@@ -1,6 +1,4 @@
 {
   "files": [],
-  "references": [
-    { "path": "sdk" }
-  ]
+  "references": []
 }
