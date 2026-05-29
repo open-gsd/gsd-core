@@ -220,11 +220,15 @@ node gsd-tools.cjs validate health [--repair]
 
 # Probe context-window utilization for status-line / hook callers (v1.40.0)
 node gsd-tools.cjs validate context
+
+# Context utilization as typed JSON surface (#455)
+node gsd-tools.cjs validate context --json
 ```
 
 `validate context` emits a structured envelope with `utilization`, `status`
 (`ok` / `warn` / `critical` at the 60 % / 70 % thresholds), and a
 `suggestion` string. The same data backs `/gsd-health --context`.
+Pass `--json` to receive the typed IR directly (useful in scripts and test assertions).
 
 ---
 
@@ -329,6 +333,22 @@ node gsd-tools.cjs requirements mark-complete <ids>
 
 ---
 
+## Agent Skills
+
+Emit the skill block for a given agent type.
+
+```bash
+# Emit raw XML skill block (default — safe for shell expansion)
+node gsd-tools.cjs agent-skills <agent-type>
+
+# Emit typed JSON surface (#455) — { agent_type, block, skills_count }
+node gsd-tools.cjs agent-skills <agent-type> --json
+```
+
+The `--json` flag returns a typed IR object suitable for structured consumption and test assertions, while the default (no flag) preserves the raw XML output that workflow shell expansions rely on.
+
+---
+
 ## Skill Manifest
 
 Pre-compute and cache skill discovery for faster command loading.
@@ -370,8 +390,11 @@ node gsd-tools.cjs summary-extract <path> [--fields field1,field2]
 # Project statistics
 node gsd-tools.cjs stats [json|table]
 
-# Progress rendering
+# Progress rendering (human-readable)
 node gsd-tools.cjs progress [json|table|bar]
+
+# Progress as typed JSON surface (#455)
+node gsd-tools.cjs progress --json
 
 # Complete a todo
 node gsd-tools.cjs todo complete <filename>
