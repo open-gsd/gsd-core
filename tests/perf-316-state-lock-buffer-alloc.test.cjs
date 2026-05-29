@@ -69,6 +69,7 @@ parentPort.postMessage({ done: true });
 // workerData: { stateCjsPath, statePath, content, tmpDir }
 const WRITER_WORKER_CODE = `
 const { parentPort, workerData } = require('worker_threads');
+const fs = require('fs');
 const RealSAB = global.SharedArrayBuffer;
 let sabCount = 0;
 // Stub: increments sabCount, calls through so Atomics.wait gets a real SAB-backed buffer.
@@ -78,6 +79,26 @@ function StubSAB(...args) {
 }
 StubSAB.prototype = RealSAB.prototype;
 global.SharedArrayBuffer = StubSAB;
+
+// Lock-attempt counter: stubs fs.openSync to count atomic-create attempts
+// (state.cjs's acquireStateLock uses fs.openSync(..., O_CREAT|O_EXCL|O_WRONLY)
+// to atomically create the lock file). Each call with O_CREAT|O_EXCL flags
+// is one retry-loop iteration. >=2 attempts proves the SUT entered the retry
+// path — without this witness, a no-retry success would yield sabCount === 1
+// from BOTH pre-fix and post-fix code (the SAB is allocated unconditionally
+// post-fix, and exactly once for the single successful open pre-fix), giving
+// a false-pass against the bug. The 1000ms holdMs + 200ms SUT retry delay
+// guarantees >=4 attempts even on the slowest CI runners.
+const realOpenSync = fs.openSync.bind(fs);
+let lockAttempts = 0;
+fs.openSync = function(filePath, flags, mode) {
+  if (typeof filePath === 'string' && filePath.endsWith('.lock') &&
+      typeof flags === 'number' &&
+      (flags & fs.constants.O_CREAT) && (flags & fs.constants.O_EXCL)) {
+    lockAttempts++;
+  }
+  return realOpenSync(filePath, flags, mode);
+};
 
 // Delete cache entry to ensure a fresh require picks up the stubbed constructor.
 // (The inline "new SharedArrayBuffer(4)" in acquireStateLock reads the global at
@@ -92,7 +113,7 @@ try {
 } catch (e) {
   callErr = (e && e.message) ? e.message : String(e);
 }
-parentPort.postMessage({ sabCount, callErr });
+parentPort.postMessage({ sabCount, lockAttempts, callErr });
 `;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -134,25 +155,57 @@ describe('perf #316: acquireStateLock hoists sleep buffer — exactly one SAB pe
     'sabCount === 1 after a call that undergoes >= 1 retry (post-fix assertion)',
     { timeout: 8000 },
     async () => {
-      // ── Worker A: hold the lock for 400ms ──────────────────────────────────
-      // retryDelay = 200ms + up to 50ms jitter, so >= 1 retry fires before
-      // Worker A releases at 400ms.
-      const holdMs = 400;
+      // ── Worker A: hold the lock for 1000ms ─────────────────────────────────
+      // state.cjs retry delay = 200ms + 0-50ms jitter; 1000ms hold guarantees
+      // >=4 retries even on the slowest CI worker (~200ms spawn + 4 retry
+      // intervals ~1000ms ≈ hold duration). The lockAttempts assertion below
+      // proves the retry path was exercised end-to-end.
+      const holdMs = 1000;
       let holderWorker;
+      let resolveLockWritten;
+      const lockWritten = new Promise((resolve) => { resolveLockWritten = resolve; });
       const holderDone = new Promise((resolve, reject) => {
         holderWorker = new Worker(HOLDER_WORKER_CODE, {
           eval: true,
           workerData: { lockPath, holdMs },
         });
-        holderWorker.on('message', (msg) => { if (msg.done) resolve(); });
-        holderWorker.on('error', reject);
+        holderWorker.on('message', (msg) => {
+          if (msg.pid !== undefined) resolveLockWritten();
+          if (msg.done) resolve();
+        });
+        holderWorker.on('error', (err) => {
+          resolveLockWritten(); // unblock so the assert below fires immediately
+          reject(err);
+        });
         holderWorker.on('exit', (code) => {
+          resolveLockWritten(); // unblock if Worker A exits before posting
           if (code !== 0) reject(new Error('Holder worker exit code: ' + code));
         });
       });
+      // Suppress unhandled-rejection warnings on holderDone — we always observe
+      // it later via `await holderDone`, which re-throws the original error.
+      holderDone.catch(() => {});
 
-      // Give Worker A 80ms to write the lock file before starting Worker B.
-      await new Promise(resolve => setTimeout(resolve, 80));
+      // Deterministic synchronization: await Worker A's {pid} message, which
+      // it posts AFTER fs.writeFileSync returns (single-thread source order
+      // within the worker). By the time the parent receives this message,
+      // the lock file exists on disk and is visible across threads (workers
+      // share the same OS file table). The MessagePort buffers messages
+      // posted before the listener attaches, so there is no listener-race.
+      // Ref: https://nodejs.org/api/worker_threads.html#event-message_1
+      // The 5000ms safety timeout catches a hung holder; nominal latency <50ms.
+      let lockWrittenTimer;
+      const lockWrittenTimeout = new Promise((_, reject) => {
+        lockWrittenTimer = setTimeout(
+          () => reject(new Error('Holder worker did not post pid within 5000ms')),
+          5000
+        );
+      });
+      try {
+        await Promise.race([lockWritten, lockWrittenTimeout]);
+      } finally {
+        clearTimeout(lockWrittenTimer);
+      }
       assert.ok(fs.existsSync(lockPath), 'Worker A must have written the lock file');
 
       // ── Worker B: call writeStateMd, measure SAB allocations ───────────────
@@ -187,17 +240,33 @@ describe('perf #316: acquireStateLock hoists sleep buffer — exactly one SAB pe
         'at least one SharedArrayBuffer must be allocated (the sleep buffer must exist)'
       );
 
+      // PROOF OF RETRY-PATH COVERAGE (Contract 4 of test-rigor):
+      //   The sabCount === 1 invariant below only discriminates pre-fix from
+      //   post-fix when the SUT actually entered the retry loop. Without this
+      //   witness, a no-retry success path yields sabCount === 1 under BOTH
+      //   pre-fix and post-fix code (one SAB for the single successful open).
+      //   lockAttempts counts atomic-create attempts (fs.openSync with
+      //   O_CREAT|O_EXCL); >=2 means at least one failed-then-retried.
+      assert.ok(
+        writeResult.lockAttempts >= 2,
+        'SUT must have entered the retry path (>=1 failed lock attempt before success). ' +
+          'Got lockAttempts: ' + writeResult.lockAttempts + '. The 1000ms holdMs + 200ms ' +
+          'SUT retry delay guarantees >=2 attempts on any CI runner.'
+      );
+
       // THE KEY INVARIANT:
       //   POST-FIX: sabCount === 1  (buffer allocated once, before the retry loop)
-      //   PRE-FIX:  sabCount >= 2   (new buffer on EVERY retry iteration)
-      //
-      // With a 400ms hold and 200ms retryDelay, the pre-fix code observes sabCount=2.
-      // (Confirmed pre-fix RED: sabCount=2 with holdMs=400.)
+      //   PRE-FIX:  sabCount === lockAttempts  (new buffer on EVERY iteration,
+      //             both successful and failed)
+      // Combined with lockAttempts >= 2 above, sabCount === 1 strictly proves
+      // the buffer is hoisted (post-fix). Pre-fix code would observe sabCount
+      // equal to the iteration count, never 1.
       assert.strictEqual(
         writeResult.sabCount,
         1,
         'post-fix: exactly one SharedArrayBuffer must be allocated per acquireStateLock call ' +
-          '(buffer hoisted before retry loop). Got: ' + writeResult.sabCount
+          '(buffer hoisted before retry loop). Got: ' + writeResult.sabCount +
+          ' across ' + writeResult.lockAttempts + ' lock attempts.'
       );
     }
   );
