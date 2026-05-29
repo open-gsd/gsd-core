@@ -159,6 +159,13 @@ const INTERNAL_COMPONENT_SLUGS = new Set([
   // The regex captures "/gsd-test-runner" from the URL path component. This is
   // an external tool repo, not a user-typable slash command in this product.
   'test-runner',
+
+  // gsd-core — GitHub repository name: "open-gsd/gsd-core".
+  // docs/adr/22-plan-drift-guard.md references it as an issue tracker link:
+  //   open-gsd/gsd-core#22
+  // The regex captures "/gsd-core" from the org/repo path separator. This is
+  // the canonical repo name, not a user-typable slash command in this product.
+  'core',
 ]);
 
 /**
