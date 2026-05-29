@@ -362,7 +362,7 @@ The `gsd-planner` agent is decomposed into a core agent plus reference modules t
 
 ---
 
-## CLI Modules (75 shipped)
+## CLI Modules (76 shipped)
 
 Full listing: `get-shit-done/bin/lib/*.cjs`.
 
@@ -375,6 +375,7 @@ Full listing: `get-shit-done/bin/lib/*.cjs`.
 | `audit.cjs` | Audit dispatch, audit open sessions, audit storage helpers |
 | `check-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools check` |
 | `cjs-command-router-adapter.cjs` | Shared compatibility adapter for manifest-backed CJS command-family routers |
+| `clock.cjs` | Injectable clock seam (now/sleep) for deterministic lock testing |
 | `clusters.cjs` | Skill cluster definitions for the runtime surface module (ADR-0011 Phase 2) |
 | `code-review-flags.cjs` | Typed flag parser for `/gsd:code-review`; exports `parseCodeReviewFlags(argv)` (→ `{ fix, all, auto, depth, files }`) and `resolveCodeReviewWorkflow(flags)` (→ `'code-review.md' \| 'code-review-fix.md'`); canonical dispatch seam for `--fix`/`--all`/`--auto` routing |
 | `command-aliases.cjs` | Alias/subcommand metadata for manifest-backed family routers |

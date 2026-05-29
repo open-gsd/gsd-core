@@ -1,5 +1,5 @@
 {
-  "generated": "2026-05-26",
+  "generated": "2026-05-29",
   "families": {
     "agents": [
       "gsd-advisor-researcher",
@@ -267,6 +267,7 @@
       "audit.cjs",
       "check-command-router.cjs",
       "cjs-command-router-adapter.cjs",
+      "clock.cjs",
       "clusters.cjs",
       "code-review-flags.cjs",
       "command-aliases.cjs",

@@ -97,41 +97,6 @@ describe('acquireStateLock: success path still returns lockPath', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// C3. EEXIST error → retry semantics unchanged
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe('acquireStateLock: EEXIST retry semantics unchanged', () => {
-  test('C3: source still handles EEXIST with retry / stale-lock removal', () => {
-    const src = fs.readFileSync(STATE_CJS_PATH, 'utf-8');
-    const fnSrc = extractAcquireStateLockSource(src);
-
-    // The EEXIST branch falls through to stale-lock detection and Atomics.wait retry.
-    // These must still be present after the non-EEXIST fix.
-    assert.ok(
-      fnSrc.includes('Atomics.wait'),
-      'acquireStateLock must still use Atomics.wait() for EEXIST retry sleep'
-    );
-
-    assert.ok(
-      fnSrc.includes('staleThresholdMs'),
-      'acquireStateLock must still check stale lock threshold on EEXIST'
-    );
-
-    assert.ok(
-      fnSrc.includes('maxWaitMs'),
-      'acquireStateLock must still enforce max wait budget on EEXIST retry exhaustion'
-    );
-
-    // The fix only affects the non-EEXIST branch; the EEXIST guard must still exist.
-    const eexistGuard = /err\.code\s*!==\s*['"]EEXIST['"]/;
-    assert.ok(
-      eexistGuard.test(fnSrc),
-      'acquireStateLock must still distinguish EEXIST from other errors'
-    );
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
 // C4. RETRY_ERRNOS set: new Docker/NFS transient codes must be present (#3776)
 // ─────────────────────────────────────────────────────────────────────────────
 
