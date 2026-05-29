@@ -10,6 +10,13 @@
  * Real assertions on runtime values — no source-grep.
  */
 
+// MUST be set before require('bin/install.js') so the main install block
+// (guarded by !GSD_TEST_MODE) does not execute and perform a real global
+// install into $HOME/.claude/ — which would leak gsd-tools.cjs into the
+// ambient HOME and break runtime-launcher-parity test (D) in the same
+// node --test run (all unit tests share the same HOME on CI).
+process.env.GSD_TEST_MODE = '1';
+
 const assert = require('assert');
 const path = require('path');
 
