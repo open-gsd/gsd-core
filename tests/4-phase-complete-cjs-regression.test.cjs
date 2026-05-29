@@ -111,6 +111,38 @@ function readStateMd(tmpDir) {
   return fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf8');
 }
 
+function roadmapCompletionSnapshot(roadmapContent) {
+  const snapshot = {
+    phaseCheckboxes: [],
+    progressRows: [],
+  };
+
+  for (const line of roadmapContent.split(/\r?\n/)) {
+    let match = line.match(/^- \[([ x])\] Phase ([^:]+): (.*)$/);
+    if (match) {
+      snapshot.phaseCheckboxes.push({
+        checked: match[1] === 'x',
+        phase: match[2].trim(),
+        title: match[3].replace(/\s+\(completed [^)]+\)$/, '').trim(),
+      });
+      continue;
+    }
+
+    match = line.match(/^\|\s*(\d+[A-Z]?(?:\.\d+)*)\.?\s*([^|]*)\|\s*([^|]*)\|\s*([^|]*)\|\s*([^|]*)\|$/i);
+    if (match) {
+      snapshot.progressRows.push({
+        phase: match[1].trim(),
+        title: match[2].trim(),
+        plans: match[3].trim(),
+        status: match[4].trim(),
+        completed: match[5].trim(),
+      });
+    }
+  }
+
+  return snapshot;
+}
+
 function extractField(stateContent, fieldName) {
   const escaped = fieldName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const boldMatch = stateContent.match(new RegExp(`\\*\\*${escaped}:\\*\\*[ \\t]*(.+)`, 'i'));
@@ -235,9 +267,11 @@ describe('issue #4 (CJS): cmdPhaseComplete — idempotency (blind-increment bug)
     const roadmapAfter = fs.readFileSync(roadmapPath, 'utf8');
     const stateAfter = fs.readFileSync(statePath, 'utf8');
 
-    assert.ok(!roadmapAfter.includes('[x]'), 'ROADMAP.md should not leave phase checkbox marked complete');
-    assert.ok(!roadmapAfter.includes('Complete    '), 'ROADMAP.md should not leave progress row marked complete');
-    assert.ok(originalRoadmap.includes('Phase 01: Foundation'), 'fixture sanity check');
+    assert.deepEqual(
+      roadmapCompletionSnapshot(roadmapAfter),
+      roadmapCompletionSnapshot(originalRoadmap),
+      'ROADMAP.md should roll back to its original completion state',
+    );
     assert.equal(stateAfter, originalState, 'STATE.md should remain unchanged after injected write failure');
   });
 });
