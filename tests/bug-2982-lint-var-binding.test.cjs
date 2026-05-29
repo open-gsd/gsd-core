@@ -1,3 +1,7 @@
+// allow-test-rule: structural-regression-guard
+// Reads hook .js or bin/install.js source to assert structural invariants
+// (search array order, function wiring, path constants) that cannot be
+// verified by observing runtime outputs alone. Per CONTRIBUTING.md exception matrix.
 'use strict';
 // Migrated (#455): detectVarBindingViolations/detectWrappedAssertOkMatch are pure
 // functions returning typed violation records; all assertions use typed fields.

@@ -1,3 +1,7 @@
+// allow-test-rule: source-text-is-the-product
+// Workflow .md / agent .md / command .md / reference .md files — their text
+// IS what the runtime loads. Testing text content tests the deployed contract.
+// Per CONTRIBUTING.md exception matrix.
 // Migrated (#455): tests parse JSON output and assert on typed fields
 // (output.status, error/warning/info codes). The single message.includes()
 // at W001 checks the canonical section name '## Core Value' which is the

@@ -1,3 +1,7 @@
+// allow-test-rule: source-text-is-the-product
+// Workflow .md / agent .md / command .md / reference .md files — their text
+// IS what the runtime loads. Testing text content tests the deployed contract.
+// Per CONTRIBUTING.md exception matrix.
 
 /**
  * Regression test for bug #2516
