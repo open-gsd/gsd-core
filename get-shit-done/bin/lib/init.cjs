@@ -1832,8 +1832,15 @@ function buildAgentSkillsBlock(config, agentType, projectRoot) {
 /**
  * Command: output the agent skills block for a given agent type.
  * Used by workflows: SKILLS=$(node "$TOOLS" agent-skills gsd-executor 2>/dev/null)
+ *
+ * With --json flag: emits a typed JSON IR object so tests can assert structurally
+ * instead of grep-parsing the XML text (retiring pending-migration-to-typed-ir, #455):
+ *   { agent_type: string, block: string, skills_count: number }
+ *
+ * Without --json (default): outputs the raw XML block so workflow shell expansions
+ * continue to work unchanged.
  */
-function cmdAgentSkills(cwd, agentType, raw) {
+function cmdAgentSkills(cwd, agentType, raw, jsonMode) {
   if (!agentType) {
     // No agent type — output empty string silently
     output('', raw, '');
@@ -1842,7 +1849,16 @@ function cmdAgentSkills(cwd, agentType, raw) {
 
   const config = loadConfig(cwd);
   const block = buildAgentSkillsBlock(config, agentType, cwd);
-  // Output raw text (not JSON) so workflows can embed it directly
+
+  if (jsonMode) {
+    // --json mode: emit typed IR so callers can assert on typed fields
+    const skillPaths = (config && config.agent_skills && config.agent_skills[agentType]) || [];
+    const normalizedPaths = Array.isArray(skillPaths) ? skillPaths : (skillPaths ? [skillPaths] : []);
+    output({ agent_type: agentType, block: block || '', skills_count: normalizedPaths.length }, raw);
+    return;
+  }
+
+  // Default: output the raw XML block so workflow shell expansions work unchanged
   if (block) {
     process.stdout.write(block);
   }

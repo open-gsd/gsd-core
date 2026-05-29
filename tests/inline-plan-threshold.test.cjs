@@ -1,7 +1,8 @@
-// allow-test-rule: pending-migration-to-typed-ir [#2974]
-// Tracked in #2974 for migration to typed-IR assertions per CONTRIBUTING.md
-// "Prohibited: Raw Text Matching on Test Outputs". Per-file review may
-// reclassify some entries as source-text-is-the-product during migration.
+// allow-test-rule: source-text-is-the-product
+// execute-plan.md and planning-config.md are deployed workflow/reference files
+// whose text IS the product loaded by agents at runtime. The config-set tests
+// use runGsdTools and assert on success/failure (typed). Migration from
+// pending-migration-to-typed-ir per #455.
 
 /**
  * Tests for workflow.inline_plan_threshold config key and routing logic (#1979).

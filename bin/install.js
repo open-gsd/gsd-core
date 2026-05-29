@@ -6930,6 +6930,27 @@ function validateHookFields(settings) {
 }
 
 /**
+ * GSD hook filenames removed during uninstall.
+ * Module-level so tests can assert structurally instead of regex-parsing source
+ * (retires pending-migration-to-typed-ir on hooks-opt-in.test.cjs, per #455).
+ */
+const GSD_UNINSTALL_HOOKS = [
+  'gsd-statusline.js',
+  'gsd-check-update.js',
+  'gsd-check-update.cmd',
+  'gsd-context-monitor.js',
+  'gsd-prompt-guard.js',
+  'gsd-read-guard.js',
+  'gsd-read-injection-scanner.js',
+  'gsd-update-banner.js',
+  'gsd-workflow-guard.js',
+  'gsd-session-state.sh',
+  'gsd-validate-commit.sh',
+  'gsd-phase-boundary.sh',
+  'gsd-graphify-update.sh',
+];
+
+/**
  * Uninstall GSD from the specified directory for a specific runtime
  * Removes only GSD-specific files/directories, preserves user content
  * @param {boolean} isGlobal - Whether to uninstall from global or local
@@ -7178,9 +7199,8 @@ function uninstall(isGlobal, runtime = 'claude') {
   // 4. Remove GSD hooks
   const hooksDir = path.join(targetDir, 'hooks');
   if (fs.existsSync(hooksDir)) {
-    const gsdHooks = ['gsd-statusline.js', 'gsd-check-update.js', 'gsd-check-update.cmd', 'gsd-context-monitor.js', 'gsd-prompt-guard.js', 'gsd-read-guard.js', 'gsd-read-injection-scanner.js', 'gsd-update-banner.js', 'gsd-workflow-guard.js', 'gsd-session-state.sh', 'gsd-validate-commit.sh', 'gsd-phase-boundary.sh', 'gsd-graphify-update.sh'];
     let hookCount = 0;
-    for (const hook of gsdHooks) {
+    for (const hook of GSD_UNINSTALL_HOOKS) {
       const hookPath = path.join(hooksDir, hook);
       if (fs.existsSync(hookPath)) {
         fs.unlinkSync(hookPath);
@@ -11762,6 +11782,7 @@ module.exports = {
     maybeSuggestPathExport,
     runtimeMap,
     allRuntimes,
+    GSD_UNINSTALL_HOOKS,
     parseRuntimeInput,
     buildRuntimePromptText,
     buildUpdateBannerPromptText,
@@ -11781,7 +11802,7 @@ module.exports = {
   };
 
 // Main logic — only run when not loaded as a module for testing
-if (!process.env.GSD_TEST_MODE) {
+if (require.main === module && !process.env.GSD_TEST_MODE) {
   if (hasSkillsRoot) {
     // Print the skills root directory for a given runtime (used by /gsd-sync-skills).
     // Usage: node install.js --skills-root <runtime>

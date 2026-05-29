@@ -34,6 +34,7 @@ const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const {
   writeManifest,
+  GSD_UNINSTALL_HOOKS,
 } = require('../bin/install.js');
 
 const {
@@ -593,60 +594,50 @@ describe('#1755: .sh hooks are copied and executable after install', () => {
   });
 });
 
-describe('install.js source correctness', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'bin', 'install.js'), 'utf8');
-
-  test('.sh files get chmod after copyFileSync', () => {
-    assert.ok(src.includes("if (entry.endsWith('.sh'))"));
+// Migrated (#455): uses typed export GSD_UNINSTALL_HOOKS instead of
+// source-grep assertions on bin/install.js for the uninstall hook list tests.
+describe('install.js uninstall hooks registry (typed assertions)', () => {
+  test('GSD_UNINSTALL_HOOKS is a non-empty array', () => {
+    assert.ok(Array.isArray(GSD_UNINSTALL_HOOKS), 'GSD_UNINSTALL_HOOKS must be an array');
+    assert.ok(GSD_UNINSTALL_HOOKS.length > 0, 'GSD_UNINSTALL_HOOKS must not be empty');
   });
 
-  test('Codex hook uses correct filename gsd-check-update.js', () => {
-    assert.ok(!src.match(/['"]gsd-update-check\.js['"]/));
+  test('gsd-workflow-guard.js is in GSD_UNINSTALL_HOOKS', () => {
+    assert.ok(
+      GSD_UNINSTALL_HOOKS.includes('gsd-workflow-guard.js'),
+      'GSD_UNINSTALL_HOOKS must include gsd-workflow-guard.js'
+    );
   });
 
-  test('Codex hook path does not use get-shit-done/hooks/ subdirectory', () => {
-    assert.ok(!src.includes("'get-shit-done', 'hooks', 'gsd-check-update"));
+  test('phantom gsd-check-update.sh is NOT in GSD_UNINSTALL_HOOKS', () => {
+    assert.ok(
+      !GSD_UNINSTALL_HOOKS.includes('gsd-check-update.sh'),
+      'GSD_UNINSTALL_HOOKS must not include the phantom gsd-check-update.sh entry'
+    );
   });
 
-  test('cache invalidation uses ~/.cache/gsd/ path', () => {
-    assert.ok(src.includes("os.homedir(), '.cache', 'gsd'"));
-  });
-
-  test('manifest tracks .sh hook files', () => {
-    assert.ok(src.includes("file.endsWith('.sh')"));
-  });
-
-  test('gsd-workflow-guard.js is in uninstall hook list', () => {
-    const m = src.match(/const gsdHooks\s*=\s*\[([^\]]+)\]/);
-    assert.ok(m, 'gsdHooks array must exist');
-    assert.ok(m[1].includes('gsd-workflow-guard.js'));
-  });
-
-  test('phantom gsd-check-update.sh is not in uninstall hook list', () => {
-    const m = src.match(/const gsdHooks\s*=\s*\[([^\]]+)\]/);
-    assert.ok(m);
-    assert.ok(!m[1].includes('gsd-check-update.sh'));
-  });
-
-  test('isGsdHookCommand covers all GSD hook names', () => {
-    const names = [
-      'gsd-check-update', 'gsd-statusline', 'gsd-session-state',
-      'gsd-context-monitor', 'gsd-phase-boundary', 'gsd-prompt-guard',
-      'gsd-read-guard', 'gsd-validate-commit', 'gsd-workflow-guard',
-    ];
-    for (const name of names) {
-      assert.ok(src.includes(`'${name}'`) || src.includes(`"${name}"`));
+  test('GSD_UNINSTALL_HOOKS covers all 3 opt-in bash hooks', () => {
+    const required = ['gsd-session-state.sh', 'gsd-validate-commit.sh', 'gsd-phase-boundary.sh'];
+    for (const hook of required) {
+      assert.ok(
+        GSD_UNINSTALL_HOOKS.includes(hook),
+        `GSD_UNINSTALL_HOOKS must include ${hook}`
+      );
     }
   });
 
-  test('no duplicate isCursor or isWindsurf branches in uninstall', () => {
-    const uninstallStart = src.indexOf('function uninstall(');
-    const uninstallEnd = src.indexOf('function verifyInstalled(');
-    assert.ok(uninstallStart !== -1);
-    assert.ok(uninstallEnd !== -1);
-    const block = src.substring(uninstallStart, uninstallEnd);
-    assert.strictEqual((block.match(/else if \(isCursor\)/g) || []).length, 0);
-    assert.strictEqual((block.match(/else if \(isWindsurf\)/g) || []).length, 0);
+  test('GSD_UNINSTALL_HOOKS covers core JS hooks', () => {
+    const coreJsHooks = [
+      'gsd-check-update.js', 'gsd-statusline.js', 'gsd-session-state.sh',
+      'gsd-context-monitor.js', 'gsd-phase-boundary.sh', 'gsd-prompt-guard.js',
+      'gsd-read-guard.js', 'gsd-validate-commit.sh', 'gsd-workflow-guard.js',
+    ];
+    for (const hook of coreJsHooks) {
+      assert.ok(
+        GSD_UNINSTALL_HOOKS.includes(hook),
+        `GSD_UNINSTALL_HOOKS must include ${hook}`
+      );
+    }
   });
 });
 

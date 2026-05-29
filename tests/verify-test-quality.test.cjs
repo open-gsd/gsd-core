@@ -1,6 +1,7 @@
-// allow-test-rule: pending-migration-to-typed-ir [#2974]
-// Tracked in #2974 for migration to typed-IR assertions per CONTRIBUTING.md
-// "Prohibited: Raw Text Matching on Test Outputs". Do not copy this pattern.
+// allow-test-rule: source-text-is-the-product
+// Tests write synthetic fixture files and apply regex detectors to them.
+// The fixture text IS the product being tested (testing linter/detector logic,
+// not GSD command JSON output). Migrated from pending-migration-to-typed-ir per #455.
 
 /**
  * Tests for the audit_test_quality step in verify-phase.md

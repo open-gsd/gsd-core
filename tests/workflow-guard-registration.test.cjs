@@ -1,7 +1,7 @@
-// allow-test-rule: pending-migration-to-typed-ir [#2974]
-// Tracked in #2974 for migration to typed-IR assertions per CONTRIBUTING.md
-// "Prohibited: Raw Text Matching on Test Outputs". Per-file review may
-// reclassify some entries as source-text-is-the-product during migration.
+// allow-test-rule: structural-regression-guard
+// Reads hook .js or bin/install.js source to assert structural invariants
+// (search array order, function wiring, path constants) that cannot be
+// verified by observing runtime outputs alone. Per CONTRIBUTING.md exception matrix.
 
 /**
  * Regression guard for #1767: gsd-workflow-guard.js must be registered in settings.json
@@ -78,15 +78,11 @@ describe('workflow-guard hook registration (#1767)', () => {
 describe('hook registration completeness anti-pattern guard', () => {
   test('every JS hook in gsdHooks has a command construction in install.js', () => {
     const content = fs.readFileSync(INSTALL_JS, 'utf-8');
-    // Extract gsdHooks array entries
-    const hooksMatch = content.match(/gsdHooks\s*=\s*\[([^\]]+)\]/);
-    assert.ok(hooksMatch, 'gsdHooks array must exist in install.js');
+    // Use the typed export instead of source-grep regex (branch #455: retire source-grep)
+    const { GSD_UNINSTALL_HOOKS } = require('../bin/install.js');
+    assert.ok(Array.isArray(GSD_UNINSTALL_HOOKS), 'GSD_UNINSTALL_HOOKS must be exported from install.js');
 
-    const hookNames = hooksMatch[1]
-      .match(/'([^']+)'/g)
-      .map(h => h.replace(/'/g, ''));
-
-    const jsHooks = hookNames.filter(h => h.endsWith('.js'));
+    const jsHooks = GSD_UNINSTALL_HOOKS.filter(h => h.endsWith('.js'));
 
     const missing = [];
     for (const hook of jsHooks) {

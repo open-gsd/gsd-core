@@ -4,6 +4,10 @@
  * CLI integration tests for the `agent-skills` command that reads
  * `agent_skills` from .planning/config.json and returns a formatted
  * skills block for injection into Task() prompts.
+ *
+ * Migrated (#455): uses `--json` flag to get typed IR
+ *   { agent_type, block, skills_count }
+ * instead of asserting on raw XML output text.
  */
 
 const { test, describe, beforeEach, afterEach } = require('node:test');
@@ -24,6 +28,24 @@ function readConfig(tmpDir) {
   return JSON.parse(fs.readFileSync(configPath, 'utf-8'));
 }
 
+// Run agent-skills with --json for typed IR assertions
+function runAgentSkillsJson(args, tmpDir, env) {
+  // Insert --json after 'agent-skills' subcommand
+  const allArgs = Array.isArray(args) ? args : [args];
+  const cmdIdx = allArgs.indexOf('agent-skills');
+  const withJson = [...allArgs];
+  if (cmdIdx !== -1) {
+    withJson.splice(cmdIdx + 1, 0, '--json');
+  }
+  const result = runGsdTools(withJson, tmpDir, env || { HOME: tmpDir, USERPROFILE: tmpDir });
+  if (!result.success) return { success: false, error: result.error, ir: null };
+  try {
+    return { success: true, ir: JSON.parse(result.output) };
+  } catch (e) {
+    return { success: false, error: `JSON parse failed: ${e.message} output=${result.output}`, ir: null };
+  }
+}
+
 // ─── agent-skills command ────────────────────────────────────────────────────
 
 describe('agent-skills command', () => {
@@ -37,31 +59,33 @@ describe('agent-skills command', () => {
     cleanup(tmpDir);
   });
 
-  test('returns empty when no config exists', () => {
-    // No config.json at all
-    const result = runGsdTools(['agent-skills', 'gsd-executor'], tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
-    // Should succeed with empty output (no skills configured)
-    assert.strictEqual(result.output, '');
+  test('returns empty block when no config exists', () => {
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.agent_type, 'gsd-executor');
+    assert.strictEqual(r.ir.block, '', 'block must be empty when no skills configured');
   });
 
-  test('returns empty when config has no agent_skills section', () => {
+  test('returns empty block when config has no agent_skills section', () => {
     writeConfig(tmpDir, { model_profile: 'balanced' });
-    const result = runGsdTools(['agent-skills', 'gsd-executor'], tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
-    assert.strictEqual(result.output, '');
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.block, '');
   });
 
-  test('returns empty for unconfigured agent type', () => {
+  test('returns empty block for unconfigured agent type', () => {
     writeConfig(tmpDir, {
       agent_skills: {
         'gsd-executor': ['skills/test-skill'],
       },
     });
-    const result = runGsdTools(['agent-skills', 'gsd-planner'], tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
-    assert.strictEqual(result.output, '');
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-planner'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.agent_type, 'gsd-planner');
+    assert.strictEqual(r.ir.block, '');
   });
 
-  test('returns formatted block for configured agent with array of paths', () => {
-    // Create the skill directories with SKILL.md files
+  test('returns block containing agent_skills XML for configured agent', () => {
     const skillDir = path.join(tmpDir, 'skills', 'test-skill');
     fs.mkdirSync(skillDir, { recursive: true });
     fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# Test Skill\n');
@@ -72,14 +96,31 @@ describe('agent-skills command', () => {
       },
     });
 
-    const result = runGsdTools(['agent-skills', 'gsd-executor'], tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
-    assert.ok(result.success, `Command failed: ${result.error}`);
-    assert.ok(result.output.includes('<agent_skills>'), 'Should contain <agent_skills> tag');
-    assert.ok(result.output.includes('</agent_skills>'), 'Should contain closing tag');
-    assert.ok(result.output.includes('skills/test-skill/SKILL.md'), 'Should contain skill path');
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.agent_type, 'gsd-executor');
+    assert.ok(r.ir.block.includes('<agent_skills>'), `block must contain <agent_skills> tag, got: ${r.ir.block}`);
+    assert.ok(r.ir.block.includes('</agent_skills>'), 'block must contain closing tag');
+    assert.ok(r.ir.block.includes('skills/test-skill/SKILL.md'), 'block must contain skill path');
   });
 
-  test('returns formatted block for configured agent with single string path', () => {
+  test('skills_count reflects configured skill paths for agent type', () => {
+    const skillDir = path.join(tmpDir, 'skills', 'test-skill');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# Test Skill\n');
+
+    writeConfig(tmpDir, {
+      agent_skills: {
+        'gsd-executor': ['skills/test-skill'],
+      },
+    });
+
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.skills_count, 1, 'skills_count must be 1 for single configured skill path');
+  });
+
+  test('returns block for configured agent with single string path', () => {
     const skillDir = path.join(tmpDir, 'skills', 'my-skill');
     fs.mkdirSync(skillDir, { recursive: true });
     fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# My Skill\n');
@@ -90,9 +131,10 @@ describe('agent-skills command', () => {
       },
     });
 
-    const result = runGsdTools(['agent-skills', 'gsd-executor'], tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
-    assert.ok(result.success, `Command failed: ${result.error}`);
-    assert.ok(result.output.includes('skills/my-skill/SKILL.md'), 'Should contain skill path');
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.ok(r.ir.block.includes('skills/my-skill/SKILL.md'), 'block must contain skill path');
+    assert.strictEqual(r.ir.skills_count, 1, 'skills_count must be 1 for single string path');
   });
 
   test('handles multiple skill paths', () => {
@@ -109,10 +151,11 @@ describe('agent-skills command', () => {
       },
     });
 
-    const result = runGsdTools(['agent-skills', 'gsd-executor'], tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
-    assert.ok(result.success, `Command failed: ${result.error}`);
-    assert.ok(result.output.includes('skills/skill-a/SKILL.md'), 'Should contain first skill');
-    assert.ok(result.output.includes('skills/skill-b/SKILL.md'), 'Should contain second skill');
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.ok(r.ir.block.includes('skills/skill-a/SKILL.md'), 'block must contain first skill');
+    assert.ok(r.ir.block.includes('skills/skill-b/SKILL.md'), 'block must contain second skill');
+    assert.strictEqual(r.ir.skills_count, 2, 'skills_count must be 2 for two configured paths');
   });
 
   test('warns for nonexistent skill path but does not error', () => {
@@ -122,12 +165,9 @@ describe('agent-skills command', () => {
       },
     });
 
-    const result = runGsdTools(['agent-skills', 'gsd-executor'], tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
-    // Should not crash — returns empty output (the missing skill is skipped)
-    assert.ok(result.success, 'Command should succeed even with missing skill paths');
-    // Should not include the missing skill in the output
-    assert.ok(!result.output.includes('skills/nonexistent/SKILL.md'),
-      'Should not include nonexistent skill in output');
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
+    assert.ok(r.success, 'Command should succeed even with missing skill paths');
+    assert.strictEqual(r.ir.block, '', 'block must be empty when all skill paths are missing');
   });
 
   test('validates path safety — rejects traversal attempts', () => {
@@ -137,17 +177,17 @@ describe('agent-skills command', () => {
       },
     });
 
-    const result = runGsdTools(['agent-skills', 'gsd-executor'], tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
-    // Should not include traversal path in output
-    assert.ok(!result.output.includes('/etc/passwd'), 'Should not include traversal path');
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
+    assert.ok(!r.ir || !r.ir.block.includes('/etc/passwd'), 'block must not include traversal path');
   });
 
-  test('returns empty when no agent type argument provided', () => {
-    const result = runGsdTools(['agent-skills'], tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
-    // Should succeed with empty output — no agent type means no skills to return
-    assert.ok(result.success, 'Command should succeed');
-    const parsed = JSON.parse(result.output);
-    assert.strictEqual(parsed, '', 'Should return empty string');
+  test('returns typed empty IR when no agent type argument provided', () => {
+    const r = runAgentSkillsJson(['agent-skills'], tmpDir);
+    // With --json and no agent type, the command outputs the empty-string IR
+    assert.ok(r.success, 'Command should succeed');
+    // Output is JSON, either empty string or empty object
+    const parsed = JSON.parse(r.success ? JSON.stringify(r.ir) : '""');
+    assert.ok(parsed === '' || (typeof parsed === 'object'), 'Should return empty or empty-agent IR');
   });
 });
 
@@ -239,9 +279,12 @@ describe('agent-skills global: prefix', () => {
       agent_skills: { 'gsd-executor': ['global:valid-skill'] },
     });
 
-    const result = runGsdTools(['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome });
-    assert.ok(result.output.includes('valid-skill/SKILL.md'), `should reference the global skill: ${result.output}`);
-    assert.ok(result.output.includes('<agent_skills>'), 'should emit agent_skills block');
+    const r = runAgentSkillsJson(
+      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+    );
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.ok(r.ir.block.includes('valid-skill/SKILL.md'), `block must reference the global skill: ${r.ir.block}`);
+    assert.ok(r.ir.block.includes('<agent_skills>'), 'block must emit agent_skills XML');
   });
 
   test('global:invalid!name is rejected by regex and skipped', () => {
@@ -249,25 +292,28 @@ describe('agent-skills global: prefix', () => {
       agent_skills: { 'gsd-executor': ['global:invalid!name'] },
     });
 
-    const result = runGsdTools(['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome });
-    // No valid skills → empty output, command succeeds
-    assert.strictEqual(result.output, '', 'should skip invalid name without crashing');
+    const r = runAgentSkillsJson(
+      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+    );
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.block, '', 'block must be empty when invalid name is rejected');
   });
 
   test('global:missing-skill is skipped when directory is absent', () => {
-    // Do NOT create the skill directory
     writeConfig(tmpDir, {
       agent_skills: { 'gsd-executor': ['global:missing-skill'] },
     });
 
-    const result = runGsdTools(['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome });
-    assert.strictEqual(result.output, '', 'should skip missing skill gracefully');
+    const r = runAgentSkillsJson(
+      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+    );
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.block, '', 'block must be empty when skill is missing');
   });
 
   test('mix of global: and project-relative paths both resolve correctly', () => {
     createGlobalSkill('shadcn');
 
-    // Create a project-relative skill
     const projectSkillDir = path.join(tmpDir, 'skills', 'local-skill');
     fs.mkdirSync(projectSkillDir, { recursive: true });
     fs.writeFileSync(path.join(projectSkillDir, 'SKILL.md'), '# local\n');
@@ -276,9 +322,13 @@ describe('agent-skills global: prefix', () => {
       agent_skills: { 'gsd-executor': ['global:shadcn', 'skills/local-skill'] },
     });
 
-    const result = runGsdTools(['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome });
-    assert.ok(result.output.includes('shadcn/SKILL.md'), 'should include global shadcn');
-    assert.ok(result.output.includes('skills/local-skill/SKILL.md'), 'should include project-relative skill');
+    const r = runAgentSkillsJson(
+      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+    );
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.ok(r.ir.block.includes('shadcn/SKILL.md'), 'block must include global shadcn');
+    assert.ok(r.ir.block.includes('skills/local-skill/SKILL.md'), 'block must include project-relative skill');
+    assert.strictEqual(r.ir.skills_count, 2, 'skills_count must be 2 for both configured paths');
   });
 
   test('global: with empty name produces clear warning and skips', () => {
@@ -286,9 +336,10 @@ describe('agent-skills global: prefix', () => {
       agent_skills: { 'gsd-executor': ['global:'] },
     });
 
-    const result = runGsdTools(['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome });
-    assert.strictEqual(result.output, '', 'should skip empty global: prefix');
-    // The warning goes to stderr — cannot assert on it through runGsdTools's output field,
-    // but the command must not crash and must return empty.
+    const r = runAgentSkillsJson(
+      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+    );
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.block, '', 'block must be empty for empty global: prefix');
   });
 });

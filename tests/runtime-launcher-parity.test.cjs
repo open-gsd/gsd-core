@@ -272,7 +272,7 @@ describe('runtime-launcher-parity (#373)', () => {
         execFileSync('bash', [scriptPath], {
           encoding: 'utf8',
           stdio: ['pipe', 'pipe', 'pipe'],
-          env: { ...process.env, PATH: isolatedPath },
+          env: { ...process.env, PATH: isolatedPath, HOME: base },
         });
       } catch (err) {
         threw = true;

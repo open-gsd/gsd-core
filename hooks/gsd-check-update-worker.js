@@ -16,6 +16,9 @@ const { isSemverNewer } = require('../get-shit-done/bin/lib/semver-compare.cjs')
 // Derive the published package name from package.json so this survives
 // future renames and always matches the actual registry entry (#378).
 const PACKAGE_NAME = require('../package.json').name;
+// Authoritative list of managed hooks — shared with tests to retire source-grep
+// assertions (pending-migration-to-typed-ir [#455]).
+const { MANAGED_HOOKS } = require('./managed-hooks-registry.cjs');
 
 const cacheFile = process.env.GSD_CACHE_FILE;
 const projectVersionFile = process.env.GSD_PROJECT_VERSION_FILE;
@@ -38,21 +41,7 @@ try {
 // Hooks are installed at configDir/hooks/ (e.g. ~/.claude/hooks/) (#1421)
 // Only check hooks that GSD currently ships — orphaned files from removed features
 // (e.g., gsd-intel-*.js) must be ignored to avoid permanent stale warnings (#1750)
-const MANAGED_HOOKS = [
-  'gsd-check-update-worker.js',
-  'gsd-check-update.js',
-  'gsd-context-monitor.js',
-  'gsd-graphify-update.sh',
-  'gsd-phase-boundary.sh',
-  'gsd-prompt-guard.js',
-  'gsd-read-guard.js',
-  'gsd-read-injection-scanner.js',
-  'gsd-session-state.sh',
-  'gsd-statusline.js',
-  'gsd-update-banner.js',
-  'gsd-validate-commit.sh',
-  'gsd-workflow-guard.js',
-];
+// MANAGED_HOOKS is imported from ./managed-hooks-registry.cjs above.
 
 let staleHooks = [];
 if (configDir) {

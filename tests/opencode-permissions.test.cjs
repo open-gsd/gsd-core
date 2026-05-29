@@ -1,6 +1,8 @@
-// allow-test-rule: pending-migration-to-typed-ir [#2974]
-// Tracked in #2974 for migration to typed-IR assertions per CONTRIBUTING.md
-// "Prohibited: Raw Text Matching on Test Outputs". Do not copy this pattern.
+// allow-test-rule: architectural-invariant
+// The finishInstall test asserts the call-site passes configDir (not a hardcoded
+// path) — a load-bearing wiring invariant. All other tests call the exported
+// configureOpencodePermissions function directly and assert on typed config state.
+// Migrated from pending-migration-to-typed-ir per #455.
 
 /**
  * Regression tests for OpenCode permission config handling.

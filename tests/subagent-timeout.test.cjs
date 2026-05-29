@@ -1,7 +1,7 @@
-// allow-test-rule: pending-migration-to-typed-ir [#2974]
-// Tracked in #2974 for migration to typed-IR assertions per CONTRIBUTING.md
-// "Prohibited: Raw Text Matching on Test Outputs". Per-file review may
-// reclassify some entries as source-text-is-the-product during migration.
+// Migrated (#455): all runGsdTools assertions parse JSON and assert on typed
+// fields (parsed.subagent_timeout, parsed.context_window). The workflow/reference
+// file checks are source-text-is-the-product (deployed file content is the product).
+// allow-test-rule: source-text-is-the-product
 
 /**
  * GSD Tools Tests - subagent timeout configuration
