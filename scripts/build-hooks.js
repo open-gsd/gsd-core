@@ -224,4 +224,13 @@ function build() {
   console.log('\nBuild complete.');
 }
 
-build();
+// Export HOOKS_TO_COPY so tests can require() this file and assert against
+// the typed value instead of regex-parsing the source text (retires
+// pending-migration-to-typed-ir for orphaned-hooks.test.cjs, per #455).
+// Guard the build() call so requiring this file as a module does not trigger
+// a full build run (which copies files and writes to disk).
+if (require.main === module) {
+  build();
+}
+
+module.exports = { HOOKS_TO_COPY };

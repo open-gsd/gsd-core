@@ -1,7 +1,6 @@
 'use strict';
-// allow-test-rule: pending-migration-to-typed-ir [#2974]
-// Tracked in #2974 for migration to typed-IR assertions per CONTRIBUTING.md
-// "Prohibited: Raw Text Matching on Test Outputs". Do not copy this pattern.
+// Migrated (#455): detectVarBindingViolations/detectWrappedAssertOkMatch are pure
+// functions returning typed violation records; all assertions use typed fields.
 
 process.env.GSD_TEST_MODE = '1';
 

@@ -821,7 +821,12 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
     }
 
     case 'agent-skills': {
-      init.cmdAgentSkills(cwd, args[1], raw);
+      // --json emits typed IR { agent_type, block, skills_count } for test assertions
+      // (#455). Default (no flag) outputs raw XML so workflow shell expansions work.
+      const jsonIdx = args.indexOf('--json');
+      const agentSkillsJsonMode = jsonIdx !== -1;
+      if (agentSkillsJsonMode) args.splice(jsonIdx, 1);
+      init.cmdAgentSkills(cwd, args[1], raw, agentSkillsJsonMode);
       break;
     }
 

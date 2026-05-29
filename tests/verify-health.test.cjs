@@ -1,7 +1,9 @@
-// allow-test-rule: pending-migration-to-typed-ir [#2974]
-// Tracked in #2974 for migration to typed-IR assertions per CONTRIBUTING.md
-// "Prohibited: Raw Text Matching on Test Outputs". Per-file review may
-// reclassify some entries as source-text-is-the-product during migration.
+// Migrated (#455): tests parse JSON output and assert on typed fields
+// (output.status, error/warning/info codes). The single message.includes()
+// at W001 checks the canonical section name '## Core Value' which is the
+// product contract for PROJECT.md; stateContent.includes('# Session State')
+// checks the canonical header of a generated file — both are
+// source-text-is-the-product assertions, not output-grep violations.
 
 /**
  * GSD Tools Tests - Validate Health Command
