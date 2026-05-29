@@ -584,6 +584,16 @@ Display:
 | model_profile_overrides.<runtime>.opus     | {model/built-in/null} |
 | model_profile_overrides.<runtime>.sonnet   | {model/built-in/null} |
 | model_profile_overrides.<runtime>.haiku    | {model/built-in/null} |
+| effort.default                             | {low/medium/high/xhigh/max} |
+| effort.routing_tier_defaults.light         | {low/medium/high/xhigh/max} |
+| effort.routing_tier_defaults.standard      | {low/medium/high/xhigh/max} |
+| effort.routing_tier_defaults.heavy         | {low/medium/high/xhigh/max} |
+| effort.agent_overrides.<agent-id>          | {low/medium/high/xhigh/max} |
+| fast_mode.enabled                          | {true/false} |
+| fast_mode.routing_tier_defaults.light      | {true/false} |
+| fast_mode.routing_tier_defaults.standard   | {true/false} |
+| fast_mode.routing_tier_defaults.heavy      | {true/false} |
+| fast_mode.agent_overrides.<agent-id>       | {true/false} |
 
 These settings apply to future /gsd:plan-phase, /gsd:execute-phase, /gsd:discuss-phase,
 and /gsd:ship runs.

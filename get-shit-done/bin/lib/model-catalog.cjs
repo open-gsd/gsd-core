@@ -118,6 +118,79 @@ function getAgentToModelMapForProfile(normalizedProfile) {
   return out;
 }
 
+// ─── Effort rendering ────────────────────────────────────────────────────────
+//
+// Universal effort ladder: minimal < low < medium < high < xhigh < max
+//
+// Each runtime supports a subset. The unique tails must be clamped when emitting
+// to a runtime that does not support them:
+//   - 'max'     is Anthropic-only: Codex does not support it -> clamp to 'xhigh'
+//   - 'minimal' is Codex-only: Claude does not support it -> clamp to 'low'
+//
+// Rendering maps the universal effort string to the runtime's native parameter.
+
+const EFFORT_RENDERING = {
+  // Claude Code subagent effort: output_config.effort frontmatter key /
+  // CLAUDE_CODE_EFFORT_LEVEL env. Supports: low, medium, high, xhigh, max.
+  // Does NOT support 'minimal' (Codex-only) -> clamp to 'low'.
+  claude: {
+    param: 'output_config.effort',
+    channel: 'frontmatter',
+    supported: new Set(['low', 'medium', 'high', 'xhigh', 'max']),
+    clamp(level) {
+      if (level === 'minimal') return 'low';
+      return level;
+    },
+  },
+  // Codex Responses API reasoning.effort. Supports: minimal, low, medium, high, xhigh.
+  // Does NOT support 'max' (Anthropic-only) -> clamp to 'xhigh'.
+  codex: {
+    param: 'model_reasoning_effort',
+    channel: 'api',
+    supported: new Set(['minimal', 'low', 'medium', 'high', 'xhigh']),
+    clamp(level) {
+      if (level === 'max') return 'xhigh';
+      return level;
+    },
+  },
+};
+
+/**
+ * Render a universal effort string for a specific runtime.
+ *
+ * Returns { value (clamped), param, channel } where:
+ *   - value:   the clamped effort string safe to pass to the runtime
+ *   - param:   the native parameter name (e.g. 'output_config.effort')
+ *   - channel: how the value is propagated ('frontmatter', 'api', null)
+ *
+ * Unknown runtimes return { value: universalEffort, param: null, channel: null }
+ * so callers can always read .value safely.
+ */
+function renderEffortForRuntime(runtime, universalEffort) {
+  const spec = EFFORT_RENDERING[runtime];
+  if (!spec) {
+    return { value: universalEffort, param: null, channel: null };
+  }
+  return {
+    value: spec.clamp(universalEffort),
+    param: spec.param,
+    channel: spec.channel,
+  };
+}
+
+// ─── Fast mode propagation ───────────────────────────────────────────────────
+//
+// RUNTIMES_WITH_FAST_MODE is the set of runtimes where fast_mode=true can be
+// propagated to a SPAWNED SUBAGENT via a native mechanism.
+//
+// Claude Code has NO per-subagent fast-mode mechanism — /fast is a session-level
+// toggle only. Emitting a `fast_mode: true` frontmatter key on a Claude subagent
+// would be a SILENT NO-OP, which is why 'claude' is deliberately excluded here.
+//
+// Only API-direct runtimes ('api') accept a speed:"fast" field in the request.
+// Codex and other runtimes do not expose per-call fast_mode either.
+const RUNTIMES_WITH_FAST_MODE = new Set(['api']);
+
 module.exports = {
   catalog,
   MODEL_PROFILES,
@@ -133,4 +206,7 @@ module.exports = {
   nextTier,
   formatAgentToModelMapAsTable,
   getAgentToModelMapForProfile,
+  EFFORT_RENDERING,
+  renderEffortForRuntime,
+  RUNTIMES_WITH_FAST_MODE,
 };

@@ -49,6 +49,9 @@ See **[CONTRIBUTING.md — "Proposing an ADR or PRD"](../../CONTRIBUTING.md#prop
 | [3524-cjs-sdk-hard-seam.md](3524-cjs-sdk-hard-seam.md) | CJS↔SDK hard seam — single canonical owner per responsibility (#3524) | Superseded by ADR-0174 |
 | [3660-runtime-artifact-layout-module.md](3660-runtime-artifact-layout-module.md) | Runtime Artifact Layout Module owns per-runtime artifact placement | Proposed |
 | [0174-retire-gsd-sdk-package-boundary.md](0174-retire-gsd-sdk-package-boundary.md) | Retire @opengsd/gsd-sdk package boundary — single-runtime collapse | Accepted |
+| [452-eslint-lint-harness.md](452-eslint-lint-harness.md) | Adopt standard ESLint flat-config lint harness; retire homegrown regex scanners | Accepted |
+| [456-test-rigor-architecture.md](456-test-rigor-architecture.md) | Test-rigor architecture — deterministic scheduling, antagonistic tier, typed-surface mandate, delete-bad-tests policy | Accepted |
+| [457-generated-cjs-single-source.md](457-generated-cjs-single-source.md) | Collapse hand-written CJS to generated single-source | Proposed |
 
 ## Seam map
 

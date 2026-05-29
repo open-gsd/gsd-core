@@ -538,6 +538,81 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       break;
     }
 
+    case 'resolve-execution': {
+      // Deterministic flag parsing: consume --flag <value> pairs first,
+      // then the AGENT is the single remaining positional.
+      // Supports both orderings: <agent> --flag val  AND  --flag val <agent>.
+      // Also supports --flag=value form (same convention as --cwd= above).
+      const execArgs = args.slice(1);
+      let effortOverride;
+      let fastModeOverride;
+      let attempt;
+      const positionals = [];
+      for (let i = 0; i < execArgs.length; i++) {
+        const a = execArgs[i];
+        // --effort=<val> form
+        if (a.startsWith('--effort=')) {
+          effortOverride = a.slice('--effort='.length);
+          continue;
+        }
+        // --fast-mode=<val> form
+        if (a.startsWith('--fast-mode=')) {
+          const v = a.slice('--fast-mode='.length);
+          fastModeOverride = v === 'true' ? true : v === 'false' ? false : undefined;
+          continue;
+        }
+        // --attempt=<val> form
+        if (a.startsWith('--attempt=')) {
+          const v = a.slice('--attempt='.length);
+          const n = parseInt(v, 10);
+          if (!Number.isInteger(n) || n < 0) error('--attempt requires a non-negative integer', ERROR_REASON.USAGE);
+          attempt = n;
+          continue;
+        }
+        // --effort <val>
+        if (a === '--effort') {
+          const val = execArgs[i + 1];
+          if (val === undefined || val.startsWith('--')) error('Missing value for --effort', ERROR_REASON.USAGE);
+          effortOverride = val;
+          i++;
+          continue;
+        }
+        // --fast-mode <val>
+        if (a === '--fast-mode') {
+          const val = execArgs[i + 1];
+          if (val === undefined || val.startsWith('--')) error('Missing value for --fast-mode', ERROR_REASON.USAGE);
+          fastModeOverride = val === 'true' ? true : val === 'false' ? false : undefined;
+          i++;
+          continue;
+        }
+        // --attempt <val>
+        if (a === '--attempt') {
+          const val = execArgs[i + 1];
+          if (val === undefined || val.startsWith('--')) error('Missing value for --attempt', ERROR_REASON.USAGE);
+          const n = parseInt(val, 10);
+          if (!Number.isInteger(n) || n < 0) error('--attempt requires a non-negative integer', ERROR_REASON.USAGE);
+          attempt = n;
+          i++;
+          continue;
+        }
+        // --raw is handled by top-level arg processing; skip it here
+        if (a === '--raw') continue;
+        // Unknown flag
+        if (a.startsWith('-')) error(`Unknown flag for resolve-execution: ${a}`, ERROR_REASON.USAGE);
+        // Positional
+        positionals.push(a);
+      }
+      if (positionals.length === 0) error('agent-type required', ERROR_REASON.USAGE);
+      if (positionals.length > 1) error(`resolve-execution requires exactly one agent-type argument; got: ${positionals.join(', ')}`, ERROR_REASON.USAGE);
+      const agentTypeArg = positionals[0];
+      commands.cmdResolveExecution(cwd, agentTypeArg, raw, {
+        effortOverride,
+        fastModeOverride,
+        attempt,
+      });
+      break;
+    }
+
     case 'find-phase': {
       // Phase 6 (#3575): dispatch via SDK executeForCjs when available.
       // SDK handler: findPhase in sdk/src/query/phase.ts.

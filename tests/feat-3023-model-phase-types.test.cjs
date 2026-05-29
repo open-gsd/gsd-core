@@ -253,129 +253,100 @@ describe('#3023 resolver: models.<phase_type> overrides profile-based tier', () 
   });
 });
 
-// ─── #3030 CR Major outside-diff: reasoning_effort honors phase-type ───────
+// ─── #443 Unified effort: resolveEffortInternal + renderEffortForRuntime ────
 
-const { resolveReasoningEffortInternal } = require('../get-shit-done/bin/lib/core.cjs');
+const { resolveEffortInternal } = require('../get-shit-done/bin/lib/core.cjs');
+const { renderEffortForRuntime } = require('../get-shit-done/bin/lib/model-catalog.cjs');
 
-describe('#3023 + #3030 CR: resolveReasoningEffortInternal honors phase-type tier (Codex)', () => {
+describe('#3023 + #443: unified effort resolver (resolveEffortInternal) for Codex', () => {
   let projectDir;
   beforeEach(() => { projectDir = makeTmp('effort'); });
   afterEach(() => { rmr(projectDir); });
 
-  test('exported from core.cjs', () => {
-    assert.equal(typeof resolveReasoningEffortInternal, 'function');
+  test('resolveEffortInternal exported from core.cjs', () => {
+    assert.equal(typeof resolveEffortInternal, 'function');
   });
 
-  test('phase-type override flips both model AND reasoning_effort to the same tier (Codex)', () => {
-    // The CR Major bug: previously the model was resolved from the
-    // phase-type tier (opus → gpt-5.4) but reasoning_effort still came
-    // from the profile-derived sonnet tier (medium) — leading to a
-    // mismatched (model, effort) pair on Codex spawn.
+  test('effort derives from AGENT_DEFAULT_TIERS (routing), not phase-type; gsd-executor is standard → high', () => {
+    // Under unification, effort is config-driven via routing_tier_defaults.
+    // gsd-executor has routing tier 'standard' → default effort 'high', regardless
+    // of models.execution phase-type or model_profile setting.
     writeConfig(projectDir, {
       runtime: 'codex',
       model_profile: 'balanced',
       models: { execution: 'opus' },
     });
-    // gsd-executor's profile tier under balanced is sonnet, so without
-    // the phase-type lookup mirror, model would resolve to opus (xhigh)
-    // but effort to medium. Both must derive from the same tier source.
-    const effort = resolveReasoningEffortInternal(projectDir, 'gsd-executor');
-    // The exact effort value depends on the runtime tier map's opus row;
-    // the test guards the relationship: it must NOT be the sonnet/medium
-    // value when the phase-type forced opus.
-    const sonnetEffort = (() => {
-      // Read the sonnet effort by setting a config that uses the sonnet tier
-      // and reading what comes back, so the assertion is semantic (effort
-      // matches phase-type tier) rather than a hard-coded string.
-      const sonnetDir = makeTmp('effort-sonnet');
-      try {
-        writeConfig(sonnetDir, {
-          runtime: 'codex', model_profile: 'balanced',
-        });
-        return resolveReasoningEffortInternal(sonnetDir, 'gsd-executor');
-      } finally {
-        rmr(sonnetDir);
-      }
-    })();
-    const opusEffort = (() => {
-      const opusDir = makeTmp('effort-opus');
-      try {
-        writeConfig(opusDir, {
-          runtime: 'codex', model_profile: 'quality',  // quality → executor=opus
-        });
-        return resolveReasoningEffortInternal(opusDir, 'gsd-executor');
-      } finally {
-        rmr(opusDir);
-      }
-    })();
-    // The phase-type override (models.execution=opus) must produce the
-    // SAME effort as a profile-only opus config.
-    assert.equal(effort, opusEffort,
-      `phase-type override must match opus-tier effort, got ${effort}, expected ${opusEffort}`);
-    // And it must NOT match sonnet effort (proving the override fired).
-    if (opusEffort !== null && sonnetEffort !== null && opusEffort !== sonnetEffort) {
-      assert.notEqual(effort, sonnetEffort,
-        `phase-type override should not silently use sonnet effort: ${effort}`);
-    }
+    const eff = resolveEffortInternal(projectDir, 'gsd-executor');
+    // standard tier → 'high' (not 'xhigh' from opus, not 'medium' from old catalog)
+    assert.equal(eff, 'high');
+    const rendered = renderEffortForRuntime('codex', eff);
+    assert.equal(rendered.param, 'model_reasoning_effort');
+    assert.equal(rendered.value, 'high');
   });
 
-  test('inherit phase-type tier returns null effort (no runtime entry maps to inherit)', () => {
+  test('effort resolves universally even when models.execution=inherit', () => {
+    // Under unification, models.execution='inherit' does not affect effort resolution.
+    // Effort always resolves from routing_tier_defaults: gsd-executor (standard) → 'high'.
     writeConfig(projectDir, {
       runtime: 'codex',
       model_profile: 'balanced',
       models: { execution: 'inherit' },
     });
-    // 'inherit' has no runtime-tier entry, so the resolver returns null.
-    const effort = resolveReasoningEffortInternal(projectDir, 'gsd-executor');
-    assert.equal(effort, null);
+    const eff = resolveEffortInternal(projectDir, 'gsd-executor');
+    assert.equal(eff, 'high');
+    const rendered = renderEffortForRuntime('codex', eff);
+    assert.equal(rendered.param, 'model_reasoning_effort');
+    assert.equal(rendered.value, 'high');
   });
 
-  test('per-agent override still bypasses phase-type for reasoning_effort', () => {
+  test('per-agent model_overrides does not affect effort (effort is routing-tier-based)', () => {
+    // Under unification, effort does not check model_overrides.
+    // gsd-executor (standard tier) → 'high' regardless.
     writeConfig(projectDir, {
       runtime: 'codex',
       model_profile: 'balanced',
       models: { execution: 'opus' },
       model_overrides: { 'gsd-executor': 'openai/gpt-5' },
     });
-    // model_overrides[agent] short-circuits resolveReasoningEffortInternal
-    // (the user supplied a fully-qualified ID; effort must be set per-agent).
-    assert.equal(resolveReasoningEffortInternal(projectDir, 'gsd-executor'), null);
+    const eff = resolveEffortInternal(projectDir, 'gsd-executor');
+    assert.equal(eff, 'high');
+    const rendered = renderEffortForRuntime('codex', eff);
+    assert.equal(rendered.param, 'model_reasoning_effort');
+    assert.equal(rendered.value, 'high');
   });
 
-  test('claude runtime ignores models.* for reasoning_effort (returns null)', () => {
+  test('Claude runtime: effort is first-class (emits output_config.effort, not null)', () => {
+    // Under unification, Claude effort is first-class via output_config.effort.
+    // No `runtime` set → defaults to claude (no runtime key → undefined runtime).
     writeConfig(projectDir, {
-      // No `runtime` set → defaults to claude, which has no reasoning_effort.
       model_profile: 'balanced',
       models: { execution: 'opus' },
     });
-    assert.equal(resolveReasoningEffortInternal(projectDir, 'gsd-executor'), null);
+    const eff = resolveEffortInternal(projectDir, 'gsd-executor');
+    // effort resolves universally; claude render gives output_config.effort
+    const rendered = renderEffortForRuntime(undefined, eff);
+    // undefined runtime yields param=null (no runtime key set)
+    assert.equal(rendered.param, null);
+    // But if explicitly set to 'claude':
+    const renderedClaude = renderEffortForRuntime('claude', eff);
+    assert.equal(renderedClaude.param, 'output_config.effort');
+    assert.equal(renderedClaude.value, 'high');
   });
 
-  test('phase-type override wins over profile=inherit for effort (CR Major #3030)', () => {
-    // Pre-fix bug: profile=inherit short-circuited to null even when
-    // models.execution=opus would have supplied a valid tier.
+  test('profile=inherit does not affect effort; effort resolves from routing tier', () => {
+    // Under unification, effort is completely independent of model_profile.
+    // gsd-executor (standard routing tier) → 'high' even with model_profile='inherit'.
     writeConfig(projectDir, {
       runtime: 'codex',
       model_profile: 'inherit',
       models: { execution: 'opus' },
     });
-    // Compute the expected effort by reading what gsd-executor would
-    // get under a profile-only opus config — the phase-type override
-    // must produce the SAME result.
-    const expected = (() => {
-      const dir = makeTmp('effort-opus2');
-      try {
-        writeConfig(dir, { runtime: 'codex', model_profile: 'quality' });
-        return resolveReasoningEffortInternal(dir, 'gsd-executor');
-      } finally {
-        rmr(dir);
-      }
-    })();
-    const actual = resolveReasoningEffortInternal(projectDir, 'gsd-executor');
-    assert.equal(actual, expected,
-      `phase-type override over profile=inherit must produce the opus-tier effort; got ${actual}, expected ${expected}`);
-    assert.notEqual(actual, null,
-      'phase-type opus must NOT return null effort just because profile=inherit');
+    const eff = resolveEffortInternal(projectDir, 'gsd-executor');
+    assert.equal(eff, 'high',
+      'profile=inherit must not affect effort; standard routing tier → high');
+    const rendered = renderEffortForRuntime('codex', eff);
+    assert.equal(rendered.param, 'model_reasoning_effort');
+    assert.equal(rendered.value, 'high');
   });
 });
 

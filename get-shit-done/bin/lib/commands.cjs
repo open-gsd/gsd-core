@@ -4,7 +4,8 @@
 const fs = require('fs');
 const path = require('path');
 const { execGit, platformWriteSync, platformReadSync, platformEnsureDir } = require('./shell-command-projection.cjs');
-const { loadConfig, isGitIgnored, normalizePhaseName, comparePhaseNum, getArchivedPhaseDirs, generateSlugInternal, getMilestoneInfo, getMilestonePhaseFilter, resolveModelInternal, resolveReasoningEffortInternal, stripShippedMilestones, extractCurrentMilestone, toPosixPath, output, error, findPhaseInternal, extractOneLinerFromBody, getRoadmapPhaseInternal } = require('./core.cjs');
+const { loadConfig, isGitIgnored, normalizePhaseName, comparePhaseNum, getArchivedPhaseDirs, generateSlugInternal, getMilestoneInfo, getMilestonePhaseFilter, resolveModelInternal, resolveEffortInternal, resolveFastModeInternal, resolveEffortForTier, stripShippedMilestones, extractCurrentMilestone, toPosixPath, output, error, findPhaseInternal, extractOneLinerFromBody, getRoadmapPhaseInternal } = require('./core.cjs');
+const { renderEffortForRuntime, RUNTIMES_WITH_FAST_MODE } = require('./model-catalog.cjs');
 const { planningDir, planningPaths } = require('./planning-workspace.cjs');
 const { extractFrontmatter } = require('./frontmatter.cjs');
 const { MODEL_PROFILES } = require('./model-profiles.cjs');
@@ -241,14 +242,69 @@ function cmdResolveModel(cwd, agentType, raw) {
   const config = loadConfig(cwd);
   const profile = config.model_profile || 'balanced';
   const model = resolveModelInternal(cwd, agentType);
-  const reasoningEffort = resolveReasoningEffortInternal(cwd, agentType);
+  const effort = resolveEffortInternal(cwd, agentType);
 
   const agentModels = MODEL_PROFILES[agentType];
   const result = agentModels
-    ? { model, profile }
-    : { model, profile, unknown_agent: true };
-  if (reasoningEffort) result.reasoning_effort = reasoningEffort;
+    ? { model, profile, effort }
+    : { model, profile, effort, unknown_agent: true };
   output(result, raw, model);
+}
+
+/**
+ * #443 — Superset execution query: model + unified effort + fast_mode.
+ *
+ * Emits JSON:
+ *   { model, profile, effort, effort_rendered, effort_param, effort_propagation,
+ *     fast_mode, fast_mode_supported, [unknown_agent] }
+ *
+ * Flags: --effort <level>, --fast-mode <true|false>, --attempt <n>
+ *
+ * @param {string} cwd
+ * @param {string} agentType
+ * @param {boolean} raw
+ * @param {{ effortOverride?: string, fastModeOverride?: boolean, attempt?: number }} [opts]
+ */
+function cmdResolveExecution(cwd, agentType, raw, opts) {
+  if (!agentType) {
+    error('agent-type required');
+  }
+
+  opts = opts || {};
+  const config = loadConfig(cwd);
+  const profile = config.model_profile || 'balanced';
+  const model = resolveModelInternal(cwd, agentType);
+
+  const effortOpts = {};
+  if (typeof opts.effortOverride === 'string') effortOpts.override = opts.effortOverride;
+
+  const fastModeOpts = {};
+  if (typeof opts.fastModeOverride === 'boolean') fastModeOpts.override = opts.fastModeOverride;
+
+  const effort = (opts.attempt !== undefined && opts.attempt !== null)
+    ? resolveEffortForTier(cwd, agentType, opts.attempt)
+    : resolveEffortInternal(cwd, agentType, effortOpts);
+
+  const fastMode = resolveFastModeInternal(cwd, agentType, fastModeOpts);
+
+  const runtime = config.runtime || 'claude';
+  const rendered = renderEffortForRuntime(runtime, effort);
+
+  const fastModeSupported = RUNTIMES_WITH_FAST_MODE.has(runtime);
+
+  const agentModels = MODEL_PROFILES[agentType];
+  const result = {
+    model,
+    profile,
+    effort,
+    effort_rendered: rendered.value,
+    effort_param: rendered.param,
+    effort_propagation: rendered.channel,
+    fast_mode: fastMode,
+    fast_mode_supported: fastModeSupported,
+  };
+  if (!agentModels) result.unknown_agent = true;
+  output(result, raw, effort);
 }
 
 function cmdCommit(cwd, message, files, raw, amend, noVerify) {
@@ -1117,6 +1173,7 @@ module.exports = {
   cmdVerifyPathExists,
   cmdHistoryDigest,
   cmdResolveModel,
+  cmdResolveExecution,
   cmdCommit,
   cmdCommitToSubrepo,
   cmdSummaryExtract,

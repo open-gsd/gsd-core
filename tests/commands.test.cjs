@@ -1135,7 +1135,10 @@ describe('resolve-model command', () => {
     assert.ok(output.model, 'should resolve a model');
   });
 
-  test('includes reasoning_effort when selected runtime supports it', () => {
+  // #443: resolve-model now emits unified `effort` instead of `reasoning_effort`.
+  // reasoning_effort was flavor-text (resolved but consumed by nobody); effort is
+  // the wired, config-driven universal effort string for all runtimes.
+  test('emits unified effort (not reasoning_effort) when runtime supports tiered effort', () => {
     fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify({
       model_profile: 'balanced',
       runtime: 'codex',
@@ -1147,10 +1150,14 @@ describe('resolve-model command', () => {
     const output = JSON.parse(result.output);
     assert.strictEqual(output.model, 'gpt-5.4');
     assert.strictEqual(output.profile, 'balanced');
-    assert.strictEqual(output.reasoning_effort, 'xhigh');
+    // #443: effort is now the unified field (xhigh for gsd-planner heavy tier default)
+    assert.strictEqual(output.effort, 'xhigh');
+    // reasoning_effort must be absent — replaced by unified effort
+    assert.ok(!Object.prototype.hasOwnProperty.call(output, 'reasoning_effort'),
+      'reasoning_effort must not appear in resolve-model output (replaced by effort)');
   });
 
-  test('does not include reasoning_effort for unsupported runtime overrides', () => {
+  test('does not include reasoning_effort for unsupported runtime overrides (effort present instead)', () => {
     fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify({
       model_profile: 'balanced',
       runtime: 'opencode',
@@ -1167,10 +1174,13 @@ describe('resolve-model command', () => {
     const output = JSON.parse(result.output);
     assert.strictEqual(output.model, 'openrouter/openai/gpt-5.5');
     assert.strictEqual(output.profile, 'balanced');
-    assert.ok(!Object.prototype.hasOwnProperty.call(output, 'reasoning_effort'));
+    // #443: effort always present; reasoning_effort never present
+    assert.ok(Object.prototype.hasOwnProperty.call(output, 'effort'), 'effort must be present');
+    assert.ok(!Object.prototype.hasOwnProperty.call(output, 'reasoning_effort'),
+      'reasoning_effort must not appear (replaced by unified effort)');
   });
 
-  test('does not include reasoning_effort for per-agent model_overrides', () => {
+  test('does not include reasoning_effort for per-agent model_overrides (effort present instead)', () => {
     fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify({
       model_profile: 'balanced',
       runtime: 'codex',
@@ -1183,7 +1193,10 @@ describe('resolve-model command', () => {
     const output = JSON.parse(result.output);
     assert.strictEqual(output.model, 'gpt-5.5');
     assert.strictEqual(output.profile, 'balanced');
-    assert.ok(!Object.prototype.hasOwnProperty.call(output, 'reasoning_effort'));
+    // #443: effort always present; reasoning_effort never present
+    assert.ok(Object.prototype.hasOwnProperty.call(output, 'effort'), 'effort must be present');
+    assert.ok(!Object.prototype.hasOwnProperty.call(output, 'reasoning_effort'),
+      'reasoning_effort must not appear (replaced by unified effort)');
   });
 
   test('fails when no agent-type provided', () => {

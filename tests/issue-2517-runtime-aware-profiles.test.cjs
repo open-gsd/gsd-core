@@ -34,12 +34,13 @@ const { createTempProject, cleanup } = require('./helpers.cjs');
 
 const {
   resolveModelInternal,
-  resolveReasoningEffortInternal,
+  resolveEffortInternal,
   resolveTierEntry,
   RUNTIME_PROFILE_MAP,
   KNOWN_RUNTIMES,
   _resetRuntimeWarningCacheForTests,
 } = require('../get-shit-done/bin/lib/core.cjs');
+const { renderEffortForRuntime } = require('../get-shit-done/bin/lib/model-catalog.cjs');
 const { isValidConfigKey } = require('../get-shit-done/bin/lib/config-schema.cjs');
 
 function writeConfig(tmpDir, obj) {
@@ -98,9 +99,12 @@ describe('issue #2517: backwards compat — no runtime key set', () => {
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), '');
   });
 
-  test('reasoning_effort returns null when runtime absent', () => {
+  test('effort resolves universally but render param is null when runtime absent', () => {
     writeConfig(tmpDir, { model_profile: 'balanced' });
-    assert.strictEqual(resolveReasoningEffortInternal(tmpDir, 'gsd-planner'), null);
+    const eff = resolveEffortInternal(tmpDir, 'gsd-planner');
+    // Effort always resolves (universal); rendering without a runtime yields no wire param.
+    const rendered = renderEffortForRuntime(undefined, eff);
+    assert.strictEqual(rendered.param, null);
   });
 
   test('adaptive profile still works without runtime (#1713/#1806)', () => {
@@ -144,9 +148,14 @@ describe('issue #2517: runtime "claude" is a no-op for resolution (finding #4)',
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'claude-opus-4-7');
   });
 
-  test('reasoning_effort is null on Claude (never leaks)', () => {
+  test('effort is first-class on Claude (emits output_config.effort)', () => {
     writeConfig(tmpDir, { runtime: 'claude', model_profile: 'quality' });
-    assert.strictEqual(resolveReasoningEffortInternal(tmpDir, 'gsd-planner'), null);
+    // Under unification, Claude effort is first-class — rendered via output_config.effort.
+    const eff = resolveEffortInternal(tmpDir, 'gsd-planner');
+    const rendered = renderEffortForRuntime('claude', eff);
+    assert.strictEqual(rendered.param, 'output_config.effort');
+    // gsd-planner is heavy tier → default effort 'xhigh'
+    assert.strictEqual(rendered.value, 'xhigh');
   });
 });
 
@@ -156,23 +165,35 @@ describe('issue #2517: runtime "codex" — Codex tier resolution', () => {
   beforeEach(() => { isolateHome(); tmpDir = createTempProject(); _resetRuntimeWarningCacheForTests(); });
   afterEach(() => { cleanup(tmpDir); restoreHome(); });
 
-  test('opus tier -> gpt-5.4 with reasoning_effort xhigh', () => {
+  test('opus tier -> gpt-5.4 model; heavy-tier agent -> xhigh effort on codex', () => {
     writeConfig(tmpDir, { runtime: 'codex', model_profile: 'quality' });
-    // gsd-planner quality -> opus -> gpt-5.4
+    // gsd-planner quality -> opus -> gpt-5.4 (model unchanged)
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'gpt-5.4');
-    assert.strictEqual(resolveReasoningEffortInternal(tmpDir, 'gsd-planner'), 'xhigh');
+    // gsd-planner is heavy routing tier → effort 'xhigh' → rendered model_reasoning_effort
+    const eff = resolveEffortInternal(tmpDir, 'gsd-planner');
+    const rendered = renderEffortForRuntime('codex', eff);
+    assert.strictEqual(rendered.param, 'model_reasoning_effort');
+    assert.strictEqual(rendered.value, 'xhigh');
   });
 
-  test('sonnet tier -> gpt-5.3-codex with reasoning_effort medium', () => {
+  test('sonnet tier -> gpt-5.3-codex model; heavy-tier agent -> xhigh effort on codex', () => {
     writeConfig(tmpDir, { runtime: 'codex', model_profile: 'balanced' });
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-roadmapper'), 'gpt-5.3-codex');
-    assert.strictEqual(resolveReasoningEffortInternal(tmpDir, 'gsd-roadmapper'), 'medium');
+    // gsd-roadmapper is heavy routing tier → effort 'xhigh' (not catalog medium)
+    const eff = resolveEffortInternal(tmpDir, 'gsd-roadmapper');
+    const rendered = renderEffortForRuntime('codex', eff);
+    assert.strictEqual(rendered.param, 'model_reasoning_effort');
+    assert.strictEqual(rendered.value, 'xhigh');
   });
 
-  test('haiku tier -> gpt-5.4-mini with reasoning_effort medium', () => {
+  test('haiku tier -> gpt-5.4-mini model; light-tier agent -> low effort on codex', () => {
     writeConfig(tmpDir, { runtime: 'codex', model_profile: 'budget' });
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-codebase-mapper'), 'gpt-5.4-mini');
-    assert.strictEqual(resolveReasoningEffortInternal(tmpDir, 'gsd-codebase-mapper'), 'medium');
+    // gsd-codebase-mapper is light routing tier → effort 'low' (not catalog medium)
+    const eff = resolveEffortInternal(tmpDir, 'gsd-codebase-mapper');
+    const rendered = renderEffortForRuntime('codex', eff);
+    assert.strictEqual(rendered.param, 'model_reasoning_effort');
+    assert.strictEqual(rendered.value, 'low');
   });
 
   test('adaptive profile resolves on Codex (no #1713/#1806 regression)', () => {
@@ -183,11 +204,15 @@ describe('issue #2517: runtime "codex" — Codex tier resolution', () => {
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-codebase-mapper'), 'gpt-5.4-mini');
   });
 
-  test('inherit profile still returns "inherit" on Codex', () => {
+  test('inherit profile still returns "inherit" on Codex; effort still resolves universally', () => {
     writeConfig(tmpDir, { runtime: 'codex', model_profile: 'inherit' });
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'inherit');
-    // No reasoning_effort when inherit
-    assert.strictEqual(resolveReasoningEffortInternal(tmpDir, 'gsd-planner'), null);
+    // Unified effort is config-driven (routing_tier_defaults), independent of model_profile.
+    // gsd-planner (heavy tier) → 'xhigh'; rendered to codex param.
+    const eff = resolveEffortInternal(tmpDir, 'gsd-planner');
+    const rendered = renderEffortForRuntime('codex', eff);
+    assert.strictEqual(rendered.param, 'model_reasoning_effort');
+    assert.strictEqual(rendered.value, 'xhigh');
   });
 
   test('runtime:"codex" beats resolve_model_ids:"omit" (explicit non-Claude opt-in wins)', () => {
@@ -261,33 +286,39 @@ describe('issue #2517: field-merge of overrides with built-in defaults (finding 
   beforeEach(() => { isolateHome(); tmpDir = createTempProject(); _resetRuntimeWarningCacheForTests(); });
   afterEach(() => { cleanup(tmpDir); restoreHome(); });
 
-  test('string-shorthand override keeps reasoning_effort from built-in (CONFIGURATION.md example)', () => {
-    // `{ codex: { opus: "gpt-5-pro" } }` is the documented shorthand. Pre-fix,
-    // it silently dropped reasoning_effort. Post-fix, the model is overridden
-    // and reasoning_effort comes from the built-in entry.
+  test('string-shorthand override: model is overridden; unified effort derives from routing tier', () => {
+    // `{ codex: { opus: "gpt-5-pro" } }` is the documented shorthand.
+    // Model is overridden to gpt-5-pro; effort now derives from the universal
+    // config-driven path (gsd-planner heavy tier → 'xhigh'), not from the catalog.
     writeConfig(tmpDir, {
       runtime: 'codex',
       model_profile: 'quality',
       model_profile_overrides: { codex: { opus: 'gpt-5-pro' } },
     });
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'gpt-5-pro');
-    assert.strictEqual(resolveReasoningEffortInternal(tmpDir, 'gsd-planner'), 'xhigh');
+    const eff = resolveEffortInternal(tmpDir, 'gsd-planner');
+    const rendered = renderEffortForRuntime('codex', eff);
+    assert.strictEqual(rendered.param, 'model_reasoning_effort');
+    assert.strictEqual(rendered.value, 'xhigh');
   });
 
-  test('partial-object override (no model) keeps model from built-in', () => {
-    // `{ codex: { opus: { reasoning_effort: "low" } } }` previously dropped
-    // the model entirely (returned undefined and fell through). Post-fix, the
-    // built-in `gpt-5.4` model is preserved and `low` reasoning_effort wins.
+  test('partial-object override (no model) keeps model from built-in; unified effort from routing tier', () => {
+    // `{ codex: { opus: { reasoning_effort: "low" } } }` preserves the built-in model.
+    // Under unification, the catalog reasoning_effort field is not read for effort resolution;
+    // effort comes from routing_tier_defaults (gsd-planner heavy → 'xhigh').
     writeConfig(tmpDir, {
       runtime: 'codex',
       model_profile: 'quality',
       model_profile_overrides: { codex: { opus: { reasoning_effort: 'low' } } },
     });
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'gpt-5.4');
-    assert.strictEqual(resolveReasoningEffortInternal(tmpDir, 'gsd-planner'), 'low');
+    const eff = resolveEffortInternal(tmpDir, 'gsd-planner');
+    const rendered = renderEffortForRuntime('codex', eff);
+    assert.strictEqual(rendered.param, 'model_reasoning_effort');
+    assert.strictEqual(rendered.value, 'xhigh');
   });
 
-  test('full-object override replaces both fields', () => {
+  test('full-object override: model replaced; unified effort from routing tier (not catalog field)', () => {
     writeConfig(tmpDir, {
       runtime: 'codex',
       model_profile: 'quality',
@@ -296,7 +327,11 @@ describe('issue #2517: field-merge of overrides with built-in defaults (finding 
       },
     });
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'custom-model');
-    assert.strictEqual(resolveReasoningEffortInternal(tmpDir, 'gsd-planner'), 'minimal');
+    // Effort comes from routing_tier_defaults, not the catalog 'minimal' field.
+    const eff = resolveEffortInternal(tmpDir, 'gsd-planner');
+    const rendered = renderEffortForRuntime('codex', eff);
+    assert.strictEqual(rendered.param, 'model_reasoning_effort');
+    assert.strictEqual(rendered.value, 'xhigh');
   });
 
   test('resolveTierEntry helper: shorthand merge', () => {
@@ -328,15 +363,15 @@ describe('issue #2517: field-merge of overrides with built-in defaults (finding 
   });
 });
 
-// ─── reasoning_effort allowlist (review finding #3) ─────────────────────────
-describe('issue #2517: reasoning_effort allowlist gates regardless of overrides (finding #3)', () => {
+// ─── Unknown runtime render safety (finding #3 spirit) ──────────────────────
+describe('issue #2517: unknown runtime render param is null (effort does not leak to install path)', () => {
   let tmpDir;
   beforeEach(() => { isolateHome(); tmpDir = createTempProject(); _resetRuntimeWarningCacheForTests(); });
   afterEach(() => { cleanup(tmpDir); restoreHome(); });
 
-  test('unknown runtime with overrides supplying reasoning_effort yields null effort', () => {
-    // Pre-fix: `if (!overrides) return null` left a hole — overrides for an
-    // unknown runtime made effort propagate, defeating the typo guard.
+  test('unknown runtime: model resolves via override; render param is null (no wire param leaked)', () => {
+    // Under unification, effort always resolves (universal), but renderEffortForRuntime
+    // returns param=null for unknown runtimes — no effort leaks to the install path.
     writeConfig(tmpDir, {
       runtime: 'mystery',
       model_profile: 'quality',
@@ -346,17 +381,21 @@ describe('issue #2517: reasoning_effort allowlist gates regardless of overrides 
     });
     // Model still resolves (overrides are honored).
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'mystery-opus');
-    // …but reasoning_effort does NOT propagate to a runtime not in the allowlist.
-    assert.strictEqual(resolveReasoningEffortInternal(tmpDir, 'gsd-planner'), null);
+    // Effort resolves universally but the unknown runtime has no wire param.
+    const eff = resolveEffortInternal(tmpDir, 'gsd-planner');
+    const rendered = renderEffortForRuntime('mystery', eff);
+    assert.strictEqual(rendered.param, null);
   });
 
-  test('typo runtime "codx" with overrides yields null effort (no leak into install path)', () => {
+  test('typo runtime "codx": render param is null (no leak into install path)', () => {
     writeConfig(tmpDir, {
       runtime: 'codx',
       model_profile: 'quality',
       model_profile_overrides: { codx: { opus: { model: 'gpt-5.4', reasoning_effort: 'xhigh' } } },
     });
-    assert.strictEqual(resolveReasoningEffortInternal(tmpDir, 'gsd-planner'), null);
+    const eff = resolveEffortInternal(tmpDir, 'gsd-planner');
+    const rendered = renderEffortForRuntime('codx', eff);
+    assert.strictEqual(rendered.param, null);
   });
 });
 
@@ -541,10 +580,13 @@ describe('issue #2517: install end-to-end — per-project config reaches Codex T
     assert.match(toml, /^model_reasoning_effort = "xhigh"$/m);
   });
 
-  test('generated TOML omits reasoning_effort when runtime has none', () => {
-    // For a known runtime with model but no reasoning_effort, only model is emitted.
-    // Use the user-override path to simulate this with codex (no built-in returns
-    // model alone, so fabricate via override of an unknown-runtime entry).
+  test('generated TOML always includes model_reasoning_effort even when model_profile_overrides sets reasoning_effort to empty (#443 unified)', () => {
+    // Under the unified effort design (#443), model_reasoning_effort in the Codex TOML
+    // is driven by the unified effort resolver (resolveInstallTimeEffort / effortCfg),
+    // NOT by model_profile_overrides.reasoning_effort. Setting reasoning_effort: '' in
+    // model_profile_overrides does NOT suppress the unified effort — the TOML always
+    // carries a valid model_reasoning_effort drawn from the agent's routing tier.
+    // gsd-planner is a heavy-tier agent → unified default resolves to "xhigh".
     writeConfig(tmpDir, {
       runtime: 'codex',
       model_profile: 'quality',
@@ -557,8 +599,12 @@ describe('issue #2517: install end-to-end — per-project config reaches Codex T
       null,
       resolver
     );
+    // Model override (from model_profile_overrides) is still respected.
     assert.match(toml, /^model = "custom"$/m);
-    assert.doesNotMatch(toml, /model_reasoning_effort/);
+    // Unified effort always fires — model_reasoning_effort is present and valid.
+    assert.match(toml, /^model_reasoning_effort = "(minimal|low|medium|high|xhigh)"$/m);
+    // gsd-planner is heavy-tier, so with no effortCfg the manifest tier default applies → xhigh.
+    assert.match(toml, /^model_reasoning_effort = "xhigh"$/m);
   });
 
   test('resolver returns null with no global, no per-project config', () => {
@@ -612,9 +658,10 @@ describe('issue #2612: runtime "gemini" — Gemini tier resolution', () => {
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-codebase-mapper'), 'gemini-2.5-flash-lite');
   });
 
-  test('reasoning_effort is null for gemini (no reasoning_effort in spec)', () => {
+  test('gemini: effort resolves universally but render param is null (no wire param)', () => {
     writeConfig(tmpDir, { runtime: 'gemini', model_profile: 'quality' });
-    assert.strictEqual(resolveReasoningEffortInternal(tmpDir, 'gsd-planner'), null);
+    const eff = resolveEffortInternal(tmpDir, 'gsd-planner');
+    assert.strictEqual(renderEffortForRuntime('gemini', eff).param, null);
   });
 });
 
@@ -639,9 +686,10 @@ describe('issue #2612: runtime "qwen" — Qwen tier resolution', () => {
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-codebase-mapper'), 'qwen3-coder-next');
   });
 
-  test('reasoning_effort is null for qwen (no reasoning_effort in spec)', () => {
+  test('qwen: effort resolves universally but render param is null (no wire param)', () => {
     writeConfig(tmpDir, { runtime: 'qwen', model_profile: 'quality' });
-    assert.strictEqual(resolveReasoningEffortInternal(tmpDir, 'gsd-planner'), null);
+    const eff = resolveEffortInternal(tmpDir, 'gsd-planner');
+    assert.strictEqual(renderEffortForRuntime('qwen', eff).param, null);
   });
 });
 
@@ -666,9 +714,10 @@ describe('issue #2612: runtime "opencode" — OpenCode tier resolution', () => {
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-codebase-mapper'), 'anthropic/claude-haiku-4-5');
   });
 
-  test('reasoning_effort is null for opencode (no reasoning_effort in spec)', () => {
+  test('opencode: effort resolves universally but render param is null (no wire param)', () => {
     writeConfig(tmpDir, { runtime: 'opencode', model_profile: 'quality' });
-    assert.strictEqual(resolveReasoningEffortInternal(tmpDir, 'gsd-planner'), null);
+    const eff = resolveEffortInternal(tmpDir, 'gsd-planner');
+    assert.strictEqual(renderEffortForRuntime('opencode', eff).param, null);
   });
 });
 
@@ -693,9 +742,10 @@ describe('issue #2612: runtime "copilot" — Copilot tier resolution', () => {
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-codebase-mapper'), 'claude-haiku-4-5');
   });
 
-  test('reasoning_effort is null for copilot (no reasoning_effort in spec)', () => {
+  test('copilot: effort resolves universally but render param is null (no wire param)', () => {
     writeConfig(tmpDir, { runtime: 'copilot', model_profile: 'quality' });
-    assert.strictEqual(resolveReasoningEffortInternal(tmpDir, 'gsd-planner'), null);
+    const eff = resolveEffortInternal(tmpDir, 'gsd-planner');
+    assert.strictEqual(renderEffortForRuntime('copilot', eff).param, null);
   });
 });
 

@@ -145,7 +145,60 @@ const { MODEL_PROFILES: GSD_MODEL_PROFILES } = require(path.join(_gsdLibDir, 'mo
 const {
   RUNTIME_PROFILE_MAP: GSD_RUNTIME_PROFILE_MAP,
   resolveTierEntry: gsdResolveTierEntry,
+  EFFORT_SET: GSD_EFFORT_SET,
 } = require(path.join(_gsdLibDir, 'core.cjs'));
+
+// #443 — model-catalog and config-defaults.manifest.json exports needed only
+// by effort-resolution code paths (resolveInstallTimeEffort /
+// generateCodexAgentToml / Claude .md effort injection).  Loaded lazily the
+// first time they are needed so that requiring install.js in test contexts that
+// never trigger an install does NOT produce module-load-time side effects (the
+// manifest read + hard throw) that could alter subprocess exit codes or stderr.
+let _gsdEffortCatalogCache = null;
+function _getGsdEffortCatalog() {
+  if (_gsdEffortCatalogCache) return _gsdEffortCatalogCache;
+
+  const { AGENT_DEFAULT_TIERS, renderEffortForRuntime } = require(path.join(_gsdLibDir, 'model-catalog.cjs'));
+
+  const manifestPath = path.join(
+    __dirname,
+    '..',
+    'get-shit-done',
+    'bin',
+    'shared',
+    'config-defaults.manifest.json'
+  );
+  let manifestData;
+  try {
+    manifestData = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+  } catch (_err) {
+    // Fail loudly — a missing manifest is a broken install, not a soft degradation.
+    throw new Error(
+      `gsd install: cannot load config-defaults.manifest.json at ${manifestPath}: ${_err.message}`
+    );
+  }
+
+  const tierDefaults =
+    (manifestData.effort &&
+      manifestData.effort.routing_tier_defaults &&
+      typeof manifestData.effort.routing_tier_defaults === 'object' &&
+      !Array.isArray(manifestData.effort.routing_tier_defaults))
+      ? manifestData.effort.routing_tier_defaults
+      : { light: 'low', standard: 'high', heavy: 'xhigh' }; // guard: unreachable if manifest is valid
+
+  const effortDefault =
+    (manifestData.effort && typeof manifestData.effort.default === 'string')
+      ? manifestData.effort.default
+      : 'high'; // guard: unreachable if manifest is valid
+
+  _gsdEffortCatalogCache = {
+    AGENT_DEFAULT_TIERS,
+    renderEffortForRuntime,
+    EFFORT_MANIFEST_TIER_DEFAULTS: tierDefaults,
+    EFFORT_MANIFEST_DEFAULT: effortDefault,
+  };
+  return _gsdEffortCatalogCache;
+}
 
 const {
   MINIMAL_SKILL_ALLOWLIST,
@@ -1379,6 +1432,185 @@ function readGsdEffectiveModelOverrides(targetDir = null) {
   if (!global && !projectOverrides) return null;
   // Per-project wins on conflict; preserve non-conflicting global keys.
   return { ...(global || {}), ...(projectOverrides || {}) };
+}
+
+/**
+ * #443 — Read the merged `effort` config block for install-time effort resolution.
+ *
+ * Probes the same config sources as readGsdRuntimeProfileResolver (per-project
+ * `.planning/config.json` wins over `~/.gsd/defaults.json`) but extracts the
+ * `effort` object instead of the model-profile fields.
+ *
+ * Returns the merged `effort` object or null when neither source defines one.
+ * The caller can pass this to resolveInstallTimeEffort() which is pure and
+ * requires no filesystem access beyond what this helper already performs.
+ *
+ * @param {string|null} targetDir  Runtime install root (walks up to find .planning/).
+ * @returns {object|null}
+ */
+function readGsdEffectiveEffortConfig(targetDir = null) {
+  const homeDefaults = _readGsdConfigFile(
+    path.join(os.homedir(), '.gsd', 'defaults.json'),
+    '~/.gsd/defaults.json'
+  );
+
+  let projectConfig = null;
+  if (targetDir) {
+    let probeDir = path.resolve(targetDir);
+    for (let depth = 0; depth < 8; depth += 1) {
+      const candidate = path.join(probeDir, '.planning', 'config.json');
+      if (fs.existsSync(candidate)) {
+        projectConfig = _readGsdConfigFile(candidate, '.planning/config.json');
+        break;
+      }
+      const parent = path.dirname(probeDir);
+      if (parent === probeDir) break;
+      probeDir = parent;
+    }
+  }
+
+  const homeEffort = (homeDefaults && homeDefaults.effort && typeof homeDefaults.effort === 'object' && !Array.isArray(homeDefaults.effort))
+    ? homeDefaults.effort
+    : null;
+  const projectEffort = (projectConfig && projectConfig.effort && typeof projectConfig.effort === 'object' && !Array.isArray(projectConfig.effort))
+    ? projectConfig.effort
+    : null;
+
+  if (!homeEffort && !projectEffort) return null;
+
+  // Per-project wins on conflict within each sub-field. Merge field-by-field so
+  // a project config that only sets agent_overrides still inherits global
+  // routing_tier_defaults and default.
+  return {
+    ...(homeEffort || {}),
+    ...(projectEffort || {}),
+    // Deep-merge agent_overrides (project wins per-key)
+    agent_overrides: {
+      ...((homeEffort && homeEffort.agent_overrides) || {}),
+      ...((projectEffort && projectEffort.agent_overrides) || {}),
+    },
+  };
+}
+
+
+/**
+ * #443 — Resolve install-time effort for a given agent, using the same
+ * precedence chain as resolveEffortInternal() in core.cjs, but operating
+ * on a pre-loaded effortCfg object (no loadConfig side-effects at install).
+ *
+ * Precedence (mirrors resolveEffortInternal):
+ *   1. effortCfg.agent_overrides[agentName]
+ *   2. effortCfg.routing_tier_defaults[agentTier]  (if effortCfg present)
+ *      — OR manifest tier defaults when effortCfg is null
+ *   3. effortCfg.default
+ *   4. 'high' (hardcoded fallback)
+ *
+ * @param {object|null} effortCfg   Result of readGsdEffectiveEffortConfig().
+ * @param {string} agentName        e.g. 'gsd-planner'
+ * @returns {string}                Universal effort string (low/medium/high/xhigh/max/minimal)
+ */
+function resolveInstallTimeEffort(effortCfg, agentName) {
+  // Validates each candidate against the canonical EFFORT_SET (sourced once
+  // from core.cjs) before accepting it, mirroring resolveEffortInternal exactly.
+  // Invalid values fall through to the next precedence layer; final fallback 'high'.
+
+  // Step 1: agent_overrides
+  if (effortCfg) {
+    const ao = effortCfg.agent_overrides;
+    if (ao && typeof ao === 'object' && !Array.isArray(ao)) {
+      const v = ao[agentName];
+      if (typeof v === 'string' && GSD_EFFORT_SET.has(v)) return v;
+    }
+  }
+
+  // Step 2: routing_tier_defaults keyed by the agent's catalog tier
+  const { AGENT_DEFAULT_TIERS, EFFORT_MANIFEST_TIER_DEFAULTS, EFFORT_MANIFEST_DEFAULT } = _getGsdEffortCatalog();
+  const agentTier = AGENT_DEFAULT_TIERS[agentName];
+  if (agentTier) {
+    if (effortCfg && effortCfg.routing_tier_defaults &&
+        typeof effortCfg.routing_tier_defaults === 'object' &&
+        !Array.isArray(effortCfg.routing_tier_defaults)) {
+      const v = effortCfg.routing_tier_defaults[agentTier];
+      if (typeof v === 'string' && GSD_EFFORT_SET.has(v)) return v;
+    } else if (!effortCfg) {
+      // No effort config — use manifest tier defaults
+      const v = EFFORT_MANIFEST_TIER_DEFAULTS[agentTier];
+      if (typeof v === 'string' && GSD_EFFORT_SET.has(v)) return v;
+    }
+    // effortCfg exists but has no routing_tier_defaults — fall through
+  }
+
+  // Step 3: effort.default
+  if (effortCfg) {
+    const d = effortCfg.default;
+    if (typeof d === 'string' && GSD_EFFORT_SET.has(d)) return d;
+  }
+
+  // Step 4: manifest default (sourced from config-defaults.manifest.json effort.default)
+  // If even the manifest default is invalid, fall back to 'high'.
+  if (typeof EFFORT_MANIFEST_DEFAULT === 'string' && GSD_EFFORT_SET.has(EFFORT_MANIFEST_DEFAULT)) {
+    return EFFORT_MANIFEST_DEFAULT;
+  }
+  return 'high';
+}
+
+/**
+ * #443 — Inject `effort: <value>` into YAML frontmatter of a Claude .md agent
+ * file in a newline-agnostic way (LF and CRLF source files are both handled).
+ *
+ * The function:
+ *   - Detects the file's EOL (CRLF if the first `---` line ends with \r\n,
+ *     otherwise LF).
+ *   - Skips injection if an `effort:` key already exists in the frontmatter
+ *     (idempotent).
+ *   - Inserts `effort: <value>` immediately before the closing `---` delimiter,
+ *     using the same EOL as the surrounding frontmatter so the output file
+ *     stays EOL-consistent.
+ *   - Returns the original content unchanged when no YAML frontmatter is found.
+ *
+ * @param {string} content      Raw file content (may have LF or CRLF endings).
+ * @param {string} effortValue  Rendered effort string, e.g. "xhigh".
+ * @returns {string}            Updated content with `effort:` injected, or the
+ *                              original content when no frontmatter is found.
+ */
+function injectEffortFrontmatter(content, effortValue) {
+  // Detect the dominant EOL from the first line (the opening `---`).
+  // If the very first `---` is followed by \r\n, treat the whole file as CRLF.
+  const eol = /^---\r\n/.test(content) ? '\r\n' : '\n';
+
+  // Build a frontmatter-matching regex that tolerates an optional \r before
+  // each \n, so we handle both LF and CRLF files without needing to normalise
+  // the whole content.
+  //
+  // Breakdown:
+  //   ^---\r?\n        — opening delimiter (with optional \r)
+  //   ([\s\S]*?)       — frontmatter body (non-greedy)
+  //   ^---\r?$         — closing delimiter line (optional \r, $ before \n in
+  //                       multiline mode)
+  //   (\r?\n|$)        — newline after closing --- (or end of string)
+  //
+  // The `m` flag makes ^ / $ match at every line boundary.
+  const fmRe = /^---\r?\n([\s\S]*?)^---\r?$/m;
+  const match = fmRe.exec(content);
+  if (!match) return content; // no YAML frontmatter — leave unchanged
+
+  // Idempotency guard: don't insert a second effort: line.
+  const fmBody = match[1]; // content between the two `---` lines
+  if (/^effort:/m.test(fmBody)) return content;
+
+  // Locate the exact position of the closing `---` line so we can insert
+  // before it using a simple string splice (avoids re-running the regex and
+  // avoids any edge-cases with $ matching \r differently per engine).
+  const closeIdx = match.index + 4 + fmBody.length; // 4 = len("---\n") (opening)
+  // Actually compute based on the full match start + captured group length:
+  // match[0] = full frontmatter block; match.index = start of that block.
+  // The closing `---` starts at: match.index + ("---" + eol).length + fmBody.length
+  const openLen = 3 + eol.length; // "---" + eol
+  const closingStart = match.index + openLen + fmBody.length;
+
+  const before = content.slice(0, closingStart);
+  const after = content.slice(closingStart);
+  return `${before}effort: ${effortValue}${eol}${after}`;
 }
 
 /**
@@ -2691,8 +2923,14 @@ purpose: ${toSingleLine(description)}
  * Generate a per-agent .toml config file for Codex.
  * Sets required agent metadata, sandbox_mode, and developer_instructions
  * from the agent markdown content.
+ *
+ * @param {string} agentName
+ * @param {string} agentContent
+ * @param {object|null} modelOverrides
+ * @param {object|null} runtimeResolver  — runtime-aware tier resolver from readGsdRuntimeProfileResolver
+ * @param {object|null} effortCfg        — #443: merged effort config from readGsdEffectiveEffortConfig
  */
-function generateCodexAgentToml(agentName, agentContent, modelOverrides = null, runtimeResolver = null) {
+function generateCodexAgentToml(agentName, agentContent, modelOverrides = null, runtimeResolver = null, effortCfg = null) {
   const sandboxMode = CODEX_AGENT_SANDBOX[agentName] || 'read-only';
   const { frontmatter, body } = extractFrontmatterAndBody(agentContent);
   const frontmatterText = frontmatter || '';
@@ -2721,11 +2959,19 @@ function generateCodexAgentToml(agentName, agentContent, modelOverrides = null, 
     const entry = runtimeResolver.resolve(resolvedName) || runtimeResolver.resolve(agentName);
     if (entry?.model) {
       lines.push(`model = ${JSON.stringify(entry.model)}`);
-      if (entry.reasoning_effort) {
-        lines.push(`model_reasoning_effort = ${JSON.stringify(entry.reasoning_effort)}`);
-      }
+      // model is resolved here; reasoning_effort from catalog tier is REPLACED by the
+      // unified effort resolver below (#443). Do NOT emit entry.reasoning_effort here.
     }
   }
+
+  // #443 — Unified effort for Codex .toml. Uses the same config-driven precedence chain
+  // as the Claude .md effort injection (resolveInstallTimeEffort), so both runtimes read
+  // from the same effort.agent_overrides / effort.routing_tier_defaults / effort.default
+  // config source. Codex does not support 'max' → clamped to 'xhigh' by
+  // gsdRenderEffortForRuntime('codex', ...).
+  const _universalEffortCodex = resolveInstallTimeEffort(effortCfg, resolvedName !== agentName ? resolvedName : agentName);
+  const _renderedEffortCodex = _getGsdEffortCatalog().renderEffortForRuntime('codex', _universalEffortCodex).value;
+  lines.push(`model_reasoning_effort = ${JSON.stringify(_renderedEffortCodex)}`);
 
   // Agent prompts contain raw backslashes in regexes and shell snippets.
   // TOML literal multiline strings preserve them without escape parsing.
@@ -4992,7 +5238,10 @@ function installCodexConfig(targetDir, agentsSrc) {
     // setting runtime in the project config reaches the Codex emit path is
     // false (review finding #1).
     const runtimeResolver = readGsdRuntimeProfileResolver(targetDir);
-    const tomlContent = generateCodexAgentToml(name, content, modelOverrides, runtimeResolver);
+    // #443 — pass unified effort config so model_reasoning_effort in the .toml
+    // follows the same config-driven precedence as the Claude .md effort key.
+    const effortCfg = readGsdEffectiveEffortConfig(targetDir);
+    const tomlContent = generateCodexAgentToml(name, content, modelOverrides, runtimeResolver, effortCfg);
     fs.writeFileSync(path.join(agentsTomlDir, `${name}.toml`), tomlContent);
   }
 
@@ -8686,6 +8935,20 @@ function install(isGlobal, runtime = 'claude', options = {}) {
           content = content.replace(/\bClaude Code\b/g, 'Hermes Agent');
           content = content.replace(/\.claude\//g, '.hermes/');
         }
+        // #443 — Inject `effort:` into the Claude .md frontmatter ONLY.
+        // Gemini/OpenCode/Qwen/Hermes also produce .md files but break on
+        // unknown frontmatter keys (the repo bans skills:/permissionMode: for
+        // the same reason — see tests/agent-frontmatter.test.cjs).
+        // Claude Code reads per-subagent `effort:` frontmatter (anthropics/claude-code #31536).
+        // Injection is per-runtime at install time because the canonical source
+        // agents/*.md must stay Gemini-safe (no effort: key in source).
+        if (runtime === 'claude') {
+          const _effortCfg = readGsdEffectiveEffortConfig(targetDir);
+          const _agentName = entry.name.replace(/\.md$/, '');
+          const _universalEffort = resolveInstallTimeEffort(_effortCfg, _agentName);
+          const _renderedEffort = _getGsdEffortCatalog().renderEffortForRuntime('claude', _universalEffort).value;
+          content = injectEffortFrontmatter(content, _renderedEffort);
+        }
         // #3677 — normalize retired `/gsd:<cmd>` colon refs in the agent body
         // to the canonical hyphen form `/gsd-<cmd>` for hyphen-`name:`
         // runtimes (claude / qwen / hermes). Self-converting runtimes and
@@ -11419,6 +11682,11 @@ module.exports = {
     installCodexConfig,
     readGsdRuntimeProfileResolver,
     readGsdEffectiveModelOverrides,
+    readGsdEffectiveEffortConfig,
+    resolveInstallTimeEffort,
+    injectEffortFrontmatter,
+    get _GSD_EFFORT_MANIFEST_TIER_DEFAULTS() { return _getGsdEffortCatalog().EFFORT_MANIFEST_TIER_DEFAULTS; },
+    get _GSD_EFFORT_MANIFEST_DEFAULT() { return _getGsdEffortCatalog().EFFORT_MANIFEST_DEFAULT; },
     install,
     installAllRuntimes,
     uninstall,
