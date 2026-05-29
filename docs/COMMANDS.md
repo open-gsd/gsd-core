@@ -1042,6 +1042,18 @@ Build, query, and inspect the project knowledge graph stored in `.planning/graph
 
 **Programmatic access:** `node gsd-tools.cjs graphify <build|query|status|diff|snapshot>` — see [CLI Tools Reference](CLI-TOOLS.md).
 
+### `gsd-tools intel api-surface`
+
+Render the `.planning/intel/api-map.json` index (built by `/gsd-map-codebase`) into a human-readable `API-SURFACE.md` in `.planning/intel/`. Gated on `intel.enabled: true` in `config.json`; when Intel is disabled the command prints an activation hint and exits. The output path is always `.planning/intel/API-SURFACE.md` — there is no `--out` or `--format` flag. When `api-map.json` is absent or empty the command still writes the file with an explicit "incomplete" banner so consumers never mistake silence for "nothing exists".
+
+**Produces:** `.planning/intel/API-SURFACE.md`
+
+```bash
+node gsd-tools.cjs intel api-surface              # Render api-map.json → API-SURFACE.md
+```
+
+The `API-SURFACE.md` output lists exported symbols (functions, classes, decorators, constants) grouped by source file with their signatures and detected visibility. When `plan_review.source_grounding_authority` is set to `intel`, the plan drift guard reads `api-map.json` directly rather than invoking the `api-surface` renderer.
+
 ---
 
 ## AI Integration Commands

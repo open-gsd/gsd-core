@@ -624,6 +624,8 @@ The migration module also owns the gated first-time baseline scan for legacy
 installs, classifying known runtime install surfaces before later migrations
 remove or rewrite anything.
 
+The plan drift guard (`plan_review.source_grounding`) — which verifies symbol references in generated plans against live source before execution — is specified in [ADR 22](adr/22-plan-drift-guard.md).
+
 ### Platform Handling
 
 - **Windows:** `windowsHide` on child processes, EPERM/EACCES protection on protected directories, path separator normalization

@@ -40,6 +40,7 @@ Parse current values (default to `true` if not present):
 - `workflow.research` — spawn researcher during plan-phase
 - `workflow.plan_check` — spawn plan checker during plan-phase
 - `workflow.verifier` — spawn verifier during execute-phase
+- `plan_review.source_grounding` — verify plan symbols against live source during plan review (default: true if absent; set `plan_review.source_grounding_authority` to select the resolver adapter: `grep` (default), `intel`, `treesitter`, `lsp`, or `scip`)
 - `workflow.nyquist_validation` — validation architecture research during plan-phase (default: true if absent)
 - `workflow.pattern_mapper` — run gsd-pattern-mapper between research and planning (default: true if absent)
 - `workflow.ui_phase` — generate UI-SPEC.md design contracts for frontend phases (default: true if absent)
@@ -83,7 +84,7 @@ Use AskUserQuestion with current values pre-selected. Questions are grouped into
 Section layout:
 
 ### Planning
-Research, Plan Checker, Pattern Mapper, Nyquist, UI Phase, UI Gate, AI Phase
+Research, Plan Checker, Drift Guard, Pattern Mapper, Nyquist, UI Phase, UI Gate, AI Phase
 
 ### Execution
 Verifier, TDD Mode, Code Review, Code Review Depth _(conditional — only when code_review=on)_, UI Review
@@ -174,6 +175,15 @@ AskUserQuestion([
     options: [
       { label: "Yes", description: "Verify must-haves after execution" },
       { label: "No", description: "Skip post-execution verification" }
+    ]
+  },
+  {
+    question: "Enable Plan Drift Guard? (verifies that symbols cited in plans exist in source at review time)",
+    header: "Drift Guard",
+    multiSelect: false,
+    options: [
+      { label: "Yes (Recommended)", description: "Resolve symbol references (decorators, classes, functions, CLI flags) against live source — catches hallucinated names before execution. Authority controlled by plan_review.source_grounding_authority (default: grep)." },
+      { label: "No", description: "Skip symbol grounding. Plan review proceeds without source verification." }
     ]
   },
   {
@@ -395,6 +405,9 @@ Merge new settings into existing config.json:
     "skip_discuss": true/false,
     "use_worktrees": true/false
   },
+  "plan_review": {
+    "source_grounding": true/false
+  },
   "intel": {
     "enabled": true/false
   },
@@ -468,6 +481,9 @@ Write `~/.gsd/defaults.json` with:
     "ui_review": <current>,
     "skip_discuss": <current>
   },
+  "plan_review": {
+    "source_grounding": <current>
+  },
   "intel": {
     "enabled": <current>
   },
@@ -496,6 +512,7 @@ Display:
 | Execution Verifier   | {On/Off} |
 | TDD Mode             | {On/Off} |
 | Code Review          | {On/Off} |
+| Plan Drift Guard     | {On/Off} |
 | Code Review Depth    | {quick/standard/deep} |
 | UI Review            | {On/Off} |
 | Commit Docs          | {On/Off} |
@@ -528,7 +545,7 @@ Quick commands:
 
 <success_criteria>
 - [ ] Current config read
-- [ ] User presented with 23 settings (profile + workflow toggles + features + git branching + git tagging + ctx warnings), grouped into six sections: Planning, Execution, Docs & Output, Features, Model & Pipeline, Misc. `code_review_depth` is conditional on `code_review=on`. Model profile uses a two-question split (Q1: Adaptive / Standard tier / Inherit; Q2: Quality / Balanced / Budget — only when Standard tier chosen) to stay within the 4-option AskUserQuestion cap while exposing all 5 valid profiles (#3784).
+- [ ] User presented with 24 settings (profile + workflow toggles + features + git branching + git tagging + ctx warnings), grouped into six sections: Planning, Execution, Docs & Output, Features, Model & Pipeline, Misc. `code_review_depth` is conditional on `code_review=on`. Model profile uses a two-question split (Q1: Adaptive / Standard tier / Inherit; Q2: Quality / Balanced / Budget — only when Standard tier chosen) to stay within the 4-option AskUserQuestion cap while exposing all 5 valid profiles (#3784). Drift Guard (`plan_review.source_grounding`) is in the Planning section.
 - [ ] Config updated with model_profile, workflow, and git sections
 - [ ] User offered to save as global defaults (~/.gsd/defaults.json)
 - [ ] Changes confirmed to user

@@ -457,6 +457,16 @@ Toggle optional capabilities via the `features.*` config namespace. Feature flag
 | `learnings.max_inject` | number | `10` | Maximum number of cross-project learnings injected into each planner prompt. Lower values reduce prompt size; higher values provide broader historical context |
 | `intel.enabled` | boolean | `false` | Enable queryable codebase intelligence system. When `true`, `/gsd-map-codebase --query` commands build and query a JSON index in `.planning/intel/`. Added in v1.34 |
 
+<a id="plan-review-settings"></a>
+### Plan Review Settings
+
+The `plan_review.*` namespace controls the plan drift guard, which verifies that symbols cited in generated plans (decorators, classes, functions, CLI flags) actually exist in your source code at review time. This catches hallucinated names before execution begins.
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `plan_review.source_grounding` | boolean | `true` | Enable the plan drift guard. When `true` (the default), plan review resolves every symbol reference cited in a PLAN.md against the live source tree. Plans that cite a non-existent function, class, decorator, or CLI flag produce a `needs-acknowledgement` notice before the plan is approved. Disable with `false` to skip symbol verification entirely. Toggle during setup (`/gsd:new-project`) or at any time via `/gsd:settings`. |
+| `plan_review.source_grounding_authority` | enum | `grep` | Selects the resolver adapter used to verify symbol existence. Allowed values: `grep` (default — ripgrep/grep search of source files, works in any project without additional tooling), `intel` (query the `.planning/intel/api-map.json` index built by `/gsd:map-codebase`; requires `intel.enabled: true`), `treesitter` (reserved for future tree-sitter adapter), `lsp` (reserved for future LSP adapter), `scip` (reserved for future SCIP/LSIF adapter). Use `intel` when you have run `/gsd:map-codebase` and want the faster, pre-indexed lookup. All other values beyond `grep` and `intel` are reserved and have no effect in the current release. |
+
 <a id="graphify-settings"></a>
 ### Graphify Settings
 

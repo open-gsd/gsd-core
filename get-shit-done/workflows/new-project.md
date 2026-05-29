@@ -223,6 +223,15 @@ AskUserQuestion([
     ]
   },
   {
+    header: "Drift Guard",
+    question: "Enable the plan drift-guard? It verifies that symbols your plans cite (decorators, classes, functions, CLI flags) actually exist in your source at review time, catching hallucinated names before execution. [Y/n]",
+    multiSelect: false,
+    options: [
+      { label: "Yes (Recommended)", description: "Resolve symbol references against live source during plan review — catches hallucinated names before execution" },
+      { label: "No", description: "Skip symbol grounding — plan review proceeds without source verification" }
+    ]
+  },
+  {
     header: "AI Models",
     question: "Which AI models for planning agents?",
     multiSelect: false,
@@ -264,7 +273,7 @@ Create `.planning/config.json` with all settings (CLI fills in remaining default
 
 ```bash
 mkdir -p .planning
-gsd_run query config-new-project '{"mode":"yolo","granularity":"[selected]","parallelization":true|false,"commit_docs":true|false,"model_profile":"quality|balanced|budget|inherit","workflow":{"research":true|false,"plan_check":true|false,"verifier":true|false,"nyquist_validation":true|false,"auto_advance":true},"ship":{"pr_body_sections":[{"heading":"User Stories & Acceptance Criteria","enabled":true|false,"source":"REQUIREMENTS.md ## User Stories || REQUIREMENTS.md ## Acceptance Criteria","fallback":"- Acceptance criteria are covered by the linked requirements and verification evidence."},{"heading":"Risks & Dependencies","enabled":true|false,"source":"PLAN.md ## Risks || PLAN.md ## Dependencies","fallback":"- No known high-risk rollout dependencies."},{"heading":"Success Metrics & Release Criteria","enabled":true|false,"source":"REQUIREMENTS.md ## Definition of Done || VERIFICATION.md ## Release Criteria","fallback":"- Release when automated verification and required manual checks pass."},{"heading":"Stakeholder Review & Approval","enabled":true|false,"template":"- Product owner approval pending for {phase_name}."}]}}'
+gsd_run query config-new-project '{"mode":"yolo","granularity":"[selected]","parallelization":true|false,"commit_docs":true|false,"model_profile":"quality|balanced|budget|inherit","workflow":{"research":true|false,"plan_check":true|false,"verifier":true|false,"nyquist_validation":true|false,"auto_advance":true},"plan_review":{"source_grounding":true|false},"ship":{"pr_body_sections":[{"heading":"User Stories & Acceptance Criteria","enabled":true|false,"source":"REQUIREMENTS.md ## User Stories || REQUIREMENTS.md ## Acceptance Criteria","fallback":"- Acceptance criteria are covered by the linked requirements and verification evidence."},{"heading":"Risks & Dependencies","enabled":true|false,"source":"PLAN.md ## Risks || PLAN.md ## Dependencies","fallback":"- No known high-risk rollout dependencies."},{"heading":"Success Metrics & Release Criteria","enabled":true|false,"source":"REQUIREMENTS.md ## Definition of Done || VERIFICATION.md ## Release Criteria","fallback":"- Release when automated verification and required manual checks pass."},{"heading":"Stakeholder Review & Approval","enabled":true|false,"template":"- Product owner approval pending for {phase_name}."}]}}'
 ```
 
 **If commit_docs = No:** Add `.planning/` to `.gitignore`.
@@ -506,6 +515,7 @@ Format the JSON into human-readable bullets using these label mappings:
 - `workflow.research` → "Research" (`true` → "Yes", `false` → "No")
 - `workflow.plan_check` → "Plan Check" (`true` → "Yes", `false` → "No")
 - `workflow.verifier` → "Verifier" (`true` → "Yes", `false` → "No")
+- `plan_review.source_grounding` → "Drift Guard" (`true` → "Yes", `false` → "No")
 
 Display above the prompt:
 
@@ -519,6 +529,7 @@ Your saved defaults (~/.gsd/defaults.json):
   • Research: [Yes|No]
   • Plan Check: [Yes|No]
   • Verifier: [Yes|No]
+  • Drift Guard: [Yes|No]
 ```
 
 Then ask:
@@ -555,6 +566,7 @@ Which settings do you want to change? (enter numbers, comma-separated)
   6. Research — Currently: [Yes|No]
   7. Plan Check — Currently: [Yes|No]
   8. Verifier — Currently: [Yes|No]
+  9. Drift Guard — Currently: [Yes|No]
 ```
 
 **Otherwise** (Claude runtime with AskUserQuestion): use a two-block split
@@ -620,7 +632,8 @@ AskUserQuestion([
       { label: "AI Models", description: "Currently: [value]" },
       { label: "Research", description: "Currently: [Yes|No]" },
       { label: "Plan Check", description: "Currently: [Yes|No]" },
-      { label: "Verifier", description: "Currently: [Yes|No]" }
+      { label: "Verifier", description: "Currently: [Yes|No]" },
+      { label: "Drift Guard", description: "Currently: [Yes|No]" }
     ]
   }
 ])
@@ -745,7 +758,7 @@ Create `.planning/config.json` with all settings (CLI fills in remaining default
 
 ```bash
 mkdir -p .planning
-gsd_run query config-new-project '{"mode":"[yolo|interactive]","granularity":"[selected]","parallelization":true|false,"commit_docs":true|false,"model_profile":"quality|balanced|budget|inherit","workflow":{"research":true|false,"plan_check":true|false,"verifier":true|false,"nyquist_validation":[false if granularity=coarse, true otherwise]},"ship":{"pr_body_sections":[{"heading":"User Stories & Acceptance Criteria","enabled":true|false,"source":"REQUIREMENTS.md ## User Stories || REQUIREMENTS.md ## Acceptance Criteria","fallback":"- Acceptance criteria are covered by the linked requirements and verification evidence."},{"heading":"Risks & Dependencies","enabled":true|false,"source":"PLAN.md ## Risks || PLAN.md ## Dependencies","fallback":"- No known high-risk rollout dependencies."},{"heading":"Success Metrics & Release Criteria","enabled":true|false,"source":"REQUIREMENTS.md ## Definition of Done || VERIFICATION.md ## Release Criteria","fallback":"- Release when automated verification and required manual checks pass."},{"heading":"Stakeholder Review & Approval","enabled":true|false,"template":"- Product owner approval pending for {phase_name}."}]}}'
+gsd_run query config-new-project '{"mode":"[yolo|interactive]","granularity":"[selected]","parallelization":true|false,"commit_docs":true|false,"model_profile":"quality|balanced|budget|inherit","workflow":{"research":true|false,"plan_check":true|false,"verifier":true|false,"nyquist_validation":[false if granularity=coarse, true otherwise]},"plan_review":{"source_grounding":true|false},"ship":{"pr_body_sections":[{"heading":"User Stories & Acceptance Criteria","enabled":true|false,"source":"REQUIREMENTS.md ## User Stories || REQUIREMENTS.md ## Acceptance Criteria","fallback":"- Acceptance criteria are covered by the linked requirements and verification evidence."},{"heading":"Risks & Dependencies","enabled":true|false,"source":"PLAN.md ## Risks || PLAN.md ## Dependencies","fallback":"- No known high-risk rollout dependencies."},{"heading":"Success Metrics & Release Criteria","enabled":true|false,"source":"REQUIREMENTS.md ## Definition of Done || VERIFICATION.md ## Release Criteria","fallback":"- Release when automated verification and required manual checks pass."},{"heading":"Stakeholder Review & Approval","enabled":true|false,"template":"- Product owner approval pending for {phase_name}."}]}}'
 ```
 
 **Note:** Run `/gsd:settings` anytime to update model profile, workflow agents, branching strategy, and other preferences.

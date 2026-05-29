@@ -992,6 +992,33 @@ invocation to refresh just the affected subtrees. Flip the behavior with:
 
 The gate is non-blocking: any internal failure logs and the phase continues.
 
+### Plan Drift Guard
+
+**Default-on.** The plan drift guard (`plan_review.source_grounding: true`) runs during plan review and verifies that every symbol your plans cite — decorators, classes, functions, CLI flags — actually exists in your source tree at review time. This catches hallucinated names (symbols the planner invented but that don't exist yet) before any execution agent runs.
+
+**What it catches:**
+
+- Functions referenced in a PLAN.md step that don't exist in source
+- Class or decorator names that were renamed or removed since the plan was written
+- CLI flags documented in a plan that are not defined in the argument parser
+- Module paths cited in implementation steps that resolve to no files
+
+**Needs-acknowledgement behavior.** When the guard finds a missing symbol, it emits a `needs-acknowledgement` notice in the plan review output rather than hard-blocking. You can acknowledge and proceed (the symbol may be intentionally new) or request a plan revision. The guard does not auto-reject plans — it surfaces signal for human decision.
+
+**Works without intel.** By default the guard uses `grep`/`ripgrep` to search source files — no pre-indexing required. If you have run `/gsd:map-codebase` with `intel.enabled: true`, set `plan_review.source_grounding_authority: intel` to use the faster pre-built `api-map.json` index instead.
+
+```bash
+# Enable/disable (default: on)
+/gsd-settings plan_review.source_grounding true
+/gsd-settings plan_review.source_grounding false
+
+# Switch resolver authority
+/gsd-settings plan_review.source_grounding_authority grep   # live grep (default)
+/gsd-settings plan_review.source_grounding_authority intel  # pre-indexed api-map.json
+```
+
+Toggle at project setup (`/gsd:new-project` asks during workflow preferences) or any time via `/gsd:settings` (Planning section → Drift Guard).
+
 ### Quick Bug Fix
 
 ```bash
