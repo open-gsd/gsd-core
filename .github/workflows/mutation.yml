@@ -1,0 +1,72 @@
+name: Mutation Testing
+
+# PR-GATING: runs on every pull_request targeting `next` or `main`.
+# Uses --incremental --since origin/next so only mutants in CHANGED files
+# are tested — keeps the job bounded even on large PRs.
+# Full-repo mutation runs are reserved for local exploration (npm run test:mutation).
+
+on:
+  pull_request:
+    branches:
+      - next
+      - main
+    paths:
+      # Only run when lib source or property tests change
+      - 'get-shit-done/bin/lib/**/*.cjs'
+      - 'tests/**/*.property.test.cjs'
+      - 'stryker.config.mjs'
+  workflow_dispatch:
+    inputs:
+      since:
+        description: 'Git ref for --since (default: origin/next). Use "HEAD" for full run.'
+        required: false
+        default: 'origin/next'
+
+concurrency:
+  group: mutation-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  mutation:
+    name: Stryker mutation score (changed files only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Stryker (incremental, changed files only)
+        # --since limits mutation to files changed relative to origin/next.
+        # --break 50 causes Stryker to exit non-zero when the mutation score
+        # on changed files falls below 50%, failing the PR check.
+        # SINCE_REF is passed via env (not interpolated into the shell string)
+        # to prevent workflow injection via github.event.inputs.since.
+        env:
+          NODE_OPTIONS: '--max-old-space-size=4096'
+          SINCE_REF: ${{ github.event.inputs.since || 'origin/next' }}
+        run: |
+          echo "Running Stryker with --since=${SINCE_REF}"
+          npx stryker run --incremental --since "${SINCE_REF}"
+
+      - name: Upload mutation HTML report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449d3ec4f5dde0c5a4e1  # v4.6.2
+        if: always()  # upload even on failure so the score is visible
+        with:
+          name: mutation-report-${{ github.run_number }}
+          path: reports/mutation/mutation.html
+          retention-days: 14

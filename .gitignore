@@ -81,3 +81,8 @@ claude-test-command.md
 
 # Observability audit trail (issue #177) — append-only, local only
 .planning/.gsd-trace.jsonl
+
+# Mutation testing artifacts (issue #454)
+.stryker-tmp/
+.stryker-incremental.json
+reports/mutation/

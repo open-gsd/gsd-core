@@ -48,7 +48,9 @@
     "ws": "8.20.1"
   },
   "devDependencies": {
+    "@stryker-mutator/core": "^8.7.1",
     "c8": "^11.0.0",
+    "fast-check": "^4.8.0",
     "js-yaml": "^4.1.1"
   },
   "optionalDependencies": {
@@ -83,6 +85,8 @@
     "test:affected": "node scripts/run-affected-tests.cjs",
     "test:coverage": "c8 --check-coverage --lines 70 --reporter text --include 'get-shit-done/bin/lib/*.cjs' --exclude 'tests/**' --all node scripts/run-tests.cjs",
     "test:coverage:unit": "c8 --check-coverage --lines 70 --reporter text --include 'get-shit-done/bin/lib/*.cjs' --exclude 'tests/**' --all node scripts/run-tests.cjs --suite unit",
-    "test:coverage:all": "npm run test:coverage"
+    "test:coverage:all": "npm run test:coverage",
+    "test:mutation": "stryker run",
+    "test:mutation:since": "stryker run --incremental --since origin/next"
   }
 }
