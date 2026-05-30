@@ -77,7 +77,9 @@ function listShippedSlashBaseNames() {
 
 function extractSlashReferences(contents) {
   const names = new Set();
-  const tokenRe = /\/gsd[:-]([a-z][a-z0-9-]*)/g;
+  // Negative lookbehind: must not be preceded by a letter (avoids matching npm scope
+  // paths like @opengsd/gsd-core where `/gsd-` appears inside a package URL).
+  const tokenRe = /(?<![a-z])\/gsd[:-]([a-z][a-z0-9-]*)/g;
   let match;
   while ((match = tokenRe.exec(contents)) !== null) {
     names.add(match[1]);
