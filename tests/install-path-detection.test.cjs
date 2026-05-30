@@ -381,3 +381,128 @@ describe('installer HOME-relative PATH detection (#2620)',
     }
   });
 });
+
+describe('installer current gsd-tools PATH guidance gates', () => {
+  let installer;
+
+  before(() => {
+    installer = loadInstaller();
+  });
+
+  function captureLogs(fn) {
+    const logs = [];
+    const origLog = console.log;
+    console.log = (...args) => { logs.push(args.join(' ')); };
+    try {
+      fn();
+    } finally {
+      console.log = origLog;
+    }
+    return logs.join('\n');
+  }
+
+  test('finishInstall suppresses PATH guidance for local installs even when configured', () => {
+    const home = createTempHome();
+    const origPath = process.env.PATH;
+    try {
+      const settingsPath = path.join(home, 'settings.json');
+      const globalBin = path.join(home, '.npm-global', 'bin');
+      fs.mkdirSync(globalBin, { recursive: true });
+      process.env.PATH = '/usr/bin:/bin';
+
+      const joined = captureLogs(() => {
+        installer.finishInstall(
+          settingsPath,
+          {},
+          null,
+          false,
+          'claude',
+          false,
+          home,
+          { pathSuggestionGlobalBin: globalBin, pathSuggestionHomeDir: home },
+        );
+      });
+
+      assert.doesNotMatch(joined, /not on your PATH/, 'local installs must not emit global PATH guidance');
+      assert.doesNotMatch(joined, /Add it so your shell can find/, 'local installs must not emit PATH repair commands');
+      assert.doesNotMatch(joined, /gsd-sdk/, 'local install output must not mention retired gsd-sdk');
+    } finally {
+      if (origPath === undefined) delete process.env.PATH; else process.env.PATH = origPath;
+      cleanup(home);
+    }
+  });
+
+  test('finishInstall suppresses PATH guidance when global bin dir is unavailable', () => {
+    const home = createTempHome();
+    const origPath = process.env.PATH;
+    try {
+      const settingsPath = path.join(home, 'settings.json');
+      process.env.PATH = '/usr/bin:/bin';
+
+      const joined = captureLogs(() => {
+        installer.finishInstall(
+          settingsPath,
+          {},
+          null,
+          false,
+          'claude',
+          true,
+          home,
+          { pathSuggestionHomeDir: home },
+        );
+      });
+
+      assert.doesNotMatch(joined, /not on your PATH/, 'missing global bin dir must not emit PATH guidance');
+      assert.doesNotMatch(joined, /Add it so your shell can find/, 'missing global bin dir must not emit PATH repair commands');
+      assert.doesNotMatch(joined, /gsd-sdk/, 'global install output must not mention retired gsd-sdk');
+    } finally {
+      if (origPath === undefined) delete process.env.PATH; else process.env.PATH = origPath;
+      cleanup(home);
+    }
+  });
+
+  test('resolveCurrentGlobalBinDir returns npm prefix itself for win32 npm global prefix', () => {
+    const prefix = 'C:/Users/alice/AppData/Roaming/npm';
+    assert.strictEqual(
+      installer.resolveCurrentGlobalBinDir({
+        env: { npm_config_prefix: prefix, npm_config_global: 'true' },
+        installDir: '/irrelevant/source/bin',
+        platform: 'win32',
+      }),
+      prefix,
+    );
+  });
+
+  test('resolveCurrentGlobalBinDir returns package prefix without /bin for win32 global package layout', () => {
+    assert.strictEqual(
+      installer.resolveCurrentGlobalBinDir({
+        env: {},
+        installDir: '/opt/npm/lib/node_modules/@opengsd/get-shit-done-redux/bin',
+        platform: 'win32',
+      }),
+      '/opt/npm',
+    );
+  });
+
+  test('resolveCurrentGlobalBinDir returns null for source checkout layout', () => {
+    assert.strictEqual(
+      installer.resolveCurrentGlobalBinDir({
+        env: {},
+        installDir: path.join(__dirname, '..', 'bin'),
+        platform: 'linux',
+      }),
+      null,
+    );
+  });
+
+  test('resolveCurrentGlobalBinDir returns null when npm prefix is not a global install', () => {
+    assert.strictEqual(
+      installer.resolveCurrentGlobalBinDir({
+        env: { npm_config_prefix: '/opt/npm', npm_config_global: 'false' },
+        installDir: path.join(__dirname, '..', 'bin'),
+        platform: 'linux',
+      }),
+      null,
+    );
+  });
+});
