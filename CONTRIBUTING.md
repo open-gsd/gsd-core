@@ -408,7 +408,7 @@ You do not need all twelve cases for every PR. You do need to cover the cases th
 
 #### CLI and command routing
 
-Changes to CLI parsing, command dispatch, query dispatch, command routers, `gsd-tools` must include a negative input matrix for the affected command family.
+Changes to CLI parsing, command dispatch, query dispatch, command routers, or `gsd-tools` must include a negative input matrix for the affected command family.
 
 Required cases where relevant:
 
