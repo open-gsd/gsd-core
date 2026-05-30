@@ -17,8 +17,8 @@ const { checkLatestVersion, CHECK_REASON, PACKAGE_NAME } = require(
 // Tests use a pluggable spawn so no real npm process is invoked.
 
 describe('Bug #2992: deterministic latest-version check', () => {
-  test('PACKAGE_NAME is the constant @opengsd/get-shit-done-redux (no callers can override)', () => {
-    assert.equal(PACKAGE_NAME, '@opengsd/get-shit-done-redux');
+  test('PACKAGE_NAME is the constant @opengsd/gsd-core (no callers can override)', () => {
+    assert.equal(PACKAGE_NAME, '@opengsd/gsd-core');
   });
 
   test('CHECK_REASON enum exposes the documented codes', () => {

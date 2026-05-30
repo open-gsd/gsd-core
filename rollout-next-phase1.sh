@@ -31,7 +31,7 @@
 #
 # Env overrides:
 #   TARBALL=/path/to/next-branch-files.tar.gz   (default: ./next-branch-files.tar.gz)
-#   REPO=open-gsd/get-shit-done-redux           (default: that)
+#   REPO=open-gsd/gsd-core           (default: that)
 #   DRY_RUN=1                                   (skip push, issue, PR)
 
 set -euo pipefail
@@ -39,7 +39,7 @@ set -euo pipefail
 # ───────────────────────────────────────────────────────────
 # Config
 # ───────────────────────────────────────────────────────────
-REPO="${REPO:-open-gsd/get-shit-done-redux}"
+REPO="${REPO:-open-gsd/gsd-core}"
 TARBALL="${TARBALL:-./next-branch-files.tar.gz}"
 BRANCH="chore/introduce-next-integration-branch"
 DRY_RUN="${DRY_RUN:-0}"
@@ -236,7 +236,7 @@ git checkout next
 git pull --ff-only origin next
 git checkout -b fix/3187-config-corruption
 # ... commit, push
-gh pr create --base next --repo open-gsd/get-shit-done-redux
+gh pr create --base next --repo open-gsd/gsd-core
 ```
 
 If you target the wrong branch by accident, the `PR Target Validator`

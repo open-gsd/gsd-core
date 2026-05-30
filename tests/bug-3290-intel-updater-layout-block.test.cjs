@@ -17,7 +17,7 @@
  * ignored by Steps 2-6 on non-GSD projects. The block was dead-but-noisy.
  *
  * Fix: gate the runtime bash detection on a positive "is-this-the-framework-
- * repo" check (package.json name === "@opengsd/get-shit-done-redux") so it runs ONLY when
+ * repo" check (package.json name === "@opengsd/gsd-core") so it runs ONLY when
  * analysing the GSD framework's own repo, OR remove the block entirely if no
  * downstream consumers exist.
  *
@@ -88,7 +88,7 @@ describe('bug #3290 — Group A: layout-detection block must be gated or absent'
       // A valid gate checks package.json name or an equivalent positive signal
       // that the current project IS the GSD framework's own repo.
       const hasFrameworkGate =
-        content.includes('@opengsd/get-shit-done-redux') ||
+        content.includes('@opengsd/gsd-core') ||
         content.includes('is-this-the-framework') ||
         content.includes('framework repo') ||
         content.includes('Only run') ||
@@ -102,7 +102,7 @@ describe('bug #3290 — Group A: layout-detection block must be gated or absent'
         'bash block (`ls -d .kilo ... || echo unknown`) with no surrounding ' +
         'framework-repo gate (#3290). ' +
         'Either remove the block entirely, or wrap it in a check like:\n' +
-        '  if [[ "$(jq -r \'.name // ""\' package.json 2>/dev/null)" == "@opengsd/get-shit-done-redux" ]]; then\n' +
+        '  if [[ "$(jq -r \'.name // ""\' package.json 2>/dev/null)" == "@opengsd/gsd-core" ]]; then\n' +
         '    # ... detection block ...\n' +
         '  fi'
       );

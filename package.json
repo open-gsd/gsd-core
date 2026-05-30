@@ -1,9 +1,9 @@
 {
-  "name": "@opengsd/get-shit-done-redux",
+  "name": "@opengsd/gsd-core",
   "version": "1.0.0",
   "description": "A meta-prompting, context engineering and spec-driven development system for Claude Code, OpenCode, Gemini and Codex by TÂCHES.",
   "bin": {
-    "get-shit-done-redux": "bin/install.js",
+    "gsd-core": "bin/install.js",
     "gsd-tools": "get-shit-done/bin/gsd-tools.cjs"
   },
   "files": [
@@ -30,11 +30,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/open-gsd/get-shit-done-redux.git"
+    "url": "git+https://github.com/open-gsd/gsd-core.git"
   },
-  "homepage": "https://github.com/open-gsd/get-shit-done-redux",
+  "homepage": "https://github.com/open-gsd/gsd-core",
   "bugs": {
-    "url": "https://github.com/open-gsd/get-shit-done-redux/issues"
+    "url": "https://github.com/open-gsd/gsd-core/issues"
   },
   "publishConfig": {
     "access": "public"

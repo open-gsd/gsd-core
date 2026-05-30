@@ -1,5 +1,5 @@
 /**
- * Regression test for #3610: fresh `npx @opengsd/get-shit-done-redux@latest --codex`
+ * Regression test for #3610: fresh `npx @opengsd/gsd-core@latest --codex`
  * hard-aborts when the target ~/.codex/hooks/ contains the bundled GSD
  * hook files (`gsd-check-update-worker.js`, `gsd-prompt-guard.js`, …)
  * left over from a previous version. The installer-migration report

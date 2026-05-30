@@ -38,7 +38,7 @@
     <!-- Prompt line -->
     <text class="text prompt" font-size="15" y="0">~</text>
     <text class="text dim" font-size="15" x="16" y="0">$</text>
-    <text class="text command" font-size="15" x="36" y="0">npx @opengsd/get-shit-done-redux</text>
+    <text class="text command" font-size="15" x="36" y="0">npx @opengsd/gsd-core</text>
 
     <!-- Banner -->
     <text class="text cyan" font-size="14" y="48" xml:space="preserve">   ██████╗ ███████╗██████╗</text>

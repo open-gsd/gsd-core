@@ -3,11 +3,11 @@
 //   node scripts/generate-package-identity.cjs
 'use strict';
 
-const packageName = "@opengsd/get-shit-done-redux";
-const binName = "get-shit-done-redux";
-const repoSlug = "open-gsd/get-shit-done-redux";
-const repoUrl = "https://github.com/open-gsd/get-shit-done-redux";
-const changelogRawUrl = "https://raw.githubusercontent.com/open-gsd/get-shit-done-redux/main/CHANGELOG.md";
+const packageName = "@opengsd/gsd-core";
+const binName = "gsd-core";
+const repoSlug = "open-gsd/gsd-core";
+const repoUrl = "https://github.com/open-gsd/gsd-core";
+const changelogRawUrl = "https://raw.githubusercontent.com/open-gsd/gsd-core/main/CHANGELOG.md";
 
 function formatManualInstall({ packageName, binName, scope, runtime } = {}) {
   const runtimeFlag = runtime ? ` --${runtime}` : '';

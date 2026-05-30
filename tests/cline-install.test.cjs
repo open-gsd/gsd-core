@@ -7,7 +7,7 @@
  * Regression tests for bug #1991
  *
  * Cline is listed in GSD documentation as a supported runtime but was
- * completely absent from bin/install.js. Running `npx @opengsd/get-shit-done-redux`
+ * completely absent from bin/install.js. Running `npx @opengsd/gsd-core`
  * did not show Cline as an option in the interactive menu.
  *
  * Fixed: Cline is now a first-class runtime that:

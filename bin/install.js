@@ -8624,7 +8624,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   // behind by a previous version), there is no actual "user choice" to
   // make — the file is a known GSD-managed artifact and the installer is
   // about to write the fresh bundled version. Gating the resolver on
-  // `!isTTY` made `npx @opengsd/get-shit-done-redux@latest --codex` hard-abort with
+  // `!isTTY` made `npx @opengsd/gsd-core@latest --codex` hard-abort with
   // 12 blocked bundled hooks. The env-override branch (operator-supplied
   // GSD_INSTALLER_MIGRATION_RESOLVE) still applies only in non-TTY mode.
   const _migrationIsTty = process.stdin && process.stdin.isTTY === true;
@@ -8863,7 +8863,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   // Copy agents to agents directory.
   // Skipped under --minimal: gsd-* subagent descriptions are eagerly loaded
   // into the runtime's Agent tool schema, costing ~6k tokens per turn even
-  // when no GSD workflow is active. See open-gsd/get-shit-done-redux#2762.
+  // when no GSD workflow is active. See open-gsd/gsd-core#2762.
   // Note: agentsSrc is declared as let before the enclosing try block so it
   // is accessible by installCodexConfig() in the Codex config section below.
   agentsSrc = _stageAgents(path.join(src, 'agents'));
@@ -10694,12 +10694,12 @@ function maybeSuggestPathExport(globalBin, homeDir) {
 
 /**
  * #3406 helper: detect a stale globally-installed `@opengsd/gsd-sdk` package
- * shadowing the `gsd-sdk` shim that `@opengsd/get-shit-done-redux` installs.
+ * shadowing the `gsd-sdk` shim that `@opengsd/gsd-core` installs.
  *
  * Background: `@opengsd/gsd-sdk@0.1.0` was published once and never updated
- * (the SDK now ships embedded in `@opengsd/get-shit-done-redux`). When a user has the
+ * (the SDK now ships embedded in `@opengsd/gsd-core`). When a user has the
  * 0.1.0 standalone package installed globally, its `gsd-sdk` bin shadows
- * the one `@opengsd/get-shit-done-redux` provides — and the 0.1.0 binary only knows
+ * the one `@opengsd/gsd-core` provides — and the 0.1.0 binary only knows
  * `run | auto | init` (no `query`), so every `gsd-sdk query <command>`
  * call from skills/hooks fails until the user runs
  * `npm uninstall -g @opengsd/gsd-sdk`.
@@ -10762,7 +10762,7 @@ function formatStaleStandaloneSdkWarning(info) {
     '     npm uninstall -g @opengsd/gsd-sdk',
     '     npx -y ' + pkg.name + '@latest --<runtime> --global',
     '',
-    '   Tracking: #3406 — https://github.com/open-gsd/get-shit-done-redux/issues/3406',
+    '   Tracking: #3406 — https://github.com/open-gsd/gsd-core/issues/3406',
   ].join('\n');
 }
 

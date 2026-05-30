@@ -4,7 +4,7 @@
  * Lint guard: the package name must be single-sourced from package-identity.cjs.
  *
  * Scans runtime files (bin/install.js, get-shit-done/bin/**, scripts/*.cjs)
- * and FAILS if the literal `@opengsd/get-shit-done-redux` appears in a
+ * and FAILS if the literal `@opengsd/gsd-core` appears in a
  * non-comment, non-identity-module line. This enforces that a future rename
  * is a one-file change in package.json (#516).
  *
@@ -24,7 +24,7 @@ const path = require('node:path');
 const { execSync } = require('node:child_process');
 
 const ROOT = path.join(__dirname, '..');
-const LITERAL = '@opengsd/get-shit-done-redux';
+const LITERAL = '@opengsd/gsd-core';
 const IDENTITY_MODULE = path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'package-identity.cjs');
 
 // Files to scan: bin/install.js + everything under get-shit-done/bin/ + touched scripts
@@ -75,7 +75,7 @@ function isCommentLine(trimmed) {
   );
 }
 
-test('no hardcoded package-name literals in runtime non-comment code lines (#516)', () => {
+test('no hardcoded @opengsd/gsd-core literals in runtime non-comment code lines (#516)', () => {
   const files = getRuntimeFiles();
   const violations = [];
 
@@ -98,7 +98,7 @@ test('no hardcoded package-name literals in runtime non-comment code lines (#516
   assert.deepEqual(
     violations,
     [],
-    `Found ${violations.length} hardcoded package-name literal(s) in non-comment code lines:\n` +
+    `Found ${violations.length} hardcoded @opengsd/gsd-core literal(s) in non-comment code lines:\n` +
     violations.map(v => `  ${v}`).join('\n') +
     '\n\nReplace each with the PACKAGE_NAME imported from get-shit-done/bin/lib/package-identity.cjs'
   );

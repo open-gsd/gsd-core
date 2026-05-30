@@ -31,7 +31,7 @@ const fs = require('node:fs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf-8'));
-const installPath = path.resolve(REPO_ROOT, pkg.bin['get-shit-done-redux']);
+const installPath = path.resolve(REPO_ROOT, pkg.bin['gsd-core']);
 const { stripStaleGsdHookBlocks } = require(installPath);
 
 /**

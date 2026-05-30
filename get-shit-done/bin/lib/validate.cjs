@@ -22,8 +22,8 @@
  *
  * References:
  *   - ADR-3524 (docs/adr/3524-cjs-sdk-hard-seam.md)
- *   - Issue #6 (open-gsd/get-shit-done-redux)
- *   - Issue #26 (open-gsd/get-shit-done-redux)
+ *   - Issue #6 (open-gsd/gsd-core)
+ *   - Issue #26 (open-gsd/gsd-core)
  *   - PR #154 (issue #4) — generator pattern precedent
  *   - PR #156 (issue #6) — validate.ts generator that #26 extends
  */

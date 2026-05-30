@@ -7,7 +7,7 @@ process.env.GSD_TEST_MODE = '1';
  * .github/workflows/*.yml file has an effective `shell:` directive that is
  * H1-policy-compliant (native shell per OS).
  *
- * H1 policy (LOCKED — open-gsd/get-shit-done-redux):
+ * H1 policy (LOCKED — open-gsd/gsd-core):
  *   ubuntu-* → bash (runner default, no pin needed)
  *   macos-*  → zsh  (must be pinned explicitly)
  *   windows-* → pwsh (runner default, no pin needed)

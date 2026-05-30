@@ -11,7 +11,7 @@ const path = require('node:path');
 //
 //   2. Source-repo dev path — sdk/shared/model-catalog.json
 //      Three levels up from bin/lib/: works when running directly from the
-//      open-gsd/get-shit-done-redux clone (the original path introduced by #3230).
+//      open-gsd/gsd-core clone (the original path introduced by #3230).
 //
 //   3. GSD_MODEL_CATALOG env override — allows test harnesses and custom
 //      deployments to point at an arbitrary catalog file.

@@ -21,14 +21,14 @@
 #   bash /path/to/rollout-next-phase2.sh
 #
 # Env overrides:
-#   REPO=open-gsd/get-shit-done-redux   (default)
+#   REPO=open-gsd/gsd-core   (default)
 #   SKIP_PROTECTION=1                   (skip running setup-branch-protection.sh)
 #   SKIP_DEFAULT_FLIP=1                 (skip switching default branch)
 #   DRY_RUN=1                           (skip all pushes, PRs, and api writes)
 
 set -euo pipefail
 
-REPO="${REPO:-open-gsd/get-shit-done-redux}"
+REPO="${REPO:-open-gsd/gsd-core}"
 FLIP_BRANCH="chore/flip-next-rollout-flags"
 DRY_RUN="${DRY_RUN:-0}"
 

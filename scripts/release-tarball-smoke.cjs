@@ -28,7 +28,7 @@
  *     - Assert commands/gsd/<cmd>.md exists in the installed package
  *     - Parse the .md for a workflow @-import or inline reference
  *     - Assert the referenced workflow .md exists in the installed package
- *   If 'init' is in lifecycleCommands, runs `get-shit-done-redux --local --claude`
+ *   If 'init' is in lifecycleCommands, runs `gsd-core --local --claude`
  *   in fixtureDir to verify the installer is callable (INIT_FAILED on crash).
  *   Non-interactive: --local --claude flags skip all prompts.
  *
@@ -118,7 +118,7 @@ function binInvocation(binPath, args = []) {
 // ---------------------------------------------------------------------------
 
 /**
- * Locate the lib/node_modules/@opengsd/get-shit-done-redux package root inside
+ * Locate the lib/node_modules/@opengsd/gsd-core package root inside
  * an npm --prefix install directory.
  */
 function pkgRoot(installPrefix) {
@@ -167,10 +167,10 @@ function findGsdToolsBin(installPrefix) {
 }
 
 /**
- * Locate the get-shit-done-redux installer binary (the symlink in <prefix>/bin/).
+ * Locate the gsd-core installer binary (the symlink in <prefix>/bin/).
  */
 function findInstallerBin(installPrefix) {
-  for (const c of binCandidates(installPrefix, 'get-shit-done-redux')) {
+  for (const c of binCandidates(installPrefix, 'gsd-core')) {
     if (fs.existsSync(c)) return c;
   }
   return null;
@@ -390,7 +390,7 @@ function runSmoke({
         code: SMOKE.INIT_FAILED,
         details: {
           ...details,
-          reason: 'get-shit-done-redux binary not found in installPrefix',
+          reason: 'gsd-core binary not found in installPrefix',
           installPrefix,
         },
       };

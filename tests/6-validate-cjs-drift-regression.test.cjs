@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Regression tests for issue #6 (open-gsd/get-shit-done-redux):
+ * Regression tests for issue #6 (open-gsd/gsd-core):
  *   Three validation behaviors present in validate.ts are missing from verify.cjs,
  *   producing silent false negatives on the CJS production path.
  *
@@ -22,7 +22,7 @@
  *
  * References:
  *   - ADR-3524 (docs/adr/3524-cjs-sdk-hard-seam.md)
- *   - Issue #6 (open-gsd/get-shit-done-redux)
+ *   - Issue #6 (open-gsd/gsd-core)
  *   - PR #154 (issue #4) — precedent for the generator pattern
  */
 

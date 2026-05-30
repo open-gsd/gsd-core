@@ -4,14 +4,14 @@
 // Regression guard for bug #3130.
 //
 // Two failure modes were observed with the pre-fix npx invocation form:
-//   1. Cache-stale: bare `npx -y @opengsd/get-shit-done-redux@latest` hits npx's local
+//   1. Cache-stale: bare `npx -y @opengsd/gsd-core@latest` hits npx's local
 //      cache and may pull an older version instead of @latest.
 //   2. Token-routing: Bash-tool wrappers misroute the `@` token in
-//      `@opengsd/get-shit-done-redux@latest`, causing npm to error with
-//      "Unknown command: @opengsd/get-shit-done-redux@latest".
+//      `@opengsd/gsd-core@latest`, causing npm to error with
+//      "Unknown command: @opengsd/gsd-core@latest".
 //
 // The robust form is:
-//   npx -y --package=@opengsd/get-shit-done-redux@latest -- get-shit-done-redux $ARGS
+//   npx -y --package=@opengsd/gsd-core@latest -- gsd-core $ARGS
 //
 // `--package=` forces a fresh registry fetch, bypassing the npx cache.
 // `--` clearly delineates npx flags from the run-command, preventing
@@ -28,9 +28,9 @@ const UPDATE_WF = path.join(ROOT, 'get-shit-done', 'workflows', 'update.md');
 const src = fs.readFileSync(UPDATE_WF, 'utf8');
 
 test('bug #3130: update.md contains no bare npx invocations (cache-stale form)', () => {
-  // Any occurrence of `npx -y @opengsd/get-shit-done-redux@latest` without `--package=`
+  // Any occurrence of `npx -y @opengsd/gsd-core@latest` without `--package=`
   // is the stale form that triggers the two failure modes.
-  const stale = (src.match(/npx -y @opengsd\/get-shit-done-redux@latest[^\n]*/g) || []);
+  const stale = (src.match(/npx -y @opengsd\/gsd-core@latest[^\n]*/g) || []);
   assert.deepEqual(
     stale,
     [],
@@ -40,7 +40,7 @@ test('bug #3130: update.md contains no bare npx invocations (cache-stale form)',
 
 test('bug #3130: update.md has >=3 robust npx invocations (--package= + -- separator)', () => {
   // Three sibling invocations: local, global, and unknown/fallback.
-  const robust = (src.match(/npx -y --package=@opengsd\/get-shit-done-redux@latest -- get-shit-done-redux/g) || []);
+  const robust = (src.match(/npx -y --package=@opengsd\/gsd-core@latest -- gsd-core/g) || []);
   assert.ok(
     robust.length >= 3,
     `Expected >=3 robust npx invocations in update.md, found ${robust.length}`,

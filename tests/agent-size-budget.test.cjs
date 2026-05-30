@@ -19,7 +19,7 @@
  * rationale in the PR, and make sure the bloat is not duplicated content
  * that belongs in `get-shit-done/references/`.
  *
- * See: https://github.com/open-gsd/get-shit-done-redux/issues/2361
+ * See: https://github.com/open-gsd/gsd-core/issues/2361
  */
 
 const { test, describe } = require('node:test');

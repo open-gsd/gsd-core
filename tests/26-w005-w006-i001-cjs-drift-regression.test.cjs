@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Regression tests for issue #26 (open-gsd/get-shit-done-redux).
+ * Regression tests for issue #26 (open-gsd/gsd-core).
  * Three generator-pattern drift items: W005 phaseDirNameRe,
  * W006-archived regex constants (PHASE_TOKEN_FROM_DIR_RE, MILESTONE_ARCHIVE_DIR_RE),
  * I001 canonicalPlanStem.
@@ -11,7 +11,7 @@
  * tests go RED.
  *
  * References:
- *   - Issue #26 (open-gsd/get-shit-done-redux) — three drift items + reproducer
+ *   - Issue #26 (open-gsd/gsd-core) — three drift items + reproducer
  *   - ADR-3524 (docs/adr/3524-cjs-sdk-hard-seam.md)
  *   - PR #154 (issue #4) — generator pattern precedent
  *   - PR #156 (issue #6) — validate.ts generator scaffolding (#26 extends this)

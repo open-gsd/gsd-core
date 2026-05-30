@@ -309,9 +309,9 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
         run: |
-          EXISTING=$(npm view get-shit-done-redux@"$VERSION" version 2>/dev/null || true)
+          EXISTING=$(npm view @opengsd/gsd-core@"$VERSION" version 2>/dev/null || true)
           if [ -n "$EXISTING" ]; then
-            echo "::warning::get-shit-done-redux@${VERSION} is already on the registry — entering reconciliation mode (skip publish, continue with tag/release/PR/dist-tag)."
+            echo "::warning::@opengsd/gsd-core@${VERSION} is already on the registry — entering reconciliation mode (skip publish, continue with tag/release/PR/dist-tag)."
             echo "skip_publish=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip_publish=false" >> "$GITHUB_OUTPUT"
@@ -358,7 +358,7 @@ jobs:
           VERSION: ${{ inputs.version }}
           NODE_AUTH_TOKEN: ${{ secrets.GETSHITDONEREDUXNPMTOKEN }}
         run: |
-          npm dist-tag add "get-shit-done-redux@${VERSION}" next
+          npm dist-tag add "@opengsd/gsd-core@${VERSION}" next
           echo "✅ next dist-tag re-pointed to v${VERSION} (matches latest)"
 
       - name: Create GitHub Release (idempotent)
@@ -404,7 +404,7 @@ jobs:
         run: |
           PUBLISHED="NOT_FOUND"
           for delay in 5 10 20 30 45; do
-            PUBLISHED=$(npm view get-shit-done-redux@"$VERSION" version 2>/dev/null || echo "NOT_FOUND")
+            PUBLISHED=$(npm view @opengsd/gsd-core@"$VERSION" version 2>/dev/null || echo "NOT_FOUND")
             if [ "$PUBLISHED" = "$VERSION" ]; then
               break
             fi
@@ -415,12 +415,12 @@ jobs:
             echo "::error::Version $VERSION did not appear on the registry within timeout"
             exit 1
           fi
-          LATEST_VER=$(npm view get-shit-done-redux dist-tags.latest 2>/dev/null || echo "NOT_FOUND")
+          LATEST_VER=$(npm view @opengsd/gsd-core dist-tags.latest 2>/dev/null || echo "NOT_FOUND")
           if [ "$LATEST_VER" != "$VERSION" ]; then
             echo "::error::dist-tag 'latest' resolves to '$LATEST_VER', expected '$VERSION'"
             exit 1
           fi
-          echo "✓ Verified: get-shit-done-redux@$VERSION is live on @latest"
+          echo "✓ Verified: @opengsd/gsd-core@$VERSION is live on @latest"
 
       - name: Summary
         env:

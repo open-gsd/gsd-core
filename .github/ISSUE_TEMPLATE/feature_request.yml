@@ -11,7 +11,7 @@ body:
         A feature adds something new to GSD — a new command, workflow, concept, or integration. Features have the **highest bar** for acceptance because every feature adds permanent maintenance burden to a project built for solo developers.
 
         **Before opening this issue:**
-        - Check [Discussions](https://github.com/open-gsd/get-shit-done-redux/discussions) — has this been proposed and declined before?
+        - Check [Discussions](https://github.com/open-gsd/gsd-core/discussions) — has this been proposed and declined before?
         - Read [CONTRIBUTING.md](../../CONTRIBUTING.md#-feature) — understand what "approved-feature" means and why you must wait for it before writing code.
         - Ask yourself: *does this solve a real problem for a solo developer working with an AI coding tool, or is it a feature I personally want?*
 

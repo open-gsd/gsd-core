@@ -1,6 +1,6 @@
 # Render agent definitions from templates at install/config-change time
 
-**Source:** [#2758](https://github.com/open-gsd/get-shit-done-redux/issues/2758)
+**Source:** [#2758](https://github.com/open-gsd/gsd-core/issues/2758)
 **Decision:** wontfix — closed on the technical merits
 **Date:** 2026-05-02
 

@@ -16,7 +16,7 @@
  *
  * References:
  *   - ADR-3524 (docs/adr/3524-cjs-sdk-hard-seam.md)
- *   - Issue #4 (open-gsd/get-shit-done-redux)
+ *   - Issue #4 (open-gsd/gsd-core)
  */
 
 /**

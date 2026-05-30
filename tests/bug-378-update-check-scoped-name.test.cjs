@@ -1,9 +1,9 @@
 /**
  * Regression test for #378 / #498: the SessionStart update worker must end up
- * querying the SCOPED package name (@opengsd/get-shit-done-redux) when it asks
+ * querying the SCOPED package name (@opengsd/gsd-core) when it asks
  * npm for the latest version.
  *
- * Background (#378): the worker once hardcoded the unscoped 'get-shit-done-redux',
+ * Background (#378): the worker once hardcoded the unscoped 'gsd-core',
  * which 404s from the registry, leaving update_available permanently false.
  *
  * Original #378 fix derived the name from `require('../package.json').name`.
@@ -26,7 +26,7 @@
  *   3. Structural: worker delegates to check-latest-version's
  *      `checkLatestVersion` rather than calling `npm view` itself.
  *   4. Single-source: check-latest-version's PACKAGE_NAME === the seam's
- *      packageName === the scoped '@opengsd/get-shit-done-redux'.
+ *      packageName === the scoped '@opengsd/gsd-core'.
  *
  * Source-grep policy: this test reads hook source via readFileSync. The repo's
  * lint-no-source-grep rule targets bin/lib/get-shit-done — hooks/ is out of
@@ -63,16 +63,16 @@ describe('bug #378 / #498: update worker queries the scoped name via the seam', 
     assert.ok(fs.existsSync(WORKER_PATH), `worker not found at ${WORKER_PATH}`);
   });
 
-  test('package.json name is the scoped @opengsd/get-shit-done-redux', () => {
+  test('package.json name is the scoped @opengsd/gsd-core', () => {
     const pkg = JSON.parse(fs.readFileSync(PKG_PATH, 'utf8'));
-    assert.equal(pkg.name, '@opengsd/get-shit-done-redux');
+    assert.equal(pkg.name, '@opengsd/gsd-core');
   });
 
-  test('worker does NOT hardcode the unscoped get-shit-done-redux as a string literal', () => {
+  test('worker does NOT hardcode the unscoped gsd-core as a string literal', () => {
     assert.doesNotMatch(
       workerCodeOnly(),
-      /['"]get-shit-done-redux['"]/,
-      "Worker must not pass the unscoped 'get-shit-done-redux' to npm — it 404s.",
+      /['"]gsd-core['"]/,
+      "Worker must not pass the unscoped 'gsd-core' to npm — it 404s.",
     );
   });
 
@@ -100,6 +100,6 @@ describe('bug #378 / #498: update worker queries the scoped name via the seam', 
 
   test('check-latest-version PACKAGE_NAME is single-sourced from the seam', () => {
     assert.equal(PACKAGE_NAME, SEAM.packageName);
-    assert.equal(SEAM.packageName, '@opengsd/get-shit-done-redux');
+    assert.equal(SEAM.packageName, '@opengsd/gsd-core');
   });
 });

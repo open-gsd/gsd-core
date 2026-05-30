@@ -42,7 +42,7 @@
  *      truly un-reclaimable lock, must still throw with a useful message naming
  *      the holder PID. (This guards against over-reclamation.)
  *
- * @see https://github.com/open-gsd/get-shit-done-redux/issues/3670
+ * @see https://github.com/open-gsd/gsd-core/issues/3670
  */
 
 'use strict';

@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Regression tests for issue #416 (open-gsd/get-shit-done-redux).
+ * Regression tests for issue #416 (open-gsd/gsd-core).
  *
  * Bug: getActiveMilestoneArchiveDir falls back to the newest archive directory
  * when STATE.md names a milestone that has no matching archive yet, producing

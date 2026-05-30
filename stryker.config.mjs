@@ -1,7 +1,7 @@
 /**
  * stryker.config.mjs
  *
- * Mutation testing configuration for get-shit-done-redux.
+ * Mutation testing configuration for gsd-core.
  *
  * Test runner: 'command' (built into @stryker-mutator/core)
  *   Runs: node --test over the lib test files via the repo's run-tests invocation.

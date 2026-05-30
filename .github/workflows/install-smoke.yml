@@ -147,13 +147,13 @@ jobs:
           TMPDIR_ROOT=$(mktemp -d)
           cd "$TMPDIR_ROOT"
           npm install -g "$WORKSPACE/$TARBALL"
-          command -v get-shit-done-redux
+          command -v gsd-core
           # `--claude --local` is the non-interactive code path. Don't swallow
           # non-zero exit — if the installer fails, that IS the CI failure, and
           # its own error message is more useful than the downstream "shim
           # regression" assertion masking the real cause.
-          if ! get-shit-done-redux --claude --local; then
-            echo "::error::get-shit-done-redux --claude --local failed. See the install.js output above for the real error."
+          if ! gsd-core --claude --local; then
+            echo "::error::gsd-core --claude --local failed. See the install.js output above for the real error."
             exit 1
           fi
 
@@ -235,8 +235,8 @@ jobs:
           TMPDIR_ROOT=$(mktemp -d)
           cd "$TMPDIR_ROOT"
           npm install -g "$GITHUB_WORKSPACE"
-          command -v get-shit-done-redux
-          get-shit-done-redux --claude --local || true
+          command -v gsd-core
+          gsd-core --claude --local || true
 
       - name: Assert gsd-tools resolves on PATH after unpacked install
         run: |

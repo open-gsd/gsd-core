@@ -17,7 +17,7 @@ Select the template that matches your PR:
 - If it **corrects broken behavior** → Fix
 - If it **improves existing behavior** without adding new commands or concepts → Enhancement
 - If it **adds something that doesn't exist today** → Feature
-- If you are not sure → open a [Discussion](https://github.com/open-gsd/get-shit-done-redux/discussions) first
+- If you are not sure → open a [Discussion](https://github.com/open-gsd/gsd-core/discussions) first
 
 ---
 

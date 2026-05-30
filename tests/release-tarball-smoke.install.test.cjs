@@ -97,7 +97,7 @@ describe('release-tarball-smoke', () => {
   // ── Test C — happy lifecycle ───────────────────────────────────────────────
   // Verifies that the installed package has all expected command .md files and
   // that each command resolves a workflow .md file that also exists.
-  // Also verifies that `get-shit-done-redux --local --claude` (init) succeeds in
+  // Also verifies that `gsd-core --local --claude` (init) succeeds in
   // the fixtureDir and creates the expected .claude/ directories.
   test('C: happy lifecycle — command + workflow files resolve OK', () => {
     const result = runSmoke({

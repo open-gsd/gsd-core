@@ -59,11 +59,11 @@ The /gsd:map-codebase --query command has already confirmed that intel.enabled i
 
 <!-- Layout detection: only meaningful when analysing the GSD framework's own repo (#3290). -->
 
-**Runtime layout detection (GSD framework repo only):** If `package.json` `"name"` equals `"get-shit-done-redux"`, this project IS the GSD framework. In that case, detect the runtime root to choose canonical paths:
+**Runtime layout detection (GSD framework repo only):** If `package.json` `"name"` equals `"@opengsd/gsd-core"`, this project IS the GSD framework. In that case, detect the runtime root to choose canonical paths:
 
 ```bash
 # Only run layout detection when analysing the GSD framework repo itself.
-if [[ "$(jq -r '.name // ""' package.json 2>/dev/null)" == "get-shit-done-redux" ]]; then
+if [[ "$(jq -r '.name // ""' package.json 2>/dev/null)" == "@opengsd/gsd-core" ]]; then
   ls -d .kilo 2>/dev/null && echo "kilo" || (ls -d .claude/get-shit-done 2>/dev/null && echo "claude") || echo "unknown"
 fi
 ```

@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Regression test for issue #4 (open-gsd/get-shit-done-redux):
+ * Regression test for issue #4 (open-gsd/gsd-core):
  *   bin/lib/phase.cjs cmdPhaseComplete — non-idempotent and unclamped.
  *
  * Root cause (pre-fix):
@@ -21,7 +21,7 @@
  * References:
  *   - ADR-3524 (docs/adr/3524-cjs-sdk-hard-seam.md) — architectural foundation
  *   - /tmp/adr-3524-review-findings.md — architectural justification
- *   - Issue #4 (open-gsd/get-shit-done-redux)
+ *   - Issue #4 (open-gsd/gsd-core)
  */
 
 const { describe, test, beforeEach, afterEach } = require('node:test');

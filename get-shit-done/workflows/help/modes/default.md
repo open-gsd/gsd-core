@@ -45,6 +45,6 @@ Topics: `workflow` · `planning` · `execute` · `quick` · `debug` · `capture`
 ## Update GSD
 
 ```bash
-npx @opengsd/get-shit-done-redux@latest
+npx @opengsd/gsd-core@latest
 ```
 </reference>
