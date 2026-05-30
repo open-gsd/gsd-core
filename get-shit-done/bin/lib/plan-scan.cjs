@@ -1,11 +1,6 @@
 'use strict';
 
 /**
- * GENERATED FILE — DO NOT EDIT.
- *
- * Source: sdk/src/query/plan-scan.ts
- * Regenerate: cd sdk && npm run gen:plan-scan
- *
  * Plan Scan Module — detects plan and summary files in a phase directory.
  * Supports both flat (pre-#3139) and nested (post-#3139) layouts.
  */

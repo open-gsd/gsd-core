@@ -1,11 +1,6 @@
 'use strict';
 
 /**
- * GENERATED FILE — DO NOT EDIT.
- *
- * Source: sdk/src/query/decisions.ts
- * Regenerate: cd sdk && npm run gen:decisions
- *
  * Shared parser for CONTEXT.md <decisions> blocks.
  * Accepts both numeric (D-42) and alphanumeric (D-INFRA-01) IDs.
  * Returns {id, text, category, tags, trackable} per decision.

@@ -1,11 +1,6 @@
 'use strict';
 
 /**
- * GENERATED FILE — DO NOT EDIT.
- *
- * Source: sdk/src/query/validate.ts
- * Regenerate: cd sdk && npm run gen:validate
- *
  * Validate Helpers — pure computation helpers and regex constants extracted from
  * sdk/src/query/validate.ts. No I/O. No async. No filesystem operations.
  *
