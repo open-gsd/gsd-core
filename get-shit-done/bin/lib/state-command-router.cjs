@@ -31,7 +31,7 @@ function routeStateCommand({ state, args, cwd, raw, error }) {
     subcommands: ['load', 'complete-phase', ...STATE_SUBCOMMANDS.filter((s) => s !== 'load')],
     defaultSubcommand: 'load',
     unsupported: {
-      'add-roadmap-evolution': 'state add-roadmap-evolution is SDK-only. Use: gsd-sdk query state.add-roadmap-evolution ...',
+      'add-roadmap-evolution': 'state add-roadmap-evolution is SDK-only. Use: gsd-tools query state.add-roadmap-evolution ...',
     },
     error,
     cwd,
