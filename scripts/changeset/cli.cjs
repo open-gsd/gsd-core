@@ -25,6 +25,7 @@ const {
   compareSemverCore,
   isStableTripletSemver,
 } = require('../../get-shit-done/bin/lib/semver-compare.cjs');
+const { PACKAGE_NAME } = require('../../get-shit-done/bin/lib/package-identity.cjs');
 
 function parseArgs(argv) {
   const opts = {
@@ -37,7 +38,7 @@ function parseArgs(argv) {
     changelog: null,
     output: null,
     repoSlug: 'open-gsd/get-shit-done-redux',
-    installCommand: 'npx @opengsd/get-shit-done-redux@latest',
+    installCommand: `npx ${PACKAGE_NAME}@latest`,
     json: false,
   };
   if (argv.length === 0) return { ok: true, opts };

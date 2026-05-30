@@ -2,6 +2,7 @@
 
 const path = require('path');
 const fs = require('fs');
+const { PACKAGE_NAME } = require('./package-identity.cjs');
 // Use non-destructured access so test-time mock.method(childProcess, 'spawnSync')
 // can intercept calls from this seam — destructured imports capture references
 // at load time and become un-mockable.
@@ -350,12 +351,12 @@ function formatSdkPathDiagnostic({ shimDir, platform, runDir }) {
   } else {
     actionLines.push('Could not locate a writable PATH directory to install the shim.');
     actionLines.push('Install globally to materialize the bin symlink:');
-    actionLines.push('npm install -g @opengsd/get-shit-done-redux');
+    actionLines.push(`npm install -g ${PACKAGE_NAME}`);
   }
   const npxNoteLines = isNpx
     ? [
         "Note: you're running via npx. For a persistent shim,",
-        'install globally instead: npm install -g @opengsd/get-shit-done-redux',
+        `install globally instead: npm install -g ${PACKAGE_NAME}`,
       ]
     : [];
   return { shimLocationLine, actionLines, shellActions, npxNoteLines, isNpx, isWin32 };

@@ -14,6 +14,7 @@ const path = require('path');
 const os = require('os');
 const { loadConfig, normalizePhaseName, escapeRegex, findPhaseInternal, getMilestoneInfo, stripShippedMilestones, extractCurrentMilestone, output, error, checkAgentsInstalled, CONFIG_DEFAULTS, inspectWorktreeHealth } = require('./core.cjs');
 const { execGit, platformReadSync: safeReadFile, platformWriteSync } = require('./shell-command-projection.cjs');
+const { PACKAGE_NAME } = require('./package-identity.cjs');
 const { planningDir } = require('./planning-workspace.cjs');
 const { extractFrontmatter, parseMustHavesBlock } = require('./frontmatter.cjs');
 const { writeStateMd } = require('./state.cjs');
@@ -867,11 +868,11 @@ function cmdValidateHealth(cwd, options, raw) {
       if (agentStatus.installed_agents.length === 0) {
         addIssue('warning', 'W010',
           `No GSD agents found in ${agentStatus.agents_dir} — Task(subagent_type="gsd-*") will fall back to general-purpose`,
-          'Run the GSD installer: npx @opengsd/get-shit-done-redux@latest');
+          `Run the GSD installer: npx ${PACKAGE_NAME}@latest`);
       } else {
         addIssue('warning', 'W010',
           `Missing ${agentStatus.missing_agents.length} GSD agents: ${agentStatus.missing_agents.join(', ')} — affected workflows will fall back to general-purpose`,
-          'Run the GSD installer: npx @opengsd/get-shit-done-redux@latest');
+          `Run the GSD installer: npx ${PACKAGE_NAME}@latest`);
       }
     }
   } catch { /* intentionally empty — agent check is non-blocking */ }

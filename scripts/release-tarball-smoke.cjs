@@ -45,6 +45,7 @@ const { execFileSync, spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { PACKAGE_NAME } = require('../get-shit-done/bin/lib/package-identity.cjs');
 // 120 s proved too tight on Windows GitHub-hosted runners: cold-cache
 // `npm install -g` with a 1499-file tarball took ~120 s exactly, causing
 // spawnSync to fire SIGTERM and return { status: null, stdout: '', stderr: '' }
@@ -121,10 +122,12 @@ function binInvocation(binPath, args = []) {
  * an npm --prefix install directory.
  */
 function pkgRoot(installPrefix) {
-  // POSIX: <prefix>/lib/node_modules/@opengsd/get-shit-done-redux
-  // Windows: <prefix>/node_modules/@opengsd/get-shit-done-redux
-  const posix = path.join(installPrefix, 'lib', 'node_modules', '@opengsd', 'get-shit-done-redux');
-  const win = path.join(installPrefix, 'node_modules', '@opengsd', 'get-shit-done-redux');
+  // POSIX: <prefix>/lib/node_modules/<scope>/<pkg>
+  // Windows: <prefix>/node_modules/<scope>/<pkg>
+  // PACKAGE_NAME is scoped (@scope/pkg), so split('/') yields the two path segments.
+  const pkgSegments = PACKAGE_NAME.split('/');
+  const posix = path.join(installPrefix, 'lib', 'node_modules', ...pkgSegments);
+  const win = path.join(installPrefix, 'node_modules', ...pkgSegments);
   return fs.existsSync(posix) ? posix : win;
 }
 

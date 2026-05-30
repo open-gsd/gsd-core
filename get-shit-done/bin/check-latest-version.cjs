@@ -21,10 +21,11 @@
  */
 
 const { execNpm } = require('./lib/shell-command-projection.cjs');
+const { PACKAGE_NAME } = require('./lib/package-identity.cjs');
 
-// Hardcoded. Do not parameterise — the whole point of this script is that
-// the package name is not a runtime choice for the caller.
-const PACKAGE_NAME = '@opengsd/get-shit-done-redux';
+// Sourced from package.json via package-identity.cjs (#516). Do not
+// parameterise — the whole point of this script is that the package name is
+// not a runtime choice for the caller.
 
 const CHECK_REASON = Object.freeze({
   OK: 'ok',
