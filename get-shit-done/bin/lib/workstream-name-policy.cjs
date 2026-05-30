@@ -1,11 +1,6 @@
 'use strict';
 
 /**
- * GENERATED FILE — DO NOT EDIT.
- *
- * Source: sdk/src/workstream-name-policy.ts
- * Regenerate: cd sdk && npm run gen:workstream-name-policy
- *
  * Canonical workstream name validation and slug normalization.
  * Used by active-workstream-store.cjs, planning-workspace.cjs, workstream.cjs.
  */

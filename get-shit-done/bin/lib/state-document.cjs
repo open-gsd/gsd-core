@@ -1,11 +1,6 @@
 'use strict';
 
 /**
- * GENERATED FILE — DO NOT EDIT.
- *
- * Source: sdk/src/state/index.ts
- * Regenerate: cd sdk && npm run gen:state-document
- *
  * STATE.md Document Module — pure transforms for STATE.md text.
  * This module does not read the filesystem and does not own persistence or locking.
  */

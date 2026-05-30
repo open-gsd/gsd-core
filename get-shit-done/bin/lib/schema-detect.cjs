@@ -1,11 +1,6 @@
 'use strict';
 
 /**
- * GENERATED FILE — DO NOT EDIT.
- *
- * Source: sdk/src/query/schema-detect.ts
- * Regenerate: cd sdk && npm run gen:schema-detect
- *
  * Schema Drift Detection — detects schema-relevant file changes and verifies
  * that the appropriate database push command was executed during a phase.
  * This module does not read the filesystem directly.

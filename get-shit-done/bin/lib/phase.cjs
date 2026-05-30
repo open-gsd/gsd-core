@@ -2,8 +2,8 @@
  * Phase — Phase CRUD, query, and lifecycle operations
  *
  * Re-export shim note (issue #4 / ADR-3524):
- *   The phase lifecycle pure-computation helpers live in phase-lifecycle.generated.cjs
- *   (generated from sdk/src/query/phase-lifecycle.ts). cmdPhaseComplete uses
+ *   The phase lifecycle pure-computation helpers live in phase-lifecycle.cjs.
+ *   cmdPhaseComplete uses
  *   deriveProgressFromRoadmap + clampPercent from that module to fix the
  *   non-idempotent Completed Phases blind-increment bug.
  *
@@ -20,8 +20,7 @@ const { planningDir, withPlanningLock } = require('./planning-workspace.cjs');
 const { extractFrontmatter } = require('./frontmatter.cjs');
 const { writeStateMd, readModifyWriteStateMd, stateExtractField, stateReplaceField, stateReplaceFieldWithFallback, updatePerformanceMetricsSection } = require('./state.cjs');
 const { formatGsdSlash, resolveRuntime } = require('./runtime-slash.cjs');
-// Generated pure-computation helpers for cmdPhaseComplete (issue #4 fix).
-// Source: sdk/src/query/phase-lifecycle.ts. Regenerate: node sdk/scripts/gen-phase-lifecycle.mjs
+// Pure-computation helpers for cmdPhaseComplete (issue #4 fix).
 const { deriveProgressFromRoadmap, clampPercent } = require('./phase-lifecycle.cjs');
 
 // #2893 — strict canonical filter: `{padded_phase}-{NN}-PLAN.md` or `PLAN.md`.

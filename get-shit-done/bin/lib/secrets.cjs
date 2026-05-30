@@ -1,11 +1,6 @@
 'use strict';
 
 /**
- * GENERATED FILE — DO NOT EDIT.
- *
- * Source: sdk/src/query/secrets.ts
- * Regenerate: cd sdk && npm run gen:secrets
- *
  * Secrets handling — masking convention for API keys and other
  * credentials managed via /gsd-settings-integrations.
  * This module does not read the filesystem.
