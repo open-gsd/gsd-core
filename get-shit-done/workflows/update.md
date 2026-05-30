@@ -251,16 +251,10 @@ First, resolve the config directory (`RUNTIME_DIR`) from the install scope
 detected in `get_installed_version`:
 
 ```bash
-# RUNTIME_DIR is the resolved config directory (e.g. ~/.config/opencode, ~/.gemini)
-# It should already be set from get_installed_version as GLOBAL_DIR or LOCAL_DIR.
-# Use the appropriate variable based on INSTALL_SCOPE.
-if [ "$INSTALL_SCOPE" = "LOCAL" ]; then
-  RUNTIME_DIR="$LOCAL_DIR"
-elif [ "$INSTALL_SCOPE" = "GLOBAL" ]; then
-  RUNTIME_DIR="$GLOBAL_DIR"
-else
-  RUNTIME_DIR=""
-fi
+# RUNTIME_DIR is the resolved config directory (e.g. ~/.config/opencode, ~/.gemini).
+# get_installed_version emits it as GSD_DIR (LOCAL or GLOBAL install dir, or empty
+# when scope is UNKNOWN). Empty RUNTIME_DIR skips the backup below.
+RUNTIME_DIR="$GSD_DIR"
 ```
 
 If `RUNTIME_DIR` is empty or does not exist, skip this step (no config dir to
