@@ -31,10 +31,10 @@ Selected sections are written with `"enabled": true`. Seeded but unselected sect
 
 ## Configure Sections Manually
 
-Set `ship.pr_body_sections` with `gsd-sdk query config-set`:
+Set `ship.pr_body_sections` with `gsd-tools query config-set`:
 
 ```bash
-gsd-sdk query config-set ship.pr_body_sections '[{"heading":"Risks & Dependencies","enabled":true,"source":"PLAN.md ## Risks || PLAN.md ## Dependencies","fallback":"- No known high-risk rollout dependencies."}]'
+gsd-tools query config-set ship.pr_body_sections '[{"heading":"Risks & Dependencies","enabled":true,"source":"PLAN.md ## Risks || PLAN.md ## Dependencies","fallback":"- No known high-risk rollout dependencies."}]'
 ```
 
 You can also edit `.planning/config.json` directly:
