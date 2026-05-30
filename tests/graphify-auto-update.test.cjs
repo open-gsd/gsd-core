@@ -571,11 +571,11 @@ describe('auto-update', () => {
       'git pull --ff-only',
       'git rebase --continue',
       'git cherry-pick abc123',
-      // #3653 — `gsd-sdk query commit` invokes git via spawnSync('git', [...]),
+      // #3653 — `gsd-tools query commit` invokes git via spawnSync('git', [...]),
       // so the substring "git commit" never appears in tool_input.command.
       // The hook must match the user-facing SDK invocation directly.
-      'gsd-sdk query commit "docs: probe" --files .planning/STATE.md',
-      'npx gsd-sdk query commit "docs: probe" --files .planning/STATE.md',
+      'gsd-tools query commit "docs: probe" --files .planning/STATE.md',
+      'npx gsd-tools query commit "docs: probe" --files .planning/STATE.md',
     ]) {
       test(`dispatches on: ${cmd}`, (t) => {
         const tmpDir = createTempGitRepo({
@@ -610,7 +610,7 @@ describe('auto-update', () => {
         {
           tool_name: 'Bash',
           tool_input: {
-            command: 'gsd-sdk query commit-to-subrepo "msg" --files packages/foo',
+            command: 'gsd-tools query commit-to-subrepo "msg" --files packages/foo',
           },
         },
         { pathPrepend: mockBin },
@@ -623,13 +623,13 @@ describe('auto-update', () => {
     });
 
     // #3653 — only the SDK `commit` verb invokes git internally. Other
-    // `gsd-sdk query` verbs (phase.complete, roadmap.update-plan-progress,
+    // `gsd-tools query` verbs (phase.complete, roadmap.update-plan-progress,
     // state.begin-phase) mutate .md files but do NOT advance HEAD; matching
     // them would cause a spurious rebuild per state mutation.
     for (const cmd of [
-      'gsd-sdk query phase.complete 109',
-      'gsd-sdk query roadmap.update-plan-progress 109 W001',
-      'gsd-sdk query state.begin-phase 110',
+      'gsd-tools query phase.complete 109',
+      'gsd-tools query roadmap.update-plan-progress 109 W001',
+      'gsd-tools query state.begin-phase 110',
     ]) {
       test(`does NOT dispatch on non-HEAD-advancing SDK verb: ${cmd}`, (t) => {
         const tmpDir = createTempGitRepo({

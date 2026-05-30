@@ -32,23 +32,8 @@ describe('bug #3441: PATH guidance is projected from typed shell action IR', () 
     assert.equal(typeof projection.projectPathActionProjection, 'function');
   });
 
-  test('formatSdkPathDiagnostic exposes structured shellActions alongside rendered actionLines', () => {
-    const ir = install.formatSdkPathDiagnostic({
-      shimDir: 'C:\\Users\\me\\AppData\\Roaming\\npm',
-      platform: 'win32',
-      runDir: 'C:\\some\\path',
-    });
-
-    assert.ok(Array.isArray(ir.shellActions), 'shellActions must be an array');
-    assert.ok(ir.shellActions.length >= 3, `expected 3+ shell actions, got ${ir.shellActions.length}`);
-    assert.equal(ir.shellActions[0].label, 'PowerShell');
-    assert.equal(typeof ir.shellActions[0].command, 'string');
-    assert.equal(
-      ir.actionLines.some((line) => line.startsWith('PowerShell:')),
-      true,
-      `rendered action lines should include shell labels: ${JSON.stringify(ir.actionLines)}`,
-    );
-  });
+  // (formatSdkPathDiagnostic removed with the gsd-sdk shim, #191 — the PATH
+  // action projection it wrapped is still covered by the tests below.)
 
   test('persistent PATH export guidance is projected via the same seam', () => {
     const posix = projection.projectPathActionProjection({

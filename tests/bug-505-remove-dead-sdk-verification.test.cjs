@@ -54,33 +54,10 @@ describe('bug #505: dead SDK verification subsystem removed from bin/install.js'
   }
 
   // ----------------------------------------------------------------
-  // Live symbols — MUST still be exported as functions
+  // The stale-standalone-SDK helpers (detectStaleStandaloneSdk,
+  // formatStaleStandaloneSdkWarning) and the gsd-sdk shim contract surface
+  // (buildWindowsShimTriple, formatSdkPathDiagnostic) that #505 kept were
+  // removed when the gsd-sdk shim itself was retired (#191). Their absence is
+  // covered by the dead-symbol assertions above.
   // ----------------------------------------------------------------
-  test('live function detectStaleStandaloneSdk is still exported', () => {
-    assert.equal(
-      typeof inst.detectStaleStandaloneSdk,
-      'function',
-      'detectStaleStandaloneSdk handles real stale-SDK condition (#3406) and must not be removed',
-    );
-  });
-
-  test('live function formatStaleStandaloneSdkWarning is still exported', () => {
-    assert.equal(
-      typeof inst.formatStaleStandaloneSdkWarning,
-      'function',
-      'formatStaleStandaloneSdkWarning handles real stale-SDK condition (#3406) and must not be removed',
-    );
-  });
-
-  // buildWindowsShimTriple / formatSdkPathDiagnostic have no production caller
-  // after this removal, but they are the install.js side of a projection-contract
-  // drift guard (tests/bug-3441, tests/bug-3442) that assert install.js delegates
-  // to shell-command-projection.cjs. They are deliberately kept exported.
-  test('contract surface buildWindowsShimTriple is still exported', () => {
-    assert.equal(typeof inst.buildWindowsShimTriple, 'function');
-  });
-
-  test('contract surface formatSdkPathDiagnostic is still exported', () => {
-    assert.equal(typeof inst.formatSdkPathDiagnostic, 'function');
-  });
 });
