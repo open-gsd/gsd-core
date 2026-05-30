@@ -36,7 +36,7 @@ This is a **beta of a beta**: ultraplan itself is in research preview, so this c
 /gsd-ultraplan-phase [phase]
         │
         ├─ Runtime gate (CLAUDE_CODE_VERSION check)
-        ├─ gsd-sdk query init.plan-phase → phase context
+        ├─ gsd-tools query init.plan-phase → phase context
         ├─ Build ultraplan prompt (phase scope + requirements + research)
         ├─ Display return-path instructions card
         └─ /ultraplan <prompt>
@@ -87,7 +87,7 @@ If unset/empty: print error and exit.
 
 ### 3. Initialize
 ```bash
-INIT=$(gsd-sdk query init.plan-phase "$PHASE")
+INIT=$(gsd-tools query init.plan-phase "$PHASE")
 ```
 Parse: phase number, phase name, phase slug, phase dir, roadmap path, requirements path, research path.
 
@@ -153,7 +153,7 @@ Ultraplan runs as a standard Claude Code on the web session. For Pro/Max subscri
 - Command references workflow
 - Workflow has runtime gate (`CLAUDE_CODE_VERSION`)
 - Workflow has beta warning
-- Workflow has init step (gsd-sdk query)
+- Workflow has init step (gsd-tools query)
 - Workflow builds ultraplan prompt with phase context
 - Workflow triggers `/ultraplan`
 - Workflow has return-path instructions (Cancel path, `/gsd-import --from`)

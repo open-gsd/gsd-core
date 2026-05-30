@@ -29,8 +29,7 @@ const USER_FACING_PREFIXES = [
   'agents/',
   'commands/',
   'hooks/',
-  'sdk/src/',
-  'sdk/prompts/',
+  'scripts/',
 ];
 
 // Exact-match user-facing files. Any direct edit to one of these without a
@@ -107,4 +106,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { evaluateLint, LINT_REASON, OPT_OUT_LABEL, isUserFacing, isFragment };
+module.exports = { evaluateLint, LINT_REASON, OPT_OUT_LABEL, USER_FACING_PREFIXES, isUserFacing, isFragment };

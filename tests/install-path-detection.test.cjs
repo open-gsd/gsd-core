@@ -242,6 +242,8 @@ describe('installer HOME-relative PATH detection (#2620)',
       }
 
       const joined = logs.join('\n');
+      assert.match(joined, /gsd-tools/, 'rc-covered diagnostic should name current gsd-tools binary');
+      assert.doesNotMatch(joined, /gsd-sdk/, 'rc-covered diagnostic must not mention retired gsd-sdk');
       assert.ok(
         !/echo 'export PATH=/.test(joined),
         `installer should not emit absolute export suggestion; got:\n${joined}`,
@@ -271,6 +273,8 @@ describe('installer HOME-relative PATH detection (#2620)',
       }
 
       const joined = logs.join('\n');
+      assert.match(joined, /gsd-tools/, 'PATH suggestion should name current gsd-tools binary');
+      assert.doesNotMatch(joined, /gsd-sdk/, 'PATH suggestion must not mention retired gsd-sdk');
       assert.equal(
         typeof projection.projectPersistentPathExportActions,
         'function',
@@ -289,6 +293,66 @@ describe('installer HOME-relative PATH detection (#2620)',
         );
       }
     } finally {
+      cleanup(home);
+    }
+  });
+
+  test('resolveCurrentGlobalBinDir detects npm global prefix for current gsd-tools install', () => {
+    const prefix = path.join(os.tmpdir(), 'gsd-prefix');
+    assert.strictEqual(
+      installer.resolveCurrentGlobalBinDir({
+        env: { npm_config_prefix: prefix, npm_config_global: 'true' },
+        installDir: path.join(__dirname, '..', 'bin'),
+        platform: 'linux',
+      }),
+      path.join(prefix, 'bin'),
+    );
+  });
+
+  test('resolveCurrentGlobalBinDir detects installed global package layout', () => {
+    assert.strictEqual(
+      installer.resolveCurrentGlobalBinDir({
+        env: {},
+        installDir: '/opt/npm/lib/node_modules/@opengsd/get-shit-done-redux/bin',
+        platform: 'linux',
+      }),
+      '/opt/npm/bin',
+    );
+  });
+
+  test('finishInstall emits gsd-tools PATH guidance only when explicitly configured', () => {
+    const home = createTempHome();
+    const origPath = process.env.PATH;
+    try {
+      const settingsPath = path.join(home, 'settings.json');
+      const globalBin = path.join(home, '.npm-global', 'bin');
+      fs.mkdirSync(globalBin, { recursive: true });
+      process.env.PATH = '/usr/bin:/bin';
+
+      const logs = [];
+      const origLog = console.log;
+      console.log = (...args) => { logs.push(args.join(' ')); };
+      try {
+        installer.finishInstall(
+          settingsPath,
+          {},
+          null,
+          false,
+          'claude',
+          true,
+          home,
+          { pathSuggestionGlobalBin: globalBin, pathSuggestionHomeDir: home },
+        );
+      } finally {
+        console.log = origLog;
+      }
+
+      const joined = logs.join('\n');
+      assert.match(joined, /gsd-tools/, 'finishInstall should emit current gsd-tools PATH guidance when configured');
+      assert.doesNotMatch(joined, /gsd-sdk/, 'finishInstall PATH guidance must not mention retired gsd-sdk');
+      assert.match(joined, /not on your PATH/);
+    } finally {
+      if (origPath === undefined) delete process.env.PATH; else process.env.PATH = origPath;
       cleanup(home);
     }
   });

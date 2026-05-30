@@ -101,15 +101,14 @@ function cleanupFixture(dir) {
 // Case 1: No new drift pair — exits 0 on current repo tree
 // ---------------------------------------------------------------------------
 describe('lint-shared-module-handsync: current repo tree', () => {
-  test('exits 0 with the real allowlist and current repo tree', () => {
+  test('exits 0 with sdk_retired reason in the current repo tree', () => {
     const { status, payload } = runLintJson();
     assert.strictEqual(status, 0);
     assert.ok(payload, 'expected JSON payload on stdout');
     assert.strictEqual(payload.ok, true);
-    assert.ok(
-      payload.reason === undefined || payload.reason === 'sdk_retired',
-      `unexpected success reason: ${payload.reason}`
-    );
+    assert.strictEqual(payload.reason, 'sdk_retired');
+    assert.strictEqual(payload.cooperatingCount, 0);
+    assert.strictEqual(payload.backlogCount, 0);
   });
 
   test('reports numeric counts when lint runs or short-circuits on retired SDK tree', () => {
@@ -122,6 +121,16 @@ describe('lint-shared-module-handsync: current repo tree', () => {
     }
     // No errors field on success — only warnings (backlog) may be present
     assert.strictEqual(payload.ok, true);
+  });
+
+  test('explicit missing --sdk-src remains fail-loud', () => {
+    const missingSdkSrc = path.join(os.tmpdir(), `gsd-missing-sdk-src-${process.pid}-${Date.now()}`);
+    const { status, payload } = runLintJson(['--sdk-src', missingSdkSrc]);
+    assert.strictEqual(status, 1);
+    assert.ok(payload, 'expected JSON payload on stdout');
+    assert.strictEqual(payload.ok, false);
+    assert.strictEqual(payload.reason, 'sdk_src_missing');
+    assert.strictEqual(payload.path, missingSdkSrc);
   });
 
   test('script has no syntax errors', () => {

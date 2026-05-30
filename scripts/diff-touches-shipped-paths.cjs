@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Used by the release-sdk hotfix cherry-pick loop to decide whether a
- * candidate commit can possibly change what ships in the npm package.
+ * Used by the hotfix cherry-pick loop to decide whether a candidate commit
+ * can possibly change what ships in the npm package.
  *
  * Reads a newline-separated list of paths from stdin (typically the
  * output of `git diff-tree --no-commit-id --name-only -r <SHA>`) and
@@ -12,11 +12,10 @@
  *   - package.json (always included by `npm pack`, regardless of `files`)
  *   - every entry in package.json `files`, treated as either an exact
  *     file match or a directory prefix (matching `npm pack` semantics).
- *   - CI-gating test paths: `tests/<anything>` plus
- *     `sdk/src/<anything>/<name>.test.<ts|cjs|mjs|js>` and `.spec.` variants
- *     — these don't ship in the tarball, but they gate the hotfix-branch
- *     test job. A test fixture update that aligns with a cherry-picked
- *     production fix MUST be pickable or CI fails on the hotfix run.
+ *   - CI-gating test paths under `tests/` — these don't ship in the tarball,
+ *     but they gate the hotfix-branch test job. A test fixture update that
+ *     aligns with a cherry-picked production fix MUST be pickable or CI fails
+ *     on the hotfix run.
  *     #3621 — root cause of the v1.42.3 hotfix red CI.
  *
  * `package-lock.json` is intentionally NOT considered shipped — `npm pack`
@@ -64,12 +63,7 @@ function loadShipPrefixes(pkgPath) {
 // in hotfix.yml, this lets `test(####):` fixture-alignment commits be
 // cherry-picked alongside their production counterparts.
 function isCiGating(diffPath) {
-  if (diffPath.startsWith('tests/')) return true;
-  // SDK vitest specs live next to source. Production source ships via
-  // sdk/dist/ (already in package.json `files`); the test files are what's
-  // missing from that surface.
-  if (diffPath.startsWith('sdk/src/') && /\.(test|spec)\.(ts|cjs|mjs|js)$/.test(diffPath)) return true;
-  return false;
+  return diffPath.startsWith('tests/');
 }
 
 function isShipped(diffPath, shipPrefixes) {

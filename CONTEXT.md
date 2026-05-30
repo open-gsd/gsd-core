@@ -193,7 +193,7 @@ The canonical lint infrastructure adopted in ADR 452 (`docs/adr/452-eslint-lint-
 `RULESET.ADR-HEADER=every docs/adr/NNNN-*.md must open with - **Status:** Accepted|Proposed|Deprecated + - **Date:** YYYY-MM-DD immediately after title`
 `RULESET.MANIFEST-CANONICAL-KEY=docs/INVENTORY-MANIFEST.json — only families.workflows is canonical (read by tooling); top-level workflows key is stale, delete if present`
 
-`RULESET.SDK-ONLY-VERBS.exemption=any gsd-sdk query verb implemented only in SDK native registry (no gsd-tools.cjs mirror) must be added to NO_CJS_SUBPROCESS_REASON in sdk/src/golden/golden-policy.ts — otherwise golden-policy test fails treating verb as missing implementation`
+`RULESET.GSD-TOOLS-QUERY.exemption=any gsd-tools query verb without a CJS router mirror must be documented with an explicit unsupported/current-runtime refusal before release`
 
 `RULESET.PR-SCOPE.one-concern-per-pr=split unrelated changes into separate PRs; cherry-pick doc changes to dedicated docs/ branch immediately, then force-push original to remove the commit`
 
@@ -573,8 +573,8 @@ Migration plan: Phase 1 (#3465) seam additions complete; Phase 2 (#3466) targets
 `DEFECT.STACKED-PR-CANNOT-STAND-ALONE.anti-pattern=blindly running git rebase --onto origin/main on the patch branch — produces "conflicts" that are really "the scaffolding doesn't exist yet"; resolving them means reinventing the upstream PR's contribution, which duplicates work and creates merge hazards. Recognize the shape early via cat-file probe before rebasing`
 
 `DEFECT.CANARY-VERSION-LEAK.symptom=package.json version on main carries a -canary.<N> suffix that per release policy belongs to the dev branch only; nothing publishable depends on the version string at runtime, but every consumer of the version metadata (release flow, install banners, statusline) sees the dev-channel label`
-`DEFECT.CANARY-VERSION-LEAK.examples=2026-05-16 audit found origin/main + origin/feat/3575-enforcement-hardening both at "version": "1.50.0-canary.0" in sdk/package.json AND root package.json; npm view @opengsd/gsd-sdk versions returned ["0.1.0"] only, dist-tag latest=0.1.0, @1.50.0-canary.0 404 — confirms the string is metadata-only, never published. git log -S '"version": "1.50.0-canary.0"' origin/main blamed commit 2d32ad82 fix(plan-phase)... (#3206), a fix PR that accidentally carried the version bump from a dev-branch base`
-`DEFECT.CANARY-VERSION-LEAK.detect=jq -r .version package.json sdk/package.json on origin/main shows a -canary suffix; OR npm view <pkg> dist-tags shows latest != main's version`
+`DEFECT.CANARY-VERSION-LEAK.examples=2026-05-16 audit found origin/main + origin/feat/3575-enforcement-hardening carrying "version": "1.50.0-canary.0" where release policy expects only stable versions on main. git log -S '"version": "1.50.0-canary.0"' origin/main blamed commit 2d32ad82 fix(plan-phase)... (#3206), a fix PR that accidentally carried the version bump from a dev-branch base`
+`DEFECT.CANARY-VERSION-LEAK.detect=jq -r .version package.json on origin/main shows a -canary suffix; OR npm view <pkg> dist-tags shows latest != main's version`
 `DEFECT.CANARY-VERSION-LEAK.fix-forward=open a chore/* PR against main that resets the version strings to the canonical pre-canary stable; rebase open PRs to pick it up; gate at PR open with a CI check that rejects -canary versions on PRs targeting main`
 `DEFECT.GSD-TEST-HOST-MID-RUN-DEATH.symptom=pick_host succeeds at probe time (ssh -o ConnectTimeout=3 -o BatchMode=yes "$h" true); subsequent ssh "$h" 'docker run ...' hangs indefinitely because the chosen host went unreachable between probe and exec; gsd-test-summary buffers stderr until the wrapper exits, so the operator sees no progress at all`
 `DEFECT.GSD-TEST-HOST-MID-RUN-DEATH.examples=2026-05-16 redshirt probed up at 12:48 UTC, gsd-test-summary picked it, docker container spawned, then redshirt's ssh daemon stopped responding — banner-exchange timeout. Test stalled 20+ minutes with the wrapper's output file at 0 bytes`
@@ -648,7 +648,7 @@ Full detail in `~/.claude/skills/gsd-pr-fix-discipline/SKILL.md`. AI agents MUST
 
 - **Symptom:** `gen-*.mjs` emits stale CJS; correct fixes appear to be reverted by subsequent regeneration passes
 - **Affected this session:** #154 (2nd-pass agent reverted a correct slash-form fix)
-- **Fix:** Always `npm run build:sdk &&` before `node sdk/scripts/gen-*.mjs`; PR #169 adds staleness check
+- **Fix:** Always run the relevant current generator/check script before committing generated runtime artifacts; PR #169 added staleness checks
 
 ### Slash command two-tier confusion
 

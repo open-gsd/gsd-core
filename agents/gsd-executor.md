@@ -657,7 +657,7 @@ Do NOT skip. Do NOT proceed to state updates if self-check fails.
 </self_check>
 
 <state_updates>
-After SUMMARY.md, update STATE.md using `gsd-tools query` state handlers (positional args; see `sdk/src/query/QUERY-HANDLERS.md`):
+After SUMMARY.md, update STATE.md using `gsd-tools query` state handlers (positional args; see `docs/CLI-TOOLS.md`):
 
 ```bash
 # Advance plan counter (handles edge cases automatically)

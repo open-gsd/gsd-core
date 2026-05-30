@@ -134,11 +134,7 @@ commit before the PR is merged.
 
 ### Scope
 
-The gate runs `npm ls --all --json` at the repository root. The `sdk/`
-sub-directory is a separate, non-workspace package and is out of scope for this
-single invocation. If `sdk/` is ever declared as a workspace in root
-`package.json`, it will be covered automatically (npm >=7 traverses workspaces
-by default).
+The gate runs `npm ls --all --json` at the repository root. This repository now ships a single root package, so the root invocation covers the active package dependency tree.
 
 ### CI coverage
 

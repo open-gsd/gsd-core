@@ -571,11 +571,11 @@ describe('auto-update', () => {
       'git pull --ff-only',
       'git rebase --continue',
       'git cherry-pick abc123',
-      // #3653 — `gsd-sdk query commit` invokes git via spawnSync('git', [...]),
+      // #3653 — `gsd-tools query commit` / `gsd_run query commit` invoke git via spawnSync('git', [...]),
       // so the substring "git commit" never appears in tool_input.command.
-      // The hook must match the user-facing SDK invocation directly.
-      'gsd-sdk query commit "docs: probe" --files .planning/STATE.md',
-      'npx gsd-sdk query commit "docs: probe" --files .planning/STATE.md',
+      // The hook must match the user-facing runtime invocation directly.
+      'gsd-tools query commit "docs: probe" --files .planning/STATE.md',
+      'gsd_run query commit "docs: probe" --files .planning/STATE.md',
     ]) {
       test(`dispatches on: ${cmd}`, (t) => {
         const tmpDir = createTempGitRepo({
@@ -599,39 +599,42 @@ describe('auto-update', () => {
       });
     }
 
-    test('does NOT dispatch on SDK commit-to-subrepo prefix collision', (t) => {
-      const tmpDir = createTempGitRepo({
-        config: { graphify: { enabled: true, auto_update: true } },
-      });
-      t.after(() => cleanupHookRepo(tmpDir));
-      const mockBin = makeMockGraphifyBin(tmpDir, { sleepMs: 100 });
-      const r = runHook(
-        tmpDir,
-        {
-          tool_name: 'Bash',
-          tool_input: {
-            command: 'gsd-sdk query commit-to-subrepo "msg" --files packages/foo',
+    for (const cmd of [
+      'gsd-tools query commit-to-subrepo "msg" --files packages/foo',
+      'gsd_run query commit-to-subrepo "msg" --files packages/foo',
+    ]) {
+      test(`does NOT dispatch on commit-to-subrepo prefix collision: ${cmd}`, (t) => {
+        const tmpDir = createTempGitRepo({
+          config: { graphify: { enabled: true, auto_update: true } },
+        });
+        t.after(() => cleanupHookRepo(tmpDir));
+        const mockBin = makeMockGraphifyBin(tmpDir, { sleepMs: 100 });
+        const r = runHook(
+          tmpDir,
+          {
+            tool_name: 'Bash',
+            tool_input: { command: cmd },
           },
-        },
-        { pathPrepend: mockBin },
-      );
-      assert.strictEqual(r.status, 0);
-      assert.ok(
-        !fs.existsSync(path.join(tmpDir, '.planning/graphs/.last-build-status.json')),
-        'must NOT dispatch for commit-to-subrepo, which does not advance the outer repo HEAD',
-      );
-    });
+          { pathPrepend: mockBin },
+        );
+        assert.strictEqual(r.status, 0);
+        assert.ok(
+          !fs.existsSync(path.join(tmpDir, '.planning/graphs/.last-build-status.json')),
+          'must NOT dispatch for commit-to-subrepo, which does not advance the outer repo HEAD',
+        );
+      });
+    }
 
-    // #3653 — only the SDK `commit` verb invokes git internally. Other
-    // `gsd-sdk query` verbs (phase.complete, roadmap.update-plan-progress,
+    // #3653 — only the `commit` verb invokes git internally. Other
+    // `gsd-tools query` verbs (phase.complete, roadmap.update-plan-progress,
     // state.begin-phase) mutate .md files but do NOT advance HEAD; matching
     // them would cause a spurious rebuild per state mutation.
     for (const cmd of [
-      'gsd-sdk query phase.complete 109',
-      'gsd-sdk query roadmap.update-plan-progress 109 W001',
-      'gsd-sdk query state.begin-phase 110',
+      'gsd-tools query phase.complete 109',
+      'gsd-tools query roadmap.update-plan-progress 109 W001',
+      'gsd-tools query state.begin-phase 110',
     ]) {
-      test(`does NOT dispatch on non-HEAD-advancing SDK verb: ${cmd}`, (t) => {
+      test(`does NOT dispatch on non-HEAD-advancing gsd-tools verb: ${cmd}`, (t) => {
         const tmpDir = createTempGitRepo({
           config: { graphify: { enabled: true, auto_update: true } },
         });
@@ -640,7 +643,7 @@ describe('auto-update', () => {
         assert.strictEqual(r.status, 0);
         assert.ok(
           !fs.existsSync(path.join(tmpDir, '.planning/graphs/.last-build-status.json')),
-          `must NOT dispatch for non-HEAD-advancing SDK verb: ${cmd}`,
+          `must NOT dispatch for non-HEAD-advancing gsd-tools verb: ${cmd}`,
         );
       });
     }

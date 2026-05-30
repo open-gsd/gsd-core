@@ -932,7 +932,7 @@ Interactive configuration of workflow toggles and model profile. Questions are g
 - **Model & Pipeline** — Model Profile, Auto-Advance, Branching
 - **Misc** — Context Warnings, Research Qs
 
-All answers are merged via `gsd-sdk query config-set` into the resolved project config path (`.planning/config.json` for a standard install, or `.planning/workstreams/<active>/config.json` when a workstream is active), preserving unrelated keys. After confirmation, the user may save the full settings object to `~/.gsd/defaults.json` so future `/gsd-new-project` runs start from the same baseline.
+All answers are merged via `gsd-tools query config-set` into the resolved project config path (`.planning/config.json` for a standard install, or `.planning/workstreams/<active>/config.json` when a workstream is active), preserving unrelated keys. After confirmation, the user may save the full settings object to `~/.gsd/defaults.json` so future `/gsd-new-project` runs start from the same baseline.
 
 ```bash
 /gsd-settings                       # Interactive config
@@ -960,7 +960,7 @@ Configure GSD settings interactively — workflow toggles, advanced knobs, integ
 | Git Customization | `git.base_branch`, `git.phase_branch_template`, `git.milestone_branch_template` |
 | Runtime / Output | `response_language`, `context_window`, `search_gitignored`, `graphify.build_timeout` |
 
-All answers merge via `gsd-sdk query config-set`, preserving unrelated keys. API keys are masked (`****<last-4>`) in all output.
+All answers merge via `gsd-tools query config-set`, preserving unrelated keys. API keys are masked (`****<last-4>`) in all output.
 
 ```bash
 /gsd-config                         # Common-case interactive config

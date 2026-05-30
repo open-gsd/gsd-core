@@ -219,13 +219,13 @@ describe('bug-2808: SKILL.md name: uses hyphen form', () => {
     const { transformContentToHyphen, readCmdNames } = transformer;
     const liveCmdNames = readCmdNames();
 
-    const input = 'Run /gsd:plan-phase then gsd:execute-phase. Also see /gsd:review and gsd-sdk query.';
+    const input = 'Run /gsd:plan-phase then gsd:execute-phase. Also see /gsd:review and gsd-tools query.';
     const out = transformContentToHyphen(input, liveCmdNames);
 
     assert.ok(out.includes('/gsd-plan-phase'), 'leading-/ colon form must become hyphen');
     assert.ok(out.includes('gsd-execute-phase'), 'bare colon form must become hyphen');
     assert.ok(out.includes('/gsd-review'), 'another command reference must be rewritten');
-    assert.ok(out.includes('gsd-sdk'), 'non-command gsd-sdk must be left untouched');
+    assert.ok(out.includes('gsd-tools'), 'non-command gsd-tools must be left untouched');
     assert.ok(!out.match(/\bgsd:[a-z]/), 'no colon-form command reference may survive');
   });
 

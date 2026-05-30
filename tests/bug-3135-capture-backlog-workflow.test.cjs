@@ -37,11 +37,11 @@ describe('#3135: get-shit-done/workflows/add-backlog.md', () => {
     );
   });
 
-  test('uses gsd-sdk query phase.next-decimal to find next 999.x slot', () => {
+  test('uses gsd-tools query phase.next-decimal to find next 999.x slot', () => {
     const src = fs.readFileSync(WORKFLOW, 'utf8');
     assert.ok(
       src.includes('phase.next-decimal'),
-      'add-backlog.md must use gsd-sdk query phase.next-decimal to find the next 999.x number',
+      'add-backlog.md must use gsd-tools query phase.next-decimal to find the next 999.x number',
     );
   });
 
@@ -62,15 +62,15 @@ describe('#3135: get-shit-done/workflows/add-backlog.md', () => {
     const src = fs.readFileSync(WORKFLOW, 'utf8');
     assert.ok(
       src.includes('generate-slug'),
-      'add-backlog.md must use gsd-sdk query generate-slug to build the phase directory slug',
+      'add-backlog.md must use gsd-tools query generate-slug to build the phase directory slug',
     );
   });
 
-  test('commits via gsd-sdk query commit', () => {
+  test('commits via gsd-tools query commit', () => {
     const src = fs.readFileSync(WORKFLOW, 'utf8');
     assert.ok(
-      src.includes('gsd-sdk query commit') || src.includes('query commit'),
-      'add-backlog.md must commit via gsd-sdk query commit',
+      src.includes('gsd-tools query commit') || src.includes('query commit'),
+      'add-backlog.md must commit via gsd-tools query commit',
     );
   });
 

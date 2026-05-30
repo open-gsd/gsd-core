@@ -190,7 +190,7 @@ describe('gsd-health --context flag is wired into command + workflow', () => {
     );
   });
 
-  test('workflow context_check invokes gsd-sdk query validate.context', () => {
+  test('workflow context_check invokes gsd-tools query validate.context', () => {
     const raw = fs.readFileSync(HEALTH_WORKFLOW, 'utf-8');
     // Extract just the context_check step's body so a stray reference
     // elsewhere in the file can't satisfy this assertion.

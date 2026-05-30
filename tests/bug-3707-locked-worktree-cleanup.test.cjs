@@ -2,7 +2,7 @@
 // Real-filesystem tests for the two failure modes pinned in #3707:
 //   1. executeWorktreeWaveCleanupPlan must unlock-then-retry when a worktree is locked.
 //   2. reapOrphanWorktrees must reap dead-pid+merged entries and skip live / unmerged / fresh-mtime entries.
-//   3. quick.md and execute-phase.md must wire gsd-sdk query worktree.reap-orphans at startup.
+//   3. quick.md and execute-phase.md must wire gsd-tools query worktree.reap-orphans at startup.
 
 'use strict';
 
@@ -380,7 +380,7 @@ describe('bug-3707: startup orphan sweep is wired into workflow entry points', (
     const content = fs.readFileSync(QUICK_PATH, 'utf8');
     assert.ok(
       content.includes('worktree.reap-orphans'),
-      'quick.md must call gsd-sdk query worktree.reap-orphans at startup'
+      'quick.md must call gsd-tools query worktree.reap-orphans at startup'
     );
     // Must be guarded by USE_WORKTREES check
     assert.ok(
@@ -394,7 +394,7 @@ describe('bug-3707: startup orphan sweep is wired into workflow entry points', (
     const content = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf8');
     assert.ok(
       content.includes('worktree.reap-orphans'),
-      'execute-phase.md must call gsd-sdk query worktree.reap-orphans at startup'
+      'execute-phase.md must call gsd-tools query worktree.reap-orphans at startup'
     );
     assert.ok(
       /USE_WORKTREES.*!=.*false[\s\S]{0,200}worktree\.reap-orphans/m.test(content) ||

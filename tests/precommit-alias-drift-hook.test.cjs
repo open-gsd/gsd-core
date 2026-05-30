@@ -22,11 +22,11 @@ function writeMock(tmpDir, name, content) {
 }
 
 describe('.githooks/pre-commit alias drift guard', () => {
-  test('runs npm check when staged files include command-manifest/alias artifacts', (t) => {
+  test('runs npm check when staged files include live command alias artifact', (t) => {
     const tmpDir = createTempDir('gsd-precommit-hook-');
     t.after(() => cleanup(tmpDir));
 
-    const mockGit = writeMock(tmpDir, 'git', `#!/usr/bin/env bash\nprintf "%s\\n" "${'sdk/src/query/command-manifest.phase.ts'}"\n`);
+    const mockGit = writeMock(tmpDir, 'git', `#!/usr/bin/env bash\nprintf "%s\\n" "${'get-shit-done/bin/lib/command-aliases.cjs'}"\n`);
     const mockNpm = writeMock(tmpDir, 'npm', `#!/usr/bin/env bash\nprintf "called" > "$GSD_TEST_NPM_MARKER"\n`);
 
     const marker = path.join(tmpDir, 'npm-called.txt');
@@ -43,6 +43,22 @@ describe('.githooks/pre-commit alias drift guard', () => {
     });
 
     assert.ok(fs.existsSync(marker), 'expected npm run check:alias-drift to be invoked');
+  });
+
+  test('every npm run invocation in the hook exists in package.json', () => {
+    const hook = fs.readFileSync(HOOK_PATH, 'utf8');
+    const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+    const npmRunScripts = [...hook.matchAll(/(?:"\$NPM_CMD"|\$NPM_CMD|\bnpm)\s+run\s+([A-Za-z0-9:_-]+)/g)]
+      .map((match) => match[1]);
+
+    assert.notEqual(npmRunScripts.length, 0, 'expected hook to invoke at least one npm script');
+
+    for (const script of npmRunScripts) {
+      assert.ok(
+        Object.prototype.hasOwnProperty.call(packageJson.scripts, script),
+        `expected package.json to define script ${script}`,
+      );
+    }
   });
 
   test('does not run npm check when staged files are unrelated', (t) => {

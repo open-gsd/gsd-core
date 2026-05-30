@@ -344,7 +344,7 @@ Example:
 
 ### Project-Root Resolution in Multi-Repo Workspaces
 
-When `sub_repos` is set and `gsd-tools.cjs` or `gsd-sdk query` is invoked from inside a listed child repo, both CLIs walk up to the parent workspace that owns `.planning/` before dispatching handlers. Resolution order (checked at each ancestor up to 10 levels, never above `$HOME`):
+When `sub_repos` is set and `gsd-tools query` is invoked from inside a listed child repo, the CLI walks up to the parent workspace that owns `.planning/` before dispatching handlers. Resolution order (checked at each ancestor up to 10 levels, never above `$HOME`):
 
 1. If the starting directory already has its own `.planning/`, it is the project root (no walk-up).
 2. Parent has `.planning/config.json` listing the starting directory's top-level segment in `sub_repos` (or the legacy `planning.sub_repos` shape).
@@ -424,7 +424,7 @@ Any GSD agent type can receive skills. Common types:
 
 ### How It Works
 
-At spawn time, workflows call `gsd-sdk query agent-skills <type>` (or legacy `node gsd-tools.cjs agent-skills <type>`) to load configured skills. If skills exist for the agent type, they are injected as an `<agent_skills>` block in the Task() prompt:
+At spawn time, workflows call `gsd-tools query agent-skills <type>` to load configured skills. If skills exist for the agent type, they are injected as an `<agent_skills>` block in the Task() prompt:
 
 ```xml
 <agent_skills>
@@ -441,7 +441,7 @@ If no skills are configured, the block is omitted (zero overhead).
 Set skills via the CLI:
 
 ```bash
-gsd-sdk query config-set agent_skills.gsd-executor '["skills/my-skill"]'
+gsd-tools query config-set agent_skills.gsd-executor '["skills/my-skill"]'
 ```
 
 ---
@@ -502,10 +502,10 @@ architecture questions.
 
 ```bash
 # Enable a feature
-gsd-sdk query config-set features.global_learnings true
+gsd-tools query config-set features.global_learnings true
 
 # Disable a feature
-gsd-sdk query config-set features.thinking_partner false
+gsd-tools query config-set features.thinking_partner false
 ```
 
 The `features.*` namespace is a dynamic key pattern — new feature flags can be added without modifying `VALID_CONFIG_KEYS`. Any key matching `features.<name>` is accepted by the config system.
@@ -780,7 +780,7 @@ Invalid flag tokens are sanitized and logged as warnings. Only recognized GSD fl
 | gsd-doc-writer | Opus | Sonnet | Haiku | Sonnet | Inherit |
 | gsd-doc-verifier | Sonnet | Sonnet | Haiku | Haiku | Inherit |
 
-> **All 33 shipped agents have explicit per-profile tier assignments** in the catalog (`sdk/shared/model-catalog.json`). The table above shows a representative subset of the most-used agents. For agents not listed here, `model_overrides` accepts any shipped agent name. The authoritative profile data is derived from `sdk/shared/model-catalog.json` via `get-shit-done/bin/lib/model-catalog.cjs` and `sdk/src/model-catalog.ts`.
+> **All 33 shipped agents have explicit per-profile tier assignments** in the catalog (`get-shit-done/bin/shared/model-catalog.json`). The table above shows a representative subset of the most-used agents. For agents not listed here, `model_overrides` accepts any shipped agent name. The authoritative profile data is derived from `get-shit-done/bin/shared/model-catalog.json` via `get-shit-done/bin/lib/model-catalog.cjs`.
 
 ### Per-Agent Overrides
 

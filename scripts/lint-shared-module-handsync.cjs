@@ -4,13 +4,20 @@
 /**
  * Shared Module hand-sync drift lint — Phase 6 of #3524 (#3575).
  *
- * Scans get-shit-done/bin/lib/ for .cjs files and checks whether a matching
+ * The default repository no longer has an active sdk/src tree. In default
+ * mode, this lint reports success with reason `sdk_retired`; explicit
+ * --sdk-src fixture/legacy runs still fail loud when the requested tree is
+ * missing.
+ *
+ * When --sdk-src is provided for a fixture or legacy audit, the lint scans
+ * get-shit-done/bin/lib/ for .cjs files and checks whether a matching
  * TypeScript file exists in sdk/src/<name>.ts, sdk/src/query/<name>.ts, or
  * sdk/src/<name>/index.ts (excluding *.generated.ts and *.test.ts).
  *
  * Allowlist entries are keyed by the (cjs, ts) PAIR. An entry with cjs
  * `bin/lib/foo.cjs` and ts `sdk/src/foo.ts` only allow-throughs that exact
- * pair — a sibling at `sdk/src/query/foo.ts` is still flagged.
+ * pair — a sibling at `sdk/src/query/foo.ts` is still flagged in explicit
+ * fixture/legacy mode.
  *
  * Cross-name pairs are also supported when declared in the allowlist
  * (for example `verify.cjs` <-> `validate.ts`), so cooperating siblings are
@@ -336,13 +343,11 @@ function main() {
         process.stderr.write('\n');
       }
       process.stderr.write(
-        'To resolve, choose one of:\n' +
-          '  1. Migrate to a Shared Module (preferred): create sdk/src/<name>/index.ts as the\n' +
-          '     source-of-truth, write a generator script (sdk/scripts/gen-<name>.mjs), add a\n' +
-          '     freshness check, and update CI. See docs/agents/cjs-sdk-seam.md for the pattern.\n' +
-          '  2. Add an explicit allowlist entry to scripts/shared-module-handsync-allowlist.json\n' +
-          '     with a justification explaining why this pair is a legitimate cooperating sibling\n' +
-          '     rather than a drift anti-pattern. Requires maintainer review via CODEOWNERS.\n\n'
+        'To resolve this explicit --sdk-src fixture/legacy audit, choose one of:\n' +
+          '  1. Remove the duplicate hand-sync implementation so the current CJS runtime has a\n' +
+          '     single source of truth.\n' +
+          '  2. Add an explicit fixture/legacy allowlist entry to scripts/shared-module-handsync-allowlist.json\n' +
+          '     with a justification explaining why this pair is intentionally preserved.\n\n'
       );
     }
     process.exit(1);

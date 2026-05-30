@@ -3,7 +3,7 @@
  *
  * The CJS dispatcher (gsd-tools.cjs) must accept dotted canonical command
  * form (e.g. `state.update`) as well as the spaced form (`state update`).
- * Workflow markdown files emit `gsd-sdk query <domain>.<subcommand>` calls,
+ * Workflow markdown files emit `gsd-tools query <domain>.<subcommand>` calls,
  * and any caller that bypasses the SDK (stale npm binary, direct shell-out,
  * third-party script) would hit "Unknown command: <domain>.<subcommand>".
  *

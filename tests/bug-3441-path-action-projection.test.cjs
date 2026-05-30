@@ -16,7 +16,6 @@ const projection = require(path.join(
   'lib',
   'shell-command-projection.cjs',
 ));
-const install = require(path.join(__dirname, '..', 'bin', 'install.js'));
 const { withIsolatedProcessState } = require('./helpers.cjs');
 
 function createTempHome() {
@@ -30,24 +29,6 @@ function cleanup(dir) {
 describe('bug #3441: PATH guidance is projected from typed shell action IR', () => {
   test('projection module exports PATH action projection helper', () => {
     assert.equal(typeof projection.projectPathActionProjection, 'function');
-  });
-
-  test('formatSdkPathDiagnostic exposes structured shellActions alongside rendered actionLines', () => {
-    const ir = install.formatSdkPathDiagnostic({
-      shimDir: 'C:\\Users\\me\\AppData\\Roaming\\npm',
-      platform: 'win32',
-      runDir: 'C:\\some\\path',
-    });
-
-    assert.ok(Array.isArray(ir.shellActions), 'shellActions must be an array');
-    assert.ok(ir.shellActions.length >= 3, `expected 3+ shell actions, got ${ir.shellActions.length}`);
-    assert.equal(ir.shellActions[0].label, 'PowerShell');
-    assert.equal(typeof ir.shellActions[0].command, 'string');
-    assert.equal(
-      ir.actionLines.some((line) => line.startsWith('PowerShell:')),
-      true,
-      `rendered action lines should include shell labels: ${JSON.stringify(ir.actionLines)}`,
-    );
   });
 
   test('persistent PATH export guidance is projected via the same seam', () => {
@@ -106,7 +87,7 @@ describe('bug #3441: PATH guidance is projected from typed shell action IR', () 
         const originalLog = console.log;
         console.log = (...args) => logs.push(args.join(' '));
         try {
-          install.maybeSuggestPathExport(globalBin, home);
+          require(path.join(__dirname, '..', 'bin', 'install.js')).maybeSuggestPathExport(globalBin, home);
         } finally {
           console.log = originalLog;
         }

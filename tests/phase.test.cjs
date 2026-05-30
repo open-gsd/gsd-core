@@ -4110,7 +4110,7 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
       const content = readWorkflow(IMPORT_WF);
       assert.ok(
         content.includes('init.phase-op') || content.includes('init phase-op'),
-        'import.md must call gsd-sdk query init.phase-op to get expected_phase_dir with project_code prefix',
+		'import.md must call gsd-tools query init.phase-op to get expected_phase_dir with project_code prefix',
       );
     });
   });

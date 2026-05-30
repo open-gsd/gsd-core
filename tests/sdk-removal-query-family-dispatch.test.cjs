@@ -84,6 +84,24 @@ describe('SDK-removal CJS query family dispatch', () => {
     assert.equal(result.output, 'true');
   });
 
+  test('query state.add-roadmap-evolution refuses with current runtime wording', () => {
+    const result = runGsdTools(['query', 'state.add-roadmap-evolution'], tmpDir);
+    const combinedOutput = `${result.output}\n${result.error || ''}`;
+
+    assert.strictEqual(result.success, false, 'expected unsupported state command to fail');
+    assert.match(combinedOutput, /current gsd-tools runtime/);
+    assert.doesNotMatch(combinedOutput, /gsd-sdk|SDK-only/);
+  });
+
+  test('query phase.uat-passed is explicitly unsupported in current runtime', () => {
+    const result = runGsdTools(['query', 'phase.uat-passed'], tmpDir);
+    const combinedOutput = `${result.output}\n${result.error || ''}`;
+
+    assert.strictEqual(result.success, false, 'expected unsupported phase command to fail');
+    assert.match(combinedOutput, /phase uat-passed is not implemented in the current gsd-tools runtime/);
+    assert.doesNotMatch(combinedOutput, /gsd-sdk|SDK-only/);
+  });
+
   test('query check.decision-coverage-verify returns non-blocking misses', () => {
     fs.writeFileSync(contextPath, [
       '<decisions>',

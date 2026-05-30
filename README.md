@@ -6,7 +6,6 @@
 > Use only these package names:
 >
 > - npm (main): `@opengsd/get-shit-done-redux`
-> - npm (sdk): `@opengsd/gsd-sdk`
 >
 > The legacy upstream is outside open-gsd control. Based on public transition announcements and repository ownership reality, we strongly recommend removing legacy packages and migrating to `@opengsd/*`.
 >
@@ -241,7 +240,7 @@ For the full configuration reference — all settings, git branching strategies,
 | [Commands](docs/COMMANDS.md) | Every command with flags and examples |
 | [Configuration](docs/CONFIGURATION.md) | Full config schema, model profiles, git branching |
 | [Architecture](docs/ARCHITECTURE.md) | How the multi-agent orchestration works |
-| [CLI Tools](docs/CLI-TOOLS.md) | `gsd-sdk query` and programmatic SDK dispatch seams |
+| [CLI Tools](docs/CLI-TOOLS.md) | `gsd-tools query` and CJS runtime dispatch seams |
 | [Features](docs/FEATURES.md) | Complete feature index |
 | [Changelog](CHANGELOG.md) | What changed in each release |
 

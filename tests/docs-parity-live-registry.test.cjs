@@ -94,16 +94,20 @@ const INTERNAL_COMPONENT_SLUGS = new Set([
   // the regex captures "/gsd-update-check" from the path component.
   'update-check',
 
-  // Internal agent names referenced in ARCHITECTURE.md tables of agents.
-  // These are spawned agents (gsd-planner, etc.), not user-typable slash commands.
+  // Internal agent names referenced in ARCHITECTURE.md tables and investigation notes.
+  // These are spawned agents (gsd-planner, gsd-executor, etc.), not user-typable slash commands.
   'planner',
+  'executor',
 
-  // Malformed token from SDK init reference: "/gsd-init-" appears as a truncated
-  // prefix in CLI-TOOLS.md describing the gsd-sdk init command family
-  // (e.g., "gsd-sdk query init.phase-op 12"). The regex captures "/gsd-init-"
-  // without a following slug — this is a documentation formatting artifact, not
-  // a real command token.
+  // Malformed token from CLI init examples: "/gsd-init-" appears as a truncated
+  // path-like token in CLI-TOOLS.md examples (e.g., "gsd-tools query init.phase-op 12").
+  // The regex captures "/gsd-init-" without a following slug; it is not a real command token.
   'init-',
+
+  // Historical SDK references in ADRs and investigation reports can contain
+  // `@opengsd/gsd-sdk` or `gsd-sdk` as package/CLI history. These are not
+  // current user-typable slash commands.
+  'sdk',
 
   // Compatibility guard for legacy doc links that may include
   // legacy org path segments in migrated historical URLs.
@@ -126,12 +130,6 @@ const INTERNAL_COMPONENT_SLUGS = new Set([
   // as an external community project URL. The regex captures "/gsd-opencode" from
   // the URL path. Not a user-typable slash command in this product.
   'opencode',
-
-  // gsd-sdk — the @opengsd/gsd-sdk npm package and `gsd-sdk query` CLI binary.
-  // Docs reference it as a package name (e.g. `@opengsd/gsd-sdk`) and CLI tool
-  // (e.g. `gsd-sdk query init phase-op 12`). The regex captures "/gsd-sdk" from
-  // the npm scope path separator in `@opengsd/gsd-sdk`. Not a user-typable slash command.
-  'sdk',
 
   // Smoke-test directory path — locale docs reference "/tmp/gsd-smoke-$(date +%s)"
   // as a temporary directory path in bash code-block examples. The regex captures

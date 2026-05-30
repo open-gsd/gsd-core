@@ -310,57 +310,6 @@ function projectPersistentPathExportActions({ targetDir, platform = process.plat
   return { shellActions: projected.shellActions };
 }
 
-function buildWindowsShimTriple(shimSrc) {
-  const shimAbs = path.resolve(shimSrc);
-  const shimQuoted = JSON.stringify(shimAbs);
-  const invocation = {
-    interpreter: 'node',
-    target: shimAbs,
-  };
-  const renderCmd = () =>
-    '@ECHO OFF\r\n@SETLOCAL\r\n@node ' + shimQuoted + ' %*\r\n';
-  const renderPs1 = () =>
-    '#!/usr/bin/env pwsh\n& node ' + shimQuoted + ' $args\nexit $LASTEXITCODE\n';
-  const renderSh = () =>
-    '#!/usr/bin/env sh\nexec node ' + shimQuoted + ' "$@"\n';
-  return {
-    invocation,
-    eol: { cmd: '\r\n', ps1: '\n', sh: '\n' },
-    fileNames: { cmd: 'gsd-sdk.cmd', ps1: 'gsd-sdk.ps1', sh: 'gsd-sdk' },
-    render: { cmd: renderCmd, ps1: renderPs1, sh: renderSh },
-  };
-}
-
-function formatSdkPathDiagnostic({ shimDir, platform, runDir }) {
-  const isWin32 = platform === 'win32';
-  const isNpx = typeof runDir === 'string' &&
-    (runDir.includes('/_npx/') || runDir.includes('\\_npx\\'));
-  const shimLocationLine = shimDir ? `Shim written to: ${shimDir}` : '';
-  const actionLines = [];
-  let shellActions = [];
-  if (shimDir) {
-    const projected = projectPathActionProjection({
-      mode: 'repair',
-      targetDir: shimDir,
-      platform,
-    });
-    shellActions = projected.shellActions;
-    actionLines.push('Add that directory to your PATH and restart your shell.');
-    actionLines.push(...projected.actionLines);
-  } else {
-    actionLines.push('Could not locate a writable PATH directory to install the shim.');
-    actionLines.push('Install globally to materialize the bin symlink:');
-    actionLines.push('npm install -g @opengsd/get-shit-done-redux');
-  }
-  const npxNoteLines = isNpx
-    ? [
-        "Note: you're running via npx. For a persistent shim,",
-        'install globally instead: npm install -g @opengsd/get-shit-done-redux',
-      ]
-    : [];
-  return { shimLocationLine, actionLines, shellActions, npxNoteLines, isNpx, isWin32 };
-}
-
 // ─── Subprocess dispatch ──────────────────────────────────────────────────────
 
 function _spawnResult(result, program) {
@@ -539,8 +488,6 @@ module.exports = {
   projectPathActionProjection,
   renderShellActionLines,
   projectPersistentPathExportActions,
-  buildWindowsShimTriple,
-  formatSdkPathDiagnostic,
   execGit,
   execNpm,
   execTool,

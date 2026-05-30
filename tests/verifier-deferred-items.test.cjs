@@ -37,7 +37,7 @@ describe('verifier deferred-items filtering (#1624)', () => {
       verifierContent = verifierContent || fs.readFileSync(verifierPath, 'utf-8');
       assert.ok(
         verifierContent.includes('roadmap analyze') || verifierContent.includes('roadmap.analyze'),
-        'Step 9b should reference roadmap analyze (CJS or gsd-sdk query) for loading full milestone data'
+        'Step 9b should reference roadmap analyze (CJS or gsd-tools query) for loading full milestone data'
       );
     });
 

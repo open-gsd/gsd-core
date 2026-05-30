@@ -14,7 +14,7 @@
  * commit_docs is false.
  *
  * Root cause: the executor agent prompt (agents/gsd-executor.md) tells the
- * agent to call `gsd-sdk query commit "docs(...)" --files .planning/...`
+ * agent to call `gsd-tools query commit "docs(...)" --files .planning/...`
  * in the per-plan final_commit block, but the prompt says nothing about
  * what to do when the SDK returns `{committed: false, skipped: true,
  * reason: 'skipped_commit_docs_false'}`. With no explicit instruction, the
@@ -75,7 +75,7 @@ describe('bug #3678 — executor must respect commit_docs:false', () => {
       assert.ok(
         mentionsSkipReason || mentionsCommittedFalse || mentionsSkippedTrue,
         'agents/gsd-executor.md must teach the agent how to recognize the '
-        + 'skipped envelope from `gsd-sdk query commit` (one of: '
+        + 'skipped envelope from `gsd-tools query commit` (one of: '
         + `'${COMMIT_REASON.SKIPPED_COMMIT_DOCS_FALSE}', 'committed: false', `
         + "'skipped: true').",
       );

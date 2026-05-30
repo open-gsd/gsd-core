@@ -119,9 +119,9 @@ describe('bug #3677 — agent body colon-namespace leak (Claude / Qwen / Hermes)
       '',
       'Run `/gsd:execute-phase 1 --tdd` to execute the phase.',
       'Then `/gsd:verify-work 1` to verify.',
-      'Reference unchanged: `gsd-sdk query commit` (this is a CLI binary, not a slash command).',
+      'Reference unchanged: `gsd-tools query commit` (this is a CLI binary, not a slash command).',
     ].join('\n');
-    // Only known commands from commands/gsd/*.md should be rewritten; gsd-sdk
+    // Only known commands from commands/gsd/*.md should be rewritten; gsd-tools
     // (a binary) must stay untouched.
     const cmdNames = ['execute-phase', 'verify-work', 'plan-phase'];
 
@@ -131,7 +131,7 @@ describe('bug #3677 — agent body colon-namespace leak (Claude / Qwen / Hermes)
       assert.ok(out.includes('/gsd-verify-work'), 'verify-work must be rewritten to hyphen form');
       assert.ok(!out.includes('/gsd:execute-phase'), 'colon form for execute-phase must be gone');
       assert.ok(!out.includes('/gsd:verify-work'), 'colon form for verify-work must be gone');
-      assert.ok(out.includes('gsd-sdk query commit'), 'gsd-sdk (CLI binary) must not be touched');
+      assert.ok(out.includes('gsd-tools query commit'), 'gsd-tools (CLI binary) must not be touched');
     });
 
     test('C2: qwen — same transform applies', () => {

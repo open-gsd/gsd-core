@@ -2,8 +2,8 @@
 /**
  * lint-test-file-count.cjs — max 2 test files per production module.
  *
- * Scans sdk/src/query/, sdk/src/, get-shit-done/bin/lib/, bin/ for production
- * modules, then counts matching test files in tests/ and sdk/src (recursive). Cap is 2
+ * Scans get-shit-done/bin/lib/ and bin/ for production modules, then counts
+ * matching test files in tests/ (recursive). Cap is 2
  * (primary + one integration). Over-limit clusters must be in the allowlist at
  * their frozen count (ratchet: may only decrease). --json emits structured output.
  *
@@ -17,14 +17,11 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 const PROD_DIRS = [
-  path.join(ROOT, 'sdk', 'src', 'query'),
-  path.join(ROOT, 'sdk', 'src'),
   path.join(ROOT, 'get-shit-done', 'bin', 'lib'),
   path.join(ROOT, 'bin'),
 ];
 const TEST_DIRS = [
   path.join(ROOT, 'tests'),
-  path.join(ROOT, 'sdk', 'src'),
 ];
 const ALLOWLIST_PATH = path.join(__dirname, 'lint-test-file-count.allowlist.json');
 const MAX_FILES = 2;
@@ -181,6 +178,8 @@ function run() {
 
 module.exports = {
   Verdict, evaluateLint, testEffectivePrefix, prodPrefix,
+  _PROD_DIRS: PROD_DIRS,
+  _TEST_DIRS: TEST_DIRS,
   _collectProdPrefixes: collectProdPrefixes,
   _collectAllTestFiles: collectAllTestFiles,
   _buildTestMap: buildTestMap,

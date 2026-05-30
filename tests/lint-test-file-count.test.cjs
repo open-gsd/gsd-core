@@ -21,6 +21,9 @@ const {
   Verdict,
   evaluateLint,
   testEffectivePrefix,
+  _PROD_DIRS,
+  _TEST_DIRS,
+  _loadAllowlist,
 } = require(LINT_SCRIPT);
 
 // ---------------------------------------------------------------------------
@@ -185,6 +188,18 @@ describe('testEffectivePrefix', () => {
 // ---------------------------------------------------------------------------
 // CLI — JSON mode end-to-end
 // ---------------------------------------------------------------------------
+
+describe('retired SDK scan contract', () => {
+  test('production and test scan roots do not include retired sdk/src', () => {
+    const scanRoots = [..._PROD_DIRS, ..._TEST_DIRS].map((p) => p.replace(/\\/g, '/'));
+    assert.equal(scanRoots.some((p) => p.includes('/sdk/src')), false);
+  });
+
+  test('allowlist no longer carries a gsd-sdk module bucket', () => {
+    const allowlist = _loadAllowlist();
+    assert.equal(Object.prototype.hasOwnProperty.call(allowlist, 'gsd-sdk'), false);
+  });
+});
 
 describe('CLI --json', () => {
   test('script parses without syntax errors', () => {

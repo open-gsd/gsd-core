@@ -5,7 +5,7 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 
-const { evaluateLint, LINT_REASON } = require(path.join(__dirname, '..', 'scripts', 'changeset', 'lint.cjs'));
+const { evaluateLint, LINT_REASON, USER_FACING_PREFIXES } = require(path.join(__dirname, '..', 'scripts', 'changeset', 'lint.cjs'));
 
 // evaluateLint is a pure function over file lists + label list — no fs, no git.
 // Tests assert on the structured verdict: { ok: bool, reason: LINT_REASON.X }.
@@ -45,6 +45,25 @@ describe('changeset lint: pure verdict (#2975)', () => {
   test('OK_NO_USER_FACING_CHANGES when only test/ci/doc files change', () => {
     const verdict = evaluateLint({
       changedFiles: ['tests/foo.test.cjs', '.github/workflows/x.yml', 'docs/x.md'],
+      labels: [],
+    });
+    assert.deepEqual(verdict, { ok: true, reason: LINT_REASON.OK_NO_USER_FACING_CHANGES });
+  });
+
+  test('FAIL_MISSING_FRAGMENT when shipped scripts change without a fragment', () => {
+    const verdict = evaluateLint({
+      changedFiles: ['scripts/diff-touches-shipped-paths.cjs'],
+      labels: [],
+    });
+    assert.deepEqual(verdict, { ok: false, reason: LINT_REASON.FAIL_MISSING_FRAGMENT });
+  });
+
+  test('SDK source and prompt paths are no longer active user-facing prefixes', () => {
+    assert.equal(USER_FACING_PREFIXES.includes('sdk/src/'), false);
+    assert.equal(USER_FACING_PREFIXES.includes('sdk/prompts/'), false);
+
+    const verdict = evaluateLint({
+      changedFiles: ['sdk/src/query/state.ts', 'sdk/prompts/agents/example.md'],
       labels: [],
     });
     assert.deepEqual(verdict, { ok: true, reason: LINT_REASON.OK_NO_USER_FACING_CHANGES });

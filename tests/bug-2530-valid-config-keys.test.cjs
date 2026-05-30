@@ -36,14 +36,14 @@ describe('VALID_CONFIG_KEYS correctness', () => {
   test('#2532: workflow.ui_review must be in VALID_CONFIG_KEYS (used in autonomous.md)', () => {
     assert.ok(
       VALID_CONFIG_KEYS.has('workflow.ui_review'),
-      'workflow.ui_review is read in autonomous.md via gsd-sdk query config-get'
+      'workflow.ui_review is read in autonomous.md via gsd-tools query config-get'
     );
   });
 
   test('#2533: workflow.max_discuss_passes must be in VALID_CONFIG_KEYS (used in discuss-phase.md)', () => {
     assert.ok(
       VALID_CONFIG_KEYS.has('workflow.max_discuss_passes'),
-      'workflow.max_discuss_passes is read in discuss-phase.md via gsd-sdk query config-get'
+      'workflow.max_discuss_passes is read in discuss-phase.md via gsd-tools query config-get'
     );
   });
 

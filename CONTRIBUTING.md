@@ -179,7 +179,7 @@ Contributor requirements (summary):
 - Do not rewrite maintainer intent in `CONTEXT.md`/ADRs as part of drive-by cleanup; propose focused updates tied to approved scope.
 - If using an AI assistant, prompt it to read `CONTEXT.md` and the relevant ADRs before writing any code or docs, and verify it used the correct vocabulary before opening the PR.
 
-**CJS↔SDK seam.** When working on `bin/lib/*.cjs` or `sdk/src/**`, read [`docs/agents/cjs-sdk-seam.md`](docs/agents/cjs-sdk-seam.md). It documents the canonical pattern for Shared Modules (data manifest + source-of-truth file + generator + freshness check + Adapters) and the hand-sync pair lint that blocks new drift. New `<name>.cjs` ↔ `<name>.ts` pairs require either migration to a Shared Module or an explicit allowlist entry with justification in `scripts/shared-module-handsync-allowlist.json`. Adding an allowlist entry requires maintainer review via CODEOWNERS.
+**CJS runtime seam.** When working on `get-shit-done/bin/lib/*.cjs` or command routing, read the relevant ADRs and existing router tests before changing dispatch behavior. Keep generated/shared runtime artifacts current and add focused drift checks for any new generated file.
 
 **Every PR must link to an approved issue.** PRs without a linked issue are closed without review, no exceptions.
 
@@ -188,7 +188,7 @@ Contributor requirements (summary):
 - **Link with a closing keyword** — use `Closes #123`, `Fixes #123`, or `Resolves #123` in the PR body. The CI check will fail and the PR will be auto-closed if no valid issue reference is found.
 - **One concern per PR** — bug fixes, enhancements, and features must be separate PRs
 - **No drive-by formatting** — don't reformat code unrelated to your change
-- **Don't bundle test-fixture updates into `docs:` or unrelated commits** — when a production change makes an existing test assertion stale, the test correction MUST land as its own `test:` (or `fix:`) commit, not bundled into a `docs:` commit that also updates the explanation. The release-sdk hotfix cherry-pick filter routes by commit-subject prefix (`fix:`, `chore:`, `test:`); a test-fixture correction packed under a `docs:` prefix is invisible to the picker and ships a half-state to the hotfix branch — production code changed, test assertion stale. v1.42.3 hit this exact mode (#3621). The fix is upstream: keep the test-fixture commit separate.
+- **Don't bundle test-fixture updates into `docs:` or unrelated commits** — when a production change makes an existing test assertion stale, the test correction MUST land as its own `test:` (or `fix:`) commit, not bundled into a `docs:` commit that also updates the explanation. The hotfix cherry-pick filter routes by commit-subject prefix (`fix:`, `chore:`, `test:`); a test-fixture correction packed under a `docs:` prefix is invisible to the picker and ships a half-state to the hotfix branch — production code changed, test assertion stale. v1.42.3 hit this exact mode (#3621). The fix is upstream: keep the test-fixture commit separate.
 - **CI must pass** — all configured matrix jobs must be green. Node 22 remains the compatibility floor; Node 24 is the primary target; Node 26 compatibility must be preserved for code and tests even when a Node 26 CI lane is not yet available.
 - **Scope matches the approved issue** — if your PR does more than what the issue describes, the extra changes will be asked to be removed or moved to a new issue
 
@@ -205,7 +205,7 @@ This writes `.changeset/<adjective>-<noun>-<noun>.md`. Three random words → co
 
 Fragments are consolidated into `CHANGELOG.md` at release time by the release workflow. See [`.changeset/README.md`](.changeset/README.md) for the format spec and [#2975](https://github.com/open-gsd/get-shit-done-redux/issues/2975) for the rationale.
 
-**CI enforcement:** the `Changeset Required` workflow (`scripts/changeset/lint.cjs`) fails any PR that touches `bin/`, `get-shit-done/`, `agents/`, `commands/`, `hooks/`, or `sdk/src/` without a `.changeset/*.md` fragment.
+**CI enforcement:** the `Changeset Required` workflow (`scripts/changeset/lint.cjs`) fails any PR that touches `bin/`, `get-shit-done/`, `agents/`, `commands/`, `hooks/`, or `scripts/` without a `.changeset/*.md` fragment.
 
 **Opt-out:** PRs with no user-facing impact (test refactors, lint config changes, CI tweaks, formatting-only changes) can add the `no-changelog` label. The lint honors it. When unsure whether a change is user-facing, **add the fragment**.
 
@@ -408,7 +408,7 @@ You do not need all twelve cases for every PR. You do need to cover the cases th
 
 #### CLI and command routing
 
-Changes to CLI parsing, command dispatch, query dispatch, command routers, `gsd-tools`, or `gsd-sdk` must include a negative input matrix for the affected command family.
+Changes to CLI parsing, command dispatch, query dispatch, command routers, `gsd-tools` must include a negative input matrix for the affected command family.
 
 Required cases where relevant:
 
@@ -584,7 +584,7 @@ The following are all violations of the same rule:
 
 ```javascript
 // BAD — substring match on text written by the code under test
-const cmdContent = fs.readFileSync(path.join(tmpDir, 'gsd-sdk.cmd'), 'utf8');
+const cmdContent = fs.readFileSync(path.join(tmpDir, 'gsd-tools.cmd'), 'utf8');
 assert.ok(cmdContent.includes(`@node ${jsonQuoted} %*`), '.cmd embeds shim path');
 
 // BAD — regex match on a child process's human-readable stdout formatter
@@ -718,7 +718,7 @@ cat > .githooks/pre-commit <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-if git diff --cached --name-only | grep -Eq "^sdk/src/query/command-manifest\.|^sdk/src/query/command-aliases\.generated\.ts$|^get-shit-done/bin/lib/command-aliases\.generated\.cjs$|^sdk/scripts/gen-command-aliases\.ts$"; then
+if git diff --cached --name-only | grep -Eq "^get-shit-done/bin/lib/command-aliases\.cjs$"; then
   npm run check:alias-drift
 fi
 EOF

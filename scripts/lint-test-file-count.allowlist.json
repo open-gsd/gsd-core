@@ -1,13 +1,11 @@
 {
   "_doc": "Baseline of modules currently exceeding the 2-test-file limit. Each entry locks in TODAY's count as the ceiling. Reductions are ratcheted automatically — when a cluster drops to ≤ 2, remove its entry. New entries require justification in PR description.",
   "modules": {
-    "phase":                  { "current": 5, "issue": "3788" },
     "worktree":               { "current": 13, "issue": "TBD" },
     "milestone":              { "current": 10, "issue": "TBD" },
     "roadmap":                { "current": 9,  "issue": "TBD" },
     "verify":                 { "current": 10, "issue": "3767" },
     "install":                { "current": 9,  "issue": "TBD" },
-    "init":                   { "current": 8,  "issue": "TBD" },
     "state":                  { "current": 11, "issue": "180" },
     "config":                 { "current": 8,  "issue": "TBD" },
     "graphify":               { "current": 7,  "issue": "TBD" },
@@ -15,22 +13,15 @@
     "cli":                    { "current": 5,  "issue": "TBD" },
     "surface":                { "current": 5,  "issue": "TBD" },
     "commit":                 { "current": 4,  "issue": "TBD" },
-    "frontmatter":            { "current": 4,  "issue": "TBD" },
     "index":                  { "current": 5,  "issue": "180" },
     "intel":                  { "current": 4,  "issue": "TBD" },
     "mvp":                    { "current": 4,  "issue": "TBD" },
     "install-profiles":       { "current": 4,  "issue": "TBD" },
     "audit":                  { "current": 4,  "issue": "192" },
     "audit-open":             { "current": 3,  "issue": "TBD" },
-    "config-schema":          { "current": 3,  "issue": "TBD" },
     "profile":                { "current": 3,  "issue": "TBD" },
-    "prompt-budget":          { "current": 3,  "issue": "TBD" },
-    "uat":                    { "current": 3,  "issue": "TBD" },
-    "validate":               { "current": 3,  "issue": "TBD" },
-    "workstream":             { "current": 3,  "issue": "TBD" },
     "gsd-tools":              { "current": 3,  "issue": "TBD" },
     "runtime-artifact-layout":{ "current": 3,  "issue": "TBD" },
-    "security":               { "current": 3,  "issue": "TBD" },
-    "gsd-sdk":                { "current": 3,  "issue": "TBD" }
+    "security":               { "current": 3,  "issue": "TBD" }
   }
 }

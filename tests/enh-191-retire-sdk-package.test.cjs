@@ -44,4 +44,22 @@ test('enhancement #191: installer does not maintain gsd-sdk shim compatibility p
     'bin/install.js must not expose --no-sdk flag');
   assert.equal(/installSdkIfNeeded\(\{/.test(installJs), false,
     'bin/install.js must not run installSdkIfNeeded during installation');
+
+  process.env.GSD_TEST_MODE = '1';
+  const install = require(INSTALL_PATH);
+  for (const name of [
+    'installSdkIfNeeded',
+    'buildSdkFailFastReport',
+    'renderSdkFailFastReport',
+    'classifySdkInstall',
+    'readGsdSdkVersion',
+    'buildGsdSdkVersionMismatchReport',
+    'renderGsdSdkVersionMismatchReport',
+  ]) {
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(install, name),
+      false,
+      `bin/install.js must not export retired SDK helper ${name}`,
+    );
+  }
 });

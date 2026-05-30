@@ -58,8 +58,8 @@ describe('bug-2686: review-fix agent worktree isolation', () => {
     }
 
     // commit command must come after worktree setup — the fixer may use
-    // either `git commit` directly or `gsd-sdk query commit`
-    const commitMatch = /(?:git commit|gsd-sdk query commit)/.exec(agentContent);
+    // either `git commit` directly or `gsd-tools query commit`
+    const commitMatch = /(?:git commit|gsd-tools query commit)/.exec(agentContent);
     if (commitMatch) {
       const commitPos = commitMatch.index;
       assert.ok(

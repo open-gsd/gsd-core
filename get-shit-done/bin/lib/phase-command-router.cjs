@@ -22,6 +22,7 @@ function routePhaseCommand({ phase, args, cwd, raw, error }) {
   // Resolved before dispatch so the error message stays deterministic.
   const UNSUPPORTED = {
     scaffold: 'phase scaffold is routed through the top-level scaffold command.',
+    'uat-passed': 'phase uat-passed is not implemented in the current gsd-tools runtime.',
   };
 
   const subcommand = args[1];

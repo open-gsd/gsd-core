@@ -65,7 +65,6 @@ See https://docs.npmjs.com/cli/v10/commands/npm-ci
 | `npm test` | Run the full test suite (unit + integration + security) |
 | `npm run test:unit` | Unit tests only (fastest) |
 | `npm run test:integration` | Integration tests |
-| `npm run build:sdk` | Rebuild the SDK dist (required before first test run) |
 
 > `npm run check:integrity` — available once [#114](https://github.com/open-gsd/get-shit-done-redux/issues/114) merges.
 
@@ -183,7 +182,6 @@ nvm use          # re-activate from .nvmrc
 **Fix:**
 ```bash
 npm ci           # clean install from lockfile
-npm run build:sdk
 ```
 
 ---

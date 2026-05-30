@@ -11,7 +11,7 @@
  * exit. Now --help → render top-level usage and exit 0 WITHOUT running
  * the command. Both shapes satisfy the original invariant ("the
  * destructive command did not execute"); the new shape also restores
- * subcommand discoverability for `gsd-sdk query <subcommand> --help`.
+ * subcommand discoverability for `gsd-tools query <subcommand> --help`.
  *
  * The tests therefore assert two things:
  *   1. The destructive command did NOT run (anti-hallucination invariant).

@@ -176,8 +176,8 @@ describe('slash-command namespace invariant (#3443)', () => {
         'transformer must be a no-op when input is already canonical');
     });
 
-    test('does not rewrite gsd-sdk or gsd-tools (not slash commands)', () => {
-      const input = 'Run /gsd-sdk query and /gsd-tools init.';
+    test('does not rewrite gsd-tools-like tokens that are not slash commands', () => {
+      const input = 'Run /gsd-tools query and /gsd-tools init.';
       assert.strictEqual(transformContent(input, liveCmdNames), input,
         'transformer must leave non-command identifiers alone');
     });
@@ -191,11 +191,11 @@ describe('slash-command namespace invariant (#3443)', () => {
 
   test('transformer leaves non-command identifiers untouched', () => {
     const { transformContent } = require(path.join(ROOT, 'scripts', 'fix-slash-commands.cjs'));
-    const sample = 'Use /gsd-sdk query and node bin/gsd-tools.cjs';
+    const sample = 'Use /gsd-tools query and node bin/gsd-tools.cjs';
     assert.strictEqual(
       transformContent(sample, cmdNames),
       sample,
-      'gsd-sdk and gsd-tools are not slash commands and must remain untouched'
+      'gsd-tools-like tokens are not slash commands and must remain untouched'
     );
   });
 });

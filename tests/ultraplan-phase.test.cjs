@@ -110,7 +110,7 @@ describe('ultraplan-phase workflow runtime gate', () => {
 describe('ultraplan-phase workflow initialization', () => {
   const content = fs.readFileSync(WF_PATH, 'utf-8');
 
-  test('loads GSD phase context via gsd-sdk query init.plan-phase', () => {
+  test('loads GSD phase context via gsd-tools query init.plan-phase', () => {
     // After #3797 architectural fix, callsites use gsd_run
     assert.ok(
       content.includes('gsd_run query init.plan-phase'),

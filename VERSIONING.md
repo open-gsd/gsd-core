@@ -85,20 +85,10 @@ A hotfix `vX.YY.Z` cumulatively includes everything in `vX.YY.{Z-1}` plus every 
 3. Trigger `hotfix.yml` with `action=finalize`. The workflow:
    - Runs `install-smoke` cross-platform gate.
    - Runs full test suite + coverage.
-   - Builds SDK, bundles `sdk-bundle/gsd-sdk.tgz` inside the CC tarball (parity with `release-sdk.yml`).
    - Tags `v1.27.1`, publishes to `@latest`, re-points `@next → v1.27.1`.
    - Opens merge-back PR against `main`.
 
-**Path B — `release-sdk.yml` (stopgap, one-shot):**
-
-Active while the `@opengsd/gsd-sdk` npm token is unavailable; bundles the SDK inside the CC tarball.
-
-1. Trigger `release-sdk.yml` with `action=hotfix`, `version=1.27.1`, `auto_cherry_pick=true`.
-   - The `prepare` job creates the branch and cherry-picks (same logic as Path A).
-   - `install-smoke` runs against the new branch.
-   - The `release` job tags, publishes to `@latest`, re-points `@next`, opens merge-back PR.
-   - Idempotent: if `hotfix/1.27.1` already exists (e.g. you ran `hotfix.yml create` first), the prepare job checks it out and re-runs cherry-pick as a no-op.
-2. `dry_run=true` exercises the full pipeline without pushing the branch or publishing.
+`dry_run=true` exercises the full hotfix pipeline without pushing the branch or publishing.
 
 ### Minor Release (Standard Cycle)
 
