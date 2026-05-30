@@ -53,9 +53,9 @@ describe('Issue #498: deriveIdentity (pure, package.json -> coordinates)', () =>
   test('derives the real GSD coordinates from the repo package.json', () => {
     const real = require(path.join(ROOT, 'package.json'));
     const id = deriveIdentity(real);
-    assert.equal(id.packageName, '@opengsd/get-shit-done-redux');
-    assert.equal(id.binName, 'get-shit-done-redux');
-    assert.equal(id.repoSlug, 'open-gsd/get-shit-done-redux');
+    assert.equal(id.packageName, '@opengsd/gsd-core');
+    assert.equal(id.binName, 'gsd-core');
+    assert.equal(id.repoSlug, 'open-gsd/gsd-core');
   });
 });
 
@@ -78,7 +78,7 @@ describe('Issue #498: formatManualInstall (the npx fallback command)', () => {
     const id = deriveIdentity(require(path.join(ROOT, 'package.json')));
     assert.equal(
       formatManualInstall({ packageName: id.packageName, binName: id.binName, scope: 'global', runtime: 'claude' }),
-      'npx -y --package=@opengsd/get-shit-done-redux@latest -- get-shit-done-redux --claude --global',
+      'npx -y --package=@opengsd/gsd-core@latest -- gsd-core --claude --global',
     );
   });
 });
@@ -98,16 +98,16 @@ describe('Issue #498: generated runtime module (baked, drift-checked)', () => {
 
   test('requiring the generated module exposes the real coordinates', () => {
     const id = require(GENERATED);
-    assert.equal(id.packageName, '@opengsd/get-shit-done-redux');
-    assert.equal(id.binName, 'get-shit-done-redux');
-    assert.equal(id.repoSlug, 'open-gsd/get-shit-done-redux');
+    assert.equal(id.packageName, '@opengsd/gsd-core');
+    assert.equal(id.binName, 'gsd-core');
+    assert.equal(id.repoSlug, 'open-gsd/gsd-core');
   });
 
   test('generated manualInstallCommand closes over the baked coordinates', () => {
     const id = require(GENERATED);
     assert.equal(
       id.manualInstallCommand({ scope: 'global', runtime: 'claude' }),
-      'npx -y --package=@opengsd/get-shit-done-redux@latest -- get-shit-done-redux --claude --global',
+      'npx -y --package=@opengsd/gsd-core@latest -- gsd-core --claude --global',
     );
   });
 });
