@@ -6,8 +6,6 @@ const os = require('os');
 const readline = require('readline');
 const crypto = require('crypto');
 const {
-  buildWindowsShimTriple: buildWindowsShimTripleFromProjection,
-  formatSdkPathDiagnostic: formatSdkPathDiagnosticFromProjection,
   isManagedHookBasename,
   isManagedHookCommand,
   projectLocalHookPrefix,
@@ -1070,8 +1068,8 @@ function reconcileCodexHooksJsonSessionStart(targetDir, opts = {}) {
  * (a Windows PE binary) via execvp(), which fails with ENOEXEC on Windows PE
  * binaries that the MSYS layer doesn't know how to fork-exec natively.
  *
- * Fix: write a .cmd shim (same IR pattern as buildWindowsShimTriple for
- * gsd-sdk.cmd) whose content is `@ECHO OFF / @SETLOCAL / @"node.exe" "script.js" %*`.
+ * Fix: write a .cmd shim (using the same CRLF .cmd shim pattern) whose
+ * content is `@ECHO OFF / @SETLOCAL / @"node.exe" "script.js" %*`.
  * cmd.exe executes
  * .cmd natively via CreateProcess — no POSIX exec layer, no MSYS shebang
  * walk, no PE binary fork-exec failure.
@@ -1117,9 +1115,8 @@ function buildCodexHookWindowsShimIR(scriptAbsPath, absoluteRunnerToken) {
     eol: { cmd: '\r\n' },            // CRLF — canonical for cmd.exe .cmd files
     passthroughArgs: true,           // the shim forwards all args via %*
     render: {
-      // Mirror buildWindowsShimTriple's CRLF line endings for strict
-      // cmd.exe compatibility (LF-only .cmd files work in modern Windows but
-      // CRLF is canonical and what the existing gsd-sdk.cmd triple emits).
+      // Use CRLF line endings for strict cmd.exe compatibility (LF-only
+      // .cmd files work in modern Windows but CRLF is the canonical format).
       cmd: () => `@ECHO OFF\r\n@SETLOCAL\r\n@${runnerQuoted} ${scriptQuoted} %*\r\n`,
     },
   };
@@ -8275,45 +8272,6 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     ? targetDir.replace(os.homedir(), '~')
     : targetDir.replace(process.cwd(), '.');
 
-  // #3406: warn if a stale standalone `@opengsd/gsd-sdk` is globally installed
-  // and shadows the `gsd-sdk` shim this installer wires up. Only meaningful
-  // for global installs (the shim collision lives in the global node_modules
-  // bin dir). Guarded by GSD_SKIP_STALE_SDK_CHECK so CI/tests can silence it.
-  // #3406 CR: opt-out only on explicit "1" / "true" / "yes" rather than any
-  // non-empty value. Without this guard `GSD_SKIP_STALE_SDK_CHECK=0` and
-  // `GSD_SKIP_STALE_SDK_CHECK=false` would silently disable the check.
-  const skipRaw = process.env.GSD_SKIP_STALE_SDK_CHECK;
-  const skipStaleCheck = skipRaw === '1' || skipRaw === 'true' || skipRaw === 'yes';
-  if (isGlobal && !skipStaleCheck) {
-    try {
-      const { execFileSync } = require('child_process');
-      const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-      const staleInfo = detectStaleStandaloneSdk(() => {
-        try {
-          return execFileSync(
-            npmCmd,
-            ['ls', '-g', '@opengsd/gsd-sdk', '--json', '--depth=0'],
-            { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 }
-          );
-        } catch (e) {
-          // `npm ls -g <missing>` exits 1 with the JSON still on stdout when
-          // the package is absent. execFileSync throws on non-zero exit but
-          // attaches stdout to the error. Recover the JSON in that case so
-          // the detector classifies "absent" correctly.
-          if (e && typeof e.stdout !== 'undefined') {
-            return Buffer.isBuffer(e.stdout) ? e.stdout.toString('utf-8') : String(e.stdout);
-          }
-          throw e;
-        }
-      });
-      if (staleInfo.stale) {
-        console.warn(`\n${yellow}${formatStaleStandaloneSdkWarning(staleInfo)}${reset}\n`);
-      }
-    } catch {
-      // Detection is best-effort; never block install on its failure.
-    }
-  }
-
   // Path prefix for file references in markdown content (e.g. gsd-tools.cjs).
   // Replaces $HOME/.claude/ or ~/.claude/ so the result is <pathPrefix>get-shit-done/bin/...
   // For global installs: use $HOME/ so paths expand correctly inside double-quoted
@@ -10673,8 +10631,13 @@ function maybeSuggestPathExport(globalBin, homeDir) {
   });
   if (onPath) return;
 
+  // Already added to PATH via an rc file, but the current shell predates that
+  // edit — tell the user to reopen rather than (wrongly) suggesting they add it
+  // again. Applies to whatever bin dir we install into (retained shim-agnostic).
   if (homePathCoveredByRc(globalBin, homeDir)) {
-    console.log(`  ${yellow}⚠${reset} ${bold}gsd-sdk${reset}'s directory is already on your PATH via an rc file entry — try reopening your shell (or ${cyan}source ~/.zshrc${reset}).`);
+    console.log('');
+    console.log(`  ${yellow}⚠${reset} ${bold}${globalBin}${reset}'s directory is already on your PATH via an rc file entry — try reopening your shell (or ${cyan}source ~/.zshrc${reset}).`);
+    console.log('');
     return;
   }
 
@@ -10690,94 +10653,6 @@ function maybeSuggestPathExport(globalBin, homeDir) {
     console.log(`      ${cyan}${labelPrefix}${action.command}${reset}`);
   }
   console.log('');
-}
-
-/**
- * #3406 helper: detect a stale globally-installed `@opengsd/gsd-sdk` package
- * shadowing the `gsd-sdk` shim that `@opengsd/gsd-core` installs.
- *
- * Background: `@opengsd/gsd-sdk@0.1.0` was published once and never updated
- * (the SDK now ships embedded in `@opengsd/gsd-core`). When a user has the
- * 0.1.0 standalone package installed globally, its `gsd-sdk` bin shadows
- * the one `@opengsd/gsd-core` provides — and the 0.1.0 binary only knows
- * `run | auto | init` (no `query`), so every `gsd-sdk query <command>`
- * call from skills/hooks fails until the user runs
- * `npm uninstall -g @opengsd/gsd-sdk`.
- *
- * Pure function: takes an injected `runNpmLs` executor that returns
- * `npm ls -g @opengsd/gsd-sdk --json --depth=0` stdout. Returns:
- *   `{ stale: true, version }` when the package is present.
- *   `{ stale: false }` for every other input — including:
- *     - executor throws (npm missing / EACCES / network),
- *     - executor returns null/undefined/non-string,
- *     - stdout is not parseable JSON,
- *     - the JSON has no `.dependencies['@opengsd/gsd-sdk']` field.
- *
- * Fail-closed conservative: we'd rather miss a detection than fire a
- * false-positive warning that confuses users who have a fine install.
- */
-function detectStaleStandaloneSdk(runNpmLs) {
-  if (typeof runNpmLs !== 'function') return { stale: false };
-  let out;
-  try {
-    out = runNpmLs();
-  } catch {
-    return { stale: false };
-  }
-  if (typeof out !== 'string' || out.length === 0) return { stale: false };
-  let parsed;
-  try {
-    parsed = JSON.parse(out);
-  } catch {
-    return { stale: false };
-  }
-  const deps = parsed && typeof parsed === 'object' ? parsed.dependencies : null;
-  if (!deps || typeof deps !== 'object') return { stale: false };
-  const entry = deps['@opengsd/gsd-sdk'];
-  if (!entry || typeof entry !== 'object') return { stale: false };
-  const version = typeof entry.version === 'string' ? entry.version : '(unknown)';
-  // #3406 CR: scope stale detection to the known-bad version (0.1.0). Any
-  // newer @opengsd/gsd-sdk version is an intentional install (or a future
-  // republish) and should not be flagged as a shim shadow. Without this
-  // narrowing, a maintainer's local-link or a legitimate future publish
-  // would trigger a misleading "stale shadow" warning on every install.
-  if (version !== '0.1.0') return { stale: false };
-  return { stale: true, version };
-}
-
-/**
- * #3406 helper: format the install-time warning emitted when
- * `detectStaleStandaloneSdk` reports a stale shadow. Separated from the
- * detection so the message contract is testable independently of npm.
- */
-function formatStaleStandaloneSdkWarning(info) {
-  const version = info && info.version ? info.version : '(unknown)';
-  return [
-    '⚠  A stale globally-installed @opengsd/gsd-sdk@' + version + ' is shadowing the',
-    '   `gsd-sdk` shim that ' + pkg.name + ' provides. The standalone package',
-    '   only knows `run | auto | init` — every `gsd-sdk query <cmd>` call from',
-    '   skills and hooks will fail until you remove it.',
-    '',
-    '   Remediation:',
-    '     npm uninstall -g @opengsd/gsd-sdk',
-    '     npx -y ' + pkg.name + '@latest --<runtime> --global',
-    '',
-    '   Tracking: #3406 — https://github.com/open-gsd/gsd-core/issues/3406',
-  ].join('\n');
-}
-
-// Projection-contract surfaces (drift guards: tests/bug-3441, tests/bug-3442).
-// These have no production caller after the #505 dead-SDK-verification removal,
-// but they are the install.js side of the shell-command projection contract:
-// the drift-guard tests assert install.js delegates to
-// shell-command-projection.cjs rather than hand-rolling the projection. Kept
-// exported so that contract stays verifiable.
-function buildWindowsShimTriple(shimSrc) {
-  return buildWindowsShimTripleFromProjection(shimSrc);
-}
-
-function formatSdkPathDiagnostic({ shimDir, platform, runDir }) {
-  return formatSdkPathDiagnosticFromProjection({ shimDir, platform, runDir });
 }
 
 /**
@@ -10931,10 +10806,6 @@ module.exports = {
     install,
     installAllRuntimes,
     uninstall,
-    detectStaleStandaloneSdk,
-    formatStaleStandaloneSdkWarning,
-    buildWindowsShimTriple,
-    formatSdkPathDiagnostic,
     convertClaudeCommandToCodexSkill,
     convertClaudeToOpencodeFrontmatter,
     convertClaudeToKiloFrontmatter,
