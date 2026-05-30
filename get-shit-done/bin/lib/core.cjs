@@ -1056,8 +1056,18 @@ function extractCurrentMilestone(content, cwd) {
   const currentSection = content.slice(sectionStart, sectionEnd);
 
   // Also include any content before the first milestone heading (title, overview, etc.)
-  // but strip any <details> blocks in it (these are definitely shipped)
-  const preamble = beforeMilestones.replace(/<details>[\s\S]*?<\/details>/gi, '');
+  // but strip any <details> blocks in it (these are definitely shipped) and any
+  // flat phase-detail blocks. A "## Phase Details"-style section before the first
+  // milestone heading lists `### Phase N:` entries spanning ALL milestones; left
+  // in the preamble they leak into the active-milestone scope and over-count
+  // total_phases / total_plans (#501). The active milestone's own phase content
+  // lives in currentSection, so stripping phase blocks from the preamble is safe.
+  const preamble = beforeMilestones
+    .replace(/<details>[\s\S]*?<\/details>/gi, '')
+    // Drop each `### Phase N:` heading and its body up to the next heading.
+    .replace(/^#{2,4}\s*Phase\s+[\w][\w.-]*\s*:[^\n]*(?:\n(?!#{1,6}\s)[^\n]*)*\n?/gim, '')
+    // Drop a now-empty flat phase-details section heading, if present.
+    .replace(/^#{1,4}\s*Phase Details\b[^\n]*\n?/gim, '');
 
   return preamble + currentSection;
 }

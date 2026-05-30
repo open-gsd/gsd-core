@@ -522,7 +522,9 @@ function cmdValidateConsistency(cwd, raw) {
   const roadmapContentRaw = fs.readFileSync(roadmapPath, 'utf-8');
   const roadmapContent = extractCurrentMilestone(roadmapContentRaw, cwd);
 
-  // Extract phases from ROADMAP (archived milestones already stripped)
+  // Extract phases from the ACTIVE-milestone scope (archived milestones already
+  // stripped). Used for the "in ROADMAP but not on disk" check — we only require
+  // disk dirs for the active milestone's phases.
   const roadmapPhases = new Set();
   const phasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:/gi;
   let m;
@@ -530,20 +532,33 @@ function cmdValidateConsistency(cwd, raw) {
     roadmapPhases.add(m[1]);
   }
 
+  // Extract phases from the FULL ROADMAP (every milestone). Used for the
+  // "on disk but not in ROADMAP" orphan check: a phase dir belonging to a
+  // shipped milestone is expected to exist on disk and is NOT an orphan, even
+  // though it is absent from the active-milestone scope. Without this, narrowing
+  // the scope (#501) would flag every shipped phase dir as a spurious orphan.
+  const fullRoadmapPhases = new Set();
+  const fullPhasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:/gi;
+  let fm;
+  while ((fm = fullPhasePattern.exec(roadmapContentRaw)) !== null) {
+    fullRoadmapPhases.add(fm[1]);
+  }
+
   // Get phases on disk (flat layout + milestone-archive layout)
   const diskPhases = collectDiskPhases(planBase);
 
-  // Check: phases in ROADMAP but not on disk
+  // Check: phases in ROADMAP but not on disk (active-milestone scope)
   for (const p of roadmapPhases) {
     if (!diskPhases.has(p) && !diskPhases.has(normalizePhaseName(p))) {
       warnings.push(`Phase ${p} in ROADMAP.md but no directory on disk`);
     }
   }
 
-  // Check: phases on disk but not in ROADMAP
+  // Check: phases on disk but not in ROADMAP (compared against the FULL roadmap
+  // so shipped-milestone phase dirs are not flagged as orphans — #501)
   for (const p of diskPhases) {
     const unpadded = String(parseInt(p, 10));
-    if (!roadmapPhases.has(p) && !roadmapPhases.has(unpadded)) {
+    if (!fullRoadmapPhases.has(p) && !fullRoadmapPhases.has(unpadded)) {
       warnings.push(`Phase ${p} exists on disk but not in ROADMAP.md`);
     }
   }
@@ -883,10 +898,17 @@ function cmdValidateHealth(cwd, options, raw) {
     const roadmapContentRaw = fs.readFileSync(roadmapPath, 'utf-8');
     const roadmapContent = extractCurrentMilestone(roadmapContentRaw, cwd);
 
-    // Build roadmapPhases (raw) and roadmapPhaseVariants (all normalized variants).
-    // roadmapPhases: used for W006 disk-existence check (preserve original for message).
-    // roadmapPhaseVariants: used for W007 roadmap-membership check.
-    const { roadmapPhases, roadmapPhaseVariants } = buildRoadmapPhaseVariants(roadmapContent);
+    // roadmapPhases (active-milestone scope): used for the W006 disk-existence
+    // check (preserve original for message). W006 stays scoped to the active
+    // milestone — we only require disk dirs for the current milestone's phases.
+    const { roadmapPhases } = buildRoadmapPhaseVariants(roadmapContent);
+
+    // W007 (on-disk-but-not-in-roadmap) must check membership against the FULL
+    // roadmap (every milestone), not just the active-milestone scope. A phase dir
+    // belonging to a shipped milestone is expected on disk; flagging it as a W007
+    // orphan once the scope is narrowed (#501) would be spurious noise.
+    const { roadmapPhaseVariants: fullRoadmapPhaseVariants } =
+      buildRoadmapPhaseVariants(roadmapContentRaw);
 
     // diskPhases: active phasesDir + archived milestone dirs (for W006 — archived phases
     // are valid on-disk locations for historical ROADMAP phases).
@@ -925,7 +947,7 @@ function cmdValidateHealth(cwd, options, raw) {
     // so neither archived phases nor padding-mismatch phases trigger false W007.
     for (const p of activeDiskPhases) {
       const variants = phaseVariants(p);
-      if (![...variants].some((v) => roadmapPhaseVariants.has(v))) {
+      if (![...variants].some((v) => fullRoadmapPhaseVariants.has(v))) {
         addIssue('warning', 'W007', `Phase ${p} exists on disk but not in ROADMAP.md`, 'Add to roadmap or remove directory');
       }
     }
