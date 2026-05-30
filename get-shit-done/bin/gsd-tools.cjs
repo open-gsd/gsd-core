@@ -1615,6 +1615,38 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       break;
     }
 
+    case 'update-context': {
+      // #498: resolve the installed GSD version, scope, runtime, and config dir
+      // for /gsd:update. Replaces ~280 lines of inline bash in update.md with a
+      // tested projection. Emits the contract as JSON: { installedVersion,
+      // scope, runtime, gsdDir }. Optional --config-dir / --runtime carry the
+      // workflow's execution_context hints (the one thing only it can know).
+      const { loadUpdateContext } = require('./lib/update-context.cjs');
+      const ucArgs = args.slice(1);
+      let preferredConfigDir = '';
+      let preferredRuntime = '';
+      for (let i = 0; i < ucArgs.length; i++) {
+        const a = ucArgs[i];
+        if (a.startsWith('--config-dir=')) { preferredConfigDir = a.slice('--config-dir='.length); continue; }
+        if (a.startsWith('--runtime=')) { preferredRuntime = a.slice('--runtime='.length); continue; }
+        if (a === '--config-dir') {
+          const v = ucArgs[i + 1];
+          if (v === undefined || v.startsWith('--')) error('Missing value for --config-dir', ERROR_REASON.USAGE);
+          preferredConfigDir = v; i++; continue;
+        }
+        if (a === '--runtime') {
+          const v = ucArgs[i + 1];
+          if (v === undefined || v.startsWith('--')) error('Missing value for --runtime', ERROR_REASON.USAGE);
+          preferredRuntime = v; i++; continue;
+        }
+        if (a === '--json') continue; // JSON is the only output; accepted for symmetry
+        if (a.startsWith('-')) error(`Unknown flag for update-context: ${a}`, ERROR_REASON.USAGE);
+      }
+      const ctx = loadUpdateContext({ preferredConfigDir, preferredRuntime });
+      process.stdout.write(JSON.stringify(ctx) + '\n');
+      break;
+    }
+
     default: {
       // #3243: if the caller passed a dotted form (e.g. "foo.bar"), the shim
       // above split it so `command` here is the head ("foo"). Use
