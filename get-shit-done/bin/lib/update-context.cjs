@@ -28,6 +28,7 @@ const RUNTIME_DIRS = [
   ['antigravity', '.gemini/antigravity-ide'],
   ['antigravity', '.gemini/antigravity-cli'],
   ['antigravity', '.gemini/antigravity'],
+  ['antigravity', '.agent'], // local Antigravity install dir (#503; bin/install.js getDirName('antigravity'))
   ['gemini', '.gemini'],
   ['kilo', '.config/kilo'],
   ['kilo', '.kilo'],
@@ -181,4 +182,10 @@ function loadUpdateContext(opts = {}) {
   });
 }
 
-module.exports = { resolveUpdateContext, loadUpdateContext, RUNTIME_DIRS };
+module.exports = {
+  resolveUpdateContext,
+  loadUpdateContext,
+  RUNTIME_DIRS,
+  inferPreferredRuntime,
+  envRuntimeDirs,
+};

@@ -643,6 +643,11 @@ describe('Kilo source integration assertions', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'bin', 'install.js'), 'utf8');
   const updateWorkflowSrc = fs.readFileSync(
     path.join(__dirname, '..', 'get-shit-done', 'workflows', 'update.md'), 'utf8');
+  // #498: update.md's runtime/scope/config-dir resolution moved into the tested
+  // projection get-shit-done/bin/lib/update-context.cjs. Custom-config-dir
+  // detection (kilo.jsonc, KILO_CONFIG) is now asserted there.
+  const updateContextSrc = fs.readFileSync(
+    path.join(__dirname, '..', 'get-shit-done', 'bin', 'lib', 'update-context.cjs'), 'utf8');
 
   test('--kilo flag parsing exists', () => {
     assert.ok(src.includes("args.includes('--kilo')"));
@@ -668,8 +673,11 @@ describe('Kilo source integration assertions', () => {
   });
 
   test('update workflow checks preferred custom config dirs', () => {
+    // update.md still derives the preferred config dir from execution_context…
     assert.ok(updateWorkflowSrc.includes('PREFERRED_CONFIG_DIR'));
-    assert.ok(updateWorkflowSrc.includes('kilo.jsonc'));
-    assert.ok(updateWorkflowSrc.includes('KILO_CONFIG'));
+    // …and the custom-dir detection (kilo.jsonc config marker, KILO_CONFIG env)
+    // now lives in the tested update-context projection (#498).
+    assert.ok(updateContextSrc.includes('kilo.jsonc'));
+    assert.ok(updateContextSrc.includes('KILO_CONFIG'));
   });
 });
