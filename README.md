@@ -1,6 +1,6 @@
 > # Project Continuity Notice
 >
-> GSD is maintained by the **open-gsd** team at:
+> GSD Core is maintained by the **open-gsd** team at:
 > **`open-gsd/gsd-core`**
 >
 > Use only these package names:
@@ -25,7 +25,9 @@
 
 <div align="center">
 
-# GET SHIT DONE
+# GSD Core
+
+**Git Ship. Done.**
 
 **English** · [Português](README.pt-BR.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja-JP.md) · [한국어](README.ko-KR.md)
 
@@ -58,7 +60,7 @@ npx @opengsd/gsd-core@latest
 
 *"I've done SpecKit, OpenSpec and Taskmaster — this has produced the best results for me."*
 
-*"By far the most powerful addition to my Claude Code. Nothing over-engineered. Literally just gets shit done."*
+*"By far the most powerful addition to my Claude Code. Nothing over-engineered. It just helps me ship."*
 
 <br>
 
@@ -69,15 +71,15 @@ npx @opengsd/gsd-core@latest
 ---
 
 > [!IMPORTANT]
-> **Returning to GSD?**
+> **Returning to GSD Core?**
 >
 > Run `/gsd-map-codebase` to re-index your codebase, then `/gsd-new-project` to rebuild GSD's planning context. Your code is fine — GSD just needs its context rebuilt. See the [CHANGELOG](CHANGELOG.md) for what's new.
 
 ---
 
-## Why We Continue Building GSD
+## Why We Continue Building GSD Core
 
-GSD exists to help solo builders and small teams ship reliably with AI: clear specs, controlled context, and verification before release.
+GSD Core exists to help solo builders and small teams ship reliably with AI: clear specs, controlled context, and verification before release.
 
 In May 2026, maintainers published a continuity announcement and migrated active development to `open-gsd/gsd-core` after trust and ownership concerns around the former upstream, including a meme-coin rug-pull incident publicly associated with that ecosystem.
 
@@ -161,7 +163,7 @@ The installer prompts for your runtime (Claude Code, OpenCode, Gemini CLI, Kilo,
 claude --dangerously-skip-permissions
 ```
 
-GSD is built for frictionless automation. Skip-permissions is how it's intended to run.
+GSD Core is built for frictionless automation. Skip-permissions is how it's intended to run.
 
 Install only the skills you need with `--profile=core` (six core-loop skills), `--profile=standard` (core + phase management), or the default full install. Profiles compose: `--profile=core,audit`. `--minimal` is an alias for `--profile=core`. See **[docs/USER-GUIDE.md](docs/USER-GUIDE.md)** for the full walkthrough, non-interactive install flags for all 15 runtimes, and permissions configuration. See [ADR-0011](docs/adr/0011-skill-surface-budget-module.md) for the profile model and runtime surface control.
 
@@ -296,6 +298,6 @@ MIT License. See [LICENSE](LICENSE) for details.
 
 <div align="center">
 
-**Claude Code is powerful. GSD makes it reliable.**
+**Claude Code is powerful. GSD Core makes it reliable.**
 
 </div>

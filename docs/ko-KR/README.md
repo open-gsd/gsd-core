@@ -1,6 +1,6 @@
-# GSD 문서
+# GSD Core 문서
 
-Get Shit Done (GSD) 프레임워크의 종합 문서입니다. GSD는 AI 코딩 에이전트를 위한 메타 프롬프팅, 컨텍스트 엔지니어링, 스펙 기반 개발 시스템입니다.
+GSD Core (Git Ship. Done.) 문서입니다. GSD Core는 AI 코딩 에이전트를 위한 메타 프롬프팅, 컨텍스트 엔지니어링, 스펙 기반 개발 시스템입니다.
 
 언어 버전: [English](README.md) · [Português (pt-BR)](pt-BR/README.md) · [日本語](ja-JP/README.md) · [简体中文](zh-CN/README.md) · [한국어](ko-KR/README.md)
 

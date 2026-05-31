@@ -613,9 +613,10 @@ const banner = '\n' +
   '  ╚██████╔╝███████║██████╔╝\n' +
   '   ╚═════╝ ╚══════╝╚═════╝' + reset + '\n' +
   '\n' +
-  '  Get Shit Done ' + dim + 'v' + pkg.version + reset + '\n' +
+  '  GSD Core ' + dim + 'v' + pkg.version + reset + '\n' +
+  '  Git Ship. Done.\n' +
   '  A meta-prompting, context engineering and spec-driven\n' +
-  '  development system for Claude Code, OpenCode, Gemini, Kilo, Codex, Copilot, Antigravity, Cursor, Windsurf, Augment, Trae, Qwen Code, Hermes Agent, Cline and CodeBuddy by TÂCHES.\n';
+  '  development workflows for Claude Code, OpenCode, Gemini, Kilo, Codex, Copilot, Antigravity, Cursor, Windsurf, Augment, Trae, Qwen Code, Hermes Agent, Cline and CodeBuddy.\n';
 
 // Pure seam: parse --config-dir / -c from an arbitrary args array.
 // Returns the path string, '' for an empty equals-form value, or null when the
@@ -6001,10 +6002,10 @@ function writeHermesCategoryDescription(categoryDir) {
     '---',
     'name: gsd',
     `version: ${pkg.version}`,
-    'description: Get Shit Done — disciplined planning, execution, and shipping workflows. Use any gsd-* skill in this category to drive a project through new-project → discuss-phase → plan-phase → execute-phase → ship.',
+    'description: GSD Core — Git Ship. Done. Disciplined planning, execution, and shipping workflows. Use any gsd-* skill in this category to drive a project through new-project → discuss-phase → plan-phase → execute-phase → ship.',
     '---',
     '',
-    '# Get Shit Done (GSD)',
+    '# GSD Core',
     '',
     'GSD is a structured development workflow. Skills in this category cover',
     'project initialization, phase planning, execution, code review, and shipping.',
@@ -8785,7 +8786,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   copyWithPathReplacement(skillSrc, skillDest, pathPrefix, runtime, false, isGlobal);
   restoreUserArtifacts(skillDest, savedGsdArtifacts);
   if (verifyInstalled(skillDest, 'get-shit-done')) {
-    console.log(`  ${green}✓${reset} Installed get-shit-done`);
+    console.log(`  ${green}✓${reset} Installed workflow assets`);
   } else {
     failures.push('get-shit-done');
   }
@@ -9547,7 +9548,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     // Cline uses .clinerules — generate a rules file with GSD system instructions
     const clinerulesDest = path.join(targetDir, '.clinerules');
     const clinerules = [
-      '# GSD — Get Shit Done',
+      '# GSD Core — Git Ship. Done.',
       '',
       '- GSD workflows live in `get-shit-done/workflows/`. Load the relevant workflow when',
       '  the user runs a `/gsd-*` command.',
