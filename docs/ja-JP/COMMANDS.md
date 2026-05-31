@@ -834,6 +834,7 @@ GSDアップデート後にローカルの変更を復元します。
 | `--opencode` | OpenCodeレビューを含める（GitHub Copilot経由） |
 | `--qwen` | Qwen Codeレビューを含める（Alibaba Qwenモデル） |
 | `--cursor` | Cursorエージェントレビューを含める |
+| `--agy` / `--antigravity` | Antigravity CLIレビューを含める（Google認証情報で無料） |
 | `--all` | 利用可能なすべてのCLIを含める |
 
 **生成物:** `{phase}-REVIEWS.md` — `/gsd-plan-phase --reviews` で利用可能

@@ -23,6 +23,7 @@ command -v coderabbit >/dev/null 2>&1 && echo "coderabbit:available" || echo "co
 command -v opencode >/dev/null 2>&1 && echo "opencode:available" || echo "opencode:missing"
 command -v qwen >/dev/null 2>&1 && echo "qwen:available" || echo "qwen:missing"
 command -v cursor >/dev/null 2>&1 && echo "cursor:available" || echo "cursor:missing"
+command -v agy >/dev/null 2>&1 && echo "antigravity:available" || echo "antigravity:missing"
 
 # Check local model servers (OpenAI-compatible HTTP API — no CLI binary required)
 OLLAMA_HOST=$(gsd_run query config-get review.ollama_host 2>/dev/null | jq -r '.' 2>/dev/null || echo "")
@@ -46,6 +47,7 @@ Parse flags from `$ARGUMENTS`:
 - `--opencode` → include OpenCode
 - `--qwen` → include Qwen Code
 - `--cursor` → include Cursor
+- `--agy` or `--antigravity` → include Antigravity CLI
 - `--ollama` → include Ollama (local server, OpenAI-compatible)
 - `--lm-studio` → include LM Studio (local server, OpenAI-compatible)
 - `--llama-cpp` → include llama.cpp (local server, OpenAI-compatible)
@@ -73,6 +75,7 @@ No external AI CLIs found. Install at least one:
 - opencode: https://opencode.ai (leverages GitHub Copilot subscription models)
 - qwen: https://github.com/nicepkg/qwen-code (Alibaba Qwen models)
 - cursor: https://cursor.com (Cursor IDE agent mode)
+- agy: curl -fsSL https://antigravity.google/cli/install.sh | bash (Antigravity CLI — free with Google credentials)
 
 Then run /gsd:review again.
 ```
@@ -218,6 +221,8 @@ GEMINI_MODEL=$(gsd_run query config-get review.models.gemini 2>/dev/null | jq -r
 CLAUDE_MODEL=$(gsd_run query config-get review.models.claude 2>/dev/null | jq -r '.' 2>/dev/null || true)
 CODEX_MODEL=$(gsd_run query config-get review.models.codex 2>/dev/null | jq -r '.' 2>/dev/null || true)
 OPENCODE_MODEL=$(gsd_run query config-get review.models.opencode 2>/dev/null | jq -r '.' 2>/dev/null || true)
+# review.models.agy is reserved for future model-pinning support; agy selects its model internally
+AGY_MODEL=$(gsd_run query config-get review.models.agy 2>/dev/null | jq -r '.' 2>/dev/null || true)
 ```
 
 For each selected CLI, invoke in sequence (not parallel — avoid rate limits):
@@ -282,6 +287,103 @@ fi
 cat /tmp/gsd-review-prompt-{phase}.md | cursor agent -p --mode ask --trust 2>/dev/null > /tmp/gsd-review-cursor-{phase}.md
 if [ ! -s /tmp/gsd-review-cursor-{phase}.md ]; then
   echo "Cursor review failed or returned empty output." > /tmp/gsd-review-cursor-{phase}.md
+fi
+```
+
+**Antigravity CLI:**
+
+**Maintainer note — why this block has three layers (last updated against agy 1.0.2):**
+
+`agy -p` (the `--print` non-interactive flag) works correctly on macOS and Linux: it sends the
+prompt, receives the model response, and writes it to stdout. On **native Windows** it silently
+produces no stdout output despite the API call succeeding — a bug in `text_drip.go`'s non-TTY
+flush path, tracked at https://github.com/google-antigravity/antigravity-cli/issues/27466 and
+still open as of agy 1.0.2.
+
+Regardless of platform, `agy` always persists the full exchange to a transcript file on disk.
+The transcript fallback (Step 2 below) reads that file directly, giving Windows users full review
+coverage without any extra tooling. This pattern was first documented by the community MCP bridge
+at https://github.com/SinanTufekci/Claude-Code-Antigravity-CLI-MCP-Server — we inline the same
+logic here in pure bash/jq so no additional dependency is required.
+
+**Stale-response guard (why the pre-flight watermark matters):**
+Without a watermark, the fallback would read the last `PLANNER_RESPONSE` entry in the transcript
+regardless of when it was written — including entries from a previous invocation in the same
+workspace. To prevent that, we record the transcript's line count *before* calling `agy -p`. In
+the fallback, we only read lines appended after that count. If no new lines were written (agy
+failed before producing a response), `_AGY_RESULT` is empty and Step 3 fires — never stale. If
+the conv-id changed (agy started a fresh session), all lines in the new file are new and we use
+skip=0.
+
+**If the upstream stdout bug is fixed** (check the issue above): Step 2 silently becomes
+unreachable; stdout is non-empty and Step 1 handles it. No code change needed.
+
+**If the transcript paths change** in a future `agy` release: Step 2 silently becomes a no-op
+and Step 3 fires with a clear error message in REVIEWS.md. No silent corruption. To debug:
+- `~/.gemini/antigravity-cli/cache/last_conversations.json` — workspace → conv-id map
+- `~/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/transcript.jsonl`
+  Filter: `source=="MODEL"`, `status=="DONE"`, `type=="PLANNER_RESPONSE"`, take the last match's `content` field.
+
+Invocation specifics (verified agy 1.0.0, macOS arm64 and Linux amd64):
+- `-p` takes the prompt as a **flag value** — `echo X | agy -p` errors with "flag needs an argument: -p"
+- `--print-timeout` defaults to 5m, aligning with this workflow's global timeout
+- No `-m` / `--model` flag — agy selects the model internally
+
+```bash
+# Pre-flight: snapshot the transcript watermark before invoking agy.
+# Must run BEFORE agy -p — this is what prevents the fallback from reading a stale prior response.
+_AGY_WS=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+_AGY_CACHE="$HOME/.gemini/antigravity-cli/cache/last_conversations.json"
+_AGY_MARK_CONV=""
+_AGY_MARK_LINES=0
+if [ -f "$_AGY_CACHE" ]; then
+  _AGY_MARK_CONV=$(jq -r --arg ws "$_AGY_WS" '
+    .[$ws] //
+    (to_entries
+     | map(select(.key | ascii_downcase == ($ws | ascii_downcase)))
+     | first | .value) //
+    empty
+  ' "$_AGY_CACHE" 2>/dev/null)
+  if [ -n "$_AGY_MARK_CONV" ] && [ "$_AGY_MARK_CONV" != "null" ]; then
+    _AGY_MARK_TX="$HOME/.gemini/antigravity-cli/brain/${_AGY_MARK_CONV}/.system_generated/logs/transcript.jsonl"
+    [ -f "$_AGY_MARK_TX" ] && _AGY_MARK_LINES=$(wc -l < "$_AGY_MARK_TX" | tr -d ' ')
+  fi
+fi
+
+# Step 1 — primary invocation: stdout works on macOS, Linux, and WSL
+agy -p "$(cat /tmp/gsd-review-prompt-{phase}.md)" 2>/dev/null > /tmp/gsd-review-antigravity-{phase}.md
+
+# Step 2 — transcript fallback: catches Windows agy -p stdout bug (and any future stdout-silent edge cases).
+# Reads only lines appended AFTER the pre-flight watermark. If agy failed before writing a new response,
+# _AGY_RESULT is empty and Step 3 fires — no stale content can leak through.
+# Undocumented paths, verified agy 1.0.0–1.0.2. See maintainer note above if these break.
+if [ ! -s /tmp/gsd-review-antigravity-{phase}.md ]; then
+  if [ -f "$_AGY_CACHE" ]; then
+    _AGY_CONV=$(jq -r --arg ws "$_AGY_WS" '
+      .[$ws] //
+      (to_entries
+       | map(select(.key | ascii_downcase == ($ws | ascii_downcase)))
+       | first | .value) //
+      empty
+    ' "$_AGY_CACHE" 2>/dev/null)
+    if [ -n "$_AGY_CONV" ] && [ "$_AGY_CONV" != "null" ]; then
+      _AGY_TX="$HOME/.gemini/antigravity-cli/brain/${_AGY_CONV}/.system_generated/logs/transcript.jsonl"
+      if [ -f "$_AGY_TX" ]; then
+        # If conv-id changed, agy started a new session — all lines are new, skip 0.
+        # If same conv-id, only read lines beyond the watermark.
+        [ "$_AGY_CONV" = "$_AGY_MARK_CONV" ] && _AGY_SKIP=$_AGY_MARK_LINES || _AGY_SKIP=0
+        _AGY_RESULT=$(tail -n +"$((_AGY_SKIP + 1))" "$_AGY_TX" 2>/dev/null | \
+          jq -r 'select(.source=="MODEL" and .status=="DONE" and .type=="PLANNER_RESPONSE") | .content' \
+          2>/dev/null | tail -1)
+        [ -n "$_AGY_RESULT" ] && echo "$_AGY_RESULT" > /tmp/gsd-review-antigravity-{phase}.md
+      fi
+    fi
+  fi
+fi
+
+# Step 3 — final guard: both approaches yielded nothing (auth error, first-run setup, path schema changed, etc.)
+if [ ! -s /tmp/gsd-review-antigravity-{phase}.md ]; then
+  echo "Antigravity review failed or returned empty output." > /tmp/gsd-review-antigravity-{phase}.md
 fi
 ```
 
@@ -493,7 +595,7 @@ After all reviewers complete, collect trim metadata files written during the run
 ```markdown
 ---
 phase: {N}
-reviewers: [gemini, claude, codex, coderabbit, opencode, qwen, cursor, ollama, lm_studio, llama_cpp]  # populate at runtime with only the reviewers actually invoked
+reviewers: [gemini, claude, codex, coderabbit, opencode, qwen, cursor, antigravity, ollama, lm_studio, llama_cpp]  # populate at runtime with only the reviewers actually invoked
 reviewed_at: {ISO timestamp}
 plans_reviewed: [{list of PLAN.md files}]
 trimmed_reviewers:        # only present if at least one reviewer was trimmed
@@ -549,6 +651,12 @@ trimmed_reviewers:        # only present if at least one reviewer was trimmed
 ## Cursor Review
 
 {cursor review content}
+
+---
+
+## Antigravity Review
+
+{antigravity review content}
 
 ---
 
