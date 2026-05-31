@@ -1,28 +1,3 @@
-> # Project Continuity Notice
->
-> GSD Core is maintained by the **open-gsd** team at:
-> **`open-gsd/gsd-core`**
->
-> Use only these package names:
->
-> - npm (main): `@opengsd/gsd-core`
-> - npm (sdk): `@opengsd/gsd-sdk`
->
-> The legacy upstream is outside open-gsd control. Based on public transition announcements and repository ownership reality, we strongly recommend removing legacy packages and migrating to `@opengsd/*`.
->
-> Security status:
->
-> - maintainers completed an internal security audit
-> - maintainers report an independent review pass
-> - no known active exploit was found in tracked source during those passes
->
-> See:
->
-> - continuity announcement: https://github.com/open-gsd/gsd-core/discussions/109
-> - audit transparency report: https://github.com/open-gsd/gsd-core/discussions/119
->
-> ---
-
 <div align="center">
 
 # GSD Core
