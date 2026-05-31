@@ -62,6 +62,11 @@ Thumbs.db
 .next/
 dist/
 build/
+
+# ADR-457 build-at-publish: TS-generated runtime artifacts (compiled from src/*.cts
+# by `npm run build:lib`). Source of truth is src/; these are emitted, never edited.
+# Published via prepublishOnly; built before test via pretest. Grows as modules migrate.
+/get-shit-done/bin/lib/semver-compare.cjs
 __pycache__/
 *.pyc
 .venv/
