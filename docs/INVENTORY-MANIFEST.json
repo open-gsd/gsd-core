@@ -1,5 +1,5 @@
 {
-  "generated": "2026-05-30",
+  "generated": "2026-05-31",
   "families": {
     "agents": [
       "gsd-advisor-researcher",
@@ -328,6 +328,7 @@
       "task-command-router.cjs",
       "template.cjs",
       "uat.cjs",
+      "ui-safety-gate.cjs",
       "update-context.cjs",
       "validate-command-router.cjs",
       "validate.cjs",
