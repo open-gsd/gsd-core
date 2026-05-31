@@ -4,7 +4,39 @@ All notable changes to GSD will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased](https://github.com/open-gsd/get-shit-done-redux/compare/v1.42.1...HEAD)
+## [Unreleased]
+
+### Fixed
+
+- **README version guidance now uses npm/package metadata as the source of truth** — README, localized READMEs, and the docs index no longer present archived release-note or canary-stream numbers as the current GSD Core package version. (#545)
+
+## [1.2.0](https://www.npmjs.com/package/@opengsd/gsd-core/v/1.2.0) - 2026-05-31
+
+`1.2.0` is the current stable `@opengsd/gsd-core` release. It resumes the public package line after the release-version validation recovery documented in [ADR 218](docs/adr/218-release-version-validation.md) and makes `@opengsd/gsd-core` / `gsd-core` the canonical package and CLI identity.
+
+### Added
+
+- **Plan-vs-codebase drift guard** — plan review can verify generated plans against live source symbols before execution so hallucinated files, APIs, or commands are caught earlier. (#487)
+- **Single Package Identity seam** — package name, CLI identity, update checks, and installer identity are centralized so `@opengsd/gsd-core` stays consistent across runtime surfaces. (#499, #517, #521)
+- **Cross-provider effort controls and fast-mode-aware routing** — model-effort selection works across providers and can adjust routing for faster workflows. (#463)
+- **Current public docs and install identity** — README/docs now advertise GSD Core, `@opengsd/gsd-core`, and the `gsd-core` binary as the canonical user-facing surface. (#519, #523, #540)
+
+### Changed
+
+- **SDK shim retired from installer/runtime docs** — workflows now route through `gsd-tools`; dead SDK-shim verification and stale SDK-generated banners were removed. (#522, #515, #510)
+- **Release numbering recovered at `1.2.0`** — leading-zero release inputs are invalid and duplicate-version checks fail early before publish work begins. See [ADR 218](docs/adr/218-release-version-validation.md).
+- **CI/test selection is more precise** — affected-test selection now widens docs/test-impact correctly and avoids under-testing relevant PRs. (#495)
+
+### Fixed
+
+- **Planning writes are more reliable** — phase completion writes are transactional and no longer corrupt milestone progress counters. (#465, #514)
+- **Roadmap and milestone parsing no longer leak stale phase details into active milestone state.** (#513)
+- **`/gsd:update` detects local Antigravity `.agent` installs and repo-local Claude installs correctly.** (#512, #476)
+- **Package identity registration no longer regresses update/runtime detection.** (#521)
+
+## Legacy Release History
+
+The entries below were carried forward from the pre-`@opengsd/gsd-core` package lineage for continuity. They are archived history, not the current package version line; the legacy archive may reuse version numbers that now belong to `@opengsd/gsd-core`.
 
 ## [1.42.1](https://github.com/open-gsd/get-shit-done-redux/compare/v1.41.0...v1.42.1) - 2026-05-15
 
@@ -2633,7 +2665,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 - AskUserQuestion restored for decision gate in questioning flow
 
-## [1.2.0](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.0) - 2025-12-15
+## [1.2.0 legacy](https://github.com/open-gsd/get-shit-done-redux/releases/tag/v1.2.0) - 2025-12-15
 
 ### Changed
 
@@ -2748,7 +2780,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 - YOLO mode for autonomous execution
 - Interactive mode with checkpoints
 
-[Unreleased]: https://github.com/open-gsd/get-shit-done-redux/compare/v1.42.1...HEAD
+[Unreleased]: https://github.com/open-gsd/gsd-core/compare/main...HEAD
 [1.42.1]: https://github.com/open-gsd/get-shit-done-redux/compare/v1.41.0...v1.42.1
 [1.38.4]: https://github.com/open-gsd/get-shit-done-redux/compare/v1.38.2...v1.38.4
 [1.38.2]: https://github.com/open-gsd/get-shit-done-redux/compare/v1.37.1...v1.38.2

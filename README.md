@@ -48,7 +48,7 @@ npx @opengsd/gsd-core@latest
 > [!IMPORTANT]
 > **Returning to GSD Core?**
 >
-> Run `/gsd-map-codebase` to re-index your codebase, then `/gsd-new-project` to rebuild GSD's planning context. Your code is fine — GSD just needs its context rebuilt. See the [CHANGELOG](CHANGELOG.md) for what's new.
+> Run `/gsd-map-codebase` to re-index your codebase, then `/gsd-new-project` to rebuild GSD's planning context. Your code is fine — GSD just needs its context rebuilt. Use `@opengsd/gsd-core@latest` for the current package line.
 
 ---
 
@@ -130,7 +130,7 @@ GSD Core is built for frictionless automation. Skip-permissions is how it's inte
 
 Install only the skills you need with `--profile=core` (six core-loop skills), `--profile=standard` (core + phase management), or the default full install. Profiles compose: `--profile=core,audit`. `--minimal` is an alias for `--profile=core`. See **[docs/USER-GUIDE.md](docs/USER-GUIDE.md)** for the full walkthrough, non-interactive install flags for all 15 runtimes, and permissions configuration. See [ADR-0011](docs/adr/0011-skill-surface-budget-module.md) for the profile model and runtime surface control.
 
-Current release highlights are in [docs/RELEASE-v1.42.1.md](docs/RELEASE-v1.42.1.md): package legitimacy checks, safer installer migrations, runtime surface control, custom ship PR sections, reviewer defaults, fallow structural review, and quota-aware execution recovery.
+The canonical release version is the `@opengsd/gsd-core` version published on npm and mirrored in `package.json`. Older release-note files under `docs/` are retained as legacy continuity notes; do not use archived release-note numbers as the current GSD Core package version.
 
 ### Cross-runtime compatibility: installer required
 
@@ -208,7 +208,7 @@ For the full configuration reference — all settings, git branching strategies,
 | [Architecture](docs/ARCHITECTURE.md) | How the multi-agent orchestration works |
 | [CLI Tools](docs/CLI-TOOLS.md) | `gsd-sdk query` and programmatic SDK dispatch seams |
 | [Features](docs/FEATURES.md) | Complete feature index |
-| [Changelog](CHANGELOG.md) | What changed in each release |
+| [Changelog](CHANGELOG.md) | Release history, including archived legacy continuity notes |
 
 ---
 
