@@ -30,16 +30,17 @@ describe('autonomous workflow ui-phase and ui-review integration (#1375)', () =>
     });
 
     test('UI design contract step detects frontend indicators via shell-free Node gate (#3718)', () => {
-      // After #3718 fix: the gate is implemented in bin/lib/ui-safety-gate.cjs (Node.js)
-      // piped from stdin, path anchored via git rev-parse. This avoids silent failure
-      // on Windows PowerShell and ARG_MAX limits for large phase text.
+      // After #3718: the gate is implemented in bin/lib/ui-safety-gate.cjs (Node.js)
+      // piped from stdin, avoiding silent failure on Windows PowerShell and ARG_MAX.
+      // After #448: the helper is resolved against the GSD install dir (RUNTIME_DIR),
+      // not the consuming project's git root, so it is actually found at runtime.
       assert.ok(
         content.includes('ui-safety-gate.cjs'),
         'should invoke shell-free Node gate for cross-platform portability (#3718)'
       );
       assert.ok(
-        content.includes('GSD_REPO_ROOT'),
-        'should anchor gate path to GSD_REPO_ROOT to avoid CWD-sensitive failure'
+        content.includes('RUNTIME_DIR'),
+        'should resolve the gate helper against the GSD install dir (RUNTIME_DIR), not the consuming project root (#448)'
       );
     });
 
