@@ -28,6 +28,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('node:child_process');
+const os = require('node:os');
 
 const HELPER_PATH = path.join(__dirname, '..', 'bin', 'lib', 'ui-safety-gate.cjs');
 const PLAN_PHASE_PATH = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'plan-phase.md');
@@ -68,19 +69,33 @@ describe('Workflow .md structural guard (#3718)', () => {
     ['plan-phase.md', PLAN_PHASE_PATH],
     ['autonomous.md', AUTONOMOUS_PATH],
   ]) {
-    test(`${label} must invoke ui-safety-gate.cjs via stdin, anchored to GSD_REPO_ROOT`, () => {
+    test(`${label} must invoke ui-safety-gate.cjs via stdin, anchored to the GSD install dir`, () => {
       const content = fs.readFileSync(filePath, 'utf-8');
       assert.ok(
         content.includes('ui-safety-gate.cjs'),
         `${label}: must reference ui-safety-gate.cjs for cross-shell portability (#3718)`
       );
+
+      // Scope structural assertions to the gate invocation region so we test the
+      // gate's OWN resolution, not §1's unrelated RUNTIME_DIR usage for gsd-tools.
+      const gi = content.indexOf('ui-safety-gate.cjs');
+      const region = content.slice(Math.max(0, gi - 800), gi + 200);
+
+      // #448: the helper ships inside the GSD package, so it must be resolved
+      // against the GSD install dir (RUNTIME_DIR), NOT the consuming project's
+      // git root — otherwise the node call fails and the gate silently no-ops.
       assert.ok(
-        content.includes('GSD_REPO_ROOT'),
-        `${label}: must anchor path to GSD_REPO_ROOT to avoid CWD-sensitive failure (#3718)`
+        region.includes('RUNTIME_DIR'),
+        `${label}: UI gate must resolve ui-safety-gate.cjs against RUNTIME_DIR (the GSD install dir), not the consuming project's git root (#448)`
       );
       assert.ok(
-        content.includes('git rev-parse --show-toplevel'),
-        `${label}: must derive GSD_REPO_ROOT from git rev-parse --show-toplevel`
+        !region.includes('GSD_REPO_ROOT'),
+        `${label}: UI gate must NOT anchor the helper to GSD_REPO_ROOT (the consuming project's git root) — that silently no-ops in installed repos (#448)`
+      );
+      // Retain a git rev-parse --show-toplevel fallback when RUNTIME_DIR is unset (#3718).
+      assert.ok(
+        region.includes('git rev-parse --show-toplevel'),
+        `${label}: must retain a git rev-parse --show-toplevel fallback for the install-dir resolution`
       );
       // Confirm stdin pipe usage (printf or echo piped to node)
       assert.ok(
@@ -250,6 +265,53 @@ function runBehavioralTests(label) {
 }
 
 runBehavioralTests('ui-safety-gate.cjs');
+
+// ── Install-dir resolution from a consuming project (#448) ────────────────────
+
+describe('UI gate resolves the helper against RUNTIME_DIR, not the consuming repo (#448)', () => {
+  const REPO_ROOT = path.join(__dirname, '..');
+
+  // Mirrors the §5.6 / §3a.5 resolution. The structural guard above forces the
+  // workflows to keep using this RUNTIME_DIR-anchored form; this proves the
+  // candidate path is correct and the helper is actually found + executed when
+  // the CWD is a consuming project that has no bin/lib of its own.
+  const GATE_SNIPPET = [
+    '_GSD_RT="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"',
+    'UI_GATE_JS=$(for _c in "$_GSD_RT/bin/lib/ui-safety-gate.cjs" "$_GSD_RT/.claude/bin/lib/ui-safety-gate.cjs" "$HOME/.claude/bin/lib/ui-safety-gate.cjs"; do [ -f "$_c" ] && { echo "$_c"; break; }; done)',
+    'if [ -n "$UI_GATE_JS" ]; then printf \'%s\' "$PHASE_SECTION" | node "$UI_GATE_JS" >/dev/null 2>&1; HAS_UI=$?; else HAS_UI=0; fi',
+    'echo "$HAS_UI"',
+  ].join('\n');
+
+  function runGateFrom(consumingDir, phaseSection) {
+    return spawnSync('bash', ['-c', GATE_SNIPPET], {
+      cwd: consumingDir,
+      encoding: 'utf-8',
+      env: { ...process.env, RUNTIME_DIR: REPO_ROOT, PHASE_SECTION: phaseSection },
+    });
+  }
+
+  test('UI text is detected (HAS_UI=0) from a project without bin/lib', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-consuming-'));
+    try {
+      const res = runGateFrom(tmp, 'UI Refactor: migrate all screens');
+      assert.strictEqual(res.status, 0, `bash failed: ${res.stderr}`);
+      assert.strictEqual(res.stdout.trim(), '0',
+        'helper must be found via RUNTIME_DIR and report UI present — not silently no-op');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test('non-UI text returns HAS_UI=1 via the RUNTIME_DIR-resolved helper', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-consuming-'));
+    try {
+      const res = runGateFrom(tmp, 'Requirements: backend REST API only');
+      assert.strictEqual(res.stdout.trim(), '1');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
 
 // ── checkUiPresence() return value API ───────────────────────────────────────
 

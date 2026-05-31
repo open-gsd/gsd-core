@@ -625,11 +625,11 @@ Check if phase has frontend indicators:
 PHASE_SECTION=$(gsd_run query roadmap.get-phase "${PHASE}" 2>/dev/null)
 # Shell-free word-boundary gate (#3718): Node.js helper — no locale env-var dependency.
 # Reads via stdin to avoid OS ARG_MAX limits on large phase text.
-# Path anchored to repo root; falls back to CWD if git is unavailable
-# Exit codes mirror grep: 0 = UI tokens found, 1 = not found.
-GSD_REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
-printf '%s' "$PHASE_SECTION" | node "${GSD_REPO_ROOT}/bin/lib/ui-safety-gate.cjs" > /dev/null 2>&1
-HAS_UI=$?
+# Resolve the helper against the GSD install dir via RUNTIME_DIR (#448) — NOT the consuming
+# project's git root — falling back to git toplevel / $HOME/.claude. Exit codes mirror grep (0=UI,1=none).
+_GSD_RT="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+UI_GATE_JS=$(for _c in "$_GSD_RT/bin/lib/ui-safety-gate.cjs" "$_GSD_RT/.claude/bin/lib/ui-safety-gate.cjs" "$HOME/.claude/bin/lib/ui-safety-gate.cjs"; do [ -f "$_c" ] && { echo "$_c"; break; }; done)
+if [ -n "$UI_GATE_JS" ]; then printf '%s' "$PHASE_SECTION" | node "$UI_GATE_JS" >/dev/null 2>&1; HAS_UI=$?; else echo "WARN: ui-safety-gate.cjs not found via RUNTIME_DIR/\$HOME (#448) — assuming UI present" >&2; HAS_UI=0; fi
 ```
 
 **If `HAS_UI` is 0 (frontend indicators found):**
