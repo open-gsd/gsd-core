@@ -1,6 +1,6 @@
 # Arquitetura do GSD Core
 
-Visão arquitetural do GSD Core (Git Ship. Done.) em Português.
+Visão arquitetural do GSD Core (Git. Ship. Done.) em Português.
 Para detalhes de implementação linha a linha, consulte [ARCHITECTURE.md em inglês](../ARCHITECTURE.md).
 
 ---
