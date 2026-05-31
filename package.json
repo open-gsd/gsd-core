@@ -74,7 +74,7 @@
     "build:hooks": "node scripts/build-hooks.js",
     "build:lib": "tsc -p tsconfig.build.json",
     "generate:identity": "node scripts/generate-package-identity.cjs",
-    "prepare": "npm run build:lib",
+    "prepack": "npm run build:lib",
     "prepublishOnly": "npm run build:lib && npm run build:hooks",
     "pretest": "npm run build:lib && npm run lint:skill-deps",
     "pretest:coverage": "npm run build:lib && npm run lint:skill-deps",
