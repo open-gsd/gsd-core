@@ -614,7 +614,7 @@ const banner = '\n' +
   '   ╚═════╝ ╚══════╝╚═════╝' + reset + '\n' +
   '\n' +
   '  GSD Core ' + dim + 'v' + pkg.version + reset + '\n' +
-  '  Git Ship. Done.\n' +
+  '  Git. Ship. Done.\n' +
   '  A meta-prompting, context engineering and spec-driven\n' +
   '  development workflows for Claude Code, OpenCode, Gemini, Kilo, Codex, Copilot, Antigravity, Cursor, Windsurf, Augment, Trae, Qwen Code, Hermes Agent, Cline and CodeBuddy.\n';
 
@@ -6002,7 +6002,7 @@ function writeHermesCategoryDescription(categoryDir) {
     '---',
     'name: gsd',
     `version: ${pkg.version}`,
-    'description: GSD Core — Git Ship. Done. Disciplined planning, execution, and shipping workflows. Use any gsd-* skill in this category to drive a project through new-project → discuss-phase → plan-phase → execute-phase → ship.',
+    'description: GSD Core — Git. Ship. Done. Disciplined planning, execution, and shipping workflows. Use any gsd-* skill in this category to drive a project through new-project → discuss-phase → plan-phase → execute-phase → ship.',
     '---',
     '',
     '# GSD Core',
@@ -9548,7 +9548,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     // Cline uses .clinerules — generate a rules file with GSD system instructions
     const clinerulesDest = path.join(targetDir, '.clinerules');
     const clinerules = [
-      '# GSD Core — Git Ship. Done.',
+      '# GSD Core — Git. Ship. Done.',
       '',
       '- GSD workflows live in `get-shit-done/workflows/`. Load the relevant workflow when',
       '  the user runs a `/gsd-*` command.',

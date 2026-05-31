@@ -50,7 +50,7 @@
 
     <!-- Title and subtitle -->
     <text class="text white" font-size="15" y="188">  GSD Core <tspan class="dim">v1.2.0</tspan></text>
-    <text class="text white" font-size="15" y="212">  Git Ship. Done.</text>
+    <text class="text white" font-size="15" y="212">  Git. Ship. Done.</text>
     <text class="text white" font-size="15" y="232">  Meta-prompting, context engineering, and spec-driven workflows.</text>
 
     <!-- Install output -->

@@ -5,7 +5,7 @@ Display the complete GSD Core command reference. Output ONLY the reference conte
 <reference>
 # GSD Core Command Reference
 
-**GSD Core** (Git Ship. Done.) creates hierarchical project plans optimized for solo agentic development with Claude Code.
+**GSD Core** (Git. Ship. Done.) creates hierarchical project plans optimized for solo agentic development with Claude Code.
 
 ## Quick Start
 

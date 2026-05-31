@@ -4,7 +4,7 @@
 
 # GSD Core
 
-**Git Ship. Done.**
+**Git. Ship. Done.**
 
 [English](README.md) · [Português](README.pt-BR.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja-JP.md) · **한국어**
 
