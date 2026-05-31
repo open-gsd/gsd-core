@@ -1,4 +1,4 @@
-# GSD Architecture
+# GSD Core Architecture
 
 > System architecture for contributors and advanced users. For user-facing documentation, see [Feature Reference](FEATURES.md) or [User Guide](USER-GUIDE.md).
 
@@ -21,7 +21,7 @@
 
 ## System Overview
 
-GSD is a **meta-prompting framework** that sits between the user and AI coding agents (Claude Code, Gemini CLI, OpenCode, Kilo, Codex, Copilot, Antigravity, Trae, Cline, Augment Code). It provides:
+GSD Core is a **meta-prompting framework** that sits between the user and AI coding agents (Claude Code, Gemini CLI, OpenCode, Kilo, Codex, Copilot, Antigravity, Trae, Cline, Augment Code). It provides:
 
 1. **Context engineering** — Structured artifacts that give the AI everything it needs per task
 2. **Multi-agent orchestration** — Thin orchestrators that spawn specialized agents with fresh context windows

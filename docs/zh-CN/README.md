@@ -1,6 +1,8 @@
 <div align="center">
 
-# GET SHIT DONE
+# GSD Core
+
+**Git Ship. Done.**
 
 **一个轻量级且强大的元提示、上下文工程和规格驱动开发系统，支持 Claude Code、OpenCode、Gemini CLI、Kilo、Codex、Copilot、Cursor、Windsurf、Antigravity、Augment、Trae 和 Cline。**
 
@@ -140,7 +142,7 @@ npx @opengsd/gsd-core --all --global      # 安装到所有目录
 
 ```bash
 git clone https://github.com/open-gsd/gsd-core.git
-cd get-shit-done
+cd gsd-core
 node bin/install.js --claude --local
 ```
 

@@ -204,7 +204,7 @@ Full roster at `get-shit-done/workflows/*.md`. Workflows are thin orchestrators 
 | `forensics.md` | Forensics investigation of failed workflows — git, artifacts, and state analysis. | `/gsd-forensics` |
 | `graduation.md` | Cluster recurring LEARNINGS.md items across phases and surface HITL promotion candidates. | `transition.md` (graduation_scan step) |
 | `health.md` | Validate `.planning/` directory integrity and report actionable issues. | `/gsd-health` |
-| `help.md` | Display the complete GSD command reference. | `/gsd-help` |
+| `help.md` | Display the complete GSD Core command reference. | `/gsd-help` |
 | `import.md` | Ingest external plans with conflict detection against existing project decisions. | `/gsd-import` |
 | `inbox.md` | Triage open GitHub issues and PRs against project contribution templates. | `/gsd-inbox` |
 | `ingest-docs.md` | Scan a repo for mixed planning docs; classify, synthesize, and bootstrap or merge into `.planning/` with a conflicts report. | `/gsd-ingest-docs` |

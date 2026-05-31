@@ -1,4 +1,4 @@
-# GSD Command Reference
+# GSD Core Command Reference
 
 > Command syntax, flags, options, and examples for stable commands. For feature details, see [Feature Reference](FEATURES.md). For workflow walkthroughs, see [User Guide](USER-GUIDE.md).
 
@@ -264,6 +264,8 @@ User acceptance testing with auto-diagnosis.
 **Prerequisites:** Phase has been executed
 **Produces:** `{phase}-UAT.md`, fix plans if issues found
 
+For browser-backed UAT, use a configured browser MCP server. The current Open GSD companion is `gsd-browser` (`gsd-browser mcp`), which provides deterministic navigation, versioned refs, assertions, screenshots, visual diffs, recordings, and human takeover. Legacy Playwright MCP servers remain usable when already configured.
+
 ```bash
 /gsd-verify-work 1                  # UAT for phase 1
 ```
@@ -311,6 +313,8 @@ Retroactive 6-pillar visual audit of implemented frontend.
 
 **Prerequisites:** Project has frontend code (works standalone, no GSD project needed)
 **Produces:** `{phase}-UI-REVIEW.md`, screenshots in `.planning/ui-reviews/`
+
+For richer visual evidence, pair this with `gsd-browser` or another browser MCP server so the audit can capture screenshots, state, console/network context, and reproducible interaction steps.
 
 ```bash
 /gsd-ui-review                      # Audit current phase

@@ -2,7 +2,9 @@
 
 <div align="center">
 
-# GET SHIT DONE
+# GSD Core
+
+**Git Ship. Done.**
 
 [English](README.md) · [Português](README.pt-BR.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja-JP.md) · **한국어**
 
@@ -181,7 +183,7 @@ npx @opengsd/gsd-core --all --global      # 모든 디렉터리에 설치
 
 ```bash
 git clone https://github.com/open-gsd/gsd-core.git
-cd get-shit-done
+cd gsd-core
 node bin/install.js --claude --local
 ```
 

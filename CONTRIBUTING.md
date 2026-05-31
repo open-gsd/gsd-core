@@ -1,11 +1,11 @@
-# Contributing to GSD
+# Contributing to GSD Core
 
 ## Getting Started
 
 ```bash
 # Clone the repo
 git clone https://github.com/open-gsd/gsd-core.git
-cd get-shit-done
+cd gsd-core
 
 # Install dependencies
 npm install

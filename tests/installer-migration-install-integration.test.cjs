@@ -307,7 +307,7 @@ describe('installer migration install integration', { concurrency: false }, () =
     assert.match(plainOutput, /Installer migrations/);
     assert.match(plainOutput, /removed\s+hooks\/statusline\.js/);
     assert.ok(
-      plainOutput.indexOf('Installer migrations') < plainOutput.indexOf('Installed get-shit-done'),
+      plainOutput.indexOf('Installer migrations') < plainOutput.indexOf('Installed workflow assets'),
       'migration report should appear before package materialization'
     );
     assert.equal(fs.existsSync(path.join(codexHome, 'hooks/statusline.js')), false);
@@ -434,7 +434,7 @@ describe('installer migration install integration', { concurrency: false }, () =
       assert.match(output, /Installing for /);
       assert.match(output, /Installer migrations/);
       assert.match(output, /removed\s+hooks\/statusline\.js/);
-      assert.match(output, /Installed get-shit-done/);
+      assert.match(output, /Installed workflow assets/);
       assert.match(output, /Done!/);
       assert.equal(fs.existsSync(path.join(targetDir, 'hooks/statusline.js')), false);
 
