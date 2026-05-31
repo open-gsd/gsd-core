@@ -49,13 +49,13 @@
     <text class="text cyan" font-size="14" y="148" xml:space="preserve">   ╚═════╝ ╚══════╝╚═════╝</text>
 
     <!-- Title and subtitle -->
-    <text class="text white" font-size="15" y="188">  Get Shit Done <tspan class="dim">v1.0.1</tspan></text>
-    <text class="text white" font-size="15" y="212">  A meta-prompting, context engineering and spec-driven</text>
-    <text class="text white" font-size="15" y="232">  development system for Claude Code by TÂCHES.</text>
+    <text class="text white" font-size="15" y="188">  GSD Core <tspan class="dim">v1.2.0</tspan></text>
+    <text class="text white" font-size="15" y="212">  Git. Ship. Done.</text>
+    <text class="text white" font-size="15" y="232">  Meta-prompting, context engineering, and spec-driven workflows.</text>
 
     <!-- Install output -->
     <text class="text" font-size="15" y="280"><tspan class="green">  ✓</tspan><tspan class="white"> Installed commands/gsd</tspan></text>
-    <text class="text" font-size="15" y="304"><tspan class="green">  ✓</tspan><tspan class="white"> Installed get-shit-done</tspan></text>
+    <text class="text" font-size="15" y="304"><tspan class="green">  ✓</tspan><tspan class="white"> Installed workflow assets</tspan></text>
 
     <!-- Done message -->
     <text class="text" font-size="15" y="352"><tspan class="green">  Done!</tspan><tspan class="white"> Run </tspan><tspan class="cyan">/gsd-help</tspan><tspan class="white"> to get started.</tspan></text>

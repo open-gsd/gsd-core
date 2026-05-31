@@ -1,6 +1,6 @@
-# Documentação do GSD
+# Documentação do GSD Core
 
-Documentação abrangente do framework Get Shit Done (GSD) — um sistema de meta-prompting, engenharia de contexto e desenvolvimento orientado por especificações para agentes de IA.
+Documentação abrangente do GSD Core (Git. Ship. Done.) — um sistema de meta-prompting, engenharia de contexto e desenvolvimento orientado por especificações para agentes de IA.
 
 ## Índice da documentação
 
