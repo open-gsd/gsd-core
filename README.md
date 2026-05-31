@@ -52,18 +52,6 @@ npx @opengsd/gsd-core@latest
 
 ---
 
-## Why We Continue Building GSD Core
-
-GSD Core exists to help solo builders and small teams ship reliably with AI: clear specs, controlled context, and verification before release.
-
-In May 2026, maintainers published a continuity announcement and migrated active development to `open-gsd/gsd-core` after trust and ownership concerns around the former upstream, including a meme-coin rug-pull incident publicly associated with that ecosystem.
-
-The former creator and legacy lineage are no longer part of this program. This repository is the maintained continuation under open-gsd governance.
-
-The current team continues release operations, triage, and security hardening in public. Audit status and follow-up security work are documented in Discussion #119 and linked issues.
-
----
-
 ## How It Works
 
 The loop is six commands. Each one does exactly one thing.
