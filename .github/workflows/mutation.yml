@@ -14,6 +14,9 @@ on:
     paths:
       # Only run when lib source or property tests change
       - 'get-shit-done/bin/lib/**/*.cjs'
+      # ADR-457: migrated lib modules now author logic in src/*.cts (compiled to the
+      # .cjs above), so a source-only edit must still trigger mutation testing.
+      - 'src/**/*.cts'
       - 'tests/**/*.property.test.cjs'
       - 'stryker.config.mjs'
   workflow_dispatch:
