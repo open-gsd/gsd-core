@@ -55,7 +55,6 @@ function deriveProgressFromRoadmap(roadmapContent) {
     let totalPlansSum = 0;
     const planCellPattern = /\|\s*\d+[^|]*\|\s*(\d+)\/(\d+)\s*\|/gi;
     let pm;
-    // eslint-disable-next-line no-cond-assign
     while ((pm = planCellPattern.exec(roadmapContent)) !== null) {
       totalPlansSum += parseInt(pm[2], 10);
     }

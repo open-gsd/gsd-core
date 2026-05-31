@@ -238,10 +238,6 @@ function isStateTemplateDefault(field, value) {
 function stateReplaceFieldIfTemplate(content, field, knownDefaults, newValue) {
     if (newValue === null || newValue === undefined) return content;
     const existing = stateExtractField(content, field);
-    // Build a temporary KNOWN_TEMPLATE_DEFAULTS-compatible lookup so we can reuse
-    // the isStateTemplateDefault logic for the provided knownDefaults array.
-    const tempField = '__tmp__';
-    const tempDefaults = { [tempField]: knownDefaults || [] };
     // Inline check: absent/blank → always write; in list → write; else → skip.
     if (existing === null || existing === undefined || existing.trim() === '') {
         return stateReplaceField(content, field, newValue) || content;
