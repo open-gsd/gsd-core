@@ -1,11 +1,11 @@
 <purpose>
-One-page newcomer-oriented tour of GSD. Output ONLY the `<reference>` content below. No additions.
+One-page newcomer-oriented tour of GSD Core. Output ONLY the `<reference>` content below. No additions.
 </purpose>
 
 <reference>
-# GSD — Get Shit Done
+# GSD Core — Git. Ship. Done.
 
-Plan-driven development for solo agentic work with Claude Code. GSD turns a vague idea into a hierarchical plan, then executes it phase by phase with state tracking and atomic commits.
+Plan-driven development for solo agentic work with Claude Code. GSD Core turns a vague idea into a hierarchical plan, then executes it phase by phase with state tracking and atomic commits.
 
 ## Start here (3 commands)
 

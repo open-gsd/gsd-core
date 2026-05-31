@@ -14,7 +14,10 @@ permissions:
 jobs:
   close-if-draft:
     name: Reject draft PRs
-    if: github.event.pull_request.draft == true
+    # Maintainers may use draft PRs for internal coordination.
+    if: >-
+      github.event.pull_request.draft == true &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) == false
     runs-on: ubuntu-latest
     steps:
       - name: Comment and close draft PR

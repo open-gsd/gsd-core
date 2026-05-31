@@ -2741,7 +2741,7 @@ Technical implementation details for Phase 2 appear in the **Changed** section b
 
 ### Added
 
-- Initial release of GSD (Get Shit Done) meta-prompting system
+- Initial release of GSD Core (Git Ship. Done.) meta-prompting system
 - Core slash commands: `/gsd:new-project`, `/gsd:discuss-phase`, `/gsd:plan-phase`, `/gsd:execute-phase`
 - PROJECT.md and STATE.md templates
 - Phase-based development workflow

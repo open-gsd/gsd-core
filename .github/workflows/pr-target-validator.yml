@@ -22,6 +22,9 @@ permissions:
 
 jobs:
   validate-target:
+    # Maintainers may open internal release/backport coordination PRs against main.
+    if: >-
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) == false
     runs-on: ubuntu-latest
     timeout-minutes: 2
     env:
