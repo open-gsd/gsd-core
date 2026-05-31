@@ -6,10 +6,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Added
-
-- **Antigravity CLI (`agy`) as a peer reviewer in `/gsd-review`** — `--agy` / `--antigravity` flag invokes `agy -p` and produces an `## Antigravity Review` section in REVIEWS.md. Auto-detected by `--all`. Preserves Google-family adversarial review coverage after Gemini CLI's free-tier retirement on 2026-06-18. (#34)
-
 ### Fixed
 
 - **README version guidance now uses npm/package metadata as the source of truth** — README, localized READMEs, and the docs index no longer present archived release-note or canary-stream numbers as the current GSD Core package version. (#545)
