@@ -24,4 +24,4 @@ The GitHub-assigned issue number is the prefix. Do not compute a sequential numb
 
 | PRD | Title | Status |
 |-----|-------|--------|
-| [3524-cjs-sdk-hard-seam.md](3524-cjs-sdk-hard-seam.md) | CJS↔SDK hard seam — phased migration (#3524) | Reference |
+| [3524-cjs-sdk-hard-seam.md](3524-cjs-sdk-hard-seam.md) | CJS↔SDK hard seam — phased migration (#3524) | Superseded by ADR-0174 |

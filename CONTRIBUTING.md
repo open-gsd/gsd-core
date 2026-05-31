@@ -179,8 +179,6 @@ Contributor requirements (summary):
 - Do not rewrite maintainer intent in `CONTEXT.md`/ADRs as part of drive-by cleanup; propose focused updates tied to approved scope.
 - If using an AI assistant, prompt it to read `CONTEXT.md` and the relevant ADRs before writing any code or docs, and verify it used the correct vocabulary before opening the PR.
 
-**CJS↔SDK seam.** When working on `bin/lib/*.cjs` or `sdk/src/**`, read [`docs/agents/cjs-sdk-seam.md`](docs/agents/cjs-sdk-seam.md). It documents the canonical pattern for Shared Modules (data manifest + source-of-truth file + generator + freshness check + Adapters) and the hand-sync pair lint that blocks new drift. New `<name>.cjs` ↔ `<name>.ts` pairs require either migration to a Shared Module or an explicit allowlist entry with justification in `scripts/shared-module-handsync-allowlist.json`. Adding an allowlist entry requires maintainer review via CODEOWNERS.
-
 **Every PR must link to an approved issue.** PRs without a linked issue are closed without review, no exceptions.
 
 - **No draft PRs** — draft PRs are automatically closed. Only open a PR when it is complete, tested, and ready for review. If your work is not finished, keep it on your local branch until it is.
