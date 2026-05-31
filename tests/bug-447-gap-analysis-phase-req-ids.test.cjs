@@ -190,6 +190,23 @@ describe('gap-analysis --phase-req-ids scoping (#447)', () => {
       'gap report is scoped to the phase-mapped IDs; REQ-03 (another phase) is excluded');
   });
 
+  test('mapped REQ-ID absent from REQUIREMENTS.md appears as "Missing" row, not silently dropped', () => {
+    writeRequirements(['REQ-01']);
+    writePlan('01', '# Plan\n\nImplements REQ-01.\n');
+
+    const r = runGsdTools(
+      ['gap-analysis', '--phase-dir', phaseDir, '--phase-req-ids', 'REQ-01,REQ-99'], tmpDir);
+    assert.ok(r.success, r.error);
+    const out = JSON.parse(r.output);
+
+    assert.deepStrictEqual(reqRows(out).sort(), ['REQ-01', 'REQ-99'],
+      'REQ-99 (absent from REQUIREMENTS.md) must be present in the report, not silently dropped');
+    const req99 = out.rows.find(x => x.item === 'REQ-99');
+    assert.ok(req99, 'missing mapped ID must have an output row');
+    assert.strictEqual(req99.status, 'Missing from REQUIREMENTS.md');
+    assert.ok(out.counts.uncovered > 0, 'uncovered count must reflect the missing mapped ID');
+  });
+
   test('phase with no Requirements line → init.plan-phase yields empty → gap-analysis skips requirements', () => {
     writeRoadmap(''); // no **Requirements:** line
     writeRequirements(['REQ-01', 'REQ-02']);

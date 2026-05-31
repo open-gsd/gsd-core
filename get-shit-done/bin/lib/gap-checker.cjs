@@ -99,7 +99,9 @@ function formatGapTable(rows) {
   }
   const header = '| Source | Item | Status |\n|--------|------|--------|';
   const body = rows.map(r => {
-    const tick = r.status === 'Covered' ? '\u2713 Covered' : '\u2717 Not covered';
+    const tick = r.status === 'Covered' ? '\u2713 Covered'
+      : r.status === 'Missing from REQUIREMENTS.md' ? '\u26a0 Missing from REQUIREMENTS.md'
+      : '\u2717 Not covered';
     return `| ${r.source} | ${r.item} | ${tick} |`;
   }).join('\n');
   return `## Post-Planning Gap Analysis\n\n${header}\n${body}\n`;
@@ -160,11 +162,14 @@ function runGapAnalysis(cwd, phaseDir, options = {}) {
   // A phase that maps no requirements (phase_req_ids null/TBD) must not report
   // every unrelated project REQ-ID as a gap — mirror §13's skip behavior.
   // CONTEXT.md decisions (below) are always in scope regardless.
+  let ghostReqIds = [];
   if (phaseReqIds === null) {
     reqItems = [];
   } else if (Array.isArray(phaseReqIds)) {
     const wanted = new Set(phaseReqIds);
+    const foundIds = new Set(reqItems.map(r => r.id));
     reqItems = reqItems.filter(r => wanted.has(r.id));
+    ghostReqIds = phaseReqIds.filter(id => !foundIds.has(id));
   }
 
   // Read the phase directory once; reuse the listing for both context detection
@@ -202,9 +207,12 @@ function runGapAnalysis(cwd, phaseDir, options = {}) {
     };
   }
 
-  const rows = sortRows(detectCoverage(items, planText));
-  const uncovered = rows.filter(r => r.status === 'Not covered').length;
-  const covered = rows.length - uncovered;
+  const rows = sortRows([
+    ...detectCoverage(items, planText),
+    ...ghostReqIds.map(id => ({ source: 'REQUIREMENTS.md', item: id, status: 'Missing from REQUIREMENTS.md' })),
+  ]);
+  const covered = rows.filter(r => r.status === 'Covered').length;
+  const uncovered = rows.length - covered;
 
   const summary = uncovered === 0
     ? `\u2713 All ${rows.length} items covered by plans`
