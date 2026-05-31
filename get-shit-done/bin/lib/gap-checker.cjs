@@ -116,7 +116,30 @@ function readGate(cwd) {
   return true;
 }
 
-function runGapAnalysis(cwd, phaseDir) {
+/**
+ * Normalize a raw `--phase-req-ids` argument into the scoping signal used by
+ * runGapAnalysis (#447). Mirrors §13's null/TBD skip semantics.
+ *
+ *   undefined           → flag absent: compare the whole REQUIREMENTS.md (back-compat)
+ *   null | '' | TBD     → no requirements mapped to this phase: skip the comparison
+ *   "REQ-01,REQ-02"     → restrict the comparison to these IDs
+ *
+ * Tolerates JSON-array-ish input (`["REQ-01","REQ-02"]`) since callers may pass
+ * the roadmap value through verbatim.
+ */
+function normalizePhaseReqIds(rawVal) {
+  if (rawVal === undefined) return undefined;
+  if (rawVal === null) return null;
+  const v = String(rawVal).replace(/["'[\]()]/g, '').trim();
+  if (v === '' || /^(null|tbd|none)$/i.test(v)) return null;
+  // Tolerate comma-, space-, or newline-separated lists (callers may pass the
+  // roadmap value verbatim, whose serialization is not guaranteed).
+  const ids = v.split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
+  return ids.length === 0 ? null : ids;
+}
+
+function runGapAnalysis(cwd, phaseDir, options = {}) {
+  const phaseReqIds = normalizePhaseReqIds(options.phaseReqIds);
   if (!readGate(cwd)) {
     return {
       enabled: false,
@@ -131,7 +154,18 @@ function runGapAnalysis(cwd, phaseDir) {
 
   const reqPath = planningPaths(cwd).requirements;
   const reqMd = fs.existsSync(reqPath) ? fs.readFileSync(reqPath, 'utf-8') : '';
-  const reqItems = parseRequirements(reqMd).map(r => ({ ...r, source: 'REQUIREMENTS.md' }));
+  let reqItems = parseRequirements(reqMd).map(r => ({ ...r, source: 'REQUIREMENTS.md' }));
+
+  // Scope the requirements comparison to the phase's mapped REQ-IDs (#447).
+  // A phase that maps no requirements (phase_req_ids null/TBD) must not report
+  // every unrelated project REQ-ID as a gap — mirror §13's skip behavior.
+  // CONTEXT.md decisions (below) are always in scope regardless.
+  if (phaseReqIds === null) {
+    reqItems = [];
+  } else if (Array.isArray(phaseReqIds)) {
+    const wanted = new Set(phaseReqIds);
+    reqItems = reqItems.filter(r => wanted.has(r.id));
+  }
 
   // Read the phase directory once; reuse the listing for both context detection
   // and plan-file enumeration (avoids redundant readdirSync calls).
@@ -191,7 +225,13 @@ function cmdGapAnalysis(cwd, args, raw) {
     error('Usage: gap-analysis --phase-dir <path-to-phase-directory>');
   }
   const phaseDir = args[idx + 1];
-  const result = runGapAnalysis(cwd, phaseDir);
+
+  // Optional --phase-req-ids scopes the requirements comparison (#447).
+  // Absent → compare the whole REQUIREMENTS.md (back-compat).
+  const reqIdx = args.indexOf('--phase-req-ids');
+  const phaseReqIds = reqIdx === -1 ? undefined : (args[reqIdx + 1] ?? '');
+
+  const result = runGapAnalysis(cwd, phaseDir, { phaseReqIds });
   output(result, raw, result.table || result.summary);
 }
 
@@ -200,6 +240,7 @@ module.exports = {
   detectCoverage,
   formatGapTable,
   sortRows,
+  normalizePhaseReqIds,
   runGapAnalysis,
   cmdGapAnalysis,
 };

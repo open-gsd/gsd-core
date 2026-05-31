@@ -1627,7 +1627,8 @@ one place before execution begins.
 ```bash
 POST_PLANNING_GAPS=$(gsd_run query config-get workflow.post_planning_gaps --default true 2>/dev/null || echo true)
 if [ "$POST_PLANNING_GAPS" = "true" ]; then
-  node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" gap-analysis --phase-dir "${PHASE_DIR}"
+  # Scope to this phase's mapped REQ-IDs (#447); null/TBD skips the requirements comparison (CONTEXT.md decisions still reported), mirroring §13.
+  node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" gap-analysis --phase-dir "${PHASE_DIR}" --phase-req-ids "$(node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" query roadmap.get-phase "$PHASE" --pick phase_req_ids 2>/dev/null || echo TBD)"
 fi
 ```
 
