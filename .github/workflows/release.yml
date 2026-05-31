@@ -328,36 +328,6 @@ jobs:
       - name: Dry-run publish validation
         run: npm publish --dry-run
 
-      - name: Create PR to merge release back to main
-        if: ${{ !inputs.dry_run }}
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BRANCH: ${{ needs.validate-version.outputs.branch }}
-          VERSION: ${{ inputs.version }}
-        run: |
-          # Non-fatal: repos that disable "Allow GitHub Actions to create and
-          # approve pull requests" cause this step to fail with GraphQL 403.
-          # The release itself (tag + npm publish + GitHub Release) must still
-          # proceed. Open the merge-back PR manually afterwards with:
-          #   gh pr create --base main --head release/${VERSION} \
-          #     --title "chore: merge release v${VERSION} to main"
-          EXISTING_PR=$(gh pr list --base main --head "$BRANCH" --state open --json number --jq '.[0].number' 2>/dev/null || echo "")
-          if [ -n "$EXISTING_PR" ]; then
-            echo "PR #$EXISTING_PR already exists; updating"
-            gh pr edit "$EXISTING_PR" \
-              --title "chore: merge release v${VERSION} to main" \
-              --body "Merge release branch back to main after v${VERSION} stable release." \
-              || echo "::warning::Could not update merge-back PR (likely PR-creation policy disabled). Open it manually after release."
-          else
-            gh pr create \
-              --base main \
-              --head "$BRANCH" \
-              --title "chore: merge release v${VERSION} to main" \
-              --body "Merge release branch back to main after v${VERSION} stable release." \
-              || echo "::warning::Could not create merge-back PR (likely PR-creation policy disabled). Open it manually after release."
-          fi
-
       - name: Tag and push
         if: ${{ !inputs.dry_run }}
         env:
@@ -392,6 +362,22 @@ jobs:
             --title "v${VERSION}" \
             --generate-notes \
             --latest
+
+      - name: Promote main to released commit
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_MAIN_PAT }}
+          VERSION: ${{ inputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          # main is the automation-only "latest stable release" pointer: pushes
+          # are restricted to the release identity and force-push is enabled, so
+          # this promotes main to the released, tagged commit. Force is required
+          # because main diverges from each release branch's version-bump commit.
+          # Runs only after npm publish + GitHub Release succeed, so main never
+          # moves to a half-released commit.
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "HEAD:main" --force
+          echo "✓ main promoted to v${VERSION} ($(git rev-parse --short HEAD))"
 
       - name: Clean up next dist-tag
         if: ${{ !inputs.dry_run }}
@@ -430,6 +416,6 @@ jobs:
           else
             echo "- Published to npm as \`latest\`" >> "$GITHUB_STEP_SUMMARY"
             echo "- Tagged \`v${VERSION}\`" >> "$GITHUB_STEP_SUMMARY"
-            echo "- PR created to merge back to main" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Promoted \`main\` to v${VERSION}" >> "$GITHUB_STEP_SUMMARY"
             echo "- Install: \`npx @opengsd/gsd-core@latest\`" >> "$GITHUB_STEP_SUMMARY"
           fi
