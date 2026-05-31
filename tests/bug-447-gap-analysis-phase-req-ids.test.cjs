@@ -161,4 +161,49 @@ describe('gap-analysis --phase-req-ids scoping (#447)', () => {
     assert.deepStrictEqual(reqRows(out).sort(), ['REQ-01', 'REQ-02'],
       'with no --phase-req-ids, all requirements are still reported (back-compat)');
   });
+
+  // ── §13e wiring: init.plan-phase --pick phase_req_ids → gap-analysis ─────────
+  // Guards the exact query the workflow uses. `roadmap.get-phase` returns raw
+  // phase TEXT (not JSON), so --pick yields nothing there; the scoping value
+  // must come from `init.plan-phase`. This test would have caught using the
+  // wrong query (which silently skips requirements for every phase).
+
+  function writeRoadmap(reqLine) {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap\n\n## Phase 1: Test Phase\n**Goal:** Do the thing\n${reqLine}**Success Criteria:**\n- It works\n`);
+  }
+
+  test('init.plan-phase --pick phase_req_ids exposes the mapped IDs, and gap-analysis scopes to them', () => {
+    writeRoadmap('**Requirements:** REQ-01, REQ-02\n');
+    writeRequirements(['REQ-01', 'REQ-02', 'REQ-03']);
+    writePlan('01', '# Plan\n\nImplements the first requirement only.\n');
+
+    const q = runGsdTools(['query', 'init.plan-phase', '1', '--pick', 'phase_req_ids'], tmpDir);
+    assert.ok(q.success, `init.plan-phase query failed: ${q.error}`);
+    const ids = q.output.trim();
+    assert.match(ids, /REQ-01/, 'init.plan-phase must expose phase_req_ids (roadmap.get-phase does NOT)');
+
+    const r = runGsdTools(['gap-analysis', '--phase-dir', phaseDir, '--phase-req-ids', ids], tmpDir);
+    assert.ok(r.success, r.error);
+    const out = JSON.parse(r.output);
+    assert.deepStrictEqual(reqRows(out).sort(), ['REQ-01', 'REQ-02'],
+      'gap report is scoped to the phase-mapped IDs; REQ-03 (another phase) is excluded');
+  });
+
+  test('phase with no Requirements line → init.plan-phase yields empty → gap-analysis skips requirements', () => {
+    writeRoadmap(''); // no **Requirements:** line
+    writeRequirements(['REQ-01', 'REQ-02']);
+    writePlan('01', '# Plan\n\nStandalone phase.\n');
+
+    const q = runGsdTools(['query', 'init.plan-phase', '1', '--pick', 'phase_req_ids'], tmpDir);
+    assert.ok(q.success, q.error);
+    const ids = q.output.trim(); // expected empty
+
+    // The workflow passes the (possibly empty) value through verbatim.
+    const r = runGsdTools(['gap-analysis', '--phase-dir', phaseDir, '--phase-req-ids', ids], tmpDir);
+    assert.ok(r.success, r.error);
+    const out = JSON.parse(r.output);
+    assert.deepStrictEqual(reqRows(out), [],
+      'an unmapped phase reports no requirement gaps (the original #447 bug)');
+  });
 });
