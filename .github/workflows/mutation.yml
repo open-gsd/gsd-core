@@ -14,9 +14,9 @@ on:
     paths:
       # Only run when lib source or property tests change
       - 'get-shit-done/bin/lib/**/*.cjs'
-      # ADR-457: migrated lib modules now author logic in src/*.cts (compiled to the
+      # ADR-457: migrated lib modules now author logic in src/ (compiled to the
       # .cjs above), so a source-only edit must still trigger mutation testing.
-      - 'src/**/*.cts'
+      - 'src/**'
       - 'tests/**/*.property.test.cjs'
       - 'stryker.config.mjs'
   workflow_dispatch:
@@ -64,7 +64,10 @@ jobs:
           # bin/lib/*.cjs above (gitignored, so never in the diff). Map each changed
           # source to its built artifact path — that on-disk .cjs is what Stryker
           # mutates after `npm ci` runs `prepare`/build:lib.
-          CHANGED_SRC=$(git diff --name-only "${BASE_REF}...HEAD" -- 'src/**/*.cts' \
+          # Pathspec 'src/' (not 'src/**/*.cts') — git's default glob does not match
+          # a top-level src/*.cts file; filter to .cts after the dir-scoped diff.
+          CHANGED_SRC=$(git diff --name-only "${BASE_REF}...HEAD" -- 'src/' \
+            | grep -E '\.cts$' \
             | sed -E 's#^src/(.*)\.cts$#get-shit-done/bin/lib/\1.cjs#' || true)
           # Merge both sources, then apply the test/excluded-module filters once.
           CHANGED=$(printf '%s\n%s\n' "$CHANGED_CJS" "$CHANGED_SRC" \
