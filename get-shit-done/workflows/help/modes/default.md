@@ -3,7 +3,7 @@ One-page newcomer-oriented tour of GSD Core. Output ONLY the `<reference>` conte
 </purpose>
 
 <reference>
-# GSD Core — Git Ship. Done.
+# GSD Core — Git. Ship. Done.
 
 Plan-driven development for solo agentic work with Claude Code. GSD Core turns a vague idea into a hierarchical plan, then executes it phase by phase with state tracking and atomic commits.
 

@@ -1,33 +1,8 @@
-> # Project Continuity Notice
->
-> GSD Core is maintained by the **open-gsd** team at:
-> **`open-gsd/gsd-core`**
->
-> Use only these package names:
->
-> - npm (main): `@opengsd/gsd-core`
-> - npm (sdk): `@opengsd/gsd-sdk`
->
-> The legacy upstream is outside open-gsd control. Based on public transition announcements and repository ownership reality, we strongly recommend removing legacy packages and migrating to `@opengsd/*`.
->
-> Security status:
->
-> - maintainers completed an internal security audit
-> - maintainers report an independent review pass
-> - no known active exploit was found in tracked source during those passes
->
-> See:
->
-> - continuity announcement: https://github.com/open-gsd/gsd-core/discussions/109
-> - audit transparency report: https://github.com/open-gsd/gsd-core/discussions/119
->
-> ---
-
 <div align="center">
 
 # GSD Core
 
-**Git Ship. Done.**
+**Git. Ship. Done.**
 
 **English** · [Português](README.pt-BR.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja-JP.md) · [한국어](README.ko-KR.md)
 
@@ -74,18 +49,6 @@ npx @opengsd/gsd-core@latest
 > **Returning to GSD Core?**
 >
 > Run `/gsd-map-codebase` to re-index your codebase, then `/gsd-new-project` to rebuild GSD's planning context. Your code is fine — GSD just needs its context rebuilt. See the [CHANGELOG](CHANGELOG.md) for what's new.
-
----
-
-## Why We Continue Building GSD Core
-
-GSD Core exists to help solo builders and small teams ship reliably with AI: clear specs, controlled context, and verification before release.
-
-In May 2026, maintainers published a continuity announcement and migrated active development to `open-gsd/gsd-core` after trust and ownership concerns around the former upstream, including a meme-coin rug-pull incident publicly associated with that ecosystem.
-
-The former creator and legacy lineage are no longer part of this program. This repository is the maintained continuation under open-gsd governance.
-
-The current team continues release operations, triage, and security hardening in public. Audit status and follow-up security work are documented in Discussion #119 and linked issues.
 
 ---
 
