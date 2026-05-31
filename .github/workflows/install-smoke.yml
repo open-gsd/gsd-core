@@ -22,6 +22,8 @@ on:
       - 'bin/install.js'
       - 'get-shit-done/bin/gsd-tools.cjs'
       - 'get-shit-done/bin/**'
+      - 'src/**'
+      - 'tsconfig.build.json'
       - 'package.json'
       - 'package-lock.json'
       - 'scripts/release-tarball-smoke.cjs'

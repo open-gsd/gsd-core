@@ -20,11 +20,32 @@
 // See docs/TESTING-SUITES.md for full grouping policy.
 'use strict';
 
-const { readdirSync } = require('fs');
+const { readdirSync, existsSync } = require('fs');
 const { join } = require('path');
 const { execFileSync } = require('child_process');
 
 const SUITES = ['all', 'unit', 'integration', 'install', 'security', 'slow'];
+
+// ADR-457 build-at-publish: get-shit-done/bin/lib/*.cjs is generated from
+// src/*.cts and gitignored, so on a clean checkout (fresh CI, before any build)
+// the artifact is absent — yet test files require it. This is the universal
+// chokepoint every test path funnels through (test:unit, --files-from, direct
+// invocation), so build the artifact here if missing. It is a no-op once built
+// (dev, pretest, a prior run in the same job), which keeps the harness test's
+// spawned invocations side-effect-free. Paths resolve from __dirname (not cwd),
+// so it works regardless of GSD_TEST_DIR / temp-dir cwd. NOTE: the sentinel is
+// the pilot module; revisit (or switch to an unconditional quiet build) as more
+// modules migrate into src/.
+function ensureBuiltArtifacts() {
+  const root = join(__dirname, '..');
+  const sentinel = join(root, 'get-shit-done', 'bin', 'lib', 'semver-compare.cjs');
+  if (existsSync(sentinel)) return;
+  const tscBin = require.resolve('typescript/bin/tsc');
+  execFileSync(process.execPath, [tscBin, '-p', join(root, 'tsconfig.build.json')], {
+    cwd: root,
+    stdio: 'inherit',
+  });
+}
 const MARKED_SUITES = ['integration', 'install', 'security', 'slow'];
 
 function parseArgs(argv) {
@@ -202,6 +223,9 @@ function main() {
     console.error(`run-tests: no tests in suite "${suite || 'all'}"`);
     process.exit(0);
   }
+
+  // Build the gitignored bin/lib artifact if absent, before any test requires it.
+  ensureBuiltArtifacts();
 
   // Log selected files to stderr for CI / harness-test visibility.
   // node:test default reporter doesn't echo filenames, so this gives

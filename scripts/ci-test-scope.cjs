@@ -43,6 +43,16 @@ const RULES = [
     ],
   },
   {
+    name: 'TS runtime sources (ADR-457 build-at-publish)',
+    // src/*.cts compiles into get-shit-done/bin/lib/*.cjs; a source-only edit must
+    // still trigger the migrated module's tests (otherwise CI silently skips them).
+    match: path => path.startsWith('src/') || path === 'tsconfig.build.json',
+    tests: [
+      'tests/semver-compare.test.cjs',
+      'tests/bug-10-semver-policy-consolidation.test.cjs',
+    ],
+  },
+  {
     name: 'installer and package layout',
     match: path => path.startsWith('bin/') ||
       path.startsWith('get-shit-done/bin/') ||

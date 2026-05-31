@@ -51,8 +51,28 @@ export default tseslint.config(
       '.claude/**',
       'coverage/**',
       '**/*.generated.cjs',
+      // ADR-457: tsc-generated runtime artifact — lint the src/*.cts source, not the emitted .cjs.
+      'get-shit-done/bin/lib/semver-compare.cjs',
       ...GENERATED_CJS_IGNORES,
     ],
+  },
+
+  // ── src/**/*.cts — TypeScript runtime sources (ADR-457 build-at-publish) ─────
+  // First-class type-aware linting on the migrated source. The TS compiler
+  // (`npm run build:lib`, strict + noEmitOnError) is the primary type gate;
+  // these rules add lint-level coverage. warn-first per the harness convention.
+  {
+    files: ['src/**/*.cts'],
+    extends: [tseslint.configs.recommendedTypeChecked],
+    languageOptions: {
+      parserOptions: {
+        project: './tsconfig.build.json',
+        tsconfigRootDir: __dirname,
+      },
+    },
+    rules: {
+      '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+    },
   },
 
   // ── get-shit-done/bin/**/*.cjs + scripts/**/*.cjs ───────────────────────────
