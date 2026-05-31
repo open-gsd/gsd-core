@@ -58,10 +58,20 @@ jobs:
         id: changed
         run: |
           BASE_REF="origin/${{ github.base_ref }}"
-          # Find changed non-test, non-generated .cjs files in bin/lib
-          CHANGED=$(git diff --name-only "${BASE_REF}...HEAD" -- 'get-shit-done/bin/lib/**/*.cjs' \
+          # Changed hand-written .cjs in bin/lib.
+          CHANGED_CJS=$(git diff --name-only "${BASE_REF}...HEAD" -- 'get-shit-done/bin/lib/**/*.cjs' || true)
+          # ADR-457: migrated modules author logic in src/*.cts and compile to the
+          # bin/lib/*.cjs above (gitignored, so never in the diff). Map each changed
+          # source to its built artifact path — that on-disk .cjs is what Stryker
+          # mutates after `npm ci` runs `prepare`/build:lib.
+          CHANGED_SRC=$(git diff --name-only "${BASE_REF}...HEAD" -- 'src/**/*.cts' \
+            | sed -E 's#^src/(.*)\.cts$#get-shit-done/bin/lib/\1.cjs#' || true)
+          # Merge both sources, then apply the test/excluded-module filters once.
+          CHANGED=$(printf '%s\n%s\n' "$CHANGED_CJS" "$CHANGED_SRC" \
+            | grep -v '^$' \
             | grep -v '\.test\.cjs$' \
             | grep -v -E '/(configuration|command-aliases|commands|core|install-profiles|installer-migrations|phase|profile-output|state|verify|init|audit|gsd2-import)\.cjs$' \
+            | sort -u \
             || true)
           if [ -z "$CHANGED" ]; then
             echo "changed=" >> "$GITHUB_OUTPUT"
