@@ -22,22 +22,6 @@ const localPlugin = {
   },
 };
 
-// Generated bin/lib files — never lint
-const GENERATED_CJS_IGNORES = [
-  'get-shit-done/bin/lib/command-aliases.cjs',
-  'get-shit-done/bin/lib/configuration.cjs',
-  'get-shit-done/bin/lib/decisions.cjs',
-  'get-shit-done/bin/lib/phase-lifecycle.cjs',
-  'get-shit-done/bin/lib/plan-scan.cjs',
-  'get-shit-done/bin/lib/project-root.cjs',
-  'get-shit-done/bin/lib/schema-detect.cjs',
-  'get-shit-done/bin/lib/secrets.cjs',
-  'get-shit-done/bin/lib/state-document.cjs',
-  'get-shit-done/bin/lib/validate.cjs',
-  'get-shit-done/bin/lib/workstream-inventory-builder.cjs',
-  'get-shit-done/bin/lib/workstream-name-policy.cjs',
-];
-
 const sdkSrcExists = existsSync(join(__dirname, 'sdk', 'src'));
 
 export default tseslint.config(
@@ -53,7 +37,6 @@ export default tseslint.config(
       '**/*.generated.cjs',
       // ADR-457: tsc-generated runtime artifact — lint the src/*.cts source, not the emitted .cjs.
       'get-shit-done/bin/lib/semver-compare.cjs',
-      ...GENERATED_CJS_IGNORES,
     ],
   },
 
@@ -77,7 +60,6 @@ export default tseslint.config(
 
   // ── get-shit-done/bin/**/*.cjs + scripts/**/*.cjs ───────────────────────────
   // CommonJS Node files: js.recommended + eslint-plugin-n + local plugin rules
-  // Type-aware via parserOptions.project=tsconfig.lint.json where applicable
   {
     files: ['get-shit-done/bin/**/*.cjs', 'scripts/**/*.cjs'],
     plugins: {
