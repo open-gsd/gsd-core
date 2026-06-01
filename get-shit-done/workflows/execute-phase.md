@@ -1406,11 +1406,11 @@ grep "^status:" "$PHASE_DIR"/*-VERIFICATION.md | cut -d: -f2 | tr -d ' '
 
 **Step A: Persist human verification items as UAT file.**
 
-Create `{phase_dir}/{phase_num}-HUMAN-UAT.md` using UAT template format:
+Create `{phase_dir}/{phase_num}-UAT.md` using UAT template format:
 
 ```markdown
 ---
-status: partial
+status: testing
 phase: {phase_num}-{phase_name}
 source: [{phase_num}-VERIFICATION.md]
 started: [now ISO]
@@ -1419,7 +1419,9 @@ updated: [now ISO]
 
 ## Current Test
 
-[awaiting human testing]
+### 1. {first human_verification item description}
+expected: {expected behavior from VERIFICATION.md}
+result: [pending]
 
 ## Tests
 
@@ -1443,26 +1445,32 @@ blocked: 0
 
 Commit the file:
 ```bash
-gsd_run query commit "test({phase_num}): persist human verification items as UAT" --files "{phase_dir}/{phase_num}-HUMAN-UAT.md"
+gsd_run query commit "test({phase_num}): persist human verification items as UAT" --files "{phase_dir}/{phase_num}-UAT.md"
 ```
 
 **Step B: Present to user:**
 
 ```
-## ✓ Phase {X}: {Name} — Human Verification Required
+## ◷ Phase {X}: {Name} — Human Verification Needed
 
-All automated checks passed. {N} items need human testing:
+All automated checks passed. {N} item(s) require human testing before this phase can be marked complete:
 
 {From VERIFICATION.md human_verification section}
 
-Items saved to `{phase_num}-HUMAN-UAT.md` — they will appear in `/gsd:progress` and `/gsd:audit-uat`.
+Tests saved to `{phase_num}-UAT.md`.
 
-"approved" → continue | Report issues → gap closure
+When ready to run the tests:
+
+`/gsd:verify-work {X} ${GSD_WS}`
+
+Verify-work will walk you through each item and mark the phase complete when all tests pass.
 ```
 
-**If user says "approved":** Proceed to `update_roadmap`. The HUMAN-UAT.md file persists with `status: partial` and will surface in future progress checks until the user runs `/gsd:verify-work` on it.
+**Do NOT advance the phase from this branch.** Phase completion is handled by verify-work's auto-transition after UAT passes.
 
-**If user reports issues:** Proceed to gap closure as currently implemented.
+**If user acknowledges without reporting issues (e.g. "ok", "noted", "ack", "got it"):** Stop. The phase remains pending. No further orchestrator action — wait for the user to run `/gsd:verify-work`.
+
+**If user reports issues now (before running verify-work):** Proceed to gap closure as currently implemented.
 
 **If gaps_found:**
 ```
