@@ -55,6 +55,7 @@ const ALLOWLIST = new Set([
   'get-shit-done/workflows/new-project.md',     // Large workflow (~50K) — agent install, runtime detect, brownfield map, #3491 worktree gating
   'get-shit-done/workflows/execute-phase.md',  // Large orchestration workflow (~51K) with wave execution + code-review gate
   'get-shit-done/workflows/plan-phase.md',      // Large orchestration workflow (~51K) with TDD mode integration
+  'get-shit-done/workflows/docs-update.md',   // Large orchestration workflow (~51K) — multi-wave doc generation, fix loop + truncation guard (#571)
   'hooks/gsd-prompt-guard.js',                  // The prompt guard hook
   'hooks/gsd-read-injection-scanner.js',        // The read injection scanner (contains patterns)
   'tests/security.test.cjs',                    // Security tests

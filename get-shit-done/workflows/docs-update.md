@@ -902,7 +902,10 @@ Correct flagged inaccuracies by re-sending failing docs to the doc-writer in fix
 **For each iteration (while iteration < MAX_FIX_ITERATIONS and there are docs with failures):**
 
 1. For each doc with `claims_failed > 0` in the latest verification_results:
-   a. Read the current file content from disk.
+   a. Read the current file content from disk. Record the pre-fix line count:
+      ```bash
+      PRE_FIX_LINES=$(wc -l < {doc_path} 2>/dev/null || echo 0)
+      ```
    b. Spawn `gsd-doc-writer` agent (or invoke sequentially) with a fix assignment:
       ```xml
       <doc_assignment>
@@ -919,6 +922,15 @@ Correct flagged inaccuracies by re-sending failing docs to the doc-writer in fix
       </doc_assignment>
       ```
    c. One agent spawn per doc with failures. Do not batch multiple docs into one spawn.
+   d. **Post-fix truncation guard:** After the fix agent completes, check for file corruption:
+      ```bash
+      POST_FIX_LINES=$(wc -l < {doc_path} 2>/dev/null || echo 0)
+      ```
+      If `POST_FIX_LINES` is less than 10% of `PRE_FIX_LINES` (i.e. the file shrank by more than 90%), the fix agent corrupted the file via a full-file Write. Restore it immediately:
+      - Write the `existing_content` captured in step 1a back to `{doc_path}` using the Write tool
+      - Log: `WARNING: Fix agent corrupted {doc_path} ({POST_FIX_LINES} lines after fix, was {PRE_FIX_LINES}). Restored from pre-fix content. Failures for this doc require manual correction.`
+      - Mark this doc as `"fix-corrupted"` in the manifest; it will appear in remaining failures at the end
+      - Do NOT count this doc as fixed; do not re-verify it this iteration (it was restored, not corrected)
 
 2. After all fix agents complete, re-verify ALL docs (not just the ones that were fixed):
    - Re-run the same verification process as verify_docs step.
