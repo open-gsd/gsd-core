@@ -16,6 +16,8 @@ const {
   projectPersistentPathExportActions,
   projectShellCommandText,
   projectCodexHookTomlCommand,
+  shellHookOmitsBashRunner,
+  buildLocalShellHookCommand,
 } = require('../get-shit-done/bin/lib/shell-command-projection.cjs');
 
 // Bidirectional GSD slash-command namespace transformer (#3583).
@@ -1217,7 +1219,7 @@ function buildHookCommand(configDir, hookName, opts) {
   // Windows, so wrapping `.sh` hooks with an explicit `bash.exe` path can
   // trigger `bash.exe: ... cannot execute binary file`. Emit only the quoted
   // script path for Claude on Windows.
-  if (platform === 'win32' && runtime === 'claude' && isShellHook) {
+  if (shellHookOmitsBashRunner({ platform, runtime, isShellHook })) {
     if (opts.portableHooks) {
       const portableBaseDir = projectPortableHookBaseDir({
         configDir,
@@ -9699,14 +9701,13 @@ function install(isGlobal, runtime = 'claude', options = {}) {
       runtime,
       platform: process.platform,
     });
-  const localShellCmd = (hookFile) => localBashRunner === null
-    ? null
-    : projectShellCommandText({
-      runnerToken: localBashRunner,
-      argTokens: [`${localPrefix}/hooks/${hookFile}`],
-      runtime,
-      platform: process.platform,
-    });
+  const localShellCmd = (hookFile) => buildLocalShellHookCommand({
+    localPrefix,
+    hookFile,
+    bashRunner: localBashRunner,
+    runtime,
+    platform: process.platform,
+  });
   const statuslineCommand = isGlobal
     ? buildHookCommand(targetDir, 'gsd-statusline.js', hookOpts)
     : localCmd('gsd-statusline.js');

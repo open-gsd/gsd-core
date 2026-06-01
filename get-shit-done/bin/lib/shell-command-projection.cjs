@@ -41,6 +41,39 @@ function formatHookCommandForRuntime(command, opts = {}) {
   return hookCommandNeedsPowerShellCallOperator(opts) ? `& ${command}` : command;
 }
 
+// #166/#580: Claude Code on Windows executes hook command strings inside Git
+// Bash. A `.sh` hook wrapped with an explicit bash.exe path makes bash try to
+// exec bash itself ("C:/.../bash.exe: cannot execute binary file"). Both install
+// paths — global (buildHookCommand) and local (buildLocalShellHookCommand) — must
+// drop the bash runner in this case and emit only the anchored script path.
+// Centralized here so the two paths cannot silently drift apart again: the local
+// path missed this guard and reintroduced the #166/#377 failure (#580).
+function shellHookOmitsBashRunner({ platform = process.platform, runtime = 'generic', isShellHook = false } = {}) {
+  return platform === 'win32' && runtime === 'claude' && isShellHook;
+}
+
+// Builds the command string for a local-install managed `.sh` hook. Mirrors the
+// global buildHookCommand path but uses the $CLAUDE_PROJECT_DIR-anchored prefix
+// instead of an absolute configDir. On Claude/Windows the bash runner is dropped
+// (see shellHookOmitsBashRunner) and the anchored script path is emitted alone —
+// matching the global path. Elsewhere the resolved bash runner is required; a
+// null runner yields null so callers skip registration instead of emitting a
+// broken hook (#3393).
+function buildLocalShellHookCommand({ localPrefix, hookFile, bashRunner, runtime = 'generic', platform = process.platform }) {
+  if (!localPrefix || !hookFile) return null;
+  const scriptPath = `${localPrefix}/hooks/${hookFile}`;
+  if (shellHookOmitsBashRunner({ platform, runtime, isShellHook: true })) {
+    return formatHookCommandForRuntime(scriptPath, { platform, runtime });
+  }
+  if (!bashRunner) return null;
+  return projectShellCommandText({
+    runnerToken: bashRunner,
+    argTokens: [scriptPath],
+    runtime,
+    platform,
+  });
+}
+
 /**
  * Project a managed hook script path token for serialized shell commands.
  * Windows managed hook commands normalize to forward slashes so the same path
@@ -476,6 +509,8 @@ function platformEnsureDir(dirPath) {
 module.exports = {
   hookCommandNeedsPowerShellCallOperator,
   formatHookCommandForRuntime,
+  shellHookOmitsBashRunner,
+  buildLocalShellHookCommand,
   formatManagedHookScriptToken,
   projectLocalHookPrefix,
   projectPortableHookBaseDir,
