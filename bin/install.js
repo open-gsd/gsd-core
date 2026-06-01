@@ -2812,6 +2812,9 @@ function convertClaudeToCodexMarkdown(content) {
   converted = converted.replace(/\$HOME\/\.claude\//g, '$HOME/.codex/');
   converted = converted.replace(/~\/\.claude\//g, '~/.codex/');
   converted = converted.replace(/\.\/\.claude\//g, './.codex/');
+  // Bare ~/.claude without trailing slash (e.g. configDir = ~/.claude)
+  converted = converted.replace(/\$HOME\/\.claude\b/g, '$HOME/.codex');
+  converted = converted.replace(/~\/\.claude\b/g, '~/.codex');
   // Bare/project-relative .claude/... references (#2639). Covers strings like
   // "check `.claude/skills/`" where there is no ~/, $HOME/, or ./ anchor.
   // Negative lookbehind prevents double-replacing already-anchored forms and
@@ -7853,7 +7856,7 @@ function writeManifest(configDir, runtime = 'claude', options = {}) {
   }
   if (fs.existsSync(agentsDir)) {
     for (const file of fs.readdirSync(agentsDir)) {
-      if (file.startsWith('gsd-') && file.endsWith('.md')) {
+      if (file.startsWith('gsd-') && (file.endsWith('.md') || file.endsWith('.toml'))) {
         manifest.files['agents/' + file] = fileHash(path.join(agentsDir, file));
       }
     }
@@ -9104,42 +9107,48 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   // Report any backed-up local patches
   reportLocalPatches(targetDir, runtime);
 
-  // Verify no leaked .claude paths in non-Claude runtimes
+  // Verify no leaked .claude paths in non-Claude runtimes (manifest-scoped)
   if (runtime !== 'claude') {
     const leakedPaths = [];
-    function scanForLeakedPaths(dir) {
-      if (!fs.existsSync(dir)) return;
-      let entries;
-      try {
-        entries = fs.readdirSync(dir, { withFileTypes: true });
-      } catch (err) {
-        if (err.code === 'EPERM' || err.code === 'EACCES') {
-          return; // skip inaccessible directories
+    // Only scan files that were written by this install (manifest-tracked).
+    // Scanning the entire targetDir can match user-authored content that
+    // legitimately references ~/.claude (e.g. personal notes), producing
+    // false-positive warnings. Restricting to the manifest avoids that.
+    let manifestFiles = null;
+    try {
+      const manifestPath = path.join(targetDir, MANIFEST_NAME);
+      if (fs.existsSync(manifestPath)) {
+        const manifestData = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+        if (manifestData && typeof manifestData.files === 'object') {
+          manifestFiles = Object.keys(manifestData.files);
         }
-        throw err;
       }
-      for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          scanForLeakedPaths(fullPath);
-        } else if ((entry.name.endsWith('.md') || entry.name.endsWith('.toml')) && entry.name !== 'CHANGELOG.md') {
-          let content;
-          try {
-            content = fs.readFileSync(fullPath, 'utf8');
-          } catch (err) {
-            if (err.code === 'EPERM' || err.code === 'EACCES') {
-              continue; // skip inaccessible files
-            }
-            throw err;
+    } catch (_manifestParseErr) {
+      // If we cannot read/parse the manifest, skip the scan entirely to
+      // avoid false positives rather than falling back to a full directory walk.
+      manifestFiles = null;
+    }
+    if (manifestFiles !== null) {
+      for (const relPath of manifestFiles) {
+        const fileName = path.basename(relPath);
+        if (!(fileName.endsWith('.md') || fileName.endsWith('.toml'))) continue;
+        if (fileName === 'CHANGELOG.md') continue;
+        const fullPath = path.join(targetDir, relPath);
+        let content;
+        try {
+          content = fs.readFileSync(fullPath, 'utf8');
+        } catch (err) {
+          if (err.code === 'EPERM' || err.code === 'EACCES' || err.code === 'ENOENT') {
+            continue; // skip inaccessible or missing files
           }
-          const matches = content.match(/(?:~|\$HOME)\/\.claude\b/g);
-          if (matches) {
-            leakedPaths.push({ file: fullPath.replace(targetDir + '/', ''), count: matches.length });
-          }
+          throw err;
+        }
+        const matches = content.match(/(?:~|\$HOME)\/\.claude\b/g);
+        if (matches) {
+          leakedPaths.push({ file: relPath, count: matches.length });
         }
       }
     }
-    scanForLeakedPaths(targetDir);
     if (leakedPaths.length > 0) {
       const totalLeaks = leakedPaths.reduce((sum, l) => sum + l.count, 0);
       console.warn(`\n  ${yellow}⚠${reset}  Found ${totalLeaks} unreplaced .claude path reference(s) in ${leakedPaths.length} file(s):`);
@@ -9343,6 +9352,10 @@ function install(isGlobal, runtime = 'claude', options = {}) {
       }
       console.log(`  ${green}✓${reset} Generated config.toml with ${agentCount} agent roles`);
       console.log(`  ${green}✓${reset} Generated ${agentCount} agent .toml config files`);
+      // Re-write the manifest now that .toml agent files exist on disk.
+      // The initial writeManifest call (before Codex config generation) could
+      // not include agents/gsd-*.toml because those files did not yet exist.
+      writeManifest(targetDir, runtime, { mode: _effectiveInstallMode });
     } else {
       console.log(`  ${dim}↳${reset} Skipping Codex agent config generation (minimal install)`);
     }
