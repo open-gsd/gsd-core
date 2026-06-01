@@ -39,3 +39,17 @@ Every PR must link an approved or confirmed issue with `Closes #123`, `Fixes #12
 ## Security & Configuration Tips
 
 Do not commit secrets, local config, or generated worktree artifacts. Before release-facing changes, run the relevant scan scripts in `scripts/`, especially `secret-scan.sh`, `base64-scan.sh`, and `prompt-injection-scan.sh`.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues at `open-gsd/gsd-core` (via the `gh` CLI, always with `--repo open-gsd/gsd-core`). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Five canonical triage roles mapped to this repo's labels — `needs-info`→`needs-reproduction`, `ready-for-agent`→`confirmed`, `ready-for-human`→`approved-enhancement`/`approved-feature`, others default. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context — `CONTEXT.md` (domain glossary + recurring PR rules) and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
