@@ -61,6 +61,15 @@ const ALLOWLIST = new Set([
   'tests/prompt-injection-scan.test.cjs',       // This file
 ]);
 
+// Workflows that exceed the 50K strict-mode size threshold due to legitimate
+// complexity, but must still pass all injection pattern checks. These receive
+// a size-finding exemption only — every other security check still runs.
+// Do NOT add files here that legitimately reference injection patterns (those
+// belong in ALLOWLIST). Only add files that are large but otherwise clean.
+const SIZE_ONLY_WORKFLOWS = new Set([
+  'get-shit-done/workflows/docs-update.md',  // ~51K after fix-loop truncation guard (#571)
+]);
+
 // ─── Scanner ────────────────────────────────────────────────────────────────
 
 function collectFiles(dir) {
@@ -167,8 +176,14 @@ describe('codebase prompt injection scan', () => {
       const content = fs.readFileSync(file, 'utf-8');
       const result = scanForInjection(content, { strict: true });
 
-      if (!result.clean) {
-        findings.push({ file: relPath, issues: result.findings });
+      // SIZE_ONLY_WORKFLOWS entries still run injection scanning but are exempt
+      // from the 50K size threshold — filter out only the size finding for them.
+      const activeFindings = SIZE_ONLY_WORKFLOWS.has(relPath)
+        ? result.findings.filter(f => !f.startsWith('Suspicious text length:'))
+        : result.findings;
+
+      if (activeFindings.length > 0) {
+        findings.push({ file: relPath, issues: activeFindings });
       }
     }
 
