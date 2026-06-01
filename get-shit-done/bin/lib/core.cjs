@@ -1569,13 +1569,15 @@ function resolveModelPolicy(policy, tier) {
   // merging config.runtime into the policy object (see step 2.5 in resolveModelInternal).
   const runtime = policy.runtime;
   const rtOverrides = policy.runtime_tiers;
-  if (runtime && rtOverrides && typeof rtOverrides === 'object') {
-    const runtimeEntry = rtOverrides[runtime];
-    if (runtimeEntry && typeof runtimeEntry === 'object') {
-      const raw = runtimeEntry[tier];
-      if (raw != null) {
-        const entry = typeof raw === 'string' ? { model: raw } : raw;
-        if (entry && entry.model) return entry.model;
+  if (runtime && typeof runtime === 'string' && rtOverrides && typeof rtOverrides === 'object') {
+    if (Object.hasOwn(rtOverrides, runtime)) {
+      const runtimeEntry = rtOverrides[runtime];
+      if (runtimeEntry && typeof runtimeEntry === 'object' && Object.hasOwn(runtimeEntry, tier)) {
+        const raw = runtimeEntry[tier];
+        if (raw != null) {
+          const entry = typeof raw === 'string' ? { model: raw } : raw;
+          if (entry && entry.model) return entry.model;
+        }
       }
     }
   }
@@ -1595,14 +1597,19 @@ function resolveModelPolicy(policy, tier) {
     return (v && typeof v === 'string') ? v : null;
   }
 
+  // Object.hasOwn guards prevent __proto__ / constructor key escalation from
+  // user-controlled policy.provider / policy.budget reaching inherited slots.
+  if (!Object.hasOwn(PROVIDER_PRESETS, provider)) return null;
   const presetForProvider = PROVIDER_PRESETS[provider];
-  if (!presetForProvider) return null; // Unknown provider — fall through silently.
+  if (!presetForProvider || typeof presetForProvider !== 'object') return null;
 
+  if (!Object.hasOwn(presetForProvider, tier)) return null;
   const tierPresets = presetForProvider[tier];
-  if (!tierPresets) return null; // Tier not in preset (partial preset catalog entry).
+  if (!tierPresets || typeof tierPresets !== 'object') return null;
 
   // Budget defaults to 'medium' — mirrors the existing 'balanced' default bias.
   const budget = (policy.budget && typeof policy.budget === 'string') ? policy.budget : 'medium';
+  if (!Object.hasOwn(tierPresets, budget)) return null;
   const budgetEntry = tierPresets[budget];
   if (!budgetEntry || !budgetEntry.model) return null; // Missing or null budget slot.
 
@@ -1747,6 +1754,14 @@ function resolveModelForTier(cwd, agentType, attempt) {
   // User-supplied full IDs bypass the entire tier mechanism.
   const override = config.model_overrides?.[agentType];
   if (override) return override;
+
+  // model_policy beats dynamic_routing (#49 Codex adversarial HIGH finding).
+  // Delegate to resolveModelInternal which handles step 2.5 (policy) correctly
+  // and falls through to runtimeTierDefaults on a miss. Gate on non-Claude
+  // runtime to match the same condition in resolveModelInternal step 2.5.
+  if (config.model_policy && config.runtime && config.runtime !== 'claude') {
+    return resolveModelInternal(cwd, agentType);
+  }
 
   const dr = config.dynamic_routing;
   // Disabled / missing / non-object → fall back to the existing resolver.

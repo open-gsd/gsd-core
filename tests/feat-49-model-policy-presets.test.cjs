@@ -63,6 +63,7 @@ const os = require('node:os');
 const {
   resolveModelInternal,
   resolveModelPolicy,
+  resolveModelForTier,
   KNOWN_PROVIDERS,
   _resetRuntimeWarningCacheForTests,
 } = require('../get-shit-done/bin/lib/core.cjs');
@@ -676,5 +677,110 @@ describe('#49 KNOWN_PROVIDERS exports from model-catalog.cjs and core.cjs', () =
     const fromCore = [...KNOWN_PROVIDERS].sort();
     assert.deepStrictEqual(fromCore, fromCatalog,
       'KNOWN_PROVIDERS from core.cjs (re-export) must match model-catalog.cjs canonical export');
+  });
+});
+
+// ─── resolveModelPolicy: Object.hasOwn prototype-pollution guards ────────────
+
+describe('#49 resolveModelPolicy: prototype-pollution guards', () => {
+  test('__proto__ as provider returns null without throwing', () => {
+    assert.strictEqual(resolveModelPolicy({ provider: '__proto__', budget: 'medium' }, 'sonnet'), null);
+  });
+
+  test('constructor as provider returns null without throwing', () => {
+    assert.strictEqual(resolveModelPolicy({ provider: 'constructor', budget: 'medium' }, 'sonnet'), null);
+  });
+
+  test('__proto__ as budget returns null without throwing', () => {
+    assert.strictEqual(resolveModelPolicy({ provider: 'openai', budget: '__proto__' }, 'haiku'), null);
+  });
+
+  test('toString as budget returns null without throwing', () => {
+    assert.strictEqual(resolveModelPolicy({ provider: 'openai', budget: 'toString' }, 'haiku'), null);
+  });
+
+  test('__proto__ as runtime_tiers key returns null without throwing', () => {
+    const policy = {
+      runtime: '__proto__',
+      runtime_tiers: { '__proto__': { haiku: { model: 'evil' } } },
+    };
+    assert.strictEqual(resolveModelPolicy(policy, 'haiku'), null);
+  });
+
+  test('__proto__ as tier inside runtime_tiers returns null without throwing', () => {
+    const policy = {
+      runtime: 'codex',
+      runtime_tiers: { codex: { '__proto__': { model: 'evil' } } },
+    };
+    assert.strictEqual(resolveModelPolicy(policy, '__proto__'), null);
+  });
+
+  test('valid provider+tier+budget still resolves correctly after guards', () => {
+    const result = resolveModelPolicy({ provider: 'openai', budget: 'low' }, 'haiku');
+    assert.ok(typeof result === 'string' && result.length > 0,
+      'valid openai/haiku/low lookup must still resolve after adding hasOwn guards');
+  });
+});
+
+// ─── resolveModelForTier: model_policy beats dynamic_routing ─────────────────
+
+describe('#49 resolveModelForTier: model_policy beats dynamic_routing', () => {
+  let tmpDir;
+  beforeEach(() => { tmpDir = makeTmp('for-tier-'); });
+  afterEach(() => { rmr(tmpDir); });
+
+  test('model_policy wins over dynamic_routing.tier_models when both are set', () => {
+    writeConfig(tmpDir, {
+      runtime: 'codex',
+      model_policy: { provider: 'openai', budget: 'low' },
+      dynamic_routing: {
+        enabled: true,
+        tier_models: { light: 'haiku', standard: 'sonnet', heavy: 'opus' },
+      },
+    });
+    // model_policy fires before dynamic_routing in resolveModelForTier
+    const result = resolveModelForTier(tmpDir, 'gsd-executor', 0);
+    // gsd-executor is standard/sonnet tier; openai+low+sonnet preset model
+    assert.ok(typeof result === 'string' && result.length > 0,
+      'model_policy must return a model string');
+    assert.notStrictEqual(result, 'sonnet',
+      'dynamic_routing tier alias must not win over model_policy');
+  });
+
+  test('model_overrides still beats model_policy in resolveModelForTier', () => {
+    writeConfig(tmpDir, {
+      runtime: 'codex',
+      model_policy: { provider: 'openai', budget: 'high' },
+      dynamic_routing: {
+        enabled: true,
+        tier_models: { light: 'haiku', standard: 'sonnet', heavy: 'opus' },
+      },
+      model_overrides: { 'gsd-planner': 'custom-model-id' },
+    });
+    assert.strictEqual(resolveModelForTier(tmpDir, 'gsd-planner', 0), 'custom-model-id');
+  });
+
+  test('dynamic_routing.tier_models used normally when model_policy absent', () => {
+    writeConfig(tmpDir, {
+      runtime: 'codex',
+      dynamic_routing: {
+        enabled: true,
+        tier_models: { light: 'haiku', standard: 'my-custom-sonnet', heavy: 'opus' },
+      },
+    });
+    assert.strictEqual(resolveModelForTier(tmpDir, 'gsd-executor', 0), 'my-custom-sonnet');
+  });
+
+  test('model_policy with Claude runtime does not interrupt dynamic_routing', () => {
+    // model_policy only gates on non-Claude runtimes; with runtime absent/claude,
+    // dynamic_routing must still work normally.
+    writeConfig(tmpDir, {
+      model_policy: { provider: 'openai', budget: 'low' },
+      dynamic_routing: {
+        enabled: true,
+        tier_models: { light: 'haiku', standard: 'my-sonnet', heavy: 'opus' },
+      },
+    });
+    assert.strictEqual(resolveModelForTier(tmpDir, 'gsd-executor', 0), 'my-sonnet');
   });
 });
