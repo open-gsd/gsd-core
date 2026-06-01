@@ -416,6 +416,35 @@ CROSS_AI_TIMEOUT=$(gsd_run query config-get workflow.cross_ai_timeout 2>/dev/nul
 <step name="execute_waves">
 Execute each selected wave in sequence. Within a wave: parallel if `PARALLELIZATION=true`, sequential if `false`.
 
+**Orchestrator cwd-drift guard (FIRST ACTION at execute_waves entry — #48):**
+
+A prior `Agent(isolation="worktree")` dispatch can silently leave the orchestrator's
+cwd inside an agent worktree (or a subdirectory of one). Every subsequent
+orchestrator-side git call would then target the wrong tree — this is how a wrong-base
+merge nearly shipped ~1000 files. Resolve the *worktree root* (so a subdirectory cwd
+cannot skew the check) and refuse if it is an agent worktree. The discriminator is the
+per-agent branch namespace `worktree-agent-*`, NOT the `.claude/worktrees/` path: the
+orchestrator may itself be legitimately invoked from a feature worktree under
+`.claude/worktrees/`, so a path-substring refusal would break legitimate runs. Do NOT
+pin to `git worktree list`'s first entry — that is the main worktree, the wrong target
+when the orchestrator legitimately runs from a feature worktree.
+
+```bash
+ORCHESTRATOR_WT=$(git rev-parse --show-toplevel 2>/dev/null) || {
+  echo "FATAL: execute_waves entry is not inside a git worktree (#48)." >&2; exit 1; }
+ORCH_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+if printf '%s' "$ORCH_BRANCH" | grep -Eq '^worktree-agent-'; then
+  echo "FATAL: orchestrator cwd is inside an agent worktree (branch '$ORCH_BRANCH', root '$ORCHESTRATOR_WT') — refusing to execute waves (#48). A prior isolation=\"worktree\" dispatch drifted the cwd; re-run from the orchestrator's own worktree." >&2
+  exit 1
+fi
+# Pin to the worktree root; each later orchestrator-side block re-pins the same way
+# (see the #3174 cleanup guard). Treat $ORCHESTRATOR_WT as the canonical root for the
+# rest of the phase — prefer `git -C "$ORCHESTRATOR_WT"` for cross-step git calls,
+# since a bare `cd` does not persist across separate tool invocations.
+export ORCHESTRATOR_WT
+cd "$ORCHESTRATOR_WT" || { echo "FATAL: cannot cd to orchestrator worktree '$ORCHESTRATOR_WT' (#48)." >&2; exit 1; }
+```
+
 **Stream-idle-timeout prevention — checkpoint heartbeats (#2410):**
 
 Multi-plan phases can accumulate enough subagent context that the Claude API
@@ -625,6 +654,8 @@ increases monotonically across waves. `{status}` is `complete` (success),
    ```
 
    Immediately after each worktree `Agent()` spawn returns metadata, atomically append `{agent_id, worktree_path, branch, expected_base}` to `WAVE_WORKTREE_MANIFEST`. If any field is missing, stop and ask for recovery instead of scanning all agent worktrees.
+
+   > **ORCHESTRATOR FAIL-CLOSED RULE (#48):** `worktree_branch_check` is verify-only — an executor that hits a base/HEAD-namespace mismatch prints `FATAL:` and exits **42** instead of self-recovering. If any executor result reports a `FATAL:`/`exit 42` (or its commits never appear because it halted at the check), mark that plan **blocked**: do NOT merge or clean up its worktree (preserve it for inspection), do NOT count the wave as successful, and surface the mismatch with recovery guidance to the user. The orchestrator — the worktree lifecycle owner — performs any base correction (e.g. recreate the worktree on `{EXPECTED_BASE}`); the sub-agent never does. Never proceed past a halted executor on the assumption it succeeded.
 
    > **ORCHESTRATOR RULE — CODEX RUNTIME**: After calling Agent() above to spawn executor agent(s), stop working on this task immediately. Do not read more files, edit code, or run tests related to this task while the subagent is active. Wait for the subagent to return its result. This prevents duplicate work, conflicting edits, and wasted context. Only resume when the subagent result is available.
 

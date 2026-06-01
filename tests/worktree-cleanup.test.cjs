@@ -146,21 +146,14 @@ describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
       );
     });
 
-    test('HEAD-attachment assertion runs BEFORE `git reset --hard`', () => {
+    test('block is verify-only: HEAD assertion present, no git reset, fails closed (#48)', () => {
       const codeBlocks = extractFencedCodeBlocks(block);
       const allStatements = codeBlocks.flatMap(({ body }) => shellStatements(body));
-      const symbolicRefIdx = findCommandIndex(allStatements, (cmd) =>
-        cmd[0] === 'git' && cmd[1] === 'symbolic-ref' && cmd.includes('HEAD')
-      );
-      const resetHardIdx = findCommandIndex(allStatements, (cmd) =>
-        cmd[0] === 'git' && cmd[1] === 'reset' && cmd.includes('--hard')
-      );
-      assert.notStrictEqual(symbolicRefIdx, -1, 'symbolic-ref check must exist');
-      assert.notStrictEqual(resetHardIdx, -1, 'reset --hard must exist');
-      assert.ok(
-        symbolicRefIdx < resetHardIdx,
-        'HEAD attachment assertion (symbolic-ref) must precede `git reset --hard` so a stale HEAD never moves a protected branch'
-      );
+      const symbolicRefIdx = findCommandIndex(allStatements, (cmd) => cmd[0] === 'git' && cmd[1] === 'symbolic-ref' && cmd.includes('HEAD'));
+      const resetIdx = findCommandIndex(allStatements, (cmd) => cmd[0] === 'git' && cmd[1] === 'reset');
+      assert.notStrictEqual(symbolicRefIdx, -1, 'symbolic-ref HEAD-attachment check must exist');
+      assert.strictEqual(resetIdx, -1, 'fragment must be verify-only — no git reset self-recovery (#48)');
+      assert.ok(/exit 42/.test(block), 'fragment must fail closed with exit 42 (#48)');
     });
 
     test('block names protected branches that must NOT be the agent branch', () => {
@@ -306,23 +299,19 @@ describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
       );
     });
 
-    test('HEAD assertion precedes `git reset --hard`', () => {
-      // Use shell-statement ordering on the fenced code block to avoid false matches
-      // from the preamble text that mentions `git reset --hard` for context.
+    test('block is verify-only: HEAD assertion present, no git reset, fails closed (#48)', () => {
+      // Verify-only contract: symbolic-ref exists, no git reset at all, fails closed with exit 42.
       const codeBlocks = extractFencedCodeBlocks(block);
       const allStatements = codeBlocks.flatMap(({ body }) => shellStatements(body));
       const symbolicRefIdx = findCommandIndex(allStatements, (cmd) =>
         cmd[0] === 'git' && cmd[1] === 'symbolic-ref' && cmd.includes('HEAD')
       );
-      const resetHardIdx = findCommandIndex(allStatements, (cmd) =>
-        cmd[0] === 'git' && cmd[1] === 'reset' && cmd.includes('--hard')
+      const resetIdx = findCommandIndex(allStatements, (cmd) =>
+        cmd[0] === 'git' && cmd[1] === 'reset'
       );
-      assert.notStrictEqual(symbolicRefIdx, -1, 'symbolic-ref check must exist');
-      assert.notStrictEqual(resetHardIdx, -1, 'reset --hard must exist');
-      assert.ok(
-        symbolicRefIdx < resetHardIdx,
-        'symbolic-ref HEAD assertion must appear before `git reset --hard` in quick.md worktree_branch_check'
-      );
+      assert.notStrictEqual(symbolicRefIdx, -1, 'symbolic-ref HEAD-attachment check must exist');
+      assert.strictEqual(resetIdx, -1, 'fragment must be verify-only — no git reset self-recovery (#48)');
+      assert.ok(/exit 42/.test(block), 'fragment must fail closed with exit 42 (#48)');
     });
 
     test('block forbids `git update-ref` self-recovery', () => {
@@ -732,4 +721,50 @@ test('#3425: cleanup-tail snippet carries the same primary-worktree pin before r
   assert.match(content, /Cleanup-tail: pin orchestrator CWD to primary worktree before cleanup-tail \(#3174\)\./);
   assert.match(content, /FATAL: cannot cd to primary worktree \$PRIMARY_WT/);
   assert.match(content, /# Cleanup-tail: remove residual agent worktrees after a cross-wave-dependency deviation\./);
+});
+
+describe('bug #48: orchestrator cwd-drift guard at execute_waves entry', () => {
+  const content = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf-8');
+  const stepStart = content.indexOf('<step name="execute_waves">');
+  const nextStep = content.indexOf('<step ', stepStart + 1);
+  const stepBody = content.slice(stepStart, nextStep === -1 ? undefined : nextStep);
+
+  test('execute_waves step exists', () => {
+    assert.notStrictEqual(stepStart, -1, 'execute-phase.md must contain a <step name="execute_waves"> step');
+  });
+
+  test('execute_waves contains a labelled cwd-drift guard (#48)', () => {
+    assert.ok(stepBody.includes('cwd-drift guard') && /#48/.test(stepBody), 'execute_waves entry must contain a cwd-drift guard tagged #48');
+  });
+
+  test('cwd-drift guard resolves the worktree root via git rev-parse --show-toplevel (#48)', () => {
+    const g = stepBody.indexOf('cwd-drift guard');
+    assert.notStrictEqual(g, -1);
+    const region = stepBody.slice(g, g + 1600);
+    assert.ok(/git rev-parse --show-toplevel/.test(region), 'cwd-drift guard must resolve the worktree ROOT via git rev-parse --show-toplevel (#48)');
+  });
+
+  test('cwd-drift guard discriminates agent worktrees by branch namespace and fails closed (#48)', () => {
+    const g = stepBody.indexOf('cwd-drift guard');
+    assert.notStrictEqual(g, -1);
+    const region = stepBody.slice(g, g + 1600);
+    assert.ok(/worktree-agent-/.test(region), 'guard must use the worktree-agent-* branch namespace as the drift discriminator (#48)');
+    assert.ok(/exit 1/.test(region), 'cwd-drift guard must fail closed with exit 1 on drift (#48)');
+  });
+
+  test('cwd-drift guard does NOT blanket-refuse .claude/worktrees/ paths (#48)', () => {
+    const g = stepBody.indexOf('cwd-drift guard');
+    assert.notStrictEqual(g, -1);
+    const region = stepBody.slice(g, g + 1600);
+    assert.ok(!region.includes('*.claude/worktrees/*') && !region.includes('.claude/worktrees/*)'), 'guard must not blanket-refuse .claude/worktrees/ paths — would break legitimate worktree invocations (#48)');
+  });
+});
+
+describe('bug #48: orchestrator fail-closed handling of verify-only halts', () => {
+  const content = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf-8');
+  const withoutDispatchNote = content.replace(/<worktree_branch_check>[\s\S]*?<\/worktree_branch_check>/g, '');
+  test('orchestrator documents a fail-closed rule for executor exit 42 / FATAL (#48)', () => {
+    assert.ok(/exit 42|FATAL/.test(withoutDispatchNote), 'execute-phase.md must reference executor exit 42 / FATAL outside the dispatch note (#48)');
+    assert.ok(/(blocked|do NOT merge|not merge)/i.test(withoutDispatchNote), 'execute-phase.md must document an orchestrator-side rule that an executor FATAL/exit 42 marks the plan blocked and is not merged (#48)');
+  });
 });
