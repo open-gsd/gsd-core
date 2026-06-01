@@ -454,7 +454,7 @@ Full listing: `get-shit-done/bin/lib/*.cjs`.
 
 ---
 
-## Hooks (13 shipped)
+## Hooks (14 shipped)
 
 Full listing: `hooks/`.
 
@@ -469,6 +469,7 @@ Full listing: `hooks/`.
 | `gsd-workflow-guard.js` | `PreToolUse` | Detects file edits outside GSD workflow context (advisory, opt-in) |
 | `gsd-read-guard.js` | `PreToolUse` | Advisory guard preventing Edit/Write on unread files |
 | `gsd-read-injection-scanner.js` | `PostToolUse` | Scans tool Read results for prompt-injection patterns (v1.36+, PR #2201) |
+| `gsd-worktree-path-guard.js` | `PreToolUse` | Hard-blocks Edit/Write/MultiEdit with absolute paths outside the worktree root (PR #579, #260) |
 | `gsd-session-state.sh` | `PostToolUse` | Session-state tracking for shell-based runtimes |
 | `gsd-validate-commit.sh` | `PostToolUse` | Commit validation for conventional-commit enforcement |
 | `gsd-phase-boundary.sh` | `PostToolUse` | Phase-boundary detection for workflow transitions |
