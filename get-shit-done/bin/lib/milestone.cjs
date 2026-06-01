@@ -4,7 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { escapeRegex, getMilestonePhaseFilter, extractOneLinerFromBody, output, error } = require('./core.cjs');
+const { escapeRegex, getMilestonePhaseFilter, extractOneLinerFromBody, normalizePhaseName, phaseTokenMatches, output, error } = require('./core.cjs');
 const { platformWriteSync, platformEnsureDir } = require('./shell-command-projection.cjs');
 const { planningPaths } = require('./planning-workspace.cjs');
 const { extractFrontmatter } = require('./frontmatter.cjs');
@@ -148,13 +148,12 @@ function cmdMilestoneComplete(cwd, version, options, raw) {
         })();
         while ((pm = phasePattern.exec(scopedContent)) !== null) {
           const phaseNum = pm[1];
-          const numPrefix = phaseNum.replace(/^0+/, '').split(/[^0-9]/)[0];
+          const normalized = normalizePhaseName(phaseNum);
           // A phase has disk_status: 'no_directory' when no phase directory
-          // with a matching numeric prefix exists on disk.
-          const hasDirectory = phaseDirEntries.some(d => {
-            const dirNum = d.replace(/^0+/, '').split(/[^0-9]/)[0];
-            return dirNum === numPrefix;
-          });
+          // with a matching token exists on disk. Use the same phaseTokenMatches
+          // helper that roadmap.analyze uses to avoid false positives on decimal
+          // (2.1) and letter-suffix (12A) phase IDs.
+          const hasDirectory = phaseDirEntries.some(d => phaseTokenMatches(d, normalized));
           if (!hasDirectory) {
             noDirectoryPhases.push(phaseNum);
           }

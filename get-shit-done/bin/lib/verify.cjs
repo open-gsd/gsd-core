@@ -12,7 +12,7 @@ const {
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { loadConfig, normalizePhaseName, escapeRegex, findPhaseInternal, getMilestoneInfo, stripShippedMilestones, extractCurrentMilestone, output, error, checkAgentsInstalled, CONFIG_DEFAULTS, inspectWorktreeHealth } = require('./core.cjs');
+const { loadConfig, normalizePhaseName, phaseTokenMatches, escapeRegex, findPhaseInternal, getMilestoneInfo, stripShippedMilestones, extractCurrentMilestone, output, error, checkAgentsInstalled, CONFIG_DEFAULTS, inspectWorktreeHealth } = require('./core.cjs');
 const { execGit, platformReadSync: safeReadFile, platformWriteSync } = require('./shell-command-projection.cjs');
 const { PACKAGE_NAME } = require('./package-identity.cjs');
 const { planningDir } = require('./planning-workspace.cjs');
@@ -1132,13 +1132,12 @@ function cmdValidateHealth(cwd, options, raw) {
         })();
         while ((pm = phasePattern.exec(scopedContent)) !== null) {
           const phaseNum = pm[1];
-          const numPrefix = phaseNum.replace(/^0+/, '').split(/[^0-9]/)[0];
+          const normalized = normalizePhaseName(phaseNum);
           // Phase is unstarted (disk_status: no_directory) if no directory
-          // with matching numeric prefix exists on disk.
-          const hasDirectory = phaseDirNames2.some(d => {
-            const dirNum = d.replace(/^0+/, '').split(/[^0-9]/)[0];
-            return dirNum === numPrefix;
-          });
+          // with a matching token exists on disk. Use phaseTokenMatches (same
+          // helper as roadmap.analyze) to correctly handle decimal (2.1) and
+          // letter-suffix (12A) phase IDs without false positives.
+          const hasDirectory = phaseDirNames2.some(d => phaseTokenMatches(d, normalized));
           if (!hasDirectory) {
             unstarted.push(phaseNum);
           }

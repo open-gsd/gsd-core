@@ -985,9 +985,11 @@ function extractCurrentMilestone(content, cwd) {
   // 3. Find the section matching this version
   // Match headings like: ## Roadmap v3.0: Name, ## v3.0 Name, etc.
   // Also match <summary> tags that contain the version (milestone in <details open>).
+  // Exclude phase headings (e.g. "### Phase 1: v1.3 migration") so that a phase title
+  // that mentions the milestone version does not bypass the <summary> fallback.
   const escapedVersion = escapeRegex(version);
   const sectionPattern = new RegExp(
-    `(^#{1,3}\\s+.*${escapedVersion}\\b[^\\n]*)`,
+    `(^#{1,3}\\s+(?!Phase\\s+\\S).*${escapedVersion}\\b[^\\n]*)`,
     'gmi'
   );
   const summaryPattern = new RegExp(
