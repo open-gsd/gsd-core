@@ -1,0 +1,5 @@
+---
+type: Fixed
+pr: 557
+---
+**Milestone marked complete while ROADMAP lists unstarted phases** — extractCurrentMilestone() had two miss paths that caused it to fall through to stripShippedMilestones(): (1) sectionPattern only matched ##/### headings so when a milestone version appeared only inside a <summary> tag the section was not found; (2) activeMarkerPattern and the Step 2 fallback regex did not include the 🔄 emoji so milestones using it as the in-progress marker were not recognised. Both misses caused stripShippedMilestones() to erase the active <details open> block, leaving roadmap.analyze with phase_count: 0. Fixes: (a) <summary> tag content is now searched when heading matches are absent; (b) 🔄 is added to activeMarkerPattern and the fallback emoji regex; (c) cmdMilestoneComplete now guards against completing when STATE confirms the current milestone still has phases with no directory on disk; (d) validate health emits W021 when STATE says milestone complete but ROADMAP lists unstarted phases. (#557)
