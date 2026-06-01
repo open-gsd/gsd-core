@@ -11,6 +11,7 @@
   "context_window": 200000,
   "phase_naming": "sequential",
   "project_code": null,
+  "phase_id_convention": null,
   "mode": "interactive",
   "claude_md_path": "./CLAUDE.md",
   "git": {

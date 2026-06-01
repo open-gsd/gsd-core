@@ -4,7 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execGit, platformWriteSync, platformReadSync, platformEnsureDir } = require('./shell-command-projection.cjs');
-const { loadConfig, isGitIgnored, normalizePhaseName, comparePhaseNum, getArchivedPhaseDirs, generateSlugInternal, getMilestoneInfo, getMilestonePhaseFilter, resolveModelInternal, resolveEffortInternal, resolveFastModeInternal, resolveEffortForTier, stripShippedMilestones, extractCurrentMilestone, toPosixPath, output, error, findPhaseInternal, extractOneLinerFromBody, getRoadmapPhaseInternal } = require('./core.cjs');
+const { loadConfig, isGitIgnored, normalizePhaseName, comparePhaseNum, getArchivedPhaseDirs, generateSlugInternal, getMilestoneInfo, getMilestonePhaseFilter, resolveModelInternal, resolveEffortInternal, resolveFastModeInternal, resolveEffortForTier, stripShippedMilestones, extractCurrentMilestone, toPosixPath, output, error, findPhaseInternal, extractOneLinerFromBody, getRoadmapPhaseInternal, extractPhaseToken } = require('./core.cjs');
 const { renderEffortForRuntime, RUNTIMES_WITH_FAST_MODE } = require('./model-catalog.cjs');
 const { planningDir, planningPaths } = require('./planning-workspace.cjs');
 const { extractFrontmatter } = require('./frontmatter.cjs');
@@ -994,7 +994,9 @@ function cmdStats(cwd, format, raw) {
     const roadmapRaw = platformReadSync(roadmapPath);
     if (roadmapRaw === null) throw new Error('roadmap missing');
     const roadmapContent = extractCurrentMilestone(roadmapRaw, cwd);
-    const headingPattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:\s*([^\n]+)/gi;
+    // Matches both plain numeric (Phase 1:) and milestone-prefixed (Phase 2-01:) headings.
+    // Also tolerates optional [bracket-token] scope prefix on phase headings.
+    const headingPattern = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*(?:-[\w.-]+)*)\s*:\s*([^\n]+)/gi;
     let match;
     while ((match = headingPattern.exec(roadmapContent)) !== null) {
       const key = normalizePhaseName(match[1]);
@@ -1017,9 +1019,12 @@ function cmdStats(cwd, format, raw) {
       .sort((a, b) => comparePhaseNum(a, b));
 
     for (const dir of dirs) {
-      const dm = dir.match(/^(\d+[A-Z]?(?:\.\d+)*)-?(.*)/i);
-      const phaseNum = dm ? dm[1] : dir;
-      const phaseName = dm && dm[2] ? dm[2].replace(/-/g, ' ') : '';
+      // Use extractPhaseToken to correctly parse M-NN-style and code-prefixed dir names.
+      const phaseToken = extractPhaseToken(dir);
+      const phaseNum = phaseToken || dir;
+      // phaseName is everything after the token (strip leading '-')
+      const afterToken = dir.slice(phaseToken ? phaseToken.length : 0).replace(/^-/, '');
+      const phaseName = afterToken ? afterToken.replace(/-/g, ' ') : '';
       const phaseFiles = fs.readdirSync(path.join(phasesDir, dir));
       const plans = phaseFiles.filter(f => f.endsWith('-PLAN.md') || f === 'PLAN.md').length;
       const summaries = phaseFiles.filter(f => f.endsWith('-SUMMARY.md') || f === 'SUMMARY.md').length;

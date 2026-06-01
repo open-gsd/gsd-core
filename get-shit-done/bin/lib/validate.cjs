@@ -29,8 +29,13 @@
  */
 
 // ── Issue #26: regex constants (W005, W006-archived) ────────────────────────
-const phaseDirNameRe = /^\d{2,}(?:\.\d+)*-[\w-]+$/;
-const PHASE_TOKEN_FROM_DIR_RE = /^(?:[A-Z]{1,6}-)?(\d+[A-Z]?(?:\.\d+)*)(?:-|$)/i;
+// Matches legacy numeric dirs (01-setup), milestone-prefixed dirs (02-01-setup),
+// deep dirs (02-04-01-deep), and project-code-prefixed variants (GSD-02-01-setup).
+const phaseDirNameRe = /^(?:[A-Z]{1,6}-)?\d{1,}(?:-\d+)*(?:\.\d+)*-[\w-]+$/i;
+// Extracts the full phase token from a directory name, including milestone-prefixed
+// multi-segment tokens like "02-01" from "02-01-setup" or "GSD-02-01-setup".
+// Greedily captures all leading all-digit segments before the first letter-start segment.
+const PHASE_TOKEN_FROM_DIR_RE = /^(?:[A-Z]{1,6}-)?(\d+(?:-\d+)*[A-Z]?(?:\.\d+)*)(?:-[a-z]|$)/i;
 const MILESTONE_ARCHIVE_DIR_RE = /^v\d+.*-phases$/i;
 
 // ── Issue #26: I001 canonicalization ────────────────────────────────────────
@@ -41,26 +46,46 @@ function canonicalPlanStem(stem) {
 
 // ── Issue #6: phase variant helpers (W006/W007) ──────────────────────────────
 function phaseVariants(phase) {
+  const variants = new Set([phase]);
+  const dotIdx = phase.indexOf('.');
+  const head = dotIdx === -1 ? phase : phase.slice(0, dotIdx);
+  const tail = dotIdx === -1 ? '' : phase.slice(dotIdx);
 
-                const variants = new Set([phase]);
-                const dotIdx = phase.indexOf('.');
-                const head = dotIdx === -1 ? phase : phase.slice(0, dotIdx);
-                const tail = dotIdx === -1 ? '' : phase.slice(dotIdx);
-                const headMatch = head.match(/^(\d+)([A-Z]?)$/i);
-                if (!headMatch)
-                    return variants;
-                const numericHead = headMatch[1];
-                const letterSuffix = headMatch[2] || '';
-                variants.add(`${String(parseInt(numericHead, 10))}${letterSuffix}${tail}`);
-                variants.add(`${numericHead.padStart(2, '0')}${letterSuffix}${tail}`);
-                return variants;
-            
+  // Milestone-prefixed IDs: M-NN or M-N-N. Add padding-normalized variant.
+  // e.g. "2-01" → also "02-01"; "02-01" → also "2-01"
+  const milestoneHeadMatch = head.match(/^(\d+)((?:-\d+)+)([A-Z]?)$/i);
+  if (milestoneHeadMatch) {
+    const major = milestoneHeadMatch[1];
+    const subSegs = milestoneHeadMatch[2]; // e.g. "-01" or "-04-01"
+    const letter = milestoneHeadMatch[3] || '';
+    const paddedMajor = major.padStart(2, '0');
+    const unpaddedMajor = String(parseInt(major, 10));
+    // Pad/unpad sub-segments individually
+    const paddedSubs = subSegs.slice(1).split('-').map(s => s.padStart(2, '0')).join('-');
+    const unpaddedSubs = subSegs.slice(1).split('-').map(s => String(parseInt(s, 10))).join('-');
+    variants.add(`${paddedMajor}-${paddedSubs}${letter}${tail}`);
+    variants.add(`${unpaddedMajor}-${unpaddedSubs}${letter}${tail}`);
+    variants.add(`${unpaddedMajor}-${paddedSubs}${letter}${tail}`);
+    variants.add(`${paddedMajor}-${unpaddedSubs}${letter}${tail}`);
+    return variants;
+  }
+
+  // Plain numeric/decimal IDs: "1", "01", "12A", "12.1"
+  const headMatch = head.match(/^(\d+)([A-Z]?)$/i);
+  if (!headMatch) return variants;
+  const numericHead = headMatch[1];
+  const letterSuffix = headMatch[2] || '';
+  variants.add(`${String(parseInt(numericHead, 10))}${letterSuffix}${tail}`);
+  variants.add(`${numericHead.padStart(2, '0')}${letterSuffix}${tail}`);
+  return variants;
 }
 
 function buildRoadmapPhaseVariants(roadmapContent) {
   const roadmapPhases = new Set();
   const roadmapPhaseVariants = new Set();
-  const phasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:/gi;
+  // Matches both legacy numeric (Phase 1:), decimal (Phase 2.1:), milestone-prefixed (Phase 2-01:),
+  // and bracket-prefixed (### [GSD] Phase 2-01:) headings.
+  const phasePattern = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*(?:-[\w.-]+)*)\s*:/gi;
   let m;
   while ((m = phasePattern.exec(roadmapContent)) !== null) {
     roadmapPhases.add(m[1]);
@@ -71,7 +96,8 @@ function buildRoadmapPhaseVariants(roadmapContent) {
 
 function buildNotStartedPhaseVariants(roadmapContent) {
   const notStartedPhases = new Set();
-  const uncheckedPattern = /-\s*\[\s\]\s*\*{0,2}Phase\s+(\d+[A-Z]?(?:\.\d+)*)[:\s*]/gi;
+  // Also matches milestone-prefixed and bracket-prefixed checklist items.
+  const uncheckedPattern = /-\s*\[\s\]\s*\*{0,2}Phase\s+([\w][\w.-]*(?:-[\w.-]+)*)[:\s*]/gi;
   let um;
   while ((um = uncheckedPattern.exec(roadmapContent)) !== null) {
     for (const variant of phaseVariants(um[1])) notStartedPhases.add(variant);

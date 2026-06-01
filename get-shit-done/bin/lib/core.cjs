@@ -668,6 +668,18 @@ function normalizePhaseName(phase) {
   const str = String(phase);
   // Strip optional project_code prefix (e.g., 'CK-01' → '01')
   const stripped = str.replace(/^[A-Z]{1,6}-(?=\d)/, '');
+  // Milestone-prefixed phase IDs: M-NN or M-N-N (deep decomposition).
+  // Examples: '2-01', '02-01', '2-4-1', '02-04-01'.
+  // Must be tested BEFORE the plain numeric path so '2-01' → '02-01', not '02'.
+  // Pattern: at least two dash-separated all-digit segments (letter/decimal suffix on last).
+  const milestoneMatch = stripped.match(/^(\d+)((?:-\d+)+)([A-Z]?(?:\.\d+)*)$/i);
+  if (milestoneMatch) {
+    const major = milestoneMatch[1].padStart(2, '0');
+    // Each sub-segment gets zero-padded to at least 2 digits.
+    const subSegments = milestoneMatch[2].slice(1).split('-').map(s => s.padStart(2, '0'));
+    const suffix = milestoneMatch[3] || '';
+    return `${major}-${subSegments.join('-')}${suffix}`;
+  }
   // Standard numeric phases: 1, 01, 12A, 12.1
   const match = stripped.match(/^(\d+)([A-Z])?((?:\.\d+)*)/i);
   if (match) {
@@ -681,6 +693,32 @@ function normalizePhaseName(phase) {
   }
   // Custom phase IDs (e.g. PROJ-42, AUTH-101): return as-is
   return str;
+}
+
+function getMilestoneFromPhaseId(phaseId) {
+  const str = String(phaseId);
+  const stripped = str.replace(/^[A-Z]{1,6}-(?=\d)/i, '');
+  const m = stripped.match(/^0*(\d+)-/);
+  if (!m) return null;
+  const major = parseInt(m[1], 10);
+  if (major === 0 || major === 999) return null;
+  return `v${major}.0`;
+}
+
+function getPhaseDirFromPhaseId(phaseId, phaseName, projectCode) {
+  const str = String(phaseId);
+  const stripped = str.replace(/^[A-Z]{1,6}-(?=\d)/i, '');
+  const m = stripped.match(/^0*(\d+)-(0*(\d+(?:-\d+)*))$/);
+  if (!m) return null;
+  const milestone = String(parseInt(m[1], 10)).padStart(2, '0');
+  const subParts = m[2].split('-').map(p => String(parseInt(p, 10)).padStart(2, '0'));
+  const sub = subParts.join('-');
+  const slug = phaseName
+    ? phaseName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+    : '';
+  const parts = [milestone, sub, slug].filter(Boolean);
+  const base = parts.join('-');
+  return projectCode ? `${projectCode}-${base}` : base;
 }
 
 /**
@@ -699,6 +737,24 @@ function normalizePhaseName(phase) {
  */
 function phaseMarkdownRegexSource(phaseNum) {
   const stripped = String(phaseNum).replace(/^[A-Z]{1,6}-(?=\d)/i, '');
+
+  // Milestone-prefixed IDs: M-NN or M-N-N (deep). Each numeric segment is padding-tolerant.
+  // Pattern: one or more dash-separated all-digit groups (last may have letter/decimal suffix).
+  const milestoneSegments = stripped.match(/^(\d+)((?:-\d+)*)([A-Z]?(?:\.\d+)*)$/i);
+  if (milestoneSegments && milestoneSegments[2]) {
+    // Has at least one dash-separated segment — treat as milestone-prefixed
+    const majorUnpadded = milestoneSegments[1].replace(/^0+/, '') || '0';
+    const subParts = milestoneSegments[2].slice(1).split('-'); // drop leading '-'
+    const subFragments = subParts.map(s => {
+      const unpadded = s.replace(/^0+/, '') || '0';
+      return `0*${escapeRegex(unpadded)}`;
+    });
+    const suffix = milestoneSegments[3] || '';
+    const suffixFragment = suffix ? escapeRegex(suffix) : '';
+    return `0*${escapeRegex(majorUnpadded)}-${subFragments.join('-')}${suffixFragment}`;
+  }
+
+  // Plain numeric phase: 1, 01, 12A, 12.1
   const match = stripped.match(/^0*(\d+)([A-Z])?((?:\.\d+)*)$/i);
   if (!match) return escapeRegex(phaseNum);
 
@@ -729,8 +785,35 @@ function phaseMarkdownRegexSourceExact(phaseNum) {
 
 function comparePhaseNum(a, b) {
   // Strip optional project_code prefix before comparing (e.g., 'CK-01-name' → '01-name')
-  const sa = String(a).replace(/^[A-Z]{1,6}-/, '');
-  const sb = String(b).replace(/^[A-Z]{1,6}-/, '');
+  const sa = String(a).replace(/^[A-Z]{1,6}-(?=\d)/i, '');
+  const sb = String(b).replace(/^[A-Z]{1,6}-(?=\d)/i, '');
+
+  // Milestone-prefixed IDs: one or more dash-separated all-digit segments.
+  // e.g. '02-10', '2-01', '02-04-01'. Compare segment by segment numerically.
+  // A string matches this form when it starts with digits and has at least one '-digit' group.
+  const milestoneA = sa.match(/^(\d+)((?:-\d+)+)([A-Z]?(?:\.\d+)*)$/i);
+  const milestoneB = sb.match(/^(\d+)((?:-\d+)+)([A-Z]?(?:\.\d+)*)$/i);
+
+  if (milestoneA && milestoneB) {
+    const segsA = [parseInt(milestoneA[1], 10), ...milestoneA[2].slice(1).split('-').map(s => parseInt(s, 10))];
+    const segsB = [parseInt(milestoneB[1], 10), ...milestoneB[2].slice(1).split('-').map(s => parseInt(s, 10))];
+    const maxSegs = Math.max(segsA.length, segsB.length);
+    for (let i = 0; i < maxSegs; i++) {
+      const av = segsA[i] !== undefined ? segsA[i] : 0;
+      const bv = segsB[i] !== undefined ? segsB[i] : 0;
+      if (av !== bv) return av - bv;
+    }
+    // Segments equal — compare any trailing letter/decimal suffix
+    const sufA = milestoneA[3] || '';
+    const sufB = milestoneB[3] || '';
+    if (sufA !== sufB) return sufA < sufB ? -1 : 1;
+    return 0;
+  }
+
+  // If one is milestone-prefixed and the other is not, milestone-prefixed sorts first
+  // (they come from different conventions; preserve caller's intent by string comparison).
+  if (milestoneA || milestoneB) return String(a).localeCompare(String(b));
+
   const pa = sa.match(/^(\d+)([A-Z])?((?:\.\d+)*)/i);
   const pb = sb.match(/^(\d+)([A-Z])?((?:\.\d+)*)/i);
   // If either is non-numeric (custom ID), fall back to string comparison
@@ -761,20 +844,59 @@ function comparePhaseNum(a, b) {
 
 /**
  * Extract the phase token from a directory name.
- * Supports: '01-name', '1009A-name', '999.6-name', 'CK-01-name', 'PROJ-42-name'.
- * Returns the token portion (e.g. '01', '1009A', '999.6', 'PROJ-42') or the full name if no separator.
+ * A token is the leading all-numeric (or project-code-prefixed) run of dash-separated
+ * segments, up to but not including the first segment that starts with a letter after the
+ * optional code prefix. The last numeric segment may carry a letter suffix (e.g. 12A) or
+ * decimal suffix (e.g. 999.6).
+ *
+ * Examples:
+ *   '01-name'           → '01'
+ *   '02-01-setup'       → '02-01'      (milestone-prefixed 2-segment)
+ *   '02-04-01-deep'     → '02-04-01'   (deep 3-segment)
+ *   'CK-01-name'        → 'CK-01'      (project-code-prefixed)
+ *   'GSD-02-01-setup'   → 'GSD-02-01'  (code-prefixed milestone)
+ *   'GSD-02-04-01-deep' → 'GSD-02-04-01'
+ *   '1009A-name'        → '1009A'
+ *   '999.6-name'        → '999.6'
+ *   'PROJ-42-name'      → 'PROJ-42'    (custom ID)
  */
 function extractPhaseToken(dirName) {
-  // Try project-code-prefixed numeric: CK-01-name → CK-01, CK-01A.2-name → CK-01A.2
-  const codePrefixed = dirName.match(/^([A-Z]{1,6}-\d+[A-Z]?(?:\.\d+)*)(?:-|$)/i);
-  if (codePrefixed) return codePrefixed[1];
-  // Try plain numeric: 01-name, 1009A-name, 999.6-name
-  const numeric = dirName.match(/^(\d+[A-Z]?(?:\.\d+)*)(?:-|$)/i);
-  if (numeric) return numeric[1];
-  // Custom IDs: PROJ-42-name → everything before the last segment that looks like a name
-  const custom = dirName.match(/^([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*)(?:-[a-z]|$)/i);
-  if (custom) return custom[1];
-  return dirName;
+  // Optional project-code prefix: 1–6 uppercase letters followed by a digit segment.
+  const codePrefixMatch = dirName.match(/^([A-Z]{1,6})-(\d.*)/i);
+  let prefix = '';
+  let rest = dirName;
+  if (codePrefixMatch) {
+    // Distinguish code prefix (e.g. GSD-, CK-) from purely numeric-looking start.
+    // The prefix must be all-uppercase-letter (already guaranteed by [A-Z]{1,6}) and
+    // the first char after '-' must be a digit so we don't swallow PROJ-42-name prematurely.
+    prefix = codePrefixMatch[1] + '-';
+    rest = codePrefixMatch[2];
+  }
+
+  // Greedily consume all leading all-digit segments (possibly with A-Z letter or .N suffix on the last).
+  // Stop when a segment starts with a letter (that is not a continuation of the last digit segment).
+  const segments = rest.split('-');
+  const tokenSegments = [];
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    if (/^\d/.test(seg)) {
+      // Numeric segment (possibly trailing letter or .N suffix on last) — always include
+      tokenSegments.push(seg);
+    } else {
+      // First letter-start segment after digits → name portion starts here
+      break;
+    }
+  }
+
+  if (tokenSegments.length === 0) {
+    // No leading numeric segment — could be a custom ID like PROJ-42
+    // If we stripped a code prefix, return the full original (prefix stripped the code but rest is numeric handled above)
+    // For purely letter-start directory with no code prefix (shouldn't normally happen), return as-is
+    return dirName;
+  }
+
+  // The last numeric segment may have a letter suffix (1009A) or decimal (.6) already included.
+  return prefix + tokenSegments.join('-');
 }
 
 /**
@@ -811,13 +933,13 @@ function searchPhaseInDir(baseDir, relBase, normalized) {
     const match = dirs.find(d => phaseTokenMatches(d, normalized));
     if (!match) return null;
 
-    // Extract phase number and name — supports numeric (01-name), project-code-prefixed (CK-01-name), and custom (PROJ-42-name)
-    const dirMatch = match.match(/^(?:[A-Z]{1,6}-)(\d+[A-Z]?(?:\.\d+)*)-?(.*)/i)
-      || match.match(/^(\d+[A-Z]?(?:\.\d+)*)-?(.*)/i)
-      || match.match(/^([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*)-(.+)/i)
-      || [null, match, null];
-    const phaseNumber = dirMatch ? dirMatch[1] : normalized;
-    const phaseName = dirMatch && dirMatch[2] ? dirMatch[2] : null;
+    // Extract phase number and name using extractPhaseToken for correctness with all ID forms
+    // including deep milestone-prefixed (02-04-01-deep → 02-04-01 / deep) and code-prefixed.
+    const phaseToken = extractPhaseToken(match);
+    const phaseNumber = phaseToken || normalized;
+    // phase_name is everything after the token (strip leading '-')
+    const afterToken = match.slice(phaseToken ? phaseToken.length : 0).replace(/^-/, '');
+    const phaseName = afterToken || null;
     const phaseDir = path.join(baseDir, match);
     const { plans: unsortedPlans, summaries: unsortedSummaries, hasResearch, hasContext, hasVerification, hasReviews } = getPhaseFileStats(phaseDir);
     const plans = unsortedPlans.sort();
@@ -1140,8 +1262,9 @@ function getRoadmapPhaseInternal(cwd, phaseNum) {
     // #3537: route through canonical padding-tolerant fragment. The prior
     // hand-rolled `isNumeric` branch only stripped padding on integer-only
     // ids and missed decimal padding (`02.7` against `Phase 2.7:` headings).
+    // Also tolerate optional [bracket-token] scope prefix on phase headings.
     const phasePattern = new RegExp(
-      `#{2,4}\\s*Phase\\s+${phaseMarkdownRegexSource(phaseNum)}:\\s*([^\\n]+)`,
+      `#{2,4}\\s*(?:\\[[^\\]]+\\]\\s*)?Phase\\s+${phaseMarkdownRegexSource(phaseNum)}:\\s*([^\\n]+)`,
       'i'
     );
     const headerMatch = content.match(phasePattern);
@@ -1150,7 +1273,8 @@ function getRoadmapPhaseInternal(cwd, phaseNum) {
     const phaseName = headerMatch[1].trim();
     const headerIndex = headerMatch.index;
     const restOfContent = content.slice(headerIndex);
-    const nextHeaderMatch = restOfContent.match(/\n#{2,4}\s+Phase\s+[\w]/i);
+    // Boundary: next phase heading — also matches bracket-prefixed form.
+    const nextHeaderMatch = restOfContent.match(/\n#{2,4}\s+(?:\[[^\]]+\]\s*)?Phase\s+[\w]/i);
     const sectionEnd = nextHeaderMatch ? headerIndex + nextHeaderMatch.index : content.length;
     const section = content.slice(headerIndex, sectionEnd).trim();
 
@@ -1926,6 +2050,18 @@ function getMilestonePhaseFilter(cwd, versionOverride) {
     if (roadmapContent === null) throw new Error('missing');
     let roadmap = extractCurrentMilestone(roadmapContent, cwd);
 
+    // Emit a deprecation warning for "free-form" roadmaps: those that have
+    // Phase headings but no versioned milestone sections (## vX.Y / ## Roadmap vX.Y).
+    // This is non-fatal — the roadmap continues to work via legacy behaviour.
+    const hasVersionedMilestonesGlobal = /^#{1,3}\s+.*v\d+\.\d+/mi.test(roadmapContent);
+    const hasPhaseHeadings = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+[\w]/i.test(roadmapContent);
+    if (!hasVersionedMilestonesGlobal && hasPhaseHeadings) {
+      console.warn(
+        '[gsd] Deprecated: free-form ROADMAP.md detected (no versioned milestone headings). ' +
+        'Set phase_id_convention in config.json to suppress this warning.'
+      );
+    }
+
     if (versionOverride) {
       const escapedVersion = escapeRegex(versionOverride);
       // Exclude phase headings (e.g. "### Phase 1: v1.3 migration") that mention
@@ -2002,8 +2138,9 @@ function getMilestonePhaseFilter(cwd, versionOverride) {
       }
     }
 
-    // Match both numeric phases (Phase 1:) and custom IDs (Phase PROJ-42:)
-    const phasePattern = /#{2,4}\s*Phase\s+([\w][\w.-]*)\s*:/gi;
+    // Match both numeric phases (Phase 1:) and custom IDs (Phase PROJ-42:).
+    // Also tolerate optional [bracket-token] scope prefix (e.g., ### [GSD] Phase 2-01:).
+    const phasePattern = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*)\s*:/gi;
     let m;
     while ((m = phasePattern.exec(roadmap)) !== null) {
       milestonePhaseNums.add(m[1]);
@@ -2018,13 +2155,17 @@ function getMilestonePhaseFilter(cwd, versionOverride) {
   }
 
   const normalized = new Set(
-    [...milestonePhaseNums].map(n => (n.replace(/^0+(?=\d)/, '') || '0').toLowerCase())
+    [...milestonePhaseNums].map(n => n.split('-').map(seg => (seg.replace(/^0+(?=\d)/, '') || '0')).join('-').toLowerCase())
   );
+
+  function normalizePhaseIdSegments(id) {
+    return id.split('-').map(seg => seg.replace(/^0+(?=\d)/, '') || '0').join('-');
+  }
 
   function isDirInMilestone(dirName) {
     // Try numeric match first
-    const m = dirName.match(/^0*(\d+[A-Za-z]?(?:\.\d+)*)/);
-    if (m && normalized.has(m[1].toLowerCase())) return true;
+    const m = dirName.match(/^0*(\d+(?:-0*\d+)*[A-Za-z]?(?:\.\d+)*)/);
+    if (m && normalized.has(normalizePhaseIdSegments(m[1]).toLowerCase())) return true;
     // Try custom ID match (e.g. PROJ-42-description → PROJ-42)
     const customMatch = dirName.match(/^([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*)/);
     if (customMatch && normalized.has(customMatch[1].toLowerCase())) return true;
@@ -2037,8 +2178,8 @@ function getMilestonePhaseFilter(cwd, versionOverride) {
     // milestone is keyed on the bare numeric form.
     const stripped = dirName.replace(/^[A-Z]{1,6}-(?=\d)/i, '');
     if (stripped !== dirName) {
-      const sm = stripped.match(/^0*(\d+[A-Za-z]?(?:\.\d+)*)/);
-      if (sm && normalized.has(sm[1].toLowerCase())) return true;
+      const sm = stripped.match(/^0*(\d+(?:-0*\d+)*[A-Za-z]?(?:\.\d+)*)/);
+      if (sm && normalized.has(normalizePhaseIdSegments(sm[1]).toLowerCase())) return true;
     }
     return false;
   }
@@ -2127,6 +2268,8 @@ module.exports = {
   isGitIgnored,
   escapeRegex,
   normalizePhaseName,
+  getMilestoneFromPhaseId,
+  getPhaseDirFromPhaseId,
   phaseMarkdownRegexSource,
   phaseMarkdownRegexSourceExact,
   comparePhaseNum,

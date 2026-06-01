@@ -83,6 +83,7 @@
     "features.global_learnings",
     "learnings.max_inject",
     "project_code",
+    "phase_id_convention",
     "phase_naming",
     "manager.flags.discuss",
     "manager.flags.plan",

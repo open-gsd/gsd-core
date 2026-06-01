@@ -540,6 +540,22 @@ const ROADMAP_COMMAND_ALIASES = [
     ],
     "subcommand": "annotate-dependencies",
     "mutation": true
+  },
+  {
+    "canonical": "roadmap.validate",
+    "aliases": [
+      "roadmap validate"
+    ],
+    "subcommand": "validate",
+    "mutation": false
+  },
+  {
+    "canonical": "roadmap.upgrade",
+    "aliases": [
+      "roadmap upgrade"
+    ],
+    "subcommand": "upgrade",
+    "mutation": true
   }
 ];
 

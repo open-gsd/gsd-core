@@ -63,7 +63,7 @@ function countPhasePlansAndSummaries(phaseDir) {
 function searchPhaseInContent(content, escapedPhase, phaseNum) {
   // Match "## Phase X:", "### Phase X:", or "#### Phase X:" with optional name
   const phasePattern = new RegExp(
-    `#{2,4}\\s*Phase\\s+${escapedPhase}:\\s*([^\\n]+)`,
+    `#{2,4}\\s*(?:\\[[^\\]]+\\]\\s*)?Phase\\s+${escapedPhase}:\\s*([^\\n]+)`,
     'i'
   );
   const headerMatch = content.match(phasePattern);
@@ -92,9 +92,10 @@ function searchPhaseInContent(content, escapedPhase, phaseNum) {
   const phaseName = headerMatch[1].trim();
   const headerIndex = headerMatch.index;
 
-  // Find the end of this section (next ## or ### phase header, or end of file)
+  // Find the end of this section (next ## or ### phase header, or end of file).
+  // Also matches bracket-prefixed headings like ### [GSD] Phase 2-01:.
   const restOfContent = content.slice(headerIndex);
-  const nextHeaderMatch = restOfContent.match(/\n#{2,4}\s+Phase\s+[\w][\w.-]*/i);
+  const nextHeaderMatch = restOfContent.match(/\n#{2,4}\s+(?:\[[^\]]+\]\s*)?Phase\s+[\w][\w.-]*/i);
   const sectionEnd = nextHeaderMatch
     ? headerIndex + nextHeaderMatch.index
     : content.length;
@@ -203,7 +204,7 @@ function cmdRoadmapAnalyze(cwd, raw) {
   const phasesDir = planningPaths(cwd).phases;
 
   // Extract all phase headings: ## Phase N: Name or ### Phase N: Name
-  const phasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:\s*([^\n]+)/gi;
+  const phasePattern = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+(\d+[A-Z]?(?:[.-]\d+)*)\s*:\s*([^\n]+)/gi;
   const phases = [];
   let match;
 
@@ -225,7 +226,7 @@ function cmdRoadmapAnalyze(cwd, raw) {
     const restOfContent = content.slice(sectionStart);
     // #3691: `\d` → `\d[\d.]*` so decimal phase headings (e.g. `### Phase 02.3:`) are
     // recognised as section boundaries.
-    const nextHeader = restOfContent.match(/\n#{2,4}\s+Phase\s+\d[\d.]*/i);
+    const nextHeader = restOfContent.match(/\n#{2,4}\s+(?:\[[^\]]+\]\s*)?Phase\s+\d[\d.-]*/i);
     const sectionEnd = nextHeader ? sectionStart + nextHeader.index : content.length;
     const section = content.slice(sectionStart, sectionEnd);
 

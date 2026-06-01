@@ -507,6 +507,34 @@ function collectDiskPhases(planBase) {
   return diskPhases;
 }
 
+// W021: phase ID integer prefix doesn't match its enclosing milestone section
+// Only fires when phase_id_convention is 'milestone-prefixed' (opt-in).
+// Returns array of mismatch objects: { phaseId, foundInMilestone, expectedMilestone }
+function checkMilestonePrefixMismatches(roadmapContent, { getMilestoneFromPhaseId }) {
+  const mismatches = [];
+  // Find all milestone sections (## vN.N or ## [code] vN.N)
+  const sections = [];
+  const sectionRx = /^#{1,3}\s+(?:\[[^\]]+\]\s*)?.*v(\d+\.\d+)/gim;
+  let m;
+  while ((m = sectionRx.exec(roadmapContent)) !== null) {
+    if (sections.length > 0) sections[sections.length - 1].end = m.index;
+    sections.push({ version: `v${m[1]}`, start: m.index, end: roadmapContent.length });
+  }
+  for (const section of sections) {
+    const content = roadmapContent.slice(section.start, section.end);
+    const phaseRx = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*)\s*:/gi;
+    let pm;
+    while ((pm = phaseRx.exec(content)) !== null) {
+      const phaseId = pm[1];
+      const expectedMilestone = getMilestoneFromPhaseId(phaseId);
+      if (expectedMilestone !== null && expectedMilestone !== section.version) {
+        mismatches.push({ phaseId, foundInMilestone: section.version, expectedMilestone });
+      }
+    }
+  }
+  return mismatches;
+}
+
 function cmdValidateConsistency(cwd, raw) {
   const planBase = planningDir(cwd);
   const roadmapPath = path.join(planBase, 'ROADMAP.md');
@@ -527,7 +555,9 @@ function cmdValidateConsistency(cwd, raw) {
   // stripped). Used for the "in ROADMAP but not on disk" check — we only require
   // disk dirs for the active milestone's phases.
   const roadmapPhases = new Set();
-  const phasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:/gi;
+  // Matches both legacy numeric (Phase 1:), decimal (Phase 2.1:), and
+  // milestone-prefixed (Phase 2-01:) headings, including bracket-prefixed form.
+  const phasePattern = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*(?:-[\w.-]+)*)\s*:/gi;
   let m;
   while ((m = phasePattern.exec(roadmapContent)) !== null) {
     roadmapPhases.add(m[1]);
@@ -539,7 +569,7 @@ function cmdValidateConsistency(cwd, raw) {
   // though it is absent from the active-milestone scope. Without this, narrowing
   // the scope (#501) would flag every shipped phase dir as a spurious orphan.
   const fullRoadmapPhases = new Set();
-  const fullPhasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:/gi;
+  const fullPhasePattern = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*(?:-[\w.-]+)*)\s*:/gi;
   let fm;
   while ((fm = fullPhasePattern.exec(roadmapContentRaw)) !== null) {
     fullRoadmapPhases.add(fm[1]);
@@ -558,8 +588,12 @@ function cmdValidateConsistency(cwd, raw) {
   // Check: phases on disk but not in ROADMAP (compared against the FULL roadmap
   // so shipped-milestone phase dirs are not flagged as orphans — #501)
   for (const p of diskPhases) {
+    // For plain numeric IDs, also try the unpadded form (e.g. "02" → "2").
+    // For milestone-prefixed IDs (e.g. "02-01"), use normalizePhaseName to
+    // canonicalize padding before comparing with the ROADMAP entries.
+    const normalized = normalizePhaseName(p);
     const unpadded = String(parseInt(p, 10));
-    if (!fullRoadmapPhases.has(p) && !fullRoadmapPhases.has(unpadded)) {
+    if (!fullRoadmapPhases.has(p) && !fullRoadmapPhases.has(normalized) && !fullRoadmapPhases.has(unpadded)) {
       warnings.push(`Phase ${p} exists on disk but not in ROADMAP.md`);
     }
   }
@@ -1058,6 +1092,31 @@ function cmdValidateHealth(cwd, options, raw) {
       }
     }
   } catch { /* git worktree not available or not a git repo — skip silently */ }
+
+  // ─── Check 11b: Phase ID / milestone-section mismatch (W021) ─────────────
+  // Only active when phase_id_convention === 'milestone-prefixed' in config.json.
+  try {
+    const phaseConvention = (() => {
+      if (!fs.existsSync(configPath)) return null;
+      try {
+        const configRaw = fs.readFileSync(configPath, 'utf-8');
+        const configParsed = JSON.parse(configRaw);
+        return configParsed.phase_id_convention || null;
+      } catch { return null; }
+    })();
+    if (phaseConvention === 'milestone-prefixed') {
+      if (fs.existsSync(roadmapPath)) {
+        const roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
+        const { getMilestoneFromPhaseId } = require('./core.cjs');
+        const mismatches = checkMilestonePrefixMismatches(roadmapContent, { getMilestoneFromPhaseId });
+        for (const m of mismatches) {
+          addIssue('warning', 'W021',
+            `Phase ${m.phaseId}: integer prefix implies ${m.expectedMilestone} but listed under ${m.foundInMilestone}`,
+            'Run `gsd-tools roadmap upgrade --convention milestone-prefixed` to migrate (dry-run by default)');
+        }
+      }
+    }
+  } catch { /* W021 check is advisory — skip on error */ }
 
   // ─── Check 12: MILESTONES.md / archive snapshot drift (#2446) ─────────────
   const milestonesPath = path.join(planBase, 'MILESTONES.md');

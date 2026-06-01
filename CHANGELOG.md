@@ -6,8 +6,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Milestone-prefixed phase ID convention (M-NN) for globally unique phase IDs within a project (#39)
+- `getMilestoneFromPhaseId()` and `getPhaseDirFromPhaseId()` helpers in core.cjs (#39)
+- W021 validation rule: fires when a phase ID's integer prefix mismatches its enclosing milestone section (#39)
+- `gsd-tools roadmap validate` subcommand for convention compliance checking (#39)
+- `gsd-tools roadmap upgrade --convention milestone-prefixed` migration tool (dry-run by default, `--apply` to mutate) (#39)
+- `phase_id_convention` config field (`null` | `'milestone-prefixed'` | `'free-form'`), defaults to `null` (legacy free-form, no breaking change) (#39)
+
 ### Fixed
 
+- `isDirInMilestone` now correctly matches M-NN-style phase directories against milestone-prefixed ROADMAP headings (#39)
+- `searchPhaseInContent` heading regex now tolerates `[bracket-token]` scope prefix (e.g., `### [GSD] Phase 2-01:`) (#39)
 - **README version guidance now uses npm/package metadata as the source of truth** — README, localized READMEs, and the docs index no longer present archived release-note or canary-stream numbers as the current GSD Core package version. (#545)
 
 ## [1.2.0](https://www.npmjs.com/package/@opengsd/gsd-core/v/1.2.0) - 2026-05-31

@@ -46,6 +46,8 @@
  *   roadmap analyze                    Full roadmap parse with disk status
  *   roadmap update-plan-progress <N>   Update progress table row from disk (PLAN vs SUMMARY counts)
  *   roadmap annotate-dependencies <N>  Add wave dependency notes + cross-cutting constraints to ROADMAP.md
+ *   roadmap validate                   Validate phase ID convention compliance
+ *   roadmap upgrade [--apply] --convention milestone-prefixed  Migrate phase IDs to M-NN convention
  *
  * Requirements Operations:
  *   requirements mark-complete <ids>   Mark requirement IDs as complete in REQUIREMENTS.md

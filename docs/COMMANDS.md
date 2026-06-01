@@ -1369,6 +1369,40 @@ Threads are lightweight cross-session knowledge stores for work that spans multi
 
 ---
 
+## Roadmap Management Commands
+
+### `roadmap validate`
+
+Validate ROADMAP.md for structural integrity, including milestone-prefix consistency.
+
+**Prerequisites:** `.planning/ROADMAP.md` exists
+**Produces:** Validation report; exits non-zero on any error or warning
+
+```bash
+node gsd-tools.cjs roadmap validate
+```
+
+---
+
+### `roadmap upgrade --convention milestone-prefixed`
+
+Migrate legacy `Phase N` IDs to the milestone-prefixed `Phase M-NN` convention.
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--convention milestone-prefixed` | Yes | Target convention to migrate to |
+| `--apply` | No | Write changes to disk (default: dry-run only) |
+
+**Prerequisites:** `.planning/ROADMAP.md` exists
+**Produces:** Dry-run diff (default) or in-place ROADMAP.md rewrite (`--apply`)
+
+```bash
+node gsd-tools.cjs roadmap upgrade --convention milestone-prefixed         # dry-run
+node gsd-tools.cjs roadmap upgrade --convention milestone-prefixed --apply  # apply
+```
+
+---
+
 ## State Management Commands
 
 ### `state validate`

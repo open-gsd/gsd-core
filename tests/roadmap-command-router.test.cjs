@@ -82,6 +82,6 @@ describe('roadmap-command-router', () => {
       },
     });
 
-    assert.equal(message, 'Unknown roadmap subcommand. Available: analyze, get-phase, update-plan-progress, annotate-dependencies');
+    assert.equal(message, 'Unknown roadmap subcommand. Available: analyze, get-phase, update-plan-progress, annotate-dependencies, validate, upgrade');
   });
 });
