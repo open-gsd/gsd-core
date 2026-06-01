@@ -8,6 +8,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Vertical MVP Slice mode** — `--mvp` flag on `/gsd-plan-phase` switches the planner from horizontal layer decomposition to vertical feature-slice decomposition (UI→API→DB in one task sequence). On Phase 1 of a new project with no prior phase summaries, also emits `SKELETON.md` via Walking Skeleton mode. Composable with `--tdd`: `--mvp --tdd` produces vertical slices where every behavior-adding task starts with a failing test. Phase-level persistence via `**Mode:** mvp` in ROADMAP.md applies `--mvp` automatically without the flag. (#78)
+- **`/gsd-mvp-phase` command** — guided MVP planning: prompts for a user story (`As a / I want to / So that`), runs SPIDR story-splitting check (Spike/Paths/Interfaces/Data/Rules axes), writes `**Mode:** mvp` to ROADMAP.md, then delegates to `/gsd-plan-phase`. (#78)
+- **MVP-aware UAT framing in `verify-phase`** — when a phase has `mode: mvp`, the verifier generates a user-flow-first UAT script (walks the feature as a user would) before any technical checks. (#78)
+- **MVP progress and stats display** — `progress` and `stats` commands show Walking Skeleton completion status and per-feature-slice status lines for MVP-mode phases. (#78)
+- **Six MVP reference files** — `planner-mvp-mode.md`, `skeleton-template.md`, `user-story-template.md`, `spidr-splitting.md`, `execute-mvp-tdd.md`, `verify-mvp-mode.md` — loaded by the planner, executor, and verifier agents when MVP mode is active. (#78)
 - Milestone-prefixed phase ID convention (M-NN) for globally unique phase IDs within a project (#39)
 - `getMilestoneFromPhaseId()` and `getPhaseDirFromPhaseId()` helpers in core.cjs (#39)
 - W021 validation rule: fires when a phase ID's integer prefix mismatches its enclosing milestone section (#39)
