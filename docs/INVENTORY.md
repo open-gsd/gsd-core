@@ -262,7 +262,7 @@ Full roster at `get-shit-done/workflows/*.md`. Workflows are thin orchestrators 
 
 ---
 
-## References (62 shipped)
+## References (63 shipped)
 
 Full roster at `get-shit-done/references/*.md`. References are shared knowledge documents that workflows and agents `@-reference`. The groupings below match [`docs/ARCHITECTURE.md`](ARCHITECTURE.md#references-get-shit-donereferencesmd) — core, workflow, thinking-model clusters, and the modular planner decomposition.
 
@@ -360,7 +360,7 @@ The `gsd-planner` agent is decomposed into a core agent plus reference modules t
 | `user-story-template.md` | User story format for MVP planning — "As a / I want to / So that" structured fields. |
 | `spidr-splitting.md` | SPIDR splitting decomposition rules for handling large user stories in MVP mode. |
 
-> **Subdirectory:** `get-shit-done/references/few-shot-examples/` contains additional few-shot examples (`plan-checker.md`, `verifier.md`) that are referenced from specific agents. These are not counted in the 62 top-level references.
+> **Subdirectory:** `get-shit-done/references/few-shot-examples/` contains additional few-shot examples (`plan-checker.md`, `verifier.md`) that are referenced from specific agents. These are not counted in the 63 top-level references.
 
 ---
 
