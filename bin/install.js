@@ -9932,7 +9932,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     }
 
     // Configure PreToolUse hook for worktree absolute-path safety (#260)
-    // Hard-blocks Edit/Write tool calls with absolute paths that resolve
+    // Hard-blocks Edit/Write/MultiEdit tool calls with absolute paths that resolve
     // outside the current worktree root. Prevents executor agents from
     // accidentally writing to the main checkout when running in isolation="worktree".
     const worktreePathGuardCommand = isGlobal
@@ -9944,7 +9944,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     const worktreePathGuardFile = path.join(targetDir, 'hooks', 'gsd-worktree-path-guard.js');
     if (!hasWorktreePathGuardHook && fs.existsSync(worktreePathGuardFile) && worktreePathGuardCommand) {
       settings.hooks[preToolEvent].push({
-        matcher: 'Write|Edit',
+        matcher: 'Write|Edit|MultiEdit',
         hooks: [
           {
             type: 'command',

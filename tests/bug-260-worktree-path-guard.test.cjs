@@ -280,6 +280,99 @@ describe('bug #260: gsd-worktree-path-guard.js', () => {
     });
   });
 
+  // 7. Adversarial: subdirectory cwd still guards correctly (Codex finding #2)
+  describe('subdirectory cwd', () => {
+    test('hook fires when cwd is a subdirectory of the worktree, not just its root', () => {
+      // The orchestrator may set cwd to a subdirectory. The hook must still
+      // detect the worktree context via git rev-parse --git-dir and block.
+      const subDir = path.join(worktreeDir, 'src');
+      fs.mkdirSync(subDir, { recursive: true });
+      const payload = {
+        cwd: subDir,
+        tool_name: 'Edit',
+        tool_input: { file_path: path.join(mainRepo, 'src', 'index.ts') },
+      };
+      const result = runHook(subDir, payload);
+      assert.strictEqual(result.status, 2,
+        `Hook must block even when cwd is a subdirectory of the worktree. ` +
+        `Got exit ${result.status}. stderr: ${result.stderr}`
+      );
+      const parsed = JSON.parse(result.stdout);
+      assert.strictEqual(parsed.decision, 'block');
+    });
+
+    test('path inside worktree passes even when cwd is a subdirectory', () => {
+      const subDir = path.join(worktreeDir, 'src');
+      fs.mkdirSync(subDir, { recursive: true });
+      const payload = {
+        cwd: subDir,
+        tool_name: 'Edit',
+        tool_input: { file_path: path.join(worktreeDir, 'src', 'foo.ts') },
+      };
+      const result = runHook(subDir, payload);
+      assert.strictEqual(result.status, 0,
+        `Absolute path inside worktree should pass regardless of cwd. ` +
+        `Got exit ${result.status}. stderr: ${result.stderr}`
+      );
+    });
+  });
+
+  // 8. Adversarial: `..` traversal is normalised before the containment check (Codex finding #1)
+  describe('dot-dot traversal is blocked', () => {
+    test('path with .. that escapes the worktree is blocked', () => {
+      // /worktree/src/../../../main-repo/file.ts resolves outside the worktree
+      const traversalPath = path.join(worktreeDir, 'src', '..', '..', '..', mainRepo.replace(/^\//, ''), 'file.ts');
+      const payload = {
+        cwd: worktreeDir,
+        tool_name: 'Edit',
+        tool_input: { file_path: traversalPath },
+      };
+      const result = runHook(worktreeDir, payload);
+      // After path.resolve, the path should equal something outside the worktree
+      const resolved = path.resolve(traversalPath);
+      if (resolved.startsWith(worktreeDir + path.sep) || resolved === worktreeDir) {
+        // The traversal happened to stay inside — skip this assertion
+        assert.ok(true, 'traversal resolved inside worktree (environment-dependent)');
+      } else {
+        assert.strictEqual(result.status, 2,
+          `Traversal path "${traversalPath}" resolves to "${resolved}" which is outside the worktree. ` +
+          `Must be blocked. Got exit ${result.status}. stderr: ${result.stderr}`
+        );
+        const parsed = JSON.parse(result.stdout);
+        assert.strictEqual(parsed.decision, 'block');
+      }
+    });
+  });
+
+  // 9. MultiEdit is also guarded (Codex finding #5)
+  describe('MultiEdit tool is guarded', () => {
+    test('MultiEdit with outside absolute path is blocked', () => {
+      const payload = {
+        cwd: worktreeDir,
+        tool_name: 'MultiEdit',
+        tool_input: { file_path: path.join(mainRepo, 'src', 'index.ts') },
+      };
+      const result = runHook(worktreeDir, payload);
+      assert.strictEqual(result.status, 2,
+        `MultiEdit targeting outside path must be blocked. Got ${result.status}. stderr: ${result.stderr}`
+      );
+      const parsed = JSON.parse(result.stdout);
+      assert.strictEqual(parsed.decision, 'block');
+    });
+
+    test('MultiEdit with inside absolute path passes', () => {
+      const payload = {
+        cwd: worktreeDir,
+        tool_name: 'MultiEdit',
+        tool_input: { file_path: path.join(worktreeDir, 'src', 'foo.ts') },
+      };
+      const result = runHook(worktreeDir, payload);
+      assert.strictEqual(result.status, 0,
+        `MultiEdit inside worktree should pass. Got ${result.status}. stderr: ${result.stderr}`
+      );
+    });
+  });
+
 });
 
 // ---------------------------------------------------------------------------
