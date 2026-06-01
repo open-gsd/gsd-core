@@ -105,8 +105,8 @@ describe('cleanup #40: prune local branches whose upstream is gone', () => {
     assert.ok(block, 'cleanup.md must contain a <prune_local_branches> step');
   });
 
-  test('prune_local_branches runs `git fetch --prune`', () => {
-    const block = extractNamedBlock(content, 'prune_local_branches');
+  test('show_dry_run runs `git fetch --prune` so execution list matches what the user confirmed', () => {
+    const block = extractNamedBlock(content, 'show_dry_run');
     assert.ok(block);
     const codeBlocks = extractFencedCodeBlocks(block);
     const allStatements = codeBlocks.flatMap(({ body }) => shellStatements(body));
@@ -115,7 +115,24 @@ describe('cleanup #40: prune local branches whose upstream is gone', () => {
     );
     assert.notStrictEqual(
       idx, -1,
-      'prune_local_branches must run `git fetch --prune` to remove stale remote-tracking refs'
+      'show_dry_run must run `git fetch --prune` so the candidate list shown to the user ' +
+      'is drawn from the same tracking-ref state as the execution step'
+    );
+  });
+
+  test('prune_local_branches does NOT re-run `git fetch --prune` (fetch already done in show_dry_run)', () => {
+    const block = extractNamedBlock(content, 'prune_local_branches');
+    assert.ok(block);
+    const codeBlocks = extractFencedCodeBlocks(block);
+    const allStatements = codeBlocks.flatMap(({ body }) => shellStatements(body));
+    const idx = findCommandIndex(allStatements, (cmd) =>
+      cmd[0] === 'git' && cmd[1] === 'fetch' && (cmd.includes('--prune') || cmd.includes('-p'))
+    );
+    assert.strictEqual(
+      idx, -1,
+      'prune_local_branches must not re-run git fetch --prune — the fetch in show_dry_run ' +
+      'ensures both steps use the same tracking-ref state, so re-fetching would create a ' +
+      'TOCTOU window between what the user confirmed and what gets deleted'
     );
   });
 
@@ -207,25 +224,21 @@ describe('cleanup #40: prune local branches whose upstream is gone', () => {
     assert.ok(block);
     // In `git branch -vv` output, the current branch is prefixed with `* `.
     // awk '{print $1}' on the current branch yields `*`, NOT the branch name.
-    // The pipeline must explicitly exclude lines starting with `*` so that
+    // The pipeline must explicitly exclude the `*` marker so that
     // `git branch -D` is never passed `*` as a literal argument.
-    //
-    // Accept either explicit awk guards (!/^\*/ or $1 != "*") OR
-    // git branch --format with a filter that skips HEAD.
     const hasExplicitHeadGuard = (
-      block.includes('!/^\\*/') ||      // awk negation pattern
-      block.includes("!/^\\*") ||        // awk negation without closing /
       block.includes('$1 != "*"') ||    // awk field comparison
       block.includes('$1!="*"') ||
-      block.includes('HEAD') && block.includes('filter') || // filter approach
+      block.includes('$1 !~') ||        // awk regex non-match (covers * and protected names)
+      block.includes('!/^\\*/') ||      // awk negation pattern
+      block.includes("!/^\\*") ||
       block.includes('--format') ||     // git branch --format skips * entirely
-      block.includes('sed') && block.includes('\\*') // sed stripping * prefix
+      (block.includes('sed') && block.includes('\\*'))
     );
     assert.ok(
       hasExplicitHeadGuard,
-      'prune_local_branches awk must explicitly exclude lines starting with `*` ' +
-      '(the current branch marker) — using !/^\\*/ or equivalent — to prevent ' +
-      'passing literal `*` to `git branch -D`'
+      'prune_local_branches awk must explicitly exclude the current branch marker (`*`) ' +
+      'using $1 != "*", $1 !~ /regex/, or equivalent, to prevent passing literal `*` to `git branch -D`'
     );
   });
 
@@ -246,21 +259,19 @@ describe('cleanup #40: prune local branches whose upstream is gone', () => {
     );
   });
 
-  test('show_dry_run does NOT run git fetch --prune (dry-run must be non-side-effecting)', () => {
-    const block = extractNamedBlock(content, 'show_dry_run');
+  test('prune_local_branches awk filter excludes protected branch names (main, next, trunk, develop)', () => {
+    const block = extractNamedBlock(content, 'prune_local_branches');
     assert.ok(block);
-    // git fetch --prune is a state-modifying operation (removes stale tracking refs).
-    // It must not appear in the dry-run step; only in prune_local_branches.
-    const codeBlocks = extractFencedCodeBlocks(block);
-    const allStatements = codeBlocks.flatMap(({ body }) => shellStatements(body));
-    const fetchPruneIdx = findCommandIndex(allStatements, (cmd) =>
-      cmd[0] === 'git' && cmd[1] === 'fetch' && (cmd.includes('--prune') || cmd.includes('-p'))
+    // Protected branch names must be excluded even if their upstream is gone.
+    // Accept double-quoted "main", single-quoted 'main', or regex anchor ^main$.
+    assert.ok(
+      block.includes('"main"') || block.includes("'main'") || block.includes('^main$') || block.includes('^main|'),
+      'prune_local_branches awk must exclude "main" from deletion candidates'
     );
-    assert.strictEqual(
-      fetchPruneIdx, -1,
-      'show_dry_run must not run `git fetch --prune` — the dry-run phase should be ' +
-      'read-only; git fetch --prune modifies remote-tracking refs and belongs only in ' +
-      'the prune_local_branches execution step'
+    assert.ok(
+      block.includes('"next"') || block.includes("'next'") || block.includes('^next$') || block.includes('^next|') ||
+      block.includes('"trunk"') || block.includes("'trunk'") || block.includes('^trunk$') || block.includes('^trunk|'),
+      'prune_local_branches awk must exclude integration branch names (next or trunk)'
     );
   });
 

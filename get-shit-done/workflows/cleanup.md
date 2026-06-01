@@ -87,10 +87,16 @@ Destination: .planning/milestones/v{X.Z}-phases/
 
 **Stale local branches (upstream gone):**
 
-Run to enumerate candidate branches (uses current cached remote-tracking state — `git fetch --prune` runs during the actual prune step):
+First, update remote-tracking refs so the candidate list matches the execution list exactly:
 
 ```bash
-git branch -vv | awk '/: gone\]/ && !/^\*/ {print $1}'
+git fetch --prune 2>/dev/null || true
+```
+
+Then enumerate candidates (protected branch names are excluded even if their upstream is gone):
+
+```bash
+git branch -vv | awk '/: gone\]/ { if ($1 !~ /^\*$|^main$|^next$|^trunk$|^develop$/) print $1 }'
 ```
 
 Show each branch name. If none, show:
@@ -136,18 +142,17 @@ Repeat for all milestones in the cleanup set.
 
 <step name="prune_local_branches">
 
-After phase archival, prune local branches whose upstream has been deleted:
+After phase archival, prune local branches whose upstream has been deleted. Use the same filter as the dry-run so the execution list matches exactly what the user confirmed:
 
 ```bash
-git fetch --prune 2>/dev/null || true
-git branch -vv | awk '/: gone\]/ { if ($1 != "*") print $1 }' | xargs -r git branch -D
+git branch -vv | awk '/: gone\]/ { if ($1 !~ /^\*$|^main$|^next$|^trunk$|^develop$/) print $1 }' | xargs -r git branch -D
 ```
 
 Notes:
-- `git fetch --prune` updates remote-tracking refs so the branch list is current.
-- `$1 != "*"` explicitly skips the currently checked-out branch — in `git branch -vv` output the current branch is prefixed with `* `, so `$1` yields `*` for it; without this guard `xargs` would pass literal `*` to `git branch -D`.
+- `git fetch --prune` already ran in `show_dry_run` — the tracking refs are current and this step enumerates from the same state the user confirmed.
+- `!~ /^\*$/` skips the currently checked-out branch (prefixed with `* ` in `git branch -vv` output, so `$1` yields `*`).
+- `!~ /^main$|^next$|^trunk$|^develop$/` excludes protected branch names even if their upstream is gone — matches the dry-run exclusion exactly.
 - `xargs -r` prevents `git branch -D` from running with no arguments when no stale branches exist.
-- If `git fetch --prune` fails (no network), the step continues with the cached tracking-ref state shown in the dry-run.
 
 </step>
 
