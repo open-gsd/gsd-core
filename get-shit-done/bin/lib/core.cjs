@@ -1855,6 +1855,12 @@ function resolveEffortInternal(cwd, agentType, opts) {
       const v = ao[agentType];
       if (typeof v === 'string' && EFFORT_SET.has(v)) return v;
     }
+  } else {
+    const mao = CANONICAL_CONFIG_DEFAULTS.effort && CANONICAL_CONFIG_DEFAULTS.effort.agent_overrides;
+    if (mao && typeof mao === 'object' && !Array.isArray(mao)) {
+      const v = mao[agentType];
+      if (typeof v === 'string' && EFFORT_SET.has(v)) return v;
+    }
   }
 
   // Step 3: routing_tier_defaults by agent's default tier.
@@ -1885,6 +1891,9 @@ function resolveEffortInternal(cwd, agentType, opts) {
   // Step 4: effort.default
   if (effortCfg) {
     const d = effortCfg.default;
+    if (typeof d === 'string' && EFFORT_SET.has(d)) return d;
+  } else {
+    const d = CANONICAL_CONFIG_DEFAULTS.effort && CANONICAL_CONFIG_DEFAULTS.effort.default;
     if (typeof d === 'string' && EFFORT_SET.has(d)) return d;
   }
 
