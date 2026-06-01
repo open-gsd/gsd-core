@@ -155,9 +155,11 @@ Research, plan, and verify a phase.
 | `--validate` | Run state validation before planning begins |
 | `--bounce` | Run external plan bounce validation after planning (uses `workflow.plan_bounce_script`) |
 | `--skip-bounce` | Skip plan bounce even if enabled in config |
+| `--mvp` | Vertical MVP mode — planner organizes tasks as feature slices (UI→API→DB) instead of horizontal layers. On Phase 1 of a new project with no prior phase summaries, also emits `SKELETON.md` (Walking Skeleton). Can be persisted on a phase via `**Mode:** mvp` in ROADMAP.md, which applies `--mvp` automatically without the flag. |
+| `--tdd` | TDD mode — planner applies `type: tdd` to eligible behavior-adding tasks so each begins with a failing test. Composable with `--mvp`: `--mvp --tdd` produces vertical slices where every behavior-adding task starts red-green. |
 
 **Prerequisites:** `.planning/ROADMAP.md` exists
-**Produces:** `{phase}-RESEARCH.md`, `{phase}-{N}-PLAN.md`, `{phase}-VALIDATION.md`
+**Produces:** `{phase}-RESEARCH.md`, `{phase}-{N}-PLAN.md`, `{phase}-VALIDATION.md`; `{phase}/SKELETON.md` when Walking Skeleton mode fires
 
 **Research-only mode (`--research-phase <N>`):**
 - No modifier: prompts `update / view / skip` if RESEARCH.md already exists.
@@ -186,6 +188,8 @@ See [Package Legitimacy Gate in the User Guide](USER-GUIDE.md#package-legitimacy
 /gsd-plan-phase --research-phase 4             # Research only on phase 4 (prompts if RESEARCH.md exists)
 /gsd-plan-phase --research-phase 4 --view      # Print existing RESEARCH.md, no spawn
 /gsd-plan-phase --research-phase 4 --research  # Force-refresh research, no prompt
+/gsd-plan-phase 1 --mvp                        # Vertical-slice plan for phase 1
+/gsd-plan-phase 1 --mvp --tdd                  # Vertical slices + failing test per behavior-adding task
 ```
 
 ---
@@ -431,6 +435,39 @@ CRUD for phases in ROADMAP.md — add, insert, remove, or edit phases with a sin
 /gsd-phase --remove 7               # Remove phase 7, renumber 8→7, 9→8, etc.
 /gsd-phase --edit 5                 # Edit any field of phase 5
 /gsd-phase --edit 5 --force         # Edit phase 5 even if in-progress or completed
+```
+
+---
+
+### `/gsd-mvp-phase`
+
+Guided MVP planning for a phase — prompts for a user story, runs SPIDR splitting check, writes `**Mode:** mvp` to ROADMAP.md, then delegates to `/gsd-plan-phase` (which auto-detects MVP mode via the roadmap field).
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `N` | **Yes** | Phase number to convert to MVP mode (integer or decimal like `2.1`) |
+
+| Flag | Description |
+|------|-------------|
+| `--force` | Allow converting an `in_progress` or `completed` phase |
+
+**Prerequisites:** Phase must already exist in ROADMAP.md (created via `/gsd-new-project`, `/gsd-phase`, or `/gsd-phase --insert`). The command does not create new phases — it converts an existing phase.
+
+**Process:**
+1. Prompts for "As a / I want to / So that" user story (three structured questions)
+2. Validates story format against the canonical regex
+3. Runs SPIDR splitting check — if the story is too large, walks through Spike/Paths/Interfaces/Data/Rules axes and offers to split into multiple phases
+4. Writes `**Goal:** <user-story>` and `**Mode:** mvp` to the phase's ROADMAP.md section (with confirmation gate)
+5. Delegates to `/gsd-plan-phase <N>`, which detects MVP mode automatically
+
+**Walking Skeleton:** Auto-triggered when `--mvp` (or `mode: mvp`) is used on Phase 1 of a new project with no prior phase summaries. The planner produces `SKELETON.md` alongside `PLAN.md`.
+
+**Produces:** Updated ROADMAP.md, then all artifacts from `/gsd-plan-phase`; `SKELETON.md` when Walking Skeleton mode fires.
+
+```bash
+/gsd-mvp-phase 1                    # MVP planning for phase 1
+/gsd-mvp-phase 2.1                  # MVP planning for a decimal phase
+/gsd-mvp-phase 3 --force            # Convert phase 3 even if in-progress
 ```
 
 ---
