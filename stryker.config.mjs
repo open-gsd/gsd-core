@@ -23,7 +23,6 @@
 
 // Generated files that must NEVER be mutated
 const GENERATED_FILES = [
-  '!get-shit-done/bin/lib/configuration.cjs',   // GENERATED — sdk/src/config/index.ts
   '!get-shit-done/bin/lib/command-aliases.cjs',  // GENERATED
   '!get-shit-done/bin/lib/commands.cjs',         // GENERATED
   '!get-shit-done/bin/lib/core.cjs',             // GENERATED

@@ -3,8 +3,7 @@ import tseslint from 'typescript-eslint';
 import globals from 'globals';
 import pluginN from 'eslint-plugin-n';
 import noOnlyTests from 'eslint-plugin-no-only-tests';
-import { existsSync } from 'fs';
-import { join, dirname } from 'path';
+import { dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -22,15 +21,12 @@ const localPlugin = {
   },
 };
 
-const sdkSrcExists = existsSync(join(__dirname, 'sdk', 'src'));
-
 export default tseslint.config(
   // ── Global ignores ─────────────────────────────────────────────────────────
   {
     ignores: [
       'node_modules/**',
       '**/dist/**',
-      'sdk/dist/**',
       '.worktrees/**',
       '.claude/**',
       'coverage/**',
