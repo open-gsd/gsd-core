@@ -307,6 +307,88 @@ function cmdResolveExecution(cwd, agentType, raw, opts) {
   output(result, raw, effort);
 }
 
+/**
+ * #488 — Replace or inject the `effort:` value in YAML frontmatter.
+ * Unlike injectEffortFrontmatter (install.js), this overwrites an existing value.
+ */
+function setEffortFrontmatter(content, effortValue) {
+  const eol = /^---\r\n/.test(content) ? '\r\n' : '\n';
+  const fmRe = /^---\r?\n([\s\S]*?)^---\r?$/m;
+  const match = fmRe.exec(content);
+  if (!match) return content;
+  const fmBody = match[1];
+  if (/^effort:/m.test(fmBody)) {
+    return content.replace(/^(effort:)[ \t]*.*$/m, `$1 ${effortValue}`);
+  }
+  const openLen = 3 + eol.length;
+  const closingStart = match.index + openLen + fmBody.length;
+  return content.slice(0, closingStart) + `effort: ${effortValue}${eol}` + content.slice(closingStart);
+}
+
+/**
+ * #488 — Re-sync effort: frontmatter in all installed gsd-*.md agent files to
+ * match the current effort config, without requiring a full reinstall.
+ *
+ * @param {string} cwd        Project working directory (for effort config resolution).
+ * @param {boolean} raw       JSON output flag.
+ * @param {{ dryRun?: boolean, configDir?: string, runtime?: string }} [opts]
+ *   dryRun    — when true (default), report changes without writing; false = apply.
+ *   configDir — override the agents parent dir (default: runtime global config dir).
+ *   runtime   — override runtime (default: config.runtime || 'claude').
+ */
+function cmdEffortSync(cwd, raw, opts) {
+  opts = opts || {};
+  const dryRun = opts.dryRun !== false;
+
+  const config = loadConfig(cwd);
+  const runtime = opts.runtime || config.runtime || 'claude';
+
+  if (runtime !== 'claude') {
+    output({ synced: 0, skipped: 0, changes: [], dry_run: dryRun, reason: `runtime '${runtime}' does not use effort: frontmatter` }, raw, '');
+    return;
+  }
+
+  const { getGlobalConfigDir } = require('./runtime-homes.cjs');
+  const agentsDir = path.join(opts.configDir || getGlobalConfigDir(runtime), 'agents');
+
+  if (!fs.existsSync(agentsDir)) {
+    output({ synced: 0, skipped: 0, changes: [], dry_run: dryRun, agents_dir: agentsDir, reason: 'agents directory not found' }, raw, '');
+    return;
+  }
+
+  const files = fs.readdirSync(agentsDir).filter(f => f.startsWith('gsd-') && f.endsWith('.md'));
+  const changes = [];
+  let synced = 0;
+  let skipped = 0;
+
+  for (const file of files) {
+    const agentName = file.replace(/\.md$/, '');
+    const filePath = path.join(agentsDir, file);
+    const content = fs.readFileSync(filePath, 'utf8');
+
+    const universalEffort = resolveEffortInternal(cwd, agentName);
+    const rendered = renderEffortForRuntime(runtime, universalEffort);
+    const newEffortValue = rendered.value;
+
+    const fmMatch = /^---\r?\n([\s\S]*?)^---\r?$/m.exec(content);
+    if (!fmMatch) { skipped++; continue; }
+
+    const effortMatch = /^effort:[ \t]*(.+?)[ \t]*$/m.exec(fmMatch[1]);
+    const currentEffort = effortMatch ? effortMatch[1] : null;
+
+    if (currentEffort === newEffortValue) { skipped++; continue; }
+
+    changes.push({ agent: agentName, from: currentEffort, to: newEffortValue });
+    synced++;
+
+    if (!dryRun) {
+      fs.writeFileSync(filePath, setEffortFrontmatter(content, newEffortValue));
+    }
+  }
+
+  output({ synced, skipped, changes, dry_run: dryRun, agents_dir: agentsDir }, raw, synced > 0 ? 'changed' : 'ok');
+}
+
 function cmdCommit(cwd, message, files, raw, amend, noVerify) {
   if (!message && !amend) {
     error('commit message required');
@@ -1179,6 +1261,7 @@ module.exports = {
   cmdHistoryDigest,
   cmdResolveModel,
   cmdResolveExecution,
+  cmdEffortSync,
   cmdCommit,
   cmdCommitToSubrepo,
   cmdSummaryExtract,

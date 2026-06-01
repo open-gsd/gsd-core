@@ -370,7 +370,7 @@ async function main() {
   const TOP_LEVEL_USAGE = 'Usage: gsd-tools <command> [args] [--raw] [--pick <field>] [--cwd <path>] [--ws <name>] [--json-errors]\n' +
     'Commands: agent, agent-skills, audit-open, audit-uat, check, check-commit, commit, commit-to-subrepo, ' +
     'config-ensure-section, config-get, config-new-project, config-path, config-set, migrate-config, ' +
-    'current-timestamp, detect-custom-files, docs-init, extract-messages, find-phase, ' +
+    'current-timestamp, detect-custom-files, docs-init, effort, extract-messages, find-phase, ' +
     'from-gsd2, frontmatter, gap-analysis, generate-claude-md, generate-claude-profile, ' +
     'generate-dev-preferences, generate-slug, graphify, history-digest, init, intel, ' +
     'learnings, list-todos, milestone, phase, phase-plan-index, phases, profile-questionnaire, ' +
@@ -1650,6 +1650,39 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       }
       const ctx = loadUpdateContext({ preferredConfigDir, preferredRuntime });
       process.stdout.write(JSON.stringify(ctx) + '\n');
+      break;
+    }
+
+    case 'effort': {
+      const subcommand = args[1];
+      if (subcommand === 'sync') {
+        const effortSyncArgs = args.slice(2);
+        let dryRun = true;
+        let effortSyncConfigDir;
+        let effortSyncRuntime;
+        for (let i = 0; i < effortSyncArgs.length; i++) {
+          const a = effortSyncArgs[i];
+          if (a === '--apply') { dryRun = false; continue; }
+          if (a === '--dry-run') { dryRun = true; continue; }
+          if (a.startsWith('--config-dir=')) { effortSyncConfigDir = a.slice('--config-dir='.length); continue; }
+          if (a === '--config-dir') {
+            const v = effortSyncArgs[i + 1];
+            if (!v || v.startsWith('--')) error('Missing value for --config-dir', ERROR_REASON.USAGE);
+            effortSyncConfigDir = v; i++; continue;
+          }
+          if (a.startsWith('--runtime=')) { effortSyncRuntime = a.slice('--runtime='.length); continue; }
+          if (a === '--runtime') {
+            const v = effortSyncArgs[i + 1];
+            if (!v || v.startsWith('--')) error('Missing value for --runtime', ERROR_REASON.USAGE);
+            effortSyncRuntime = v; i++; continue;
+          }
+          if (a === '--raw') continue;
+          if (a.startsWith('-')) error(`Unknown flag for effort sync: ${a}`, ERROR_REASON.USAGE);
+        }
+        commands.cmdEffortSync(cwd, raw, { dryRun, configDir: effortSyncConfigDir, runtime: effortSyncRuntime });
+      } else {
+        error('Unknown effort subcommand. Available: sync', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+      }
       break;
     }
 
