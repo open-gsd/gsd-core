@@ -15,6 +15,7 @@ const KNOWN_REVIEWER_SLUGS = [
   'opencode',
   'qwen',
   'cursor',
+  'antigravity',
   'ollama',
   'lm_studio',
   'llama_cpp',
