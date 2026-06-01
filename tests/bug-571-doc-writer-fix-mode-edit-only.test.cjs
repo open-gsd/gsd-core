@@ -153,5 +153,48 @@ describe('bug #571: docs-update workflow fix_loop', () => {
         'fix_loop must log a WARNING when truncation is detected and restored (#571)'
       );
     });
+
+    // Structural ordering: PRE check → fix agent runs → POST check → restore
+    // These ensure the guard is wired in the right sequence, not just present.
+    test('PRE_FIX_LINES is captured before POST_FIX_LINES (correct ordering)', () => {
+      const preIdx = loopBlock.indexOf('PRE_FIX_LINES');
+      const postIdx = loopBlock.indexOf('POST_FIX_LINES');
+      assert.ok(preIdx !== -1 && postIdx !== -1, 'both PRE_FIX_LINES and POST_FIX_LINES must be present (#571)');
+      assert.ok(
+        preIdx < postIdx,
+        'PRE_FIX_LINES must appear before POST_FIX_LINES — pre-capture must happen before post-check (#571)'
+      );
+    });
+
+    test('restore instruction appears after POST_FIX_LINES check (correct ordering)', () => {
+      const postIdx = loopBlock.indexOf('POST_FIX_LINES');
+      // Find the restore instruction — it follows the threshold comparison
+      const restoreIdx = loopBlock.indexOf('existing_content', postIdx);
+      assert.ok(
+        restoreIdx !== -1 && restoreIdx > postIdx,
+        'restore-from-existing_content instruction must appear after the POST_FIX_LINES check (#571)'
+      );
+    });
+
+    test('fix_loop doc path is quoted in shell snippets', () => {
+      // Unquoted paths break on filenames with spaces or shell metacharacters.
+      // Verify the bash snippets use quoted "{doc_path}" not bare {doc_path}.
+      assert.ok(
+        loopBlock.includes('< "{doc_path}"') || loopBlock.includes("<\"{doc_path}\""),
+        'shell redirections must quote {doc_path} to handle paths with spaces (#571)'
+      );
+    });
+
+    test('corrupted doc is still re-verified (not silently skipped)', () => {
+      // The restored doc must be included in step 2 re-verification so its
+      // failures are counted and reported. It should only be excluded from
+      // receiving another fix attempt, not from verification.
+      const restoreIdx = loopBlock.indexOf('existing_content', loopBlock.indexOf('POST_FIX_LINES'));
+      const reVerifyIdx = loopBlock.indexOf('re-verify', restoreIdx);
+      assert.ok(
+        reVerifyIdx !== -1,
+        'fix_loop must include re-verification after truncation restore (corrupted docs still have failures) (#571)'
+      );
+    });
   });
 });
