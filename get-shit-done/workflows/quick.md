@@ -392,7 +392,7 @@ Display banner:
  GSD ► RESEARCHING QUICK TASK
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-◆ Investigating approaches for: ${DESCRIPTION}
+◆ Investigating approaches for: ${DESCRIPTION} (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)
 ```
 
 Spawn a single focused researcher (not 4 parallel researchers like full phases — quick tasks need targeted research, not broad domain surveys):
@@ -454,6 +454,8 @@ If research file not found, warn but continue: "Research agent did not produce o
 **If `$VALIDATE_MODE`:** Use `quick-full` mode with stricter constraints.
 
 **If NOT `$VALIDATE_MODE`:** Use standard `quick` mode.
+
+Display: `◆ Spawning planner... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)`
 
 ```
 Agent(

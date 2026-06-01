@@ -324,6 +324,8 @@ UI_SPEC_FILE=$(ls "${PHASE_DIR}"/*-UI-SPEC.md 2>/dev/null | head -1)
 
 **If `INTERACTIVE` is set:** Dispatch plan as a background agent to keep the main context lean. While plan runs, the workflow can immediately start discussing the next phase (see step 4).
 
+Print: `◆ Spawning background planner for phase ${PHASE_NUM}... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)`
+
 ```
 Agent(
   description="Plan phase ${PHASE_NUM}: ${PHASE_NAME}",

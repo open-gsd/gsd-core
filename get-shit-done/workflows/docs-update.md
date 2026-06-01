@@ -831,7 +831,8 @@ Extract `canonical_queue` (items with `status: "completed"`) and `review_queue` 
 
 For each doc in `canonical_queue` that was successfully written to disk:
 
-1. Spawn the `gsd-doc-verifier` agent (or invoke sequentially if Task tool is unavailable) with a `<verify_assignment>` block:
+1. Print: `◆ Spawning doc verifier for {doc_path}... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)`
+   Spawn the `gsd-doc-verifier` agent (or invoke sequentially if Task tool is unavailable) with a `<verify_assignment>` block:
    ```xml
    <verify_assignment>
    doc_path: {relative path to the doc file, e.g. README.md}
@@ -849,7 +850,8 @@ This is NOT optional. Every doc in `review_queue` MUST be verified.
 
 For each doc in `review_queue` from the manifest:
 
-1. Spawn the `gsd-doc-verifier` agent with the same `<verify_assignment>` block as above.
+1. Print: `◆ Spawning doc verifier for {doc_path}... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)`
+   Spawn the `gsd-doc-verifier` agent with the same `<verify_assignment>` block as above.
 2. Read the result JSON from `.planning/tmp/verify-{doc_filename}.json`.
 3. Update the manifest: set `status: "verified"` for each review_queue doc processed.
 

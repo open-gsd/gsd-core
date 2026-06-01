@@ -1040,7 +1040,7 @@ fi
 
 Display:
 ```text
-◆ Chunked mode: spawning outline planner...
+◆ Chunked mode: spawning outline planner... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)
 ```
 
 Spawn the planner in **outline-only** mode — it must write only the outline manifest, not any
@@ -1087,7 +1087,7 @@ For each plan entry extracted from `PLAN-OUTLINE.md`:
 
 2. Display:
    ```text
-   ◆ Chunked mode: planning {plan_id} ({k}/{N})...
+   ◆ Chunked mode: planning {plan_id} ({k}/{N})... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)
    ```
 
 3. Spawn the planner in **single-plan** mode — it must write exactly one PLAN.md file:

@@ -98,7 +98,7 @@ Display startup banner:
 
 **If `has_plans` is false:**
 
-Display: `◆ No plans found — spawning initial planning agent...`
+Display: `◆ No plans found — spawning initial planning agent... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)`
 
 ```text
 Agent(
@@ -134,7 +134,7 @@ prev_high_count = Infinity
 
 Increment `cycle`.
 
-Display: `◆ Cycle {cycle}/{MAX_CYCLES} — spawning review agent...`
+Display: `◆ Cycle {cycle}/{MAX_CYCLES} — spawning review agent... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)`
 
 ```text
 Agent(
