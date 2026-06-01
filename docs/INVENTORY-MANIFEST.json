@@ -1,5 +1,5 @@
 {
-  "generated": "2026-05-31",
+  "generated": "2026-06-01",
   "families": {
     "agents": [
       "gsd-advisor-researcher",
@@ -311,6 +311,7 @@
       "prompt-budget.cjs",
       "review-reviewer-selection.cjs",
       "roadmap-command-router.cjs",
+      "roadmap-upgrade.cjs",
       "roadmap.cjs",
       "runtime-artifact-layout.cjs",
       "runtime-homes.cjs",

@@ -31,7 +31,7 @@
 // ── Issue #26: regex constants (W005, W006-archived) ────────────────────────
 // Matches legacy numeric dirs (01-setup), milestone-prefixed dirs (02-01-setup),
 // deep dirs (02-04-01-deep), and project-code-prefixed variants (GSD-02-01-setup).
-const phaseDirNameRe = /^(?:[A-Z]{1,6}-)?\d{1,}(?:-\d+)*(?:\.\d+)*-[\w-]+$/i;
+const phaseDirNameRe = /^(?:[A-Z]{1,6}-)?\d{2,}(?:-\d+)*(?:\.\d+)*-[\w-]+$/i;
 // Extracts the full phase token from a directory name, including milestone-prefixed
 // multi-segment tokens like "02-01" from "02-01-setup" or "GSD-02-01-setup".
 // Greedily captures all leading all-digit segments before the first letter-start segment.
