@@ -308,7 +308,7 @@ Exit workflow.
 
 Update `prev_high_count = HIGH_COUNT`.
 
-Display: `◆ Spawning replan agent with review feedback...`
+Display: `◆ Spawning replan agent with review feedback... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)`
 
 ```text
 Agent(

@@ -93,6 +93,8 @@ Call AskUserQuestion with threat table and options:
 - `register_authored_at_plan_time: true` — **Verify mitigations exist** — do not scan for new threats. The register is complete; verify each threat's mitigation is present in the implementation.
 - `register_authored_at_plan_time: false` (retroactive-STRIDE mode) — **Retroactive-STRIDE: build a STRIDE register from implementation files first, then verify mitigations.** The phase was authored before formal threat modelling; the auditor must construct the register from scratch before verifying.
 
+Print: `◆ Spawning security auditor... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)`
+
 ```
 Agent(
   prompt="Read ~/.claude/agents/gsd-security-auditor.md for instructions.\n\n" +

@@ -72,6 +72,8 @@ mkdir -p .planning/codebase
 
 Spawn a single `gsd-codebase-mapper` agent with the selected focus area:
 
+Print: `◆ Spawning scanner... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)`
+
 ```
 Agent(
   prompt="Scan this codebase with focus: {focus}. Write results to .planning/codebase/. Produce only: {document_list}",

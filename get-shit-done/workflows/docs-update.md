@@ -374,7 +374,7 @@ After all decisions recorded, continue to detect_runtime_capabilities.
 <step name="dispatch_wave_1" condition="Task tool is available">
 **Read the work manifest first:** `Read .planning/tmp/docs-work-manifest.json` — use `canonical_queue` items with `wave: 1` for this step.
 
-Spawn 3 parallel gsd-doc-writer agents for Wave 1 docs: README, ARCHITECTURE, CONFIGURATION.
+Spawn 3 parallel gsd-doc-writer agents for Wave 1 docs: README, ARCHITECTURE, CONFIGURATION (each runs in a subagent — no output until they return, ~1–5 min; expected, not a freeze).
 
 These are foundational docs with no cross-references needed, making them ideal for parallel generation.
 

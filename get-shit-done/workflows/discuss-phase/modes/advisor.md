@@ -86,7 +86,7 @@ This reframing applies to:
 After the user selects gray areas in `present_gray_areas`, spawn parallel
 research agents.
 
-1. Display brief status: `Researching {N} areas...`
+1. Display brief status: `Researching {N} areas...` (each runs in a subagent — no output until they return, ~1–5 min; expected, not a freeze)
 
 2. For EACH user-selected gray area, spawn a `Agent()` in parallel:
 

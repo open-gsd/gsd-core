@@ -441,6 +441,8 @@ fi
 
 Spawn the gsd-code-reviewer agent:
 
+Print: `◆ Spawning code reviewer... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)`
+
 ```
 Agent(subagent_type="gsd-code-reviewer", prompt="
 <files_to_read>

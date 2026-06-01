@@ -68,7 +68,7 @@ Build file list for auditor:
 ## 3. Spawn gsd-ui-auditor
 
 ```
-◆ Spawning UI auditor...
+◆ Spawning UI auditor... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)
 ```
 
 Build prompt:

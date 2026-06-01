@@ -144,6 +144,8 @@ Use Agent tool with `subagent_type="gsd-codebase-mapper"`, `model="{mapper_model
 
 **CRITICAL:** Use the dedicated `gsd-codebase-mapper` agent, NOT `Explore` or `browser_subagent`. The mapper agent writes documents directly.
 
+Print: "Spawning 4 parallel codebase mapper agents (each runs in a subagent — no output until they return, ~1–5 min; expected, not a freeze)"
+
 **Agent 1: Tech Focus**
 
 ```text

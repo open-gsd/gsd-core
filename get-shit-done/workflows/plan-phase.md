@@ -480,7 +480,7 @@ Display banner:
  GSD ► RESEARCHING PHASE {X}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-◆ Spawning researcher...
+◆ Spawning researcher... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)
 ```
 
 ### Spawn gsd-phase-researcher
@@ -815,7 +815,7 @@ Display banner:
  GSD ► PATTERN MAPPING PHASE {X}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-◆ Spawning pattern mapper...
+◆ Spawning pattern mapper... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)
 ```
 
 Pattern mapper prompt:
@@ -877,7 +877,7 @@ Display banner:
  GSD ► PLANNING PHASE {X}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-◆ Spawning planner...
+◆ Spawning planner... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)
 ```
 
 Planner prompt:
@@ -1225,7 +1225,7 @@ Display banner:
  GSD ► VERIFYING PLANS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-◆ Spawning plan checker...
+◆ Spawning plan checker... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)
 ```
 
 Checker prompt:

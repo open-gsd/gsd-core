@@ -94,7 +94,7 @@ final output — do not proceed to fixing.
 <step name="fix-loop">
 For each **auto-fixable** finding (up to `--max`, ordered by severity desc):
 
-**a. Spawn executor agent:**
+**a. Spawn executor agent** (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)**:**
 ```
 Agent(
   prompt="Fix finding {ID}: {description}. Files: {file_refs}. Make the minimal change to resolve this specific finding. Do not refactor surrounding code.",

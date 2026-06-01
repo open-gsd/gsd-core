@@ -73,7 +73,7 @@ Build file list for auditor:
 ## 3. Spawn gsd-eval-auditor
 
 ```
-◆ Spawning eval auditor...
+◆ Spawning eval auditor... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)
 ```
 
 Build prompt:

@@ -869,7 +869,7 @@ Check if this is greenfield or subsequent milestone:
 Display spawning indicator:
 
 ```
-◆ Spawning 4 researchers in parallel...
+◆ Spawning 4 researchers in parallel... (each runs in a subagent — no output until they return, ~1–5 min; expected, not a freeze)
   → Stack research
   → Features research
   → Architecture research
@@ -1265,7 +1265,7 @@ Display stage banner:
  GSD ► CREATING ROADMAP
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-◆ Spawning roadmapper...
+◆ Spawning roadmapper... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)
 ```
 
 **ROADMAP.md template — mode-aware emit.** When generating the initial ROADMAP.md:

@@ -269,7 +269,7 @@ Important: You are running in the background. Do NOT use AskUserQuestion — mak
 Display:
 
 ```
-◆ Spawning planner for Phase {N}: {phase_name}...
+◆ Spawning planner for Phase {N}: {phase_name}... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)
 ```
 
 Loop back to dashboard step.
@@ -303,7 +303,7 @@ Important: You are running in the background. Do NOT use AskUserQuestion — mak
 Display:
 
 ```
-◆ Spawning executor for Phase {N}: {phase_name}...
+◆ Spawning executor for Phase {N}: {phase_name}... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)
 ```
 
 Loop back to dashboard step.

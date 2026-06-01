@@ -83,10 +83,12 @@ Plans: 3/5 complete
 
 ## Spawning Indicators
 
-```
-◆ Spawning researcher...
+**Liveness convention:** Every spawn announcement must carry the canonical phrase `runs in a subagent` inline so users know that silence during a subagent run is expected. Without this, a healthy 1–5 minute agent looks identical to a frozen session. Single spawns use the singular form; parallel spawns use the plural form.
 
-◆ Spawning 4 researchers in parallel...
+```
+◆ Spawning researcher... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)
+
+◆ Spawning 4 researchers in parallel... (each runs in a subagent — no output until they return, ~1–5 min; expected, not a freeze)
   → Stack research
   → Features research
   → Architecture research

@@ -59,6 +59,8 @@ This would take ~30 seconds and might surface useful context.
 ```
 
 If yes, spawn a research agent:
+
+Print: `◆ Spawning explorer... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)`
 ```
 Agent(
   prompt="Quick research: {specific_question}. Return 3-5 key findings, no more than 200 words.",

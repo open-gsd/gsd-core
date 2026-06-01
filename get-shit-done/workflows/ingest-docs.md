@@ -180,7 +180,7 @@ Collect the one-line confirmations from each classifier. If any classifier error
 
 <step name="synthesize">
 
-Spawn `gsd-doc-synthesizer` once:
+Spawn `gsd-doc-synthesizer` once (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze):
 
 ```
 Agent({
@@ -247,7 +247,7 @@ Proceed to routing silently, or optionally display `GSD > No conflicts. Auto-res
 
 Audit PROJECT.md field requirements that `gsd-roadmapper` expects. For fields derivable from `.planning/intel/SYNTHESIS.md` (project scope, goals/non-goals, constraints, locked decisions), synthesize from the intel. For fields NOT derivable (project name, developer-facing success metric, target runtime), prompt via `AskUserQuestion` one at a time — minimal question set, no interrogation.
 
-Delegate to `gsd-roadmapper`:
+Delegate to `gsd-roadmapper` (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze):
 
 ```
 Agent({

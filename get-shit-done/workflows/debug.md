@@ -101,7 +101,7 @@ Eliminated: {count}
 
 Surface to user. Then delegate directly to the session manager (skip Steps 2 and 3 — pass `symptoms_prefilled: true` and set the slug from SLUG variable). The existing file IS the context.
 
-Print before spawning:
+Print before spawning (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze):
 ```
 [debug] Session: .planning/debug/{SLUG}.md
 [debug] Status: {status}
@@ -189,6 +189,11 @@ Create `.planning/debug/{slug}.md` with initial state using the Write tool (neve
 ## 4. Session Management (delegated to gsd-debug-session-manager)
 
 After initial context setup, spawn the session manager to handle the full checkpoint/continuation loop. The session manager handles specialist_hint dispatch internally: when gsd-debugger returns ROOT CAUSE FOUND it extracts the specialist_hint field and invokes the matching skill (e.g. typescript-expert, swift-concurrency) before offering fix options.
+
+Print before spawning (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze):
+```
+[debug] Delegating loop to session manager...
+```
 
 ```
 Agent(

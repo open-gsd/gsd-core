@@ -93,6 +93,8 @@ Call AskUserQuestion with gap table and options:
 
 ## 5. Spawn gsd-nyquist-auditor
 
+Print: `◆ Spawning nyquist auditor... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)`
+
 ```
 Agent(
   prompt="Read ~/.claude/agents/gsd-nyquist-auditor.md for instructions.\n\n" +

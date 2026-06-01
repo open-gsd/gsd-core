@@ -49,7 +49,7 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
 AGENT_SKILLS_MAPPER=$(gsd_run query agent-skills gsd-codebase-mapper)
 ```
 
-Then spawn `gsd-codebase-mapper` agents with the `--paths` hint:
+Then spawn `gsd-codebase-mapper` agents with the `--paths` hint (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze):
 
 ```text
 Agent(

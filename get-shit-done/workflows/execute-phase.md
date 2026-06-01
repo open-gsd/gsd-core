@@ -491,7 +491,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
    **{Plan ID}: {Plan Name}**
    {2-3 sentences: what this builds, technical approach, why it matters}
 
-   Spawning {count} agent(s)...
+   Spawning {count} agent(s)... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)
    ---
    ```
 

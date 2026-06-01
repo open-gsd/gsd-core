@@ -252,7 +252,7 @@ Map to calibration tier:
 
 If no USER-PROFILE.md: calibration_tier = "standard"
 
-**Spawn Explore subagent:**
+**Spawn Explore subagent** (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)**:**
 
 ```
 Agent(subagent_type="gsd-assumptions-analyzer", prompt="""
@@ -310,7 +310,7 @@ Parse the subagent's response. Extract:
 <step name="external_research">
 **Skip if:** `needs_research` from deep_codebase_analysis is empty.
 
-If research topics were flagged, spawn a general-purpose research agent:
+If research topics were flagged, spawn a general-purpose research agent (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze):
 
 ```
 Agent(subagent_type="general-purpose", prompt="""

@@ -1126,6 +1126,14 @@ Always read a file before editing it. Never call Edit or Write on a file you hav
 
 You ran `/gsd-new-project` but `.planning/PROJECT.md` already exists. This is a safety check. If you want to start over, delete the `.planning/` directory first.
 
+### A Command Looks Frozen After "Spawning..."
+
+If you see `◆ Spawning researcher...` (or any "Spawning…" line) and then nothing — no output, no spinner — for 1–5 minutes, **this is normal**. GSD subagents run in a separate context window; their work is invisible to the parent session while in progress. The liveness note on the spawn line confirms this: "(runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)".
+
+**Do not interrupt the session.** Killing it discards the in-progress subagent work and forces you to restart that step. Wait for the result to appear. Research and planning agents routinely take 1–5 minutes; verification agents can take longer on large phases.
+
+**If it truly seems stuck** (>10 minutes with no result): check whether Claude Code's agent task is still active in the sidebar. If the task shows as completed but no output appeared, the result may have been lost in a context switch — run the command again.
+
 ### Context Degradation During Long Sessions
 
 Clear your context window between major commands: `/clear` in Claude Code. GSD is designed around fresh contexts -- every subagent gets a clean 200K window. If quality is dropping in the main session, clear and use `/gsd-resume-work` or `/gsd-progress` to restore state.
