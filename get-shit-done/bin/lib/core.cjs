@@ -1928,14 +1928,42 @@ function getMilestonePhaseFilter(cwd, versionOverride) {
 
     if (versionOverride) {
       const escapedVersion = escapeRegex(versionOverride);
-      const sectionPattern = new RegExp(`(^#{1,3}\\s+.*${escapedVersion}[^\\n]*)`, 'mi');
-      const sectionMatch = roadmapContent.match(sectionPattern);
+      // Exclude phase headings (e.g. "### Phase 1: v1.3 migration") that mention
+      // the version but are not milestone-level headings. Same guard as sectionPattern
+      // in extractCurrentMilestone().
+      const sectionPattern = new RegExp(`(^#{1,3}\\s+(?!Phase\\s+\\S).*${escapedVersion}[^\\n]*)`, 'mi');
+      let sectionMatch = roadmapContent.match(sectionPattern);
+
+      // If no heading match, check whether the version lives in a <summary> tag
+      // (milestone wrapped in <details open>). If so, extract that block's heading
+      // so the phase-filter can scope correctly.
       if (!sectionMatch) {
-        // Only treat this as an error case when the roadmap is milestone-versioned.
+        const summaryPat = new RegExp(`<summary[^>]*>[^<]*${escapedVersion}[^<]*<\\/summary>`, 'i');
+        const summaryHit = roadmapContent.match(summaryPat);
+        if (summaryHit) {
+          // Treat the <summary> content as a synthetic heading match so the code
+          // below can extract the section boundaries from it.
+          // We fabricate a match object pointing at the <details> block start.
+          const beforeSummary = roadmapContent.slice(0, summaryHit.index);
+          const detailsIdx = beforeSummary.lastIndexOf('<details');
+          if (detailsIdx !== -1) {
+            // Use extractCurrentMilestone (already called above) which now handles
+            // <summary> correctly — roadmap is already scoped. Skip the override
+            // re-scoping: roadmap is already the current milestone content.
+            // Do nothing: keep roadmap as-is from extractCurrentMilestone.
+            sectionMatch = null; // fall through without setting missingExplicitVersion
+          }
+        }
+      }
+
+      if (!sectionMatch) {
+        // Only treat this as an error case when the roadmap is milestone-versioned
+        // AND the version is genuinely absent (not in a <summary> tag handled above).
         // Older/flat roadmap formats without vX.Y milestone headings should keep
         // legacy pass-through behavior for milestone.complete.
-        const hasVersionedMilestones = /^#{1,3}\s+.*v\d+\.\d+/mi.test(roadmapContent);
-        if (hasVersionedMilestones) {
+        const hasVersionedMilestones = /^#{1,3}\s+(?!Phase\s+\S).*v\d+\.\d+/mi.test(roadmapContent);
+        const versionInSummary = new RegExp(`<summary[^>]*>[^<]*${escapedVersion}[^<]*<\\/summary>`, 'i').test(roadmapContent);
+        if (hasVersionedMilestones && !versionInSummary) {
           roadmap = '';
           missingExplicitVersion = true;
         }
