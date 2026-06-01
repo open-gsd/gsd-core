@@ -65,9 +65,11 @@ process.stdin.on('end', () => {
     }
 
     // path.resolve() normalises git's forward-slash output (C:/repo) to the
-    // platform separator (C:\repo on Windows) before realpathSync runs.
-    let wtRoot = path.resolve(toplevelResult.stdout.trim());
-    try { wtRoot = fs.realpathSync(wtRoot); } catch { /* fail open */ }
+    // platform separator (C:\repo on Windows) and collapses any .. segments.
+    // We intentionally do NOT call realpathSync here: on Windows, realpathSync
+    // returns the filesystem's canonical case (e.g. C:\Users\Runner) which may
+    // differ from the case used in the file_path argument, causing false blocks.
+    const wtRoot = path.resolve(toplevelResult.stdout.trim());
 
     const rawFilePath = data.tool_input?.file_path || '';
     if (!rawFilePath) {
