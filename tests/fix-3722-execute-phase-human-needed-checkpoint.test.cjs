@@ -13,7 +13,7 @@
  * remain unresolved.
  *
  * The correct design:
- *   - human_needed branch creates a UAT.md file (not HUMAN-UAT.md)
+ *   - human_needed branch creates a {phase_num}-UAT.md file (not {phase_num}-HUMAN-UAT.md)
  *   - directs the user to /gsd:verify-work to complete verification
  *   - does NOT call update_roadmap directly (phase completion goes through verify-work)
  *   - does NOT offer "approved" → continue as a bypass

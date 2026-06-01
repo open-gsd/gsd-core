@@ -1419,9 +1419,11 @@ updated: [now ISO]
 
 ## Current Test
 
-### 1. {first human_verification item description}
-expected: {expected behavior from VERIFICATION.md}
-result: [pending]
+number: 1
+name: {first human_verification item description}
+expected: |
+  {expected behavior from VERIFICATION.md}
+awaiting: user response
 
 ## Tests
 
@@ -1468,7 +1470,7 @@ Verify-work will walk you through each item and mark the phase complete when all
 
 **Do NOT advance the phase from this branch.** Phase completion is handled by verify-work's auto-transition after UAT passes.
 
-**If user acknowledges without reporting issues (e.g. "ok", "noted", "ack", "got it"):** Stop. The phase remains pending. No further orchestrator action — wait for the user to run `/gsd:verify-work`.
+**If user acknowledges without reporting issues (including "ok", "noted", "ack", "got it", "approved", "done", "yes", "pass", or similar):** Stop. The phase remains pending. No further orchestrator action — wait for the user to run `/gsd:verify-work`.
 
 **If user reports issues now (before running verify-work):** Proceed to gap closure as currently implemented.
 

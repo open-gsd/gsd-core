@@ -27,7 +27,7 @@ Instead, fold each would-be verification step into the relevant `auto` task usin
 </task>
 ```
 
-The verifier (Step 8) harvests every `<verify><human-check>` block at end-of-phase and consolidates them into the existing `human_needed` → HUMAN-UAT.md path in `workflows/execute-phase.md`. The user reviews everything in one batch instead of paying a cold-start cost per item.
+The verifier (Step 8) harvests every `<verify><human-check>` block at end-of-phase and consolidates them into the existing `human_needed` → `{phase_num}-UAT.md` path in `workflows/execute-phase.md`. The user reviews everything in one batch instead of paying a cold-start cost per item.
 
 ### `mid-flight` (opt-back-in — pre-#3309 behavior)
 

@@ -544,7 +544,7 @@ done
 </verify>
 ```
 
-Merge those harvested items into the same human verification list as your own analysis. Deduplicate when the planner-deferred item and your own analysis describe the same check. The downstream `human_needed` → HUMAN-UAT.md path in `workflows/execute-phase.md` is the single sink — no separate file is created.
+Merge those harvested items into the same human verification list as your own analysis. Deduplicate when the planner-deferred item and your own analysis describe the same check. The downstream `human_needed` → `{phase_num}-UAT.md` path in `workflows/execute-phase.md` is the single sink — no separate file is created.
 
 **Format:**
 
