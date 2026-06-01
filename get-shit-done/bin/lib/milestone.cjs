@@ -114,6 +114,65 @@ function cmdMilestoneComplete(cwd, version, options, raw) {
     error(`no phases found for milestone ${version} in ROADMAP.md`);
   }
 
+  // Guard: prevent marking complete when ROADMAP still lists phases that have
+  // no directory on disk (disk_status: no_directory). This catches the case
+  // where the active milestone was erroneously marked complete before phases
+  // were even started. Only fires when STATE.md confirms the current milestone
+  // version matches what is being completed — no false positives on fresh
+  // projects where phases haven't been scaffolded yet.
+  // Pass --force to override this guard.
+  if (!options.force) {
+    try {
+      // Only guard when STATE.md's milestone field matches the version being completed.
+      let stateVersion = null;
+      try {
+        const stateRaw = fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf-8') : null;
+        if (stateRaw) {
+          const milestoneMatch = stateRaw.match(/^milestone:\s*(.+)/m);
+          if (milestoneMatch) stateVersion = milestoneMatch[1].trim();
+        }
+      } catch { /* skip */ }
+
+      if (stateVersion && stateVersion === version) {
+        const { extractCurrentMilestone } = require('./core.cjs');
+        const roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
+        const scopedContent = extractCurrentMilestone(roadmapContent, cwd);
+        const phasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:\s*([^\n]+)/gi;
+        const noDirectoryPhases = [];
+        let pm;
+        const phaseDirEntries = (() => {
+          try {
+            return fs.readdirSync(phasesDir, { withFileTypes: true })
+              .filter(e => e.isDirectory()).map(e => e.name);
+          } catch { return []; }
+        })();
+        while ((pm = phasePattern.exec(scopedContent)) !== null) {
+          const phaseNum = pm[1];
+          const numPrefix = phaseNum.replace(/^0+/, '').split(/[^0-9]/)[0];
+          // A phase has disk_status: 'no_directory' when no phase directory
+          // with a matching numeric prefix exists on disk.
+          const hasDirectory = phaseDirEntries.some(d => {
+            const dirNum = d.replace(/^0+/, '').split(/[^0-9]/)[0];
+            return dirNum === numPrefix;
+          });
+          if (!hasDirectory) {
+            noDirectoryPhases.push(phaseNum);
+          }
+        }
+        if (noDirectoryPhases.length > 0) {
+          error(
+            `Cannot mark milestone complete: ROADMAP lists ${noDirectoryPhases.length} unstarted phase(s) ` +
+            `(e.g. Phase ${noDirectoryPhases[0]}). Re-run with --force to override.`
+          );
+        }
+      }
+    } catch (e) {
+      // If the error came from our guard, re-throw it; otherwise skip silently.
+      if (e.message && e.message.startsWith('Cannot mark milestone complete:')) throw e;
+      // Phase scan failed or STATE version mismatch — allow completion to proceed.
+    }
+  }
+
   // Gather stats from phases (scoped to current milestone only)
   let phaseCount = 0;
   let totalPlans = 0;

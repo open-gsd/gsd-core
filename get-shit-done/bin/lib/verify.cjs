@@ -1107,6 +1107,51 @@ function cmdValidateHealth(cwd, options, raw) {
     }
   } catch { /* artifact check is advisory — skip on error */ }
 
+  // ─── Check 14: milestone-status vs. roadmap-progress incoherence (W021) ───
+  try {
+    if (fs.existsSync(statePath) && fs.existsSync(roadmapPath)) {
+      const stateRaw = fs.readFileSync(statePath, 'utf-8');
+      const statusMatch = stateRaw.match(/^status:\s*(.+)/im);
+      const stateStatus = statusMatch ? statusMatch[1].trim().toLowerCase() : '';
+      const isMarkedComplete = /milestone complete|archived/.test(stateStatus);
+      if (isMarkedComplete) {
+        // Inline phase scan: read roadmap, extract current milestone section,
+        // then check for phases with no directory on disk (unstarted).
+        const roadmapRaw = fs.readFileSync(roadmapPath, 'utf-8');
+        const scopedContent = extractCurrentMilestone(roadmapRaw, cwd);
+        const phasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:\s*([^\n]+)/gi;
+        const unstarted = [];
+        let pm;
+        const planningWorkspace = require('./planning-workspace.cjs');
+        const phasesDir2 = planningWorkspace.planningPaths(cwd).phases;
+        const phaseDirNames2 = (() => {
+          try {
+            return fs.readdirSync(phasesDir2, { withFileTypes: true })
+              .filter(e => e.isDirectory()).map(e => e.name);
+          } catch { return []; }
+        })();
+        while ((pm = phasePattern.exec(scopedContent)) !== null) {
+          const phaseNum = pm[1];
+          const numPrefix = phaseNum.replace(/^0+/, '').split(/[^0-9]/)[0];
+          // Phase is unstarted (disk_status: no_directory) if no directory
+          // with matching numeric prefix exists on disk.
+          const hasDirectory = phaseDirNames2.some(d => {
+            const dirNum = d.replace(/^0+/, '').split(/[^0-9]/)[0];
+            return dirNum === numPrefix;
+          });
+          if (!hasDirectory) {
+            unstarted.push(phaseNum);
+          }
+        }
+        if (unstarted.length > 0) {
+          addIssue('warning', 'W021',
+            `STATE says milestone complete but ROADMAP lists ${unstarted.length} unstarted phase(s) (e.g. Phase ${unstarted[0]})`,
+            'Run validate consistency or re-run complete-milestone after verifying all phases are done');
+        }
+      }
+    }
+  } catch { /* W021 check is advisory — skip on error */ }
+
   // ─── Perform repairs if requested ─────────────────────────────────────────
   const repairActions = [];
   if (options.repair && repairs.length > 0) {
