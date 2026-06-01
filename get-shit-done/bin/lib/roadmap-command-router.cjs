@@ -32,8 +32,9 @@ function checkW021(content) {
   const MILESTONE_RE = /^#{1,3}\s+(?:\[[^\]]+\]\s+|Roadmap\s+|[✅🚧]\s*)?v(\d+)\.\d+(?:\s|:|\s*—)/iu;
 
   // Migrated phase heading: ### Phase M-NN: Name  (M-NN or unpadded M-N form)
-  // \d+ on the sub-segment tolerates unpadded forms like Phase 2-1: as well as Phase 2-01:
   const PHASE_RE = /^#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+(\d+)-(\d+)(?:-\d+)*\s*:/i;
+  // Unprefixed legacy phase heading: ### Phase N: Name  (no hyphen sub-index)
+  const UNPREFIXED_PHASE_RE = /^#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+(\d+[A-Za-z]?(?:\.\d+)*)\s*:/i;
 
   let currentMilestoneMajor = null;
   const lines = content.split('\n');
@@ -58,6 +59,26 @@ function checkW021(content) {
             `Phase ID prefix mismatch: phase "${phaseId}" is listed under v${currentMilestoneMajor}.x ` +
             `but its prefix (${phaseMajor}) does not match. ` +
             `Run \`${MIGRATION_CMD}\` to fix.`,
+        });
+      }
+      continue;
+    }
+
+    // When the convention is active, an unprefixed heading (### Phase 1:) is itself a W021
+    // violation — it is missing the required M-NN prefix entirely.
+    const unprefixedMatch = line.match(UNPREFIXED_PHASE_RE);
+    if (unprefixedMatch && currentMilestoneMajor !== null) {
+      const rawId = unprefixedMatch[1];
+      // Skip if it matched PHASE_RE already (it didn't reach here in that case)
+      // Also skip if it looks like a bare integer whose prefix matches the section
+      // — those pass; only non-matching or non-prefixed forms fire W021.
+      const numericMajor = parseInt(rawId, 10);
+      if (!SENTINELS.has(numericMajor)) {
+        warnings.push({
+          code: 'W021',
+          message:
+            `Phase ID "${rawId}" is not in M-NN form (milestone-prefixed convention is active). ` +
+            `Run \`${MIGRATION_CMD}\` to migrate.`,
         });
       }
     }

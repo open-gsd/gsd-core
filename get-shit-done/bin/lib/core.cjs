@@ -698,7 +698,7 @@ function normalizePhaseName(phase) {
 function getMilestoneFromPhaseId(phaseId) {
   const str = String(phaseId);
   const stripped = str.replace(/^[A-Z]{1,6}-(?=\d)/i, '');
-  const m = stripped.match(/^0*(\d+)-/);
+  const m = stripped.match(/^0*(\d+)-\d/);
   if (!m) return null;
   const major = parseInt(m[1], 10);
   if (major === 0 || major === 999) return null;
@@ -2162,9 +2162,17 @@ function getMilestonePhaseFilter(cwd, versionOverride) {
     return id.split('-').map(seg => seg.replace(/^0+(?=\d)/, '') || '0').join('-');
   }
 
+  // Only capture hyphenated M-NN segments when the ROADMAP itself uses that convention.
+  // Legacy ROADMAPs with phase IDs like '1' must use the simple first-segment regex or
+  // a legacy dir like '01-02-setup' (phase 1, slug '02-setup') would match as '1-02'.
+  const roadmapUsesHyphenedIds = [...normalized].some(n => n.includes('-'));
+  const numericRe = roadmapUsesHyphenedIds
+    ? /^0*(\d+(?:-0*\d+)*[A-Za-z]?(?:\.\d+)*)/
+    : /^0*(\d+[A-Za-z]?(?:\.\d+)*)/;
+
   function isDirInMilestone(dirName) {
     // Try numeric match first
-    const m = dirName.match(/^0*(\d+(?:-0*\d+)*[A-Za-z]?(?:\.\d+)*)/);
+    const m = dirName.match(numericRe);
     if (m && normalized.has(normalizePhaseIdSegments(m[1]).toLowerCase())) return true;
     // Try custom ID match (e.g. PROJ-42-description → PROJ-42)
     const customMatch = dirName.match(/^([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*)/);
@@ -2178,7 +2186,7 @@ function getMilestonePhaseFilter(cwd, versionOverride) {
     // milestone is keyed on the bare numeric form.
     const stripped = dirName.replace(/^[A-Z]{1,6}-(?=\d)/i, '');
     if (stripped !== dirName) {
-      const sm = stripped.match(/^0*(\d+(?:-0*\d+)*[A-Za-z]?(?:\.\d+)*)/);
+      const sm = stripped.match(numericRe);
       if (sm && normalized.has(normalizePhaseIdSegments(sm[1]).toLowerCase())) return true;
     }
     return false;

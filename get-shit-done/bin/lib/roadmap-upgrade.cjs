@@ -118,15 +118,6 @@ function extractPhaseNumFromDir(dirName) {
   return m ? m[1] : null;
 }
 
-/**
- * Check whether any phase directory name matches the milestone-prefixed form.
- * e.g. "01-02-setup" (M=1, sub=02) or "GSD-01-02-setup"
- */
-function isMigratedDirName(dirName) {
-  const stripped = dirName.replace(/^[A-Z]{1,6}-(?=\d)/i, '');
-  // milestone-prefixed: NN-NN-... where first segment is milestone major
-  return /^\d+-\d{2}-/.test(stripped) || /^\d+-\d{2}$/.test(stripped);
-}
 
 /**
  * Build the new directory name from old name and new phase ID.
@@ -253,11 +244,6 @@ function computeMigrationPlan(cwd, options = {}) {
       } catch { return false; }
     });
   } catch { /* phases dir may not exist */ }
-
-  // Check if any dirs are already migrated
-  if (existingDirs.some(isMigratedDirName)) {
-    return { alreadyMigrated: true, phases: [], roadmapEdits: [], crossRefEdits: [] };
-  }
 
   // ── Build phase rename pairs ───────────────────────────────────────────────
   // Flat ordered list of (legacyPhaseNum, newId) in ROADMAP order, for dir matching.
