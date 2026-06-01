@@ -4,7 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { escapeRegex, loadConfig, getMilestoneInfo, getMilestonePhaseFilter, output, error } = require('./core.cjs');
+const { escapeRegex, loadConfig, getMilestoneInfo, getMilestonePhaseFilter, extractCurrentMilestone, output, error } = require('./core.cjs');
 const { platformWriteSync, platformReadSync, platformEnsureDir } = require('./shell-command-projection.cjs');
 const { planningDir, planningPaths } = require('./planning-workspace.cjs');
 const { realClock } = require('./clock.cjs');
@@ -886,9 +886,31 @@ function buildStateFrontmatter(bodyContent, cwd) {
             diskTotalSummaries += summaryCount;
             if (completed) diskCompletedPhases++;
           }
+          // Count phase headings from ROADMAP using a digit-containing pattern
+          // that matches both numeric phases (01, 05.1) and project-code phases
+          // (PROJ-42, CK-05) but excludes pure-word section headers like
+          // `## Phase Overview:` or `## Phase Details:` — single source of
+          // truth for total_phases (#549).
+          let roadmapPhaseCount = 0;
+          try {
+            const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
+            const roadmapRaw = platformReadSync(roadmapPath);
+            if (roadmapRaw !== null) {
+              const roadmapScope = extractCurrentMilestone(roadmapRaw, cwd);
+              const phaseHeadingPattern = /#{2,4}\s*Phase\s+([\w][\w.-]*)\s*:/gi;
+              let m;
+              while ((m = phaseHeadingPattern.exec(roadmapScope)) !== null) {
+                // Only count tokens that contain at least one digit — excludes
+                // pure-word section headings (Overview, Details) while keeping
+                // numeric phases (01, 05.1) and project-code IDs (PROJ-42).
+                if (/\d/.test(m[1])) roadmapPhaseCount++;
+              }
+            }
+          } catch { /* fall through: phaseDirs.length used as sole count */ }
+
           cached = {
-            totalPhases: isDirInMilestone.phaseCount > 0
-              ? Math.max(phaseDirs.length, isDirInMilestone.phaseCount)
+            totalPhases: roadmapPhaseCount > 0
+              ? Math.max(phaseDirs.length, roadmapPhaseCount)
               : phaseDirs.length,
             completedPhases: diskCompletedPhases,
             totalPlans: diskTotalPlans,
@@ -1651,9 +1673,22 @@ function cmdStateSync(cwd, options, raw) {
   // Mirrors the logic in buildStateFrontmatter so both report consistent percents (#3242 Bug B).
   let syncTotalPhases = null;
   try {
-    const isDirInMilestone = getMilestonePhaseFilter(cwd);
-    if (isDirInMilestone.phaseCount > 0) {
-      syncTotalPhases = Math.max(entries.length, isDirInMilestone.phaseCount);
+    let roadmapPhaseCount = 0;
+    const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
+    const roadmapRaw = platformReadSync(roadmapPath);
+    if (roadmapRaw !== null) {
+      const roadmapScope = extractCurrentMilestone(roadmapRaw, cwd);
+      const phaseHeadingPattern = /#{2,4}\s*Phase\s+([\w][\w.-]*)\s*:/gi;
+      let m;
+      while ((m = phaseHeadingPattern.exec(roadmapScope)) !== null) {
+        // Only count tokens that contain at least one digit — excludes
+        // pure-word section headings (Overview, Details) while keeping
+        // numeric phases (01, 05.1) and project-code IDs (PROJ-42).
+        if (/\d/.test(m[1])) roadmapPhaseCount++;
+      }
+    }
+    if (roadmapPhaseCount > 0) {
+      syncTotalPhases = Math.max(entries.length, roadmapPhaseCount);
     } else {
       syncTotalPhases = entries.length;
     }
