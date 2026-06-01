@@ -262,7 +262,7 @@ Full roster at `get-shit-done/workflows/*.md`. Workflows are thin orchestrators 
 
 ---
 
-## References (63 shipped)
+## References (62 shipped)
 
 Full roster at `get-shit-done/references/*.md`. References are shared knowledge documents that workflows and agents `@-reference`. The groupings below match [`docs/ARCHITECTURE.md`](ARCHITECTURE.md#references-get-shit-donereferencesmd) — core, workflow, thinking-model clusters, and the modular planner decomposition.
 

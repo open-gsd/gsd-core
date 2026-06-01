@@ -127,17 +127,10 @@ Set `TEXT_MODE=true` if `--text` is present in $ARGUMENTS OR `text_mode` from in
 ```bash
 MVP_FLAG_ARG=""
 if [[ "$ARGUMENTS" =~ (^|[[:space:]])--mvp([[:space:]]|$) ]]; then MVP_FLAG_ARG="--cli-flag"; fi
-```
-
-Defer the `phase.mvp-mode` query until `PHASE` is finalized (after explicit argument parsing/fallback phase detection + validation).
-
-**`--tdd` CLI flag override.** If `--tdd` is present in `$ARGUMENTS`, treat it as `TDD_MODE=true` regardless of the config value. This allows `--mvp --tdd` as a one-shot CLI combination without requiring a persistent config change.
-
-```bash
 if [[ "$ARGUMENTS" =~ (^|[[:space:]])--tdd([[:space:]]|$) ]]; then TDD_MODE=true; fi
 ```
 
-The verb returns `true|false`. Full result also exposes `source` (`cli_flag` | `roadmap` | `config` | `none`) for diagnostics. The mode is **all-or-nothing per phase** (PRD decision Q1) — never selective per task.
+Defer the `phase.mvp-mode` query until `PHASE` is finalized (after explicit argument parsing/fallback phase detection + validation). The verb returns `true|false`; full result also exposes `source` (`cli_flag` | `roadmap` | `config` | `none`) for diagnostics. Mode is **all-or-nothing per phase** (PRD decision Q1).
 
 **Walking Skeleton gate.** When `MVP_MODE=true` AND `phase_number == "01"` AND there are zero prior phase summaries (new project), the planner runs in **Walking Skeleton mode** (per PRD decision Q2 — new projects only). Detect with:
 
