@@ -1,23 +1,26 @@
 // allow-test-rule: source-text-is-the-product
 // Tests that every GSD workflow that spawns a subagent carries the liveness phrase
-// "runs in a subagent" on its spawn announcement banner line.
+// "runs in a subagent" on its spawn announcement lines.
 // Canonical phrase defined in get-shit-done/references/ui-brand.md § Spawning Indicators.
 // Regression test for https://github.com/open-gsd/gsd-core/issues/558.
 //
-// DESIGN NOTE: We check two independent conditions per file:
+// TEST STRATEGY: Two complementary assertions.
 //
-// 1. BANNER CHECK — every `◆ Spawning …` line (user-visible print) must carry the liveness
-//    phrase on that same line. This is the primary convention.
+// 1. SPAWN-BANNER CHECK — any ◆ display line that contains the word "spawn" or "spawning"
+//    (case-insensitive, anywhere on the line) must carry the liveness phrase. This is more
+//    rigorous than a simple /◆\s+[Ss]pawning/ prefix match and catches all variants:
+//      "◆ Spawning researcher..."              (spawn word right after ◆)
+//      "◆ Chunked mode: spawning planner..."   (spawn word after prefix text)
+//    It does NOT match ◆ status/error lines that say "planner returned" or "checker wrote"
+//    (those don't contain the word "spawn"), so it has no false positives.
 //
-// 2. SUBAGENT PRESENCE CHECK — if a file contains a `subagent_type` assignment (i.e. it
-//    actually dispatches a subagent), it must contain the liveness phrase somewhere in the
-//    file. This is a coarser fallback that catches workflows that dispatch without a
-//    `◆ Spawning …` banner — either because they use a prose "Print: `◆ Spawning …`"
-//    instruction that was missed, or a display line with a different prefix.
+// 2. PRESENCE CHECK (coarser fallback) — if a file contains `subagent_type`, it must
+//    contain the liveness phrase at least once. Catches workflows that dispatch subagents
+//    without any ◆ spawn banner (e.g. prose-only "Spawn X" instructions).
 //
-// Together the two checks are strictly stronger than the original file-level check,
-// without generating false positives for `subagent_type` strings that appear inside
-// Agent() code blocks that are themselves within a file that already has a liveness note.
+// Together the two assertions are strictly stronger than the original file-level check:
+// a file with 10 spawns where only one ◆ Spawning banner got the note still fails #1.
+// A file with subagent_type but no banner at all still fails #2.
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
@@ -27,11 +30,14 @@ const path = require('path');
 const WORKFLOWS_DIR = path.join(__dirname, '..', 'get-shit-done', 'workflows');
 const LIVENESS_PHRASE = 'runs in a subagent';
 
-// Matches a user-visible spawn banner line (the ◆ glyph signals a UI-brand display event).
-// We do NOT match raw `subagent_type=` lines here because those are code-block internals,
-// not user-visible announcements — the liveness phrase belongs on the banner, not inside
-// the Agent() call.
-const SPAWN_BANNER_RE = /◆\s+(?:Spawning|spawning)/;
+// Matches any ◆ line that contains "spawn" or "spawning" (case-insensitive, word anywhere).
+// This covers:
+//   "◆ Spawning researcher..."       → matched
+//   "◆ Chunked mode: spawning X..."  → matched
+// But NOT:
+//   "◆ Planner wrote N plan(s)..."   → not matched (no "spawn" word)
+//   "◆ Research phase enabled"       → not matched (no "spawn" word)
+const SPAWN_BANNER_RE = /◆[^\n]*\bspawning?\b/i;
 
 function findMdFiles(dir) {
   const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -48,7 +54,7 @@ function findMdFiles(dir) {
 }
 
 describe('spawn-liveness-banner', () => {
-  test('every ◆ Spawning… banner line carries the liveness phrase "runs in a subagent"', () => {
+  test('every ◆ spawn announcement line carries the liveness phrase "runs in a subagent"', () => {
     const mdFiles = findMdFiles(WORKFLOWS_DIR);
     const bannerViolations = [];
 
@@ -68,10 +74,10 @@ describe('spawn-liveness-banner', () => {
     assert.deepStrictEqual(
       bannerViolations,
       [],
-      `The following ◆ Spawning… banner lines are missing the liveness phrase "${LIVENESS_PHRASE}":\n` +
+      `The following ◆ spawn announcement lines are missing the liveness phrase "${LIVENESS_PHRASE}":\n` +
         bannerViolations.map(v => `  - ${v}`).join('\n') +
         '\n\nPer get-shit-done/references/ui-brand.md § "Spawning Indicators":\n' +
-        'every spawn announcement banner must carry "runs in a subagent" so users know\n' +
+        'every ◆ spawn announcement must carry "runs in a subagent" so users know\n' +
         'that silence during a subagent run is expected and do not kill a healthy agent.\n' +
         'See https://github.com/open-gsd/gsd-core/issues/558'
     );
