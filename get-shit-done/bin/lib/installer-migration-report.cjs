@@ -122,6 +122,7 @@ const BUNDLED_GSD_HOOK_FILES = Object.freeze(new Set([
   'hooks/gsd-update-banner.js',
   'hooks/gsd-validate-commit.sh',
   'hooks/gsd-workflow-guard.js',
+  'hooks/gsd-worktree-path-guard.js',
 ]));
 
 // Classify a blocked prompt-user action into one of the safe-default

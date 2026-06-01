@@ -64,8 +64,9 @@ process.stdin.on('end', () => {
       process.exit(0); // can't determine root — fail open
     }
 
-    let wtRoot = toplevelResult.stdout.trim();
-    // Resolve symlinks on the worktree root so the anchor is canonical
+    // path.resolve() normalises git's forward-slash output (C:/repo) to the
+    // platform separator (C:\repo on Windows) before realpathSync runs.
+    let wtRoot = path.resolve(toplevelResult.stdout.trim());
     try { wtRoot = fs.realpathSync(wtRoot); } catch { /* fail open */ }
 
     const rawFilePath = data.tool_input?.file_path || '';
