@@ -397,6 +397,41 @@ describe('DISCUSS: discussion log generation', () => {
   });
 });
 
+// ─── Section-writer agents must carry both Write and Edit (#581) ────────────
+
+describe('EDITWRITE: section-writer agents must have both Write and Edit in tools', () => {
+  // These agents perform in-place section edits on shared/existing files (e.g.
+  // AI-SPEC.md). Without Edit in tools:, the "Edit-only" discipline in their
+  // spawn-prompt is unenforceable — they fall back to whole-file Write and
+  // clobber sibling sections. Same bug class as #571/#575 (fixed gsd-doc-writer).
+  // Issue #581.
+  const SECTION_WRITER_AGENTS = [
+    'gsd-eval-planner',
+    'gsd-ai-researcher',
+    'gsd-domain-researcher',
+    'gsd-phase-researcher',
+    'gsd-ui-researcher',
+    'gsd-debug-session-manager',
+  ];
+
+  for (const agent of SECTION_WRITER_AGENTS) {
+    test(`${agent} has both Write and Edit in tools: (#581)`, () => {
+      const content = fs.readFileSync(path.join(AGENTS_DIR, agent + '.md'), 'utf-8');
+      const toolsMatch = content.match(/^tools:\s*(.+)$/m);
+      assert.ok(toolsMatch, `${agent} missing tools: line in frontmatter`);
+      const tools = toolsMatch[1].split(',').map(t => t.trim());
+      assert.ok(
+        tools.includes('Write'),
+        `${agent} missing Write in tools: — required for file creation`
+      );
+      assert.ok(
+        tools.includes('Edit'),
+        `${agent} missing Edit in tools: — required to enforce Edit-only discipline on shared files (#581)`
+      );
+    });
+  }
+});
+
 // ─── Cross-runtime agent compatibility (#1522) ──────────────────────────────
 
 describe('COMPAT: agents must not use runtime-specific frontmatter keys', () => {
