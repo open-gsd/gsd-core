@@ -60,7 +60,6 @@ export default tseslint.config(
 
   // ── get-shit-done/bin/**/*.cjs + scripts/**/*.cjs ───────────────────────────
   // CommonJS Node files: js.recommended + eslint-plugin-n + local plugin rules
-  // Type-aware via parserOptions.project=tsconfig.lint.json where applicable
   {
     files: ['get-shit-done/bin/**/*.cjs', 'scripts/**/*.cjs'],
     plugins: {
