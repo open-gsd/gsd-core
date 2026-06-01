@@ -257,6 +257,7 @@
       "verification-patterns.md",
       "verify-mvp-mode.md",
       "workstream-flag.md",
+      "worktree-branch-check.md",
       "worktree-path-safety.md"
     ],
     "cli_modules": [

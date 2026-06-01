@@ -7,32 +7,10 @@ must run before any staging, Edit, or Write operation in worktree mode.
 
 ## Worktree branch check (run once at spawn-time)
 
-FIRST ACTION: HEAD assertion MUST run before any reset/checkout. Worktrees
-spawned by Claude Code's `isolation="worktree"` use the `worktree-agent-<id>`
-namespace. If HEAD is on a protected ref (main/master/develop/trunk/release/*)
-or detached, HALT — do NOT self-recover by force-rewinding via `git update-ref`,
-that destroys concurrent commits in multi-active scenarios (#2924). Only after
-this passes is `git reset --hard` safe (#2015 — affects all platforms).
-
-```bash
-HEAD_REF=$(git symbolic-ref --quiet HEAD || echo "DETACHED")
-ACTUAL_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-if [ "$HEAD_REF" = "DETACHED" ] || echo "$ACTUAL_BRANCH" | grep -Eq '^(main|master|develop|trunk|release/.*)$'; then
-  echo "FATAL: worktree HEAD on '$ACTUAL_BRANCH' (expected worktree-agent-*); refusing to self-recover via 'git update-ref' (#2924)." >&2
-  exit 1
-fi
-if ! echo "$ACTUAL_BRANCH" | grep -Eq '^worktree-agent-[A-Za-z0-9._/-]+$'; then
-  echo "FATAL: worktree HEAD '$ACTUAL_BRANCH' is not in the worktree-agent-* namespace; refusing to commit (#2924)." >&2
-  exit 1
-fi
-ACTUAL_BASE=$(git merge-base HEAD {EXPECTED_BASE})
-if [ "$ACTUAL_BASE" != "{EXPECTED_BASE}" ]; then
-  git reset --hard {EXPECTED_BASE}
-  [ "$(git rev-parse HEAD)" != "{EXPECTED_BASE}" ] && { echo "ERROR: could not correct worktree base"; exit 1; }
-fi
-```
-
-Per-commit HEAD assertion: `agents/gsd-executor.md` `<task_commit_protocol>` step 0.
+The spawn-time HEAD/base guard now lives in the canonical fragment
+`get-shit-done/references/worktree-branch-check.md`, which the orchestrator embeds directly
+into your prompt at dispatch. Run that block FIRST, before any reset/checkout or staging.
+If your prompt contains a `<worktree_branch_check>` embed instruction rather than the block itself, complete that read-and-embed step before any reset/checkout or staging.
 
 ---
 

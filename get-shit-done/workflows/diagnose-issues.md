@@ -98,9 +98,11 @@ For each gap, fill the debug-subagent-prompt template and spawn:
 
 Print: `◆ Spawning diagnostics agent... (each runs in a subagent — no output until they return, ~1–5 min; expected, not a freeze)`
 
+Before spawning, materialize the guard into WORKTREE_GUARD: read `get-shit-done/references/worktree-branch-check.md`, substitute `{EXPECTED_BASE}` with `$EXPECTED_BASE`, and use the resulting `<worktree_branch_check>` block (the runnable guard) as WORKTREE_GUARD below.
+
 ```
 Agent(
-  prompt=filled_debug_subagent_prompt + "\n\n<worktree_branch_check>\nFIRST ACTION: assert this is a disposable worktree branch before any repair. Run:\n```bash\nHEAD_REF=$(git symbolic-ref --quiet HEAD || echo \"DETACHED\")\nACTUAL_BRANCH=$(git rev-parse --abbrev-ref HEAD)\nif [ \"$HEAD_REF\" = \"DETACHED\" ] || echo \"$ACTUAL_BRANCH\" | grep -Eq '^(main|master|develop|trunk|release/.*)$'; then\n  echo \"FATAL: diagnose worktree HEAD on '$ACTUAL_BRANCH'; refusing reset --hard on a protected branch.\" >&2\n  exit 1\nfi\nif ! echo \"$ACTUAL_BRANCH\" | grep -Eq '^worktree-agent-[A-Za-z0-9._/-]+$'; then\n  echo \"FATAL: diagnose worktree HEAD '$ACTUAL_BRANCH' is not in the worktree-agent-* namespace; refusing reset --hard.\" >&2\n  exit 1\nfi\nACTUAL_BASE=$(git merge-base HEAD {EXPECTED_BASE})\nif [ \"$ACTUAL_BASE\" != \"{EXPECTED_BASE}\" ]; then\n  git reset --hard {EXPECTED_BASE}\n  [ \"$(git rev-parse HEAD)\" != \"{EXPECTED_BASE}\" ] && { echo \"ERROR: Could not correct worktree base\"; exit 1; }\nfi\n```\nFixes EnterWorktree creating branches from main on all platforms while preventing protected-branch data loss.\n</worktree_branch_check>\n\n<files_to_read>\n- {phase_dir}/{phase_num}-UAT.md\n- .planning/STATE.md\n</files_to_read>\n${AGENT_SKILLS_DEBUGGER}",
+  prompt=filled_debug_subagent_prompt + "\n\n" + WORKTREE_GUARD + "\n\n<files_to_read>\n- {phase_dir}/{phase_num}-UAT.md\n- .planning/STATE.md\n</files_to_read>\n${AGENT_SKILLS_DEBUGGER}",
   subagent_type="gsd-debugger",
   ${USE_WORKTREES !== "false" ? 'isolation="worktree",' : ''}
   description="Debug: {truth_short}"

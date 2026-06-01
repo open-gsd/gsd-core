@@ -33,6 +33,7 @@ const EXECUTE_PLAN_PATH = path.join(REPO_ROOT, 'get-shit-done', 'workflows', 'ex
 const QUICK_PATH = path.join(REPO_ROOT, 'get-shit-done', 'workflows', 'quick.md');
 const EXECUTOR_AGENT_PATH = path.join(REPO_ROOT, 'agents', 'gsd-executor.md');
 const GIT_INTEGRATION_PATH = path.join(REPO_ROOT, 'get-shit-done', 'references', 'git-integration.md');
+const WORKTREE_BRANCH_CHECK_FRAGMENT = path.join(REPO_ROOT, 'get-shit-done', 'references', 'worktree-branch-check.md');
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -118,11 +119,19 @@ function findCommandIndex(statements, predicate) {
 
 describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
   describe('execute-phase.md worktree_branch_check', () => {
-    const content = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf-8');
-    const block = extractNamedBlock(content, 'worktree_branch_check');
+    const executePhaseContent = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf-8');
+    const fragmentContent = fs.readFileSync(WORKTREE_BRANCH_CHECK_FRAGMENT, 'utf-8');
+    const block = extractNamedBlock(fragmentContent, 'worktree_branch_check');
 
-    test('block exists', () => {
-      assert.ok(block, 'execute-phase.md must contain a <worktree_branch_check> block');
+    test('execute-phase.md references the canonical fragment', () => {
+      assert.ok(
+        executePhaseContent.includes('worktree-branch-check.md'),
+        'execute-phase.md must reference the canonical worktree-branch-check.md fragment'
+      );
+    });
+
+    test('block exists in canonical fragment', () => {
+      assert.ok(block, 'worktree-branch-check.md must contain a <worktree_branch_check> block');
     });
 
     test('block invokes `git symbolic-ref` to inspect HEAD attachment', () => {
@@ -269,18 +278,26 @@ describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
   });
 
   describe('quick.md worktree_branch_check', () => {
-    const content = fs.readFileSync(QUICK_PATH, 'utf-8');
-    const block = extractNamedBlock(content, 'worktree_branch_check');
+    const quickContent = fs.readFileSync(QUICK_PATH, 'utf-8');
+    const fragmentContent = fs.readFileSync(WORKTREE_BRANCH_CHECK_FRAGMENT, 'utf-8');
+    const block = extractNamedBlock(fragmentContent, 'worktree_branch_check');
 
-    test('block exists', () => {
-      assert.ok(block, 'quick.md must contain a <worktree_branch_check> block');
+    test('quick.md references the canonical fragment', () => {
+      assert.ok(
+        quickContent.includes('worktree-branch-check.md'),
+        'quick.md must reference the canonical worktree-branch-check.md fragment'
+      );
+    });
+
+    test('block exists in canonical fragment', () => {
+      assert.ok(block, 'worktree-branch-check.md must contain a <worktree_branch_check> block');
     });
 
     test('block references `git symbolic-ref` for HEAD attachment assertion', () => {
-      // quick.md uses inline `git symbolic-ref ... HEAD` rather than a fenced
-      // block, so search the block as a token stream of statements.
-      const statements = shellStatements(block);
-      const idx = findCommandIndex(statements, (cmd) =>
+      // Search the block from the canonical fragment as a token stream of statements.
+      const codeBlocks = extractFencedCodeBlocks(block);
+      const allStatements = codeBlocks.flatMap(({ body }) => shellStatements(body));
+      const idx = findCommandIndex(allStatements, (cmd) =>
         cmd[0] === 'git' && cmd[1] === 'symbolic-ref' && cmd.includes('HEAD')
       );
       assert.notStrictEqual(
@@ -290,12 +307,20 @@ describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
     });
 
     test('HEAD assertion precedes `git reset --hard`', () => {
-      const symbolicRefByteIdx = block.indexOf('symbolic-ref');
-      const resetHardByteIdx = block.indexOf('reset --hard');
-      assert.notStrictEqual(symbolicRefByteIdx, -1);
-      assert.notStrictEqual(resetHardByteIdx, -1);
+      // Use shell-statement ordering on the fenced code block to avoid false matches
+      // from the preamble text that mentions `git reset --hard` for context.
+      const codeBlocks = extractFencedCodeBlocks(block);
+      const allStatements = codeBlocks.flatMap(({ body }) => shellStatements(body));
+      const symbolicRefIdx = findCommandIndex(allStatements, (cmd) =>
+        cmd[0] === 'git' && cmd[1] === 'symbolic-ref' && cmd.includes('HEAD')
+      );
+      const resetHardIdx = findCommandIndex(allStatements, (cmd) =>
+        cmd[0] === 'git' && cmd[1] === 'reset' && cmd.includes('--hard')
+      );
+      assert.notStrictEqual(symbolicRefIdx, -1, 'symbolic-ref check must exist');
+      assert.notStrictEqual(resetHardIdx, -1, 'reset --hard must exist');
       assert.ok(
-        symbolicRefByteIdx < resetHardByteIdx,
+        symbolicRefIdx < resetHardIdx,
         'symbolic-ref HEAD assertion must appear before `git reset --hard` in quick.md worktree_branch_check'
       );
     });
@@ -582,6 +607,7 @@ describe('worktree commit safety hardening (#1977)', () => {
   test('execute-plan worktree_branch_check has no Windows-only platform qualifier', () => {
     const content = fs.readFileSync(EXECUTE_PLAN_PATH, 'utf-8');
     assert.ok(content.includes('worktree_branch_check'), 'execute-plan.md must contain a worktree_branch_check block');
+    assert.ok(content.includes('worktree-branch-check.md'), 'execute-plan.md must reference the canonical worktree-branch-check.md fragment');
     const hasWindowsOnlyQualifier = (
       /Windows.only/i.test(content) ||
       /affects Windows only/i.test(content) ||

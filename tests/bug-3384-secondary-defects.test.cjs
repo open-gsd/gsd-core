@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const repoRoot = path.resolve(__dirname, '..');
+const WORKTREE_BRANCH_CHECK_FRAGMENT = path.join(repoRoot, 'get-shit-done', 'references', 'worktree-branch-check.md');
 
 function read(relPath) {
   return fs.readFileSync(path.join(repoRoot, relPath), 'utf8');
@@ -22,14 +23,24 @@ describe('bug #3384: adjacent worktree data-loss guards', () => {
   });
 
   test('diagnose-issues agents assert disposable worktree branch before reset --hard', () => {
-    const source = read('get-shit-done/workflows/diagnose-issues.md');
-    const branchCheck = source.indexOf('HEAD_REF=$(git symbolic-ref --quiet HEAD || echo');
-    const namespaceCheck = source.indexOf('worktree-agent-* namespace');
-    const reset = source.indexOf('git reset --hard {EXPECTED_BASE}');
+    // diagnose-issues.md now references the canonical fragment rather than
+    // inlining the block. Verify (a) it references the fragment and (b) the
+    // fragment itself has the correct ordering: symbolic-ref/HEAD assertion and
+    // ^worktree-agent- allow-list appear BEFORE git reset --hard.
+    const diagnoseSource = read('get-shit-done/workflows/diagnose-issues.md');
+    assert.ok(
+      diagnoseSource.includes('worktree-branch-check.md'),
+      'diagnose-issues.md must reference the canonical worktree-branch-check.md fragment'
+    );
 
-    assert.ok(branchCheck > 0, 'diagnose prompt must assert HEAD before repair');
-    assert.ok(namespaceCheck > branchCheck, 'diagnose prompt must require disposable worktree-agent branch');
-    assert.ok(reset > namespaceCheck, 'reset --hard must come only after branch namespace check');
+    const fragmentSource = fs.readFileSync(WORKTREE_BRANCH_CHECK_FRAGMENT, 'utf8');
+    const branchCheck = fragmentSource.indexOf('HEAD_REF=$(git symbolic-ref --quiet HEAD || echo');
+    const namespaceCheck = fragmentSource.indexOf('^worktree-agent-');
+    const reset = fragmentSource.indexOf('git reset --hard {EXPECTED_BASE}');
+
+    assert.ok(branchCheck > 0, 'canonical fragment must assert HEAD before repair');
+    assert.ok(namespaceCheck > branchCheck, 'canonical fragment must require disposable worktree-agent branch before reset');
+    assert.ok(reset > namespaceCheck, 'reset --hard must come only after branch namespace check in canonical fragment');
   });
 
   test('remove-workspace fails closed when git worktree remove fails', () => {
