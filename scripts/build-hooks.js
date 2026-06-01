@@ -33,6 +33,7 @@ const HOOKS_TO_COPY = [
   'gsd-statusline.js',
   'gsd-update-banner.js',
   'gsd-workflow-guard.js',
+  'gsd-worktree-path-guard.js',
   // Community hooks (bash, opt-in via .planning/config.json hooks.community)
   'gsd-session-state.sh',
   'gsd-validate-commit.sh',

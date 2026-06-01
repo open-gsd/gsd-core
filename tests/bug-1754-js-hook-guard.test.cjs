@@ -27,6 +27,7 @@ const JS_HOOKS = [
   { name: 'gsd-prompt-guard.js',      registrationAnchor: 'hasPromptGuardHook' },
   { name: 'gsd-read-guard.js',        registrationAnchor: 'hasReadGuardHook' },
   { name: 'gsd-workflow-guard.js',    registrationAnchor: 'hasWorkflowGuardHook' },
+  { name: 'gsd-worktree-path-guard.js', registrationAnchor: 'hasWorktreePathGuardHook' },
 ];
 
 describe('bug #1754: .js hook registration guards', () => {

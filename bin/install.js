@@ -9931,6 +9931,33 @@ function install(isGlobal, runtime = 'claude', options = {}) {
       console.warn(`  ${yellow}⚠${reset}  Skipped workflow guard hook — gsd-workflow-guard.js not found at target`);
     }
 
+    // Configure PreToolUse hook for worktree absolute-path safety (#260)
+    // Hard-blocks Edit/Write tool calls with absolute paths that resolve
+    // outside the current worktree root. Prevents executor agents from
+    // accidentally writing to the main checkout when running in isolation="worktree".
+    const worktreePathGuardCommand = isGlobal
+      ? buildHookCommand(targetDir, 'gsd-worktree-path-guard.js', hookOpts)
+      : localCmd('gsd-worktree-path-guard.js');
+    const hasWorktreePathGuardHook = settings.hooks[preToolEvent].some(entry =>
+      entry.hooks && entry.hooks.some(h => h.command && h.command.includes('gsd-worktree-path-guard'))
+    );
+    const worktreePathGuardFile = path.join(targetDir, 'hooks', 'gsd-worktree-path-guard.js');
+    if (!hasWorktreePathGuardHook && fs.existsSync(worktreePathGuardFile) && worktreePathGuardCommand) {
+      settings.hooks[preToolEvent].push({
+        matcher: 'Write|Edit',
+        hooks: [
+          {
+            type: 'command',
+            command: worktreePathGuardCommand,
+            timeout: 5
+          }
+        ]
+      });
+      console.log(`  ${green}✓${reset} Configured worktree path guard hook`);
+    } else if (!hasWorktreePathGuardHook && !fs.existsSync(worktreePathGuardFile)) {
+      console.warn(`  ${yellow}⚠${reset}  Skipped worktree path guard hook — gsd-worktree-path-guard.js not found at target`);
+    }
+
     // Configure commit validation hook (Conventional Commits enforcement, opt-in)
     const validateCommitCommand = isGlobal
       ? buildHookCommand(targetDir, 'gsd-validate-commit.sh', hookOpts)
