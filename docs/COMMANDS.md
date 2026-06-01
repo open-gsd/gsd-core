@@ -776,11 +776,18 @@ v1.40.0, [#2792](https://github.com/open-gsd/gsd-core/issues/2792)).
 
 ### `/gsd-cleanup`
 
-Archive accumulated phase directories from completed milestones.
+Archive accumulated phase directories from completed milestones and prune local branches whose upstream has been deleted.
 
 ```bash
 /gsd-cleanup
 ```
+
+On confirmation, the workflow performs two actions:
+
+1. **Phase archival** — moves phase directories from `.planning/phases/` into milestone archive directories under `.planning/milestones/v{X.Y}-phases/`, using archived ROADMAP snapshots to determine phase membership.
+2. **Branch pruning** — runs `git fetch --prune` to update remote-tracking refs, then identifies and force-deletes local branches whose upstream is marked gone. The currently checked-out branch is always skipped.
+
+The dry-run summary shows both phase directories to archive and candidate local branches for deletion before confirmation.
 
 ---
 
