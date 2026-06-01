@@ -90,6 +90,21 @@ const RUNTIMES_WITH_REASONING_EFFORT = new Set(
     .map(([runtime]) => runtime)
 );
 
+const PROVIDER_PRESETS = catalog.providerPresets || {};
+
+// KNOWN_PROVIDERS excludes 'generic' — it is a sentinel (all null entries) that
+// forces users to supply model IDs via model_profile_overrides. It is not a
+// real catalog-backed provider (#49).
+const KNOWN_PROVIDERS = new Set(
+  Object.entries(PROVIDER_PRESETS)
+    .filter(([, tiers]) =>
+      Object.values(tiers).some((budgets) =>
+        budgets && Object.values(budgets).some((entry) => entry && entry.model)
+      )
+    )
+    .map(([name]) => name)
+);
+
 function nextTier(currentTier) {
   const order = ['light', 'standard', 'heavy'];
   const idx = order.indexOf(String(currentTier));
@@ -203,6 +218,8 @@ module.exports = {
   RUNTIME_PROFILE_MAP,
   KNOWN_RUNTIMES,
   RUNTIMES_WITH_REASONING_EFFORT,
+  PROVIDER_PRESETS,
+  KNOWN_PROVIDERS,
   nextTier,
   formatAgentToModelMapAsTable,
   getAgentToModelMapForProfile,

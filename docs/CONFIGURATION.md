@@ -139,6 +139,12 @@ GSD stores project settings in `.planning/config.json`. Created during `/gsd-new
 | `model_profile` | enum | `quality`, `balanced`, `budget`, `adaptive`, `inherit` | `balanced` | Model tier for each agent (see [Model Profiles](#model-profiles)). `adaptive` was added per [#1713](https://github.com/open-gsd/gsd-core/issues/1713) / [#1806](https://github.com/open-gsd/gsd-core/issues/1806) and resolves the same way as the other tiers under runtime-aware profiles. |
 | `runtime` | string | `claude`, `codex`, or any string | (none) | Active runtime for [runtime-aware profile resolution](#runtime-aware-profiles-2517). When set, profile tiers (opus/sonnet/haiku) resolve to runtime-native model IDs. Today only the Codex install path emits per-agent model IDs from this resolver; other runtimes (`opencode`, `gemini`, `qwen`, `copilot`, …) consume the resolver at spawn time and gain dedicated install-path support in [#2612](https://github.com/open-gsd/gsd-core/issues/2612). When unset (default), behavior is unchanged from prior versions. Added in v1.39 |
 | `model_profile_overrides.<runtime>.<tier>` | string \| object | per-runtime tier override | (none) | Override the runtime-aware tier mapping for a specific `(runtime, tier)`. Tier is one of `opus`, `sonnet`, `haiku`. Value is either a model ID string (e.g. `"gpt-5-pro"`) or `{ model, reasoning_effort }`. See [Runtime-Aware Profiles](#runtime-aware-profiles-2517). Added in v1.39 |
+| `model_policy.provider` | string | `openai`, `anthropic`, `google`, `qwen`, `generic` | (none) | Declares the model provider. Known providers (`openai`, `anthropic`, `google`, `qwen`) unlock catalog-backed presets. `generic` treats all model IDs as opaque strings — no prefix inference, no reasoning-effort defaults. `model_policy.runtime_tiers` resolves before legacy `model_profile_overrides`. See [Model Policy Presets](#model-policy-presets-model_policy--added-in-v142). Added in v1.42 ([#49](https://github.com/open-gsd/gsd-core/issues/49)) |
+| `model_policy.budget` | enum | `high`, `medium`, `low` | (none) | Selects a budget tier when using a known provider. GSD materializes the matching catalog preset into explicit tier mappings at resolve time. Ignored when `provider` is `generic` or `custom`. Added in v1.42 ([#49](https://github.com/open-gsd/gsd-core/issues/49)) |
+| `model_policy.high` | string | model ID | (none) | High-cost tier model ID for `generic`/`custom` provider. Used when `provider: "generic"` or `"custom"`. Added in v1.42 ([#49](https://github.com/open-gsd/gsd-core/issues/49)) |
+| `model_policy.medium` | string | model ID | (none) | Medium-cost tier model ID for `generic`/`custom` provider. Added in v1.42 ([#49](https://github.com/open-gsd/gsd-core/issues/49)) |
+| `model_policy.low` | string | model ID | (none) | Low-cost tier model ID for `generic`/`custom` provider. Added in v1.42 ([#49](https://github.com/open-gsd/gsd-core/issues/49)) |
+| `model_policy.runtime_tiers.<runtime>.<tier>` | object | `{ model, reasoning_effort? }` | (none) | Explicit per-runtime, per-tier model entry. `tier` is one of `opus`, `sonnet`, `haiku` (matching the existing profile tier names). `reasoning_effort` is forwarded only to runtimes that support it; unsupported runtimes never receive the field. Takes precedence over `model_profile_overrides`. Added in v1.42 ([#49](https://github.com/open-gsd/gsd-core/issues/49)) |
 | `models.<phase_type>` | enum | `opus`, `sonnet`, `haiku`, `inherit` | (none) | Per-phase-type model tier. Six accepted slots: `planning`, `discuss`, `research`, `execution`, `verification`, `completion`. Lets you tune at the phase level ("Opus for planning, Sonnet for the rest") without learning agent names. Resolves between `model_overrides` (higher) and `model_profile` (lower); see [Per-Phase-Type Models](#per-phase-type-models-models--added-in-v140). Added in v1.40 ([#3023](https://github.com/open-gsd/gsd-core/pull/3030)) |
 | `dynamic_routing.enabled` | boolean | `true`, `false` | `false` | Master switch for [dynamic routing with failure-tier escalation](#dynamic-routing-with-failure-tier-escalation-dynamic_routing--added-in-v140). When `true`, agents resolve to `tier_models[default_tier]` and escalate one tier up on orchestrator-detected soft failure. Added in v1.40 ([#3024](https://github.com/open-gsd/gsd-core/pull/3031)) |
 | `dynamic_routing.tier_models.<tier>` | enum | `opus`, `sonnet`, `haiku` | (none) | Tier alias for `light`, `standard`, or `heavy`. Used when `dynamic_routing.enabled: true`. Added in v1.40 |
@@ -1215,6 +1221,84 @@ This resolves `gsd-planner` → `gpt-5.5` (xhigh), `gsd-executor` → `gpt-5.3-c
 | `balanced` | Opus for planning only, Sonnet for everything else | Normal development (default) |
 | `budget` | Sonnet for code-writing, Haiku for research/verification | High-volume work, less critical phases |
 | `inherit` | All agents use current session model | Dynamic model switching, **non-Anthropic providers** (OpenRouter, local models) |
+
+---
+
+## Model Policy Presets (`model_policy`) — Added in v1.42
+
+> **[#49](https://github.com/open-gsd/gsd-core/issues/49)** — provider-neutral model policy config surface. Resolves before legacy `model_profile_overrides`.
+
+`model_policy` provides a simpler, provider-neutral way to configure model tiers across runtimes. It is the preferred surface for non-Anthropic runtimes where `model_profile_overrides` would require manually knowing the right model IDs. Configure it via `/gsd-settings` or `/gsd-settings-advanced` → Section 8.
+
+### Known provider preset
+
+Choose a provider and budget level via the settings workflow; GSD writes the canonical model IDs for that provider/budget combination:
+
+```json
+{
+  "runtime": "codex",
+  "model_policy": {
+    "provider": "openai",
+    "budget": "medium",
+    "high":   "gpt-5.5",
+    "medium": "gpt-5.3-codex",
+    "low":    "gpt-5.4-mini"
+  }
+}
+```
+
+Known providers: `openai`, `anthropic`, `google`, `qwen`. Budget levels: `high`, `medium`, `low`.
+
+For advanced per-runtime control, `runtime_tiers` accepts explicit entries using the internal profile tier names (`opus`, `sonnet`, `haiku`):
+
+```json
+{
+  "runtime": "codex",
+  "model_policy": {
+    "provider": "openai",
+    "runtime_tiers": {
+      "codex": {
+        "opus":   { "model": "gpt-5.5",        "reasoning_effort": "high" },
+        "sonnet": { "model": "gpt-5.3-codex",  "reasoning_effort": "medium" },
+        "haiku":  { "model": "gpt-5.4-mini",   "reasoning_effort": "low" }
+      }
+    }
+  }
+}
+```
+
+### Generic provider (escape hatch)
+
+Use `provider: "generic"` (or `"custom"`) for OpenRouter, LiteLLM, local gateways, or any runtime where you supply exact model IDs. GSD treats model IDs as opaque strings — no prefix inference, no provider-specific defaults:
+
+```json
+{
+  "runtime": "opencode",
+  "model_policy": {
+    "provider": "generic",
+    "high":   "openrouter/anthropic/claude-opus-4-5",
+    "medium": "openrouter/anthropic/claude-sonnet-4-5",
+    "low":    "openrouter/anthropic/claude-haiku-4-5"
+  }
+}
+```
+
+### Reasoning effort gating
+
+`reasoning_effort` within a `runtime_tiers` entry is forwarded only to runtimes that declare support for it (currently: `codex`). Any runtime not on the allowlist receives the tier entry without the `reasoning_effort` field — it is silently stripped, never leaked.
+
+### Precedence
+
+`model_policy` resolution sits above `model_profile_overrides` in the resolver:
+
+1. `model_overrides[<agent>]` — per-agent explicit ID (highest)
+2. `model_policy.runtime_tiers[<runtime>][<tier>]` — explicit runtime/tier entry
+3. `model_policy` flat `high`/`medium`/`low` keys — for `generic`/`custom` provider
+4. `model_profile_overrides[<runtime>][<tier>]` — legacy per-runtime override
+5. Built-in runtime catalog default
+6. `model_profile` tier alias
+
+**Backwards compatibility.** Configs without `model_policy` are unaffected. Existing `model_profile_overrides` blocks continue to work exactly as before.
 
 ---
 

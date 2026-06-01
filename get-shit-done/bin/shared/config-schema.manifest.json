@@ -101,7 +101,12 @@
     "effort.default",
     "fast_mode.enabled",
     "plan_review.source_grounding",
-    "plan_review.source_grounding_authority"
+    "plan_review.source_grounding_authority",
+    "model_policy.provider",
+    "model_policy.budget",
+    "model_policy.high",
+    "model_policy.medium",
+    "model_policy.low"
   ],
   "runtimeStateKeys": [
     "workflow._auto_chain_active"
@@ -171,6 +176,11 @@
       "topLevel": "review",
       "source": "^review\\.max_prompt_tokens_per_reviewer\\.[a-zA-Z0-9_-]+$",
       "description": "review.max_prompt_tokens_per_reviewer.<reviewer-slug>"
+    },
+    {
+      "topLevel": "model_policy",
+      "source": "^model_policy\\.runtime_tiers\\.[a-zA-Z0-9_-]+\\.(opus|sonnet|haiku)$",
+      "description": "model_policy.runtime_tiers.<runtime>.<opus|sonnet|haiku>"
     }
   ]
 }

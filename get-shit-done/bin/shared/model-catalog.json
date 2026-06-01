@@ -83,6 +83,33 @@
       "haiku": null
     }
   },
+  "providerPresets": {
+    "anthropic": {
+      "opus":   { "low": { "model": "claude-opus-4-5" }, "medium": { "model": "claude-opus-4-8" }, "high": { "model": "claude-opus-4-8" } },
+      "sonnet": { "low": { "model": "claude-haiku-4-5" }, "medium": { "model": "claude-sonnet-4-6" }, "high": { "model": "claude-opus-4-8" } },
+      "haiku":  { "low": { "model": "claude-haiku-4-5" }, "medium": { "model": "claude-haiku-4-5" }, "high": { "model": "claude-sonnet-4-6" } }
+    },
+    "openai": {
+      "opus":   { "low": { "model": "gpt-5.3-codex", "reasoning_effort": "medium" }, "medium": { "model": "gpt-5.5", "reasoning_effort": "high" }, "high": { "model": "gpt-5.5", "reasoning_effort": "xhigh" } },
+      "sonnet": { "low": { "model": "gpt-5.4-mini", "reasoning_effort": "low" }, "medium": { "model": "gpt-5.3-codex", "reasoning_effort": "medium" }, "high": { "model": "gpt-5.5", "reasoning_effort": "medium" } },
+      "haiku":  { "low": { "model": "gpt-5.4-mini", "reasoning_effort": "minimal" }, "medium": { "model": "gpt-5.4-mini", "reasoning_effort": "medium" }, "high": { "model": "gpt-5.3-codex", "reasoning_effort": "medium" } }
+    },
+    "google": {
+      "opus":   { "low": { "model": "gemini-2.5-flash-lite" }, "medium": { "model": "gemini-3-flash" }, "high": { "model": "gemini-3-pro" } },
+      "sonnet": { "low": { "model": "gemini-2.5-flash-lite" }, "medium": { "model": "gemini-3-flash" }, "high": { "model": "gemini-3-flash" } },
+      "haiku":  { "low": { "model": "gemini-2.5-flash-lite" }, "medium": { "model": "gemini-2.5-flash-lite" }, "high": { "model": "gemini-3-flash" } }
+    },
+    "qwen": {
+      "opus":   { "low": { "model": "qwen3-coder-plus" }, "medium": { "model": "qwen3-max-2026-01-23" }, "high": { "model": "qwen3-max-2026-01-23" } },
+      "sonnet": { "low": { "model": "qwen3-coder-next" }, "medium": { "model": "qwen3-coder-plus" }, "high": { "model": "qwen3-max-2026-01-23" } },
+      "haiku":  { "low": { "model": "qwen3-coder-next" }, "medium": { "model": "qwen3-coder-next" }, "high": { "model": "qwen3-coder-plus" } }
+    },
+    "generic": {
+      "opus":   { "low": null, "medium": null, "high": null },
+      "sonnet": { "low": null, "medium": null, "high": null },
+      "haiku":  { "low": null, "medium": null, "high": null }
+    }
+  },
   "agents": {
     "gsd-planner":                { "golden": "opus",   "balanced": "opus",   "budget": "sonnet", "phaseType": "planning",     "routingTier": "heavy" },
     "gsd-roadmapper":             { "golden": "opus",   "balanced": "sonnet", "budget": "sonnet", "phaseType": "planning",     "routingTier": "heavy" },

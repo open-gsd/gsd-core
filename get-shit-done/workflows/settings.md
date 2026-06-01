@@ -57,6 +57,11 @@ Parse current values (default to `true` if not present):
 - `model_profile` — which model each agent uses (default: `balanced`)
 - `git.branching_strategy` — branching approach (default: `"none"`)
 - `workflow.use_worktrees` — whether parallel executor agents run in worktree isolation (default: `true`)
+- `model_policy.provider` — provider slug for model policy (default: `null`; known values: anthropic, openai, google, qwen; set via /gsd:config --advanced)
+- `model_policy.budget` — budget level for model policy (default: `null`; known values: high, medium, low; set via /gsd:config --advanced)
+- `model_policy.high` — model ID for high-cost tier (default: `null`; set via /gsd:config --advanced)
+- `model_policy.medium` — model ID for medium-cost tier (default: `null`; set via /gsd:config --advanced)
+- `model_policy.low` — model ID for low-cost tier (default: `null`; set via /gsd:config --advanced)
 </step>
 
 <step name="present_settings">
@@ -423,6 +428,15 @@ Merge new settings into existing config.json:
   "hooks": {
     "context_warnings": true/false,
     "workflow_guard": true/false
+  },
+  "model_policy": {
+    // Read-only in this flow — written only by /gsd:config --advanced (Section 8).
+    // Listed here so safe-merge never clobbers an existing model_policy object.
+    "provider": <existing|null>,
+    "budget": <existing|null>,
+    "high": <existing|null>,
+    "medium": <existing|null>,
+    "low": <existing|null>
   }
 }
 ```
@@ -537,7 +551,7 @@ Quick commands:
 - /gsd:plan-phase --research — force research
 - /gsd:plan-phase --skip-research — skip research
 - /gsd:plan-phase --skip-verify — skip plan check
-- /gsd:config --advanced — power-user tuning (plan bounce, timeouts, branch templates, cross-AI, context window)
+- /gsd:config --advanced — power-user tuning (plan bounce, timeouts, branch templates, cross-AI, context window, model policy)
 ```
 </step>
 

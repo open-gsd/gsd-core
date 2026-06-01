@@ -1,12 +1,14 @@
 <purpose>
 Interactive configuration of GSD power-user knobs — plan bounce, node repair, subagent timeouts,
 inline plan threshold, cross-AI execution, base branch, branch templates, response language,
-context window, gitignored search, graphify build timeout, and runtime model tier overrides.
+context window, gitignored search, graphify build timeout, runtime model tier overrides, and
+model policy configuration (provider + budget → canonical tier mapping, or manual model ID
+assignment per cost tier).
 
 This is a companion to `/gsd:settings` — the common-case prompt there covers model profile,
 research/plan_check/verifier toggles, branching strategy, UI/AI phase gates, and worktree
 isolation. This advanced command covers everything else that is user-settable, grouped into
-seven sections so each prompt batch stays cognitively scoped. Every answer pre-selects the
+eight sections so each prompt batch stays cognitively scoped. Every answer pre-selects the
 current value; numeric-input answers that are non-numeric are rejected and re-prompted.
 </purpose>
 
@@ -80,6 +82,13 @@ Runtime Model Tiers:
 - `model_profile_overrides.<runtime>.opus` (default: built-in for the runtime, or absent)
 - `model_profile_overrides.<runtime>.sonnet` (default: built-in for the runtime, or absent)
 - `model_profile_overrides.<runtime>.haiku` (default: built-in for the runtime, or absent)
+
+Model Policy:
+- `model_policy.provider` (default: `null` — known values: anthropic, openai, google, qwen)
+- `model_policy.budget` (default: `null` — known values: high, medium, low)
+- `model_policy.high` (default: `null` — model ID for the high-cost tier; used by generic provider path)
+- `model_policy.medium` (default: `null` — model ID for the medium-cost tier; used by generic provider path)
+- `model_policy.low` (default: `null` — model ID for the low-cost tier; used by generic provider path)
 
 Each field's **current value is pre-selected** in the prompt rendering below. When the
 current value is absent from the config, render the documented default as the pre-selected
@@ -500,7 +509,7 @@ gsd_run query config-set model_profile_overrides.gemini.haiku null
 
 Conceptual shape after merge (unchanged top-level keys like `model_profile`,
 `granularity`, `mode`, `brave_search`, `agent_skills.*`, `hooks.context_warnings`, and
-anything not listed in Sections 1–7 MUST survive the update):
+anything not listed in Sections 1–8 MUST survive the update):
 
 ```json
 {
@@ -542,6 +551,14 @@ anything not listed in Sections 1–7 MUST survive the update):
       "sonnet": <new|existing|null>,
       "haiku": <new|existing|null>
     }
+  },
+  "model_policy": {
+    ...existing_model_policy,
+    "provider": <new|existing|null>,
+    "budget": <new|existing|null>,
+    "high": <new|existing|null>,
+    "medium": <new|existing|null>,
+    "low": <new|existing|null>
   }
 }
 ```
@@ -549,6 +566,170 @@ anything not listed in Sections 1–7 MUST survive the update):
 Never emit a full overwrite of the file that omits keys the user did not touch. Always
 route each write through `gsd-tools.cjs query config-set` so sibling preservation is handled by
 the central setter.
+</step>
+
+### Section 8 — Model Policy
+
+This section configures the `model_policy` key in `.planning/config.json`. Model policy
+defines which AI models GSD uses at each cost tier (low / medium / high), independently
+of the `runtime` and `model_profile` selections above. Two paths are offered:
+
+- **Known provider:** choose a provider and a budget level; GSD materializes the canonical
+  tier mapping for that provider.
+- **Generic provider:** enter low / medium / high model IDs manually.
+
+**Step A — Read and display the current model policy:**
+
+```bash
+cat "$GSD_CONFIG_PATH" | python3 -c "import sys,json; c=json.load(sys.stdin); mp=c.get('model_policy',{}); print(json.dumps(mp,indent=2))" 2>/dev/null || echo "{}"
+```
+
+Display the current values (or "(unset)" for any absent field) before asking:
+
+```text
+Current model_policy:
+  provider : <value or "(unset)">
+  budget   : <value or "(unset)">
+  low      : <value or "(unset)">
+  medium   : <value or "(unset)">
+  high     : <value or "(unset)">
+```
+
+**Step B — Choose configuration path:**
+
+```text
+AskUserQuestion([
+  {
+    question: "How do you want to configure the model policy?",
+    header: "Model Policy",
+    multiSelect: false,
+    options: [
+      { label: "Known provider", description: "Choose a provider (Claude / OpenAI / Gemini / Qwen) and a budget level — GSD writes the canonical tier mapping automatically." },
+      { label: "Generic provider", description: "Enter low / medium / high model IDs manually for any provider or custom deployment." },
+      { label: "Keep current", description: "Leave model_policy unchanged." }
+    ]
+  }
+])
+```
+
+**If "Keep current" is selected:** skip Steps C–E and move on to the confirm step.
+
+**Step C — Known-provider path:**
+
+```text
+AskUserQuestion([
+  {
+    question: "Which provider?",
+    header: "Provider",
+    multiSelect: false,
+    options: [
+      { label: "anthropic", description: "claude-opus-4-8 / claude-sonnet-4-6 / claude-haiku-4-5 (Anthropic / Claude)" },
+      { label: "openai", description: "gpt-5.5 / gpt-5.3-codex / gpt-5.4-mini (OpenAI / Codex)" },
+      { label: "google", description: "gemini-3-pro / gemini-3-flash / gemini-2.5-flash-lite (Google Gemini)" },
+      { label: "qwen", description: "qwen3-max-2026-01-23 / qwen3-coder-plus / qwen3-coder-next (Qwen)" }
+    ]
+  }
+])
+```
+
+After the user picks a provider, ask:
+
+```text
+AskUserQuestion([
+  {
+    question: "Which budget level?",
+    header: "Budget",
+    multiSelect: false,
+    options: [
+      { label: "high", description: "All tiers use the highest-quality model for the chosen provider. Highest cost." },
+      { label: "medium", description: "High tier → top model; medium → mid model; low → cheapest model. Best cost/quality ratio." },
+      { label: "low", description: "All tiers use the cheapest model for the chosen provider. Lowest cost." }
+    ]
+  }
+])
+```
+
+Canonical tier mappings by provider and budget:
+
+| Provider  | Budget | high                       | medium                     | low                        |
+|-----------|--------|----------------------------|----------------------------|----------------------------|
+| anthropic | high   | claude-opus-4-8            | claude-opus-4-8            | claude-opus-4-8            |
+| anthropic | medium | claude-opus-4-8            | claude-sonnet-4-6          | claude-haiku-4-5           |
+| anthropic | low    | claude-haiku-4-5           | claude-haiku-4-5           | claude-haiku-4-5           |
+| openai    | high   | gpt-5.5                    | gpt-5.5                    | gpt-5.5                    |
+| openai    | medium | gpt-5.5                    | gpt-5.3-codex              | gpt-5.4-mini               |
+| openai    | low    | gpt-5.4-mini               | gpt-5.4-mini               | gpt-5.4-mini               |
+| google    | high   | gemini-3-pro               | gemini-3-pro               | gemini-3-pro               |
+| google    | medium | gemini-3-pro               | gemini-3-flash             | gemini-2.5-flash-lite      |
+| google    | low    | gemini-2.5-flash-lite      | gemini-2.5-flash-lite      | gemini-2.5-flash-lite      |
+| qwen      | high   | qwen3-max-2026-01-23       | qwen3-max-2026-01-23       | qwen3-max-2026-01-23       |
+| qwen      | medium | qwen3-max-2026-01-23       | qwen3-coder-plus           | qwen3-coder-next           |
+| qwen      | low    | qwen3-coder-next           | qwen3-coder-next           | qwen3-coder-next           |
+
+Look up the selected (provider, budget) row and proceed to Step E to write those values.
+
+**Step D — Generic-provider path:**
+
+Prompt the user to enter each model ID as a free-text input. An empty input means "keep
+the current value for that tier." Validate that non-empty inputs are non-blank strings
+(no whitespace-only values); if validation fails, re-prompt that single field.
+
+```text
+AskUserQuestion([
+  {
+    question: "Model ID for the HIGH-cost tier? (most capable model — used for heavy reasoning tasks)",
+    header: "High-tier model",
+    multiSelect: false,
+    options: [
+      { label: "Keep current", description: "Leave unchanged (current: <model_policy.high or '(unset)'>)." },
+      { label: "Enter model ID", description: "Type the exact model identifier. Non-blank string required." }
+    ]
+  },
+  {
+    question: "Model ID for the MEDIUM-cost tier? (balanced model — used for most agents)",
+    header: "Medium-tier model",
+    multiSelect: false,
+    options: [
+      { label: "Keep current", description: "Leave unchanged (current: <model_policy.medium or '(unset)'>)." },
+      { label: "Enter model ID", description: "Type the exact model identifier." }
+    ]
+  },
+  {
+    question: "Model ID for the LOW-cost tier? (cheapest model — used for lightweight/fast tasks)",
+    header: "Low-tier model",
+    multiSelect: false,
+    options: [
+      { label: "Keep current", description: "Leave unchanged (current: <model_policy.low or '(unset)'>)." },
+      { label: "Enter model ID", description: "Type the exact model identifier." }
+    ]
+  }
+])
+```
+
+Set `provider = "custom"` and `budget = null` when writing the generic-provider result.
+Proceed to Step E.
+
+**Step E — Write model_policy to config:**
+
+```bash
+# Known-provider path — write all four keys atomically:
+gsd_run query config-set model_policy.provider "<provider>"   # e.g., anthropic / openai / google / qwen
+gsd_run query config-set model_policy.budget   "<budget>"    # high / medium / low
+gsd_run query config-set model_policy.high     "<high-id>"
+gsd_run query config-set model_policy.medium   "<medium-id>"
+gsd_run query config-set model_policy.low      "<low-id>"
+
+# Generic-provider path — write only tiers the user changed ("Keep current" skipped):
+gsd_run query config-set model_policy.provider "custom"
+gsd_run query config-set model_policy.budget   null
+# Per-tier writes for each non-"Keep current" answer:
+gsd_run query config-set model_policy.high     "<high-id>"   # omit if user chose "Keep current"
+gsd_run query config-set model_policy.medium   "<medium-id>" # omit if user chose "Keep current"
+gsd_run query config-set model_policy.low      "<low-id>"    # omit if user chose "Keep current"
+```
+
+Never write a tier the user explicitly chose to keep; the existing value must survive.
+
 </step>
 
 <step name="confirm">
@@ -594,6 +775,11 @@ Display:
 | fast_mode.routing_tier_defaults.standard   | {true/false} |
 | fast_mode.routing_tier_defaults.heavy      | {true/false} |
 | fast_mode.agent_overrides.<agent-id>       | {true/false} |
+| model_policy.provider                      | {anthropic/openai/google/qwen/custom/null} |
+| model_policy.budget                        | {high/medium/low/null} |
+| model_policy.high                          | {model-id/null} |
+| model_policy.medium                        | {model-id/null} |
+| model_policy.low                           | {model-id/null} |
 
 These settings apply to future /gsd:plan-phase, /gsd:execute-phase, /gsd:discuss-phase,
 and /gsd:ship runs.
@@ -607,7 +793,7 @@ UI/AI phase gates), use /gsd:settings.
 
 <success_criteria>
 - [ ] Current config read from resolved `$GSD_CONFIG_PATH`
-- [ ] Seven sections rendered (Planning, Execution, Discussion, Cross-AI, Git, Runtime/Output, Runtime Model Tiers)
+- [ ] Eight sections rendered (Planning, Execution, Discussion, Cross-AI, Git, Runtime/Output, Runtime Model Tiers, Model Policy)
 - [ ] Every field pre-selected to its current value (or documented default if absent)
 - [ ] Numeric inputs validated — non-numeric rejected and re-prompted
 - [ ] Branch-template inputs validated — non-default must contain a placeholder
@@ -616,5 +802,9 @@ UI/AI phase gates), use /gsd:settings.
 - [ ] Section 7 shows current runtime and built-in tier table
 - [ ] Group B runtimes display "(no built-in default — your runtime handles model selection)"
 - [ ] Override set/clear/keep paths all work correctly for each tier
-- [ ] Confirmation table rendered listing all 23 fields (19 + runtime + 3 tier overrides)
+- [ ] Section 8 (Model Policy) offers three top-level choices: Known provider, Generic provider, Keep current
+- [ ] Known-provider path: provider + budget → canonical tier mapping written to model_policy.{provider,budget,high,medium,low}
+- [ ] Generic-provider path: per-tier manual model IDs; "Keep current" tiers are never written; provider=custom budget=null
+- [ ] model_policy written under the model_policy key in config.json, never as a top-level flat key
+- [ ] Confirmation table rendered listing all fields including model_policy.{provider,budget,high,medium,low}
 </success_criteria>

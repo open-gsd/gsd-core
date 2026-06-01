@@ -7,7 +7,7 @@ const os = require('os');
 const path = require('path');
 const { execGit, platformWriteSync, platformReadSync, platformEnsureDir } = require('./shell-command-projection.cjs');
 const { MODEL_PROFILES, AGENT_TO_PHASE_TYPE, VALID_PHASE_TYPES, AGENT_DEFAULT_TIERS, VALID_AGENT_TIERS, nextTier } = require('./model-profiles.cjs');
-const { MODEL_ALIAS_MAP, RUNTIME_PROFILE_MAP, KNOWN_RUNTIMES, RUNTIMES_WITH_REASONING_EFFORT, renderEffortForRuntime, RUNTIMES_WITH_FAST_MODE } = require('./model-catalog.cjs');
+const { MODEL_ALIAS_MAP, RUNTIME_PROFILE_MAP, KNOWN_RUNTIMES, RUNTIMES_WITH_REASONING_EFFORT, renderEffortForRuntime, RUNTIMES_WITH_FAST_MODE, PROVIDER_PRESETS, KNOWN_PROVIDERS } = require('./model-catalog.cjs');
 const {
   resolveWorktreeContext,
   parseWorktreePorcelain: parseWorktreePorcelainPolicy,
@@ -514,6 +514,11 @@ function loadConfig(cwd, options = {}) {
       // unknown runtime/tier names at load time, not silently (review finding #10).
       runtime: parsed.runtime || null,
       model_profile_overrides: parsed.model_profile_overrides || null,
+      // #49 — provider-neutral model policy presets.
+      // model_policy is read flat (not via get()) for the same reason as
+      // model_profile_overrides: it is a top-level config key per CONFIGURATION.md,
+      // and nested resolution would introduce edge cases without benefit.
+      model_policy: parsed.model_policy || null,
       // #443 — effort/fast_mode: pass through from config.json; resolvers handle
       // defaults + tier lookups internally.
       effort: parsed.effort || null,
@@ -1384,33 +1389,89 @@ function _warnUnknownProfileOverrides(parsed, configLabel) {
   }
 
   const overrides = parsed.model_profile_overrides;
-  if (!overrides || typeof overrides !== 'object') return;
-  for (const [overrideRuntime, tierMap] of Object.entries(overrides)) {
-    if (!KNOWN_RUNTIMES.has(overrideRuntime)) {
-      const key = `${configLabel}::override-runtime::${overrideRuntime}`;
-      if (!_warnedConfigKeys.has(key)) {
-        _warnedConfigKeys.add(key);
-        try {
-          process.stderr.write(
-            `gsd: warning — model_profile_overrides.${overrideRuntime}.* uses ` +
-            `unknown runtime "${overrideRuntime}". Known runtimes: ` +
-            `${[...KNOWN_RUNTIMES].sort().join(', ')}. (#2517)\n`
-          );
-        } catch { /* ok */ }
-      }
-    }
-    if (!tierMap || typeof tierMap !== 'object') continue;
-    for (const tierName of Object.keys(tierMap)) {
-      if (!RUNTIME_OVERRIDE_TIERS.has(tierName)) {
-        const key = `${configLabel}::override-tier::${overrideRuntime}.${tierName}`;
+  if (overrides && typeof overrides === 'object') {
+    for (const [overrideRuntime, tierMap] of Object.entries(overrides)) {
+      if (!KNOWN_RUNTIMES.has(overrideRuntime)) {
+        const key = `${configLabel}::override-runtime::${overrideRuntime}`;
         if (!_warnedConfigKeys.has(key)) {
           _warnedConfigKeys.add(key);
           try {
             process.stderr.write(
-              `gsd: warning — model_profile_overrides.${overrideRuntime}.${tierName} ` +
-              `uses unknown tier "${tierName}". Allowed tiers: opus, sonnet, haiku. (#2517)\n`
+              `gsd: warning — model_profile_overrides.${overrideRuntime}.* uses ` +
+              `unknown runtime "${overrideRuntime}". Known runtimes: ` +
+              `${[...KNOWN_RUNTIMES].sort().join(', ')}. (#2517)\n`
             );
           } catch { /* ok */ }
+        }
+      }
+      if (!tierMap || typeof tierMap !== 'object') continue;
+      for (const tierName of Object.keys(tierMap)) {
+        if (!RUNTIME_OVERRIDE_TIERS.has(tierName)) {
+          const key = `${configLabel}::override-tier::${overrideRuntime}.${tierName}`;
+          if (!_warnedConfigKeys.has(key)) {
+            _warnedConfigKeys.add(key);
+            try {
+              process.stderr.write(
+                `gsd: warning — model_profile_overrides.${overrideRuntime}.${tierName} ` +
+                `uses unknown tier "${tierName}". Allowed tiers: opus, sonnet, haiku. (#2517)\n`
+              );
+            } catch { /* ok */ }
+          }
+        }
+      }
+    }
+  }
+
+  const policy = parsed.model_policy;
+  if (policy && typeof policy === 'object') {
+    const provider = policy.provider;
+    // 'generic' and 'custom' are sentinel values for the manual model-ID path — not catalog entries.
+    const _POLICY_SENTINEL_PROVIDERS = new Set(['generic', 'custom']);
+    if (provider && typeof provider === 'string' &&
+        !KNOWN_PROVIDERS.has(provider) && !_POLICY_SENTINEL_PROVIDERS.has(provider)) {
+      const pkey = `${configLabel}::model_policy::provider::${provider}`;
+      if (!_warnedConfigKeys.has(pkey)) {
+        _warnedConfigKeys.add(pkey);
+        try {
+          process.stderr.write(
+            `gsd: warning — model_policy.provider has unknown value "${provider}". ` +
+            `Known providers: ${[...KNOWN_PROVIDERS].sort().join(', ')}. ` +
+            `For manual model IDs use provider="custom". (#49)\n`
+          );
+        } catch { /* ok */ }
+      }
+    }
+
+    const rtOverrides = policy.runtime_tiers;
+    if (rtOverrides && typeof rtOverrides === 'object') {
+      for (const [pruntime, tierMap] of Object.entries(rtOverrides)) {
+        if (!KNOWN_RUNTIMES.has(pruntime)) {
+          const key = `${configLabel}::model_policy.runtime_tiers::${pruntime}`;
+          if (!_warnedConfigKeys.has(key)) {
+            _warnedConfigKeys.add(key);
+            try {
+              process.stderr.write(
+                `gsd: warning — model_policy.runtime_tiers.${pruntime}.* uses ` +
+                `unknown runtime "${pruntime}". Known runtimes: ` +
+                `${[...KNOWN_RUNTIMES].sort().join(', ')}. (#49)\n`
+              );
+            } catch { /* ok */ }
+          }
+        }
+        if (!tierMap || typeof tierMap !== 'object') continue;
+        for (const tierName of Object.keys(tierMap)) {
+          if (!RUNTIME_OVERRIDE_TIERS.has(tierName)) {
+            const key = `${configLabel}::model_policy.runtime_tiers::${pruntime}.${tierName}`;
+            if (!_warnedConfigKeys.has(key)) {
+              _warnedConfigKeys.add(key);
+              try {
+                process.stderr.write(
+                  `gsd: warning — model_policy.runtime_tiers.${pruntime}.${tierName} ` +
+                  `uses unknown tier "${tierName}". Allowed: opus, sonnet, haiku. (#49)\n`
+                );
+              } catch { /* ok */ }
+            }
+          }
         }
       }
     }
@@ -1476,6 +1537,78 @@ function _resolveRuntimeTier(config, tier) {
   });
 }
 
+/**
+ * #49 — Provider-neutral model policy preset resolution.
+ *
+ * Signature: resolveModelPolicy(policy, tier) → string | null
+ *
+ * Resolves a model ID string from a model_policy object. Two resolution sub-paths:
+ *
+ *   A. runtime_tiers sub-block (explicit per-runtime entries):
+ *      policy.runtime_tiers[policy.runtime][tier] → model string
+ *      The active runtime is read from policy.runtime (the caller merges
+ *      config.runtime into the policy object before calling).
+ *
+ *   B. provider + budget preset lookup (catalog-backed):
+ *      PROVIDER_PRESETS[provider][tier][budget] → model string
+ *      budget defaults to 'medium' if absent from policy.
+ *
+ * Returns a string model ID on a hit, null on miss.
+ * Never throws — unknown provider/tier/budget degrades gracefully to null
+ * so the caller falls through to model_profile_overrides.
+ *
+ * Precedence: runtime_tiers wins over provider presets when both are present
+ * for the same runtime+tier combination.
+ */
+function resolveModelPolicy(policy, tier) {
+  if (!policy || typeof policy !== 'object') return null;
+  if (!tier) return null;
+
+  // Sub-path A: explicit runtime_tiers override (highest precedence within policy).
+  // The active runtime is read from policy.runtime — the caller is responsible for
+  // merging config.runtime into the policy object (see step 2.5 in resolveModelInternal).
+  const runtime = policy.runtime;
+  const rtOverrides = policy.runtime_tiers;
+  if (runtime && rtOverrides && typeof rtOverrides === 'object') {
+    const runtimeEntry = rtOverrides[runtime];
+    if (runtimeEntry && typeof runtimeEntry === 'object') {
+      const raw = runtimeEntry[tier];
+      if (raw != null) {
+        const entry = typeof raw === 'string' ? { model: raw } : raw;
+        if (entry && entry.model) return entry.model;
+      }
+    }
+  }
+
+  // Sub-path B: catalog-backed provider preset.
+  const provider = policy.provider;
+  if (!provider || typeof provider !== 'string') return null;
+
+  // Sub-path B1: generic provider — model IDs supplied directly via model_policy.high/medium/low.
+  // 'generic' and 'custom' are sentinel values meaning "user-supplied IDs, no catalog lookup".
+  // The tier-to-key mapping: 'opus' → high, 'sonnet' → medium, 'haiku' → low.
+  if (provider === 'generic' || provider === 'custom') {
+    const TIER_TO_POLICY_KEY = { opus: 'high', sonnet: 'medium', haiku: 'low' };
+    const policyKey = TIER_TO_POLICY_KEY[tier];
+    if (!policyKey) return null;
+    const v = policy[policyKey];
+    return (v && typeof v === 'string') ? v : null;
+  }
+
+  const presetForProvider = PROVIDER_PRESETS[provider];
+  if (!presetForProvider) return null; // Unknown provider — fall through silently.
+
+  const tierPresets = presetForProvider[tier];
+  if (!tierPresets) return null; // Tier not in preset (partial preset catalog entry).
+
+  // Budget defaults to 'medium' — mirrors the existing 'balanced' default bias.
+  const budget = (policy.budget && typeof policy.budget === 'string') ? policy.budget : 'medium';
+  const budgetEntry = tierPresets[budget];
+  if (!budgetEntry || !budgetEntry.model) return null; // Missing or null budget slot.
+
+  return budgetEntry.model;
+}
+
 function resolveModelInternal(cwd, agentType) {
   const config = loadConfig(cwd);
 
@@ -1517,6 +1650,22 @@ function resolveModelInternal(cwd, agentType) {
     : (profile === 'inherit'
       ? 'inherit'
       : (agentModels ? (agentModels[profile] || agentModels['balanced']) : null));
+
+  // 2.5. model_policy preset (#49) — higher precedence than model_profile_overrides.
+  // Fires when config.model_policy is set AND runtime is a non-Claude runtime with
+  // tier !== 'inherit'. The provider preset catalog (Sub-path B) and any
+  // runtime_tiers overrides (Sub-path A) are checked here before falling through to
+  // the existing model_profile_overrides chain in step 3.
+  if (config.runtime && config.runtime !== 'claude' && tier && tier !== 'inherit') {
+    // Merge config.runtime into the policy object so resolveModelPolicy can use
+    // it for Sub-path A (runtime_tiers) lookup without needing a separate argument.
+    const mergedPolicy = config.model_policy
+      ? { ...config.model_policy, runtime: config.runtime }
+      : null;
+    const policyModel = resolveModelPolicy(mergedPolicy, tier);
+    if (policyModel) return policyModel;
+    // No policy hit → fall through to step 3 (model_profile_overrides).
+  }
 
   // 3. Runtime-aware resolution (#2517) — only when `runtime` is explicitly set
   // to a non-Claude runtime. `runtime: "claude"` is the implicit default and is
@@ -2301,6 +2450,8 @@ module.exports = {
   KNOWN_RUNTIMES,
   RUNTIME_OVERRIDE_TIERS,
   resolveTierEntry,
+  resolveModelPolicy,
+  KNOWN_PROVIDERS,
   _resetRuntimeWarningCacheForTests,
   pathExistsInternal,
   gitWorktreeInfoInternal,
