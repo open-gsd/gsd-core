@@ -1678,6 +1678,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
           }
           if (a === '--raw') continue;
           if (a.startsWith('-')) error(`Unknown flag for effort sync: ${a}`, ERROR_REASON.USAGE);
+          error(`effort sync takes no positional arguments; got: ${a}`, ERROR_REASON.USAGE);
         }
         commands.cmdEffortSync(cwd, raw, { dryRun, configDir: effortSyncConfigDir, runtime: effortSyncRuntime });
       } else {

@@ -329,6 +329,12 @@ function setEffortFrontmatter(content, effortValue) {
  * #488 — Re-sync effort: frontmatter in all installed gsd-*.md agent files to
  * match the current effort config, without requiring a full reinstall.
  *
+ * Uses install-time resolution (readGsdEffectiveEffortConfig + resolveInstallTimeEffort
+ * from bin/install.js) rather than the runtime resolver (resolveEffortInternal), because
+ * the sync must mirror what install actually wrote: home defaults merged with project config.
+ * The runtime resolver (loadConfig) does not merge ~/.gsd/defaults.json when a project
+ * .planning/config.json exists, so it would silently ignore home-level effort changes.
+ *
  * @param {string} cwd        Project working directory (for effort config resolution).
  * @param {boolean} raw       JSON output flag.
  * @param {{ dryRun?: boolean, configDir?: string, runtime?: string }} [opts]
@@ -349,6 +355,11 @@ function cmdEffortSync(cwd, raw, opts) {
   }
 
   const { getGlobalConfigDir } = require('./runtime-homes.cjs');
+  // Use install-time resolvers: they merge ~/.gsd/defaults.json with project config,
+  // matching the exact logic used when agents were originally installed.
+  const { readGsdEffectiveEffortConfig, resolveInstallTimeEffort } = require('../../../bin/install.js');
+  const effortCfg = readGsdEffectiveEffortConfig(cwd);
+
   const agentsDir = path.join(opts.configDir || getGlobalConfigDir(runtime), 'agents');
 
   if (!fs.existsSync(agentsDir)) {
@@ -356,7 +367,11 @@ function cmdEffortSync(cwd, raw, opts) {
     return;
   }
 
-  const files = fs.readdirSync(agentsDir).filter(f => f.startsWith('gsd-') && f.endsWith('.md'));
+  // Skip symlinks — only write regular files to avoid clobbering symlink targets.
+  const files = fs.readdirSync(agentsDir).filter(f => {
+    if (!f.startsWith('gsd-') || !f.endsWith('.md')) return false;
+    try { return fs.lstatSync(path.join(agentsDir, f)).isFile(); } catch { return false; }
+  });
   const changes = [];
   let synced = 0;
   let skipped = 0;
@@ -366,7 +381,8 @@ function cmdEffortSync(cwd, raw, opts) {
     const filePath = path.join(agentsDir, file);
     const content = fs.readFileSync(filePath, 'utf8');
 
-    const universalEffort = resolveEffortInternal(cwd, agentName);
+    // Resolve using install-time logic: home defaults merged with project config.
+    const universalEffort = resolveInstallTimeEffort(effortCfg, agentName);
     const rendered = renderEffortForRuntime(runtime, universalEffort);
     const newEffortValue = rendered.value;
 
