@@ -21,20 +21,27 @@
  * to stay bounded. Full runs are for local exploration only.
  */
 
-// Generated files that must NEVER be mutated
-const GENERATED_FILES = [
-  '!get-shit-done/bin/lib/command-aliases.cjs',  // GENERATED
-  '!get-shit-done/bin/lib/commands.cjs',         // GENERATED
-  '!get-shit-done/bin/lib/core.cjs',             // GENERATED
-  '!get-shit-done/bin/lib/install-profiles.cjs', // GENERATED
-  '!get-shit-done/bin/lib/installer-migrations.cjs', // GENERATED
-  '!get-shit-done/bin/lib/phase.cjs',            // GENERATED
-  '!get-shit-done/bin/lib/profile-output.cjs',   // GENERATED
-  '!get-shit-done/bin/lib/state.cjs',            // GENERATED
-  '!get-shit-done/bin/lib/verify.cjs',           // GENERATED
-  '!get-shit-done/bin/lib/init.cjs',             // GENERATED
-  '!get-shit-done/bin/lib/audit.cjs',            // GENERATED
-  '!get-shit-done/bin/lib/gsd2-import.cjs',      // GENERATED
+// ADR-457: bin/lib/*.cjs are gitignored build artifacts (compiled from
+// src/*.cts by `npm run build:lib`, which the mutation CI job runs via `npm ci`
+// → prepare before Stryker). Stryker mutates the *built* .cjs directly — the
+// command runner runs the tests with NO rebuild, so each mutation to the
+// shipped artifact is seen by the tests. (Mutating src/*.cts instead would
+// force a full tsc rebuild per mutant — far too slow for the 30-min CI budget.)
+// Large/low-coverage modules are excluded (the command's test set does not
+// exercise them, so they would only ever produce survived mutants).
+const UNMUTATED = [
+  '!get-shit-done/bin/lib/command-aliases.cjs',
+  '!get-shit-done/bin/lib/commands.cjs',
+  '!get-shit-done/bin/lib/core.cjs',
+  '!get-shit-done/bin/lib/install-profiles.cjs',
+  '!get-shit-done/bin/lib/installer-migrations.cjs',
+  '!get-shit-done/bin/lib/phase.cjs',
+  '!get-shit-done/bin/lib/profile-output.cjs',
+  '!get-shit-done/bin/lib/state.cjs',
+  '!get-shit-done/bin/lib/verify.cjs',
+  '!get-shit-done/bin/lib/init.cjs',
+  '!get-shit-done/bin/lib/audit.cjs',
+  '!get-shit-done/bin/lib/gsd2-import.cjs',
 ];
 
 /** @type {import('@stryker-mutator/core').PartialStrykerOptions} */
@@ -42,16 +49,19 @@ export default {
   // ── Test runner ──────────────────────────────────────────────────────────────
   testRunner: 'command',
   commandRunner: {
-    // Run property tests + unit tests over lib only.
-    // Deliberately avoids running the full integration suite (slow).
+    // Run property + unit tests over lib only (avoids the slow integration
+    // suite). NO build step here: Stryker mutates the already-built .cjs and the
+    // tests load it directly — adding a build would rebuild over the mutation.
     command: 'node --test tests/context-utilization.property.test.cjs tests/prompt-budget.property.test.cjs tests/frontmatter.property.test.cjs tests/adr-parser.property.test.cjs tests/config-schema.property.test.cjs tests/adr-parser.test.cjs tests/active-workstream-store.test.cjs',
   },
 
   // ── Files to mutate ──────────────────────────────────────────────────────────
+  // The built bin/lib/*.cjs artifacts (ADR-457). CI overrides this with
+  // --mutate <changed, covered modules> computed in mutation.yml.
   mutate: [
     'get-shit-done/bin/lib/**/*.cjs',
     '!get-shit-done/bin/lib/**/*.test.cjs',
-    ...GENERATED_FILES,
+    ...UNMUTATED,
   ],
 
   // ── Coverage ─────────────────────────────────────────────────────────────────

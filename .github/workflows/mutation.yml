@@ -55,10 +55,21 @@ jobs:
         id: changed
         run: |
           BASE_REF="origin/${{ github.base_ref }}"
-          # Find changed non-test, non-generated .cjs files in bin/lib
-          CHANGED=$(git diff --name-only "${BASE_REF}...HEAD" -- 'get-shit-done/bin/lib/**/*.cjs' \
-            | grep -v '\.test\.cjs$' \
-            | grep -v -E '/(configuration|command-aliases|commands|core|install-profiles|installer-migrations|phase|profile-output|state|verify|init|audit|gsd2-import)\.cjs$' \
+          # ADR-457 build-at-publish: bin/lib/*.cjs are generated from src/*.cts,
+          # so Stryker mutates the TS SOURCES. The mutation gate is only
+          # meaningful for modules that the stryker.config.mjs command actually
+          # exercises (its property/unit test set) — mutating an uncovered module
+          # can only ever produce survived mutants. Scope to those covered modules.
+          # grep-based (not a git pathspec): `src/**/*.cts` pathspec only matches
+          # nested dirs, missing the top-level src/*.cts covered modules.
+          # Stryker mutates the BUILT artifact, so map the changed src/*.cts to
+          # its emitted get-shit-done/bin/lib/*.cjs path.
+          COVERED='^src/(context-utilization|prompt-budget|frontmatter|adr-parser|config-schema|active-workstream-store)\.cts$'
+          CHANGED=$(git diff --name-only "${BASE_REF}...HEAD" \
+            | grep -E '^src/.*\.cts$' \
+            | grep -vE '\.d\.cts$' \
+            | grep -E "$COVERED" \
+            | sed -E 's#^src/#get-shit-done/bin/lib/#; s#\.cts$#.cjs#' \
             || true)
           if [ -z "$CHANGED" ]; then
             echo "changed=" >> "$GITHUB_OUTPUT"
