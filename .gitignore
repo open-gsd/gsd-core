@@ -141,6 +141,8 @@ build/
 /get-shit-done/bin/lib/config.cjs
 /get-shit-done/bin/lib/profile-output.cjs
 /get-shit-done/bin/lib/template.cjs
+/get-shit-done/bin/lib/commands.cjs
+/get-shit-done/bin/lib/state.cjs
 /get-shit-done/bin/lib/uat.cjs
 /get-shit-done/bin/lib/workstream.cjs
 /get-shit-done/bin/lib/roadmap.cjs

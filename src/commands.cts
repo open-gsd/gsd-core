@@ -1,21 +1,104 @@
 /**
  * Commands — Standalone utility commands
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/commands.cjs collapsed
+ * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only strict types are added.
  */
-const fs = require('fs');
-const path = require('path');
-const { execGit, platformWriteSync, platformReadSync, platformEnsureDir } = require('./shell-command-projection.cjs');
-const { loadConfig, isGitIgnored, normalizePhaseName, comparePhaseNum, getArchivedPhaseDirs, generateSlugInternal, getMilestoneInfo, getMilestonePhaseFilter, resolveModelInternal, resolveEffortInternal, resolveFastModeInternal, resolveEffortForTier, stripShippedMilestones, extractCurrentMilestone, toPosixPath, output, error, findPhaseInternal, extractOneLinerFromBody, getRoadmapPhaseInternal, extractPhaseToken, resolveGranularityInternal } = require('./core.cjs');
-const { renderEffortForRuntime, RUNTIMES_WITH_FAST_MODE } = require('./model-catalog.cjs');
-const { planningDir, planningPaths } = require('./planning-workspace.cjs');
-const { extractFrontmatter } = require('./frontmatter.cjs');
-const { MODEL_PROFILES, VALID_PHASE_TYPES } = require('./model-profiles.cjs');
-const { formatGsdSlash, resolveRuntime } = require('./runtime-slash.cjs');
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { execGit, platformWriteSync, platformReadSync, platformEnsureDir } from './shell-command-projection.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import core = require('./core.cjs');
+const {
+  loadConfig,
+  isGitIgnored,
+  normalizePhaseName,
+  comparePhaseNum,
+  getArchivedPhaseDirs,
+  generateSlugInternal,
+  getMilestoneInfo,
+  getMilestonePhaseFilter,
+  resolveModelInternal,
+  resolveEffortInternal,
+  resolveFastModeInternal,
+  resolveEffortForTier,
+  stripShippedMilestones: _stripShippedMilestones,
+  extractCurrentMilestone,
+  toPosixPath,
+  output,
+  error,
+  findPhaseInternal,
+  extractOneLinerFromBody,
+  getRoadmapPhaseInternal,
+  extractPhaseToken,
+  resolveGranularityInternal,
+} = core;
+import { renderEffortForRuntime, RUNTIMES_WITH_FAST_MODE } from './model-catalog.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planningWorkspace = require('./planning-workspace.cjs');
+const { planningDir, planningPaths } = planningWorkspace;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import frontmatter = require('./frontmatter.cjs');
+const { extractFrontmatter } = frontmatter;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import modelProfiles = require('./model-profiles.cjs');
+const { MODEL_PROFILES, VALID_PHASE_TYPES } = modelProfiles;
+import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface ArchivedPhaseDir {
+  name: string;
+  fullPath: string;
+  milestone: string | null;
+}
+
+interface PhaseProgress {
+  number: string;
+  name: string;
+  plans: number;
+  summaries: number;
+  status: string;
+}
+
+interface GroupFilesBySubrepoResult {
+  grouped: Record<string, string[]>;
+  unmatched: string[];
+}
+
+interface WebsearchOptions {
+  limit?: number;
+  freshness?: string;
+}
+
+interface ScaffoldOptions {
+  phase?: string;
+  name?: string;
+}
+
+interface CommitToSubrepoRepoResult {
+  committed: boolean;
+  hash: string | null;
+  files: string[];
+  reason?: string;
+  error?: string;
+}
+
+interface EffortSyncChange {
+  agent: string;
+  from: string | null;
+  to: string;
+}
+
+// ─── Phase Status ─────────────────────────────────────────────────────────────
 
 /**
  * Determine phase status by checking plan/summary counts AND verification state.
  * Introduces "Executed" for phases with all summaries but no passing verification.
  */
-function determinePhaseStatus(plans, summaries, phaseDir, defaultPending) {
+function determinePhaseStatus(plans: number, summaries: number, phaseDir: string, defaultPending: string): string {
   if (plans === 0) return defaultPending;
   if (summaries < plans && summaries > 0) return 'In Progress';
   if (summaries < plans) return 'Planned';
@@ -38,12 +121,12 @@ function determinePhaseStatus(plans, summaries, phaseDir, defaultPending) {
   return 'Executed';
 }
 
-function cmdGenerateSlug(text, raw) {
+function cmdGenerateSlug(text: string | undefined, raw: boolean): void {
   if (!text) {
     error('text required for slug generation');
   }
 
-  const slug = text
+  const slug = (text as string)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
@@ -53,9 +136,9 @@ function cmdGenerateSlug(text, raw) {
   output(result, raw, slug);
 }
 
-function cmdCurrentTimestamp(format, raw) {
+function cmdCurrentTimestamp(format: string | undefined, raw: boolean): void {
   const now = new Date();
-  let result;
+  let result: string;
 
   switch (format) {
     case 'date':
@@ -73,11 +156,11 @@ function cmdCurrentTimestamp(format, raw) {
   output({ timestamp: result }, raw, result);
 }
 
-function cmdListTodos(cwd, area, raw) {
+function cmdListTodos(cwd: string, area: string | undefined, raw: boolean): void {
   const pendingDir = path.join(planningDir(cwd), 'todos', 'pending');
 
   let count = 0;
-  const todos = [];
+  const todos: Array<{ file: string; created: string; title: string; area: string; path: string }> = [];
 
   try {
     const files = fs.readdirSync(pendingDir).filter(f => f.endsWith('.md'));
@@ -109,17 +192,17 @@ function cmdListTodos(cwd, area, raw) {
   output(result, raw, count.toString());
 }
 
-function cmdVerifyPathExists(cwd, targetPath, raw) {
+function cmdVerifyPathExists(cwd: string, targetPath: string | undefined, raw: boolean): void {
   if (!targetPath) {
     error('path required for verification');
   }
 
   // Reject null bytes and validate path does not contain traversal attempts
-  if (targetPath.includes('\0')) {
+  if ((targetPath as string).includes('\0')) {
     error('path contains null bytes');
   }
 
-  const fullPath = path.isAbsolute(targetPath) ? targetPath : path.join(cwd, targetPath);
+  const fullPath = path.isAbsolute(targetPath as string) ? targetPath as string : path.join(cwd, targetPath as string);
 
   try {
     const stats = fs.statSync(fullPath);
@@ -132,15 +215,19 @@ function cmdVerifyPathExists(cwd, targetPath, raw) {
   }
 }
 
-function cmdHistoryDigest(cwd, raw) {
+function cmdHistoryDigest(cwd: string, raw: boolean): void {
   const phasesDir = planningPaths(cwd).phases;
-  const digest = { phases: {}, decisions: [], tech_stack: new Set() };
+  const digest: {
+    phases: Record<string, { name: string; provides: Set<string> | string[]; affects: Set<string> | string[]; patterns: Set<string> | string[] }>;
+    decisions: Array<{ phase: string; decision: string }>;
+    tech_stack: Set<string> | string[];
+  } = { phases: {}, decisions: [], tech_stack: new Set() };
 
   // Collect all phase directories: archived + current
-  const allPhaseDirs = [];
+  const allPhaseDirs: Array<{ name: string; fullPath: string; milestone: string | null }> = [];
 
   // Add archived phases first (oldest milestones first)
-  const archived = getArchivedPhaseDirs(cwd);
+  const archived = getArchivedPhaseDirs(cwd) as ArchivedPhaseDir[];
   for (const a of archived) {
     allPhaseDirs.push({ name: a.name, fullPath: a.fullPath, milestone: a.milestone });
   }
@@ -160,7 +247,7 @@ function cmdHistoryDigest(cwd, raw) {
 
   if (allPhaseDirs.length === 0) {
     digest.tech_stack = [];
-    output(digest, raw);
+    output(digest, raw, undefined);
     return;
   }
 
@@ -172,49 +259,51 @@ function cmdHistoryDigest(cwd, raw) {
         const content = platformReadSync(path.join(dirPath, summary));
         if (content === null) continue;
         try {
-          const fm = extractFrontmatter(content);
+          const fm = extractFrontmatter(content) as Record<string, unknown>;
 
-          const phaseNum = fm.phase || dir.split('-')[0];
+          const phaseNum = (fm['phase'] as string) || dir.split('-')[0];
 
           if (!digest.phases[phaseNum]) {
             digest.phases[phaseNum] = {
-              name: fm.name || dir.split('-').slice(1).join(' ') || 'Unknown',
-              provides: new Set(),
-              affects: new Set(),
-              patterns: new Set(),
+              name: (fm['name'] as string) || dir.split('-').slice(1).join(' ') || 'Unknown',
+              provides: new Set<string>(),
+              affects: new Set<string>(),
+              patterns: new Set<string>(),
             };
           }
 
           // Merge provides
-          if (fm['dependency-graph'] && fm['dependency-graph'].provides) {
-            fm['dependency-graph'].provides.forEach(p => digest.phases[phaseNum].provides.add(p));
-          } else if (fm.provides) {
-            fm.provides.forEach(p => digest.phases[phaseNum].provides.add(p));
+          const depGraph = fm['dependency-graph'] as Record<string, string[]> | undefined;
+          if (depGraph && depGraph['provides']) {
+            depGraph['provides'].forEach((p: string) => (digest.phases[phaseNum].provides as Set<string>).add(p));
+          } else if (fm['provides']) {
+            (fm['provides'] as string[]).forEach((p: string) => (digest.phases[phaseNum].provides as Set<string>).add(p));
           }
 
           // Merge affects
-          if (fm['dependency-graph'] && fm['dependency-graph'].affects) {
-            fm['dependency-graph'].affects.forEach(a => digest.phases[phaseNum].affects.add(a));
+          if (depGraph && depGraph['affects']) {
+            depGraph['affects'].forEach((a: string) => (digest.phases[phaseNum].affects as Set<string>).add(a));
           }
 
           // Merge patterns
           if (fm['patterns-established']) {
-            fm['patterns-established'].forEach(p => digest.phases[phaseNum].patterns.add(p));
+            (fm['patterns-established'] as string[]).forEach((p: string) => (digest.phases[phaseNum].patterns as Set<string>).add(p));
           }
 
           // Merge decisions
           if (fm['key-decisions']) {
-            fm['key-decisions'].forEach(d => {
+            (fm['key-decisions'] as string[]).forEach((d: string) => {
               digest.decisions.push({ phase: phaseNum, decision: d });
             });
           }
 
           // Merge tech stack
-          if (fm['tech-stack'] && fm['tech-stack'].added) {
-            fm['tech-stack'].added.forEach(t => digest.tech_stack.add(typeof t === 'string' ? t : t.name));
+          const techStack = fm['tech-stack'] as { added?: Array<string | { name: string }> } | undefined;
+          if (techStack && techStack['added']) {
+            techStack['added'].forEach((t: string | { name: string }) => (digest.tech_stack as Set<string>).add(typeof t === 'string' ? t : t.name));
           }
 
-        } catch (e) {
+        } catch {  
           // Skip malformed summaries
         }
       }
@@ -222,41 +311,41 @@ function cmdHistoryDigest(cwd, raw) {
 
     // Convert Sets to Arrays for JSON output
     Object.keys(digest.phases).forEach(p => {
-      digest.phases[p].provides = [...digest.phases[p].provides];
-      digest.phases[p].affects = [...digest.phases[p].affects];
-      digest.phases[p].patterns = [...digest.phases[p].patterns];
+      digest.phases[p].provides = [...(digest.phases[p].provides as Set<string>)];
+      digest.phases[p].affects = [...(digest.phases[p].affects as Set<string>)];
+      digest.phases[p].patterns = [...(digest.phases[p].patterns as Set<string>)];
     });
-    digest.tech_stack = [...digest.tech_stack];
+    digest.tech_stack = [...(digest.tech_stack as Set<string>)];
 
-    output(digest, raw);
+    output(digest, raw, undefined);
   } catch (e) {
-    error('Failed to generate history digest: ' + e.message);
+    error('Failed to generate history digest: ' + (e as Error).message);
   }
 }
 
-function cmdResolveModel(cwd, agentType, raw) {
+function cmdResolveModel(cwd: string, agentType: string | undefined, raw: boolean): void {
   if (!agentType) {
     error('agent-type required');
   }
 
   const config = loadConfig(cwd);
-  const profile = config.model_profile || 'balanced';
-  const model = resolveModelInternal(cwd, agentType);
-  const effort = resolveEffortInternal(cwd, agentType);
+  const profile = (config['model_profile'] as string) || 'balanced';
+  const model = resolveModelInternal(cwd, agentType!);
+  const effort = resolveEffortInternal(cwd, agentType!);
 
-  const agentModels = MODEL_PROFILES[agentType];
+  const agentModels = (MODEL_PROFILES as Record<string, unknown>)[agentType!];
   const result = agentModels
     ? { model, profile, effort }
     : { model, profile, effort, unknown_agent: true };
   output(result, raw, model);
 }
 
-function cmdResolveGranularity(cwd, phaseType, raw) {
+function cmdResolveGranularity(cwd: string, phaseType: string | undefined, raw: boolean): void {
   if (!phaseType) {
     error('phase-type required');
   }
   const granularity = resolveGranularityInternal(cwd, phaseType);
-  const result = VALID_PHASE_TYPES.has(phaseType)
+  const result = (VALID_PHASE_TYPES).has(phaseType!)
     ? { granularity, phase_type: phaseType }
     : { granularity, phase_type: phaseType, unknown_phase_type: true };
   output(result, raw, granularity);
@@ -270,41 +359,36 @@ function cmdResolveGranularity(cwd, phaseType, raw) {
  *     fast_mode, fast_mode_supported, [unknown_agent] }
  *
  * Flags: --effort <level>, --fast-mode <true|false>, --attempt <n>
- *
- * @param {string} cwd
- * @param {string} agentType
- * @param {boolean} raw
- * @param {{ effortOverride?: string, fastModeOverride?: boolean, attempt?: number }} [opts]
  */
-function cmdResolveExecution(cwd, agentType, raw, opts) {
+function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: boolean, opts?: { effortOverride?: string; fastModeOverride?: boolean; attempt?: number }): void {
   if (!agentType) {
     error('agent-type required');
   }
 
   opts = opts || {};
   const config = loadConfig(cwd);
-  const profile = config.model_profile || 'balanced';
-  const model = resolveModelInternal(cwd, agentType);
+  const profile = (config['model_profile'] as string) || 'balanced';
+  const model = resolveModelInternal(cwd, agentType!);
 
-  const effortOpts = {};
-  if (typeof opts.effortOverride === 'string') effortOpts.override = opts.effortOverride;
+  const effortOpts: Record<string, unknown> = {};
+  if (typeof opts.effortOverride === 'string') effortOpts['override'] = opts.effortOverride;
 
-  const fastModeOpts = {};
-  if (typeof opts.fastModeOverride === 'boolean') fastModeOpts.override = opts.fastModeOverride;
+  const fastModeOpts: Record<string, unknown> = {};
+  if (typeof opts.fastModeOverride === 'boolean') fastModeOpts['override'] = opts.fastModeOverride;
 
   const effort = (opts.attempt !== undefined && opts.attempt !== null)
-    ? resolveEffortForTier(cwd, agentType, opts.attempt)
-    : resolveEffortInternal(cwd, agentType, effortOpts);
+    ? resolveEffortForTier(cwd, agentType!, opts.attempt)
+    : resolveEffortInternal(cwd, agentType!, effortOpts);
 
-  const fastMode = resolveFastModeInternal(cwd, agentType, fastModeOpts);
+  const fastMode = resolveFastModeInternal(cwd, agentType!, fastModeOpts);
 
-  const runtime = config.runtime || 'claude';
+  const runtime = (config['runtime'] as string) || 'claude';
   const rendered = renderEffortForRuntime(runtime, effort);
 
   const fastModeSupported = RUNTIMES_WITH_FAST_MODE.has(runtime);
 
-  const agentModels = MODEL_PROFILES[agentType];
-  const result = {
+  const agentModels = (MODEL_PROFILES as Record<string, unknown>)[agentType!];
+  const result: Record<string, unknown> = {
     model,
     profile,
     effort,
@@ -314,7 +398,7 @@ function cmdResolveExecution(cwd, agentType, raw, opts) {
     fast_mode: fastMode,
     fast_mode_supported: fastModeSupported,
   };
-  if (!agentModels) result.unknown_agent = true;
+  if (!agentModels) result['unknown_agent'] = true;
   output(result, raw, effort);
 }
 
@@ -322,7 +406,7 @@ function cmdResolveExecution(cwd, agentType, raw, opts) {
  * #488 — Replace or inject the `effort:` value in YAML frontmatter.
  * Unlike injectEffortFrontmatter (install.js), this overwrites an existing value.
  */
-function setEffortFrontmatter(content, effortValue) {
+function setEffortFrontmatter(content: string, effortValue: string): string {
   const eol = /^---\r\n/.test(content) ? '\r\n' : '\n';
   const fmRe = /^---\r?\n([\s\S]*?)^---\r?$/m;
   const match = fmRe.exec(content);
@@ -345,30 +429,28 @@ function setEffortFrontmatter(content, effortValue) {
  * the sync must mirror what install actually wrote: home defaults merged with project config.
  * The runtime resolver (loadConfig) does not merge ~/.gsd/defaults.json when a project
  * .planning/config.json exists, so it would silently ignore home-level effort changes.
- *
- * @param {string} cwd        Project working directory (for effort config resolution).
- * @param {boolean} raw       JSON output flag.
- * @param {{ dryRun?: boolean, configDir?: string, runtime?: string }} [opts]
- *   dryRun    — when true (default), report changes without writing; false = apply.
- *   configDir — override the agents parent dir (default: runtime global config dir).
- *   runtime   — override runtime (default: config.runtime || 'claude').
  */
-function cmdEffortSync(cwd, raw, opts) {
+function cmdEffortSync(cwd: string, raw: boolean, opts?: { dryRun?: boolean; configDir?: string; runtime?: string }): void {
   opts = opts || {};
   const dryRun = opts.dryRun !== false;
 
   const config = loadConfig(cwd);
-  const runtime = opts.runtime || config.runtime || 'claude';
+  const runtime = opts.runtime || (config['runtime'] as string) || 'claude';
 
   if (runtime !== 'claude') {
     output({ synced: 0, skipped: 0, changes: [], dry_run: dryRun, reason: `runtime '${runtime}' does not use effort: frontmatter` }, raw, '');
     return;
   }
 
-  const { getGlobalConfigDir } = require('./runtime-homes.cjs');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/unbound-method
+  const { getGlobalConfigDir } = require('./runtime-homes.cjs') as { getGlobalConfigDir(runtime: string): string };
   // Use install-time resolvers: they merge ~/.gsd/defaults.json with project config,
   // matching the exact logic used when agents were originally installed.
-  const { readGsdEffectiveEffortConfig, resolveInstallTimeEffort } = require('../../../bin/install.js');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/unbound-method
+  const { readGsdEffectiveEffortConfig, resolveInstallTimeEffort } = require('../../../bin/install.js') as {
+    readGsdEffectiveEffortConfig(cwd: string): Record<string, unknown>;
+    resolveInstallTimeEffort(cfg: Record<string, unknown>, agentName: string): string;
+  };
   const effortCfg = readGsdEffectiveEffortConfig(cwd);
 
   const agentsDir = path.join(opts.configDir || getGlobalConfigDir(runtime), 'agents');
@@ -383,7 +465,7 @@ function cmdEffortSync(cwd, raw, opts) {
     if (!f.startsWith('gsd-') || !f.endsWith('.md')) return false;
     try { return fs.lstatSync(path.join(agentsDir, f)).isFile(); } catch { return false; }
   });
-  const changes = [];
+  const changes: EffortSyncChange[] = [];
   let synced = 0;
   let skipped = 0;
 
@@ -416,16 +498,18 @@ function cmdEffortSync(cwd, raw, opts) {
   output({ synced, skipped, changes, dry_run: dryRun, agents_dir: agentsDir }, raw, synced > 0 ? 'changed' : 'ok');
 }
 
-function cmdCommit(cwd, message, files, raw, amend, noVerify) {
+function cmdCommit(cwd: string, message: string | undefined, files: string[] | undefined, raw: boolean, amend: boolean, noVerify: boolean): void {
   if (!message && !amend) {
     error('commit message required');
   }
 
   // Sanitize commit message: strip invisible chars and injection markers
   // that could hijack agent context when commit messages are read back
-  if (message) {
-    const { sanitizeForPrompt } = require('./security.cjs');
-    message = sanitizeForPrompt(message);
+  let sanitizedMessage = message;
+  if (sanitizedMessage) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/unbound-method
+    const { sanitizeForPrompt } = require('./security.cjs') as { sanitizeForPrompt(text: unknown): string };
+    sanitizedMessage = sanitizeForPrompt(sanitizedMessage);
   }
 
   const config = loadConfig(cwd);
@@ -434,7 +518,7 @@ function cmdCommit(cwd, message, files, raw, amend, noVerify) {
   // `skipped: true` is explicit so agent prompts can match on a first-class
   // success signal rather than inferring "skip" from "committed is missing"
   // and improvising raw git fallbacks (#3678).
-  if (!config.commit_docs) {
+  if (!config['commit_docs']) {
     const result = { committed: false, skipped: true, hash: null, reason: 'skipped_commit_docs_false' };
     output(result, raw, 'skipped');
     return;
@@ -450,24 +534,25 @@ function cmdCommit(cwd, message, files, raw, amend, noVerify) {
   // Ensure branching strategy branch exists before first commit (#1278).
   // Pre-execution workflows (discuss, plan, research) commit artifacts but the branch
   // was previously only created during execute-phase — too late.
-  if (config.branching_strategy && config.branching_strategy !== 'none') {
-    let branchName = null;
-    if (config.branching_strategy === 'phase') {
+  const branchingStrategy = config['branching_strategy'] as string | undefined;
+  if (branchingStrategy && branchingStrategy !== 'none') {
+    let branchName: string | null = null;
+    if (branchingStrategy === 'phase') {
       // Determine which phase we're committing for from the file paths
       const phaseMatch = (files || []).join(' ').match(/(\d+(?:\.\d+)*)-/);
       if (phaseMatch) {
         const phaseNum = phaseMatch[1];
-        const phaseInfo = findPhaseInternal(cwd, phaseNum);
+        const phaseInfo = findPhaseInternal(cwd, phaseNum) as Record<string, unknown> | null;
         if (phaseInfo) {
-          branchName = config.phase_branch_template
-            .replace('{phase}', phaseInfo.phase_number)
-            .replace('{slug}', phaseInfo.phase_slug || 'phase');
+          branchName = (config['phase_branch_template'] as string)
+            .replace('{phase}', phaseInfo['phase_number'] as string)
+            .replace('{slug}', (phaseInfo['phase_slug'] as string) || 'phase');
         }
       }
-    } else if (config.branching_strategy === 'milestone') {
+    } else if (branchingStrategy === 'milestone') {
       const milestone = getMilestoneInfo(cwd);
       if (milestone && milestone.version) {
-        branchName = config.milestone_branch_template
+        branchName = (config['milestone_branch_template'] as string)
           .replace('{milestone}', milestone.version)
           .replace('{slug}', generateSlugInternal(milestone.name) || 'milestone');
       }
@@ -505,7 +590,7 @@ function cmdCommit(cwd, message, files, raw, amend, noVerify) {
   }
 
   // Commit (--no-verify skips pre-commit hooks, used by parallel executor agents)
-  const commitArgs = amend ? ['commit', '--amend', '--no-edit'] : ['commit', '-m', message];
+  const commitArgs = amend ? ['commit', '--amend', '--no-edit'] : ['commit', '-m', sanitizedMessage as string];
   if (noVerify) commitArgs.push('--no-verify');
   const commitResult = execGit(commitArgs, { cwd });
   if (commitResult.exitCode !== 0) {
@@ -542,20 +627,19 @@ function cmdCommit(cwd, message, files, raw, amend, noVerify) {
  * (incl. multi-segment sub-repos like "vendor/pkg", which resolve via the
  * inner startsWith). (#311)
  *
- * @param {string[]} files    - changed file paths (relative to project root)
- * @param {string[]} subRepos - sub-repo path prefixes from config.sub_repos
- * @returns {{ grouped: Object<string,string[]>, unmatched: string[] }}
+ * @param files    - changed file paths (relative to project root)
+ * @param subRepos - sub-repo path prefixes from config.sub_repos
  */
-function groupFilesBySubrepo(files, subRepos) {
-  const reposByFirstSeg = new Map();
+function groupFilesBySubrepo(files: string[], subRepos: string[]): GroupFilesBySubrepoResult {
+  const reposByFirstSeg = new Map<string, string[]>();
   for (const repo of subRepos) {
     const firstSeg = String(repo).split('/')[0];
     let bucket = reposByFirstSeg.get(firstSeg);
     if (!bucket) { bucket = []; reposByFirstSeg.set(firstSeg, bucket); }
     bucket.push(repo);
   }
-  const grouped = {};
-  const unmatched = [];
+  const grouped: Record<string, string[]> = {};
+  const unmatched: string[] = [];
   for (const file of files) {
     const candidates = reposByFirstSeg.get(file.split('/')[0]);
     const match = candidates ? candidates.find(repo => file.startsWith(repo + '/')) : undefined;
@@ -568,13 +652,13 @@ function groupFilesBySubrepo(files, subRepos) {
   return { grouped, unmatched };
 }
 
-function cmdCommitToSubrepo(cwd, message, files, raw) {
+function cmdCommitToSubrepo(cwd: string, message: string | undefined, files: string[] | undefined, raw: boolean): void {
   if (!message) {
     error('commit message required');
   }
 
   const config = loadConfig(cwd);
-  const subRepos = config.sub_repos;
+  const subRepos = config['sub_repos'] as string[] | undefined;
 
   if (!subRepos || subRepos.length === 0) {
     error('no sub_repos configured in .planning/config.json');
@@ -585,13 +669,13 @@ function cmdCommitToSubrepo(cwd, message, files, raw) {
   }
 
   // Group files by sub-repo prefix
-  const { grouped, unmatched } = groupFilesBySubrepo(files, subRepos);
+  const { grouped, unmatched } = groupFilesBySubrepo(files as string[], subRepos as string[]);
 
   if (unmatched.length > 0) {
     process.stderr.write(`Warning: ${unmatched.length} file(s) did not match any sub-repo prefix: ${unmatched.join(', ')}\n`);
   }
 
-  const repos = {};
+  const repos: Record<string, CommitToSubrepoRepoResult> = {};
   for (const [repo, repoFiles] of Object.entries(grouped)) {
     const repoCwd = path.join(cwd, repo);
 
@@ -602,7 +686,7 @@ function cmdCommitToSubrepo(cwd, message, files, raw) {
     }
 
     // Commit
-    const commitResult = execGit(['commit', '-m', message], { cwd: repoCwd });
+    const commitResult = execGit(['commit', '-m', message as string], { cwd: repoCwd });
     if (commitResult.exitCode !== 0) {
       if (commitResult.stdout.includes('nothing to commit') || commitResult.stderr.includes('nothing to commit')) {
         repos[repo] = { committed: false, hash: null, files: repoFiles, reason: 'nothing_to_commit' };
@@ -626,25 +710,25 @@ function cmdCommitToSubrepo(cwd, message, files, raw) {
   output(result, raw, Object.entries(repos).map(([r, v]) => `${r}:${v.hash || 'skip'}`).join(' '));
 }
 
-function cmdSummaryExtract(cwd, summaryPath, fields, raw) {
+function cmdSummaryExtract(cwd: string, summaryPath: string | undefined, fields: string[] | undefined, raw: boolean): void {
   if (!summaryPath) {
     error('summary-path required for summary-extract');
   }
 
-  const fullPath = path.join(cwd, summaryPath);
+  const fullPath = path.join(cwd, summaryPath as string);
 
   if (!fs.existsSync(fullPath)) {
-    output({ error: 'File not found', path: summaryPath }, raw);
+    output({ error: 'File not found', path: summaryPath }, raw, undefined);
     return;
   }
 
   const content = fs.readFileSync(fullPath, 'utf-8');
-  const fm = extractFrontmatter(content);
+  const fm = extractFrontmatter(content) as Record<string, unknown>;
 
   // Parse key-decisions into structured format
-  const parseDecisions = (decisionsList) => {
+  const parseDecisions = (decisionsList: unknown) => {
     if (!decisionsList || !Array.isArray(decisionsList)) return [];
-    return decisionsList.map(d => {
+    return (decisionsList as string[]).map(d => {
       const colonIdx = d.indexOf(':');
       if (colonIdx > 0) {
         return {
@@ -656,12 +740,14 @@ function cmdSummaryExtract(cwd, summaryPath, fields, raw) {
     });
   };
 
+  const techStack = fm['tech-stack'] as { added?: string[] } | undefined;
+
   // Build full result
-  const fullResult = {
+  const fullResult: Record<string, unknown> = {
     path: summaryPath,
     one_liner: fm['one-liner'] || extractOneLinerFromBody(content) || null,
     key_files: fm['key-files'] || [],
-    tech_added: (fm['tech-stack'] && fm['tech-stack'].added) || [],
+    tech_added: (techStack && techStack['added']) || [],
     patterns: fm['patterns-established'] || [],
     decisions: parseDecisions(fm['key-decisions']),
     requirements_completed: fm['requirements-completed'] || [],
@@ -669,24 +755,24 @@ function cmdSummaryExtract(cwd, summaryPath, fields, raw) {
 
   // If fields specified, filter to only those fields
   if (fields && fields.length > 0) {
-    const filtered = { path: summaryPath };
+    const filtered: Record<string, unknown> = { path: summaryPath };
     for (const field of fields) {
       if (fullResult[field] !== undefined) {
         filtered[field] = fullResult[field];
       }
     }
-    output(filtered, raw);
+    output(filtered, raw, undefined);
     return;
   }
 
-  output(fullResult, raw);
+  output(fullResult, raw, undefined);
 }
 
-function _wsSleep(ms) {
+function _wsSleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function _wsParseRetryAfter(header) {
+function _wsParseRetryAfter(header: string | null | undefined): number | null {
   if (!header) return null;
   const trimmed = header.trim();
   if (/^\d+$/.test(trimmed)) {
@@ -699,15 +785,15 @@ function _wsParseRetryAfter(header) {
   return null;
 }
 
-function _wsRetryDelayMs(attempt) {
+function _wsRetryDelayMs(attempt: number): number {
   const base = 250;
   const cap = 2000;
   const exp = Math.min(base * Math.pow(2, attempt), cap);
   return exp + Math.floor(Math.random() * 100);
 }
 
-async function cmdWebsearch(query, options, raw) {
-  const apiKey = process.env.BRAVE_API_KEY;
+async function cmdWebsearch(query: string | undefined, options: WebsearchOptions, raw: boolean): Promise<void> {
+  const apiKey = process.env['BRAVE_API_KEY'];
 
   if (!apiKey) {
     // No key = silent skip, agent falls back to built-in WebSearch
@@ -732,7 +818,7 @@ async function cmdWebsearch(query, options, raw) {
     params.set('freshness', options.freshness);
   }
 
-  const rawTimeout = parseInt(process.env.GSD_WEBSEARCH_TIMEOUT_MS, 10);
+  const rawTimeout = parseInt(process.env['GSD_WEBSEARCH_TIMEOUT_MS'] as string, 10);
   const timeoutMs = (Number.isInteger(rawTimeout) && rawTimeout > 0) ? rawTimeout : 10000;
 
   const MAX_RETRIES = 2;
@@ -742,9 +828,10 @@ async function cmdWebsearch(query, options, raw) {
     try {
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(new Error('timeout')), timeoutMs);
-      let response;
+      let response: Response;
       try {
         response = await fetch(
+          // eslint-disable-next-line @typescript-eslint/restrict-template-expressions
           `https://api.search.brave.com/res/v1/web/search?${params}`,
           {
             headers: {
@@ -759,7 +846,7 @@ async function cmdWebsearch(query, options, raw) {
       }
 
       if (response.ok) {
-        const data = await response.json();
+        const data = await response.json() as { web?: { results?: Array<{ title: string; url: string; description: string; age?: string }> } };
         const results = (data.web?.results || []).map(r => ({
           title: r.title,
           url: r.url,
@@ -791,7 +878,7 @@ async function cmdWebsearch(query, options, raw) {
         return;
       }
 
-      let delay;
+      let delay: number;
       if (status === 429) {
         const retryAfter = _wsParseRetryAfter(response.headers.get('retry-after'));
         delay = retryAfter !== null ? retryAfter : _wsRetryDelayMs(attempt - 1);
@@ -803,7 +890,7 @@ async function cmdWebsearch(query, options, raw) {
     } catch (err) {
       attempt++;
       if (attempt > MAX_RETRIES) {
-        output({ available: false, error: err.message, attempts: attempt }, raw, '');
+        output({ available: false, error: (err as Error).message, attempts: attempt }, raw, '');
         return;
       }
       await _wsSleep(_wsRetryDelayMs(attempt - 1));
@@ -811,12 +898,11 @@ async function cmdWebsearch(query, options, raw) {
   }
 }
 
-function cmdProgressRender(cwd, format, raw) {
+function cmdProgressRender(cwd: string, format: string | undefined, raw: boolean): void {
   const phasesDir = planningPaths(cwd).phases;
-  const roadmapPath = planningPaths(cwd).roadmap;
   const milestone = getMilestoneInfo(cwd);
 
-  const phases = [];
+  const phases: PhaseProgress[] = [];
   let totalPlans = 0;
   let totalSummaries = 0;
 
@@ -847,7 +933,7 @@ function cmdProgressRender(cwd, format, raw) {
     // Render markdown table
     const barWidth = 10;
     const filled = Math.round((percent / 100) * barWidth);
-    const bar = '\u2588'.repeat(filled) + '\u2591'.repeat(barWidth - filled);
+    const bar = '█'.repeat(filled) + '░'.repeat(barWidth - filled);
     let out = `# ${milestone.version} ${milestone.name}\n\n`;
     out += `**Progress:** [${bar}] ${totalSummaries}/${totalPlans} plans (${percent}%)\n\n`;
     out += `| Phase | Name | Plans | Status |\n`;
@@ -859,7 +945,7 @@ function cmdProgressRender(cwd, format, raw) {
   } else if (format === 'bar') {
     const barWidth = 20;
     const filled = Math.round((percent / 100) * barWidth);
-    const bar = '\u2588'.repeat(filled) + '\u2591'.repeat(barWidth - filled);
+    const bar = '█'.repeat(filled) + '░'.repeat(barWidth - filled);
     const text = `[${bar}] ${totalSummaries}/${totalPlans} plans (${percent}%)`;
     output({ bar: text, percent, completed: totalSummaries, total: totalPlans }, raw, text);
   } else {
@@ -871,7 +957,7 @@ function cmdProgressRender(cwd, format, raw) {
       total_plans: totalPlans,
       total_summaries: totalSummaries,
       percent,
-    }, raw);
+    }, raw, undefined);
   }
 }
 
@@ -880,11 +966,17 @@ function cmdProgressRender(cwd, format, raw) {
  * Returns todos with relevance scores based on keyword, area, and file overlap.
  * Used by discuss-phase to surface relevant todos before scope-setting.
  */
-function cmdTodoMatchPhase(cwd, phase, raw) {
+function cmdTodoMatchPhase(cwd: string, phase: string | undefined, raw: boolean): void {
   if (!phase) { error('phase required for todo match-phase'); }
 
   const pendingDir = path.join(planningDir(cwd), 'todos', 'pending');
-  const todos = [];
+  const todos: Array<{
+    file: string;
+    title: string;
+    area: string;
+    files: string[];
+    body: string;
+  }> = [];
 
   // Load pending todos
   try {
@@ -905,18 +997,18 @@ function cmdTodoMatchPhase(cwd, phase, raw) {
         body: body.slice(0, 200), // first 200 chars for context
       });
     }
-  } catch {}
+  } catch { /* intentionally empty */ }
 
   if (todos.length === 0) {
-    output({ phase, matches: [], todo_count: 0 }, raw);
+    output({ phase, matches: [], todo_count: 0 }, raw, undefined);
     return;
   }
 
   // Load phase goal/name from ROADMAP
-  const phaseInfo = getRoadmapPhaseInternal(cwd, phase);
-  const phaseName = phaseInfo ? (phaseInfo.phase_name || '') : '';
-  const phaseGoal = phaseInfo ? (phaseInfo.goal || '') : '';
-  const phaseSection = phaseInfo ? (phaseInfo.section || '') : '';
+  const phaseInfo = getRoadmapPhaseInternal(cwd, phase) as Record<string, unknown> | null;
+  const phaseName = phaseInfo ? ((phaseInfo['phase_name'] as string) || '') : '';
+  const phaseGoal = phaseInfo ? ((phaseInfo['goal'] as string) || '') : '';
+  const phaseSection = phaseInfo ? ((phaseInfo['section'] as string) || '') : '';
 
   // Build keyword set from phase name + goal + section text
   const phaseText = `${phaseName} ${phaseGoal} ${phaseSection}`.toLowerCase();
@@ -928,11 +1020,11 @@ function cmdTodoMatchPhase(cwd, phase, raw) {
   );
 
   // Find phase directory to get expected file paths
-  const phaseInfoDisk = findPhaseInternal(cwd, phase);
-  const phasePlans = [];
-  if (phaseInfoDisk && phaseInfoDisk.found) {
+  const phaseInfoDisk = findPhaseInternal(cwd, phase) as Record<string, unknown> | null;
+  const phasePlans: string[] = [];
+  if (phaseInfoDisk && phaseInfoDisk['found']) {
     try {
-      const phaseDir = path.join(cwd, phaseInfoDisk.directory);
+      const phaseDir = path.join(cwd, phaseInfoDisk['directory'] as string);
       const planFiles = fs.readdirSync(phaseDir).filter(f => f.endsWith('-PLAN.md'));
       for (const pf of planFiles) {
         const planContent = platformReadSync(path.join(phaseDir, pf));
@@ -942,14 +1034,20 @@ function cmdTodoMatchPhase(cwd, phase, raw) {
           phasePlans.push(...fmFiles[1].split(',').map(s => s.trim().replace(/['"]/g, '')).filter(Boolean));
         }
       }
-    } catch {}
+    } catch { /* intentionally empty */ }
   }
 
   // Score each todo for relevance
-  const matches = [];
+  const matches: Array<{
+    file: string;
+    title: string;
+    area: string;
+    score: number;
+    reasons: string[];
+  }> = [];
   for (const todo of todos) {
     let score = 0;
-    const reasons = [];
+    const reasons: string[] = [];
 
     // Keyword match: todo title/body terms in phase text
     const todoWords = `${todo.title} ${todo.body}`.toLowerCase()
@@ -994,20 +1092,20 @@ function cmdTodoMatchPhase(cwd, phase, raw) {
   // Sort by score descending
   matches.sort((a, b) => b.score - a.score);
 
-  output({ phase, matches, todo_count: todos.length }, raw);
+  output({ phase, matches, todo_count: todos.length }, raw, undefined);
 }
 
-function cmdTodoComplete(cwd, filename, raw) {
+function cmdTodoComplete(cwd: string, filename: string | undefined, raw: boolean): void {
   if (!filename) {
     error('filename required for todo complete');
   }
 
   const pendingDir = path.join(planningDir(cwd), 'todos', 'pending');
   const completedDir = path.join(planningDir(cwd), 'todos', 'completed');
-  const sourcePath = path.join(pendingDir, filename);
+  const sourcePath = path.join(pendingDir, filename as string);
 
   if (!fs.existsSync(sourcePath)) {
-    error(`Todo not found: ${filename}`);
+    error(`Todo not found: ${filename as string}`);
   }
 
   // Ensure completed directory exists
@@ -1018,41 +1116,41 @@ function cmdTodoComplete(cwd, filename, raw) {
   const today = new Date().toISOString().split('T')[0];
   content = `completed: ${today}\n` + content;
 
-  platformWriteSync(path.join(completedDir, filename), content);
+  platformWriteSync(path.join(completedDir, filename as string), content);
   fs.unlinkSync(sourcePath);
 
   output({ completed: true, file: filename, date: today }, raw, 'completed');
 }
 
-function cmdScaffold(cwd, type, options, raw) {
+function cmdScaffold(cwd: string, type: string, options: ScaffoldOptions, raw: boolean): void {
   const { phase, name } = options;
   const padded = phase ? normalizePhaseName(phase) : '00';
   const today = new Date().toISOString().split('T')[0];
 
   // Find phase directory
-  const phaseInfo = phase ? findPhaseInternal(cwd, phase) : null;
-  const phaseDir = phaseInfo ? path.join(cwd, phaseInfo.directory) : null;
+  const phaseInfo = phase ? findPhaseInternal(cwd, phase) as Record<string, unknown> | null : null;
+  const phaseDir = phaseInfo ? path.join(cwd, phaseInfo['directory'] as string) : null;
 
   if (phase && !phaseDir && type !== 'phase-dir') {
     error(`Phase ${phase} directory not found`);
   }
 
-  let filePath, content;
+  let filePath: string, content: string;
 
   switch (type) {
     case 'context': {
-      filePath = path.join(phaseDir, `${padded}-CONTEXT.md`);
-      content = `---\nphase: "${padded}"\nname: "${name || phaseInfo?.phase_name || 'Unnamed'}"\ncreated: ${today}\n---\n\n# Phase ${phase}: ${name || phaseInfo?.phase_name || 'Unnamed'} — Context\n\n## Decisions\n\n_Decisions will be captured during ${formatGsdSlash('discuss-phase', resolveRuntime(cwd))} ${phase}_\n\n## Discretion Areas\n\n_Areas where the executor can use judgment_\n\n## Deferred Ideas\n\n_Ideas to consider later_\n`;
+      filePath = path.join(phaseDir as string, `${padded}-CONTEXT.md`);
+      content = `---\nphase: "${padded}"\nname: "${name || (phaseInfo?.['phase_name'] as string | undefined) || 'Unnamed'}"\ncreated: ${today}\n---\n\n# Phase ${phase}: ${name || (phaseInfo?.['phase_name'] as string | undefined) || 'Unnamed'} — Context\n\n## Decisions\n\n_Decisions will be captured during ${String(formatGsdSlash('discuss-phase', resolveRuntime(cwd)))} ${phase}_\n\n## Discretion Areas\n\n_Areas where the executor can use judgment_\n\n## Deferred Ideas\n\n_Ideas to consider later_\n`;
       break;
     }
     case 'uat': {
-      filePath = path.join(phaseDir, `${padded}-UAT.md`);
-      content = `---\nphase: "${padded}"\nname: "${name || phaseInfo?.phase_name || 'Unnamed'}"\ncreated: ${today}\nstatus: pending\n---\n\n# Phase ${phase}: ${name || phaseInfo?.phase_name || 'Unnamed'} — User Acceptance Testing\n\n## Test Results\n\n| # | Test | Status | Notes |\n|---|------|--------|-------|\n\n## Summary\n\n_Pending UAT_\n`;
+      filePath = path.join(phaseDir as string, `${padded}-UAT.md`);
+      content = `---\nphase: "${padded}"\nname: "${name || (phaseInfo?.['phase_name'] as string | undefined) || 'Unnamed'}"\ncreated: ${today}\nstatus: pending\n---\n\n# Phase ${phase}: ${name || (phaseInfo?.['phase_name'] as string | undefined) || 'Unnamed'} — User Acceptance Testing\n\n## Test Results\n\n| # | Test | Status | Notes |\n|---|------|--------|-------|\n\n## Summary\n\n_Pending UAT_\n`;
       break;
     }
     case 'verification': {
-      filePath = path.join(phaseDir, `${padded}-VERIFICATION.md`);
-      content = `---\nphase: "${padded}"\nname: "${name || phaseInfo?.phase_name || 'Unnamed'}"\ncreated: ${today}\nstatus: pending\n---\n\n# Phase ${phase}: ${name || phaseInfo?.phase_name || 'Unnamed'} — Verification\n\n## Goal-Backward Verification\n\n**Phase Goal:** [From ROADMAP.md]\n\n## Checks\n\n| # | Requirement | Status | Evidence |\n|---|------------|--------|----------|\n\n## Result\n\n_Pending verification_\n`;
+      filePath = path.join(phaseDir as string, `${padded}-VERIFICATION.md`);
+      content = `---\nphase: "${padded}"\nname: "${name || (phaseInfo?.['phase_name'] as string | undefined) || 'Unnamed'}"\ncreated: ${today}\nstatus: pending\n---\n\n# Phase ${phase}: ${name || (phaseInfo?.['phase_name'] as string | undefined) || 'Unnamed'} — Verification\n\n## Goal-Backward Verification\n\n**Phase Goal:** [From ROADMAP.md]\n\n## Checks\n\n| # | Requirement | Status | Evidence |\n|---|------------|--------|----------|\n\n## Result\n\n_Pending verification_\n`;
       break;
     }
     case 'phase-dir': {
@@ -1062,7 +1160,7 @@ function cmdScaffold(cwd, type, options, raw) {
       const slug = generateSlugInternal(name);
       // #3287: apply project_code prefix to stay consistent with phase.add/phase.insert
       const scaffoldConfig = loadConfig(cwd);
-      const scaffoldProjectCode = scaffoldConfig.project_code || '';
+      const scaffoldProjectCode = (scaffoldConfig['project_code'] as string) || '';
       const scaffoldPrefix = scaffoldProjectCode ? `${scaffoldProjectCode}-` : '';
       const dirName = `${scaffoldPrefix}${padded}-${slug}`;
       const phasesParent = planningPaths(cwd).phases;
@@ -1074,6 +1172,8 @@ function cmdScaffold(cwd, type, options, raw) {
     }
     default:
       error(`Unknown scaffold type: ${type}. Available: context, uat, verification, phase-dir`);
+      // unreachable — error() calls process.exit
+      return;
   }
 
   if (fs.existsSync(filePath)) {
@@ -1086,16 +1186,22 @@ function cmdScaffold(cwd, type, options, raw) {
   output({ created: true, path: relPath }, raw, relPath);
 }
 
-function cmdStats(cwd, format, raw) {
+function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
   const phasesDir = planningPaths(cwd).phases;
   const roadmapPath = planningPaths(cwd).roadmap;
   const reqPath = planningPaths(cwd).requirements;
   const statePath = planningPaths(cwd).state;
   const milestone = getMilestoneInfo(cwd);
-  const isDirInMilestone = getMilestonePhaseFilter(cwd);
+  const isDirInMilestone = getMilestonePhaseFilter(cwd) as (dir: string) => boolean;
 
   // Phase & plan stats (reuse progress pattern)
-  const phasesByNumber = new Map();
+  const phasesByNumber = new Map<string, {
+    number: string;
+    name: string;
+    plans: number;
+    summaries: number;
+    status: string;
+  }>();
   let totalPlans = 0;
   let totalSummaries = 0;
 
@@ -1106,7 +1212,7 @@ function cmdStats(cwd, format, raw) {
     // Matches both plain numeric (Phase 1:) and milestone-prefixed (Phase 2-01:) headings.
     // Also tolerates optional [bracket-token] scope prefix on phase headings.
     const headingPattern = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*(?:-[\w.-]+)*)\s*:\s*([^\n]+)/gi;
-    let match;
+    let match: RegExpExecArray | null;
     while ((match = headingPattern.exec(roadmapContent)) !== null) {
       const key = normalizePhaseName(match[1]);
       phasesByNumber.set(key, {
@@ -1129,7 +1235,7 @@ function cmdStats(cwd, format, raw) {
 
     for (const dir of dirs) {
       // Use extractPhaseToken to correctly parse M-NN-style and code-prefixed dir names.
-      const phaseToken = extractPhaseToken(dir);
+      const phaseToken = extractPhaseToken(dir) as string | null;
       const phaseNum = phaseToken || dir;
       // phaseName is everything after the token (strip leading '-')
       const afterToken = dir.slice(phaseToken ? phaseToken.length : 0).replace(/^-/, '');
@@ -1172,7 +1278,7 @@ function cmdStats(cwd, format, raw) {
   }
 
   // Last activity from STATE.md
-  let lastActivity = null;
+  let lastActivity: string | null = null;
   const stateContent = platformReadSync(statePath);
   if (stateContent !== null) {
     const activityMatch = stateContent.match(/^last_activity:\s*(.+)$/im)
@@ -1184,7 +1290,7 @@ function cmdStats(cwd, format, raw) {
 
   // Git stats
   let gitCommits = 0;
-  let gitFirstCommitDate = null;
+  let gitFirstCommitDate: string | null = null;
   const commitCount = execGit(['rev-list', '--count', 'HEAD'], { cwd });
   if (commitCount.exitCode === 0) {
     gitCommits = parseInt(commitCount.stdout, 10) || 0;
@@ -1218,8 +1324,8 @@ function cmdStats(cwd, format, raw) {
   if (format === 'table') {
     const barWidth = 10;
     const filled = Math.round((percent / 100) * barWidth);
-    const bar = '\u2588'.repeat(filled) + '\u2591'.repeat(barWidth - filled);
-    let out = `# ${milestone.version} ${milestone.name} \u2014 Statistics\n\n`;
+    const bar = '█'.repeat(filled) + '░'.repeat(barWidth - filled);
+    let out = `# ${milestone.version} ${milestone.name} — Statistics\n\n`;
     out += `**Progress:** [${bar}] ${completedPhases}/${phases.length} phases (${percent}%)\n`;
     if (totalPlans > 0) {
       out += `**Plans:** ${totalSummaries}/${totalPlans} complete (${planPercent}%)\n`;
@@ -1242,7 +1348,7 @@ function cmdStats(cwd, format, raw) {
     if (lastActivity) out += `**Last activity:** ${lastActivity}\n`;
     output({ rendered: out }, raw, out);
   } else {
-    output(result, raw);
+    output(result, raw, undefined);
   }
 }
 
@@ -1251,11 +1357,11 @@ function cmdStats(cwd, format, raw) {
  * When commit_docs is false, rejects commits that stage .planning/ files.
  * Intended for use as a pre-commit hook guard.
  */
-function cmdCheckCommit(cwd, raw) {
+function cmdCheckCommit(cwd: string, raw: boolean): void {
   const config = loadConfig(cwd);
 
   // If commit_docs is true (or not set), allow all commits
-  if (config.commit_docs !== false) {
+  if (config['commit_docs'] !== false) {
     output({ allowed: true, reason: 'commit_docs_enabled' }, raw, 'allowed');
     return;
   }
@@ -1278,7 +1384,7 @@ function cmdCheckCommit(cwd, raw) {
   output({ allowed: true, reason: 'no_planning_files_staged' }, raw, 'allowed');
 }
 
-module.exports = {
+export = {
   groupFilesBySubrepo,
   determinePhaseStatus,
   cmdGenerateSlug,
