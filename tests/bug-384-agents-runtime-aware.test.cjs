@@ -54,7 +54,7 @@ describe('bug #384 — getAgentsDir() is runtime-aware', () => {
 
   afterEach(() => {
     cleanup(tmpDir);
-    fs.rmSync(opencodeConfigDir, { recursive: true, force: true });
+    cleanup(opencodeConfigDir);
   });
 
   // ── Test 1: opencode runtime resolves the opencode agents path ──────────────
@@ -95,7 +95,6 @@ describe('bug #384 — getAgentsDir() is runtime-aware', () => {
 
   test('default runtime (no GSD_RUNTIME) with GSD_AGENTS_DIR → agents_installed=true, agent_runtime=claude', () => {
     // Classic GSD_AGENTS_DIR override: no runtime set, use the env shortcut
-    const agentsDir = path.join(tmpDir, 'claude-agents');
     createAgentsInConfigDir(tmpDir);
     // GSD_AGENTS_DIR points directly at the agents dir (not the config dir)
     const directAgentsDir = path.join(tmpDir, 'agents');

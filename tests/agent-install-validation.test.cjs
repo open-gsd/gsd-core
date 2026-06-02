@@ -145,13 +145,9 @@ describe('validate health: agent installation check W010 (#1371)', () => {
   });
 
   test('health check reports healthy when agents are installed (repo layout)', () => {
-    // Point at the repo's own agents/ dir via GSD_AGENTS_DIR. After the
-    // runtime-aware fix (#384), getAgentsDir() no longer falls back to the
-    // __dirname-relative path; GSD_AGENTS_DIR is still the correct override
-    // for test isolation (and the installed-agent comment held for the old code
-    // only when running from the repo checkout, not on CI or OpenCode installs).
-    const repoAgentsDir = path.resolve(__dirname, '..', 'agents');
-    const result = runGsdTools('validate health --raw', tmpDir, { GSD_AGENTS_DIR: repoAgentsDir });
+    // In the repo, agents/ exists as a sibling of get-shit-done/, so the
+    // health check should find them via the gsd-tools.cjs path resolution
+    const result = runGsdTools('validate health --raw', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
