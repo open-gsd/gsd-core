@@ -1,8 +1,11 @@
-'use strict';
-
 /**
  * Validate Helpers — pure computation helpers and regex constants extracted from
- * sdk/src/query/validate.ts. No I/O. No async. No filesystem operations.
+ * sdk/src/query/validate.ts (ADR-457 build-at-publish: the hand-written
+ * bin/lib/validate.cjs collapsed to a TypeScript source of truth). Behaviour is
+ * preserved byte-for-behaviour from the prior hand-written .cjs; only types are
+ * added.
+ *
+ * No I/O. No async. No filesystem operations.
  *
  * Issue #6 drift items (three helpers):
  *   1. phaseVariants() — replaces parseInt-based padded/unpadded check in verify.cjs
@@ -31,21 +34,27 @@
 // ── Issue #26: regex constants (W005, W006-archived) ────────────────────────
 // Matches legacy numeric dirs (01-setup), milestone-prefixed dirs (02-01-setup),
 // deep dirs (02-04-01-deep), and project-code-prefixed variants (GSD-02-01-setup).
-const phaseDirNameRe = /^(?:[A-Z]{1,6}-)?\d{2,}(?:-\d+)*(?:\.\d+)*-[\w-]+$/i;
+export const phaseDirNameRe = /^(?:[A-Z]{1,6}-)?\d{2,}(?:-\d+)*(?:\.\d+)*-[\w-]+$/i;
 // Extracts the full phase token from a directory name, including milestone-prefixed
 // multi-segment tokens like "02-01" from "02-01-setup" or "GSD-02-01-setup".
 // Greedily captures all leading all-digit segments before the first letter-start segment.
-const PHASE_TOKEN_FROM_DIR_RE = /^(?:[A-Z]{1,6}-)?(\d+(?:-\d+)*[A-Z]?(?:\.\d+)*)(?:-[a-z]|$)/i;
-const MILESTONE_ARCHIVE_DIR_RE = /^v\d+.*-phases$/i;
+export const PHASE_TOKEN_FROM_DIR_RE = /^(?:[A-Z]{1,6}-)?(\d+(?:-\d+)*[A-Z]?(?:\.\d+)*)(?:-[a-z]|$)/i;
+export const MILESTONE_ARCHIVE_DIR_RE = /^v\d+.*-phases$/i;
 
 // ── Issue #26: I001 canonicalization ────────────────────────────────────────
-function canonicalPlanStem(stem) {
-    const m = stem.match(/^(\d+[A-Z]?(?:\.\d+)*-\d+)/i);
-    return m ? m[1] : stem;
+export function canonicalPlanStem(stem: string): string {
+  const m = stem.match(/^(\d+[A-Z]?(?:\.\d+)*-\d+)/i);
+  return m ? m[1] : stem;
+}
+
+/** Result of buildRoadmapPhaseVariants. */
+export interface RoadmapPhaseVariantsResult {
+  roadmapPhases: Set<string>;
+  roadmapPhaseVariants: Set<string>;
 }
 
 // ── Issue #6: phase variant helpers (W006/W007) ──────────────────────────────
-function phaseVariants(phase) {
+export function phaseVariants(phase: string): Set<string> {
   const variants = new Set([phase]);
   const dotIdx = phase.indexOf('.');
   const head = dotIdx === -1 ? phase : phase.slice(0, dotIdx);
@@ -80,13 +89,13 @@ function phaseVariants(phase) {
   return variants;
 }
 
-function buildRoadmapPhaseVariants(roadmapContent) {
-  const roadmapPhases = new Set();
-  const roadmapPhaseVariants = new Set();
+export function buildRoadmapPhaseVariants(roadmapContent: string): RoadmapPhaseVariantsResult {
+  const roadmapPhases = new Set<string>();
+  const roadmapPhaseVariants = new Set<string>();
   // Matches both legacy numeric (Phase 1:), decimal (Phase 2.1:), milestone-prefixed (Phase 2-01:),
   // and bracket-prefixed (### [GSD] Phase 2-01:) headings.
   const phasePattern = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*(?:-[\w.-]+)*)\s*:/gi;
-  let m;
+  let m: RegExpExecArray | null;
   while ((m = phasePattern.exec(roadmapContent)) !== null) {
     roadmapPhases.add(m[1]);
     for (const variant of phaseVariants(m[1])) roadmapPhaseVariants.add(variant);
@@ -94,25 +103,13 @@ function buildRoadmapPhaseVariants(roadmapContent) {
   return { roadmapPhases, roadmapPhaseVariants };
 }
 
-function buildNotStartedPhaseVariants(roadmapContent) {
-  const notStartedPhases = new Set();
+export function buildNotStartedPhaseVariants(roadmapContent: string): Set<string> {
+  const notStartedPhases = new Set<string>();
   // Also matches milestone-prefixed and bracket-prefixed checklist items.
   const uncheckedPattern = /-\s*\[\s\]\s*\*{0,2}Phase\s+([\w][\w.-]*(?:-[\w.-]+)*)[:\s*]/gi;
-  let um;
+  let um: RegExpExecArray | null;
   while ((um = uncheckedPattern.exec(roadmapContent)) !== null) {
     for (const variant of phaseVariants(um[1])) notStartedPhases.add(variant);
   }
   return notStartedPhases;
 }
-
-module.exports = {
-  // Issue #26 exports (W005 regex, W006-archived regex constants, I001 helper)
-  phaseDirNameRe,
-  PHASE_TOKEN_FROM_DIR_RE,
-  MILESTONE_ARCHIVE_DIR_RE,
-  canonicalPlanStem,
-  // Issue #6 exports (W006/W007 phase variant helpers)
-  phaseVariants,
-  buildRoadmapPhaseVariants,
-  buildNotStartedPhaseVariants,
-};

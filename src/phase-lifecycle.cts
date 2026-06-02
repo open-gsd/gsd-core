@@ -1,8 +1,9 @@
-'use strict';
-
 /**
  * Phase Lifecycle Pure Helpers — pure-computation functions extracted from
- * the phase-lifecycle SDK handler.
+ * the phase-lifecycle SDK handler (ADR-457 build-at-publish: the hand-written
+ * bin/lib/phase-lifecycle.cjs collapsed to a TypeScript source of truth).
+ * Behaviour is preserved byte-for-behaviour from the prior hand-written .cjs;
+ * only types are added.
  *
  * I/O adapter pattern (ADR-3524 Section 4): each side supplies its own I/O
  * (sync readFileSync for CJS, async readFile for SDK); the pure computation
@@ -19,14 +20,21 @@
  *   - Issue #4 (open-gsd/gsd-core)
  */
 
+/** Result of deriveProgressFromRoadmap. */
+export interface RoadmapProgress {
+  completedPhases: number | null;
+  totalPhases: number | null;
+  totalPlans: number | null;
+}
+
 /**
  * Derive completed_phases, total_phases, and total_plans from ROADMAP content.
  * Root cause fix for issue #4 — see gen-phase-lifecycle.mjs for full documentation.
  */
-function deriveProgressFromRoadmap(roadmapContent) {
-  let completedPhases = null;
-  let totalPhases = null;
-  let totalPlans = null;
+export function deriveProgressFromRoadmap(roadmapContent: string): RoadmapProgress {
+  let completedPhases: number | null = null;
+  let totalPhases: number | null = null;
+  let totalPlans: number | null = null;
 
   try {
     // Count Complete rows in the progress table (Status column = "Complete").
@@ -54,7 +62,7 @@ function deriveProgressFromRoadmap(roadmapContent) {
     // Sum plan counts from M/N columns in progress table
     let totalPlansSum = 0;
     const planCellPattern = /\|\s*\d+[^|]*\|\s*(\d+)\/(\d+)\s*\|/gi;
-    let pm;
+    let pm: RegExpExecArray | null;
     while ((pm = planCellPattern.exec(roadmapContent)) !== null) {
       totalPlansSum += parseInt(pm[2], 10);
     }
@@ -68,12 +76,7 @@ function deriveProgressFromRoadmap(roadmapContent) {
  * Compute progress percent clamped to 100.
  * Root cause fix for issue #4 — see gen-phase-lifecycle.mjs for full documentation.
  */
-function clampPercent(completed, total) {
+export function clampPercent(completed: number, total: number): number {
   if (!total || total <= 0) return 0;
   return Math.min(100, Math.round((completed / total) * 100));
 }
-
-module.exports = {
-  deriveProgressFromRoadmap,
-  clampPercent,
-};

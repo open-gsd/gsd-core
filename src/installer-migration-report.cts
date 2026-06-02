@@ -1,21 +1,120 @@
-'use strict';
+/**
+ * Installer migration report utilities (ADR-457 build-at-publish: the
+ * hand-written bin/lib/installer-migration-report.cjs collapsed to a TypeScript
+ * source of truth). Behaviour is preserved byte-for-behaviour from the prior
+ * hand-written .cjs; only types are added.
+ *
+ * Resolution environment variable surface for #3541 — when the installer
+ * runs without a TTY (typical /gsd:update path via Claude Code or any
+ * scripted update), prompt-user migration actions cannot be answered
+ * interactively. Classification-based defaults apply; anything else falls
+ * through to the hard assertion with a grouped, actionable error message.
+ *
+ * docs/installer-migrations.md#prompt-user-resolution for the spec.
+ */
 
-// Resolution environment variable surface for #3541 — when the installer
-// runs without a TTY (typical /gsd:update path via Claude Code or any
-// scripted update), prompt-user migration actions cannot be answered
-// interactively. We resolve them by classification:
-//   - Stale SDK build artifacts (get-shit-done/sdk/{dist,src}/gsd-*):
-//     default `remove`. Fresh install supplies replacements.
-//   - User-facing skill anchors (skills/gsd-*/SKILL.md): default `keep`.
-//     User-owned content is preserved.
-// Anything else: fall through to the hard assertion with an improved,
-// grouped, actionable error message.
+export const RESOLUTION_ENV_VAR = 'GSD_INSTALLER_MIGRATION_RESOLVE';
+const VALID_CHOICES: ReadonlyArray<string> = ['keep', 'remove'];
+
+// #3628: explicit whitelist of bundled hook files shipped in the npm
+// distribution under `hooks/`. The classifier-based auto-removal of these
+// files at first-time-baseline scan (added in #3610) is restricted to this
+// set — a shape regex like `^hooks/gsd-[^/]+\.(?:js|sh|cjs|mjs)$` also
+// matches user-authored custom hooks and retired bundled hooks from prior
+// versions, and auto-removing those is silent data loss.
 //
-// docs/installer-migrations.md#prompt-user-resolution for the spec.
-const RESOLUTION_ENV_VAR = 'GSD_INSTALLER_MIGRATION_RESOLVE';
-const VALID_CHOICES = ['keep', 'remove'];
+// The bug-3628 regression guard asserts this Set stays aligned with the
+// on-disk `hooks/` directory in both directions: whitelist-but-missing
+// AND shipped-but-not-whitelisted both fail CI.
+export const BUNDLED_GSD_HOOK_FILES: ReadonlySet<string> = Object.freeze(new Set([
+  'hooks/gsd-check-update-worker.js',
+  'hooks/gsd-check-update.js',
+  'hooks/gsd-context-monitor.js',
+  'hooks/gsd-graphify-update.sh',
+  'hooks/gsd-phase-boundary.sh',
+  'hooks/gsd-prompt-guard.js',
+  'hooks/gsd-read-guard.js',
+  'hooks/gsd-read-injection-scanner.js',
+  'hooks/gsd-session-state.sh',
+  'hooks/gsd-statusline.js',
+  'hooks/gsd-update-banner.js',
+  'hooks/gsd-validate-commit.sh',
+  'hooks/gsd-workflow-guard.js',
+  'hooks/gsd-worktree-path-guard.js',
+]));
 
-function installerMigrationActionLabel(action) {
+// ── Internal action types ─────────────────────────────────────────────────────
+
+interface MigrationAction {
+  type: string;
+  relPath?: string;
+  reason?: string;
+  migrationId?: string;
+  migrationChecksum?: string;
+  classification?: string;
+  originalHash?: string | null;
+  currentHash?: string | null;
+  requestedType?: string;
+  backupRelPath?: string | null;
+  choices?: string[];
+  deleteIfEmpty?: boolean;
+  count?: number;
+  actions?: MigrationAction[];
+  [key: string]: unknown;
+}
+
+interface MigrationPlan {
+  actions?: MigrationAction[];
+  blocked?: MigrationAction[];
+  [key: string]: unknown;
+}
+
+interface MigrationResult {
+  blocked?: MigrationAction[];
+  plan?: MigrationPlan;
+  [key: string]: unknown;
+}
+
+interface SummaryRow {
+  label: string;
+  relPath: string;
+  reason: string;
+  action: MigrationAction;
+}
+
+interface SummarizeResult {
+  hasReportableActions: boolean;
+  blocked: MigrationAction[];
+  rows: (SummaryRow | null)[];
+}
+
+interface Resolution {
+  relPath: string | undefined;
+  category: string;
+  choice: string;
+  reason: string | undefined;
+  resolvedActionType: string;
+  source: string;
+}
+
+interface ResolvePromptsResult {
+  result: MigrationResult;
+  resolutions: Resolution[];
+}
+
+interface ClassifyResult {
+  category: string;
+  choice: string;
+}
+
+interface ResolveOptions {
+  isTty?: boolean;
+  env?: Record<string, string | undefined>;
+}
+
+// ── Internal helpers ──────────────────────────────────────────────────────────
+
+function installerMigrationActionLabel(action: MigrationAction | null | undefined): string {
   if (!action || !action.type) return 'skipped';
   if (action.type === 'backup-and-remove') return 'backed up and removed';
   if (action.type === 'remove-managed') return 'removed';
@@ -27,18 +126,18 @@ function installerMigrationActionLabel(action) {
   return 'skipped';
 }
 
-function blockedInstallerMigrationActions(result) {
+function blockedInstallerMigrationActions(result: MigrationResult | null | undefined): MigrationAction[] {
   if (result && Array.isArray(result.blocked)) return result.blocked;
   const plan = result && result.plan;
   if (plan && Array.isArray(plan.blocked)) return plan.blocked;
   return [];
 }
 
-function baselineSummaryLabel(count, noun) {
+function baselineSummaryLabel(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? '' : 's'}`;
 }
 
-function baselineSummaryRow(type, actions) {
+function baselineSummaryRow(type: string, actions: MigrationAction[]): SummaryRow {
   const count = actions.length;
   if (type === 'record-baseline') {
     return {
@@ -56,14 +155,14 @@ function baselineSummaryRow(type, actions) {
   };
 }
 
-function summarizeInstallerMigrationResult(result) {
+export function summarizeInstallerMigrationResult(result: MigrationResult | null | undefined): SummarizeResult {
   const plan = result && result.plan;
-  const actions = plan && Array.isArray(plan.actions) ? plan.actions : [];
+  const actions: MigrationAction[] = plan && Array.isArray(plan.actions) ? plan.actions : [];
   const blocked = blockedInstallerMigrationActions(result);
   const blockedSet = new Set(blocked);
-  const rows = [];
-  const baselineIndexes = new Map();
-  const baselineActions = new Map();
+  const rows: (SummaryRow | null)[] = [];
+  const baselineIndexes = new Map<string, number>();
+  const baselineActions = new Map<string, MigrationAction[]>();
 
   for (const action of actions) {
     const type = action && action.type;
@@ -73,13 +172,13 @@ function summarizeInstallerMigrationResult(result) {
         baselineIndexes.set(type, rows.length);
         rows.push(null);
       }
-      baselineActions.get(type).push(action);
+      baselineActions.get(type)!.push(action);
       continue;
     }
 
     rows.push({
       label: blockedSet.has(action) ? 'blocked' : installerMigrationActionLabel(action),
-      relPath: action.relPath,
+      relPath: action.relPath ?? '',
       reason: action.reason || '',
       action,
     });
@@ -88,7 +187,7 @@ function summarizeInstallerMigrationResult(result) {
   // Phase 4 requires action reporting without flooding first-time baseline installs:
   // docs/installer-migrations.md#phase-4-installupdate-integration.
   for (const [type, baselineRows] of baselineActions) {
-    rows[baselineIndexes.get(type)] = baselineSummaryRow(type, baselineRows);
+    rows[baselineIndexes.get(type)!] = baselineSummaryRow(type, baselineRows);
   }
 
   return {
@@ -98,33 +197,6 @@ function summarizeInstallerMigrationResult(result) {
   };
 }
 
-// #3628: explicit whitelist of bundled hook files shipped in the npm
-// distribution under `hooks/`. The classifier-based auto-removal of these
-// files at first-time-baseline scan (added in #3610) is restricted to this
-// set — a shape regex like `^hooks/gsd-[^/]+\.(?:js|sh|cjs|mjs)$` also
-// matches user-authored custom hooks and retired bundled hooks from prior
-// versions, and auto-removing those is silent data loss.
-//
-// The bug-3628 regression guard asserts this Set stays aligned with the
-// on-disk `hooks/` directory in both directions: whitelist-but-missing
-// AND shipped-but-not-whitelisted both fail CI.
-const BUNDLED_GSD_HOOK_FILES = Object.freeze(new Set([
-  'hooks/gsd-check-update-worker.js',
-  'hooks/gsd-check-update.js',
-  'hooks/gsd-context-monitor.js',
-  'hooks/gsd-graphify-update.sh',
-  'hooks/gsd-phase-boundary.sh',
-  'hooks/gsd-prompt-guard.js',
-  'hooks/gsd-read-guard.js',
-  'hooks/gsd-read-injection-scanner.js',
-  'hooks/gsd-session-state.sh',
-  'hooks/gsd-statusline.js',
-  'hooks/gsd-update-banner.js',
-  'hooks/gsd-validate-commit.sh',
-  'hooks/gsd-workflow-guard.js',
-  'hooks/gsd-worktree-path-guard.js',
-]));
-
 // Classify a blocked prompt-user action into one of the safe-default
 // categories. Returns null when no safe default applies — caller must
 // fall back to the hard assertion / interactive prompt for those.
@@ -133,7 +205,7 @@ const BUNDLED_GSD_HOOK_FILES = Object.freeze(new Set([
 // and are regenerated on every install, so removing them is lossless.
 // User-facing skill anchors are the .md files that surface as commands
 // to the user — these are user-owned and must be kept.
-function classifyPromptUserAction(action) {
+export function classifyPromptUserAction(action: MigrationAction): ClassifyResult | null {
   const relPath = action && action.relPath;
   if (typeof relPath !== 'string' || !relPath) return null;
   if (/^get-shit-done\/sdk\/(dist|src)\//.test(relPath)) {
@@ -159,8 +231,9 @@ function classifyPromptUserAction(action) {
 // `keep` → baseline-preserve-user (idempotent — already on disk).
 // `remove` → backup-and-remove (safe: keeps a rollback copy in the
 // migration journal under gsd-migration-journal/<runId>-backups/).
-function materializeResolution(action, choice) {
-  const base = {
+function materializeResolution(action: MigrationAction, choice: string): MigrationAction {
+  const base: MigrationAction = {
+    type: '',          // overridden in each return branch below
     migrationId: action.migrationId,
     migrationChecksum: action.migrationChecksum,
     relPath: action.relPath,
@@ -177,13 +250,13 @@ function materializeResolution(action, choice) {
   return { ...base, type: 'backup-and-remove', backupRelPath: null };
 }
 
-function normalizeResolutionChoice(rawValue) {
+function normalizeResolutionChoice(rawValue: unknown): string | null {
   if (typeof rawValue !== 'string') return null;
   const normalized = rawValue.trim().toLowerCase();
   return VALID_CHOICES.includes(normalized) ? normalized : null;
 }
 
-function actionSupportsChoice(action, choice) {
+function actionSupportsChoice(action: MigrationAction, choice: string): boolean {
   if (!action || !choice) return false;
   if (!Array.isArray(action.choices) || action.choices.length === 0) {
     return VALID_CHOICES.includes(choice);
@@ -199,7 +272,10 @@ function actionSupportsChoice(action, choice) {
 //     could NOT be safely defaulted (caller must still handle those).
 // Returns { result, resolutions } where `resolutions` is the structured
 // log of every defaulted resolution.
-function resolveInstallerMigrationPromptsForNonTty(result, options = {}) {
+export function resolveInstallerMigrationPromptsForNonTty(
+  result: MigrationResult,
+  options: ResolveOptions = {},
+): ResolvePromptsResult {
   if (!result || typeof result !== 'object') {
     return { result, resolutions: [] };
   }
@@ -215,19 +291,19 @@ function resolveInstallerMigrationPromptsForNonTty(result, options = {}) {
     return { result, resolutions: [] };
   }
 
-  const env =
+  const env: Record<string, string | undefined> =
     options && options.env && typeof options.env === 'object'
       ? options.env
       : process.env;
   const envChoice = normalizeResolutionChoice(env && env[RESOLUTION_ENV_VAR]);
-  const resolutions = [];
-  const unresolved = [];
+  const resolutions: Resolution[] = [];
+  const unresolved: MigrationAction[] = [];
 
   for (const action of blocked) {
     if (action && action.type === 'prompt-user') {
-      let category = null;
-      let choice = null;
-      let source = null;
+      let category: string | null = null;
+      let choice: string | null = null;
+      let source: string | null = null;
       if (envChoice && actionSupportsChoice(action, envChoice)) {
         category = 'operator-override';
         choice = envChoice;
@@ -257,11 +333,11 @@ function resolveInstallerMigrationPromptsForNonTty(result, options = {}) {
         }
         resolutions.push({
           relPath: action.relPath,
-          category,
-          choice,
+          category: category ?? '',
+          choice: choice ?? '',
           reason: action.reason,
           resolvedActionType: resolved.type,
-          source,
+          source: source ?? '',
         });
         continue;
       }
@@ -285,18 +361,18 @@ function resolveInstallerMigrationPromptsForNonTty(result, options = {}) {
 // Group blocked prompt-user actions by their `reason` so the operator
 // sees one summary line per cause instead of N path lines for the
 // same underlying issue.
-function groupBlockedByReason(blocked) {
-  const byReason = new Map();
+function groupBlockedByReason(blocked: MigrationAction[]): Map<string, MigrationAction[]> {
+  const byReason = new Map<string, MigrationAction[]>();
   for (const action of blocked) {
     const reason = (action && action.reason) || 'no reason given';
     if (!byReason.has(reason)) byReason.set(reason, []);
-    byReason.get(reason).push(action);
+    byReason.get(reason)!.push(action);
   }
   return byReason;
 }
 
-function describeChoicesForActions(blocked) {
-  const choiceSet = new Set();
+function describeChoicesForActions(blocked: MigrationAction[]): string[] {
+  const choiceSet = new Set<string>();
   for (const action of blocked) {
     if (action && Array.isArray(action.choices)) {
       for (const choice of action.choices) choiceSet.add(choice);
@@ -308,12 +384,12 @@ function describeChoicesForActions(blocked) {
   return [...choiceSet];
 }
 
-function buildBlockedErrorMessage(blocked) {
+function buildBlockedErrorMessage(blocked: MigrationAction[]): string {
   const byReason = groupBlockedByReason(blocked);
   const totalFiles = blocked.length;
   const choices = describeChoicesForActions(blocked);
 
-  const lines = [
+  const lines: string[] = [
     `installer migration blocked pending user choice: ${totalFiles} file${totalFiles === 1 ? '' : 's'} need a decision`,
     `  choices: [${choices.join(', ')}]`,
   ];
@@ -334,22 +410,14 @@ function buildBlockedErrorMessage(blocked) {
   return lines.join('\n');
 }
 
-function assertInstallerMigrationsUnblocked(result) {
+export function assertInstallerMigrationsUnblocked(result: MigrationResult | null | undefined): void {
   const blocked = blockedInstallerMigrationActions(result);
   if (blocked.length === 0) return;
   const message = buildBlockedErrorMessage(blocked);
-  const error = new Error(message);
-  error.blocked = blocked;
-  error.blockedByReason = Object.fromEntries(groupBlockedByReason(blocked));
-  error.resolutionEnvVar = RESOLUTION_ENV_VAR;
+  const error = Object.assign(new Error(message), {
+    blocked,
+    blockedByReason: Object.fromEntries(groupBlockedByReason(blocked)),
+    resolutionEnvVar: RESOLUTION_ENV_VAR,
+  });
   throw error;
 }
-
-module.exports = {
-  RESOLUTION_ENV_VAR,
-  BUNDLED_GSD_HOOK_FILES,
-  assertInstallerMigrationsUnblocked,
-  classifyPromptUserAction,
-  resolveInstallerMigrationPromptsForNonTty,
-  summarizeInstallerMigrationResult,
-};

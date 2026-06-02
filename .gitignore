@@ -77,6 +77,15 @@ build/
 /get-shit-done/bin/lib/clusters.cjs
 /get-shit-done/bin/lib/installer-migrations/001-legacy-orphan-files.cjs
 /get-shit-done/bin/lib/observability/redaction.cjs
+/get-shit-done/bin/lib/installer-migration-report.cjs
+/get-shit-done/bin/lib/prompt-budget.cjs
+/get-shit-done/bin/lib/secrets.cjs
+/get-shit-done/bin/lib/phase-lifecycle.cjs
+/get-shit-done/bin/lib/workstream-name-policy.cjs
+/get-shit-done/bin/lib/decisions.cjs
+/get-shit-done/bin/lib/validate.cjs
+/get-shit-done/bin/lib/schema-detect.cjs
+/get-shit-done/bin/lib/runtime-name-policy.cjs
 __pycache__/
 *.pyc
 .venv/

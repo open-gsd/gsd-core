@@ -1,10 +1,13 @@
-'use strict';
-
 /**
- * prompt-budget.cjs
+ * prompt-budget.cts
  *
  * Pure functions for assembling and trimming review prompts to fit within
- * a token budget. Used by the review pipeline to support small-context models.
+ * a token budget (ADR-457 build-at-publish: the hand-written
+ * bin/lib/prompt-budget.cjs collapsed to a TypeScript source of truth).
+ * Behaviour is preserved byte-for-behaviour from the prior hand-written .cjs;
+ * only types are added.
+ *
+ * Used by the review pipeline to support small-context models.
  *
  * Trim priority (in order — never violate):
  *   1. Instructions:   ALWAYS kept verbatim
@@ -29,27 +32,67 @@ const DEFAULT_NOTE_TEMPLATE = [
   '</note>',
 ].join('\n');
 
+/** A single plan section with its filename and content. */
+export interface PlanSection {
+  file: string;
+  content: string;
+}
+
+/** Input sections for applyBudget. */
+export interface PromptSections {
+  instructions: string;
+  roadmap: string;
+  plans: PlanSection[];
+  projectMd?: string | null;
+  context?: string | null;
+  research?: string | null;
+  requirements?: string | null;
+}
+
+/** Options for applyBudget. */
+export interface BudgetOptions {
+  safetyMarginPct?: number;
+  noteTemplate?: string;
+  projectMdHeadLines?: number;
+}
+
+/** Metadata about the budget application result. */
+export interface BudgetMetadata {
+  budget: number;
+  effectiveBudget: number;
+  estimatedTokens: number;
+  omitted: string[];
+  projectMdShrunk: boolean;
+  planTruncationPct: number;
+  hardFailed: boolean;
+  noteInjected: boolean;
+}
+
+/** Result of applyBudget. */
+export interface BudgetResult {
+  prompt: string;
+  metadata: BudgetMetadata;
+}
+
+/** Input to applyBudget. */
+export interface ApplyBudgetInput {
+  sections: PromptSections;
+  budget: number;
+  options?: BudgetOptions;
+}
+
 /**
  * Estimate tokens for a string. Chars / 4, rounded up.
- *
- * @param {string} text
- * @returns {number}
  */
-function estimateTokens(text) {
+export function estimateTokens(text: string | null | undefined): number {
   if (!text) return 0;
   return Math.ceil(text.length / 4);
 }
 
 /**
  * Render the trim-disclosure note.
- *
- * @param {string} template
- * @param {number} budget
- * @param {string[]} omitted
- * @param {number} planTruncationPct
- * @returns {string}
  */
-function renderNote(template, budget, omitted, planTruncationPct) {
+function renderNote(template: string, budget: number, omitted: string[], planTruncationPct: number): string {
   const omittedList = omitted.length > 0 ? omitted.join(', ') : 'none';
   return template
     .replace('{budget}', String(budget))
@@ -59,12 +102,8 @@ function renderNote(template, budget, omitted, planTruncationPct) {
 
 /**
  * Head-shrink a string to at most `maxLines` lines.
- *
- * @param {string} text
- * @param {number} maxLines
- * @returns {string}
  */
-function headShrink(text, maxLines) {
+function headShrink(text: string, maxLines: number): string {
   if (maxLines <= 0) return '';
   let idx = -1;
   let seen = 0;
@@ -78,23 +117,25 @@ function headShrink(text, maxLines) {
 
 /**
  * Tail-truncate a string to at most `maxChars` characters.
- *
- * @param {string} text
- * @param {number} maxChars
- * @returns {string}
  */
-function tailTruncate(text, maxChars) {
+function tailTruncate(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
   return text.slice(0, maxChars);
 }
 
 /**
  * Assemble the final prompt string from its sections.
- *
- * @param {object} parts
- * @returns {string}
  */
-function assemblePrompt(parts) {
+function assemblePrompt(parts: {
+  instructions: string;
+  note: string | null;
+  roadmap: string;
+  projectMd: string | null;
+  plans: PlanSection[];
+  context: string | null;
+  research: string | null;
+  requirements: string | null;
+}): string {
   const {
     instructions,
     note,
@@ -106,7 +147,7 @@ function assemblePrompt(parts) {
     requirements,
   } = parts;
 
-  const blocks = [];
+  const blocks: string[] = [];
 
   blocks.push(instructions);
 
@@ -131,14 +172,8 @@ function assemblePrompt(parts) {
 /**
  * Apply a token budget to a set of review prompt sections.
  * Returns the trimmed prompt and structured metadata.
- *
- * @param {object} param0
- * @param {object} param0.sections
- * @param {number} param0.budget
- * @param {object} [param0.options]
- * @returns {{ prompt: string, metadata: object }}
  */
-function applyBudget({ sections, budget, options = {} }) {
+export function applyBudget({ sections, budget, options = {} }: ApplyBudgetInput): BudgetResult {
   const {
     safetyMarginPct = 10,
     noteTemplate = DEFAULT_NOTE_TEMPLATE,
@@ -158,13 +193,13 @@ function applyBudget({ sections, budget, options = {} }) {
   } = sections;
 
   // Working mutable state
-  let projectMd = projectMdRaw;
-  let context = contextRaw;
-  let research = researchRaw;
-  let requirements = requirementsRaw;
-  let workingPlans = plans.map((p) => ({ file: p.file, content: p.content }));
+  let projectMd: string | null = projectMdRaw;
+  let context: string | null = contextRaw;
+  let research: string | null = researchRaw;
+  let requirements: string | null = requirementsRaw;
+  let workingPlans: PlanSection[] = plans.map((p) => ({ file: p.file, content: p.content }));
 
-  const omitted = [];
+  const omitted: string[] = [];
   let projectMdShrunk = false;
   let planTruncationPct = 0;
   let noteInjected = false;
@@ -236,7 +271,7 @@ function applyBudget({ sections, budget, options = {} }) {
     0
   );
 
-  const getCurrentBaseTokens = () =>
+  const getCurrentBaseTokens = (): number =>
     staticBaseTokens +
     projectTokens +
     planContentTokens +
@@ -344,11 +379,15 @@ function applyBudget({ sections, budget, options = {} }) {
   const anyTrimOccurred =
     omitted.length > 0 || projectMdShrunk || planTruncationPct > 0;
 
-  let note = null;
+  let note: string | null = null;
   if (anyTrimOccurred) {
     note = renderNote(noteTemplate, budget, omitted, planTruncationPct);
     noteInjected = true;
   }
+
+  // Suppress unused variable warning — currentBaseTokens is used via the
+  // closure in getCurrentBaseTokens(); the final value is not used directly.
+  void currentBaseTokens;
 
   // ── Assemble ──────────────────────────────────────────────────────────────
   const prompt = assemblePrompt({
@@ -395,5 +434,3 @@ function applyBudget({ sections, budget, options = {} }) {
     },
   };
 }
-
-module.exports = { estimateTokens, applyBudget };

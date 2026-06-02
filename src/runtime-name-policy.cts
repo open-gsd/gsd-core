@@ -1,9 +1,20 @@
-'use strict';
+/**
+ * Runtime name policy — alias resolution and canonicalization for GSD runtime
+ * identifiers (ADR-457 build-at-publish: the hand-written
+ * bin/lib/runtime-name-policy.cjs collapsed to a TypeScript source of truth).
+ * Behaviour is preserved byte-for-behaviour from the prior hand-written .cjs;
+ * only types are added.
+ *
+ * Group C cross-import candidate: no bin/lib sibling dependencies; only
+ * node:fs and node:path. Once this module is migrated, runtime-slash.cjs
+ * (which imports runtime-name-policy.cjs) becomes the first true cross-import
+ * proof candidate.
+ */
 
-const fs = require('node:fs');
-const path = require('node:path');
+import fs from 'node:fs';
+import path from 'node:path';
 
-const FALLBACK_ALIASES = {
+const FALLBACK_ALIASES: Readonly<Record<string, string[]>> = {
   claude: ['claude', 'claude-code', 'claude-cli'],
   opencode: ['opencode', 'open-code', 'opencode-cli'],
   kilo: ['kilo', 'kilo-cli'],
@@ -21,28 +32,28 @@ const FALLBACK_ALIASES = {
   cline: ['cline', 'cline-cli'],
 };
 
-function normalizeRuntimeToken(value) {
+function normalizeRuntimeToken(value: string): string {
   return String(value).trim().toLowerCase().replace(/[_\s]+/g, '-');
 }
 
-function loadAliasManifest() {
+function loadAliasManifest(): Record<string, string[]> {
   const manifestCandidates = [
     path.resolve(__dirname, '..', 'shared', 'runtime-aliases.manifest.json'),
     path.resolve(__dirname, '../../../sdk/shared/runtime-aliases.manifest.json'),
   ];
   for (const manifestPath of manifestCandidates) {
     try {
-      const parsed = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-      if (parsed && typeof parsed === 'object') return parsed;
+      const parsed = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as unknown;
+      if (parsed && typeof parsed === 'object') return parsed as Record<string, string[]>;
     } catch {
       // Try next candidate.
     }
   }
-  return FALLBACK_ALIASES;
+  return { ...FALLBACK_ALIASES };
 }
 
 const aliasManifest = loadAliasManifest();
-const aliasToCanonical = new Map();
+const aliasToCanonical = new Map<string, string>();
 for (const [canonical, aliases] of Object.entries(aliasManifest)) {
   if (typeof canonical !== 'string' || !Array.isArray(aliases)) continue;
   aliasToCanonical.set(normalizeRuntimeToken(canonical), normalizeRuntimeToken(canonical));
@@ -52,7 +63,7 @@ for (const [canonical, aliases] of Object.entries(aliasManifest)) {
   }
 }
 
-function canonicalizeRuntimeName(value) {
+export function canonicalizeRuntimeName(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   return aliasToCanonical.get(normalizeRuntimeToken(value)) || null;
 }
@@ -64,10 +75,10 @@ function canonicalizeRuntimeName(value) {
  * - Known aliases are canonicalized (codex-cli -> codex).
  * - Unknown values are normalized and returned (future-runtime tolerance).
  *
- * @param {...string} candidates
- * @returns {string|null}
+ * @param candidates - string candidates in precedence order
+ * @returns the resolved runtime name, or null if no valid candidate
  */
-function resolveRuntimeNameFromCandidates(...candidates) {
+export function resolveRuntimeNameFromCandidates(...candidates: unknown[]): string | null {
   for (const candidate of candidates) {
     if (typeof candidate !== 'string') continue;
     const normalized = normalizeRuntimeToken(candidate);
@@ -76,8 +87,3 @@ function resolveRuntimeNameFromCandidates(...candidates) {
   }
   return null;
 }
-
-module.exports = {
-  canonicalizeRuntimeName,
-  resolveRuntimeNameFromCandidates,
-};
