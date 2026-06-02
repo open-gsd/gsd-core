@@ -63,7 +63,11 @@ describe('bug #3384: adjacent worktree data-loss guards', () => {
 
   test('validate health warns when worktree inventory cannot be listed', () => {
     const source = read('get-shit-done/bin/lib/verify.cjs');
-    const failureBranch = source.indexOf("worktreeHealth.reason === 'git_list_failed'");
+    // Accept both hand-written dot access and the tsc-compiled bracket form
+    // (ADR-457: verify.cjs is now emitted from src/verify.cts):
+    //   hand-written: worktreeHealth.reason === 'git_list_failed'
+    //   tsc-compiled:  worktreeHealth['reason'] === 'git_list_failed'
+    const failureBranch = source.search(/worktreeHealth(?:\.reason|\['reason'\]) === 'git_list_failed'/);
     const warning = source.indexOf("addIssue('warning', 'W020'", failureBranch);
 
     assert.ok(failureBranch > 0, 'verify health should branch on git_list_failed');

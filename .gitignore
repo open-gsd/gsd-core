@@ -144,6 +144,9 @@ build/
 /get-shit-done/bin/lib/commands.cjs
 /get-shit-done/bin/lib/state.cjs
 /get-shit-done/bin/lib/milestone.cjs
+/get-shit-done/bin/lib/phase.cjs
+/get-shit-done/bin/lib/verify.cjs
+/get-shit-done/bin/lib/init.cjs
 /get-shit-done/bin/lib/uat.cjs
 /get-shit-done/bin/lib/workstream.cjs
 /get-shit-done/bin/lib/roadmap.cjs
