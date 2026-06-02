@@ -90,6 +90,7 @@ export default tseslint.config(
       'get-shit-done/bin/lib/phase-command-router.cjs',
       'get-shit-done/bin/lib/surface.cjs',
       'get-shit-done/bin/lib/roadmap-upgrade.cjs',
+      'get-shit-done/bin/lib/config-types.cjs',
     ],
   },
 
