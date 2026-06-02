@@ -174,10 +174,17 @@ const INTERNAL_COMPONENT_SLUGS = new Set([
  * this was /gsd-old-name...").
  */
 function stripHtmlComments(content) {
-  let stripped = content;
-  let prev;
-  do { prev = stripped; stripped = stripped.replace(/<!--[\s\S]*?-->/g, ''); } while (stripped !== prev);
-  return stripped.replace(/<!--/g, '');
+  // regex-free HTML-comment stripper (CodeQL: avoid incomplete-multi-character-sanitization)
+  let out = '';
+  let rest = content;
+  let idx;
+  while ((idx = rest.indexOf('<!--')) !== -1) {
+    out += rest.slice(0, idx);
+    const end = rest.indexOf('-->', idx + 4);
+    if (end === -1) { rest = ''; break; }
+    rest = rest.slice(end + 3);
+  }
+  return out + rest;
 }
 
 /**

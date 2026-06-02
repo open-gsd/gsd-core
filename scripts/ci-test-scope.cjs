@@ -208,7 +208,19 @@ function parseArgs(argv) {
 
 function splitFiles(value) {
   if (!value) return [];
-  return value.split(/[,\s]+/).map(v => v.trim()).filter(Boolean);
+  const SEPARATORS = new Set([',', ' ', '\t', '\n', '\r', '\f', '\v']);
+  const tokens = [];
+  let current = '';
+  for (const ch of value) {
+    if (SEPARATORS.has(ch)) {
+      if (current) tokens.push(current);
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  if (current) tokens.push(current);
+  return tokens.map(v => v.trim()).filter(Boolean);
 }
 
 function changedFiles(args) {

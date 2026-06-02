@@ -61,10 +61,19 @@ function collectFiles(dir, results) {
  * happens at the call site so the extractor stays neutral.
  */
 function extractSkillCalls(content) {
-  let stripped = content;
-  let _prev;
-  do { _prev = stripped; stripped = stripped.replace(/<!--[\s\S]*?-->/g, ''); } while (stripped !== _prev);
-  stripped = stripped.replace(/<!--/g, '');
+  // regex-free HTML-comment stripper (CodeQL: avoid incomplete-multi-character-sanitization)
+  let stripped = '';
+  {
+    let rest = content;
+    let idx;
+    while ((idx = rest.indexOf('<!--')) !== -1) {
+      stripped += rest.slice(0, idx);
+      const end = rest.indexOf('-->', idx + 4);
+      if (end === -1) { rest = ''; break; }
+      rest = rest.slice(end + 3);
+    }
+    stripped += rest;
+  }
   const calls = [];
   // Body class excludes backslash so the extractor doesn't include an
   // escape character that precedes the closing quote in embedded examples
