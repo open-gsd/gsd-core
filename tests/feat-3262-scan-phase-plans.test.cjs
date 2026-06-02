@@ -17,6 +17,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { cleanup } = require('./helpers.cjs');
 
 // Helper under test — must exist at this path (GREEN phase wires it up)
 const scanPhasePlans = require('../get-shit-done/bin/lib/plan-scan.cjs');
@@ -44,7 +45,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  cleanup(tmpDir);
 });
 
 // ---------------------------------------------------------------------------

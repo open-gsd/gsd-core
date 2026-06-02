@@ -497,6 +497,19 @@ function loadConfig(cwd, options = {}) {
       // resolveModelInternal. Defaults to null so configs without it
       // behave exactly as today.
       models: parsed.models || null,
+      // #68 — top-level granularity (global override; written by new-project
+      // payloads and legacy depth→granularity migration). Pass through as-is so
+      // resolveGranularityInternal can honor user-set values without enum-guarding
+      // here (preserves Hyrum compat for the global slot).
+      granularity: parsed.granularity !== undefined ? parsed.granularity : null,
+      // #68 — per-phase-type granularity map. Six named slots mirroring `models`.
+      // Defaults to null so configs without it behave exactly as before.
+      granularities: parsed.granularities || null,
+      // #68 — planning sub-object (needed for planning.granularity fallback).
+      // Also used by other keys (planning.commit_docs etc.) via `get()` above,
+      // but those use the nested get() path; resolveGranularityInternal needs
+      // direct access to planning.granularity so we pass through the whole block.
+      planning: parsed.planning || null,
       // #3024 — dynamic routing block. When `enabled: true`, the
       // resolveModelForTier() resolver picks tier_models[default_tier]
       // for the agent and escalates one tier per attempt up to
@@ -566,6 +579,9 @@ function loadConfig(cwd, options = {}) {
         subagent_timeout: globalDefaults.subagent_timeout ?? defaults.subagent_timeout,
         model_overrides: globalDefaults.model_overrides || null,
         models: globalDefaults.models || null,
+        granularity: globalDefaults.granularity !== undefined ? globalDefaults.granularity : null,
+        granularities: globalDefaults.granularities || null,
+        planning: globalDefaults.planning || null,
         dynamic_routing: globalDefaults.dynamic_routing || null,
         effort: globalDefaults.effort || null,
         fast_mode: globalDefaults.fast_mode || null,
@@ -1721,6 +1737,37 @@ function resolveModelInternal(cwd, agentType) {
   return alias;
 }
 
+const VALID_GRANULARITIES = new Set(['coarse', 'standard', 'fine']);
+
+/**
+ * Resolve the planning granularity for a phase type (#68).
+ *
+ * Precedence (mirrors resolveModelInternal's phase-type slot):
+ *   1. granularities[phaseType] — per-phase override; honored only when a
+ *      recognized enum value (coarse|standard|fine). A typo or wrong type
+ *      falls through so it can't silently break resolution.
+ *   2. top-level `granularity` — global (new-project payload / legacy depth).
+ *   3. planning.granularity — canonical global default (always present post-merge).
+ *   4. 'standard' — hard default.
+ */
+function resolveGranularityInternal(cwd, phaseType) {
+  const config = loadConfig(cwd);
+  const perPhase = (phaseType && config.granularities && typeof config.granularities === 'object')
+    ? config.granularities[phaseType]
+    : undefined;
+  if (perPhase && VALID_GRANULARITIES.has(perPhase)) {
+    return perPhase;
+  }
+  if (config.granularity !== undefined && config.granularity !== null && config.granularity !== '') {
+    return config.granularity;
+  }
+  const planningGran = config.planning && config.planning.granularity;
+  if (planningGran !== undefined && planningGran !== null && planningGran !== '') {
+    return planningGran;
+  }
+  return 'standard';
+}
+
 /**
  * #3024 — Resolve a model for a specific dynamic-routing attempt.
  *
@@ -2462,6 +2509,8 @@ module.exports = {
   getRoadmapPhaseInternal,
   resolveModelInternal,
   resolveModelForTier,
+  resolveGranularityInternal,
+  VALID_GRANULARITIES,
   resolveEffortInternal,
   resolveFastModeInternal,
   resolveEffortForTier,

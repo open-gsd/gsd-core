@@ -7,6 +7,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 
+const { cleanup } = require('./helpers.cjs');
+
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-workflow-guard.js');
 
 function git(cwd, args) {
@@ -61,7 +63,7 @@ describe('bug #261: workflow guard blocks forced git add on worktree-agent branc
       assert.strictEqual(envelope.decision, 'block');
       assert.strictEqual(envelope.code, 'WORKTREE_AGENT_FORCE_ADD_FORBIDDEN');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -73,7 +75,7 @@ describe('bug #261: workflow guard blocks forced git add on worktree-agent branc
       assert.strictEqual(result.status, 2);
       assert.strictEqual(JSON.parse(result.stdout).code, 'WORKTREE_AGENT_FORCE_ADD_FORBIDDEN');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -85,7 +87,7 @@ describe('bug #261: workflow guard blocks forced git add on worktree-agent branc
       assert.strictEqual(result.status, 0);
       assert.strictEqual(result.stdout, '');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -97,7 +99,7 @@ describe('bug #261: workflow guard blocks forced git add on worktree-agent branc
       assert.strictEqual(result.status, 0);
       assert.strictEqual(result.stdout, '');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -109,7 +111,7 @@ describe('bug #261: workflow guard blocks forced git add on worktree-agent branc
       assert.strictEqual(result.status, 0);
       assert.strictEqual(result.stdout, '');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -121,7 +123,7 @@ describe('bug #261: workflow guard blocks forced git add on worktree-agent branc
       assert.strictEqual(result.status, 0);
       assert.strictEqual(result.stdout, '');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -132,7 +134,7 @@ describe('bug #261: workflow guard blocks forced git add on worktree-agent branc
       assert.strictEqual(result.status, 0);
       assert.strictEqual(result.stdout, '');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -154,7 +156,7 @@ describe('bug #261: workflow guard blocks forced git add on worktree-agent branc
         /WORKFLOW ADVISORY/
       );
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 });

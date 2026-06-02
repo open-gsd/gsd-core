@@ -468,7 +468,7 @@ describe('loadSkillsManifest', () => {
       const m = loadSkillsManifest(dir);
       assert.ok(m instanceof Map, 'should return a Map');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -480,7 +480,7 @@ describe('loadSkillsManifest', () => {
       assert.ok(m.has('help'), 'help should be in manifest');
       assert.deepStrictEqual(m.get('help'), []);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -492,7 +492,7 @@ describe('loadSkillsManifest', () => {
       assert.ok(m.has('add-tests'));
       assert.deepStrictEqual(m.get('add-tests'), ['phase']);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -503,7 +503,7 @@ describe('loadSkillsManifest', () => {
       const m = loadSkillsManifest(dir);
       assert.deepStrictEqual(m.get('plan-phase'), ['discuss-phase', 'phase', 'review', 'update']);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -518,7 +518,7 @@ describe('loadSkillsManifest', () => {
       assert.ok(!m.has('README'));
       assert.ok(!m.has('notes'));
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -528,7 +528,7 @@ describe('loadSkillsManifest', () => {
       const m = loadSkillsManifest(dir);
       assert.strictEqual(m.size, 0);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -539,7 +539,7 @@ describe('loadSkillsManifest', () => {
       const m = loadSkillsManifest(dir);
       assert.deepStrictEqual(m.get('explore'), []);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -564,7 +564,7 @@ describe('readActiveProfile / writeActiveProfile', () => {
       writeActiveProfile(dir, 'standard');
       assert.strictEqual(readActiveProfile(dir), 'standard');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -574,7 +574,7 @@ describe('readActiveProfile / writeActiveProfile', () => {
       writeActiveProfile(dir, 'core');
       assert.strictEqual(readActiveProfile(dir), 'core');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -584,7 +584,7 @@ describe('readActiveProfile / writeActiveProfile', () => {
       writeActiveProfile(dir, 'core,audit');
       assert.strictEqual(readActiveProfile(dir), 'core,audit');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -594,7 +594,7 @@ describe('readActiveProfile / writeActiveProfile', () => {
       writeActiveProfile(dir, 'full');
       assert.strictEqual(readActiveProfile(dir), 'full');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -604,7 +604,7 @@ describe('readActiveProfile / writeActiveProfile', () => {
       const result = readActiveProfile(dir);
       assert.strictEqual(result, null);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -621,7 +621,7 @@ describe('readActiveProfile / writeActiveProfile', () => {
       const result = readActiveProfile(dir);
       assert.strictEqual(result, null);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -632,7 +632,7 @@ describe('readActiveProfile / writeActiveProfile', () => {
       const result = readActiveProfile(dir);
       assert.strictEqual(result, null);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -644,7 +644,7 @@ describe('readActiveProfile / writeActiveProfile', () => {
       assert.ok(fs.existsSync(nested), 'directory should be created');
       assert.strictEqual(readActiveProfile(nested), 'standard');
     } finally {
-      fs.rmSync(base, { recursive: true, force: true });
+      cleanup(base);
     }
   });
 
@@ -655,7 +655,7 @@ describe('readActiveProfile / writeActiveProfile', () => {
       writeActiveProfile(dir, 'full');
       assert.strictEqual(readActiveProfile(dir), 'full');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 });

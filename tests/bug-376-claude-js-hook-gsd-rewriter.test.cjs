@@ -27,6 +27,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { cleanup } = require('./helpers.cjs');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const INSTALL_PATH = path.join(REPO_ROOT, 'bin', 'install.js');
@@ -129,9 +130,7 @@ describe('bug #376 — Suite 1: Claude install rewrites /gsd: → /gsd- in hook 
   });
 
   after(() => {
-    if (tmpDir) {
-      fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-    }
+    cleanup(tmpDir);
   });
 
   test('1a: hooks/ directory is created by the Claude local install', () => {
@@ -206,9 +205,7 @@ describe('bug #376 — Suite 2: Cursor install still rewrites /gsd: → /gsd- (r
   });
 
   after(() => {
-    if (tmpDir) {
-      fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-    }
+    cleanup(tmpDir);
   });
 
   test('2a: .cursor/ directory is created by the Cursor local install', () => {

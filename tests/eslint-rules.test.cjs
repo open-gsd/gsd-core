@@ -3,10 +3,11 @@
 /**
  * eslint-rules.test.cjs
  *
- * RuleTester unit tests for the three local ESLint rules:
+ * RuleTester unit tests for the local ESLint rules:
  *   - local/no-source-grep
  *   - local/no-magic-sleep-in-tests
  *   - local/no-elapsed-assertion
+ *   - local/no-raw-rmsync-in-tests
  */
 
 const { test, describe } = require('node:test');
@@ -16,6 +17,7 @@ const { RuleTester } = require('eslint');
 const noSourceGrep = require('../eslint-rules/no-source-grep.cjs');
 const noMagicSleepInTests = require('../eslint-rules/no-magic-sleep-in-tests.cjs');
 const noElapsedAssertion = require('../eslint-rules/no-elapsed-assertion.cjs');
+const noRawRmsyncInTests = require('../eslint-rules/no-raw-rmsync-in-tests.cjs');
 
 const ruleTester = new RuleTester({
   languageOptions: {
@@ -315,5 +317,175 @@ describe('no-elapsed-assertion rule', () => {
       ],
     });
     assert.ok(true, 'no-elapsed-assertion flags assert.equal with timing comparison');
+  });
+});
+
+// ─── no-raw-rmsync-in-tests ──────────────────────────────────────────────────
+
+describe('no-raw-rmsync-in-tests rule', () => {
+  // ── INVALID cases (must error) ────────────────────────────────────────────
+
+  test('invalid: fs.rmSync() in a test file', () => {
+    ruleTester.run('no-raw-rmsync-in-tests', noRawRmsyncInTests, {
+      valid: [],
+      invalid: [
+        {
+          code: `
+            const fs = require('fs');
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+          `,
+          filename: 'tests/foo.test.cjs',
+          errors: [{ messageId: 'noRawRmSync' }],
+        },
+      ],
+    });
+    assert.ok(true, 'no-raw-rmsync-in-tests flags fs.rmSync() in test file');
+  });
+
+  test('invalid: computed member fs["rmSync"]() in a test file', () => {
+    ruleTester.run('no-raw-rmsync-in-tests', noRawRmsyncInTests, {
+      valid: [],
+      invalid: [
+        {
+          code: `
+            const fs = require('fs');
+            fs['rmSync'](d, { recursive: true, force: true });
+          `,
+          filename: 'tests/foo.test.cjs',
+          errors: [{ messageId: 'noRawRmSync' }],
+        },
+      ],
+    });
+    assert.ok(true, 'no-raw-rmsync-in-tests flags fs["rmSync"]() in test file');
+  });
+
+  test('invalid: destructured rmSync from require("fs") in a test file', () => {
+    ruleTester.run('no-raw-rmsync-in-tests', noRawRmsyncInTests, {
+      valid: [],
+      invalid: [
+        {
+          code: `
+            const { rmSync } = require('fs');
+            rmSync(d, { recursive: true, force: true });
+          `,
+          filename: 'tests/foo.test.cjs',
+          errors: [{ messageId: 'noRawRmSync' }],
+        },
+      ],
+    });
+    assert.ok(true, 'no-raw-rmsync-in-tests flags destructured rmSync from require("fs")');
+  });
+
+  test('invalid: aliased const del = fs.rmSync; del() in a test file', () => {
+    ruleTester.run('no-raw-rmsync-in-tests', noRawRmsyncInTests, {
+      valid: [],
+      invalid: [
+        {
+          code: `
+            const fs = require('fs');
+            const del = fs.rmSync;
+            del(d, { recursive: true, force: true });
+          `,
+          filename: 'tests/foo.test.cjs',
+          errors: [{ messageId: 'noRawRmSync' }],
+        },
+      ],
+    });
+    assert.ok(true, 'no-raw-rmsync-in-tests flags aliased fs.rmSync');
+  });
+
+  test('invalid: allow-test-rule annotation no longer suppresses this rule (Defect 1 fixed)', () => {
+    // A file with // allow-test-rule: <source-grep reason> must still error
+    // on raw rmSync calls. The file-level annotation is for no-source-grep only.
+    ruleTester.run('no-raw-rmsync-in-tests', noRawRmsyncInTests, {
+      valid: [],
+      invalid: [
+        {
+          code: `
+            // allow-test-rule: source-text-is-the-product
+            const fs = require('fs');
+            fs.rmSync(d, { recursive: true, force: true });
+          `,
+          filename: 'tests/foo.test.cjs',
+          errors: [{ messageId: 'noRawRmSync' }],
+        },
+      ],
+    });
+    assert.ok(true, 'no-raw-rmsync-in-tests is NOT suppressed by allow-test-rule annotation');
+  });
+
+  // ── VALID cases (must NOT error) ──────────────────────────────────────────
+
+  test('valid: helpers.cleanup() in a test file (no error)', () => {
+    ruleTester.run('no-raw-rmsync-in-tests', noRawRmsyncInTests, {
+      valid: [
+        {
+          code: `
+            const { cleanup } = require('../helpers.cjs');
+            cleanup(tmpDir);
+          `,
+          filename: 'tests/foo.test.cjs',
+        },
+      ],
+      invalid: [],
+    });
+    assert.ok(true, 'no-raw-rmsync-in-tests allows helpers.cleanup()');
+  });
+
+  test('valid: bare rmSync() that is NOT fs-derived (local function) is not flagged', () => {
+    // A locally defined function named rmSync must not be flagged — the rule
+    // only tracks names that were bound from require("fs").
+    ruleTester.run('no-raw-rmsync-in-tests', noRawRmsyncInTests, {
+      valid: [
+        {
+          code: `
+            const rmSync = () => {};
+            rmSync(d);
+          `,
+          filename: 'tests/foo.test.cjs',
+        },
+      ],
+      invalid: [],
+    });
+    assert.ok(true, 'no-raw-rmsync-in-tests does not flag a locally-defined rmSync()');
+  });
+
+  // NOTE: The inline `// eslint-disable-next-line local/no-raw-rmsync-in-tests -- reason`
+  // escape hatch is handled entirely by ESLint's own disable-comment mechanism and
+  // cannot be unit-tested here via RuleTester (RuleTester runs the rule under a
+  // different internal namespace so the comment's rule-id doesn't match). The escape
+  // hatch works correctly when ESLint processes real files via `npx eslint`.
+
+  test('valid: fs.rmSync() in a non-test file (rule is inert outside *.test.cjs)', () => {
+    ruleTester.run('no-raw-rmsync-in-tests', noRawRmsyncInTests, {
+      valid: [
+        {
+          code: `
+            const fs = require('fs');
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+          `,
+          filename: 'scripts/foo.cjs',
+        },
+      ],
+      invalid: [],
+    });
+    assert.ok(true, 'no-raw-rmsync-in-tests is inert in non-test files');
+  });
+
+  test('valid: member access / assignment without calling (not a CallExpression)', () => {
+    ruleTester.run('no-raw-rmsync-in-tests', noRawRmsyncInTests, {
+      valid: [
+        {
+          code: `
+            const fs = require('fs');
+            const orig = fs.rmSync;
+            fs.rmSync = orig;
+          `,
+          filename: 'tests/foo.test.cjs',
+        },
+      ],
+      invalid: [],
+    });
+    assert.ok(true, 'no-raw-rmsync-in-tests ignores member access / assignment without call');
   });
 });

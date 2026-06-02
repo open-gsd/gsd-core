@@ -143,6 +143,11 @@
       "description": "models.<planning|discuss|research|execution|verification|completion>"
     },
     {
+      "topLevel": "granularities",
+      "source": "^granularities\\.(planning|discuss|research|execution|verification|completion)$",
+      "description": "granularities.<planning|discuss|research|execution|verification|completion>"
+    },
+    {
       "topLevel": "dynamic_routing",
       "source": "^dynamic_routing\\.(enabled|escalate_on_failure|max_escalations|tier_models\\.(light|standard|heavy))$",
       "description": "dynamic_routing.<enabled|escalate_on_failure|max_escalations|tier_models.<light|standard|heavy>>"

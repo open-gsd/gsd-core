@@ -140,7 +140,7 @@ describe('install-profiles: stageSkillsForMode', () => {
     try {
       assert.strictEqual(stageSkillsForMode(src, 'full'), src);
     } finally {
-      fs.rmSync(src, { recursive: true, force: true });
+      cleanup(src);
     }
   });
 
@@ -156,8 +156,8 @@ describe('install-profiles: stageSkillsForMode', () => {
           'phase.md', 'plan-phase.md', 'surface.md', 'update.md'],
       );
     } finally {
-      fs.rmSync(src, { recursive: true, force: true });
-      if (staged) fs.rmSync(staged, { recursive: true, force: true });
+      cleanup(src);
+      cleanup(staged);
     }
   });
 
@@ -170,8 +170,8 @@ describe('install-profiles: stageSkillsForMode', () => {
       const copied = fs.readFileSync(path.join(staged, 'plan-phase.md'), 'utf8');
       assert.strictEqual(copied, original);
     } finally {
-      fs.rmSync(src, { recursive: true, force: true });
-      if (staged) fs.rmSync(staged, { recursive: true, force: true });
+      cleanup(src);
+      cleanup(staged);
     }
   });
 
@@ -191,8 +191,8 @@ describe('install-profiles: stageSkillsForMode', () => {
       staged = stageSkillsForMode(src, 'minimal');
       assert.deepStrictEqual(fs.readdirSync(staged), ['plan-phase.md']);
     } finally {
-      fs.rmSync(src, { recursive: true, force: true });
-      if (staged) fs.rmSync(staged, { recursive: true, force: true });
+      cleanup(src);
+      cleanup(staged);
     }
   });
 });
@@ -211,7 +211,7 @@ describe('install-profiles: cleanupStagedSkills', () => {
       assert.ok(!fs.existsSync(a));
       assert.ok(!fs.existsSync(b));
     } finally {
-      fs.rmSync(src, { recursive: true, force: true });
+      cleanup(src);
     }
   });
 
@@ -230,7 +230,7 @@ describe('install-profiles: cleanupStagedSkills', () => {
       const after = process.listenerCount('exit');
       assert.ok(after - before <= 1, `expected <=1 new exit listener, got ${after - before}`);
     } finally {
-      fs.rmSync(src, { recursive: true, force: true });
+      cleanup(src);
       cleanupStagedSkills();
     }
   });
@@ -261,7 +261,7 @@ describe('install-profiles: cleanupStagedSkills', () => {
     } finally {
       fs.copyFileSync = realCopy;
       fs.mkdtempSync = realMkdtemp;
-      fs.rmSync(src, { recursive: true, force: true });
+      cleanup(src);
       cleanupStagedSkills();
     }
   });
@@ -296,7 +296,7 @@ describe('install: --minimal honoured for every runtime in --global mode', () =>
         );
         assert.strictEqual(manifestAgentCount(manifest), 0);
       } finally {
-        fs.rmSync(root, { recursive: true, force: true });
+        cleanup(root);
       }
     });
   }
@@ -315,7 +315,7 @@ describe('install: --minimal honoured for every runtime in --local mode', () => 
         );
         assert.strictEqual(manifestAgentCount(manifest), 0);
       } finally {
-        fs.rmSync(root, { recursive: true, force: true });
+        cleanup(root);
       }
     });
   }
@@ -333,7 +333,7 @@ describe('install: Cline --minimal (rules-based, no skills/ dir)', () => {
         assert.strictEqual(manifestAgentCount(manifest), 0);
         assert.ok(fs.existsSync(path.join(configDir, '.clinerules')));
       } finally {
-        fs.rmSync(root, { recursive: true, force: true });
+        cleanup(root);
       }
     });
   }
@@ -358,7 +358,7 @@ describe('install: on-disk skill files match manifest for --minimal', () => {
             assert.deepStrictEqual(gsdAgents, []);
           }
         } finally {
-          fs.rmSync(root, { recursive: true, force: true });
+          cleanup(root);
         }
       });
     }
@@ -385,7 +385,7 @@ describe('install: manifest records mode for both profiles', () => {
       const agentCount = Object.keys(m.files || {}).filter(k => k.startsWith('agents/')).length;
       return { mode: m.mode, skillCount, agentCount };
     } finally {
-      fs.rmSync(targetDir, { recursive: true, force: true });
+      cleanup(targetDir);
     }
   }
 
@@ -439,7 +439,7 @@ describe('install-minimal-backcompat: --minimal and --profile=core produce same 
       const profileMarker = fs.existsSync(markerPath) ? fs.readFileSync(markerPath, 'utf8').trim() : null;
       return { mode: m.mode, skillCount, profileMarker };
     } finally {
-      fs.rmSync(targetDir, { recursive: true, force: true });
+      cleanup(targetDir);
     }
   }
 
@@ -518,7 +518,7 @@ describe('install: Codex full → minimal downgrade cleans stale agent state', (
       }
       assert.ok(fs.existsSync(configPath));
     } finally {
-      fs.rmSync(targetDir, { recursive: true, force: true });
+      cleanup(targetDir);
     }
   });
 });
@@ -545,7 +545,7 @@ describe('install: Claude full → minimal downgrade removes stale agents', () =
       assert.ok(remaining.includes('my-custom-agent.md'));
       assert.deepStrictEqual(remaining.filter(f => f.startsWith('gsd-')), []);
     } finally {
-      fs.rmSync(targetDir, { recursive: true, force: true });
+      cleanup(targetDir);
     }
   });
 });

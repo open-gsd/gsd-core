@@ -34,6 +34,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { cleanup } = require('./helpers.cjs');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const INSTALL_PATH = path.join(REPO_ROOT, 'bin', 'install.js');
@@ -148,9 +149,7 @@ describe('bug #3683 — command body colon-namespace leak (Claude local install)
     });
 
     after(() => {
-      if (tmpDir) {
-        fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-      }
+      cleanup(tmpDir);
     });
 
     test('E0: staged commands/gsd/ directory exists after install', () => {

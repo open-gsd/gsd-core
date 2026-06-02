@@ -19,6 +19,7 @@ const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { cleanup } = require('./helpers.cjs');
 
 const QUICK_PATH = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'quick.md');
 
@@ -149,7 +150,7 @@ function runStep(bash, cwd, branchName) {
       stdio: ['pipe', 'pipe', 'pipe'],
     }).toString();
   } finally {
-    fs.rmSync(scriptDir, { recursive: true, force: true });
+    cleanup(scriptDir);
   }
 }
 
@@ -256,7 +257,7 @@ describe('quick workflow: branching support', () => {
           `new quick-task branch tip must equal ${upstream} tip`
         );
       } finally {
-        fs.rmSync(root, { recursive: true, force: true });
+        cleanup(root);
       }
     });
   }
@@ -287,7 +288,7 @@ describe('quick workflow: branching support', () => {
         'existing-branch tip must be preserved (no rebase/reset)'
       );
     } finally {
-      fs.rmSync(root, { recursive: true, force: true });
+      cleanup(root);
     }
   });
 });

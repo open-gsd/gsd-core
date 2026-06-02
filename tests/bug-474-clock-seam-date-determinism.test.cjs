@@ -228,7 +228,7 @@ describe('bug-474: installer-migrations lock-loop timeout is deterministic via c
     const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-474-lock-'));
 
     t.after(() => {
-      fs.rmSync(configDir, { recursive: true, force: true });
+      cleanup(configDir);
     });
 
     const LOCK_NAME = 'gsd-install-migration.lock';

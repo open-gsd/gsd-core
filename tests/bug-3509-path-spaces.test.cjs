@@ -16,16 +16,12 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { runGsdTools } = require('./helpers.cjs');
+const { runGsdTools, cleanup } = require('./helpers.cjs');
 
 // Create a tmpdir whose name always contains a space — this is the invariant
 // that was violated on /Volumes/Mini Me/... machines.
 function createSpacedTmpDir(prefix = 'path with spaces-') {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-}
-
-function cleanup(dir) {
-  fs.rmSync(dir, { recursive: true, force: true });
 }
 
 // ─── dispatcher --cwd= with space in path ────────────────────────────────────

@@ -29,6 +29,8 @@ const {
   resolveProfile,
 } = require('../get-shit-done/bin/lib/install-profiles.cjs');
 
+const { cleanup } = require('./helpers.cjs');
+
 const manifest = loadSkillsManifest();
 const resolvedProfileFull = resolveProfile({ modes: [], manifest });
 
@@ -136,9 +138,7 @@ describe('Qwen Code: installRuntimeArtifacts', () => {
   });
 
   afterEach(() => {
-    if (fs.existsSync(tmpDir)) {
-      fs.rmSync(tmpDir, { recursive: true });
-    }
+    cleanup(tmpDir);
   });
 
   test('creates skills/gsd-xxx/SKILL.md directory structure', () => {

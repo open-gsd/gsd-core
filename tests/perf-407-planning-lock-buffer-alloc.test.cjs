@@ -34,6 +34,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { cleanup } = require('./helpers.cjs');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -58,7 +59,7 @@ function makeTempDir() {
 }
 
 function removeTempDir(dir) {
-  try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+  try { cleanup(dir); } catch { /* ignore */ }
 }
 
 /**

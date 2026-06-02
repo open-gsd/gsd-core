@@ -21,6 +21,7 @@ const {
   readGsdState,
   isInstalledAheadOfLatest,
 } = require('../hooks/gsd-statusline.js');
+const { cleanup } = require('./helpers.cjs');
 
 // ─── parseStateMd ───────────────────────────────────────────────────────────
 
@@ -396,7 +397,7 @@ describe('todo-resolution: resolves in_progress task from the newest matching to
   test('resolves in_progress task from the newest matching todos file (#305)', (t) => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-305-'));
     t.after(() => {
-      try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
+      cleanup(tempDir);
     });
 
     const todosDir = path.join(tempDir, 'todos');

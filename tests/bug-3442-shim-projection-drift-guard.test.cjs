@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { cleanup } = require('./helpers.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const DRIFT_LINT = path.join(ROOT, 'scripts', 'lint-shell-command-projection-drift.cjs');
@@ -44,7 +45,7 @@ describe('bug #3442: shim/wrapper serialized-command drift guard', () => {
       const result = runLint(fixture);
       assert.notEqual(result.status, 0, 'inline shim renderer should be rejected by the drift guard');
     } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+      cleanup(tmp);
     }
   });
 
@@ -64,7 +65,7 @@ describe('bug #3442: shim/wrapper serialized-command drift guard', () => {
       const result = runLint(fixture);
       assert.equal(result.status, 0, `spawnSync/execFileSync should remain allowed:\n${result.stderr || result.stdout}`);
     } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+      cleanup(tmp);
     }
   });
 });

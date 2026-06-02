@@ -27,6 +27,7 @@ const { execFileSync } = require('child_process');
 
 const { validateCodexConfigSchema, install } = require('../bin/install.js');
 const installModule = require('../bin/install.js');
+const { cleanup } = require('./helpers.cjs');
 
 if (previousGsdTestMode === undefined) {
   delete process.env.GSD_TEST_MODE;
@@ -219,7 +220,7 @@ describe('#3285 — install succeeds when config.toml contains hooks.state entri
   });
 
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('install does not throw when config.toml contains hooks.state trust entries', () => {

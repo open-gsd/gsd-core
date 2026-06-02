@@ -64,6 +64,7 @@ describe('phases clear command', () => {
 
   test('succeeds with cleared=0 when phases directory does not exist', () => {
     // Remove the phases directory entirely
+    // eslint-disable-next-line local/no-raw-rmsync-in-tests -- mid-test removal to simulate absent phases dir (SUT behavior, not teardown)
     fs.rmSync(path.join(tmpDir, '.planning', 'phases'), { recursive: true, force: true });
 
     const result = runGsdTools('phases clear --confirm', tmpDir);

@@ -61,7 +61,7 @@ describe('feat-3210: fallow integration module', () => {
     const resolved = resolveFallowBinary({ cwd: tmp, envPath: '' });
     assert.strictEqual(resolved, fallowPath);
 
-    fs.rmSync(tmp, { recursive: true, force: true });
+    cleanup(tmp);
   });
 
   // H6: replaced wholesale win32 skip with platform-adapted assertion
@@ -87,7 +87,7 @@ describe('feat-3210: fallow integration module', () => {
           'Windows: .cmd candidate must be preferred over bare extensionless file',
         );
       } finally {
-        fs.rmSync(tmp, { recursive: true, force: true });
+        cleanup(tmp);
       }
     } else {
       // H6: non-Windows — non-executable file in PATH must be ignored
@@ -101,7 +101,7 @@ describe('feat-3210: fallow integration module', () => {
         const resolved = resolveFallowBinary({ cwd: tmp, envPath: pathDir });
         assert.strictEqual(resolved, null);
       } finally {
-        fs.rmSync(tmp, { recursive: true, force: true });
+        cleanup(tmp);
       }
     }
   });
@@ -130,7 +130,7 @@ describe('feat-3210: fallow integration module', () => {
       () => requireFallowBinary({ cwd: tmp, envPath: '' }),
       /install fallow via `npm install -D fallow` or `cargo install fallow`/,
     );
-    fs.rmSync(tmp, { recursive: true, force: true });
+    cleanup(tmp);
   });
 
   // L3: runFallowAudit against a non-zero-exit binary must surface error state
@@ -166,7 +166,7 @@ describe('feat-3210: fallow integration module', () => {
         'runFallowAudit must return error state (error/exitCode/failed) when binary exits non-zero',
       );
     } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+      cleanup(tmp);
     }
   });
 
@@ -267,7 +267,7 @@ describe('feat-3210: M2 - node_modules/.bin resolution order', () => {
       const resolved = resolveFallowBinary({ cwd: tmp, envPath: pathDir });
       assert.strictEqual(resolved, localFallow, 'node_modules/.bin/fallow must win over PATH fallow');
     } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+      cleanup(tmp);
     }
   });
 });

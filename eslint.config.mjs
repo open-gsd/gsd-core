@@ -8,16 +8,18 @@ import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Local plugin with three custom AST rules
+// Local plugin with custom AST rules
 import noSourceGrep from './eslint-rules/no-source-grep.cjs';
 import noMagicSleepInTests from './eslint-rules/no-magic-sleep-in-tests.cjs';
 import noElapsedAssertion from './eslint-rules/no-elapsed-assertion.cjs';
+import noRawRmsyncInTests from './eslint-rules/no-raw-rmsync-in-tests.cjs';
 
 const localPlugin = {
   rules: {
     'no-source-grep': noSourceGrep,
     'no-magic-sleep-in-tests': noMagicSleepInTests,
     'no-elapsed-assertion': noElapsedAssertion,
+    'no-raw-rmsync-in-tests': noRawRmsyncInTests,
   },
 };
 
@@ -108,6 +110,8 @@ export default tseslint.config(
       // Timing anti-patterns — warn for now; flip to error after cleanup
       'local/no-magic-sleep-in-tests': 'warn',
       'local/no-elapsed-assertion': 'warn',
+      // Ban raw fs.rmSync in tests — use helpers.cleanup() for Windows-EBUSY retry budget
+      'local/no-raw-rmsync-in-tests': 'error',
       // Ban raw setTimeout sync + elapsed/duration-style assertions via no-restricted-syntax
       'no-restricted-syntax': [
         'warn',

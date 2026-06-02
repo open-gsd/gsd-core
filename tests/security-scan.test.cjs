@@ -39,6 +39,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+const { cleanup } = require('./helpers.cjs');
+
 const PROJECT_ROOT = path.join(__dirname, '..');
 const SCRIPTS = {
   injection: path.join(PROJECT_ROOT, 'scripts', 'prompt-injection-scan.sh'),
@@ -69,7 +71,7 @@ function runScript(scriptPath, content, extraArgs) {
       stderr: err.stderr || '',
     };
   } finally {
-    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    cleanup(tmpDir);
   }
 }
 

@@ -3387,7 +3387,7 @@ describe('bug #1998: phase complete updates overview checkbox', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('checkbox updated when no archived milestones exist', () => {
@@ -3506,7 +3506,7 @@ describe('bug #2005: phase complete updates plan count when milestone is inside 
   });
 
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('plan count is updated when current milestone is wrapped in <details>', () => {
@@ -3659,7 +3659,7 @@ describe('bug #2526: phase complete warns about unregistered REQ-IDs', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('emits warning for REQ-IDs in body but missing from Traceability table', () => {
@@ -4296,7 +4296,7 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
     });
 
     afterEach(() => {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      cleanup(tmpDir);
     });
 
     test('completed_phases is derived from ROADMAP, not blindly incremented (idempotency)', () => {

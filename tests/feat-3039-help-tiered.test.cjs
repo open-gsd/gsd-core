@@ -29,12 +29,17 @@
  *   8. Every full.md heading is either aliased or in the intentional-orphan allowlist.
  *   9. The `commands/gsd/help.md` shim passes `$ARGUMENTS` through and advertises
  *      the composable `--brief <topic>` form.
+ *
+ * Tighten-only invariant (issue #597): ceilings track the per-tier high-water mark
+ * within GRACE lines. Budgets may only decrease, never silently creep upward.
+ * The assertTightCeiling() calls below enforce this automatically.
  */
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { assertTightCeiling } = require('../scripts/lib/allowlist-ratchet.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const WORKFLOWS = path.join(ROOT, 'get-shit-done', 'workflows');
@@ -47,11 +52,25 @@ const MODE_FILES = ['brief.md', 'default.md', 'full.md', 'topic.md'];
 // "One screen" budgets, including frontmatter/<purpose>/<reference> tags.
 // These are conservative (one-page conceptual size of ~25 lines of usable
 // content) but allow for the wrapping tags. Tighten as content stabilizes.
+//
+// Ceilings tightened to actualMax + SMALL_GRACE per the ratchet-down rule (#597).
+// BRIEF ceiling kept at 30 (actualMax=22, slack=8 ≤ SMALL_GRACE=10).
 const BRIEF_BUDGET = 30;
-const DEFAULT_BUDGET = 70;
+// DEFAULT ceiling lowered from 70 → 60 (actualMax=50; #597 ratchet-down).
+const DEFAULT_BUDGET = 60;
 // full.md is the LARGE tier (see workflow-size-budget.test.cjs — LARGE_BUDGET = 1500).
 // The size-budget test is non-recursive so full.md is not covered there; cap it here.
-const FULL_BUDGET = 1500;
+// FULL ceiling lowered from 1500 → 844 (actualMax=784; #597 ratchet-down).
+const FULL_BUDGET = 844;
+
+// Grace bands:
+//   SMALL_GRACE — for the tiny brief/default/dispatcher files (≤ ~70 lines):
+//     10 lines of breathing room is proportionate and prevents trivial edits from
+//     failing while still catching any meaningful upward creep.
+//   LARGE_GRACE — for full.md where content fluctuates more:
+//     60 lines matches the line-budget GRACE used in the other size-budget tests.
+const SMALL_GRACE = 10;
+const LARGE_GRACE = 60;
 
 function read(file) {
   return fs.readFileSync(file, 'utf8');
@@ -71,10 +90,13 @@ describe('feature #3039: tiered help — file structure', () => {
     });
   }
 
-  test('dispatcher exists and is small (≤ 40 lines)', () => {
+  // Dispatcher ceiling lowered from 40 → 34 (actualMax=24; #597 ratchet-down).
+  const DISPATCHER_BUDGET = 34;
+  test(`dispatcher exists and is small (≤ ${DISPATCHER_BUDGET} lines)`, () => {
     assert.ok(fs.existsSync(DISPATCHER));
     const n = lineCount(DISPATCHER);
-    assert.ok(n <= 40, `dispatcher should be small; got ${n} lines`);
+    assert.ok(n <= DISPATCHER_BUDGET, `dispatcher should be small; got ${n} lines`);
+    assertTightCeiling({ label: 'dispatcher', actualMax: n, ceiling: DISPATCHER_BUDGET, grace: SMALL_GRACE, fail: assert.fail });
   });
 
   for (const f of MODE_FILES) {
@@ -94,11 +116,13 @@ describe('feature #3039: tiered help — size budgets', () => {
   test(`brief.md fits one screen (≤ ${BRIEF_BUDGET} lines)`, () => {
     const n = lineCount(path.join(MODES, 'brief.md'));
     assert.ok(n <= BRIEF_BUDGET, `brief.md is ${n} lines, budget ${BRIEF_BUDGET}`);
+    assertTightCeiling({ label: 'BRIEF', actualMax: n, ceiling: BRIEF_BUDGET, grace: SMALL_GRACE, fail: assert.fail });
   });
 
   test(`default.md fits one screen (≤ ${DEFAULT_BUDGET} lines)`, () => {
     const n = lineCount(path.join(MODES, 'default.md'));
     assert.ok(n <= DEFAULT_BUDGET, `default.md is ${n} lines, budget ${DEFAULT_BUDGET}`);
+    assertTightCeiling({ label: 'DEFAULT', actualMax: n, ceiling: DEFAULT_BUDGET, grace: SMALL_GRACE, fail: assert.fail });
   });
 
   test('full.md preserves the complete reference (≥ 600 lines)', () => {
@@ -113,6 +137,7 @@ describe('feature #3039: tiered help — size budgets', () => {
     // workflow-size-budget.test.cjs. Cap it here at the LARGE tier limit.
     const n = lineCount(path.join(MODES, 'full.md'));
     assert.ok(n <= FULL_BUDGET, `full.md grew to ${n} lines (LARGE budget: ${FULL_BUDGET})`);
+    assertTightCeiling({ label: 'FULL', actualMax: n, ceiling: FULL_BUDGET, grace: LARGE_GRACE, fail: assert.fail });
   });
 });
 

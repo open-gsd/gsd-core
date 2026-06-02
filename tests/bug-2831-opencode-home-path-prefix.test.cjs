@@ -27,6 +27,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { cleanup } = require('./helpers.cjs');
 
 let computePathPrefix;
 
@@ -148,7 +149,7 @@ describe('bug-2831: OpenCode pathPrefix uses absolute path on all platforms', ()
         `output should include absolute path with @ prefix; got:\n${content}`
       );
     } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+      cleanup(tmp);
     }
   });
 });

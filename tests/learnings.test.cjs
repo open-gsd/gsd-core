@@ -37,9 +37,7 @@ function makeTempDir() {
  * @param {string} dir
  */
 function cleanupDir(dir) {
-  if (fs.existsSync(dir)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  cleanup(dir);
 }
 
 // ─── Write ───────────────────────────────────────────────────────────────────

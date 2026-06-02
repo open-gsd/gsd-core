@@ -7,6 +7,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const cp = require('node:child_process');
+const { cleanup } = require('./helpers.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const SCRIPT = path.join(ROOT, 'scripts', 'changeset', 'cli.cjs');
@@ -36,7 +37,7 @@ function runRender(args = []) {
 }
 
 before(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-changeset-')); });
-after(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
+after(() => { cleanup(tmp); });
 
 // Fixtures for extract tests (#3496)
 // Written as arrays to avoid template-literal indentation injecting
@@ -349,7 +350,7 @@ describe('changeset cli extract: version-range changelog extraction (#3496)', ()
 
 describe('changeset cli render: file-I/O wrapper (#2975)', () => {
   test('exits 0 with consumed=N when N fragments are folded into CHANGELOG.md and deleted', () => {
-    fs.rmSync(path.join(tmp, '.changeset'), { recursive: true, force: true });
+    cleanup(path.join(tmp, '.changeset'));
     fs.writeFileSync(
       path.join(tmp, 'CHANGELOG.md'),
       '# Changelog\n\n## [Unreleased]\n\n## [1.0.0] - 2026-01-01\n\n### Fixed\n\n- prior fix (#1)\n',

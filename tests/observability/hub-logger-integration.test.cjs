@@ -29,6 +29,7 @@ const {
   createDefaultLogger,
   createNoOpLogger,
 } = require('../../get-shit-done/bin/lib/observability/logger.cjs');
+const { cleanup } = require('../helpers.cjs');
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -346,7 +347,7 @@ describe('Hub + createDefaultLogger — end-to-end', () => {
   afterEach(() => {
     if (savedAudit === undefined) delete process.env.GSD_AUDIT; else process.env.GSD_AUDIT = savedAudit;
     if (savedAuditArgs === undefined) delete process.env.GSD_AUDIT_ARGS; else process.env.GSD_AUDIT_ARGS = savedAuditArgs;
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('silent on success with default logger', () => {

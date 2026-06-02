@@ -50,6 +50,7 @@ function createFakeInstall(prefix = 'gsd-uninstall-test-') {
 }
 
 function cleanup(dir) {
+  // eslint-disable-next-line local/no-raw-rmsync-in-tests -- local teardown helper predates helpers.cjs; renaming would collide with the imported cleanup
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
 }
 

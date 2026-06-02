@@ -17,6 +17,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const { cleanup } = require('./helpers.cjs');
 
 const statusline = require('../hooks/gsd-statusline.js');
 const { VALID_CONFIG_KEYS } = require('../get-shit-done/bin/lib/config-schema.cjs');
@@ -35,7 +36,7 @@ function makeProject({ flag, transcript }) {
     transcriptPath = path.join(dir, 'transcript.jsonl');
     fs.writeFileSync(transcriptPath, transcript);
   }
-  return { dir, transcriptPath, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
+  return { dir, transcriptPath, cleanup: () => cleanup(dir) };
 }
 
 function buildInput(dir, transcriptPath) {

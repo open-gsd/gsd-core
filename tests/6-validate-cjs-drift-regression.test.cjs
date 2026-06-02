@@ -32,7 +32,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-const { runGsdTools } = require('./helpers.cjs');
+const { runGsdTools, cleanup } = require('./helpers.cjs');
 
 // ── Fixture helpers ──────────────────────────────────────────────────────────
 
@@ -124,7 +124,7 @@ describe('Drift item 1 — W007 activeDiskPhases: no false W007 for archived pha
   });
 
   after(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('no W007 for archived phase "1" absent from current ROADMAP', () => {
@@ -198,7 +198,7 @@ describe('Drift item 2 — phaseVariants() normalization: letter-suffix zero-pad
   });
 
   after(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('no false W006 when ROADMAP says 01A and disk has 1A-... (phaseVariants normalizes)', () => {
@@ -275,7 +275,7 @@ describe('Drift item 3 — W006 false positive when disk has zero-padded letter 
   });
 
   after(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('no false W006 when ROADMAP says 3B and disk has 03B-... (phaseVariants covers zero-padded)', () => {

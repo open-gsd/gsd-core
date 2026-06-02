@@ -19,12 +19,10 @@ function sha256(content) {
   return crypto.createHash('sha256').update(content).digest('hex');
 }
 
+const { cleanup } = require('./helpers.cjs');
+
 function createTempDir() {
   return fs.mkdtempSync(path.join(require('os').tmpdir(), 'gsd-patch-test-'));
-}
-
-function cleanup(dir) {
-  try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
 }
 
 /**

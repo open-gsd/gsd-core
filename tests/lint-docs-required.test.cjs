@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { cleanup } = require('./helpers.cjs');
 
 const {
   evaluateLint,
@@ -284,7 +285,7 @@ describe('docs-required lint: readFragmentsFromDisk', () => {
       fs.mkdirSync(path.join(tmp, '.changeset'), { recursive: true });
       fn(tmp);
     } finally {
-      fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+      cleanup(tmp);
     }
   }
 

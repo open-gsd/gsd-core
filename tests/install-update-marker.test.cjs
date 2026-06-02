@@ -16,6 +16,8 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+const { cleanup } = require('./helpers.cjs');
+
 const {
   resolveEffectiveProfile,
   mostRestrictiveProfile,
@@ -36,7 +38,7 @@ describe('resolveEffectiveProfile', () => {
       const result = resolveEffectiveProfile({ requestedProfileName: null, targetDir: dir });
       assert.strictEqual(result, 'full');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -47,7 +49,7 @@ describe('resolveEffectiveProfile', () => {
       const result = resolveEffectiveProfile({ requestedProfileName: null, targetDir: dir });
       assert.strictEqual(result, 'standard');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -58,7 +60,7 @@ describe('resolveEffectiveProfile', () => {
       const result = resolveEffectiveProfile({ requestedProfileName: null, targetDir: dir });
       assert.strictEqual(result, 'core');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -69,7 +71,7 @@ describe('resolveEffectiveProfile', () => {
       const result = resolveEffectiveProfile({ requestedProfileName: 'full', targetDir: dir });
       assert.strictEqual(result, 'full');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -80,7 +82,7 @@ describe('resolveEffectiveProfile', () => {
       const result = resolveEffectiveProfile({ requestedProfileName: 'standard', targetDir: dir });
       assert.strictEqual(result, 'standard');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -91,7 +93,7 @@ describe('resolveEffectiveProfile', () => {
       const result = resolveEffectiveProfile({ requestedProfileName: null, targetDir: dir });
       assert.strictEqual(result, 'full');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 });
@@ -159,7 +161,7 @@ describe('marker-driven profile resolution end-to-end', () => {
         if (staged) cleanupStagedSkills();
       }
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -175,8 +177,8 @@ describe('marker-driven profile resolution end-to-end', () => {
       assert.strictEqual(resolved, 'core',
         'core is smaller than standard — most-restrictive wins');
     } finally {
-      fs.rmSync(dirA, { recursive: true, force: true });
-      fs.rmSync(dirB, { recursive: true, force: true });
+      cleanup(dirA);
+      cleanup(dirB);
     }
   });
 
@@ -190,7 +192,7 @@ describe('marker-driven profile resolution end-to-end', () => {
       const resolved = resolveProfile({ modes: [effective], manifest });
       assert.strictEqual(resolved.skills, '*', 'full profile should be sentinel');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 });

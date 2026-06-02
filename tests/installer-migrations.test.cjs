@@ -22,6 +22,7 @@ function createTempInstall() {
 }
 
 function cleanup(dir) {
+  // eslint-disable-next-line local/no-raw-rmsync-in-tests -- local cleanup predates helpers.cjs; name collision prevents import
   fs.rmSync(dir, { recursive: true, force: true });
 }
 

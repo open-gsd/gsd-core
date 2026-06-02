@@ -23,6 +23,7 @@ const path = require('node:path');
 const os = require('node:os');
 
 const state = require('../get-shit-done/bin/lib/state.cjs');
+const { cleanup } = require('./helpers.cjs');
 
 describe('buildStateFrontmatter cache invalidation (#1967)', () => {
   let tmpDir;
@@ -59,7 +60,7 @@ describe('buildStateFrontmatter cache invalidation (#1967)', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('writeStateMd invalidates cache so subsequent reads see new disk state', () => {

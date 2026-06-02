@@ -13,10 +13,11 @@ const { generateFragmentName, scaffoldFragment, parseFragment } = (() => {
   const parse = require(path.join(ROOT, 'scripts', 'changeset', 'parse.cjs'));
   return { ...newCs, parseFragment: parse.parseFragment };
 })();
+const { cleanup } = require('./helpers.cjs');
 
 let tmp;
 before(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-new-changeset-')); });
-after(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
+after(() => { cleanup(tmp); });
 
 describe('changeset new: name generator + scaffold writer (#2975)', () => {
   test('generateFragmentName returns three lowercase words separated by hyphens', () => {

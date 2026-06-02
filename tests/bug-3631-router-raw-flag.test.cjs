@@ -24,6 +24,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
+const { cleanup } = require('./helpers.cjs');
 
 const GSD_TOOLS = path.resolve(__dirname, '..', 'get-shit-done', 'bin', 'gsd-tools.cjs');
 
@@ -103,7 +104,7 @@ describe('bug #3631 — SDK family routers forward --raw to output()', () => {
         `expected next-decimal of base "1" to be 1.1 or 01.1; got: ${trimmed}`
       );
     } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+      cleanup(tmp);
     }
   });
 
@@ -128,7 +129,7 @@ describe('bug #3631 — SDK family routers forward --raw to output()', () => {
         `--raw must emit the section body containing the Phase 2 heading; got: ${trimmed.slice(0, 80)}`
       );
     } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+      cleanup(tmp);
     }
   });
 });

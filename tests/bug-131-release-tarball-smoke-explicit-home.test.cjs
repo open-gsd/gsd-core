@@ -25,7 +25,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 // The helpers under test.
-const { runNpm, isolatedNpmEnv } = require('./helpers.cjs');
+const { runNpm, isolatedNpmEnv, cleanup } = require('./helpers.cjs');
 
 // Resolve a filesystem path to its canonical (symlink-free) form even if the
 // leaf does not exist yet (e.g. ~/.npm before npm has written its cache).
@@ -113,9 +113,9 @@ describe('bug-131: runNpm isolates HOME from the caller environment', () => {
         `expected semver output from npm --version, got: ${stdout}`,
       );
     } finally {
-      // Restore write permission before cleanup so rmSync can delete it.
+      // Restore write permission before cleanup so the directory can be deleted.
       try { fs.chmodSync(poisonedHome, 0o700); } catch (_) { /* best-effort */ }
-      fs.rmSync(poisonedHome, { recursive: true, force: true });
+      cleanup(poisonedHome);
     }
   });
 

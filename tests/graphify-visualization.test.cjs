@@ -546,9 +546,7 @@ describe('regressions', () => {
     });
 
     after(() => {
-      if (tmpDir) {
-        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
-      }
+      cleanup(tmpDir);
     });
 
     test('hooks/gsd-graphify-update.sh present at install target', () => {

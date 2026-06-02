@@ -877,7 +877,7 @@ describe('Copilot instructions merge/strip', () => {
     });
 
     afterEach(() => {
-      fs.rmSync(tmpMergeDir, { recursive: true, force: true });
+      cleanup(tmpMergeDir);
     });
 
     test('creates file from scratch when none exists', () => {
@@ -1021,7 +1021,7 @@ describe('Copilot uninstall skill removal', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('identifies gsd-* skill directories for removal', () => {
@@ -1083,7 +1083,7 @@ describe('Copilot manifest and patches fixes', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('writeManifest hashes skills for Copilot runtime', () => {
@@ -1210,7 +1210,7 @@ describe('E2E: Copilot full install verification', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('installs expected number of skill directories', () => {
@@ -1365,7 +1365,7 @@ describe('E2E: Copilot uninstall verification', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('removes engine directory', () => {
@@ -1409,7 +1409,7 @@ describe('E2E: Copilot uninstall verification', () => {
     });
 
     afterEach(() => {
-      fs.rmSync(td, { recursive: true, force: true });
+      cleanup(td);
     });
 
     test('preserves non-GSD content in skills directory', () => {
@@ -1470,7 +1470,7 @@ describe('Claude uninstall preserves user-generated files (#1423)', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('preserves USER-PROFILE.md across uninstall', () => {

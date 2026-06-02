@@ -22,6 +22,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
+const { cleanup } = require('./helpers.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', 'get-shit-done', 'workflows');
 const SNIPPET_FILE = path.join(WORKFLOWS_DIR, '_runtime-launcher.snippet.sh');
@@ -126,8 +127,8 @@ describe('bug-211: launcher ~/.claude home fallback', () => {
         `Expected stub output "CLAUDE_HOME_STUB:ping,test", got:\n${stdout.trim()}`,
       );
     } finally {
-      fs.rmSync(fakeHome, { recursive: true, force: true });
-      fs.rmSync(fakeRuntime, { recursive: true, force: true });
+      cleanup(fakeHome);
+      cleanup(fakeRuntime);
     }
   });
 
@@ -182,8 +183,8 @@ describe('bug-211: launcher ~/.claude home fallback', () => {
         `Expected stderr to contain "not found" or "ERROR", got: ${stderrOutput.trim()}`,
       );
     } finally {
-      fs.rmSync(fakeHome, { recursive: true, force: true });
-      fs.rmSync(fakeRuntime, { recursive: true, force: true });
+      cleanup(fakeHome);
+      cleanup(fakeRuntime);
     }
   });
 });

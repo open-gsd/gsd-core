@@ -25,6 +25,7 @@ const ROOT = path.join(__dirname, '..');
 const { formatGsdSlash, resolveRuntime } = require(
   path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'runtime-slash.cjs'),
 );
+const { cleanup } = require('./helpers.cjs');
 
 describe('formatGsdSlash — runtime-aware slash command formatter', () => {
   describe('hyphen-form runtimes (claude, cursor, opencode, kilo, etc.)', () => {
@@ -235,7 +236,7 @@ describe('resolveRuntime — env > config > default', () => {
     const fs = require('fs');
     const os = require('os');
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3584-'));
-    t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+    t.after(() => cleanup(tmp));
 
     fs.mkdirSync(path.join(tmp, '.planning'), { recursive: true });
     fs.writeFileSync(
@@ -256,7 +257,7 @@ describe('resolveRuntime — env > config > default', () => {
     const fs = require('fs');
     const os = require('os');
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3584-'));
-    t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+    t.after(() => cleanup(tmp));
 
     fs.mkdirSync(path.join(tmp, '.planning'), { recursive: true });
     fs.writeFileSync(
@@ -277,7 +278,7 @@ describe('resolveRuntime — env > config > default', () => {
     const fs = require('fs');
     const os = require('os');
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3584-'));
-    t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+    t.after(() => cleanup(tmp));
 
     fs.mkdirSync(path.join(tmp, '.planning'), { recursive: true });
     fs.writeFileSync(

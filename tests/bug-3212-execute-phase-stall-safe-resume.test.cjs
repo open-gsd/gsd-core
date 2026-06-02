@@ -9,6 +9,7 @@ const { spawnSync } = require('node:child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { cleanup } = require('./helpers.cjs');
 
 const ROOT = path.join(__dirname, '..');
 
@@ -47,7 +48,7 @@ describe('bug #3212 execute-phase stall detection and safe resume', () => {
 
   test('config-get returns schema defaults for executor stall detector keys', (t) => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3212-'));
-    t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+    t.after(() => cleanup(tmp));
     fs.mkdirSync(path.join(tmp, '.planning'));
     fs.writeFileSync(path.join(tmp, '.planning/config.json'), '{}\n');
 

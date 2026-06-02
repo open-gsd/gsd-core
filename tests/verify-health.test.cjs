@@ -74,6 +74,7 @@ describe('validate health command', () => {
 
   test("returns 'broken' when .planning directory is missing", () => {
     // createTempProject creates .planning/phases — remove it entirely
+    // eslint-disable-next-line local/no-raw-rmsync-in-tests -- mid-test SUT setup: removes .planning/ to simulate missing dir condition
     fs.rmSync(path.join(tmpDir, '.planning'), { recursive: true, force: true });
 
     const result = runGsdTools('validate health', tmpDir);
@@ -1008,6 +1009,7 @@ describe('validate health — missing phasesDir', () => {
     // Remove the phases directory if it exists
     const phasesDir = path.join(tmpDir, '.planning', 'phases');
     if (fs.existsSync(phasesDir)) {
+      // eslint-disable-next-line local/no-raw-rmsync-in-tests -- mid-test SUT setup: removes phases/ to simulate missing phasesDir condition
       fs.rmSync(phasesDir, { recursive: true, force: true });
     }
 

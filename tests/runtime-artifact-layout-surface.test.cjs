@@ -323,7 +323,7 @@ describe('resolveSurface', () => {
         'surface with no state should equal profile resolution'
       );
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -351,7 +351,7 @@ describe('resolveSurface', () => {
         }
       }
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -376,7 +376,7 @@ describe('resolveSurface', () => {
         assert.ok(resolved.skills.has(dep), `transitive dep "${dep}" of sketch must be present`);
       }
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -395,7 +395,7 @@ describe('resolveSurface', () => {
 
       assert.ok(!resolved.skills.has('progress'), '"progress" must be removed by explicitRemoves');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -410,7 +410,7 @@ describe('resolveSurface', () => {
       assert.ok(typeof resolved.name === 'string');
       assert.ok(resolved.agents instanceof Set);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -434,7 +434,7 @@ describe('resolveSurface', () => {
         'surface baseProfile takes precedence over marker'
       );
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -463,7 +463,7 @@ describe('resolveSurface', () => {
         }
       }
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 });
@@ -484,7 +484,7 @@ describe('readSurface / writeSurface', () => {
       const read = readSurface(dir);
       assert.deepStrictEqual(read, state);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -500,7 +500,7 @@ describe('readSurface / writeSurface', () => {
       writeSurface(dir, state);
       assert.deepStrictEqual(readSurface(dir), state);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -516,7 +516,7 @@ describe('readSurface / writeSurface', () => {
       writeSurface(dir, state);
       assert.deepStrictEqual(readSurface(dir), state);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -526,7 +526,7 @@ describe('readSurface / writeSurface', () => {
       const result = readSurface(dir);
       assert.strictEqual(result, null);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -543,7 +543,7 @@ describe('readSurface / writeSurface', () => {
       const result = readSurface(dir);
       assert.strictEqual(result, null);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -558,7 +558,7 @@ describe('readSurface / writeSurface', () => {
       const result = readSurface(dir);
       assert.strictEqual(result, null);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -573,7 +573,7 @@ describe('readSurface / writeSurface', () => {
       const result = readSurface(dir);
       assert.strictEqual(result, null);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -587,7 +587,7 @@ describe('readSurface / writeSurface', () => {
       assert.deepStrictEqual(tmpFiles, [], 'no tmp files should remain after write');
       assert.ok(files.includes('.gsd-surface.json'));
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -600,7 +600,7 @@ describe('readSurface / writeSurface', () => {
       assert.strictEqual(read.baseProfile, 'standard');
       assert.deepStrictEqual(read.disabledClusters, ['utility']);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -612,7 +612,7 @@ describe('readSurface / writeSurface', () => {
       assert.ok(fs.existsSync(nested));
       assert.ok(readSurface(nested) !== null);
     } finally {
-      fs.rmSync(base, { recursive: true, force: true });
+      cleanup(base);
     }
   });
 });
@@ -720,7 +720,7 @@ describe('listSurface', () => {
       assert.ok(Array.isArray(result.disabled), 'disabled must be array');
       assert.ok(typeof result.tokenCost === 'number', 'tokenCost must be number');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -737,7 +737,7 @@ describe('listSurface', () => {
       assert.ok(typeof result.tokenCost === 'number', 'tokenCost must be number');
       assert.ok(result.tokenCost >= 0, 'tokenCost must be non-negative');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -758,7 +758,7 @@ describe('listSurface', () => {
       assert.ok(coreList.enabled.length + coreList.disabled.length === totalStems,
         'enabled + disabled must equal total stems');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -784,7 +784,7 @@ describe('listSurface', () => {
       assert.ok(afterList.tokenCost <= beforeList.tokenCost,
         'disabling a cluster should not increase token cost');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -807,7 +807,7 @@ describe('listSurface', () => {
 
       assert.strictEqual(result.tokenCost, expected, 'tokenCost must equal sum of description lengths ÷ 4');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -822,7 +822,7 @@ describe('listSurface', () => {
       assert.deepStrictEqual(result.enabled, [...result.enabled].sort());
       assert.deepStrictEqual(result.disabled, [...result.disabled].sort());
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 });

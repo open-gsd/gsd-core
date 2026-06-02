@@ -19,6 +19,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { cleanup } = require('./helpers.cjs');
 
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-update-banner.js');
 const {
@@ -123,7 +124,7 @@ describe('shouldSuppressFailureWarning', () => {
       );
       assert.equal(result, false);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -135,7 +136,7 @@ describe('shouldSuppressFailureWarning', () => {
       const result = shouldSuppressFailureWarning(f, 1000 + RATE_LIMIT_SECONDS - 1);
       assert.equal(result, true);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -147,7 +148,7 @@ describe('shouldSuppressFailureWarning', () => {
       const result = shouldSuppressFailureWarning(f, 1000 + RATE_LIMIT_SECONDS + 1);
       assert.equal(result, false);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -159,7 +160,7 @@ describe('shouldSuppressFailureWarning', () => {
       const result = shouldSuppressFailureWarning(f, 100);
       assert.equal(result, false);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 });
@@ -194,7 +195,7 @@ describe('gsd-update-banner.js end-to-end', () => {
       assert.equal(r.status, 0, `expected exit 0, got ${r.status} stderr=${r.stderr}`);
       assert.equal(r.stdout.trim(), '');
     } finally {
-      fs.rmSync(home, { recursive: true, force: true });
+      cleanup(home);
     }
   });
 
@@ -213,7 +214,7 @@ describe('gsd-update-banner.js end-to-end', () => {
       assert.ok(parsed.systemMessage.includes('1.40.0'));
       assert.ok(parsed.systemMessage.includes('/gsd:update'));
     } finally {
-      fs.rmSync(home, { recursive: true, force: true });
+      cleanup(home);
     }
   });
 
@@ -229,7 +230,7 @@ describe('gsd-update-banner.js end-to-end', () => {
       assert.equal(r.status, 0);
       assert.equal(r.stdout.trim(), '');
     } finally {
-      fs.rmSync(home, { recursive: true, force: true });
+      cleanup(home);
     }
   });
 
@@ -243,7 +244,7 @@ describe('gsd-update-banner.js end-to-end', () => {
       assert.equal(typeof parsed.systemMessage, 'string');
       assert.ok(/check failed/i.test(parsed.systemMessage));
     } finally {
-      fs.rmSync(home, { recursive: true, force: true });
+      cleanup(home);
     }
   });
 
@@ -272,7 +273,7 @@ describe('gsd-update-banner.js end-to-end', () => {
         'subsequent run within rate-limit window must stay silent'
       );
     } finally {
-      fs.rmSync(home, { recursive: true, force: true });
+      cleanup(home);
     }
   });
 
@@ -284,7 +285,7 @@ describe('gsd-update-banner.js end-to-end', () => {
       assert.equal(r.status, 0);
       assert.equal(r.stdout.trim(), '');
     } finally {
-      fs.rmSync(home, { recursive: true, force: true });
+      cleanup(home);
     }
   });
 });

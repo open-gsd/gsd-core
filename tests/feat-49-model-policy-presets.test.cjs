@@ -72,7 +72,7 @@ const {
 const modelCatalog = require('../get-shit-done/bin/lib/model-catalog.cjs');
 
 const { isValidConfigKey } = require('../get-shit-done/bin/lib/config-schema.cjs');
-const { createTempDir } = require('./helpers.cjs');
+const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const makeTmp = (prefix) => createTempDir(`gsd-49-${prefix}-`);
 
@@ -83,7 +83,7 @@ function writeConfig(dir, config) {
 }
 
 function rmr(p) {
-  try { fs.rmSync(p, { recursive: true, force: true }); } catch { /* noop */ }
+  cleanup(p);
 }
 
 // ─── resolveModelPolicy unit tests ──────────────────────────────────────────

@@ -23,13 +23,10 @@ const os = require('node:os');
 
 const auditModule = require('../get-shit-done/bin/lib/audit.cjs');
 const { auditOpenArtifacts } = auditModule;
+const { cleanup } = require('./helpers.cjs');
 
 function mkTmp() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'bug-2836-'));
-}
-
-function rmTmp(dir) {
-  try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
 }
 
 describe('bug #2836: audit-open quick-task summary filename + UAT terminal status', () => {
@@ -70,7 +67,7 @@ describe('bug #2836: audit-open quick-task summary filename + UAT terminal statu
       );
       assert.equal(result.counts.quick_tasks, 0);
     } finally {
-      rmTmp(cwd);
+      cleanup(cwd);
     }
   });
 
@@ -95,7 +92,7 @@ describe('bug #2836: audit-open quick-task summary filename + UAT terminal statu
       );
       assert.equal(result.counts.uat_gaps, 0);
     } finally {
-      rmTmp(cwd);
+      cleanup(cwd);
     }
   });
 
@@ -114,7 +111,7 @@ describe('bug #2836: audit-open quick-task summary filename + UAT terminal statu
       const realUatGaps = result.items.uat_gaps.filter(i => !i.scan_error);
       assert.equal(realUatGaps.length, 0);
     } finally {
-      rmTmp(cwd);
+      cleanup(cwd);
     }
   });
 
@@ -134,7 +131,7 @@ describe('bug #2836: audit-open quick-task summary filename + UAT terminal statu
       assert.equal(realUatGaps.length, 1, 'pending UAT must still be flagged');
       assert.equal(realUatGaps[0].status, 'pending');
     } finally {
-      rmTmp(cwd);
+      cleanup(cwd);
     }
   });
 
@@ -153,7 +150,7 @@ describe('bug #2836: audit-open quick-task summary filename + UAT terminal statu
       assert.equal(realQuickTasks.length, 1);
       assert.equal(realQuickTasks[0].status, 'missing');
     } finally {
-      rmTmp(cwd);
+      cleanup(cwd);
     }
   });
 });

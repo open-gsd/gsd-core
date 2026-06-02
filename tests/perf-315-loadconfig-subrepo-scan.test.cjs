@@ -25,6 +25,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const { cleanup } = require('./helpers.cjs');
 
 // Import loadConfig directly (sync, no CLI subprocess needed)
 const { loadConfig } = require('../get-shit-done/bin/lib/core.cjs');
@@ -63,7 +64,7 @@ describe('perf-315 — loadConfig calls detectSubRepos at most once per invocati
 
   afterEach(() => {
     if (tmpDir) {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      cleanup(tmpDir);
       tmpDir = null;
     }
   });

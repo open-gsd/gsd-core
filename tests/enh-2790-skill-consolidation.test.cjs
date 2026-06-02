@@ -8,6 +8,77 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const { assertWithinAllowlist } = require('../scripts/lib/allowlist-ratchet.cjs');
+
+// ---------------------------------------------------------------------------
+// Allowlisted set of user-invocable skills (commands/gsd/*.md, ns-* excluded).
+// Consolidation target ~58; this set may only SHRINK.
+// Adding a new skill requires adding it here with justification.
+// Removing a consolidated skill requires pruning it here.
+// ---------------------------------------------------------------------------
+const KNOWN_SKILLS = new Set([
+  'add-tests.md',
+  'ai-integration-phase.md',
+  'audit-fix.md',
+  'audit-milestone.md',
+  'audit-uat.md',
+  'autonomous.md',
+  'capture.md',
+  'cleanup.md',
+  'code-review.md',
+  'complete-milestone.md',
+  'config.md',
+  'debug.md',
+  'discuss-phase.md',
+  'docs-update.md',
+  'eval-review.md',
+  'execute-phase.md',
+  'explore.md',
+  'extract-learnings.md',
+  'fast.md',
+  'forensics.md',
+  'graphify.md',
+  'health.md',
+  'help.md',
+  'import.md',
+  'inbox.md',
+  'ingest-docs.md',
+  'manager.md',
+  'map-codebase.md',
+  'milestone-summary.md',
+  'mvp-phase.md',
+  'new-milestone.md',
+  'new-project.md',
+  'pause-work.md',
+  'phase.md',
+  'plan-phase.md',
+  'plan-review-convergence.md',
+  'pr-branch.md',
+  'profile-user.md',
+  'progress.md',
+  'quick.md',
+  'resume-work.md',
+  'review-backlog.md',
+  'review.md',
+  'secure-phase.md',
+  'settings.md',
+  'ship.md',
+  'sketch.md',
+  'spec-phase.md',
+  'spike.md',
+  'stats.md',
+  'surface.md',
+  'thread.md',
+  'ui-phase.md',
+  'ui-review.md',
+  'ultraplan-phase.md',
+  'undo.md',
+  'update.md',
+  'validate-phase.md',
+  'verify-work.md',
+  'workspace.md',
+  'workstreams.md',
+]);
 
 const COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');
 
@@ -339,22 +410,22 @@ describe('settings.md is kept (merged into config entry point or remains standal
 });
 
 // ---------------------------------------------------------------------------
-// Group: Skill count reduced
+// Group: Skill set allowlisted (identity-based, consolidating toward ~58)
 // ---------------------------------------------------------------------------
-describe('skill count', () => {
-  test('total user-invocable files in commands/gsd/*.md is <= 63', () => {
-    // Exclude `ns-*.md` namespace meta-skills (#2792) from this cap.
+describe('skill set', () => {
+  test('user-invocable skill set is allowlisted (consolidating toward ~58)', () => {
+    // Exclude `ns-*.md` namespace meta-skills (#2792) from this guard.
     // Those are descriptor-only routers selected first by the model and
     // are not part of the consolidation surface this test tracks; their
     // own contract is enforced by tests/enh-2792-namespace-skills.test.cjs.
-    const files = fs.readdirSync(COMMANDS_DIR)
+    const currentBasenames = fs.readdirSync(COMMANDS_DIR)
       .filter((f) => f.endsWith('.md') && !f.startsWith('ns-'));
-    assert.ok(
-      files.length <= 63,
-      [
-        `Expected <= 63 user-invocable skill files, found ${files.length}.`,
-        'Consolidation target is ~58.',
-      ].join(' '),
-    );
+    assertWithinAllowlist({
+      label: 'user-invocable skills (commands/gsd)',
+      current: currentBasenames,
+      known: KNOWN_SKILLS,
+      fail: assert.fail,
+      pruneHint: 'edit KNOWN_SKILLS in tests/enh-2790-skill-consolidation.test.cjs',
+    });
   });
 });

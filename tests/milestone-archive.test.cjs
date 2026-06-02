@@ -232,6 +232,7 @@ function setupMilestoneArchiveProject(tmpDir, options = {}) {
     roadmapPhases = ['64'],
   } = options;
 
+  // eslint-disable-next-line local/no-raw-rmsync-in-tests -- mid-fixture setup: removing subdirectory (not temp root teardown)
   fs.rmSync(path.join(tmpDir, '.planning', 'phases'), { recursive: true, force: true });
 
   const archiveDir = path.join(tmpDir, '.planning', 'milestones', `${milestone}-phases`);
@@ -297,6 +298,7 @@ describe('#3164 — validate consistency: milestone-archive layout', () => {
   });
 
   test('consistency scans only active milestone archive and still validates plans/frontmatter', () => {
+    // eslint-disable-next-line local/no-raw-rmsync-in-tests -- mid-test setup: removing subdirectory to establish milestone-archive layout
     fs.rmSync(path.join(tmpDir, '.planning', 'phases'), { recursive: true, force: true });
 
     const oldDir = path.join(tmpDir, '.planning', 'milestones', 'v1.6-phases', '64-legacy');
@@ -373,6 +375,7 @@ describe('#3164 — find-phase: milestone-archive layout', () => {
   });
 
   test('find-phase searches milestone archives in deterministic sorted order', () => {
+    // eslint-disable-next-line local/no-raw-rmsync-in-tests -- mid-test setup: removing phases subdirectory to establish milestone-archive layout
     fs.rmSync(path.join(tmpDir, '.planning', 'phases'), { recursive: true, force: true });
 
     const milestonesDir = path.join(tmpDir, '.planning', 'milestones');
