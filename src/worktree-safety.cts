@@ -2,17 +2,32 @@
  * Worktree Safety Policy Module
  *
  * Owns worktree-root resolution and non-destructive prune policy decisions.
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/worktree-safety.cjs
+ * collapsed to a TypeScript source of truth. Behaviour is preserved
+ * byte-for-behaviour from the prior hand-written .cjs; only types are added.
  */
 
-const fs = require('fs');
-const path = require('path');
-const { execGit: execGitSeam } = require('./shell-command-projection.cjs');
+import fs from 'node:fs';
+import path from 'node:path';
+import { execGit as execGitSeam } from './shell-command-projection.cjs';
 
 // Default timeout for worktree-related git subprocess calls.
 // 10 s is generous enough for normal git operations on large repos while still
 // providing a deterministic failure path when git stalls (locked index, hung
 // remote, stalled NFS mount, etc.).  Callers can override via deps.timeout.
 const DEFAULT_GIT_TIMEOUT_MS = 10000;
+
+interface GitResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  signal?: string | null;
+  error?: NodeJS.ErrnoException | null;
+  timedOut: boolean;
+}
+
+type ExecGitFn = (args: string[], opts?: { cwd?: string; timeout?: number }) => GitResult;
 
 /**
  * Execute a git command via the shell-projection seam, with a derived
@@ -22,21 +37,31 @@ const DEFAULT_GIT_TIMEOUT_MS = 10000;
  * Return shape: { exitCode, stdout, stderr, timedOut, error, signal }
  *   - timedOut: true when spawnSync reports SIGTERM + ETIMEDOUT
  */
-function execGitDefault(args, opts = {}) {
+function execGitDefault(args: string[], opts: { cwd?: string; timeout?: number } = {}): GitResult {
   const result = execGitSeam(args, { ...opts, timeout: opts.timeout ?? DEFAULT_GIT_TIMEOUT_MS });
-  const timedOut = result.signal === 'SIGTERM' && result.error?.code === 'ETIMEDOUT';
+  const timedOut = result.signal === 'SIGTERM' && (result.error as NodeJS.ErrnoException)?.code === 'ETIMEDOUT';
   return { ...result, timedOut };
 }
 
-function parseWorktreePorcelain(porcelain) {
-  return parseWorktreeEntries(porcelain).filter((entry) => entry.branch).map((entry) => ({
+interface WorktreeBranchEntry {
+  path: string;
+  branch: string;
+}
+
+interface WorktreeEntry {
+  path: string;
+  branch: string | null;
+}
+
+function parseWorktreePorcelain(porcelain: string): WorktreeBranchEntry[] {
+  return parseWorktreeEntries(porcelain).filter((entry) => entry.branch !== null).map((entry) => ({
     path: entry.path,
-    branch: entry.branch,
+    branch: entry.branch!,
   }));
 }
 
-function parseWorktreeEntries(porcelain) {
-  const entries = [];
+function parseWorktreeEntries(porcelain: string): WorktreeEntry[] {
+  const entries: WorktreeEntry[] = [];
   const blocks = String(porcelain || '').split('\n\n').filter(Boolean);
   for (const block of blocks) {
     const lines = block.split('\n');
@@ -51,11 +76,34 @@ function parseWorktreeEntries(porcelain) {
   return entries;
 }
 
-function parseWorktreeListPaths(porcelain) {
+function parseWorktreeListPaths(porcelain: string): string[] {
   return parseWorktreeEntries(porcelain).map((entry) => entry.path);
 }
 
-function readWorktreeList(repoRoot, deps = {}) {
+interface WorktreeListResult {
+  ok: boolean;
+  reason: string;
+  porcelain: string;
+  entries: WorktreeEntry[];
+}
+
+interface WorktreeDeps {
+  execGit?: ExecGitFn;
+  existsSync?: (p: string) => boolean;
+  statSync?: (p: string) => fs.Stats;
+  findSummaryFiles?: (worktreePath: string) => string[];
+  readFileSync?: (p: string) => string;
+  mkdirSync?: (d: string, o?: { recursive?: boolean }) => void;
+  copyFileSync?: (src: string, dest: string) => void;
+  isPidAlive?: (pid: number) => boolean;
+  readDirSafe?: (dir: string) => string[] | null;
+  readFileSafe?: (file: string) => string | null;
+  mtimeSafe?: (file: string) => Date | null;
+  reapMtimeGuardMs?: number;
+  parseWorktreePorcelain?: (porcelain: string) => WorktreeBranchEntry[];
+}
+
+function readWorktreeList(repoRoot: string, deps: WorktreeDeps = {}): WorktreeListResult {
   const execGit = deps.execGit || execGitDefault;
   const listResult = execGit(['worktree', 'list', '--porcelain'], { cwd: repoRoot });
   if (listResult.timedOut) {
@@ -89,7 +137,13 @@ function readWorktreeList(repoRoot, deps = {}) {
   };
 }
 
-function resolveWorktreeContext(cwd, deps = {}) {
+interface WorktreeContextResult {
+  effectiveRoot: string;
+  mode: string;
+  reason: string;
+}
+
+function resolveWorktreeContext(cwd: string, deps: WorktreeDeps = {}): WorktreeContextResult {
   const execGit = deps.execGit || execGitDefault;
   const existsSync = deps.existsSync || fs.existsSync;
 
@@ -129,7 +183,14 @@ function resolveWorktreeContext(cwd, deps = {}) {
   };
 }
 
-function planWorktreePrune(repoRoot, options = {}, deps = {}) {
+interface WorktreePrunePlan {
+  repoRoot: string;
+  action: string;
+  reason: string;
+  destructiveModeRequested: boolean;
+}
+
+function planWorktreePrune(repoRoot: string, options: { allowDestructive?: boolean } = {}, deps: WorktreeDeps = {}): WorktreePrunePlan {
   const parsePorcelain = deps.parseWorktreePorcelain || parseWorktreePorcelain;
   const destructiveModeRequested = Boolean(options.allowDestructive);
   const listed = readWorktreeList(repoRoot, deps);
@@ -142,7 +203,7 @@ function planWorktreePrune(repoRoot, options = {}, deps = {}) {
     };
   }
 
-  let worktrees = [];
+  let worktrees: WorktreeBranchEntry[] = [];
   try {
     worktrees = parsePorcelain(listed.porcelain);
   } catch {
@@ -158,7 +219,15 @@ function planWorktreePrune(repoRoot, options = {}, deps = {}) {
   };
 }
 
-function executeWorktreePrunePlan(plan, deps = {}) {
+interface PruneExecuteResult {
+  ok: boolean;
+  action: string;
+  reason: string;
+  timedOut?: boolean;
+  pruned: unknown[];
+}
+
+function executeWorktreePrunePlan(plan: WorktreePrunePlan | null, deps: WorktreeDeps = {}): PruneExecuteResult {
   const execGit = deps.execGit || execGitDefault;
   if (!plan || plan.action === 'skip') {
     return {
@@ -200,7 +269,13 @@ function executeWorktreePrunePlan(plan, deps = {}) {
   };
 }
 
-function listLinkedWorktreePaths(repoRoot, deps = {}) {
+interface LinkedWorktreePathsResult {
+  ok: boolean;
+  reason: string;
+  paths: string[];
+}
+
+function listLinkedWorktreePaths(repoRoot: string, deps: WorktreeDeps = {}): LinkedWorktreePathsResult {
   const listed = readWorktreeList(repoRoot, deps);
   if (!listed.ok) {
     return {
@@ -219,7 +294,19 @@ function listLinkedWorktreePaths(repoRoot, deps = {}) {
   };
 }
 
-function inspectWorktreeHealth(repoRoot, options = {}, deps = {}) {
+interface WorktreeFinding {
+  kind: 'orphan' | 'stale';
+  path: string;
+  ageMinutes?: number;
+}
+
+interface HealthResult {
+  ok: boolean;
+  reason: string;
+  findings: WorktreeFinding[];
+}
+
+function inspectWorktreeHealth(repoRoot: string, options: { staleAfterMs?: number; nowMs?: number } = {}, deps: WorktreeDeps = {}): HealthResult {
   const inventory = snapshotWorktreeInventory(repoRoot, options, deps);
   if (!inventory.ok) {
     return {
@@ -229,7 +316,7 @@ function inspectWorktreeHealth(repoRoot, options = {}, deps = {}) {
     };
   }
 
-  const findings = [];
+  const findings: WorktreeFinding[] = [];
   for (const entry of inventory.entries) {
     if (!entry.exists) {
       findings.push({
@@ -242,7 +329,7 @@ function inspectWorktreeHealth(repoRoot, options = {}, deps = {}) {
       findings.push({
         kind: 'stale',
         path: entry.path,
-        ageMinutes: entry.ageMinutes,
+        ageMinutes: entry.ageMinutes ?? undefined,
       });
     }
   }
@@ -254,7 +341,20 @@ function inspectWorktreeHealth(repoRoot, options = {}, deps = {}) {
   };
 }
 
-function snapshotWorktreeInventory(repoRoot, options = {}, deps = {}) {
+interface InventoryEntry {
+  path: string;
+  exists: boolean;
+  isStale: boolean;
+  ageMinutes: number | null;
+}
+
+interface InventoryResult {
+  ok: boolean;
+  reason: string;
+  entries: InventoryEntry[];
+}
+
+function snapshotWorktreeInventory(repoRoot: string, options: { staleAfterMs?: number; nowMs?: number } = {}, deps: WorktreeDeps = {}): InventoryResult {
   const existsSync = deps.existsSync || fs.existsSync;
   const statSync = deps.statSync || fs.statSync;
   const staleAfterMs = options.staleAfterMs ?? (60 * 60 * 1000);
@@ -268,11 +368,11 @@ function snapshotWorktreeInventory(repoRoot, options = {}, deps = {}) {
     };
   }
 
-  const entries = [];
+  const entries: InventoryEntry[] = [];
   for (const worktreePath of listed.paths) {
     let exists = false;
     let isStale = false;
-    let ageMinutes = null;
+    let ageMinutes: number | null = null;
 
     if (!existsSync(worktreePath)) {
       entries.push({
@@ -310,25 +410,39 @@ function snapshotWorktreeInventory(repoRoot, options = {}, deps = {}) {
   };
 }
 
-function normalizeCleanupManifestEntry(entry) {
+interface CleanupManifestEntry {
+  agent_id: string | null;
+  worktree_path: string;
+  branch: string;
+  expected_base: string;
+}
+
+function normalizeCleanupManifestEntry(entry: unknown): CleanupManifestEntry | null {
   if (!entry || typeof entry !== 'object') return null;
-  const worktreePath = typeof entry.worktree_path === 'string'
-    ? entry.worktree_path
-    : (typeof entry.path === 'string' ? entry.path : '');
-  const branch = typeof entry.branch === 'string' ? entry.branch : '';
-  const expectedBase = typeof entry.expected_base === 'string' ? entry.expected_base : '';
+  const e = entry as Record<string, unknown>;
+  const worktreePath = typeof e.worktree_path === 'string'
+    ? e.worktree_path
+    : (typeof e.path === 'string' ? e.path : '');
+  const branch = typeof e.branch === 'string' ? e.branch : '';
+  const expectedBase = typeof e.expected_base === 'string' ? e.expected_base : '';
   if (!worktreePath || !branch || !expectedBase) return null;
   if (!/^worktree-agent-[A-Za-z0-9._/-]+$/.test(branch)) return null;
   return {
-    agent_id: typeof entry.agent_id === 'string' ? entry.agent_id : null,
+    agent_id: typeof e.agent_id === 'string' ? e.agent_id : null,
     worktree_path: worktreePath,
     branch,
     expected_base: expectedBase,
   };
 }
 
-function normalizeCleanupManifest(manifest) {
-  let parsed = manifest;
+interface NormalizedManifestResult {
+  ok: boolean;
+  reason: string;
+  entries: CleanupManifestEntry[];
+}
+
+function normalizeCleanupManifest(manifest: unknown): NormalizedManifestResult {
+  let parsed: unknown = manifest;
   if (typeof manifest === 'string') {
     try {
       parsed = JSON.parse(manifest);
@@ -337,11 +451,12 @@ function normalizeCleanupManifest(manifest) {
     }
   }
 
-  const rawEntries = Array.isArray(parsed)
-    ? parsed
-    : (Array.isArray(parsed?.worktrees) ? parsed.worktrees : []);
-  const seen = new Set();
-  const entries = [];
+  const p = parsed as Record<string, unknown> | unknown[] | null;
+  const rawEntries = Array.isArray(p)
+    ? p
+    : (Array.isArray((p as Record<string, unknown>)?.worktrees) ? (p as Record<string, unknown>).worktrees as unknown[] : []);
+  const seen = new Set<string>();
+  const entries: CleanupManifestEntry[] = [];
   for (const raw of rawEntries) {
     const entry = normalizeCleanupManifestEntry(raw);
     if (!entry) continue;
@@ -358,7 +473,16 @@ function normalizeCleanupManifest(manifest) {
   return { ok: true, reason: 'ok', entries };
 }
 
-function planWorktreeWaveCleanup(repoRoot, manifest) {
+interface WaveCleanupPlan {
+  ok: boolean;
+  repoRoot: string;
+  action: string;
+  discovery: string;
+  reason: string;
+  entries: CleanupManifestEntry[];
+}
+
+function planWorktreeWaveCleanup(repoRoot: string, manifest: unknown): WaveCleanupPlan {
   const normalized = normalizeCleanupManifest(manifest);
   if (!normalized.ok) {
     return {
@@ -381,8 +505,8 @@ function planWorktreeWaveCleanup(repoRoot, manifest) {
   };
 }
 
-function gitResultOk(result) {
-  return result && result.exitCode === 0 && !result.timedOut;
+function gitResultOk(result: GitResult | null | undefined): boolean {
+  return !!(result && result.exitCode === 0 && !result.timedOut);
 }
 
 /**
@@ -393,11 +517,11 @@ function gitResultOk(result) {
  * Mirrors the shell fallback in quick.md (#2296, #2070, #2838):
  *   find "$WT/.planning" -name "*SUMMARY.md"
  */
-function defaultFindSummaryFiles(worktreePath) {
+function defaultFindSummaryFiles(worktreePath: string): string[] {
   const planningDir = path.join(worktreePath, '.planning');
-  const results = [];
-  function walk(dir) {
-    let entries;
+  const results: string[] = [];
+  function walk(dir: string): void {
+    let entries: fs.Dirent[];
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
@@ -426,23 +550,16 @@ function defaultFindSummaryFiles(worktreePath) {
  * that were eligible for rescue (regardless of whether a copy was needed).
  * These paths are filtered out of the git-status porcelain output so a
  * SUMMARY-only dirty worktree does not block cleanup.
- *
- * Injected deps (all optional — falls back to real FS):
- *   findSummaryFiles(worktreePath) → string[]
- *   existsSync(path) → boolean
- *   readFileSync(path) → string
- *   mkdirSync(dir, opts)
- *   copyFileSync(src, dest)
  */
-function rescueSummaryArtifacts(worktreePath, repoRoot, deps) {
+function rescueSummaryArtifacts(worktreePath: string, repoRoot: string, deps: WorktreeDeps): Set<string> {
   const findSummaryFiles = deps.findSummaryFiles || defaultFindSummaryFiles;
   const existsSync = deps.existsSync || fs.existsSync;
-  const readFileSync = deps.readFileSync || ((p) => fs.readFileSync(p, 'utf8'));
-  const mkdirSync = deps.mkdirSync || ((d, o) => fs.mkdirSync(d, o));
+  const readFileSync = deps.readFileSync || ((p: string) => fs.readFileSync(p, 'utf8'));
+  const mkdirSync = deps.mkdirSync || ((d: string, o?: { recursive?: boolean }) => fs.mkdirSync(d, o));
   const copyFileSync = deps.copyFileSync || fs.copyFileSync;
 
   const summaryPaths = findSummaryFiles(worktreePath);
-  const rescuedRelPaths = new Set();
+  const rescuedRelPaths = new Set<string>();
 
   for (const absPath of summaryPaths) {
     // relPath is the path relative to the worktree root (e.g. ".planning/q1-SUMMARY.md")
@@ -475,7 +592,21 @@ function rescueSummaryArtifacts(worktreePath, repoRoot, deps) {
   return rescuedRelPaths;
 }
 
-function executeWorktreeWaveCleanupPlan(plan, deps = {}) {
+interface WaveCleanupEntryResult extends CleanupManifestEntry {
+  status: string;
+  reason: string | null;
+  stderr: string;
+}
+
+interface WaveCleanupResult {
+  ok: boolean;
+  action: string;
+  reason: string;
+  entries: WaveCleanupEntryResult[];
+  pending: CleanupManifestEntry[];
+}
+
+function executeWorktreeWaveCleanupPlan(plan: WaveCleanupPlan | null, deps: WorktreeDeps = {}): WaveCleanupResult {
   const execGit = deps.execGit || execGitDefault;
   const entries = Array.isArray(plan?.entries) ? plan.entries : [];
   if (!plan || plan.action !== 'cleanup_wave' || entries.length === 0) {
@@ -488,13 +619,13 @@ function executeWorktreeWaveCleanupPlan(plan, deps = {}) {
     };
   }
 
-  const results = [];
-  const pending = [];
+  const results: WaveCleanupEntryResult[] = [];
+  const pending: CleanupManifestEntry[] = [];
   let ok = true;
 
   for (let i = 0; i < entries.length; i += 1) {
     const entry = entries[i];
-    const result = {
+    const result: WaveCleanupEntryResult = {
       ...entry,
       status: 'pending',
       reason: null,
@@ -630,7 +761,7 @@ function executeWorktreeWaveCleanupPlan(plan, deps = {}) {
   };
 }
 
-function cmdWorktreeCleanupWave(cwd, args = []) {
+function cmdWorktreeCleanupWave(cwd: string, args: string[] = []): void {
   const manifestFlagIndex = args.indexOf('--manifest');
   const manifestPath = manifestFlagIndex >= 0 ? args[manifestFlagIndex + 1] : '';
   if (!manifestPath) {
@@ -639,14 +770,14 @@ function cmdWorktreeCleanupWave(cwd, args = []) {
     return;
   }
 
-  let manifest;
+  let manifest: string;
   try {
     manifest = fs.readFileSync(path.resolve(cwd, manifestPath), 'utf8');
   } catch (err) {
     process.stdout.write(`${JSON.stringify({
       ok: false,
       reason: 'manifest_read_failed',
-      error: err.message,
+      error: (err as Error).message,
     }, null, 2)}\n`);
     process.exitCode = 1;
     return;
@@ -674,35 +805,24 @@ function cmdWorktreeCleanupWave(cwd, args = []) {
  * Reap orphaned linked worktrees whose lock owner process is dead, whose
  * branch tip is fully merged into the default branch, and whose lock file
  * mtime is older than REAP_MTIME_GUARD_MS (race guard).
- *
- * Invariants (Fail-closed — skip on any doubt):
- *   Pre:  .git/worktrees/<id>/locked exists for a linked worktree
- *   Reap: pid dead (or unparseable) AND branch-tip ancestor of default branch
- *         AND lock mtime > REAP_MTIME_GUARD_MS old
- *   Action: worktree unlock → worktree remove --force → prune
- *   Post: worktree absent from git worktree list; no unmerged work lost
- *
- * @param {string} repoRoot  - Absolute path to the primary worktree root.
- * @param {object} [deps]    - Optional dependency overrides for testing.
- *   deps.execGit            - Replaces execGitDefault for all git calls.
- *   deps.isPidAlive         - Function(pid:number):boolean (default: kill -0).
- *   deps.readDirSafe        - Function(dir:string):string[] (default: fs.readdirSync).
- *   deps.readFileSafe       - Function(file:string):string (default: fs.readFileSync).
- *   deps.mtimeSafe          - Function(file:string):Date (default: fs.statSync).
- *   deps.reapMtimeGuardMs   - Override stale-lock age threshold (default 5 min).
- * @returns {Array<{path:string, status:'reaped'|'skipped', reason:string}>}
  */
 const REAP_MTIME_GUARD_MS = 5 * 60 * 1000; // 5 minutes
 
-function reapOrphanWorktrees(repoRoot, deps = {}) {
+interface ReapResult {
+  path: string;
+  status: 'reaped' | 'skipped';
+  reason: string;
+}
+
+function reapOrphanWorktrees(repoRoot: string, deps: WorktreeDeps = {}): ReapResult[] {
   const execGit = deps.execGit || execGitDefault;
-  const isPidAlive = deps.isPidAlive || defaultIsPidAlive;
+  const isPidAliveCheck = deps.isPidAlive || defaultIsPidAlive;
   const readDirSafe = deps.readDirSafe || defaultReadDirSafe;
   const readFileSafe = deps.readFileSafe || defaultReadFileSafe;
   const mtimeSafe = deps.mtimeSafe || defaultMtimeSafe;
   const reapMtimeGuardMs = deps.reapMtimeGuardMs !== undefined ? deps.reapMtimeGuardMs : REAP_MTIME_GUARD_MS;
 
-  const results = [];
+  const results: ReapResult[] = [];
 
   // 1. Discover the .git/worktrees/ admin directory.
   const gitDir = execGit(['rev-parse', '--git-dir'], { cwd: repoRoot });
@@ -714,22 +834,12 @@ function reapOrphanWorktrees(repoRoot, deps = {}) {
   if (!entries) return results;
 
   // 2. Discover the default branch (main/master/etc) tip.
-  // Strategy (fail-closed):
-  //   a. Prefer refs/remotes/origin/HEAD — the authoritative integration branch.
-  //   b. Only fall back to 'main' / 'master' when origin/HEAD is absent AND the
-  //      remote itself doesn't exist (i.e. local-only test fixtures).  In all other
-  //      cases, bail out rather than guess: using a wrong branch tip would allow
-  //      `merge-base --is-ancestor` to pass against a non-authoritative ref and
-  //      reap a worktree whose branch is NOT merged into the real default.
-  //
-  // Intentionally excludes 'HEAD': using HEAD when detached or on a feature
-  // branch would make every branch appear "merged" into it, causing false reaping.
   const defaultBranchResult = execGit(
     ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'],
     { cwd: repoRoot }
   );
 
-  let mainTip;
+  let mainTip: string | undefined;
   if (gitResultOk(defaultBranchResult)) {
     // Remote default branch is known — use it exclusively.
     const branchName = defaultBranchResult.stdout.trim().replace(/^origin\//, '');
@@ -738,23 +848,17 @@ function reapOrphanWorktrees(repoRoot, deps = {}) {
     mainTip = r.stdout.trim();
   } else {
     // No remote configured (local-only repo, e.g. test fixtures).
-    // Fall back to 'main' then 'master' — only safe because there is no remote
-    // integration branch to confuse with.  A remote that exists but lacks
-    // origin/HEAD is treated as ambiguous and bails out (fail-closed).
     const hasRemote = execGit(['remote'], { cwd: repoRoot });
     if (gitResultOk(hasRemote) && hasRemote.stdout.trim()) {
       // Remote exists but origin/HEAD not set — ambiguous; fail closed.
       return results;
     }
     // Build candidate list: init.defaultBranch config, HEAD symref, then main, master.
-    const candidateBranches = [];
-    // Try git config init.defaultBranch first (user-configured default)
+    const candidateBranches: string[] = [];
     const configResult = execGit(['config', '--get', 'init.defaultBranch'], { cwd: repoRoot });
     if (gitResultOk(configResult) && configResult.stdout.trim()) {
       candidateBranches.push(configResult.stdout.trim());
     }
-    // Try HEAD symref (the branch the repo is currently on — valid for local repos
-    // without detached HEAD; do not use when detached since it could be a feature branch)
     const headSymref = execGit(['symbolic-ref', '--quiet', '--short', 'HEAD'], { cwd: repoRoot });
     if (gitResultOk(headSymref) && headSymref.stdout.trim()) {
       const headBranch = headSymref.stdout.trim();
@@ -762,7 +866,6 @@ function reapOrphanWorktrees(repoRoot, deps = {}) {
         candidateBranches.push(headBranch);
       }
     }
-    // Always include main and master as universal fallbacks
     for (const b of ['main', 'master']) {
       if (!candidateBranches.includes(b)) candidateBranches.push(b);
     }
@@ -777,15 +880,9 @@ function reapOrphanWorktrees(repoRoot, deps = {}) {
   }
 
   // 3. Build a canonical-path → listed-path index from git worktree list.
-  // git worktree list shows paths AS PROVIDED to git worktree add.
-  // On macOS, os.tmpdir() may be /var/folders/... (symlink) while git writes
-  // /private/var/folders/... (real path) in the gitdir file.  We need the
-  // LISTED path for git worktree unlock/remove to find the worktree.
   const listedResult = execGit(['worktree', 'list', '--porcelain'], { cwd: repoRoot });
-  const canonicalToListed = new Map();
+  const canonicalToListed = new Map<string, string>();
   if (gitResultOk(listedResult)) {
-    // Normalize CRLF → LF before splitting: git on Windows may emit CRLF in
-    // porcelain output, which would break block splitting on '\n\n'.
     const normalizedListed = listedResult.stdout.replace(/\r\n/g, '\n');
     for (const block of normalizedListed.split('\n\n').filter(Boolean)) {
       const wtLine = block.split('\n').find((l) => l.startsWith('worktree '));
@@ -808,8 +905,6 @@ function reapOrphanWorktrees(repoRoot, deps = {}) {
     if (lockedContent === null) continue; // no lock file — not our concern
 
     // Resolve the actual worktree path from the gitdir pointer.
-    // The gitdir file contains a path like "../../<name>/.git" relative to adminDir.
-    // Strip the trailing .git segment (cross-platform: handle both / and \).
     const gitdirFile = path.join(adminDir, 'gitdir');
     const gitdirContent = readFileSafe(gitdirFile);
     if (!gitdirContent) continue;
@@ -819,8 +914,7 @@ function reapOrphanWorktrees(repoRoot, deps = {}) {
       : resolvedGitFile;
 
     // Look up the git-list path (the path git knows about) for use in
-    // git worktree unlock/remove commands.  Falls back to worktreePath if
-    // not found (e.g. already removed, or no symlink ambiguity).
+    // git worktree unlock/remove commands.
     let gitKnownPath = worktreePath;
     try {
       const canonical = fs.realpathSync.native(worktreePath);
@@ -837,21 +931,15 @@ function reapOrphanWorktrees(repoRoot, deps = {}) {
     }
 
     // 4b. PID liveness check.
-    // Fail-closed: any lock content that does not parse as a numeric PID (e.g.
-    // "Locked by claude-code agent-xxxx") is treated as ALIVE — we cannot
-    // confirm the owner is dead, so we must not reap.  This includes the real
-    // Claude Code lock format which is non-numeric text.
     const pidStr = lockedContent.trim().match(/^\d+/)?.[0];
     if (!pidStr) {
       results.push({ path: worktreePath, status: 'skipped', reason: 'lock_owner_unknown' });
       continue;
     }
     const pid = parseInt(pidStr, 10);
-    // Wrap isPidAlive in try/catch: any error (e.g. EPERM on Windows when the process
-    // exists but is owned by another user) must be treated as ALIVE (fail-closed).
-    let pidIsAlive;
+    let pidIsAlive: boolean;
     try {
-      pidIsAlive = Number.isNaN(pid) || isPidAlive(pid);
+      pidIsAlive = Number.isNaN(pid) || isPidAliveCheck(pid);
     } catch {
       pidIsAlive = true; // Cannot determine liveness — treat as alive, do not reap.
     }
@@ -861,9 +949,7 @@ function reapOrphanWorktrees(repoRoot, deps = {}) {
     }
 
     // 4c. Ancestry guard: branch-tip must be reachable from main (fail closed).
-    // The admin HEAD file contains either "ref: refs/heads/<branch>" or a bare SHA.
-    // We read the file directly (no non-standard git ref parsing).
-    let branchTip;
+    let branchTip: string | undefined;
     {
       const headContent = readFileSafe(path.join(adminDir, 'HEAD'));
       if (!headContent) {
@@ -899,9 +985,6 @@ function reapOrphanWorktrees(repoRoot, deps = {}) {
     }
 
     // 4d. Reap: unlock → remove --force.
-    // Use gitKnownPath (from git worktree list) so that git can locate the
-    // worktree even when the path in the gitdir file differs due to symlinks
-    // (e.g. macOS /var/folders vs /private/var/folders).
     execGit(['worktree', 'unlock', gitKnownPath], { cwd: repoRoot }); // ignore failure (already unlocked)
     const removeResult = execGit(['worktree', 'remove', gitKnownPath, '--force'], { cwd: repoRoot });
     if (!gitResultOk(removeResult)) {
@@ -909,8 +992,6 @@ function reapOrphanWorktrees(repoRoot, deps = {}) {
       continue;
     }
 
-    // Use the git-listed path so the result is consistent with what callers see
-    // from 'git worktree list', avoiding symlink vs real-path mismatches on macOS.
     results.push({ path: gitKnownPath, status: 'reaped', reason: 'pid_dead_and_merged' });
   }
 
@@ -922,42 +1003,35 @@ function reapOrphanWorktrees(repoRoot, deps = {}) {
 
 // ─── reapOrphanWorktrees deps helpers ─────────────────────────────────────────
 
-function defaultIsPidAlive(pid) {
-  // process.kill(pid, 0) probes process existence without sending a real signal.
-  //   - Returns normally → process is alive.
-  //   - Throws ESRCH → process does not exist → dead.
-  //   - Throws EPERM → process exists but we lack permission (alive; fail-closed
-  //     on Windows where cross-user processes throw EPERM, not ESRCH).
+function defaultIsPidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
   } catch (err) {
-    // EPERM means the process exists but we cannot signal it.
-    // Treat as alive (fail-closed: do not reap a process we cannot confirm dead).
-    if (err && err.code === 'EPERM') return true;
+    if (err && (err as NodeJS.ErrnoException).code === 'EPERM') return true;
     return false;
   }
 }
 
-function defaultReadDirSafe(dir) {
+function defaultReadDirSafe(dir: string): string[] | null {
   try { return fs.readdirSync(dir); } catch { return null; }
 }
 
-function defaultReadFileSafe(file) {
+function defaultReadFileSafe(file: string): string | null {
   try { return fs.readFileSync(file, 'utf8'); } catch { return null; }
 }
 
-function defaultMtimeSafe(file) {
+function defaultMtimeSafe(file: string): Date | null {
   try { return fs.statSync(file).mtime; } catch { return null; }
 }
 
-function cmdWorktreeReapOrphans(cwd) {
-  let result;
+function cmdWorktreeReapOrphans(cwd: string): void {
+  let result: ReapResult[];
   try {
     result = reapOrphanWorktrees(cwd);
   } catch (err) {
     // Surface failure as a one-line warning; keep exit-zero so workflows don't break.
-    process.stderr.write(`[gsd] worktree.reap-orphans failed: ${err && err.message ? err.message : String(err)}\n`);
+    process.stderr.write(`[gsd] worktree.reap-orphans failed: ${err && (err as Error).message ? (err as Error).message : String(err)}\n`);
     result = [];
   }
   const skippedCount = result.filter((r) => r.status === 'skipped').length;
@@ -968,7 +1042,10 @@ function cmdWorktreeReapOrphans(cwd) {
   process.stdout.write(`${JSON.stringify({ ok: true, reaped: result.filter((r) => r.status === 'reaped').length, entries: result }, null, 2)}\n`);
 }
 
-module.exports = {
+// Unused exports kept for API compatibility
+void parseWorktreeListPaths;
+
+export = {
   resolveWorktreeContext,
   parseWorktreePorcelain,
   planWorktreePrune,

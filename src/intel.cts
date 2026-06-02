@@ -1,41 +1,40 @@
 /**
- * lib/intel.cjs -- Intel storage and query operations for GSD.
+ * lib/intel.cts -- Intel storage and query operations for GSD.
  *
  * Provides a persistent, queryable intelligence system for project metadata.
  * Intel files live in .planning/intel/ and store structured data about
  * the project's files, APIs, dependencies, architecture, and tech stack.
  *
  * All public functions gate on intel.enabled config (no-op when false).
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/intel.cjs collapsed
+ * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only types are added.
  */
 
-'use strict';
-
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
-const { platformWriteSync, platformReadSync, platformEnsureDir } = require('./shell-command-projection.cjs');
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { platformWriteSync, platformReadSync, platformEnsureDir } from './shell-command-projection.cjs';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const INTEL_DIR = '.planning/intel';
 
-const INTEL_FILES = {
+const INTEL_FILES: Record<string, string> = {
   files: 'file-roles.json',
   apis: 'api-map.json',
   deps: 'dependency-graph.json',
   arch: 'arch-decisions.json',
-  stack: 'stack.json'
+  stack: 'stack.json',
 };
 
 // ─── Internal helpers ────────────────────────────────────────────────────────
 
 /**
  * Ensure the intel directory exists under the given planning dir.
- *
- * @param {string} planningDir - Path to .planning directory
- * @returns {string} Full path to .planning/intel/
  */
-function ensureIntelDir(planningDir) {
+function ensureIntelDir(planningDir: string): string {
   const intelPath = path.join(planningDir, 'intel');
   platformEnsureDir(intelPath);
   return intelPath;
@@ -45,53 +44,66 @@ function ensureIntelDir(planningDir) {
  * Check whether intel is enabled in the project config.
  * Reads config.json directly via fs. Returns false by default
  * (when no config, no intel key, or on error).
- *
- * @param {string} planningDir - Path to .planning directory
- * @returns {boolean}
  */
-function isIntelEnabled(planningDir) {
+function isIntelEnabled(planningDir: string): boolean {
   try {
     const configPath = path.join(planningDir, 'config.json');
     const raw = platformReadSync(configPath);
     if (raw === null) return false;
-    const config = JSON.parse(raw);
-    if (config && config.intel && config.intel.enabled === true) return true;
+    const config: unknown = JSON.parse(raw);
+    if (
+      config &&
+      typeof config === 'object' &&
+      'intel' in config &&
+      config.intel &&
+      typeof config.intel === 'object' &&
+      'enabled' in config.intel &&
+      (config.intel as Record<string, unknown>).enabled === true
+    ) return true;
     return false;
   } catch (_e) {
     return false;
   }
 }
 
+interface DisabledResponse {
+  disabled: true;
+  message: string;
+}
+
 /**
  * Return the standard disabled response object.
- * @returns {{ disabled: true, message: string }}
  */
-function disabledResponse() {
+function disabledResponse(): DisabledResponse {
   return { disabled: true, message: 'Intel system disabled. Set intel.enabled=true in config.json to activate.' };
 }
 
 /**
  * Resolve full path to an intel file.
- * @param {string} planningDir
- * @param {string} filename
- * @returns {string}
  */
-function intelFilePath(planningDir, filename) {
+function intelFilePath(planningDir: string, filename: string): string {
   return path.join(planningDir, 'intel', filename);
+}
+
+interface IntelData {
+  _meta?: {
+    updated_at?: string;
+    version?: number;
+    [key: string]: unknown;
+  };
+  entries?: Record<string, unknown>;
+  [key: string]: unknown;
 }
 
 /**
  * Safely read and parse a JSON intel file.
  * Returns null if file doesn't exist or can't be parsed.
- *
- * @param {string} filePath
- * @returns {object|null}
  */
-function safeReadJson(filePath) {
+function safeReadJson(filePath: string): IntelData | null {
   try {
     const raw = platformReadSync(filePath);
     if (raw === null) return null;
-    return JSON.parse(raw);
+    return JSON.parse(raw) as IntelData;
   } catch (_e) {
     return null;
   }
@@ -100,11 +112,8 @@ function safeReadJson(filePath) {
 /**
  * Compute SHA-256 hash of a file's contents.
  * Returns null if the file doesn't exist.
- *
- * @param {string} filePath
- * @returns {string|null}
  */
-function hashFile(filePath) {
+function hashFile(filePath: string): string | null {
   try {
     const content = platformReadSync(filePath);
     if (content === null) return null;
@@ -114,22 +123,23 @@ function hashFile(filePath) {
   }
 }
 
+interface SearchMatch {
+  key: string;
+  value: unknown;
+}
+
 /**
  * Search for a term (case-insensitive) in a JSON object's keys and string values.
  * Returns an array of matching entries.
- *
- * @param {object} data - The JSON data (expects { _meta, entries } or flat object)
- * @param {string} term - Search term
- * @returns {Array<{ key: string, value: * }>}
  */
-function searchJsonEntries(data, term) {
+function searchJsonEntries(data: IntelData, term: string): SearchMatch[] {
   if (!data || typeof data !== 'object') return [];
 
   const entries = data.entries || data;
   if (!entries || typeof entries !== 'object') return [];
 
   const lowerTerm = term.toLowerCase();
-  const matches = [];
+  const matches: SearchMatch[] = [];
 
   for (const [key, value] of Object.entries(entries)) {
     if (key === '_meta') continue;
@@ -151,12 +161,8 @@ function searchJsonEntries(data, term) {
 
 /**
  * Recursively check if a term appears in any string value.
- *
- * @param {*} value
- * @param {string} lowerTerm
- * @returns {boolean}
  */
-function matchesInValue(value, lowerTerm) {
+function matchesInValue(value: unknown, lowerTerm: string): boolean {
   if (typeof value === 'string') {
     return value.toLowerCase().includes(lowerTerm);
   }
@@ -172,12 +178,8 @@ function matchesInValue(value, lowerTerm) {
 /**
  * Search for a term in arch.md text content.
  * Returns matching lines.
- *
- * @param {string} filePath - Path to arch.md
- * @param {string} term - Search term
- * @returns {string[]}
  */
-function searchArchMd(filePath, term) {
+function searchArchMd(filePath: string, term: string): string[] {
   try {
     const content = platformReadSync(filePath);
     if (content === null) return [];
@@ -191,18 +193,20 @@ function searchArchMd(filePath, term) {
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
+interface IntelQueryResult {
+  matches: Array<{ source: string; entries: SearchMatch[] }>;
+  term: string;
+  total: number;
+}
+
 /**
  * Query intel files for a search term.
  * Searches across all JSON intel files (keys and values) and arch.md (text lines).
- *
- * @param {string} term - Search term (case-insensitive)
- * @param {string} planningDir - Path to .planning directory
- * @returns {{ matches: Array<{ source: string, entries: Array }>, term: string, total: number } | { disabled: true, message: string }}
  */
-function intelQuery(term, planningDir) {
+function intelQuery(term: string, planningDir: string): IntelQueryResult | DisabledResponse {
   if (!isIntelEnabled(planningDir)) return disabledResponse();
 
-  const matches = [];
+  const matches: Array<{ source: string; entries: SearchMatch[] }> = [];
   let total = 0;
 
   // Search all JSON intel files
@@ -221,19 +225,27 @@ function intelQuery(term, planningDir) {
   return { matches, term, total };
 }
 
+interface IntelStatusFileEntry {
+  exists: boolean;
+  updated_at: string | null;
+  stale: boolean;
+}
+
+interface IntelStatusResult {
+  files: Record<string, IntelStatusFileEntry>;
+  overall_stale: boolean;
+}
+
 /**
  * Report status and staleness of each intel file.
  * A file is considered stale if its updated_at is older than 24 hours.
- *
- * @param {string} planningDir - Path to .planning directory
- * @returns {{ files: object, overall_stale: boolean } | { disabled: true, message: string }}
  */
-function intelStatus(planningDir) {
+function intelStatus(planningDir: string): IntelStatusResult | DisabledResponse {
   if (!isIntelEnabled(planningDir)) return disabledResponse();
 
   const STALE_MS = 24 * 60 * 60 * 1000; // 24 hours
   const now = Date.now();
-  const files = {};
+  const files: Record<string, IntelStatusFileEntry> = {};
   let overallStale = false;
 
   for (const [_key, filename] of Object.entries(INTEL_FILES)) {
@@ -246,7 +258,7 @@ function intelStatus(planningDir) {
       continue;
     }
 
-    let updatedAt = null;
+    let updatedAt: string | null = null;
 
     // All intel files are JSON — read _meta.updated_at
     const data = safeReadJson(filePath);
@@ -267,13 +279,16 @@ function intelStatus(planningDir) {
   return { files, overall_stale: overallStale };
 }
 
+interface IntelDiffResult {
+  changed: string[];
+  added: string[];
+  removed: string[];
+}
+
 /**
  * Show changes since the last full refresh by comparing file hashes.
- *
- * @param {string} planningDir - Path to .planning directory
- * @returns {{ changed: string[], added: string[], removed: string[] } | { no_baseline: true } | { disabled: true, message: string }}
  */
-function intelDiff(planningDir) {
+function intelDiff(planningDir: string): IntelDiffResult | { no_baseline: true } | DisabledResponse {
   if (!isIntelEnabled(planningDir)) return disabledResponse();
 
   const snapshotPath = intelFilePath(planningDir, '.last-refresh.json');
@@ -283,10 +298,10 @@ function intelDiff(planningDir) {
     return { no_baseline: true };
   }
 
-  const prevHashes = snapshot.hashes || {};
-  const changed = [];
-  const added = [];
-  const removed = [];
+  const prevHashes = (snapshot.hashes as Record<string, string> | undefined) || {};
+  const changed: string[] = [];
+  const added: string[] = [];
+  const removed: string[] = [];
 
   // Check current files against snapshot
   for (const [_key, filename] of Object.entries(INTEL_FILES)) {
@@ -308,29 +323,29 @@ function intelDiff(planningDir) {
 /**
  * Stub for triggering an intel update.
  * The actual update is performed by the intel-updater agent (PLAN-02).
- *
- * @param {string} planningDir - Path to .planning directory
- * @returns {{ action: string, message: string } | { disabled: true, message: string }}
  */
-function intelUpdate(planningDir) {
+function intelUpdate(planningDir: string): { action: string; message: string } | DisabledResponse {
   if (!isIntelEnabled(planningDir)) return disabledResponse();
 
   return {
     action: 'spawn_agent',
-    message: 'Run gsd-tools intel update or spawn gsd-intel-updater agent for full refresh'
+    message: 'Run gsd-tools intel update or spawn gsd-intel-updater agent for full refresh',
   };
+}
+
+interface SaveRefreshResult {
+  saved: boolean;
+  timestamp: string;
+  files: number;
 }
 
 /**
  * Save a refresh snapshot with hashes of all current intel files.
  * Called by the intel-updater agent after completing a refresh.
- *
- * @param {string} planningDir - Path to .planning directory
- * @returns {{ saved: boolean, timestamp: string, files: number }}
  */
-function saveRefreshSnapshot(planningDir) {
+function saveRefreshSnapshot(planningDir: string): SaveRefreshResult {
   const intelPath = ensureIntelDir(planningDir);
-  const hashes = {};
+  const hashes: Record<string, string> = {};
   let fileCount = 0;
 
   for (const [_key, filename] of Object.entries(INTEL_FILES)) {
@@ -347,7 +362,7 @@ function saveRefreshSnapshot(planningDir) {
   platformWriteSync(snapshotPath, JSON.stringify({
     hashes,
     timestamp,
-    version: 1
+    version: 1,
   }, null, 2));
 
   return { saved: true, timestamp, files: fileCount };
@@ -358,26 +373,26 @@ function saveRefreshSnapshot(planningDir) {
 /**
  * Thin wrapper around saveRefreshSnapshot for CLI dispatch.
  * Writes .last-refresh.json with accurate timestamps and hashes.
- *
- * @param {string} planningDir - Path to .planning directory
- * @returns {{ saved: boolean, timestamp: string, files: number } | { disabled: true, message: string }}
  */
-function intelSnapshot(planningDir) {
+function intelSnapshot(planningDir: string): SaveRefreshResult | DisabledResponse {
   if (!isIntelEnabled(planningDir)) return disabledResponse();
   return saveRefreshSnapshot(planningDir);
 }
 
+interface IntelValidateResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
 /**
  * Validate all intel files for correctness and freshness.
- *
- * @param {string} planningDir - Path to .planning directory
- * @returns {{ valid: boolean, errors: string[], warnings: string[] } | { disabled: true, message: string }}
  */
-function intelValidate(planningDir) {
+function intelValidate(planningDir: string): IntelValidateResult | DisabledResponse {
   if (!isIntelEnabled(planningDir)) return disabledResponse();
 
-  const errors = [];
-  const warnings = [];
+  const errors: string[] = [];
+  const warnings: string[] = [];
   const STALE_MS = 24 * 60 * 60 * 1000;
   const now = Date.now();
 
@@ -398,11 +413,11 @@ function intelValidate(planningDir) {
       errors.push(`${filename}: file missing`);
       continue;
     }
-    let data;
+    let data: IntelData;
     try {
-      data = JSON.parse(raw);
+      data = JSON.parse(raw) as IntelData;
     } catch (e) {
-      errors.push(`${filename}: invalid JSON — ${e.message}`);
+      errors.push(`${filename}: invalid JSON — ${(e as Error).message}`);
       continue;
     }
 
@@ -421,8 +436,9 @@ function intelValidate(planningDir) {
       // files.json: check exports are actual symbol names (no spaces)
       if (key === 'files') {
         for (const [entryPath, entry] of Object.entries(data.entries)) {
-          if (entry.exports && Array.isArray(entry.exports)) {
-            for (const exp of entry.exports) {
+          const entryObj = entry as Record<string, unknown>;
+          if (entryObj.exports && Array.isArray(entryObj.exports)) {
+            for (const exp of entryObj.exports as unknown[]) {
               if (typeof exp === 'string' && exp.includes(' ')) {
                 warnings.push(`${filename}: "${entryPath}" export "${exp}" looks like a description (contains space)`);
               }
@@ -441,10 +457,11 @@ function intelValidate(planningDir) {
       // deps.json: check entries have version, type, used_by
       if (key === 'deps') {
         for (const [depName, entry] of Object.entries(data.entries)) {
-          const missing = [];
-          if (!entry.version) missing.push('version');
-          if (!entry.type) missing.push('type');
-          if (!entry.used_by) missing.push('used_by');
+          const entryObj = entry as Record<string, unknown>;
+          const missing: string[] = [];
+          if (!entryObj.version) missing.push('version');
+          if (!entryObj.type) missing.push('type');
+          if (!entryObj.used_by) missing.push('used_by');
           if (missing.length > 0) {
             warnings.push(`${filename}: "${depName}" missing fields: ${missing.join(', ')}`);
           }
@@ -456,16 +473,19 @@ function intelValidate(planningDir) {
   return { valid: errors.length === 0, errors, warnings };
 }
 
+interface IntelApiSurfaceResult {
+  written: string;
+  symbolCount: number;
+  stale: boolean;
+}
+
 /**
  * Render .planning/intel/api-map.json into a human-readable API-SURFACE.md.
  * Always writes the file — even when api-map.json is absent or empty, the
  * surface will contain an explicit "incomplete" banner so consumers never
  * mistake silence for "nothing exists".
- *
- * @param {string} planningDir - Path to .planning directory
- * @returns {{ written: string, symbolCount: number, stale: boolean } | { disabled: true, message: string }}
  */
-function intelApiSurface(planningDir) {
+function intelApiSurface(planningDir: string): IntelApiSurfaceResult | DisabledResponse {
   if (!isIntelEnabled(planningDir)) return disabledResponse();
 
   const intelPath = ensureIntelDir(planningDir);
@@ -486,7 +506,7 @@ function intelApiSurface(planningDir) {
     stale = age > STALE_MS;
   }
 
-  const lines = [];
+  const lines: string[] = [];
   lines.push('# API Surface');
   lines.push('');
   lines.push('> Generated from `.planning/intel/api-map.json`. Do not edit by hand.');
@@ -506,7 +526,7 @@ function intelApiSurface(planningDir) {
       lines.push(`## \`${symbol}\``);
       lines.push('');
       if (info && typeof info === 'object') {
-        for (const [field, val] of Object.entries(info)) {
+        for (const [field, val] of Object.entries(info as Record<string, unknown>)) {
           const display = Array.isArray(val) ? val.join(', ') : String(val);
           lines.push(`- **${field}:** ${display}`);
         }
@@ -520,27 +540,31 @@ function intelApiSurface(planningDir) {
   return { written: outputPath, symbolCount, stale };
 }
 
+interface IntelPatchMetaResult {
+  patched: boolean;
+  file?: string;
+  timestamp?: string;
+  error?: string;
+}
+
 /**
  * Patch _meta.updated_at in a JSON intel file to the current timestamp.
  * Reads the file, updates _meta.updated_at, increments version, writes back.
  *
  * NOTE: Does not gate on isIntelEnabled — operates on arbitrary file paths
  * for use by agents patching individual files outside the intel store.
- *
- * @param {string} filePath - Absolute or relative path to the JSON intel file
- * @returns {{ patched: boolean, file: string, timestamp: string } | { patched: false, error: string }}
  */
-function intelPatchMeta(filePath) {
+function intelPatchMeta(filePath: string): IntelPatchMetaResult {
   try {
     const content = platformReadSync(filePath);
     if (content === null) {
       return { patched: false, error: `File not found: ${filePath}` };
     }
-    let data;
+    let data: IntelData;
     try {
-      data = JSON.parse(content);
+      data = JSON.parse(content) as IntelData;
     } catch (e) {
-      return { patched: false, error: `Invalid JSON: ${e.message}` };
+      return { patched: false, error: `Invalid JSON: ${(e as Error).message}` };
     }
 
     if (!data._meta) {
@@ -555,8 +579,14 @@ function intelPatchMeta(filePath) {
 
     return { patched: true, file: filePath, timestamp };
   } catch (e) {
-    return { patched: false, error: e.message };
+    return { patched: false, error: (e as Error).message };
   }
+}
+
+interface IntelExtractExportsResult {
+  file: string;
+  exports: string[];
+  method: string;
 }
 
 /**
@@ -564,16 +594,13 @@ function intelPatchMeta(filePath) {
  *
  * NOTE: Does not gate on isIntelEnabled — operates on arbitrary source files
  * for use by agents building intel data from project files.
- *
- * @param {string} filePath - Path to the JS/CJS file
- * @returns {{ file: string, exports: string[], method: string }}
  */
-function intelExtractExports(filePath) {
+function intelExtractExports(filePath: string): IntelExtractExportsResult {
   const content = platformReadSync(filePath);
   if (content === null) {
     return { file: filePath, exports: [], method: 'none' };
   }
-  const exports = new Set();
+  const exports = new Set<string>();
   let method = 'none';
 
   // Try module.exports = { ... } pattern (handle multi-line)
@@ -608,7 +635,7 @@ function intelExtractExports(filePath) {
 
   // Also try individual exports.X = patterns (only at start of line, not inside strings/regex)
   const individualPattern = /^exports\.(\w+)\s*=/gm;
-  let im;
+  let im: RegExpExecArray | null;
   while ((im = individualPattern.exec(content)) !== null) {
     if (!exports.has(im[1])) {
       exports.add(im[1]);
@@ -619,11 +646,11 @@ function intelExtractExports(filePath) {
   const hadCjs = exports.size > 0;
 
   // ESM patterns
-  const esmExports = new Set();
+  const esmExports = new Set<string>();
 
   // export default function X / export default class X
   const defaultNamedPattern = /^export\s+default\s+(?:function|class)\s+(\w+)/gm;
-  let em;
+  let em: RegExpExecArray | null;
   while ((em = defaultNamedPattern.exec(content)) !== null) {
     esmExports.add(em[1]);
   }
@@ -683,7 +710,7 @@ function intelExtractExports(filePath) {
 
 // ─── Exports ─────────────────────────────────────────────────────────────────
 
-module.exports = {
+export = {
   // Public API
   intelQuery,
   intelUpdate,
@@ -704,5 +731,5 @@ module.exports = {
 
   // Constants
   INTEL_FILES,
-  INTEL_DIR
+  INTEL_DIR,
 };

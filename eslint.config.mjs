@@ -76,6 +76,11 @@ export default tseslint.config(
       'get-shit-done/bin/lib/observability/logger.cjs',
       'get-shit-done/bin/lib/active-workstream-store.cjs',
       'get-shit-done/bin/lib/adr-parser.cjs',
+      'get-shit-done/bin/lib/graphify.cjs',
+      'get-shit-done/bin/lib/install-profiles.cjs',
+      'get-shit-done/bin/lib/intel.cjs',
+      'get-shit-done/bin/lib/installer-migrations.cjs',
+      'get-shit-done/bin/lib/worktree-safety.cjs',
     ],
   },
 

@@ -1,8 +1,15 @@
-'use strict';
+/**
+ * Graphify integration module — config gate, subprocess execution, knowledge-graph
+ * query, status, diff, build pipeline, and snapshot helpers.
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/graphify.cjs collapsed
+ * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only types are added.
+ */
 
-const fs = require('fs');
-const path = require('path');
-const { execTool, execGit, platformWriteSync } = require('./shell-command-projection.cjs');
+import fs from 'node:fs';
+import path from 'node:path';
+import { execTool, execGit, platformWriteSync } from './shell-command-projection.cjs';
 
 // ─── Config Gate ─────────────────────────────────────────────────────────────
 
@@ -10,40 +17,41 @@ const { execTool, execGit, platformWriteSync } = require('./shell-command-projec
  * Check whether graphify is enabled in the project config.
  * Reads config.json directly via fs. Returns false by default
  * (when no config, no graphify key, or on error).
- *
- * @param {string} planningDir - Path to .planning directory
- * @returns {boolean}
  */
-function isGraphifyEnabled(planningDir) {
+function isGraphifyEnabled(planningDir: string): boolean {
   try {
     const configPath = path.join(planningDir, 'config.json');
     if (!fs.existsSync(configPath)) return false;
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    if (config && config.graphify && config.graphify.enabled === true) return true;
+    const config: unknown = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    if (
+      config &&
+      typeof config === 'object' &&
+      'graphify' in config &&
+      config.graphify &&
+      typeof config.graphify === 'object' &&
+      'enabled' in config.graphify &&
+      (config.graphify as Record<string, unknown>).enabled === true
+    ) return true;
     return false;
   } catch (_e) {
     return false;
   }
 }
 
+interface DisabledResponse {
+  disabled: true;
+  message: string;
+}
+
 /**
  * Return the standard disabled response object.
- * @returns {{ disabled: true, message: string }}
  */
-function disabledResponse() {
+function disabledResponse(): DisabledResponse {
   return { disabled: true, message: 'graphify is not enabled. Enable with: gsd-tools config-set graphify.enabled true' };
 }
 
 // ─── Subprocess Helper ───────────────────────────────────────────────────────
 
-/**
- * Execute graphify CLI as a subprocess with proper env and timeout handling.
- *
- * @param {string} cwd - Working directory for the subprocess
- * @param {string[]} args - Arguments to pass to graphify
- * @param {{ timeout?: number }} [options={}] - Options (timeout in ms, default 30000)
- * @returns {{ exitCode: number, stdout: string, stderr: string }}
- */
 /**
  * Frozen enum of typed reason codes for execGraphify failures (#2974).
  * Tests assert on result.reason instead of grepping stderr text.
@@ -53,9 +61,22 @@ const GRAPHIFY_REASON = Object.freeze({
   ENOENT: 'graphify_not_found',
   TIMEOUT: 'graphify_timed_out',
   EXIT_NONZERO: 'graphify_exit_nonzero',
-});
+} as const);
 
-function execGraphify(cwd, args, options = {}) {
+type GraphifyReason = typeof GRAPHIFY_REASON[keyof typeof GRAPHIFY_REASON];
+
+interface GraphifyExecResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  reason: GraphifyReason;
+  timeout_ms?: number;
+}
+
+/**
+ * Execute graphify CLI as a subprocess with proper env and timeout handling.
+ */
+function execGraphify(cwd: string, args: string[], options: { timeout?: number } = {}): GraphifyExecResult {
   const timeout = options.timeout ?? 30000;
   const result = execTool('graphify', args, {
     cwd,
@@ -64,7 +85,7 @@ function execGraphify(cwd, args, options = {}) {
   });
 
   // ENOENT — seam normalizes to exitCode 127. Surface as typed reason.
-  if (result.error && result.error.code === 'ENOENT') {
+  if (result.error && (result.error as NodeJS.ErrnoException).code === 'ENOENT') {
     return {
       exitCode: 127,
       stdout: '',
@@ -94,13 +115,16 @@ function execGraphify(cwd, args, options = {}) {
 
 // ─── Presence & Version ──────────────────────────────────────────────────────
 
+interface InstalledResult {
+  installed: boolean;
+  message?: string;
+}
+
 /**
  * Check whether the graphify CLI binary is installed and accessible on PATH.
  * Uses --help (NOT --version, which graphify does not support).
- *
- * @returns {{ installed: boolean, message?: string }}
  */
-function checkGraphifyInstalled() {
+function checkGraphifyInstalled(): InstalledResult {
   const result = execTool('graphify', ['--help'], { timeout: 5000 });
 
   if (result.error) {
@@ -113,6 +137,12 @@ function checkGraphifyInstalled() {
   return { installed: true };
 }
 
+interface VersionResult {
+  version: string | null;
+  compatible: boolean | null;
+  warning: string | null;
+}
+
 /**
  * Detect graphify version and check compatibility.
  * Tested range: >=0.4.0,<1.0
@@ -121,14 +151,12 @@ function checkGraphifyInstalled() {
  * 1. Try `graphify --version` (works for most CLI installations, incl. venv installs)
  * 2. Fall back to python3 importlib.metadata (legacy / system Python path)
  * 3. Return null version gracefully if both fail
- *
- * @returns {{ version: string|null, compatible: boolean|null, warning: string|null }}
  */
-function checkGraphifyVersion() {
+function checkGraphifyVersion(): VersionResult {
   // Strategy 1: try `graphify --version` directly (2s timeout -- fast path)
   const versionResult = execTool('graphify', ['--version'], { timeout: 2000 });
 
-  let versionStr = null;
+  let versionStr: string | null = null;
 
   if (!versionResult.error && versionResult.exitCode === 0) {
     // graphify --version may emit "graphify 0.4.23" or just "0.4.23"
@@ -168,32 +196,57 @@ function checkGraphifyVersion() {
 
 // ─── Internal Helpers ────────────────────────────────────────────────────────
 
+interface GraphNode {
+  id: string;
+  label?: string;
+  description?: string;
+  [key: string]: unknown;
+}
+
+interface GraphEdge {
+  source: string;
+  target: string;
+  label?: string;
+  relation?: string;
+  confidence?: string;
+  confidence_score?: string;
+  [key: string]: unknown;
+}
+
+interface Graph {
+  nodes?: GraphNode[];
+  edges?: GraphEdge[];
+  links?: GraphEdge[];
+  hyperedges?: unknown[];
+  built_at_commit?: unknown;
+  [key: string]: unknown;
+}
+
 /**
  * Safely read and parse a JSON file. Returns null on missing file or parse error.
  * Prevents crashes on malformed JSON (T-02-01 mitigation).
- *
- * @param {string} filePath - Absolute path to JSON file
- * @returns {object|null}
  */
-function safeReadJson(filePath) {
+function safeReadJson(filePath: string): Graph | null {
   try {
     if (!fs.existsSync(filePath)) return null;
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    return JSON.parse(fs.readFileSync(filePath, 'utf8')) as Graph;
   } catch (_e) {
     return null;
   }
+}
+
+interface AdjEntry {
+  target: string;
+  edge: GraphEdge;
 }
 
 /**
  * Build a bidirectional adjacency map from graph nodes and edges.
  * Each node ID maps to an array of { target, edge } entries.
  * Bidirectional: both source->target and target->source are added (Pitfall 3).
- *
- * @param {{ nodes: object[], edges: object[] }} graph
- * @returns {Object.<string, Array<{ target: string, edge: object }>>}
  */
-function buildAdjacencyMap(graph) {
-  const adj = {};
+function buildAdjacencyMap(graph: Graph): Record<string, AdjEntry[]> {
+  const adj: Record<string, AdjEntry[]> = {};
   for (const node of (graph.nodes || [])) {
     adj[node.id] = [];
   }
@@ -206,16 +259,18 @@ function buildAdjacencyMap(graph) {
   return adj;
 }
 
+interface ExpandResult {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  seeds: Set<string>;
+  trimmed?: string | null;
+}
+
 /**
  * Seed-then-expand query: find nodes matching term, then BFS-expand up to maxHops.
  * Matches on node label and description (case-insensitive substring, D-01).
- *
- * @param {{ nodes: object[], edges: object[] }} graph
- * @param {string} term - Search term
- * @param {number} [maxHops=2] - Maximum BFS hops from seed nodes
- * @returns {{ nodes: object[], edges: object[], seeds: Set<string> }}
  */
-function seedAndExpand(graph, term, maxHops = 2) {
+function seedAndExpand(graph: Graph, term: string, maxHops = 2): ExpandResult {
   const lowerTerm = term.toLowerCase();
   const nodeMap = Object.fromEntries((graph.nodes || []).map(n => [n.id, n]));
   const adj = buildAdjacencyMap(graph);
@@ -228,12 +283,12 @@ function seedAndExpand(graph, term, maxHops = 2) {
 
   // BFS expand from seeds
   const visitedNodes = new Set(seeds.map(n => n.id));
-  const collectedEdges = [];
-  const seenEdgeKeys = new Set();
+  const collectedEdges: GraphEdge[] = [];
+  const seenEdgeKeys = new Set<string>();
   let frontier = seeds.map(n => n.id);
 
   for (let hop = 0; hop < maxHops && frontier.length > 0; hop++) {
-    const nextFrontier = [];
+    const nextFrontier: string[] = [];
     for (const nodeId of frontier) {
       for (const entry of (adj[nodeId] || [])) {
         // Deduplicate edges by source::target::label key
@@ -251,27 +306,31 @@ function seedAndExpand(graph, term, maxHops = 2) {
     frontier = nextFrontier;
   }
 
-  const resultNodes = [...visitedNodes].map(id => nodeMap[id]).filter(Boolean);
+  const resultNodes = [...visitedNodes].map(id => nodeMap[id]).filter((n): n is GraphNode => Boolean(n));
   return { nodes: resultNodes, edges: collectedEdges, seeds: new Set(seeds.map(n => n.id)) };
+}
+
+interface BudgetResult {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  trimmed: string | null;
+  total_nodes: number;
+  total_edges: number;
 }
 
 /**
  * Apply token budget by dropping edges by confidence tier (D-04, D-05, D-06).
  * Token estimation: Math.ceil(JSON.stringify(obj).length / 4).
  * Drop order: AMBIGUOUS -> INFERRED -> EXTRACTED.
- *
- * @param {{ nodes: object[], edges: object[], seeds: Set<string> }} result
- * @param {number|null} budgetTokens - Max tokens, or null/falsy for unlimited
- * @returns {{ nodes: object[], edges: object[], trimmed: string|null, total_nodes: number, total_edges: number, term?: string }}
  */
-function applyBudget(result, budgetTokens) {
+function applyBudget(result: ExpandResult, budgetTokens: number | null): ExpandResult | BudgetResult {
   if (!budgetTokens) return result;
 
   const CONFIDENCE_ORDER = ['AMBIGUOUS', 'INFERRED', 'EXTRACTED'];
   let edges = [...result.edges];
   let omitted = 0;
 
-  const estimateTokens = (obj) => Math.ceil(JSON.stringify(obj).length / 4);
+  const estimateTokens = (obj: unknown) => Math.ceil(JSON.stringify(obj).length / 4);
 
   for (const tier of CONFIDENCE_ORDER) {
     if (estimateTokens({ nodes: result.nodes, edges }) <= budgetTokens) break;
@@ -282,7 +341,7 @@ function applyBudget(result, budgetTokens) {
   }
 
   // Find unreachable nodes after edge removal
-  const reachableNodes = new Set();
+  const reachableNodes = new Set<string>();
   for (const edge of edges) {
     reachableNodes.add(edge.source);
     reachableNodes.add(edge.target);
@@ -303,15 +362,39 @@ function applyBudget(result, budgetTokens) {
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 /**
+ * Strict 4-40 hex fence for graph.built_at_commit values (#3170). Anything
+ * else (dashed, prose, empty) is treated as absent so a hostile graph.json
+ * cannot smuggle a `--upload-pack=…` option into a `git` argv.
+ */
+const COMMIT_HASH_RE = /^[0-9a-f]{4,40}$/i;
+
+/**
+ * Read git HEAD for the project at `cwd`. Returns the full commit hash on
+ * success, or null when cwd is not a git repo / `git` is not on PATH.
+ */
+function readGitHead(cwd: string): string | null {
+  const r = execGit(['rev-parse', 'HEAD'], { cwd });
+  if (r.exitCode !== 0) return null;
+  return r.stdout.trim() || null;
+}
+
+/**
+ * Count commits between `from` and `to` (exclusive..inclusive, like
+ * `git rev-list --count A..B`). Returns null when either ref is unreachable
+ * or the cwd is not a git repo.
+ */
+function countCommitsBetween(cwd: string, from: string, to: string): number | null {
+  const r = execGit(['rev-list', '--count', `${from}..${to}`], { cwd });
+  if (r.exitCode !== 0) return null;
+  const n = parseInt(r.stdout.trim(), 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
  * Query the knowledge graph for nodes matching a term, with optional budget cap.
  * Uses seed-then-expand BFS traversal (D-01).
- *
- * @param {string} cwd - Working directory
- * @param {string} term - Search term
- * @param {{ budget?: number|null }} [options={}]
- * @returns {object}
  */
-function graphifyQuery(cwd, term, options = {}) {
+function graphifyQuery(cwd: string, term: string, options: { budget?: number | null } = {}): unknown {
   const planningDir = path.join(cwd, '.planning');
   if (!isGraphifyEnabled(planningDir)) return disabledResponse();
 
@@ -325,7 +408,7 @@ function graphifyQuery(cwd, term, options = {}) {
     return { error: 'Failed to parse graph.json' };
   }
 
-  let result = seedAndExpand(graph, term);
+  let result: ExpandResult | BudgetResult = seedAndExpand(graph, term);
 
   if (options.budget) {
     result = applyBudget(result, options.budget);
@@ -337,37 +420,8 @@ function graphifyQuery(cwd, term, options = {}) {
     edges: result.edges,
     total_nodes: result.nodes.length,
     total_edges: result.edges.length,
-    trimmed: result.trimmed || null,
+    trimmed: 'trimmed' in result ? (result.trimmed || null) : null,
   };
-}
-
-/**
- * Strict 4-40 hex fence for graph.built_at_commit values (#3170). Anything
- * else (dashed, prose, empty) is treated as absent so a hostile graph.json
- * cannot smuggle a `--upload-pack=…` option into a `git` argv.
- */
-const COMMIT_HASH_RE = /^[0-9a-f]{4,40}$/i;
-
-/**
- * Read git HEAD for the project at `cwd`. Returns the full commit hash on
- * success, or null when cwd is not a git repo / `git` is not on PATH.
- */
-function readGitHead(cwd) {
-  const r = execGit(['rev-parse', 'HEAD'], { cwd });
-  if (r.exitCode !== 0) return null;
-  return r.stdout.trim() || null;
-}
-
-/**
- * Count commits between `from` and `to` (exclusive..inclusive, like
- * `git rev-list --count A..B`). Returns null when either ref is unreachable
- * or the cwd is not a git repo.
- */
-function countCommitsBetween(cwd, from, to) {
-  const r = execGit(['rev-list', '--count', `${from}..${to}`], { cwd });
-  if (r.exitCode !== 0) return null;
-  const n = parseInt(r.stdout.trim(), 10);
-  return Number.isFinite(n) ? n : null;
 }
 
 /**
@@ -378,11 +432,8 @@ function countCommitsBetween(cwd, from, to) {
  * (#3170). Tri-state on commit_stale: null means "we don't know" (pre-v0.7
  * graph, no git, or unreachable commit), distinct from false ("known
  * fresh").
- *
- * @param {string} cwd - Working directory
- * @returns {object}
  */
-function graphifyStatus(cwd) {
+function graphifyStatus(cwd: string): unknown {
   const planningDir = path.join(cwd, '.planning');
   if (!isGraphifyEnabled(planningDir)) return disabledResponse();
 
@@ -401,11 +452,12 @@ function graphifyStatus(cwd) {
   const age = Date.now() - stat.mtimeMs;
 
   // Commit-staleness signal (#3170). Validate before passing to git.
-  const rawBuilt = (graph.built_at_commit || '').toString().trim();
+  const builtAtCommit = graph.built_at_commit;
+  const rawBuilt = (typeof builtAtCommit === 'string' ? builtAtCommit : '').trim();
   const builtAt = COMMIT_HASH_RE.test(rawBuilt) ? rawBuilt : null;
   const head = readGitHead(cwd);
-  let commitsBehind = null;
-  let commitStale = null;
+  let commitsBehind: number | null = null;
+  let commitStale: boolean | null = null;
   if (builtAt && head) {
     commitsBehind = countCommitsBetween(cwd, builtAt, head);
     if (commitsBehind !== null) commitStale = commitsBehind > 0;
@@ -443,11 +495,8 @@ function graphifyStatus(cwd) {
 
 /**
  * Compute topology-level diff between current graph and last build snapshot (D-07, D-08, D-09).
- *
- * @param {string} cwd - Working directory
- * @returns {object}
  */
-function graphifyDiff(cwd) {
+function graphifyDiff(cwd: string): unknown {
   const planningDir = path.join(cwd, '.planning');
   if (!isGraphifyEnabled(planningDir)) return disabledResponse();
 
@@ -480,7 +529,7 @@ function graphifyDiff(cwd) {
   );
 
   // Diff edges (keyed by source+target+relation)
-  const edgeKey = (e) => `${e.source}::${e.target}::${e.relation || e.label || ''}`;
+  const edgeKey = (e: GraphEdge) => `${e.source}::${e.target}::${e.relation || e.label || ''}`;
   const currentEdgeMap = Object.fromEntries((current.edges || current.links || []).map(e => [edgeKey(e), e]));
   const snapshotEdgeMap = Object.fromEntries((snapshot.edges || snapshot.links || []).map(e => [edgeKey(e), e]));
 
@@ -502,11 +551,8 @@ function graphifyDiff(cwd) {
 /**
  * Pre-flight checks for graphify build (BUILD-01, BUILD-02, D-09).
  * Does NOT invoke graphify -- returns structured JSON for the builder agent.
- *
- * @param {string} cwd - Working directory
- * @returns {object}
  */
-function graphifyBuild(cwd) {
+function graphifyBuild(cwd: string): unknown {
   const planningDir = path.join(cwd, '.planning');
   if (!isGraphifyEnabled(planningDir)) return disabledResponse();
 
@@ -521,7 +567,8 @@ function graphifyBuild(cwd) {
 
   // Read build timeout from config -- default 300s per D-02
   const config = safeReadJson(path.join(planningDir, 'config.json')) || {};
-  const timeoutSec = (config.graphify && config.graphify.build_timeout) || 300;
+  const graphifyConfig = config.graphify as Record<string, unknown> | undefined;
+  const timeoutSec = (graphifyConfig && graphifyConfig.build_timeout) || 300;
 
   return {
     action: 'spawn_agent',
@@ -534,15 +581,19 @@ function graphifyBuild(cwd) {
   };
 }
 
+interface SnapshotResult {
+  saved: boolean;
+  timestamp: string;
+  node_count: number;
+  edge_count: number;
+}
+
 /**
  * Write a diff snapshot after successful build (D-06).
  * Reads graph.json from .planning/graphs/ and writes .last-build-snapshot.json
  * using platformWriteSync for crash safety.
- *
- * @param {string} cwd - Working directory
- * @returns {object}
  */
-function writeSnapshot(cwd) {
+function writeSnapshot(cwd: string): SnapshotResult | { error: string } {
   const graphPath = path.join(cwd, '.planning', 'graphs', 'graph.json');
   const graph = safeReadJson(graphPath);
   if (!graph) return { error: 'Cannot write snapshot: graph.json not parseable' };
@@ -566,7 +617,7 @@ function writeSnapshot(cwd) {
 
 // ─── Exports ─────────────────────────────────────────────────────────────────
 
-module.exports = {
+export = {
   // Config gate
   isGraphifyEnabled,
   disabledResponse,

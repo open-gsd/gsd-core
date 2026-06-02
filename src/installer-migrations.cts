@@ -1,14 +1,23 @@
-'use strict';
+/**
+ * Installer migrations engine — plan, apply, and track filesystem-mutation
+ * migrations for GSD runtime config directories.
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/installer-migrations.cjs
+ * collapsed to a TypeScript source of truth. Behaviour is preserved
+ * byte-for-behaviour from the prior hand-written .cjs; only types are added.
+ */
 
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
-const {
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import {
   validateInstallerMigrationActions,
   validateInstallerMigrationRecord,
-} = require('./installer-migration-authoring.cjs');
-const { platformWriteSync } = require('./shell-command-projection.cjs');
-const { realClock } = require('./clock.cjs');
+  type MigrationRecord,
+  type MigrationAction,
+} from './installer-migration-authoring.cjs';
+import { platformWriteSync } from './shell-command-projection.cjs';
+import { realClock, type Clock } from './clock.cjs';
 
 const MANIFEST_NAME = 'gsd-file-manifest.json';
 const INSTALL_STATE_NAME = 'gsd-install-state.json';
@@ -17,7 +26,7 @@ const DEFAULT_MIGRATIONS_DIR = path.join(__dirname, 'installer-migrations');
 const DEFAULT_LOCK_TIMEOUT_MS = 30_000;
 const STRICT_JSON = Symbol('strict-json');
 
-function sha256File(filePath) {
+function sha256File(filePath: string): string {
   const hash = crypto.createHash('sha256');
   const buffer = Buffer.allocUnsafe(1024 * 1024);
   const fd = fs.openSync(filePath, 'r');
@@ -33,50 +42,64 @@ function sha256File(filePath) {
   return hash.digest('hex');
 }
 
-function sha256Text(value) {
+function sha256Text(value: string): string {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
-function readJsonIfPresent(filePath, fallback) {
+function readJsonIfPresent(filePath: string, fallback: unknown): unknown {
   if (!fs.existsSync(filePath)) return fallback;
   try {
     return JSON.parse(fs.readFileSync(filePath, 'utf8'));
   } catch (error) {
     if (fallback === STRICT_JSON) {
-      throw new Error(`invalid installer migration state JSON: ${filePath}: ${error.message}`);
+      throw new Error(`invalid installer migration state JSON: ${filePath}: ${(error as Error).message}`);
     }
     return fallback;
   }
 }
 
-function readInstallManifest(configDir) {
+interface InstallManifest {
+  version: string | null;
+  timestamp: string | null;
+  mode: string | null;
+  files: Record<string, string>;
+}
+
+function readInstallManifest(configDir: string): InstallManifest {
   const manifest = readJsonIfPresent(path.join(configDir, MANIFEST_NAME), null);
   if (!manifest || typeof manifest !== 'object') {
     return { version: null, timestamp: null, mode: null, files: {} };
   }
+  const m = manifest as Record<string, unknown>;
   return {
-    version: manifest.version || null,
-    timestamp: manifest.timestamp || null,
-    mode: manifest.mode || null,
-    files: manifest.files && typeof manifest.files === 'object' ? manifest.files : {},
+    version: typeof m.version === 'string' ? m.version : null,
+    timestamp: typeof m.timestamp === 'string' ? m.timestamp : null,
+    mode: typeof m.mode === 'string' ? m.mode : null,
+    files: m.files && typeof m.files === 'object' ? m.files as Record<string, string> : {},
   };
 }
 
-function readInstallState(configDir) {
+interface InstallState {
+  schemaVersion: number;
+  appliedMigrations: Array<Record<string, unknown>>;
+}
+
+function readInstallState(configDir: string): InstallState {
   const state = readJsonIfPresent(path.join(configDir, INSTALL_STATE_NAME), STRICT_JSON);
   if (!state || typeof state !== 'object') {
     return { schemaVersion: 1, appliedMigrations: [] };
   }
+  const s = state as Record<string, unknown>;
   return {
-    schemaVersion: state.schemaVersion || 1,
-    appliedMigrations: Array.isArray(state.appliedMigrations) ? state.appliedMigrations : [],
+    schemaVersion: typeof s.schemaVersion === 'number' ? s.schemaVersion : 1,
+    appliedMigrations: Array.isArray(s.appliedMigrations) ? s.appliedMigrations as Array<Record<string, unknown>> : [],
   };
 }
 
 // Strict atomic write for the install state: must never be left half-written.
 // Bypasses the seam because platformWriteSync falls back to a direct write on
 // rename failure, which would silently violate this invariant.
-function atomicWriteInstallState(configDir, content) {
+function atomicWriteInstallState(configDir: string, content: string): void {
   fs.mkdirSync(configDir, { recursive: true });
   const filePath = path.join(configDir, INSTALL_STATE_NAME);
   const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
@@ -89,12 +112,18 @@ function atomicWriteInstallState(configDir, content) {
   }
 }
 
-function writeInstallState(configDir, state) {
+function writeInstallState(configDir: string, state: InstallState): InstallState {
   atomicWriteInstallState(configDir, JSON.stringify(state, null, 2) + '\n');
   return state;
 }
 
-function readJson(configDir, relPath) {
+interface ReadJsonResult {
+  exists: boolean;
+  value: unknown;
+  error: Error | null;
+}
+
+function readJson(configDir: string, relPath: string): ReadJsonResult {
   const { fullPath } = ensureInsideConfig(configDir, relPath);
   if (!fs.existsSync(fullPath)) {
     return { exists: false, value: null, error: null };
@@ -102,11 +131,11 @@ function readJson(configDir, relPath) {
   try {
     return { exists: true, value: JSON.parse(fs.readFileSync(fullPath, 'utf8')), error: null };
   } catch (error) {
-    return { exists: true, value: null, error };
+    return { exists: true, value: null, error: error as Error };
   }
 }
 
-function normalizeRelPath(relPath) {
+function normalizeRelPath(relPath: string): string {
   if (typeof relPath !== 'string' || relPath.trim() === '') {
     throw new Error('migration action relPath must be a non-empty string');
   }
@@ -121,7 +150,13 @@ function normalizeRelPath(relPath) {
   return segments.join('/');
 }
 
-function classifyArtifact(configDir, relPath, manifest) {
+interface ArtifactClassification {
+  classification: string;
+  originalHash: string | null;
+  currentHash: string | null;
+}
+
+function classifyArtifact(configDir: string, relPath: string, manifest: InstallManifest): ArtifactClassification {
   const normalized = normalizeRelPath(relPath);
   const originalHash = manifest.files[normalized] || null;
   const fullPath = path.join(configDir, normalized);
@@ -138,16 +173,16 @@ function classifyArtifact(configDir, relPath, manifest) {
   return { classification: 'managed-modified', originalHash, currentHash };
 }
 
-function appliedMigrationIds(state) {
+function appliedMigrationIds(state: InstallState): Set<string> {
   return new Set(
     state.appliedMigrations
       .filter((entry) => entry && typeof entry.id === 'string')
-      .map((entry) => entry.id)
+      .map((entry) => entry.id as string)
   );
 }
 
-function appliedMigrationEntries(state) {
-  const entries = new Map();
+function appliedMigrationEntries(state: InstallState): Map<string, Record<string, unknown>> {
+  const entries = new Map<string, Record<string, unknown>>();
   for (const entry of state.appliedMigrations) {
     if (entry && typeof entry.id === 'string' && !entries.has(entry.id)) {
       entries.set(entry.id, entry);
@@ -156,7 +191,7 @@ function appliedMigrationEntries(state) {
   return entries;
 }
 
-function migrationChecksum(migration) {
+function migrationChecksum(migration: MigrationRecord): string {
   const checksum = migration.checksum;
   if (typeof checksum === 'string' && checksum) return checksum;
   const serializable = {
@@ -168,35 +203,35 @@ function migrationChecksum(migration) {
     scopes: migration.scopes || null,
     destructive: migration.destructive === true,
     runtimeContract: migration.runtimeContract || null,
-    plan: typeof migration.plan === 'function' ? migration.plan.toString() : null,
+    plan: typeof migration.plan === 'function' ? (migration.plan as (...args: unknown[]) => unknown).toString() : null,
   };
   return `sha256:${sha256Text(JSON.stringify(serializable))}`;
 }
 
-function assertAppliedMigrationChecksums(applied, migrations) {
+function assertAppliedMigrationChecksums(applied: Map<string, Record<string, unknown>>, migrations: MigrationRecord[]): void {
   for (const migration of migrations) {
-    const entry = applied.get(migration.id);
+    const entry = applied.get(migration.id as string);
     if (!entry || !entry.checksum) continue;
     const checksum = migrationChecksum(migration);
     if (entry.checksum !== checksum) {
       throw new Error(
-        `applied migration checksum changed for ${migration.id}; create a new fix-forward migration id`
+        `applied migration checksum changed for ${migration.id as string}; create a new fix-forward migration id`
       );
     }
   }
 }
 
-function migrationMatchesContext(migration, { runtime, scope }) {
-  if (Array.isArray(migration.runtimes) && migration.runtimes.length > 0) {
-    if (!runtime || !migration.runtimes.includes(runtime)) return false;
+function migrationMatchesContext(migration: MigrationRecord, { runtime, scope }: { runtime: string | null; scope: string | null }): boolean {
+  if (Array.isArray(migration.runtimes) && (migration.runtimes as string[]).length > 0) {
+    if (!runtime || !(migration.runtimes as string[]).includes(runtime)) return false;
   }
-  if (Array.isArray(migration.scopes) && migration.scopes.length > 0) {
-    if (!scope || !migration.scopes.includes(scope)) return false;
+  if (Array.isArray(migration.scopes) && (migration.scopes as string[]).length > 0) {
+    if (!scope || !(migration.scopes as string[]).includes(scope)) return false;
   }
   return true;
 }
 
-function discoverInstallerMigrations({ migrationsDir }) {
+function discoverInstallerMigrations({ migrationsDir }: { migrationsDir: string }): MigrationRecord[] {
   if (!migrationsDir || !fs.existsSync(migrationsDir)) return [];
   return fs.readdirSync(migrationsDir, { withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith('.cjs'))
@@ -204,22 +239,24 @@ function discoverInstallerMigrations({ migrationsDir }) {
     .sort()
     .flatMap((fileName) => {
       const source = path.join(migrationsDir, fileName);
+       
       delete require.cache[require.resolve(source)];
-      const exported = require(source);
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const exported: unknown = require(source);
       const records = Array.isArray(exported) ? exported : [exported];
-      return records.map((record) => validateInstallerMigrationRecord(record, source));
+      return records.map((record) => validateInstallerMigrationRecord(record as MigrationRecord, source));
     });
 }
 
-function journalTimestamp(now) {
+function journalTimestamp(now: () => string): string {
   return now().replace(/[:.]/g, '-');
 }
 
-function migrationRunId(appliedAt) {
+function migrationRunId(appliedAt: string): string {
   return `${journalTimestamp(() => appliedAt)}-${crypto.randomBytes(8).toString('hex')}`;
 }
 
-function sleepSync(ms) {
+function sleepSync(ms: number): void {
   const buffer = new SharedArrayBuffer(4);
   Atomics.wait(new Int32Array(buffer), 0, 0, ms);
 }
@@ -231,26 +268,31 @@ function sleepSync(ms) {
  * Returns true if alive or permission-denied (live but not ours),
  * false if ESRCH (no such process).
  */
-function isPidAlive(pid) {
+function isPidAlive(pid: number): boolean {
   if (typeof pid !== 'number' || !Number.isFinite(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
     return true; // alive (or permission denied — treat as live)
   } catch (err) {
-    return err.code !== 'ESRCH';
+    return (err as NodeJS.ErrnoException).code !== 'ESRCH';
   }
+}
+
+interface LockFileData {
+  pid: number;
+  acquiredAt: string;
 }
 
 /**
  * Try to read and parse the lock file JSON. Returns null on any error
  * (missing, invalid JSON, I/O failure).
  */
-function readLockFile(lockPath) {
+function readLockFile(lockPath: string): LockFileData | null {
   try {
     const raw = fs.readFileSync(lockPath, 'utf8');
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && typeof parsed.pid === 'number') {
-      return parsed;
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && typeof (parsed as Record<string, unknown>).pid === 'number') {
+      return parsed as LockFileData;
     }
     return null;
   } catch {
@@ -258,13 +300,17 @@ function readLockFile(lockPath) {
   }
 }
 
-function acquireInstallMigrationLock(configDir, { timeoutMs = DEFAULT_LOCK_TIMEOUT_MS } = {}, clock = realClock) {
+function acquireInstallMigrationLock(
+  configDir: string,
+  { timeoutMs = DEFAULT_LOCK_TIMEOUT_MS }: { timeoutMs?: number } = {},
+  clock: Clock = realClock,
+): () => void {
   fs.mkdirSync(configDir, { recursive: true });
   const lockPath = path.join(configDir, INSTALL_MIGRATION_LOCK_NAME);
   const started = clock.now();
 
   while (true) {
-    let fd = null;
+    let fd: number | null = null;
     let lockCreatedByUs = false;
     try {
       fd = fs.openSync(lockPath, 'wx');
@@ -281,14 +327,14 @@ function acquireInstallMigrationLock(configDir, { timeoutMs = DEFAULT_LOCK_TIMEO
       }) + '\n');
       lockCreatedByUs = false; // release closure owns cleanup from here
       return () => {
-        const failures = [];
+        const failures: Error[] = [];
         // Use unlinkSync (not rmSync with { force: true }) so EPERM errors
         // are NOT silently swallowed. On Windows, if the unlink fails
         // transiently, the error surfaces via releaseError so the caller
         // can observe and surface it rather than leaving a stale lock.
-        try { fs.unlinkSync(lockPath); } catch (error) { failures.push(error); }
+        try { fs.unlinkSync(lockPath); } catch (error) { failures.push(error as Error); }
         if (failures.length > 0) {
-          const releaseError = new Error(`failed to release installer migration lock: ${lockPath}`);
+          const releaseError = new Error(`failed to release installer migration lock: ${lockPath}`) as Error & { failures: Error[] };
           releaseError.failures = failures;
           throw releaseError;
         }
@@ -304,7 +350,8 @@ function acquireInstallMigrationLock(configDir, { timeoutMs = DEFAULT_LOCK_TIMEO
         // so it does not orphan as an unreadable (empty/invalid JSON) stale lock.
         try { fs.unlinkSync(lockPath); } catch { /* best-effort */ }
       }
-      if (error && error.code === 'EEXIST') {
+      const err = error as NodeJS.ErrnoException;
+      if (err && err.code === 'EEXIST') {
         // Stale-lock reclamation: read the on-disk PID and check liveness.
         // If the PID is dead (ESRCH) or is our own process (same-process
         // re-entry caused by rmSync silently swallowing an unlink error on
@@ -337,7 +384,12 @@ function acquireInstallMigrationLock(configDir, { timeoutMs = DEFAULT_LOCK_TIMEO
   }
 }
 
-function ensureInsideConfig(configDir, relPath) {
+interface EnsureInsideConfigResult {
+  normalized: string;
+  fullPath: string;
+}
+
+function ensureInsideConfig(configDir: string, relPath: string): EnsureInsideConfigResult {
   const normalized = normalizeRelPath(relPath);
   const fullPath = path.resolve(configDir, normalized);
   const root = path.resolve(configDir);
@@ -347,16 +399,58 @@ function ensureInsideConfig(configDir, relPath) {
   return { normalized, fullPath };
 }
 
-function isStructurallyEmpty(value) {
+function isStructurallyEmpty(value: unknown): boolean {
   if (value === null || value === undefined) return true;
   if (Array.isArray(value)) return value.length === 0;
   return typeof value === 'object' && Object.keys(value).length === 0;
 }
 
+interface JournalAction extends Record<string, unknown> {
+  status: string;
+}
 
-function journalAction(action, status, extras = {}) {
-  const { value, ...safeAction } = action;
+function journalAction(action: MigrationAction, status: string, extras: Record<string, unknown> = {}): JournalAction {
+  const { value: _value, ...safeAction } = action;
   return { ...safeAction, ...extras, status };
+}
+
+interface PlanContext {
+  configDir: string;
+  runtime: string | null;
+  scope: string | null;
+  manifest: InstallManifest;
+  state: InstallState;
+  baselineScan: boolean;
+  now: () => string;
+  classifyArtifact: (relPath: string) => ArtifactClassification;
+  readJson: (relPath: string) => ReadJsonResult;
+}
+
+interface PlannedAction extends MigrationAction {
+  migrationId: string;
+  migrationChecksum: string;
+  type: string;
+  relPath: string;
+  reason: string;
+  classification: string;
+  originalHash: string | null;
+  currentHash: string | null;
+  requestedType?: string;
+  backupRelPath?: string | null;
+  value?: unknown;
+  deleteIfEmpty?: boolean;
+  prompt?: unknown;
+  choices?: unknown[];
+}
+
+interface MigrationPlan {
+  generatedAt: string;
+  manifest: InstallManifest;
+  state: InstallState;
+  pendingMigrationIds: string[];
+  pendingMigrations: MigrationRecord[];
+  actions: PlannedAction[];
+  blocked: PlannedAction[];
 }
 
 function planInstallerMigrations({
@@ -366,7 +460,14 @@ function planInstallerMigrations({
   migrations,
   baselineScan = false,
   now = () => new Date().toISOString(),
-}) {
+}: {
+  configDir: string;
+  runtime?: string | null;
+  scope?: string | null;
+  migrations: MigrationRecord[];
+  baselineScan?: boolean;
+  now?: () => string;
+}): MigrationPlan {
   if (!configDir) throw new Error('configDir is required');
   if (!Array.isArray(migrations)) throw new Error('migrations must be an array');
 
@@ -380,20 +481,21 @@ function planInstallerMigrations({
   );
   const applied = appliedMigrationEntries(state);
   assertAppliedMigrationChecksums(applied, scopedMigrations);
-  const pending = scopedMigrations.filter((migration) => !applied.has(migration.id));
-  const actions = [];
-  const blocked = [];
-  const classifications = new Map();
-  const classify = (relPath) => {
+  const pending = scopedMigrations.filter((migration) => !applied.has(migration.id as string));
+  const actions: PlannedAction[] = [];
+  const blocked: PlannedAction[] = [];
+  const classifications = new Map<string, ArtifactClassification>();
+  const classify = (relPath: string): ArtifactClassification => {
     const normalized = normalizeRelPath(relPath);
     if (!classifications.has(normalized)) {
       classifications.set(normalized, classifyArtifact(configDir, normalized, manifest));
     }
-    return classifications.get(normalized);
+    return classifications.get(normalized)!;
   };
 
   for (const migration of pending) {
-    const plannedActions = migration.plan({
+    const planFn = migration.plan as (ctx: PlanContext) => unknown[];
+    const plannedActions = planFn({
       configDir,
       runtime,
       scope,
@@ -406,34 +508,34 @@ function planInstallerMigrations({
     });
     validateInstallerMigrationActions(plannedActions, migration);
     const checksum = migrationChecksum(migration);
-    for (const rawAction of plannedActions) {
-      const relPath = normalizeRelPath(rawAction.relPath);
+    for (const rawAction of plannedActions as MigrationAction[]) {
+      const relPath = normalizeRelPath(rawAction.relPath as string);
       const classification = rawAction.classification
         ? {
-            classification: rawAction.classification,
-            originalHash: rawAction.originalHash || null,
-            currentHash: rawAction.currentHash || null,
+            classification: rawAction.classification as string,
+            originalHash: rawAction.originalHash as string | null || null,
+            currentHash: rawAction.currentHash as string | null || null,
           }
         : classify(relPath);
-      let protectedType = rawAction.type;
+      let protectedType = rawAction.type as string;
       if (rawAction.type === 'remove-managed' && classification.classification === 'managed-modified') {
         protectedType = 'backup-and-remove';
       }
       if (rawAction.type === 'remove-managed' && classification.classification === 'unknown') {
         protectedType = 'preserve-user';
       }
-      const action = {
-        migrationId: migration.id,
+      const action: PlannedAction = {
+        migrationId: migration.id as string,
         migrationChecksum: checksum,
         type: protectedType,
         relPath,
-        reason: rawAction.reason || migration.description || '',
+        reason: rawAction.reason as string || migration.description as string || '',
         classification: classification.classification,
         originalHash: classification.originalHash,
         currentHash: classification.currentHash,
       };
       if (action.type !== rawAction.type) {
-        action.requestedType = rawAction.type;
+        action.requestedType = rawAction.type as string | undefined;
       }
       if (action.type === 'backup-and-remove') {
         action.backupRelPath = null;
@@ -443,7 +545,7 @@ function planInstallerMigrations({
         action.deleteIfEmpty = rawAction.deleteIfEmpty === true;
       }
       if (rawAction.prompt) action.prompt = rawAction.prompt;
-      if (Array.isArray(rawAction.choices)) action.choices = rawAction.choices;
+      if (Array.isArray(rawAction.choices)) action.choices = rawAction.choices as unknown[];
       if (action.type === 'prompt-user') {
         blocked.push(action);
       } else if (
@@ -462,34 +564,43 @@ function planInstallerMigrations({
     generatedAt: now(),
     manifest,
     state,
-    pendingMigrationIds: pending.map((migration) => migration.id),
+    pendingMigrationIds: pending.map((migration) => migration.id as string),
     pendingMigrations: pending,
     actions,
     blocked,
   };
 }
 
-function uniqueActionMigrationIds(actions) {
+function uniqueActionMigrationIds(actions: PlannedAction[]): string[] {
   return [...new Set(actions.map((action) => action.migrationId).filter(Boolean))];
 }
 
-function rollbackAppliedMigrationResult({ configDir, journal, journalPath, rollbackRoot, backupRoot, previousInstallStateBytes }) {
-  const failures = [];
+interface RollbackArgs {
+  configDir: string;
+  journal: { actions: JournalAction[] };
+  journalPath: string;
+  rollbackRoot: string;
+  backupRoot: string;
+  previousInstallStateBytes: string | null;
+}
+
+function rollbackAppliedMigrationResult({ configDir, journal, journalPath, rollbackRoot, backupRoot, previousInstallStateBytes }: RollbackArgs): void {
+  const failures: Array<{ relPath: string; error: string }> = [];
   for (const action of [...journal.actions].reverse()) {
     if (!action.rollbackRelPath) continue;
-    const rollbackPath = path.join(configDir, action.rollbackRelPath);
-    const dest = path.join(configDir, action.relPath);
+    const rollbackPath = path.join(configDir, action.rollbackRelPath as string);
+    const dest = path.join(configDir, action.relPath as string);
     try {
       if (fs.existsSync(rollbackPath)) {
         fs.mkdirSync(path.dirname(dest), { recursive: true });
         fs.copyFileSync(rollbackPath, dest);
       }
     } catch (error) {
-      failures.push({ relPath: action.relPath, error: error.message });
+      failures.push({ relPath: action.relPath as string, error: (error as Error).message });
     }
     if (action.backupRelPath) {
       try {
-        fs.rmSync(path.join(configDir, action.backupRelPath), { force: true });
+        fs.rmSync(path.join(configDir, action.backupRelPath as string), { force: true });
       } catch {
         // backup cleanup is best-effort; preserve restore failures above
       }
@@ -503,7 +614,7 @@ function rollbackAppliedMigrationResult({ configDir, journal, journalPath, rollb
       atomicWriteInstallState(configDir, previousInstallStateBytes);
     }
   } catch (error) {
-    failures.push({ relPath: INSTALL_STATE_NAME, error: error.message });
+    failures.push({ relPath: INSTALL_STATE_NAME, error: (error as Error).message });
   }
 
   try {
@@ -515,19 +626,33 @@ function rollbackAppliedMigrationResult({ configDir, journal, journalPath, rollb
   }
 
   if (failures.length > 0) {
-    const error = new Error('migration rollback incomplete');
+    const error = new Error('migration rollback incomplete') as Error & { rollbackFailures: typeof failures };
     error.rollbackFailures = failures;
     throw error;
   }
 }
 
-function cleanupMigrationRunArtifacts(journalPath, rollbackRoot, backupRoot) {
+function cleanupMigrationRunArtifacts(journalPath: string, rollbackRoot: string, backupRoot: string): void {
   try { fs.rmSync(journalPath, { force: true }); } catch { /* best-effort */ }
   try { fs.rmSync(rollbackRoot, { recursive: true, force: true }); } catch { /* best-effort */ }
   try { fs.rmSync(backupRoot, { recursive: true, force: true }); } catch { /* best-effort */ }
 }
 
-function applyInstallerMigrationPlan({ configDir, plan, now = () => new Date().toISOString() }) {
+interface ApplyResult {
+  appliedMigrationIds: string[];
+  journalRelPath: string;
+  rollback: () => void;
+}
+
+function applyInstallerMigrationPlan({
+  configDir,
+  plan,
+  now = () => new Date().toISOString(),
+}: {
+  configDir: string;
+  plan: MigrationPlan;
+  now?: () => string;
+}): ApplyResult {
   if (!configDir) throw new Error('configDir is required');
   if (!plan || !Array.isArray(plan.actions)) throw new Error('plan with actions is required');
   if (Array.isArray(plan.blocked) && plan.blocked.length > 0) {
@@ -542,13 +667,13 @@ function applyInstallerMigrationPlan({ configDir, plan, now = () => new Date().t
   const rollbackRoot = path.join(configDir, rollbackRootRelPath);
   const backupRootRelPath = path.posix.join('gsd-migration-journal', `${runId}-backups`);
   const backupRoot = path.join(configDir, backupRootRelPath);
-  const journal = {
+  const journal: { schemaVersion: number; appliedAt: string; appliedMigrationIds: string[]; actions: JournalAction[] } = {
     schemaVersion: 1,
     appliedAt,
     appliedMigrationIds: uniqueActionMigrationIds(plan.actions),
     actions: [],
   };
-  const rollback = [];
+  const rollback: Array<{ relPath: string; rollbackPath: string }> = [];
   const installStatePath = path.join(configDir, INSTALL_STATE_NAME);
   const previousInstallStateBytes = fs.existsSync(installStatePath)
     ? fs.readFileSync(installStatePath, 'utf8')
@@ -622,7 +747,7 @@ function applyInstallerMigrationPlan({ configDir, plan, now = () => new Date().t
     const state = readInstallState(configDir);
     const applied = appliedMigrationIds(state);
     const nextApplied = [...state.appliedMigrations];
-    const actionsByMigrationId = new Map();
+    const actionsByMigrationId = new Map<string, PlannedAction>();
     for (const action of plan.actions) {
       if (action.migrationId && !actionsByMigrationId.has(action.migrationId)) {
         actionsByMigrationId.set(action.migrationId, action);
@@ -650,7 +775,7 @@ function applyInstallerMigrationPlan({ configDir, plan, now = () => new Date().t
       rollback: () => rollbackAppliedMigrationResult({ configDir, journal, journalPath, rollbackRoot, backupRoot, previousInstallStateBytes }),
     };
   } catch (error) {
-    const rollbackFailures = [];
+    const rollbackFailures: Array<{ relPath: string; rollbackPath: string; error: string }> = [];
     for (const entry of rollback.reverse()) {
       const dest = path.join(configDir, entry.relPath);
       try {
@@ -660,12 +785,12 @@ function applyInstallerMigrationPlan({ configDir, plan, now = () => new Date().t
         rollbackFailures.push({
           relPath: entry.relPath,
           rollbackPath: entry.rollbackPath,
-          error: rollbackError.message,
+          error: (rollbackError as Error).message,
         });
       }
     }
     if (rollbackFailures.length > 0) {
-      const rollbackError = new Error(`migration apply failed and rollback incomplete: ${error.message}`);
+      const rollbackError = new Error(`migration apply failed and rollback incomplete: ${(error as Error).message}`) as Error & { cause: unknown; rollbackFailures: typeof rollbackFailures };
       rollbackError.cause = error;
       rollbackError.rollbackFailures = rollbackFailures;
       throw rollbackError;
@@ -675,19 +800,27 @@ function applyInstallerMigrationPlan({ configDir, plan, now = () => new Date().t
   }
 }
 
-function markPendingMigrationsApplied({ configDir, plan, now = () => new Date().toISOString() }) {
+function markPendingMigrationsApplied({
+  configDir,
+  plan,
+  now = () => new Date().toISOString(),
+}: {
+  configDir: string;
+  plan: MigrationPlan;
+  now?: () => string;
+}): string[] {
   if (!plan || !Array.isArray(plan.pendingMigrationIds) || plan.pendingMigrationIds.length === 0) {
     return [];
   }
   const appliedAt = now();
   const state = readInstallState(configDir);
   const applied = appliedMigrationIds(state);
-  const checksumsByMigrationId = new Map();
+  const checksumsByMigrationId = new Map<string, string>();
   for (const migration of plan.pendingMigrations || []) {
-    checksumsByMigrationId.set(migration.id, migrationChecksum(migration));
+    checksumsByMigrationId.set(migration.id as string, migrationChecksum(migration));
   }
   const nextApplied = [...state.appliedMigrations];
-  const newlyApplied = [];
+  const newlyApplied: string[] = [];
   for (const id of plan.pendingMigrationIds) {
     if (applied.has(id)) continue;
     nextApplied.push({
@@ -707,6 +840,14 @@ function markPendingMigrationsApplied({ configDir, plan, now = () => new Date().
   return newlyApplied;
 }
 
+interface RunResult {
+  appliedMigrationIds: string[];
+  journalRelPath: string | null;
+  plan: MigrationPlan;
+  blocked?: PlannedAction[];
+  rollback?: () => void;
+}
+
 function runInstallerMigrations({
   configDir,
   runtime = null,
@@ -716,17 +857,26 @@ function runInstallerMigrations({
   baselineScan = false,
   now = () => new Date().toISOString(),
   lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS,
-} = {}) {
+}: {
+  configDir: string;
+  runtime?: string | null;
+  scope?: string | null;
+  migrationsDir?: string;
+  migrations?: MigrationRecord[];
+  baselineScan?: boolean;
+  now?: () => string;
+  lockTimeoutMs?: number;
+} = { configDir: '' }): RunResult {
   const releaseLock = acquireInstallMigrationLock(configDir, { timeoutMs: lockTimeoutMs });
-  let primaryError = null;
+  let primaryError: (Error & { suppressed?: Error[] }) | null = null;
   let completed = false;
   try {
     const plan = planInstallerMigrations({ configDir, runtime, scope, migrations, baselineScan, now });
     if (plan.actions.length === 0) {
-      const appliedMigrationIds = markPendingMigrationsApplied({ configDir, plan, now });
+      const newlyApplied = markPendingMigrationsApplied({ configDir, plan, now });
       completed = true;
       return {
-        appliedMigrationIds,
+        appliedMigrationIds: newlyApplied,
         journalRelPath: null,
         plan,
       };
@@ -744,14 +894,14 @@ function runInstallerMigrations({
     completed = true;
     return { ...result, plan };
   } catch (error) {
-    primaryError = error;
+    primaryError = error as Error & { suppressed?: Error[] };
     throw error;
   } finally {
     try {
       releaseLock();
     } catch (releaseError) {
       if (primaryError) {
-        primaryError.suppressed = [...(primaryError.suppressed || []), releaseError];
+        primaryError.suppressed = [...(primaryError.suppressed || []), releaseError as Error];
       } else if (completed) {
         throw releaseError;
       } else {
@@ -761,7 +911,11 @@ function runInstallerMigrations({
   }
 }
 
-module.exports = {
+// Unused but kept to satisfy eslint — sleepSync is referenced in the original
+// and may be used by test code that patches this module.
+void sleepSync;
+
+export = {
   DEFAULT_MIGRATIONS_DIR,
   INSTALL_MIGRATION_LOCK_NAME,
   INSTALL_STATE_NAME,
