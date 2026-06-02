@@ -84,6 +84,7 @@ export default tseslint.config(
       'get-shit-done/bin/lib/planning-workspace.cjs',
       'get-shit-done/bin/lib/runtime-artifact-layout.cjs',
       'get-shit-done/bin/lib/command-routing-hub.cjs',
+      'get-shit-done/bin/lib/core.cjs',
       'get-shit-done/bin/lib/drift.cjs',
       'get-shit-done/bin/lib/cjs-command-router-adapter.cjs',
       'get-shit-done/bin/lib/phase-command-router.cjs',
