@@ -23,8 +23,8 @@
 
 GSD Core is a **meta-prompting framework** that sits between the user and AI coding agents (Claude Code, Gemini CLI, OpenCode, Kilo, Codex, Copilot, Antigravity, Trae, Cline, Augment Code). It provides:
 
-1. **Context engineering** — Structured artifacts that give the AI everything it needs per task
-2. **Multi-agent orchestration** — Thin orchestrators that spawn specialized agents with fresh context windows
+1. **Context engineering** — Structured artifacts that give the AI everything it needs per task (see [Context engineering](explanation/context-engineering.md))
+2. **Multi-agent orchestration** — Thin orchestrators that spawn specialized agents with fresh context windows (see [Multi-agent orchestration](explanation/multi-agent-orchestration.md))
 3. **Spec-driven development** — Requirements → research → plans → execution → verification pipeline
 4. **State management** — Persistent project memory across sessions and context resets
 
@@ -700,6 +700,8 @@ The researcher → planner → executor pipeline includes a supply-chain gate ag
 
 ### Security Hooks (v1.27)
 
+For a conceptual overview of how the hook and guard layers fit into the broader security approach, see [Security model](explanation/security-model.md).
+
 **Prompt Guard** (`gsd-prompt-guard.js`):
 
 - Triggers on Write/Edit to `.planning/` files
@@ -770,3 +772,12 @@ available. The current source snapshot is 2026-05-11:
 5. **Model references** — `inherit` profile lets GSD defer to runtime's model selection
 
 The installer handles all translation at install time. Workflows and agents are written in Claude Code's native format and transformed during deployment.
+
+---
+
+## Related
+
+- [Multi-agent orchestration](explanation/multi-agent-orchestration.md)
+- [Security model](explanation/security-model.md)
+- [CLI tools](CLI-TOOLS.md)
+- [docs index](README.md)

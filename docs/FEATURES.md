@@ -1,6 +1,6 @@
 # GSD Feature Reference
 
-> Complete feature and function documentation with requirements. For architecture details, see [Architecture](ARCHITECTURE.md). For command syntax, see [Command Reference](COMMANDS.md).
+> Feature index and reference for GSD Core. For architecture details, see [Architecture](ARCHITECTURE.md). For command syntax, see [Command Reference](COMMANDS.md). Return to [docs index](README.md).
 
 ---
 
@@ -2666,7 +2666,7 @@ Users who run a memory / knowledge-base MCP server (for example, ExoCortex-style
 - REQ-LIFECYCLE-02: `formatGsdState()` checks the lifecycle fields in priority order and emits the first matching scene (Phase active → Idle next-recommended → Milestone complete → Default fallback).
 - REQ-LIFECYCLE-03: All four fields default to undefined; existing STATE.md files render byte-for-byte identically.
 
-**Reference issue:** [#2833](https://github.com/open-gsd/gsd-core/issues/2833) — see [`docs/STATE-MD-LIFECYCLE.md`](STATE-MD-LIFECYCLE.md) for the full field reference and rendering rules.
+**Reference issue:** [#2833](https://github.com/open-gsd/gsd-core/issues/2833) — see [`docs/STATE-MD-LIFECYCLE.md`](reference/state-md.md) for the full field reference and rendering rules.
 
 ---
 
@@ -3007,5 +3007,13 @@ explicit reviewer flags -> --all -> review.default_reviewers -> all detected rev
 - REQ-JSON-ERRORS-01: Unknown commands, validation errors, timeouts, native failures, fallback failures, and internal errors MUST map to canonical error kinds.
 - REQ-JSON-ERRORS-02: CLI exit code mapping MUST remain stable for automation callers.
 - REQ-JSON-ERRORS-03: Human-readable output MUST remain the default when `--json-errors` is absent.
+
+---
+
+## Related
+
+- [Commands](COMMANDS.md)
+- [Configuration](CONFIGURATION.md)
+- [docs index](README.md)
 
 **Reference:** [JSON Error Mode](json-errors.md)

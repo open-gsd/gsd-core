@@ -1,6 +1,6 @@
 # GSD CLI Tools Reference
 
-> Surface-area reference for `get-shit-done/bin/gsd-tools.cjs` (Node CLI). For slash commands and user flows, see [Command Reference](COMMANDS.md).
+> Reference for the `gsd-tools` CLI (`get-shit-done/bin/gsd-tools.cjs`). For slash commands and user flows, see [Command Reference](COMMANDS.md). Return to [docs index](README.md).
 
 ---
 
@@ -493,7 +493,9 @@ API keys configured via `/gsd-settings` (`brave_search`, `firecrawl`, `exa_searc
 
 ---
 
-## See also
+## Related
 
-- [Architecture](ARCHITECTURE.md) — orchestration and runtime layering
-- [Command Reference](COMMANDS.md) — user-facing `/gsd-` commands
+- [Commands](COMMANDS.md)
+- [Configuration](CONFIGURATION.md)
+- [Architecture](ARCHITECTURE.md)
+- [docs index](README.md)

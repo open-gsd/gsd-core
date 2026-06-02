@@ -4,7 +4,7 @@ Documentos avançados traduzidos:
 
 ## Plans
 
-- [2026-03-18-materialize-new-project-config](plans/2026-03-18-materialize-new-project-config.md)
+- [2026-03-23-materialize-new-project-config](plans/2026-03-23-materialize-new-project-config.md)
 
 ## Specs
 
