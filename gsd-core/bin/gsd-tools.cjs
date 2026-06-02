@@ -171,7 +171,12 @@
 const fs = require('fs');
 const path = require('path');
 const core = require('./lib/core.cjs');
-const { error, findProjectRoot, ERROR_REASON } = core;
+const { error, ERROR_REASON } = core;
+// Resolve findProjectRoot lazily at call time rather than binding it at module
+// load. It is a re-export from core.cjs (sourced from project-root.cjs); a
+// call-time lookup is robust against any require/load-ordering edge where the
+// re-export isn't bound yet when this entrypoint is first required (#604).
+const findProjectRoot = (...args) => core.findProjectRoot(...args);
 const { getActiveWorkstream } = require('./lib/planning-workspace.cjs');
 const { resolveActiveWorkstream, applyResolvedWorkstreamEnv } = require('./lib/active-workstream-store.cjs');
 const state = require('./lib/state.cjs');
