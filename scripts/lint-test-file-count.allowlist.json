@@ -109,6 +109,7 @@
         "bug-3657-verify-reapply-patches-pristine-drift.test.cjs",
         "verify-health.test.cjs",
         "verify-mvp-uat.test.cjs",
+        "verify-npm-publish.test.cjs",
         "verify-test-quality.test.cjs",
         "verify-work-auto-transition.test.cjs",
         "verify.test.cjs"
