@@ -35,6 +35,7 @@ export default tseslint.config(
       '**/*.generated.cjs',
       // ADR-457: tsc-generated runtime artifact — lint the src/*.cts source, not the emitted .cjs.
       'get-shit-done/bin/lib/semver-compare.cjs',
+      'get-shit-done/bin/lib/code-review-flags.cjs',
     ],
   },
 

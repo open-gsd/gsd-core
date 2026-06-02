@@ -67,6 +67,7 @@ build/
 # by `npm run build:lib`). Source of truth is src/; these are emitted, never edited.
 # Published via prepublishOnly; built before test via pretest. Grows as modules migrate.
 /get-shit-done/bin/lib/semver-compare.cjs
+/get-shit-done/bin/lib/code-review-flags.cjs
 __pycache__/
 *.pyc
 .venv/
