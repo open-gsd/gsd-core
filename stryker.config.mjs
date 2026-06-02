@@ -52,7 +52,7 @@ export default {
     // Run property + unit tests over lib only (avoids the slow integration
     // suite). NO build step here: Stryker mutates the already-built .cjs and the
     // tests load it directly — adding a build would rebuild over the mutation.
-    command: 'node --test tests/context-utilization.property.test.cjs tests/prompt-budget.property.test.cjs tests/frontmatter.property.test.cjs tests/adr-parser.property.test.cjs tests/config-schema.property.test.cjs tests/adr-parser.test.cjs tests/active-workstream-store.test.cjs',
+    command: 'node --test tests/context-utilization.property.test.cjs tests/prompt-budget.property.test.cjs tests/frontmatter.property.test.cjs tests/adr-parser.property.test.cjs tests/config-schema.property.test.cjs tests/adr-parser.test.cjs tests/active-workstream-store.test.cjs tests/prompt-budget.unit.test.cjs tests/adr-parser.unit.test.cjs',
   },
 
   // ── Files to mutate ──────────────────────────────────────────────────────────
