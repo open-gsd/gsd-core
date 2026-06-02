@@ -117,7 +117,7 @@ git worktree list | tail -n +2 | awk '{print $1, $3}' | tr -d '[]'
 This yields lines like `/path/to/wt  branch-name`. For each, test if the branch is merged:
 
 ```bash
-git branch --merged main 2>/dev/null | sed 's/^[* ]*//' | grep -vE '^(main|trunk|develop|next)$'
+git branch --merged main 2>/dev/null | sed 's/^[* +]*//' | grep -vE '^(main|trunk|develop|next)$'
 ```
 
 Cross-reference: a worktree is **orphaned** if its branch appears in the merged list above.
@@ -204,7 +204,7 @@ Remove worktrees whose branch is merged into main. Use the same candidate list i
 
 ```bash
 # Compute merged branches (excluding protected names)
-MERGED=$(git branch --merged main 2>/dev/null | sed 's/^[* ]*//' | grep -vE '^(main|trunk|develop|next)$')
+MERGED=$(git branch --merged main 2>/dev/null | sed 's/^[* +]*//' | grep -vE '^(main|trunk|develop|next)$')
 ```
 
 For each non-primary worktree whose branch appears in `$MERGED`:
