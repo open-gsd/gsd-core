@@ -61,7 +61,10 @@ function collectFiles(dir, results) {
  * happens at the call site so the extractor stays neutral.
  */
 function extractSkillCalls(content) {
-  const stripped = content.replace(/<!--[\s\S]*?-->/g, '').replace(/<!--/g, '');
+  let stripped = content;
+  let _prev;
+  do { _prev = stripped; stripped = stripped.replace(/<!--[\s\S]*?-->/g, ''); } while (stripped !== _prev);
+  stripped = stripped.replace(/<!--/g, '');
   const calls = [];
   // Body class excludes backslash so the extractor doesn't include an
   // escape character that precedes the closing quote in embedded examples

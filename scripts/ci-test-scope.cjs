@@ -231,6 +231,9 @@ function addAll(set, values) {
   for (const value of values) set.add(value);
 }
 
+const WINDOWS_HINTS = ['windows', 'path', 'shell', 'workflow', 'install', 'hook'];
+const isWindowsHint = s => WINDOWS_HINTS.some(k => s.toLowerCase().includes(k));
+
 function classify(files) {
   const targeted = new Set();
   const windows = new Set();
@@ -239,9 +242,9 @@ function classify(files) {
   let fullMatrix = false;
 
   for (const file of files) {
-    if (/^(bin|gsd-core|agents|commands|docs|hooks|tests|scripts)\//.test(file) ||
-      /^package(-lock)?\.json$/.test(file) ||
-      /^tsconfig.*\.json$/.test(file) ||
+    if (['bin/', 'gsd-core/', 'agents/', 'commands/', 'docs/', 'hooks/', 'tests/', 'scripts/'].some(p => file.startsWith(p)) ||
+      file === 'package.json' || file === 'package-lock.json' ||
+      (file.startsWith('tsconfig') && file.endsWith('.json')) ||
       file.startsWith('.github/workflows/') ||
       file.startsWith('.github/rulesets/')) {
       codeChanged = true;
@@ -250,7 +253,7 @@ function classify(files) {
     if (file.startsWith('tests/') && file.endsWith('.test.cjs')) {
       targeted.add(file);
       fullMatrix = true;
-      if (/windows|path|shell|workflow|install|hook/i.test(file)) {
+      if (isWindowsHint(file)) {
         windows.add(file);
       }
     }
@@ -272,7 +275,7 @@ function classify(files) {
     targetedTests.push('unit');
   }
 
-  const windowsTests = existingTests([...new Set([...windows, ...targetedTests.filter(t => /windows|path|shell|workflow|install|hook/i.test(t))])].sort());
+  const windowsTests = existingTests([...new Set([...windows, ...targetedTests.filter(isWindowsHint)])].sort());
 
   return {
     code_changed: codeChanged,
