@@ -1,4 +1,3 @@
-'use strict';
 /**
  * Runtime surface module — ADR-0011 Phase 2 (Option B).
  *
@@ -14,27 +13,48 @@
  *   writeSurface(runtimeConfigDir, surfaceState)
  *   resolveSurface(runtimeConfigDir, manifest, clusterMap)
  *   applySurface(runtimeConfigDir, layout, manifest, clusterMap)
- *   listSurface(runtimeConfigDir, layout, manifest, clusterMap)
+ *   listSurface(runtimeConfigDir, manifest, clusterMap)
  *   pruneSkillDirs(skillsDir, retainedNames, prefix, manifest)
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/surface.cjs collapsed
+ * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only types are added.
  */
 
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
-const { platformWriteSync } = require('./shell-command-projection.cjs');
-
+import fs from 'node:fs';
+import path from 'node:path';
+import { platformWriteSync } from './shell-command-projection.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import installProfiles = require('./install-profiles.cjs');
 const {
   readActiveProfile,
   resolveProfile,
-  stageSkillsForProfile,
-  stageAgentsForProfile,
   loadSkillsManifest,
-  PROFILES,
-} = require('./install-profiles.cjs');
-const { CLUSTERS, allClusteredSkills } = require('./clusters.cjs');
-const { findInstallSourceRoot } = require('./runtime-artifact-layout.cjs');
+} = installProfiles;
+import { CLUSTERS } from './clusters.cjs';
+import type { ClusterMap } from './clusters.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import runtimeArtifactLayout = require('./runtime-artifact-layout.cjs');
+const { findInstallSourceRoot } = runtimeArtifactLayout;
 
 const SURFACE_FILE_NAME = '.gsd-surface.json';
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+interface ArtifactKind {
+  kind: string;
+  destSubpath: string;
+  prefix: string;
+  stage: (resolvedProfile: { name: string; skills: Set<string> | '*'; agents: Set<string> }) => string;
+}
+
+interface Layout {
+  runtime: string;
+  configDir: string;
+  kinds: ArtifactKind[];
+}
 
 // ---------------------------------------------------------------------------
 // State IO
@@ -48,28 +68,36 @@ const SURFACE_FILE_NAME = '.gsd-surface.json';
  * @property {string[]} explicitRemoves
  */
 
+interface SurfaceState {
+  baseProfile: string;
+  disabledClusters: string[];
+  explicitAdds: string[];
+  explicitRemoves: string[];
+}
+
 /**
  * Read the surface state from a runtime config directory.
  *
- * @param {string} runtimeConfigDir
- * @returns {SurfaceState|null} null if file missing or corrupt
+ * @param runtimeConfigDir
+ * @returns null if file missing or corrupt
  */
-function readSurface(runtimeConfigDir) {
+function readSurface(runtimeConfigDir: string): SurfaceState | null {
   const filePath = path.join(runtimeConfigDir, SURFACE_FILE_NAME);
   try {
     const raw = fs.readFileSync(filePath, 'utf8');
-    const parsed = JSON.parse(raw);
+    const parsed: unknown = JSON.parse(raw);
     // Structural validation — must have these fields with expected types
     if (typeof parsed !== 'object' || parsed === null) return null;
-    if (typeof parsed.baseProfile !== 'string') return null;
-    if (!Array.isArray(parsed.disabledClusters)) return null;
-    if (!Array.isArray(parsed.explicitAdds)) return null;
-    if (!Array.isArray(parsed.explicitRemoves)) return null;
+    const p = parsed as Record<string, unknown>;
+    if (typeof p['baseProfile'] !== 'string') return null;
+    if (!Array.isArray(p['disabledClusters'])) return null;
+    if (!Array.isArray(p['explicitAdds'])) return null;
+    if (!Array.isArray(p['explicitRemoves'])) return null;
     return {
-      baseProfile: parsed.baseProfile,
-      disabledClusters: parsed.disabledClusters,
-      explicitAdds: parsed.explicitAdds,
-      explicitRemoves: parsed.explicitRemoves,
+      baseProfile: p['baseProfile'],
+      disabledClusters: p['disabledClusters'] as string[],
+      explicitAdds: p['explicitAdds'] as string[],
+      explicitRemoves: p['explicitRemoves'] as string[],
     };
   } catch {
     return null;
@@ -78,11 +106,8 @@ function readSurface(runtimeConfigDir) {
 
 /**
  * Write the surface state atomically via the platform seam (mkdir + tmp+rename).
- *
- * @param {string} runtimeConfigDir
- * @param {SurfaceState} surfaceState
  */
-function writeSurface(runtimeConfigDir, surfaceState) {
+function writeSurface(runtimeConfigDir: string, surfaceState: SurfaceState): void {
   platformWriteSync(path.join(runtimeConfigDir, SURFACE_FILE_NAME), JSON.stringify(surfaceState, null, 2) + '\n');
 }
 
@@ -92,15 +117,11 @@ function writeSurface(runtimeConfigDir, surfaceState) {
 
 /**
  * Expand cluster names to skill stems using the provided clusterMap.
- *
- * @param {string[]} clusterNames
- * @param {Object} clusterMap CLUSTERS or override
- * @returns {Set<string>}
  */
-function clustersToSkills(clusterNames, clusterMap) {
-  const result = new Set();
+function clustersToSkills(clusterNames: string[], clusterMap: ClusterMap | Record<string, string[]>): Set<string> {
+  const result = new Set<string>();
   for (const name of clusterNames) {
-    const members = clusterMap[name];
+    const members = (clusterMap as Record<string, ReadonlyArray<string> | undefined>)[name];
     if (members) {
       for (const s of members) result.add(s);
     }
@@ -117,12 +138,8 @@ function clustersToSkills(clusterNames, clusterMap) {
  *  - legacy plain object map: { [stem]: string[] }
  *  - parsed gsd-file-manifest.json object ({ files: { ... } }) by rebuilding
  *    the dependency manifest from the install source tree
- *
- * @param {string} runtimeConfigDir
- * @param {Map<string, string[]>|Object} manifest
- * @returns {Map<string, string[]>}
  */
-function normalizeSkillManifest(runtimeConfigDir, manifest) {
+function normalizeSkillManifest(runtimeConfigDir: string, manifest: Map<string, string[]> | object | null | undefined): Map<string, string[]> {
   if (manifest instanceof Map) {
     return manifest;
   }
@@ -131,13 +148,14 @@ function normalizeSkillManifest(runtimeConfigDir, manifest) {
   }
 
   // Legacy/ad-hoc object map: stem -> requires[]
-  const arrayEntries = Object.entries(manifest).filter(([, value]) => Array.isArray(value));
+  const arrayEntries = Object.entries(manifest as Record<string, unknown>).filter(([, value]) => Array.isArray(value)) as [string, string[]][];
   if (arrayEntries.length > 0) {
     return new Map(arrayEntries.map(([stem, deps]) => [stem, deps]));
   }
 
   // Parsed gsd-file-manifest.json shape: rebuild the dependency map from source.
-  if (manifest.files && typeof manifest.files === 'object') {
+  const manifestObj = manifest as Record<string, unknown>;
+  if (manifestObj['files'] && typeof manifestObj['files'] === 'object') {
     const srcCommandsDir = findInstallSourceRoot(runtimeConfigDir);
     return loadSkillsManifest(srcCommandsDir);
   }
@@ -154,13 +172,8 @@ function normalizeSkillManifest(runtimeConfigDir, manifest) {
  * 2. Remove skills in disabled clusters
  * 3. Add explicitAdds (and their transitive closure)
  * 4. Remove explicitRemoves (only the stem itself, no cascade)
- *
- * @param {string} runtimeConfigDir
- * @param {Map<string, string[]>} manifest
- * @param {Object} [clusterMap] defaults to CLUSTERS
- * @returns {{ name: string, skills: Set<string>, agents: Set<string> }}
  */
-function resolveSurface(runtimeConfigDir, manifest, clusterMap) {
+function resolveSurface(runtimeConfigDir: string, manifest: Map<string, string[]> | object, clusterMap?: ClusterMap | Record<string, string[]>): { name: string; skills: Set<string>; agents: Set<string> } {
   const cm = clusterMap || CLUSTERS;
   const skillManifest = normalizeSkillManifest(runtimeConfigDir, manifest);
   const surface = readSurface(runtimeConfigDir);
@@ -172,15 +185,15 @@ function resolveSurface(runtimeConfigDir, manifest, clusterMap) {
 
   // Resolve base profile
   const baseResolved = resolveProfile({
-    modes: baseProfileName.split(',').map(s => s.trim()),
+    modes: baseProfileName.split(',').map((s: string) => s.trim()),
     manifest: skillManifest,
   });
 
   // If full, we need to enumerate all skills from the manifest
-  let skills;
+  let skills: Set<string>;
   if (baseResolved.skills === '*') {
     // Materialize all skill stems from manifest
-    skills = new Set();
+    skills = new Set<string>();
     for (const [key] of skillManifest) {
       if (!key.startsWith('_calls_agents_')) skills.add(key);
     }
@@ -200,7 +213,7 @@ function resolveSurface(runtimeConfigDir, manifest, clusterMap) {
       const queue = [...addSet];
       const visited = new Set(addSet);
       while (queue.length > 0) {
-        const stem = queue.pop();
+        const stem = queue.pop()!;
         const deps = skillManifest.get(stem) || [];
         for (const dep of deps) {
           if (!visited.has(dep)) {
@@ -219,7 +232,7 @@ function resolveSurface(runtimeConfigDir, manifest, clusterMap) {
   }
 
   // Derive agents from skills
-  const agents = new Set();
+  const agents = new Set<string>();
   for (const skillStem of skills) {
     const agentRefs = skillManifest.get(`_calls_agents_${skillStem}`) || [];
     for (const agentStem of agentRefs) agents.add(agentStem);
@@ -236,13 +249,8 @@ function resolveSurface(runtimeConfigDir, manifest, clusterMap) {
 /**
  * Re-stage the active surface using the resolved layout.
  * Iterates layout.kinds and syncs each artifact kind to its destination.
- *
- * @param {string} runtimeConfigDir
- * @param {import('./runtime-artifact-layout.cjs').Layout} layout
- * @param {Map<string, string[]>} manifest
- * @param {Object} [clusterMap]
  */
-function applySurface(runtimeConfigDir, layout, manifest, clusterMap) {
+function applySurface(runtimeConfigDir: string, layout: Layout, manifest: Map<string, string[]> | object, clusterMap?: ClusterMap | Record<string, string[]>): { name: string; skills: Set<string>; agents: Set<string> } {
   if (path.resolve(runtimeConfigDir) !== path.resolve(layout.configDir)) {
     throw new TypeError('applySurface runtimeConfigDir must match layout.configDir');
   }
@@ -277,14 +285,14 @@ function applySurface(runtimeConfigDir, layout, manifest, clusterMap) {
  * This is the single point of truth for skill-dir pruning. Both _syncGsdDir
  * (surface apply) and callers that need stand-alone pruning use this function.
  *
- * @param {string} skillsDir        directory that contains the gsd-STEM sub-dirs
- * @param {Set<string>} retainedNames set of directory names to keep (e.g. 'gsd-help')
- * @param {string} prefix           GSD dir prefix, e.g. 'gsd-' (or '' for Hermes)
- * @param {Map<string, string[]>} [manifest] optional; required for Hermes empty-prefix case
- *                                  and for manifest-membership gate in prefixed case.
- *                                  Must be a Map; any other type is treated as missing.
+ * @param skillsDir        directory that contains the gsd-STEM sub-dirs
+ * @param retainedNames    set of directory names to keep (e.g. 'gsd-help')
+ * @param prefix           GSD dir prefix, e.g. 'gsd-' (or '' for Hermes)
+ * @param manifest         optional; required for Hermes empty-prefix case
+ *                         and for manifest-membership gate in prefixed case.
+ *                         Must be a Map; any other type is treated as missing.
  */
-function pruneSkillDirs(skillsDir, retainedNames, prefix, manifest) {
+function pruneSkillDirs(skillsDir: string, retainedNames: Set<string>, prefix: string, manifest?: Map<string, string[]>): void {
   if (!fs.existsSync(skillsDir)) return;
 
   // Finding 2: guard against callers passing a truthy non-Map as manifest.
@@ -301,7 +309,7 @@ function pruneSkillDirs(skillsDir, retainedNames, prefix, manifest) {
     const entryPath = path.join(skillsDir, entry);
     if (!fs.statSync(entryPath).isDirectory()) continue;
 
-    let isGsdOwned;
+    let isGsdOwned: boolean;
     if (prefix !== '') {
       if (!entry.startsWith(prefix)) {
         // Does not match prefix at all — user-owned, preserve.
@@ -334,7 +342,7 @@ function pruneSkillDirs(skillsDir, retainedNames, prefix, manifest) {
     try {
       fs.rmSync(entryPath, { recursive: true, force: true });
     } catch (err) {
-      process.stderr.write(`surface: failed to prune ${entryPath}: ${err.message}\n`);
+      process.stderr.write(`surface: failed to prune ${entryPath}: ${(err as Error).message}\n`);
     }
   }
 }
@@ -351,13 +359,8 @@ function pruneSkillDirs(skillsDir, retainedNames, prefix, manifest) {
  * For Hermes (empty prefix): uses manifest membership to discriminate GSD-owned vs
  * user-owned dirs. GSD-owned = stem in manifest; removal targets = in manifest AND
  * not in staged set. User-owned (not in manifest) are always preserved.
- *
- * @param {string} stagedDir source (staged temp dir or original)
- * @param {string} destDir runtime destination
- * @param {import('./runtime-artifact-layout.cjs').ArtifactKind|'commands'|'agents'} kind
- * @param {Map<string, string[]>} [manifest] optional; required for Hermes empty-prefix removal
  */
-function _syncGsdDir(stagedDir, destDir, kind, manifest) {
+function _syncGsdDir(stagedDir: string, destDir: string, kind: ArtifactKind | string, manifest?: Map<string, string[]>): void {
   if (!fs.existsSync(stagedDir)) return;
   fs.mkdirSync(destDir, { recursive: true });
 
@@ -368,7 +371,7 @@ function _syncGsdDir(stagedDir, destDir, kind, manifest) {
   if (kindName === 'skills') {
     // Skills kind: work with directories, not files.
     // Each staged entry is a directory named ${prefix}${stem}.
-    const stagedDirs = new Set(
+    const stagedDirs = new Set<string>(
       fs.readdirSync(stagedDir).filter(entry => {
         return fs.statSync(path.join(stagedDir, entry)).isDirectory();
       })
@@ -385,7 +388,7 @@ function _syncGsdDir(stagedDir, destDir, kind, manifest) {
     pruneSkillDirs(destDir, stagedDirs, kindPrefix, manifest);
   } else {
     // commands / agents kind: work with .md files
-    const stagedFiles = new Set(
+    const stagedFiles = new Set<string>(
       fs.readdirSync(stagedDir).filter(f => f.endsWith('.md'))
     );
 
@@ -401,7 +404,7 @@ function _syncGsdDir(stagedDir, destDir, kind, manifest) {
     for (const file of destEntries) {
       if (kindName === 'agents' && !file.startsWith('gsd-')) continue;
       if (!stagedFiles.has(file)) {
-        try { fs.unlinkSync(path.join(destDir, file)); } catch {}
+        try { fs.unlinkSync(path.join(destDir, file)); } catch { /* ignore */ }
       }
     }
   }
@@ -416,18 +419,13 @@ function _syncGsdDir(stagedDir, destDir, kind, manifest) {
  *
  * Token cost = sum of description lengths ÷ 4 (mirrors audit script).
  * Descriptions are read from the install source (findInstallSourceRoot).
- *
- * @param {string} runtimeConfigDir
- * @param {Map<string, string[]>} manifest
- * @param {Object} [clusterMap]
- * @returns {{ enabled: string[], disabled: string[], tokenCost: number }}
  */
-function listSurface(runtimeConfigDir, manifest, clusterMap) {
+function listSurface(runtimeConfigDir: string, manifest: Map<string, string[]> | object, clusterMap?: ClusterMap | Record<string, string[]>): { enabled: string[]; disabled: string[]; tokenCost: number } {
   const skillManifest = normalizeSkillManifest(runtimeConfigDir, manifest);
   const resolved = resolveSurface(runtimeConfigDir, skillManifest, clusterMap);
 
   // All known stems from manifest (exclude _calls_agents_ meta keys)
-  const allStems = [];
+  const allStems: string[] = [];
   for (const [key] of skillManifest) {
     if (!key.startsWith('_calls_agents_')) allStems.push(key);
   }
@@ -448,7 +446,7 @@ function listSurface(runtimeConfigDir, manifest, clusterMap) {
       if (descMatch) {
         tokenCost += Math.ceil(descMatch[1].trim().length / 4);
       }
-    } catch {}
+    } catch { /* ignore */ }
   }
 
   return { enabled, disabled, tokenCost };
@@ -458,7 +456,7 @@ function listSurface(runtimeConfigDir, manifest, clusterMap) {
 // Exports
 // ---------------------------------------------------------------------------
 
-module.exports = {
+export = {
   readSurface,
   writeSurface,
   resolveSurface,

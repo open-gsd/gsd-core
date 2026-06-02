@@ -1,14 +1,49 @@
-'use strict';
-
-const { createHub, ERROR_KINDS } = require('./command-routing-hub.cjs');
-
 /**
  * CJS Command Router Adapter Module
  *
  * Compatibility routing for gsd-tools.cjs command families. Uses generated
  * command metadata for availability and small family-local argument shapers for
  * CJS handler calls.
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/cjs-command-router-adapter.cjs
+ * collapsed to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only types are added.
  */
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import commandRoutingHub = require('./command-routing-hub.cjs');
+const { createHub, ERROR_KINDS } = commandRoutingHub;
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type Handler = () => unknown;
+
+interface RouteCjsCommandFamilyOptions {
+  args: string[];
+  subcommands: string[];
+  handlers: Record<string, Handler>;
+  defaultSubcommand?: string;
+  unsupported?: Record<string, string>;
+  unknownMessage: (subcommand: string, available: string[]) => string;
+  error: (message: string) => void;
+  cwd?: string;
+  raw?: boolean;
+}
+
+interface RouteHubCommandFamilyOptions {
+  family: string;
+  args: string[];
+  subcommands: string[];
+  handlers: Record<string, Handler>;
+  defaultSubcommand?: string;
+  unsupported?: Record<string, string>;
+  unknownMessage: (subcommand: string, available: string[]) => string;
+  error: (message: string) => void;
+  cwd?: string;
+  raw?: boolean;
+}
+
+// ─── Implementation ───────────────────────────────────────────────────────────
 
 function routeCjsCommandFamily({
   args,
@@ -20,7 +55,7 @@ function routeCjsCommandFamily({
   error,
   cwd,
   raw,
-}) {
+}: RouteCjsCommandFamilyOptions): void {
   routeHubCommandFamily({
     family: '__legacy_cjs_family__',
     args,
@@ -53,7 +88,7 @@ function routeHubCommandFamily({
   error,
   cwd,
   raw,
-}) {
+}: RouteHubCommandFamilyOptions): void {
   const subcommand = args[1] || defaultSubcommand;
 
   if (subcommand && unsupported[subcommand]) {
@@ -65,12 +100,12 @@ function routeHubCommandFamily({
   const registryHandlers = Object.fromEntries(
     Object.entries(handlers).map(([name, handler]) => [
       name,
-      () => {
+      (): { ok: true; data: unknown } => {
         const result = handler();
         if (result && typeof result === 'object' && Object.prototype.hasOwnProperty.call(result, 'ok')) {
-          return result;
+          return result as { ok: true; data: unknown };
         }
-        return { ok: true, data: null };
+        return { ok: true as const, data: null };
       },
     ]),
   );
@@ -90,14 +125,14 @@ function routeHubCommandFamily({
 
   if (result.ok) return;
   if (result.kind === ERROR_KINDS.UnknownCommand) {
-    error(unknownMessage(subcommand, available));
+    error(unknownMessage(subcommand ?? '', available));
     return;
   }
   if (result.kind === ERROR_KINDS.InvalidArgs || result.kind === ERROR_KINDS.HandlerRefusal) {
-    error(result.reason);
+    error((result as { reason: string }).reason);
     return;
   }
-  error(result.message);
+  error((result as { message: string }).message);
 }
 
 /**
@@ -107,11 +142,11 @@ function routeHubCommandFamily({
  * Accepts variable argument shapes so routers can pass legacy projection tuples
  * (`registryCommand`, `registryArgs`, `legacyArgs`, optional `rawFormatter`, `cjsFallback`).
  */
-function cjsFallbackHandler(...projectionArgs) {
+function cjsFallbackHandler(...projectionArgs: unknown[]): unknown {
   return projectionArgs[projectionArgs.length - 1];
 }
 
-module.exports = {
+export = {
   routeCjsCommandFamily,
   routeHubCommandFamily,
   cjsFallbackHandler,

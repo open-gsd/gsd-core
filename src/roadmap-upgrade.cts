@@ -1,14 +1,18 @@
-'use strict';
-
 /**
  * Roadmap Upgrade — Migration tool for converting legacy 'Phase N' phase IDs
  * to milestone-prefixed 'Phase M-NN' form.
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/roadmap-upgrade.cjs collapsed
+ * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only types are added.
  */
 
-const fs = require('fs');
-const path = require('path');
-const { execSync } = require('child_process');
-const { planningDir } = require('./planning-workspace.cjs');
+import fs from 'node:fs';
+import path from 'node:path';
+import { execSync } from 'node:child_process';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planningWorkspace = require('./planning-workspace.cjs');
+const { planningDir } = planningWorkspace;
 
 // ─── Regex helpers ────────────────────────────────────────────────────────────
 
@@ -26,6 +30,59 @@ const MILESTONE_HEADING_RE = /^##\s+(?:\[[^\]]+\]\s+|Roadmap\s+|[✅🚧]\s*)?v(
 // Matches checklist phase references: - [ ] **Phase N:** or - [x] **Phase N:**  (also decimal)
 const CHECKLIST_PHASE_RE = /^(\s*-\s*\[[ x]\]\s*\*{0,2})Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:/gi;
 
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface ParsedPhaseEntry {
+  lineIndex: number;
+  headingLine: string;
+  alreadyMigrated: boolean;
+  milestoneInt?: number | null;
+  legacyPhaseNum?: string;
+  phaseName?: string;
+  hashes?: string;
+}
+
+interface AssignedMapping {
+  newId: string;
+  milestoneInt: number;
+  subIndex: number;
+  legacyPhaseNum: string;
+}
+
+interface PhaseRename {
+  oldId: string;
+  newId: string;
+  oldDir: string;
+  newDir: string;
+}
+
+interface RoadmapEdit {
+  lineIndex: number;
+  from: string;
+  to: string;
+}
+
+interface CrossRefEdit {
+  file: string;
+  from: string;
+  to: string;
+}
+
+interface MigrationPlan {
+  alreadyMigrated: boolean;
+  phases: PhaseRename[];
+  roadmapEdits: RoadmapEdit[];
+  crossRefEdits: CrossRefEdit[];
+}
+
+interface ApplyMigrationResult {
+  applied?: boolean;
+  alreadyMigrated?: boolean;
+  dryRun?: boolean;
+  renamedDirs?: string[];
+  editedFiles?: string[];
+}
+
 // ─── Pure computation helpers ─────────────────────────────────────────────────
 
 /**
@@ -35,9 +92,9 @@ const CHECKLIST_PHASE_RE = /^(\s*-\s*\[[ x]\]\s*\*{0,2})Phase\s+(\d+[A-Z]?(?:\.\
  * Returns an array of:
  *   { lineIndex, headingLine, milestoneInt, legacyPhaseNum, phaseName }
  */
-function parseRoadmapPhases(lines) {
-  const results = [];
-  let currentMilestoneInt = null;
+function parseRoadmapPhases(lines: string[]): ParsedPhaseEntry[] {
+  const results: ParsedPhaseEntry[] = [];
+  let currentMilestoneInt: number | null = null;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -84,9 +141,9 @@ function parseRoadmapPhases(lines) {
  *
  * Sub-indices are 1-based and sequential within each milestone.
  */
-function assignSubIndices(phaseEntries) {
-  const milestoneCounters = new Map(); // milestoneInt → counter
-  const mapping = new Map(); // lineIndex → { newId, milestoneInt, subIndex }
+function assignSubIndices(phaseEntries: ParsedPhaseEntry[]): Map<number, AssignedMapping> {
+  const milestoneCounters = new Map<number, number>(); // milestoneInt → counter
+  const mapping = new Map<number, AssignedMapping>(); // lineIndex → { newId, milestoneInt, subIndex }
 
   for (const entry of phaseEntries) {
     if (entry.alreadyMigrated) continue;
@@ -99,7 +156,7 @@ function assignSubIndices(phaseEntries) {
     const subIndex = String(counter).padStart(2, '0');
     const newId = `${m}-${subIndex}`;
 
-    mapping.set(entry.lineIndex, { newId, milestoneInt: m, subIndex: counter, legacyPhaseNum: entry.legacyPhaseNum });
+    mapping.set(entry.lineIndex, { newId, milestoneInt: m, subIndex: counter, legacyPhaseNum: entry.legacyPhaseNum! });
   }
 
   return mapping;
@@ -109,7 +166,7 @@ function assignSubIndices(phaseEntries) {
  * Read a phase directory name and return its numeric token (stripping project_code prefix).
  * e.g. "GSD-01-setup" → "01", "01-setup" → "01", "02-implement" → "02", "02.1-hotfix" → "02.1"
  */
-function extractPhaseNumFromDir(dirName) {
+function extractPhaseNumFromDir(dirName: string): string | null {
   // Strip optional project_code prefix: "GSD-01-setup" → "01-setup"
   const stripped = dirName.replace(/^[A-Z]{1,6}-(?=\d)/i, '');
   // Matches: digits + optional letter + optional decimal suffix, followed by '-' or end.
@@ -125,7 +182,7 @@ function extractPhaseNumFromDir(dirName) {
  * old: "01-setup"         newId: "1-02"  projectCode: null   → "01-02-setup"
  * old: "GSD-01-setup"     newId: "1-02"  projectCode: "GSD"  → "GSD-01-02-setup"
  */
-function buildNewDirName(oldDirName, newId, projectCode) {
+function buildNewDirName(oldDirName: string, newId: string, projectCode: string | null): string {
   // Strip existing project_code prefix
   const stripped = oldDirName.replace(/^[A-Z]{1,6}-(?=\d)/i, '');
 
@@ -136,9 +193,8 @@ function buildNewDirName(oldDirName, newId, projectCode) {
   // Build M-NN prefix (zero-pad both parts)
   const [milestoneStr, subStr] = newId.split('-');
   const milestoneInt = parseInt(milestoneStr, 10);
-  const subIndex = subStr;
   const paddedMilestone = String(milestoneInt).padStart(2, '0');
-  const newBase = slug ? `${paddedMilestone}-${subIndex}-${slug}` : `${paddedMilestone}-${subIndex}`;
+  const newBase = slug ? `${paddedMilestone}-${subStr}-${slug}` : `${paddedMilestone}-${subStr}`;
 
   return projectCode ? `${projectCode}-${newBase}` : newBase;
 }
@@ -146,11 +202,11 @@ function buildNewDirName(oldDirName, newId, projectCode) {
 /**
  * Read project_code from config.json if present.
  */
-function readProjectCode(configPath) {
+function readProjectCode(configPath: string): string | null {
   try {
     const raw = fs.readFileSync(configPath, 'utf8');
-    const parsed = JSON.parse(raw);
-    return parsed.project_code || null;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return typeof parsed['project_code'] === 'string' ? parsed['project_code'] : null;
   } catch {
     return null;
   }
@@ -160,33 +216,25 @@ function readProjectCode(configPath) {
 
 /**
  * Compute a migration plan without touching the filesystem.
- *
- * @param {string} cwd
- * @param {object} [options]
- * @returns {{
- *   alreadyMigrated: boolean,
- *   phases: Array<{oldId, newId, oldDir, newDir}>,
- *   roadmapEdits: Array<{lineIndex, from, to}>,
- *   crossRefEdits: Array<{file, from, to}>,
- * }}
  */
-function computeMigrationPlan(cwd, options = {}) {
+function computeMigrationPlan(cwd: string, options: Record<string, unknown> = {}): MigrationPlan {
+  void options;
   const pDir = planningDir(cwd);
   const roadmapPath = path.join(pDir, 'ROADMAP.md');
   const configPath = path.join(pDir, 'config.json');
   const phasesDir = path.join(pDir, 'phases');
 
   // ── Check config for existing convention ─────────────────────────────────
-  let configData = {};
+  let configData: Record<string, unknown> = {};
   try {
-    configData = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    configData = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
   } catch { /* config may not exist */ }
 
-  if (configData.phase_id_convention === 'milestone-prefixed') {
+  if (configData['phase_id_convention'] === 'milestone-prefixed') {
     return { alreadyMigrated: true, phases: [], roadmapEdits: [], crossRefEdits: [] };
   }
 
-  const projectCode = configData.project_code || null;
+  const projectCode = typeof configData['project_code'] === 'string' ? configData['project_code'] : null;
 
   // ── Read ROADMAP.md ───────────────────────────────────────────────────────
   let roadmapContent = '';
@@ -211,12 +259,12 @@ function computeMigrationPlan(cwd, options = {}) {
   // Secondary lookup: (milestoneInt, normalizedLegacyNum) → newId
   // Used for directory renames and checklist rewrites where line position is unknown.
   // For simplicity, each milestone gets its own Map from legacy num → newId.
-  const milestoneIdMap = new Map(); // milestoneInt → Map<normalizedLegacyNum, newId>
+  const milestoneIdMap = new Map<number, Map<string, string>>(); // milestoneInt → Map<normalizedLegacyNum, newId>
   for (const [, entry] of idMapping) {
     if (!milestoneIdMap.has(entry.milestoneInt)) {
-      milestoneIdMap.set(entry.milestoneInt, new Map());
+      milestoneIdMap.set(entry.milestoneInt, new Map<string, string>());
     }
-    const mMap = milestoneIdMap.get(entry.milestoneInt);
+    const mMap = milestoneIdMap.get(entry.milestoneInt)!;
     const legacyNum = entry.legacyPhaseNum;
     // Register integer forms (covers plain numeric and letter-suffix IDs)
     const intPart = parseInt(legacyNum, 10);
@@ -236,7 +284,7 @@ function computeMigrationPlan(cwd, options = {}) {
   }
 
   // ── Read existing phase directories ───────────────────────────────────────
-  let existingDirs = [];
+  let existingDirs: string[] = [];
   try {
     existingDirs = fs.readdirSync(phasesDir).filter(d => {
       try {
@@ -261,7 +309,7 @@ function computeMigrationPlan(cwd, options = {}) {
   // context. The dry-run output shows the complete rename plan so users can review before
   // applying with --apply.
 
-  const phases = [];
+  const phases: PhaseRename[] = [];
   for (const dirName of existingDirs) {
     const phaseNum = extractPhaseNumFromDir(dirName);
     if (!phaseNum) continue;
@@ -295,7 +343,7 @@ function computeMigrationPlan(cwd, options = {}) {
   }
 
   // ── Build ROADMAP.md line edits ────────────────────────────────────────────
-  const roadmapEdits = [];
+  const roadmapEdits: RoadmapEdit[] = [];
 
   for (const entry of legacyPhases) {
     // Use lineIndex as the canonical key (not legacyPhaseNum, which may collide across milestones)
@@ -314,7 +362,7 @@ function computeMigrationPlan(cwd, options = {}) {
   }
 
   // Rewrite checklist lines in ROADMAP.md — use milestone context to resolve collisions.
-  let currentChecklistMilestone = null;
+  let currentChecklistMilestone: number | null = null;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
@@ -338,9 +386,9 @@ function computeMigrationPlan(cwd, options = {}) {
       const paddedLegacyDecimal = cDotIdx !== -1 ? paddedLegacy + legacyNum.slice(cDotIdx) : null;
 
       // Prefer milestone-context lookup (avoids collision across milestones)
-      let newId;
+      let newId: string | undefined;
       if (currentChecklistMilestone !== null && milestoneIdMap.has(currentChecklistMilestone)) {
-        const mMap = milestoneIdMap.get(currentChecklistMilestone);
+        const mMap = milestoneIdMap.get(currentChecklistMilestone)!;
         newId = mMap.get(legacyNum) || mMap.get(paddedLegacy) || mMap.get(unpaddedLegacy);
         if (!newId && paddedLegacyDecimal) newId = mMap.get(paddedLegacyDecimal);
       }
@@ -368,7 +416,7 @@ function computeMigrationPlan(cwd, options = {}) {
   }
 
   // ── Build cross-ref edits for STATE.md and PROJECT.md ────────────────────
-  const crossRefEdits = [];
+  const crossRefEdits: CrossRefEdit[] = [];
   const crossRefFiles = ['STATE.md', 'PROJECT.md'];
 
   for (const fileName of crossRefFiles) {
@@ -429,18 +477,12 @@ function computeMigrationPlan(cwd, options = {}) {
 /**
  * Apply the migration plan computed by computeMigrationPlan().
  *
- * @param {string} cwd
- * @param {{ alreadyMigrated, phases, roadmapEdits, crossRefEdits }} plan
- * @param {object} [options]
- * @param {boolean} [options.dryRun=true] - Print plan and exit without mutating.
- * @returns {{
- *   applied?: boolean,
- *   alreadyMigrated?: boolean,
- *   renamedDirs?: string[],
- *   editedFiles?: string[],
- * }}
+ * @param cwd
+ * @param plan
+ * @param options
+ * @param options.dryRun - Print plan and exit without mutating. (default true)
  */
-function applyMigration(cwd, plan, options = {}) {
+function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: boolean } = {}): ApplyMigrationResult {
   const dryRun = options.dryRun !== false; // default true
 
   if (plan.alreadyMigrated) {
@@ -453,22 +495,22 @@ function applyMigration(cwd, plan, options = {}) {
   }
 
   // ── Real run: verify clean working tree ───────────────────────────────────
-  let gitStatus;
+  let gitStatus: string;
   try {
     gitStatus = execSync('git status --porcelain', { cwd, encoding: 'utf8' });
   } catch (err) {
-    throw new Error(`git status failed: ${err.message}`);
+    throw new Error(`git status failed: ${(err as Error).message}`);
   }
   if (gitStatus.trim().length > 0) {
     throw new Error('Working tree is dirty. Commit or stash changes before migrating.');
   }
 
   // Capture HEAD sha for rollback
-  let headSha;
+  let headSha: string;
   try {
     headSha = execSync('git rev-parse HEAD', { cwd, encoding: 'utf8' }).trim();
   } catch (err) {
-    throw new Error(`git rev-parse HEAD failed: ${err.message}`);
+    throw new Error(`git rev-parse HEAD failed: ${(err as Error).message}`);
   }
 
   const pDir = planningDir(cwd);
@@ -476,8 +518,8 @@ function applyMigration(cwd, plan, options = {}) {
   const roadmapPath = path.join(pDir, 'ROADMAP.md');
   const configPath = path.join(pDir, 'config.json');
 
-  const renamedDirs = [];
-  const editedFiles = [];
+  const renamedDirs: string[] = [];
+  const editedFiles: string[] = [];
 
   try {
     // 1. Rename phase directories
@@ -508,12 +550,12 @@ function applyMigration(cwd, plan, options = {}) {
     }
 
     // 3. Rewrite cross-refs in STATE.md and PROJECT.md
-    const crossRefsByFile = new Map();
+    const crossRefsByFile = new Map<string, CrossRefEdit[]>();
     for (const edit of plan.crossRefEdits) {
       if (!crossRefsByFile.has(edit.file)) {
         crossRefsByFile.set(edit.file, []);
       }
-      crossRefsByFile.get(edit.file).push(edit);
+      crossRefsByFile.get(edit.file)!.push(edit);
     }
 
     for (const [fileName, edits] of crossRefsByFile) {
@@ -538,12 +580,12 @@ function applyMigration(cwd, plan, options = {}) {
     }
 
     // 4. Update config.json: set phase_id_convention to 'milestone-prefixed'
-    let configData = {};
+    let configData: Record<string, unknown> = {};
     try {
-      configData = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      configData = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
     } catch { /* config may not exist yet */ }
 
-    configData.phase_id_convention = 'milestone-prefixed';
+    configData['phase_id_convention'] = 'milestone-prefixed';
     fs.writeFileSync(configPath, JSON.stringify(configData, null, 2) + '\n', 'utf8');
     editedFiles.push('config.json');
 
@@ -552,10 +594,10 @@ function applyMigration(cwd, plan, options = {}) {
     try {
       execSync(`git reset --hard ${headSha}`, { cwd, stdio: 'pipe' });
       execSync('git clean -fd .planning/phases/', { cwd, stdio: 'pipe' });
-    } catch (rollbackErr) {
+    } catch {
       // Swallow rollback errors — surface original error
     }
-    throw new Error(`Migration failed (rolled back to ${headSha}): ${err.message}`);
+    throw new Error(`Migration failed (rolled back to ${headSha}): ${(err as Error).message}`);
   }
 
   return { applied: true, renamedDirs, editedFiles };
@@ -563,7 +605,7 @@ function applyMigration(cwd, plan, options = {}) {
 
 // ─── Exports ──────────────────────────────────────────────────────────────────
 
-module.exports = {
+export = {
   computeMigrationPlan,
   applyMigration,
 };

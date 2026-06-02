@@ -1,10 +1,3 @@
-'use strict';
-
-const { PHASE_SUBCOMMANDS } = require('./command-aliases.cjs');
-
-// ─── CommandRoutingHub (issue #3788, simplified in #175, typed in #176) ───────
-const { createHub, ERROR_KINDS, makeInvalidArgs } = require('./command-routing-hub.cjs');
-
 /**
  * Manifest-backed phase subcommand router.
  * Keeps gsd-tools.cjs thin while preserving existing command semantics.
@@ -16,11 +9,45 @@ const { createHub, ERROR_KINDS, makeInvalidArgs } = require('./command-routing-h
  *
  * #3788: dispatch is mediated by CommandRoutingHub. The public entry point
  * and observable CLI behaviour are unchanged.
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/phase-command-router.cjs
+ * collapsed to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only types are added.
  */
-function routePhaseCommand({ phase, args, cwd, raw, error }) {
+
+import { PHASE_SUBCOMMANDS } from './command-aliases.cjs';
+
+// ─── CommandRoutingHub (issue #3788, simplified in #175, typed in #176) ───────
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import commandRoutingHub = require('./command-routing-hub.cjs');
+const { createHub, ERROR_KINDS, makeInvalidArgs } = commandRoutingHub;
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface PhaseHandlers {
+  cmdPhaseMvpMode: (cwd: string, args: string[], raw: boolean) => void;
+  cmdPhaseNextDecimal: (cwd: string, arg: string | undefined, raw: boolean) => void;
+  cmdPhaseAdd: (cwd: string, desc: string, raw: boolean, customId: string | null) => void;
+  cmdPhaseAddBatch: (cwd: string, descriptions: string[], raw: boolean) => void;
+  cmdPhaseInsert: (cwd: string, pos: string | undefined, desc: string, raw: boolean) => void;
+  cmdPhaseRemove: (cwd: string, phaseNum: string, opts: { force: boolean }, raw: boolean) => void;
+  cmdPhaseComplete: (cwd: string, phaseNum: string | undefined, raw: boolean) => void;
+}
+
+interface RoutePhaseCommandOptions {
+  phase: PhaseHandlers;
+  args: string[];
+  cwd: string;
+  raw: boolean;
+  error: (message: string) => void;
+}
+
+// ─── Implementation ───────────────────────────────────────────────────────────
+
+function routePhaseCommand({ phase, args, cwd, raw, error }: RoutePhaseCommandOptions): void {
   // ── Unsupported subcommands ─────────────────────────────────────────────────
   // Resolved before dispatch so the error message stays deterministic.
-  const UNSUPPORTED = {
+  const UNSUPPORTED: Record<string, string> = {
     scaffold: 'phase scaffold is routed through the top-level scaffold command.',
   };
 
@@ -56,13 +83,13 @@ function routePhaseCommand({ phase, args, cwd, raw, error }) {
   // Each handler receives a ctx object from the hub and must return a HubResult.
   const cjsRegistry = {
     phase: {
-      'next-decimal': (_ctx) => {
+      'next-decimal': (_ctx: Record<string, unknown>): { ok: true; data: null } => {
         phase.cmdPhaseNextDecimal(cwd, args[2], raw);
-        return { ok: true, data: null };
+        return { ok: true as const, data: null };
       },
-      add: (_ctx) => {
-        let customId = null;
-        const descArgs = [];
+      add: (_ctx: Record<string, unknown>) => {
+        let customId: string | null = null;
+        const descArgs: string[] = [];
         for (let i = 2; i < args.length; i++) {
           const token = args[i];
           if (token === '--raw') {
@@ -82,18 +109,18 @@ function routePhaseCommand({ phase, args, cwd, raw, error }) {
           }
         }
         phase.cmdPhaseAdd(cwd, descArgs.join(' '), raw, customId);
-        return { ok: true, data: null };
+        return { ok: true as const, data: null };
       },
-      'add-batch': (_ctx) => {
+      'add-batch': (_ctx: Record<string, unknown>) => {
         const descFlagIdx = args.indexOf('--descriptions');
-        let descriptions;
+        let descriptions: string[];
         if (descFlagIdx !== -1) {
           const rawDescriptions = args[descFlagIdx + 1];
           if (!rawDescriptions || rawDescriptions.startsWith('--')) {
             return makeInvalidArgs('--descriptions', '--descriptions must be a JSON array');
           }
           try {
-            descriptions = JSON.parse(rawDescriptions);
+            descriptions = JSON.parse(rawDescriptions) as string[];
           } catch {
             return makeInvalidArgs('--descriptions', '--descriptions must be a JSON array');
           }
@@ -104,19 +131,19 @@ function routePhaseCommand({ phase, args, cwd, raw, error }) {
           descriptions = args.slice(2).filter(a => a !== '--raw');
         }
         phase.cmdPhaseAddBatch(cwd, descriptions, raw);
-        return { ok: true, data: null };
+        return { ok: true as const, data: null };
       },
-      insert: (_ctx) => {
+      insert: (_ctx: Record<string, unknown>) => {
         if (args.includes('--dry-run')) {
           return makeInvalidArgs('--dry-run', 'phase insert does not support --dry-run');
         }
         phase.cmdPhaseInsert(cwd, args[2], args.slice(3).join(' '), raw);
-        return { ok: true, data: null };
+        return { ok: true as const, data: null };
       },
-      remove: (_ctx) => {
+      remove: (_ctx: Record<string, unknown>) => {
         const removeArgs = args.slice(2).filter(token => token !== '--raw');
         let forceFlag = false;
-        const positional = [];
+        const positional: string[] = [];
         for (const token of removeArgs) {
           if (token === '--force') {
             forceFlag = true;
@@ -131,11 +158,11 @@ function routePhaseCommand({ phase, args, cwd, raw, error }) {
           return makeInvalidArgs('<phase-number>', 'phase remove accepts exactly one phase number');
         }
         phase.cmdPhaseRemove(cwd, positional[0], { force: forceFlag }, raw);
-        return { ok: true, data: null };
+        return { ok: true as const, data: null };
       },
-      complete: (_ctx) => {
+      complete: (_ctx: Record<string, unknown>): { ok: true; data: null } => {
         phase.cmdPhaseComplete(cwd, args[2], raw);
-        return { ok: true, data: null };
+        return { ok: true as const, data: null };
       },
     },
   };
@@ -186,6 +213,6 @@ function routePhaseCommand({ phase, args, cwd, raw, error }) {
   }
 }
 
-module.exports = {
+export = {
   routePhaseCommand,
 };
