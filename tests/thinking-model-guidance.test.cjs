@@ -14,7 +14,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const REFERENCES_DIR = path.join(__dirname, '..', 'get-shit-done', 'references');
+const REFERENCES_DIR = path.join(__dirname, '..', 'gsd-core', 'references');
 const AGENTS_DIR = path.join(__dirname, '..', 'agents');
 
 const THINKING_CONTEXTS = ['debug', 'execution', 'planning', 'research', 'verification'];

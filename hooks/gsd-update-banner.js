@@ -15,7 +15,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { PACKAGE_NAME, updateCacheFileName } = require('../get-shit-done/bin/lib/package-identity.cjs');
+const { PACKAGE_NAME, updateCacheFileName } = require('../gsd-core/bin/lib/package-identity.cjs');
 
 // Suppress repeat parse-error banners for 24 hours so a genuinely broken
 // cache file doesn't nag the user every session.

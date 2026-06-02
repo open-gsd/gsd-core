@@ -56,7 +56,7 @@ const path = require('node:path');
 const {
   INSTALL_MIGRATION_LOCK_NAME,
   runInstallerMigrations,
-} = require('../get-shit-done/bin/lib/installer-migrations.cjs');
+} = require('../gsd-core/bin/lib/installer-migrations.cjs');
 const { cleanup } = require('./helpers.cjs');
 
 // ---------------------------------------------------------------------------

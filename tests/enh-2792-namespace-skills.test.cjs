@@ -158,7 +158,7 @@ describe('Namespace skill bodies carry a routing table', () => {
 
 describe('gsd-health --context flag is wired into command + workflow', () => {
   const HEALTH_CMD = path.join(COMMANDS_DIR, 'health.md');
-  const HEALTH_WORKFLOW = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'health.md');
+  const HEALTH_WORKFLOW = path.join(__dirname, '..', 'gsd-core', 'workflows', 'health.md');
 
   test('commands/gsd/health.md argument-hint advertises --context', () => {
     const raw = fs.readFileSync(HEALTH_CMD, 'utf-8');
@@ -181,7 +181,7 @@ describe('gsd-health --context flag is wired into command + workflow', () => {
     );
   });
 
-  test('get-shit-done/workflows/health.md has a context_check step', () => {
+  test('gsd-core/workflows/health.md has a context_check step', () => {
     const raw = fs.readFileSync(HEALTH_WORKFLOW, 'utf-8');
     assert.match(
       raw,

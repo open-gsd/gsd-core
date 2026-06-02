@@ -22,7 +22,7 @@ const PLANNER_AGENT_PATH = path.join(__dirname, '..', 'agents', 'gsd-planner.md'
 const EXECUTE_PHASE_PATH = path.join(
   __dirname,
   '..',
-  'get-shit-done',
+  'gsd-core',
   'workflows',
   'execute-phase.md'
 );

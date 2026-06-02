@@ -6,7 +6,7 @@
  *
  * See feat #49 (model_policy presets) and config-schema.manifest.json.
  * Added under ADR-457: TS sources in src/ compile to CJS artifacts in
- * get-shit-done/bin/lib/ at publish time.
+ * gsd-core/bin/lib/ at publish time.
  *
  * Resolution precedence (highest → lowest):
  *   1. model_overrides[agent]

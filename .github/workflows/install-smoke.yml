@@ -20,8 +20,8 @@ on:
       - main
     paths:
       - 'bin/install.js'
-      - 'get-shit-done/bin/gsd-tools.cjs'
-      - 'get-shit-done/bin/**'
+      - 'gsd-core/bin/gsd-tools.cjs'
+      - 'gsd-core/bin/**'
       - 'src/**'
       - 'tsconfig.build.json'
       - 'package.json'

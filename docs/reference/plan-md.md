@@ -122,8 +122,8 @@ Lists workflow files the executor reads before starting. Always includes the exe
 
 ```xml
 <execution_context>
-@~/.claude/get-shit-done/workflows/execute-plan.md
-@~/.claude/get-shit-done/templates/summary.md
+@~/.claude/gsd-core/workflows/execute-plan.md
+@~/.claude/gsd-core/templates/summary.md
 </execution_context>
 ```
 

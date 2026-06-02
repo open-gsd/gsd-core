@@ -201,14 +201,14 @@ export function summarizeInstallerMigrationResult(result: MigrationResult | null
 // categories. Returns null when no safe default applies — caller must
 // fall back to the hard assertion / interactive prompt for those.
 //
-// Stale SDK build artifacts live under get-shit-done/sdk/{dist,src}/
+// Stale SDK build artifacts live under gsd-core/sdk/{dist,src}/
 // and are regenerated on every install, so removing them is lossless.
 // User-facing skill anchors are the .md files that surface as commands
 // to the user — these are user-owned and must be kept.
 export function classifyPromptUserAction(action: MigrationAction): ClassifyResult | null {
   const relPath = action && action.relPath;
   if (typeof relPath !== 'string' || !relPath) return null;
-  if (/^get-shit-done\/sdk\/(dist|src)\//.test(relPath)) {
+  if (/^gsd-core\/sdk\/(dist|src)\//.test(relPath)) {
     return { category: 'stale-sdk-build-artifact', choice: 'remove' };
   }
   if (/^skills\/gsd-[^/]+\/SKILL\.md$/.test(relPath)) {

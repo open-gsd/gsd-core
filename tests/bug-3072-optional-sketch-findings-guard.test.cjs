@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const ROOT = path.join(__dirname, '..', 'get-shit-done', 'workflows');
+const ROOT = path.join(__dirname, '..', 'gsd-core', 'workflows');
 
 function read(rel) {
   return fs.readFileSync(path.join(ROOT, rel), 'utf8');

@@ -23,7 +23,7 @@ This codebase adopts ESLint flat config (eslint ≥ 9) with `typescript-eslint`,
 
 ### Generated vs hand-written split
 
-Approximately 59 hand-written and 13 generated `.cjs` files currently coexist in `get-shit-done/bin/lib/`. The hand-written files are not checked by `typescript-eslint` type-aware rules because `tsconfig.lint.json` is not wired into an ESLint project. ADR 457 (`457-generated-cjs-single-source.md`) proposes collapsing this split; the present ADR is a prerequisite: the ESLint harness must exist before the collapse can surface type errors.
+Approximately 59 hand-written and 13 generated `.cjs` files currently coexist in `gsd-core/bin/lib/`. The hand-written files are not checked by `typescript-eslint` type-aware rules because `tsconfig.lint.json` is not wired into an ESLint project. ADR 457 (`457-generated-cjs-single-source.md`) proposes collapsing this split; the present ADR is a prerequisite: the ESLint harness must exist before the collapse can surface type errors.
 
 ## Decision
 

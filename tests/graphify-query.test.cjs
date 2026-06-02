@@ -17,7 +17,7 @@ const {
   buildAdjacencyMap,
   seedAndExpand,
   applyBudget,
-} = require('../get-shit-done/bin/lib/graphify.cjs');
+} = require('../gsd-core/bin/lib/graphify.cjs');
 
 const {
   enableGraphify,

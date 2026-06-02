@@ -26,7 +26,7 @@ const {
 } = require('../bin/install.js');
 
 // ─── Profile resolution for installRuntimeArtifacts tests ────────────────────
-const _gsdLibDir = path.join(__dirname, '..', 'get-shit-done', 'bin', 'lib');
+const _gsdLibDir = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib');
 const { loadSkillsManifest, resolveProfile } = require(path.join(_gsdLibDir, 'install-profiles.cjs'));
 const _manifest = loadSkillsManifest();
 const resolvedProfileFull = resolveProfile({ modes: [], manifest: _manifest });
@@ -188,7 +188,7 @@ describe('CodeBuddy local install/uninstall', () => {
     assert.ok(result.settingsPath, 'should have settingsPath (CodeBuddy supports hooks)');
 
     assert.ok(fs.existsSync(path.join(targetDir, 'skills', 'gsd-help', 'SKILL.md')));
-    assert.ok(fs.existsSync(path.join(targetDir, 'get-shit-done', 'VERSION')));
+    assert.ok(fs.existsSync(path.join(targetDir, 'gsd-core', 'VERSION')));
     assert.ok(fs.existsSync(path.join(targetDir, 'agents')));
 
     const manifest = writeManifest(targetDir, 'codebuddy');
@@ -197,7 +197,7 @@ describe('CodeBuddy local install/uninstall', () => {
     uninstall(false, 'codebuddy');
 
     assert.ok(!fs.existsSync(path.join(targetDir, 'skills', 'gsd-help')), 'CodeBuddy skill directory removed');
-    assert.ok(!fs.existsSync(path.join(targetDir, 'get-shit-done')), 'get-shit-done removed');
+    assert.ok(!fs.existsSync(path.join(targetDir, 'gsd-core')), 'gsd-core removed');
   });
 });
 
@@ -257,12 +257,12 @@ describe('E2E: CodeBuddy uninstall skills cleanup', () => {
     const targetDir = path.join(tmpDir, '.codebuddy');
     install(false, 'codebuddy');
 
-    assert.ok(fs.existsSync(path.join(targetDir, 'get-shit-done', 'VERSION')),
+    assert.ok(fs.existsSync(path.join(targetDir, 'gsd-core', 'VERSION')),
       'engine exists before uninstall');
 
     uninstall(false, 'codebuddy');
 
-    assert.ok(!fs.existsSync(path.join(targetDir, 'get-shit-done')),
-      'get-shit-done engine should be removed after CodeBuddy uninstall');
+    assert.ok(!fs.existsSync(path.join(targetDir, 'gsd-core')),
+      'gsd-core engine should be removed after CodeBuddy uninstall');
   });
 });

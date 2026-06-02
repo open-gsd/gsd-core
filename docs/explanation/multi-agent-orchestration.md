@@ -29,7 +29,7 @@ collects the result, and updates shared state in `.planning/`.
 
 ## The orchestrator → agent pattern
 
-Every workflow in `get-shit-done/workflows/` follows the same shape:
+Every workflow in `gsd-core/workflows/` follows the same shape:
 
 ```text
 Orchestrator (workflow .md file)

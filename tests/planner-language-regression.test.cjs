@@ -23,9 +23,9 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 const AGENTS_DIR = path.join(ROOT, 'agents');
-const WORKFLOWS_DIR = path.join(ROOT, 'get-shit-done', 'workflows');
-const REFERENCES_DIR = path.join(ROOT, 'get-shit-done', 'references');
-const TEMPLATES_DIR = path.join(ROOT, 'get-shit-done', 'templates');
+const WORKFLOWS_DIR = path.join(ROOT, 'gsd-core', 'workflows');
+const REFERENCES_DIR = path.join(ROOT, 'gsd-core', 'references');
+const TEMPLATES_DIR = path.join(ROOT, 'gsd-core', 'templates');
 
 /**
  * Collect all .md files from a directory (non-recursive).
@@ -242,7 +242,7 @@ describe('gsd-planner.md — required structural sections (#2091, #2092)', () =>
   test('coverage audit includes all four source types: GOAL, REQ, RESEARCH, CONTEXT', () => {
     // The planner file or its referenced planner-source-audit.md must define all four types.
     // The inline compact version uses **GOAL**, **REQ**, **RESEARCH**, **CONTEXT**.
-    const refPath = path.join(ROOT, 'get-shit-done', 'references', 'planner-source-audit.md');
+    const refPath = path.join(ROOT, 'gsd-core', 'references', 'planner-source-audit.md');
     const combined = plannerContent + (fs.existsSync(refPath) ? fs.readFileSync(refPath, 'utf-8') : '');
 
     const hasGoal = combined.includes('**GOAL**');

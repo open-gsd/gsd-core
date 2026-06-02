@@ -22,8 +22,8 @@ const fs = require('fs');
 const path = require('path');
 
 describe('Route 0: resume_incomplete_phase invariant (#160)', () => {
-  const nextMdPath = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'next.md');
-  const progressMdPath = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'progress.md');
+  const nextMdPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'next.md');
+  const progressMdPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'progress.md');
 
   // ── next.md ───────────────────────────────────────────────────────────────
 

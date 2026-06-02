@@ -14,7 +14,7 @@ const assert = require('node:assert/strict');
 const {
   shouldIncludeArgs,
   redactEvent,
-} = require('../../get-shit-done/bin/lib/observability/redaction.cjs');
+} = require('../../gsd-core/bin/lib/observability/redaction.cjs');
 
 describe('shouldIncludeArgs', () => {
   let originalEnv;

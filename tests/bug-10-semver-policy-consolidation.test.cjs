@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const {
   compareSemverCore,
   isStableTripletSemver,
-} = require('../get-shit-done/bin/lib/semver-compare.cjs');
+} = require('../gsd-core/bin/lib/semver-compare.cjs');
 const { isInstalledAheadOfLatest } = require('../hooks/gsd-statusline.js');
 
 describe('bug #10: semver policy consolidation', () => {

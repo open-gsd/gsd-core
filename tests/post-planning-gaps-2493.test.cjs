@@ -29,7 +29,7 @@ const path = require('path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
-const PLAN_PHASE_PATH = path.join(REPO_ROOT, 'get-shit-done', 'workflows', 'plan-phase.md');
+const PLAN_PHASE_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'plan-phase.md');
 
 // ─── Workflow file structure ──────────────────────────────────────────────────
 
@@ -82,7 +82,7 @@ describe('plan-phase.md Step 13e insertion (#2493)', () => {
 // ─── Decisions parser ────────────────────────────────────────────────────────
 
 describe('decisions.cjs parser (shared with #2492)', () => {
-  const { parseDecisions } = require('../get-shit-done/bin/lib/decisions.cjs');
+  const { parseDecisions } = require('../gsd-core/bin/lib/decisions.cjs');
 
   test('extracts D-NN entries from a <decisions> block', () => {
     const md = `
@@ -363,13 +363,13 @@ describe('workflow.post_planning_gaps config (#2493)', () => {
   afterEach(() => { cleanup(tmpDir); });
 
   test('VALID_CONFIG_KEYS contains workflow.post_planning_gaps', () => {
-    const { VALID_CONFIG_KEYS } = require('../get-shit-done/bin/lib/config-schema.cjs');
+    const { VALID_CONFIG_KEYS } = require('../gsd-core/bin/lib/config-schema.cjs');
     assert.ok(VALID_CONFIG_KEYS.has('workflow.post_planning_gaps'));
   });
 
   test('CONFIG_DEFAULTS contains post_planning_gaps default true', () => {
     // CONFIG_DEFAULTS is exported from core.cjs
-    const { CONFIG_DEFAULTS } = require('../get-shit-done/bin/lib/core.cjs');
+    const { CONFIG_DEFAULTS } = require('../gsd-core/bin/lib/core.cjs');
     assert.strictEqual(CONFIG_DEFAULTS.post_planning_gaps, true);
   });
 
@@ -406,7 +406,7 @@ describe('workflow.post_planning_gaps config (#2493)', () => {
   // in its return so callers can read config.post_planning_gaps regardless of whether
   // config.json exists, has the workflow section, or sets the flat key.
   test('loadConfig() returns post_planning_gaps default true when key absent', () => {
-    const { loadConfig } = require('../get-shit-done/bin/lib/core.cjs');
+    const { loadConfig } = require('../gsd-core/bin/lib/core.cjs');
     runGsdTools('config-ensure-section', tmpDir);
     // Remove the key to simulate older configs that pre-date the toggle
     const cfgPath = path.join(tmpDir, '.planning', 'config.json');
@@ -418,7 +418,7 @@ describe('workflow.post_planning_gaps config (#2493)', () => {
   });
 
   test('loadConfig() returns post_planning_gaps:false when workflow.post_planning_gaps=false', () => {
-    const { loadConfig } = require('../get-shit-done/bin/lib/core.cjs');
+    const { loadConfig } = require('../gsd-core/bin/lib/core.cjs');
     runGsdTools('config-ensure-section', tmpDir);
     runGsdTools(['config-set', 'workflow.post_planning_gaps', 'false'], tmpDir);
     const config = loadConfig(tmpDir);
@@ -426,7 +426,7 @@ describe('workflow.post_planning_gaps config (#2493)', () => {
   });
 
   test('loadConfig() returns post_planning_gaps:true when workflow.post_planning_gaps=true', () => {
-    const { loadConfig } = require('../get-shit-done/bin/lib/core.cjs');
+    const { loadConfig } = require('../gsd-core/bin/lib/core.cjs');
     runGsdTools('config-ensure-section', tmpDir);
     runGsdTools(['config-set', 'workflow.post_planning_gaps', 'true'], tmpDir);
     const config = loadConfig(tmpDir);

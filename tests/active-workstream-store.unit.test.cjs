@@ -25,7 +25,7 @@ const {
   parseCliWorkstream,
   resolveActiveWorkstream,
   applyResolvedWorkstreamEnv,
-} = require('../get-shit-done/bin/lib/active-workstream-store.cjs');
+} = require('../gsd-core/bin/lib/active-workstream-store.cjs');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

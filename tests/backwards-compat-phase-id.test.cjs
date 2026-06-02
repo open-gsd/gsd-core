@@ -25,7 +25,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { createTempProject, cleanup, runGsdTools, captureConsole } = require('./helpers.cjs');
-const { getMilestonePhaseFilter } = require('../get-shit-done/bin/lib/core.cjs');
+const { getMilestonePhaseFilter } = require('../gsd-core/bin/lib/core.cjs');
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 

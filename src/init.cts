@@ -2064,8 +2064,8 @@ function buildSkillManifest(cwd: string, skillsDir: string | null = null): Skill
           kind: 'skills',
         },
         {
-          root: '.claude/get-shit-done/skills',
-          path: path.join(os.homedir(), '.claude', 'get-shit-done', 'skills'),
+          root: '.claude/gsd-core/skills',
+          path: path.join(os.homedir(), '.claude', 'gsd-core', 'skills'),
           scope: 'import-only',
           kind: 'skills',
           deprecated: true,

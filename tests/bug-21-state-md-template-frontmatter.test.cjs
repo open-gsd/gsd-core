@@ -26,7 +26,7 @@ const path = require('node:path');
 const REPO_ROOT = path.join(__dirname, '..');
 
 const TEMPLATE_PATHS = [
-  path.join(REPO_ROOT, 'get-shit-done', 'templates', 'state.md'),
+  path.join(REPO_ROOT, 'gsd-core', 'templates', 'state.md'),
 ];
 
 /**

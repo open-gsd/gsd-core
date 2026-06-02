@@ -66,12 +66,12 @@ const {
   resolveModelForTier,
   KNOWN_PROVIDERS,
   _resetRuntimeWarningCacheForTests,
-} = require('../get-shit-done/bin/lib/core.cjs');
+} = require('../gsd-core/bin/lib/core.cjs');
 
 // KNOWN_PROVIDERS must also be exported directly from model-catalog.cjs
-const modelCatalog = require('../get-shit-done/bin/lib/model-catalog.cjs');
+const modelCatalog = require('../gsd-core/bin/lib/model-catalog.cjs');
 
-const { isValidConfigKey } = require('../get-shit-done/bin/lib/config-schema.cjs');
+const { isValidConfigKey } = require('../gsd-core/bin/lib/config-schema.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const makeTmp = (prefix) => createTempDir(`gsd-49-${prefix}-`);
@@ -593,7 +593,7 @@ describe('#49 reasoning_effort in model_policy entries', () => {
     // This test verifies the contract: resolveModelPolicy returns the model string,
     // and for runtimes not in RUNTIMES_WITH_REASONING_EFFORT, the caller must not
     // emit reasoning_effort.
-    const { renderEffortForRuntime, RUNTIMES_WITH_REASONING_EFFORT } = require('../get-shit-done/bin/lib/model-catalog.cjs');
+    const { renderEffortForRuntime, RUNTIMES_WITH_REASONING_EFFORT } = require('../gsd-core/bin/lib/model-catalog.cjs');
 
     // 'opencode' is NOT in RUNTIMES_WITH_REASONING_EFFORT (only codex has reasoning_effort in catalog)
     assert.ok(!RUNTIMES_WITH_REASONING_EFFORT.has('opencode'),

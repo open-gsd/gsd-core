@@ -19,9 +19,9 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const PLAN_PHASE = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'plan-phase.md');
-const VERIFY_PHASE = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'verify-phase.md');
-const SCHEMA_MANIFEST_JSON = path.join(__dirname, '..', 'get-shit-done', 'bin', 'shared', 'config-schema.manifest.json');
+const PLAN_PHASE = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-phase.md');
+const VERIFY_PHASE = path.join(__dirname, '..', 'gsd-core', 'workflows', 'verify-phase.md');
+const SCHEMA_MANIFEST_JSON = path.join(__dirname, '..', 'gsd-core', 'bin', 'shared', 'config-schema.manifest.json');
 
 describe('plan-phase decision-coverage gate (#2492)', () => {
   const md = fs.readFileSync(PLAN_PHASE, 'utf-8');

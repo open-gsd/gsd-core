@@ -77,7 +77,7 @@ paused_at: null
 
 ### Status values
 
-`normalizeStateStatus()` in `get-shit-done/bin/lib/state-document.cjs` maps raw body text to these canonical values:
+`normalizeStateStatus()` in `gsd-core/bin/lib/state-document.cjs` maps raw body text to these canonical values:
 
 | Canonical value | Matched text (case-insensitive) |
 |---|---|
@@ -133,7 +133,7 @@ If a future change replaces the regex parser with a full YAML library, these con
 
 ## Markdown body sections
 
-The body (everything after the closing `---`) follows the template in `get-shit-done/templates/state.md`. The standard sections are:
+The body (everything after the closing `---`) follows the template in `gsd-core/templates/state.md`. The standard sections are:
 
 ### Project Reference
 
@@ -153,7 +153,7 @@ Where the project stands right now:
 | `Last activity:` | ISO date (`YYYY-MM-DD`) when handler-written; narrative prose when executor-authored |
 | `Progress:` | Visual bar, e.g. `[████░░░░░░] 40%` |
 
-The `Status:` and `Last activity:` fields in this section are updated by GSD handlers when the existing value is a known template default (Knuth invariant: executor-authored values are preserved). The full list of known handler defaults is in `KNOWN_TEMPLATE_DEFAULTS` inside `get-shit-done/bin/lib/state-document.cjs`.
+The `Status:` and `Last activity:` fields in this section are updated by GSD handlers when the existing value is a known template default (Knuth invariant: executor-authored values are preserved). The full list of known handler defaults is in `KNOWN_TEMPLATE_DEFAULTS` inside `gsd-core/bin/lib/state-document.cjs`.
 
 ### Performance Metrics
 

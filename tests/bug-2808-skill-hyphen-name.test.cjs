@@ -40,13 +40,13 @@ const { convertClaudeCommandToClaudeSkill, installRuntimeArtifacts, uninstallRun
 const {
   loadSkillsManifest,
   resolveProfile,
-} = require(path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'install-profiles.cjs'));
+} = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'install-profiles.cjs'));
 
 // Full resolved profile — installs all available skills from the source dir
 const _manifest = loadSkillsManifest();
 const resolvedProfileFull = resolveProfile({ modes: [], manifest: _manifest });
 
-const WORKFLOWS_DIR = path.join(ROOT, 'get-shit-done', 'workflows');
+const WORKFLOWS_DIR = path.join(ROOT, 'gsd-core', 'workflows');
 const COMMANDS_DIR = path.join(ROOT, 'commands', 'gsd');
 
 function walkMd(dir) {

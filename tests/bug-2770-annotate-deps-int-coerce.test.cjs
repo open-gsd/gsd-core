@@ -28,7 +28,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
-const { extractFrontmatter } = require('../get-shit-done/bin/lib/frontmatter.cjs');
+const { extractFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
 
 function makePlanProject(files = {}) {
   const dir = createTempProject();

@@ -22,7 +22,7 @@ const isWindows = process.platform === 'win32';
 const PROJECTION_PATH = path.join(
   __dirname,
   '..',
-  'get-shit-done',
+  'gsd-core',
   'bin',
   'lib',
   'shell-command-projection.cjs',

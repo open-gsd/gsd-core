@@ -16,7 +16,7 @@ const _require: NodeRequire = require;
 // ─── Manifest requires ───────────────────────────────────────────────────────
 function loadConfigurationManifest(fileName: string): Record<string, unknown> {
   const candidates = [
-    // Installed runtime layout: get-shit-done/bin/shared/*.manifest.json
+    // Installed runtime layout: gsd-core/bin/shared/*.manifest.json
     join(__dirname, '..', 'shared', fileName),
   ];
   let lastErr: Error | null = null;

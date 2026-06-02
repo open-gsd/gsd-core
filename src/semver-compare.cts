@@ -3,7 +3,7 @@
  * bin/lib/*.cjs collapsed to a TypeScript source of truth).
  *
  * Logic is preserved byte-for-behaviour from the prior hand-written
- * `get-shit-done/bin/lib/semver-compare.cjs`; only types are added. The
+ * `gsd-core/bin/lib/semver-compare.cjs`; only types are added. The
  * normalization policy here is locked by `tests/semver-compare.test.cjs` and
  * consumed by update-check, statusline dev-install detection, and changeset
  * range compare (`scripts/changeset/cli.cjs`).

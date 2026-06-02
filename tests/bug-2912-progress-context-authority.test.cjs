@@ -2,7 +2,7 @@
  * Tests for issue #2912 — /gsd-progress can use stale CLAUDE.md project block
  * instead of GSD tracking files as authoritative source.
  *
- * Fix: the `report` step in get-shit-done/workflows/progress.md must contain
+ * Fix: the `report` step in gsd-core/workflows/progress.md must contain
  * an explicit "context authority" directive establishing PROJECT.md, STATE.md,
  * and ROADMAP.md as the authoritative sources for the progress report, and
  * forbidding the use of CLAUDE.md `## Project` blocks as a source for any
@@ -21,7 +21,7 @@ const path = require('path');
 const WORKFLOW_PATH = path.join(
   __dirname,
   '..',
-  'get-shit-done',
+  'gsd-core',
   'workflows',
   'progress.md'
 );

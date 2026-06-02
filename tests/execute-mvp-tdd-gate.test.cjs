@@ -10,7 +10,7 @@ const path = require('path');
 
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 
-const WORKFLOW = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'execute-phase.md');
+const WORKFLOW = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md');
 
 function parseGateContract(content) {
   const lines = content.split(/\r?\n/);

@@ -9,7 +9,7 @@
 // phrases like 'not found' or 'timed out'.
 
 /**
- * Tests for get-shit-done/bin/lib/graphify.cjs
+ * Tests for gsd-core/bin/lib/graphify.cjs
  *
  * Covers: config gate on/off (TEST-03), graceful degradation (TEST-04),
  * subprocess helper (FOUND-04), presence detection (FOUND-02),
@@ -34,7 +34,7 @@ const {
   // Build (Phase 3)
   graphifyBuild,
   writeSnapshot,
-} = require('../get-shit-done/bin/lib/graphify.cjs');
+} = require('../gsd-core/bin/lib/graphify.cjs');
 
 const {
   enableGraphify,

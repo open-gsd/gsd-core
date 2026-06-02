@@ -10,7 +10,7 @@ const assert = require('node:assert/strict');
 const {
   parseCodeReviewFlags,
   resolveCodeReviewWorkflow,
-} = require('../get-shit-done/bin/lib/code-review-flags.cjs');
+} = require('../gsd-core/bin/lib/code-review-flags.cjs');
 
 describe('parseCodeReviewFlags', () => {
   test('no flags → all defaults', () => {

@@ -54,7 +54,7 @@ function executionContextRefs(content) {
       const trailingProse = line.length > token.length;
       const normalized = token
         .replace(/^@(?:~|\$HOME)\//, '')
-        .replace(/^(?:\.claude\/)?(?:get-shit-done\/)?/, '');
+        .replace(/^(?:\.claude\/)?(?:gsd-core\/)?/, '');
       refs.push({ token, normalized, trailingProse });
     }
   }

@@ -4,7 +4,7 @@
  * Regression test for #3197 — gsd-tools config-set rejects workflow._auto_chain_active.
  *
  * Root cause: RUNTIME_STATE_KEYS was added to sdk/src/query/config-schema.ts in #3162
- * but not to get-shit-done/bin/lib/config-schema.cjs, so gsd-tools.cjs users still hit
+ * but not to gsd-core/bin/lib/config-schema.cjs, so gsd-tools.cjs users still hit
  * "Unknown config key" when setting workflow._auto_chain_active.
  */
 

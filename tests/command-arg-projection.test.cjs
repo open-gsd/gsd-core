@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const {
   parseNamedArgs,
   parseMultiwordArg,
-} = require('../get-shit-done/bin/lib/command-arg-projection.cjs');
+} = require('../gsd-core/bin/lib/command-arg-projection.cjs');
 
 // ---------------------------------------------------------------------------
 // parseNamedArgs — behavior-lock tests (green before AND after the #312 fix)

@@ -28,7 +28,7 @@ const {
 const DRIFT_PATH = path.join(
   __dirname,
   '..',
-  'get-shit-done',
+  'gsd-core',
   'bin',
   'lib',
   'drift.cjs',
@@ -36,7 +36,7 @@ const DRIFT_PATH = path.join(
 const CONFIG_SCHEMA_PATH = path.join(
   __dirname,
   '..',
-  'get-shit-done',
+  'gsd-core',
   'bin',
   'lib',
   'config-schema.cjs',
@@ -560,7 +560,7 @@ describe('gsd-codebase-mapper --paths flag', () => {
       path.join(
         __dirname,
         '..',
-        'get-shit-done',
+        'gsd-core',
         'workflows',
         'map-codebase.md',
       ),
@@ -578,7 +578,7 @@ describe('execute-phase integrates codebase_drift_gate', () => {
       path.join(
         __dirname,
         '..',
-        'get-shit-done',
+        'gsd-core',
         'workflows',
         'execute-phase.md',
       ),
@@ -592,7 +592,7 @@ describe('execute-phase integrates codebase_drift_gate', () => {
       path.join(
         __dirname,
         '..',
-        'get-shit-done',
+        'gsd-core',
         'workflows',
         'execute-phase.md',
       ),

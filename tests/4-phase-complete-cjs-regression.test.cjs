@@ -35,7 +35,7 @@ const { cleanup } = require('./helpers.cjs');
 // ── Load cmdPhaseComplete directly from phase.cjs (bypass the SDK router) ────
 // phase-command-router.cjs delegates to SDK when available; we must test the
 // CJS implementation directly since that is where the bug lives.
-const phaseModule = require('../get-shit-done/bin/lib/phase.cjs');
+const phaseModule = require('../gsd-core/bin/lib/phase.cjs');
 const { cmdPhaseComplete } = phaseModule;
 
 // ── Fixture builder ──────────────────────────────────────────────────────────
@@ -193,7 +193,7 @@ function extractFrontmatterField(stateContent, fieldName) {
 // Capture stdout from cmdPhaseComplete (it calls output() which writes to stdout)
 function capturePhaseComplete(cwd, phaseNum) {
   const { execFileSync } = require('child_process');
-  const TOOLS = path.join(__dirname, '..', 'get-shit-done', 'bin', 'gsd-tools.cjs');
+  const TOOLS = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
   // We invoke gsd-tools directly for the full CJS path, but with GSD_DISABLE_SDK_BRIDGE=1
   // to force the CJS implementation. Since no env var disables bridge, we call cmdPhaseComplete
   // directly and redirect output capture.

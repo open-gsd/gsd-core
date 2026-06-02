@@ -10,7 +10,7 @@ const assert = require('node:assert/strict');
 const {
   CLUSTERS,
   allClusteredSkills,
-} = require('../get-shit-done/bin/lib/clusters.cjs');
+} = require('../gsd-core/bin/lib/clusters.cjs');
 
 describe('CLUSTERS', () => {
   test('is a frozen object', () => {

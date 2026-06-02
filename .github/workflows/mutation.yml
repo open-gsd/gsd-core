@@ -15,7 +15,7 @@ on:
     paths:
       # Only run when lib source, property/unit tests, or mutation config change
       - 'src/**/*.cts'
-      - 'get-shit-done/bin/lib/**/*.cjs'
+      - 'gsd-core/bin/lib/**/*.cjs'
       - 'tests/**/*.property.test.cjs'
       - 'tests/**/*.unit.test.cjs'
       - 'tests/adr-parser.test.cjs'

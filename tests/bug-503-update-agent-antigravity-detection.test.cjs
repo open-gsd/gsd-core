@@ -32,11 +32,11 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 const UPDATE_MD = fs.readFileSync(
-  path.join(ROOT, 'get-shit-done', 'workflows', 'update.md'),
+  path.join(ROOT, 'gsd-core', 'workflows', 'update.md'),
   'utf-8',
 );
 const { resolveUpdateContext } = require(
-  path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'update-context.cjs'),
+  path.join(ROOT, 'gsd-core', 'bin', 'lib', 'update-context.cjs'),
 );
 
 function normKey(p) { return path.resolve(p).replace(/\\/g, '/').toLowerCase(); }
@@ -55,8 +55,8 @@ describe('/gsd:update detects local Antigravity (.agent) installs (#503)', () =>
     const CWD = '/work/proj';
     const agentDir = `${CWD}/.agent`;
     const ffs = fakeFs({
-      [`${agentDir}/get-shit-done/VERSION`]: '1.40.0\n',
-      [`${agentDir}/get-shit-done/workflows/update.md`]: 'x',
+      [`${agentDir}/gsd-core/VERSION`]: '1.40.0\n',
+      [`${agentDir}/gsd-core/workflows/update.md`]: 'x',
     });
     const r = resolveUpdateContext({ home: HOME, cwd: CWD, env: {}, fs: ffs });
     assert.equal(

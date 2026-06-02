@@ -52,6 +52,6 @@ process.stderr.write(`ERROR shell-projection-drift: inline serialized shim build
 for (const match of matches) {
   process.stderr.write(`  - ${match.label}\n`);
 }
-process.stderr.write('Route shim/wrapper rendering through get-shit-done/bin/lib/shell-command-projection.cjs\n');
+process.stderr.write('Route shim/wrapper rendering through gsd-core/bin/lib/shell-command-projection.cjs\n');
 process.stderr.write('Safe subprocess execution via spawnSync/execFileSync is intentionally allowed.\n');
 process.exit(1);

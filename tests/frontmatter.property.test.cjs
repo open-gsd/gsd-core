@@ -3,7 +3,7 @@
 /**
  * Property-based tests for frontmatter.cjs
  *
- * Module: get-shit-done/bin/lib/frontmatter.cjs
+ * Module: gsd-core/bin/lib/frontmatter.cjs
  * Exported (pure): extractFrontmatter, reconstructFrontmatter, spliceFrontmatter
  *
  * Properties tested:
@@ -23,7 +23,7 @@ const {
   extractFrontmatter,
   reconstructFrontmatter,
   spliceFrontmatter,
-} = require('../get-shit-done/bin/lib/frontmatter.cjs');
+} = require('../gsd-core/bin/lib/frontmatter.cjs');
 
 // ─── Arbitraries ─────────────────────────────────────────────────────────────
 

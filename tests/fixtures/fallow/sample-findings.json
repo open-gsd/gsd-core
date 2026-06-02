@@ -9,7 +9,7 @@
   "duplicates": [
     {
       "left": {
-        "file": "get-shit-done/bin/lib/config-schema.cjs",
+        "file": "gsd-core/bin/lib/config-schema.cjs",
         "start": 14,
         "end": 22
       },

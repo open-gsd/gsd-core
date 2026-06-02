@@ -15,7 +15,7 @@ const _require: NodeRequire = require;
 // Resolve model-catalog.json via a prioritised candidate list so the module
 // works in every layout:
 //
-//   1. Co-located install path — get-shit-done/bin/shared/model-catalog.json
+//   1. Co-located install path — gsd-core/bin/shared/model-catalog.json
 //   2. Source-repo dev path — sdk/shared/model-catalog.json
 //   3. GSD_MODEL_CATALOG env override
 const _catalogCandidates: string[] = [

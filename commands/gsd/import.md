@@ -21,10 +21,10 @@ Import external plan files into the GSD planning system with conflict detection 
 </objective>
 
 <execution_context>
-@~/.claude/get-shit-done/workflows/import.md
-@~/.claude/get-shit-done/references/ui-brand.md
-@~/.claude/get-shit-done/references/gate-prompts.md
-@~/.claude/get-shit-done/references/doc-conflict-engine.md
+@~/.claude/gsd-core/workflows/import.md
+@~/.claude/gsd-core/references/ui-brand.md
+@~/.claude/gsd-core/references/gate-prompts.md
+@~/.claude/gsd-core/references/doc-conflict-engine.md
 </execution_context>
 
 <context>
@@ -33,7 +33,7 @@ $ARGUMENTS
 
 <process>
 If `--from-gsd2` is in $ARGUMENTS:
-Run: `node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" from-gsd2`
+Run: `node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" from-gsd2`
 Pass `--path <dir>` if provided. Present the migration result to the user.
 Stop here (do not run the standard import workflow).
 

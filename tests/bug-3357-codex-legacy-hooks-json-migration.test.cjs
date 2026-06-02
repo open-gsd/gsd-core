@@ -18,7 +18,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 const installModule = require('../bin/install.js');
-const { readInstallState } = require('../get-shit-done/bin/lib/installer-migrations.cjs');
+const { readInstallState } = require('../gsd-core/bin/lib/installer-migrations.cjs');
 const { install, parseTomlToObject } = installModule;
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const HOOKS_DIST = path.join(__dirname, '..', 'hooks', 'dist');

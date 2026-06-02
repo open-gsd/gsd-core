@@ -17,7 +17,7 @@
  *
  * Raising a budget is a deliberate choice — adjust the constant, write a
  * rationale in the PR, and make sure the bloat is not duplicated content
- * that belongs in `get-shit-done/references/`.
+ * that belongs in `gsd-core/references/`.
  *
  * Tighten-only invariant (issue #597): ceilings track the tier high-water mark
  * within GRACE lines. Budgets may only decrease, never silently creep upward.
@@ -90,7 +90,7 @@ describe('SIZE: agent line-count budget', () => {
       assert.ok(
         lines <= limit,
         `${agent}.md has ${lines} lines — exceeds ${tier} budget of ${limit}. ` +
-        `Extract shared boilerplate to get-shit-done/references/ or raise the budget ` +
+        `Extract shared boilerplate to gsd-core/references/ or raise the budget ` +
         `in tests/agent-size-budget.test.cjs with a rationale.`
       );
     });

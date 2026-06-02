@@ -1,5 +1,5 @@
 /**
- * Tests for get-shit-done/bin/lib/intel.cjs
+ * Tests for gsd-core/bin/lib/intel.cjs
  *
  * Covers: query, status, diff, validate, snapshot, patch-meta,
  * extract-exports, enabled/disabled gating, and CLI routing via gsd-tools.
@@ -26,7 +26,7 @@ const {
   ensureIntelDir,
   isIntelEnabled,
   INTEL_FILES,
-} = require('../get-shit-done/bin/lib/intel.cjs');
+} = require('../gsd-core/bin/lib/intel.cjs');
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 

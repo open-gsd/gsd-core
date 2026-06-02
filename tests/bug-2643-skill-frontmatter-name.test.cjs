@@ -25,7 +25,7 @@ const {
   skillFrontmatterName,
 } = require(path.join(ROOT, 'bin', 'install.js'));
 
-const WORKFLOWS_DIR = path.join(ROOT, 'get-shit-done', 'workflows');
+const WORKFLOWS_DIR = path.join(ROOT, 'gsd-core', 'workflows');
 const COMMANDS_DIR = path.join(ROOT, 'commands', 'gsd');
 
 function collectFiles(dir, results) {

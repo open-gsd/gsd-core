@@ -17,7 +17,7 @@ process.env.GSD_TEST_MODE = '1';
  * migration claim that "Legacy commands/gsd directory removed
  * (replaced by skills/)".
  *
- * Root cause: the writer at get-shit-done/bin/lib/profile-output.cjs
+ * Root cause: the writer at gsd-core/bin/lib/profile-output.cjs
  * fell back to commands/gsd/dev-preferences.md when no --output was passed.
  * The /gsd-profile-user workflow does not pass --output, so every refresh
  * deterministically re-creates the legacy directory.
@@ -43,8 +43,8 @@ const os = require('node:os');
 const { cleanup } = require('./helpers.cjs');
 
 const ROOT = path.join(__dirname, '..');
-const PROFILE_OUTPUT = path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'profile-output.cjs');
-const WORKFLOW = path.join(ROOT, 'get-shit-done', 'workflows', 'profile-user.md');
+const PROFILE_OUTPUT = path.join(ROOT, 'gsd-core', 'bin', 'lib', 'profile-output.cjs');
+const WORKFLOW = path.join(ROOT, 'gsd-core', 'workflows', 'profile-user.md');
 const INSTALL = path.join(ROOT, 'bin', 'install.js');
 
 describe('Bug #2973: dev-preferences default writer path is skills/gsd-dev-preferences/SKILL.md', () => {
@@ -173,7 +173,7 @@ describe('Bug #2973 (#3003 CR): installRuntimeArtifacts preserves user-owned gsd
     // installRuntimeArtifacts → _copyStaged overlays only staged skill dirs;
     // gsd-dev-preferences (not in source) is left untouched.
     const inst = require(INSTALL);
-    const { loadSkillsManifest, resolveProfile } = require(path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'install-profiles.cjs'));
+    const { loadSkillsManifest, resolveProfile } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'install-profiles.cjs'));
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2973-wipe-'));
     try {
       const configDir = path.join(tmp, 'config');
@@ -213,7 +213,7 @@ describe('Bug #2973 (#3003 CR): installRuntimeArtifacts preserves user-owned gsd
     // uninstallRuntimeArtifacts removes all gsd-* entries; installRuntimeArtifacts
     // then writes fresh ones from source.
     const inst = require(INSTALL);
-    const { loadSkillsManifest, resolveProfile } = require(path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'install-profiles.cjs'));
+    const { loadSkillsManifest, resolveProfile } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'install-profiles.cjs'));
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2973-wipe-shipped-'));
     try {
       const configDir = path.join(tmp, 'config');

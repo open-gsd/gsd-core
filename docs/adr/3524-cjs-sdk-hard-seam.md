@@ -7,9 +7,9 @@
 - **Extends:** ADR-0005 (seam map) — adds the **Shared-Module Source Policy** to the seam family
 - **Defers to:** ADR-0001 (Dispatch Policy Module), ADR-0003 (Model Catalog Module), ADR-0004 (Planning Workspace Module), ADR-0006 (Planning Path Projection Module), ADR-0009 (Shell Command Projection Module — post-Phase 3–4, also subsuming superseded ADR-0010)
 
-We decided to harden the boundary between the CJS tooling layer (`get-shit-done/bin/lib/*.cjs`) and the SDK (`sdk/src/**/*.ts`) by making every Module that is conceptually shared between the two runtimes have exactly one hand-authored source of truth and at most one generated artifact per runtime. The trigger is the recurring drift bug class — #1535, #1542, #2047/#2052, #2638/#2655, #2653/#2670, #2687/#2706, #2798/#2816, #3055/#3116, #3523 — each of which was a fix landing on one side without the other.
+We decided to harden the boundary between the CJS tooling layer (`gsd-core/bin/lib/*.cjs`) and the SDK (`sdk/src/**/*.ts`) by making every Module that is conceptually shared between the two runtimes have exactly one hand-authored source of truth and at most one generated artifact per runtime. The trigger is the recurring drift bug class — #1535, #1542, #2047/#2052, #2638/#2655, #2653/#2670, #2687/#2706, #2798/#2816, #3055/#3116, #3523 — each of which was a fix landing on one side without the other.
 
-The precedent shape is already in the repo. `sdk/scripts/gen-command-aliases.ts` emits `sdk/src/query/command-aliases.generated.ts` **and** `get-shit-done/bin/lib/command-aliases.generated.cjs` from one TypeScript source. `sdk/scripts/check-command-aliases-fresh.mjs` is the CI freshness gate. The two consuming sides are pure Adapters over the generated artifact. This ADR generalizes that pattern to the other Shared Modules and forbids the hand-synced-pair anti-pattern that produced #3523.
+The precedent shape is already in the repo. `sdk/scripts/gen-command-aliases.ts` emits `sdk/src/query/command-aliases.generated.ts` **and** `gsd-core/bin/lib/command-aliases.generated.cjs` from one TypeScript source. `sdk/scripts/check-command-aliases-fresh.mjs` is the CI freshness gate. The two consuming sides are pure Adapters over the generated artifact. This ADR generalizes that pattern to the other Shared Modules and forbids the hand-synced-pair anti-pattern that produced #3523.
 
 ## Decision
 
@@ -20,10 +20,10 @@ A **Shared Module** is any Module whose Interface is consumed identically by bot
 For every Shared Module:
 
 1. **Exactly one hand-authored source of truth.** Lives at `sdk/src/<module-name>/` as TypeScript when the Module has behavior, or `sdk/shared/<module-name>.manifest.json` when the Module is pure data.
-2. **Generated artifacts only.** The CJS-side file is `get-shit-done/bin/lib/<module-name>.generated.cjs` and is emitted mechanically. It is never hand-edited.
+2. **Generated artifacts only.** The CJS-side file is `gsd-core/bin/lib/<module-name>.generated.cjs` and is emitted mechanically. It is never hand-edited.
 3. **Per-Module freshness check.** A CI script `sdk/scripts/check-<module>-fresh.mjs` re-runs the generator and fails if the emitted artifact differs from the committed one. Precedent: `check-command-aliases-fresh.mjs`.
 4. **Per-Module drift lint** (when the source is data, not a generator output). Precedent: `scripts/lint-shell-command-projection-drift.cjs`. The lint asserts the canonical-owner invariants that aren't captured by file-equality.
-5. **Hand-synced pairs are forbidden.** A pre-merge `lint-shared-module-handsync.cjs` greps `get-shit-done/bin/lib/` for non-`.generated.*` files whose basename matches a `sdk/src/query/<same-name>.ts` source and fails the build unless the pair is explicitly allow-listed.
+5. **Hand-synced pairs are forbidden.** A pre-merge `lint-shared-module-handsync.cjs` greps `gsd-core/bin/lib/` for non-`.generated.*` files whose basename matches a `sdk/src/query/<same-name>.ts` source and fails the build unless the pair is explicitly allow-listed.
 
 ### 2. Module-indexed canonical-owner table
 
@@ -31,13 +31,13 @@ The table below indexes by Module, not by physical layer. Each row names the sou
 
 | Module | Status | Source of truth | Generated artifacts | Adapters |
 |---|---|---|---|---|
-| **STATE.md Document Module** | New under this ADR (Phase 1) — see CONTEXT.md "STATE.md Document Module" | `sdk/src/state/index.ts` (promoted from `sdk/src/query/state-document.ts`) | `sdk/src/query/state-document.generated.ts`, `get-shit-done/bin/lib/state-document.generated.cjs` | `bin/lib/state.cjs` and `sdk/src/query/state*.ts` import the generated form |
-| **Configuration Module** | New under this ADR (Phase 2) — definition added to CONTEXT.md as part of Phase 2 | `sdk/src/config/index.ts` plus data manifests `sdk/shared/config-schema.manifest.json` and `sdk/shared/config-defaults.manifest.json` | `sdk/src/query/config-schema.generated.ts`, `get-shit-done/bin/lib/config-schema.generated.cjs`, `get-shit-done/bin/lib/configuration.generated.cjs` | `bin/lib/config.cjs`, `bin/lib/core.cjs:loadConfig`, `sdk/src/config.ts` |
-| **Workstream Inventory Module** (Builder) | Amended under this ADR (Phase 3) — Builder split documented in CONTEXT.md update | `sdk/src/workstream/builder.ts` (pure projection from directory entries + STATE.md text + plan scan results → typed inventory) | `sdk/src/query/workstream-inventory-builder.generated.ts`, `get-shit-done/bin/lib/workstream-inventory-builder.generated.cjs` | Per-side fs Readers (`workstream-inventory.cjs` sync, `workstream-inventory.ts` async) call the Builder. Readers stay hand-authored because the fs idiom legitimately differs. |
-| **Project-Root Resolution Module** | New under this ADR (Phase 4) — short CONTEXT.md entry, behavior already de-facto shared | `sdk/src/project-root/index.ts` | `get-shit-done/bin/lib/project-root.generated.cjs` | `bin/lib/core.cjs` (`findProjectRoot`, `findEffectiveRoot`), `sdk/src/helpers.ts` |
-| **Frontmatter Module** | Conditional (Phase 3, only if drift catalogue confirms pair duplication) | `sdk/src/frontmatter/index.ts` | `get-shit-done/bin/lib/frontmatter.generated.cjs` | Existing handler call sites |
-| **Plan Scan Module** | Conditional (Phase 3 or later) | `sdk/src/plan-scan/index.ts` | `get-shit-done/bin/lib/plan-scan.generated.cjs` | Phase/roadmap routers |
-| **CJS Command Router Adapter Module** | Amended under this ADR (Phase 5). Existing Module (per CONTEXT.md) is extended so the per-family `handlers` map delegates to the SDK runtime bridge in-process instead of to parallel CJS handler implementations. | `sdk/src/query-runtime-bridge.ts` (already exists) + per-family delegate emitter | `get-shit-done/bin/lib/cjs-command-router-adapter.cjs` (existing, ~40 lines) plus per-family `handlers` maps that `require('../../sdk/dist/query-runtime-bridge.cjs')` and call `QueryRuntimeBridge.execute()` | `bin/gsd-tools.cjs` and the seven `bin/lib/*-command-router.cjs` files are the consumers. Per-family CJS handler files (`state.cjs`, `verify.cjs`, `init.cjs`, etc.) shrink to delegates or are deleted once the SDK handler is the only implementation. |
+| **STATE.md Document Module** | New under this ADR (Phase 1) — see CONTEXT.md "STATE.md Document Module" | `sdk/src/state/index.ts` (promoted from `sdk/src/query/state-document.ts`) | `sdk/src/query/state-document.generated.ts`, `gsd-core/bin/lib/state-document.generated.cjs` | `bin/lib/state.cjs` and `sdk/src/query/state*.ts` import the generated form |
+| **Configuration Module** | New under this ADR (Phase 2) — definition added to CONTEXT.md as part of Phase 2 | `sdk/src/config/index.ts` plus data manifests `sdk/shared/config-schema.manifest.json` and `sdk/shared/config-defaults.manifest.json` | `sdk/src/query/config-schema.generated.ts`, `gsd-core/bin/lib/config-schema.generated.cjs`, `gsd-core/bin/lib/configuration.generated.cjs` | `bin/lib/config.cjs`, `bin/lib/core.cjs:loadConfig`, `sdk/src/config.ts` |
+| **Workstream Inventory Module** (Builder) | Amended under this ADR (Phase 3) — Builder split documented in CONTEXT.md update | `sdk/src/workstream/builder.ts` (pure projection from directory entries + STATE.md text + plan scan results → typed inventory) | `sdk/src/query/workstream-inventory-builder.generated.ts`, `gsd-core/bin/lib/workstream-inventory-builder.generated.cjs` | Per-side fs Readers (`workstream-inventory.cjs` sync, `workstream-inventory.ts` async) call the Builder. Readers stay hand-authored because the fs idiom legitimately differs. |
+| **Project-Root Resolution Module** | New under this ADR (Phase 4) — short CONTEXT.md entry, behavior already de-facto shared | `sdk/src/project-root/index.ts` | `gsd-core/bin/lib/project-root.generated.cjs` | `bin/lib/core.cjs` (`findProjectRoot`, `findEffectiveRoot`), `sdk/src/helpers.ts` |
+| **Frontmatter Module** | Conditional (Phase 3, only if drift catalogue confirms pair duplication) | `sdk/src/frontmatter/index.ts` | `gsd-core/bin/lib/frontmatter.generated.cjs` | Existing handler call sites |
+| **Plan Scan Module** | Conditional (Phase 3 or later) | `sdk/src/plan-scan/index.ts` | `gsd-core/bin/lib/plan-scan.generated.cjs` | Phase/roadmap routers |
+| **CJS Command Router Adapter Module** | Amended under this ADR (Phase 5). Existing Module (per CONTEXT.md) is extended so the per-family `handlers` map delegates to the SDK runtime bridge in-process instead of to parallel CJS handler implementations. | `sdk/src/query-runtime-bridge.ts` (already exists) + per-family delegate emitter | `gsd-core/bin/lib/cjs-command-router-adapter.cjs` (existing, ~40 lines) plus per-family `handlers` maps that `require('../../sdk/dist/query-runtime-bridge.cjs')` and call `QueryRuntimeBridge.execute()` | `bin/gsd-tools.cjs` and the seven `bin/lib/*-command-router.cjs` files are the consumers. Per-family CJS handler files (`state.cjs`, `verify.cjs`, `init.cjs`, etc.) shrink to delegates or are deleted once the SDK handler is the only implementation. |
 | Command-Alias Module | **Already sealed** by this pattern's precedent — `sdk/scripts/gen-command-aliases.ts` + `check-command-aliases-fresh.mjs` | No change | No change | No change |
 | Dispatch Policy Module | **Defer — see ADR-0001** (and its 2026-05-05 SDK Runtime Bridge amendment) | n/a | n/a | n/a |
 | Model Catalog Module | **Defer — see ADR-0003**; the `sdk/shared/model-catalog.json` manifest already follows the source-of-truth policy | n/a | n/a | n/a |
@@ -68,7 +68,7 @@ Drift is blocked at three layers, each modeled on an existing in-repo script:
 
 1. **Per-Module freshness check** — `sdk/scripts/check-<module>-fresh.mjs`, one per Shared Module in the table. Precedent: `check-command-aliases-fresh.mjs`.
 2. **Per-Module drift lint** (when invariants are not pure file-equality) — `scripts/lint-<module>-drift.cjs`, one per data-manifest-backed Module. Precedent: `lint-shell-command-projection-drift.cjs`.
-3. **Hand-sync pair lint** — `scripts/lint-shared-module-handsync.cjs` rejects any pair of files at `get-shit-done/bin/lib/<name>.cjs` and `sdk/src/query/<name>.ts` (or `sdk/src/<name>.ts`) that are neither generated artifacts nor on an explicit allow-list. This blocks the #3523 anti-pattern at PR time.
+3. **Hand-sync pair lint** — `scripts/lint-shared-module-handsync.cjs` rejects any pair of files at `gsd-core/bin/lib/<name>.cjs` and `sdk/src/query/<name>.ts` (or `sdk/src/<name>.ts`) that are neither generated artifacts nor on an explicit allow-list. This blocks the #3523 anti-pattern at PR time.
 
 CODEOWNERS extends to `sdk/src/<module>/` for each Shared Module. Architecture-team review is required for changes to a source of truth.
 
@@ -105,11 +105,11 @@ _(Append-only. Use a dated header when the decision evolves.)_
 ### 2026-05-23 — validate.ts → verify.cjs generator pattern (issue #6)
 
 Three pure helpers from `sdk/src/query/validate.ts` Check 8 are now generated into
-`get-shit-done/bin/lib/validate.generated.cjs` via `sdk/scripts/gen-validate.mjs`,
+`gsd-core/bin/lib/validate.generated.cjs` via `sdk/scripts/gen-validate.mjs`,
 following the same I/O adapter pattern established by PR #154 (issue #4):
 
 **Generator:** `sdk/scripts/gen-validate.mjs`
-**Artifact:** `get-shit-done/bin/lib/validate.generated.cjs`
+**Artifact:** `gsd-core/bin/lib/validate.generated.cjs`
 **Freshness check:** `sdk/scripts/check-validate-fresh.mjs`
 **CI:** `.github/workflows/test.yml` — "SDK generated validate artifact drift check"
 
@@ -150,7 +150,7 @@ is still a full implementation; only Check 8 helpers are generated).
 #### Extension — issue #26: W005/W006-archived/I001 generator migration
 
 PR #3479 fixed three false-positive classes in `sdk/src/query/validate.ts`. PR #3806 hand-ported
-the three fixes to `get-shit-done/bin/lib/verify.cjs` but did not route them through the generator
+the three fixes to `gsd-core/bin/lib/verify.cjs` but did not route them through the generator
 — meaning they could drift again. Issue #26 closes this gap by extending `gen-validate.mjs`
 (introduced in this amendment above) to also extract and export the W005/W006-archived/I001 items.
 
@@ -211,11 +211,11 @@ verify.cjs migration scope for generator-pattern coverage.
 **Decision:** Apply the I/O adapter pattern (Section 4) to the pure-computation kernel inside `phase-lifecycle.ts`:
 
 1. **Three new generator scripts** extract pure helpers from the phase family:
-   - `sdk/scripts/gen-phase.mjs` → `get-shit-done/bin/lib/phase.generated.cjs`
+   - `sdk/scripts/gen-phase.mjs` → `gsd-core/bin/lib/phase.generated.cjs`
      (pure helpers: `isCanonicalPlanFile`, `describeNonCanonicalPlans`)
-   - `sdk/scripts/gen-phase-lifecycle.mjs` → `get-shit-done/bin/lib/phase-lifecycle.generated.cjs`
+   - `sdk/scripts/gen-phase-lifecycle.mjs` → `gsd-core/bin/lib/phase-lifecycle.generated.cjs`
      (pure helpers: `deriveProgressFromRoadmap`, `clampPercent`)
-   - `sdk/scripts/gen-phase-lifecycle-policy.mjs` → `get-shit-done/bin/lib/phase-lifecycle-policy.generated.cjs`
+   - `sdk/scripts/gen-phase-lifecycle-policy.mjs` → `gsd-core/bin/lib/phase-lifecycle-policy.generated.cjs`
      (14 pure policy helpers: `generatePhaseSlug`, `computePhaseDirectory`, `buildPhaseRoadmapEntry`, etc.)
 
 2. **`phase.cjs:cmdPhaseComplete`** is migrated to use `deriveProgressFromRoadmap` + `clampPercent` from the generated artifact. It reads the freshly-updated ROADMAP synchronously, derives the completed-phase count from Complete-row matching (idempotent), and passes it through `clampPercent` to prevent >100% Progress.

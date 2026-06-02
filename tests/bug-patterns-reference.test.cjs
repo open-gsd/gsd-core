@@ -18,7 +18,7 @@ const fs = require('fs');
 const path = require('path');
 
 const REFERENCE_PATH = path.join(
-  __dirname, '..', 'get-shit-done', 'references', 'common-bug-patterns.md'
+  __dirname, '..', 'gsd-core', 'references', 'common-bug-patterns.md'
 );
 const DEBUGGER_AGENT_PATH = path.join(
   __dirname, '..', 'agents', 'gsd-debugger.md'

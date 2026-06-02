@@ -164,12 +164,12 @@ Root architectural gap: orchestration flows lack a plan strategy seam (`local` v
 
 - Issue: #15
 - `commands/gsd/progress.md`
-- `get-shit-done/workflows/progress.md`
-- `get-shit-done/workflows/next.md`
+- `gsd-core/workflows/progress.md`
+- `gsd-core/workflows/next.md`
 - `commands/gsd/autonomous.md`
-- `get-shit-done/workflows/autonomous.md`
+- `gsd-core/workflows/autonomous.md`
 - `commands/gsd/plan-review-convergence.md`
-- `get-shit-done/workflows/plan-review-convergence.md`
+- `gsd-core/workflows/plan-review-convergence.md`
 - `commands/gsd/review.md`
 - `docs/COMMANDS.md` (`/gsd-plan-review-convergence`, `/gsd-review`)
 - `docs/CONFIGURATION.md` (`workflow.plan_review_convergence`, `review.default_reviewers`, `review.models.*`)

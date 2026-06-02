@@ -29,7 +29,7 @@ GSD on its own consumes roughly 60% of the default skill-listing budget. When th
 
 GSD has done one consolidation pass and shipped one install-time lever:
 
-- **`--minimal` / `--core-only` install flag** (`bin/install.js:123`, `get-shit-done/bin/lib/install-profiles.cjs`). Stages a filtered copy of `commands/gsd/` into a temp dir before each runtime-specific copy step. Reduces ~12k tokens of cold-start overhead to ~700.
+- **`--minimal` / `--core-only` install flag** (`bin/install.js:123`, `gsd-core/bin/lib/install-profiles.cjs`). Stages a filtered copy of `commands/gsd/` into a temp dir before each runtime-specific copy step. Reduces ~12k tokens of cold-start overhead to ~700.
 - **`MINIMAL_SKILL_ALLOWLIST`** — 6 skills: `new-project`, `discuss-phase`, `plan-phase`, `execute-phase`, `help`, `update`. Zero sub-agents in minimal.
 - **Hard 100-char description budget**, enforced in CI by `scripts/lint-descriptions.cjs` and `npm run lint:descriptions`.
 - **`gsd update` (without `--minimal`)** as the documented upgrade path from minimal → full.
@@ -235,7 +235,7 @@ Drafted for filing at <https://docs.claude.com/feedback> or similar channel; cop
 
 Phase 1 — profiles (ships with ADR-0010):
 
-1. In `get-shit-done/bin/lib/install-profiles.cjs`, replace the single `MINIMAL_SKILL_ALLOWLIST` constant with a `PROFILES` map. Each profile is the *transitive closure* over a base set, so `standard` includes `core` automatically.
+1. In `gsd-core/bin/lib/install-profiles.cjs`, replace the single `MINIMAL_SKILL_ALLOWLIST` constant with a `PROFILES` map. Each profile is the *transitive closure* over a base set, so `standard` includes `core` automatically.
 2. Add a `requires:` frontmatter field to every skill that calls another skill in its body. Add a lint check in `scripts/lint-descriptions.cjs` (or a sibling `lint-skill-deps.cjs`) that fails CI if a skill body references another skill that isn't in its `requires` list, and that fails if any profile would ship a skill whose `requires` aren't satisfied.
 3. Extend the `bin/install.js` argument parser: `--profile=<name>` (mutually exclusive with `--minimal`), `--profile=core,audit` for composition. Keep `--minimal` as an alias for `--profile=core`.
 4. Interactive install: if no `--profile` is given and no runtime/location is forced, present an `AskUserQuestion`-style picker. (Cowork analog already in the install flow.)
@@ -261,7 +261,7 @@ Phase 2 — runtime surface command (follow-up ADR or amendment):
 ## 10. References
 
 - Issue: [#3408](https://github.com/open-gsd/get-shit-done-redux/issues/3408)
-- Existing seam: `get-shit-done/bin/lib/install-profiles.cjs`
+- Existing seam: `gsd-core/bin/lib/install-profiles.cjs`
 - Description lint: `scripts/lint-descriptions.cjs`
 - Install dispatcher: `bin/install.js:123` (mode parsing), `bin/install.js:8167-8207` (minimal staging)
 - Audit data: [`docs/research/data/2026-05-12-skill-audit.json`](data/2026-05-12-skill-audit.json) (per-skill dep graph, description sizes, and cluster mapping — reproducible from `commands/gsd/` and `agents/`)

@@ -27,7 +27,7 @@ const fs = require('fs');
 const path = require('path');
 
 const STATE_CJS_PATH = path.join(
-  __dirname, '..', 'get-shit-done', 'bin', 'lib', 'state.cjs'
+  __dirname, '..', 'gsd-core', 'bin', 'lib', 'state.cjs'
 );
 
 // ─────────────────────────────────────────────────────────────────────────────

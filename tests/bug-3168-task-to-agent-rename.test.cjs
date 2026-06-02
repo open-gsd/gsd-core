@@ -1,7 +1,7 @@
 'use strict';
 
 // allow-test-rule: source-text-is-the-product
-// commands/gsd/*.md, get-shit-done/workflows/*.md, and agents/gsd-*.md are
+// commands/gsd/*.md, gsd-core/workflows/*.md, and agents/gsd-*.md are
 // deployed product files. Checking their text IS checking the runtime contract.
 
 /**
@@ -20,7 +20,7 @@ const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
 const COMMANDS_DIR = path.join(ROOT, 'commands', 'gsd');
-const WORKFLOWS_DIR = path.join(ROOT, 'get-shit-done', 'workflows');
+const WORKFLOWS_DIR = path.join(ROOT, 'gsd-core', 'workflows');
 const AGENTS_DIR = path.join(ROOT, 'agents');
 
 // Task tracker names — these must NOT be renamed

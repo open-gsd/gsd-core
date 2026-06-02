@@ -122,7 +122,7 @@ describe('orphaned hooks stale detection (#1750)', () => {
     //
     // Scope: only *same-directory* relative requires — require('./x') and
     // require('./subdir/x'). A require('../...') target reaches out of the hooks/
-    // dir into sibling package dirs (e.g. get-shit-done/) whose shipping is governed
+    // dir into sibling package dirs (e.g. gsd-core/) whose shipping is governed
     // by package.json "files", not by this allowlist, so it is out of scope here.
     assert.ok(Array.isArray(HOOKS_SUBDIRS_TO_COPY), 'HOOKS_SUBDIRS_TO_COPY must be exported as an array');
 

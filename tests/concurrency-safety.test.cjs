@@ -23,7 +23,7 @@ const path = require('path');
 const os = require('os');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 
-const { normalizeContent } = require('../get-shit-done/bin/lib/shell-command-projection.cjs');
+const { normalizeContent } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
 // normalizeMd was removed from core.cjs (Phase 4 — issue #3468); the same algorithm now
 // lives in the shell-command-projection seam. Wrap normalizeContent so existing
 // behavioral / snapshot / perf assertions stay point-of-truth.

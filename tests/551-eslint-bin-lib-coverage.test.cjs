@@ -3,7 +3,7 @@
 /**
  * Regression / migration-gate test for #551 and ADR-457 (TS migration).
  *
- * ESLint must apply the correct policy to every get-shit-done/bin/lib/*.cjs
+ * ESLint must apply the correct policy to every gsd-core/bin/lib/*.cjs
  * file as modules migrate from hand-written CJS to tsc-generated artifacts:
  *
  *   - tsc-generated artifact (has src/<basename>.cts counterpart) → MUST be
@@ -28,7 +28,7 @@ const path = require('node:path');
 const { ESLint } = require('eslint');
 
 const ROOT = path.resolve(__dirname, '..');
-const LIB_DIR = path.join(ROOT, 'get-shit-done', 'bin', 'lib');
+const LIB_DIR = path.join(ROOT, 'gsd-core', 'bin', 'lib');
 const SRC_DIR = path.join(ROOT, 'src');
 
 /**

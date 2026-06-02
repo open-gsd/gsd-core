@@ -8,7 +8,7 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 const COMMAND_PATH = path.join(ROOT, 'commands', 'gsd', 'plan-phase.md');
-const WORKFLOW_PATH = path.join(ROOT, 'get-shit-done', 'workflows', 'plan-phase.md');
+const WORKFLOW_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'plan-phase.md');
 const DOCS_COMMANDS_PATH = path.join(ROOT, 'docs', 'COMMANDS.md');
 
 function read(filePath) {

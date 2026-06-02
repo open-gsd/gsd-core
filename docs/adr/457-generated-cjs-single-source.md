@@ -9,7 +9,7 @@
 >
 > **Provenance note.** An earlier draft of this ADR (and issue #457) was authored
 > by an agent and asserted a codebase state that did not exist — "~13 files
-> generated from `.ts` via `tsc`", `get-shit-done/src/` / `sdk/src/` source trees,
+> generated from `.ts` via `tsc`", `gsd-core/src/` / `sdk/src/` source trees,
 > and a `tests/cjs-ts-parity.test.cjs`. None of those existed. This rewrite
 > grounds the decision in verified ground truth. Do not restore the earlier
 > "natural completion of the 13 generated files" framing; it was fiction.
@@ -18,12 +18,12 @@
 
 ### What actually exists today (verified 2026-05-31)
 
-- `get-shit-done/bin/lib/` holds **84** `.cjs` files. **Exactly one** carries a
+- `gsd-core/bin/lib/` holds **84** `.cjs` files. **Exactly one** carries a
   `// @generated` header: `package-identity.cjs`.
 - That one generated file is **not** `tsc` output. It is produced by
   `scripts/generate-package-identity.cjs` — a plain Node script that reads
   `package.json` and **bakes literal coordinate values** into a CJS module.
-- There is **no** `get-shit-done/src/` or `sdk/src/` TypeScript tree. There is
+- There is **no** `gsd-core/src/` or `sdk/src/` TypeScript tree. There is
   **no** TS→CJS transpilation pipeline. There is **no**
   `tests/cjs-ts-parity.test.cjs`. The only parity test is
   `tests/issue-498-package-identity.test.cjs`, scoped to the one baked file: it
@@ -88,7 +88,7 @@ build artifact?** Three models:
 
 2. **Build at publish (recommended).** `bin/lib/*.cjs` becomes a gitignored
    build artifact emitted from a TS `src/` tree by `tsc`; npm publishes the
-   built output. **Feasible today:** `package.json` already ships `get-shit-done`
+   built output. **Feasible today:** `package.json` already ships `gsd-core`
    and `scripts` via its `files` array, and already runs a pre-publish build
    step (`"prepublishOnly": "npm run build:hooks"`) — the `.cjs` emit hooks into
    the same step, and `npm pack` includes on-disk artifacts regardless of

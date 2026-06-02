@@ -7,7 +7,7 @@ process.env.GSD_TEST_MODE = '1';
  * discoverable $gsd-* skill surface.
  *
  * Codex CLI 0.130.0 (the version in the issue report) does NOT auto-discover
- * commands from get-shit-done/workflows/*.md or agents/*.md. It only registers
+ * commands from gsd-core/workflows/*.md or agents/*.md. It only registers
  * commands from skills/<name>/SKILL.md. Prior installer logic ("Codex now
  * discovers official skills from .agents/skills") was based on an assumption
  * that does not match the shipping Codex CLI behavior, leaving users with

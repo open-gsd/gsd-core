@@ -35,7 +35,7 @@ const {
   detectSubRepos,
   planningDir,
   timeAgo,
-} = require('../get-shit-done/bin/lib/core.cjs');
+} = require('../gsd-core/bin/lib/core.cjs');
 
 // ─── loadConfig ────────────────────────────────────────────────────────────────
 
@@ -162,7 +162,7 @@ describe('loadConfig', () => {
     // Verify that loadConfig's unknown-key check uses config-set's VALID_CONFIG_KEYS
     // as its source of truth. If a new key is added to config-set, it should
     // automatically be recognized by loadConfig without a separate update.
-    const { VALID_CONFIG_KEYS } = require('../get-shit-done/bin/lib/config.cjs');
+    const { VALID_CONFIG_KEYS } = require('../gsd-core/bin/lib/config.cjs');
     // Every top-level key from VALID_CONFIG_KEYS should be recognized
     const topLevelKeys = [...VALID_CONFIG_KEYS].map(k => k.split('.')[0]);
     // For value-validated keys (e.g. `runtime` enforces an enum at loadConfig
@@ -1242,7 +1242,7 @@ describe('stale hook path', () => {
       path.join(__dirname, '..', 'hooks', 'gsd-check-update-worker.js'), 'utf-8'
     );
     // Hooks are installed at configDir/hooks/ (e.g. ~/.claude/hooks/),
-    // not configDir/get-shit-done/hooks/ which doesn't exist (#1421)
+    // not configDir/gsd-core/hooks/ which doesn't exist (#1421)
     assert.ok(
       content.includes("path.join(configDir, 'hooks')"),
       'stale hook check must look in configDir/hooks/ where hooks are actually installed'
@@ -1267,7 +1267,7 @@ describe('shared cache directory (#1421)', () => {
 
   test('gsd-statusline.js reads the per-package shared cache and rejects foreign lineage (#1421/#607)', () => {
     const { evaluateUpdateCache } = require('../hooks/gsd-statusline.js');
-    const { updateCacheFileName, PACKAGE_NAME } = require('../get-shit-done/bin/lib/package-identity.cjs');
+    const { updateCacheFileName, PACKAGE_NAME } = require('../gsd-core/bin/lib/package-identity.cjs');
 
     // Per-package filename embeds the package identity — no generic fallback
     assert.strictEqual(
@@ -1328,7 +1328,7 @@ describe('shared cache directory (#1421)', () => {
 // ─── resolveWorktreeRoot ─────────────────────────────────────────────────────
 
 describe('resolveWorktreeRoot', () => {
-  const { resolveWorktreeRoot } = require('../get-shit-done/bin/lib/core.cjs');
+  const { resolveWorktreeRoot } = require('../gsd-core/bin/lib/core.cjs');
   let tmpDir;
 
   beforeEach(() => {
@@ -1353,7 +1353,7 @@ describe('resolveWorktreeRoot', () => {
 // ─── resolveWorktreeRoot — linked worktree with .planning/ (#1315) ───────────
 
 describe('resolveWorktreeRoot with linked worktree .planning/', () => {
-  const { resolveWorktreeRoot } = require('../get-shit-done/bin/lib/core.cjs');
+  const { resolveWorktreeRoot } = require('../gsd-core/bin/lib/core.cjs');
   const { execSync: execSyncLocal } = require('child_process');
   // On Windows CI, os.tmpdir() may return 8.3 short paths (RUNNER~1) while
   // git returns long paths (runneradmin). realpathSync.native resolves both.
@@ -1424,7 +1424,7 @@ describe('resolveWorktreeRoot with linked worktree .planning/', () => {
 // ─── monorepo worktree CWD preservation (#1283) ─────────────────────────────
 
 describe('monorepo worktree CWD preservation', () => {
-  const { resolveWorktreeRoot } = require('../get-shit-done/bin/lib/core.cjs');
+  const { resolveWorktreeRoot } = require('../gsd-core/bin/lib/core.cjs');
   let tmpDir;
 
   beforeEach(() => {
@@ -1461,7 +1461,7 @@ describe('monorepo worktree CWD preservation', () => {
 // ─── withPlanningLock ────────────────────────────────────────────────────────
 
 describe('withPlanningLock', () => {
-  const { withPlanningLock, planningDir } = require('../get-shit-done/bin/lib/core.cjs');
+  const { withPlanningLock, planningDir } = require('../gsd-core/bin/lib/core.cjs');
   let tmpDir;
 
   beforeEach(() => {

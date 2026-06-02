@@ -14,12 +14,12 @@ const path = require('path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 
 const AGENTS_DIR_NAME = 'agents';
-const MODEL_PROFILES = require('../get-shit-done/bin/lib/model-profiles.cjs').MODEL_PROFILES;
+const MODEL_PROFILES = require('../gsd-core/bin/lib/model-profiles.cjs').MODEL_PROFILES;
 const EXPECTED_AGENTS = Object.keys(MODEL_PROFILES);
 
 /**
  * Create a fake GSD install directory structure that mirrors what the installer
- * produces. gsd-tools.cjs lives at <configDir>/get-shit-done/bin/gsd-tools.cjs,
+ * produces. gsd-tools.cjs lives at <configDir>/gsd-core/bin/gsd-tools.cjs,
  * so the agents dir is at <configDir>/agents/.
  *
  * We use --cwd to point at the project, and GSD_INSTALL_DIR env to override
@@ -50,7 +50,7 @@ describe('init commands: agents_installed field (#1371)', () => {
     cleanup(tmpDir);
   });
 
-  // Point the SDK at the repo's agents/ dir (sibling of get-shit-done/) via the
+  // Point the SDK at the repo's agents/ dir (sibling of gsd-core/) via the
   // GSD_AGENTS_DIR override. The SDK side of init resolves agents from
   // GSD_AGENTS_DIR or the runtime config dir (~/.claude/agents for Claude); it
   // does NOT walk up from cwd like the CJS-era code did. Without this override
@@ -145,7 +145,7 @@ describe('validate health: agent installation check W010 (#1371)', () => {
   });
 
   test('health check reports healthy when agents are installed (repo layout)', () => {
-    // In the repo, agents/ exists as a sibling of get-shit-done/, so the
+    // In the repo, agents/ exists as a sibling of gsd-core/, so the
     // health check should find them via the gsd-tools.cjs path resolution
     const result = runGsdTools('validate health --raw', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);

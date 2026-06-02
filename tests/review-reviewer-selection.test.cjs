@@ -12,7 +12,7 @@ const {
   KNOWN_REVIEWER_SLUGS,
   normalizeConfiguredDefaultReviewers,
   resolveReviewerSelection,
-} = require('../get-shit-done/bin/lib/review-reviewer-selection.cjs');
+} = require('../gsd-core/bin/lib/review-reviewer-selection.cjs');
 
 describe('KNOWN_REVIEWER_SLUGS', () => {
   test('is an array of strings', () => {

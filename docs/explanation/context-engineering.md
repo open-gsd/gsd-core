@@ -48,7 +48,7 @@ Context engineering alone is not enough. If an agent starts fresh but receives v
 
 **Spec-driven development** means that every phase produces structured artefacts before execution begins. A `CONTEXT.md` captures implementation decisions from the Discuss step. A `RESEARCH.md` records what the researcher found. A `PLAN.md` breaks work into discrete, dependency-ordered tasks with explicit acceptance criteria. By the time an executor agent touches a file, it has a precise specification to work from — not a re-interpretation of a long conversation.
 
-**Meta-prompting** means the agent definitions themselves are carefully engineered prompts, not ad-hoc instructions. The files in `get-shit-done/workflows/` and `agents/` encode hard-won knowledge about how to scope tasks, what to verify, and when to escalate to a human checkpoint. The user does not need to re-explain this knowledge in every session; it is baked into the system's own prompts.
+**Meta-prompting** means the agent definitions themselves are carefully engineered prompts, not ad-hoc instructions. The files in `gsd-core/workflows/` and `agents/` encode hard-won knowledge about how to scope tasks, what to verify, and when to escalate to a human checkpoint. The user does not need to re-explain this knowledge in every session; it is baked into the system's own prompts.
 
 The combination is deliberate. Fresh context ensures each agent reasons clearly. Spec-driven artefacts ensure each agent reasons about the *right* thing. Meta-prompting ensures each agent knows *how* to reason about it well.
 

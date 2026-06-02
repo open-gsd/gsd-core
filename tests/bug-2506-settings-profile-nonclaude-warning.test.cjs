@@ -19,7 +19,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const SETTINGS_PATH = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'settings.md');
+const SETTINGS_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'settings.md');
 
 describe('bug #2506: settings.md non-Claude runtime warning for model profiles', () => {
   let content;

@@ -25,7 +25,7 @@ const PR_FULL_SUITES = ['unit', 'integration', 'security'];
 // Relative to repoRoot. We walk these to discover SUT-internal requires so that
 // a change to a deep helper propagates through re-export chains to tests.
 const SOURCE_TREES = [
-  'get-shit-done/bin/lib',
+  'gsd-core/bin/lib',
   'bin/lib',
   'bin',
   'scripts',

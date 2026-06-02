@@ -53,4 +53,4 @@ through to a triage decision rather than dropping an issue and moving on.
 ## Related
 
 - `.planning/state/` — existing session-continuity artifacts
-- `get-shit-done/references/` — where any future plugin-interface doc would live
+- `gsd-core/references/` — where any future plugin-interface doc would live

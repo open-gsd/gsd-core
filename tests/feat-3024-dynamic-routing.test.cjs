@@ -51,14 +51,14 @@ const os = require('node:os');
 const {
   resolveModelInternal,
   resolveModelForTier,
-} = require('../get-shit-done/bin/lib/core.cjs');
+} = require('../gsd-core/bin/lib/core.cjs');
 const {
   AGENT_DEFAULT_TIERS,
   VALID_AGENT_TIERS,
   MODEL_PROFILES,
   nextTier,
-} = require('../get-shit-done/bin/lib/model-profiles.cjs');
-const { isValidConfigKey } = require('../get-shit-done/bin/lib/config-schema.cjs');
+} = require('../gsd-core/bin/lib/model-profiles.cjs');
+const { isValidConfigKey } = require('../gsd-core/bin/lib/config-schema.cjs');
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const makeTmp = (prefix) => createTempDir(`gsd-3024-${prefix}-`);

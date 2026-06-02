@@ -44,7 +44,7 @@ const RULES = [
   },
   {
     name: 'TS runtime sources (ADR-457 build-at-publish)',
-    // src/*.cts compiles into get-shit-done/bin/lib/*.cjs; a source-only edit must
+    // src/*.cts compiles into gsd-core/bin/lib/*.cjs; a source-only edit must
     // still trigger the migrated module's tests (otherwise CI silently skips them).
     match: path => path.startsWith('src/') || path === 'tsconfig.build.json',
     tests: [
@@ -55,7 +55,7 @@ const RULES = [
   {
     name: 'installer and package layout',
     match: path => path.startsWith('bin/') ||
-      path.startsWith('get-shit-done/bin/') ||
+      path.startsWith('gsd-core/bin/') ||
       path.includes('install') ||
       path.includes('release-tarball-smoke'),
     fullMatrix: true,
@@ -122,7 +122,7 @@ const RULES = [
   },
   {
     name: 'workflow prompts',
-    match: path => path.startsWith('get-shit-done/workflows/'),
+    match: path => path.startsWith('gsd-core/workflows/'),
     tests: [
       'tests/workflow-compat.test.cjs',
       'tests/workflow-size-budget.test.cjs',
@@ -239,7 +239,7 @@ function classify(files) {
   let fullMatrix = false;
 
   for (const file of files) {
-    if (/^(bin|get-shit-done|agents|commands|docs|hooks|tests|scripts)\//.test(file) ||
+    if (/^(bin|gsd-core|agents|commands|docs|hooks|tests|scripts)\//.test(file) ||
       /^package(-lock)?\.json$/.test(file) ||
       /^tsconfig.*\.json$/.test(file) ||
       file.startsWith('.github/workflows/') ||

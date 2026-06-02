@@ -6,7 +6,7 @@
  * that cause the installer to warn about leaked paths.
  *
  * Files affected: agents/gsd-debugger.md (configDir = ~/.claude) and
- * get-shit-done/workflows/update.md (comment with e.g. ~/.claude).
+ * gsd-core/workflows/update.md (comment with e.g. ~/.claude).
  */
 
 process.env.GSD_TEST_MODE = '1';
@@ -54,17 +54,17 @@ describe('convertClaudeToAntigravityContent bare path replacement (#2418)', () =
     });
 
     test('still replaces ~/.claude/ (with trailing slash) correctly', () => {
-      const input = 'See ~/.claude/get-shit-done/workflows/';
+      const input = 'See ~/.claude/gsd-core/workflows/';
       const result = convertClaudeToAntigravityContent(input, true);
       assert.ok(
-        result.includes('~/.gemini/antigravity/get-shit-done/workflows/'),
+        result.includes('~/.gemini/antigravity/gsd-core/workflows/'),
         `Expected path with trailing slash to be replaced, got: ${result}`
       );
       assert.ok(!result.includes('~/.claude/'), `Expected ~/ .claude/ to be fully replaced, got: ${result}`);
     });
 
     test('does not double-replace ~/.claude/ paths', () => {
-      const input = 'See ~/.claude/get-shit-done/';
+      const input = 'See ~/.claude/gsd-core/';
       const result = convertClaudeToAntigravityContent(input, true);
       // Result should contain exactly one occurrence of the replacement path
       const count = (result.match(/~\/.gemini\/antigravity\//g) || []).length;
@@ -100,7 +100,7 @@ describe('convertClaudeToAntigravityContent bare path replacement (#2418)', () =
     });
 
     test('does not double-replace ~/.claude/ paths', () => {
-      const input = 'See ~/.claude/get-shit-done/';
+      const input = 'See ~/.claude/gsd-core/';
       const result = convertClaudeToAntigravityContent(input, false);
       // .agent/ should appear exactly once
       const count = (result.match(/\.agent\//g) || []).length;
@@ -133,7 +133,7 @@ describe('convertClaudeToAntigravityContent bare path replacement (#2418)', () =
     });
 
     test('update.md has no leaked ~/.claude after global Antigravity conversion', () => {
-      const updatePath = path.join(repoRoot, 'get-shit-done', 'workflows', 'update.md');
+      const updatePath = path.join(repoRoot, 'gsd-core', 'workflows', 'update.md');
       if (!fs.existsSync(updatePath)) return; // skip if file doesn't exist
       const converted = convertFile(updatePath, true);
       const matches = converted.match(leakedPathRegex);

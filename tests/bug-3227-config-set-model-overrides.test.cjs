@@ -16,7 +16,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
-const { DYNAMIC_KEY_PATTERNS, isValidConfigKey } = require('../get-shit-done/bin/lib/config-schema.cjs');
+const { DYNAMIC_KEY_PATTERNS, isValidConfigKey } = require('../gsd-core/bin/lib/config-schema.cjs');
 
 describe('#3227 — config-set accepts model_overrides.<agent-id>', () => {
   test('isValidConfigKey accepts model_overrides.gsd-plan-checker', () => {

@@ -1,5 +1,5 @@
 // allow-test-rule: source-text-is-the-product
-// The commands/gsd/*.md and get-shit-done/workflows/*.md files are the
+// The commands/gsd/*.md and gsd-core/workflows/*.md files are the
 // installed agent stubs — their frontmatter and workflow body IS the
 // deployed contract. These assertions check structural fields (argument-hint,
 // description, early-exit prose) that govern runtime routing.
@@ -73,7 +73,7 @@ describe('skill frontmatter: /gsd-plan-phase --research-phase flag absorbs the s
   });
 
   test('workflows/plan-phase.md parses --research-phase and sets a research-only mode', () => {
-    const content = read('get-shit-done/workflows/plan-phase.md');
+    const content = read('gsd-core/workflows/plan-phase.md');
     // The arg-parsing section of the workflow must mention the new flag
     // by name. This is the structural seam the LLM follows.
     // Anchored to the argument/flags section to avoid false positives from prose.
@@ -87,7 +87,7 @@ describe('skill frontmatter: /gsd-plan-phase --research-phase flag absorbs the s
   });
 
   test('workflows/plan-phase.md skips planner/verifier when in research-only mode', () => {
-    const content = read('get-shit-done/workflows/plan-phase.md');
+    const content = read('gsd-core/workflows/plan-phase.md');
     // Look for explicit early-exit prose so the LLM knows to stop after
     // research. We accept any of: "research-only", "research only mode",
     // "skip if --research-phase", "RESEARCH_ONLY", "exit after research".
@@ -107,7 +107,7 @@ describe('skill frontmatter: /gsd-plan-phase --research-phase flag absorbs the s
 
   test('orphaned workflows/research-phase.md is removed', () => {
     assert.equal(
-      exists('get-shit-done/workflows/research-phase.md'),
+      exists('gsd-core/workflows/research-phase.md'),
       false,
       'workflows/research-phase.md must be removed; the capability now lives on /gsd-plan-phase --research-phase'
     );
@@ -124,7 +124,7 @@ describe('skill frontmatter: /gsd-plan-phase --research-phase flag absorbs the s
   });
 
   test('workflow handles --view by printing existing RESEARCH.md without spawning', () => {
-    const content = read('get-shit-done/workflows/plan-phase.md');
+    const content = read('gsd-core/workflows/plan-phase.md');
     // The workflow must reference the --view flag as a no-spawn mode
     // for research-only invocations. We accept any of: "view-only",
     // "VIEW_ONLY", "skip if --view", "no spawn" alongside --view.
@@ -148,7 +148,7 @@ describe('skill frontmatter: /gsd-plan-phase --research-phase flag absorbs the s
   });
 
   test('workflow uses --research as the force-refresh signal in research-only mode', () => {
-    const content = read('get-shit-done/workflows/plan-phase.md');
+    const content = read('gsd-core/workflows/plan-phase.md');
     // The plan-phase workflow already had a --research flag with
     // "force re-research" semantics. In research-only mode, that flag
     // must short-circuit the "RESEARCH.md exists, what do you want to
@@ -173,7 +173,7 @@ describe('skill frontmatter: /gsd-plan-phase --research-phase flag absorbs the s
   });
 
   test('workflow has an existing-RESEARCH.md prompt path (update/view/skip) within proximity', () => {
-    const content = read('get-shit-done/workflows/plan-phase.md');
+    const content = read('gsd-core/workflows/plan-phase.md');
     // CR #3045 finding: the previous version of this test asserted
     // `update`, `view`, `skip` appeared anywhere in the file, which was
     // tautological — those words occur all over the workflow for

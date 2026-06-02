@@ -8,7 +8,7 @@ const cp = require('node:child_process');
 
 const ROOT = path.join(__dirname, '..');
 const { checkLatestVersion, CHECK_REASON, PACKAGE_NAME } = require(
-  path.join(ROOT, 'get-shit-done', 'bin', 'check-latest-version.cjs'),
+  path.join(ROOT, 'gsd-core', 'bin', 'check-latest-version.cjs'),
 );
 
 // checkLatestVersion is a pure-ish function: it spawns one fixed npm
@@ -36,7 +36,7 @@ describe('Bug #2992: deterministic latest-version check', () => {
 });
 
 describe('Bug #2992: error paths', () => {
-  const { checkLatestVersion, CHECK_REASON } = require(require('node:path').join(__dirname, '..', 'get-shit-done', 'bin', 'check-latest-version.cjs'));
+  const { checkLatestVersion, CHECK_REASON } = require(require('node:path').join(__dirname, '..', 'gsd-core', 'bin', 'check-latest-version.cjs'));
 
   test('FAIL_NPM_FAILED when npm exits non-zero (e.g. offline, 404)', () => {
     const r = checkLatestVersion({

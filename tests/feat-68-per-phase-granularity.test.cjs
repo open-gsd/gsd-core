@@ -30,12 +30,12 @@ const path = require('node:path');
 const {
   resolveGranularityInternal,
   VALID_GRANULARITIES,
-} = require('../get-shit-done/bin/lib/core.cjs');
-const commands = require('../get-shit-done/bin/lib/commands.cjs');
+} = require('../gsd-core/bin/lib/core.cjs');
+const commands = require('../gsd-core/bin/lib/commands.cjs');
 const {
   VALID_PHASE_TYPES,
-} = require('../get-shit-done/bin/lib/model-profiles.cjs');
-const { isValidConfigKey } = require('../get-shit-done/bin/lib/config-schema.cjs');
+} = require('../gsd-core/bin/lib/model-profiles.cjs');
+const { isValidConfigKey } = require('../gsd-core/bin/lib/config-schema.cjs');
 
 const { createTempDir, runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 const makeTmp = (prefix) => createTempDir(`gsd-68-${prefix}-`);

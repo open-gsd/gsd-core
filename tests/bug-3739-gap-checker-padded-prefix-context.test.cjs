@@ -141,7 +141,7 @@ describe('bug #3739 — gap-analysis padded-prefix CONTEXT.md', () => {
   // ── Test 5: findContextMdIn helper unit test ─────────────────────────────
 
   test('findContextMdIn helper returns padded filename when present', () => {
-    const { findContextMdIn } = require('../get-shit-done/bin/lib/planning-workspace.cjs');
+    const { findContextMdIn } = require('../gsd-core/bin/lib/planning-workspace.cjs');
     // Write 01-CONTEXT.md into the phase dir (already created in beforeEach)
     fs.writeFileSync(path.join(phaseDir, '01-CONTEXT.md'), '# context\n');
 
@@ -151,7 +151,7 @@ describe('bug #3739 — gap-analysis padded-prefix CONTEXT.md', () => {
   });
 
   test('findContextMdIn helper returns bare filename when only bare form exists', () => {
-    const { findContextMdIn } = require('../get-shit-done/bin/lib/planning-workspace.cjs');
+    const { findContextMdIn } = require('../gsd-core/bin/lib/planning-workspace.cjs');
     fs.writeFileSync(path.join(phaseDir, 'CONTEXT.md'), '# context\n');
 
     const found = findContextMdIn(phaseDir);
@@ -160,7 +160,7 @@ describe('bug #3739 — gap-analysis padded-prefix CONTEXT.md', () => {
   });
 
   test('findContextMdIn helper returns null when no CONTEXT.md exists', () => {
-    const { findContextMdIn } = require('../get-shit-done/bin/lib/planning-workspace.cjs');
+    const { findContextMdIn } = require('../gsd-core/bin/lib/planning-workspace.cjs');
     // phaseDir exists but is empty (no CONTEXT.md)
     const found = findContextMdIn(phaseDir);
     assert.strictEqual(found, null,
@@ -170,7 +170,7 @@ describe('bug #3739 — gap-analysis padded-prefix CONTEXT.md', () => {
   // ── Test 5b: findContextMdIn accepts pre-read files array (avoids double readdirSync) ──
 
   test('findContextMdIn accepts an already-read files array (avoids double readdirSync)', () => {
-    const { findContextMdIn } = require('../get-shit-done/bin/lib/planning-workspace.cjs');
+    const { findContextMdIn } = require('../gsd-core/bin/lib/planning-workspace.cjs');
     // Passing an array directly should behave identically to passing a directory path.
     assert.strictEqual(findContextMdIn(['CONTEXT.md', 'other.md']), 'CONTEXT.md',
       'bare form found in array');
@@ -186,7 +186,7 @@ describe('bug #3739 — gap-analysis padded-prefix CONTEXT.md', () => {
   // ── Test 6: dual-file precedence — bare CONTEXT.md wins over padded form ──
 
   test('findContextMdIn prefers bare CONTEXT.md over padded form (helper level)', () => {
-    const { findContextMdIn } = require('../get-shit-done/bin/lib/planning-workspace.cjs');
+    const { findContextMdIn } = require('../gsd-core/bin/lib/planning-workspace.cjs');
     // Write BOTH forms into the phase directory
     fs.writeFileSync(path.join(phaseDir, 'CONTEXT.md'), '# bare context\n');
     fs.writeFileSync(path.join(phaseDir, '01-CONTEXT.md'), '# padded context\n');

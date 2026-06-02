@@ -20,12 +20,12 @@ const { cleanup } = require('./helpers.cjs');
 const REPO_ROOT = path.join(__dirname, '..');
 const COMMAND_ALIASES_FILE = path.join(
   REPO_ROOT,
-  'get-shit-done',
+  'gsd-core',
   'bin',
   'lib',
   'command-aliases.cjs',
 );
-const GSD_TOOLS = path.join(REPO_ROOT, 'get-shit-done', 'bin', 'gsd-tools.cjs');
+const GSD_TOOLS = path.join(REPO_ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
 
 const MISSING_14 = [
   'check.decision-coverage-plan',

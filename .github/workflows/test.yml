@@ -111,6 +111,8 @@ jobs:
         run: node scripts/lint-command-contract.cjs
       - name: Lint — PR checks use projectDir
         run: node scripts/lint-pr-check-project-dir.cjs
+      - name: Lint — legacy directory name guard (#604)
+        run: npm run lint:legacy-name
 
   test:
     name: test (${{ matrix.os }}, ${{ matrix.node-version }})

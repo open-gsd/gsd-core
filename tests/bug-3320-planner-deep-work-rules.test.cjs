@@ -11,7 +11,7 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 const PLANNER_AGENT = path.join(ROOT, 'agents', 'gsd-planner.md');
-const PLAN_PHASE_WORKFLOW = path.join(ROOT, 'get-shit-done', 'workflows', 'plan-phase.md');
+const PLAN_PHASE_WORKFLOW = path.join(ROOT, 'gsd-core', 'workflows', 'plan-phase.md');
 
 function read(relativePath) {
   return fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
@@ -76,7 +76,7 @@ describe('bug #3320 planner action contract', () => {
   });
 
   test('quality gate matches the reconciled planner contract', () => {
-    const workflow = read('get-shit-done/workflows/plan-phase.md');
+    const workflow = read('gsd-core/workflows/plan-phase.md');
 
     assert.match(
       workflow,

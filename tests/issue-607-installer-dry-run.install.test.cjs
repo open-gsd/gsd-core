@@ -50,7 +50,7 @@ function writeFile(filePath, content) {
 
 // The assembled signal string used as file content to trigger
 // content-references-old-package detection.
-const LEGACY_PKG_SIGNAL = 'get-shit-done' + '-cc';
+const LEGACY_PKG_SIGNAL = 'gsd-core' + '-cc';
 
 // ─── Suite 1: spawn --dry-run, assert no mutations ───────────────────────────
 
@@ -132,8 +132,8 @@ describe('#607 --dry-run flag: spawned installer exits 0 and mutates nothing', (
       `Legacy cache must still exist after --dry-run: ${legacyCache}`
     );
 
-    // No actual install happened — .claude/get-shit-done must not exist
-    const installDir = path.join(tmpHome, '.claude', 'get-shit-done');
+    // No actual install happened — .claude/gsd-core must not exist
+    const installDir = path.join(tmpHome, '.claude', 'gsd-core');
     assert.equal(
       fs.existsSync(installDir),
       false,
@@ -144,7 +144,7 @@ describe('#607 --dry-run flag: spawned installer exits 0 and mutates nothing', (
     // (guard against the duplicate-print bug where it was printed both inside
     // cleanupLegacyGsdCc and again in the outer --dry-run block).
     const updateCacheFileName = require(
-      path.join(REPO_ROOT, 'get-shit-done', 'bin', 'lib', 'package-identity.cjs')
+      path.join(REPO_ROOT, 'gsd-core', 'bin', 'lib', 'package-identity.cjs')
     ).updateCacheFileName;
     const perPkgCacheFile = path.join(tmpHome, '.cache', 'gsd', updateCacheFileName);
     const occurrences = stdout.split(perPkgCacheFile).length - 1;
@@ -187,7 +187,7 @@ describe('#607 --dry-run flag: spawned installer exits 0 and mutates nothing', (
       `Expected "does not preview --uninstall" warning.\nGot:\n${stdout}`
     );
 
-    // No uninstall occurred — .claude/get-shit-done must not have been removed
+    // No uninstall occurred — .claude/gsd-core must not have been removed
     // (it never existed, but we confirm the installer didn't blow up)
     assert.equal(
       result.status,
@@ -254,7 +254,7 @@ describe('#607 cleanupLegacyGsdCc: exported helper unit tests', () => {
     writeFile(legacyHook, `// installed via ${LEGACY_PKG_SIGNAL}\nconsole.log("old worker");`);
 
     // Seed a dev-preferences.md that must NOT be removed
-    const devPrefs = path.join(homeDir, '.gemini', 'get-shit-done', 'dev-preferences.md');
+    const devPrefs = path.join(homeDir, '.gemini', 'gsd-core', 'dev-preferences.md');
     writeFile(devPrefs, '# My prefs\n\nSome user content — must not be touched.');
 
     const { plan, result } = cleanupLegacyGsdCc({

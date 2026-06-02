@@ -2087,7 +2087,7 @@ Test suite that scans all agent, workflow, and command files for embedded inject
 
 ### 92. Gates Taxonomy
 
-**References:** `get-shit-done/references/gates.md`
+**References:** `gsd-core/references/gates.md`
 **Agents:** plan-checker, verifier
 
 **Purpose:** Define 4 canonical gate types that structure all workflow decision points, enabling plan-checker and verifier agents to apply consistent gate logic.
@@ -2936,7 +2936,7 @@ explicit reviewer flags -> --all -> review.default_reviewers -> all detected rev
 - REQ-HUMAN-VERIFY-02: Human-needed verification MUST remain pending until the end-of-phase review resolves it.
 - REQ-HUMAN-VERIFY-03: Configs without the key MUST use `"end-of-phase"`.
 
-**Reference:** [Checkpoints Reference](../get-shit-done/references/checkpoints.md)
+**Reference:** [Checkpoints Reference](../gsd-core/references/checkpoints.md)
 
 ---
 

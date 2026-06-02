@@ -27,7 +27,7 @@ function getWritableTmp() {
 
 describe('feat-3210: fallow integration module', () => {
   test('normalizes structural findings from a fallow report', () => {
-    const { normalizeFallowReport } = require('../get-shit-done/bin/lib/fallow-runner.cjs');
+    const { normalizeFallowReport } = require('../gsd-core/bin/lib/fallow-runner.cjs');
     const fixture = JSON.parse(
       fs.readFileSync(path.join(ROOT, 'tests', 'fixtures', 'fallow', 'sample-findings.json'), 'utf8'),
     );
@@ -48,7 +48,7 @@ describe('feat-3210: fallow integration module', () => {
   });
 
   test('falls back to node_modules/.bin/fallow when PATH does not contain fallow', () => {
-    const { resolveFallowBinary } = require('../get-shit-done/bin/lib/fallow-runner.cjs');
+    const { resolveFallowBinary } = require('../gsd-core/bin/lib/fallow-runner.cjs');
     // N2: use shared helper
     const baseTmp = getWritableTmp();
     const tmp = fs.mkdtempSync(path.join(baseTmp, 'gsd-fallow-bin-'));
@@ -66,7 +66,7 @@ describe('feat-3210: fallow integration module', () => {
 
   // H6: replaced wholesale win32 skip with platform-adapted assertion
   test('ignores non-executable PATH candidate on non-Windows; prefers .cmd over bare extensionless on Windows', () => {
-    const { resolveFallowBinary } = require('../get-shit-done/bin/lib/fallow-runner.cjs');
+    const { resolveFallowBinary } = require('../gsd-core/bin/lib/fallow-runner.cjs');
     // N2: use shared helper
     const baseTmp = getWritableTmp();
 
@@ -107,7 +107,7 @@ describe('feat-3210: fallow integration module', () => {
   });
 
   test('normalizes empty fallow report to zero findings', () => {
-    const { normalizeFallowReport } = require('../get-shit-done/bin/lib/fallow-runner.cjs');
+    const { normalizeFallowReport } = require('../gsd-core/bin/lib/fallow-runner.cjs');
     const fixture = JSON.parse(
       fs.readFileSync(path.join(ROOT, 'tests', 'fixtures', 'fallow', 'sample-empty.json'), 'utf8'),
     );
@@ -122,7 +122,7 @@ describe('feat-3210: fallow integration module', () => {
   });
 
   test('throws actionable error when fallow is enabled but binary is unavailable', () => {
-    const { requireFallowBinary } = require('../get-shit-done/bin/lib/fallow-runner.cjs');
+    const { requireFallowBinary } = require('../gsd-core/bin/lib/fallow-runner.cjs');
     // N2: use shared helper
     const baseTmp = getWritableTmp();
     const tmp = fs.mkdtempSync(path.join(baseTmp, 'gsd-fallow-missing-'));
@@ -135,7 +135,7 @@ describe('feat-3210: fallow integration module', () => {
 
   // L3: runFallowAudit against a non-zero-exit binary must surface error state
   test('runFallowAudit surfaces error state when binary exits non-zero', async () => {
-    const { runFallowAudit } = require('../get-shit-done/bin/lib/fallow-runner.cjs');
+    const { runFallowAudit } = require('../gsd-core/bin/lib/fallow-runner.cjs');
     // N2: use shared helper
     const baseTmp = getWritableTmp();
     const tmp = fs.mkdtempSync(path.join(baseTmp, 'gsd-fallow-fail-'));
@@ -172,7 +172,7 @@ describe('feat-3210: fallow integration module', () => {
 
   // M5: edge-case fixture — missing severity, similarity extremes, 3-node cycle, unicode path
   test('normalizes edge-case fixture: missing severity, similarity extremes, 3-node cycle, unicode path', () => {
-    const { normalizeFallowReport } = require('../get-shit-done/bin/lib/fallow-runner.cjs');
+    const { normalizeFallowReport } = require('../gsd-core/bin/lib/fallow-runner.cjs');
     const fixture = JSON.parse(
       fs.readFileSync(
         path.join(ROOT, 'tests', 'fixtures', 'fallow', 'sample-edge-cases.json'),
@@ -221,7 +221,7 @@ describe('feat-3210: fallow integration module', () => {
 
 describe('feat-3210: H1 - line:0 preservation', () => {
   test('normalizeFallowReport preserves line:0 for unused_export (not coerced to null)', () => {
-    const { normalizeFallowReport } = require('../get-shit-done/bin/lib/fallow-runner.cjs');
+    const { normalizeFallowReport } = require('../gsd-core/bin/lib/fallow-runner.cjs');
     const report = {
       unusedExports: [{ file: 'src/a.ts', symbol: 'foo', line: 0 }],
       duplicates: [],
@@ -232,7 +232,7 @@ describe('feat-3210: H1 - line:0 preservation', () => {
   });
 
   test('normalizeFallowReport preserves line:0 for duplicate_block left.start (not coerced to null)', () => {
-    const { normalizeFallowReport } = require('../get-shit-done/bin/lib/fallow-runner.cjs');
+    const { normalizeFallowReport } = require('../gsd-core/bin/lib/fallow-runner.cjs');
     const report = {
       unusedExports: [],
       duplicates: [{ left: { file: 'src/a.ts', start: 0 }, right: { file: 'src/b.ts', start: 5 }, similarity: 0.9 }],
@@ -245,7 +245,7 @@ describe('feat-3210: H1 - line:0 preservation', () => {
 
 describe('feat-3210: M2 - node_modules/.bin resolution order', () => {
   test('resolveFallowBinary prefers node_modules/.bin over PATH when both exist', () => {
-    const { resolveFallowBinary } = require('../get-shit-done/bin/lib/fallow-runner.cjs');
+    const { resolveFallowBinary } = require('../gsd-core/bin/lib/fallow-runner.cjs');
     // N2: use shared helper
     const baseTmp = getWritableTmp();
     const tmp = fs.mkdtempSync(path.join(baseTmp, 'gsd-fallow-order-'));
@@ -276,8 +276,8 @@ describe('feat-3210: workflow and config contracts', () => {
   test('config schema allows code_quality.fallow.* keys in CJS and runtime manifest', () => {
     // CJS config-schema and runtime consume the same manifest source-of-truth.
     // Use the CJS runtime Set and the manifest directly (no inline text parsing).
-    const { VALID_CONFIG_KEYS } = require('../get-shit-done/bin/lib/config-schema.cjs');
-    const manifestPath = path.join(ROOT, 'get-shit-done', 'bin', 'shared', 'config-schema.manifest.json');
+    const { VALID_CONFIG_KEYS } = require('../gsd-core/bin/lib/config-schema.cjs');
+    const manifestPath = path.join(ROOT, 'gsd-core', 'bin', 'shared', 'config-schema.manifest.json');
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     const manifestKeys = new Set(manifest.validKeys);
     for (const key of [
@@ -321,7 +321,7 @@ describe('feat-3210: workflow and config contracts', () => {
   // structurally and assert on structural properties, not on prose strings.
   test('code-review workflow structural_pre_pass step is parseable and references FALLOW.json output', () => {
     const workflow = fs.readFileSync(
-      path.join(ROOT, 'get-shit-done', 'workflows', 'code-review.md'),
+      path.join(ROOT, 'gsd-core', 'workflows', 'code-review.md'),
       'utf8',
     );
 
@@ -352,7 +352,7 @@ describe('feat-3210: workflow and config contracts', () => {
   // Live agent output is covered by /gsd-code-review e2e runs downstream.
   test('reviewer prompt defines ## Structural Findings (fallow) heading and review context echoes it', () => {
     const reviewer = fs.readFileSync(path.join(ROOT, 'agents', 'gsd-code-reviewer.md'), 'utf8');
-    const reviewContext = fs.readFileSync(path.join(ROOT, 'get-shit-done', 'contexts', 'review.md'), 'utf8');
+    const reviewContext = fs.readFileSync(path.join(ROOT, 'gsd-core', 'contexts', 'review.md'), 'utf8');
 
     // Doc-parity: section heading must exist in the shipped agent file (the heading is a contract,
     // not prose — renaming it would break every consumer that parses agent output by section)

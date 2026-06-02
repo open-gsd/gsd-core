@@ -3,7 +3,7 @@
 /**
  * Unit tests for frontmatter.cjs
  *
- * Module: get-shit-done/bin/lib/frontmatter.cjs
+ * Module: gsd-core/bin/lib/frontmatter.cjs
  *
  * Covers:
  *   - extractFrontmatter: all scalar types, quoted, arrays, nested, edge cases
@@ -22,7 +22,7 @@ const {
   spliceFrontmatter,
   parseMustHavesBlock,
   FRONTMATTER_SCHEMAS,
-} = require('../get-shit-done/bin/lib/frontmatter.cjs');
+} = require('../gsd-core/bin/lib/frontmatter.cjs');
 
 // ─── extractFrontmatter ───────────────────────────────────────────────────────
 

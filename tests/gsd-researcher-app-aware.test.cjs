@@ -18,7 +18,7 @@ const fs = require('fs');
 const path = require('path');
 
 const AGENTS_DIR = path.join(__dirname, '..', 'agents');
-const TEMPLATES_DIR = path.join(__dirname, '..', 'get-shit-done', 'templates');
+const TEMPLATES_DIR = path.join(__dirname, '..', 'gsd-core', 'templates');
 
 // ─── Phase Researcher: Architectural Responsibility Mapping ─────────────────
 

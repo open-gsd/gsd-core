@@ -45,7 +45,7 @@ describe('no-source-grep rule', () => {
           code: `
             const fs = require('fs');
             const path = require('path');
-            const content = fs.readFileSync(path.join(__dirname, '..', 'get-shit-done', 'workflows', 'config.json'), 'utf-8');
+            const content = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'config.json'), 'utf-8');
             content.includes('key');
           `,
           filename: 'tests/foo.test.cjs',
@@ -64,7 +64,7 @@ describe('no-source-grep rule', () => {
           code: `
             const fs = require('fs');
             const path = require('path');
-            const src = fs.readFileSync(path.join(__dirname, '..', 'get-shit-done', 'bin', 'lib', 'core.cjs'), 'utf-8');
+            const src = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'core.cjs'), 'utf-8');
             src.includes('someFunction');
           `,
           filename: 'tests/foo.test.cjs',
@@ -103,7 +103,7 @@ describe('no-source-grep rule', () => {
             // allow-test-rule: pending migration
             const fs = require('fs');
             const path = require('path');
-            const src = fs.readFileSync(path.join(__dirname, '..', 'get-shit-done', 'bin', 'lib', 'core.cjs'), 'utf-8');
+            const src = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'core.cjs'), 'utf-8');
             src.includes('someFunction');
           `,
           filename: 'tests/foo.test.cjs',
@@ -119,7 +119,7 @@ describe('no-source-grep rule', () => {
       valid: [
         {
           code: `
-            const mod = require('../get-shit-done/bin/lib/core.cjs');
+            const mod = require('../gsd-core/bin/lib/core.cjs');
             mod.someMethod();
           `,
           filename: 'tests/foo.test.cjs',

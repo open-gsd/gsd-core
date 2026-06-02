@@ -105,11 +105,11 @@ body:
         If you cannot fill this out, you do not understand the codebase well enough to propose this feature yet.
       placeholder: |
         Files that would be created:
-        - `get-shit-done/commands/gsd/rollback.md` — new slash command definition
+        - `gsd-core/commands/gsd/rollback.md` — new slash command definition
 
         Files that would be modified:
-        - `get-shit-done/bin/lib/state.cjs` — add rollback() function
-        - `get-shit-done/bin/lib/phases.cjs` — expose phase snapshot API
+        - `gsd-core/bin/lib/state.cjs` — add rollback() function
+        - `gsd-core/bin/lib/phases.cjs` — expose phase snapshot API
         - `tests/rollback.test.cjs` — new test file
         - `docs/COMMANDS.md` — document new command
         - `CHANGELOG.md` — entry for this feature

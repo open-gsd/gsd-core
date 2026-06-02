@@ -24,8 +24,8 @@ const path = require('path');
 const REPO_ROOT = path.join(__dirname, '..');
 const AGENTS_DIR = path.join(REPO_ROOT, 'agents');
 const COMMANDS_DIR = path.join(REPO_ROOT, 'commands', 'gsd');
-const WORKFLOWS_DIR = path.join(REPO_ROOT, 'get-shit-done', 'workflows');
-const TEMPLATES_DIR = path.join(REPO_ROOT, 'get-shit-done', 'templates');
+const WORKFLOWS_DIR = path.join(REPO_ROOT, 'gsd-core', 'workflows');
+const TEMPLATES_DIR = path.join(REPO_ROOT, 'gsd-core', 'templates');
 
 // ─── 1. Agent frontmatter — gsd-security-auditor.md ─────────────────────────
 
@@ -158,7 +158,7 @@ describe('SECURE: secure-phase workflow file', () => {
   test('workflow file exists', () => {
     assert.ok(
       fs.existsSync(wfPath),
-      'secure-phase.md must exist in get-shit-done/workflows/'
+      'secure-phase.md must exist in gsd-core/workflows/'
     );
   });
 
@@ -215,7 +215,7 @@ describe('SECURE: SECURITY.md template', () => {
   test('template exists', () => {
     assert.ok(
       fs.existsSync(tplPath),
-      'SECURITY.md must exist in get-shit-done/templates/'
+      'SECURITY.md must exist in gsd-core/templates/'
     );
   });
 
@@ -297,7 +297,7 @@ describe('SECURE: config.json security defaults', () => {
   test('config template exists', () => {
     assert.ok(
       fs.existsSync(configPath),
-      'config.json must exist in get-shit-done/templates/'
+      'config.json must exist in gsd-core/templates/'
     );
   });
 
@@ -349,7 +349,7 @@ describe('SECURE: VALIDATION.md security columns', () => {
   test('VALIDATION.md template exists', () => {
     assert.ok(
       fs.existsSync(valPath),
-      'VALIDATION.md must exist in get-shit-done/templates/'
+      'VALIDATION.md must exist in gsd-core/templates/'
     );
   });
 

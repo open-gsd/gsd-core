@@ -14,7 +14,7 @@
  * file was never deleted.
  *
  * Fix: add `rm -f "$HOME/.cache/gsd/gsd-update-check.json"` to the
- * run_update step's cache-clear block in get-shit-done/workflows/update.md.
+ * run_update step's cache-clear block in gsd-core/workflows/update.md.
  */
 
 'use strict';
@@ -27,7 +27,7 @@ const path = require('node:path');
 const REPO_ROOT = path.join(__dirname, '..');
 const UPDATE_WORKFLOW = path.join(
   REPO_ROOT,
-  'get-shit-done',
+  'gsd-core',
   'workflows',
   'update.md'
 );

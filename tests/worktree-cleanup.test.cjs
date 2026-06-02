@@ -6,7 +6,7 @@
 /**
  * Worktree Cleanup Module — HEAD attachment, post-executor cleanup, and contract tests
  *
- * Seam: get-shit-done/workflows/{execute-phase,execute-plan,quick}.md,
+ * Seam: gsd-core/workflows/{execute-phase,execute-plan,quick}.md,
  *       agents/gsd-executor.md, references/git-integration.md
  *
  * Split from the consolidated 13→2 worktree cluster (≤800 LOC/file):
@@ -28,12 +28,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const REPO_ROOT = path.join(__dirname, '..');
-const EXECUTE_PHASE_PATH = path.join(REPO_ROOT, 'get-shit-done', 'workflows', 'execute-phase.md');
-const EXECUTE_PLAN_PATH = path.join(REPO_ROOT, 'get-shit-done', 'workflows', 'execute-plan.md');
-const QUICK_PATH = path.join(REPO_ROOT, 'get-shit-done', 'workflows', 'quick.md');
+const EXECUTE_PHASE_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'execute-phase.md');
+const EXECUTE_PLAN_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'execute-plan.md');
+const QUICK_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'quick.md');
 const EXECUTOR_AGENT_PATH = path.join(REPO_ROOT, 'agents', 'gsd-executor.md');
-const GIT_INTEGRATION_PATH = path.join(REPO_ROOT, 'get-shit-done', 'references', 'git-integration.md');
-const WORKTREE_BRANCH_CHECK_FRAGMENT = path.join(REPO_ROOT, 'get-shit-done', 'references', 'worktree-branch-check.md');
+const GIT_INTEGRATION_PATH = path.join(REPO_ROOT, 'gsd-core', 'references', 'git-integration.md');
+const WORKTREE_BRANCH_CHECK_FRAGMENT = path.join(REPO_ROOT, 'gsd-core', 'references', 'worktree-branch-check.md');
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -413,7 +413,7 @@ describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
   });
 
   describe('no workflow file performs unconditional update-ref on a protected branch', () => {
-    const workflowsDir = path.join(REPO_ROOT, 'get-shit-done', 'workflows');
+    const workflowsDir = path.join(REPO_ROOT, 'gsd-core', 'workflows');
     const workflowFiles = fs
       .readdirSync(workflowsDir, { recursive: true })
       .filter((f) => typeof f === 'string' && f.endsWith('.md'))
@@ -472,8 +472,8 @@ describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
 // ─── #1496: post-executor worktree cleanup ──────────────────────────────────
 
 describe('worktree cleanup after executor completes (#1496)', () => {
-  const executePhasePath = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'execute-phase.md');
-  const quickPath = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'quick.md');
+  const executePhasePath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md');
+  const quickPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'quick.md');
 
   test('execute-phase.md includes worktree cleanup step', () => {
     const content = fs.readFileSync(executePhasePath, 'utf8');

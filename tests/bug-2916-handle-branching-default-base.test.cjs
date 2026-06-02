@@ -31,7 +31,7 @@ const { cleanup } = require('./helpers.cjs');
 const EXECUTE_PHASE_PATH = path.join(
   __dirname,
   '..',
-  'get-shit-done',
+  'gsd-core',
   'workflows',
   'execute-phase.md'
 );

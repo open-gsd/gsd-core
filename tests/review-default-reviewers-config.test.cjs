@@ -7,7 +7,7 @@ const path = require('node:path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 const {
   VALID_CONFIG_KEYS,
-} = require('../get-shit-done/bin/lib/config-schema.cjs');
+} = require('../gsd-core/bin/lib/config-schema.cjs');
 
 describe('review.default_reviewers config key (#3079)', () => {
   let tmpDir;

@@ -16,24 +16,24 @@ const BASELINE_MIGRATION_ID = '2026-05-11-first-time-baseline-scan';
 // - docs/installer-migrations.md#runtime-configuration-contract-registry
 // - docs/ARCHITECTURE.md#runtime-install-contract-matrix
 const RUNTIME_SURFACES: Record<string, string[]> = {
-  claude: ['get-shit-done', 'commands/gsd', 'skills', 'agents', 'hooks', 'settings.json'],
-  codex: ['get-shit-done', 'skills', 'agents', 'hooks', 'config.toml', 'hooks.json'],
-  gemini: ['get-shit-done', 'commands/gsd', 'hooks'],
-  opencode: ['get-shit-done', 'command', 'skills', 'agents'],
-  kilo: ['get-shit-done', 'command', 'skills', 'agents'],
-  copilot: ['get-shit-done', 'skills', 'agents'],
-  antigravity: ['get-shit-done', 'skills', 'agents'],
-  cursor: ['get-shit-done', 'skills', 'agents'],
-  windsurf: ['get-shit-done', 'skills', 'agents', 'rules'],
-  augment: ['get-shit-done', 'skills', 'agents'],
-  trae: ['get-shit-done', 'skills', 'agents', 'rules'],
-  qwen: ['get-shit-done', 'skills', 'agents'],
-  hermes: ['get-shit-done', 'skills/gsd', 'agents'],
-  cline: ['get-shit-done', 'skills', 'agents'],
-  codebuddy: ['get-shit-done', 'skills', 'agents'],
+  claude: ['gsd-core', 'commands/gsd', 'skills', 'agents', 'hooks', 'settings.json'],
+  codex: ['gsd-core', 'skills', 'agents', 'hooks', 'config.toml', 'hooks.json'],
+  gemini: ['gsd-core', 'commands/gsd', 'hooks'],
+  opencode: ['gsd-core', 'command', 'skills', 'agents'],
+  kilo: ['gsd-core', 'command', 'skills', 'agents'],
+  copilot: ['gsd-core', 'skills', 'agents'],
+  antigravity: ['gsd-core', 'skills', 'agents'],
+  cursor: ['gsd-core', 'skills', 'agents'],
+  windsurf: ['gsd-core', 'skills', 'agents', 'rules'],
+  augment: ['gsd-core', 'skills', 'agents'],
+  trae: ['gsd-core', 'skills', 'agents', 'rules'],
+  qwen: ['gsd-core', 'skills', 'agents'],
+  hermes: ['gsd-core', 'skills/gsd', 'agents'],
+  cline: ['gsd-core', 'skills', 'agents'],
+  codebuddy: ['gsd-core', 'skills', 'agents'],
 };
 
-const COMMON_SURFACES = ['get-shit-done', 'skills', 'agents', 'hooks'];
+const COMMON_SURFACES = ['gsd-core', 'skills', 'agents', 'hooks'];
 const INTERNAL_TOP_LEVEL_NAMES = new Set([
   'gsd-file-manifest.json',
   'gsd-install-state.json',
@@ -41,7 +41,7 @@ const INTERNAL_TOP_LEVEL_NAMES = new Set([
   'gsd-migration-journal',
 ]);
 const USER_OWNED_PATHS = new Set([
-  'get-shit-done/USER-PROFILE.md',
+  'gsd-core/USER-PROFILE.md',
   'commands/gsd/dev-preferences.md',
   'skills/gsd-dev-preferences/SKILL.md',
 ]);

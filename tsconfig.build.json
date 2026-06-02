@@ -1,8 +1,8 @@
 {
-  "//": "ADR-457 build-at-publish: compile TS runtime sources in src/ to gitignored .cjs artifacts under get-shit-done/bin/lib/. Source uses the .cts extension so tsc emits .cjs natively. As modules migrate, they move from hand-written bin/lib/*.cjs into src/*.cts here.",
+  "//": "ADR-457 build-at-publish: compile TS runtime sources in src/ to gitignored .cjs artifacts under gsd-core/bin/lib/. Source uses the .cts extension so tsc emits .cjs natively. As modules migrate, they move from hand-written bin/lib/*.cjs into src/*.cts here.",
   "compilerOptions": {
     "rootDir": "src",
-    "outDir": "get-shit-done/bin/lib",
+    "outDir": "gsd-core/bin/lib",
     "module": "nodenext",
     "moduleResolution": "nodenext",
     "target": "ES2022",

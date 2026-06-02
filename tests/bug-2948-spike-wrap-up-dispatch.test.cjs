@@ -26,7 +26,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const SPIKE_CMD_PATH = path.join(__dirname, '..', 'commands', 'gsd', 'spike.md');
-const SPIKE_WORKFLOW_PATH = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'spike.md');
+const SPIKE_WORKFLOW_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'spike.md');
 
 /**
  * Parse YAML frontmatter + body from a markdown file.
@@ -138,9 +138,9 @@ describe('bug-2948: /gsd:spike --wrap-up dispatch wiring', () => {
     });
   });
 
-  describe('get-shit-done/workflows/spike.md — companion references', () => {
+  describe('gsd-core/workflows/spike.md — companion references', () => {
     test('spike workflow file exists', () => {
-      assert.ok(fs.existsSync(SPIKE_WORKFLOW_PATH), 'get-shit-done/workflows/spike.md should exist');
+      assert.ok(fs.existsSync(SPIKE_WORKFLOW_PATH), 'gsd-core/workflows/spike.md should exist');
     });
 
     test('does NOT reference the deleted /gsd-spike-wrap-up entry-point', () => {

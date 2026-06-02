@@ -39,7 +39,7 @@ const { cleanup } = require('./helpers.cjs');
 // ─────────────────────────────────────────────────────────────────────────────
 
 const STATE_CJS_PATH = path.join(
-  __dirname, '..', 'get-shit-done', 'bin', 'lib', 'state.cjs'
+  __dirname, '..', 'gsd-core', 'bin', 'lib', 'state.cjs'
 );
 
 const MINIMAL_STATE_MD = [

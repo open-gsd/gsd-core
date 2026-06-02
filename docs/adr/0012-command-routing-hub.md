@@ -9,7 +9,7 @@ Seven `*-command-router.cjs` files (`phase`, `phases`, `roadmap`, `state`, `veri
 
 ## Decision
 
-Introduce `CommandRoutingHub` (`get-shit-done/bin/lib/command-routing-hub.cjs`) as the single dispatch seam for all CJS command family routers. The hub contract:
+Introduce `CommandRoutingHub` (`gsd-core/bin/lib/command-routing-hub.cjs`) as the single dispatch seam for all CJS command family routers. The hub contract:
 
 ```
 createHub({ mode: 'sdk' | 'cjs', sdkLoader, cjsRegistry, manifest }) -> hub

@@ -3,8 +3,8 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { routeCjsCommandFamily, routeHubCommandFamily } = require('../get-shit-done/bin/lib/cjs-command-router-adapter.cjs');
-const { makeInvalidArgs } = require('../get-shit-done/bin/lib/command-routing-hub.cjs');
+const { routeCjsCommandFamily, routeHubCommandFamily } = require('../gsd-core/bin/lib/cjs-command-router-adapter.cjs');
+const { makeInvalidArgs } = require('../gsd-core/bin/lib/command-routing-hub.cjs');
 
 describe('cjs-command-router-adapter routeHubCommandFamily', () => {
   test('routes known subcommand handler through the hub', () => {

@@ -9,13 +9,13 @@
  *     StringLiteral, BlockStatement, BooleanLiteral, ArrowFunction,
  *     MethodExpression, LogicalOperator
  *
- * Module: get-shit-done/bin/lib/prompt-budget.cjs
+ * Module: gsd-core/bin/lib/prompt-budget.cjs
  */
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { estimateTokens, applyBudget } = require('../get-shit-done/bin/lib/prompt-budget.cjs');
+const { estimateTokens, applyBudget } = require('../gsd-core/bin/lib/prompt-budget.cjs');
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -2800,7 +2800,7 @@ describe('module exports integrity', () => {
   });
 
   test('module exports both named functions (not mangled by __esModule mutation)', () => {
-    const mod = require('../get-shit-done/bin/lib/prompt-budget.cjs');
+    const mod = require('../gsd-core/bin/lib/prompt-budget.cjs');
     assert.ok('estimateTokens' in mod, 'estimateTokens must be exported');
     assert.ok('applyBudget' in mod, 'applyBudget must be exported');
     assert.equal(typeof mod.estimateTokens, 'function');

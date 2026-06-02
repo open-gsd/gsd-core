@@ -16,7 +16,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
 
-const { VALID_CONFIG_KEYS, isValidConfigKey } = require('../get-shit-done/bin/lib/config-schema.cjs');
+const { VALID_CONFIG_KEYS, isValidConfigKey } = require('../gsd-core/bin/lib/config-schema.cjs');
 
 describe('VALID_CONFIG_KEYS correctness', () => {
   test('#2530: workflow._auto_chain_active must not be in VALID_CONFIG_KEYS (internal state)', () => {

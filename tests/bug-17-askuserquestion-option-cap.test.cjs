@@ -9,7 +9,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const ROOT = path.join(__dirname, '..', 'get-shit-done', 'workflows');
+const ROOT = path.join(__dirname, '..', 'gsd-core', 'workflows');
 const ASK_USER_QUESTION_OPTION_CAP = 4;
 
 function walkMarkdownFiles(dir, out = []) {

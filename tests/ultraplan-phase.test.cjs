@@ -18,7 +18,7 @@ const fs = require('fs');
 const path = require('path');
 
 const CMD_PATH = path.join(__dirname, '..', 'commands', 'gsd', 'ultraplan-phase.md');
-const WF_PATH = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'ultraplan-phase.md');
+const WF_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'ultraplan-phase.md');
 
 // ─── File Existence ────────────────────────────────────────────────────────────
 
@@ -28,7 +28,7 @@ describe('ultraplan-phase file existence', () => {
   });
 
   test('workflow file exists', () => {
-    assert.ok(fs.existsSync(WF_PATH), 'get-shit-done/workflows/ultraplan-phase.md should exist');
+    assert.ok(fs.existsSync(WF_PATH), 'gsd-core/workflows/ultraplan-phase.md should exist');
   });
 });
 
@@ -57,7 +57,7 @@ describe('ultraplan-phase command references', () => {
 
   test('references the ultraplan-phase workflow', () => {
     assert.ok(
-      content.includes('@~/.claude/get-shit-done/workflows/ultraplan-phase.md'),
+      content.includes('@~/.claude/gsd-core/workflows/ultraplan-phase.md'),
       'command should reference ultraplan-phase workflow'
     );
   });

@@ -27,7 +27,7 @@ const path = require('path');
 const EXECUTE_PHASE = path.join(
   __dirname,
   '..',
-  'get-shit-done',
+  'gsd-core',
   'workflows',
   'execute-phase.md'
 );

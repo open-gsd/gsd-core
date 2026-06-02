@@ -14,7 +14,7 @@ describe('plan-phase UI-SPEC missing behavior', () => {
   const workflowPath = path.join(
     __dirname,
     '..',
-    'get-shit-done',
+    'gsd-core',
     'workflows',
     'plan-phase.md'
   );

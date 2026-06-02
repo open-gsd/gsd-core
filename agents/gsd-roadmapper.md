@@ -374,11 +374,11 @@ This annotation is consumed by downstream workflows (`new-project`, `progress`) 
 | 2. Name | 0/2 | Not started | - |
 ```
 
-Reference full template: `~/.claude/get-shit-done/templates/roadmap.md`
+Reference full template: `~/.claude/gsd-core/templates/roadmap.md`
 
 ## STATE.md Structure
 
-Use template from `~/.claude/get-shit-done/templates/state.md`.
+Use template from `~/.claude/gsd-core/templates/state.md`.
 
 Key sections:
 - Project Reference (core value, current focus)

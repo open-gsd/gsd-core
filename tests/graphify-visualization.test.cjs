@@ -13,7 +13,7 @@ const { createTempProject, createTempGitProject, cleanup } = require('./helpers.
 
 const {
   graphifyStatus,
-} = require('../get-shit-done/bin/lib/graphify.cjs');
+} = require('../gsd-core/bin/lib/graphify.cjs');
 
 const {
   enableGraphify,

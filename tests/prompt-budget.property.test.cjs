@@ -3,7 +3,7 @@
 /**
  * Property-based tests for prompt-budget.cjs
  *
- * Module: get-shit-done/bin/lib/prompt-budget.cjs
+ * Module: gsd-core/bin/lib/prompt-budget.cjs
  * Exported: estimateTokens(text), applyBudget({ sections, budget, options })
  *
  * Key invariants:
@@ -19,7 +19,7 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fc = require('./helpers/fast-check-setup.cjs');
 
-const { estimateTokens, applyBudget } = require('../get-shit-done/bin/lib/prompt-budget.cjs');
+const { estimateTokens, applyBudget } = require('../gsd-core/bin/lib/prompt-budget.cjs');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

@@ -17,7 +17,7 @@
  */
 
 // allow-test-rule: source-text-is-the-product
-// get-shit-done/workflows/update.md is the installed runtime workflow —
+// gsd-core/workflows/update.md is the installed runtime workflow —
 // its text IS the deployed behavioral contract.
 
 const { describe, test } = require('node:test');
@@ -61,14 +61,14 @@ describe('reapply-patches pristine baseline detection (#2424)', () => {
 
   test('update.md workflow references backup-meta.json for pristine-hash baseline', () => {
     // #2790: The behavioral contract (pristine_hashes from backup-meta.json as primary
-    // baseline source) is implemented in the update.md workflow (get-shit-done/workflows/update.md),
+    // baseline source) is implemented in the update.md workflow (gsd-core/workflows/update.md),
     // not the command file. The command delegates via --reapply flag.
     // Verify the underlying workflow has this content.
-    const workflowPath = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'update.md');
+    const workflowPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'update.md');
     const workflowContent = fs.readFileSync(workflowPath, 'utf-8');
     assert.ok(
       workflowContent.includes('backup-meta.json'),
-      'get-shit-done/workflows/update.md must reference backup-meta.json (pristine_hashes baseline source)'
+      'gsd-core/workflows/update.md must reference backup-meta.json (pristine_hashes baseline source)'
     );
   });
 

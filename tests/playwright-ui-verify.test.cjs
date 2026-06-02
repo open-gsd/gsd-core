@@ -10,7 +10,7 @@ const path = require('path');
 describe('Playwright-MCP UI verification integration', () => {
   test('verify-work.md mentions automated UI verification', () => {
     const content = fs.readFileSync(
-      path.join(__dirname, '..', 'get-shit-done', 'workflows', 'verify-work.md'), 'utf-8'
+      path.join(__dirname, '..', 'gsd-core', 'workflows', 'verify-work.md'), 'utf-8'
     );
     assert.ok(
       content.toLowerCase().includes('playwright') || content.includes('automated') && content.includes('UI'),
@@ -20,7 +20,7 @@ describe('Playwright-MCP UI verification integration', () => {
 
   test('ui-review.md mentions Playwright-MCP when available', () => {
     const content = fs.readFileSync(
-      path.join(__dirname, '..', 'get-shit-done', 'workflows', 'ui-review.md'), 'utf-8'
+      path.join(__dirname, '..', 'gsd-core', 'workflows', 'ui-review.md'), 'utf-8'
     );
     assert.ok(
       content.toLowerCase().includes('playwright') || content.includes('mcp__playwright'),
@@ -40,7 +40,7 @@ describe('Playwright-MCP UI verification integration', () => {
 
   test('automated verification is optional/conditional (falls back to manual)', () => {
     const verifyContent = fs.readFileSync(
-      path.join(__dirname, '..', 'get-shit-done', 'workflows', 'verify-work.md'), 'utf-8'
+      path.join(__dirname, '..', 'gsd-core', 'workflows', 'verify-work.md'), 'utf-8'
     );
     // Must include a fallback / "if available" conditional
     const hasConditional =

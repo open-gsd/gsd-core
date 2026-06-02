@@ -39,7 +39,7 @@ const cp = require('node:child_process');
 const { cleanup } = require('./helpers.cjs');
 
 const ROOT = path.join(__dirname, '..');
-const SCRIPT = path.join(ROOT, 'get-shit-done', 'bin', 'verify-reapply-patches.cjs');
+const SCRIPT = path.join(ROOT, 'gsd-core', 'bin', 'verify-reapply-patches.cjs');
 const { REASON } = require(SCRIPT);
 
 // ---------------------------------------------------------------------------
@@ -488,7 +488,7 @@ describe('Bug #3657: pristine-drift does not produce false FAIL_USER_LINES_MISSI
    * fields that Finding 1 added to the JSON report.
    */
   test('Finding 2: workflow Step 5a source contains drift-check section for DRIFTED_COUNT gate', () => {
-    const workflowPath = path.join(ROOT, 'get-shit-done', 'workflows', 'reapply-patches.md');
+    const workflowPath = path.join(ROOT, 'gsd-core', 'workflows', 'reapply-patches.md');
     const workflowSource = fs.readFileSync(workflowPath, 'utf8');
 
     // The drift-check block must be present in Step 5a.

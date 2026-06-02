@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const REFS_DIR = path.join(__dirname, '..', 'get-shit-done', 'references', 'few-shot-examples');
+const REFS_DIR = path.join(__dirname, '..', 'gsd-core', 'references', 'few-shot-examples');
 const AGENTS_DIR = path.join(__dirname, '..', 'agents');
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -109,12 +109,12 @@ describe('few-shot calibration examples', () => {
   describe('agent files reference few-shot examples', () => {
     test('gsd-plan-checker.md contains reference to plan-checker few-shot examples', () => {
       const content = readFile(path.join(AGENTS_DIR, 'gsd-plan-checker.md'));
-      assert.match(content, /@~\/\.claude\/get-shit-done\/references\/few-shot-examples\/plan-checker\.md/);
+      assert.match(content, /@~\/\.claude\/gsd-core\/references\/few-shot-examples\/plan-checker\.md/);
     });
 
     test('gsd-verifier.md contains reference to verifier few-shot examples', () => {
       const content = readFile(path.join(AGENTS_DIR, 'gsd-verifier.md'));
-      assert.match(content, /@~\/\.claude\/get-shit-done\/references\/few-shot-examples\/verifier\.md/);
+      assert.match(content, /@~\/\.claude\/gsd-core\/references\/few-shot-examples\/verifier\.md/);
     });
   });
 

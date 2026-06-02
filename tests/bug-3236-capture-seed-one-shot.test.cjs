@@ -29,7 +29,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
-const PLANT_SEED = path.join(ROOT, 'get-shit-done', 'workflows', 'plant-seed.md');
+const PLANT_SEED = path.join(ROOT, 'gsd-core', 'workflows', 'plant-seed.md');
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -37,7 +37,7 @@ function readPlantSeed() {
   try {
     return fs.readFileSync(PLANT_SEED, 'utf8');
   } catch (err) {
-    throw new Error('get-shit-done/workflows/plant-seed.md not found: ' + err.message);
+    throw new Error('gsd-core/workflows/plant-seed.md not found: ' + err.message);
   }
 }
 
@@ -74,7 +74,7 @@ describe('#3236: plant-seed.md one-shot capture contract', () => {
   test('plant-seed.md exists', () => {
     assert.ok(
       fs.existsSync(PLANT_SEED),
-      'get-shit-done/workflows/plant-seed.md does not exist',
+      'gsd-core/workflows/plant-seed.md does not exist',
     );
   });
 

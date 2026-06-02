@@ -15,10 +15,10 @@ const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 
 const ROOT = path.join(__dirname, '..');
-const GSD_TOOLS = path.join(ROOT, 'get-shit-done', 'bin', 'gsd-tools.cjs');
+const GSD_TOOLS = path.join(ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
 const { cleanup } = require('./helpers.cjs');
 const { resolveUpdateContext } = require(
-  path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'update-context.cjs'),
+  path.join(ROOT, 'gsd-core', 'bin', 'lib', 'update-context.cjs'),
 );
 
 // Normalize a path to a platform-agnostic key: resolve to absolute, then
@@ -44,8 +44,8 @@ function sameDir(a, b) { return normKey(a) === normKey(b); }
 const HOME = '/home/u';
 const CWD = '/work/proj';
 
-function ver(dir) { return `${dir}/get-shit-done/VERSION`; }
-function marker(dir) { return `${dir}/get-shit-done/workflows/update.md`; }
+function ver(dir) { return `${dir}/gsd-core/VERSION`; }
+function marker(dir) { return `${dir}/gsd-core/workflows/update.md`; }
 
 describe('resolveUpdateContext: scope cascade', () => {
   test('GLOBAL claude install under $HOME/.claude', () => {
@@ -124,9 +124,9 @@ describe('gsd-tools update-context (CLI): emits the JSON contract', () => {
   test('--config-dir fixture resolves to the documented 4-field JSON', () => {
     const tmp = nodeFs.mkdtempSync(path.join(os.tmpdir(), 'gsd-uc-'));
     try {
-      nodeFs.mkdirSync(path.join(tmp, 'get-shit-done', 'workflows'), { recursive: true });
-      nodeFs.writeFileSync(path.join(tmp, 'get-shit-done', 'VERSION'), '1.42.0\n');
-      nodeFs.writeFileSync(path.join(tmp, 'get-shit-done', 'workflows', 'update.md'), 'x');
+      nodeFs.mkdirSync(path.join(tmp, 'gsd-core', 'workflows'), { recursive: true });
+      nodeFs.writeFileSync(path.join(tmp, 'gsd-core', 'VERSION'), '1.42.0\n');
+      nodeFs.writeFileSync(path.join(tmp, 'gsd-core', 'workflows', 'update.md'), 'x');
       const out = execFileSync(
         process.execPath,
         [GSD_TOOLS, 'update-context', '--config-dir', tmp, '--runtime', 'kilo', '--json'],

@@ -46,7 +46,7 @@ const {
   cleanupStagedSkills,
   loadSkillsManifest,
   resolveProfile,
-} = require('../get-shit-done/bin/lib/install-profiles.cjs');
+} = require('../gsd-core/bin/lib/install-profiles.cjs');
 
 const {
   INSTALL_SCRIPT,
@@ -485,7 +485,7 @@ describe('install: Codex full → minimal downgrade cleans stale agent state', (
         '# user-owned setting',
         'model = "gpt-5"',
         '',
-        '# GSD Agent Configuration — managed by get-shit-done installer',
+        '# GSD Agent Configuration — managed by gsd-core installer',
         '[agents.gsd-executor]',
         'cmd = "stale"',
         '',

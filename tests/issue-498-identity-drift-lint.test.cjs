@@ -32,7 +32,7 @@ describe('Issue #498: findCoordinateDrift (pure)', () => {
     assert.equal(v[0].kind, 'package');
   });
 
-  test('a different package (@opengsd/gsd-sdk) is NOT a get-shit-done coordinate', () => {
+  test('a different package (@opengsd/gsd-sdk) is NOT a gsd-core coordinate', () => {
     assert.deepEqual(findCoordinateDrift("require('@opengsd/gsd-sdk')", SEAM), []);
   });
 

@@ -19,13 +19,13 @@
  *   checkUiPresence(text: string): { hasUI: boolean, tokens: string[] }
  *
  * CLI usage — reads phase-section text from STDIN to avoid ARG_MAX limits:
- *   echo "$PHASE_SECTION" | node get-shit-done/bin/lib/ui-safety-gate.cjs
+ *   echo "$PHASE_SECTION" | node gsd-core/bin/lib/ui-safety-gate.cjs
  *   echo $?   → 0 if UI tokens found, 1 if not, 2 on usage error
  *
  * Exit codes mirror grep: 0 = match found, 1 = no match, 2 = usage error.
  *
- * Canonical location: get-shit-done/bin/lib/ui-safety-gate.cjs (#448)
- * This path is deployed by the GSD installer to $RUNTIME_DIR/get-shit-done/bin/lib/.
+ * Canonical location: gsd-core/bin/lib/ui-safety-gate.cjs (#448)
+ * This path is deployed by the GSD installer to $RUNTIME_DIR/gsd-core/bin/lib/.
  * bin/lib/ui-safety-gate.cjs (root) is retained for source-repo and npm usage.
  */
 

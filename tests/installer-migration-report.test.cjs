@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const {
   assertInstallerMigrationsUnblocked,
   summarizeInstallerMigrationResult,
-} = require('../get-shit-done/bin/lib/installer-migration-report.cjs');
+} = require('../gsd-core/bin/lib/installer-migration-report.cjs');
 
 test('summarizes every installer migration report category', () => {
   const blockedAction = {

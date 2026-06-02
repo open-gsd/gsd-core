@@ -4,7 +4,7 @@
 #
 # Project context: GSD ships a CLI tool + an agent runtime, not a documented
 # public library. We carry rich JSDoc on internal helpers that warrant it
-# (see bin/install.js, get-shit-done/bin/lib/*.cjs) but we do not enforce a
+# (see bin/install.js, gsd-core/bin/lib/*.cjs) but we do not enforce a
 # blanket docstring coverage bar — see issue #2932 for rationale.
 
 reviews:

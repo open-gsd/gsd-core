@@ -6,7 +6,7 @@
 /**
  * Worktree Lifecycle Module — branch-check and workspace-safety tests
  *
- * Seam: get-shit-done/workflows/{execute-phase,execute-plan,quick}.md,
+ * Seam: gsd-core/workflows/{execute-phase,execute-plan,quick}.md,
  *       agents/gsd-executor.md
  *
  * Split from the consolidated 13→2 worktree cluster (≤800 LOC/file):
@@ -29,13 +29,13 @@ const os = require('node:os');
 const { cleanup } = require('./helpers.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
-const EXECUTE_PHASE_PATH = path.join(REPO_ROOT, 'get-shit-done', 'workflows', 'execute-phase.md');
-const EXECUTE_PLAN_PATH = path.join(REPO_ROOT, 'get-shit-done', 'workflows', 'execute-plan.md');
-const QUICK_PATH = path.join(REPO_ROOT, 'get-shit-done', 'workflows', 'quick.md');
+const EXECUTE_PHASE_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'execute-phase.md');
+const EXECUTE_PLAN_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'execute-plan.md');
+const QUICK_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'quick.md');
 const EXECUTOR_AGENT_PATH = path.join(REPO_ROOT, 'agents', 'gsd-executor.md');
-const DIAGNOSE_PATH = path.join(REPO_ROOT, 'get-shit-done', 'workflows', 'diagnose-issues.md');
-const GIT_INTEGRATION_PATH = path.join(REPO_ROOT, 'get-shit-done', 'references', 'git-integration.md');
-const WORKTREE_BRANCH_CHECK_FRAGMENT = path.join(REPO_ROOT, 'get-shit-done', 'references', 'worktree-branch-check.md');
+const DIAGNOSE_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'diagnose-issues.md');
+const GIT_INTEGRATION_PATH = path.join(REPO_ROOT, 'gsd-core', 'references', 'git-integration.md');
+const WORKTREE_BRANCH_CHECK_FRAGMENT = path.join(REPO_ROOT, 'gsd-core', 'references', 'worktree-branch-check.md');
 
 const isWindows = process.platform === 'win32';
 
@@ -584,7 +584,7 @@ describe('bug #2774 — worktree cleanup pipeline must not target the parent wor
       // workspace worktree + agent worktree under workspace's
       // `.claude/worktrees/agent-` namespace.
       const porcelain = [
-        'worktree /Users/dev/upstream/get-shit-done',
+        'worktree /Users/dev/upstream/gsd-core',
         'HEAD abc123',
         'branch refs/heads/main',
         '',
@@ -610,7 +610,7 @@ describe('bug #2774 — worktree cleanup pipeline must not target the parent wor
 
     test('selects nothing when no agent worktrees exist', () => {
       const porcelain = [
-        'worktree /Users/dev/upstream/get-shit-done',
+        'worktree /Users/dev/upstream/gsd-core',
         'HEAD abc123',
         'branch refs/heads/main',
         '',

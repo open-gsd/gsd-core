@@ -38,8 +38,8 @@ function expandHome(p: string | undefined | null, home: string): string {
   return p.startsWith('~/') ? path.join(home, p.slice(2)) : p;
 }
 
-function versionFile(dir: string): string { return path.join(dir, 'get-shit-done', 'VERSION'); }
-function markerFile(dir: string): string { return path.join(dir, 'get-shit-done', 'workflows', 'update.md'); }
+function versionFile(dir: string): string { return path.join(dir, 'gsd-core', 'VERSION'); }
+function markerFile(dir: string): string { return path.join(dir, 'gsd-core', 'workflows', 'update.md'); }
 
 export interface FsAdapter {
   exists(p: string): boolean;

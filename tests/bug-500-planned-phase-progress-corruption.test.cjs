@@ -20,7 +20,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
-const planScan = require('../get-shit-done/bin/lib/plan-scan.cjs');
+const planScan = require('../gsd-core/bin/lib/plan-scan.cjs');
 const { isRootPlanFile, scanPhasePlans } = planScan;
 
 describe('isRootPlanFile does not count legacy summaries as plans (#500 RC2)', () => {

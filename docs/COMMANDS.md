@@ -594,7 +594,7 @@ Show GSD commands at the tier you ask for. Default fits one screen; `--full` is 
 /gsd-help --brief <topic>           # Compact scoped lookup — signature + one-line summary
 ```
 
-See `get-shit-done/workflows/help/modes/topic.md` for the full alias table. Unknown topics print the recognized list.
+See `gsd-core/workflows/help/modes/topic.md` for the full alias table. Unknown topics print the recognized list.
 
 ---
 

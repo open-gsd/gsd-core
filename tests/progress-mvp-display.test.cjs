@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const WORKFLOW = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'progress.md');
+const WORKFLOW = path.join(__dirname, '..', 'gsd-core', 'workflows', 'progress.md');
 
 function parseProgressContract(content) {
   const lines = content.split(/\r?\n/);

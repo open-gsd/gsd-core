@@ -28,9 +28,9 @@ const INVENTORY = fs.readFileSync(INVENTORY_MD, 'utf8');
 const FAMILIES = [
   { label: 'Agents',      dir: 'agents',                      filter: (f) => /^gsd-.*\.md$/.test(f) },
   { label: 'Commands',    dir: 'commands/gsd',                filter: (f) => f.endsWith('.md') },
-  { label: 'Workflows',   dir: 'get-shit-done/workflows',     filter: (f) => f.endsWith('.md') },
-  { label: 'References',  dir: 'get-shit-done/references',    filter: (f) => f.endsWith('.md') },
-  { label: 'CLI Modules', dir: 'get-shit-done/bin/lib',       filter: (f) => f.endsWith('.cjs') },
+  { label: 'Workflows',   dir: 'gsd-core/workflows',     filter: (f) => f.endsWith('.md') },
+  { label: 'References',  dir: 'gsd-core/references',    filter: (f) => f.endsWith('.md') },
+  { label: 'CLI Modules', dir: 'gsd-core/bin/lib',       filter: (f) => f.endsWith('.cjs') },
   { label: 'Hooks',       dir: 'hooks',                       filter: (f) => /\.(js|sh)$/.test(f) },
 ];
 

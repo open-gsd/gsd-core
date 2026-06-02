@@ -20,7 +20,7 @@ const path = require('path');
 
 const ROOT          = path.join(__dirname, '..');
 const COMMANDS_DIR  = path.join(ROOT, 'commands', 'gsd');
-const GSD_ROOT      = path.join(ROOT, 'get-shit-done');
+const GSD_ROOT      = path.join(ROOT, 'gsd-core');
 
 const {
   CANONICAL_TOOLS,

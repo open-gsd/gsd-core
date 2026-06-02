@@ -21,7 +21,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const UPDATE_MD = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'update.md');
+const UPDATE_MD = path.join(__dirname, '..', 'gsd-core', 'workflows', 'update.md');
 
 describe('update.md — no bare ~.claude path references (#2470)', () => {
   const content = fs.readFileSync(UPDATE_MD, 'utf-8');

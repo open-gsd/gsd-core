@@ -17,16 +17,16 @@ const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
 
 const {
   graphifyStatus,
-} = require('../get-shit-done/bin/lib/graphify.cjs');
+} = require('../gsd-core/bin/lib/graphify.cjs');
 
 const {
   VALID_CONFIG_KEYS,
   isValidConfigKey,
-} = require('../get-shit-done/bin/lib/config-schema.cjs');
+} = require('../gsd-core/bin/lib/config-schema.cjs');
 
 const {
   CONFIG_DEFAULTS: CANONICAL_CONFIG_DEFAULTS,
-} = require('../get-shit-done/bin/lib/configuration.cjs');
+} = require('../gsd-core/bin/lib/configuration.cjs');
 
 const {
   makeStatusProject,

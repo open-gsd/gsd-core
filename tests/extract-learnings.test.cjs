@@ -17,7 +17,7 @@ const fs = require('fs');
 const path = require('path');
 
 const COMMAND_PATH = path.join(__dirname, '..', 'commands', 'gsd', 'extract-learnings.md');
-const WORKFLOW_PATH = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'extract-learnings.md');
+const WORKFLOW_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'extract-learnings.md');
 
 describe('extract-learnings command', () => {
   test('command file exists', () => {

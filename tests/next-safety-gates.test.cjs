@@ -19,7 +19,7 @@ const fs = require('fs');
 const path = require('path');
 
 describe('/gsd-next safety gates (#1732, #2089)', () => {
-  const workflowPath = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'next.md');
+  const workflowPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'next.md');
   // #2790: next.md command was consolidated into progress.md as the --next flag.
   const commandPath = path.join(__dirname, '..', 'commands', 'gsd', 'progress.md');
 

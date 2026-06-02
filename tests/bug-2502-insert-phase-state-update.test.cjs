@@ -23,7 +23,7 @@ const fs = require('fs');
 const path = require('path');
 
 const INSERT_PHASE_PATH = path.join(
-  __dirname, '..', 'get-shit-done', 'workflows', 'insert-phase.md'
+  __dirname, '..', 'gsd-core', 'workflows', 'insert-phase.md'
 );
 
 describe('bug-2502: insert-phase must update STATE.md next-phase recommendation', () => {

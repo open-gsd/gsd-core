@@ -6,7 +6,7 @@
 /**
  * Workflow size budget.
  *
- * Workflow definitions in `get-shit-done/workflows/*.md` are loaded verbatim
+ * Workflow definitions in `gsd-core/workflows/*.md` are loaded verbatim
  * into Claude's context every time the corresponding `/gsd:*` command is
  * invoked. Unbounded growth is paid on every invocation across every session.
  *
@@ -17,7 +17,7 @@
  *
  * Raising a budget is a deliberate choice — adjust the constant, write a
  * rationale in the PR, and confirm the bloat is not duplicated content
- * that belongs in `get-shit-done/references/` or a per-mode subdirectory
+ * that belongs in `gsd-core/references/` or a per-mode subdirectory
  * (see `workflows/discuss-phase/modes/` for the progressive-disclosure
  * pattern introduced by #2551).
  *
@@ -36,7 +36,7 @@ const fs = require('fs');
 const path = require('path');
 const { assertTightCeiling } = require('../scripts/lib/allowlist-ratchet.cjs');
 
-const WORKFLOWS_DIR = path.join(__dirname, '..', 'get-shit-done', 'workflows');
+const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
 
 // Grace band: maximum allowed slack (ceiling − actualMax) before a ceiling is
 // considered too loose. 60 lines gives one reasonable screen of breathing room
@@ -108,7 +108,7 @@ describe('SIZE: workflow line-count budget', () => {
         `${workflow}.md has ${lines} lines — exceeds ${tier} budget of ${limit}. ` +
         `Extract per-mode bodies to a workflows/${workflow}/modes/ subdirectory, ` +
         `templates to workflows/${workflow}/templates/, or shared references ` +
-        `to get-shit-done/references/. See workflows/discuss-phase/ for the pattern.`
+        `to gsd-core/references/. See workflows/discuss-phase/ for the pattern.`
       );
     });
   }

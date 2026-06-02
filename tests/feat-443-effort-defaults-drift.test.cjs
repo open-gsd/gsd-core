@@ -26,7 +26,7 @@ const { test } = require('node:test');
 const manifestPath = path.join(
   __dirname,
   '..',
-  'get-shit-done',
+  'gsd-core',
   'bin',
   'shared',
   'config-defaults.manifest.json'

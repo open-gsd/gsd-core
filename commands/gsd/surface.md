@@ -37,7 +37,7 @@ Parse the first token of $ARGUMENTS:
 ## list / status
 
 Call `listSurface(runtimeConfigDir, manifest, CLUSTERS)` from
-`get-shit-done/bin/lib/surface.cjs`. Display:
+`gsd-core/bin/lib/surface.cjs`. Display:
 
 ```
 Enabled (N skills, ~T tokens):
@@ -144,12 +144,12 @@ All paths can be overridden by reading the `CLAUDE_CONFIG_DIR` env var if set.
 
 - Unknown cluster name → list valid cluster names, exit without writing.
 - Unknown profile name → list known profiles (`core`, `standard`, `full`), exit.
-- Missing `surface.cjs` → prompt: "Run `npm i -g get-shit-done` to reinstall GSD."
+- Missing `surface.cjs` → prompt: "Run `npm i -g gsd-core` to reinstall GSD."
 
 <execution_context>
 Surface state file: `~/.claude/.gsd-surface.json`
 Install profile marker: `~/.claude/.gsd-profile`
 Skill dirs: `~/.claude/skills/gsd-*/`
-Engine module: `~/.claude/get-shit-done/bin/lib/surface.cjs`
-Cluster definitions: `~/.claude/get-shit-done/bin/lib/clusters.cjs`
+Engine module: `~/.claude/gsd-core/bin/lib/surface.cjs`
+Cluster definitions: `~/.claude/gsd-core/bin/lib/clusters.cjs`
 </execution_context>

@@ -29,7 +29,7 @@ const ROOT = path.resolve(__dirname, '..');
 // #2790: edit-phase.md was consolidated into phase.md as the --edit flag.
 // The COMMAND_PATH here now points to the consolidated command.
 const COMMAND_PATH = path.join(ROOT, 'commands', 'gsd', 'phase.md');
-const WORKFLOW_PATH = path.join(ROOT, 'get-shit-done', 'workflows', 'edit-phase.md');
+const WORKFLOW_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'edit-phase.md');
 
 // ─── File existence ──────────────────────────────────────────────────────────
 
@@ -38,8 +38,8 @@ describe('edit-phase: file existence', () => {
     assert.ok(fs.existsSync(COMMAND_PATH), 'commands/gsd/phase.md should exist (consolidates edit-phase)');
   });
 
-  test('get-shit-done/workflows/edit-phase.md exists', () => {
-    assert.ok(fs.existsSync(WORKFLOW_PATH), 'get-shit-done/workflows/edit-phase.md should exist');
+  test('gsd-core/workflows/edit-phase.md exists', () => {
+    assert.ok(fs.existsSync(WORKFLOW_PATH), 'gsd-core/workflows/edit-phase.md should exist');
   });
 });
 

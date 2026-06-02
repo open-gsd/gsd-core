@@ -19,10 +19,10 @@ const fs = require('fs');
 const path = require('path');
 
 describe('plan-phase chain flag preservation (#1620)', () => {
-  const planPath = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'plan-phase.md');
-  const discussPath = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'discuss-phase.md');
+  const planPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-phase.md');
+  const discussPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'discuss-phase.md');
   // After #2551, discuss-phase chain logic moved to modes/chain.md.
-  const discussChainPath = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'discuss-phase', 'modes', 'chain.md');
+  const discussChainPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'discuss-phase', 'modes', 'chain.md');
   const readDiscuss = () => {
     // Fail loudly if either source is missing — silent filtering would let a
     // regression that deletes modes/chain.md pass this whole suite.

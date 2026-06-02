@@ -12,7 +12,7 @@ const {
   CANONICAL_EXACT,
   CANONICAL_PATTERNS,
   isCanonicalPlanningFile,
-} = require('../get-shit-done/bin/lib/artifacts.cjs');
+} = require('../gsd-core/bin/lib/artifacts.cjs');
 
 describe('CANONICAL_EXACT', () => {
   test('is a Set', () => {

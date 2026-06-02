@@ -73,7 +73,7 @@ ALLOWLIST=(
   'tests/security.test.cjs'
   'tests/prompt-injection-scan.test.cjs'
   'tests/verify.test.cjs'
-  'get-shit-done/bin/lib/security.cjs'
+  'gsd-core/bin/lib/security.cjs'
   'hooks/gsd-prompt-guard.js'
   'hooks/gsd-read-injection-scanner.js'
   'tests/read-injection-scanner.test.cjs'

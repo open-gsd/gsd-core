@@ -216,8 +216,8 @@ body:
 
         **Useful diagnostics to include (if applicable):**
         - `npm list -g @opengsd/gsd-core` — confirms installed version
-        - `ls -la ~/.claude/get-shit-done/` — confirms installation files (Claude Code)
-        - `cat ~/.claude/get-shit-done/gsd-file-manifest.json` — file manifest for debugging install issues
+        - `ls -la ~/.claude/gsd-core/` — confirms installation files (Claude Code)
+        - `cat ~/.claude/gsd-core/gsd-file-manifest.json` — file manifest for debugging install issues
         - `ls -la .planning/` — confirms planning directory state
 
         **⚠️ PII Warning:** File listings and manifests contain your home directory path. Replace your username with `REDACTED`.

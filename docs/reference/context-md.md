@@ -14,7 +14,7 @@ Every phase that has been through the discuss workflow produces one `CONTEXT.md`
 
 For example: `.planning/phases/03-post-feed/03-CONTEXT.md`.
 
-The file is produced by `write_context` in `get-shit-done/workflows/discuss-phase.md` (or its PRD / ADR ingest express paths). It is never edited by hand during normal operation — the discuss-phase workflow writes it and downstream agents read it as a sealed source of truth.
+The file is produced by `write_context` in `gsd-core/workflows/discuss-phase.md` (or its PRD / ADR ingest express paths). It is never edited by hand during normal operation — the discuss-phase workflow writes it and downstream agents read it as a sealed source of truth.
 
 ---
 

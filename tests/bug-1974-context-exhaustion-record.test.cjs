@@ -29,7 +29,7 @@ const { spawnSync } = require('node:child_process');
 const { cleanup } = require('./helpers.cjs');
 
 const HOOK_PATH = path.resolve(__dirname, '..', 'hooks', 'gsd-context-monitor.js');
-const GSD_TOOLS = path.resolve(__dirname, '..', 'get-shit-done', 'bin', 'gsd-tools.cjs');
+const GSD_TOOLS = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 
 // Windows can hold a transient handle on the temp dir after a spawnSync child
 // exits (AV scanner / handle-release lag), so cleanup()'s internal rmSync retry

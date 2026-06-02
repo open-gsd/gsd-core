@@ -21,10 +21,10 @@ const fs = require('fs');
 const path = require('path');
 
 const QUICK_MD = path.join(
-  __dirname, '..', 'get-shit-done', 'workflows', 'quick.md'
+  __dirname, '..', 'gsd-core', 'workflows', 'quick.md'
 );
 const EXECUTE_PHASE_MD = path.join(
-  __dirname, '..', 'get-shit-done', 'workflows', 'execute-phase.md'
+  __dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md'
 );
 
 describe('resurrection guard drift check — quick.md vs execute-phase.md (#3195)', () => {

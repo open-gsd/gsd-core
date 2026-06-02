@@ -14,7 +14,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-const { cmdValidateHealth } = require('../get-shit-done/bin/lib/verify.cjs');
+const { cmdValidateHealth } = require('../gsd-core/bin/lib/verify.cjs');
 
 function makeTempProject(files = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2446-'));
@@ -96,7 +96,7 @@ test('--backfill synthesizes missing MILESTONES.md entry from snapshot', () => {
 
 test('health.md mentions --backfill flag', () => {
   const healthMd = fs.readFileSync(
-    path.join(__dirname, '../get-shit-done/workflows/health.md'), 'utf-8'
+    path.join(__dirname, '../gsd-core/workflows/health.md'), 'utf-8'
   );
   assert.ok(healthMd.includes('--backfill'), 'health.md should document --backfill');
   assert.ok(healthMd.includes('W018'), 'health.md should list W018 error code');

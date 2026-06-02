@@ -44,7 +44,7 @@ function collectSourceFiles(dir) {
 }
 
 // Scan source dirs only — exclude tests/ which may contain intentional fixtures
-const sourceDirs = ['bin', 'scripts', 'hooks', path.join('get-shit-done', 'bin')].map(
+const sourceDirs = ['bin', 'scripts', 'hooks', path.join('gsd-core', 'bin')].map(
   d => path.join(repoRoot, d)
 );
 const sourceFiles = sourceDirs.flatMap(collectSourceFiles);

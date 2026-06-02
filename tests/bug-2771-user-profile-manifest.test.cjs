@@ -3,7 +3,7 @@
  *
  * USER-PROFILE.md is a user-owned artifact created/refreshed by /gsd-profile-user.
  * preserveUserArtifacts() correctly preserves it across reinstalls. But writeManifest()
- * also records it under "get-shit-done/USER-PROFILE.md" with a SHA-256 of whatever was
+ * also records it under "gsd-core/USER-PROFILE.md" with a SHA-256 of whatever was
  * on disk at install time. On the next install, saveLocalPatches() compares the on-disk
  * (refreshed) hash to the manifest hash, finds them different, and emits the spurious
  * "Found N locally modified GSD file(s) — backed up to gsd-local-patches/" warning.
@@ -53,11 +53,11 @@ describe('#2771: USER-PROFILE.md is excluded from gsd-file-manifest.json', () =>
   beforeEach(() => { tmpDir = createTempDir('gsd-2771-manifest-'); });
   afterEach(() => { cleanup(tmpDir); });
 
-  test('writeManifest excludes get-shit-done/USER-PROFILE.md even when present on disk', () => {
+  test('writeManifest excludes gsd-core/USER-PROFILE.md even when present on disk', () => {
     runInstaller(tmpDir);
 
     // Simulate /gsd-profile-user creating USER-PROFILE.md
-    const profilePath = path.join(tmpDir, 'get-shit-done', 'USER-PROFILE.md');
+    const profilePath = path.join(tmpDir, 'gsd-core', 'USER-PROFILE.md');
     fs.writeFileSync(profilePath, '# My Profile\n\nFirst version.\n');
 
     // Re-install: writeManifest runs again with USER-PROFILE.md present on disk
@@ -68,8 +68,8 @@ describe('#2771: USER-PROFILE.md is excluded from gsd-file-manifest.json', () =>
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 
     assert.ok(
-      !Object.prototype.hasOwnProperty.call(manifest.files, 'get-shit-done/USER-PROFILE.md'),
-      'manifest.files must NOT contain get-shit-done/USER-PROFILE.md — it is a user artifact, not distribution'
+      !Object.prototype.hasOwnProperty.call(manifest.files, 'gsd-core/USER-PROFILE.md'),
+      'manifest.files must NOT contain gsd-core/USER-PROFILE.md — it is a user artifact, not distribution'
     );
   });
 });
@@ -85,7 +85,7 @@ describe('#2771: USER-PROFILE.md is still preserved across reinstall', () => {
   test('USER-PROFILE.md content survives reinstall (preservation regression guard)', () => {
     runInstaller(tmpDir);
 
-    const profilePath = path.join(tmpDir, 'get-shit-done', 'USER-PROFILE.md');
+    const profilePath = path.join(tmpDir, 'gsd-core', 'USER-PROFILE.md');
     const content = '# Profile\n\nUser content from /gsd-profile-user.\n';
     fs.writeFileSync(profilePath, content);
 
@@ -109,7 +109,7 @@ describe('#2771: refreshed USER-PROFILE.md does not trigger local-patches warnin
     runInstaller(tmpDir);
 
     // /gsd-profile-user creates USER-PROFILE.md (v1)
-    const profilePath = path.join(tmpDir, 'get-shit-done', 'USER-PROFILE.md');
+    const profilePath = path.join(tmpDir, 'gsd-core', 'USER-PROFILE.md');
     fs.writeFileSync(profilePath, '# Profile v1\n');
 
     // Reinstall — manifest written with v1 contents (under buggy code) or excluded (under fix)
@@ -123,7 +123,7 @@ describe('#2771: refreshed USER-PROFILE.md does not trigger local-patches warnin
     const output = runInstaller(tmpDir);
 
     const patchesDir = path.join(tmpDir, PATCHES_DIR_NAME);
-    const patchFile = path.join(patchesDir, 'get-shit-done', 'USER-PROFILE.md');
+    const patchFile = path.join(patchesDir, 'gsd-core', 'USER-PROFILE.md');
     assert.ok(
       !fs.existsSync(patchFile),
       'USER-PROFILE.md must NOT appear in gsd-local-patches/ — it is a user artifact, not a modified distribution file'
@@ -152,7 +152,7 @@ describe('#2771: legacy manifest entries for USER_OWNED_ARTIFACTS are normalized
     // Initial install
     runInstaller(tmpDir);
 
-    const profilePath = path.join(tmpDir, 'get-shit-done', 'USER-PROFILE.md');
+    const profilePath = path.join(tmpDir, 'gsd-core', 'USER-PROFILE.md');
     fs.writeFileSync(profilePath, '# Profile v1\n');
 
     // Reinstall to populate manifest under the (now-fixed) writer
@@ -163,7 +163,7 @@ describe('#2771: legacy manifest entries for USER_OWNED_ARTIFACTS are normalized
     const manifestPath = path.join(tmpDir, MANIFEST_NAME);
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     manifest.files = manifest.files || {};
-    manifest.files['get-shit-done/USER-PROFILE.md'] = 'deadbeef'.repeat(8); // stale hash
+    manifest.files['gsd-core/USER-PROFILE.md'] = 'deadbeef'.repeat(8); // stale hash
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
 
     // /gsd-profile-user --refresh rewrites USER-PROFILE.md
@@ -173,7 +173,7 @@ describe('#2771: legacy manifest entries for USER_OWNED_ARTIFACTS are normalized
     const output = runInstaller(tmpDir);
 
     const patchesDir = path.join(tmpDir, PATCHES_DIR_NAME);
-    const patchFile = path.join(patchesDir, 'get-shit-done', 'USER-PROFILE.md');
+    const patchFile = path.join(patchesDir, 'gsd-core', 'USER-PROFILE.md');
     assert.ok(
       !fs.existsSync(patchFile),
       'legacy USER-PROFILE.md manifest entry must be normalized away — not backed up as a patch'

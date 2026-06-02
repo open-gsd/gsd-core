@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 
 const {
   resolveReviewerSelection,
-} = require('../get-shit-done/bin/lib/review-reviewer-selection.cjs');
+} = require('../gsd-core/bin/lib/review-reviewer-selection.cjs');
 
 describe('review default reviewers resolution (#3079)', () => {
   test('no flags + config defaults selects configured subset', () => {

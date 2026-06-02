@@ -60,15 +60,15 @@ The installer:
 If the installer cannot resolve `get-shit-done-cc` in your environment, or you
 prefer to clean up by hand:
 
-1. **Check each runtime config directory** for a `get-shit-done/` subtree left
+1. **Check each runtime config directory** for a `gsd-core/` subtree left
    by the old package:
 
    ```bash
-   ls ~/.claude/get-shit-done/
-   ls ~/.gemini/get-shit-done/
-   ls ~/.codex/get-shit-done/
-   ls ~/.config/opencode/get-shit-done/
-   ls ~/.kilo/get-shit-done/
+   ls ~/.claude/gsd-core/
+   ls ~/.gemini/gsd-core/
+   ls ~/.codex/gsd-core/
+   ls ~/.config/opencode/gsd-core/
+   ls ~/.kilo/gsd-core/
    ```
 
    Remove any directories found there that were written by `get-shit-done-cc`

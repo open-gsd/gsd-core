@@ -20,7 +20,7 @@ const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
 const SKETCH_COMMAND = path.join(ROOT, 'commands/gsd/sketch.md');
-const SKETCH_WORKFLOW = path.join(ROOT, 'get-shit-done/workflows/sketch.md');
+const SKETCH_WORKFLOW = path.join(ROOT, 'gsd-core/workflows/sketch.md');
 
 describe('bug-2949: sketch --wrap-up dispatch wiring', () => {
   test('commands/gsd/sketch.md contains --wrap-up dispatch logic', () => {

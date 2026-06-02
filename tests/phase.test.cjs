@@ -22,7 +22,7 @@ const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 const { runGsdTools, createTempProject, createTempDir, cleanup } = require('./helpers.cjs');
 
-const GSD_TOOLS_BIN = path.resolve(__dirname, '..', 'get-shit-done', 'bin', 'gsd-tools.cjs');
+const GSD_TOOLS_BIN = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 
 describe('phases list command', () => {
   let tmpDir;
@@ -947,7 +947,7 @@ Output: Chat component, API endpoints.
 </objective>
 
 <execution_context>
-@~/.claude/get-shit-done/workflows/execute-plan.md
+@~/.claude/gsd-core/workflows/execute-plan.md
 </execution_context>
 
 <context>
@@ -2848,7 +2848,7 @@ Plans:
 // comparePhaseNum and normalizePhaseName (imported directly)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const { comparePhaseNum, normalizePhaseName } = require('../get-shit-done/bin/lib/core.cjs');
+const { comparePhaseNum, normalizePhaseName } = require('../gsd-core/bin/lib/core.cjs');
 
 describe('comparePhaseNum', () => {
   test('sorts integer phases numerically', () => {
@@ -4040,9 +4040,9 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
 // ─────────────────────────────────────────────────────────────────────────────
 
 {
-  const PMG_WF = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'plan-milestone-gaps.md');
-  const IMPORT_WF = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'import.md');
-  const BACKLOG_WF = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'add-backlog.md');
+  const PMG_WF = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-milestone-gaps.md');
+  const IMPORT_WF = path.join(__dirname, '..', 'gsd-core', 'workflows', 'import.md');
+  const BACKLOG_WF = path.join(__dirname, '..', 'gsd-core', 'workflows', 'add-backlog.md');
 
   function readWorkflow(filePath) {
     try {

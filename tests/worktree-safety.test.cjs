@@ -3,7 +3,7 @@
 /**
  * Worktree Safety Policy Module — typed IR tests
  *
- * Seam: get-shit-done/bin/lib/worktree-safety.cjs
+ * Seam: gsd-core/bin/lib/worktree-safety.cjs
  * Interface: resolveWorktreeContext, parseWorktreePorcelain, planWorktreePrune,
  *            executeWorktreePrunePlan, listLinkedWorktreePaths, inspectWorktreeHealth,
  *            snapshotWorktreeInventory, planWorktreeWaveCleanup,
@@ -20,7 +20,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 
 const WORKTREE_SAFETY_PATH = path.join(
-  __dirname, '..', 'get-shit-done', 'bin', 'lib', 'worktree-safety.cjs'
+  __dirname, '..', 'gsd-core', 'bin', 'lib', 'worktree-safety.cjs'
 );
 
 const {

@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const WORKFLOW = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'new-project.md');
+const WORKFLOW = path.join(__dirname, '..', 'gsd-core', 'workflows', 'new-project.md');
 
 function parseNewProjectContract(content) {
   const lines = content.split(/\r?\n/);

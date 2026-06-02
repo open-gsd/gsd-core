@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 const {
   getMilestoneFromPhaseId,
   getPhaseDirFromPhaseId,
-} = require('../get-shit-done/bin/lib/core.cjs');
+} = require('../gsd-core/bin/lib/core.cjs');
 
 // ─── getMilestoneFromPhaseId ────────────────────────────────────────────────
 

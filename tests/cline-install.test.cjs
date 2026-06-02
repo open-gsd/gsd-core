@@ -14,7 +14,7 @@
  * - Appears in the interactive menu and --all flag
  * - Supports the --cline CLI flag
  * - Writes .clinerules to the install directory
- * - Installs get-shit-done/ engine with path replacement
+ * - Installs gsd-core/ engine with path replacement
  */
 
 'use strict';
@@ -108,7 +108,7 @@ describe('Cline markdown conversion', () => {
   });
 
   test('replaces .claude/ paths with .cline/', () => {
-    const result = convertClaudeToCliineMarkdown('See ~/.claude/get-shit-done/');
+    const result = convertClaudeToCliineMarkdown('See ~/.claude/gsd-core/');
     assert.ok(!result.includes('.claude/'), `Expected no .claude/ in: ${result}`);
     assert.ok(result.includes('.cline/'));
   });
@@ -154,10 +154,10 @@ describe('Cline install (local)', () => {
     assert.ok(content.includes('GSD') || content.includes('gsd'), '.clinerules must reference GSD');
   });
 
-  test('install creates get-shit-done engine directory', () => {
+  test('install creates gsd-core engine directory', () => {
     install(false, 'cline');
-    const engineDir = path.join(tmpDir, 'get-shit-done');
-    assert.ok(fs.existsSync(engineDir), 'get-shit-done directory must exist after install');
+    const engineDir = path.join(tmpDir, 'gsd-core');
+    assert.ok(fs.existsSync(engineDir), 'gsd-core directory must exist after install');
   });
 
   test('finishInstall does not throw ERR_INVALID_ARG_TYPE for cline runtime (regression: null settingsPath guard)', () => {
@@ -179,7 +179,7 @@ describe('Cline install (local)', () => {
 
   test('installed engine files have no leaked .claude paths', () => {
     install(false, 'cline');
-    const engineDir = path.join(tmpDir, 'get-shit-done');
+    const engineDir = path.join(tmpDir, 'gsd-core');
     if (!fs.existsSync(engineDir)) return; // skip if engine not installed
 
     function scanDir(dir) {
@@ -195,7 +195,7 @@ describe('Cline install (local)', () => {
           // Check for GSD install paths that should have been substituted.
           // profile-pipeline.cjs intentionally references ~/.claude/projects (Claude Code
           // session data) as a runtime feature — that is not a leaked install path.
-          const hasLeaked = /~\/\.claude\/(?:get-shit-done|commands|agents|hooks)|HOME\/\.claude\/(?:get-shit-done|commands|agents|hooks)/.test(content);
+          const hasLeaked = /~\/\.claude\/(?:gsd-core|commands|agents|hooks)|HOME\/\.claude\/(?:gsd-core|commands|agents|hooks)/.test(content);
           assert.ok(!hasLeaked, `Found leaked GSD .claude install path in ${fullPath}`);
         }
       }

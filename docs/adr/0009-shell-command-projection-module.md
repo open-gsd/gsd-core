@@ -7,7 +7,7 @@ We propose introducing a Shell Command Projection Module that owns projection fr
 
 ## Decision
 
-- Add a **Shell Command Projection Module** under `get-shit-done/bin/lib/` as the single owner for runtime-aware command-text rendering.
+- Add a **Shell Command Projection Module** under `gsd-core/bin/lib/` as the single owner for runtime-aware command-text rendering.
 - Feed the module typed inputs (`platform`, `shell`, `runtime`, executable token, args, path policy) instead of prebuilt shell strings.
 - Keep callers as thin Adapters that request projected text for:
   - managed hook commands in `settings.json`
@@ -125,7 +125,7 @@ The seam grew beyond the original "rendering only" scope. The "does not become a
 
 **Open question resolutions:**
 
-- Q4 (installer-only vs shared seam): **resolved — shared.** The seam lives in `get-shit-done/bin/lib/`, consumed by installer, planning workflow, and every fs/subprocess call site across the tool.
+- Q4 (installer-only vs shared seam): **resolved — shared.** The seam lives in `gsd-core/bin/lib/`, consumed by installer, planning workflow, and every fs/subprocess call site across the tool.
 - Q1, Q2, Q3 (`hooks.shell_preference`, Windows Git Bash modeling, shim/script builder migration timing): unresolved, carried forward as projection-design concerns independent of the I/O expansion.
 
 See CONTEXT.md "Shell Command Projection Module" entry for the canonical current-state description.

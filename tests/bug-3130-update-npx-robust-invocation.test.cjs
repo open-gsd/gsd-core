@@ -23,7 +23,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
-const UPDATE_WF = path.join(ROOT, 'get-shit-done', 'workflows', 'update.md');
+const UPDATE_WF = path.join(ROOT, 'gsd-core', 'workflows', 'update.md');
 
 const src = fs.readFileSync(UPDATE_WF, 'utf8');
 

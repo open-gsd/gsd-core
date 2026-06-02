@@ -97,8 +97,8 @@ describe('ci-test-scope.cjs', () => {
   });
 
   test('bug-408: code change with no rule match falls back to unit suite token', () => {
-    // A plain source file that matches no RULES entry but is under get-shit-done/ (code path)
-    const result = scopeFor(['get-shit-done/src/some-util.js']);
+    // A plain source file that matches no RULES entry but is under gsd-core/ (code path)
+    const result = scopeFor(['gsd-core/src/some-util.js']);
     assert.strictEqual(result.code_changed, true);
     // allow-test-rule: the unit-fallback contract is the exact subject of bug #408.
     assert.deepStrictEqual(result.targeted_tests, ['unit'],

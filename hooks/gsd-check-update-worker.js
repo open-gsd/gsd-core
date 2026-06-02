@@ -11,15 +11,15 @@
 
 const fs = require('fs');
 const path = require('path');
-const { isSemverNewer } = require('../get-shit-done/bin/lib/semver-compare.cjs');
+const { isSemverNewer } = require('../gsd-core/bin/lib/semver-compare.cjs');
 // Latest-version lookup is delegated to the single deterministic adapter
 // (#498). checkLatestVersion() owns the npm-view call, the timeout/semver
 // policy, and the package name — sourced from the baked Package Identity seam.
 // The previous `require('../package.json').name` (#378) resolved to undefined
 // in the installed tree (only a {"type":"commonjs"} marker ships), so the
 // background check never reported updates.
-const { checkLatestVersion } = require('../get-shit-done/bin/check-latest-version.cjs');
-const { PACKAGE_NAME } = require('../get-shit-done/bin/lib/package-identity.cjs');
+const { checkLatestVersion } = require('../gsd-core/bin/check-latest-version.cjs');
+const { PACKAGE_NAME } = require('../gsd-core/bin/lib/package-identity.cjs');
 // Authoritative list of managed hooks — shared with tests to retire source-grep
 // assertions (pending-migration-to-typed-ir [#455]).
 // NOTE: managed-hooks-registry.cjs must be in HOOKS_TO_COPY (scripts/build-hooks.js)

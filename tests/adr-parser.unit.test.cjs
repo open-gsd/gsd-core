@@ -3,7 +3,7 @@
 /**
  * Example-based unit tests for adr-parser.cjs
  *
- * Target: get-shit-done/bin/lib/adr-parser.cjs
+ * Target: gsd-core/bin/lib/adr-parser.cjs
  * Purpose: kill surviving mutants by asserting EXACT values from every branch
  *
  * Gap coverage:
@@ -28,7 +28,7 @@ const {
   parseAdrMarkdown,
   shouldRejectAdrStatus,
   CANONICAL_HEADERS,
-} = require('../get-shit-done/bin/lib/adr-parser.cjs');
+} = require('../gsd-core/bin/lib/adr-parser.cjs');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // normalizeAdrHeader — exact transformation chain

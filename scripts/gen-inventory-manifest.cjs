@@ -34,19 +34,19 @@ const FAMILIES = [
   },
   {
     name: 'workflows',
-    dir: path.join(ROOT, 'get-shit-done', 'workflows'),
+    dir: path.join(ROOT, 'gsd-core', 'workflows'),
     filter: (f) => f.endsWith('.md'),
     toName: (f) => f,
   },
   {
     name: 'references',
-    dir: path.join(ROOT, 'get-shit-done', 'references'),
+    dir: path.join(ROOT, 'gsd-core', 'references'),
     filter: (f) => f.endsWith('.md'),
     toName: (f) => f,
   },
   {
     name: 'cli_modules',
-    dir: path.join(ROOT, 'get-shit-done', 'bin', 'lib'),
+    dir: path.join(ROOT, 'gsd-core', 'bin', 'lib'),
     filter: (f) => f.endsWith('.cjs'),
     toName: (f) => f,
   },

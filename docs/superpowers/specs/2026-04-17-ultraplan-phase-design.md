@@ -18,7 +18,7 @@ This is a **beta of a beta**: ultraplan itself is in research preview, so this c
 
 **In scope:**
 - New `commands/gsd/ultraplan-phase.md` command
-- New `get-shit-done/workflows/ultraplan-phase.md` workflow
+- New `gsd-core/workflows/ultraplan-phase.md` workflow
 - Runtime gate: Claude Code only (checks `$CLAUDE_CODE_VERSION`)
 - Builds structured ultraplan prompt from GSD phase context
 - Return path via existing `/gsd-import --from <file>` (no new import logic)
@@ -65,7 +65,7 @@ Frontmatter:
 - `description:` includes `[BETA]` marker
 - `argument-hint: [phase-number]`
 - `allowed-tools:` Read, Bash, Glob, Grep
-- References: `@~/.claude/get-shit-done/workflows/ultraplan-phase.md`, ui-brand
+- References: `@~/.claude/gsd-core/workflows/ultraplan-phase.md`, ui-brand
 
 ---
 

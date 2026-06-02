@@ -193,7 +193,7 @@ describe('bug #376 — Suite 1: Claude install rewrites /gsd: → /gsd- in hook 
 // Note: Cursor does NOT install hooks/dist files (Cursor skips the hooks
 // install step entirely — see install.js gate around line 8829). The Cursor
 // /gsd: rewrite applies in `copyWithPathReplacement` to JS files under the
-// agent/skill tree (.cursor/get-shit-done/*.js etc). We verify that Cursor's
+// agent/skill tree (.cursor/gsd-core/*.js etc). We verify that Cursor's
 // installed .js files under .cursor/ have no /gsd: colon refs.
 // ---------------------------------------------------------------------------
 describe('bug #376 — Suite 2: Cursor install still rewrites /gsd: → /gsd- (regression)', () => {

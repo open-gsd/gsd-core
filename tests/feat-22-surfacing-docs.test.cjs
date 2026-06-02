@@ -11,8 +11,8 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 
-const NEW_PROJECT_PATH = path.join(ROOT, 'get-shit-done', 'workflows', 'new-project.md');
-const SETTINGS_PATH = path.join(ROOT, 'get-shit-done', 'workflows', 'settings.md');
+const NEW_PROJECT_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'new-project.md');
+const SETTINGS_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'settings.md');
 const CONFIGURATION_PATH = path.join(ROOT, 'docs', 'CONFIGURATION.md');
 const COMMANDS_PATH = path.join(ROOT, 'docs', 'COMMANDS.md');
 const USER_GUIDE_PATH = path.join(ROOT, 'docs', 'USER-GUIDE.md');

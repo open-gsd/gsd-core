@@ -93,7 +93,7 @@ The `changes` job treats these paths as code-touching:
 
 ```
 bin/**
-get-shit-done/**
+gsd-core/**
 agents/**
 commands/**
 hooks/**

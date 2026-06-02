@@ -25,7 +25,7 @@ const {
   makeInvalidArgs,
   makeHandlerRefusal,
   makeHandlerFailure,
-} = require('../get-shit-done/bin/lib/command-routing-hub.cjs');
+} = require('../gsd-core/bin/lib/command-routing-hub.cjs');
 
 // ─── Frozen taxonomy lock ─────────────────────────────────────────────────────
 // #175: SdkDispatchFailed and SdkLoadFailed are removed from the closed enum.

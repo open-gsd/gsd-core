@@ -100,5 +100,5 @@ This may be revisited if a contributor:
   precedent for deterministic compile-time embedding into agent files)
 - v1.37.0 release notes — shared-boilerplate extraction (reference files for
   mandatory-initial-read, project-skills-discovery)
-- `get-shit-done/workflows/` — workflow-level config embedding before subagent
+- `gsd-core/workflows/` — workflow-level config embedding before subagent
   spawn (the path of least friction for incremental deterministic gating)

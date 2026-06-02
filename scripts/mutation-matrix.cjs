@@ -20,7 +20,7 @@
  *     "has_work": "true"|"false",
  *     "matrix": {
  *       "include": [
- *         { "name": "<module>", "mutate": "get-shit-done/bin/lib/<module>.cjs", "tests": "<space-joined test files>" },
+ *         { "name": "<module>", "mutate": "gsd-core/bin/lib/<module>.cjs", "tests": "<space-joined test files>" },
  *         ...
  *       ]
  *     }
@@ -39,27 +39,27 @@ const { readFileSync } = require('fs');
 // only ever produce survived mutants — so we scope strictly to these 6.
 const COVERED = {
   'context-utilization': {
-    cjs: 'get-shit-done/bin/lib/context-utilization.cjs',
+    cjs: 'gsd-core/bin/lib/context-utilization.cjs',
     tests: [
       'tests/context-utilization.property.test.cjs',
     ],
   },
   'prompt-budget': {
-    cjs: 'get-shit-done/bin/lib/prompt-budget.cjs',
+    cjs: 'gsd-core/bin/lib/prompt-budget.cjs',
     tests: [
       'tests/prompt-budget.property.test.cjs',
       'tests/prompt-budget.unit.test.cjs',
     ],
   },
   frontmatter: {
-    cjs: 'get-shit-done/bin/lib/frontmatter.cjs',
+    cjs: 'gsd-core/bin/lib/frontmatter.cjs',
     tests: [
       'tests/frontmatter.property.test.cjs',
       'tests/frontmatter.unit.test.cjs',
     ],
   },
   'adr-parser': {
-    cjs: 'get-shit-done/bin/lib/adr-parser.cjs',
+    cjs: 'gsd-core/bin/lib/adr-parser.cjs',
     tests: [
       'tests/adr-parser.property.test.cjs',
       'tests/adr-parser.test.cjs',
@@ -67,13 +67,13 @@ const COVERED = {
     ],
   },
   'config-schema': {
-    cjs: 'get-shit-done/bin/lib/config-schema.cjs',
+    cjs: 'gsd-core/bin/lib/config-schema.cjs',
     tests: [
       'tests/config-schema.property.test.cjs',
     ],
   },
   'active-workstream-store': {
-    cjs: 'get-shit-done/bin/lib/active-workstream-store.cjs',
+    cjs: 'gsd-core/bin/lib/active-workstream-store.cjs',
     tests: [
       'tests/active-workstream-store.test.cjs',
       'tests/active-workstream-store.unit.test.cjs',

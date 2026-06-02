@@ -613,7 +613,7 @@ Twelve additional agents ship under `agents/gsd-*.md` and are used by specialty 
 | **Color** | `#F59E0B` (amber) |
 | **Produces** | Sections 5–7 of `AI-SPEC.md` (Evaluation Strategy, Guardrails, Production Monitoring) |
 
-**Required reading:** `get-shit-done/references/ai-evals.md` (evaluation framework).
+**Required reading:** `gsd-core/references/ai-evals.md` (evaluation framework).
 
 **Key behaviors:**
 - Turns domain-researcher rubric ingredients into measurable, tooled evaluation criteria
@@ -634,7 +634,7 @@ Twelve additional agents ship under `agents/gsd-*.md` and are used by specialty 
 | **Color** | `#EF4444` (red) |
 | **Produces** | `EVAL-REVIEW.md` with dimension scores, findings, and remediation guidance |
 
-**Required reading:** `get-shit-done/references/ai-evals.md`.
+**Required reading:** `gsd-core/references/ai-evals.md`.
 
 **Key behaviors:**
 - Compares the implemented codebase against the planned eval strategy — never re-plans
@@ -655,7 +655,7 @@ Twelve additional agents ship under `agents/gsd-*.md` and are used by specialty 
 | **Color** | `#38BDF8` (sky blue) |
 | **Produces** | Scored ranked recommendation (structured return to orchestrator) |
 
-**Required reading:** `get-shit-done/references/ai-frameworks.md` (decision matrix).
+**Required reading:** `gsd-core/references/ai-frameworks.md` (decision matrix).
 
 **Key behaviors:**
 - Scans `package.json`, `pyproject.toml`, `requirements*.txt` for existing AI libraries before the interview to avoid recommending a rejected framework

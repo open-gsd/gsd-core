@@ -13,8 +13,8 @@
 //
 // Fix: replace each `/gsd-intel` (the retired user-facing slash command) with
 // `/gsd-map-codebase --query` in:
-//   - get-shit-done/references/planning-config.md
-//   - get-shit-done/workflows/settings.md
+//   - gsd-core/references/planning-config.md
+//   - gsd-core/workflows/settings.md
 //   - docs/INVENTORY.md
 //   - docs/USER-GUIDE.md
 //   - docs/FEATURES.md
@@ -67,8 +67,8 @@ function staleLinesIn(src) {
 
 const SOURCE_DIRS = [
   path.join(ROOT, 'commands', 'gsd'),
-  path.join(ROOT, 'get-shit-done', 'workflows'),
-  path.join(ROOT, 'get-shit-done', 'references'),
+  path.join(ROOT, 'gsd-core', 'workflows'),
+  path.join(ROOT, 'gsd-core', 'references'),
   path.join(ROOT, 'agents'),
   path.join(ROOT, 'docs'),
 ];

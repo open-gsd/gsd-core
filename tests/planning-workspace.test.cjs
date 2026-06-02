@@ -13,9 +13,9 @@ const {
   withPlanningLock,
   getActiveWorkstream,
   setActiveWorkstream,
-} = require('../get-shit-done/bin/lib/planning-workspace.cjs');
+} = require('../gsd-core/bin/lib/planning-workspace.cjs');
 
-const core = require('../get-shit-done/bin/lib/core.cjs');
+const core = require('../gsd-core/bin/lib/core.cjs');
 
 describe('planning-workspace: planningDir/planningPaths parity', () => {
   const cwd = '/fake/repo';

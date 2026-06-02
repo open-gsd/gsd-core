@@ -4,7 +4,7 @@ const cp = require('node:child_process');
 const path = require('node:path');
 
 const { parseFragment } = require('./parse.cjs');
-const { packageName, repoSlug: defaultRepoSlug } = require('../../get-shit-done/bin/lib/package-identity.cjs');
+const { packageName, repoSlug: defaultRepoSlug } = require('../../gsd-core/bin/lib/package-identity.cjs');
 
 const SECTION_ORDER = ['Fixed', 'Added', 'Changed', 'Deprecated', 'Removed', 'Security'];
 

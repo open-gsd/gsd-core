@@ -7,7 +7,7 @@ const {
   assertValidActiveWorkstreamName,
   isValidActiveWorkstreamName,
   INVALID_ACTIVE_WORKSTREAM_NAME_MESSAGE,
-} = require('../get-shit-done/bin/lib/workstream-name-policy.cjs');
+} = require('../gsd-core/bin/lib/workstream-name-policy.cjs');
 
 describe('workstream-name-policy', () => {
   test('normalizeWorkstreamNameInput trims and nulls empty input', () => {

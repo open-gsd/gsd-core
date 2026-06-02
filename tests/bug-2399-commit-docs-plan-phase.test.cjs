@@ -16,11 +16,11 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const PLAN_PHASE_PATH = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'plan-phase.md');
+const PLAN_PHASE_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-phase.md');
 
 describe('plan-phase commit_docs support (#2399)', () => {
   test('plan-phase.md exists', () => {
-    assert.ok(fs.existsSync(PLAN_PHASE_PATH), 'get-shit-done/workflows/plan-phase.md must exist');
+    assert.ok(fs.existsSync(PLAN_PHASE_PATH), 'gsd-core/workflows/plan-phase.md must exist');
   });
 
   test('plan-phase.md has a commit step for plan artifacts', () => {

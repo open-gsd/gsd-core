@@ -24,9 +24,9 @@ const { cleanup } = require('./helpers.cjs');
 let tmpRoot;
 function fixtureRepo({ workflows, files }) {
   // workflows: { 'foo.md': '...content with ${GSD_HOME}/...' }
-  // files:     [ 'get-shit-done/bin/x.cjs', ... ]  — files to create in repo
+  // files:     [ 'gsd-core/bin/x.cjs', ... ]  — files to create in repo
   const repoRoot = fs.mkdtempSync(path.join(tmpRoot, 'repo-'));
-  const workflowsDir = path.join(repoRoot, 'get-shit-done', 'workflows');
+  const workflowsDir = path.join(repoRoot, 'gsd-core', 'workflows');
   fs.mkdirSync(workflowsDir, { recursive: true });
   for (const [name, body] of Object.entries(workflows || {})) {
     fs.writeFileSync(path.join(workflowsDir, name), body);
@@ -53,14 +53,14 @@ describe('Bug #2995: post-install script-paths audit (#2995)', () => {
   test('returns { ok: true, findings: [] } when workflow refs an existing, installed-path script', () => {
     const { repoRoot, workflowsDir } = fixtureRepo({
       workflows: {
-        'good.md': 'node "${GSD_HOME}/get-shit-done/bin/foo.cjs" --json\n',
+        'good.md': 'node "${GSD_HOME}/gsd-core/bin/foo.cjs" --json\n',
       },
-      files: ['get-shit-done/bin/foo.cjs'],
+      files: ['gsd-core/bin/foo.cjs'],
     });
     const r = auditWorkflowScriptPaths({
       workflowsDir,
       repoRoot,
-      installedPrefixes: ['get-shit-done', 'commands', 'agents', 'hooks'],
+      installedPrefixes: ['gsd-core', 'commands', 'agents', 'hooks'],
     });
     assert.deepEqual(r, { ok: true, findings: [] });
   });
@@ -72,20 +72,20 @@ describe('Bug #2995: detection paths', () => {
   test('reports MISSING_FROM_REPO when the referenced file does not exist in the repo', () => {
     const { repoRoot, workflowsDir } = fixtureRepo({
       workflows: {
-        'foo.md': 'node "${GSD_HOME}/get-shit-done/bin/typo.cjs" --json\n',
+        'foo.md': 'node "${GSD_HOME}/gsd-core/bin/typo.cjs" --json\n',
       },
       files: [],
     });
     const r = auditWorkflowScriptPaths({
       workflowsDir,
       repoRoot,
-      installedPrefixes: ['get-shit-done'],
+      installedPrefixes: ['gsd-core'],
     });
     assert.equal(r.ok, false);
     assert.equal(r.findings.length, 1);
     assert.deepEqual(r.findings[0], {
       workflow: 'foo.md',
-      path: 'get-shit-done/bin/typo.cjs',
+      path: 'gsd-core/bin/typo.cjs',
       kind: AUDIT_FINDING.MISSING_FROM_REPO,
     });
   });
@@ -100,7 +100,7 @@ describe('Bug #2995: detection paths', () => {
     const r = auditWorkflowScriptPaths({
       workflowsDir,
       repoRoot,
-      installedPrefixes: ['get-shit-done', 'commands', 'agents', 'hooks'],
+      installedPrefixes: ['gsd-core', 'commands', 'agents', 'hooks'],
     });
     assert.equal(r.ok, false);
     assert.equal(r.findings.length, 1);
@@ -114,14 +114,14 @@ describe('Bug #2995: detection paths', () => {
   test('handles ${GSD_HOME:-$HOME/.claude}/... default-fallback syntax', () => {
     const { repoRoot, workflowsDir } = fixtureRepo({
       workflows: {
-        'a.md': 'node "${GSD_HOME:-$HOME/.claude}/get-shit-done/bin/x.cjs"\n',
+        'a.md': 'node "${GSD_HOME:-$HOME/.claude}/gsd-core/bin/x.cjs"\n',
       },
-      files: ['get-shit-done/bin/x.cjs'],
+      files: ['gsd-core/bin/x.cjs'],
     });
     const r = auditWorkflowScriptPaths({
       workflowsDir,
       repoRoot,
-      installedPrefixes: ['get-shit-done'],
+      installedPrefixes: ['gsd-core'],
     });
     assert.deepEqual(r, { ok: true, findings: [] });
   });
@@ -131,16 +131,16 @@ describe('Bug #2995: detection paths', () => {
       workflows: {
         'multi.md': [
           'node "${GSD_HOME}/scripts/a.cjs"',
-          'node "${GSD_HOME}/get-shit-done/bin/b.cjs"',
-          'node "${GSD_HOME}/get-shit-done/bin/missing.cjs"',
+          'node "${GSD_HOME}/gsd-core/bin/b.cjs"',
+          'node "${GSD_HOME}/gsd-core/bin/missing.cjs"',
         ].join('\n') + '\n',
       },
-      files: ['scripts/a.cjs', 'get-shit-done/bin/b.cjs'],
+      files: ['scripts/a.cjs', 'gsd-core/bin/b.cjs'],
     });
     const r = auditWorkflowScriptPaths({
       workflowsDir,
       repoRoot,
-      installedPrefixes: ['get-shit-done'],
+      installedPrefixes: ['gsd-core'],
     });
     assert.equal(r.ok, false);
     assert.equal(r.findings.length, 2);
@@ -157,7 +157,7 @@ describe('Bug #2995: detection paths', () => {
     const r = auditWorkflowScriptPaths({
       workflowsDir,
       repoRoot,
-      installedPrefixes: ['get-shit-done'],
+      installedPrefixes: ['gsd-core'],
     });
     assert.deepEqual(r, { ok: true, findings: [] });
   });
@@ -170,7 +170,7 @@ describe('Bug #2995: real workflow audit', () => {
   // copies into ${configDir}/. Touching this set requires updating both
   // bin/install.js AND this constant — the parity is intentional.
   const INSTALLED_PREFIXES = [
-    'get-shit-done',  // workflows, references, bin/lib, templates
+    'gsd-core',  // workflows, references, bin/lib, templates
     'commands',       // commands/gsd/*.md (Claude Code local + Gemini global)
     'skills',         // skills/gsd-*/SKILL.md (Claude Code 2.1.88+ global, Codex, etc.)
     'agents',         // agents/gsd-*.md
@@ -181,12 +181,12 @@ describe('Bug #2995: real workflow audit', () => {
   // land in the same PR that fixes the underlying issue; CI surfaces any NEW
   // gap as a hard failure.
   // (#2994 entry removed: this PR moves verify-reapply-patches.cjs to
-  // get-shit-done/bin/ which IS an installed prefix, closing the gap.)
+  // gsd-core/bin/ which IS an installed prefix, closing the gap.)
   const KNOWN_GAPS = new Set();
 
   test('no NEW workflow refs fail to resolve at the deployed path (KNOWN_GAPS allow-listed)', () => {
     const r = auditWorkflowScriptPaths({
-      workflowsDir: require('node:path').join(ROOT, 'get-shit-done', 'workflows'),
+      workflowsDir: require('node:path').join(ROOT, 'gsd-core', 'workflows'),
       repoRoot: ROOT,
       installedPrefixes: INSTALLED_PREFIXES,
     });
@@ -220,7 +220,7 @@ describe('Bug #2995: real workflow audit', () => {
     const r = auditWorkflowScriptPaths({
       workflowsDir,
       repoRoot,
-      installedPrefixes: ['get-shit-done', 'agents', 'hooks', 'commands'],
+      installedPrefixes: ['gsd-core', 'agents', 'hooks', 'commands'],
     });
     assert.equal(r.ok, false);
     const kinds = r.findings.filter((f) => f.path === 'scripts/missing.cjs').map((f) => f.kind).sort();
@@ -233,7 +233,7 @@ describe('Bug #2995: real workflow audit', () => {
 
   test('KNOWN_GAPS entries still match real findings — fixed gaps must be removed from the allow-list', () => {
     const r = auditWorkflowScriptPaths({
-      workflowsDir: require('node:path').join(ROOT, 'get-shit-done', 'workflows'),
+      workflowsDir: require('node:path').join(ROOT, 'gsd-core', 'workflows'),
       repoRoot: ROOT,
       installedPrefixes: INSTALLED_PREFIXES,
     });

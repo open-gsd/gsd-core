@@ -24,7 +24,7 @@ const fs = require('fs');
 const path = require('path');
 
 const AGENTS_DIR = path.join(__dirname, '..', 'agents');
-const WORKFLOWS_DIR = path.join(__dirname, '..', 'get-shit-done', 'workflows');
+const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
 
 const AGENT_PATH = path.join(AGENTS_DIR, 'gsd-doc-writer.md');
 const WORKFLOW_PATH = path.join(WORKFLOWS_DIR, 'docs-update.md');
@@ -110,7 +110,7 @@ describe('bug #571: docs-update workflow fix_loop', () => {
   const content = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
 
   test('workflow file exists', () => {
-    assert.ok(fs.existsSync(WORKFLOW_PATH), 'get-shit-done/workflows/docs-update.md must exist');
+    assert.ok(fs.existsSync(WORKFLOW_PATH), 'gsd-core/workflows/docs-update.md must exist');
   });
 
   describe('fix_loop step', () => {

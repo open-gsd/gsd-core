@@ -2,7 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const configuration = require('../get-shit-done/bin/lib/configuration.cjs');
+const configuration = require('../gsd-core/bin/lib/configuration.cjs');
 
 test('mergeDefaults clones defaults without JSON serialization fragility (#321)', () => {
   const sentinelKey = '__bug321_bigint_sentinel__';

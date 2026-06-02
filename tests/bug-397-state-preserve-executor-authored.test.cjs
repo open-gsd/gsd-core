@@ -36,7 +36,7 @@ const path = require('node:path');
 const { cleanup } = require('./helpers.cjs');
 
 const ROOT = path.join(__dirname, '..');
-const TOOLS_PATH = path.join(ROOT, 'get-shit-done', 'bin', 'gsd-tools.cjs');
+const TOOLS_PATH = path.join(ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
 
 // ---------------------------------------------------------------------------
 // Helpers

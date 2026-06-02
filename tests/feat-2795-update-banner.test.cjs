@@ -27,7 +27,7 @@ const {
   shouldSuppressFailureWarning,
   RATE_LIMIT_SECONDS,
 } = require('../hooks/gsd-update-banner.js');
-const { updateCacheFileName } = require('../get-shit-done/bin/lib/package-identity.cjs');
+const { updateCacheFileName } = require('../gsd-core/bin/lib/package-identity.cjs');
 
 // ─── Pure function: buildBannerOutput ───────────────────────────────────────
 

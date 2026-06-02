@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 
 const AGENT = path.join(__dirname, '..', 'agents', 'gsd-verifier.md');
-const REF = path.join(__dirname, '..', 'get-shit-done', 'references', 'verify-mvp-mode.md');
+const REF = path.join(__dirname, '..', 'gsd-core', 'references', 'verify-mvp-mode.md');
 
 function parseVerifierContract(content) {
   const lines = content.split(/\r?\n/);

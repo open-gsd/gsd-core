@@ -29,10 +29,10 @@ Mode routing:
 </routing>
 
 <execution_context>
-@~/.claude/get-shit-done/workflows/new-workspace.md
-@~/.claude/get-shit-done/workflows/list-workspaces.md
-@~/.claude/get-shit-done/workflows/remove-workspace.md
-@~/.claude/get-shit-done/references/ui-brand.md
+@~/.claude/gsd-core/workflows/new-workspace.md
+@~/.claude/gsd-core/workflows/list-workspaces.md
+@~/.claude/gsd-core/workflows/remove-workspace.md
+@~/.claude/gsd-core/references/ui-brand.md
 </execution_context>
 
 <context>

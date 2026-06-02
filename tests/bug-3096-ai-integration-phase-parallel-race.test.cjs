@@ -24,7 +24,7 @@ const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
 const src = fs.readFileSync(
-  path.join(ROOT, 'get-shit-done', 'workflows', 'ai-integration-phase.md'),
+  path.join(ROOT, 'gsd-core', 'workflows', 'ai-integration-phase.md'),
   'utf8',
 );
 

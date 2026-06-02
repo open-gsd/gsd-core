@@ -23,8 +23,8 @@ const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
 // Require the module under test directly
-const roadmapLib = path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'roadmap.cjs');
-const planScanLib = path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'plan-scan.cjs');
+const roadmapLib = path.join(ROOT, 'gsd-core', 'bin', 'lib', 'roadmap.cjs');
+const planScanLib = path.join(ROOT, 'gsd-core', 'bin', 'lib', 'plan-scan.cjs');
 
 // We test countPhasePlansAndSummaries indirectly via getManagerInfo since
 // it is not exported. We build a real phaseDir on disk and call the full

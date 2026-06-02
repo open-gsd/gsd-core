@@ -25,9 +25,9 @@ const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 const REPO_ROOT      = path.join(__dirname, '..');
 const AGENTS_DIR     = path.join(REPO_ROOT, 'agents');
 const COMMANDS_DIR   = path.join(REPO_ROOT, 'commands', 'gsd');
-const WORKFLOWS_DIR  = path.join(REPO_ROOT, 'get-shit-done', 'workflows');
-const TEMPLATES_DIR  = path.join(REPO_ROOT, 'get-shit-done', 'templates');
-const REFERENCES_DIR = path.join(REPO_ROOT, 'get-shit-done', 'references');
+const WORKFLOWS_DIR  = path.join(REPO_ROOT, 'gsd-core', 'workflows');
+const TEMPLATES_DIR  = path.join(REPO_ROOT, 'gsd-core', 'templates');
+const REFERENCES_DIR = path.join(REPO_ROOT, 'gsd-core', 'references');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

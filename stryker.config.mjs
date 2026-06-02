@@ -30,18 +30,18 @@
 // Large/low-coverage modules are excluded (the command's test set does not
 // exercise them, so they would only ever produce survived mutants).
 const UNMUTATED = [
-  '!get-shit-done/bin/lib/command-aliases.cjs',
-  '!get-shit-done/bin/lib/commands.cjs',
-  '!get-shit-done/bin/lib/core.cjs',
-  '!get-shit-done/bin/lib/install-profiles.cjs',
-  '!get-shit-done/bin/lib/installer-migrations.cjs',
-  '!get-shit-done/bin/lib/phase.cjs',
-  '!get-shit-done/bin/lib/profile-output.cjs',
-  '!get-shit-done/bin/lib/state.cjs',
-  '!get-shit-done/bin/lib/verify.cjs',
-  '!get-shit-done/bin/lib/init.cjs',
-  '!get-shit-done/bin/lib/audit.cjs',
-  '!get-shit-done/bin/lib/gsd2-import.cjs',
+  '!gsd-core/bin/lib/command-aliases.cjs',
+  '!gsd-core/bin/lib/commands.cjs',
+  '!gsd-core/bin/lib/core.cjs',
+  '!gsd-core/bin/lib/install-profiles.cjs',
+  '!gsd-core/bin/lib/installer-migrations.cjs',
+  '!gsd-core/bin/lib/phase.cjs',
+  '!gsd-core/bin/lib/profile-output.cjs',
+  '!gsd-core/bin/lib/state.cjs',
+  '!gsd-core/bin/lib/verify.cjs',
+  '!gsd-core/bin/lib/init.cjs',
+  '!gsd-core/bin/lib/audit.cjs',
+  '!gsd-core/bin/lib/gsd2-import.cjs',
 ];
 
 // Full test command used by local runs and as the fallback when CI does not
@@ -64,8 +64,8 @@ export default {
   // The built bin/lib/*.cjs artifacts (ADR-457). CI overrides this with
   // --mutate <changed, covered modules> computed in mutation.yml.
   mutate: [
-    'get-shit-done/bin/lib/**/*.cjs',
-    '!get-shit-done/bin/lib/**/*.test.cjs',
+    'gsd-core/bin/lib/**/*.cjs',
+    '!gsd-core/bin/lib/**/*.test.cjs',
     ...UNMUTATED,
   ],
 

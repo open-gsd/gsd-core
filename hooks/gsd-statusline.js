@@ -6,8 +6,8 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { isSemverNewer } = require('../get-shit-done/bin/lib/semver-compare.cjs');
-const { PACKAGE_NAME, updateCacheFileName } = require('../get-shit-done/bin/lib/package-identity.cjs');
+const { isSemverNewer } = require('../gsd-core/bin/lib/semver-compare.cjs');
+const { PACKAGE_NAME, updateCacheFileName } = require('../gsd-core/bin/lib/package-identity.cjs');
 
 // --- Config + last-command readers ------------------------------------------
 

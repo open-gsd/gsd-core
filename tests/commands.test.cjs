@@ -890,7 +890,7 @@ describe('current-timestamp command', () => {
   });
 
   test('dispatches directly to CJS handler (no SDK bridge) to avoid Windows native crash path', () => {
-    const sourcePath = path.join(__dirname, '..', 'get-shit-done', 'bin', 'gsd-tools.cjs');
+    const sourcePath = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
     const source = fs.readFileSync(sourcePath, 'utf8');
     const match = source.match(/case 'current-timestamp':\s*\{[\s\S]*?\r?\n\s*break;\r?\n\s*\}/);
 
@@ -1406,7 +1406,7 @@ describe('commit command', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('groupFilesBySubrepo (#311)', () => {
-  const { groupFilesBySubrepo } = require('../get-shit-done/bin/lib/commands.cjs');
+  const { groupFilesBySubrepo } = require('../gsd-core/bin/lib/commands.cjs');
 
   test('single-segment subrepos route files correctly and unmatched collected', () => {
     const result = groupFilesBySubrepo(
@@ -1476,7 +1476,7 @@ describe('groupFilesBySubrepo (#311)', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('websearch command', () => {
-  const { cmdWebsearch } = require('../get-shit-done/bin/lib/commands.cjs');
+  const { cmdWebsearch } = require('../gsd-core/bin/lib/commands.cjs');
   let origFetch;
   let origApiKey;
   let origWriteSync;
@@ -2075,7 +2075,7 @@ describe('check-commit command', () => {
 });
 
 describe('_wsParseRetryAfter (#308)', () => {
-  const { _wsParseRetryAfter } = require('../get-shit-done/bin/lib/commands.cjs');
+  const { _wsParseRetryAfter } = require('../gsd-core/bin/lib/commands.cjs');
 
   test('integer seconds: "120" → 60000 (capped at 60s)', () => {
     assert.strictEqual(_wsParseRetryAfter('120'), 60000);

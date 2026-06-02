@@ -25,8 +25,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..');
-const FLAGS_LIB = path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'code-review-flags.cjs');
-const WORKFLOW_PATH = path.join(ROOT, 'get-shit-done', 'workflows', 'code-review.md');
+const FLAGS_LIB = path.join(ROOT, 'gsd-core', 'bin', 'lib', 'code-review-flags.cjs');
+const WORKFLOW_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'code-review.md');
 
 // ---------------------------------------------------------------------------
 // Stage 2 seam: typed IR from parseCodeReviewFlags and resolveCodeReviewWorkflow

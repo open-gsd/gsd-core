@@ -562,14 +562,14 @@ For a comprehensive troubleshooting guide, see [Recover and troubleshoot](how-to
 
 ### Programmatic CLI (`gsd-tools query` vs `gsd-tools.cjs`)
 
-For automation, prefer **`gsd-tools query`** with a registered subcommand (see [CLI-TOOLS.md — SDK and programmatic access](CLI-TOOLS.md#sdk-and-programmatic-access) and QUERY-HANDLERS.md). The legacy `node $HOME/.claude/get-shit-done/bin/gsd-tools.cjs` CLI remains supported.
+For automation, prefer **`gsd-tools query`** with a registered subcommand (see [CLI-TOOLS.md — SDK and programmatic access](CLI-TOOLS.md#sdk-and-programmatic-access) and QUERY-HANDLERS.md). The legacy `node $HOME/.claude/gsd-core/bin/gsd-tools.cjs` CLI remains supported.
 
 ### STATE.md Out of Sync
 
 ```bash
-node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" state validate          # Detect drift
-node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" state sync --verify     # Preview changes
-node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" state sync              # Reconstruct STATE.md
+node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" state validate          # Detect drift
+node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" state sync --verify     # Preview changes
+node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" state sync              # Reconstruct STATE.md
 ```
 
 ### A Command Looks Frozen After "Spawning..."
@@ -667,7 +667,7 @@ Quick audit before a long phase:
 
 Each disabled server removes its schema from every subsequent turn. Trimming MCPs **compounds** with `model_profile` tuning — both levers are additive, and MCP savings show up immediately across every subagent the orchestrator spawns.
 
-For the full audit, harness reference, and the composition note with `model_profile`, see [MCP Tool Schema Cost](../get-shit-done/references/context-budget.md#mcp-tool-schema-cost-harness-concern) in the bundled `context-budget.md` reference.
+For the full audit, harness reference, and the composition note with `model_profile`, see [MCP Tool Schema Cost](../gsd-core/references/context-budget.md#mcp-tool-schema-cost-harness-concern) in the bundled `context-budget.md` reference.
 
 ### Using Non-Claude Runtimes (Codex, OpenCode, Gemini CLI, Kilo)
 

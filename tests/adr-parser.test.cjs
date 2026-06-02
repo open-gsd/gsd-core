@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const {
   parseAdrMarkdown,
   shouldRejectAdrStatus,
-} = require('../get-shit-done/bin/lib/adr-parser.cjs');
+} = require('../gsd-core/bin/lib/adr-parser.cjs');
 
 describe('adr-parser', () => {
   test('maps common ADR header synonyms into canonical fields', () => {

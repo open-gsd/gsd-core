@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-16  
 **Status:** Discussion active on closed issue. Awaiting maintainer response.  
-**Purpose of this document:** Serve as the primary context file for future Grok (or other) agent sessions started inside this repository (`/home/cristian/bum/get-shit-done`) so they can work on local Grok Build support and improved synchronization across multiple AI coding harnesses.
+**Purpose of this document:** Serve as the primary context file for future Grok (or other) agent sessions started inside this repository (`/home/cristian/bum/gsd-core`) so they can work on local Grok Build support and improved synchronization across multiple AI coding harnesses.
 
 ---
 
@@ -28,13 +28,13 @@ Currently, Grok Build is only supported via its Claude compatibility layer. This
 ## 2. Current Multi-Runtime Setup (as of May 2026)
 
 ### Development Source (Single Source of Truth)
-- **Path:** `/home/cristian/bum/get-shit-done` (this repo — your working fork of `open-gsd/gsd-core`)
+- **Path:** `/home/cristian/bum/gsd-core` (this repo — your working fork of `open-gsd/gsd-core`)
 
 ### Installed Locations
-- `~/.agents/get-shit-done/` — Core workflows, references, templates, `gsd-tools.cjs`, `bin/`
+- `~/.agents/gsd-core/` — Core workflows, references, templates, `gsd-tools.cjs`, `bin/`
 - `~/.agents/skills/gsd-*` — ~125 skills (heavily GSD + many large reference skills like `userinterface-wiki`, `react-best-practices`, etc.)
 - `~/.agents/agents/` — 22 GSD sub-agents (with `.md` + `.toml`)
-- `~/.claude/skills/gsd-*` + `~/.claude/get-shit-done/` + `~/.claude/agents/` — Parallel Claude Code install (~208 skills total)
+- `~/.claude/skills/gsd-*` + `~/.claude/gsd-core/` + `~/.claude/agents/` — Parallel Claude Code install (~208 skills total)
 - `~/.grok/skills/` — Mostly empty (only the 7 official bundled Grok skills)
 - `~/.grok/` — Not yet properly used by GSD
 
@@ -92,7 +92,7 @@ From `trek-e`’s detailed closing comment on #3603:
 
 ## 4. Recommended Work Plan for Future Grok Sessions in This Repo
 
-When a new Grok session is started inside `/home/cristian/bum/get-shit-done`, it should follow something like this phased approach:
+When a new Grok session is started inside `/home/cristian/bum/gsd-core`, it should follow something like this phased approach:
 
 ### Phase 0 — Orientation (Current Session Context)
 - Read this document fully.
@@ -148,8 +148,8 @@ Possible components:
 **In this repo:**
 - `docs/grok-build-support/` (all 7 documents — highest priority)
 - `bin/install.js` (installer logic, especially runtime handling and conversion functions)
-- `get-shit-done/bin/lib/runtime-homes.cjs`
-- `get-shit-done/bin/lib/shell-command-projection.cjs` (hook projection)
+- `gsd-core/bin/lib/runtime-homes.cjs`
+- `gsd-core/bin/lib/shell-command-projection.cjs` (hook projection)
 - `sdk/shared/model-catalog.json`
 - Existing `gsd-sync-skills` skill (in `~/.agents/skills/gsd-sync-skills/`)
 - Any skills that already contain `<codex_skill_adapter>` sections (study the pattern)
@@ -176,7 +176,7 @@ Useful commands and checks when working on this:
 
 When designing improvements to sync:
 
-- Single source of truth = this repository (`/home/cristian/bum/get-shit-done`).
+- Single source of truth = this repository (`/home/cristian/bum/gsd-core`).
 - Runtime-specific transformations should be as declarative and maintainable as possible.
 - The `<codex_skill_adapter>` pattern is already proven for Grok/Codex — extend it rather than reinvent.
 - Prefer generating the runtime-specific artifacts during sync rather than maintaining four separate copies.
@@ -213,18 +213,18 @@ Then follow the phased plan in Section 4.
 ## 10. Progress — May 2026 Session (Current)
 
 ### Audit Findings (Phase 1)
-- **Version drift confirmed**: `~/.agents/get-shit-done/` (Grok Build primary) was on 1.38.4; `~/.claude/` on 1.42.2; `~/.codex/` and `~/.gemini/` on 1.41.2.
+- **Version drift confirmed**: `~/.agents/gsd-core/` (Grok Build primary) was on 1.38.4; `~/.claude/` on 1.42.2; `~/.codex/` and `~/.gemini/` on 1.41.2.
 - `~/.agents/hooks/` was empty (no hooks active for Grok Build sessions).
 - `grok inspect` successfully discovers 80+ `gsd-*` skills via the `~/.agents/skills/` layout + the existing `<codex_skill_adapter>` blocks.
 - No `grok` or `agents` runtime existed in installer or sync logic.
 - `~/.grok/` itself contains only the 7 official bundled skills; GSD lives entirely in the shared `~/.agents/` layout.
 
 ### Immediate Actions Taken
-- **Engine drift fixed ASAP**: Backed up old `~/.agents/get-shit-done/` to `.backup-1.38.4/`, then rsynced the current source `get-shit-done/` tree into `~/.agents/get-shit-done/`. Now running the latest from this repo (v1.50.0-canary.0). New modules (active-workstream-store, adr-parser, etc.) and updated workflows are live for Grok Build sessions.
+- **Engine drift fixed ASAP**: Backed up old `~/.agents/gsd-core/` to `.backup-1.38.4/`, then rsynced the current source `gsd-core/` tree into `~/.agents/gsd-core/`. Now running the latest from this repo (v1.50.0-canary.0). New modules (active-workstream-store, adr-parser, etc.) and updated workflows are live for Grok Build sessions.
 - **First-class 'grok' runtime added** (pragmatic choice: maps to `~/.agents/`):
-  - [get-shit-done/bin/lib/runtime-homes.cjs](/home/cristian/bum/get-shit-done/get-shit-done/bin/lib/runtime-homes.cjs): Added `grok` case (honors `GROK_AGENTS_HOME` env, defaults to `~/.agents`).
-  - [bin/install.js](/home/cristian/bum/get-shit-done/bin/install.js): Added `--grok` flag, `hasGrok`, `getDirName('grok') → '.agents'`, `getGlobalDir('grok')`, `getConfigDirFromHome`, inclusion in `--all` and help text. Reuses existing Codex conversion logic (skill adapters + agent .toml generation) because Grok Build uses the same invocation model.
-  - [get-shit-done/workflows/sync-skills.md](/home/cristian/bum/get-shit-done/get-shit-done/workflows/sync-skills.md): Added `grok` to supported runtimes and the `--to all` list.
+  - [gsd-core/bin/lib/runtime-homes.cjs](/home/cristian/bum/gsd-core/gsd-core/bin/lib/runtime-homes.cjs): Added `grok` case (honors `GROK_AGENTS_HOME` env, defaults to `~/.agents`).
+  - [bin/install.js](/home/cristian/bum/gsd-core/bin/install.js): Added `--grok` flag, `hasGrok`, `getDirName('grok') → '.agents'`, `getGlobalDir('grok')`, `getConfigDirFromHome`, inclusion in `--all` and help text. Reuses existing Codex conversion logic (skill adapters + agent .toml generation) because Grok Build uses the same invocation model.
+  - [gsd-core/workflows/sync-skills.md](/home/cristian/bum/gsd-core/gsd-core/workflows/sync-skills.md): Added `grok` to supported runtimes and the `--to all` list.
 - Verified: `node bin/install.js --skills-root grok` correctly returns `~/.agents/skills`.
 
 ### Next Steps (for follow-up sessions)

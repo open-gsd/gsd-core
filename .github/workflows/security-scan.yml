@@ -8,7 +8,7 @@ on:
       - 'release/**'
       - 'hotfix/**'
     paths:
-      - 'get-shit-done/**'
+      - 'gsd-core/**'
       - 'agents/**'
       - 'commands/**'
       - 'hooks/**'

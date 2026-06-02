@@ -24,7 +24,7 @@ const childProc = require('node:child_process');
 const { createTempProject, cleanup, TOOLS_PATH } = require('./helpers.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
-const WORKFLOW_FILE = path.join(REPO_ROOT, 'get-shit-done', 'workflows', 'ingest-docs.md');
+const WORKFLOW_FILE = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'ingest-docs.md');
 
 function spawnGsdTools(args, projectDir) {
   let stdout = '';
@@ -136,13 +136,13 @@ describe('bug-2801: ingest-docs.md workflow calls gsd-tools not gsd-sdk', () => 
     // Per #2851 the only valid form is the absolute-path node invocation; the
     // legacy bare `gsd-tools` is the bug being fixed and must not be accepted.
     const initLine = bashLines.find((l) =>
-      /\bnode\s+["']?\$HOME\/\.claude\/get-shit-done\/bin\/gsd-tools\.cjs["']?\s+init\s+ingest-docs\b/.test(l)
+      /\bnode\s+["']?\$HOME\/\.claude\/gsd-core\/bin\/gsd-tools\.cjs["']?\s+init\s+ingest-docs\b/.test(l)
     );
     assert.ok(initLine, 'workflow must invoke init ingest-docs via canonical node-path gsd-tools.cjs');
   });
 
   test('cmdInitIngestDocs is exported from init.cjs', () => {
-    const init = require(path.join(REPO_ROOT, 'get-shit-done', 'bin', 'lib', 'init.cjs'));
+    const init = require(path.join(REPO_ROOT, 'gsd-core', 'bin', 'lib', 'init.cjs'));
     assert.strictEqual(typeof init.cmdInitIngestDocs, 'function', 'cmdInitIngestDocs must be exported');
   });
 });

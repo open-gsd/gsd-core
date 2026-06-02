@@ -2,7 +2,7 @@
  * Tests for legacy artifact cleanup seam (issue #607).
  *
  * Covers planLegacyCleanup and applyLegacyCleanup from
- * get-shit-done/bin/lib/legacy-cleanup.cjs using real temp dirs so the
+ * gsd-core/bin/lib/legacy-cleanup.cjs using real temp dirs so the
  * filesystem logic is exercised end-to-end without touching live config dirs.
  *
  * These tests read files they create themselves in OS temp directories —
@@ -19,7 +19,7 @@ const os     = require('node:os');
 const path   = require('node:path');
 
 const { planLegacyCleanup, applyLegacyCleanup } = require(
-  path.join(__dirname, '..', 'get-shit-done', 'bin', 'lib', 'legacy-cleanup.cjs')
+  path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'legacy-cleanup.cjs')
 );
 const { MANAGED_HOOKS } = require(
   path.join(__dirname, '..', 'hooks', 'managed-hooks-registry.cjs')
@@ -29,7 +29,7 @@ const { cleanup } = require('./helpers.cjs');
 // Assembled the same way the implementation does so this file also avoids the
 // bare literal (correctness: the test content strings below DO contain it,
 // which is fine — tests may reference the signal string directly).
-const OLD_PACKAGE_SIGNAL = 'get-shit-done' + '-cc';
+const OLD_PACKAGE_SIGNAL = 'gsd-core' + '-cc';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -105,24 +105,24 @@ describe('issue-607 legacy-cleanup: planLegacyCleanup', () => {
     assert.equal(entry, undefined, 'user custom gsd-*.sh with no old-package content must NOT be in plan');
   });
 
-  // ── self-deletion regression: get-shit-done/ subtree must NOT be scanned ──
+  // ── self-deletion regression: gsd-core/ subtree must NOT be scanned ──
 
-  test('regression #607 (self-deletion): a code file under get-shit-done/bin/lib/ containing old-package signal must NOT be flagged', () => {
-    // The subtree 'get-shit-done' is no longer scanned — the current package's
+  test('regression #607 (self-deletion): a code file under gsd-core/bin/lib/ containing old-package signal must NOT be flagged', () => {
+    // The subtree 'gsd-core' is no longer scanned — the current package's
     // own infra lives there and would falsely match if scanned.
-    const libFile = path.join(configDir, 'get-shit-done', 'bin', 'lib', 'legacy-cleanup.cjs');
-    writeFile(libFile, "'use strict';\nconst SIG = 'get-shit-done' + '-cc';\nmodule.exports = {};");
+    const libFile = path.join(configDir, 'gsd-core', 'bin', 'lib', 'legacy-cleanup.cjs');
+    writeFile(libFile, "'use strict';\nconst SIG = 'gsd-core' + '-cc';\nmodule.exports = {};");
 
     const plan = planLegacyCleanup([configDir], { homeDir });
     const entry = plan.find((p) => p.path === libFile);
-    assert.equal(entry, undefined, 'code file in get-shit-done/ subtree must NOT appear in plan (subtree not scanned)');
+    assert.equal(entry, undefined, 'code file in gsd-core/ subtree must NOT appear in plan (subtree not scanned)');
   });
 
   // ── issue-607 regression: markdown files must never be flagged ─────────────
 
   test('regression #607: CHANGELOG.md containing old-package signal must NOT be flagged', () => {
     // Markdown docs legitimately cite the old package name in historical context.
-    const changelogFile = path.join(configDir, 'get-shit-done', 'CHANGELOG.md');
+    const changelogFile = path.join(configDir, 'gsd-core', 'CHANGELOG.md');
     writeFile(changelogFile, '# Changelog\n\nMigrated from ' + OLD_PACKAGE_SIGNAL + ' to @opengsd/gsd-core.');
 
     const plan = planLegacyCleanup([configDir], { homeDir });
@@ -132,7 +132,7 @@ describe('issue-607 legacy-cleanup: planLegacyCleanup', () => {
   });
 
   test('regression #607: a workflow .md file containing old-package signal must NOT be flagged', () => {
-    const workflowMd = path.join(configDir, 'get-shit-done', 'workflows', 'update.md');
+    const workflowMd = path.join(configDir, 'gsd-core', 'workflows', 'update.md');
     writeFile(workflowMd, '# Update workflow\n\nPreviously required ' + OLD_PACKAGE_SIGNAL + ' to be installed.');
 
     const plan = planLegacyCleanup([configDir], { homeDir });

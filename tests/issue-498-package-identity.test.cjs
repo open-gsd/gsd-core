@@ -4,7 +4,7 @@ process.env.GSD_TEST_MODE = '1';
 // Issue #498: single Package Identity seam.
 // The package coordinates (npm name, bin name, repo slug, changelog URL) are
 // DERIVED from package.json, not re-typed. deriveIdentity is the pure core;
-// the generated runtime module get-shit-done/bin/lib/package-identity.cjs
+// the generated runtime module gsd-core/bin/lib/package-identity.cjs
 // bakes those values at build time so it survives the install layout where
 // the only package.json present is the synthetic {"type":"commonjs"} marker.
 
@@ -18,7 +18,7 @@ const ROOT = path.join(__dirname, '..');
 const { deriveIdentity, formatManualInstall, render, slugifyPackageName } = require(
   path.join(ROOT, 'scripts', 'generate-package-identity.cjs'),
 );
-const GENERATED = path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'package-identity.cjs');
+const GENERATED = path.join(ROOT, 'gsd-core', 'bin', 'lib', 'package-identity.cjs');
 
 describe('Issue #498: deriveIdentity (pure, package.json -> coordinates)', () => {
   const FAKE_PKG = {

@@ -24,7 +24,7 @@ const { createTempDir, cleanup } = require('./helpers.cjs');
 const {
   loadSkillsManifest,
   resolveProfile,
-} = require('../get-shit-done/bin/lib/install-profiles.cjs');
+} = require('../gsd-core/bin/lib/install-profiles.cjs');
 
 // Load install exports via GSD_TEST_MODE to skip CLI main()
 const savedTestMode = process.env.GSD_TEST_MODE;

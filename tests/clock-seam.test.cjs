@@ -37,8 +37,8 @@ const os = require('node:os');
 const { spawnSync } = require('node:child_process');
 
 const { makeFakeClock } = require('./helpers/clock.cjs');
-const { acquireStateLock, releaseStateLock, readModifyWriteStateMd } = require('../get-shit-done/bin/lib/state.cjs');
-const { withPlanningLock } = require('../get-shit-done/bin/lib/planning-workspace.cjs');
+const { acquireStateLock, releaseStateLock, readModifyWriteStateMd } = require('../gsd-core/bin/lib/state.cjs');
+const { withPlanningLock } = require('../gsd-core/bin/lib/planning-workspace.cjs');
 const { createTempProject, cleanup, runGsdTools, TOOLS_PATH } = require('./helpers.cjs');
 
 // ─────────────────────────────────────────────────────────────────────────────

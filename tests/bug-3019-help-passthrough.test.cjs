@@ -11,7 +11,7 @@
  *   1. sdk/src/cli.ts  — leave --help in queryArgv so it travels to the
  *      handler/fallback. Only honor the global help flag when there is
  *      no subcommand to dispatch to.
- *   2. get-shit-done/bin/gsd-tools.cjs — render the top-level usage on
+ *   2. gsd-core/bin/gsd-tools.cjs — render the top-level usage on
  *      --help instead of erroring. Anti-hallucination invariant from
  *      #1818 is preserved (the destructive command never executes).
  *

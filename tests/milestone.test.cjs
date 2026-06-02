@@ -584,7 +584,7 @@ describe('milestone.cjs regex global state fix', () => {
   // allow-test-rule: structural-regression-guard
   // milestone.cjs must use replace()+compare, not test()+replace(), to avoid
   // regex lastIndex corruption with global flags.
-  const MILESTONE_SRC = path.join(__dirname, '..', 'get-shit-done', 'bin', 'lib', 'milestone.cjs');
+  const MILESTONE_SRC = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'milestone.cjs');
   let src;
 
   before(() => { src = fs.readFileSync(MILESTONE_SRC, 'utf-8'); });
@@ -644,7 +644,7 @@ describe('milestone.cjs regex global state fix', () => {
 
 describe('new-milestone workflow verification gate', () => {
   test('new-milestone workflow has verification step before writing PROJECT.md', () => {
-    const workflowPath = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'new-milestone.md');
+    const workflowPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'new-milestone.md');
     const content = fs.readFileSync(workflowPath, 'utf8');
 
     assert.ok(content.includes('Verify Milestone Understanding'));
@@ -656,7 +656,7 @@ describe('new-milestone workflow verification gate', () => {
   });
 
   test('verification step uses AskUserQuestion with adjust loop', () => {
-    const workflowPath = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'new-milestone.md');
+    const workflowPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'new-milestone.md');
     const content = fs.readFileSync(workflowPath, 'utf8');
 
     const section = content.slice(content.indexOf('## 3.5'), content.indexOf('## 4.'));

@@ -8,7 +8,7 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const migration = require('../../get-shit-done/bin/lib/installer-migrations/001-legacy-orphan-files.cjs');
+const migration = require('../../gsd-core/bin/lib/installer-migrations/001-legacy-orphan-files.cjs');
 
 describe('migration metadata', () => {
   test('exports a single migration object with required fields', () => {

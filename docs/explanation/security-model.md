@@ -129,7 +129,7 @@ exfiltrate information.
 
 GSD Core addresses prompt injection at three levels.
 
-**Input validation (`security.cjs`).** The `get-shit-done/bin/lib/security.cjs`
+**Input validation (`security.cjs`).** The `gsd-core/bin/lib/security.cjs`
 module is the central security utility. It provides:
 
 - Path traversal prevention: user-supplied file paths (`--text-file`, `--prd`)

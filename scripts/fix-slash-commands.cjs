@@ -20,11 +20,11 @@ const path = require('node:path');
 
 const COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');
 const SEARCH_DIRS = [
-  path.join(__dirname, '..', 'get-shit-done', 'bin', 'lib'),
-  path.join(__dirname, '..', 'get-shit-done', 'workflows'),
-  path.join(__dirname, '..', 'get-shit-done', 'references'),
-  path.join(__dirname, '..', 'get-shit-done', 'templates'),
-  path.join(__dirname, '..', 'get-shit-done', 'contexts'),
+  path.join(__dirname, '..', 'gsd-core', 'bin', 'lib'),
+  path.join(__dirname, '..', 'gsd-core', 'workflows'),
+  path.join(__dirname, '..', 'gsd-core', 'references'),
+  path.join(__dirname, '..', 'gsd-core', 'templates'),
+  path.join(__dirname, '..', 'gsd-core', 'contexts'),
   path.join(__dirname, '..', 'commands', 'gsd'),
   path.join(__dirname, '..', 'agents'),
   path.join(__dirname, '..', 'hooks'),

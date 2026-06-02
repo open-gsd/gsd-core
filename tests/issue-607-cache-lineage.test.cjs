@@ -11,7 +11,7 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { PACKAGE_NAME, updateCacheFileName } = require('../get-shit-done/bin/lib/package-identity.cjs');
+const { PACKAGE_NAME, updateCacheFileName } = require('../gsd-core/bin/lib/package-identity.cjs');
 const { buildBannerOutput } = require('../hooks/gsd-update-banner.js');
 const { evaluateUpdateCache } = require('../hooks/gsd-statusline.js');
 

@@ -35,7 +35,7 @@ const path = require('path');
 
 const WORKER_PATH = path.join(__dirname, '..', 'hooks', 'gsd-check-update-worker.js');
 const PROJECTION_PATH = path.join(
-  __dirname, '..', 'get-shit-done', 'bin', 'lib', 'shell-command-projection.cjs',
+  __dirname, '..', 'gsd-core', 'bin', 'lib', 'shell-command-projection.cjs',
 );
 
 function codeOnly(file) {

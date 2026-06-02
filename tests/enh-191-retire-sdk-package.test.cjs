@@ -26,8 +26,8 @@ test('enhancement #191: published package no longer exposes gsd-sdk artifacts', 
 
   assert.equal(Object.prototype.hasOwnProperty.call(pkg.bin || {}, 'gsd-sdk'), false,
     'package.json bin must not expose gsd-sdk');
-  assert.equal(pkg.bin && pkg.bin['gsd-tools'], 'get-shit-done/bin/gsd-tools.cjs',
-    'package.json bin.gsd-tools must point to get-shit-done/bin/gsd-tools.cjs');
+  assert.equal(pkg.bin && pkg.bin['gsd-tools'], 'gsd-core/bin/gsd-tools.cjs',
+    'package.json bin.gsd-tools must point to gsd-core/bin/gsd-tools.cjs');
 
   const publishedFiles = Array.isArray(pkg.files) ? pkg.files : [];
   const hasSdkPublishedPaths = publishedFiles.some((entry) => String(entry).startsWith('sdk'));

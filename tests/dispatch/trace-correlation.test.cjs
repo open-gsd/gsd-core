@@ -20,8 +20,8 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const { createHub } = require('../../get-shit-done/bin/lib/command-routing-hub.cjs');
-const { createDefaultLogger } = require('../../get-shit-done/bin/lib/observability/logger.cjs');
+const { createHub } = require('../../gsd-core/bin/lib/command-routing-hub.cjs');
+const { createDefaultLogger } = require('../../gsd-core/bin/lib/observability/logger.cjs');
 const { cleanup } = require('../helpers.cjs');
 
 // ─── Test fixture setup ───────────────────────────────────────────────────────

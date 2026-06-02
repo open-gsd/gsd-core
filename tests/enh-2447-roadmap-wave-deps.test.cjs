@@ -259,7 +259,7 @@ Plans:
 
   test('plan-phase.md documents annotate-dependencies step', () => {
     const planPhase = fs.readFileSync(
-      path.join(__dirname, '../get-shit-done/workflows/plan-phase.md'), 'utf-8'
+      path.join(__dirname, '../gsd-core/workflows/plan-phase.md'), 'utf-8'
     );
     assert.ok(planPhase.includes('annotate-dependencies'), 'plan-phase.md references annotate-dependencies command');
     assert.ok(planPhase.includes('13d'), 'plan-phase.md has step 13d');

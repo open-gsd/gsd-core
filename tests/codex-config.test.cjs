@@ -230,11 +230,11 @@ description: Debugs issues
 tools: Read, Bash
 ---
 
-INIT=$(node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" state load)
-node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" commit "docs: resolve"`;
+INIT=$(node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" state load)
+node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" commit "docs: resolve"`;
 
     const result = convertClaudeAgentToCodexAgent(input);
-    assert.ok(result.includes('$HOME/.codex/get-shit-done/bin/gsd-tools.cjs'), 'replaces $HOME/.claude/ with $HOME/.codex/');
+    assert.ok(result.includes('$HOME/.codex/gsd-core/bin/gsd-tools.cjs'), 'replaces $HOME/.claude/ with $HOME/.codex/');
     assert.ok(!result.includes('$HOME/.claude/'), 'no .claude paths remain');
   });
 });
@@ -280,7 +280,7 @@ description: Test
 tools: Read
 ---
 
-node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" init`;
+node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" init`;
 
     const result = convertClaudeCommandToCodexSkill(input, 'gsd-test');
     assert.ok(result.includes('gsd-tools.cjs'), 'gsd-tools.cjs preserved in path');
@@ -2119,7 +2119,7 @@ describe('Codex install hook configuration (e2e)', () => {
     const content = readCodexConfig(codexHome);
     // [features] is inserted after top-level lines, before [model] — not prepended
     assert.ok(content.includes('# first line wins\n\n[features]\nhooks = true\n'), 'inserts features after top-level lines using first newline style');
-    assert.ok(content.includes(`# GSD Agent Configuration — managed by get-shit-done installer\n`), 'writes the managed agent block using the first newline style');
+    assert.ok(content.includes(`# GSD Agent Configuration — managed by gsd-core installer\n`), 'writes the managed agent block using the first newline style');
     // Structural check: managed SessionStart hooks live in hooks.json.
     const parsedMixed = parseTomlToObject(content);
     assert.ok(!parsedMixed.hooks || !Array.isArray(parsedMixed.hooks.SessionStart), 'does not write managed SessionStart hooks to config.toml');

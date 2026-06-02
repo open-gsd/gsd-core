@@ -21,8 +21,8 @@ Flow: Validate → Research UI → Verify UI-SPEC → Done
 </objective>
 
 <execution_context>
-@~/.claude/get-shit-done/workflows/ui-phase.md
-@~/.claude/get-shit-done/references/ui-brand.md
+@~/.claude/gsd-core/workflows/ui-phase.md
+@~/.claude/gsd-core/references/ui-brand.md
 </execution_context>
 
 <context>

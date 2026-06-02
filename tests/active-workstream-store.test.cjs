@@ -13,7 +13,7 @@ const {
   createMemoryPointerAdapter,
   getActiveWorkstream,
   setActiveWorkstream,
-} = require('../get-shit-done/bin/lib/active-workstream-store.cjs');
+} = require('../gsd-core/bin/lib/active-workstream-store.cjs');
 
 describe('active-workstream-store', () => {
   test('validateWorkstreamName accepts canonical names', () => {

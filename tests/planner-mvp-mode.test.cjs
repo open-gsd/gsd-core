@@ -9,8 +9,8 @@ const fs = require('fs');
 const path = require('path');
 
 const AGENT = path.join(__dirname, '..', 'agents', 'gsd-planner.md');
-const REF_MVP = path.join(__dirname, '..', 'get-shit-done', 'references', 'planner-mvp-mode.md');
-const REF_SKEL = path.join(__dirname, '..', 'get-shit-done', 'references', 'skeleton-template.md');
+const REF_MVP = path.join(__dirname, '..', 'gsd-core', 'references', 'planner-mvp-mode.md');
+const REF_SKEL = path.join(__dirname, '..', 'gsd-core', 'references', 'skeleton-template.md');
 
 describe('gsd-planner — MVP-mode branch', () => {
   const content = fs.readFileSync(AGENT, 'utf-8');

@@ -6,7 +6,7 @@
  *
  * `deriveIdentity(pkg)` is the pure core: it turns a parsed package.json into
  * the coordinate record every consumer needs. The generated runtime module
- * `get-shit-done/bin/lib/package-identity.cjs` bakes those values at build
+ * `gsd-core/bin/lib/package-identity.cjs` bakes those values at build
  * time, because the installed tree carries only a synthetic
  * `{"type":"commonjs"}` package.json (no `.name`) — so a runtime
  * `require('package.json').name` resolves to `undefined` (the #378 bug this
@@ -115,7 +115,7 @@ function main() {
   const fs = require('node:fs');
   const path = require('node:path');
   const pkg = require(path.join(__dirname, '..', 'package.json'));
-  const out = path.join(__dirname, '..', 'get-shit-done', 'bin', 'lib', 'package-identity.cjs');
+  const out = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'package-identity.cjs');
   fs.writeFileSync(out, render(deriveIdentity(pkg)));
   process.stdout.write(`wrote ${path.relative(path.join(__dirname, '..'), out)}\n`);
 }

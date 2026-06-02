@@ -51,21 +51,21 @@ const COMMANDS_DIR = path.join(ROOT, 'commands', 'gsd');
 // bug-3584 test is updated to cover it.
 const RUNTIME_EMITTER_EXCLUDES = new Set([
   // Primary runtime-slash emitter (bug-3584 canonical contract):
-  path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'runtime-slash.cjs'),
+  path.join(ROOT, 'gsd-core', 'bin', 'lib', 'runtime-slash.cjs'),
   // phase-lifecycle-policy.ts emits runtime-persisted slash references (bug-3584):
-  path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'phase-lifecycle-policy.ts'),
+  path.join(ROOT, 'gsd-core', 'bin', 'lib', 'phase-lifecycle-policy.ts'),
   // Generated CJS files match the TS source's emitted form — never hand-edited:
   // (matched below by .generated.cjs extension — see collectFiles exclusion)
 ]);
 
 const SEARCH_DIRS = [
-  // NOTE: get-shit-done/bin/lib is intentionally EXCLUDED from SEARCH_DIRS.
+  // NOTE: gsd-core/bin/lib is intentionally EXCLUDED from SEARCH_DIRS.
   // runtime-slash.cjs and *.generated.cjs live there and use the hyphen form
   // per bug-3584's runtime-emitter contract. The full bin/lib tree is
   // runtime-emitter territory — scanning it would cause false positives.
-  path.join(ROOT, 'get-shit-done', 'workflows'),
-  path.join(ROOT, 'get-shit-done', 'references'),
-  path.join(ROOT, 'get-shit-done', 'templates'),
+  path.join(ROOT, 'gsd-core', 'workflows'),
+  path.join(ROOT, 'gsd-core', 'references'),
+  path.join(ROOT, 'gsd-core', 'templates'),
   COMMANDS_DIR,
   path.join(ROOT, 'agents'),
   path.join(ROOT, 'hooks'),
@@ -118,7 +118,7 @@ describe('slash-command namespace invariant (#3443)', () => {
   // SCOPED ACTIVE INVARIANT (2026-05-23 re-activation after Codex adversarial review of PR #164).
   //
   // Scan is scoped to Claude-facing source directories only (SEARCH_DIRS above).
-  // get-shit-done/bin/lib/ is excluded entirely — runtime-slash.cjs and
+  // gsd-core/bin/lib/ is excluded entirely — runtime-slash.cjs and
   // *.generated.cjs there use hyphen form per bug-3584's runtime-emitter contract.
   //
   // If this test fails: check CONTEXT.md § "Slash-command form: directory-level matrix"

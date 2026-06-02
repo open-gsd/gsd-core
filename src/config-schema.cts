@@ -1,7 +1,7 @@
 /**
  * Thin adapter — sources schema data from the manifest via the generated
  * Configuration Module. All inline literals have been removed; the manifest
- * at get-shit-done/bin/shared/config-schema.manifest.json is the single source of truth.
+ * at gsd-core/bin/shared/config-schema.manifest.json is the single source of truth.
  *
  * Imported by:
  *   - config.cjs (isValidConfigKey validator)

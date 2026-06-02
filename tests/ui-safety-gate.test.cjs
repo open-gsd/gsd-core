@@ -10,7 +10,7 @@ const assert = require('node:assert/strict');
 const {
   checkUiPresence,
   UI_TOKENS,
-} = require('../get-shit-done/bin/lib/ui-safety-gate.cjs');
+} = require('../gsd-core/bin/lib/ui-safety-gate.cjs');
 
 describe('UI_TOKENS', () => {
   test('is an array containing expected token strings', () => {

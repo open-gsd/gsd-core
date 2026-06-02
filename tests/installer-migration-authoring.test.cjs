@@ -8,7 +8,7 @@ const path = require('path');
 const {
   discoverInstallerMigrations,
   planInstallerMigrations,
-} = require('../get-shit-done/bin/lib/installer-migrations.cjs');
+} = require('../gsd-core/bin/lib/installer-migrations.cjs');
 const { cleanup, createTempDir } = require('./helpers.cjs');
 
 function writeMigration(dir, fileName, source) {
