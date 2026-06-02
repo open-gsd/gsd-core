@@ -121,6 +121,13 @@ build/
 /get-shit-done/bin/lib/cjs-command-router-adapter.cjs
 /get-shit-done/bin/lib/phase-command-router.cjs
 /get-shit-done/bin/lib/surface.cjs
+/get-shit-done/bin/lib/gap-checker.cjs
+/get-shit-done/bin/lib/docs.cjs
+/get-shit-done/bin/lib/check-command-router.cjs
+/get-shit-done/bin/lib/frontmatter.cjs
+/get-shit-done/bin/lib/learnings.cjs
+/get-shit-done/bin/lib/gsd2-import.cjs
+/get-shit-done/bin/lib/profile-pipeline.cjs
 /get-shit-done/bin/lib/roadmap-upgrade.cjs
 /get-shit-done/bin/lib/phases-command-router.cjs
 /get-shit-done/bin/lib/verify-command-router.cjs

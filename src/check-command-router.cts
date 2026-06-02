@@ -1,12 +1,24 @@
-'use strict';
+/**
+ * Check subcommand router — auto-mode, decision-coverage-plan, decision-coverage-verify.
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/check-command-router.cjs collapsed
+ * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only strict types are added.
+ */
 
-const fs = require('fs');
-const path = require('path');
-const { execFileSync } = require('child_process');
-const { output, error, ERROR_REASON } = require('./core.cjs');
-const { parseDecisions } = require('./decisions.cjs');
+import fs from 'node:fs';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import core = require('./core.cjs');
+const { output, error, ERROR_REASON } = core;
+import { parseDecisions } from './decisions.cjs';
+import type { Decision } from './decisions.cjs';
 
-function normalizePhrase(text) {
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function normalizePhrase(text: unknown): string {
+  // eslint-disable-next-line @typescript-eslint/no-base-to-string
   return String(text || '')
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, ' ')
@@ -16,20 +28,20 @@ function normalizePhrase(text) {
 
 const SOFT_PHRASE_MIN_WORDS = 6;
 
-function softPhrase(text) {
+function softPhrase(text: unknown): string {
   const words = normalizePhrase(text).split(' ').filter(Boolean);
   if (words.length < SOFT_PHRASE_MIN_WORDS) return '';
   return words.slice(0, SOFT_PHRASE_MIN_WORDS).join(' ');
 }
 
-function decisionMentioned(haystack, decision) {
+function decisionMentioned(haystack: string | null | undefined, decision: Decision): boolean {
   if (!haystack) return false;
   if (new RegExp(`\\b${decision.id}\\b`).test(haystack)) return true;
   const phrase = softPhrase(decision.text);
   return phrase ? normalizePhrase(haystack).includes(phrase) : false;
 }
 
-function readIfExists(filePath) {
+function readIfExists(filePath: string): string {
   try {
     return fs.readFileSync(filePath, 'utf-8');
   } catch {
@@ -37,26 +49,33 @@ function readIfExists(filePath) {
   }
 }
 
-function resolvePath(inputPath, projectDir) {
+function resolvePath(inputPath: string, projectDir: string): string {
   return path.isAbsolute(inputPath) ? inputPath : path.join(projectDir, inputPath);
 }
 
-function readWorkflowConfig(projectDir) {
+interface WorkflowConfig {
+  auto_advance?: boolean;
+  _auto_chain_active?: boolean;
+  context_coverage_gate?: boolean | string;
+}
+
+function readWorkflowConfig(projectDir: string): WorkflowConfig {
   const configPath = path.join(projectDir, '.planning', 'config.json');
   try {
-    const parsed = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    const parsed = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+    const wf = (parsed['workflow'] as Record<string, unknown> | undefined) || {};
     return {
-      ...(parsed.workflow || {}),
-      auto_advance: parsed.workflow?.auto_advance ?? parsed.auto_advance,
-      _auto_chain_active: parsed.workflow?._auto_chain_active ?? parsed._auto_chain_active,
-      context_coverage_gate: parsed.workflow?.context_coverage_gate ?? parsed.context_coverage_gate,
+      ...wf,
+      auto_advance: (wf['auto_advance'] ?? parsed['auto_advance']) as boolean | undefined,
+      _auto_chain_active: (wf['_auto_chain_active'] ?? parsed['_auto_chain_active']) as boolean | undefined,
+      context_coverage_gate: (wf['context_coverage_gate'] ?? parsed['context_coverage_gate']) as boolean | string | undefined,
     };
   } catch {
     return {};
   }
 }
 
-function cmdAutoMode(projectDir, raw) {
+function cmdAutoMode(projectDir: string, raw: boolean): void {
   const workflow = readWorkflowConfig(projectDir);
   const autoAdvance = Boolean(workflow.auto_advance ?? false);
   const autoChainActive = Boolean(workflow._auto_chain_active ?? false);
@@ -70,10 +89,10 @@ function cmdAutoMode(projectDir, raw) {
     source,
     auto_chain_active: autoChainActive,
     auto_advance: autoAdvance,
-  }, raw);
+  }, raw, undefined);
 }
 
-function gateEnabled(projectDir) {
+function gateEnabled(projectDir: string): boolean {
   const value = readWorkflowConfig(projectDir).context_coverage_gate;
   if (typeof value === 'boolean') return value;
   if (typeof value === 'string') {
@@ -83,7 +102,7 @@ function gateEnabled(projectDir) {
   return true;
 }
 
-function loadPlanContents(phaseDir) {
+function loadPlanContents(phaseDir: string): string[] {
   if (!fs.existsSync(phaseDir)) return [];
   try {
     return fs.readdirSync(phaseDir)
@@ -97,14 +116,14 @@ function loadPlanContents(phaseDir) {
 const DESIGNATED_HEADINGS_RE = /^#{1,6}\s+(?:must[_ ]haves?|truths?|tasks?|objective)\b/i;
 const XML_DECISION_TAGS_RE = /<(?:objective|tasks?|action)(?:\s[^>]*)?>([\s\S]*?)<\/(?:objective|tasks?|action)>/gi;
 
-function stripCommentsAndFences(text) {
+function stripCommentsAndFences(text: string): string {
   return text
     .replace(/<!--[\s\S]*?-->/g, ' ')
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/~~~[\s\S]*?~~~/g, ' ');
 }
 
-function extractYamlBlock(frontmatter, key) {
+function extractYamlBlock(frontmatter: string, key: string): string {
   const match = frontmatter.match(new RegExp(`^${key}\\s*:(.*)$`, 'm'));
   if (!match) return '';
   const startIdx = (match.index || 0) + match[0].length;
@@ -117,28 +136,28 @@ function extractYamlBlock(frontmatter, key) {
   return block.join('\n');
 }
 
-function extractXmlTagBodies(text) {
-  const parts = [];
+function extractXmlTagBodies(text: string): string {
+  const parts: string[] = [];
   for (const match of text.matchAll(XML_DECISION_TAGS_RE)) {
     if (match[1]) parts.push(match[1]);
   }
   return parts.join('\n');
 }
 
-function extractPlanDesignatedSections(planContent) {
+function extractPlanDesignatedSections(planContent: string | null | undefined): string {
   if (!planContent) return '';
   const cleaned = stripCommentsAndFences(planContent);
   const fmMatch = cleaned.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
   const frontmatter = fmMatch ? fmMatch[1] : '';
   const body = fmMatch ? fmMatch[2] : cleaned;
 
-  const parts = [];
+  const parts: string[] = [];
   for (const key of ['must_haves', 'truths', 'objective']) {
     const block = extractYamlBlock(frontmatter, key);
     if (block) parts.push(block);
   }
 
-  const bodyParts = [];
+  const bodyParts: string[] = [];
   let inDesignated = false;
   for (const line of body.split(/\r?\n/)) {
     const heading = /^#{1,6}\s+/.test(line);
@@ -154,7 +173,13 @@ function extractPlanDesignatedSections(planContent) {
   return parts.join('\n\n');
 }
 
-function buildPlanMessage(uncovered) {
+interface UncoveredItem {
+  id: string;
+  text: string;
+  category: string;
+}
+
+function buildPlanMessage(uncovered: UncoveredItem[]): string {
   if (uncovered.length === 0) return 'All trackable CONTEXT.md decisions are covered by plans.';
   return [
     '## Decision Coverage Gap',
@@ -168,7 +193,7 @@ function buildPlanMessage(uncovered) {
   ].join('\n');
 }
 
-function buildVerifyMessage(notHonored) {
+function buildVerifyMessage(notHonored: UncoveredItem[]): string {
   if (notHonored.length === 0) return 'All trackable CONTEXT.md decisions are honored by shipped artifacts.';
   return [
     '### Decision Coverage (warning)',
@@ -181,31 +206,31 @@ function buildVerifyMessage(notHonored) {
   ].join('\n');
 }
 
-function loadTrackableDecisions(contextPath) {
+function loadTrackableDecisions(contextPath: string): Decision[] {
   return parseDecisions(readIfExists(contextPath)).filter((decision) => decision.trackable);
 }
 
-function cmdDecisionCoveragePlan(projectDir, args, raw) {
+function cmdDecisionCoveragePlan(projectDir: string, args: string[], raw: boolean): void {
   const phaseDir = args[2] ? resolvePath(args[2], projectDir) : '';
   const contextPath = args[3] ? resolvePath(args[3], projectDir) : '';
 
   if (!gateEnabled(projectDir)) {
-    output({ passed: true, skipped: true, reason: 'workflow.context_coverage_gate is false', total: 0, covered: 0, uncovered: [], message: 'Decision coverage gate disabled by config.' }, raw);
+    output({ passed: true, skipped: true, reason: 'workflow.context_coverage_gate is false', total: 0, covered: 0, uncovered: [], message: 'Decision coverage gate disabled by config.' }, raw, undefined);
     return;
   }
   if (!contextPath || !fs.existsSync(contextPath)) {
-    output({ passed: true, skipped: true, reason: 'CONTEXT.md missing', total: 0, covered: 0, uncovered: [], message: 'No CONTEXT.md - nothing to check.' }, raw);
+    output({ passed: true, skipped: true, reason: 'CONTEXT.md missing', total: 0, covered: 0, uncovered: [], message: 'No CONTEXT.md - nothing to check.' }, raw, undefined);
     return;
   }
 
   const decisions = loadTrackableDecisions(contextPath);
   if (decisions.length === 0) {
-    output({ passed: true, skipped: true, reason: 'no trackable decisions', total: 0, covered: 0, uncovered: [], message: 'No trackable decisions in CONTEXT.md.' }, raw);
+    output({ passed: true, skipped: true, reason: 'no trackable decisions', total: 0, covered: 0, uncovered: [], message: 'No trackable decisions in CONTEXT.md.' }, raw, undefined);
     return;
   }
 
   const sections = loadPlanContents(phaseDir).map(extractPlanDesignatedSections);
-  const uncovered = [];
+  const uncovered: UncoveredItem[] = [];
   let covered = 0;
   for (const decision of decisions) {
     if (sections.some((section) => decisionMentioned(section, decision))) covered++;
@@ -219,10 +244,10 @@ function cmdDecisionCoveragePlan(projectDir, args, raw) {
     covered,
     uncovered,
     message: buildPlanMessage(uncovered),
-  }, raw);
+  }, raw, undefined);
 }
 
-function recentCommitMessages(projectDir) {
+function recentCommitMessages(projectDir: string): string {
   try {
     return execFileSync('git', ['log', '-n', '200', '--pretty=%s%n%b'], {
       cwd: projectDir,
@@ -234,14 +259,14 @@ function recentCommitMessages(projectDir) {
   }
 }
 
-function isInsideRoot(candidatePath, rootDir) {
+function isInsideRoot(candidatePath: string, rootDir: string): boolean {
   const root = path.resolve(rootDir);
   const target = path.resolve(root, candidatePath);
   return target === root || target.startsWith(`${root}${path.sep}`);
 }
 
-function readModifiedFilesContent(projectDir, summaries) {
-  const out = [];
+function readModifiedFilesContent(projectDir: string, summaries: string[]): string {
+  const out: string[] = [];
   let total = 0;
   for (const summary of summaries) {
     if (!summary) continue;
@@ -262,22 +287,22 @@ function readModifiedFilesContent(projectDir, summaries) {
   return out.join('\n\n');
 }
 
-function cmdDecisionCoverageVerify(projectDir, args, raw) {
+function cmdDecisionCoverageVerify(projectDir: string, args: string[], raw: boolean): void {
   const phaseDir = args[2] ? resolvePath(args[2], projectDir) : '';
   const contextPath = args[3] ? resolvePath(args[3], projectDir) : '';
 
   if (!gateEnabled(projectDir)) {
-    output({ skipped: true, blocking: false, reason: 'workflow.context_coverage_gate is false', total: 0, honored: 0, not_honored: [], message: 'Decision coverage gate disabled by config.' }, raw);
+    output({ skipped: true, blocking: false, reason: 'workflow.context_coverage_gate is false', total: 0, honored: 0, not_honored: [], message: 'Decision coverage gate disabled by config.' }, raw, undefined);
     return;
   }
   if (!contextPath || !fs.existsSync(contextPath)) {
-    output({ skipped: true, blocking: false, reason: 'CONTEXT.md missing', total: 0, honored: 0, not_honored: [], message: 'No CONTEXT.md - nothing to check.' }, raw);
+    output({ skipped: true, blocking: false, reason: 'CONTEXT.md missing', total: 0, honored: 0, not_honored: [], message: 'No CONTEXT.md - nothing to check.' }, raw, undefined);
     return;
   }
 
   const decisions = loadTrackableDecisions(contextPath);
   if (decisions.length === 0) {
-    output({ skipped: true, blocking: false, reason: 'no trackable decisions', total: 0, honored: 0, not_honored: [], message: 'No trackable decisions in CONTEXT.md.' }, raw);
+    output({ skipped: true, blocking: false, reason: 'no trackable decisions', total: 0, honored: 0, not_honored: [], message: 'No trackable decisions in CONTEXT.md.' }, raw, undefined);
     return;
   }
 
@@ -292,7 +317,7 @@ function cmdDecisionCoverageVerify(projectDir, args, raw) {
     recentCommitMessages(projectDir),
   ].join('\n\n');
 
-  const notHonored = [];
+  const notHonored: UncoveredItem[] = [];
   let honored = 0;
   for (const decision of decisions) {
     if (decisionMentioned(haystack, decision)) honored++;
@@ -306,10 +331,16 @@ function cmdDecisionCoverageVerify(projectDir, args, raw) {
     honored,
     not_honored: notHonored,
     message: buildVerifyMessage(notHonored),
-  }, raw);
+  }, raw, undefined);
 }
 
-function routeCheckCommand({ args, cwd, raw }) {
+interface RouteCheckCommandOptions {
+  args: string[];
+  cwd: string;
+  raw: boolean;
+}
+
+function routeCheckCommand({ args, cwd, raw }: RouteCheckCommandOptions): void {
   const subcommand = args[1];
   if (subcommand === 'auto-mode') {
     cmdAutoMode(cwd, raw);
@@ -326,7 +357,7 @@ function routeCheckCommand({ args, cwd, raw }) {
   error('Unknown check subcommand. Available: auto-mode, decision-coverage-plan, decision-coverage-verify', ERROR_REASON.SDK_UNKNOWN_COMMAND);
 }
 
-module.exports = {
+export = {
   routeCheckCommand,
   decisionMentioned,
   extractPlanDesignatedSections,

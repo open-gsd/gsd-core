@@ -1,11 +1,22 @@
 /**
  * Frontmatter — YAML frontmatter parsing, serialization, and CRUD commands
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/frontmatter.cjs collapsed
+ * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only strict types are added.
  */
 
-const fs = require('fs');
-const path = require('path');
-const { output, error } = require('./core.cjs');
-const { platformReadSync: safeReadFile, platformWriteSync } = require('./shell-command-projection.cjs');
+import fs from 'node:fs';
+import path from 'node:path';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import core = require('./core.cjs');
+const { output, error } = core;
+import { platformReadSync as safeReadFile, platformWriteSync } from './shell-command-projection.cjs';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type FrontmatterValue = string | string[] | Record<string, unknown>;
+type Frontmatter = Record<string, FrontmatterValue>;
 
 // ─── Parsing engine ───────────────────────────────────────────────────────────
 
@@ -13,10 +24,10 @@ const { platformReadSync: safeReadFile, platformWriteSync } = require('./shell-c
  * Split a YAML inline array body on commas, respecting quoted strings.
  * e.g. '"a, b", c' → ['a, b', 'c']
  */
-function splitInlineArray(body) {
-  const items = [];
+function splitInlineArray(body: string): string[] {
+  const items: string[] = [];
   let current = '';
-  let inQuote = null; // null | '"' | "'"
+  let inQuote: string | null = null;
 
   for (let i = 0; i < body.length; i++) {
     const ch = body[i];
@@ -41,8 +52,8 @@ function splitInlineArray(body) {
   return items;
 }
 
-function extractFrontmatter(content) {
-  const frontmatter = {};
+function extractFrontmatter(content: string): Frontmatter {
+  const frontmatter: Frontmatter = {};
   // Match frontmatter only at byte 0 — a `---` block later in the document
   // body (YAML examples, horizontal rules) must never be treated as frontmatter.
   const match = content.match(/^---\r?\n([\s\S]+?)\r?\n---/);
@@ -52,8 +63,8 @@ function extractFrontmatter(content) {
   const lines = yaml.split(/\r?\n/);
 
   // Stack to track nested objects: [{obj, key, indent}]
-  // obj = object to write to, key = current key collecting array items, indent = indentation level
-  const stack = [{ obj: frontmatter, key: null, indent: -1 }];
+  type StackEntry = { obj: Record<string, unknown> | unknown[]; key: string | null; indent: number };
+  const stack: StackEntry[] = [{ obj: frontmatter, key: null, indent: -1 }];
 
   for (const line of lines) {
     // Skip empty lines
@@ -78,18 +89,18 @@ function extractFrontmatter(content) {
 
       if (value === '' || value === '[') {
         // Key with no value or opening bracket — could be nested object or array
-        // We'll determine based on next lines, for now create placeholder
-        current.obj[key] = value === '[' ? [] : {};
+        const newObj: Record<string, unknown> | unknown[] = value === '[' ? [] : {};
+        (current.obj as Record<string, unknown>)[key] = newObj;
         current.key = null;
         // Push new context for potential nested content
-        stack.push({ obj: current.obj[key], key: null, indent });
+        stack.push({ obj: newObj, key: null, indent });
       } else if (value.startsWith('[') && value.endsWith(']')) {
         // Inline array: key: [a, b, c] — quote-aware split (REG-04 fix)
-        current.obj[key] = splitInlineArray(value.slice(1, -1));
+        (current.obj as Record<string, unknown>)[key] = splitInlineArray(value.slice(1, -1));
         current.key = null;
       } else {
         // Simple key: value
-        current.obj[key] = value.replace(/^["']|["']$/g, '');
+        (current.obj as Record<string, unknown>)[key] = value.replace(/^["']|["']$/g, '');
         current.key = null;
       }
     } else if (line.trim().startsWith('- ')) {
@@ -102,9 +113,9 @@ function extractFrontmatter(content) {
         const parent = stack.length > 1 ? stack[stack.length - 2] : null;
         if (parent) {
           for (const k of Object.keys(parent.obj)) {
-            if (parent.obj[k] === current.obj) {
-              parent.obj[k] = [itemValue];
-              current.obj = parent.obj[k];
+            if ((parent.obj as Record<string, unknown>)[k] === current.obj) {
+              (parent.obj as Record<string, unknown>)[k] = [itemValue];
+              current.obj = (parent.obj as Record<string, unknown>)[k] as unknown[];
               break;
             }
           }
@@ -118,15 +129,15 @@ function extractFrontmatter(content) {
   return frontmatter;
 }
 
-function reconstructFrontmatter(obj) {
-  const lines = [];
+function reconstructFrontmatter(obj: Frontmatter): string {
+  const lines: string[] = [];
   for (const [key, value] of Object.entries(obj)) {
     if (value === null || value === undefined) continue;
     if (Array.isArray(value)) {
       if (value.length === 0) {
         lines.push(`${key}: []`);
-      } else if (value.every(v => typeof v === 'string') && value.length <= 3 && value.join(', ').length < 60) {
-        lines.push(`${key}: [${value.join(', ')}]`);
+      } else if (value.every(v => typeof v === 'string') && value.length <= 3 && (value).join(', ').length < 60) {
+        lines.push(`${key}: [${(value).join(', ')}]`);
       } else {
         lines.push(`${key}:`);
         for (const item of value) {
@@ -140,8 +151,8 @@ function reconstructFrontmatter(obj) {
         if (Array.isArray(subval)) {
           if (subval.length === 0) {
             lines.push(`  ${subkey}: []`);
-          } else if (subval.every(v => typeof v === 'string') && subval.length <= 3 && subval.join(', ').length < 60) {
-            lines.push(`  ${subkey}: [${subval.join(', ')}]`);
+          } else if (subval.every((v: unknown) => typeof v === 'string') && subval.length <= 3 && (subval).join(', ').length < 60) {
+            lines.push(`  ${subkey}: [${(subval).join(', ')}]`);
           } else {
             lines.push(`  ${subkey}:`);
             for (const item of subval) {
@@ -150,7 +161,7 @@ function reconstructFrontmatter(obj) {
           }
         } else if (typeof subval === 'object') {
           lines.push(`  ${subkey}:`);
-          for (const [subsubkey, subsubval] of Object.entries(subval)) {
+          for (const [subsubkey, subsubval] of Object.entries(subval as Record<string, unknown>)) {
             if (subsubval === null || subsubval === undefined) continue;
             if (Array.isArray(subsubval)) {
               if (subsubval.length === 0) {
@@ -162,10 +173,12 @@ function reconstructFrontmatter(obj) {
                 }
               }
             } else {
+              // eslint-disable-next-line @typescript-eslint/no-base-to-string, @typescript-eslint/restrict-template-expressions
               lines.push(`    ${subsubkey}: ${subsubval}`);
             }
           }
         } else {
+          // eslint-disable-next-line @typescript-eslint/no-base-to-string
           const sv = String(subval);
           lines.push(`  ${subkey}: ${sv.includes(':') || sv.includes('#') ? `"${sv}"` : sv}`);
         }
@@ -182,7 +195,7 @@ function reconstructFrontmatter(obj) {
   return lines.join('\n');
 }
 
-function spliceFrontmatter(content, newObj) {
+function spliceFrontmatter(content: string, newObj: Frontmatter): string {
   const yamlStr = reconstructFrontmatter(newObj);
   const match = content.match(/^---\r?\n[\s\S]+?\r?\n---/);
   if (match) {
@@ -191,7 +204,7 @@ function spliceFrontmatter(content, newObj) {
   return `---\n${yamlStr}\n---\n\n` + content;
 }
 
-function parseMustHavesBlock(content, blockName) {
+function parseMustHavesBlock(content: string, blockName: string): unknown[] {
   // Extract a specific block from must_haves in raw frontmatter YAML
   // Handles 3-level nesting: must_haves > artifacts/key_links > [{path, provides, ...}]
   const fmMatch = content.match(/^---\r?\n([\s\S]+?)\r?\n---/);
@@ -223,14 +236,15 @@ function parseMustHavesBlock(content, blockName) {
 
   // List items are indented one level deeper than blockIndent
   // Continuation KVs are indented one level deeper than list items
-  const items = [];
-  let current = null;
+  const items: unknown[] = [];
+  let current: string | Record<string, unknown> | null = null;
   let listItemIndent = -1; // detected from first "- " line
 
   for (const line of blockLines) {
     // Skip empty lines
     if (line.trim() === '') continue;
-    const indent = line.match(/^(\s*)/)[1].length;
+    const indentMatch = line.match(/^(\s*)/);
+    const indent = indentMatch ? indentMatch[1].length : 0;
     // Stop at same or lower indent level than the block header
     if (indent <= blockIndent && line.trim() !== '') break;
 
@@ -259,7 +273,7 @@ function parseMustHavesBlock(content, blockName) {
           const kvMatch = afterDash.match(/^(\w+):\s+"?([^"]*)"?\s*$/);
           if (kvMatch) {
             current = {};
-            current[kvMatch[1]] = kvMatch[2];
+            (current)[kvMatch[1]] = kvMatch[2];
           } else {
             // Looks like KV but doesn't match — treat as plain string (#2757)
             current = afterDash.replace(/^["']|["']$/g, '');
@@ -276,16 +290,17 @@ function parseMustHavesBlock(content, blockName) {
         const arrVal = trimmed.slice(2).replace(/^["']|["']$/g, '');
         const keys = Object.keys(current);
         const lastKey = keys[keys.length - 1];
-        if (lastKey && !Array.isArray(current[lastKey])) {
-          current[lastKey] = current[lastKey] ? [current[lastKey]] : [];
+        if (lastKey && !Array.isArray((current)[lastKey])) {
+          const existing = (current)[lastKey];
+          (current)[lastKey] = existing ? [existing] : [];
         }
-        if (lastKey) current[lastKey].push(arrVal);
+        if (lastKey) ((current)[lastKey] as unknown[]).push(arrVal);
       } else {
         const kvMatch = trimmed.match(/^(\w+):\s*"?([^"]*)"?\s*$/);
         if (kvMatch) {
           const val = kvMatch[2];
           // Try to parse as number
-          current[kvMatch[1]] = /^\d+$/.test(val) ? parseInt(val, 10) : val;
+          (current)[kvMatch[1]] = /^\d+$/.test(val) ? parseInt(val, 10) : val;
         }
       }
     }
@@ -310,73 +325,73 @@ function parseMustHavesBlock(content, blockName) {
 
 // ─── Frontmatter CRUD commands ────────────────────────────────────────────────
 
-const FRONTMATTER_SCHEMAS = {
+const FRONTMATTER_SCHEMAS: Record<string, { required: string[] }> = {
   plan: { required: ['phase', 'plan', 'type', 'wave', 'depends_on', 'files_modified', 'autonomous', 'must_haves'] },
   summary: { required: ['phase', 'plan', 'subsystem', 'tags', 'duration', 'completed'] },
   verification: { required: ['phase', 'verified', 'status', 'score'] },
 };
 
-function cmdFrontmatterGet(cwd, filePath, field, raw) {
+function cmdFrontmatterGet(cwd: string, filePath: string, field: string | undefined, raw: boolean): void {
   if (!filePath) { error('file path required'); }
   // Path traversal guard: reject null bytes
   if (filePath.includes('\0')) { error('file path contains null bytes'); }
   const fullPath = path.isAbsolute(filePath) ? filePath : path.join(cwd, filePath);
   const content = safeReadFile(fullPath);
-  if (!content) { output({ error: 'File not found', path: filePath }, raw); return; }
+  if (!content) { output({ error: 'File not found', path: filePath }, raw, undefined); return; }
   const fm = extractFrontmatter(content);
   if (field) {
     const value = fm[field];
-    if (value === undefined) { output({ error: 'Field not found', field }, raw); return; }
+    if (value === undefined) { output({ error: 'Field not found', field }, raw, undefined); return; }
     output({ [field]: value }, raw, JSON.stringify(value));
   } else {
-    output(fm, raw);
+    output(fm, raw, undefined);
   }
 }
 
-function cmdFrontmatterSet(cwd, filePath, field, value, raw) {
+function cmdFrontmatterSet(cwd: string, filePath: string, field: string | undefined, value: string | undefined, raw: boolean): void {
   if (!filePath || !field || value === undefined) { error('file, field, and value required'); }
   // Path traversal guard: reject null bytes
   if (filePath.includes('\0')) { error('file path contains null bytes'); }
   const fullPath = path.isAbsolute(filePath) ? filePath : path.join(cwd, filePath);
-  if (!fs.existsSync(fullPath)) { output({ error: 'File not found', path: filePath }, raw); return; }
+  if (!fs.existsSync(fullPath)) { output({ error: 'File not found', path: filePath }, raw, undefined); return; }
   const content = fs.readFileSync(fullPath, 'utf-8');
   const fm = extractFrontmatter(content);
-  let parsedValue;
-  try { parsedValue = JSON.parse(value); } catch { parsedValue = value; }
-  fm[field] = parsedValue;
+  let parsedValue: unknown;
+  try { parsedValue = JSON.parse(value as string); } catch { parsedValue = value; }
+  fm[field as string] = parsedValue as FrontmatterValue;
   const newContent = spliceFrontmatter(content, fm);
   platformWriteSync(fullPath, newContent);
   output({ updated: true, field, value: parsedValue }, raw, 'true');
 }
 
-function cmdFrontmatterMerge(cwd, filePath, data, raw) {
+function cmdFrontmatterMerge(cwd: string, filePath: string, data: string | undefined, raw: boolean): void {
   if (!filePath || !data) { error('file and data required'); }
   const fullPath = path.isAbsolute(filePath) ? filePath : path.join(cwd, filePath);
-  if (!fs.existsSync(fullPath)) { output({ error: 'File not found', path: filePath }, raw); return; }
+  if (!fs.existsSync(fullPath)) { output({ error: 'File not found', path: filePath }, raw, undefined); return; }
   const content = fs.readFileSync(fullPath, 'utf-8');
   const fm = extractFrontmatter(content);
-  let mergeData;
-  try { mergeData = JSON.parse(data); } catch { error('Invalid JSON for --data'); return; }
+  let mergeData: Record<string, FrontmatterValue>;
+  try { mergeData = JSON.parse(data as string) as Record<string, FrontmatterValue>; } catch { error('Invalid JSON for --data'); return; }
   Object.assign(fm, mergeData);
   const newContent = spliceFrontmatter(content, fm);
   platformWriteSync(fullPath, newContent);
   output({ merged: true, fields: Object.keys(mergeData) }, raw, 'true');
 }
 
-function cmdFrontmatterValidate(cwd, filePath, schemaName, raw) {
+function cmdFrontmatterValidate(cwd: string, filePath: string, schemaName: string | undefined, raw: boolean): void {
   if (!filePath || !schemaName) { error('file and schema required'); }
-  const schema = FRONTMATTER_SCHEMAS[schemaName];
+  const schema = FRONTMATTER_SCHEMAS[schemaName as string];
   if (!schema) { error(`Unknown schema: ${schemaName}. Available: ${Object.keys(FRONTMATTER_SCHEMAS).join(', ')}`); }
   const fullPath = path.isAbsolute(filePath) ? filePath : path.join(cwd, filePath);
   const content = safeReadFile(fullPath);
-  if (!content) { output({ error: 'File not found', path: filePath }, raw); return; }
+  if (!content) { output({ error: 'File not found', path: filePath }, raw, undefined); return; }
   const fm = extractFrontmatter(content);
   const missing = schema.required.filter(f => fm[f] === undefined);
   const present = schema.required.filter(f => fm[f] !== undefined);
   output({ valid: missing.length === 0, missing, present, schema: schemaName }, raw, missing.length === 0 ? 'valid' : 'invalid');
 }
 
-module.exports = {
+export = {
   extractFrontmatter,
   reconstructFrontmatter,
   spliceFrontmatter,

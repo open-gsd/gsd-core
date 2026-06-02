@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * Post-planning gap analysis (#2493).
  *
@@ -12,13 +10,60 @@
  *
  * Coverage detection uses word-boundary regex matching to avoid false positives
  * (REQ-1 must not match REQ-10).
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/gap-checker.cjs collapsed
+ * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only strict types are added.
  */
 
-const fs = require('fs');
-const path = require('path');
-const { escapeRegex, output, error } = require('./core.cjs');
-const { planningPaths, planningDir, findContextMdIn } = require('./planning-workspace.cjs');
-const { parseDecisions } = require('./decisions.cjs');
+import fs from 'node:fs';
+import path from 'node:path';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import core = require('./core.cjs');
+const { escapeRegex, output, error } = core;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planningWorkspace = require('./planning-workspace.cjs');
+const { planningPaths, planningDir, findContextMdIn } = planningWorkspace;
+import { parseDecisions } from './decisions.cjs';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface ReqItem {
+  id: string;
+  text: string;
+}
+
+interface RequirementItem extends ReqItem {
+  source: string;
+}
+
+type DecisionItem = ReturnType<typeof parseDecisions>[number] & { source: string };
+
+type Item = RequirementItem | DecisionItem;
+
+interface CoverageRow {
+  source: string;
+  item: string;
+  status: string;
+}
+
+interface GapCounts {
+  total: number;
+  covered: number;
+  uncovered: number;
+}
+
+interface GapResult {
+  enabled: boolean;
+  rows: CoverageRow[];
+  table: string;
+  summary: string;
+  counts: GapCounts;
+}
+
+interface RunGapAnalysisOptions {
+  phaseReqIds?: string | null | undefined;
+}
 
 /**
  * Parse REQ-IDs from REQUIREMENTS.md content.
@@ -26,10 +71,10 @@ const { parseDecisions } = require('./decisions.cjs');
  * Supports both checkbox (`- [ ] **REQ-NN** ...`) and traceability table
  * (`| REQ-NN | ... |`) formats.
  */
-function parseRequirements(reqMd) {
+function parseRequirements(reqMd: unknown): ReqItem[] {
   if (!reqMd || typeof reqMd !== 'string') return [];
-  const out = [];
-  const seen = new Set();
+  const out: ReqItem[] = [];
+  const seen = new Set<string>();
 
   // Prefix-agnostic ID format: REQ-01, TST-01, BACK-07, INSP-04, etc.
   const ID_PATTERN = '[A-Z][A-Z0-9]*-[A-Za-z0-9_-]+';
@@ -69,7 +114,7 @@ function parseRequirements(reqMd) {
   return out;
 }
 
-function detectCoverage(items, planText) {
+function detectCoverage(items: Item[], planText: string): CoverageRow[] {
   return items.map(it => {
     const re = new RegExp('\\b' + escapeRegex(it.id) + '\\b');
     return {
@@ -80,12 +125,12 @@ function detectCoverage(items, planText) {
   });
 }
 
-function naturalKey(s) {
-  return String(s).replace(/(\d+)/g, (_, n) => n.padStart(8, '0'));
+function naturalKey(s: unknown): string {
+  return String(s).replace(/(\d+)/g, (_, n: string) => n.padStart(8, '0'));
 }
 
-function sortRows(rows) {
-  const sourceOrder = { 'REQUIREMENTS.md': 0, 'CONTEXT.md': 1 };
+function sortRows(rows: CoverageRow[]): CoverageRow[] {
+  const sourceOrder: Record<string, number> = { 'REQUIREMENTS.md': 0, 'CONTEXT.md': 1 };
   return rows.slice().sort((a, b) => {
     const so = (sourceOrder[a.source] ?? 99) - (sourceOrder[b.source] ?? 99);
     if (so !== 0) return so;
@@ -93,26 +138,30 @@ function sortRows(rows) {
   });
 }
 
-function formatGapTable(rows) {
+function formatGapTable(rows: CoverageRow[]): string {
   if (rows.length === 0) {
     return '## Post-Planning Gap Analysis\n\nNo requirements or decisions to check.\n';
   }
   const header = '| Source | Item | Status |\n|--------|------|--------|';
   const body = rows.map(r => {
-    const tick = r.status === 'Covered' ? '\u2713 Covered'
-      : r.status === 'Missing from REQUIREMENTS.md' ? '\u26a0 Missing from REQUIREMENTS.md'
-      : '\u2717 Not covered';
+    const tick = r.status === 'Covered' ? '✓ Covered'
+      : r.status === 'Missing from REQUIREMENTS.md' ? '⚠ Missing from REQUIREMENTS.md'
+      : '✗ Not covered';
     return `| ${r.source} | ${r.item} | ${tick} |`;
   }).join('\n');
   return `## Post-Planning Gap Analysis\n\n${header}\n${body}\n`;
 }
 
-function readGate(cwd) {
+function readGate(cwd: string): boolean {
   const cfgPath = path.join(planningDir(cwd), 'config.json');
   try {
-    const raw = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
-    if (raw && raw.workflow && typeof raw.workflow.post_planning_gaps === 'boolean') {
-      return raw.workflow.post_planning_gaps;
+    const raw = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as unknown;
+    if (raw && typeof raw === 'object' && 'workflow' in raw) {
+      const wf = (raw as Record<string, unknown>)['workflow'];
+      if (wf && typeof wf === 'object' && 'post_planning_gaps' in wf) {
+        const val = (wf as Record<string, unknown>)['post_planning_gaps'];
+        if (typeof val === 'boolean') return val;
+      }
     }
   } catch { /* fall through */ }
   return true;
@@ -129,9 +178,10 @@ function readGate(cwd) {
  * Tolerates JSON-array-ish input (`["REQ-01","REQ-02"]`) since callers may pass
  * the roadmap value through verbatim.
  */
-function normalizePhaseReqIds(rawVal) {
+function normalizePhaseReqIds(rawVal: unknown): string[] | null | undefined {
   if (rawVal === undefined) return undefined;
   if (rawVal === null) return null;
+  // eslint-disable-next-line @typescript-eslint/no-base-to-string
   const v = String(rawVal).replace(/["'[\]()]/g, '').trim();
   if (v === '' || /^(null|tbd|none)$/i.test(v)) return null;
   // Tolerate comma-, space-, or newline-separated lists (callers may pass the
@@ -140,7 +190,7 @@ function normalizePhaseReqIds(rawVal) {
   return ids.length === 0 ? null : ids;
 }
 
-function runGapAnalysis(cwd, phaseDir, options = {}) {
+function runGapAnalysis(cwd: string, phaseDir: string, options: RunGapAnalysisOptions = {}): GapResult {
   const phaseReqIds = normalizePhaseReqIds(options.phaseReqIds);
   if (!readGate(cwd)) {
     return {
@@ -156,13 +206,13 @@ function runGapAnalysis(cwd, phaseDir, options = {}) {
 
   const reqPath = planningPaths(cwd).requirements;
   const reqMd = fs.existsSync(reqPath) ? fs.readFileSync(reqPath, 'utf-8') : '';
-  let reqItems = parseRequirements(reqMd).map(r => ({ ...r, source: 'REQUIREMENTS.md' }));
+  let reqItems: RequirementItem[] = parseRequirements(reqMd).map(r => ({ ...r, source: 'REQUIREMENTS.md' }));
 
   // Scope the requirements comparison to the phase's mapped REQ-IDs (#447).
   // A phase that maps no requirements (phase_req_ids null/TBD) must not report
   // every unrelated project REQ-ID as a gap — mirror §13's skip behavior.
   // CONTEXT.md decisions (below) are always in scope regardless.
-  let ghostReqIds = [];
+  let ghostReqIds: string[] = [];
   if (phaseReqIds === null) {
     reqItems = [];
   } else if (Array.isArray(phaseReqIds)) {
@@ -174,7 +224,7 @@ function runGapAnalysis(cwd, phaseDir, options = {}) {
 
   // Read the phase directory once; reuse the listing for both context detection
   // and plan-file enumeration (avoids redundant readdirSync calls).
-  let phaseDirFiles = [];
+  let phaseDirFiles: string[] = [];
   try {
     if (fs.existsSync(absPhaseDir)) phaseDirFiles = fs.readdirSync(absPhaseDir);
   } catch { /* unreadable */ }
@@ -182,9 +232,9 @@ function runGapAnalysis(cwd, phaseDir, options = {}) {
   const ctxFile = findContextMdIn(phaseDirFiles);
   const ctxPath = ctxFile ? path.join(absPhaseDir, ctxFile) : null;
   const ctxMd = ctxPath ? fs.readFileSync(ctxPath, 'utf-8') : '';
-  const dItems = parseDecisions(ctxMd).map(d => ({ ...d, source: 'CONTEXT.md' }));
+  const dItems: DecisionItem[] = parseDecisions(ctxMd).map(d => ({ ...d, source: 'CONTEXT.md' }));
 
-  const items = [...reqItems, ...dItems];
+  const items: Item[] = [...reqItems, ...dItems];
 
   let planText = '';
   try {
@@ -215,8 +265,8 @@ function runGapAnalysis(cwd, phaseDir, options = {}) {
   const uncovered = rows.length - covered;
 
   const summary = uncovered === 0
-    ? `\u2713 All ${rows.length} items covered by plans`
-    : `\u26A0 ${uncovered} of ${rows.length} items not covered by any plan`;
+    ? `✓ All ${rows.length} items covered by plans`
+    : `⚠ ${uncovered} of ${rows.length} items not covered by any plan`;
 
   return {
     enabled: true,
@@ -227,7 +277,7 @@ function runGapAnalysis(cwd, phaseDir, options = {}) {
   };
 }
 
-function cmdGapAnalysis(cwd, args, raw) {
+function cmdGapAnalysis(cwd: string, args: string[], raw: boolean): void {
   const idx = args.indexOf('--phase-dir');
   if (idx === -1 || !args[idx + 1]) {
     error('Usage: gap-analysis --phase-dir <path-to-phase-directory>');
@@ -243,7 +293,7 @@ function cmdGapAnalysis(cwd, args, raw) {
   output(result, raw, result.table || result.summary);
 }
 
-module.exports = {
+export = {
   parseRequirements,
   detectCoverage,
   formatGapTable,

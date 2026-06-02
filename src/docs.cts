@@ -4,12 +4,18 @@
  * Provides `cmdDocsInit` which returns project signals, existing doc inventory
  * with GSD marker detection, doc tooling detection, monorepo awareness, and
  * model resolution. Used by Phase 2 to route doc generation appropriately.
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/docs.cjs collapsed
+ * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only strict types are added.
  */
 
-const fs = require('fs');
-const path = require('path');
-const { output, loadConfig, resolveModelInternal, pathExistsInternal, toPosixPath, checkAgentsInstalled } = require('./core.cjs');
-const { platformReadSync } = require('./shell-command-projection.cjs');
+import fs from 'node:fs';
+import path from 'node:path';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import core = require('./core.cjs');
+const { output, loadConfig, resolveModelInternal, pathExistsInternal, toPosixPath, checkAgentsInstalled } = core;
+import { platformReadSync } from './shell-command-projection.cjs';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -26,11 +32,8 @@ const SKIP_DIRS = new Set([
 /**
  * Check whether a file begins with the GSD doc writer marker.
  * Reads the first 500 bytes only — avoids loading large files.
- *
- * @param {string} filePath - Absolute path to the file
- * @returns {boolean}
  */
-function hasGsdMarker(filePath) {
+function hasGsdMarker(filePath: string): boolean {
   try {
     const buf = Buffer.alloc(500);
     const fd = fs.openSync(filePath, 'r');
@@ -42,23 +45,20 @@ function hasGsdMarker(filePath) {
   }
 }
 
+interface DocEntry {
+  path: string;
+  has_gsd_marker: boolean;
+}
+
 /**
  * Recursively scan the project root (immediate .md files) and docs/ directory
  * (up to 4 levels deep) for Markdown files, excluding dirs in SKIP_DIRS.
- *
- * @param {string} cwd - Project root
- * @returns {Array<{path: string, has_gsd_marker: boolean}>}
  */
-function scanExistingDocs(cwd) {
+function scanExistingDocs(cwd: string): DocEntry[] {
   const MAX_DEPTH = 4;
-  const results = [];
+  const results: DocEntry[] = [];
 
-  /**
-   * Recursively walk a directory for .md files up to MAX_DEPTH levels.
-   * @param {string} dir - Directory to scan
-   * @param {number} depth - Current depth (1-based)
-   */
-  function walkDir(dir, depth) {
+  function walkDir(dir: string, depth: number): void {
     if (depth > MAX_DEPTH) return;
     try {
       const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -111,38 +111,49 @@ function scanExistingDocs(cwd) {
   return results.sort((a, b) => a.path.localeCompare(b.path));
 }
 
+interface ProjectTypeSignals {
+  has_package_json: boolean;
+  has_api_routes: boolean;
+  has_cli_bin: boolean;
+  is_open_source: boolean;
+  has_deploy_config: boolean;
+  is_monorepo: boolean;
+  has_tests: boolean;
+}
+
 /**
  * Detect project type signals from the filesystem and package.json.
  * All checks are best-effort and never throw.
- *
- * @param {string} cwd - Project root
- * @returns {Object} Boolean signal fields
  */
-function detectProjectType(cwd) {
-  const exists = (rel) => {
+function detectProjectType(cwd: string): ProjectTypeSignals {
+  const exists = (rel: string): boolean => {
     try { return pathExistsInternal(cwd, rel); } catch { return false; }
   };
 
   // Read package.json once — used by has_cli_bin, is_monorepo, has_tests checks.
   const pkgRaw = platformReadSync(path.join(cwd, 'package.json'));
-  let pkg = null;
+  let pkg: Record<string, unknown> | null = null;
   if (pkgRaw) {
-    try { pkg = JSON.parse(pkgRaw); } catch { /* invalid JSON */ }
+    try { pkg = JSON.parse(pkgRaw) as Record<string, unknown>; } catch { /* invalid JSON */ }
   }
 
   // has_cli_bin: package.json has a `bin` field
-  const has_cli_bin = !!(pkg && pkg.bin && (typeof pkg.bin === 'string' || Object.keys(pkg.bin).length > 0));
+  const binField = pkg?.['bin'];
+  const has_cli_bin = !!(binField && (
+    typeof binField === 'string' ||
+    (typeof binField === 'object' && Object.keys(binField).length > 0)
+  ));
 
   // is_monorepo: pnpm-workspace.yaml, lerna.json, or package.json workspaces
   let is_monorepo = exists('pnpm-workspace.yaml') || exists('lerna.json');
   if (!is_monorepo && pkg) {
-    is_monorepo = Array.isArray(pkg.workspaces) && pkg.workspaces.length > 0;
+    is_monorepo = Array.isArray(pkg['workspaces']) && (pkg['workspaces'] as unknown[]).length > 0;
   }
 
   // has_tests: common test directories or test frameworks in devDependencies
   let has_tests = exists('test') || exists('tests') || exists('__tests__') || exists('spec');
   if (!has_tests && pkg) {
-    const devDeps = Object.keys(pkg.devDependencies || {});
+    const devDeps = Object.keys((pkg['devDependencies'] as Record<string, unknown> | undefined) || {});
     has_tests = devDeps.some(d => ['vitest', 'jest', 'mocha', 'jasmine', 'ava'].includes(d));
   }
 
@@ -168,14 +179,18 @@ function detectProjectType(cwd) {
   };
 }
 
+interface DocToolingSignals {
+  docusaurus: boolean;
+  vitepress: boolean;
+  mkdocs: boolean;
+  storybook: boolean;
+}
+
 /**
  * Detect known documentation tooling in the project.
- *
- * @param {string} cwd - Project root
- * @returns {Object} Boolean detection fields
  */
-function detectDocTooling(cwd) {
-  const exists = (rel) => {
+function detectDocTooling(cwd: string): DocToolingSignals {
+  const exists = (rel: string): boolean => {
     try { return pathExistsInternal(cwd, rel); } catch { return false; }
   };
 
@@ -194,15 +209,12 @@ function detectDocTooling(cwd) {
 /**
  * Extract monorepo workspace globs from pnpm-workspace.yaml, package.json
  * workspaces, or lerna.json.
- *
- * @param {string} cwd - Project root
- * @returns {string[]} Array of workspace glob patterns, or [] if not a monorepo
  */
-function detectMonorepoWorkspaces(cwd) {
+function detectMonorepoWorkspaces(cwd: string): string[] {
   // pnpm-workspace.yaml
   const pnpmRaw = platformReadSync(path.join(cwd, 'pnpm-workspace.yaml'));
   if (pnpmRaw) {
-    const workspaces = [];
+    const workspaces: string[] = [];
     for (const line of pnpmRaw.split('\n')) {
       const m = line.match(/^\s*-\s+['"]?(.+?)['"]?\s*$/);
       if (m) workspaces.push(m[1].trim());
@@ -214,9 +226,9 @@ function detectMonorepoWorkspaces(cwd) {
   const pkgRaw = platformReadSync(path.join(cwd, 'package.json'));
   if (pkgRaw) {
     try {
-      const pkg = JSON.parse(pkgRaw);
-      if (Array.isArray(pkg.workspaces) && pkg.workspaces.length > 0) {
-        return pkg.workspaces;
+      const pkg = JSON.parse(pkgRaw) as Record<string, unknown>;
+      if (Array.isArray(pkg['workspaces']) && (pkg['workspaces'] as unknown[]).length > 0) {
+        return pkg['workspaces'] as string[];
       }
     } catch { /* invalid JSON */ }
   }
@@ -225,9 +237,9 @@ function detectMonorepoWorkspaces(cwd) {
   const lernaRaw = platformReadSync(path.join(cwd, 'lerna.json'));
   if (lernaRaw) {
     try {
-      const lerna = JSON.parse(lernaRaw);
-      if (Array.isArray(lerna.packages) && lerna.packages.length > 0) {
-        return lerna.packages;
+      const lerna = JSON.parse(lernaRaw) as Record<string, unknown>;
+      if (Array.isArray(lerna['packages']) && (lerna['packages'] as unknown[]).length > 0) {
+        return lerna['packages'] as string[];
       }
     } catch { /* invalid JSON */ }
   }
@@ -244,13 +256,10 @@ function detectMonorepoWorkspaces(cwd) {
  *
  * @example
  * node gsd-tools.cjs docs-init --raw
- *
- * @param {string} cwd - Project root directory
- * @param {boolean} raw - Pass raw JSON flag through to output()
  */
-function cmdDocsInit(cwd, raw) {
+function cmdDocsInit(cwd: string, raw: boolean): void {
   const config = loadConfig(cwd);
-  const result = {
+  const result: Record<string, unknown> = {
     doc_writer_model: resolveModelInternal(cwd, 'gsd-doc-writer'),
     commit_docs: config.commit_docs,
     existing_docs: scanExistingDocs(cwd),
@@ -260,11 +269,11 @@ function cmdDocsInit(cwd, raw) {
     planning_exists: pathExistsInternal(cwd, '.planning'),
   };
   // Inject project_root and agent installation status (mirrors withProjectRoot in init.cjs)
-  result.project_root = cwd;
+  result['project_root'] = cwd;
   const agentStatus = checkAgentsInstalled();
-  result.agents_installed = agentStatus.agents_installed;
-  result.missing_agents = agentStatus.missing_agents;
-  output(result, raw);
+  result['agents_installed'] = agentStatus.agents_installed;
+  result['missing_agents'] = agentStatus.missing_agents;
+  output(result, raw, undefined);
 }
 
-module.exports = { cmdDocsInit };
+export = { cmdDocsInit };

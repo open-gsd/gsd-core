@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * gsd2-import — Reverse migration from GSD-2 (.gsd/) to GSD v1 (.planning/)
  *
@@ -15,23 +13,80 @@
  *   - Completed slices ([x] in ROADMAP) → [x] phases in ROADMAP.md
  *   - Tasks with a SUMMARY file → SUMMARY.md written
  *   - Slice RESEARCH.md → phase XX-RESEARCH.md
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/gsd2-import.cjs collapsed
+ * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only strict types are added.
  */
 
-const fs = require('node:fs');
-const path = require('node:path');
-const { platformWriteSync } = require('./shell-command-projection.cjs');
+import fs from 'node:fs';
+import path from 'node:path';
+import { platformWriteSync } from './shell-command-projection.cjs';
+import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import core = require('./core.cjs');
+const { output } = core;
+
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+interface SliceInfo {
+  done: boolean;
+  id: string;
+  title: string;
+}
+
+interface TaskInfo {
+  id: string;
+  title: string;
+  description: string;
+  mustHaves: string[];
+  plan: string | null;
+  summary: string | null;
+  done: boolean;
+}
+
+interface Slice {
+  id: string;
+  title: string;
+  done: boolean;
+  plan: string | null;
+  summary: string | null;
+  research: string | null;
+  context: string | null;
+  tasks: TaskInfo[];
+}
+
+interface Milestone {
+  id: string;
+  title: string;
+  research: string | null;
+  slices: Slice[];
+}
+
+interface Gsd2Data {
+  projectContent: string | null;
+  requirements: string | null;
+  milestones: Milestone[];
+}
+
+interface PhaseMapEntry {
+  milestoneId: string;
+  milestoneTitle: string;
+  slice: Slice;
+  phaseNum: number;
+}
 
 // ─── Utilities ──────────────────────────────────────────────────────────────
 
-function readOptional(filePath) {
+function readOptional(filePath: string): string | null {
   try { return fs.readFileSync(filePath, 'utf8'); } catch { return null; }
 }
 
-function zeroPad(n, width = 2) {
+function zeroPad(n: number, width = 2): string {
   return String(n).padStart(width, '0');
 }
 
-function slugify(title) {
+function slugify(title: string): string {
   return title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 }
 
@@ -41,7 +96,7 @@ function slugify(title) {
  * Find the .gsd/ directory starting from a project root.
  * Returns the absolute path or null if not found.
  */
-function findGsd2Root(startPath) {
+function findGsd2Root(startPath: string): string | null {
   if (path.basename(startPath) === '.gsd' && fs.existsSync(startPath)) {
     return startPath;
   }
@@ -57,8 +112,8 @@ function findGsd2Root(startPath) {
  * Each slice entry looks like:
  *   - [x] **S01: Title** `risk:medium` `depends:[S00]`
  */
-function parseSlicesFromRoadmap(content) {
-  const slices = [];
+function parseSlicesFromRoadmap(content: string): SliceInfo[] {
+  const slices: SliceInfo[] = [];
   const sectionMatch = content.match(/## Slices\n([\s\S]*?)(?:\n## |\n# |$)/);
   if (!sectionMatch) return slices;
 
@@ -74,7 +129,7 @@ function parseSlicesFromRoadmap(content) {
  * Parse the milestone title from the first heading in a GSD-2 ROADMAP.md.
  * Format: # M001: Title
  */
-function parseMilestoneTitle(content) {
+function parseMilestoneTitle(content: string): string | null {
   const m = content.match(/^# \w+:\s*(.+)/m);
   return m ? m[1].trim() : null;
 }
@@ -83,7 +138,7 @@ function parseMilestoneTitle(content) {
  * Parse a task title from a GSD-2 T##-PLAN.md.
  * Format: # T01: Title
  */
-function parseTaskTitle(content, fallback) {
+function parseTaskTitle(content: string, fallback: string): string {
   const m = content.match(/^# \w+:\s*(.+)/m);
   return m ? m[1].trim() : fallback;
 }
@@ -91,7 +146,7 @@ function parseTaskTitle(content, fallback) {
 /**
  * Parse the ## Description body from a GSD-2 task plan.
  */
-function parseTaskDescription(content) {
+function parseTaskDescription(content: string): string {
   const m = content.match(/## Description\n+([\s\S]+?)(?:\n## |\n# |$)/);
   return m ? m[1].trim() : '';
 }
@@ -99,19 +154,19 @@ function parseTaskDescription(content) {
 /**
  * Parse ## Must-Haves items from a GSD-2 task plan.
  */
-function parseTaskMustHaves(content) {
+function parseTaskMustHaves(content: string): string[] {
   const m = content.match(/## Must-Haves\n+([\s\S]+?)(?:\n## |\n# |$)/);
   if (!m) return [];
   return m[1].split('\n')
     .map(l => l.match(/^- \[[ x]\]\s*(.+)/))
-    .filter(Boolean)
+    .filter((match): match is RegExpMatchArray => match !== null)
     .map(match => match[1].trim());
 }
 
 /**
  * Read all task plan files from a GSD-2 tasks/ directory.
  */
-function readTasksDir(tasksDir) {
+function readTasksDir(tasksDir: string): TaskInfo[] {
   if (!fs.existsSync(tasksDir)) return [];
 
   return fs.readdirSync(tasksDir)
@@ -136,8 +191,8 @@ function readTasksDir(tasksDir) {
 /**
  * Parse a complete GSD-2 .gsd/ directory into a structured representation.
  */
-function parseGsd2(gsdDir) {
-  const data = {
+function parseGsd2(gsdDir: string): Gsd2Data {
+  const data: Gsd2Data = {
     projectContent: readOptional(path.join(gsdDir, 'PROJECT.md')),
     requirements: readOptional(path.join(gsdDir, 'REQUIREMENTS.md')),
     milestones: [],
@@ -157,7 +212,7 @@ function parseGsd2(gsdDir) {
 
     const sliceInfos = roadmapContent ? parseSlicesFromRoadmap(roadmapContent) : [];
 
-    const slices = sliceInfos.map(info => {
+    const slices: Slice[] = sliceInfos.map(info => {
       const sDir = path.join(slicesDir, info.id);
       const hasSDir = fs.existsSync(sDir);
       return {
@@ -188,7 +243,7 @@ function parseGsd2(gsdDir) {
 /**
  * Build a GSD v1 PLAN.md from a GSD-2 task.
  */
-function buildPlanMd(task, phasePrefix, planPrefix, phaseSlug, milestoneTitle) {
+function buildPlanMd(task: TaskInfo, phasePrefix: string, planPrefix: string, phaseSlug: string, milestoneTitle: string): string {
   const lines = [
     '---',
     `phase: "${phasePrefix}"`,
@@ -225,7 +280,7 @@ function buildPlanMd(task, phasePrefix, planPrefix, phaseSlug, milestoneTitle) {
  * Build a GSD v1 SUMMARY.md from a GSD-2 task summary.
  * Strips the GSD-2 frontmatter and preserves the body.
  */
-function buildSummaryMd(task, phasePrefix, planPrefix) {
+function buildSummaryMd(task: TaskInfo, phasePrefix: string, planPrefix: string): string {
   const raw = task.summary || '';
   // Strip GSD-2 frontmatter block (--- ... ---) if present
   const bodyMatch = raw.match(/^---[\s\S]*?---\n+([\s\S]*)$/);
@@ -245,7 +300,7 @@ function buildSummaryMd(task, phasePrefix, planPrefix) {
 /**
  * Build a GSD v1 XX-CONTEXT.md from a GSD-2 slice.
  */
-function buildContextMd(slice, phasePrefix) {
+function buildContextMd(slice: Slice, phasePrefix: string): string {
   const lines = [
     `# Phase ${phasePrefix} Context`,
     '',
@@ -263,7 +318,7 @@ function buildContextMd(slice, phasePrefix) {
 /**
  * Build the GSD v1 ROADMAP.md with milestone-sectioned format.
  */
-function buildRoadmapMd(milestones, phaseMap) {
+function buildRoadmapMd(milestones: Milestone[], phaseMap: PhaseMapEntry[]): string {
   const lines = ['# Roadmap', ''];
 
   for (const milestone of milestones) {
@@ -284,7 +339,7 @@ function buildRoadmapMd(milestones, phaseMap) {
 /**
  * Build the GSD v1 STATE.md reflecting the current position in the project.
  */
-function buildStateMd(phaseMap) {
+function buildStateMd(phaseMap: PhaseMapEntry[]): string {
   const currentEntry = phaseMap.find(p => !p.slice.done);
   const totalPhases = phaseMap.length;
   const donePhases = phaseMap.filter(p => p.slice.done).length;
@@ -340,8 +395,8 @@ function buildStateMd(phaseMap) {
  * Convert parsed GSD-2 data into a map of relative path → file content.
  * All paths are relative to the .planning/ root.
  */
-function buildPlanningArtifacts(gsd2Data) {
-  const artifacts = new Map();
+function buildPlanningArtifacts(gsd2Data: Gsd2Data): Map<string, string> {
+  const artifacts = new Map<string, string>();
 
   // Passthrough files
   artifacts.set('PROJECT.md', gsd2Data.projectContent || '# Project\n\n(Migrated from GSD-2)\n');
@@ -353,7 +408,7 @@ function buildPlanningArtifacts(gsd2Data) {
   artifacts.set('config.json', JSON.stringify({ version: 1 }, null, 2) + '\n');
 
   // Build sequential phase map: flatten Milestones → Slices into numbered phases
-  const phaseMap = [];
+  const phaseMap: PhaseMapEntry[] = [];
   let phaseNum = 1;
   for (const milestone of gsd2Data.milestones) {
     for (const slice of milestone.slices) {
@@ -365,8 +420,8 @@ function buildPlanningArtifacts(gsd2Data) {
   artifacts.set('ROADMAP.md', buildRoadmapMd(gsd2Data.milestones, phaseMap));
   artifacts.set('STATE.md', buildStateMd(phaseMap));
 
-  for (const { slice, phaseNum, milestoneTitle } of phaseMap) {
-    const prefix = zeroPad(phaseNum);
+  for (const { slice, phaseNum: pNum, milestoneTitle } of phaseMap) {
+    const prefix = zeroPad(pNum);
     const slug = slugify(slice.title);
     const dir = `phases/${prefix}-${slug}`;
 
@@ -402,7 +457,7 @@ function buildPlanningArtifacts(gsd2Data) {
 /**
  * Format a dry-run preview string for display before writing.
  */
-function buildPreview(gsd2Data, artifacts, projectDir) {
+function buildPreview(gsd2Data: Gsd2Data, artifacts: Map<string, string>, projectDir: string): string {
   const lines = ['Preview — files that will be created in .planning/:'];
 
   for (const rel of artifacts.keys()) {
@@ -421,8 +476,7 @@ function buildPreview(gsd2Data, artifacts, projectDir) {
   lines.push('');
   lines.push('Cannot migrate automatically:');
   lines.push('  - GSD-2 cost/token ledger (no v1 equivalent)');
-  const { formatGsdSlash, resolveRuntime } = require('./runtime-slash.cjs');
-  lines.push(`  - GSD-2 database state (rebuilt from files on first ${formatGsdSlash('health', resolveRuntime(projectDir))})`);
+  lines.push(`  - GSD-2 database state (rebuilt from files on first ${formatGsdSlash('health', resolveRuntime(projectDir)) as string})`);
   lines.push('  - VS Code extension state');
 
   return lines.join('\n');
@@ -433,7 +487,7 @@ function buildPreview(gsd2Data, artifacts, projectDir) {
 /**
  * Write all artifacts to the .planning/ directory.
  */
-function writePlanningDir(artifacts, planningRoot) {
+function writePlanningDir(artifacts: Map<string, string>, planningRoot: string): void {
   for (const [rel, content] of artifacts) {
     const absPath = path.join(planningRoot, rel);
     platformWriteSync(absPath, content);
@@ -446,9 +500,7 @@ function writePlanningDir(artifacts, planningRoot) {
  * Entry point called from gsd-tools.cjs.
  * Supports: --force, --dry-run, --path <dir>
  */
-function cmdFromGsd2(args, cwd, raw) {
-  const { output, error } = require('./core.cjs');
-
+function cmdFromGsd2(args: string[], cwd: string, raw: boolean): void {
   const force = args.includes('--force');
   const dryRun = args.includes('--dry-run');
 
@@ -459,15 +511,17 @@ function cmdFromGsd2(args, cwd, raw) {
 
   const gsdDir = findGsd2Root(projectDir);
   if (!gsdDir) {
-    return output({ success: false, error: `No .gsd/ directory found in ${projectDir}` }, raw);
+    output({ success: false, error: `No .gsd/ directory found in ${projectDir}` }, raw, undefined);
+    return;
   }
 
   const planningRoot = path.join(path.dirname(gsdDir), '.planning');
   if (fs.existsSync(planningRoot) && !force) {
-    return output({
+    output({
       success: false,
       error: `.planning/ already exists at ${planningRoot}. Pass --force to overwrite.`,
-    }, raw);
+    }, raw, undefined);
+    return;
   }
 
   const gsd2Data = parseGsd2(gsdDir);
@@ -477,21 +531,22 @@ function cmdFromGsd2(args, cwd, raw) {
   const preview = buildPreview(gsd2Data, artifacts, projectDir);
 
   if (dryRun) {
-    return output({ success: true, dryRun: true, preview }, raw);
+    output({ success: true, dryRun: true, preview }, raw, undefined);
+    return;
   }
 
   writePlanningDir(artifacts, planningRoot);
 
-  return output({
+  output({
     success: true,
     planningDir: planningRoot,
     filesWritten: artifacts.size,
     milestones: gsd2Data.milestones.length,
     preview,
-  }, raw);
+  }, raw, undefined);
 }
 
-module.exports = {
+export = {
   findGsd2Root,
   parseGsd2,
   buildPlanningArtifacts,

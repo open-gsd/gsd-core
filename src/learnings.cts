@@ -9,16 +9,61 @@
  * Storage format: { id, source_project, date, context, learning, tags, content_hash }
  * File naming: {id}.json
  * Deduplication: SHA-256 of learning text + source_project
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/learnings.cjs collapsed
+ * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only strict types are added.
  */
 
-'use strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import os from 'node:os';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import core = require('./core.cjs');
+const { output, error: coreError } = core;
+import { platformWriteSync } from './shell-command-projection.cjs';
 
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
-const os = require('os');
-const { output, error: coreError } = require('./core.cjs');
-const { platformWriteSync } = require('./shell-command-projection.cjs');
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+interface LearningRecord {
+  id: string;
+  source_project: string;
+  date: string;
+  context: string;
+  learning: string;
+  tags: string[];
+  content_hash: string;
+}
+
+interface WriteEntry {
+  source_project: string;
+  learning: string;
+  context?: string;
+  tags?: string[];
+}
+
+interface WriteOpts {
+  storeDir?: string;
+  dedupeIndex?: Map<string, string>;
+}
+
+interface WriteResult {
+  id: string;
+  created: boolean;
+  content_hash: string;
+}
+
+interface CopyResult {
+  total: number;
+  created: number;
+  skipped: number;
+}
+
+interface PruneResult {
+  removed: number;
+  kept: number;
+}
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -26,81 +71,41 @@ const DEFAULT_STORE_DIR = path.join(os.homedir(), '.gsd', 'knowledge');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/**
- * Get the store directory, allowing override for testing.
- * @param {object} [opts]
- * @param {string} [opts.storeDir] - Override store directory
- * @returns {string}
- */
-function getStoreDir(opts) {
+function getStoreDir(opts?: WriteOpts | { storeDir?: string }): string {
   return (opts && opts.storeDir) || DEFAULT_STORE_DIR;
 }
 
-/**
- * Ensure the store directory exists. Created on first write, not on install.
- * @param {string} dir
- */
-function ensureStoreDir(dir) {
+function ensureStoreDir(dir: string): void {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
 }
 
-/**
- * Generate a content hash for deduplication.
- * Uses SHA-256 of learning text combined with source_project.
- * @param {string} learning
- * @param {string} sourceProject
- * @returns {string}
- */
-function contentHash(learning, sourceProject) {
+function contentHash(learning: string, sourceProject: string): string {
   return crypto.createHash('sha256')
     .update(learning + '\n' + sourceProject)
     .digest('hex');
 }
 
-/**
- * Generate a unique ID based on timestamp + random suffix.
- * @returns {string}
- */
-function generateId() {
+function generateId(): string {
   const ts = Date.now().toString(36);
   const rand = crypto.randomBytes(4).toString('hex');
   return `${ts}-${rand}`;
 }
 
-/**
- * Read and parse a single learning JSON file.
- * Returns null (with stderr warning) for malformed files.
- * @param {string} filePath
- * @returns {object|null}
- */
-function readLearningFile(filePath) {
+function readLearningFile(filePath: string): LearningRecord | null {
   try {
     const content = fs.readFileSync(filePath, 'utf-8');
-    return JSON.parse(content);
+    return JSON.parse(content) as LearningRecord;
   } catch (err) {
-    process.stderr.write(`Warning: skipping malformed file ${filePath}: ${err.message}\n`);
+    process.stderr.write(`Warning: skipping malformed file ${filePath}: ${(err as Error).message}\n`);
     return null;
   }
 }
 
 // ─── CRUD Operations ─────────────────────────────────────────────────────────
 
-/**
- * Write a learning to the global store.
- * Deduplicates by content hash — same content from same project is not stored twice.
- *
- * @param {object} entry
- * @param {string} entry.source_project - Project name or path
- * @param {string} entry.learning - The learning text
- * @param {string} [entry.context] - Additional context
- * @param {string[]} [entry.tags] - Tags for querying
- * @param {object} [opts]
- * @param {string} [opts.storeDir] - Override store directory
- * @returns {{ id: string, created: boolean, content_hash: string }}
- */
-function learningsWrite(entry, opts) {
+function learningsWrite(entry: WriteEntry, opts?: WriteOpts): WriteResult {
   const dir = getStoreDir(opts);
   ensureStoreDir(dir);
 
@@ -108,17 +113,13 @@ function learningsWrite(entry, opts) {
 
   // #306: In bulk-import paths, callers may supply a pre-built dedupeIndex
   // (Map<content_hash, id>) to avoid the per-write O(N) store scan.
-  // When present, use it for the dedupe check instead of scanning the directory.
-  // After writing a new record, add it to the index so subsequent items in the
-  // same bulk operation dedupe against it.
-  // When absent (single-write path), fall back to the existing full-store scan.
   if (opts && opts.dedupeIndex) {
     const dedupeIndex = opts.dedupeIndex;
     if (dedupeIndex.has(hash)) {
-      return { id: dedupeIndex.get(hash), created: false, content_hash: hash };
+      return { id: dedupeIndex.get(hash) as string, created: false, content_hash: hash };
     }
     const id = generateId();
-    const record = {
+    const record: LearningRecord = {
       id,
       source_project: entry.source_project,
       date: new Date().toISOString(),
@@ -142,7 +143,7 @@ function learningsWrite(entry, opts) {
   }
 
   const id = generateId();
-  const record = {
+  const record: LearningRecord = {
     id,
     source_project: entry.source_project,
     date: new Date().toISOString(),
@@ -156,15 +157,7 @@ function learningsWrite(entry, opts) {
   return { id, created: true, content_hash: hash };
 }
 
-/**
- * Read a single learning by ID.
- *
- * @param {string} id
- * @param {object} [opts]
- * @param {string} [opts.storeDir] - Override store directory
- * @returns {object|null}
- */
-function learningsRead(id, opts) {
+function learningsRead(id: string, opts?: { storeDir?: string }): LearningRecord | null {
   if (!/^[a-z0-9]+-[a-f0-9]+$/.test(id)) return null;
   const dir = getStoreDir(opts);
   const filePath = path.join(dir, `${id}.json`);
@@ -172,19 +165,12 @@ function learningsRead(id, opts) {
   return readLearningFile(filePath);
 }
 
-/**
- * List all learnings, sorted by date (newest first).
- *
- * @param {object} [opts]
- * @param {string} [opts.storeDir] - Override store directory
- * @returns {object[]}
- */
-function learningsList(opts) {
+function learningsList(opts?: { storeDir?: string }): LearningRecord[] {
   const dir = getStoreDir(opts);
   if (!fs.existsSync(dir)) return [];
 
   const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
-  const results = [];
+  const results: LearningRecord[] = [];
   for (const file of files) {
     const record = readLearningFile(path.join(dir, file));
     if (record) results.push(record);
@@ -195,32 +181,15 @@ function learningsList(opts) {
   return results;
 }
 
-/**
- * Query learnings by tag.
- *
- * @param {object} query
- * @param {string} [query.tag] - Tag to filter by
- * @param {object} [opts]
- * @param {string} [opts.storeDir] - Override store directory
- * @returns {object[]}
- */
-function learningsQuery(query, opts) {
+function learningsQuery(query: { tag?: string }, opts?: { storeDir?: string }): LearningRecord[] {
   const all = learningsList(opts);
   if (query && query.tag) {
-    return all.filter(r => r.tags && r.tags.includes(query.tag));
+    return all.filter(r => r.tags && r.tags.includes(query.tag as string));
   }
   return all;
 }
 
-/**
- * Delete a learning by ID.
- *
- * @param {string} id
- * @param {object} [opts]
- * @param {string} [opts.storeDir] - Override store directory
- * @returns {boolean} true if deleted, false if not found
- */
-function learningsDelete(id, opts) {
+function learningsDelete(id: string, opts?: { storeDir?: string }): boolean {
   if (!/^[a-z0-9]+-[a-f0-9]+$/.test(id)) return false;
   const dir = getStoreDir(opts);
   const filePath = path.join(dir, `${id}.json`);
@@ -229,24 +198,7 @@ function learningsDelete(id, opts) {
   return true;
 }
 
-/**
- * Copy learnings from a project's LEARNINGS.md into the global store.
- * Parses markdown sections as individual learnings. Deduplicates by content hash.
- *
- * Expected LEARNINGS.md format:
- *   ## Section Title
- *   Learning content paragraph(s)...
- *
- *   ## Another Section
- *   More content...
- *
- * @param {string} planningDir - Path to .planning/ directory (or directory containing LEARNINGS.md)
- * @param {object} [opts]
- * @param {string} [opts.storeDir] - Override store directory
- * @param {string} [opts.sourceProject] - Project name (defaults to directory basename)
- * @returns {{ total: number, created: number, skipped: number }}
- */
-function learningsCopyFromProject(planningDir, opts) {
+function learningsCopyFromProject(planningDir: string, opts?: WriteOpts & { sourceProject?: string }): CopyResult {
   const learningsPath = path.join(planningDir, 'LEARNINGS.md');
   if (!fs.existsSync(learningsPath)) {
     return { total: 0, created: 0, skipped: 0 };
@@ -260,7 +212,7 @@ function learningsCopyFromProject(planningDir, opts) {
   // O(K*N) -> O(N+K).
   const dir = getStoreDir(opts);
   ensureStoreDir(dir);
-  const dedupeIndex = new Map();
+  const dedupeIndex = new Map<string, string>();
   for (const file of fs.readdirSync(dir).filter(f => f.endsWith('.json'))) {
     const existing = readLearningFile(path.join(dir, file));
     // First-seen-wins, matching the legacy scan path's first-match return so the
@@ -302,15 +254,7 @@ function learningsCopyFromProject(planningDir, opts) {
   return { total: created + skipped, created, skipped };
 }
 
-/**
- * Prune learnings older than a given threshold.
- *
- * @param {string} olderThan - Duration string like "90d", "30d", "7d"
- * @param {object} [opts]
- * @param {string} [opts.storeDir] - Override store directory
- * @returns {{ removed: number, kept: number }}
- */
-function learningsPrune(olderThan, opts) {
+function learningsPrune(olderThan: string, opts?: { storeDir?: string }): PruneResult {
   const match = /^(\d+)d$/.exec(olderThan);
   if (!match) {
     throw new Error(`Invalid duration format: "${olderThan}" — expected format like "90d"`);
@@ -345,66 +289,40 @@ function learningsPrune(olderThan, opts) {
 
 // ─── CLI Command Handlers ────────────────────────────────────────────────────
 
-/**
- * Handle `gsd-tools learnings list`
- * @param {boolean} raw - Raw output flag
- */
-function cmdLearningsList(raw) {
+function cmdLearningsList(raw: boolean): void {
   const results = learningsList();
-  output({ learnings: results, count: results.length }, raw);
+  output({ learnings: results, count: results.length }, raw, undefined);
 }
 
-/**
- * Handle `gsd-tools learnings query --tag <tag>`
- * @param {string} tag
- * @param {boolean} raw - Raw output flag
- */
-function cmdLearningsQuery(tag, raw) {
+function cmdLearningsQuery(tag: string, raw: boolean): void {
   const results = learningsQuery({ tag });
-  output({ learnings: results, count: results.length, tag }, raw);
+  output({ learnings: results, count: results.length, tag }, raw, undefined);
 }
 
-/**
- * Handle `gsd-tools learnings copy`
- * @param {string} cwd - Current working directory
- * @param {boolean} raw - Raw output flag
- */
-function cmdLearningsCopy(cwd, raw) {
-  const planningDir = path.join(cwd, '.planning');
-  const result = learningsCopyFromProject(planningDir);
-  output(result, raw);
+function cmdLearningsCopy(cwd: string, raw: boolean): void {
+  const planDir = path.join(cwd, '.planning');
+  const result = learningsCopyFromProject(planDir);
+  output(result, raw, undefined);
 }
 
-/**
- * Handle `gsd-tools learnings prune --older-than <duration>`
- * @param {string} olderThan - Duration string like "90d"
- * @param {boolean} raw - Raw output flag
- */
-function cmdLearningsPrune(olderThan, raw) {
+function cmdLearningsPrune(olderThan: string, raw: boolean): void {
   try {
     const result = learningsPrune(olderThan);
-    output(result, raw);
+    output(result, raw, undefined);
   } catch (err) {
-    coreError(err.message);
+    coreError((err as Error).message);
   }
 }
 
-/**
- * Handle `gsd-tools learnings delete <id>`
- * @param {string} id
- * @param {boolean} raw - Raw output flag
- */
-function cmdLearningsDelete(id, raw) {
+function cmdLearningsDelete(id: string, raw: boolean): void {
   if (!/^[a-z0-9]+-[a-f0-9]+$/.test(id)) {
     coreError(`Invalid learning ID: "${id}"`);
   }
   const deleted = learningsDelete(id);
-  output({ id, deleted }, raw);
+  output({ id, deleted }, raw, undefined);
 }
 
-// ─── Exports ─────────────────────────────────────────────────────────────────
-
-module.exports = {
+export = {
   learningsWrite,
   learningsRead,
   learningsList,

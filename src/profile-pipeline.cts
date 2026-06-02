@@ -6,25 +6,100 @@
  *   - scan-sessions: list all projects and sessions
  *   - extract-messages: extract user messages from a specific project
  *   - profile-sample: multi-project sampling with recency weighting
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/profile-pipeline.cjs collapsed
+ * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only strict types are added.
  */
 
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
-const readline = require('readline');
-const { output, error, reapStaleTempFiles } = require('./core.cjs');
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import readline from 'node:readline';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import core = require('./core.cjs');
+const { output, error, reapStaleTempFiles } = core;
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface SessionEntry {
+  sessionId: string;
+  filePath: string;
+  size: number;
+  modified: Date;
+}
+
+interface IndexEntry {
+  sessionId?: string;
+  summary?: string;
+  messageCount?: number;
+  created?: string;
+}
+
+interface IndexData {
+  originalPath: string | null;
+  entries: Map<string, IndexEntry>;
+}
+
+interface ProjectInfo {
+  name: string;
+  directory: string;
+  sessionCount: number;
+  totalSize: number;
+  totalSizeHuman: string;
+  lastActive: string;
+  dateRange: { first: string; last: string };
+  sessions?: SessionDetail[];
+}
+
+interface SessionDetail {
+  sessionId: string;
+  size: number;
+  sizeHuman: string;
+  modified: string;
+  summary?: string;
+  messageCount?: number;
+  created?: string;
+}
+
+interface ExtractedMessage {
+  sessionId: string;
+  projectPath: string | null;
+  timestamp: string | null;
+  content: string;
+}
+
+interface SampleMessage {
+  sessionId: string;
+  projectName: string;
+  projectPath: string | null;
+  timestamp: string | null;
+  content: string;
+}
+
+interface JsonlRecord {
+  type?: string;
+  userType?: string;
+  isMeta?: boolean;
+  isSidechain?: boolean;
+  message?: {
+    content?: unknown;
+  };
+  cwd?: string;
+  timestamp?: string;
+}
 
 // ─── Session I/O Helpers ──────────────────────────────────────────────────────
 
-function getSessionsDir(overridePath) {
+function getSessionsDir(overridePath?: string | null): string | null {
   const dir = overridePath || path.join(os.homedir(), '.claude', 'projects');
   if (!fs.existsSync(dir)) return null;
   return dir;
 }
 
-function scanProjectDir(projectDirPath) {
+function scanProjectDir(projectDirPath: string): SessionEntry[] {
   const entries = fs.readdirSync(projectDirPath);
-  const sessions = [];
+  const sessions: SessionEntry[] = [];
 
   for (const entry of entries) {
     if (!entry.endsWith('.jsonl')) continue;
@@ -40,16 +115,16 @@ function scanProjectDir(projectDirPath) {
     });
   }
 
-  sessions.sort((a, b) => b.modified - a.modified);
+  sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
   return sessions;
 }
 
-function readSessionIndex(projectDirPath) {
+function readSessionIndex(projectDirPath: string): IndexData {
   try {
     const indexPath = path.join(projectDirPath, 'sessions-index.json');
     const raw = fs.readFileSync(indexPath, 'utf-8');
-    const parsed = JSON.parse(raw);
-    const entries = new Map();
+    const parsed = JSON.parse(raw) as { originalPath?: string; entries?: IndexEntry[] };
+    const entries = new Map<string, IndexEntry>();
     for (const entry of (parsed.entries || [])) {
       if (entry.sessionId) {
         entries.set(entry.sessionId, entry);
@@ -61,7 +136,7 @@ function readSessionIndex(projectDirPath) {
   }
 }
 
-function getProjectName(projectDirName, indexData, firstRecordCwd) {
+function getProjectName(projectDirName: string, indexData: IndexData, firstRecordCwd?: string | null): string {
   if (indexData && indexData.originalPath) {
     return path.basename(indexData.originalPath);
   }
@@ -71,14 +146,14 @@ function getProjectName(projectDirName, indexData, firstRecordCwd) {
   return projectDirName;
 }
 
-function formatBytes(bytes) {
+function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)} MB`;
   return `${(bytes / 1073741824).toFixed(1)} GB`;
 }
 
-function formatProjectTable(projects) {
+function formatProjectTable(projects: ProjectInfo[]): string {
   let out = '';
   out += 'Project'.padEnd(35) + 'Sessions'.padEnd(10) + 'Size'.padEnd(10) + 'Last Active\n';
   out += '-'.repeat(75) + '\n';
@@ -90,7 +165,7 @@ function formatProjectTable(projects) {
   return out;
 }
 
-function formatSessionTable(sessions) {
+function formatSessionTable(sessions: SessionDetail[]): string {
   let out = '';
   out += '  Session ID'.padEnd(42) + 'Size'.padEnd(10) + 'Modified\n';
   out += '  ' + '-'.repeat(70) + '\n';
@@ -104,7 +179,7 @@ function formatSessionTable(sessions) {
 
 // ─── Message Extraction Helpers ───────────────────────────────────────────────
 
-function isGenuineUserMessage(record) {
+function isGenuineUserMessage(record: JsonlRecord): boolean {
   if (record.type !== 'user') return false;
   if (record.userType !== 'external') return false;
   if (record.isMeta === true) return false;
@@ -119,26 +194,26 @@ function isGenuineUserMessage(record) {
   return true;
 }
 
-function truncateContent(content, maxLen = 2000) {
+function truncateContent(content: string, maxLen = 2000): string {
   if (content.length <= maxLen) return content;
   return content.substring(0, maxLen) + '... [truncated]';
 }
 
-async function streamExtractMessages(filePath, filterFn, maxMessages = 300) {
+async function streamExtractMessages(filePath: string, filterFn: (r: JsonlRecord) => boolean, maxMessages = 300): Promise<ExtractedMessage[]> {
   const rl = readline.createInterface({
     input: fs.createReadStream(filePath),
     crlfDelay: Infinity,
     terminal: false,
   });
 
-  const messages = [];
+  const messages: ExtractedMessage[] = [];
   const sessionId = path.basename(filePath, '.jsonl');
 
   for await (const line of rl) {
     if (messages.length >= maxMessages) break;
-    let record;
+    let record: JsonlRecord;
     try {
-      record = JSON.parse(line);
+      record = JSON.parse(line) as JsonlRecord;
     } catch {
       continue;
     }
@@ -147,7 +222,8 @@ async function streamExtractMessages(filePath, filterFn, maxMessages = 300) {
       sessionId,
       projectPath: record.cwd || null,
       timestamp: record.timestamp || null,
-      content: truncateContent(record.message.content),
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string
+      content: truncateContent(String(record.message?.content ?? '')),
     });
   }
 
@@ -156,7 +232,7 @@ async function streamExtractMessages(filePath, filterFn, maxMessages = 300) {
 
 // ─── Commands ─────────────────────────────────────────────────────────────────
 
-async function cmdScanSessions(overridePath, options, raw) {
+function cmdScanSessions(overridePath: string | null | undefined, options: { json?: boolean; verbose?: boolean }, raw: boolean): void {
   const sessionsDir = getSessionsDir(overridePath);
   if (!sessionsDir) {
     const searchedPath = overridePath || '~/.claude/projects';
@@ -165,10 +241,10 @@ async function cmdScanSessions(overridePath, options, raw) {
 
   process.stderr.write('Reading your session history (read-only, nothing is modified or sent anywhere)...\n');
 
-  let projectDirs;
+  let projectDirs: string[];
   try {
-    projectDirs = fs.readdirSync(sessionsDir).filter(entry => {
-      const fullPath = path.join(sessionsDir, entry);
+    projectDirs = fs.readdirSync(sessionsDir as string).filter(entry => {
+      const fullPath = path.join(sessionsDir as string, entry);
       try {
         return fs.statSync(fullPath).isDirectory();
       } catch {
@@ -176,13 +252,14 @@ async function cmdScanSessions(overridePath, options, raw) {
       }
     });
   } catch (err) {
-    error(`Cannot read sessions directory: ${err.message}`);
+    error(`Cannot read sessions directory: ${(err as Error).message}`);
+    return;
   }
 
-  const projects = [];
+  const projects: ProjectInfo[] = [];
 
   for (const dirName of projectDirs) {
-    const projectPath = path.join(sessionsDir, dirName);
+    const projectPath = path.join(sessionsDir as string, dirName);
     const sessions = scanProjectDir(projectPath);
     if (sessions.length === 0) continue;
 
@@ -198,7 +275,7 @@ async function cmdScanSessions(overridePath, options, raw) {
     const oldest = sessions[sessions.length - 1].modified.toISOString();
     const newest = sessions[0].modified.toISOString();
 
-    const project = {
+    const project: ProjectInfo = {
       name: projectName,
       directory: dirName,
       sessionCount: sessions.length,
@@ -211,7 +288,7 @@ async function cmdScanSessions(overridePath, options, raw) {
     if (options.verbose) {
       project.sessions = sessions.map(s => {
         const indexed = indexData.entries.get(s.sessionId);
-        const session = {
+        const session: SessionDetail = {
           sessionId: s.sessionId,
           size: s.size,
           sizeHuman: formatBytes(s.size),
@@ -232,7 +309,7 @@ async function cmdScanSessions(overridePath, options, raw) {
   projects.sort((a, b) => b.dateRange.last.localeCompare(a.dateRange.last));
 
   if (options.json || raw) {
-    output(projects, raw);
+    output(projects, raw, undefined);
   } else {
     process.stdout.write('\n' + formatProjectTable(projects));
     if (options.verbose) {
@@ -248,17 +325,17 @@ async function cmdScanSessions(overridePath, options, raw) {
   }
 }
 
-async function cmdExtractMessages(projectArg, options, raw, overridePath) {
+async function cmdExtractMessages(projectArg: string, options: { sessionId?: string; limit?: number }, raw: boolean, overridePath?: string | null): Promise<void> {
   const sessionsDir = getSessionsDir(overridePath);
   if (!sessionsDir) {
     const searchedPath = overridePath || '~/.claude/projects';
     error(`No Claude Code sessions found at ${searchedPath}.${overridePath ? '' : ' Is Claude Code installed?'}`);
   }
 
-  let projectDirs;
+  let projectDirs: string[];
   try {
-    projectDirs = fs.readdirSync(sessionsDir).filter(entry => {
-      const fullPath = path.join(sessionsDir, entry);
+    projectDirs = fs.readdirSync(sessionsDir as string).filter(entry => {
+      const fullPath = path.join(sessionsDir as string, entry);
       try {
         return fs.statSync(fullPath).isDirectory();
       } catch {
@@ -266,11 +343,12 @@ async function cmdExtractMessages(projectArg, options, raw, overridePath) {
       }
     });
   } catch (err) {
-    error(`Cannot read sessions directory: ${err.message}`);
+    error(`Cannot read sessions directory: ${(err as Error).message}`);
+    return;
   }
 
-  let matchedDir = null;
-  let matchedName = null;
+  let matchedDir: string | null = null;
+  let matchedName: string | null = null;
 
   for (const dirName of projectDirs) {
     if (dirName === projectArg) {
@@ -285,9 +363,9 @@ async function cmdExtractMessages(projectArg, options, raw, overridePath) {
     if (matches.length === 1) {
       matchedDir = matches[0];
     } else if (matches.length > 1) {
-      const exactNameMatches = [];
+      const exactNameMatches: { dirName: string; name: string }[] = [];
       for (const dirName of matches) {
-        const indexData = readSessionIndex(path.join(sessionsDir, dirName));
+        const indexData = readSessionIndex(path.join(sessionsDir as string, dirName));
         const pName = getProjectName(dirName, indexData);
         if (pName.toLowerCase() === lowerArg) {
           exactNameMatches.push({ dirName, name: pName });
@@ -298,7 +376,7 @@ async function cmdExtractMessages(projectArg, options, raw, overridePath) {
         matchedName = exactNameMatches[0].name;
       } else {
         const names = matches.map(d => {
-          const idx = readSessionIndex(path.join(sessionsDir, d));
+          const idx = readSessionIndex(path.join(sessionsDir as string, d));
           return `  - ${getProjectName(d, idx)} (${d})`;
         });
         error(`Multiple projects match "${projectArg}":\n${names.join('\n')}\nBe more specific.`);
@@ -308,13 +386,14 @@ async function cmdExtractMessages(projectArg, options, raw, overridePath) {
 
   if (!matchedDir) {
     const available = projectDirs.map(d => {
-      const idx = readSessionIndex(path.join(sessionsDir, d));
+      const idx = readSessionIndex(path.join(sessionsDir as string, d));
       return `  - ${getProjectName(d, idx)}`;
     });
     error(`No project matching "${projectArg}". Available projects:\n${available.join('\n')}`);
+    return;
   }
 
-  const projectPath = path.join(sessionsDir, matchedDir);
+  const projectPath = path.join(sessionsDir as string, matchedDir);
   const indexData = readSessionIndex(projectPath);
   const projectName = matchedName || getProjectName(matchedDir, indexData);
 
@@ -363,7 +442,7 @@ async function cmdExtractMessages(projectArg, options, raw, overridePath) {
       sessionsProcessed++;
     } catch (err) {
       sessionsSkipped++;
-      process.stderr.write(`\nWarning: Skipped session ${session.sessionId}: ${err.message}\n`);
+      process.stderr.write(`\nWarning: Skipped session ${session.sessionId}: ${(err as Error).message}\n`);
     }
   }
 
@@ -385,11 +464,11 @@ async function cmdExtractMessages(projectArg, options, raw, overridePath) {
     process.stdout.write(JSON.stringify(result, null, 2));
     process.exit(1);
   } else {
-    output(result, raw);
+    output(result, raw, undefined);
   }
 }
 
-async function cmdProfileSample(overridePath, options, raw) {
+async function cmdProfileSample(overridePath: string | null | undefined, options: { limit?: number; maxChars?: number; maxPerProject?: number }, raw: boolean): Promise<void> {
   const sessionsDir = getSessionsDir(overridePath);
   if (!sessionsDir) {
     const searchedPath = overridePath || '~/.claude/projects';
@@ -401,10 +480,10 @@ async function cmdProfileSample(overridePath, options, raw) {
   const limit = options.limit || 150;
   const maxChars = options.maxChars || 500;
 
-  let projectDirs;
+  let projectDirs: string[];
   try {
-    projectDirs = fs.readdirSync(sessionsDir).filter(entry => {
-      const fullPath = path.join(sessionsDir, entry);
+    projectDirs = fs.readdirSync(sessionsDir as string).filter(entry => {
+      const fullPath = path.join(sessionsDir as string, entry);
       try {
         return fs.statSync(fullPath).isDirectory();
       } catch {
@@ -412,16 +491,25 @@ async function cmdProfileSample(overridePath, options, raw) {
       }
     });
   } catch (err) {
-    error(`Cannot read sessions directory: ${err.message}`);
+    error(`Cannot read sessions directory: ${(err as Error).message}`);
+    return;
   }
 
   if (projectDirs.length === 0) {
     error('No project directories found in sessions directory.');
   }
 
-  const projectMeta = [];
+  interface ProjectMeta {
+    dirName: string;
+    projectPath: string;
+    sessions: SessionEntry[];
+    projectName: string;
+    lastActive: Date;
+  }
+
+  const projectMeta: ProjectMeta[] = [];
   for (const dirName of projectDirs) {
-    const projectPath = path.join(sessionsDir, dirName);
+    const projectPath = path.join(sessionsDir as string, dirName);
     const sessions = scanProjectDir(projectPath);
     if (sessions.length === 0) continue;
     const indexData = readSessionIndex(projectPath);
@@ -430,7 +518,7 @@ async function cmdProfileSample(overridePath, options, raw) {
     projectMeta.push({ dirName, projectPath, sessions, projectName, lastActive });
   }
 
-  projectMeta.sort((a, b) => b.lastActive - a.lastActive);
+  projectMeta.sort((a, b) => b.lastActive.getTime() - a.lastActive.getTime());
 
   const projectCount = projectMeta.length;
   if (projectCount === 0) {
@@ -440,9 +528,9 @@ async function cmdProfileSample(overridePath, options, raw) {
   const perProjectCap = options.maxPerProject || Math.max(5, Math.floor(limit / projectCount));
 
   const recencyThreshold = Date.now() - 30 * 24 * 60 * 60 * 1000;
-  const allMessages = [];
+  const allMessages: SampleMessage[] = [];
   let skippedContextDumps = 0;
-  const projectBreakdown = [];
+  const projectBreakdown: { project: string; messages: number; sessions: number }[] = [];
 
   for (const proj of projectMeta) {
     if (allMessages.length >= limit) break;
@@ -529,10 +617,10 @@ async function cmdProfileSample(overridePath, options, raw) {
     project_breakdown: projectBreakdown,
   };
 
-  output(result, raw);
+  output(result, raw, undefined);
 }
 
-module.exports = {
+export = {
   cmdScanSessions,
   cmdExtractMessages,
   cmdProfileSample,

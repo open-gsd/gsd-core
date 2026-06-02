@@ -100,6 +100,13 @@ export default tseslint.config(
       'get-shit-done/bin/lib/workstream-inventory.cjs',
       'get-shit-done/bin/lib/roadmap-command-router.cjs',
       'get-shit-done/bin/lib/state-command-router.cjs',
+      'get-shit-done/bin/lib/gap-checker.cjs',
+      'get-shit-done/bin/lib/docs.cjs',
+      'get-shit-done/bin/lib/check-command-router.cjs',
+      'get-shit-done/bin/lib/frontmatter.cjs',
+      'get-shit-done/bin/lib/learnings.cjs',
+      'get-shit-done/bin/lib/gsd2-import.cjs',
+      'get-shit-done/bin/lib/profile-pipeline.cjs',
     ],
   },
 
