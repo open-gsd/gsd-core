@@ -96,6 +96,11 @@ jobs:
           node-version: 24
       - name: Install dev dependencies
         run: npm ci --ignore-scripts
+      # ADR-457 build-at-publish: bin/lib/*.cjs are gitignored, built by tsc.
+      # --ignore-scripts skips the prepare build, but lint:skill-deps (and other
+      # lint scripts) require() the built modules — so build them explicitly.
+      - name: Build runtime lib (required by lint scripts)
+        run: npm run build:lib
       - name: Lint — ESLint (source-grep + timing + no-only-tests + quality)
         run: npx eslint . --cache --cache-location node_modules/.cache/eslint/
       - name: Lint — skill dependency graph

@@ -212,7 +212,11 @@ if (fs.existsSync(LOCKFILE)) {
 // ---------------------------------------------------------------------------
 if (fs.existsSync(LOCKFILE)) {
   try {
-    const res = spawnSync(npmCmd, ['ci', '--dry-run'], {
+    // --ignore-scripts: this is a lockfile-vs-package.json sync check, not a
+    // build. Without it, npm would run the `prepare` lifecycle (build:lib via
+    // tsc) — which fails when check:env runs before deps are installed (tsc
+    // absent), misreporting an out-of-sync lockfile. ADR-457 build-at-publish.
+    const res = spawnSync(npmCmd, ['ci', '--dry-run', '--ignore-scripts'], {
       cwd: PROJECT_ROOT,
       encoding: 'utf8',
       shell: process.platform === 'win32',
