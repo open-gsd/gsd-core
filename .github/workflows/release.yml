@@ -238,6 +238,10 @@ jobs:
             --title "v${PRE_VERSION}" \
             --generate-notes \
             --prerelease
+          # Reformat the auto-generated notes into the curated
+          # Install + Feature/Enhancement/Fix format.
+          node scripts/release-notes/format-github-release-notes.cjs \
+            --tag "v${PRE_VERSION}" --prerelease --apply
 
       - name: Verify publish
         if: ${{ !inputs.dry_run }}
@@ -392,6 +396,10 @@ jobs:
             --title "v${VERSION}" \
             --generate-notes \
             --latest
+          # Reformat the auto-generated notes into the curated
+          # Install + Feature/Enhancement/Fix format.
+          node scripts/release-notes/format-github-release-notes.cjs \
+            --tag "v${VERSION}" --latest --apply
 
       - name: Clean up next dist-tag
         if: ${{ !inputs.dry_run }}

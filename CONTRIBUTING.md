@@ -207,6 +207,27 @@ Fragments are consolidated into `CHANGELOG.md` at release time by the release wo
 
 **Opt-out:** PRs with no user-facing impact (test refactors, lint config changes, CI tweaks, formatting-only changes) can add the `no-changelog` label. The lint honors it. When unsure whether a change is user-facing, **add the fragment**.
 
+### Release notes formatting
+
+GitHub release notes are generated automatically. The release and hotfix
+workflows first create the release with `gh release create --generate-notes`,
+then run `scripts/release-notes/format-github-release-notes.cjs --apply` to
+rewrite the body into the project's curated format: an **Install** block,
+followed by **What's Changed** grouped into **Feature** / **Enhancement** /
+**Fix** sections (classified by each PR's conventional-commit title prefix —
+`feat` → Feature, `fix` → Fix, everything else → Enhancement), then
+**New Contributors** and the **Full Changelog** link.
+
+To re-format an existing release by hand (e.g. backfilling an older release):
+
+```bash
+node scripts/release-notes/format-github-release-notes.cjs \
+  --tag vX.Y.Z --repo open-gsd/gsd-core --apply
+```
+
+Omit `--apply` to print the reformatted body to stdout for review without
+publishing.
+
 ## Documentation Updates — Update the Relevant Docs
 
 If your PR adds, changes, deprecates, or removes user-visible behavior, you **must** update the relevant documentation in `docs/`. CI will fail any PR whose changeset fragment is typed `Added`, `Changed`, `Deprecated`, or `Removed` without also modifying at least one file under `docs/` ([#3213](https://github.com/open-gsd/gsd-core/issues/3213)).

@@ -376,6 +376,10 @@ jobs:
               --generate-notes \
               --latest
           fi
+          # Reformat the auto-generated notes into the curated
+          # Install + Feature/Enhancement/Fix format.
+          node scripts/release-notes/format-github-release-notes.cjs \
+            --tag "v${VERSION}" --latest --apply
 
       - name: Create PR to merge hotfix back to main
         if: ${{ !inputs.dry_run }}
