@@ -215,11 +215,11 @@ Read granularity from config.json. Granularity controls compression tolerance.
 
 | Granularity | Typical Phases | What It Means |
 |-------------|----------------|---------------|
-| Coarse | 3-5 | Combine aggressively, critical path only |
-| Standard | 5-8 | Balanced grouping |
-| Fine | 8-12 | Let natural boundaries stand |
+| Coarse | 2-4 | Combine aggressively, critical path only |
+| Standard | 4-6 | Balanced grouping (tightened from 5-8 in 2026-05; downstream observation that the prior baseline encouraged ~15-20% over-fragmentation, often manifesting as thin "maintenance" phases that would have been better folded into a neighbor) |
+| Fine | 6-10 | Let natural boundaries stand |
 
-**Key:** Derive phases from work, then apply granularity as compression guidance. Don't pad small projects or compress complex ones.
+**Key:** Derive phases from work, then apply granularity as compression guidance. Don't pad small projects or compress complex ones. When a phase you are about to write would have a single requirement, an internal-quality goal ("improve X", "refactor Y", "add tests for Z"), or success criteria that read as tasks rather than user-observable outcomes, prefer to fold it into the most-related neighbor instead of creating a standalone phase.
 
 ## Good Phase Patterns
 

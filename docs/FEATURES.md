@@ -208,7 +208,7 @@
 **Functional Requirements:**
 - Questions adapt based on detected project type (web app, CLI, mobile, API, etc.)
 - Research agents have web search capability for current ecosystem information
-- Granularity setting controls phase count: `coarse` (3-5), `standard` (5-8), `fine` (8-12)
+- Granularity setting controls phase count: `coarse` (2-4), `standard` (4-6), `fine` (6-10)
 - `--auto` mode extracts all information from the provided document without interactive questioning
 - Existing codebase context (from `/gsd-map-codebase`) is loaded if present
 
