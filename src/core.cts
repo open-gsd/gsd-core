@@ -1203,9 +1203,9 @@ function getRoadmapPhaseInternal(cwd: string, phaseNum: unknown): RoadmapPhaseRe
  *
  * Priority:
  *   1. GSD_AGENTS_DIR env var (explicit override, any runtime)
- *   2. For claude runtime: __dirname-relative path (agents/ sibling of get-shit-done/)
+ *   2. For claude runtime: __dirname-relative path (agents/ sibling of gsd-core/)
  *      This is correct for both repo runs and real installs (the runtime config dir's
- *      agents/ folder) because gsd-tools.cjs lives inside get-shit-done/bin/ in both cases.
+ *      agents/ folder) because gsd-tools.cjs lives inside gsd-core/bin/ in both cases.
  *   3. For non-claude runtimes: getGlobalConfigDir(runtime)/agents
  *
  * @param runtime - the active runtime name; defaults to GSD_RUNTIME env, then 'claude'

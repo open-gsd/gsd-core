@@ -23,7 +23,7 @@ const path = require('path');
 const os = require('os');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 
-const MODEL_PROFILES = require('../get-shit-done/bin/lib/model-profiles.cjs').MODEL_PROFILES;
+const MODEL_PROFILES = require('../gsd-core/bin/lib/model-profiles.cjs').MODEL_PROFILES;
 const EXPECTED_AGENTS = Object.keys(MODEL_PROFILES);
 
 /**
