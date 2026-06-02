@@ -46,10 +46,6 @@ function writeConfig(projectDir, config) {
   fs.writeFileSync(path.join(planningDir, 'config.json'), JSON.stringify(config, null, 2));
 }
 
-function rmr(p) {
-  try { fs.rmSync(p, { recursive: true, force: true }); } catch { /* noop */ }
-}
-
 // ─── Export check ────────────────────────────────────────────────────────────
 
 describe('#68 exports: resolveGranularityInternal and VALID_GRANULARITIES are exported', () => {
@@ -98,7 +94,7 @@ describe('#68 config-schema: granularities.<phase_type> validation', () => {
 describe('#68 resolver: granularities.<phase_type> overrides global granularity', () => {
   let projectDir;
   beforeEach(() => { projectDir = makeTmp('resolver'); });
-  afterEach(() => { rmr(projectDir); });
+  afterEach(() => { cleanup(projectDir); });
 
   test('per-phase override wins: granularities.planning=fine resolves to fine', () => {
     writeConfig(projectDir, {
@@ -143,7 +139,7 @@ describe('#68 resolver: granularities.<phase_type> overrides global granularity'
 describe('#68 resolver: invalid per-phase value falls through to global (typo safety)', () => {
   let projectDir;
   beforeEach(() => { projectDir = makeTmp('invalid'); });
-  afterEach(() => { rmr(projectDir); });
+  afterEach(() => { cleanup(projectDir); });
 
   test('invalid value ultra falls through to global granularity', () => {
     writeConfig(projectDir, {
@@ -168,7 +164,7 @@ describe('#68 resolver: invalid per-phase value falls through to global (typo sa
 describe('#68 resolver: malformed granularities value does not throw', () => {
   let projectDir;
   beforeEach(() => { projectDir = makeTmp('malformed'); });
-  afterEach(() => { rmr(projectDir); });
+  afterEach(() => { cleanup(projectDir); });
 
   test('granularities as a string does not throw, returns global fallback', () => {
     writeConfig(projectDir, {
@@ -203,7 +199,7 @@ describe('#68 resolver: malformed granularities value does not throw', () => {
 describe('#68 backward-compat: no granularities key resolves identically to pre-feature global', () => {
   let projectDir;
   beforeEach(() => { projectDir = makeTmp('compat'); });
-  afterEach(() => { rmr(projectDir); });
+  afterEach(() => { cleanup(projectDir); });
 
   test('top-level granularity=fine resolves to fine for all six phase types (no granularities key)', () => {
     writeConfig(projectDir, {
@@ -229,7 +225,7 @@ describe('#68 backward-compat: no granularities key resolves identically to pre-
 describe('#68 resolver: global fallback precedence chain', () => {
   let projectDir;
   beforeEach(() => { projectDir = makeTmp('precedence'); });
-  afterEach(() => { rmr(projectDir); });
+  afterEach(() => { cleanup(projectDir); });
 
   test('top-level granularity honored when present', () => {
     writeConfig(projectDir, {
