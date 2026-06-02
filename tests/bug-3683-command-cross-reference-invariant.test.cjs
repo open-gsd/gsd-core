@@ -24,7 +24,10 @@ function stripFrontmatter(src) {
 
 // Word-boundary lookbehind matching fix-slash-commands.cjs buildColonPattern / buildPattern
 // Excludes path-y characters (~, ., /) so `~/gsd-workspaces`, `./gsd-foo`, `path/gsd-bar` don't match.
-const REF_PATTERN = /(?<![a-zA-Z0-9_~./-])\/gsd[:-]([a-zA-Z0-9_-]+)/g;
+// Trailing `(?![\w-]*\/)` rejects filesystem path segments like `${VAR}/gsd-core/bin` (the
+// runtime-launcher shim) where a non-path char (e.g. `}`) precedes `/gsd-core/` — those are
+// directory paths to the gsd-core/ runtime, not slash-command references (#604 rename).
+const REF_PATTERN = /(?<![a-zA-Z0-9_~./-])\/gsd[:-]([a-zA-Z0-9_-]+)(?![\w-]*\/)/g;
 
 describe('bug-3683 command cross-reference invariant', () => {
   test('all /gsd:<X> and /gsd-<X> body refs resolve to known command base-names', () => {
