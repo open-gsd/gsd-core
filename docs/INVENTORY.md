@@ -8,6 +8,8 @@
 - This file enumerates every shipped surface across all six families (agents, commands, workflows, references, CLI modules, hooks). Broad docs may render narrative or curated subsets; when they disagree with the filesystem, this file and the directory listings are authoritative.
 - New surfaces added after v1.36.0 should land here first, then propagate to the broad docs. The drift-control tests in `tests/inventory-counts.test.cjs`, `tests/commands-doc-parity.test.cjs`, `tests/agents-doc-parity.test.cjs`, `tests/cli-modules-doc-parity.test.cjs`, `tests/hooks-doc-parity.test.cjs`, `tests/architecture-counts.test.cjs`, and `tests/command-count-sync.test.cjs` anchor the counts and roster contents against the filesystem.
 
+This is the authoritative roster of every shipped GSD Core surface. See the [docs index](README.md) to navigate by topic.
+
 ---
 
 ## Agents (33 shipped)
@@ -484,3 +486,9 @@ Full listing: `hooks/`.
 - When a new command, agent, workflow, reference, CLI module, or hook ships, update the corresponding section here before the release is cut.
 - The drift-guard tests under `tests/` (see "How To Use This File" above) assert that every shipped file is enumerated in this inventory. A new file without a matching row here will fail CI.
 - When the filesystem diverges from `docs/ARCHITECTURE.md` counts or from curated-subset docs (e.g. `docs/AGENTS.md`'s primary roster), this file is the source of truth.
+
+## Related
+
+- [Commands](COMMANDS.md) — user-facing command reference
+- [Architecture](ARCHITECTURE.md) — how the surfaces fit together
+- [docs index](README.md)

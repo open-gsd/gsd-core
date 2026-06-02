@@ -60,54 +60,9 @@ GSD's `/gsd-pause-work` command saves execution state. The WARNING message sugge
 
 ## Setup
 
-Both hooks are automatically registered during `npx @opengsd/gsd-core` installation:
+Both hooks are registered automatically during `npx @opengsd/gsd-core` installation — no manual steps are needed under normal circumstances. For hook configuration details, threshold overrides, and manual registration examples, see [Configuration](CONFIGURATION.md).
 
-- **Statusline** (writes bridge file): Registered as `statusLine` in settings.json
-- **Context Monitor** (reads bridge file): Registered as `PostToolUse` hook in settings.json (`AfterTool` for Gemini)
-
-Manual registration should use the absolute Node executable path that ran the installer. On Windows PowerShell, prefix the command with `&` when that executable path is quoted.
-
-Manual registration in `~/.claude/settings.json` (Claude Code):
-
-```json
-{
-  "statusLine": {
-    "type": "command",
-    "command": "\"/usr/local/bin/node\" \"/Users/me/.claude/hooks/gsd-statusline.js\""
-  },
-  "hooks": {
-    "PostToolUse": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/usr/local/bin/node\" \"/Users/me/.claude/hooks/gsd-context-monitor.js\""
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-For Gemini CLI (`~/.gemini/settings.json`), use `AfterTool` instead of `PostToolUse`:
-
-```json
-{
-  "hooks": {
-    "AfterTool": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "& \"C:/Program Files/nodejs/node.exe\" \"C:/Users/me/.gemini/hooks/gsd-context-monitor.js\""
-          }
-        ]
-      }
-    ]
-  }
-}
-```
+As a brief reference: the statusline hook registers as `statusLine` in `settings.json`; the context monitor (`gsd-context-monitor.js`) registers as a `PostToolUse` hook (or `AfterTool` for Gemini CLI). Both entries use the absolute Node executable path that ran the installer. On Windows PowerShell, prefix quoted executable paths with `&`.
 
 ## Safety
 
@@ -115,3 +70,11 @@ For Gemini CLI (`~/.gemini/settings.json`), use `AfterTool` instead of `PostTool
 - It never blocks tool execution — a broken monitor should not break the agent's workflow
 - Stale metrics (older than 60s) are ignored
 - Missing bridge files are handled gracefully (subagents, fresh sessions)
+
+---
+
+## Related
+
+- [Architecture](ARCHITECTURE.md)
+- [Configuration](CONFIGURATION.md)
+- [docs index](README.md)

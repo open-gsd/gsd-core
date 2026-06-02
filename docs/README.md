@@ -1,36 +1,69 @@
-# GSD Core Documentation
+# GSD Core documentation
 
-Comprehensive documentation for GSD Core (Git. Ship. Done.) — a meta-prompting, context engineering, and spec-driven development system for AI coding agents.
+Documentation is organised into four quadrants: **tutorials** help you learn by doing, **how-to guides** solve specific tasks, **reference** states authoritative facts, and **explanation** explores concepts and design decisions.
 
 Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md) · [日本語](ja-JP/README.md) · [简体中文](zh-CN/README.md)
 
-## Documentation Index
+---
 
-| Document | Audience | Description |
-|----------|----------|-------------|
-| [Architecture](ARCHITECTURE.md) | Contributors, advanced users | System architecture, agent model, data flow, and internal design |
-| [Installer Migrations](installer-migrations.md) | Contributors | Architecture for safe install-time migrations, cleanup, preservation, dry-run planning, and rollback |
-| [Feature Reference](FEATURES.md) | All users | Feature narratives and requirements for released features |
-| [Command Reference](COMMANDS.md) | All users | Stable commands with syntax, flags, options, and examples |
-| [Configuration Reference](CONFIGURATION.md) | All users | Full config schema, workflow toggles, model profiles, git branching |
-| [Custom PR Body Sections](ship-pr-body-sections.md) | All users | How to append project-specific PRD sections to `/gsd-ship` PR bodies |
-| [CLI Tools Reference](CLI-TOOLS.md) | Contributors, agent authors | `gsd-tools.cjs` programmatic API for workflows and agents |
-| [JSON Error Mode](json-errors.md) | Contributors, agent authors | Machine-readable `gsd-tools --json-errors` failure envelopes |
-| [Agent Reference](AGENTS.md) | Contributors, advanced users | Role cards for primary agents — roles, tools, spawn patterns (the `agents/` filesystem is authoritative) |
-| [User Guide](USER-GUIDE.md) | All users | Workflow walkthroughs, troubleshooting, and recovery |
-| [Issue-Driven Orchestration](issue-driven-orchestration.md) | All users | Recipe for driving GSD from a tracker issue (GitHub / Linear / Jira) using existing primitives — no new commands or daemon |
-| [Context Monitor](context-monitor.md) | All users | Context window monitoring hook architecture |
-| [Discuss Mode](workflow-discuss-mode.md) | All users | Assumptions vs interview mode for discuss-phase |
-| [Canary Stream](CANARY.md) | Maintainers | Archived stream notes; current public npm tags are `latest` and `next` |
+## Tutorials
 
-## Quick Links
+- [Your first project](tutorials/your-first-project.md) — install to first shipped phase, one guaranteed path
+- [Onboarding an existing codebase](tutorials/onboarding-an-existing-codebase.md) — bring GSD Core to a brownfield repo
 
-- **What's new:** install `@opengsd/gsd-core@latest` and use the npm/package version as the current source of truth; older release-note files are archived continuity notes
-- **Preview streams:** current public npm tags are `latest` and `next`; older canary notes are archived in [Canary Stream](CANARY.md)
-- **Getting started:** [README](../README.md) → install → `/gsd-new-project`
-- **Full workflow walkthrough:** [User Guide](USER-GUIDE.md)
-- **All commands at a glance:** [Command Reference](COMMANDS.md)
-- **Configuring GSD:** [Configuration Reference](CONFIGURATION.md)
-- **Customizing ship PR bodies:** [Custom PR Body Sections](ship-pr-body-sections.md)
-- **How the system works internally:** [Architecture](ARCHITECTURE.md)
-- **Contributing or extending:** [CLI Tools Reference](CLI-TOOLS.md) + [Agent Reference](AGENTS.md)
+---
+
+## How-to guides
+
+- [Install on your runtime](how-to/install-on-your-runtime.md) — runtime-specific install steps for all 15 supported runtimes
+- [Discuss a phase](how-to/discuss-a-phase.md) — capture implementation decisions before planning begins
+- [Plan a phase](how-to/plan-a-phase.md) — run research, decompose work, and verify plan quality
+- [Execute a phase](how-to/execute-a-phase.md) — run plans in parallel waves with fresh-context subagents
+- [Verify and ship](how-to/verify-and-ship.md) — walk through completed work, diagnose failures, and create the PR
+- [Run phases autonomously](how-to/run-phases-autonomously.md) — use autonomous mode for unattended phase execution
+- [Handle quick and fast tasks](how-to/handle-quick-and-fast-tasks.md) — use `/gsd-quick` and `/gsd-fast` for ad-hoc work outside the phase loop
+- [Configure model profiles](how-to/configure-model-profiles.md) — switch between quality, balanced, and budget model tiers
+- [Set up cross-AI review](how-to/set-up-cross-ai-review.md) — configure a second AI to review code produced by the primary agent
+- [Work in parallel with workstreams](how-to/work-in-parallel-with-workstreams.md) — run independent lines of work simultaneously using workstreams
+- [Isolate work with workspaces](how-to/isolate-work-with-workspaces.md) — use workspaces to sandbox experimental or risky changes
+- [Debug a failed execution](how-to/debug-a-failed-execution.md) — diagnose and recover from broken or incomplete phase execution
+- [Spike and sketch](how-to/spike-and-sketch.md) — use `/gsd-spike` and `/gsd-sketch` for exploratory work before committing to a plan
+- [Design a UI phase](how-to/design-a-ui-phase.md) — use the UI phase loop for frontend and visual work
+- [Drive GSD from a tracker issue](how-to/drive-gsd-from-a-tracker-issue.md) — start a phase from a GitHub, Linear, or Jira issue
+- [Migrate from GSD 2](how-to/migrate-from-gsd-2.md) — upgrade an existing GSD 2 project to GSD Core
+- [Update GSD](how-to/update-gsd.md) — re-run the installer to pick up the latest release
+- [Recover and troubleshoot](how-to/recover-and-troubleshoot.md) — fix common problems, rebuild context, and uninstall
+
+---
+
+## Reference
+
+- [Commands](COMMANDS.md) — every command with flags and examples
+- [Configuration](CONFIGURATION.md) — full config schema, model profiles, git branching strategies
+- [CLI tools](CLI-TOOLS.md) — `gsd-tools.cjs` programmatic API for workflows and agents
+- [Features](FEATURES.md) — complete feature index
+- [Inventory](INVENTORY.md) — installed skills and surface map
+- [STATE.md schema](reference/state-md.md) — field-by-field reference for `.planning/STATE.md`
+- [CONTEXT.md schema](reference/context-md.md) — field-by-field reference for `.planning/phases/<N>/CONTEXT.md`
+- [PLAN.md schema](reference/plan-md.md) — field-by-field reference for `.planning/phases/<N>/PLAN.md`
+- [Planning artifacts](reference/planning-artifacts.md) — all `.planning/` files and their roles
+
+---
+
+## Explanation
+
+- [Context engineering](explanation/context-engineering.md) — how context rot forms and how GSD Core prevents it
+- [The phase loop](explanation/the-phase-loop.md) — design rationale for the Discuss → Plan → Execute → Verify → Ship cycle
+- [Multi-agent orchestration](explanation/multi-agent-orchestration.md) — how subagents are spawned, scoped, and coordinated
+- [Security model](explanation/security-model.md) — trust boundaries, permissions, and safe automation
+- [Architecture](ARCHITECTURE.md) — system architecture, agent model, and data flow
+- [Discuss modes](workflow-discuss-mode.md) — assumptions mode vs interview mode for `/gsd-discuss-phase`
+- [Context monitoring](context-monitor.md) — context window monitoring hook architecture
+- [Issue-driven orchestration](issue-driven-orchestration.md) — recipe for driving GSD from a tracker issue using existing primitives
+
+---
+
+## Related
+
+- [Root README](../README.md) — landing page, quickstart, and documentation overview
+- [Changelog](../CHANGELOG.md) — release history

@@ -1,5 +1,7 @@
 # GSD Configuration Reference
 
+Complete schema reference for `.planning/config.json`. For setup walkthroughs and task-oriented guides see the [docs index](README.md).
+
 > Full configuration schema, workflow toggles, model profiles, and git branching options. For feature context, see [Feature Reference](FEATURES.md).
 
 ---
@@ -332,7 +334,9 @@ Example:
 }
 ```
 
-### Recommended Presets
+### Common Setting Combinations
+
+The following combinations of `mode`, `granularity`, `model_profile`, and workflow toggles are commonly used together. See [Configure model profiles](how-to/configure-model-profiles.md) for setup guidance.
 
 | Scenario | mode | granularity | profile | research | plan_check | verifier |
 |----------|------|-------------|---------|----------|------------|----------|
@@ -380,11 +384,7 @@ The prompt injection guard hook (`gsd-prompt-guard.js`) is always active and can
 
 ### Private Planning Setup
 
-To keep planning artifacts out of git:
-
-1. Set `planning.commit_docs: false` and `planning.search_gitignored: true`
-2. Add `.planning/` to `.gitignore`
-3. If previously tracked: `git rm -r --cached .planning/ && git commit -m "chore: stop tracking planning docs"`
+When `planning.commit_docs` is `false` and `.planning/` is listed in `.gitignore`, GSD treats planning artefacts as local-only. `planning.search_gitignored: true` ensures broad searches still include the `.planning/` directory in this configuration. See [Configure private planning](how-to/configure-model-profiles.md) for setup steps.
 
 ---
 
@@ -486,19 +486,7 @@ The `plan_review.*` namespace controls the plan drift guard, which verifies that
 
 #### Multi-developer setup
 
-If multiple developers will rebuild the graph in the same repo, run once per
-clone after enabling graphify:
-
-```bash
-graphify hook install
-```
-
-This installs a git merge driver that union-merges concurrent `graph.json`
-writes (no conflict markers in the knowledge graph), plus the post-commit
-rebuild hook. It writes `.gitattributes` and registers `graphify
-merge-driver` in `.git/config`. Solo projects can skip this step; running it
-anyway is harmless. Introduced upstream in graphify v0.7.0 alongside the
-`built_at_commit` freshness signal that `/gsd-graphify status` surfaces.
+When multiple developers rebuild the graph in the same repository, `graphify hook install` (run once per clone) installs a git merge driver that union-merges concurrent `graph.json` writes, eliminating conflict markers. It also registers the post-commit rebuild hook, writes `.gitattributes`, and adds `graphify merge-driver` to `.git/config`. Solo projects may skip this step. Introduced upstream in graphify v0.7.0 alongside the `built_at_commit` freshness signal surfaced by `/gsd-graphify status`.
 
 #### Commit-based staleness
 
@@ -557,7 +545,7 @@ The `features.*` namespace is a dynamic key pattern — new feature flags can be
 | `next_phases` | YAML flow array | Phases the `next_action` applies to (e.g. `["4.5"]`) |
 | `progress` | block | Nested `total_phases` / `completed_phases` / `percent` for the milestone progress bar |
 
-All four fields are **optional and additive** — STATE.md files without them keep rendering exactly as in v1.38.x. See [`STATE-MD-LIFECYCLE.md`](STATE-MD-LIFECYCLE.md) for the full field reference, parser constraints, and rendering scenes.
+All four fields are **optional and additive** — STATE.md files without them keep rendering exactly as in v1.38.x. See [STATE.md schema](reference/state-md.md) for the full field reference, parser constraints, and rendering scenes.
 
 ---
 
@@ -1372,3 +1360,12 @@ GSD_AUDIT_ARGS=1 GSD_AUDIT=1 gsd plan --tdd
 ```
 
 `GSD_AUDIT_ARGS` applies to both the stderr error line and the audit file simultaneously.
+
+---
+
+## Related
+
+- [Commands](COMMANDS.md)
+- [Configure model profiles](how-to/configure-model-profiles.md)
+- [STATE.md schema](reference/state-md.md)
+- [Docs index](README.md)

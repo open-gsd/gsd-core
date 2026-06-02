@@ -2,9 +2,9 @@
 
 ツール使用後に実行されるフック（Claude Code では `PostToolUse`、Gemini CLI では `AfterTool`）で、コンテキストウィンドウの使用量が高くなった際にエージェントに警告します。
 
-## 課題
+## 問題
 
-ステータスラインはコンテキスト使用量を**ユーザー**に表示しますが、**エージェント**自身はコンテキストの制限を認識していません。コンテキストが不足すると、エージェントは限界に達するまで作業を続行し、タスクの途中で状態を保存できないまま停止する可能性があります。
+ステータスラインはコンテキスト使用量を**ユーザー**に表示しますが、**エージェント**自身はコンテキストの制限を認識していません。コンテキストが不足すると、エージェントは限界に達するまで作業を続行し、状態を保存できないままタスクの途中で止まる可能性があります。
 
 ## 仕組み
 
@@ -16,34 +16,34 @@
 ## しきい値
 
 | レベル | 残量 | エージェントの動作 |
-|--------|------|------------------|
+|-------|-----------|----------------|
 | Normal | > 35% | 警告なし |
 | WARNING | <= 35% | 現在のタスクをまとめ、新しい複雑な作業の開始を避ける |
 | CRITICAL | <= 25% | 即座に停止し、状態を保存する（`/gsd-pause-work`） |
 
 ## デバウンス
 
-エージェントへの繰り返し警告を防ぐため:
+エージェントへの繰り返し警告を防ぐため：
 - 最初の警告は即座に発火
-- 以降の警告は間に5回のツール使用が必要
+- 以降の警告は間に 5 回のツール使用が必要
 - 深刻度のエスカレーション（WARNING -> CRITICAL）はデバウンスをバイパス
 
 ## アーキテクチャ
 
 ```
-ステータスラインフック (gsd-statusline.js)
-    | 書き込み
+Statusline Hook (gsd-statusline.js)
+    | writes
     v
 /tmp/claude-ctx-{session_id}.json
-    ^ 読み取り
+    ^ reads
     |
-コンテキストモニター (gsd-context-monitor.js, PostToolUse/AfterTool)
-    | 注入
+Context Monitor (gsd-context-monitor.js, PostToolUse/AfterTool)
+    | injects
     v
-additionalContext -> エージェントが警告を確認
+additionalContext -> Agent sees warning
 ```
 
-ブリッジファイルはシンプルな JSON オブジェクトです:
+ブリッジファイルはシンプルな JSON オブジェクトです：
 
 ```json
 {
@@ -60,56 +60,21 @@ GSD の `/gsd-pause-work` コマンドは実行状態を保存します。WARNIN
 
 ## セットアップ
 
-両フックは `npx @opengsd/gsd-core` のインストール時に自動的に登録されます:
+両フックは `npx @opengsd/gsd-core` のインストール時に自動的に登録されます——通常の状況では手動の手順は不要です。フック設定の詳細、しきい値のオーバーライド、手動登録の例については、[設定](CONFIGURATION.md) を参照してください。
 
-- **ステータスライン**（ブリッジファイルの書き込み）: settings.json の `statusLine` として登録
-- **コンテキストモニター**（ブリッジファイルの読み取り）: settings.json の `PostToolUse` フックとして登録（Gemini では `AfterTool`）
-
-`~/.claude/settings.json`（Claude Code）への手動登録:
-
-```json
-{
-  "statusLine": {
-    "type": "command",
-    "command": "node ~/.claude/hooks/gsd-statusline.js"
-  },
-  "hooks": {
-    "PostToolUse": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node ~/.claude/hooks/gsd-context-monitor.js"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-Gemini CLI（`~/.gemini/settings.json`）の場合、`PostToolUse` の代わりに `AfterTool` を使用します:
-
-```json
-{
-  "hooks": {
-    "AfterTool": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node ~/.gemini/hooks/gsd-context-monitor.js"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
+簡単な参考として：ステータスラインフックは `settings.json` に `statusLine` として登録されます；コンテキストモニター（`gsd-context-monitor.js`）は `PostToolUse` フックとして登録されます（Gemini CLI の場合は `AfterTool`）。どちらのエントリも、インストーラーを実行した Node 実行ファイルの絶対パスを使います。Windows PowerShell では、引用符付きの実行ファイルパスに `&` をプレフィックスしてください。
 
 ## 安全性
 
 - フックは全体を try/catch で囲み、エラー時はサイレントに終了
-- ツール実行をブロックしない — モニターの故障がエージェントのワークフローを壊してはならない
-- 古いメトリクス（60秒以上前）は無視
+- ツール実行をブロックしない — モニターが壊れてもエージェントのワークフローを壊してはならない
+- 古いメトリクス（60 秒以上前）は無視
 - ブリッジファイルが存在しない場合も正常に処理（サブエージェント、新規セッション）
+
+---
+
+## Related
+
+- [アーキテクチャ](ARCHITECTURE.md)
+- [設定](CONFIGURATION.md)
+- [ドキュメント索引](README.md)

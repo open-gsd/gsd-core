@@ -1,40 +1,80 @@
-# Monitor de Contexto
+# Monitor de Janela de Contexto
 
-O monitor de contexto ajuda a evitar degradação de qualidade em sessões longas, alertando sobre uso excessivo da janela de contexto.
+Um hook pós-ferramenta (`PostToolUse` para o Claude Code, `AfterTool` para o Gemini CLI) que avisa o agente quando o uso da janela de contexto está elevado.
 
-Para detalhes completos de implementação, veja [context-monitor.md em inglês](../context-monitor.md).
+## Problema
 
----
+A barra de status exibe o uso de contexto para o **usuário**, mas o **agente** não tem consciência dos limites de contexto. Quando o contexto está se esgotando, o agente continua trabalhando até atingir o limite — potencialmente no meio de uma tarefa, sem nenhum estado salvo.
 
-## Objetivos
+## Como Funciona
 
-- identificar quando a sessão principal está saturando
-- recomendar ações de recuperação (`/clear`, `/gsd-resume-work`, `/gsd-progress`)
-- manter previsibilidade durante ciclos longos de desenvolvimento
+1. O hook da barra de status grava métricas de contexto em `/tmp/claude-ctx-{session_id}.json`
+2. Após cada uso de ferramenta, o monitor de contexto lê essas métricas
+3. Quando o contexto restante cai abaixo dos limiares, ele injeta um aviso como `additionalContext`
+4. O agente recebe o aviso em sua conversa e pode agir de acordo
 
-## Como funciona
+## Limiares
 
-1. coleta sinais de uso da janela de contexto
-2. compara com limiares de alerta
-3. emite avisos progressivos
-4. sugere retomada por artefatos persistentes
+| Nível | Restante | Comportamento do Agente |
+|-------|----------|-------------------------|
+| Normal | > 35% | Sem aviso |
+| ALERTA | <= 35% | Encerrar a tarefa atual, evitar iniciar trabalhos complexos novos |
+| CRÍTICO | <= 25% | Parar imediatamente, salvar estado (`/gsd-pause-work`) |
 
-## Estratégia recomendada
+## Debounce
 
-- Limpe contexto entre fases grandes
-- Execute tarefas pesadas em subagentes
-- Mantenha o estado em `.planning/` como fonte de verdade
+Para evitar sobrecarregar o agente com avisos repetidos:
+- O primeiro aviso sempre é disparado imediatamente
+- Avisos subsequentes exigem 5 usos de ferramenta entre eles
+- A escalada de severidade (ALERTA -> CRÍTICO) ignora o debounce
 
-## Recuperação quando há degradação
+## Arquitetura
 
-```bash
-/clear
-/gsd-resume-work
-# ou
-/gsd-progress
+```
+Hook da Barra de Status (gsd-statusline.js)
+    | escreve
+    v
+/tmp/claude-ctx-{session_id}.json
+    ^ lê
+    |
+Monitor de Contexto (gsd-context-monitor.js, PostToolUse/AfterTool)
+    | injeta
+    v
+additionalContext -> Agente recebe o aviso
 ```
 
+O arquivo de ponte é um objeto JSON simples:
+
+```json
+{
+  "session_id": "abc123",
+  "remaining_percentage": 28.5,
+  "used_pct": 71,
+  "timestamp": 1708200000
+}
+```
+
+## Integração com o GSD
+
+O comando `/gsd-pause-work` do GSD salva o estado de execução. A mensagem de ALERTA sugere utilizá-lo. A mensagem CRÍTICA instrui o salvamento imediato do estado.
+
+## Configuração
+
+Ambos os hooks são registrados automaticamente durante a instalação do `npx @opengsd/gsd-core` — nenhuma etapa manual é necessária em circunstâncias normais. Para detalhes de configuração de hooks, substituições de limiares e exemplos de registro manual, consulte [Configuração](CONFIGURATION.md).
+
+Como referência rápida: o hook da barra de status se registra como `statusLine` em `settings.json`; o monitor de contexto (`gsd-context-monitor.js`) se registra como um hook `PostToolUse` (ou `AfterTool` para o Gemini CLI). Ambas as entradas utilizam o caminho absoluto do executável Node que executou o instalador. No Windows PowerShell, prefixe caminhos de executáveis entre aspas com `&`.
+
+## Segurança
+
+- O hook envolve tudo em try/catch e encerra silenciosamente em caso de erro
+- Ele nunca bloqueia a execução de ferramentas — um monitor com falha não deve interromper o fluxo de trabalho do agente
+- Métricas obsoletas (com mais de 60s) são ignoradas
+- Arquivos de ponte ausentes são tratados de forma elegante (subagentes, sessões novas)
+
 ---
 
-> [!TIP]
-> O monitor não substitui boas práticas de escopo. Planos pequenos e verificáveis continuam sendo o principal fator de qualidade.
+## Relacionados
+
+- [Arquitetura](ARCHITECTURE.md)
+- [Configuração](CONFIGURATION.md)
+- [Índice da documentação](README.md)
