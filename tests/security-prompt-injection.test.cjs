@@ -643,7 +643,7 @@ describe('validatePath: hostile path values are rejected before write', () => {
     assert.strictEqual(r.safe, false,
       'a symlink whose target is outside the base must fail containment');
     // Cleanup the outside dir; the link itself is cleaned by cleanup(tmpDir).
-    fs.rmSync(outside, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    cleanup(outside);
   });
 });
 

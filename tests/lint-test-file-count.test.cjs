@@ -54,7 +54,7 @@ describe('evaluateLint — OK_UNDER_LIMIT', () => {
     });
     assert.strictEqual(result.verdict, Verdict.OK_UNDER_LIMIT);
     assert.strictEqual(result.count, 1);
-    assert.strictEqual(result.ceiling, null);
+    assert.strictEqual(result.knownFiles, null);
   });
 
   test('2-file module passes (primary + integration)', () => {
@@ -84,12 +84,12 @@ describe('evaluateLint — FAIL_EXCEEDS_LIMIT', () => {
     });
     assert.strictEqual(result.verdict, Verdict.FAIL_EXCEEDS_LIMIT);
     assert.strictEqual(result.count, 3);
-    assert.strictEqual(result.ceiling, null);
+    assert.strictEqual(result.knownFiles, null);
   });
 });
 
-describe('evaluateLint — allowlist behaviour', () => {
-  test('3-file module allowlisted at 3 passes (OK_IN_ALLOWLIST)', () => {
+describe('evaluateLint — allowlist behaviour (identity-based)', () => {
+  test('3-file module allowlisted with exact filenames passes (OK_IN_ALLOWLIST)', () => {
     const result = evaluateLint({
       prefix: 'phase',
       testFiles: makeFiles('phase', [
@@ -97,44 +97,120 @@ describe('evaluateLint — allowlist behaviour', () => {
         'phase-edge.test.cjs',
         'phase-regression.test.cjs',
       ]),
-      allowlist: { phase: { current: 3, issue: 'TBD' } },
+      allowlist: {
+        phase: {
+          files: ['phase.test.cjs', 'phase-edge.test.cjs', 'phase-regression.test.cjs'],
+          issue: 'TBD',
+        },
+      },
     });
     assert.strictEqual(result.verdict, Verdict.OK_IN_ALLOWLIST);
     assert.strictEqual(result.count, 3);
-    assert.strictEqual(result.ceiling, 3);
+    assert.deepStrictEqual(result.novel, []);
+    assert.deepStrictEqual(result.stale, []);
   });
 
-  test('2-file module allowlisted at 3 emits HINT_CAN_REMOVE_FROM_ALLOWLIST', () => {
+  test('2-file module allowlisted fails (FAIL_STALE_ALLOWLIST — whole entry must be pruned)', () => {
     const result = evaluateLint({
       prefix: 'phase',
       testFiles: makeFiles('phase', [
         'phase.test.cjs',
         'phase-edge.test.cjs',
       ]),
-      allowlist: { phase: { current: 3, issue: 'TBD' } },
+      allowlist: {
+        phase: {
+          files: ['phase.test.cjs', 'phase-edge.test.cjs', 'phase-regression.test.cjs'],
+          issue: 'TBD',
+        },
+      },
     });
-    assert.strictEqual(result.verdict, Verdict.HINT_CAN_REMOVE_FROM_ALLOWLIST);
+    // Ratchet-DOWN: dropping to ≤ MAX_FILES while allowlisted is a FAILURE, not a hint.
+    assert.strictEqual(result.verdict, Verdict.FAIL_STALE_ALLOWLIST);
     assert.strictEqual(result.count, 2);
-    assert.strictEqual(result.ceiling, 3);
+    assert.deepStrictEqual(result.novel, []);
+    // stale should list all known files (the entire entry must be removed)
+    assert.deepStrictEqual(result.stale.sort(), [
+      'phase-edge.test.cjs',
+      'phase-regression.test.cjs',
+      'phase.test.cjs',
+    ]);
   });
 
-  test('4-file module allowlisted at 3 fails (FAIL_EXCEEDS_ALLOWLIST)', () => {
+  test('novel file added to capped module fails (FAIL_NOVEL_FILES)', () => {
     const result = evaluateLint({
       prefix: 'phase',
       testFiles: makeFiles('phase', [
         'phase.test.cjs',
-        'phase-a.test.cjs',
-        'phase-b.test.cjs',
-        'phase-c.test.cjs',
+        'phase-edge.test.cjs',
+        'phase-regression.test.cjs',
+        'phase-new-extra.test.cjs',   // <-- novel
       ]),
-      allowlist: { phase: { current: 3, issue: 'TBD' } },
+      allowlist: {
+        phase: {
+          files: ['phase.test.cjs', 'phase-edge.test.cjs', 'phase-regression.test.cjs'],
+          issue: 'TBD',
+        },
+      },
     });
-    assert.strictEqual(result.verdict, Verdict.FAIL_EXCEEDS_ALLOWLIST);
-    assert.strictEqual(result.count, 4);
-    assert.strictEqual(result.ceiling, 3);
+    assert.strictEqual(result.verdict, Verdict.FAIL_NOVEL_FILES);
+    assert.deepStrictEqual(result.novel, ['phase-new-extra.test.cjs']);
+    assert.deepStrictEqual(result.stale, []);
   });
 
-  test('ratchet: count equal to ceiling passes', () => {
+  test('allowlisted file removed from disk while dropping to cap fails (FAIL_STALE_ALLOWLIST)', () => {
+    const result = evaluateLint({
+      prefix: 'phase',
+      testFiles: makeFiles('phase', [
+        'phase.test.cjs',
+        'phase-edge.test.cjs',
+        // phase-regression.test.cjs removed — count now at MAX_FILES (2)
+      ]),
+      allowlist: {
+        phase: {
+          files: ['phase.test.cjs', 'phase-edge.test.cjs', 'phase-regression.test.cjs'],
+          issue: 'TBD',
+        },
+      },
+    });
+    // count is 2 (≤ MAX_FILES=2) while still allowlisted — ratchet-DOWN FAILURE.
+    // All known files are stale; the entire entry must be pruned.
+    assert.strictEqual(result.verdict, Verdict.FAIL_STALE_ALLOWLIST);
+    assert.deepStrictEqual(result.novel, []);
+    assert.deepStrictEqual(result.stale.sort(), [
+      'phase-edge.test.cjs',
+      'phase-regression.test.cjs',
+      'phase.test.cjs',
+    ]);
+  });
+
+  test('allowlisted file removed while still over cap fails (FAIL_STALE_ALLOWLIST)', () => {
+    // Module has 4 files allowlisted, one removed (3 remain, still > 2)
+    const result = evaluateLint({
+      prefix: 'phase',
+      testFiles: makeFiles('phase', [
+        'phase.test.cjs',
+        'phase-edge.test.cjs',
+        'phase-regression.test.cjs',
+        // phase-extra.test.cjs removed from disk
+      ]),
+      allowlist: {
+        phase: {
+          files: [
+            'phase.test.cjs',
+            'phase-edge.test.cjs',
+            'phase-regression.test.cjs',
+            'phase-extra.test.cjs',   // stale
+          ],
+          issue: 'TBD',
+        },
+      },
+    });
+    assert.strictEqual(result.verdict, Verdict.FAIL_STALE_ALLOWLIST);
+    assert.deepStrictEqual(result.stale, ['phase-extra.test.cjs']);
+    assert.deepStrictEqual(result.novel, []);
+  });
+
+  test('ratchet: count equal to allowlisted set passes', () => {
     const result = evaluateLint({
       prefix: 'init',
       testFiles: makeFiles('init', [
@@ -142,9 +218,49 @@ describe('evaluateLint — allowlist behaviour', () => {
         'init-manager.test.cjs',
         'init-manager-deps.test.cjs',
       ]),
-      allowlist: { init: { current: 3, issue: 'TBD' } },
+      allowlist: {
+        init: {
+          files: ['init.test.cjs', 'init-manager.test.cjs', 'init-manager-deps.test.cjs'],
+          issue: 'TBD',
+        },
+      },
     });
     assert.strictEqual(result.verdict, Verdict.OK_IN_ALLOWLIST);
+  });
+
+  // -------------------------------------------------------------------
+  // Masking blind spot: count unchanged but SET changed → must FAIL
+  // -------------------------------------------------------------------
+  test('masking blind spot closed: swapped file (same count, different identity) fails', () => {
+    // Old allowlist grandfathers 3 files. One is deleted, one new one added.
+    // Count stays at 3 — the old count-ratchet would have passed. Identity must fail.
+    const result = evaluateLint({
+      prefix: 'phase',
+      testFiles: makeFiles('phase', [
+        'phase.test.cjs',
+        'phase-edge.test.cjs',
+        'phase-brand-new.test.cjs',   // <-- replaces phase-regression (novel)
+      ]),
+      allowlist: {
+        phase: {
+          files: [
+            'phase.test.cjs',
+            'phase-edge.test.cjs',
+            'phase-regression.test.cjs',   // <-- no longer on disk (stale)
+          ],
+          issue: 'TBD',
+        },
+      },
+    });
+    // The identity check must catch this: novel = ['phase-brand-new.test.cjs'],
+    // stale = ['phase-regression.test.cjs']. Count is the same (3), but the
+    // old count-ratchet would have silently passed. The identity ratchet fails.
+    assert.ok(
+      result.verdict === Verdict.FAIL_NOVEL_FILES || result.verdict === Verdict.FAIL_STALE_ALLOWLIST,
+      `expected FAIL_NOVEL_FILES or FAIL_STALE_ALLOWLIST, got ${result.verdict}`
+    );
+    assert.deepStrictEqual(result.novel, ['phase-brand-new.test.cjs']);
+    assert.deepStrictEqual(result.stale, ['phase-regression.test.cjs']);
   });
 });
 
@@ -207,7 +323,7 @@ describe('CLI --json', () => {
     assert.ok(typeof data.ok === 'boolean', 'ok must be boolean');
   });
 
-  test('each result has verdict, prefix, count, ceiling, files', () => {
+  test('each result has verdict, prefix, count, knownFiles, files', () => {
     const { data } = runCliJson();
     for (const r of data.results) {
       assert.ok(typeof r.verdict === 'string', `verdict missing on ${r.prefix}`);
@@ -222,6 +338,16 @@ describe('CLI --json', () => {
     const { data } = runCliJson();
     for (const r of data.results) {
       assert.ok(valid.has(r.verdict), `Unknown verdict "${r.verdict}" on prefix "${r.prefix}"`);
+    }
+  });
+
+  test('OK_IN_ALLOWLIST results have knownFiles array', () => {
+    const { data } = runCliJson();
+    const allowlisted = data.results.filter(r => r.verdict === Verdict.OK_IN_ALLOWLIST);
+    assert.ok(allowlisted.length > 0, 'expected at least one allowlisted module in real repo');
+    for (const r of allowlisted) {
+      assert.ok(Array.isArray(r.knownFiles), `knownFiles must be array on ${r.prefix}`);
+      assert.ok(r.knownFiles.length > 0, `knownFiles must be non-empty on ${r.prefix}`);
     }
   });
 });

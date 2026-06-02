@@ -35,7 +35,7 @@ const {
   install,
 } = require('../bin/install.js');
 
-const { createTempDir } = require('./helpers.cjs');
+const { createTempDir, cleanup } = require('./helpers.cjs');
 const makeTmp = (prefix) => createTempDir(`gsd-2794-${prefix}-`);
 
 function writeJson(p, obj) {
@@ -43,9 +43,6 @@ function writeJson(p, obj) {
   fs.writeFileSync(p, JSON.stringify(obj, null, 2), 'utf-8');
 }
 
-function rmr(p) {
-  try { fs.rmSync(p, { recursive: true, force: true }); } catch { /* noop */ }
-}
 
 describe('bug-2794: readGsdRuntimeProfileResolver resolves opencode tier overrides', () => {
   let projectDir;
@@ -62,8 +59,8 @@ describe('bug-2794: readGsdRuntimeProfileResolver resolves opencode tier overrid
   afterEach(() => {
     if (origHome === undefined) delete process.env.HOME;
     else process.env.HOME = origHome;
-    rmr(projectDir);
-    rmr(homeDir);
+    cleanup(projectDir);
+    cleanup(homeDir);
   });
 
   test('resolves opencode sonnet tier to user-supplied model ID', () => {
@@ -127,8 +124,8 @@ describe('bug-2794: OpenCode agent install embeds model_profile_overrides model'
     if (origHome === undefined) delete process.env.HOME;
     else process.env.HOME = origHome;
     process.chdir(origCwd);
-    rmr(projectDir);
-    rmr(homeDir);
+    cleanup(projectDir);
+    cleanup(homeDir);
   });
 
   test('generated OpenCode agent frontmatter includes model from model_profile_overrides', () => {

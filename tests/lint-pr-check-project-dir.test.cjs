@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { cleanup } = require('./helpers.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const LINT_SCRIPT = path.join(ROOT, 'scripts', 'lint-pr-check-project-dir.cjs');
@@ -110,7 +111,7 @@ describe('lint-pr-check-project-dir', () => {
 
       assert.notStrictEqual(result.status, 0);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+      cleanup(dir);
     }
   });
 

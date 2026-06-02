@@ -16,6 +16,7 @@ const { execFileSync } = require('node:child_process');
 
 const ROOT = path.join(__dirname, '..');
 const GSD_TOOLS = path.join(ROOT, 'get-shit-done', 'bin', 'gsd-tools.cjs');
+const { cleanup } = require('./helpers.cjs');
 const { resolveUpdateContext } = require(
   path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'update-context.cjs'),
 );
@@ -137,7 +138,7 @@ describe('gsd-tools update-context (CLI): emits the JSON contract', () => {
       assert.equal(ctx.scope, 'GLOBAL');
       assert.equal(ctx.runtime, 'kilo');
     } finally {
-      nodeFs.rmSync(tmp, { recursive: true, force: true });
+      cleanup(tmp);
     }
   });
 });

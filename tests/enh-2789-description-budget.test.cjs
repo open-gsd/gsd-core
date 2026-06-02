@@ -21,6 +21,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const os = require('node:os');
+const { cleanup } = require('./helpers.cjs');
 
 const COMMANDS_DIR = path.join(__dirname, '../commands/gsd');
 const LINT_SCRIPT = path.join(__dirname, '../scripts/lint-descriptions.cjs');
@@ -137,7 +138,7 @@ describe('lint-descriptions.cjs', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('rejects a command file with a description over 100 chars', () => {

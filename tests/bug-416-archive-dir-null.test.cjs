@@ -25,7 +25,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-const { runGsdTools } = require('./helpers.cjs');
+const { runGsdTools, cleanup } = require('./helpers.cjs');
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -108,7 +108,7 @@ describe('bug #416 case 1: STATE.md v6.0 with only v5.0-phases/ on disk → null
     ]);
   });
 
-  after(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
+  after(() => { cleanup(tmpDir); });
 
   test('validate health emits zero W007 warnings (no prior-milestone phases surfaced)', () => {
     const result = runGsdTools(['validate', 'health', '--json'], tmpDir);
@@ -150,7 +150,7 @@ describe('bug #416 case 2: no STATE.md + multiple archives → version-sort fall
     ]);
   });
 
-  after(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
+  after(() => { cleanup(tmpDir); });
 
   test('validate health succeeds and does not emit W007 for v5.0 archive phases', () => {
     const result = runGsdTools(['validate', 'health', '--json'], tmpDir);
@@ -196,7 +196,7 @@ describe('bug #416 case 3: STATE.md v5.0 with matching v5.0-phases/ → returns 
     ]);
   });
 
-  after(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
+  after(() => { cleanup(tmpDir); });
 
   test('validate health emits zero W007 — archive phases are in ROADMAP and active', () => {
     const result = runGsdTools(['validate', 'health', '--json'], tmpDir);

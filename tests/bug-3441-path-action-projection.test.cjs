@@ -17,15 +17,12 @@ const projection = require(path.join(
   'shell-command-projection.cjs',
 ));
 const install = require(path.join(__dirname, '..', 'bin', 'install.js'));
-const { withIsolatedProcessState } = require('./helpers.cjs');
+const { withIsolatedProcessState, cleanup } = require('./helpers.cjs');
 
 function createTempHome() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-home-3441-'));
 }
 
-function cleanup(dir) {
-  fs.rmSync(dir, { recursive: true, force: true });
-}
 
 describe('bug #3441: PATH guidance is projected from typed shell action IR', () => {
   test('projection module exports PATH action projection helper', () => {

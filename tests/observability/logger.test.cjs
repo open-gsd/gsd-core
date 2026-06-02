@@ -18,6 +18,7 @@ const {
   createDefaultLogger,
   createNoOpLogger,
 } = require('../../get-shit-done/bin/lib/observability/logger.cjs');
+const { cleanup } = require('../helpers.cjs');
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -105,7 +106,7 @@ describe('createDefaultLogger — silent on success', () => {
   afterEach(() => {
     if (savedAudit === undefined) delete process.env.GSD_AUDIT; else process.env.GSD_AUDIT = savedAudit;
     if (savedAuditArgs === undefined) delete process.env.GSD_AUDIT_ARGS; else process.env.GSD_AUDIT_ARGS = savedAuditArgs;
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('no stderr output on ok result', () => {
@@ -140,7 +141,7 @@ describe('createDefaultLogger — stderr on error', () => {
   afterEach(() => {
     if (savedAudit === undefined) delete process.env.GSD_AUDIT; else process.env.GSD_AUDIT = savedAudit;
     if (savedAuditArgs === undefined) delete process.env.GSD_AUDIT_ARGS; else process.env.GSD_AUDIT_ARGS = savedAuditArgs;
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('emits exactly one JSON line to stderr on error', () => {
@@ -230,7 +231,7 @@ describe('createDefaultLogger — audit file', () => {
   afterEach(() => {
     if (savedAudit === undefined) delete process.env.GSD_AUDIT; else process.env.GSD_AUDIT = savedAudit;
     if (savedAuditArgs === undefined) delete process.env.GSD_AUDIT_ARGS; else process.env.GSD_AUDIT_ARGS = savedAuditArgs;
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('creates .planning/.gsd-trace.jsonl when GSD_AUDIT=1 (ok result)', () => {

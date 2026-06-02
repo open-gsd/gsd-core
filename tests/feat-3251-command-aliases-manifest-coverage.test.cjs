@@ -15,6 +15,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('path');
 const { spawnSync } = require('node:child_process');
+const { cleanup } = require('./helpers.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 const COMMAND_ALIASES_FILE = path.join(
@@ -183,7 +184,7 @@ describe('feat-3251: generated aliases dispatch through real gsd-tools behavior'
         cli_flag_present: true,
       });
     } finally {
-      fs.rmSync(projectDir, { recursive: true, force: true });
+      cleanup(projectDir);
     }
   });
 
@@ -216,7 +217,7 @@ describe('feat-3251: generated aliases dispatch through real gsd-tools behavior'
       assert.equal(output.cli_flag_present, false);
       assert.deepEqual(snapshotProjectState(projectDir), beforeFiles);
     } finally {
-      fs.rmSync(projectDir, { recursive: true, force: true });
+      cleanup(projectDir);
     }
   });
 
@@ -250,7 +251,7 @@ describe('feat-3251: generated aliases dispatch through real gsd-tools behavior'
       assert.equal(output.roadmap_mode, null);
       assert.deepEqual(snapshotProjectState(projectDir), beforeFiles);
     } finally {
-      fs.rmSync(projectDir, { recursive: true, force: true });
+      cleanup(projectDir);
     }
   });
 
@@ -270,7 +271,7 @@ describe('feat-3251: generated aliases dispatch through real gsd-tools behavior'
       assert.equal(/\n\s*at\s/.test(result.stderr), false, 'non-debug failure must not print a stack trace');
       assert.deepEqual(snapshotProjectState(projectDir), beforeFiles);
     } finally {
-      fs.rmSync(projectDir, { recursive: true, force: true });
+      cleanup(projectDir);
     }
   });
 });

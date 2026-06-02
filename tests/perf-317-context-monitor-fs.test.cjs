@@ -18,6 +18,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { cleanup } = require('./helpers.cjs');
 
 const MONITOR_PATH = path.join(__dirname, '..', 'hooks', 'gsd-context-monitor.js');
 const tmpDir = os.tmpdir();
@@ -157,7 +158,7 @@ describe('perf #317: config.json absent (exercises config-missing → defaults p
         'warning output must contain additionalContext'
       );
     } finally {
-      try { fs.rmSync(testCwd, { recursive: true, force: true }); } catch { /* tolerate */ }
+      cleanup(testCwd);
     }
   });
 
@@ -194,7 +195,7 @@ describe('perf #317: config.json absent (exercises config-missing → defaults p
       stdout = e.stdout || '';
     } finally {
       try { fs.unlinkSync(metricsPath); } catch { /* noop */ }
-      try { fs.rmSync(testCwd, { recursive: true, force: true }); } catch { /* tolerate */ }
+      cleanup(testCwd);
     }
 
     assert.strictEqual(exitCode, 0, 'hook should exit 0 when context_warnings=false');

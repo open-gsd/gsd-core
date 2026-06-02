@@ -1,36 +1,131 @@
 {
-  "_doc": "Baseline of modules currently exceeding the 2-test-file limit. Each entry locks in TODAY's count as the ceiling. Reductions are ratcheted automatically — when a cluster drops to ≤ 2, remove its entry. New entries require justification in PR description.",
+  "_doc": "Baseline of modules currently exceeding the 2-test-file limit. Each entry locks in TODAY's exact test filenames as the allowlisted set (identity ratchet). Adding a NEW test file to a capped module fails (novel). Removing one requires pruning this list (stale, ratchet-down). When a cluster drops to ≤ 2, remove its entry entirely. New entries require justification in PR description.",
   "modules": {
-    "phase":                  { "current": 5, "issue": "3788" },
-    "worktree":               { "current": 13, "issue": "TBD" },
-    "milestone":              { "current": 10, "issue": "TBD" },
-    "roadmap":                { "current": 9,  "issue": "TBD" },
-    "verify":                 { "current": 10, "issue": "3767" },
-    "install":                { "current": 9,  "issue": "TBD" },
-    "init":                   { "current": 8,  "issue": "TBD" },
-    "state":                  { "current": 11, "issue": "180" },
-    "config":                 { "current": 8,  "issue": "TBD" },
-    "graphify":               { "current": 7,  "issue": "TBD" },
-    "progress":               { "current": 6,  "issue": "14"  },
-    "cli":                    { "current": 5,  "issue": "TBD" },
-    "surface":                { "current": 5,  "issue": "TBD" },
-    "commit":                 { "current": 4,  "issue": "TBD" },
-    "frontmatter":            { "current": 4,  "issue": "TBD" },
-    "index":                  { "current": 5,  "issue": "180" },
-    "intel":                  { "current": 4,  "issue": "TBD" },
-    "mvp":                    { "current": 4,  "issue": "TBD" },
-    "install-profiles":       { "current": 4,  "issue": "TBD" },
-    "audit":                  { "current": 4,  "issue": "192" },
-    "audit-open":             { "current": 3,  "issue": "TBD" },
-    "config-schema":          { "current": 3,  "issue": "TBD" },
-    "profile":                { "current": 3,  "issue": "TBD" },
-    "prompt-budget":          { "current": 3,  "issue": "TBD" },
-    "uat":                    { "current": 3,  "issue": "TBD" },
-    "validate":               { "current": 3,  "issue": "TBD" },
-    "workstream":             { "current": 3,  "issue": "TBD" },
-    "gsd-tools":              { "current": 3,  "issue": "TBD" },
-    "runtime-artifact-layout":{ "current": 3,  "issue": "TBD" },
-    "security":               { "current": 3,  "issue": "TBD" },
-    "gsd-sdk":                { "current": 3,  "issue": "TBD" }
+    "audit": {
+      "files": [
+        "audit-fix-command.test.cjs",
+        "bug-2659-audit-open-crash.test.cjs",
+        "bug-2836-audit-open-summary-uat-drift.test.cjs",
+        "bug-2911-audit-open-output-shape.test.cjs"
+      ],
+      "issue": "192"
+    },
+    "config": {
+      "files": [
+        "bug-2943-config-get-context-window-default.test.cjs",
+        "bug-321-config-defaults-clone-strategy.test.cjs",
+        "bug-3227-config-set-model-overrides.test.cjs",
+        "bug-442-config-dir-equals-in-path.test.cjs",
+        "config-field-docs.test.cjs",
+        "config-get-default.test.cjs",
+        "config-schema.property.test.cjs",
+        "config.test.cjs"
+      ],
+      "issue": "TBD"
+    },
+    "graphify": {
+      "files": [
+        "graphify-auto-update.test.cjs",
+        "graphify-query.test.cjs",
+        "graphify-visualization.test.cjs",
+        "graphify.test.cjs"
+      ],
+      "issue": "TBD"
+    },
+    "intel": {
+      "files": [
+        "bug-2351-intel-kilo-layout.test.cjs",
+        "bug-3290-intel-updater-layout-block.test.cjs",
+        "intel.test.cjs"
+      ],
+      "issue": "TBD"
+    },
+    "milestone": {
+      "files": [
+        "milestone-archive.test.cjs",
+        "milestone-helper.test.cjs",
+        "milestone-prefixed-convention.test.cjs",
+        "milestone-summary.test.cjs",
+        "milestone.test.cjs"
+      ],
+      "issue": "TBD"
+    },
+    "phase": {
+      "files": [
+        "bug-214-phase-researcher-write-truncation-contract.test.cjs",
+        "phase-dependency-levels.test.cjs",
+        "phase.test.cjs"
+      ],
+      "issue": "597"
+    },
+    "roadmap": {
+      "files": [
+        "bug-2661-roadmap-sync-parallel.test.cjs",
+        "bug-3128-roadmap-plan-count-slug-layout.test.cjs",
+        "bug-3599-roadmap-get-phase-project-code-prefix.test.cjs",
+        "enh-2447-roadmap-wave-deps.test.cjs",
+        "roadmap-mode-field.test.cjs",
+        "roadmap-phase-fallback.test.cjs",
+        "roadmap.test.cjs"
+      ],
+      "issue": "TBD"
+    },
+    "runtime-artifact-layout": {
+      "files": [
+        "runtime-artifact-layout-install-profiles.test.cjs",
+        "runtime-artifact-layout-surface.test.cjs",
+        "runtime-artifact-layout.test.cjs"
+      ],
+      "issue": "TBD"
+    },
+    "security": {
+      "files": [
+        "security-prompt-injection.test.cjs",
+        "security-scan.test.cjs",
+        "security.test.cjs"
+      ],
+      "issue": "TBD"
+    },
+    "state": {
+      "files": [
+        "bug-21-state-md-template-frontmatter.test.cjs",
+        "bug-2630-state-frontmatter-milestone-switch.test.cjs",
+        "bug-3127-state-begin-phase-idempotent.test.cjs",
+        "bug-3242-state-update-progress-trample.test.cjs",
+        "bug-3286-state-write-routing.test.cjs",
+        "bug-3454-state-dollar-backreference-growth.test.cjs",
+        "bug-397-state-preserve-executor-authored.test.cjs",
+        "state-acquirestatelock-non-eexist.test.cjs",
+        "state-prune.test.cjs",
+        "state.test.cjs"
+      ],
+      "issue": "180"
+    },
+    "verify": {
+      "files": [
+        "bug-2969-verify-reapply-patches.test.cjs",
+        "bug-2994-verify-reapply-patches-installed-path.test.cjs",
+        "bug-3381-verify-work-workstream.test.cjs",
+        "bug-3657-verify-reapply-patches-pristine-drift.test.cjs",
+        "verify-health.test.cjs",
+        "verify-mvp-uat.test.cjs",
+        "verify-test-quality.test.cjs",
+        "verify-work-auto-transition.test.cjs",
+        "verify.test.cjs"
+      ],
+      "issue": "3767"
+    },
+    "install": {
+      "files": [
+        "bug-410-install-defaults-test-mode-guard.test.cjs",
+        "install-minimal-hooks.test.cjs",
+        "install-path-detection.test.cjs",
+        "install-regressions.test.cjs",
+        "install-runtime-artifacts.test.cjs",
+        "install-update-marker.test.cjs",
+        "install.test.cjs"
+      ],
+      "issue": "TBD"
+    }
   }
 }

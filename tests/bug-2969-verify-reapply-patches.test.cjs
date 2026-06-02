@@ -27,6 +27,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const cp = require('node:child_process');
+const { cleanup } = require('./helpers.cjs');
 
 const ROOT = path.join(__dirname, '..');
 // Script lives at get-shit-done/bin/ so the installer ships it under
@@ -47,7 +48,7 @@ function writeFile(absPath, content) {
 
 function resetFixture({ withPristine = true } = {}) {
   for (const dir of [patchesDir, configDir, pristineDir]) {
-    fs.rmSync(dir, { recursive: true, force: true });
+    cleanup(dir);
   }
   fs.mkdirSync(patchesDir);
   fs.mkdirSync(configDir);
@@ -79,7 +80,7 @@ before(() => {
 });
 
 after(() => {
-  fs.rmSync(tmpRoot, { recursive: true, force: true });
+  cleanup(tmpRoot);
 });
 
 describe('Bug #2969: deterministic Step 5 verification gate', () => {

@@ -263,7 +263,7 @@ describe('agent-skills global: prefix', () => {
 
   afterEach(() => {
     cleanup(tmpDir);
-    fs.rmSync(fakeHome, { recursive: true, force: true });
+    cleanup(fakeHome);
   });
 
   function createGlobalSkill(name) {

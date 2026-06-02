@@ -155,6 +155,7 @@ describe('phase next-decimal ROADMAP.md scanning (#1865)', () => {
 
   test('handles no phases dir and no ROADMAP.md', () => {
     // Remove the phases directory entirely
+    // eslint-disable-next-line local/no-raw-rmsync-in-tests -- mid-test removal to simulate absent phases dir (SUT behavior, not teardown)
     fs.rmSync(path.join(tmpDir, '.planning', 'phases'), { recursive: true });
 
     const result = runGsdTools('phase next-decimal 999', tmpDir);

@@ -23,6 +23,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { cleanup } = require('./helpers.cjs');
 
 const ROOT = path.join(__dirname, '..');
 
@@ -105,7 +106,7 @@ describe('bug #3127: state.begin-phase idempotency guard', () => {
           'begin-phase reset Current Plan to 1 on a mid-flight phase — idempotency guard not applied');
       }
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -123,7 +124,7 @@ describe('bug #3127: state.begin-phase idempotency guard', () => {
         'begin-phase overwrote stopped_at narrative on a mid-flight phase',
       );
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -142,7 +143,7 @@ describe('bug #3127: state.begin-phase idempotency guard', () => {
           'begin-phase should set Current Plan to 1 on a fresh phase');
       }
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -172,7 +173,7 @@ describe('bug #3127: state.begin-phase idempotency guard', () => {
       else process.env.GSD_TEST_MODE = origTestMode;
       if (origNowMs === undefined) delete process.env.GSD_NOW_MS;
       else process.env.GSD_NOW_MS = origNowMs;
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 });

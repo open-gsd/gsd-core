@@ -181,6 +181,7 @@ describe('pruneOrphanedWorktrees', () => {
     assert.ok(listedWorktreePaths(repoDir).has(wantedKey), 'worktree should appear in list before deletion');
 
     // Manually delete the worktree directory (simulate orphan)
+    // eslint-disable-next-line local/no-raw-rmsync-in-tests -- mid-test fault injection: simulates an orphaned worktree dir that git still references
     fs.rmSync(worktreeDir, { recursive: true, force: true });
 
     // Act

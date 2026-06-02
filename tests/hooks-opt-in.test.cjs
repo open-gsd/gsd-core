@@ -46,6 +46,7 @@ function createTempProject(prefix = 'gsd-hook-test-') {
 }
 
 function cleanup(tmpDir) {
+  // eslint-disable-next-line local/no-raw-rmsync-in-tests -- this IS the local teardown helper; wrapping helpers.cjs cleanup would create a circular dependency
   try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
 }
 
@@ -203,7 +204,7 @@ describe('opt-in gating behavior', { skip: isWindows ? 'bash hooks require unix 
   test('validate-commit is a no-op when config.json is absent', (t) => {
     // No config.json at all
     const bareDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-hook-bare-'));
-    t.after(() => { fs.rmSync(bareDir, { recursive: true, force: true }); });
+    t.after(() => { cleanup(bareDir); });
     const hookPath = path.join(HOOKS_DIR, 'gsd-validate-commit.sh');
     const input = JSON.stringify({
       tool_input: { command: 'git commit -m "WIP save"' }
@@ -353,7 +354,7 @@ describe('hook execution when enabled', { skip: isWindows ? 'bash hooks require 
   test('session-state exits 0 without .planning/ (in enabled project)', (t) => {
     // Create a dir with config but no STATE.md
     const noStateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-hook-nostate-'));
-    t.after(() => { fs.rmSync(noStateDir, { recursive: true, force: true }); });
+    t.after(() => { cleanup(noStateDir); });
     fs.mkdirSync(path.join(noStateDir, '.planning'), { recursive: true });
     writeConfigWithHooks(noStateDir, true);
     const hookPath = path.join(HOOKS_DIR, 'gsd-session-state.sh');

@@ -33,6 +33,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { cleanup } = require('./helpers.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const TOOLS_PATH = path.join(ROOT, 'get-shit-done', 'bin', 'gsd-tools.cjs');
@@ -234,7 +235,7 @@ describe('bug #397: executor-authored STATE.md fields must be preserved', () => 
         `record-session overwrote executor-authored Resume File with '${rfMatch[1].trim()}'`,
       );
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -253,7 +254,7 @@ describe('bug #397: executor-authored STATE.md fields must be preserved', () => 
         `Expected 'None' to remain when it was already 'None', got: ${rfMatch[1].trim()}`,
       );
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -272,7 +273,7 @@ describe('bug #397: executor-authored STATE.md fields must be preserved', () => 
         `Expected explicit --resume-file value to be written, got: ${rfMatch[1].trim()}`,
       );
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -293,7 +294,7 @@ describe('bug #397: executor-authored STATE.md fields must be preserved', () => 
         `advance-plan overwrote executor-authored Status: got '${statusMatch[1].trim()}'`,
       );
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -318,7 +319,7 @@ describe('bug #397: executor-authored STATE.md fields must be preserved', () => 
         `Expected phase-complete Status text, got: '${statusMatch[1].trim()}'`,
       );
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -339,7 +340,7 @@ describe('bug #397: executor-authored STATE.md fields must be preserved', () => 
         `advance-plan overwrote executor-authored Last Activity: got '${laMatch[1].trim()}'`,
       );
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -368,7 +369,7 @@ describe('bug #397: executor-authored STATE.md fields must be preserved', () => 
         `advance-plan overwrote executor-authored Current Position Last activity: got '${posActivityMatch[1].trim()}'`,
       );
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 

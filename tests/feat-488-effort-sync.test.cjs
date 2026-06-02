@@ -13,6 +13,8 @@ const path = require('node:path');
 const os = require('node:os');
 const { spawnSync } = require('node:child_process');
 
+const { cleanup } = require('./helpers.cjs');
+
 const GSD_TOOLS = path.resolve(__dirname, '../get-shit-done/bin/gsd-tools.cjs');
 
 function runCli(args, env = {}) {
@@ -93,7 +95,7 @@ describe('feat-488: effort sync command', () => {
     // dry-run must not modify the file
     assert.ok(fs.readFileSync(agentPath, 'utf8').includes('effort: medium'), 'dry-run must not write file');
 
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('--apply mode rewrites effort: frontmatter to new config value', () => {
@@ -115,7 +117,7 @@ describe('feat-488: effort sync command', () => {
     assert.ok(updated.includes('effort: xhigh'), 'file must be updated to xhigh');
     assert.ok(!updated.includes('effort: medium'), 'old effort value must be gone');
 
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('skips agents where effort: already matches config', () => {
@@ -134,7 +136,7 @@ describe('feat-488: effort sync command', () => {
     assert.equal(result.synced, 0, 'nothing to sync when already matching');
     assert.equal(result.skipped, 1);
 
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('injects effort: into agent files that lack the frontmatter key', () => {
@@ -154,7 +156,7 @@ describe('feat-488: effort sync command', () => {
     assert.equal(result.changes[0].to, 'max');
     assert.ok(fs.readFileSync(agentPath, 'utf8').includes('effort: max'), 'effort must be injected');
 
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('non-claude runtime exits cleanly with informative reason field', () => {
@@ -168,7 +170,7 @@ describe('feat-488: effort sync command', () => {
     assert.ok(result.reason, 'should include a reason message for unsupported runtime');
     assert.equal(result.synced, 0);
 
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('home-default effort config gap: applies home-level effort when project config has no effort section', () => {
@@ -211,8 +213,8 @@ describe('feat-488: effort sync command', () => {
     assert.ok(typeof result.synced === 'number', 'synced must be a number');
     assert.ok(Array.isArray(result.changes), 'changes must be array');
 
-    fs.rmSync(tmpHome, { recursive: true, force: true });
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpHome);
+    cleanup(tmpDir);
   });
 
   test('CLI dispatcher: positional args after effort sync are rejected', () => {
@@ -245,6 +247,6 @@ describe('feat-488: effort sync command', () => {
       'CLI --apply must write the updated effort value'
     );
 
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 });

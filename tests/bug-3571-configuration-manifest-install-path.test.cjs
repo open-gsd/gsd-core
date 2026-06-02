@@ -20,7 +20,7 @@ const SHARED_DIR = path.join(REPO_ROOT, 'get-shit-done', 'bin', 'shared');
 
 const { install } = require('../bin/install.js');
 
-const { createTempDir } = require('./helpers.cjs');
+const { createTempDir, cleanup } = require('./helpers.cjs');
 const makeTmpDir = () => createTempDir('gsd-3571-');
 
 function silenceConsole(fn) {
@@ -65,7 +65,7 @@ describe('bug #3571: configuration generated manifests resolve in install layout
     } else {
       process.env.GSD_EXPLICIT_CONFIG_DIR = savedExplicitConfigDir;
     }
-    fs.rmSync(tmpRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    cleanup(tmpRoot);
   });
 
   test('co-located bin/shared manifests let configuration.cjs load without sdk/shared', () => {

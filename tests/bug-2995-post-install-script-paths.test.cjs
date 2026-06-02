@@ -11,6 +11,7 @@ const ROOT = path.join(__dirname, '..');
 const { auditWorkflowScriptPaths, AUDIT_FINDING } = require(
   path.join(ROOT, 'scripts', 'audit-workflow-script-paths.cjs'),
 );
+const { cleanup } = require('./helpers.cjs');
 
 // auditWorkflowScriptPaths is a pure function: it walks workflowsDir,
 // extracts every ${GSD_HOME}/<path> script reference, and returns a
@@ -39,7 +40,7 @@ function fixtureRepo({ workflows, files }) {
 }
 
 before(() => { tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2995-')); });
-after(() => { fs.rmSync(tmpRoot, { recursive: true, force: true }); });
+after(() => { cleanup(tmpRoot); });
 
 describe('Bug #2995: post-install script-paths audit (#2995)', () => {
   test('AUDIT_FINDING enum exposes the documented codes', () => {

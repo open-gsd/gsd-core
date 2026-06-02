@@ -72,6 +72,7 @@ function createTempDir(prefix) {
 }
 
 function cleanup(dir) {
+  // eslint-disable-next-line local/no-raw-rmsync-in-tests -- local cleanup() helper wrapping rmSync; cannot use imported cleanup() without naming collision
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
 }
 

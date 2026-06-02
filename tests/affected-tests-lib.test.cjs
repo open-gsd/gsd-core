@@ -18,6 +18,8 @@ const {
   resolveRelativeDependency,
 } = require('../scripts/affected-tests-lib.cjs');
 
+const { cleanup } = require('./helpers.cjs');
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -188,7 +190,7 @@ test('transitive: changing a deep dependency selects the test that depends on it
     'get-shit-done/bin/lib/depA.cjs': `'use strict';\nconst depB = require('./depB.cjs');\nmodule.exports = { a: depB };\n`,
     'tests/t.test.cjs': `'use strict';\nconst depA = require('../get-shit-done/bin/lib/depA.cjs');\n`,
   });
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  t.after(() => cleanup(dir));
 
   const reverseIndex = buildTransitiveReverseIndex(dir, ['tests/t.test.cjs']);
   const selected = pickAffectedTests(
@@ -213,7 +215,7 @@ test('adversarial(a): cycle depA<->depB — changing depA selects test, no hang'
     'get-shit-done/bin/lib/depB.cjs': `'use strict';\nconst depA = require('./depA.cjs');\nmodule.exports = {};\n`,
     'tests/cycle.test.cjs': `'use strict';\nconst depA = require('../get-shit-done/bin/lib/depA.cjs');\n`,
   });
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  t.after(() => cleanup(dir));
 
   // Must complete without hanging
   const reverseIndex = buildTransitiveReverseIndex(dir, ['tests/cycle.test.cjs']);
@@ -234,7 +236,7 @@ test('adversarial(b): missing require (gone file) — null resolve, no crash', (
     // Requires a file that does not exist
     'tests/missing.test.cjs': `'use strict';\nconst x = require('../get-shit-done/bin/lib/gone.cjs');\n`,
   });
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  t.after(() => cleanup(dir));
 
   // Should not throw
   let reverseIndex;
@@ -258,7 +260,7 @@ test('adversarial(c): .json dependency — changing data.json selects the test',
     'get-shit-done/bin/lib/data.json': `{"key":"value"}`,
     'tests/json.test.cjs': `'use strict';\nconst data = require('../get-shit-done/bin/lib/data.json');\n`,
   });
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  t.after(() => cleanup(dir));
 
   const reverseIndex = buildTransitiveReverseIndex(dir, ['tests/json.test.cjs']);
   const selected = pickAffectedTests(
@@ -279,7 +281,7 @@ test('adversarial(d): re-export chain — changing depB selects the test that re
     'get-shit-done/bin/lib/reexporter.cjs': `'use strict';\nmodule.exports = require('./depB.cjs');\n`,
     'tests/reexport.test.cjs': `'use strict';\nconst x = require('../get-shit-done/bin/lib/reexporter.cjs');\n`,
   });
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  t.after(() => cleanup(dir));
 
   const reverseIndex = buildTransitiveReverseIndex(dir, ['tests/reexport.test.cjs']);
   const selected = pickAffectedTests(
@@ -313,7 +315,7 @@ test('adversarial(f): WIDEN — changing a src file with no test dependents wide
     'get-shit-done/bin/lib/orphan.cjs': `'use strict';\nmodule.exports = {};\n`,
     'tests/unrelated.test.cjs': `'use strict';\n// requires nothing\n`,
   });
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  t.after(() => cleanup(dir));
 
   const reverseIndex = buildTransitiveReverseIndex(dir, ['tests/unrelated.test.cjs']);
 
@@ -345,7 +347,7 @@ test('adversarial(g): dynamic require in changed file with no static dependents 
     'get-shit-done/bin/lib/dynamic.cjs': `'use strict';\nconst x = 'foo';\nconst m = require(\`./\${x}\`);\nmodule.exports = {};\n`,
     'tests/unrelated.test.cjs': `'use strict';\n// does not require dynamic.cjs\n`,
   });
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  t.after(() => cleanup(dir));
 
   const reverseIndex = buildTransitiveReverseIndex(dir, ['tests/unrelated.test.cjs']);
 
@@ -367,7 +369,7 @@ test('resolveRelativeDependency resolves .ts, .json extensions', (t) => {
     'src/helper.ts': `export const x = 1;\n`,
     'src/data.json': `{"k":1}`,
   });
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  t.after(() => cleanup(dir));
 
   const fromAbs = path.join(dir, 'tests/consumer.cjs');
 
@@ -444,7 +446,7 @@ test('regression(mixed-diff): widen plan covers integration suite; concrete matc
     'tests/server.integration.test.cjs': `'use strict';\nconst s = require('../bin/lib/server.cjs');\n`,
     'tests/unrelated.test.cjs': `'use strict';\n// requires nothing\n`,
   });
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  t.after(() => cleanup(dir));
 
   // Act: build graph over both test files
   const allTests = [
@@ -532,7 +534,7 @@ test('regression(delete-only-source): deleting a source file triggers widen, nev
     'get-shit-done/bin/lib/other.cjs': `'use strict';\nmodule.exports = {};\n`,
     'tests/unrelated.test.cjs': `'use strict';\n// requires nothing from gone.cjs\n`,
   });
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  t.after(() => cleanup(dir));
 
   // Act
   const allTests = ['tests/unrelated.test.cjs'];
@@ -592,7 +594,7 @@ test('regression(rename-stale-old-path): deleted old path triggers widen, protec
     'tests/newname.test.cjs': `'use strict';\nconst x = require('../get-shit-done/bin/lib/newname.cjs');\n`,
     'tests/unrelated.test.cjs': `'use strict';\n// no dependency on oldname or newname\n`,
   });
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  t.after(() => cleanup(dir));
 
   // Act
   const allTests = ['tests/newname.test.cjs', 'tests/unrelated.test.cjs'];
@@ -646,7 +648,7 @@ test('regression(delete-only-test): deleting a test file does not trigger widen 
   const dir = makeFixture({
     'tests/surviving.test.cjs': `'use strict';\n// a plain surviving unit test\n`,
   });
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  t.after(() => cleanup(dir));
 
   // Act
   // allTests comes from the fixture's tests/ directory — gone.test.cjs is absent.

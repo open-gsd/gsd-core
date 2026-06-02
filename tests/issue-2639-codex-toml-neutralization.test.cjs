@@ -24,6 +24,7 @@ const path = require('path');
 const os = require('os');
 
 const { installCodexConfig } = require('../bin/install.js');
+const { cleanup } = require('./helpers.cjs');
 
 function makeTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2639-'));
@@ -54,7 +55,7 @@ describe('#2639 — Codex TOML emit routes through full neutralization pipeline'
   });
 
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('strips CLAUDE.md, .claude/skills/, .claude/commands/, .claude/agents/, and .claudeignore from emitted TOML', () => {

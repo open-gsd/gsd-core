@@ -4,16 +4,19 @@
  *
  * Scans sdk/src/query/, sdk/src/, get-shit-done/bin/lib/, bin/ for production
  * modules, then counts matching test files in tests/ and sdk/src (recursive). Cap is 2
- * (primary + one integration). Over-limit clusters must be in the allowlist at
- * their frozen count (ratchet: may only decrease). --json emits structured output.
+ * (primary + one integration). Over-limit clusters must be in the allowlist with the
+ * EXACT set of test filenames grandfathered (identity ratchet via allowlist-ratchet.cjs).
+ * Adding a new test file to a capped module is a novel offender; removing one requires
+ * pruning the allowlist entry (stale). --json emits structured output.
  *
  * Verdicts: OK_UNDER_LIMIT | OK_IN_ALLOWLIST | FAIL_EXCEEDS_LIMIT |
- *           FAIL_EXCEEDS_ALLOWLIST | HINT_CAN_REMOVE_FROM_ALLOWLIST
+ *           FAIL_NOVEL_FILES | FAIL_STALE_ALLOWLIST
  */
 'use strict';
 
 const fs   = require('fs');
 const path = require('path');
+const { assertWithinAllowlist } = require('./lib/allowlist-ratchet.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const PROD_DIRS = [
@@ -30,11 +33,11 @@ const ALLOWLIST_PATH = path.join(__dirname, 'lint-test-file-count.allowlist.json
 const MAX_FILES = 2;
 
 const Verdict = Object.freeze({
-  OK_UNDER_LIMIT:                 'OK_UNDER_LIMIT',
-  OK_IN_ALLOWLIST:                'OK_IN_ALLOWLIST',
-  FAIL_EXCEEDS_LIMIT:             'FAIL_EXCEEDS_LIMIT',
-  FAIL_EXCEEDS_ALLOWLIST:         'FAIL_EXCEEDS_ALLOWLIST',
-  HINT_CAN_REMOVE_FROM_ALLOWLIST: 'HINT_CAN_REMOVE_FROM_ALLOWLIST',
+  OK_UNDER_LIMIT:       'OK_UNDER_LIMIT',
+  OK_IN_ALLOWLIST:      'OK_IN_ALLOWLIST',
+  FAIL_EXCEEDS_LIMIT:   'FAIL_EXCEEDS_LIMIT',
+  FAIL_NOVEL_FILES:     'FAIL_NOVEL_FILES',
+  FAIL_STALE_ALLOWLIST: 'FAIL_STALE_ALLOWLIST',
 });
 
 function isTestFile(name) {
@@ -120,17 +123,62 @@ function loadAllowlist() {
   catch (_) { return {}; }
 }
 
+/**
+ * Evaluate one module's test files against the allowlist.
+ *
+ * For modules under the default cap (≤ MAX_FILES): simple count check.
+ * For modules with an allowlist entry: identity check via assertWithinAllowlist.
+ *   - count now ≤ MAX_FILES → FAIL_STALE_ALLOWLIST (all known files are stale; prune entry)
+ *   - novel files (in current but not in known) → FAIL_NOVEL_FILES
+ *   - stale files (in known but not in current) → FAIL_STALE_ALLOWLIST
+ *   - exact match → OK_IN_ALLOWLIST
+ * For modules over the cap with no allowlist entry: FAIL_EXCEEDS_LIMIT.
+ *
+ * Returns { verdict, prefix, count, knownFiles, novel, stale, files }
+ */
 function evaluateLint({ prefix, testFiles, allowlist }) {
   const count = testFiles.length;
   const entry = allowlist[prefix];
-  const ceiling = entry ? entry.current : null;
+  const currentNames = testFiles.map(f => path.basename(f));
+
   if (entry !== undefined) {
-    if (count <= MAX_FILES)    return { verdict: Verdict.HINT_CAN_REMOVE_FROM_ALLOWLIST, prefix, count, ceiling, files: testFiles };
-    if (count <= ceiling)      return { verdict: Verdict.OK_IN_ALLOWLIST,                prefix, count, ceiling, files: testFiles };
-    return                            { verdict: Verdict.FAIL_EXCEEDS_ALLOWLIST,          prefix, count, ceiling, files: testFiles };
+    const knownFiles = Array.isArray(entry.files) ? entry.files : [];
+    // If the module is now at or under the default cap, the entire allowlist entry is
+    // stale and must be removed — this is a ratchet-DOWN failure, not a hint.
+    // All known files are stale (the whole entry can go).
+    if (count <= MAX_FILES) {
+      return {
+        verdict: Verdict.FAIL_STALE_ALLOWLIST,
+        prefix, count,
+        knownFiles,
+        novel: [],
+        stale: knownFiles.slice().sort(),
+        files: testFiles,
+      };
+    }
+    // Identity check via assertWithinAllowlist
+    const messages = [];
+    const { novel, stale } = assertWithinAllowlist({
+      label: prefix,
+      current: currentNames,
+      known: knownFiles,
+      fail: (msg) => messages.push(msg),
+      pruneHint: 'scripts/lint-test-file-count.allowlist.json',
+    });
+
+    if (novel.length > 0) {
+      return { verdict: Verdict.FAIL_NOVEL_FILES,     prefix, count, knownFiles, novel, stale, files: testFiles };
+    }
+    if (stale.length > 0) {
+      return { verdict: Verdict.FAIL_STALE_ALLOWLIST, prefix, count, knownFiles, novel, stale, files: testFiles };
+    }
+    return { verdict: Verdict.OK_IN_ALLOWLIST,        prefix, count, knownFiles, novel: [], stale: [], files: testFiles };
   }
-  if (count <= MAX_FILES) return { verdict: Verdict.OK_UNDER_LIMIT,    prefix, count, ceiling: null, files: testFiles };
-  return                         { verdict: Verdict.FAIL_EXCEEDS_LIMIT, prefix, count, ceiling: null, files: testFiles };
+
+  if (count <= MAX_FILES) {
+    return { verdict: Verdict.OK_UNDER_LIMIT,    prefix, count, knownFiles: null, novel: [], stale: [], files: testFiles };
+  }
+  return   { verdict: Verdict.FAIL_EXCEEDS_LIMIT, prefix, count, knownFiles: null, novel: [], stale: [], files: testFiles };
 }
 
 function run() {
@@ -147,35 +195,42 @@ function run() {
   }
 
   const failures = results.filter(r =>
-    r.verdict === Verdict.FAIL_EXCEEDS_LIMIT || r.verdict === Verdict.FAIL_EXCEEDS_ALLOWLIST);
-  const hints = results.filter(r => r.verdict === Verdict.HINT_CAN_REMOVE_FROM_ALLOWLIST);
+    r.verdict === Verdict.FAIL_EXCEEDS_LIMIT ||
+    r.verdict === Verdict.FAIL_NOVEL_FILES ||
+    r.verdict === Verdict.FAIL_STALE_ALLOWLIST);
 
   if (jsonMode) {
-    console.log(JSON.stringify({ ok: failures.length === 0, results, failures, hints }, null, 2));
+    console.log(JSON.stringify({ ok: failures.length === 0, results, failures, hints: [] }, null, 2));
     process.exit(failures.length > 0 ? 1 : 0);
   }
 
   if (failures.length === 0) {
     const inAllowlist = results.filter(r => r.verdict === Verdict.OK_IN_ALLOWLIST).length;
     console.log(`ok lint-test-file-count: ${results.length} module(s) checked, 0 failures` +
-      (inAllowlist > 0 ? `, ${inAllowlist} allowlisted` : '') +
-      (hints.length > 0 ? `, ${hints.length} hint(s)` : ''));
-    for (const h of hints) {
-      console.log(`  hint: "${h.prefix}" is allowlisted at ${h.ceiling} but now has ${h.count} — remove from allowlist`);
-    }
+      (inAllowlist > 0 ? `, ${inAllowlist} allowlisted` : ''));
     process.exit(0);
   }
 
   process.stderr.write(`\nERROR lint-test-file-count: ${failures.length} module(s) exceed the test-file limit\n\n`);
   for (const f of failures) {
-    const tag = f.verdict === Verdict.FAIL_EXCEEDS_LIMIT
-      ? `${f.count} files (limit ${MAX_FILES})`
-      : `${f.count} files (allowlist ceiling ${f.ceiling})`;
-    process.stderr.write(`  ${f.prefix}: ${tag}\n`);
-    for (const tf of f.files) process.stderr.write(`    ${path.relative(ROOT, tf)}\n`);
+    if (f.verdict === Verdict.FAIL_EXCEEDS_LIMIT) {
+      process.stderr.write(`  ${f.prefix}: ${f.count} files (limit ${MAX_FILES}) — not in allowlist\n`);
+      for (const tf of f.files) process.stderr.write(`    ${path.relative(ROOT, tf)}\n`);
+    } else if (f.verdict === Verdict.FAIL_NOVEL_FILES) {
+      process.stderr.write(`  ${f.prefix}: ${f.novel.length} NEW test file(s) not in allowlist\n`);
+      for (const n of f.novel) process.stderr.write(`    + ${n}\n`);
+    } else if (f.verdict === Verdict.FAIL_STALE_ALLOWLIST) {
+      if (f.count <= MAX_FILES) {
+        const staleList = f.stale.join(', ');
+        process.stderr.write(`  "${f.prefix}": now at ${f.count} file(s) (≤ ${MAX_FILES}) — remove its entry from the allowlist (stale: ${staleList})\n`);
+      } else {
+        process.stderr.write(`  ${f.prefix}: ${f.stale.length} allowlisted file(s) no longer present — prune allowlist\n`);
+        for (const s of f.stale) process.stderr.write(`    - ${s}\n`);
+      }
+    }
   }
   process.stderr.write('\nFix: consolidate test files per module (one primary + one integration).\n');
-  process.stderr.write('Or add the module to scripts/lint-test-file-count.allowlist.json with PR justification.\n\n');
+  process.stderr.write('Or update scripts/lint-test-file-count.allowlist.json with PR justification.\n\n');
   process.exit(1);
 }
 

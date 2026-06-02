@@ -31,6 +31,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
+const { cleanup } = require('./helpers.cjs');
 
 const { parseTomlToObject, validateCodexConfigSchema, install } = require('../bin/install.js');
 const installModule = require('../bin/install.js');
@@ -224,7 +225,7 @@ describe('#3245 — install succeeds with TOML float in pre-existing config', { 
   });
 
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('install completes when config.toml contains tool_timeout_sec = 20.0', () => {
@@ -353,7 +354,7 @@ describe('#3245 — idempotent rollback reverts skills/, agents/, and VERSION', 
 
   afterEach(() => {
     delete installModule.__codexSchemaValidator;
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('validation failure rolls back skills/, agents/, and VERSION to pre-install state', () => {

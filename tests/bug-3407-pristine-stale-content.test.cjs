@@ -41,6 +41,7 @@ const crypto = require('node:crypto');
 
 const ROOT = path.join(__dirname, '..');
 const INSTALL = require(path.join(ROOT, 'bin', 'install.js'));
+const { cleanup } = require('./helpers.cjs');
 
 const MANIFEST_NAME = 'gsd-file-manifest.json';
 const PATCHES_DIR_NAME = 'gsd-local-patches';
@@ -63,7 +64,7 @@ describe('Bug #3407: saveLocalPatches preserves old-release pristine across upgr
     fs.mkdirSync(configDir, { recursive: true });
     fs.mkdirSync(fakeSrcDir, { recursive: true });
     t.after(() => {
-      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+      cleanup(tmpDir);
     });
   });
 

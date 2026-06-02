@@ -49,6 +49,7 @@ function createTempDir(prefix) {
 }
 
 function cleanup(dir) {
+  // eslint-disable-next-line local/no-raw-rmsync-in-tests -- local cleanup wrapper; try/catch swallows ENOENT so runInstaller teardown never fails the test
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
 }
 

@@ -24,6 +24,7 @@ const os = require('node:os');
 const ROOT   = path.resolve(__dirname, '..');
 const SCRIPT = path.join(ROOT, 'scripts', 'ci-rebase-check.cjs');
 const NODE   = process.execPath;
+const { cleanup } = require('./helpers.cjs');
 
 // ---------------------------------------------------------------------------
 // Helper: run a small inline Node snippet that requires the run() helper
@@ -167,7 +168,7 @@ describe('ci-rebase-check: fetch-retry loop resolves when git fetch succeeds', (
         `Script must not emit "failed after 3 attempts" when fetch succeeded.\nstderr: ${r.stderr}`
       );
     } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      cleanup(tmpDir);
     }
   });
 

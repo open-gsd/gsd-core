@@ -19,6 +19,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
+const { cleanup } = require('./helpers.cjs');
 
 // #2153 follow-up: ensure hooks/dist/ exists before any install integration
 // test runs. The Codex install path copies hook files from hooks/dist/, which
@@ -953,7 +954,7 @@ describe('Codex hooks emit: migration produces namespaced AoT so managed-emit co
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-codex-fieldparity-'));
   });
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('migration of legacy [hooks.SessionStart] produces two-level nested AoT (#2773)', () => {
@@ -1002,7 +1003,7 @@ describe('mergeCodexConfig', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   const sampleBlock = generateCodexConfigBlock([
@@ -1321,7 +1322,7 @@ describe('installCodexConfig (integration)', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(tmpTarget, { recursive: true, force: true });
+    cleanup(tmpTarget);
   });
 
   // Only run if agents/ directory exists (not in CI without full checkout)
@@ -1430,7 +1431,7 @@ describe('Codex install hook configuration (e2e)', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('Codex install copies hook file that is referenced in hooks.json (#2153)', () => {
@@ -2141,7 +2142,7 @@ describe('Codex uninstall symmetry for hook-enabled configs', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('fresh install removes the GSD-added codex_hooks feature on uninstall', () => {
@@ -2275,7 +2276,7 @@ describe('Codex uninstall symmetry for hook-enabled configs', () => {
       const cleaned = stripGsdFromCodexConfig(readCodexConfig(codexHome));
       assert.strictEqual(cleaned, initialContent, `preserves short-circuited root features assignment: ${initialContent.split('\n')[0]}`);
 
-      fs.rmSync(codexHome, { recursive: true, force: true });
+      cleanup(codexHome);
       fs.mkdirSync(codexHome, { recursive: true });
     }
   });

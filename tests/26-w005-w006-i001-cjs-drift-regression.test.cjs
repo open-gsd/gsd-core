@@ -24,7 +24,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-const { runGsdTools } = require('./helpers.cjs');
+const { runGsdTools, cleanup } = require('./helpers.cjs');
 
 function mkplanning(base) {
   const planningDir = path.join(base, '.planning');
@@ -84,7 +84,7 @@ describe('Drift item W005 — phaseDirNameRe: 999.X-name dirs must not trigger W
     fs.mkdirSync(path.join(phasesDir, '999.1-foo'), { recursive: true });
   });
 
-  after(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
+  after(() => { cleanup(tmpDir); });
 
   test('no W005 for 999.1-foo (multi-digit sub-phase prefix)', () => {
     const result = runGsdTools(['validate', 'health', '--json'], tmpDir);
@@ -159,7 +159,7 @@ describe('Drift item W006-archived — MILESTONE_ARCHIVE_DIR_RE and PHASE_TOKEN_
     );
   });
 
-  after(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
+  after(() => { cleanup(tmpDir); });
 
   test('no W006 for Phase 64 archived under milestones/v1.0-phases/', () => {
     const result = runGsdTools(['validate', 'health', '--json'], tmpDir);
@@ -227,7 +227,7 @@ describe('Drift item I001 — canonicalPlanStem: long PLAN stem matches short SU
     fs.writeFileSync(path.join(phaseDir, '68-01-SUMMARY.md'), '# Summary\n');
   });
 
-  after(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
+  after(() => { cleanup(tmpDir); });
 
   test('no I001 when 68-01-scaffolding-PLAN.md matches 68-01-SUMMARY.md via canonicalPlanStem', () => {
     const result = runGsdTools(['validate', 'health', '--json'], tmpDir);

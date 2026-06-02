@@ -228,7 +228,7 @@ describe('manifest path safety', () => {
     outside = path.join(tmpDir, '..', `outside-managed-file-${path.basename(tmpDir)}.txt`);
   });
   afterEach(() => {
-    if (outside) fs.rmSync(outside, { recursive: true, force: true });
+    cleanup(outside);
     cleanup(tmpDir);
   });
 

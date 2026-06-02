@@ -36,6 +36,7 @@ const crypto = require('node:crypto');
 const os = require('node:os');
 const path = require('node:path');
 const cp = require('node:child_process');
+const { cleanup } = require('./helpers.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const SCRIPT = path.join(ROOT, 'get-shit-done', 'bin', 'verify-reapply-patches.cjs');
@@ -66,7 +67,7 @@ function writeBackupMeta(overrides = {}) {
 
 function resetFixture() {
   for (const dir of [patchesDir, configDir, pristineDir]) {
-    fs.rmSync(dir, { recursive: true, force: true });
+    cleanup(dir);
   }
   fs.mkdirSync(patchesDir);
   fs.mkdirSync(configDir);
@@ -98,7 +99,7 @@ before(() => {
 });
 
 after(() => {
-  fs.rmSync(tmpRoot, { recursive: true, force: true });
+  cleanup(tmpRoot);
 });
 
 // ---------------------------------------------------------------------------

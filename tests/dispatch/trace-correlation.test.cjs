@@ -22,6 +22,7 @@ const os = require('os');
 
 const { createHub } = require('../../get-shit-done/bin/lib/command-routing-hub.cjs');
 const { createDefaultLogger } = require('../../get-shit-done/bin/lib/observability/logger.cjs');
+const { cleanup } = require('../helpers.cjs');
 
 // ─── Test fixture setup ───────────────────────────────────────────────────────
 
@@ -99,7 +100,7 @@ describe('trace correlation — end-to-end parentTraceId propagation', () => {
       process.env.GSD_AUDIT = savedAudit;
     }
     // Clean up the temp directory
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   // ── Assertions ────────────────────────────────────────────────────────────
@@ -210,7 +211,7 @@ describe('trace correlation — end-to-end parentTraceId propagation', () => {
       } else {
         process.env.GSD_AUDIT = isolatedSavedAudit;
       }
-      fs.rmSync(isolatedTmp, { recursive: true, force: true });
+      cleanup(isolatedTmp);
     }
   });
 

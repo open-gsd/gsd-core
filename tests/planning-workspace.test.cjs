@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { cleanup } = require('./helpers.cjs');
 
 const {
   createPlanningWorkspace,
@@ -81,7 +82,7 @@ describe('planning-workspace: session adapter precedence', () => {
 
       assert.strictEqual(workspace.activeWorkstream.get(), 'session-ws');
     } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      cleanup(tmpDir);
     }
   });
 });
@@ -109,7 +110,7 @@ describe('planning-workspace: self-heal behavior', () => {
       assert.strictEqual(workspace.activeWorkstream.get(), null);
       assert.strictEqual(adapter.read(), null);
     } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      cleanup(tmpDir);
     }
   });
 });
@@ -122,7 +123,7 @@ describe('planning-workspace: lock seam', () => {
       assert.strictEqual(result, 'ok');
       assert.ok(!fs.existsSync(path.join(tmpDir, '.planning', '.lock')));
     } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      cleanup(tmpDir);
     }
   });
 
@@ -141,7 +142,7 @@ describe('planning-workspace: lock seam', () => {
       assert.strictEqual(attempts, 1);
       assert.ok(!fs.existsSync(path.join(tmpDir, '.planning', '.lock')));
     } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      cleanup(tmpDir);
     }
   });
 });
@@ -180,7 +181,7 @@ describe('core compatibility adapter: planning workspace functions', () => {
       setActiveWorkstream(tmpDir, null);
       assert.strictEqual(core.getActiveWorkstream(tmpDir), null);
     } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      cleanup(tmpDir);
     }
   });
 });

@@ -28,16 +28,12 @@ const {
   getCodexSkillAdapterHeader,
 } = require('../bin/install.js');
 
-const { createTempDir } = require('./helpers.cjs');
+const { createTempDir, cleanup } = require('./helpers.cjs');
 const makeTmp = (prefix) => createTempDir(`gsd-2256-${prefix}-`);
 
 function writeJson(p, obj) {
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, JSON.stringify(obj, null, 2));
-}
-
-function rmr(p) {
-  try { fs.rmSync(p, { recursive: true, force: true }); } catch { /* noop */ }
 }
 
 describe('bug #2256 — readGsdEffectiveModelOverrides', () => {
@@ -65,8 +61,8 @@ describe('bug #2256 — readGsdEffectiveModelOverrides', () => {
       if (origUserProfile === undefined) delete process.env.USERPROFILE;
       else process.env.USERPROFILE = origUserProfile;
     }
-    rmr(projectDir);
-    rmr(homeDir);
+    cleanup(projectDir);
+    cleanup(homeDir);
   });
 
   test('returns null when neither source defines model_overrides', () => {

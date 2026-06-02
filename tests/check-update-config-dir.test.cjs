@@ -18,6 +18,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
+const { cleanup } = require('./helpers.cjs');
 
 const CHECK_UPDATE_PATH = path.join(__dirname, '..', 'hooks', 'gsd-check-update.js');
 
@@ -60,7 +61,7 @@ describe('detectConfigDir runtime behavior (#1860)', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(tmpHome, { recursive: true, force: true });
+    cleanup(tmpHome);
   });
 
   test('returns .claude config dir when both .claude and .config/opencode exist', () => {

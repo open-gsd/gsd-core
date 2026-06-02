@@ -40,6 +40,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
+const { cleanup } = require('./helpers.cjs');
+
 const ROOT = path.join(__dirname, '..');
 const PROFILE_OUTPUT = path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'profile-output.cjs');
 const WORKFLOW = path.join(ROOT, 'get-shit-done', 'workflows', 'profile-user.md');
@@ -85,7 +87,7 @@ describe('Bug #2973: dev-preferences default writer path is skills/gsd-dev-prefe
       assert.equal(fs.existsSync(legacyPath), false,
         `writer must not create ${legacyPath} (#2973)`);
     } finally {
-      fs.rmSync(tmpHome, { recursive: true, force: true });
+      cleanup(tmpHome);
     }
   });
 });
@@ -130,7 +132,7 @@ describe('Bug #2973: installer migrates existing legacy dev-preferences.md to sk
       assert.equal(fs.existsSync(skillFile), true, `expected SKILL.md at ${skillFile}`);
       assert.equal(fs.readFileSync(skillFile, 'utf-8'), '# my legacy preferences\n');
     } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      cleanup(tmpDir);
     }
   });
 
@@ -148,7 +150,7 @@ describe('Bug #2973: installer migrates existing legacy dev-preferences.md to sk
       // Existing content untouched.
       assert.equal(fs.readFileSync(skillFile, 'utf-8'), '# user-customized skill\n');
     } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      cleanup(tmpDir);
     }
   });
 });
@@ -200,7 +202,7 @@ describe('Bug #2973 (#3003 CR): installRuntimeArtifacts preserves user-owned gsd
       assert.equal(fs.readFileSync(skillFile, 'utf-8'), userContent,
         'user content must be byte-identical after the install');
     } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+      cleanup(tmp);
     }
   });
 
@@ -239,7 +241,7 @@ describe('Bug #2973 (#3003 CR): installRuntimeArtifacts preserves user-owned gsd
       assert.equal(fs.existsSync(path.join(staleSkillDir, 'SKILL.md')), true,
         'fresh SKILL.md from source must be installed after wipe');
     } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+      cleanup(tmp);
     }
   });
 });

@@ -35,6 +35,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execSync } = require('node:child_process');
+const { cleanup } = require('./helpers.cjs');
 
 const EXECUTOR_PATH = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
 
@@ -172,6 +173,6 @@ test('bug-3542: stash pushed in main checkout is visible inside a linked worktre
         'contamination the executor prohibition exists to prevent.',
     );
   } finally {
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    cleanup(tmpRoot);
   }
 });

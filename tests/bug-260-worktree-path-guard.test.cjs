@@ -24,6 +24,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync, execFileSync } = require('node:child_process');
+const { cleanup } = require('./helpers.cjs');
 
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-worktree-path-guard.js');
 const INSTALL_SRC = path.join(__dirname, '..', 'bin', 'install.js');
@@ -97,8 +98,8 @@ before(() => {
 after(() => {
   // Remove worktree registration before deleting the directory
   try { git(mainRepo, ['worktree', 'remove', '--force', worktreeDir]); } catch { /* ignore */ }
-  try { fs.rmSync(mainRepo, { recursive: true, force: true }); } catch { /* ignore */ }
-  try { fs.rmSync(worktreeDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  cleanup(mainRepo);
+  cleanup(worktreeDir);
 });
 
 // ---------------------------------------------------------------------------

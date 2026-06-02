@@ -28,6 +28,7 @@ const path = require('node:path');
 const os = require('node:os');
 
 const { install } = require('../bin/install.js');
+const { cleanup } = require('./helpers.cjs');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const SOURCE_AGENTS_DIR = path.join(REPO_ROOT, 'agents');
@@ -107,7 +108,7 @@ function runGlobalInstall(runtime, tmpHome) {
     if (prevSkipStale === undefined) delete process.env.GSD_SKIP_STALE_SDK_CHECK;
     else process.env.GSD_SKIP_STALE_SDK_CHECK = prevSkipStale;
     // Clean up the isolated HOME dir
-    try { fs.rmSync(isolatedHome, { recursive: true, force: true }); } catch (_) { /* best-effort */ }
+    cleanup(isolatedHome);
   }
 
   return tmpHome;
@@ -132,7 +133,7 @@ describe('#443 Claude install: effort: injected into frontmatter', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('gsd-planner.md contains effort: xhigh (heavy tier default)', () => {
@@ -170,7 +171,7 @@ describe('#443 Gemini install: effort: absent (Gemini-safe)', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('gsd-planner.md does NOT contain effort: (Gemini install)', () => {
@@ -201,7 +202,7 @@ describe('#443 Codex install: model_reasoning_effort in .toml (unified resolver)
   });
 
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('gsd-planner.toml contains model_reasoning_effort = "xhigh" (heavy tier)', () => {
@@ -255,7 +256,7 @@ describe('#443 Config-driven: effort.agent_overrides drives install-time effort'
   });
 
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   test('Claude .md gets effort: low when agent_overrides.gsd-planner=low', () => {
@@ -329,7 +330,7 @@ describe('#443 resolveInstallTimeEffort: invalid tokens fall through to valid ef
   });
 
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanup(tmpDir);
   });
 
   function writeProjectConfig(config) {

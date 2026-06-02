@@ -22,6 +22,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
+const { cleanup } = require('./helpers.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', 'get-shit-done', 'workflows');
 const SNIPPET_FILE = path.join(WORKFLOWS_DIR, '_runtime-launcher.snippet.sh');
@@ -142,8 +143,8 @@ describe('bug-444: resolver finds repo-local .claude install', () => {
         `Expected stub output "LOCAL_CLAUDE_STUB:ping,test" but got:\n${stdout.trim()}`,
       );
     } finally {
-      fs.rmSync(fakeRoot, { recursive: true, force: true });
-      fs.rmSync(fakeHome, { recursive: true, force: true });
+      cleanup(fakeRoot);
+      cleanup(fakeHome);
     }
   });
 
@@ -204,8 +205,8 @@ describe('bug-444: resolver finds repo-local .claude install', () => {
         `Expected $HOME/.claude stub NOT to be invoked, but got:\n${stdout.trim()}`,
       );
     } finally {
-      fs.rmSync(fakeRoot, { recursive: true, force: true });
-      fs.rmSync(fakeHome, { recursive: true, force: true });
+      cleanup(fakeRoot);
+      cleanup(fakeHome);
     }
   });
 });

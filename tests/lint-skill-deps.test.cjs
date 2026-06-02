@@ -13,6 +13,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { spawnSync } = require('child_process');
+const { cleanup } = require('./helpers.cjs');
 
 const LINT_SCRIPT = path.join(__dirname, '..', 'scripts', 'lint-skill-deps.cjs');
 
@@ -48,7 +49,7 @@ describe('lint-skill-deps: frontmatter ↔ body consistency', () => {
       const result = runLint(['--dir', dir]);
       assert.strictEqual(result.status, 0, `Expected exit 0, got ${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -65,7 +66,7 @@ describe('lint-skill-deps: frontmatter ↔ body consistency', () => {
       const result = runLint(['--dir', dir]);
       assert.notStrictEqual(result.status, 0, 'Should exit non-zero when requires: is missing but body has reference');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -81,7 +82,7 @@ describe('lint-skill-deps: frontmatter ↔ body consistency', () => {
       const result = runLint(['--dir', dir]);
       assert.notStrictEqual(result.status, 0, 'Should exit non-zero for undeclared reference');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -92,7 +93,7 @@ describe('lint-skill-deps: frontmatter ↔ body consistency', () => {
       const result = runLint(['--dir', dir]);
       assert.strictEqual(result.status, 0);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 
@@ -108,7 +109,7 @@ describe('lint-skill-deps: frontmatter ↔ body consistency', () => {
       const result = runLint(['--dir', dir]);
       assert.notStrictEqual(result.status, 0, 'Unknown skill references must fail lint');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 });
@@ -138,7 +139,7 @@ describe('lint-skill-deps: script basics', () => {
       assert.strictEqual(result.stderr, '', `Expected empty stderr on success, got: ${result.stderr}`);
       assert.ok(result.stdout.length > 0, 'Expected non-empty stdout on success');
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      cleanup(dir);
     }
   });
 });

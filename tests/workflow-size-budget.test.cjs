@@ -21,6 +21,10 @@
  * (see `workflows/discuss-phase/modes/` for the progressive-disclosure
  * pattern introduced by #2551).
  *
+ * Tighten-only invariant (issue #597): ceilings track the tier high-water mark
+ * within GRACE lines. Budgets may only decrease, never silently creep upward.
+ * The assertTightCeiling() call below enforces this automatically.
+ *
  * See:
  *   - https://github.com/open-gsd/gsd-core/issues/2551 (this test)
  *   - https://github.com/open-gsd/gsd-core/issues/2361 (agent budget)
@@ -30,8 +34,14 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const { assertTightCeiling } = require('../scripts/lib/allowlist-ratchet.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', 'get-shit-done', 'workflows');
+
+// Grace band: maximum allowed slack (ceiling − actualMax) before a ceiling is
+// considered too loose. 60 lines gives one reasonable screen of breathing room
+// without permitting gross inflation.
+const GRACE = 60;
 
 // Bumped from 1700 → 1800 in #3181 to absorb MVP-mode verb-call additions
 // in execute-phase.md (1727 → ) and plan-phase.md (1714 → ) from #3178.
@@ -39,9 +49,12 @@ const WORKFLOWS_DIR = path.join(__dirname, '..', 'get-shit-done', 'workflows');
 // per the discuss-phase/modes/ precedent and revert this back to 1700.
 // Bumped from 1800 → 1810 in #3707 to absorb the startup orphan-sweep
 // block added to execute-phase.md (+2 lines: one comment + one bash command).
+// XL ceiling kept at 1810 (actualMax=1810, plan-phase; slack=0 ≤ GRACE=60).
 const XL_BUDGET = 1810;
-const LARGE_BUDGET = 1500;
-const DEFAULT_BUDGET = 1000;
+// LARGE ceiling lowered from 1500 → 1236 (actualMax=1176, docs-update; #597 ratchet-down).
+const LARGE_BUDGET = 1236;
+// DEFAULT ceiling lowered from 1000 → 870 (actualMax=810, settings-advanced; #597 ratchet-down).
+const DEFAULT_BUDGET = 870;
 
 // Top-level orchestrators that own end-to-end multi-phase rubrics.
 // Grandfathered at current sizes — see PR #2551 for #2551 progressive-disclosure
@@ -99,6 +112,35 @@ describe('SIZE: workflow line-count budget', () => {
       );
     });
   }
+});
+
+describe('SIZE: tier anti-creep (tighten-only ceilings, issue #597)', () => {
+  // For each tier, compute the high-water mark across all files in that tier
+  // and assert the ceiling stays tight. Prevents budgets from silently drifting
+  // upward: ceiling − actualMax must not exceed GRACE.
+  test('XL tier: ceiling tracks high-water mark within GRACE', () => {
+    const values = ALL_WORKFLOWS
+      .filter(w => XL_WORKFLOWS.has(w))
+      .map(w => lineCount(path.join(WORKFLOWS_DIR, w + '.md')));
+    const actualMax = Math.max(...values);
+    assertTightCeiling({ label: 'XL', actualMax, ceiling: XL_BUDGET, grace: GRACE, fail: assert.fail });
+  });
+
+  test('LARGE tier: ceiling tracks high-water mark within GRACE', () => {
+    const values = ALL_WORKFLOWS
+      .filter(w => LARGE_WORKFLOWS.has(w))
+      .map(w => lineCount(path.join(WORKFLOWS_DIR, w + '.md')));
+    const actualMax = Math.max(...values);
+    assertTightCeiling({ label: 'LARGE', actualMax, ceiling: LARGE_BUDGET, grace: GRACE, fail: assert.fail });
+  });
+
+  test('DEFAULT tier: ceiling tracks high-water mark within GRACE', () => {
+    const values = ALL_WORKFLOWS
+      .filter(w => !XL_WORKFLOWS.has(w) && !LARGE_WORKFLOWS.has(w))
+      .map(w => lineCount(path.join(WORKFLOWS_DIR, w + '.md')));
+    const actualMax = Math.max(...values);
+    assertTightCeiling({ label: 'DEFAULT', actualMax, ceiling: DEFAULT_BUDGET, grace: GRACE, fail: assert.fail });
+  });
 });
 
 describe('SIZE: discuss-phase progressive disclosure (issue #2551)', () => {

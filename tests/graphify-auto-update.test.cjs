@@ -130,7 +130,7 @@ describe('auto-update', () => {
         head_at_build: 'abcdef0',
         graphify_version: null,
       });
-      t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+      t.after(() => cleanup(tmpDir));
       const s = graphifyStatus(tmpDir);
       assert.strictEqual(s.stale, true, 'auto-build failure must set stale=true');
       assert.ok(s.last_build_auto_update, 'last_build_auto_update must be exposed');
@@ -147,7 +147,7 @@ describe('auto-update', () => {
         head_at_build: 'abcdef0',
         graphify_version: null,
       });
-      t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+      t.after(() => cleanup(tmpDir));
       const s = graphifyStatus(tmpDir);
       assert.strictEqual(s.stale, true, 'auto-build in-flight must set stale=true');
       assert.strictEqual(s.last_build_auto_update.status, 'running');
@@ -162,7 +162,7 @@ describe('auto-update', () => {
         head_at_build: 'abcdef0',
         graphify_version: null,
       });
-      t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+      t.after(() => cleanup(tmpDir));
       const s = graphifyStatus(tmpDir);
       assert.strictEqual(s.stale, false, 'fresh graph + ok auto-build => not stale');
       assert.strictEqual(s.last_build_auto_update.status, 'ok');
@@ -170,7 +170,7 @@ describe('auto-update', () => {
 
     test('graphifyStatus exposes last_build_auto_update: null when status file absent', (t) => {
       const tmpDir = makeStatusProject(null);
-      t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+      t.after(() => cleanup(tmpDir));
       const s = graphifyStatus(tmpDir);
       assert.strictEqual(s.last_build_auto_update, null);
       assert.strictEqual(s.stale, false, 'no status file => stale follows mtime only');
@@ -316,6 +316,7 @@ describe('auto-update', () => {
       atomicSleep(50); // yield 50 ms, then re-check (replaces execFileSync('sleep'))
     }
     try {
+      // eslint-disable-next-line local/no-raw-rmsync-in-tests -- best-effort teardown: error is swallowed so cleanup() (which propagates) cannot be used here; a residual temp dir after a detached-subprocess race is harmless (#382)
       fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
     } catch { /* best-effort teardown: a residual temp dir is harmless; never fail the test (#382) */ }
   }

@@ -26,6 +26,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
+const { cleanup } = require('./helpers.cjs');
+
 const EXECUTE_PHASE_PATH = path.join(
   __dirname,
   '..',
@@ -163,7 +165,7 @@ function runHandleBranchingStep(bash, cwd, branchName) {
       stdio: ['pipe', 'pipe', 'pipe'],
     }).toString();
   } finally {
-    fs.rmSync(scriptDir, { recursive: true, force: true });
+    cleanup(scriptDir);
   }
 }
 
@@ -209,7 +211,7 @@ describe('handle_branching branches off origin/HEAD, not current HEAD (#2916)', 
           `new phase branch tip must equal ${upstream} tip`
         );
       } finally {
-        fs.rmSync(root, { recursive: true, force: true });
+        cleanup(root);
       }
     });
   }
@@ -240,7 +242,7 @@ describe('handle_branching branches off origin/HEAD, not current HEAD (#2916)', 
         'existing-branch tip must be preserved (no rebase/reset)'
       );
     } finally {
-      fs.rmSync(root, { recursive: true, force: true });
+      cleanup(root);
     }
   });
 });

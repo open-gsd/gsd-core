@@ -29,6 +29,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('node:child_process');
 const os = require('node:os');
+const { cleanup } = require('./helpers.cjs');
 
 const HELPER_PATH = path.join(__dirname, '..', 'bin', 'lib', 'ui-safety-gate.cjs');
 const PLAN_PHASE_PATH = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'plan-phase.md');
@@ -298,7 +299,7 @@ describe('UI gate resolves the helper against RUNTIME_DIR, not the consuming rep
       assert.strictEqual(res.stdout.trim(), '0',
         'helper must be found via RUNTIME_DIR and report UI present — not silently no-op');
     } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+      cleanup(tmp);
     }
   });
 
@@ -308,7 +309,7 @@ describe('UI gate resolves the helper against RUNTIME_DIR, not the consuming rep
       const res = runGateFrom(tmp, 'Requirements: backend REST API only');
       assert.strictEqual(res.stdout.trim(), '1');
     } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+      cleanup(tmp);
     }
   });
 
@@ -334,8 +335,8 @@ describe('UI gate resolves the helper against RUNTIME_DIR, not the consuming rep
       assert.strictEqual(res.stdout.trim(), '0',
         'helper must be found via get-shit-done/bin/lib/ in installed layout and report UI present');
     } finally {
-      fs.rmSync(fakeRuntime, { recursive: true, force: true });
-      fs.rmSync(consumingProject, { recursive: true, force: true });
+      cleanup(fakeRuntime);
+      cleanup(consumingProject);
     }
   });
 });

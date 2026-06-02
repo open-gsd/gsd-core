@@ -23,7 +23,7 @@ const {
   convertClaudeCommandToClaudeSkill,
   installRuntimeArtifacts,
 } = require('../bin/install.js');
-const { parseFrontmatter } = require('./helpers.cjs');
+const { parseFrontmatter, cleanup } = require('./helpers.cjs');
 const pkg = require('../package.json');
 
 const {
@@ -138,9 +138,7 @@ describe('Hermes Agent: installRuntimeArtifacts', () => {
   });
 
   afterEach(() => {
-    if (fs.existsSync(tmpDir)) {
-      fs.rmSync(tmpDir, { recursive: true });
-    }
+    cleanup(tmpDir);
   });
 
   test('creates skills/gsd/quick/SKILL.md directory structure (Hermes bare-stem layout)', () => {

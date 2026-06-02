@@ -30,6 +30,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
+const { cleanup } = require('./helpers.cjs');
+
 // ── Load cmdPhaseComplete directly from phase.cjs (bypass the SDK router) ────
 // phase-command-router.cjs delegates to SDK when available; we must test the
 // CJS implementation directly since that is where the bug lives.
@@ -216,7 +218,7 @@ describe('issue #4 (CJS): cmdPhaseComplete — idempotency (blind-increment bug)
   });
 
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    cleanup(tmpDir);
   });
 
   test('T1: double invocation does NOT double-increment Completed Phases in STATE.md body', () => {
@@ -361,7 +363,7 @@ describe('issue #4 (CJS): cmdPhaseComplete — progress percent clamp', () => {
   let tmpDir;
 
   afterEach(() => {
-    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    cleanup(tmpDir);
   });
 
   test('T2: Progress percent never exceeds 100 after double invocation', () => {

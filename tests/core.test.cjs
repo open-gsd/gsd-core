@@ -1348,7 +1348,7 @@ describe('resolveWorktreeRoot with linked worktree .planning/', () => {
   afterEach(() => {
     if (worktreeDir) {
       try { execSyncLocal(`git worktree remove "${worktreeDir}" --force`, { cwd: mainDir, stdio: 'pipe' }); } catch { /* ok */ }
-      try { fs.rmSync(worktreeDir, { recursive: true, force: true }); } catch { /* ok */ }
+      cleanup(worktreeDir);
     }
     cleanup(mainDir);
   });
@@ -1359,7 +1359,7 @@ describe('resolveWorktreeRoot with linked worktree .planning/', () => {
 
     // Create a linked worktree
     worktreeDir = normalizePath(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-wt-linked-')));
-    fs.rmSync(worktreeDir, { recursive: true, force: true });
+    cleanup(worktreeDir);
     execSyncLocal(`git worktree add "${worktreeDir}" -b test-linked`, { cwd: mainDir, stdio: 'pipe' });
 
     // Give the linked worktree its own .planning/
@@ -1374,7 +1374,7 @@ describe('resolveWorktreeRoot with linked worktree .planning/', () => {
   test('returns main repo root when linked worktree has no .planning/', () => {
     // Create a linked worktree (no .planning/ in main or worktree)
     worktreeDir = normalizePath(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-wt-linked-')));
-    fs.rmSync(worktreeDir, { recursive: true, force: true });
+    cleanup(worktreeDir);
     execSyncLocal(`git worktree add "${worktreeDir}" -b test-linked-no-plan`, { cwd: mainDir, stdio: 'pipe' });
 
     // resolveWorktreeRoot should return the main repo root
@@ -1473,7 +1473,7 @@ describe('detectSubRepos', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(projectRoot, { recursive: true, force: true });
+    cleanup(projectRoot);
   });
 
   test('returns empty array when no child directories have .git', () => {
@@ -1520,7 +1520,7 @@ describe('loadConfig sub_repos auto-sync', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(projectRoot, { recursive: true, force: true });
+    cleanup(projectRoot);
   });
 
   test('migrates multiRepo: true to sub_repos array', () => {
@@ -1590,7 +1590,7 @@ describe('findProjectRoot', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(projectRoot, { recursive: true, force: true });
+    cleanup(projectRoot);
   });
 
   test('returns startDir when no .planning/ exists anywhere', () => {
