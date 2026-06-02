@@ -7,20 +7,33 @@
  * grok is intentionally absent: it is in runtime-homes.cjs but not wired
  * here. The TypeError on unknown runtime is the loud-fail signal that a
  * runtime was added to the homes list without a layout entry.
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/runtime-artifact-layout.cjs
+ * collapsed to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only types are added.
  */
 
-const path = require('path');
-const fs = require('fs');
-
+import path from 'node:path';
+import fs from 'node:fs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import installProfiles = require('./install-profiles.cjs');
 const {
   stageSkillsForProfile,
   stageAgentsForProfile,
   stageSkillsForRuntimeAsSkills,
-} = require('./install-profiles.cjs');
+} = installProfiles;
+
+// In .cts (CommonJS output) files, `require` is available as a global.
+const _require: NodeRequire = require;
 
 // ---------------------------------------------------------------------------
 // Lazy installer exports (avoids GSD_TEST_MODE env mutation at module load)
 // ---------------------------------------------------------------------------
+
+interface InstallExports {
+  readGsdCommandNames: () => string[];
+  [converterName: string]: unknown;
+}
 
 /**
  * Load bin/install.js exports in a test-safe way.
@@ -28,37 +41,50 @@ const {
  * it was not already set, restoring the original value in a finally block so
  * the module-level environment is never permanently mutated.
  */
-function loadInstallExports() {
-  const savedTestMode = process.env.GSD_TEST_MODE;
-  if (savedTestMode === undefined) process.env.GSD_TEST_MODE = '1';
+function loadInstallExports(): InstallExports {
+  const savedTestMode = process.env['GSD_TEST_MODE'];
+  if (savedTestMode === undefined) process.env['GSD_TEST_MODE'] = '1';
   try {
-     
-    return require('../../../bin/install.js');
+    return _require('../../../bin/install.js') as InstallExports;
   } finally {
-    if (savedTestMode === undefined) delete process.env.GSD_TEST_MODE;
-    else process.env.GSD_TEST_MODE = savedTestMode;
+    if (savedTestMode === undefined) delete process.env['GSD_TEST_MODE'];
+    else process.env['GSD_TEST_MODE'] = savedTestMode;
   }
 }
 
 /** Cache after first successful load. */
-let _installExports = null;
-function getInstallExports() {
+let _installExports: InstallExports | null = null;
+function getInstallExports(): InstallExports {
   if (!_installExports) _installExports = loadInstallExports();
   return _installExports;
 }
 
-/**
- * @typedef {'commands'|'agents'|'skills'} ArtifactKindName
- * @typedef {Object} ArtifactKind
- * @property {ArtifactKindName} kind
- * @property {string} destSubpath
- * @property {string} prefix
- * @property {(resolvedProfile: Object) => string} stage
- * @typedef {Object} Layout
- * @property {string} runtime
- * @property {string} configDir
- * @property {ArtifactKind[]} kinds
- */
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+type ArtifactKindName = 'commands' | 'agents' | 'skills';
+
+// Mirrors the (unexported) ResolvedProfile in install-profiles.cts.
+// Must stay in sync if that shape changes.
+interface ResolvedProfile {
+  name: string;
+  skills: Set<string> | '*';
+  agents: Set<string>;
+}
+
+interface ArtifactKind {
+  kind: ArtifactKindName;
+  destSubpath: string;
+  prefix: string;
+  stage: (resolvedProfile: ResolvedProfile) => string;
+}
+
+interface Layout {
+  runtime: string;
+  configDir: string;
+  kinds: ArtifactKind[];
+}
 
 // ---------------------------------------------------------------------------
 // Source root finders
@@ -71,11 +97,8 @@ function getInstallExports() {
  * 1. If runtimeConfigDir provided, check <runtimeConfigDir>/.gsd-source marker.
  * 2. Walk up from __dirname using path.dirname (no literal .. segments).
  * 3. Throw a descriptive error if neither succeeds.
- *
- * @param {string} [runtimeConfigDir] optional runtime config directory
- * @returns {string}
  */
-function findInstallSourceRoot(runtimeConfigDir) {
+function findInstallSourceRoot(runtimeConfigDir?: string): string {
   // Step 1: marker check
   if (runtimeConfigDir) {
     const markerPath = path.join(runtimeConfigDir, '.gsd-source');
@@ -107,11 +130,8 @@ function findInstallSourceRoot(runtimeConfigDir) {
  * 1. If runtimeConfigDir provided, check <runtimeConfigDir>/.gsd-source marker.
  * 2. Walk up from __dirname using path.dirname (no literal .. segments).
  * 3. Throw a descriptive error if neither succeeds.
- *
- * @param {string} [runtimeConfigDir] optional runtime config directory
- * @returns {string}
  */
-function findAgentsSourceRoot(runtimeConfigDir) {
+function findAgentsSourceRoot(runtimeConfigDir?: string): string {
   // Step 1: marker check
   if (runtimeConfigDir) {
     const markerPath = path.join(runtimeConfigDir, '.gsd-source');
@@ -154,7 +174,7 @@ const ALLOWED_RUNTIMES = new Set([
 // Layout table builders
 // ---------------------------------------------------------------------------
 
-function commandsKind(destSubpath, prefix, configDir) {
+function commandsKind(destSubpath: string, prefix: string, configDir: string): ArtifactKind {
   return {
     kind: 'commands',
     destSubpath,
@@ -163,7 +183,7 @@ function commandsKind(destSubpath, prefix, configDir) {
   };
 }
 
-function agentsKind(destSubpath, prefix, configDir) {
+function agentsKind(destSubpath: string, prefix: string, configDir: string): ArtifactKind {
   return {
     kind: 'agents',
     destSubpath,
@@ -175,24 +195,30 @@ function agentsKind(destSubpath, prefix, configDir) {
 /**
  * Build a skills kind descriptor.
  *
- * @param {string} destSubpath
- * @param {string} prefix
- * @param {string} converterName  name of converter function in bin/install.js exports
- * @param {string} runtime        canonical runtime ID (gates Hermes/Qwen branding in converter)
- * @param {string} configDir      runtime config dir (for .gsd-source marker resolution)
+ * @param destSubpath
+ * @param prefix
+ * @param converterName  name of converter function in bin/install.js exports
+ * @param runtime        canonical runtime ID (gates Hermes/Qwen branding in converter)
+ * @param configDir      runtime config dir (for .gsd-source marker resolution)
  */
-function skillsKind(destSubpath, prefix, converterName, runtime, configDir) {
+function skillsKind(
+  destSubpath: string,
+  prefix: string,
+  converterName: string,
+  runtime: string,
+  configDir: string,
+): ArtifactKind {
   return {
     kind: 'skills',
     destSubpath,
     prefix,
     stage: (resolved) => {
       const installExports = getInstallExports();
-      const realConverter = installExports[converterName];
+      const realConverter = installExports[converterName] as (content: string, skillName: string, runtime: string, cmdNames: string[]) => string;
       // Compute cmdNames once per stage call for performance (#3583).
       // Extra args are ignored by converters that don't need runtime/cmdNames.
       const cmdNames = installExports.readGsdCommandNames();
-      const wrappedConverter = (content, skillName) =>
+      const wrappedConverter = (content: string, skillName: string): string =>
         realConverter(content, skillName, runtime, cmdNames);
       return stageSkillsForRuntimeAsSkills(findInstallSourceRoot(configDir), resolved, wrappedConverter, prefix);
     },
@@ -205,13 +231,8 @@ function skillsKind(destSubpath, prefix, converterName, runtime, configDir) {
 
 /**
  * Resolve the artifact layout for a given runtime and config directory.
- *
- * @param {string} runtime
- * @param {string} configDir
- * @param {'local'|'global'} [scope]
- * @returns {Layout}
  */
-function resolveRuntimeArtifactLayout(runtime, configDir, scope = 'global') {
+function resolveRuntimeArtifactLayout(runtime: string, configDir: string, scope: 'local' | 'global' = 'global'): Layout {
   if (typeof configDir !== 'string' || configDir === '') {
     throw new TypeError('configDir must be a non-empty string');
   }
@@ -222,7 +243,7 @@ function resolveRuntimeArtifactLayout(runtime, configDir, scope = 'global') {
     throw new TypeError(`Unknown runtime: '${runtime}' — add to runtime-artifact-layout.cjs table`);
   }
 
-  let kinds;
+  let kinds: ArtifactKind[];
   switch (runtime) {
     case 'claude':
       if (scope === 'local') {
@@ -298,4 +319,4 @@ function resolveRuntimeArtifactLayout(runtime, configDir, scope = 'global') {
   return { runtime, configDir, kinds };
 }
 
-module.exports = { resolveRuntimeArtifactLayout, findInstallSourceRoot };
+export = { resolveRuntimeArtifactLayout, findInstallSourceRoot };

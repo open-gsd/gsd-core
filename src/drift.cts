@@ -26,12 +26,17 @@
  *   - The detector NEVER throws on malformed input — it returns a
  *     `{ skipped: true }` result. The phase workflow depends on this
  *     non-blocking guarantee.
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/drift.cjs collapsed to
+ * a TypeScript source of truth. Behaviour is preserved byte-for-behaviour from
+ * the prior hand-written .cjs; only types are added.
  */
 
 'use strict';
 
-const fs = require('node:fs');
-const { platformWriteSync } = require('./shell-command-projection.cjs');
+import fs from 'node:fs';
+import { platformWriteSync } from './shell-command-projection.cjs';
+import { formatGsdSlash } from './runtime-slash.cjs';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -39,7 +44,7 @@ const DRIFT_CATEGORIES = Object.freeze(['new_dir', 'barrel', 'migration', 'route
 
 // Category priority when a single file matches multiple rules.
 // Higher index = more specific = wins.
-const CATEGORY_PRIORITY = { new_dir: 0, barrel: 1, route: 2, migration: 3 };
+const CATEGORY_PRIORITY: Record<string, number> = { new_dir: 0, barrel: 1, route: 2, migration: 3 };
 
 const BARREL_RE = /^(packages|apps)\/[^/]+\/src\/index\.(ts|tsx|js|mjs|cjs)$/;
 
@@ -67,13 +72,12 @@ const SAFE_PATH_RE = /^(?!.*\.\.)(?:[A-Za-z0-9_.][A-Za-z0-9_.\-]*)(?:\/[A-Za-z0-
 
 // ─── Classification ──────────────────────────────────────────────────────────
 
+type DriftCategory = 'barrel' | 'migration' | 'route' | 'new_dir';
+
 /**
  * Classify a single file path into a drift category or null.
- *
- * @param {string} file - repo-relative path, forward slashes.
- * @returns {'barrel'|'migration'|'route'|null}
  */
-function classifyFile(file) {
+function classifyFile(file: unknown): DriftCategory | null {
   if (typeof file !== 'string' || !file) return null;
   const norm = file.replace(/\\/g, '/');
   if (MIGRATION_RES.some((r) => r.test(norm))) return 'migration';
@@ -90,7 +94,7 @@ function classifyFile(file) {
  * markdown, not a structured manifest. If the map mentions `src/lib/` the
  * check `structureMd.includes('src/lib')` holds.
  */
-function isPathMapped(file, structureMd) {
+function isPathMapped(file: string, structureMd: string): boolean {
   const norm = file.replace(/\\/g, '/');
   const parts = norm.split('/');
   // Check prefixes from longest to shortest; any hit means "mapped".
@@ -104,38 +108,72 @@ function isPathMapped(file, structureMd) {
   return false;
 }
 
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+interface DriftElement {
+  category: string;
+  path: string;
+}
+
+interface DetectDriftInput {
+  addedFiles?: unknown[];
+  modifiedFiles?: unknown[];
+  deletedFiles?: unknown[];
+  structureMd?: string | null;
+  threshold?: number;
+  action?: string;
+  runtime?: string;
+}
+
+interface DetectDriftResult {
+  skipped: false;
+  elements: DriftElement[];
+  actionRequired: boolean;
+  directive: string;
+  spawnMapper: boolean;
+  affectedPaths: string[];
+  threshold: number;
+  action: string;
+  message: string;
+  counts: {
+    added: number;
+    modified: number;
+    deleted: number;
+  };
+}
+
+interface SkippedResult {
+  skipped: true;
+  reason: string;
+  elements: DriftElement[];
+  actionRequired: false;
+  directive: string;
+  spawnMapper: false;
+  affectedPaths: string[];
+  message: string;
+}
+
 // ─── Main detection ──────────────────────────────────────────────────────────
 
 /**
  * Detect codebase drift.
- *
- * @param {object} input
- * @param {string[]} input.addedFiles - files with git status A (new)
- * @param {string[]} input.modifiedFiles - files with git status M
- * @param {string[]} input.deletedFiles - files with git status D
- * @param {string|null|undefined} input.structureMd - contents of STRUCTURE.md
- * @param {number} [input.threshold=3] - min number of drift elements that triggers action
- * @param {'warn'|'auto-remap'} [input.action='warn']
- * @param {string} [input.runtime='claude'] - runtime name (claude, codex, ...) used
- *   to format the slash-command in the remediation message. Caller resolves and
- *   passes this in to keep drift.cjs a pure library with no env/config reads.
- * @returns {object} result
  */
-function detectDrift(input) {
+function detectDrift(input: unknown): DetectDriftResult | SkippedResult {
   try {
     if (!input || typeof input !== 'object') {
       return skipped('invalid-input');
     }
+    const inp = input as DetectDriftInput;
     const {
       addedFiles,
       modifiedFiles,
       deletedFiles,
       structureMd,
-    } = input;
-    const threshold = Number.isInteger(input.threshold) && input.threshold >= 1
-      ? input.threshold
+    } = inp;
+    const threshold = Number.isInteger(inp.threshold) && (inp.threshold as number) >= 1
+      ? (inp.threshold as number)
       : 3;
-    const action = input.action === 'auto-remap' ? 'auto-remap' : 'warn';
+    const action = inp.action === 'auto-remap' ? 'auto-remap' : 'warn';
 
     if (structureMd === null || structureMd === undefined) {
       return skipped('missing-structure-md');
@@ -144,19 +182,18 @@ function detectDrift(input) {
       return skipped('invalid-structure-md');
     }
 
-    const added = Array.isArray(addedFiles) ? addedFiles.filter((x) => typeof x === 'string') : [];
+    const added = Array.isArray(addedFiles) ? addedFiles.filter((x): x is string => typeof x === 'string') : [];
     const modified = Array.isArray(modifiedFiles) ? modifiedFiles : [];
     const deleted = Array.isArray(deletedFiles) ? deletedFiles : [];
 
     // Build elements. One element per file, highest-priority category wins.
-    /** @type {{category: string, path: string}[]} */
-    const elements = [];
-    const seen = new Map();
+    const elements: DriftElement[] = [];
+    const seen = new Map<string, string>();
 
     for (const rawFile of added) {
       const file = rawFile.replace(/\\/g, '/');
       const specific = classifyFile(file);
-      let category = specific;
+      let category: string | null = specific;
       if (!category) {
         if (!isPathMapped(file, structureMd)) {
           category = 'new_dir';
@@ -184,7 +221,7 @@ function detectDrift(input) {
     const actionRequired = elements.length >= threshold;
     let directive = 'none';
     let spawnMapper = false;
-    let affectedPaths = [];
+    let affectedPaths: string[] = [];
     let message = '';
 
     if (actionRequired) {
@@ -193,7 +230,7 @@ function detectDrift(input) {
       if (action === 'auto-remap') {
         spawnMapper = true;
       }
-      message = buildMessage(elements, affectedPaths, action, input.runtime);
+      message = buildMessage(elements, affectedPaths, action, inp.runtime);
     }
 
     return {
@@ -214,11 +251,12 @@ function detectDrift(input) {
     };
   } catch (err) {
     // Non-blocking: never throw from this function.
-    return skipped('exception:' + (err && err.message ? err.message : String(err)));
+    const errMsg = (err as Error)?.message ? (err as Error).message : String(err);
+    return skipped('exception:' + errMsg);
   }
 }
 
-function skipped(reason) {
+function skipped(reason: string): SkippedResult {
   return {
     skipped: true,
     reason,
@@ -231,16 +269,17 @@ function skipped(reason) {
   };
 }
 
-function buildMessage(elements, affectedPaths, action, runtime) {
-  const byCat = {};
+function buildMessage(elements: DriftElement[], affectedPaths: string[], action: string, runtime: string | undefined): string {
+  const byCat: Record<string, string[]> = {};
   for (const e of elements) {
-    (byCat[e.category] ||= []).push(e.path);
+    if (!byCat[e.category]) byCat[e.category] = [];
+    byCat[e.category].push(e.path);
   }
-  const lines = [
+  const lines: string[] = [
     `Codebase drift detected: ${elements.length} structural element(s) since last mapping.`,
     '',
   ];
-  const labels = {
+  const labels: Record<string, string> = {
     new_dir: 'New directories',
     barrel: 'New barrel exports',
     migration: 'New migrations',
@@ -256,14 +295,13 @@ function buildMessage(elements, affectedPaths, action, runtime) {
   if (action === 'auto-remap') {
     lines.push(`Auto-remap scheduled for paths: ${affectedPaths.join(', ')}`);
   } else {
-    // drift.cjs is a pure library — it must never read env/config. The
+    // drift.cts is a pure library — it must never read env/config. The
     // caller (verify.cmdVerifyCodebaseDrift) resolves the runtime once and
     // passes it in via input.runtime so emitted commands match the project
     // the caller is targeting, not the current process directory.
-    const { formatGsdSlash } = require('./runtime-slash.cjs');
     const mapCmd = formatGsdSlash('map-codebase', runtime || 'claude');
     lines.push(
-      `Run ${mapCmd} --paths ${affectedPaths.join(',')} to refresh planning context.`,
+      `Run ${String(mapCmd)} --paths ${affectedPaths.join(',')} to refresh planning context.`,
     );
   }
   return lines.join('\n');
@@ -276,8 +314,8 @@ function buildMessage(elements, affectedPaths, action, runtime) {
  * the top-level directory prefixes (depth 2 when the repo uses an
  * `<apps|packages>/<name>/…` layout; depth 1 otherwise).
  */
-function chooseAffectedPaths(paths) {
-  const out = new Set();
+function chooseAffectedPaths(paths: string[]): string[] {
+  const out = new Set<string>();
   for (const raw of paths || []) {
     if (typeof raw !== 'string' || !raw) continue;
     const file = raw.replace(/\\/g, '/');
@@ -298,9 +336,9 @@ function chooseAffectedPaths(paths) {
  * Any path that is absolute, contains traversal, or includes shell
  * metacharacters is dropped.
  */
-function sanitizePaths(paths) {
+function sanitizePaths(paths: unknown): string[] {
   if (!Array.isArray(paths)) return [];
-  const out = [];
+  const out: string[] = [];
   for (const p of paths) {
     if (typeof p !== 'string') continue;
     if (p.startsWith('/')) continue;
@@ -314,11 +352,16 @@ function sanitizePaths(paths) {
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
-function parseFrontmatter(content) {
+interface FrontmatterResult {
+  data: Record<string, string>;
+  body: string;
+}
+
+function parseFrontmatter(content: unknown): FrontmatterResult {
   if (typeof content !== 'string') return { data: {}, body: '' };
   const m = content.match(FRONTMATTER_RE);
   if (!m) return { data: {}, body: content };
-  const data = {};
+  const data: Record<string, string> = {};
   for (const line of m[1].split(/\r?\n/)) {
     const kv = line.match(/^([A-Za-z0-9_][A-Za-z0-9_-]*):\s*(.*)$/);
     if (!kv) continue;
@@ -327,7 +370,7 @@ function parseFrontmatter(content) {
   return { data, body: content.slice(m[0].length) };
 }
 
-function serializeFrontmatter(data, body) {
+function serializeFrontmatter(data: Record<string, string>, body: string): string {
   const keys = Object.keys(data);
   if (keys.length === 0) return body;
   const lines = ['---'];
@@ -340,15 +383,15 @@ function serializeFrontmatter(data, body) {
  * Read `last_mapped_commit` from the frontmatter of a `.planning/codebase/*.md`
  * file. Returns null if the file does not exist or has no frontmatter.
  */
-function readMappedCommit(filePath) {
-  let content;
+function readMappedCommit(filePath: string): string | null {
+  let content: string;
   try {
     content = fs.readFileSync(filePath, 'utf8');
   } catch {
     return null;
   }
   const { data } = parseFrontmatter(content);
-  const sha = data.last_mapped_commit;
+  const sha = data['last_mapped_commit'];
   return typeof sha === 'string' && sha.length > 0 ? sha : null;
 }
 
@@ -356,7 +399,7 @@ function readMappedCommit(filePath) {
  * Upsert `last_mapped_commit` and `last_mapped_at` into the frontmatter of
  * the given file, preserving any other frontmatter keys and the body.
  */
-function writeMappedCommit(filePath, commitSha, isoDate) {
+function writeMappedCommit(filePath: string, commitSha: string, isoDate?: string): void {
   // Symmetric with readMappedCommit (which returns null on missing files):
   // tolerate a missing target by creating a minimal frontmatter-only file
   // rather than throwing ENOENT. This matters when a mapper produces a new
@@ -365,17 +408,17 @@ function writeMappedCommit(filePath, commitSha, isoDate) {
   try {
     content = fs.readFileSync(filePath, 'utf8');
   } catch (err) {
-    if (err.code !== 'ENOENT') throw err;
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
   }
   const { data, body } = parseFrontmatter(content);
-  data.last_mapped_commit = commitSha;
-  if (isoDate) data.last_mapped_at = isoDate;
+  data['last_mapped_commit'] = commitSha;
+  if (isoDate) data['last_mapped_at'] = isoDate;
   platformWriteSync(filePath, serializeFrontmatter(data, body));
 }
 
 // ─── Exports ─────────────────────────────────────────────────────────────────
 
-module.exports = {
+export = {
   DRIFT_CATEGORIES,
   classifyFile,
   detectDrift,

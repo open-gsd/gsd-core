@@ -7,12 +7,19 @@
  *
  * Active workstream pointer policy/session identity lives in
  * active-workstream-store.cjs and is consumed here via thin adapters.
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/planning-workspace.cjs collapsed
+ * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour from
+ * the prior hand-written .cjs; only types are added.
  */
 
-const fs = require('fs');
-const path = require('path');
-const { platformEnsureDir } = require('./shell-command-projection.cjs');
-const { realClock } = require('./clock.cjs');
+import fs from 'node:fs';
+import path from 'node:path';
+import { platformEnsureDir } from './shell-command-projection.cjs';
+import { realClock } from './clock.cjs';
+import type { Clock } from './clock.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import activeWorkstreamStore = require('./active-workstream-store.cjs');
 const {
   createSharedPointerAdapter,
   createSessionScopedPointerAdapter,
@@ -20,10 +27,10 @@ const {
   getActiveWorkstream: getStoredActiveWorkstream,
   setActiveWorkstream: setStoredActiveWorkstream,
   clearActiveWorkstream: clearStoredActiveWorkstream,
-} = require('./active-workstream-store.cjs');
+} = activeWorkstreamStore;
 
 // Track .planning/.lock files held by this process so they can be removed on exit.
-const _heldPlanningLocks = new Set();
+const _heldPlanningLocks = new Set<string>();
 process.on('exit', () => {
   for (const lockPath of _heldPlanningLocks) {
     try { fs.unlinkSync(lockPath); } catch { /* already gone */ }
@@ -47,9 +54,15 @@ const PLANNING_LOCK_RETRY_ERRNOS = new Set([
   'ESTALE',  // NFS: stale file handle (self-resolves on retry)
 ]);
 
-function planningDir(cwd, ws, project) {
-  if (project === undefined) project = process.env.GSD_PROJECT || null;
-  if (ws === undefined) ws = process.env.GSD_WORKSTREAM || null;
+// Loose opts type accepted by createPlanningWorkspace — passed through to
+// active-workstream-store get/set/clear which accept { activeWorkstreamAdapter?,
+// activeWorkstreamAdapters?, getStored? }. Using Record<string, unknown> is
+// compatible with the structural type the store expects.
+type WorkstreamAdapterOpts = Record<string, unknown>;
+
+function planningDir(cwd: string, ws?: string | null, project?: string | null): string {
+  if (project === undefined) project = process.env['GSD_PROJECT'] ?? null;
+  if (ws === undefined) ws = process.env['GSD_WORKSTREAM'] ?? null;
 
   // Reject path separators and traversal components in project/workstream names
   const BAD_SEGMENT = /[/\\]|\.\./;
@@ -66,11 +79,21 @@ function planningDir(cwd, ws, project) {
   return base;
 }
 
-function planningRoot(cwd) {
+function planningRoot(cwd: string): string {
   return path.join(cwd, '.planning');
 }
 
-function planningPaths(cwd, ws) {
+interface PlanningPaths {
+  planning: string;
+  state: string;
+  roadmap: string;
+  project: string;
+  config: string;
+  phases: string;
+  requirements: string;
+}
+
+function planningPaths(cwd: string, ws?: string | null): PlanningPaths {
   const base = planningDir(cwd, ws);
   return {
     planning: base,
@@ -84,14 +107,14 @@ function planningPaths(cwd, ws) {
 }
 
 /**
- * @param {string} cwd
- * @param {function} fn - callback to run while holding the lock
- * @param {{ now(): number, sleep(ms: number): void }} [clock]
+ * @param cwd
+ * @param fn - callback to run while holding the lock
+ * @param clock
  *   Optional clock seam for testing. Defaults to realClock (Date.now + Atomics.wait).
  *   Pass a fake clock from tests/helpers/clock.cjs to drive timeout/stale logic
  *   without real wall-clock waits.
  */
-function withPlanningLock(cwd, fn, clock) {
+function withPlanningLock<T>(cwd: string, fn: () => T, clock?: Clock): T {
   if (clock === undefined) clock = realClock;
   const lockPath = path.join(planningDir(cwd), '.lock');
   const lockTimeout = 10000; // 10 seconds
@@ -100,7 +123,7 @@ function withPlanningLock(cwd, fn, clock) {
   // Ensure .planning/ exists
   try { platformEnsureDir(planningDir(cwd)); } catch { /* ok */ }
 
-  function acquireLock() {
+  function acquireLock(): void {
     // Atomic create — fails if file exists
     fs.writeFileSync(lockPath, JSON.stringify({
       pid: process.pid,
@@ -111,7 +134,7 @@ function withPlanningLock(cwd, fn, clock) {
     _heldPlanningLocks.add(lockPath);
   }
 
-  function runWithHeldLock() {
+  function runWithHeldLock(): T {
     try {
       return fn();
     } finally {
@@ -131,11 +154,12 @@ function withPlanningLock(cwd, fn, clock) {
       // are recoverable — wait and retry rather than propagating.
       // See PLANNING_LOCK_RETRY_ERRNOS for the full list and rationale.
       if (lockWasAcquired) throw err;
-      if (PLANNING_LOCK_RETRY_ERRNOS.has(err.code)) {
+      const nodeErr = err as NodeJS.ErrnoException;
+      if (PLANNING_LOCK_RETRY_ERRNOS.has(nodeErr.code ?? '')) {
         clock.sleep(100);
         continue;
       }
-      if (err.code === 'EEXIST') {
+      if (nodeErr.code === 'EEXIST') {
         // Lock exists — check if stale (>30s old)
         try {
           const stat = fs.statSync(lockPath);
@@ -159,16 +183,27 @@ function withPlanningLock(cwd, fn, clock) {
   return runWithHeldLock();
 }
 
-function createPlanningWorkspace(cwd, opts = {}) {
+function createPlanningWorkspace(cwd: string, opts: WorkstreamAdapterOpts = {}): {
+  paths: {
+    dir(ws?: string | null, project?: string | null): string;
+    root(): string;
+    all(ws?: string | null): PlanningPaths;
+  };
+  activeWorkstream: {
+    get(): string | null;
+    set(name: string): void;
+    clear(): void;
+  };
+} {
   return {
     paths: {
-      dir(ws, project) {
+      dir(ws?: string | null, project?: string | null) {
         return planningDir(cwd, ws, project);
       },
       root() {
         return planningRoot(cwd);
       },
-      all(ws) {
+      all(ws?: string | null) {
         return planningPaths(cwd, ws);
       },
     },
@@ -176,7 +211,7 @@ function createPlanningWorkspace(cwd, opts = {}) {
       get() {
         return getStoredActiveWorkstream(cwd, opts);
       },
-      set(name) {
+      set(name: string) {
         setStoredActiveWorkstream(cwd, name, opts);
       },
       clear() {
@@ -186,11 +221,11 @@ function createPlanningWorkspace(cwd, opts = {}) {
   };
 }
 
-function getActiveWorkstream(cwd) {
+function getActiveWorkstream(cwd: string): string | null {
   return getStoredActiveWorkstream(cwd);
 }
 
-function setActiveWorkstream(cwd, name) {
+function setActiveWorkstream(cwd: string, name: string): void {
   setStoredActiveWorkstream(cwd, name);
 }
 
@@ -206,24 +241,23 @@ function setActiveWorkstream(cwd, name) {
  * duplication that previously existed across init.cjs, roadmap.cjs,
  * core.cjs, gap-checker.cjs (#3739).
  *
- * @param {string|string[]} absDirOrFiles - Absolute path to the phase directory,
+ * @param absDirOrFiles - Absolute path to the phase directory,
  *   OR an already-read files array (avoids a redundant readdirSync at call sites
  *   that already hold a directory listing).
- * @returns {string|null}
  */
-function findContextMdIn(absDirOrFiles) {
+function findContextMdIn(absDirOrFiles: string | string[]): string | null {
   try {
     const files = Array.isArray(absDirOrFiles)
       ? absDirOrFiles
       : fs.readdirSync(absDirOrFiles);
     if (files.includes('CONTEXT.md')) return 'CONTEXT.md';
-    return files.find(f => f.endsWith('-CONTEXT.md')) ?? null;
+    return files.find((f: string) => f.endsWith('-CONTEXT.md')) ?? null;
   } catch {
     return null;
   }
 }
 
-module.exports = {
+export = {
   createPlanningWorkspace,
   createSharedPointerAdapter,
   createSessionScopedPointerAdapter,

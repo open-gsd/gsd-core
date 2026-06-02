@@ -25,7 +25,18 @@
  *   - The kind taxonomy is closed. Callers switch on ERROR_KINDS values.
  *   - Each error variant carries ONLY its own typed payload (#176).
  *     No cross-variant `message`/`details` escape hatches.
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/command-routing-hub.cjs collapsed
+ * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour from
+ * the prior hand-written .cjs; only types are added.
  */
+
+import { makeDispatchEvent } from './observability/event.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import observabilityLogger = require('./observability/logger.cjs');
+const { createNoOpLogger } = observabilityLogger;
+
+// ─── Error kind constants ─────────────────────────────────────────────────────
 
 /**
  * Closed error-kind enum. Export as a frozen object so callers can switch on
@@ -45,20 +56,50 @@ const ERROR_KINDS = Object.freeze({
   HandlerRefusal: 'HandlerRefusal',
   /** A handler threw an unexpected exception. */
   HandlerFailure: 'HandlerFailure',
-});
+} as const);
 
-// ─── Observability imports ────────────────────────────────────────────────────
-const { makeDispatchEvent } = require('./observability/event.cjs');
-const { createNoOpLogger } = require('./observability/logger.cjs');
+// ─── Result types ─────────────────────────────────────────────────────────────
+
+interface OkResult {
+  ok: true;
+  data: unknown;
+}
+
+interface UnknownCommandResult {
+  ok: false;
+  kind: 'UnknownCommand';
+  command: string;
+}
+
+interface InvalidArgsResult {
+  ok: false;
+  kind: 'InvalidArgs';
+  arg: string;
+  reason: string;
+}
+
+interface HandlerRefusalResult {
+  ok: false;
+  kind: 'HandlerRefusal';
+  reason: string;
+}
+
+interface HandlerFailureResult {
+  ok: false;
+  kind: 'HandlerFailure';
+  message: string;
+  cause?: Error;
+}
+
+type ErrResult = UnknownCommandResult | InvalidArgsResult | HandlerRefusalResult | HandlerFailureResult;
+type HubResult = OkResult | ErrResult;
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 /**
  * Safe JSON serialisation that never throws.
- * @param {unknown} value
- * @returns {string}
  */
-function _safeJson(value) {
+function _safeJson(value: unknown): string {
   try {
     return JSON.stringify(value);
   } catch {
@@ -72,46 +113,37 @@ function _safeJson(value) {
 // Finding 3: all factory returns are Object.freeze'd so callers cannot mutate
 // the variant invariant.
 
-/**
- * @param {string} command - The unrecognised command string (family or family+subcommand).
- * @returns {Readonly<{ ok: false, kind: 'UnknownCommand', command: string }>}
- */
-function makeUnknownCommand(command) {
-  return Object.freeze({ ok: false, kind: ERROR_KINDS.UnknownCommand, command });
+function makeUnknownCommand(command: string): Readonly<UnknownCommandResult> {
+  return Object.freeze({ ok: false as const, kind: ERROR_KINDS.UnknownCommand, command });
+}
+
+function makeInvalidArgs(arg: string, reason: string): Readonly<InvalidArgsResult> {
+  return Object.freeze({ ok: false as const, kind: ERROR_KINDS.InvalidArgs, arg, reason });
+}
+
+function makeHandlerRefusal(reason: string): Readonly<HandlerRefusalResult> {
+  return Object.freeze({ ok: false as const, kind: ERROR_KINDS.HandlerRefusal, reason });
 }
 
 /**
- * @param {string} arg    - The argument token that failed validation.
- * @param {string} reason - Human-readable explanation of the failure.
- * @returns {Readonly<{ ok: false, kind: 'InvalidArgs', arg: string, reason: string }>}
- */
-function makeInvalidArgs(arg, reason) {
-  return Object.freeze({ ok: false, kind: ERROR_KINDS.InvalidArgs, arg, reason });
-}
-
-/**
- * @param {string} reason - Human-readable explanation for the refusal.
- * @returns {Readonly<{ ok: false, kind: 'HandlerRefusal', reason: string }>}
- */
-function makeHandlerRefusal(reason) {
-  return Object.freeze({ ok: false, kind: ERROR_KINDS.HandlerRefusal, reason });
-}
-
-/**
- * @param {string} message  - Human-readable description of the failure.
- * @param {Error}  [cause]  - The original thrown Error, when available.
+ * @param message  - Human-readable description of the failure.
+ * @param cause    - The original thrown Error, when available.
  *   Non-Error values (strings, plain objects, etc.) are wrapped in an Error
  *   with `.thrown` set to the original value. null/undefined → no cause field.
- * @returns {{ ok: false, kind: 'HandlerFailure', message: string, cause?: Error }}
  */
-function makeHandlerFailure(message, cause) {
-  const obj = { ok: false, kind: ERROR_KINDS.HandlerFailure, message };
+function makeHandlerFailure(message: string, cause?: unknown): HandlerFailureResult {
+  const obj: {
+    ok: false;
+    kind: 'HandlerFailure';
+    message: string;
+    cause?: Error;
+  } = { ok: false as const, kind: ERROR_KINDS.HandlerFailure, message };
   if (cause != null) {
     if (cause instanceof Error) {
       obj.cause = cause;
     } else {
       // Finding 4: wrap non-Error cause so downstream .cause.stack never silently returns undefined
-      const wrapper = new Error('non-Error cause: ' + _safeJson(cause));
+      const wrapper = new Error('non-Error cause: ' + _safeJson(cause)) as Error & { thrown?: unknown };
       wrapper.thrown = cause;
       obj.cause = wrapper;
     }
@@ -125,10 +157,8 @@ function makeHandlerFailure(message, cause) {
  * Required payload fields per ok:false kind.
  * `required` — fields that MUST be present (non-undefined) for the variant to be valid.
  * `allowed`  — the complete set of allowed fields (including ok, kind).
- *
- * @type {Record<string, { required: string[], allowed: Set<string> }>}
  */
-const _VARIANT_SCHEMA = {
+const _VARIANT_SCHEMA: Record<string, { required: string[]; allowed: Set<string> }> = {
   UnknownCommand: {
     required: ['command'],
     allowed: new Set(['ok', 'kind', 'command']),
@@ -151,17 +181,14 @@ const _VARIANT_SCHEMA = {
  * Validates a handler-returned { ok: false, ... } result against the typed schema.
  *
  * Returns null if valid, or a string describing the contract violation.
- *
- * @param {object} result
- * @returns {string|null}
  */
-function _validateErrResult(result) {
+function _validateErrResult(result: Record<string, unknown>): string | null {
   const { kind } = result;
-  const schema = _VARIANT_SCHEMA[kind];
+  const schema = _VARIANT_SCHEMA[kind as string];
 
   // Unknown kind — not in the closed enum
   if (!schema) {
-    return `handler returned unknown kind '${kind}': expected one of ${Object.keys(_VARIANT_SCHEMA).join(', ')}`;
+    return `handler returned unknown kind '${String(kind)}': expected one of ${Object.keys(_VARIANT_SCHEMA).join(', ')}`;
   }
 
   // Missing required fields
@@ -169,7 +196,7 @@ function _validateErrResult(result) {
     if (result[field] === undefined) {
       return (
         `handler returned malformed Result variant: ` +
-        `kind '${kind}' requires field '${field}' but it is missing. ` +
+        `kind '${String(kind)}' requires field '${field}' but it is missing. ` +
         `got: ${_safeJson(result)}`
       );
     }
@@ -180,7 +207,7 @@ function _validateErrResult(result) {
     if (!schema.allowed.has(key)) {
       return (
         `handler returned malformed Result variant: ` +
-        `kind '${kind}' does not allow field '${key}'. ` +
+        `kind '${String(kind)}' does not allow field '${key}'. ` +
         `expected fields: ${[...schema.allowed].join(', ')}. ` +
         `got: ${_safeJson(result)}`
       );
@@ -190,34 +217,29 @@ function _validateErrResult(result) {
   return null; // valid
 }
 
-/**
- * @typedef {{ ok: true, data: unknown }} OkResult
- * @typedef {{ ok: false, kind: 'UnknownCommand', command: string }} UnknownCommandResult
- * @typedef {{ ok: false, kind: 'InvalidArgs', arg: string, reason: string }} InvalidArgsResult
- * @typedef {{ ok: false, kind: 'HandlerRefusal', reason: string }} HandlerRefusalResult
- * @typedef {{ ok: false, kind: 'HandlerFailure', message: string, cause?: Error }} HandlerFailureResult
- * @typedef {UnknownCommandResult | InvalidArgsResult | HandlerRefusalResult | HandlerFailureResult} ErrResult
- * @typedef {OkResult | ErrResult} HubResult
- */
+// ─── Hub options ──────────────────────────────────────────────────────────────
 
-/**
- * @typedef {object} HubOptions
- * @property {Record<string, Record<string, (ctx: object) => HubResult>>} [cjsRegistry] -
- *   Nested map of family -> subcommand -> handler.
- * @property {Record<string, string[]>} [manifest] - Map of family -> known subcommands.
- *   Used for UnknownCommand detection.
- * @property {{ onEvent(event: object): void }} [logger] -
- *   DispatchLogger to receive a DispatchEvent after every dispatch.
- *   Defaults to a no-op logger (silent). Use createDefaultLogger() for the
- *   reference implementation (stderr on error, opt-in file audit).
- */
+type Handler = (ctx: Record<string, unknown>) => HubResult;
+
+interface HubOptions {
+  cjsRegistry?: Record<string, Record<string, Handler>>;
+  manifest?: Record<string, string[]>;
+  logger?: { onEvent(event: object): void };
+}
+
+interface DispatchRequest {
+  family: string;
+  subcommand?: string;
+  args?: unknown[];
+  cwd?: string;
+  raw?: boolean;
+  parentTraceId?: unknown;
+}
 
 /**
  * Safe stringify for logger-failure warnings — avoids circular-ref crashes.
- * @param {unknown} value
- * @returns {string}
  */
-function _safeJsonForWarn(value) {
+function _safeJsonForWarn(value: unknown): string {
   try {
     return JSON.stringify(value);
   } catch {
@@ -227,11 +249,8 @@ function _safeJsonForWarn(value) {
 
 /**
  * Construct a CommandRoutingHub.
- *
- * @param {HubOptions} options
- * @returns {{ dispatch: (req: object) => HubResult }}
  */
-function createHub({ cjsRegistry, manifest, logger } = {}) {
+function createHub({ cjsRegistry, manifest, logger }: HubOptions = {}): { dispatch: (req: DispatchRequest) => HubResult } {
   const _cjsRegistry = cjsRegistry;
   const _manifest = manifest;
   // Default to no-op so callers that don't inject a logger get pure-silent behaviour.
@@ -245,28 +264,21 @@ function createHub({ cjsRegistry, manifest, logger } = {}) {
    *
    * HubResult ok path:   { ok: true, data }        → { kind: 'ok', data }
    * HubResult err paths: { ok: false, kind, ...payload } → { kind, ...payload }
-   *
-   * @param {object} hubResult
-   * @returns {object}
    */
-  function _normaliseResult(hubResult) {
+  function _normaliseResult(hubResult: HubResult): Record<string, unknown> {
     if (hubResult.ok) {
       return { kind: 'ok', data: hubResult.data };
     }
     // err variant: already has kind + typed payload
-    return hubResult;
+    // Double-cast through unknown to satisfy strict index-signature check.
+    return hubResult as unknown as Record<string, unknown>; // eslint-disable-line @typescript-eslint/no-unsafe-return
   }
 
   /**
    * Emit a DispatchEvent to the injected logger.
    * Logger errors NEVER propagate — they are caught and emitted as a warn line to stderr.
-   *
-   * @param {string}  command       - The dispatched command string.
-   * @param {unknown} args          - The raw args from the request.
-   * @param {object}  hubResult     - The HubResult.
-   * @param {string}  [parentTraceId] - Optional parent trace ID from the request (P1.4).
    */
-  function _notifyLogger(command, args, hubResult, parentTraceId) {
+  function _notifyLogger(command: string, args: unknown, hubResult: HubResult, parentTraceId?: unknown): void {
     try {
       const eventResult = _normaliseResult(hubResult);
       const event = makeDispatchEvent({ command, args, result: eventResult, parentTraceId });
@@ -278,7 +290,7 @@ function createHub({ cjsRegistry, manifest, logger } = {}) {
           _safeJsonForWarn({
             level: 'warn',
             source: 'DispatchLogger',
-            message: 'logger.onEvent failed: ' + String(logErr && logErr.message || logErr),
+            message: 'logger.onEvent failed: ' + String((logErr as Error)?.message || logErr),
           }) + '\n'
         );
       } catch {
@@ -289,15 +301,12 @@ function createHub({ cjsRegistry, manifest, logger } = {}) {
 
   /**
    * Dispatch a command through the hub.
-   *
-   * @param {{ family: string, subcommand: string, args?: unknown[], cwd?: string, raw?: boolean }} req
-   * @returns {HubResult}
    */
-  function dispatch(req) {
-    const { family, subcommand, args = [], parentTraceId } = req || {};
+  function dispatch(req: DispatchRequest): HubResult {
+    const { family, subcommand, args = [], parentTraceId } = req || {} as DispatchRequest;
     const command = subcommand ? `${family} ${subcommand}` : String(family);
 
-    let result;
+    let result: HubResult;
     try {
       result = _dispatch(req);
     } catch (err) {
@@ -305,7 +314,7 @@ function createHub({ cjsRegistry, manifest, logger } = {}) {
         result = makeHandlerFailure(err.message, err);
       } else {
         // Finding 2: preserve non-Error throwables via a wrapper Error with .thrown
-        const wrapper = new Error('non-Error thrown: ' + _safeJson(err));
+        const wrapper = new Error('non-Error thrown: ' + _safeJson(err)) as Error & { thrown?: unknown };
         wrapper.thrown = err;
         result = makeHandlerFailure(String(err), wrapper);
       }
@@ -315,7 +324,7 @@ function createHub({ cjsRegistry, manifest, logger } = {}) {
     return result;
   }
 
-  function _dispatch(req) {
+  function _dispatch(req: DispatchRequest): HubResult {
     const { family, subcommand, args = [], cwd, raw } = req;
 
     // ── manifest check ────────────────────────────────────────────────────────
@@ -332,7 +341,7 @@ function createHub({ cjsRegistry, manifest, logger } = {}) {
     return _dispatchCjs({ family, subcommand, args, cwd, raw });
   }
 
-  function _dispatchCjs({ family, subcommand, args, cwd, raw }) {
+  function _dispatchCjs({ family, subcommand, args, cwd, raw }: DispatchRequest): HubResult {
     if (!_cjsRegistry) {
       return makeUnknownCommand(String(family));
     }
@@ -355,11 +364,12 @@ function createHub({ cjsRegistry, manifest, logger } = {}) {
     if (result && typeof result === 'object' && 'ok' in result) {
       if (!result.ok) {
         // Finding 1: runtime-validate ok:false variant shape; coerce malformed to HandlerFailure
-        const violation = _validateErrResult(result);
+        const violation = _validateErrResult(result as unknown as Record<string, unknown>);
         if (violation !== null) {
           return makeHandlerFailure(
             'handler returned malformed Result variant: ' + violation,
-            new Error('expected ' + (result.kind || '<no kind>') + ', got ' + _safeJson(result))
+            // eslint-disable-next-line @typescript-eslint/no-base-to-string, @typescript-eslint/restrict-plus-operands
+            new Error('expected ' + ((result as unknown as Record<string, unknown>)['kind'] ?? '<no kind>') + ', got ' + _safeJson(result))
           );
         }
       }
@@ -378,7 +388,7 @@ function createHub({ cjsRegistry, manifest, logger } = {}) {
   return { dispatch };
 }
 
-module.exports = {
+export = {
   createHub,
   ERROR_KINDS,
   makeUnknownCommand,

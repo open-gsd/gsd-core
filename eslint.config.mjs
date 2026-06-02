@@ -81,6 +81,10 @@ export default tseslint.config(
       'get-shit-done/bin/lib/intel.cjs',
       'get-shit-done/bin/lib/installer-migrations.cjs',
       'get-shit-done/bin/lib/worktree-safety.cjs',
+      'get-shit-done/bin/lib/planning-workspace.cjs',
+      'get-shit-done/bin/lib/runtime-artifact-layout.cjs',
+      'get-shit-done/bin/lib/command-routing-hub.cjs',
+      'get-shit-done/bin/lib/drift.cjs',
     ],
   },
 
