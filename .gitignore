@@ -87,6 +87,16 @@ build/
 /get-shit-done/bin/lib/schema-detect.cjs
 /get-shit-done/bin/lib/runtime-name-policy.cjs
 /get-shit-done/bin/lib/runtime-slash.cjs
+/get-shit-done/bin/lib/observability/event.cjs
+/get-shit-done/bin/lib/workstream-inventory-builder.cjs
+/get-shit-done/bin/lib/plan-scan.cjs
+/get-shit-done/bin/lib/fallow-runner.cjs
+/get-shit-done/bin/lib/project-root.cjs
+/get-shit-done/bin/lib/installer-migration-authoring.cjs
+/get-shit-done/bin/lib/update-context.cjs
+/get-shit-done/bin/lib/installer-migrations/000-first-time-baseline.cjs
+/get-shit-done/bin/lib/runtime-homes.cjs
+/get-shit-done/bin/lib/model-catalog.cjs
 __pycache__/
 *.pyc
 .venv/
