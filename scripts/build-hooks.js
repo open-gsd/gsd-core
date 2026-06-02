@@ -237,4 +237,4 @@ if (require.main === module) {
   build();
 }
 
-module.exports = { HOOKS_TO_COPY };
+module.exports = { HOOKS_TO_COPY, HOOKS_SUBDIRS_TO_COPY };
