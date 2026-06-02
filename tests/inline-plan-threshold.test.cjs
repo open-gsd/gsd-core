@@ -98,7 +98,7 @@ describe('execute-plan.md routing instruction (#1979)', () => {
     const patternMatch = content.match(/TASK_COUNT=\$\(grep -cE '([^']+)'/);
     assert.ok(patternMatch, 'must find TASK_COUNT grep pattern');
 
-    const regexSource = patternMatch[1].replace(/\\s/g, '\\s').replace(/\[\[:space:\]>\]/, '[\\s>]');
+    const regexSource = patternMatch[1].replace(/\[\[:space:\]>\]/, '[\\s>]');
     const re = new RegExp(regexSource, 'gm');
 
     // Test cases: should match all of these as single tasks

@@ -128,7 +128,7 @@ describe('bug-2808: SKILL.md name: uses hyphen form', () => {
     for (const f of workflowFiles) {
       const src = fs.readFileSync(f, 'utf-8');
       // Strip HTML comments to avoid matching commented-out examples.
-      const stripped = src.replace(/<!--[\s\S]*?-->/g, '');
+      const stripped = src.replace(/<!--[\s\S]*?-->/g, '').replace(/<!--/g, '');
       // Scan each line for Skill() calls using the colon form.
       // Parsing line-by-line is more precise than a multi-line regex
       // and avoids false positives from incidental matches in prose.

@@ -174,7 +174,7 @@ const INTERNAL_COMPONENT_SLUGS = new Set([
  * this was /gsd-old-name...").
  */
 function stripHtmlComments(content) {
-  return content.replace(/<!--[\s\S]*?-->/g, '');
+  return content.replace(/<!--[\s\S]*?-->/g, '').replace(/<!--/g, '');
 }
 
 /**

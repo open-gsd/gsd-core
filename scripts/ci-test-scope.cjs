@@ -153,7 +153,7 @@ const RULES = [
   },
   {
     name: 'configuration',
-    match: path => /config|configuration|model-catalog|model-profile/.test(path),
+    match: path => ['config', 'configuration', 'model-catalog', 'model-profile'].some(k => path.includes(k)),
     tests: [
       'tests/config.test.cjs',
       'tests/config-get-default.test.cjs',

@@ -531,9 +531,9 @@ function generateSkillsSection(cwd: string): SectionResult {
 
   const lines = ['| Skill | Description | Path |', '|-------|-------------|------|'];
   for (const skill of discovered) {
-    // Sanitize table cell content (escape pipes)
-    const desc = skill.description.replace(/\|/g, '\\|').replace(/\n/g, ' ').trim();
-    const safeName = skill.name.replace(/\|/g, '\\|');
+    // Sanitize table cell content (escape backslashes first, then pipes)
+    const desc = skill.description.replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\n/g, ' ').trim();
+    const safeName = skill.name.replace(/\\/g, '\\\\').replace(/\|/g, '\\|');
     lines.push(`| ${safeName} | ${desc} | \`${skill.path}/SKILL.md\` |`);
   }
 
