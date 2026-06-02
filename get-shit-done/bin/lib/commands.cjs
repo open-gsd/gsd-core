@@ -4,11 +4,11 @@
 const fs = require('fs');
 const path = require('path');
 const { execGit, platformWriteSync, platformReadSync, platformEnsureDir } = require('./shell-command-projection.cjs');
-const { loadConfig, isGitIgnored, normalizePhaseName, comparePhaseNum, getArchivedPhaseDirs, generateSlugInternal, getMilestoneInfo, getMilestonePhaseFilter, resolveModelInternal, resolveEffortInternal, resolveFastModeInternal, resolveEffortForTier, stripShippedMilestones, extractCurrentMilestone, toPosixPath, output, error, findPhaseInternal, extractOneLinerFromBody, getRoadmapPhaseInternal, extractPhaseToken } = require('./core.cjs');
+const { loadConfig, isGitIgnored, normalizePhaseName, comparePhaseNum, getArchivedPhaseDirs, generateSlugInternal, getMilestoneInfo, getMilestonePhaseFilter, resolveModelInternal, resolveEffortInternal, resolveFastModeInternal, resolveEffortForTier, stripShippedMilestones, extractCurrentMilestone, toPosixPath, output, error, findPhaseInternal, extractOneLinerFromBody, getRoadmapPhaseInternal, extractPhaseToken, resolveGranularityInternal } = require('./core.cjs');
 const { renderEffortForRuntime, RUNTIMES_WITH_FAST_MODE } = require('./model-catalog.cjs');
 const { planningDir, planningPaths } = require('./planning-workspace.cjs');
 const { extractFrontmatter } = require('./frontmatter.cjs');
-const { MODEL_PROFILES } = require('./model-profiles.cjs');
+const { MODEL_PROFILES, VALID_PHASE_TYPES } = require('./model-profiles.cjs');
 const { formatGsdSlash, resolveRuntime } = require('./runtime-slash.cjs');
 
 /**
@@ -249,6 +249,17 @@ function cmdResolveModel(cwd, agentType, raw) {
     ? { model, profile, effort }
     : { model, profile, effort, unknown_agent: true };
   output(result, raw, model);
+}
+
+function cmdResolveGranularity(cwd, phaseType, raw) {
+  if (!phaseType) {
+    error('phase-type required');
+  }
+  const granularity = resolveGranularityInternal(cwd, phaseType);
+  const result = VALID_PHASE_TYPES.has(phaseType)
+    ? { granularity, phase_type: phaseType }
+    : { granularity, phase_type: phaseType, unknown_phase_type: true };
+  output(result, raw, granularity);
 }
 
 /**
@@ -1276,6 +1287,7 @@ module.exports = {
   cmdVerifyPathExists,
   cmdHistoryDigest,
   cmdResolveModel,
+  cmdResolveGranularity,
   cmdResolveExecution,
   cmdEffortSync,
   cmdCommit,
