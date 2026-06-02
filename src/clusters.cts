@@ -1,6 +1,8 @@
-'use strict';
 /**
- * Skill cluster definitions for the runtime surface module (ADR-0011 Phase 2).
+ * Skill cluster definitions for the runtime surface module (ADR-457
+ * build-at-publish: the hand-written bin/lib/clusters.cjs collapsed to a
+ * TypeScript source of truth). Behaviour is preserved byte-for-behaviour from
+ * the prior hand-written .cjs; only types are added.
  *
  * Each cluster is a named group of skill stems. Clusters are used by /gsd:surface
  * to enable/disable a cohesive group of skills without reinstall.
@@ -13,7 +15,21 @@
  * against commands/gsd/ listing in surface-clusters.test.cjs).
  */
 
-const CLUSTERS = Object.freeze({
+export type ClusterName =
+  | 'core_loop'
+  | 'audit_review'
+  | 'milestone'
+  | 'research_ideate'
+  | 'workspace_state'
+  | 'docs'
+  | 'ui'
+  | 'ai_eval'
+  | 'ns_meta'
+  | 'utility';
+
+export type ClusterMap = Readonly<Record<ClusterName, ReadonlyArray<string>>>;
+
+export const CLUSTERS: ClusterMap = Object.freeze({
   core_loop: Object.freeze([
     'new-project',
     'discuss-phase',
@@ -122,14 +138,11 @@ const CLUSTERS = Object.freeze({
 
 /**
  * Build a Set of all skill stems covered by at least one cluster.
- * @returns {Set<string>}
  */
-function allClusteredSkills() {
-  const result = new Set();
+export function allClusteredSkills(): Set<string> {
+  const result = new Set<string>();
   for (const skills of Object.values(CLUSTERS)) {
     for (const s of skills) result.add(s);
   }
   return result;
 }
-
-module.exports = { CLUSTERS, allClusteredSkills };

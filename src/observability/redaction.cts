@@ -1,7 +1,8 @@
-'use strict';
-
 /**
- * Arg redaction policy — issue #177 (ADR-0174 P1.3).
+ * Arg redaction policy — issue #177 (ADR-457 build-at-publish: the
+ * hand-written bin/lib/observability/redaction.cjs collapsed to a TypeScript
+ * source of truth). Behaviour is preserved byte-for-behaviour from the prior
+ * hand-written .cjs; only types are added.
  *
  * Privacy default: args are OMITTED from every emitted event (both stderr
  * and file audit). Opt-in: set GSD_AUDIT_ARGS=1 to include args verbatim.
@@ -12,13 +13,16 @@
  */
 
 /**
+ * A DispatchEvent (frozen or plain). Must be an object; `args` is optional.
+ */
+export type DispatchEvent = Record<string, unknown>;
+
+/**
  * Returns true when the caller has opted in to including args in events.
  * Only GSD_AUDIT_ARGS === '1' enables inclusion; any other value (including
  * empty string, 'true', 'yes') keeps the default of omitting args.
- *
- * @returns {boolean}
  */
-function shouldIncludeArgs() {
+export function shouldIncludeArgs(): boolean {
   return process.env.GSD_AUDIT_ARGS === '1';
 }
 
@@ -32,10 +36,10 @@ function shouldIncludeArgs() {
  *
  * The original event object is never mutated (it is frozen by makeDispatchEvent).
  *
- * @param {object} event - A DispatchEvent (frozen or plain).
- * @returns {object} A new plain object with the same fields, minus args when redacted.
+ * @param event - A DispatchEvent (frozen or plain).
+ * @returns A new plain object with the same fields, minus args when redacted.
  */
-function redactEvent(event) {
+export function redactEvent(event: DispatchEvent): DispatchEvent {
   if (shouldIncludeArgs()) {
     // Include path: return a shallow copy with args preserved if present
     const copy = Object.assign({}, event);
@@ -46,5 +50,3 @@ function redactEvent(event) {
   const { args: _dropped, ...rest } = event;
   return rest;
 }
-
-module.exports = { shouldIncludeArgs, redactEvent };

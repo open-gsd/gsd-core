@@ -36,6 +36,15 @@ export default tseslint.config(
       // ADR-457: tsc-generated runtime artifact — lint the src/*.cts source, not the emitted .cjs.
       'get-shit-done/bin/lib/semver-compare.cjs',
       'get-shit-done/bin/lib/code-review-flags.cjs',
+      'get-shit-done/bin/lib/context-utilization.cjs',
+      'get-shit-done/bin/lib/artifacts.cjs',
+      'get-shit-done/bin/lib/command-arg-projection.cjs',
+      'get-shit-done/bin/lib/clock.cjs',
+      'get-shit-done/bin/lib/ui-safety-gate.cjs',
+      'get-shit-done/bin/lib/review-reviewer-selection.cjs',
+      'get-shit-done/bin/lib/clusters.cjs',
+      'get-shit-done/bin/lib/installer-migrations/001-legacy-orphan-files.cjs',
+      'get-shit-done/bin/lib/observability/redaction.cjs',
     ],
   },
 

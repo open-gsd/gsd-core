@@ -16,5 +16,5 @@
     "noEmitOnError": true,
     "skipLibCheck": true
   },
-  "include": ["src/**/*.cts"]
+  "include": ["src/**/*.cts", "src/**/*.d.ts"]
 }

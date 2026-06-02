@@ -1,13 +1,14 @@
-'use strict';
-
 /**
- * Review Reviewer Selection Module
+ * Review Reviewer Selection Module (ADR-457 build-at-publish: the hand-written
+ * bin/lib/review-reviewer-selection.cjs collapsed to a TypeScript source of
+ * truth). Behaviour is preserved byte-for-behaviour from the prior hand-written
+ * .cjs; only types are added.
  *
  * Owns reviewer-selection policy projection for /gsd:review:
  * explicit flags > --all > review.default_reviewers > all detected.
  */
 
-const KNOWN_REVIEWER_SLUGS = [
+export const KNOWN_REVIEWER_SLUGS: ReadonlyArray<string> = [
   'gemini',
   'claude',
   'codex',
@@ -21,7 +22,30 @@ const KNOWN_REVIEWER_SLUGS = [
   'llama_cpp',
 ];
 
-function normalizeConfiguredDefaultReviewers(rawValue) {
+export interface NormalizedDefaultReviewers {
+  absent: boolean;
+  values: string[];
+  errors: string[];
+}
+
+export interface ReviewerSelectionInput {
+  detected?: unknown[];
+  explicitFlags?: unknown[];
+  allFlag?: unknown;
+  configuredDefaultReviewers?: unknown;
+}
+
+export interface ReviewerSelectionResult {
+  source: string;
+  selected: string[];
+  warnings: string[];
+  infos: string[];
+  errors: string[];
+}
+
+export function normalizeConfiguredDefaultReviewers(
+  rawValue: unknown,
+): NormalizedDefaultReviewers {
   if (rawValue === undefined || rawValue === null) {
     return { absent: true, values: [], errors: [] };
   }
@@ -40,9 +64,9 @@ function normalizeConfiguredDefaultReviewers(rawValue) {
     };
   }
 
-  const seen = new Set();
-  const normalized = [];
-  const errors = [];
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  const errors: string[] = [];
   for (const item of rawValue) {
     if (typeof item !== 'string') {
       errors.push('review.default_reviewers must contain only string slugs');
@@ -62,18 +86,26 @@ function normalizeConfiguredDefaultReviewers(rawValue) {
   return { absent: false, values: normalized, errors };
 }
 
-function resolveReviewerSelection(input) {
-  const detected = new Set((input.detected || []).map((v) => String(v).toLowerCase()));
-  const explicitFlags = new Set((input.explicitFlags || []).map((v) => String(v).toLowerCase()));
+export function resolveReviewerSelection(
+  input: ReviewerSelectionInput,
+): ReviewerSelectionResult {
+  const detected = new Set(
+    (input.detected ?? []).map((v) => String(v).toLowerCase()),
+  );
+  const explicitFlags = new Set(
+    (input.explicitFlags ?? []).map((v) => String(v).toLowerCase()),
+  );
   const allFlag = !!input.allFlag;
-  const normalizedDefaults = normalizeConfiguredDefaultReviewers(input.configuredDefaultReviewers);
+  const normalizedDefaults = normalizeConfiguredDefaultReviewers(
+    input.configuredDefaultReviewers,
+  );
 
-  const warnings = [];
-  const infos = [];
-  const errors = [...normalizedDefaults.errors];
+  const warnings: string[] = [];
+  const infos: string[] = [];
+  const errors: string[] = [...normalizedDefaults.errors];
 
   let source = 'no_config_all_detected';
-  let selected = [];
+  let selected: string[] = [];
 
   if (explicitFlags.size > 0) {
     source = 'explicit_flags';
@@ -90,7 +122,7 @@ function resolveReviewerSelection(input) {
     selected = [...detected];
   } else if (!normalizedDefaults.absent) {
     source = 'config_default';
-    const knownDefaults = [];
+    const knownDefaults: string[] = [];
     for (const slug of normalizedDefaults.values) {
       if (!KNOWN_REVIEWER_SLUGS.includes(slug)) {
         warnings.push(`unknown reviewer slug in review.default_reviewers: ${slug}`);
@@ -118,9 +150,3 @@ function resolveReviewerSelection(input) {
     errors,
   };
 }
-
-module.exports = {
-  KNOWN_REVIEWER_SLUGS,
-  normalizeConfiguredDefaultReviewers,
-  resolveReviewerSelection,
-};

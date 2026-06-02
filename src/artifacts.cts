@@ -1,5 +1,8 @@
 /**
- * Canonical GSD artifact registry.
+ * Canonical GSD artifact registry (ADR-457 build-at-publish: the hand-written
+ * bin/lib/artifacts.cjs collapsed to a TypeScript source of truth). Behaviour
+ * is preserved byte-for-behaviour from the prior hand-written .cjs; only types
+ * are added.
  *
  * Enumerates the file names that gsd workflows officially produce at the
  * .planning/ root level. Used by gsd-health (W019) to flag unrecognized files
@@ -8,10 +11,8 @@
  * Add entries here whenever a new workflow produces a .planning/ root file.
  */
 
-'use strict';
-
 // Exact-match canonical file names at .planning/ root
-const CANONICAL_EXACT = new Set([
+export const CANONICAL_EXACT: ReadonlySet<string> = new Set([
   'PROJECT.md',
   'ROADMAP.md',
   'STATE.md',
@@ -27,8 +28,8 @@ const CANONICAL_EXACT = new Set([
 
 // Pattern-match canonical file names (regex tests on the basename)
 // Each pattern includes the name of the workflow that produces it as a comment.
-const CANONICAL_PATTERNS = [
-  /^v\d+\.\d+(?:\.\d+)?-MILESTONE-AUDIT\.md$/i,  // gsd-complete-milestone (pre-archive)
+export const CANONICAL_PATTERNS: ReadonlyArray<RegExp> = [
+  /^v\d+\.\d+(?:\.\d+)?-MILESTONE-AUDIT\.md$/i, // gsd-complete-milestone (pre-archive)
   /^v\d+\.\d+(?:\.\d+)?-.*\.md$/i,               // other version-stamped planning docs
 ];
 
@@ -36,18 +37,12 @@ const CANONICAL_PATTERNS = [
  * Return true if `filename` (basename only, no path) matches a canonical
  * .planning/ root artifact — either an exact name or a known pattern.
  *
- * @param {string} filename - Basename of the file (e.g. "STATE.md")
+ * @param filename - Basename of the file (e.g. "STATE.md")
  */
-function isCanonicalPlanningFile(filename) {
+export function isCanonicalPlanningFile(filename: string): boolean {
   if (CANONICAL_EXACT.has(filename)) return true;
   for (const pattern of CANONICAL_PATTERNS) {
     if (pattern.test(filename)) return true;
   }
   return false;
 }
-
-module.exports = {
-  CANONICAL_EXACT,
-  CANONICAL_PATTERNS,
-  isCanonicalPlanningFile,
-};
