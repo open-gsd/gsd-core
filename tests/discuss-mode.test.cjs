@@ -164,4 +164,25 @@ describe('workflow.discuss_mode config', () => {
     assert.ok(doc.includes('discuss'), 'doc should mention discuss');
     assert.ok(doc.includes('config-set'), 'doc should show how to configure');
   });
+
+  test('discuss-phase command mode-routing uses gsd_run (shim-safe) not bare gsd-tools', () => {
+    const command = fs.readFileSync(
+      path.join(__dirname, '..', 'commands', 'gsd', 'discuss-phase.md'), 'utf8'
+    );
+    // Must contain the canonical shim probe marker
+    assert.ok(
+      command.includes('_GSD_SHIM_NAME'),
+      'discuss-phase.md must define _GSD_SHIM_NAME shim probe before mode routing'
+    );
+    // Must use gsd_run for the config lookup
+    assert.ok(
+      command.includes('gsd_run query config-get workflow.discuss_mode'),
+      'discuss-phase.md must use gsd_run (not bare gsd-tools) for discuss_mode lookup'
+    );
+    // Must NOT contain the bare footgun pattern: gsd-tools immediately before the silent default
+    assert.ok(
+      !command.includes('gsd-tools query config-get workflow.discuss_mode 2>/dev/null || echo'),
+      'discuss-phase.md must NOT use bare gsd-tools binary for discuss_mode lookup (shim-only install footgun)'
+    );
+  });
 });

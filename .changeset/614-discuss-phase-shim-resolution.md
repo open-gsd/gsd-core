@@ -1,0 +1,5 @@
+---
+type: Fixed
+pr: 618
+---
+**`/gsd-discuss-phase` now honors `workflow.discuss_mode: assumptions` on shim-only installs** — mode routing resolves `gsd-tools` via the runtime shim instead of the bare PATH command, so a missing PATH binary no longer silently falls back to standard discuss mode.

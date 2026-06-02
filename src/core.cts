@@ -36,6 +36,7 @@ const {
   findContextMdIn,
 } = planningWorkspace;
 import { findProjectRoot } from './project-root.cjs';
+import { getGlobalConfigDir } from './runtime-homes.cjs';
 
 // ─── Configuration Module (generated CJS mirror) ────────────────────────────
 import { CONFIG_DEFAULTS as CANONICAL_CONFIG_DEFAULTS, normalizeLegacyKeys } from './configuration.cjs';
@@ -1198,13 +1199,26 @@ function getRoadmapPhaseInternal(cwd: string, phaseNum: unknown): RoadmapPhaseRe
 // ─── Agent installation validation (#1371) ───────────────────────────────────
 
 /**
- * Resolve the agents directory from the GSD install location.
+ * Resolve the agents directory for the given runtime.
+ *
+ * Priority:
+ *   1. GSD_AGENTS_DIR env var (explicit override, any runtime)
+ *   2. For claude runtime: __dirname-relative path (agents/ sibling of get-shit-done/)
+ *      This is correct for both repo runs and real installs (the runtime config dir's
+ *      agents/ folder) because gsd-tools.cjs lives inside get-shit-done/bin/ in both cases.
+ *   3. For non-claude runtimes: getGlobalConfigDir(runtime)/agents
+ *
+ * @param runtime - the active runtime name; defaults to GSD_RUNTIME env, then 'claude'
  */
-function getAgentsDir(): string {
+function getAgentsDir(runtime?: string): string {
   if (process.env['GSD_AGENTS_DIR']) {
     return process.env['GSD_AGENTS_DIR'];
   }
-  return path.join(__dirname, '..', '..', '..', 'agents');
+  const resolved = runtime ?? (process.env['GSD_RUNTIME'] || 'claude');
+  if (resolved === 'claude') {
+    return path.join(__dirname, '..', '..', '..', 'agents');
+  }
+  return path.join(getGlobalConfigDir(resolved), 'agents');
 }
 
 interface AgentsInstalledResult {
@@ -1212,13 +1226,17 @@ interface AgentsInstalledResult {
   missing_agents: string[];
   installed_agents: string[];
   agents_dir: string;
+  agent_runtime: string;
 }
 
 /**
  * Check which GSD agents are installed on disk.
+ *
+ * @param runtime - the active runtime name; defaults to GSD_RUNTIME env, then 'claude'
  */
-function checkAgentsInstalled(): AgentsInstalledResult {
-  const agentsDir = getAgentsDir();
+function checkAgentsInstalled(runtime?: string): AgentsInstalledResult {
+  const resolvedRuntime = runtime ?? (process.env['GSD_RUNTIME'] || 'claude');
+  const agentsDir = getAgentsDir(resolvedRuntime);
   const expectedAgents = Object.keys(MODEL_PROFILES);
   const installed: string[] = [];
   const missing: string[] = [];
@@ -1229,6 +1247,7 @@ function checkAgentsInstalled(): AgentsInstalledResult {
       missing_agents: expectedAgents,
       installed_agents: [],
       agents_dir: agentsDir,
+      agent_runtime: resolvedRuntime,
     };
   }
 
@@ -1248,6 +1267,7 @@ function checkAgentsInstalled(): AgentsInstalledResult {
     missing_agents: missing,
     installed_agents: installed,
     agents_dir: agentsDir,
+    agent_runtime: resolvedRuntime,
   };
 }
 

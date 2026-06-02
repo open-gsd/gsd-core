@@ -546,12 +546,20 @@ function defaultFindSummaryFiles(worktreePath: string): string[] {
  *   - destination = <repoRoot>/<relPath>
  *   - copy when dest is absent or content differs
  *
- * Returns a Set of worktree-relative paths (e.g. ".planning/q1-SUMMARY.md")
- * that were eligible for rescue (regardless of whether a copy was needed).
- * These paths are filtered out of the git-status porcelain output so a
- * SUMMARY-only dirty worktree does not block cleanup.
+ * Returns `{ rescuedRelPaths, failures }`:
+ *   - `rescuedRelPaths`: Set of worktree-relative paths that were successfully rescued
+ *     (copy not needed because dest already matches, or copy succeeded).  Only paths
+ *     where the rescue genuinely succeeded are included so the dirty-block filter does
+ *     not suppress paths that were silently lost.
+ *   - `failures`: array of `{ relPath, error }` for any path where mkdirSync or
+ *     copyFileSync threw.  A read failure during content comparison is NOT a rescue
+ *     failure — it sets needsCopy=true and the copy is attempted normally.
  */
-function rescueSummaryArtifacts(worktreePath: string, repoRoot: string, deps: WorktreeDeps): Set<string> {
+function rescueSummaryArtifacts(
+  worktreePath: string,
+  repoRoot: string,
+  deps: WorktreeDeps,
+): { rescuedRelPaths: Set<string>; failures: Array<{ relPath: string; error: string }> } {
   const findSummaryFiles = deps.findSummaryFiles || defaultFindSummaryFiles;
   const existsSync = deps.existsSync || fs.existsSync;
   const readFileSync = deps.readFileSync || ((p: string) => fs.readFileSync(p, 'utf8'));
@@ -560,13 +568,13 @@ function rescueSummaryArtifacts(worktreePath: string, repoRoot: string, deps: Wo
 
   const summaryPaths = findSummaryFiles(worktreePath);
   const rescuedRelPaths = new Set<string>();
+  const failures: Array<{ relPath: string; error: string }> = [];
 
   for (const absPath of summaryPaths) {
     // relPath is the path relative to the worktree root (e.g. ".planning/q1-SUMMARY.md")
     // Normalize to forward slashes so the Set comparison against `git status --porcelain`
     // output works on Windows too (git always emits forward slashes in porcelain output).
     const relPath = absPath.slice(worktreePath.length).replace(/^[/\\]/, '').replace(/\\/g, '/');
-    rescuedRelPaths.add(relPath);
 
     const dest = path.join(repoRoot, relPath);
     let needsCopy = !existsSync(dest);
@@ -576,6 +584,7 @@ function rescueSummaryArtifacts(worktreePath: string, repoRoot: string, deps: Wo
         const destContent = readFileSync(dest);
         needsCopy = srcContent !== destContent;
       } catch {
+        // Read failure during comparison is not a rescue failure — force a copy attempt.
         needsCopy = true;
       }
     }
@@ -583,13 +592,20 @@ function rescueSummaryArtifacts(worktreePath: string, repoRoot: string, deps: Wo
       try {
         mkdirSync(path.dirname(dest), { recursive: true });
         copyFileSync(absPath, dest);
-      } catch {
-        // Best-effort rescue — if it fails the dirty check below will decide fate
+        // Copy succeeded — the SUMMARY is now safe in the main tree.
+        rescuedRelPaths.add(relPath);
+      } catch (err) {
+        // Write failure: the SUMMARY was NOT rescued.  Record it so the caller can
+        // block cleanup instead of silently losing data.
+        failures.push({ relPath, error: (err as Error).message });
       }
+    } else {
+      // dest already exists with identical content — SUMMARY is already safe.
+      rescuedRelPaths.add(relPath);
     }
   }
 
-  return rescuedRelPaths;
+  return { rescuedRelPaths, failures };
 }
 
 interface WaveCleanupEntryResult extends CleanupManifestEntry {
@@ -677,7 +693,16 @@ function executeWorktreeWaveCleanupPlan(plan: WaveCleanupPlan | null, deps: Work
     // Safety net: rescue uncommitted SUMMARY.md artifacts before the dirty check.
     // The executor leaves <quick_id>-SUMMARY.md uncommitted by contract — the
     // orchestrator commits it.  Mirrors quick.md shell fallback (#2296, #2070, #2838, #3804).
-    const rescuedRelPaths = rescueSummaryArtifacts(entry.worktree_path, plan.repoRoot, deps);
+    const { rescuedRelPaths, failures: rescueFailures } = rescueSummaryArtifacts(entry.worktree_path, plan.repoRoot, deps);
+    if (rescueFailures.length > 0) {
+      result.status = 'blocked';
+      result.reason = 'summary_rescue_failed';
+      result.stderr = rescueFailures.map((f) => `${f.relPath}: ${f.error}`).join('; ');
+      results.push(result);
+      pending.push(...entries.slice(i + 1));
+      ok = false;
+      break;
+    }
 
     const worktreeStatus = execGit(['-C', entry.worktree_path, 'status', '--porcelain', '--untracked-files=all'], { cwd: plan.repoRoot });
     if (!gitResultOk(worktreeStatus)) {
