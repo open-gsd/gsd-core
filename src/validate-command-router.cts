@@ -1,10 +1,3 @@
-'use strict';
-
-const { VALIDATE_SUBCOMMANDS } = require('./command-aliases.cjs');
-const { formatGsdSlash, resolveRuntime } = require('./runtime-slash.cjs');
-const { routeCjsCommandFamily } = require('./cjs-command-router-adapter.cjs');
-const { parseNamedArgs } = require('./command-arg-projection.cjs');
-
 /**
  * Manifest-backed validate subcommand router.
  * Keeps gsd-tools.cjs thin while preserving existing command semantics.
@@ -20,14 +13,46 @@ const { parseNamedArgs } = require('./command-arg-projection.cjs');
  *   output formatting that has no direct SDK counterpart. Remains CJS-native.
  *
  * SDK-only (unsupported in CJS router): none.
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/validate-command-router.cjs
+ * collapsed to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only types are added.
  */
-function routeValidateCommand({ verify, args, cwd, raw, output: outputFn, error }) {
+
+import { VALIDATE_SUBCOMMANDS } from './command-aliases.cjs';
+import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import cjsCommandRouterAdapter = require('./cjs-command-router-adapter.cjs');
+const { routeCjsCommandFamily } = cjsCommandRouterAdapter;
+import { parseNamedArgs } from './command-arg-projection.cjs';
+import { classifyContextUtilization, STATES } from './context-utilization.cjs';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface VerifyModule {
+  cmdValidateConsistency(cwd: string, raw: boolean): void;
+  cmdValidateHealth(cwd: string, opts: { repair: boolean; backfill: boolean }, raw: boolean): void;
+  cmdValidateAgents(cwd: string, raw: boolean): void;
+}
+
+interface RouteValidateCommandOptions {
+  verify: VerifyModule;
+  args: string[];
+  cwd: string;
+  raw: boolean;
+  output: (result: unknown, raw: boolean, rawValue?: unknown) => void;
+  error: (message: string) => void;
+}
+
+// ─── Implementation ───────────────────────────────────────────────────────────
+
+function routeValidateCommand({ verify, args, cwd, raw, output: outputFn, error }: RouteValidateCommandOptions): void {
   routeCjsCommandFamily({
     args,
     subcommands: VALIDATE_SUBCOMMANDS,
     unsupported: {},
     error,
-    unknownMessage: (_subcommand, available) => `Unknown validate subcommand. Available: ${available.join(', ')}`,
+    unknownMessage: (_subcommand: string, available: string[]) => `Unknown validate subcommand. Available: ${available.join(', ')}`,
     handlers: {
       consistency: () => verify.cmdValidateConsistency(cwd, raw),
       // Keep health on CJS for now so fix hints are rendered via runtime-slash
@@ -50,18 +75,18 @@ function routeValidateCommand({ verify, args, cwd, raw, output: outputFn, error 
           error('--context-window <integer> is required for `validate context`');
           return;
         }
-        const { classifyContextUtilization, STATES } = require('./context-utilization.cjs');
-        const threadCmd = formatGsdSlash('thread', resolveRuntime(cwd));
-        const RECOMMENDATIONS = {
+        const threadCmd = String(formatGsdSlash('thread', resolveRuntime(cwd)));
+        const RECOMMENDATIONS: Record<string, string | null> = {
           [STATES.HEALTHY]: null,
           [STATES.WARNING]: `Context is approaching the fracture zone — consider ${threadCmd} to continue in a fresh window.`,
           [STATES.CRITICAL]: `Reasoning quality may degrade past 70% utilization (fracture point). Run ${threadCmd} now to preserve output quality.`,
         };
-        let classified;
+        let classified: ReturnType<typeof classifyContextUtilization>;
         try {
           classified = classifyContextUtilization(Number(opts['tokens-used']), Number(opts['context-window']));
         } catch (e) {
-          const flag = /tokensUsed/.test(e.message) ? '--tokens-used' : '--context-window';
+          const msg = (e as Error).message;
+          const flag = /tokensUsed/.test(msg) ? '--tokens-used' : '--context-window';
           error(`${flag} must be a non-negative integer (window > 0), got the values supplied`);
           return;
         }
@@ -78,6 +103,6 @@ function routeValidateCommand({ verify, args, cwd, raw, output: outputFn, error 
   });
 }
 
-module.exports = {
+export = {
   routeValidateCommand,
 };

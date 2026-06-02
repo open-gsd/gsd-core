@@ -1,10 +1,40 @@
-'use strict';
+/**
+ * Task command router — is-behavior-adding subcommand handler.
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/task-command-router.cjs
+ * collapsed to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only types are added.
+ */
 
-const fs = require('fs');
-const path = require('path');
-const { output, error, ERROR_REASON } = require('./core.cjs');
+import fs from 'node:fs';
+import path from 'node:path';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import core = require('./core.cjs');
+const { output, error, ERROR_REASON } = core;
 
-function isBehaviorAddingTaskContent(content) {
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface BehaviorAddingChecks {
+  tdd_true: boolean;
+  has_behavior_block: boolean;
+  has_source_files: boolean;
+}
+
+interface BehaviorAddingResult {
+  is_behavior_adding: boolean;
+  checks: BehaviorAddingChecks;
+  reason: string | null;
+}
+
+interface RouteTaskCommandOptions {
+  args: string[];
+  cwd: string;
+  raw: boolean;
+}
+
+// ─── Implementation ───────────────────────────────────────────────────────────
+
+function isBehaviorAddingTaskContent(content: string): BehaviorAddingResult {
   const tddTrue = /\btdd\s*=\s*["']true["']/i.test(content);
 
   const behaviorMatch = content.match(/<behavior>([\s\S]*?)<\/behavior>/i);
@@ -29,7 +59,7 @@ function isBehaviorAddingTaskContent(content) {
   }
 
   const isBehaviorAdding = tddTrue && hasBehaviorBlock && hasSourceFiles;
-  const missing = [];
+  const missing: string[] = [];
   if (!tddTrue) missing.push('tdd="true" frontmatter absent');
   if (!hasBehaviorBlock) missing.push('<behavior> block missing or empty');
   if (!hasSourceFiles) missing.push('<files> has no non-test source file');
@@ -45,13 +75,13 @@ function isBehaviorAddingTaskContent(content) {
   };
 }
 
-function routeTaskCommand({ args, cwd, raw }) {
+function routeTaskCommand({ args, cwd, raw }: RouteTaskCommandOptions): void {
   const subcommand = args[1];
   if (subcommand !== 'is-behavior-adding') {
     error('Unknown task subcommand. Available: is-behavior-adding', ERROR_REASON.SDK_UNKNOWN_COMMAND);
   }
 
-  let content = null;
+  let content: string | null = null;
   if (args[2] === '--task-content') {
     content = args[3] || null;
   } else if (args[2]) {
@@ -72,10 +102,10 @@ function routeTaskCommand({ args, cwd, raw }) {
     error('Usage: task.is-behavior-adding <plan-file-path> | --task-content "<xml>"', ERROR_REASON.USAGE);
   }
 
-  output(isBehaviorAddingTaskContent(content), raw);
+  output(isBehaviorAddingTaskContent(content as string), raw, undefined);
 }
 
-module.exports = {
+export = {
   isBehaviorAddingTaskContent,
   routeTaskCommand,
 };

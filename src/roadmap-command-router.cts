@@ -1,12 +1,50 @@
-'use strict';
+/**
+ * Manifest-backed roadmap subcommand router.
+ * Keeps gsd-tools.cjs thin while preserving existing command semantics.
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/roadmap-command-router.cjs
+ * collapsed to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only types are added.
+ */
 
-const fs = require('fs');
-const path = require('path');
-const { ROADMAP_SUBCOMMANDS } = require('./command-aliases.cjs');
-const { routeCjsCommandFamily } = require('./cjs-command-router-adapter.cjs');
-const roadmapUpgrade = require('./roadmap-upgrade.cjs');
-const { planningDir } = require('./planning-workspace.cjs');
-const { loadConfig } = require('./core.cjs');
+import fs from 'node:fs';
+import path from 'node:path';
+import { ROADMAP_SUBCOMMANDS } from './command-aliases.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import cjsCommandRouterAdapter = require('./cjs-command-router-adapter.cjs');
+const { routeCjsCommandFamily } = cjsCommandRouterAdapter;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import roadmapUpgrade = require('./roadmap-upgrade.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planningWorkspace = require('./planning-workspace.cjs');
+const { planningDir } = planningWorkspace;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import core = require('./core.cjs');
+const { loadConfig } = core;
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface RoadmapModule {
+  cmdRoadmapGetPhase(cwd: string, phase: string | undefined, raw: boolean): void;
+  cmdRoadmapAnalyze(cwd: string, raw: boolean): void;
+  cmdRoadmapUpdatePlanProgress(cwd: string, phase: string | undefined, raw: boolean): void;
+  cmdRoadmapAnnotateDependencies(cwd: string, phase: string | undefined, raw: boolean): void;
+}
+
+interface RouteRoadmapCommandOptions {
+  roadmap: RoadmapModule;
+  args: string[];
+  cwd: string;
+  raw: boolean;
+  error: (message: string) => void;
+}
+
+interface W021Warning {
+  code: 'W021';
+  message: string;
+}
+
+// ─── W021 Implementation ──────────────────────────────────────────────────────
 
 /**
  * Check each phase entry in a milestone-prefixed ROADMAP.md for W021 violations.
@@ -16,11 +54,11 @@ const { loadConfig } = require('./core.cjs');
  *
  * Sentinel milestones (0 = pre-milestone, 999 = backlog) are exempt.
  *
- * @param {string} content - ROADMAP.md content
- * @returns {Array<{code:'W021', message:string}>}
+ * @param content - ROADMAP.md content
+ * @returns Array of W021 warnings
  */
-function checkW021(content) {
-  const warnings = [];
+function checkW021(content: string): W021Warning[] {
+  const warnings: W021Warning[] = [];
 
   // Sentinel milestone integers exempt from W021
   const SENTINELS = new Set([0, 999]);
@@ -36,7 +74,7 @@ function checkW021(content) {
   // Unprefixed legacy phase heading: ### Phase N: Name  (no hyphen sub-index)
   const UNPREFIXED_PHASE_RE = /^#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+(\d+[A-Za-z]?(?:\.\d+)*)\s*:/i;
 
-  let currentMilestoneMajor = null;
+  let currentMilestoneMajor: number | null = null;
   const lines = content.split('\n');
 
   for (const line of lines) {
@@ -87,17 +125,15 @@ function checkW021(content) {
   return warnings;
 }
 
-/**
- * Manifest-backed roadmap subcommand router.
- * Keeps gsd-tools.cjs thin while preserving existing command semantics.
- */
-function routeRoadmapCommand({ roadmap, args, cwd, raw, error }) {
+// ─── Router ───────────────────────────────────────────────────────────────────
+
+function routeRoadmapCommand({ roadmap, args, cwd, raw, error }: RouteRoadmapCommandOptions): void {
   routeCjsCommandFamily({
     args,
     subcommands: ROADMAP_SUBCOMMANDS,
     unsupported: {},
     error,
-    unknownMessage: (_subcommand, available) => `Unknown roadmap subcommand. Available: ${available.join(', ')}`,
+    unknownMessage: (_subcommand: string, available: string[]) => `Unknown roadmap subcommand. Available: ${available.join(', ')}`,
     handlers: {
       'get-phase': () => roadmap.cmdRoadmapGetPhase(cwd, args[2], raw),
       analyze: () => roadmap.cmdRoadmapAnalyze(cwd, raw),
@@ -115,10 +151,10 @@ function routeRoadmapCommand({ roadmap, args, cwd, raw, error }) {
         // W021 only fires when phase_id_convention is explicitly 'milestone-prefixed'.
         // Authoritative source: .planning/config.json (set by the upgrade command).
         // Fallback: ROADMAP.md frontmatter (for projects that set the field there directly).
-        let convention;
+        let convention: string | undefined | null;
         try {
           const cfg = loadConfig(cwd);
-          convention = cfg.phase_id_convention;
+          convention = cfg['phase_id_convention'] as string | undefined | null;
         } catch {
           convention = undefined;
         }
@@ -145,7 +181,7 @@ function routeRoadmapCommand({ roadmap, args, cwd, raw, error }) {
       },
       'upgrade': () => {
         const dryRun = !args.includes('--apply');
-        const convention = args.find((a, i) => args[i-1] === '--convention') || 'milestone-prefixed';
+        const convention = args.find((_a, i) => args[i - 1] === '--convention') || 'milestone-prefixed';
         if (convention !== 'milestone-prefixed') {
           process.stderr.write('Only --convention milestone-prefixed is supported\n');
           process.exit(1);
@@ -157,6 +193,6 @@ function routeRoadmapCommand({ roadmap, args, cwd, raw, error }) {
   });
 }
 
-module.exports = {
+export = {
   routeRoadmapCommand,
 };
