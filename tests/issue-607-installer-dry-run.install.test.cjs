@@ -84,6 +84,7 @@ describe('#607 --dry-run flag: spawned installer exits 0 and mutates nothing', (
         env: {
           ...process.env,
           HOME: tmpHome,
+          USERPROFILE: tmpHome,
           // Redirect Claude config dir into isolated tmp home
           CLAUDE_CONFIG_DIR: path.join(tmpHome, '.claude'),
           // Suppress slow stale-SDK npm check
@@ -161,6 +162,7 @@ describe('#607 --dry-run flag: spawned installer exits 0 and mutates nothing', (
         env: {
           ...process.env,
           HOME: tmpHome,
+          USERPROFILE: tmpHome,
           CLAUDE_CONFIG_DIR: path.join(tmpHome, '.claude'),
           GSD_SKIP_STALE_SDK_CHECK: '1',
           GSD_TEST_MODE: undefined,
