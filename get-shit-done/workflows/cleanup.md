@@ -1,6 +1,6 @@
 <purpose>
 
-Archive accumulated phase directories from completed milestones into `.planning/milestones/v{X.Y}-phases/`. Identifies which phases belong to each completed milestone, shows a dry-run summary, and moves directories on confirmation.
+Archive accumulated phase directories from completed milestones into `.planning/milestones/v{X.Y}-phases/`. Prune stale local branches (upstream gone) and orphaned git worktrees (branch merged into main). Identifies candidates, shows a dry-run summary, and executes on confirmation.
 
 </purpose>
 
@@ -105,18 +105,60 @@ Show each branch name. If none, show:
 No stale local branches detected.
 ```
 
-If no phase directories remain to archive (all already moved or deleted) AND no stale branches exist:
+**Orphaned worktrees (branch merged into main):**
+
+Enumerate all registered worktrees, skipping the primary worktree (first entry in the list). For each non-primary worktree, check whether its branch has been merged into the default branch:
+
+```bash
+# List worktrees: path + branch name, skipping the first (primary) entry
+git worktree list | tail -n +2 | awk '{print $1, $3}' | tr -d '[]'
+```
+
+This yields lines like `/path/to/wt  branch-name`. For each, test if the branch is merged:
+
+```bash
+git branch --merged main 2>/dev/null | sed 's/^[* ]*//' | grep -vE '^(main|trunk|develop|next)$'
+```
+
+Cross-reference: a worktree is **orphaned** if its branch appears in the merged list above.
+
+Also check for worktrees whose directory no longer exists (safe to prune without confirmation):
+
+```bash
+git worktree prune --dry-run 2>&1
+```
+
+Show a summary:
+
+```
+**Orphaned worktrees (branch merged into main):**
+
+- worktrees/PD-482/  [branch: PD-482]
+- worktrees/feature-auth/  [branch: feature-auth]
+  ... (N total)
+
+Also: X worktree(s) with missing directories will be pruned automatically.
+```
+
+If none found:
+
+```
+No orphaned worktrees detected.
+```
+
+If no phase directories remain to archive AND no stale branches exist AND no orphaned worktrees exist:
 
 ```
 No phase directories found to archive. Phases may have been removed or archived previously.
-No stale local branches detected either.
+No stale local branches detected.
+No orphaned worktrees detected.
 ```
 
 Stop here.
 
 
 **Text mode (`workflow.text_mode: true` in config or `--text` flag):** Set `TEXT_MODE=true` if `--text` is present in `$ARGUMENTS` OR `text_mode` from init JSON is `true`. When TEXT_MODE is active, replace every `AskUserQuestion` call with a plain-text numbered list and ask the user to type their choice number. This is required for non-Claude runtimes (OpenAI Codex, Gemini CLI, etc.) where `AskUserQuestion` is not available.
-AskUserQuestion: "Proceed with archiving and pruning?" with options: "Yes — archive phases and prune stale branches" | "Cancel"
+AskUserQuestion: "Proceed with archiving and pruning?" with options: "Yes — archive phases, prune stale branches, and remove orphaned worktrees" | "Cancel"
 
 If "Cancel": Stop.
 
@@ -156,6 +198,42 @@ Notes:
 
 </step>
 
+<step name="prune_orphaned_worktrees">
+
+Remove worktrees whose branch is merged into main. Use the same candidate list identified in `show_dry_run` — enumerate live worktrees again and cross-reference the merged-branch list so the execution matches exactly what the user confirmed.
+
+```bash
+# Compute merged branches (excluding protected names)
+MERGED=$(git branch --merged main 2>/dev/null | sed 's/^[* ]*//' | grep -vE '^(main|trunk|develop|next)$')
+```
+
+For each non-primary worktree whose branch appears in `$MERGED`:
+
+```bash
+# Get worktree path and branch (skip primary worktree — first line)
+git worktree list | tail -n +2 | awk '{print $1, $3}' | tr -d '[]' | while IFS=' ' read -r wt_path branch; do
+  if echo "$MERGED" | grep -qx "$branch"; then
+    # Remove worktree directory and its git metadata
+    git worktree remove "$wt_path" --force 2>/dev/null || git worktree remove "$wt_path"
+    # Delete the local branch (already confirmed merged, safe to delete)
+    git branch -d "$branch" 2>/dev/null || true
+  fi
+done
+```
+
+After the loop, prune dangling metadata entries for worktrees whose directories are already gone:
+
+```bash
+git worktree prune
+```
+
+Notes:
+- `--force` handles worktrees that have uncommitted changes but are confirmed merged — the branch content is already in main.
+- `git branch -d` (lowercase) refuses to delete unmerged branches; this is a safety net against races where the merge check and the delete diverge.
+- `git worktree prune` cleans up `.git/worktrees/<name>` stubs for any directory that was externally deleted; it is always safe to run.
+
+</step>
+
 <step name="commit">
 
 Commit the changes:
@@ -176,7 +254,9 @@ Archived:
 
 Pruned: {N} local branches whose upstream is gone.
 
-.planning/phases/ cleaned up.
+Worktrees removed: {N} orphaned worktrees (branch merged into main).
+
+.planning/phases/ and worktrees/ cleaned up.
 ```
 
 </step>
@@ -187,9 +267,11 @@ Pruned: {N} local branches whose upstream is gone.
 
 - [ ] All completed milestones without existing phase archives identified
 - [ ] Phase membership determined from archived ROADMAP snapshots
-- [ ] Dry-run summary shown and user confirmed (covers both archival and pruning)
+- [ ] Dry-run summary shown and user confirmed (covers archival, branch pruning, and worktree removal)
 - [ ] Phase directories moved to `.planning/milestones/v{X.Y}-phases/`
 - [ ] Stale local branches pruned (branches whose upstream is gone)
+- [ ] Orphaned worktrees removed (branches merged into main)
+- [ ] `git worktree prune` run to clean dangling metadata
 - [ ] Changes committed
 
 </success_criteria>
