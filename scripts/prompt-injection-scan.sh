@@ -80,6 +80,10 @@ ALLOWLIST=(
   'tests/security-prompt-injection.test.cjs'
   'tests/fixtures/adversarial/security/'
   'SECURITY.md'
+  # These files contain intentional injection examples / security-model prose
+  # and are not attack vectors — they explain/demonstrate injection patterns.
+  'TEST-EXAMPLES.md'
+  'docs/explanation/security-model.md'
 )
 
 is_allowlisted() {
