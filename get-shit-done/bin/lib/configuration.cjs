@@ -13,8 +13,6 @@ function loadConfigurationManifest(fileName) {
   const candidates = [
     // Installed runtime layout: get-shit-done/bin/shared/*.manifest.json
     join(__dirname, '..', 'shared', fileName),
-    // Source-repo dev layout: sdk/shared/*.manifest.json
-    join(__dirname, '..', '..', '..', 'sdk', 'shared', fileName),
   ];
   let lastErr = null;
   for (const candidate of candidates) {

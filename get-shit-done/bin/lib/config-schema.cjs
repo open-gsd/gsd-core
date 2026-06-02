@@ -3,12 +3,12 @@
 /**
  * Thin adapter — sources schema data from the manifest via the generated
  * Configuration Module. All inline literals have been removed; the manifest
- * at sdk/shared/config-schema.manifest.json is the single source of truth.
+ * at get-shit-done/bin/shared/config-schema.manifest.json is the single source of truth.
  *
  * Imported by:
  *   - config.cjs (isValidConfigKey validator)
- *   - tests/config-schema-docs-parity.test.cjs (CI drift guard)
- *   - tests/config-schema-sdk-parity.test.cjs (CJS↔SDK parity guard)
+ *   - core.cjs
+ *   - many tests (config-schema.property.test.cjs, bug-*, feat-*, etc.)
  *
  * See Phase 2 Cycle 5 (#3536) — schema manifest migration.
  */
