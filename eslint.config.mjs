@@ -105,6 +105,7 @@ export default tseslint.config(
       'get-shit-done/bin/lib/profile-output.cjs',
       'get-shit-done/bin/lib/commands.cjs',
       'get-shit-done/bin/lib/state.cjs',
+      'get-shit-done/bin/lib/milestone.cjs',
       'get-shit-done/bin/lib/docs.cjs',
       'get-shit-done/bin/lib/check-command-router.cjs',
       'get-shit-done/bin/lib/frontmatter.cjs',

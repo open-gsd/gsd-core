@@ -127,7 +127,7 @@ function reapStaleTempFiles(prefix = 'gsd-', { maxAgeMs = 5 * 60 * 1000, dirsOnl
   }
 }
 
-function output(result: unknown, raw: boolean, rawValue: unknown): void {
+function output(result: unknown, raw: boolean, rawValue?: unknown): void {
   let data: string;
   if (raw && rawValue !== undefined) {
     // eslint-disable-next-line @typescript-eslint/no-base-to-string

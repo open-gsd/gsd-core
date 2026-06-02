@@ -1,17 +1,44 @@
 /**
- * Milestone — Milestone and requirements lifecycle operations
+ * Milestone — Milestone and requirements lifecycle operations.
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/milestone.cjs collapsed to
+ * a TypeScript source of truth, compiled by tsc to a gitignored .cjs at the same
+ * require() path. Behaviour preserved byte-for-behaviour; only types are added.
  */
 
-const fs = require('fs');
-const path = require('path');
-const { escapeRegex, getMilestonePhaseFilter, extractOneLinerFromBody, normalizePhaseName, phaseTokenMatches, output, error } = require('./core.cjs');
-const { platformWriteSync, platformEnsureDir } = require('./shell-command-projection.cjs');
-const { planningPaths } = require('./planning-workspace.cjs');
-const { extractFrontmatter } = require('./frontmatter.cjs');
-const { writeStateMd, stateReplaceFieldWithFallback } = require('./state.cjs');
-const { formatGsdSlash, resolveRuntime } = require('./runtime-slash.cjs');
+import fs from 'node:fs';
+import path from 'node:path';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- core.cjs is an export= CommonJS module
+import core = require('./core.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-workspace.cjs is an export= CommonJS module
+import planningWorkspace = require('./planning-workspace.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
+import frontmatterMod = require('./frontmatter.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- state.cjs is an export= CommonJS module
+import stateMod = require('./state.cjs');
+import { platformWriteSync, platformEnsureDir } from './shell-command-projection.cjs';
+import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 
-function cmdRequirementsMarkComplete(cwd, reqIdsRaw, raw) {
+const {
+  escapeRegex,
+  getMilestonePhaseFilter,
+  extractOneLinerFromBody,
+  normalizePhaseName,
+  phaseTokenMatches,
+  output,
+  error,
+} = core;
+const { planningPaths } = planningWorkspace;
+const { extractFrontmatter } = frontmatterMod;
+const { writeStateMd, stateReplaceFieldWithFallback } = stateMod;
+
+interface MilestoneCompleteOptions {
+  name?: string;
+  force?: boolean;
+  archivePhases?: boolean;
+}
+
+function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: boolean): void {
   if (!reqIdsRaw || reqIdsRaw.length === 0) {
     error('requirement IDs required. Usage: requirements mark-complete REQ-01,REQ-02 or REQ-01 REQ-02');
   }
@@ -21,7 +48,7 @@ function cmdRequirementsMarkComplete(cwd, reqIdsRaw, raw) {
     .join(' ')
     .replace(/[\[\]]/g, '')
     .split(/[,\s]+/)
-    .map(r => r.trim())
+    .map((r) => r.trim())
     .filter(Boolean);
 
   if (reqIds.length === 0) {
@@ -35,9 +62,9 @@ function cmdRequirementsMarkComplete(cwd, reqIdsRaw, raw) {
   }
 
   let reqContent = fs.readFileSync(reqPath, 'utf-8');
-  const updated = [];
-  const alreadyComplete = [];
-  const notFound = [];
+  const updated: string[] = [];
+  const alreadyComplete: string[] = [];
+  const notFound: string[] = [];
 
   for (const reqId of reqIds) {
     let found = false;
@@ -80,16 +107,20 @@ function cmdRequirementsMarkComplete(cwd, reqIdsRaw, raw) {
     platformWriteSync(reqPath, reqContent);
   }
 
-  output({
-    updated: updated.length > 0,
-    marked_complete: updated,
-    already_complete: alreadyComplete,
-    not_found: notFound,
-    total: reqIds.length,
-  }, raw, `${updated.length}/${reqIds.length} requirements marked complete`);
+  output(
+    {
+      updated: updated.length > 0,
+      marked_complete: updated,
+      already_complete: alreadyComplete,
+      not_found: notFound,
+      total: reqIds.length,
+    },
+    raw,
+    `${updated.length}/${reqIds.length} requirements marked complete`,
+  );
 }
 
-function cmdMilestoneComplete(cwd, version, options, raw) {
+function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCompleteOptions, raw: boolean): void {
   if (!version) {
     error('version required for milestone complete (e.g., v1.0)');
   }
@@ -124,27 +155,33 @@ function cmdMilestoneComplete(cwd, version, options, raw) {
   if (!options.force) {
     try {
       // Only guard when STATE.md's milestone field matches the version being completed.
-      let stateVersion = null;
+      let stateVersion: string | null = null;
       try {
         const stateRaw = fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf-8') : null;
         if (stateRaw) {
           const milestoneMatch = stateRaw.match(/^milestone:\s*(.+)/m);
           if (milestoneMatch) stateVersion = milestoneMatch[1].trim();
         }
-      } catch { /* skip */ }
+      } catch {
+        /* skip */
+      }
 
       if (stateVersion && stateVersion === version) {
-        const { extractCurrentMilestone } = require('./core.cjs');
+        const { extractCurrentMilestone } = core;
         const roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
         const scopedContent = extractCurrentMilestone(roadmapContent, cwd);
         const phasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:\s*([^\n]+)/gi;
-        const noDirectoryPhases = [];
-        let pm;
-        const phaseDirEntries = (() => {
+        const noDirectoryPhases: string[] = [];
+        let pm: RegExpExecArray | null;
+        const phaseDirEntries = ((): string[] => {
           try {
-            return fs.readdirSync(phasesDir, { withFileTypes: true })
-              .filter(e => e.isDirectory()).map(e => e.name);
-          } catch { return []; }
+            return fs
+              .readdirSync(phasesDir, { withFileTypes: true })
+              .filter((e) => e.isDirectory())
+              .map((e) => e.name);
+          } catch {
+            return [];
+          }
         })();
         while ((pm = phasePattern.exec(scopedContent)) !== null) {
           const phaseNum = pm[1];
@@ -153,7 +190,7 @@ function cmdMilestoneComplete(cwd, version, options, raw) {
           // with a matching token exists on disk. Use the same phaseTokenMatches
           // helper that roadmap.analyze uses to avoid false positives on decimal
           // (2.1) and letter-suffix (12A) phase IDs.
-          const hasDirectory = phaseDirEntries.some(d => phaseTokenMatches(d, normalized));
+          const hasDirectory = phaseDirEntries.some((d) => phaseTokenMatches(d, normalized));
           if (!hasDirectory) {
             noDirectoryPhases.push(phaseNum);
           }
@@ -161,13 +198,14 @@ function cmdMilestoneComplete(cwd, version, options, raw) {
         if (noDirectoryPhases.length > 0) {
           error(
             `Cannot mark milestone complete: ROADMAP lists ${noDirectoryPhases.length} unstarted phase(s) ` +
-            `(e.g. Phase ${noDirectoryPhases[0]}). Re-run with --force to override.`
+              `(e.g. Phase ${noDirectoryPhases[0]}). Re-run with --force to override.`,
           );
         }
       }
     } catch (e) {
       // If the error came from our guard, re-throw it; otherwise skip silently.
-      if (e.message && e.message.startsWith('Cannot mark milestone complete:')) throw e;
+      const message = e instanceof Error ? e.message : String(e);
+      if (message && message.startsWith('Cannot mark milestone complete:')) throw e;
       // Phase scan failed or STATE version mismatch — allow completion to proceed.
     }
   }
@@ -176,19 +214,22 @@ function cmdMilestoneComplete(cwd, version, options, raw) {
   let phaseCount = 0;
   let totalPlans = 0;
   let totalTasks = 0;
-  const accomplishments = [];
+  const accomplishments: string[] = [];
 
   try {
     const entries = fs.readdirSync(phasesDir, { withFileTypes: true });
-    const dirs = entries.filter(e => e.isDirectory()).map(e => e.name).sort();
+    const dirs = entries
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort();
 
     for (const dir of dirs) {
       if (!isDirInMilestone(dir)) continue;
 
       phaseCount++;
       const phaseFiles = fs.readdirSync(path.join(phasesDir, dir));
-      const plans = phaseFiles.filter(f => f.endsWith('-PLAN.md') || f === 'PLAN.md');
-      const summaries = phaseFiles.filter(f => f.endsWith('-SUMMARY.md') || f === 'SUMMARY.md');
+      const plans = phaseFiles.filter((f) => f.endsWith('-PLAN.md') || f === 'PLAN.md');
+      const summaries = phaseFiles.filter((f) => f.endsWith('-SUMMARY.md') || f === 'SUMMARY.md');
       totalPlans += plans.length;
 
       // Extract one-liners from summaries
@@ -196,7 +237,8 @@ function cmdMilestoneComplete(cwd, version, options, raw) {
         try {
           const content = fs.readFileSync(path.join(phasesDir, dir, s), 'utf-8');
           const fm = extractFrontmatter(content);
-          const oneLiner = fm['one-liner'] || extractOneLinerFromBody(content);
+          const rawOneLiner = fm['one-liner'];
+          const oneLiner = (typeof rawOneLiner === 'string' ? rawOneLiner : '') || extractOneLinerFromBody(content);
           if (oneLiner) {
             accomplishments.push(oneLiner);
           }
@@ -210,10 +252,14 @@ function cmdMilestoneComplete(cwd, version, options, raw) {
             const mdTaskMatches = content.match(/##\s*Task\s*\d+/gi) || [];
             totalTasks += xmlTaskMatches.length || mdTaskMatches.length;
           }
-        } catch { /* intentionally empty */ }
+        } catch {
+          /* intentionally empty */
+        }
       }
     }
-  } catch { /* intentionally empty */ }
+  } catch {
+    /* intentionally empty */
+  }
 
   // Archive ROADMAP.md
   if (fs.existsSync(roadmapPath)) {
@@ -235,7 +281,7 @@ function cmdMilestoneComplete(cwd, version, options, raw) {
   }
 
   // Create/append MILESTONES.md entry
-  const accomplishmentsList = accomplishments.map(a => `- ${a}`).join('\n');
+  const accomplishmentsList = accomplishments.map((a) => `- ${a}`).join('\n');
   const milestoneEntry = `## ${version} ${milestoneName} (Shipped: ${today})\n\n**Phases completed:** ${phaseCount} phases, ${totalPlans} plans, ${totalTasks} tasks\n\n**Key accomplishments:**\n${accomplishmentsList || '- (none recorded)'}\n\n---\n\n`;
 
   if (fs.existsSync(milestonesPath)) {
@@ -265,8 +311,12 @@ function cmdMilestoneComplete(cwd, version, options, raw) {
 
     stateContent = stateReplaceFieldWithFallback(stateContent, 'Status', null, `${version} milestone complete`);
     stateContent = stateReplaceFieldWithFallback(stateContent, 'Last Activity', 'Last activity', today);
-    stateContent = stateReplaceFieldWithFallback(stateContent, 'Last Activity Description', null,
-      `${version} milestone completed and archived`);
+    stateContent = stateReplaceFieldWithFallback(
+      stateContent,
+      'Last Activity Description',
+      null,
+      `${version} milestone completed and archived`,
+    );
 
     // Reset Current Position narrative so resume/progress flows do not keep
     // pointing at closed-phase execution instructions.
@@ -277,7 +327,7 @@ function cmdMilestoneComplete(cwd, version, options, raw) {
       `Status: Awaiting next milestone\n` +
       `Last activity: ${today} — Milestone ${version} completed and archived\n\n`;
     if (positionPattern.test(stateContent)) {
-      stateContent = stateContent.replace(positionPattern, (_m, header) => `${header}${closedPositionBody}`);
+      stateContent = stateContent.replace(positionPattern, (_m, header: string) => `${header}${closedPositionBody}`);
     } else {
       stateContent = `${stateContent.trimEnd()}\n\n## Current Position\n${closedPositionBody}`;
     }
@@ -287,10 +337,10 @@ function cmdMilestoneComplete(cwd, version, options, raw) {
     if (operatorPattern.test(stateContent)) {
       stateContent = stateContent.replace(
         operatorPattern,
-        `$1\n- Start the next milestone with ${formatGsdSlash('new-milestone', resolveRuntime(cwd))}\n\n`,
+        `$1\n- Start the next milestone with ${formatGsdSlash('new-milestone', resolveRuntime(cwd)) as string}\n\n`,
       );
     } else {
-      stateContent = `${stateContent.trimEnd()}\n\n## Operator Next Steps\n\n- Start the next milestone with ${formatGsdSlash('new-milestone', resolveRuntime(cwd))}\n`;
+      stateContent = `${stateContent.trimEnd()}\n\n## Operator Next Steps\n\n- Start the next milestone with ${formatGsdSlash('new-milestone', resolveRuntime(cwd)) as string}\n`;
     }
 
     writeStateMd(statePath, stateContent, cwd);
@@ -304,7 +354,7 @@ function cmdMilestoneComplete(cwd, version, options, raw) {
       platformEnsureDir(phaseArchiveDir);
 
       const phaseEntries = fs.readdirSync(phasesDir, { withFileTypes: true });
-      const phaseDirNames = phaseEntries.filter(e => e.isDirectory()).map(e => e.name);
+      const phaseDirNames = phaseEntries.filter((e) => e.isDirectory()).map((e) => e.name);
       let archivedCount = 0;
       for (const dir of phaseDirNames) {
         if (!isDirInMilestone(dir)) continue;
@@ -312,7 +362,9 @@ function cmdMilestoneComplete(cwd, version, options, raw) {
         archivedCount++;
       }
       phasesArchived = archivedCount > 0;
-    } catch { /* intentionally empty */ }
+    } catch {
+      /* intentionally empty */
+    }
   }
 
   const result = {
@@ -336,19 +388,19 @@ function cmdMilestoneComplete(cwd, version, options, raw) {
   output(result, raw);
 }
 
-function cmdPhasesClear(cwd, raw, args) {
+function cmdPhasesClear(cwd: string, raw: boolean, args: string[]): void {
   const phasesDir = planningPaths(cwd).phases;
   const confirm = Array.isArray(args) && args.includes('--confirm');
   let cleared = 0;
 
   if (fs.existsSync(phasesDir)) {
     const entries = fs.readdirSync(phasesDir, { withFileTypes: true });
-    const dirs = entries.filter(e => e.isDirectory() && !/^999(?:\.|$)/.test(e.name));
+    const dirs = entries.filter((e) => e.isDirectory() && !/^999(?:\.|$)/.test(e.name));
 
     if (dirs.length > 0 && !confirm) {
       error(
         `phases clear would delete ${dirs.length} phase director${dirs.length === 1 ? 'y' : 'ies'}. ` +
-        `Pass --confirm to proceed.`
+          `Pass --confirm to proceed.`,
       );
     }
 
@@ -358,14 +410,15 @@ function cmdPhasesClear(cwd, raw, args) {
         cleared++;
       }
     } catch (e) {
-      error('Failed to clear phases directory: ' + e.message);
+      const message = e instanceof Error ? e.message : String(e);
+      error('Failed to clear phases directory: ' + message);
     }
   }
 
   output({ cleared }, raw, `${cleared} phase director${cleared === 1 ? 'y' : 'ies'} cleared`);
 }
 
-module.exports = {
+export = {
   cmdRequirementsMarkComplete,
   cmdMilestoneComplete,
   cmdPhasesClear,
