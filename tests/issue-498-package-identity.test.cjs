@@ -15,7 +15,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 
 const ROOT = path.join(__dirname, '..');
-const { deriveIdentity, formatManualInstall, render } = require(
+const { deriveIdentity, formatManualInstall, render, slugifyPackageName } = require(
   path.join(ROOT, 'scripts', 'generate-package-identity.cjs'),
 );
 const GENERATED = path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'package-identity.cjs');
@@ -57,6 +57,28 @@ describe('Issue #498: deriveIdentity (pure, package.json -> coordinates)', () =>
     assert.equal(id.binName, 'gsd-core');
     assert.equal(id.repoSlug, 'open-gsd/gsd-core');
   });
+
+  test('deriveIdentity returns cacheSlug for @opengsd/gsd-core', () => {
+    const real = require(path.join(ROOT, 'package.json'));
+    const id = deriveIdentity(real);
+    assert.equal(id.cacheSlug, 'opengsd-gsd-core');
+  });
+
+  test('deriveIdentity returns updateCacheFileName for @opengsd/gsd-core', () => {
+    const real = require(path.join(ROOT, 'package.json'));
+    const id = deriveIdentity(real);
+    assert.equal(id.updateCacheFileName, 'gsd-update-check-opengsd-gsd-core.json');
+  });
+});
+
+describe('Issue #498: slugifyPackageName (pure helper for cache filename)', () => {
+  test('slugifyPackageName strips leading @, replaces / with -, for @opengsd/gsd-core', () => {
+    assert.equal(slugifyPackageName('@opengsd/gsd-core'), 'opengsd-gsd-core');
+  });
+
+  test('slugifyPackageName returns empty string for empty input', () => {
+    assert.equal(slugifyPackageName(''), '');
+  });
 });
 
 describe('Issue #498: formatManualInstall (the npx fallback command)', () => {
@@ -91,6 +113,7 @@ describe('Issue #498: generated runtime module (baked, drift-checked)', () => {
     // bug-3707). The sync check is about content, not the checkout's eol.
     const norm = (s) => s.replace(/\r\n/g, '\n');
     const expected = render(deriveIdentity(require(path.join(ROOT, 'package.json'))));
+    // allow-test-rule: architectural-invariant
     const actual = fs.readFileSync(GENERATED, 'utf8');
     assert.equal(norm(actual), norm(expected),
       'package-identity.cjs is stale — run `node scripts/generate-package-identity.cjs`');
@@ -101,6 +124,16 @@ describe('Issue #498: generated runtime module (baked, drift-checked)', () => {
     assert.equal(id.packageName, '@opengsd/gsd-core');
     assert.equal(id.binName, 'gsd-core');
     assert.equal(id.repoSlug, 'open-gsd/gsd-core');
+  });
+
+  test('generated module exports cacheSlug matching @opengsd/gsd-core', () => {
+    const id = require(GENERATED);
+    assert.equal(id.cacheSlug, 'opengsd-gsd-core');
+  });
+
+  test('generated module exports updateCacheFileName matching @opengsd/gsd-core', () => {
+    const id = require(GENERATED);
+    assert.equal(id.updateCacheFileName, 'gsd-update-check-opengsd-gsd-core.json');
   });
 
   test('generated manualInstallCommand closes over the baked coordinates', () => {

@@ -26,6 +26,9 @@ const STAGE_DIR = path.join(HOOKS_DIR, `.dist-staging-${process.pid}`);
 const HOOKS_TO_COPY = [
   'gsd-check-update-worker.js',
   'gsd-check-update.js',
+  // Required by gsd-check-update-worker.js at runtime — must ship alongside it
+  // so require('./managed-hooks-registry.cjs') resolves in the installed hooks/ dir.
+  'managed-hooks-registry.cjs',
   'gsd-context-monitor.js',
   'gsd-prompt-guard.js',
   'gsd-read-guard.js',

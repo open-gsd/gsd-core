@@ -79,6 +79,24 @@ describe('orphaned hooks stale detection (#1750)', () => {
     }
   });
 
+  test('MANAGED_HOOKS is a superset of all gsd-* hooks in HOOKS_TO_COPY (all extensions)', () => {
+    // Every hook-named file in HOOKS_TO_COPY (matching the gsd-* naming pattern
+    // that the registry governs, regardless of extension) must appear in MANAGED_HOOKS.
+    // Non-hook support files like managed-hooks-registry.cjs are intentionally
+    // excluded from this check because they are not themselves hooks.
+    // This catches missing .sh entries as well as .js entries.
+    assert.ok(Array.isArray(HOOKS_TO_COPY), 'HOOKS_TO_COPY must be an array');
+    const gsdHooks = HOOKS_TO_COPY.filter(h => h.startsWith('gsd-'));
+    assert.ok(gsdHooks.length >= 5, `expected at least 5 gsd-* hooks in HOOKS_TO_COPY, got ${gsdHooks.length}`);
+
+    for (const hook of gsdHooks) {
+      assert.ok(
+        MANAGED_HOOKS.includes(hook),
+        `MANAGED_HOOKS should include '${hook}' (from HOOKS_TO_COPY) — add it to hooks/managed-hooks-registry.cjs`
+      );
+    }
+  });
+
   test('orphaned hook filenames are NOT in MANAGED_HOOKS', () => {
     const orphanedHooks = [
       'gsd-intel-index.js',

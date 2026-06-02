@@ -2,7 +2,7 @@
 // gsd-hook-version: {{GSD_VERSION}}
 // SessionStart banner that surfaces GSD update availability when GSD's
 // statusline isn't installed. Reads the cache that
-// gsd-check-update-worker.js writes to ~/.cache/gsd/gsd-update-check.json.
+// gsd-check-update-worker.js writes to ~/.cache/gsd/<updateCacheFileName> (per-package).
 //
 // Opt-in by design: bin/install.js only registers this hook when the user
 // declines to install (or replace) the GSD statusline. The presence of the
@@ -15,6 +15,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { PACKAGE_NAME, updateCacheFileName } = require('../get-shit-done/bin/lib/package-identity.cjs');
 
 // Suppress repeat parse-error banners for 24 hours so a genuinely broken
 // cache file doesn't nag the user every session.
@@ -37,6 +38,9 @@ function buildBannerOutput(state) {
     return { systemMessage: 'GSD update check failed.' };
   }
   if (!cache) return null;
+  // Lineage guard: package_name must be present and match this package.
+  // Absent package_name means the cache predates lineage tracking — treat as untrusted.
+  if (!cache.package_name || cache.package_name !== PACKAGE_NAME) return null;
   if (!cache.update_available) return null;
   const installed = cache.installed || 'unknown';
   const latest = cache.latest || 'unknown';
@@ -96,7 +100,7 @@ function recordFailureWarning(sentinelFile, nowSeconds) {
 
 function main() {
   const cacheDir = path.join(os.homedir(), '.cache', 'gsd');
-  const cacheFile = path.join(cacheDir, 'gsd-update-check.json');
+  const cacheFile = path.join(cacheDir, updateCacheFileName);
   const sentinelFile = path.join(cacheDir, 'banner-failure-warned-at');
   const now = Math.floor(Date.now() / 1000);
 

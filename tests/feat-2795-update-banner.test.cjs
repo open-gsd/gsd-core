@@ -27,6 +27,7 @@ const {
   shouldSuppressFailureWarning,
   RATE_LIMIT_SECONDS,
 } = require('../hooks/gsd-update-banner.js');
+const { updateCacheFileName } = require('../get-shit-done/bin/lib/package-identity.cjs');
 
 // ─── Pure function: buildBannerOutput ───────────────────────────────────────
 
@@ -51,7 +52,7 @@ describe('buildBannerOutput', () => {
 
   test('returns banner envelope when update_available is true', () => {
     const out = buildBannerOutput({
-      cache: { update_available: true, installed: '1.39.0', latest: '1.40.0' },
+      cache: { update_available: true, installed: '1.39.0', latest: '1.40.0', package_name: '@opengsd/gsd-core' },
       parseError: false,
       suppressFailureWarning: false,
     });
@@ -96,7 +97,7 @@ describe('buildBannerOutput', () => {
 
   test('falls back to "unknown" when installed/latest missing', () => {
     const out = buildBannerOutput({
-      cache: { update_available: true },
+      cache: { update_available: true, package_name: '@opengsd/gsd-core' },
       parseError: false,
       suppressFailureWarning: false,
     });
@@ -183,7 +184,7 @@ describe('gsd-update-banner.js end-to-end', () => {
 
   function writeCache(home, contents) {
     fs.writeFileSync(
-      path.join(home, '.cache', 'gsd', 'gsd-update-check.json'),
+      path.join(home, '.cache', 'gsd', updateCacheFileName),
       typeof contents === 'string' ? contents : JSON.stringify(contents)
     );
   }
@@ -206,6 +207,7 @@ describe('gsd-update-banner.js end-to-end', () => {
         update_available: true,
         installed: '1.39.0',
         latest: '1.40.0',
+        package_name: '@opengsd/gsd-core',
       });
       const r = runHook(home);
       assert.equal(r.status, 0);

@@ -379,22 +379,47 @@ fi
 if [ -n "$CODEX_HOME" ]; then
   CACHE_DIRS+=( "$(expand_home "$CODEX_HOME")" )
 fi
+if [ -n "$CURSOR_CONFIG_DIR" ]; then
+  CACHE_DIRS+=( "$(expand_home "$CURSOR_CONFIG_DIR")" )
+fi
+if [ -n "$WINDSURF_CONFIG_DIR" ]; then
+  CACHE_DIRS+=( "$(expand_home "$WINDSURF_CONFIG_DIR")" )
+fi
+if [ -n "$AUGMENT_CONFIG_DIR" ]; then
+  CACHE_DIRS+=( "$(expand_home "$AUGMENT_CONFIG_DIR")" )
+fi
+if [ -n "$TRAE_CONFIG_DIR" ]; then
+  CACHE_DIRS+=( "$(expand_home "$TRAE_CONFIG_DIR")" )
+fi
+if [ -n "$QWEN_CONFIG_DIR" ]; then
+  CACHE_DIRS+=( "$(expand_home "$QWEN_CONFIG_DIR")" )
+fi
+if [ -n "$HERMES_HOME" ]; then
+  CACHE_DIRS+=( "$(expand_home "$HERMES_HOME")" )
+fi
+if [ -n "$CODEBUDDY_CONFIG_DIR" ]; then
+  CACHE_DIRS+=( "$(expand_home "$CODEBUDDY_CONFIG_DIR")" )
+fi
+if [ -n "$CLINE_CONFIG_DIR" ]; then
+  CACHE_DIRS+=( "$(expand_home "$CLINE_CONFIG_DIR")" )
+fi
 
 for dir in "${CACHE_DIRS[@]}"; do
   if [ -n "$dir" ]; then
-    rm -f "$dir/cache/gsd-update-check.json"
+    rm -f "$dir/cache/gsd-update-check"*.json
   fi
 done
 
-for dir in .claude .config/opencode .opencode .gemini/antigravity-ide .gemini/antigravity-cli .gemini/antigravity .agent .gemini .config/kilo .kilo .codex; do
-  rm -f "./$dir/cache/gsd-update-check.json"
-  rm -f "$HOME/$dir/cache/gsd-update-check.json"
+for dir in .claude .config/opencode .opencode .gemini/antigravity-ide .gemini/antigravity-cli .gemini/antigravity .agent .gemini .config/kilo .kilo .codex .cursor .codeium/windsurf .augment .trae .qwen .hermes .codebuddy .cline; do
+  rm -f "./$dir/cache/gsd-update-check"*.json
+  rm -f "$HOME/$dir/cache/gsd-update-check"*.json
 done
 
 # Clear the shared tool-agnostic cache written by gsd-check-update.js hook (#2784).
-# The hook uses ~/.cache/gsd/gsd-update-check.json regardless of runtime; clear it
-# so the statusline stops showing the stale "⬆ /gsd:update" indicator after update.
-rm -f "$HOME/.cache/gsd/gsd-update-check.json"
+# The hook uses ~/.cache/gsd/gsd-update-check.json (legacy) or a per-package name
+# like gsd-update-check-opengsd-gsd-core.json; the glob clears all variants so the
+# statusline stops showing the stale "⬆ /gsd:update" indicator after update.
+rm -f "$HOME/.cache/gsd/gsd-update-check"*.json
 ```
 
 The SessionStart hook (`gsd-check-update.js`) writes to the detected runtime's cache directory, so preferred/env-derived paths and default paths must all be cleared to prevent stale update indicators.

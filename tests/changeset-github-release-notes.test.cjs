@@ -17,8 +17,8 @@ const {
   renderGithubReleaseNotes,
 } = require(path.join(ROOT, 'scripts', 'changeset', 'github-release-notes.cjs'));
 
-function run(command, args, cwd) {
-  const result = cp.spawnSync(command, args, { cwd, encoding: 'utf8' });
+function run(command, args, cwd, env) {
+  const result = cp.spawnSync(command, args, { cwd, encoding: 'utf8', env: env || process.env });
   assert.equal(result.status, 0, `${command} ${args.join(' ')}\nstdout=${result.stdout}\nstderr=${result.stderr}`);
   return result.stdout;
 }
@@ -31,19 +31,34 @@ function writeFragment(repo, name, type, pr, body) {
 
 function createTaggedRepo() {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-release-notes-'));
-  run('git', ['init', '-q'], repo);
-  run('git', ['config', 'user.email', 'test@example.com'], repo);
-  run('git', ['config', 'user.name', 'Test User'], repo);
+  // Isolate from the developer's global/system git config (e.g. gpgSign settings)
+  // by pointing GIT_CONFIG_GLOBAL and GIT_CONFIG_SYSTEM at an empty file inside
+  // the temp dir. This prevents tag.gpgSign / commit.gpgSign / tag.forceSignAnnotated
+  // from leaking in and breaking lightweight tags or unsigned commits.
+  const emptyGitConfig = path.join(repo, '.git-config-empty');
+  fs.writeFileSync(emptyGitConfig, '');
+  const gitEnv = {
+    ...process.env,
+    GIT_CONFIG_GLOBAL: emptyGitConfig,
+    GIT_CONFIG_SYSTEM: emptyGitConfig,
+  };
+  run('git', ['init', '-q'], repo, gitEnv);
+  // Belt-and-suspenders: also set local repo config to disable signing
+  run('git', ['config', 'user.email', 'test@example.com'], repo, gitEnv);
+  run('git', ['config', 'user.name', 'Test User'], repo, gitEnv);
+  run('git', ['config', 'commit.gpgSign', 'false'], repo, gitEnv);
+  run('git', ['config', 'tag.gpgSign', 'false'], repo, gitEnv);
+  run('git', ['config', 'tag.forceSignAnnotated', 'false'], repo, gitEnv);
   fs.writeFileSync(path.join(repo, 'README.md'), 'fixture\n');
-  run('git', ['add', 'README.md'], repo);
-  run('git', ['commit', '-q', '-m', 'initial'], repo);
-  run('git', ['tag', 'v1.0.0'], repo);
+  run('git', ['add', 'README.md'], repo, gitEnv);
+  run('git', ['commit', '-q', '-m', 'initial'], repo, gitEnv);
+  run('git', ['tag', 'v1.0.0'], repo, gitEnv);
 
   writeFragment(repo, 'fix-install-sdk', 'Fixed', 101, '**`gsd-sdk` now installs reliably** — persistent PATH is checked.');
   writeFragment(repo, 'remove-intel-noise', 'Removed', 102, '**`gsd-intel-updater` no longer emits layout detection noise** — ordinary projects stay quiet.');
-  run('git', ['add', '.changeset'], repo);
-  run('git', ['commit', '-q', '-m', 'add changesets'], repo);
-  run('git', ['tag', 'v1.0.1'], repo);
+  run('git', ['add', '.changeset'], repo, gitEnv);
+  run('git', ['commit', '-q', '-m', 'add changesets'], repo, gitEnv);
+  run('git', ['tag', 'v1.0.1'], repo, gitEnv);
   return repo;
 }
 

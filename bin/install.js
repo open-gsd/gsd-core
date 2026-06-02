@@ -227,6 +227,13 @@ const {
 const {
   resolveRuntimeArtifactLayout,
 } = require(path.join(_gsdLibDir, 'runtime-artifact-layout.cjs'));
+const {
+  planLegacyCleanup,
+  applyLegacyCleanup,
+} = require(path.join(__dirname, '..', 'get-shit-done', 'bin', 'lib', 'legacy-cleanup.cjs'));
+const {
+  updateCacheFileName,
+} = require(path.join(__dirname, '..', 'get-shit-done', 'bin', 'lib', 'package-identity.cjs'));
 
 // Parse args
 const args = process.argv.slice(2);
@@ -253,6 +260,7 @@ const hasUninstall = args.includes('--uninstall') || args.includes('-u');
 const hasSkillsRoot = args.includes('--skills-root');
 const hasPortableHooks = args.includes('--portable-hooks') || process.env.GSD_PORTABLE_HOOKS === '1';
 const hasMinimal = args.includes('--minimal') || args.includes('--core-only');
+const hasDryRun = args.includes('--dry-run');
 // --profile=<name> or --profile=<n1>,<n2> (composable); mutually exclusive with --minimal
 const _profileArgRaw = (() => {
   for (const arg of args) {
@@ -9092,10 +9100,17 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     console.log(`  ${green}✓${reset} Installed hooks/lib/ helpers (git-cmd, graphify-rebuild, ...)`);
   }
 
-  // Clear stale update cache so next session re-evaluates hook versions
-  // Cache lives at ~/.cache/gsd/ (see hooks/gsd-check-update.js line 35-36)
-  const updateCacheFile = path.join(os.homedir(), '.cache', 'gsd', 'gsd-update-check.json');
-  try { fs.unlinkSync(updateCacheFile); } catch (e) { /* cache may not exist yet */ }
+  // Remove legacy get-shit-done-cc artifacts and stale update caches (#607).
+  // cleanupLegacyGsdCc handles both the legacy shared cache and the per-package
+  // cache (formerly an inline unlinkSync here). A cleanup failure must never
+  // abort a successful install — log a warning and continue.
+  // install() is never reached in --dry-run mode (the early-exit at the CLI
+  // dispatch handles preview), so cleanup here always applies for real.
+  try {
+    cleanupLegacyGsdCc({ dryRun: false });
+  } catch (cleanupErr) {
+    console.warn(`  ${yellow}Warning: legacy cleanup failed: ${cleanupErr.message}${reset}`);
+  }
 
   if (failures.length > 0) {
     console.error(`\n  ${yellow}Installation incomplete!${reset} Failed: ${failures.join(', ')}`);
@@ -10697,6 +10712,86 @@ function maybeSuggestPathExport(globalBin, homeDir) {
   console.log('');
 }
 
+// Runtime subdir names to scan for legacy get-shit-done-cc artifacts (#607).
+// Covers both local (project-relative) and common global forms.
+const _LEGACY_SCAN_SUBDIR_NAMES = [
+  '.claude',
+  '.gemini',
+  '.opencode',
+  '.config/opencode',
+  '.kilo',
+  '.config/kilo',
+  '.codex',
+  '.copilot',
+  '.github',    // copilot local form
+  '.agent',     // antigravity local form
+  '.cursor',
+  '.windsurf',
+  '.codeium/windsurf',
+  '.augment',
+  '.trae',
+  '.qwen',
+  '.hermes',
+  '.codebuddy',
+  '.cline',
+];
+
+/**
+ * Detect and remove leftover get-shit-done-cc artifacts across ALL known
+ * runtime config directories (issue #607).
+ *
+ * Exported so tests can call it directly without spawning a subprocess.
+ *
+ * Scans ONLY subdirs under homeDir — never cwd — to avoid touching the
+ * user's active-project hooks when the installer is run from a project dir.
+ *
+ * @param {object} [opts]
+ * @param {string}  [opts.homeDir=os.homedir()]  - home directory to scan
+ * @param {boolean} [opts.dryRun=false]          - preview only; no mutations
+ * @param {object}  [opts.logger=console]        - injectable logger
+ * @returns {{ plan: {path:string,reason:string}[], result: object }}
+ */
+function cleanupLegacyGsdCc({ homeDir = os.homedir(), dryRun = false, logger = console } = {}) {
+  // Build de-duplicated list of candidate config dirs to scan.
+  // Only scan under homeDir — never cwd — to prevent accidental deletion of
+  // the user's active-project hooks when the installer is invoked from a
+  // project directory that has .claude/hooks or similar subdirs.
+  const seen = new Set();
+  const configDirs = [];
+  for (const name of _LEGACY_SCAN_SUBDIR_NAMES) {
+    const candidate = path.join(homeDir, name);
+    if (!seen.has(candidate) && fs.existsSync(candidate)) {
+      seen.add(candidate);
+      configDirs.push(candidate);
+    }
+  }
+
+  // planLegacyCleanup scans each configDir and already includes the legacy
+  // shared cache (gsd-update-check.json) as a plan entry.
+  const plan = planLegacyCleanup(configDirs, { homeDir });
+
+  // Apply the plan (dryRun honors the flag).
+  const result = applyLegacyCleanup(plan, { dryRun, logger });
+
+  // Also clear / preview the per-package cache so next session re-evaluates
+  // hook versions (replaces the former inline unlinkSync on line ~9104).
+  const perPkgCacheFile = path.join(homeDir, '.cache', 'gsd', updateCacheFileName);
+  if (dryRun) {
+    logger.log('[dry-run] would remove: ' + perPkgCacheFile + '  (per-package-update-cache)');
+  } else {
+    try { fs.unlinkSync(perPkgCacheFile); } catch (_e) { /* cache may not exist yet */ }
+  }
+
+  // Concise summary
+  if (plan.length > 0 || !dryRun) {
+    const verb = dryRun ? 'Would remove' : 'Removed';
+    const count = dryRun ? plan.length : result.removed.length;
+    logger.log(`[legacy-cleanup] ${verb} ${count} legacy artifact(s).`);
+  }
+
+  return { plan, result };
+}
+
 /**
  * Install GSD for all selected runtimes
  */
@@ -10920,11 +11015,26 @@ module.exports = {
     installRuntimeArtifacts,
     uninstallRuntimeArtifacts,
     parseConfigDirFromArgs,
+    cleanupLegacyGsdCc,
   };
 
 // Main logic — only run when not loaded as a module for testing
 if (require.main === module && !process.env.GSD_TEST_MODE) {
-  if (hasSkillsRoot) {
+  if (hasDryRun) {
+    // --dry-run: preview legacy cleanup and exit without installing.
+    if (hasUninstall) {
+      console.log('Note: --dry-run previews legacy get-shit-done-cc cleanup only; it does not preview --uninstall.');
+    }
+    console.log('Dry run — no files will be modified.\n');
+    // cleanupLegacyGsdCc with dryRun:true is the single source of truth for
+    // both the legacy artifacts and the per-package cache path — no duplicate
+    // printing here.
+    const { plan } = cleanupLegacyGsdCc({ dryRun: true });
+    if (plan.length === 0) {
+      console.log('  (no legacy get-shit-done-cc artifacts found)');
+    }
+    process.exit(0);
+  } else if (hasSkillsRoot) {
     // Print the skills root directory for a given runtime (used by /gsd-sync-skills).
     // Usage: node install.js --skills-root <runtime>
     const runtimeArg = args[args.indexOf('--skills-root') + 1];

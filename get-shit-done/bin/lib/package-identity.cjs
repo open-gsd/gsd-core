@@ -8,6 +8,8 @@ const binName = "gsd-core";
 const repoSlug = "open-gsd/gsd-core";
 const repoUrl = "https://github.com/open-gsd/gsd-core";
 const changelogRawUrl = "https://raw.githubusercontent.com/open-gsd/gsd-core/main/CHANGELOG.md";
+const cacheSlug = "opengsd-gsd-core";
+const updateCacheFileName = "gsd-update-check-opengsd-gsd-core.json";
 
 function formatManualInstall({ packageName, binName, scope, runtime } = {}) {
   const runtimeFlag = runtime ? ` --${runtime}` : '';
@@ -21,11 +23,13 @@ function manualInstallCommand(opts = {}) {
 module.exports = Object.freeze({
   packageName,
   // PACKAGE_NAME: back-compat alias for #516-era consumers. Baked here, so it
-  // survives the installed tree’s synthetic package.json (fixes the #378 undefined).
+  // survives the installed tree's synthetic package.json (fixes the #378 undefined).
   PACKAGE_NAME: packageName,
   binName,
   repoSlug,
   repoUrl,
   changelogRawUrl,
+  cacheSlug,
+  updateCacheFileName,
   manualInstallCommand,
 });

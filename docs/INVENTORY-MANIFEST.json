@@ -1,5 +1,5 @@
 {
-  "generated": "2026-06-01",
+  "generated": "2026-06-02",
   "families": {
     "agents": [
       "gsd-advisor-researcher",
@@ -297,6 +297,7 @@
       "installer-migrations.cjs",
       "intel.cjs",
       "learnings.cjs",
+      "legacy-cleanup.cjs",
       "milestone.cjs",
       "model-catalog.cjs",
       "model-profiles.cjs",

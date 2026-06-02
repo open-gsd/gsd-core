@@ -25,6 +25,21 @@ function parseRepoSlug(repository) {
 }
 
 /**
+ * Pure: turn an npm package name into a filesystem-safe slug for cache filenames.
+ * Strips a leading `@`, replaces `/` with `-`, then collapses any run of
+ * characters that are NOT `[a-z0-9]` to a single `-`, and trims leading/trailing `-`.
+ */
+function slugifyPackageName(name) {
+  if (!name) return '';
+  return name
+    .replace(/^@/, '')
+    .replace(/\//g, '-')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/**
  * Pure: package.json object -> the package identity coordinates.
  */
 function deriveIdentity(pkg = {}) {
@@ -35,7 +50,9 @@ function deriveIdentity(pkg = {}) {
   const changelogRawUrl = repoSlug
     ? `https://raw.githubusercontent.com/${repoSlug}/main/CHANGELOG.md`
     : '';
-  return { packageName, binName, repoSlug, repoUrl, changelogRawUrl };
+  const cacheSlug = slugifyPackageName(packageName);
+  const updateCacheFileName = cacheSlug ? `gsd-update-check-${cacheSlug}.json` : 'gsd-update-check.json';
+  return { packageName, binName, repoSlug, repoUrl, changelogRawUrl, cacheSlug, updateCacheFileName };
 }
 
 /**
@@ -62,7 +79,7 @@ const GENERATED_HEADER =
  * runtime command builder is byte-identical to the tested source above.
  */
 function render(identity) {
-  const { packageName, binName, repoSlug, repoUrl, changelogRawUrl } = identity;
+  const { packageName, binName, repoSlug, repoUrl, changelogRawUrl, cacheSlug, updateCacheFileName } = identity;
   const j = (v) => JSON.stringify(v);
   return (
     GENERATED_HEADER +
@@ -71,7 +88,9 @@ function render(identity) {
     `const binName = ${j(binName)};\n` +
     `const repoSlug = ${j(repoSlug)};\n` +
     `const repoUrl = ${j(repoUrl)};\n` +
-    `const changelogRawUrl = ${j(changelogRawUrl)};\n\n` +
+    `const changelogRawUrl = ${j(changelogRawUrl)};\n` +
+    `const cacheSlug = ${j(cacheSlug)};\n` +
+    `const updateCacheFileName = ${j(updateCacheFileName)};\n\n` +
     `${formatManualInstall.toString()}\n\n` +
     'function manualInstallCommand(opts = {}) {\n' +
     '  return formatManualInstall({ packageName, binName, scope: opts.scope, runtime: opts.runtime });\n' +
@@ -79,12 +98,14 @@ function render(identity) {
     'module.exports = Object.freeze({\n' +
     '  packageName,\n' +
     '  // PACKAGE_NAME: back-compat alias for #516-era consumers. Baked here, so it\n' +
-    '  // survives the installed tree’s synthetic package.json (fixes the #378 undefined).\n' +
+    "  // survives the installed tree's synthetic package.json (fixes the #378 undefined).\n" +
     '  PACKAGE_NAME: packageName,\n' +
     '  binName,\n' +
     '  repoSlug,\n' +
     '  repoUrl,\n' +
     '  changelogRawUrl,\n' +
+    '  cacheSlug,\n' +
+    '  updateCacheFileName,\n' +
     '  manualInstallCommand,\n' +
     '});\n'
   );
@@ -101,4 +122,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { deriveIdentity, parseRepoSlug, formatManualInstall, render, main };
+module.exports = { deriveIdentity, parseRepoSlug, slugifyPackageName, formatManualInstall, render, main };

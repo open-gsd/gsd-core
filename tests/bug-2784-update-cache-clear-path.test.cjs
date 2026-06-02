@@ -71,12 +71,12 @@ describe('bug-2784: update.md cache-clear covers shared cache path', () => {
     }
 
     const sharedCacheClearCmds = bashLines.filter(
-      (line) => /^rm\b/.test(line) && line.includes('.cache/gsd/gsd-update-check.json')
+      (line) => /^rm\b/.test(line) && line.includes('.cache/gsd/gsd-update-check') && line.includes('*.json')
     );
     assert.ok(
       sharedCacheClearCmds.length > 0,
       [
-        'run_update step bash blocks must include an `rm` command targeting .cache/gsd/gsd-update-check.json.',
+        'run_update step bash blocks must include an `rm` command targeting .cache/gsd/gsd-update-check*.json (glob form clearing legacy + per-package variants).',
         `Bash lines found: ${JSON.stringify(bashLines)}`,
       ].join('\n')
     );

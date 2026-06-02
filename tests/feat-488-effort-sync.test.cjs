@@ -1,6 +1,7 @@
 // Tests for gsd-tools effort sync command (#488)
 // Verifies that effort frontmatter in installed agent files can be re-synced
 // when effort config changes after initial install.
+// allow-test-rule: structural-regression-guard — readFileSync asserts on installed agent .md files (the product under mutation) to verify dry-run safety and apply correctness; stderr.includes guards the CLI argument-rejection contract.
 
 'use strict';
 

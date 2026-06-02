@@ -1265,26 +1265,62 @@ describe('shared cache directory (#1421)', () => {
     );
   });
 
-  test('gsd-statusline.js checks shared cache first, falls back to legacy (#1421)', () => {
-    const content = fs.readFileSync(
+  test('gsd-statusline.js reads the per-package shared cache and rejects foreign lineage (#1421/#607)', () => {
+    const { evaluateUpdateCache } = require('../hooks/gsd-statusline.js');
+    const { updateCacheFileName, PACKAGE_NAME } = require('../get-shit-done/bin/lib/package-identity.cjs');
+
+    // Per-package filename embeds the package identity — no generic fallback
+    assert.strictEqual(
+      updateCacheFileName,
+      'gsd-update-check-opengsd-gsd-core.json',
+      'updateCacheFileName must be the per-package filename'
+    );
+
+    // The statusline must NOT reference a legacyCacheFile — the legacy fallback was removed
+    // allow-test-rule: architectural-invariant
+    const statuslineSrc = fs.readFileSync(
       path.join(__dirname, '..', 'hooks', 'gsd-statusline.js'), 'utf-8'
     );
-    // Statusline must check the shared cache path first
     assert.ok(
-      content.includes("path.join(homeDir, '.cache', 'gsd', 'gsd-update-check.json')"),
-      'statusline must check shared cache at ~/.cache/gsd/gsd-update-check.json'
+      !statuslineSrc.includes('legacyCacheFile'),
+      'gsd-statusline.js must not reference legacyCacheFile — legacy fallback was removed in #607'
     );
-    // Must fall back to legacy runtime-specific cache for backward compat
     assert.ok(
-      content.includes("path.join(claudeDir, 'cache', 'gsd-update-check.json')"),
-      'statusline must fall back to legacy cache at claudeDir/cache/gsd-update-check.json'
+      statuslineSrc.includes(updateCacheFileName) || statuslineSrc.includes('updateCacheFileName'),
+      'gsd-statusline.js must reference the per-package updateCacheFileName'
     );
-    // Shared cache must be checked before legacy (existsSync order matters)
-    const sharedIdx = content.indexOf('sharedCacheFile');
-    const legacyIdx = content.indexOf('legacyCacheFile');
-    assert.ok(
-      sharedIdx < legacyIdx,
-      'shared cache must be defined and checked before legacy cache'
+
+    // evaluateUpdateCache: foreign package_name → no update shown
+    assert.deepStrictEqual(
+      evaluateUpdateCache({ package_name: 'other-package', update_available: true }),
+      { showUpdate: false, staleWarning: 'none' },
+      'foreign package_name must be rejected (lineage guard)'
+    );
+
+    // evaluateUpdateCache: absent package_name → no update shown
+    assert.deepStrictEqual(
+      evaluateUpdateCache({ update_available: true }),
+      { showUpdate: false, staleWarning: 'none' },
+      'absent package_name must be rejected (lineage guard)'
+    );
+
+    // evaluateUpdateCache: null cache → no update shown
+    assert.deepStrictEqual(
+      evaluateUpdateCache(null),
+      { showUpdate: false, staleWarning: 'none' },
+      'null cache must return no-update'
+    );
+
+    // evaluateUpdateCache: matching package_name + update_available:true → show update
+    const result = evaluateUpdateCache({ package_name: PACKAGE_NAME, update_available: true });
+    assert.strictEqual(result.showUpdate, true,
+      'matching package_name with update_available:true must set showUpdate=true'
+    );
+
+    // evaluateUpdateCache: matching package_name + update_available:false → no update
+    const noUpdate = evaluateUpdateCache({ package_name: PACKAGE_NAME, update_available: false });
+    assert.strictEqual(noUpdate.showUpdate, false,
+      'matching package_name with update_available:false must not show update'
     );
   });
 });

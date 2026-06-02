@@ -19,9 +19,21 @@ const { isSemverNewer } = require('../get-shit-done/bin/lib/semver-compare.cjs')
 // in the installed tree (only a {"type":"commonjs"} marker ships), so the
 // background check never reported updates.
 const { checkLatestVersion } = require('../get-shit-done/bin/check-latest-version.cjs');
+const { PACKAGE_NAME } = require('../get-shit-done/bin/lib/package-identity.cjs');
 // Authoritative list of managed hooks — shared with tests to retire source-grep
 // assertions (pending-migration-to-typed-ir [#455]).
-const { MANAGED_HOOKS } = require('./managed-hooks-registry.cjs');
+// NOTE: managed-hooks-registry.cjs must be in HOOKS_TO_COPY (scripts/build-hooks.js)
+// so it is present in hooks/dist/ and ships to the installed runtime hooks/ dir.
+// If it is missing (e.g., installed from an older dist), catch and degrade gracefully
+// so the worker always proceeds to compute and write the result cache record.
+let MANAGED_HOOKS = [];
+try {
+  ({ MANAGED_HOOKS } = require('./managed-hooks-registry.cjs'));
+} catch (e) {
+  // Module not found in installed runtime — stale-hook detection degrades to
+  // no-op (empty list means no hooks are checked for staleness). The worker
+  // still runs and writes package_name / installed / latest / update_available.
+}
 
 const cacheFile = process.env.GSD_CACHE_FILE;
 const projectVersionFile = process.env.GSD_PROJECT_VERSION_FILE;
@@ -88,6 +100,7 @@ const result = {
   latest: latest || 'unknown',
   checked: Math.floor(Date.now() / 1000),
   stale_hooks: staleHooks.length > 0 ? staleHooks : undefined,
+  package_name: PACKAGE_NAME,
 };
 
 if (cacheFile) {
