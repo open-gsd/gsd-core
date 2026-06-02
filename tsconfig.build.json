@@ -7,7 +7,7 @@
     "moduleResolution": "nodenext",
     "target": "ES2022",
     "lib": ["ES2022"],
-    "types": [],
+    "types": ["node"],
     "strict": true,
     "declaration": false,
     "sourceMap": false,
@@ -16,5 +16,5 @@
     "noEmitOnError": true,
     "skipLibCheck": true
   },
-  "include": ["src/**/*.cts", "src/**/*.d.ts"]
+  "include": ["src/**/*.cts"]
 }

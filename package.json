@@ -51,6 +51,7 @@
   "devDependencies": {
     "@eslint/js": "^9.39.4",
     "@stryker-mutator/core": "^9.6.1",
+    "@types/node": "^22.19.19",
     "c8": "^11.0.0",
     "eslint": "^9.39.4",
     "eslint-plugin-n": "^17.24.0",
