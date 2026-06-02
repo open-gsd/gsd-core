@@ -772,6 +772,70 @@ describe('executeWorktreeWaveCleanupPlan', () => {
     assert.equal(result.entries[0].reason, 'worktree_dirty');
   });
 
+  test('#245: blocks with summary_rescue_failed when copyFileSync throws during rescue', () => {
+    // Fixture: the only dirty file is .planning/q1-SUMMARY.md, but copyFileSync throws
+    // (simulating ENOSPC / permission error).  The path must NOT be added to rescuedRelPaths,
+    // so the entry must be blocked with status='blocked', reason='summary_rescue_failed',
+    // and the worktree must NOT be merged or removed.
+    const calls = [];
+    const plan = {
+      ok: true,
+      repoRoot: '/repo/main',
+      action: 'cleanup_wave',
+      discovery: 'manifest',
+      entries: [{
+        agent_id: 'a1',
+        worktree_path: '/repo/.claude/worktrees/agent-a1',
+        branch: 'worktree-agent-a1',
+        expected_base: 'abc123',
+      }],
+    };
+    const result = executeWorktreeWaveCleanupPlan(plan, {
+      execGit: (args) => {
+        calls.push(args.join(' '));
+        const key = args.join(' ');
+        if (key === '-C /repo/.claude/worktrees/agent-a1 rev-parse --abbrev-ref HEAD') {
+          return { exitCode: 0, stdout: 'worktree-agent-a1', stderr: '' };
+        }
+        if (key === 'merge-base HEAD worktree-agent-a1') {
+          return { exitCode: 0, stdout: 'abc123', stderr: '' };
+        }
+        if (key === 'diff --diff-filter=D --name-only HEAD...worktree-agent-a1') {
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        if (key === '-C /repo/.claude/worktrees/agent-a1 status --porcelain --untracked-files=all') {
+          // Only the SUMMARY is dirty
+          return { exitCode: 0, stdout: '?? .planning/q1-SUMMARY.md', stderr: '' };
+        }
+        // Any merge or worktree-remove call proves we failed to block — throw to surface it
+        if (key.startsWith('merge worktree-agent-a1') || key.startsWith('worktree remove')) {
+          throw new Error(`worktree was not blocked before merge/remove: ${key}`);
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+      findSummaryFiles: (worktreePath) => {
+        if (worktreePath === '/repo/.claude/worktrees/agent-a1') {
+          return ['/repo/.claude/worktrees/agent-a1/.planning/q1-SUMMARY.md'];
+        }
+        return [];
+      },
+      readFileSync: (p) => {
+        if (p === '/repo/.claude/worktrees/agent-a1/.planning/q1-SUMMARY.md') return 'summary content';
+        return '';
+      },
+      existsSync: () => false,
+      mkdirSync: () => {},
+      copyFileSync: () => { throw new Error('ENOSPC: no space left on device'); },
+    });
+
+    assert.equal(result.ok, false, 'result.ok must be false when rescue copy fails');
+    assert.equal(result.entries[0].status, 'blocked', 'entry status must be blocked');
+    assert.equal(result.entries[0].reason, 'summary_rescue_failed', 'entry reason must be summary_rescue_failed');
+    // Verify no merge or worktree-remove call was made (the execGit throw above would have surfaced it)
+    const mergeCalls = calls.filter((c) => c.startsWith('merge worktree-agent-a1') || c.startsWith('worktree remove'));
+    assert.equal(mergeCalls.length, 0, 'no merge or worktree-remove git call must have been made');
+  });
+
   test('blocks dirty worktrees before merge/remove/delete', () => {
     const calls = [];
     const plan = {
