@@ -1,10 +1,11 @@
 name: Mutation Testing
 
 # PR-GATING: runs on every pull_request targeting `next` or `main`.
-# Computes changed core lib files via git diff and passes them to --mutate,
-# so only mutants in CHANGED files are tested — keeps the job bounded.
-# If no core lib files changed, the gate passes trivially (skip+exit 0).
-# Full-repo mutation runs are reserved for local exploration (npm run test:mutation).
+# scripts/mutation-matrix.cjs is the single source of truth for which modules
+# are "covered" (have meaningful test coverage for mutation). It computes
+# changed modules from git diff and emits a GitHub Actions matrix so each
+# changed module gets its own Stryker shard running in parallel.
+# If no covered modules changed the gate passes trivially (has_work: false).
 
 on:
   pull_request:
@@ -12,10 +13,15 @@ on:
       - next
       - main
     paths:
-      # Only run when lib source or property tests change
+      # Only run when lib source, property/unit tests, or mutation config change
+      - 'src/**/*.cts'
       - 'get-shit-done/bin/lib/**/*.cjs'
       - 'tests/**/*.property.test.cjs'
+      - 'tests/**/*.unit.test.cjs'
+      - 'tests/adr-parser.test.cjs'
+      - 'tests/active-workstream-store.test.cjs'
       - 'stryker.config.mjs'
+      - 'scripts/mutation-matrix.cjs'
   workflow_dispatch:
 
 concurrency:
@@ -26,10 +32,60 @@ permissions:
   contents: read
 
 jobs:
-  mutation:
-    name: Stryker mutation score (changed files only)
+  # ── Job 1: detect ─────────────────────────────────────────────────────────
+  # Computes which covered modules changed and emits a matrix for the mutate job.
+  # Intentionally does NOT run npm ci — it only needs git + Node builtins.
+  detect:
+    name: Detect changed covered modules
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    outputs:
+      has_work: ${{ steps.matrix.outputs.has_work }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Fetch base ref for diff
+        # Ensure the base branch tip is available for the git diff below.
+        # fetch-depth: 0 above gets all history, but the remote ref name must exist.
+        # For workflow_dispatch (no base_ref) we fall back to `next`.
+        run: git fetch origin ${{ github.base_ref || 'next' }} --depth=1
+
+      - name: Compute mutation matrix
+        id: matrix
+        run: |
+          BASE_REF="origin/${{ github.base_ref || 'next' }}"
+          # Run the matrix script; capture the JSON output.
+          JSON=$(node scripts/mutation-matrix.cjs --base "${BASE_REF}")
+
+          # Extract has_work and the compact matrix string for GITHUB_OUTPUT.
+          HAS_WORK=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')).has_work)" <<< "${JSON}")
+          MATRIX=$(node -e "process.stdout.write(JSON.stringify(JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')).matrix))" <<< "${JSON}")
+
+          echo "has_work=${HAS_WORK}" >> "${GITHUB_OUTPUT}"
+          echo "matrix=${MATRIX}" >> "${GITHUB_OUTPUT}"
+
+          # Human-readable summary for the step log.
+          echo "has_work=${HAS_WORK}"
+          echo "${JSON}"
+
+  # ── Job 2: mutate ──────────────────────────────────────────────────────────
+  # One shard per changed covered module, each running only that module's tests.
+  # Skipped entirely when detect reports no covered files changed.
+  mutate:
+    name: Stryker (${{ matrix.name }})
+    needs: detect
+    if: needs.detect.outputs.has_work == 'true'
+    # TODO: can switch runs-on to blacksmith-4vcpu-ubuntu-2404 for faster shards
+    # once org-level runner label is confirmed available — do NOT change in this PR.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15  # per-shard; lower than the old 30-min serial budget
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.detect.outputs.matrix) }}
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
@@ -43,63 +99,66 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
-      - name: Install dependencies
+      - name: Install dependencies (builds .cjs via prepare)
         run: npm ci
 
-      - name: Fetch base ref for diff
-        # Ensure the base branch tip is available for the git diff below.
-        # fetch-depth: 0 above gets all history, but the remote ref name must exist.
-        run: git fetch origin ${{ github.base_ref }} --depth=1
-
-      - name: Compute changed core lib files
-        id: changed
-        run: |
-          BASE_REF="origin/${{ github.base_ref }}"
-          # ADR-457 build-at-publish: bin/lib/*.cjs are generated from src/*.cts,
-          # so Stryker mutates the TS SOURCES. The mutation gate is only
-          # meaningful for modules that the stryker.config.mjs command actually
-          # exercises (its property/unit test set) — mutating an uncovered module
-          # can only ever produce survived mutants. Scope to those covered modules.
-          # grep-based (not a git pathspec): `src/**/*.cts` pathspec only matches
-          # nested dirs, missing the top-level src/*.cts covered modules.
-          # Stryker mutates the BUILT artifact, so map the changed src/*.cts to
-          # its emitted get-shit-done/bin/lib/*.cjs path.
-          COVERED='^src/(context-utilization|prompt-budget|frontmatter|adr-parser|config-schema|active-workstream-store)\.cts$'
-          CHANGED=$(git diff --name-only "${BASE_REF}...HEAD" \
-            | grep -E '^src/.*\.cts$' \
-            | grep -vE '\.d\.cts$' \
-            | grep -E "$COVERED" \
-            | sed -E 's#^src/#get-shit-done/bin/lib/#; s#\.cts$#.cjs#' \
-            || true)
-          if [ -z "$CHANGED" ]; then
-            echo "changed=" >> "$GITHUB_OUTPUT"
-          else
-            # Join with commas for --mutate
-            MUTATE_LIST=$(echo "$CHANGED" | paste -sd, -)
-            echo "changed=${MUTATE_LIST}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Skip mutation gate (no core lib files changed)
-        if: steps.changed.outputs.changed == ''
-        run: echo "No core lib files changed; skipping mutation gate"
-
-      - name: Run Stryker (incremental, changed files only)
-        if: steps.changed.outputs.changed != ''
-        # --mutate scopes mutation to only the changed production files.
+      - name: Run Stryker — ${{ matrix.name }}
+        # MUTATION_TEST_CMD scopes the command runner to only this module's tests.
+        # --mutate scopes mutation to only the changed module's built artifact.
         # --incremental reuses cached results for unchanged mutants.
-        # The break threshold (50) is read from stryker.config.mjs and causes
-        # Stryker to exit non-zero when mutation score < 50%, failing the PR check.
+        # The break threshold (50) is read from stryker.config.mjs.
         env:
           NODE_OPTIONS: '--max-old-space-size=4096'
+          MUTATION_TEST_CMD: node --test ${{ matrix.tests }}
         run: |
-          MUTATE_LIST="${{ steps.changed.outputs.changed }}"
-          echo "Running Stryker --mutate '${MUTATE_LIST}'"
-          npx stryker run --incremental --mutate "${MUTATE_LIST}"
+          echo "Module:  ${{ matrix.name }}"
+          echo "Mutate:  ${{ matrix.mutate }}"
+          echo "Tests:   ${{ matrix.tests }}"
+          npx stryker run --incremental --mutate "${{ matrix.mutate }}"
 
-      - name: Upload mutation HTML report
+      - name: Upload mutation report — ${{ matrix.name }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()  # upload even on failure so the score is visible
         with:
-          name: mutation-report-${{ github.run_number }}
+          name: mutation-report-${{ matrix.name }}-${{ github.run_number }}
           path: reports/mutation/mutation.html
           retention-days: 14
+
+  # ── Job 3: mutation-gate ───────────────────────────────────────────────────
+  # Stable required-check name for branch protection. Passes when:
+  #   • has_work is false (nothing to mutate — trivial pass), OR
+  #   • all mutate shards succeeded.
+  # Fails when any shard failed.
+  mutation-gate:
+    name: Mutation gate
+    needs: [detect, mutate]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate gate
+        run: |
+          DETECT="${{ needs.detect.result }}"
+          MUTATE="${{ needs.mutate.result }}"
+          HAS_WORK="${{ needs.detect.outputs.has_work }}"
+
+          echo "detect result : ${DETECT}"
+          echo "mutate result : ${MUTATE}"
+          echo "has_work      : ${HAS_WORK}"
+
+          if [ "${DETECT}" != "success" ]; then
+            echo "FAIL: detect job did not succeed (${DETECT})"
+            exit 1
+          fi
+
+          if [ "${HAS_WORK}" = "false" ]; then
+            echo "PASS: no covered modules changed — gate trivially green"
+            exit 0
+          fi
+
+          if [ "${MUTATE}" = "success" ]; then
+            echo "PASS: all mutation shards passed"
+            exit 0
+          fi
+
+          echo "FAIL: one or more mutation shards failed or were cancelled (${MUTATE})"
+          exit 1
