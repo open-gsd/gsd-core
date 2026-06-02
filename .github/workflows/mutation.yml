@@ -79,8 +79,8 @@ jobs:
     name: Stryker (${{ matrix.name }})
     needs: detect
     if: needs.detect.outputs.has_work == 'true'
-    # TODO: can switch runs-on to blacksmith-4vcpu-ubuntu-2404 for faster shards
-    # once org-level runner label is confirmed available — do NOT change in this PR.
+    # GitHub-hosted runners only. Speed comes from running shards in PARALLEL
+    # (one job per changed module), not from larger/3rd-party runners.
     runs-on: ubuntu-latest
     timeout-minutes: 15  # per-shard; lower than the old 30-min serial budget
     strategy:

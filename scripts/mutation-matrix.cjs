@@ -55,6 +55,7 @@ const COVERED = {
     cjs: 'get-shit-done/bin/lib/frontmatter.cjs',
     tests: [
       'tests/frontmatter.property.test.cjs',
+      'tests/frontmatter.unit.test.cjs',
     ],
   },
   'adr-parser': {
@@ -75,6 +76,7 @@ const COVERED = {
     cjs: 'get-shit-done/bin/lib/active-workstream-store.cjs',
     tests: [
       'tests/active-workstream-store.test.cjs',
+      'tests/active-workstream-store.unit.test.cjs',
     ],
   },
 };
