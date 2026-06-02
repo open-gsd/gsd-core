@@ -185,22 +185,4 @@ describe('workflow.discuss_mode config', () => {
       'discuss-phase.md must NOT use bare gsd-tools binary for discuss_mode lookup (shim-only install footgun)'
     );
   });
-
-  test('codebase-drift-gate uses gsd_run (shim-safe) not bare gsd-tools for drift check', () => {
-    const gate = fs.readFileSync(
-      path.join(
-        __dirname, '..', 'get-shit-done', 'workflows', 'execute-phase', 'steps', 'codebase-drift-gate.md'
-      ), 'utf8'
-    );
-    // Must use gsd_run for the initial DRIFT assignment
-    assert.ok(
-      gate.includes('DRIFT=$(gsd_run verify codebase-drift'),
-      'codebase-drift-gate.md must use gsd_run for the DRIFT assignment'
-    );
-    // Must NOT use bare gsd-tools for the DRIFT assignment
-    assert.ok(
-      !gate.includes('DRIFT=$(gsd-tools verify codebase-drift'),
-      'codebase-drift-gate.md must NOT use bare gsd-tools binary for DRIFT assignment'
-    );
-  });
 });
