@@ -3,16 +3,20 @@
  *
  * Owns active workstream source precedence, session identity, and pointer IO:
  * CLI --ws > GSD_WORKSTREAM env > stored active workstream pointer.
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/active-workstream-store.cjs
+ * collapsed to a TypeScript source of truth. Behaviour is preserved
+ * byte-for-behaviour from the prior hand-written .cjs; only types are added.
  */
 
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const crypto = require('crypto');
-const { probeTty, platformWriteSync, platformReadSync, platformEnsureDir } = require('./shell-command-projection.cjs');
-const { isValidActiveWorkstreamName } = require('./workstream-name-policy.cjs');
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { probeTty, platformWriteSync, platformReadSync, platformEnsureDir } from './shell-command-projection.cjs';
+import { isValidActiveWorkstreamName } from './workstream-name-policy.cjs';
 
-const WORKSTREAM_SESSION_ENV_KEYS = [
+const WORKSTREAM_SESSION_ENV_KEYS: ReadonlyArray<string> = [
   'GSD_SESSION_KEY',
   'CODEX_THREAD_ID',
   'CLAUDE_SESSION_ID',
@@ -27,24 +31,25 @@ const WORKSTREAM_SESSION_ENV_KEYS = [
   'ZELLIJ_SESSION_NAME',
 ];
 
-let cachedControllingTtyToken = null;
+let cachedControllingTtyToken: string | null = null;
 let didProbeControllingTtyToken = false;
 
-function planningRoot(cwd) {
+function planningRoot(cwd: string): string {
   return path.join(cwd, '.planning');
 }
 
-function validateWorkstreamName(name) {
+function validateWorkstreamName(name: string | null | undefined): boolean {
   return isValidActiveWorkstreamName(name);
 }
 
-function sanitizeWorkstreamSessionToken(value) {
+function sanitizeWorkstreamSessionToken(value: unknown): string | null {
   if (value === null || value === undefined) return null;
-  const token = String(value).trim().replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '');
+  const raw = typeof value === 'string' ? value : `${value as number | boolean}`;
+  const token = raw.trim().replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '');
   return token ? token.slice(0, 160) : null;
 }
 
-function probeControllingTtyToken() {
+function probeControllingTtyToken(): string | null {
   if (didProbeControllingTtyToken) return cachedControllingTtyToken;
   didProbeControllingTtyToken = true;
 
@@ -61,7 +66,7 @@ function probeControllingTtyToken() {
   return cachedControllingTtyToken;
 }
 
-function getControllingTtyToken() {
+function getControllingTtyToken(): string | null {
   for (const envKey of ['TTY', 'SSH_TTY']) {
     const token = sanitizeWorkstreamSessionToken(process.env[envKey]);
     if (token) return `tty-${token.replace(/^dev_/, '')}`;
@@ -70,7 +75,7 @@ function getControllingTtyToken() {
   return probeControllingTtyToken();
 }
 
-function getWorkstreamSessionKey() {
+function getWorkstreamSessionKey(): string | null {
   for (const envKey of WORKSTREAM_SESSION_ENV_KEYS) {
     const raw = process.env[envKey];
     const token = sanitizeWorkstreamSessionToken(raw);
@@ -80,11 +85,17 @@ function getWorkstreamSessionKey() {
   return getControllingTtyToken();
 }
 
-function getSessionScopedWorkstreamFile(cwd, fixedSessionKey) {
+interface SessionScopedWorkstreamFile {
+  sessionKey: string;
+  dirPath: string;
+  filePath: string;
+}
+
+function getSessionScopedWorkstreamFile(cwd: string, fixedSessionKey?: string | null): SessionScopedWorkstreamFile | null {
   const sessionKey = fixedSessionKey || getWorkstreamSessionKey();
   if (!sessionKey) return null;
 
-  let planningAbs;
+  let planningAbs: string;
   try {
     planningAbs = fs.realpathSync.native(planningRoot(cwd));
   } catch {
@@ -104,36 +115,42 @@ function getSessionScopedWorkstreamFile(cwd, fixedSessionKey) {
   };
 }
 
-function createSharedPointerAdapter(cwd) {
+interface WorkstreamPointerAdapter {
+  read(): string | null;
+  write(name: string): void;
+  clear(): void;
+}
+
+function createSharedPointerAdapter(cwd: string): WorkstreamPointerAdapter {
   const filePath = path.join(planningRoot(cwd), 'active-workstream');
   return {
-    read() {
+    read(): string | null {
       const raw = platformReadSync(filePath);
       return raw ? raw.trim() || null : null;
     },
-    write(name) {
+    write(name: string): void {
       platformWriteSync(filePath, name + '\n');
     },
-    clear() {
+    clear(): void {
       try { fs.unlinkSync(filePath); } catch {}
     },
   };
 }
 
-function createSessionScopedPointerAdapter(cwd, fixedSessionKey) {
+function createSessionScopedPointerAdapter(cwd: string, fixedSessionKey?: string | null): WorkstreamPointerAdapter | null {
   const scoped = getSessionScopedWorkstreamFile(cwd, fixedSessionKey);
   if (!scoped) return null;
 
   return {
-    read() {
+    read(): string | null {
       const raw = platformReadSync(scoped.filePath);
       return raw ? raw.trim() || null : null;
     },
-    write(name) {
+    write(name: string): void {
       platformEnsureDir(scoped.dirPath);
       platformWriteSync(scoped.filePath, name + '\n');
     },
-    clear() {
+    clear(): void {
       try { fs.unlinkSync(scoped.filePath); } catch {}
       try {
         const remaining = fs.readdirSync(scoped.dirPath);
@@ -145,22 +162,33 @@ function createSessionScopedPointerAdapter(cwd, fixedSessionKey) {
   };
 }
 
-function createMemoryPointerAdapter(initialName = null) {
-  let value = initialName;
+function createMemoryPointerAdapter(initialName: string | null = null): WorkstreamPointerAdapter {
+  let value: string | null = initialName;
   return {
-    read() {
+    read(): string | null {
       return value;
     },
-    write(name) {
+    write(name: string): void {
       value = name;
     },
-    clear() {
+    clear(): void {
       value = null;
     },
   };
 }
 
-function pickActiveWorkstreamAdapter(cwd, opts = {}) {
+interface ActiveWorkstreamAdapters {
+  session?: WorkstreamPointerAdapter;
+  shared?: WorkstreamPointerAdapter;
+}
+
+interface ActiveWorkstreamOpts {
+  activeWorkstreamAdapter?: WorkstreamPointerAdapter;
+  activeWorkstreamAdapters?: ActiveWorkstreamAdapters;
+  getStored?: (dir: string) => string | null;
+}
+
+function pickActiveWorkstreamAdapter(cwd: string, opts: ActiveWorkstreamOpts = {}): WorkstreamPointerAdapter | null {
   if (opts.activeWorkstreamAdapter) {
     return opts.activeWorkstreamAdapter;
   }
@@ -179,7 +207,7 @@ function pickActiveWorkstreamAdapter(cwd, opts = {}) {
   return createSharedPointerAdapter(cwd);
 }
 
-function getActiveWorkstream(cwd, opts = {}) {
+function getActiveWorkstream(cwd: string, opts: ActiveWorkstreamOpts = {}): string | null {
   const adapter = pickActiveWorkstreamAdapter(cwd, opts);
   if (!adapter) return null;
 
@@ -198,7 +226,7 @@ function getActiveWorkstream(cwd, opts = {}) {
   return name;
 }
 
-function setActiveWorkstream(cwd, name, opts = {}) {
+function setActiveWorkstream(cwd: string, name: string | null | undefined, opts: ActiveWorkstreamOpts = {}): void {
   const adapter = pickActiveWorkstreamAdapter(cwd, opts);
   if (!adapter) return;
 
@@ -215,14 +243,20 @@ function setActiveWorkstream(cwd, name, opts = {}) {
   adapter.write(name);
 }
 
-function clearActiveWorkstream(cwd, opts = {}) {
+function clearActiveWorkstream(cwd: string, opts: ActiveWorkstreamOpts = {}): void {
   const adapter = pickActiveWorkstreamAdapter(cwd, opts);
   if (!adapter) return;
   adapter.clear();
 }
 
-function parseCliWorkstream(args) {
-  const wsEqArg = args.find(arg => arg.startsWith('--ws='));
+interface ParsedCliWorkstream {
+  value: string | null;
+  source: string | null;
+  args: string[];
+}
+
+function parseCliWorkstream(args: string[]): ParsedCliWorkstream {
+  const wsEqArg = args.find((arg) => arg.startsWith('--ws='));
   const wsIdx = args.indexOf('--ws');
 
   if (wsEqArg) {
@@ -231,7 +265,7 @@ function parseCliWorkstream(args) {
     return {
       value,
       source: 'cli',
-      args: args.filter(arg => arg !== wsEqArg),
+      args: args.filter((arg) => arg !== wsEqArg),
     };
   }
 
@@ -241,7 +275,7 @@ function parseCliWorkstream(args) {
     return {
       value,
       source: 'cli',
-      args: args.filter((_, idx) => idx !== wsIdx && idx !== wsIdx + 1),
+      args: args.filter((_: string, idx: number) => idx !== wsIdx && idx !== wsIdx + 1),
     };
   }
 
@@ -252,18 +286,29 @@ function parseCliWorkstream(args) {
   };
 }
 
-function resolveActiveWorkstream(cwd, args, env = process.env, deps = {}) {
-  const parsed = parseCliWorkstream(args);
-  const getStored = deps.getStored || ((dir) => getActiveWorkstream(dir, deps));
+interface ResolvedWorkstream {
+  ws: string | null;
+  source: string;
+  args: string[];
+}
 
-  let ws = null;
+function resolveActiveWorkstream(
+  cwd: string,
+  args: string[],
+  env: NodeJS.ProcessEnv = process.env,
+  deps: ActiveWorkstreamOpts = {}
+): ResolvedWorkstream {
+  const parsed = parseCliWorkstream(args);
+  const getStored = deps.getStored || ((dir: string) => getActiveWorkstream(dir, deps));
+
+  let ws: string | null = null;
   let source = 'none';
 
   if (parsed.value) {
     ws = parsed.value;
-    source = parsed.source;
-  } else if (env && typeof env.GSD_WORKSTREAM === 'string' && env.GSD_WORKSTREAM.trim()) {
-    ws = env.GSD_WORKSTREAM.trim();
+    source = parsed.source ?? 'cli';
+  } else if (env && typeof env['GSD_WORKSTREAM'] === 'string' && env['GSD_WORKSTREAM'].trim()) {
+    ws = env['GSD_WORKSTREAM'].trim();
     source = 'env';
   } else {
     ws = getStored(cwd) || null;
@@ -281,12 +326,15 @@ function resolveActiveWorkstream(cwd, args, env = process.env, deps = {}) {
   };
 }
 
-function applyResolvedWorkstreamEnv(resolution, env = process.env) {
+function applyResolvedWorkstreamEnv(
+  resolution: ResolvedWorkstream | null | undefined,
+  env: NodeJS.ProcessEnv = process.env
+): void {
   if (!resolution || !resolution.ws) return;
-  env.GSD_WORKSTREAM = resolution.ws;
+  env['GSD_WORKSTREAM'] = resolution.ws;
 }
 
-module.exports = {
+export = {
   validateWorkstreamName,
   getWorkstreamSessionKey,
   createSharedPointerAdapter,

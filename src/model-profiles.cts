@@ -1,6 +1,13 @@
-'use strict';
+/**
+ * model-profiles — re-exports model catalog symbols consumed by callers that
+ * historically required bin/lib/model-profiles.cjs.
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/model-profiles.cjs collapsed
+ * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour from
+ * the prior hand-written .cjs; only types are added.
+ */
 
-const {
+import {
   MODEL_PROFILES,
   VALID_PROFILES,
   AGENT_TO_PHASE_TYPE,
@@ -13,9 +20,9 @@ const {
   EFFORT_RENDERING,
   renderEffortForRuntime,
   RUNTIMES_WITH_FAST_MODE,
-} = require('./model-catalog.cjs');
+} from './model-catalog.cjs';
 
-module.exports = {
+export = {
   MODEL_PROFILES,
   VALID_PROFILES,
   AGENT_TO_PHASE_TYPE,

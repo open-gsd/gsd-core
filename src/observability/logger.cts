@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * DispatchLogger interface + default implementation — issue #177 (ADR-0174 P1.3).
  *
@@ -16,12 +14,16 @@
  *
  * No-op logger (createNoOpLogger):
  *   Silent on all events. Used as the Hub default when no logger is injected.
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/observability/logger.cjs
+ * collapsed to a TypeScript source of truth. Behaviour is preserved
+ * byte-for-behaviour from the prior hand-written .cjs; only types are added.
  */
 
-const fs = require('fs');
-const path = require('path');
+import fs from 'node:fs';
+import path from 'node:path';
 
-const { redactEvent, shouldIncludeArgs } = require('./redaction.cjs');
+import { redactEvent } from './redaction.cjs';
 
 const AUDIT_FILE_NAME = '.gsd-trace.jsonl';
 const PLANNING_DIR = '.planning';
@@ -30,10 +32,8 @@ const PLANNING_DIR = '.planning';
 
 /**
  * Safely serialise a value to JSON, falling back to a placeholder on circular refs.
- * @param {unknown} value
- * @returns {string}
  */
-function _safeStringify(value) {
+function _safeStringify(value: unknown): string {
   try {
     return JSON.stringify(value);
   } catch {
@@ -43,12 +43,9 @@ function _safeStringify(value) {
 
 /**
  * Determine whether the audit file should be written to.
- *
- * @param {{ audit?: { enabled?: boolean } } | undefined} config
- * @returns {boolean}
  */
-function _isAuditEnabled(config) {
-  if (process.env.GSD_AUDIT === '1') return true;
+function _isAuditEnabled(config: { audit?: { enabled?: boolean } } | undefined): boolean {
+  if (process.env['GSD_AUDIT'] === '1') return true;
   if (config && config.audit && config.audit.enabled === true) return true;
   return false;
 }
@@ -56,11 +53,8 @@ function _isAuditEnabled(config) {
 /**
  * Build the redacted plain object for the audit file.
  * Preserves the full DispatchEvent structure.
- *
- * @param {object} event - DispatchEvent
- * @returns {object}
  */
-function _toAuditRecord(event) {
+function _toAuditRecord(event: Record<string, unknown>): Record<string, unknown> {
   return redactEvent(event);
 }
 
@@ -70,15 +64,13 @@ function _toAuditRecord(event) {
  * Per ADR-0174 P1.3 contract: { "kind": "<variant>", "traceId": "<uuid>", ...typedPayload }
  * The result's kind is promoted to top-level and the typed payload fields are spread in.
  * The `result` wrapper is removed.
- *
- * @param {object} event - DispatchEvent with an error result
- * @returns {object}
  */
-function _toStderrRecord(event) {
+function _toStderrRecord(event: Record<string, unknown>): Record<string, unknown> {
   const redacted = redactEvent(event);
   const { result, ...eventWithoutResult } = redacted;
   // Flatten: top-level gets kind + typed payload fields from result
-  const { kind, ...typedPayload } = result;
+  const resultObj = result as Record<string, unknown>;
+  const { kind, ...typedPayload } = resultObj;
   return Object.assign({}, eventWithoutResult, { kind }, typedPayload);
 }
 
@@ -87,11 +79,8 @@ function _toStderrRecord(event) {
  * Creates .planning/ directory if it does not exist.
  *
  * Uses synchronous fs API (crash-safe for v1 — dispatch is synchronous).
- *
- * @param {string} cwd - Project root directory.
- * @param {object} event - Redacted DispatchEvent.
  */
-function _appendAuditLine(cwd, event) {
+function _appendAuditLine(cwd: string, event: Record<string, unknown>): void {
   const planningDir = path.join(cwd, PLANNING_DIR);
   // Ensure the directory exists
   if (!fs.existsSync(planningDir)) {
@@ -103,35 +92,38 @@ function _appendAuditLine(cwd, event) {
 
 // ─── Public factories ─────────────────────────────────────────────────────────
 
+interface DispatchLogger {
+  onEvent(event: Record<string, unknown>): void;
+}
+
 /**
  * Create a no-op logger. All events are silently dropped.
  * This is the Hub's default when no logger is injected by the caller.
- *
- * @returns {{ onEvent(event: object): void }}
  */
-function createNoOpLogger() {
+function createNoOpLogger(): DispatchLogger {
   return {
-    onEvent(_event) {
+    onEvent(_event: Record<string, unknown>): void {
       // intentionally empty
     },
   };
 }
 
+interface DefaultLoggerOptions {
+  cwd?: string;
+  config?: { audit?: { enabled?: boolean } };
+}
+
 /**
  * Create the default DispatchLogger.
- *
- * @param {object} [opts]
- * @param {string}  [opts.cwd=process.cwd()] - Project root; audit file is written relative to this.
- * @param {object}  [opts.config]             - GSD config object. config.audit.enabled triggers audit.
- * @returns {{ onEvent(event: object): void }}
  */
-function createDefaultLogger({ cwd = process.cwd(), config } = {}) {
+function createDefaultLogger({ cwd = process.cwd(), config }: DefaultLoggerOptions = {}): DispatchLogger {
   return {
     /**
-     * @param {object} event - A DispatchEvent from the Hub.
+     * @param event - A DispatchEvent from the Hub.
      */
-    onEvent(event) {
-      const isOk = event && event.result && event.result.kind === 'ok';
+    onEvent(event: Record<string, unknown>): void {
+      const resultObj = event && (event['result'] as Record<string, unknown> | undefined);
+      const isOk = resultObj && resultObj['kind'] === 'ok';
 
       // ── Audit file (both ok and error) ────────────────────────────────────
       if (_isAuditEnabled(config)) {
@@ -144,7 +136,7 @@ function createDefaultLogger({ cwd = process.cwd(), config } = {}) {
             _safeStringify({
               level: 'warn',
               source: 'DispatchLogger',
-              message: 'audit file write failed: ' + String(auditErr && auditErr.message || auditErr),
+              message: 'audit file write failed: ' + String((auditErr as Error | null)?.message ?? auditErr),
             }) + '\n'
           );
         }
@@ -161,7 +153,7 @@ function createDefaultLogger({ cwd = process.cwd(), config } = {}) {
             _safeStringify({
               level: 'warn',
               source: 'DispatchLogger',
-              message: 'stderr emit failed: ' + String(stderrErr && stderrErr.message || stderrErr),
+              message: 'stderr emit failed: ' + String((stderrErr as Error | null)?.message ?? stderrErr),
             }) + '\n'
           );
         }
@@ -171,4 +163,4 @@ function createDefaultLogger({ cwd = process.cwd(), config } = {}) {
   };
 }
 
-module.exports = { createDefaultLogger, createNoOpLogger };
+export = { createDefaultLogger, createNoOpLogger };

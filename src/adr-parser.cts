@@ -1,12 +1,34 @@
-'use strict';
+/**
+ * ADR Markdown parser — parses Architecture Decision Record documents into
+ * structured objects for downstream processing (adr command, gap checker, etc.).
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/adr-parser.cjs collapsed
+ * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only types are added.
+ */
 
-const fs = require('fs');
-const path = require('path');
-const { requireSafePath } = require('./security.cjs');
+import fs from 'node:fs';
+import path from 'node:path';
+import { requireSafePath } from './security.cjs';
 
 const STATUS_REJECT_SET = new Set(['superseded', 'rejected', 'deprecated']);
 
-const CANONICAL_HEADERS = {
+type CanonicalHeader =
+  | 'status'
+  | 'goal'
+  | 'decisions'
+  | 'considered_options'
+  | 'risks'
+  | 'success_criteria'
+  | 'plan_sequence'
+  | 'key_files'
+  | 'out_of_scope'
+  | 'deferred'
+  | 'dependencies'
+  | 'update'
+  | 'consequences';
+
+const CANONICAL_HEADERS: Record<CanonicalHeader, string[]> = {
   status: ['status', 'state', 'lifecycle', 'stage'],
   goal: [
     'context',
@@ -154,7 +176,7 @@ const CANONICAL_HEADERS = {
   ],
 };
 
-const CONSEQUENCE_NEGATIVE_HINTS = [
+const CONSEQUENCE_NEGATIVE_HINTS: string[] = [
   'negative',
   'drawback',
   'risk',
@@ -165,7 +187,7 @@ const CONSEQUENCE_NEGATIVE_HINTS = [
   'side effect',
 ];
 
-const CONSEQUENCE_POSITIVE_HINTS = [
+const CONSEQUENCE_POSITIVE_HINTS: string[] = [
   'positive',
   'success',
   'metric',
@@ -175,8 +197,9 @@ const CONSEQUENCE_POSITIVE_HINTS = [
   'benefit',
 ];
 
-function normalizeAdrHeader(raw) {
-  return String(raw || '')
+function normalizeAdrHeader(raw: unknown): string {
+  const s = typeof raw === 'string' ? raw : '';
+  return s
     .trim()
     .toLowerCase()
     .replace(/[\s:._-]+/g, ' ')
@@ -184,8 +207,8 @@ function normalizeAdrHeader(raw) {
     .trim();
 }
 
-function classifyHeader(normalizedHeader) {
-  for (const [canonical, synonyms] of Object.entries(CANONICAL_HEADERS)) {
+function classifyHeader(normalizedHeader: string): CanonicalHeader | null {
+  for (const [canonical, synonyms] of Object.entries(CANONICAL_HEADERS) as Array<[CanonicalHeader, string[]]>) {
     for (const synonym of synonyms) {
       if (normalizedHeader === synonym) return canonical;
       if (normalizedHeader.startsWith(`${synonym} `)) return canonical;
@@ -194,8 +217,8 @@ function classifyHeader(normalizedHeader) {
   return null;
 }
 
-function splitEntries(blockText) {
-  return String(blockText || '')
+function splitEntries(blockText: unknown): string[] {
+  return (typeof blockText === 'string' ? blockText : '')
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
@@ -203,10 +226,15 @@ function splitEntries(blockText) {
     .filter(Boolean);
 }
 
-function parseSections(markdown) {
-  const lines = String(markdown || '').split(/\r?\n/);
-  const sections = [];
-  let current = { heading: null, body: [] };
+interface MarkdownSection {
+  heading: string | null;
+  body: string[];
+}
+
+function parseSections(markdown: unknown): MarkdownSection[] {
+  const lines = (typeof markdown === 'string' ? markdown : '').split(/\r?\n/);
+  const sections: MarkdownSection[] = [];
+  let current: MarkdownSection = { heading: null, body: [] };
 
   for (const line of lines) {
     const m = line.match(/^#{1,6}\s+(.*)$/);
@@ -222,7 +250,7 @@ function parseSections(markdown) {
   return sections;
 }
 
-function parseStatusFromSections(sections) {
+function parseStatusFromSections(sections: MarkdownSection[]): string {
   for (const section of sections) {
     const canonical = classifyHeader(normalizeAdrHeader(section.heading));
     if (canonical !== 'status') continue;
@@ -239,7 +267,7 @@ function parseStatusFromSections(sections) {
   return '';
 }
 
-function pushUnique(target, values) {
+function pushUnique(target: string[], values: string[]): void {
   const seen = new Set(target);
   for (const value of values) {
     if (!seen.has(value)) {
@@ -249,7 +277,26 @@ function pushUnique(target, values) {
   }
 }
 
-function parseConsequences(lines, out) {
+interface AdrOut {
+  title: string;
+  status: string;
+  context: string;
+  decisions: string[];
+  options_considered: string[];
+  consequences_positive: string[];
+  consequences_negative: string[];
+  out_of_scope: string[];
+  deferred: string[];
+  dependencies: string[];
+  updates: Array<{ heading: string; entries: string[] }>;
+  source_path: string;
+  key_files: string[];
+  plan_sequence: string[];
+  format: string;
+  unmapped_headers: string[];
+}
+
+function parseConsequences(lines: string[], out: AdrOut): void {
   for (const entry of lines) {
     const lower = entry.toLowerCase();
     if (CONSEQUENCE_NEGATIVE_HINTS.some((hint) => lower.includes(hint))) {
@@ -264,12 +311,17 @@ function parseConsequences(lines, out) {
   }
 }
 
-function parseAdrMarkdown(markdown, { sourcePath = '', format = 'auto' } = {}) {
+interface ParseAdrMarkdownOptions {
+  sourcePath?: string;
+  format?: string;
+}
+
+function parseAdrMarkdown(markdown: unknown, { sourcePath = '', format = 'auto' }: ParseAdrMarkdownOptions = {}): AdrOut {
   const sections = parseSections(markdown);
-  const titleLine = String(markdown || '').split(/\r?\n/).find((line) => /^#\s+/.test(line)) || '';
+  const titleLine = (typeof markdown === 'string' ? markdown : '').split(/\r?\n/).find((line) => /^#\s+/.test(line)) || '';
   const title = titleLine.replace(/^#\s+/, '').trim();
 
-  const out = {
+  const out: AdrOut = {
     title,
     status: parseStatusFromSections(sections) || 'accepted',
     context: '',
@@ -345,12 +397,18 @@ function parseAdrMarkdown(markdown, { sourcePath = '', format = 'auto' } = {}) {
   return out;
 }
 
-function shouldRejectAdrStatus(status) {
+function shouldRejectAdrStatus(status: string): boolean {
   return STATUS_REJECT_SET.has(normalizeAdrHeader(status));
 }
 
-function parseCliArgs(argv) {
-  const opts = { input: null, format: 'auto', projectDir: process.cwd() };
+interface CliOpts {
+  input: string | null;
+  format: string;
+  projectDir: string;
+}
+
+function parseCliArgs(argv: string[]): CliOpts {
+  const opts: CliOpts = { input: null, format: 'auto', projectDir: process.cwd() };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--input') {
@@ -369,11 +427,11 @@ function parseCliArgs(argv) {
   return opts;
 }
 
-function main(argv) {
+function main(argv: string[]): void {
   const opts = parseCliArgs(argv);
   const safePath = requireSafePath(opts.input, path.resolve(opts.projectDir), 'ADR input path', { allowAbsolute: true });
   const content = fs.readFileSync(safePath, 'utf8');
-  const parsed = parseAdrMarkdown(content, { sourcePath: opts.input, format: opts.format });
+  const parsed = parseAdrMarkdown(content, { sourcePath: opts.input ?? undefined, format: opts.format });
   process.stdout.write(JSON.stringify(parsed, null, 2));
 }
 
@@ -381,12 +439,12 @@ if (require.main === module) {
   try {
     main(process.argv.slice(2));
   } catch (error) {
-    process.stderr.write(`Error: ${error.message}\n`);
+    process.stderr.write(`Error: ${(error as Error).message}\n`);
     process.exit(1);
   }
 }
 
-module.exports = {
+export = {
   CANONICAL_HEADERS,
   normalizeAdrHeader,
   parseAdrMarkdown,

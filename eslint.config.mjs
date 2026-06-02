@@ -70,6 +70,12 @@ export default tseslint.config(
       'get-shit-done/bin/lib/shell-command-projection.cjs',
       'get-shit-done/bin/lib/security.cjs',
       'get-shit-done/bin/lib/command-aliases.cjs',
+      'get-shit-done/bin/lib/config-schema.cjs',
+      'get-shit-done/bin/lib/model-profiles.cjs',
+      'get-shit-done/bin/lib/installer-migrations/002-codex-legacy-hooks-json.cjs',
+      'get-shit-done/bin/lib/observability/logger.cjs',
+      'get-shit-done/bin/lib/active-workstream-store.cjs',
+      'get-shit-done/bin/lib/adr-parser.cjs',
     ],
   },
 
