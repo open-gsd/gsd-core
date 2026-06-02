@@ -1,11 +1,11 @@
-'use strict';
-
-const { canonicalizeRuntimeName, resolveRuntimeNameFromCandidates } = require('./runtime-name-policy.cjs');
-
 /**
- * runtime-slash.cjs — single source of truth for emitting GSD slash-command
+ * runtime-slash.cts — single source of truth for emitting GSD slash-command
  * references in user-facing runtime output (recommended-actions JSON, persisted
  * ROADMAP.md entries, verify/validate fix hints, error messages, etc.).
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/runtime-slash.cjs collapsed
+ * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour from
+ * the prior hand-written .cjs; only types are added.
  *
  * Background: #2808 unified all GSD skill installs to register under the hyphen
  * form (`name: gsd-<cmd>`). The legacy colon form `/gsd:<cmd>` is no longer
@@ -18,9 +18,17 @@ const { canonicalizeRuntimeName, resolveRuntimeNameFromCandidates } = require('.
  *   - claude, cursor, opencode, kilo, etc.:    /gsd-<cmd>
  *
  * The colon form is never emitted.
+ *
+ * Cross-import proof candidate (ADR-457): this is the first TS source that
+ * imports a sibling TS-migrated module. The import specifier uses the .cjs
+ * extension per nodenext convention; tsc resolves it to src/runtime-name-policy.cts.
  */
 
-function formatGsdSlash(commandName, runtime) {
+import fs from 'node:fs';
+import path from 'node:path';
+import { canonicalizeRuntimeName, resolveRuntimeNameFromCandidates } from './runtime-name-policy.cjs';
+
+export function formatGsdSlash(commandName: unknown, runtime: unknown): unknown {
   if (typeof commandName !== 'string') return commandName;
   if (commandName === '') return commandName;
 
@@ -45,7 +53,7 @@ function formatGsdSlash(commandName, runtime) {
   const token = wsMatch ? wsMatch[1] : bare;
   const tail = wsMatch && wsMatch[2] ? wsMatch[2] : '';
 
-  const runtimeText = String(runtime || 'claude').toLowerCase();
+  const runtimeText = (typeof runtime === 'string' && runtime ? runtime : 'claude').toLowerCase();
   const rt = canonicalizeRuntimeName(runtimeText) || runtimeText;
   if (rt === 'codex') {
     // Codex skills are invoked as $gsd-<cmd> (shell-var syntax). The command
@@ -65,11 +73,11 @@ function formatGsdSlash(commandName, runtime) {
  * the runtime resolution chain. Returns a lowercased string so downstream
  * comparisons can be case-blind.
  *
- * @param {string|null|undefined} projectDir
- * @returns {string}
+ * @param projectDir - path to the project directory, or null/undefined
+ * @returns the resolved runtime name
  */
-function resolveRuntime(projectDir) {
-  const envRuntime = resolveRuntimeNameFromCandidates(process.env.GSD_RUNTIME);
+export function resolveRuntime(projectDir: string | null | undefined): string {
+  const envRuntime = resolveRuntimeNameFromCandidates(process.env['GSD_RUNTIME']);
   if (envRuntime) return envRuntime;
   if (projectDir) {
     try {
@@ -78,14 +86,12 @@ function resolveRuntime(projectDir) {
       // would mutate the project file just to read the runtime name. We only
       // need the literal `runtime:` value, so a plain JSON read is sufficient
       // and side-effect-free.
-      const fs = require('fs');
-      const path = require('path');
       const configPath = path.join(projectDir, '.planning', 'config.json');
       if (fs.existsSync(configPath)) {
         const raw = fs.readFileSync(configPath, 'utf-8');
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object' && parsed.runtime) {
-          const configRuntime = resolveRuntimeNameFromCandidates(parsed.runtime);
+        const parsed: unknown = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && 'runtime' in parsed) {
+          const configRuntime = resolveRuntimeNameFromCandidates((parsed as Record<string, unknown>)['runtime']);
           if (configRuntime) return configRuntime;
         }
       }
@@ -101,12 +107,6 @@ function resolveRuntime(projectDir) {
  * Convenience: format using the runtime resolved from a project directory.
  * Equivalent to `formatGsdSlash(name, resolveRuntime(projectDir))`.
  */
-function formatGsdSlashFor(projectDir, commandName) {
+export function formatGsdSlashFor(projectDir: string | null | undefined, commandName: unknown): unknown {
   return formatGsdSlash(commandName, resolveRuntime(projectDir));
 }
-
-module.exports = {
-  formatGsdSlash,
-  resolveRuntime,
-  formatGsdSlashFor,
-};

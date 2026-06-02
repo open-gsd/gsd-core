@@ -54,6 +54,7 @@ export default tseslint.config(
       'get-shit-done/bin/lib/validate.cjs',
       'get-shit-done/bin/lib/schema-detect.cjs',
       'get-shit-done/bin/lib/runtime-name-policy.cjs',
+      'get-shit-done/bin/lib/runtime-slash.cjs',
     ],
   },
 
