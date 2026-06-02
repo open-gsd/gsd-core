@@ -7,16 +7,99 @@
  *   - generate-dev-preferences: dev-preferences.md command artifact
  *   - generate-claude-profile: Developer Profile section in CLAUDE.md
  *   - generate-claude-md: full CLAUDE.md with managed sections
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/profile-output.cjs collapsed
+ * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only strict types are added.
  */
 
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
-const { output, error, loadConfig } = require('./core.cjs');
-const { platformReadSync: safeReadFile, platformWriteSync, platformEnsureDir } = require('./shell-command-projection.cjs');
-const { getGlobalSkillDir } = require('./runtime-homes.cjs');
-const { formatGsdSlash, resolveRuntime } = require('./runtime-slash.cjs');
-const { resolveRuntimeNameFromCandidates } = require('./runtime-name-policy.cjs');
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import core = require('./core.cjs');
+const { output, error, loadConfig } = core;
+import { platformReadSync as safeReadFile, platformWriteSync, platformEnsureDir } from './shell-command-projection.cjs';
+import { getGlobalSkillDir } from './runtime-homes.cjs';
+import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
+import { resolveRuntimeNameFromCandidates } from './runtime-name-policy.cjs';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface ProfilingOption {
+  label: string;
+  value: string;
+  rating: string;
+}
+
+interface ProfilingQuestion {
+  dimension: string;
+  header: string;
+  context: string;
+  question: string;
+  options: ProfilingOption[];
+}
+
+interface EvidenceEntry {
+  signal?: string;
+  quote?: string;
+  example?: string;
+  pattern?: string;
+  project?: string;
+}
+
+interface DimensionData {
+  rating?: string;
+  confidence?: string;
+  evidence_count?: number;
+  cross_project_consistent?: boolean | null;
+  evidence?: EvidenceEntry[];
+  evidence_quotes?: EvidenceEntry[];
+  summary?: string;
+  claude_instruction?: string;
+}
+
+interface AnalysisData {
+  profile_version?: string;
+  analyzed_at?: string;
+  data_source?: string;
+  projects_list?: string[];
+  projects_analyzed?: string[];
+  message_count?: number;
+  messages_analyzed?: number;
+  message_threshold?: string;
+  sensitive_excluded?: unknown[];
+  dimensions: Record<string, DimensionData>;
+}
+
+interface SectionResult {
+  content: string;
+  source: string;
+  linkPath?: string | null;
+  hasFallback: boolean;
+}
+
+interface CmdWriteProfileOptions {
+  input?: string;
+  output?: string;
+}
+
+interface CmdGenerateDevPreferencesOptions {
+  analysis?: string;
+  output?: string;
+  stack?: string;
+}
+
+interface CmdGenerateClaudeProfileOptions {
+  analysis?: string;
+  output?: string;
+  global?: boolean;
+}
+
+interface CmdGenerateClaudeMdOptions {
+  output?: string;
+  auto?: boolean;
+}
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -26,7 +109,7 @@ const DIMENSION_KEYS = [
   'frustration_triggers', 'learning_style'
 ];
 
-const PROFILING_QUESTIONS = [
+const PROFILING_QUESTIONS: ProfilingQuestion[] = [
   {
     dimension: 'communication_style',
     header: 'Communication Style',
@@ -125,7 +208,7 @@ const PROFILING_QUESTIONS = [
   },
 ];
 
-const CLAUDE_INSTRUCTIONS = {
+const CLAUDE_INSTRUCTIONS: Record<string, Record<string, string>> = {
   communication_style: {
     'terse-direct': 'Keep responses concise and action-oriented. Skip lengthy preambles. Match this developer\'s direct style.',
     'conversational': 'Use a natural conversational tone. Explain reasoning briefly alongside code. Engage with the developer\'s questions.',
@@ -180,9 +263,9 @@ const CLAUDE_INSTRUCTIONS = {
 // commands route correctly under the active install (#3584). The values must
 // be computed per-call rather than at module load because the slash form
 // depends on the runtime resolved from the project's config/env.
-function buildClaudeMdFallbacks(runtime) {
+function buildClaudeMdFallbacks(runtime: unknown): Record<string, string> {
   return {
-    project: `Project not yet initialized. Run ${formatGsdSlash('new-project', runtime)} to set up.`,
+    project: `Project not yet initialized. Run ${String(formatGsdSlash('new-project', runtime))} to set up.`,
     stack: 'Technology stack not yet documented. Will populate after codebase mapping or first phase.',
     conventions: 'Conventions not yet established. Will populate as patterns emerge during development.',
     architecture: 'Architecture not yet mapped. Follow existing patterns found in the codebase.',
@@ -193,25 +276,25 @@ function buildClaudeMdFallbacks(runtime) {
 // Directories where project skills may live (checked in order)
 const SKILL_SEARCH_DIRS = ['.claude/skills', '.agents/skills', '.cursor/skills', '.github/skills', '.codex/skills'];
 
-function buildClaudeMdWorkflowEnforcement(runtime) {
+function buildClaudeMdWorkflowEnforcement(runtime: unknown): string {
   return [
     'Before using Edit, Write, or other file-changing tools, start work through a GSD command so planning artifacts and execution context stay in sync.',
     '',
     'Use these entry points:',
-    `- \`${formatGsdSlash('quick', runtime)}\` for small fixes, doc updates, and ad-hoc tasks`,
-    `- \`${formatGsdSlash('debug', runtime)}\` for investigation and bug fixing`,
-    `- \`${formatGsdSlash('execute-phase', runtime)}\` for planned phase work`,
+    `- \`${String(formatGsdSlash('quick', runtime))}\` for small fixes, doc updates, and ad-hoc tasks`,
+    `- \`${String(formatGsdSlash('debug', runtime))}\` for investigation and bug fixing`,
+    `- \`${String(formatGsdSlash('execute-phase', runtime))}\` for planned phase work`,
     '',
     'Do not make direct repo edits outside a GSD workflow unless the user explicitly asks to bypass it.',
   ].join('\n');
 }
 
-function buildClaudeMdProfilePlaceholder(runtime) {
+function buildClaudeMdProfilePlaceholder(runtime: unknown): string {
   return [
     '<!-- GSD:profile-start -->',
     '## Developer Profile',
     '',
-    `> Profile not yet configured. Run \`${formatGsdSlash('profile-user', runtime)}\` to generate your developer profile.`,
+    `> Profile not yet configured. Run \`${String(formatGsdSlash('profile-user', runtime))}\` to generate your developer profile.`,
     '> This section is managed by `generate-claude-profile` -- do not edit manually.',
     '<!-- GSD:profile-end -->',
   ].join('\n');
@@ -219,7 +302,7 @@ function buildClaudeMdProfilePlaceholder(runtime) {
 
 // ─── Helper Functions ─────────────────────────────────────────────────────────
 
-function isAmbiguousAnswer(dimension, value) {
+function isAmbiguousAnswer(dimension: string, value: string): boolean {
   if (dimension === 'communication_style' && value === 'd') return true;
   const question = PROFILING_QUESTIONS.find(q => q.dimension === dimension);
   if (!question) return false;
@@ -228,7 +311,7 @@ function isAmbiguousAnswer(dimension, value) {
   return option.rating === 'mixed';
 }
 
-function generateClaudeInstruction(dimension, rating) {
+function generateClaudeInstruction(dimension: string, rating: string): string {
   const dimInstructions = CLAUDE_INSTRUCTIONS[dimension];
   if (dimInstructions && dimInstructions[rating]) {
     return dimInstructions[rating];
@@ -236,7 +319,7 @@ function generateClaudeInstruction(dimension, rating) {
   return `Adapt to this developer's ${dimension.replace(/_/g, ' ')} preference: ${rating}.`;
 }
 
-function extractSectionContent(fileContent, sectionName) {
+function extractSectionContent(fileContent: string, sectionName: string): string | null {
   const startMarker = `<!-- GSD:${sectionName}-start`;
   const endMarker = `<!-- GSD:${sectionName}-end -->`;
   const startIdx = fileContent.indexOf(startMarker);
@@ -247,7 +330,7 @@ function extractSectionContent(fileContent, sectionName) {
   return fileContent.substring(startTagEnd + 3, endIdx);
 }
 
-function buildSection(sectionName, sourceFile, content) {
+function buildSection(sectionName: string, sourceFile: string, content: string): string {
   return [
     `<!-- GSD:${sectionName}-start source:${sourceFile} -->`,
     content,
@@ -255,7 +338,7 @@ function buildSection(sectionName, sourceFile, content) {
   ].join('\n');
 }
 
-function updateSection(fileContent, sectionName, newContent) {
+function updateSection(fileContent: string, sectionName: string, newContent: string): { content: string; action: string } {
   const startMarker = `<!-- GSD:${sectionName}-start`;
   const endMarker = `<!-- GSD:${sectionName}-end -->`;
   const startIdx = fileContent.indexOf(startMarker);
@@ -268,18 +351,18 @@ function updateSection(fileContent, sectionName, newContent) {
   return { content: fileContent.trimEnd() + '\n\n' + newContent + '\n', action: 'appended' };
 }
 
-function detectManualEdit(fileContent, sectionName, expectedContent) {
+function detectManualEdit(fileContent: string, sectionName: string, expectedContent: string): boolean {
   const currentContent = extractSectionContent(fileContent, sectionName);
   if (currentContent === null) return false;
-  const normalize = (s) => s.trim().replace(/\n{3,}/g, '\n\n');
+  const normalize = (s: string) => s.trim().replace(/\n{3,}/g, '\n\n');
   return normalize(currentContent) !== normalize(expectedContent);
 }
 
-function extractMarkdownSection(content, sectionName) {
+function extractMarkdownSection(content: string | null, sectionName: string): string | null {
   if (!content) return null;
   const lines = content.split('\n');
   let capturing = false;
-  const result = [];
+  const result: string[] = [];
   const headingPattern = new RegExp(`^## ${sectionName}\\s*$`);
   for (const line of lines) {
     if (headingPattern.test(line)) {
@@ -295,14 +378,14 @@ function extractMarkdownSection(content, sectionName) {
 
 // ─── CLAUDE.md Section Generators ─────────────────────────────────────────────
 
-function generateProjectSection(cwd) {
+function generateProjectSection(cwd: string): SectionResult {
   const fallbacks = buildClaudeMdFallbacks(resolveRuntime(cwd));
   const projectPath = path.join(cwd, '.planning', 'PROJECT.md');
   const content = safeReadFile(projectPath);
   if (!content) {
-    return { content: fallbacks.project, source: 'PROJECT.md', linkPath: null, hasFallback: true };
+    return { content: fallbacks['project'], source: 'PROJECT.md', linkPath: null, hasFallback: true };
   }
-  const parts = [];
+  const parts: string[] = [];
   const h1Match = content.match(/^# (.+)$/m);
   if (h1Match) parts.push(`**${h1Match[1]}**`);
   const whatThisIs = extractMarkdownSection(content, 'What This Is');
@@ -321,12 +404,12 @@ function generateProjectSection(cwd) {
     if (body) parts.push(`### Constraints\n\n${body}`);
   }
   if (parts.length === 0) {
-    return { content: fallbacks.project, source: 'PROJECT.md', linkPath: null, hasFallback: true };
+    return { content: fallbacks['project'], source: 'PROJECT.md', linkPath: null, hasFallback: true };
   }
   return { content: parts.join('\n\n'), source: 'PROJECT.md', linkPath: '.planning/PROJECT.md', hasFallback: false };
 }
 
-function generateStackSection(cwd) {
+function generateStackSection(cwd: string): SectionResult {
   const fallbacks = buildClaudeMdFallbacks(resolveRuntime(cwd));
   const codebasePath = path.join(cwd, '.planning', 'codebase', 'STACK.md');
   const researchPath = path.join(cwd, '.planning', 'research', 'STACK.md');
@@ -339,10 +422,10 @@ function generateStackSection(cwd) {
     linkPath = '.planning/research/STACK.md';
   }
   if (!content) {
-    return { content: fallbacks.stack, source: 'STACK.md', linkPath: null, hasFallback: true };
+    return { content: fallbacks['stack'], source: 'STACK.md', linkPath: null, hasFallback: true };
   }
   const lines = content.split('\n');
-  const summaryLines = [];
+  const summaryLines: string[] = [];
   let inTable = false;
   for (const line of lines) {
     if (line.startsWith('#')) {
@@ -357,15 +440,15 @@ function generateStackSection(cwd) {
   return { content: summary, source, linkPath, hasFallback: false };
 }
 
-function generateConventionsSection(cwd) {
+function generateConventionsSection(cwd: string): SectionResult {
   const fallbacks = buildClaudeMdFallbacks(resolveRuntime(cwd));
   const conventionsPath = path.join(cwd, '.planning', 'codebase', 'CONVENTIONS.md');
   const content = safeReadFile(conventionsPath);
   if (!content) {
-    return { content: fallbacks.conventions, source: 'CONVENTIONS.md', linkPath: null, hasFallback: true };
+    return { content: fallbacks['conventions'], source: 'CONVENTIONS.md', linkPath: null, hasFallback: true };
   }
   const lines = content.split('\n');
-  const summaryLines = [];
+  const summaryLines: string[] = [];
   for (const line of lines) {
     if (line.startsWith('#')) { if (!line.startsWith('# ')) summaryLines.push(line); continue; }
     if (line.startsWith('- ') || line.startsWith('* ') || line.startsWith('|')) summaryLines.push(line);
@@ -374,15 +457,15 @@ function generateConventionsSection(cwd) {
   return { content: summary, source: 'CONVENTIONS.md', linkPath: '.planning/codebase/CONVENTIONS.md', hasFallback: false };
 }
 
-function generateArchitectureSection(cwd) {
+function generateArchitectureSection(cwd: string): SectionResult {
   const fallbacks = buildClaudeMdFallbacks(resolveRuntime(cwd));
   const architecturePath = path.join(cwd, '.planning', 'codebase', 'ARCHITECTURE.md');
   const content = safeReadFile(architecturePath);
   if (!content) {
-    return { content: fallbacks.architecture, source: 'ARCHITECTURE.md', linkPath: null, hasFallback: true };
+    return { content: fallbacks['architecture'], source: 'ARCHITECTURE.md', linkPath: null, hasFallback: true };
   }
   const lines = content.split('\n');
-  const summaryLines = [];
+  const summaryLines: string[] = [];
   for (const line of lines) {
     if (line.startsWith('#')) { if (!line.startsWith('# ')) summaryLines.push(line); continue; }
     if (line.startsWith('- ') || line.startsWith('* ') || line.startsWith('|') || line.startsWith('```')) summaryLines.push(line);
@@ -391,7 +474,7 @@ function generateArchitectureSection(cwd) {
   return { content: summary, source: 'ARCHITECTURE.md', linkPath: '.planning/codebase/ARCHITECTURE.md', hasFallback: false };
 }
 
-function generateWorkflowSection(cwd) {
+function generateWorkflowSection(cwd: string): SectionResult {
   return {
     content: buildClaudeMdWorkflowEnforcement(resolveRuntime(cwd)),
     source: 'GSD defaults',
@@ -405,15 +488,15 @@ function generateWorkflowSection(cwd) {
  * (name + description) for each. Returns a table summary for CLAUDE.md so
  * agents know which skills are available at session startup (Layer 1 discovery).
  */
-function generateSkillsSection(cwd) {
+function generateSkillsSection(cwd: string): SectionResult {
   const fallbacks = buildClaudeMdFallbacks(resolveRuntime(cwd));
-  const discovered = [];
+  const discovered: Array<{ name: string; description: string; path: string }> = [];
 
   for (const dir of SKILL_SEARCH_DIRS) {
     const absDir = path.join(cwd, dir);
     if (!fs.existsSync(absDir)) continue;
 
-    let entries;
+    let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(absDir, { withFileTypes: true });
     } catch {
@@ -443,7 +526,7 @@ function generateSkillsSection(cwd) {
   }
 
   if (discovered.length === 0) {
-    return { content: fallbacks.skills, source: 'skills/', hasFallback: true };
+    return { content: fallbacks['skills'], source: 'skills/', hasFallback: true };
   }
 
   const lines = ['| Skill | Description | Path |', '|-------|-------------|------|'];
@@ -461,7 +544,7 @@ function generateSkillsSection(cwd) {
  * Extract name and description from YAML-like frontmatter in a SKILL.md file.
  * Handles multi-line description values (continuation lines indented with spaces).
  */
-function extractSkillFrontmatter(content) {
+function extractSkillFrontmatter(content: string): { name: string; description: string } {
   const result = { name: '', description: '' };
   const fmMatch = content.match(/^---\s*\n([\s\S]*?)\n---/);
   if (!fmMatch) return result;
@@ -493,28 +576,28 @@ function extractSkillFrontmatter(content) {
 
 // ─── Commands ─────────────────────────────────────────────────────────────────
 
-function cmdWriteProfile(cwd, options, raw) {
+function cmdWriteProfile(cwd: string, options: CmdWriteProfileOptions, raw: boolean): void {
   if (!options.input) {
     error('--input <analysis-json-path> is required');
   }
 
-  let analysisPath = options.input;
+  let analysisPath = options.input!;
   if (!path.isAbsolute(analysisPath)) analysisPath = path.join(cwd, analysisPath);
   if (!fs.existsSync(analysisPath)) error(`Analysis file not found: ${analysisPath}`);
 
-  let analysis;
+  let analysis: AnalysisData;
   const analysisRaw = safeReadFile(analysisPath);
   try {
     if (analysisRaw === null) throw new Error(`analysis file not found: ${analysisPath}`);
-    analysis = JSON.parse(analysisRaw);
+    analysis = JSON.parse(analysisRaw) as AnalysisData;
   } catch (err) {
-    error(`Failed to parse analysis JSON: ${err.message}`);
+    error(`Failed to parse analysis JSON: ${(err as Error).message}`);
   }
 
-  if (!analysis.dimensions || typeof analysis.dimensions !== 'object') {
+  if (!analysis!.dimensions || typeof analysis!.dimensions !== 'object') {
     error('Analysis JSON must contain a "dimensions" object');
   }
-  if (!analysis.profile_version) {
+  if (!analysis!.profile_version) {
     error('Analysis JSON must contain "profile_version"');
   }
 
@@ -534,7 +617,7 @@ function cmdWriteProfile(cwd, options, raw) {
 
   let redactedCount = 0;
 
-  function redactSensitive(text) {
+  function redactSensitive(text: unknown): unknown {
     if (typeof text !== 'string') return text;
     let result = text;
     for (const pattern of SENSITIVE_PATTERNS) {
@@ -548,14 +631,14 @@ function cmdWriteProfile(cwd, options, raw) {
     return result;
   }
 
-  for (const dimKey of Object.keys(analysis.dimensions)) {
-    const dim = analysis.dimensions[dimKey];
+  for (const dimKey of Object.keys(analysis!.dimensions)) {
+    const dim = analysis!.dimensions[dimKey];
     if (dim.evidence && Array.isArray(dim.evidence)) {
       for (let i = 0; i < dim.evidence.length; i++) {
         const ev = dim.evidence[i];
-        if (ev.quote) ev.quote = redactSensitive(ev.quote);
-        if (ev.example) ev.example = redactSensitive(ev.example);
-        if (ev.signal) ev.signal = redactSensitive(ev.signal);
+        if (ev.quote) ev.quote = redactSensitive(ev.quote) as string;
+        if (ev.example) ev.example = redactSensitive(ev.example) as string;
+        if (ev.signal) ev.signal = redactSensitive(ev.signal) as string;
       }
     }
   }
@@ -568,7 +651,7 @@ function cmdWriteProfile(cwd, options, raw) {
   if (!fs.existsSync(templatePath)) error(`Template not found: ${templatePath}`);
   let template = fs.readFileSync(templatePath, 'utf-8');
 
-  const dimensionLabels = {
+  const dimensionLabels: Record<string, string> = {
     communication_style: 'Communication',
     decision_speed: 'Decisions',
     explanation_depth: 'Explanations',
@@ -579,11 +662,11 @@ function cmdWriteProfile(cwd, options, raw) {
     learning_style: 'Learning Style',
   };
 
-  const summaryLines = [];
+  const summaryLines: string[] = [];
   let highCount = 0, mediumCount = 0, lowCount = 0, dimensionsScored = 0;
 
   for (const dimKey of DIMENSION_KEYS) {
-    const dim = analysis.dimensions[dimKey];
+    const dim = analysis!.dimensions[dimKey];
     if (!dim) continue;
     const conf = (dim.confidence || '').toUpperCase();
     if (conf === 'HIGH' || conf === 'MEDIUM' || conf === 'LOW') dimensionsScored++;
@@ -603,12 +686,12 @@ function cmdWriteProfile(cwd, options, raw) {
     : '- No high or medium confidence dimensions scored yet.';
 
   template = template.replace(/\{\{generated_at\}\}/g, new Date().toISOString());
-  template = template.replace(/\{\{data_source\}\}/g, analysis.data_source || 'session_analysis');
-  template = template.replace(/\{\{projects_list\}\}/g, (analysis.projects_list || analysis.projects_analyzed || []).join(', '));
-  template = template.replace(/\{\{message_count\}\}/g, String(analysis.message_count || analysis.messages_analyzed || 0));
+  template = template.replace(/\{\{data_source\}\}/g, analysis!.data_source || 'session_analysis');
+  template = template.replace(/\{\{projects_list\}\}/g, (analysis!.projects_list || analysis!.projects_analyzed || []).join(', '));
+  template = template.replace(/\{\{message_count\}\}/g, String(analysis!.message_count || analysis!.messages_analyzed || 0));
   template = template.replace(/\{\{summary_instructions\}\}/g, summaryInstructions);
-  template = template.replace(/\{\{profile_version\}\}/g, analysis.profile_version);
-  template = template.replace(/\{\{projects_count\}\}/g, String((analysis.projects_list || analysis.projects_analyzed || []).length));
+  template = template.replace(/\{\{profile_version\}\}/g, analysis!.profile_version!);
+  template = template.replace(/\{\{projects_count\}\}/g, String((analysis!.projects_list || analysis!.projects_analyzed || []).length));
   template = template.replace(/\{\{dimensions_scored\}\}/g, String(dimensionsScored));
   template = template.replace(/\{\{high_confidence_count\}\}/g, String(highCount));
   template = template.replace(/\{\{medium_confidence_count\}\}/g, String(mediumCount));
@@ -617,7 +700,7 @@ function cmdWriteProfile(cwd, options, raw) {
     redactedCount > 0 ? `${redactedCount} pattern(s) redacted` : 'None detected');
 
   for (const dimKey of DIMENSION_KEYS) {
-    const dim = analysis.dimensions[dimKey] || {};
+    const dim = analysis!.dimensions[dimKey] || {};
     const rating = dim.rating || 'UNSCORED';
     const confidence = dim.confidence || 'UNSCORED';
     const instruction = dim.claude_instruction || 'No strong preference detected. Ask the developer when this dimension is relevant.';
@@ -661,13 +744,13 @@ function cmdWriteProfile(cwd, options, raw) {
     medium_confidence: mediumCount,
     low_confidence: lowCount,
     sensitive_redacted: redactedCount,
-    source: analysis.data_source || 'session_analysis',
+    source: analysis!.data_source || 'session_analysis',
   };
 
-  output(result, raw);
+  output(result, raw, undefined);
 }
 
-function cmdProfileQuestionnaire(options, raw) {
+function cmdProfileQuestionnaire(options: { answers?: string }, raw: boolean): void {
   if (!options.answers) {
     const questionsOutput = {
       mode: 'interactive',
@@ -679,7 +762,7 @@ function cmdProfileQuestionnaire(options, raw) {
         options: q.options.map(o => ({ label: o.label, value: o.value })),
       })),
     };
-    output(questionsOutput, raw);
+    output(questionsOutput, raw, undefined);
     return;
   }
 
@@ -688,7 +771,7 @@ function cmdProfileQuestionnaire(options, raw) {
     error(`Expected ${PROFILING_QUESTIONS.length} answers (comma-separated), got ${answerValues.length}`);
   }
 
-  const analysis = {
+  const analysis: AnalysisData = {
     profile_version: '1.0',
     analyzed_at: new Date().toISOString(),
     data_source: 'questionnaire',
@@ -711,44 +794,44 @@ function cmdProfileQuestionnaire(options, raw) {
     const ambiguous = isAmbiguousAnswer(question.dimension, answerValue);
 
     analysis.dimensions[question.dimension] = {
-      rating: selectedOption.rating,
+      rating: selectedOption!.rating,
       confidence: ambiguous ? 'LOW' : 'MEDIUM',
       evidence_count: 1,
       cross_project_consistent: null,
       evidence: [{
         signal: 'Self-reported via questionnaire',
-        quote: selectedOption.label,
+        quote: selectedOption!.label,
         project: 'N/A (questionnaire)',
       }],
-      summary: `Developer self-reported as ${selectedOption.rating} for ${question.header.toLowerCase()}.`,
-      claude_instruction: generateClaudeInstruction(question.dimension, selectedOption.rating),
+      summary: `Developer self-reported as ${selectedOption!.rating} for ${question.header.toLowerCase()}.`,
+      claude_instruction: generateClaudeInstruction(question.dimension, selectedOption!.rating),
     };
   }
 
-  output(analysis, raw);
+  output(analysis, raw, undefined);
 }
 
-function cmdGenerateDevPreferences(cwd, options, raw) {
+function cmdGenerateDevPreferences(cwd: string, options: CmdGenerateDevPreferencesOptions, raw: boolean): void {
   if (!options.analysis) error('--analysis <path> is required');
 
-  let analysisPath = options.analysis;
+  let analysisPath = options.analysis!;
   if (!path.isAbsolute(analysisPath)) analysisPath = path.join(cwd, analysisPath);
   if (!fs.existsSync(analysisPath)) error(`Analysis file not found: ${analysisPath}`);
 
-  let analysis;
+  let analysis: AnalysisData;
   const analysisRaw = safeReadFile(analysisPath);
   try {
     if (analysisRaw === null) throw new Error(`analysis file not found: ${analysisPath}`);
-    analysis = JSON.parse(analysisRaw);
+    analysis = JSON.parse(analysisRaw) as AnalysisData;
   } catch (err) {
-    error(`Failed to parse analysis JSON: ${err.message}`);
+    error(`Failed to parse analysis JSON: ${(err as Error).message}`);
   }
 
-  if (!analysis.dimensions || typeof analysis.dimensions !== 'object') {
+  if (!analysis!.dimensions || typeof analysis!.dimensions !== 'object') {
     error('Analysis JSON must contain a "dimensions" object');
   }
 
-  const devPrefLabels = {
+  const devPrefLabels: Record<string, string> = {
     communication_style: 'Communication',
     decision_speed: 'Decision Support',
     explanation_depth: 'Explanations',
@@ -763,11 +846,11 @@ function cmdGenerateDevPreferences(cwd, options, raw) {
   if (!fs.existsSync(templatePath)) error(`Template not found: ${templatePath}`);
   let template = fs.readFileSync(templatePath, 'utf-8');
 
-  const directiveLines = [];
-  const dimensionsIncluded = [];
+  const directiveLines: string[] = [];
+  const dimensionsIncluded: string[] = [];
 
   for (const dimKey of DIMENSION_KEYS) {
-    const dim = analysis.dimensions[dimKey];
+    const dim = analysis!.dimensions[dimKey];
     if (!dim) continue;
     const label = devPrefLabels[dimKey] || dimKey;
     const confidence = dim.confidence || 'UNSCORED';
@@ -787,11 +870,11 @@ function cmdGenerateDevPreferences(cwd, options, raw) {
   const directivesBlock = directiveLines.join('\n').trim();
   template = template.replace(/\{\{behavioral_directives\}\}/g, directivesBlock);
   template = template.replace(/\{\{generated_at\}\}/g, new Date().toISOString());
-  template = template.replace(/\{\{data_source\}\}/g, analysis.data_source || 'session_analysis');
+  template = template.replace(/\{\{data_source\}\}/g, analysis!.data_source || 'session_analysis');
 
-  let stackBlock;
-  if (analysis.data_source === 'questionnaire') {
-    stackBlock = `Stack preferences not available (questionnaire-only profile). Run \`${formatGsdSlash('profile-user', resolveRuntime(cwd))} --refresh\` with session data to populate.`;
+  let stackBlock: string;
+  if (analysis!.data_source === 'questionnaire') {
+    stackBlock = `Stack preferences not available (questionnaire-only profile). Run \`${String(formatGsdSlash('profile-user', resolveRuntime(cwd)))} --refresh\` with session data to populate.`;
   } else if (options.stack) {
     stackBlock = options.stack;
   } else {
@@ -813,13 +896,13 @@ function cmdGenerateDevPreferences(cwd, options, raw) {
     try {
       const config = loadConfig(cwd);
       effectiveRuntime = resolveRuntimeNameFromCandidates(
-        process.env.GSD_RUNTIME,
-        config.runtime,
+        process.env['GSD_RUNTIME'],
+        config['runtime'],
         'claude'
       ) || 'claude';
     } catch {
       effectiveRuntime = resolveRuntimeNameFromCandidates(
-        process.env.GSD_RUNTIME,
+        process.env['GSD_RUNTIME'],
         'claude'
       ) || 'claude';
     }
@@ -827,7 +910,7 @@ function cmdGenerateDevPreferences(cwd, options, raw) {
     if (!skillDir) {
       error(`Runtime "${effectiveRuntime}" does not use a skills directory; pass --output to choose a path explicitly.`);
     }
-    outputPath = path.join(skillDir, 'SKILL.md');
+    outputPath = path.join(skillDir!, 'SKILL.md');
   } else if (!path.isAbsolute(outputPath)) {
     outputPath = path.join(cwd, outputPath);
   }
@@ -839,33 +922,33 @@ function cmdGenerateDevPreferences(cwd, options, raw) {
     command_path: outputPath,
     command_name: formatGsdSlash('dev-preferences', resolveRuntime(cwd)),
     dimensions_included: dimensionsIncluded,
-    source: analysis.data_source || 'session_analysis',
+    source: analysis!.data_source || 'session_analysis',
   };
 
-  output(result, raw);
+  output(result, raw, undefined);
 }
 
-function cmdGenerateClaudeProfile(cwd, options, raw) {
+function cmdGenerateClaudeProfile(cwd: string, options: CmdGenerateClaudeProfileOptions, raw: boolean): void {
   if (!options.analysis) error('--analysis <path> is required');
 
-  let analysisPath = options.analysis;
+  let analysisPath = options.analysis!;
   if (!path.isAbsolute(analysisPath)) analysisPath = path.join(cwd, analysisPath);
   if (!fs.existsSync(analysisPath)) error(`Analysis file not found: ${analysisPath}`);
 
-  let analysis;
+  let analysis: AnalysisData;
   const analysisRaw = safeReadFile(analysisPath);
   try {
     if (analysisRaw === null) throw new Error(`analysis file not found: ${analysisPath}`);
-    analysis = JSON.parse(analysisRaw);
+    analysis = JSON.parse(analysisRaw) as AnalysisData;
   } catch (err) {
-    error(`Failed to parse analysis JSON: ${err.message}`);
+    error(`Failed to parse analysis JSON: ${(err as Error).message}`);
   }
 
-  if (!analysis.dimensions || typeof analysis.dimensions !== 'object') {
+  if (!analysis!.dimensions || typeof analysis!.dimensions !== 'object') {
     error('Analysis JSON must contain a "dimensions" object');
   }
 
-  const profileLabels = {
+  const profileLabels: Record<string, string> = {
     communication_style: 'Communication',
     decision_speed: 'Decisions',
     explanation_depth: 'Explanations',
@@ -876,13 +959,13 @@ function cmdGenerateClaudeProfile(cwd, options, raw) {
     learning_style: 'Learning',
   };
 
-  const dataSource = analysis.data_source || 'session_analysis';
-  const tableRows = [];
-  const directiveLines = [];
-  const dimensionsIncluded = [];
+  const dataSource = analysis!.data_source || 'session_analysis';
+  const tableRows: string[] = [];
+  const directiveLines: string[] = [];
+  const dimensionsIncluded: string[] = [];
 
   for (const dimKey of DIMENSION_KEYS) {
-    const dim = analysis.dimensions[dimKey];
+    const dim = analysis!.dimensions[dimKey];
     if (!dim) continue;
     const label = profileLabels[dimKey] || dimKey;
     const rating = dim.rating || 'UNSCORED';
@@ -905,7 +988,7 @@ function cmdGenerateClaudeProfile(cwd, options, raw) {
     '<!-- GSD:profile-start -->',
     '## Developer Profile',
     '',
-    `> Generated by GSD from ${dataSource}. Run \`${formatGsdSlash('profile-user', resolveRuntime(cwd))} --refresh\` to update.`,
+    `> Generated by GSD from ${dataSource}. Run \`${String(formatGsdSlash('profile-user', resolveRuntime(cwd)))}\` to update.`,
     '',
     '| Dimension | Rating | Confidence |',
     '|-----------|--------|------------|',
@@ -918,7 +1001,7 @@ function cmdGenerateClaudeProfile(cwd, options, raw) {
 
   const sectionContent = sectionLines.join('\n');
 
-  let targetPath;
+  let targetPath: string;
   if (options.global) {
     targetPath = path.join(os.homedir(), '.claude', 'CLAUDE.md');
   } else if (options.output) {
@@ -928,12 +1011,12 @@ function cmdGenerateClaudeProfile(cwd, options, raw) {
     let configClaudeMdPath = './CLAUDE.md';
     try {
       const config = loadConfig(cwd);
-      if (config.claude_md_path) configClaudeMdPath = config.claude_md_path;
+      if (config['claude_md_path']) configClaudeMdPath = config['claude_md_path'] as string;
     } catch { /* use default */ }
     targetPath = path.isAbsolute(configClaudeMdPath) ? configClaudeMdPath : path.join(cwd, configClaudeMdPath);
   }
 
-  let action;
+  let action: string;
 
   let existingContent = safeReadFile(targetPath);
   if (existingContent !== null) {
@@ -965,12 +1048,12 @@ function cmdGenerateClaudeProfile(cwd, options, raw) {
     is_global: !!options.global,
   };
 
-  output(result, raw);
+  output(result, raw, undefined);
 }
 
-function cmdGenerateClaudeMd(cwd, options, raw) {
+function cmdGenerateClaudeMd(cwd: string, options: CmdGenerateClaudeMdOptions, raw: boolean): void {
   const MANAGED_SECTIONS = ['project', 'stack', 'conventions', 'architecture', 'skills', 'workflow'];
-  const generators = {
+  const generators: Record<string, (cwd: string) => SectionResult> = {
     project: generateProjectSection,
     stack: generateStackSection,
     conventions: generateConventionsSection,
@@ -978,7 +1061,7 @@ function cmdGenerateClaudeMd(cwd, options, raw) {
     skills: generateSkillsSection,
     workflow: generateWorkflowSection,
   };
-  const sectionHeadings = {
+  const sectionHeadings: Record<string, string> = {
     project: '## Project',
     stack: '## Technology Stack',
     conventions: '## Conventions',
@@ -987,10 +1070,10 @@ function cmdGenerateClaudeMd(cwd, options, raw) {
     workflow: '## GSD Workflow Enforcement',
   };
 
-  const generated = {};
-  const sectionsGenerated = [];
-  const sectionsFallback = [];
-  const sectionsSkipped = [];
+  const generated: Record<string, SectionResult> = {};
+  const sectionsGenerated: string[] = [];
+  const sectionsFallback: string[] = [];
+  const sectionsSkipped: string[] = [];
 
   for (const name of MANAGED_SECTIONS) {
     const gen = generators[name](cwd);
@@ -1002,18 +1085,18 @@ function cmdGenerateClaudeMd(cwd, options, raw) {
     }
   }
 
-  let assemblyConfig = {};
+  let assemblyConfig: Record<string, unknown> = {};
   let configClaudeMdPath = './CLAUDE.md';
   try {
     const config = loadConfig(cwd);
-    if (config.claude_md_path) configClaudeMdPath = config.claude_md_path;
-    if (config.claude_md_assembly) assemblyConfig = config.claude_md_assembly;
+    if (config['claude_md_path']) configClaudeMdPath = config['claude_md_path'] as string;
+    if (config['claude_md_assembly']) assemblyConfig = config['claude_md_assembly'] as Record<string, unknown>;
     // #3163: When runtime is codex, override the output target to AGENTS.md
     // regardless of claude_md_path, so Codex projects never write to CLAUDE.md.
     // GSD_RUNTIME env var takes precedence over config.runtime, mirroring detectRuntime().
     const effectiveRuntime = resolveRuntimeNameFromCandidates(
-      process.env.GSD_RUNTIME,
-      config.runtime
+      process.env['GSD_RUNTIME'],
+      config['runtime']
     );
     if (!options.output && effectiveRuntime === 'codex') {
       configClaudeMdPath = './AGENTS.md';
@@ -1027,13 +1110,13 @@ function cmdGenerateClaudeMd(cwd, options, raw) {
     outputPath = path.join(cwd, outputPath);
   }
 
-  const globalAssemblyMode = assemblyConfig.mode || 'embed';
-  const blockModes = assemblyConfig.blocks || {};
+  const globalAssemblyMode = (assemblyConfig['mode'] as string) || 'embed';
+  const blockModes = (assemblyConfig['blocks'] as Record<string, string>) || {};
 
   // Return the assembled content for a section, respecting link vs embed mode.
   // "link" mode writes `@<linkPath>` when the generator has a real source file.
   // Falls back to "embed" for sections without a linkable source (workflow, fallbacks).
-  function buildSectionContent(name, gen, heading) {
+  function buildSectionContent(name: string, gen: SectionResult, heading: string): string {
     const effectiveMode = blockModes[name] || globalAssemblyMode;
     if (effectiveMode === 'link' && gen.linkPath && !gen.hasFallback) {
       return buildSection(name, gen.source, `${heading}\n\n@${gen.linkPath}`);
@@ -1042,10 +1125,10 @@ function cmdGenerateClaudeMd(cwd, options, raw) {
   }
 
   let existingContent = safeReadFile(outputPath);
-  let action;
+  let action: string;
 
   if (existingContent === null) {
-    const sections = [];
+    const sections: string[] = [];
     for (const name of MANAGED_SECTIONS) {
       const gen = generated[name];
       const heading = sectionHeadings[name];
@@ -1098,7 +1181,7 @@ function cmdGenerateClaudeMd(cwd, options, raw) {
   }
 
   const finalContent = safeReadFile(outputPath);
-  let profileStatus;
+  let profileStatus: string;
   if (finalContent && finalContent.indexOf('<!-- GSD:profile-start') !== -1) {
     if (action === 'created' || existingContent.indexOf('<!-- GSD:profile-start') === -1) {
       profileStatus = 'placeholder_added';
@@ -1114,7 +1197,7 @@ function cmdGenerateClaudeMd(cwd, options, raw) {
   let message = `Generated ${genCount}/${totalManaged} sections.`;
   if (sectionsFallback.length > 0) message += ` Fallback: ${sectionsFallback.join(', ')}.`;
   if (sectionsSkipped.length > 0) message += ` Skipped (manually edited): ${sectionsSkipped.join(', ')}.`;
-  if (profileStatus === 'placeholder_added') message += ` Run ${formatGsdSlash('profile-user', resolveRuntime(cwd))} to unlock Developer Profile.`;
+  if (profileStatus === 'placeholder_added') message += ` Run ${String(formatGsdSlash('profile-user', resolveRuntime(cwd)))} to unlock Developer Profile.`;
 
   const result = {
     claude_md_path: outputPath,
@@ -1127,10 +1210,10 @@ function cmdGenerateClaudeMd(cwd, options, raw) {
     message,
   };
 
-  output(result, raw);
+  output(result, raw, undefined);
 }
 
-module.exports = {
+export = {
   cmdWriteProfile,
   cmdProfileQuestionnaire,
   cmdGenerateDevPreferences,

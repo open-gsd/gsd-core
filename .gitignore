@@ -138,6 +138,8 @@ build/
 /get-shit-done/bin/lib/workstream-inventory.cjs
 /get-shit-done/bin/lib/roadmap-command-router.cjs
 /get-shit-done/bin/lib/state-command-router.cjs
+/get-shit-done/bin/lib/config.cjs
+/get-shit-done/bin/lib/profile-output.cjs
 __pycache__/
 *.pyc
 .venv/
