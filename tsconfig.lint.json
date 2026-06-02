@@ -11,9 +11,6 @@
     "get-shit-done/bin/lib/**/*.cjs"
   ],
   "exclude": [
-    "get-shit-done/bin/lib/command-aliases.cjs",
-    "get-shit-done/bin/lib/configuration.cjs",
-    "get-shit-done/bin/lib/state-document.cjs",
     "tests/**/*",
     "node_modules/**/*"
   ]

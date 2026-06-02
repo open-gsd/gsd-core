@@ -65,6 +65,11 @@ export default tseslint.config(
       'get-shit-done/bin/lib/installer-migrations/000-first-time-baseline.cjs',
       'get-shit-done/bin/lib/runtime-homes.cjs',
       'get-shit-done/bin/lib/model-catalog.cjs',
+      'get-shit-done/bin/lib/configuration.cjs',
+      'get-shit-done/bin/lib/state-document.cjs',
+      'get-shit-done/bin/lib/shell-command-projection.cjs',
+      'get-shit-done/bin/lib/security.cjs',
+      'get-shit-done/bin/lib/command-aliases.cjs',
     ],
   },
 

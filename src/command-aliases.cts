@@ -1,10 +1,25 @@
-'use strict';
-
 /**
  * state.*, verify.*, init.*, phase.*, phases.*, validate.*, roadmap.*, and non-family alias/subcommand metadata for CJS routing.
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/command-aliases.cjs collapsed
+ * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only types are added.
  */
 
-const STATE_COMMAND_ALIASES = [
+interface CommandAlias {
+  canonical: string;
+  aliases: string[];
+  subcommand: string;
+  mutation: boolean;
+}
+
+interface NonFamilyCommandAlias {
+  canonical: string;
+  aliases: string[];
+  mutation: boolean;
+}
+
+export const STATE_COMMAND_ALIASES: CommandAlias[] = [
   {
     "canonical": "state.load",
     "aliases": [],
@@ -173,7 +188,7 @@ const STATE_COMMAND_ALIASES = [
   }
 ];
 
-const VERIFY_COMMAND_ALIASES = [
+export const VERIFY_COMMAND_ALIASES: CommandAlias[] = [
   {
     "canonical": "verify.plan-structure",
     "aliases": [
@@ -240,7 +255,7 @@ const VERIFY_COMMAND_ALIASES = [
   }
 ];
 
-const INIT_COMMAND_ALIASES = [
+export const INIT_COMMAND_ALIASES: CommandAlias[] = [
   {
     "canonical": "init.execute-phase",
     "aliases": [
@@ -379,7 +394,7 @@ const INIT_COMMAND_ALIASES = [
   }
 ];
 
-const PHASE_COMMAND_ALIASES = [
+export const PHASE_COMMAND_ALIASES: CommandAlias[] = [
   {
     "canonical": "phase.uat-passed",
     "aliases": [
@@ -446,7 +461,7 @@ const PHASE_COMMAND_ALIASES = [
   }
 ];
 
-const PHASES_COMMAND_ALIASES = [
+export const PHASES_COMMAND_ALIASES: CommandAlias[] = [
   {
     "canonical": "phases.list",
     "aliases": [
@@ -473,7 +488,7 @@ const PHASES_COMMAND_ALIASES = [
   }
 ];
 
-const VALIDATE_COMMAND_ALIASES = [
+export const VALIDATE_COMMAND_ALIASES: CommandAlias[] = [
   {
     "canonical": "validate.consistency",
     "aliases": [
@@ -508,7 +523,7 @@ const VALIDATE_COMMAND_ALIASES = [
   }
 ];
 
-const ROADMAP_COMMAND_ALIASES = [
+export const ROADMAP_COMMAND_ALIASES: CommandAlias[] = [
   {
     "canonical": "roadmap.analyze",
     "aliases": [
@@ -559,7 +574,7 @@ const ROADMAP_COMMAND_ALIASES = [
   }
 ];
 
-const NON_FAMILY_COMMAND_ALIASES = [
+export const NON_FAMILY_COMMAND_ALIASES: NonFamilyCommandAlias[] = [
   {
     "canonical": "agent.classify-failure",
     "aliases": [
@@ -804,28 +819,10 @@ const NON_FAMILY_COMMAND_ALIASES = [
   }
 ];
 
-const STATE_SUBCOMMANDS = STATE_COMMAND_ALIASES.map((entry) => entry.subcommand);
-const VERIFY_SUBCOMMANDS = VERIFY_COMMAND_ALIASES.map((entry) => entry.subcommand);
-const INIT_SUBCOMMANDS = INIT_COMMAND_ALIASES.map((entry) => entry.subcommand);
-const PHASE_SUBCOMMANDS = PHASE_COMMAND_ALIASES.map((entry) => entry.subcommand);
-const PHASES_SUBCOMMANDS = PHASES_COMMAND_ALIASES.map((entry) => entry.subcommand);
-const VALIDATE_SUBCOMMANDS = VALIDATE_COMMAND_ALIASES.map((entry) => entry.subcommand);
-const ROADMAP_SUBCOMMANDS = ROADMAP_COMMAND_ALIASES.map((entry) => entry.subcommand);
-
-module.exports = {
-  STATE_COMMAND_ALIASES,
-  VERIFY_COMMAND_ALIASES,
-  INIT_COMMAND_ALIASES,
-  PHASE_COMMAND_ALIASES,
-  PHASES_COMMAND_ALIASES,
-  VALIDATE_COMMAND_ALIASES,
-  ROADMAP_COMMAND_ALIASES,
-  NON_FAMILY_COMMAND_ALIASES,
-  STATE_SUBCOMMANDS,
-  VERIFY_SUBCOMMANDS,
-  INIT_SUBCOMMANDS,
-  PHASE_SUBCOMMANDS,
-  PHASES_SUBCOMMANDS,
-  VALIDATE_SUBCOMMANDS,
-  ROADMAP_SUBCOMMANDS,
-};
+export const STATE_SUBCOMMANDS: string[] = STATE_COMMAND_ALIASES.map((entry) => entry.subcommand);
+export const VERIFY_SUBCOMMANDS: string[] = VERIFY_COMMAND_ALIASES.map((entry) => entry.subcommand);
+export const INIT_SUBCOMMANDS: string[] = INIT_COMMAND_ALIASES.map((entry) => entry.subcommand);
+export const PHASE_SUBCOMMANDS: string[] = PHASE_COMMAND_ALIASES.map((entry) => entry.subcommand);
+export const PHASES_SUBCOMMANDS: string[] = PHASES_COMMAND_ALIASES.map((entry) => entry.subcommand);
+export const VALIDATE_SUBCOMMANDS: string[] = VALIDATE_COMMAND_ALIASES.map((entry) => entry.subcommand);
+export const ROADMAP_SUBCOMMANDS: string[] = ROADMAP_COMMAND_ALIASES.map((entry) => entry.subcommand);
