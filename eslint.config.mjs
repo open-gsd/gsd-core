@@ -109,6 +109,11 @@ export default tseslint.config(
       'get-shit-done/bin/lib/learnings.cjs',
       'get-shit-done/bin/lib/gsd2-import.cjs',
       'get-shit-done/bin/lib/profile-pipeline.cjs',
+      'get-shit-done/bin/lib/template.cjs',
+      'get-shit-done/bin/lib/uat.cjs',
+      'get-shit-done/bin/lib/workstream.cjs',
+      'get-shit-done/bin/lib/roadmap.cjs',
+      'get-shit-done/bin/lib/audit.cjs',
     ],
   },
 

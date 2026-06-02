@@ -1,13 +1,53 @@
 /**
  * Roadmap — Roadmap parsing and update operations
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/roadmap.cjs collapsed
+ * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only strict types are added.
  */
 
-const fs = require('fs');
-const path = require('path');
-const { escapeRegex, normalizePhaseName, phaseMarkdownRegexSource, phaseMarkdownRegexSourceExact, output, error, findPhaseInternal, stripShippedMilestones, extractCurrentMilestone, replaceInCurrentMilestone, phaseTokenMatches } = require('./core.cjs');
-const { platformWriteSync } = require('./shell-command-projection.cjs');
-const { planningPaths, withPlanningLock, findContextMdIn } = require('./planning-workspace.cjs');
-const scanPhasePlans = require('./plan-scan.cjs');
+import fs from 'node:fs';
+import path from 'node:path';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import core = require('./core.cjs');
+const { escapeRegex, normalizePhaseName, phaseMarkdownRegexSource, phaseMarkdownRegexSourceExact, output, error, findPhaseInternal, stripShippedMilestones, extractCurrentMilestone, replaceInCurrentMilestone, phaseTokenMatches } = core;
+import { platformWriteSync } from './shell-command-projection.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planningWorkspace = require('./planning-workspace.cjs');
+const { planningPaths, withPlanningLock, findContextMdIn } = planningWorkspace;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import scanPhasePlans = require('./plan-scan.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import frontmatter = require('./frontmatter.cjs');
+const { extractFrontmatter, parseMustHavesBlock } = frontmatter;
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface PhasePlansAndSummaries {
+  planCount: number;
+  summaryCount: number;
+  hasContext: boolean;
+  hasResearch: boolean;
+}
+
+interface PhaseSearchResult {
+  found: boolean;
+  phase_number: string;
+  phase_name: string;
+  goal?: string | null;
+  mode?: string | null;
+  success_criteria?: string[];
+  section?: string;
+  error?: string;
+  message?: string;
+}
+
+interface TruthValue {
+  count: number;
+  text: string;
+}
+
+// ─── coerceTruthToString ──────────────────────────────────────────────────────
 
 /**
  * Coerce an arbitrary YAML scalar/object into a string for cross-cutting
@@ -21,7 +61,7 @@ const scanPhasePlans = require('./plan-scan.cjs');
  * Returns the empty string when no usable text can be derived; callers should
  * skip empty results.
  */
-function coerceTruthToString(t) {
+function coerceTruthToString(t: unknown): string {
   if (t === null || t === undefined) return '';
   if (typeof t === 'string') return t;
   if (typeof t === 'number' || typeof t === 'boolean' || typeof t === 'bigint') {
@@ -30,7 +70,7 @@ function coerceTruthToString(t) {
   if (typeof t === 'object') {
     // Prefer common title-bearing keys produced by parseMustHavesBlock
     for (const k of ['title', 'text', 'name', 'rule', 'path', 'provides']) {
-      const v = t[k];
+      const v = (t as Record<string, unknown>)[k];
       if (typeof v === 'string' && v.trim()) return v;
       if (typeof v === 'number' || typeof v === 'boolean') return String(v);
     }
@@ -38,11 +78,13 @@ function coerceTruthToString(t) {
   return '';
 }
 
-function countPhasePlansAndSummaries(phaseDir) {
+// ─── countPhasePlansAndSummaries ──────────────────────────────────────────────
+
+function countPhasePlansAndSummaries(phaseDir: string): PhasePlansAndSummaries {
   const { planCount, summaryCount } = scanPhasePlans(phaseDir);
   // hasContext and hasResearch are not plan-scan concerns — read the directory
   // once and share the listing for all non-plan metadata that cmdRoadmapAnalyze needs.
-  let phaseFiles = [];
+  let phaseFiles: string[] = [];
   try { phaseFiles = fs.readdirSync(phaseDir); } catch { /* empty */ }
   return {
     planCount,
@@ -55,12 +97,14 @@ function countPhasePlansAndSummaries(phaseDir) {
 // `phaseMarkdownRegexSource` moved to core.cjs (#3537) so phase.cjs and
 // core.cjs itself can consume it without circular deps. Imported above.
 
+// ─── searchPhaseInContent ─────────────────────────────────────────────────────
+
 /**
  * Search for a phase header (and its section) within the given content string.
  * Returns a result object if found (either a full match or a malformed_roadmap
  * checklist-only match), or null if the phase is not present at all.
  */
-function searchPhaseInContent(content, escapedPhase, phaseNum) {
+function searchPhaseInContent(content: string, escapedPhase: string, phaseNum: string): PhaseSearchResult | null {
   // Match "## Phase X:", "### Phase X:", or "#### Phase X:" with optional name
   const phasePattern = new RegExp(
     `#{2,4}\\s*(?:\\[[^\\]]+\\]\\s*)?Phase\\s+${escapedPhase}:\\s*([^\\n]+)`,
@@ -90,14 +134,14 @@ function searchPhaseInContent(content, escapedPhase, phaseNum) {
   }
 
   const phaseName = headerMatch[1].trim();
-  const headerIndex = headerMatch.index;
+  const headerIndex = headerMatch.index!;
 
   // Find the end of this section (next ## or ### phase header, or end of file).
   // Also matches bracket-prefixed headings like ### [GSD] Phase 2-01:.
   const restOfContent = content.slice(headerIndex);
   const nextHeaderMatch = restOfContent.match(/\n#{2,4}\s+(?:\[[^\]]+\]\s*)?Phase\s+[\w][\w.-]*/i);
   const sectionEnd = nextHeaderMatch
-    ? headerIndex + nextHeaderMatch.index
+    ? headerIndex + nextHeaderMatch.index!
     : content.length;
 
   const section = content.slice(headerIndex, sectionEnd).trim();
@@ -128,7 +172,9 @@ function searchPhaseInContent(content, escapedPhase, phaseNum) {
   };
 }
 
-function cmdRoadmapGetPhase(cwd, phaseNum, raw) {
+// ─── cmdRoadmapGetPhase ───────────────────────────────────────────────────────
+
+function cmdRoadmapGetPhase(cwd: string, phaseNum: string, raw: boolean): void {
   const roadmapPath = planningPaths(cwd).roadmap;
 
   if (!fs.existsSync(roadmapPath)) {
@@ -187,15 +233,17 @@ function cmdRoadmapGetPhase(cwd, phaseNum, raw) {
 
     output(result, raw, result.section);
   } catch (e) {
-    error('Failed to read ROADMAP.md: ' + e.message);
+    error('Failed to read ROADMAP.md: ' + (e as Error).message);
   }
 }
 
-function cmdRoadmapAnalyze(cwd, raw) {
+// ─── cmdRoadmapAnalyze ────────────────────────────────────────────────────────
+
+function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
   const roadmapPath = planningPaths(cwd).roadmap;
 
   if (!fs.existsSync(roadmapPath)) {
-    output({ error: 'ROADMAP.md not found', milestones: [], phases: [], current_phase: null }, raw);
+    output({ error: 'ROADMAP.md not found', milestones: [], phases: [], current_phase: null }, raw, undefined);
     return;
   }
 
@@ -205,8 +253,20 @@ function cmdRoadmapAnalyze(cwd, raw) {
 
   // Extract all phase headings: ## Phase N: Name or ### Phase N: Name
   const phasePattern = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+(\d+[A-Z]?(?:[.-]\d+)*)\s*:\s*([^\n]+)/gi;
-  const phases = [];
-  let match;
+  const phases: Array<{
+    number: string;
+    name: string;
+    goal: string | null;
+    mode: string | null;
+    depends_on: string | null;
+    plan_count: number;
+    summary_count: number;
+    has_context: boolean;
+    has_research: boolean;
+    disk_status: string;
+    roadmap_complete: boolean;
+  }> = [];
+  let match: RegExpExecArray | null;
 
   // Build phase directory lookup once (O(1) readdir instead of O(N) per phase)
   const _phaseDirNames = (() => {
@@ -227,7 +287,7 @@ function cmdRoadmapAnalyze(cwd, raw) {
     // #3691: `\d` → `\d[\d.]*` so decimal phase headings (e.g. `### Phase 02.3:`) are
     // recognised as section boundaries.
     const nextHeader = restOfContent.match(/\n#{2,4}\s+(?:\[[^\]]+\]\s*)?Phase\s+\d[\d.-]*/i);
-    const sectionEnd = nextHeader ? sectionStart + nextHeader.index : content.length;
+    const sectionEnd = nextHeader ? sectionStart + nextHeader.index! : content.length;
     const section = content.slice(sectionStart, sectionEnd);
 
     const goalMatch = section.match(/\*\*Goal(?::\*\*|\*\*:)\s*([^\n]+)/i);
@@ -297,9 +357,9 @@ function cmdRoadmapAnalyze(cwd, raw) {
   }
 
   // Extract milestone info
-  const milestones = [];
+  const milestones: Array<{ heading: string; version: string }> = [];
   const milestonePattern = /##\s*(.*v(\d+(?:\.\d+)+)[^(\n]*)/gi;
-  let mMatch;
+  let mMatch: RegExpExecArray | null;
   while ((mMatch = milestonePattern.exec(content)) !== null) {
     milestones.push({
       heading: mMatch[1].trim(),
@@ -318,8 +378,8 @@ function cmdRoadmapAnalyze(cwd, raw) {
 
   // Detect phases in summary list without detail sections (malformed ROADMAP)
   const checklistPattern = /-\s*\[[ x]\]\s*\*\*Phase\s+(\d+[A-Z]?(?:\.\d+)*)/gi;
-  const checklistPhases = new Set();
-  let checklistMatch;
+  const checklistPhases = new Set<string>();
+  let checklistMatch: RegExpExecArray | null;
   while ((checklistMatch = checklistPattern.exec(content)) !== null) {
     checklistPhases.add(checklistMatch[1]);
   }
@@ -339,10 +399,12 @@ function cmdRoadmapAnalyze(cwd, raw) {
     missing_phase_details: missingDetails.length > 0 ? missingDetails : null,
   };
 
-  output(result, raw);
+  output(result, raw, undefined);
 }
 
-function cmdRoadmapUpdatePlanProgress(cwd, phaseNum, raw) {
+// ─── cmdRoadmapUpdatePlanProgress ─────────────────────────────────────────────
+
+function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | undefined, raw: boolean): void {
   if (!phaseNum) {
     error('phase number required for roadmap update-plan-progress');
   }
@@ -354,8 +416,8 @@ function cmdRoadmapUpdatePlanProgress(cwd, phaseNum, raw) {
     error(`Phase ${phaseNum} not found`);
   }
 
-  const planCount = phaseInfo.plans.length;
-  const summaryCount = phaseInfo.summaries.length;
+  const planCount = phaseInfo!.plans.length;
+  const summaryCount = phaseInfo!.summaries.length;
 
   if (planCount === 0) {
     output({ updated: false, reason: 'No plans found', plan_count: 0, summary_count: 0 }, raw, 'no plans');
@@ -418,7 +480,7 @@ function cmdRoadmapUpdatePlanProgress(cwd, phaseNum, raw) {
     }
 
     // Mark completed plan checkboxes (e.g. "- [ ] 50-01-PLAN.md", "- [ ] 50-01:", or "- [ ] **50-01**")
-    for (const summaryFile of phaseInfo.summaries) {
+    for (const summaryFile of phaseInfo!.summaries) {
       const planId = summaryFile.replace('-SUMMARY.md', '').replace('SUMMARY.md', '');
       if (!planId) continue;
       const planEscaped = escapeRegex(planId);
@@ -441,6 +503,8 @@ function cmdRoadmapUpdatePlanProgress(cwd, phaseNum, raw) {
   }, raw, `${summaryCount}/${planCount} ${status}`);
 }
 
+// ─── cmdRoadmapAnnotateDependencies ───────────────────────────────────────────
+
 /**
  * Annotate the ROADMAP.md plan list for a phase with wave dependency notes
  * and a cross-cutting constraints subsection derived from PLAN frontmatter.
@@ -454,7 +518,7 @@ function cmdRoadmapUpdatePlanProgress(cwd, phaseNum, raw) {
  * The operation is idempotent: if wave headers already exist in the section
  * the function returns without modifying the file.
  */
-function cmdRoadmapAnnotateDependencies(cwd, phaseNum, raw) {
+function cmdRoadmapAnnotateDependencies(cwd: string, phaseNum: string | null | undefined, raw: boolean): void {
   if (!phaseNum) {
     error('phase number required for roadmap annotate-dependencies');
   }
@@ -471,16 +535,14 @@ function cmdRoadmapAnnotateDependencies(cwd, phaseNum, raw) {
     return;
   }
 
-  const { extractFrontmatter, parseMustHavesBlock } = require('./frontmatter.cjs');
-
   // Read each PLAN.md and extract wave + must_haves.truths
-  const planData = [];
+  const planData: Array<{ planFile: string; planId: string; wave: number; truths: unknown[] }> = [];
   for (const planFile of phaseInfo.plans) {
     const planPath = path.join(path.resolve(cwd, phaseInfo.directory), planFile);
     try {
       const content = fs.readFileSync(planPath, 'utf-8');
       const fm = extractFrontmatter(content);
-      const wave = parseInt(fm.wave, 10) || 1;
+      const wave = parseInt(fm.wave as string, 10) || 1;
       const planId = planFile.replace(/-PLAN\.md$/i, '').replace(/PLAN\.md$/i, '');
       const truths = parseMustHavesBlock(content, 'truths') || [];
       planData.push({ planFile, planId, wave, truths });
@@ -493,10 +555,10 @@ function cmdRoadmapAnnotateDependencies(cwd, phaseNum, raw) {
   }
 
   // Group plans by wave (sorted)
-  const waveGroups = new Map();
+  const waveGroups = new Map<number, typeof planData>();
   for (const p of planData) {
     if (!waveGroups.has(p.wave)) waveGroups.set(p.wave, []);
-    waveGroups.get(p.wave).push(p);
+    waveGroups.get(p.wave)!.push(p);
   }
   const waves = [...waveGroups.keys()].sort((a, b) => a - b);
 
@@ -509,9 +571,9 @@ function cmdRoadmapAnnotateDependencies(cwd, phaseNum, raw) {
   // `t.trim()`. We coerce primitives via `String(t)` and extract a sensible
   // string field from object-shaped items produced by parseMustHavesBlock's
   // continuation-kv path (issue #2757 produces those shapes for nested keys).
-  const truthCounts = new Map();
+  const truthCounts = new Map<string, TruthValue>();
   for (const { truths } of planData) {
-    const seen = new Set();
+    const seen = new Set<string>();
     for (const t of truths) {
       const text = coerceTruthToString(t);
       if (!text) continue;
@@ -520,7 +582,7 @@ function cmdRoadmapAnnotateDependencies(cwd, phaseNum, raw) {
       if (!key || seen.has(key)) continue;
       seen.add(key);
       if (!truthCounts.has(key)) truthCounts.set(key, { count: 0, text: trimmed });
-      truthCounts.get(key).count++;
+      truthCounts.get(key)!.count++;
     }
   }
   const crossCuttingTruths = [...truthCounts.values()]
@@ -540,7 +602,7 @@ function cmdRoadmapAnnotateDependencies(cwd, phaseNum, raw) {
     const phaseMatch = content.match(phaseHeaderPattern);
     if (!phaseMatch) return;
 
-    const phaseStart = phaseMatch.index;
+    const phaseStart = phaseMatch.index!;
     const restAfterHeader = content.slice(phaseStart);
     const nextPhaseOffset = restAfterHeader.slice(1).search(/\n#{2,4}\s+Phase\s+\d/i);
     const phaseEnd = nextPhaseOffset >= 0 ? phaseStart + 1 + nextPhaseOffset : content.length;
@@ -576,13 +638,13 @@ function cmdRoadmapAnnotateDependencies(cwd, phaseNum, raw) {
     // #314 perf: build a first-wins Map so per-line lookup is O(1) instead of O(plans).
     // First-wins mirrors .find() semantics: if the same planId appears more than once
     // in planData, the earlier entry wins — identical to what .find() returned before.
-    const planById = new Map();
+    const planById = new Map<string, typeof planData[number]>();
     for (const p of planData) {
       if (!planById.has(p.planId)) planById.set(p.planId, p);
     }
 
     // Build wave-annotated plan list
-    const linesByWave = new Map();
+    const linesByWave = new Map<number, string[]>();
     for (const line of listLines) {
       // Match plan ID from line: "- [ ] 01-01-PLAN.md — ..." or "- [ ] 01-01: ..."
       // #3691 Bug 3: `[\w-]+?` excluded `.`, so decimal IDs like `02.3-01` were captured
@@ -598,14 +660,14 @@ function cmdRoadmapAnnotateDependencies(cwd, phaseNum, raw) {
       const planEntry = planId ? (planById.get(planId) || null) : null;
       const wave = planEntry ? planEntry.wave : 1;
       if (!linesByWave.has(wave)) linesByWave.set(wave, []);
-      linesByWave.get(wave).push(line);
+      linesByWave.get(wave)!.push(line);
     }
 
-    const annotatedLines = [];
+    const annotatedLines: string[] = [];
     const sortedWaves = [...linesByWave.keys()].sort((a, b) => a - b);
     for (let i = 0; i < sortedWaves.length; i++) {
       const w = sortedWaves[i];
-      const waveLines = linesByWave.get(w);
+      const waveLines = linesByWave.get(w)!;
       if (sortedWaves.length > 1) {
         const dep = i > 0 ? ` *(blocked on Wave ${sortedWaves[i - 1]} completion)*` : '';
         annotatedLines.push(`**Wave ${w}**${dep}`);
@@ -643,7 +705,7 @@ function cmdRoadmapAnnotateDependencies(cwd, phaseNum, raw) {
   }, raw, updated ? `annotated ${waves.length} wave(s), ${crossCuttingTruths.length} constraint(s)` : 'skipped (already annotated or no plan list)');
 }
 
-module.exports = {
+export = {
   cmdRoadmapGetPhase,
   cmdRoadmapAnalyze,
   cmdRoadmapUpdatePlanProgress,

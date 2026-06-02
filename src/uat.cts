@@ -3,23 +3,67 @@
  *
  * Reads all *-UAT.md and *-VERIFICATION.md files across all phases.
  * Extracts non-passing items. Returns structured JSON for workflow consumption.
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/uat.cjs collapsed
+ * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only strict types are added.
  */
 
-const fs = require('fs');
-const path = require('path');
-const { output, error, getMilestonePhaseFilter, toPosixPath } = require('./core.cjs');
-const { planningDir } = require('./planning-workspace.cjs');
-const { extractFrontmatter } = require('./frontmatter.cjs');
-const { requireSafePath, sanitizeForDisplay } = require('./security.cjs');
+import fs from 'node:fs';
+import path from 'node:path';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import core = require('./core.cjs');
+const { output, error, getMilestonePhaseFilter, toPosixPath } = core;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planningWorkspace = require('./planning-workspace.cjs');
+const { planningDir } = planningWorkspace;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import frontmatter = require('./frontmatter.cjs');
+const { extractFrontmatter } = frontmatter;
+import { requireSafePath, sanitizeForDisplay } from './security.cjs';
 
-function cmdAuditUat(cwd, raw) {
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type UatResult = string;
+type UatCategory = 'server_blocked' | 'device_needed' | 'build_needed' | 'third_party' | 'blocked' | 'skipped_unresolved' | 'pending' | 'human_uat' | 'unknown';
+
+interface UatItem {
+  test?: number;
+  name: string;
+  expected?: string;
+  result: UatResult;
+  category: UatCategory;
+  reason?: string;
+  blocked_by?: string;
+}
+
+interface UatFileResult {
+  phase: string;
+  phase_dir: string;
+  file: string;
+  file_path: string;
+  type: 'uat' | 'verification';
+  status: string;
+  items: UatItem[];
+}
+
+interface CurrentTest {
+  complete: boolean;
+  number?: number;
+  name?: string;
+  expected?: string;
+}
+
+// ─── cmdAuditUat ─────────────────────────────────────────────────────────────
+
+function cmdAuditUat(cwd: string, raw: boolean): void {
   const phasesDir = path.join(planningDir(cwd), 'phases');
   if (!fs.existsSync(phasesDir)) {
     error('No phases directory found in planning directory');
   }
 
   const isDirInMilestone = getMilestonePhaseFilter(cwd);
-  const results = [];
+  const results: UatFileResult[] = [];
 
   // Scan all phase directories
   const dirs = fs.readdirSync(phasesDir, { withFileTypes: true })
@@ -45,7 +89,7 @@ function cmdAuditUat(cwd, raw) {
           file,
           file_path: toPosixPath(path.relative(cwd, path.join(phaseDir, file))),
           type: 'uat',
-          status: (extractFrontmatter(content).status || 'unknown'),
+          status: (extractFrontmatter(content).status as string || 'unknown'),
           items,
         });
       }
@@ -54,7 +98,7 @@ function cmdAuditUat(cwd, raw) {
     // Process VERIFICATION files
     for (const file of files.filter(f => f.includes('-VERIFICATION') && f.endsWith('.md'))) {
       const content = fs.readFileSync(path.join(phaseDir, file), 'utf-8');
-      const status = extractFrontmatter(content).status || 'unknown';
+      const status = extractFrontmatter(content).status as string || 'unknown';
       if (status === 'human_needed' || status === 'gaps_found') {
         const items = parseVerificationItems(content, status);
         if (items.length > 0) {
@@ -73,7 +117,12 @@ function cmdAuditUat(cwd, raw) {
   }
 
   // Compute summary
-  const summary = {
+  const summary: {
+    total_files: number;
+    total_items: number;
+    by_category: Record<string, number>;
+    by_phase: Record<string, number>;
+  } = {
     total_files: results.length,
     total_items: results.reduce((sum, r) => sum + r.items.length, 0),
     by_category: {},
@@ -89,10 +138,12 @@ function cmdAuditUat(cwd, raw) {
     }
   }
 
-  output({ results, summary }, raw);
+  output({ results, summary }, raw, undefined);
 }
 
-function cmdRenderCheckpoint(cwd, options = {}, raw) {
+// ─── cmdRenderCheckpoint ──────────────────────────────────────────────────────
+
+function cmdRenderCheckpoint(cwd: string, options: { file?: string } = {}, raw: boolean): void {
   const filePath = options.file;
   if (!filePath) {
     error('UAT file required: use uat render-checkpoint --file <path>');
@@ -110,7 +161,7 @@ function cmdRenderCheckpoint(cwd, options = {}, raw) {
     error('UAT session is already complete; no pending checkpoint to render');
   }
 
-  const checkpoint = buildCheckpoint(currentTest);
+  const checkpoint = buildCheckpoint(currentTest as Required<Omit<CurrentTest, 'complete'>> & { complete: false });
   output({
     file_path: toPosixPath(path.relative(cwd, resolvedPath)),
     test_number: currentTest.number,
@@ -119,13 +170,15 @@ function cmdRenderCheckpoint(cwd, options = {}, raw) {
   }, raw, checkpoint);
 }
 
-function parseCurrentTest(content) {
+// ─── parseCurrentTest ─────────────────────────────────────────────────────────
+
+function parseCurrentTest(content: string): CurrentTest {
   const currentTestMatch = content.match(/##\s*Current Test\s*(?:\n<!--[\s\S]*?-->)?\n([\s\S]*?)(?=\n##\s|$)/i);
   if (!currentTestMatch) {
     error('UAT file is missing a Current Test section');
   }
 
-  const section = currentTestMatch[1].trimEnd();
+  const section = currentTestMatch![1].trimEnd();
   if (!section.trim()) {
     error('Current Test section is empty');
   }
@@ -144,26 +197,28 @@ function parseCurrentTest(content) {
     error('Current Test section is malformed');
   }
 
-  let expected;
+  let expected: string;
   if (expectedBlockMatch) {
     expected = expectedBlockMatch[1]
       .split('\n')
-      .map(line => line.replace(/^ {2}/, ''))
+      .map((line: string) => line.replace(/^ {2}/, ''))
       .join('\n')
       .trim();
   } else {
-    expected = expectedInlineMatch[1].trim();
+    expected = expectedInlineMatch![1].trim();
   }
 
   return {
     complete: false,
-    number: parseInt(numberMatch[1], 10),
-    name: sanitizeForDisplay(nameMatch[1].trim()),
+    number: parseInt(numberMatch![1], 10),
+    name: sanitizeForDisplay(nameMatch![1].trim()),
     expected: sanitizeForDisplay(expected),
   };
 }
 
-function buildCheckpoint(currentTest) {
+// ─── buildCheckpoint ──────────────────────────────────────────────────────────
+
+function buildCheckpoint(currentTest: { number: number; name: string; expected: string }): string {
   return [
     '╔══════════════════════════════════════════════════════════════╗',
     '║  CHECKPOINT: Verification Required                           ║',
@@ -179,12 +234,14 @@ function buildCheckpoint(currentTest) {
   ].join('\n');
 }
 
-function parseUatItems(content) {
-  const items = [];
+// ─── parseUatItems ────────────────────────────────────────────────────────────
+
+function parseUatItems(content: string): UatItem[] {
+  const items: UatItem[] = [];
   // Match test blocks: ### N. Name\nexpected: ...\nresult: ...\n
   // Accept both bare (result: pending) and bracketed (result: [pending]) formats (#2273)
   const testPattern = /###\s*(\d+)\.\s*([^\n]+)\nexpected:\s*([^\n]+)\nresult:\s*\[?(\w+)\]?(?:\n(?:reported|reason|blocked_by):\s*[^\n]*)?/g;
-  let match;
+  let match: RegExpExecArray | null;
   while ((match = testPattern.exec(content)) !== null) {
     const [, num, name, expected, result] = match;
     if (result === 'pending' || result === 'skipped' || result === 'blocked') {
@@ -195,7 +252,7 @@ function parseUatItems(content) {
       const reasonMatch = blockText.match(/reason:\s*(.+)/);
       const blockedByMatch = blockText.match(/blocked_by:\s*(.+)/);
 
-      const item = {
+      const item: UatItem = {
         test: parseInt(num, 10),
         name: name.trim(),
         expected: expected.trim(),
@@ -210,8 +267,10 @@ function parseUatItems(content) {
   return items;
 }
 
-function parseVerificationItems(content, status) {
-  const items = [];
+// ─── parseVerificationItems ───────────────────────────────────────────────────
+
+function parseVerificationItems(content: string, status: string): UatItem[] {
+  const items: UatItem[] = [];
   if (status === 'human_needed') {
     // Extract from human_verification section — look for numbered items or table rows
     const hvSection = content.match(/##\s*Human Verification.*?\n([\s\S]*?)(?=\n##\s|\n---\s|$)/i);
@@ -227,7 +286,7 @@ function parseVerificationItems(content, status) {
 
         if (tableMatch) {
           // Skip rows that already have a passing result (PASS, pass, resolved, etc.)
-          const rowRemainder = line.slice(tableMatch.index + tableMatch[0].length);
+          const rowRemainder = line.slice(tableMatch.index! + tableMatch[0].length);
           const cellValues = rowRemainder.split('|').map(c => c.trim());
           const hasPassResult = cellValues.some(c => /^pass$/i.test(c) || /^resolved$/i.test(c));
           if (hasPassResult) continue;
@@ -258,7 +317,9 @@ function parseVerificationItems(content, status) {
   return items;
 }
 
-function categorizeItem(result, reason, blockedBy) {
+// ─── categorizeItem ───────────────────────────────────────────────────────────
+
+function categorizeItem(result: string, reason?: string, blockedBy?: string): UatCategory {
   if (result === 'blocked' || blockedBy) {
     if (blockedBy) {
       if (/server/i.test(blockedBy)) return 'server_blocked';
@@ -281,7 +342,7 @@ function categorizeItem(result, reason, blockedBy) {
   return 'unknown';
 }
 
-module.exports = {
+export = {
   cmdAuditUat,
   cmdRenderCheckpoint,
   parseCurrentTest,

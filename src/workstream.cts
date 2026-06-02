@@ -6,27 +6,50 @@
  *
  * When no workstreams/ directory exists, GSD operates in "flat mode" with
  * everything at .planning/ — backward compatible with pre-workstream installs.
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/workstream.cjs collapsed
+ * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only strict types are added.
  */
 
-const fs = require('fs');
-const path = require('path');
-const { output, error, toPosixPath, getMilestoneInfo, generateSlugInternal } = require('./core.cjs');
-const { platformWriteSync, platformEnsureDir } = require('./shell-command-projection.cjs');
-const { planningRoot, setActiveWorkstream, getActiveWorkstream } = require('./planning-workspace.cjs');
-const {
+import fs from 'node:fs';
+import path from 'node:path';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import core = require('./core.cjs');
+const { output, error, toPosixPath, getMilestoneInfo, generateSlugInternal } = core;
+import { platformWriteSync, platformEnsureDir } from './shell-command-projection.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planningWorkspace = require('./planning-workspace.cjs');
+const { planningRoot, setActiveWorkstream, getActiveWorkstream } = planningWorkspace;
+import {
   toWorkstreamSlug,
   assertValidActiveWorkstreamName,
   isValidActiveWorkstreamName,
   INVALID_ACTIVE_WORKSTREAM_NAME_MESSAGE,
-} = require('./workstream-name-policy.cjs');
-const { formatGsdSlash, resolveRuntime } = require('./runtime-slash.cjs');
+} from './workstream-name-policy.cjs';
+import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import workstreamInventory = require('./workstream-inventory.cjs');
 const {
   getOtherActiveWorkstreamInventories,
   inspectWorkstream,
   listWorkstreamInventories,
-} = require('./workstream-inventory.cjs');
+} = workstreamInventory;
 
-// ─── Migration ──────────────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface WorkstreamCreateOptions {
+  migrate?: boolean;
+  migrateName?: string | null;
+}
+
+interface MigrateResult {
+  migrated: boolean;
+  workstream: string;
+  files_moved: string[];
+}
+
+// ─── Migration ───────────────────────────────────────────────────────────────
 
 /**
  * Migrate flat .planning/ layout to workstream mode.
@@ -34,10 +57,10 @@ const {
  * into .planning/workstreams/{name}/. Shared files (PROJECT.md, config.json,
  * milestones/, research/, codebase/, todos/) stay in place.
  */
-function migrateToWorkstreams(cwd, workstreamName) {
+function migrateToWorkstreams(cwd: string, workstreamName: string): MigrateResult {
   try {
     assertValidActiveWorkstreamName(workstreamName, 'Invalid workstream name for migration');
-  } catch (err) {
+  } catch {
     throw new Error('Invalid workstream name for migration');
   }
 
@@ -48,7 +71,7 @@ function migrateToWorkstreams(cwd, workstreamName) {
     throw new Error('Already in workstream mode — .planning/workstreams/ exists');
   }
 
-  const toMove = [
+  const toMove: Array<{ name: string; type: string }> = [
     { name: 'ROADMAP.md', type: 'file' },
     { name: 'STATE.md', type: 'file' },
     { name: 'REQUIREMENTS.md', type: 'file' },
@@ -57,7 +80,7 @@ function migrateToWorkstreams(cwd, workstreamName) {
 
   platformEnsureDir(wsDir);
 
-  const filesMoved = [];
+  const filesMoved: string[] = [];
   try {
     for (const item of toMove) {
       const src = path.join(baseDir, item.name);
@@ -69,19 +92,19 @@ function migrateToWorkstreams(cwd, workstreamName) {
     }
   } catch (err) {
     for (const name of filesMoved) {
-      try { fs.renameSync(path.join(wsDir, name), path.join(baseDir, name)); } catch {}
+      try { fs.renameSync(path.join(wsDir, name), path.join(baseDir, name)); } catch { /* ignore */ }
     }
-    try { fs.rmSync(wsDir, { recursive: true }); } catch {}
-    try { fs.rmdirSync(path.join(baseDir, 'workstreams')); } catch {}
+    try { fs.rmSync(wsDir, { recursive: true }); } catch { /* ignore */ }
+    try { fs.rmdirSync(path.join(baseDir, 'workstreams')); } catch { /* ignore */ }
     throw err;
   }
 
   return { migrated: true, workstream: workstreamName, files_moved: filesMoved };
 }
 
-// ─── CRUD Commands ──────────────────────────────────────────────────────────
+// ─── CRUD Commands ────────────────────────────────────────────────────────────
 
-function cmdWorkstreamCreate(cwd, name, options, raw) {
+function cmdWorkstreamCreate(cwd: string, name: string | null | undefined, options: WorkstreamCreateOptions, raw: boolean): void {
   if (!name) {
     error('workstream name required. Usage: workstream create <name>');
   }
@@ -93,19 +116,19 @@ function cmdWorkstreamCreate(cwd, name, options, raw) {
 
   const baseDir = planningRoot(cwd);
   if (!fs.existsSync(baseDir)) {
-    error(`.planning/ directory not found — run ${formatGsdSlash('new-project', resolveRuntime(cwd))} first`);
+    error(`.planning/ directory not found — run ${formatGsdSlash('new-project', resolveRuntime(cwd)) as string} first`);
   }
 
   const wsRoot = path.join(baseDir, 'workstreams');
   const wsDir = path.join(wsRoot, slug);
 
   if (fs.existsSync(wsDir) && fs.existsSync(path.join(wsDir, 'STATE.md'))) {
-    output({ created: false, error: 'already_exists', workstream: slug, path: toPosixPath(path.relative(cwd, wsDir)) }, raw);
+    output({ created: false, error: 'already_exists', workstream: slug, path: toPosixPath(path.relative(cwd, wsDir)) }, raw, undefined);
     return;
   }
 
   const isFlatMode = !fs.existsSync(wsRoot);
-  let migration = null;
+  let migration: MigrateResult | null = null;
   if (isFlatMode && options.migrate !== false) {
     const hasExistingWork = fs.existsSync(path.join(baseDir, 'ROADMAP.md')) ||
                             fs.existsSync(path.join(baseDir, 'STATE.md')) ||
@@ -113,17 +136,18 @@ function cmdWorkstreamCreate(cwd, name, options, raw) {
 
     if (hasExistingWork) {
       const migrateName = options.migrateName || null;
-      let existingWsName;
+      let existingWsName: string;
       if (migrateName) {
-        existingWsName = toWorkstreamSlug(migrateName);
-        if (!existingWsName) {
+        const slugged = toWorkstreamSlug(migrateName);
+        if (!slugged) {
           output({
             created: false,
             error: 'migration_failed',
             message: 'Invalid migrate-name — must contain at least one alphanumeric character',
-          }, raw);
+          }, raw, undefined);
           return;
         }
+        existingWsName = slugged;
       } else {
         try {
           const milestone = getMilestoneInfo(cwd);
@@ -136,7 +160,7 @@ function cmdWorkstreamCreate(cwd, name, options, raw) {
       try {
         migration = migrateToWorkstreams(cwd, existingWsName);
       } catch (e) {
-        output({ created: false, error: 'migration_failed', message: e.message }, raw);
+        output({ created: false, error: 'migration_failed', message: (e as Error).message }, raw, undefined);
         return;
       }
     } else {
@@ -188,13 +212,13 @@ function cmdWorkstreamCreate(cwd, name, options, raw) {
     phases_path: relPath + '/phases',
     migration: migration || null,
     active: true,
-  }, raw);
+  }, raw, undefined);
 }
 
-function cmdWorkstreamList(cwd, raw) {
+function cmdWorkstreamList(cwd: string, raw: boolean): void {
   const inventory = listWorkstreamInventories(cwd);
   if (inventory.mode === 'flat') {
-    output({ mode: 'flat', workstreams: [], message: inventory.message }, raw);
+    output({ mode: 'flat', workstreams: [], message: inventory.message }, raw, undefined);
     return;
   }
 
@@ -209,10 +233,10 @@ function cmdWorkstreamList(cwd, raw) {
     completed_phases: ws.completed_phases,
   }));
 
-  output({ mode: 'workstream', workstreams, count: workstreams.length }, raw);
+  output({ mode: 'workstream', workstreams, count: workstreams.length }, raw, undefined);
 }
 
-function cmdWorkstreamStatus(cwd, name, raw) {
+function cmdWorkstreamStatus(cwd: string, name: string | null | undefined, raw: boolean): void {
   if (!name) error('workstream name required. Usage: workstream status <name>');
   try {
     assertValidActiveWorkstreamName(name, INVALID_ACTIVE_WORKSTREAM_NAME_MESSAGE);
@@ -220,29 +244,33 @@ function cmdWorkstreamStatus(cwd, name, raw) {
     error(INVALID_ACTIVE_WORKSTREAM_NAME_MESSAGE);
   }
 
-  const wsDir = path.join(planningRoot(cwd), 'workstreams', name);
+  const wsDir = path.join(planningRoot(cwd), 'workstreams', name!);
   if (!fs.existsSync(wsDir)) {
-    output({ found: false, workstream: name }, raw);
+    output({ found: false, workstream: name }, raw, undefined);
     return;
   }
 
-  const inventory = inspectWorkstream(cwd, name);
+  const inv = inspectWorkstream(cwd, name!);
+  if (!inv) {
+    output({ found: false, workstream: name }, raw, undefined);
+    return;
+  }
 
   output({
     found: true,
     workstream: name,
-    path: inventory.path,
-    files: inventory.files,
-    phases: inventory.phases,
-    phase_count: inventory.phase_count,
-    completed_phases: inventory.completed_phases,
-    status: inventory.status,
-    current_phase: inventory.current_phase,
-    last_activity: inventory.last_activity,
-  }, raw);
+    path: inv.path,
+    files: inv.files,
+    phases: inv.phases,
+    phase_count: inv.phase_count,
+    completed_phases: inv.completed_phases,
+    status: inv.status,
+    current_phase: inv.current_phase,
+    last_activity: inv.last_activity,
+  }, raw, undefined);
 }
 
-function cmdWorkstreamComplete(cwd, name, options, raw) {
+function cmdWorkstreamComplete(cwd: string, name: string | null | undefined, options: Record<string, unknown>, raw: boolean): void {
   if (!name) error('workstream name required. Usage: workstream complete <name>');
   try {
     assertValidActiveWorkstreamName(name, INVALID_ACTIVE_WORKSTREAM_NAME_MESSAGE);
@@ -252,15 +280,15 @@ function cmdWorkstreamComplete(cwd, name, options, raw) {
 
   const root = planningRoot(cwd);
   const wsRoot = path.join(root, 'workstreams');
-  const wsDir = path.join(wsRoot, name);
+  const wsDir = path.join(wsRoot, name!);
 
   if (!fs.existsSync(wsDir)) {
-    output({ completed: false, error: 'not_found', workstream: name }, raw);
+    output({ completed: false, error: 'not_found', workstream: name }, raw, undefined);
     return;
   }
 
   const active = getActiveWorkstream(cwd);
-  if (active === name) setActiveWorkstream(cwd, null);
+  if (active === name) setActiveWorkstream(cwd, null as unknown as string);
 
   const archiveDir = path.join(root, 'milestones');
   const today = new Date().toISOString().split('T')[0];
@@ -272,7 +300,7 @@ function cmdWorkstreamComplete(cwd, name, options, raw) {
 
   platformEnsureDir(archivePath);
 
-  const filesMoved = [];
+  const filesMoved: string[] = [];
   try {
     const entries = fs.readdirSync(wsDir, { withFileTypes: true });
     for (const entry of entries) {
@@ -281,21 +309,21 @@ function cmdWorkstreamComplete(cwd, name, options, raw) {
     }
   } catch (err) {
     for (const fname of filesMoved) {
-      try { fs.renameSync(path.join(archivePath, fname), path.join(wsDir, fname)); } catch {}
+      try { fs.renameSync(path.join(archivePath, fname), path.join(wsDir, fname)); } catch { /* ignore */ }
     }
-    try { fs.rmSync(archivePath, { recursive: true }); } catch {}
-    if (active === name) setActiveWorkstream(cwd, name);
-    output({ completed: false, error: 'archive_failed', message: err.message, workstream: name }, raw);
+    try { fs.rmSync(archivePath, { recursive: true }); } catch { /* ignore */ }
+    if (active === name) setActiveWorkstream(cwd, name!);
+    output({ completed: false, error: 'archive_failed', message: (err as Error).message, workstream: name }, raw, undefined);
     return;
   }
 
-  try { fs.rmdirSync(wsDir); } catch {}
+  try { fs.rmdirSync(wsDir); } catch { /* ignore */ }
 
   let remainingWs = 0;
   try {
     remainingWs = fs.readdirSync(wsRoot, { withFileTypes: true }).filter(e => e.isDirectory()).length;
     if (remainingWs === 0) fs.rmdirSync(wsRoot);
-  } catch {}
+  } catch { /* ignore */ }
 
   output({
     completed: true,
@@ -303,30 +331,30 @@ function cmdWorkstreamComplete(cwd, name, options, raw) {
     archived_to: toPosixPath(path.relative(cwd, archivePath)),
     remaining_workstreams: remainingWs,
     reverted_to_flat: remainingWs === 0,
-  }, raw);
+  }, raw, undefined);
 }
 
-// ─── Active Workstream Commands ──────────────────────────────────────────────
+// ─── Active Workstream Commands ───────────────────────────────────────────────
 
-function cmdWorkstreamSet(cwd, name, raw) {
+function cmdWorkstreamSet(cwd: string, name: string | null | undefined, raw: boolean): void {
   if (!name || name === '--clear') {
     if (name !== '--clear') {
       error('Workstream name required. Usage: workstream set <name> (or workstream set --clear to unset)');
     }
     const previous = getActiveWorkstream(cwd);
-    setActiveWorkstream(cwd, null);
-    output({ active: null, cleared: true, previous: previous || null }, raw);
+    setActiveWorkstream(cwd, null as unknown as string);
+    output({ active: null, cleared: true, previous: previous || null }, raw, undefined);
     return;
   }
 
   if (!isValidActiveWorkstreamName(name)) {
-    output({ active: null, error: 'invalid_name', message: 'Workstream name must be alphanumeric, hyphens, underscores, or dots' }, raw);
+    output({ active: null, error: 'invalid_name', message: 'Workstream name must be alphanumeric, hyphens, underscores, or dots' }, raw, undefined);
     return;
   }
 
   const wsDir = path.join(planningRoot(cwd), 'workstreams', name);
   if (!fs.existsSync(wsDir)) {
-    output({ active: null, error: 'not_found', workstream: name }, raw);
+    output({ active: null, error: 'not_found', workstream: name }, raw, undefined);
     return;
   }
 
@@ -334,16 +362,16 @@ function cmdWorkstreamSet(cwd, name, raw) {
   output({ active: name, set: true }, raw, name);
 }
 
-function cmdWorkstreamGet(cwd, raw) {
+function cmdWorkstreamGet(cwd: string, raw: boolean): void {
   const active = getActiveWorkstream(cwd);
   const wsRoot = path.join(planningRoot(cwd), 'workstreams');
   output({ active, mode: fs.existsSync(wsRoot) ? 'workstream' : 'flat' }, raw, active || 'none');
 }
 
-function cmdWorkstreamProgress(cwd, raw) {
+function cmdWorkstreamProgress(cwd: string, raw: boolean): void {
   const inventory = listWorkstreamInventories(cwd);
   if (inventory.mode === 'flat') {
-    output({ mode: 'flat', workstreams: [], message: inventory.message }, raw);
+    output({ mode: 'flat', workstreams: [], message: inventory.message }, raw, undefined);
     return;
   }
 
@@ -351,32 +379,37 @@ function cmdWorkstreamProgress(cwd, raw) {
     name: ws.name,
     active: ws.active,
     status: ws.status,
-    current_phase: ws.current_phase,
+    current_phase: ws.current_phase ?? null,
     phases: `${ws.completed_phases}/${ws.roadmap_phase_count}`,
     plans: `${ws.completed_plans}/${ws.total_plans}`,
     progress_percent: ws.progress_percent,
   }));
 
-  output({ mode: 'workstream', active: inventory.active, workstreams, count: workstreams.length }, raw);
+  output({ mode: 'workstream', active: inventory.active, workstreams, count: workstreams.length }, raw, undefined);
 }
 
-// ─── Collision Detection ────────────────────────────────────────────────────
+// ─── Collision Detection ──────────────────────────────────────────────────────
 
 /**
  * Return other workstreams that are NOT complete.
  * Used to detect whether the milestone has active parallel work
  * when a workstream finishes its last phase.
  */
-function getOtherActiveWorkstreams(cwd, excludeWs) {
+function getOtherActiveWorkstreams(cwd: string, excludeWs: string): Array<{
+  name: string;
+  status: string;
+  current_phase: string | null;
+  phases: string;
+}> {
   return getOtherActiveWorkstreamInventories(cwd, excludeWs).map(ws => ({
     name: ws.name,
     status: ws.status,
-    current_phase: ws.current_phase,
+    current_phase: ws.current_phase ?? null,
     phases: `${ws.completed_phases}/${ws.phase_count}`,
   }));
 }
 
-module.exports = {
+export = {
   migrateToWorkstreams,
   cmdWorkstreamCreate,
   cmdWorkstreamList,

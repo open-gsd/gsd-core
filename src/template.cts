@@ -1,21 +1,57 @@
 /**
  * Template — Template selection and fill operations
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/template.cjs collapsed
+ * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only strict types are added.
  */
 
-const fs = require('fs');
-const path = require('path');
-const { normalizePhaseName, findPhaseInternal, generateSlugInternal, toPosixPath, output, error } = require('./core.cjs');
-const { platformWriteSync } = require('./shell-command-projection.cjs');
-const { planningDir } = require('./planning-workspace.cjs');
-const { reconstructFrontmatter } = require('./frontmatter.cjs');
+import fs from 'node:fs';
+import path from 'node:path';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import core = require('./core.cjs');
+const { normalizePhaseName, findPhaseInternal, generateSlugInternal, toPosixPath, output, error } = core;
+import { platformWriteSync } from './shell-command-projection.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planningWorkspace = require('./planning-workspace.cjs');
+const { planningDir } = planningWorkspace;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import frontmatter = require('./frontmatter.cjs');
+const { reconstructFrontmatter } = frontmatter;
 
-function cmdTemplateSelect(cwd, planPath, raw) {
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+// Mirrors frontmatter.cts Frontmatter type for type-safe reconstruction calls.
+type FrontmatterValue = string | string[] | Record<string, unknown>;
+type FrontmatterFields = Record<string, FrontmatterValue>;
+
+interface TemplateFillOptions {
+  phase?: string;
+  name?: string;
+  plan?: string;
+  type?: string;
+  wave?: string | number;
+  fields?: Record<string, unknown>;
+}
+
+interface TemplateSelectResult {
+  template: string;
+  type: string;
+  taskCount?: number;
+  fileCount?: number;
+  hasDecisions?: boolean;
+  error?: string;
+}
+
+// ─── cmdTemplateSelect ────────────────────────────────────────────────────────
+
+function cmdTemplateSelect(cwd: string, planPath: string | null | undefined, raw: boolean): void {
   if (!planPath) {
     error('plan-path required');
   }
 
   try {
-    const fullPath = path.join(cwd, planPath);
+    const fullPath = path.join(cwd, planPath!);
     const content = fs.readFileSync(fullPath, 'utf-8');
 
     // Simple heuristics
@@ -26,7 +62,7 @@ function cmdTemplateSelect(cwd, planPath, raw) {
     const hasDecisions = decisionMatch.length > 0;
 
     // Count file mentions
-    const fileMentions = new Set();
+    const fileMentions = new Set<string>();
     const filePattern = /`([^`]+\.[a-zA-Z]+)`/g;
     let m;
     while ((m = filePattern.exec(content)) !== null) {
@@ -47,20 +83,22 @@ function cmdTemplateSelect(cwd, planPath, raw) {
       type = 'complex';
     }
 
-    const result = { template, type, taskCount, fileCount, hasDecisions };
+    const result: TemplateSelectResult = { template, type, taskCount, fileCount, hasDecisions };
     output(result, raw, template);
   } catch (e) {
     // Fallback to standard
-    output({ template: 'templates/summary-standard.md', type: 'standard', error: e.message }, raw, 'templates/summary-standard.md');
+    output({ template: 'templates/summary-standard.md', type: 'standard', error: (e as Error).message }, raw, 'templates/summary-standard.md');
   }
 }
 
-function cmdTemplateFill(cwd, templateType, options, raw) {
+// ─── cmdTemplateFill ──────────────────────────────────────────────────────────
+
+function cmdTemplateFill(cwd: string, templateType: string | null | undefined, options: TemplateFillOptions, raw: boolean): void {
   if (!templateType) { error('template type required: summary, plan, or verification'); }
   if (!options.phase) { error('--phase required'); }
 
   const phaseInfo = findPhaseInternal(cwd, options.phase);
-  if (!phaseInfo || !phaseInfo.found) { output({ error: 'Phase not found', phase: options.phase }, raw); return; }
+  if (!phaseInfo || !phaseInfo.found) { output({ error: 'Phase not found', phase: options.phase }, raw, undefined); return; }
 
   const padded = normalizePhaseName(options.phase);
   const today = new Date().toISOString().split('T')[0];
@@ -70,11 +108,13 @@ function cmdTemplateFill(cwd, templateType, options, raw) {
   const planNum = (options.plan || '01').padStart(2, '0');
   const fields = options.fields || {};
 
-  let frontmatter, body, fileName;
+  let frontmatterObj: Record<string, unknown>;
+  let body: string;
+  let fileName: string;
 
   switch (templateType) {
     case 'summary': {
-      frontmatter = {
+      frontmatterObj = {
         phase: phaseId,
         plan: planNum,
         subsystem: '[primary category]',
@@ -120,8 +160,8 @@ function cmdTemplateFill(cwd, templateType, options, raw) {
     }
     case 'plan': {
       const planType = options.type || 'execute';
-      const wave = parseInt(options.wave) || 1;
-      frontmatter = {
+      const wave = parseInt(String(options.wave), 10) || 1;
+      frontmatterObj = {
         phase: phaseId,
         plan: planNum,
         type: planType,
@@ -171,7 +211,7 @@ function cmdTemplateFill(cwd, templateType, options, raw) {
       break;
     }
     case 'verification': {
-      frontmatter = {
+      frontmatterObj = {
         phase: phaseId,
         verified: new Date().toISOString(),
         status: 'pending',
@@ -212,11 +252,11 @@ function cmdTemplateFill(cwd, templateType, options, raw) {
       return;
   }
 
-  const fullContent = `---\n${reconstructFrontmatter(frontmatter)}\n---\n\n${body}\n`;
+  const fullContent = `---\n${reconstructFrontmatter(frontmatterObj as FrontmatterFields)}\n---\n\n${body}\n`;
   const outPath = path.join(cwd, phaseInfo.directory, fileName);
 
   if (fs.existsSync(outPath)) {
-    output({ error: 'File already exists', path: toPosixPath(path.relative(cwd, outPath)) }, raw);
+    output({ error: 'File already exists', path: toPosixPath(path.relative(cwd, outPath)) }, raw, undefined);
     return;
   }
 
@@ -225,4 +265,4 @@ function cmdTemplateFill(cwd, templateType, options, raw) {
   output({ created: true, path: relPath, template: templateType }, raw, relPath);
 }
 
-module.exports = { cmdTemplateSelect, cmdTemplateFill };
+export = { cmdTemplateSelect, cmdTemplateFill };

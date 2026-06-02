@@ -5,33 +5,139 @@
  * Returns structured JSON for workflow consumption.
  * Called by: gsd-tools.cjs audit-open
  * Used by: /gsd:complete-milestone pre-close gate
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/audit.cjs collapsed
+ * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only strict types are added.
  */
 
-'use strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { platformReadSync } from './shell-command-projection.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planningWorkspace = require('./planning-workspace.cjs');
+const { planningDir } = planningWorkspace;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import frontmatter = require('./frontmatter.cjs');
+const { extractFrontmatter } = frontmatter;
+import { requireSafePath, sanitizeForDisplay } from './security.cjs';
 
-const fs = require('fs');
-const path = require('path');
-const { toPosixPath } = require('./core.cjs');
-const { platformReadSync } = require('./shell-command-projection.cjs');
-const { planningDir } = require('./planning-workspace.cjs');
-const { extractFrontmatter } = require('./frontmatter.cjs');
-const { requireSafePath, sanitizeForDisplay } = require('./security.cjs');
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface DebugSessionItem {
+  slug: string;
+  status: string;
+  updated: string;
+  hypothesis: string;
+  scan_error?: boolean;
+}
+
+interface QuickTaskItem {
+  slug: string;
+  date: string;
+  status: string;
+  description: string;
+  scan_error?: boolean;
+}
+
+interface ThreadItem {
+  slug: string;
+  status: string;
+  updated: string;
+  title: string;
+  scan_error?: boolean;
+}
+
+interface TodoItem {
+  filename: string;
+  priority: string;
+  area: string;
+  summary: string;
+  scan_error?: boolean;
+  _remainder_count?: number;
+}
+
+interface SeedItem {
+  seed_id: string;
+  slug: string;
+  status: string;
+  title: string;
+  scan_error?: boolean;
+}
+
+interface UatGapItem {
+  phase: string;
+  file: string;
+  status: string;
+  open_scenario_count: number;
+  scan_error?: boolean;
+}
+
+interface VerificationGapItem {
+  phase: string;
+  file: string;
+  status: string;
+  scan_error?: boolean;
+}
+
+interface ContextQuestionItem {
+  phase: string;
+  file: string;
+  question_count: number;
+  questions: string[];
+  scan_error?: boolean;
+}
+
+interface AuditCounts {
+  debug_sessions: number;
+  quick_tasks: number;
+  threads: number;
+  todos: number;
+  seeds: number;
+  uat_gaps: number;
+  verification_gaps: number;
+  context_questions: number;
+  total: number;
+}
+
+interface AuditResult {
+  scanned_at: string;
+  has_open_items: boolean;
+  counts: AuditCounts;
+  items: {
+    debug_sessions: DebugSessionItem[];
+    quick_tasks: QuickTaskItem[];
+    threads: ThreadItem[];
+    todos: TodoItem[];
+    seeds: SeedItem[];
+    uat_gaps: UatGapItem[];
+    verification_gaps: VerificationGapItem[];
+    context_questions: ContextQuestionItem[];
+  };
+}
+
+// Terminal UAT states: `complete` (legacy) and `resolved` (post-gap-closure
+// per workflows/execute-phase.md). Hoisted outside scanUatGaps so the Set is
+// not recreated on each loop iteration.
+const TERMINAL_UAT_STATUSES = new Set(['complete', 'resolved']);
+
+// ─── scanDebugSessions ────────────────────────────────────────────────────────
 
 /**
  * Scan .planning/debug/ for open sessions.
  * Open = status NOT in ['resolved', 'complete'].
  * Ignores the resolved/ subdirectory.
  */
-function scanDebugSessions(planDir) {
+function scanDebugSessions(planDir: string): DebugSessionItem[] {
   const debugDir = path.join(planDir, 'debug');
   if (!fs.existsSync(debugDir)) return [];
 
-  const results = [];
-  let files;
+  const results: DebugSessionItem[] = [];
+  let files: fs.Dirent[];
   try {
     files = fs.readdirSync(debugDir, { withFileTypes: true });
   } catch {
-    return [{ scan_error: true }];
+    return [{ scan_error: true, slug: '', status: '', updated: '', hypothesis: '' }];
   }
 
   for (const entry of files) {
@@ -40,7 +146,7 @@ function scanDebugSessions(planDir) {
 
     const filePath = path.join(debugDir, entry.name);
 
-    let safeFilePath;
+    let safeFilePath: string;
     try {
       safeFilePath = requireSafePath(filePath, planDir, 'debug session file', { allowAbsolute: true });
     } catch {
@@ -51,7 +157,7 @@ function scanDebugSessions(planDir) {
     if (content === null) continue;
 
     const fm = extractFrontmatter(content);
-    const status = (fm.status || 'unknown').toLowerCase();
+    const status = ((fm.status as string) || 'unknown').toLowerCase();
     if (status === 'resolved' || status === 'complete') continue;
 
     // Extract hypothesis from "Current Focus" block if parseable
@@ -66,7 +172,7 @@ function scanDebugSessions(planDir) {
     results.push({
       slug: sanitizeForDisplay(slug),
       status: sanitizeForDisplay(status),
-      updated: sanitizeForDisplay(String(fm.updated || fm.date || '')),
+      updated: sanitizeForDisplay(fm.updated || fm.date || ''),
       hypothesis,
     });
   }
@@ -74,29 +180,31 @@ function scanDebugSessions(planDir) {
   return results;
 }
 
+// ─── scanQuickTasks ───────────────────────────────────────────────────────────
+
 /**
  * Scan .planning/quick/ for incomplete tasks.
  * Incomplete if SUMMARY.md missing or status !== 'complete'.
  */
-function scanQuickTasks(planDir) {
+function scanQuickTasks(planDir: string): QuickTaskItem[] {
   const quickDir = path.join(planDir, 'quick');
   if (!fs.existsSync(quickDir)) return [];
 
-  let entries;
+  let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(quickDir, { withFileTypes: true });
   } catch {
-    return [{ scan_error: true }];
+    return [{ scan_error: true, slug: '', date: '', status: '', description: '' }];
   }
 
-  const results = [];
+  const results: QuickTaskItem[] = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
 
     const dirName = entry.name;
     const taskDir = path.join(quickDir, dirName);
 
-    let safeTaskDir;
+    let safeTaskDir: string;
     try {
       safeTaskDir = requireSafePath(taskDir, planDir, 'quick task dir', { allowAbsolute: true });
     } catch {
@@ -105,7 +213,7 @@ function scanQuickTasks(planDir) {
 
     // workflows/quick.md mandates `${quick_id}-SUMMARY.md`; older flows used
     // bare `SUMMARY.md`. Accept either to avoid false-positive "missing".
-    let summaryPath = null;
+    let summaryPath: string | null = null;
     try {
       const summaryFiles = fs.readdirSync(safeTaskDir, { withFileTypes: true })
         .filter(e => e.isFile() && (e.name === 'SUMMARY.md' || e.name.endsWith('-SUMMARY.md')));
@@ -124,7 +232,7 @@ function scanQuickTasks(planDir) {
     const description = '';
 
     if (summaryPath && fs.existsSync(summaryPath)) {
-      let safeSum;
+      let safeSum: string;
       try {
         safeSum = requireSafePath(summaryPath, planDir, 'quick task summary', { allowAbsolute: true });
       } catch {
@@ -135,7 +243,7 @@ function scanQuickTasks(planDir) {
         status = 'unreadable';
       } else {
         const fm = extractFrontmatter(content);
-        status = (fm.status || 'unknown').toLowerCase();
+        status = ((fm.status as string) || 'unknown').toLowerCase();
       }
     }
 
@@ -161,23 +269,25 @@ function scanQuickTasks(planDir) {
   return results;
 }
 
+// ─── scanThreads ──────────────────────────────────────────────────────────────
+
 /**
  * Scan .planning/threads/ for open threads.
  * Open if status in ['open', 'in_progress', 'in progress'] (case-insensitive).
  */
-function scanThreads(planDir) {
+function scanThreads(planDir: string): ThreadItem[] {
   const threadsDir = path.join(planDir, 'threads');
   if (!fs.existsSync(threadsDir)) return [];
 
-  let files;
+  let files: fs.Dirent[];
   try {
     files = fs.readdirSync(threadsDir, { withFileTypes: true });
   } catch {
-    return [{ scan_error: true }];
+    return [{ scan_error: true, slug: '', status: '', updated: '', title: '' }];
   }
 
   const openStatuses = new Set(['open', 'in_progress', 'in progress']);
-  const results = [];
+  const results: ThreadItem[] = [];
 
   for (const entry of files) {
     if (!entry.isFile()) continue;
@@ -185,7 +295,7 @@ function scanThreads(planDir) {
 
     const filePath = path.join(threadsDir, entry.name);
 
-    let safeFilePath;
+    let safeFilePath: string;
     try {
       safeFilePath = requireSafePath(filePath, planDir, 'thread file', { allowAbsolute: true });
     } catch {
@@ -196,7 +306,7 @@ function scanThreads(planDir) {
     if (content === null) continue;
 
     const fm = extractFrontmatter(content);
-    let status = (fm.status || '').toLowerCase().trim();
+    let status = ((fm.status as string) || '').toLowerCase().trim();
 
     // Fall back to scanning body for ## Status: OPEN / IN PROGRESS
     if (!status) {
@@ -209,7 +319,7 @@ function scanThreads(planDir) {
     if (!openStatuses.has(status)) continue;
 
     // Extract title from # Thread: heading or frontmatter title
-    let title = sanitizeForDisplay(String(fm.title || ''));
+    let title = sanitizeForDisplay(fm.title || '');
     if (!title) {
       const headingMatch = content.match(/^#\s*Thread:\s*(.+)$/m);
       if (headingMatch) {
@@ -221,7 +331,7 @@ function scanThreads(planDir) {
     results.push({
       slug: sanitizeForDisplay(slug),
       status: sanitizeForDisplay(status),
-      updated: sanitizeForDisplay(String(fm.updated || fm.date || '')),
+      updated: sanitizeForDisplay(fm.updated || fm.date || ''),
       title,
     });
   }
@@ -229,30 +339,32 @@ function scanThreads(planDir) {
   return results;
 }
 
+// ─── scanTodos ────────────────────────────────────────────────────────────────
+
 /**
  * Scan .planning/todos/pending/ for pending todos.
  * Returns array of { filename, priority, area, summary }.
  * Display limited to first 5 + count of remainder.
  */
-function scanTodos(planDir) {
+function scanTodos(planDir: string): TodoItem[] {
   const pendingDir = path.join(planDir, 'todos', 'pending');
   if (!fs.existsSync(pendingDir)) return [];
 
-  let files;
+  let files: fs.Dirent[];
   try {
     files = fs.readdirSync(pendingDir, { withFileTypes: true });
   } catch {
-    return [{ scan_error: true }];
+    return [{ scan_error: true, filename: '', priority: '', area: '', summary: '' }];
   }
 
   const mdFiles = files.filter(e => e.isFile() && e.name.endsWith('.md'));
-  const results = [];
+  const results: TodoItem[] = [];
 
   const displayFiles = mdFiles.slice(0, 5);
   for (const entry of displayFiles) {
     const filePath = path.join(pendingDir, entry.name);
 
-    let safeFilePath;
+    let safeFilePath: string;
     try {
       safeFilePath = requireSafePath(filePath, planDir, 'todo file', { allowAbsolute: true });
     } catch {
@@ -271,36 +383,38 @@ function scanTodos(planDir) {
 
     results.push({
       filename: sanitizeForDisplay(entry.name),
-      priority: sanitizeForDisplay(String(fm.priority || '')),
-      area: sanitizeForDisplay(String(fm.area || '')),
+      priority: sanitizeForDisplay(fm.priority || ''),
+      area: sanitizeForDisplay(fm.area || ''),
       summary,
     });
   }
 
   if (mdFiles.length > 5) {
-    results.push({ _remainder_count: mdFiles.length - 5 });
+    results.push({ _remainder_count: mdFiles.length - 5, filename: '', priority: '', area: '', summary: '' });
   }
 
   return results;
 }
 
+// ─── scanSeeds ────────────────────────────────────────────────────────────────
+
 /**
  * Scan .planning/seeds/SEED-*.md for unimplemented seeds.
  * Unimplemented if status in ['dormant', 'active', 'triggered'].
  */
-function scanSeeds(planDir) {
+function scanSeeds(planDir: string): SeedItem[] {
   const seedsDir = path.join(planDir, 'seeds');
   if (!fs.existsSync(seedsDir)) return [];
 
-  let files;
+  let files: fs.Dirent[];
   try {
     files = fs.readdirSync(seedsDir, { withFileTypes: true });
   } catch {
-    return [{ scan_error: true }];
+    return [{ scan_error: true, seed_id: '', slug: '', status: '', title: '' }];
   }
 
   const unimplementedStatuses = new Set(['dormant', 'active', 'triggered']);
-  const results = [];
+  const results: SeedItem[] = [];
 
   for (const entry of files) {
     if (!entry.isFile()) continue;
@@ -308,7 +422,7 @@ function scanSeeds(planDir) {
 
     const filePath = path.join(seedsDir, entry.name);
 
-    let safeFilePath;
+    let safeFilePath: string;
     try {
       safeFilePath = requireSafePath(filePath, planDir, 'seed file', { allowAbsolute: true });
     } catch {
@@ -319,7 +433,7 @@ function scanSeeds(planDir) {
     if (content === null) continue;
 
     const fm = extractFrontmatter(content);
-    const status = (fm.status || 'dormant').toLowerCase();
+    const status = ((fm.status as string) || 'dormant').toLowerCase();
 
     if (!unimplementedStatuses.has(status)) continue;
 
@@ -328,7 +442,7 @@ function scanSeeds(planDir) {
     const seed_id = seedIdMatch ? seedIdMatch[1] : path.basename(entry.name, '.md');
     const slug = sanitizeForDisplay(seed_id.replace(/^SEED-/, ''));
 
-    let title = sanitizeForDisplay(String(fm.title || ''));
+    let title = sanitizeForDisplay(fm.title || '');
     if (!title) {
       const headingMatch = content.match(/^#\s*(.+)$/m);
       if (headingMatch) title = sanitizeForDisplay(headingMatch[1].trim().slice(0, 100));
@@ -345,36 +459,33 @@ function scanSeeds(planDir) {
   return results;
 }
 
-// Terminal UAT states: `complete` (legacy) and `resolved` (post-gap-closure
-// per workflows/execute-phase.md). Hoisted outside scanUatGaps so the Set is
-// not recreated on each loop iteration.
-const TERMINAL_UAT_STATUSES = new Set(['complete', 'resolved']);
+// ─── scanUatGaps ──────────────────────────────────────────────────────────────
 
 /**
  * Scan .planning/phases for UAT gaps (UAT files with status != 'complete').
  */
-function scanUatGaps(planDir) {
+function scanUatGaps(planDir: string): UatGapItem[] {
   const phasesDir = path.join(planDir, 'phases');
   if (!fs.existsSync(phasesDir)) return [];
 
-  let dirs;
+  let dirs: string[];
   try {
     dirs = fs.readdirSync(phasesDir, { withFileTypes: true })
       .filter(e => e.isDirectory())
       .map(e => e.name)
       .sort();
   } catch {
-    return [{ scan_error: true }];
+    return [{ scan_error: true, phase: '', file: '', status: '', open_scenario_count: 0 }];
   }
 
-  const results = [];
+  const results: UatGapItem[] = [];
 
   for (const dir of dirs) {
     const phaseDir = path.join(phasesDir, dir);
     const phaseMatch = dir.match(/^(\d+[A-Z]?(?:\.\d+)*)/i);
     const phaseNum = phaseMatch ? phaseMatch[1] : dir;
 
-    let files;
+    let files: string[];
     try {
       files = fs.readdirSync(phaseDir);
     } catch {
@@ -384,7 +495,7 @@ function scanUatGaps(planDir) {
     for (const file of files.filter(f => f.includes('-UAT') && f.endsWith('.md'))) {
       const filePath = path.join(phaseDir, file);
 
-      let safeFilePath;
+      let safeFilePath: string;
       try {
         safeFilePath = requireSafePath(filePath, planDir, 'UAT file', { allowAbsolute: true });
       } catch {
@@ -395,8 +506,8 @@ function scanUatGaps(planDir) {
       if (content === null) continue;
 
       const fm = extractFrontmatter(content);
-      const status = (fm.status || 'unknown').toLowerCase();
-      const result = (fm.result || '').toString().toLowerCase();
+      const status = ((fm.status as string) || 'unknown').toLowerCase();
+      const result = ((fm.result as string) || '').toLowerCase();
 
       // Also accept `result: all_pass` as a fallback when status is absent
       // — covers UATs that omit `status:`.
@@ -418,31 +529,33 @@ function scanUatGaps(planDir) {
   return results;
 }
 
+// ─── scanVerificationGaps ─────────────────────────────────────────────────────
+
 /**
  * Scan .planning/phases for VERIFICATION gaps.
  */
-function scanVerificationGaps(planDir) {
+function scanVerificationGaps(planDir: string): VerificationGapItem[] {
   const phasesDir = path.join(planDir, 'phases');
   if (!fs.existsSync(phasesDir)) return [];
 
-  let dirs;
+  let dirs: string[];
   try {
     dirs = fs.readdirSync(phasesDir, { withFileTypes: true })
       .filter(e => e.isDirectory())
       .map(e => e.name)
       .sort();
   } catch {
-    return [{ scan_error: true }];
+    return [{ scan_error: true, phase: '', file: '', status: '' }];
   }
 
-  const results = [];
+  const results: VerificationGapItem[] = [];
 
   for (const dir of dirs) {
     const phaseDir = path.join(phasesDir, dir);
     const phaseMatch = dir.match(/^(\d+[A-Z]?(?:\.\d+)*)/i);
     const phaseNum = phaseMatch ? phaseMatch[1] : dir;
 
-    let files;
+    let files: string[];
     try {
       files = fs.readdirSync(phaseDir);
     } catch {
@@ -452,7 +565,7 @@ function scanVerificationGaps(planDir) {
     for (const file of files.filter(f => f.includes('-VERIFICATION') && f.endsWith('.md'))) {
       const filePath = path.join(phaseDir, file);
 
-      let safeFilePath;
+      let safeFilePath: string;
       try {
         safeFilePath = requireSafePath(filePath, planDir, 'VERIFICATION file', { allowAbsolute: true });
       } catch {
@@ -463,7 +576,7 @@ function scanVerificationGaps(planDir) {
       if (content === null) continue;
 
       const fm = extractFrontmatter(content);
-      const status = (fm.status || 'unknown').toLowerCase();
+      const status = ((fm.status as string) || 'unknown').toLowerCase();
 
       if (status !== 'gaps_found' && status !== 'human_needed') continue;
 
@@ -478,31 +591,33 @@ function scanVerificationGaps(planDir) {
   return results;
 }
 
+// ─── scanContextQuestions ─────────────────────────────────────────────────────
+
 /**
  * Scan .planning/phases for CONTEXT files with open_questions.
  */
-function scanContextQuestions(planDir) {
+function scanContextQuestions(planDir: string): ContextQuestionItem[] {
   const phasesDir = path.join(planDir, 'phases');
   if (!fs.existsSync(phasesDir)) return [];
 
-  let dirs;
+  let dirs: string[];
   try {
     dirs = fs.readdirSync(phasesDir, { withFileTypes: true })
       .filter(e => e.isDirectory())
       .map(e => e.name)
       .sort();
   } catch {
-    return [{ scan_error: true }];
+    return [{ scan_error: true, phase: '', file: '', question_count: 0, questions: [] }];
   }
 
-  const results = [];
+  const results: ContextQuestionItem[] = [];
 
   for (const dir of dirs) {
     const phaseDir = path.join(phasesDir, dir);
     const phaseMatch = dir.match(/^(\d+[A-Z]?(?:\.\d+)*)/i);
     const phaseNum = phaseMatch ? phaseMatch[1] : dir;
 
-    let files;
+    let files: string[];
     try {
       files = fs.readdirSync(phaseDir);
     } catch {
@@ -512,7 +627,7 @@ function scanContextQuestions(planDir) {
     for (const file of files.filter(f => f.includes('-CONTEXT') && f.endsWith('.md'))) {
       const filePath = path.join(phaseDir, file);
 
-      let safeFilePath;
+      let safeFilePath: string;
       try {
         safeFilePath = requireSafePath(filePath, planDir, 'CONTEXT file', { allowAbsolute: true });
       } catch {
@@ -525,10 +640,10 @@ function scanContextQuestions(planDir) {
       const fm = extractFrontmatter(content);
 
       // Check frontmatter open_questions field
-      let questions = [];
+      let questions: string[] = [];
       if (fm.open_questions) {
         if (Array.isArray(fm.open_questions) && fm.open_questions.length > 0) {
-          questions = fm.open_questions.map(q => sanitizeForDisplay(String(q).slice(0, 200)));
+          questions = (fm.open_questions as unknown[]).map(q => sanitizeForDisplay(String(q).slice(0, 200)));
         }
       }
 
@@ -539,10 +654,10 @@ function scanContextQuestions(planDir) {
           const oqBody = oqMatch[1].trim();
           if (oqBody && oqBody.length > 0 && !/^\s*none\s*$/i.test(oqBody)) {
             const items = oqBody.split('\n')
-              .map(l => l.trim())
-              .filter(l => l && l !== '-' && l !== '*')
-              .filter(l => /^[-*\d]/.test(l) || l.includes('?'));
-            questions = items.slice(0, 3).map(q => sanitizeForDisplay(q.slice(0, 200)));
+              .map((l: string) => l.trim())
+              .filter((l: string) => l && l !== '-' && l !== '*')
+              .filter((l: string) => /^[-*\d]/.test(l) || l.includes('?'));
+            questions = items.slice(0, 3).map((q: string) => sanitizeForDisplay(q.slice(0, 200)));
           }
         }
       }
@@ -561,51 +676,54 @@ function scanContextQuestions(planDir) {
   return results;
 }
 
+// ─── auditOpenArtifacts ───────────────────────────────────────────────────────
+
 /**
  * Main audit function. Scans all .planning/ artifact categories.
  *
- * @param {string} cwd - Project root directory
- * @returns {object} Structured audit result
+ * @param cwd - Project root directory
+ * @returns Structured audit result
  */
-function auditOpenArtifacts(cwd) {
+function auditOpenArtifacts(cwd: string): AuditResult {
   const planDir = planningDir(cwd);
 
   const debugSessions = (() => {
-    try { return scanDebugSessions(planDir); } catch { return [{ scan_error: true }]; }
+    try { return scanDebugSessions(planDir); } catch { return [{ scan_error: true, slug: '', status: '', updated: '', hypothesis: '' }]; }
   })();
 
   const quickTasks = (() => {
-    try { return scanQuickTasks(planDir); } catch { return [{ scan_error: true }]; }
+    try { return scanQuickTasks(planDir); } catch { return [{ scan_error: true, slug: '', date: '', status: '', description: '' }]; }
   })();
 
   const threads = (() => {
-    try { return scanThreads(planDir); } catch { return [{ scan_error: true }]; }
+    try { return scanThreads(planDir); } catch { return [{ scan_error: true, slug: '', status: '', updated: '', title: '' }]; }
   })();
 
   const todos = (() => {
-    try { return scanTodos(planDir); } catch { return [{ scan_error: true }]; }
+    try { return scanTodos(planDir); } catch { return [{ scan_error: true, filename: '', priority: '', area: '', summary: '' }]; }
   })();
 
   const seeds = (() => {
-    try { return scanSeeds(planDir); } catch { return [{ scan_error: true }]; }
+    try { return scanSeeds(planDir); } catch { return [{ scan_error: true, seed_id: '', slug: '', status: '', title: '' }]; }
   })();
 
   const uatGaps = (() => {
-    try { return scanUatGaps(planDir); } catch { return [{ scan_error: true }]; }
+    try { return scanUatGaps(planDir); } catch { return [{ scan_error: true, phase: '', file: '', status: '', open_scenario_count: 0 }]; }
   })();
 
   const verificationGaps = (() => {
-    try { return scanVerificationGaps(planDir); } catch { return [{ scan_error: true }]; }
+    try { return scanVerificationGaps(planDir); } catch { return [{ scan_error: true, phase: '', file: '', status: '' }]; }
   })();
 
   const contextQuestions = (() => {
-    try { return scanContextQuestions(planDir); } catch { return [{ scan_error: true }]; }
+    try { return scanContextQuestions(planDir); } catch { return [{ scan_error: true, phase: '', file: '', question_count: 0, questions: [] }]; }
   })();
 
   // Count real items (not scan_error sentinels)
-  const countReal = arr => arr.filter(i => !i.scan_error && !i._remainder_count).length;
+  const countReal = (arr: Array<{ scan_error?: boolean; _remainder_count?: number }>) =>
+    arr.filter(i => !i.scan_error && !i._remainder_count).length;
 
-  const counts = {
+  const counts: AuditCounts = {
     debug_sessions: countReal(debugSessions),
     quick_tasks: countReal(quickTasks),
     threads: countReal(threads),
@@ -614,8 +732,9 @@ function auditOpenArtifacts(cwd) {
     uat_gaps: countReal(uatGaps),
     verification_gaps: countReal(verificationGaps),
     context_questions: countReal(contextQuestions),
+    total: 0,
   };
-  counts.total = Object.values(counts).reduce((s, n) => s + n, 0);
+  counts.total = counts.debug_sessions + counts.quick_tasks + counts.threads + counts.todos + counts.seeds + counts.uat_gaps + counts.verification_gaps + counts.context_questions;
 
   return {
     scanned_at: new Date().toISOString(),
@@ -634,15 +753,17 @@ function auditOpenArtifacts(cwd) {
   };
 }
 
+// ─── formatAuditReport ────────────────────────────────────────────────────────
+
 /**
  * Format the audit result as a human-readable report.
  *
- * @param {object} auditResult - Result from auditOpenArtifacts()
- * @returns {string} Formatted report
+ * @param auditResult - Result from auditOpenArtifacts()
+ * @returns Formatted report
  */
-function formatAuditReport(auditResult) {
+function formatAuditReport(auditResult: AuditResult): string {
   const { counts, items, has_open_items } = auditResult;
-  const lines = [];
+  const lines: string[] = [];
   const hr = '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━';
 
   lines.push(hr);
@@ -752,4 +873,4 @@ function formatAuditReport(auditResult) {
   return lines.join('\n');
 }
 
-module.exports = { auditOpenArtifacts, formatAuditReport };
+export = { auditOpenArtifacts, formatAuditReport };
