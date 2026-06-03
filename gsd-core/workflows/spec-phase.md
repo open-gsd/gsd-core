@@ -187,9 +187,136 @@ If gate passes (ambiguity ≤ 0.20 AND all minimums met):
 
 ## Step 5: (covered inline — ambiguity scoring is per-round)
 
+## Step 5.5: Edge-Completeness Probe
+
+Run AFTER the ambiguity gate passes (you probe edges of clear requirements, not vague
+ones). Reference: @~/.claude/gsd-core/references/edge-probe.md.
+
+**Runtime coverage compute — resolve and invoke edge-probe.cjs:**
+
+```bash
+# Resolve the compiled edge-probe.cjs against the GSD install dir via RUNTIME_DIR (#448)
+# — NOT the consuming project's git root — falling back to git toplevel / $HOME/.claude.
+# Mirrors the ui-safety-gate.cjs resolution idiom at autonomous.md:290 / plan-phase.md:631.
+_GSD_RT="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+EDGE_PROBE_JS=$(for _c in \
+  "$_GSD_RT/gsd-core/bin/lib/edge-probe.cjs" \
+  "$_GSD_RT/bin/lib/edge-probe.cjs" \
+  "$_GSD_RT/.claude/bin/lib/edge-probe.cjs" \
+  "$HOME/.claude/gsd-core/bin/lib/edge-probe.cjs" \
+  "$HOME/.claude/bin/lib/edge-probe.cjs"; do
+  [ -f "$_c" ] && { echo "$_c"; break; }
+done)
+
+# Graceful degradation — never silent skip (RR-04). Build ONLY when $_GSD_RT is a verified
+# GSD source checkout (has tsconfig.build.json + src/edge-probe.cts), and pin npm to it with
+# --prefix so we never trigger the CONSUMING project's own build:lib (its cwd package scripts:
+# codegen/migrations/writes) during a spec workflow. Real installs ship the compiled .cjs via
+# prepublishOnly, so this build path only matters in a GSD dev checkout (review High).
+if [ -z "$EDGE_PROBE_JS" ]; then
+  if [ -f "$_GSD_RT/tsconfig.build.json" ] && [ -f "$_GSD_RT/src/edge-probe.cts" ]; then
+    npm --prefix "$_GSD_RT" run build:lib 2>/dev/null || true
+    EDGE_PROBE_JS=$(for _c in \
+      "$_GSD_RT/gsd-core/bin/lib/edge-probe.cjs" \
+      "$_GSD_RT/bin/lib/edge-probe.cjs" \
+      "$_GSD_RT/.claude/bin/lib/edge-probe.cjs" \
+      "$HOME/.claude/gsd-core/bin/lib/edge-probe.cjs" \
+      "$HOME/.claude/bin/lib/edge-probe.cjs"; do
+      [ -f "$_c" ] && { echo "$_c"; break; }
+    done)
+  fi
+  if [ -z "$EDGE_PROBE_JS" ]; then
+    echo "ERROR: edge-probe.cjs not found — reinstall GSD or run \`npm run build:lib\` in your GSD checkout." >&2
+    exit 1
+  fi
+fi
+
+# Write the Requirements gathered in THIS spec session to a temp JSON, then invoke the
+# canonical coverage compute. Populate the heredoc from the SPEC's Requirements — one object
+# per requirement: {"id","text","shapes"?}. This is the load-bearing step: an empty file makes
+# the probe a no-op, so the guard below fails loud rather than silently skipping (RR-04).
+REQS_JSON=$(mktemp "${TMPDIR:-/tmp}/edge-probe-reqs-XXXXXX.json")
+cat > "$REQS_JSON" <<'JSON'
+[
+  { "id": "R1", "text": "<replace: requirement text from the SPEC>" }
+]
+JSON
+# Guard — never invoke on an empty/invalid array, OR one still holding the heredoc
+# `<replace: …>` placeholder (a forgotten substitution would otherwise yield a
+# meaningful-looking but bogus coverage report). Fail loud, not silent no-op.
+if ! node -e 'const a=require(process.argv[1]);if(!Array.isArray(a)||a.length===0)process.exit(1);if(a.some(r=>typeof r.text!=="string"||!r.text.trim()||r.text.includes("<replace:")))process.exit(1)' "$REQS_JSON" 2>/dev/null; then
+  echo "ERROR: edge-probe requirements JSON is empty/invalid or still holds the <replace: …> placeholder — populate \$REQS_JSON from the SPEC Requirements before Step 5.5 runs." >&2
+  exit 1
+fi
+# Invoke the compiled engine and CAPTURE its report — it computes which categories apply per
+# requirement. The covered/backstop/dismissed/unresolved rows in $COVERAGE drive the
+# resolution loop below (canonical taxonomy compute, NOT LLM re-derivation from prose).
+# The engine FAILS CLOSED (exit 2) on an invalid authored shape or bad input — so the capture
+# MUST be exit-checked. A bare `COVERAGE=$(node …)` swallows that exit code, leaves $COVERAGE
+# empty, and lets the workflow fall through to prose re-derivation: fail-OPEN at the boundary
+# the engine validation exists to protect. Make the run fatal, then validate the captured
+# report is well-formed JSON before the resolution loop consumes it.
+if ! COVERAGE=$(node "$EDGE_PROBE_JS" "$REQS_JSON"); then
+  rm -f "$REQS_JSON"
+  echo "ERROR: edge-probe engine failed (invalid shapes or bad input) — fix the requirement(s) and re-run; never proceed with empty coverage." >&2
+  exit 1
+fi
+rm -f "$REQS_JSON"
+# Exit-0-but-garbage guard: the report must parse as JSON with the expected { items[], coverage{} } shape.
+if ! printf '%s' "$COVERAGE" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let r;try{r=JSON.parse(s)}catch{process.exit(1)}if(!r||!Array.isArray(r.items)||typeof r.coverage!=="object"||r.coverage===null)process.exit(1)})'; then
+  echo "ERROR: edge-probe produced an unparseable or malformed coverage report — refusing to proceed with the resolution loop." >&2
+  exit 1
+fi
+# Zero-applicable guard: a report where the engine proposed NO applicable edge across ANY
+# requirement is far more likely a shape-classification miss (or malformed requirements) than
+# a genuinely edge-free spec — the same fail-open shape as an invalid shape yielding
+# applicable:0. Surface it loudly; the author must explicitly confirm "no applicable edges"
+# below rather than silently emitting a green empty ## Edge Coverage section.
+APPLICABLE=$(printf '%s' "$COVERAGE" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let n=0;try{n=JSON.parse(s).coverage.applicable}catch{n=0}process.stdout.write(String(n))})')
+if [ "$APPLICABLE" = "0" ]; then
+  echo "WARNING: edge-probe proposed ZERO applicable edges across all requirements — likely a classification miss or malformed requirements, not a genuinely edge-free spec. Do NOT silently write an empty Edge Coverage section." >&2
+fi
+```
+
+If `$APPLICABLE` is `0`, do NOT proceed silently: ask the author to confirm via AskUserQuestion
+("The edge probe found no applicable edges for any requirement — is this genuinely an
+edge-free spec, or should we revisit the requirement wording / authored shapes?"). Only write
+an empty `## Edge Coverage` section after explicit confirmation.
+
+For each Requirement gathered so far:
+1. Classify its shape and raise only applicable edge categories (relevance filter — see
+   the taxonomy in the reference). Reuse any edges the Round-4 Failure Analyst already
+   surfaced as pre-`covered`.
+2. For each raised category, propose a CONCRETE candidate edge (not "consider
+   boundaries" — e.g. "R2 merges intervals; what about `[[1,2],[2,3]]` that only touch?").
+3. Resolve each with the user (AskUserQuestion; text mode → numbered list):
+   - **Specify it** → write a new pass/fail line into Acceptance Criteria AND mark the
+     edge `covered`.
+   - **Dismiss (reason)** → mark `dismissed` with a required non-empty reason.
+   - **Backstop with a test** → mark `backstop`; note "held-out edge test" for plan-phase.
+   - **Defer** → leave `unresolved`.
+
+**Soft gate (after resolving):**
+- All applicable edges resolved → proceed to Step 6.
+- Any `unresolved` → AskUserQuestion:
+  - header: "Edge Coverage"
+  - question: "[N] edge(s) are unresolved: [list]. What do you want to do?"
+  - options: "Resolve now" (loop back) / "Write SPEC.md anyway — flag unresolved" /
+    "Keep probing"
+  - On "anyway": write SPEC.md with those rows marked `⚠ Edge unresolved — planner must
+    treat as assumption`.
+
+**`--auto` mode:** auto-`covered` where a defensible acceptance criterion can be written;
+otherwise auto-`backstop` (never auto-dismiss — a wrong dismissal is the exact silent
+failure being eliminated). Log: `[auto] edge coverage: C covered, B backstop, U unresolved`.
+
+Populate the `## Edge Coverage` section of SPEC.md from the resolved edges.
+
 ## Step 6: Generate SPEC.md
 
 Use the SPEC.md template from @~/.claude/gsd-core/templates/spec.md.
+
+- Populate the **Edge Coverage** section from Step 5.5 (covered/dismissed/backstop/unresolved rows).
 
 **Requirements for every requirement entry:**
 - One specific, testable statement
@@ -249,6 +376,7 @@ Next: /gsd:discuss-phase {X}
 - Do NOT ask about HOW to implement — that is discuss-phase territory
 - Scout the codebase BEFORE the first question — grounded questions only
 - Max 2–3 questions per round — do not frontload all questions at once
+- Step 5.5 edge probe runs after the ambiguity gate; dismissals require a reason; --auto never auto-dismisses
 </critical_rules>
 
 <success_criteria>
@@ -260,4 +388,5 @@ Next: /gsd:discuss-phase {X}
 - Acceptance criteria are pass/fail checkboxes
 - SPEC.md committed atomically (when commit_docs is true)
 - User directed to /gsd:discuss-phase as next step
+- Edge-completeness probe run; Edge Coverage section populated; unresolved edges flagged as assumptions
 </success_criteria>
