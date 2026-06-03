@@ -331,6 +331,7 @@
       "phases-command-router.cjs",
       "plan-scan.cjs",
       "planning-workspace.cjs",
+      "probe-core.cjs",
       "profile-output.cjs",
       "profile-pipeline.cjs",
       "project-root.cjs",
