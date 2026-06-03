@@ -53,6 +53,7 @@ See **[CONTRIBUTING.md — "Proposing an ADR or PRD"](../../CONTRIBUTING.md#prop
 | [452-eslint-lint-harness.md](452-eslint-lint-harness.md) | Adopt standard ESLint flat-config lint harness; retire homegrown regex scanners | Accepted |
 | [456-test-rigor-architecture.md](456-test-rigor-architecture.md) | Test-rigor architecture — deterministic scheduling, antagonistic tier, typed-surface mandate, delete-bad-tests policy | Accepted |
 | [457-generated-cjs-single-source.md](457-generated-cjs-single-source.md) | Collapse hand-written CJS to generated single-source | Proposed |
+| [627-unified-gsd-root-namespacing.md](627-unified-gsd-root-namespacing.md) | Unified .gsd/ root with platform sub-namespaces for cross-platform compatibility | Proposed |
 
 ## Seam map
 
