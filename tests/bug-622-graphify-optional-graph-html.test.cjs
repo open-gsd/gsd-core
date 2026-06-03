@@ -42,7 +42,7 @@ const GRAPHIFY_MD = path.join(__dirname, '..', 'commands', 'gsd', 'graphify.md')
 function extractStep3Block() {
   const content = fs.readFileSync(GRAPHIFY_MD, 'utf-8');
   // Capture from the `graphify update .` line through the next closing ``` fence.
-  const match = content.match(/```bash\n(graphify update \.[^\0]*?)```/);
+  const match = content.match(/```bash\r?\n(graphify update \.[^\0]*?)```/);
   return match ? match[1].trim() : null;
 }
 

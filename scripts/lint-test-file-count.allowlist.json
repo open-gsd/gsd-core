@@ -25,12 +25,13 @@
     },
     "graphify": {
       "files": [
+        "bug-622-graphify-optional-graph-html.test.cjs",
         "graphify-auto-update.test.cjs",
         "graphify-query.test.cjs",
         "graphify-visualization.test.cjs",
         "graphify.test.cjs"
       ],
-      "issue": "TBD"
+      "issue": "622"
     },
     "intel": {
       "files": [
