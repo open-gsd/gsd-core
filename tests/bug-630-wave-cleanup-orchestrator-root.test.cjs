@@ -47,6 +47,13 @@ function git(cwd, args) {
   }).trim();
 }
 
+// Canonicalize a path the way the OS does. On Windows, os.tmpdir() can yield an 8.3
+// short name (RUNNER~1) while `git worktree list` reports the long form (runneradmin);
+// realpathSync.native reconciles both to the true canonical path so comparisons are stable.
+function canon(p) {
+  return fs.realpathSync.native(p);
+}
+
 describe('bug #630 — wave-cleanup pins to the orchestrator root, not git-worktree-list first entry', () => {
   test('execute-phase.md is readable', () => {
     assert.ok(readMd().length > 0, 'execute-phase.md must not be empty');
@@ -112,8 +119,8 @@ describe('bug #630 — wave-cleanup pins to the orchestrator root, not git-workt
       const laneDir = path.join(tmpRoot, 'lane');
       git(mainDir, ['worktree', 'add', '-q', '-b', 'feat/lane', laneDir]);
 
-      const realMain = fs.realpathSync(mainDir);
-      const realLane = fs.realpathSync(laneDir);
+      const realMain = canon(mainDir);
+      const realLane = canon(laneDir);
 
       // Manifest as written at dispatch: orchestrator_root is the lane (the orchestrator runs there).
       const manifest = path.join(tmpRoot, 'wave.json');
@@ -128,16 +135,16 @@ describe('bug #630 — wave-cleanup pins to the orchestrator root, not git-workt
       }).trim();
 
       // The buggy first-entry resolution (run from the lane) yields the MAIN checkout.
-      const firstEntry = fs.realpathSync(
+      const firstEntry = canon(
         git(laneDir, ['worktree', 'list', '--porcelain'])
           .split('\n')
           .find(l => l.startsWith('worktree '))
           .slice('worktree '.length),
       );
 
-      assert.equal(resolved, realLane, 'manifest reader must resolve to the orchestrator lane worktree');
+      assert.equal(canon(resolved), realLane, 'manifest reader must resolve to the orchestrator lane worktree');
       assert.equal(firstEntry, realMain, 'sanity: first-entry resolution points at the main checkout (the #630 bug target)');
-      assert.notEqual(resolved, firstEntry, 'the fix must diverge from the old first-entry behavior for a lane orchestrator');
+      assert.notEqual(canon(resolved), firstEntry, 'the fix must diverge from the old first-entry behavior for a lane orchestrator');
 
       // The #3174 branch assertion now passes (pinned to lane → branch matches EXPECTED_BRANCH);
       // pinning to first-entry (main) would have failed it.
