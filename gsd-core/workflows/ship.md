@@ -41,10 +41,15 @@ Verify the work is ready to ship:
 
 1. **Verification passed?**
    ```bash
-   VERIFICATION=$(cat ${PHASE_DIR}/*-VERIFICATION.md 2>/dev/null)
+   VERIFICATION_FILE=$(ls ${PHASE_DIR}/*-VERIFICATION.md 2>/dev/null | head -1)
+   STATUS=$(grep "^status:" "${VERIFICATION_FILE}" 2>/dev/null | cut -d: -f2 | tr -d ' ')
    ```
-   Check for `status: pass` or `status: passed`.
-   If no VERIFICATION.md or status is anything other than `pass` / `passed` (including `human_needed` / `gaps_found`): block with `PHASE_VERIFICATION_INCOMPLETE`; complete or formally re-run verification before shipping.
+   The verifier emits exactly `passed`, `gaps_found`, or `human_needed` (see the status table in `execute-phase.md`); only `passed` may ship. Route on `${STATUS}` — on any non-`passed` value, block with `PHASE_VERIFICATION_INCOMPLETE` and state the matching next action:
+   - `passed` → verification complete; continue to the next preflight check.
+   - `gaps_found` → run `/gsd:plan-phase ${PHASE_NUMBER} --gaps` to plan the fixes, then re-run `/gsd:execute-phase` before shipping.
+   - `human_needed` → complete the manual tests in `${PHASE_DIR}/*-UAT.md`, then re-run the verify step until status is `passed`.
+   - empty (no `*-VERIFICATION.md`) → the verify step never completed; re-run `/gsd:execute-phase`.
+   - any other value → unexpected status `${STATUS}`; re-run `/gsd:execute-phase` verification.
 
 2. **Clean working tree?**
    ```bash
