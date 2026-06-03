@@ -1628,7 +1628,7 @@ one place before execution begins.
 POST_PLANNING_GAPS=$(gsd_run query config-get workflow.post_planning_gaps --default true 2>/dev/null || echo true)
 if [ "$POST_PLANNING_GAPS" = "true" ]; then
   # Scope to this phase's mapped REQ-IDs (#447); null/TBD skips the requirements comparison (CONTEXT.md decisions still reported), mirroring §13.
-  node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" gap-analysis --phase-dir "${PHASE_DIR}" --phase-req-ids "$(node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" query init.plan-phase "$PHASE" --pick phase_req_ids 2>/dev/null || echo TBD)"
+  gsd_run gap-analysis --phase-dir "${PHASE_DIR}" --phase-req-ids "$(gsd_run query init.plan-phase "$PHASE" --pick phase_req_ids 2>/dev/null || echo TBD)"
 fi
 ```
 
