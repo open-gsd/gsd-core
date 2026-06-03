@@ -16,7 +16,7 @@ const {
   VALID_PROFILES,
   formatAgentToModelMapAsTable,
   getAgentToModelMapForProfile,
-} = require('../get-shit-done/bin/lib/model-profiles.cjs');
+} = require('../gsd-core/bin/lib/model-profiles.cjs');
 
 function agentFilesOnDisk() {
   return fs.readdirSync(path.join(__dirname, '..', 'agents'))

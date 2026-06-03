@@ -20,12 +20,12 @@ describe('claude_md_path config key', () => {
   });
 
   test('claude_md_path is in VALID_CONFIG_KEYS', () => {
-    const { VALID_CONFIG_KEYS } = require('../get-shit-done/bin/lib/config.cjs');
+    const { VALID_CONFIG_KEYS } = require('../gsd-core/bin/lib/config.cjs');
     assert.ok(VALID_CONFIG_KEYS.has('claude_md_path'));
   });
 
   test('config template includes claude_md_path', () => {
-    const templatePath = path.join(__dirname, '..', 'get-shit-done', 'templates', 'config.json');
+    const templatePath = path.join(__dirname, '..', 'gsd-core', 'templates', 'config.json');
     const template = JSON.parse(fs.readFileSync(templatePath, 'utf-8'));
     assert.strictEqual(template.claude_md_path, './CLAUDE.md');
   });

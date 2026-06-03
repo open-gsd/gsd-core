@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 
 const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
-const REF = path.join(__dirname, '..', 'get-shit-done', 'references', 'execute-mvp-tdd.md');
+const REF = path.join(__dirname, '..', 'gsd-core', 'references', 'execute-mvp-tdd.md');
 
 describe('gsd-executor — MVP+TDD gate section', () => {
   const content = fs.readFileSync(AGENT, 'utf-8');

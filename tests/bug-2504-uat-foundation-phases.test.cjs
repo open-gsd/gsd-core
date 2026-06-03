@@ -20,7 +20,7 @@ const fs = require('fs');
 const path = require('path');
 
 const VERIFY_PHASE_PATH = path.join(
-  __dirname, '..', 'get-shit-done', 'workflows', 'verify-phase.md'
+  __dirname, '..', 'gsd-core', 'workflows', 'verify-phase.md'
 );
 
 /**
@@ -39,7 +39,7 @@ describe('bug #2504: UAT auto-pass for foundation/infrastructure phases', () => 
   test('verify-phase workflow file exists', () => {
     assert.ok(
       fs.existsSync(VERIFY_PHASE_PATH),
-      'get-shit-done/workflows/verify-phase.md should exist'
+      'gsd-core/workflows/verify-phase.md should exist'
     );
   });
 

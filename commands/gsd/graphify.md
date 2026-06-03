@@ -10,7 +10,7 @@ requires: [config, fast, phase, update]
 
 **STOP -- DO NOT READ THIS FILE. You are already reading it. This prompt was injected into your context by Claude Code's command system. Using the Read tool on this file wastes tokens. Begin executing Step 0 immediately.**
 
-**CJS-only (graphify):** `graphify` subcommands are not registered on `gsd-tools query`. Use `node $HOME/.claude/get-shit-done/bin/gsd-tools.cjs graphify …` as documented in this command and in `docs/CLI-TOOLS.md`. Other tooling may still use `gsd-tools query` where a handler exists.
+**CJS-only (graphify):** `graphify` subcommands are not registered on `gsd-tools query`. Use `node $HOME/.claude/gsd-core/bin/gsd-tools.cjs graphify …` as documented in this command and in `docs/CLI-TOOLS.md`. Other tooling may still use `gsd-tools query` where a handler exists.
 
 ## Step 0 -- Banner
 
@@ -41,7 +41,7 @@ GSD > GRAPHIFY
 
 Knowledge graph is disabled. To activate:
 
-  node $HOME/.claude/get-shit-done/bin/gsd-tools.cjs config-set graphify.enabled true
+  node $HOME/.claude/gsd-core/bin/gsd-tools.cjs config-set graphify.enabled true
 
 Then run /gsd:graphify build to create the initial graph.
 ```
@@ -79,7 +79,7 @@ Modes:
 Run:
 
 ```bash
-node $HOME/.claude/get-shit-done/bin/gsd-tools.cjs graphify query <term>
+node $HOME/.claude/gsd-core/bin/gsd-tools.cjs graphify query <term>
 ```
 
 Parse the JSON output and display results:
@@ -95,7 +95,7 @@ Parse the JSON output and display results:
 Run:
 
 ```bash
-node $HOME/.claude/get-shit-done/bin/gsd-tools.cjs graphify status
+node $HOME/.claude/gsd-core/bin/gsd-tools.cjs graphify status
 ```
 
 Parse the JSON output and display:
@@ -119,7 +119,7 @@ Surface both so the agent can choose.
 Run:
 
 ```bash
-node $HOME/.claude/get-shit-done/bin/gsd-tools.cjs graphify diff
+node $HOME/.claude/gsd-core/bin/gsd-tools.cjs graphify diff
 ```
 
 Parse the JSON output and display:
@@ -137,7 +137,7 @@ If no snapshot exists, suggest running `build` twice (first to create, second to
 Run the pre-flight check first:
 
 ```bash
-node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" graphify build
+node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" graphify build
 ```
 
 Parse the JSON output:
@@ -158,10 +158,10 @@ Run the build, copy artifacts, write the diff snapshot, and report the summary i
 ```bash
 graphify update . \
   && cp graphify-out/graph.json .planning/graphs/graph.json \
-  && cp graphify-out/graph.html .planning/graphs/graph.html \
+  && { [ -f graphify-out/graph.html ] && cp graphify-out/graph.html .planning/graphs/graph.html || true; } \
   && cp graphify-out/GRAPH_REPORT.md .planning/graphs/GRAPH_REPORT.md \
-  && node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" graphify build snapshot \
-  && node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" graphify status
+  && node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" graphify build snapshot \
+  && node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" graphify status
 ```
 
 Do NOT pass `run_in_background: true`. Typical builds complete in 15-60 seconds and the entire chain must run foreground.

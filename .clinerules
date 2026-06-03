@@ -10,8 +10,8 @@ Do not make direct repo edits. All changes must go through a GSD workflow:
 - `/gsd:verify-work` → verify results
 
 ## Architecture
-- `get-shit-done/bin/lib/` — Core Node.js library (CommonJS .cjs, no external deps)
-- `get-shit-done/workflows/` — Workflow definition files (.md)
+- `gsd-core/bin/lib/` — Core Node.js library (CommonJS .cjs, no external deps)
+- `gsd-core/workflows/` — Workflow definition files (.md)
 - `agents/` — Agent definition files (.md)
 - `commands/gsd/` — Slash command definitions (.md)
 - `tests/` — Test files (.test.cjs, node:test + node:assert)
@@ -24,4 +24,4 @@ Do not make direct repo edits. All changes must go through a GSD workflow:
 
 ## Safety
 - Use `execFileSync` (array args) not `execSync` (string interpolation)
-- Validate user-provided paths with `validatePath()` from `get-shit-done/bin/lib/security.cjs`
+- Validate user-provided paths with `validatePath()` from `gsd-core/bin/lib/security.cjs`

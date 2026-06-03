@@ -2,7 +2,7 @@
 
 // feat(#41): /gsd-ship generate_pr_body emits a TDD Audit table + an aggregate
 // `gate_status:` trailer so the per-commit TDD gate trail survives squash-merge.
-// These assertions pin the shipped workflow prose in get-shit-done/workflows/ship.md.
+// These assertions pin the shipped workflow prose in gsd-core/workflows/ship.md.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -15,7 +15,7 @@ function readRepoFile(relativePath) {
 }
 
 describe('feat-41: ship.md TDD Audit gate_status extraction', () => {
-  const workflow = readRepoFile('get-shit-done/workflows/ship.md');
+  const workflow = readRepoFile('gsd-core/workflows/ship.md');
 
   test('adds a "## TDD Audit" section to the generated PR body', () => {
     assert.match(workflow, /## TDD Audit/);

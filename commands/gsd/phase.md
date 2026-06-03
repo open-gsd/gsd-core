@@ -31,10 +31,10 @@ Mode routing:
 </routing>
 
 <execution_context>
-@~/.claude/get-shit-done/workflows/add-phase.md
-@~/.claude/get-shit-done/workflows/insert-phase.md
-@~/.claude/get-shit-done/workflows/remove-phase.md
-@~/.claude/get-shit-done/workflows/edit-phase.md
+@~/.claude/gsd-core/workflows/add-phase.md
+@~/.claude/gsd-core/workflows/insert-phase.md
+@~/.claude/gsd-core/workflows/remove-phase.md
+@~/.claude/gsd-core/workflows/edit-phase.md
 </execution_context>
 
 <context>

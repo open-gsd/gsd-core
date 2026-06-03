@@ -203,9 +203,30 @@ This writes `.changeset/<adjective>-<noun>-<noun>.md`. Three random words → co
 
 Fragments are consolidated into `CHANGELOG.md` at release time by the release workflow. See [`.changeset/README.md`](.changeset/README.md) for the format spec and [#2975](https://github.com/open-gsd/gsd-core/issues/2975) for the rationale.
 
-**CI enforcement:** the `Changeset Required` workflow (`scripts/changeset/lint.cjs`) fails any PR that touches `bin/`, `get-shit-done/`, `agents/`, `commands/`, `hooks/`, or `sdk/src/` without a `.changeset/*.md` fragment.
+**CI enforcement:** the `Changeset Required` workflow (`scripts/changeset/lint.cjs`) fails any PR that touches `bin/`, `gsd-core/`, `agents/`, `commands/`, `hooks/`, or `sdk/src/` without a `.changeset/*.md` fragment.
 
 **Opt-out:** PRs with no user-facing impact (test refactors, lint config changes, CI tweaks, formatting-only changes) can add the `no-changelog` label. The lint honors it. When unsure whether a change is user-facing, **add the fragment**.
+
+### Release notes formatting
+
+GitHub release notes are generated automatically. The release and hotfix
+workflows first create the release with `gh release create --generate-notes`,
+then run `scripts/release-notes/format-github-release-notes.cjs --apply` to
+rewrite the body into the project's curated format: an **Install** block,
+followed by **What's Changed** grouped into **Feature** / **Enhancement** /
+**Fix** sections (classified by each PR's conventional-commit title prefix —
+`feat` → Feature, `fix` → Fix, everything else → Enhancement), then
+**New Contributors** and the **Full Changelog** link.
+
+To re-format an existing release by hand (e.g. backfilling an older release):
+
+```bash
+node scripts/release-notes/format-github-release-notes.cjs \
+  --tag vX.Y.Z --repo open-gsd/gsd-core --apply
+```
+
+Omit `--apply` to print the reformatted body to stdout for review without
+publishing.
 
 ## Documentation Updates — Update the Relevant Docs
 
@@ -513,7 +534,7 @@ Generator tests should run in temp fixtures and assert atomic output behavior. D
 ```javascript
 // BAD — source-grep theater
 const configSrc = fs.readFileSync(
-  path.join(GSD_ROOT, 'bin', 'lib', 'config-schema.cjs'), 'utf-8'
+  path.join(GSD_ROOT, 'gsd-core', 'bin', 'lib', 'config-schema.cjs'), 'utf-8'
 );
 assert.ok(
   configSrc.includes("'workflow.plan_bounce'"),
@@ -544,7 +565,7 @@ This single test covers key registration in `VALID_CONFIG_KEYS`, the key's names
 
 **Why this pattern broke at scale:** Commit `990c3e64` in this repo updated 5 source-grep tests in one pass when `VALID_CONFIG_KEYS` moved between files. Zero of those tests were testing behavior. If they had been behavioral tests, the migration would have been invisible.
 
-**CI enforcement:** A linter (`scripts/lint-no-source-grep.cjs`, run as `npm run lint:tests`) detects violations. Any test file that calls `readFileSync` on a `.cjs` path in a source directory without the exemption annotation below will fail the `lint-tests` CI job.
+**CI enforcement:** The `local/no-source-grep` ESLint rule (`eslint-rules/no-source-grep.cjs`, wired in `eslint.config.mjs`) detects violations. Any test file that calls `readFileSync` on a `.cjs` path in a source directory without the exemption annotation below is flagged by `npx eslint .` (the `Lint — ESLint` CI step).
 
 ### Exception: `allow-test-rule: <reason>`
 
@@ -615,11 +636,9 @@ Concretely: for any system-under-test that produces text output (a file renderer
 | Error / status / reason | A frozen enum (`Object.freeze({ FAIL_X: 'fail_x', ... })`) | `assert.equal(result.reason, REASON.FAIL_X)` |
 | File presence after a write | `fs.statSync().isFile()`, `.size > 0`, `.mtimeMs` advances | Filesystem facts; never read the file content back |
 
-#### Concrete examples from this repo
+#### Concrete example from this repo
 
-`buildWindowsShimTriple(shimSrc)` in `bin/install.js` is the canonical IR pattern: pure function, no I/O, returns `{ invocation, eol, fileNames, render }`. `trySelfLinkGsdSdkWindows` calls it and writes `triple.render[kind]()` to disk. Tests assert on `triple.invocation.target`, `triple.eol.cmd`, `Object.keys(triple).sort()` — never on the rendered text. Filesystem-level tests assert `fs.statSync(target).size === Buffer.byteLength(triple.render.cmd())` to prove the writer writes what the renderer produces, **without comparing content**.
-
-`scripts/verify-reapply-patches.cjs` exposes a frozen `REASON` enum and emits it through `--json`. Tests assert `report.results[0].reason === REASON.FAIL_USER_LINES_MISSING`. The human formatter exists for operator console output only — tests must not depend on its prose. Adding a new reason code requires updating the `REASON` enum, the `--json` output, AND the test that locks `Object.keys(REASON).sort()` — three coordinated changes that prevent the code surface from drifting from the test surface.
+`gsd-core/bin/verify-reapply-patches.cjs` exposes a frozen `REASON` enum and emits it through `--json`. Tests assert `report.results[0].reason === REASON.FAIL_USER_LINES_MISSING` rather than regex-matching the human-readable prose. The human formatter exists for operator console output only — tests must not depend on it. Adding a new reason code requires updating the `REASON` enum, the `--json` output, AND the test that locks `Object.keys(REASON).sort()` — three coordinated changes that keep the code surface from drifting from the test surface. A pure builder that returns the IR (no I/O) and a writer that consumes it — `fs.statSync(target).size === Buffer.byteLength(render())` to prove the writer writes what the renderer produces, **without comparing content** — is the same pattern applied to rendered files.
 
 #### Hiding grep behind a function is still grep
 
@@ -634,7 +653,7 @@ There are exactly two cases where text content is the legitimate object of a tes
 
 For everything else, if a test reaches for `.includes()` / `.startsWith()` / `assert.match(text, /…/)`, the production code is missing a typed surface. **Add the typed surface; do not work around it.**
 
-**CI enforcement:** `scripts/lint-no-source-grep.cjs` is being extended (see issue tracker for the latest scope) to flag `String#includes`/`String#startsWith`/`String#endsWith`/`assert.match` on `readFileSync` results and on `cp.spawnSync` stdout/stderr in test files, with the same `// allow-test-rule:` exemption mechanism.
+**CI enforcement:** the `local/no-source-grep` ESLint rule (`eslint-rules/no-source-grep.cjs`) is being extended (see issue tracker for the latest scope) to flag `String#includes`/`String#startsWith`/`String#endsWith`/`assert.match` on `readFileSync` results and on `cp.spawnSync` stdout/stderr in test files, with the same `// allow-test-rule:` exemption mechanism.
 
 ### Node.js Version Compatibility
 
@@ -716,7 +735,7 @@ cat > .githooks/pre-commit <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-if git diff --cached --name-only | grep -Eq "^sdk/src/query/command-manifest\.|^sdk/src/query/command-aliases\.generated\.ts$|^get-shit-done/bin/lib/command-aliases\.generated\.cjs$|^sdk/scripts/gen-command-aliases\.ts$"; then
+if git diff --cached --name-only | grep -Eq "^sdk/src/query/command-manifest\.|^sdk/src/query/command-aliases\.generated\.ts$|^gsd-core/bin/lib/command-aliases\.generated\.cjs$|^sdk/scripts/gen-command-aliases\.ts$"; then
   npm run check:alias-drift
 fi
 EOF
@@ -770,11 +789,9 @@ The following checks run on every PR in addition to the test suite:
 
 | Job | What it checks | How to pass |
 |-----|----------------|-------------|
-| `lint-tests` | No source-grep tests (see above) | Replace with `runGsdTools()` behavioral tests, or add `// allow-test-rule: <reason>` |
+| `Lint — ESLint` | No source-grep tests (see above), via the `local/no-source-grep` rule | Replace with `runGsdTools()` behavioral tests, or add `// allow-test-rule: <reason>` |
 
-Run locally before pushing: `npm run lint:tests`
-
-### Test Requirements by Contribution Type
+Run locally before pushing: `npm run lint` (or `npx eslint .`)
 
 ### Architecture-Aware Testing Requirements
 
@@ -783,6 +800,8 @@ When work touches architecture, routing, policy, registry assembly, or command s
 - Prefer invariant/contract tests that protect ADR-backed behavior and `CONTEXT.md` terminology.
 - Ensure tests validate canonical behavior through the defined seam (for example: structured result contracts, canonical command metadata, and adapter parity), not source-text coupling.
 - If ADRs define expected behavior, tests should assert those expectations directly.
+
+### Test Requirements by Contribution Type
 
 The required tests differ depending on what you are contributing:
 
@@ -821,7 +840,7 @@ Defensive normalization at trust boundaries must validate both the value's type 
 
 ```
 bin/install.js          — Installer (multi-runtime)
-get-shit-done/
+gsd-core/
   bin/lib/              — Core library modules (.cjs)
   workflows/            — Workflow definitions (.md)
                           Large workflows split per progressive-disclosure

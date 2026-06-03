@@ -5,12 +5,16 @@
  * Use the resolver snippets for SDK calls, or an explicit local CJS path when
  * a command intentionally targets the checked-in legacy script:
  *
- *   node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" <subcommand> [args]
+ *   node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" <subcommand> [args]
+ *
+ * As of #621, the §13e gap-analysis call uses the `gsd_run` launcher (the
+ * canonical resolvable form) instead of the absolute-$HOME path above.
+ * Both forms are resolvable; `gsd_run` is now the preferred canonical form.
  *
  * Some workflow markdown files leaked the bare `gsd-tools <subcommand>` form,
  * which fails with `command not found` at runtime.
  *
- * This test parses every markdown file in get-shit-done/workflows/ structurally:
+ * This test parses every markdown file in gsd-core/workflows/ structurally:
  * it tokenizes the content into fenced code blocks, then on each shell-block
  * line checks whether `gsd-tools` appears as a bare command (not preceded by
  * `node `, not part of the filename `gsd-tools.cjs`, not inside a comment).
@@ -26,7 +30,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const WORKFLOWS_DIR = path.join(__dirname, '..', 'get-shit-done', 'workflows');
+const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
 
 /**
  * Extract shell-fenced code blocks from a markdown file.
@@ -116,7 +120,7 @@ function lineHasBareGsdTools(line) {
 }
 
 describe('bug-2851: workflow files must not call bare `gsd-tools` (#2245 sweep regression)', () => {
-  test('no get-shit-done/workflows/*.md file contains a bare gsd-tools command', () => {
+  test('no gsd-core/workflows/*.md file contains a bare gsd-tools command', () => {
     const files = fs.readdirSync(WORKFLOWS_DIR).filter((f) => f.endsWith('.md'));
     assert.ok(files.length > 0, 'expected workflow files to exist');
 
@@ -138,12 +142,12 @@ describe('bug-2851: workflow files must not call bare `gsd-tools` (#2245 sweep r
       violations,
       [],
       'Bare `gsd-tools` invocations found in workflow shell blocks. ' +
-        'Use a resolver snippet or `node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" <subcommand>` instead.\n' +
+        'Use a resolver snippet or `node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" <subcommand>` instead.\n' +
         violations.join('\n'),
     );
   });
 
-  test('plan-phase.md §13e gap-analysis uses canonical absolute-path invocation', () => {
+  test('plan-phase.md §13e gap-analysis uses the gsd_run launcher (resolvable invocation, #621)', () => {
     const planPhase = fs.readFileSync(path.join(WORKFLOWS_DIR, 'plan-phase.md'), 'utf-8');
     const blocks = extractShellBlocks(planPhase);
     let foundGapAnalysisCall = false;
@@ -153,8 +157,8 @@ describe('bug-2851: workflow files must not call bare `gsd-tools` (#2245 sweep r
           foundGapAnalysisCall = true;
           assert.match(
             line,
-            /\bnode\s+["']?\$HOME\/\.claude\/get-shit-done\/bin\/gsd-tools\.cjs["']?\s+gap-analysis\b/,
-            `gap-analysis call must use canonical absolute-path invocation, got: ${line.trim()}`,
+            /\bgsd_run\s+gap-analysis\b/,
+            `gap-analysis must use the gsd_run launcher (not a hardcoded $HOME path), got: ${line.trim()}`,
           );
         }
       }

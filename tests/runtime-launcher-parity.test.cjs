@@ -29,7 +29,7 @@ const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 const { cleanup } = require('./helpers.cjs');
 
-const WORKFLOWS_DIR = path.join(__dirname, '..', 'get-shit-done', 'workflows');
+const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
 const SNIPPET_FILE = path.join(WORKFLOWS_DIR, '_runtime-launcher.snippet.sh');
 
 /**
@@ -208,7 +208,7 @@ describe('runtime-launcher-parity (#373)', () => {
     // Create temp dir whose path contains a space
     const base = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd 373 '));
     try {
-      const binDir = path.join(base, 'get-shit-done', 'bin');
+      const binDir = path.join(base, 'gsd-core', 'bin');
       fs.mkdirSync(binDir, { recursive: true });
 
       // Stub gsd-tools.cjs that prints its argv
@@ -292,7 +292,7 @@ describe('runtime-launcher-parity (#373)', () => {
 
   // ─── (E) PATH fallback behavioral (#3668) ────────────────────────────────
   test('(E) PATH fallback: uses installed gsd-tools when no local gsd-tools.cjs present', () => {
-    // Create a temp dir with NO local get-shit-done/bin/gsd-tools.cjs.
+    // Create a temp dir with NO local gsd-core/bin/gsd-tools.cjs.
     // Place an executable gsd-tools stub on a dedicated PATH dir.
     // RUNTIME_DIR points somewhere that has no gsd-tools.cjs.
     const base = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd 373 pathfb '));
@@ -305,7 +305,7 @@ describe('runtime-launcher-parity (#373)', () => {
       fs.writeFileSync(stubPath, '#!/bin/sh\necho "installed:$*"\n');
       fs.chmodSync(stubPath, 0o755);
 
-      // RUNTIME_DIR points to base — no get-shit-done/bin/gsd-tools.cjs there
+      // RUNTIME_DIR points to base — no gsd-core/bin/gsd-tools.cjs there
       const snippet = fs.readFileSync(SNIPPET_FILE, 'utf8');
       const scriptContent =
         `export RUNTIME_DIR=${JSON.stringify(base)}\n` +
@@ -351,17 +351,17 @@ describe('runtime-launcher-parity (#373)', () => {
   // ─── (G) ~/.claude fallback arm is present (#211) ───────────────────────────
   test('(G) snippet and all propagated workflow .md files contain the $HOME/.claude fallback arm between PATH check and hard error', () => {
     // The resolution order must be:
-    //   (1) local/RUNTIME_DIR  →  (2) PATH  →  (3) $HOME/.claude/get-shit-done/bin  →  (4) hard error
-    // We probe for .claude/get-shit-done/bin (using ${_GSD_SHIM_NAME} indirection)
+    //   (1) local/RUNTIME_DIR  →  (2) PATH  →  (3) $HOME/.claude/gsd-core/bin  →  (4) hard error
+    // We probe for .claude/gsd-core/bin (using ${_GSD_SHIM_NAME} indirection)
     // between the `command -v gsd-tools` elif and the hard-error else branch.
-    const CLAUDE_HOME_PROBE = '.claude/get-shit-done/bin/';
+    const CLAUDE_HOME_PROBE = '.claude/gsd-core/bin/';
 
     // Assert snippet itself contains the probe
     const snippetContent = fs.readFileSync(SNIPPET_FILE, 'utf8');
     assert.ok(
       snippetContent.includes(CLAUDE_HOME_PROBE),
       `_runtime-launcher.snippet.sh must contain the $HOME/.claude fallback arm (probing "${CLAUDE_HOME_PROBE}"). ` +
-        `Add an elif arm that checks $HOME/.claude/get-shit-done/bin/\${_GSD_SHIM_NAME} before the hard-error else.`,
+        `Add an elif arm that checks $HOME/.claude/gsd-core/bin/\${_GSD_SHIM_NAME} before the hard-error else.`,
     );
 
     // Assert the probe appears BEFORE the hard-error text in the snippet

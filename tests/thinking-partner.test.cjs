@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 
-const GSD_ROOT = path.join(__dirname, '..', 'get-shit-done');
+const GSD_ROOT = path.join(__dirname, '..', 'gsd-core');
 
 describe('Thinking Partner Integration (#1726)', () => {
   // Reference doc tests

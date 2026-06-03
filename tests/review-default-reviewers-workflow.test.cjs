@@ -10,7 +10,7 @@ const path = require('node:path');
 
 describe('review workflow default reviewer selection contract (#3079)', () => {
   const workflow = fs.readFileSync(
-    path.join(process.cwd(), 'get-shit-done', 'workflows', 'review.md'),
+    path.join(process.cwd(), 'gsd-core', 'workflows', 'review.md'),
     'utf8'
   );
 

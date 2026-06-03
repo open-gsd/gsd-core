@@ -33,14 +33,14 @@ describe('#2188: discuss-phase --all flag', () => {
 
   test('discuss-phase workflow handles --all flag in present_gray_areas', () => {
     const workflow = fs.readFileSync(
-      path.join(__dirname, '..', 'get-shit-done', 'workflows', 'discuss-phase.md'), 'utf8'
+      path.join(__dirname, '..', 'gsd-core', 'workflows', 'discuss-phase.md'), 'utf8'
     );
     assert.ok(workflow.includes('--all'), 'workflow should handle --all flag');
   });
 
   test('discuss-phase workflow auto-selects all areas when --all is present', () => {
     const workflow = fs.readFileSync(
-      path.join(__dirname, '..', 'get-shit-done', 'workflows', 'discuss-phase.md'), 'utf8'
+      path.join(__dirname, '..', 'gsd-core', 'workflows', 'discuss-phase.md'), 'utf8'
     );
     // The present_gray_areas step must trigger auto-select when --all is set
     const grayAreasStep = workflow.slice(
@@ -56,7 +56,7 @@ describe('#2188: discuss-phase --all flag', () => {
 
   test('discuss-phase workflow does NOT auto-advance when --all is used without --auto or --chain', () => {
     const workflow = fs.readFileSync(
-      path.join(__dirname, '..', 'get-shit-done', 'workflows', 'discuss-phase.md'), 'utf8'
+      path.join(__dirname, '..', 'gsd-core', 'workflows', 'discuss-phase.md'), 'utf8'
     );
     // The auto_advance step should NOT treat --all as a trigger for plan-phase auto-launch
     const autoAdvanceStep = workflow.slice(
@@ -75,7 +75,7 @@ describe('#2188: discuss-phase --all flag', () => {
 
   test('discuss-phase workflow initialize step documents --all flag behavior', () => {
     const workflow = fs.readFileSync(
-      path.join(__dirname, '..', 'get-shit-done', 'workflows', 'discuss-phase.md'), 'utf8'
+      path.join(__dirname, '..', 'gsd-core', 'workflows', 'discuss-phase.md'), 'utf8'
     );
     // The initialize step should document --all mode like it documents --auto and --chain
     const initStep = workflow.slice(

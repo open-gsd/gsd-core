@@ -3,7 +3,7 @@
 const { describe, test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { routeRoadmapCommand } = require('../get-shit-done/bin/lib/roadmap-command-router.cjs');
+const { routeRoadmapCommand } = require('../gsd-core/bin/lib/roadmap-command-router.cjs');
 
 // These tests exercise router dispatch with a deterministic runtime context.
 let _prevWorkstream;

@@ -14,7 +14,7 @@ const { createTempProject, createTempGitProject, cleanup, runGsdTools } = requir
 // ─── Unit: detectSchemaFiles ─────────────────────────────────────────────────
 
 const { detectSchemaFiles, detectSchemaOrm, checkSchemaDrift } = require(
-  path.join(__dirname, '..', 'get-shit-done', 'bin', 'lib', 'schema-detect.cjs')
+  path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'schema-detect.cjs')
 );
 
 describe('detectSchemaFiles', () => {

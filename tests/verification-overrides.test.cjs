@@ -18,8 +18,8 @@ describe('verification overrides reference (#1747)', () => {
 
   // ── Reference document ────────────────────────────────────────────────────
 
-  describe('get-shit-done/references/verification-overrides.md', () => {
-    const refPath = path.join(ROOT, 'get-shit-done', 'references', 'verification-overrides.md');
+  describe('gsd-core/references/verification-overrides.md', () => {
+    const refPath = path.join(ROOT, 'gsd-core', 'references', 'verification-overrides.md');
     let content;
 
     test('file exists', () => {

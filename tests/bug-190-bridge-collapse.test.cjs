@@ -12,19 +12,19 @@ function read(rel) {
 }
 
 test('bridge collapse removes cjs-sdk-bridge and runtime-bridge-sync seam', () => {
-  const bridgePath = path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'cjs-sdk-bridge.cjs');
+  const bridgePath = path.join(ROOT, 'gsd-core', 'bin', 'lib', 'cjs-sdk-bridge.cjs');
   const sdkDir = path.join(ROOT, 'sdk');
 
   assert.equal(fs.existsSync(bridgePath), false, 'cjs-sdk-bridge.cjs must be removed');
   assert.equal(fs.existsSync(sdkDir), false, 'sdk directory must be removed');
 
   const routers = [
-    'get-shit-done/bin/lib/init-command-router.cjs',
-    'get-shit-done/bin/lib/roadmap-command-router.cjs',
-    'get-shit-done/bin/lib/state-command-router.cjs',
-    'get-shit-done/bin/lib/validate-command-router.cjs',
-    'get-shit-done/bin/lib/verify-command-router.cjs',
-    'get-shit-done/bin/lib/phases-command-router.cjs',
+    'gsd-core/bin/lib/init-command-router.cjs',
+    'gsd-core/bin/lib/roadmap-command-router.cjs',
+    'gsd-core/bin/lib/state-command-router.cjs',
+    'gsd-core/bin/lib/validate-command-router.cjs',
+    'gsd-core/bin/lib/verify-command-router.cjs',
+    'gsd-core/bin/lib/phases-command-router.cjs',
   ];
 
   for (const rel of routers) {

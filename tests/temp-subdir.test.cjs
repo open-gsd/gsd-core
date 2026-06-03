@@ -14,7 +14,7 @@ const os = require('os');
 
 const {
   reapStaleTempFiles,
-} = require('../get-shit-done/bin/lib/core.cjs');
+} = require('../gsd-core/bin/lib/core.cjs');
 
 const GSD_TEMP_DIR = path.join(os.tmpdir(), 'gsd');
 
@@ -121,7 +121,7 @@ describe('dedicated gsd temp subdirectory', () => {
 
       // The legacy reap function should still clean old-location files
       // We import it if exported, or verify the main reap handles both
-      const core = require('../get-shit-done/bin/lib/core.cjs');
+      const core = require('../gsd-core/bin/lib/core.cjs');
       if (typeof core.reapStaleTempFilesLegacy === 'function') {
         core.reapStaleTempFilesLegacy(testPrefix, { maxAgeMs: 5 * 60 * 1000 });
         assert.ok(!fs.existsSync(oldLocationPath), 'legacy reap should clean old location');

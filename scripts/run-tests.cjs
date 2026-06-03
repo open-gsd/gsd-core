@@ -26,7 +26,7 @@ const { execFileSync } = require('child_process');
 
 const SUITES = ['all', 'unit', 'integration', 'install', 'security', 'slow'];
 
-// ADR-457 build-at-publish: get-shit-done/bin/lib/*.cjs is generated from
+// ADR-457 build-at-publish: gsd-core/bin/lib/*.cjs is generated from
 // src/*.cts and gitignored, so on a clean checkout (fresh CI, before any build)
 // the artifact is absent — yet test files require it. This is the universal
 // chokepoint every test path funnels through (test:unit, --files-from, direct
@@ -38,7 +38,7 @@ const SUITES = ['all', 'unit', 'integration', 'install', 'security', 'slow'];
 // modules migrate into src/.
 function ensureBuiltArtifacts() {
   const root = join(__dirname, '..');
-  const sentinel = join(root, 'get-shit-done', 'bin', 'lib', 'semver-compare.cjs');
+  const sentinel = join(root, 'gsd-core', 'bin', 'lib', 'semver-compare.cjs');
   if (existsSync(sentinel)) return;
   const tscBin = require.resolve('typescript/bin/tsc');
   execFileSync(process.execPath, [tscBin, '-p', join(root, 'tsconfig.build.json')], {
@@ -161,7 +161,15 @@ function selectExplicitFiles(allFiles, filesValue, filesFrom) {
   const selected = [];
   const missing = [];
   for (const file of requested) {
-    if (available.has(file)) {
+    // If the token is a bare suite name (e.g. "unit" written by ci-test-scope
+    // as the #408 fallback sentinel), delegate to the existing suite resolver
+    // rather than treating it as a filename. This prevents the
+    // "requested test file(s) not found: unit" crash (#641).
+    if (SUITES.includes(file)) {
+      for (const f of selectFiles(allFiles, file)) {
+        selected.push(f);
+      }
+    } else if (available.has(file)) {
       selected.push(file);
     } else {
       missing.push(file);

@@ -24,8 +24,8 @@ const { renderGithubReleaseNotes } = require('./github-release-notes.cjs');
 const {
   compareSemverCore,
   isStableTripletSemver,
-} = require('../../get-shit-done/bin/lib/semver-compare.cjs');
-const { packageName, repoSlug: defaultRepoSlug } = require('../../get-shit-done/bin/lib/package-identity.cjs');
+} = require('../../gsd-core/bin/lib/semver-compare.cjs');
+const { packageName, repoSlug: defaultRepoSlug } = require('../../gsd-core/bin/lib/package-identity.cjs');
 
 function parseArgs(argv) {
   const opts = {

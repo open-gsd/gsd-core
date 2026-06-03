@@ -71,7 +71,7 @@ describe('generate-claude-md', () => {
 });
 
 describe('new-project workflow includes CLAUDE.md generation', () => {
-  const workflowPath = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'new-project.md');
+  const workflowPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'new-project.md');
   const commandsPath = path.join(__dirname, '..', 'docs', 'COMMANDS.md');
 
   test('new-project workflow generates instruction file before final commit', () => {
@@ -169,9 +169,9 @@ describe('generate-claude-md skills section', () => {
     );
 
     const homeDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'gsd-claude-skills-home-'));
-    fs.mkdirSync(path.join(homeDir, '.claude', 'get-shit-done', 'skills', 'import-only'), { recursive: true });
+    fs.mkdirSync(path.join(homeDir, '.claude', 'gsd-core', 'skills', 'import-only'), { recursive: true });
     fs.writeFileSync(
-      path.join(homeDir, '.claude', 'get-shit-done', 'skills', 'import-only', 'SKILL.md'),
+      path.join(homeDir, '.claude', 'gsd-core', 'skills', 'import-only', 'SKILL.md'),
       '---\nname: import-only\ndescription: Deprecated import-only skill.\n---\n'
     );
 

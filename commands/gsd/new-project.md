@@ -34,11 +34,11 @@ Initialize a new project through unified flow: questioning → research (optiona
 </objective>
 
 <execution_context>
-@~/.claude/get-shit-done/workflows/new-project.md
-@~/.claude/get-shit-done/references/questioning.md
-@~/.claude/get-shit-done/references/ui-brand.md
-@~/.claude/get-shit-done/templates/project.md
-@~/.claude/get-shit-done/templates/requirements.md
+@~/.claude/gsd-core/workflows/new-project.md
+@~/.claude/gsd-core/references/questioning.md
+@~/.claude/gsd-core/references/ui-brand.md
+@~/.claude/gsd-core/templates/project.md
+@~/.claude/gsd-core/templates/requirements.md
 </execution_context>
 
 <process>

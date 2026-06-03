@@ -22,7 +22,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const WORKFLOWS_DIR = path.join(__dirname, '..', 'get-shit-done', 'workflows');
+const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
 const HOOKS_DIR = path.join(__dirname, '..', 'hooks');
 
 /**

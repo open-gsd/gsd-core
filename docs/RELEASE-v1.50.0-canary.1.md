@@ -35,17 +35,17 @@ A new top-level command that walks the user through framing a phase as a vertica
 - Mutates the ROADMAP entry to set `**Mode:** mvp` and replaces `**Goal:**` with the assembled user story
 - Delegates to `/gsd plan-phase --mvp <N>` to produce the plan
 
-Two new references: [`spidr-splitting.md`](../get-shit-done/references/spidr-splitting.md), [`user-story-template.md`](../get-shit-done/references/user-story-template.md).
+Two new references: [`spidr-splitting.md`](../gsd-core/references/spidr-splitting.md), [`user-story-template.md`](../gsd-core/references/user-story-template.md).
 
 #### Execute-phase MVP+TDD runtime gate ([#2878](https://github.com/GSD-redux/get-shit-done-redux/pull/2878))
 
-When `MVP_MODE` and `TDD_MODE` are both true at execution time, `execute-phase` adds a per-task gate that requires a `test(<phase>-<plan>):` commit to exist before the corresponding `feat(...)` commit. The reference [`execute-mvp-tdd.md`](../get-shit-done/references/execute-mvp-tdd.md) documents the contract; the executor agent (`agents/gsd-executor.md`) gains an MVP+TDD Gate section that explains when the gate trips, what evidence it expects, and how to escalate via the documented escape hatch.
+When `MVP_MODE` and `TDD_MODE` are both true at execution time, `execute-phase` adds a per-task gate that requires a `test(<phase>-<plan>):` commit to exist before the corresponding `feat(...)` commit. The reference [`execute-mvp-tdd.md`](../gsd-core/references/execute-mvp-tdd.md) documents the contract; the executor agent (`agents/gsd-executor.md`) gains an MVP+TDD Gate section that explains when the gate trips, what evidence it expects, and how to escalate via the documented escape hatch.
 
 > **Known canary-bake item.** The current bash gate snippet uses some workflow variables that aren't fully wired (`${PLAN_ID}`, `${TASK_TDD}`) and the documented `--force-mvp-gate` escape hatch is referenced in the user-facing error message but not yet implemented in the argument parser. These are tracked as canary-bake follow-ups; the gate itself is functional for the dominant code path.
 
 #### Verify-work MVP-mode UAT framing ([#2880](https://github.com/GSD-redux/get-shit-done-redux/pull/2880))
 
-Under MVP mode, `verify-work` flips the UAT script's framing so user-flow steps come **before** technical correctness checks — the inverse of the default order. The verifier agent gains a `mvp_mode_verification` section. New reference: [`verify-mvp-mode.md`](../get-shit-done/references/verify-mvp-mode.md).
+Under MVP mode, `verify-work` flips the UAT script's framing so user-flow steps come **before** technical correctness checks — the inverse of the default order. The verifier agent gains a `mvp_mode_verification` section. New reference: [`verify-mvp-mode.md`](../gsd-core/references/verify-mvp-mode.md).
 
 A user-story format guard at the top of `extract_tests` will halt verification if a phase claims `**Mode:** mvp` but its `**Goal:**` doesn't parse as `As a … I want to … so that …` — pointing the user at `/gsd mvp-phase <N>` to repair.
 

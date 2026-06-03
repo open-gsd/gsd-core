@@ -62,7 +62,7 @@ function readFrontmatter(mdPath) {
  * reads, stale-SDK npm subprocess writes to ~/.npm) from touching the real
  * HOME and polluting the test environment for other concurrently-running
  * test files (e.g. runtime-launcher-parity test (D) checks that
- * $HOME/.claude/get-shit-done/bin/gsd-tools.cjs is absent).
+ * $HOME/.claude/gsd-core/bin/gsd-tools.cjs is absent).
  *
  * GSD_SKIP_STALE_SDK_CHECK=1 is set to suppress the `npm ls -g` subprocess
  * that the installer spawns for global installs — that subprocess is slow,

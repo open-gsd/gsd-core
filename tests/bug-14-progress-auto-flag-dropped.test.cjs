@@ -47,7 +47,7 @@ describe('#14: /gsd:progress --next --auto flag must be documented and propagate
 
   test('next.md show_and_execute step handles --auto to chain steps', () => {
     const workflow = fs.readFileSync(
-      path.join(ROOT, 'get-shit-done', 'workflows', 'next.md'),
+      path.join(ROOT, 'gsd-core', 'workflows', 'next.md'),
       'utf8'
     );
 
@@ -59,7 +59,7 @@ describe('#14: /gsd:progress --next --auto flag must be documented and propagate
 
   test('next.md --auto chaining re-invokes /gsd:progress --next after step completion', () => {
     const workflow = fs.readFileSync(
-      path.join(ROOT, 'get-shit-done', 'workflows', 'next.md'),
+      path.join(ROOT, 'gsd-core', 'workflows', 'next.md'),
       'utf8'
     );
 

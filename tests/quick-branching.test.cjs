@@ -21,7 +21,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { cleanup } = require('./helpers.cjs');
 
-const QUICK_PATH = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'quick.md');
+const QUICK_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'quick.md');
 
 const GIT_ENV = Object.freeze({
   ...process.env,

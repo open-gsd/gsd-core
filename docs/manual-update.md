@@ -48,7 +48,7 @@ Use `--local` instead of `--global` for a project-scoped install.
 
 The installer performs a clean wipe-and-replace of GSD-managed directories only:
 
-- `~/.claude/get-shit-done/` — workflows, references, templates
+- `~/.claude/gsd-core/` — workflows, references, templates
 - `~/.claude/commands/gsd/` — slash commands
 - `~/.claude/agents/gsd-*.md` — GSD agents
 - `~/.claude/hooks/dist/` — compiled hooks

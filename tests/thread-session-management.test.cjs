@@ -11,7 +11,7 @@ const path = require('path');
 
 describe('thread session management (#2156)', () => {
   const threadCmd = fs.readFileSync(
-    path.join(__dirname, '..', 'get-shit-done', 'workflows', 'thread.md'),
+    path.join(__dirname, '..', 'gsd-core', 'workflows', 'thread.md'),
     'utf8'
   );
 

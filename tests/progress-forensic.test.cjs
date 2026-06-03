@@ -24,7 +24,7 @@ describe('#2189: progress --forensic flag', () => {
 
   test('progress workflow has a forensic_audit step', () => {
     const workflow = fs.readFileSync(
-      path.join(__dirname, '..', 'get-shit-done', 'workflows', 'progress.md'), 'utf8'
+      path.join(__dirname, '..', 'gsd-core', 'workflows', 'progress.md'), 'utf8'
     );
     assert.ok(
       workflow.includes('<step name="forensic_audit">'),
@@ -34,7 +34,7 @@ describe('#2189: progress --forensic flag', () => {
 
   test('forensic_audit step is only triggered when --forensic is present', () => {
     const workflow = fs.readFileSync(
-      path.join(__dirname, '..', 'get-shit-done', 'workflows', 'progress.md'), 'utf8'
+      path.join(__dirname, '..', 'gsd-core', 'workflows', 'progress.md'), 'utf8'
     );
     const forensicStep = workflow.slice(
       workflow.indexOf('<step name="forensic_audit">'),
@@ -52,7 +52,7 @@ describe('#2189: progress --forensic flag', () => {
 
   test('forensic_audit step includes all 6 checks', () => {
     const workflow = fs.readFileSync(
-      path.join(__dirname, '..', 'get-shit-done', 'workflows', 'progress.md'), 'utf8'
+      path.join(__dirname, '..', 'gsd-core', 'workflows', 'progress.md'), 'utf8'
     );
     const forensicStep = workflow.slice(
       workflow.indexOf('<step name="forensic_audit">'),
@@ -92,7 +92,7 @@ describe('#2189: progress --forensic flag', () => {
 
   test('forensic_audit step produces a CLEAN or INTEGRITY ISSUE(S) FOUND verdict', () => {
     const workflow = fs.readFileSync(
-      path.join(__dirname, '..', 'get-shit-done', 'workflows', 'progress.md'), 'utf8'
+      path.join(__dirname, '..', 'gsd-core', 'workflows', 'progress.md'), 'utf8'
     );
     const forensicStep = workflow.slice(
       workflow.indexOf('<step name="forensic_audit">'),
@@ -110,7 +110,7 @@ describe('#2189: progress --forensic flag', () => {
 
   test('forensic_audit step does not change default progress behavior', () => {
     const workflow = fs.readFileSync(
-      path.join(__dirname, '..', 'get-shit-done', 'workflows', 'progress.md'), 'utf8'
+      path.join(__dirname, '..', 'gsd-core', 'workflows', 'progress.md'), 'utf8'
     );
     // The forensic step must explicitly say default behavior is unchanged
     const forensicStep = workflow.slice(

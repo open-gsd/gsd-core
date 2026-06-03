@@ -16,7 +16,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const QUICK_MD = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'quick.md');
+const QUICK_MD = path.join(__dirname, '..', 'gsd-core', 'workflows', 'quick.md');
 
 function readQuickMd() {
   return fs.readFileSync(QUICK_MD, 'utf8');

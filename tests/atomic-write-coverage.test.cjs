@@ -24,7 +24,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const libDir = path.resolve(__dirname, '..', 'get-shit-done', 'bin', 'lib');
+const libDir = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'lib');
 
 /**
  * Find all fs.writeFileSync(...) call sites in a file.
@@ -76,10 +76,15 @@ describe('atomic write coverage (#1972)', () => {
     test(`${file}: imports platformWriteSync from shell-command-projection.cjs`, () => {
       const filePath = path.join(libDir, file);
       const content = fs.readFileSync(filePath, 'utf-8');
-      assert.match(
-        content,
-        /platformWriteSync[^)]*\}\s*=\s*require\(['"]\.\/shell-command-projection\.cjs['"]\)/s,
-        `${file} must import platformWriteSync from shell-command-projection.cjs`
+      // Accept both hand-written destructure form and tsc-compiled namespace form:
+      //   hand-written: const { platformWriteSync } = require('./shell-command-projection.cjs')
+      //   tsc-compiled:  const x = require("./shell-command-projection.cjs"); x.platformWriteSync(...)
+      const hasImport =
+        /platformWriteSync[^)]*\}\s*=\s*require\(['"]\.\/shell-command-projection\.cjs['"]\)/s.test(content) ||
+        /require\(['"]\.\/shell-command-projection\.cjs['"]\)/.test(content);
+      assert.ok(
+        hasImport,
+        `${file} must import from shell-command-projection.cjs`
       );
     });
   }
@@ -87,9 +92,12 @@ describe('atomic write coverage (#1972)', () => {
   test('all three files use platformWriteSync at least once', () => {
     for (const file of targetFiles) {
       const content = fs.readFileSync(path.join(libDir, file), 'utf-8');
-      assert.match(
-        content,
-        /platformWriteSync\s*\(/,
+      // Accept both hand-written call form and tsc-compiled IIFE dispatch form:
+      //   hand-written: platformWriteSync(path, content)
+      //   tsc-compiled:  (0, x.platformWriteSync)(path, content)
+      const hasCall = /platformWriteSync[\s)]*\(/.test(content);
+      assert.ok(
+        hasCall,
         `${file} must contain at least one platformWriteSync call`
       );
     }

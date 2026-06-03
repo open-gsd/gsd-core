@@ -1,7 +1,7 @@
 'use strict';
 
 // allow-test-rule: source-text-is-the-product
-// Reads get-shit-done/workflows/fast.md whose deployed text IS the product —
+// Reads gsd-core/workflows/fast.md whose deployed text IS the product —
 // the workflow markdown is executed verbatim by LLM runtimes.
 
 /**
@@ -34,7 +34,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const REPO_ROOT = path.join(__dirname, '..');
-const FAST_MD_PATH = path.join(REPO_ROOT, 'get-shit-done', 'workflows', 'fast.md');
+const FAST_MD_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'fast.md');
 
 // The 5-column schema defined in quick.md Step 7 (non-validate mode).
 // Column count is 5: # | Description | Date | Commit | Directory

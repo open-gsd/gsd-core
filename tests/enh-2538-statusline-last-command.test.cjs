@@ -20,7 +20,7 @@ const os = require('node:os');
 const { cleanup } = require('./helpers.cjs');
 
 const statusline = require('../hooks/gsd-statusline.js');
-const { VALID_CONFIG_KEYS } = require('../get-shit-done/bin/lib/config-schema.cjs');
+const { VALID_CONFIG_KEYS } = require('../gsd-core/bin/lib/config-schema.cjs');
 
 function makeProject({ flag, transcript }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'enh-2538-'));

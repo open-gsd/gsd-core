@@ -840,7 +840,7 @@ describe('validate health --repair command', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Regression: CJS bundle drift — W005/W006/I001 false positives (#3806)
 // PR #3479 fixed these in sdk/src/query/validate.ts but never propagated to
-// get-shit-done/bin/lib/verify.cjs. These tests fail on old verify.cjs and
+// gsd-core/bin/lib/verify.cjs. These tests fail on old verify.cjs and
 // pass on the fixed version.
 // ─────────────────────────────────────────────────────────────────────────────
 

@@ -1,5 +1,5 @@
 // allow-test-rule: source-text-is-the-product
-// get-shit-done/workflows/reapply-patches.md is the installed runtime workflow —
+// gsd-core/workflows/reapply-patches.md is the installed runtime workflow —
 // its text IS the deployed behavioral contract for the --reapply flag.
 
 'use strict';
@@ -30,7 +30,7 @@ const path = require('node:path');
 const WORKFLOW_PATH = path.join(
   __dirname,
   '..',
-  'get-shit-done',
+  'gsd-core',
   'workflows',
   'reapply-patches.md',
 );
@@ -72,7 +72,7 @@ describe('Bug #3516: git-enhanced two-way merge filter includes gsd-update arm',
   test('workflow file exists', () => {
     assert.ok(
       fs.existsSync(WORKFLOW_PATH),
-      'get-shit-done/workflows/reapply-patches.md must exist',
+      'gsd-core/workflows/reapply-patches.md must exist',
     );
   });
 

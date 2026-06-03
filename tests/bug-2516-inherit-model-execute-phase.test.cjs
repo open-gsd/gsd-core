@@ -28,18 +28,18 @@ const path = require('path');
 const WORKFLOW_PATH = path.join(
   __dirname,
   '..',
-  'get-shit-done',
+  'gsd-core',
   'workflows',
   'execute-phase.md'
 );
 
 describe('bug #2516: executor_model "inherit" must not be passed literally to Task()', () => {
   test('workflow file exists', () => {
-    assert.ok(fs.existsSync(WORKFLOW_PATH), 'get-shit-done/workflows/execute-phase.md should exist');
+    assert.ok(fs.existsSync(WORKFLOW_PATH), 'gsd-core/workflows/execute-phase.md should exist');
   });
 
   test('workflow contains instructions for handling the "inherit" case', () => {
-    assert.ok(fs.existsSync(WORKFLOW_PATH), 'get-shit-done/workflows/execute-phase.md should exist');
+    assert.ok(fs.existsSync(WORKFLOW_PATH), 'gsd-core/workflows/execute-phase.md should exist');
     const content = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
     const hasInheritInstruction =
       content.includes('"inherit"') &&
@@ -54,7 +54,7 @@ describe('bug #2516: executor_model "inherit" must not be passed literally to Ta
   });
 
   test('workflow does not instruct passing model="inherit" literally to Task', () => {
-    assert.ok(fs.existsSync(WORKFLOW_PATH), 'get-shit-done/workflows/execute-phase.md should exist');
+    assert.ok(fs.existsSync(WORKFLOW_PATH), 'gsd-core/workflows/execute-phase.md should exist');
     const content = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
     // The workflow must not have an unconditional model="{executor_model}" template
     // that would pass "inherit" through. It should document conditional logic.
@@ -99,7 +99,7 @@ describe('bug #2516: executor_model "inherit" must not be passed literally to Ta
   });
 
   test('workflow documents that omitting model= causes inheritance from orchestrator', () => {
-    assert.ok(fs.existsSync(WORKFLOW_PATH), 'get-shit-done/workflows/execute-phase.md should exist');
+    assert.ok(fs.existsSync(WORKFLOW_PATH), 'gsd-core/workflows/execute-phase.md should exist');
     const content = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
     const hasInheritanceExplanation =
       content.includes('inherit') &&

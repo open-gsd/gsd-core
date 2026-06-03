@@ -947,7 +947,7 @@ describe('config-set/config-get context', () => {
   });
 
   test('all three context profile files exist', () => {
-    const contextsDir = path.join(__dirname, '..', 'get-shit-done', 'contexts');
+    const contextsDir = path.join(__dirname, '..', 'gsd-core', 'contexts');
     assert.ok(fs.existsSync(path.join(contextsDir, 'dev.md')), 'dev.md should exist');
     assert.ok(fs.existsSync(path.join(contextsDir, 'research.md')), 'research.md should exist');
     assert.ok(fs.existsSync(path.join(contextsDir, 'review.md')), 'review.md should exist');

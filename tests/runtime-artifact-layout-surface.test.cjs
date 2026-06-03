@@ -12,10 +12,10 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const { writeSurface, readSurface, resolveSurface, listSurface, applySurface } = require('../get-shit-done/bin/lib/surface.cjs');
-const { loadSkillsManifest, writeActiveProfile, resolveProfile } = require('../get-shit-done/bin/lib/install-profiles.cjs');
-const { resolveRuntimeArtifactLayout } = require('../get-shit-done/bin/lib/runtime-artifact-layout.cjs');
-const { CLUSTERS, allClusteredSkills } = require('../get-shit-done/bin/lib/clusters.cjs');
+const { writeSurface, readSurface, resolveSurface, listSurface, applySurface } = require('../gsd-core/bin/lib/surface.cjs');
+const { loadSkillsManifest, writeActiveProfile, resolveProfile } = require('../gsd-core/bin/lib/install-profiles.cjs');
+const { resolveRuntimeArtifactLayout } = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
+const { CLUSTERS, allClusteredSkills } = require('../gsd-core/bin/lib/clusters.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const REAL_COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');
@@ -172,7 +172,7 @@ describe('applySurface', () => {
   });
 
   test('_syncGsdDir skills kind: adds missing skill dirs, removes stale prefix-matched dirs, preserves foreign dirs', (t) => {
-    const { _syncGsdDir } = require('../get-shit-done/bin/lib/surface.cjs');
+    const { _syncGsdDir } = require('../gsd-core/bin/lib/surface.cjs');
 
     const base = createTempDir('gsd-surface-skills-');
     t.after(() => cleanup(base));
@@ -239,7 +239,7 @@ describe('applySurface', () => {
   });
 
   test('Hermes profile shrink: stale GSD skill dirs are removed; user skills preserved', (t) => {
-    const { _syncGsdDir } = require('../get-shit-done/bin/lib/surface.cjs');
+    const { _syncGsdDir } = require('../gsd-core/bin/lib/surface.cjs');
 
     const base = createTempDir('gsd-surface-hermes-shrink-');
     t.after(() => cleanup(base));
@@ -280,7 +280,7 @@ describe('applySurface', () => {
   });
 
   test('_syncGsdDir skills kind (hermes): preserves non-GSD user dir under skills/gsd/ when kindPrefix is empty', (t) => {
-    const { _syncGsdDir } = require('../get-shit-done/bin/lib/surface.cjs');
+    const { _syncGsdDir } = require('../gsd-core/bin/lib/surface.cjs');
 
     const base = createTempDir('gsd-surface-hermes-');
     t.after(() => cleanup(base));

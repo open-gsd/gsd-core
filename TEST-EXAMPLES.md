@@ -57,7 +57,7 @@ for (const scenario of cases) {
 
     const result = spawnSync(
       process.execPath,
-      [path.join(__dirname, '..', 'get-shit-done', 'bin', 'gsd-tools.cjs'), ...scenario.args, '--json'],
+      [path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs'), ...scenario.args, '--json'],
       { cwd: projectDir, encoding: 'utf8' },
     );
 

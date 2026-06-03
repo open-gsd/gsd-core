@@ -40,7 +40,7 @@ const REPO_ROOT = path.join(__dirname, '..');
 
 describe('workflow.human_verify_mode in VALID_CONFIG_KEYS', () => {
   test('is a recognized config key', () => {
-    const { VALID_CONFIG_KEYS } = require('../get-shit-done/bin/lib/config.cjs');
+    const { VALID_CONFIG_KEYS } = require('../gsd-core/bin/lib/config.cjs');
     assert.ok(
       VALID_CONFIG_KEYS.has('workflow.human_verify_mode'),
       'workflow.human_verify_mode should be in VALID_CONFIG_KEYS',
@@ -172,7 +172,7 @@ describe('agents/gsd-verifier.md harvests deferred human verification items', ()
 describe('references/checkpoints.md documents the flag', () => {
   test('mentions workflow.human_verify_mode in the human-verify section', () => {
     const refSrc = fs.readFileSync(
-      path.join(REPO_ROOT, 'get-shit-done', 'references', 'checkpoints.md'),
+      path.join(REPO_ROOT, 'gsd-core', 'references', 'checkpoints.md'),
       'utf-8',
     );
     assert.ok(

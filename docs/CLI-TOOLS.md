@@ -1,6 +1,6 @@
 # GSD CLI Tools Reference
 
-> Surface-area reference for `get-shit-done/bin/gsd-tools.cjs` (Node CLI). For slash commands and user flows, see [Command Reference](COMMANDS.md).
+> Reference for the `gsd-tools` CLI (`gsd-core/bin/gsd-tools.cjs`). For slash commands and user flows, see [Command Reference](COMMANDS.md). Return to [docs index](README.md).
 
 ---
 
@@ -11,8 +11,8 @@
 
 |                    |                                                                                                                                                                                                        |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Shipped path**   | `get-shit-done/bin/gsd-tools.cjs`                                                                                                                                                                      |
-| **Implementation** | 20 domain modules under `get-shit-done/bin/lib/` (the directory is authoritative)                                                                                                                        |
+| **Shipped path**   | `gsd-core/bin/gsd-tools.cjs`                                                                                                                                                                      |
+| **Implementation** | 20 domain modules under `gsd-core/bin/lib/` (the directory is authoritative)                                                                                                                        |
 | **Status**         | Primary runtime command surface for orchestration, workflows, and automation. |
 
 
@@ -489,11 +489,13 @@ Slugs are validated against `[a-zA-Z0-9_-]+`; empty or path-containing slugs are
 
 ## Secret Handling
 
-API keys configured via `/gsd-settings` (`brave_search`, `firecrawl`, `exa_search`) are written plaintext to `.planning/config.json` but are masked (`****<last-4>`) in every `config-set` / `config-get` output, confirmation table, and interactive prompt. See `get-shit-done/bin/lib/secrets.cjs` for the masking implementation. The `config.json` file itself is the security boundary — protect it with filesystem permissions and keep it out of git (`.planning/` is gitignored by default).
+API keys configured via `/gsd-settings` (`brave_search`, `firecrawl`, `exa_search`) are written plaintext to `.planning/config.json` but are masked (`****<last-4>`) in every `config-set` / `config-get` output, confirmation table, and interactive prompt. See `gsd-core/bin/lib/secrets.cjs` for the masking implementation. The `config.json` file itself is the security boundary — protect it with filesystem permissions and keep it out of git (`.planning/` is gitignored by default).
 
 ---
 
-## See also
+## Related
 
-- [Architecture](ARCHITECTURE.md) — orchestration and runtime layering
-- [Command Reference](COMMANDS.md) — user-facing `/gsd-` commands
+- [Commands](COMMANDS.md)
+- [Configuration](CONFIGURATION.md)
+- [Architecture](ARCHITECTURE.md)
+- [docs index](README.md)

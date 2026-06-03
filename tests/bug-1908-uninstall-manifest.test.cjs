@@ -29,9 +29,9 @@ function createFakeInstall(prefix = 'gsd-uninstall-test-') {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 
   // Simulate the minimum directory/file layout produced by the installer:
-  // get-shit-done/ directory, agents/ directory, and the manifest file.
-  fs.mkdirSync(path.join(dir, 'get-shit-done', 'workflows'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'get-shit-done', 'workflows', 'execute-phase.md'), '# stub');
+  // gsd-core/ directory, agents/ directory, and the manifest file.
+  fs.mkdirSync(path.join(dir, 'gsd-core', 'workflows'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'gsd-core', 'workflows', 'execute-phase.md'), '# stub');
 
   fs.mkdirSync(path.join(dir, 'agents'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'agents', 'gsd-executor.md'), '# stub');
@@ -40,7 +40,7 @@ function createFakeInstall(prefix = 'gsd-uninstall-test-') {
     version: '1.34.0',
     timestamp: new Date().toISOString(),
     files: {
-      'get-shit-done/workflows/execute-phase.md': 'abc123',
+      'gsd-core/workflows/execute-phase.md': 'abc123',
       'agents/gsd-executor.md': 'def456',
     },
   };
@@ -110,8 +110,8 @@ describe('uninstall — manifest cleanup (#1908)', () => {
     // For a local install, getGlobalDir is not called — targetDir = cwd + dirName.
     // Simulate by creating .claude/ inside tmpDir and placing artefacts there.
     const localDir = path.join(tmpDir, '.claude');
-    fs.mkdirSync(path.join(localDir, 'get-shit-done', 'workflows'), { recursive: true });
-    fs.writeFileSync(path.join(localDir, 'get-shit-done', 'workflows', 'execute-phase.md'), '# stub');
+    fs.mkdirSync(path.join(localDir, 'gsd-core', 'workflows'), { recursive: true });
+    fs.writeFileSync(path.join(localDir, 'gsd-core', 'workflows', 'execute-phase.md'), '# stub');
     const localManifestPath = path.join(localDir, MANIFEST_NAME);
     fs.writeFileSync(localManifestPath, JSON.stringify({ version: '1.34.0', files: {} }, null, 2));
 

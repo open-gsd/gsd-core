@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..');
-const aliasesPath = path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'command-aliases.cjs');
+const aliasesPath = path.join(ROOT, 'gsd-core', 'bin', 'lib', 'command-aliases.cjs');
 
 function fail(message) {
   process.stderr.write(`${message}\n`);
@@ -37,37 +37,37 @@ const families = [
   {
     commandAliases: 'STATE_COMMAND_ALIASES',
     subcommands: 'STATE_SUBCOMMANDS',
-    routerPath: path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'state-command-router.cjs'),
+    routerPath: path.join(ROOT, 'gsd-core', 'bin', 'lib', 'state-command-router.cjs'),
   },
   {
     commandAliases: 'VERIFY_COMMAND_ALIASES',
     subcommands: 'VERIFY_SUBCOMMANDS',
-    routerPath: path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'verify-command-router.cjs'),
+    routerPath: path.join(ROOT, 'gsd-core', 'bin', 'lib', 'verify-command-router.cjs'),
   },
   {
     commandAliases: 'INIT_COMMAND_ALIASES',
     subcommands: 'INIT_SUBCOMMANDS',
-    routerPath: path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'init-command-router.cjs'),
+    routerPath: path.join(ROOT, 'gsd-core', 'bin', 'lib', 'init-command-router.cjs'),
   },
   {
     commandAliases: 'PHASE_COMMAND_ALIASES',
     subcommands: 'PHASE_SUBCOMMANDS',
-    routerPath: path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'phase-command-router.cjs'),
+    routerPath: path.join(ROOT, 'gsd-core', 'bin', 'lib', 'phase-command-router.cjs'),
   },
   {
     commandAliases: 'PHASES_COMMAND_ALIASES',
     subcommands: 'PHASES_SUBCOMMANDS',
-    routerPath: path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'phases-command-router.cjs'),
+    routerPath: path.join(ROOT, 'gsd-core', 'bin', 'lib', 'phases-command-router.cjs'),
   },
   {
     commandAliases: 'VALIDATE_COMMAND_ALIASES',
     subcommands: 'VALIDATE_SUBCOMMANDS',
-    routerPath: path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'validate-command-router.cjs'),
+    routerPath: path.join(ROOT, 'gsd-core', 'bin', 'lib', 'validate-command-router.cjs'),
   },
   {
     commandAliases: 'ROADMAP_COMMAND_ALIASES',
     subcommands: 'ROADMAP_SUBCOMMANDS',
-    routerPath: path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'roadmap-command-router.cjs'),
+    routerPath: path.join(ROOT, 'gsd-core', 'bin', 'lib', 'roadmap-command-router.cjs'),
   },
 ];
 

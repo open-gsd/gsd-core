@@ -1,6 +1,6 @@
 # Adversarial Frontmatter Fixtures (#3594)
 
-Reusable hostile inputs for `get-shit-done/bin/lib/frontmatter.cjs`
+Reusable hostile inputs for `gsd-core/bin/lib/frontmatter.cjs`
 `extractFrontmatter()` and downstream consumers.
 
 Each fixture is a single markdown file whose name encodes the abuse

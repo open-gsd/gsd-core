@@ -22,7 +22,7 @@ const { spawnSync } = require('node:child_process');
 const os = require('node:os');
 
 const INSTALL_JS = path.join(__dirname, '../bin/install.js');
-const WORKFLOW = path.join(__dirname, '../get-shit-done/workflows/sync-skills.md');
+const WORKFLOW = path.join(__dirname, '../gsd-core/workflows/sync-skills.md');
 const COMMAND = path.join(__dirname, '../commands/gsd/sync-skills.md');
 
 function readWorkflow() {

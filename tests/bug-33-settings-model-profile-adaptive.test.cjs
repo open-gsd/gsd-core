@@ -9,7 +9,7 @@
  * model_profile UI shows 4 options, schema has 5 — `adaptive` missing from
  * `settings.md` AskUserQuestion.
  *
- * The schema (get-shit-done/bin/shared/model-catalog.json `profiles` array) defines 5 valid
+ * The schema (gsd-core/bin/shared/model-catalog.json `profiles` array) defines 5 valid
  * model_profile values: quality, balanced, budget, adaptive, inherit. The
  * settings.md AskUserQuestion block for model_profile originally listed only 4
  * options (Quality, Balanced, Budget, Inherit) — `adaptive` was missing.
@@ -28,8 +28,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const REPO_ROOT = path.join(__dirname, '..');
-const SETTINGS_PATH = path.join(REPO_ROOT, 'get-shit-done', 'workflows', 'settings.md');
-const CATALOG_PATH = path.join(REPO_ROOT, 'get-shit-done', 'bin', 'shared', 'model-catalog.json');
+const SETTINGS_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'settings.md');
+const CATALOG_PATH = path.join(REPO_ROOT, 'gsd-core', 'bin', 'shared', 'model-catalog.json');
 
 /**
  * Collect every label: "..." value within a text block, lowercased.

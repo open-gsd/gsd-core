@@ -5,8 +5,8 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
-const REFERENCES_DIR = path.join(ROOT, 'get-shit-done', 'references');
-const WORKFLOWS_DIR = path.join(ROOT, 'get-shit-done', 'workflows');
+const REFERENCES_DIR = path.join(ROOT, 'gsd-core', 'references');
+const WORKFLOWS_DIR = path.join(ROOT, 'gsd-core', 'workflows');
 
 describe('methodology artifact type (#1488)', () => {
   // -------------------------------------------------------------------------
@@ -14,9 +14,9 @@ describe('methodology artifact type (#1488)', () => {
   // -------------------------------------------------------------------------
   let artifactTypesContent;
 
-  test('artifact-types.md exists in get-shit-done/references/', () => {
+  test('artifact-types.md exists in gsd-core/references/', () => {
     const p = path.join(REFERENCES_DIR, 'artifact-types.md');
-    assert.ok(fs.existsSync(p), 'get-shit-done/references/artifact-types.md must exist');
+    assert.ok(fs.existsSync(p), 'gsd-core/references/artifact-types.md must exist');
     artifactTypesContent = fs.readFileSync(p, 'utf-8');
   });
 

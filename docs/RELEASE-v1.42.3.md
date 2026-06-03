@@ -111,7 +111,7 @@ canonical Codex hooks, and the SDK bridge load path.
 
 - **Configuration manifests load from the installed payload** —
   `configuration.generated.cjs` looks in the installed
-  `get-shit-done/bin/shared/` path first, then falls back to
+  `gsd-core/bin/shared/` path first, then falls back to
   source-checkout `sdk/shared/`. Fixes the install where the manifest
   loader failed on the runtime layout because the source-tree path
   doesn't exist after install.

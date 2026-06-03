@@ -32,8 +32,8 @@ const os = require('node:os');
 const { cleanup } = require('./helpers.cjs');
 
 const HELPER_PATH = path.join(__dirname, '..', 'bin', 'lib', 'ui-safety-gate.cjs');
-const PLAN_PHASE_PATH = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'plan-phase.md');
-const AUTONOMOUS_PATH = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'autonomous.md');
+const PLAN_PHASE_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-phase.md');
+const AUTONOMOUS_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'autonomous.md');
 
 const { checkUiPresence } = require(HELPER_PATH);
 
@@ -278,7 +278,7 @@ describe('UI gate resolves the helper against RUNTIME_DIR, not the consuming rep
   // the CWD is a consuming project that has no bin/lib of its own.
   const GATE_SNIPPET = [
     '_GSD_RT="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"',
-    'UI_GATE_JS=$(for _c in "$_GSD_RT/get-shit-done/bin/lib/ui-safety-gate.cjs" "$_GSD_RT/bin/lib/ui-safety-gate.cjs" "$_GSD_RT/.claude/bin/lib/ui-safety-gate.cjs" "$HOME/.claude/get-shit-done/bin/lib/ui-safety-gate.cjs" "$HOME/.claude/bin/lib/ui-safety-gate.cjs"; do [ -f "$_c" ] && { echo "$_c"; break; }; done)',
+    'UI_GATE_JS=$(for _c in "$_GSD_RT/gsd-core/bin/lib/ui-safety-gate.cjs" "$_GSD_RT/bin/lib/ui-safety-gate.cjs" "$_GSD_RT/.claude/bin/lib/ui-safety-gate.cjs" "$HOME/.claude/gsd-core/bin/lib/ui-safety-gate.cjs" "$HOME/.claude/bin/lib/ui-safety-gate.cjs"; do [ -f "$_c" ] && { echo "$_c"; break; }; done)',
     'if [ -n "$UI_GATE_JS" ]; then printf \'%s\' "$PHASE_SECTION" | node "$UI_GATE_JS" >/dev/null 2>&1; HAS_UI=$?; else HAS_UI=0; fi',
     'echo "$HAS_UI"',
   ].join('\n');
@@ -313,16 +313,16 @@ describe('UI gate resolves the helper against RUNTIME_DIR, not the consuming rep
     }
   });
 
-  test('UI gate found via get-shit-done/bin/lib/ in installed layout (no root bin/lib/)', () => {
-    // Regression for #448: installed RUNTIME_DIR has get-shit-done/bin/lib/ but NOT root bin/lib/.
+  test('UI gate found via gsd-core/bin/lib/ in installed layout (no root bin/lib/)', () => {
+    // Regression for #448: installed RUNTIME_DIR has gsd-core/bin/lib/ but NOT root bin/lib/.
     // The probe must find the helper at the installed path, not silently no-op to HAS_UI=0.
     const fakeRuntime = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-installed-rt-'));
     const consumingProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-consuming-'));
     try {
-      const installedLibDir = path.join(fakeRuntime, 'get-shit-done', 'bin', 'lib');
+      const installedLibDir = path.join(fakeRuntime, 'gsd-core', 'bin', 'lib');
       fs.mkdirSync(installedLibDir, { recursive: true });
       fs.copyFileSync(
-        path.join(REPO_ROOT, 'get-shit-done', 'bin', 'lib', 'ui-safety-gate.cjs'),
+        path.join(REPO_ROOT, 'gsd-core', 'bin', 'lib', 'ui-safety-gate.cjs'),
         path.join(installedLibDir, 'ui-safety-gate.cjs')
       );
 
@@ -333,7 +333,7 @@ describe('UI gate resolves the helper against RUNTIME_DIR, not the consuming rep
       });
       assert.strictEqual(res.status, 0, `bash failed: ${res.stderr}`);
       assert.strictEqual(res.stdout.trim(), '0',
-        'helper must be found via get-shit-done/bin/lib/ in installed layout and report UI present');
+        'helper must be found via gsd-core/bin/lib/ in installed layout and report UI present');
     } finally {
       cleanup(fakeRuntime);
       cleanup(consumingProject);

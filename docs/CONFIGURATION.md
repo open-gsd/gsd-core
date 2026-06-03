@@ -1,5 +1,7 @@
 # GSD Configuration Reference
 
+Complete schema reference for `.planning/config.json`. For setup walkthroughs and task-oriented guides see the [docs index](README.md).
+
 > Full configuration schema, workflow toggles, model profiles, and git branching options. For feature context, see [Feature Reference](FEATURES.md).
 
 ---
@@ -183,7 +185,7 @@ API key fields accept a string value (the key itself). They can also be set to t
 | `firecrawl` | string \| boolean \| null | `null` | Firecrawl API key for deep-crawl scraping. Masked in display |
 | `exa_search` | string \| boolean \| null | `null` | Exa Search API key for semantic search. Masked in display |
 
-**Masking convention (`get-shit-done/bin/lib/secrets.cjs`):** keys 8+ characters render as `****<last-4>`; shorter keys render as `****`; `null`/empty renders as `(unset)`. Plaintext is written as-is to `.planning/config.json` — that file is the security boundary — but the CLI, confirmation tables, logs, and `AskUserQuestion` descriptions never display the plaintext. This applies to the `config-set` command output itself: `config-set brave_search <key>` returns a JSON payload with the value masked.
+**Masking convention (`gsd-core/bin/lib/secrets.cjs`):** keys 8+ characters render as `****<last-4>`; shorter keys render as `****`; `null`/empty renders as `(unset)`. Plaintext is written as-is to `.planning/config.json` — that file is the security boundary — but the CLI, confirmation tables, logs, and `AskUserQuestion` descriptions never display the plaintext. This applies to the `config-set` command output itself: `config-set brave_search <key>` returns a JSON payload with the value masked.
 
 ### Code-review CLI routing
 
@@ -255,7 +257,7 @@ All workflow toggles follow the **absent = enabled** pattern. If a key is missin
 | `workflow.plan_chunked` | boolean | `false` | Enable chunked planning mode. When `true` (or when `--chunked` flag is passed to `/gsd-plan-phase`), the orchestrator splits the single long-lived planner Task into a short outline Task followed by N short per-plan Tasks (~3-5 min each). Each plan is committed individually for crash resilience. If a Task hangs and the terminal is force-killed, rerunning with `--chunked` resumes from the last completed plan. Particularly useful on Windows where long-lived Tasks may hang on stdio. Added in v1.38 |
 | `workflow.code_review_command` | string | (none) | Shell command for external code review integration in `/gsd-ship`. Receives changed file paths via stdin. Non-zero exit blocks the ship workflow. Added in v1.36 |
 | `workflow.tdd_mode` | boolean | `false` | Enable TDD pipeline as a first-class execution mode. When `true`, the planner aggressively applies `type: tdd` to eligible tasks (business logic, APIs, validations, algorithms) and the executor enforces RED/GREEN/REFACTOR gate sequence. An end-of-phase collaborative review checkpoint verifies gate compliance. Added in v1.36 |
-| `workflow.human_verify_mode` | string | `'end-of-phase'` | Controls human verification checkpoints. `'end-of-phase'` (default since #3309) suppresses `checkpoint:human-verify` tasks and embeds checks into `<verify><human-check>` blocks for end-of-phase review. `'mid-flight'` restores blocking checkpoint tasks. `checkpoint:decision` and `checkpoint:human-action` are unaffected. See [Checkpoints Reference](../get-shit-done/references/checkpoints.md#checkpoint_types). |
+| `workflow.human_verify_mode` | string | `'end-of-phase'` | Controls human verification checkpoints. `'end-of-phase'` (default since #3309) suppresses `checkpoint:human-verify` tasks and embeds checks into `<verify><human-check>` blocks for end-of-phase review. `'mid-flight'` restores blocking checkpoint tasks. `checkpoint:decision` and `checkpoint:human-action` are unaffected. See [Checkpoints Reference](../gsd-core/references/checkpoints.md#checkpoint_types). |
 | `workflow.cross_ai_execution` | boolean | `false` | Delegate phase execution to an external AI CLI instead of spawning local executor agents. Useful for leveraging a different model's strengths for specific phases. Added in v1.36 |
 | `workflow.cross_ai_command` | string | (none) | Shell command template for cross-AI execution. Receives the phase prompt via stdin. Must produce SUMMARY.md-compatible output. Required when `cross_ai_execution` is `true`. Added in v1.36 |
 | `workflow.cross_ai_timeout` | number | `300` | Timeout in seconds for cross-AI execution commands. Prevents runaway external processes. Added in v1.36 |
@@ -284,7 +286,7 @@ The `code_quality.*` namespace gates optional structural-analysis tooling that a
 
 ## Ship Settings
 
-`ship.pr_body_sections` adds additional PR body sections for project-specific PRD/PR body content in `/gsd-ship` without editing `get-shit-done/workflows/ship.md`.
+`ship.pr_body_sections` adds additional PR body sections for project-specific PRD/PR body content in `/gsd-ship` without editing `gsd-core/workflows/ship.md`.
 
 For a user guide with onboarding examples and troubleshooting, see [Custom PR Body Sections](ship-pr-body-sections.md).
 
@@ -332,7 +334,9 @@ Example:
 }
 ```
 
-### Recommended Presets
+### Common Setting Combinations
+
+The following combinations of `mode`, `granularity`, `model_profile`, and workflow toggles are commonly used together. See [Configure model profiles](how-to/configure-model-profiles.md) for setup guidance.
 
 | Scenario | mode | granularity | profile | research | plan_check | verifier |
 |----------|------|-------------|---------|----------|------------|----------|
@@ -380,11 +384,7 @@ The prompt injection guard hook (`gsd-prompt-guard.js`) is always active and can
 
 ### Private Planning Setup
 
-To keep planning artifacts out of git:
-
-1. Set `planning.commit_docs: false` and `planning.search_gitignored: true`
-2. Add `.planning/` to `.gitignore`
-3. If previously tracked: `git rm -r --cached .planning/ && git commit -m "chore: stop tracking planning docs"`
+When `planning.commit_docs` is `false` and `.planning/` is listed in `.gitignore`, GSD treats planning artefacts as local-only. `planning.search_gitignored: true` ensures broad searches still include the `.planning/` directory in this configuration. See [Configure private planning](how-to/configure-model-profiles.md) for setup steps.
 
 ---
 
@@ -486,19 +486,7 @@ The `plan_review.*` namespace controls the plan drift guard, which verifies that
 
 #### Multi-developer setup
 
-If multiple developers will rebuild the graph in the same repo, run once per
-clone after enabling graphify:
-
-```bash
-graphify hook install
-```
-
-This installs a git merge driver that union-merges concurrent `graph.json`
-writes (no conflict markers in the knowledge graph), plus the post-commit
-rebuild hook. It writes `.gitattributes` and registers `graphify
-merge-driver` in `.git/config`. Solo projects can skip this step; running it
-anyway is harmless. Introduced upstream in graphify v0.7.0 alongside the
-`built_at_commit` freshness signal that `/gsd-graphify status` surfaces.
+When multiple developers rebuild the graph in the same repository, `graphify hook install` (run once per clone) installs a git merge driver that union-merges concurrent `graph.json` writes, eliminating conflict markers. It also registers the post-commit rebuild hook, writes `.gitattributes`, and adds `graphify merge-driver` to `.git/config`. Solo projects may skip this step. Introduced upstream in graphify v0.7.0 alongside the `built_at_commit` freshness signal surfaced by `/gsd-graphify status`.
 
 #### Commit-based staleness
 
@@ -557,7 +545,7 @@ The `features.*` namespace is a dynamic key pattern — new feature flags can be
 | `next_phases` | YAML flow array | Phases the `next_action` applies to (e.g. `["4.5"]`) |
 | `progress` | block | Nested `total_phases` / `completed_phases` / `percent` for the milestone progress bar |
 
-All four fields are **optional and additive** — STATE.md files without them keep rendering exactly as in v1.38.x. See [`STATE-MD-LIFECYCLE.md`](STATE-MD-LIFECYCLE.md) for the full field reference, parser constraints, and rendering scenes.
+All four fields are **optional and additive** — STATE.md files without them keep rendering exactly as in v1.38.x. See [STATE.md schema](reference/state-md.md) for the full field reference, parser constraints, and rendering scenes.
 
 ---
 
@@ -798,7 +786,7 @@ Invalid flag tokens are sanitized and logged as warnings. Only recognized GSD fl
 | gsd-doc-writer | Opus | Sonnet | Haiku | Sonnet | Inherit |
 | gsd-doc-verifier | Sonnet | Sonnet | Haiku | Haiku | Inherit |
 
-> **All 33 shipped agents have explicit per-profile tier assignments** in the catalog (`sdk/shared/model-catalog.json`). The table above shows a representative subset of the most-used agents. For agents not listed here, `model_overrides` accepts any shipped agent name. The authoritative profile data is derived from `sdk/shared/model-catalog.json` via `get-shit-done/bin/lib/model-catalog.cjs` and `sdk/src/model-catalog.ts`.
+> **All 33 shipped agents have explicit per-profile tier assignments** in the catalog (`sdk/shared/model-catalog.json`). The table above shows a representative subset of the most-used agents. For agents not listed here, `model_overrides` accepts any shipped agent name. The authoritative profile data is derived from `sdk/shared/model-catalog.json` via `gsd-core/bin/lib/model-catalog.cjs` and `sdk/src/model-catalog.ts`.
 
 ### Per-Agent Overrides
 
@@ -1372,3 +1360,12 @@ GSD_AUDIT_ARGS=1 GSD_AUDIT=1 gsd plan --tdd
 ```
 
 `GSD_AUDIT_ARGS` applies to both the stderr error line and the audit file simultaneously.
+
+---
+
+## Related
+
+- [Commands](COMMANDS.md)
+- [Configure model profiles](how-to/configure-model-profiles.md)
+- [STATE.md schema](reference/state-md.md)
+- [Docs index](README.md)

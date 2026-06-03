@@ -17,13 +17,13 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const WORKFLOW_PATH = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'quick.md');
+const WORKFLOW_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'quick.md');
 
 describe('bug #2523: quick-task final commit includes deferred-items.md', () => {
   const content = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
 
   test('workflow file exists', () => {
-    assert.ok(fs.existsSync(WORKFLOW_PATH), 'get-shit-done/workflows/quick.md must exist');
+    assert.ok(fs.existsSync(WORKFLOW_PATH), 'gsd-core/workflows/quick.md must exist');
   });
 
   test('Step 8 file list references deferred-items.md', () => {

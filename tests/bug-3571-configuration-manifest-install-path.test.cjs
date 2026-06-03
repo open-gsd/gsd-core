@@ -1,7 +1,7 @@
 /**
  * Regression test for #3571: configuration.cjs used the source
  * checkout sdk/shared path only, which breaks installed gsd-tools.cjs because
- * runtime installs copy get-shit-done/ but not sdk/.
+ * runtime installs copy gsd-core/ but not sdk/.
  */
 
 'use strict';
@@ -15,8 +15,8 @@ const os = require('node:os');
 const path = require('node:path');
 
 const REPO_ROOT = path.join(__dirname, '..');
-const CONFIGURATION_CJS = path.join(REPO_ROOT, 'get-shit-done', 'bin', 'lib', 'configuration.cjs');
-const SHARED_DIR = path.join(REPO_ROOT, 'get-shit-done', 'bin', 'shared');
+const CONFIGURATION_CJS = path.join(REPO_ROOT, 'gsd-core', 'bin', 'lib', 'configuration.cjs');
+const SHARED_DIR = path.join(REPO_ROOT, 'gsd-core', 'bin', 'shared');
 
 const { install } = require('../bin/install.js');
 
@@ -69,7 +69,7 @@ describe('bug #3571: configuration generated manifests resolve in install layout
   });
 
   test('co-located bin/shared manifests let configuration.cjs load without sdk/shared', () => {
-    const gsdBinDir = path.join(tmpRoot, '.codex', 'get-shit-done', 'bin');
+    const gsdBinDir = path.join(tmpRoot, '.codex', 'gsd-core', 'bin');
     const gsdLibDir = path.join(gsdBinDir, 'lib');
     const gsdSharedDir = path.join(gsdBinDir, 'shared');
     fs.mkdirSync(gsdLibDir, { recursive: true });
@@ -103,7 +103,7 @@ describe('bug #3571: configuration generated manifests resolve in install layout
       install(true, 'codex');
     });
 
-    const sharedDir = path.join(tmpRoot, '.codex', 'get-shit-done', 'bin', 'shared');
+    const sharedDir = path.join(tmpRoot, '.codex', 'gsd-core', 'bin', 'shared');
     for (const fileName of ['config-defaults.manifest.json', 'config-schema.manifest.json']) {
       const installedManifest = path.join(sharedDir, fileName);
       assert.ok(fs.existsSync(installedManifest), `${fileName} must be copied to ${sharedDir}`);
@@ -115,7 +115,7 @@ describe('bug #3571: configuration generated manifests resolve in install layout
     const installedCjs = path.join(
       tmpRoot,
       '.codex',
-      'get-shit-done',
+      'gsd-core',
       'bin',
       'lib',
       'configuration.cjs'

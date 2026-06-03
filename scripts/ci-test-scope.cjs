@@ -44,7 +44,7 @@ const RULES = [
   },
   {
     name: 'TS runtime sources (ADR-457 build-at-publish)',
-    // src/*.cts compiles into get-shit-done/bin/lib/*.cjs; a source-only edit must
+    // src/*.cts compiles into gsd-core/bin/lib/*.cjs; a source-only edit must
     // still trigger the migrated module's tests (otherwise CI silently skips them).
     match: path => path.startsWith('src/') || path === 'tsconfig.build.json',
     tests: [
@@ -55,7 +55,7 @@ const RULES = [
   {
     name: 'installer and package layout',
     match: path => path.startsWith('bin/') ||
-      path.startsWith('get-shit-done/bin/') ||
+      path.startsWith('gsd-core/bin/') ||
       path.includes('install') ||
       path.includes('release-tarball-smoke'),
     fullMatrix: true,
@@ -122,7 +122,7 @@ const RULES = [
   },
   {
     name: 'workflow prompts',
-    match: path => path.startsWith('get-shit-done/workflows/'),
+    match: path => path.startsWith('gsd-core/workflows/'),
     tests: [
       'tests/workflow-compat.test.cjs',
       'tests/workflow-size-budget.test.cjs',
@@ -153,7 +153,7 @@ const RULES = [
   },
   {
     name: 'configuration',
-    match: path => /config|configuration|model-catalog|model-profile/.test(path),
+    match: path => ['config', 'configuration', 'model-catalog', 'model-profile'].some(k => path.includes(k)),
     tests: [
       'tests/config.test.cjs',
       'tests/config-get-default.test.cjs',
@@ -208,7 +208,19 @@ function parseArgs(argv) {
 
 function splitFiles(value) {
   if (!value) return [];
-  return value.split(/[,\s]+/).map(v => v.trim()).filter(Boolean);
+  const SEPARATORS = new Set([',', ' ', '\t', '\n', '\r', '\f', '\v']);
+  const tokens = [];
+  let current = '';
+  for (const ch of value) {
+    if (SEPARATORS.has(ch)) {
+      if (current) tokens.push(current);
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  if (current) tokens.push(current);
+  return tokens.map(v => v.trim()).filter(Boolean);
 }
 
 function changedFiles(args) {
@@ -231,6 +243,9 @@ function addAll(set, values) {
   for (const value of values) set.add(value);
 }
 
+const WINDOWS_HINTS = ['windows', 'path', 'shell', 'workflow', 'install', 'hook'];
+const isWindowsHint = s => WINDOWS_HINTS.some(k => s.toLowerCase().includes(k));
+
 function classify(files) {
   const targeted = new Set();
   const windows = new Set();
@@ -239,9 +254,9 @@ function classify(files) {
   let fullMatrix = false;
 
   for (const file of files) {
-    if (/^(bin|get-shit-done|agents|commands|docs|hooks|tests|scripts)\//.test(file) ||
-      /^package(-lock)?\.json$/.test(file) ||
-      /^tsconfig.*\.json$/.test(file) ||
+    if (['bin/', 'gsd-core/', 'agents/', 'commands/', 'docs/', 'hooks/', 'tests/', 'scripts/'].some(p => file.startsWith(p)) ||
+      file === 'package.json' || file === 'package-lock.json' ||
+      (file.startsWith('tsconfig') && file.endsWith('.json')) ||
       file.startsWith('.github/workflows/') ||
       file.startsWith('.github/rulesets/')) {
       codeChanged = true;
@@ -250,7 +265,7 @@ function classify(files) {
     if (file.startsWith('tests/') && file.endsWith('.test.cjs')) {
       targeted.add(file);
       fullMatrix = true;
-      if (/windows|path|shell|workflow|install|hook/i.test(file)) {
+      if (isWindowsHint(file)) {
         windows.add(file);
       }
     }
@@ -272,7 +287,7 @@ function classify(files) {
     targetedTests.push('unit');
   }
 
-  const windowsTests = existingTests([...new Set([...windows, ...targetedTests.filter(t => /windows|path|shell|workflow|install|hook/i.test(t))])].sort());
+  const windowsTests = existingTests([...new Set([...windows, ...targetedTests.filter(isWindowsHint)])].sort());
 
   return {
     code_changed: codeChanged,

@@ -42,7 +42,7 @@ const { createTempGitProject, cleanup, runGsdTools } = require('./helpers.cjs');
 
 // Repo root resolution. This test file lives in `<repo>/tests/`. Use a single
 // parent reference (the established repo-wide pattern, e.g. tests/helpers.cjs
-// `path.resolve(__dirname, '..', 'get-shit-done', ...)`). A `.git`-anchored
+// `path.resolve(__dirname, '..', 'gsd-core', ...)`). A `.git`-anchored
 // walker is not portable because the docker test mirror at `/work` strips the
 // `.git/` directory before running tests.
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -50,7 +50,7 @@ const REPO_ROOT = path.resolve(__dirname, '..');
 const EXECUTOR_AGENT = path.join(REPO_ROOT, 'agents', 'gsd-executor.md');
 
 // Frozen reason enum mirrors the SDK source — keep in sync with
-// `cmdCommit` in get-shit-done/bin/lib/commands.cjs.
+// `cmdCommit` in gsd-core/bin/lib/commands.cjs.
 const COMMIT_REASON = Object.freeze({
   SKIPPED_COMMIT_DOCS_FALSE: 'skipped_commit_docs_false',
   SKIPPED_GITIGNORED: 'skipped_gitignored',
@@ -239,7 +239,7 @@ describe('bug #3678 — executor must respect commit_docs:false', () => {
     });
 
     test('C2: no workflow body contains `git add -f` / `git add --force`', () => {
-      const offenders = scanForForceAdd(path.join(REPO_ROOT, 'get-shit-done', 'workflows'));
+      const offenders = scanForForceAdd(path.join(REPO_ROOT, 'gsd-core', 'workflows'));
       assert.deepStrictEqual(
         offenders,
         [],

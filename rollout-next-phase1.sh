@@ -26,7 +26,7 @@
 # already done.
 #
 # Usage:
-#   cd /Volumes/Mini\ Me/Users/trekkie/projects/get-shit-done
+#   cd /Volumes/Mini\ Me/Users/trekkie/projects/gsd-core
 #   bash /path/to/rollout-next-phase1.sh
 #
 # Env overrides:
@@ -62,7 +62,7 @@ note()  { echo "${C_DIM}  $*${C_RST}"; }
 # ───────────────────────────────────────────────────────────
 step "Sanity checks"
 
-[ -d .git ] || die "Not in a git repo. cd to your get-shit-done checkout first."
+[ -d .git ] || die "Not in a git repo. cd to your gsd-core checkout first."
 command -v gh >/dev/null || die "gh CLI not found. Install from https://cli.github.com/"
 command -v jq >/dev/null || die "jq not found. Install: brew install jq"
 gh auth status >/dev/null 2>&1 || die "gh not authenticated. Run: gh auth login"

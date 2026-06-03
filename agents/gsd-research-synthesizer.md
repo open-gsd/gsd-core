@@ -142,7 +142,7 @@ Identify gaps that couldn't be resolved and need attention during planning.
    - `Read` the file, then `Edit` it, replacing `<!-- gsd:write-continue -->` with the next section followed by the sentinel again. Repeat, one section per `Edit`.
    - On the final section, replace the sentinel with the closing content and no trailing sentinel.
 
-Use template: ~/.claude/get-shit-done/templates/research-project/SUMMARY.md
+Use template: ~/.claude/gsd-core/templates/research-project/SUMMARY.md
 
 Write to `.planning/research/SUMMARY.md`.
 
@@ -162,7 +162,7 @@ Return brief confirmation with key points for the orchestrator.
 
 <output_format>
 
-Use template: ~/.claude/get-shit-done/templates/research-project/SUMMARY.md
+Use template: ~/.claude/gsd-core/templates/research-project/SUMMARY.md
 
 Key sections:
 - Executive Summary (2-3 paragraphs)

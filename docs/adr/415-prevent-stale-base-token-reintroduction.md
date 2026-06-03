@@ -8,11 +8,11 @@
 
 ### The `$GSD_SDK` → `gsd_run` rename (#373/#379)
 
-PRs #373 and #379 renamed the runtime resolver from the unquoted `$GSD_SDK` shell variable to a single-line, space-safe `gsd_run` launcher. The launcher is defined in `get-shit-done/workflows/_runtime-launcher.snippet.sh`, propagated to all workflow `.md` files by `scripts/sync-runtime-launcher.cjs`, and enforced by `tests/runtime-launcher-parity.test.cjs` (which forbids any `$GSD_SDK` token in workflow markdown).
+PRs #373 and #379 renamed the runtime resolver from the unquoted `$GSD_SDK` shell variable to a single-line, space-safe `gsd_run` launcher. The launcher is defined in `gsd-core/workflows/_runtime-launcher.snippet.sh`, propagated to all workflow `.md` files by `scripts/sync-runtime-launcher.cjs`, and enforced by `tests/runtime-launcher-parity.test.cjs` (which forbids any `$GSD_SDK` token in workflow markdown).
 
 ### The silent regression (#406)
 
-During a multi-PR merge sweep, PR #406 (`fix(#160)`) — branched **before** #379 — re-introduced 5 `$GSD_SDK` occurrences into `get-shit-done/workflows/next.md`. Because it edited a **different** region of the file than #379, the merge produced no textual conflict and Git accepted it silently.
+During a multi-PR merge sweep, PR #406 (`fix(#160)`) — branched **before** #379 — re-introduced 5 `$GSD_SDK` occurrences into `gsd-core/workflows/next.md`. Because it edited a **different** region of the file than #379, the merge produced no textual conflict and Git accepted it silently.
 
 #406's own CI was green because its base predated the parity test, and nothing re-checked the merge result against current `next`. #406 also carried a stale companion assertion (`tests/policy-160-route0-resume.test.cjs`) that **required** `$GSD_SDK` to be present.
 
@@ -64,5 +64,5 @@ A green PR on a stale base can still regress the integration branch via a **sema
 - Rename PRs: #373, #379 (`gsd_run`)
 - Propagator: `scripts/sync-runtime-launcher.cjs`
 - Parity test: `tests/runtime-launcher-parity.test.cjs`
-- Launcher snippet: `get-shit-done/workflows/_runtime-launcher.snippet.sh`
+- Launcher snippet: `gsd-core/workflows/_runtime-launcher.snippet.sh`
 - Tracking issue: #415

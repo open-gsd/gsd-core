@@ -72,7 +72,7 @@ describe('configureOpencodePermissions', () => {
     configureOpencodePermissions(true, configDir);
 
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    const gsdPath = `${configDir.replace(/\\/g, '/')}/get-shit-done/*`;
+    const gsdPath = `${configDir.replace(/\\/g, '/')}/gsd-core/*`;
 
     assert.strictEqual(config.permission.read[gsdPath], 'allow');
     assert.strictEqual(config.permission.external_directory[gsdPath], 'allow');

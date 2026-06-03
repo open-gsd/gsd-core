@@ -28,8 +28,8 @@ const fs = require('fs');
 const path = require('path');
 
 const COMMAND_PATH = path.join(__dirname, '..', 'commands', 'gsd', 'plan-review-convergence.md');
-const WORKFLOW_PATH = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'plan-review-convergence.md');
-const SCHEMA_PATH = path.join(__dirname, '..', 'get-shit-done', 'bin', 'lib', 'config-schema.cjs');
+const WORKFLOW_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-review-convergence.md');
+const SCHEMA_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'config-schema.cjs');
 const CONFIG_DOC_PATH = path.join(__dirname, '..', 'docs', 'CONFIGURATION.md');
 
 // ─── Command source ────────────────────────────────────────────────────────
@@ -61,7 +61,7 @@ describe('plan-review-convergence command source (#2306)', () => {
 
   test('command references the workflow file via execution_context', () => {
     assert.ok(
-      command.includes('@$HOME/.claude/get-shit-done/workflows/plan-review-convergence.md'),
+      command.includes('@$HOME/.claude/gsd-core/workflows/plan-review-convergence.md'),
       'execution_context must reference the workflow file'
     );
   });
@@ -480,7 +480,7 @@ describe('plan-review-convergence workflow: success criteria (#2306-v2)', () => 
 describe('plan-review-convergence config schema registration (#2306-v2)', () => {
   // After Cycle 5 (#3536), config-schema.cjs is a thin adapter sourcing from
   // the manifest. Use the runtime Set instead of text-parsing the source file.
-  const { VALID_CONFIG_KEYS } = require('../get-shit-done/bin/lib/config-schema.cjs');
+  const { VALID_CONFIG_KEYS } = require('../gsd-core/bin/lib/config-schema.cjs');
 
   test('workflow.plan_review_convergence is registered in config-schema.cjs', () => {
     assert.ok(
@@ -542,7 +542,7 @@ describe('plan-review-convergence local model reviewer flags (#2306-local)', () 
 describe('plan-review-convergence local model config schema registration (#2306-local)', () => {
   // After Cycle 5 (#3536), config-schema.cjs is a thin adapter sourcing from
   // the manifest. Use the runtime Set instead of text-parsing the source file.
-  const { VALID_CONFIG_KEYS } = require('../get-shit-done/bin/lib/config-schema.cjs');
+  const { VALID_CONFIG_KEYS } = require('../gsd-core/bin/lib/config-schema.cjs');
 
   test('review.ollama_host is registered in config-schema.cjs', () => {
     assert.ok(

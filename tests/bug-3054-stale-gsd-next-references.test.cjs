@@ -30,7 +30,7 @@ describe('bug #3054: user-facing docs should not reference removed /gsd-next com
     const root = path.join(__dirname, '..');
     const files = [
       ...walkMd(path.join(root, 'docs')),
-      ...walkMd(path.join(root, 'get-shit-done', 'workflows')),
+      ...walkMd(path.join(root, 'gsd-core', 'workflows')),
       ...fs.readdirSync(root).filter((f) => /^README.*\.md$/.test(f)).map((f) => path.join(root, f)),
     ];
 

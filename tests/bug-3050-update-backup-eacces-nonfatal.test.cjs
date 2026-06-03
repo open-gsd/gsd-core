@@ -8,7 +8,7 @@ const path = require('node:path');
 describe('bug #3050: update backup skips unreadable files non-fatally', () => {
   test('update workflow backup loop wraps copyFileSync in try/catch and logs non-fatal skip', () => {
     const content = fs.readFileSync(
-      path.join(__dirname, '..', 'get-shit-done', 'workflows', 'update.md'),
+      path.join(__dirname, '..', 'gsd-core', 'workflows', 'update.md'),
       'utf8',
     );
 

@@ -17,7 +17,7 @@
 # Idempotent: re-running converges. Each step checks if it's already done.
 #
 # Usage:
-#   cd /Volumes/Mini\ Me/Users/trekkie/projects/get-shit-done
+#   cd /Volumes/Mini\ Me/Users/trekkie/projects/gsd-core
 #   bash /path/to/rollout-next-phase2.sh
 #
 # Env overrides:
@@ -49,7 +49,7 @@ note()  { echo "${C_DIM}  $*${C_RST}"; }
 # ───────────────────────────────────────────────────────────
 step "Sanity checks"
 
-[ -d .git ] || die "Not in a git repo. cd to your get-shit-done checkout."
+[ -d .git ] || die "Not in a git repo. cd to your gsd-core checkout."
 command -v gh >/dev/null || die "gh not found. https://cli.github.com/"
 gh auth status >/dev/null 2>&1 || die "gh not authenticated."
 

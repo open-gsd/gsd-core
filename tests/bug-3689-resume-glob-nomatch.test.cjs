@@ -9,7 +9,7 @@
  * `.planning/.continue-here*.md` checkpoints under zsh's default NOMATCH.
  *
  * Root cause: the `check_incomplete_work` step in
- * `get-shit-done/workflows/resume-project.md` used a chained `ls` with six
+ * `gsd-core/workflows/resume-project.md` used a chained `ls` with six
  * bare-glob arguments. Under zsh's default `NOMATCH` setopt the first
  * non-matching glob aborts the entire command during word-expansion — every
  * pattern after that point is never evaluated, including the one that holds
@@ -42,7 +42,7 @@ const { spawnSync } = require('node:child_process');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
-const WORKFLOW_PATH = path.join(REPO_ROOT, 'get-shit-done', 'workflows', 'resume-project.md');
+const WORKFLOW_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'resume-project.md');
 
 // The exact snippet the workflow now embeds. Keep in sync with
 // resume-project.md `check_incomplete_work` step.

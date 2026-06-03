@@ -301,7 +301,7 @@ describe('lint: grandfathered entries (backward compat)', { skip: IS_WINDOWS }, 
   // Under --strict: exit 1.
   const GRANDFATHER_FIXTURE = [
     '# plan-phase.md contains illustrative DATABASE_URL/REDIS_URL examples',
-    'get-shit-done/workflows/plan-phase.md',
+    'gsd-core/workflows/plan-phase.md',
     '',
   ].join('\n');
 
@@ -432,10 +432,10 @@ describe('secret-scan.sh --strict: reduces effective exclusions', { skip: IS_WIN
 
 describe('secret-scan.sh default mode: regression test', { skip: IS_WINDOWS }, () => {
   test('existing .secretscanignore entry is still honoured in default mode', () => {
-    // The file get-shit-done/workflows/plan-phase.md is listed in .secretscanignore.
+    // The file gsd-core/workflows/plan-phase.md is listed in .secretscanignore.
     // Default mode must honour that exclusion: scanning the file directly should
     // show "scanned 0 files" (the ignorelist causes it to be skipped entirely).
-    const planPhase = path.join(PROJECT_ROOT, 'get-shit-done', 'workflows', 'plan-phase.md');
+    const planPhase = path.join(PROJECT_ROOT, 'gsd-core', 'workflows', 'plan-phase.md');
     if (!fs.existsSync(planPhase)) {
       // File doesn't exist in this branch — skip gracefully
       return;
@@ -443,7 +443,7 @@ describe('secret-scan.sh default mode: regression test', { skip: IS_WINDOWS }, (
 
     // Run scanner with --file on the excluded path, from project root so
     // .secretscanignore is found. Excluded → scanned 0 files → exit 0.
-    const result = spawnSync(SECRET_SCAN, ['--file', 'get-shit-done/workflows/plan-phase.md'], {
+    const result = spawnSync(SECRET_SCAN, ['--file', 'gsd-core/workflows/plan-phase.md'], {
       encoding: 'utf-8',
       timeout: 10000,
       cwd: PROJECT_ROOT,

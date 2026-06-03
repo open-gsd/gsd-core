@@ -89,7 +89,7 @@ describe('audit-open — output shape (#2911)', () => {
     assert.equal(typeof parsed, 'object', 'parsed payload must be an object');
     assert.ok(parsed !== null, 'parsed payload must not be null');
 
-    // Shape contract from auditOpenArtifacts() in get-shit-done/bin/lib/audit.cjs.
+    // Shape contract from auditOpenArtifacts() in gsd-core/bin/lib/audit.cjs.
     assert.equal(typeof parsed.scanned_at, 'string', 'must include scanned_at ISO timestamp');
     assert.equal(typeof parsed.has_open_items, 'boolean', 'must include has_open_items boolean');
     assert.equal(typeof parsed.counts, 'object', 'must include counts object');

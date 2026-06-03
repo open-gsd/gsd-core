@@ -26,7 +26,7 @@
  * ALLOWED_HISTORICAL_MENTIONS: files that legitimately reference deleted
  * commands as part of deprecation documentation are excluded from the scan.
  * Preserved from the three legacy tests:
- *   - get-shit-done/workflows/help.md  (deprecation-trail prose)
+ *   - gsd-core/workflows/help.md  (deprecation-trail prose)
  *   - CHANGELOG.md                     (historical release notes, must not be rewritten)
  */
 
@@ -46,7 +46,7 @@ const LOCALES = ['ja-JP', 'ko-KR', 'zh-CN', 'pt-BR'];
 // Preserved from the three legacy tests — do not remove without understanding
 // why the exemption exists (see issue #3049 and legacy test comments).
 const ALLOWED_HISTORICAL_MENTIONS = new Set([
-  path.join(ROOT, 'get-shit-done', 'workflows', 'help.md'),
+  path.join(ROOT, 'gsd-core', 'workflows', 'help.md'),
   path.join(ROOT, 'CHANGELOG.md'),
 ]);
 
@@ -74,7 +74,7 @@ const INTERNAL_COMPONENT_SLUGS = new Set([
 
   // gsd-tools.cjs — the legacy Node CLI binary (bin/gsd-tools.cjs).
   // Docs reference it as a path component in shell examples, not as a slash command.
-  // Example: node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" state validate
+  // Example: node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" state validate
   'tools',
 
   // Hook scripts — internal runtime hooks, not user-invocable slash commands.
@@ -146,7 +146,7 @@ const INTERNAL_COMPONENT_SLUGS = new Set([
   'alternative-2',
 
   // gsd-sync-skills — installed Claude skill directory name (also a workflow
-  // under get-shit-done/workflows/sync-skills.md), but NOT a registered
+  // under gsd-core/workflows/sync-skills.md), but NOT a registered
   // slash command (no commands/gsd/sync-skills.md). Docs reference it as a
   // filesystem path component, e.g. "~/.agents/skills/gsd-sync-skills/" in
   // docs/discussions/grok-build-support-2026-05.md. The regex captures
@@ -174,7 +174,17 @@ const INTERNAL_COMPONENT_SLUGS = new Set([
  * this was /gsd-old-name...").
  */
 function stripHtmlComments(content) {
-  return content.replace(/<!--[\s\S]*?-->/g, '');
+  // regex-free HTML-comment stripper (CodeQL: avoid incomplete-multi-character-sanitization)
+  let out = '';
+  let rest = content;
+  let idx;
+  while ((idx = rest.indexOf('<!--')) !== -1) {
+    out += rest.slice(0, idx);
+    const end = rest.indexOf('-->', idx + 4);
+    if (end === -1) { rest = ''; break; }
+    rest = rest.slice(end + 3);
+  }
+  return out + rest;
 }
 
 /**

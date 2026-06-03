@@ -16,7 +16,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const WORKFLOWS_DIR = path.join(__dirname, '../get-shit-done/workflows');
+const WORKFLOWS_DIR = path.join(__dirname, '../gsd-core/workflows');
 
 function readWorkflow(name) {
   return fs.readFileSync(path.join(WORKFLOWS_DIR, name), 'utf-8');

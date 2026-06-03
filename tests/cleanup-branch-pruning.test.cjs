@@ -6,7 +6,7 @@
 /**
  * Cleanup enhancement: branch pruning (#40)
  *
- * Seam: get-shit-done/workflows/cleanup.md
+ * Seam: gsd-core/workflows/cleanup.md
  *
  * Verifies that /gsd-cleanup prunes local branches whose upstream is gone,
  * integrated between archive_phases and commit steps.
@@ -18,7 +18,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const REPO_ROOT = path.join(__dirname, '..');
-const CLEANUP_PATH = path.join(REPO_ROOT, 'get-shit-done', 'workflows', 'cleanup.md');
+const CLEANUP_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'cleanup.md');
 
 // ─── Helpers (mirrors worktree-cleanup.test.cjs) ─────────────────────────────
 

@@ -37,7 +37,7 @@ describe('skill-manifest', () => {
     writeSkill(path.join(homeDir, '.claude', 'skills'), 'global-claude', 'Global Claude skill');
     writeSkill(path.join(homeDir, '.codex', 'skills'), 'global-codex', 'Global Codex skill');
     writeSkill(
-      path.join(homeDir, '.claude', 'get-shit-done', 'skills'),
+      path.join(homeDir, '.claude', 'gsd-core', 'skills'),
       'legacy-import',
       'Deprecated import-only skill'
     );
@@ -100,7 +100,7 @@ describe('skill-manifest', () => {
         deprecated: importedSkill.deprecated,
       },
       {
-        root: '.claude/get-shit-done/skills',
+        root: '.claude/gsd-core/skills',
         scope: 'import-only',
         installed: false,
         deprecated: true,

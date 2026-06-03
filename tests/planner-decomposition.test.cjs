@@ -30,9 +30,9 @@ const PLANNER_EXTRACTED_LIMIT = 48 * 1024;  // 48K — proves extraction happene
 // ─── File paths ──────────────────────────────────────────────────────────────
 
 const PLANNER_PATH = path.join(PROJECT_ROOT, 'agents', 'gsd-planner.md');
-const GAP_CLOSURE_REF = path.join(PROJECT_ROOT, 'get-shit-done', 'references', 'planner-gap-closure.md');
-const REVISION_REF = path.join(PROJECT_ROOT, 'get-shit-done', 'references', 'planner-revision.md');
-const REVIEWS_REF = path.join(PROJECT_ROOT, 'get-shit-done', 'references', 'planner-reviews.md');
+const GAP_CLOSURE_REF = path.join(PROJECT_ROOT, 'gsd-core', 'references', 'planner-gap-closure.md');
+const REVISION_REF = path.join(PROJECT_ROOT, 'gsd-core', 'references', 'planner-revision.md');
+const REVIEWS_REF = path.join(PROJECT_ROOT, 'gsd-core', 'references', 'planner-reviews.md');
 
 // ─── gsd-planner.md size ─────────────────────────────────────────────────────
 

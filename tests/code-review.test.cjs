@@ -31,7 +31,7 @@ const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 
 const AGENTS_DIR = path.join(__dirname, '..', 'agents');
 const COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');
-const WORKFLOWS_DIR = path.join(__dirname, '..', 'get-shit-done', 'workflows');
+const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
 
 /**
  * Parse top-level (non-nested, non-escaped) Skill() invocations from a workflow .md file.
@@ -169,7 +169,7 @@ function parseSkillCallBody(body) {
 }
 
 // Plugin directory resolution (cross-platform safe)
-const PLUGIN_WORKFLOWS_DIR = process.env.GSD_PLUGIN_ROOT || path.join(os.homedir(), '.claude', 'get-shit-done', 'workflows');
+const PLUGIN_WORKFLOWS_DIR = process.env.GSD_PLUGIN_ROOT || path.join(os.homedir(), '.claude', 'gsd-core', 'workflows');
 const PLUGIN_AVAILABLE = fs.existsSync(PLUGIN_WORKFLOWS_DIR);
 
 // --- CR-AGENT: code review agent frontmatter ---

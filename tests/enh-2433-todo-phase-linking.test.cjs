@@ -17,10 +17,10 @@ const path = require('node:path');
 const ROOT = path.resolve(__dirname, '..');
 
 const NEW_MILESTONE = fs.readFileSync(
-  path.join(ROOT, 'get-shit-done/workflows/new-milestone.md'), 'utf-8'
+  path.join(ROOT, 'gsd-core/workflows/new-milestone.md'), 'utf-8'
 );
 const EXECUTE_PHASE = fs.readFileSync(
-  path.join(ROOT, 'get-shit-done/workflows/execute-phase.md'), 'utf-8'
+  path.join(ROOT, 'gsd-core/workflows/execute-phase.md'), 'utf-8'
 );
 
 test('new-milestone.md: step 10.5 links pending todos to roadmap phases', () => {

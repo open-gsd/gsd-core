@@ -9,7 +9,7 @@
 // to silently fail with:
 //   [agent-skills] WARNING: Global skill not found at "~/.cursor/skills/X/SKILL.md" — skipping
 //
-// Fix introduces get-shit-done/bin/lib/runtime-homes.cjs with first-class
+// Fix introduces gsd-core/bin/lib/runtime-homes.cjs with first-class
 // support for all 15 supported runtimes, including:
 //   - hermes: nested skills/gsd/<skillName>/ layout (#2841)
 //   - cline: rules-based, returns null (no skills directory)
@@ -28,7 +28,7 @@ const {
   getGlobalSkillsBase,
   getGlobalSkillDir,
   getGlobalSkillDisplayPath,
-} = require(path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'runtime-homes.cjs'));
+} = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'runtime-homes.cjs'));
 
 // Helper: run fn with an env var temporarily set
 function withEnv(key, value, fn) {
@@ -191,7 +191,7 @@ describe('bug #3126: init.cjs uses runtime-homes not hardcoded .claude', () => {
   test('init.cjs has no hardcoded globalSkillsBase assignment to ~/.claude/skills', () => {
     const fs = require('node:fs');
     const src = fs.readFileSync(
-      path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'init.cjs'),
+      path.join(ROOT, 'gsd-core', 'bin', 'lib', 'init.cjs'),
       'utf8',
     );
     assert.ok(
@@ -202,7 +202,7 @@ describe('bug #3126: init.cjs uses runtime-homes not hardcoded .claude', () => {
   test('init.cjs requires runtime-homes', () => {
     const fs = require('node:fs');
     const src = fs.readFileSync(
-      path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'init.cjs'),
+      path.join(ROOT, 'gsd-core', 'bin', 'lib', 'init.cjs'),
       'utf8',
     );
     assert.ok(
@@ -213,7 +213,7 @@ describe('bug #3126: init.cjs uses runtime-homes not hardcoded .claude', () => {
   test('init.cjs warning message no longer hardcodes ~/.claude/skills', () => {
     const fs = require('node:fs');
     const src = fs.readFileSync(
-      path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'init.cjs'),
+      path.join(ROOT, 'gsd-core', 'bin', 'lib', 'init.cjs'),
       'utf8',
     );
     assert.ok(

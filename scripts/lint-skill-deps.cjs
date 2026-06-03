@@ -26,7 +26,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const PROFILES_MODULE = path.join(__dirname, '..', 'get-shit-done', 'bin', 'lib', 'install-profiles.cjs');
+const PROFILES_MODULE = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'install-profiles.cjs');
 const { PROFILES, loadSkillsManifest, resolveProfile } = require(PROFILES_MODULE);
 
 // ---------------------------------------------------------------------------

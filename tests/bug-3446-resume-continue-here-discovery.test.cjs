@@ -14,7 +14,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
-const WORKFLOW_PATH = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'resume-project.md');
+const WORKFLOW_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'resume-project.md');
 
 // Extract the first ```bash``` code block inside the
 // `<step name="check_incomplete_work">` element. That's the snippet the

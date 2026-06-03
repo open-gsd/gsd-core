@@ -29,11 +29,11 @@ const crypto = require('node:crypto');
 
 const {
   runInstallerMigrations,
-} = require('../get-shit-done/bin/lib/installer-migrations.cjs');
+} = require('../gsd-core/bin/lib/installer-migrations.cjs');
 const {
   assertInstallerMigrationsUnblocked,
   resolveInstallerMigrationPromptsForNonTty,
-} = require('../get-shit-done/bin/lib/installer-migration-report.cjs');
+} = require('../gsd-core/bin/lib/installer-migration-report.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
 function sha256(content) {
@@ -72,9 +72,9 @@ describe('#3541: installer migration prompt-user non-TTY resolution', { concurre
 
   test('Test A: non-TTY default resolution removes stale SDK artifacts and keeps user skills', () => {
     // Stale SDK build artifact: replicates the 1.41.2 → 1.42.2 upgrade where
-    // 24 stale `get-shit-done/sdk/{dist,src}/gsd-*` files leaked into the
+    // 24 stale `gsd-core/sdk/{dist,src}/gsd-*` files leaked into the
     // baseline because the new manifest no longer classifies them as managed.
-    writeFile(configDir, 'get-shit-done/sdk/dist/gsd-old-bundle.js', 'stale sdk bundle\n');
+    writeFile(configDir, 'gsd-core/sdk/dist/gsd-old-bundle.js', 'stale sdk bundle\n');
     // User-facing skill: replicates `skills/gsd-roadmap/SKILL.md` from the
     // same incident — user-owned content that must be preserved.
     writeFile(configDir, 'skills/gsd-roadmap/SKILL.md', '# Roadmap skill\nuser content\n');
@@ -95,7 +95,7 @@ describe('#3541: installer migration prompt-user non-TTY resolution', { concurre
     const blockedPaths = (result.blocked || []).map((a) => a.relPath).sort();
     assert.deepEqual(
       blockedPaths,
-      ['get-shit-done/sdk/dist/gsd-old-bundle.js', 'skills/gsd-roadmap/SKILL.md'],
+      ['gsd-core/sdk/dist/gsd-old-bundle.js', 'skills/gsd-roadmap/SKILL.md'],
       'precondition: both stale-looking files should be flagged for explicit user choice'
     );
 
@@ -111,7 +111,7 @@ describe('#3541: installer migration prompt-user non-TTY resolution', { concurre
     );
 
     const byPath = new Map(resolved.resolutions.map((r) => [r.relPath, r]));
-    const sdkResolution = byPath.get('get-shit-done/sdk/dist/gsd-old-bundle.js');
+    const sdkResolution = byPath.get('gsd-core/sdk/dist/gsd-old-bundle.js');
     const skillResolution = byPath.get('skills/gsd-roadmap/SKILL.md');
 
     assert.ok(sdkResolution, 'SDK artifact resolution logged');
@@ -141,7 +141,7 @@ describe('#3541: installer migration prompt-user non-TTY resolution', { concurre
     const blocked = [
       {
         type: 'prompt-user',
-        relPath: 'get-shit-done/sdk/dist/gsd-a.js',
+        relPath: 'gsd-core/sdk/dist/gsd-a.js',
         reason: 'GSD-looking file is not proven manifest-managed and needs explicit user choice',
         classification: 'stale-gsd-looking',
         prompt: 'Choose whether to remove this stale-looking GSD artifact or keep it as user-owned.',
@@ -149,7 +149,7 @@ describe('#3541: installer migration prompt-user non-TTY resolution', { concurre
       },
       {
         type: 'prompt-user',
-        relPath: 'get-shit-done/sdk/dist/gsd-b.js',
+        relPath: 'gsd-core/sdk/dist/gsd-b.js',
         reason: 'GSD-looking file is not proven manifest-managed and needs explicit user choice',
         classification: 'stale-gsd-looking',
         prompt: 'Choose whether to remove this stale-looking GSD artifact or keep it as user-owned.',

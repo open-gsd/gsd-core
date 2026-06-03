@@ -17,7 +17,7 @@ const fs = require('fs');
 const path = require('path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 
-const GSD_ROOT = path.join(__dirname, '..', 'get-shit-done');
+const GSD_ROOT = path.join(__dirname, '..', 'gsd-core');
 const CONFIG_TEMPLATE_PATH = path.join(GSD_ROOT, 'templates', 'config.json');
 const PLAN_PHASE_PATH = path.join(GSD_ROOT, 'workflows', 'plan-phase.md');
 

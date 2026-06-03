@@ -16,7 +16,7 @@ doesn't belong to any specific phase.
 </objective>
 
 <execution_context>
-@~/.claude/get-shit-done/workflows/thread.md
+@~/.claude/gsd-core/workflows/thread.md
 </execution_context>
 
 <process>

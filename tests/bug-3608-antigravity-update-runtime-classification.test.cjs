@@ -9,7 +9,7 @@
  *
  * Relocation (#498): the update flow's runtime/scope detection moved out of
  * ~280 lines of inline bash in update.md into the tested projection
- * `get-shit-done/bin/lib/update-context.cjs` (resolveUpdateContext). The
+ * `gsd-core/bin/lib/update-context.cjs` (resolveUpdateContext). The
  * antigravity-first-class contract now lives there as data + behavior, so this
  * test asserts it on the projection. The only piece still authored in update.md
  * is the execution_context path classification (prose the agent applies), which
@@ -34,8 +34,8 @@ const {
   inferPreferredRuntime,
   envRuntimeDirs,
   resolveUpdateContext,
-} = require(path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'update-context.cjs'));
-const UPDATE_MD = path.join(ROOT, 'get-shit-done', 'workflows', 'update.md');
+} = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'update-context.cjs'));
+const UPDATE_MD = path.join(ROOT, 'gsd-core', 'workflows', 'update.md');
 
 function runtimeOrder() {
   return RUNTIME_DIRS.map(([rt]) => rt);
@@ -89,8 +89,8 @@ describe('bug #3608 / #498: update-context models Antigravity as a first-class r
     const normKey = (p) => path.resolve(p).replace(/\\/g, '/').toLowerCase();
     const HOME = '/home/u';
     const agDir = path.join(HOME, '.gemini', 'antigravity');
-    const verFile = normKey(path.join(agDir, 'get-shit-done', 'VERSION'));
-    const markerFile = normKey(path.join(agDir, 'get-shit-done', 'workflows', 'update.md'));
+    const verFile = normKey(path.join(agDir, 'gsd-core', 'VERSION'));
+    const markerFile = normKey(path.join(agDir, 'gsd-core', 'workflows', 'update.md'));
     const fakeFs = {
       exists: (p) => normKey(p) === verFile || normKey(p) === markerFile,
       readFile: (p) => (normKey(p) === verFile ? '1.40.0\n' : null),

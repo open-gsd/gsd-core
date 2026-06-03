@@ -24,7 +24,7 @@ const fs = require('fs');
 const path = require('path');
 
 const EXECUTE_PHASE = path.join(
-  __dirname, '..', 'get-shit-done', 'workflows', 'execute-phase.md'
+  __dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md'
 );
 
 describe('execute-phase.md — resurrection-detection guard (#2501)', () => {

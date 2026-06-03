@@ -24,7 +24,7 @@ const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
 const WORKFLOW_PATH = path.join(
   __dirname,
   '..',
-  'get-shit-done',
+  'gsd-core',
   'workflows',
   'complete-milestone.md',
 );

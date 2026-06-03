@@ -3,7 +3,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
-// Replicates the inline node -e parser from get-shit-done/workflows/code-review.md
+// Replicates the inline node -e parser from gsd-core/workflows/code-review.md
 // step compute_file_scope, Tier 2 (lines ~172-181).
 //
 // Bug #2134: the section-reset regex uses \s+ (requires leading whitespace), so

@@ -1,13 +1,13 @@
 'use strict';
 /**
  * Regression test for bug #211: gsd_run launcher must probe
- * $HOME/.claude/get-shit-done/bin/gsd-tools.cjs before emitting the hard error.
+ * $HOME/.claude/gsd-core/bin/gsd-tools.cjs before emitting the hard error.
  *
  * Asserts:
  * (A) The canonical snippet file contains the ~/.claude fallback arm.
  * (B) A representative propagated workflow file contains the ~/.claude fallback arm.
  * (C) Behavioral: when RUNTIME_DIR misses and gsd-tools is NOT on PATH,
- *     a stub at $HOME/.claude/get-shit-done/bin/gsd-tools.cjs is resolved and invoked.
+ *     a stub at $HOME/.claude/gsd-core/bin/gsd-tools.cjs is resolved and invoked.
  * (D) The resolution order is preserved: local -> PATH -> ~/.claude -> hard error.
  *     When all three miss, exit non-zero.
  */
@@ -24,12 +24,12 @@ const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 const { cleanup } = require('./helpers.cjs');
 
-const WORKFLOWS_DIR = path.join(__dirname, '..', 'get-shit-done', 'workflows');
+const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
 const SNIPPET_FILE = path.join(WORKFLOWS_DIR, '_runtime-launcher.snippet.sh');
 // Representative propagated workflow file (has a gsd_run call):
 const REPRESENTATIVE_FILE = path.join(WORKFLOWS_DIR, 'add-backlog.md');
 
-const CLAUDE_HOME_PROBE = '.claude/get-shit-done/bin/';
+const CLAUDE_HOME_PROBE = '.claude/gsd-core/bin/';
 
 describe('bug-211: launcher ~/.claude home fallback', () => {
   // --- (A) Snippet contains the arm ----------------------------------------
@@ -53,13 +53,13 @@ describe('bug-211: launcher ~/.claude home fallback', () => {
   });
 
   // --- (C) Behavioral: ~/.claude stub is resolved when local and PATH both miss
-  test('(C) gsd_run resolves $HOME/.claude/get-shit-done/bin/ stub when no local install and gsd-tools not on PATH', () => {
-    // Build a fake $HOME with a stub at .claude/get-shit-done/bin/gsd-tools.cjs
+  test('(C) gsd_run resolves $HOME/.claude/gsd-core/bin/ stub when no local install and gsd-tools not on PATH', () => {
+    // Build a fake $HOME with a stub at .claude/gsd-core/bin/gsd-tools.cjs
     const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-211-home-'));
     // RUNTIME_DIR points to a directory with no gsd-tools.cjs
     const fakeRuntime = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-211-rt-'));
     try {
-      const claudeBinDir = path.join(fakeHome, '.claude', 'get-shit-done', 'bin');
+      const claudeBinDir = path.join(fakeHome, '.claude', 'gsd-core', 'bin');
       fs.mkdirSync(claudeBinDir, { recursive: true });
 
       // Stub gsd-tools.cjs that prints a marker
@@ -118,8 +118,8 @@ describe('bug-211: launcher ~/.claude home fallback', () => {
       // GSD_TOOLS must point into the fake ~/.claude dir
       const normStdout = stdout.replace(/\\/g, '/');
       assert.ok(
-        normStdout.includes('.claude/get-shit-done/bin/'),
-        `Expected GSD_TOOLS to resolve into .claude/get-shit-done/bin/, got:\n${stdout.trim()}`,
+        normStdout.includes('.claude/gsd-core/bin/'),
+        `Expected GSD_TOOLS to resolve into .claude/gsd-core/bin/, got:\n${stdout.trim()}`,
       );
       // The stub must have been invoked
       assert.ok(
@@ -139,7 +139,7 @@ describe('bug-211: launcher ~/.claude home fallback', () => {
     // noToolsBin so PATH check finds nothing
     const noToolsBin = path.join(fakeHome, 'nobin');
     fs.mkdirSync(noToolsBin, { recursive: true });
-    // NO .claude/get-shit-done/bin stub created in fakeHome
+    // NO .claude/gsd-core/bin stub created in fakeHome
     try {
       const snippet = fs.readFileSync(SNIPPET_FILE, 'utf8');
       const scriptContent =

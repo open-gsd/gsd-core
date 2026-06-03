@@ -7,7 +7,7 @@ const path = require('node:path');
 const migration = require(path.join(
   __dirname,
   '..',
-  'get-shit-done',
+  'gsd-core',
   'bin',
   'lib',
   'installer-migrations',

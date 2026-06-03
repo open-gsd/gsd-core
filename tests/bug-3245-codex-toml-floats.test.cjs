@@ -402,8 +402,8 @@ describe('#3245 — idempotent rollback reverts skills/, agents/, and VERSION', 
       );
     }
 
-    // VERSION — GSD writes get-shit-done/VERSION. Must be absent (wasn't there before).
-    const versionPath = path.join(codexHome, 'get-shit-done', 'VERSION');
+    // VERSION — GSD writes gsd-core/VERSION. Must be absent (wasn't there before).
+    const versionPath = path.join(codexHome, 'gsd-core', 'VERSION');
     assert.strictEqual(
       fs.existsSync(versionPath),
       false,

@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const WORKFLOW = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'stats.md');
+const WORKFLOW = path.join(__dirname, '..', 'gsd-core', 'workflows', 'stats.md');
 
 describe('stats — MVP mode summary', () => {
   const content = fs.readFileSync(WORKFLOW, 'utf-8');

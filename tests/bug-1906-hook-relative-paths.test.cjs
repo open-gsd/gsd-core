@@ -19,7 +19,7 @@ const { describe, test, before } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
 
-const projection = require(path.join(__dirname, '..', 'get-shit-done', 'bin', 'lib', 'shell-command-projection.cjs'));
+const projection = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'shell-command-projection.cjs'));
 const { projectLocalHookPrefix, projectShellCommandText } = projection;
 
 describe('bug #1906: local hook commands use $CLAUDE_PROJECT_DIR', () => {

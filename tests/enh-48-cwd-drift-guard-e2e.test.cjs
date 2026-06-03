@@ -12,7 +12,7 @@ const os = require('node:os');
 const { cleanup } = require('./helpers.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
-const EXECUTE_PHASE_PATH = path.join(REPO_ROOT, 'get-shit-done', 'workflows', 'execute-phase.md');
+const EXECUTE_PHASE_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'execute-phase.md');
 
 // ---------------------------------------------------------------------------
 // Extract the cwd-drift guard bash block from execute-phase.md

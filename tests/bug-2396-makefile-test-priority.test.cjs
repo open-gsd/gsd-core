@@ -19,9 +19,9 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const EXECUTE_PHASE_PATH = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'execute-phase.md');
-const VERIFY_PHASE_PATH = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'verify-phase.md');
-const AUDIT_FIX_PATH = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'audit-fix.md');
+const EXECUTE_PHASE_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md');
+const VERIFY_PHASE_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'verify-phase.md');
+const AUDIT_FIX_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'audit-fix.md');
 
 function assertMakefileCheckBeforeNpmTest(filePath, label) {
   const content = fs.readFileSync(filePath, 'utf-8');

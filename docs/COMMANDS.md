@@ -1,6 +1,6 @@
 # GSD Core Command Reference
 
-> Command syntax, flags, options, and examples for stable commands. For feature details, see [Feature Reference](FEATURES.md). For workflow walkthroughs, see [User Guide](USER-GUIDE.md).
+> Command reference for GSD Core — syntax, flags, options, and examples for every stable command. For feature details see [Feature Reference](FEATURES.md); for workflow walkthroughs see [User Guide](USER-GUIDE.md); for the docs index see [README](README.md).
 
 ---
 
@@ -144,7 +144,7 @@ Research, plan, and verify a phase.
 | `--auto` | Skip interactive confirmations |
 | `--research` | Force re-research even if RESEARCH.md exists |
 | `--skip-research` | Skip domain research step |
-| `--research-phase <N>` | Research-only mode: spawn researcher for phase `<N>`, write RESEARCH.md, exit before planner. Replaces the deleted `gsd-research-phase` standalone command (#3042). |
+| `--research-phase <N>` | Research-only mode: spawn researcher for phase `<N>`, write RESEARCH.md, exit before planner. Supersedes the deleted standalone research command (#3042). |
 | `--view` | Research-only modifier: when used with `--research-phase`, print existing RESEARCH.md to stdout and exit (no spawn). |
 | `--gaps` | Gap closure mode (reads VERIFICATION.md, skips research) |
 | `--skip-verify` | Skip plan checker verification loop |
@@ -453,12 +453,7 @@ Guided MVP planning for a phase — prompts for a user story, runs SPIDR splitti
 
 **Prerequisites:** Phase must already exist in ROADMAP.md (created via `/gsd-new-project`, `/gsd-phase`, or `/gsd-phase --insert`). The command does not create new phases — it converts an existing phase.
 
-**Process:**
-1. Prompts for "As a / I want to / So that" user story (three structured questions)
-2. Validates story format against the canonical regex
-3. Runs SPIDR splitting check — if the story is too large, walks through Spike/Paths/Interfaces/Data/Rules axes and offers to split into multiple phases
-4. Writes `**Goal:** <user-story>` and `**Mode:** mvp` to the phase's ROADMAP.md section (with confirmation gate)
-5. Delegates to `/gsd-plan-phase <N>`, which detects MVP mode automatically
+**Behaviour:** Collects a structured user story, validates format, runs a SPIDR splitting check, writes `**Goal:**` and `**Mode:** mvp` to the phase's ROADMAP.md section, then delegates to `/gsd-plan-phase <N>`. See [How to plan an MVP phase](USER-GUIDE.md#mvp-phase-planning) for a walkthrough.
 
 **Walking Skeleton:** Auto-triggered when `--mvp` (or `mode: mvp`) is used on Phase 1 of a new project with no prior phase summaries. The planner produces `SKELETON.md` alongside `PLAN.md`.
 
@@ -599,7 +594,7 @@ Show GSD commands at the tier you ask for. Default fits one screen; `--full` is 
 /gsd-help --brief <topic>           # Compact scoped lookup — signature + one-line summary
 ```
 
-See `get-shit-done/workflows/help/modes/topic.md` for the full alias table. Unknown topics print the recognized list.
+See `gsd-core/workflows/help/modes/topic.md` for the full alias table. Unknown topics print the recognized list.
 
 ---
 
@@ -815,16 +810,11 @@ v1.40.0, [#2792](https://github.com/open-gsd/gsd-core/issues/2792)).
 
 Archive accumulated phase directories from completed milestones and prune local branches whose upstream has been deleted.
 
+**Behaviour:** Presents a dry-run summary of phase directories to archive (moved from `.planning/phases/` into `.planning/milestones/v{X.Y}-phases/`) and local branches whose upstream is gone (pruned via `git fetch --prune`). Requires confirmation before writing any changes. The currently checked-out branch is never pruned.
+
 ```bash
 /gsd-cleanup
 ```
-
-On confirmation, the workflow performs two actions:
-
-1. **Phase archival** — moves phase directories from `.planning/phases/` into milestone archive directories under `.planning/milestones/v{X.Y}-phases/`, using archived ROADMAP snapshots to determine phase membership.
-2. **Branch pruning** — runs `git fetch --prune` to update remote-tracking refs, then identifies and force-deletes local branches whose upstream is marked gone. The currently checked-out branch is always skipped.
-
-The dry-run summary shows both phase directories to archive and candidate local branches for deletion before confirmation.
 
 ---
 
@@ -1529,3 +1519,12 @@ npm run lint:descriptions
 ```
 
 The check is also run as part of `npm test` via `tests/enh-2789-description-budget.test.cjs`.
+
+---
+
+## Related
+
+- [Configuration Reference](CONFIGURATION.md)
+- [CLI Tools Reference](CLI-TOOLS.md)
+- [Feature Reference](FEATURES.md)
+- [Docs index](README.md)

@@ -1,7 +1,7 @@
 /**
  * CLI negative-matrix harness (#3593).
  *
- * Wraps spawnSync of get-shit-done/bin/gsd-tools.cjs so test files can
+ * Wraps spawnSync of gsd-core/bin/gsd-tools.cjs so test files can
  * assert on structured outputs (exit code, typed reason, stack-trace
  * absence) without each test re-implementing the JSON-errors parsing
  * dance. Hostile values are passed as argv elements — never composed
@@ -29,7 +29,7 @@
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-const TOOLS_PATH = path.resolve(__dirname, '..', '..', 'get-shit-done', 'bin', 'gsd-tools.cjs');
+const TOOLS_PATH = path.resolve(__dirname, '..', '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 
 /**
  * Run gsd-tools with the given argv against a project directory.

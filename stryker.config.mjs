@@ -21,37 +21,52 @@
  * to stay bounded. Full runs are for local exploration only.
  */
 
-// Generated files that must NEVER be mutated
-const GENERATED_FILES = [
-  '!get-shit-done/bin/lib/command-aliases.cjs',  // GENERATED
-  '!get-shit-done/bin/lib/commands.cjs',         // GENERATED
-  '!get-shit-done/bin/lib/core.cjs',             // GENERATED
-  '!get-shit-done/bin/lib/install-profiles.cjs', // GENERATED
-  '!get-shit-done/bin/lib/installer-migrations.cjs', // GENERATED
-  '!get-shit-done/bin/lib/phase.cjs',            // GENERATED
-  '!get-shit-done/bin/lib/profile-output.cjs',   // GENERATED
-  '!get-shit-done/bin/lib/state.cjs',            // GENERATED
-  '!get-shit-done/bin/lib/verify.cjs',           // GENERATED
-  '!get-shit-done/bin/lib/init.cjs',             // GENERATED
-  '!get-shit-done/bin/lib/audit.cjs',            // GENERATED
-  '!get-shit-done/bin/lib/gsd2-import.cjs',      // GENERATED
+// ADR-457: bin/lib/*.cjs are gitignored build artifacts (compiled from
+// src/*.cts by `npm run build:lib`, which the mutation CI job runs via `npm ci`
+// → prepare before Stryker). Stryker mutates the *built* .cjs directly — the
+// command runner runs the tests with NO rebuild, so each mutation to the
+// shipped artifact is seen by the tests. (Mutating src/*.cts instead would
+// force a full tsc rebuild per mutant — far too slow for the 30-min CI budget.)
+// Large/low-coverage modules are excluded (the command's test set does not
+// exercise them, so they would only ever produce survived mutants).
+const UNMUTATED = [
+  '!gsd-core/bin/lib/command-aliases.cjs',
+  '!gsd-core/bin/lib/commands.cjs',
+  '!gsd-core/bin/lib/core.cjs',
+  '!gsd-core/bin/lib/install-profiles.cjs',
+  '!gsd-core/bin/lib/installer-migrations.cjs',
+  '!gsd-core/bin/lib/phase.cjs',
+  '!gsd-core/bin/lib/profile-output.cjs',
+  '!gsd-core/bin/lib/state.cjs',
+  '!gsd-core/bin/lib/verify.cjs',
+  '!gsd-core/bin/lib/init.cjs',
+  '!gsd-core/bin/lib/audit.cjs',
+  '!gsd-core/bin/lib/gsd2-import.cjs',
 ];
+
+// Full test command used by local runs and as the fallback when CI does not
+// inject a per-shard command via MUTATION_TEST_CMD.
+const DEFAULT_TEST_CMD = 'node --test tests/context-utilization.property.test.cjs tests/prompt-budget.property.test.cjs tests/frontmatter.property.test.cjs tests/adr-parser.property.test.cjs tests/config-schema.property.test.cjs tests/adr-parser.test.cjs tests/active-workstream-store.test.cjs tests/active-workstream-store.unit.test.cjs tests/prompt-budget.unit.test.cjs tests/adr-parser.unit.test.cjs tests/frontmatter.unit.test.cjs';
 
 /** @type {import('@stryker-mutator/core').PartialStrykerOptions} */
 export default {
   // ── Test runner ──────────────────────────────────────────────────────────────
   testRunner: 'command',
   commandRunner: {
-    // Run property tests + unit tests over lib only.
-    // Deliberately avoids running the full integration suite (slow).
-    command: 'node --test tests/context-utilization.property.test.cjs tests/prompt-budget.property.test.cjs tests/frontmatter.property.test.cjs tests/adr-parser.property.test.cjs tests/config-schema.property.test.cjs tests/adr-parser.test.cjs tests/active-workstream-store.test.cjs',
+    // Run property + unit tests over lib only (avoids the slow integration
+    // suite). NO build step here: Stryker mutates the already-built .cjs and the
+    // tests load it directly — adding a build would rebuild over the mutation.
+    // In CI each matrix shard injects MUTATION_TEST_CMD with only its own tests.
+    command: process.env.MUTATION_TEST_CMD || DEFAULT_TEST_CMD,
   },
 
   // ── Files to mutate ──────────────────────────────────────────────────────────
+  // The built bin/lib/*.cjs artifacts (ADR-457). CI overrides this with
+  // --mutate <changed, covered modules> computed in mutation.yml.
   mutate: [
-    'get-shit-done/bin/lib/**/*.cjs',
-    '!get-shit-done/bin/lib/**/*.test.cjs',
-    ...GENERATED_FILES,
+    'gsd-core/bin/lib/**/*.cjs',
+    '!gsd-core/bin/lib/**/*.test.cjs',
+    ...UNMUTATED,
   ],
 
   // ── Coverage ─────────────────────────────────────────────────────────────────

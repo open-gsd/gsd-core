@@ -62,10 +62,10 @@ describe('Bug #2998: populatePristineDir is exported and writes pristine for mod
     const pristineDir = path.join(tmp, 'gsd-pristine');
     try {
       // Pick a real installed-side relPath from the package source. The
-      // install transforms map source `get-shit-done/<rel>` to installed
-      // `get-shit-done/<rel>` for skills-aware runtimes (like claude),
+      // install transforms map source `gsd-core/<rel>` to installed
+      // `gsd-core/<rel>` for skills-aware runtimes (like claude),
       // so the relPath is the same on both sides.
-      const candidate = path.join('get-shit-done', 'workflows', 'reapply-patches.md');
+      const candidate = path.join('gsd-core', 'workflows', 'reapply-patches.md');
       const sourcePath = path.join(ROOT, candidate);
       assert.equal(fs.existsSync(sourcePath), true,
         `precondition: source file exists at ${candidate}`);
@@ -99,13 +99,13 @@ describe('Bug #2998: populatePristineDir is exported and writes pristine for mod
       const written = INSTALL.populatePristineDir({
         packageSrc: ROOT,
         pristineDir,
-        modified: ['get-shit-done/this-path-does-not-exist.md'],
+        modified: ['gsd-core/this-path-does-not-exist.md'],
         runtime: 'claude',
         pathPrefix: '$HOME/.claude/',
         isGlobal: true,
       });
       assert.equal(written, 0, 'expected zero pristine files for non-existent source paths');
-      const out = path.join(pristineDir, 'get-shit-done/this-path-does-not-exist.md');
+      const out = path.join(pristineDir, 'gsd-core/this-path-does-not-exist.md');
       assert.equal(fs.existsSync(out), false, 'pristine should not contain ghost paths');
     } finally {
       cleanup(tmp);
@@ -119,7 +119,7 @@ describe('Bug #2998: populatePristineDir is exported and writes pristine for mod
     const tmp1 = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2998-d1-'));
     const tmp2 = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2998-d2-'));
     try {
-      const candidate = path.join('get-shit-done', 'workflows', 'reapply-patches.md');
+      const candidate = path.join('gsd-core', 'workflows', 'reapply-patches.md');
       const ctx = {
         packageSrc: ROOT,
         modified: [candidate],
@@ -165,11 +165,11 @@ describe('Bug #2998 (#3004 CR): pristine expansion covers every manifest install
     }
   });
 
-  test('a mix of get-shit-done/ and agents/ paths in modified list are all staged', () => {
+  test('a mix of gsd-core/ and agents/ paths in modified list are all staged', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2998-mix-'));
     const pristineDir = path.join(tmp, 'gsd-pristine');
     try {
-      const a = path.join('get-shit-done', 'workflows', 'reapply-patches.md');
+      const a = path.join('gsd-core', 'workflows', 'reapply-patches.md');
       const b = path.join('agents', 'gsd-planner.md');
       assert.equal(fs.existsSync(path.join(ROOT, a)), true);
       assert.equal(fs.existsSync(path.join(ROOT, b)), true);

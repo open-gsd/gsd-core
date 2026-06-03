@@ -105,8 +105,8 @@ body:
         An enhancement should have a narrow, well-defined scope. If your list is long, this might be a feature, not an enhancement.
       placeholder: |
         Files modified:
-        - `get-shit-done/commands/gsd/status.md` — update output format description
-        - `get-shit-done/bin/lib/state.cjs` — expose phase name in status() return value
+        - `gsd-core/commands/gsd/status.md` — update output format description
+        - `gsd-core/bin/lib/state.cjs` — expose phase name in status() return value
         - `tests/status.test.cjs` — update snapshot and add test for phase name in output
         - `CHANGELOG.md` — user-facing change entry
 

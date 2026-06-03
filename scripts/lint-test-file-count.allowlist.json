@@ -25,12 +25,13 @@
     },
     "graphify": {
       "files": [
+        "bug-622-graphify-optional-graph-html.test.cjs",
         "graphify-auto-update.test.cjs",
         "graphify-query.test.cjs",
         "graphify-visualization.test.cjs",
         "graphify.test.cjs"
       ],
-      "issue": "TBD"
+      "issue": "622"
     },
     "intel": {
       "files": [
@@ -109,6 +110,7 @@
         "bug-3657-verify-reapply-patches-pristine-drift.test.cjs",
         "verify-health.test.cjs",
         "verify-mvp-uat.test.cjs",
+        "verify-npm-publish.test.cjs",
         "verify-test-quality.test.cjs",
         "verify-work-auto-transition.test.cjs",
         "verify.test.cjs"

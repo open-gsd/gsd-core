@@ -22,7 +22,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-const state = require('../get-shit-done/bin/lib/state.cjs');
+const state = require('../gsd-core/bin/lib/state.cjs');
 const { cleanup } = require('./helpers.cjs');
 
 describe('buildStateFrontmatter cache invalidation (#1967)', () => {

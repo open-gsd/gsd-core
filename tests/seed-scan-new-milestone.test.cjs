@@ -16,8 +16,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
-const NEW_MILESTONE_PATH = path.join(ROOT, 'get-shit-done', 'workflows', 'new-milestone.md');
-const PLANT_SEED_PATH = path.join(ROOT, 'get-shit-done', 'workflows', 'plant-seed.md');
+const NEW_MILESTONE_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'new-milestone.md');
+const PLANT_SEED_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'plant-seed.md');
 
 const newMilestone = fs.readFileSync(NEW_MILESTONE_PATH, 'utf-8');
 const plantSeed = fs.readFileSync(PLANT_SEED_PATH, 'utf-8');

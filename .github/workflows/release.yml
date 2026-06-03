@@ -238,22 +238,16 @@ jobs:
             --title "v${PRE_VERSION}" \
             --generate-notes \
             --prerelease
+          # Reformat the auto-generated notes into the curated
+          # Install + Feature/Enhancement/Fix format.
+          node scripts/release-notes/format-github-release-notes.cjs \
+            --tag "v${PRE_VERSION}" --prerelease --apply
 
       - name: Verify publish
         if: ${{ !inputs.dry_run }}
         env:
           PRE_VERSION: ${{ steps.prerelease.outputs.pre_version }}
-        run: |
-          sleep 10
-          PUBLISHED=$(npm view @opengsd/gsd-core@"$PRE_VERSION" version 2>/dev/null || echo "NOT_FOUND")
-          if [ "$PUBLISHED" != "$PRE_VERSION" ]; then
-            echo "::error::Published version verification failed. Expected $PRE_VERSION, got $PUBLISHED"
-            exit 1
-          fi
-          echo "✓ Verified: @opengsd/gsd-core@$PRE_VERSION is live on npm"
-          # Also verify dist-tag
-          NEXT_TAG=$(npm dist-tag ls @opengsd/gsd-core 2>/dev/null | grep "next:" | awk '{print $2}')
-          echo "✓ next tag points to: $NEXT_TAG"
+        run: node scripts/verify-npm-publish.cjs --package @opengsd/gsd-core --version "$PRE_VERSION" --dist-tag next
 
       - name: Summary
         env:
@@ -392,6 +386,10 @@ jobs:
             --title "v${VERSION}" \
             --generate-notes \
             --latest
+          # Reformat the auto-generated notes into the curated
+          # Install + Feature/Enhancement/Fix format.
+          node scripts/release-notes/format-github-release-notes.cjs \
+            --tag "v${VERSION}" --latest --apply
 
       - name: Clean up next dist-tag
         if: ${{ !inputs.dry_run }}
@@ -407,17 +405,7 @@ jobs:
         if: ${{ !inputs.dry_run }}
         env:
           VERSION: ${{ inputs.version }}
-        run: |
-          sleep 10
-          PUBLISHED=$(npm view @opengsd/gsd-core@"$VERSION" version 2>/dev/null || echo "NOT_FOUND")
-          if [ "$PUBLISHED" != "$VERSION" ]; then
-            echo "::error::Published version verification failed. Expected $VERSION, got $PUBLISHED"
-            exit 1
-          fi
-          echo "✓ Verified: @opengsd/gsd-core@$VERSION is live on npm"
-          # Verify latest tag
-          LATEST_TAG=$(npm dist-tag ls @opengsd/gsd-core 2>/dev/null | grep "latest:" | awk '{print $2}')
-          echo "✓ latest tag points to: $LATEST_TAG"
+        run: node scripts/verify-npm-publish.cjs --package @opengsd/gsd-core --version "$VERSION" --dist-tag latest
 
       - name: Summary
         env:

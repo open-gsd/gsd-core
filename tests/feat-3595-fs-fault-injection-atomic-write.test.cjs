@@ -2,7 +2,7 @@
  * Filesystem fault-injection coverage for the canonical atomic-write
  * seam (#3595).
  *
- * `platformWriteSync` in `get-shit-done/bin/lib/shell-command-projection.cjs`
+ * `platformWriteSync` in `gsd-core/bin/lib/shell-command-projection.cjs`
  * is the shared seam every config/state/generated-artifact writer in
  * the CJS layer routes through. Its contract:
  *
@@ -42,7 +42,7 @@ const os = require('node:os');
 const {
   platformWriteSync,
   platformEnsureDir,
-} = require('../get-shit-done/bin/lib/shell-command-projection.cjs');
+} = require('../gsd-core/bin/lib/shell-command-projection.cjs');
 
 /**
  * Create a fresh real-fs scratch dir per test so no two faults share

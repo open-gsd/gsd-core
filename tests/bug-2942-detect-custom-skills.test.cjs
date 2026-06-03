@@ -110,14 +110,14 @@ describe('detect-custom-files — skills/ directory missing from GSD_MANAGED_DIR
     );
   });
 
-  // Test 3: regression guard — still detects custom files in get-shit-done/workflows/
-  test('regression: still detects custom files in get-shit-done/workflows/', () => {
+  // Test 3: regression guard — still detects custom files in gsd-core/workflows/
+  test('regression: still detects custom files in gsd-core/workflows/', () => {
     writeManifest(tmpDir, {
-      'get-shit-done/workflows/plan-phase.md': '# Plan Phase\n',
+      'gsd-core/workflows/plan-phase.md': '# Plan Phase\n',
       'skills/gsd-planner/SKILL.md': '# GSD Planner Skill\n',
     });
 
-    writeCustomFile(tmpDir, 'get-shit-done/workflows/custom-workflow.md', '# My Custom Workflow\n');
+    writeCustomFile(tmpDir, 'gsd-core/workflows/custom-workflow.md', '# My Custom Workflow\n');
 
     const result = runGsdTools(
       ['detect-custom-files', '--config-dir', tmpDir],
@@ -128,7 +128,7 @@ describe('detect-custom-files — skills/ directory missing from GSD_MANAGED_DIR
 
     const json = JSON.parse(result.output);
     assert.ok(
-      json.custom_files.includes('get-shit-done/workflows/custom-workflow.md'),
+      json.custom_files.includes('gsd-core/workflows/custom-workflow.md'),
       `custom workflow should still be detected; got: ${JSON.stringify(json.custom_files)}`
     );
   });

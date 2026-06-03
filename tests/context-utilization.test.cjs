@@ -16,7 +16,7 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { classifyContextUtilization, STATES } = require('../get-shit-done/bin/lib/context-utilization.cjs');
+const { classifyContextUtilization, STATES } = require('../gsd-core/bin/lib/context-utilization.cjs');
 
 describe('STATES constant exposes the three boundary names', () => {
   test('exports HEALTHY, WARNING, CRITICAL', () => {

@@ -3,7 +3,7 @@
 /**
  * Property-based tests for adr-parser.cjs
  *
- * Module: get-shit-done/bin/lib/adr-parser.cjs
+ * Module: gsd-core/bin/lib/adr-parser.cjs
  * Exported: parseAdrMarkdown(markdown, options), shouldRejectAdrStatus(status)
  *
  * Properties tested:
@@ -22,7 +22,7 @@ const fc = require('./helpers/fast-check-setup.cjs');
 const {
   parseAdrMarkdown,
   shouldRejectAdrStatus,
-} = require('../get-shit-done/bin/lib/adr-parser.cjs');
+} = require('../gsd-core/bin/lib/adr-parser.cjs');
 
 // Required output keys
 const REQUIRED_KEYS = [

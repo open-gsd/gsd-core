@@ -481,6 +481,17 @@ This sequence keeps the first implementation small: the existing installer
 continues to materialize files, while the migration runner takes ownership of
 cleanup, classification, and reviewable destructive changes.
 
+## Shipped Migrations
+
+Each row corresponds to one migration record in `src/installer-migrations/`.
+
+| ID | File | Introduced In | Scopes | Destructive | Summary |
+|----|------|---------------|--------|-------------|---------|
+| `2026-05-11-first-time-baseline-scan` | `000-first-time-baseline.cts` | 1.50.0 | global, local | No | Records classification baseline for existing installs before destructive migrations run. |
+| `2026-05-11-legacy-orphan-files` | `001-legacy-orphan-files.cts` | 1.50.0 | global, local | Yes | Removes manifest-managed legacy orphan hook files (`hooks/gsd-notify.sh`, `hooks/statusline.js`) retired by the installer. |
+| `2026-05-11-codex-legacy-hooks-json` | `002-codex-legacy-hooks-json.cts` | 1.50.0 | global, local | Yes | Removes legacy GSD hook registrations from Codex `hooks.json` after the `config.toml` migration. |
+| `2026-06-02-rename-get-shit-done-to-gsd-core` | `003-rename-get-shit-done-to-gsd-core.cts` | 1.2.0 | global, local | Yes | Removes managed files from the stale `get-shit-done/` runtime directory after the rename to `gsd-core/` (#604). User-added files are preserved; emptied directories may remain (framework limitation). <!-- gsd-allow-legacy-name --> |
+
 ## Prior Art
 
 The design borrows from established upgrade systems:

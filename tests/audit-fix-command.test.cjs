@@ -24,7 +24,7 @@ const path = require('path');
 
 const REPO_ROOT = path.join(__dirname, '..');
 const COMMANDS_DIR = path.join(REPO_ROOT, 'commands', 'gsd');
-const WORKFLOWS_DIR = path.join(REPO_ROOT, 'get-shit-done', 'workflows');
+const WORKFLOWS_DIR = path.join(REPO_ROOT, 'gsd-core', 'workflows');
 
 // ─── 1. Command file — audit-fix.md ──────────────────────────────────────────
 
@@ -123,7 +123,7 @@ describe('AUDIT-FIX: workflow file', () => {
   test('workflow file exists', () => {
     assert.ok(
       fs.existsSync(wfPath),
-      'audit-fix.md must exist in get-shit-done/workflows/'
+      'audit-fix.md must exist in gsd-core/workflows/'
     );
   });
 

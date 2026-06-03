@@ -24,7 +24,7 @@ function readConfig(tmpDir) {
 
 describe('workflow.tdd_mode in VALID_CONFIG_KEYS', () => {
   test('workflow.tdd_mode is a recognized config key', () => {
-    const { VALID_CONFIG_KEYS } = require('../get-shit-done/bin/lib/config.cjs');
+    const { VALID_CONFIG_KEYS } = require('../gsd-core/bin/lib/config.cjs');
     assert.ok(
       VALID_CONFIG_KEYS.has('workflow.tdd_mode'),
       'workflow.tdd_mode should be in VALID_CONFIG_KEYS'

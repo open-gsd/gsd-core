@@ -34,7 +34,7 @@ const { runGsdTools, cleanup } = require('./helpers.cjs');
 const WORKFLOW_PATH = path.join(
   __dirname,
   '..',
-  'get-shit-done',
+  'gsd-core',
   'workflows',
   'new-project.md',
 );

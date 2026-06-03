@@ -4,12 +4,12 @@
   "description": "GSD Core is a meta-prompting, context engineering, and spec-driven development system for AI coding agents.",
   "bin": {
     "gsd-core": "bin/install.js",
-    "gsd-tools": "get-shit-done/bin/gsd-tools.cjs"
+    "gsd-tools": "gsd-core/bin/gsd-tools.cjs"
   },
   "files": [
     "bin",
     "commands",
-    "get-shit-done",
+    "gsd-core",
     "assets",
     "agents",
     "hooks",
@@ -51,6 +51,7 @@
   "devDependencies": {
     "@eslint/js": "^9.39.4",
     "@stryker-mutator/core": "^9.6.1",
+    "@types/node": "^22.19.19",
     "c8": "^11.0.0",
     "eslint": "^9.39.4",
     "eslint-plugin-n": "^17.24.0",
@@ -75,6 +76,7 @@
     "build:lib": "tsc -p tsconfig.build.json",
     "generate:identity": "node scripts/generate-package-identity.cjs",
     "prepack": "npm run build:lib",
+    "prepare": "npm run build:lib",
     "prepublishOnly": "npm run build:lib && npm run build:hooks",
     "pretest": "npm run build:lib && npm run lint:skill-deps",
     "pretest:coverage": "npm run build:lib && npm run lint:skill-deps",
@@ -86,6 +88,7 @@
     "lint:pr-checks": "node scripts/lint-pr-check-project-dir.cjs",
     "lint:changeset": "node scripts/changeset/lint.cjs",
     "lint:docs": "node scripts/lint-docs-required.cjs",
+    "lint:legacy-name": "node scripts/lint-legacy-dir-name.cjs",
     "ci:test-scope": "node scripts/ci-test-scope.cjs",
     "changeset": "node scripts/changeset/new.cjs",
     "changelog:render": "node scripts/changeset/cli.cjs render",
@@ -96,8 +99,8 @@
     "test:security": "node scripts/run-tests.cjs --suite security",
     "test:slow": "node scripts/run-tests.cjs --suite slow",
     "test:affected": "node scripts/run-affected-tests.cjs",
-    "test:coverage": "c8 --check-coverage --lines 70 --reporter text --include 'get-shit-done/bin/lib/*.cjs' --exclude 'tests/**' --all node scripts/run-tests.cjs",
-    "test:coverage:unit": "c8 --check-coverage --lines 70 --reporter text --include 'get-shit-done/bin/lib/*.cjs' --exclude 'tests/**' --all node scripts/run-tests.cjs --suite unit",
+    "test:coverage": "c8 --check-coverage --lines 70 --reporter text --include 'gsd-core/bin/lib/*.cjs' --exclude 'tests/**' --all node scripts/run-tests.cjs",
+    "test:coverage:unit": "c8 --check-coverage --lines 70 --reporter text --include 'gsd-core/bin/lib/*.cjs' --exclude 'tests/**' --all node scripts/run-tests.cjs --suite unit",
     "test:coverage:all": "npm run test:coverage",
     "test:mutation": "stryker run",
     "test:mutation:since": "stryker run --incremental --since origin/next"

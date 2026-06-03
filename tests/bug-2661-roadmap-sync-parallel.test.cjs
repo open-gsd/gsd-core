@@ -40,7 +40,7 @@ const fs = require('fs');
 const path = require('path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 
-const WORKFLOW_PATH = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'execute-plan.md');
+const WORKFLOW_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-plan.md');
 
 function writeRoadmap(tmpDir, content) {
   fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), content);

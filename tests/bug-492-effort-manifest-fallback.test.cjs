@@ -6,8 +6,8 @@ const { describe, test, beforeEach, afterEach } = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("path");
 const { createTempProject, cleanup } = require("./helpers.cjs");
-const { resolveEffortInternal, CONFIG_DEFAULTS } = require("../get-shit-done/bin/lib/core.cjs");
-const { CONFIG_DEFAULTS: CANONICAL_CONFIG_DEFAULTS } = require("../get-shit-done/bin/lib/configuration.cjs");
+const { resolveEffortInternal, CONFIG_DEFAULTS } = require("../gsd-core/bin/lib/core.cjs");
+const { CONFIG_DEFAULTS: CANONICAL_CONFIG_DEFAULTS } = require("../gsd-core/bin/lib/configuration.cjs");
 
 describe("#492 manifest effort fallback", () => {
   let tmpDir;

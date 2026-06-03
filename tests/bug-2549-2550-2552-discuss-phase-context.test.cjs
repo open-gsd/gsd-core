@@ -19,12 +19,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const DISCUSS_PHASE = path.join(
-  __dirname, '..', 'get-shit-done', 'workflows', 'discuss-phase.md',
+  __dirname, '..', 'gsd-core', 'workflows', 'discuss-phase.md',
 );
 // After #2551 progressive-disclosure refactor, the scout_codebase phase-type
 // table and split-reads warning live in references/scout-codebase.md.
 const SCOUT_REF = path.join(
-  __dirname, '..', 'get-shit-done', 'references', 'scout-codebase.md',
+  __dirname, '..', 'gsd-core', 'references', 'scout-codebase.md',
 );
 
 function readDiscussContext() {

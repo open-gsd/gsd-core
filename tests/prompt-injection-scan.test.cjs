@@ -29,7 +29,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const { scanForInjection, INJECTION_PATTERNS } = require('../get-shit-done/bin/lib/security.cjs');
+const { scanForInjection, INJECTION_PATTERNS } = require('../gsd-core/bin/lib/security.cjs');
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
@@ -39,8 +39,8 @@ const PROJECT_ROOT = path.join(__dirname, '..');
 const SCAN_DIRS = [
   'agents',
   'commands',
-  'get-shit-done/workflows',
-  'get-shit-done/bin/lib',
+  'gsd-core/workflows',
+  'gsd-core/bin/lib',
   'hooks',
 ];
 
@@ -50,11 +50,11 @@ const SCAN_EXTS = new Set(['.md', '.cjs', '.js', '.json']);
 // Files that legitimately reference injection patterns (e.g., security docs, this test)
 // or exceed the 50K size threshold due to legitimate workflow complexity
 const ALLOWLIST = new Set([
-  'get-shit-done/bin/lib/security.cjs',        // The security module itself
-  'get-shit-done/workflows/discuss-phase.md',  // Large workflow (~50K) with power mode + i18n
-  'get-shit-done/workflows/new-project.md',     // Large workflow (~50K) — agent install, runtime detect, brownfield map, #3491 worktree gating
-  'get-shit-done/workflows/execute-phase.md',  // Large orchestration workflow (~51K) with wave execution + code-review gate
-  'get-shit-done/workflows/plan-phase.md',      // Large orchestration workflow (~51K) with TDD mode integration
+  'gsd-core/bin/lib/security.cjs',        // The security module itself
+  'gsd-core/workflows/discuss-phase.md',  // Large workflow (~50K) with power mode + i18n
+  'gsd-core/workflows/new-project.md',     // Large workflow (~50K) — agent install, runtime detect, brownfield map, #3491 worktree gating
+  'gsd-core/workflows/execute-phase.md',  // Large orchestration workflow (~51K) with wave execution + code-review gate
+  'gsd-core/workflows/plan-phase.md',      // Large orchestration workflow (~51K) with TDD mode integration
   'hooks/gsd-prompt-guard.js',                  // The prompt guard hook
   'hooks/gsd-read-injection-scanner.js',        // The read injection scanner (contains patterns)
   'tests/security.test.cjs',                    // Security tests
@@ -67,7 +67,7 @@ const ALLOWLIST = new Set([
 // Do NOT add files here that legitimately reference injection patterns (those
 // belong in ALLOWLIST). Only add files that are large but otherwise clean.
 const SIZE_ONLY_WORKFLOWS = new Set([
-  'get-shit-done/workflows/docs-update.md',  // ~51K after fix-loop truncation guard (#571)
+  'gsd-core/workflows/docs-update.md',  // ~51K after fix-loop truncation guard (#571)
 ]);
 
 // ─── Scanner ────────────────────────────────────────────────────────────────
@@ -111,8 +111,8 @@ describe('codebase prompt injection scan', () => {
 
     for (const file of agentFiles) {
       // Normalize to POSIX separators so ALLOWLIST.has() works on Windows
-      // (path.relative returns 'get-shit-done\bin\...' on win32; allowlist
-      // keys are POSIX 'get-shit-done/bin/...').
+      // (path.relative returns 'gsd-core\bin\...' on win32; allowlist
+      // keys are POSIX 'gsd-core/bin/...').
       const relPath = path.relative(PROJECT_ROOT, file).replace(/\\/g, '/');
       if (ALLOWLIST.has(relPath)) continue;
 
@@ -144,8 +144,8 @@ describe('codebase prompt injection scan', () => {
 
     for (const file of agentFiles) {
       // Normalize to POSIX separators so ALLOWLIST.has() works on Windows
-      // (path.relative returns 'get-shit-done\bin\...' on win32; allowlist
-      // keys are POSIX 'get-shit-done/bin/...').
+      // (path.relative returns 'gsd-core\bin\...' on win32; allowlist
+      // keys are POSIX 'gsd-core/bin/...').
       const relPath = path.relative(PROJECT_ROOT, file).replace(/\\/g, '/');
       if (ALLOWLIST.has(relPath)) continue;
 
@@ -168,8 +168,8 @@ describe('codebase prompt injection scan', () => {
 
     for (const file of workflowFiles) {
       // Normalize to POSIX separators so ALLOWLIST.has() works on Windows
-      // (path.relative returns 'get-shit-done\bin\...' on win32; allowlist
-      // keys are POSIX 'get-shit-done/bin/...').
+      // (path.relative returns 'gsd-core\bin\...' on win32; allowlist
+      // keys are POSIX 'gsd-core/bin/...').
       const relPath = path.relative(PROJECT_ROOT, file).replace(/\\/g, '/');
       if (ALLOWLIST.has(relPath)) continue;
 
@@ -200,8 +200,8 @@ describe('codebase prompt injection scan', () => {
 
     for (const file of commandFiles) {
       // Normalize to POSIX separators so ALLOWLIST.has() works on Windows
-      // (path.relative returns 'get-shit-done\bin\...' on win32; allowlist
-      // keys are POSIX 'get-shit-done/bin/...').
+      // (path.relative returns 'gsd-core\bin\...' on win32; allowlist
+      // keys are POSIX 'gsd-core/bin/...').
       const relPath = path.relative(PROJECT_ROOT, file).replace(/\\/g, '/');
       if (ALLOWLIST.has(relPath)) continue;
 
@@ -226,8 +226,8 @@ describe('codebase prompt injection scan', () => {
 
     for (const file of hookFiles) {
       // Normalize to POSIX separators so ALLOWLIST.has() works on Windows
-      // (path.relative returns 'get-shit-done\bin\...' on win32; allowlist
-      // keys are POSIX 'get-shit-done/bin/...').
+      // (path.relative returns 'gsd-core\bin\...' on win32; allowlist
+      // keys are POSIX 'gsd-core/bin/...').
       const relPath = path.relative(PROJECT_ROOT, file).replace(/\\/g, '/');
       if (ALLOWLIST.has(relPath)) continue;
 
@@ -252,8 +252,8 @@ describe('codebase prompt injection scan', () => {
 
     for (const file of libFiles) {
       // Normalize to POSIX separators so ALLOWLIST.has() works on Windows
-      // (path.relative returns 'get-shit-done\bin\...' on win32; allowlist
-      // keys are POSIX 'get-shit-done/bin/...').
+      // (path.relative returns 'gsd-core\bin\...' on win32; allowlist
+      // keys are POSIX 'gsd-core/bin/...').
       const relPath = path.relative(PROJECT_ROOT, file).replace(/\\/g, '/');
       if (ALLOWLIST.has(relPath)) continue;
 
@@ -278,8 +278,8 @@ describe('codebase prompt injection scan', () => {
 
     for (const file of allFiles) {
       // Normalize to POSIX separators so ALLOWLIST.has() works on Windows
-      // (path.relative returns 'get-shit-done\bin\...' on win32; allowlist
-      // keys are POSIX 'get-shit-done/bin/...').
+      // (path.relative returns 'gsd-core\bin\...' on win32; allowlist
+      // keys are POSIX 'gsd-core/bin/...').
       const relPath = path.relative(PROJECT_ROOT, file).replace(/\\/g, '/');
       if (ALLOWLIST.has(relPath)) continue;
 
@@ -310,8 +310,8 @@ describe('codebase prompt injection scan', () => {
 
     for (const file of allFiles) {
       // Normalize to POSIX separators so ALLOWLIST.has() works on Windows
-      // (path.relative returns 'get-shit-done\bin\...' on win32; allowlist
-      // keys are POSIX 'get-shit-done/bin/...').
+      // (path.relative returns 'gsd-core\bin\...' on win32; allowlist
+      // keys are POSIX 'gsd-core/bin/...').
       const relPath = path.relative(PROJECT_ROOT, file).replace(/\\/g, '/');
       if (ALLOWLIST.has(relPath)) continue;
       // Allow .md files to use common tags in examples/docs

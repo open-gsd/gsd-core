@@ -19,8 +19,8 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const NEW_PROJECT_PATH = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'new-project.md');
-const NEW_MILESTONE_PATH = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'new-milestone.md');
+const NEW_PROJECT_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'new-project.md');
+const NEW_MILESTONE_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'new-milestone.md');
 const AGENTS_DIR = path.join(__dirname, '..', 'agents');
 
 describe('gsd-project-researcher agent registration (#2419)', () => {

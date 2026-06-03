@@ -117,7 +117,7 @@ describe('ship.pr_body_sections config (#3167)', () => {
   });
 
   test('ship workflow composes configured sections as append-only extensions', () => {
-    const workflow = readRepoFile('get-shit-done/workflows/ship.md');
+    const workflow = readRepoFile('gsd-core/workflows/ship.md');
 
     assert.match(workflow, /config-get ship\.pr_body_sections --default '\[\]'/);
     assert.match(workflow, /append-only/i);
@@ -132,7 +132,7 @@ describe('ship.pr_body_sections config (#3167)', () => {
   });
 
   test('default config and documentation describe ship.pr_body_sections', () => {
-    const template = JSON.parse(readRepoFile('get-shit-done/templates/config.json'));
+    const template = JSON.parse(readRepoFile('gsd-core/templates/config.json'));
     assert.deepEqual(template.ship.pr_body_sections, []);
 
     const docs = readRepoFile('docs/CONFIGURATION.md');
@@ -142,12 +142,12 @@ describe('ship.pr_body_sections config (#3167)', () => {
     assert.match(docs, /lean\/agile PRD/i);
     assert.match(docs, /Definition of Done/);
 
-    const planningConfig = readRepoFile('get-shit-done/references/planning-config.md');
+    const planningConfig = readRepoFile('gsd-core/references/planning-config.md');
     assert.match(planningConfig, /ship\.pr_body_sections/);
   });
 
   test('new-project onboarding can seed enabled or disabled PR body sections', () => {
-    const workflow = readRepoFile('get-shit-done/workflows/new-project.md');
+    const workflow = readRepoFile('gsd-core/workflows/new-project.md');
 
     assert.match(workflow, /ship\.pr_body_sections/);
     assert.match(workflow, /enabled.*true/);

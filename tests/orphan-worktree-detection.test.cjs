@@ -67,13 +67,13 @@ function setupHealthyProject(tmpDir) {
 
 describe('W017: structural presence', () => {
   test('worktree-safety module exports inspectWorktreeHealth', () => {
-    const modulePath = path.join(__dirname, '..', 'get-shit-done', 'bin', 'lib', 'worktree-safety.cjs');
+    const modulePath = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'worktree-safety.cjs');
     const seam = require(modulePath);
     assert.strictEqual(typeof seam.inspectWorktreeHealth, 'function');
   });
 
   test('worktree-safety module exports linked worktree listing interface', () => {
-    const modulePath = path.join(__dirname, '..', 'get-shit-done', 'bin', 'lib', 'worktree-safety.cjs');
+    const modulePath = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'worktree-safety.cjs');
     const seam = require(modulePath);
     assert.strictEqual(typeof seam.listLinkedWorktreePaths, 'function');
   });

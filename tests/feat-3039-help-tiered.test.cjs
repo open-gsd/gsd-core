@@ -42,7 +42,7 @@ const path = require('node:path');
 const { assertTightCeiling } = require('../scripts/lib/allowlist-ratchet.cjs');
 
 const ROOT = path.join(__dirname, '..');
-const WORKFLOWS = path.join(ROOT, 'get-shit-done', 'workflows');
+const WORKFLOWS = path.join(ROOT, 'gsd-core', 'workflows');
 const MODES = path.join(WORKFLOWS, 'help', 'modes');
 const DISPATCHER = path.join(WORKFLOWS, 'help.md');
 const COMMAND_SHIM = path.join(ROOT, 'commands', 'gsd', 'help.md');

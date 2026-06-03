@@ -10,7 +10,7 @@ All changes in `bin/install.js` unless noted.
 **Line 5391-5392** — After `fs.copyFileSync`, add `fs.chmodSync(destFile, 0o755)` for `.sh` files.
 
 ### Fix 2: Fix Codex hook path and filename (CRITICAL)
-**Line 5485** — Change `gsd-update-check.js` to `gsd-check-update.js` and fix path from `get-shit-done/hooks/` to `hooks/`.
+**Line 5485** — Change `gsd-update-check.js` to `gsd-check-update.js` and fix path from `gsd-core/hooks/` to `hooks/`.
 **Line 5492** — Update dedup check to use `gsd-check-update`.
 
 ### Fix 3: Fix stale cache invalidation path (CRITICAL)

@@ -14,8 +14,8 @@ const {
   readInstallState,
   runInstallerMigrations,
   writeInstallState,
-} = require('../get-shit-done/bin/lib/installer-migrations.cjs');
-const firstTimeBaselineMigration = require('../get-shit-done/bin/lib/installer-migrations/000-first-time-baseline.cjs');
+} = require('../gsd-core/bin/lib/installer-migrations.cjs');
+const firstTimeBaselineMigration = require('../gsd-core/bin/lib/installer-migrations/000-first-time-baseline.cjs');
 
 function createTempInstall() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-installer-migrations-'));
@@ -94,10 +94,10 @@ function userHook(command) {
 test('records a first-time baseline while preserving user-owned artifacts', () => {
   const configDir = createTempInstall();
   try {
-    writeFile(configDir, 'get-shit-done/workflows/plan.md', 'managed workflow\n');
-    writeFile(configDir, 'get-shit-done/USER-PROFILE.md', 'user profile\n');
+    writeFile(configDir, 'gsd-core/workflows/plan.md', 'managed workflow\n');
+    writeFile(configDir, 'gsd-core/USER-PROFILE.md', 'user profile\n');
     writeManifest(configDir, {
-      'get-shit-done/workflows/plan.md': sha256('managed workflow\n'),
+      'gsd-core/workflows/plan.md': sha256('managed workflow\n'),
     });
 
     const result = runInstallerMigrations({
@@ -110,8 +110,8 @@ test('records a first-time baseline while preserving user-owned artifacts', () =
     });
 
     assert.deepEqual(result.appliedMigrationIds, ['2026-05-11-first-time-baseline-scan']);
-    assert.equal(fs.readFileSync(path.join(configDir, 'get-shit-done/workflows/plan.md'), 'utf8'), 'managed workflow\n');
-    assert.equal(fs.readFileSync(path.join(configDir, 'get-shit-done/USER-PROFILE.md'), 'utf8'), 'user profile\n');
+    assert.equal(fs.readFileSync(path.join(configDir, 'gsd-core/workflows/plan.md'), 'utf8'), 'managed workflow\n');
+    assert.equal(fs.readFileSync(path.join(configDir, 'gsd-core/USER-PROFILE.md'), 'utf8'), 'user profile\n');
 
     assert.deepEqual(
       result.plan.actions.map((action) => ({
@@ -122,12 +122,12 @@ test('records a first-time baseline while preserving user-owned artifacts', () =
       [
         {
           type: 'record-baseline',
-          relPath: 'get-shit-done/workflows/plan.md',
+          relPath: 'gsd-core/workflows/plan.md',
           classification: 'managed-pristine',
         },
         {
           type: 'baseline-preserve-user',
-          relPath: 'get-shit-done/USER-PROFILE.md',
+          relPath: 'gsd-core/USER-PROFILE.md',
           classification: 'user-owned',
         },
       ]
@@ -1265,7 +1265,7 @@ test('backs up modified legacy orphan files before removing them', () => {
     const plan = planInstallerMigrations({
       configDir,
       migrations: discoverInstallerMigrations({
-        migrationsDir: path.join(__dirname, '..', 'get-shit-done', 'bin', 'lib', 'installer-migrations'),
+        migrationsDir: path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'installer-migrations'),
       }),
       scope: 'global',
       now: () => '2026-05-11T00:00:05.000Z',

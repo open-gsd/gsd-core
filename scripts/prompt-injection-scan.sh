@@ -73,13 +73,17 @@ ALLOWLIST=(
   'tests/security.test.cjs'
   'tests/prompt-injection-scan.test.cjs'
   'tests/verify.test.cjs'
-  'get-shit-done/bin/lib/security.cjs'
+  'gsd-core/bin/lib/security.cjs'
   'hooks/gsd-prompt-guard.js'
   'hooks/gsd-read-injection-scanner.js'
   'tests/read-injection-scanner.test.cjs'
   'tests/security-prompt-injection.test.cjs'
   'tests/fixtures/adversarial/security/'
   'SECURITY.md'
+  # These files contain intentional injection examples / security-model prose
+  # and are not attack vectors — they explain/demonstrate injection patterns.
+  'TEST-EXAMPLES.md'
+  'docs/explanation/security-model.md'
 )
 
 is_allowlisted() {

@@ -8,7 +8,7 @@ For current work on **Grok Build compatibility** and multi-runtime synchronizati
 
 ## Project Structure & Module Organization
 
-This repository ships GSD as a Node.js CLI and SDK. Root package entry points live in `bin/`, scripts in `scripts/`, runtime hooks in `hooks/`, command definitions in `commands/gsd/`, and workflow/template content in `get-shit-done/`. Agent role files are in `agents/`; docs are in `docs/`; logos and terminal images are in `assets/`. Root tests are in `tests/*.test.cjs`. The TypeScript SDK is isolated under `sdk/`, with source and Vitest tests in `sdk/src/`.
+This repository ships GSD as a Node.js CLI and SDK. Root package entry points live in `bin/`, scripts in `scripts/`, runtime hooks in `hooks/`, command definitions in `commands/gsd/`, and workflow/template content in `gsd-core/`. Agent role files are in `agents/`; docs are in `docs/`; logos and terminal images are in `assets/`. Root tests are in `tests/*.test.cjs`. The TypeScript SDK is isolated under `sdk/`, with source and Vitest tests in `sdk/src/`.
 
 ## Build, Test, and Development Commands
 

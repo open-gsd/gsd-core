@@ -23,7 +23,7 @@ const {
   buildStateMd,
   slugify,
   zeroPad,
-} = require('../get-shit-done/bin/lib/gsd2-import.cjs');
+} = require('../gsd-core/bin/lib/gsd2-import.cjs');
 
 // ─── Fixture Builders ──────────────────────────────────────────────────────
 

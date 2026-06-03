@@ -19,7 +19,7 @@ const { cleanup } = require('./helpers.cjs');
 
 const repoRoot = path.resolve(__dirname, '..');
 const commandPath = path.join(repoRoot, 'commands', 'gsd', 'forensics.md');
-const workflowPath = path.join(repoRoot, 'get-shit-done', 'workflows', 'forensics.md');
+const workflowPath = path.join(repoRoot, 'gsd-core', 'workflows', 'forensics.md');
 
 describe('forensics command', () => {
   test('command file exists', () => {

@@ -4,7 +4,7 @@
 /**
  * Drift-guard lint for the Package Identity seam (issue #498).
  *
- * The seam (`get-shit-done/bin/lib/package-identity.cjs`, derived from
+ * The seam (`get-shit-done/bin/lib/package-identity.cjs`, derived from // gsd-allow-legacy-name
  * package.json) is the single source of GSD's published coordinates. Many
  * runtime surfaces still carry a literal copy of those coordinates because
  * they cannot `require()` the seam at runtime: the bash launcher snippet (and
@@ -19,7 +19,7 @@
  * literal is reported until updated. That is what turns a repoint into a
  * one-line change with mechanical enforcement.
  *
- * Scope: the runtime/code surface (bin/, hooks/, scripts/, get-shit-done/).
+ * Scope: the runtime/code surface (bin/, hooks/, scripts/, get-shit-done/). // gsd-allow-legacy-name
  * Pure-prose docs and localized READMEs are intentionally out of scope.
  */
 
@@ -27,11 +27,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 // A GSD package coordinate: a scoped npm name whose package part contains
-// "get-shit-done" (so @opengsd/gsd-sdk and unrelated scopes never match).
-const PACKAGE_RE = /@[A-Za-z0-9._-]+\/[A-Za-z0-9._-]*get-shit-done[A-Za-z0-9._-]*/g;
+// "get-shit-done" (so @opengsd/gsd-sdk and unrelated scopes never match). // gsd-allow-legacy-name
+const PACKAGE_RE = /@[A-Za-z0-9._-]+\/[A-Za-z0-9._-]*get-shit-done[A-Za-z0-9._-]*/g; // gsd-allow-legacy-name
 // A GSD repo slug, only inside a GitHub URL context so it never overlaps the
 // scoped package literal above. The `.git` suffix is trimmed before compare.
-const SLUG_RE = /(?:github\.com[/:]|raw\.githubusercontent\.com\/)([A-Za-z0-9._-]+\/[A-Za-z0-9._-]*get-shit-done[A-Za-z0-9._-]*)/g;
+const SLUG_RE = /(?:github\.com[/:]|raw\.githubusercontent\.com\/)([A-Za-z0-9._-]+\/[A-Za-z0-9._-]*get-shit-done[A-Za-z0-9._-]*)/g; // gsd-allow-legacy-name
 
 function lineOf(text, index) {
   let line = 1;
@@ -62,14 +62,14 @@ function findCoordinateDrift(text, { packageName, repoSlug }) {
 }
 
 // Directories scanned, relative to repo root.
-const SCAN_DIRS = ['bin', 'hooks', 'scripts', 'get-shit-done'];
+const SCAN_DIRS = ['bin', 'hooks', 'scripts', 'gsd-core'];
 const SCAN_EXT = new Set(['.js', '.cjs', '.sh', '.md']);
 // Files exempt because they ARE the source of truth / the tooling that defines
 // the coordinate patterns. The generated seam holds the correct value by
 // construction; the generator and this lint carry regex/templates, not stray
 // literals.
 const EXEMPT = new Set([
-  path.join('get-shit-done', 'bin', 'lib', 'package-identity.cjs'),
+  path.join('gsd-core', 'bin', 'lib', 'package-identity.cjs'),
   path.join('scripts', 'generate-package-identity.cjs'),
   path.join('scripts', 'lint-package-identity-drift.cjs'),
 ]);
@@ -98,7 +98,7 @@ function walk(dir, acc) {
  * annotated with the repo-relative file path.
  */
 function scanRepo(root) {
-  const seam = require(path.join(root, 'get-shit-done', 'bin', 'lib', 'package-identity.cjs'));
+  const seam = require(path.join(root, 'gsd-core', 'bin', 'lib', 'package-identity.cjs'));
   const expected = { packageName: seam.packageName, repoSlug: seam.repoSlug };
   const violations = [];
   for (const dir of SCAN_DIRS) {

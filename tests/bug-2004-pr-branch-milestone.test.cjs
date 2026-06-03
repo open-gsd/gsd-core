@@ -22,7 +22,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const workflowPath = path.resolve(
-  __dirname, '..', 'get-shit-done', 'workflows', 'pr-branch.md'
+  __dirname, '..', 'gsd-core', 'workflows', 'pr-branch.md'
 );
 
 describe('bug #2004: pr-branch preserves structural planning commits', () => {

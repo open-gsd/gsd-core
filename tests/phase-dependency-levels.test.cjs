@@ -10,7 +10,7 @@
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
-const { computeDependencyLevels } = require('../get-shit-done/bin/lib/phase.cjs');
+const { computeDependencyLevels } = require('../gsd-core/bin/lib/phase.cjs');
 
 // Helper: build rawPlans + planMap + canonicalToId from a simple spec.
 // spec is an array of { id, dependsOn } objects.

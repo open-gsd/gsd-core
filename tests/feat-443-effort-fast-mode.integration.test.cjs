@@ -52,13 +52,13 @@ const {
   resolveFastModeInternal,
   resolveEffortForTier,
   VALID_EFFORTS,
-} = require('../get-shit-done/bin/lib/core.cjs');
+} = require('../gsd-core/bin/lib/core.cjs');
 
 const {
   renderEffortForRuntime,
   RUNTIMES_WITH_FAST_MODE,
   catalog,
-} = require('../get-shit-done/bin/lib/model-catalog.cjs');
+} = require('../gsd-core/bin/lib/model-catalog.cjs');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Ground-truth provider enums (defined HERE, not sourced from the implementation).

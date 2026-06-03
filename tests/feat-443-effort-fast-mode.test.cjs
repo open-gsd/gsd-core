@@ -25,12 +25,12 @@ const {
   resolveEffortInternal,
   resolveFastModeInternal,
   resolveEffortForTier,
-} = require('../get-shit-done/bin/lib/core.cjs');
+} = require('../gsd-core/bin/lib/core.cjs');
 
 const {
   renderEffortForRuntime,
   RUNTIMES_WITH_FAST_MODE,
-} = require('../get-shit-done/bin/lib/model-catalog.cjs');
+} = require('../gsd-core/bin/lib/model-catalog.cjs');
 
 const {
   injectEffortFrontmatter,
@@ -621,7 +621,7 @@ describe('#443 QA matrix — malformed effort/fast_mode configs', () => {
 // ─── Config schema: new keys are valid ───────────────────────────────────────
 
 describe('#443 config schema: new effort/fast_mode keys valid', () => {
-  const { isValidConfigKey } = require('../get-shit-done/bin/lib/config-schema.cjs');
+  const { isValidConfigKey } = require('../gsd-core/bin/lib/config-schema.cjs');
 
   test('effort.default is a valid config key', () => {
     assert.ok(isValidConfigKey('effort.default'), 'effort.default must be valid');

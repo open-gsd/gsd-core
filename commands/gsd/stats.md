@@ -11,7 +11,7 @@ Display comprehensive project statistics including phase progress, plan executio
 </objective>
 
 <execution_context>
-@~/.claude/get-shit-done/workflows/stats.md
+@~/.claude/gsd-core/workflows/stats.md
 </execution_context>
 
 <process>

@@ -8,11 +8,11 @@
  *
  * #2790: reapply-patches.md (combined command+workflow) was consolidated into
  * update.md as the --reapply flag. The workflow content now lives in
- * get-shit-done/workflows/reapply-patches.md.
+ * gsd-core/workflows/reapply-patches.md.
  */
 
 // allow-test-rule: source-text-is-the-product
-// get-shit-done/workflows/reapply-patches.md is the installed runtime workflow —
+// gsd-core/workflows/reapply-patches.md is the installed runtime workflow —
 // its text IS the deployed behavioral contract for the --reapply path.
 
 const { describe, test, before } = require('node:test');
@@ -21,7 +21,7 @@ const fs = require('fs');
 const path = require('path');
 
 const WORKFLOW_PATH = path.join(
-  __dirname, '..', 'get-shit-done', 'workflows', 'reapply-patches.md'
+  __dirname, '..', 'gsd-core', 'workflows', 'reapply-patches.md'
 );
 
 function extractTagBlock(markdown, tagName) {

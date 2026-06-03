@@ -15,13 +15,13 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const QUICK_MD = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'quick.md');
+const QUICK_MD = path.join(__dirname, '..', 'gsd-core', 'workflows', 'quick.md');
 
 describe('quick.md pre-dispatch PLAN.md commit (#2432)', () => {
   let content;
 
   test('quick.md exists', () => {
-    assert.ok(fs.existsSync(QUICK_MD), 'get-shit-done/workflows/quick.md must exist');
+    assert.ok(fs.existsSync(QUICK_MD), 'gsd-core/workflows/quick.md must exist');
     content = fs.readFileSync(QUICK_MD, 'utf-8');
   });
 

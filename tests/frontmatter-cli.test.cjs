@@ -94,7 +94,7 @@ describe('frontmatter set', () => {
 
     // Read back and verify
     const content = fs.readFileSync(file, 'utf-8');
-    const { extractFrontmatter } = require('../get-shit-done/bin/lib/frontmatter.cjs');
+    const { extractFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
     const fm = extractFrontmatter(content);
     assert.strictEqual(fm.phase, '02');
   });
@@ -105,7 +105,7 @@ describe('frontmatter set', () => {
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const content = fs.readFileSync(file, 'utf-8');
-    const { extractFrontmatter } = require('../get-shit-done/bin/lib/frontmatter.cjs');
+    const { extractFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
     const fm = extractFrontmatter(content);
     assert.strictEqual(fm.status, 'active');
   });
@@ -116,7 +116,7 @@ describe('frontmatter set', () => {
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const content = fs.readFileSync(file, 'utf-8');
-    const { extractFrontmatter } = require('../get-shit-done/bin/lib/frontmatter.cjs');
+    const { extractFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
     const fm = extractFrontmatter(content);
     assert.ok(Array.isArray(fm.tags), 'tags should be an array');
     assert.deepStrictEqual(fm.tags, ['a', 'b']);
@@ -149,7 +149,7 @@ describe('frontmatter merge', () => {
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const content = fs.readFileSync(file, 'utf-8');
-    const { extractFrontmatter } = require('../get-shit-done/bin/lib/frontmatter.cjs');
+    const { extractFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
     const fm = extractFrontmatter(content);
     assert.strictEqual(fm.phase, '01', 'original field should be preserved');
     assert.strictEqual(fm.plan, '02', 'merged field should be present');
@@ -162,7 +162,7 @@ describe('frontmatter merge', () => {
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const content = fs.readFileSync(file, 'utf-8');
-    const { extractFrontmatter } = require('../get-shit-done/bin/lib/frontmatter.cjs');
+    const { extractFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
     const fm = extractFrontmatter(content);
     assert.strictEqual(fm.phase, '02', 'conflicting field should be overwritten');
     assert.strictEqual(fm.type, 'execute', 'non-conflicting field should be preserved');

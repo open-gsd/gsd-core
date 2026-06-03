@@ -14,14 +14,14 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { extractFrontmatter } = require('../get-shit-done/bin/lib/frontmatter.cjs');
+const { extractFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const CMD_PATH = path.join(ROOT, 'commands', 'gsd', 'ingest-docs.md');
-const WF_PATH = path.join(ROOT, 'get-shit-done', 'workflows', 'ingest-docs.md');
+const WF_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'ingest-docs.md');
 const CLASSIFIER_PATH = path.join(ROOT, 'agents', 'gsd-doc-classifier.md');
 const SYNTHESIZER_PATH = path.join(ROOT, 'agents', 'gsd-doc-synthesizer.md');
-const CONFLICT_ENGINE_PATH = path.join(ROOT, 'get-shit-done', 'references', 'doc-conflict-engine.md');
+const CONFLICT_ENGINE_PATH = path.join(ROOT, 'gsd-core', 'references', 'doc-conflict-engine.md');
 
 // ─── File Existence ────────────────────────────────────────────────────────────
 
@@ -30,7 +30,7 @@ describe('ingest-docs file structure (#2387)', () => {
     assert.ok(fs.existsSync(CMD_PATH), 'commands/gsd/ingest-docs.md should exist');
   });
   test('workflow file exists', () => {
-    assert.ok(fs.existsSync(WF_PATH), 'get-shit-done/workflows/ingest-docs.md should exist');
+    assert.ok(fs.existsSync(WF_PATH), 'gsd-core/workflows/ingest-docs.md should exist');
   });
   test('classifier agent exists', () => {
     assert.ok(fs.existsSync(CLASSIFIER_PATH), 'agents/gsd-doc-classifier.md should exist');
@@ -77,19 +77,19 @@ describe('ingest-docs command references', () => {
 
   test('references the ingest-docs workflow', () => {
     assert.ok(
-      content.includes('@~/.claude/get-shit-done/workflows/ingest-docs.md'),
+      content.includes('@~/.claude/gsd-core/workflows/ingest-docs.md'),
       'command must @-reference its workflow'
     );
   });
   test('references the doc-conflict-engine', () => {
     assert.ok(
-      content.includes('@~/.claude/get-shit-done/references/doc-conflict-engine.md'),
+      content.includes('@~/.claude/gsd-core/references/doc-conflict-engine.md'),
       'command must load the shared conflict-engine contract'
     );
   });
   test('references gate-prompts', () => {
     assert.ok(
-      content.includes('@~/.claude/get-shit-done/references/gate-prompts.md'),
+      content.includes('@~/.claude/gsd-core/references/gate-prompts.md'),
       'command must load gate-prompts for AskUserQuestion patterns'
     );
   });
@@ -292,11 +292,11 @@ describe('doc-conflict-engine shared reference', () => {
 
 describe('import command adopts shared conflict-engine', () => {
   const cmdContent = fs.readFileSync(path.join(ROOT, 'commands', 'gsd', 'import.md'), 'utf-8');
-  const wfContent = fs.readFileSync(path.join(ROOT, 'get-shit-done', 'workflows', 'import.md'), 'utf-8');
+  const wfContent = fs.readFileSync(path.join(ROOT, 'gsd-core', 'workflows', 'import.md'), 'utf-8');
 
   test('import command loads doc-conflict-engine reference', () => {
     assert.ok(
-      cmdContent.includes('@~/.claude/get-shit-done/references/doc-conflict-engine.md'),
+      cmdContent.includes('@~/.claude/gsd-core/references/doc-conflict-engine.md'),
       '/gsd-import must load the shared conflict-engine contract'
     );
   });

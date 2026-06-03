@@ -3,7 +3,7 @@
 /**
  * Lint guard: the package name must be single-sourced from package-identity.cjs.
  *
- * Scans runtime files (bin/install.js, get-shit-done/bin/**, scripts/*.cjs)
+ * Scans runtime files (bin/install.js, gsd-core/bin/**, scripts/*.cjs)
  * and FAILS if the literal `@opengsd/gsd-core` appears in a
  * non-comment, non-identity-module line. This enforces that a future rename
  * is a one-file change in package.json (#516).
@@ -25,9 +25,9 @@ const { execSync } = require('node:child_process');
 
 const ROOT = path.join(__dirname, '..');
 const LITERAL = '@opengsd/gsd-core';
-const IDENTITY_MODULE = path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'package-identity.cjs');
+const IDENTITY_MODULE = path.join(ROOT, 'gsd-core', 'bin', 'lib', 'package-identity.cjs');
 
-// Files to scan: bin/install.js + everything under get-shit-done/bin/ + touched scripts
+// Files to scan: bin/install.js + everything under gsd-core/bin/ + touched scripts
 function getRuntimeFiles() {
   const files = [];
 
@@ -35,7 +35,7 @@ function getRuntimeFiles() {
   const installJs = path.join(ROOT, 'bin', 'install.js');
   if (fs.existsSync(installJs)) files.push(installJs);
 
-  // get-shit-done/bin/**/*.cjs and *.js (recursive)
+  // gsd-core/bin/**/*.cjs and *.js (recursive)
   function collectDir(dir) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const fullPath = path.join(dir, entry.name);
@@ -46,7 +46,7 @@ function getRuntimeFiles() {
       }
     }
   }
-  collectDir(path.join(ROOT, 'get-shit-done', 'bin'));
+  collectDir(path.join(ROOT, 'gsd-core', 'bin'));
 
   // scripts/*.cjs
   for (const entry of fs.readdirSync(path.join(ROOT, 'scripts'), { withFileTypes: true })) {
@@ -100,12 +100,12 @@ test('no hardcoded @opengsd/gsd-core literals in runtime non-comment code lines 
     [],
     `Found ${violations.length} hardcoded @opengsd/gsd-core literal(s) in non-comment code lines:\n` +
     violations.map(v => `  ${v}`).join('\n') +
-    '\n\nReplace each with the PACKAGE_NAME imported from get-shit-done/bin/lib/package-identity.cjs'
+    '\n\nReplace each with the PACKAGE_NAME imported from gsd-core/bin/lib/package-identity.cjs'
   );
 });
 
 test('PACKAGE_NAME from identity module matches package.json name (#516)', () => {
-  const { PACKAGE_NAME } = require('../get-shit-done/bin/lib/package-identity.cjs');
+  const { PACKAGE_NAME } = require('../gsd-core/bin/lib/package-identity.cjs');
   const pkgJson = require('../package.json');
   assert.equal(
     PACKAGE_NAME,

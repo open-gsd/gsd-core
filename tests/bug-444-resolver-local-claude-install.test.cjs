@@ -1,13 +1,13 @@
 'use strict';
 /**
  * Regression test for bug #444: gsd_run resolver must probe
- * <repo-root>/.claude/get-shit-done/bin/gsd-tools.cjs (the project-local
+ * <repo-root>/.claude/gsd-core/bin/gsd-tools.cjs (the project-local
  * `--claude --local` install location) BEFORE checking $HOME/.claude and PATH.
  *
  * Asserts:
  * (A) The canonical snippet file contains the repo-local .claude/ check.
- * (B) Behavioral: when RUNTIME_DIR/get-shit-done/bin/ misses, but a stub
- *     exists ONLY at <repo-root>/.claude/get-shit-done/bin/gsd-tools.cjs,
+ * (B) Behavioral: when RUNTIME_DIR/gsd-core/bin/ misses, but a stub
+ *     exists ONLY at <repo-root>/.claude/gsd-core/bin/gsd-tools.cjs,
  *     gsd_run resolves to that stub (no PATH stub, no HOME stub).
  * (C) Precedence: repo-local .claude/ wins over $HOME/.claude/ when both exist.
  */
@@ -24,12 +24,12 @@ const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 const { cleanup } = require('./helpers.cjs');
 
-const WORKFLOWS_DIR = path.join(__dirname, '..', 'get-shit-done', 'workflows');
+const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
 const SNIPPET_FILE = path.join(WORKFLOWS_DIR, '_runtime-launcher.snippet.sh');
 
 // The probe string that must appear in the snippet for the new repo-local check.
 // The snippet uses _GSD_RUNTIME_ROOT as the intermediate variable.
-const LOCAL_CLAUDE_PROBE = '_GSD_RUNTIME_ROOT}/.claude/get-shit-done/bin/';
+const LOCAL_CLAUDE_PROBE = '_GSD_RUNTIME_ROOT}/.claude/gsd-core/bin/';
 
 /**
  * Build a PATH that strips gsd-tools but keeps node and system binaries.
@@ -38,8 +38,8 @@ const LOCAL_CLAUDE_PROBE = '_GSD_RUNTIME_ROOT}/.claude/get-shit-done/bin/';
  * We cannot simply remove the whole directory that contains gsd-tools because
  * that directory may also contain node (e.g. /opt/homebrew/bin on macOS).
  * Instead, we keep the system PATH as-is and rely on the test's RUNTIME_DIR
- * having no get-shit-done/bin/ sub-path, so the resolver's first two checks
- * (RUNTIME_DIR/get-shit-done/bin/ and RUNTIME_DIR/.claude/get-shit-done/bin/)
+ * having no gsd-core/bin/ sub-path, so the resolver's first two checks
+ * (RUNTIME_DIR/gsd-core/bin/ and RUNTIME_DIR/.claude/gsd-core/bin/)
  * are the only ones exercised before we hit our stub.
  *
  * The extra extraBefore dirs (e.g. noToolsBin) sit first but have no gsd-tools
@@ -76,7 +76,7 @@ describe('bug-444: resolver finds repo-local .claude install', () => {
     );
 
     // Must still contain the $HOME/.claude fallback arm
-    const homeClaudeIdx = content.indexOf('$HOME/.claude/get-shit-done/bin/');
+    const homeClaudeIdx = content.indexOf('$HOME/.claude/gsd-core/bin/');
     assert.ok(
       homeClaudeIdx !== -1,
       `Snippet must still contain the $HOME/.claude fallback arm.`,
@@ -91,9 +91,9 @@ describe('bug-444: resolver finds repo-local .claude install', () => {
   });
 
   // --- (B) Behavioral: repo-local .claude stub resolved when only location ---
-  test('(B) gsd_run resolves repo-local .claude/get-shit-done/bin/ stub when no other locations present', () => {
-    // Create a fake repo root with a stub ONLY at .claude/get-shit-done/bin/gsd-tools.cjs
-    // NO stub at get-shit-done/bin/, NOT on PATH, NOT in $HOME/.claude
+  test('(B) gsd_run resolves repo-local .claude/gsd-core/bin/ stub when no other locations present', () => {
+    // Create a fake repo root with a stub ONLY at .claude/gsd-core/bin/gsd-tools.cjs
+    // NO stub at gsd-core/bin/, NOT on PATH, NOT in $HOME/.claude
     const fakeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-444-root-'));
     const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-444-home-'));
     const noToolsBin = path.join(fakeRoot, 'nobin');
@@ -101,7 +101,7 @@ describe('bug-444: resolver finds repo-local .claude install', () => {
 
     try {
       // Create the stub at the repo-local .claude path ONLY
-      const localClaudeBinDir = path.join(fakeRoot, '.claude', 'get-shit-done', 'bin');
+      const localClaudeBinDir = path.join(fakeRoot, '.claude', 'gsd-core', 'bin');
       fs.mkdirSync(localClaudeBinDir, { recursive: true });
       const stubPath = path.join(localClaudeBinDir, 'gsd-tools.cjs');
       fs.writeFileSync(
@@ -134,8 +134,8 @@ describe('bug-444: resolver finds repo-local .claude install', () => {
       // Must have resolved to the local .claude stub
       const normStdout = stdout.replace(/\\/g, '/');
       assert.ok(
-        normStdout.includes('.claude/get-shit-done/bin/gsd-tools.cjs'),
-        `Expected GSD_TOOLS to resolve to .claude/get-shit-done/bin/gsd-tools.cjs, got:\n${stdout.trim()}`,
+        normStdout.includes('.claude/gsd-core/bin/gsd-tools.cjs'),
+        `Expected GSD_TOOLS to resolve to .claude/gsd-core/bin/gsd-tools.cjs, got:\n${stdout.trim()}`,
       );
       // The stub must have been invoked with the correct arguments
       assert.ok(
@@ -157,7 +157,7 @@ describe('bug-444: resolver finds repo-local .claude install', () => {
 
     try {
       // Stub at repo-local .claude/ path (should be picked)
-      const localClaudeBinDir = path.join(fakeRoot, '.claude', 'get-shit-done', 'bin');
+      const localClaudeBinDir = path.join(fakeRoot, '.claude', 'gsd-core', 'bin');
       fs.mkdirSync(localClaudeBinDir, { recursive: true });
       const localStubPath = path.join(localClaudeBinDir, 'gsd-tools.cjs');
       fs.writeFileSync(
@@ -167,7 +167,7 @@ describe('bug-444: resolver finds repo-local .claude install', () => {
       fs.chmodSync(localStubPath, 0o755);
 
       // Stub at $HOME/.claude/ path (must NOT be picked)
-      const homeClaudeBinDir = path.join(fakeHome, '.claude', 'get-shit-done', 'bin');
+      const homeClaudeBinDir = path.join(fakeHome, '.claude', 'gsd-core', 'bin');
       fs.mkdirSync(homeClaudeBinDir, { recursive: true });
       const homeStubPath = path.join(homeClaudeBinDir, 'gsd-tools.cjs');
       fs.writeFileSync(

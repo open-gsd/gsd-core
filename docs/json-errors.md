@@ -39,7 +39,7 @@ Fields:
 
 ## Error code taxonomy
 
-Codes are frozen constants in `get-shit-done/bin/lib/core.cjs` under
+Codes are frozen constants in `gsd-core/bin/lib/core.cjs` under
 `ERROR_REASON`.  Tests must assert on `reason` values (stable), not `message`
 text (unstable).
 
@@ -117,7 +117,7 @@ assert.strictEqual(err.reason, 'sdk_unknown_command');
 ## Adding a new error code
 
 1. Add the constant to `ERROR_REASON` in
-   `get-shit-done/bin/lib/core.cjs` (snake\_case, prefixed by subsystem).
+   `gsd-core/bin/lib/core.cjs` (snake\_case, prefixed by subsystem).
 2. Pass it as the second argument to `error()` at the call site.
 3. Add a row to this document.
 4. Add a test asserting the new `reason` code via `JSON.parse`.

@@ -30,10 +30,10 @@ Three modes:
 </flags>
 
 <execution_context>
-@~/.claude/get-shit-done/workflows/progress.md
-@~/.claude/get-shit-done/workflows/next.md
-@~/.claude/get-shit-done/workflows/do.md
-@~/.claude/get-shit-done/references/ui-brand.md
+@~/.claude/gsd-core/workflows/progress.md
+@~/.claude/gsd-core/workflows/next.md
+@~/.claude/gsd-core/workflows/do.md
+@~/.claude/gsd-core/references/ui-brand.md
 </execution_context>
 
 <process>

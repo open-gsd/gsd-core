@@ -34,12 +34,12 @@ const {
 
 const {
   resolveRuntimeArtifactLayout,
-} = require('../get-shit-done/bin/lib/runtime-artifact-layout.cjs');
+} = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
 
 const {
   loadSkillsManifest,
   resolveProfile,
-} = require('../get-shit-done/bin/lib/install-profiles.cjs');
+} = require('../gsd-core/bin/lib/install-profiles.cjs');
 
 const REAL_COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');
 const MANIFEST = loadSkillsManifest(REAL_COMMANDS_DIR);

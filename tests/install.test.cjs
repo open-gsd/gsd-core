@@ -308,7 +308,7 @@ describe('install/uninstall — hermes (nested skills/gsd/ layout)', () => {
     assert.ok(fs.existsSync(path.join(targetDir, 'skills', 'gsd', 'help', 'SKILL.md')));
     assert.ok(fs.existsSync(path.join(targetDir, 'skills', 'gsd', 'DESCRIPTION.md')),
       'DESCRIPTION.md at category root');
-    assert.ok(fs.existsSync(path.join(targetDir, 'get-shit-done', 'VERSION')));
+    assert.ok(fs.existsSync(path.join(targetDir, 'gsd-core', 'VERSION')));
     assert.ok(fs.existsSync(path.join(targetDir, 'agents')));
 
     const manifest = writeManifest(targetDir, 'hermes');
@@ -319,7 +319,7 @@ describe('install/uninstall — hermes (nested skills/gsd/ layout)', () => {
 
     assert.ok(!fs.existsSync(path.join(targetDir, 'skills', 'gsd', 'help')));
     assert.ok(!fs.existsSync(path.join(targetDir, 'skills', 'gsd')));
-    assert.ok(!fs.existsSync(path.join(targetDir, 'get-shit-done')));
+    assert.ok(!fs.existsSync(path.join(targetDir, 'gsd-core')));
   });
 
   test('installed SKILL.md frontmatter conforms to Hermes spec', () => {
@@ -397,7 +397,7 @@ describe('install/uninstall — qwen (flat skills/gsd-* layout)', () => {
     assert.strictEqual(result.configDir, fs.realpathSync(targetDir));
 
     assert.ok(fs.existsSync(path.join(targetDir, 'skills', 'gsd-help', 'SKILL.md')));
-    assert.ok(fs.existsSync(path.join(targetDir, 'get-shit-done', 'VERSION')));
+    assert.ok(fs.existsSync(path.join(targetDir, 'gsd-core', 'VERSION')));
     assert.ok(fs.existsSync(path.join(targetDir, 'agents')));
 
     const manifest = writeManifest(targetDir, 'qwen');
@@ -405,7 +405,7 @@ describe('install/uninstall — qwen (flat skills/gsd-* layout)', () => {
 
     uninstall(false, 'qwen');
     assert.ok(!fs.existsSync(path.join(targetDir, 'skills', 'gsd-help')));
-    assert.ok(!fs.existsSync(path.join(targetDir, 'get-shit-done')));
+    assert.ok(!fs.existsSync(path.join(targetDir, 'gsd-core')));
   });
 });
 
@@ -438,7 +438,7 @@ describe('install/uninstall — trae (flat skills/gsd-* layout)', () => {
     });
 
     assert.ok(fs.existsSync(path.join(targetDir, 'skills', 'gsd-help', 'SKILL.md')));
-    assert.ok(fs.existsSync(path.join(targetDir, 'get-shit-done', 'VERSION')));
+    assert.ok(fs.existsSync(path.join(targetDir, 'gsd-core', 'VERSION')));
     assert.ok(fs.existsSync(path.join(targetDir, 'agents')));
 
     const manifest = writeManifest(targetDir, 'trae');
@@ -446,7 +446,7 @@ describe('install/uninstall — trae (flat skills/gsd-* layout)', () => {
 
     uninstall(false, 'trae');
     assert.ok(!fs.existsSync(path.join(targetDir, 'skills', 'gsd-help')));
-    assert.ok(!fs.existsSync(path.join(targetDir, 'get-shit-done')));
+    assert.ok(!fs.existsSync(path.join(targetDir, 'gsd-core')));
   });
 });
 
@@ -493,9 +493,9 @@ describe('uninstall skills cleanup — hermes', () => {
   test('removes engine directory', () => {
     install(false, 'hermes');
     const targetDir = path.join(tmpDir, '.hermes');
-    assert.ok(fs.existsSync(path.join(targetDir, 'get-shit-done', 'VERSION')));
+    assert.ok(fs.existsSync(path.join(targetDir, 'gsd-core', 'VERSION')));
     uninstall(false, 'hermes');
-    assert.ok(!fs.existsSync(path.join(targetDir, 'get-shit-done')));
+    assert.ok(!fs.existsSync(path.join(targetDir, 'gsd-core')));
   });
 });
 
@@ -611,7 +611,7 @@ describe('configureKiloPermissions', () => {
     configureKiloPermissions(true);
     const configPath = path.join(configDir, 'kilo.json');
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    const gsdPath = `${configDir.replace(/\\/g, '/')}/get-shit-done/*`;
+    const gsdPath = `${configDir.replace(/\\/g, '/')}/gsd-core/*`;
     assert.strictEqual(config.permission.read[gsdPath], 'allow');
     assert.strictEqual(config.permission.external_directory[gsdPath], 'allow');
   });
@@ -622,7 +622,7 @@ describe('configureKiloPermissions', () => {
     fs.writeFileSync(configPath, '{\n  // existing\n  "permission": {\n    "bash": "ask",\n  },\n}\n');
     configureKiloPermissions(true);
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    const gsdPath = `${configDir.replace(/\\/g, '/')}/get-shit-done/*`;
+    const gsdPath = `${configDir.replace(/\\/g, '/')}/gsd-core/*`;
     assert.strictEqual(config.permission.bash, 'ask');
     assert.strictEqual(config.permission.read[gsdPath], 'allow');
     assert.strictEqual(config.permission.external_directory[gsdPath], 'allow');
@@ -633,7 +633,7 @@ describe('configureKiloPermissions', () => {
     configureKiloPermissions(true, explicitDir);
     const configPath = path.join(explicitDir, 'kilo.json');
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    const gsdPath = `${explicitDir.replace(/\\/g, '/')}/get-shit-done/*`;
+    const gsdPath = `${explicitDir.replace(/\\/g, '/')}/gsd-core/*`;
     assert.strictEqual(config.permission.read[gsdPath], 'allow');
     assert.strictEqual(config.permission.external_directory[gsdPath], 'allow');
   });
@@ -642,12 +642,12 @@ describe('configureKiloPermissions', () => {
 describe('Kilo source integration assertions', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'bin', 'install.js'), 'utf8');
   const updateWorkflowSrc = fs.readFileSync(
-    path.join(__dirname, '..', 'get-shit-done', 'workflows', 'update.md'), 'utf8');
+    path.join(__dirname, '..', 'gsd-core', 'workflows', 'update.md'), 'utf8');
   // #498: update.md's runtime/scope/config-dir resolution moved into the tested
-  // projection get-shit-done/bin/lib/update-context.cjs. Custom-config-dir
+  // projection gsd-core/bin/lib/update-context.cjs. Custom-config-dir
   // detection (kilo.jsonc, KILO_CONFIG) is now asserted there.
   const updateContextSrc = fs.readFileSync(
-    path.join(__dirname, '..', 'get-shit-done', 'bin', 'lib', 'update-context.cjs'), 'utf8');
+    path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'update-context.cjs'), 'utf8');
 
   test('--kilo flag parsing exists', () => {
     assert.ok(src.includes("args.includes('--kilo')"));

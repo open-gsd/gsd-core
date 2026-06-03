@@ -27,7 +27,7 @@ const {
 const {
   loadSkillsManifest,
   resolveProfile,
-} = require('../get-shit-done/bin/lib/install-profiles.cjs');
+} = require('../gsd-core/bin/lib/install-profiles.cjs');
 
 const { cleanup } = require('./helpers.cjs');
 
@@ -185,7 +185,7 @@ describe('Qwen Code: installRuntimeArtifacts', () => {
       'description: Next step',
       '---',
       '',
-      'Reference: @~/.claude/get-shit-done/workflows/next.md',
+      'Reference: @~/.claude/gsd-core/workflows/next.md',
     ].join('\n'));
 
     const configDir = path.join(tmpDir, 'dest');
@@ -208,7 +208,7 @@ describe('Qwen Code: installRuntimeArtifacts', () => {
       'description: Plan phase',
       '---',
       '',
-      'Reference: $HOME/.claude/get-shit-done/workflows/plan.md',
+      'Reference: $HOME/.claude/gsd-core/workflows/plan.md',
     ].join('\n'));
 
     const configDir = path.join(tmpDir, 'dest');

@@ -217,6 +217,18 @@ extract_and_check_blobs() {
   local found=0
   local line_num=0
 
+  # Skip binary-by-content files (e.g. adversarial parser fixtures with embedded
+  # non-UTF8 / NUL bytes). They cannot meaningfully carry base64-obfuscated *text*,
+  # and feeding NUL bytes through the per-line scanner spawns thousands of bogus
+  # `base64 -d` subprocesses (the "ignored null byte" warnings) — slow enough to
+  # blow the job timeout on a large diff. `grep -Iq .` treats a binary file as
+  # non-matching, so this skips it with a coverage notice (collect_files already
+  # filters binary *extensions*; this catches binary *content* in text extensions).
+  if ! LC_ALL=C grep -Iq . "$file" 2>/dev/null; then
+    echo "SKIP: $file (binary content — base64 text scan not applicable)" >&2
+    return 0
+  fi
+
   while IFS= read -r line; do
     line_num=$((line_num + 1))
 

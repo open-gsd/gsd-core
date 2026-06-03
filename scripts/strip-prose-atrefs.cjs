@@ -2,7 +2,7 @@
 /**
  * strip-prose-atrefs.cjs
  *
- * Removes redundant @~/.claude/get-shit-done/ path tokens from prose lines
+ * Removes redundant @~/.claude/gsd-core/ path tokens from prose lines
  * in <process> and <context> blocks. The path is already declared in
  * <execution_context> where it actually loads the file. Prose copies are
  * inert and add ~900 tokens/invocation of dead weight.
@@ -30,7 +30,7 @@ const DRY_RUN      = process.argv.includes('--dry-run');
 const ROOT         = path.join(__dirname, '..');
 const COMMANDS_DIR = path.join(ROOT, 'commands', 'gsd');
 
-const AT_PATH_PATTERN = /@(?:~|\$HOME)\/.+?get-shit-done\/[^\s`\)]+/;
+const AT_PATH_PATTERN = /@(?:~|\$HOME)\/.+?gsd-core\/[^\s`\)]+/;
 const mkAtRe = () => new RegExp(AT_PATH_PATTERN.source, 'g');
 
 function transformLine(line) {

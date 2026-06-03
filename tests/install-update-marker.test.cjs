@@ -27,7 +27,7 @@ const {
   loadSkillsManifest,
   stageSkillsForProfile,
   cleanupStagedSkills,
-} = require('../get-shit-done/bin/lib/install-profiles.cjs');
+} = require('../gsd-core/bin/lib/install-profiles.cjs');
 
 const REAL_COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');
 

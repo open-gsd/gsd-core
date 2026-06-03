@@ -41,11 +41,11 @@ const { cleanup } = require('./helpers.cjs');
 // ─────────────────────────────────────────────────────────────────────────────
 
 const PLANNING_WORKSPACE_CJS_PATH = path.join(
-  __dirname, '..', 'get-shit-done', 'bin', 'lib', 'planning-workspace.cjs'
+  __dirname, '..', 'gsd-core', 'bin', 'lib', 'planning-workspace.cjs'
 );
 
 const CLOCK_CJS_PATH = path.join(
-  __dirname, '..', 'get-shit-done', 'bin', 'lib', 'clock.cjs'
+  __dirname, '..', 'gsd-core', 'bin', 'lib', 'clock.cjs'
 );
 
 // ─────────────────────────────────────────────────────────────────────────────

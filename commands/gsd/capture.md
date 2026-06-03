@@ -36,12 +36,12 @@ Mode routing:
 </routing>
 
 <execution_context>
-@~/.claude/get-shit-done/workflows/add-todo.md
-@~/.claude/get-shit-done/workflows/note.md
-@~/.claude/get-shit-done/workflows/add-backlog.md
-@~/.claude/get-shit-done/workflows/plant-seed.md
-@~/.claude/get-shit-done/workflows/check-todos.md
-@~/.claude/get-shit-done/references/ui-brand.md
+@~/.claude/gsd-core/workflows/add-todo.md
+@~/.claude/gsd-core/workflows/note.md
+@~/.claude/gsd-core/workflows/add-backlog.md
+@~/.claude/gsd-core/workflows/plant-seed.md
+@~/.claude/gsd-core/workflows/check-todos.md
+@~/.claude/gsd-core/references/ui-brand.md
 </execution_context>
 
 <context>

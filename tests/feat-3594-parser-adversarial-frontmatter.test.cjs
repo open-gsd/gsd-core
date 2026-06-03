@@ -22,7 +22,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { extractFrontmatter } = require('../get-shit-done/bin/lib/frontmatter.cjs');
+const { extractFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
 
 const FIXTURE_DIR = path.join(__dirname, 'fixtures', 'adversarial', 'frontmatter');
 

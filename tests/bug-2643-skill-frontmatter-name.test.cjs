@@ -25,7 +25,7 @@ const {
   skillFrontmatterName,
 } = require(path.join(ROOT, 'bin', 'install.js'));
 
-const WORKFLOWS_DIR = path.join(ROOT, 'get-shit-done', 'workflows');
+const WORKFLOWS_DIR = path.join(ROOT, 'gsd-core', 'workflows');
 const COMMANDS_DIR = path.join(ROOT, 'commands', 'gsd');
 
 function collectFiles(dir, results) {
@@ -61,7 +61,19 @@ function collectFiles(dir, results) {
  * happens at the call site so the extractor stays neutral.
  */
 function extractSkillCalls(content) {
-  const stripped = content.replace(/<!--[\s\S]*?-->/g, '');
+  // regex-free HTML-comment stripper (CodeQL: avoid incomplete-multi-character-sanitization)
+  let stripped = '';
+  {
+    let rest = content;
+    let idx;
+    while ((idx = rest.indexOf('<!--')) !== -1) {
+      stripped += rest.slice(0, idx);
+      const end = rest.indexOf('-->', idx + 4);
+      if (end === -1) { rest = ''; break; }
+      rest = rest.slice(end + 3);
+    }
+    stripped += rest;
+  }
   const calls = [];
   // Body class excludes backslash so the extractor doesn't include an
   // escape character that precedes the closing quote in embedded examples

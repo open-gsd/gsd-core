@@ -19,7 +19,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const workflowPath = path.resolve(
-  __dirname, '..', 'get-shit-done', 'workflows', 'execute-phase.md'
+  __dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md'
 );
 
 describe('bug #2002: offer_next checks CONTEXT.md before suggesting next step', () => {

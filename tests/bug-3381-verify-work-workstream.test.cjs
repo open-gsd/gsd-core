@@ -10,7 +10,7 @@ const path = require('node:path');
 describe('bug #3381: verify-work forwards workstream context', () => {
   test('workflow forwards ${GSD_WS} to workstream-sensitive SDK queries', () => {
     const workflow = fs.readFileSync(
-      path.join(__dirname, '..', 'get-shit-done', 'workflows', 'verify-work.md'),
+      path.join(__dirname, '..', 'gsd-core', 'workflows', 'verify-work.md'),
       'utf8',
     );
 

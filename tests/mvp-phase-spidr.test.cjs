@@ -12,7 +12,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const WORKFLOW = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'mvp-phase.md');
+const WORKFLOW = path.join(__dirname, '..', 'gsd-core', 'workflows', 'mvp-phase.md');
 
 function parseMvpPhaseContract(content) {
   const lines = content.split(/\r?\n/);

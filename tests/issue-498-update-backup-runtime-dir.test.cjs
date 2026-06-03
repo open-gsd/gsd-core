@@ -8,7 +8,7 @@
  * LOCAL_DIR / GLOBAL_DIR, which are no longer assigned anywhere — so RUNTIME_DIR
  * went empty for every LOCAL/GLOBAL install and detect-custom-files was skipped.
  * Because the update then runs a clean install that wipes managed dirs
- * (commands/gsd, get-shit-done), user-added files inside those dirs could be
+ * (commands/gsd, gsd-core), user-added files inside those dirs could be
  * deleted without the intended backup.
  *
  * This locks the fix: RUNTIME_DIR comes from GSD_DIR, and the dead LOCAL_DIR /
@@ -29,7 +29,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const UPDATE_MD = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'update.md');
+const UPDATE_MD = path.join(__dirname, '..', 'gsd-core', 'workflows', 'update.md');
 
 function codeOnly(file) {
   // Strip fenced-block prose is unnecessary here; we assert on the whole doc

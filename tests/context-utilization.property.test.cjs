@@ -3,7 +3,7 @@
 /**
  * Property-based tests for context-utilization.cjs
  *
- * Module: get-shit-done/bin/lib/context-utilization.cjs
+ * Module: gsd-core/bin/lib/context-utilization.cjs
  * Exported: classifyContextUtilization(tokensUsed, contextWindow) -> { percent, state }
  *
  * Thresholds (from module source):
@@ -22,7 +22,7 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fc = require('./helpers/fast-check-setup.cjs');
 
-const { classifyContextUtilization, STATES } = require('../get-shit-done/bin/lib/context-utilization.cjs');
+const { classifyContextUtilization, STATES } = require('../gsd-core/bin/lib/context-utilization.cjs');
 
 // ─── Boundary constants ───────────────────────────────────────────────────────
 const WARNING_THRESHOLD = 0.60; // ratio < this → healthy

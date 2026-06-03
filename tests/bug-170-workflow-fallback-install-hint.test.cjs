@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const WORKFLOWS_DIR = path.join(__dirname, '..', 'get-shit-done', 'workflows');
+const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
 const LEGACY_HINT = 'npx get-shit-done-cc@latest --claude --local';
 const CURRENT_HINT = 'npx -y @opengsd/gsd-core@latest --claude --local';
 

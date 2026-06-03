@@ -8,8 +8,6 @@
 
 **A light-weight meta-prompting, context engineering, and spec-driven development system for Claude Code, OpenCode, Gemini CLI, Kilo, Codex, Copilot, Cursor, Windsurf, and more.**
 
-**Solves context rot — the quality degradation that happens as your AI fills its context window.**
-
 [![npm version](https://img.shields.io/npm/v/%40opengsd%2Fgsd-core?style=for-the-badge&logo=npm&logoColor=white&color=CB3837)](https://www.npmjs.com/package/@opengsd/gsd-core)
 [![npm downloads](https://img.shields.io/npm/dm/%40opengsd%2Fgsd-core?style=for-the-badge&logo=npm&logoColor=white&color=CB3837)](https://www.npmjs.com/package/@opengsd/gsd-core)
 [![Tests](https://img.shields.io/github/actions/workflow/status/open-gsd/gsd-core/test.yml?branch=main&style=for-the-badge&logo=github&label=Tests)](https://github.com/open-gsd/gsd-core/actions/workflows/test.yml)
@@ -17,218 +15,79 @@
 [![GitHub stars](https://img.shields.io/github/stars/open-gsd/gsd-core?style=for-the-badge&logo=github&color=181717)](https://github.com/open-gsd/gsd-core)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)](LICENSE)
 
-<br>
+</div>
+
+---
+
+## What is GSD Core
+
+GSD Core is a context-engineering and spec-driven development framework that drives AI coding agents (Claude Code, Codex, Gemini CLI, Copilot, Cursor, and more) through a disciplined phase loop. It solves [context rot](docs/explanation/context-engineering.md) — the quality degradation that accumulates as an AI fills its context window — by running all heavy research, planning, and execution work in fresh-context subagents while keeping your main session lean.
+
+---
+
+## How it works
+
+Each milestone repeats the same five-step loop, one phase at a time:
+
+1. **Discuss** — capture implementation decisions before anything is planned
+2. **Plan** — research, decompose, and verify the plan fits a fresh context window
+3. **Execute** — run plans in parallel waves; each executor starts with a clean 200k-token context
+4. **Verify** — walk through what was built; diagnose and fix before declaring done
+5. **Ship** — create the PR, archive the phase, repeat for the next one
+
+---
+
+## Quickstart
 
 ```bash
 npx @opengsd/gsd-core@latest
 ```
 
-**Works on Mac, Windows, and Linux.**
+The installer prompts for your runtime (Claude Code, OpenCode, Gemini CLI, Kilo, Codex, Copilot, Cursor, Windsurf, and more) and whether to install globally or locally. The installer is required for cross-runtime compatibility — do not copy files from `agents/` or `commands/` directly.
 
-<br>
+On another runtime or without Node.js? See [Install on your runtime](docs/how-to/install-on-your-runtime.md).
 
-![GSD Install](assets/terminal.svg)
-
-<br>
-
-*"If you know clearly what you want, this WILL build it for you. No bs."*
-
-*"I've done SpecKit, OpenSpec and Taskmaster — this has produced the best results for me."*
-
-*"By far the most powerful addition to my Claude Code. Nothing over-engineered. It just helps me ship."*
-
-<br>
-
-**Trusted by engineers at Amazon, Google, Shopify, and Webflow.**
-
-</div>
-
----
-
-> [!IMPORTANT]
-> **Returning to GSD Core?**
->
-> Run `/gsd-map-codebase` to re-index your codebase, then `/gsd-new-project` to rebuild GSD's planning context. Your code is fine — GSD just needs its context rebuilt. Use `@opengsd/gsd-core@latest` for the current package line.
-
----
-
-## How It Works
-
-The loop is six commands. Each one does exactly one thing.
-
-### 1. Initialize
+Once installed, start your first project:
 
 ```bash
 /gsd-new-project
 ```
 
-Questions → research → requirements → roadmap. You approve it, then you're ready to build.
-
-> **Already have code?** Run `/gsd-map-codebase` first. It analyzes your stack, architecture, and conventions so `/gsd-new-project` asks the right questions.
-
-### 2. Discuss
-
-```bash
-/gsd-discuss-phase 1
-```
-
-Your roadmap has a sentence per phase. That's not enough to build it the way *you* imagine it. Discuss captures your decisions before anything gets planned: layouts, API shapes, error handling, data structures — whatever gray areas exist for this specific phase.
-
-The output feeds directly into research and planning. Skip it, get reasonable defaults. Use it, get your vision.
-
-### 3. Plan
-
-```bash
-/gsd-plan-phase 1
-```
-
-Research → plan → verify, in a loop until the plans pass. Each plan is small enough to execute in a fresh context window.
-
-### 4. Execute
-
-```bash
-/gsd-execute-phase 1
-```
-
-Plans run in parallel waves. Each executor gets a fresh 200k-token context. Each task gets its own atomic commit. Walk away, come back to completed work with a clean git history.
-
-Your main context window stays at 30–40%. The work happens in the subagents.
-
-### 5. Verify
-
-```bash
-/gsd-verify-work 1
-```
-
-Walk through what was built. Anything broken gets a diagnosed fix plan — ready for immediate re-execution. You don't debug manually; you just run execute again.
-
-### 6. Repeat → Ship
-
-```bash
-/gsd-ship 1
-/gsd-complete-milestone
-/gsd-new-milestone
-```
-
-Loop discuss → plan → execute → verify → ship until the milestone is done. Then archive, tag, and start the next one fresh.
-
----
-
-## Getting Started
-
-```bash
-npx @opengsd/gsd-core@latest
-```
-
-The installer prompts for your runtime (Claude Code, OpenCode, Gemini CLI, Kilo, Codex, Copilot, Cursor, Windsurf, and more) and whether to install globally or locally.
-
-```bash
-claude --dangerously-skip-permissions
-```
-
-GSD Core is built for frictionless automation. Skip-permissions is how it's intended to run.
-
-Install only the skills you need with `--profile=core` (six core-loop skills), `--profile=standard` (core + phase management), or the default full install. Profiles compose: `--profile=core,audit`. `--minimal` is an alias for `--profile=core`. See **[docs/USER-GUIDE.md](docs/USER-GUIDE.md)** for the full walkthrough, non-interactive install flags for all 15 runtimes, and permissions configuration. See [ADR-0011](docs/adr/0011-skill-surface-budget-module.md) for the profile model and runtime surface control.
-
-The canonical release version is the `@opengsd/gsd-core` version published on npm and mirrored in `package.json`. Older release-note files under `docs/` are retained as legacy continuity notes; do not use archived release-note numbers as the current GSD Core package version.
-
-### Cross-runtime compatibility: installer required
-
-The `agents/` and `commands/` directories in this repository are Claude Code-format source files. The installer (`npx @opengsd/gsd-core@latest`) transforms them per target runtime — stripping or converting frontmatter fields that Claude Code uses but other runtimes reject. For example, OpenCode requires `color` as a hex or semantic value from a fixed set, and does not accept a `tools:` frontmatter field; the installer function `convertClaudeToOpencodeFrontmatter` (`bin/install.js`) handles this automatically.
-
-**Manually copying files** from `agents/` or `commands/` directly into a non-Claude-Code runtime config directory (e.g., `~/.config/opencode/agents`) skips the conversion step and will produce schema validation errors in that runtime.
-
-If you are on a system without Node.js or npm (Windows + OpenCode is the most common case), see **[docs/USER-GUIDE.md — Manual install / no-Node.js setup](docs/USER-GUIDE.md#manual-install--no-nodejs-setup)** for the per-runtime conversion summary and alternative install paths.
-
----
-
-## Commands
-
-The main loop:
-
-| Command | What it does |
-|---------|--------------|
-| `/gsd-new-project` | Questions → research → requirements → roadmap |
-| `/gsd-discuss-phase [N]` | Capture implementation decisions before planning |
-| `/gsd-plan-phase [N]` | Research + plan + verify |
-| `/gsd-execute-phase <N>` | Execute plans in parallel waves |
-| `/gsd-verify-work [N]` | Manual acceptance testing |
-| `/gsd-ship [N]` | Create PR from verified phase work |
-| `/gsd-progress --next` | Auto-detect and run the next step |
-| `/gsd-complete-milestone` | Archive milestone and tag release |
-| `/gsd-new-milestone` | Start next version |
-| `/gsd:surface` | Enable/disable skill clusters at runtime without reinstall |
-
-For ad-hoc tasks, autonomous mode, codebase analysis, forensics, and the full command surface — see **[docs/COMMANDS.md](docs/COMMANDS.md)**.
-
----
-
-## Why It Works
-
-Three things most AI-coding setups get wrong:
-
-**1. Context bloat.** As a session grows, quality degrades. GSD keeps your main context clean by doing the heavy work in fresh subagent contexts. Researchers, planners, and executors each start fresh with exactly what they need.
-
-**2. No shared memory.** GSD maintains structured artifacts that survive session boundaries: `PROJECT.md` (vision), `REQUIREMENTS.md` (scope), `ROADMAP.md` (where you're going), `STATE.md` (current position and decisions), `CONTEXT.md` (per-phase implementation decisions). Every new session loads these and knows exactly where things stand.
-
-**3. No verification.** Code that "runs" isn't code that "works." GSD's verify step walks you through what was built, diagnoses failures with dedicated debug agents, and generates fix plans before you declare a phase done.
-
-See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for how the multi-agent orchestration and context engineering work in detail.
-
----
-
-## Configuration
-
-Settings live in `.planning/config.json`. Configure during `/gsd-new-project` or update with `/gsd-settings`.
-
-Key dials:
-
-| Setting | What it controls |
-|---------|-----------------|
-| `mode` | `interactive` (confirm each step) or `yolo` (auto-approve) |
-| Model profiles | `quality` / `balanced` / `budget` — controls which model each agent uses |
-| `workflow.research` / `plan_check` / `verifier` | Toggle the quality agents that add tokens and time |
-| `parallelization.enabled` | Run independent plans simultaneously |
-
-Optional structural review: set `code_quality.fallow.enabled` to `true` to add a fallow pre-pass to `/gsd-code-review`. GSD writes `.planning/phases/<phase>/FALLOW.json` and surfaces a `Structural Findings (fallow)` section in `REVIEW.md`. Install with `npm install -D fallow@^2.70.0` (or system-wide via `cargo install fallow`; note that the Rust binary's JSON schema must match the documented v2.70+ contract — older versions may produce silent zero-finding output).
-
-Package legitimacy checks are built into the research, planning, and execution path: recommended dependencies get audited, unverified packages require a human checkpoint, and failed installs stop instead of trying similarly named alternatives.
-
-For the full configuration reference — all settings, git branching strategies, per-runtime model overrides, workstream config inheritance, agent skills injection — see **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)**.
+New here? Follow [Your first project](docs/tutorials/your-first-project.md) for a guided walkthrough from install to first shipped phase.
 
 ---
 
 ## Documentation
 
-| Doc | What's in it |
-|-----|-------------|
-| [User Guide](docs/USER-GUIDE.md) | End-to-end walkthrough, install options, all runtime flags, configuration reference |
-| [Commands](docs/COMMANDS.md) | Every command with flags and examples |
-| [Configuration](docs/CONFIGURATION.md) | Full config schema, model profiles, git branching |
-| [Architecture](docs/ARCHITECTURE.md) | How the multi-agent orchestration works |
-| [CLI Tools](docs/CLI-TOOLS.md) | `gsd-sdk query` and programmatic SDK dispatch seams |
-| [Features](docs/FEATURES.md) | Complete feature index |
-| [Changelog](CHANGELOG.md) | Release history, including archived legacy continuity notes |
+**Tutorials** — learning by doing:
+- [Your first project](docs/tutorials/your-first-project.md)
+- [Onboarding an existing codebase](docs/tutorials/onboarding-an-existing-codebase.md)
+
+**How-to guides** — task-focused recipes:
+- [Install on your runtime](docs/how-to/install-on-your-runtime.md)
+- [Plan a phase](docs/how-to/plan-a-phase.md)
+- [Verify and ship](docs/how-to/verify-and-ship.md)
+- … [see all how-to guides](docs/README.md#how-to-guides)
+
+**Reference** — authoritative facts:
+- [Commands](docs/COMMANDS.md)
+- [Configuration](docs/CONFIGURATION.md)
+- [CLI tools](docs/CLI-TOOLS.md)
+
+**Explanation** — concepts and design decisions:
+- [Context engineering](docs/explanation/context-engineering.md)
+- [The phase loop](docs/explanation/the-phase-loop.md)
+- [Architecture](docs/ARCHITECTURE.md)
+
+Full index: [docs/README.md](docs/README.md). Other languages: [日本語](README.ja-JP.md) · [한국어](README.ko-KR.md) · [Português](README.pt-BR.md) · [简体中文](README.zh-CN.md).
 
 ---
 
-## Troubleshooting
+## Why it works
 
-**Commands not showing up?** Restart your runtime after install. GSD installs to `~/.claude/skills/gsd-*/` (Claude Code), `~/.codex/skills/gsd-*/` (Codex), or the equivalent for your runtime.
+Most AI-coding setups fail at scale because context bloat silently degrades output quality, there is no shared memory between sessions, and nothing verifies that code actually works. GSD Core solves all three: heavy work runs in fresh subagents, structured artifacts like `STATE.md` and `CONTEXT.md` survive session boundaries, and the verify step walks through what was built and generates fix plans before a phase is declared done. See [docs/explanation/context-engineering.md](docs/explanation/context-engineering.md) for the full reasoning.
 
-**Codex users — minimum supported CLI version is `0.130.0`.** Codex CLI 0.130.0 ([release notes](https://github.com/openai/codex/releases/tag/rust-v0.130.0)) removed extra-skill-roots discovery via [openai/codex#21485](https://github.com/openai/codex/pull/21485); from that version onward Codex discovers skills from standard roots (including `~/.codex/skills/<name>/SKILL.md`). GSD installs there directly. Earlier Codex CLI versions may still discover additional roots, which can surface duplicate `gsd-*` entries (one from extra-roots discovery, one from `~/.codex/skills/`); restart Codex after install and either upgrade or accept the duplicate listing.
-
-**Something broken?** Re-run the installer — it's idempotent:
-```bash
-npx @opengsd/gsd-core@latest
-```
-
-**Containers or Docker?** Set `CLAUDE_CONFIG_DIR` before installing to avoid tilde-expansion issues:
-```bash
-CLAUDE_CONFIG_DIR=/home/youruser/.claude npx @opengsd/gsd-core --global
-```
-
-Full troubleshooting and uninstall instructions in **[docs/USER-GUIDE.md](docs/USER-GUIDE.md#troubleshooting)**.
+Troubleshooting? See [docs/how-to/recover-and-troubleshoot.md](docs/how-to/recover-and-troubleshoot.md).
 
 ---
 

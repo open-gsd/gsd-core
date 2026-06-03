@@ -1,7 +1,7 @@
 /**
  * Bug #3668: workflow resolver snippets must run from installed user projects.
  *
- * A user project normally does not contain get-shit-done/bin/gsd-tools.cjs.
+ * A user project normally does not contain gsd-core/bin/gsd-tools.cjs.
  * The snippets should still prefer RUNTIME_DIR for local/dev installs, then
  * fall back to the installed gsd-tools binary on PATH.
  */
@@ -14,7 +14,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
-const WORKFLOW_PATH = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'next.md');
+const WORKFLOW_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'next.md');
 
 /**
  * Extract the canonical runtime resolver snippet from next.md.
@@ -106,7 +106,7 @@ function writeExecutable(file, content) {
 
 describe('bug-3668: workflow SDK resolver supports installed user projects', () => {
   test('falls back to installed gsd-tools when project-local runtime copy is absent', () => {
-    // Bug #3668: when a user project has no local get-shit-done/bin/gsd-tools.cjs,
+    // Bug #3668: when a user project has no local gsd-core/bin/gsd-tools.cjs,
     // the elif branch must resolve to the gsd-tools binary on PATH.
     // RUNTIME_DIR points to a dir that has no gsd-tools.cjs.
     const tmp = makeTempDir();
@@ -122,7 +122,7 @@ describe('bug-3668: workflow SDK resolver supports installed user projects', () 
       '#!/bin/sh\nprintf "installed:%s %s\\n" "$1" "$2"\n',
     );
 
-    // NO get-shit-done/bin/gsd-tools.cjs in runtimeNoLocal
+    // NO gsd-core/bin/gsd-tools.cjs in runtimeNoLocal
     const output = runResolver({ cwd: project, runtimeDir: runtimeNoLocal, pathDir: pathBin });
 
     // GSD_TOOLS must have been reassigned to the PATH binary (not the missing .cjs)
@@ -139,7 +139,7 @@ describe('bug-3668: workflow SDK resolver supports installed user projects', () 
     fs.mkdirSync(project, { recursive: true });
     writeExecutable(path.join(pathBin, 'gsd-tools'), '#!/bin/sh\nprintf "path-installed:%s %s\\n" "$1" "$2"\n');
     writeExecutable(
-      path.join(runtime, 'get-shit-done', 'bin', 'gsd-tools.cjs'),
+      path.join(runtime, 'gsd-core', 'bin', 'gsd-tools.cjs'),
       '#!/usr/bin/env node\nconsole.log(`runtime:${process.argv[2]} ${process.argv[3]}`);\n',
     );
 
@@ -147,9 +147,9 @@ describe('bug-3668: workflow SDK resolver supports installed user projects', () 
 
     // Normalize separators so the assertion works on Windows (Git bash emits POSIX paths)
     const norm = output.replace(/\\/g, '/');
-    // The resolved bin is the RUNTIME_DIR local runtime (suffix /get-shit-done/bin/gsd-tools.cjs)
+    // The resolved bin is the RUNTIME_DIR local runtime (suffix /gsd-core/bin/gsd-tools.cjs)
     // Use .+ instead of \S* to handle paths with spaces (e.g. /Volumes/Mini Me/...)
-    assert.match(norm, /GSD_TOOLS=.+\/get-shit-done\/bin\/gsd-tools\.cjs(?:\s|$)/m);
+    assert.match(norm, /GSD_TOOLS=.+\/gsd-core\/bin\/gsd-tools\.cjs(?:\s|$)/m);
     assert.match(output, /runtime:query state\.json/);
     assert.doesNotMatch(output, /path-installed:query state\.json/);
   });

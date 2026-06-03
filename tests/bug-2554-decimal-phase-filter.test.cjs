@@ -15,7 +15,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { createTempProject, cleanup } = require('./helpers.cjs');
-const { getMilestonePhaseFilter } = require('../get-shit-done/bin/lib/core.cjs');
+const { getMilestonePhaseFilter } = require('../gsd-core/bin/lib/core.cjs');
 
 describe('bug #2554 — getMilestonePhaseFilter decimal phase dirs', () => {
   let tmpDir;

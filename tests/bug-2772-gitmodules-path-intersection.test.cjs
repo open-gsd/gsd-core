@@ -9,7 +9,7 @@
  * any submodule path.
  *
  * Behavioral test: the bash decision pipeline from
- * get-shit-done/workflows/execute-phase.md is extracted verbatim into an
+ * gsd-core/workflows/execute-phase.md is extracted verbatim into an
  * executable snippet here, then run via execFileSync('bash', ...) against
  * real fixture projects built with `createTempGitProject()`. We assert
  * the resulting USE_WORKTREES_FOR_PLAN value (printed on the final line
@@ -340,14 +340,14 @@ describe('execute-phase.md dispatch wires USE_WORKTREES_FOR_PLAN (#2772)', () =>
   const workflowPath = path.join(
     __dirname,
     '..',
-    'get-shit-done',
+    'gsd-core',
     'workflows',
     'execute-phase.md'
   );
   const gatePath = path.join(
     __dirname,
     '..',
-    'get-shit-done',
+    'gsd-core',
     'workflows',
     'execute-phase',
     'steps',
@@ -439,7 +439,7 @@ describe('execute-phase.md dispatch wires USE_WORKTREES_FOR_PLAN (#2772)', () =>
 // (b) actually abort when run against a fixture that stages a submodule path.
 
 describe('quick.md executor pre-commit submodule guard (#2772)', () => {
-  const quickPath = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'quick.md');
+  const quickPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'quick.md');
 
   test('quick.md executor prompt injects SUBMODULE_PATHS', () => {
     const md = fs.readFileSync(quickPath, 'utf-8');

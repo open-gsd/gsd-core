@@ -29,7 +29,7 @@ const pkg = require('../package.json');
 const {
   loadSkillsManifest,
   resolveProfile,
-} = require('../get-shit-done/bin/lib/install-profiles.cjs');
+} = require('../gsd-core/bin/lib/install-profiles.cjs');
 
 const manifest = loadSkillsManifest();
 const resolvedProfileFull = resolveProfile({ modes: [], manifest });
@@ -190,7 +190,7 @@ describe('Hermes Agent: installRuntimeArtifacts', () => {
       'description: Next step',
       '---',
       '',
-      'Reference: @~/.claude/get-shit-done/workflows/next.md',
+      'Reference: @~/.claude/gsd-core/workflows/next.md',
     ].join('\n'));
 
     const configDir = path.join(tmpDir, 'dest');
@@ -214,7 +214,7 @@ describe('Hermes Agent: installRuntimeArtifacts', () => {
       'description: Plan phase',
       '---',
       '',
-      'Reference: $HOME/.claude/get-shit-done/workflows/plan.md',
+      'Reference: $HOME/.claude/gsd-core/workflows/plan.md',
     ].join('\n'));
 
     const configDir = path.join(tmpDir, 'dest');

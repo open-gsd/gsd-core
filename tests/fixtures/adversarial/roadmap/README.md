@@ -1,7 +1,7 @@
 # Adversarial Roadmap Fixtures (#3594)
 
 Hostile / messy ROADMAP.md inputs for
-`get-shit-done/bin/lib/roadmap.cjs` (`searchPhaseInContent`,
+`gsd-core/bin/lib/roadmap.cjs` (`searchPhaseInContent`,
 `cmdRoadmapGetPhase`, `cmdRoadmapAnalyze`) and the SDK roadmap parser
 in `sdk/src/query/roadmap.ts`.
 

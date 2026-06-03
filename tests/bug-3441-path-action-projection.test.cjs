@@ -11,7 +11,7 @@ const os = require('node:os');
 const projection = require(path.join(
   __dirname,
   '..',
-  'get-shit-done',
+  'gsd-core',
   'bin',
   'lib',
   'shell-command-projection.cjs',

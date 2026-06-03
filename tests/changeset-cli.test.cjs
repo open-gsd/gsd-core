@@ -325,9 +325,9 @@ describe('changeset cli extract: version-range changelog extraction (#3496)', ()
   // allow-test-rule: reads a product workflow .md file (not CJS source) to verify
   // the user-facing instruction was wired; there is no behavioural runtime to invoke.
   test('F1: workflows/update.md contains concrete extract subcommand invocation', (t) => {
-    const workflowPath = path.join(ROOT, 'get-shit-done', 'workflows', 'update.md');
+    const workflowPath = path.join(ROOT, 'gsd-core', 'workflows', 'update.md');
     const workflowText = fs.readFileSync(workflowPath, 'utf8');
-    // The invocation is: node "$GSD_DIR/get-shit-done/scripts/changeset/cli.cjs" extract
+    // The invocation is: node "$GSD_DIR/gsd-core/scripts/changeset/cli.cjs" extract
     // so the literal substring is 'cli.cjs" extract' (quote between script path and subcommand)
     assert.ok(
       workflowText.includes('cli.cjs" extract') || workflowText.includes('cli.cjs extract'),

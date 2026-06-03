@@ -11,7 +11,7 @@
 // workflows/add-backlog.md via execution_context. The workflow file was never
 // created. Same gap class as reapply-patches.md (found and fixed in the same PR).
 //
-// Fix: create get-shit-done/workflows/add-backlog.md with the full process
+// Fix: create gsd-core/workflows/add-backlog.md with the full process
 // ported from the deleted commands/gsd/add-backlog.md (git ref 87917131^).
 //
 // Also adds a broad regression: every @-reference in any commands/gsd/*.md
@@ -23,17 +23,17 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
-const WORKFLOW = path.join(ROOT, 'get-shit-done', 'workflows', 'add-backlog.md');
+const WORKFLOW = path.join(ROOT, 'gsd-core', 'workflows', 'add-backlog.md');
 const COMMANDS_DIR = path.join(ROOT, 'commands', 'gsd');
-const WORKFLOWS_DIR = path.join(ROOT, 'get-shit-done', 'workflows');
+const WORKFLOWS_DIR = path.join(ROOT, 'gsd-core', 'workflows');
 
 // ─── #3135: add-backlog workflow ─────────────────────────────────────────────
 
-describe('#3135: get-shit-done/workflows/add-backlog.md', () => {
+describe('#3135: gsd-core/workflows/add-backlog.md', () => {
   test('file exists', () => {
     assert.ok(
       fs.existsSync(WORKFLOW),
-      'get-shit-done/workflows/add-backlog.md does not exist — capture --backlog has no implementation to load',
+      'gsd-core/workflows/add-backlog.md does not exist — capture --backlog has no implementation to load',
     );
   });
 
@@ -115,7 +115,7 @@ describe('#3135: capture.md correctly routes --backlog to add-backlog workflow',
       for (const line of blk.split('\n')) {
         const t = line.trim();
         if (!t.startsWith('@')) continue;
-        const rel = t.replace(/^@~?\/?(?:\.claude\/)?(?:get-shit-done\/)?/, '');
+        const rel = t.replace(/^@~?\/?(?:\.claude\/)?(?:gsd-core\/)?/, '');
         targets.push(rel);
       }
     }
@@ -136,7 +136,7 @@ describe('#3135: capture.md correctly routes --backlog to add-backlog workflow',
 
 describe('regression: every execution_context @-reference in commands/gsd/*.md resolves to an existing workflow file', () => {
   // Extract @-references from execution_context blocks, normalised to the
-  // get-shit-done/workflows/ relative tail so we can resolve them on disk.
+  // gsd-core/workflows/ relative tail so we can resolve them on disk.
   function extractWorkflowRefs(filePath) {
     const body = fs.readFileSync(filePath, 'utf8');
     const blocks = [
@@ -149,8 +149,8 @@ describe('regression: every execution_context @-reference in commands/gsd/*.md r
         if (!t.startsWith('@')) continue;
         // Only care about workflow references (skip non-workflow @-refs)
         if (!t.includes('/workflows/')) continue;
-        // Normalise: drop everything up to and including 'get-shit-done/'
-        const match = t.match(/get-shit-done\/(workflows\/.+\.md)/);
+        // Normalise: drop everything up to and including 'gsd-core/'
+        const match = t.match(/gsd-core\/(workflows\/.+\.md)/);
         if (match) refs.push(match[1]);
       }
     }
@@ -172,10 +172,10 @@ describe('regression: every execution_context @-reference in commands/gsd/*.md r
     }
     for (const ref of refs) {
       test(`${cmdName}: @-ref '${ref}' exists on disk`, () => {
-        const absPath = path.join(ROOT, 'get-shit-done', ref);
+        const absPath = path.join(ROOT, 'gsd-core', ref);
         assert.ok(
           fs.existsSync(absPath),
-          `${cmdName} references @${ref} in execution_context but get-shit-done/${ref} does not exist`,
+          `${cmdName} references @${ref} in execution_context but gsd-core/${ref} does not exist`,
         );
       });
     }

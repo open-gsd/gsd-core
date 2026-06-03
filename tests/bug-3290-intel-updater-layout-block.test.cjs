@@ -11,7 +11,7 @@
  * unconditionally on every project analysed, emitting:
  *
  *   Layout detection returned "unknown" — this project is not a GSD-system
- *   installation (no `.claude/get-shit-done/` or `.kilo/` runtime root).
+ *   installation (no `.claude/gsd-core/` or `.kilo/` runtime root).
  *
  * for every ordinary (non-GSD-framework) user project. The verdict was already
  * ignored by Steps 2-6 on non-GSD projects. The block was dead-but-noisy.
@@ -92,7 +92,7 @@ describe('bug #3290 — Group A: layout-detection block must be gated or absent'
         content.includes('is-this-the-framework') ||
         content.includes('framework repo') ||
         content.includes('Only run') ||
-        /if.*package\.json.*get-shit-done/i.test(content) ||
+        /if.*package\.json.*gsd-core/i.test(content) ||
         /Only.*layout detection.*GSD framework/i.test(content) ||
         /Only.*layout detection.*framework/i.test(content);
 
@@ -116,7 +116,7 @@ describe('bug #3290 — Group B: layout-detection verdict has no downstream cons
   const SOURCE_DIRS = [
     path.join(ROOT, 'agents'),
     path.join(ROOT, 'commands', 'gsd'),
-    path.join(ROOT, 'get-shit-done', 'workflows'),
+    path.join(ROOT, 'gsd-core', 'workflows'),
   ];
 
   /**

@@ -40,7 +40,7 @@ const rule = {
     const sourceGrepVars = new Set();
 
     // Detect if a node represents a readFileSync call on a source file (.cjs/.js/.ts)
-    // that lives in a source directory (bin, lib, get-shit-done, src).
+    // that lives in a source directory (bin, lib, gsd-core, src).
     function isSourceReadFileSync(node) {
       if (node.type !== 'CallExpression') return false;
 
@@ -71,7 +71,7 @@ const rule = {
       if (!hasCjsExt) return false;
 
       // Must reference a source directory indicator somewhere in the expression
-      const hasSourceDir = /['"](?:bin|lib|get-shit-done|src)['"]/i.test(src);
+      const hasSourceDir = /['"](?:bin|lib|gsd-core|src)['"]/i.test(src);
       return hasSourceDir;
     }
 

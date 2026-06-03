@@ -22,7 +22,7 @@ const {
   validateShellArg,
   validatePromptStructure,
   scanEntropyAnomalies,
-} = require('../get-shit-done/bin/lib/security.cjs');
+} = require('../gsd-core/bin/lib/security.cjs');
 
 // ─── Path Traversal Prevention ──────────────────────────────────────────────
 

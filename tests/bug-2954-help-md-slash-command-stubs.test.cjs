@@ -38,8 +38,8 @@ const COMMANDS_DIR = path.join(ROOT, 'commands', 'gsd');
 // After #3039, the canonical command reference is the `--full` mode file.
 // `workflows/help.md` is now a small dispatcher; the bidirectional parity
 // invariant lives with the comprehensive reference body.
-const HELP_MD = path.join(ROOT, 'get-shit-done', 'workflows', 'help', 'modes', 'full.md');
-const DO_MD = path.join(ROOT, 'get-shit-done', 'workflows', 'do.md');
+const HELP_MD = path.join(ROOT, 'gsd-core', 'workflows', 'help', 'modes', 'full.md');
+const DO_MD = path.join(ROOT, 'gsd-core', 'workflows', 'do.md');
 
 function parseFrontmatter(content) {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -79,7 +79,10 @@ function extractSlashReferences(contents) {
   const names = new Set();
   // Negative lookbehind: must not be preceded by a letter (avoids matching npm scope
   // paths like @opengsd/gsd-core where `/gsd-` appears inside a package URL).
-  const tokenRe = /(?<![a-z])\/gsd[:-]([a-z][a-z0-9-]*)/g;
+  // Negative lookahead (?![\w-]*\/): excludes filesystem path segments like
+  // `/gsd-core/bin` where the captured name is followed by a `/`, which would
+  // be a directory segment rather than a slash command name.
+  const tokenRe = /(?<![a-z])\/gsd[:-]([a-z][a-z0-9-]*)(?![\w-]*\/)/g;
   let match;
   while ((match = tokenRe.exec(contents)) !== null) {
     names.add(match[1]);

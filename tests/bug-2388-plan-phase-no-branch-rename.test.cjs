@@ -18,7 +18,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const PLAN_PHASE_PATH = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'plan-phase.md');
+const PLAN_PHASE_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-phase.md');
 
 describe('bug-2388: plan-phase must not rename or create git branches', () => {
   test('plan-phase.md exists', () => {

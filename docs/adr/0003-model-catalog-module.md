@@ -9,9 +9,9 @@ We decided to centralize model-selection data in one Model Catalog Module so the
 
 Before this ADR there were four drifting sources:
 
-1. `get-shit-done/bin/lib/model-profiles.cjs` — agent → profile alias map, phase-type map, dynamic-routing default tiers
+1. `gsd-core/bin/lib/model-profiles.cjs` — agent → profile alias map, phase-type map, dynamic-routing default tiers
 2. `sdk/src/query/config-query.ts` — stale 18-agent copy of `MODEL_PROFILES`
-3. `get-shit-done/workflows/settings-advanced.md` — runtime → built-in model-id table
+3. `gsd-core/workflows/settings-advanced.md` — runtime → built-in model-id table
 4. `sdk/src/session-runner.ts` — hardcoded Claude-only profile → model-id map
 
 This caused issue #3229: the SDK knew only 18 agents while 33 agent files existed on disk, so ~15 agents silently fell back to Sonnet with `unknown_agent: true`.

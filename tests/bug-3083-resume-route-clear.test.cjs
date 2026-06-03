@@ -7,7 +7,7 @@ const path = require('node:path');
 
 describe('bug #3083: resume-project next-step routing should not include /clear then:', () => {
   test('route_to_workflow block omits /clear then: in resume templates', () => {
-    const workflowPath = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'resume-project.md');
+    const workflowPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'resume-project.md');
     const content = fs.readFileSync(workflowPath, 'utf-8');
     const routeStart = content.indexOf('<step name="route_to_workflow">');
     const routeEnd = content.indexOf('</step>', routeStart);
@@ -17,7 +17,7 @@ describe('bug #3083: resume-project next-step routing should not include /clear 
   });
 
   test('route_to_workflow block includes exception note explaining resume behavior', () => {
-    const workflowPath = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'resume-project.md');
+    const workflowPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'resume-project.md');
     const content = fs.readFileSync(workflowPath, 'utf-8');
     const routeStart = content.indexOf('<step name="route_to_workflow">');
     const routeEnd = content.indexOf('</step>', routeStart);

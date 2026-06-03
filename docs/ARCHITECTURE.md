@@ -23,8 +23,8 @@
 
 GSD Core is a **meta-prompting framework** that sits between the user and AI coding agents (Claude Code, Gemini CLI, OpenCode, Kilo, Codex, Copilot, Antigravity, Trae, Cline, Augment Code). It provides:
 
-1. **Context engineering** — Structured artifacts that give the AI everything it needs per task
-2. **Multi-agent orchestration** — Thin orchestrators that spawn specialized agents with fresh context windows
+1. **Context engineering** — Structured artifacts that give the AI everything it needs per task (see [Context engineering](explanation/context-engineering.md))
+2. **Multi-agent orchestration** — Thin orchestrators that spawn specialized agents with fresh context windows (see [Multi-agent orchestration](explanation/multi-agent-orchestration.md))
 3. **Spec-driven development** — Requirements → research → plans → execution → verification pipeline
 4. **State management** — Persistent project memory across sessions and context resets
 
@@ -42,7 +42,7 @@ GSD Core is a **meta-prompting framework** that sits between the user and AI cod
                       │
 ┌─────────────────────▼────────────────────────────────┐
 │              WORKFLOW LAYER                           │
-│   get-shit-done/workflows/*.md — Orchestration logic  │
+│   gsd-core/workflows/*.md — Orchestration logic  │
 │   (Reads references, spawns agents, manages state)    │
 └──────┬──────────────┬─────────────────┬──────────────┘
        │              │                 │
@@ -75,7 +75,7 @@ Every agent spawned by an orchestrator gets a clean context window (up to 200K t
 
 ### 2. Thin Orchestrators
 
-Workflow files (`get-shit-done/workflows/*.md`) never do heavy lifting. They:
+Workflow files (`gsd-core/workflows/*.md`) never do heavy lifting. They:
 
 - Load context via `gsd-tools.cjs init <workflow>`
 - Spawn specialized agents with focused prompts
@@ -130,7 +130,7 @@ The router descriptions use pipe-separated keyword tags (≤ 60 chars) per the T
 
 The eager skill listing is one of two recurring per-turn token costs. The other is the MCP tool schema injected by every enabled MCP server in `.claude/settings.json`. Heavyweight MCP servers (browser/playwright, Mac-tools, Windows-tools) can each cost 20 k+ tokens per turn — often dwarfing what `model_profile` tuning saves. The toggle lives in the Claude Code harness (`enabledMcpjsonServers` / `disabledMcpjsonServers` in `.claude/settings.json`) and is **not** a GSD concern. Together, the two-stage routing layer (#2792) and disciplined MCP enablement are the largest cost levers per turn. See [`docs/USER-GUIDE.md`](USER-GUIDE.md) and `references/context-budget.md` for the audit checklist.
 
-### Workflows (`get-shit-done/workflows/*.md`)
+### Workflows (`gsd-core/workflows/*.md`)
 
 Orchestration logic that commands reference. Contains the step-by-step process including:
 
@@ -159,7 +159,7 @@ mirrors the agent budget from #2361:
 issue #2551. When a workflow grows beyond its tier, extract per-mode bodies
 into `workflows/<workflow>/modes/<mode>.md`, templates into
 `workflows/<workflow>/templates/`, and shared knowledge into
-`get-shit-done/references/`. The parent file becomes a thin dispatcher that
+`gsd-core/references/`. The parent file becomes a thin dispatcher that
 Reads only the mode and template files needed for the current invocation.
 
 `workflows/discuss-phase/` is the canonical example of this pattern —
@@ -180,7 +180,7 @@ Specialized agent definitions with frontmatter specifying:
 
 **Total agents:** 33
 
-### References (`get-shit-done/references/*.md`)
+### References (`gsd-core/references/*.md`)
 
 Shared knowledge documents that workflows and agents `@-reference` (see [`docs/INVENTORY.md`](INVENTORY.md#references-41-shipped) for the authoritative count and full roster):
 
@@ -234,7 +234,7 @@ The planner agent (`agents/gsd-planner.md`) was decomposed from a single monolit
 - `planner-reviews.md` — Cross-AI review integration (reads REVIEWS.md from `/gsd-review`)
 - `planner-revision.md` — Plan revision patterns for iterative refinement
 
-### Templates (`get-shit-done/templates/`)
+### Templates (`gsd-core/templates/`)
 
 Markdown templates for all planning artifacts. Used by `gsd-tools.cjs template fill` / `phase.scaffold` (and top-level `scaffold`) to create pre-structured files:
 - `project.md`, `requirements.md`, `roadmap.md`, `state.md` — Core project files
@@ -266,13 +266,13 @@ Runtime hooks that integrate with the host AI agent:
 
 See [`docs/INVENTORY.md`](INVENTORY.md#hooks-11-shipped) for the authoritative 11-hook roster.
 
-### Command Routing Hub (`get-shit-done/bin/lib/command-routing-hub.cjs`)
+### Command Routing Hub (`gsd-core/bin/lib/command-routing-hub.cjs`)
 
 CJS command family routers dispatch through `CommandRoutingHub`. The hub owns the no-throw pure-result contract (`hub.dispatch()` catches internal exceptions and returns `{ ok: false, kind, ...typedPayload }`) and the closed runtime error taxonomy (`UnknownCommand`, `InvalidArgs`, `HandlerRefusal`, `HandlerFailure`). Router adapters remain thin CLI translators — they build the hub, call `dispatch`, then map the Result to `output()`/`error()` calls. The runtime is single-path (no dual-runtime mode selection). See `docs/adr/0174-retire-gsd-sdk-package-boundary.md`.
 
-### CLI Tools (`get-shit-done/bin/`)
+### CLI Tools (`gsd-core/bin/`)
 
-Node.js CLI utility (`gsd-tools.cjs`) with domain modules split across `get-shit-done/bin/lib/` (see [`docs/INVENTORY.md`](INVENTORY.md#cli-modules-33-shipped) for the authoritative roster):
+Node.js CLI utility (`gsd-tools.cjs`) with domain modules split across `gsd-core/bin/lib/` (see [`docs/INVENTORY.md`](INVENTORY.md#cli-modules-33-shipped) for the authoritative roster):
 
 
 | Module                 | Responsibility                                                                                      |
@@ -479,7 +479,7 @@ UI-SPEC.md (per phase) ───────────────────
 ~/.claude/                          # Claude Code (global install)
 ├── skills/gsd-*/SKILL.md           # Global skills (authoritative roster: docs/INVENTORY.md)
 ├── commands/gsd/*.md               # Local Claude installs use slash commands instead of global skills
-├── get-shit-done/
+├── gsd-core/
 │   ├── bin/gsd-tools.cjs           # CLI utility
 │   ├── bin/lib/*.cjs               # Domain modules (authoritative roster: docs/INVENTORY.md)
 │   ├── workflows/*.md              # Workflow definitions (authoritative roster: docs/INVENTORY.md)
@@ -700,6 +700,8 @@ The researcher → planner → executor pipeline includes a supply-chain gate ag
 
 ### Security Hooks (v1.27)
 
+For a conceptual overview of how the hook and guard layers fit into the broader security approach, see [Security model](explanation/security-model.md).
+
 **Prompt Guard** (`gsd-prompt-guard.js`):
 
 - Triggers on Write/Edit to `.planning/` files
@@ -770,3 +772,12 @@ available. The current source snapshot is 2026-05-11:
 5. **Model references** — `inherit` profile lets GSD defer to runtime's model selection
 
 The installer handles all translation at install time. Workflows and agents are written in Claude Code's native format and transformed during deployment.
+
+---
+
+## Related
+
+- [Multi-agent orchestration](explanation/multi-agent-orchestration.md)
+- [Security model](explanation/security-model.md)
+- [CLI tools](CLI-TOOLS.md)
+- [docs index](README.md)

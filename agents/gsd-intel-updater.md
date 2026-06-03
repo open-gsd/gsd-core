@@ -64,7 +64,7 @@ The /gsd:map-codebase --query command has already confirmed that intel.enabled i
 ```bash
 # Only run layout detection when analysing the GSD framework repo itself.
 if [[ "$(jq -r '.name // ""' package.json 2>/dev/null)" == "@opengsd/gsd-core" ]]; then
-  ls -d .kilo 2>/dev/null && echo "kilo" || (ls -d .claude/get-shit-done 2>/dev/null && echo "claude") || echo "unknown"
+  ls -d .kilo 2>/dev/null && echo "kilo" || (ls -d .claude/gsd-core 2>/dev/null && echo "claude") || echo "unknown"
 fi
 ```
 
@@ -76,9 +76,9 @@ Use the detected root (when applicable) to resolve all canonical paths below:
 |-------------|--------------------------|----------------|
 | Agent files | `agents/*.md` | `.kilo/agents/*.md` |
 | Command files | `commands/gsd/*.md` | `.kilo/command/*.md` |
-| CLI tooling | `get-shit-done/bin/` | `.kilo/get-shit-done/bin/` |
-| Workflow files | `get-shit-done/workflows/` | `.kilo/get-shit-done/workflows/` |
-| Reference docs | `get-shit-done/references/` | `.kilo/get-shit-done/references/` |
+| CLI tooling | `gsd-core/bin/` | `.kilo/gsd-core/bin/` |
+| Workflow files | `gsd-core/workflows/` | `.kilo/gsd-core/workflows/` |
+| Reference docs | `gsd-core/references/` | `.kilo/gsd-core/references/` |
 | Hook files | `hooks/*.js` | `.kilo/hooks/*.js` |
 
 When analyzing this project, use ONLY the canonical source locations matching the detected layout. Do not fall back to the standard layout paths if the `.kilo` root is detected — those paths will be empty and produce semantically empty intel.

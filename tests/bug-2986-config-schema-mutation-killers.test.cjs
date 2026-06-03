@@ -4,7 +4,7 @@ process.env.GSD_TEST_MODE = '1';
 
 /**
  * Bug #2986: Layer-3 fault-detection audit found 4.62% Stryker mutation
- * score on get-shit-done/bin/lib/config-schema.cjs (6 killed, 124 survived).
+ * score on gsd-core/bin/lib/config-schema.cjs (6 killed, 124 survived).
  * Surviving mutants document tests that "exercise paths" but don't
  * "verify outputs" -- a polarity flip or predicate swap inside the lib
  * passed every existing test.
@@ -48,7 +48,7 @@ const {
   VALID_CONFIG_KEYS,
   DYNAMIC_KEY_PATTERNS,
   isValidConfigKey,
-} = require('../get-shit-done/bin/lib/config-schema.cjs');
+} = require('../gsd-core/bin/lib/config-schema.cjs');
 
 describe('Bug #2986: M1/M4 -- isValidConfigKey returns true for EVERY static key in VALID_CONFIG_KEYS', () => {
   // Stryker mutants like `if (false) return true;` would silently flip

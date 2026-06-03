@@ -26,13 +26,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
-const { VALID_CONFIG_KEYS } = require('../get-shit-done/bin/lib/config-schema.cjs');
+const { VALID_CONFIG_KEYS } = require('../gsd-core/bin/lib/config-schema.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 // #2790: settings-advanced.md was consolidated into config.md as the --advanced flag.
 const COMMAND_PATH = path.join(ROOT, 'commands', 'gsd', 'config.md');
-const WORKFLOW_PATH = path.join(ROOT, 'get-shit-done', 'workflows', 'settings-advanced.md');
-const SETTINGS_WORKFLOW_PATH = path.join(ROOT, 'get-shit-done', 'workflows', 'settings.md');
+const WORKFLOW_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'settings-advanced.md');
+const SETTINGS_WORKFLOW_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'settings.md');
 
 // ─── Spec — every field the advanced command must expose ──────────────────────
 
@@ -79,7 +79,7 @@ describe('gsd-settings-advanced — file scaffolding', () => {
     assert.ok(fs.existsSync(COMMAND_PATH), `missing ${COMMAND_PATH}`);
   });
 
-  test('workflow file exists at get-shit-done/workflows/settings-advanced.md', () => {
+  test('workflow file exists at gsd-core/workflows/settings-advanced.md', () => {
     assert.ok(fs.existsSync(WORKFLOW_PATH), `missing ${WORKFLOW_PATH}`);
   });
 
@@ -197,7 +197,7 @@ describe('gsd-settings-advanced — VALID_CONFIG_KEYS coverage', () => {
     test(`VALID_CONFIG_KEYS contains "${key}"`, () => {
       assert.ok(
         VALID_CONFIG_KEYS.has(key),
-        `VALID_CONFIG_KEYS missing ${key} — add it to get-shit-done/bin/lib/config-schema.cjs`
+        `VALID_CONFIG_KEYS missing ${key} — add it to gsd-core/bin/lib/config-schema.cjs`
       );
     });
   }
@@ -210,11 +210,11 @@ describe('/gsd-settings advertises /gsd-settings-advanced', () => {
     const text = fs.readFileSync(SETTINGS_WORKFLOW_PATH, 'utf-8');
     assert.ok(
       text.includes('/gsd:config --advanced'),
-      'get-shit-done/workflows/settings.md must mention /gsd:config --advanced'
+      'gsd-core/workflows/settings.md must mention /gsd:config --advanced'
     );
     assert.ok(
       !text.includes('gsd-settings-advanced') && !text.includes('gsd:settings-advanced'),
-      'get-shit-done/workflows/settings.md must not mention legacy /gsd-settings-advanced variants'
+      'gsd-core/workflows/settings.md must not mention legacy /gsd-settings-advanced variants'
     );
   });
 });

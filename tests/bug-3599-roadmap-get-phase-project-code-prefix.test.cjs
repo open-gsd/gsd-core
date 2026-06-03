@@ -2,7 +2,7 @@
  * Bug #3599: roadmap.get-phase no longer matches custom phase IDs with
  * project-code prefixes like `PROJ-42`.
  *
- * `phaseMarkdownRegexSource(phaseNum)` in get-shit-done/bin/lib/core.cjs
+ * `phaseMarkdownRegexSource(phaseNum)` in gsd-core/bin/lib/core.cjs
  * (and its SDK twin in sdk/src/query/roadmap-update-plan-progress.ts) strips
  * the `PROJ-` prefix before building the padding-tolerant numeric regex.
  * Result: `roadmap get-phase PROJ-42` produces a regex of `0*42`, which

@@ -16,7 +16,7 @@
  * New contract (#498): the worker no longer resolves the package name itself.
  * It delegates the latest-version lookup to check-latest-version.cjs's
  * `checkLatestVersion()`, whose `PACKAGE_NAME` is sourced from the baked Package
- * Identity seam (`get-shit-done/bin/lib/package-identity.cjs`). The seam's value
+ * Identity seam (`gsd-core/bin/lib/package-identity.cjs`). The seam's value
  * is a build-time constant, correct in every install layout, so the
  * undefined-at-runtime failure cannot recur. This test locks that contract:
  *
@@ -29,7 +29,7 @@
  *      packageName === the scoped '@opengsd/gsd-core'.
  *
  * Source-grep policy: this test reads hook source via readFileSync. The repo's
- * lint-no-source-grep rule targets bin/lib/get-shit-done — hooks/ is out of
+ * lint-no-source-grep rule targets bin/lib/gsd-core — hooks/ is out of
  * scope. The behavior (correct name → no E404) only manifests at runtime
  * against the live registry; structural assertions are the minimum-cost
  * contract for the worker, the same rationale #378 carried.
@@ -48,8 +48,8 @@ const path = require('path');
 
 const WORKER_PATH = path.join(__dirname, '..', 'hooks', 'gsd-check-update-worker.js');
 const PKG_PATH = path.join(__dirname, '..', 'package.json');
-const SEAM = require('../get-shit-done/bin/lib/package-identity.cjs');
-const { PACKAGE_NAME } = require('../get-shit-done/bin/check-latest-version.cjs');
+const SEAM = require('../gsd-core/bin/lib/package-identity.cjs');
+const { PACKAGE_NAME } = require('../gsd-core/bin/check-latest-version.cjs');
 
 function workerCodeOnly() {
   const src = fs.readFileSync(WORKER_PATH, 'utf8');

@@ -6,7 +6,7 @@
  *   > Skipped Codex skill-copy generation (Codex discovers official skills directly)
  * which left users with a "successful" install but no routable `$gsd-*`
  * entrypoints in Codex CLI 0.130.0. Codex CLI does NOT auto-discover
- * commands from `~/.codex/get-shit-done/workflows/*.md` or `agents/*.md`;
+ * commands from `~/.codex/gsd-core/workflows/*.md` or `agents/*.md`;
  * it only registers slash commands derived from `~/.codex/skills/<name>/SKILL.md`.
  * The "Codex discovers official skills directly" assumption was wrong.
  *

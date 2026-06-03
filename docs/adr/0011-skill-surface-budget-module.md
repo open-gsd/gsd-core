@@ -11,7 +11,7 @@ The root problem is an absence of a profile/surface seam: the installer wrote ev
 
 ## Decision
 
-- Add a **Skill Surface Budget Module** under `get-shit-done/bin/lib/install-profiles.cjs` as the single owner for which skills and agents are written to runtime config directories.
+- Add a **Skill Surface Budget Module** under `gsd-core/bin/lib/install-profiles.cjs` as the single owner for which skills and agents are written to runtime config directories.
 - Define three named profiles: `core` (six skills covering the main loop), `standard` (core + phase management and workspace skills), and `full` (all skills — the previous default).
 - Compute each profile's effective skill set as the transitive closure over the `requires:` dependency graph extracted from skill frontmatter, so partial installs never break cross-skill dependencies.
 - Persist the chosen profile in a `.gsd-profile` marker file in each runtime config directory; `gsd update` reads the marker to honor the profile on re-install.
@@ -33,9 +33,9 @@ The Phase 2 decision, previously listed as an open question, is recorded here as
   - `disable <cluster>` — mark a cluster disabled; re-stage to remove its skills from the runtime config dir
   - `enable <cluster>` — mark a cluster enabled; re-stage to add its skills back
   - `reset` — clear surface state and re-apply the active profile from `.gsd-profile`
-- Implement the runtime surface engine in `get-shit-done/bin/lib/surface.cjs`, consuming `stageSkillsForProfile` and `stageAgentsForProfile` from the Phase 1 module without duplicating staging logic.
+- Implement the runtime surface engine in `gsd-core/bin/lib/surface.cjs`, consuming `stageSkillsForProfile` and `stageAgentsForProfile` from the Phase 1 module without duplicating staging logic.
 - Persist per-runtime surface state in `<runtimeConfigDir>/.gsd-surface.json`, independent from `.gsd-profile`. The profile marker owns install-time identity; the surface JSON owns session-scope cluster toggles.
-- Source cluster taxonomy from the research memo §3.2 (2026-05-12-skill-surface-budget.md). Define clusters in `get-shit-done/bin/lib/clusters.cjs` — a separate module so the surface engine and future SDK callers can import cluster definitions without loading the full profile module.
+- Source cluster taxonomy from the research memo §3.2 (2026-05-12-skill-surface-budget.md). Define clusters in `gsd-core/bin/lib/clusters.cjs` — a separate module so the surface engine and future SDK callers can import cluster definitions without loading the full profile module.
 - Cluster taxonomy: `core_loop`, `audit_review`, `milestone`, `research_ideate`, `workspace_state`, `docs`, `ui`, `ai_eval`, `ns_meta`, `utility`. Membership may overlap; every installed skill stem must appear in at least one cluster (enforced by `tests/surface-clusters.test.cjs`).
 - Relationship to Anthropic platform asks: Asks D (native per-skill toggle API) and E (budget-fraction negotiation) remain filed separately. The `/gsd:surface` command is a unilateral GSD-side workaround that does not depend on those platform changes.
 
@@ -43,7 +43,7 @@ The Phase 2 decision, previously listed as an open question, is recorded here as
 
 Phase 1 artifacts landed on `feat/3408-skills-description-dropped-due-to-size`:
 
-- `get-shit-done/bin/lib/install-profiles.cjs` — `PROFILES` map, `resolveProfile`, `loadSkillsManifest`, `stageSkillsForProfile`, `stageAgentsForProfile`, `readActiveProfile`, `writeActiveProfile`, `mostRestrictiveProfile`, `resolveEffectiveProfile`
+- `gsd-core/bin/lib/install-profiles.cjs` — `PROFILES` map, `resolveProfile`, `loadSkillsManifest`, `stageSkillsForProfile`, `stageAgentsForProfile`, `readActiveProfile`, `writeActiveProfile`, `mostRestrictiveProfile`, `resolveEffectiveProfile`
 - `requires:` frontmatter added to 64 skills in `commands/gsd/*.md`
 - `scripts/lint-skill-deps.cjs` — CI gate for `requires:` integrity, wired into `pretest`
 - `bin/install.js` — `--profile=<name>` flag (composable); `--minimal`/`--core-only` as aliases; `.gsd-profile` marker write on install; `gsd update` re-reads marker
@@ -52,8 +52,8 @@ Phase 1 artifacts landed on `feat/3408-skills-description-dropped-due-to-size`:
 Phase 2 shipped on the same branch:
 
 - `commands/gsd/surface.md` — `/gsd:surface` slash command runbook (sub-commands: `list`, `status`, `profile <name>`, `disable <cluster>`, `enable <cluster>`, `reset`)
-- `get-shit-done/bin/lib/surface.cjs` — runtime engine (`readSurface`, `writeSurface`, `resolveSurface`, `applySurface`, `listSurface`); reuses `stageSkillsForProfile` / `stageAgentsForProfile` from Phase 1
-- `get-shit-done/bin/lib/clusters.cjs` — 10-cluster taxonomy covering all installed skill stems
+- `gsd-core/bin/lib/surface.cjs` — runtime engine (`readSurface`, `writeSurface`, `resolveSurface`, `applySurface`, `listSurface`); reuses `stageSkillsForProfile` / `stageAgentsForProfile` from Phase 1
+- `gsd-core/bin/lib/clusters.cjs` — 10-cluster taxonomy covering all installed skill stems
 - Tests: `tests/surface-state.test.cjs`, `tests/surface-clusters.test.cjs`, `tests/surface-resolve.test.cjs`, `tests/surface-apply.test.cjs`, `tests/surface-list.test.cjs`
 - Persistent surface state: `<runtimeConfigDir>/.gsd-surface.json` (independent from `.gsd-profile`)
 

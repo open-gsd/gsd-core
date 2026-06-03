@@ -8,10 +8,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { catalog, KNOWN_RUNTIMES } = require('../get-shit-done/bin/lib/model-catalog.cjs');
+const { catalog, KNOWN_RUNTIMES } = require('../gsd-core/bin/lib/model-catalog.cjs');
 
 const ROOT = path.join(__dirname, '..');
-const SETTINGS_ADVANCED = fs.readFileSync(path.join(ROOT, 'get-shit-done', 'workflows', 'settings-advanced.md'), 'utf8');
+const SETTINGS_ADVANCED = fs.readFileSync(path.join(ROOT, 'gsd-core', 'workflows', 'settings-advanced.md'), 'utf8');
 const CONFIG_DOC = fs.readFileSync(path.join(ROOT, 'docs', 'CONFIGURATION.md'), 'utf8');
 
 describe('model catalog runtime defaults parity (#3229)', () => {

@@ -29,7 +29,7 @@ const { execFileSync } = require('node:child_process');
 
 const { cleanup } = require('./helpers.cjs');
 
-const gsdTools = path.resolve(__dirname, '..', 'get-shit-done', 'bin', 'gsd-tools.cjs');
+const gsdTools = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 
 function run(args, cwd) {
   try {

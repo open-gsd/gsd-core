@@ -30,7 +30,7 @@ const assert = require('node:assert/strict');
 const {
   classifyPromptUserAction,
   BUNDLED_GSD_HOOK_FILES,
-} = require('../get-shit-done/bin/lib/installer-migration-report.cjs');
+} = require('../gsd-core/bin/lib/installer-migration-report.cjs');
 const path = require('node:path');
 const fs = require('node:fs');
 

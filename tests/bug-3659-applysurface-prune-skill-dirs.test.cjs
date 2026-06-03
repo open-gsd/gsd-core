@@ -33,10 +33,10 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { writeSurface, applySurface } = require('../get-shit-done/bin/lib/surface.cjs');
-const { loadSkillsManifest } = require('../get-shit-done/bin/lib/install-profiles.cjs');
-const { CLUSTERS } = require('../get-shit-done/bin/lib/clusters.cjs');
-const { resolveRuntimeArtifactLayout } = require('../get-shit-done/bin/lib/runtime-artifact-layout.cjs');
+const { writeSurface, applySurface } = require('../gsd-core/bin/lib/surface.cjs');
+const { loadSkillsManifest } = require('../gsd-core/bin/lib/install-profiles.cjs');
+const { CLUSTERS } = require('../gsd-core/bin/lib/clusters.cjs');
+const { resolveRuntimeArtifactLayout } = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const REAL_COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');

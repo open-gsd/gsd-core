@@ -173,11 +173,10 @@ scope for this guide.
 
 ## Related
 
-- [docs/USER-GUIDE.md](USER-GUIDE.md) — task-oriented walkthroughs of
-  individual commands referenced above.
-- [docs/COMMANDS.md](COMMANDS.md) — full reference for `/gsd-*`
-  commands.
-- [docs/FEATURES.md](FEATURES.md) — feature-level capability matrix
-  (workspaces, manager, autonomous, verify, review, ship).
-- [docs/ARCHITECTURE.md](ARCHITECTURE.md) — phase-artifact lifecycle
-  and `STATE.md` mechanics.
+- [The phase loop](explanation/the-phase-loop.md) — how discuss → plan → execute → verify → ship fits together as a repeating cycle.
+- [Workspaces how-to](how-to/work-in-parallel-with-workstreams.md) — step-by-step guide to creating and managing parallel worktrees.
+- [docs index](README.md) — full table of contents for GSD Core documentation.
+- [docs/USER-GUIDE.md](./USER-GUIDE.md) — task-oriented walkthroughs of individual commands referenced above.
+- [docs/COMMANDS.md](COMMANDS.md) — full reference for `/gsd-*` commands.
+- [docs/FEATURES.md](FEATURES.md) — feature-level capability matrix (workspaces, manager, autonomous, verify, review, ship).
+- [docs/ARCHITECTURE.md](ARCHITECTURE.md) — phase-artifact lifecycle and `STATE.md` mechanics.

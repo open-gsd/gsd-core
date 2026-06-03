@@ -18,7 +18,7 @@ const fs = require('fs');
 const path = require('path');
 
 describe('autonomous --interactive flag (#1413)', () => {
-  const workflowPath = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'autonomous.md');
+  const workflowPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'autonomous.md');
   const commandPath = path.join(__dirname, '..', 'commands', 'gsd', 'autonomous.md');
 
   test('command definition includes --interactive in argument-hint', () => {

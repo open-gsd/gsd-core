@@ -86,7 +86,7 @@ describe('bug-2798: context_window is a valid config key', () => {
       t.skip('sdk/dist/query/config-schema.js not built — run `cd sdk && npm run build` to enable this integration test');
       return;
     }
-    const cjsSchema = require(path.join(REPO_ROOT, 'get-shit-done', 'bin', 'lib', 'config-schema.cjs'));
+    const cjsSchema = require(path.join(REPO_ROOT, 'gsd-core', 'bin', 'lib', 'config-schema.cjs'));
     const sdkSchema = require(path.join(REPO_ROOT, 'sdk', 'dist', 'query', 'config-schema.js'));
 
     assert.ok(

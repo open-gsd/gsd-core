@@ -10,7 +10,7 @@ const {
   compareSemverCore,
   isSemverNewer,
   toNumericTuple,
-} = require('../get-shit-done/bin/lib/semver-compare.cjs');
+} = require('../gsd-core/bin/lib/semver-compare.cjs');
 
 describe('isSemverNewer (shared semver comparison)', () => {
   test('newer major version', () => {

@@ -1,6 +1,7 @@
 // Tests for gsd-tools effort sync command (#488)
 // Verifies that effort frontmatter in installed agent files can be re-synced
 // when effort config changes after initial install.
+// allow-test-rule: structural-regression-guard — readFileSync asserts on installed agent .md files (the product under mutation) to verify dry-run safety and apply correctness; stderr.includes guards the CLI argument-rejection contract.
 
 'use strict';
 
@@ -15,7 +16,7 @@ const { spawnSync } = require('node:child_process');
 
 const { cleanup } = require('./helpers.cjs');
 
-const GSD_TOOLS = path.resolve(__dirname, '../get-shit-done/bin/gsd-tools.cjs');
+const GSD_TOOLS = path.resolve(__dirname, '../gsd-core/bin/gsd-tools.cjs');
 
 function runCli(args, env = {}) {
   const result = spawnSync(process.execPath, [GSD_TOOLS, ...args], {
@@ -81,7 +82,7 @@ describe('feat-488: effort sync command', () => {
     fs.writeFileSync(agentPath, AGENT_WITH_EFFORT);
     writePlanningConfig(tmpDir, { default: 'high', agent_overrides: { 'gsd-planner': 'xhigh' } });
 
-    const { cmdEffortSync } = require('../get-shit-done/bin/lib/commands.cjs');
+    const { cmdEffortSync } = require('../gsd-core/bin/lib/commands.cjs');
     const result = captureOutput(() =>
       cmdEffortSync(tmpDir, false, { dryRun: true, configDir: tmpDir, runtime: 'claude' })
     );
@@ -105,7 +106,7 @@ describe('feat-488: effort sync command', () => {
     fs.writeFileSync(agentPath, AGENT_WITH_EFFORT);
     writePlanningConfig(tmpDir, { default: 'low', agent_overrides: { 'gsd-planner': 'xhigh' } });
 
-    const { cmdEffortSync } = require('../get-shit-done/bin/lib/commands.cjs');
+    const { cmdEffortSync } = require('../gsd-core/bin/lib/commands.cjs');
     const result = captureOutput(() =>
       cmdEffortSync(tmpDir, false, { dryRun: false, configDir: tmpDir, runtime: 'claude' })
     );
@@ -128,7 +129,7 @@ describe('feat-488: effort sync command', () => {
     fs.writeFileSync(agentPath, AGENT_WITH_EFFORT.replace('effort: medium', 'effort: xhigh'));
     writePlanningConfig(tmpDir, { agent_overrides: { 'gsd-planner': 'xhigh' } });
 
-    const { cmdEffortSync } = require('../get-shit-done/bin/lib/commands.cjs');
+    const { cmdEffortSync } = require('../gsd-core/bin/lib/commands.cjs');
     const result = captureOutput(() =>
       cmdEffortSync(tmpDir, false, { dryRun: false, configDir: tmpDir, runtime: 'claude' })
     );
@@ -146,7 +147,7 @@ describe('feat-488: effort sync command', () => {
     fs.writeFileSync(agentPath, AGENT_WITHOUT_EFFORT);
     writePlanningConfig(tmpDir, { default: 'max' });
 
-    const { cmdEffortSync } = require('../get-shit-done/bin/lib/commands.cjs');
+    const { cmdEffortSync } = require('../gsd-core/bin/lib/commands.cjs');
     const result = captureOutput(() =>
       cmdEffortSync(tmpDir, false, { dryRun: false, configDir: tmpDir, runtime: 'claude' })
     );
@@ -162,7 +163,7 @@ describe('feat-488: effort sync command', () => {
   test('non-claude runtime exits cleanly with informative reason field', () => {
     const tmpDir = makeTmpDir('effort-sync-gemini-');
 
-    const { cmdEffortSync } = require('../get-shit-done/bin/lib/commands.cjs');
+    const { cmdEffortSync } = require('../gsd-core/bin/lib/commands.cjs');
     const result = captureOutput(() =>
       cmdEffortSync(tmpDir, false, { dryRun: true, runtime: 'gemini' })
     );
@@ -194,7 +195,7 @@ describe('feat-488: effort sync command', () => {
     fs.mkdirSync(gsdDir, { recursive: true });
     fs.writeFileSync(path.join(gsdDir, 'defaults.json'), JSON.stringify({ effort: { default: 'low' } }));
 
-    const { cmdEffortSync } = require('../get-shit-done/bin/lib/commands.cjs');
+    const { cmdEffortSync } = require('../gsd-core/bin/lib/commands.cjs');
     const result = captureOutput(() =>
       cmdEffortSync(tmpDir, false, {
         dryRun: false,

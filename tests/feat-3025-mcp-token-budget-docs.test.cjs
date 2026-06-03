@@ -1,7 +1,7 @@
 /**
  * Documentation regression test for issue #3025 — MCP token-budget guidance.
  *
- * Verifies that get-shit-done/references/context-budget.md contains the
+ * Verifies that gsd-core/references/context-budget.md contains the
  * structural elements the issue requires:
  *
  *   1. A section explaining MCP/tool schemas as a context-budget concern
@@ -30,7 +30,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
-const CONTEXT_BUDGET_MD = path.join(ROOT, 'get-shit-done', 'references', 'context-budget.md');
+const CONTEXT_BUDGET_MD = path.join(ROOT, 'gsd-core', 'references', 'context-budget.md');
 const USER_GUIDE_MD = path.join(ROOT, 'docs', 'USER-GUIDE.md');
 
 /**

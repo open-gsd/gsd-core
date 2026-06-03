@@ -3,11 +3,11 @@
 - **Status:** Proposed
 - **Date:** 2026-05-12
 
-We propose extending the existing install profile seam (`get-shit-done/bin/lib/install-profiles.cjs`) into a **Skill Surface Budget Module** that owns which subset of GSD's 66 skills is written to the runtime config dirs, and that owns the per-skill `requires:` dependency manifest used to keep that subset closed under cross-skill references. GSD currently ships a binary `--minimal` / full toggle; runtimes that enumerate skills (Claude Code, OpenCode, etc.) cap the `<available_skills>` system-prompt block at `skillListingBudgetFraction` of the context window (default 1% = ~2k tokens at 200k), and GSD alone consumes ~60% of that cap (#3408). Further description shrinkage is unavailable — `scripts/lint-descriptions.cjs` already enforces a hard 100-char ceiling and the mean is 72.5 chars. The remaining lever is surfacing fewer skills, which requires a typed profile model plus a dependency manifest, not more ad-hoc allowlists.
+We propose extending the existing install profile seam (`gsd-core/bin/lib/install-profiles.cjs`) into a **Skill Surface Budget Module** that owns which subset of GSD's 66 skills is written to the runtime config dirs, and that owns the per-skill `requires:` dependency manifest used to keep that subset closed under cross-skill references. GSD currently ships a binary `--minimal` / full toggle; runtimes that enumerate skills (Claude Code, OpenCode, etc.) cap the `<available_skills>` system-prompt block at `skillListingBudgetFraction` of the context window (default 1% = ~2k tokens at 200k), and GSD alone consumes ~60% of that cap (#3408). Further description shrinkage is unavailable — `scripts/lint-descriptions.cjs` already enforces a hard 100-char ceiling and the mean is 72.5 chars. The remaining lever is surfacing fewer skills, which requires a typed profile model plus a dependency manifest, not more ad-hoc allowlists.
 
 ## Decision
 
-- Add a **Skill Surface Budget Module** by extending `get-shit-done/bin/lib/install-profiles.cjs` as the single owner for which `commands/gsd/*.md` and `agents/gsd-*.md` files are staged into the per-runtime copy pipeline.
+- Add a **Skill Surface Budget Module** by extending `gsd-core/bin/lib/install-profiles.cjs` as the single owner for which `commands/gsd/*.md` and `agents/gsd-*.md` files are staged into the per-runtime copy pipeline.
 - Replace the single `MINIMAL_SKILL_ALLOWLIST` constant with a typed `PROFILES` map keyed by profile name. Each profile is a *base set* of skills; the module computes the **transitive closure** over each skill's declared `requires:` set before staging.
 - Add a `requires:` frontmatter field to every skill whose body references another GSD skill. The dependency graph in the research memo (`docs/research/2026-05-12-skill-surface-budget.md` §3.1) is the migration spec for this pass.
 - Extend `bin/install.js` argument parsing to accept `--profile=<name>` and `--profile=<name1>,<name2>` (composable). Preserve `--minimal` / `--core-only` as aliases for `--profile=core`. Default install (no flag) remains `full` for back-compat.
@@ -35,7 +35,7 @@ It should **not** in the first pass:
 
 ## Migration Inventory
 
-### `get-shit-done/bin/lib/install-profiles.cjs`
+### `gsd-core/bin/lib/install-profiles.cjs`
 
 - Replace `MINIMAL_SKILL_ALLOWLIST` Object.freeze constant with `PROFILES` Object.freeze map of profile-name → base skill set.
 - Replace `isMinimalMode(mode)` with `resolveProfile(mode)` returning a typed `{name, skills: Set, agents: Set}` after transitive-closure computation.
@@ -141,7 +141,7 @@ requires: [phase, discuss-phase]   # GSD skills only; not Claude Code primitives
 
 - Feature issue: `#3408`
 - Research input: `docs/research/2026-05-12-skill-surface-budget.md`
-- Existing seam being extended: `get-shit-done/bin/lib/install-profiles.cjs`
+- Existing seam being extended: `gsd-core/bin/lib/install-profiles.cjs`
 - Description budget enforcement: `scripts/lint-descriptions.cjs`
 - Installer dispatch site: `bin/install.js:123-124`, `:8167-8207`
 - See `0008-installer-migration-module.md` (the migration that records the profile marker lives here)

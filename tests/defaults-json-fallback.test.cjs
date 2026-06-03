@@ -13,7 +13,7 @@ const path = require('path');
 const os = require('os');
 const { cleanup } = require('./helpers.cjs');
 
-const { loadConfig } = require('../get-shit-done/bin/lib/core.cjs');
+const { loadConfig } = require('../gsd-core/bin/lib/core.cjs');
 
 /** Create a bare temp dir (no .planning/) to simulate pre-project context */
 function createBareTmpDir() {

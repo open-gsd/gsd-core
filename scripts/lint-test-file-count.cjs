@@ -2,7 +2,7 @@
 /**
  * lint-test-file-count.cjs — max 2 test files per production module.
  *
- * Scans sdk/src/query/, sdk/src/, get-shit-done/bin/lib/, bin/ for production
+ * Scans sdk/src/query/, sdk/src/, gsd-core/bin/lib/, bin/ for production
  * modules, then counts matching test files in tests/ and sdk/src (recursive). Cap is 2
  * (primary + one integration). Over-limit clusters must be in the allowlist with the
  * EXACT set of test filenames grandfathered (identity ratchet via allowlist-ratchet.cjs).
@@ -22,7 +22,7 @@ const ROOT = path.join(__dirname, '..');
 const PROD_DIRS = [
   path.join(ROOT, 'sdk', 'src', 'query'),
   path.join(ROOT, 'sdk', 'src'),
-  path.join(ROOT, 'get-shit-done', 'bin', 'lib'),
+  path.join(ROOT, 'gsd-core', 'bin', 'lib'),
   path.join(ROOT, 'bin'),
 ];
 const TEST_DIRS = [

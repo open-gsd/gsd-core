@@ -424,6 +424,61 @@ one-liner: Minimal summary
     assert.deepStrictEqual(output.requirements_completed, [], 'requirements_completed defaults to empty');
   });
 
+  test('reads requirements in snake_case form the tool itself emits (#628)', () => {
+    // Regression: the tool's JSON output key and the milestone-audit `--pick` both use the
+    // snake form `requirements_completed`, so operators naturally write that into SUMMARY
+    // frontmatter. The reader must accept it, not silently drop it to [].
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-foundation');
+    fs.mkdirSync(phaseDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(phaseDir, '01-01-SUMMARY.md'),
+      `---
+one-liner: Snake-keyed summary
+requirements_completed:
+  - REQ-1
+  - REQ-2
+---
+
+# Summary
+`
+    );
+
+    const result = runGsdTools('summary-extract .planning/phases/01-foundation/01-01-SUMMARY.md', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.deepStrictEqual(output.requirements_completed, ['REQ-1', 'REQ-2'],
+      'snake-case requirements_completed should be read, not dropped to []');
+  });
+
+  test('prefers kebab requirements-completed when both key forms are present (#628)', () => {
+    // kebab is the documented template form and must win the tolerance fallback.
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-foundation');
+    fs.mkdirSync(phaseDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(phaseDir, '01-01-SUMMARY.md'),
+      `---
+one-liner: Both key forms present
+requirements-completed:
+  - KEBAB-1
+requirements_completed:
+  - SNAKE-1
+---
+
+# Summary
+`
+    );
+
+    const result = runGsdTools('summary-extract .planning/phases/01-foundation/01-01-SUMMARY.md', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.deepStrictEqual(output.requirements_completed, ['KEBAB-1'],
+      'kebab key should take precedence over snake when both are present');
+  });
+
   test('parses key-decisions with rationale', () => {
     const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-foundation');
     fs.mkdirSync(phaseDir, { recursive: true });
@@ -890,7 +945,7 @@ describe('current-timestamp command', () => {
   });
 
   test('dispatches directly to CJS handler (no SDK bridge) to avoid Windows native crash path', () => {
-    const sourcePath = path.join(__dirname, '..', 'get-shit-done', 'bin', 'gsd-tools.cjs');
+    const sourcePath = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
     const source = fs.readFileSync(sourcePath, 'utf8');
     const match = source.match(/case 'current-timestamp':\s*\{[\s\S]*?\r?\n\s*break;\r?\n\s*\}/);
 
@@ -1406,7 +1461,7 @@ describe('commit command', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('groupFilesBySubrepo (#311)', () => {
-  const { groupFilesBySubrepo } = require('../get-shit-done/bin/lib/commands.cjs');
+  const { groupFilesBySubrepo } = require('../gsd-core/bin/lib/commands.cjs');
 
   test('single-segment subrepos route files correctly and unmatched collected', () => {
     const result = groupFilesBySubrepo(
@@ -1476,7 +1531,7 @@ describe('groupFilesBySubrepo (#311)', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('websearch command', () => {
-  const { cmdWebsearch } = require('../get-shit-done/bin/lib/commands.cjs');
+  const { cmdWebsearch } = require('../gsd-core/bin/lib/commands.cjs');
   let origFetch;
   let origApiKey;
   let origWriteSync;
@@ -2075,7 +2130,7 @@ describe('check-commit command', () => {
 });
 
 describe('_wsParseRetryAfter (#308)', () => {
-  const { _wsParseRetryAfter } = require('../get-shit-done/bin/lib/commands.cjs');
+  const { _wsParseRetryAfter } = require('../gsd-core/bin/lib/commands.cjs');
 
   test('integer seconds: "120" → 60000 (capped at 60s)', () => {
     assert.strictEqual(_wsParseRetryAfter('120'), 60000);

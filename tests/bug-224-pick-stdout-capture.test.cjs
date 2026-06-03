@@ -12,7 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const { runGsdTools } = require('./helpers.cjs');
 
-const GSD_TOOLS_SRC = path.join(__dirname, '..', 'get-shit-done', 'bin', 'gsd-tools.cjs');
+const GSD_TOOLS_SRC = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 
 describe('bug #224: --pick stdout capture contract', () => {
   let src;

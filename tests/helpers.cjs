@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const { createFixture } = require('./fixtures/index.cjs');
 
-const TOOLS_PATH = path.join(__dirname, '..', 'get-shit-done', 'bin', 'gsd-tools.cjs');
+const TOOLS_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 const TEST_ENV_BASE = {
   GSD_SESSION_KEY: '',
   CODEX_THREAD_ID: '',

@@ -20,7 +20,7 @@
 const { describe, test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { routePhaseCommand } = require('../get-shit-done/bin/lib/phase-command-router.cjs');
+const { routePhaseCommand } = require('../gsd-core/bin/lib/phase-command-router.cjs');
 
 // Force CJS path throughout: set GSD_WORKSTREAM so tryLoadSdk() is bypassed.
 // This makes unit-level assertions deterministic regardless of SDK build state.

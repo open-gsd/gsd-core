@@ -45,7 +45,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const INSTALL = require('../bin/install.js');
-const PROJECTION = require('../get-shit-done/bin/lib/shell-command-projection.cjs');
+const PROJECTION = require('../gsd-core/bin/lib/shell-command-projection.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const {

@@ -20,17 +20,17 @@ describe('analyze-dependencies command', () => {
 
   // Legacy placeholder: was previously a separate test; now just passes trivially.
   test('workflow file is sufficient without a standalone command file', () => {
-    const p = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'analyze-dependencies.md');
+    const p = path.join(__dirname, '..', 'gsd-core', 'workflows', 'analyze-dependencies.md');
     assert.ok(fs.existsSync(p), 'workflows/analyze-dependencies.md should still exist');
   });
 
   test('workflow file exists', () => {
-    const p = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'analyze-dependencies.md');
+    const p = path.join(__dirname, '..', 'gsd-core', 'workflows', 'analyze-dependencies.md');
     assert.ok(fs.existsSync(p), 'workflows/analyze-dependencies.md should exist');
   });
 
   test('workflow describes dependency analysis approach', () => {
-    const p = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'analyze-dependencies.md');
+    const p = path.join(__dirname, '..', 'gsd-core', 'workflows', 'analyze-dependencies.md');
     const content = fs.readFileSync(p, 'utf-8');
     assert.ok(content.includes('ROADMAP') || content.includes('phase'),
       'workflow should reference ROADMAP.md/phases');
@@ -41,7 +41,7 @@ describe('analyze-dependencies command', () => {
   });
 
   test('workflow mentions file overlap detection', () => {
-    const p = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'analyze-dependencies.md');
+    const p = path.join(__dirname, '..', 'gsd-core', 'workflows', 'analyze-dependencies.md');
     const content = fs.readFileSync(p, 'utf-8');
     assert.ok(
       content.includes('file') && (content.includes('overlap') || content.includes('conflict')),

@@ -25,7 +25,7 @@ const OPT_OUT_LABEL = 'no-changelog';
 // fragment or an explicit opt-out label. Test/CI/docs/lock files do not.
 const USER_FACING_PREFIXES = [
   'bin/',
-  'get-shit-done/',
+  'gsd-core/',
   'agents/',
   'commands/',
   'hooks/',

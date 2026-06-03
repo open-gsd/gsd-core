@@ -32,7 +32,7 @@ const {
   writeActiveProfile,
   PROFILES,
   STAGED_DIRS,
-} = require('../get-shit-done/bin/lib/install-profiles.cjs');
+} = require('../gsd-core/bin/lib/install-profiles.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const REAL_COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');

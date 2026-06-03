@@ -9,7 +9,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const WORKFLOW = path.join(__dirname, '..', 'get-shit-done', 'workflows', 'verify-work.md');
+const WORKFLOW = path.join(__dirname, '..', 'gsd-core', 'workflows', 'verify-work.md');
 
 describe('verify-work — MVP mode UAT framing', () => {
   const content = fs.readFileSync(WORKFLOW, 'utf-8');

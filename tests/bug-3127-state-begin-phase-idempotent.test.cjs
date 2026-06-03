@@ -29,7 +29,7 @@ const ROOT = path.join(__dirname, '..');
 
 // Load the state.cjs module internals via the command router
 function requireStateCjs() {
-  return require(path.join(ROOT, 'get-shit-done', 'bin', 'lib', 'state.cjs'));
+  return require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'state.cjs'));
 }
 
 function makeTempPlanning(stateContent) {

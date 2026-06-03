@@ -66,12 +66,12 @@ describe('detectConfigDir runtime behavior (#1860)', () => {
 
   test('returns .claude config dir when both .claude and .config/opencode exist', () => {
     // Simulate OpenCode install with OLDER version
-    const openCodeVersionDir = path.join(tmpHome, '.config', 'opencode', 'get-shit-done');
+    const openCodeVersionDir = path.join(tmpHome, '.config', 'opencode', 'gsd-core');
     fs.mkdirSync(openCodeVersionDir, { recursive: true });
     fs.writeFileSync(path.join(openCodeVersionDir, 'VERSION'), '1.0.0\n');
 
     // Simulate Claude Code install with NEWER version
-    const claudeVersionDir = path.join(tmpHome, '.claude', 'get-shit-done');
+    const claudeVersionDir = path.join(tmpHome, '.claude', 'gsd-core');
     fs.mkdirSync(claudeVersionDir, { recursive: true });
     fs.writeFileSync(path.join(claudeVersionDir, 'VERSION'), '1.32.0\n');
 
@@ -119,7 +119,7 @@ describe('detectConfigDir runtime behavior (#1860)', () => {
 
   test('falls back to .config/opencode when .claude does not exist', () => {
     // Only OpenCode installed
-    const openCodeVersionDir = path.join(tmpHome, '.config', 'opencode', 'get-shit-done');
+    const openCodeVersionDir = path.join(tmpHome, '.config', 'opencode', 'gsd-core');
     fs.mkdirSync(openCodeVersionDir, { recursive: true });
     fs.writeFileSync(path.join(openCodeVersionDir, 'VERSION'), '1.0.0\n');
 

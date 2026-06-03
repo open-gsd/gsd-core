@@ -3,7 +3,7 @@
 /**
  * Property-based tests for config-schema.cjs
  *
- * Module: get-shit-done/bin/lib/config-schema.cjs
+ * Module: gsd-core/bin/lib/config-schema.cjs
  * Exported: isValidConfigKey(keyPath) -> boolean
  *           VALID_CONFIG_KEYS: Set<string>
  *           RUNTIME_STATE_KEYS: Set<string>
@@ -25,7 +25,7 @@ const {
   isValidConfigKey,
   VALID_CONFIG_KEYS,
   RUNTIME_STATE_KEYS,
-} = require('../get-shit-done/bin/lib/config-schema.cjs');
+} = require('../gsd-core/bin/lib/config-schema.cjs');
 
 describe('config-schema: isValidConfigKey properties', () => {
   // (a) Never throws on any input

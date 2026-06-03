@@ -39,9 +39,9 @@ const {
   RUNTIME_PROFILE_MAP,
   KNOWN_RUNTIMES,
   _resetRuntimeWarningCacheForTests,
-} = require('../get-shit-done/bin/lib/core.cjs');
-const { renderEffortForRuntime } = require('../get-shit-done/bin/lib/model-catalog.cjs');
-const { isValidConfigKey } = require('../get-shit-done/bin/lib/config-schema.cjs');
+} = require('../gsd-core/bin/lib/core.cjs');
+const { renderEffortForRuntime } = require('../gsd-core/bin/lib/model-catalog.cjs');
+const { isValidConfigKey } = require('../gsd-core/bin/lib/config-schema.cjs');
 
 function writeConfig(tmpDir, obj) {
   fs.writeFileSync(
@@ -472,7 +472,7 @@ describe('issue #2517: VALID_CONFIG_KEYS schema', () => {
 
 // ─── loadConfig validation warnings (review findings #10, #13) ──────────────
 describe('issue #2517: loadConfig warns on unknown runtime/tier (findings #10, #13)', () => {
-  const { loadConfig } = require('../get-shit-done/bin/lib/core.cjs');
+  const { loadConfig } = require('../gsd-core/bin/lib/core.cjs');
   let tmpDir;
   let origWrite;
   let captured;
@@ -617,7 +617,7 @@ describe('issue #2517: install end-to-end — per-project config reaches Codex T
     // Defensive: assert the lib files install.js requires actually exist at
     // resolver-construction time. Catches accidental relative-path drift in CI.
     const installDir = path.dirname(require.resolve('../bin/install.js'));
-    const libDir = path.join(installDir, '..', 'get-shit-done', 'bin', 'lib');
+    const libDir = path.join(installDir, '..', 'gsd-core', 'bin', 'lib');
     assert.ok(fs.existsSync(path.join(libDir, 'core.cjs')));
     assert.ok(fs.existsSync(path.join(libDir, 'model-profiles.cjs')));
   });

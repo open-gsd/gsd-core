@@ -20,7 +20,7 @@ const os = require('os');
 const { cleanup } = require('./helpers.cjs');
 
 // Helper under test — must exist at this path (GREEN phase wires it up)
-const scanPhasePlans = require('../get-shit-done/bin/lib/plan-scan.cjs');
+const scanPhasePlans = require('../gsd-core/bin/lib/plan-scan.cjs');
 
 // ---------------------------------------------------------------------------
 // Fixture helpers
