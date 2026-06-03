@@ -161,7 +161,15 @@ function selectExplicitFiles(allFiles, filesValue, filesFrom) {
   const selected = [];
   const missing = [];
   for (const file of requested) {
-    if (available.has(file)) {
+    // If the token is a bare suite name (e.g. "unit" written by ci-test-scope
+    // as the #408 fallback sentinel), delegate to the existing suite resolver
+    // rather than treating it as a filename. This prevents the
+    // "requested test file(s) not found: unit" crash (#641).
+    if (SUITES.includes(file)) {
+      for (const f of selectFiles(allFiles, file)) {
+        selected.push(f);
+      }
+    } else if (available.has(file)) {
       selected.push(file);
     } else {
       missing.push(file);
