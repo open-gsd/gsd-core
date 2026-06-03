@@ -59,9 +59,11 @@ test('the dead `pass` status arm is gone — only `passed` is accepted', () => {
 // ---- behavioral tests: run the gate's OWN bash pipeline against fixtures ----
 
 const bashBlock = (() => {
-  const m = gate.match(/```bash\n([\s\S]*?)```/);
+  // `\r?\n` (not a literal `\n`) so the fence matches on Windows CRLF checkouts;
+  // normalize the captured block to LF before handing it to bash.
+  const m = gate.match(/```bash\r?\n([\s\S]*?)```/);
   assert.ok(m, 'gate must contain a bash block');
-  return m[1];
+  return m[1].replace(/\r\n/g, '\n');
 })();
 
 const hasBash = (() => {
