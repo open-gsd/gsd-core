@@ -138,12 +138,16 @@ describe('bug-2851: workflow files must not call bare `gsd-tools` (#2245 sweep r
       violations,
       [],
       'Bare `gsd-tools` invocations found in workflow shell blocks. ' +
-        'Use a resolver snippet or `node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" <subcommand>` instead.\n' +
+        'Use the `gsd_run` resolver (defined once in the canonical launcher preamble) instead.\n' +
         violations.join('\n'),
     );
   });
 
-  test('plan-phase.md §13e gap-analysis uses canonical absolute-path invocation', () => {
+  // #621: the gap-analysis call previously used a hardcoded
+  // `node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs"` path, which misses a working
+  // global install when no project-local runtime exists. It must now go through the
+  // resolved `gsd_run` launcher like every other invocation in the file.
+  test('plan-phase.md gap-analysis is invoked via the gsd_run resolver (#621)', () => {
     const planPhase = fs.readFileSync(path.join(WORKFLOWS_DIR, 'plan-phase.md'), 'utf-8');
     const blocks = extractShellBlocks(planPhase);
     let foundGapAnalysisCall = false;
@@ -153,8 +157,8 @@ describe('bug-2851: workflow files must not call bare `gsd-tools` (#2245 sweep r
           foundGapAnalysisCall = true;
           assert.match(
             line,
-            /\bnode\s+["']?\$HOME\/\.claude\/gsd-core\/bin\/gsd-tools\.cjs["']?\s+gap-analysis\b/,
-            `gap-analysis call must use canonical absolute-path invocation, got: ${line.trim()}`,
+            /\bgsd_run\s+gap-analysis\b/,
+            `gap-analysis must use the resolved gsd_run launcher (#621), not a hardcoded path, got: ${line.trim()}`,
           );
         }
       }
