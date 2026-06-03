@@ -750,7 +750,11 @@ function cmdSummaryExtract(cwd: string, summaryPath: string | undefined, fields:
     tech_added: (techStack && techStack['added']) || [],
     patterns: fm['patterns-established'] || [],
     decisions: parseDecisions(fm['key-decisions']),
-    requirements_completed: fm['requirements-completed'] || [],
+    // Tolerate both key forms: the template/reader use kebab `requirements-completed`,
+    // but the tool's own JSON output and the milestone audit `--pick` use snake
+    // `requirements_completed`. Reading both prevents a snake-keyed SUMMARY (the form the
+    // tool emits) from being silently dropped to []. See #628.
+    requirements_completed: fm['requirements-completed'] ?? fm['requirements_completed'] ?? [],
   };
 
   // If fields specified, filter to only those fields
