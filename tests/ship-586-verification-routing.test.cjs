@@ -71,6 +71,11 @@ const hasBash = (() => {
   catch { return false; }
 })();
 
+// The extraction logic is platform-independent; the bash *pipeline* is executed
+// only where the gate's shell actually runs (POSIX). On Windows, git-bash exists
+// but receives Windows-style tmpdir paths it cannot glob, so skip execution there.
+const skipBashPipeline = (process.platform === 'win32' || !hasBash) && 'bash pipeline runs on POSIX only';
+
 function runGateExtraction(verificationContents) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ship586-'));
   try {
@@ -87,21 +92,21 @@ function runGateExtraction(verificationContents) {
 const FM = (status) =>
   `---\nphase: 01-demo\nverified: 2026-01-01T00:00:00Z\nstatus: ${status}\nscore: 3/3 must-haves verified\n---\n\n# Verification\n`;
 
-test('extraction yields passed for a passing frontmatter', { skip: !hasBash && 'bash unavailable' }, () => {
+test('extraction yields passed for a passing frontmatter', { skip: skipBashPipeline }, () => {
   assert.strictEqual(runGateExtraction(FM('passed')), 'passed');
 });
 
-test('extraction yields gaps_found / human_needed verbatim', { skip: !hasBash && 'bash unavailable' }, () => {
+test('extraction yields gaps_found / human_needed verbatim', { skip: skipBashPipeline }, () => {
   assert.strictEqual(runGateExtraction(FM('gaps_found')), 'gaps_found');
   assert.strictEqual(runGateExtraction(FM('human_needed')), 'human_needed');
 });
 
-test('REGRESSION: a body `status:` line does not corrupt a passing report (Codex PR #650 finding)', { skip: !hasBash && 'bash unavailable' }, () => {
+test('REGRESSION: a body `status:` line does not corrupt a passing report (Codex PR #650 finding)', { skip: skipBashPipeline }, () => {
   const withBodyStatus = FM('passed') +
     '\n## Example\n\n```yaml\nstatus: gaps_found\n```\n\nstatus: human_needed\n';
   assert.strictEqual(runGateExtraction(withBodyStatus), 'passed');
 });
 
-test('extraction yields empty when no VERIFICATION.md exists', { skip: !hasBash && 'bash unavailable' }, () => {
+test('extraction yields empty when no VERIFICATION.md exists', { skip: skipBashPipeline }, () => {
   assert.strictEqual(runGateExtraction(null), '');
 });
