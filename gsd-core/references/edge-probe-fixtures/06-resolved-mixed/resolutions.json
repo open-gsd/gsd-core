@@ -1,4 +1,4 @@
 [
-  { "requirement_id": "R1", "category": "adjacency", "status": "covered", "resolution": "AC#6: touching intervals merge", "reason": null },
+  { "requirement_id": "R1", "category": "adjacency", "status": "resolved", "verification": "explicit", "resolution": "AC#6: touching intervals merge", "reason": null },
   { "requirement_id": "R1", "category": "ordering", "status": "dismissed", "resolution": null, "reason": "output is canonically sorted; no tie possible" }
 ]

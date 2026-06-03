@@ -4,6 +4,13 @@
  * Asserts the LOCKED export surface of the spec-completeness edge-probe against
  * the BUILT artifact (`gsd-core/bin/lib/edge-probe.cjs`), which
  * `npm run build:lib` (run by pretest) emits from `src/edge-probe.cts`.
+ *
+ * Post ADR-550 Decision 7: the generic resolution model lives in `probe-core`;
+ * edge-probe is its first adapter (shapes/TAXONOMY/proposeEdges + the
+ * `{explicit, backstop}` verification validators). The resolution model is the
+ * status×verification re-cut: `status: resolved | dismissed | unresolved` ×
+ * `verification: explicit | backstop`. `covered`/`backstop` are no longer status
+ * values — `covered → {resolved, explicit}`, `backstop → {resolved, backstop}`.
  */
 'use strict';
 process.env.GSD_TEST_MODE = '1';
@@ -67,12 +74,13 @@ describe('edge-probe: TAXONOMY + applicableCategories', () => {
 });
 
 describe('edge-probe: proposeEdges', () => {
-  test('rounding requirement proposes boundary + precision, all unresolved', () => {
+  test('rounding requirement proposes boundary + precision, all unresolved (verification null)', () => {
     const edges = ep.proposeEdges({ id: 'R1', text: 'Round a number to N decimal places' });
     assert.deepEqual(edges.map((e) => e.category).sort(), ['boundary', 'precision']);
     for (const e of edges) {
       assert.equal(e.requirement_id, 'R1');
       assert.equal(e.status, 'unresolved');
+      assert.equal(e.verification, null);
       assert.equal(e.resolution, null);
       assert.equal(e.reason, null);
       assert.equal(typeof e.probe, 'string');
@@ -89,6 +97,10 @@ describe('edge-probe: validateResolution', () => {
     assert.throws(() => ep.validateResolution({ requirement_id: 'R1', category: 'boundary', status: 'maybe' }),
       /invalid status/i);
   });
+  test('rejects a former covered status (re-cut: covered is no longer a status)', () => {
+    assert.throws(() => ep.validateResolution({ requirement_id: 'R1', category: 'boundary', status: 'covered', resolution: 'x' }),
+      /invalid status/i);
+  });
   test('rejects dismissed without a reason', () => {
     assert.throws(() => ep.validateResolution({ requirement_id: 'R1', category: 'boundary', status: 'dismissed', reason: '' }),
       /dismissed requires a reason/i);
@@ -96,23 +108,33 @@ describe('edge-probe: validateResolution', () => {
   test('accepts dismissed with a reason', () => {
     assert.equal(ep.validateResolution({ requirement_id: 'R1', category: 'boundary', status: 'dismissed', reason: 'bounded enum' }), true);
   });
+  test('rejects resolved with a missing verification tier', () => {
+    assert.throws(() => ep.validateResolution({ requirement_id: 'R1', category: 'boundary', status: 'resolved', resolution: 'AC' }),
+      /verification/i);
+  });
+  test('rejects resolved with a verification tier outside {explicit, backstop}', () => {
+    assert.throws(() => ep.validateResolution({ requirement_id: 'R1', category: 'boundary', status: 'resolved', verification: 'judgment', resolution: 'AC' }),
+      /invalid verification/i);
+  });
 });
 
 describe('edge-probe: analyzeCoverage', () => {
   const reqs = [{ id: 'R1', text: 'Merge a list of overlapping intervals' }];
-  test('with no resolutions, every applicable edge is unresolved', () => {
+  test('with no resolutions, every applicable edge is unresolved (byVerification zeroed)', () => {
     const rep = ep.analyzeCoverage(reqs, []);
-    assert.deepEqual(rep.coverage, { applicable: 3, resolved: 0, unresolved: 3 });
+    assert.deepEqual(rep.coverage, { applicable: 3, resolved: 0, unresolved: 3, byVerification: { explicit: 0, backstop: 0 } });
   });
-  test('merges a covered resolution and counts it resolved', () => {
+  test('merges a resolved/explicit resolution and counts it resolved', () => {
     const rep = ep.analyzeCoverage(reqs, [
-      { requirement_id: 'R1', category: 'adjacency', status: 'covered', resolution: 'AC#6: touching intervals merge' },
+      { requirement_id: 'R1', category: 'adjacency', status: 'resolved', verification: 'explicit', resolution: 'AC#6: touching intervals merge' },
     ]);
     const adj = rep.items.find((i) => i.category === 'adjacency');
-    assert.equal(adj.status, 'covered');
+    assert.equal(adj.status, 'resolved');
+    assert.equal(adj.verification, 'explicit');
     assert.equal(adj.resolution, 'AC#6: touching intervals merge');
     assert.equal(rep.coverage.resolved, 1);
     assert.equal(rep.coverage.unresolved, 2);
+    assert.deepEqual(rep.coverage.byVerification, { explicit: 1, backstop: 0 });
   });
   test('throws if a resolution is invalid (dismissed w/o reason)', () => {
     assert.throws(() => ep.analyzeCoverage(reqs, [
@@ -128,7 +150,7 @@ describe('edge-probe: CLI (built artifact)', () => {
     fs.writeFileSync(reqPath, JSON.stringify([{ id: 'R1', text: 'Round a number to N decimal places' }]));
     const out = execFileSync('node', [BUILT_SCRIPT, reqPath], { encoding: 'utf8' });
     const rep = JSON.parse(out);
-    assert.deepEqual(rep.coverage, { applicable: 2, resolved: 0, unresolved: 2 });
+    assert.deepEqual(rep.coverage, { applicable: 2, resolved: 0, unresolved: 2, byVerification: { explicit: 0, backstop: 0 } });
   });
   test('with no args exits with status 2 (assert on exit code, not stderr prose)', () => {
     let status;
@@ -175,7 +197,7 @@ describe('edge-probe: CLI JSON.parse error handling (RR-10)', () => {
       const r = spawnSync(process.execPath, [BUILT_SCRIPT, reqPath], { stdio: 'pipe', encoding: 'utf8' });
       assert.equal(r.status, 0);
       const rep = JSON.parse(r.stdout);
-      assert.deepEqual(rep.coverage, { applicable: 2, resolved: 0, unresolved: 2 });
+      assert.deepEqual(rep.coverage, { applicable: 2, resolved: 0, unresolved: 2, byVerification: { explicit: 0, backstop: 0 } });
     } finally {
       cleanup(dir);
     }
@@ -253,7 +275,7 @@ describe('edge-probe: input validation & orphan-resolution rejection (adversaria
     assert.throws(
       () => ep.analyzeCoverage(
         [{ id: 'R1', text: 'Round a number to N decimal places' }],
-        [{ requirement_id: 'R1', category: 'precison', status: 'covered', resolution: 'AC: precision handled' }],
+        [{ requirement_id: 'R1', category: 'precison', status: 'resolved', verification: 'explicit', resolution: 'AC: precision handled' }],
       ),
       /unknown resolution|no matching proposed edge/i,
     );
@@ -263,7 +285,7 @@ describe('edge-probe: input validation & orphan-resolution rejection (adversaria
     assert.throws(
       () => ep.analyzeCoverage(
         [{ id: 'R1', text: 'Round a number to N decimal places' }],
-        [{ requirement_id: 'R1', category: 'encoding', status: 'covered', resolution: 'AC' }],
+        [{ requirement_id: 'R1', category: 'encoding', status: 'resolved', verification: 'explicit', resolution: 'AC' }],
       ),
       /unknown resolution|no matching proposed edge/i,
     );
@@ -271,7 +293,7 @@ describe('edge-probe: input validation & orphan-resolution rejection (adversaria
   test('a matching resolution still resolves (no false orphan rejection)', () => {
     const rep = ep.analyzeCoverage(
       [{ id: 'R1', text: 'Round a number to N decimal places' }],
-      [{ requirement_id: 'R1', category: 'precision', status: 'covered', resolution: 'AC: precision tested' }],
+      [{ requirement_id: 'R1', category: 'precision', status: 'resolved', verification: 'explicit', resolution: 'AC: precision tested' }],
     );
     assert.equal(rep.coverage.resolved, 1);
   });
@@ -303,55 +325,55 @@ describe('edge-probe: input validation & orphan-resolution rejection (adversaria
   });
 });
 
-describe('edge-probe: validateResolution — covered-needs-resolution (RR-07)', () => {
-  test('rejects covered with empty resolution string', () => {
+describe('edge-probe: validateResolution — explicit-needs-resolution (RR-07, re-cut)', () => {
+  test('rejects resolved/explicit with empty resolution string', () => {
     assert.throws(
-      () => ep.validateResolution({ requirement_id: 'R1', category: 'boundary', status: 'covered', resolution: '' }),
-      /covered requires a resolution/i,
+      () => ep.validateResolution({ requirement_id: 'R1', category: 'boundary', status: 'resolved', verification: 'explicit', resolution: '' }),
+      /explicit requires a resolution/i,
     );
   });
-  test('rejects covered with whitespace-only resolution', () => {
+  test('rejects resolved/explicit with whitespace-only resolution', () => {
     assert.throws(
-      () => ep.validateResolution({ requirement_id: 'R1', category: 'boundary', status: 'covered', resolution: '   ' }),
-      /covered requires a resolution/i,
+      () => ep.validateResolution({ requirement_id: 'R1', category: 'boundary', status: 'resolved', verification: 'explicit', resolution: '   ' }),
+      /explicit requires a resolution/i,
     );
   });
-  test('rejects covered with missing resolution', () => {
+  test('rejects resolved/explicit with missing resolution', () => {
     assert.throws(
-      () => ep.validateResolution({ requirement_id: 'R1', category: 'boundary', status: 'covered' }),
-      /covered requires a resolution/i,
+      () => ep.validateResolution({ requirement_id: 'R1', category: 'boundary', status: 'resolved', verification: 'explicit' }),
+      /explicit requires a resolution/i,
     );
   });
-  test('accepts covered with a non-empty resolution', () => {
+  test('accepts resolved/explicit with a non-empty resolution', () => {
     assert.equal(
-      ep.validateResolution({ requirement_id: 'R1', category: 'boundary', status: 'covered', resolution: 'AC#3: boundary tested in suite' }),
+      ep.validateResolution({ requirement_id: 'R1', category: 'boundary', status: 'resolved', verification: 'explicit', resolution: 'AC#3: boundary tested in suite' }),
       true,
     );
   });
 });
 
-describe('edge-probe: validateResolution — backstop-needs-resolution (RR-07 follow-up)', () => {
-  test('rejects backstop with empty resolution string', () => {
+describe('edge-probe: validateResolution — backstop-needs-resolution (RR-07 follow-up, re-cut)', () => {
+  test('rejects resolved/backstop with empty resolution string', () => {
     assert.throws(
-      () => ep.validateResolution({ requirement_id: 'R1', category: 'boundary', status: 'backstop', resolution: '' }),
+      () => ep.validateResolution({ requirement_id: 'R1', category: 'boundary', status: 'resolved', verification: 'backstop', resolution: '' }),
       /backstop requires a resolution/i,
     );
   });
-  test('rejects backstop with whitespace-only resolution', () => {
+  test('rejects resolved/backstop with whitespace-only resolution', () => {
     assert.throws(
-      () => ep.validateResolution({ requirement_id: 'R1', category: 'boundary', status: 'backstop', resolution: '   ' }),
+      () => ep.validateResolution({ requirement_id: 'R1', category: 'boundary', status: 'resolved', verification: 'backstop', resolution: '   ' }),
       /backstop requires a resolution/i,
     );
   });
-  test('rejects backstop with missing resolution', () => {
+  test('rejects resolved/backstop with missing resolution', () => {
     assert.throws(
-      () => ep.validateResolution({ requirement_id: 'R1', category: 'boundary', status: 'backstop' }),
+      () => ep.validateResolution({ requirement_id: 'R1', category: 'boundary', status: 'resolved', verification: 'backstop' }),
       /backstop requires a resolution/i,
     );
   });
-  test('accepts backstop with a non-empty resolution note', () => {
+  test('accepts resolved/backstop with a non-empty resolution note', () => {
     assert.equal(
-      ep.validateResolution({ requirement_id: 'R1', category: 'boundary', status: 'backstop', resolution: 'held-out: covered by integration fuzz suite' }),
+      ep.validateResolution({ requirement_id: 'R1', category: 'boundary', status: 'resolved', verification: 'backstop', resolution: 'held-out: covered by integration fuzz suite' }),
       true,
     );
   });
@@ -362,8 +384,8 @@ describe('edge-probe: analyzeCoverage — duplicate rejection (RR-09)', () => {
   test('rejects duplicate (requirement_id, category) resolution', () => {
     assert.throws(
       () => ep.analyzeCoverage(reqs, [
-        { requirement_id: 'R1', category: 'adjacency', status: 'covered', resolution: 'AC#1' },
-        { requirement_id: 'R1', category: 'adjacency', status: 'covered', resolution: 'AC#2' },
+        { requirement_id: 'R1', category: 'adjacency', status: 'resolved', verification: 'explicit', resolution: 'AC#1' },
+        { requirement_id: 'R1', category: 'adjacency', status: 'resolved', verification: 'explicit', resolution: 'AC#2' },
       ]),
       /duplicate resolution/i,
     );
@@ -371,7 +393,7 @@ describe('edge-probe: analyzeCoverage — duplicate rejection (RR-09)', () => {
   test('distinct pairs still analyze without throwing', () => {
     // mirrors fixture 06-resolved-mixed
     assert.doesNotThrow(() => ep.analyzeCoverage(reqs, [
-      { requirement_id: 'R1', category: 'adjacency', status: 'covered', resolution: 'AC#6: touching intervals merge' },
+      { requirement_id: 'R1', category: 'adjacency', status: 'resolved', verification: 'explicit', resolution: 'AC#6: touching intervals merge' },
       { requirement_id: 'R1', category: 'ordering', status: 'dismissed', resolution: null, reason: 'output is canonically sorted; no tie possible' },
     ]));
   });

@@ -77,48 +77,59 @@ Two rules keep the probe honest and prevent an "everything is N/A" failure mode:
 2. **Dismissal requires a reason string.** "N/A — input is a bounded enum, no boundary
    exists" is valid; silence is not. The reason string is the audit trail.
 
-Resolve each raised edge to exactly one of four states:
+Each raised edge carries two orthogonal axes — a resolution **lifecycle** and, when
+resolved, a **verification** tier (ADR-550 Decision 7, the shared probe-core model):
 
-- **covered** — a checkable assertion for the edge is written.
-- **dismissed** — not applicable, accompanied by a required, non-empty reason string.
-- **backstop** — a held-out / property-based test stands in for an edge the author knows
-  but cannot fully articulate in prose (records intent; the test body is authored later).
-- **unresolved** — carried forward and flagged; the author chose not to resolve it yet.
+- **status** — `resolved | dismissed | unresolved`:
+  - **resolved** — the edge is addressed; *how* it is addressed is the verification tier.
+  - **dismissed** — not applicable, accompanied by a required, non-empty reason string.
+  - **unresolved** — carried forward and flagged; the author chose not to resolve it yet.
+- **verification** (only when `status` is `resolved`; `null` otherwise) — `explicit | backstop`:
+  - **explicit** — a checkable assertion for the edge is written (a SPEC acceptance criterion).
+  - **backstop** — a held-out / property-based test stands in for an edge the author knows
+    but cannot fully articulate in prose (records intent; the test body is authored later).
 
-`resolved` is the count of covered + dismissed + backstop. An `unresolved` *applicable*
-edge is the precise signal a soft completeness gate raises.
+Splitting these axes keeps the lifecycle enum free of a verification fact (the old single
+enum smuggled `covered`/`backstop` — both *resolved* — into one flat list) and lets sibling
+probes add their own verification tiers (e.g. `test | judgment`) without a parallel enum.
+
+`coverage.resolved` is the count of **closed** edges — `resolved` + `dismissed` (the
+pre-re-cut "covered + dismissed + backstop" set, count-preserved). An `unresolved`
+*applicable* edge is the precise signal a soft completeness gate raises.
 
 ## Output schema
 
 The probe emits, per edge, an item of the form:
 
 ```
-{ requirement_id, category, status, resolution, reason, probe }
+{ requirement_id, category, status, verification, resolution, reason, probe }
 ```
 
 plus a coverage summary:
 
 ```
-coverage: { applicable, resolved, unresolved }
+coverage: { applicable, resolved, unresolved, byVerification: { explicit, backstop } }
 ```
 
-`applicable` is the number of raised edges, `resolved` = covered + dismissed + backstop,
-and `unresolved` is the remainder. This JSON is the stable contract both the reference
+`applicable` is the number of raised edges, `resolved` = closed (`resolved` + `dismissed`)
+status edges, `unresolved` is the remainder, and `byVerification` breaks the
+`resolved`-status edges down by tier (probe-agnostic in core; the edge adapter declares
+`{ explicit, backstop }`). This JSON is the stable contract both the reference
 implementation and any third-party port emit.
 
 ## Generic mapping (requirements → checks → verifier)
 
-| Host structure | "requirement" | a `covered` edge becomes | a `backstop` edge becomes |
+| Host structure | "requirement" | a `resolved`/`explicit` edge becomes | a `resolved`/`backstop` edge becomes |
 |----------------|---------------|--------------------------|---------------------------|
 | GSD SPEC | a SPEC Requirement | an Acceptance Criterion that `plan-phase` lifts into `must_haves.truths` | a non-inferable check in `must_haves.truths` (needs a held-out/PBT test) |
 | Gherkin feature | a Scenario | an additional `Then` assertion / Scenario Outline row | a tagged scenario routed to a property test |
 | OpenAPI operation | an operation | a response/constraint example + schema rule | a contract/property test on the operation |
 | Docstring contract | a documented behavior | an assertion in the contract test | a property-based test for the function |
 
-The portable invariant: a `covered` edge produces **the unit your verifier iterates over**
-(GSD: a `must_haves.truth`); a `backstop` edge produces a test added to that same set as a
-non-inferable check. An `unresolved` edge is an explicit assumption the downstream planner
-must surface, not silently drop.
+The portable invariant: a `resolved`/`explicit` edge produces **the unit your verifier
+iterates over** (GSD: a `must_haves.truth`); a `resolved`/`backstop` edge produces a test
+added to that same set as a non-inferable check. An `unresolved` edge is an explicit
+assumption the downstream planner must surface, not silently drop.
 
 ## Worked example (merge-intervals)
 
@@ -135,17 +146,17 @@ resolutions supplied, every applicable edge is `unresolved`:
 ```json edge-probe:02-merge-intervals/expected-coverage.json
 {
   "items": [
-    { "requirement_id": "R1", "category": "adjacency", "status": "unresolved", "resolution": null, "reason": null, "probe": "When two things are exactly equal or just touch, do they merge, collide, or separate?" },
-    { "requirement_id": "R1", "category": "empty", "status": "unresolved", "resolution": null, "reason": null, "probe": "What is the result for empty, single-element, or null input?" },
-    { "requirement_id": "R1", "category": "ordering", "status": "unresolved", "resolution": null, "reason": null, "probe": "When elements compare equal, is output order specified and stable?" }
+    { "requirement_id": "R1", "category": "adjacency", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "When two things are exactly equal or just touch, do they merge, collide, or separate?" },
+    { "requirement_id": "R1", "category": "empty", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "What is the result for empty, single-element, or null input?" },
+    { "requirement_id": "R1", "category": "ordering", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "When elements compare equal, is output order specified and stable?" }
   ],
-  "coverage": { "applicable": 3, "resolved": 0, "unresolved": 3 }
+  "coverage": { "applicable": 3, "resolved": 0, "unresolved": 3, "byVerification": { "explicit": 0, "backstop": 0 } }
 }
 ```
 
 The `adjacency` row is the one that catches the canonical defect: `[[1,2],[2,3]]` intervals
-that only *touch* — does the spec say they merge? Resolving it `covered` writes that
-assertion, and the verifier can then enforce it. This worked-example block is kept
+that only *touch* — does the spec say they merge? Resolving it `resolved`/`explicit` writes
+that assertion, and the verifier can then enforce it. This worked-example block is kept
 byte-for-byte (parsed-JSON) identical to its fixture by `edge-probe-docs-fixtures.test.cjs`,
 so the doc and the reference implementation cannot silently drift.
 
@@ -158,10 +169,10 @@ rule, the requirement classifies as `numeric-range`, which raises `boundary` and
 ```json edge-probe:01-round-half-even/expected-coverage.json
 {
   "items": [
-    { "requirement_id": "R1", "category": "boundary", "status": "unresolved", "resolution": null, "reason": null, "probe": "What happens exactly at each min/max/threshold — and one step either side?" },
-    { "requirement_id": "R1", "category": "precision", "status": "unresolved", "resolution": null, "reason": null, "probe": "Where can precision loss or overflow occur, and what is the contract?" }
+    { "requirement_id": "R1", "category": "boundary", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "What happens exactly at each min/max/threshold — and one step either side?" },
+    { "requirement_id": "R1", "category": "precision", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "Where can precision loss or overflow occur, and what is the contract?" }
   ],
-  "coverage": { "applicable": 2, "resolved": 0, "unresolved": 2 }
+  "coverage": { "applicable": 2, "resolved": 0, "unresolved": 2, "byVerification": { "explicit": 0, "backstop": 0 } }
 }
 ```
 
@@ -177,10 +188,10 @@ the requirement classifies as `text`, which raises `empty` and `encoding`:
 ```json edge-probe:03-truncate-graphemes/expected-coverage.json
 {
   "items": [
-    { "requirement_id": "R1", "category": "empty", "status": "unresolved", "resolution": null, "reason": null, "probe": "What is the result for empty, single-element, or null input?" },
-    { "requirement_id": "R1", "category": "encoding", "status": "unresolved", "resolution": null, "reason": null, "probe": "Whose definition of length/equality applies — bytes, code points, grapheme clusters, or normalized form?" }
+    { "requirement_id": "R1", "category": "empty", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "What is the result for empty, single-element, or null input?" },
+    { "requirement_id": "R1", "category": "encoding", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "Whose definition of length/equality applies — bytes, code points, grapheme clusters, or normalized form?" }
   ],
-  "coverage": { "applicable": 2, "resolved": 0, "unresolved": 2 }
+  "coverage": { "applicable": 2, "resolved": 0, "unresolved": 2, "byVerification": { "explicit": 0, "backstop": 0 } }
 }
 ```
 
@@ -197,10 +208,10 @@ classifies as `numeric-range`, which raises `boundary` and `precision`:
 ```json edge-probe:04-money-rounding/expected-coverage.json
 {
   "items": [
-    { "requirement_id": "R1", "category": "boundary", "status": "unresolved", "resolution": null, "reason": null, "probe": "What happens exactly at each min/max/threshold — and one step either side?" },
-    { "requirement_id": "R1", "category": "precision", "status": "unresolved", "resolution": null, "reason": null, "probe": "Where can precision loss or overflow occur, and what is the contract?" }
+    { "requirement_id": "R1", "category": "boundary", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "What happens exactly at each min/max/threshold — and one step either side?" },
+    { "requirement_id": "R1", "category": "precision", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "Where can precision loss or overflow occur, and what is the contract?" }
   ],
-  "coverage": { "applicable": 2, "resolved": 0, "unresolved": 2 }
+  "coverage": { "applicable": 2, "resolved": 0, "unresolved": 2, "byVerification": { "explicit": 0, "backstop": 0 } }
 }
 ```
 
@@ -216,11 +227,11 @@ Given a requirement to deduplicate a list of items, the requirement classifies a
 ```json edge-probe:05-list-dedupe/expected-coverage.json
 {
   "items": [
-    { "requirement_id": "R1", "category": "adjacency", "status": "unresolved", "resolution": null, "reason": null, "probe": "When two things are exactly equal or just touch, do they merge, collide, or separate?" },
-    { "requirement_id": "R1", "category": "empty", "status": "unresolved", "resolution": null, "reason": null, "probe": "What is the result for empty, single-element, or null input?" },
-    { "requirement_id": "R1", "category": "ordering", "status": "unresolved", "resolution": null, "reason": null, "probe": "When elements compare equal, is output order specified and stable?" }
+    { "requirement_id": "R1", "category": "adjacency", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "When two things are exactly equal or just touch, do they merge, collide, or separate?" },
+    { "requirement_id": "R1", "category": "empty", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "What is the result for empty, single-element, or null input?" },
+    { "requirement_id": "R1", "category": "ordering", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "When elements compare equal, is output order specified and stable?" }
   ],
-  "coverage": { "applicable": 3, "resolved": 0, "unresolved": 3 }
+  "coverage": { "applicable": 3, "resolved": 0, "unresolved": 3, "byVerification": { "explicit": 0, "backstop": 0 } }
 }
 ```
 
@@ -230,19 +241,21 @@ kept — first occurrence, last, or implementation-defined? The spec must commit
 ## Worked example (resolved-mixed)
 
 The same merge-intervals requirement after a resolution session where `adjacency` was
-resolved `covered`, `ordering` was dismissed, and `empty` was left unresolved:
+resolved with an explicit acceptance criterion, `ordering` was dismissed, and `empty` was
+left unresolved:
 
 ```json edge-probe:06-resolved-mixed/expected-coverage.json
 {
   "items": [
-    { "requirement_id": "R1", "category": "adjacency", "status": "covered", "resolution": "AC#6: touching intervals merge", "reason": null, "probe": "When two things are exactly equal or just touch, do they merge, collide, or separate?" },
-    { "requirement_id": "R1", "category": "empty", "status": "unresolved", "resolution": null, "reason": null, "probe": "What is the result for empty, single-element, or null input?" },
-    { "requirement_id": "R1", "category": "ordering", "status": "dismissed", "resolution": null, "reason": "output is canonically sorted; no tie possible", "probe": "When elements compare equal, is output order specified and stable?" }
+    { "requirement_id": "R1", "category": "adjacency", "status": "resolved", "verification": "explicit", "resolution": "AC#6: touching intervals merge", "reason": null, "probe": "When two things are exactly equal or just touch, do they merge, collide, or separate?" },
+    { "requirement_id": "R1", "category": "empty", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "What is the result for empty, single-element, or null input?" },
+    { "requirement_id": "R1", "category": "ordering", "status": "dismissed", "verification": null, "resolution": null, "reason": "output is canonically sorted; no tie possible", "probe": "When elements compare equal, is output order specified and stable?" }
   ],
-  "coverage": { "applicable": 3, "resolved": 2, "unresolved": 1 }
+  "coverage": { "applicable": 3, "resolved": 2, "unresolved": 1, "byVerification": { "explicit": 1, "backstop": 0 } }
 }
 ```
 
-`coverage.resolved` is 2 (adjacency=covered + ordering=dismissed); `unresolved` is 1
-(empty). The soft gate raises on this example because one applicable edge remains
+`coverage.resolved` is 2 — the closed set (adjacency=`resolved`/`explicit` + ordering=`dismissed`);
+`unresolved` is 1 (empty); `byVerification.explicit` is 1 (the single explicitly-verified
+edge), `backstop` 0. The soft gate raises on this example because one applicable edge remains
 unresolved — the author must either specify, dismiss, or backstop it before writing the SPEC.

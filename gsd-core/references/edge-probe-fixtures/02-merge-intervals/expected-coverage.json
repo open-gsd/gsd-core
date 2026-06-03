@@ -1,8 +1,8 @@
 {
   "items": [
-    { "requirement_id": "R1", "category": "adjacency", "status": "unresolved", "resolution": null, "reason": null, "probe": "When two things are exactly equal or just touch, do they merge, collide, or separate?" },
-    { "requirement_id": "R1", "category": "empty", "status": "unresolved", "resolution": null, "reason": null, "probe": "What is the result for empty, single-element, or null input?" },
-    { "requirement_id": "R1", "category": "ordering", "status": "unresolved", "resolution": null, "reason": null, "probe": "When elements compare equal, is output order specified and stable?" }
+    { "requirement_id": "R1", "category": "adjacency", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "When two things are exactly equal or just touch, do they merge, collide, or separate?" },
+    { "requirement_id": "R1", "category": "empty", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "What is the result for empty, single-element, or null input?" },
+    { "requirement_id": "R1", "category": "ordering", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "When elements compare equal, is output order specified and stable?" }
   ],
-  "coverage": { "applicable": 3, "resolved": 0, "unresolved": 3 }
+  "coverage": { "applicable": 3, "resolved": 0, "unresolved": 3, "byVerification": { "explicit": 0, "backstop": 0 } }
 }
