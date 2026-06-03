@@ -158,7 +158,7 @@ Run the build, copy artifacts, write the diff snapshot, and report the summary i
 ```bash
 graphify update . \
   && cp graphify-out/graph.json .planning/graphs/graph.json \
-  && cp graphify-out/graph.html .planning/graphs/graph.html \
+  && { [ -f graphify-out/graph.html ] && cp graphify-out/graph.html .planning/graphs/graph.html || true; } \
   && cp graphify-out/GRAPH_REPORT.md .planning/graphs/GRAPH_REPORT.md \
   && node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" graphify build snapshot \
   && node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" graphify status

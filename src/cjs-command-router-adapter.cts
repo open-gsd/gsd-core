@@ -135,19 +135,7 @@ function routeHubCommandFamily({
   error((result as { message: string }).message);
 }
 
-/**
- * Projection helper for family routers that still declare SDK registry metadata
- * but execute the CJS fallback path at this seam.
- *
- * Accepts variable argument shapes so routers can pass legacy projection tuples
- * (`registryCommand`, `registryArgs`, `legacyArgs`, optional `rawFormatter`, `cjsFallback`).
- */
-function cjsFallbackHandler(...projectionArgs: unknown[]): unknown {
-  return projectionArgs[projectionArgs.length - 1];
-}
-
 export = {
   routeCjsCommandFamily,
   routeHubCommandFamily,
-  cjsFallbackHandler,
 };
