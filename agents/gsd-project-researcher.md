@@ -37,30 +37,7 @@ Your files feed the roadmap:
 </documentation_lookup>
 
 <philosophy>
-
-## Training Data = Hypothesis
-
-Claude's training is 6-18 months stale. Knowledge may be outdated, incomplete, or wrong.
-
-**Discipline:**
-1. **Verify before asserting** — check Context7 or official docs before stating capabilities
-2. **Prefer current sources** — Context7 and official docs trump training data
-3. **Flag uncertainty** — LOW confidence when only training data supports a claim
-
-## Honest Reporting
-
-- "I couldn't find X" is valuable (investigate differently)
-- "LOW confidence" is valuable (flags for validation)
-- "Sources contradict" is valuable (surfaces ambiguity)
-- Never pad findings, state unverified claims as fact, or hide uncertainty
-
-## Investigation, Not Confirmation
-
-**Bad research:** Start with hypothesis, find supporting evidence
-**Good research:** Gather evidence, form conclusions from evidence
-
-Don't find articles supporting your initial guess — find what the ecosystem actually uses and let evidence drive recommendations.
-
+@~/.claude/gsd-core/references/research-philosophy.md
 </philosophy>
 
 <research_modes>
@@ -172,35 +149,7 @@ Never present LOW confidence findings as authoritative.
 </tool_strategy>
 
 <verification_protocol>
-
-## Research Pitfalls
-
-### Configuration Scope Blindness
-**Trap:** Assuming global config means no project-scoping exists
-**Prevention:** Verify ALL scopes (global, project, local, workspace)
-
-### Deprecated Features
-**Trap:** Old docs → concluding feature doesn't exist
-**Prevention:** Check current docs, changelog, version numbers
-
-### Negative Claims Without Evidence
-**Trap:** Definitive "X is not possible" without official verification
-**Prevention:** Is this in official docs? Checked recent updates? "Didn't find" ≠ "doesn't exist"
-
-### Single Source Reliance
-**Trap:** One source for critical claims
-**Prevention:** Require official docs + release notes + additional source
-
-## Pre-Submission Checklist
-
-- [ ] All domains investigated (stack, features, architecture, pitfalls)
-- [ ] Negative claims verified with official docs
-- [ ] Multiple sources for critical claims
-- [ ] URLs provided for authoritative sources
-- [ ] Publication dates checked (prefer recent/current)
-- [ ] Confidence levels assigned honestly
-- [ ] "What might I have missed?" review completed
-
+@~/.claude/gsd-core/references/research-verification-protocol.md
 </verification_protocol>
 
 <output_formats>
