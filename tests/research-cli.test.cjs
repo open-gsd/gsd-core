@@ -199,6 +199,93 @@ describe('research-plan: fetch plan for unseeded question', () => {
 });
 
 // ---------------------------------------------------------------------------
+// (e) classify-confidence: context7 provider, no --verified -> HIGH, verified:false
+// ---------------------------------------------------------------------------
+
+describe('classify-confidence: context7 without --verified', () => {
+  test('returns confidence HIGH and verified false', () => {
+    const tmpDir = makeTempDir();
+    try {
+      const result = runGsdTools(
+        ['query', 'classify-confidence', '--provider', 'context7'],
+        tmpDir,
+      );
+      assert.ok(result.success, `expected exit 0; got: ${result.error}`);
+      const out = JSON.parse(result.output);
+      assert.equal(out.confidence, 'HIGH', `expected HIGH, got ${out.confidence}`);
+      assert.equal(out.verified, false, `expected verified:false, got ${out.verified}`);
+      assert.equal(out.provider, 'context7', `expected provider:context7, got ${out.provider}`);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (f) classify-confidence: exa provider, no --verified -> LOW
+// ---------------------------------------------------------------------------
+
+describe('classify-confidence: exa without --verified', () => {
+  test('returns confidence LOW', () => {
+    const tmpDir = makeTempDir();
+    try {
+      const result = runGsdTools(
+        ['query', 'classify-confidence', '--provider', 'exa'],
+        tmpDir,
+      );
+      assert.ok(result.success, `expected exit 0; got: ${result.error}`);
+      const out = JSON.parse(result.output);
+      assert.equal(out.confidence, 'LOW', `expected LOW, got ${out.confidence}`);
+      assert.equal(out.verified, false, `expected verified:false, got ${out.verified}`);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (g) classify-confidence: exa with --verified -> MEDIUM
+// ---------------------------------------------------------------------------
+
+describe('classify-confidence: exa with --verified', () => {
+  test('returns confidence MEDIUM and verified true', () => {
+    const tmpDir = makeTempDir();
+    try {
+      const result = runGsdTools(
+        ['query', 'classify-confidence', '--provider', 'exa', '--verified'],
+        tmpDir,
+      );
+      assert.ok(result.success, `expected exit 0; got: ${result.error}`);
+      const out = JSON.parse(result.output);
+      assert.equal(out.confidence, 'MEDIUM', `expected MEDIUM, got ${out.confidence}`);
+      assert.equal(out.verified, true, `expected verified:true, got ${out.verified}`);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (h) classify-confidence: missing --provider -> usage error, non-zero exit
+// ---------------------------------------------------------------------------
+
+describe('classify-confidence: missing --provider -> usage error', () => {
+  test('exits non-zero and reports usage error when --provider is absent', () => {
+    const tmpDir = makeTempDir();
+    try {
+      const result = runGsdTools(
+        ['query', 'classify-confidence'],
+        tmpDir,
+      );
+      assert.ok(!result.success, 'expected non-zero exit when --provider is missing');
+      assert.ok(result.exitCode !== 0, `expected non-zero exit code, got ${result.exitCode}`);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // (e) package-legitimacy check with NO --ecosystem -> usage error, non-zero exit
 // ---------------------------------------------------------------------------
 

@@ -378,7 +378,7 @@ async function main() {
     'current-timestamp, detect-custom-files, docs-init, effort, extract-messages, find-phase, ' +
     'from-gsd2, frontmatter, gap-analysis, generate-claude-md, generate-claude-profile, ' +
     'generate-dev-preferences, generate-slug, graphify, history-digest, init, intel, ' +
-    'learnings, list-todos, milestone, package-legitimacy, phase, phase-plan-index, phases, profile-questionnaire, ' +
+    'classify-confidence, learnings, list-todos, milestone, package-legitimacy, phase, phase-plan-index, phases, profile-questionnaire, ' +
     'profile-sample, progress, prompt-budget, requirements, research-plan, research-store, resolve-granularity, resolve-model, roadmap, scaffold, state, ' +
     'task, template, validate, verify, verify-path-exists, verify-summary, workstream, worktree\n\n' +
     'Global flags:\n' +
@@ -423,7 +423,7 @@ async function main() {
     'generate-slug', 'current-timestamp', 'verify-path-exists',
     'verify-summary', 'template', 'frontmatter', 'detect-custom-files',
     'worktree', 'prompt-budget',
-    'research-store', 'research-plan', 'package-legitimacy',
+    'research-store', 'research-plan', 'package-legitimacy', 'classify-confidence',
   ]);
   if (!SKIP_ROOT_RESOLUTION.has(command)) {
     cwd = findProjectRoot(cwd);
@@ -1739,6 +1739,24 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       const homeDir = process.env.HOME || require('os').homedir();
       const plan = researchProvider.planResearch({ questions, ecosystem, config: planConfig, cwd, homeDir });
       core.output(plan, raw);
+      break;
+    }
+
+    // ─── Classify Confidence ──────────────────────────────────────────────
+    //
+    // classify-confidence --provider <id> [--verified]
+    //   -> classifyConfidence({ provider, verifiedAgainstOfficial }); core.output(result, raw)
+
+    case 'classify-confidence': {
+      const researchProvider = require('./lib/research-provider.cjs');
+      const providerIdx = args.indexOf('--provider');
+      const provider = providerIdx !== -1 ? args[providerIdx + 1] : null;
+      if (!provider || provider.startsWith('--')) {
+        error('Usage: gsd-tools query classify-confidence --provider <id> [--verified]', ERROR_REASON.USAGE);
+      }
+      const verified = args.includes('--verified');
+      const confidence = researchProvider.classifyConfidence({ provider, verifiedAgainstOfficial: verified });
+      core.output({ provider, verified, confidence }, raw);
       break;
     }
 
