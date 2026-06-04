@@ -12,9 +12,14 @@ on:
           - rc
           - finalize
       version:
-        description: 'Version (e.g., 1.28.0 or 2.0.0)'
+        description: 'Version: X.Y.0 (minor/major) or X.Y.Z with Z>0 (hotfix/patch)'
         required: true
         type: string
+      auto_cherry_pick:
+        description: 'Hotfix create only: auto-cherry-pick fix:/chore: commits from origin/next (fallback origin/main) since base tag'
+        required: false
+        type: boolean
+        default: true
       dry_run:
         description: 'Dry run (skip npm publish, tagging, and push)'
         required: false
@@ -37,6 +42,8 @@ jobs:
     outputs:
       branch: ${{ steps.validate.outputs.branch }}
       is_major: ${{ steps.validate.outputs.is_major }}
+      is_hotfix: ${{ steps.validate.outputs.is_hotfix }}
+      base_tag: ${{ steps.validate.outputs.base_tag }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
@@ -46,20 +53,44 @@ jobs:
         id: validate
         env:
           VERSION: ${{ inputs.version }}
+          ACTION: ${{ inputs.action }}
         run: |
-          # Must be X.Y.0 (minor or major release, not patch), no leading zeros in any segment
-          if ! echo "$VERSION" | grep -qE '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.0$'; then
-            echo "::error::Version '$VERSION' is invalid. Must be X.Y.0 with no leading zeros (e.g., 1.28.0 or 2.0.0). Use hotfix workflow for patch releases."
-            exit 1
-          fi
-          BRANCH="release/${VERSION}"
-          # Detect major (X.0.0)
+          set -euo pipefail
+          IS_HOTFIX="false"
           IS_MAJOR="false"
-          if echo "$VERSION" | grep -qE '^(0|[1-9][0-9]*)\.0\.0$'; then
-            IS_MAJOR="true"
+          BASE_TAG=""
+          if echo "$VERSION" | grep -qE '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.0$'; then
+            # Minor or major release (X.Y.0)
+            BRANCH="release/${VERSION}"
+            if echo "$VERSION" | grep -qE '^(0|[1-9][0-9]*)\.0\.0$'; then
+              IS_MAJOR="true"
+            fi
+          elif echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[1-9][0-9]*$'; then
+            # Patch / hotfix release (X.Y.Z, Z>0)
+            IS_HOTFIX="true"
+            if [ "$ACTION" = "rc" ]; then
+              echo "::error::Hotfix (patch) releases skip the rc action — run create, then finalize."
+              exit 1
+            fi
+            BRANCH="hotfix/${VERSION}"
+            MAJOR_MINOR=$(echo "$VERSION" | cut -d. -f1-2)
+            TARGET_TAG="v${VERSION}"
+            # semver-correct base tag: highest vMAJOR_MINOR.* strictly below TARGET_TAG
+            BASE_TAG=$( ( git tag -l "v${MAJOR_MINOR}.*" | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+$"; echo "$TARGET_TAG" ) \
+              | sort -V \
+              | awk -v target="$TARGET_TAG" '$1 == target { print prev; exit } { prev = $1 }')
+            if [ -z "$BASE_TAG" ]; then
+              echo "::error::No prior stable tag found for ${MAJOR_MINOR}.x before $TARGET_TAG"
+              exit 1
+            fi
+          else
+            echo "::error::Version '$VERSION' is invalid. Use X.Y.0 (minor/major) or X.Y.Z with Z>0 (hotfix), no leading zeros."
+            exit 1
           fi
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
           echo "is_major=$IS_MAJOR" >> "$GITHUB_OUTPUT"
+          echo "is_hotfix=$IS_HOTFIX" >> "$GITHUB_OUTPUT"
+          echo "base_tag=$BASE_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Reject already-published versions
         env:
@@ -103,6 +134,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Create release branch
+        if: needs.validate-version.outputs.is_hotfix != 'true'
         env:
           BRANCH: ${{ needs.validate-version.outputs.branch }}
           VERSION: ${{ inputs.version }}
@@ -123,6 +155,152 @@ jobs:
           fi
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "Next: run this workflow with \`rc\` action to publish a pre-release to \`next\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create hotfix branch from base tag (skeleton)
+        if: needs.validate-version.outputs.is_hotfix == 'true'
+        env:
+          BRANCH: ${{ needs.validate-version.outputs.branch }}
+          BASE_TAG: ${{ needs.validate-version.outputs.base_tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          git checkout -b "$BRANCH" "$BASE_TAG"
+          # Push the skeleton up-front so a later cherry-pick conflict leaves a
+          # remote artefact the operator can fetch, resolve, and re-push.
+          if [ "$DRY_RUN" != "true" ]; then
+            git push -u origin "$BRANCH"
+          fi
+
+      - name: Cherry-pick fix/chore commits from origin/next since base tag
+        if: ${{ needs.validate-version.outputs.is_hotfix == 'true' && inputs.auto_cherry_pick }}
+        env:
+          BRANCH: ${{ needs.validate-version.outputs.branch }}
+          BASE_TAG: ${{ needs.validate-version.outputs.base_tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          # Under the next-branch model, day-to-day fixes land on `next` first
+          # and only reach `main` via release back-merge. So `next` is the
+          # canonical cherry-pick source. Fall back to `main` if `next` doesn't
+          # exist yet (legacy single-branch repos) or as a transition guard.
+          if git ls-remote --exit-code origin next >/dev/null 2>&1; then
+            git fetch origin next:refs/remotes/origin/next
+            SOURCE="origin/next"
+          else
+            git fetch origin main:refs/remotes/origin/main
+            SOURCE="origin/main"
+          fi
+          echo "Cherry-pick source: $SOURCE"
+
+          # `git cherry $BASE_TAG $SOURCE` lists every commit on the source not
+          # patch-equivalent in BASE_TAG. + means needs picking, - means
+          # already applied (skipped silently).
+          CANDIDATES=$(git cherry "$BASE_TAG" "$SOURCE" | awk '/^\+ / {print $2}')
+
+          if [ -z "$CANDIDATES" ]; then
+            echo "No commits on $SOURCE beyond $BASE_TAG."
+            echo "## Cherry-pick summary" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Base: \`$BASE_TAG\` (source: \`$SOURCE\`) — no commits to consider." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Re-order chronologically (oldest first) for predictable application.
+          ORDERED=$(git log --reverse --format='%H' "$BASE_TAG..$SOURCE" \
+            | grep -F -f <(echo "$CANDIDATES") || true)
+
+          INCLUDED=""
+          SKIPPED=""
+          while IFS= read -r SHA; do
+            [ -z "$SHA" ] && continue
+            SUBJECT=$(git log -1 --format='%s' "$SHA")
+            # fix: or chore:, optional scope, optional ! breaking marker
+            if echo "$SUBJECT" | grep -qE '^(fix|chore)(\([^)]+\))?!?: '; then
+              echo "→ cherry-picking $SHA  $SUBJECT"
+              if ! git cherry-pick -x "$SHA"; then
+                # Abort restores HEAD to the last successful pick. On real
+                # runs, push that state so the operator can fetch, resolve
+                # $SHA manually, and finalize with auto_cherry_pick=false.
+                git cherry-pick --abort || true
+                if [ "$DRY_RUN" != "true" ]; then
+                  git push --force-with-lease origin "$BRANCH" || git push origin "$BRANCH" || true
+                fi
+                {
+                  echo "## Cherry-pick conflict"
+                  echo ""
+                  echo "Failed at: \`${SHA}\` — \`${SUBJECT}\`"
+                  echo ""
+                  if [ "$DRY_RUN" = "true" ]; then
+                    echo "**Dry run:** branch was not pushed, so the picks below were discarded with the runner."
+                    if [ -n "$INCLUDED" ]; then
+                      echo ""
+                      echo "Already-applied picks (lost — must be re-applied before resolving \`${SHA}\`):"
+                      echo ""
+                      echo "$INCLUDED"
+                    fi
+                    echo ""
+                    echo "**To resolve:** re-run \`create\` with \`auto_cherry_pick=true\` (real, not dry-run) to materialize the partial branch on origin, then resolve \`${SHA}\` manually. Re-running with \`auto_cherry_pick=false\` would recreate the branch from \`${BASE_TAG}\` and lose every pick listed above."
+                  else
+                    echo "Branch \`${BRANCH}\` was pushed with picks applied up to (but not including) the conflicting commit."
+                    echo ""
+                    echo "**To resolve:** \`git fetch origin && git checkout ${BRANCH} && git cherry-pick -x ${SHA}\`, fix the conflict, push, then re-run \`finalize\` with \`auto_cherry_pick=false\`."
+                  fi
+                } >> "$GITHUB_STEP_SUMMARY"
+                echo "::error::Cherry-pick of $SHA failed. See summary."
+                exit 1
+              fi
+              INCLUDED="${INCLUDED}- \`${SHA}\` ${SUBJECT}"$'\n'
+            else
+              echo "  skip $SHA  $SUBJECT  (not fix/chore)"
+              SKIPPED="${SKIPPED}- \`${SHA}\` ${SUBJECT}"$'\n'
+            fi
+          done <<< "$ORDERED"
+
+          {
+            echo "## Cherry-pick summary"
+            echo ""
+            echo "Base: \`$BASE_TAG\`"
+            echo ""
+            if [ -n "$INCLUDED" ]; then
+              echo "### Included (fix/chore)"
+              echo ""
+              echo "$INCLUDED"
+            else
+              echo "_No fix/chore commits to include._"
+              echo ""
+            fi
+            if [ -n "$SKIPPED" ]; then
+              echo "### Skipped (feat/refactor/etc — not auto-included)"
+              echo ""
+              echo "$SKIPPED"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Bump hotfix version and push
+        if: needs.validate-version.outputs.is_hotfix == 'true'
+        env:
+          BRANCH: ${{ needs.validate-version.outputs.branch }}
+          BASE_TAG: ${{ needs.validate-version.outputs.base_tag }}
+          VERSION: ${{ inputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          npm version "$VERSION" --no-git-tag-version
+          git add package.json package-lock.json
+          git commit -m "chore: bump version to $VERSION for hotfix"
+          if [ "$DRY_RUN" != "true" ]; then
+            git push origin "$BRANCH"
+          else
+            echo "DRY RUN — branch not pushed."
+          fi
+          {
+            echo "## Hotfix branch created"
+            echo ""
+            echo "- Branch: \`$BRANCH\`"
+            echo "- Based on: \`$BASE_TAG\`"
+            echo "- Apply additional manual fixes if needed, then run \`finalize\`."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   install-smoke-rc:
     needs: validate-version

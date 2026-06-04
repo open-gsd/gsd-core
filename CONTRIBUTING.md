@@ -133,7 +133,7 @@ and `next` (integration for the upcoming release). **Almost every PR targets
 | `chore/`, `docs/`, `refactor/`, `test/`, `perf/`, `ci/`, `revert/` | `next` | All routine work |
 | `fix/critical-NNN-slug` | `main` | Production-down emergencies only; auto-back-merges to `next` |
 | `release/X.Y.0` | `main` | Created by `release.yml` — don't make these by hand |
-| `hotfix/X.Y.Z` | `main` | Created by `hotfix.yml` — don't make these by hand |
+| `hotfix/X.Y.Z` | `main` | Created by `release.yml` (dispatch with a patch version X.Y.Z) — don't make these by hand |
 | Stabilization PR for an in-flight release | `release/X.Y.0` | Fix a regression found during the RC cycle |
 
 **Day-to-day commands:**
