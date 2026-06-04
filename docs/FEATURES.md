@@ -2817,7 +2817,7 @@ Source commit: abc1234 (3 commits behind HEAD)
 - REQ-PKG-GATE-02: Planner MUST gate unverified or suspicious package installs before execution.
 - REQ-PKG-GATE-03: Executor MUST NOT auto-substitute package names after failed package-manager installs.
 
-**Reference:** [v1.42.1 Release Notes](RELEASE-v1.42.1.md)
+**Reference:** [v1.42.1 Release Notes](RELEASE-NOTES-LEGACY.md)
 
 ---
 
