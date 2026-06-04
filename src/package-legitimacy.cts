@@ -228,10 +228,25 @@ async function lookupNpm(name: string): Promise<PackageSignals> {
     const deprecated =
       typeof (versionMeta as Record<string, unknown>).deprecated === 'string' ? true : false;
 
+    // Fetch weekly download count from the npm downloads API
+    let weeklyDownloads: number | null = null;
+    try {
+      const dlRaw = await httpsGet(
+        `https://api.npmjs.org/downloads/point/last-week/${encodeURIComponent(name)}`,
+        5000
+      );
+      const dlData = JSON.parse(dlRaw) as Record<string, unknown>;
+      if (typeof dlData.downloads === 'number') {
+        weeklyDownloads = dlData.downloads as number;
+      }
+    } catch {
+      // Degraded: leave weeklyDownloads as null, never throw
+    }
+
     return {
       exists: true,
       publishedAt: time[latestVersion] ?? time.created ?? null,
-      weeklyDownloads: null, // npm weekly downloads require a separate API call
+      weeklyDownloads,
       repoUrl,
       deprecated,
       postinstall,

@@ -176,6 +176,14 @@ function buildNewProjectConfig(userChoices: Record<string, unknown>): Record<str
   const hasFirecrawl = !!(process.env['FIRECRAWL_API_KEY'] || fs.existsSync(firecrawlKeyFile));
   const exaKeyFile = path.join(homedir, '.gsd', 'exa_api_key');
   const hasExaSearch = !!(process.env['EXA_API_KEY'] || fs.existsSync(exaKeyFile));
+  const tavilyKeyFile = path.join(homedir, '.gsd', 'tavily_api_key');
+  const hasTavilySearch = !!(process.env['TAVILY_API_KEY'] || fs.existsSync(tavilyKeyFile));
+  const refKeyFile = path.join(homedir, '.gsd', 'ref_api_key');
+  const hasRefSearch = !!(process.env['REF_API_KEY'] || fs.existsSync(refKeyFile));
+  const perplexityKeyFile = path.join(homedir, '.gsd', 'perplexity_api_key');
+  const hasPerplexity = !!(process.env['PERPLEXITY_API_KEY'] || fs.existsSync(perplexityKeyFile));
+  const jinaKeyFile = path.join(homedir, '.gsd', 'jina_api_key');
+  const hasJina = !!(process.env['JINA_API_KEY'] || fs.existsSync(jinaKeyFile));
 
   // Load user-level defaults from ~/.gsd/defaults.json if available
   const globalDefaultsPath = path.join(homedir, '.gsd', 'defaults.json');
@@ -205,6 +213,10 @@ function buildNewProjectConfig(userChoices: Record<string, unknown>): Record<str
     brave_search: hasBraveSearch,
     firecrawl: hasFirecrawl,
     exa_search: hasExaSearch,
+    tavily_search: hasTavilySearch,
+    ref_search: hasRefSearch,
+    perplexity: hasPerplexity,
+    jina: hasJina,
     git: {
       branching_strategy: CONFIG_DEFAULTS.branching_strategy,
       create_tag: true,
