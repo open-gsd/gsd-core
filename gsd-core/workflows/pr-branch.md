@@ -41,6 +41,81 @@ Commits: {AHEAD} ahead
 ```
 </step>
 
+<step name="handle_sub_repos">
+Read sub-repo list from config:
+
+```bash
+SUB_REPOS_RAW=$(gsd_run query config-get sub_repos 2>/dev/null || echo "")
+```
+
+If `SUB_REPOS_RAW` is empty, `null`, or `[]`, skip this step entirely and proceed to `analyze_commits`.
+
+Otherwise, resolve the root path and scan each sub-repo for uncommitted changes.
+**Critical: all git commands must use `git -C "$REPO"` — never `cd "$REPO"`, shell state does not persist between commands.**
+
+```bash
+ROOT=$(git rev-parse --show-toplevel)
+
+DIRTY_REPOS=()
+while IFS= read -r REPO_REL; do
+  [ -z "$REPO_REL" ] && continue
+  REPO="$ROOT/$REPO_REL"
+  CHANGES=$(git -C "$REPO" status --porcelain 2>/dev/null)
+  if [ -n "$CHANGES" ]; then
+    DIRTY_REPOS+=("$REPO_REL")
+  fi
+done < <(echo "$SUB_REPOS_RAW" | jq -r '.[]' 2>/dev/null)
+```
+
+If no sub-repos have uncommitted changes, skip to `analyze_commits`.
+
+Display dirty sub-repos and prompt the user:
+
+```
+Sub-repos with uncommitted changes:
+  backend  — 3 file(s)
+  frontend — 1 file(s)
+
+How should sub-repo changes be handled?
+  1. all    — create PR branch, commit, push, and open PR for every listed sub-repo
+  2. select — choose which sub-repos to process
+  3. skip   — ignore sub-repos, continue with root repo only
+```
+
+If the user chooses **skip**, proceed to `analyze_commits`.
+
+For each selected sub-repo (`$REPO_REL`):
+
+```bash
+REPO="$ROOT/$REPO_REL"
+SUB_BRANCH="${CURRENT_BRANCH}-pr"
+
+# 1. Create the PR branch in the sub-repo
+git -C "$REPO" checkout -b "$SUB_BRANCH"
+
+# 2. Stage all changes and commit (Conventional Commits format)
+git -C "$REPO" add -A
+git -C "$REPO" commit -m "fix($REPO_REL): sync uncommitted changes for PR"
+
+# 3. Push to remote
+git -C "$REPO" push origin "$SUB_BRANCH"
+
+# 4. Determine remote repo slug and open PR
+SUB_REMOTE=$(git -C "$REPO" remote get-url origin 2>/dev/null)
+SUB_REPO_SLUG=$(echo "$SUB_REMOTE" \
+  | sed 's|.*github\.com[:/]\(.*\)\.git$|\1|;s|.*github\.com[:/]\(.*\)$|\1|')
+
+gh pr create \
+  --repo "$SUB_REPO_SLUG" \
+  --base "$TARGET" \
+  --head "$SUB_BRANCH" \
+  --title "fix($REPO_REL): sync uncommitted changes for PR" \
+  --body "Companion PR for root repo branch \`$CURRENT_BRANCH\`."
+```
+
+After processing all selected sub-repos, continue to `analyze_commits` for the root repo.
+</step>
+
 <step name="analyze_commits">
 Classify commits:
 
