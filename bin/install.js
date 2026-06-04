@@ -1997,6 +1997,8 @@ function convertCopilotToolName(claudeTool) {
   if (claudeToCopilotTools[claudeTool]) {
     return claudeToCopilotTools[claudeTool];
   }
+  // mcp__{tavily,ref,jina,exa,firecrawl}__* use the generic MCP passthrough like exa/firecrawl;
+  // add explicit Copilot registry mappings when the io.github ids are confirmed (#657 follow-up)
   // Default: lowercase
   return claudeTool.toLowerCase();
 }

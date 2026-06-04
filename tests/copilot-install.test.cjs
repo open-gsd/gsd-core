@@ -272,6 +272,36 @@ describe('convertCopilotToolName', () => {
   test('mapping constant has 13 entries (12 direct + mcp handled separately)', () => {
     assert.strictEqual(Object.keys(claudeToCopilotTools).length, 12);
   });
+
+  // Regression: mcp__tavily/ref/jina use the same generic passthrough as exa/firecrawl (#657)
+  // No explicit io.github.* registry ID is known for these providers; they lower-case passthrough.
+  const genericMcpCases = [
+    ['mcp__exa__*',        'mcp__exa__*'],
+    ['mcp__firecrawl__*',  'mcp__firecrawl__*'],
+    ['mcp__tavily__*',     'mcp__tavily__*'],
+    ['mcp__ref__*',        'mcp__ref__*'],
+    ['mcp__jina__*',       'mcp__jina__*'],
+    ['mcp__exa__web_search_exa',   'mcp__exa__web_search_exa'],
+    ['mcp__firecrawl__scrape',     'mcp__firecrawl__scrape'],
+    ['mcp__tavily__search',        'mcp__tavily__search'],
+    ['mcp__ref__get',              'mcp__ref__get'],
+    ['mcp__jina__read_url',        'mcp__jina__read_url'],
+  ];
+
+  for (const [input, expected] of genericMcpCases) {
+    test(`generic MCP passthrough: ${input} → ${expected}`, () => {
+      assert.strictEqual(convertCopilotToolName(input), expected);
+    });
+  }
+
+  test('mcp__context7__* still gets the explicit io.github.upstash mapping (not generic passthrough)', () => {
+    // Confirm the context7 special-case is NOT affected by the generic path
+    assert.strictEqual(convertCopilotToolName('mcp__context7__*'), 'io.github.upstash/context7/*');
+    assert.strictEqual(
+      convertCopilotToolName('mcp__context7__resolve-library-id'),
+      'io.github.upstash/context7/resolve-library-id'
+    );
+  });
 });
 
 // ─── convertClaudeToCopilotContent ──────────────────────────────────────────────
