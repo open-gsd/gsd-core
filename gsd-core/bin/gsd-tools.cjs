@@ -378,8 +378,8 @@ async function main() {
     'current-timestamp, detect-custom-files, docs-init, effort, extract-messages, find-phase, ' +
     'from-gsd2, frontmatter, gap-analysis, generate-claude-md, generate-claude-profile, ' +
     'generate-dev-preferences, generate-slug, graphify, history-digest, init, intel, ' +
-    'learnings, list-todos, milestone, phase, phase-plan-index, phases, profile-questionnaire, ' +
-    'profile-sample, progress, prompt-budget, requirements, resolve-granularity, resolve-model, roadmap, scaffold, state, ' +
+    'learnings, list-todos, milestone, package-legitimacy, phase, phase-plan-index, phases, profile-questionnaire, ' +
+    'profile-sample, progress, prompt-budget, requirements, research-plan, research-store, resolve-granularity, resolve-model, roadmap, scaffold, state, ' +
     'task, template, validate, verify, verify-path-exists, verify-summary, workstream, worktree\n\n' +
     'Global flags:\n' +
     '  --raw              Emit raw output without post-processing\n' +
@@ -423,6 +423,7 @@ async function main() {
     'generate-slug', 'current-timestamp', 'verify-path-exists',
     'verify-summary', 'template', 'frontmatter', 'detect-custom-files',
     'worktree', 'prompt-budget',
+    'research-store', 'research-plan', 'package-legitimacy',
   ]);
   if (!SKIP_ROOT_RESOLUTION.has(command)) {
     cwd = findProjectRoot(cwd);
@@ -1660,6 +1661,123 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       }
       const ctx = loadUpdateContext({ preferredConfigDir, preferredRuntime });
       process.stdout.write(JSON.stringify(ctx) + '\n');
+      break;
+    }
+
+    // ─── Research Store ────────────────────────────────────────────────────
+    //
+    // research-store get <key> [--kind <k>]
+    //   -> getResearch(cwd, key, { kind }); core.output(result, raw)
+    // research-store put <key> --content <str> --source <s> --provider <p>
+    //                           --confidence <c> --kind <k>
+    //   -> putResearch(cwd, key, { content, source, provider, confidence, kind })
+    //
+    // curated-tier (kind=docs) writes to process.env.HOME/.gsd/research-cache
+    // so tests may override the home directory by setting the HOME env var.
+
+    case 'research-store': {
+      const researchStore = require('./lib/research-store.cjs');
+      const subcommand = args[1];
+      const homeDir = process.env.HOME || require('os').homedir();
+      if (subcommand === 'get') {
+        const key = args[2];
+        if (!key || key.startsWith('--')) {
+          error('Usage: gsd-tools research-store get <key> [--kind <k>]', ERROR_REASON.USAGE);
+        }
+        const kindIdx = args.indexOf('--kind');
+        const kind = kindIdx !== -1 ? args[kindIdx + 1] : undefined;
+        const result = researchStore.getResearch(cwd, key, { kind, homeDir });
+        core.output(result, raw);
+      } else if (subcommand === 'put') {
+        const key = args[2];
+        if (!key || key.startsWith('--')) {
+          error('Usage: gsd-tools research-store put <key> --content <str> --source <s> --provider <p> --confidence <c> --kind <k>', ERROR_REASON.USAGE);
+        }
+        const contentIdx = args.indexOf('--content');
+        const sourceIdx = args.indexOf('--source');
+        const providerIdx = args.indexOf('--provider');
+        const confidenceIdx = args.indexOf('--confidence');
+        const kindIdx = args.indexOf('--kind');
+        const content = contentIdx !== -1 ? args[contentIdx + 1] : null;
+        const source = sourceIdx !== -1 ? args[sourceIdx + 1] : null;
+        const provider = providerIdx !== -1 ? args[providerIdx + 1] : null;
+        const confidence = confidenceIdx !== -1 ? args[confidenceIdx + 1] : null;
+        const kind = kindIdx !== -1 ? args[kindIdx + 1] : null;
+        if (!content || !source || !provider || !confidence || !kind) {
+          error('Usage: gsd-tools research-store put <key> --content <str> --source <s> --provider <p> --confidence <c> --kind <k>', ERROR_REASON.USAGE);
+        }
+        const entry = researchStore.putResearch(cwd, key, { content, source, provider, confidence, kind }, { homeDir });
+        core.output(entry, raw);
+      } else {
+        error('Unknown research-store subcommand. Available: get, put', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+      }
+      break;
+    }
+
+    // ─── Research Plan ─────────────────────────────────────────────────────
+    //
+    // research-plan --input <path>
+    //   Read+JSON.parse file; call planResearch({ questions, ecosystem, config, cwd })
+    //   { ecosystem, config, questions: [{ text, kind, library?, version? }] }
+
+    case 'research-plan': {
+      const researchProvider = require('./lib/research-provider.cjs');
+      const inputIdx = args.indexOf('--input');
+      const inputPath = inputIdx !== -1 ? args[inputIdx + 1] : null;
+      if (!inputPath || inputPath.startsWith('--')) {
+        error('Usage: gsd-tools research-plan --input <path>', ERROR_REASON.USAGE);
+      }
+      let planInput;
+      try {
+        const raw_ = fs.readFileSync(path.resolve(inputPath), 'utf8');
+        planInput = JSON.parse(raw_);
+      } catch (readErr) {
+        error(`research-plan: cannot read/parse --input file: ${inputPath}`, ERROR_REASON.USAGE);
+      }
+      const { ecosystem = '', config: planConfig = {}, questions = [] } = planInput;
+      const homeDir = process.env.HOME || require('os').homedir();
+      const plan = researchProvider.planResearch({ questions, ecosystem, config: planConfig, cwd, homeDir });
+      core.output(plan, raw);
+      break;
+    }
+
+    // ─── Package Legitimacy ────────────────────────────────────────────────
+    //
+    // package-legitimacy check --ecosystem <eco> <pkg1> <pkg2> ...
+    //
+    // checkPackages is ASYNC. This entire runCommand function is async, so
+    // we can await directly. On rejection we call error() which exits.
+
+    case 'package-legitimacy': {
+      const pkgLegitimacy = require('./lib/package-legitimacy.cjs');
+      const subcommand = args[1];
+      if (subcommand !== 'check') {
+        error('Unknown package-legitimacy subcommand. Available: check', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+      }
+      const ecoIdx = args.indexOf('--ecosystem');
+      const ecosystem = ecoIdx !== -1 ? args[ecoIdx + 1] : null;
+      const VALID_ECOSYSTEMS = new Set(['npm', 'pypi', 'crates']);
+      if (!ecosystem || !VALID_ECOSYSTEMS.has(ecosystem)) {
+        error('Usage: gsd-tools package-legitimacy check --ecosystem <npm|pypi|crates> <pkg1> ...', ERROR_REASON.USAGE);
+      }
+      // Collect positional package names (everything after args[1] that isn't a flag or flag value)
+      const packages = [];
+      for (let i = 2; i < args.length; i++) {
+        const a = args[i];
+        if (a === '--ecosystem') { i++; continue; }
+        if (a.startsWith('--')) { i++; continue; }
+        packages.push(a);
+      }
+      if (packages.length === 0) {
+        error('Usage: gsd-tools package-legitimacy check --ecosystem <eco> <pkg1> <pkg2> ...', ERROR_REASON.USAGE);
+      }
+      let pkgResults;
+      try {
+        pkgResults = await pkgLegitimacy.checkPackages({ ecosystem, packages }, {});
+      } catch (pkgErr) {
+        error(`package-legitimacy: ${pkgErr && pkgErr.message ? pkgErr.message : String(pkgErr)}`, ERROR_REASON.UNKNOWN);
+      }
+      core.output(pkgResults, raw);
       break;
     }
 
