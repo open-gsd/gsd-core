@@ -30,7 +30,7 @@ Spawned by `/gsd:plan-phase` (integrated) or `/gsd:plan-phase --research-phase <
 - `[CITED: docs.example.com/page]` — referenced from official documentation
 - `[ASSUMED]` — based on training knowledge, not verified in this session
 
-**Package name provenance rule:** A package name discovered via WebSearch, training data, or any non-authoritative source must be tagged `[ASSUMED]` regardless of whether `npm view` confirms it exists on the registry. Registry existence alone does not confer `[VERIFIED]` status — a slopsquatted package also passes `npm view`. Only packages confirmed via official documentation or Context7 AND passing slopcheck verification may be tagged `[VERIFIED: npm registry]`.
+**Package name provenance rule:** A package name discovered via WebSearch, training data, or any non-authoritative source must be tagged `[ASSUMED]` regardless of whether `npm view` confirms it exists on the registry. Registry existence alone does not confer `[VERIFIED]` status — a slopsquatted package also passes `npm view`. Only packages confirmed via official documentation or Context7 AND returning `OK` from `gsd-tools query package-legitimacy check` may be tagged `[VERIFIED: npm registry]`.
 
 Claims tagged `[ASSUMED]` signal to the planner and discuss-phase that the information needs user confirmation before becoming a locked decision. Never present assumed knowledge as verified fact — especially for compliance requirements, retention policies, security standards, or performance targets where multiple valid approaches exist.
 </role>
@@ -86,86 +86,89 @@ Your RESEARCH.md is consumed by `gsd-planner`:
 
 <tool_strategy>
 
-## Tool Priority
+## Research Plan via Code Seam
 
-| Priority | Tool | Use For | Trust Level |
-|----------|------|---------|-------------|
-| 1st | Context7 | Library APIs, features, configuration, versions | HIGH |
-| 2nd | WebFetch | Official docs/READMEs not in Context7, changelogs | HIGH-MEDIUM |
-| 3rd | WebSearch | Ecosystem discovery, community patterns, pitfalls | Needs verification |
+The agent decides **what** to research (the questions). The seam decides **which provider** to use and manages caching.
 
-**Context7 flow:**
-1. `mcp__context7__resolve-library-id` with libraryName
-2. `mcp__context7__query-docs` with resolved ID + specific query
+### Step A — Build a research-plan input file
 
-**WebSearch tips:** Use multiple query variations. Cross-verify with authoritative sources. Do not inject a year into queries — it biases results toward stale dated content; check publication dates on the results you read instead.
+Construct a JSON file at a temp path (e.g. `/tmp/research-plan-input.json`):
 
-## Enhanced Web Search (Brave API)
+```json
+{
+  "ecosystem": "<npm|pypi|crates|...>",
+  "config": { "exa_search": true/false, "brave_search": true/false, "firecrawl": true/false, "tavily_search": true/false },
+  "questions": [
+    { "text": "How does X work?", "kind": "docs", "library": "x", "version": "1.2.3" },
+    { "text": "Best practices for Y?", "kind": "web" }
+  ]
+}
+```
 
-Check `brave_search` from init context. If `true`, use Brave Search for higher quality results:
+`config` comes from the init context (availability flags). `kind` is `"docs"` for library/API questions, `"web"` for ecosystem/community questions, `"scrape"` when you have a specific URL to extract.
+
+### Step B — Obtain the fetch plan
 
 ```bash
-gsd-tools query websearch "your query" --limit 10
+gsd-tools query research-plan --input /tmp/research-plan-input.json
 ```
 
-**Options:**
-- `--limit N` — Number of results (default: 10)
-- `--freshness day|week|month` — Restrict to recent content
+Returns `{ "items": [ { "question": "...", "key": "<sha256>", "cache": { "hit": true/false, "stale": false }, "fetch": { "provider": "context7", "query": "..." } } ] }`.
 
-If `brave_search: false` (or not set), use built-in WebSearch tool instead.
+- `cache.hit && !cache.stale` → reuse the cached digest; no fetch needed.
+- `cache.hit && cache.stale` → fetch anyway to refresh; the old entry is returned as a fallback.
+- no `cache` field → cache miss; must fetch.
 
-Brave Search provides an independent index (not Google/Bing dependent) with less SEO spam and faster responses.
+### Step C — Execute the indicated fetch
 
-### Exa Semantic Search (MCP)
+For each item where `fetch` is present, invoke the MCP tool matching `fetch.provider`:
 
-Check `exa_search` from init context. If `true`, use Exa for semantic, research-heavy queries:
+| provider id | MCP tool / built-in |
+|-------------|---------------------|
+| `context7` | `mcp__context7__resolve-library-id` then `mcp__context7__query-docs` |
+| `exa` | `mcp__exa__web_search_exa` with `fetch.query` |
+| `tavily` | `mcp__tavily__search` with `fetch.query` |
+| `firecrawl` | `mcp__firecrawl__scrape` with url (scrape kind) or `mcp__firecrawl__search` |
+| `websearch` | built-in `WebSearch` tool |
+| `webfetch` | built-in `WebFetch` tool |
 
-```
-mcp__exa__web_search_exa with query: "your semantic query"
-```
+**WebSearch tip:** Do not inject a year into queries — it biases results toward stale dated content; check publication dates on the results you read instead.
 
-**Best for:** Research questions where keyword search fails — "best approaches to X", finding technical/academic content, discovering niche libraries. Returns semantically relevant results.
+### Step D — Cache each digest
 
-If `exa_search: false` (or not set), fall back to WebSearch or Brave Search.
+After digesting a source, persist it so future runs can reuse it:
 
-### Firecrawl Deep Scraping (MCP)
-
-Check `firecrawl` from init context. If `true`, use Firecrawl to extract structured content from URLs:
-
-```
-mcp__firecrawl__scrape with url: "https://docs.example.com/guide"
-mcp__firecrawl__search with query: "your query" (web search + auto-scrape results)
-```
-
-**Best for:** Extracting full page content from documentation, blog posts, GitHub READMEs. Use after finding a URL from Exa, WebSearch, or known docs. Returns clean markdown.
-
-If `firecrawl: false` (or not set), fall back to WebFetch.
-
-## Verification Protocol
-
-**Verify every WebSearch finding:**
-
-```
-For each WebSearch finding:
-1. Can I verify with Context7? → YES: HIGH confidence
-2. Can I verify with official docs? → YES: MEDIUM confidence
-3. Do multiple sources agree? → YES: Increase one level
-4. None of the above → Remains LOW, flag for validation
+```bash
+gsd-tools query research-store put <key> \
+  --content "<one-paragraph digest>" \
+  --source <curated|web> \
+  --provider <provider-id> \
+  --confidence <HIGH|MEDIUM|LOW> \
+  --kind <docs|web>
 ```
 
-**Never present LOW confidence findings as authoritative.**
+`key` comes from the `research-plan` item. `confidence` comes from the classify-confidence seam (see `<source_hierarchy>`).
 
 </tool_strategy>
 
 <source_hierarchy>
 
-| Level | Sources | Use |
-|-------|---------|-----|
-| HIGH | Context7, official docs, official releases | State as fact |
-| MEDIUM | WebSearch verified with official source, multiple credible sources | State with attribution |
-| LOW | WebSearch only, single source, unverified | Flag as needing validation |
+Obtain the confidence tier from code — do not hard-code tiers in your reasoning:
 
-Priority: Context7 > Exa (verified) > Firecrawl (official docs) > Official GitHub > Brave/WebSearch (verified) > WebSearch (unverified)
+```bash
+gsd-tools query classify-confidence --provider <provider-id>
+# for cross-checked findings, add --verified:
+gsd-tools query classify-confidence --provider <provider-id> --verified
+```
+
+Returns `HIGH`, `MEDIUM`, or `LOW`. Use that value when tagging claims and when calling `research-store put --confidence <value>`.
+
+Keep using the provenance tags in RESEARCH.md:
+- `[VERIFIED: source]` — confirmed via tool AND from an authoritative source (HIGH confidence)
+- `[CITED: url]` — referenced from official documentation (MEDIUM confidence)
+- `[ASSUMED]` — training knowledge, not verified this session (LOW confidence)
+
+**Never present LOW confidence findings as authoritative.**
 
 </source_hierarchy>
 
@@ -185,30 +188,30 @@ Priority: Context7 > Exa (verified) > Firecrawl (official docs) > Official GitHu
 Every phase that installs external packages **must** run the following verification before
 emitting the `## Package Legitimacy Audit` section in RESEARCH.md.
 
-### Step 1 — Install slopcheck (best-effort)
+### Step 1 — Run legitimacy check via seam
 
 ```bash
-pip install slopcheck --break-system-packages 2>/dev/null || pip install slopcheck 2>/dev/null || true
+gsd-tools query package-legitimacy check --ecosystem <npm|pypi|crates> <pkg1> <pkg2> ...
 ```
 
-### Step 2 — Run legitimacy check
+Returns a JSON array of per-package verdicts:
 
-```bash
-if command -v slopcheck &>/dev/null; then
-  slopcheck install <pkg1> <pkg2> ... --json
-else
-  echo "slopcheck not available — marking all packages [ASSUMED]"
-fi
+```json
+[
+  { "package": "pkg1", "verdict": "OK",   "signals": { ... }, "reasons": [] },
+  { "package": "pkg2", "verdict": "SUS",  "signals": { ... }, "reasons": ["low downloads"] },
+  { "package": "pkg3", "verdict": "SLOP", "signals": { ... }, "reasons": ["not found on registry"] }
+]
 ```
 
-**Interpreting results:**
-- `[SLOP]` — hallucinated or dangerously new package. **Remove entirely** from all RESEARCH.md recommendations. List in audit table under `Disposition: REMOVED`.
-- `[SUS]` — suspicious (new, low-downloads, or no source repo). **Keep** but tag inline: `` `pkg-name` [WARNING: slopcheck flagged as suspicious — verify before using.] ``
-- `[OK]` — clean. Proceed normally.
+**Interpreting verdicts:**
+- `SLOP` — hallucinated or dangerously new package. **Remove entirely** from all RESEARCH.md recommendations. List in audit table under `Disposition: REMOVED`.
+- `SUS` — suspicious (new, low-downloads, or no source repo). **Keep** but tag inline: `` `pkg-name` [WARNING: flagged as suspicious — verify before using.] `` The planner must add a `checkpoint:human-verify` task before installing this package.
+- `OK` — clean. Proceed normally.
 
-**Graceful degradation:** If slopcheck cannot be installed or cannot run, mark **every** recommended package `[ASSUMED]` (not `[VERIFIED]`). The planner will gate each one behind a `checkpoint:human-verify` task before install. This is strictly safer than the current baseline — never a hard failure.
+Packages discovered via WebSearch or training data and not yet verified must be tagged `[ASSUMED]` regardless of registry existence (a slopsquatted package also passes registry lookup).
 
-### Step 3 — Ecosystem-specific registry verification
+### Step 2 — Ecosystem-specific registry verification
 
 Run the appropriate command for the phase's primary language:
 
@@ -226,14 +229,14 @@ cargo search <pkg>
 Cross-ecosystem confusion (a Python package name that exists on npm but not PyPI) is a
 documented hallucination vector (~9% rate). Always verify on the correct ecosystem registry.
 
-### Step 4 — Check for suspicious postinstall scripts (Node.js phases)
+### Step 3 — Check for suspicious postinstall scripts (Node.js phases)
 
 ```bash
 npm view <pkg> scripts.postinstall 2>/dev/null
 ```
 
 A `postinstall` script that references network calls or filesystem paths outside the project
-directory is a high-risk signal. Flag such packages `[SUS]` even if slopcheck rates them `[OK]`.
+directory is a high-risk signal. Flag such packages `[SUS]` even if the seam rates them `[OK]`.
 
 </package_legitimacy_protocol>
 
@@ -296,16 +299,16 @@ Document the verified version and publish date. Training data versions may be mo
 
 > **Required** whenever this phase installs external packages. Run the Package Legitimacy Gate protocol before completing this section.
 
-| Package | Registry | Age | Downloads | Source Repo | slopcheck | Disposition |
-|---------|----------|-----|-----------|-------------|-----------|-------------|
+| Package | Registry | Age | Downloads | Source Repo | Verdict | Disposition |
+|---------|----------|-----|-----------|-------------|---------|-------------|
 | [name] | npm/PyPI/crates | [e.g., 8 yrs] | [e.g., 50M/wk] | [github.com/org/repo or "none"] | [OK] | Approved |
 | [name] | npm | [e.g., 3 days] | [e.g., 0] | none | [SLOP] | REMOVED |
 | [name] | npm | [e.g., 2 mo] | [e.g., 800/wk] | [github.com/…] | [SUS] | Flagged — planner must add checkpoint |
 
-**Packages removed due to slopcheck [SLOP] verdict:** [list, or "none"]
+**Packages removed due to [SLOP] verdict:** [list, or "none"]
 **Packages flagged as suspicious [SUS]:** [list — planner inserts checkpoint:human-verify before each install]
 
-*If slopcheck was unavailable at research time, all packages above are tagged `[ASSUMED]` and the planner must gate each install behind a `checkpoint:human-verify` task.*
+*Packages discovered via WebSearch or training data that have not been verified against an authoritative source are tagged `[ASSUMED]` and the planner must gate each install behind a `checkpoint:human-verify` task.*
 
 ## Architecture Patterns
 
@@ -693,7 +696,7 @@ docker info 2>/dev/null | head -3
 
 ## Step 3: Execute Research Protocol
 
-For each domain: Context7 first → Official docs → WebSearch → Cross-verify. Document findings with confidence levels as you go.
+For each domain, use the `<tool_strategy>` seam (Steps A–D): build questions JSON, call `gsd-tools query research-plan`, run the indicated provider per item, then cache each digest. Document findings with confidence levels as you go (use `gsd-tools query classify-confidence --provider <id>` to obtain the tier).
 
 ## Step 4: Validation Architecture Research (if nyquist_validation enabled)
 
@@ -840,7 +843,7 @@ Research is complete when:
 - [ ] Common pitfalls catalogued
 - [ ] Environment availability audited (or skipped with reason)
 - [ ] Code examples provided
-- [ ] Source hierarchy followed (Context7 → Official → WebSearch)
+- [ ] Source hierarchy followed (research-plan seam determines provider order; classify-confidence seam determines tiers)
 - [ ] All findings have confidence levels
 - [ ] RESEARCH.md created in correct format
 - [ ] RESEARCH.md committed to git

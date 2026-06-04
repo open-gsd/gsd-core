@@ -188,46 +188,47 @@ function readModel(filePath) {
   };
 }
 
-describe('gsd-phase-researcher.md — slopcheck invocation', () => {
+// allow-test-rule: source-text-is-the-product
+// Agent .md files — their text IS what the runtime loads.
+// Testing text content tests the deployed contract.
+// Per CONTRIBUTING.md exception matrix.
+
+describe('gsd-phase-researcher.md — package-legitimacy seam invocation', () => {
   let model;
 
   before(() => {
     model = readModel(RESEARCHER);
   });
 
-  test('contains slopcheck install command in a fenced code block', () => {
-    const found = model.codeBlocks.some((block) => hasAllTokens(block, ['slopcheck', 'install']));
-    assert.ok(found, 'researcher must invoke slopcheck install inside a fenced code block');
-  });
-
-  test('slopcheck invocation includes --json flag', () => {
+  test('invokes gsd-tools query package-legitimacy check inside a fenced code block', () => {
     const found = model.codeBlocks.some((block) =>
-      hasAllTokens(block, ['slopcheck', 'install']) && hasAllTokens(block, ['json'])
+      hasAllTokens(block, ['package-legitimacy', 'check'])
     );
-    assert.ok(found, 'slopcheck invocation must pass --json');
+    assert.ok(found, 'researcher must invoke package-legitimacy check inside a fenced code block');
   });
 
-  test('guards slopcheck invocation with command availability check', () => {
-    const hasCommandV = model.codeBlocks.some((block) => hasAllTokens(block, ['command', '-v', 'slopcheck']));
-    const hasWhich = model.codeBlocks.some((block) => hasAllTokens(block, ['which', 'slopcheck']));
-    assert.ok(hasCommandV || hasWhich, 'researcher must guard slopcheck invocation with command -v or which');
+  test('package-legitimacy invocation includes --ecosystem flag', () => {
+    const found = model.codeBlocks.some((block) =>
+      hasAllTokens(block, ['package-legitimacy', 'check']) && hasAllTokens(block, ['--ecosystem'])
+    );
+    assert.ok(found, 'package-legitimacy check must include --ecosystem flag');
   });
 
-  test('documents graceful degradation when slopcheck is unavailable', () => {
+  test('documents SLOP, SUS, OK verdict interpretation', () => {
+    const hasSLOP = anyLineHasAll(model.lines, ['slop']);
+    const hasSUS = anyLineHasAll(model.lines, ['sus']);
+    const hasOK = anyLineHasAll(model.lines, ['ok']);
+    assert.ok(hasSLOP && hasSUS && hasOK, 'researcher must document SLOP, SUS, OK verdict interpretation');
+  });
+
+  test('documents [ASSUMED] tag for WebSearch-discovered packages not verified against authoritative source', () => {
     const hasAssumedLine = anyLineHasAll(model.lines, ['assumed']);
-    const hasSlopcheckUnavailableLine = model.lines.some((line) => {
-      const slopcheckMention = hasAllTokens(line, ['slopcheck']);
-      const unavailableMention =
-        hasAllTokens(line, ['not', 'available']) ||
-        hasAllTokens(line, ['not', 'found']) ||
-        hasAllTokens(line, ['unavailable']) ||
-        hasAllTokens(line, ['cannot', 'installed']);
-      return slopcheckMention && unavailableMention;
-    });
-
+    const hasWebSearchOrTraining = model.lines.some((line) =>
+      hasAllTokens(line, ['websearch']) || hasAllTokens(line, ['training'])
+    );
     assert.ok(
-      hasAssumedLine && hasSlopcheckUnavailableLine,
-      'researcher must document [ASSUMED] fallback when slopcheck cannot run'
+      hasAssumedLine && hasWebSearchOrTraining,
+      'researcher must document [ASSUMED] tag for packages from non-authoritative sources'
     );
   });
 });
@@ -253,7 +254,8 @@ describe('gsd-phase-researcher.md — Package Legitimacy Audit section in templa
     const table = parseMarkdownTable(section.body);
     assert.ok(table, 'Package Legitimacy Audit section must include a markdown table');
 
-    const expected = ['Package', 'Registry', 'Age', 'Downloads', 'slopcheck', 'Disposition'];
+    // 'slopcheck' column renamed to 'Verdict' to reflect the code seam (gsd-tools query package-legitimacy)
+    const expected = ['Package', 'Registry', 'Age', 'Downloads', 'Verdict', 'Disposition'];
     for (const column of expected) {
       assert.ok(table.headers.includes(column), `audit table must have "${column}" column`);
     }
@@ -305,9 +307,11 @@ describe('gsd-phase-researcher.md — no npx --yes auto-download', () => {
     assert.equal(found, false, 'researcher must not invoke npx --yes in any code block');
   });
 
-  test('ctx7 CLI fallback uses command -v guard', () => {
-    const found = model.codeBlocks.some((block) => hasAllTokens(block, ['command', '-v', 'ctx7']));
-    assert.ok(found, 'ctx7 CLI fallback must guard with command -v ctx7 before invocation');
+  test('context7 is accessed via mcp__context7__ tools (not raw CLI)', () => {
+    // The research-plan seam routes context7 queries; the agent calls MCP tools directly.
+    // Verify the provider table references mcp__context7__ rather than a raw ctx7 CLI invocation.
+    const hasMcpContext7 = anyLineHasAll(model.lines, ['mcp__context7__']);
+    assert.ok(hasMcpContext7, 'researcher must reference mcp__context7__ tools for context7 access');
   });
 });
 
