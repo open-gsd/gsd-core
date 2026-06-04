@@ -85,7 +85,7 @@ describe('research-store: getResearch missing key', () => {
 
   test('returns {hit:false, stale:false, entry:null} for missing key, does not throw', () => {
     assert.doesNotThrow(() => {
-      const result = getResearch(tmpCwd, 'nonexistentkey', { homeDir: tmpHome, kind: 'web' });
+      const result = getResearch(tmpCwd, 'nonexistentkey', { homeDir: tmpHome });
       assert.equal(result.hit, false);
       assert.equal(result.stale, false);
       assert.equal(result.entry, null);
@@ -119,14 +119,14 @@ describe('research-store: getResearch corrupt file', () => {
   });
 
   test('returns {hit:false, stale:false, entry:null} on corrupt JSON, does not throw', () => {
-    // Write garbage JSON to the expected path for a 'web' kind entry
+    // Write garbage JSON to the expected path for a 'web' source (project tier)
     const dir = resolveStorePath(tmpCwd, 'web', { homeDir: tmpHome });
     fs.mkdirSync(dir, { recursive: true });
     const corruptKey = 'corruptkey123';
     fs.writeFileSync(path.join(dir, `${corruptKey}.json`), '{');
 
     assert.doesNotThrow(() => {
-      const result = getResearch(tmpCwd, corruptKey, { homeDir: tmpHome, kind: 'web' });
+      const result = getResearch(tmpCwd, corruptKey, { homeDir: tmpHome });
       assert.equal(result.hit, false);
       assert.equal(result.stale, false);
       assert.equal(result.entry, null);
@@ -188,10 +188,11 @@ describe('research-store: staleness boundary (clock seam)', () => {
 
   function putAtZero(cwd, home, key) {
     const clockZero = { now: () => 0 };
+    // version:'4.17.21' prevents the blank-version TTL cap so TTL stays at 30d
     putResearch(
       cwd,
       key,
-      { content: 'data', source: 'curated', provider: 'p', confidence: 'HIGH', kind: 'docs' },
+      { content: 'data', source: 'curated', provider: 'p', confidence: 'HIGH', kind: 'docs', version: '4.17.21' },
       { clock: clockZero, homeDir: home }
     );
   }
@@ -199,7 +200,7 @@ describe('research-store: staleness boundary (clock seam)', () => {
   test('now = ttl-1 → stale:false', () => {
     const key = researchKey({ ecosystem: 'x', kind: 'docs', query: 'ttl-minus-1' });
     putAtZero(tmpCwd, tmpHome, key);
-    const result = getResearch(tmpCwd, key, { clock: { now: () => TTL_30D - 1 }, homeDir: tmpHome, kind: 'docs' });
+    const result = getResearch(tmpCwd, key, { clock: { now: () => TTL_30D - 1 }, homeDir: tmpHome });
     assert.equal(result.hit, true);
     assert.equal(result.stale, false, 'age = ttl-1 should NOT be stale');
   });
@@ -207,7 +208,7 @@ describe('research-store: staleness boundary (clock seam)', () => {
   test('now = ttl → stale:false (strict > boundary: equal is not stale)', () => {
     const key = researchKey({ ecosystem: 'x', kind: 'docs', query: 'ttl-exact' });
     putAtZero(tmpCwd, tmpHome, key);
-    const result = getResearch(tmpCwd, key, { clock: { now: () => TTL_30D }, homeDir: tmpHome, kind: 'docs' });
+    const result = getResearch(tmpCwd, key, { clock: { now: () => TTL_30D }, homeDir: tmpHome });
     assert.equal(result.hit, true);
     assert.equal(result.stale, false, 'age = ttl exactly should NOT be stale (strict >)');
   });
@@ -215,45 +216,204 @@ describe('research-store: staleness boundary (clock seam)', () => {
   test('now = ttl+1 → stale:true', () => {
     const key = researchKey({ ecosystem: 'x', kind: 'docs', query: 'ttl-plus-1' });
     putAtZero(tmpCwd, tmpHome, key);
-    const result = getResearch(tmpCwd, key, { clock: { now: () => TTL_30D + 1 }, homeDir: tmpHome, kind: 'docs' });
+    const result = getResearch(tmpCwd, key, { clock: { now: () => TTL_30D + 1 }, homeDir: tmpHome });
     assert.equal(result.hit, true);
     assert.equal(result.stale, true, 'age = ttl+1 should be stale');
   });
 });
 
 // ---------------------------------------------------------------------------
-// Cycle 8: resolveStorePath tiers
+// Cycle 8: resolveStorePath tiers — source-derived (I1)
 // ---------------------------------------------------------------------------
 
 describe('research-store: resolveStorePath tiers', () => {
   const FAKE_HOME = '/fake/home';
   const FAKE_CWD = '/fake/cwd';
 
-  test("kind 'docs' (curated) → under injected homeDir/.gsd/research-cache", () => {
-    const p = resolveStorePath(FAKE_CWD, 'docs', { homeDir: FAKE_HOME });
+  test("source 'curated' → under injected homeDir/.gsd/research-cache", () => {
+    const p = resolveStorePath(FAKE_CWD, 'curated', { homeDir: FAKE_HOME });
     assert.equal(p, path.join(FAKE_HOME, '.gsd', 'research-cache'));
   });
 
-  test("kind 'web' (project) → under cwd/.planning/research/.cache", () => {
+  test("source 'web' (project) → under cwd/.planning/research/.cache", () => {
     const p = resolveStorePath(FAKE_CWD, 'web', { homeDir: FAKE_HOME });
     assert.equal(p, path.join(FAKE_CWD, '.planning', 'research', '.cache'));
   });
 
-  test("kind 'synthesis' (project) → under cwd/.planning/research/.cache", () => {
+  test("source 'synthesis' (project) → under cwd/.planning/research/.cache", () => {
     const p = resolveStorePath(FAKE_CWD, 'synthesis', { homeDir: FAKE_HOME });
     assert.equal(p, path.join(FAKE_CWD, '.planning', 'research', '.cache'));
   });
 
-  test("kind 'legitimacy' (project) → under cwd/.planning/research/.cache", () => {
+  test("source 'legitimacy' (project) → under cwd/.planning/research/.cache", () => {
     const p = resolveStorePath(FAKE_CWD, 'legitimacy', { homeDir: FAKE_HOME });
     assert.equal(p, path.join(FAKE_CWD, '.planning', 'research', '.cache'));
   });
 
   test('paths are absolute', () => {
-    const docs = resolveStorePath(FAKE_CWD, 'docs', { homeDir: FAKE_HOME });
+    const curated = resolveStorePath(FAKE_CWD, 'curated', { homeDir: FAKE_HOME });
     const web = resolveStorePath(FAKE_CWD, 'web', { homeDir: FAKE_HOME });
-    assert.ok(path.isAbsolute(docs));
+    assert.ok(path.isAbsolute(curated));
     assert.ok(path.isAbsolute(web));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// I1 REGRESSION: putResearch with source:'web', kind:'docs' → project tier
+// (currently fails: kind:'docs' forces user tier regardless of source)
+// ---------------------------------------------------------------------------
+
+describe('research-store: I1 regression — source is the tier axis', () => {
+  let tmpCwd;
+  let tmpHome;
+
+  beforeEach(() => {
+    tmpCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rs-i1-cwd-'));
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rs-i1-home-'));
+  });
+
+  afterEach(() => {
+    cleanup(tmpCwd);
+    cleanup(tmpHome);
+  });
+
+  test('source:web + kind:docs → file in PROJECT dir, NOT user dir', () => {
+    const key = researchKey({ ecosystem: 'npm', library: 'axios', version: '1.0.0', query: 'get', kind: 'docs' });
+    putResearch(
+      tmpCwd,
+      key,
+      { content: 'web data', source: 'web', provider: 'web', confidence: 'HIGH', kind: 'docs' },
+      { homeDir: tmpHome }
+    );
+
+    const projectFile = path.join(tmpCwd, '.planning', 'research', '.cache', `${key}.json`);
+    const userFile = path.join(tmpHome, '.gsd', 'research-cache', `${key}.json`);
+
+    assert.ok(fs.existsSync(projectFile), 'file should exist in project dir (.planning/research/.cache)');
+    assert.ok(!fs.existsSync(userFile), 'file should NOT exist in user dir (~/.gsd/research-cache)');
+  });
+
+  test('source:curated + kind:web → file in USER dir, NOT project dir', () => {
+    const key = researchKey({ ecosystem: 'npm', library: 'zod', version: '3.0.0', query: 'parse', kind: 'web' });
+    putResearch(
+      tmpCwd,
+      key,
+      { content: 'curated data', source: 'curated', provider: 'ctx7', confidence: 'HIGH', kind: 'web' },
+      { homeDir: tmpHome }
+    );
+
+    const projectFile = path.join(tmpCwd, '.planning', 'research', '.cache', `${key}.json`);
+    const userFile = path.join(tmpHome, '.gsd', 'research-cache', `${key}.json`);
+
+    assert.ok(fs.existsSync(userFile), 'file should exist in user dir (~/.gsd/research-cache)');
+    assert.ok(!fs.existsSync(projectFile), 'file should NOT exist in project dir');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W4 REGRESSION: getResearch prefers FRESHEST across both tiers
+// (currently returns first-match regardless of staleness)
+// ---------------------------------------------------------------------------
+
+describe('research-store: W4a regression — prefer fresh over stale across tiers', () => {
+  const DAY_MS = 86_400_000;
+  let tmpCwd;
+  let tmpHome;
+
+  beforeEach(() => {
+    tmpCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rs-w4-cwd-'));
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rs-w4-home-'));
+  });
+
+  afterEach(() => {
+    cleanup(tmpCwd);
+    cleanup(tmpHome);
+  });
+
+  test('fresh project entry wins over stale curated entry for same key', () => {
+    // After fix: source derives tier. We use distinct source values so entries land in different tiers.
+    // We compute the key without kind so both entries share the same key.
+    const key = researchKey({ ecosystem: 'npm', library: 'react', version: '18.0.0', query: 'hooks' });
+
+    // Seed a STALE curated entry directly into user tier directory
+    const userDir = path.join(tmpHome, '.gsd', 'research-cache');
+    fs.mkdirSync(userDir, { recursive: true });
+    const staleEntry = {
+      content: 'stale curated content',
+      source: 'curated',
+      provider: 'ctx7',
+      confidence: 'HIGH',
+      fetched_at: new Date(0).toISOString(), // epoch → always stale at t=100d
+      ttl: 30 * DAY_MS,
+      kind: 'docs',
+    };
+    fs.writeFileSync(path.join(userDir, `${key}.json`), JSON.stringify(staleEntry));
+
+    // Seed a FRESH web entry directly into project tier directory
+    const freshClock = { now: () => 100 * DAY_MS }; // well beyond the curated entry's TTL
+    const projectDir = path.join(tmpCwd, '.planning', 'research', '.cache');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const freshEntry = {
+      content: 'fresh web content',
+      source: 'web',
+      provider: 'web',
+      confidence: 'HIGH',
+      fetched_at: new Date(100 * DAY_MS).toISOString(), // brand new
+      ttl: DAY_MS,
+      kind: 'docs',
+    };
+    fs.writeFileSync(path.join(projectDir, `${key}.json`), JSON.stringify(freshEntry));
+
+    // Now at freshClock time, curated is stale (age=100d > 30d ttl) but web is fresh (age=0 < 1d ttl)
+    const result = getResearch(tmpCwd, key, { clock: freshClock, homeDir: tmpHome });
+
+    assert.equal(result.hit, true, 'should find a hit');
+    assert.equal(result.stale, false, 'should return the FRESH entry (stale:false)');
+    assert.equal(result.entry.content, 'fresh web content', 'should return fresh web content, not stale curated');
+    assert.equal(result.entry.source, 'web', 'source should be web');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W4b REGRESSION: blank version caps TTL at DAY_MS
+// (currently blank version still gets 30d curated TTL)
+// ---------------------------------------------------------------------------
+
+describe('research-store: W4b regression — blank version caps TTL', () => {
+  const DAY_MS = 86_400_000;
+  let tmpCwd;
+  let tmpHome;
+
+  beforeEach(() => {
+    tmpCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rs-w4b-cwd-'));
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rs-w4b-home-'));
+  });
+
+  afterEach(() => {
+    cleanup(tmpCwd);
+    cleanup(tmpHome);
+  });
+
+  test('curated + HIGH + version blank → ttl = DAY_MS (capped)', () => {
+    const key = researchKey({ ecosystem: 'npm', library: 'lodash', version: '', query: 'chunk', kind: 'docs' });
+    const entry = putResearch(
+      tmpCwd,
+      key,
+      { content: 'data', source: 'curated', provider: 'ctx7', confidence: 'HIGH', kind: 'docs', version: '' },
+      { homeDir: tmpHome }
+    );
+    assert.equal(entry.ttl, DAY_MS, 'blank version should cap TTL at DAY_MS, not 30*DAY_MS');
+  });
+
+  test('curated + HIGH + version "1.2.3" → ttl = 30 * DAY_MS (uncapped)', () => {
+    const key = researchKey({ ecosystem: 'npm', library: 'lodash', version: '1.2.3', query: 'chunk', kind: 'docs' });
+    const entry = putResearch(
+      tmpCwd,
+      key,
+      { content: 'data', source: 'curated', provider: 'ctx7', confidence: 'HIGH', kind: 'docs', version: '1.2.3' },
+      { homeDir: tmpHome }
+    );
+    assert.equal(entry.ttl, 30 * DAY_MS, 'non-blank version should NOT cap TTL');
   });
 });
 
@@ -288,7 +448,7 @@ describe('research-store: tracer bullet round-trip', () => {
 
     assert.equal(stored.content, 'lodash chunk docs', 'putResearch returns entry with content');
 
-    const result = getResearch(tmpCwd, key, { clock: fixedClock, homeDir: tmpHome, kind: 'docs' });
+    const result = getResearch(tmpCwd, key, { clock: fixedClock, homeDir: tmpHome });
 
     assert.equal(result.hit, true, 'hit should be true');
     assert.equal(result.stale, false, 'stale should be false at time 0');

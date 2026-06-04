@@ -1667,13 +1667,15 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
     // ─── Research Store ────────────────────────────────────────────────────
     //
     // research-store get <key> [--kind <k>]
-    //   -> getResearch(cwd, key, { kind }); core.output(result, raw)
+    //   -> getResearch(cwd, key, { homeDir }); searches both tiers; core.output(result, raw)
+    //   (--kind is accepted for backward compatibility but no longer drives tier selection)
     // research-store put <key> --content <str> --source <s> --provider <p>
     //                           --confidence <c> --kind <k>
     //   -> putResearch(cwd, key, { content, source, provider, confidence, kind })
     //
-    // curated-tier (kind=docs) writes to process.env.HOME/.gsd/research-cache
-    // so tests may override the home directory by setting the HOME env var.
+    // Tier is derived from source: 'curated' source writes to process.env.HOME/.gsd/research-cache;
+    // all other sources write to cwd/.planning/research/.cache.
+    // Tests may override the home directory by setting the HOME env var.
 
     case 'research-store': {
       const researchStore = require('./lib/research-store.cjs');
@@ -1684,9 +1686,8 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         if (!key || key.startsWith('--')) {
           error('Usage: gsd-tools research-store get <key> [--kind <k>]', ERROR_REASON.USAGE);
         }
-        const kindIdx = args.indexOf('--kind');
-        const kind = kindIdx !== -1 ? args[kindIdx + 1] : undefined;
-        const result = researchStore.getResearch(cwd, key, { kind, homeDir });
+        // --kind is accepted but no longer drives tier selection; getResearch searches both tiers
+        const result = researchStore.getResearch(cwd, key, { homeDir });
         core.output(result, raw);
       } else if (subcommand === 'put') {
         const key = args[2];

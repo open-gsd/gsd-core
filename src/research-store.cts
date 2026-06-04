@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { platformWriteSync } from './shell-command-projection.cjs';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -58,7 +59,15 @@ interface PutOptions {
 interface GetOptions {
   clock?: ClockLike;
   homeDir?: string;
-  kind?: string;
+}
+
+interface PutPayload {
+  content: unknown;
+  source: string;
+  provider: string;
+  confidence: string;
+  kind: string;
+  version?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -92,18 +101,21 @@ function researchKey(input: ResearchKeyInput): string {
 function ttlForSource(source: string, confidence: string): number {
   if (source === 'curated' && confidence === 'HIGH') return 30 * DAY_MS;
   if (source === 'curated' && confidence === 'MEDIUM') return 7 * DAY_MS;
-  if (source === 'web' || confidence === 'LOW') return DAY_MS;
   return DAY_MS;
 }
 
 // ---------------------------------------------------------------------------
-// resolveStorePath
+// tierForSource / resolveStorePath
 // ---------------------------------------------------------------------------
 
-const CURATED_KINDS = new Set(['docs']);
+const CURATED_SOURCES = new Set(['curated']);
 
-function resolveStorePath(cwd: string, kind: string, { homeDir = os.homedir() }: { homeDir?: string } = {}): string {
-  if (CURATED_KINDS.has(kind)) {
+function tierForSource(source: string): 'user' | 'project' {
+  return CURATED_SOURCES.has(source) ? 'user' : 'project';
+}
+
+function resolveStorePath(cwd: string, source: string, { homeDir = os.homedir() }: { homeDir?: string } = {}): string {
+  if (tierForSource(source) === 'user') {
     return path.join(homeDir, '.gsd', 'research-cache');
   }
   return path.join(cwd, '.planning', 'research', '.cache');
@@ -116,16 +128,21 @@ function resolveStorePath(cwd: string, kind: string, { homeDir = os.homedir() }:
 function putResearch(
   cwd: string,
   key: string,
-  payload: { content: unknown; source: string; provider: string; confidence: string; kind: string },
+  payload: PutPayload,
   { clock = Date, homeDir = os.homedir() }: PutOptions = {}
 ): ResearchEntry {
-  const { content, source, provider, confidence, kind } = payload;
-  const ttl = ttlForSource(source, confidence);
+  const { content, source, provider, confidence, kind, version } = payload;
+  let ttl = ttlForSource(source, confidence);
+  // Cap TTL when version is blank/missing — a versionless curated entry must not
+  // get the long 30-day window since we can't know if it's still current.
+  if (!version) {
+    ttl = Math.min(ttl, DAY_MS);
+  }
   const fetched_at = new Date(clock.now()).toISOString();
   const entry: ResearchEntry = { content, source, provider, confidence, fetched_at, ttl, kind };
-  const dir = resolveStorePath(cwd, kind, { homeDir });
+  const dir = resolveStorePath(cwd, source, { homeDir });
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, `${key}.json`), JSON.stringify(entry));
+  platformWriteSync(path.join(dir, `${key}.json`), JSON.stringify(entry));
   return entry;
 }
 
@@ -133,13 +150,22 @@ function putResearch(
 // getResearch
 // ---------------------------------------------------------------------------
 
-function getResearch(cwd: string, key: string, { clock = Date, homeDir = os.homedir(), kind }: GetOptions = {}): GetResult {
+function getResearch(cwd: string, key: string, { clock = Date, homeDir = os.homedir() }: GetOptions = {}): GetResult {
   try {
-    // If kind is provided, check only that tier; otherwise search both.
-    const searchKinds: string[] = kind !== undefined ? [kind] : ['docs', 'web'];
+    // Search both physical tiers: user (curated) and project (web/etc.)
+    const userDir = path.join(homeDir, '.gsd', 'research-cache');
+    const projectDir = path.join(cwd, '.planning', 'research', '.cache');
+    const tierDirs = [userDir, projectDir];
 
-    for (const k of searchKinds) {
-      const dir = resolveStorePath(cwd, k, { homeDir });
+    interface Candidate {
+      entry: ResearchEntry;
+      stale: boolean;
+      age: number;
+    }
+
+    const candidates: Candidate[] = [];
+
+    for (const dir of tierDirs) {
       const filePath = path.join(dir, `${key}.json`);
       if (!fs.existsSync(filePath)) continue;
 
@@ -147,15 +173,27 @@ function getResearch(cwd: string, key: string, { clock = Date, homeDir = os.home
       try {
         entry = JSON.parse(fs.readFileSync(filePath, 'utf8')) as ResearchEntry;
       } catch {
-        return { hit: false, stale: false, entry: null };
+        // Corrupt file in this tier — skip it
+        continue;
       }
 
       const age = clock.now() - Date.parse(entry.fetched_at);
       const stale = age > entry.ttl;
-      return { hit: true, stale, entry };
+      candidates.push({ entry, stale, age });
     }
 
-    return { hit: false, stale: false, entry: null };
+    if (candidates.length === 0) {
+      return { hit: false, stale: false, entry: null };
+    }
+
+    // Prefer: non-stale over stale; among same-staleness, lowest age (most recent)
+    candidates.sort((a, b) => {
+      if (a.stale !== b.stale) return a.stale ? 1 : -1; // non-stale first
+      return a.age - b.age; // lower age (more recent) first
+    });
+
+    const best = candidates[0];
+    return { hit: true, stale: best.stale, entry: best.entry };
   } catch {
     return { hit: false, stale: false, entry: null };
   }
@@ -165,4 +203,4 @@ function getResearch(cwd: string, key: string, { clock = Date, homeDir = os.home
 // Exports
 // ---------------------------------------------------------------------------
 
-export = { researchKey, ttlForSource, resolveStorePath, putResearch, getResearch };
+export = { researchKey, ttlForSource, tierForSource, resolveStorePath, putResearch, getResearch };
