@@ -1686,6 +1686,9 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         if (!key || key.startsWith('--')) {
           error('Usage: gsd-tools research-store get <key> [--kind <k>]', ERROR_REASON.USAGE);
         }
+        if (!researchStore.isValidResearchKey(key)) {
+          error('research-store: <key> must be a 64-char sha256 hex (use research-plan to obtain keys)', ERROR_REASON.USAGE);
+        }
         // --kind is accepted but no longer drives tier selection; getResearch searches both tiers
         const result = researchStore.getResearch(cwd, key, { homeDir });
         core.output(result, raw);
@@ -1693,6 +1696,9 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         const key = args[2];
         if (!key || key.startsWith('--')) {
           error('Usage: gsd-tools research-store put <key> --content <str> --source <s> --provider <p> --confidence <c> --kind <k>', ERROR_REASON.USAGE);
+        }
+        if (!researchStore.isValidResearchKey(key)) {
+          error('research-store: <key> must be a 64-char sha256 hex (use research-plan to obtain keys)', ERROR_REASON.USAGE);
         }
         const contentIdx = args.indexOf('--content');
         const sourceIdx = args.indexOf('--source');

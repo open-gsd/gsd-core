@@ -122,6 +122,19 @@ function resolveStorePath(cwd: string, source: string, { homeDir = os.homedir() 
 }
 
 // ---------------------------------------------------------------------------
+// isValidResearchKey
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns true iff key is a valid 64-character lowercase hexadecimal SHA-256
+ * string (the exact shape produced by researchKey).  Any other shape —
+ * including path-traversal sequences — is rejected.
+ */
+function isValidResearchKey(key: unknown): boolean {
+  return typeof key === 'string' && /^[0-9a-f]{64}$/.test(key);
+}
+
+// ---------------------------------------------------------------------------
 // putResearch
 // ---------------------------------------------------------------------------
 
@@ -131,6 +144,11 @@ function putResearch(
   payload: PutPayload,
   { clock = Date, homeDir = os.homedir() }: PutOptions = {}
 ): ResearchEntry {
+  // Defense-in-depth: reject any key that is not a 64-char sha256 hex string.
+  if (!isValidResearchKey(key)) {
+    throw new Error('invalid research key');
+  }
+
   const { content, source, provider, confidence, kind, version } = payload;
   let ttl = ttlForSource(source, confidence);
   // Cap TTL when version is blank/missing — a versionless curated entry must not
@@ -141,8 +159,17 @@ function putResearch(
   const fetched_at = new Date(clock.now()).toISOString();
   const entry: ResearchEntry = { content, source, provider, confidence, fetched_at, ttl, kind };
   const dir = resolveStorePath(cwd, source, { homeDir });
+
+  // Belt-and-suspenders: ensure the resolved file path stays inside the store dir.
+  const resolvedDir = path.resolve(dir);
+  const filePath = path.join(dir, `${key}.json`);
+  const resolvedFile = path.resolve(filePath);
+  if (!resolvedFile.startsWith(resolvedDir + path.sep)) {
+    throw new Error('invalid research key');
+  }
+
   fs.mkdirSync(dir, { recursive: true });
-  platformWriteSync(path.join(dir, `${key}.json`), JSON.stringify(entry));
+  platformWriteSync(filePath, JSON.stringify(entry));
   return entry;
 }
 
@@ -151,6 +178,11 @@ function putResearch(
 // ---------------------------------------------------------------------------
 
 function getResearch(cwd: string, key: string, { clock = Date, homeDir = os.homedir() }: GetOptions = {}): GetResult {
+  // Defense-in-depth: reject any key that is not a 64-char sha256 hex string.
+  if (!isValidResearchKey(key)) {
+    return { hit: false, stale: false, entry: null };
+  }
+
   try {
     // Search both physical tiers: user (curated) and project (web/etc.)
     const userDir = path.join(homeDir, '.gsd', 'research-cache');
@@ -166,7 +198,11 @@ function getResearch(cwd: string, key: string, { clock = Date, homeDir = os.home
     const candidates: Candidate[] = [];
 
     for (const dir of tierDirs) {
+      const resolvedDir = path.resolve(dir);
       const filePath = path.join(dir, `${key}.json`);
+      // Belt-and-suspenders: ensure path stays inside tier dir
+      if (!path.resolve(filePath).startsWith(resolvedDir + path.sep)) continue;
+
       if (!fs.existsSync(filePath)) continue;
 
       let entry: ResearchEntry;
@@ -177,7 +213,17 @@ function getResearch(cwd: string, key: string, { clock = Date, homeDir = os.home
         continue;
       }
 
-      const age = clock.now() - Date.parse(entry.fetched_at);
+      // Finding 3: validate entry metadata shape before accepting as a candidate.
+      // An entry with missing/invalid fetched_at or ttl must be treated as a miss.
+      const parsedFetchedAt = Date.parse(entry.fetched_at);
+      if (!Number.isFinite(parsedFetchedAt)) continue;
+      if (
+        typeof entry.ttl !== 'number' ||
+        !Number.isFinite(entry.ttl) ||
+        entry.ttl <= 0
+      ) continue;
+
+      const age = clock.now() - parsedFetchedAt;
       const stale = age > entry.ttl;
       candidates.push({ entry, stale, age });
     }
@@ -203,4 +249,4 @@ function getResearch(cwd: string, key: string, { clock = Date, homeDir = os.home
 // Exports
 // ---------------------------------------------------------------------------
 
-export = { researchKey, ttlForSource, tierForSource, resolveStorePath, putResearch, getResearch };
+export = { isValidResearchKey, researchKey, ttlForSource, tierForSource, resolveStorePath, putResearch, getResearch };

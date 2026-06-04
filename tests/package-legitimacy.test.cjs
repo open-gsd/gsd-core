@@ -555,3 +555,171 @@ describe('I3 — version parameter forwarded to registry.lookup', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// FINDING 2 REGRESSION — version-specific age uses version-level metadata
+// Package-level/first-publish is OLD (>1yr) but requested version is 2 days old.
+// With version provided, publishedAt must reflect the requested version → too-new.
+// ---------------------------------------------------------------------------
+
+describe('Finding 2 — version-specific publishedAt from requested version, not package-level', () => {
+  // Fixed clock: 2024-01-01
+  const F2_FIXED_MS = Date.UTC(2024, 0, 1, 0, 0, 0, 0);
+  const f2Clock = { now: () => F2_FIXED_MS };
+
+  // Package-level first-publish: 2 years ago (old, would NOT be too-new)
+  const packageLevelOld = new Date(F2_FIXED_MS - 730 * 86_400_000).toISOString();
+  // Requested version published: 2 days ago (new, SHOULD trigger too-new)
+  const versionRecent = new Date(F2_FIXED_MS - 2 * 86_400_000).toISOString();
+
+  test('npm: version-specific publishedAt is recent → too-new (not old package-level date)', async () => {
+    // npm payload: package existed for 2yr, but the requested version 2.0.0 was published 2d ago
+    const npmPayload = JSON.stringify({
+      'dist-tags': { latest: '1.0.0' },
+      versions: {
+        '1.0.0': { scripts: {}, repository: { url: 'https://github.com/x/y' } },
+        '2.0.0': { scripts: {}, repository: { url: 'https://github.com/x/y' } },
+      },
+      time: {
+        created: packageLevelOld,
+        '1.0.0': packageLevelOld,
+        '2.0.0': versionRecent,  // requested version is recent
+        modified: new Date(F2_FIXED_MS - 1 * 86_400_000).toISOString(),
+      },
+    });
+    let callCount = 0;
+    const transport = async (_url, _timeoutMs) => {
+      callCount++;
+      if (callCount === 1) return { statusCode: 200, body: npmPayload };
+      return { statusCode: 200, body: JSON.stringify({ downloads: 50000 }) };
+    };
+    _setHttpGet(transport);
+    try {
+      const results = await checkPackages(
+        { ecosystem: 'npm', packages: ['old-pkg-new-version'], version: '2.0.0' },
+        { clock: f2Clock, thresholds: { ...DEFAULT_THRESHOLDS, minAgeDays: 30, requireRepo: false } }
+      );
+      assert.equal(results.length, 1);
+      const r = results[0];
+      // publishedAt should be versionRecent (2 days ago), not packageLevelOld
+      assert.ok(
+        r.signals.publishedAt === versionRecent,
+        `npm: signals.publishedAt should be version-specific (${versionRecent}), got: ${r.signals.publishedAt}`
+      );
+      assert.ok(
+        r.reasons.includes('too-new'),
+        `npm: version-specific age (2d) should trigger too-new. reasons: ${r.reasons}`
+      );
+    } finally {
+      _setHttpGet(null);
+    }
+  });
+
+  test('pypi: version-specific upload_time is recent → too-new (not package-level urls[0])', async () => {
+    // PyPI payload: urls[] is for latest release (old), but releases['2.0.0'] is recent
+    const pypiPayload = JSON.stringify({
+      info: {
+        name: 'old-pypi-pkg',
+        project_urls: { Source: 'https://github.com/x/y' },
+        home_page: null,
+      },
+      urls: [
+        // This is the package-level / latest-release upload time (old)
+        { upload_time_iso_8601: packageLevelOld },
+      ],
+      releases: {
+        '1.0.0': [{ upload_time_iso_8601: packageLevelOld }],
+        '2.0.0': [{ upload_time_iso_8601: versionRecent }],  // requested version is recent
+      },
+    });
+    const transport = async (_url, _timeoutMs) => ({ statusCode: 200, body: pypiPayload });
+    _setHttpGet(transport);
+    try {
+      const results = await checkPackages(
+        { ecosystem: 'pypi', packages: ['old-pypi-pkg'], version: '2.0.0' },
+        { clock: f2Clock, thresholds: { ...DEFAULT_THRESHOLDS, minAgeDays: 30, requireRepo: false } }
+      );
+      assert.equal(results.length, 1);
+      const r = results[0];
+      assert.ok(
+        r.signals.publishedAt === versionRecent,
+        `pypi: signals.publishedAt should be version-specific (${versionRecent}), got: ${r.signals.publishedAt}`
+      );
+      assert.ok(
+        r.reasons.includes('too-new'),
+        `pypi: version-specific age (2d) should trigger too-new. reasons: ${r.reasons}`
+      );
+    } finally {
+      _setHttpGet(null);
+    }
+  });
+
+  test('crates: version-specific created_at is recent → too-new (not crate.created_at)', async () => {
+    const cratesPayload = JSON.stringify({
+      crate: {
+        name: 'old-crate',
+        repository: 'https://github.com/x/y',
+        created_at: packageLevelOld,  // package first-created: old
+        recent_downloads: 50000,
+      },
+      versions: [
+        { num: '1.0.0', created_at: packageLevelOld },
+        { num: '2.0.0', created_at: versionRecent },  // requested version is recent
+      ],
+    });
+    const transport = async (_url, _timeoutMs) => ({ statusCode: 200, body: cratesPayload });
+    _setHttpGet(transport);
+    try {
+      const results = await checkPackages(
+        { ecosystem: 'crates', packages: ['old-crate'], version: '2.0.0' },
+        { clock: f2Clock, thresholds: { ...DEFAULT_THRESHOLDS, minAgeDays: 30, requireRepo: false } }
+      );
+      assert.equal(results.length, 1);
+      const r = results[0];
+      assert.ok(
+        r.signals.publishedAt === versionRecent,
+        `crates: signals.publishedAt should be version-specific (${versionRecent}), got: ${r.signals.publishedAt}`
+      );
+      assert.ok(
+        r.reasons.includes('too-new'),
+        `crates: version-specific age (2d) should trigger too-new. reasons: ${r.reasons}`
+      );
+    } finally {
+      _setHttpGet(null);
+    }
+  });
+
+  test('npm: without version, falls back to package-level date (old → not too-new)', async () => {
+    const npmPayload = JSON.stringify({
+      'dist-tags': { latest: '1.0.0' },
+      versions: {
+        '1.0.0': { scripts: {}, repository: { url: 'https://github.com/x/y' } },
+      },
+      time: {
+        created: packageLevelOld,
+        '1.0.0': packageLevelOld,
+        modified: packageLevelOld,
+      },
+    });
+    let callCount = 0;
+    const transport = async (_url, _timeoutMs) => {
+      callCount++;
+      if (callCount === 1) return { statusCode: 200, body: npmPayload };
+      return { statusCode: 200, body: JSON.stringify({ downloads: 50000 }) };
+    };
+    _setHttpGet(transport);
+    try {
+      const results = await checkPackages(
+        { ecosystem: 'npm', packages: ['old-pkg'] },  // no version
+        { clock: f2Clock, thresholds: { ...DEFAULT_THRESHOLDS, minAgeDays: 30, requireRepo: false } }
+      );
+      const r = results[0];
+      assert.ok(
+        !r.reasons.includes('too-new'),
+        `Without version, old package should NOT be too-new. reasons: ${r.reasons}`
+      );
+    } finally {
+      _setHttpGet(null);
+    }
+  });
+});

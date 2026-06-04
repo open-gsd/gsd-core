@@ -458,3 +458,182 @@ describe('research-store: tracer bullet round-trip', () => {
     assert.equal(result.entry.confidence, 'HIGH');
   });
 });
+
+// ---------------------------------------------------------------------------
+// FINDING 1 REGRESSION: key validation / path-traversal prevention
+// ---------------------------------------------------------------------------
+
+describe('research-store: isValidResearchKey exported', () => {
+  const { isValidResearchKey } = require('../gsd-core/bin/lib/research-store.cjs');
+
+  test('isValidResearchKey is exported', () => {
+    assert.equal(typeof isValidResearchKey, 'function', 'isValidResearchKey must be exported');
+  });
+
+  test('64-char hex key is valid', () => {
+    assert.equal(isValidResearchKey('a'.repeat(64)), true);
+    assert.equal(isValidResearchKey('0123456789abcdef'.repeat(4)), true);
+  });
+
+  test('short key is invalid', () => {
+    assert.equal(isValidResearchKey('abc'), false);
+  });
+
+  test('traversal key is invalid', () => {
+    assert.equal(isValidResearchKey('../../../etc/passwd'), false);
+  });
+
+  test('non-hex 64-char key is invalid', () => {
+    assert.equal(isValidResearchKey('g'.repeat(64)), false);
+  });
+
+  test('non-string is invalid', () => {
+    assert.equal(isValidResearchKey(null), false);
+    assert.equal(isValidResearchKey(undefined), false);
+    assert.equal(isValidResearchKey(123), false);
+  });
+});
+
+describe('research-store: putResearch rejects traversal key', () => {
+  let tmpCwd;
+  let tmpHome;
+
+  beforeEach(() => {
+    tmpCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rs-trav-cwd-'));
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rs-trav-home-'));
+  });
+
+  afterEach(() => {
+    cleanup(tmpCwd);
+    cleanup(tmpHome);
+  });
+
+  test('putResearch throws on traversal key and does NOT write any file outside cache dir', () => {
+    const traversalKey = '../../../' + 'x'.repeat(10);
+    // Verify no file is created outside
+    const outsideTarget = path.join(os.tmpdir(), 'x'.repeat(10) + '.json');
+    // Remove any pre-existing file at traversal target
+    try { fs.unlinkSync(outsideTarget); } catch { /* ignore */ }
+
+    assert.throws(
+      () => putResearch(tmpCwd, traversalKey, { content: 'evil', source: 'web', provider: 'p', confidence: 'HIGH', kind: 'docs' }, { homeDir: tmpHome }),
+      /invalid research key/i
+    );
+    assert.equal(fs.existsSync(outsideTarget), false, 'traversal target must not be created');
+  });
+
+  test('putResearch throws on short/fake key', () => {
+    assert.throws(
+      () => putResearch(tmpCwd, 'abc', { content: 'x', source: 'web', provider: 'p', confidence: 'HIGH', kind: 'docs' }, { homeDir: tmpHome }),
+      /invalid research key/i
+    );
+  });
+
+  test('putResearch succeeds with valid 64-hex key', () => {
+    const key = researchKey({ ecosystem: 'npm', library: 'react', version: '18.0.0', query: 'hooks', kind: 'docs' });
+    assert.doesNotThrow(() => {
+      putResearch(tmpCwd, key, { content: 'ok', source: 'web', provider: 'p', confidence: 'HIGH', kind: 'docs' }, { homeDir: tmpHome });
+    });
+  });
+});
+
+describe('research-store: getResearch rejects traversal key', () => {
+  let tmpCwd;
+  let tmpHome;
+
+  beforeEach(() => {
+    tmpCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rs-trav2-cwd-'));
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rs-trav2-home-'));
+  });
+
+  afterEach(() => {
+    cleanup(tmpCwd);
+    cleanup(tmpHome);
+  });
+
+  test('getResearch returns {hit:false} on traversal key and does NOT read outside cache dir', () => {
+    const traversalKey = '../../../etc/passwd';
+    const result = getResearch(tmpCwd, traversalKey, { homeDir: tmpHome });
+    assert.equal(result.hit, false, 'traversal key must return hit:false');
+    assert.equal(result.stale, false);
+    assert.equal(result.entry, null);
+  });
+
+  test('getResearch returns {hit:false} on short key', () => {
+    const result = getResearch(tmpCwd, 'k1', { homeDir: tmpHome });
+    assert.equal(result.hit, false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FINDING 3 REGRESSION: malformed cache metadata treated as fresh
+// ---------------------------------------------------------------------------
+
+describe('research-store: getResearch rejects malformed cache metadata', () => {
+  let tmpCwd;
+  let tmpHome;
+
+  beforeEach(() => {
+    tmpCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rs-malformed-cwd-'));
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rs-malformed-home-'));
+  });
+
+  afterEach(() => {
+    cleanup(tmpCwd);
+    cleanup(tmpHome);
+  });
+
+  function writeEntry(dir, key, entry) {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${key}.json`), JSON.stringify(entry));
+  }
+
+  test('missing fetched_at → hit:false (not treated as fresh)', () => {
+    const key = researchKey({ ecosystem: 'npm', library: 'bad', version: '1.0.0', query: 'q', kind: 'docs' });
+    const dir = path.join(tmpCwd, '.planning', 'research', '.cache');
+    writeEntry(dir, key, { content: 'x', source: 'web', provider: 'p', confidence: 'HIGH', kind: 'docs', ttl: 86400000 });
+    // fetched_at is missing
+    const result = getResearch(tmpCwd, key, { homeDir: tmpHome });
+    assert.equal(result.hit, false, 'missing fetched_at must return hit:false');
+  });
+
+  test('ttl = "abc" (string) → hit:false', () => {
+    const key = researchKey({ ecosystem: 'npm', library: 'bad2', version: '1.0.0', query: 'q', kind: 'docs' });
+    const dir = path.join(tmpCwd, '.planning', 'research', '.cache');
+    writeEntry(dir, key, { content: 'x', source: 'web', provider: 'p', confidence: 'HIGH', kind: 'docs', fetched_at: new Date().toISOString(), ttl: 'abc' });
+    const result = getResearch(tmpCwd, key, { homeDir: tmpHome });
+    assert.equal(result.hit, false, 'string ttl must return hit:false');
+  });
+
+  test('ttl = 0 → hit:false', () => {
+    const key = researchKey({ ecosystem: 'npm', library: 'bad3', version: '1.0.0', query: 'q', kind: 'docs' });
+    const dir = path.join(tmpCwd, '.planning', 'research', '.cache');
+    writeEntry(dir, key, { content: 'x', source: 'web', provider: 'p', confidence: 'HIGH', kind: 'docs', fetched_at: new Date().toISOString(), ttl: 0 });
+    const result = getResearch(tmpCwd, key, { homeDir: tmpHome });
+    assert.equal(result.hit, false, 'ttl=0 must return hit:false');
+  });
+
+  test('ttl = -1 (negative) → hit:false', () => {
+    const key = researchKey({ ecosystem: 'npm', library: 'bad4', version: '1.0.0', query: 'q', kind: 'docs' });
+    const dir = path.join(tmpCwd, '.planning', 'research', '.cache');
+    writeEntry(dir, key, { content: 'x', source: 'web', provider: 'p', confidence: 'HIGH', kind: 'docs', fetched_at: new Date().toISOString(), ttl: -1 });
+    const result = getResearch(tmpCwd, key, { homeDir: tmpHome });
+    assert.equal(result.hit, false, 'negative ttl must return hit:false');
+  });
+
+  test('fetched_at = "not-a-date" → hit:false', () => {
+    const key = researchKey({ ecosystem: 'npm', library: 'bad5', version: '1.0.0', query: 'q', kind: 'docs' });
+    const dir = path.join(tmpCwd, '.planning', 'research', '.cache');
+    writeEntry(dir, key, { content: 'x', source: 'web', provider: 'p', confidence: 'HIGH', kind: 'docs', fetched_at: 'not-a-date', ttl: 86400000 });
+    const result = getResearch(tmpCwd, key, { homeDir: tmpHome });
+    assert.equal(result.hit, false, 'invalid fetched_at must return hit:false');
+  });
+
+  test('valid entry still works', () => {
+    const key = researchKey({ ecosystem: 'npm', library: 'good', version: '1.0.0', query: 'q', kind: 'docs' });
+    const dir = path.join(tmpCwd, '.planning', 'research', '.cache');
+    writeEntry(dir, key, { content: 'valid', source: 'web', provider: 'p', confidence: 'HIGH', kind: 'docs', fetched_at: new Date().toISOString(), ttl: 86400000 });
+    const result = getResearch(tmpCwd, key, { homeDir: tmpHome });
+    assert.equal(result.hit, true, 'valid entry should still hit');
+  });
+});

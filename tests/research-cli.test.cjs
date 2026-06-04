@@ -35,7 +35,9 @@ describe('research-store: put then get round-trip', () => {
   test('put stores entry; get returns hit:true, stale:false, correct content', () => {
     const tmpDir = makeTempDir();
     try {
-      const key = 'test-round-trip-key-abc123';
+      // Must be a valid 64-char sha256 hex string (as produced by researchKey).
+      // Using a pre-computed key for 'test-round-trip' to satisfy isValidResearchKey.
+      const key = '4642afa8420709e0902413b46e2f26806499a5df710b602c22a5344f0eb298d0';
 
       // PUT
       const putResult = runGsdTools(
@@ -81,8 +83,10 @@ describe('research-store: get on unknown key', () => {
   test('returns hit:false, entry:null with exit 0', () => {
     const tmpDir = makeTempDir();
     try {
+      // Must be a valid 64-char sha256 hex string — but nothing seeded under this key.
+      const noSuchKey = '5620aa17b85cb82f1d82633c8cfb4799d3e947f58a1775248c96bbeeeb8f8537';
       const result = runGsdTools(
-        ['research-store', 'get', 'no-such-key-xyz', '--kind', 'docs'],
+        ['research-store', 'get', noSuchKey, '--kind', 'docs'],
         tmpDir,
         { HOME: tmpDir },
       );
@@ -299,6 +303,71 @@ describe('package-legitimacy: missing --ecosystem -> usage error', () => {
       );
       assert.ok(!result.success, 'expected non-zero exit when --ecosystem is missing');
       assert.ok(result.exitCode !== 0, `expected non-zero exit code, got ${result.exitCode}`);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FINDING 1 REGRESSION (CLI): research-store put/get must reject non-64-hex keys
+// ---------------------------------------------------------------------------
+
+describe('research-store CLI: traversal/invalid key rejected with usage error', () => {
+  test('put ../../x --content ... → non-zero exit (usage error)', () => {
+    const tmpDir = makeTempDir();
+    try {
+      const result = runGsdTools(
+        [
+          'research-store', 'put', '../../x',
+          '--content', 'evil',
+          '--source', 'web',
+          '--provider', 'p',
+          '--confidence', 'HIGH',
+          '--kind', 'docs',
+        ],
+        tmpDir,
+        { HOME: tmpDir },
+      );
+      assert.ok(!result.success, `expected non-zero exit for traversal key; got: ${result.output}`);
+      assert.ok(result.exitCode !== 0, `expected non-zero exit code, got ${result.exitCode}`);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('get ../../etc/passwd → non-zero exit (usage error)', () => {
+    const tmpDir = makeTempDir();
+    try {
+      const result = runGsdTools(
+        ['research-store', 'get', '../../etc/passwd'],
+        tmpDir,
+        { HOME: tmpDir },
+      );
+      assert.ok(!result.success, `expected non-zero exit for traversal key; got: ${result.output}`);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('put with valid 64-hex key → success', () => {
+    const tmpDir = makeTempDir();
+    try {
+      const researchStore = require('../gsd-core/bin/lib/research-store.cjs');
+      const validKey = researchStore.researchKey({ ecosystem: 'npm', library: 'lodash', version: '4.0.0', query: 'chunk', kind: 'docs' });
+      const result = runGsdTools(
+        [
+          'research-store', 'put', validKey,
+          '--content', 'test content',
+          '--source', 'web',
+          '--provider', 'p',
+          '--confidence', 'HIGH',
+          '--kind', 'docs',
+        ],
+        tmpDir,
+        { HOME: tmpDir },
+      );
+      assert.ok(result.success, `put with valid 64-hex key should succeed; got: ${result.error}`);
     } finally {
       cleanup(tmpDir);
     }

@@ -317,16 +317,28 @@ async function lookupPypi(name: string, version?: string): Promise<PackageSignal
     const info = (data.info as Record<string, unknown>) ?? {};
 
     // I3: when a specific version is requested, verify it exists in releases
+    const releases = (data.releases as Record<string, unknown> | undefined) ?? {};
     if (version !== undefined) {
-      const releases = (data.releases as Record<string, unknown> | undefined) ?? {};
       if (!(version in releases)) {
         return { ...degradedSignals(), exists: false };
       }
     }
 
-    const urls = (data.urls as Array<Record<string, unknown>>) ?? [];
-    const uploadTime =
-      urls.length > 0 ? (urls[0].upload_time_iso_8601 as string | undefined) ?? null : null;
+    // Finding 2: when version is provided, derive publishedAt from the
+    // version-specific release record rather than the package-level urls[] array
+    // (which reflects the latest release, not the requested version).
+    let uploadTime: string | null = null;
+    if (version !== undefined) {
+      const versionFiles = (releases[version] as Array<Record<string, unknown>> | undefined) ?? [];
+      uploadTime =
+        versionFiles.length > 0
+          ? (versionFiles[0].upload_time_iso_8601 as string | undefined) ?? null
+          : null;
+    } else {
+      const urls = (data.urls as Array<Record<string, unknown>>) ?? [];
+      uploadTime =
+        urls.length > 0 ? (urls[0].upload_time_iso_8601 as string | undefined) ?? null : null;
+    }
 
     const projectUrls = info.project_urls as Record<string, string> | undefined;
     const repoUrl =
@@ -362,8 +374,8 @@ async function lookupCrates(name: string, version?: string): Promise<PackageSign
     const krate = (data.crate as Record<string, unknown>) ?? {};
 
     // I3: when a specific version is requested, verify it exists in versions list
+    const versions = (data.versions as Array<Record<string, unknown>> | undefined) ?? [];
     if (version !== undefined) {
-      const versions = (data.versions as Array<Record<string, unknown>> | undefined) ?? [];
       const found = versions.some(
         (v) => (v.num as string | undefined) === version
       );
@@ -373,7 +385,15 @@ async function lookupCrates(name: string, version?: string): Promise<PackageSign
     }
 
     const repoUrl = (krate.repository as string | undefined) ?? null;
-    const created = (krate.created_at as string | undefined) ?? null;
+    // Finding 2: when version is provided, use the version-specific created_at
+    // rather than the package-level crate.created_at (first-ever publish date).
+    let created: string | null;
+    if (version !== undefined) {
+      const versionObj = versions.find((v) => (v.num as string | undefined) === version);
+      created = (versionObj?.created_at as string | undefined) ?? null;
+    } else {
+      created = (krate.created_at as string | undefined) ?? null;
+    }
     const downloads = typeof krate.recent_downloads === 'number' ? krate.recent_downloads : null;
 
     return {
