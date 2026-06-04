@@ -270,6 +270,37 @@ See [`docs/INVENTORY.md`](INVENTORY.md#hooks-11-shipped) for the authoritative 1
 
 CJS command family routers dispatch through `CommandRoutingHub`. The hub owns the no-throw pure-result contract (`hub.dispatch()` catches internal exceptions and returns `{ ok: false, kind, ...typedPayload }`) and the closed runtime error taxonomy (`UnknownCommand`, `InvalidArgs`, `HandlerRefusal`, `HandlerFailure`). Router adapters remain thin CLI translators — they build the hub, call `dispatch`, then map the Result to `output()`/`error()` calls. The runtime is single-path (no dual-runtime mode selection). See `docs/adr/0174-retire-gsd-sdk-package-boundary.md`.
 
+### Research Module (`src/research-{store,provider}.cts`, `src/package-legitimacy.cts`)
+
+The Research Module implements an **L2-hybrid seam**: code owns the cache, provider policy, and package legitimacy verdicts; MCP owns the actual network fetch.
+
+Three compiled modules (generated to `gsd-core/bin/lib/*.cjs` per ADR-457) are reachable via `gsd-tools query research-plan | research-store | package-legitimacy`:
+
+- **Research Store** — content-addressed cache (`sha256(ecosystem+library+version+query+kind)`) with per-source TTL (curated-doc: 30 d, medium: 7 d, web/synthesis: 1 d) and two storage tiers: `~/.gsd/research-cache` for cross-project curated-doc hits, `.planning/research/.cache` for project-local web/synthesis results.
+- **Research Provider** — single `PROVIDER_WATERFALL` (`Context7→Ref→Jina→websearch` for docs; `Exa→Tavily→Perplexity→Brave→websearch` for web; `Firecrawl→Jina` for scrape-only). `planResearch()` returns cache hits plus a fetch plan; `classifyConfidence()` stamps `HIGH|MEDIUM|LOW` by provider tier.
+- **Package Legitimacy** — registry-API verdicts (npm/PyPI/crates.io injectable adapters) producing `OK|SUS|SLOP` per package. `slopcheck` is an optional escalate-only adapter; absence leaves registry verdicts intact rather than downgrading everything to `[ASSUMED]`.
+
+**Data flow:**
+
+```
+agent
+  │
+  ▼
+gsd-tools query research-plan          ← Research Provider: check cache, build fetch plan
+  │
+  ├── [cache hits] ──────────────────► RESEARCH.md (digest only, no raw content)
+  │
+  └── [fetch plan] ──────────────────► MCP fetch (agent calls MCP tools with the plan)
+                                          │
+                                          ▼
+                                    gsd-tools query research-store (put)
+                                          │
+                                          ▼
+                                    RESEARCH.md path returned to orchestrator
+```
+
+Agents always return a `RESEARCH.md` path, never raw fetched content. Context discipline is enforced through subagent isolation, compact provider output, and fetch-to-disk. See [ADR-0656](adr/0656-research-module-seam.md).
+
 ### CLI Tools (`gsd-core/bin/`)
 
 Node.js CLI utility (`gsd-tools.cjs`) with domain modules split across `gsd-core/bin/lib/` (see [`docs/INVENTORY.md`](INVENTORY.md#cli-modules-33-shipped) for the authoritative roster):
