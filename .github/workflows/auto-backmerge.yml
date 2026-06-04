@@ -56,7 +56,7 @@ jobs:
         if: steps.check.outputs.next_exists == 'true'
         id: branch
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           SHORT_SHA=$(git rev-parse --short HEAD)
@@ -108,7 +108,7 @@ jobs:
       - name: Open or update PR
         if: steps.check.outputs.next_exists == 'true' && steps.branch.outputs.reused != 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN || secrets.GITHUB_TOKEN }}
           BR: ${{ steps.branch.outputs.branch }}
         run: |
           set -euo pipefail
