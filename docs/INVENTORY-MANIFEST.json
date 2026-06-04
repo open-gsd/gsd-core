@@ -1,5 +1,5 @@
 {
-  "generated": "2026-06-02",
+  "generated": "2026-06-04",
   "families": {
     "agents": [
       "gsd-advisor-researcher",
@@ -302,6 +302,7 @@
       "model-catalog.cjs",
       "model-profiles.cjs",
       "package-identity.cjs",
+      "package-legitimacy.cjs",
       "phase-command-router.cjs",
       "phase-lifecycle.cjs",
       "phase.cjs",
@@ -312,6 +313,8 @@
       "profile-pipeline.cjs",
       "project-root.cjs",
       "prompt-budget.cjs",
+      "research-provider.cjs",
+      "research-store.cjs",
       "review-reviewer-selection.cjs",
       "roadmap-command-router.cjs",
       "roadmap-upgrade.cjs",
