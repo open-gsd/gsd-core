@@ -119,6 +119,13 @@ function parseAgentFile(filePath) {
  * Returns an array of failure strings (empty = pass).
  */
 function checkAgent(profile) {
+  // Validate required array fields — return a clear failure rather than throwing TypeError.
+  for (const field of ['requiredIncludes', 'requiredSeamCalls', 'outputContract']) {
+    if (!Array.isArray(profile[field])) {
+      return ['profile ' + profile.name + ': missing required array field ' + field];
+    }
+  }
+
   const agentPath = path.join(AGENTS_DIR, profile.name + '.md');
   const failures = [];
 

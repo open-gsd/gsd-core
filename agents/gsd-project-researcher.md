@@ -92,11 +92,17 @@ For each item where `fetch` is present, invoke the MCP tool matching `fetch.prov
 | provider id | MCP tool / built-in |
 |-------------|---------------------|
 | `context7` | `mcp__context7__resolve-library-id` then `mcp__context7__query-docs` |
+| `ref` | `mcp__ref__*` (use the appropriate ref MCP tool for the query) |
+| `jina` | `mcp__jina__*` (use the appropriate jina MCP tool for the query) |
 | `exa` | `mcp__exa__web_search_exa` with `fetch.query` |
 | `tavily` | `mcp__tavily__search` with `fetch.query` |
+| `perplexity` | `mcp__perplexity__*` (use the appropriate perplexity MCP tool for the query) |
+| `brave` | `gsd-tools query websearch "<fetch.query>"` (Brave-backed) or built-in `WebSearch` |
 | `firecrawl` | `mcp__firecrawl__scrape` with url (scrape kind) or `mcp__firecrawl__search` |
 | `websearch` | built-in `WebSearch` tool |
 | `webfetch` | built-in `WebFetch` tool |
+
+For any other provider id `X` not listed above: use `mcp__X__*` if available, else fall back to `WebSearch`.
 
 **WebSearch tip:** Do not inject a year into queries — it biases results toward stale dated content; check publication dates on the results you read instead.
 

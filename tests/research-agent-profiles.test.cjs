@@ -12,6 +12,9 @@
  *   1. The profiles table covers exactly the 7 researcher agents (no missing, no extra).
  *   2. Every agent passes the profile check (frontmatter + includes + seam-calls +
  *      output-contract markers all match the profile).
+ *   3. (DEFECT.GENERATIVE-FIX parity guard) Every provider id in PROVIDER_WATERFALL
+ *      has a dispatch mapping in the Step-C section of BOTH seam-wired researcher agents.
+ *   4. checkAgent returns a clear failure string for malformed profiles (not a thrown TypeError).
  *
  * If an agent's frontmatter/includes/seam-calls drift from its profile, this test fails.
  */
@@ -90,4 +93,96 @@ describe('research-agent-profiles: parity', () => {
       );
     });
   }
+});
+
+// ─── Provider dispatch parity (DEFECT.GENERATIVE-FIX) ────────────────────────
+//
+// Every provider id in PROVIDER_WATERFALL must have a dispatch mapping in the
+// Step-C section of gsd-phase-researcher.md and gsd-project-researcher.md.
+// This guard fails when code adds a new provider without updating the agents.
+
+describe('research-agent-profiles: provider dispatch parity', () => {
+  // The two seam-wired researcher agents that contain a Step-C dispatch table.
+  const SEAM_AGENTS = ['gsd-phase-researcher', 'gsd-project-researcher'];
+
+  // Load PROVIDER_WATERFALL from the compiled seam module.
+  const { PROVIDER_WATERFALL } = require('../gsd-core/bin/lib/research-provider.cjs');
+
+  // Compute the union of all provider ids across all waterfall kinds.
+  const allProviderIds = new Set();
+  for (const ids of Object.values(PROVIDER_WATERFALL)) {
+    for (const id of ids) {
+      allProviderIds.add(id);
+    }
+  }
+
+  // Extract the Step-C section from an agent file.
+  // We look for the section between "### Step C" and "### Step D".
+  function extractStepC(agentPath) {
+    const content = fs.readFileSync(agentPath, 'utf8');
+    const stepCStart = content.indexOf('### Step C');
+    if (stepCStart === -1) return '';
+    const stepDStart = content.indexOf('### Step D', stepCStart);
+    if (stepDStart === -1) return content.slice(stepCStart);
+    return content.slice(stepCStart, stepDStart);
+  }
+
+  for (const agentName of SEAM_AGENTS) {
+    for (const providerId of allProviderIds) {
+      test(agentName + ' Step-C dispatch table covers provider: ' + providerId, () => {
+        const agentPath = path.join(ROOT, 'agents', agentName + '.md');
+        assert.ok(
+          fs.existsSync(agentPath),
+          'Agent file not found: ' + agentPath,
+        );
+        const stepC = extractStepC(agentPath);
+        assert.ok(
+          stepC.includes('`' + providerId + '`') || stepC.includes('"' + providerId + '"'),
+          agentName + ' Step-C dispatch table is missing provider "' + providerId + '".\n' +
+          'Add a row for this provider in the Step-C dispatch table.\n' +
+          'Step-C section content:\n' + stepC,
+        );
+      });
+    }
+  }
+});
+
+// ─── checkAgent handles malformed profiles without throwing ──────────────────
+
+describe('research-agent-profiles: checkAgent malformed profile', () => {
+  test('checkAgent returns clear failure string when requiredSeamCalls is missing (not a thrown TypeError)', () => {
+    const malformedProfile = {
+      name: 'gsd-phase-researcher',
+      description: 'some description',
+      color: 'cyan',
+      tools: 'Read',
+      requiredIncludes: [],
+      // requiredSeamCalls intentionally omitted
+      outputContract: [],
+    };
+
+    let result;
+    let threw = false;
+    try {
+      result = checkAgent(malformedProfile);
+    } catch (err) {
+      threw = true;
+    }
+
+    assert.ok(
+      !threw,
+      'checkAgent threw a TypeError instead of returning a failure string. ' +
+      'Add array validation at the top of checkAgent().',
+    );
+    assert.ok(
+      Array.isArray(result),
+      'checkAgent should return an array, got: ' + typeof result,
+    );
+    // Should contain a clear failure message about the missing field
+    const combined = result.join('\n');
+    assert.ok(
+      combined.includes('requiredSeamCalls') || combined.includes('missing required array field'),
+      'checkAgent should return a message mentioning the missing field "requiredSeamCalls", got: ' + combined,
+    );
+  });
 });
