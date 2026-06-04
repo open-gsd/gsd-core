@@ -11,6 +11,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { cleanup } = require('./helpers.cjs');
 
 const {
   researchKey,
@@ -78,8 +79,8 @@ describe('research-store: getResearch missing key', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(tmpCwd, { recursive: true, force: true });
-    fs.rmSync(tmpHome, { recursive: true, force: true });
+    cleanup(tmpCwd);
+    cleanup(tmpHome);
   });
 
   test('returns {hit:false, stale:false, entry:null} for missing key, does not throw', () => {
@@ -113,8 +114,8 @@ describe('research-store: getResearch corrupt file', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(tmpCwd, { recursive: true, force: true });
-    fs.rmSync(tmpHome, { recursive: true, force: true });
+    cleanup(tmpCwd);
+    cleanup(tmpHome);
   });
 
   test('returns {hit:false, stale:false, entry:null} on corrupt JSON, does not throw', () => {
@@ -181,8 +182,8 @@ describe('research-store: staleness boundary (clock seam)', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(tmpCwd, { recursive: true, force: true });
-    fs.rmSync(tmpHome, { recursive: true, force: true });
+    cleanup(tmpCwd);
+    cleanup(tmpHome);
   });
 
   function putAtZero(cwd, home, key) {
@@ -270,8 +271,8 @@ describe('research-store: tracer bullet round-trip', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(tmpCwd, { recursive: true, force: true });
-    fs.rmSync(tmpHome, { recursive: true, force: true });
+    cleanup(tmpCwd);
+    cleanup(tmpHome);
   });
 
   test('put then get returns hit:true, stale:false, entry with content preserved', () => {

@@ -23,7 +23,7 @@ import * as https from 'node:https';
 // ---------------------------------------------------------------------------
 
 type Verdict = 'OK' | 'SUS' | 'SLOP';
-type Ecosystem = 'npm' | 'pypi' | 'crates' | string;
+type Ecosystem = string;
 
 interface Thresholds {
   minAgeDays: number;
@@ -140,10 +140,10 @@ function classifyPackage(
   const downloads = signals.weeklyDownloads;
   if (downloads == null) {
     reasons.push('unknown-downloads');
-  } else if (typeof downloads !== 'number' || !Number.isFinite(downloads as number)) {
+  } else if (typeof downloads !== 'number' || !Number.isFinite(downloads)) {
     // Odd type / NaN — treat as unknown
     reasons.push('unknown-downloads');
-  } else if ((downloads as number) < thresholds.minWeeklyDownloads) {
+  } else if (downloads < thresholds.minWeeklyDownloads) {
     reasons.push('low-downloads');
   }
 
@@ -237,7 +237,7 @@ async function lookupNpm(name: string): Promise<PackageSignals> {
       );
       const dlData = JSON.parse(dlRaw) as Record<string, unknown>;
       if (typeof dlData.downloads === 'number') {
-        weeklyDownloads = dlData.downloads as number;
+        weeklyDownloads = dlData.downloads;
       }
     } catch {
       // Degraded: leave weeklyDownloads as null, never throw
@@ -298,7 +298,7 @@ async function lookupCrates(name: string): Promise<PackageSignals> {
 
     const repoUrl = (krate.repository as string | undefined) ?? null;
     const created = (krate.created_at as string | undefined) ?? null;
-    const downloads = typeof krate.recent_downloads === 'number' ? krate.recent_downloads as number : null;
+    const downloads = typeof krate.recent_downloads === 'number' ? krate.recent_downloads : null;
 
     return {
       exists: true,

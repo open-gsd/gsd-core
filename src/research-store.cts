@@ -66,7 +66,11 @@ interface GetOptions {
 // ---------------------------------------------------------------------------
 
 function normalize(x: unknown): string {
-  return String(x ?? '').trim().toLowerCase();
+  if (x === null || x === undefined) return '';
+  if (typeof x === 'object') return JSON.stringify(x).trim().toLowerCase();
+  // After excluding null, undefined, and object, x can only be a primitive —
+  // cast through number | string | boolean to avoid no-base-to-string on unknown.
+  return `${x as number | string | boolean}`.trim().toLowerCase();
 }
 
 function researchKey(input: ResearchKeyInput): string {
@@ -113,7 +117,7 @@ function putResearch(
   cwd: string,
   key: string,
   payload: { content: unknown; source: string; provider: string; confidence: string; kind: string },
-  { clock = Date as unknown as ClockLike, homeDir = os.homedir() }: PutOptions = {}
+  { clock = Date, homeDir = os.homedir() }: PutOptions = {}
 ): ResearchEntry {
   const { content, source, provider, confidence, kind } = payload;
   const ttl = ttlForSource(source, confidence);
@@ -129,7 +133,7 @@ function putResearch(
 // getResearch
 // ---------------------------------------------------------------------------
 
-function getResearch(cwd: string, key: string, { clock = Date as unknown as ClockLike, homeDir = os.homedir(), kind }: GetOptions = {}): GetResult {
+function getResearch(cwd: string, key: string, { clock = Date, homeDir = os.homedir(), kind }: GetOptions = {}): GetResult {
   try {
     // If kind is provided, check only that tier; otherwise search both.
     const searchKinds: string[] = kind !== undefined ? [kind] : ['docs', 'web'];

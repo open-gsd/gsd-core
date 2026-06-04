@@ -39,7 +39,7 @@ interface ProviderAvailabilityConfig {
 
 interface Question {
   text: string;
-  kind: ProviderKind | string;
+  kind: string;
   library?: string;
   version?: string;
 }
@@ -162,7 +162,7 @@ let _defaultStore: ResearchStore | undefined;
 
 function getDefaultStore(): ResearchStore {
   if (!_defaultStore) {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy default store; tests inject their own
     _defaultStore = require('./research-store.cjs') as ResearchStore;
   }
   return _defaultStore;
