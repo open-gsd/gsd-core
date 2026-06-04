@@ -171,8 +171,6 @@ interface InstallerMigration {
   title: string;
   description: string;
   introducedIn: string;
-  checksum: string;
-  legacyChecksums?: string[];
   scopes: string[];
   destructive: boolean;
   plan: (ctx: PlanContext) => BaselineAction[];
@@ -183,10 +181,6 @@ const migration: InstallerMigration = {
   title: 'Record first-time installer migration baseline',
   description: 'Classify existing install surfaces before destructive installer migrations run.',
   introducedIn: '1.50.0',
-  checksum: 'sha256:4ec58d35b30dbf39cc56e3972146086d8d31861ecd800cf0b37a7aa94fe74c2a',
-  legacyChecksums: [
-    'sha256:34608ea4e2f4e1c53b069604892860e603600d8573cc6a5584e4194044b48e67',
-  ],
   scopes: ['global', 'local'],
   destructive: false,
   plan: ({ configDir, runtime, baselineScan, classifyArtifact }: PlanContext): BaselineAction[] => {

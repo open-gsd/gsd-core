@@ -91,7 +91,6 @@ export function validateInstallerMigrationRecord(record: unknown, source?: strin
     throw new Error(`migration record must declare destructive as a boolean: ${displaySource}`);
   }
   validateStringArray(rec, 'runtimes', displaySource);
-  validateStringArray(rec, 'legacyChecksums', displaySource);
   requireStringArray(rec, 'scopes', displaySource);
   if (typeof rec['plan'] !== 'function') {
     throw new Error(`migration record must include a plan function: ${displaySource}`);

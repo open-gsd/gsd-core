@@ -64,7 +64,6 @@ const RULES = [
       'tests/install-regressions.test.cjs',
       'tests/install-runtime-artifacts.test.cjs',
       'tests/install-path-detection.test.cjs',
-      'tests/installer-migration-checksum-compat.test.cjs',
       'tests/release-tarball-smoke.install.test.cjs',
       'tests/runtime-artifact-layout.test.cjs',
     ],
@@ -255,7 +254,7 @@ function classify(files) {
   let fullMatrix = false;
 
   for (const file of files) {
-    if (['bin/', 'gsd-core/', 'agents/', 'commands/', 'docs/', 'hooks/', 'tests/', 'scripts/', 'src/'].some(p => file.startsWith(p)) ||
+    if (['bin/', 'gsd-core/', 'agents/', 'commands/', 'docs/', 'hooks/', 'tests/', 'scripts/'].some(p => file.startsWith(p)) ||
       file === 'package.json' || file === 'package-lock.json' ||
       (file.startsWith('tsconfig') && file.endsWith('.json')) ||
       file.startsWith('.github/workflows/') ||

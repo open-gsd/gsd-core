@@ -48,7 +48,6 @@ interface InstallerMigration {
   title: string;
   description: string;
   introducedIn: string;
-  checksum: string;
   scopes: string[];
   destructive: boolean;
   plan(ctx: MigrationPlanContext): MigrationAction[];
@@ -81,7 +80,6 @@ const migration: InstallerMigration = {
     'After the config dir rename from get-shit-done/ to gsd-core/ (#604), remove prior-manifest-managed files ' + // gsd-allow-legacy-name
     'from the stale legacy directory during install (framework rollback restores them if install fails). User-added files are preserved.',
   introducedIn: '1.2.0',
-  checksum: 'sha256:3a9f1d97f64097fb313203d19c6d93a187a38df61dd299afa5eef73e16124e95',
   scopes: ['global', 'local'],
   destructive: true,
   plan(ctx: MigrationPlanContext): MigrationAction[] {

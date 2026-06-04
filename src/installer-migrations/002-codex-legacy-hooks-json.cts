@@ -48,8 +48,6 @@ interface InstallerMigration {
   title: string;
   description: string;
   introducedIn: string;
-  checksum: string;
-  legacyChecksums?: string[];
   runtimes: string[];
   scopes: string[];
   destructive: boolean;
@@ -112,10 +110,6 @@ const migration: InstallerMigration = {
   title: 'Remove legacy Codex hooks.json GSD hook registrations',
   description: 'Remove legacy Codex hooks.json GSD hook registrations after config.toml migration.',
   introducedIn: '1.50.0',
-  checksum: 'sha256:5ce55294aa02f25758f604a569c899a6d2d060299189f5f447f68d8033157058',
-  legacyChecksums: [
-    'sha256:41f1545704dc72dfc3ab019207677a8652e389b200e8c450d52317df5bc198da',
-  ],
   runtimes: ['codex'],
   scopes: ['global', 'local'],
   destructive: true,

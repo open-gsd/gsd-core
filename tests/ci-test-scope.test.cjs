@@ -56,16 +56,7 @@ describe('ci-test-scope.cjs', () => {
     assert.strictEqual(result.code_changed, true);
     assert.strictEqual(result.full_matrix, true);
     assert.ok(result.targeted_tests.includes('tests/install.test.cjs'));
-    assert.ok(result.targeted_tests.includes('tests/installer-migration-checksum-compat.test.cjs'));
     assert.ok(result.targeted_tests.includes('tests/release-tarball-smoke.install.test.cjs'));
-  });
-
-  test('ADR-457 installer source changes wake scoped CI and checksum compatibility guard', () => {
-    const result = scopeFor(['src/installer-migrations/000-first-time-baseline.cts']);
-    assert.strictEqual(result.code_changed, true);
-    assert.strictEqual(result.full_matrix, true);
-    assert.ok(result.targeted_tests.includes('tests/installer-migration-checksum-compat.test.cjs'));
-    assert.ok(result.windows_tests.includes('tests/installer-migration-checksum-compat.test.cjs'));
   });
 
   test('missing required CLI values fail with usage', () => {

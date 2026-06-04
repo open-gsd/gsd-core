@@ -208,27 +208,51 @@ function migrationChecksum(migration: MigrationRecord): string {
   return `sha256:${sha256Text(JSON.stringify(serializable))}`;
 }
 
-function migrationLegacyChecksums(migration: MigrationRecord): string[] {
-  return Array.isArray(migration.legacyChecksums)
-    ? migration.legacyChecksums.filter((checksum): checksum is string => typeof checksum === 'string' && checksum.length > 0)
-    : [];
+// Rewrite the stored checksum of any already-applied entry whose id drifted, so the
+// drift is reconciled durably and not re-detected on every subsequent run (issue #670).
+// Returns the number of entries actually changed (so callers know whether a write is needed).
+function reconcileDriftedChecksums(
+  appliedEntries: Array<Record<string, unknown>>,
+  checksumDrift: Array<{ id: string; currentChecksum: string }> | undefined
+): number {
+  if (!Array.isArray(checksumDrift) || checksumDrift.length === 0) return 0;
+  const reconcile = new Map(checksumDrift.map((d) => [d.id, d.currentChecksum]));
+  let changed = 0;
+  for (let i = 0; i < appliedEntries.length; i++) {
+    const existing = appliedEntries[i];
+    if (existing && typeof existing.id === 'string' && reconcile.has(existing.id)) {
+      const next = reconcile.get(existing.id) as string;
+      if (existing.checksum !== next) {
+        appliedEntries[i] = { ...existing, checksum: next };
+        changed += 1;
+      }
+    }
+  }
+  return changed;
 }
 
-function migrationAcceptedChecksums(migration: MigrationRecord): Set<string> {
-  return new Set([migrationChecksum(migration), ...migrationLegacyChecksums(migration)]);
-}
-
-function assertAppliedMigrationChecksums(applied: Map<string, Record<string, unknown>>, migrations: MigrationRecord[]): void {
+function collectAppliedChecksumDrift(
+  applied: Map<string, Record<string, unknown>>,
+  migrations: MigrationRecord[]
+): Array<{ id: string; storedChecksum: string; currentChecksum: string }> {
+  const drift: Array<{ id: string; storedChecksum: string; currentChecksum: string }> = [];
   for (const migration of migrations) {
     const entry = applied.get(migration.id as string);
     if (!entry || !entry.checksum) continue;
-    const accepted = migrationAcceptedChecksums(migration);
-    if (!accepted.has(entry.checksum as string)) {
-      throw new Error(
-        `applied migration checksum changed for ${migration.id as string}; create a new fix-forward migration id`
-      );
+    const currentChecksum = migrationChecksum(migration);
+    if (entry.checksum !== currentChecksum) {
+      // An already-applied migration is never re-run (it is filtered out of `pending`),
+      // so a checksum drift here is functionally inert. A prior release may have edited a
+      // shipped migration body (see issue #670). Surface it for reconciliation instead of
+      // hard-aborting the user's upgrade.
+      drift.push({
+        id: migration.id as string,
+        storedChecksum: entry.checksum as string,
+        currentChecksum,
+      });
     }
   }
+  return drift;
 }
 
 function migrationMatchesContext(migration: MigrationRecord, { runtime, scope }: { runtime: string | null; scope: string | null }): boolean {
@@ -461,6 +485,7 @@ interface MigrationPlan {
   pendingMigrations: MigrationRecord[];
   actions: PlannedAction[];
   blocked: PlannedAction[];
+  checksumDrift: Array<{ id: string; storedChecksum: string; currentChecksum: string }>;
 }
 
 function planInstallerMigrations({
@@ -490,7 +515,7 @@ function planInstallerMigrations({
     migrationMatchesContext(migration, { runtime, scope })
   );
   const applied = appliedMigrationEntries(state);
-  assertAppliedMigrationChecksums(applied, scopedMigrations);
+  const checksumDrift = collectAppliedChecksumDrift(applied, scopedMigrations);
   const pending = scopedMigrations.filter((migration) => !applied.has(migration.id as string));
   const actions: PlannedAction[] = [];
   const blocked: PlannedAction[] = [];
@@ -578,6 +603,7 @@ function planInstallerMigrations({
     pendingMigrations: pending,
     actions,
     blocked,
+    checksumDrift,
   };
 }
 
@@ -757,6 +783,7 @@ function applyInstallerMigrationPlan({
     const state = readInstallState(configDir);
     const applied = appliedMigrationIds(state);
     const nextApplied = [...state.appliedMigrations];
+    reconcileDriftedChecksums(nextApplied, plan.checksumDrift);
     const actionsByMigrationId = new Map<string, PlannedAction>();
     for (const action of plan.actions) {
       if (action.migrationId && !actionsByMigrationId.has(action.migrationId)) {
@@ -819,29 +846,36 @@ function markPendingMigrationsApplied({
   plan: MigrationPlan;
   now?: () => string;
 }): string[] {
-  if (!plan || !Array.isArray(plan.pendingMigrationIds) || plan.pendingMigrationIds.length === 0) {
-    return [];
-  }
+  if (!plan) return [];
+  const hasPending = Array.isArray(plan.pendingMigrationIds) && plan.pendingMigrationIds.length > 0;
+  const hasDrift = Array.isArray(plan.checksumDrift) && plan.checksumDrift.length > 0;
+  if (!hasPending && !hasDrift) return [];
+
   const appliedAt = now();
   const state = readInstallState(configDir);
   const applied = appliedMigrationIds(state);
-  const checksumsByMigrationId = new Map<string, string>();
-  for (const migration of plan.pendingMigrations || []) {
-    checksumsByMigrationId.set(migration.id as string, migrationChecksum(migration));
-  }
   const nextApplied = [...state.appliedMigrations];
+  const reconciledCount = reconcileDriftedChecksums(nextApplied, plan.checksumDrift);
+
   const newlyApplied: string[] = [];
-  for (const id of plan.pendingMigrationIds) {
-    if (applied.has(id)) continue;
-    nextApplied.push({
-      id,
-      appliedAt,
-      journal: null,
-      checksum: checksumsByMigrationId.get(id) || null,
-    });
-    newlyApplied.push(id);
+  if (hasPending) {
+    const checksumsByMigrationId = new Map<string, string>();
+    for (const migration of plan.pendingMigrations || []) {
+      checksumsByMigrationId.set(migration.id as string, migrationChecksum(migration));
+    }
+    for (const id of plan.pendingMigrationIds) {
+      if (applied.has(id)) continue;
+      nextApplied.push({
+        id,
+        appliedAt,
+        journal: null,
+        checksum: checksumsByMigrationId.get(id) || null,
+      });
+      newlyApplied.push(id);
+    }
   }
-  if (newlyApplied.length > 0) {
+
+  if (newlyApplied.length > 0 || reconciledCount > 0) {
     writeInstallState(configDir, {
       schemaVersion: 1,
       appliedMigrations: nextApplied,
@@ -933,8 +967,8 @@ export = {
   acquireInstallMigrationLock,
   applyInstallerMigrationPlan,
   classifyArtifact,
-  computeInstallerMigrationChecksum: migrationChecksum,
   discoverInstallerMigrations,
+  migrationChecksum,
   planInstallerMigrations,
   readInstallManifest,
   readInstallState,

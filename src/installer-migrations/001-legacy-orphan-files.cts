@@ -31,8 +31,6 @@ interface InstallerMigration {
   title: string;
   description: string;
   introducedIn: string;
-  checksum: string;
-  legacyChecksums?: string[];
   scopes: string[];
   destructive: boolean;
   plan: (ctx: MigrationPlanContext) => MigrationAction[];
@@ -48,10 +46,6 @@ const migration: InstallerMigration = {
   title: 'Remove manifest-managed legacy orphan hook files',
   description: 'Remove legacy orphan hook files that are still manifest-managed.',
   introducedIn: '1.50.0',
-  checksum: 'sha256:e492698748a2436a12a55f0940f539b9bf651d8ffcac6f60cd856a6dabd6788c',
-  legacyChecksums: [
-    'sha256:4488e38c127a5225b31016918bcbc85ba3fd3139291ad407b94e76c03c0b89d3',
-  ],
   scopes: ['global', 'local'],
   destructive: true,
   // Retired generated hook files are removed only with manifest-managed
