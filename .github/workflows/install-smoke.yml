@@ -30,7 +30,6 @@ on:
       - 'tests/release-tarball-smoke.install.test.cjs'
       - '.github/workflows/install-smoke.yml'
       - '.github/workflows/release.yml'
-      - '.github/workflows/hotfix.yml'
   push:
     branches:
       - main
