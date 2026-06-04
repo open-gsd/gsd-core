@@ -234,3 +234,70 @@ describe('research-provider: terminal fallback to websearch', () => {
     assert.equal(item.fetch.provider, 'websearch');
   });
 });
+
+// ---------------------------------------------------------------------------
+// FINDING 5 REGRESSION: planResearch skips questions with missing/non-string text
+// ---------------------------------------------------------------------------
+
+describe('FINDING-5: planResearch skips questions without non-empty string text', () => {
+  test('question without text field → skipped; valid question → emitted (exactly 1 item)', async () => {
+    // [{kind:'docs'}, {text:'use zod', kind:'docs'}] → only 1 item (for 'use zod')
+    // CURRENTLY emits 2 items (first with question:undefined) — that is the bug.
+    const result = await planResearch({
+      questions: [
+        { kind: 'docs' },                    // no text — must be skipped
+        { text: 'use zod', kind: 'docs' },   // valid — must be emitted
+      ],
+      ecosystem: 'npm',
+      cwd: '/tmp',
+      config: FULL_CONFIG,
+      store: makeFakeStore({ hit: false, stale: false }),
+    });
+
+    assert.ok(Array.isArray(result.items), 'result.items must be an array');
+    assert.equal(
+      result.items.length,
+      1,
+      `FINDING-5: expected exactly 1 item (text-less question skipped), got ${result.items.length}: ${JSON.stringify(result.items)}`,
+    );
+    assert.equal(result.items[0].question, 'use zod', 'retained item must be the valid question');
+  });
+
+  test('question with text:null → skipped', async () => {
+    const result = await planResearch({
+      questions: [{ text: null, kind: 'docs' }, { text: 'valid', kind: 'docs' }],
+      ecosystem: 'npm',
+      cwd: '/tmp',
+      config: FULL_CONFIG,
+      store: makeFakeStore({ hit: false, stale: false }),
+    });
+
+    assert.equal(result.items.length, 1, `null-text question should be skipped; got ${result.items.length} items`);
+    assert.equal(result.items[0].question, 'valid');
+  });
+
+  test('question with text:"" (empty string) → skipped', async () => {
+    const result = await planResearch({
+      questions: [{ text: '', kind: 'docs' }, { text: 'valid2', kind: 'docs' }],
+      ecosystem: 'npm',
+      cwd: '/tmp',
+      config: FULL_CONFIG,
+      store: makeFakeStore({ hit: false, stale: false }),
+    });
+
+    assert.equal(result.items.length, 1, `empty-string text question should be skipped; got ${result.items.length} items`);
+    assert.equal(result.items[0].question, 'valid2');
+  });
+
+  test('all questions lack text → empty items array', async () => {
+    const result = await planResearch({
+      questions: [{ kind: 'docs' }, { kind: 'web' }],
+      ecosystem: 'npm',
+      cwd: '/tmp',
+      config: FULL_CONFIG,
+      store: makeFakeStore({ hit: false, stale: false }),
+    });
+
+    assert.equal(result.items.length, 0, `all text-less questions should yield empty items`);
+  });
+});

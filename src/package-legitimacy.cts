@@ -394,7 +394,12 @@ async function lookupCrates(name: string, version?: string): Promise<PackageSign
     } else {
       created = (krate.created_at as string | undefined) ?? null;
     }
-    const downloads = typeof krate.recent_downloads === 'number' ? krate.recent_downloads : null;
+    // recent_downloads is a 90-day count; normalize to a weekly figure for comparison
+    // against minWeeklyDownloads (which is a weekly threshold).
+    const rawDownloads = krate.recent_downloads;
+    const downloads = (rawDownloads != null && typeof Number(rawDownloads) === 'number' && !isNaN(Number(rawDownloads)))
+      ? Math.round(Number(rawDownloads) * 7 / 90)
+      : null;
 
     return {
       exists: true,

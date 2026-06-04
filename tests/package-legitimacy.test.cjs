@@ -689,6 +689,73 @@ describe('Finding 2 — version-specific publishedAt from requested version, not
     }
   });
 
+  // ---------------------------------------------------------------------------
+  // FINDING 2 REGRESSION: crates recent_downloads (90d) vs weekly threshold
+  // Without normalization: recent_downloads=5000 >= minWeeklyDownloads=1000 → no low-downloads
+  // With normalization: 5000 * 7 / 90 ≈ 389/week < 1000 → low-downloads (SUS)
+  // ---------------------------------------------------------------------------
+
+  test('FINDING-2 crates: recent_downloads=5000 (≈389/wk) → low-downloads after normalization', async () => {
+    // recent_downloads is a 90-DAY count. Without normalization the raw 5000 >= 1000 threshold
+    // passes, so no low-downloads reason is emitted — that is WRONG.
+    // After fix: Math.round(5000 * 7 / 90) = 389 < 1000 → low-downloads (SUS).
+    const cratesPayload = JSON.stringify({
+      crate: {
+        name: 'low-dl-crate',
+        repository: 'https://github.com/x/y',
+        created_at: packageLevelOld,
+        recent_downloads: 5000,  // 90-day count; ≈389/week (below 1000)
+      },
+      versions: [{ num: '1.0.0', created_at: packageLevelOld }],
+    });
+    const transport = async (_url, _timeoutMs) => ({ statusCode: 200, body: cratesPayload });
+    _setHttpGet(transport);
+    try {
+      const results = await checkPackages(
+        { ecosystem: 'crates', packages: ['low-dl-crate'] },
+        { clock: f2Clock, thresholds: { ...DEFAULT_THRESHOLDS, minWeeklyDownloads: 1000, requireRepo: false } }
+      );
+      assert.equal(results.length, 1);
+      const r = results[0];
+      assert.ok(
+        r.reasons.includes('low-downloads'),
+        `FINDING-2: crates recent_downloads=5000 (≈389/wk) should yield low-downloads after 90d→weekly normalization. reasons: ${r.reasons}`
+      );
+      assert.equal(r.verdict, 'SUS', `expected SUS, got ${r.verdict}`);
+    } finally {
+      _setHttpGet(null);
+    }
+  });
+
+  test('FINDING-2 crates: recent_downloads=20000 (≈1556/wk) → NOT low-downloads', async () => {
+    // Math.round(20000 * 7 / 90) = 1556 >= 1000 → OK
+    const cratesPayload = JSON.stringify({
+      crate: {
+        name: 'good-dl-crate',
+        repository: 'https://github.com/x/y',
+        created_at: packageLevelOld,
+        recent_downloads: 20000,  // ≈1556/week — above threshold
+      },
+      versions: [{ num: '1.0.0', created_at: packageLevelOld }],
+    });
+    const transport = async (_url, _timeoutMs) => ({ statusCode: 200, body: cratesPayload });
+    _setHttpGet(transport);
+    try {
+      const results = await checkPackages(
+        { ecosystem: 'crates', packages: ['good-dl-crate'] },
+        { clock: f2Clock, thresholds: { ...DEFAULT_THRESHOLDS, minWeeklyDownloads: 1000, requireRepo: false } }
+      );
+      assert.equal(results.length, 1);
+      const r = results[0];
+      assert.ok(
+        !r.reasons.includes('low-downloads'),
+        `FINDING-2: crates recent_downloads=20000 (≈1556/wk) should NOT yield low-downloads. reasons: ${r.reasons}`
+      );
+    } finally {
+      _setHttpGet(null);
+    }
+  });
+
   test('npm: without version, falls back to package-level date (old → not too-new)', async () => {
     const npmPayload = JSON.stringify({
       'dist-tags': { latest: '1.0.0' },

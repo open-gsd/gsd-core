@@ -185,8 +185,14 @@ function planResearch(options: PlanResearchOptions): PlanResearchResult {
 
   const availability = providerAvailability(config);
 
-  const items: ResearchItem[] = questions.map((q) => {
+  const items: ResearchItem[] = questions.flatMap((q) => {
     const { text, kind, library, version } = q;
+
+    // Skip questions without a non-empty string text — emitting an item with
+    // question:undefined / fetch.query:undefined would produce corrupt output.
+    if (typeof text !== 'string' || text.length === 0) {
+      return [];
+    }
 
     const key = store.researchKey({ ecosystem, library, version, query: text, kind });
     const res = store.getResearch(cwd, key, { clock, homeDir, kind });

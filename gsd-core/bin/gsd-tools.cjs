@@ -1705,11 +1705,20 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         const providerIdx = args.indexOf('--provider');
         const confidenceIdx = args.indexOf('--confidence');
         const kindIdx = args.indexOf('--kind');
-        const content = contentIdx !== -1 ? args[contentIdx + 1] : null;
-        const source = sourceIdx !== -1 ? args[sourceIdx + 1] : null;
-        const provider = providerIdx !== -1 ? args[providerIdx + 1] : null;
-        const confidence = confidenceIdx !== -1 ? args[confidenceIdx + 1] : null;
-        const kind = kindIdx !== -1 ? args[kindIdx + 1] : null;
+        // For each flag, if the following value is missing or itself starts with '--', reject.
+        function getFlagValue(idx, flagName) {
+          if (idx === -1) return null;
+          const val = args[idx + 1];
+          if (val === undefined || val.startsWith('--')) {
+            error(`research-store put: missing value for ${flagName}`, ERROR_REASON.USAGE);
+          }
+          return val;
+        }
+        const content = getFlagValue(contentIdx, '--content');
+        const source = getFlagValue(sourceIdx, '--source');
+        const provider = getFlagValue(providerIdx, '--provider');
+        const confidence = getFlagValue(confidenceIdx, '--confidence');
+        const kind = getFlagValue(kindIdx, '--kind');
         if (!content || !source || !provider || !confidence || !kind) {
           error('Usage: gsd-tools research-store put <key> --content <str> --source <s> --provider <p> --confidence <c> --kind <k>', ERROR_REASON.USAGE);
         }
@@ -1741,7 +1750,13 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       } catch (readErr) {
         error(`research-plan: cannot read/parse --input file: ${inputPath}`, ERROR_REASON.USAGE);
       }
-      const { ecosystem = '', config: planConfig = {}, questions = [] } = planInput;
+      if (planInput === null || typeof planInput !== 'object' || Array.isArray(planInput)) {
+        error('research-plan: --input must be an object with a questions array', ERROR_REASON.USAGE);
+      }
+      if (!Array.isArray(planInput.questions)) {
+        error('research-plan: --input must be an object with a questions array', ERROR_REASON.USAGE);
+      }
+      const { ecosystem = '', config: planConfig = {}, questions } = planInput;
       const homeDir = process.env.HOME || require('os').homedir();
       const plan = researchProvider.planResearch({ questions, ecosystem, config: planConfig, cwd, homeDir });
       core.output(plan, raw);
@@ -1785,12 +1800,16 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       if (!ecosystem || !VALID_ECOSYSTEMS.has(ecosystem)) {
         error('Usage: gsd-tools package-legitimacy check --ecosystem <npm|pypi|crates> <pkg1> ...', ERROR_REASON.USAGE);
       }
-      // Collect positional package names (everything after args[1] that isn't a flag or flag value)
+      // Collect positional package names.
+      // Only --ecosystem takes a value. Every non-flag arg is a package name.
+      // Any unknown --flag is a usage error (do not silently skip+consume the next arg).
       const packages = [];
       for (let i = 2; i < args.length; i++) {
         const a = args[i];
         if (a === '--ecosystem') { i++; continue; }
-        if (a.startsWith('--')) { i++; continue; }
+        if (a.startsWith('--')) {
+          error(`package-legitimacy: unknown flag ${a}`, ERROR_REASON.USAGE);
+        }
         packages.push(a);
       }
       if (packages.length === 0) {
