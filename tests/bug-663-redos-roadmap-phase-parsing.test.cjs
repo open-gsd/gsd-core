@@ -12,16 +12,22 @@
  *
  * Part A: behavior preservation — the collapsed regex still matches the same
  *   phase identifiers as before on normal roadmap content.
- * Part B: ReDoS guard — pathological input that caused catastrophic
- *   backtracking under the old pattern completes in well under 1 second with
- *   the fixed pattern.
+ * Part B: ReDoS adversarial fixtures — calls buildRoadmapPhaseVariants /
+ *   buildNotStartedPhaseVariants with pathological input (a malformed heading
+ *   or checklist line that has NO terminating colon).  The adversarial input
+ *   would cause catastrophic backtracking under the OLD nested-quantifier
+ *   pattern; the fix makes backtracking linear.  We assert on the STRUCTURED
+ *   RESULT (the returned Set is empty — no match — because the colon is
+ *   absent) rather than on elapsed time, in compliance with the
+ *   local/no-elapsed-assertion ESLint rule.  A { timeout: 5000 } backstop is
+ *   retained so the test fails fast if a future regression reintroduces a
+ *   slow pattern.
  *
  * Requirements: TEST-663-B
  */
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
-const { performance } = require('node:perf_hooks');
 const {
   buildRoadmapPhaseVariants,
   buildNotStartedPhaseVariants,
@@ -111,33 +117,39 @@ describe('buildNotStartedPhaseVariants — behavior preservation (#663)', () => 
   });
 });
 
-// ─── Part B: ReDoS guard ──────────────────────────────────────────────────────
+// ─── Part B: ReDoS adversarial fixtures ──────────────────────────────────────
 
-describe('buildRoadmapPhaseVariants — ReDoS guard (#663)', () => {
+describe('buildRoadmapPhaseVariants — ReDoS adversarial fixture (#663)', () => {
   // Pathological input: a heading line where the phase-id segment consists of
   // many consecutive "-a" chunks with NO terminating colon.  Under the old
   // nested-quantifier pattern ([\w.-]*(?:-[\w.-]+)*\s*:) the engine must
-  // explore exponentially many ways to partition the "-a" repetitions across
-  // the two quantifiers before concluding there is no match.  The fixed
-  // single-quantifier pattern ([\w.-]*\s*:) backtracks linearly.
-  test('completes in < 1000 ms on pathological input (no terminating colon)', { timeout: 5000 }, () => {
+  // explore exponentially many ways to partition the "-a" repetitions before
+  // concluding there is no match.  The fixed single-quantifier pattern
+  // ([\w.-]*\s*:) backtracks linearly.  We assert that the malformed heading
+  // yields NO match (empty roadmapPhases Set) — the correct behavior when the
+  // terminating colon is absent.  The { timeout: 5000 } backstop catches any
+  // regression that re-introduces a slow pattern.
+  test('malformed heading without colon yields no phase match (adversarial input)', { timeout: 5000 }, () => {
     const pathological = '## Phase a' + '-a'.repeat(32) + ' ';
-    const t0 = performance.now();
-    buildRoadmapPhaseVariants(pathological);
-    const elapsed = performance.now() - t0;
-    assert.ok(elapsed < 1000, `ReDoS: buildRoadmapPhaseVariants took ${elapsed.toFixed(1)} ms (expected < 1000 ms)`);
+    const { roadmapPhases } = buildRoadmapPhaseVariants(pathological);
+    assert.strictEqual(roadmapPhases.size, 0,
+      'a heading with no terminating colon should not match any phase');
   });
 });
 
-describe('buildNotStartedPhaseVariants — ReDoS guard (#663)', () => {
+describe('buildNotStartedPhaseVariants — ReDoS adversarial fixture (#663)', () => {
   // Same analysis: the old uncheckedPattern used the same nested quantifier.
-  // A checklist-style line with many "-a" segments and no colon/space triggers
-  // the same catastrophic backtracking.
-  test('completes in < 1000 ms on pathological unchecked-item input', { timeout: 5000 }, () => {
-    const pathological = '- [ ] Phase a' + '-a'.repeat(32) + ' ';
-    const t0 = performance.now();
-    buildNotStartedPhaseVariants(pathological);
-    const elapsed = performance.now() - t0;
-    assert.ok(elapsed < 1000, `ReDoS: buildNotStartedPhaseVariants took ${elapsed.toFixed(1)} ms (expected < 1000 ms)`);
+  // A checklist-style line with many "-a" segments and no colon triggers the
+  // same catastrophic backtracking.  Assert the correct structured result:
+  // the malformed line yields an empty notStarted Set.
+  test('malformed unchecked-item without terminator yields no phase match (adversarial input)', { timeout: 5000 }, () => {
+    // No trailing colon or whitespace: the regex terminator [:\s*] cannot match,
+    // so the engine must backtrack through all '-a' repetitions and conclude no
+    // match.  Under the old nested-quantifier pattern this was exponential;
+    // under the fixed linear pattern it returns immediately with an empty Set.
+    const pathological = '- [ ] Phase a' + '-a'.repeat(32);
+    const notStarted = buildNotStartedPhaseVariants(pathological);
+    assert.strictEqual(notStarted.size, 0,
+      'an unchecked-item line with no terminating colon or space should not match any phase');
   });
 });
