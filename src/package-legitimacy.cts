@@ -9,6 +9,7 @@
  *   DEFAULT_THRESHOLDS  — baseline thresholds
  *   classifyPackage     — pure function: signals → { verdict, reasons }
  *   checkPackages       — async: resolves registry signals and classifies
+ *   _setHttpGet         — test seam: override the HTTP transport (pass null to restore)
  *
  * All network IO is injected via a `registry` client option so that tests
  * never touch the real network (same seam pattern as clock injection).
@@ -54,7 +55,7 @@ interface CheckResult {
 }
 
 interface RegistryClient {
-  lookup(ecosystem: Ecosystem, name: string): Promise<PackageSignals>;
+  lookup(ecosystem: Ecosystem, name: string, version?: string): Promise<PackageSignals>;
 }
 
 interface SlopcheckAdapter {
@@ -79,6 +80,14 @@ interface CheckPackagesOptions {
   slopcheck?: SlopcheckAdapter | null;
 }
 
+/** Shape returned by the injectable HTTP transport */
+interface HttpResponse {
+  statusCode: number;
+  body: string;
+}
+
+type HttpGetFn = (url: string, timeoutMs: number) => Promise<HttpResponse>;
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -89,11 +98,12 @@ const DEFAULT_THRESHOLDS: Thresholds = {
   requireRepo: true,
 };
 
-// Matches common dangerous postinstall patterns:
-//   curl, wget, http/https URLs, parent-dir traversal (../), /etc/ paths,
-//   home-dir (~/) paths, netcat (nc ), bash -c
+// Matches common dangerous postinstall execution patterns.
+// Deliberately EXCLUDES bare https?:// (over-fires on legit packages like
+// esbuild/sharp/node-gyp that reference download URLs without executing them).
+// Shell-execution / download-and-exec signatures only:
 const SUSPICIOUS_POSTINSTALL_RE =
-  /(curl|wget|https?:\/\/|\.\.\/|\/etc\/|~\/|nc |bash -c)/i;
+  /(curl |wget |\|\s*(ba)?sh|bash -c|sh -c|node -e|eval|base64 -d|\/etc\/|\.\.\/|~\/|nc |>\s*\/)/i;
 
 // ---------------------------------------------------------------------------
 // Severity ordering for verdict merging (SLOP > SUS > OK)
@@ -101,7 +111,7 @@ const SUSPICIOUS_POSTINSTALL_RE =
 
 const SEVERITY: Record<Verdict, number> = { OK: 0, SUS: 1, SLOP: 2 };
 
-function moreServerVerdict(a: Verdict, b: Verdict): Verdict {
+function moreSevereVerdict(a: Verdict, b: Verdict): Verdict {
   return SEVERITY[a] >= SEVERITY[b] ? a : b;
 }
 
@@ -164,15 +174,21 @@ function classifyPackage(
     }
   }
 
+  // Terminal: suspicious postinstall is a slopsquatting execution risk
+  if (reasons.includes('suspicious-postinstall')) {
+    return { verdict: 'SLOP', reasons };
+  }
+
   const verdict: Verdict = reasons.length > 0 ? 'SUS' : 'OK';
   return { verdict, reasons };
 }
 
 // ---------------------------------------------------------------------------
-// Real registry adapters (not exercised by tests — tests inject fakes)
+// Injectable HTTP transport (test seam — W1)
 // ---------------------------------------------------------------------------
 
-function httpsGet(url: string, timeoutMs: number): Promise<string> {
+/** The real HTTPS transport — resolves { statusCode, body } */
+function realHttpsGet(url: string, timeoutMs: number): Promise<HttpResponse> {
   return new Promise((resolve, reject) => {
     const req = https.get(
       url,
@@ -180,7 +196,12 @@ function httpsGet(url: string, timeoutMs: number): Promise<string> {
       (res) => {
         const chunks: Buffer[] = [];
         res.on('data', (c: Buffer) => chunks.push(c));
-        res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+        res.on('end', () =>
+          resolve({
+            statusCode: res.statusCode ?? 0,
+            body: Buffer.concat(chunks).toString('utf8'),
+          })
+        );
         res.on('error', reject);
       }
     );
@@ -190,6 +211,21 @@ function httpsGet(url: string, timeoutMs: number): Promise<string> {
     req.on('error', reject);
   });
 }
+
+/** Module-level transport pointer — overrideable via _setHttpGet for tests */
+let httpsGet: HttpGetFn = realHttpsGet;
+
+/**
+ * Test seam: replace the HTTP transport. Pass null to restore the real transport.
+ * Tests call this before exercising a real-adapter code path; always restore in finally.
+ */
+function _setHttpGet(fn: HttpGetFn | null): void {
+  httpsGet = fn ?? realHttpsGet;
+}
+
+// ---------------------------------------------------------------------------
+// Real registry adapters (not exercised by tests — tests inject fakes)
+// ---------------------------------------------------------------------------
 
 function degradedSignals(): PackageSignals {
   return {
@@ -202,16 +238,28 @@ function degradedSignals(): PackageSignals {
   };
 }
 
-async function lookupNpm(name: string): Promise<PackageSignals> {
+async function lookupNpm(name: string, version?: string): Promise<PackageSignals> {
   try {
-    const raw = await httpsGet(`https://registry.npmjs.org/${encodeURIComponent(name)}`, 5000);
-    const data = JSON.parse(raw) as Record<string, unknown>;
+    const resp = await httpsGet(`https://registry.npmjs.org/${encodeURIComponent(name)}`, 5000);
+    if (resp.statusCode === 404) return { ...degradedSignals(), exists: false };
+    if (resp.statusCode < 200 || resp.statusCode >= 300) return degradedSignals();
+
+    const data = JSON.parse(resp.body) as Record<string, unknown>;
     if (data.error) return { ...degradedSignals(), exists: false };
 
     const time = (data.time as Record<string, string> | undefined) ?? {};
+    const allVersions = (data.versions as Record<string, unknown> | undefined) ?? {};
+
+    // I3: when a specific version is requested, verify it exists
+    if (version !== undefined) {
+      if (!(version in allVersions)) {
+        return { ...degradedSignals(), exists: false };
+      }
+    }
+
     const latestVersion = (data['dist-tags'] as Record<string, string> | undefined)?.latest ?? '';
-    const versionMeta =
-      ((data.versions as Record<string, unknown> | undefined) ?? {})[latestVersion] ?? {};
+    const resolvedVersion = version !== undefined ? version : latestVersion;
+    const versionMeta = allVersions[resolvedVersion] ?? {};
 
     const scripts =
       ((versionMeta as Record<string, unknown>).scripts as Record<string, string> | undefined) ??
@@ -231,13 +279,15 @@ async function lookupNpm(name: string): Promise<PackageSignals> {
     // Fetch weekly download count from the npm downloads API
     let weeklyDownloads: number | null = null;
     try {
-      const dlRaw = await httpsGet(
+      const dlResp = await httpsGet(
         `https://api.npmjs.org/downloads/point/last-week/${encodeURIComponent(name)}`,
         5000
       );
-      const dlData = JSON.parse(dlRaw) as Record<string, unknown>;
-      if (typeof dlData.downloads === 'number') {
-        weeklyDownloads = dlData.downloads;
+      if (dlResp.statusCode >= 200 && dlResp.statusCode < 300) {
+        const dlData = JSON.parse(dlResp.body) as Record<string, unknown>;
+        if (typeof dlData.downloads === 'number') {
+          weeklyDownloads = dlData.downloads;
+        }
       }
     } catch {
       // Degraded: leave weeklyDownloads as null, never throw
@@ -245,7 +295,7 @@ async function lookupNpm(name: string): Promise<PackageSignals> {
 
     return {
       exists: true,
-      publishedAt: time[latestVersion] ?? time.created ?? null,
+      publishedAt: time[resolvedVersion] ?? time.created ?? null,
       weeklyDownloads,
       repoUrl,
       deprecated,
@@ -257,11 +307,23 @@ async function lookupNpm(name: string): Promise<PackageSignals> {
   }
 }
 
-async function lookupPypi(name: string): Promise<PackageSignals> {
+async function lookupPypi(name: string, version?: string): Promise<PackageSignals> {
   try {
-    const raw = await httpsGet(`https://pypi.org/pypi/${encodeURIComponent(name)}/json`, 5000);
-    const data = JSON.parse(raw) as Record<string, unknown>;
+    const resp = await httpsGet(`https://pypi.org/pypi/${encodeURIComponent(name)}/json`, 5000);
+    if (resp.statusCode === 404) return { ...degradedSignals(), exists: false };
+    if (resp.statusCode < 200 || resp.statusCode >= 300) return degradedSignals();
+
+    const data = JSON.parse(resp.body) as Record<string, unknown>;
     const info = (data.info as Record<string, unknown>) ?? {};
+
+    // I3: when a specific version is requested, verify it exists in releases
+    if (version !== undefined) {
+      const releases = (data.releases as Record<string, unknown> | undefined) ?? {};
+      if (!(version in releases)) {
+        return { ...degradedSignals(), exists: false };
+      }
+    }
+
     const urls = (data.urls as Array<Record<string, unknown>>) ?? [];
     const uploadTime =
       urls.length > 0 ? (urls[0].upload_time_iso_8601 as string | undefined) ?? null : null;
@@ -287,14 +349,28 @@ async function lookupPypi(name: string): Promise<PackageSignals> {
   }
 }
 
-async function lookupCrates(name: string): Promise<PackageSignals> {
+async function lookupCrates(name: string, version?: string): Promise<PackageSignals> {
   try {
-    const raw = await httpsGet(
+    const resp = await httpsGet(
       `https://crates.io/api/v1/crates/${encodeURIComponent(name)}`,
       5000
     );
-    const data = JSON.parse(raw) as Record<string, unknown>;
+    if (resp.statusCode === 404) return { ...degradedSignals(), exists: false };
+    if (resp.statusCode < 200 || resp.statusCode >= 300) return degradedSignals();
+
+    const data = JSON.parse(resp.body) as Record<string, unknown>;
     const krate = (data.crate as Record<string, unknown>) ?? {};
+
+    // I3: when a specific version is requested, verify it exists in versions list
+    if (version !== undefined) {
+      const versions = (data.versions as Array<Record<string, unknown>> | undefined) ?? [];
+      const found = versions.some(
+        (v) => (v.num as string | undefined) === version
+      );
+      if (!found) {
+        return { ...degradedSignals(), exists: false };
+      }
+    }
 
     const repoUrl = (krate.repository as string | undefined) ?? null;
     const created = (krate.created_at as string | undefined) ?? null;
@@ -315,14 +391,14 @@ async function lookupCrates(name: string): Promise<PackageSignals> {
 }
 
 const realRegistry: RegistryClient = {
-  async lookup(ecosystem: Ecosystem, name: string): Promise<PackageSignals> {
+  async lookup(ecosystem: Ecosystem, name: string, version?: string): Promise<PackageSignals> {
     switch (ecosystem) {
       case 'npm':
-        return lookupNpm(name);
+        return lookupNpm(name, version);
       case 'pypi':
-        return lookupPypi(name);
+        return lookupPypi(name, version);
       case 'crates':
-        return lookupCrates(name);
+        return lookupCrates(name, version);
       default:
         return degradedSignals();
     }
@@ -334,7 +410,7 @@ const realRegistry: RegistryClient = {
 // ---------------------------------------------------------------------------
 
 async function checkPackages(
-  { ecosystem, packages }: CheckPackagesInput,
+  { ecosystem, packages, version }: CheckPackagesInput,
   {
     registry = realRegistry,
     clock = Date,
@@ -345,7 +421,7 @@ async function checkPackages(
   const results: CheckResult[] = [];
 
   for (const name of packages) {
-    const signals = await registry.lookup(ecosystem, name);
+    const signals = await registry.lookup(ecosystem, name, version);
     const { verdict: registryVerdict, reasons } = classifyPackage(signals, { thresholds, clock });
 
     let finalVerdict: Verdict = registryVerdict;
@@ -353,7 +429,7 @@ async function checkPackages(
     if (slopcheck != null) {
       const slopVerdict = await slopcheck.check(ecosystem, name);
       if (slopVerdict != null) {
-        finalVerdict = moreServerVerdict(finalVerdict, slopVerdict);
+        finalVerdict = moreSevereVerdict(finalVerdict, slopVerdict);
       }
     }
 
@@ -367,4 +443,4 @@ async function checkPackages(
 // Module export (CommonJS interop — export = only, no other export keywords)
 // ---------------------------------------------------------------------------
 
-export = { DEFAULT_THRESHOLDS, classifyPackage, checkPackages };
+export = { DEFAULT_THRESHOLDS, classifyPackage, checkPackages, _setHttpGet };

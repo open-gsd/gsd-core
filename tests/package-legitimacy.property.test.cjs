@@ -82,7 +82,7 @@ describe('property: classifyPackage never throws on arbitrary partial signals', 
     );
   });
 
-  test('SLOP verdict only appears when exists===false', () => {
+  test('SLOP verdict only appears when exists===false OR suspicious-postinstall', () => {
     fc.assert(
       fc.property(arbitrarySignals, (signals) => {
         let result;
@@ -90,10 +90,11 @@ describe('property: classifyPackage never throws on arbitrary partial signals', 
           result = classifyPackage(signals, { clock: fixedClock });
         });
         if (result.verdict === 'SLOP') {
-          assert.equal(
-            signals.exists,
-            false,
-            'SLOP verdict should only occur when exists===false'
+          const isMissingPkg = signals.exists === false;
+          const hasSuspiciousPostinstall = result.reasons.includes('suspicious-postinstall');
+          assert.ok(
+            isMissingPkg || hasSuspiciousPostinstall,
+            'SLOP verdict should only occur when exists===false or suspicious-postinstall is present'
           );
         }
       })
