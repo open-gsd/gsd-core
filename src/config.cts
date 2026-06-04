@@ -419,6 +419,10 @@ function setConfigValue(cwd: string, keyPath: string, parsedValue: unknown): Set
 
     // Set nested value using dot notation (e.g., "workflow.research")
     const keys = keyPath.split('.');
+    const FORBIDDEN_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
+    if (keys.some((k) => FORBIDDEN_KEYS.has(k))) {
+      error('Invalid config key (prototype pollution guard): ' + keyPath, ERROR_REASON.CONFIG_PARSE_FAILED);
+    }
     let current: Record<string, unknown> = config;
     for (let i = 0; i < keys.length - 1; i++) {
       const key = keys[i];

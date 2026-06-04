@@ -49,6 +49,9 @@ concurrency:
   group: install-smoke-${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   # ---------------------------------------------------------------------------
   # Job 1: tarball install (existing canonical path)

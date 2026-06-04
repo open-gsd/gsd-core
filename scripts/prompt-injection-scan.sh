@@ -83,7 +83,7 @@ ALLOWLIST=(
   # These files contain intentional injection examples / security-model prose
   # and are not attack vectors — they explain/demonstrate injection patterns.
   'TEST-EXAMPLES.md'
-  'docs/explanation/security-model.md'
+  'explanation/security-model.md'
 )
 
 is_allowlisted() {
