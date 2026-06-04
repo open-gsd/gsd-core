@@ -121,6 +121,9 @@ export default tseslint.config(
       'gsd-core/bin/lib/workstream.cjs',
       'gsd-core/bin/lib/roadmap.cjs',
       'gsd-core/bin/lib/audit.cjs',
+      'gsd-core/bin/lib/research-store.cjs',
+      'gsd-core/bin/lib/research-provider.cjs',
+      'gsd-core/bin/lib/package-legitimacy.cjs',
     ],
   },
 
