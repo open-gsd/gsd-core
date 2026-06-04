@@ -264,7 +264,7 @@ Full roster at `gsd-core/workflows/*.md`. Workflows are thin orchestrators that 
 
 ---
 
-## References (63 shipped)
+## References (64 shipped)
 
 Full roster at `gsd-core/references/*.md`. References are shared knowledge documents that workflows and agents `@-reference`. The groupings below match [`docs/ARCHITECTURE.md`](ARCHITECTURE.md#references-gsd-corereferencesmd) — core, workflow, thinking-model clusters, and the modular planner decomposition.
 
@@ -288,6 +288,7 @@ Full roster at `gsd-core/references/*.md`. References are shared knowledge docum
 | `debugger-philosophy.md` | Evergreen debugging disciplines loaded by `gsd-debugger`. |
 | `mandatory-initial-read.md` | Shared required-reading boilerplate injected into agent prompts. |
 | `project-skills-discovery.md` | Shared project-skills-discovery boilerplate injected into agent prompts. |
+| `research-documentation-lookup.md` | Shared documentation-lookup protocol (Context7 MCP + guarded CLI fallback) injected into all researcher agents. |
 
 ### Workflow References
 
@@ -362,7 +363,7 @@ The `gsd-planner` agent is decomposed into a core agent plus reference modules t
 | `user-story-template.md` | User story format for MVP planning — "As a / I want to / So that" structured fields. |
 | `spidr-splitting.md` | SPIDR splitting decomposition rules for handling large user stories in MVP mode. |
 
-> **Subdirectory:** `gsd-core/references/few-shot-examples/` contains additional few-shot examples (`plan-checker.md`, `verifier.md`) that are referenced from specific agents. These are not counted in the 63 top-level references.
+> **Subdirectory:** `gsd-core/references/few-shot-examples/` contains additional few-shot examples (`plan-checker.md`, `verifier.md`) that are referenced from specific agents. These are not counted in the 64 top-level references.
 
 ---
 
