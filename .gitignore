@@ -68,6 +68,7 @@ build/
 # Published via prepublishOnly; built before test via pretest. Grows as modules migrate.
 /gsd-core/bin/lib/research-store.cjs
 /gsd-core/bin/lib/research-provider.cjs
+/gsd-core/bin/lib/package-legitimacy.cjs
 /gsd-core/bin/lib/semver-compare.cjs
 /gsd-core/bin/lib/config-types.cjs
 /gsd-core/bin/lib/code-review-flags.cjs
