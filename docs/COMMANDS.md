@@ -713,13 +713,17 @@ Run all remaining phases autonomously.
 |------|-------------|
 | `--from N` | Start from a specific phase number |
 | `--to N` | Stop after completing a specific phase number |
+| `--only N` | Restrict execution to phase N; lifecycle step is skipped |
 | `--interactive` | Lean context with user input |
+| `--text` | Replace `AskUserQuestion` prompts with plain numbered lists |
 
 ```bash
 /gsd-autonomous                     # Run all remaining phases
 /gsd-autonomous --from 3            # Start from phase 3
 /gsd-autonomous --to 5              # Run up to and including phase 5
 /gsd-autonomous --from 3 --to 5     # Run phases 3 through 5
+/gsd-autonomous --only 4            # Run only phase 4
+/gsd-autonomous --text              # Run with text-mode prompts
 ```
 
 ### `/gsd-debug`
