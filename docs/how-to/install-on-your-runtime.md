@@ -281,6 +281,17 @@ Restart your runtime to pick up new commands and agents. Then start your first p
 
 If the command is not found after restart, verify the install directory matches the runtime's expected config path. The prerelease-editions section above covers the most common mismatch.
 
+### "… is not on your PATH" after install
+
+If the installer's global bin directory is not on your `PATH`, it prints a one-time warning with a copy-paste command for your shell. The suggestion list covers `zsh`, `bash`, and `fish` (plus PowerShell, cmd.exe, and Git Bash on Windows):
+
+```fish
+# fish — persists via fish's universal variables
+fish_add_path '/path/to/global/bin'
+```
+
+The installer also suppresses this warning when your shell already covers the directory — for fish that means an existing `fish_user_paths` entry (in `~/.config/fish/fish_variables`) or a `fish_add_path` / `set -gx PATH` line in `~/.config/fish/config.fish`. If the directory is already covered but the warning still mentions reopening your shell, open a new session (`exec fish`) to pick up the change.
+
 ---
 
 ## Related

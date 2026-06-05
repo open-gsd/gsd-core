@@ -10659,6 +10659,180 @@ function homePathCoveredByRc(globalBin, homeDir, rcFileNames) {
 }
 
 /**
+ * Check whether fish's configuration already places `globalBin` on PATH (#323).
+ *
+ * fish does not use the sh-style `export PATH=` rc files that
+ * `homePathCoveredByRc()` parses, so a fish user whose `fish_user_paths`
+ * already covers the global bin would otherwise see a false-positive
+ * "not on your PATH" warning on every install. Two detection routes,
+ * mirroring how `fish_add_path` actually persists:
+ *
+ *  1. The universal-variable store `fish_variables` — a
+ *     `SETUVAR fish_user_paths:<a>\x1e<b>…` line whose `\x1e`-separated
+ *     entries are absolute paths (fish does not HOME-expand them here).
+ *  2. `config.fish` — explicit `fish_add_path …`, `set -gx PATH …`, or
+ *     `set -Ux fish_user_paths …` lines that name the directory after
+ *     HOME expansion.
+ *
+ * Best-effort and side-effect-free: any unreadable / missing file is ignored
+ * (no fish subprocess is spawned). Honours `$XDG_CONFIG_HOME` and always also
+ * checks `~/.config/fish`. Pass `fishConfigDir` to override the lookup
+ * directory (tests).
+ *
+ * @param {string} globalBin  Absolute path to npm's global bin directory.
+ * @param {string} homeDir    Absolute path used to substitute HOME / ~.
+ * @param {string} [fishConfigDir]  Override the fish config directory.
+ * @returns {boolean}         true iff fish config adds globalBin to PATH.
+ */
+function homePathCoveredByFishConfig(globalBin, homeDir, fishConfigDir) {
+  if (!globalBin || !homeDir) return false;
+  const path = require('path');
+  const fs = require('fs');
+
+  const normalise = (p) => {
+    if (!p) return '';
+    let n = p.replace(/[\\/]+$/g, '');
+    if (n === '') n = p.startsWith('/') ? '/' : p;
+    return n;
+  };
+
+  const targetAbs = normalise(path.resolve(globalBin));
+  const homeAbs = path.resolve(homeDir);
+
+  const baseDirs = [];
+  if (fishConfigDir) {
+    baseDirs.push(fishConfigDir);
+  } else {
+    if (process.env.XDG_CONFIG_HOME) {
+      baseDirs.push(path.join(process.env.XDG_CONFIG_HOME, 'fish'));
+    }
+    baseDirs.push(path.join(homeAbs, '.config', 'fish'));
+  }
+
+  const expandHome = (segment) => {
+    let s = segment;
+    s = s.replace(/\$\{HOME\}/g, homeAbs).replace(/\$HOME/g, homeAbs);
+    if (s.startsWith('~/') || s === '~') {
+      s = s === '~' ? homeAbs : path.join(homeAbs, s.slice(2));
+    }
+    return s;
+  };
+
+  // Compare an already-resolved absolute literal (a decoded fish_user_paths
+  // entry — fish stores these resolved, never as `$VAR`/`~`). A literal `$`
+  // here is part of the directory name, so it must NOT be treated as an
+  // unexpanded variable.
+  const matchesLiteral = (segment) => {
+    if (!segment || !path.isAbsolute(segment)) return false;
+    try {
+      return normalise(path.resolve(segment)) === targetAbs;
+    } catch {
+      return false;
+    }
+  };
+
+  // Compare a config.fish shell token: strip surrounding quotes, expand the
+  // common HOME forms, and skip anything still holding a `$` (an unexpanded
+  // variable such as `$PATH` / `$fish_user_paths`) or still relative.
+  const matchesTarget = (rawSegment) => {
+    if (!rawSegment) return false;
+    let seg = rawSegment.trim();
+    if ((seg.startsWith('"') && seg.endsWith('"')) ||
+        (seg.startsWith("'") && seg.endsWith("'"))) {
+      seg = seg.slice(1, -1);
+    }
+    const expanded = expandHome(seg);
+    if (expanded.includes('$')) return false;
+    return matchesLiteral(expanded);
+  };
+
+  const readLines = (filePath) => {
+    try {
+      return fs.readFileSync(filePath, 'utf8').split(/\r?\n/);
+    } catch {
+      return null;
+    }
+  };
+
+  // Decode fish's universal-variable value escaping (the inverse of fish's
+  // `full_escape`). fish serializes every non-`[A-Za-z0-9/_]` byte in
+  // fish_variables — e.g. space -> `\x20`, hyphen -> `\x2d`, dot -> `\x2e` —
+  // and joins list elements with the literal 4-char token `\x1e` (NOT a raw
+  // 0x1e byte). Callers split on `\x1e` first, then decode each element here.
+  const decodeFishUniversalValue = (s) => {
+    let out = '';
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i];
+      if (c !== '\\') { out += c; continue; }
+      const n = s[i + 1];
+      if (n === 'n') { out += '\n'; i += 1; }
+      else if (n === 'r') { out += '\r'; i += 1; }
+      else if (n === 't') { out += '\t'; i += 1; }
+      else if (n === '\\') { out += '\\'; i += 1; }
+      else if (n === 'x' || n === 'X') {
+        const hex = s.slice(i + 2, i + 4);
+        if (/^[0-9a-fA-F]{2}$/.test(hex)) { out += String.fromCharCode(parseInt(hex, 16)); i += 3; }
+        else { out += c; }
+      } else if (n === 'u') {
+        const hex = s.slice(i + 2, i + 6);
+        if (/^[0-9a-fA-F]{4}$/.test(hex)) { out += String.fromCharCode(parseInt(hex, 16)); i += 5; }
+        else { out += c; }
+      } else if (n === 'U') {
+        const hex = s.slice(i + 2, i + 10);
+        if (/^[0-9a-fA-F]{8}$/.test(hex)) { out += String.fromCodePoint(parseInt(hex, 16)); i += 9; }
+        else { out += c; }
+      } else { out += c; }
+    }
+    return out;
+  };
+
+  for (const baseDir of baseDirs) {
+    // Route 1: universal variable store.
+    const uvarLines = readLines(path.join(baseDir, 'fish_variables'));
+    if (uvarLines) {
+      for (const rawLine of uvarLines) {
+        const m = /^SETUVAR(?:\s+--\S+)*\s+fish_user_paths:(.*)$/.exec(rawLine);
+        if (!m) continue;
+        // Elements are joined by the literal `\x1e` token; decode each. The
+        // decoded entry is an absolute literal — compare it directly.
+        for (const entry of m[1].split('\\x1e')) {
+          if (matchesLiteral(decodeFishUniversalValue(entry))) return true;
+        }
+      }
+    }
+
+    // Route 2: config.fish explicit PATH mutations.
+    const configLines = readLines(path.join(baseDir, 'config.fish'));
+    if (configLines) {
+      for (const rawLine of configLines) {
+        const line = rawLine.replace(/^\s+/, '');
+        if (line.startsWith('#')) continue;
+
+        let rest = null;
+        let m;
+        if ((m = /^fish_add_path\s+(.+)$/.exec(line))) {
+          rest = m[1];
+        } else if ((m = /^set\s+(?:-\S+\s+)*PATH\s+(.+)$/.exec(line))) {
+          rest = m[1];
+        } else if ((m = /^set\s+(?:-\S+\s+)*fish_user_paths\s+(.+)$/.exec(line))) {
+          rest = m[1];
+        }
+        if (rest === null) continue;
+
+        // Tokens are whitespace-separated; flag tokens (`-g`, `--path`) and
+        // variable references are skipped by matchesTarget / the `-` guard.
+        for (const tok of rest.split(/\s+/)) {
+          if (!tok || tok.startsWith('-')) continue;
+          if (matchesTarget(tok)) return true;
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+/**
  * Emit a PATH-export suggestion if globalBin is not already on PATH AND
  * the user's shell rc files do not already cover it via a HOME-relative
  * entry (#2620).
@@ -10696,6 +10870,16 @@ function maybeSuggestPathExport(globalBin, homeDir) {
   if (homePathCoveredByRc(globalBin, homeDir)) {
     console.log('');
     console.log(`  ${yellow}⚠${reset} ${bold}${globalBin}${reset}'s directory is already on your PATH via an rc file entry — try reopening your shell (or ${cyan}source ~/.zshrc${reset}).`);
+    console.log('');
+    return;
+  }
+
+  // Same idea for fish users: fish_user_paths / config.fish already covers the
+  // dir, the current session just predates it. fish has no sh-style rc file so
+  // homePathCoveredByRc never sees it — check the fish config explicitly (#323).
+  if (homePathCoveredByFishConfig(globalBin, homeDir)) {
+    console.log('');
+    console.log(`  ${yellow}⚠${reset} ${bold}${globalBin}${reset}'s directory is already on your PATH via fish's universal variables — open a new fish session (or run ${cyan}exec fish${reset}).`);
     console.log('');
     return;
   }
@@ -10996,6 +11180,7 @@ module.exports = {
     USER_OWNED_ARTIFACTS,
     finishInstall,
     homePathCoveredByRc,
+    homePathCoveredByFishConfig,
     maybeSuggestPathExport,
     runtimeMap,
     allRuntimes,
