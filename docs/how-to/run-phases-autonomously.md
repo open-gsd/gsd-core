@@ -42,6 +42,18 @@ Resume with: /gsd-autonomous --from 6
 
 ---
 
+## Run a single phase
+
+To run exactly one phase without triggering the milestone lifecycle, use `--only N`:
+
+```bash
+/gsd-autonomous --only 4
+```
+
+If the phase is already complete, autonomous mode exits immediately with a message rather than re-running it.
+
+---
+
 ## Run with interactive discuss
 
 By default, autonomous mode answers discuss questions automatically using smart discuss (batch table proposals). If you want to answer design questions yourself while keeping plan and execute out of the main context:
@@ -54,6 +66,19 @@ In interactive mode:
 - `/gsd-discuss-phase` runs inline and waits for your answers
 - Planning and execution are dispatched as background agents so you can discuss the next phase while the current one builds
 - The main context stays lean — only discuss conversations accumulate
+
+---
+
+## Run on a non-Claude runtime
+
+To run autonomously on a runtime that does not support the `AskUserQuestion` tool (for example Codex CLI or Gemini CLI), add `--text`:
+
+```bash
+/gsd-autonomous --text
+/gsd-autonomous --from 3 --text
+```
+
+All interactive prompts become plain numbered lists; type the choice number to respond.
 
 ---
 
@@ -78,7 +103,7 @@ Do not use `/gsd-autonomous` when:
 
 - **Phases have unsettled design decisions.** If you have not run `/gsd-discuss-phase` and your `PROJECT.md` does not capture your preferences, smart discuss will make autonomous choices you may not agree with. Run discuss interactively first, or use `--interactive`.
 
-- **You need fine-grained control over a single phase.** For one phase, `/gsd-execute-phase N` gives you step-by-step output and lets you react before continuing. Autonomous mode is designed for bulk unattended runs.
+- **You need fine-grained control over a single phase.** For one phase, `/gsd-execute-phase N` gives you step-by-step output and lets you react before continuing. Use `--only N` if you want the autonomous quality pipeline on a single phase but do not need step-by-step interaction.
 
 - **The phase has novel or high-risk work.** Autonomous mode skips pauses unless it hits a blocker. On a phase where you expect surprises, stay in the loop with manual execution.
 
