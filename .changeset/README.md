@@ -37,8 +37,14 @@ PRs that legitimately have no user-facing impact can add the `no-changelog` labe
 
 ## At release time
 
+Promotion is **automatic**. The release workflow's `finalize` job runs:
+
 ```bash
-node scripts/changeset/cli.cjs render --version vX.Y.Z --date YYYY-MM-DD
+node scripts/changeset/cli.cjs render --version vX.Y.Z --date YYYY-MM-DD --allow-empty
 ```
 
-Reads every fragment, groups bullets by `type:`, replaces `## [Unreleased]` with a new `## [vX.Y.Z] - YYYY-MM-DD` block, opens a fresh `## [Unreleased]` above, deletes consumed fragments. Idempotent.
+This reads every fragment, groups bullets by `type:`, replaces `## [Unreleased]` with a new `## [vX.Y.Z] - YYYY-MM-DD` block, opens a fresh `## [Unreleased]` above, and deletes consumed fragments. The `--allow-empty` flag ensures a no-change release still gets a dated heading (with a `_No notable changes._` placeholder). A subsequent `verify` step confirms the promotion landed correctly. Maintainers do **not** run this by hand.
+
+## Archived fragments
+
+`.changeset/archived/` holds fragments for already-shipped releases (≤ 1.3.1), retained for provenance. Their content was hand-curated into the dated `## [1.x.y]` sections of `CHANGELOG.md` during the #690 backfill — they were never consumed by `render`. All changeset tooling enumerates `.changeset/` non-recursively, so archived fragments are never picked up or rendered. Do not move them back to the top level.
