@@ -427,6 +427,7 @@ export function execGit(args: string[], opts: { cwd?: string; env?: Record<strin
     encoding: 'utf-8',
     stdio: 'pipe',
     timeout: opts.timeout ?? 10_000,
+    windowsHide: true,
   });
   return _spawnResult(result, 'git');
 }
@@ -438,6 +439,7 @@ export function execNpm(args: string[], opts: { cwd?: string; timeout?: number }
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: opts.timeout ?? 15_000,
+    windowsHide: true,
   });
   return _spawnResult(result, 'npm');
 }
@@ -449,6 +451,7 @@ export function execTool(program: string, args: string[], opts: { cwd?: string; 
     encoding: 'utf-8',
     stdio: 'pipe',
     timeout: opts.timeout ?? 30_000,
+    windowsHide: true,
   });
   return _spawnResult(result, program);
 }

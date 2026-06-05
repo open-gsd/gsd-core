@@ -36,11 +36,11 @@ describe('Cursor CLI reviewer in /gsd-review (#1960)', () => {
       content = fs.readFileSync(reviewPath, 'utf-8');
     });
 
-    test('contains cursor CLI detection via command -v', () => {
+    test('contains cursor CLI detection via command -v cursor-agent', () => {
       const c = fs.readFileSync(reviewPath, 'utf-8');
       assert.ok(
-        c.includes('command -v cursor'),
-        'review.md should detect cursor CLI via "command -v cursor"'
+        c.includes('command -v cursor-agent'),
+        'review.md should detect cursor CLI via "command -v cursor-agent" (not the cursor IDE launcher)'
       );
     });
 
@@ -60,11 +60,47 @@ describe('Cursor CLI reviewer in /gsd-review (#1960)', () => {
       );
     });
 
-    test('contains cursor agent invocation command', () => {
+    test('invocation uses cursor-agent single binary with -p flag', () => {
       const c = fs.readFileSync(reviewPath, 'utf-8');
       assert.ok(
-        c.includes('cursor agent -p --mode ask --trust'),
-        'review.md should invoke cursor via "cursor agent -p --mode ask --trust"'
+        c.includes('cursor-agent -p'),
+        'review.md should invoke cursor via "cursor-agent -p" (single binary, not two-token "cursor agent")'
+      );
+    });
+
+    test('invocation includes --output-format text', () => {
+      const c = fs.readFileSync(reviewPath, 'utf-8');
+      assert.ok(
+        c.includes('--output-format text'),
+        'review.md cursor-agent invocation should include "--output-format text"'
+      );
+    });
+
+    test('invocation passes prompt as a file-path argument (not via stdin pipe)', () => {
+      const c = fs.readFileSync(reviewPath, 'utf-8');
+      assert.ok(
+        c.includes('Read the file at /tmp/gsd-review-prompt-'),
+        'review.md cursor-agent invocation should pass prompt by referencing the file path as an argument'
+      );
+    });
+
+    test('does NOT use broken two-token "cursor agent " form', () => {
+      const c = fs.readFileSync(reviewPath, 'utf-8');
+      // Must not match "cursor agent " (cursor + space + agent + space)
+      // The hyphenated "cursor-agent" must NOT trip this check — the regex uses a space, not a hyphen.
+      assert.ok(
+        !/cursor agent /.test(c),
+        'review.md must NOT contain the broken two-token form "cursor agent " (use "cursor-agent" instead)'
+      );
+    });
+
+    test('does NOT pipe the prompt into a cursor command via stdin', () => {
+      const c = fs.readFileSync(reviewPath, 'utf-8');
+      // Must not match a pipe feeding into a cursor command (e.g. "| cursor" or "|cursor")
+      // "cursor-agent" (hyphenated) must NOT trip this — the regex anchors on "cursor" not followed by "-agent"
+      assert.ok(
+        !/\| *cursor(?!-agent)/.test(c),
+        'review.md must NOT pipe the prompt to a cursor command via stdin'
       );
     });
 

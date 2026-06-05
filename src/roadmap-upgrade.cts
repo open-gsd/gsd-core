@@ -497,7 +497,7 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
   // ── Real run: verify clean working tree ───────────────────────────────────
   let gitStatus: string;
   try {
-    gitStatus = execSync('git status --porcelain', { cwd, encoding: 'utf8' });
+    gitStatus = execSync('git status --porcelain', { cwd, encoding: 'utf8', windowsHide: true });
   } catch (err) {
     throw new Error(`git status failed: ${(err as Error).message}`);
   }
@@ -508,7 +508,7 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
   // Capture HEAD sha for rollback
   let headSha: string;
   try {
-    headSha = execSync('git rev-parse HEAD', { cwd, encoding: 'utf8' }).trim();
+    headSha = execSync('git rev-parse HEAD', { cwd, encoding: 'utf8', windowsHide: true }).trim();
   } catch (err) {
     throw new Error(`git rev-parse HEAD failed: ${(err as Error).message}`);
   }
@@ -592,8 +592,8 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
   } catch (err) {
     // Rollback via git reset --hard + git clean
     try {
-      execSync(`git reset --hard ${headSha}`, { cwd, stdio: 'pipe' });
-      execSync('git clean -fd .planning/phases/', { cwd, stdio: 'pipe' });
+      execSync(`git reset --hard ${headSha}`, { cwd, stdio: 'pipe', windowsHide: true });
+      execSync('git clean -fd .planning/phases/', { cwd, stdio: 'pipe', windowsHide: true });
     } catch {
       // Swallow rollback errors — surface original error
     }

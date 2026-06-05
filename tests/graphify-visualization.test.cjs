@@ -469,8 +469,8 @@ describe('regressions', () => {
       'a bash code block must invoke `graphify update .`'
     );
     assert.ok(
-      bashBlocks.some(b => /gsd-tools\.cjs["']?\s+graphify build snapshot/.test(b.content)),
-      'a bash code block must invoke `gsd-tools.cjs graphify build snapshot`'
+      bashBlocks.some(b => /gsd_run\s+graphify build snapshot/.test(b.content)),
+      'a bash code block must invoke `gsd_run graphify build snapshot`'
     );
   });
 
