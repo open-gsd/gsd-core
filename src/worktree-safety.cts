@@ -543,10 +543,11 @@ function defaultFindSummaryFiles(worktreePath: string): string[] {
  *
  * For each *SUMMARY.md found under <worktreePath>/.planning/:
  *   - compute relative path from worktree root  → .planning/<id>-SUMMARY.md
- *   - if the file is ALREADY COMMITTED on the worktree branch (git ls-files
- *     --error-unmatch returns exit 0), skip the copy entirely: the merge will
- *     carry it naturally and copying it as an untracked file would cause a
- *     "untracked working tree files would be overwritten by merge" collision.
+ *   - if the file is ALREADY COMMITTED on the worktree branch
+ *     (`git cat-file -e HEAD:<relPath>` returns exit 0), skip the copy entirely:
+ *     the merge will carry it naturally and copying it as an untracked file would
+ *     cause a "untracked working tree files would be overwritten by merge" collision.
+ *     On timeout or fatal exit (128) the rescue is also skipped (fail-closed).
  *     (#706 — execute-phase committed-SUMMARY contract)
  *   - destination = <repoRoot>/<relPath>
  *   - copy when dest is absent or content differs
@@ -596,9 +597,14 @@ function rescueSummaryArtifacts(
     // issue).  The cleanup will be blocked by merge_failed in the worst case,
     // which is the observable behaviour before this fix and is recoverable.
     const catFileResult = execGit(['-C', worktreePath, 'cat-file', '-e', `HEAD:${relPath}`], { cwd: repoRoot });
-    if (catFileResult.exitCode === 0 || catFileResult.timedOut) {
-      // File is committed on HEAD (exit 0) — or git call was unreliable (timeout)
-      // — skip rescue so the merge can carry it (or fail safely).
+    if (catFileResult.exitCode !== 1) {
+      // Rescue only when cat-file definitively reports the object is absent (exit 1).
+      //   exit 0  → object exists (committed on HEAD) — merge will carry it, skip.
+      //   exit 128 → fatal git error (corrupt store, unborn HEAD, etc.) — uncertain,
+      //              fail-closed: do NOT rescue to avoid recreating the #706 collision.
+      //   timedOut / null / other → unreliable result — same fail-closed policy.
+      // In all non-1 cases the merge will either succeed naturally (0) or surface
+      // the problem safely (128/timeout), which is the recoverable pre-fix behaviour.
       continue;
     }
 

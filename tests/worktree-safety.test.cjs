@@ -1051,6 +1051,78 @@ describe('executeWorktreeWaveCleanupPlan', () => {
     assert.equal(result.entries[0].status, 'merged_removed');
   });
 
+  test('#706: cat-file fatal exit 128 causes rescue to be skipped (fail-closed on uncertain git)', () => {
+    // Finding #1 (code-review): exit code 128 means a fatal git error (e.g. corrupt
+    // object store, unborn HEAD, missing repo).  The guard must treat it as
+    // "uncertain — cannot determine committed status" and skip rescue, NOT proceed.
+    // Rescuing when status is uncertain would re-create the #706 merge collision if
+    // the file is actually already committed.
+    //
+    // Fixture: cat-file returns exitCode:128, timedOut:false.
+    // The cleanup must NOT rescue the SUMMARY (no copy into main tree).
+    const rescued = [];
+    const plan = {
+      ok: true,
+      repoRoot: '/repo/main',
+      action: 'cleanup_wave',
+      discovery: 'manifest',
+      entries: [{
+        agent_id: 'a1',
+        worktree_path: '/repo/.claude/worktrees/agent-a1',
+        branch: 'worktree-agent-a1',
+        expected_base: 'abc123',
+      }],
+    };
+    const result = executeWorktreeWaveCleanupPlan(plan, {
+      execGit: (args) => {
+        const key = args.join(' ');
+        if (key === '-C /repo/.claude/worktrees/agent-a1 rev-parse --abbrev-ref HEAD') {
+          return { exitCode: 0, stdout: 'worktree-agent-a1', stderr: '' };
+        }
+        if (key === 'merge-base HEAD worktree-agent-a1') {
+          return { exitCode: 0, stdout: 'abc123', stderr: '' };
+        }
+        if (key === 'diff --diff-filter=D --name-only HEAD...worktree-agent-a1') {
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        // cat-file returns 128 — fatal git error (e.g. corrupt object store)
+        if (key === '-C /repo/.claude/worktrees/agent-a1 cat-file -e HEAD:.planning/q1-SUMMARY.md') {
+          return { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository', timedOut: false };
+        }
+        if (key === '-C /repo/.claude/worktrees/agent-a1 status --porcelain --untracked-files=all') {
+          // Worktree appears clean (SUMMARY is committed on branch)
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        if (key.startsWith('merge worktree-agent-a1')) {
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        if (key === 'worktree remove /repo/.claude/worktrees/agent-a1 --force') {
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        if (key === 'branch -D worktree-agent-a1') {
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+      findSummaryFiles: (worktreePath) => {
+        if (worktreePath === '/repo/.claude/worktrees/agent-a1') {
+          return ['/repo/.claude/worktrees/agent-a1/.planning/q1-SUMMARY.md'];
+        }
+        return [];
+      },
+      readFileSync: () => 'summary content',
+      existsSync: () => false,
+      mkdirSync: () => {},
+      copyFileSync: (src, dest) => { rescued.push({ src, dest }); },
+    });
+
+    // On fatal exit 128, rescue must be skipped (fail-closed) — no copy into main tree
+    assert.equal(rescued.length, 0,
+      'cat-file exit 128 must NOT rescue the SUMMARY — uncertain git state, skip to avoid recreating #706 collision');
+    // The rest of cleanup proceeds normally (merge/remove/delete succeed in this fixture)
+    assert.equal(result.ok, true, 'cleanup can still succeed when cat-file returns 128 and worktree is clean');
+  });
+
   test('#706: cat-file timeout causes rescue to be skipped (fail-closed on unreliable git)', () => {
     // Codex adversarial finding: on cat-file timeout, rescuing an actually-committed
     // file would re-create the untracked collision.  The fix treats timeout as
