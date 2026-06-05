@@ -495,6 +495,24 @@ jobs:
           node scripts/check-npm-integrity.cjs
           npm run test:coverage:unit
 
+      - name: Promote CHANGELOG (render fragments)
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          node scripts/changeset/cli.cjs render \
+            --version "$VERSION" --date "$(date -u +%F)" --allow-empty
+          git add -A .changeset CHANGELOG.md
+          # Diff-preview guard: surface exactly what was promoted, in the log and
+          # the job summary, before the commit lands.
+          {
+            echo "### CHANGELOG promotion for v${VERSION}"
+            echo '```diff'
+            git diff --cached -- CHANGELOG.md
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+          git --no-pager diff --cached -- CHANGELOG.md
+          git diff --cached --quiet || git commit -m "chore: promote CHANGELOG for v${VERSION}"
+
       - name: Verify CHANGELOG promoted
         env:
           VERSION: ${{ inputs.version }}

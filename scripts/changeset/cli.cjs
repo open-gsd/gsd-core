@@ -40,6 +40,7 @@ function parseArgs(argv) {
     repoSlug: defaultRepoSlug,
     installCommand: `npx ${packageName}@latest`,
     json: false,
+    allowEmpty: false,
   };
   if (argv.length === 0) return { ok: true, opts };
   opts.cmd = argv[0];
@@ -59,6 +60,7 @@ function parseArgs(argv) {
   for (let i = 1; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--json') { opts.json = true; continue; }
+    if (a === '--allow-empty') { opts.allowEmpty = true; continue; }
     if (
       a === '--repo' ||
       a === '--version' ||
@@ -118,6 +120,18 @@ function splitChangelog(text) {
   return { lead, prior };
 }
 
+// FIX 2: tiny local helper so both render paths share identical assembly logic.
+function assembleChangelog(lead, releaseBlock) {
+  return [
+    lead || '# Changelog',
+    '',
+    '## [Unreleased]',
+    '',
+    releaseBlock.replace(/\s+$/, ''),
+    '',
+  ].join('\n');
+}
+
 function cmdRender(opts) {
   const repo = path.resolve(opts.repo);
   const changesetDir = path.join(repo, '.changeset');
@@ -133,14 +147,83 @@ function cmdRender(opts) {
     else failures.push({ file: path.relative(repo, file), reason: r.reason, detail: r.detail || null });
   }
 
+  // 1. parse-failure → exitCode 1 (unchanged).
   if (failures.length > 0) {
     return { exitCode: 1, report: { consumed: 0, failures } };
   }
-  if (fragments.length === 0) {
-    return { exitCode: 0, report: { consumed: 0, failures: [] } };
+
+  // 2. Read priorText once; reuse in all subsequent branches.
+  const priorText = fs.existsSync(changelogPath) ? fs.readFileSync(changelogPath, 'utf8') : '';
+
+  // 3. FIX 1: idempotency guard — if the version is already promoted (a dated
+  //    release heading for this version already exists in CHANGELOG), split on
+  //    whether fragments are still present:
+  //    • alreadyPromoted + zero fragments → legitimate CI-retry no-op (the prior
+  //      render commit already deleted fragments and wrote the heading).
+  //    • alreadyPromoted + fragments present → inconsistent state: the heading
+  //      was written out-of-band but fragments were never consumed.  Fail loudly
+  //      so the operator resolves it manually rather than silently leaving stale
+  //      fragments to be re-consumed in a later release.
+  const version = stripV(opts.version);
+  const { releases: existingReleases } = parseChangelog(priorText);
+  const alreadyPromoted = existingReleases.some(
+    (rel) => rel.version === version && rel.date,
+  );
+  if (alreadyPromoted) {
+    if (fragments.length === 0) {
+      return { exitCode: 0, report: { consumed: 0, failures: [], alreadyPromoted: true } };
+    }
+    const errMsg =
+      `CHANGELOG.md already has a dated heading for ${version} but ` +
+      `${fragments.length} unconsumed fragment(s) remain in .changeset/ — ` +
+      `resolve manually (the version was likely promoted out-of-band).`;
+    return {
+      exitCode: 1,
+      report: { consumed: 0, failures: [], alreadyPromoted: true, error: errMsg },
+    };
   }
 
-  const priorText = fs.existsSync(changelogPath) ? fs.readFileSync(changelogPath, 'utf8') : '';
+  // 4. Zero-fragment + !allowEmpty early-exit: write nothing.
+  if (fragments.length === 0) {
+    if (!opts.allowEmpty) {
+      return { exitCode: 0, report: { consumed: 0, failures: [] } };
+    }
+    // --allow-empty: emit a dated heading with a placeholder even though there
+    // are no fragments. This lets the render→verify CI chain succeed when a
+    // release contains no user-visible changes.
+    const { lead, prior } = splitChangelog(priorText);
+    // Build a header-only release block and inject the placeholder line.
+    const ir = renderChangelog({
+      fragments: [],
+      version: opts.version,
+      date: opts.date,
+      priorChangelog: prior || null,
+    });
+    const headerOnlyBlock = serializeChangelog(ir);
+    // Insert placeholder after the release header line.
+    // serializeChangelog with no sections yields just "## [v] - d\n" (single
+    // trailing newline, no blank line).  We replace that trailing newline with
+    // a blank line + placeholder + blank line so parseChangelog still sees the
+    // dated heading first and the file is human-readable.
+    const releaseBlock = headerOnlyBlock.replace(
+      /^(##\s+\[[^\]]+\][^\n]*)\n+/,
+      '$1\n\n_No notable changes._\n\n',
+    );
+    // FIX 2: use shared assembleChangelog helper.
+    const out = assembleChangelog(lead, releaseBlock);
+    fs.writeFileSync(changelogPath, out);
+    return {
+      exitCode: 0,
+      report: {
+        consumed: 0,
+        failures: [],
+        written: true,
+        release: { version: opts.version, date: opts.date },
+      },
+    };
+  }
+
+  // 5. Normal render path: fragments present — reuse priorText already read above.
   const { lead, prior } = splitChangelog(priorText);
 
   const ir = renderChangelog({
@@ -150,14 +233,8 @@ function cmdRender(opts) {
     priorChangelog: prior || null,
   });
   const releaseBlock = serializeChangelog(ir);
-  const out = [
-    lead || '# Changelog',
-    '',
-    '## [Unreleased]',
-    '',
-    releaseBlock.replace(/\s+$/, ''),
-    '',
-  ].join('\n');
+  // FIX 2: use shared assembleChangelog helper.
+  const out = assembleChangelog(lead, releaseBlock);
 
   fs.writeFileSync(changelogPath, out);
 
@@ -382,7 +459,7 @@ function cmdGithubReleaseNotes(opts) {
 function usage() {
   return [
     'usage:',
-    '  changeset/cli.cjs render --repo <dir> --version V --date D [--json]',
+    '  changeset/cli.cjs render --repo <dir> --version V --date D [--allow-empty] [--json]',
     '  changeset/cli.cjs github-release-notes --repo <dir> --from REF --to REF [--output FILE] [--repo-slug OWNER/REPO] [--install-command CMD] [--json]',
     '  changeset/cli.cjs extract --from VERSION --to VERSION [--changelog FILE] [--repo <dir>] [--json]',
     '    Extracts changelog entries strictly after --from (exclusive) and up to',
@@ -453,6 +530,9 @@ function main() {
   } else if (opts.cmd === 'github-release-notes' && report.body) {
     process.stdout.write(report.body);
   } else {
+    if (report.error) {
+      process.stderr.write(`${report.error}\n`);
+    }
     process.stdout.write(`Consumed: ${report.consumed} fragment(s)\n`);
     if (report.failures.length > 0) {
       process.stdout.write(`Failures: ${report.failures.length}\n`);
@@ -466,4 +546,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { cmdRender, cmdExtract, cmdVerify, cmdGithubReleaseNotes, parseArgs, splitChangelog, listFragmentFiles, usage };
+module.exports = { cmdRender, cmdExtract, cmdVerify, cmdGithubReleaseNotes, parseArgs, splitChangelog, assembleChangelog, listFragmentFiles, usage };
