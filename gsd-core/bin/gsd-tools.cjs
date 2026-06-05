@@ -1765,19 +1765,22 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
 
     // ─── Classify Confidence ──────────────────────────────────────────────
     //
-    // classify-confidence --provider <id> [--verified]
-    //   -> classifyConfidence({ provider, verifiedAgainstOfficial }); core.output(result, raw)
+    // classify-confidence --provider <id> [--verified] [--legitimacy-verdict <ok|sus|slop>]
+    //   -> classifyConfidence({ provider, verifiedAgainstOfficial, legitimacyVerdict }); core.output(result, raw)
 
     case 'classify-confidence': {
       const researchProvider = require('./lib/research-provider.cjs');
       const providerIdx = args.indexOf('--provider');
       const provider = providerIdx !== -1 ? args[providerIdx + 1] : null;
       if (!provider || provider.startsWith('--')) {
-        error('Usage: gsd-tools query classify-confidence --provider <id> [--verified]', ERROR_REASON.USAGE);
+        error('Usage: gsd-tools query classify-confidence --provider <id> [--verified] [--legitimacy-verdict <ok|sus|slop>]', ERROR_REASON.USAGE);
       }
       const verified = args.includes('--verified');
-      const confidence = researchProvider.classifyConfidence({ provider, verifiedAgainstOfficial: verified });
-      core.output({ provider, verified, confidence }, raw);
+      const verdictIdx = args.indexOf('--legitimacy-verdict');
+      const rawVerdict = verdictIdx !== -1 ? args[verdictIdx + 1] : null;
+      const legitimacyVerdict = (rawVerdict && !rawVerdict.startsWith('--')) ? rawVerdict.toUpperCase() : null;
+      const confidence = researchProvider.classifyConfidence({ provider, verifiedAgainstOfficial: verified, legitimacyVerdict });
+      core.output({ provider, verified, legitimacyVerdict, confidence }, raw);
       break;
     }
 

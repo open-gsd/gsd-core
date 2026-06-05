@@ -24,6 +24,7 @@ interface ProviderWaterfall {
 interface ClassifyConfidenceInput {
   provider?: unknown;
   verifiedAgainstOfficial?: unknown;
+  legitimacyVerdict?: unknown;
 }
 
 interface ProviderAvailabilityConfig {
@@ -108,28 +109,75 @@ const PROVIDER_WATERFALL: ProviderWaterfall = {
 };
 
 // ---------------------------------------------------------------------------
-// Cycle 4: classifyConfidence
+// Cycle 4: classifyConfidence (evidence-driven)
+//
+// HIGH = corroborated against an authoritative source (registry ground-truth),
+// NOT a correctness guarantee.
+//
+// Two-axis model:
+//   axis-1: authorityOf(provider) → 'official' | 'scrape' | 'web' | 'none'
+//   axis-2: groundTruth (legitimacyVerdict normalized to OK|SUS|SLOP)
+//
+// Decision table (evaluated in order):
+//   legitimacyVerdict === 'SLOP'                         → LOW  (caps everything)
+//   groundTruth && authority !== 'none'                  → HIGH
+//   authority === 'official' || authority === 'scrape'   → MEDIUM
+//   groundTruth (authority 'none')                       → MEDIUM
+//   authority === 'web' && verifiedAgainstOfficial       → MEDIUM
+//   else                                                 → LOW
 // ---------------------------------------------------------------------------
+
+type ProviderAuthority = 'official' | 'scrape' | 'web' | 'none';
+
+function authorityOf(provider: unknown): ProviderAuthority {
+  switch (provider) {
+    case 'context7':
+    case 'ref':
+      return 'official';
+    case 'jina':
+    case 'firecrawl':
+      return 'scrape';
+    case 'exa':
+    case 'tavily':
+    case 'perplexity':
+    case 'brave':
+    case 'websearch':
+      return 'web';
+    default:
+      return 'none';
+  }
+}
+
+function normalizeLegitimacyVerdict(raw: unknown): 'OK' | 'SUS' | 'SLOP' | null {
+  if (typeof raw !== 'string') return null;
+  const upper = raw.toUpperCase();
+  if (upper === 'OK' || upper === 'SUS' || upper === 'SLOP') return upper;
+  return null;
+}
 
 function classifyConfidence(input: ClassifyConfidenceInput): ConfidenceLevel {
   try {
-    const { provider, verifiedAgainstOfficial } = input;
-    switch (provider) {
-      case 'context7':
-      case 'ref':
-        return 'HIGH';
-      case 'jina':
-      case 'firecrawl':
-        return 'MEDIUM';
-      case 'exa':
-      case 'tavily':
-      case 'perplexity':
-      case 'brave':
-      case 'websearch':
-        return verifiedAgainstOfficial ? 'MEDIUM' : 'LOW';
-      default:
-        return 'LOW';
-    }
+    const { provider, verifiedAgainstOfficial, legitimacyVerdict } = input;
+    const authority = authorityOf(provider);
+    const verdict = normalizeLegitimacyVerdict(legitimacyVerdict);
+    const groundTruth = verdict === 'OK';
+
+    // SLOP caps everything — checked first
+    if (verdict === 'SLOP') return 'LOW';
+
+    // Ground-truth corroboration + known authority → HIGH
+    if (groundTruth && authority !== 'none') return 'HIGH';
+
+    // Official or scrape provider (authority alone) → MEDIUM
+    if (authority === 'official' || authority === 'scrape') return 'MEDIUM';
+
+    // Ground-truth but unknown provider → MEDIUM
+    if (groundTruth) return 'MEDIUM';
+
+    // Web provider with self-reported verification → MEDIUM
+    if (authority === 'web' && verifiedAgainstOfficial === true) return 'MEDIUM';
+
+    return 'LOW';
   } catch {
     return 'LOW';
   }

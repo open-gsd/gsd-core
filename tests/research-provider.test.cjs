@@ -108,12 +108,17 @@ describe('research-provider: stale cache', () => {
 // ---------------------------------------------------------------------------
 
 describe('research-provider: classifyConfidence', () => {
-  test('context7 -> HIGH', () => {
-    assert.equal(classifyConfidence({ provider: 'context7' }), 'HIGH');
+  // Slice 1: core inversion — provider identity alone no longer yields HIGH
+  test('context7 (no legitimacyVerdict) -> MEDIUM', () => {
+    assert.equal(classifyConfidence({ provider: 'context7' }), 'MEDIUM');
   });
 
-  test('ref -> HIGH', () => {
-    assert.equal(classifyConfidence({ provider: 'ref' }), 'HIGH');
+  test('ref (no legitimacyVerdict) -> MEDIUM', () => {
+    assert.equal(classifyConfidence({ provider: 'ref' }), 'MEDIUM');
+  });
+
+  test('context7 + legitimacyVerdict OK -> HIGH', () => {
+    assert.equal(classifyConfidence({ provider: 'context7', legitimacyVerdict: 'OK' }), 'HIGH');
   });
 
   test('jina -> MEDIUM', () => {
@@ -143,6 +148,23 @@ describe('research-provider: classifyConfidence', () => {
   test('undefined provider -> LOW (never throws)', () => {
     assert.doesNotThrow(() => classifyConfidence({ provider: undefined }));
     assert.equal(classifyConfidence({ provider: undefined }), 'LOW');
+  });
+
+  // Slice 2: caps + web + edges
+  test('context7 + legitimacyVerdict SLOP -> LOW (cap overrides authority)', () => {
+    assert.equal(classifyConfidence({ provider: 'context7', legitimacyVerdict: 'SLOP' }), 'LOW');
+  });
+
+  test('exa + legitimacyVerdict OK -> HIGH (verification drives, independent of provider)', () => {
+    assert.equal(classifyConfidence({ provider: 'exa', legitimacyVerdict: 'OK' }), 'HIGH');
+  });
+
+  test('zzz + legitimacyVerdict OK -> MEDIUM (groundTruth but unknown provider)', () => {
+    assert.equal(classifyConfidence({ provider: 'zzz', legitimacyVerdict: 'OK' }), 'MEDIUM');
+  });
+
+  test('legitimacyVerdict SUS + context7 -> MEDIUM (SUS is not OK, authority gives MEDIUM)', () => {
+    assert.equal(classifyConfidence({ provider: 'context7', legitimacyVerdict: 'SUS' }), 'MEDIUM');
   });
 });
 
