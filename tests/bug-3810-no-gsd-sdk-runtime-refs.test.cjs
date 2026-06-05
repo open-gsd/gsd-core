@@ -81,7 +81,7 @@ describe('#339 no gsd-sdk references in runtime surfaces', () => {
     for (const { dir, exts, skipDirs = [] } of RUNTIME_SURFACES) {
       const files = collectFiles(path.join(REPO_ROOT, dir), exts, skipDirs);
       for (const file of files) {
-        const lines = fs.readFileSync(file, 'utf-8').split('\n');
+        const lines = fs.readFileSync(file, 'utf-8').split(/\r?\n/);
         for (let i = 0; i < lines.length; i++) {
           if (SDK_REF.test(lines[i])) {
             violations.push(`${rel(file)}:${i + 1}: ${lines[i].trim()}`);
