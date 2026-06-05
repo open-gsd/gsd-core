@@ -162,7 +162,7 @@ Research, plan, and verify a phase.
 **Produces:** `{phase}-RESEARCH.md`, `{phase}-{N}-PLAN.md`, `{phase}-VALIDATION.md`; `{phase}/SKELETON.md` when Walking Skeleton mode fires
 
 **Research-only mode (`--research-phase <N>`):**
-- No modifier: when RESEARCH.md already exists, auto-use it — emit a one-line notice and exit cleanly (no prompt). Pass `--research` to refresh or `--view` to print.
+- No modifier: when RESEARCH.md already exists, auto-uses it — emits a one-line notice and exits, no prompt.
 - With `--research`: force-refresh — re-spawn researcher unconditionally, no prompt.
 - With `--view`: print existing RESEARCH.md to stdout, no spawn. Errors if RESEARCH.md missing.
 
@@ -185,7 +185,7 @@ See [Package Legitimacy Gate in the User Guide](USER-GUIDE.md#package-legitimacy
 /gsd-plan-phase 1 --bounce                     # Plan + external bounce validation
 /gsd-plan-phase 2 --ingest docs/adr/0010.md   # ADR express path for context synthesis
 /gsd-plan-phase 2 --ingest 'docs/adr/00*.md' --ingest-format auto
-/gsd-plan-phase --research-phase 4             # Research only on phase 4 (auto-uses existing RESEARCH.md; --research to refresh)
+/gsd-plan-phase --research-phase 4             # Research only on phase 4 (auto-uses existing RESEARCH.md, no prompt)
 /gsd-plan-phase --research-phase 4 --view      # Print existing RESEARCH.md, no spawn
 /gsd-plan-phase --research-phase 4 --research  # Force-refresh research, no prompt
 /gsd-plan-phase 1 --mvp                        # Vertical-slice plan for phase 1
