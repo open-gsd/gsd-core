@@ -1,5 +1,5 @@
 {
-  "generated": "2026-06-02",
+  "generated": "2026-06-05",
   "families": {
     "agents": [
       "gsd-advisor-researcher",
@@ -227,6 +227,7 @@
       "planner-graphify-auto-update.md",
       "planner-human-verify-mode.md",
       "planner-interface-context.md",
+      "planner-load-graph-context.md",
       "planner-mvp-mode.md",
       "planner-reviews.md",
       "planner-revision.md",
