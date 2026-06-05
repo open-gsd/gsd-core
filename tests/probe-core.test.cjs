@@ -278,6 +278,17 @@ describe('probe-core: runProbeCli (generic I/O scaffold, injected io)', () => {
     assert.equal(code, 2);
     assert.equal(out, '');
   });
+  test('a report whose coverage object carries non-numeric counts → exits 2 (partial-guard case)', () => {
+    // items[] is well-formed and `coverage` IS an object, so the cheaper checks pass — this
+    // exercises the numeric-count branch of the structural guard specifically.
+    let code; let out = '';
+    pc.runProbeCli(() => ({ items: [], coverage: { applicable: 'x', resolved: null, unresolved: undefined, byVerification: {} } }), {
+      usage: 'demo', argv: ['node', 'demo', '/req.json'],
+      readFile: () => '[]', write: (s) => { out += s; }, writeErr: () => {}, exit: (c) => { code = c; },
+    });
+    assert.equal(code, 2);
+    assert.equal(out, '');
+  });
   test('a well-formed report still writes and does not trip the structural guard', () => {
     let out = '';
     pc.runProbeCli(() => report, {
