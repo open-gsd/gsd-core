@@ -93,6 +93,29 @@ describe('probe-core: validateResolution (status×verification)', () => {
   test('accepts resolved/backstop with a resolution note', () => {
     assert.equal(v({ requirement_id: 'R1', category: 'adjacency', status: 'resolved', verification: 'backstop', resolution: 'held-out PBT suite' }), true);
   });
+  // Re-review #5 Medium — fail closed across the FULL status×verification model, not just
+  // `resolved`. The invariant (probe-core header): verification is null unless status is
+  // resolved. A dismissed/unresolved resolution carrying a tier otherwise merges verbatim
+  // (analyzeCoverage line ~189), breaking the model for the second adapter (#644) that
+  // inherits this seam.
+  test('rejects a dismissed resolution carrying a verification tier (null unless resolved)', () => {
+    assert.throws(() => v({ requirement_id: 'R1', category: 'adjacency', status: 'dismissed', reason: 'n/a', verification: 'explicit' }), /verification must be null/i);
+  });
+  test('rejects an unresolved resolution carrying a verification tier', () => {
+    assert.throws(() => v({ requirement_id: 'R1', category: 'adjacency', status: 'unresolved', verification: 'backstop' }), /verification must be null/i);
+  });
+  // An unresolved resolution is an UNACTED item — a populated resolution/reason payload is an
+  // authoring mistake (the author meant resolved/dismissed) that today is silently dropped into
+  // the unresolved count with no error pointing at it. Reject the payload.
+  test('rejects an unresolved resolution carrying a resolution payload', () => {
+    assert.throws(() => v({ requirement_id: 'R1', category: 'adjacency', status: 'unresolved', resolution: 'AC#1' }), /unresolved must not carry/i);
+  });
+  test('rejects an unresolved resolution carrying a reason payload', () => {
+    assert.throws(() => v({ requirement_id: 'R1', category: 'adjacency', status: 'unresolved', reason: 'because' }), /unresolved must not carry/i);
+  });
+  test('accepts a bare unresolved resolution (no payload — a harmless no-op merge)', () => {
+    assert.equal(v({ requirement_id: 'R1', category: 'adjacency', status: 'unresolved' }), true);
+  });
 });
 
 describe('probe-core: validateRequirement (generic id/text only)', () => {
@@ -153,6 +176,21 @@ describe('probe-core: analyzeCoverage (merge · rollup · byVerification)', () =
     assert.equal(rep.coverage.unresolved, 0);
     assert.equal(rep.coverage.resolved, 3); // 2 resolved-status + 1 dismissed
     assert.deepEqual(rep.coverage.byVerification, { explicit: 1, backstop: 1 });
+  });
+  test('an all-dismissed run is CLOSED but NOT affirmatively covered (byVerification is the honest gate)', () => {
+    // Re-review #5 Medium — coverage.resolved is the closed set (resolved + dismissed), kept
+    // count-preserved per the blessed migration contract. So an all-dismissed spec has
+    // resolved === applicable while NOTHING was affirmatively resolved/backstopped. A CI gate
+    // keying on `resolved === applicable` would read green here; the honest signal is
+    // byVerification (all tiers zero). This test locks that distinction.
+    const rep = pc.analyzeCoverage(UNRESOLVED_ITEMS, [
+      { requirement_id: 'R1', category: 'adjacency', status: 'dismissed', reason: 'bounded enum' },
+      { requirement_id: 'R1', category: 'empty', status: 'dismissed', reason: 'guaranteed non-empty' },
+      { requirement_id: 'R1', category: 'ordering', status: 'dismissed', reason: 'canonically sorted' },
+    ], VALIDATORS);
+    assert.equal(rep.coverage.unresolved, 0);
+    assert.equal(rep.coverage.resolved, 3); // closed set counts the dismissals
+    assert.deepEqual(rep.coverage.byVerification, { explicit: 0, backstop: 0 }); // nothing affirmatively verified
   });
   test('rejects a duplicate (requirement_id, category) resolution', () => {
     assert.throws(() => pc.analyzeCoverage(UNRESOLVED_ITEMS, [
@@ -227,5 +265,25 @@ describe('probe-core: runProbeCli (generic I/O scaffold, injected io)', () => {
       readFile: () => '[]', writeErr: () => {}, exit: (c) => { code = c; },
     });
     assert.equal(code, 2);
+  });
+  // Re-review #5 Low — the scaffold trusts each adapter's `as` cast for the returned report.
+  // A future adapter (#644) that forgets to validate inside its closure would otherwise have a
+  // structurally-broken report written as green output. Guard the report shape structurally.
+  test('a structurally-invalid report from analyze → exits 2 and writes nothing (no silent malformed output)', () => {
+    let code; let out = '';
+    pc.runProbeCli(() => ({ nope: true }), {
+      usage: 'demo', argv: ['node', 'demo', '/req.json'],
+      readFile: () => '[]', write: (s) => { out += s; }, writeErr: () => {}, exit: (c) => { code = c; },
+    });
+    assert.equal(code, 2);
+    assert.equal(out, '');
+  });
+  test('a well-formed report still writes and does not trip the structural guard', () => {
+    let out = '';
+    pc.runProbeCli(() => report, {
+      usage: 'demo', argv: ['node', 'demo', '/req.json'],
+      readFile: () => '[]', write: (s) => { out += s; }, exit: () => {},
+    });
+    assert.deepEqual(JSON.parse(out), report);
   });
 });

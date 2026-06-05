@@ -97,6 +97,27 @@ function errMessage(e: unknown): string {
 }
 
 /**
+ * Structural guard for the report an adapter's `analyze` returns. The scaffold types `analyze`
+ * loosely (it runs over JSON-parsed input the adapter `as`-casts), so a future adapter (#644)
+ * that forgets to validate inside its closure could hand back a malformed object. Rather than
+ * stringify garbage as green output, `runProbeCli` checks the report shape and fails closed.
+ */
+function isValidReport(report: unknown): report is CoverageReport {
+  if (report == null || typeof report !== 'object') return false;
+  const r = report as { items?: unknown; coverage?: unknown };
+  if (!Array.isArray(r.items)) return false;
+  const c = r.coverage as
+    | { applicable?: unknown; resolved?: unknown; unresolved?: unknown; byVerification?: unknown }
+    | undefined;
+  if (c == null || typeof c !== 'object') return false;
+  if (typeof c.applicable !== 'number' || typeof c.resolved !== 'number' || typeof c.unresolved !== 'number') {
+    return false;
+  }
+  if (c.byVerification == null || typeof c.byVerification !== 'object') return false;
+  return true;
+}
+
+/**
  * Validate a requirement's generic structural fields — fail closed on malformed input rather
  * than coercing it. Probe-specific fields (e.g. the edge adapter's `shapes`) are validated by
  * the adapter. Typed loosely because the CLI casts arbitrary parsed JSON to `Requirement`.
@@ -121,6 +142,26 @@ export function validateResolution<V extends string>(r: Resolution<V>, validator
   const key = `${r.requirement_id}::${r.category}`;
   if (!VALID_STATUS.includes(r.status)) {
     throw new Error(`invalid status "${r.status}" for ${key}`);
+  }
+  // Invariant (this module's header): `verification` is null unless `status` is `resolved`.
+  // Enforce it for EVERY status — a dismissed/unresolved resolution carrying a verification
+  // tier would otherwise merge verbatim (`analyzeCoverage` below) and silently break the
+  // model for the second adapter (#644) that inherits this seam. Fail closed across the full
+  // status×verification space, not just `resolved`.
+  if (r.status !== 'resolved' && r.verification != null) {
+    throw new Error(`verification must be null unless status is "resolved" (got "${r.verification}") for ${key}`);
+  }
+  // An `unresolved` resolution is an UNACTED item: it must carry no resolution/reason payload.
+  // A populated payload is an authoring mistake (the author meant resolved/dismissed) that
+  // would otherwise be silently dropped into the unresolved count with no error pointing at
+  // it. Reject it so the mistake surfaces.
+  if (r.status === 'unresolved') {
+    if (r.resolution != null && String(r.resolution).trim()) {
+      throw new Error(`unresolved must not carry a resolution (${key})`);
+    }
+    if (r.reason != null && String(r.reason).trim()) {
+      throw new Error(`unresolved must not carry a reason (${key})`);
+    }
   }
   if (r.status === 'dismissed' && !(r.reason && String(r.reason).trim())) {
     throw new Error(`dismissed requires a reason (${key})`);
@@ -274,6 +315,9 @@ export function runProbeCli(
   }
   try {
     const report = analyze(requirements, resolutions);
+    if (!isValidReport(report)) {
+      throw new Error('adapter returned a structurally-invalid coverage report (expected { items[], coverage{ applicable, resolved, unresolved, byVerification } })');
+    }
     write(`${JSON.stringify(report, null, 2)}\n`);
   } catch (e: unknown) {
     writeErr(`error: ${errMessage(e)}\n`);
