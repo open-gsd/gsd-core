@@ -78,10 +78,11 @@ describe('#704 — Codex global install launcher path corruption', () => {
       );
     }
 
-    // The correct path forms must be preserved
+    // The correct path forms must be preserved — the canonical launcher path
+    // (RUNTIME_ROOT_PATH) must survive Codex conversion intact.
     assert.ok(
-      output.includes('}/gsd-core/bin/'),
-      `Expected "${'}' + '/gsd-core/bin/'}" to appear in the converted output. ` +
+      output.includes(RUNTIME_ROOT_PATH),
+      `Expected canonical launcher path "${RUNTIME_ROOT_PATH}" to appear in the converted output. ` +
         `Got:\n${output.substring(0, 500)}`,
     );
     assert.ok(
