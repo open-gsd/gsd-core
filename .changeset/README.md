@@ -37,8 +37,10 @@ PRs that legitimately have no user-facing impact can add the `no-changelog` labe
 
 ## At release time
 
+Promotion is **automatic**. The release workflow's `finalize` job runs:
+
 ```bash
-node scripts/changeset/cli.cjs render --version vX.Y.Z --date YYYY-MM-DD
+node scripts/changeset/cli.cjs render --version vX.Y.Z --date YYYY-MM-DD --allow-empty
 ```
 
-Reads every fragment, groups bullets by `type:`, replaces `## [Unreleased]` with a new `## [vX.Y.Z] - YYYY-MM-DD` block, opens a fresh `## [Unreleased]` above, deletes consumed fragments. Idempotent.
+This reads every fragment, groups bullets by `type:`, replaces `## [Unreleased]` with a new `## [vX.Y.Z] - YYYY-MM-DD` block, opens a fresh `## [Unreleased]` above, and deletes consumed fragments. The `--allow-empty` flag ensures a no-change release still gets a dated heading (with a `_No notable changes._` placeholder). A subsequent `verify` step confirms the promotion landed correctly. Maintainers do **not** run this by hand.

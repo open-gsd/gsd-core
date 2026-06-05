@@ -577,3 +577,354 @@ describe('changeset cli verify subcommand (not yet implemented — TDD red step)
     assert.equal(r.status, 1, `expected exit 1 for pre-release version; stderr=${r.stderr}`);
   });
 });
+
+// ---------------------------------------------------------------------------
+// GROUP C — render --allow-empty
+// ---------------------------------------------------------------------------
+
+describe('changeset cli render --allow-empty', () => {
+  // Helper: run render for a specific test-local tmp directory.
+  function runRenderIn(dir, args = []) {
+    const r = cp.spawnSync(
+      process.execPath,
+      [SCRIPT, 'render', '--repo', dir, ...args, '--json'],
+      { encoding: 'utf8' },
+    );
+    return {
+      status: r.status,
+      report: r.stdout && r.stdout.length ? JSON.parse(r.stdout) : null,
+      stderr: r.stderr || '',
+    };
+  }
+
+  function runVerifyIn(dir, version) {
+    const changelogPath = path.join(dir, 'CHANGELOG.md');
+    const r = cp.spawnSync(
+      process.execPath,
+      [SCRIPT, 'verify', '--version', version, '--changelog', changelogPath],
+      { encoding: 'utf8' },
+    );
+    return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
+  }
+
+  // Test 1: --allow-empty with zero fragments writes a dated heading +
+  // placeholder, and subsequent verify exits 0.
+  test('--allow-empty with zero fragments writes dated heading + placeholder; verify exits 0', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-ae-'));
+    try {
+      fs.mkdirSync(path.join(dir, '.changeset'), { recursive: true });
+      // Only a README — no fragment files.
+      fs.writeFileSync(
+        path.join(dir, '.changeset', 'README.md'),
+        '# Changesets\n\nThis folder holds changeset fragments.\n',
+      );
+      fs.writeFileSync(
+        path.join(dir, 'CHANGELOG.md'),
+        '# Changelog\n\n## [Unreleased]\n',
+      );
+
+      const r = runRenderIn(dir, ['--version', '9.9.9', '--date', '2026-06-05', '--allow-empty']);
+      assert.equal(r.status, 0, `render exited non-zero; stderr=${r.stderr}`);
+      assert.equal(r.report.consumed, 0, 'consumed must be 0 for empty run');
+      assert.equal(r.report.failures.length, 0, 'no failures expected');
+      assert.strictEqual(r.report.written, true, 'report.written must be true');
+
+      // The CHANGELOG must now contain a dated heading for 9.9.9.
+      const text = fs.readFileSync(path.join(dir, 'CHANGELOG.md'), 'utf8');
+      const parsed = parseChangelog(text);
+      const rel = parsed.releases.find((r) => r.version === '9.9.9');
+      assert.ok(rel, 'release 9.9.9 must appear in CHANGELOG after --allow-empty render');
+      assert.equal(rel.date, '2026-06-05', 'release date must be 2026-06-05');
+
+      // The placeholder line must be present in the raw text.
+      assert.ok(
+        text.includes('_No notable changes._'),
+        'CHANGELOG must contain _No notable changes._ placeholder',
+      );
+
+      // verify must exit 0 for this version.
+      const vr = runVerifyIn(dir, '9.9.9');
+      assert.equal(vr.status, 0, `verify must exit 0 after --allow-empty render; stderr=${vr.stderr}`);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  // Test 2: render WITHOUT --allow-empty and zero fragments early-exits —
+  // CHANGELOG is not created / not modified. Regression lock.
+  test('render without --allow-empty and zero fragments does NOT write CHANGELOG', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-ae-'));
+    try {
+      fs.mkdirSync(path.join(dir, '.changeset'), { recursive: true });
+      // No fragment files, only README.
+      fs.writeFileSync(
+        path.join(dir, '.changeset', 'README.md'),
+        '# Changesets\n',
+      );
+      // Write a known CHANGELOG so we can verify it is unchanged.
+      const originalChangelog = '# Changelog\n\n## [Unreleased]\n';
+      fs.writeFileSync(path.join(dir, 'CHANGELOG.md'), originalChangelog);
+
+      const r = runRenderIn(dir, ['--version', '9.9.8', '--date', '2026-06-05']);
+      assert.equal(r.status, 0, `render without --allow-empty exited non-zero; stderr=${r.stderr}`);
+      assert.equal(r.report.consumed, 0, 'consumed must be 0');
+      assert.equal(r.report.failures.length, 0, 'no failures expected');
+      // report.written must NOT be set (undefined or absent).
+      assert.ok(
+        r.report.written === undefined || r.report.written === null || r.report.written === false,
+        'report.written must not be true in the no-op path',
+      );
+
+      // CHANGELOG must be byte-identical to the original.
+      const text = fs.readFileSync(path.join(dir, 'CHANGELOG.md'), 'utf8');
+      assert.equal(text, originalChangelog, 'CHANGELOG must be unchanged when no fragments and no --allow-empty');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  // Test 3: render WITH fragments + --allow-empty behaves exactly like normal
+  // render (consumes/deletes fragments, NO placeholder injected).
+  test('render --allow-empty with fragments behaves like normal render (no placeholder)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-ae-'));
+    try {
+      fs.mkdirSync(path.join(dir, '.changeset'), { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, '.changeset', 'fix-one.md'),
+        '---\ntype: Fixed\npr: 200\n---\nFragment-driven fix.\n',
+      );
+      fs.writeFileSync(
+        path.join(dir, 'CHANGELOG.md'),
+        '# Changelog\n\n## [Unreleased]\n',
+      );
+
+      const r = runRenderIn(dir, ['--version', '9.9.7', '--date', '2026-06-05', '--allow-empty']);
+      assert.equal(r.status, 0, `render with fragments exited non-zero; stderr=${r.stderr}`);
+      assert.equal(r.report.consumed, 1, 'one fragment must be consumed');
+      assert.equal(r.report.failures.length, 0, 'no failures expected');
+
+      const text = fs.readFileSync(path.join(dir, 'CHANGELOG.md'), 'utf8');
+      // Placeholder must NOT appear when there are real fragments.
+      assert.ok(
+        !text.includes('_No notable changes._'),
+        'placeholder must NOT appear when fragments were consumed',
+      );
+      // The fragment bullet must be present.
+      const parsed = parseChangelog(text);
+      const rel = parsed.releases.find((r) => r.version === '9.9.7');
+      assert.ok(rel, 'release 9.9.7 must appear in CHANGELOG');
+      assert.equal(rel.date, '2026-06-05', 'release date must be 2026-06-05');
+      const prs = rel.sections.flatMap((s) => s.bullets.map((b) => b.pr));
+      assert.ok(prs.includes(200), 'pr=200 bullet must be present in the release');
+
+      // Fragment file must be deleted.
+      const remaining = fs.readdirSync(path.join(dir, '.changeset'))
+        .filter((f) => f.endsWith('.md') && f !== 'README.md');
+      assert.deepEqual(remaining, [], 'fragment must be deleted after consumption');
+
+      // verify must exit 0.
+      const vr = runVerifyIn(dir, '9.9.7');
+      assert.equal(vr.status, 0, `verify must exit 0 after render with fragments; stderr=${vr.stderr}`);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  // Test 4 (idempotency): after a fragmentful render, a second render
+  // --allow-empty for the SAME version is now a NO-OP (FIX 1 guard).  It must
+  // NOT add a second heading, must exit 0, and must report alreadyPromoted:true.
+  test('idempotency: second --allow-empty render for same version is a no-op (no duplicate heading)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-ae-'));
+    try {
+      fs.mkdirSync(path.join(dir, '.changeset'), { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, '.changeset', 'fix-two.md'),
+        '---\ntype: Fixed\npr: 300\n---\nIdempotency test fix.\n',
+      );
+      fs.writeFileSync(
+        path.join(dir, 'CHANGELOG.md'),
+        '# Changelog\n\n## [Unreleased]\n',
+      );
+
+      // First render: with a fragment.
+      const r1 = runRenderIn(dir, ['--version', '9.9.6', '--date', '2026-06-05']);
+      assert.equal(r1.status, 0, `first render exited non-zero; stderr=${r1.stderr}`);
+      assert.equal(r1.report.consumed, 1, 'first render must consume 1 fragment');
+
+      // verify after first render must succeed.
+      const vr1 = runVerifyIn(dir, '9.9.6');
+      assert.equal(vr1.status, 0, `verify after first render must exit 0; stderr=${vr1.stderr}`);
+
+      // Second render --allow-empty: zero fragments now, same version.
+      // This is now a NO-OP due to the already-promoted guard (FIX 1).
+      const r2 = runRenderIn(dir, ['--version', '9.9.6', '--date', '2026-06-05', '--allow-empty']);
+      assert.equal(r2.status, 0, `second render exited non-zero; stderr=${r2.stderr}`);
+      assert.equal(r2.report.consumed, 0, 'second render must consume 0 fragments');
+      assert.strictEqual(r2.report.alreadyPromoted, true, 'second render must report alreadyPromoted:true');
+
+      // Exactly ONE ## [9.9.6] heading must be present — no duplicate.
+      const text = fs.readFileSync(path.join(dir, 'CHANGELOG.md'), 'utf8');
+      const parsed = parseChangelog(text);
+      const all996 = parsed.releases.filter((r) => r.version === '9.9.6');
+      assert.equal(
+        all996.length, 1,
+        `exactly one 9.9.6 heading must be present after two renders; found ${all996.length}`,
+      );
+
+      // verify must still exit 0.
+      const vr2 = runVerifyIn(dir, '9.9.6');
+      assert.equal(vr2.status, 0, `verify after second render must still exit 0; stderr=${vr2.stderr}`);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  // Test 4b (stale fragments): alreadyPromoted + fragments present → render exits
+  // NON-ZERO, CHANGELOG is NOT modified, and the fragment file is NOT deleted.
+  // This guards the inconsistent-state scenario identified in the adversarial review:
+  // a manual/partial promotion wrote the heading but left fragments unconsumed.
+  test('alreadyPromoted + fragments present: exits non-zero, CHANGELOG unchanged, fragment survives', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-ae-'));
+    try {
+      fs.mkdirSync(path.join(dir, '.changeset'), { recursive: true });
+
+      // CHANGELOG already has a dated heading for 3.3.3 (out-of-band promotion).
+      const originalChangelog = [
+        '# Changelog',
+        '',
+        '## [Unreleased]',
+        '',
+        '## [3.3.3] - 2026-01-01',
+        '',
+        '### Fixed',
+        '',
+        '- x (#1)',
+        '',
+      ].join('\n');
+      fs.writeFileSync(path.join(dir, 'CHANGELOG.md'), originalChangelog);
+
+      // A fragment file is still present — unconsumed.
+      const fragmentPath = path.join(dir, '.changeset', 'leftover.md');
+      fs.writeFileSync(fragmentPath, '---\ntype: Fixed\npr: 9\n---\nleftover fragment\n');
+
+      // Run render for the same version.
+      const r = runRenderIn(dir, ['--version', '3.3.3', '--date', '2026-06-05', '--allow-empty']);
+
+      // Must exit non-zero.
+      assert.notEqual(r.status, 0, `expected non-zero exit for alreadyPromoted+fragments; got ${r.status}`);
+
+      // report.alreadyPromoted must be true and report.error must be present.
+      assert.strictEqual(r.report.alreadyPromoted, true, 'report.alreadyPromoted must be true');
+      assert.ok(typeof r.report.error === 'string' && r.report.error.length > 0, 'report.error must be a non-empty string');
+      assert.ok(r.report.error.includes('3.3.3'), 'report.error must mention the version');
+
+      // Fragment file must still exist — render must NOT have deleted it.
+      assert.ok(fs.existsSync(fragmentPath), 'leftover fragment must still exist after non-zero exit');
+
+      // CHANGELOG must be byte-identical to the original — render must NOT have modified it.
+      const text = fs.readFileSync(path.join(dir, 'CHANGELOG.md'), 'utf8');
+      assert.equal(text, originalChangelog, 'CHANGELOG must be unchanged');
+
+      // Exactly one ## [3.3.3] heading must be present (no duplicate added).
+      const parsed = parseChangelog(text);
+      const all333 = parsed.releases.filter((rel) => rel.version === '3.3.3');
+      assert.equal(all333.length, 1, `exactly one 3.3.3 heading must be present; found ${all333.length}`);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  // Test 5 (cold start): --allow-empty when CHANGELOG.md does NOT exist creates
+  // the file with # Changelog, ## [Unreleased], and a dated release with placeholder.
+  test('--allow-empty cold start (no CHANGELOG.md) creates file with expected structure', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-ae-'));
+    try {
+      fs.mkdirSync(path.join(dir, '.changeset'), { recursive: true });
+      // No CHANGELOG.md, no fragments.
+
+      const r = runRenderIn(dir, ['--version', '8.8.8', '--date', '2026-06-05', '--allow-empty']);
+      assert.equal(r.status, 0, `render exited non-zero; stderr=${r.stderr}`);
+      assert.equal(r.report.consumed, 0, 'consumed must be 0');
+      assert.strictEqual(r.report.written, true, 'report.written must be true');
+
+      const changelogPath = path.join(dir, 'CHANGELOG.md');
+      assert.ok(fs.existsSync(changelogPath), 'CHANGELOG.md must be created');
+
+      const text = fs.readFileSync(changelogPath, 'utf8');
+      // Must contain a top-level heading.
+      assert.ok(text.includes('# Changelog'), 'must contain # Changelog heading');
+      // Must contain an ## [Unreleased] block.
+      assert.ok(text.includes('## [Unreleased]'), 'must contain ## [Unreleased] block');
+      // Must contain a dated release heading for 8.8.8.
+      assert.ok(text.includes('## [8.8.8] - 2026-06-05'), 'must contain dated release heading for 8.8.8');
+      // Must contain the placeholder.
+      assert.ok(text.includes('_No notable changes._'), 'must contain _No notable changes._ placeholder');
+
+      // parseChangelog must see the release with the correct date.
+      const parsed = parseChangelog(text);
+      const rel = parsed.releases.find((r) => r.version === '8.8.8');
+      assert.ok(rel, 'release 8.8.8 must appear in parsed CHANGELOG');
+      assert.equal(rel.date, '2026-06-05', 'release date must be 2026-06-05');
+
+      // verify must exit 0.
+      const vr = runVerifyIn(dir, '8.8.8');
+      assert.equal(vr.status, 0, `verify must exit 0 after cold-start --allow-empty render; stderr=${vr.stderr}`);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  // Test 6: --allow-empty (zero fragments) on a CHANGELOG that already has a
+  // prior dated release PRESERVES that prior release in the output.
+  test('--allow-empty preserves prior dated release below new section', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-ae-'));
+    try {
+      fs.mkdirSync(path.join(dir, '.changeset'), { recursive: true });
+      // Pre-existing CHANGELOG with a prior dated release.
+      const priorChangelog = [
+        '# Changelog',
+        '',
+        '## [Unreleased]',
+        '',
+        '## [1.0.0] - 2026-01-01',
+        '',
+        '### Fixed',
+        '',
+        '- Old fix. (#1)',
+        '',
+      ].join('\n');
+      fs.writeFileSync(path.join(dir, 'CHANGELOG.md'), priorChangelog);
+
+      const r = runRenderIn(dir, ['--version', '2.0.0', '--date', '2026-06-05', '--allow-empty']);
+      assert.equal(r.status, 0, `render exited non-zero; stderr=${r.stderr}`);
+      assert.equal(r.report.consumed, 0, 'consumed must be 0');
+      assert.strictEqual(r.report.written, true, 'report.written must be true');
+
+      const text = fs.readFileSync(path.join(dir, 'CHANGELOG.md'), 'utf8');
+
+      // New release must appear.
+      assert.ok(text.includes('## [2.0.0]'), 'new 2.0.0 heading must be present');
+      assert.ok(text.includes('_No notable changes._'), 'placeholder must be present');
+
+      // Prior release must survive.
+      assert.ok(text.includes('## [1.0.0] - 2026-01-01'), 'prior 1.0.0 heading must be preserved');
+      assert.ok(text.includes('- Old fix. (#1)'), 'prior release bullet must be preserved');
+
+      // Parse and assert both releases are present.
+      const parsed = parseChangelog(text);
+      const rel200 = parsed.releases.find((r) => r.version === '2.0.0');
+      assert.ok(rel200, '2.0.0 must appear in parsed CHANGELOG');
+      assert.equal(rel200.date, '2026-06-05', '2.0.0 date must be 2026-06-05');
+      const rel100 = parsed.releases.find((r) => r.version === '1.0.0');
+      assert.ok(rel100, '1.0.0 must still appear in parsed CHANGELOG');
+      assert.equal(rel100.date, '2026-01-01', '1.0.0 date must be preserved');
+      assert.equal(rel100.sections[0].bullets[0].pr, 1, 'pr=1 bullet in 1.0.0 must be preserved');
+
+      // verify for the new version must exit 0.
+      const vr = runVerifyIn(dir, '2.0.0');
+      assert.equal(vr.status, 0, `verify must exit 0 after --allow-empty on existing CHANGELOG; stderr=${vr.stderr}`);
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
