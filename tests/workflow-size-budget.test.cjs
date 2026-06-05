@@ -1,33 +1,64 @@
 // allow-test-rule: source-text-is-the-product
-// Tests measure line counts of workflow files — the workflow file text IS the
+// Tests measure byte sizes of workflow files — the workflow file text IS the
 // product loaded by agents at runtime. No command output is parsed.
 // Migrated from pending-migration-to-typed-ir per #455.
 
 /**
- * Workflow size budget.
+ * Workflow size budget (measured in BYTES — see #717).
  *
  * Workflow definitions in `gsd-core/workflows/*.md` are loaded verbatim
- * into Claude's context every time the corresponding `/gsd:*` command is
+ * into the agent's context every time the corresponding `/gsd:*` command is
  * invoked. Unbounded growth is paid on every invocation across every session.
  *
+ * ## Why bytes, not lines (#717)
+ *
+ * Line count is a poor proxy: markdown tables and fenced code blocks are
+ * token-dense, so a line budget over-penalizes prose and under-catches dense
+ * additions. Bytes are cheap, deterministic, and need no tokenizer. They are
+ * also the UNIT our vendors bound on — Codex caps instruction docs at 32,768
+ * bytes (`project_doc_max_bytes`) and truncates past it. We adopt that unit,
+ * not that exact number: our XL/LARGE ceilings sit above 32,768 because these
+ * are grandfathered top-level orchestrators loaded by Claude, not Codex
+ * AGENTS.md docs — the goal is a bounded, ratcheting budget, not Codex parity.
+ *
+ * ## Why the budget exists at all (the quality argument, not just cost)
+ *
+ * With prompt caching the per-invocation *cost* premise is weak (cache reads
+ * are ~10% of input). The stronger, caching-independent reason is QUALITY:
+ * larger context degrades recall and reasoning ("context rot" / attention
+ * budget). Lean, high-signal instructions produce better plans. The ceiling
+ * protects the agent's attention, not just the token bill.
+ *
+ * ## The goal this metric is a proxy for (read before gaming it — #717)
+ *
+ * The real target is bounded *loaded* context. This test measures one file's
+ * bytes, but `@~/.claude/gsd-core/references/...` imports are loaded EAGERLY
+ * into context. Moving prose into an eagerly @-imported reference shrinks the
+ * measured file while leaving (or growing) total loaded context — that is
+ * gaming the proxy, not improving the goal. Legitimate extraction is LAZY:
+ * content Read only at the step that needs it (see the discuss-phase mode/
+ * template tests below, which forbid templates in <required_reading>).
+ *
  * Tiered the same way as agent budgets (#2361):
- *   - XL       : top-level orchestrators (e.g., execute-phase, autonomous)
+ *   - XL       : top-level orchestrators (e.g., execute-phase, plan-phase)
  *   - LARGE    : multi-step planners
  *   - DEFAULT  : focused single-purpose workflows (target tier)
  *
  * Raising a budget is a deliberate choice — adjust the constant, write a
  * rationale in the PR, and confirm the bloat is not duplicated content
- * that belongs in `gsd-core/references/` or a per-mode subdirectory
- * (see `workflows/discuss-phase/modes/` for the progressive-disclosure
- * pattern introduced by #2551).
+ * that belongs in `gsd-core/references/` (lazily loaded) or a per-mode
+ * subdirectory (see `workflows/discuss-phase/modes/`, #2551).
  *
  * Tighten-only invariant (issue #597): ceilings track the tier high-water mark
- * within GRACE lines. Budgets may only decrease, never silently creep upward.
+ * within GRACE bytes. Budgets may only decrease, never silently creep upward.
  * The assertTightCeiling() call below enforces this automatically.
  *
  * See:
+ *   - https://github.com/open-gsd/gsd-core/issues/717  (bytes re-base + rationale)
  *   - https://github.com/open-gsd/gsd-core/issues/2551 (this test)
  *   - https://github.com/open-gsd/gsd-core/issues/2361 (agent budget)
+ *   - https://developers.openai.com/codex/guides/agents-md (Codex 32 KB cap)
+ *   - https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents
  */
 
 const { test, describe } = require('node:test');
@@ -38,46 +69,45 @@ const { assertTightCeiling } = require('../scripts/lib/allowlist-ratchet.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
 
-// Grace band: maximum allowed slack (ceiling − actualMax) before a ceiling is
-// considered too loose. 60 lines gives one reasonable screen of breathing room
-// without permitting gross inflation.
-const GRACE = 60;
+// Grace band: maximum allowed slack (ceiling − actualMax) in BYTES before a
+// ceiling is considered too loose. 3000 bytes ≈ the prior 60-line grace
+// re-expressed for the #717 unit swap (these files run ~36–50 bytes/line, so
+// ~60–80 lines of breathing room) without permitting gross inflation.
+const GRACE = 3000;
 
-// Bumped from 1700 → 1800 in #3181 to absorb MVP-mode verb-call additions
-// in execute-phase.md (1727 → ) and plan-phase.md (1714 → ) from #3178.
-// Follow-up #3182 (TBD): extract MVP-mode bodies to `<workflow>/modes/mvp.md`
-// per the discuss-phase/modes/ precedent and revert this back to 1700.
-// Bumped from 1800 → 1810 in #3707 to absorb the startup orphan-sweep
-// block added to execute-phase.md (+2 lines: one comment + one bash command).
-// XL ceiling kept at 1810 (actualMax=1810, plan-phase; slack=0 ≤ GRACE=60).
-const XL_BUDGET = 1810;
-// LARGE ceiling lowered from 1500 → 1236 (actualMax=1176, docs-update; #597 ratchet-down).
-const LARGE_BUDGET = 1236;
-// DEFAULT ceiling lowered from 1000 → 870 (actualMax=810, settings-advanced; #597 ratchet-down).
-const DEFAULT_BUDGET = 870;
+// Byte ceilings (#717 re-base from lines). Each tier's ceiling tracks the
+// current high-water mark within GRACE (#597 tighten-only ratchet).
+// XL high-water mark is execute-phase.md — note that under LINES it was
+// plan-phase; bytes genuinely re-rank the tier, which is the point of #717.
+// actualMax=87005 (execute-phase); slack=2995 ≤ GRACE.
+const XL_BUDGET = 90000;
+// LARGE high-water mark is docs-update.md. actualMax=51184; slack=2816 ≤ GRACE.
+const LARGE_BUDGET = 54000;
+// DEFAULT high-water mark is settings-advanced.md. actualMax=35183; slack=2817 ≤ GRACE.
+const DEFAULT_BUDGET = 38000;
 
 // Top-level orchestrators that own end-to-end multi-phase rubrics.
-// Grandfathered at current sizes — see PR #2551 for #2551 progressive-disclosure
-// pattern that future shrinks should follow.
+// Grandfathered at current sizes — see PR #2551 for the progressive-disclosure
+// pattern that future shrinks should follow. Byte counts noted for reference.
 const XL_WORKFLOWS = new Set([
-  'execute-phase',  // 1727 (post-MVP-verb-integration; was 1622)
-  'plan-phase',     // 1714 (post-MVP-verb-integration; was 1493)
-  'new-project',    // 1391
+  'execute-phase',  // 87005 bytes (tier high-water mark)
+  'plan-phase',     // 85068 bytes
+  'new-project',    // 55850 bytes
 ]);
 
 // Multi-step planners and bigger feature workflows. Grandfathered.
 const LARGE_WORKFLOWS = new Set([
-  'docs-update',           // 1155
-  'autonomous',            // 789
-  'complete-milestone',    // 847
-  'verify-work',           // 740
-  'transition',            // 693
-  'discuss-phase-assumptions', // 670
-  'progress',              // 619
-  'new-milestone',         // 611
-  'update',                // 587
-  'quick',                 // 971
-  'code-review',           // 515
+  'docs-update',           // 51184 bytes (tier high-water mark)
+  'autonomous',            // 32655
+  'complete-milestone',    // 26284
+  'verify-work',           // 26896
+  'transition',            // 18201
+  'discuss-phase-assumptions', // 23398
+  'progress',              // 23061
+  'new-milestone',         // 26582
+  'update',                // 19334
+  'quick',                 // 42484
+  'code-review',           // 25500
 ]);
 
 const ALL_WORKFLOWS = fs.readdirSync(WORKFLOWS_DIR)
@@ -90,38 +120,40 @@ function budgetFor(workflow) {
   return { tier: 'DEFAULT', limit: DEFAULT_BUDGET };
 }
 
-function lineCount(filePath) {
-  const content = fs.readFileSync(filePath, 'utf-8');
-  if (content.length === 0) return 0;
-  const trailingNewline = content.endsWith('\n') ? 1 : 0;
-  return content.split('\n').length - trailingNewline;
+function byteCount(filePath) {
+  // Match `wc -c`: count every byte on disk, including any trailing newline.
+  // Deliberately NOT the trailing-newline-stripping logic the old lineCount()
+  // used — the byte ceilings are calibrated against raw `wc -c` output.
+  return fs.statSync(filePath).size;
 }
 
-describe('SIZE: workflow line-count budget', () => {
+describe('SIZE: workflow byte-size budget', () => {
   for (const workflow of ALL_WORKFLOWS) {
     const { tier, limit } = budgetFor(workflow);
-    test(`${workflow} (${tier}) stays under ${limit} lines`, () => {
+    test(`${workflow} (${tier}) stays under ${limit} bytes`, () => {
       const filePath = path.join(WORKFLOWS_DIR, workflow + '.md');
-      const lines = lineCount(filePath);
+      const bytes = byteCount(filePath);
       assert.ok(
-        lines <= limit,
-        `${workflow}.md has ${lines} lines — exceeds ${tier} budget of ${limit}. ` +
+        bytes <= limit,
+        `${workflow}.md is ${bytes} bytes — exceeds ${tier} budget of ${limit}. ` +
         `Extract per-mode bodies to a workflows/${workflow}/modes/ subdirectory, ` +
         `templates to workflows/${workflow}/templates/, or shared references ` +
-        `to gsd-core/references/. See workflows/discuss-phase/ for the pattern.`
+        `to gsd-core/references/ — and load them LAZILY (not via @-required_reading, ` +
+        `which would shrink this file's bytes without shrinking loaded context). ` +
+        `See workflows/discuss-phase/ for the pattern.`
       );
     });
   }
 });
 
 describe('SIZE: tier anti-creep (tighten-only ceilings, issue #597)', () => {
-  // For each tier, compute the high-water mark across all files in that tier
-  // and assert the ceiling stays tight. Prevents budgets from silently drifting
-  // upward: ceiling − actualMax must not exceed GRACE.
+  // For each tier, compute the high-water mark (in bytes) across all files in
+  // that tier and assert the ceiling stays tight. Prevents budgets from
+  // silently drifting upward: ceiling − actualMax must not exceed GRACE.
   test('XL tier: ceiling tracks high-water mark within GRACE', () => {
     const values = ALL_WORKFLOWS
       .filter(w => XL_WORKFLOWS.has(w))
-      .map(w => lineCount(path.join(WORKFLOWS_DIR, w + '.md')));
+      .map(w => byteCount(path.join(WORKFLOWS_DIR, w + '.md')));
     const actualMax = Math.max(...values);
     assertTightCeiling({ label: 'XL', actualMax, ceiling: XL_BUDGET, grace: GRACE, fail: assert.fail });
   });
@@ -129,7 +161,7 @@ describe('SIZE: tier anti-creep (tighten-only ceilings, issue #597)', () => {
   test('LARGE tier: ceiling tracks high-water mark within GRACE', () => {
     const values = ALL_WORKFLOWS
       .filter(w => LARGE_WORKFLOWS.has(w))
-      .map(w => lineCount(path.join(WORKFLOWS_DIR, w + '.md')));
+      .map(w => byteCount(path.join(WORKFLOWS_DIR, w + '.md')));
     const actualMax = Math.max(...values);
     assertTightCeiling({ label: 'LARGE', actualMax, ceiling: LARGE_BUDGET, grace: GRACE, fail: assert.fail });
   });
@@ -137,24 +169,27 @@ describe('SIZE: tier anti-creep (tighten-only ceilings, issue #597)', () => {
   test('DEFAULT tier: ceiling tracks high-water mark within GRACE', () => {
     const values = ALL_WORKFLOWS
       .filter(w => !XL_WORKFLOWS.has(w) && !LARGE_WORKFLOWS.has(w))
-      .map(w => lineCount(path.join(WORKFLOWS_DIR, w + '.md')));
+      .map(w => byteCount(path.join(WORKFLOWS_DIR, w + '.md')));
     const actualMax = Math.max(...values);
     assertTightCeiling({ label: 'DEFAULT', actualMax, ceiling: DEFAULT_BUDGET, grace: GRACE, fail: assert.fail });
   });
 });
 
 describe('SIZE: discuss-phase progressive disclosure (issue #2551)', () => {
-  // Issue #2551 explicitly targets discuss-phase.md at <500 lines, separate from
-  // the per-tier grandfathered budgets above. This is the headline metric of the
-  // refactor — every other workflow above 500 is grandfathered at its current
-  // size and may shrink later by following the same pattern.
-  const DISCUSS_PHASE_TARGET = 500;
-  test(`discuss-phase.md is under ${DISCUSS_PHASE_TARGET} lines (issue #2551 target)`, () => {
+  // Issue #2551 targets discuss-phase.md as a thin dispatcher, separate from
+  // the per-tier grandfathered budgets above. Originally expressed as <500
+  // lines; re-based to bytes for #717 (500 lines ≈ 28 KB at these files'
+  // density; set to 30 KB to preserve the thin-dispatcher intent with modest
+  // headroom). This is the headline metric of the refactor — every other
+  // workflow above its tier is grandfathered and may shrink later via the
+  // same pattern.
+  const DISCUSS_PHASE_TARGET = 30000;
+  test(`discuss-phase.md is under ${DISCUSS_PHASE_TARGET} bytes (issue #2551 target)`, () => {
     const filePath = path.join(WORKFLOWS_DIR, 'discuss-phase.md');
-    const lines = lineCount(filePath);
+    const bytes = byteCount(filePath);
     assert.ok(
-      lines < DISCUSS_PHASE_TARGET,
-      `discuss-phase.md has ${lines} lines — must be under ${DISCUSS_PHASE_TARGET} per #2551. ` +
+      bytes < DISCUSS_PHASE_TARGET,
+      `discuss-phase.md is ${bytes} bytes — must be under ${DISCUSS_PHASE_TARGET} per #2551. ` +
       `Per-mode logic belongs in workflows/discuss-phase/modes/<mode>.md, ` +
       `templates in workflows/discuss-phase/templates/.`
     );

@@ -195,7 +195,7 @@ The canonical lint infrastructure adopted in ADR 452 (`docs/adr/452-eslint-lint-
 `RULESET.TESTS.eslint-harness=ADR 452 (2026-05-28): ESLint flat config + typescript-eslint + eslint-plugin-n + eslint-plugin-no-only-tests + local plugin at scripts/eslint-rules/; replaces scripts/lint-*.cjs regex scanners; three test-rigor rules (local/no-source-grep, local/no-magic-sleep-in-tests, local/no-elapsed-assertion) ship at warn, promoted to error after #453 cleanup sweep merges`
 
 `RULESET.WORKFLOW_MARKDOWN.FENCES=preserve opening language fence when editing shell snippets in workflow markdown; malformed fence creates fresh CR threads (MD040)`
-`RULESET.WORKFLOW_SIZE_BUDGET=workflow-size-budget can fail otherwise-valid review fixes; XL workflows <=1800 lines or trim prose before final checks`
+`RULESET.WORKFLOW_SIZE_BUDGET=workflow-size-budget (#717) measures BYTES not lines; tiers XL<=90000 / LARGE<=54000 / DEFAULT<=38000 bytes, discuss-phase<30000; can fail otherwise-valid review fixes — trim prose or extract LAZILY-loaded content (eager @-imports don't reduce loaded context) before final checks`
 `RULESET.WORKFLOW_FILE_NAMES=workflow files use hyphens; <step name="..."> XML attributes must match (extract-learnings not extract_learnings); tests should pin exact hyphenated name`
 `RULESET.WORKFLOW_EXECUTION_CONTEXT=@-ref in commands/gsd/*.md must resolve to an existing file on disk; regression test in tests/bug-3135-capture-backlog-workflow.test.cjs; INVENTORY.md row + INVENTORY-MANIFEST.json families.workflows must stay in sync; "Invoked by" attribution must move when a flag absorbs a micro-skill`
 `RULESET.WORKFLOW_EXECUTE_END_TO_END=ADR-0002 standard for single-workflow commands is "Execute end-to-end." (no bolded **Follow the X workflow** fragments); flag-dispatch routing uses "execute the X workflow end-to-end." in routing bullets`
@@ -238,7 +238,6 @@ The canonical lint infrastructure adopted in ADR 452 (`docs/adr/452-eslint-lint-
 `RULESET.CODERABBIT.GUARD.SCOPE=if a new @me open PR appears during final list, include it in the same guard pass before declaring all-open-PRs complete`
 `RULESET.TESTS.CODERABBIT_FIX=prefer exported-function behavioral tests over source-grep; lint-no-source-grep rejects readFileSync source assertions without allow-test-rule`
 `RULESET.WORKFLOW_MARKDOWN.FENCES=when editing shell snippets inside workflow markdown, preserve the opening language fence; malformed fence can create fresh CodeRabbit threads`
-`RULESET.WORKFLOW_SIZE_BUDGET=workflow-size-budget can fail otherwise-valid review fixes; keep XL workflows <=1800 lines or trim prose in same PR before final checks`
 `RULESET.GEMINI.TOOLS.ask_user=Gemini CLI has no ask_user tool; filter both AskUserQuestion and lowercase ask_user from tools frontmatter and neutralize both names in Gemini body text`
 `RULESET.GEMINI.TEST_SENTINEL=convertClaudeToGeminiAgent regression should assert tools excludes ask_user, body excludes AskUserQuestion/ask_user, and Read still maps to read_file`
 
