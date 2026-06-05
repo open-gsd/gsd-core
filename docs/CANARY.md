@@ -61,6 +61,6 @@ File against the [issue tracker](https://github.com/open-gsd/gsd-core/issues) wi
 
 ## Where to look next
 
-- Active canary release notes: [`docs/RELEASE-v1.50.0-canary.1.md`](RELEASE-v1.50.0-canary.1.md)
+- Active canary release notes: [`v1.50.0-canary.1` (now in the legacy release-notes archive)](RELEASE-NOTES-LEGACY.md)
 - Stable release notes: [`CHANGELOG.md`](../CHANGELOG.md)
 - Stream architecture rationale: discussed across [#2727](https://github.com/open-gsd/gsd-core/issues/2727), [#2773](https://github.com/open-gsd/gsd-core/issues/2773) (codex schema-break and the resulting promotion bottleneck that motivated explicit stream isolation)

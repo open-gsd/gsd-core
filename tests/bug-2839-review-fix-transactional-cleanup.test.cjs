@@ -125,7 +125,7 @@ describe('bug-2839: /gsd-code-review-fix cleanup is transactional', () => {
     // (`rm -f .../.review-fix-recovery-pending.json`) or a shell-variable form
     // referring to the previously-declared `sentinel` variable
     // (`rm -f "$sentinel"` / `rm -f "${sentinel}"`).
-    const escapedName = SENTINEL_NAME.replace(/\./g, '\\.');
+    const escapedName = SENTINEL_NAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const sentinelRemovalRe = new RegExp(
       `(rm\\s+(?:-f\\s+)?[^\\n]*(?:${escapedName}|\\$\\{?sentinel\\}?)|unlink[^\\n]*(?:${escapedName}|\\$\\{?sentinel\\}?))`
     );

@@ -694,7 +694,7 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
     let _dirName: string;
 
     if (customId || config.phase_naming === 'custom') {
-      _newPhaseId = customId || slug.toUpperCase().replace(/-/g, '-');
+      _newPhaseId = customId || slug.toUpperCase();
       if (!_newPhaseId) error('--id required when phase_naming is "custom"');
       _dirName = `${prefix}${_newPhaseId}-${slug}`;
     } else {
@@ -805,7 +805,7 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
       let newPhaseId: number | string;
       let dirName: string;
       if (config.phase_naming === 'custom') {
-        newPhaseId = slug.toUpperCase().replace(/-/g, '-');
+        newPhaseId = slug.toUpperCase();
         dirName = `${prefix}${newPhaseId}-${slug}`;
       } else {
         maxPhase += 1;
@@ -1176,7 +1176,7 @@ function updateRoadmapAfterPhaseRemoval(
           `${prefix}${decrementRoadmapPhaseNumber(num, removedInt)}${suffix}`,
       );
       content = content.replace(
-        /(?<![0-9-])(\d{2})-(\d{2})(?=(?:(?:-[A-Za-z][A-Za-z0-9-]*)*-(?:PLAN|SUMMARY)\.md)|(?![0-9-]))/g,
+        /(?<![0-9-])(\d{2})-(\d{2})(?=(?:(?:-[A-Za-z][A-Za-z0-9-]*)?-(?:PLAN|SUMMARY)\.md)|(?![0-9-]))/g,
         (_match, phaseNum: string, planNum: string) =>
           `${decrementRoadmapPaddedPhaseNumber(phaseNum, removedInt)}-${planNum}`,
       );

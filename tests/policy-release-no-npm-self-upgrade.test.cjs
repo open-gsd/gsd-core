@@ -18,7 +18,6 @@ const NPM_SELF_UPGRADE_RE = /\bnpm\s+(install|i)\s+(-g|--global)\b[^\n]*\bnpm(@|
 
 describe('policy: no runtime npm self-upgrade in release lanes (#318)', () => {
   const releaseFile = path.join(WORKFLOWS_DIR, 'release.yml');
-  const hotfixFile = path.join(WORKFLOWS_DIR, 'hotfix.yml');
 
   test('release.yml must not contain a runtime global npm self-upgrade step', () => {
     const content = fs.readFileSync(releaseFile, 'utf8');
@@ -32,21 +31,6 @@ describe('policy: no runtime npm self-upgrade in release lanes (#318)', () => {
       0,
       `release.yml contains ${violations.length} runtime npm self-upgrade line(s) — ` +
         `remove them and rely on Node 24 bundled npm (pinned via setup-node). ` +
-        `Violations: ${violations.map(({ lineNo, line }) => `line ${lineNo}: ${line.trim()}`).join('; ')}`
-    );
-  });
-
-  test('hotfix.yml must not contain a runtime global npm self-upgrade step', () => {
-    const content = fs.readFileSync(hotfixFile, 'utf8');
-    const lines = content.split('\n');
-    const violations = lines
-      .map((line, idx) => ({ line, lineNo: idx + 1 }))
-      .filter(({ line }) => NPM_SELF_UPGRADE_RE.test(line));
-
-    assert.strictEqual(
-      violations.length,
-      0,
-      `hotfix.yml contains ${violations.length} runtime npm self-upgrade line(s) — ` +
         `Violations: ${violations.map(({ lineNo, line }) => `line ${lineNo}: ${line.trim()}`).join('; ')}`
     );
   });

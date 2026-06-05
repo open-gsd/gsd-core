@@ -643,7 +643,7 @@ function cmdValidateConsistency(cwd: string, raw: boolean): void {
 
   const roadmapPhases = new Set<string>();
   const phasePattern =
-    /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*(?:-[\w.-]+)*)\s*:/gi;
+    /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*)\s*:/gi;
   let m: RegExpExecArray | null;
   while ((m = phasePattern.exec(roadmapContent)) !== null) {
     roadmapPhases.add(m[1]);
@@ -651,7 +651,7 @@ function cmdValidateConsistency(cwd: string, raw: boolean): void {
 
   const fullRoadmapPhases = new Set<string>();
   const fullPhasePattern =
-    /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*(?:-[\w.-]+)*)\s*:/gi;
+    /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*)\s*:/gi;
   let fm: RegExpExecArray | null;
   while ((fm = fullPhasePattern.exec(roadmapContentRaw)) !== null) {
     fullRoadmapPhases.add(fm[1]);

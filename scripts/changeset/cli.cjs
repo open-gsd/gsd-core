@@ -188,6 +188,14 @@ function cmdRender(opts) {
   };
 }
 
+function stripV(v) { return typeof v === 'string' ? v.replace(/^v/, '') : v; }
+
+function resolveChangelogPath(opts) {
+  return opts.changelog
+    ? path.resolve(opts.changelog)
+    : path.join(path.resolve(opts.repo), 'CHANGELOG.md');
+}
+
 /**
  * extract subcommand: extracts all changelog release blocks strictly after
  * `--from` (exclusive) up to and including `--to` (inclusive).  Both
@@ -203,7 +211,6 @@ function cmdRender(opts) {
  * vague/manual extraction that can silently skip intermediate versions.
  */
 function cmdExtract(opts) {
-  const stripV = (v) => (typeof v === 'string' ? v.replace(/^v/, '') : v);
   const from = stripV(opts.fromRef);
   const to = stripV(opts.toRef);
 
@@ -225,9 +232,7 @@ function cmdExtract(opts) {
     };
   }
 
-  const changelogPath = opts.changelog
-    ? path.resolve(opts.changelog)
-    : path.join(path.resolve(opts.repo), 'CHANGELOG.md');
+  const changelogPath = resolveChangelogPath(opts);
 
   if (!fs.existsSync(changelogPath)) {
     return {
@@ -282,6 +287,61 @@ function cmdExtract(opts) {
   };
 }
 
+function cmdVerify(opts) {
+  const version = stripV(opts.version);
+
+  if (!isStableTripletSemver(version)) {
+    return {
+      exitCode: 1,
+      report: { error: `invalid semver for --version: "${version}" (expected N.N.N)`, ok: false },
+      textOutput: null,
+    };
+  }
+
+  const changelogPath = resolveChangelogPath(opts);
+
+  if (!fs.existsSync(changelogPath)) {
+    return {
+      exitCode: 1,
+      report: { error: `CHANGELOG not found: ${changelogPath}`, ok: false },
+      textOutput: null,
+    };
+  }
+
+  const text = fs.readFileSync(changelogPath, 'utf8');
+  const { releases } = parseChangelog(text);
+
+  const match = releases.find((r) => r.version === version);
+
+  if (!match) {
+    return {
+      exitCode: 1,
+      report: {
+        error: `CHANGELOG.md has no \`## [${version}]\` release heading — promote [Unreleased] into a dated section before releasing (see #690)`,
+        ok: false,
+      },
+      textOutput: null,
+    };
+  }
+
+  if (!match.date) {
+    return {
+      exitCode: 1,
+      report: {
+        error: `CHANGELOG.md heading \`## [${version}]\` has no date — expected \`## [${version}] - YYYY-MM-DD\``,
+        ok: false,
+      },
+      textOutput: null,
+    };
+  }
+
+  return {
+    exitCode: 0,
+    report: { ok: true, version, date: match.date },
+    textOutput: `CHANGELOG.md has a dated heading for ${version} (${match.date})`,
+  };
+}
+
 function cmdGithubReleaseNotes(opts) {
   const repo = path.resolve(opts.repo);
   const report = renderGithubReleaseNotes({
@@ -328,6 +388,7 @@ function usage() {
     '    Extracts changelog entries strictly after --from (exclusive) and up to',
     '    and including --to (inclusive).  Accepts v-prefixed versions.',
     '    Exit 2 when no releases fall in range.',
+    '  changeset/cli.cjs verify --version <X.Y.Z> [--changelog <path>]   Exit non-zero if CHANGELOG.md has no dated `## [X.Y.Z]` heading (release gate, #690)',
     '',
   ].join('\n');
 }
@@ -340,7 +401,7 @@ function main() {
     process.exit(2);
   }
   const { opts } = parsed;
-  if (opts.cmd !== 'render' && opts.cmd !== 'github-release-notes' && opts.cmd !== 'extract') {
+  if (opts.cmd !== 'render' && opts.cmd !== 'github-release-notes' && opts.cmd !== 'extract' && opts.cmd !== 'verify') {
     process.stderr.write(usage());
     process.exit(1);
   }
@@ -357,6 +418,10 @@ function main() {
     process.stderr.write(usage());
     process.exit(1);
   }
+  if (opts.cmd === 'verify' && !opts.version) {
+    process.stderr.write('--version is required for verify\n');
+    process.exit(2);
+  }
 
   if (opts.cmd === 'extract') {
     const { exitCode, report, textOutput } = cmdExtract(opts);
@@ -366,6 +431,18 @@ function main() {
       process.stdout.write(textOutput + '\n');
     } else if (exitCode === 2) {
       process.stderr.write(`no releases found in range (from=${report.from}, to=${report.to})\n`);
+    }
+    process.exit(exitCode);
+  }
+
+  if (opts.cmd === 'verify') {
+    const { exitCode, report, textOutput } = cmdVerify(opts);
+    if (opts.json) {
+      process.stdout.write(JSON.stringify(report, null, 2) + '\n');
+    } else if (textOutput) {
+      process.stdout.write(textOutput + '\n');
+    } else {
+      process.stderr.write(report.error + '\n');
     }
     process.exit(exitCode);
   }
@@ -389,4 +466,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { cmdRender, cmdExtract, cmdGithubReleaseNotes, parseArgs, splitChangelog, listFragmentFiles, usage };
+module.exports = { cmdRender, cmdExtract, cmdVerify, cmdGithubReleaseNotes, parseArgs, splitChangelog, listFragmentFiles, usage };

@@ -10,7 +10,6 @@ const DEFAULT_RELATIVE_FILES = [
   '.github/workflows/test.yml',
   '.github/workflows/pr-template-format.yml',
   '.github/workflows/changeset-required.yml',
-  'scripts/lint-no-source-grep.cjs',
   'scripts/lint-command-contract.cjs',
   'scripts/lint-skill-deps.cjs',
   'scripts/lint-descriptions.cjs',

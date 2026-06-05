@@ -750,7 +750,11 @@ function cmdSummaryExtract(cwd: string, summaryPath: string | undefined, fields:
     tech_added: (techStack && techStack['added']) || [],
     patterns: fm['patterns-established'] || [],
     decisions: parseDecisions(fm['key-decisions']),
-    requirements_completed: fm['requirements-completed'] || [],
+    // Tolerate both key forms: the template/reader use kebab `requirements-completed`,
+    // but the tool's own JSON output and the milestone audit `--pick` use snake
+    // `requirements_completed`. Reading both prevents a snake-keyed SUMMARY (the form the
+    // tool emits) from being silently dropped to []. See #628.
+    requirements_completed: fm['requirements-completed'] ?? fm['requirements_completed'] ?? [],
   };
 
   // If fields specified, filter to only those fields
@@ -1211,7 +1215,7 @@ function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
     const roadmapContent = extractCurrentMilestone(roadmapRaw, cwd);
     // Matches both plain numeric (Phase 1:) and milestone-prefixed (Phase 2-01:) headings.
     // Also tolerates optional [bracket-token] scope prefix on phase headings.
-    const headingPattern = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*(?:-[\w.-]+)*)\s*:\s*([^\n]+)/gi;
+    const headingPattern = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*)\s*:\s*([^\n]+)/gi;
     let match: RegExpExecArray | null;
     while ((match = headingPattern.exec(roadmapContent)) !== null) {
       const key = normalizePhaseName(match[1]);
