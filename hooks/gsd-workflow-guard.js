@@ -61,6 +61,7 @@ function currentBranch(cwd) {
     cwd,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
+    windowsHide: true,
   });
   if (result.status !== 0) return '';
   return result.stdout.trim();
