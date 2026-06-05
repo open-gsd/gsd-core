@@ -18,15 +18,26 @@ const { classifyConfidence } = require('../gsd-core/bin/lib/research-provider.cj
 // ---------------------------------------------------------------------------
 
 describe('research-provider property: classifyConfidence never throws', () => {
-  test('classifyConfidence({provider: any, verifiedAgainstOfficial: any}) never throws', () => {
+  test('classifyConfidence({provider: any, verifiedAgainstOfficial: any, legitimacyVerdict: any}) never throws', () => {
+    // Sample legitimacyVerdict from values an agent might supply or that arrive via checkPackages
+    const legitimacyVerdictArb = fc.oneof(
+      fc.constant('OK'),
+      fc.constant('SUS'),
+      fc.constant('SLOP'),
+      fc.constant(undefined),
+      fc.constant(null),
+      fc.integer(),
+      fc.anything(),
+    );
     fc.assert(
       fc.property(
         fc.anything(),
         fc.anything(),
-        (provider, verifiedAgainstOfficial) => {
+        legitimacyVerdictArb,
+        (provider, verifiedAgainstOfficial, legitimacyVerdict) => {
           let result;
           assert.doesNotThrow(() => {
-            result = classifyConfidence({ provider, verifiedAgainstOfficial });
+            result = classifyConfidence({ provider, verifiedAgainstOfficial, legitimacyVerdict });
           });
           // Must return one of the three valid confidence levels
           assert.ok(

@@ -1765,22 +1765,35 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
 
     // ─── Classify Confidence ──────────────────────────────────────────────
     //
-    // classify-confidence --provider <id> [--verified] [--legitimacy-verdict <ok|sus|slop>]
+    // classify-confidence --provider <id> [--package <name> --ecosystem <npm|pypi|crates>] [--verified]
     //   -> classifyConfidence({ provider, verifiedAgainstOfficial, legitimacyVerdict }); core.output(result, raw)
+    //
+    // legitimacyVerdict is CODE-COMPUTED via checkPackages — never caller-supplied — so an agent cannot self-assert OK→HIGH.
 
     case 'classify-confidence': {
       const researchProvider = require('./lib/research-provider.cjs');
       const providerIdx = args.indexOf('--provider');
       const provider = providerIdx !== -1 ? args[providerIdx + 1] : null;
       if (!provider || provider.startsWith('--')) {
-        error('Usage: gsd-tools query classify-confidence --provider <id> [--verified] [--legitimacy-verdict <ok|sus|slop>]', ERROR_REASON.USAGE);
+        error('Usage: gsd-tools query classify-confidence --provider <id> [--package <name> --ecosystem <npm|pypi|crates>] [--verified]', ERROR_REASON.USAGE);
       }
       const verified = args.includes('--verified');
-      const verdictIdx = args.indexOf('--legitimacy-verdict');
-      const rawVerdict = verdictIdx !== -1 ? args[verdictIdx + 1] : null;
-      const legitimacyVerdict = (rawVerdict && !rawVerdict.startsWith('--')) ? rawVerdict.toUpperCase() : null;
+      const pkgIdx = args.indexOf('--package');
+      const pkg = pkgIdx !== -1 ? args[pkgIdx + 1] : null;
+      const ecoIdx = args.indexOf('--ecosystem');
+      const ecosystem = ecoIdx !== -1 ? args[ecoIdx + 1] : null;
+      let legitimacyVerdict = null;
+      if (pkg && (!pkg.startsWith('--'))) {
+        const VALID_ECOSYSTEMS = new Set(['npm', 'pypi', 'crates']);
+        if (!ecosystem || ecosystem.startsWith('--') || !VALID_ECOSYSTEMS.has(ecosystem)) {
+          error('Usage: gsd-tools query classify-confidence --provider <id> [--package <name> --ecosystem <npm|pypi|crates>] [--verified]', ERROR_REASON.USAGE);
+        }
+        const pkgLegitimacy = require('./lib/package-legitimacy.cjs');
+        const results = await pkgLegitimacy.checkPackages({ ecosystem, packages: [pkg] }, {});
+        legitimacyVerdict = results[0] ? results[0].verdict : null;
+      }
       const confidence = researchProvider.classifyConfidence({ provider, verifiedAgainstOfficial: verified, legitimacyVerdict });
-      core.output({ provider, verified, legitimacyVerdict, confidence }, raw);
+      core.output({ provider, package: pkg || null, ecosystem: ecosystem || null, legitimacyVerdict, verified, confidence }, raw);
       break;
     }
 

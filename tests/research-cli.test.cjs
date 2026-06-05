@@ -203,11 +203,13 @@ describe('research-plan: fetch plan for unseeded question', () => {
 });
 
 // ---------------------------------------------------------------------------
-// (e) classify-confidence: context7 provider, no --verified -> HIGH, verified:false
+// (e) classify-confidence: context7 provider, no --verified -> MEDIUM, verified:false
+// (context7 has authority=official; without a code-computed legitimacyVerdict of OK,
+//  the HIGH branch is never reached — correctly yields MEDIUM)
 // ---------------------------------------------------------------------------
 
 describe('classify-confidence: context7 without --verified', () => {
-  test('returns confidence HIGH and verified false', () => {
+  test('returns confidence MEDIUM and verified false', () => {
     const tmpDir = makeTempDir();
     try {
       const result = runGsdTools(
@@ -216,7 +218,7 @@ describe('classify-confidence: context7 without --verified', () => {
       );
       assert.ok(result.success, `expected exit 0; got: ${result.error}`);
       const out = JSON.parse(result.output);
-      assert.equal(out.confidence, 'HIGH', `expected HIGH, got ${out.confidence}`);
+      assert.equal(out.confidence, 'MEDIUM', `expected MEDIUM, got ${out.confidence}`);
       assert.equal(out.verified, false, `expected verified:false, got ${out.verified}`);
       assert.equal(out.provider, 'context7', `expected provider:context7, got ${out.provider}`);
     } finally {
