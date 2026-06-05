@@ -38,7 +38,12 @@ const REPO_ROOT = path.join(__dirname, '..');
 // Runtime surfaces the installer ships. Each entry is { dir, exts } — dir is
 // repo-relative, exts is the set of file extensions whose text is deployed.
 const RUNTIME_SURFACES = [
-  { dir: path.join('gsd-core', 'workflows'), exts: ['.md'] },
+  // .md prompts plus the non-.md runtime artifacts this dir also ships:
+  // _runtime-launcher.snippet.sh (the canonical launcher synced into every hook
+  // by scripts/sync-runtime-launcher.cjs) and discuss-phase/templates/*.json
+  // (loaded at runtime by discuss-phase.md). Scanning only .md left these two
+  // deployed files uncovered. (#691 review)
+  { dir: path.join('gsd-core', 'workflows'), exts: ['.md', '.sh', '.json'] },
   { dir: path.join('gsd-core', 'references'), exts: ['.md'] },
   { dir: path.join('commands', 'gsd'), exts: ['.md'] },
   { dir: 'agents', exts: ['.md'] },
