@@ -174,7 +174,6 @@ EXTRACT_JSON=$(node "$GSD_DIR/gsd-core/scripts/changeset/cli.cjs" extract \
   --changelog "$CHANGELOG_TMP" \
   --json 2>/dev/null)
 EXTRACT_EXIT=$?
-rm -f "$CHANGELOG_TMP"
 
 if [ "$EXTRACT_EXIT" -eq 2 ]; then
   # Exit 2 = no releases in range (e.g. versions are equal or changelog is sparse)
@@ -188,6 +187,8 @@ else
     --to "$LATEST_VERSION" \
     --changelog "$CHANGELOG_TMP" 2>/dev/null || echo "(changelog unavailable)")
 fi
+# Clean up temp changelog now that both extract runs are done
+rm -f "$CHANGELOG_TMP"
 ```
 
 3. Display preview and ask for confirmation, using `$CHANGELOG_PREVIEW` from the extract step above:

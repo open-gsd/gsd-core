@@ -126,19 +126,21 @@ describe('bug-2801: ingest-docs.md workflow calls gsd-tools not gsd-sdk', () => 
     );
   });
 
-  test('ingest-docs.md init step uses canonical node-path gsd-tools.cjs invocation', () => {
+  test('ingest-docs.md init step uses the gsd_run launcher (#637)', () => {
     const content = fs.readFileSync(WORKFLOW_FILE, 'utf-8');
     // Parse fenced bash blocks structurally — do not match raw markdown text.
     const codeBlockRe = /```bash\r?\n([\s\S]*?)```/g;
     const bashLines = [...content.matchAll(codeBlockRe)]
       .flatMap((m) => m[1].split('\n'))
       .filter((l) => !/^\s*#/.test(l));
-    // Per #2851 the only valid form is the absolute-path node invocation; the
-    // legacy bare `gsd-tools` is the bug being fixed and must not be accepted.
+    // #637 routes ingest-docs through the resolved `gsd_run` launcher instead of
+    // the hardcoded `node "$HOME/.../gsd-tools.cjs"` path (which misses global
+    // installs). The legacy bare `gsd-tools` form remains the bug and is still
+    // rejected by bug-2851's repo-wide guard.
     const initLine = bashLines.find((l) =>
-      /\bnode\s+["']?\$HOME\/\.claude\/gsd-core\/bin\/gsd-tools\.cjs["']?\s+init\s+ingest-docs\b/.test(l)
+      /\bgsd_run\s+init\s+ingest-docs\b/.test(l)
     );
-    assert.ok(initLine, 'workflow must invoke init ingest-docs via canonical node-path gsd-tools.cjs');
+    assert.ok(initLine, 'workflow must invoke init ingest-docs via the gsd_run launcher (#637)');
   });
 
   test('cmdInitIngestDocs is exported from init.cjs', () => {

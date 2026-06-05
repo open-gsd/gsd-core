@@ -10,6 +10,7 @@ const {
   classifyArtifact,
   discoverInstallerMigrations,
   INSTALL_STATE_NAME,
+  migrationChecksum,
   planInstallerMigrations,
   readInstallState,
   runInstallerMigrations,
@@ -480,6 +481,46 @@ test('computes each migration checksum once per planned migration', (t) => {
 
   assert.equal(plan.actions.length, 2);
   assert.equal(checksumReads, 1);
+});
+
+test('tolerates an applied-migration checksum drift instead of aborting the upgrade', (t) => {
+  const configDir = createTempInstall();
+  t.after(() => cleanup(configDir));
+
+  // A migration that a prior release recorded as applied under a DIFFERENT body,
+  // so the stored checksum no longer matches the current computed checksum.
+  const migration = migrationRecord({ id: '2026-05-11-remove-old-hook' });
+  writeInstallState(configDir, {
+    schemaVersion: 1,
+    appliedMigrations: [
+      {
+        id: '2026-05-11-remove-old-hook',
+        appliedAt: '2026-01-01T00:00:00.000Z',
+        journal: null,
+        checksum: 'sha256:stale-pre-1-3-0-value',
+      },
+    ],
+  });
+
+  // Planning must NOT throw, must skip the already-applied migration, and must
+  // surface the drift on the plan for downstream reconciliation.
+  let plan;
+  assert.doesNotThrow(() => {
+    plan = planInstallerMigrations({
+      configDir,
+      migrations: [migration],
+      scope: 'global',
+      now: () => '2026-05-11T00:00:00.000Z',
+    });
+  });
+  assert.deepEqual(plan.pendingMigrationIds, []);
+  assert.equal(plan.actions.length, 0);
+  assert.ok(Array.isArray(plan.checksumDrift));
+  const drift = plan.checksumDrift.find((d) => d.id === '2026-05-11-remove-old-hook');
+  assert.ok(drift, 'expected checksum drift to be reported for the applied migration');
+  assert.equal(drift.storedChecksum, 'sha256:stale-pre-1-3-0-value');
+  assert.match(drift.currentChecksum, /^sha256:/);
+  assert.notEqual(drift.currentChecksum, drift.storedChecksum);
 });
 
 test('classifies large files without loading the whole file through readFileSync', (t) => {
@@ -1063,7 +1104,7 @@ test('marks zero-action pending migrations as applied', () => {
   }
 });
 
-test('refuses to plan an already-applied migration whose checksum changed', () => {
+test('surfaces checksum drift for an already-applied migration without aborting', () => {
   const configDir = createTempInstall();
   try {
     writeManifest(configDir, {});
@@ -1079,8 +1120,9 @@ test('refuses to plan an already-applied migration whose checksum changed', () =
       ],
     });
 
-    assert.throws(
-      () => planInstallerMigrations({
+    let plan;
+    assert.doesNotThrow(() => {
+      plan = planInstallerMigrations({
         configDir,
         migrations: [
           migrationRecord({
@@ -1089,9 +1131,14 @@ test('refuses to plan an already-applied migration whose checksum changed', () =
           }),
         ],
         scope: 'global',
-      }),
-      /applied migration checksum changed/
-    );
+      });
+    });
+    assert.deepEqual(plan.pendingMigrationIds, []);
+    assert.ok(Array.isArray(plan.checksumDrift));
+    const drift = plan.checksumDrift.find((d) => d.id === '2026-05-11-remove-old-hook');
+    assert.ok(drift, 'expected drift entry for the applied migration');
+    assert.equal(drift.storedChecksum, 'sha256:old-definition');
+    assert.equal(drift.currentChecksum, 'sha256:new-definition');
   } finally {
     cleanup(configDir);
   }
@@ -1381,6 +1428,149 @@ test('skips runtime-specific migration records for other runtimes', () => {
     const hooksJson = JSON.parse(fs.readFileSync(path.join(configDir, 'hooks.json'), 'utf8'));
     assert.equal(hooksJson.SessionStart[0].hooks[0].command, `node "${path.join(configDir, 'hooks', 'gsd-check-update.js')}"`);
     assert.equal(result.appliedMigrationIds.includes('2026-05-11-codex-legacy-hooks-json'), false);
+  } finally {
+    cleanup(configDir);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Checksum-baseline guardrail (issue #670)
+//
+// Shipped installer-migration bodies are immutable: editing a released body
+// breaks the stored checksum for any user who has already applied that
+// migration, which was the root cause of issue #670.
+//
+// This test locks every shipped migration to its committed checksum so that CI
+// catches accidental body edits. When you INTENTIONALLY change the behaviour
+// of a migration you must add a NEW fix-forward migration id instead; if for
+// some extraordinary reason you truly need to update an existing baseline, add
+// the new checksum here with a comment explaining why.
+//
+// Mechanism: compute each migration's checksum directly via the exported
+// migrationChecksum() (scope-independent) and assert it matches the committed
+// baseline. This is simpler and more robust than the previous plan()-based
+// approach because it doesn't depend on runtime/scope filtering.
+// ---------------------------------------------------------------------------
+test('shipped installer-migration checksums are locked to a committed baseline (issue #670 guardrail)', () => {
+  // Committed baseline — update ONLY when adding a new migration or performing an
+  // extraordinary intentional body change (add a comment explaining why). Editing a
+  // shipped migration body breaks the stored checksum for everyone who already applied
+  // it (root cause of #670) — add a NEW fix-forward migration id instead.
+  const EXPECTED_CHECKSUMS = {
+    '2026-05-11-first-time-baseline-scan':
+      'sha256:4ec58d35b30dbf39cc56e3972146086d8d31861ecd800cf0b37a7aa94fe74c2a',
+    '2026-05-11-legacy-orphan-files':
+      'sha256:e492698748a2436a12a55f0940f539b9bf651d8ffcac6f60cd856a6dabd6788c',
+    '2026-05-11-codex-legacy-hooks-json':
+      'sha256:5ce55294aa02f25758f604a569c899a6d2d060299189f5f447f68d8033157058',
+    '2026-06-02-rename-get-shit-done-to-gsd-core':
+      'sha256:3a9f1d97f64097fb313203d19c6d93a187a38df61dd299afa5eef73e16124e95',
+  };
+
+  const { DEFAULT_MIGRATIONS_DIR, migrationChecksum: computeChecksum } = require('../gsd-core/bin/lib/installer-migrations.cjs');
+  const migrations = discoverInstallerMigrations({ migrationsDir: DEFAULT_MIGRATIONS_DIR });
+  const discoveredIds = new Set(migrations.map((m) => m.id));
+
+  // No stale baseline entries.
+  for (const id of Object.keys(EXPECTED_CHECKSUMS)) {
+    assert.ok(discoveredIds.has(id),
+      `EXPECTED_CHECKSUMS has a stale entry for '${id}' — that migration no longer exists; remove it`);
+  }
+  // Every discovered migration has a committed baseline entry.
+  for (const id of discoveredIds) {
+    assert.ok(Object.prototype.hasOwnProperty.call(EXPECTED_CHECKSUMS, id),
+      `new migration '${id}' has no committed checksum baseline — add it to EXPECTED_CHECKSUMS in tests/installer-migrations.test.cjs`);
+  }
+  // Core lock: each shipped migration's current checksum must match its committed baseline,
+  // computed directly (scope-independent).
+  for (const m of migrations) {
+    assert.strictEqual(computeChecksum(m), EXPECTED_CHECKSUMS[m.id],
+      `'${m.id}' body changed — its checksum drifted from the committed baseline; ` +
+      `add a NEW fix-forward migration id instead of editing a shipped migration body, ` +
+      `or intentionally update the baseline in EXPECTED_CHECKSUMS`);
+  }
+});
+
+test('reconciles a drifted applied-migration checksum into install state on apply', () => {
+  const configDir = createTempInstall();
+  try {
+    // Set up: one already-applied migration with a stale checksum, one pending migration
+    // that will produce an action (so applyInstallerMigrationPlan writes state).
+    const alreadyAppliedMigration = migrationRecord({
+      id: '2026-05-11-already-applied-with-drift',
+      title: 'Already applied with drift',
+      description: 'Already applied with drift',
+      scopes: ['global'],
+      destructive: false,
+      plan: () => [],
+    });
+    const pendingMigration = migrationRecord({
+      id: '2026-05-11-pending-to-trigger-apply',
+      title: 'Pending migration',
+      description: 'Pending migration',
+      scopes: ['global'],
+      destructive: true,
+      plan: () => [
+        {
+          type: 'remove-managed',
+          relPath: 'hooks/old-hook.js',
+          reason: 'retiring hook',
+          ownershipEvidence: 'test fixture manifest-managed hook',
+        },
+      ],
+    });
+
+    writeFile(configDir, 'hooks/old-hook.js', 'managed hook\n');
+    writeManifest(configDir, {
+      'hooks/old-hook.js': sha256('managed hook\n'),
+    });
+
+    // Seed install state: alreadyAppliedMigration recorded with a STALE checksum.
+    writeInstallState(configDir, {
+      schemaVersion: 1,
+      appliedMigrations: [
+        {
+          id: alreadyAppliedMigration.id,
+          appliedAt: '2026-01-01T00:00:00.000Z',
+          journal: null,
+          checksum: 'sha256:stale-old',
+        },
+      ],
+    });
+
+    const plan = planInstallerMigrations({
+      configDir,
+      migrations: [alreadyAppliedMigration, pendingMigration],
+      scope: 'global',
+      now: () => '2026-05-11T00:00:00.000Z',
+    });
+
+    // The already-applied migration should appear in checksumDrift.
+    const drift = plan.checksumDrift.find((d) => d.id === alreadyAppliedMigration.id);
+    assert.ok(drift, 'expected checksumDrift entry for the already-applied migration');
+    assert.equal(drift.storedChecksum, 'sha256:stale-old');
+
+    // Apply the plan (the pending migration has an action, so this writes state).
+    applyInstallerMigrationPlan({
+      configDir,
+      plan,
+      now: () => '2026-05-11T00:00:01.000Z',
+    });
+
+    // Re-read install state and assert the stale checksum was reconciled.
+    const stateAfter = readInstallState(configDir);
+    const reconciledEntry = stateAfter.appliedMigrations.find(
+      (entry) => entry.id === alreadyAppliedMigration.id
+    );
+    assert.ok(reconciledEntry, 'expected the already-applied entry to still be in install state');
+    const expectedChecksum = migrationChecksum(alreadyAppliedMigration);
+    assert.strictEqual(
+      reconciledEntry.checksum,
+      expectedChecksum,
+      `expected checksum to be reconciled to current value (${expectedChecksum}), not the stale 'sha256:stale-old'`
+    );
+    assert.notEqual(reconciledEntry.checksum, 'sha256:stale-old',
+      'stale checksum must not remain after apply');
   } finally {
     cleanup(configDir);
   }

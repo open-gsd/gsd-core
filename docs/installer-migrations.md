@@ -121,9 +121,17 @@ Required fields:
 }
 ```
 
-The checksum is calculated from the migration definition. If an applied
-migration's checksum changes, the installer must warn and refuse to silently
-re-run it. Fix-forward migrations should use a new migration id.
+The checksum is calculated from the migration definition.
+
+An already-applied migration is never re-run, so a drifted checksum is
+tolerated at runtime: it is collected in `plan.checksumDrift` and reconciled
+into install state on the next write, rather than aborting the user's upgrade
+(this unblocks upgrades — see issue #670).
+
+The "shipped migration bodies are immutable" rule is enforced in CI by a
+committed checksum-baseline test in `tests/installer-migrations.test.cjs`.
+If you need to change the behaviour of a released migration, add a NEW
+fix-forward migration id instead of editing the shipped body.
 
 ## Migration Record
 

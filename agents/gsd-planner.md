@@ -818,39 +818,10 @@ If exists, load relevant documents by phase type:
 </step>
 
 <step name="load_graph_context">
-Check for knowledge graph:
-
-```bash
-ls .planning/graphs/graph.json 2>/dev/null
-```
-
-If graph.json exists, check freshness:
-
-```bash
-node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" graphify status
-```
-
-If the status response has `stale: true`, note for later: "Graph is {age_hours}h old -- treat semantic relationships as approximate." Include this annotation inline with any graph context injected below.
-
-Query the graph for phase-relevant dependency context (single query per D-06):
-
-```bash
-node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" graphify query "<phase-goal-keyword>" --budget 2000
-```
-
-(graphify is not exposed on `gsd-tools query` yet; use `gsd-tools.cjs` for graphify only.)
-
-Use the keyword that best captures the phase goal. Examples:
-- Phase "User Authentication" -> query term "auth"
-- Phase "Payment Integration" -> query term "payment"
-- Phase "Database Migration" -> query term "migration"
-
-If the query returns nodes and edges, incorporate as dependency context for planning:
-- Which modules/files are semantically related to this phase's domain
-- Which subsystems may be affected by changes in this phase
-- Cross-document relationships that inform task ordering and wave structure
-
-If no results or graph.json absent, continue without graph context.
+Read `gsd-core/references/planner-load-graph-context.md` and execute it. It checks for a
+knowledge graph and, if `.planning/graphs/graph.json` exists, reads freshness and
+phase-relevant dependency context via the `gsd_run` launcher and incorporates the results
+into planning. If the graph is absent, skip and continue without graph context.
 </step>
 
 <step name="identify_phase">
