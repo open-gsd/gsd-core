@@ -712,6 +712,138 @@ function cmdCommitToSubrepo(cwd: string, message: string | undefined, files: str
   output(result, raw, Object.entries(repos).map(([r, v]) => `${r}:${v.hash || 'skip'}`).join(' '));
 }
 
+/**
+ * Prepare a sub-repo for a companion PR branch.
+ *
+ * Detects uncommitted changes, creates a new branch, stages every changed
+ * file explicitly (never git add -A per universal-anti-patterns.md:44), commits,
+ * and pushes with --set-upstream. Returns a structured result the workflow uses
+ * to call `gh pr create`.
+ *
+ * On any failure after the branch has been created, the branch is deleted and
+ * the caller is returned to the original HEAD so the repo is left clean.
+ */
+function cmdPrSubrepo(
+  cwd: string,
+  repo: string | undefined,
+  branch: string | undefined,
+  commitMessage: string | undefined,
+  raw: boolean,
+): void {
+  if (!repo) {
+    error('--repo required');
+  }
+  if (!branch) {
+    error('--branch required');
+  }
+  if (!commitMessage || commitMessage.startsWith('--')) {
+    error('commit message required');
+  }
+
+  const repoCwd = path.resolve(cwd, repo as string);
+  if (!fs.existsSync(repoCwd)) {
+    error(`Sub-repo not found: ${repoCwd}`);
+  }
+
+  // 1. Collect changed files via porcelain status — explicit, never git add -A.
+  //    ?? (untracked) lines are excluded — only stage tracked modifications.
+  const statusResult = execGit(['status', '--porcelain'], { cwd: repoCwd });
+  if (statusResult.exitCode !== 0) {
+    error(`git status failed in ${repo}: ${statusResult.stderr}`);
+  }
+
+  const changedFiles: string[] = statusResult.stdout
+    .split('\n')
+    .filter(Boolean)
+    .filter(line => !line.startsWith('??'))
+    .flatMap(line => {
+      // execGit trims the entire stdout string, which strips the leading X-status
+      // space from the first output line only. Detect that case via line[2] and
+      // slice accordingly (3 for full "XY PATH", 2 for trimmed "Y PATH").
+      const file = (line[2] === ' ' ? line.slice(3) : line.slice(2)).trim();
+      // Porcelain renames: "old -> new" — stage both so git tracks the move
+      const arrowIdx = file.indexOf(' -> ');
+      return arrowIdx !== -1
+        ? [file.slice(0, arrowIdx).trim(), file.slice(arrowIdx + 4).trim()]
+        : [file];
+    });
+
+  if (changedFiles.length === 0) {
+    output(
+      { ok: true, repo, branch, committed: false, reason: 'nothing_to_commit', files: [] },
+      raw,
+      'nothing_to_commit',
+    );
+    return;
+  }
+
+  // 2. Guard: refuse if branch already exists — checkout -b is non-idempotent
+  const branchCheck = execGit(['rev-parse', '--verify', branch as string], { cwd: repoCwd });
+  if (branchCheck.exitCode === 0) {
+    error(`Branch already exists in ${repo}: ${branch}. Delete it first or choose a unique name.`);
+  }
+
+  // 3. Create branch
+  const checkoutResult = execGit(['checkout', '-b', branch as string], { cwd: repoCwd });
+  if (checkoutResult.exitCode !== 0) {
+    error(`Failed to create branch ${branch} in ${repo}: ${checkoutResult.stderr}`);
+  }
+
+  // Helper: rollback the created branch and return to the previous HEAD
+  const rollback = (): void => {
+    execGit(['checkout', '-'], { cwd: repoCwd });
+    execGit(['branch', '-D', branch as string], { cwd: repoCwd });
+  };
+
+  // 4. Stage explicit files (never git add -A per universal-anti-patterns.md:44)
+  for (const file of changedFiles) {
+    const addResult = execGit(['add', '--', file], { cwd: repoCwd });
+    if (addResult.exitCode !== 0) {
+      rollback();
+      error(`Failed to stage ${file} in ${repo}: ${addResult.stderr}`);
+    }
+  }
+
+  // 5. Commit
+  const commitResult = execGit(['commit', '-m', commitMessage as string], { cwd: repoCwd });
+  if (commitResult.exitCode !== 0) {
+    rollback();
+    error(`Failed to commit in ${repo}: ${commitResult.stderr}`);
+  }
+
+  // 6. Capture commit hash
+  const hashResult = execGit(['rev-parse', '--short', 'HEAD'], { cwd: repoCwd });
+  const commitHash = hashResult.exitCode === 0 ? hashResult.stdout.trim() : null;
+
+  // 7. Capture remote URL and derive GitHub owner/repo slug for gh pr create
+  const remoteResult = execGit(['remote', 'get-url', 'origin'], { cwd: repoCwd });
+  const remoteUrl = remoteResult.exitCode === 0 ? remoteResult.stdout.trim() : null;
+  let remoteSlug: string | null = null;
+  if (remoteUrl) {
+    const m = remoteUrl.match(/github\.com[:/](.+?)(?:\.git)?$/);
+    remoteSlug = m ? m[1] : null;
+  }
+
+  // 8. Push with --set-upstream so gh pr create can find the branch
+  const pushResult = execGit(['push', '--set-upstream', 'origin', branch as string], { cwd: repoCwd });
+  if (pushResult.exitCode !== 0) {
+    rollback();
+    error(`Failed to push ${branch} in ${repo}: ${pushResult.stderr}`);
+  }
+
+  const result = {
+    ok: true,
+    repo,
+    branch,
+    committed: true,
+    files: changedFiles,
+    commit_hash: commitHash,
+    remote_url: remoteUrl,
+    remote_slug: remoteSlug,
+  };
+  output(result, raw, `${repo}@${commitHash ?? 'unknown'}`);
+}
+
 function cmdSummaryExtract(cwd: string, summaryPath: string | undefined, fields: string[] | undefined, raw: boolean): void {
   if (!summaryPath) {
     error('summary-path required for summary-extract');
@@ -1404,6 +1536,7 @@ export = {
   cmdEffortSync,
   cmdCommit,
   cmdCommitToSubrepo,
+  cmdPrSubrepo,
   cmdSummaryExtract,
   cmdWebsearch,
   cmdProgressRender,

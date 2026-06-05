@@ -42,78 +42,110 @@ Commits: {AHEAD} ahead
 </step>
 
 <step name="handle_sub_repos">
-Read sub-repo list from config:
+Read the sub-repo list from config using the canonical key path — `planning.sub_repos`.
+A non-zero exit code means the key is absent; treat that as "no sub-repos configured".
 
 ```bash
-SUB_REPOS_RAW=$(gsd_run query config-get sub_repos 2>/dev/null || echo "")
+SUB_REPOS_JSON=$(gsd_run query config-get planning.sub_repos 2>/dev/null)
+if [ $? -ne 0 ] || [ -z "$SUB_REPOS_JSON" ] || [ "$SUB_REPOS_JSON" = "null" ] || [ "$SUB_REPOS_JSON" = "[]" ]; then
+  : # Not configured or empty — skip to analyze_commits
+fi
 ```
 
-If `SUB_REPOS_RAW` is empty, `null`, or `[]`, skip this step entirely and proceed to `analyze_commits`.
-
-Otherwise, resolve the root path and scan each sub-repo for uncommitted changes.
-**Critical: all git commands must use `git -C "$REPO"` — never `cd "$REPO"`, shell state does not persist between commands.**
+Scan each sub-repo for uncommitted changes using node (always available — avoids undeclared
+jq dependency). Write dirty repo names to a temp file so the list survives across
+subsequent command executions:
 
 ```bash
 ROOT=$(git rev-parse --show-toplevel)
+DIRTY_FILE=$(mktemp)
 
-DIRTY_REPOS=()
-while IFS= read -r REPO_REL; do
-  [ -z "$REPO_REL" ] && continue
-  REPO="$ROOT/$REPO_REL"
-  CHANGES=$(git -C "$REPO" status --porcelain 2>/dev/null)
-  if [ -n "$CHANGES" ]; then
-    DIRTY_REPOS+=("$REPO_REL")
-  fi
-done < <(echo "$SUB_REPOS_RAW" | jq -r '.[]' 2>/dev/null)
+node -e "
+  const repos = JSON.parse(process.argv[1]);
+  const { execFileSync } = require('child_process');
+  const path = require('path');
+  const root = process.argv[2];
+  const fs = require('fs');
+  const out = [];
+  for (const r of repos) {
+    try {
+      const res = execFileSync('git', ['-C', path.join(root, r), 'status', '--porcelain'],
+                               { encoding: 'utf8' });
+      if (res.trim()) out.push(r);
+    } catch (_) {}
+  }
+  fs.writeFileSync(process.argv[3], out.join('\n'));
+" "$SUB_REPOS_JSON" "$ROOT" "$DIRTY_FILE"
+
+DIRTY_REPOS=$(cat "$DIRTY_FILE")
 ```
 
-If no sub-repos have uncommitted changes, skip to `analyze_commits`.
+If `$DIRTY_REPOS` is empty, remove the temp file and continue to `analyze_commits`.
 
-Display dirty sub-repos and prompt the user:
+Display dirty repos and prompt the user:
 
 ```
 Sub-repos with uncommitted changes:
-  backend  — 3 file(s)
-  frontend — 1 file(s)
+  backend
+  frontend
 
 How should sub-repo changes be handled?
-  1. all    — create PR branch, commit, push, and open PR for every listed sub-repo
+  1. all    — branch, commit (explicit files only), push -u, open companion PR per repo
   2. select — choose which sub-repos to process
   3. skip   — ignore sub-repos, continue with root repo only
 ```
 
-If the user chooses **skip**, proceed to `analyze_commits`.
+If the user chooses **skip**, remove the temp file and continue to `analyze_commits`.
 
-For each selected sub-repo (`$REPO_REL`):
+For each selected sub-repo `$REPO_REL`, delegate all git work to the `pr-subrepo` query
+seam — it stages explicit changed files (never `git add -A`), creates the branch,
+commits, and pushes with `--set-upstream`. Branch names include the repo slug to avoid
+colliding with the root `PR_BRANCH` that `create_pr_branch` creates later:
 
 ```bash
-REPO="$ROOT/$REPO_REL"
-SUB_BRANCH="${CURRENT_BRANCH}-pr"
+# Replace path separators to make the name safe as a branch component
+REPO_SAFE="${REPO_REL//\//-}"
+SUB_BRANCH="${CURRENT_BRANCH}-${REPO_SAFE}-pr"
+COMMIT_MSG="fix(${REPO_REL}): sync uncommitted changes for PR"
 
-# 1. Create the PR branch in the sub-repo
-git -C "$REPO" checkout -b "$SUB_BRANCH"
-
-# 2. Stage all changes and commit (Conventional Commits format)
-git -C "$REPO" add -A
-git -C "$REPO" commit -m "fix($REPO_REL): sync uncommitted changes for PR"
-
-# 3. Push to remote
-git -C "$REPO" push origin "$SUB_BRANCH"
-
-# 4. Determine remote repo slug and open PR
-SUB_REMOTE=$(git -C "$REPO" remote get-url origin 2>/dev/null)
-SUB_REPO_SLUG=$(echo "$SUB_REMOTE" \
-  | sed 's|.*github\.com[:/]\(.*\)\.git$|\1|;s|.*github\.com[:/]\(.*\)$|\1|')
-
-gh pr create \
-  --repo "$SUB_REPO_SLUG" \
-  --base "$TARGET" \
-  --head "$SUB_BRANCH" \
-  --title "fix($REPO_REL): sync uncommitted changes for PR" \
-  --body "Companion PR for root repo branch \`$CURRENT_BRANCH\`."
+RESULT=$(gsd_run query pr-subrepo "$COMMIT_MSG" \
+  --repo "$REPO_REL" \
+  --branch "$SUB_BRANCH")
 ```
 
-After processing all selected sub-repos, continue to `analyze_commits` for the root repo.
+Parse the structured result with node and open the companion PR. If `remote_slug` is null
+(non-GitHub remote), skip `gh pr create` and show the push URL instead:
+
+```bash
+REMOTE_SLUG=$(node -e "
+  try { console.log(JSON.parse(process.argv[1]).remote_slug || ''); } catch(_) {}
+" "$RESULT")
+
+if [ -n "$REMOTE_SLUG" ]; then
+  # Resolve base branch: use $TARGET if it exists in sub-repo, else fall back to
+  # the sub-repo's own default branch
+  if git -C "$ROOT/$REPO_REL" ls-remote --exit-code --heads origin "$TARGET" \
+       > /dev/null 2>&1; then
+    SUB_TARGET="$TARGET"
+  else
+    SUB_TARGET=$(git -C "$ROOT/$REPO_REL" remote show origin 2>/dev/null \
+      | awk '/HEAD branch/ {print $NF}')
+    SUB_TARGET="${SUB_TARGET:-main}"
+  fi
+
+  gh pr create \
+    --repo "$REMOTE_SLUG" \
+    --base "$SUB_TARGET" \
+    --head "$SUB_BRANCH" \
+    --title "$COMMIT_MSG" \
+    --body "Companion PR for root repo branch \`$CURRENT_BRANCH\`."
+else
+  echo "No GitHub remote detected for $REPO_REL — branch pushed, open PR manually."
+fi
+```
+
+After processing all selected sub-repos, remove the temp file and continue to
+`analyze_commits` for the root repo.
 </step>
 
 <step name="analyze_commits">
