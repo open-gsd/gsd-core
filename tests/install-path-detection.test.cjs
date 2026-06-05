@@ -317,4 +317,257 @@ describe('installer HOME-relative PATH detection (#2620)',
       cleanup(home);
     }
   });
+
+  // #323 — fish has no sh-style `export PATH=` rc file, so homePathCoveredByRc
+  // can never see a fish user's PATH. homePathCoveredByFishConfig parses fish's
+  // universal-variable store (fish_variables) and config.fish so the installer
+  // does not emit a false-positive warning for fish users whose
+  // fish_user_paths already covers globalBin.
+  describe('fish-shell PATH coverage detection (#323)', () => {
+    function writeFishFile(home, name, content) {
+      const fishDir = path.join(home, '.config', 'fish');
+      fs.mkdirSync(fishDir, { recursive: true });
+      fs.writeFileSync(path.join(fishDir, name), content);
+    }
+
+    // Mirror fish's universal-variable serialization (`full_escape`): every
+    // byte outside [A-Za-z0-9/_] is written as `\xHH`, and list elements are
+    // joined by the literal 4-char token `\x1e` — NOT a raw 0x1e byte.
+    // Verified against fish 3.7.0 output (space -> \x20, `-` -> \x2d, `.` ->
+    // \x2e). Fixtures use this so the decoder is tested against real format.
+    function fishEncodeUniversalList(paths) {
+      const esc = (p) => p.replace(/[^A-Za-z0-9/_]/g, (ch) =>
+        '\\x' + ch.charCodeAt(0).toString(16).padStart(2, '0'));
+      return paths.map(esc).join('\\x1e');
+    }
+
+    test('homePathCoveredByFishConfig is exported', () => {
+      assert.strictEqual(
+        typeof installer.homePathCoveredByFishConfig,
+        'function',
+        'bin/install.js must export homePathCoveredByFishConfig for #323',
+      );
+    });
+
+    test('detects fish_user_paths in the universal-variable store', () => {
+      const home = createTempHome();
+      try {
+        const globalBin = path.join(home, '.nvm', 'bin');
+        writeFishFile(
+          home,
+          'fish_variables',
+          [
+            'SETUVAR --export LANG:en_US',
+            `SETUVAR fish_user_paths:${fishEncodeUniversalList([globalBin, '/usr/local/bin'])}`,
+            '',
+          ].join('\n'),
+        );
+        assert.strictEqual(installer.homePathCoveredByFishConfig(globalBin, home), true);
+      } finally {
+        cleanup(home);
+      }
+    });
+
+    // Regression: fish escapes `-`, `.`, and space in the universal-variable
+    // store, so the detector must decode `\xHH` before comparing. A raw
+    // string match (the original, naive implementation) fails here. Mirrors a
+    // real nvm path (dots + hyphens) plus a space-containing sibling.
+    test('decodes fish-escaped paths (dots, hyphens, spaces) in fish_variables', () => {
+      const home = createTempHome();
+      try {
+        const globalBin = path.join(home, '.nvm', 'versions', 'node', 'v24.15.0', 'bin');
+        const spaced = path.join(home, 'my tools', 'bin');
+        const encoded = fishEncodeUniversalList([spaced, globalBin]);
+        // Sanity: the fixture really is escaped, not a plain path.
+        assert.ok(encoded.includes('\\x2e') && encoded.includes('\\x20') && encoded.includes('\\x1e'));
+        writeFishFile(home, 'fish_variables', `SETUVAR fish_user_paths:${encoded}\n`);
+        assert.strictEqual(installer.homePathCoveredByFishConfig(globalBin, home), true);
+        assert.strictEqual(installer.homePathCoveredByFishConfig(spaced, home), true);
+        assert.strictEqual(
+          installer.homePathCoveredByFishConfig(path.join(home, 'not', 'there'), home),
+          false,
+        );
+      } finally {
+        cleanup(home);
+      }
+    });
+
+    // Adversarial regression: fish stores a literal `$` in a directory name as
+    // `\x24` in the universal store, so the decoded entry contains `$`. That
+    // `$` is part of the path, not an unexpanded variable — the uvar route
+    // must still match it. (config.fish tokens keep the `$VAR` guard.)
+    test('detects a fish_user_paths entry whose directory name contains a literal $', () => {
+      const home = createTempHome();
+      try {
+        const globalBin = path.join(home, 'has $VAR dir', 'bin');
+        writeFishFile(home, 'fish_variables', `SETUVAR fish_user_paths:${fishEncodeUniversalList([globalBin])}\n`);
+        assert.ok(fishEncodeUniversalList([globalBin]).includes('\\x24'), 'fixture must encode $ as \\x24');
+        assert.strictEqual(installer.homePathCoveredByFishConfig(globalBin, home), true);
+      } finally {
+        cleanup(home);
+      }
+    });
+
+    test('detects fish_add_path in config.fish (with flag)', () => {
+      const home = createTempHome();
+      try {
+        const globalBin = path.join(home, '.nvm', 'bin');
+        writeFishFile(home, 'config.fish', `fish_add_path -g ${globalBin}\n`);
+        assert.strictEqual(installer.homePathCoveredByFishConfig(globalBin, home), true);
+      } finally {
+        cleanup(home);
+      }
+    });
+
+    test('detects set -gx PATH in config.fish', () => {
+      const home = createTempHome();
+      try {
+        const globalBin = path.join(home, '.nvm', 'bin');
+        writeFishFile(home, 'config.fish', `set -gx PATH $PATH ${globalBin}\n`);
+        assert.strictEqual(installer.homePathCoveredByFishConfig(globalBin, home), true);
+      } finally {
+        cleanup(home);
+      }
+    });
+
+    test('detects set -Ux fish_user_paths in config.fish', () => {
+      const home = createTempHome();
+      try {
+        const globalBin = path.join(home, '.nvm', 'bin');
+        writeFishFile(home, 'config.fish', `set -Ux fish_user_paths ${globalBin} /usr/bin\n`);
+        assert.strictEqual(installer.homePathCoveredByFishConfig(globalBin, home), true);
+      } finally {
+        cleanup(home);
+      }
+    });
+
+    test('ignores commented-out fish_add_path lines', () => {
+      const home = createTempHome();
+      try {
+        const globalBin = path.join(home, '.nvm', 'bin');
+        writeFishFile(home, 'config.fish', `# fish_add_path ${globalBin}\n`);
+        assert.strictEqual(installer.homePathCoveredByFishConfig(globalBin, home), false);
+      } finally {
+        cleanup(home);
+      }
+    });
+
+    test('returns false when fish config does not cover globalBin', () => {
+      const home = createTempHome();
+      try {
+        writeFishFile(home, 'config.fish', 'fish_add_path /opt/some/other/bin\n');
+        const globalBin = path.join(home, '.nvm', 'bin');
+        assert.strictEqual(installer.homePathCoveredByFishConfig(globalBin, home), false);
+      } finally {
+        cleanup(home);
+      }
+    });
+
+    test('returns false when no fish config exists', () => {
+      const home = createTempHome();
+      try {
+        const globalBin = path.join(home, '.nvm', 'bin');
+        assert.strictEqual(installer.homePathCoveredByFishConfig(globalBin, home), false);
+      } finally {
+        cleanup(home);
+      }
+    });
+
+    test('does not resolve a bare relative fish_add_path segment against HOME', () => {
+      const home = createTempHome();
+      try {
+        writeFishFile(home, 'config.fish', 'fish_add_path bin\n');
+        const globalBin = path.join(home, 'bin');
+        assert.strictEqual(
+          installer.homePathCoveredByFishConfig(globalBin, home),
+          false,
+          'relative fish_add_path segments must not be resolved against $HOME',
+        );
+      } finally {
+        cleanup(home);
+      }
+    });
+
+    test('swallows an unreadable fish config without throwing', () => {
+      const home = createTempHome();
+      try {
+        const fishDir = path.join(home, '.config', 'fish');
+        fs.mkdirSync(fishDir, { recursive: true });
+        fs.mkdirSync(path.join(fishDir, 'config.fish')); // dir where a file is expected
+        const globalBin = path.join(home, '.nvm', 'bin');
+        assert.doesNotThrow(() => installer.homePathCoveredByFishConfig(globalBin, home));
+        assert.strictEqual(installer.homePathCoveredByFishConfig(globalBin, home), false);
+      } finally {
+        cleanup(home);
+      }
+    });
+
+    test('maybeSuggestPathExport suppresses suggestion when fish config covers globalBin', () => {
+      const home = createTempHome();
+      const origPath = process.env.PATH;
+      try {
+        const globalBin = path.join(home, '.nvm', 'bin');
+        fs.mkdirSync(globalBin, { recursive: true });
+        // globalBin not on the current PATH, no sh rc files — only fish covers it.
+        process.env.PATH = '/usr/bin';
+        writeFishFile(home, 'fish_variables', `SETUVAR fish_user_paths:${fishEncodeUniversalList([globalBin])}\n`);
+
+        const logs = [];
+        const origLog = console.log;
+        console.log = (...args) => { logs.push(args.join(' ')); };
+        try {
+          installer.maybeSuggestPathExport(globalBin, home);
+        } finally {
+          console.log = origLog;
+        }
+
+        const joined = logs.join('\n');
+        assert.ok(
+          !/fish_add_path/.test(joined) && !/Add it with one of/.test(joined),
+          `installer should not emit a PATH suggestion when fish already covers it; got:\n${joined}`,
+        );
+        assert.ok(
+          /universal variables/.test(joined),
+          `installer should print the fish reopen note; got:\n${joined}`,
+        );
+      } finally {
+        if (origPath === undefined) delete process.env.PATH; else process.env.PATH = origPath;
+        cleanup(home);
+      }
+    });
+
+    test('maybeSuggestPathExport emits fish_add_path suggestion when nothing covers globalBin', () => {
+      const home = createTempHome();
+      const origPath = process.env.PATH;
+      try {
+        const globalBin = path.join(home, '.npm-global', 'bin');
+        fs.mkdirSync(globalBin, { recursive: true });
+        process.env.PATH = '/usr/bin';
+
+        const logs = [];
+        const origLog = console.log;
+        console.log = (...args) => { logs.push(args.join(' ')); };
+        try {
+          installer.maybeSuggestPathExport(globalBin, home);
+        } finally {
+          console.log = origLog;
+        }
+
+        const joined = logs.join('\n');
+        const projected = projection.projectPersistentPathExportActions({
+          targetDir: globalBin,
+          platform: process.platform,
+        });
+        const fishAction = projected.shellActions.find((a) => a.shell === 'fish');
+        assert.ok(fishAction, 'projection must include a fish action');
+        assert.ok(
+          joined.includes(fishAction.command),
+          `installer should render the projected fish command "${fishAction.command}". Output:\n${joined}`,
+        );
+      } finally {
+        if (origPath === undefined) delete process.env.PATH; else process.env.PATH = origPath;
+        cleanup(home);
+      }
+    });
+  });
 });

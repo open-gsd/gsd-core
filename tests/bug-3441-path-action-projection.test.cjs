@@ -39,11 +39,15 @@ describe('bug #3441: PATH guidance is projected from typed shell action IR', () 
       platform: 'linux',
     });
     assert.ok(Array.isArray(posix.shellActions));
-    assert.equal(posix.shellActions.length, 2);
+    assert.equal(posix.shellActions.length, 3);
     assert.equal(posix.shellActions[0].label, 'zsh');
     assert.equal(posix.shellActions[1].label, 'bash');
+    assert.equal(posix.shellActions[2].label, 'fish');
     assert.ok(posix.shellActions[0].command.includes('~/.zshrc'));
     assert.ok(posix.shellActions[1].command.includes('~/.bashrc'));
+    // #323: fish gets a fish-native fish_add_path suggestion, not `export`.
+    assert.ok(posix.shellActions[2].command.startsWith('fish_add_path '));
+    assert.ok(!posix.shellActions[2].command.includes('export'));
   });
 
   test('POSIX repair mode escapes double-quoted shell metacharacters', () => {
@@ -67,6 +71,9 @@ describe('bug #3441: PATH guidance is projected from typed shell action IR', () 
     });
     assert.equal(projected.shellActions[0].command.includes("/tmp/O'\\''Neil/bin"), true);
     assert.equal(projected.shellActions[1].command.includes("/tmp/O'\\''Neil/bin"), true);
+    // #323: fish entry single-quotes the dir with the same POSIX literal
+    // escaping (`'\''` is also a valid escaped quote in fish unquoted context).
+    assert.equal(projected.shellActions[2].command, "fish_add_path '/tmp/O'\\''Neil/bin'");
   });
 
   test('maybeSuggestPathExport renders commands projected by path-action seam', () => {
