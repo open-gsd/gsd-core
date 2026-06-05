@@ -382,3 +382,198 @@ describe('changeset cli render: file-I/O wrapper (#2975)', () => {
     assert.deepEqual(remaining.filter((f) => f.endsWith('.md')), []);
   });
 });
+
+// ---------------------------------------------------------------------------
+// GROUP A — #690 regression guard (real repo CHANGELOG.md)
+// ---------------------------------------------------------------------------
+
+describe('changeset cli #690 regression: CHANGELOG.md has 1.3.0 and 1.3.1 entries', () => {
+  const CHANGELOG_PATH = path.join(ROOT, 'CHANGELOG.md');
+
+  test('CHANGELOG.md has dated 1.3.0 and 1.3.1 release headings (regression #690)', () => {
+    const text = fs.readFileSync(CHANGELOG_PATH, 'utf8');
+    const { releases } = parseChangelog(text);
+    const stableReleases = releases.filter((r) => r.version !== 'Unreleased');
+
+    const v130 = stableReleases.find((r) => r.version === '1.3.0');
+    assert.ok(v130, 'CHANGELOG.md must contain a release entry for version 1.3.0');
+    assert.ok(v130.date !== null && v130.date !== '', '1.3.0 entry must have a non-null, non-empty date');
+
+    const v131 = stableReleases.find((r) => r.version === '1.3.1');
+    assert.ok(v131, 'CHANGELOG.md must contain a release entry for version 1.3.1');
+    assert.ok(v131.date !== null && v131.date !== '', '1.3.1 entry must have a non-null, non-empty date');
+  });
+
+  test('extract 1.2.0->1.3.1 against repo CHANGELOG returns both 1.3.x releases (regression #690)', () => {
+    const r = cp.spawnSync(
+      process.execPath,
+      [SCRIPT, 'extract', '--from', '1.2.0', '--to', '1.3.1', '--changelog', CHANGELOG_PATH, '--json'],
+      { encoding: 'utf8' },
+    );
+    const json = (() => { try { return JSON.parse(r.stdout); } catch { return null; } })();
+    assert.equal(r.status, 0, `expected exit 0 but got ${r.status}; stderr=${r.stderr}; stdout=${r.stdout}`);
+    assert.ok(json, 'stdout must be valid JSON');
+    const versions = (json.releases || []).map((rel) => rel.version);
+    assert.ok(versions.includes('1.3.0'), `releases array must include 1.3.0; got: ${JSON.stringify(versions)}`);
+    assert.ok(versions.includes('1.3.1'), `releases array must include 1.3.1; got: ${JSON.stringify(versions)}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GROUP B — unit tests for the (not-yet-implemented) `verify` subcommand
+// ---------------------------------------------------------------------------
+
+function runVerify(args, changelogText) {
+  const changelogFile = path.join(tmp, 'CHANGELOG-verify-test.md');
+  fs.writeFileSync(changelogFile, changelogText);
+  const r = cp.spawnSync(
+    process.execPath,
+    [SCRIPT, 'verify', '--changelog', changelogFile, ...args],
+    { encoding: 'utf8' },
+  );
+  return {
+    status: r.status,
+    stdout: r.stdout || '',
+    stderr: r.stderr || '',
+  };
+}
+
+describe('changeset cli verify subcommand (not yet implemented — TDD red step)', () => {
+  // Fixture: inline-URL heading form  ## [1.3.1](url) - 2026-06-04
+  const FIXTURE_URL_HEADING = [
+    '# Changelog',
+    '',
+    '## [1.3.1](https://www.npmjs.com/package/@opengsd/gsd-core/v/1.3.1) - 2026-06-04',
+    '',
+    '### Fixed',
+    '',
+    '- Some fix. (#42)',
+    '',
+    '## [1.2.0] - 2026-05-31',
+    '',
+    '### Added',
+    '',
+    '- Some feature. (#10)',
+  ].join('\n');
+
+  // Fixture: plain dated heading  ## [1.3.1] - 2026-06-04
+  const FIXTURE_PLAIN_HEADING = [
+    '# Changelog',
+    '',
+    '## [1.3.1] - 2026-06-04',
+    '',
+    '### Fixed',
+    '',
+    '- Some fix. (#42)',
+    '',
+    '## [1.2.0] - 2026-05-31',
+    '',
+    '### Added',
+    '',
+    '- Some feature. (#10)',
+  ].join('\n');
+
+  // Fixture: version absent (only Unreleased + 1.2.0)
+  const FIXTURE_NO_131 = [
+    '# Changelog',
+    '',
+    '## [Unreleased]',
+    '',
+    '## [1.2.0] - 2026-05-31',
+    '',
+    '### Added',
+    '',
+    '- Some feature. (#10)',
+  ].join('\n');
+
+  // Fixture: heading present but NO date
+  const FIXTURE_NO_DATE = [
+    '# Changelog',
+    '',
+    '## [1.3.1]',
+    '',
+    '### Fixed',
+    '',
+    '- Some fix. (#42)',
+  ].join('\n');
+
+  test('verify --version 1.3.1 exits 0 when inline-URL dated heading is present', () => {
+    const r = runVerify(['--version', '1.3.1'], FIXTURE_URL_HEADING);
+    assert.equal(r.status, 0, `expected exit 0; stderr=${r.stderr}`);
+  });
+
+  test('verify --version 1.3.1 exits 0 when plain dated heading is present', () => {
+    const r = runVerify(['--version', '1.3.1'], FIXTURE_PLAIN_HEADING);
+    assert.equal(r.status, 0, `expected exit 0; stderr=${r.stderr}`);
+  });
+
+  test('verify --version 1.3.1 exits 1 when version heading is absent', () => {
+    const r = runVerify(['--version', '1.3.1'], FIXTURE_NO_131);
+    assert.equal(r.status, 1, `expected exit 1; stderr=${r.stderr}`);
+  });
+
+  test('verify --version 1.3.1 exits 1 when heading has no date', () => {
+    const r = runVerify(['--version', '1.3.1'], FIXTURE_NO_DATE);
+    assert.equal(r.status, 1, `expected exit 1; stderr=${r.stderr}`);
+  });
+
+  test('verify --version 1.3.1 with no match emits non-empty stderr/message', () => {
+    const r = runVerify(['--version', '1.3.1'], FIXTURE_NO_131);
+    assert.ok(
+      (r.stderr && r.stderr.trim().length > 0) || (r.stdout && r.stdout.trim().length > 0),
+      'must emit a non-empty error message to stderr or stdout when version not found',
+    );
+  });
+
+  test('verify --version 1.3.x exits 1 for invalid semver', () => {
+    // Use any non-empty fixture; the version check should fail before reading the file.
+    const r = runVerify(['--version', '1.3.x'], FIXTURE_PLAIN_HEADING);
+    assert.equal(r.status, 1, `expected exit 1 for invalid semver 1.3.x; stderr=${r.stderr}`);
+  });
+
+  test('verify --version v1.3.1 (v-prefixed) exits 0 when dated heading present', () => {
+    // The leading `v` must be stripped, matching extract's behavior.
+    const FIXTURE_DATED = [
+      '# Changelog',
+      '',
+      '## [1.3.1] - 2026-06-04',
+      '',
+      '### Fixed',
+      '',
+      '- Some fix. (#42)',
+    ].join('\n');
+    const r = runVerify(['--version', 'v1.3.1'], FIXTURE_DATED);
+    assert.equal(r.status, 0, `expected exit 0 for v-prefixed version; stderr=${r.stderr}`);
+  });
+
+  test('verify --version 1.3.1 --json exits 0 and emits ok/version/date JSON fields', () => {
+    const FIXTURE_DATED = [
+      '# Changelog',
+      '',
+      '## [1.3.1] - 2026-06-04',
+      '',
+      '### Fixed',
+      '',
+      '- Some fix. (#42)',
+    ].join('\n');
+    const changelogFile = path.join(tmp, 'CHANGELOG-verify-test.md');
+    fs.writeFileSync(changelogFile, FIXTURE_DATED);
+    const r = cp.spawnSync(
+      process.execPath,
+      [SCRIPT, 'verify', '--version', '1.3.1', '--json', '--changelog', changelogFile],
+      { encoding: 'utf8' },
+    );
+    assert.equal(r.status, 0, `expected exit 0; stderr=${r.stderr}`);
+    const json = (() => { try { return JSON.parse(r.stdout); } catch { return null; } })();
+    assert.ok(json, 'stdout must be valid JSON');
+    assert.strictEqual(json.ok, true, 'json.ok must be true');
+    assert.strictEqual(json.version, '1.3.1', 'json.version must equal "1.3.1"');
+    assert.ok(json.date && json.date.length > 0, 'json.date must be non-empty');
+  });
+
+  test('verify --version 1.3.1-rc.1 (pre-release) exits 1', () => {
+    // Non-stable-triplet semver is rejected by the verify subcommand.
+    const r = runVerify(['--version', '1.3.1-rc.1'], FIXTURE_PLAIN_HEADING);
+    assert.equal(r.status, 1, `expected exit 1 for pre-release version; stderr=${r.stderr}`);
+  });
+});
