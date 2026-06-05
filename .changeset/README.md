@@ -42,3 +42,7 @@ node scripts/changeset/cli.cjs render --version vX.Y.Z --date YYYY-MM-DD
 ```
 
 Reads every fragment, groups bullets by `type:`, replaces `## [Unreleased]` with a new `## [vX.Y.Z] - YYYY-MM-DD` block, opens a fresh `## [Unreleased]` above, deletes consumed fragments. Idempotent.
+
+## Archived fragments
+
+`.changeset/archived/` holds fragments for already-shipped releases (≤ 1.3.1), retained for provenance. Their content was hand-curated into the dated `## [1.x.y]` sections of `CHANGELOG.md` during the #690 backfill — they were never consumed by `render`. All changeset tooling enumerates `.changeset/` non-recursively, so archived fragments are never picked up or rendered. Do not move them back to the top level.
