@@ -24,7 +24,7 @@ const { execFileSync, execSync, spawn } = require('child_process');
 const { promisify } = require('util');
 const { exec } = require('child_process');
 
-const { runGsdTools, createTempProject, cleanup, TOOLS_PATH } = require('./helpers.cjs');
+const { runGsdTools, createTempProject, cleanup, waitFor, TOOLS_PATH } = require('./helpers.cjs');
 
 const execAsync = promisify(exec);
 
@@ -234,14 +234,11 @@ describe('#1925 TOCTOU: state commands use readModifyWriteStateMd', () => {
     const promiseB = spawnWrapper('Current Phase', '02', readyB);
 
     // ── Orchestrate: wait for both ready-signals, then drop the barrier ───────
-    // Poll with Atomics.wait (10 ms steps).  Budget: 10 s.
-    const sab2 = new SharedArrayBuffer(4);
-    const sai2 = new Int32Array(sab2);
-    const deadline2 = Date.now() + 10000;
-    while (!fs.existsSync(readyA) || !fs.existsSync(readyB)) {
-      if (Date.now() > deadline2) throw new Error('Timed out waiting for both subprocesses to reach barrier');
-      Atomics.wait(sai2, 0, 0, 10);
-    }
+    await waitFor(() => fs.existsSync(readyA) && fs.existsSync(readyB), {
+      timeoutMs: 10000,
+      stepMs: 10,
+      message: 'Timed out waiting for both subprocesses to reach barrier',
+    });
     // Both subprocesses are at the gate — drop the barrier simultaneously.
     fs.unlinkSync(barrierPath);
 
@@ -369,14 +366,11 @@ describe('#1925 TOCTOU: state commands use readModifyWriteStateMd', () => {
     const promiseB = spawnWrapper('Waiting for design review', readyB);
 
     // ── Orchestrate: wait for both ready-signals, then drop the barrier ───────
-    // Poll with Atomics.wait (10 ms steps).  Budget: 10 s.
-    const sab2 = new SharedArrayBuffer(4);
-    const sai2 = new Int32Array(sab2);
-    const deadline2 = Date.now() + 10000;
-    while (!fs.existsSync(readyA) || !fs.existsSync(readyB)) {
-      if (Date.now() > deadline2) throw new Error('Timed out waiting for both subprocesses to reach barrier');
-      Atomics.wait(sai2, 0, 0, 10);
-    }
+    await waitFor(() => fs.existsSync(readyA) && fs.existsSync(readyB), {
+      timeoutMs: 10000,
+      stepMs: 10,
+      message: 'Timed out waiting for both subprocesses to reach barrier',
+    });
     // Both subprocesses are at the gate — drop the barrier simultaneously.
     fs.unlinkSync(barrierPath);
 
@@ -493,13 +487,11 @@ describe('#1927 config.json: setConfigValue must hold planning lock', () => {
     const promiseB = spawnWrapper('workflow.research', 'false', readyB);
 
     // ── Wait for both to reach barrier, then release ──────────────────────────
-    const sab2 = new SharedArrayBuffer(4);
-    const sai2 = new Int32Array(sab2);
-    const deadline2 = Date.now() + 10000;
-    while (!fs.existsSync(readyA) || !fs.existsSync(readyB)) {
-      if (Date.now() > deadline2) throw new Error('Timed out waiting for both config-set subprocesses to reach barrier');
-      Atomics.wait(sai2, 0, 0, 10);
-    }
+    await waitFor(() => fs.existsSync(readyA) && fs.existsSync(readyB), {
+      timeoutMs: 10000,
+      stepMs: 10,
+      message: 'Timed out waiting for both config-set subprocesses to reach barrier',
+    });
     fs.unlinkSync(barrierPath);
 
     await Promise.all([promiseA, promiseB]);

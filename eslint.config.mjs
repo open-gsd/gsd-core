@@ -196,14 +196,14 @@ export default tseslint.config(
     rules: {
       ...js.configs.recommended.rules,
       'no-only-tests/no-only-tests': 'error',
-      // Timing anti-patterns — warn for now; flip to error after cleanup
-      'local/no-magic-sleep-in-tests': 'warn',
+      // Timing anti-patterns — ratcheted to error after cleanup (all violations fixed)
+      'local/no-magic-sleep-in-tests': 'error',
       'local/no-elapsed-assertion': 'warn',
       // Ban raw fs.rmSync in tests — use helpers.cleanup() for Windows-EBUSY retry budget
       'local/no-raw-rmsync-in-tests': 'error',
       // Ban raw setTimeout sync + elapsed/duration-style assertions via no-restricted-syntax
       'no-restricted-syntax': [
-        'warn',
+        'error',
         {
           selector: 'AwaitExpression > NewExpression[callee.name="Promise"] ArrowFunctionExpression CallExpression[callee.name="setTimeout"]',
           message: 'Raw setTimeout used for synchronization in tests. Use proper async patterns instead.',
