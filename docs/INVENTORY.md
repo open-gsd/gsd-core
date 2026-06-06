@@ -215,6 +215,7 @@ Full roster at `gsd-core/workflows/*.md`. Workflows are thin orchestrators that 
 | `ingest-docs.md` | Scan a repo for mixed planning docs; classify, synthesize, and bootstrap or merge into `.planning/` with a conflicts report. | `/gsd-ingest-docs` |
 | `insert-phase.md` | Insert a decimal phase for urgent work discovered mid-milestone. | `/gsd-phase --insert` |
 | `list-phase-assumptions.md` | Surface Claude's assumptions about a phase before planning. | `/gsd-discuss-phase --assumptions` |
+| `list-seeds.md` | List and audit captured seeds (read-only), with optional status filter. | `/gsd-capture --list-seeds` |
 | `list-workspaces.md` | List all GSD workspaces found in `~/gsd-workspaces/` with their status. | `/gsd-workspace --list` |
 | `manager.md` | Interactive milestone command center — dashboard, inline discuss, background plan/execute. | `/gsd-manager` |
 | `map-codebase.md` | Orchestrate parallel codebase mapper agents to produce `.planning/codebase/` docs. | `/gsd-map-codebase` |
