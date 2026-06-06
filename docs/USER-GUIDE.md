@@ -330,6 +330,15 @@ Seeds are forward-looking ideas with trigger conditions. Unlike backlog items, s
 
 `/gsd-new-milestone` scans all seeds and presents matches. **Storage:** `.planning/seeds/SEED-NNN-slug.md`
 
+Once you've parked a few, audit them on demand instead of waiting for the next milestone to surface them:
+
+```bash
+/gsd-capture --list-seeds            # Review every parked seed
+/gsd-capture --list-seeds dormant    # Narrow to one status
+```
+
+This is read-only — it renders an audit table (ID, status, scope, trigger, title) and a per-status summary, and never modifies a seed. Filter by `dormant`, `active`, or `triggered` when you only want to see seeds in one state.
+
 ### Persistent Context Threads
 
 Threads are lightweight cross-session knowledge stores for work that spans multiple sessions but doesn't belong to any specific phase.
