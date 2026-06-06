@@ -10659,6 +10659,115 @@ function homePathCoveredByRc(globalBin, homeDir, rcFileNames) {
 }
 
 /**
+ * Detect whether fish shell already adds globalBin to PATH (#323). fish does
+ * not use the POSIX rc files scanned by homePathCoveredByRc(); it persists PATH
+ * additions through the `fish_user_paths` universal variable and through
+ * `fish_add_path` / `set -gx PATH` lines in ~/.config/fish/config.fish. Without
+ * this check the installer fires a false-positive "not on your PATH" warning on
+ * every reinstall for fish users whose PATH is already fine.
+ *
+ * Two detection routes:
+ *   1. ~/.config/fish/fish_variables — a `SETUVAR … fish_user_paths:…` line whose
+ *      \x1e (record-separator) delimited entries include globalBin. fish stores
+ *      these values fully expanded (HOME is not represented as ~ or $HOME here).
+ *   2. ~/.config/fish/config.fish — a `fish_add_path …`, `set … PATH …`, or
+ *      `set … fish_user_paths …` line referencing globalBin after HOME expansion.
+ *
+ * Exported for tests.
+ *
+ * @param {string} globalBin  Absolute path to npm's global bin directory.
+ * @param {string} homeDir    Absolute HOME path used to expand ~ / $HOME.
+ * @returns {boolean}         true iff fish config already covers globalBin.
+ */
+function homePathCoveredByFishConfig(globalBin, homeDir) {
+  if (!globalBin || !homeDir) return false;
+  const path = require('path');
+  const fs = require('fs');
+
+  const normalise = (p) => {
+    if (!p) return '';
+    let n = p.replace(/[\\/]+$/g, '');
+    if (n === '') n = p.startsWith('/') ? '/' : p;
+    return n;
+  };
+
+  const targetAbs = normalise(path.resolve(globalBin));
+  const homeAbs = path.resolve(homeDir);
+  const fishDir = path.join(homeAbs, '.config', 'fish');
+
+  const expandHome = (segment) => {
+    let s = segment;
+    s = s.replace(/\$\{HOME\}/g, homeAbs);
+    s = s.replace(/\$HOME/g, homeAbs);
+    if (s.startsWith('~/') || s === '~') {
+      s = s === '~' ? homeAbs : path.join(homeAbs, s.slice(2));
+    }
+    return s;
+  };
+
+  // Resolve a single path token and compare it to the target. Mirrors the
+  // relative-segment and unresolved-variable guards in homePathCoveredByRc():
+  // a cwd-relative token (e.g. `bin`) is NOT equivalent to `$HOME/bin`, and a
+  // token still carrying `$` after expansion is an unresolved variable.
+  const matchesTarget = (rawSegment) => {
+    if (!rawSegment) return false;
+    let seg = rawSegment.trim();
+    if (!seg) return false;
+    if ((seg.startsWith('"') && seg.endsWith('"')) ||
+        (seg.startsWith("'") && seg.endsWith("'"))) {
+      seg = seg.slice(1, -1);
+    }
+    const expanded = expandHome(seg);
+    if (!expanded || expanded.includes('$')) return false;
+    if (!path.isAbsolute(expanded)) return false;
+    try {
+      return normalise(path.resolve(expanded)) === targetAbs;
+    } catch {
+      return false;
+    }
+  };
+
+  // Route 1: universal variable store. fish_user_paths entries are \x1e
+  // delimited and stored as fully-expanded absolute paths.
+  try {
+    const content = fs.readFileSync(path.join(fishDir, 'fish_variables'), 'utf8');
+    for (const rawLine of content.split(/\r?\n/)) {
+      const m = /^SETUVAR\s+(?:--\S+\s+)*fish_user_paths:(.*)$/.exec(rawLine.replace(/^\s+/, ''));
+      if (!m) continue;
+      for (const entry of m[1].split('\x1e')) {
+        if (matchesTarget(entry)) return true;
+      }
+    }
+  } catch {
+    // missing/unreadable store — fall through to config.fish
+  }
+
+  // Route 2: config.fish — fish_add_path / set -gx PATH / set -Ux fish_user_paths.
+  try {
+    const content = fs.readFileSync(path.join(fishDir, 'config.fish'), 'utf8');
+    for (const rawLine of content.split(/\r?\n/)) {
+      const line = rawLine.replace(/^\s+/, '');
+      if (line.startsWith('#')) continue;
+      const isPathLine =
+        /^fish_add_path\b/.test(line) ||
+        /^set\s+(?:-\S+\s+)*PATH\b/.test(line) ||
+        /^set\s+(?:-\S+\s+)*fish_user_paths\b/.test(line);
+      if (!isPathLine) continue;
+      // Tokenise on whitespace; flags (`-gx`), the var name, and `$PATH`-style
+      // tokens fail matchesTarget()'s absolute/unresolved guards, so only real
+      // path arguments can register coverage. fish_add_path/set accept many.
+      for (const token of line.split(/\s+/)) {
+        if (matchesTarget(token)) return true;
+      }
+    }
+  } catch {
+    // missing/unreadable config — no fish coverage
+  }
+
+  return false;
+}
+
+/**
  * Emit a PATH-export suggestion if globalBin is not already on PATH AND
  * the user's shell rc files do not already cover it via a HOME-relative
  * entry (#2620).
@@ -10696,6 +10805,15 @@ function maybeSuggestPathExport(globalBin, homeDir) {
   if (homePathCoveredByRc(globalBin, homeDir)) {
     console.log('');
     console.log(`  ${yellow}⚠${reset} ${bold}${globalBin}${reset}'s directory is already on your PATH via an rc file entry — try reopening your shell (or ${cyan}source ~/.zshrc${reset}).`);
+    console.log('');
+    return;
+  }
+
+  // fish persists PATH outside the POSIX rc files above (#323) — suppress the
+  // warning when fish_user_paths / config.fish already covers globalBin.
+  if (homePathCoveredByFishConfig(globalBin, homeDir)) {
+    console.log('');
+    console.log(`  ${yellow}⚠${reset} ${bold}${globalBin}${reset}'s directory is already on your PATH via your fish config (${cyan}fish_user_paths${reset}) — try reopening your shell.`);
     console.log('');
     return;
   }
@@ -10996,6 +11114,7 @@ module.exports = {
     USER_OWNED_ARTIFACTS,
     finishInstall,
     homePathCoveredByRc,
+    homePathCoveredByFishConfig,
     maybeSuggestPathExport,
     runtimeMap,
     allRuntimes,

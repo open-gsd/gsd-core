@@ -357,6 +357,15 @@ export function projectPathActionProjection({
         shell: 'bash',
         command: `echo 'export PATH="${bashTargetDir}:$PATH"' >> ~/.bashrc`,
       },
+      {
+        // fish is not POSIX-compatible: it has no `export` and persists PATH
+        // through the universal-variable store, not an rc file. `fish_add_path`
+        // is the idempotent, deduplicating fish 3.2+ native API (#323). The
+        // value is single-quote-escaped consistently with the bash/zsh siblings.
+        label: 'fish',
+        shell: 'fish',
+        command: `fish_add_path '${bashTargetDir}'`,
+      },
     ];
   } else {
     const posixTargetDir = escapePosixDoubleQuoted(targetDir);

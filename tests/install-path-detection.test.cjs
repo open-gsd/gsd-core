@@ -294,6 +294,164 @@ describe('installer HOME-relative PATH detection (#2620)',
     }
   });
 
+  // ---- #323: fish-shell coverage detection (fish_user_paths / config.fish) ----
+
+  function writeFish(home, name, content) {
+    const dir = path.join(home, '.config', 'fish');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, name), content);
+  }
+
+  test('homePathCoveredByFishConfig is exported', () => {
+    assert.strictEqual(
+      typeof installer.homePathCoveredByFishConfig,
+      'function',
+      'bin/install.js must export homePathCoveredByFishConfig for #323',
+    );
+  });
+
+  test('detects globalBin in fish_variables SETUVAR fish_user_paths', () => {
+    const home = createTempHome();
+    try {
+      const globalBin = path.join(home, '.npm-global', 'bin');
+      // fish stores absolute, fully-expanded paths, \x1e-delimited.
+      writeFish(home, 'fish_variables',
+        `# This file contains fish universal variable definitions.\nSETUVAR --export fish_user_paths:${globalBin}\x1e${path.join(home, '.cargo', 'bin')}\n`,
+      );
+      assert.strictEqual(installer.homePathCoveredByFishConfig(globalBin, home), true);
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  test('detects globalBin via fish_add_path in config.fish', () => {
+    const home = createTempHome();
+    try {
+      const globalBin = path.join(home, '.npm-global', 'bin');
+      writeFish(home, 'config.fish', `fish_add_path ${globalBin}\n`);
+      assert.strictEqual(installer.homePathCoveredByFishConfig(globalBin, home), true);
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  test('detects globalBin via set -gx PATH in config.fish (HOME-expanded)', () => {
+    const home = createTempHome();
+    try {
+      const globalBin = path.join(home, '.npm-global', 'bin');
+      writeFish(home, 'config.fish', 'set -gx PATH $HOME/.npm-global/bin $PATH\n');
+      assert.strictEqual(installer.homePathCoveredByFishConfig(globalBin, home), true);
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  test('returns false when fish config does not cover globalBin', () => {
+    const home = createTempHome();
+    try {
+      const globalBin = path.join(home, '.npm-global', 'bin');
+      writeFish(home, 'fish_variables', `SETUVAR fish_user_paths:${path.join(home, '.cargo', 'bin')}\n`);
+      writeFish(home, 'config.fish', 'fish_add_path $HOME/.cargo/bin\n');
+      assert.strictEqual(installer.homePathCoveredByFishConfig(globalBin, home), false);
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  test('returns false when no fish config exists', () => {
+    const home = createTempHome();
+    try {
+      const globalBin = path.join(home, '.npm-global', 'bin');
+      assert.strictEqual(installer.homePathCoveredByFishConfig(globalBin, home), false);
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  test('ignores commented fish_add_path lines', () => {
+    const home = createTempHome();
+    try {
+      const globalBin = path.join(home, '.npm-global', 'bin');
+      writeFish(home, 'config.fish', `# fish_add_path ${globalBin}\n`);
+      assert.strictEqual(installer.homePathCoveredByFishConfig(globalBin, home), false);
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  test('does not treat bare relative fish path token as HOME-relative', () => {
+    const home = createTempHome();
+    try {
+      const globalBin = path.join(home, 'bin');
+      writeFish(home, 'config.fish', 'fish_add_path bin\n');
+      assert.strictEqual(
+        installer.homePathCoveredByFishConfig(globalBin, home),
+        false,
+        'relative tokens depend on cwd and are not equivalent to $HOME/bin',
+      );
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  test('swallows unreadable fish config without throwing', () => {
+    const home = createTempHome();
+    try {
+      const dir = path.join(home, '.config', 'fish');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.mkdirSync(path.join(dir, 'config.fish')); // directory where a file is expected
+      const globalBin = path.join(home, '.npm-global', 'bin');
+      assert.doesNotThrow(() => installer.homePathCoveredByFishConfig(globalBin, home));
+      assert.strictEqual(installer.homePathCoveredByFishConfig(globalBin, home), false);
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  test('matches fish_user_paths entry regardless of trailing slash', () => {
+    const home = createTempHome();
+    try {
+      const globalBin = path.join(home, '.npm-global', 'bin');
+      writeFish(home, 'fish_variables', `SETUVAR fish_user_paths:${globalBin}/\n`);
+      assert.strictEqual(installer.homePathCoveredByFishConfig(globalBin, home), true);
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  test('maybeSuggestPathExport suppresses suggestion when fish config covers globalBin', () => {
+    const home = createTempHome();
+    try {
+      const globalBin = path.join(home, '.npm-global', 'bin');
+      fs.mkdirSync(globalBin, { recursive: true });
+      writeFish(home, 'fish_variables', `SETUVAR --export fish_user_paths:${globalBin}\n`);
+
+      const logs = [];
+      const origLog = console.log;
+      console.log = (...args) => { logs.push(args.join(' ')); };
+      try {
+        installer.maybeSuggestPathExport(globalBin, home);
+      } finally {
+        console.log = origLog;
+      }
+
+      // Behavioral signal (mirrors the rc-coverage test above): the projected
+      // PATH-fix suggestion command must NOT be emitted when fish already
+      // covers the directory. The fish suggestion command is `fish_add_path …`.
+      const joined = logs.join('\n');
+      const fishSuggestion = projection.projectPersistentPathExportActions({
+        targetDir: globalBin,
+        platform: process.platform,
+      }).shellActions.find((a) => a.shell === 'fish');
+      assert.ok(
+        !joined.includes(fishSuggestion.command),
+        `installer must suppress the PATH suggestion when fish covers it; got:\n${joined}`,
+      );
+    } finally {
+      cleanup(home);
+    }
+  });
+
   test('maybeSuggestPathExport is a no-op when globalBin already on process.env.PATH', () => {
     const home = createTempHome();
     const origPath = process.env.PATH;

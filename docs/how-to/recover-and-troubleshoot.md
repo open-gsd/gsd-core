@@ -253,6 +253,21 @@ npx @opengsd/gsd-core@latest --claude --local
 
 For runtime-specific install paths and troubleshooting, see [Install on your runtime](install-on-your-runtime.md).
 
+### If the installer warns the global bin is "not on your PATH"
+
+The installer prints a copy-paste command to add the npm global bin directory to your PATH. Run the line for your shell:
+
+```bash
+# zsh
+echo 'export PATH="/path/to/global/bin:$PATH"' >> ~/.zshrc
+# bash
+echo 'export PATH="/path/to/global/bin:$PATH"' >> ~/.bashrc
+# fish
+fish_add_path /path/to/global/bin
+```
+
+For **fish**, use `fish_add_path` — fish is not POSIX-compatible, so the `export PATH=…` form does not work there. `fish_add_path` persists the entry in fish's universal-variable store (`fish_user_paths`) and is idempotent. Once the directory is covered (via `fish_user_paths` or a `fish_add_path`/`set -gx PATH` line in `~/.config/fish/config.fish`), the installer stops warning on subsequent runs.
+
 ### If an update overwrote your local changes
 
 Since v1.17, the installer backs up locally modified files to `gsd-local-patches/`. Reapply your changes:

@@ -39,11 +39,49 @@ describe('bug #3441: PATH guidance is projected from typed shell action IR', () 
       platform: 'linux',
     });
     assert.ok(Array.isArray(posix.shellActions));
-    assert.equal(posix.shellActions.length, 2);
+    assert.equal(posix.shellActions.length, 3);
     assert.equal(posix.shellActions[0].label, 'zsh');
     assert.equal(posix.shellActions[1].label, 'bash');
+    assert.equal(posix.shellActions[2].label, 'fish');
     assert.ok(posix.shellActions[0].command.includes('~/.zshrc'));
     assert.ok(posix.shellActions[1].command.includes('~/.bashrc'));
+    assert.ok(posix.shellActions[2].command.includes('~/.zshrc') === false);
+    assert.ok(posix.shellActions[2].command.includes('~/.bashrc') === false);
+  });
+
+  // #323: fish is not POSIX — its persist action uses the fish-native
+  // fish_add_path API, never `export`/`echo … >> rc`.
+  test('persist mode projects a fish_add_path action for fish', () => {
+    const projected = projection.projectPathActionProjection({
+      mode: 'persist',
+      targetDir: '/opt/node/bin',
+      platform: 'linux',
+    });
+    const fishAction = projected.shellActions.find((a) => a.shell === 'fish');
+    assert.ok(fishAction, 'expected a fish shell action in persist projection');
+    assert.equal(fishAction.label, 'fish');
+    assert.equal(fishAction.command, "fish_add_path '/opt/node/bin'");
+    assert.ok(!/\bexport\b/.test(fishAction.command), 'fish action must not use POSIX export');
+    assert.ok(!fishAction.command.includes('>>'), 'fish action must not append to an rc file');
+  });
+
+  test('fish persist action escapes single quotes consistently with siblings', () => {
+    const projected = projection.projectPathActionProjection({
+      mode: 'persist',
+      targetDir: "/tmp/O'Neil/bin",
+      platform: 'linux',
+    });
+    const fishAction = projected.shellActions.find((a) => a.shell === 'fish');
+    assert.equal(fishAction.command, "fish_add_path '/tmp/O'\\''Neil/bin'");
+  });
+
+  test('fish action is absent on win32 (PowerShell/cmd/Git-Bash projection)', () => {
+    const projected = projection.projectPathActionProjection({
+      mode: 'persist',
+      targetDir: 'C\\\\Users\\\\dev\\\\bin',
+      platform: 'win32',
+    });
+    assert.equal(projected.shellActions.find((a) => a.shell === 'fish'), undefined);
   });
 
   test('POSIX repair mode escapes double-quoted shell metacharacters', () => {
