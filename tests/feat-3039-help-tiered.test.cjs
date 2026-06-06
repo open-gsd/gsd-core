@@ -58,7 +58,8 @@ const MODE_FILES = ['brief.md', 'default.md', 'full.md', 'topic.md'];
 const BRIEF_BUDGET = 30;
 // DEFAULT ceiling lowered from 70 → 60 (actualMax=50; #597 ratchet-down).
 const DEFAULT_BUDGET = 60;
-// full.md is the LARGE tier (see workflow-size-budget.test.cjs — LARGE_BUDGET = 1500).
+// full.md is the LARGE tier (see workflow-size-budget.test.cjs — now byte-based per #717;
+// this FULL_BUDGET is a separate line-count budget for help/modes/full.md).
 // The size-budget test is non-recursive so full.md is not covered there; cap it here.
 // FULL ceiling lowered from 1500 → 844 (actualMax=784; #597 ratchet-down).
 const FULL_BUDGET = 844;
