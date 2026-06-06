@@ -34,14 +34,14 @@ const EXECUTE_PLAN_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'execute
 const QUICK_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'quick.md');
 const EXECUTOR_AGENT_PATH = path.join(REPO_ROOT, 'agents', 'gsd-executor.md');
 const DIAGNOSE_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'diagnose-issues.md');
-const GIT_INTEGRATION_PATH = path.join(REPO_ROOT, 'gsd-core', 'references', 'git-integration.md');
+const _GIT_INTEGRATION_PATH = path.join(REPO_ROOT, 'gsd-core', 'references', 'git-integration.md');
 const WORKTREE_BRANCH_CHECK_FRAGMENT = path.join(REPO_ROOT, 'gsd-core', 'references', 'worktree-branch-check.md');
 
 const isWindows = process.platform === 'win32';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function extractNamedBlock(markdown, blockName) {
+function _extractNamedBlock(markdown, blockName) {
   const open = `<${blockName}>`;
   const close = `</${blockName}>`;
   const start = markdown.indexOf(open);
@@ -55,7 +55,7 @@ function extractNamedBlock(markdown, blockName) {
  * Extract all fenced code blocks (```...```) from a markdown chunk.
  * Returns array of { lang, body } objects.
  */
-function extractFencedCodeBlocks(markdown) {
+function _extractFencedCodeBlocks(markdown) {
   const blocks = [];
   const lines = markdown.split('\n');
   let inFence = false;
@@ -87,7 +87,7 @@ function extractFencedCodeBlocks(markdown) {
  * and `VAR=$(cmd ...)` assignments by extracting the inner command. This is intentionally
  * simple — adequate for asserting on the presence of well-known git invocations.
  */
-function shellStatements(script) {
+function _shellStatements(script) {
   const statements = [];
   const lines = script.split('\n');
   for (let raw of lines) {
@@ -120,7 +120,7 @@ function shellStatements(script) {
  * Find the line index of the first command matching a predicate.
  * Returns -1 when not found.
  */
-function findCommandIndex(statements, predicate) {
+function _findCommandIndex(statements, predicate) {
   for (let i = 0; i < statements.length; i++) {
     if (predicate(statements[i])) return i;
   }

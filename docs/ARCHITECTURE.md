@@ -145,19 +145,43 @@ Orchestration logic that commands reference. Contains the step-by-step process i
 #### Progressive disclosure for workflows
 
 Workflow files are loaded verbatim into Claude's context every time the
-corresponding `/gsd-*` command is invoked. To keep that cost bounded, the
-workflow size budget enforced by `tests/workflow-size-budget.test.cjs`
-mirrors the agent budget from #2361:
+corresponding `/gsd-*` command is invoked. The workflow size budget enforced by
+`tests/workflow-size-budget.test.cjs` keeps each file bounded, mirroring the
+agent budget from #2361. The budget is measured in **bytes** (#717), not lines:
+line count over-penalizes prose and under-catches token-dense tables and code
+blocks, whereas bytes are deterministic and match the unit our vendors bound on
+— Codex truncates instruction docs past 32,768 bytes (`project_doc_max_bytes`).
+We adopt that unit, not that exact number: the XL/LARGE ceilings below sit above
+32,768 because these are grandfathered top-level orchestrators loaded by Claude,
+not Codex AGENTS.md docs.
 
-| Tier      | Per-file line limit |
-|-----------|--------------------|
-| `XL`      | 1700 — top-level orchestrators (`execute-phase`, `plan-phase`, `new-project`) |
-| `LARGE`   | 1500 — multi-step planners and large feature workflows |
-| `DEFAULT` | 1000 — focused single-purpose workflows (the target tier) |
+| Tier      | Per-file byte limit |
+|-----------|---------------------|
+| `XL`      | 90,000 — top-level orchestrators (`execute-phase`, `plan-phase`, `new-project`) |
+| `LARGE`   | 54,000 — multi-step planners and large feature workflows |
+| `DEFAULT` | 38,000 — focused single-purpose workflows (the target tier) |
 
-`workflows/discuss-phase.md` is held to a stricter <500-line ceiling per
-issue #2551. When a workflow grows beyond its tier, extract per-mode bodies
-into `workflows/<workflow>/modes/<mode>.md`, templates into
+Ceilings are not fixed forever: under the tighten-only ratchet (#597) each one
+tracks its tier's current high-water mark within a small grace band, so budgets
+may only decrease over time.
+
+**Why the budget exists.** With prompt caching the per-invocation *cost* of a
+large workflow is modest (cache reads run ~10% of input). The stronger,
+caching-independent reason is **quality**: as context grows, recall and
+reasoning degrade ("context rot" / attention budget), so leaner, higher-signal
+instructions produce better plans. The ceiling protects the agent's attention,
+not just the token bill.
+
+Because the budget measures one file, it is a proxy for the real goal —
+*bounded loaded context*. Extraction only helps when the extracted content is
+loaded **lazily** (Read at the step that needs it). Moving prose into a file
+that is still eagerly `@`-imported shrinks the measured file without shrinking
+loaded context, which games the proxy rather than serving the goal.
+
+`workflows/discuss-phase.md` is held to a stricter <30,000-byte ceiling per
+issue #2551 (originally <500 lines; re-based to bytes for #717). When a workflow grows
+beyond its tier, extract per-mode bodies into
+`workflows/<workflow>/modes/<mode>.md`, templates into
 `workflows/<workflow>/templates/`, and shared knowledge into
 `gsd-core/references/`. The parent file becomes a thin dispatcher that
 Reads only the mode and template files needed for the current invocation.
@@ -269,6 +293,37 @@ See [`docs/INVENTORY.md`](INVENTORY.md#hooks-11-shipped) for the authoritative 1
 ### Command Routing Hub (`gsd-core/bin/lib/command-routing-hub.cjs`)
 
 CJS command family routers dispatch through `CommandRoutingHub`. The hub owns the no-throw pure-result contract (`hub.dispatch()` catches internal exceptions and returns `{ ok: false, kind, ...typedPayload }`) and the closed runtime error taxonomy (`UnknownCommand`, `InvalidArgs`, `HandlerRefusal`, `HandlerFailure`). Router adapters remain thin CLI translators — they build the hub, call `dispatch`, then map the Result to `output()`/`error()` calls. The runtime is single-path (no dual-runtime mode selection). See `docs/adr/0174-retire-gsd-sdk-package-boundary.md`.
+
+### Research Module (`src/research-{store,provider}.cts`, `src/package-legitimacy.cts`)
+
+The Research Module implements an **L2-hybrid seam**: code owns the cache, provider policy, and package legitimacy verdicts; MCP owns the actual network fetch.
+
+Three compiled modules (generated to `gsd-core/bin/lib/*.cjs` per ADR-457) are reachable via `gsd-tools query research-plan | research-store | package-legitimacy`:
+
+- **Research Store** — content-addressed cache (`sha256(ecosystem+library+version+query+kind)`) with per-source TTL (curated-doc: 30 d, medium: 7 d, web/synthesis: 1 d) and two storage tiers: `~/.gsd/research-cache` for cross-project curated-doc hits, `.planning/research/.cache` for project-local web/synthesis results.
+- **Research Provider** — single `PROVIDER_WATERFALL` (`Context7→Ref→Jina→websearch` for docs; `Exa→Tavily→Perplexity→Brave→websearch` for web; `Firecrawl→Jina` for scrape-only). `planResearch()` returns cache hits plus a fetch plan; `classifyConfidence()` stamps `HIGH|MEDIUM|LOW` by provider tier.
+- **Package Legitimacy** — registry-API verdicts (npm/PyPI/crates.io injectable adapters) producing `OK|SUS|SLOP` per package. `slopcheck` is an optional escalate-only adapter; absence leaves registry verdicts intact rather than downgrading everything to `[ASSUMED]`.
+
+**Data flow:**
+
+```
+agent
+  │
+  ▼
+gsd-tools query research-plan          ← Research Provider: check cache, build fetch plan
+  │
+  ├── [cache hits] ──────────────────► RESEARCH.md (digest only, no raw content)
+  │
+  └── [fetch plan] ──────────────────► MCP fetch (agent calls MCP tools with the plan)
+                                          │
+                                          ▼
+                                    gsd-tools query research-store (put)
+                                          │
+                                          ▼
+                                    RESEARCH.md path returned to orchestrator
+```
+
+Agents always return a `RESEARCH.md` path, never raw fetched content. Context discipline is enforced through subagent isolation, compact provider output, and fetch-to-disk. See [ADR-0656](adr/0656-research-module-seam.md).
 
 ### CLI Tools (`gsd-core/bin/`)
 

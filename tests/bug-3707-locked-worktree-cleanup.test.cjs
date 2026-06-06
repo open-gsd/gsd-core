@@ -16,7 +16,6 @@ const { cleanup } = require('./helpers.cjs');
 
 const {
   executeWorktreeWaveCleanupPlan,
-  planWorktreeWaveCleanup,
   reapOrphanWorktrees,
 } = require('../gsd-core/bin/lib/worktree-safety.cjs');
 

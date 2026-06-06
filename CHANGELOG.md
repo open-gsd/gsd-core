@@ -6,6 +6,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.3.1](https://www.npmjs.com/package/@opengsd/gsd-core/v/1.3.1) - 2026-06-04
+
+### Security
+
+- **Bumped `hono` to clear a moderate npm advisory** carried transitively in the dependency tree. (#670)
+
+### Fixed
+
+- **Installer-migration checksum drift no longer blocks upgrades** — the updater now self-heals when a shipped migration's recorded checksum has drifted, reconciling the stored checksum instead of aborting. Restores upgrades across all OSes after shipped migration bodies were edited in a prior release. (#670)
+
+## [1.3.0](https://www.npmjs.com/package/@opengsd/gsd-core/v/1.3.0) - 2026-06-04
+
 ### Added
 
 - **Vertical MVP Slice mode** — `--mvp` flag on `/gsd-plan-phase` switches the planner from horizontal layer decomposition to vertical feature-slice decomposition (UI→API→DB in one task sequence). On Phase 1 of a new project with no prior phase summaries, also emits `SKELETON.md` via Walking Skeleton mode. Composable with `--tdd`: `--mvp --tdd` produces vertical slices where every behavior-adding task starts with a failing test. Phase-level persistence via `**Mode:** mvp` in ROADMAP.md applies `--mvp` automatically without the flag. (#78)

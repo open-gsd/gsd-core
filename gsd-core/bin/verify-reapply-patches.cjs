@@ -32,6 +32,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 
 const SIGNIFICANT_MIN_CHARS = 12;
 const GSD_HOOK_VERSION_LINE_RE = /^(?:\/\/|#)\s*gsd-hook-version:\s*\S+\s*$/i;
@@ -48,10 +49,9 @@ function parseArgs(argv) {
       process.stdout.write(
         'usage: verify-reapply-patches.cjs --patches-dir <path> --config-dir <path> [--pristine-dir <path>] [--json]\n',
       );
-      process.exit(0);
+      throw new ExitError(0);
     } else {
-      process.stderr.write(`unknown argument: ${arg}\n`);
-      process.exit(2);
+      throw new ExitError(2, `unknown argument: ${arg}`);
     }
   }
   return opts;
@@ -281,16 +281,13 @@ function verifyFile({ relPath, patchesDir, configDir, pristineDir, pristineHashe
 function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (!opts.patchesDir || !opts.configDir) {
-    process.stderr.write('--patches-dir and --config-dir are required\n');
-    process.exit(2);
+    throw new ExitError(2, '--patches-dir and --config-dir are required');
   }
   if (!fs.existsSync(opts.patchesDir)) {
-    process.stderr.write(`patches dir not found: ${opts.patchesDir}\n`);
-    process.exit(2);
+    throw new ExitError(2, `patches dir not found: ${opts.patchesDir}`);
   }
   if (!fs.existsSync(opts.configDir)) {
-    process.stderr.write(`config dir not found: ${opts.configDir}\n`);
-    process.exit(2);
+    throw new ExitError(2, `config dir not found: ${opts.configDir}`);
   }
 
   const files = walk(opts.patchesDir).filter((f) => !f.endsWith('backup-meta.json'));
@@ -342,11 +339,11 @@ function main() {
     }
   }
 
-  process.exit(failures.length > 0 ? 1 : 0);
+  return failures.length > 0 ? 1 : 0;
 }
 
 if (require.main === module) {
-  main();
+  runMain(main);
 }
 
 module.exports = { computeUserAddedLines, isSignificantLine, verifyFile, walk, REASON, readPristineHashes, sha256 };

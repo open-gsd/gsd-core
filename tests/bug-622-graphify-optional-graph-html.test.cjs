@@ -41,8 +41,9 @@ const GRAPHIFY_MD = path.join(__dirname, '..', 'commands', 'gsd', 'graphify.md')
  */
 function extractStep3Block() {
   const content = fs.readFileSync(GRAPHIFY_MD, 'utf-8');
-  // Capture from the `graphify update .` line through the next closing ``` fence.
-  const match = content.match(/```bash\r?\n(graphify update \.[^\0]*?)```/);
+  // Capture the full body of the ```bash fence that CONTAINS `graphify update .`
+  // (including any leading preamble line), without crossing into other fences.
+  const match = content.match(/```bash\r?\n((?:(?!```)[\s\S])*?graphify update \.(?:(?!```)[\s\S])*?)\r?\n```/);
   return match ? match[1].trim() : null;
 }
 

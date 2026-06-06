@@ -21,6 +21,7 @@
  */
 
 const { execNpm } = require('./lib/shell-command-projection.cjs');
+const { runMain } = require('./lib/cli-exit.cjs');
 
 // Sourced from the single Package Identity seam (#498), not re-typed. The seam
 // bakes the value from package.json at build time, so it is a code constant —
@@ -98,9 +99,9 @@ function main() {
   } else {
     process.stderr.write(`check-latest-version: ${r.reason}: ${r.detail}\n`);
   }
-  process.exit(r.ok ? 0 : 1);
+  return r.ok ? 0 : 1;
 }
 
-if (require.main === module) main();
+if (require.main === module) runMain(main);
 
 module.exports = { checkLatestVersion, CHECK_REASON, PACKAGE_NAME };

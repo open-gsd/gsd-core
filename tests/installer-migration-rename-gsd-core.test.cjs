@@ -13,7 +13,7 @@
  * 5. unknown user file under legacy dir -> baseline-preserve-user (NOT removed)
  */
 
-const { describe, test, before } = require('node:test');
+const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');

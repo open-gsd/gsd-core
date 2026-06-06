@@ -35,6 +35,7 @@ export default tseslint.config(
       '**/*.generated.cjs',
       // ADR-457: tsc-generated runtime artifact — lint the src/*.cts source, not the emitted .cjs.
       'gsd-core/bin/lib/semver-compare.cjs',
+      'gsd-core/bin/lib/cli-exit.cjs',
       'gsd-core/bin/lib/code-review-flags.cjs',
       'gsd-core/bin/lib/context-utilization.cjs',
       'gsd-core/bin/lib/artifacts.cjs',
@@ -121,6 +122,9 @@ export default tseslint.config(
       'gsd-core/bin/lib/workstream.cjs',
       'gsd-core/bin/lib/roadmap.cjs',
       'gsd-core/bin/lib/audit.cjs',
+      'gsd-core/bin/lib/research-store.cjs',
+      'gsd-core/bin/lib/research-provider.cjs',
+      'gsd-core/bin/lib/package-legitimacy.cjs',
     ],
   },
 
@@ -171,7 +175,7 @@ export default tseslint.config(
       'no-useless-escape': 'warn',
       'no-unsafe-finally': 'warn',
       // eslint-plugin-n rules
-      'n/no-process-exit': 'warn',
+      'n/no-process-exit': 'error',
       // Local rules — warn for now; flip to error after cleanup phases
       'local/no-source-grep': 'warn',
     },
@@ -193,14 +197,14 @@ export default tseslint.config(
     rules: {
       ...js.configs.recommended.rules,
       'no-only-tests/no-only-tests': 'error',
-      // Timing anti-patterns — warn for now; flip to error after cleanup
-      'local/no-magic-sleep-in-tests': 'warn',
+      // Timing anti-patterns — ratcheted to error after cleanup (all violations fixed)
+      'local/no-magic-sleep-in-tests': 'error',
       'local/no-elapsed-assertion': 'warn',
       // Ban raw fs.rmSync in tests — use helpers.cleanup() for Windows-EBUSY retry budget
       'local/no-raw-rmsync-in-tests': 'error',
       // Ban raw setTimeout sync + elapsed/duration-style assertions via no-restricted-syntax
       'no-restricted-syntax': [
-        'warn',
+        'error',
         {
           selector: 'AwaitExpression > NewExpression[callee.name="Promise"] ArrowFunctionExpression CallExpression[callee.name="setTimeout"]',
           message: 'Raw setTimeout used for synchronization in tests. Use proper async patterns instead.',
@@ -219,7 +223,7 @@ export default tseslint.config(
       // Downgraded from recommended error → warn (pre-existing violations; follow-up to fix)
       'no-useless-escape': 'warn',
       'no-regex-spaces': 'warn',
-      'no-control-regex': 'warn',
+      'no-control-regex': 'error',
       'no-irregular-whitespace': 'warn',
     },
   },

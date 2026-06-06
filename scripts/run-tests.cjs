@@ -23,6 +23,7 @@
 const { readdirSync, existsSync } = require('fs');
 const { join } = require('path');
 const { execFileSync } = require('child_process');
+const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 
 const SUITES = ['all', 'unit', 'integration', 'install', 'security', 'slow'];
 
@@ -189,13 +190,13 @@ function main() {
   if (parsed.error) {
     console.error(`run-tests: ${parsed.error}`);
     console.error(`Valid suites: ${SUITES.join(', ')}`);
-    process.exit(2);
+    throw new ExitError(2);
   }
   const suite = parsed.suite;
   if (suite !== null && !SUITES.includes(suite)) {
     console.error(`run-tests: unknown suite "${suite}"`);
     console.error(`Valid suites: ${SUITES.join(', ')}`);
-    process.exit(2);
+    throw new ExitError(2);
   }
 
   const testDir = process.env.GSD_TEST_DIR
@@ -208,7 +209,7 @@ function main() {
 
   if (allFiles.length === 0) {
     console.error(`No test files found in ${testDir}`);
-    process.exit(1);
+    throw new ExitError(1);
   }
 
   let selectedNames;
@@ -216,7 +217,7 @@ function main() {
     const explicit = selectExplicitFiles(allFiles, parsed.files, parsed.filesFrom);
     if (explicit.error) {
       console.error(`run-tests: ${explicit.error}`);
-      process.exit(2);
+      throw new ExitError(2);
     }
     selectedNames = explicit.files;
   } else {
@@ -229,7 +230,7 @@ function main() {
     // adversarial tests land) don't gate CI. CI consumers wanting strictness
     // can grep stderr for "no tests in suite".
     console.error(`run-tests: no tests in suite "${suite || 'all'}"`);
-    process.exit(0);
+    return 0;
   }
 
   // Build the gitignored bin/lib artifact if absent, before any test requires it.
@@ -304,11 +305,11 @@ function main() {
       if (firstFailureExit === 0) firstFailureExit = code;
     }
   }
-  if (firstFailureExit !== 0) process.exit(firstFailureExit);
+  if (firstFailureExit !== 0) return firstFailureExit;
 }
 
 if (require.main === module) {
-  main();
+  runMain(main);
 }
 
 module.exports = { suiteOf };

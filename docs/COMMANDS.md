@@ -162,7 +162,7 @@ Research, plan, and verify a phase.
 **Produces:** `{phase}-RESEARCH.md`, `{phase}-{N}-PLAN.md`, `{phase}-VALIDATION.md`; `{phase}/SKELETON.md` when Walking Skeleton mode fires
 
 **Research-only mode (`--research-phase <N>`):**
-- No modifier: prompts `update / view / skip` if RESEARCH.md already exists.
+- No modifier: when RESEARCH.md already exists, auto-uses it — emits a one-line notice and exits, no prompt.
 - With `--research`: force-refresh — re-spawn researcher unconditionally, no prompt.
 - With `--view`: print existing RESEARCH.md to stdout, no spawn. Errors if RESEARCH.md missing.
 
@@ -185,7 +185,7 @@ See [Package Legitimacy Gate in the User Guide](USER-GUIDE.md#package-legitimacy
 /gsd-plan-phase 1 --bounce                     # Plan + external bounce validation
 /gsd-plan-phase 2 --ingest docs/adr/0010.md   # ADR express path for context synthesis
 /gsd-plan-phase 2 --ingest 'docs/adr/00*.md' --ingest-format auto
-/gsd-plan-phase --research-phase 4             # Research only on phase 4 (prompts if RESEARCH.md exists)
+/gsd-plan-phase --research-phase 4             # Research only on phase 4 (auto-uses existing RESEARCH.md, no prompt)
 /gsd-plan-phase --research-phase 4 --view      # Print existing RESEARCH.md, no spawn
 /gsd-plan-phase --research-phase 4 --research  # Force-refresh research, no prompt
 /gsd-plan-phase 1 --mvp                        # Vertical-slice plan for phase 1
@@ -713,13 +713,17 @@ Run all remaining phases autonomously.
 |------|-------------|
 | `--from N` | Start from a specific phase number |
 | `--to N` | Stop after completing a specific phase number |
+| `--only N` | Restrict execution to phase N; lifecycle step is skipped |
 | `--interactive` | Lean context with user input |
+| `--text` | Replace `AskUserQuestion` prompts with plain numbered lists |
 
 ```bash
 /gsd-autonomous                     # Run all remaining phases
 /gsd-autonomous --from 3            # Start from phase 3
 /gsd-autonomous --to 5              # Run up to and including phase 5
 /gsd-autonomous --from 3 --to 5     # Run phases 3 through 5
+/gsd-autonomous --only 4            # Run only phase 4
+/gsd-autonomous --text              # Run with text-mode prompts
 ```
 
 ### `/gsd-debug`

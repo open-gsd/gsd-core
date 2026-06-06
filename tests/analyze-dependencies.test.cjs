@@ -3,7 +3,7 @@
 // IS what the runtime loads. Testing text content tests the deployed contract.
 // Per CONTRIBUTING.md exception matrix.
 
-const { test, describe, beforeEach, afterEach } = require('node:test');
+const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');

@@ -34,7 +34,7 @@ const path = require('node:path');
 const { cleanup, createTempDir } = require('./helpers.cjs');
 
 const ROOT = path.join(__dirname, '..');
-const { convertClaudeCommandToClaudeSkill, installRuntimeArtifacts, uninstallRuntimeArtifacts, skillFrontmatterName } =
+const { convertClaudeCommandToClaudeSkill, installRuntimeArtifacts, skillFrontmatterName } =
   require(path.join(ROOT, 'bin', 'install.js'));
 
 const {

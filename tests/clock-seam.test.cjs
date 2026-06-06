@@ -34,12 +34,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { spawnSync } = require('node:child_process');
 
 const { makeFakeClock } = require('./helpers/clock.cjs');
 const { acquireStateLock, releaseStateLock, readModifyWriteStateMd } = require('../gsd-core/bin/lib/state.cjs');
 const { withPlanningLock } = require('../gsd-core/bin/lib/planning-workspace.cjs');
-const { createTempProject, cleanup, runGsdTools, TOOLS_PATH } = require('./helpers.cjs');
+const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. Fake-clock proof: acquireStateLock accepts and uses the clock seam
@@ -209,10 +208,6 @@ describe('withPlanningLock clock seam', () => {
     // Clock that advances past lockTimeout on every sleep call so the while
     // condition trips immediately after the first retry.
     let nowValue = 0;
-    const clock = {
-      now() { return nowValue; },
-      sleep(ms) { nowValue += ms + 11000; }, // jump past lockTimeout on every sleep
-    };
 
     // withPlanningLock exits the while loop (timeout), deletes the lock, then
     // calls runWithHeldLock() which tries writeFileSync with { flag: 'wx' }.

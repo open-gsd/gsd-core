@@ -37,8 +37,6 @@ const { test, mock } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const os = require('node:os');
-
 const {
   platformWriteSync,
   platformEnsureDir,
@@ -83,7 +81,7 @@ test('platformWriteSync recovers when renameSync fails (EXDEV cross-device fallb
   // Simulate rename failing once (e.g. cross-device move on a CI runner
   // with overlayfs). The fallback path must write the content directly.
   let renameCalls = 0;
-  const renameMock = mock.method(fs, 'renameSync', (src, dest) => {
+  const renameMock = mock.method(fs, 'renameSync', (_src, _dest) => {
     renameCalls++;
     const err = new Error('EXDEV: cross-device link not permitted');
     err.code = 'EXDEV';

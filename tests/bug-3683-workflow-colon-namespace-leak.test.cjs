@@ -42,7 +42,7 @@ const { cleanup } = require('./helpers.cjs');
 const REPO_ROOT = path.resolve(__dirname, '..');
 const INSTALL_PATH = path.join(REPO_ROOT, 'bin', 'install.js');
 
-const install = require(INSTALL_PATH);
+require(INSTALL_PATH);
 const { readCmdNames } = require(path.join(REPO_ROOT, 'scripts', 'fix-slash-commands.cjs'));
 
 // ---------------------------------------------------------------------------
@@ -400,7 +400,6 @@ describe('bug #3683 — workflow/reference colon-namespace leak (Claude local in
   describe('G — negative: staged gemini workflows preserve colon-namespace refs', () => {
     let tmpDir;
     const cmdNames = readCmdNames();
-    const rosterRegex = buildRosterRegex(cmdNames);
 
     before(() => {
       tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3683-gem-'));

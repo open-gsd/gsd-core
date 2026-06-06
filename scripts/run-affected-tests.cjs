@@ -2,5 +2,6 @@
 'use strict';
 
 const { runAffectedTests } = require('./affected-tests-lib.cjs');
+const { runMain } = require('./lib/cli-exit.cjs');
 
-runAffectedTests();
+runMain(runAffectedTests);

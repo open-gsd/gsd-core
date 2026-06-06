@@ -9,19 +9,10 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { runGsdTools, cleanup } = require('./helpers.cjs');
-const { createFixture, seedWorkstream, writeState } = require('./fixtures/index.cjs');
+const { createFixture, seedWorkstream } = require('./fixtures/index.cjs');
 const { migrateToWorkstreams, getOtherActiveWorkstreams } = require('../gsd-core/bin/lib/workstream.cjs');
 
 // ─── Helper ──────────────────────────────────────────────────────────────────
-
-function createProjectWithState(tmpDir, roadmap, state) {
-  if (roadmap) {
-    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), roadmap, 'utf-8');
-  }
-  if (state) {
-    writeState(tmpDir, state);
-  }
-}
 
 function createFailingTtyEnv(tmpDir) {
   const binDir = path.join(tmpDir, 'fake-bin');

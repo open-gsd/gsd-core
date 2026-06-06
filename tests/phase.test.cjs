@@ -20,7 +20,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
-const { runGsdTools, createTempProject, createTempDir, cleanup } = require('./helpers.cjs');
+const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 
 const GSD_TOOLS_BIN = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 

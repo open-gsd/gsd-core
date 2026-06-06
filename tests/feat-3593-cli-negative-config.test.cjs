@@ -285,7 +285,7 @@ for (const payload of SHELL_PAYLOADS) {
 
 // ─── Cross-cutting: --cwd points at a non-existent path ────────────────────
 
-test('--cwd pointing at a non-existent path fails with a typed usage reason', (t) => {
+test('--cwd pointing at a non-existent path fails with a typed usage reason', (_t) => {
   const nonExistent = path.join(require('os').tmpdir(), 'cli-neg-no-such-dir-' + Date.now() + '-' + Math.random());
   assert.equal(fs.existsSync(nonExistent), false, 'pre-check: path must not exist');
   const result = runCli(['--cwd', nonExistent, 'config-get', 'model_profile'], { cwd: process.cwd() });

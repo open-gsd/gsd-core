@@ -22,7 +22,7 @@ command -v codex >/dev/null 2>&1 && echo "codex:available" || echo "codex:missin
 command -v coderabbit >/dev/null 2>&1 && echo "coderabbit:available" || echo "coderabbit:missing"
 command -v opencode >/dev/null 2>&1 && echo "opencode:available" || echo "opencode:missing"
 command -v qwen >/dev/null 2>&1 && echo "qwen:available" || echo "qwen:missing"
-command -v cursor >/dev/null 2>&1 && echo "cursor:available" || echo "cursor:missing"
+command -v cursor-agent >/dev/null 2>&1 && echo "cursor:available" || echo "cursor:missing"
 command -v agy >/dev/null 2>&1 && echo "antigravity:available" || echo "antigravity:missing"
 
 # Check local model servers (OpenAI-compatible HTTP API — no CLI binary required)
@@ -284,9 +284,15 @@ fi
 
 **Cursor:**
 ```bash
-cat /tmp/gsd-review-prompt-{phase}.md | cursor agent -p --mode ask --trust 2>/dev/null > /tmp/gsd-review-cursor-{phase}.md
+# cursor-agent is a SEPARATE binary from the `cursor` IDE launcher; print mode (-p) takes the
+# prompt as an ARGUMENT, not stdin. A full review prompt can exceed the OS argument limit, so
+# reference the prompt file by path rather than inlining it. Capture stderr so a failure is
+# diagnosable instead of a silent empty result.
+CURSOR_PROMPT_ARG="Read the file at /tmp/gsd-review-prompt-{phase}.md in full and carry out the review request it contains. Output only the resulting markdown review. Do not edit any files."
+cursor-agent -p --mode ask --trust --output-format text "$CURSOR_PROMPT_ARG" 2>/tmp/gsd-review-cursor-{phase}.err > /tmp/gsd-review-cursor-{phase}.md
 if [ ! -s /tmp/gsd-review-cursor-{phase}.md ]; then
-  echo "Cursor review failed or returned empty output." > /tmp/gsd-review-cursor-{phase}.md
+  echo "Cursor review failed or returned empty output. stderr:" > /tmp/gsd-review-cursor-{phase}.md
+  cat /tmp/gsd-review-cursor-{phase}.err >> /tmp/gsd-review-cursor-{phase}.md
 fi
 ```
 
@@ -350,8 +356,19 @@ if [ -f "$_AGY_CACHE" ]; then
   fi
 fi
 
-# Step 1 — primary invocation: stdout works on macOS, Linux, and WSL
-agy -p "$(cat /tmp/gsd-review-prompt-{phase}.md)" 2>/dev/null > /tmp/gsd-review-antigravity-{phase}.md
+# Step 1 — primary invocation: stdout works on macOS, Linux, and WSL.
+# Bound the run with agy's OWN `--print-timeout` (issue #687). On a large,
+# file-path-rich prompt agy's agentic Cascade can loop on its code_search/grep
+# steps and never converge; `--print-timeout` is agy's native cap for print mode
+# (defaults to 5m — see maintainer note above), so we pass it explicitly to let a
+# stalled run self-terminate through the tool's own mechanism. A non-zero exit
+# (timeout or crash) discards any partial output so the Step 2 transcript fallback
+# / Step 3 stub take over.
+agy --print-timeout 300s -p "$(cat /tmp/gsd-review-prompt-{phase}.md)" 2>/dev/null > /tmp/gsd-review-antigravity-{phase}.md
+_AGY_RC=$?
+if [ "$_AGY_RC" -ne 0 ]; then
+  : > /tmp/gsd-review-antigravity-{phase}.md
+fi
 
 # Step 2 — transcript fallback: catches Windows agy -p stdout bug (and any future stdout-silent edge cases).
 # Reads only lines appended AFTER the pre-flight watermark. If agy failed before writing a new response,

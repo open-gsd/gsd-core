@@ -184,7 +184,6 @@ describe('bug #3784: settings.md model profile UI exposes all 5 profiles', () =>
     // commit bd53925f fixed a duplicate '{' introduced by 35fc1d21 when the model-profile
     // AskUserQuestion was split into Q1+Q2. This test guards against a recurrence.
     let depth = 0;
-    const maxDepth = 0;
     for (const ch of presentBlock) {
       if (ch === '{') { depth++; }
       if (ch === '}') { depth--; }

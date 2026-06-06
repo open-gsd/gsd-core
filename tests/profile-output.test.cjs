@@ -156,7 +156,7 @@ describe('generate-claude-md command', () => {
     const outputPath = path.join(tmpDir, 'CLAUDE.md');
     fs.writeFileSync(outputPath, '# Custom CLAUDE.md\n\nUser content.\n');
 
-    const result = runGsdTools(['generate-claude-md', '--output', outputPath, '--auto', '--raw'], tmpDir);
+    runGsdTools(['generate-claude-md', '--output', outputPath, '--auto', '--raw'], tmpDir);
     // Should merge, not overwrite
     const content = fs.readFileSync(outputPath, 'utf-8');
     assert.ok(content.length > 0, 'should still have content');

@@ -25,6 +25,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { runMain } = require('./lib/cli-exit.cjs');
 
 const PROFILES_MODULE = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'install-profiles.cjs');
 const { PROFILES, loadSkillsManifest, resolveProfile } = require(PROFILES_MODULE);
@@ -142,39 +143,43 @@ function checkProfileClosure(manifest) {
 // Main
 // ---------------------------------------------------------------------------
 
-const manifest = loadSkillsManifest(commandsDir);
-const allStems = new Set(
-  [...manifest.keys()].filter((k) => !k.startsWith('_calls_agents_'))
-);
+function main() {
+  const manifest = loadSkillsManifest(commandsDir);
+  const allStems = new Set(
+    [...manifest.keys()].filter((k) => !k.startsWith('_calls_agents_'))
+  );
 
-const consistencyViolations = checkFrontmatterBodyConsistency(manifest, allStems);
-const closureViolations = checkProfileClosure(manifest);
+  const consistencyViolations = checkFrontmatterBodyConsistency(manifest, allStems);
+  const closureViolations = checkProfileClosure(manifest);
 
-const totalViolations = consistencyViolations.length + closureViolations.length;
+  const totalViolations = consistencyViolations.length + closureViolations.length;
 
-if (totalViolations === 0) {
-  const checked = manifest.size;
-  process.stdout.write('ok lint-skill-deps: ' + checked + ' skill(s) checked, 0 violations\n');
-  process.exit(0);
-}
-
-process.stderr.write('\nERROR lint-skill-deps: ' + totalViolations + ' violation(s) found\n\n');
-
-if (consistencyViolations.length > 0) {
-  process.stderr.write('Frontmatter to body consistency violations (' + consistencyViolations.length + '):\n\n');
-  for (const v of consistencyViolations) {
-    process.stderr.write('  ' + v.filePath + '\n');
-    process.stderr.write('    ' + v.message + '\n\n');
+  if (totalViolations === 0) {
+    const checked = manifest.size;
+    process.stdout.write('ok lint-skill-deps: ' + checked + ' skill(s) checked, 0 violations\n');
+    return 0;
   }
-  process.stderr.write('Fix: add missing deps to requires: in the skill frontmatter.\n\n');
-}
 
-if (closureViolations.length > 0) {
-  process.stderr.write('Profile closure violations (' + closureViolations.length + '):\n\n');
-  for (const v of closureViolations) {
-    process.stderr.write('  ' + v.message + '\n');
+  process.stderr.write('\nERROR lint-skill-deps: ' + totalViolations + ' violation(s) found\n\n');
+
+  if (consistencyViolations.length > 0) {
+    process.stderr.write('Frontmatter to body consistency violations (' + consistencyViolations.length + '):\n\n');
+    for (const v of consistencyViolations) {
+      process.stderr.write('  ' + v.filePath + '\n');
+      process.stderr.write('    ' + v.message + '\n\n');
+    }
+    process.stderr.write('Fix: add missing deps to requires: in the skill frontmatter.\n\n');
   }
-  process.stderr.write('\nFix: add the missing skills to the profile base set in install-profiles.cjs.\n\n');
+
+  if (closureViolations.length > 0) {
+    process.stderr.write('Profile closure violations (' + closureViolations.length + '):\n\n');
+    for (const v of closureViolations) {
+      process.stderr.write('  ' + v.message + '\n');
+    }
+    process.stderr.write('\nFix: add the missing skills to the profile base set in install-profiles.cjs.\n\n');
+  }
+
+  return 1;
 }
 
-process.exit(1);
+runMain(main);

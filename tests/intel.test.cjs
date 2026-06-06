@@ -25,7 +25,6 @@ const {
   intelApiSurface,
   ensureIntelDir,
   isIntelEnabled,
-  INTEL_FILES,
 } = require('../gsd-core/bin/lib/intel.cjs');
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -49,7 +48,7 @@ function writeIntelJson(planningDir, filename, data) {
   );
 }
 
-function writeIntelMd(planningDir, filename, content) {
+function _writeIntelMd(planningDir, filename, content) {
   const intelPath = path.join(planningDir, 'intel');
   fs.mkdirSync(intelPath, { recursive: true });
   fs.writeFileSync(path.join(intelPath, filename), content, 'utf8');

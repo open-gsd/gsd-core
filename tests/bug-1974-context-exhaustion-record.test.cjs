@@ -26,7 +26,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { spawnSync } = require('node:child_process');
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, delay } = require('./helpers.cjs');
 
 const HOOK_PATH = path.resolve(__dirname, '..', 'hooks', 'gsd-context-monitor.js');
 const GSD_TOOLS = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
@@ -34,7 +34,7 @@ const GSD_TOOLS = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cj
 // Windows can hold a transient handle on the temp dir after a spawnSync child
 // exits (AV scanner / handle-release lag), so cleanup()'s internal rmSync retry
 // (~5s) occasionally still throws EBUSY/EPERM/ENOTEMPTY under CI load. Restore a
-// bounded outer retry with async backoff (NOT Atomics.wait — lint no-magic-sleep).
+// bounded outer retry with async backoff via the shared delay() helper.
 // Re-adds the guard removed in #482. Refs #490.
 async function cleanupWithRetry(dir, attempts = 8) {
   for (let i = 0; i < attempts; i += 1) {
@@ -42,7 +42,7 @@ async function cleanupWithRetry(dir, attempts = 8) {
     catch (err) {
       const transient = err && (err.code === 'EBUSY' || err.code === 'EPERM' || err.code === 'ENOTEMPTY');
       if (!transient || i === attempts - 1) throw err;
-      await new Promise((resolve) => setTimeout(resolve, 100 * (i + 1)));
+      await delay(100 * (i + 1));
     }
   }
 }

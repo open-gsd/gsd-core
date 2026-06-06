@@ -1997,6 +1997,8 @@ function convertCopilotToolName(claudeTool) {
   if (claudeToCopilotTools[claudeTool]) {
     return claudeToCopilotTools[claudeTool];
   }
+  // mcp__{tavily,ref,jina,exa,firecrawl}__* use the generic MCP passthrough like exa/firecrawl;
+  // add explicit Copilot registry mappings when the io.github ids are confirmed (#657 follow-up)
   // Default: lowercase
   return claudeTool.toLowerCase();
 }
@@ -2800,9 +2802,12 @@ function convertSlashCommandsToCodexSkillMentions(content) {
     return `$gsd-${String(commandName).toLowerCase()}`;
   });
   // Convert hyphen-style command references (workflow output) to Codex $ prefix.
-  // Negative lookbehind excludes file paths like bin/gsd-tools.cjs where
-  // the slash is preceded by a word char, dot, or another slash.
-  converted = converted.replace(/(?<![a-zA-Z0-9./])\/gsd-([a-z0-9-]+)/gi, (_, commandName) => {
+  // Negative lookbehind excludes shell path contexts where `/gsd-` is a path
+  // segment, not a slash-command mention:
+  //   - word chars / dot / slash: `bin/gsd-tools.cjs`, `.claude/gsd-core/`
+  //   - `}`: shell variable expressions `${VAR}/gsd-core/` (#704)
+  //   - `)`: command-substitution paths `$(cmd)/gsd-local-patches` (#704)
+  converted = converted.replace(/(?<![a-zA-Z0-9./})])\/gsd-([a-z0-9-]+)/gi, (_, commandName) => {
     return `$gsd-${String(commandName).toLowerCase()}`;
   });
   return converted;

@@ -14,7 +14,7 @@
  *      the clock seam (in-process, using makeFakeClock — no subprocess needed).
  */
 
-const { describe, it, test, before, after } = require('node:test');
+const { describe, test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');

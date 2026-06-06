@@ -133,6 +133,7 @@ function withSdkDistPresent(fn) {
 }
 
 function stripAnsi(value) {
+  // eslint-disable-next-line no-control-regex -- \x1b (ESC) is the required leading byte of ANSI SGR color sequences; matching it is the purpose of stripping ANSI codes from captured CLI/console output
   return value.replace(/\x1b\[[0-9;]*m/g, '');
 }
 
@@ -171,14 +172,6 @@ function assertHasGsdDirectory(root, relPath) {
   assert.ok(
     listDirNames(root, relPath).some((name) => name.startsWith('gsd-')),
     `${relPath} should contain generated GSD entries`
-  );
-}
-
-function assertNoGsdDirectoryEntries(root, relPath) {
-  assert.equal(
-    listDirNames(root, relPath).some((name) => name.startsWith('gsd-')),
-    false,
-    `${relPath} should not contain generated GSD entries`
   );
 }
 

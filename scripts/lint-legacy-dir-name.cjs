@@ -33,6 +33,7 @@
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 
 // Constructed with split to avoid self-match when this script is scanned.
 const FORBIDDEN = 'get-shit' + '-done';
@@ -90,67 +91,70 @@ function isBinary(fullPath) {
   }
 }
 
-// Enumerate tracked files via git ls-files so only committed/staged source is checked.
-let trackedFiles;
-try {
-  trackedFiles = execFileSync('git', ['ls-files'], { cwd: REPO_ROOT, encoding: 'utf8' })
-    .split('\n')
-    .map((f) => f.trim())
-    .filter(Boolean);
-} catch (err) {
-  process.stderr.write('ERROR lint-legacy-dir-name: git ls-files failed: ' + err.message + '\n');
-  process.exit(1);
-}
-
-const violations = [];
-
-for (const relPath of trackedFiles) {
-  if (isAllowlisted(relPath)) continue;
-
-  const fullPath = path.join(REPO_ROOT, relPath);
-
-  // Skip this guard script itself.
-  if (path.resolve(fullPath) === SELF_PATH) continue;
-
-  if (isBinary(fullPath)) continue;
-
-  let content;
+function main() {
+  // Enumerate tracked files via git ls-files so only committed/staged source is checked.
+  let trackedFiles;
   try {
-    content = fs.readFileSync(fullPath, 'utf8');
-  } catch {
-    // Unreadable files (permissions, etc.) — skip silently.
-    continue;
+    trackedFiles = execFileSync('git', ['ls-files'], { cwd: REPO_ROOT, encoding: 'utf8' })
+      .split('\n')
+      .map((f) => f.trim())
+      .filter(Boolean);
+  } catch (err) {
+    throw new ExitError(1, 'ERROR lint-legacy-dir-name: git ls-files failed: ' + err.message);
   }
 
-  const lines = content.split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    // Skip lines that carry the explicit allow marker.
-    if (line.includes(ALLOW_MARKER)) continue;
+  const violations = [];
 
-    FORBIDDEN_RE.lastIndex = 0;
-    let match;
-    while ((match = FORBIDDEN_RE.exec(line)) !== null) {
-      violations.push({
-        file: relPath,
-        line: i + 1,
-        col: match.index + 1,
-        text: match[0],
-      });
+  for (const relPath of trackedFiles) {
+    if (isAllowlisted(relPath)) continue;
+
+    const fullPath = path.join(REPO_ROOT, relPath);
+
+    // Skip this guard script itself.
+    if (path.resolve(fullPath) === SELF_PATH) continue;
+
+    if (isBinary(fullPath)) continue;
+
+    let content;
+    try {
+      content = fs.readFileSync(fullPath, 'utf8');
+    } catch {
+      // Unreadable files (permissions, etc.) — skip silently.
+      continue;
+    }
+
+    const lines = content.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      // Skip lines that carry the explicit allow marker.
+      if (line.includes(ALLOW_MARKER)) continue;
+
+      FORBIDDEN_RE.lastIndex = 0;
+      let match;
+      while ((match = FORBIDDEN_RE.exec(line)) !== null) {
+        violations.push({
+          file: relPath,
+          line: i + 1,
+          col: match.index + 1,
+          text: match[0],
+        });
+      }
     }
   }
+
+  if (violations.length === 0) {
+    process.stdout.write('ok lint-legacy-dir-name: ' + trackedFiles.length + ' tracked file(s) checked, 0 violations\n');
+    return 0;
+  }
+
+  process.stderr.write('\nERROR lint-legacy-dir-name: ' + violations.length + ' violation(s) found\n\n');
+  for (const v of violations) {
+    process.stderr.write('  ' + v.file + ':' + v.line + ':' + v.col + ' — ' + JSON.stringify(v.text) + '\n');
+  }
+  process.stderr.write('\n');
+  process.stderr.write('Fix: rename to gsd-core, or add `gsd-allow-legacy-name` marker on the line if the\n');
+  process.stderr.write('      use is intentional (migration modules, tests, guard, changeset).\n\n');
+  return 1;
 }
 
-if (violations.length === 0) {
-  process.stdout.write('ok lint-legacy-dir-name: ' + trackedFiles.length + ' tracked file(s) checked, 0 violations\n');
-  process.exit(0);
-}
-
-process.stderr.write('\nERROR lint-legacy-dir-name: ' + violations.length + ' violation(s) found\n\n');
-for (const v of violations) {
-  process.stderr.write('  ' + v.file + ':' + v.line + ':' + v.col + ' — ' + JSON.stringify(v.text) + '\n');
-}
-process.stderr.write('\n');
-process.stderr.write('Fix: rename to gsd-core, or add `gsd-allow-legacy-name` marker on the line if the\n');
-process.stderr.write('      use is intentional (migration modules, tests, guard, changeset).\n\n');
-process.exit(1);
+runMain(main);

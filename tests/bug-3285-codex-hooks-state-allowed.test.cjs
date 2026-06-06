@@ -26,7 +26,6 @@ const os = require('os');
 const { execFileSync } = require('child_process');
 
 const { validateCodexConfigSchema, install } = require('../bin/install.js');
-const installModule = require('../bin/install.js');
 const { cleanup } = require('./helpers.cjs');
 
 if (previousGsdTestMode === undefined) {

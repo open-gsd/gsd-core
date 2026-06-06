@@ -16,6 +16,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
+const { ExitError, runMain } = require('./lib/cli-exit.cjs');
+
 const ROOT = path.resolve(__dirname, '..');
 const MANIFEST_PATH = path.join(ROOT, 'docs', 'INVENTORY-MANIFEST.json');
 
@@ -70,40 +72,44 @@ function buildManifest() {
   return manifest;
 }
 
-const [, , flag] = process.argv;
+function main() {
+  const [, , flag] = process.argv;
 
-if (flag === '--check') {
-  const committed = JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf8'));
-  const live = buildManifest();
-  // Strip the generated date for comparison
-  delete committed.generated;
-  delete live.generated;
-  const committedStr = JSON.stringify(committed, null, 2);
-  const liveStr = JSON.stringify(live, null, 2);
-  if (committedStr !== liveStr) {
-    process.stderr.write(
-      'docs/INVENTORY-MANIFEST.json is stale. Run:\n' +
-      '  node scripts/gen-inventory-manifest.cjs --write\n' +
-      'then add a matching row in docs/INVENTORY.md for each new entry.\n\n',
-    );
-    // Show diff-friendly output
-    for (const family of Object.keys(live.families)) {
-      const liveSet = new Set(live.families[family]);
-      const committedSet = new Set((committed.families || {})[family] || []);
-      for (const name of liveSet) {
-        if (!committedSet.has(name)) process.stderr.write('  + ' + family + '/' + name + '\n');
+  if (flag === '--check') {
+    const committed = JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf8'));
+    const live = buildManifest();
+    // Strip the generated date for comparison
+    delete committed.generated;
+    delete live.generated;
+    const committedStr = JSON.stringify(committed, null, 2);
+    const liveStr = JSON.stringify(live, null, 2);
+    if (committedStr !== liveStr) {
+      process.stderr.write(
+        'docs/INVENTORY-MANIFEST.json is stale. Run:\n' +
+        '  node scripts/gen-inventory-manifest.cjs --write\n' +
+        'then add a matching row in docs/INVENTORY.md for each new entry.\n\n',
+      );
+      // Show diff-friendly output
+      for (const family of Object.keys(live.families)) {
+        const liveSet = new Set(live.families[family]);
+        const committedSet = new Set((committed.families || {})[family] || []);
+        for (const name of liveSet) {
+          if (!committedSet.has(name)) process.stderr.write('  + ' + family + '/' + name + '\n');
+        }
+        for (const name of committedSet) {
+          if (!liveSet.has(name)) process.stderr.write('  - ' + family + '/' + name + '\n');
+        }
       }
-      for (const name of committedSet) {
-        if (!liveSet.has(name)) process.stderr.write('  - ' + family + '/' + name + '\n');
-      }
+      throw new ExitError(1);
     }
-    process.exit(1);
+    process.stdout.write('docs/INVENTORY-MANIFEST.json is up to date.\n');
+  } else if (flag === '--write') {
+    const manifest = buildManifest();
+    fs.writeFileSync(MANIFEST_PATH, JSON.stringify(manifest, null, 2) + '\n');
+    process.stdout.write('Wrote ' + MANIFEST_PATH + '\n');
+  } else {
+    process.stdout.write(JSON.stringify(buildManifest(), null, 2) + '\n');
   }
-  process.stdout.write('docs/INVENTORY-MANIFEST.json is up to date.\n');
-} else if (flag === '--write') {
-  const manifest = buildManifest();
-  fs.writeFileSync(MANIFEST_PATH, JSON.stringify(manifest, null, 2) + '\n');
-  process.stdout.write('Wrote ' + MANIFEST_PATH + '\n');
-} else {
-  process.stdout.write(JSON.stringify(buildManifest(), null, 2) + '\n');
 }
+
+runMain(main);

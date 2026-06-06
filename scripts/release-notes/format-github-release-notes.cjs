@@ -4,6 +4,7 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const { execFileSync } = require('child_process');
+const { runMain, ExitError } = require('../lib/cli-exit.cjs');
 
 /**
  * Classify a What's-Changed bullet line into 'Feature', 'Fix', or 'Enhancement'.
@@ -155,7 +156,7 @@ function formatReleaseNotes({ generatedBody, version, prerelease, packageName })
 }
 
 // CLI entry point
-if (require.main === module) {
+function main() {
   try {
     const argv = process.argv.slice(2);
 
@@ -248,9 +249,13 @@ if (require.main === module) {
       process.stdout.write(formatted + '\n');
     }
   } catch (err) {
-    process.stderr.write((err.message || String(err)) + '\n');
-    process.exit(1);
+    if (err instanceof ExitError) throw err;
+    throw new ExitError(1, err && err.message ? err.message : String(err));
   }
+}
+
+if (require.main === module) {
+  runMain(main);
 }
 
 module.exports = { formatReleaseNotes, classifyTitle };
