@@ -170,6 +170,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 const core = require('./lib/core.cjs');
 const { error, ERROR_REASON } = core;
 // Resolve findProjectRoot lazily at call time rather than binding it at module
@@ -1527,33 +1528,26 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
 
       // ── Validate required args ─────────────────────────────────────────
       if (!budgetStr) {
-        process.stderr.write('Error: --budget <N> is required\n');
-        process.exit(1);
+        throw new ExitError(1, 'Error: --budget <N> is required');
       }
       const budget = parseInt(budgetStr, 10);
       if (!Number.isFinite(budget) || budget <= 0) {
-        process.stderr.write('Error: --budget must be a positive integer\n');
-        process.exit(1);
+        throw new ExitError(1, 'Error: --budget must be a positive integer');
       }
       if (!instructionsFile) {
-        process.stderr.write('Error: --instructions-file <path> is required\n');
-        process.exit(1);
+        throw new ExitError(1, 'Error: --instructions-file <path> is required');
       }
       if (!roadmapFile) {
-        process.stderr.write('Error: --roadmap-file <path> is required\n');
-        process.exit(1);
+        throw new ExitError(1, 'Error: --roadmap-file <path> is required');
       }
       if (planFiles.length === 0) {
-        process.stderr.write('Error: at least one --plan-file <path> is required\n');
-        process.exit(1);
+        throw new ExitError(1, 'Error: at least one --plan-file <path> is required');
       }
       if (!outputPromptFile) {
-        process.stderr.write('Error: --output-prompt <path> is required\n');
-        process.exit(1);
+        throw new ExitError(1, 'Error: --output-prompt <path> is required');
       }
       if (!outputMetadataFile) {
-        process.stderr.write('Error: --output-metadata <path> is required\n');
-        process.exit(1);
+        throw new ExitError(1, 'Error: --output-metadata <path> is required');
       }
 
       // ── Validate and read required files ──────────────────────────────
@@ -1563,11 +1557,9 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
           return await fs.promises.readFile(resolved, 'utf8');
         } catch (err) {
           if (err && err.code === 'ENOENT') {
-            process.stderr.write(`Error: file not found for ${flagName}: ${resolved}\n`);
-            process.exit(1);
+            throw new ExitError(1, `Error: file not found for ${flagName}: ${resolved}`);
           }
-          process.stderr.write(`Error: cannot read file for ${flagName}: ${resolved}\n`);
-          process.exit(1);
+          throw new ExitError(1, `Error: cannot read file for ${flagName}: ${resolved}`);
         }
       }
 
@@ -1578,8 +1570,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
           return await fs.promises.readFile(resolved, 'utf8');
         } catch (err) {
           if (err && err.code === 'ENOENT') return null;
-          process.stderr.write(`Error: cannot read optional file: ${resolved}\n`);
-          process.exit(1);
+          throw new ExitError(1, `Error: cannot read optional file: ${resolved}`);
         }
       }
 
@@ -1592,11 +1583,9 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
           return { file: path.basename(p), content };
         } catch (err) {
           if (err && err.code === 'ENOENT') {
-            process.stderr.write(`Error: plan file not found: ${resolved}\n`);
-            process.exit(1);
+            throw new ExitError(1, `Error: plan file not found: ${resolved}`);
           }
-          process.stderr.write(`Error: cannot read plan file: ${resolved}\n`);
-          process.exit(1);
+          throw new ExitError(1, `Error: cannot read plan file: ${resolved}`);
         }
       }));
 
@@ -1625,7 +1614,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       await fs.promises.writeFile(path.resolve(outputPromptFile), prompt);
 
       if (metadata.hardFailed) {
-        process.exit(2);
+        throw new ExitError(2);
       }
       break;
     }
@@ -1895,4 +1884,4 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
   }
 }
 
-main();
+runMain(main);

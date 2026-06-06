@@ -35,6 +35,7 @@ export default tseslint.config(
       '**/*.generated.cjs',
       // ADR-457: tsc-generated runtime artifact — lint the src/*.cts source, not the emitted .cjs.
       'gsd-core/bin/lib/semver-compare.cjs',
+      'gsd-core/bin/lib/cli-exit.cjs',
       'gsd-core/bin/lib/code-review-flags.cjs',
       'gsd-core/bin/lib/context-utilization.cjs',
       'gsd-core/bin/lib/artifacts.cjs',
@@ -174,7 +175,7 @@ export default tseslint.config(
       'no-useless-escape': 'warn',
       'no-unsafe-finally': 'warn',
       // eslint-plugin-n rules
-      'n/no-process-exit': 'warn',
+      'n/no-process-exit': 'error',
       // Local rules — warn for now; flip to error after cleanup phases
       'local/no-source-grep': 'warn',
     },
