@@ -187,6 +187,8 @@ describe('install.js exports multi-select runtime metadata', () => {
       'prompt lists Hermes Agent as option 10');
     assert.ok(/\b11\)\s*Kimi\b/.test(prompt),
       'prompt lists Kimi as option 11');
+    assert.ok(/Kimi\s+\(~\/\.agents\)/.test(prompt),
+      'prompt shows the canonical Kimi global root');
     assert.ok(/\b14\)\s*Qwen Code\b/.test(prompt),
       'prompt lists Qwen Code as option 14');
     assert.ok(/\b15\)\s*Trae\b/.test(prompt),

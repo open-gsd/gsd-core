@@ -34,7 +34,7 @@ const RUNTIME_INSTALL_CONTRACTS = {
   cursor: { surface: 'flat-skills', settings: false, packageJson: false },
   gemini: { surface: 'commands-gsd', settings: true, packageJson: true },
   hermes: { surface: 'hermes-skills', settings: true, packageJson: true },
-  kimi: { surface: 'kimi-skills-agents', settings: false, packageJson: false, workflowPayload: false },
+  kimi: { surface: 'kimi-skills-agents', settings: false, packageJson: false },
   kilo: { surface: 'flat-command', settings: false, packageJson: true },
   opencode: { surface: 'flat-command', settings: true, packageJson: true },
   qwen: { surface: 'flat-skills', settings: true, packageJson: true },

@@ -14,9 +14,9 @@
  *   cline   — Rules-based; commands are embedded in .clinerules. Cline does
  *             not use a skills/ directory. getGlobalSkillDir() returns null
  *             for cline so the caller can emit an appropriate warning.
- *   kimi    — Agent Skills are discovered from the generic agents root:
- *             ~/.config/agents/skills. ~/.kimi/skills is compatible with
- *             Kimi CLI, but is not GSD's canonical Phase 1 install target.
+ *   kimi    — Agent Skills are discovered from Kimi's generic user root:
+ *             ~/.agents/skills. ~/.kimi-code/skills is compatible with
+ *             Kimi Code CLI and can be selected with KIMI_CONFIG_DIR.
  */
 
 import os from 'node:os';
@@ -128,11 +128,10 @@ export function getGlobalConfigDir(runtime: string): string {
     case 'cline':
       return env['CLINE_CONFIG_DIR'] ? expandTilde(env['CLINE_CONFIG_DIR']) : path.join(home, '.cline');
 
-    // ── Kimi CLI (generic agents XDG root) ─────────────────────────────────
+    // ── Kimi CLI (generic agents user root) ────────────────────────────────
     case 'kimi': {
       if (env['KIMI_CONFIG_DIR']) return expandTilde(env['KIMI_CONFIG_DIR']);
-      if (env['XDG_CONFIG_HOME']) return path.join(expandTilde(env['XDG_CONFIG_HOME']), 'agents');
-      return path.join(home, '.config', 'agents');
+      return path.join(home, '.agents');
     }
 
     // ── OpenCode (XDG) ───────────────────────────────────────────────────────

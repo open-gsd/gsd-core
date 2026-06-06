@@ -32,6 +32,9 @@ describe('convertKimiToolName', () => {
       ['TodoWrite', 'kimi_cli.tools.todo:SetTodoList'],
       ['WebSearch', 'kimi_cli.tools.web:SearchWeb'],
       ['WebFetch', 'kimi_cli.tools.web:FetchURL'],
+      ['TaskList', 'kimi_cli.tools.background:TaskList'],
+      ['TaskOutput', 'kimi_cli.tools.background:TaskOutput'],
+      ['TaskStop', 'kimi_cli.tools.background:TaskStop'],
     ]);
 
     for (const [claudeTool, kimiTool] of expectedMappings) {

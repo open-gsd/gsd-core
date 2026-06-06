@@ -563,7 +563,7 @@ Equivalent paths for other runtimes:
 - **OpenCode:** `~/.config/opencode/` global or `./.opencode/` local
 - **Kilo:** `~/.config/kilo/` global or `./.kilo/` local
 - **Gemini CLI:** `~/.gemini/` global or `./.gemini/` local
-- **Kimi CLI:** `~/.config/agents/` global; local install is deferred and guarded
+- **Kimi CLI:** `~/.agents/` global; local install is deferred and guarded
 - **Codex:** `~/.codex/` global or `./.codex/` local
 - **Copilot:** `~/.copilot/` global or `./.github/` local
 - **Antigravity:** auto-detected global root (`~/.gemini/antigravity/`, `~/.gemini/antigravity-ide/`, or `~/.gemini/antigravity-cli/`) or `./.agent/` local
@@ -802,7 +802,7 @@ The migration-specific ownership and source snapshots live in
 | OpenCode | `~/.config/opencode` | `./.opencode` | `command/gsd-*.md` | `agents/gsd-*.md` | `opencode.json` or `opencode.jsonc`; no GSD hooks |
 | Kilo | `~/.config/kilo` | `./.kilo` | `command/gsd-*.md` | `agents/gsd-*.md` | `kilo.json` or `kilo.jsonc`; no GSD hooks |
 | Gemini CLI | `~/.gemini` | `./.gemini` | `commands/gsd/*.toml` | `agents/gsd-*.md` | `settings.json` feature flag, hooks, and statusline |
-| Kimi CLI | `~/.config/agents` | Deferred and guarded | `skills/gsd-*/SKILL.md` invoked as `/skill:gsd-*` | `agents/gsd.yaml`, `agents/gsd.md`, and `agents/subagents/gsd-*` YAML/prompt pairs | Explicit `kimi --agent-file ~/.config/agents/agents/gsd.yaml`; no GSD hooks or statusline |
+| Kimi CLI | `~/.agents` | Deferred and guarded | `skills/gsd-*/SKILL.md` invoked as `/skill:gsd-*` | `agents/gsd.yaml`, `agents/gsd.md`, and `agents/subagents/gsd-*` YAML/prompt pairs | Explicit `kimi --agent-file ~/.agents/agents/gsd.yaml`; no GSD hooks or statusline |
 | Codex | `~/.codex` | `./.codex` | `skills/gsd-*/SKILL.md` | `agents/` source markdown plus per-agent TOML | `config.toml` `[agents.gsd-*]`, `[features].hooks` (canonical; legacy alias `codex_hooks` is recognized and migrated forward on reinstall, #3566), and hook tables |
 | GitHub Copilot | `~/.copilot` | `./.github` | `skills/gsd-*/SKILL.md` and `copilot-instructions.md` | `.agent.md` files | No GSD hooks or statusline |
 | Antigravity | auto-detected: `~/.gemini/antigravity`, `~/.gemini/antigravity-ide`, or `~/.gemini/antigravity-cli` | `./.agent` | `skills/gsd-*/SKILL.md` | `agents/gsd-*.md` | Gemini-style `settings.json` hook entries when installed by GSD |
@@ -818,15 +818,17 @@ The migration-specific ownership and source snapshots live in
 ### Upstream Contract Sources
 
 Runtime install expectations are checked against primary documentation where
-available. The current source snapshot is 2026-05-11:
+available. The current source snapshot is 2026-05-11, with Kimi CLI rechecked
+on 2026-06-06:
 
 - Claude Code: Anthropic slash commands, settings, hooks, and subagents docs.
 - OpenCode and Kilo: OpenCode config docs and Kilo custom subagent docs.
 - Gemini CLI and Qwen Code: command/config docs; Qwen command docs were last
   updated 2026-05-06.
-- Kimi CLI: Agent Skills docs for `~/.config/agents/skills/` discovery and
-  Agents docs for YAML files, `system_prompt_path`, `kimi_cli.tools.*` module
-  paths, and explicit `kimi --agent-file` launch.
+- Kimi CLI: Agent Skills docs for `~/.kimi-code/skills/` and
+  `~/.agents/skills/` user-level discovery, plus Agents docs for YAML files,
+  `system_prompt_path`, `kimi_cli.tools.*` module paths, and explicit
+  `kimi --agent-file` launch.
 - Codex: OpenAI Codex docs and `config-schema.json`; the installer also carries
   Codex 0.124.0 compatibility for agent table shape.
 - Copilot, Cursor, Cline, Augment, Hermes, and CodeBuddy: vendor docs for

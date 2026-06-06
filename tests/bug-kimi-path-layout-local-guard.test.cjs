@@ -47,47 +47,47 @@ function withEnv(updates, fn) {
 }
 
 describe('Kimi runtime homes', () => {
-  test('canonical global skills base is ~/.config/agents/skills, not ~/.kimi/skills', () => {
+  test('canonical global skills base is ~/.agents/skills, not ~/.kimi-code/skills', () => {
     withEnv({ KIMI_CONFIG_DIR: undefined, XDG_CONFIG_HOME: undefined }, () => {
       assert.strictEqual(
         getGlobalConfigDir('kimi'),
-        path.join(os.homedir(), '.config', 'agents'),
+        path.join(os.homedir(), '.agents'),
       );
       assert.strictEqual(
         getGlobalSkillsBase('kimi'),
-        path.join(os.homedir(), '.config', 'agents', 'skills'),
+        path.join(os.homedir(), '.agents', 'skills'),
       );
       assert.strictEqual(
         getGlobalSkillDir('kimi', 'gsd-help'),
-        path.join(os.homedir(), '.config', 'agents', 'skills', 'gsd-help'),
+        path.join(os.homedir(), '.agents', 'skills', 'gsd-help'),
       );
       assert.notStrictEqual(
         getGlobalSkillsBase('kimi'),
-        path.join(os.homedir(), '.kimi', 'skills'),
+        path.join(os.homedir(), '.kimi-code', 'skills'),
       );
     });
   });
 
-  test('KIMI_CONFIG_DIR overrides the Kimi generic agents config root', () => {
-    withEnv({ KIMI_CONFIG_DIR: '/tmp/custom-kimi-agents', XDG_CONFIG_HOME: undefined }, () => {
-      assert.strictEqual(getGlobalConfigDir('kimi'), '/tmp/custom-kimi-agents');
+  test('KIMI_CONFIG_DIR can select the brand-specific ~/.kimi-code root', () => {
+    withEnv({ KIMI_CONFIG_DIR: '/tmp/custom-kimi-code', XDG_CONFIG_HOME: undefined }, () => {
+      assert.strictEqual(getGlobalConfigDir('kimi'), '/tmp/custom-kimi-code');
       assert.strictEqual(
         getGlobalSkillsBase('kimi'),
-        path.join('/tmp/custom-kimi-agents', 'skills'),
+        path.join('/tmp/custom-kimi-code', 'skills'),
       );
-      assert.strictEqual(getGlobalDir('kimi'), '/tmp/custom-kimi-agents');
+      assert.strictEqual(getGlobalDir('kimi'), '/tmp/custom-kimi-code');
     });
   });
 
-  test('XDG_CONFIG_HOME participates in the default Kimi generic agents path', () => {
+  test('XDG_CONFIG_HOME does not change Kimi default root', () => {
     withEnv({ KIMI_CONFIG_DIR: undefined, XDG_CONFIG_HOME: '/tmp/xdg-home' }, () => {
       assert.strictEqual(
         getGlobalConfigDir('kimi'),
-        path.join('/tmp/xdg-home', 'agents'),
+        path.join(os.homedir(), '.agents'),
       );
       assert.strictEqual(
         getConfigDirFromHome('kimi', true),
-        "'.config', 'agents'",
+        "'.agents'",
       );
     });
   });
@@ -138,7 +138,8 @@ describe('Kimi local install guard', () => {
       assert.match(combined, /Kimi local install/i);
       assert.match(combined, /deferred/i);
 
-      assert.ok(!fs.existsSync(path.join(tmpProject, '.kimi')), 'must not create .kimi/');
+      assert.ok(!fs.existsSync(path.join(tmpProject, '.kimi')), 'must not create legacy .kimi/');
+      assert.ok(!fs.existsSync(path.join(tmpProject, '.kimi-code')), 'must not create .kimi-code/');
       assert.ok(!fs.existsSync(path.join(tmpProject, '.agents')), 'must not create .agents/');
       assert.ok(!fs.existsSync(path.join(tmpProject, '.claude')), 'must not fall back to Claude local install');
     } finally {
@@ -169,15 +170,19 @@ describe('Kimi local install guard', () => {
       );
       const combined = `${result.stdout}\n${result.stderr}`;
       assert.match(combined, /Installing for .*Kimi/i);
-      assert.match(combined, /Installed \d+ skills to skills\//i);
+      assert.match(combined, /Installed \d+ Kimi skills to skills\//i);
       assert.match(combined, /Generated Kimi root agent: .*agents.*gsd\.yaml/i);
       assert.match(combined, /kimi --agent-file/i);
+      assert.match(combined, /Wrote file manifest/i);
 
       const skillFile = path.join(tmpConfig, 'skills', 'gsd-new-project', 'SKILL.md');
       assert.ok(fs.existsSync(skillFile), 'must write gsd-new-project/SKILL.md');
       const skillContent = fs.readFileSync(skillFile, 'utf8');
       assert.match(skillContent, /^name: gsd-new-project$/m);
       assert.match(skillContent, /\/skill:gsd-new-project/);
+      assert.match(skillContent, /gsd-core\/workflows\/new-project\.md/);
+      assert.doesNotMatch(skillContent, /@~\/\.claude\/gsd-core|@\$HOME\/\.claude\/gsd-core/);
+      assert.doesNotMatch(skillContent, /@[^\r\n]*\\/, 'serialized Kimi payload references must use forward slashes');
       assert.doesNotMatch(skillContent, /kimi_cli\.tools|system_prompt_path|^version: 1$/m);
 
       const rootYaml = path.join(tmpConfig, 'agents', 'gsd.yaml');
@@ -204,8 +209,132 @@ describe('Kimi local install guard', () => {
       assert.match(executorYamlContent, /kimi_cli\.tools\./);
       assert.doesNotMatch(executorYamlContent, /mcp__/);
 
-      assert.ok(!fs.existsSync(path.join(tmpConfig, 'gsd-core')), 'must not write workflow payloads as Kimi artifacts');
+      assert.ok(fs.existsSync(path.join(tmpConfig, 'gsd-core', 'workflows', 'new-project.md')), 'must write workflow payloads used by Kimi skills');
+      const manifestPath = path.join(tmpConfig, 'gsd-file-manifest.json');
+      assert.ok(fs.existsSync(manifestPath), 'must write gsd-file-manifest.json for Kimi installs');
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      assert.ok(manifest.files['skills/gsd-new-project/SKILL.md'], 'manifest tracks generated Kimi skill');
+      assert.ok(manifest.files['agents/gsd.yaml'], 'manifest tracks Kimi root agent YAML');
+      assert.ok(manifest.files['agents/gsd.md'], 'manifest tracks Kimi root agent prompt');
+      assert.ok(manifest.files['agents/subagents/gsd-executor.yaml'], 'manifest tracks Kimi subagent YAML');
+      assert.ok(manifest.files['agents/subagents/gsd-executor.md'], 'manifest tracks Kimi subagent prompt');
+      assert.ok(manifest.files['gsd-core/workflows/new-project.md'], 'manifest tracks installed workflow payload');
       assert.ok(!fs.existsSync(path.join(tmpConfig, 'hooks')), 'must not write hooks under the Kimi root');
+      assert.ok(!fs.existsSync(path.join(tmpConfig, 'settings.json')), 'must not write settings.json under the Kimi root');
+      assert.ok(!fs.existsSync(path.join(tmpConfig, '.clinerules')), 'must not write rules under the Kimi root');
+    } finally {
+      cleanup(tmpProject);
+      cleanup(tmpConfig);
+      cleanup(tmpHome);
+    }
+  });
+
+  test('--kimi --global backs up local edits to generated skills and agent artifacts on reinstall', () => {
+    const tmpProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-reinstall-project-'));
+    const tmpConfig = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-reinstall-config-'));
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-reinstall-home-'));
+    const env = installerEnv({ HOME: tmpHome, USERPROFILE: tmpHome });
+
+    try {
+      const installArgs = [INSTALL_SCRIPT, '--kimi', '--global', '--config-dir', tmpConfig, '--no-sdk'];
+      const first = spawnSync(process.execPath, installArgs, {
+        cwd: tmpProject,
+        encoding: 'utf8',
+        env,
+      });
+      assert.strictEqual(
+        first.status,
+        0,
+        `first install failed\nstdout: ${first.stdout}\nstderr: ${first.stderr}`,
+      );
+
+      const skillFile = path.join(tmpConfig, 'skills', 'gsd-new-project', 'SKILL.md');
+      const agentPrompt = path.join(tmpConfig, 'agents', 'subagents', 'gsd-executor.md');
+      fs.appendFileSync(skillFile, '\nUSER LOCAL KIMI SKILL EDIT\n');
+      fs.appendFileSync(agentPrompt, '\nUSER LOCAL KIMI AGENT EDIT\n');
+
+      const second = spawnSync(process.execPath, installArgs, {
+        cwd: tmpProject,
+        encoding: 'utf8',
+        env,
+      });
+      assert.strictEqual(
+        second.status,
+        0,
+        `second install failed\nstdout: ${second.stdout}\nstderr: ${second.stderr}`,
+      );
+      assert.match(`${second.stdout}\n${second.stderr}`, /locally modified GSD file/i);
+
+      const skillBackup = path.join(tmpConfig, 'gsd-local-patches', 'skills', 'gsd-new-project', 'SKILL.md');
+      const agentBackup = path.join(tmpConfig, 'gsd-local-patches', 'agents', 'subagents', 'gsd-executor.md');
+      assert.match(fs.readFileSync(skillBackup, 'utf8'), /USER LOCAL KIMI SKILL EDIT/);
+      assert.match(fs.readFileSync(agentBackup, 'utf8'), /USER LOCAL KIMI AGENT EDIT/);
+
+      const meta = JSON.parse(fs.readFileSync(path.join(tmpConfig, 'gsd-local-patches', 'backup-meta.json'), 'utf8'));
+      assert.ok(meta.files.includes('skills/gsd-new-project/SKILL.md'));
+      assert.ok(meta.files.includes('agents/subagents/gsd-executor.md'));
+    } finally {
+      cleanup(tmpProject);
+      cleanup(tmpConfig);
+      cleanup(tmpHome);
+    }
+  });
+
+  test('--kimi --global --uninstall removes GSD artifacts and preserves non-GSD Kimi content', () => {
+    const tmpProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-uninstall-project-'));
+    const tmpConfig = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-uninstall-config-'));
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-uninstall-home-'));
+    const env = installerEnv({ HOME: tmpHome, USERPROFILE: tmpHome });
+
+    try {
+      const installArgs = [INSTALL_SCRIPT, '--kimi', '--global', '--config-dir', tmpConfig, '--no-sdk'];
+      const installResult = spawnSync(process.execPath, installArgs, {
+        cwd: tmpProject,
+        encoding: 'utf8',
+        env,
+      });
+      assert.strictEqual(
+        installResult.status,
+        0,
+        `install failed\nstdout: ${installResult.stdout}\nstderr: ${installResult.stderr}`,
+      );
+
+      const foreignSkill = path.join(tmpConfig, 'skills', 'user-custom-skill', 'SKILL.md');
+      const foreignRootAgent = path.join(tmpConfig, 'agents', 'user-agent.yaml');
+      const foreignSubagent = path.join(tmpConfig, 'agents', 'subagents', 'user-agent.yaml');
+      fs.mkdirSync(path.dirname(foreignSkill), { recursive: true });
+      fs.mkdirSync(path.dirname(foreignSubagent), { recursive: true });
+      fs.writeFileSync(foreignSkill, '# user skill\n', 'utf8');
+      fs.writeFileSync(foreignRootAgent, 'version: 1\n', 'utf8');
+      fs.writeFileSync(foreignSubagent, 'version: 1\n', 'utf8');
+
+      const uninstallResult = spawnSync(
+        process.execPath,
+        [INSTALL_SCRIPT, '--kimi', '--global', '--config-dir', tmpConfig, '--uninstall'],
+        {
+          cwd: tmpProject,
+          encoding: 'utf8',
+          env,
+        },
+      );
+      assert.strictEqual(
+        uninstallResult.status,
+        0,
+        `uninstall failed\nstdout: ${uninstallResult.stdout}\nstderr: ${uninstallResult.stderr}`,
+      );
+      assert.match(`${uninstallResult.stdout}\n${uninstallResult.stderr}`, /Kimi CLI/);
+
+      assert.ok(!fs.existsSync(path.join(tmpConfig, 'skills', 'gsd-new-project')), 'must remove generated Kimi skills');
+      assert.ok(!fs.existsSync(path.join(tmpConfig, 'agents', 'gsd.yaml')), 'must remove Kimi root agent YAML');
+      assert.ok(!fs.existsSync(path.join(tmpConfig, 'agents', 'gsd.md')), 'must remove Kimi root agent prompt');
+      assert.ok(!fs.existsSync(path.join(tmpConfig, 'agents', 'subagents', 'gsd-executor.yaml')), 'must remove generated Kimi subagent YAML');
+      assert.ok(!fs.existsSync(path.join(tmpConfig, 'agents', 'subagents', 'gsd-executor.md')), 'must remove generated Kimi subagent prompt');
+      assert.ok(!fs.existsSync(path.join(tmpConfig, 'gsd-core')), 'must remove installed workflow payload');
+      assert.ok(!fs.existsSync(path.join(tmpConfig, 'gsd-file-manifest.json')), 'must remove the manifest');
+
+      assert.ok(fs.existsSync(foreignSkill), 'must preserve non-GSD Kimi skills');
+      assert.ok(fs.existsSync(foreignRootAgent), 'must preserve non-GSD root agents');
+      assert.ok(fs.existsSync(foreignSubagent), 'must preserve non-GSD subagents');
     } finally {
       cleanup(tmpProject);
       cleanup(tmpConfig);

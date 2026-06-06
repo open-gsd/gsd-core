@@ -110,42 +110,42 @@ Skills land in `~/.codex/skills/gsd-*/SKILL.md`. Agents are written with per-age
 npx @opengsd/gsd-core@latest --kimi --global
 ```
 
-Skills land in `~/.config/agents/skills/gsd-*/SKILL.md`. Start a new Kimi CLI session after install, then invoke GSD skills with `/skill:gsd-*`, for example:
+Skills land in `~/.agents/skills/gsd-*/SKILL.md`. Start a new Kimi CLI session after install, then invoke GSD skills with `/skill:gsd-*`, for example:
 
 ```text
 /skill:gsd-new-project
 ```
 
-The installer also writes the GSD custom agent definition to `~/.config/agents/agents/gsd.yaml` with its prompt at `~/.config/agents/agents/gsd.md`; subagents land under `~/.config/agents/agents/subagents/gsd-*.yaml` and `~/.config/agents/agents/subagents/gsd-*.md`.
+The installer also writes the GSD custom agent definition to `~/.agents/agents/gsd.yaml` with its prompt at `~/.agents/agents/gsd.md`; subagents land under `~/.agents/agents/subagents/gsd-*.yaml` and `~/.agents/agents/subagents/gsd-*.md`.
 
 Kimi custom agents do not auto-activate just because the files exist. Launch Kimi with the generated agent file when you want the GSD agent surface:
 
 ```bash
-kimi --agent-file ~/.config/agents/agents/gsd.yaml
+kimi --agent-file ~/.agents/agents/gsd.yaml
 ```
 
-GSD uses Kimi's generic Agent Skills root (`~/.config/agents`) as the default so the install follows the shared agents discovery convention. Kimi also discovers user skills from the brand-specific `~/.kimi` directory. If your Kimi setup is already centered on `~/.kimi`, install there explicitly:
+GSD uses Kimi's generic Agent Skills root (`~/.agents`) as the default so the install follows the shared agents discovery convention. Kimi also discovers user skills from the brand-specific `~/.kimi-code` directory. If your Kimi setup is already centered on `~/.kimi-code`, install there explicitly:
 
 ```bash
-npx @opengsd/gsd-core@latest --kimi --global --config-dir ~/.kimi
+npx @opengsd/gsd-core@latest --kimi --global --config-dir ~/.kimi-code
 ```
 
 Then launch the generated agent from that directory:
 
 ```bash
-kimi --agent-file ~/.kimi/agents/gsd.yaml
+kimi --agent-file ~/.kimi-code/agents/gsd.yaml
 ```
 
 **Override the install directory:**
 
 ```bash
-KIMI_CONFIG_DIR=~/.config/agents-alt npx @opengsd/gsd-core@latest --kimi --global
+KIMI_CONFIG_DIR=~/.agents-alt npx @opengsd/gsd-core@latest --kimi --global
 ```
 
 For brand-specific scripted installs, use:
 
 ```bash
-KIMI_CONFIG_DIR=~/.kimi npx @opengsd/gsd-core@latest --kimi --global
+KIMI_CONFIG_DIR=~/.kimi-code npx @opengsd/gsd-core@latest --kimi --global
 ```
 
 `--kimi --local` is intentionally deferred and guarded in v1; use the global install path above for Kimi CLI.
