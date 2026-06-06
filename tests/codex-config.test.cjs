@@ -119,6 +119,22 @@ function assertUsesOnlyEol(content, eol) {
   assert.ok(!content.includes('\r\n'), 'does not contain CRLF line endings');
 }
 
+function assertNoCodexBareGsdToolsInvocation(content, label) {
+  const patterns = [
+    /(^|\n)[ \t]*gsd-tools\s/,
+    /\$\(\s*gsd-tools\s/,
+    /`\s*gsd-tools\s/,
+    /(?:&&|\|\||[;|])\s*gsd-tools\s/,
+  ];
+  for (const pattern of patterns) {
+    assert.doesNotMatch(
+      content,
+      pattern,
+      `${label} must not contain a command-position bare gsd-tools invocation`,
+    );
+  }
+}
+
 // ─── getCodexSkillAdapterHeader ─────────────────────────────────────────────────
 
 describe('getCodexSkillAdapterHeader', () => {
@@ -237,6 +253,35 @@ node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" commit "docs: resolve"`;
     assert.ok(result.includes('$HOME/.codex/gsd-core/bin/gsd-tools.cjs'), 'replaces $HOME/.claude/ with $HOME/.codex/');
     assert.ok(!result.includes('$HOME/.claude/'), 'no .claude paths remain');
   });
+
+  test('rewrites bare gsd-tools invocations to the Codex shim path', () => {
+    const input = `---
+name: gsd-planner
+description: Plans phases
+tools: Read, Bash
+---
+
+INIT=$(gsd-tools query init.plan-phase "\${PHASE}")
+gsd-tools query state.load 2>/dev/null
+if command -v gsd-tools >/dev/null 2>&1; then echo "path fallback"; fi
+Use \`gsd-tools query history-digest\` for history.`;
+
+    const result = convertClaudeAgentToCodexAgent(input);
+    assert.ok(
+      result.includes('INIT=$(node "$HOME/.codex/gsd-core/bin/gsd-tools.cjs" query init.plan-phase'),
+      'rewrites command substitution',
+    );
+    assert.ok(
+      result.includes('node "$HOME/.codex/gsd-core/bin/gsd-tools.cjs" query state.load'),
+      'rewrites line-start command',
+    );
+    assert.ok(
+      result.includes('`node "$HOME/.codex/gsd-core/bin/gsd-tools.cjs" query history-digest`'),
+      'rewrites inline command example',
+    );
+    assert.ok(result.includes('command -v gsd-tools'), 'keeps PATH resolver probe intact');
+    assertNoCodexBareGsdToolsInvocation(result, 'converted Codex agent');
+  });
 });
 
 // ─── Codex command prefix conversion ────────────────────────────────────────────
@@ -285,6 +330,37 @@ node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" init`;
     const result = convertClaudeCommandToCodexSkill(input, 'gsd-test');
     assert.ok(result.includes('gsd-tools.cjs'), 'gsd-tools.cjs preserved in path');
     assert.ok(!result.includes('$gsd-tools'), 'no $gsd-tools in file path');
+  });
+
+  test('rewrites bare gsd-tools commands in generated Codex skills', () => {
+    const input = `---
+name: gsd:quick
+description: Quick task
+---
+
+\`\`\`bash
+gsd-tools query frontmatter.get .planning/quick/example/SUMMARY.md status
+INIT=$(gsd-tools query init.quick)
+if command -v gsd-tools >/dev/null 2>&1; then echo ok; fi
+\`\`\`
+
+Status fields read via \`gsd-tools query frontmatter.get\`.`;
+
+    const result = convertClaudeCommandToCodexSkill(input, 'gsd-quick');
+    assert.ok(
+      result.includes('node "$HOME/.codex/gsd-core/bin/gsd-tools.cjs" query frontmatter.get'),
+      'rewrites line-start command in a shell block',
+    );
+    assert.ok(
+      result.includes('INIT=$(node "$HOME/.codex/gsd-core/bin/gsd-tools.cjs" query init.quick)'),
+      'rewrites command substitution in a shell block',
+    );
+    assert.ok(
+      result.includes('`node "$HOME/.codex/gsd-core/bin/gsd-tools.cjs" query frontmatter.get`'),
+      'rewrites inline command example',
+    );
+    assert.ok(result.includes('command -v gsd-tools'), 'keeps resolver probe intact');
+    assertNoCodexBareGsdToolsInvocation(result, 'converted Codex skill');
   });
 
   test('removes /clear then: for Codex', () => {
@@ -1384,6 +1460,21 @@ describe('installCodexConfig (integration)', () => {
       }
     }
     assert.deepStrictEqual(leaks, [], `No .toml files should contain .claude paths; found leaks in: ${leaks.join(', ')}`);
+  });
+
+  (hasAgents ? test : test.skip)('generated Codex agent .toml files do not call bare gsd-tools', () => {
+    const { installCodexConfig } = require('../bin/install.js');
+    installCodexConfig(tmpTarget, agentsSrc);
+
+    const agentsDir = path.join(tmpTarget, 'agents');
+    const tomlFiles = fs.readdirSync(agentsDir)
+      .filter((file) => file.startsWith('gsd-') && file.endsWith('.toml'));
+    assert.ok(tomlFiles.length > 0, 'expected generated Codex agent toml files');
+
+    for (const file of tomlFiles) {
+      const content = fs.readFileSync(path.join(agentsDir, file), 'utf8');
+      assertNoCodexBareGsdToolsInvocation(content, `agents/${file}`);
+    }
   });
 });
 

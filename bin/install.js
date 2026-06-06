@@ -2810,6 +2810,16 @@ function convertSlashCommandsToCodexSkillMentions(content) {
   return converted;
 }
 
+const CODEX_GSD_TOOLS_INVOCATION = 'node "$HOME/.codex/gsd-core/bin/gsd-tools.cjs"';
+
+function rewriteBareGsdToolsCommandsForCodex(content) {
+  return content
+    .replace(/(^[ \t]*)gsd-tools(?=\s)/gm, `$1${CODEX_GSD_TOOLS_INVOCATION}`)
+    .replace(/(\$\(\s*)gsd-tools(?=\s)/g, `$1${CODEX_GSD_TOOLS_INVOCATION}`)
+    .replace(/(`\s*)gsd-tools(?=\s)/g, `$1${CODEX_GSD_TOOLS_INVOCATION}`)
+    .replace(/((?:&&|\|\||[;|])\s*)gsd-tools(?=\s)/g, `$1${CODEX_GSD_TOOLS_INVOCATION}`);
+}
+
 function convertClaudeToCodexMarkdown(content) {
   let converted = convertSlashCommandsToCodexSkillMentions(content);
   converted = converted.replace(/\$ARGUMENTS\b/g, '{{GSD_ARGS}}');
@@ -2835,6 +2845,10 @@ function convertClaudeToCodexMarkdown(content) {
   // `.claudeignore` → `.codexignore` (#2639). Codex honors its own ignore
   // file; leaving the Claude-specific name is misleading in agent prompts.
   converted = converted.replace(/\.claudeignore\b/g, '.codexignore');
+  // Codex installs the tools shim under ~/.codex but does not guarantee a
+  // bare `gsd-tools` binary on PATH. Keep resolver probes such as
+  // `command -v gsd-tools` intact; rewrite only command invocations.
+  converted = rewriteBareGsdToolsCommandsForCodex(converted);
   // Runtime-neutral agent name replacement (#766)
   converted = neutralizeAgentReferences(converted, 'AGENTS.md');
   return converted;

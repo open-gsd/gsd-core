@@ -57,6 +57,22 @@ function stripAnsi(s) {
   return s.replace(/\x1b\[[0-9;]*m/g, '');
 }
 
+function assertNoBareGsdToolsInvocation(content, label) {
+  const patterns = [
+    /(^|\n)[ \t]*gsd-tools\s/,
+    /\$\(\s*gsd-tools\s/,
+    /`\s*gsd-tools\s/,
+    /(?:&&|\|\||[;|])\s*gsd-tools\s/,
+  ];
+  for (const pattern of patterns) {
+    assert.doesNotMatch(
+      content,
+      pattern,
+      `${label} must not contain a command-position bare gsd-tools invocation`,
+    );
+  }
+}
+
 /**
  * Walk commands/gsd/**\/*.md and return the set of skill names the installer
  * is contractually obligated to produce. Naming rule mirrors
@@ -250,6 +266,21 @@ describe('bug-3582: Codex global install materializes the skill surface', { conc
         fs.existsSync(skillMd),
         `${name}/SKILL.md must exist after Codex install (was unrouteable in 1.42.2)`,
       );
+    }
+  });
+
+  test('installed Codex skills do not ask agents to run bare gsd-tools commands', () => {
+    const skillsDir = path.join(installRun.codexHome, 'skills');
+    const skillDirs = fs.readdirSync(skillsDir, { withFileTypes: true })
+      .filter(e => e.isDirectory() && e.name.startsWith('gsd-'))
+      .map(e => e.name);
+
+    for (const name of skillDirs) {
+      const content = fs.readFileSync(
+        path.join(skillsDir, name, 'SKILL.md'),
+        'utf-8',
+      );
+      assertNoBareGsdToolsInvocation(content, `${name}/SKILL.md`);
     }
   });
 
