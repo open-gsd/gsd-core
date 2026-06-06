@@ -730,7 +730,7 @@ describe('installRuntimeArtifacts (copilot integration)', () => {
       'description preserved (round-trips through #2876 yamlQuote)',
     );
     // argument-hint round-trips
-    assert.equal(fm['argument-hint'], '[--from N] [--to N] [--only N] [--interactive]', 'argument-hint round-trips');
+    assert.equal(fm['argument-hint'], '[--from N] [--to N] [--only N] [--interactive] [--converge]', 'argument-hint round-trips');
     // allowed-tools comma-separated
     assert.ok(skillContent.includes('allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, Agent'),
       'allowed-tools is comma-separated');
