@@ -87,7 +87,6 @@ describe('bug-211: launcher ~/.claude home fallback', () => {
       // in the same directory as gsd-tools, create a dedicated shim dir with a
       // symlink to node only (no gsd-tools there).
       const nodeBin = execFileSync('which', ['node'], { encoding: 'utf8' }).trim();
-      const nodeBinDir = path.dirname(nodeBin);
       const systemPaths = (process.env.PATH || '/usr/bin:/bin')
         .split(path.delimiter)
         .filter((p) => {

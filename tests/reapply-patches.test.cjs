@@ -7,7 +7,7 @@
  * Closes: #1469
  */
 
-const { test, describe, before, beforeEach, afterEach } = require('node:test');
+const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
@@ -381,7 +381,7 @@ describe('reapply-patches gated hunk verification (#1999)', () => {
     // assert it both names the table and defines an explicit gate
     // condition tied to the `verified` column.
     const content = fs.readFileSync(workflowPath, 'utf8');
-    const step5Match = content.match(/^##\s+Step 5[^\n]*\n([\s\S]*?)(?=^##\s|\Z)/m);
+    const step5Match = content.match(/^##\s+Step 5[^\n]*\n([\s\S]*?)(?=^##\s|Z)/m);
     assert.ok(step5Match, 'reapply-patches workflow must contain a "## Step 5" section');
     const step5 = step5Match[1];
     assert.ok(
@@ -405,7 +405,7 @@ describe('reapply-patches gated hunk verification (#1999)', () => {
   test('Step 5 also halts when the Hunk Verification Table is absent (Step 4 produced nothing)', () => {
     // Independent gate: missing-table is a separate halt path from any-no-row.
     const content = fs.readFileSync(workflowPath, 'utf8');
-    const step5Match = content.match(/^##\s+Step 5[^\n]*\n([\s\S]*?)(?=^##\s|\Z)/m);
+    const step5Match = content.match(/^##\s+Step 5[^\n]*\n([\s\S]*?)(?=^##\s|Z)/m);
     assert.ok(step5Match, 'Step 5 section must exist');
     const step5 = step5Match[1];
     const handlesAbsent = /(table is absent|table is missing|missing.*table|absent.*table)/i.test(step5);

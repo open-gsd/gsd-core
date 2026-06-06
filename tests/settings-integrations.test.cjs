@@ -41,10 +41,6 @@ const WORKFLOW_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'settings-in
 const SKILL_PATH = path.join(REPO_ROOT, '.claude', 'skills', 'gsd-settings-integrations.md');
 const SETTINGS_WORKFLOW_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'settings.md');
 
-function readIfExists(p) {
-  try { return fs.readFileSync(p, 'utf-8'); } catch { return null; }
-}
-
 // ─── Artifacts ───────────────────────────────────────────────────────────────
 
 describe('#2529 artifacts', () => {

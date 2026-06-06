@@ -38,7 +38,6 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 
 const { install, getCodexSkillAdapterHeader } = require('../bin/install.js');
 const { parseFrontmatter, createTempDir, cleanup } = require('./helpers.cjs');

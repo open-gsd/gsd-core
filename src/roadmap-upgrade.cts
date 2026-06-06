@@ -27,9 +27,6 @@ const MIGRATED_PHASE_HEADING_RE = /^#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+\d+-\d{2}
 // The optional bracket-token prefix (e.g., [GSD]) must be tested before the emoji group.
 const MILESTONE_HEADING_RE = /^##\s+(?:\[[^\]]+\]\s+|Roadmap\s+|[✅🚧]\s*)?v(\d+)\.(\d+)(?:\s|:)/iu;
 
-// Matches checklist phase references: - [ ] **Phase N:** or - [x] **Phase N:**  (also decimal)
-const CHECKLIST_PHASE_RE = /^(\s*-\s*\[[ x]\]\s*\*{0,2})Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:/gi;
-
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface ParsedPhaseEntry {
@@ -197,19 +194,6 @@ function buildNewDirName(oldDirName: string, newId: string, projectCode: string 
   const newBase = slug ? `${paddedMilestone}-${subStr}-${slug}` : `${paddedMilestone}-${subStr}`;
 
   return projectCode ? `${projectCode}-${newBase}` : newBase;
-}
-
-/**
- * Read project_code from config.json if present.
- */
-function readProjectCode(configPath: string): string | null {
-  try {
-    const raw = fs.readFileSync(configPath, 'utf8');
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    return typeof parsed['project_code'] === 'string' ? parsed['project_code'] : null;
-  } catch {
-    return null;
-  }
 }
 
 // ─── computeMigrationPlan ─────────────────────────────────────────────────────

@@ -18,7 +18,6 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
@@ -33,14 +32,6 @@ const planScanLib = path.join(ROOT, 'gsd-core', 'bin', 'lib', 'plan-scan.cjs');
 // The simplest correct seam: inspect the source for the regex pattern and
 // validate with a synthetic directory that the manager path returns correct counts.
 
-// Build a temporary phase directory with the slug layout
-function makeTempPhase(files) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3128-'));
-  for (const f of files) {
-    fs.writeFileSync(path.join(dir, f), `# ${f}\n`);
-  }
-  return dir;
-}
 
 // Import countPhasePlansAndSummaries by monkey-patching: we inline the
 // fixed filter logic and verify it matches the file on disk.

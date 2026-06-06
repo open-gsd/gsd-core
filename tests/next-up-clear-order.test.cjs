@@ -17,7 +17,6 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const glob = require('path');
 
 const GSD_ROOT = path.join(__dirname, '..', 'gsd-core');
 const UI_BRAND = path.join(GSD_ROOT, 'references', 'ui-brand.md');

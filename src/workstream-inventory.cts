@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import core = require('./core.cjs');
-const { toPosixPath, readSubdirectories } = core;
+const { readSubdirectories } = core;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planScan = require('./plan-scan.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -163,7 +163,6 @@ function getOtherActiveWorkstreamInventories(cwd: string, excludeWs: string): Wo
     .filter(inventory => !isCompletedInventory(inventory.status));
 }
 
-// Re-export toPosixPath for compatibility (used by callers indirectly through core)
 export = {
   countPhaseFiles,
   countRoadmapPhases,

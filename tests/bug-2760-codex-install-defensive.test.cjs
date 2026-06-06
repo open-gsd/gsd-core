@@ -40,8 +40,6 @@ const {
   install,
   validateCodexConfigSchema,
   hasUserNamespacedAotHooks,
-  stripGsdFromCodexConfig,
-  installCodexConfig,
   parseTomlToObject,
 } = require('../bin/install.js');
 
@@ -222,7 +220,7 @@ describe('#2760 defect 3 — Hooks AoT preservation across install/uninstall/rei
 
     runCodexInstall(codexHome);
     const content = readCodexConfig(codexHome);
-    const parsed = parseTomlToObject(content);
+    parseTomlToObject(content);
 
     const hooksJsonCommands = readHooksSessionStartCommands(codexHome);
     const gsdHandlers = hooksJsonCommands.filter((cmd) => /gsd-check-update/.test(cmd));
@@ -233,7 +231,7 @@ describe('#2760 defect 3 — Hooks AoT preservation across install/uninstall/rei
     writeCodexConfig(codexHome, '');
     runCodexInstall(codexHome);
     runCodexInstall(codexHome); // second install
-    const content = readCodexConfig(codexHome);
+    readCodexConfig(codexHome);
 
     const hooksJsonCommands = readHooksSessionStartCommands(codexHome);
     const gsdHandlers = hooksJsonCommands.filter((cmd) => /gsd-check-update/.test(cmd));

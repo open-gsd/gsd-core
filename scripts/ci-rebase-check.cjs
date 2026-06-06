@@ -11,8 +11,7 @@
 // Exit 0 = merged cleanly (or merge was a no-op).
 // Exit 1 = merge conflict or fetch failure.
 
-const { execFileSync, execSync } = require('child_process');
-const path = require('path');
+const { execFileSync } = require('child_process');
 
 function run(cmd, args, opts) {
   try {
@@ -50,11 +49,9 @@ if (token && repo) {
 }
 
 // Fetch base branch with retry.
-let fetched = false;
 for (let attempt = 1; attempt <= 3; attempt++) {
   const result = run('git', ['fetch', 'origin', baseBranch]);
   if (result) {
-    fetched = true;
     break;
   }
   if (attempt === 3) {

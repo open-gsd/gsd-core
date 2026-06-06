@@ -17,7 +17,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { parseFragment, FRAGMENT_ERROR } = require('./parse.cjs');
+const { parseFragment } = require('./parse.cjs');
 const { renderChangelog } = require('./render.cjs');
 const { serializeChangelog, parseChangelog } = require('./serialize.cjs');
 const { renderGithubReleaseNotes } = require('./github-release-notes.cjs');

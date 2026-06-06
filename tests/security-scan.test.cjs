@@ -32,9 +32,9 @@
 // Migrating these to a parsed IR would add ceremony without changing
 // what is verified — the strings ARE the typed surface.
 
-const { describe, test, before, after } = require('node:test');
+const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
-const { execFileSync, execSync, spawnSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -563,7 +563,7 @@ describe('security-scan.yml workflow', () => {
   test('workflow does not use direct github context in run commands', () => {
     const content = fs.readFileSync(workflowPath, 'utf-8');
     // Extract only run: blocks and check they don't contain ${{ }}
-    const runBlocks = content.match(/run:\s*\|?\s*\n([\s\S]*?)(?=\n\s*-|\n\s*\w+:|\Z)/g) || [];
+    const runBlocks = content.match(/run:\s*\|?\s*\n([\s\S]*?)(?=\n\s*-|\n\s*\w+:|Z)/g) || [];
     for (const block of runBlocks) {
       assert.ok(
         !block.includes('${{'),

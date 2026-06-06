@@ -442,7 +442,7 @@ function resolveBaseRef() {
  * security), so every concrete match that pickAffectedTests put into `selected`
  * belongs to one of those suites and will be exercised by running all three.
  */
-function resolveRunPlan({ changedFiles, selected, widenRequired, criticalPath, noChanges }) {
+function resolveRunPlan({ changedFiles: _changedFiles, selected, widenRequired, criticalPath, noChanges }) {
   if (noChanges) {
     return { mode: 'suite', suite: 'unit' };
   }

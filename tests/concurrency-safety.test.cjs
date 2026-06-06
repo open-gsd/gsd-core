@@ -20,7 +20,6 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 
 const { normalizeContent } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
@@ -31,13 +30,6 @@ const normalizeMd = (input) => normalizeContent('test.md', input).content;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-function writeMinimalRoadmap(tmpDir, phases = ['1']) {
-  const lines = phases.map(n => `### Phase ${n}: Phase ${n} Description`).join('\n');
-  fs.writeFileSync(
-    path.join(tmpDir, '.planning', 'ROADMAP.md'),
-    `# Roadmap\n\n${lines}\n`
-  );
-}
 
 function writeMinimalStateMd(tmpDir, content) {
   const defaultContent = content || `# Session State\n\n## Current Position\n\nPhase: 1\n`;
@@ -47,22 +39,6 @@ function writeMinimalStateMd(tmpDir, content) {
   );
 }
 
-function writeMinimalProjectMd(tmpDir) {
-  const sections = ['## What This Is', '## Core Value', '## Requirements'];
-  const content = sections.map(s => `${s}\n\nContent here.\n`).join('\n');
-  fs.writeFileSync(
-    path.join(tmpDir, '.planning', 'PROJECT.md'),
-    `# Project\n\n${content}`
-  );
-}
-
-function writeValidConfigJson(tmpDir, overrides = {}) {
-  const base = { model_profile: 'balanced', commit_docs: true };
-  fs.writeFileSync(
-    path.join(tmpDir, '.planning', 'config.json'),
-    JSON.stringify({ ...base, ...overrides }, null, 2)
-  );
-}
 
 /**
  * Generate a 50-phase project structure for stress testing.

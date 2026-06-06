@@ -16,7 +16,6 @@ const {
   reconstructFrontmatter,
   spliceFrontmatter,
   parseMustHavesBlock,
-  FRONTMATTER_SCHEMAS,
 } = require('../gsd-core/bin/lib/frontmatter.cjs');
 
 // ─── extractFrontmatter ─────────────────────────────────────────────────────

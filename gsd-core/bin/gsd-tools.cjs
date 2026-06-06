@@ -298,13 +298,11 @@ async function main() {
 
   // Optional workstream override for parallel milestone work.
   // Priority: --ws flag > GSD_WORKSTREAM env var > session/shared pointer > null.
-  let ws = null;
   let workstreamContext = null;
   try {
     workstreamContext = resolveActiveWorkstream(cwd, args, process.env, {
       getStored: getActiveWorkstream,
     });
-    ws = workstreamContext.ws;
     args = workstreamContext.args;
     // Set env var so all modules (planningDir, planningPaths) auto-resolve workstream paths.
     applyResolvedWorkstreamEnv(workstreamContext, process.env);

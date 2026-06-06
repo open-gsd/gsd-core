@@ -271,7 +271,7 @@ function createHub({ cjsRegistry, manifest, logger }: HubOptions = {}): { dispat
     }
     // err variant: already has kind + typed payload
     // Double-cast through unknown to satisfy strict index-signature check.
-    return hubResult as unknown as Record<string, unknown>; // eslint-disable-line @typescript-eslint/no-unsafe-return
+    return hubResult as unknown as Record<string, unknown>;
   }
 
   /**

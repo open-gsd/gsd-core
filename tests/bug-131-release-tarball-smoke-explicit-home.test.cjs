@@ -25,7 +25,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 // The helpers under test.
-const { runNpm, isolatedNpmEnv, cleanup } = require('./helpers.cjs');
+const { isolatedNpmEnv, cleanup } = require('./helpers.cjs');
 
 // Resolve a filesystem path to its canonical (symlink-free) form even if the
 // leaf does not exist yet (e.g. ~/.npm before npm has written its cache).

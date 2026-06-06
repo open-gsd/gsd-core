@@ -19,14 +19,9 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
-const { execFileSync, execSync, spawn } = require('child_process');
-const { promisify } = require('util');
-const { exec } = require('child_process');
+const { spawn } = require('child_process');
 
 const { runGsdTools, createTempProject, cleanup, waitFor, TOOLS_PATH } = require('./helpers.cjs');
-
-const execAsync = promisify(exec);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers

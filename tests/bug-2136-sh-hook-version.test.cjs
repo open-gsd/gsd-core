@@ -45,7 +45,7 @@ const os = require('os');
 const { execFileSync } = require('child_process');
 
 const HOOKS_DIR = path.join(__dirname, '..', 'hooks');
-const CHECK_UPDATE_FILE = path.join(HOOKS_DIR, 'gsd-check-update.js');
+const _CHECK_UPDATE_FILE = path.join(HOOKS_DIR, 'gsd-check-update.js');
 const WORKER_FILE = path.join(HOOKS_DIR, 'gsd-check-update-worker.js');
 const INSTALL_SCRIPT = path.join(__dirname, '..', 'bin', 'install.js');
 const BUILD_SCRIPT = path.join(__dirname, '..', 'scripts', 'build-hooks.js');
@@ -142,11 +142,11 @@ describe('bug #2136 part 2: stale-hook detector handles bash comment syntax', ()
     // "(?:\/\/|#)" directly in source.
     const hasBashAlternative =
       src.includes('(?:\\/\\/|#)') ||     // escaped form (old template-literal style)
-      src.includes('(?:\/\/|#)');          // direct form in plain JS worker
+      src.includes('(?://|#)');          // direct form in plain JS worker
     assert.ok(
       hasBashAlternative,
       'gsd-check-update-worker.js version regex must include an alternative for bash "#" comments. ' +
-      'Expected to find (?:\\/\\/|#) or (?:\/\/|#) in the source. ' +
+      'Expected to find (?:\\/\\/|#) or (?://|#) in the source. ' +
       'The original "//" only regex causes bash hooks to always report hookVersion: "unknown"'
     );
   });

@@ -8,7 +8,7 @@
  * Tests for ROADMAP wave dependency surfacing (#2447).
  */
 
-const { test, describe, beforeEach, afterEach } = require('node:test');
+const { test, describe, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');

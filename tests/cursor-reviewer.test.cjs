@@ -29,11 +29,11 @@ describe('Cursor CLI reviewer in /gsd-review (#1960)', () => {
 
   describe('review.md workflow', () => {
     const reviewPath = path.join(ROOT, 'gsd-core', 'workflows', 'review.md');
-    let content;
+    let _content;
 
     test('review.md exists', () => {
       assert.ok(fs.existsSync(reviewPath), 'review.md should exist');
-      content = fs.readFileSync(reviewPath, 'utf-8');
+      _content = fs.readFileSync(reviewPath, 'utf-8');
     });
 
     test('contains cursor CLI detection via command -v cursor-agent', () => {
@@ -220,7 +220,6 @@ describe('Cursor CLI reviewer in /gsd-review (#1960)', () => {
     });
 
     test('mentions Cursor in the review section', () => {
-      const c = fs.readFileSync(jaPath, 'utf-8');
       assert.ok(
         /Cursor/i.test(fs.readFileSync(jaPath, 'utf-8')),
         'docs/ja-JP/FEATURES.md should mention Cursor in the review section'
@@ -254,7 +253,6 @@ describe('Cursor CLI reviewer in /gsd-review (#1960)', () => {
     });
 
     test('mentions Cursor in the review section', () => {
-      const c = fs.readFileSync(koPath, 'utf-8');
       assert.ok(
         /Cursor/i.test(fs.readFileSync(koPath, 'utf-8')),
         'docs/ko-KR/FEATURES.md should mention Cursor in the review section'

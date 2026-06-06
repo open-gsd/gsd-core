@@ -354,7 +354,6 @@ describe('stateReplaceFieldWithFallback field-miss warning', () => {
     }
     roadmapContent += '\n';
     for (let i = 1; i <= 50; i++) {
-      const pad = String(i).padStart(2, '0');
       roadmapContent += `### Phase ${i}: Feature ${i}\n\n**Goal:** Build feature ${i}\n**Plans:** 1 plans\n\n`;
     }
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), roadmapContent);

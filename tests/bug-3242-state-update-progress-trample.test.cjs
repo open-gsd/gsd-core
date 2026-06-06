@@ -104,7 +104,7 @@ describe('#3242 Bug A: body-only state.update preserves curated progress frontma
     cleanup(tmpDir);
   });
 
-  test('state.update "Last Activity" does not overwrite progress.completed_plans', (t) => {
+  test('state.update "Last Activity" does not overwrite progress.completed_plans', (_t) => {
     const statePath = path.join(tmpDir, '.planning', 'STATE.md');
     fs.writeFileSync(statePath, buildStateWithCuratedProgress({
       completedPlans: 22,
@@ -220,7 +220,7 @@ describe('#3242 Bug B: progress.percent reflects phase fraction when ROADMAP dec
     cleanup(tmpDir);
   });
 
-  test('12 declared phases / 6 realized / 6/6 plans done → percent is 50, not 100', (t) => {
+  test('12 declared phases / 6 realized / 6/6 plans done → percent is 50, not 100', (_t) => {
     const statePath = path.join(tmpDir, '.planning', 'STATE.md');
 
     // Body: 6 realized phases visible to disk scan.
@@ -273,7 +273,7 @@ describe('#3242 Bug B: progress.percent reflects phase fraction when ROADMAP dec
     );
   });
 
-  test('all phases realized: percent equals plan fraction (no artificial cap)', (t) => {
+  test('all phases realized: percent equals plan fraction (no artificial cap)', (_t) => {
     const statePath = path.join(tmpDir, '.planning', 'STATE.md');
 
     fs.writeFileSync(statePath, [
