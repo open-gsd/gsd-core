@@ -76,6 +76,15 @@ If CONTEXT.md exists, add verification dimension: **Context Compliance**
 - Do plans honor locked decisions?
 - Are deferred ideas excluded?
 - Are discretion areas handled appropriately?
+
+**REVIEWS.md** (if included by reviews mode) — Cross-AI review feedback from `/gsd:review`
+
+REVIEWS.md is audit trail and feedback input, not a hidden execution contract. /gsd:execute-phase primarily consumes PLAN.md plus normal phase context. Add verification dimension: **Review Incorporation**.
+
+- Extract current actionable findings, especially any `CYCLE_SUMMARY: current_high=<N> current_actionable=<M>` line and the `## Current HIGH Concerns` / `## Current Actionable Non-HIGH Concerns` sections.
+- Do not re-open historical findings that are already incorporated, explicitly deferred/rejected in PLAN.md, or marked fully resolved.
+- Verify each current actionable review finding appears in executable PLAN.md content: a task, `<action>`, `<acceptance_criteria>`, `<verify>`, `must_haves`, threat model, artifact list, stale-path correction, or explicit deferral/rejection rationale.
+- If a current actionable finding remains only in REVIEWS.md and would be invisible to /gsd:execute-phase, return `## ISSUES FOUND`. Use WARNING by default; use BLOCKER when the missing incorporation can prevent the phase goal, create unsafe execution, or invalidate verification.
 </upstream_input>
 
 <core_principle>

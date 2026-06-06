@@ -4,7 +4,7 @@
  * Validates that the command source and workflow contain the key structural
  * elements required for correct cross-AI plan convergence loop behavior:
  * initial planning gate, review agent spawning, CYCLE_SUMMARY contract for
- * HIGH count extraction, stall detection, escalation gate, and STATE.md update
+ * unresolved review count extraction, stall detection, escalation gate, and STATE.md update
  * on convergence.
  *
  * v2 additions (#2306-v2):
@@ -15,6 +15,11 @@
  * - PARTIALLY RESOLVED / FULLY RESOLVED definitions in contract
  * - HIGH_LINES validation warning when HIGH_COUNT > 0 but section absent
  * - Success criteria updated to reflect CYCLE_SUMMARY parsing
+ *
+ * v3 additions (#724):
+ * - CYCLE_SUMMARY includes current_actionable for unresolved actionable MEDIUM/LOW findings
+ * - convergence requires HIGH_COUNT == 0 and ACTIONABLE_COUNT == 0
+ * - reviews-mode planner/checker prompts require REVIEWS.md feedback to land in PLAN.md
  */
 
 // allow-test-rule: source-text-is-the-product
@@ -30,6 +35,9 @@ const path = require('path');
 const COMMAND_PATH = path.join(__dirname, '..', 'commands', 'gsd', 'plan-review-convergence.md');
 const WORKFLOW_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-review-convergence.md');
 const CONFIG_DOC_PATH = path.join(__dirname, '..', 'docs', 'CONFIGURATION.md');
+const PLAN_PHASE_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-phase.md');
+const PLANNER_REVIEWS_PATH = path.join(__dirname, '..', 'gsd-core', 'references', 'planner-reviews.md');
+const PLAN_CHECKER_PATH = path.join(__dirname, '..', 'agents', 'gsd-plan-checker.md');
 
 // ─── Command source ────────────────────────────────────────────────────────
 
@@ -213,10 +221,10 @@ describe('plan-review-convergence workflow: convergence loop (#2306)', () => {
     );
   });
 
-  test('workflow extracts HIGH count from CYCLE_SUMMARY contract, NOT from grepping REVIEWS.md', () => {
+  test('workflow extracts HIGH and actionable counts from CYCLE_SUMMARY contract, NOT from grepping REVIEWS.md', () => {
     // Critical regression guard: REVIEWS.md accumulates history across cycles;
     // resolved HIGHs from cycle N remain in the file during cycle N+1 as audit trail,
-    // inflating raw grep counts and causing false stalls. HIGH count must come from
+    // inflating raw grep counts and causing false stalls. Counts must come from
     // the review agent's CYCLE_SUMMARY return message, not from the file.
     assert.ok(
       workflow.includes('CYCLE_SUMMARY'),
@@ -225,6 +233,10 @@ describe('plan-review-convergence workflow: convergence loop (#2306)', () => {
     assert.ok(
       workflow.includes('current_high'),
       'workflow must parse current_high from CYCLE_SUMMARY line'
+    );
+    assert.ok(
+      workflow.includes('ACTIONABLE_COUNT') && workflow.includes('current_actionable'),
+      'workflow must parse current_actionable from CYCLE_SUMMARY line (#724)'
     );
   });
 
@@ -245,6 +257,13 @@ describe('plan-review-convergence workflow: convergence loop (#2306)', () => {
     );
   });
 
+  test('workflow fails closed when current_actionable is missing or malformed', () => {
+    assert.ok(
+      workflow.includes('current_actionable is missing or malformed'),
+      'missing or malformed current_actionable must abort instead of silently treating actionable findings as zero (#724)'
+    );
+  });
+
   test('review agent spawn forwards --ws via GSD_WS (symmetric with replan agent)', () => {
     // Critical correctness bug: if GSD_WS is not forwarded to the review agent,
     // the review reads from the wrong workspace while replanning reads from the correct one.
@@ -257,12 +276,14 @@ describe('plan-review-convergence workflow: convergence loop (#2306)', () => {
     );
   });
 
-  test('workflow exits loop when HIGH_COUNT == 0 (converged)', () => {
+  test('workflow exits loop only when HIGH_COUNT and ACTIONABLE_COUNT are zero', () => {
     assert.ok(
-      workflow.includes('HIGH_COUNT == 0') ||
-      workflow.includes('HIGH_COUNT === 0') ||
-      workflow.includes('converged'),
-      'workflow must exit the loop when no HIGH concerns remain'
+      workflow.includes('HIGH_COUNT == 0 and ACTIONABLE_COUNT == 0'),
+      'workflow must require both HIGH_COUNT and ACTIONABLE_COUNT to be zero before convergence (#724)'
+    );
+    assert.ok(
+      workflow.includes('If HIGH_COUNT > 0 or ACTIONABLE_COUNT > 0'),
+      'current_high=0 with current_actionable>0 must continue to replan/escalation instead of converging (#724)'
     );
   });
 
@@ -293,10 +314,10 @@ describe('plan-review-convergence workflow: convergence loop (#2306)', () => {
 describe('plan-review-convergence workflow: CYCLE_SUMMARY contract definition (#2306-v2)', () => {
   const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf8');
 
-  test('review agent prompt defines CYCLE_SUMMARY: current_high=<N> format', () => {
+  test('review agent prompt defines CYCLE_SUMMARY current_high/current_actionable format', () => {
     assert.ok(
-      workflow.includes('CYCLE_SUMMARY: current_high='),
-      'review agent spawn prompt must define the CYCLE_SUMMARY: current_high=<N> output format (#2306-v2)'
+      workflow.includes('CYCLE_SUMMARY: current_high=<N> current_actionable=<M>'),
+      'review agent spawn prompt must define the CYCLE_SUMMARY current_high/current_actionable output format (#724)'
     );
   });
 
@@ -320,6 +341,13 @@ describe('plan-review-convergence workflow: CYCLE_SUMMARY contract definition (#
       'review agent must provide ## Current HIGH Concerns section so escalation gate can show specific issues (#2306-v2)'
     );
   });
+
+  test('CYCLE_SUMMARY contract defines ACTIONABLE non-HIGH findings and requires their section', () => {
+    assert.ok(
+      workflow.includes('ACTIONABLE') && workflow.includes('Current Actionable Non-HIGH Concerns'),
+      'review agent must define actionable non-HIGH findings and list current unresolved actionable items (#724)'
+    );
+  });
 });
 
 // ─── Workflow: HIGH_LINES validation ──────────────────────────────────────
@@ -335,6 +363,14 @@ describe('plan-review-convergence workflow: HIGH_LINES validation (#2306-v2)', (
       'workflow must warn when HIGH_COUNT > 0 but HIGH_LINES is empty (contract partially violated) (#2306-v2)'
     );
   });
+
+  test('workflow warns when ACTIONABLE_COUNT > 0 but actionable section is absent', () => {
+    assert.ok(
+      workflow.includes('ACTIONABLE_LINES') &&
+      workflow.includes('Current Actionable Non-HIGH Concerns'),
+      'workflow must warn when ACTIONABLE_COUNT > 0 but actionable details are empty (#724)'
+    );
+  });
 });
 
 // ─── Workflow: stall detection ─────────────────────────────────────────────
@@ -342,17 +378,17 @@ describe('plan-review-convergence workflow: HIGH_LINES validation (#2306-v2)', (
 describe('plan-review-convergence workflow: stall detection (#2306)', () => {
   const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf8');
 
-  test('workflow tracks previous HIGH count to detect stalls', () => {
+  test('workflow tracks previous unresolved count to detect stalls', () => {
     assert.ok(
-      workflow.includes('prev_high_count') || workflow.includes('prev_HIGH'),
-      'workflow must track the previous cycle HIGH count for stall detection'
+      workflow.includes('prev_unresolved_count'),
+      'workflow must track the previous total unresolved review count for stall detection (#724)'
     );
   });
 
-  test('workflow warns when HIGH count is not decreasing', () => {
+  test('workflow warns when unresolved count is not decreasing', () => {
     assert.ok(
       workflow.includes('stall') || workflow.includes('Stall') || workflow.includes('not decreasing'),
-      'workflow must warn user when HIGH count is not decreasing between cycles'
+      'workflow must warn user when unresolved review count is not decreasing between cycles'
     );
   });
 });
@@ -397,20 +433,19 @@ describe('plan-review-convergence workflow: escalation gate (#2306)', () => {
 describe('plan-review-convergence workflow: stall detection behavioral (#2306)', () => {
   const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf8');
 
-  test('workflow surfaces stall warning when prev_high_count equals current HIGH_COUNT', () => {
+  test('workflow surfaces stall warning when unresolved count stops decreasing', () => {
     assert.ok(
-      workflow.includes('prev_high_count') || workflow.includes('prev_HIGH'),
-      'workflow must track prev_high_count across cycles'
+      workflow.includes('prev_unresolved_count'),
+      'workflow must track prev_unresolved_count across cycles (#724)'
     );
     assert.ok(
-      workflow.includes('HIGH_COUNT >= prev_high_count') ||
-      workflow.includes('HIGH_COUNT >= prev_HIGH') ||
+      workflow.includes('UNRESOLVED_COUNT >= prev_unresolved_count') ||
       workflow.includes('not decreasing'),
-      'workflow must compare current HIGH count against previous to detect stall'
+      'workflow must compare current unresolved count against previous to detect stall (#724)'
     );
     assert.ok(
       workflow.includes('stall') || workflow.includes('Stall') || workflow.includes('not decreasing'),
-      'workflow must emit a stall warning when HIGH count is not decreasing'
+      'workflow must emit a stall warning when unresolved review count is not decreasing'
     );
   });
 });
@@ -429,9 +464,10 @@ describe('plan-review-convergence workflow: --max-cycles 1 immediate escalation 
     );
     assert.ok(
       workflow.includes('HIGH_COUNT > 0') ||
+      workflow.includes('ACTIONABLE_COUNT > 0') ||
       workflow.includes('HIGH concerns remain') ||
       workflow.includes('Proceed anyway'),
-      'escalation gate must be reachable when HIGH_COUNT > 0 after a single cycle'
+      'escalation gate must be reachable when unresolved findings remain after a single cycle'
     );
   });
 });
@@ -461,11 +497,12 @@ describe('plan-review-convergence workflow: artifact verification (#2306)', () =
 describe('plan-review-convergence workflow: success criteria (#2306-v2)', () => {
   const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf8');
 
-  test('success criteria references CYCLE_SUMMARY parsing, not grep HIGHs', () => {
+  test('success criteria references CYCLE_SUMMARY parsing, not grep findings', () => {
     const successBlock = workflow.slice(workflow.lastIndexOf('<success_criteria>'));
     assert.ok(
-      successBlock.includes('CYCLE_SUMMARY') || successBlock.includes('parse'),
-      'success_criteria must reflect that orchestrator parses CYCLE_SUMMARY, not greps REVIEWS.md (#2306-v2)'
+      (successBlock.includes('CYCLE_SUMMARY') || successBlock.includes('parse')) &&
+        successBlock.includes('actionable non-HIGH'),
+      'success_criteria must reflect that orchestrator parses HIGH and actionable CYCLE_SUMMARY counts, not greps REVIEWS.md (#724)'
     );
     assert.ok(
       !successBlock.includes('grep HIGHs'),
@@ -507,6 +544,58 @@ describe('plan-review-convergence CONFIGURATION.md documentation (#2306-v2)', ()
     assert.ok(
       row[0].includes('false') || row[0].includes('disabled'),
       'CONFIGURATION.md entry must document that the feature defaults to false (disabled by default) (#2306-v2)'
+    );
+  });
+});
+
+// ─── Reviews-mode incorporation contract (#724) ────────────────────────────
+
+describe('plan-review-convergence reviews-mode incorporation contract (#724)', () => {
+  const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+  const planPhase = fs.readFileSync(PLAN_PHASE_PATH, 'utf8');
+  const plannerReviews = fs.readFileSync(PLANNER_REVIEWS_PATH, 'utf8');
+  const planChecker = fs.readFileSync(PLAN_CHECKER_PATH, 'utf8');
+
+  test('workflow replans while actionable non-HIGH findings remain', () => {
+    assert.ok(
+      workflow.includes('Actionable MEDIUM/LOW findings must be incorporated into executable PLAN.md content'),
+      'replan agent prompt must route actionable non-HIGH findings back through plan-phase --reviews (#724)'
+    );
+  });
+
+  test('plan-phase planner prompt says REVIEWS.md is feedback input, not the execution contract', () => {
+    assert.ok(
+      planPhase.includes('<review_incorporation_contract>') &&
+        planPhase.includes('REVIEWS.md is feedback input') &&
+        planPhase.includes('/gsd:execute-phase primarily consumes PLAN.md'),
+      'planner prompt must explain that actionable review feedback must land in PLAN.md for execute-phase (#724)'
+    );
+  });
+
+  test('plan-phase checker prompt reads REVIEWS.md in reviews mode and fails hidden actionable findings', () => {
+    assert.ok(
+      planPhase.includes('{reviews_path}') &&
+        planPhase.includes('<review_incorporation_verification>') &&
+        planPhase.includes('return `## ISSUES FOUND`'),
+      'checker prompt must read REVIEWS.md and fail if actionable findings remain only there (#724)'
+    );
+  });
+
+  test('planner reviews reference requires actionable findings to appear in PLAN.md or be deferred there', () => {
+    assert.ok(
+      plannerReviews.includes('/gsd:execute-phase primarily consumes PLAN.md') &&
+        plannerReviews.includes('Every current actionable review finding') &&
+        plannerReviews.includes('deferral/rejection rationale in that PLAN.md'),
+      'planner reviews reference must keep REVIEWS.md from becoming a hidden execution contract (#724)'
+    );
+  });
+
+  test('gsd-plan-checker has a Review Incorporation dimension for reviews mode', () => {
+    assert.ok(
+      planChecker.includes('Review Incorporation') &&
+        planChecker.includes('current_actionable=<M>') &&
+        planChecker.includes('remains only in REVIEWS.md'),
+      'plan checker must validate review incorporation when REVIEWS.md is present (#724)'
     );
   });
 });

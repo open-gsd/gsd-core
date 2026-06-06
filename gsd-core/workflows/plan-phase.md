@@ -934,7 +934,7 @@ Planner prompt:
 - {PATTERNS_PATH} (Pattern Map — analog files and code excerpts, if exists)
 - {verification_path} (Verification Gaps - if --gaps)
 - {uat_path} (UAT Gaps - if --gaps)
-- {reviews_path} (Cross-AI Review Feedback - if --reviews)
+- {reviews_path} (Cross-AI Review Feedback - if --reviews; actionable findings must be incorporated or explicitly deferred/rejected in PLAN.md)
 - {UI_SPEC_PATH} (UI Design Contract — visual/interaction specs, if exists)
 - {SPIKE_FINDINGS_PATH} (Spike Findings — validated patterns, constraints, landmines from experiments, if exists)
 - {SKETCH_FINDINGS_PATH} (Sketch Findings — validated design decisions, CSS patterns, visual direction, if exists)
@@ -954,6 +954,16 @@ ${API_SURFACE_PATH ? `
 </intel_surface_hint>
 ` : ''}
 ${AGENT_SKILLS_PLANNER}
+
+<review_incorporation_contract>
+**If Mode is reviews:** REVIEWS.md is feedback input, not a hidden execution contract. /gsd:execute-phase primarily consumes PLAN.md plus the normal phase context, so every current actionable review finding must become visible in the relevant PLAN.md before planning can pass.
+
+For each current actionable finding in REVIEWS.md, the planner MUST either:
+- incorporate it into a PLAN.md task, `<action>`, `<acceptance_criteria>`, `<verify>`, `must_haves`, threat model, or artifact list; or
+- explicitly document a deferral/rejection rationale in the relevant PLAN.md so the executor and reviewer can see the decision.
+
+Historical findings already incorporated, explicitly deferred/rejected in PLAN.md, or marked fully resolved do not require new plan changes.
+</review_incorporation_contract>
 
 **Phase requirement IDs (every ID MUST appear in a plan's `requirements` field):** {phase_req_ids}
 
@@ -1280,9 +1290,16 @@ Checker prompt:
 - {requirements_path} (Requirements)
 - {context_path} (USER DECISIONS from /gsd:discuss-phase)
 - {research_path} (Technical Research — includes Validation Architecture)
+- {reviews_path} (Cross-AI Review Feedback - if --reviews; verify actionable findings are represented in PLAN.md)
 </files_to_read>
 
 ${AGENT_SKILLS_CHECKER}
+
+<review_incorporation_verification>
+**If Mode is reviews:** Read REVIEWS.md and verify each current actionable review finding is visible in executable PLAN.md content or explicitly deferred/rejected in the relevant PLAN.md. A finding remains actionable if it requires a concrete plan task, `<action>`, `<acceptance_criteria>`, `<verify>`, `must_haves`, threat-model item, stale-path correction, or execution contract change before /gsd:execute-phase runs.
+
+If an actionable finding remains only in REVIEWS.md and would be invisible to /gsd:execute-phase, return `## ISSUES FOUND`. Use WARNING by default; use BLOCKER when the missing incorporation can prevent the phase goal, create unsafe execution, or invalidate verification.
+</review_incorporation_verification>
 
 **Phase requirement IDs (MUST ALL be covered):** {phase_req_ids}
 

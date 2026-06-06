@@ -205,7 +205,7 @@ See [Package Legitimacy Gate in the User Guide](USER-GUIDE.md#package-legitimacy
 
 ### `/gsd-plan-review-convergence`
 
-Cross-AI plan convergence loop — replan with review feedback until no HIGH concerns remain. Runs `plan-phase → review → replan → re-review` cycles (max 3 cycles by default). Spawns isolated agents for planning and review; orchestrator handles loop control, HIGH-concern counting, stall detection, and escalation.
+Cross-AI plan convergence loop — replan with review feedback until no HIGH concerns remain and no actionable MEDIUM/LOW findings remain outside `PLAN.md`. Runs `plan-phase → review → replan → re-review` cycles (max 3 cycles by default). Spawns isolated agents for planning and review; orchestrator handles loop control, unresolved review counting, stall detection, and escalation.
 
 | Argument / Flag | Required | Description |
 |-----------------|----------|-------------|
@@ -214,7 +214,7 @@ Cross-AI plan convergence loop — replan with review feedback until no HIGH con
 | `--all` | No | Run every configured reviewer in parallel |
 | `--max-cycles N` | No | Override cycle cap (default 3) |
 
-**Exit behavior:** Loop exits when HIGH count hits zero. Stall detection warns when HIGH count is not decreasing across cycles. Escalation gate asks the user to proceed or review manually when `--max-cycles` is hit with HIGH concerns still open.
+**Exit behavior:** Loop exits when both `current_high` and `current_actionable` hit zero. Stall detection warns when the total unresolved review count is not decreasing across cycles. Escalation gate asks the user to proceed or review manually when `--max-cycles` is hit with HIGH or actionable non-HIGH concerns still open.
 
 ```bash
 /gsd-plan-review-convergence 3                    # Default reviewers, 3 cycles
