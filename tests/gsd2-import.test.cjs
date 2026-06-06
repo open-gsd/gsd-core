@@ -4,14 +4,13 @@
 // Reads .md/.json/.yml product files whose deployed text IS what the
 // runtime loads — testing text content tests the deployed contract.
 
-const { describe, it, test, beforeEach, afterEach } = require('node:test');
+const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createTempDir, cleanup, runGsdTools } = require('./helpers.cjs');
 
 const {
-  findGsd2Root,
   parseSlicesFromRoadmap,
   parseMilestoneTitle,
   parseTaskTitle,

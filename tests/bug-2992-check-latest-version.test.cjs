@@ -1,10 +1,9 @@
 'use strict';
 process.env.GSD_TEST_MODE = '1';
 
-const { test, describe, before, after } = require('node:test');
+const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const cp = require('node:child_process');
 
 const ROOT = path.join(__dirname, '..');
 const { checkLatestVersion, CHECK_REASON, PACKAGE_NAME } = require(

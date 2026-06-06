@@ -96,9 +96,6 @@ function removeResolverLines(lines, preamble) {
   const result = [];
   let i = 0;
 
-  // Build a set of preamble lines for fast lookup (to strip previously-inserted preambles)
-  const preambleLineSet = new Set(preamble);
-
   while (i < lines.length) {
     const line = lines[i];
     const trimmed = line.trim();

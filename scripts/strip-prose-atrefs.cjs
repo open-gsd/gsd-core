@@ -30,7 +30,7 @@ const DRY_RUN      = process.argv.includes('--dry-run');
 const ROOT         = path.join(__dirname, '..');
 const COMMANDS_DIR = path.join(ROOT, 'commands', 'gsd');
 
-const AT_PATH_PATTERN = /@(?:~|\$HOME)\/.+?gsd-core\/[^\s`\)]+/;
+const AT_PATH_PATTERN = /@(?:~|\$HOME)\/.+?gsd-core\/[^\s`)]+/;
 const mkAtRe = () => new RegExp(AT_PATH_PATTERN.source, 'g');
 
 function transformLine(line) {

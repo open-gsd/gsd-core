@@ -21,19 +21,9 @@ const fs = require('fs');
 const path = require('path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 
-const REPO_ROOT = path.join(__dirname, '..');
-
 describe('bug #3739 — gap-analysis padded-prefix CONTEXT.md', () => {
   let tmpDir;
   let phaseDir;
-
-  function writeRequirements(ids) {
-    const lines = ids.map((id, i) => `- [ ] **${id}** Requirement ${i + 1}`);
-    fs.writeFileSync(
-      path.join(tmpDir, '.planning', 'REQUIREMENTS.md'),
-      `# Requirements\n\n${lines.join('\n')}\n`
-    );
-  }
 
   function writeContextAs(filename, decisions) {
     const dLines = decisions.map(d => `- **${d.id}:** ${d.text}`).join('\n');

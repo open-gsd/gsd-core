@@ -27,7 +27,6 @@ const {
   getGlobalConfigDir,
   getGlobalSkillsBase,
   getGlobalSkillDir,
-  getGlobalSkillDisplayPath,
 } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'runtime-homes.cjs'));
 
 // Helper: run fn with an env var temporarily set

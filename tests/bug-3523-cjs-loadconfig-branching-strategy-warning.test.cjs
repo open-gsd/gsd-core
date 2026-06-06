@@ -31,7 +31,7 @@
  * "no warning" pattern from #2687).
  */
 
-const { describe, test, afterEach, before } = require('node:test');
+const { describe, test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');

@@ -9,7 +9,6 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 const { execSync } = require('child_process');
 const { runGsdTools, createTempProject, createTempDir, cleanup } = require('./helpers.cjs');
 const { detectChildRepos } = require('../gsd-core/bin/lib/init.cjs');
@@ -328,7 +327,7 @@ describe('workspace command files', () => {
   function parseCommandFile(filePath) {
     // Strip UTF-8 BOM if present (some editors inject on save under Windows);
     // a BOM byte at offset 0 defeats the ^--- anchor, making fmMatch null.
-    const raw = fs.readFileSync(filePath, 'utf8').replace(/^﻿/, '');
+    const raw = fs.readFileSync(filePath, 'utf8').replace(/^\ufeff/, '');
     const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
     assert.ok(fmMatch, `${path.basename(filePath)} must start with a YAML frontmatter block`);
     const fm = {};

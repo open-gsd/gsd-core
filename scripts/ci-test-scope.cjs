@@ -3,7 +3,6 @@
 
 const { execFileSync } = require('child_process');
 const { existsSync, readdirSync, appendFileSync } = require('fs');
-const { join } = require('path');
 
 const RULES = [
   {

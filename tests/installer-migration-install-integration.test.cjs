@@ -174,14 +174,6 @@ function assertHasGsdDirectory(root, relPath) {
   );
 }
 
-function assertNoGsdDirectoryEntries(root, relPath) {
-  assert.equal(
-    listDirNames(root, relPath).some((name) => name.startsWith('gsd-')),
-    false,
-    `${relPath} should not contain generated GSD entries`
-  );
-}
-
 function assertFreshInstallContract(runtime, targetDir) {
   const contract = RUNTIME_INSTALL_CONTRACTS[runtime];
   assert.ok(contract, `missing runtime install contract for ${runtime}`);

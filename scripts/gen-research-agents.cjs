@@ -133,7 +133,7 @@ function checkAgent(profile) {
     return ['agent file not found: ' + agentPath];
   }
 
-  const { fields, body } = parseAgentFile(agentPath);
+  const { fields } = parseAgentFile(agentPath);
   const fullContent = fs.readFileSync(agentPath, 'utf8');
 
   // (a) frontmatter fields

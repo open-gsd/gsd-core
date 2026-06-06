@@ -891,8 +891,6 @@ describe('Copilot content conversion - engine files', () => {
 // ─── Copilot instructions merge/strip ──────────────────────────────────────────
 
 describe('Copilot instructions merge/strip', () => {
-  let tmpDir;
-
   const gsdContent = '- Follow project conventions\n- Use structured workflows';
 
   function makeGsdBlock(content) {
@@ -1127,7 +1125,7 @@ describe('Copilot manifest and patches fixes', () => {
     fs.mkdirSync(skillDir, { recursive: true });
     fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# Test Skill\n\nA test skill.');
 
-    const manifest = writeManifest(tmpDir, 'copilot');
+    writeManifest(tmpDir, 'copilot');
 
     // Check manifest file was written
     const manifestPath = path.join(tmpDir, 'gsd-file-manifest.json');

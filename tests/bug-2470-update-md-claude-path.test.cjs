@@ -35,7 +35,7 @@ describe('update.md — no bare ~.claude path references (#2470)', () => {
     assert.strictEqual(
       matches,
       null,
-      `update.md must not contain bare ~/\.claude (without trailing slash) — installer scanner flags these as unresolved path refs: ${JSON.stringify(matches)}`
+      `update.md must not contain bare ~/.claude (without trailing slash) — installer scanner flags these as unresolved path refs: ${JSON.stringify(matches)}`
     );
   });
 });

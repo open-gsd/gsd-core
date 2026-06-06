@@ -29,7 +29,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const { scanForInjection, INJECTION_PATTERNS } = require('../gsd-core/bin/lib/security.cjs');
+const { scanForInjection } = require('../gsd-core/bin/lib/security.cjs');
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
