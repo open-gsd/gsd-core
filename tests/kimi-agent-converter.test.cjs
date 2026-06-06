@@ -65,6 +65,11 @@ describe('buildKimiAgentArtifacts', () => {
     assert.ok(result.root.yaml.includes('system_prompt_path: ./gsd.md'), 'root prompt path is relative');
     assert.ok(result.root.yaml.includes('tools:'), 'root YAML has a tools field');
     assert.ok(result.root.yaml.includes('kimi_cli.tools.agent:Agent'), 'root can call Kimi subagents');
+    assert.ok(
+      result.root.yaml.includes('kimi_cli.tools.agent:Agent'),
+      'root tools use Kimi module paths'
+    );
+    assert.ok(!result.root.yaml.includes('- Agent'), 'root YAML does not emit raw Claude Agent tool');
     assert.ok(result.root.yaml.includes('subagents:'), 'root YAML declares custom subagents');
     assert.ok(result.root.yaml.includes('gsd-executor:'), 'known GSD subagent key is canonical');
     assert.ok(
@@ -89,6 +94,15 @@ describe('buildKimiAgentArtifacts', () => {
     assert.equal(executor.yamlPath, 'agents/subagents/gsd-executor.yaml');
     assert.equal(executor.promptPath, 'agents/subagents/gsd-executor.md');
     assert.ok(executor.yaml.includes('system_prompt_path: ./gsd-executor.md'));
+    assert.ok(executor.yaml.includes('kimi_cli.tools.file:ReadFile'), 'Read maps to Kimi file tool');
+    assert.ok(executor.yaml.includes('kimi_cli.tools.file:WriteFile'), 'Write maps to Kimi file tool');
+    assert.ok(executor.yaml.includes('kimi_cli.tools.file:StrReplaceFile'), 'Edit maps to Kimi file tool');
+    assert.ok(executor.yaml.includes('kimi_cli.tools.shell:Shell'), 'Bash maps to Kimi shell tool');
+    assert.ok(executor.yaml.includes('kimi_cli.tools.file:Grep'), 'Grep maps to Kimi grep tool');
+    assert.ok(executor.yaml.includes('kimi_cli.tools.file:Glob'), 'Glob maps to Kimi glob tool');
+    assert.ok(!executor.yaml.includes('- Read'), 'subagent YAML does not emit raw Claude Read tool');
+    assert.ok(!executor.yaml.includes('- Bash'), 'subagent YAML does not emit raw Claude Bash tool');
+    assert.ok(!executor.yaml.includes('kimi_cli.tools.agent:Agent'), 'subagent does not inherit nested Agent tool');
 
     for (const prompt of [result.root.prompt, executor.prompt]) {
       assert.ok(!prompt.trimStart().startsWith('---'), 'source frontmatter is removed');
@@ -128,8 +142,16 @@ describe('buildKimiAgentArtifacts', () => {
       'MCP-managed tools are diagnosed and excluded'
     );
     assert.ok(
+      result.diagnostics.some((item) => item.reason === 'mcp_managed'),
+      'MCP diagnostics expose mapper reason'
+    );
+    assert.ok(
       result.diagnostics.some((item) => item.code === 'kimi_unsupported_tool'),
       'unsupported tools are diagnosed and excluded'
+    );
+    assert.ok(
+      result.diagnostics.some((item) => item.reason === 'unsupported_tool'),
+      'unsupported diagnostics expose mapper reason'
     );
     assert.ok(!result.root.yaml.includes('mcp__github__search'), 'MCP tool names are not emitted');
     assert.ok(!result.root.yaml.includes('DefinitelyUnknownTool'), 'unsupported tool names are not emitted');
