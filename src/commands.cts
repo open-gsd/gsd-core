@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execGit, platformWriteSync, platformReadSync, platformEnsureDir } from './shell-command-projection.cjs';
+import { requireSafePath, sanitizeForDisplay } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import core = require('./core.cjs');
 const {
@@ -191,6 +192,97 @@ function cmdListTodos(cwd: string, area: string | undefined, raw: boolean): void
 
   const result = { count, todos };
   output(result, raw, count.toString());
+}
+
+/**
+ * List captured seeds from .planning/seeds/SEED-*.md for browsing/audit (#441).
+ *
+ * Unlike audit.scanSeeds (which returns only *unimplemented* seeds for the
+ * milestone surface), this lists seeds of every status with the richer fields a
+ * human audit needs (scope, trigger, planted date). An optional case-insensitive
+ * status filter narrows the set. Seed content is user-controlled, so every
+ * displayed field is passed through sanitizeForDisplay and each file path is
+ * validated with requireSafePath before reading. Read-only — never mutates.
+ */
+function cmdListSeeds(cwd: string, statusFilter: string | undefined, raw: boolean): void {
+  const planDir = planningDir(cwd);
+  const seedsDir = path.join(planDir, 'seeds');
+  const wantStatus = statusFilter ? statusFilter.trim().toLowerCase() : null;
+
+  const seeds: Array<{
+    seed_id: string; slug: string; status: string; scope: string;
+    trigger_when: string; planted: string; title: string; path: string;
+  }> = [];
+  const summary: Record<string, number> = {};
+
+  let files: fs.Dirent[];
+  try {
+    files = fs.readdirSync(seedsDir, { withFileTypes: true });
+  } catch {
+    // No seeds dir (or unreadable) — an empty, non-error result. The seed dir is
+    // created lazily by the first plant-seed, so absence is the normal zero case.
+    output({ count: 0, seeds: [], summary: {} }, raw, '0');
+    return;
+  }
+
+  for (const entry of files) {
+    if (!entry.isFile()) continue;
+    if (!entry.name.startsWith('SEED-') || !entry.name.endsWith('.md')) continue;
+
+    let safeFilePath: string;
+    try {
+      safeFilePath = requireSafePath(path.join(seedsDir, entry.name), planDir, 'seed file', { allowAbsolute: true });
+    } catch {
+      continue;
+    }
+    const content = platformReadSync(safeFilePath);
+    if (content === null) continue;
+
+    const fm = extractFrontmatter(content) as Record<string, unknown>;
+    const status = (((fm.status as string) || 'dormant').toLowerCase()).trim() || 'dormant';
+
+    if (wantStatus && sanitizeForDisplay(status) !== wantStatus) continue;
+
+    // Canonical seed id is `SEED-NNN` (frontmatter `id:`, e.g. SEED-001). Fall
+    // back to the numeric prefix of the filename, then to the whole stem. The
+    // descriptive remainder of the filename (`SEED-NNN-<slug>.md`) is the slug.
+    const stem = path.basename(entry.name, '.md');
+    const fmId = typeof fm.id === 'string' ? fm.id.trim() : '';
+    let seedId: string;
+    if (/^SEED-\d+$/i.test(fmId)) {
+      seedId = fmId;
+    } else {
+      const numMatch = stem.match(/^(SEED-\d+)/i);
+      seedId = numMatch ? numMatch[1] : stem;
+    }
+    const slugMatch = stem.match(/^SEED-\d+-(.+)$/i);
+    const slug = slugMatch ? slugMatch[1] : stem.replace(/^SEED-/i, '');
+
+    let title = sanitizeForDisplay(fm.title || '');
+    if (!title) {
+      const headingMatch = content.match(/^#\s*(.+)$/m);
+      if (headingMatch) title = sanitizeForDisplay(headingMatch[1].trim().slice(0, 100));
+    }
+
+    const safeStatus = sanitizeForDisplay(status);
+    summary[safeStatus] = (summary[safeStatus] || 0) + 1;
+
+    seeds.push({
+      seed_id: sanitizeForDisplay(seedId),
+      slug: sanitizeForDisplay(slug),
+      status: safeStatus,
+      scope: sanitizeForDisplay(fm.scope || 'unknown'),
+      trigger_when: sanitizeForDisplay(fm.trigger_when || ''),
+      planted: sanitizeForDisplay(fm.planted || ''),
+      title,
+      path: toPosixPath(path.relative(cwd, safeFilePath)),
+    });
+  }
+
+  // Stable order: by seed_id so output is deterministic across filesystems.
+  seeds.sort((a, b) => a.seed_id.localeCompare(b.seed_id));
+
+  output({ count: seeds.length, seeds, summary }, raw, seeds.length.toString());
 }
 
 function cmdVerifyPathExists(cwd: string, targetPath: string | undefined, raw: boolean): void {
@@ -1396,6 +1488,7 @@ export = {
   cmdGenerateSlug,
   cmdCurrentTimestamp,
   cmdListTodos,
+  cmdListSeeds,
   cmdVerifyPathExists,
   cmdHistoryDigest,
   cmdResolveModel,
