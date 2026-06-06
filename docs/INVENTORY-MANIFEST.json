@@ -145,6 +145,7 @@
       "ingest-docs.md",
       "insert-phase.md",
       "list-phase-assumptions.md",
+      "list-seeds.md",
       "list-workspaces.md",
       "manager.md",
       "map-codebase.md",
