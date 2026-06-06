@@ -23,7 +23,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { convertClaudeCommandToCodexSkill } = require('../bin/install.js');
+const {
+  convertClaudeCommandToCodexSkill,
+  convertSlashCommandsToCodexSkillMentions,
+} = require('../bin/install.js');
 
 // The canonical launcher snippet path that was being corrupted
 const RUNTIME_ROOT_PATH = '${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}';
@@ -148,11 +151,10 @@ describe('#704 — Codex global install launcher path corruption', () => {
     // Walk gsd-core/workflows/ and assert that no file produces $gsd-core
     // inside a shell variable expansion context after Codex conversion.
     //
-    // NOTE: The regex `/(?<![a-zA-Z0-9./}])\/gsd-/` still converts backtick-
-    // wrapped prose paths like `\`/gsd-core/workflows/update.md\`` (a pre-existing
-    // issue separate from #704 — update.md's backtick is not in the lookbehind
-    // set). That prose-path case is intentionally excluded from this assertion
-    // (tracked separately; the primary #704 bug is the shell-variable expansion).
+    // NOTE: The backtick-wrapped prose-path case (`/gsd-core/workflows/update.md`)
+    // was a pre-existing gap with the #704 lookbehind fix and is now addressed by
+    // the positive-boundary regex introduced in #712. That case is covered by the
+    // "#712" describe block below.
     //
     // We probe for the specific shell-context pattern from the issue report:
     //   BAD:  ${_GSD_RUNTIME_ROOT}$gsd-core/bin/
@@ -232,6 +234,185 @@ describe('#704 — Codex global install launcher path corruption', () => {
       [],
       `Found shell-context path corruption ([})]$gsd-*) in Codex-converted command files (#704):\n` +
         offending.map((o) => `  ${o.file}: ...${o.context}...`).join('\n'),
+    );
+  });
+});
+
+describe('#712: positive-boundary slash-command conversion', () => {
+  // Tests call convertSlashCommandsToCodexSkillMentions directly so the regex
+  // is exercised in isolation — no frontmatter wrapping, no ADAPTER_CLOSE
+  // stripping, no .claude→.codex rewrite masking the result.
+
+  // ── MUST-NOT-CONVERT (negative) cases ─────────────────────────────────────
+  // These inputs must be returned UNCHANGED — no $gsd-* substitution.
+
+  test('backtick-wrapped path: `/gsd-core/workflows/update.md` is NOT converted (THE new fix)', () => {
+    const input = 'See `/gsd-core/workflows/update.md` for details.';
+    const result = convertSlashCommandsToCodexSkillMentions(input);
+    assert.strictEqual(
+      result,
+      input,
+      `Expected backtick-wrapped path to be unchanged. Got: ${result}`,
+    );
+  });
+
+  test('backtick-wrapped path deeper: `/gsd-pi/bin/foo.cjs` is NOT converted', () => {
+    const input = 'Run `/gsd-pi/bin/foo.cjs` directly.';
+    const result = convertSlashCommandsToCodexSkillMentions(input);
+    assert.strictEqual(
+      result,
+      input,
+      `Expected deep backtick-wrapped path to be unchanged. Got: ${result}`,
+    );
+  });
+
+  test('shell var expansion: ${_GSD_RUNTIME_ROOT}/gsd-core/bin/x is NOT converted (regression guard)', () => {
+    const input = 'PATH="${_GSD_RUNTIME_ROOT}/gsd-core/bin/x"';
+    const result = convertSlashCommandsToCodexSkillMentions(input);
+    assert.ok(
+      !result.includes('$gsd-core'),
+      `Expected no $gsd-core substitution in shell var path. Got: ${result}`,
+    );
+    assert.ok(
+      result.includes('/gsd-core/bin/x'),
+      `Expected original path to be preserved. Got: ${result}`,
+    );
+  });
+
+  test('command substitution: $(expand_home ~/.claude)/gsd-local-patches is NOT converted (regression guard)', () => {
+    const input = 'candidate="$(expand_home ~/.claude)/gsd-local-patches"';
+    const result = convertSlashCommandsToCodexSkillMentions(input);
+    assert.ok(
+      !result.includes(')$gsd-local'),
+      `Expected no )$gsd-local substitution. Got: ${result}`,
+    );
+    assert.ok(
+      result.includes(')/gsd-local-patches'),
+      `Expected original path to be preserved. Got: ${result}`,
+    );
+  });
+
+  test('plain path segment: bin/gsd-tools.cjs is NOT converted', () => {
+    const input = 'node bin/gsd-tools.cjs --help';
+    const result = convertSlashCommandsToCodexSkillMentions(input);
+    assert.strictEqual(
+      result,
+      input,
+      `Expected plain path segment to be unchanged. Got: ${result}`,
+    );
+  });
+
+  test('plain path segment: .claude/gsd-core/agents — /gsd-core portion is NOT slash-command converted', () => {
+    // Tests the regex in isolation: the .claude→.codex path rewrite that happens
+    // inside convertClaudeToCodexMarkdown does NOT run here. We assert directly
+    // that the slash-command regex leaves /gsd-core after the slash intact —
+    // i.e. the `e` in `/gsd-core` is NOT treated as a command boundary.
+    const input = 'Look in .claude/gsd-core/agents for the agent files.';
+    const result = convertSlashCommandsToCodexSkillMentions(input);
+    assert.ok(
+      !result.includes('$gsd-core'),
+      `Expected no $gsd-core substitution in .claude/gsd-core path. Got: ${result}`,
+    );
+    assert.ok(
+      result.includes('/gsd-core/agents'),
+      `Expected /gsd-core/agents to remain as a path segment. Got: ${result}`,
+    );
+  });
+
+  // ── MUST-CONVERT (positive) cases ─────────────────────────────────────────
+  // These inputs contain legitimate /gsd-<cmd> mentions that MUST be converted.
+
+  test('space-preceded prose: Use /gsd-discuss-phase to start. → $gsd-discuss-phase', () => {
+    const input = 'Use /gsd-discuss-phase to start.';
+    const result = convertSlashCommandsToCodexSkillMentions(input);
+    assert.ok(
+      result.includes('$gsd-discuss-phase'),
+      `Expected /gsd-discuss-phase to be converted. Got: ${result}`,
+    );
+    assert.ok(
+      !result.includes('/gsd-discuss-phase'),
+      `Expected original /gsd-discuss-phase to be replaced. Got: ${result}`,
+    );
+  });
+
+  test('backtick-WRAPPED MENTION (single segment): Run `/gsd-execute-phase` now → `$gsd-execute-phase`', () => {
+    // A backtick-wrapped COMMAND (single segment, no path continuation) MUST
+    // still be converted — this guards against a naive whitespace-only fix.
+    const input = 'Run `/gsd-execute-phase` now.';
+    const result = convertSlashCommandsToCodexSkillMentions(input);
+    assert.ok(
+      result.includes('`$gsd-execute-phase`'),
+      `Expected backtick-wrapped command to be converted to \`$gsd-execute-phase\`. Got: ${result}`,
+    );
+    assert.ok(
+      !result.includes('`/gsd-execute-phase`'),
+      `Expected original \`/gsd-execute-phase\` to be replaced. Got: ${result}`,
+    );
+  });
+
+  test('parenthetical/backtick list like CONTEXT.md:59: (`/gsd-plan-phase`, `/gsd-progress`) → converted', () => {
+    const input = 'Available commands: (`/gsd-plan-phase`, `/gsd-progress`) — pick one.';
+    const result = convertSlashCommandsToCodexSkillMentions(input);
+    assert.ok(
+      result.includes('`$gsd-plan-phase`'),
+      `Expected /gsd-plan-phase to be converted. Got: ${result}`,
+    );
+    assert.ok(
+      result.includes('`$gsd-progress`'),
+      `Expected /gsd-progress to be converted. Got: ${result}`,
+    );
+  });
+
+  test('start-of-string: /gsd-manager runs → $gsd-manager runs (exercises the ^ branch of lookbehind)', () => {
+    // This case is IMPOSSIBLE to test through the frontmatter-wrapping pipeline
+    // (the body always has preceding chars). Direct call exercises the ^ branch.
+    const input = '/gsd-manager runs the pipeline.';
+    const result = convertSlashCommandsToCodexSkillMentions(input);
+    assert.ok(
+      result.includes('$gsd-manager'),
+      `Expected /gsd-manager to be converted. Got: ${result}`,
+    );
+    assert.ok(
+      !result.includes('/gsd-manager'),
+      `Expected original /gsd-manager to be replaced. Got: ${result}`,
+    );
+  });
+
+  test('double-quote wrapped: "/gsd-resume" → "$gsd-resume"', () => {
+    const input = 'Call "/gsd-resume" to continue.';
+    const result = convertSlashCommandsToCodexSkillMentions(input);
+    assert.ok(
+      result.includes('"$gsd-resume"'),
+      `Expected "/gsd-resume" to be converted to "$gsd-resume". Got: ${result}`,
+    );
+    assert.ok(
+      !result.includes('"/gsd-resume"'),
+      `Expected original "/gsd-resume" to be replaced. Got: ${result}`,
+    );
+  });
+
+  // ── End-to-end: headline #712 bug through the real install pipeline ────────
+
+  test('end-to-end: backtick-wrapped path `/gsd-core/workflows/update.md` survives full Codex install pipeline', () => {
+    // Uses convertClaudeCommandToCodexSkill (same pattern as #704 tests above)
+    // to prove the real install path does not corrupt prose references to repo paths.
+    const input = [
+      '---',
+      'description: Test',
+      '---',
+      '',
+      'See `/gsd-core/workflows/update.md` for the update workflow.',
+    ].join('\n');
+
+    const output = convertClaudeCommandToCodexSkill(input, 'gsd-test-712-e2e');
+
+    assert.ok(
+      !output.includes('$gsd-core'),
+      `Expected no $gsd-core in converted output. Got:\n${output}`,
+    );
+    assert.ok(
+      output.includes('/gsd-core/workflows/update.md'),
+      `Expected backtick-wrapped path to survive conversion. Got:\n${output}`,
     );
   });
 });

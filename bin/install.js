@@ -2797,17 +2797,22 @@ function convertClaudeAgentToClineAgent(content) {
 // ── End Cline converters ─────────────────────────────────────────────────────
 
 function convertSlashCommandsToCodexSkillMentions(content) {
-  // Convert colon-style skill invocations to Codex $ prefix
+  // Colon-style /gsd: never appears as a filesystem path segment, so no boundary guard is needed (unlike the hyphen-style below).
   let converted = content.replace(/\/gsd:([a-z0-9-]+)/gi, (_, commandName) => {
     return `$gsd-${String(commandName).toLowerCase()}`;
   });
   // Convert hyphen-style command references (workflow output) to Codex $ prefix.
-  // Negative lookbehind excludes shell path contexts where `/gsd-` is a path
-  // segment, not a slash-command mention:
-  //   - word chars / dot / slash: `bin/gsd-tools.cjs`, `.claude/gsd-core/`
-  //   - `}`: shell variable expressions `${VAR}/gsd-core/` (#704)
-  //   - `)`: command-substitution paths `$(cmd)/gsd-local-patches` (#704)
-  converted = converted.replace(/(?<![a-zA-Z0-9./})])\/gsd-([a-z0-9-]+)/gi, (_, commandName) => {
+  // A real /gsd-<cmd> MENTION is defined positively by two boundaries, so any
+  // in-path occurrence is excluded by construction (no denylist of preceding
+  // chars to maintain — see #712, supersedes the #637/#704 lookbehind treadmill):
+  //   1. Left boundary: opens at start-of-string, whitespace, or an inline-prose
+  //      delimiter (backtick/quote/paren/bracket) — e.g. `/gsd-execute-phase`.
+  //   2. Right boundary: the command token is NOT followed by a path separator
+  //      `/` (a path continues: `/gsd-core/bin/...`; a command does not). The
+  //      `(?![a-z0-9/-])` also blocks regex backtracking to a shorter command.
+  // This converts backtick-wrapped MENTIONS (`/gsd-foo`) while leaving backtick-
+  // wrapped PATHS (`/gsd-core/workflows/update.md`) untouched (#712).
+  converted = converted.replace(/(?<=^|[\s`"'([])\/gsd-([a-z0-9-]+)(?![a-z0-9/-])/gi, (_, commandName) => {
     return `$gsd-${String(commandName).toLowerCase()}`;
   });
   return converted;
@@ -10948,6 +10953,7 @@ module.exports = {
     install,
     installAllRuntimes,
     uninstall,
+    convertSlashCommandsToCodexSkillMentions,
     convertClaudeCommandToCodexSkill,
     convertClaudeToOpencodeFrontmatter,
     convertClaudeToKiloFrontmatter,
