@@ -29,64 +29,15 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
+const { ExitError, runMain } = require('./lib/cli-exit.cjs');
+
 // On Windows, npm ships as npm.cmd (a batch wrapper); spawnSync without
 // shell:true requires the exact filename including extension.
 const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
 // ---------------------------------------------------------------------------
-// Argument parsing
-// ---------------------------------------------------------------------------
-let jsonMode = false;
-
-for (const arg of process.argv.slice(2)) {
-  if (arg === '--json') {
-    jsonMode = true;
-  } else if (arg === '--help' || arg === '-h') {
-    process.stdout.write(
-      'scripts/check-env.cjs — Environment parity validator for contributors (issue #117).\n' +
-      '\n' +
-      'Checks that the developer\'s environment matches project requirements before\n' +
-      'running tests or audits. Designed to catch mismatches early rather than\n' +
-      'through cryptic test failures.\n' +
-      '\n' +
-      'Exit codes:\n' +
-      '  0  All checks passed\n' +
-      '  1  One or more checks failed\n' +
-      '  2  Tool error (missing required tool, corrupt package.json, etc.)\n' +
-      '\n' +
-      'Usage:\n' +
-      '  node scripts/check-env.cjs           # Human-readable report\n' +
-      '  node scripts/check-env.cjs --json    # Structured JSON report\n' +
-      '  node scripts/check-env.cjs --help    # This message\n'
-    );
-    process.exit(0);
-  } else {
-    process.stderr.write(`Unknown option: ${arg}\n`);
-    process.exit(2);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Locate the project root (directory containing package.json)
-// ---------------------------------------------------------------------------
-const PROJECT_ROOT = process.cwd();
-const PACKAGE_JSON = path.join(PROJECT_ROOT, 'package.json');
-
-if (!fs.existsSync(PACKAGE_JSON)) {
-  process.stderr.write(`ERROR: package.json not found in ${PROJECT_ROOT}\n`);
-  process.exit(2);
-}
-
-// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/** @type {Array<{name: string, status: 'pass'|'fail'|'skip', message: string}>} */
-const checks = [];
-
-function addCheck(name, status, message) {
-  checks.push({ name, status, message });
-}
 
 /**
  * Semver comparison: does `version` satisfy `constraint`?
@@ -138,7 +89,7 @@ function satisfiesConstraint(version, constraint) {
  * Returns the string value or empty string if absent.
  * Uses './package.json' so Node resolves relative to CWD on all platforms.
  */
-function pkgField(fieldPath) {
+function pkgField(fieldPath, PROJECT_ROOT) {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, 'package.json'), 'utf8'));
     let val = pkg;
@@ -152,155 +103,210 @@ function pkgField(fieldPath) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Check 1: Node version vs engines.node
-// ---------------------------------------------------------------------------
-const enginesNode = pkgField('engines.node');
-let currentNode = '';
-try {
-  currentNode = process.version.replace(/^v/, '');
-} catch { /* ignore */ }
+function main() {
+  // ---------------------------------------------------------------------------
+  // Argument parsing
+  // ---------------------------------------------------------------------------
+  let jsonMode = false;
 
-if (!currentNode) {
-  addCheck('node-version', 'fail', 'node binary not found on PATH');
-} else if (!enginesNode) {
-  addCheck('node-version', 'fail', 'engines.node missing from package.json — add it (see D2 in docs/contributing/bootstrap.md)');
-} else {
-  if (satisfiesConstraint(currentNode, enginesNode)) {
-    addCheck('node-version', 'pass', `Node ${currentNode} satisfies ${enginesNode}`);
-  } else {
-    addCheck('node-version', 'fail', `Node ${currentNode} does NOT satisfy engines.node ${enginesNode}`);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Check 2: npm version vs engines.npm (skip if field absent)
-// ---------------------------------------------------------------------------
-const enginesNpm = pkgField('engines.npm');
-let currentNpm = '';
-try {
-  const res = spawnSync(npmCmd, ['--version'], { encoding: 'utf8', timeout: 10_000, shell: process.platform === 'win32' });
-  if (res.status === 0 && res.stdout) {
-    currentNpm = res.stdout.trim();
-  }
-} catch { /* ignore */ }
-
-if (!enginesNpm) {
-  addCheck('npm-version', 'skip', 'engines.npm not set in package.json — skipping');
-} else if (!currentNpm) {
-  addCheck('npm-version', 'fail', 'npm binary not found on PATH');
-} else {
-  if (satisfiesConstraint(currentNpm, enginesNpm)) {
-    addCheck('npm-version', 'pass', `npm ${currentNpm} satisfies ${enginesNpm}`);
-  } else {
-    addCheck('npm-version', 'fail', `npm ${currentNpm} does NOT satisfy engines.npm ${enginesNpm}`);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Check 3: Lockfile presence
-// ---------------------------------------------------------------------------
-const LOCKFILE = path.join(PROJECT_ROOT, 'package-lock.json');
-if (fs.existsSync(LOCKFILE)) {
-  addCheck('lockfile-present', 'pass', 'package-lock.json exists');
-} else {
-  addCheck('lockfile-present', 'fail', "package-lock.json missing — run 'npm install' to generate it");
-}
-
-// ---------------------------------------------------------------------------
-// Check 4: Lockfile sync (npm ci --dry-run)
-// ---------------------------------------------------------------------------
-if (fs.existsSync(LOCKFILE)) {
-  try {
-    // --ignore-scripts: this is a lockfile-vs-package.json sync check, not a
-    // build. Without it, npm would run the `prepare` lifecycle (build:lib via
-    // tsc) — which fails when check:env runs before deps are installed (tsc
-    // absent), misreporting an out-of-sync lockfile. ADR-457 build-at-publish.
-    const res = spawnSync(npmCmd, ['ci', '--dry-run', '--ignore-scripts'], {
-      cwd: PROJECT_ROOT,
-      encoding: 'utf8',
-      shell: process.platform === 'win32',
-    });
-    if (res.status === 0) {
-      addCheck('lockfile-sync', 'pass', 'package-lock.json is in sync with package.json');
+  for (const arg of process.argv.slice(2)) {
+    if (arg === '--json') {
+      jsonMode = true;
+    } else if (arg === '--help' || arg === '-h') {
+      process.stdout.write(
+        'scripts/check-env.cjs — Environment parity validator for contributors (issue #117).\n' +
+        '\n' +
+        'Checks that the developer\'s environment matches project requirements before\n' +
+        'running tests or audits. Designed to catch mismatches early rather than\n' +
+        'through cryptic test failures.\n' +
+        '\n' +
+        'Exit codes:\n' +
+        '  0  All checks passed\n' +
+        '  1  One or more checks failed\n' +
+        '  2  Tool error (missing required tool, corrupt package.json, etc.)\n' +
+        '\n' +
+        'Usage:\n' +
+        '  node scripts/check-env.cjs           # Human-readable report\n' +
+        '  node scripts/check-env.cjs --json    # Structured JSON report\n' +
+        '  node scripts/check-env.cjs --help    # This message\n'
+      );
+      return 0;
     } else {
+      process.stderr.write(`Unknown option: ${arg}\n`);
+      throw new ExitError(2);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Locate the project root (directory containing package.json)
+  // ---------------------------------------------------------------------------
+  const PROJECT_ROOT = process.cwd();
+  const PACKAGE_JSON = path.join(PROJECT_ROOT, 'package.json');
+
+  if (!fs.existsSync(PACKAGE_JSON)) {
+    process.stderr.write(`ERROR: package.json not found in ${PROJECT_ROOT}\n`);
+    throw new ExitError(2);
+  }
+
+  /** @type {Array<{name: string, status: 'pass'|'fail'|'skip', message: string}>} */
+  const checks = [];
+
+  function addCheck(name, status, message) {
+    checks.push({ name, status, message });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Check 1: Node version vs engines.node
+  // ---------------------------------------------------------------------------
+  const enginesNode = pkgField('engines.node', PROJECT_ROOT);
+  let currentNode = '';
+  try {
+    currentNode = process.version.replace(/^v/, '');
+  } catch { /* ignore */ }
+
+  if (!currentNode) {
+    addCheck('node-version', 'fail', 'node binary not found on PATH');
+  } else if (!enginesNode) {
+    addCheck('node-version', 'fail', 'engines.node missing from package.json — add it (see D2 in docs/contributing/bootstrap.md)');
+  } else {
+    if (satisfiesConstraint(currentNode, enginesNode)) {
+      addCheck('node-version', 'pass', `Node ${currentNode} satisfies ${enginesNode}`);
+    } else {
+      addCheck('node-version', 'fail', `Node ${currentNode} does NOT satisfy engines.node ${enginesNode}`);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Check 2: npm version vs engines.npm (skip if field absent)
+  // ---------------------------------------------------------------------------
+  const enginesNpm = pkgField('engines.npm', PROJECT_ROOT);
+  let currentNpm = '';
+  try {
+    const res = spawnSync(npmCmd, ['--version'], { encoding: 'utf8', timeout: 10_000, shell: process.platform === 'win32' });
+    if (res.status === 0 && res.stdout) {
+      currentNpm = res.stdout.trim();
+    }
+  } catch { /* ignore */ }
+
+  if (!enginesNpm) {
+    addCheck('npm-version', 'skip', 'engines.npm not set in package.json — skipping');
+  } else if (!currentNpm) {
+    addCheck('npm-version', 'fail', 'npm binary not found on PATH');
+  } else {
+    if (satisfiesConstraint(currentNpm, enginesNpm)) {
+      addCheck('npm-version', 'pass', `npm ${currentNpm} satisfies ${enginesNpm}`);
+    } else {
+      addCheck('npm-version', 'fail', `npm ${currentNpm} does NOT satisfy engines.npm ${enginesNpm}`);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Check 3: Lockfile presence
+  // ---------------------------------------------------------------------------
+  const LOCKFILE = path.join(PROJECT_ROOT, 'package-lock.json');
+  if (fs.existsSync(LOCKFILE)) {
+    addCheck('lockfile-present', 'pass', 'package-lock.json exists');
+  } else {
+    addCheck('lockfile-present', 'fail', "package-lock.json missing — run 'npm install' to generate it");
+  }
+
+  // ---------------------------------------------------------------------------
+  // Check 4: Lockfile sync (npm ci --dry-run)
+  // ---------------------------------------------------------------------------
+  if (fs.existsSync(LOCKFILE)) {
+    try {
+      // --ignore-scripts: this is a lockfile-vs-package.json sync check, not a
+      // build. Without it, npm would run the `prepare` lifecycle (build:lib via
+      // tsc) — which fails when check:env runs before deps are installed (tsc
+      // absent), misreporting an out-of-sync lockfile. ADR-457 build-at-publish.
+      const res = spawnSync(npmCmd, ['ci', '--dry-run', '--ignore-scripts'], {
+        cwd: PROJECT_ROOT,
+        encoding: 'utf8',
+        shell: process.platform === 'win32',
+      });
+      if (res.status === 0) {
+        addCheck('lockfile-sync', 'pass', 'package-lock.json is in sync with package.json');
+      } else {
+        addCheck('lockfile-sync', 'fail', "package-lock.json is out of sync — run 'npm ci' to restore");
+      }
+    } catch {
       addCheck('lockfile-sync', 'fail', "package-lock.json is out of sync — run 'npm ci' to restore");
     }
-  } catch {
-    addCheck('lockfile-sync', 'fail', "package-lock.json is out of sync — run 'npm ci' to restore");
-  }
-} else {
-  addCheck('lockfile-sync', 'skip', 'skipped — lockfile missing');
-}
-
-// ---------------------------------------------------------------------------
-// Check 5: Version manager pin vs active Node
-// Looks for .nvmrc, .node-version, or .tool-versions at project root.
-// ---------------------------------------------------------------------------
-const NVMRC = path.join(PROJECT_ROOT, '.nvmrc');
-const NODE_VERSION_FILE = path.join(PROJECT_ROOT, '.node-version');
-const TOOL_VERSIONS = path.join(PROJECT_ROOT, '.tool-versions');
-
-let pinnedMajor = '';
-let pinSource = '';
-
-if (fs.existsSync(NVMRC)) {
-  const content = fs.readFileSync(NVMRC, 'utf8').split('\n')[0].trim().replace(/^v/, '');
-  pinnedMajor = content.split('.')[0];
-  pinSource = '.nvmrc';
-} else if (fs.existsSync(NODE_VERSION_FILE)) {
-  const content = fs.readFileSync(NODE_VERSION_FILE, 'utf8').split('\n')[0].trim().replace(/^v/, '');
-  pinnedMajor = content.split('.')[0];
-  pinSource = '.node-version';
-} else if (fs.existsSync(TOOL_VERSIONS)) {
-  const lines = fs.readFileSync(TOOL_VERSIONS, 'utf8').split('\n');
-  const nodeLine = lines.find(l => /^nodejs\s+/.test(l));
-  if (nodeLine) {
-    const ver = nodeLine.split(/\s+/)[1] || '';
-    pinnedMajor = ver.replace(/^v/, '').split('.')[0];
-    pinSource = '.tool-versions';
-  }
-}
-
-if (!pinnedMajor) {
-  addCheck('version-manager-pin', 'skip', 'no .nvmrc, .node-version, or .tool-versions found — skipping');
-} else if (process.env.CI === 'true') {
-  addCheck('version-manager-pin', 'skip', 'CI=true — version-manager pin check skipped (matrix tests multiple Node majors)');
-} else {
-  const activeMajor = process.version.replace(/^v/, '').split('.')[0];
-  if (activeMajor === pinnedMajor) {
-    addCheck('version-manager-pin', 'pass', `Active Node major (${activeMajor}) matches ${pinSource} pin (${pinnedMajor})`);
   } else {
-    addCheck('version-manager-pin', 'fail', `Active Node major (${activeMajor}) does NOT match ${pinSource} pin (${pinnedMajor}) — run 'nvm use' or equivalent`);
+    addCheck('lockfile-sync', 'skip', 'skipped — lockfile missing');
   }
-}
 
-// ---------------------------------------------------------------------------
-// Output
-// ---------------------------------------------------------------------------
-const overallPass = checks.every(c => c.status !== 'fail');
+  // ---------------------------------------------------------------------------
+  // Check 5: Version manager pin vs active Node
+  // Looks for .nvmrc, .node-version, or .tool-versions at project root.
+  // ---------------------------------------------------------------------------
+  const NVMRC = path.join(PROJECT_ROOT, '.nvmrc');
+  const NODE_VERSION_FILE = path.join(PROJECT_ROOT, '.node-version');
+  const TOOL_VERSIONS = path.join(PROJECT_ROOT, '.tool-versions');
 
-if (jsonMode) {
-  // Structured JSON: {pass: bool, checks: [{name, status, message}]}
-  const out = {
-    pass: overallPass,
-    checks: checks.map(c => ({ name: c.name, status: c.status, message: c.message })),
-  };
-  process.stdout.write(JSON.stringify(out, null, 2) + '\n');
-} else {
-  // Human-readable report
-  process.stdout.write('=== Environment Check ===\n');
-  for (const { name, status, message } of checks) {
-    const icon = status === 'pass' ? '[PASS]' : status === 'fail' ? '[FAIL]' : '[SKIP]';
-    const namePadded = name.padEnd(25);
-    process.stdout.write(`  ${icon}  ${namePadded}  ${message}\n`);
+  let pinnedMajor = '';
+  let pinSource = '';
+
+  if (fs.existsSync(NVMRC)) {
+    const content = fs.readFileSync(NVMRC, 'utf8').split('\n')[0].trim().replace(/^v/, '');
+    pinnedMajor = content.split('.')[0];
+    pinSource = '.nvmrc';
+  } else if (fs.existsSync(NODE_VERSION_FILE)) {
+    const content = fs.readFileSync(NODE_VERSION_FILE, 'utf8').split('\n')[0].trim().replace(/^v/, '');
+    pinnedMajor = content.split('.')[0];
+    pinSource = '.node-version';
+  } else if (fs.existsSync(TOOL_VERSIONS)) {
+    const lines = fs.readFileSync(TOOL_VERSIONS, 'utf8').split('\n');
+    const nodeLine = lines.find(l => /^nodejs\s+/.test(l));
+    if (nodeLine) {
+      const ver = nodeLine.split(/\s+/)[1] || '';
+      pinnedMajor = ver.replace(/^v/, '').split('.')[0];
+      pinSource = '.tool-versions';
+    }
   }
-  process.stdout.write('\n');
-  if (overallPass) {
-    process.stdout.write('Result: ALL CHECKS PASSED\n');
+
+  if (!pinnedMajor) {
+    addCheck('version-manager-pin', 'skip', 'no .nvmrc, .node-version, or .tool-versions found — skipping');
+  } else if (process.env.CI === 'true') {
+    addCheck('version-manager-pin', 'skip', 'CI=true — version-manager pin check skipped (matrix tests multiple Node majors)');
   } else {
-    process.stdout.write('Result: ONE OR MORE CHECKS FAILED — see above\n');
+    const activeMajor = process.version.replace(/^v/, '').split('.')[0];
+    if (activeMajor === pinnedMajor) {
+      addCheck('version-manager-pin', 'pass', `Active Node major (${activeMajor}) matches ${pinSource} pin (${pinnedMajor})`);
+    } else {
+      addCheck('version-manager-pin', 'fail', `Active Node major (${activeMajor}) does NOT match ${pinSource} pin (${pinnedMajor}) — run 'nvm use' or equivalent`);
+    }
   }
+
+  // ---------------------------------------------------------------------------
+  // Output
+  // ---------------------------------------------------------------------------
+  const overallPass = checks.every(c => c.status !== 'fail');
+
+  if (jsonMode) {
+    // Structured JSON: {pass: bool, checks: [{name, status, message}]}
+    const out = {
+      pass: overallPass,
+      checks: checks.map(c => ({ name: c.name, status: c.status, message: c.message })),
+    };
+    process.stdout.write(JSON.stringify(out, null, 2) + '\n');
+  } else {
+    // Human-readable report
+    process.stdout.write('=== Environment Check ===\n');
+    for (const { name, status, message } of checks) {
+      const icon = status === 'pass' ? '[PASS]' : status === 'fail' ? '[FAIL]' : '[SKIP]';
+      const namePadded = name.padEnd(25);
+      process.stdout.write(`  ${icon}  ${namePadded}  ${message}\n`);
+    }
+    process.stdout.write('\n');
+    if (overallPass) {
+      process.stdout.write('Result: ALL CHECKS PASSED\n');
+    } else {
+      process.stdout.write('Result: ONE OR MORE CHECKS FAILED — see above\n');
+    }
+  }
+
+  return overallPass ? 0 : 1;
 }
 
-process.exit(overallPass ? 0 : 1);
+runMain(main);

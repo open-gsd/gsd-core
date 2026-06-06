@@ -28,6 +28,8 @@ const {
   executionContextRefs: extractExecutionContextRefs,
 } = require('./command-contract-helpers.cjs');
 
+const { runMain } = require('./lib/cli-exit.cjs');
+
 // ─── check one file ───────────────────────────────────────────────────────────
 
 function check(filePath) {
@@ -79,30 +81,34 @@ function check(filePath) {
 
 // ─── run ─────────────────────────────────────────────────────────────────────
 
-const commandFiles = fs
-  .readdirSync(COMMANDS_DIR)
-  .filter(f => f.endsWith('.md'))
-  .map(f => path.join(COMMANDS_DIR, f));
+function main() {
+  const commandFiles = fs
+    .readdirSync(COMMANDS_DIR)
+    .filter(f => f.endsWith('.md'))
+    .map(f => path.join(COMMANDS_DIR, f));
 
-const results = commandFiles.map(check).filter(Boolean);
+  const results = commandFiles.map(check).filter(Boolean);
 
-if (results.length === 0) {
-  console.log(
-    `ok lint-command-contract: ${commandFiles.length} command files checked, 0 violations`,
-  );
-  process.exit(0);
-}
-
-const total = results.reduce((n, r) => n + r.violations.length, 0);
-process.stderr.write(
-  `\nERROR lint-command-contract: ${total} violation(s) across ${results.length} file(s)\n\n`,
-);
-for (const r of results) {
-  process.stderr.write(`  ${r.file}\n`);
-  for (const v of r.violations) {
-    process.stderr.write(`    - ${v}\n`);
+  if (results.length === 0) {
+    console.log(
+      `ok lint-command-contract: ${commandFiles.length} command files checked, 0 violations`,
+    );
+    return 0;
   }
-  process.stderr.write('\n');
+
+  const total = results.reduce((n, r) => n + r.violations.length, 0);
+  process.stderr.write(
+    `\nERROR lint-command-contract: ${total} violation(s) across ${results.length} file(s)\n\n`,
+  );
+  for (const r of results) {
+    process.stderr.write(`  ${r.file}\n`);
+    for (const v of r.violations) {
+      process.stderr.write(`    - ${v}\n`);
+    }
+    process.stderr.write('\n');
+  }
+  process.stderr.write('See docs/adr/0002-command-contract-validation-module.md for the contract spec.\n\n');
+  return 1;
 }
-process.stderr.write('See docs/adr/0002-command-contract-validation-module.md for the contract spec.\n\n');
-process.exit(1);
+
+runMain(main);

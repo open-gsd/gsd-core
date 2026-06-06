@@ -13,6 +13,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { ExitError, runMain } = require('../lib/cli-exit.cjs');
 
 // Small word lists — keep the function simple and dependency-free.
 // Together this gives ~40 * 40 * 40 = 64,000 distinct names. The lint
@@ -121,17 +122,16 @@ function main() {
   if (!parsed.ok) {
     process.stderr.write(`${parsed.error}\n`);
     process.stderr.write('usage: changeset/new.cjs --type <Fixed|Added|...> --pr NNNN --body "..."\n');
-    process.exit(2);
+    throw new ExitError(2);
   }
   const { opts } = parsed;
   if (!opts.type || !opts.pr || !opts.body) {
-    process.stderr.write('usage: changeset/new.cjs --type <Fixed|Added|...> --pr NNNN --body "..."\n');
-    process.exit(2);
+    throw new ExitError(2, 'usage: changeset/new.cjs --type <Fixed|Added|...> --pr NNNN --body "..."');
   }
   const file = scaffoldFragment(opts);
   process.stdout.write(`${path.relative(process.cwd(), file)}\n`);
 }
 
-if (require.main === module) main();
+if (require.main === module) runMain(main);
 
 module.exports = { generateFragmentName, scaffoldFragment, parseArgs, ALLOWED_TYPES };

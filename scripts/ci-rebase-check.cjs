@@ -13,6 +13,8 @@
 
 const { execFileSync } = require('child_process');
 
+const { ExitError, runMain } = require('./lib/cli-exit.cjs');
+
 function run(cmd, args, opts) {
   try {
     execFileSync(cmd, args, { stdio: 'inherit', ...opts });
@@ -26,8 +28,7 @@ function runOrThrow(cmd, args, label) {
   try {
     execFileSync(cmd, args, { stdio: 'inherit' });
   } catch (e) {
-    process.stderr.write(`::error::${label} failed\n`);
-    process.exit(1);
+    throw new ExitError(1, `::error::${label} failed`);
   }
 }
 
@@ -35,48 +36,51 @@ const token = process.env.GITHUB_TOKEN || '';
 const baseBranch = process.env.GITHUB_BASE_REF || 'main';
 const repo = process.env.GITHUB_REPOSITORY || '';
 
-// Configure git identity (needed for merge commit).
-runOrThrow('git', ['config', 'user.email', 'ci@gsd-redux'], 'git config user.email');
-runOrThrow('git', ['config', 'user.name', 'CI Rebase Check'], 'git config user.name');
+function main() {
+  // Configure git identity (needed for merge commit).
+  runOrThrow('git', ['config', 'user.email', 'ci@gsd-redux'], 'git config user.email');
+  runOrThrow('git', ['config', 'user.name', 'CI Rebase Check'], 'git config user.name');
 
-// Set authenticated remote URL.
-if (token && repo) {
-  runOrThrow(
-    'git',
-    ['remote', 'set-url', 'origin', `https://x-access-token:${token}@github.com/${repo}.git`],
-    'git remote set-url'
-  );
-}
-
-// Fetch base branch with retry.
-for (let attempt = 1; attempt <= 3; attempt++) {
-  const result = run('git', ['fetch', 'origin', baseBranch]);
-  if (result) {
-    break;
+  // Set authenticated remote URL.
+  if (token && repo) {
+    runOrThrow(
+      'git',
+      ['remote', 'set-url', 'origin', `https://x-access-token:${token}@github.com/${repo}.git`],
+      'git remote set-url'
+    );
   }
-  if (attempt === 3) {
-    process.stderr.write(`::error::git fetch origin ${baseBranch} failed after 3 attempts.\n`);
-    process.exit(1);
+
+  // Fetch base branch with retry.
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const result = run('git', ['fetch', 'origin', baseBranch]);
+    if (result) {
+      break;
+    }
+    if (attempt === 3) {
+      throw new ExitError(1, `::error::git fetch origin ${baseBranch} failed after 3 attempts.`);
+    }
+    // Wait before retry: attempt * 4 seconds.
+    const waitMs = attempt * 4000;
+    const deadline = Date.now() + waitMs;
+    while (Date.now() < deadline) { /* busy wait, acceptable in CI */ }
   }
-  // Wait before retry: attempt * 4 seconds.
-  const waitMs = attempt * 4000;
-  const deadline = Date.now() + waitMs;
-  while (Date.now() < deadline) { /* busy wait, acceptable in CI */ }
+
+  // Attempt merge.
+  try {
+    execFileSync('git', ['merge', '--no-edit', '--no-ff', `origin/${baseBranch}`], { stdio: 'inherit' });
+  } catch (e) {
+    process.stderr.write(
+      `::error::This PR cannot cleanly merge origin/${baseBranch}. Rebase your branch onto current ${baseBranch} and push again.\n`
+    );
+    process.stderr.write('::error::Conflicting files:\n');
+    try {
+      execFileSync('git', ['diff', '--name-only', '--diff-filter=U'], { stdio: 'inherit' });
+    } catch (_) { /* ignore */ }
+    try {
+      execFileSync('git', ['merge', '--abort'], { stdio: 'inherit' });
+    } catch (_) { /* ignore */ }
+    throw new ExitError(1);
+  }
 }
 
-// Attempt merge.
-try {
-  execFileSync('git', ['merge', '--no-edit', '--no-ff', `origin/${baseBranch}`], { stdio: 'inherit' });
-} catch (e) {
-  process.stderr.write(
-    `::error::This PR cannot cleanly merge origin/${baseBranch}. Rebase your branch onto current ${baseBranch} and push again.\n`
-  );
-  process.stderr.write('::error::Conflicting files:\n');
-  try {
-    execFileSync('git', ['diff', '--name-only', '--diff-filter=U'], { stdio: 'inherit' });
-  } catch (_) { /* ignore */ }
-  try {
-    execFileSync('git', ['merge', '--abort'], { stdio: 'inherit' });
-  } catch (_) { /* ignore */ }
-  process.exit(1);
-}
+runMain(main);

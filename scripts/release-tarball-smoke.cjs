@@ -46,6 +46,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { PACKAGE_NAME } = require('../gsd-core/bin/lib/package-identity.cjs');
+const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 // 120 s proved too tight on Windows GitHub-hosted runners: cold-cache
 // `npm install -g` with a 1499-file tarball took ~120 s exactly, causing
 // spawnSync to fire SIGTERM and return { status: null, stdout: '', stderr: '' }
@@ -587,23 +588,24 @@ function cliMain() {
         };
         if (isJson) process.stdout.write(JSON.stringify(result) + '\n');
         cleanup(packDir, installPrefix, fixtureDir);
-        process.exit(1);
+        throw new ExitError(1);
       }
     }
   } catch (err) {
+    if (err instanceof ExitError) throw err;
     const result = {
       code: SMOKE.PACK_FAILED,
       details: { error: err.message, stderr: err.stderr },
     };
     if (isJson) process.stdout.write(JSON.stringify(result) + '\n');
     cleanup(packDir, installPrefix, fixtureDir);
-    process.exit(1);
+    throw new ExitError(1);
   }
 
   const result = runSmoke({ tarballPath, installPrefix, expectedVersion, fixtureDir });
   if (isJson) process.stdout.write(JSON.stringify(result) + '\n');
   cleanup(packDir, installPrefix, fixtureDir);
-  process.exit(result.code === SMOKE.OK ? 0 : 1);
+  return result.code === SMOKE.OK ? 0 : 1;
 }
 
 function cleanup(...dirs) {
@@ -623,5 +625,5 @@ function cleanup(...dirs) {
 module.exports = { SMOKE, runSmoke, binInvocation };
 
 if (require.main === module) {
-  cliMain();
+  runMain(cliMain);
 }

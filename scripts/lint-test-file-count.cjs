@@ -17,6 +17,7 @@
 const fs   = require('fs');
 const path = require('path');
 const { assertWithinAllowlist } = require('./lib/allowlist-ratchet.cjs');
+const { runMain } = require('./lib/cli-exit.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const PROD_DIRS = [
@@ -201,14 +202,14 @@ function run() {
 
   if (jsonMode) {
     console.log(JSON.stringify({ ok: failures.length === 0, results, failures, hints: [] }, null, 2));
-    process.exit(failures.length > 0 ? 1 : 0);
+    return failures.length > 0 ? 1 : 0;
   }
 
   if (failures.length === 0) {
     const inAllowlist = results.filter(r => r.verdict === Verdict.OK_IN_ALLOWLIST).length;
     console.log(`ok lint-test-file-count: ${results.length} module(s) checked, 0 failures` +
       (inAllowlist > 0 ? `, ${inAllowlist} allowlisted` : ''));
-    process.exit(0);
+    return 0;
   }
 
   process.stderr.write(`\nERROR lint-test-file-count: ${failures.length} module(s) exceed the test-file limit\n\n`);
@@ -231,7 +232,7 @@ function run() {
   }
   process.stderr.write('\nFix: consolidate test files per module (one primary + one integration).\n');
   process.stderr.write('Or update scripts/lint-test-file-count.allowlist.json with PR justification.\n\n');
-  process.exit(1);
+  return 1;
 }
 
 module.exports = {
@@ -242,4 +243,4 @@ module.exports = {
   _loadAllowlist: loadAllowlist,
 };
 
-if (require.main === module) run();
+if (require.main === module) runMain(run);

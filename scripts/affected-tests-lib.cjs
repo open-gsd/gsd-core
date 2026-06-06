@@ -4,6 +4,7 @@ const { execFileSync } = require('node:child_process');
 const { readdirSync, readFileSync, existsSync } = require('node:fs');
 const path = require('node:path');
 
+const { ExitError } = require('./lib/cli-exit.cjs');
 const { suiteOf } = require('./run-tests.cjs');
 
 const CRITICAL_PATHS = [
@@ -409,7 +410,7 @@ function runNodeTestFiles(repoRoot, files) {
       if (firstFailure === 0) firstFailure = code;
     }
   }
-  if (firstFailure !== 0) process.exit(firstFailure);
+  if (firstFailure !== 0) throw new ExitError(firstFailure);
 }
 
 function runSuite(repoRoot, suite) {

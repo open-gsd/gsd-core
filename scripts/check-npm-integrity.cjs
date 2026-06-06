@@ -16,62 +16,7 @@
 const fs = require('fs');
 const path = require('path');
 
-// ---- Argument parsing -------------------------------------------------------
-
-let ignoreExtraneous = false;
-
-for (const arg of process.argv.slice(2)) {
-  if (arg === '--ignore-extraneous') {
-    ignoreExtraneous = true;
-  } else if (arg === '--help' || arg === '-h') {
-    process.stdout.write(
-      'Usage: node scripts/check-npm-integrity.cjs [--ignore-extraneous]\n'
-    );
-    process.exit(0);
-  } else {
-    process.stderr.write(`ERROR: Unknown argument: ${arg}\n`);
-    process.exit(2);
-  }
-}
-
-// ---- Locate lockfile --------------------------------------------------------
-
-const lockfilePath = path.join(process.cwd(), 'package-lock.json');
-
-if (!fs.existsSync(lockfilePath)) {
-  process.stderr.write(`ERROR: package-lock.json not found in ${process.cwd()}\n`);
-  process.exit(2);
-}
-
-// ---- Parse lockfile ---------------------------------------------------------
-
-let lock;
-try {
-  lock = JSON.parse(fs.readFileSync(lockfilePath, 'utf-8'));
-} catch (e) {
-  process.stderr.write(`ERROR: Failed to parse package-lock.json: ${e.message}\n`);
-  process.exit(2);
-}
-
-const lockVersion = lock.lockfileVersion || 1;
-if (lockVersion < 2) {
-  process.stderr.write(
-    `ERROR: package-lock.json lockfileVersion ${lockVersion} is not supported. ` +
-    'Run `npm install` to upgrade to v3.\n'
-  );
-  process.exit(2);
-}
-
-const packages = lock.packages || {};
-const rootEntry = packages[''] || {};
-
-// Collect declared dependency ranges from root entry.
-const declaredRanges = {};
-for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
-  for (const [name, range] of Object.entries(rootEntry[field] || {})) {
-    if (!declaredRanges[name]) declaredRanges[name] = range;
-  }
-}
+const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 
 // ---- Minimal semver satisfies -----------------------------------------------
 
@@ -132,78 +77,139 @@ function satisfies(installed, range) {
   return installed === range;
 }
 
-// ---- Walk packages map ------------------------------------------------------
+function main() {
+  // ---- Argument parsing -------------------------------------------------------
 
-const invalids = [];
-const missings = [];
-const extraneousFound = [];
+  let ignoreExtraneous = false;
 
-for (const [key, entry] of Object.entries(packages)) {
-  if (!key.startsWith('node_modules/')) continue;
-  const rest = key.slice('node_modules/'.length);
-  const isScoped = rest[0] === '@';
-  const slashCount = (rest.match(/\//g) || []).length;
-  if (isScoped && slashCount > 1) continue;
-  if (!isScoped && slashCount > 0) continue;
-
-  const pkgName = rest;
-  const installedVersion = entry.version || '';
-
-  if (entry.extraneous) {
-    extraneousFound.push({ name: pkgName, version: installedVersion });
-    continue;
+  for (const arg of process.argv.slice(2)) {
+    if (arg === '--ignore-extraneous') {
+      ignoreExtraneous = true;
+    } else if (arg === '--help' || arg === '-h') {
+      process.stdout.write(
+        'Usage: node scripts/check-npm-integrity.cjs [--ignore-extraneous]\n'
+      );
+      return 0;
+    } else {
+      process.stderr.write(`ERROR: Unknown argument: ${arg}\n`);
+      throw new ExitError(2);
+    }
   }
 
-  if (!declaredRanges[pkgName]) continue;
+  // ---- Locate lockfile --------------------------------------------------------
 
-  if (!satisfies(installedVersion, declaredRanges[pkgName])) {
-    invalids.push({ name: pkgName, version: installedVersion, declared: declaredRanges[pkgName] });
+  const lockfilePath = path.join(process.cwd(), 'package-lock.json');
+
+  if (!fs.existsSync(lockfilePath)) {
+    process.stderr.write(`ERROR: package-lock.json not found in ${process.cwd()}\n`);
+    throw new ExitError(2);
   }
-}
 
-for (const name of Object.keys(declaredRanges)) {
-  if (!packages[`node_modules/${name}`]) {
-    missings.push({ name, required: declaredRanges[name] });
+  // ---- Parse lockfile ---------------------------------------------------------
+
+  let lock;
+  try {
+    lock = JSON.parse(fs.readFileSync(lockfilePath, 'utf-8'));
+  } catch (e) {
+    process.stderr.write(`ERROR: Failed to parse package-lock.json: ${e.message}\n`);
+    throw new ExitError(2);
   }
-}
 
-// ---- Verdict ----------------------------------------------------------------
-
-const failInvalid = invalids.length > 0;
-const failMissing = missings.length > 0;
-const failExtra   = !ignoreExtraneous && extraneousFound.length > 0;
-
-if (!failInvalid && !failMissing && !failExtra) {
-  process.stderr.write('check-npm-integrity.cjs: clean\n');
-  process.exit(0);
-}
-
-const lines = ['FAIL: dependency integrity drift detected', ''];
-
-if (failInvalid) {
-  lines.push('  INVALID (installed version does not satisfy declared range):');
-  for (const { name, declared, version } of invalids) {
-    lines.push(`    ${name}: declared=${declared}  installed=${version}`);
+  const lockVersion = lock.lockfileVersion || 1;
+  if (lockVersion < 2) {
+    process.stderr.write(
+      `ERROR: package-lock.json lockfileVersion ${lockVersion} is not supported. ` +
+      'Run `npm install` to upgrade to v3.\n'
+    );
+    throw new ExitError(2);
   }
-  lines.push('');
-}
 
-if (failMissing) {
-  lines.push('  MISSING (declared but absent from lockfile packages map):');
-  for (const { name, required } of missings) {
-    lines.push(`    ${name}@${required}`);
+  const packages = lock.packages || {};
+  const rootEntry = packages[''] || {};
+
+  // Collect declared dependency ranges from root entry.
+  const declaredRanges = {};
+  for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
+    for (const [name, range] of Object.entries(rootEntry[field] || {})) {
+      if (!declaredRanges[name]) declaredRanges[name] = range;
+    }
   }
-  lines.push('');
-}
 
-if (failExtra) {
-  lines.push('  EXTRANEOUS (in lockfile but not declared as a dependency):');
-  for (const { name, version } of extraneousFound) {
-    lines.push(`    ${name}@${version}`);
+  // ---- Walk packages map ------------------------------------------------------
+
+  const invalids = [];
+  const missings = [];
+  const extraneousFound = [];
+
+  for (const [key, entry] of Object.entries(packages)) {
+    if (!key.startsWith('node_modules/')) continue;
+    const rest = key.slice('node_modules/'.length);
+    const isScoped = rest[0] === '@';
+    const slashCount = (rest.match(/\//g) || []).length;
+    if (isScoped && slashCount > 1) continue;
+    if (!isScoped && slashCount > 0) continue;
+
+    const pkgName = rest;
+    const installedVersion = entry.version || '';
+
+    if (entry.extraneous) {
+      extraneousFound.push({ name: pkgName, version: installedVersion });
+      continue;
+    }
+
+    if (!declaredRanges[pkgName]) continue;
+
+    if (!satisfies(installedVersion, declaredRanges[pkgName])) {
+      invalids.push({ name: pkgName, version: installedVersion, declared: declaredRanges[pkgName] });
+    }
   }
-  lines.push('');
+
+  for (const name of Object.keys(declaredRanges)) {
+    if (!packages[`node_modules/${name}`]) {
+      missings.push({ name, required: declaredRanges[name] });
+    }
+  }
+
+  // ---- Verdict ----------------------------------------------------------------
+
+  const failInvalid = invalids.length > 0;
+  const failMissing = missings.length > 0;
+  const failExtra   = !ignoreExtraneous && extraneousFound.length > 0;
+
+  if (!failInvalid && !failMissing && !failExtra) {
+    process.stderr.write('check-npm-integrity.cjs: clean\n');
+    return 0;
+  }
+
+  const lines = ['FAIL: dependency integrity drift detected', ''];
+
+  if (failInvalid) {
+    lines.push('  INVALID (installed version does not satisfy declared range):');
+    for (const { name, declared, version } of invalids) {
+      lines.push(`    ${name}: declared=${declared}  installed=${version}`);
+    }
+    lines.push('');
+  }
+
+  if (failMissing) {
+    lines.push('  MISSING (declared but absent from lockfile packages map):');
+    for (const { name, required } of missings) {
+      lines.push(`    ${name}@${required}`);
+    }
+    lines.push('');
+  }
+
+  if (failExtra) {
+    lines.push('  EXTRANEOUS (in lockfile but not declared as a dependency):');
+    for (const { name, version } of extraneousFound) {
+      lines.push(`    ${name}@${version}`);
+    }
+    lines.push('');
+  }
+
+  lines.push('Remediation: rm -rf node_modules && npm ci');
+  process.stderr.write(lines.join('\n') + '\n');
+  throw new ExitError(1);
 }
 
-lines.push('Remediation: rm -rf node_modules && npm ci');
-process.stderr.write(lines.join('\n') + '\n');
-process.exit(1);
+runMain(main);

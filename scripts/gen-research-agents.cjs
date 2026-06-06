@@ -24,6 +24,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { PROFILES } = require('./research-profiles.cjs');
+const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const AGENTS_DIR = path.join(ROOT, 'agents');
@@ -225,8 +226,7 @@ function runWrite() {
   for (const profile of PROFILES) {
     const agentPath = path.join(AGENTS_DIR, profile.name + '.md');
     if (!fs.existsSync(agentPath)) {
-      process.stderr.write('ERROR: agent file not found: ' + agentPath + '\n');
-      process.exit(1);
+      throw new ExitError(1, 'ERROR: agent file not found: ' + agentPath);
     }
     writeAgent(profile);
     process.stdout.write('  wrote  ' + profile.name + '.md\n');
@@ -241,7 +241,7 @@ module.exports = { PROFILES, checkAgent, runCheck, parseAgentFile };
 
 // ─── CLI entry point ──────────────────────────────────────────────────────────
 
-if (require.main === module) {
+function main() {
   const flag = process.argv[2] || '--check';
 
   if (flag === '--write') {
@@ -251,7 +251,7 @@ if (require.main === module) {
     const ok = runCheck();
     if (!ok) {
       process.stderr.write('\nERROR: --check failed after --write. Fix serialization.\n');
-      process.exit(1);
+      throw new ExitError(1);
     }
     process.stdout.write('\nAll agents match their profiles.\n');
   } else if (flag === '--check') {
@@ -263,12 +263,14 @@ if (require.main === module) {
         '\nTo regenerate frontmatter from profiles:\n' +
         '  node scripts/gen-research-agents.cjs --write\n',
       );
-      process.exit(1);
+      throw new ExitError(1);
     }
     process.stdout.write('\nAll 7 agents match their profiles.\n');
   } else {
-    process.stderr.write('Unknown flag: ' + flag + '\n');
-    process.stderr.write('Usage: node scripts/gen-research-agents.cjs [--check|--write]\n');
-    process.exit(1);
+    throw new ExitError(1, 'Unknown flag: ' + flag + '\nUsage: node scripts/gen-research-agents.cjs [--check|--write]');
   }
+}
+
+if (require.main === module) {
+  runMain(main);
 }
