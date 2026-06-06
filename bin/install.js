@@ -2141,6 +2141,47 @@ function convertClaudeCommandToClaudeSkill(content, skillName, runtime = null, c
   return `${fm}\n${normalizedBody}`;
 }
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeKimiSkillName(skillName) {
+  let text = String(skillName || '').trim().toLowerCase();
+  if (text.startsWith('/')) text = text.slice(1);
+  if (text.startsWith('$')) text = text.slice(1);
+  text = text.replace(/^gsd:/, 'gsd-');
+  if (!text.startsWith('gsd-')) text = `gsd-${text}`;
+  text = text.replace(/[^a-z0-9-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  return text || 'gsd-command';
+}
+
+function convertGsdCommandReferencesToKimiSkillInvocations(content, cmdNames) {
+  if (!Array.isArray(cmdNames) || cmdNames.length === 0) return content;
+  const commands = [...cmdNames].sort((a, b) => b.length - a.length).map(escapeRegExp);
+  const commandGroup = commands.join('|');
+  const colonPattern = new RegExp(`(?<![A-Za-z0-9_/:.-])/?gsd:(${commandGroup})(?=[^A-Za-z0-9_-]|$)`, 'g');
+  const hyphenPattern = new RegExp(`(?:/|\\$)gsd-(${commandGroup})(?=[^A-Za-z0-9_-]|$)`, 'g');
+
+  return content
+    .replace(colonPattern, (_, cmd) => `/skill:gsd-${cmd}`)
+    .replace(hyphenPattern, (_, cmd) => `/skill:gsd-${cmd}`);
+}
+
+function convertClaudeCommandToKimiSkill(content, skillName, _runtime = null, cmdNames = null) {
+  const { frontmatter, body } = extractFrontmatterAndBody(content);
+  const kimiSkillName = normalizeKimiSkillName(skillName);
+  const names = cmdNames || readGsdCommandNames();
+  const description = frontmatter
+    ? extractFrontmatterField(frontmatter, 'description') || `Run GSD workflow ${kimiSkillName}.`
+    : `Run GSD workflow ${kimiSkillName}.`;
+  const normalizedBody = convertGsdCommandReferencesToKimiSkillInvocations(
+    frontmatter ? body : content,
+    names
+  );
+
+  return `---\nname: ${kimiSkillName}\ndescription: ${yamlQuote(toSingleLine(description))}\n---\n${normalizedBody}`;
+}
+
 /**
  * Convert a Claude agent (.md) to a Copilot agent (.agent.md).
  * Applies tool mapping + deduplication, formats tools as JSON array.
@@ -10979,6 +11020,7 @@ module.exports = {
     installAllRuntimes,
     uninstall,
     convertClaudeCommandToCodexSkill,
+    convertClaudeCommandToKimiSkill,
     convertClaudeToOpencodeFrontmatter,
     convertClaudeToKiloFrontmatter,
     configureOpencodePermissions,
