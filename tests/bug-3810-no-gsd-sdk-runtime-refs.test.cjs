@@ -16,9 +16,11 @@
  *
  * Scope: runtime surfaces only — the prompts and hooks the installer ships into
  * a user's runtime config dir. Explicitly NOT covered here:
- *   - `bin/install.js` — installer-internal stale-package detection mechanics
- *     (a user may still have the retired `@opengsd/gsd-sdk` installed); those
- *     references are live, not dead. (#339 triage)
+ *   - `bin/install.js` — installer code, not a runtime-deployed prompt/hook
+ *     surface. (It carries zero `gsd-sdk` references today; the SDK-shim
+ *     verification subsystem was removed in #515 and the shim retired in #522.)
+ *   - `gsd-core/bin/` — executable library code, not deployed prompt text; it
+ *     may legitimately reference the SDK retirement in comments.
  *   - `tests/`, `docs/`, `.changeset/`, CI/lint scripts — legitimately reference
  *     the SDK retirement as history or detect its stale artifacts.
  *
@@ -45,6 +47,11 @@ const RUNTIME_SURFACES = [
   // deployed files uncovered. (#691 review)
   { dir: path.join('gsd-core', 'workflows'), exts: ['.md', '.sh', '.json'] },
   { dir: path.join('gsd-core', 'references'), exts: ['.md'] },
+  // Prompt surfaces the installer deep-copies and the runtime loads via
+  // `@~/.claude/gsd-core/templates/*.md` anchors in workflows/commands; the
+  // lone config.json under templates/ ships too. (#691 review)
+  { dir: path.join('gsd-core', 'templates'), exts: ['.md', '.json'] },
+  { dir: path.join('gsd-core', 'contexts'), exts: ['.md'] },
   { dir: path.join('commands', 'gsd'), exts: ['.md'] },
   { dir: 'agents', exts: ['.md'] },
   // Hooks ship as executable text (.js/.cjs/.sh). `hooks/dist/` is a gitignored
@@ -103,17 +110,24 @@ describe('#339 no gsd-sdk references in runtime surfaces', () => {
     );
   });
 
-  test('at least one file per runtime surface is scanned (guards against an empty sweep)', () => {
-    // A path typo or directory rename could silently make collectFiles() return
-    // [] for a surface, turning the guard above into a no-op that always passes.
-    // Assert each configured surface actually resolves to scanned files.
+  test('at least one file per configured extension is scanned (guards against an empty sweep)', () => {
+    // A path typo, directory rename, or stale extension could silently make
+    // collectFiles() return [] for part of a surface, turning the guard above
+    // into a no-op that always passes. Checking per-surface isn't enough: for
+    // gsd-core/workflows the .md files alone keep a per-surface count > 0, so
+    // dropping .sh/.json would stop covering _runtime-launcher.snippet.sh and
+    // discuss-phase/templates/*.json while the test stayed green. Assert each
+    // configured extension actually resolves to scanned files. (#691 review)
     for (const { dir, exts, skipDirs = [] } of RUNTIME_SURFACES) {
-      const count = collectFiles(path.join(REPO_ROOT, dir), exts, skipDirs).length;
-      assert.ok(
-        count > 0,
-        `Runtime surface "${dir}" resolved to 0 scannable files — the path may have ` +
-          'moved; update RUNTIME_SURFACES so the guard keeps covering it.'
-      );
+      for (const ext of exts) {
+        const count = collectFiles(path.join(REPO_ROOT, dir), [ext], skipDirs).length;
+        assert.ok(
+          count > 0,
+          `Runtime surface "${dir}" resolved to 0 "${ext}" files — the path may ` +
+            'have moved or the extension is stale; update RUNTIME_SURFACES so the ' +
+            'guard keeps covering it.'
+        );
+      }
     }
   });
 });
