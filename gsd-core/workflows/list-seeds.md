@@ -27,7 +27,7 @@ If `count` is 0:
 ```
 No seeds found.
 
-Plant one with /gsd-capture --seed "<forward-looking idea>".
+Plant one with /gsd:capture --seed "<forward-looking idea>".
 ```
 (If a status filter was given and nothing matched, say so: `No seeds with status "<filter>".`) Exit.
 </step>
@@ -47,8 +47,8 @@ SEED-006  triggered  medium   MILE-04 planning         Remove legacy auth crates
 
 Then offer next actions as plain text (no mutation here):
 ```
-- /gsd-capture --seed --enrich <ID>   enrich a seed with trigger, why, and scope
-- /gsd-capture --list-seeds <status>  filter by status
+- /gsd:capture --seed --enrich <ID>   enrich a seed with trigger, why, and scope
+- /gsd:capture --list-seeds <status>  filter by status
 ```
 </step>
 
