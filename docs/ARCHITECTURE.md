@@ -193,6 +193,16 @@ parent dispatches, modes/ holds per-flag behavior (`power.md`, `all.md`,
 checkpoint.json schemas that are read only when the corresponding output
 file is being written.
 
+`workflows/plan-phase.md`, `workflows/execute-phase.md`, and the
+`gsd-planner` / `gsd-executor` agent definitions apply the same discipline
+to their MVP-only reference bodies — `planner-mvp-mode.md`,
+`user-story-template.md`, `skeleton-template.md`, and `execute-mvp-tdd.md`
+are referenced for the planner/executor to Read only on MVP,
+Walking-Skeleton, or MVP+TDD paths, rather than eagerly `@`-imported, so
+non-MVP runs do not pay their context cost (guards against the "`@`-import
+behind a conditional still loads eagerly" leak; see #720). The dedicated
+`mvp-phase` workflow keeps its eager imports, since it is always MVP.
+
 ### Agents (`agents/*.md`)
 
 Specialized agent definitions with frontmatter specifying:
