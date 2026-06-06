@@ -133,6 +133,7 @@ function withSdkDistPresent(fn) {
 }
 
 function stripAnsi(value) {
+  // eslint-disable-next-line no-control-regex -- \x1b (ESC) is the required leading byte of ANSI SGR color sequences; matching it is the purpose of stripping ANSI codes from captured CLI/console output
   return value.replace(/\x1b\[[0-9;]*m/g, '');
 }
 

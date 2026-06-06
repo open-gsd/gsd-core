@@ -222,7 +222,7 @@ export default tseslint.config(
       // Downgraded from recommended error → warn (pre-existing violations; follow-up to fix)
       'no-useless-escape': 'warn',
       'no-regex-spaces': 'warn',
-      'no-control-regex': 'warn',
+      'no-control-regex': 'error',
       'no-irregular-whitespace': 'warn',
     },
   },
