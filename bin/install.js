@@ -97,6 +97,69 @@ function isCodexHooksFeatureKey(key) {
   return CODEX_HOOKS_FEATURE_ALL_KEYS.includes(key);
 }
 
+// #768 \u2014 Claude Code permissions.allow / permissions.deny entries.
+// Pre-populated during Claude installs to eliminate first-run approval friction
+// for gsd-core's own known-safe tool calls, and to add defense-in-depth deny
+// entries for common credential files.
+//
+// Format: each string uses Claude Code's documented permission rule syntax \u2014
+//   "Tool(pattern)"  e.g. "Bash(npx gsd-core *)", "Read(.planning/*)"
+//   "Tool"           (bare tool name, no pattern)
+//
+// Merge policy: additive, non-destructive \u2014 existing user entries are preserved;
+// GSD entries are appended only when not already present (idempotent).
+const GSD_CLAUDE_ALLOW_PERMISSIONS = Object.freeze([
+  'Bash(npx gsd-core *)',
+  'Read(.planning/*)',
+  'Write(.planning/*)',
+  'Read(STATE.md)',
+  'Write(STATE.md)',
+]);
+const GSD_CLAUDE_DENY_PERMISSIONS = Object.freeze([
+  'Read(.env)',
+  'Read(.env.*)',
+  'Read(.secrets)',
+]);
+
+/**
+ * Merge GSD-owned permission entries into a Claude Code settings object.
+ *
+ * Additive and idempotent: existing allow/deny entries are preserved; GSD
+ * entries are appended only if not already present. No other permission sub-keys
+ * (ask, disableBypassPermissionsMode, etc.) are touched.
+ *
+ * Defensive: if settings is not a plain object, returns immediately without
+ * throwing. If permissions.allow / permissions.deny exist but are not arrays
+ * (malformed settings), they are replaced with valid arrays.
+ *
+ * @param {object} settings - The parsed settings.json object to mutate in-place.
+ */
+function mergeClaudePermissions(settings) {
+  if (settings === null || typeof settings !== 'object' || Array.isArray(settings)) return;
+
+  if (!settings.permissions || typeof settings.permissions !== 'object' || Array.isArray(settings.permissions)) {
+    settings.permissions = {};
+  }
+
+  if (!Array.isArray(settings.permissions.allow)) {
+    settings.permissions.allow = [];
+  }
+  if (!Array.isArray(settings.permissions.deny)) {
+    settings.permissions.deny = [];
+  }
+
+  for (const entry of GSD_CLAUDE_ALLOW_PERMISSIONS) {
+    if (!settings.permissions.allow.includes(entry)) {
+      settings.permissions.allow.push(entry);
+    }
+  }
+  for (const entry of GSD_CLAUDE_DENY_PERMISSIONS) {
+    if (!settings.permissions.deny.includes(entry)) {
+      settings.permissions.deny.push(entry);
+    }
+  }
+}
+
 // Copilot instructions marker constants
 const GSD_COPILOT_INSTRUCTIONS_MARKER = '<!-- GSD Configuration \u2014 managed by gsd-core installer -->';
 const GSD_COPILOT_INSTRUCTIONS_CLOSE_MARKER = '<!-- /GSD Configuration -->';
@@ -7801,6 +7864,37 @@ function uninstall(isGlobal, runtime = 'claude') {
       delete settings.hooks;
     }
 
+    // #768 — Remove GSD-owned Claude permissions from settings.json.
+    // Applies only to Claude uninstalls. Filter only the exact GSD-owned entries
+    // to preserve any user-added allow/deny entries.
+    // Uses a local flag to avoid the shared `settingsModified` producing a false
+    // "Removed GSD permissions" message when only hooks/statusline changed.
+    if (runtime === 'claude' && settings.permissions) {
+      let permissionsModified = false;
+      if (Array.isArray(settings.permissions.allow)) {
+        const before = settings.permissions.allow.length;
+        settings.permissions.allow = settings.permissions.allow.filter(
+          (e) => !GSD_CLAUDE_ALLOW_PERMISSIONS.includes(e)
+        );
+        if (settings.permissions.allow.length !== before) {
+          permissionsModified = true;
+        }
+      }
+      if (Array.isArray(settings.permissions.deny)) {
+        const before = settings.permissions.deny.length;
+        settings.permissions.deny = settings.permissions.deny.filter(
+          (e) => !GSD_CLAUDE_DENY_PERMISSIONS.includes(e)
+        );
+        if (settings.permissions.deny.length !== before) {
+          permissionsModified = true;
+        }
+      }
+      if (permissionsModified) {
+        settingsModified = true;
+        console.log(`  ${green}✓${reset} Removed GSD permissions from settings.json`);
+      }
+    }
+
     if (settingsModified) {
       writeSettings(settingsPath, settings);
       removedCount++;
@@ -10803,6 +10897,14 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
     }
   }
 
+  // #768 — Pre-populate permissions.allow/deny for Claude Code installs.
+  // Merges GSD-owned entries non-destructively (preserves existing user permissions).
+  // Scoped to Claude only: gemini/antigravity/qwen/hermes/codebuddy also write
+  // settings.json but use different runtimes and do not use these permission strings.
+  if (runtime === 'claude') {
+    mergeClaudePermissions(settings);
+  }
+
   // Write settings when runtime supports settings.json.
   // #3002 CR: defense-in-depth — re-run validateHookFields right before
   // serialization. The push-site guards above already skip null-command
@@ -11574,6 +11676,10 @@ module.exports = {
     convertClaudeCommandToKiloSkill,
     configureOpencodePermissions,
     neutralizeAgentReferences,
+    // #768 — Claude Code permissions pre-population
+    mergeClaudePermissions,
+    GSD_CLAUDE_ALLOW_PERMISSIONS,
+    GSD_CLAUDE_DENY_PERMISSIONS,
     GSD_CODEX_MARKER,
     CODEX_AGENT_SANDBOX,
     getDirName,

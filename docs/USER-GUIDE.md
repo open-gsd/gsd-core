@@ -780,6 +780,35 @@ See [docs/manual-update.md](manual-update.md) for a step-by-step manual update p
 
 When a workflow fails in a non-obvious way, run `/gsd-forensics` to generate a diagnostic report covering git history anomalies, artifact integrity, and state inconsistencies. Output goes to `.planning/forensics/`.
 
+### Pre-populated Permissions (Claude Code)
+
+Since v1.3.1, the installer pre-populates `~/.claude/settings.json` (or
+`settings.local.json` for local installs) with the core permissions GSD needs:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx gsd-core *)",
+      "Read(.planning/*)",
+      "Write(.planning/*)",
+      "Read(STATE.md)",
+      "Write(STATE.md)"
+    ],
+    "deny": [
+      "Read(.env)",
+      "Read(.env.*)",
+      "Read(.secrets)"
+    ]
+  }
+}
+```
+
+These entries eliminate first-run approval prompts for GSD's own tool calls. The
+merge is non-destructive — your existing permissions are preserved and GSD entries
+are only appended. Uninstalling GSD removes exactly these entries and preserves
+any others.
+
 ### Executor Subagent Gets "Permission denied" on Bash Commands
 
 Add the required patterns to `~/.claude/settings.json`. Core patterns needed for all stacks:
