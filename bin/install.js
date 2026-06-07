@@ -35,6 +35,7 @@ const {
   applyWorktreeBaseRef,
   readBaseRefFromSettings,
 } = require('../gsd-core/bin/lib/worktree-base-ref.cjs');
+const { resolveRuntimeConfigIntent } = require('../gsd-core/bin/lib/runtime-config-adapter-registry.cjs');
 
 /**
  * Runtimes that register hyphen-form `name:` per #2808 AND copy agent bodies
@@ -8254,6 +8255,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   const isHermes = runtime === 'hermes';
   const isCodebuddy = runtime === 'codebuddy';
   const isCline = runtime === 'cline';
+  const configIntent = resolveRuntimeConfigIntent(runtime);
   const dirName = getDirName(runtime);
   const src = path.join(__dirname, '..');
 
@@ -9214,7 +9216,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     throw _earlyInstallErr;
   }
 
-  if (isCodex && !isMinimalMode(_effectiveInstallMode)) {
+  if (configIntent.installSurface === 'codex-toml' && !isMinimalMode(_effectiveInstallMode)) {
     // Capture pre-install snapshots before ANY GSD mutation
     // (#2760 fix 3). On post-write schema-validation failure OR any throw
     // during the mutation sequence (write failure, merge throw, etc.) we
@@ -9560,7 +9562,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir };
   }
 
-  if (isCopilot) {
+  if (configIntent.installSurface === 'copilot-instructions') {
     // Generate copilot-instructions.md
     const templatePath = path.join(targetDir, 'gsd-core', 'templates', 'copilot-instructions.md');
     const instructionsPath = path.join(targetDir, 'copilot-instructions.md');
@@ -9574,25 +9576,13 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir };
   }
 
-  if (isCursor) {
-    // Cursor uses skills — no config.toml, no settings.json hooks needed
+  if (configIntent.installSurface === 'profile-marker-only') {
+    // Cursor/Windsurf/Trae use skills — no config.toml, no settings.json hooks needed
     persistActiveProfileMarker();
     return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir };
   }
 
-  if (isWindsurf) {
-    // Windsurf uses skills — no config.toml, no settings.json hooks needed
-    persistActiveProfileMarker();
-    return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir };
-  }
-
-  if (isTrae) {
-    // Trae uses skills — no settings.json hooks needed
-    persistActiveProfileMarker();
-    return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir };
-  }
-
-  if (isCline) {
+  if (configIntent.installSurface === 'cline-rules') {
     // Cline uses .clinerules — generate a rules file with GSD system instructions
     const clinerulesDest = path.join(targetDir, '.clinerules');
     const clinerules = [
@@ -10210,6 +10200,7 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   const isWindsurf = runtime === 'windsurf';
   const isTrae = runtime === 'trae';
   const isCline = runtime === 'cline';
+  const configIntent = resolveRuntimeConfigIntent(runtime);
 
   if (shouldInstallStatusline && !isOpencode && !isKilo && !isCodex && !isCopilot && !isCursor && !isWindsurf && !isTrae) {
     if (!isGlobal && !forceStatusline) {
@@ -10269,17 +10260,17 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   // {type: 'command', command: null} items that the runtime hook schema
   // rejects at parse time. validateHookFields filters those out so the file
   // we write is always schema-valid.
-  if (!isCodex && !isCopilot && !isKilo && !isCursor && !isWindsurf && !isTrae && !isCline) {
+  if (configIntent.writesSharedSettings) {
     writeSettings(settingsPath, validateHookFields(settings));
   }
 
   // Configure OpenCode permissions
-  if (isOpencode && !process.env.GSD_TEST_MODE) {
+  if (configIntent.finishPermissionWriter === 'opencode' && !process.env.GSD_TEST_MODE) {
     configureOpencodePermissions(isGlobal, configDir);
   }
 
   // Configure Kilo permissions
-  if (isKilo) {
+  if (configIntent.finishPermissionWriter === 'kilo') {
     configureKiloPermissions(isGlobal, configDir);
   }
 

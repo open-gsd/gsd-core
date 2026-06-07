@@ -370,7 +370,7 @@ The `gsd-planner` agent is decomposed into a core agent plus reference modules t
 
 ---
 
-## CLI Modules (89 shipped)
+## CLI Modules (90 shipped)
 
 Full listing: `gsd-core/bin/lib/*.cjs`.
 
@@ -436,6 +436,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `roadmap-upgrade.cjs` | Migration tool for converting legacy `Phase N` entries to milestone-prefixed `Phase M-NN` convention; `computeMigrationPlan` + `applyMigration` with dry-run default and atomic rollback |
 | `roadmap.cjs` | ROADMAP.md parsing, phase extraction, plan progress |
 | `runtime-artifact-layout.cjs` | Runtime artifact layout module — resolves the artifact directory shapes (commands, agents, skills) for each supported runtime; single source of truth for per-runtime artifact placement (#3663) |
+| `runtime-config-adapter-registry.cjs` | Explicit runtime config adapter registry — resolves per-runtime config-mutation install intent (install surface, shared-settings gate, finish-phase permission writer); see ADR-58. |
 | `runtime-name-policy.cjs` | Runtime name normalization policy — canonical token sanitization for runtime identifiers used in path construction and display |
 | `runtime-homes.cjs` | Canonical runtime → global config/skills directory mapping; first-class support for all 15 runtimes including Hermes nested layout and Cline rules-based exclusion (#3126) |
 | `runtime-slash.cjs` | Runtime-aware slash-command formatter — single source of truth for emitting `/gsd-<cmd>` (skills-based runtimes) and `$gsd-<cmd>` (codex) in user-facing output and persisted artifacts (#3584) |

@@ -325,6 +325,7 @@
       "roadmap-upgrade.cjs",
       "roadmap.cjs",
       "runtime-artifact-layout.cjs",
+      "runtime-config-adapter-registry.cjs",
       "runtime-homes.cjs",
       "runtime-name-policy.cjs",
       "runtime-slash.cjs",
