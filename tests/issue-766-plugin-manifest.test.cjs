@@ -114,9 +114,15 @@ describe('B: hooks/hooks.json', () => {
     );
   });
 
-  test('every event name is one of: SessionStart, PreToolUse, PostToolUse', (t) => {
+  test('every event name is a known Claude Code lifecycle event', (t) => {
     if (!hooksConfig) { t.skip('hooks.json could not be parsed'); return; }
-    const validEvents = new Set(['SessionStart', 'PreToolUse', 'PostToolUse']);
+    // Complete set of Claude Code hook events as of #770 (SubagentStop, Stop,
+    // PreCompact, FileChanged added in #770; prior set was SessionStart,
+    // PreToolUse, PostToolUse from #766).
+    const validEvents = new Set([
+      'SessionStart', 'PreToolUse', 'PostToolUse',
+      'SubagentStop', 'Stop', 'PreCompact', 'FileChanged',
+    ]);
     for (const eventName of Object.keys(hooksConfig.hooks)) {
       assert.ok(validEvents.has(eventName), `Unknown hook event: "${eventName}"`);
     }

@@ -8058,6 +8058,7 @@ const GSD_UNINSTALL_HOOKS = [
   'gsd-statusline.js',
   'gsd-check-update.js',
   'gsd-check-update.cmd',
+  'gsd-config-reload.js',
   'gsd-context-monitor.js',
   'gsd-cursor-session-start.js',
   'gsd-cursor-post-tool.js',
@@ -8523,10 +8524,12 @@ function uninstall(isGlobal, runtime = 'claude') {
     // Remove GSD hooks from settings — per-hook granularity to preserve
     // user hooks that share an entry with a GSD hook (#1755 followup).
     // Includes the 3 Qwen-only events added in #788 (SubagentStop, Stop,
-    // PreCompact) and the 3 Gemini-only events added in #776 (BeforeAgent,
-    // AfterAgent, BeforeModel) — safe to iterate for all runtimes; non-Qwen
-    // and non-Gemini installs simply find no entries and skip.
-    for (const eventName of ['SessionStart', 'PostToolUse', 'AfterTool', 'PreToolUse', 'BeforeTool', 'SubagentStop', 'Stop', 'PreCompact', 'BeforeAgent', 'AfterAgent', 'BeforeModel']) {
+    // PreCompact, also registered for Claude in #770), the 3 Gemini-only
+    // events added in #776 (BeforeAgent, AfterAgent, BeforeModel), and the
+    // Claude-only FileChanged event added in #770 — safe to iterate for all
+    // runtimes; installs that don't register these events simply find no
+    // entries and skip.
+    for (const eventName of ['SessionStart', 'PostToolUse', 'AfterTool', 'PreToolUse', 'BeforeTool', 'SubagentStop', 'Stop', 'PreCompact', 'BeforeAgent', 'AfterAgent', 'BeforeModel', 'FileChanged']) {
       if (settings.hooks && settings.hooks[eventName]) {
         const before = JSON.stringify(settings.hooks[eventName]);
         settings.hooks[eventName] = settings.hooks[eventName]
@@ -11118,6 +11121,9 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   const readInjectionScannerCommand = isGlobal
     ? buildHookCommand(targetDir, 'gsd-read-injection-scanner.js', hookOpts)
     : localCmd('gsd-read-injection-scanner.js');
+  const configReloadCommand = isGlobal
+    ? buildHookCommand(targetDir, 'gsd-config-reload.js', hookOpts)
+    : localCmd('gsd-config-reload.js');
 
   // #3002 CR: when resolveNodeRunner() returns null, every dependent JS-hook
   // command is null too. Emit one warning here so the operator sees the cause
@@ -11472,36 +11478,33 @@ function install(isGlobal, runtime = 'claude', options = {}) {
       console.warn(`  ${yellow}⚠${reset}  Skipped phase boundary hook — Bash executable path unavailable (#3393)`);
     }
 
-    // ── Qwen-only extended hook events (#788) ────────────────────────────────
-    // Qwen Code exposes 15 hook events — a superset of Claude Code.  Three
-    // additional events are registered for Qwen installs:
+    // ── Extended hook events: SubagentStop / Stop / PreCompact (#788 + #770) ──
+    // Claude Code (since #770) and Qwen Code (since #788) both support these
+    // three lifecycle events.  Wire gsd-context-monitor so agents get context-
+    // headroom warnings at subagent completion, model stop, and pre-compaction
+    // (the most critical moment to surface headroom info).
+    //
     //   SubagentStop  — subagent lifecycle completion (context headroom tracking)
     //   Stop          — model stop / final-response moment (context headroom)
     //   PreCompact    — fires before conversation compaction (most critical
     //                   moment to surface context headroom warnings)
     //
-    // Wire gsd-context-monitor to all three — the same hook already used for
-    // PostToolUse — so no new hook files are needed.
-    //
     // Note: UserPromptSubmit is NOT wired here.  That event carries the raw
     // user prompt text, not a tool invocation, so gsd-prompt-guard (which
     // exits unless tool_name is Write/Edit) would be a silent no-op.  A
     // dedicated handler for UserPromptSubmit is deferred to a follow-on issue.
-    //
-    // Guard: isQwen is defined at the top of install() (line ~8254).
-    if (isQwen) {
-      // SubagentStop, Stop, PreCompact — route through the context monitor so
-      // agents get context-headroom warnings at subagent completion, model stop,
-      // and pre-compaction (the most critical moment to surface headroom info).
-      for (const qwenEvent of ['SubagentStop', 'Stop', 'PreCompact']) {
-        if (!settings.hooks[qwenEvent]) {
-          settings.hooks[qwenEvent] = [];
+    if (isQwen || runtime === 'claude') {
+      const runtimeLabel = isQwen ? 'Qwen Code' : 'Claude Code';
+      // SubagentStop, Stop, PreCompact — route through the context monitor.
+      for (const event of ['SubagentStop', 'Stop', 'PreCompact']) {
+        if (!settings.hooks[event]) {
+          settings.hooks[event] = [];
         }
-        const alreadyHasContextMonitor = settings.hooks[qwenEvent].some(entry =>
+        const alreadyHasContextMonitor = settings.hooks[event].some(entry =>
           entry.hooks && entry.hooks.some(h => h.command && h.command.includes('gsd-context-monitor'))
         );
         if (!alreadyHasContextMonitor && fs.existsSync(contextMonitorFile) && contextMonitorCommand) {
-          settings.hooks[qwenEvent].push({
+          settings.hooks[event].push({
             hooks: [
               {
                 type: 'command',
@@ -11510,13 +11513,13 @@ function install(isGlobal, runtime = 'claude', options = {}) {
               }
             ]
           });
-          console.log(`  ${green}✓${reset} Configured ${qwenEvent} context monitor hook (Qwen Code)`);
+          console.log(`  ${green}✓${reset} Configured ${event} context monitor hook (${runtimeLabel})`);
         } else if (!alreadyHasContextMonitor && !fs.existsSync(contextMonitorFile)) {
-          console.warn(`  ${yellow}⚠${reset}  Skipped ${qwenEvent} hook — gsd-context-monitor.js not found at target`);
+          console.warn(`  ${yellow}⚠${reset}  Skipped ${event} hook — gsd-context-monitor.js not found at target`);
         }
       }
     }
-    // ── end Qwen-only extended hook events ────────────────────────────────────
+    // ── end SubagentStop / Stop / PreCompact events ────────────────────────────
 
     // ── Gemini-only extended hook events (#776) ───────────────────────────────
     // Gemini CLI exposes several hook events beyond BeforeTool/AfterTool that
@@ -11566,6 +11569,45 @@ function install(isGlobal, runtime = 'claude', options = {}) {
       }
     }
     // ── end Gemini-only extended hook events ──────────────────────────────────
+
+    // ── FileChanged hook: hot-reload gsd config on .planning/config.json edits ─
+    // Claude Code fires FileChanged when a watched file changes on disk.  Wire
+    // gsd-config-reload.js to reload the gsd config context whenever the user
+    // edits .planning/config.json mid-session, eliminating the need to restart.
+    //
+    // The matcher "config.json" watches for changes to any file named config.json
+    // (Claude Code matches by filename, not full path).  The hook exits silently
+    // when the changed file is not the gsd config.
+    //
+    // Scoped to Claude Code only: Qwen Code's FileChanged support is not yet
+    // verified; extend in a follow-on if empirically confirmed.
+    if (runtime === 'claude') {
+      if (!settings.hooks.FileChanged) {
+        settings.hooks.FileChanged = [];
+      }
+      const configReloadFile = path.join(targetDir, 'hooks', 'gsd-config-reload.js');
+      const alreadyHasConfigReload = settings.hooks.FileChanged.some(entry =>
+        entry.hooks && entry.hooks.some(h => h.command && h.command.includes('gsd-config-reload'))
+      );
+      if (!alreadyHasConfigReload && fs.existsSync(configReloadFile) && configReloadCommand) {
+        settings.hooks.FileChanged.push({
+          matcher: 'config.json',
+          hooks: [
+            {
+              type: 'command',
+              command: configReloadCommand,
+              timeout: 8
+            }
+          ]
+        });
+        console.log(`  ${green}✓${reset} Configured FileChanged config-reload hook (Claude Code)`);
+      } else if (!alreadyHasConfigReload && !fs.existsSync(configReloadFile)) {
+        console.warn(`  ${yellow}⚠${reset}  Skipped FileChanged hook — gsd-config-reload.js not found at target`);
+      } else if (!alreadyHasConfigReload && !configReloadCommand) {
+        console.warn(`  ${yellow}⚠${reset}  Skipped FileChanged hook — Node executable path unavailable`);
+      }
+    }
+    // ── end FileChanged hook ────────────────────────────────────────────────────
   }
 
   // ── Gemini hooksConfig.enabled check (#776) ───────────────────────────────

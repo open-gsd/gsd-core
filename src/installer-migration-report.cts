@@ -29,6 +29,7 @@ const VALID_CHOICES: ReadonlyArray<string> = ['keep', 'remove'];
 export const BUNDLED_GSD_HOOK_FILES: ReadonlySet<string> = Object.freeze(new Set([
   'hooks/gsd-check-update-worker.js',
   'hooks/gsd-check-update.js',
+  'hooks/gsd-config-reload.js',
   'hooks/gsd-context-monitor.js',
   'hooks/gsd-cursor-post-tool.js',
   'hooks/gsd-cursor-session-start.js',

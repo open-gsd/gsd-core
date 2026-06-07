@@ -52,7 +52,48 @@ const STUB_HOOKS = [
   'gsd-context-monitor.js',
   'gsd-prompt-guard.js',
   'gsd-check-update.js',
+  'gsd-config-reload.js', // Added in #770
 ];
+
+const HOOKS_DIST = path.join(__dirname, '..', 'hooks', 'dist');
+let hooksDistCreatedByTest = false;
+
+/**
+ * Ensure hooks/dist/ exists with stub files so the installer's copy loop can
+ * populate targetDir/hooks/ for Claude Code installs.  Claude's
+ * first-time-baseline migration auto-removes pre-existing bundled hook stubs
+ * from targetDir/hooks/ and expects the installer to re-copy from hooks/dist/.
+ */
+function ensureHooksDist() {
+  if (!fs.existsSync(HOOKS_DIST)) {
+    fs.mkdirSync(HOOKS_DIST, { recursive: true });
+    hooksDistCreatedByTest = true;
+  }
+  for (const hookFile of STUB_HOOKS) {
+    const dest = path.join(HOOKS_DIST, hookFile);
+    if (!fs.existsSync(dest)) {
+      const src = path.join(HOOKS_SRC, hookFile);
+      if (fs.existsSync(src)) {
+        fs.copyFileSync(src, dest);
+      } else {
+        fs.writeFileSync(dest, '#!/usr/bin/env node\n// stub\n');
+      }
+      try { fs.chmodSync(dest, 0o755); } catch { /* Windows */ }
+    }
+  }
+}
+
+function teardownHooksDist() {
+  if (hooksDistCreatedByTest && fs.existsSync(HOOKS_DIST)) {
+    for (const hookFile of STUB_HOOKS) {
+      try { fs.unlinkSync(path.join(HOOKS_DIST, hookFile)); } catch { /* ignore */ }
+    }
+    try {
+      if (fs.readdirSync(HOOKS_DIST).length === 0) fs.rmdirSync(HOOKS_DIST);
+    } catch { /* ignore */ }
+    hooksDistCreatedByTest = false;
+  }
+}
 
 function stubHooksIntoTarget(targetDir) {
   const hooksDest = path.join(targetDir, 'hooks');
@@ -148,16 +189,27 @@ describe('enh-788: Qwen install registers 3 new hook events', () => {
       );
     }
   });
+
+  test('FileChanged is NOT registered for Qwen (Claude-only event)', () => {
+    // gsd-config-reload / FileChanged is a Claude Code-only registration.
+    // Qwen does not support the FileChanged hook event at all.
+    const cmds = hooksForEvent(settings, 'FileChanged');
+    assert.strictEqual(cmds.length, 0,
+      `FileChanged should NOT be registered for Qwen; got: ${JSON.stringify(cmds)}`);
+  });
 });
 
-// ─── Suite 2: Claude install does NOT get the new events ─────────────────────
+// ─── Suite 2: Claude install DOES get the context events (since #770) ───────
+// Note: Prior to #770, these were Qwen-only events.  #770 extended them to
+// Claude Code.  This suite is updated to match the new expected behavior.
 
-describe('enh-788: Claude install does NOT register Qwen-only hook events', () => {
+describe('enh-788 (updated by #770): Claude install registers context lifecycle events', () => {
   let tmpDir;
   let previousCwd;
   let settings;
 
   beforeEach(() => {
+    ensureHooksDist();
     tmpDir = createTempDir('gsd-788-claude-');
     previousCwd = process.cwd();
     process.chdir(tmpDir);
@@ -169,24 +221,25 @@ describe('enh-788: Claude install does NOT register Qwen-only hook events', () =
   afterEach(() => {
     process.chdir(previousCwd);
     cleanup(tmpDir);
+    teardownHooksDist();
   });
 
-  test('Claude install does not register SubagentStop', () => {
+  test('Claude install registers SubagentStop (since #770)', () => {
     const cmds = hooksForEvent(settings, 'SubagentStop');
-    assert.strictEqual(cmds.length, 0,
-      `Claude should NOT have SubagentStop; got: ${JSON.stringify(cmds)}`);
+    assert.ok(cmds.length > 0,
+      `Claude should have SubagentStop since #770; got: ${JSON.stringify(cmds)}`);
   });
 
-  test('Claude install does not register Stop', () => {
+  test('Claude install registers Stop (since #770)', () => {
     const cmds = hooksForEvent(settings, 'Stop');
-    assert.strictEqual(cmds.length, 0,
-      `Claude should NOT have Stop; got: ${JSON.stringify(cmds)}`);
+    assert.ok(cmds.length > 0,
+      `Claude should have Stop since #770; got: ${JSON.stringify(cmds)}`);
   });
 
-  test('Claude install does not register PreCompact', () => {
+  test('Claude install registers PreCompact (since #770)', () => {
     const cmds = hooksForEvent(settings, 'PreCompact');
-    assert.strictEqual(cmds.length, 0,
-      `Claude should NOT have PreCompact; got: ${JSON.stringify(cmds)}`);
+    assert.ok(cmds.length > 0,
+      `Claude should have PreCompact since #770; got: ${JSON.stringify(cmds)}`);
   });
 });
 
