@@ -28,6 +28,7 @@ jobs:
     outputs:
       code_changed: ${{ steps.scope.outputs.code_changed }}
       full_matrix: ${{ steps.scope.outputs.full_matrix }}
+      product_changed: ${{ steps.scope.outputs.product_changed }}
       targeted_tests: ${{ steps.scope.outputs.targeted_tests }}
       windows_tests: ${{ steps.scope.outputs.windows_tests }}
     steps:
@@ -49,6 +50,7 @@ jobs:
           if [ "$EVENT_NAME" != "pull_request" ]; then
             {
               echo "code_changed=true"
+              echo "product_changed=true"
               echo "full_matrix=true"
               echo "targeted_tests="
               echo "windows_tests="
@@ -117,7 +119,7 @@ jobs:
   test:
     name: test (${{ matrix.os }}, ${{ matrix.node-version }})
     needs: changes
-    if: needs.changes.outputs.code_changed == 'true'
+    if: needs.changes.outputs.product_changed == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     env:
@@ -214,6 +216,47 @@ jobs:
         if: matrix.scope == 'full' && needs.changes.outputs.full_matrix == 'true'
         run: npm run test:slow
 
+  test-inert:
+    name: test (inert CI)
+    needs: changes
+    if: needs.changes.outputs.code_changed == 'true' && needs.changes.outputs.product_changed != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GSD_PLUGIN_ROOT: .ci-gsd-plugin-root-disabled
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          token: ${{ github.token }}
+      - name: Guard — require GitHub-hosted runner
+        run: node scripts/ci-guard-runner.cjs
+      - name: Rebase check — merge PR base branch into PR head
+        if: github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/ci-rebase-check.cjs
+      - name: Set up Node.js 22
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f  # v6.3.0
+        with:
+          node-version: 22
+          cache: 'npm'
+      - name: Environment check
+        run: npm run check:env
+      - name: Install dependencies
+        run: npm ci
+      - name: Dependency integrity gate
+        run: node scripts/check-npm-integrity.cjs
+      - name: Prepare scoped test list
+        env:
+          TEST_SCOPE: targeted
+          TARGETED_TESTS: ${{ needs.changes.outputs.targeted_tests }}
+          WINDOWS_TESTS: ${{ needs.changes.outputs.windows_tests }}
+        run: node scripts/ci-prepare-test-scope.cjs
+      - name: Run scoped tests
+        run: node scripts/run-tests.cjs --files-from .ci-selected-tests.txt
+
   test-full:
     name: full test (${{ matrix.os }}, ${{ matrix.node-version }})
     needs: changes
@@ -289,7 +332,7 @@ jobs:
 
   coverage:
     needs: changes
-    if: needs.changes.outputs.code_changed == 'true'
+    if: needs.changes.outputs.product_changed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -336,6 +379,7 @@ jobs:
       - changes
       - lint-tests
       - test
+      - test-inert
       - test-full
       - coverage
     if: always()
@@ -345,17 +389,21 @@ jobs:
       - name: Summarize required test gate
         env:
           CODE_CHANGED: ${{ needs.changes.outputs.code_changed }}
+          PRODUCT_CHANGED: ${{ needs.changes.outputs.product_changed }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           LINT_RESULT: ${{ needs.lint-tests.result }}
           TEST_RESULT: ${{ needs.test.result }}
+          INERT_RESULT: ${{ needs.test-inert.result }}
           FULL_TEST_RESULT: ${{ needs.test-full.result }}
           COVERAGE_RESULT: ${{ needs.coverage.result }}
         run: |
           set -euo pipefail
           echo "code_changed=$CODE_CHANGED"
+          echo "product_changed=$PRODUCT_CHANGED"
           echo "changes=$CHANGES_RESULT"
           echo "lint-tests=$LINT_RESULT"
           echo "test=$TEST_RESULT"
+          echo "test-inert=$INERT_RESULT"
           echo "test-full=$FULL_TEST_RESULT"
           echo "coverage=$COVERAGE_RESULT"
 
@@ -374,19 +422,24 @@ jobs:
             exit 0
           fi
 
-          if [ "$TEST_RESULT" != "success" ]; then
-            echo "::error::test matrix did not pass"
-            exit 1
-          fi
-
-          if [ "$FULL_TEST_RESULT" != "success" ] && [ "$FULL_TEST_RESULT" != "skipped" ]; then
-            echo "::error::full parity matrix did not pass"
-            exit 1
-          fi
-
-          if [ "$COVERAGE_RESULT" != "success" ]; then
-            echo "::error::coverage did not pass"
-            exit 1
+          if [ "$PRODUCT_CHANGED" = "true" ]; then
+            if [ "$TEST_RESULT" != "success" ]; then
+              echo "::error::test matrix did not pass"
+              exit 1
+            fi
+            if [ "$FULL_TEST_RESULT" != "success" ] && [ "$FULL_TEST_RESULT" != "skipped" ]; then
+              echo "::error::full parity matrix did not pass"
+              exit 1
+            fi
+            if [ "$COVERAGE_RESULT" != "success" ]; then
+              echo "::error::coverage did not pass"
+              exit 1
+            fi
+          else
+            if [ "$INERT_RESULT" != "success" ]; then
+              echo "::error::inert CI lane did not pass"
+              exit 1
+            fi
           fi
 
           echo "Required test gate passed."
