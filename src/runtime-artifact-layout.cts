@@ -254,10 +254,8 @@ function convertedCommandsKind(
     prefix,
     stage: (resolved) => {
       const installExports = getInstallExports();
-      const realConverter = installExports[converterName] as (content: string, commandName: string) => string;
-      const wrappedConverter = (content: string, commandName: string): string =>
-        realConverter(content, commandName);
-      return stageCommandsForRuntimeFlat(findInstallSourceRoot(configDir), resolved, wrappedConverter, prefix);
+      const converter = installExports[converterName] as (content: string, commandName: string) => string;
+      return stageCommandsForRuntimeFlat(findInstallSourceRoot(configDir), resolved, converter, prefix);
     },
   };
 }
