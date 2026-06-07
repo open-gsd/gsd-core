@@ -5015,6 +5015,198 @@ function stripGsdFromCopilotInstructions(content) {
   return content;
 }
 
+// ── Cline directory-form rules + hooks + AGENTS.md (issue #787) ────────────────
+//
+// Cline v3.36 added a hooks system and a `.clinerules/` directory form. Because
+// `.clinerules` cannot be both a file AND a directory, emitting hooks under
+// `.clinerules/hooks/` requires migrating the rules content into the directory
+// form (`.clinerules/gsd.md`). Sources adjudicated:
+//   - https://cline.bot/blog/cline-v3-36-hooks
+//   - https://docs.cline.bot/customization/cline-rules
+
+const GSD_AGENTS_MD_MARKER = '<!-- GSD Configuration — managed by gsd-core installer -->';
+const GSD_AGENTS_MD_CLOSE_MARKER = '<!-- End GSD Configuration -->';
+
+/**
+ * The GSD instruction body shared by the Cline directory-form rules file and
+ * the cross-tool AGENTS.md block. Self-contained — references only the gsd-core
+ * engine layout, not the (separate) #782 Cline skills directory.
+ */
+function buildClineRulesBody() {
+  return [
+    '# GSD Core — Git. Ship. Done.',
+    '',
+    '- GSD workflows live in `gsd-core/workflows/`. Load the relevant workflow when',
+    '  the user runs a `/gsd-*` command.',
+    '- GSD agents live in `agents/`. Use the matching agent when spawning subagents.',
+    '- GSD tools are at `gsd-core/bin/gsd-tools.cjs`. Run with `node`.',
+    '- Planning artifacts live in `.planning/`. Never edit them outside a GSD workflow.',
+    '- Do not apply GSD workflows unless the user explicitly asks for them.',
+    '- When a GSD command triggers a deliverable (feature, fix, docs), offer the next',
+    '  step to the user using Cline\'s ask_user tool after completing it.',
+  ].join('\n') + '\n';
+}
+
+/** AGENTS.md body for the cross-tool global instruction target (`~/.agents/AGENTS.md`). */
+function buildClineAgentsMdBody() {
+  return buildClineRulesBody();
+}
+
+/**
+ * The Cline PreToolUse hook script (issue #787).
+ *
+ * Cline invokes hooks as executable scripts named exactly after the event with
+ * no extension, passing the operation context as JSON on stdin and reading a
+ * JSON decision from stdout ({ cancel, errorMessage, contextModification }).
+ *
+ * This hook is a self-standing planning-artifact guard: it cancels write-class
+ * tool calls that target `.planning/` (GSD-owned artifacts), and otherwise
+ * allows the operation. It FAILS OPEN — any parse/IO error allows the call so a
+ * hook bug can never wedge the user. No dependency on the #782 skills work.
+ */
+function buildClinePreToolUseHook() {
+  return `#!/usr/bin/env node
+'use strict';
+/* GSD-managed Cline PreToolUse hook — gsd-core issue #787.
+ * Protocol: JSON on stdin -> JSON decision on stdout.
+ * Honored fields: { cancel, errorMessage, contextModification }.
+ * Fails open: any error allows the operation. */
+let raw = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (c) => { raw += c; });
+process.stdin.on('end', () => {
+  const allow = () => process.stdout.write(JSON.stringify({ cancel: false }));
+  let input;
+  try { input = JSON.parse(raw || '{}'); } catch { return allow(); }
+  try {
+    const tool = String(
+      input.toolName || input.tool_name || input.tool ||
+      (input.toolInput && input.toolInput.name) || (input.tool_input && input.tool_input.name) || ''
+    ).toLowerCase();
+    const isWrite = /write|edit|replace|create|delete|remove|append|apply|patch|insert|mkdir/.test(tool);
+    const strings = [];
+    const walk = (v, depth) => {
+      if (depth > 4 || strings.length > 256) return;
+      if (typeof v === 'string') { strings.push(v); return; }
+      if (Array.isArray(v)) { for (const x of v) walk(x, depth + 1); return; }
+      if (v && typeof v === 'object') { for (const k of Object.keys(v)) walk(v[k], depth + 1); }
+    };
+    walk(input, 0);
+    const touchesPlanning = strings.some((s) => /(^|[\\\\/])\\.planning([\\\\/]|$)/.test(s));
+    if (isWrite && touchesPlanning) {
+      return process.stdout.write(JSON.stringify({
+        cancel: true,
+        errorMessage:
+          'GSD: .planning/ artifacts are managed by GSD workflows. Edit them only through a /gsd-* command, not directly.',
+      }));
+    }
+  } catch { /* fall through to allow */ }
+  return allow();
+});
+`;
+}
+
+/**
+ * Merge the GSD AGENTS.md block into an existing file (or create it), preserving
+ * any user content. Mirrors mergeCopilotInstructions: marker-delimited, idempotent.
+ */
+function mergeGsdAgentsMd(filePath, gsdContent) {
+  const gsdBlock = GSD_AGENTS_MD_MARKER + '\n' + gsdContent.trim() + '\n' + GSD_AGENTS_MD_CLOSE_MARKER;
+
+  if (!fs.existsSync(filePath)) {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, gsdBlock + '\n');
+    return;
+  }
+
+  const existing = fs.readFileSync(filePath, 'utf8');
+  const openIndex = existing.indexOf(GSD_AGENTS_MD_MARKER);
+  const closeIndex = existing.indexOf(GSD_AGENTS_MD_CLOSE_MARKER);
+
+  if (openIndex !== -1 && closeIndex !== -1) {
+    const before = existing.substring(0, openIndex).trimEnd();
+    const after = existing.substring(closeIndex + GSD_AGENTS_MD_CLOSE_MARKER.length).trimStart();
+    let newContent = '';
+    if (before) newContent += before + '\n\n';
+    newContent += gsdBlock;
+    if (after) newContent += '\n\n' + after;
+    newContent += '\n';
+    fs.writeFileSync(filePath, newContent);
+    return;
+  }
+
+  fs.writeFileSync(filePath, existing.trimEnd() + '\n\n' + gsdBlock + '\n');
+}
+
+/**
+ * Strip the GSD block from AGENTS.md content. Returns null if the file became
+ * empty (was GSD-only), the unchanged content if no markers were found, or the
+ * cleaned content otherwise.
+ */
+function stripGsdFromAgentsMd(content) {
+  const openIndex = content.indexOf(GSD_AGENTS_MD_MARKER);
+  const closeIndex = content.indexOf(GSD_AGENTS_MD_CLOSE_MARKER);
+  if (openIndex !== -1 && closeIndex !== -1) {
+    const before = content.substring(0, openIndex).trimEnd();
+    const after = content.substring(closeIndex + GSD_AGENTS_MD_CLOSE_MARKER.length).trimStart();
+    const cleaned = (before + (before && after ? '\n\n' : '') + after).trim();
+    if (!cleaned) return null;
+    return cleaned + '\n';
+  }
+  return content;
+}
+
+/**
+ * Write the full Cline runtime artifact set (directory-form rules + PreToolUse
+ * hook) into targetDir, migrating a legacy single-file `.clinerules` if present.
+ * For global installs, also merge the cross-tool ~/.agents/AGENTS.md target.
+ *
+ * Returns the list of manifest-relative paths written under targetDir (so the
+ * caller can hash-track them).
+ */
+function writeClineArtifacts(targetDir, isGlobalInstall) {
+  const written = [];
+  const clinerulesDir = path.join(targetDir, '.clinerules');
+
+  // Migrate a pre-#787 single-file `.clinerules` — a path cannot be both a
+  // file and a directory, so the legacy file must be removed first.
+  try {
+    if (fs.existsSync(clinerulesDir) && fs.statSync(clinerulesDir).isFile()) {
+      fs.unlinkSync(clinerulesDir);
+      console.log(`  ${green}✓${reset} Migrated legacy .clinerules file to directory form`);
+    }
+  } catch { /* best-effort migration */ }
+
+  fs.mkdirSync(clinerulesDir, { recursive: true });
+  fs.writeFileSync(path.join(clinerulesDir, 'gsd.md'), buildClineRulesBody());
+  written.push('.clinerules/gsd.md');
+  console.log(`  ${green}✓${reset} Wrote .clinerules/gsd.md`);
+
+  const hooksDir = path.join(clinerulesDir, 'hooks');
+  fs.mkdirSync(hooksDir, { recursive: true });
+  const hookPath = path.join(hooksDir, 'PreToolUse');
+  fs.writeFileSync(hookPath, buildClinePreToolUseHook());
+  try { fs.chmodSync(hookPath, 0o755); } catch { /* Windows: hooks unsupported anyway */ }
+  written.push('.clinerules/hooks/PreToolUse');
+  console.log(`  ${green}✓${reset} Wrote .clinerules/hooks/PreToolUse`);
+
+  // Global cross-tool instruction target. Cline reads ~/.agents/AGENTS.md
+  // (docs.cline.bot/customization/cline-rules). Merge-safe so we never clobber
+  // a user's or another tool's AGENTS.md. Tracked via markers (like copilot),
+  // not the per-configDir manifest, since it lives outside configDir.
+  if (isGlobalInstall) {
+    try {
+      const agentsPath = path.join(os.homedir(), '.agents', 'AGENTS.md');
+      mergeGsdAgentsMd(agentsPath, buildClineAgentsMdBody());
+      console.log(`  ${green}✓${reset} Merged GSD instructions into ~/.agents/AGENTS.md`);
+    } catch (err) {
+      console.warn(`  ${yellow}⚠${reset} Could not write ~/.agents/AGENTS.md: ${err.message}`);
+    }
+  }
+
+  return written;
+}
+
 /**
  * Generate config.toml and per-agent .toml files for Codex.
  * Reads agent .md files from source, extracts metadata, writes .toml configs.
@@ -6796,10 +6988,14 @@ function uninstall(isGlobal, runtime = 'claude') {
   const isCodebuddy = runtime === 'codebuddy';
   const dirName = getDirName(runtime);
 
-  // Get the target directory based on runtime and install type
+  // Get the target directory based on runtime and install type. Cline local
+  // installs write to the project root (.clinerules/ lives at the root, not in
+  // a .cline/ subdir), mirroring the install() path resolution (#787).
   const targetDir = isGlobal
     ? getGlobalConfigDir(runtime, explicitConfigDir)
-    : path.join(process.cwd(), dirName);
+    : runtime === 'cline'
+      ? process.cwd()
+      : path.join(process.cwd(), dirName);
 
   const locationLabel = isGlobal
     ? targetDir.replace(os.homedir(), '~')
@@ -6898,6 +7094,55 @@ function uninstall(isGlobal, runtime = 'claude') {
         removedCount++;
         console.log(`  ${green}✓${reset} Cleaned GSD section from copilot-instructions.md`);
       }
+    }
+  }
+
+  // 1b-cline. Non-layout Cline side-effects (issue #787): remove the
+  // directory-form rules + PreToolUse hook, and strip the GSD block from the
+  // global cross-tool ~/.agents/AGENTS.md target.
+  if (runtime === 'cline') {
+    const clinerulesDir = path.join(targetDir, '.clinerules');
+    for (const rel of ['gsd.md', path.join('hooks', 'PreToolUse')]) {
+      const p = path.join(clinerulesDir, rel);
+      try {
+        if (fs.existsSync(p)) {
+          fs.unlinkSync(p);
+          removedCount++;
+        }
+      } catch { /* best-effort */ }
+    }
+    // Also remove a legacy single-file .clinerules left by pre-#787 installs.
+    try {
+      if (fs.existsSync(clinerulesDir) && fs.statSync(clinerulesDir).isFile()) {
+        fs.unlinkSync(clinerulesDir);
+        removedCount++;
+      }
+    } catch { /* best-effort */ }
+    // Prune now-empty GSD-created directories (leave any user-added rule files).
+    for (const dir of [path.join(clinerulesDir, 'hooks'), clinerulesDir]) {
+      try {
+        if (fs.existsSync(dir) && fs.statSync(dir).isDirectory() && fs.readdirSync(dir).length === 0) {
+          fs.rmdirSync(dir);
+        }
+      } catch { /* best-effort */ }
+    }
+    if (isGlobal) {
+      const agentsPath = path.join(os.homedir(), '.agents', 'AGENTS.md');
+      try {
+        if (fs.existsSync(agentsPath)) {
+          const content = fs.readFileSync(agentsPath, 'utf8');
+          const cleaned = stripGsdFromAgentsMd(content);
+          if (cleaned === null) {
+            fs.unlinkSync(agentsPath);
+            removedCount++;
+            console.log(`  ${green}✓${reset} Removed ~/.agents/AGENTS.md (was GSD-only)`);
+          } else if (cleaned !== content) {
+            fs.writeFileSync(agentsPath, cleaned);
+            removedCount++;
+            console.log(`  ${green}✓${reset} Cleaned GSD section from ~/.agents/AGENTS.md`);
+          }
+        }
+      } catch { /* best-effort */ }
     }
   }
 
@@ -7665,11 +7910,15 @@ function writeManifest(configDir, runtime = 'claude', options = {}) {
       }
     }
   }
-  // Track .clinerules file in manifest for Cline installs
+  // Track Cline directory-form artifacts in the manifest (issue #787): the
+  // rules file and the PreToolUse hook. (~/.agents/AGENTS.md is tracked via its
+  // marker block, not the per-configDir manifest, since it lives outside it.)
   if (isCline) {
-    const clinerulesDest = path.join(configDir, '.clinerules');
-    if (fs.existsSync(clinerulesDest)) {
-      manifest.files['.clinerules'] = fileHash(clinerulesDest);
+    for (const rel of ['.clinerules/gsd.md', '.clinerules/hooks/PreToolUse']) {
+      const dest = path.join(configDir, rel);
+      if (fs.existsSync(dest)) {
+        manifest.files[rel] = fileHash(dest);
+      }
     }
   }
 
@@ -9362,22 +9611,13 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   }
 
   if (configIntent.installSurface === 'cline-rules') {
-    // Cline uses .clinerules — generate a rules file with GSD system instructions
-    const clinerulesDest = path.join(targetDir, '.clinerules');
-    const clinerules = [
-      '# GSD Core — Git. Ship. Done.',
-      '',
-      '- GSD workflows live in `gsd-core/workflows/`. Load the relevant workflow when',
-      '  the user runs a `/gsd-*` command.',
-      '- GSD agents live in `agents/`. Use the matching agent when spawning subagents.',
-      '- GSD tools are at `gsd-core/bin/gsd-tools.cjs`. Run with `node`.',
-      '- Planning artifacts live in `.planning/`. Never edit them outside a GSD workflow.',
-      '- Do not apply GSD workflows unless the user explicitly asks for them.',
-      '- When a GSD command triggers a deliverable (feature, fix, docs), offer the next',
-      '  step to the user using Cline\'s ask_user tool after completing it.',
-    ].join('\n') + '\n';
-    fs.writeFileSync(clinerulesDest, clinerules);
-    console.log(`  ${green}✓${reset} Wrote .clinerules`);
+    // Cline uses the `.clinerules/` directory form (issue #787): GSD rules live
+    // at .clinerules/gsd.md and a PreToolUse lifecycle hook at
+    // .clinerules/hooks/PreToolUse. Global installs also get ~/.agents/AGENTS.md.
+    writeClineArtifacts(targetDir, isGlobal);
+    // Re-run the manifest pass: these artifacts are written *after* the earlier
+    // writeManifest() call, so a second pass is needed to hash-track them.
+    writeManifest(targetDir, runtime, { mode: _effectiveInstallMode });
     persistActiveProfileMarker();
     return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir };
   }
@@ -10833,6 +11073,14 @@ module.exports = {
     convertClaudeAgentToCodebuddyAgent,
     convertClaudeToCliineMarkdown,
     convertClaudeAgentToClineAgent,
+    buildClineRulesBody,
+    buildClineAgentsMdBody,
+    buildClinePreToolUseHook,
+    writeClineArtifacts,
+    mergeGsdAgentsMd,
+    stripGsdFromAgentsMd,
+    GSD_AGENTS_MD_MARKER,
+    GSD_AGENTS_MD_CLOSE_MARKER,
     writeManifest,
     saveLocalPatches,
     reportLocalPatches,

@@ -198,7 +198,7 @@ WINDSURF_CONFIG_DIR=~/.codeium/windsurf-alt npx @opengsd/gsd-core@latest --winds
 
 ### Cline
 
-Cline uses a rules-based integration — GSD installs as `.clinerules` rather than slash commands.
+Cline uses a rules-based integration — GSD installs as Cline rules rather than slash commands.
 
 ```bash
 # Global install (all projects)
@@ -208,7 +208,24 @@ npx @opengsd/gsd-core@latest --cline --global
 npx @opengsd/gsd-core@latest --cline --local
 ```
 
-Global installs write to `~/.cline/`. Local installs write to `./.cline/`. Rules are loaded automatically by Cline — no custom slash commands are registered.
+GSD writes the [`.clinerules/` directory form](https://docs.cline.bot/customization/cline-rules):
+
+- **`.clinerules/gsd.md`** — the GSD rule file. Cline loads every `.md`/`.txt` file in
+  the `.clinerules/` directory automatically; no custom slash commands are registered.
+- **`.clinerules/hooks/PreToolUse`** — a [lifecycle hook](https://cline.bot/blog/cline-v3-36-hooks)
+  (Cline v3.36+). It is an executable script that receives the tool-call context as JSON on
+  stdin and returns a JSON decision (`cancel` / `errorMessage` / `contextModification`). The
+  GSD hook guards `.planning/` artifacts from direct edits and otherwise allows the operation;
+  it fails open, so a hook error never blocks you. Cline runs hooks on macOS and Linux only.
+
+Global installs additionally merge GSD instructions into **`~/.agents/AGENTS.md`**, the
+cross-tool global instruction file Cline reads. The block is marker-delimited, so your own
+`AGENTS.md` content (and other tools' entries) is preserved, and `--uninstall` strips only the
+GSD block.
+
+> Cline's *global* hook directory (`~/Documents/Cline/Rules/Hooks/`) is not yet populated by the
+> installer — project-scope hooks (`.clinerules/hooks/`) and the global `AGENTS.md` instruction
+> target cover the common cases.
 
 ---
 
