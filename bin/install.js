@@ -3181,14 +3181,17 @@ function generateCodexAgentToml(agentName, agentContent, modelOverrides = null, 
   // Task() model parameters). See #2256.
   // Precedence: per-agent model_overrides > runtime-aware tier resolution (#2517).
   const modelOverride = modelOverrides?.[resolvedName] || modelOverrides?.[agentName];
+  let hasPinnedModel = false;
   if (modelOverride) {
     lines.push(`model = ${JSON.stringify(modelOverride)}`);
+    hasPinnedModel = true;
   } else if (runtimeResolver) {
     // #2517 — runtime-aware tier resolution. Embeds Codex-native model + reasoning_effort
     // from RUNTIME_PROFILE_MAP / model_profile_overrides for the configured tier.
     const entry = runtimeResolver.resolve(resolvedName) || runtimeResolver.resolve(agentName);
     if (entry?.model) {
       lines.push(`model = ${JSON.stringify(entry.model)}`);
+      hasPinnedModel = true;
       // model is resolved here; reasoning_effort from catalog tier is REPLACED by the
       // unified effort resolver below (#443). Do NOT emit entry.reasoning_effort here.
     }
@@ -3199,9 +3202,15 @@ function generateCodexAgentToml(agentName, agentContent, modelOverrides = null, 
   // from the same effort.agent_overrides / effort.routing_tier_defaults / effort.default
   // config source. Codex does not support 'max' → clamped to 'xhigh' by
   // gsdRenderEffortForRuntime('codex', ...).
-  const _universalEffortCodex = resolveInstallTimeEffort(effortCfg, resolvedName !== agentName ? resolvedName : agentName);
-  const _renderedEffortCodex = _getGsdEffortCatalog().renderEffortForRuntime('codex', _universalEffortCodex).value;
-  lines.push(`model_reasoning_effort = ${JSON.stringify(_renderedEffortCodex)}`);
+  // #838 — Do not pin effort when Codex is intentionally inheriting the parent
+  // chat model. A TOML with no `model` but a static `model_reasoning_effort`
+  // creates confusing partial routing: model follows the Codex UI while effort
+  // follows GSD. Keep those knobs coupled unless GSD also pins the model.
+  if (hasPinnedModel) {
+    const _universalEffortCodex = resolveInstallTimeEffort(effortCfg, resolvedName !== agentName ? resolvedName : agentName);
+    const _renderedEffortCodex = _getGsdEffortCatalog().renderEffortForRuntime('codex', _universalEffortCodex).value;
+    lines.push(`model_reasoning_effort = ${JSON.stringify(_renderedEffortCodex)}`);
+  }
 
   // #774 — Emit service_tier and model_verbosity for light-tier agents.
   // Light-tier agents (routingTier: "light" in model-catalog.json) are haiku-equivalent
