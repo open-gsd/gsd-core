@@ -370,6 +370,29 @@ jobs:
           node scripts/check-npm-integrity.cjs
           npm run test:coverage:unit
 
+      - name: Preview CHANGELOG (non-destructive)
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          # Non-destructive CHANGELOG preview for the version under test (#759):
+          # renders the curated section finalize will promote, without writing
+          # CHANGELOG.md or consuming .changeset fragments. Surfaced in the job
+          # summary so RC testers see the upcoming release notes.
+          #
+          # Render to a file as a standalone command so a non-zero exit (e.g. a
+          # malformed fragment) fails the step. The default GitHub Linux shell
+          # is `bash -e` without pipefail, so a `node | tee` pipeline would mask
+          # a node failure behind tee's exit 0.
+          PREVIEW_FILE="${RUNNER_TEMP:-/tmp}/changelog-preview.md"
+          node scripts/changeset/cli.cjs render \
+            --version "$VERSION" --date "$(date -u +%F)" --preview > "$PREVIEW_FILE"
+          {
+            echo "### CHANGELOG preview for v${VERSION} (not yet promoted)"
+            echo ''
+            cat "$PREVIEW_FILE"
+          } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+          cat "$PREVIEW_FILE"
+
       - name: Commit pre-release version bump
         env:
           PRE_VERSION: ${{ steps.prerelease.outputs.pre_version }}
