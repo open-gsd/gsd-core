@@ -1,3 +1,6 @@
+// allow-test-rule: source-text-is-the-product
+// The PROJECT.md template + complete-milestone workflow .md ARE the product surface
+// the runtime loads; asserting on their text tests the deployed contract directly.
 /**
  * Enhancement #72 — optional Business Context section in the PROJECT.md template.
  *
