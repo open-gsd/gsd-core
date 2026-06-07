@@ -15,6 +15,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 
 const MAX_LENGTH = 100;
 const COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');
@@ -46,38 +47,41 @@ function getFiles() {
     .map(f => path.join(COMMANDS_DIR, f));
 }
 
-const files = getFiles();
-const violations = [];
+function main() {
+  const files = getFiles();
+  const violations = [];
 
-for (const filePath of files) {
-  let content;
-  try {
-    content = fs.readFileSync(filePath, 'utf-8');
-  } catch (err) {
-    process.stderr.write(`ERROR: Cannot read file: ${filePath}\n  ${err.message}\n`);
-    process.exit(1);
+  for (const filePath of files) {
+    let content;
+    try {
+      content = fs.readFileSync(filePath, 'utf-8');
+    } catch (err) {
+      throw new ExitError(1, `ERROR: Cannot read file: ${filePath}\n  ${err.message}`);
+    }
+
+    const description = parseDescription(content);
+    if (description === null) continue;
+
+    if (description.length > MAX_LENGTH) {
+      violations.push({ filePath, length: description.length, description });
+    }
   }
 
-  const description = parseDescription(content);
-  if (description === null) continue;
-
-  if (description.length > MAX_LENGTH) {
-    violations.push({ filePath, length: description.length, description });
+  if (violations.length === 0) {
+    const checked = files.length;
+    process.stdout.write(`ok lint-descriptions: ${checked} file(s) checked, 0 violations\n`);
+    return 0;
   }
+
+  process.stderr.write(`\nERROR lint-descriptions: ${violations.length} violation(s) found\n\n`);
+  for (const v of violations) {
+    const preview = v.description.length > 120 ? v.description.slice(0, 117) + '...' : v.description;
+    process.stderr.write(`  ${v.filePath}\n`);
+    process.stderr.write(`    Length : ${v.length} (max ${MAX_LENGTH})\n`);
+    process.stderr.write(`    Desc   : ${preview}\n\n`);
+  }
+  process.stderr.write(`Trim descriptions to <= ${MAX_LENGTH} chars. Flag docs belong in argument-hint:.\n\n`);
+  return 1;
 }
 
-if (violations.length === 0) {
-  const checked = files.length;
-  process.stdout.write(`ok lint-descriptions: ${checked} file(s) checked, 0 violations\n`);
-  process.exit(0);
-}
-
-process.stderr.write(`\nERROR lint-descriptions: ${violations.length} violation(s) found\n\n`);
-for (const v of violations) {
-  const preview = v.description.length > 120 ? v.description.slice(0, 117) + '...' : v.description;
-  process.stderr.write(`  ${v.filePath}\n`);
-  process.stderr.write(`    Length : ${v.length} (max ${MAX_LENGTH})\n`);
-  process.stderr.write(`    Desc   : ${preview}\n\n`);
-}
-process.stderr.write(`Trim descriptions to <= ${MAX_LENGTH} chars. Flag docs belong in argument-hint:.\n\n`);
-process.exit(1);
+runMain(main);

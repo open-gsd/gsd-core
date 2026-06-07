@@ -83,7 +83,7 @@ describe('bug #3691 — Bug 1: Plans-block detection with inline summary', () =>
   let tmpDir;
   afterEach(() => cleanup(tmpDir));
 
-  test('Plans: N plans (inline count after colon) is detected as a Plans-block', (t) => {
+  test('Plans: N plans (inline count after colon) is detected as a Plans-block', (_t) => {
     // Pre-fix: `Plans:\s*\n` requires bare newline — fails for "Plans: 2 plans\n"
     // Post-fix: `Plans:[^\n]*\n` accepts any text after the colon
     const roadmap = [
@@ -117,7 +117,7 @@ describe('bug #3691 — Bug 1: Plans-block detection with inline summary', () =>
     assert.ok(written.includes('Wave'), 'wave annotation must appear in ROADMAP.md');
   });
 
-  test('Plans: N plans across N waves (longer inline text) is detected', (t) => {
+  test('Plans: N plans across N waves (longer inline text) is detected', (_t) => {
     const roadmap = [
       '# Roadmap',
       '',
@@ -144,7 +144,7 @@ describe('bug #3691 — Bug 1: Plans-block detection with inline summary', () =>
       'Plans-block with "N plans across N waves" inline text must be detected');
   });
 
-  test('**Plans:** (bold markdown wrapper) is detected as a Plans-block', (t) => {
+  test('**Plans:** (bold markdown wrapper) is detected as a Plans-block', (_t) => {
     // Bold wrapper: `**Plans:** 3 plans across 2 waves`
     const roadmap = [
       '# Roadmap',
@@ -170,7 +170,7 @@ describe('bug #3691 — Bug 1: Plans-block detection with inline summary', () =>
       '**Plans:** bold-wrapped header must be detected as a Plans-block');
   });
 
-  test('bare Plans: (no inline text, legacy format) still works after fix', (t) => {
+  test('bare Plans: (no inline text, legacy format) still works after fix', (_t) => {
     // Regression guard: the fix must not break the working case
     const roadmap = [
       '# Roadmap',
@@ -205,7 +205,7 @@ describe('bug #3691 — Bug 3: decimal plan IDs (e.g. 02.3-01-PLAN.md) parse cor
   let tmpDir;
   afterEach(() => cleanup(tmpDir));
 
-  test('decimal plan ID 02.3-01 is captured fully and matched to the correct wave', (t) => {
+  test('decimal plan ID 02.3-01 is captured fully and matched to the correct wave', (_t) => {
     // Pre-fix: `[\w-]+?` stops at `.` → captures `02` only → planData.find misses → wave = 1 for all
     // Post-fix: `[\w.-]+?` captures `02.3-01` → planData.find resolves → correct wave written
     const roadmap = [
@@ -238,7 +238,7 @@ describe('bug #3691 — Bug 3: decimal plan IDs (e.g. 02.3-01-PLAN.md) parse cor
     assert.ok(/Wave 2/.test(written), 'Wave 2 header must appear in output');
   });
 
-  test('combined fixture: decimal phase + bold Plans: header (both bugs together)', (t) => {
+  test('combined fixture: decimal phase + bold Plans: header (both bugs together)', (_t) => {
     // Exercises Bug 1 (bold **Plans:** header) AND Bug 3 (decimal IDs) simultaneously.
     // This is the exact ROADMAP fragment from the issue report.
     const roadmap = [
@@ -280,7 +280,7 @@ describe('review fix F3 — leading-dot plan ID is rejected (defensive guard)', 
   let tmpDir;
   afterEach(() => cleanup(tmpDir));
 
-  test('checklist line with leading-dot plan ID is skipped and does not silently default to wave 1', (t) => {
+  test('checklist line with leading-dot plan ID is skipped and does not silently default to wave 1', (_t) => {
     // Guards: `.invalid-PLAN.md` would be captured as `.invalid` by the `[\w.-]+?` regex
     // (since `.` is now included), which starts with a dot — an invalid ID.
     // Without the guard, planData.find() misses it and wave defaults to 1, silently
@@ -327,7 +327,7 @@ describe('review fix F4 — adversarial test gaps', () => {
   let tmpDir;
   afterEach(() => cleanup(tmpDir));
 
-  test('001.10-PLAN.md multi-decimal leading-zero ID is captured fully and wave-assigned correctly', (t) => {
+  test('001.10-PLAN.md multi-decimal leading-zero ID is captured fully and wave-assigned correctly', (_t) => {
     // Guards regression of Bug 3: `[\w-]+?` would stop at the first `.` and
     // capture `001` instead of `001.10`, which never matches any planData entry.
     // Post-fix `[\w.-]+?` must capture `001.10` in full.
@@ -357,7 +357,7 @@ describe('review fix F4 — adversarial test gaps', () => {
       'wave 2 dependency must be resolved from full 001.10-02 ID (not truncated to 001)');
   });
 
-  test('**Plans:** (bold, no trailing text) is matched and checklist is processed', (t) => {
+  test('**Plans:** (bold, no trailing text) is matched and checklist is processed', (_t) => {
     // Guards the bare-bold variant: `**Plans:**` with nothing after the colon.
     // The `[^\n]*` quantifier accepts zero chars so this should already work,
     // but this test would fail if `\*{0,2}Plans\*{0,2}` regressed to require no stars.

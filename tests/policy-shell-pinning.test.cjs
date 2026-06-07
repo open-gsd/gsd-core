@@ -5,7 +5,6 @@ const assert = require('node:assert/strict');
 const path = require('path');
 
 const {
-  POLICY,
   VIOLATION,
   inspectWorkflow,
   runPolicyLint,

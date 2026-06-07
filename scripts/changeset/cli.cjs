@@ -17,7 +17,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { parseFragment, FRAGMENT_ERROR } = require('./parse.cjs');
+const { ExitError, runMain } = require('../lib/cli-exit.cjs');
+const { parseFragment } = require('./parse.cjs');
 const { renderChangelog } = require('./render.cjs');
 const { serializeChangelog, parseChangelog } = require('./serialize.cjs');
 const { renderGithubReleaseNotes } = require('./github-release-notes.cjs');
@@ -475,29 +476,26 @@ function main() {
   if (!parsed.ok) {
     process.stderr.write(`${parsed.error}\n`);
     process.stderr.write(usage());
-    process.exit(2);
+    throw new ExitError(2);
   }
   const { opts } = parsed;
   if (opts.cmd !== 'render' && opts.cmd !== 'github-release-notes' && opts.cmd !== 'extract' && opts.cmd !== 'verify') {
     process.stderr.write(usage());
-    process.exit(1);
+    throw new ExitError(1);
   }
   if (opts.cmd === 'render' && (!opts.version || !opts.date)) {
-    process.stderr.write('--version and --date are required for render\n');
-    process.exit(2);
+    throw new ExitError(2, '--version and --date are required for render');
   }
   if (opts.cmd === 'github-release-notes' && (!opts.fromRef || !opts.toRef)) {
-    process.stderr.write('--from and --to are required for github-release-notes\n');
-    process.exit(2);
+    throw new ExitError(2, '--from and --to are required for github-release-notes');
   }
   if (opts.cmd === 'extract' && (!opts.fromRef || !opts.toRef)) {
     process.stderr.write('--from and --to are required for extract\n');
     process.stderr.write(usage());
-    process.exit(1);
+    throw new ExitError(1);
   }
   if (opts.cmd === 'verify' && !opts.version) {
-    process.stderr.write('--version is required for verify\n');
-    process.exit(2);
+    throw new ExitError(2, '--version is required for verify');
   }
 
   if (opts.cmd === 'extract') {
@@ -509,7 +507,7 @@ function main() {
     } else if (exitCode === 2) {
       process.stderr.write(`no releases found in range (from=${report.from}, to=${report.to})\n`);
     }
-    process.exit(exitCode);
+    return exitCode;
   }
 
   if (opts.cmd === 'verify') {
@@ -521,7 +519,7 @@ function main() {
     } else {
       process.stderr.write(report.error + '\n');
     }
-    process.exit(exitCode);
+    return exitCode;
   }
 
   const { exitCode, report } = opts.cmd === 'render' ? cmdRender(opts) : cmdGithubReleaseNotes(opts);
@@ -541,9 +539,9 @@ function main() {
       }
     }
   }
-  process.exit(exitCode);
+  return exitCode;
 }
 
-if (require.main === module) main();
+if (require.main === module) runMain(main);
 
 module.exports = { cmdRender, cmdExtract, cmdVerify, cmdGithubReleaseNotes, parseArgs, splitChangelog, assembleChangelog, listFragmentFiles, usage };

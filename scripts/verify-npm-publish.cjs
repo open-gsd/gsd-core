@@ -8,6 +8,7 @@
  */
 
 const cp = require('node:child_process');
+const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 
 // ---- Constants ---------------------------------------------------------------
 
@@ -137,67 +138,57 @@ function parseArgs(argv) {
         '  --json              emit structured JSON output\n' +
         '  --help, -h          show this help\n'
       );
-      process.exit(0);
+      throw new ExitError(0);
     } else if (arg === '--package') {
       const val = args.shift();
       if (!val || val.startsWith('-')) {
-        process.stderr.write('error: --package requires a value\n');
-        process.exit(2);
+        throw new ExitError(2, 'error: --package requires a value');
       }
       opts.pkg = val;
     } else if (arg === '--version') {
       const val = args.shift();
       if (!val || val.startsWith('-')) {
-        process.stderr.write('error: --version requires a value\n');
-        process.exit(2);
+        throw new ExitError(2, 'error: --version requires a value');
       }
       opts.version = val;
     } else if (arg === '--dist-tag') {
       const val = args.shift();
       if (!val || val.startsWith('-')) {
-        process.stderr.write('error: --dist-tag requires a value\n');
-        process.exit(2);
+        throw new ExitError(2, 'error: --dist-tag requires a value');
       }
       opts.distTag = val;
     } else if (arg === '--max-attempts') {
       const val = args.shift();
       if (!val || val.startsWith('-')) {
-        process.stderr.write('error: --max-attempts requires a value\n');
-        process.exit(2);
+        throw new ExitError(2, 'error: --max-attempts requires a value');
       }
       const n = parseInt(val, 10);
       if (isNaN(n) || n < 1) {
-        process.stderr.write('error: --max-attempts must be a positive integer\n');
-        process.exit(2);
+        throw new ExitError(2, 'error: --max-attempts must be a positive integer');
       }
       opts.maxAttempts = n;
     } else if (arg === '--interval-ms') {
       const val = args.shift();
       if (!val || val.startsWith('-')) {
-        process.stderr.write('error: --interval-ms requires a value\n');
-        process.exit(2);
+        throw new ExitError(2, 'error: --interval-ms requires a value');
       }
       const n = parseInt(val, 10);
       if (isNaN(n) || n < 0) {
-        process.stderr.write('error: --interval-ms must be a non-negative integer\n');
-        process.exit(2);
+        throw new ExitError(2, 'error: --interval-ms must be a non-negative integer');
       }
       opts.intervalMs = n;
     } else if (arg === '--json') {
       opts.json = true;
     } else {
-      process.stderr.write(`unknown argument: ${arg}\n`);
-      process.exit(2);
+      throw new ExitError(2, `unknown argument: ${arg}`);
     }
   }
 
   if (!opts.pkg) {
-    process.stderr.write('error: --package is required\n');
-    process.exit(2);
+    throw new ExitError(2, 'error: --package is required');
   }
   if (!opts.version) {
-    process.stderr.write('error: --version is required\n');
-    process.exit(2);
+    throw new ExitError(2, 'error: --version is required');
   }
 
   return opts;
@@ -237,16 +228,13 @@ async function main() {
     }
   }
 
-  process.exit(result.ok ? 0 : 1);
+  return result.ok ? 0 : 1;
 }
 
 // ---- Guard -------------------------------------------------------------------
 
 if (require.main === module) {
-  main().catch((err) => {
-    process.stderr.write(String((err && err.stack) || err) + '\n');
-    process.exit(1);
-  });
+  runMain(main);
 }
 
 module.exports = { verifyPublish, parseArgs, REASON, defaultFetchVersion, defaultFetchDistTag };

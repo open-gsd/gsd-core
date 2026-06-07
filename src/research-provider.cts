@@ -12,7 +12,6 @@
 // Types
 // ---------------------------------------------------------------------------
 
-type ProviderKind = 'docs' | 'web' | 'scrape';
 type ConfidenceLevel = 'HIGH' | 'MEDIUM' | 'LOW';
 
 interface ProviderWaterfall {

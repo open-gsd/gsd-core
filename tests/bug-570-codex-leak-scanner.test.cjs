@@ -30,7 +30,6 @@ const { execFileSync } = require('node:child_process');
 
 const {
   install,
-  writeManifest,
   convertClaudeCommandToCodexSkill,
 } = require('../bin/install.js');
 const { createTempDir, cleanup, captureConsole } = require('./helpers.cjs');

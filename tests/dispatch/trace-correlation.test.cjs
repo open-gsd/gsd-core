@@ -181,7 +181,7 @@ describe('trace correlation — end-to-end parentTraceId propagation', () => {
       const allEvents = readJsonl(isolatedAuditPath);
       assert.equal(allEvents.length, 3, 'must have 3 events total (root + valid child + invalid child)');
 
-      const [root, validChild, invalidChild] = allEvents;
+      const [, validChild, invalidChild] = allEvents;
 
       // Valid child carries the correct parentTraceId
       assert.strictEqual(validChild.parentTraceId, rootTraceId,

@@ -163,9 +163,6 @@ describe('milestone-summary command structure', () => {
 });
 
 describe('milestone-summary artifact path resolution', () => {
-  const { createTempProject, cleanup } = require('./helpers.cjs');
-  let tmpDir;
-
   test('archived milestone paths point to milestones/ directory', () => {
     const content = fs.readFileSync(workflowPath, 'utf-8');
     // Archived roadmap path should be under milestones/
@@ -326,7 +323,7 @@ describe('milestone-summary git stats resilience', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('audit.cjs module (#2158)', () => {
-  const { createTempProject: createTP, cleanup: cleanTP, runGsdTools: run } = require('./helpers.cjs');
+  const { createTempProject: createTP, cleanup: cleanTP } = require('./helpers.cjs');
   let tmpDir;
 
   beforeEach(() => { tmpDir = createTP('audit-test'); });

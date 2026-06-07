@@ -88,7 +88,6 @@ describe('hook registration completeness anti-pattern guard', () => {
     for (const hook of jsHooks) {
       // Each JS hook should have a buildHookCommand or 'node ' command construction
       // that references the hook filename (not just the gsdHooks array or uninstall filter)
-      const hookBase = hook.replace('.js', '');
       const lines = content.split('\n').filter(line =>
         line.includes(hook) &&
         (line.includes('buildHookCommand') || line.includes("'node '"))

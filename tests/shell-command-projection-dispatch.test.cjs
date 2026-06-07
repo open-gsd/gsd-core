@@ -192,7 +192,7 @@ describe('platformWriteSync', () => {
     assert.ok(fs.statSync(filePath).isFile());
   });
 
-  test('mtime advances on re-write', (t) => {
+  test('mtime advances on re-write', (_t) => {
     const filePath = path.join(tmpDir, 'output.md');
     platformWriteSync(filePath, '# First\n');
     const mtimeBefore = fs.statSync(filePath).mtimeMs;

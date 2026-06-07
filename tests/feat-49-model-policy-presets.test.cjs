@@ -55,7 +55,6 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const os = require('node:os');
 
 // ─── Imports (will fail until implementation exists) ────────────────────────
 // resolveModelPolicy is a new internal function that must be exported from core.cjs.

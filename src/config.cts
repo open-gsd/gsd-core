@@ -679,7 +679,6 @@ function cmdConfigSetModelProfile(cwd: string, profile: string | undefined, raw:
     error(`Usage: config-set-model-profile <${VALID_PROFILES.join('|')}>`);
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
   const normalizedProfile = profile!.toLowerCase().trim();
   if (!VALID_PROFILES.includes(normalizedProfile)) {
     error(`Invalid profile '${String(profile)}'. Valid profiles: ${VALID_PROFILES.join(', ')}`);

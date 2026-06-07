@@ -61,7 +61,7 @@ function isIntelEnabled(planningDir: string): boolean {
       (config.intel as Record<string, unknown>).enabled === true
     ) return true;
     return false;
-  } catch (_e) {
+  } catch {
     return false;
   }
 }
@@ -104,7 +104,7 @@ function safeReadJson(filePath: string): IntelData | null {
     const raw = platformReadSync(filePath);
     if (raw === null) return null;
     return JSON.parse(raw) as IntelData;
-  } catch (_e) {
+  } catch {
     return null;
   }
 }
@@ -118,7 +118,7 @@ function hashFile(filePath: string): string | null {
     const content = platformReadSync(filePath);
     if (content === null) return null;
     return crypto.createHash('sha256').update(content).digest('hex');
-  } catch (_e) {
+  } catch {
     return null;
   }
 }
@@ -173,22 +173,6 @@ function matchesInValue(value: unknown, lowerTerm: string): boolean {
     return Object.values(value).some(v => matchesInValue(v, lowerTerm));
   }
   return false;
-}
-
-/**
- * Search for a term in arch.md text content.
- * Returns matching lines.
- */
-function searchArchMd(filePath: string, term: string): string[] {
-  try {
-    const content = platformReadSync(filePath);
-    if (content === null) return [];
-    const lowerTerm = term.toLowerCase();
-    const lines = content.split(/\r?\n/);
-    return lines.filter(line => line.toLowerCase().includes(lowerTerm));
-  } catch (_e) {
-    return [];
-  }
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────

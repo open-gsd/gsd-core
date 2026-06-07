@@ -105,7 +105,7 @@ function normalizeTokens(text) {
   return text
     .toLowerCase()
     .replace(/https?:\/\//g, ' ')
-    .replace(/[\[\]]/g, '')
+    .replace(/[[\]]/g, '')
     .replace(/[^a-z0-9{}:_-]+/g, ' ')
     .trim()
     .split(/\s+/)

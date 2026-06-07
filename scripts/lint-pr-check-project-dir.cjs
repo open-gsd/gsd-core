@@ -4,6 +4,8 @@
 const fs = require('fs');
 const path = require('path');
 
+const { runMain } = require('./lib/cli-exit.cjs');
+
 const ROOT = path.join(__dirname, '..');
 
 const DEFAULT_RELATIVE_FILES = [
@@ -84,7 +86,7 @@ function main(argv = process.argv.slice(2)) {
 }
 
 if (require.main === module) {
-  process.exit(main());
+  runMain(main);
 }
 
 module.exports = {

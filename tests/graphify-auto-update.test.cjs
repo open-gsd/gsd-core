@@ -13,7 +13,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('node:os');
 const { execFileSync, spawnSync } = require('child_process');
-const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
+const { createTempProject, cleanup, runGsdTools, delay } = require('./helpers.cjs');
 
 const {
   graphifyStatus,
@@ -263,20 +263,11 @@ describe('auto-update', () => {
     });
   }
 
-  // Shared 4-byte buffer used for Atomics.wait-based sleeps throughout the
-  // hook-test helpers.  Atomics.wait(sai, 0, 0, ms) yields the event loop for
-  // exactly `ms` milliseconds without spawning an external process.
-  const _sleepSab = new SharedArrayBuffer(4);
-  const _sleepSai = new Int32Array(_sleepSab);
-  function atomicSleep(ms) {
-    Atomics.wait(_sleepSai, 0, 0, ms);
-  }
-
   // Wait until the detached rebuild writes a terminal status, with a generous
   // deadline. The detached subprocess can be slow under contended Docker; all
   // assertions here are outcome-based, so we wait for the real terminal state
   // rather than guessing a tight wall-clock budget (#382).
-  function waitForBuildStatus(statusPath, terminal /* e.g. new Set(['ok']) */, { deadlineMs = 30000, stepMs = 25 } = {}) {
+  async function waitForBuildStatus(statusPath, terminal /* e.g. new Set(['ok']) */, { deadlineMs = 30000, stepMs = 25 } = {}) {
     const deadline = Date.now() + deadlineMs;
     let status;
     while (Date.now() < deadline) {
@@ -287,21 +278,20 @@ describe('auto-update', () => {
           if (parsed && terminal.has(parsed.status)) return parsed;
         } catch { /* detached writer can briefly expose a partial JSON write */ }
       }
-      atomicSleep(stepMs);
+      await delay(stepMs);
     }
     return status; // last seen (may be undefined / non-terminal) — assertions below will report
   }
 
-  function cleanupHookRepo(tmpDir) {
+  async function cleanupHookRepo(tmpDir) {
     // The hook detaches a graphify-rebuild subprocess that may still be writing
     // into tmpDir when the test body returns. Wait for the rebuild PID to exit
     // (lock file disappears on subprocess EXIT trap), then retry rmSync to
     // absorb any remaining transient ENOTEMPTY race.
     //
-    // Uses Atomics.wait instead of execFileSync('sleep', ...) so we yield the
-    // CPU without spawning an external process per iteration.  Budget: 15 s —
-    // bumped from 4 s to give the detached child more time to exit under
-    // contended Docker before we attempt removal (#382).
+    // Uses delay() instead of Atomics.wait so we yield the event loop
+    // without blocking the thread.  Budget: 15 s — bumped from 4 s to give
+    // the detached child more time to exit under contended Docker (#382).
     const lockPath = path.join(tmpDir, '.planning/graphs/.rebuild.lock');
     const lockDeadline = Date.now() + 15000;
     while (Date.now() < lockDeadline) {
@@ -313,7 +303,7 @@ describe('auto-update', () => {
       } catch {
         break; // PID dead → safe to clean up
       }
-      atomicSleep(50); // yield 50 ms, then re-check (replaces execFileSync('sleep'))
+      await delay(50); // yield 50 ms, then re-check
     }
     try {
       // eslint-disable-next-line local/no-raw-rmsync-in-tests -- best-effort teardown: error is swallowed so cleanup() (which propagates) cannot be used here; a residual temp dir after a detached-subprocess race is harmless (#382)
@@ -447,7 +437,7 @@ describe('auto-update', () => {
       assert.ok(/^[0-9a-f]{7,40}$/.test(status.head_at_build), 'head_at_build must be a commit sha');
     });
 
-    test('completes to status=ok after detached graphify run succeeds', (t) => {
+    test('completes to status=ok after detached graphify run succeeds', async (t) => {
       const tmpDir = createTempGitRepo({
         config: { graphify: { enabled: true, auto_update: true } },
       });
@@ -465,14 +455,14 @@ describe('auto-update', () => {
       // Docker is never racing a tight budget (#382). All assertions are
       // outcome-based; the deadline is deterministic, not a timing assertion.
       const statusPath = path.join(tmpDir, '.planning/graphs/.last-build-status.json');
-      const status = waitForBuildStatus(statusPath, new Set(['ok']));
+      const status = await waitForBuildStatus(statusPath, new Set(['ok']));
       assert.ok(status, 'status file must exist after dispatch');
       assert.strictEqual(status.status, 'ok', 'mock graphify exit=0 → status ok');
       assert.strictEqual(status.exit_code, 0);
       assert.ok(typeof status.duration_ms === 'number' && status.duration_ms >= 0);
     });
 
-    test('completes to status=failed when graphify exits non-zero', (t) => {
+    test('completes to status=failed when graphify exits non-zero', async (t) => {
       const tmpDir = createTempGitRepo({
         config: { graphify: { enabled: true, auto_update: true } },
       });
@@ -490,7 +480,7 @@ describe('auto-update', () => {
       // Docker is never racing a tight budget (#382). All assertions are
       // outcome-based; the deadline is deterministic, not a timing assertion.
       const statusPath = path.join(tmpDir, '.planning/graphs/.last-build-status.json');
-      const status = waitForBuildStatus(statusPath, new Set(['failed']));
+      const status = await waitForBuildStatus(statusPath, new Set(['failed']));
       assert.ok(status, 'status file must exist after dispatch');
       assert.strictEqual(status.status, 'failed', 'mock graphify exit=1 → status failed');
       assert.strictEqual(status.exit_code, 1);
@@ -578,7 +568,7 @@ describe('auto-update', () => {
       'gsd-tools query commit "docs: probe" --files .planning/STATE.md',
       'npx gsd-tools query commit "docs: probe" --files .planning/STATE.md',
     ]) {
-      test(`dispatches on: ${cmd}`, (t) => {
+      test(`dispatches on: ${cmd}`, async (t) => {
         const tmpDir = createTempGitRepo({
           config: { graphify: { enabled: true, auto_update: true } },
         });
@@ -592,7 +582,7 @@ describe('auto-update', () => {
         const statusPath = path.join(tmpDir, '.planning/graphs/.last-build-status.json');
         // Wait for any terminal status; we only assert the file exists,
         // not which terminal value it holds (#382: generous deadline).
-        waitForBuildStatus(statusPath, new Set(['ok', 'failed']));
+        await waitForBuildStatus(statusPath, new Set(['ok', 'failed']));
         assert.ok(
           fs.existsSync(statusPath),
           `must dispatch for HEAD-advancing op: ${cmd}`,

@@ -173,29 +173,42 @@ describe('skill frontmatter: /gsd-plan-phase --research-phase flag absorbs the s
     );
   });
 
-  test('workflow has an existing-RESEARCH.md prompt path (update/view/skip) within proximity', () => {
+  test('research-only mode auto-uses existing RESEARCH.md (no update/view/skip prompt)', () => {
     const content = read('gsd-core/workflows/plan-phase.md');
-    // CR #3045 finding: the previous version of this test asserted
-    // `update`, `view`, `skip` appeared anywhere in the file, which was
-    // tautological — those words occur all over the workflow for
-    // unrelated reasons (--skip-research, --view flag declarations,
-    // etc.). Tighten to a proximity check: all three choice tokens
-    // must occur in a window of ~400 chars surrounding "RESEARCH.md
-    // already exists" / "Update — re-spawn" / equivalent prompt prose,
-    // proving the prompt section is genuinely present.
+    // #159: the §5.0 existing-RESEARCH.md path no longer prompts
+    // update/view/skip. When RESEARCH.md exists and neither --research nor
+    // --view is set, the workflow emits a brief "using it" notice naming
+    // the two escape-hatch flags and exits cleanly — matching the
+    // promptless auto-use behavior of §5.1 standard mode.
     const idx = content.indexOf('RESEARCH.md already exists');
     assert.ok(
       idx >= 0,
-      'plan-phase workflow must contain the literal "RESEARCH.md already exists" prompt header in the research-only existing-artifact section'
+      'plan-phase workflow must contain the literal "RESEARCH.md already exists" notice in the research-only existing-artifact section'
     );
     const window = content.slice(idx, idx + 600);
-    const hasUpdate = /\b(?:update|refresh|re-spawn)\b/i.test(window);
-    const hasView = /\bview\b/i.test(window);
-    const hasSkip = /\bskip\b/i.test(window);
+    // Positive contract: an auto-use notice that names both recovery flags.
     assert.ok(
-      hasUpdate && hasView && hasSkip,
-      'prompt section near "RESEARCH.md already exists" must mention all three choices (update/refresh/re-spawn, view, skip); ' +
-        'got update=' + hasUpdate + ' view=' + hasView + ' skip=' + hasSkip
+      /using it/i.test(window),
+      'existing-RESEARCH.md notice must state the existing research is being used (e.g. "using it")'
+    );
+    assert.ok(
+      /--research\b/.test(window),
+      'notice must name --research as the force-refresh escape hatch'
+    );
+    assert.ok(
+      /--view\b/.test(window),
+      'notice must name --view as the print-existing escape hatch'
+    );
+    // Negative contract: the interactive three-choice prompt must be gone.
+    // Guard against reintroduction via prose, an AskUserQuestion call, or a
+    // lingering "skip" choice token. (The §5.1 "skip to step 6" text is ~805
+    // chars past the anchor, outside this 600-char window.)
+    assert.ok(
+      !/prompt the user/i.test(window) &&
+        !/three choices/i.test(window) &&
+        !/AskUserQuestion/i.test(window) &&
+        !/\bskip\b/i.test(window),
+      'existing-RESEARCH.md path must no longer present an interactive update/view/skip prompt'
     );
   });
 });

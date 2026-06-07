@@ -25,7 +25,6 @@ const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const crypto = require('node:crypto');
 
 const {
   runInstallerMigrations,
@@ -35,10 +34,6 @@ const {
   resolveInstallerMigrationPromptsForNonTty,
 } = require('../gsd-core/bin/lib/installer-migration-report.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
-
-function sha256(content) {
-  return crypto.createHash('sha256').update(content).digest('hex');
-}
 
 function writeFile(root, relPath, content) {
   const fullPath = path.join(root, relPath);

@@ -22,12 +22,10 @@ const os = require('os');
 
 const {
   createHub,
-  ERROR_KINDS,
 } = require('../../gsd-core/bin/lib/command-routing-hub.cjs');
 
 const {
   createDefaultLogger,
-  createNoOpLogger,
 } = require('../../gsd-core/bin/lib/observability/logger.cjs');
 const { cleanup } = require('../helpers.cjs');
 

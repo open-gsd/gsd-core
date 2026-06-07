@@ -55,7 +55,7 @@ const sourceFiles = sourceDirs.flatMap(collectSourceFiles);
  * Scan files for a pattern, skipping comment lines.
  * Returns an array of human-readable failure strings.
  */
-function scanFiles(files, pattern, description) {
+function scanFiles(files, pattern, _description) {
   const failures = [];
   for (const file of files) {
     const content = fs.readFileSync(file, 'utf8');

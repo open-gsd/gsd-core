@@ -25,7 +25,6 @@ const ROOT = path.join(__dirname, '..');
 const {
   convertClaudeCommandToClaudeSkill,
   writeManifest,
-  install,
   installRuntimeArtifacts,
   uninstallRuntimeArtifacts,
 } = require(path.join(ROOT, 'bin', 'install.js'));
