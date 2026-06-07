@@ -547,7 +547,22 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
     }
 
     case 'resolve-granularity': {
-      commands.cmdResolveGranularity(cwd, args[1], raw);
+      // Parse optional --granularity <val> flag (space form only); positional is phase-type.
+      // The =form (--granularity=<val>) is intentionally not supported: parseNamedArgs and
+      // the /gsd:plan-phase + init plan-phase paths accept only the space form, so supporting
+      // = here alone would create an inconsistency (#703).
+      const granArgs = args.slice(1);
+      let granOverride;
+      const granPositionals = [];
+      for (let i = 0; i < granArgs.length; i++) {
+        const a = granArgs[i];
+        if (a === '--granularity' && granArgs[i + 1] !== undefined && !granArgs[i + 1].startsWith('--')) {
+          if (granOverride === undefined) { granOverride = granArgs[++i]; } else { ++i; }
+        } else {
+          granPositionals.push(a);
+        }
+      }
+      commands.cmdResolveGranularity(cwd, granPositionals[0], raw, granOverride);
       break;
     }
 

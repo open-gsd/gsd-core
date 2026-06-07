@@ -407,6 +407,8 @@ Plans should complete within ~50% context (not 80%). No context anxiety, quality
 
 ## Granularity Calibration
 
+The resolved granularity is provided in the planning context as `**Granularity:** <value>`. Read that value and apply the corresponding row below. When no explicit value is present, default to Standard.
+
 | Granularity | Typical Plans/Phase | Tasks/Plan |
 |-------------|---------------------|------------|
 | Coarse | 1-3 | 2-3 |

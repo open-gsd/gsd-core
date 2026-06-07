@@ -1590,7 +1590,12 @@ const VALID_GRANULARITIES = new Set(['coarse', 'standard', 'fine']);
 /**
  * Resolve the planning granularity for a phase type (#68).
  */
-function resolveGranularityInternal(cwd: string, phaseType: string | null | undefined): string {
+function resolveGranularityInternal(cwd: string, phaseType: string | null | undefined, override?: string | null): string {
+  if (override !== undefined && override !== null && override !== '') {
+    if (VALID_GRANULARITIES.has(override)) {
+      return override;
+    }
+  }
   const config = loadConfig(cwd);
   const configGranularities = config['granularities'] as Record<string, string> | null | undefined;
   const perPhase = (phaseType && configGranularities && typeof configGranularities === 'object')
@@ -1608,6 +1613,19 @@ function resolveGranularityInternal(cwd: string, phaseType: string | null | unde
     return planningGran as string;
   }
   return 'standard';
+}
+
+/**
+ * Validate a CLI granularity override at the command boundary. Empty/null/undefined
+ * are treated as "no override" (no-op). An invalid non-empty value calls `fail`.
+ */
+function assertValidGranularityOverride(
+  override: string | null | undefined,
+  fail: (msg: string) => never,
+): void {
+  if (override !== undefined && override !== null && override !== '' && !VALID_GRANULARITIES.has(override)) {
+    fail(`invalid granularity '${override}' (valid: ${[...VALID_GRANULARITIES].join(', ')})`);
+  }
 }
 
 /**
@@ -2200,6 +2218,7 @@ export = {
   resolveModelForTier,
   resolveGranularityInternal,
   VALID_GRANULARITIES,
+  assertValidGranularityOverride,
   resolveEffortInternal,
   resolveFastModeInternal,
   resolveEffortForTier,

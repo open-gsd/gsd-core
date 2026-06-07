@@ -66,8 +66,8 @@ function routeInitCommand({ init, args, cwd, raw, error }: RouteInitCommandOptio
         init.cmdInitExecutePhase(cwd, args[2], raw, { validate: namedArgs['validate'], tdd: namedArgs['tdd'] });
       },
       'plan-phase': () => {
-        const namedArgs = parseNamedArgs(args, [], ['validate', 'tdd']);
-        init.cmdInitPlanPhase(cwd, args[2], raw, { validate: namedArgs['validate'], tdd: namedArgs['tdd'] });
+        const namedArgs = parseNamedArgs(args, ['granularity'], ['validate', 'tdd']);
+        init.cmdInitPlanPhase(cwd, args[2], raw, { validate: namedArgs['validate'], tdd: namedArgs['tdd'], granularity: namedArgs['granularity'] });
       },
       'new-project': () => init.cmdInitNewProject(cwd, raw),
       'new-milestone': () => init.cmdInitNewMilestone(cwd, raw),

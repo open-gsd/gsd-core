@@ -29,6 +29,8 @@ import frontmatterMod = require('./frontmatter.cjs');
 const {
   loadConfig,
   resolveModelInternal,
+  resolveGranularityInternal,
+  assertValidGranularityOverride,
   findPhaseInternal,
   getRoadmapPhaseInternal,
   pathExistsInternal,
@@ -375,12 +377,17 @@ function cmdInitPlanPhase(
     }
   }
 
+  const granularityOverride = options['granularity'] as string | undefined;
+  assertValidGranularityOverride(granularityOverride, error);
+  const granularity = resolveGranularityInternal(cwd, 'planning', granularityOverride || undefined);
+
   const result: Record<string, unknown> = {
     researcher_model: resolveModelInternal(cwd, 'gsd-phase-researcher'),
     planner_model: resolveModelInternal(cwd, 'gsd-planner'),
     checker_model: resolveModelInternal(cwd, 'gsd-plan-checker'),
 
     tdd_mode: options['tdd'] || config.tdd_mode || false,
+    granularity,
     research_enabled: config.research,
     plan_checker_enabled: config.plan_checker,
     nyquist_validation_enabled: config.nyquist_validation,
