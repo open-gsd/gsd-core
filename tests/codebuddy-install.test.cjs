@@ -201,6 +201,73 @@ describe('CodeBuddy local install/uninstall', () => {
   });
 });
 
+describe('CodeBuddy artifact surface (#789)', () => {
+  let tmpDir;
+  let previousCwd;
+
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-codebuddy-surface-');
+    previousCwd = process.cwd();
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    process.chdir(previousCwd);
+    cleanup(tmpDir);
+  });
+
+  test('emits gsd-* subagent manifests, converted to CodeBuddy frontmatter', () => {
+    install(false, 'codebuddy');
+    const agentsDir = path.join(tmpDir, '.codebuddy', 'agents');
+
+    assert.ok(fs.existsSync(agentsDir), 'agents/ directory exists after install');
+
+    // The full surface staged from agents/ is emitted, not a stray single file
+    // (the shared loop in bin/install.js copies every staged agent). Lock a
+    // meaningful floor so a regression that drops most manifests fails here.
+    const sourceAgentCount = fs.readdirSync(path.join(__dirname, '..', 'agents'))
+      .filter((f) => f.startsWith('gsd-') && f.endsWith('.md')).length;
+    const agentFiles = fs.readdirSync(agentsDir)
+      .filter((f) => f.startsWith('gsd-') && f.endsWith('.md'));
+    assert.ok(sourceAgentCount > 0, 'sanity: repo ships gsd-* source agents');
+    assert.strictEqual(agentFiles.length, sourceAgentCount,
+      `expected every gsd-* source agent emitted (${sourceAgentCount}), found ${agentFiles.length}: ${agentFiles.join(', ')}`);
+
+    // EVERY manifest must be CodeBuddy-converted: a name: gsd- field inside the
+    // leading YAML frontmatter block, and no leftover Claude home-dir refs.
+    for (const file of agentFiles) {
+      const content = fs.readFileSync(path.join(agentsDir, file), 'utf8');
+      const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+      assert.ok(fmMatch, `${file}: expected a leading YAML frontmatter block`);
+      assert.ok(/^name:\s*gsd-/m.test(fmMatch[1]),
+        `${file}: frontmatter should declare a gsd- name:\n${fmMatch[1]}`);
+      assert.ok(!content.includes('~/.claude/'),
+        `${file}: should not retain ~/.claude/ references after CodeBuddy conversion`);
+    }
+  });
+
+  test('skills are user-invocable by default (slash-accessible), i.e. never marked user-invocable: false', () => {
+    install(false, 'codebuddy');
+    const skillsDir = path.join(tmpDir, '.codebuddy', 'skills');
+    assert.ok(fs.existsSync(skillsDir), 'skills/ directory exists after install');
+
+    const gsdSkills = fs.readdirSync(skillsDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && e.name.startsWith('gsd-'));
+    assert.ok(gsdSkills.length > 0, 'at least one gsd-* skill dir is emitted');
+
+    // CodeBuddy hides a skill from the `/` menu only when `user-invocable: false`
+    // (docs/cli/skills). GSD must never emit that, or the workflow would vanish
+    // from the slash menu — this is CodeBuddy's slash-command surface (#789).
+    for (const skill of gsdSkills) {
+      const skillMd = path.join(skillsDir, skill.name, 'SKILL.md');
+      assert.ok(fs.existsSync(skillMd), `${skill.name}/ must contain a SKILL.md`);
+      const content = fs.readFileSync(skillMd, 'utf8');
+      assert.ok(!/^user-invocable:\s*false\b/mi.test(content),
+        `${skill.name}/SKILL.md must not set user-invocable: false (would hide it from the / menu)`);
+    }
+  });
+});
+
 describe('E2E: CodeBuddy uninstall skills cleanup', () => {
   let tmpDir;
   let previousCwd;

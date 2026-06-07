@@ -297,6 +297,22 @@ function resolveRuntimeArtifactLayout(runtime: string, configDir: string, scope:
       break;
 
     case 'codebuddy':
+      // CodeBuddy surface model (#789):
+      //   skills/  — GSD workflows as user-invocable SKILL.md. CodeBuddy shows
+      //              every skill whose `user-invocable` is not explicitly false
+      //              in the `/` menu (docs/cli/skills: "When set to false, the
+      //              Skill is hidden from the `/` menu"). GSD skills omit the
+      //              field, so they default to user-invocable and are already
+      //              reachable as `/gsd-*` slash entries — this IS the slash-
+      //              command surface. A parallel commands/ kind is intentionally
+      //              NOT registered: it would duplicate every `/gsd-*` entry in
+      //              the same `/` menu (matches the skills-runtime cohort —
+      //              cursor/windsurf/augment/trae/codex/etc. are skills-only).
+      //   agents/  — gsd-* subagent manifests are emitted by the shared agent
+      //              staging block in bin/install.js (convertClaudeAgentToCodebuddyAgent),
+      //              the same path every skills-runtime uses; not a layout kind.
+      //   MCP      — no kind: GSD ships no MCP server and no runtime emits an
+      //              mcpServers config; CodeBuddy MCP is client-only.
       kinds = [skillsKind('skills', 'gsd-', 'convertClaudeCommandToCodebuddySkill', 'codebuddy', configDir)];
       break;
 
