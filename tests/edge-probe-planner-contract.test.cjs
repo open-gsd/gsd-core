@@ -19,8 +19,16 @@ function readPlanPhase() {
   return fs.readFileSync(PLAN_PHASE_PATH, 'utf8');
 }
 
-function readPrompt() {
-  return fs.readFileSync(PROMPT_PATH, 'utf8');
+// Extract the planner <downstream_consumer> block from plan-phase.md. The runtime planner is
+// spawned from plan-phase.md's own inline <planning_context>/<downstream_consumer>, so the
+// load-bearing lift instruction must live here — NOT in templates/planner-subagent-prompt.md,
+// which nothing loads at runtime (no @-import in agents/gsd-planner.md, no read in plan-phase.md).
+function extractDownstreamConsumerBlock(content) {
+  const start = content.indexOf('<downstream_consumer>');
+  if (start === -1) return '';
+  const end = content.indexOf('</downstream_consumer>', start);
+  if (end === -1) return '';
+  return content.slice(start, end + '</downstream_consumer>'.length);
 }
 
 // Extract the planner <files_to_read> block that contains {UI_SPEC_PATH}
@@ -114,21 +122,34 @@ test('RR-01 reachability: SPEC_FILE resolution is NOT gated inside the skippable
   assert.match(content, specResolution, 'SPEC_FILE resolution must still exist on an un-gated path elsewhere in plan-phase.md');
 });
 
-// Test C (consumer end): planner-subagent-prompt.md lift instruction references ## Edge Coverage
-// and must_haves.truths — guards that the consumer contract is intact
-// This PASSES today and must continue to pass after the fix
-test('RR-02 consumer: planner-subagent-prompt.md instructs lifting covered/backstop edges into must_haves.truths', () => {
-  const content = readPrompt();
+// Test C (RR-02 consumer end): the lift instruction lives in the RUNTIME planner surface.
+// plan-phase.md spawns the planner from its own inline <planning_context>; the
+// templates/planner-subagent-prompt.md file is orphaned (loaded by nothing), so asserting the
+// contract there is false assurance — the test stays green even if the runtime never consumes it.
+// Pin the contract to the <downstream_consumer> block plan-phase.md actually sends the planner.
+test('RR-02 consumer: plan-phase.md downstream_consumer instructs lifting covered/backstop edges into must_haves.truths', () => {
+  const block = extractDownstreamConsumerBlock(readPlanPhase());
 
+  assert.ok(block.length > 0, 'sanity: plan-phase.md must contain a <downstream_consumer> block to scope this test');
   assert.match(
-    content,
+    block,
     /##\s*Edge Coverage/,
-    'planner-subagent-prompt.md must reference ## Edge Coverage'
+    'plan-phase.md <downstream_consumer> must reference ## Edge Coverage'
   );
   assert.match(
-    content,
+    block,
     /must_haves\.truths/,
-    'planner-subagent-prompt.md must reference must_haves.truths as the lift target'
+    'plan-phase.md <downstream_consumer> must reference must_haves.truths as the lift target'
+  );
+
+  // Regression guard against re-orphaning: the lift instruction must NOT be relocated back into
+  // templates/planner-subagent-prompt.md (which nothing loads) and presented as the consumer
+  // contract — that is exactly the false-assurance this retarget fixes.
+  const prompt = fs.readFileSync(PROMPT_PATH, 'utf8');
+  assert.doesNotMatch(
+    prompt,
+    /Edge Coverage/,
+    'planner-subagent-prompt.md is not loaded at runtime — the Edge Coverage lift instruction must not live there'
   );
 });
 

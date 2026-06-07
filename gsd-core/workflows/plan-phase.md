@@ -1008,6 +1008,7 @@ Output consumed by /gsd:execute-phase. Plans need:
 - Tasks in XML format with read_first and acceptance_criteria fields (MANDATORY on every task)
 - Verification criteria
 - must_haves for goal-backward verification
+- If the SPEC has an `## Edge Coverage` section, lift every `covered` edge's acceptance criterion into `must_haves.truths`, and every `backstop` edge into `must_haves.truths` as a non-inferable check (note it needs a held-out/property-based test). `unresolved` edges are explicit assumptions — surface them in the plan, do not silently drop them.
 - **"Artifacts this phase produces" section (MANDATORY)** — list every symbol this phase creates: decorators, classes, functions, CLI flags, struct/dataclass fields, new file paths. The plan-review-convergence source-grounding pass reads this section to exclude newly-created symbols from drift verification; omitting it causes new symbols to be flagged for acknowledgement.
 </downstream_consumer>
 

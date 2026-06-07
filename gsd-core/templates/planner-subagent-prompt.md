@@ -40,10 +40,6 @@ Plans must be executable prompts with:
 - Tasks in XML format
 - Verification criteria
 - must_haves for goal-backward verification
-- If the SPEC has an `## Edge Coverage` section, lift every `covered` edge's acceptance
-  criterion into `must_haves.truths`, and every `backstop` edge into `must_haves.truths`
-  as a non-inferable check (note it needs a held-out/property-based test). `unresolved`
-  edges are explicit assumptions — surface them in the plan, do not silently drop them.
 </downstream_consumer>
 
 <quality_gate>
