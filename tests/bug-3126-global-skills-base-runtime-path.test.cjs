@@ -164,8 +164,13 @@ describe('bug #3126: runtime-homes getGlobalSkillsBase', () => {
       );
     });
   });
-  test('cline: returns null (rules-based, no skills directory)', () => {
-    assert.strictEqual(getGlobalSkillsBase('cline'), null);
+  test('cline: returns ~/.cline/skills (skills-capable since v3.48.0 — #782)', () => {
+    withEnv('CLINE_CONFIG_DIR', undefined, () => {
+      assert.strictEqual(
+        getGlobalSkillsBase('cline'),
+        path.join(os.homedir(), '.cline', 'skills'),
+      );
+    });
   });
 });
 
@@ -186,8 +191,13 @@ describe('bug #3126: runtime-homes getGlobalSkillDir', () => {
       );
     });
   });
-  test('cline: returns null', () => {
-    assert.strictEqual(getGlobalSkillDir('cline', 'gsd-executor'), null);
+  test('cline: returns ~/.cline/skills/gsd-executor (skills-capable since v3.48.0 — #782)', () => {
+    withEnv('CLINE_CONFIG_DIR', undefined, () => {
+      assert.strictEqual(
+        getGlobalSkillDir('cline', 'gsd-executor'),
+        path.join(os.homedir(), '.cline', 'skills', 'gsd-executor'),
+      );
+    });
   });
 });
 

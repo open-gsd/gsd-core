@@ -156,14 +156,19 @@ describe('installRuntimeArtifacts — cursor commands layout (#785)', () => {
   });
 });
 
-describe('installRuntimeArtifacts — cline no-op', () => {
-  test('cline: no kinds — call succeeds, no dirs created', (t) => {
+describe('installRuntimeArtifacts — cline skills (#782)', () => {
+  test('cline: global install writes gsd-prefixed skill dirs under skills/', (t) => {
     const configDir = createTempDir('gsd-ial-cline-');
     t.after(() => cleanup(configDir));
 
     assert.doesNotThrow(() => installRuntimeArtifacts('cline', configDir, 'global', RESOLVED_CORE));
-    assert.ok(!fs.existsSync(path.join(configDir, 'skills')));
-    assert.ok(!fs.existsSync(path.join(configDir, 'commands')));
+
+    const skillsDir = path.join(configDir, 'skills');
+    assert.ok(fs.existsSync(skillsDir), 'skills/ must be created for global cline install');
+    assert.ok(
+      fs.existsSync(path.join(skillsDir, 'gsd-help', 'SKILL.md')),
+      'gsd-help/SKILL.md must exist'
+    );
   });
 });
 

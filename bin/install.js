@@ -503,7 +503,7 @@ if (hasUninstall) {
 
 // Show help if requested
 if (hasHelp) {
-  console.log(`  ${yellow}Usage:${reset} npx ${pkg.name} [options]\n\n  ${yellow}Options:${reset}\n    ${cyan}-g, --global${reset}              Install globally (to config directory)\n    ${cyan}-l, --local${reset}               Install locally (to current directory)\n    ${cyan}--claude${reset}                  Install for Claude Code only\n    ${cyan}--opencode${reset}                Install for OpenCode only\n    ${cyan}--gemini${reset}                  Install for Gemini only\n    ${cyan}--kilo${reset}                    Install for Kilo only\n    ${cyan}--codex${reset}                   Install for Codex only\n    ${cyan}--copilot${reset}                 Install for Copilot only\n    ${cyan}--antigravity${reset}             Install for Antigravity only\n    ${cyan}--cursor${reset}                  Install for Cursor only\n    ${cyan}--windsurf${reset}                Install for Windsurf only\n    ${cyan}--augment${reset}                 Install for Augment only\n    ${cyan}--trae${reset}                    Install for Trae only\n    ${cyan}--qwen${reset}                    Install for Qwen Code only\n    ${cyan}--hermes${reset}                  Install for Hermes Agent only\n    ${cyan}--cline${reset}                   Install for Cline only\n    ${cyan}--codebuddy${reset}              Install for CodeBuddy only\n    ${cyan}--all${reset}                     Install for all runtimes\n    ${cyan}-u, --uninstall${reset}           Uninstall GSD (remove all GSD files)\n    ${cyan}-c, --config-dir <path>${reset}   Specify custom config directory\n    ${cyan}-h, --help${reset}                Show this help message\n    ${cyan}--force-statusline${reset}        Replace existing statusline config\n    ${cyan}--portable-hooks${reset}          Emit \$HOME-relative hook paths in settings.json\n                              (for WSL/Docker bind-mount setups; also GSD_PORTABLE_HOOKS=1)\n    ${cyan}--profile=<name>${reset}         Install a named skill profile. Profiles:\n                              core     — 7 main-loop skills incl. phase (~130 desc tokens)\n                              standard — ~13 skills incl. phase, review, config (~700)\n                              full     — all 66 skills (default)\n                              Composable: --profile=core,audit installs union of closures.\n                              Profile is persisted and respected by \`gsd update\`.\n    ${cyan}--minimal${reset}                 Alias for --profile=core (back-compat).\n                              Cuts cold-start overhead from ~12k tokens to ~700.\n                              Alias: --core-only.\n\n  ${yellow}Examples:${reset}\n    ${dim}# Interactive install (prompts for runtime and location)${reset}\n    npx ${pkg.name}\n\n    ${dim}# Install for Claude Code globally${reset}\n    npx ${pkg.name} --claude --global\n\n    ${dim}# Install for Gemini globally${reset}\n    npx ${pkg.name} --gemini --global\n\n    ${dim}# Install for Kilo globally${reset}\n    npx ${pkg.name} --kilo --global\n\n    ${dim}# Install for Codex globally${reset}\n    npx ${pkg.name} --codex --global\n\n    ${dim}# Install for Copilot globally${reset}\n    npx ${pkg.name} --copilot --global\n\n    ${dim}# Install for Copilot locally${reset}\n    npx ${pkg.name} --copilot --local\n\n    ${dim}# Install for Antigravity globally${reset}\n    npx ${pkg.name} --antigravity --global\n\n    ${dim}# Install for Antigravity locally${reset}\n    npx ${pkg.name} --antigravity --local\n\n    ${dim}# Install for Cursor globally${reset}\n    npx ${pkg.name} --cursor --global\n\n    ${dim}# Install for Cursor locally${reset}\n    npx ${pkg.name} --cursor --local\n\n    ${dim}# Install for Windsurf globally${reset}\n    npx ${pkg.name} --windsurf --global\n\n    ${dim}# Install for Windsurf locally${reset}\n    npx ${pkg.name} --windsurf --local\n\n    ${dim}# Install for Augment globally${reset}\n    npx ${pkg.name} --augment --global\n\n    ${dim}# Install for Augment locally${reset}\n    npx ${pkg.name} --augment --local\n\n    ${dim}# Install for Trae globally${reset}\n    npx ${pkg.name} --trae --global\n\n    ${dim}# Install for Trae locally${reset}\n    npx ${pkg.name} --trae --local\n\n    ${dim}# Install for Hermes Agent globally${reset}\n    npx ${pkg.name} --hermes --global\n\n    ${dim}# Install for Hermes Agent locally${reset}\n    npx ${pkg.name} --hermes --local\n\n    ${dim}# Install for Cline locally${reset}\n    npx ${pkg.name} --cline --local\n\n    ${dim}# Install for CodeBuddy globally${reset}\n    npx ${pkg.name} --codebuddy --global\n\n    ${dim}# Install for CodeBuddy locally${reset}\n    npx ${pkg.name} --codebuddy --local\n\n    ${dim}# Install for all runtimes globally${reset}\n    npx ${pkg.name} --all --global\n\n    ${dim}# Install to custom config directory${reset}\n    npx ${pkg.name} --kilo --global --config-dir ~/.kilo-work\n\n    ${dim}# Install to current project only${reset}\n    npx ${pkg.name} --claude --local\n\n    ${dim}# Uninstall GSD from Cursor globally${reset}\n    npx ${pkg.name} --cursor --global --uninstall\n\n  ${yellow}Notes:${reset}\n    The --config-dir option is useful when you have multiple configurations.\n    It takes priority over CLAUDE_CONFIG_DIR / OPENCODE_CONFIG_DIR / GEMINI_CONFIG_DIR / KILO_CONFIG_DIR / CODEX_HOME / COPILOT_CONFIG_DIR / COPILOT_HOME / ANTIGRAVITY_CONFIG_DIR / CURSOR_CONFIG_DIR / WINDSURF_CONFIG_DIR / AUGMENT_CONFIG_DIR / TRAE_CONFIG_DIR / QWEN_CONFIG_DIR / HERMES_HOME / CLINE_CONFIG_DIR / CODEBUDDY_CONFIG_DIR environment variables.\n`);
+  console.log(`  ${yellow}Usage:${reset} npx ${pkg.name} [options]\n\n  ${yellow}Options:${reset}\n    ${cyan}-g, --global${reset}              Install globally (to config directory)\n    ${cyan}-l, --local${reset}               Install locally (to current directory)\n    ${cyan}--claude${reset}                  Install for Claude Code only\n    ${cyan}--opencode${reset}                Install for OpenCode only\n    ${cyan}--gemini${reset}                  Install for Gemini only\n    ${cyan}--kilo${reset}                    Install for Kilo only\n    ${cyan}--codex${reset}                   Install for Codex only\n    ${cyan}--copilot${reset}                 Install for Copilot only\n    ${cyan}--antigravity${reset}             Install for Antigravity only\n    ${cyan}--cursor${reset}                  Install for Cursor only\n    ${cyan}--windsurf${reset}                Install for Windsurf only\n    ${cyan}--augment${reset}                 Install for Augment only\n    ${cyan}--trae${reset}                    Install for Trae only\n    ${cyan}--qwen${reset}                    Install for Qwen Code only\n    ${cyan}--hermes${reset}                  Install for Hermes Agent only\n    ${cyan}--cline${reset}                   Install for Cline only\n    ${cyan}--codebuddy${reset}              Install for CodeBuddy only\n    ${cyan}--all${reset}                     Install for all runtimes\n    ${cyan}-u, --uninstall${reset}           Uninstall GSD (remove all GSD files)\n    ${cyan}-c, --config-dir <path>${reset}   Specify custom config directory\n    ${cyan}-h, --help${reset}                Show this help message\n    ${cyan}--force-statusline${reset}        Replace existing statusline config\n    ${cyan}--portable-hooks${reset}          Emit \$HOME-relative hook paths in settings.json\n                              (for WSL/Docker bind-mount setups; also GSD_PORTABLE_HOOKS=1)\n    ${cyan}--profile=<name>${reset}         Install a named skill profile. Profiles:\n                              core     — 7 main-loop skills incl. phase (~130 desc tokens)\n                              standard — ~13 skills incl. phase, review, config (~700)\n                              full     — all 66 skills (default)\n                              Composable: --profile=core,audit installs union of closures.\n                              Profile is persisted and respected by \`gsd update\`.\n    ${cyan}--minimal${reset}                 Alias for --profile=core (back-compat).\n                              Cuts cold-start overhead from ~12k tokens to ~700.\n                              Alias: --core-only.\n\n  ${yellow}Examples:${reset}\n    ${dim}# Interactive install (prompts for runtime and location)${reset}\n    npx ${pkg.name}\n\n    ${dim}# Install for Claude Code globally${reset}\n    npx ${pkg.name} --claude --global\n\n    ${dim}# Install for Gemini globally${reset}\n    npx ${pkg.name} --gemini --global\n\n    ${dim}# Install for Kilo globally${reset}\n    npx ${pkg.name} --kilo --global\n\n    ${dim}# Install for Codex globally${reset}\n    npx ${pkg.name} --codex --global\n\n    ${dim}# Install for Copilot globally${reset}\n    npx ${pkg.name} --copilot --global\n\n    ${dim}# Install for Copilot locally${reset}\n    npx ${pkg.name} --copilot --local\n\n    ${dim}# Install for Antigravity globally${reset}\n    npx ${pkg.name} --antigravity --global\n\n    ${dim}# Install for Antigravity locally${reset}\n    npx ${pkg.name} --antigravity --local\n\n    ${dim}# Install for Cursor globally${reset}\n    npx ${pkg.name} --cursor --global\n\n    ${dim}# Install for Cursor locally${reset}\n    npx ${pkg.name} --cursor --local\n\n    ${dim}# Install for Windsurf globally${reset}\n    npx ${pkg.name} --windsurf --global\n\n    ${dim}# Install for Windsurf locally${reset}\n    npx ${pkg.name} --windsurf --local\n\n    ${dim}# Install for Augment globally${reset}\n    npx ${pkg.name} --augment --global\n\n    ${dim}# Install for Augment locally${reset}\n    npx ${pkg.name} --augment --local\n\n    ${dim}# Install for Trae globally${reset}\n    npx ${pkg.name} --trae --global\n\n    ${dim}# Install for Trae locally${reset}\n    npx ${pkg.name} --trae --local\n\n    ${dim}# Install for Hermes Agent globally${reset}\n    npx ${pkg.name} --hermes --global\n\n    ${dim}# Install for Hermes Agent locally${reset}\n    npx ${pkg.name} --hermes --local\n\n    ${dim}# Install for Cline globally${reset}\n    npx ${pkg.name} --cline --global\n\n    ${dim}# Install for Cline locally${reset}\n    npx ${pkg.name} --cline --local\n\n    ${dim}# Install for CodeBuddy globally${reset}\n    npx ${pkg.name} --codebuddy --global\n\n    ${dim}# Install for CodeBuddy locally${reset}\n    npx ${pkg.name} --codebuddy --local\n\n    ${dim}# Install for all runtimes globally${reset}\n    npx ${pkg.name} --all --global\n\n    ${dim}# Install to custom config directory${reset}\n    npx ${pkg.name} --kilo --global --config-dir ~/.kilo-work\n\n    ${dim}# Install to current project only${reset}\n    npx ${pkg.name} --claude --local\n\n    ${dim}# Uninstall GSD from Cursor globally${reset}\n    npx ${pkg.name} --cursor --global --uninstall\n\n  ${yellow}Notes:${reset}\n    The --config-dir option is useful when you have multiple configurations.\n    It takes priority over CLAUDE_CONFIG_DIR / OPENCODE_CONFIG_DIR / GEMINI_CONFIG_DIR / KILO_CONFIG_DIR / CODEX_HOME / COPILOT_CONFIG_DIR / COPILOT_HOME / ANTIGRAVITY_CONFIG_DIR / CURSOR_CONFIG_DIR / WINDSURF_CONFIG_DIR / AUGMENT_CONFIG_DIR / TRAE_CONFIG_DIR / QWEN_CONFIG_DIR / HERMES_HOME / CLINE_CONFIG_DIR / CODEBUDDY_CONFIG_DIR environment variables.\n`);
   process.exit(0);
 }
 
@@ -2608,9 +2608,15 @@ function convertClaudeToCliineMarkdown(content) {
   converted = converted.replace(/\.\/CLAUDE\.md/g, '.clinerules');
   converted = converted.replace(/`CLAUDE\.md`/g, '`.clinerules`');
   converted = converted.replace(/\bCLAUDE\.md\b/g, '.clinerules');
+  // Slash forms first (most specific — superset of bare forms)
   converted = converted.replace(/\.claude\/skills\//g, '.cline/skills/');
   converted = converted.replace(/\.\/\.claude\//g, './.cline/');
   converted = converted.replace(/\.claude\//g, '.cline/');
+  // Bare forms (no trailing slash) — after slash forms to avoid double-rewrite
+  converted = converted.replace(/~\/\.claude\b/g, '~/.cline');
+  converted = converted.replace(/\$HOME\/\.claude\b/g, '$HOME/.cline');
+  // Environment variable name rewrite
+  converted = converted.replace(/\bCLAUDE_CONFIG_DIR\b/g, 'CLINE_CONFIG_DIR');
   converted = converted.replace(/\*\*Known Claude Code bug \(classifyHandoffIfNeeded\):\*\*[^\n]*\n/g, '');
   converted = converted.replace(/- \*\*classifyHandoffIfNeeded false failure:\*\*[^\n]*\n/g, '');
   converted = converted.replace(/\bClaude Code\b/g, 'Cline');
@@ -2625,6 +2631,43 @@ function convertClaudeAgentToClineAgent(content) {
   const description = extractFrontmatterField(frontmatter, 'description') || '';
   const cleanFrontmatter = `---\nname: ${yamlIdentifier(name)}\ndescription: ${yamlQuote(toSingleLine(description))}\n---`;
   return `${cleanFrontmatter}\n${body}`;
+}
+
+/**
+ * Convert a Claude command (.md) to a Cline skill (SKILL.md).
+ * Emits ONLY name + description frontmatter per the Cline skills spec
+ * (https://docs.cline.bot/customization/skills) — no allowed-tools,
+ * argument-hint, agent, or other Claude-specific fields.
+ * Body is hyphen-normalised then converted via convertClaudeToCliineMarkdown
+ * (.claude/→.cline/, "Claude Code"→"Cline", etc.).
+ * Cline uses Claude-Code-compatible tool names, so no adapter header is needed.
+ * Targets ~/.cline/skills/<name>/SKILL.md for Cline >= v3.48.0.
+ */
+function convertClaudeCommandToClineSkill(content, skillName, runtime = null, cmdNames = null) {
+  const { frontmatter, body } = extractFrontmatterAndBody(content);
+  if (!frontmatter) return content;
+
+  // Hyphen-normalise /gsd:<cmd> → gsd-<cmd> references in the body, then
+  // apply Cline-specific markdown rewrites (.claude/→.cline/, etc.).
+  const names = cmdNames || readGsdCommandNames();
+  const normalizedBody = transformContentToHyphen(body, names);
+  const clineBody = convertClaudeToCliineMarkdown(normalizedBody);
+
+  // Extract description; fall back to a generic string if absent.
+  let description = extractFrontmatterField(frontmatter, 'description');
+  if (!description) description = `Run GSD workflow ${skillName}.`;
+  description = toSingleLine(description);
+  // Cline documented max is 1024 code points (not UTF-16 code units).
+  // Use Array.from to iterate by code point so that multibyte characters
+  // (e.g. emoji, astral-plane chars) are never split, which would produce
+  // lone surrogates and corrupt the YAML output.
+  const cp = Array.from(description);
+  const shortDescription = cp.length > 1024
+    ? cp.slice(0, 1021).join('') + '...'
+    : description;
+
+  const fm = `---\nname: ${yamlIdentifier(skillName)}\ndescription: ${yamlQuote(shortDescription)}\n---`;
+  return `${fm}\n${clineBody}`;
 }
 
 // ── End Cline converters ─────────────────────────────────────────────────────
@@ -6220,7 +6263,7 @@ function migrateLegacyDevPreferencesToSkill(targetDir, saved, runtime, scope = '
   if (runtime) {
     const layout = resolveRuntimeArtifactLayout(runtime, targetDir, scope);
     const skillsKindEntry = layout.kinds.find((k) => k.kind === 'skills');
-    if (!skillsKindEntry) return false; // runtime has no skills layout (e.g. cline)
+    if (!skillsKindEntry) return false; // runtime has no skills layout at this scope (e.g. cline local)
     const stemName = skillsKindEntry.prefix === '' ? 'dev-preferences' : 'gsd-dev-preferences';
     skillDir = path.join(targetDir, skillsKindEntry.destSubpath, stemName);
   } else {
@@ -6296,6 +6339,22 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix) {
       content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
       content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
       content = content.replace(/~\/\.codex\//g, pathPrefix);
+      content = processAttribution(content, getCommitAttribution(runtime));
+      break;
+
+    case 'cline':
+      // Slash forms: both the original ~/.claude/ (safety net) and the stage-time
+      // converted ~/.cline/ (from convertClaudeToCliineMarkdown) → pathPrefix
+      content = content.replace(/~\/\.claude\//g, pathPrefix);
+      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
+      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
+      content = content.replace(/~\/\.cline\//g, pathPrefix);
+      content = content.replace(/\$HOME\/\.cline\//g, pathPrefix);
+      // Bare forms (no trailing slash)
+      content = content.replace(/~\/\.claude\b/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.claude\b/g, normalizedPathPrefix);
+      content = content.replace(/~\/\.cline\b/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.cline\b/g, normalizedPathPrefix);
       content = processAttribution(content, getCommitAttribution(runtime));
       break;
 
@@ -8840,7 +8899,8 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   //
   // Non-layout side-effects preserved inline:
   //   Hermes: writeHermesCategoryDescription (not a layout kind)
-  //   Cline:  no-op (cline layout has empty kinds[])
+  //   Cline global: skills emitted via layout; .clinerules still written below (#782)
+  //   Cline local: no skills (only .clinerules) — falls through to cline-rules surface
   //   Gemini: conflict-detection logic (not expressible in layout)
   //   OpenCode/Kilo: copyFlattenedCommands (frontmatter conversion not in commandsKind)
   //   Claude local: copyWithPathReplacement + stale-skills cleanup
@@ -8848,9 +8908,11 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   // Layout-driven path for all skills-based runtimes (full and minimal modes).
   // applyRuntimeContentRewritesInPlace (called inside installRuntimeArtifacts)
   // handles per-runtime path + branding rewrites, including Qwen/Hermes.
+  // Cline global: emit skills to ~/.cline/skills/ (Cline >= v3.48.0 — #782).
   const _isSkillsRuntime = isCodex || isCopilot || isAntigravity || isCursor || isWindsurf ||
     isAugment || isTrae || isCodebuddy || isQwen || isHermes ||
-    (runtime === 'claude' && isGlobal);
+    (runtime === 'claude' && isGlobal) ||
+    (isCline && isGlobal);
 
   if (_isSkillsRuntime) {
     // Layout-driven install for skills-based runtimes (full and minimal modes)
@@ -8922,8 +8984,9 @@ function install(isGlobal, runtime = 'claude', options = {}) {
       failures.push('command/gsd-*');
     }
   } else if (isCline) {
-    // Cline is rules-based — commands are embedded in .clinerules (generated below).
-    // No skills/commands directory needed. Engine is installed via copyWithPathReplacement.
+    // Cline local install: rules-based only — commands are embedded in .clinerules (generated below).
+    // No skills/commands directory needed for local installs.
+    // Global installs are handled above by _isSkillsRuntime (#782).
     console.log(`  ${green}✓${reset} Cline: commands will be available via .clinerules`);
   } else if (isGemini) {
     // #3037: when running --local --gemini and a GSD-managed user-scope
@@ -11258,6 +11321,7 @@ module.exports = {
     convertClaudeCommandToCodebuddySkill,
     convertClaudeAgentToCodebuddyAgent,
     convertClaudeToCliineMarkdown,
+    convertClaudeCommandToClineSkill,
     convertClaudeAgentToClineAgent,
     buildClineRulesBody,
     buildClineAgentsMdBody,
@@ -11300,6 +11364,7 @@ module.exports = {
     uninstallRuntimeArtifacts,
     parseConfigDirFromArgs,
     cleanupLegacyGsdCc,
+    _applyRuntimeRewrites,
   };
 
 // Main logic — only run when not loaded as a module for testing

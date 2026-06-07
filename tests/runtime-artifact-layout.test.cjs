@@ -210,8 +210,19 @@ describe('resolveRuntimeArtifactLayout — codebuddy', () => {
 });
 
 describe('resolveRuntimeArtifactLayout — cline', () => {
-  test('returns correct layout for cline', () => {
-    const layout = resolveRuntimeArtifactLayout('cline', FAKE_DIR);
+  test('returns correct layout for cline global (skills-capable since v3.48.0 — #782)', () => {
+    const layout = resolveRuntimeArtifactLayout('cline', FAKE_DIR, 'global');
+    assert.strictEqual(layout.runtime, 'cline');
+    assert.strictEqual(layout.configDir, FAKE_DIR);
+    assert.strictEqual(layout.kinds.length, 1);
+    assert.strictEqual(layout.kinds[0].kind, 'skills');
+    assert.strictEqual(layout.kinds[0].destSubpath, 'skills');
+    assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
+    assert.strictEqual(typeof layout.kinds[0].stage, 'function');
+  });
+
+  test('cline local: no skills kinds (global-only, #782)', () => {
+    const layout = resolveRuntimeArtifactLayout('cline', FAKE_DIR, 'local');
     assert.strictEqual(layout.runtime, 'cline');
     assert.strictEqual(layout.configDir, FAKE_DIR);
     assert.strictEqual(layout.kinds.length, 0);
@@ -253,9 +264,10 @@ describe('resolveRuntimeArtifactLayout edge-cases', () => {
     assert.strictEqual(layout.kinds[0].prefix, '');
   });
 
-  test('cline has no kinds', () => {
+  test('cline has one skills kind (#782)', () => {
     const layout = resolveRuntimeArtifactLayout('cline', '/tmp/x');
-    assert.strictEqual(layout.kinds.length, 0);
+    assert.strictEqual(layout.kinds.length, 1);
+    assert.strictEqual(layout.kinds[0].kind, 'skills');
   });
 
   test('gemini has one commands kind', () => {
