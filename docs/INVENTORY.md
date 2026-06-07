@@ -471,7 +471,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 
 ---
 
-## Hooks (14 shipped)
+## Hooks (16 shipped)
 
 Full listing: `hooks/`.
 
@@ -482,6 +482,8 @@ Full listing: `hooks/`.
 | `gsd-check-update.js` | `SessionStart` | Background check for new GSD versions |
 | `gsd-check-update-worker.js` | (worker) | Background worker helper for check-update |
 | `gsd-update-banner.js` | `SessionStart` | Opt-in banner surfacing update availability when GSD statusline isn't used (PR #2795) |
+| `gsd-cursor-session-start.js` | Cursor `sessionStart` | Cursor-native context injection at session start (issue #777) |
+| `gsd-cursor-post-tool.js` | Cursor `postToolUse` | Cursor-native STATE.md update monitor after tool calls (issue #777) |
 | `gsd-prompt-guard.js` | `PreToolUse` | Scans `.planning/` writes for prompt-injection patterns (advisory) |
 | `gsd-workflow-guard.js` | `PreToolUse` | Detects file edits outside GSD workflow context (advisory, opt-in) |
 | `gsd-read-guard.js` | `PreToolUse` | Advisory guard preventing Edit/Write on unread files |

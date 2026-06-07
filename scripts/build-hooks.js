@@ -30,6 +30,9 @@ const HOOKS_TO_COPY = [
   // so require('./managed-hooks-registry.cjs') resolves in the installed hooks/ dir.
   'managed-hooks-registry.cjs',
   'gsd-context-monitor.js',
+  // Cursor lifecycle hooks (issue #777): sessionStart context injection + postToolUse monitor
+  'gsd-cursor-session-start.js',
+  'gsd-cursor-post-tool.js',
   'gsd-prompt-guard.js',
   'gsd-read-guard.js',
   'gsd-read-injection-scanner.js',

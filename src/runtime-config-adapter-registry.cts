@@ -11,6 +11,7 @@
  *     'codex-toml'           → early-return after writing codex.toml.
  *     'copilot-instructions' → early-return after writing .github/copilot-instructions.md.
  *     'cline-rules'          → early-return after writing .clinerules.
+ *     'cursor-hooks-json'    → early-return after writing .cursor/hooks.json (issue #777).
  *     'profile-marker-only'  → early-return after writing only the profile marker.
  * - `writesSharedSettings` is the finishInstall writeSettings gate:
  *     false for codex / copilot / kilo / cursor / windsurf / trae / cline (legacy exclusion list).
@@ -30,6 +31,7 @@ type ConfigInstallSurface =
   | 'codex-toml'
   | 'copilot-instructions'
   | 'cline-rules'
+  | 'cursor-hooks-json'
   | 'profile-marker-only';
 
 type FinishPermissionWriter = 'opencode' | 'kilo' | null;
@@ -64,7 +66,7 @@ const REGISTRY: Record<string, Readonly<RegistryEntry>> = Object.freeze({
   codex:       Object.freeze({ installSurface: 'codex-toml',           writesSharedSettings: false, finishPermissionWriter: null       } as const),
   copilot:     Object.freeze({ installSurface: 'copilot-instructions', writesSharedSettings: false, finishPermissionWriter: null       } as const),
   cline:       Object.freeze({ installSurface: 'cline-rules',          writesSharedSettings: false, finishPermissionWriter: null       } as const),
-  cursor:      Object.freeze({ installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       } as const),
+  cursor:      Object.freeze({ installSurface: 'cursor-hooks-json',    writesSharedSettings: false, finishPermissionWriter: null       } as const),
   windsurf:    Object.freeze({ installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       } as const),
   trae:        Object.freeze({ installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       } as const),
 });
@@ -82,6 +84,7 @@ const INSTALL_SURFACES: ReadonlyArray<ConfigInstallSurface> = Object.freeze([
   'codex-toml',
   'copilot-instructions',
   'cline-rules',
+  'cursor-hooks-json',
   'profile-marker-only',
 ]);
 

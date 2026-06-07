@@ -31,7 +31,7 @@ const EXPECTED_TABLE = [
   { runtime: 'codex',       installSurface: 'codex-toml',           writesSharedSettings: false, finishPermissionWriter: null       },
   { runtime: 'copilot',     installSurface: 'copilot-instructions', writesSharedSettings: false, finishPermissionWriter: null       },
   { runtime: 'cline',       installSurface: 'cline-rules',          writesSharedSettings: false, finishPermissionWriter: null       },
-  { runtime: 'cursor',      installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       },
+  { runtime: 'cursor',      installSurface: 'cursor-hooks-json',    writesSharedSettings: false, finishPermissionWriter: null       },
   { runtime: 'windsurf',    installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       },
   { runtime: 'trae',        installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       },
 ];
@@ -160,8 +160,8 @@ describe('installSurface correctness', () => {
     assert.strictEqual(resolveRuntimeConfigIntent('cline').installSurface, 'cline-rules');
   });
 
-  test('cursor -> "profile-marker-only"', () => {
-    assert.strictEqual(resolveRuntimeConfigIntent('cursor').installSurface, 'profile-marker-only');
+  test('cursor -> "cursor-hooks-json"', () => {
+    assert.strictEqual(resolveRuntimeConfigIntent('cursor').installSurface, 'cursor-hooks-json');
   });
 
   test('windsurf -> "profile-marker-only"', () => {
@@ -236,10 +236,11 @@ describe('INSTALL_SURFACES export', () => {
     'codex-toml',
     'copilot-instructions',
     'cline-rules',
+    'cursor-hooks-json',
     'profile-marker-only',
   ]);
 
-  test('INSTALL_SURFACES contains exactly the 5 surface strings', () => {
+  test('INSTALL_SURFACES contains exactly the 6 surface strings', () => {
     assert.deepStrictEqual(new Set(INSTALL_SURFACES), EXPECTED_SURFACES);
   });
 });
