@@ -101,6 +101,32 @@ function isCodexHooksFeatureKey(key) {
 const GSD_COPILOT_INSTRUCTIONS_MARKER = '<!-- GSD Configuration \u2014 managed by gsd-core installer -->';
 const GSD_COPILOT_INSTRUCTIONS_CLOSE_MARKER = '<!-- /GSD Configuration -->';
 
+// #786 \u2014 GitHub Copilot CLI lifecycle hook constants.
+// Copilot reads hook configs from <config>/hooks/*.json (repo scope: .github/hooks/,
+// user scope: ~/.copilot/hooks/) with the shape { version, hooks: { <event>: [...] } }.
+// Events use camelCase (sessionStart, preToolUse, postToolUse, ...). A `command`
+// hook runs an INLINE shell command (bash / powershell), so the GSD hook is fully
+// self-contained \u2014 there is no separate hook script to install, and therefore
+// nothing that can dangle if a script copy is skipped. See
+// https://docs.github.com/en/copilot/reference/hooks-configuration
+const GSD_COPILOT_HOOK_FILE = 'gsd-session.json';
+// Copilot parses a command hook's stdout as the hook-output JSON. For sessionStart
+// the schema is `{ additionalContext?: string }` (the text is prepended to the
+// session as context). So the hook must emit that JSON envelope — not bare text.
+// The two messages contain no JSON-special characters, so they embed verbatim.
+const GSD_COPILOT_SESSION_MSG_PRESENT =
+  'GSD: .planning/STATE.md present - review the current phase and any blockers before acting.';
+const GSD_COPILOT_SESSION_MSG_ABSENT =
+  'GSD: no .planning/ workflow found - run /gsd-new-project to start a tracked workflow.';
+const GSD_COPILOT_SESSION_HOOK_BASH =
+  'if [ -f .planning/STATE.md ]; then ' +
+  `printf '%s' '{"additionalContext":"${GSD_COPILOT_SESSION_MSG_PRESENT}"}'; else ` +
+  `printf '%s' '{"additionalContext":"${GSD_COPILOT_SESSION_MSG_ABSENT}"}'; fi`;
+const GSD_COPILOT_SESSION_HOOK_PWSH =
+  'if (Test-Path .planning/STATE.md) ' +
+  `{ '{"additionalContext":"${GSD_COPILOT_SESSION_MSG_PRESENT}"}' } ` +
+  `else { '{"additionalContext":"${GSD_COPILOT_SESSION_MSG_ABSENT}"}' }`;
+
 // GSD-managed files under hooks/lib/ (helpers required by gsd-*.sh hooks).
 // git-cmd.js does not start with "gsd-" (shared classifier for #3129), gsd-graphify-rebuild.sh does.
 const GSD_HOOK_LIB_FILES = ['git-cmd.js', 'gsd-graphify-rebuild.sh'];
@@ -5016,6 +5042,57 @@ function stripGsdFromCopilotInstructions(content) {
 }
 
 /**
+ * #786 — Build the GSD-managed GitHub Copilot lifecycle hook config object.
+ *
+ * Returns the verbatim JSON shape Copilot CLI expects:
+ *   { version: 1, hooks: { sessionStart: [ <hook entry> ] } }
+ *
+ * The sessionStart entry is a `command` hook whose `bash`/`powershell` bodies
+ * run inline (no external script file), so the config can never reference a
+ * hook script that the installer did not also install — it is self-contained
+ * by construction. The command is advisory-only (always exits 0) and orients
+ * the agent toward the project's GSD planning state at session start.
+ *
+ * @returns {object} Copilot hooks-configuration object
+ */
+function buildCopilotHookConfig() {
+  return {
+    version: 1,
+    hooks: {
+      sessionStart: [
+        {
+          type: 'command',
+          bash: GSD_COPILOT_SESSION_HOOK_BASH,
+          powershell: GSD_COPILOT_SESSION_HOOK_PWSH,
+          timeoutSec: 10,
+        },
+      ],
+    },
+  };
+}
+
+/**
+ * #786 — Write the GSD-managed Copilot lifecycle hook config under the runtime
+ * config dir (`<targetDir>/hooks/gsd-session.json`). For local installs
+ * targetDir is `.github` (→ `.github/hooks/`); for global installs it is
+ * `~/.copilot` (→ `~/.copilot/hooks/`) — both are valid Copilot hook locations.
+ *
+ * The managed file is fully owned by GSD, so it is overwritten wholesale on
+ * every install (idempotent). User-authored sibling `*.json` hook files in the
+ * same directory are untouched.
+ *
+ * @param {string} targetDir - The Copilot config dir
+ * @returns {string} The path the hook config was written to
+ */
+function writeCopilotHookConfig(targetDir) {
+  const hooksDir = path.join(targetDir, 'hooks');
+  fs.mkdirSync(hooksDir, { recursive: true });
+  const hookPath = path.join(hooksDir, GSD_COPILOT_HOOK_FILE);
+  fs.writeFileSync(hookPath, JSON.stringify(buildCopilotHookConfig(), null, 2) + '\n');
+  return hookPath;
+}
+
+/**
  * Generate config.toml and per-agent .toml files for Codex.
  * Reads agent .md files from source, extracts metadata, writes .toml configs.
  */
@@ -6822,6 +6899,24 @@ function uninstall(isGlobal, runtime = 'claude') {
 
   console.log(`  Uninstalling GSD from ${cyan}${runtimeLabel}${reset} at ${cyan}${locationLabel}${reset}\n`);
 
+  // #786: AGENTS.md lives at the repo root (outside targetDir) for local Copilot
+  // installs, so its cleanup must run even when .github (targetDir) was already
+  // removed — i.e. BEFORE the "target directory missing" early-return below.
+  if (isCopilot && !isGlobal) {
+    const agentsMdPath = path.join(process.cwd(), 'AGENTS.md');
+    if (fs.existsSync(agentsMdPath)) {
+      const content = fs.readFileSync(agentsMdPath, 'utf8');
+      const cleaned = stripGsdFromCopilotInstructions(content);
+      if (cleaned === null) {
+        fs.unlinkSync(agentsMdPath);
+        console.log(`  ${green}✓${reset} Removed AGENTS.md (was GSD-only)`);
+      } else if (cleaned !== content) {
+        fs.writeFileSync(agentsMdPath, cleaned);
+        console.log(`  ${green}✓${reset} Cleaned GSD section from AGENTS.md`);
+      }
+    }
+  }
+
   // Check if target directory exists
   if (!fs.existsSync(targetDir)) {
     console.log(`  ${yellow}⚠${reset} Directory does not exist: ${locationLabel}`);
@@ -6899,6 +6994,23 @@ function uninstall(isGlobal, runtime = 'claude') {
         console.log(`  ${green}✓${reset} Cleaned GSD section from copilot-instructions.md`);
       }
     }
+
+    // #786: remove the GSD-managed Copilot lifecycle hook config and prune the
+    // hooks dir if we left it empty.
+    const hookPath = path.join(targetDir, 'hooks', GSD_COPILOT_HOOK_FILE);
+    if (fs.existsSync(hookPath)) {
+      fs.unlinkSync(hookPath);
+      removedCount++;
+      console.log(`  ${green}✓${reset} Removed Copilot lifecycle hook (${GSD_COPILOT_HOOK_FILE})`);
+      try {
+        const hooksDir = path.join(targetDir, 'hooks');
+        if (fs.existsSync(hooksDir) && fs.readdirSync(hooksDir).length === 0) {
+          fs.rmdirSync(hooksDir);
+        }
+      } catch { /* non-fatal: leave a non-empty/locked hooks dir in place */ }
+    }
+    // Note: AGENTS.md (repo root) is cleaned earlier, before the targetDir
+    // existence early-return, since it lives outside targetDir (#786).
   }
 
   // 1c. Claude local: remove commands/gsd/ (primary local install location).
@@ -9349,8 +9461,24 @@ function install(isGlobal, runtime = 'claude', options = {}) {
       const template = fs.readFileSync(templatePath, 'utf8');
       mergeCopilotInstructions(instructionsPath, template);
       console.log(`  ${green}✓${reset} Generated copilot-instructions.md`);
+      // #786: also emit AGENTS.md, which Copilot CLI reads as primary
+      // instructions from the repository root. AGENTS.md is a repo-root concept
+      // (no documented user-scope home), so emit it only for local installs;
+      // global scope is already covered by ~/.copilot/copilot-instructions.md.
+      if (!isGlobal) {
+        const agentsMdPath = path.join(process.cwd(), 'AGENTS.md');
+        mergeCopilotInstructions(agentsMdPath, template);
+        console.log(`  ${green}✓${reset} Generated AGENTS.md`);
+      }
     }
-    // Copilot: no settings.json, no hooks, no statusline (like Codex)
+    // #786: emit a self-contained Copilot lifecycle hook (sessionStart). Copilot
+    // command hooks run inline bash/powershell, so this needs no separate hook
+    // script and cannot dangle. Repo scope → .github/hooks/, user → ~/.copilot/hooks/.
+    // The hook is a required install artifact, so a write failure is fatal (it
+    // propagates) rather than silently producing a "successful" install missing
+    // the feature.
+    writeCopilotHookConfig(targetDir);
+    console.log(`  ${green}✓${reset} Configured Copilot lifecycle hook (sessionStart)`);
     persistActiveProfileMarker();
     return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir };
   }
@@ -10814,6 +10942,9 @@ module.exports = {
     GSD_COPILOT_INSTRUCTIONS_CLOSE_MARKER,
     mergeCopilotInstructions,
     stripGsdFromCopilotInstructions,
+    GSD_COPILOT_HOOK_FILE,
+    buildCopilotHookConfig,
+    writeCopilotHookConfig,
     convertClaudeToAntigravityContent,
     convertClaudeCommandToAntigravitySkill,
     convertClaudeAgentToAntigravityAgent,

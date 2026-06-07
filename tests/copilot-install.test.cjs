@@ -38,6 +38,9 @@ const {
   GSD_COPILOT_INSTRUCTIONS_CLOSE_MARKER,
   mergeCopilotInstructions,
   stripGsdFromCopilotInstructions,
+  GSD_COPILOT_HOOK_FILE,
+  buildCopilotHookConfig,
+  writeCopilotHookConfig,
   writeManifest,
   reportLocalPatches,
   installRuntimeArtifacts,
@@ -1040,6 +1043,112 @@ describe('Copilot instructions merge/strip', () => {
   });
 });
 
+// ─── Copilot lifecycle hooks (#786) ────────────────────────────────────────────
+
+describe('Copilot lifecycle hook config (#786)', () => {
+  describe('buildCopilotHookConfig', () => {
+    test('emits the documented Copilot hooks-config shape', () => {
+      const cfg = buildCopilotHookConfig();
+      assert.strictEqual(cfg.version, 1, 'version must be 1 per Copilot hooks schema');
+      assert.ok(cfg.hooks && typeof cfg.hooks === 'object', 'has hooks object');
+      assert.ok(Array.isArray(cfg.hooks.sessionStart), 'sessionStart is an array (camelCase event name)');
+      assert.strictEqual(cfg.hooks.sessionStart.length, 1, 'one sessionStart entry');
+    });
+
+    test('sessionStart entry is a self-contained inline command hook', () => {
+      const [entry] = buildCopilotHookConfig().hooks.sessionStart;
+      assert.strictEqual(entry.type, 'command', 'type is command');
+      assert.ok(typeof entry.bash === 'string' && entry.bash.length > 0, 'has inline bash body');
+      assert.ok(typeof entry.powershell === 'string' && entry.powershell.length > 0, 'has inline powershell body');
+      assert.strictEqual(entry.timeoutSec, 10, 'uses timeoutSec (Copilot field), not timeout');
+    });
+
+    test('command bodies emit the Copilot sessionStart JSON envelope (additionalContext)', () => {
+      // Copilot parses command-hook stdout as JSON; sessionStart schema is
+      // { additionalContext?: string }. Bare text would be invalid hook output.
+      const [entry] = buildCopilotHookConfig().hooks.sessionStart;
+      assert.ok(entry.bash.includes('"additionalContext"'), 'bash body emits additionalContext JSON');
+      assert.ok(entry.powershell.includes('"additionalContext"'), 'powershell body emits additionalContext JSON');
+    });
+
+    test('executing the bash hook body produces valid sessionStart JSON', { skip: process.platform === 'win32' }, () => {
+      const { execFileSync } = require('child_process');
+      const [entry] = buildCopilotHookConfig().hooks.sessionStart;
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-hook-exec-'));
+      try {
+        // No .planning/STATE.md → absent branch
+        const outAbsent = execFileSync('bash', ['-c', entry.bash], { cwd: tmp, encoding: 'utf8' });
+        const parsedAbsent = JSON.parse(outAbsent);
+        assert.ok(typeof parsedAbsent.additionalContext === 'string', 'absent branch yields additionalContext string');
+        assert.ok(/gsd-new-project/.test(parsedAbsent.additionalContext), 'absent branch suggests gsd-new-project');
+
+        // With .planning/STATE.md → present branch
+        fs.mkdirSync(path.join(tmp, '.planning'), { recursive: true });
+        fs.writeFileSync(path.join(tmp, '.planning', 'STATE.md'), '# state\n');
+        const outPresent = execFileSync('bash', ['-c', entry.bash], { cwd: tmp, encoding: 'utf8' });
+        const parsedPresent = JSON.parse(outPresent);
+        assert.ok(/STATE\.md present/.test(parsedPresent.additionalContext), 'present branch references STATE.md');
+      } finally {
+        cleanup(tmp);
+      }
+    });
+
+    test('hook command references no external script path (cannot dangle)', () => {
+      const [entry] = buildCopilotHookConfig().hooks.sessionStart;
+      // A dangling hook points at a hook SCRIPT file the installer never wrote.
+      // The GSD Copilot hook is inline, so it must not reference hooks/gsd-*.js|sh.
+      assert.ok(!/hooks\/gsd-[\w-]+\.(js|cjs|sh)/.test(entry.bash), 'bash body references no gsd hook script file');
+      assert.ok(!/hooks\/gsd-[\w-]+\.(js|cjs|sh)/.test(entry.powershell), 'powershell body references no gsd hook script file');
+    });
+
+    test('produces valid JSON', () => {
+      const json = JSON.stringify(buildCopilotHookConfig());
+      assert.doesNotThrow(() => JSON.parse(json), 'config round-trips through JSON');
+    });
+  });
+
+  describe('writeCopilotHookConfig', () => {
+    let tmpHookDir;
+
+    beforeEach(() => {
+      tmpHookDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-copilot-hook-'));
+    });
+
+    afterEach(() => {
+      cleanup(tmpHookDir);
+    });
+
+    test('writes hooks/gsd-session.json under the config dir', () => {
+      const written = writeCopilotHookConfig(tmpHookDir);
+      const expected = path.join(tmpHookDir, 'hooks', GSD_COPILOT_HOOK_FILE);
+      assert.strictEqual(written, expected, 'returns the written path');
+      assert.ok(fs.existsSync(expected), 'hook config file exists');
+      const parsed = JSON.parse(fs.readFileSync(expected, 'utf8'));
+      assert.strictEqual(parsed.version, 1, 'written file has version 1');
+      assert.ok(Array.isArray(parsed.hooks.sessionStart), 'written file has sessionStart array');
+    });
+
+    test('is idempotent and overwrites the managed file in place', () => {
+      writeCopilotHookConfig(tmpHookDir);
+      const hookPath = path.join(tmpHookDir, 'hooks', GSD_COPILOT_HOOK_FILE);
+      fs.writeFileSync(hookPath, '{"stale":true}\n');
+      writeCopilotHookConfig(tmpHookDir);
+      const parsed = JSON.parse(fs.readFileSync(hookPath, 'utf8'));
+      assert.strictEqual(parsed.stale, undefined, 'stale content replaced');
+      assert.strictEqual(parsed.version, 1, 'managed content restored');
+    });
+
+    test('preserves sibling user-authored hook files', () => {
+      const hooksDir = path.join(tmpHookDir, 'hooks');
+      fs.mkdirSync(hooksDir, { recursive: true });
+      const userHook = path.join(hooksDir, 'my-hook.json');
+      fs.writeFileSync(userHook, '{"version":1,"hooks":{}}\n');
+      writeCopilotHookConfig(tmpHookDir);
+      assert.ok(fs.existsSync(userHook), 'user hook file untouched');
+    });
+  });
+});
+
 // ─── Copilot uninstall skill removal ───────────────────────────────────────────
 
 describe('Copilot uninstall skill removal', () => {
@@ -1321,6 +1430,23 @@ describe('E2E: Copilot full install verification', () => {
       'Should contain GSD Configuration close marker');
   });
 
+  test('emits AGENTS.md at the repo root with GSD markers (#786)', () => {
+    const agentsMdPath = path.join(tmpDir, 'AGENTS.md');
+    assert.ok(fs.existsSync(agentsMdPath), 'AGENTS.md should exist at repo root for local install');
+    const content = fs.readFileSync(agentsMdPath, 'utf-8');
+    assert.ok(content.includes('<!-- GSD Configuration'), 'AGENTS.md has GSD open marker');
+    assert.ok(content.includes('<!-- /GSD Configuration -->'), 'AGENTS.md has GSD close marker');
+  });
+
+  test('emits a Copilot lifecycle hook config (#786)', () => {
+    const hookPath = path.join(tmpDir, '.github', 'hooks', 'gsd-session.json');
+    assert.ok(fs.existsSync(hookPath), '.github/hooks/gsd-session.json should exist');
+    const cfg = JSON.parse(fs.readFileSync(hookPath, 'utf-8'));
+    assert.strictEqual(cfg.version, 1, 'hook config has version 1');
+    assert.ok(Array.isArray(cfg.hooks.sessionStart), 'hook config has sessionStart array');
+    assert.strictEqual(cfg.hooks.sessionStart[0].type, 'command', 'sessionStart is a command hook');
+  });
+
   test('creates manifest with correct structure', () => {
     const manifestPath = path.join(tmpDir, '.github', 'gsd-file-manifest.json');
     assert.ok(fs.existsSync(manifestPath), 'gsd-file-manifest.json should exist');
@@ -1429,6 +1555,16 @@ describe('E2E: Copilot uninstall verification', () => {
     }
   });
 
+  test('removes the Copilot lifecycle hook config (#786)', () => {
+    const hookPath = path.join(tmpDir, '.github', 'hooks', 'gsd-session.json');
+    assert.ok(!fs.existsSync(hookPath), 'gsd-session.json should not exist after uninstall');
+  });
+
+  test('removes GSD-only AGENTS.md (#786)', () => {
+    const agentsMdPath = path.join(tmpDir, 'AGENTS.md');
+    assert.ok(!fs.existsSync(agentsMdPath), 'GSD-only AGENTS.md should be removed after uninstall');
+  });
+
   describe('preserves non-GSD content', () => {
     let td;
 
@@ -1463,6 +1599,90 @@ describe('E2E: Copilot uninstall verification', () => {
       assert.ok(fs.existsSync(customAgentPath),
         'Non-GSD agent file should be preserved after uninstall');
     });
+
+    test('preserves user-authored content in AGENTS.md on uninstall (#786)', () => {
+      // After install, AGENTS.md exists with the GSD block. Prepend user content.
+      const agentsMdPath = path.join(td, 'AGENTS.md');
+      assert.ok(fs.existsSync(agentsMdPath), 'AGENTS.md created by install');
+      const gsdBlock = fs.readFileSync(agentsMdPath, 'utf-8');
+      fs.writeFileSync(agentsMdPath, '# My Project Notes\n\nKeep these.\n\n' + gsdBlock);
+      // Uninstall strips only the GSD section
+      runCopilotUninstall(td);
+      assert.ok(fs.existsSync(agentsMdPath), 'AGENTS.md preserved (had user content)');
+      const after = fs.readFileSync(agentsMdPath, 'utf-8');
+      assert.ok(after.includes('# My Project Notes'), 'user content preserved');
+      assert.ok(!after.includes('<!-- GSD Configuration'), 'GSD section stripped');
+    });
+
+    test('preserves a user-authored sibling hook file on uninstall (#786)', () => {
+      const userHook = path.join(td, '.github', 'hooks', 'user-hook.json');
+      fs.writeFileSync(userHook, '{"version":1,"hooks":{}}\n');
+      runCopilotUninstall(td);
+      assert.ok(fs.existsSync(userHook), 'user-authored hook file preserved');
+    });
+  });
+});
+
+// ─── E2E: Copilot global scope (#786) ──────────────────────────────────────────
+
+function runCopilotInstallGlobal(cwd, configDir) {
+  const env = { ...process.env };
+  delete env.GSD_TEST_MODE;
+  return execFileSync(process.execPath,
+    [INSTALL_PATH, '--copilot', '--global', '--config-dir', configDir, '--no-sdk'], {
+      cwd,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env,
+    });
+}
+
+function runCopilotUninstallGlobal(cwd, configDir) {
+  const env = { ...process.env };
+  delete env.GSD_TEST_MODE;
+  return execFileSync(process.execPath,
+    [INSTALL_PATH, '--copilot', '--global', '--config-dir', configDir, '--uninstall', '--no-sdk'], {
+      cwd,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env,
+    });
+}
+
+describe('E2E: Copilot global install (#786)', () => {
+  let projectDir;
+  let configDir;
+
+  beforeEach(() => {
+    projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-e2e-gproj-'));
+    configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-e2e-gcfg-'));
+    runCopilotInstallGlobal(projectDir, configDir);
+  });
+
+  afterEach(() => {
+    cleanup(projectDir);
+    cleanup(configDir);
+  });
+
+  test('writes the lifecycle hook config under the global config dir', () => {
+    const hookPath = path.join(configDir, 'hooks', 'gsd-session.json');
+    assert.ok(fs.existsSync(hookPath), 'global hook config should exist under config dir');
+    const cfg = JSON.parse(fs.readFileSync(hookPath, 'utf-8'));
+    assert.strictEqual(cfg.version, 1, 'hook config version is 1');
+    assert.ok(Array.isArray(cfg.hooks.sessionStart), 'has sessionStart array');
+  });
+
+  test('does NOT emit AGENTS.md for global scope (no repo-root home)', () => {
+    assert.ok(!fs.existsSync(path.join(projectDir, 'AGENTS.md')),
+      'global install must not write AGENTS.md into the working directory');
+    assert.ok(!fs.existsSync(path.join(configDir, 'AGENTS.md')),
+      'global install must not write AGENTS.md into the config directory');
+  });
+
+  test('global uninstall removes the lifecycle hook config', () => {
+    runCopilotUninstallGlobal(projectDir, configDir);
+    const hookPath = path.join(configDir, 'hooks', 'gsd-session.json');
+    assert.ok(!fs.existsSync(hookPath), 'global hook config removed after uninstall');
   });
 });
 
