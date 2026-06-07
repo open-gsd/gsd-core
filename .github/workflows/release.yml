@@ -444,6 +444,19 @@ jobs:
           node scripts/release-notes/format-github-release-notes.cjs \
             --tag "v${PRE_VERSION}" --prerelease --apply
 
+      - name: Post Discord pre-release announcement
+        if: ${{ !inputs.dry_run }}
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_CHANGELOG_WEBHOOK }}
+          GH_TOKEN: ${{ github.token }}
+          PRE_VERSION: ${{ steps.prerelease.outputs.pre_version }}
+        run: |
+          node scripts/release-notes/discord-release-summary.cjs \
+            --tag "v${PRE_VERSION}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --post \
+            --allow-missing-webhook
+
       - name: Verify publish
         if: ${{ !inputs.dry_run }}
         env:
@@ -615,6 +628,19 @@ jobs:
           # Install + Feature/Enhancement/Fix format.
           node scripts/release-notes/format-github-release-notes.cjs \
             --tag "v${VERSION}" --latest --apply
+
+      - name: Post Discord release announcement
+        if: ${{ !inputs.dry_run }}
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_CHANGELOG_WEBHOOK }}
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          node scripts/release-notes/discord-release-summary.cjs \
+            --tag "v${VERSION}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --post \
+            --allow-missing-webhook
 
       - name: Clean up next dist-tag
         if: ${{ !inputs.dry_run }}

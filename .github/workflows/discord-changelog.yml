@@ -19,131 +19,23 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
       - name: Post release changelog to Discord
-        uses: actions/github-script@v7
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_CHANGELOG_WEBHOOK }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
-        with:
-          script: |
-            const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
-
-            if (!webhookUrl) {
-              core.setFailed("Missing DISCORD_CHANGELOG_WEBHOOK secret.");
-              return;
-            }
-
-            if (context.eventName !== "release" && context.eventName !== "workflow_dispatch") {
-              core.info(`Skipping ${context.eventName}; this workflow only posts releases.`);
-              return;
-            }
-
-            const release = await getRelease();
-            const messages = buildReleaseMessages(release);
-
-            for (const content of messages) {
-              const response = await fetch(webhookUrl, {
-                method: "POST",
-                headers: {
-                  "content-type": "application/json",
-                },
-                body: JSON.stringify({
-                  username: "Repo Changelog",
-                  content,
-                  allowed_mentions: {
-                    parse: [],
-                  },
-                }),
-              });
-
-              if (!response.ok) {
-                core.setFailed(`Discord webhook failed with ${response.status}: ${await response.text()}`);
-                return;
-              }
-            }
-
-            async function getRelease() {
-              if (context.eventName === "release") {
-                return context.payload.release;
-              }
-
-              const releaseTag = process.env.RELEASE_TAG;
-              const response = releaseTag
-                ? await github.rest.repos.getReleaseByTag({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    tag: releaseTag,
-                  })
-                : await github.rest.repos.getLatestRelease({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                  });
-
-              return response.data;
-            }
-
-            function buildReleaseMessages(release) {
-              const tag = release.tag_name || release.name || "release";
-              const title = release.name || tag;
-              const notes = formatReleaseNotes(release.body || "") || "No release notes provided.";
-              const fullMessage = `**${title} Released**\n\n${notes}`;
-
-              return splitDiscordMessage(fullMessage, 1900);
-            }
-
-            function formatReleaseNotes(value) {
-              return truncate(
-                value
-                  .replace(/\r\n/g, "\n")
-                  .replace(/https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/(\d+)/g, "#$1")
-                  .replace(/https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/issues\/(\d+)/g, "#$1")
-                  .replace(/https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/commit\/([0-9a-f]{7})[0-9a-f]*/gi, "$1")
-                  .replace(/https:\/\/github\.com\/\S+/g, "")
-                  .trim()
-                  .split("\n")
-                  .map((line) => {
-                    const heading = line.match(/^#{1,6}\s+(.+)$/);
-                    return heading ? `**${heading[1].trim()}**` : line;
-                  })
-                  .join("\n")
-                  .replace(/\n{3,}/g, "\n\n")
-                  .trim(),
-                3900,
-              );
-            }
-
-            function splitDiscordMessage(value, maxLength) {
-              if (value.length <= maxLength) {
-                return [value];
-              }
-
-              const chunks = [];
-              let remaining = value;
-
-              while (remaining.length > maxLength) {
-                let splitAt = remaining.lastIndexOf("\n", maxLength);
-
-                if (splitAt < 500) {
-                  splitAt = remaining.lastIndexOf(" ", maxLength);
-                }
-
-                if (splitAt < 500) {
-                  splitAt = maxLength;
-                }
-
-                chunks.push(remaining.slice(0, splitAt).trim());
-                remaining = remaining.slice(splitAt).trim();
-              }
-
-              if (remaining) {
-                chunks.push(remaining);
-              }
-
-              return chunks.map((chunk, index) =>
-                index === 0 ? chunk : `**Changelog continued**\n\n${chunk}`,
-              );
-            }
-
-            function truncate(value, maxLength) {
-              return value.length <= maxLength ? value : `${value.slice(0, maxLength - 3)}...`;
-            }
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "${RELEASE_TAG:-}" ]; then
+            node scripts/release-notes/discord-release-summary.cjs \
+              --tag "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --post
+          else
+            node scripts/release-notes/discord-release-summary.cjs \
+              --latest \
+              --repo "$GITHUB_REPOSITORY" \
+              --post
+          fi
