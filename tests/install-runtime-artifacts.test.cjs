@@ -28,6 +28,7 @@ const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const {
   installRuntimeArtifacts,
+  installOpencodeFamilySkills,
   parseRuntimeInput,
   allRuntimes,
 } = require('../bin/install.js');
@@ -153,6 +154,62 @@ describe('installRuntimeArtifacts — opencode / kilo flat commands', () => {
       const commandDir = path.join(configDir, 'command');
       assert.ok(fs.existsSync(commandDir));
       assert.ok(fs.existsSync(path.join(commandDir, 'gsd-help.md')));
+    });
+  }
+});
+
+// ─── #784: installOpencodeFamilySkills — skills + path rewrite + preservation ─
+
+describe('installOpencodeFamilySkills — emits skills/<name>/SKILL.md (#784)', () => {
+  for (const runtime of ['opencode', 'kilo']) {
+    test(`${runtime}: writes gsd-help/SKILL.md with name + description`, (t) => {
+      const configDir = createTempDir(`gsd-ocs-${runtime}-`);
+      t.after(() => cleanup(configDir));
+
+      const count = installOpencodeFamilySkills(runtime, configDir, 'global', RESOLVED_CORE, `${configDir}/`);
+      assert.ok(count >= 1, 'should report installed skills');
+
+      const skillMd = path.join(configDir, 'skills', 'gsd-help', 'SKILL.md');
+      assert.ok(fs.existsSync(skillMd), 'gsd-help/SKILL.md must exist');
+      const content = fs.readFileSync(skillMd, 'utf8');
+      assert.match(content, /^name: gsd-help$/m, 'name matches dir');
+      assert.match(content, /^description: /m, 'description present');
+      assert.ok(!/\/gsd:/.test(content), 'no /gsd: colon refs in body');
+    });
+
+    test(`${runtime}: rewrites body paths to the actual install target (#784 path fix)`, (t) => {
+      const configDir = createTempDir(`gsd-ocp-${runtime}-`);
+      t.after(() => cleanup(configDir));
+
+      // Simulate a custom/local install: pathPrefix points at configDir, NOT the
+      // runtime's default global config dir. Body refs must use pathPrefix.
+      installOpencodeFamilySkills(runtime, configDir, 'global', RESOLVED_CORE, `${configDir}/`);
+
+      const defaultBase = runtime === 'kilo' ? '~/.config/kilo' : '~/.config/opencode';
+      for (const skillName of fs.readdirSync(path.join(configDir, 'skills'))) {
+        const body = fs.readFileSync(path.join(configDir, 'skills', skillName, 'SKILL.md'), 'utf8');
+        assert.ok(
+          !body.includes(`${defaultBase}/`),
+          `${skillName}: must not leak hardcoded ${defaultBase}/ — should use install target`,
+        );
+      }
+    });
+
+    test(`${runtime}: preserves user-owned gsd-dev-preferences across reinstall (#784)`, (t) => {
+      const configDir = createTempDir(`gsd-ocd-${runtime}-`);
+      t.after(() => cleanup(configDir));
+
+      const userSkill = path.join(configDir, 'skills', 'gsd-dev-preferences');
+      fs.mkdirSync(userSkill, { recursive: true });
+      const marker = '---\nname: gsd-dev-preferences\ndescription: mine\n---\nKEEP ME\n';
+      fs.writeFileSync(path.join(userSkill, 'SKILL.md'), marker);
+
+      installOpencodeFamilySkills(runtime, configDir, 'global', RESOLVED_CORE, `${configDir}/`);
+
+      const after = fs.readFileSync(path.join(userSkill, 'SKILL.md'), 'utf8');
+      assert.ok(after.includes('KEEP ME'), 'user-owned dev-preferences must survive reinstall');
+      // GSD-managed skills should also be present.
+      assert.ok(fs.existsSync(path.join(configDir, 'skills', 'gsd-help', 'SKILL.md')));
     });
   }
 });
