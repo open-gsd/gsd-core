@@ -121,6 +121,7 @@
     "install": {
       "files": [
         "bug-410-install-defaults-test-mode-guard.test.cjs",
+        "enh-788-qwen-hook-events.test.cjs",
         "install-minimal-hooks.test.cjs",
         "install-path-detection.test.cjs",
         "install-regressions.test.cjs",
