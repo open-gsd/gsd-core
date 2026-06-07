@@ -7766,9 +7766,10 @@ function uninstall(isGlobal, runtime = 'claude') {
     // Remove GSD hooks from settings — per-hook granularity to preserve
     // user hooks that share an entry with a GSD hook (#1755 followup).
     // Includes the 3 Qwen-only events added in #788 (SubagentStop, Stop,
-    // PreCompact) — safe to iterate for all runtimes; non-Qwen installs
-    // simply find no entries and skip.
-    for (const eventName of ['SessionStart', 'PostToolUse', 'AfterTool', 'PreToolUse', 'BeforeTool', 'SubagentStop', 'Stop', 'PreCompact']) {
+    // PreCompact) and the 3 Gemini-only events added in #776 (BeforeAgent,
+    // AfterAgent, BeforeModel) — safe to iterate for all runtimes; non-Qwen
+    // and non-Gemini installs simply find no entries and skip.
+    for (const eventName of ['SessionStart', 'PostToolUse', 'AfterTool', 'PreToolUse', 'BeforeTool', 'SubagentStop', 'Stop', 'PreCompact', 'BeforeAgent', 'AfterAgent', 'BeforeModel']) {
       if (settings.hooks && settings.hooks[eventName]) {
         const before = JSON.stringify(settings.hooks[eventName]);
         settings.hooks[eventName] = settings.hooks[eventName]
@@ -10652,7 +10653,73 @@ function install(isGlobal, runtime = 'claude', options = {}) {
       }
     }
     // ── end Qwen-only extended hook events ────────────────────────────────────
+
+    // ── Gemini-only extended hook events (#776) ───────────────────────────────
+    // Gemini CLI exposes several hook events beyond BeforeTool/AfterTool that
+    // gsd previously did not register.  Three high-value events are added here:
+    //
+    //   BeforeAgent  — fires after user submits a prompt, before the agent
+    //                  plans.  Wire gsd-context-monitor for context headroom
+    //                  awareness at prompt time.
+    //   AfterAgent   — fires once per turn after the model generates its final
+    //                  response.  Wire gsd-context-monitor to track headroom
+    //                  after each agent turn completes.
+    //   BeforeModel  — fires before each LLM call (per-turn, not per-session).
+    //                  Wire gsd-context-monitor for per-turn context injection
+    //                  — more precise than session-start-only injection.
+    //
+    // All three reuse gsd-context-monitor.js — no new hook files needed.
+    // The `decision:"deny"` retry capability of AfterAgent is intentionally
+    // left to the hook script to implement when triggered (gsd-context-monitor
+    // exits 0 / advisory-only today; an active quality gate is a follow-on).
+    //
+    // Note: BeforeToolSelection is NOT wired.  That event does not map to a
+    // gsd hook use case at this time; deferred to a follow-on issue.
+    //
+    // Guard: isGemini is defined at the top of install() (line ~8696).
+    if (isGemini) {
+      for (const geminiEvent of ['BeforeAgent', 'AfterAgent', 'BeforeModel']) {
+        if (!Array.isArray(settings.hooks[geminiEvent])) {
+          settings.hooks[geminiEvent] = [];
+        }
+        const alreadyHasContextMonitor = settings.hooks[geminiEvent].some(entry =>
+          entry.hooks && entry.hooks.some(h => h.command && h.command.includes('gsd-context-monitor'))
+        );
+        if (!alreadyHasContextMonitor && fs.existsSync(contextMonitorFile) && contextMonitorCommand) {
+          settings.hooks[geminiEvent].push({
+            hooks: [
+              {
+                type: 'command',
+                command: contextMonitorCommand,
+                timeout: 10
+              }
+            ]
+          });
+          console.log(`  ${green}✓${reset} Configured ${geminiEvent} context monitor hook (Gemini)`);
+        } else if (!alreadyHasContextMonitor && !fs.existsSync(contextMonitorFile)) {
+          console.warn(`  ${yellow}⚠${reset}  Skipped ${geminiEvent} hook — gsd-context-monitor.js not found at target`);
+        }
+      }
+    }
+    // ── end Gemini-only extended hook events ──────────────────────────────────
   }
+
+  // ── Gemini hooksConfig.enabled check (#776) ───────────────────────────────
+  // Detect `hooksConfig.enabled: false` in the already-loaded settings object
+  // and emit a clear warning.  When this field is false the Gemini CLI silently
+  // disables ALL hook execution — gsd hooks are registered but will never run.
+  // The check is read-only (warning only; we do not mutate hooksConfig).
+  // Note: we use the in-memory `settings` object (already read from disk and
+  // cleaned up by validateHookFields/cleanupOrphanedHooks above) rather than
+  // re-reading settings.json, avoiding a TOCTOU window between the two reads.
+  if (isGemini && settings && settings.hooksConfig && settings.hooksConfig.enabled === false) {
+    console.warn(
+      `  ${yellow}⚠${reset}  Warning: hooksConfig.enabled is false in your Gemini settings.json.\n` +
+      `     gsd-core hooks are registered but will NOT run until you set\n` +
+      `     hooksConfig.enabled: true in ${path.join(targetDir, 'settings.json')}.`
+    );
+  }
+  // ── end hooksConfig.enabled check ────────────────────────────────────────
 
   // Compute the update-banner hook command alongside the others so
   // installAllRuntimes can register it at finalize time when the user opts
