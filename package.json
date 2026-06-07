@@ -13,6 +13,8 @@
     "assets",
     "agents",
     ".claude-plugin",
+    "gemini-extension.json",
+    "GEMINI.md",
     "hooks",
     "scripts"
   ],

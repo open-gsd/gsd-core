@@ -733,6 +733,43 @@ npx @opengsd/gsd-core --codebuddy --global
 npx @opengsd/gsd-core --qwen --global
 ```
 
+### Installing as a Gemini CLI extension (#775)
+
+GSD ships a `gemini-extension.json` extension manifest at the repository root, so
+Gemini CLI users can install, update, and remove GSD through Gemini's own
+extension lifecycle — and have it show up in `gemini extensions list`:
+
+```bash
+# Install (Gemini clones the repo and copies the extension)
+gemini extensions install https://github.com/open-gsd/gsd-core
+
+# Update to the latest released manifest version
+gemini extensions update gsd-core
+
+# Remove
+gemini extensions uninstall gsd-core
+```
+
+For local development against a checkout, symlink it instead of copying:
+
+```bash
+gemini extensions link /path/to/gsd-core
+```
+
+**What the extension delivers today:** it loads GSD's operating context
+(`GEMINI.md`) into every Gemini session in the project, and gives you the
+discoverable install/update/remove lifecycle above. The `/gsd:*` slash commands,
+agents, and hooks are still installed via the dedicated installer:
+
+```bash
+npx @opengsd/gsd-core --gemini --global
+```
+
+The two paths are complementary and additive — installing the extension does not
+change or replace the `npx gsd-core --gemini` install, and either can be used on
+its own. (Slash-command/agent/hook projection into the extension package itself
+is a planned follow-up.)
+
 ### Installing for Prerelease Editions
 
 Set the runtime's `*_CONFIG_DIR` env var to the prerelease directory before running the installer:

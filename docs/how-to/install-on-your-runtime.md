@@ -104,6 +104,21 @@ GEMINI_CONFIG_DIR=~/.gemini-alt npx @opengsd/gsd-core@latest --gemini --global
 
 ---
 
+### Gemini CLI — native extension install (#775)
+
+GSD also ships a `gemini-extension.json` extension manifest, so you can manage GSD through Gemini's own extension lifecycle and see it in `gemini extensions list`:
+
+```bash
+gemini extensions install https://github.com/open-gsd/gsd-core   # install
+gemini extensions update gsd-core                                # update
+gemini extensions uninstall gsd-core                             # remove
+gemini extensions link /path/to/gsd-core                         # dev: symlink a checkout
+```
+
+The extension loads GSD's operating context (`GEMINI.md`) into every session and gives you the discoverable install/update/remove lifecycle. The `/gsd:*` slash commands, agents, and hooks are installed separately by `npx @opengsd/gsd-core --gemini --global` (above). The two paths are complementary and additive — neither replaces the other, and slash-command projection into the extension is a planned follow-up.
+
+---
+
 ### OpenCode
 
 ```bash
