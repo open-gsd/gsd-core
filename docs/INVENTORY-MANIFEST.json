@@ -1,5 +1,5 @@
 {
-  "generated": "2026-06-06",
+  "generated": "2026-06-07",
   "families": {
     "agents": [
       "gsd-advisor-researcher",
@@ -350,6 +350,7 @@
       "workstream-inventory.cjs",
       "workstream-name-policy.cjs",
       "workstream.cjs",
+      "worktree-base-ref.cjs",
       "worktree-safety.cjs"
     ],
     "hooks": [

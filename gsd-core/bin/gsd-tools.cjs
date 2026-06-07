@@ -1232,8 +1232,12 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         worktreeSafety.cmdWorktreeCleanupWave(cwd, args.slice(2));
       } else if (subcommand === 'reap-orphans') {
         worktreeSafety.cmdWorktreeReapOrphans(cwd);
+      } else if (subcommand === 'base-check') {
+        require('./lib/worktree-base-ref.cjs').cmdWorktreeBaseCheck(cwd, args.slice(2));
+      } else if (subcommand === 'set-baseref') {
+        require('./lib/worktree-base-ref.cjs').cmdWorktreeSetBaseRef(cwd, args.slice(2));
       } else {
-        error('Unknown worktree subcommand. Available: cleanup-wave, reap-orphans', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+        error('Unknown worktree subcommand. Available: cleanup-wave, reap-orphans, base-check, set-baseref', ERROR_REASON.SDK_UNKNOWN_COMMAND);
       }
       break;
     }

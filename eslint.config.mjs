@@ -83,6 +83,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/intel.cjs',
       'gsd-core/bin/lib/installer-migrations.cjs',
       'gsd-core/bin/lib/worktree-safety.cjs',
+      'gsd-core/bin/lib/worktree-base-ref.cjs',
       'gsd-core/bin/lib/planning-workspace.cjs',
       'gsd-core/bin/lib/runtime-artifact-layout.cjs',
       'gsd-core/bin/lib/command-routing-hub.cjs',
