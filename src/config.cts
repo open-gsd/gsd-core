@@ -429,22 +429,31 @@ function setConfigValue(cwd: string, keyPath: string, parsedValue: unknown): Set
       error('Failed to read config.json: ' + (err as Error).message, ERROR_REASON.CONFIG_PARSE_FAILED);
     }
 
-    // Set nested value using dot notation (e.g., "workflow.research")
+    // Set nested value using dot notation (e.g., "workflow.research").
+    // Prototype-pollution guard: reject dangerous segments via inline literal
+    // comparisons on the exact key used to index `current`, immediately before
+    // each write. The inline comparison is the barrier CodeQL's
+    // js/prototype-pollution-utility query recognises — the previous Set-based
+    // pre-loop check was functionally correct but not traced through, so
+    // code-scanning alert #26 kept firing. Behaviour is unchanged from #663.
     const keys = keyPath.split('.');
-    const FORBIDDEN_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
-    if (keys.some((k) => FORBIDDEN_KEYS.has(k))) {
-      error('Invalid config key (prototype pollution guard): ' + keyPath, ERROR_REASON.CONFIG_PARSE_FAILED);
-    }
     let current: Record<string, unknown> = config;
     for (let i = 0; i < keys.length - 1; i++) {
       const key = keys[i];
+      if (key === '__proto__' || key === 'prototype' || key === 'constructor') {
+        error('Invalid config key (prototype pollution guard): ' + keyPath, ERROR_REASON.CONFIG_PARSE_FAILED);
+      }
       if (current[key] === undefined || typeof current[key] !== 'object') {
         current[key] = {};
       }
       current = current[key] as Record<string, unknown>;
     }
-    const previousValue = current[keys[keys.length - 1]]; // Capture previous value before overwriting
-    current[keys[keys.length - 1]] = parsedValue;
+    const lastKey = keys[keys.length - 1];
+    if (lastKey === '__proto__' || lastKey === 'prototype' || lastKey === 'constructor') {
+      error('Invalid config key (prototype pollution guard): ' + keyPath, ERROR_REASON.CONFIG_PARSE_FAILED);
+    }
+    const previousValue = current[lastKey]; // Capture previous value before overwriting
+    current[lastKey] = parsedValue;
 
     // Write back
     try {
