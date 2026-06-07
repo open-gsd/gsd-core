@@ -115,6 +115,9 @@ GSD stores project settings in `.planning/config.json`. Created during `/gsd-new
   },
   "project_code": null,
   "agent_skills": {},
+  "agent_skills_security": {
+    "trusted_global_roots": []
+  },
   "response_language": null,
   "features": {
     "thinking_partner": false,
@@ -395,6 +398,7 @@ Inject custom skill files into GSD subagent prompts. Skills are read by agents a
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `agent_skills` | object | `{}` | Map of agent types to skill directory paths |
+| `agent_skills_security.trusted_global_roots` | array of strings | `[]` | Opt-in allowlist of additional trusted directories for `global:` skills. See [Trusted global skill roots](#trusted-global-skill-roots-agent_skills_securitytrusted_global_roots) |
 
 ### Configuration
 
@@ -451,6 +455,50 @@ Set skills via the CLI:
 ```bash
 gsd-tools query config-set agent_skills.gsd-executor '["skills/my-skill"]'
 ```
+
+---
+
+## Trusted Global Skill Roots (`agent_skills_security.trusted_global_roots`)
+
+Widen the symlink-safety boundary for `global:` skills by declaring additional trusted root directories.
+
+### Purpose
+
+By default, a `global:<name>` skill whose `SKILL.md` real path (after resolving symlinks) escapes the runtime's global skills directory (e.g. `~/.claude/skills/`) is rejected as a symlink-escape. `agent_skills_security.trusted_global_roots` lets you declare additional trusted root directories so symlinked skills whose real target lives under one of them are accepted.
+
+Common use case: a single source-of-truth skills directory elsewhere on disk (e.g. `~/shared/skills`) symlinked into `~/.claude/skills/` so `git pull` or `rsync` keeps a team's skills up to date without maintaining copies.
+
+### Configuration
+
+```json
+{
+  "agent_skills_security": {
+    "trusted_global_roots": [
+      "~/shared/skills",
+      "/opt/shared-skills"
+    ]
+  }
+}
+```
+
+### How It Works
+
+- **Default `[]`** — behavior is byte-identical to omitting the option entirely: only skills whose real `SKILL.md` path resolves inside the default global skills directory are accepted.
+- **Absolute or tilde-prefixed paths only.** Each entry must be an absolute path (`/opt/shared-skills`) or a `~`/`~/`-prefixed path (tilde expands to your home directory). Project-relative paths are rejected, so an untrusted repo's `.planning/config.json` cannot point trust at a directory inside itself.
+- **`realpathSync` at load time.** Each declared root is resolved with `realpathSync` on every run, so trust follows the real target and cannot silently drift if a root itself later becomes a symlink. Non-existent or unreadable roots are dropped without error.
+- **Dangerously broad roots are refused.** The filesystem root (`/`), drive or UNC roots, and your home directory itself cannot be declared as trusted roots — these would make the allowlist meaningless.
+- **Acceptance rule.** A skill is accepted if and only if its real `SKILL.md` path lies inside the default global skills directory OR inside one of the resolved trusted roots. Skills resolving outside all of these are still rejected.
+- **Audit note.** When a skill is accepted via a trusted root rather than the default global skills directory, a `[agent-skills] NOTE:` line is written to stderr so the widened boundary remains visible.
+
+> **Security note:** `trusted_global_roots` is read from the project-local `.planning/config.json`. Only add roots you control and trust. Declaring a broad shared directory widens which symlinked global skills will load for every agent in this project.
+
+### CLI
+
+```bash
+gsd config-set agent_skills_security.trusted_global_roots '["~/shared/skills"]'
+```
+
+Setting the parent object (`agent_skills_security`) directly is not supported; use the dot-notation leaf form shown above.
 
 ---
 

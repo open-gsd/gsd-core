@@ -536,6 +536,7 @@ function loadConfig(cwd: string, options: Record<string, unknown> = {}): Record<
       effort: (parsed['effort']) || null,
       fast_mode: (parsed['fast_mode']) || null,
       agent_skills: (parsed['agent_skills']) || {},
+      agent_skills_security: (parsed['agent_skills_security']) || null,
       manager: (parsed['manager']) || {},
       response_language: get('response_language') || null,
       claude_md_path: get('claude_md_path') || null,
