@@ -1,6 +1,6 @@
 # Your first project
 
-In this tutorial you will install GSD Core and build a small command-line to-do app from scratch — one phase, one PR, the full loop. By the end you will have run every command in the core phase loop at least once, and you will have seen the planning artefacts that each command produces.
+In this tutorial you will install GSD Core and build a small command-line to-do app from scratch — one phase, one PR, the full loop. By the end you will have run every command in the core phase loop at least once, and you will have seen the planning artifacts that each command produces.
 
 ---
 
