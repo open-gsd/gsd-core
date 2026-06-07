@@ -305,11 +305,21 @@ function resolveRuntimeArtifactLayout(runtime: string, configDir: string, scope:
       break;
 
     case 'opencode':
-      kinds = [commandsKind('command', 'gsd-', configDir)];
+      // OpenCode reads flat slash commands from command/ and on-demand skills
+      // from skills/<name>/SKILL.md (https://opencode.ai/docs/skills). Emit both.
+      kinds = [
+        commandsKind('command', 'gsd-', configDir),
+        skillsKind('skills', 'gsd-', 'convertClaudeCommandToOpencodeSkill', 'opencode', configDir),
+      ];
       break;
 
     case 'kilo':
-      kinds = [commandsKind('command', 'gsd-', configDir)];
+      // Kilo derives from OpenCode and shares the skills/<name>/SKILL.md layout
+      // (https://kilo.ai/docs/customize/skills). Emit flat commands + skills.
+      kinds = [
+        commandsKind('command', 'gsd-', configDir),
+        skillsKind('skills', 'gsd-', 'convertClaudeCommandToKiloSkill', 'kilo', configDir),
+      ];
       break;
 
     default:

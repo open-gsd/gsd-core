@@ -211,28 +211,44 @@ describe('resolveRuntimeArtifactLayout — cline', () => {
 });
 
 describe('resolveRuntimeArtifactLayout — opencode', () => {
-  test('returns correct layout for opencode', () => {
+  test('returns commands + skills layout for opencode (#784)', () => {
     const layout = resolveRuntimeArtifactLayout('opencode', FAKE_DIR);
     assert.strictEqual(layout.runtime, 'opencode');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 1);
-    assert.strictEqual(layout.kinds[0].kind, 'commands');
-    assert.strictEqual(layout.kinds[0].destSubpath, 'command');
-    assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
-    assert.strictEqual(typeof layout.kinds[0].stage, 'function');
+    assert.strictEqual(layout.kinds.length, 2);
+
+    const commands = layout.kinds.find((k) => k.kind === 'commands');
+    assert.ok(commands, 'should have a commands kind');
+    assert.strictEqual(commands.destSubpath, 'command');
+    assert.strictEqual(commands.prefix, 'gsd-');
+    assert.strictEqual(typeof commands.stage, 'function');
+
+    const skills = layout.kinds.find((k) => k.kind === 'skills');
+    assert.ok(skills, 'should have a skills kind');
+    assert.strictEqual(skills.destSubpath, 'skills');
+    assert.strictEqual(skills.prefix, 'gsd-');
+    assert.strictEqual(typeof skills.stage, 'function');
   });
 });
 
 describe('resolveRuntimeArtifactLayout — kilo', () => {
-  test('returns correct layout for kilo', () => {
+  test('returns commands + skills layout for kilo (#784)', () => {
     const layout = resolveRuntimeArtifactLayout('kilo', FAKE_DIR);
     assert.strictEqual(layout.runtime, 'kilo');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 1);
-    assert.strictEqual(layout.kinds[0].kind, 'commands');
-    assert.strictEqual(layout.kinds[0].destSubpath, 'command');
-    assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
-    assert.strictEqual(typeof layout.kinds[0].stage, 'function');
+    assert.strictEqual(layout.kinds.length, 2);
+
+    const commands = layout.kinds.find((k) => k.kind === 'commands');
+    assert.ok(commands, 'should have a commands kind');
+    assert.strictEqual(commands.destSubpath, 'command');
+    assert.strictEqual(commands.prefix, 'gsd-');
+    assert.strictEqual(typeof commands.stage, 'function');
+
+    const skills = layout.kinds.find((k) => k.kind === 'skills');
+    assert.ok(skills, 'should have a skills kind');
+    assert.strictEqual(skills.destSubpath, 'skills');
+    assert.strictEqual(skills.prefix, 'gsd-');
+    assert.strictEqual(typeof skills.stage, 'function');
   });
 });
 
@@ -393,4 +409,31 @@ describe('stage — opencode commands kind', () => {
       assert.ok(CORE_SKILLS.has(stem), `unexpected skill staged: ${stem}`);
     }
   });
+});
+
+describe('stage — opencode/kilo skills kind (#784)', () => {
+  for (const runtime of ['opencode', 'kilo']) {
+    test(`${runtime} skills stage writes gsd-<stem>/SKILL.md with name + description`, () => {
+      const layout = resolveRuntimeArtifactLayout(runtime, FAKE_STAGE_DIR);
+      const skillsKind = layout.kinds.find(k => k.kind === 'skills');
+      assert.ok(skillsKind, 'should have a skills kind');
+
+      const stagedDir = skillsKind.stage(PROFILE_CORE);
+      assert.ok(fs.existsSync(stagedDir), 'stagedDir must exist');
+      const entries = fs.readdirSync(stagedDir);
+      assert.ok(entries.length >= 1, 'at least one skill dir should be staged');
+      for (const entry of entries) {
+        assert.ok(entry.startsWith('gsd-'), `entry should start with gsd-: ${entry}`);
+        const skillMd = path.join(stagedDir, entry, 'SKILL.md');
+        assert.ok(fs.existsSync(skillMd), `SKILL.md must exist in ${entry}`);
+        const content = fs.readFileSync(skillMd, 'utf8');
+        // OpenCode skill spec: name must match the dir, description required.
+        assert.ok(content.startsWith('---\n'), 'SKILL.md must open with frontmatter');
+        assert.match(content, new RegExp(`^name: ${entry}$`, 'm'), `name must equal dir ${entry}`);
+        assert.match(content, /^description: /m, 'description frontmatter required');
+        // No colon-namespace command leaks in the converted body.
+        assert.ok(!/\/gsd:/.test(content), 'body must not contain /gsd: colon refs');
+      }
+    });
+  }
 });

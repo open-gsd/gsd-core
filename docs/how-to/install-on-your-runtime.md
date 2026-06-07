@@ -110,7 +110,7 @@ GEMINI_CONFIG_DIR=~/.gemini-alt npx @opengsd/gsd-core@latest --gemini --global
 npx @opengsd/gsd-core@latest --opencode --global
 ```
 
-Skills land in `~/.config/opencode/` (XDG) or `~/.opencode/`. The installer converts agent frontmatter to OpenCode's schema — removing the `tools:` field and converting colour values to hex. See [Installing without Node.js — OpenCode transformations](#opencode--required-transformations) if you need to understand what changes.
+The installer writes three surfaces under `~/.config/opencode/` (XDG) or `~/.opencode/`: flat slash commands in `command/`, file-based subagents in `agents/`, and on-demand skills in `skills/<name>/SKILL.md`. It converts agent frontmatter to OpenCode's schema — removing the `tools:` field and converting colour values to hex — and emits each skill with spec-compliant frontmatter (`name` matching the skill directory plus a `description`). Skills are loaded on demand via OpenCode's native skill tool; commands remain invokable as `/gsd-*`. See [Installing without Node.js — OpenCode transformations](#opencode--required-transformations) if you need to understand what changes.
 
 **Override the install directory:**
 
@@ -126,7 +126,7 @@ OPENCODE_CONFIG_DIR=~/.config/opencode-alt npx @opengsd/gsd-core@latest --openco
 npx @opengsd/gsd-core@latest --kilo --global
 ```
 
-Skills land in `~/.config/kilo/` (XDG) or `~/.kilo/`. Uses the same OpenCode-style flat markdown command format.
+The installer writes the same three surfaces under `~/.config/kilo/` (XDG) or `~/.kilo/` as for OpenCode — flat commands in `command/`, subagents in `agents/`, and skills in `skills/<name>/SKILL.md` — since Kilo derives from OpenCode and shares its config schema and skill layout.
 
 **Override the install directory:**
 

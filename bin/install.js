@@ -5636,6 +5636,70 @@ function convertClaudeToKiloFrontmatter(content, { isAgent = false } = {}) {
 }
 
 /**
+ * Shared SKILL.md writer for the OpenCode-family runtimes (OpenCode + Kilo),
+ * which share a config schema (Kilo derives from OpenCode). OpenCode discovers
+ * skills as `skills/<name>/SKILL.md` and Kilo follows the same layout
+ * (https://opencode.ai/docs/skills, https://kilo.ai/docs/customize/skills).
+ *
+ * The skill body reuses the runtime's command-frontmatter converter for tool,
+ * path, and `/gsd:`→`/gsd-` body rewrites, then rebuilds a minimal skill
+ * frontmatter: only `name` (lowercase-hyphen, must match the containing
+ * directory) and `description` (1–1024 chars) are emitted, per the OpenCode
+ * skill spec. The command's `tools:`/`permission:` block is intentionally
+ * dropped — OpenCode skills are loaded on-demand via the native skill tool and
+ * inherit the calling agent's permissions.
+ *
+ * @param {string} content - Claude command markdown (with YAML frontmatter)
+ * @param {string} skillName - Skill directory name (e.g. gsd-help)
+ * @param {(content: string) => string} frontmatterConverter - runtime command converter
+ * @returns {string} SKILL.md content
+ */
+function convertClaudeCommandToOpencodeFamilySkill(content, skillName, frontmatterConverter) {
+  const converted = frontmatterConverter(content);
+  const { frontmatter, body } = extractFrontmatterAndBody(converted);
+  let description = `Run GSD workflow ${skillName}.`;
+  if (frontmatter) {
+    const maybeDescription = extractFrontmatterField(frontmatter, 'description');
+    if (maybeDescription) {
+      description = maybeDescription;
+    }
+  }
+  description = toSingleLine(description);
+  // OpenCode skill descriptions must be 1–1024 characters.
+  if (description.length > 1024) {
+    description = `${description.slice(0, 1021)}...`;
+  }
+  // `name` must be lowercase alphanumeric with single-hyphen separators and
+  // match the containing directory name (the staged dir is `${skillName}/`).
+  const name = yamlIdentifier(skillName);
+  return `---\nname: ${name}\ndescription: ${yamlQuote(description)}\n---\n\n${body.trimStart()}`;
+}
+
+/**
+ * Convert a Claude command (.md) to an OpenCode skill (SKILL.md).
+ * Thin wrapper over the shared OpenCode-family writer.
+ */
+function convertClaudeCommandToOpencodeSkill(content, skillName) {
+  return convertClaudeCommandToOpencodeFamilySkill(
+    content,
+    skillName,
+    (c) => convertClaudeToOpencodeFrontmatter(c),
+  );
+}
+
+/**
+ * Convert a Claude command (.md) to a Kilo skill (SKILL.md).
+ * Thin wrapper over the shared OpenCode-family writer (Kilo shares the schema).
+ */
+function convertClaudeCommandToKiloSkill(content, skillName) {
+  return convertClaudeCommandToOpencodeFamilySkill(
+    content,
+    skillName,
+    (c) => convertClaudeToKiloFrontmatter(c),
+  );
+}
+
+/**
  * Convert Claude Code markdown command to Gemini TOML format
  * @param {string} content - Markdown file content with YAML frontmatter
  * @returns {string} - TOML content
@@ -6410,6 +6474,43 @@ function installRuntimeArtifacts(runtime, configDir, scope, resolvedProfile) {
       _copyStaged(staged, dest, kind);
     }
   }
+}
+
+/**
+ * Install the skills layout kind for an OpenCode-family runtime (OpenCode/Kilo).
+ *
+ * These runtimes do NOT go through installRuntimeArtifacts (their commands use a
+ * bespoke flattened-command writer), so this stages and writes ONLY the skills
+ * kind alongside their existing command/ + agents/ surfaces. Uninstall is
+ * already layout-driven (uninstallRuntimeArtifacts iterates layout.kinds), so
+ * the skills/ dir is cleaned up automatically once the layout declares it.
+ *
+ * Respects the resolved profile (core/minimal installs stage only their skill
+ * subset). Returns the count of installed gsd-* skill directories.
+ *
+ * @param {string} runtime - 'opencode' or 'kilo'
+ * @param {string} targetDir - resolved runtime config directory
+ * @param {'global'|'local'} scope
+ * @param {object} resolvedProfile - resolved install profile
+ * @param {string} pathPrefix - computed config-path prefix for body rewrites
+ * @returns {number} number of gsd-* skill directories written
+ */
+function installOpencodeFamilySkills(runtime, targetDir, scope, resolvedProfile, pathPrefix) {
+  const layout = resolveRuntimeArtifactLayout(runtime, targetDir, scope);
+  const skillsKindEntry = layout.kinds.find((k) => k.kind === 'skills');
+  if (!skillsKindEntry) return 0;
+
+  const staged = skillsKindEntry.stage(resolvedProfile);
+  applyRuntimeContentRewritesInPlace(staged, runtime, pathPrefix);
+
+  const dest = path.join(targetDir, skillsKindEntry.destSubpath);
+  fs.mkdirSync(dest, { recursive: true });
+  _removeGsdEntries(dest, skillsKindEntry);
+  _copyStaged(staged, dest, skillsKindEntry);
+
+  if (!fs.existsSync(dest)) return 0;
+  return fs.readdirSync(dest, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && e.name.startsWith('gsd-')).length;
 }
 
 /**
@@ -8505,6 +8606,17 @@ function install(isGlobal, runtime = 'claude', options = {}) {
       console.log(`  ${green}✓${reset} Installed ${count} commands to command/`);
     } else {
       failures.push('command/gsd-*');
+    }
+
+    // Also emit OpenCode-family skills (skills/<name>/SKILL.md). OpenCode and
+    // Kilo support native, on-demand skills in addition to flat commands — see
+    // resolveRuntimeArtifactLayout's opencode/kilo entries. (#784)
+    const _scope = isGlobal ? 'global' : 'local';
+    const _skillCount = installOpencodeFamilySkills(runtime, targetDir, _scope, _resolvedProfile, pathPrefix);
+    if (_skillCount > 0) {
+      console.log(`  ${green}✓${reset} Installed ${_skillCount} skills to skills/`);
+    } else {
+      failures.push('skills/gsd-*');
     }
   } else if (isCline) {
     // Cline is rules-based — commands are embedded in .clinerules (generated below).
@@ -10797,6 +10909,8 @@ module.exports = {
     convertClaudeCommandToCodexSkill,
     convertClaudeToOpencodeFrontmatter,
     convertClaudeToKiloFrontmatter,
+    convertClaudeCommandToOpencodeSkill,
+    convertClaudeCommandToKiloSkill,
     configureOpencodePermissions,
     neutralizeAgentReferences,
     GSD_CODEX_MARKER,
