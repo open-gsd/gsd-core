@@ -248,9 +248,9 @@ fi
 **Codex:**
 ```bash
 if [ -n "$CODEX_MODEL" ] && [ "$CODEX_MODEL" != "null" ]; then
-  cat /tmp/gsd-review-prompt-{phase}.md | codex exec --model "$CODEX_MODEL" --skip-git-repo-check - 2>/dev/null > /tmp/gsd-review-codex-{phase}.md
+  cat /tmp/gsd-review-prompt-{phase}.md | codex exec --ephemeral --dangerously-bypass-hook-trust --model "$CODEX_MODEL" --skip-git-repo-check - 2>/dev/null > /tmp/gsd-review-codex-{phase}.md
 else
-  cat /tmp/gsd-review-prompt-{phase}.md | codex exec --skip-git-repo-check - 2>/dev/null > /tmp/gsd-review-codex-{phase}.md
+  cat /tmp/gsd-review-prompt-{phase}.md | codex exec --ephemeral --dangerously-bypass-hook-trust --skip-git-repo-check - 2>/dev/null > /tmp/gsd-review-codex-{phase}.md
 fi
 ```
 
