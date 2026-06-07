@@ -281,7 +281,10 @@ function resolveRuntimeArtifactLayout(runtime: string, configDir: string, scope:
       break;
 
     case 'augment':
-      kinds = [skillsKind('skills', 'gsd-', 'convertClaudeCommandToAugmentSkill', 'augment', configDir)];
+      kinds = [
+        commandsKind('commands', 'gsd-', configDir),
+        skillsKind('skills', 'gsd-', 'convertClaudeCommandToAugmentSkill', 'augment', configDir),
+      ];
       break;
 
     case 'trae':

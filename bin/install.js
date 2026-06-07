@@ -6192,6 +6192,46 @@ function applyRuntimeContentRewritesInPlace(stagedDir, runtime, pathPrefix) {
 }
 
 /**
+ * Apply per-runtime content rewrites to flat .md files in a staged commands dir.
+ * Used for runtimes that have a commandsKind in their layout and need content rewrites
+ * (e.g. augment — replaces ~/.claude/ paths and applies branding conversions).
+ *
+ * IMPORTANT: `stageSkillsForProfile()` returns the original source directory unchanged
+ * on a full/default profile (skills === '*'). This function MUST NOT mutate that source
+ * directory. It always copies to a temp dir first, rewrites there, and returns the new
+ * path so the caller installs from the temp copy, not the source.
+ *
+ * @param {string} stagedDir  directory of staged flat .md command files (may be source dir)
+ * @param {string} runtime
+ * @param {string} pathPrefix
+ * @returns {string}  path to a temp dir with rewritten files (caller is responsible for cleanup)
+ */
+function applyRuntimeContentRewritesForCommandsInPlace(stagedDir, runtime, pathPrefix) {
+  if (!fs.existsSync(stagedDir)) return stagedDir;
+  // Always copy to a temp dir — stageSkillsForProfile() returns the original source
+  // dir on full/default profile (skills === '*'), so writing in-place would corrupt the
+  // package source. A temp copy is unconditional to keep the code simple and safe.
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-cmd-rewrites-'));
+  try {
+    for (const entry of fs.readdirSync(stagedDir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+      let content = fs.readFileSync(path.join(stagedDir, entry.name), 'utf8');
+      content = _applyRuntimeRewrites(content, runtime, pathPrefix);
+      // For augment commands, apply the markdown conversion so tool references
+      // and skill paths use Augment equivalents.
+      if (runtime === 'augment') {
+        content = convertClaudeToAugmentMarkdown(content);
+      }
+      fs.writeFileSync(path.join(tempDir, entry.name), content);
+    }
+  } catch (err) {
+    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+    throw err;
+  }
+  return tempDir;
+}
+
+/**
  * Apply the per-runtime rewrite table to a single content string.
  * Extracted so it can be unit-tested independently of the filesystem walk.
  *
@@ -6573,8 +6613,14 @@ function installRuntimeArtifacts(runtime, configDir, scope, resolvedProfile) {
 
   for (const kind of layout.kinds) {
     const staged = kind.stage(resolvedProfile);
+    // stagedForCopy: the directory to copy from (may differ from staged if rewrites
+    // produce a temp copy — see applyRuntimeContentRewritesForCommandsInPlace).
+    let stagedForCopy = staged;
     if (kind.kind === 'skills') {
       applyRuntimeContentRewritesInPlace(staged, runtime, pathPrefix);
+    } else if (kind.kind === 'commands') {
+      // Returns a temp dir with rewritten content so source files are never mutated.
+      stagedForCopy = applyRuntimeContentRewritesForCommandsInPlace(staged, runtime, pathPrefix);
     }
     const dest = path.join(layout.configDir, kind.destSubpath);
     fs.mkdirSync(dest, { recursive: true });
@@ -6596,8 +6642,8 @@ function installRuntimeArtifacts(runtime, configDir, scope, resolvedProfile) {
 
       if (kind.prefix === '') {
         // Hermes: wipes entire dest dir — preserve anything not in staged.
-        const stagedNames = fs.existsSync(staged)
-          ? new Set(fs.readdirSync(staged, { withFileTypes: true })
+        const stagedNames = fs.existsSync(stagedForCopy)
+          ? new Set(fs.readdirSync(stagedForCopy, { withFileTypes: true })
               .filter(e => e.isDirectory()).map(e => e.name))
           : new Set();
         for (const entry of fs.readdirSync(dest, { withFileTypes: true })) {
@@ -6618,7 +6664,7 @@ function installRuntimeArtifacts(runtime, configDir, scope, resolvedProfile) {
       }
 
       _removeGsdEntries(dest, kind);
-      _copyStaged(staged, dest, kind);
+      _copyStaged(stagedForCopy, dest, kind);
 
       // Restore user-owned dirs after the prune+copy
       for (const [dirName, snap] of toPreserve) {
@@ -6628,7 +6674,7 @@ function installRuntimeArtifacts(runtime, configDir, scope, resolvedProfile) {
       // For non-skills kinds (commands, agents): no user content to preserve;
       // just prune stale gsd-* entries and copy new ones.
       _removeGsdEntries(dest, kind);
-      _copyStaged(staged, dest, kind);
+      _copyStaged(stagedForCopy, dest, kind);
     }
   }
 }
@@ -8711,6 +8757,21 @@ function install(isGlobal, runtime = 'claude', options = {}) {
         }
       } else {
         failures.push('skills/gsd-*');
+      }
+      // Augment: also verify commands/ (emitted alongside skills/)
+      if (isAugment) {
+        const commandsDir = path.join(targetDir, 'commands');
+        if (fs.existsSync(commandsDir)) {
+          const cmdCount = fs.readdirSync(commandsDir)
+            .filter(f => f.startsWith('gsd-') && f.endsWith('.md')).length;
+          if (cmdCount > 0) {
+            console.log(`  ${green}✓${reset} Installed ${cmdCount} commands to commands/`);
+          } else {
+            failures.push('commands/gsd-*');
+          }
+        } else {
+          failures.push('commands/gsd-*');
+        }
       }
     }
   } else if (isOpencode || isKilo) {

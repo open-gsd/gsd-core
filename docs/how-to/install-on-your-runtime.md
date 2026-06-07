@@ -246,7 +246,7 @@ QWEN_CONFIG_DIR=~/.qwen-alt npx @opengsd/gsd-core@latest --qwen --global
 npx @opengsd/gsd-core@latest --augment --global
 ```
 
-Skills land in `~/.augment/`. GSD installs skills and agents. No hook or statusline ownership.
+Skills land in `~/.augment/skills/` and slash command definitions land in `~/.augment/commands/`. GSD installs skills, agents, and commands (`/gsd-phase`, `/gsd-ship`, etc.). No hook or statusline ownership.
 
 ---
 

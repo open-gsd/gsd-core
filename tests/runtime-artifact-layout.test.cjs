@@ -137,15 +137,21 @@ describe('resolveRuntimeArtifactLayout — windsurf', () => {
 });
 
 describe('resolveRuntimeArtifactLayout — augment', () => {
-  test('returns correct layout for augment', () => {
+  test('returns correct layout for augment (commands + skills)', () => {
     const layout = resolveRuntimeArtifactLayout('augment', FAKE_DIR);
     assert.strictEqual(layout.runtime, 'augment');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 1);
-    assert.strictEqual(layout.kinds[0].kind, 'skills');
-    assert.strictEqual(layout.kinds[0].destSubpath, 'skills');
+    assert.strictEqual(layout.kinds.length, 2);
+    // commands kind first
+    assert.strictEqual(layout.kinds[0].kind, 'commands');
+    assert.strictEqual(layout.kinds[0].destSubpath, 'commands');
     assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
     assert.strictEqual(typeof layout.kinds[0].stage, 'function');
+    // skills kind second
+    assert.strictEqual(layout.kinds[1].kind, 'skills');
+    assert.strictEqual(layout.kinds[1].destSubpath, 'skills');
+    assert.strictEqual(layout.kinds[1].prefix, 'gsd-');
+    assert.strictEqual(typeof layout.kinds[1].stage, 'function');
   });
 });
 
