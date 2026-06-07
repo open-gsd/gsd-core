@@ -183,14 +183,26 @@ describe('installOpencodeFamilySkills — emits skills/<name>/SKILL.md (#784)', 
 
       // Simulate a custom/local install: pathPrefix points at configDir, NOT the
       // runtime's default global config dir. Body refs must use pathPrefix.
-      installOpencodeFamilySkills(runtime, configDir, 'global', RESOLVED_CORE, `${configDir}/`);
+      const pathPrefix = `${configDir}/`;
+      installOpencodeFamilySkills(runtime, configDir, 'global', RESOLVED_CORE, pathPrefix);
 
-      const defaultBase = runtime === 'kilo' ? '~/.config/kilo' : '~/.config/opencode';
+      const defaultBase = runtime === 'kilo' ? '.config/kilo' : '.config/opencode';
+      const help = fs.readFileSync(path.join(configDir, 'skills', 'gsd-help', 'SKILL.md'), 'utf8');
+      // gsd-help references gsd-core workflow files via @<configDir>/gsd-core/...
+      assert.ok(
+        help.includes(`${configDir}/gsd-core/`),
+        'gsd-help body must reference the actual install target via pathPrefix',
+      );
       for (const skillName of fs.readdirSync(path.join(configDir, 'skills'))) {
         const body = fs.readFileSync(path.join(configDir, 'skills', skillName, 'SKILL.md'), 'utf8');
         assert.ok(
-          !body.includes(`${defaultBase}/`),
-          `${skillName}: must not leak hardcoded ${defaultBase}/ — should use install target`,
+          !body.includes(`~/${defaultBase}/`),
+          `${skillName}: must not leak hardcoded ~/${defaultBase}/ — should use install target`,
+        );
+        // Regression guard for the prefix-overlap double-rewrite (e.g. kilo-alt-alt).
+        assert.ok(
+          !new RegExp(`${defaultBase.replace(/[.]/g, '\\.')}-[^/\\s]*-`).test(body),
+          `${skillName}: must not contain a doubled config-dir suffix`,
         );
       }
     });

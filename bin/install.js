@@ -5751,6 +5751,31 @@ function convertClaudeToGeminiToml(content) {
  * @param {string} pathPrefix - Path prefix for file references
  * @param {string} runtime - Target runtime ('claude', 'opencode', or 'kilo')
  */
+/**
+ * Apply OpenCode-family (`opencode`/`kilo`) `@file` path-prefix rewrites to a
+ * RAW Claude command/skill body, BEFORE the frontmatter converter runs.
+ *
+ * This is the single source of truth shared by copyFlattenedCommands (commands)
+ * and installOpencodeFamilySkills (skills) so the two surfaces produce identical
+ * path references. Applying pathPrefix pre-conversion (rather than rewriting an
+ * already-converted body) is what avoids the converter's hardcoded default
+ * config dir leaking into --local / --config-dir installs, and the
+ * prefix-overlap double-rewrite hazard for custom dirs like `kilo-alt`. (#784)
+ *
+ * @param {string} content - raw Claude command markdown
+ * @param {string} runtime - 'opencode' or 'kilo'
+ * @param {string} pathPrefix - trailing-slash install-target prefix
+ * @returns {string}
+ */
+function applyOpencodeFamilyPathPrefix(content, runtime, pathPrefix) {
+  content = content.replace(/~\/\.claude\//g, pathPrefix);
+  content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
+  content = content.replace(/\.\/\.claude\//g, `./${getDirName(runtime)}/`);
+  content = content.replace(/~\/\.opencode\//g, pathPrefix);
+  content = content.replace(/~\/\.kilo\//g, pathPrefix);
+  return content;
+}
+
 function copyFlattenedCommands(srcDir, destDir, prefix, pathPrefix, runtime) {
   if (!fs.existsSync(srcDir)) {
     return;
@@ -5783,16 +5808,7 @@ function copyFlattenedCommands(srcDir, destDir, prefix, pathPrefix, runtime) {
       const destPath = path.join(destDir, destName);
 
       let content = fs.readFileSync(srcPath, 'utf8');
-      const globalClaudeRegex = /~\/\.claude\//g;
-      const globalClaudeHomeRegex = /\$HOME\/\.claude\//g;
-      const localClaudeRegex = /\.\/\.claude\//g;
-      const opencodeDirRegex = /~\/\.opencode\//g;
-      const kiloDirRegex = /~\/\.kilo\//g;
-      content = content.replace(globalClaudeRegex, pathPrefix);
-      content = content.replace(globalClaudeHomeRegex, pathPrefix);
-      content = content.replace(localClaudeRegex, `./${getDirName(runtime)}/`);
-      content = content.replace(opencodeDirRegex, pathPrefix);
-      content = content.replace(kiloDirRegex, pathPrefix);
+      content = applyOpencodeFamilyPathPrefix(content, runtime, pathPrefix);
       content = processAttribution(content, getCommitAttribution(runtime));
       content = runtime === 'kilo'
         ? convertClaudeToKiloFrontmatter(content)
@@ -6152,32 +6168,12 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix) {
       content = processAttribution(content, getCommitAttribution(runtime));
       break;
 
-    case 'opencode':
-    case 'kilo': {
-      // OpenCode/Kilo skills are staged THROUGH the runtime command converter
-      // (convertClaudeTo{Opencode,Kilo}Frontmatter), which has already rewritten
-      // ~/.claude → the runtime's DEFAULT global config dir (~/.config/opencode
-      // or ~/.config/kilo). Re-point those at the actual install target so
-      // --local and --config-dir installs reference the right directory. This
-      // mirrors how commands/agents apply pathPrefix (they rewrite BEFORE
-      // conversion; the staged-skills path converts first, so we reverse the
-      // hardcoded default here). For a default global install pathPrefix already
-      // equals that base, so these are no-ops. (#784)
-      const defaultBase = runtime === 'kilo' ? '.config/kilo' : '.config/opencode';
-      const esc = escapeRegExp(defaultBase);
-      content = content.replace(new RegExp(`~/${esc}/`, 'g'), pathPrefix);
-      content = content.replace(new RegExp(`\\$HOME/${esc}/`, 'g'), pathPrefix);
-      content = content.replace(new RegExp(`~/${esc}\\b`, 'g'), normalizedPathPrefix);
-      content = content.replace(new RegExp(`\\$HOME/${esc}\\b`, 'g'), normalizedPathPrefix);
-      // Local relative refs: converter rewrites ./.claude/ → ./.kilo/ for Kilo;
-      // OpenCode keeps ./.claude/ which we normalize to the OpenCode dir name.
-      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
-      content = processAttribution(content, getCommitAttribution(runtime));
-      break;
-    }
-
     default:
-      // Unknown runtime — no rewrites
+      // Unknown runtime — no rewrites.
+      // OpenCode/Kilo are intentionally absent: their skills are written by
+      // installOpencodeFamilySkills, which applies pathPrefix BEFORE the
+      // command→skill conversion (mirroring copyFlattenedCommands) rather than
+      // rewriting already-converted SKILL.md bodies. See #784.
       break;
   }
 
@@ -6522,10 +6518,22 @@ function installRuntimeArtifacts(runtime, configDir, scope, resolvedProfile) {
 function installOpencodeFamilySkills(runtime, targetDir, scope, resolvedProfile, pathPrefix) {
   const layout = resolveRuntimeArtifactLayout(runtime, targetDir, scope);
   const skillsKindEntry = layout.kinds.find((k) => k.kind === 'skills');
-  if (!skillsKindEntry) return 0;
+  const commandsKindEntry = layout.kinds.find((k) => k.kind === 'commands');
+  if (!skillsKindEntry || !commandsKindEntry) return 0;
 
-  const staged = skillsKindEntry.stage(resolvedProfile);
-  applyRuntimeContentRewritesInPlace(staged, runtime, pathPrefix);
+  // Stage RAW Claude commands honoring the profile (same source the flattened
+  // command writer uses). We deliberately do NOT use skillsKindEntry.stage()
+  // here: that converts before any pathPrefix is known, so its bodies carry the
+  // converter's hardcoded default config dir. Instead we mirror
+  // copyFlattenedCommands exactly — pathPrefix rewrite → attribution →
+  // command→skill conversion — guaranteeing command/ and skills/ bodies match
+  // byte-for-byte for global, --local, and --config-dir installs. (#784)
+  const rawDir = commandsKindEntry.stage(resolvedProfile);
+  if (!fs.existsSync(rawDir)) return 0;
+
+  const converter = runtime === 'kilo'
+    ? convertClaudeCommandToKiloSkill
+    : convertClaudeCommandToOpencodeSkill;
 
   const dest = path.join(targetDir, skillsKindEntry.destSubpath);
   fs.mkdirSync(dest, { recursive: true });
@@ -6534,7 +6542,7 @@ function installOpencodeFamilySkills(runtime, targetDir, scope, resolvedProfile,
   // gsd-dev-preferences is generated by the user (via generate-dev-preferences)
   // and lives at <configDir>/skills/gsd-dev-preferences — _removeGsdEntries
   // would otherwise wipe it. Mirrors the preservation in installRuntimeArtifacts
-  // (#2973). Skills GSD reinstalls from source are simply overwritten by the copy.
+  // (#2973).
   const USER_OWNED_SKILL_DIRS = ['gsd-dev-preferences'];
   const toPreserve = new Map(); // dirName -> Map<relPath, Buffer>
   for (const dirName of USER_OWNED_SKILL_DIRS) {
@@ -6545,16 +6553,28 @@ function installOpencodeFamilySkills(runtime, targetDir, scope, resolvedProfile,
   }
 
   _removeGsdEntries(dest, skillsKindEntry);
-  _copyStaged(staged, dest, skillsKindEntry);
+
+  let count = 0;
+  for (const entry of fs.readdirSync(rawDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+    const stem = entry.name.slice(0, -3);
+    const skillName = `${skillsKindEntry.prefix}${stem}`;
+    let content = fs.readFileSync(path.join(rawDir, entry.name), 'utf8');
+    content = applyOpencodeFamilyPathPrefix(content, runtime, pathPrefix);
+    content = processAttribution(content, getCommitAttribution(runtime));
+    content = converter(content, skillName);
+    const skillDir = path.join(dest, skillName);
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), content);
+    count++;
+  }
 
   // Restore user-owned dirs after the prune+copy.
   for (const [dirName, snap] of toPreserve) {
     _restoreDir(path.join(dest, dirName), snap);
   }
 
-  if (!fs.existsSync(dest)) return 0;
-  return fs.readdirSync(dest, { withFileTypes: true })
-    .filter((e) => e.isDirectory() && e.name.startsWith('gsd-')).length;
+  return count;
 }
 
 /**
