@@ -250,7 +250,6 @@ Qwen Code supports 15 hook events. GSD registers the following events automatica
 | `SubagentStop` | `gsd-context-monitor.js` | Context headroom tracking after subagent completion |
 | `Stop` | `gsd-context-monitor.js` | Context headroom tracking before model stop |
 | `PreCompact` | `gsd-context-monitor.js` | Context awareness before conversation compaction |
-| `UserPromptSubmit` | `gsd-prompt-guard.js` | Prompt injection scan on user input |
 
 ---
 

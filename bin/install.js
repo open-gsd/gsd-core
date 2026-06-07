@@ -7100,10 +7100,10 @@ function uninstall(isGlobal, runtime = 'claude') {
 
     // Remove GSD hooks from settings — per-hook granularity to preserve
     // user hooks that share an entry with a GSD hook (#1755 followup).
-    // Includes the 4 Qwen-only events added in #788 (SubagentStop, Stop,
-    // PreCompact, UserPromptSubmit) — safe to iterate for all runtimes;
-    // non-Qwen installs simply find no entries and skip.
-    for (const eventName of ['SessionStart', 'PostToolUse', 'AfterTool', 'PreToolUse', 'BeforeTool', 'SubagentStop', 'Stop', 'PreCompact', 'UserPromptSubmit']) {
+    // Includes the 3 Qwen-only events added in #788 (SubagentStop, Stop,
+    // PreCompact) — safe to iterate for all runtimes; non-Qwen installs
+    // simply find no entries and skip.
+    for (const eventName of ['SessionStart', 'PostToolUse', 'AfterTool', 'PreToolUse', 'BeforeTool', 'SubagentStop', 'Stop', 'PreCompact']) {
       if (settings.hooks && settings.hooks[eventName]) {
         const before = JSON.stringify(settings.hooks[eventName]);
         settings.hooks[eventName] = settings.hooks[eventName]
@@ -9886,16 +9886,20 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     }
 
     // ── Qwen-only extended hook events (#788) ────────────────────────────────
-    // Qwen Code exposes 15 hook events — a superset of Claude Code.  These 4
-    // additional events are only registered for Qwen installs:
-    //   SubagentStop       — subagent lifecycle completion (context tracking)
-    //   Stop               — model stop / final-response moment (context tracking)
-    //   PreCompact         — fires before conversation compaction (context tracking)
-    //   UserPromptSubmit   — user submits a prompt (prompt injection scanning)
+    // Qwen Code exposes 15 hook events — a superset of Claude Code.  Three
+    // additional events are registered for Qwen installs:
+    //   SubagentStop  — subagent lifecycle completion (context headroom tracking)
+    //   Stop          — model stop / final-response moment (context headroom)
+    //   PreCompact    — fires before conversation compaction (most critical
+    //                   moment to surface context headroom warnings)
     //
-    // Wire gsd-context-monitor to the lifecycle events and gsd-prompt-guard to
-    // UserPromptSubmit — same hooks already used for PostToolUse / PreToolUse
-    // respectively, so no new hook files are needed.
+    // Wire gsd-context-monitor to all three — the same hook already used for
+    // PostToolUse — so no new hook files are needed.
+    //
+    // Note: UserPromptSubmit is NOT wired here.  That event carries the raw
+    // user prompt text, not a tool invocation, so gsd-prompt-guard (which
+    // exits unless tool_name is Write/Edit) would be a silent no-op.  A
+    // dedicated handler for UserPromptSubmit is deferred to a follow-on issue.
     //
     // Guard: isQwen is defined at the top of install() (line ~8254).
     if (isQwen) {
@@ -9923,31 +9927,6 @@ function install(isGlobal, runtime = 'claude', options = {}) {
         } else if (!alreadyHasContextMonitor && !fs.existsSync(contextMonitorFile)) {
           console.warn(`  ${yellow}⚠${reset}  Skipped ${qwenEvent} hook — gsd-context-monitor.js not found at target`);
         }
-      }
-
-      // UserPromptSubmit — run the prompt injection guard whenever the user
-      // submits a prompt.  Mirrors the PreToolUse Write|Edit guard but fires
-      // earlier, before any tool call, to surface injection attempts in the
-      // raw user turn.
-      if (!settings.hooks.UserPromptSubmit) {
-        settings.hooks.UserPromptSubmit = [];
-      }
-      const alreadyHasPromptGuardOnSubmit = settings.hooks.UserPromptSubmit.some(entry =>
-        entry.hooks && entry.hooks.some(h => h.command && h.command.includes('gsd-prompt-guard'))
-      );
-      if (!alreadyHasPromptGuardOnSubmit && fs.existsSync(promptGuardFile) && promptGuardCommand) {
-        settings.hooks.UserPromptSubmit.push({
-          hooks: [
-            {
-              type: 'command',
-              command: promptGuardCommand,
-              timeout: 5
-            }
-          ]
-        });
-        console.log(`  ${green}✓${reset} Configured UserPromptSubmit prompt injection guard (Qwen Code)`);
-      } else if (!alreadyHasPromptGuardOnSubmit && !fs.existsSync(promptGuardFile)) {
-        console.warn(`  ${yellow}⚠${reset}  Skipped UserPromptSubmit hook — gsd-prompt-guard.js not found at target`);
       }
     }
     // ── end Qwen-only extended hook events ────────────────────────────────────
