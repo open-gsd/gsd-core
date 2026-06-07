@@ -51,6 +51,8 @@ The `.planning/` directory is GSD Core's shared memory for a project. Every work
 | **Produced by** | `/gsd-new-project` (initial creation); updated by `/gsd-complete-milestone` as decisions are validated. |
 | **Consumed by** | All planning workflows; `gsd-phase-researcher`, `gsd-planner` (context); `discuss-phase` (prior decisions); `gsd-plan-checker` (project constraints). |
 
+Includes an optional `## Business Context` section (Customer, Revenue model, Success metric, Strategy notes) for monetized or customer-facing projects — four one-line fields that connect business outcomes to requirement prioritization. It is deleted for internal tools, experiments, or meta workspaces, and reviewed at each milestone by `/gsd-complete-milestone` when present.
+
 ### `ROADMAP.md`
 
 | | |
