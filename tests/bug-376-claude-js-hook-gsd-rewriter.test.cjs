@@ -32,6 +32,20 @@ const { cleanup } = require('./helpers.cjs');
 const REPO_ROOT = path.resolve(__dirname, '..');
 const INSTALL_PATH = path.join(REPO_ROOT, 'bin', 'install.js');
 const HOOKS_DIST_DIR = path.join(REPO_ROOT, 'hooks', 'dist');
+const BUILD_HOOKS_SCRIPT = path.join(REPO_ROOT, 'scripts', 'build-hooks.js');
+
+/**
+ * Ensure hooks/dist is populated before any suite that reads it.
+ * hooks/dist/ is gitignored and only produced by `npm run build:hooks`.
+ * In CI the scoped/windows test jobs do NOT run build:hooks before running
+ * tests, so the first test that needs hooks/dist would fail. This mirrors
+ * the pattern used in bug-3357-codex-legacy-hooks-json-migration.test.cjs.
+ */
+function ensureHooksDist() {
+  if (!fs.existsSync(HOOKS_DIST_DIR) || fs.readdirSync(HOOKS_DIST_DIR).filter(f => f.endsWith('.js')).length === 0) {
+    execFileSync(process.execPath, [BUILD_HOOKS_SCRIPT], { stdio: 'pipe' });
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -92,6 +106,12 @@ function colonRefs(content) {
 // Prerequisite: hooks/dist must exist (built by `npm run build:hooks`)
 // ---------------------------------------------------------------------------
 describe('bug #376 — prerequisite: hooks/dist is present', () => {
+  before(() => {
+    // hooks/dist is gitignored; build it on demand so this test is
+    // deterministic in CI scoped/windows jobs that don't pre-run build:hooks.
+    ensureHooksDist();
+  });
+
   test('hooks/dist directory exists (run npm run build:hooks if missing)', () => {
     assert.ok(
       fs.existsSync(HOOKS_DIST_DIR),
@@ -281,6 +301,9 @@ describe('bug #376 — Suite 3: hooks/ source files are unchanged by install', (
   let snapshotBefore;
 
   before(() => {
+    // Ensure hooks/dist is built before snapshotting; it may be absent in CI
+    // scoped/windows jobs that don't pre-run build:hooks (#777 fix).
+    ensureHooksDist();
     // Snapshot hooks/dist JS files before any install in this suite
     snapshotBefore = {};
     if (fs.existsSync(HOOKS_DIST_DIR)) {
