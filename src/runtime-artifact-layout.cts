@@ -21,6 +21,7 @@ const {
   stageSkillsForProfile,
   stageAgentsForProfile,
   stageSkillsForRuntimeAsSkills,
+  stageCommandsForRuntimeFlat,
 } = installProfiles;
 
 // In .cts (CommonJS output) files, `require` is available as a global.
@@ -225,6 +226,42 @@ function skillsKind(
   };
 }
 
+/**
+ * Build a converted-commands kind descriptor for runtimes that use a flat
+ * commands directory with per-file conversion (e.g. Cursor 1.6 slash commands).
+ *
+ * Unlike `commandsKind` (which passes raw source files through), this kind
+ * applies `converterName` from bin/install.js exports to each file during
+ * staging, writing flat `${prefix}${stem}.md` files to the staged directory.
+ *
+ * The staged files are then written by `_copyStaged` (commands branch) which
+ * handles prefix logic via the existing layout machinery.
+ *
+ * @param destSubpath   destination subpath within configDir (e.g. 'commands')
+ * @param prefix        filename prefix, e.g. 'gsd-'
+ * @param converterName name of converter function in bin/install.js exports
+ * @param configDir     runtime config dir (for .gsd-source marker resolution)
+ */
+function convertedCommandsKind(
+  destSubpath: string,
+  prefix: string,
+  converterName: string,
+  configDir: string,
+): ArtifactKind {
+  return {
+    kind: 'commands',
+    destSubpath,
+    prefix,
+    stage: (resolved) => {
+      const installExports = getInstallExports();
+      const realConverter = installExports[converterName] as (content: string, commandName: string) => string;
+      const wrappedConverter = (content: string, commandName: string): string =>
+        realConverter(content, commandName);
+      return stageCommandsForRuntimeFlat(findInstallSourceRoot(configDir), resolved, wrappedConverter, prefix);
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -257,7 +294,14 @@ function resolveRuntimeArtifactLayout(runtime: string, configDir: string, scope:
       break;
 
     case 'cursor':
-      kinds = [skillsKind('skills', 'gsd-', 'convertClaudeCommandToCursorSkill', 'cursor', configDir)];
+      // Cursor 1.6+ supports two artifact surfaces:
+      //   1. skills/gsd-<name>/SKILL.md  — rich skills with frontmatter + adapter header
+      //   2. commands/gsd-<name>.md      — plain markdown slash commands (no frontmatter)
+      //      accessed via '/' in the Agent input (#785)
+      kinds = [
+        skillsKind('skills', 'gsd-', 'convertClaudeCommandToCursorSkill', 'cursor', configDir),
+        convertedCommandsKind('commands', 'gsd-', 'convertClaudeCommandToCursorCommand', configDir),
+      ];
       break;
 
     case 'gemini':
