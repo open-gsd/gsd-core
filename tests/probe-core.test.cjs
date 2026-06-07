@@ -216,6 +216,41 @@ describe('probe-core: analyzeCoverage (merge · rollup · byVerification)', () =
     // vocabulary is an adapter bug, caught here rather than silently rolled up.
     assert.throws(() => pc.analyzeCoverage([item('bogus-category')], [], VALIDATORS), /unknown category/i);
   });
+
+  // m1: a verbatim item (no matching author resolution) is rolled up as-is, so its OWN
+  // status/fields must also be validated. The edge adapter only proposes `unresolved` items, but
+  // the prohibition adapter (#644) proposes LLM-generated items that arrive already populated —
+  // an out-of-enum status or a `dismissed` with no reason must fail closed, not count as closed.
+  test('m1: rejects a verbatim item carrying an out-of-enum status (e.g. the dropped "covered")', () => {
+    assert.throws(
+      () => pc.analyzeCoverage([item('adjacency', { status: 'covered' })], [], VALIDATORS),
+      /invalid status/i,
+    );
+  });
+  test('m1: rejects a verbatim item dismissed without a reason', () => {
+    assert.throws(
+      () => pc.analyzeCoverage([item('adjacency', { status: 'dismissed' })], [], VALIDATORS),
+      /dismissed requires a reason/i,
+    );
+  });
+  test('m1: rejects a verbatim resolved item missing its verification tier', () => {
+    assert.throws(
+      () => pc.analyzeCoverage([item('adjacency', { status: 'resolved', resolution: 'AC' })], [], VALIDATORS),
+      /requires a verification tier/i,
+    );
+  });
+  test('m1: a matching resolution still governs — item validation targets VERBATIM items only', () => {
+    // When a resolution matches, the item is rebuilt from the (already-validated) resolution, so a
+    // pre-populated item status is irrelevant and must NOT cause a throw. Guards against the m1
+    // fix over-reaching into the merge path.
+    const rep = pc.analyzeCoverage([item('adjacency', { status: 'covered' })], [
+      { requirement_id: 'R1', category: 'adjacency', status: 'resolved', verification: 'explicit', resolution: 'AC#6' },
+    ], VALIDATORS);
+    const adj = rep.items.find((i) => i.category === 'adjacency');
+    assert.equal(adj.status, 'resolved');
+    assert.equal(adj.verification, 'explicit');
+    assert.equal(rep.coverage.resolved, 1);
+  });
 });
 
 describe('probe-core: runProbeCli (generic I/O scaffold, injected io)', () => {

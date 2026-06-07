@@ -226,9 +226,19 @@ export function analyzeCoverage<V extends string>(
     }
     itemKeys.add(key(item));
     const o = resMap.get(key(item));
-    merged.push(o
-      ? { ...item, status: o.status, verification: o.verification ?? null, resolution: o.resolution ?? null, reason: o.reason ?? null }
-      : item);
+    if (o) {
+      merged.push({ ...item, status: o.status, verification: o.verification ?? null, resolution: o.resolution ?? null, reason: o.reason ?? null });
+    } else {
+      // No author resolution: the item is rolled up VERBATIM, so its own status/fields must be
+      // valid too. The edge adapter only proposes `unresolved` items, but the prohibition adapter
+      // (#644) proposes LLM-generated items that arrive already populated — one carrying an
+      // out-of-enum status (e.g. the dropped "covered") or `dismissed` with no reason would
+      // otherwise be counted closed without validation. An Item is structurally a superset of a
+      // Resolution, so the same fail-closed check guards both. (ADR-550 Decision 5 hardens this
+      // shared seam for the second adapter; m1.)
+      validateResolution(item as unknown as Resolution<V>, validators);
+      merged.push(item);
+    }
   }
   // Reject orphan resolutions — a resolution whose (requirement_id, category) matches no
   // proposed item (typo'd category or a non-applicable one) would otherwise be silently
