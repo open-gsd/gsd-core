@@ -160,13 +160,22 @@ describe('installRuntimeArtifacts — opencode / kilo flat commands', () => {
 
 // ─── #784: installOpencodeFamilySkills — skills + path rewrite + preservation ─
 
+// Stage the raw command set the way the installer's _stageSkills() does, so the
+// skills writer receives the same input as the flattened-command writer.
+function stageRawCommands(runtime, configDir) {
+  const layout = resolveRuntimeArtifactLayout(runtime, configDir, 'global');
+  const commandsKind = layout.kinds.find((k) => k.kind === 'commands');
+  return commandsKind.stage(RESOLVED_CORE);
+}
+
 describe('installOpencodeFamilySkills — emits skills/<name>/SKILL.md (#784)', () => {
   for (const runtime of ['opencode', 'kilo']) {
     test(`${runtime}: writes gsd-help/SKILL.md with name + description`, (t) => {
       const configDir = createTempDir(`gsd-ocs-${runtime}-`);
       t.after(() => cleanup(configDir));
 
-      const count = installOpencodeFamilySkills(runtime, configDir, 'global', RESOLVED_CORE, `${configDir}/`);
+      const raw = stageRawCommands(runtime, configDir);
+      const count = installOpencodeFamilySkills(runtime, configDir, raw, `${configDir}/`);
       assert.ok(count >= 1, 'should report installed skills');
 
       const skillMd = path.join(configDir, 'skills', 'gsd-help', 'SKILL.md');
@@ -184,7 +193,7 @@ describe('installOpencodeFamilySkills — emits skills/<name>/SKILL.md (#784)', 
       // Simulate a custom/local install: pathPrefix points at configDir, NOT the
       // runtime's default global config dir. Body refs must use pathPrefix.
       const pathPrefix = `${configDir}/`;
-      installOpencodeFamilySkills(runtime, configDir, 'global', RESOLVED_CORE, pathPrefix);
+      installOpencodeFamilySkills(runtime, configDir, stageRawCommands(runtime, configDir), pathPrefix);
 
       const defaultBase = runtime === 'kilo' ? '.config/kilo' : '.config/opencode';
       const help = fs.readFileSync(path.join(configDir, 'skills', 'gsd-help', 'SKILL.md'), 'utf8');
@@ -216,7 +225,7 @@ describe('installOpencodeFamilySkills — emits skills/<name>/SKILL.md (#784)', 
       const marker = '---\nname: gsd-dev-preferences\ndescription: mine\n---\nKEEP ME\n';
       fs.writeFileSync(path.join(userSkill, 'SKILL.md'), marker);
 
-      installOpencodeFamilySkills(runtime, configDir, 'global', RESOLVED_CORE, `${configDir}/`);
+      installOpencodeFamilySkills(runtime, configDir, stageRawCommands(runtime, configDir), `${configDir}/`);
 
       const after = fs.readFileSync(path.join(userSkill, 'SKILL.md'), 'utf8');
       assert.ok(after.includes('KEEP ME'), 'user-owned dev-preferences must survive reinstall');

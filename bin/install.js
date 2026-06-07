@@ -6500,36 +6500,36 @@ function installRuntimeArtifacts(runtime, configDir, scope, resolvedProfile) {
  * Install the skills layout kind for an OpenCode-family runtime (OpenCode/Kilo).
  *
  * These runtimes do NOT go through installRuntimeArtifacts (their commands use a
- * bespoke flattened-command writer), so this stages and writes ONLY the skills
- * kind alongside their existing command/ + agents/ surfaces. Uninstall is
- * already layout-driven (uninstallRuntimeArtifacts iterates layout.kinds), so
- * the skills/ dir is cleaned up automatically once the layout declares it.
+ * bespoke flattened-command writer), so this writes ONLY the skills kind
+ * alongside their existing command/ + agents/ surfaces. Uninstall is already
+ * layout-driven (uninstallRuntimeArtifacts iterates layout.kinds), so the
+ * skills/ dir is cleaned up automatically once the layout declares it.
  *
- * Respects the resolved profile (core/minimal installs stage only their skill
- * subset). Returns the count of installed gsd-* skill directories.
+ * `rawCommandsDir` MUST be the SAME staged command directory the flattened
+ * command writer consumes (the caller passes its `_stageSkills()` output) so the
+ * command/ and skills/ surfaces always cover the identical, profile-resolved set
+ * — including the `--minimal`/`--core-only` alias path, which stages differently
+ * from a plain `--profile=core`.
+ *
+ * Mirrors copyFlattenedCommands exactly per file — pathPrefix rewrite →
+ * attribution → command→skill conversion — guaranteeing command/ and skills/
+ * bodies match byte-for-byte for global, --local, and --config-dir installs.
+ * We deliberately do NOT use skillsKindEntry.stage(): that converts before any
+ * pathPrefix is known, so its bodies would carry the converter's hardcoded
+ * default config dir. (#784)
  *
  * @param {string} runtime - 'opencode' or 'kilo'
  * @param {string} targetDir - resolved runtime config directory
- * @param {'global'|'local'} scope
- * @param {object} resolvedProfile - resolved install profile
+ * @param {string} rawCommandsDir - staged RAW Claude command dir (caller's _stageSkills output)
  * @param {string} pathPrefix - computed config-path prefix for body rewrites
  * @returns {number} number of gsd-* skill directories written
  */
-function installOpencodeFamilySkills(runtime, targetDir, scope, resolvedProfile, pathPrefix) {
-  const layout = resolveRuntimeArtifactLayout(runtime, targetDir, scope);
+function installOpencodeFamilySkills(runtime, targetDir, rawCommandsDir, pathPrefix) {
+  const layout = resolveRuntimeArtifactLayout(runtime, targetDir);
   const skillsKindEntry = layout.kinds.find((k) => k.kind === 'skills');
-  const commandsKindEntry = layout.kinds.find((k) => k.kind === 'commands');
-  if (!skillsKindEntry || !commandsKindEntry) return 0;
-
-  // Stage RAW Claude commands honoring the profile (same source the flattened
-  // command writer uses). We deliberately do NOT use skillsKindEntry.stage()
-  // here: that converts before any pathPrefix is known, so its bodies carry the
-  // converter's hardcoded default config dir. Instead we mirror
-  // copyFlattenedCommands exactly — pathPrefix rewrite → attribution →
-  // command→skill conversion — guaranteeing command/ and skills/ bodies match
-  // byte-for-byte for global, --local, and --config-dir installs. (#784)
-  const rawDir = commandsKindEntry.stage(resolvedProfile);
-  if (!fs.existsSync(rawDir)) return 0;
+  if (!skillsKindEntry) return 0;
+  const rawDir = rawCommandsDir;
+  if (!rawDir || !fs.existsSync(rawDir)) return 0;
 
   const converter = runtime === 'kilo'
     ? convertClaudeCommandToKiloSkill
@@ -8674,9 +8674,9 @@ function install(isGlobal, runtime = 'claude', options = {}) {
 
     // Also emit OpenCode-family skills (skills/<name>/SKILL.md). OpenCode and
     // Kilo support native, on-demand skills in addition to flat commands — see
-    // resolveRuntimeArtifactLayout's opencode/kilo entries. (#784)
-    const _scope = isGlobal ? 'global' : 'local';
-    const _skillCount = installOpencodeFamilySkills(runtime, targetDir, _scope, _resolvedProfile, pathPrefix);
+    // resolveRuntimeArtifactLayout's opencode/kilo entries. Derive skills from
+    // the SAME staged command set (gsdSrc) so both surfaces match exactly. (#784)
+    const _skillCount = installOpencodeFamilySkills(runtime, targetDir, gsdSrc, pathPrefix);
     if (_skillCount > 0) {
       console.log(`  ${green}✓${reset} Installed ${_skillCount} skills to skills/`);
     } else {
