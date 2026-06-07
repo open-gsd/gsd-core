@@ -1988,6 +1988,10 @@ function convertClaudeCommandToClaudeSkill(content, skillName, runtime = null, c
   const description = extractFrontmatterField(frontmatter, 'description') || '';
   const argumentHint = extractFrontmatterField(frontmatter, 'argument-hint');
   const agent = extractFrontmatterField(frontmatter, 'agent');
+  // #769: preserve context: and effort: from source command files so they
+  // are emitted into the installed SKILL.md frontmatter unchanged.
+  const context = extractFrontmatterField(frontmatter, 'context');
+  const effort = extractFrontmatterField(frontmatter, 'effort');
 
   // Preserve allowed-tools as YAML multiline list (Claude native format)
   const toolsMatch = frontmatter.match(/^allowed-tools:\s*\n((?:\s+-\s+.+\n?)*)/m);
@@ -2007,6 +2011,12 @@ function convertClaudeCommandToClaudeSkill(content, skillName, runtime = null, c
   if (runtime === 'hermes') fm += `version: ${yamlQuote(pkg.version)}\n`;
   if (argumentHint) fm += `argument-hint: ${yamlQuote(argumentHint)}\n`;
   if (agent) fm += `agent: ${agent}\n`;
+  // #769: emit context: and effort: when present so the runtime can honour
+  // them natively (context: fork = isolated subagent window; effort: =
+  // token-budget tier). Fields are Claude-specific; unknown frontmatter
+  // fields are silently ignored by other runtimes (backward-compatible).
+  if (context) fm += `context: ${context}\n`;
+  if (effort) fm += `effort: ${effort}\n`;
   if (toolsBlock) fm += toolsBlock;
   fm += '---';
 
