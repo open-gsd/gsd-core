@@ -22,6 +22,11 @@ const EXPECTED_SH_HOOKS = [
   'gsd-session-state.sh',
   'gsd-validate-commit.sh',
   'gsd-phase-boundary.sh',
+  // Extended hook-event coverage (#788)
+  'gsd-pre-compact.sh',
+  'gsd-stop-state.sh',
+  'gsd-subagent-state.sh',
+  'gsd-user-prompt-submit.sh',
 ];
 
 const EXPECTED_ALL_HOOKS = [

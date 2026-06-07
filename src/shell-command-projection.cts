@@ -171,6 +171,15 @@ const MANAGED_HOOK_COMMAND_BASENAMES_BY_SURFACE: Record<string, Set<string>> = {
     'gsd-session-state.sh',
     'gsd-validate-commit.sh',
     'gsd-phase-boundary.sh',
+    // Extended hook-event coverage (#788): new community hooks for Qwen/Claude.
+    // Must be listed here so isManagedHookCommand() recognises them during uninstall,
+    // allowing the per-event cleanup loop (bin/install.js ~line 7324) to remove
+    // their settings.json entries. Omitting a hook here causes stale entries to
+    // persist after uninstall.
+    'gsd-pre-compact.sh',
+    'gsd-stop-state.sh',
+    'gsd-subagent-state.sh',
+    'gsd-user-prompt-submit.sh',
   ]),
   'codex-toml': new Set([
     'gsd-check-update.js',

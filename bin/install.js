@@ -6993,6 +6993,10 @@ const GSD_UNINSTALL_HOOKS = [
   'gsd-validate-commit.sh',
   'gsd-phase-boundary.sh',
   'gsd-graphify-update.sh',
+  'gsd-pre-compact.sh',
+  'gsd-stop-state.sh',
+  'gsd-subagent-state.sh',
+  'gsd-user-prompt-submit.sh',
 ];
 
 /**
@@ -7320,8 +7324,10 @@ function uninstall(isGlobal, runtime = 'claude') {
     }
 
     // Remove GSD hooks from settings — per-hook granularity to preserve
-    // user hooks that share an entry with a GSD hook (#1755 followup)
-    for (const eventName of ['SessionStart', 'PostToolUse', 'AfterTool', 'PreToolUse', 'BeforeTool']) {
+    // user hooks that share an entry with a GSD hook (#1755 followup).
+    // The extended event list covers the 4 additional events registered for
+    // Qwen Code (#788): SubagentStop, Stop, PreCompact, UserPromptSubmit.
+    for (const eventName of ['SessionStart', 'PostToolUse', 'AfterTool', 'PreToolUse', 'BeforeTool', 'SubagentStop', 'Stop', 'PreCompact', 'UserPromptSubmit']) {
       if (settings.hooks && settings.hooks[eventName]) {
         const before = JSON.stringify(settings.hooks[eventName]);
         settings.hooks[eventName] = settings.hooks[eventName]
@@ -10102,6 +10108,126 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     } else if (!hasPhaseBoundaryHook && !phaseBoundaryCommand) {
       console.warn(`  ${yellow}⚠${reset}  Skipped phase boundary hook — Bash executable path unavailable (#3393)`);
     }
+
+    // Configure PreCompact hook for state snapshot before context compaction (#788).
+    // Fires before the runtime compacts the conversation context; saves STATE.md
+    // head so post-compaction context retains planning continuity. Opt-in.
+    const preCompactCommand = isGlobal
+      ? buildHookCommand(targetDir, 'gsd-pre-compact.sh', hookOpts)
+      : localShellCmd('gsd-pre-compact.sh');
+    if (!settings.hooks.PreCompact) {
+      settings.hooks.PreCompact = [];
+    }
+    const hasPreCompactHook = settings.hooks.PreCompact.some(entry =>
+      entry.hooks && entry.hooks.some(h => h.command && h.command.includes('gsd-pre-compact'))
+    );
+    const preCompactFile = path.join(targetDir, 'hooks', 'gsd-pre-compact.sh');
+    if (!hasPreCompactHook && fs.existsSync(preCompactFile) && preCompactCommand) {
+      settings.hooks.PreCompact.push({
+        hooks: [
+          {
+            type: 'command',
+            command: preCompactCommand,
+            timeout: 5
+          }
+        ]
+      });
+      console.log(`  ${green}✓${reset} Configured pre-compact state snapshot hook (opt-in via config)`);
+    } else if (!hasPreCompactHook && !fs.existsSync(preCompactFile)) {
+      console.warn(`  ${yellow}⚠${reset}  Skipped pre-compact hook — gsd-pre-compact.sh not found at target`);
+    } else if (!hasPreCompactHook && !preCompactCommand) {
+      console.warn(`  ${yellow}⚠${reset}  Skipped pre-compact hook — Bash executable path unavailable (#3393)`);
+    }
+
+    // Configure SubagentStop hook for subagent lifecycle tracking (#788).
+    // Fires when a sub-agent finishes; emits a structured handoff marker so
+    // the orchestrating context sees a clear completion notice. Opt-in.
+    const subagentStateCommand = isGlobal
+      ? buildHookCommand(targetDir, 'gsd-subagent-state.sh', hookOpts)
+      : localShellCmd('gsd-subagent-state.sh');
+    if (!settings.hooks.SubagentStop) {
+      settings.hooks.SubagentStop = [];
+    }
+    const hasSubagentStateHook = settings.hooks.SubagentStop.some(entry =>
+      entry.hooks && entry.hooks.some(h => h.command && h.command.includes('gsd-subagent-state'))
+    );
+    const subagentStateFile = path.join(targetDir, 'hooks', 'gsd-subagent-state.sh');
+    if (!hasSubagentStateHook && fs.existsSync(subagentStateFile) && subagentStateCommand) {
+      settings.hooks.SubagentStop.push({
+        hooks: [
+          {
+            type: 'command',
+            command: subagentStateCommand,
+            timeout: 5
+          }
+        ]
+      });
+      console.log(`  ${green}✓${reset} Configured subagent lifecycle tracking hook (opt-in via config)`);
+    } else if (!hasSubagentStateHook && !fs.existsSync(subagentStateFile)) {
+      console.warn(`  ${yellow}⚠${reset}  Skipped subagent-state hook — gsd-subagent-state.sh not found at target`);
+    } else if (!hasSubagentStateHook && !subagentStateCommand) {
+      console.warn(`  ${yellow}⚠${reset}  Skipped subagent-state hook — Bash executable path unavailable (#3393)`);
+    }
+
+    // Configure Stop hook for session-end summary (#788).
+    // Fires when the model finishes responding; emits mode and state summary
+    // as a handoff marker for multi-session workflows. Opt-in.
+    const stopStateCommand = isGlobal
+      ? buildHookCommand(targetDir, 'gsd-stop-state.sh', hookOpts)
+      : localShellCmd('gsd-stop-state.sh');
+    if (!settings.hooks.Stop) {
+      settings.hooks.Stop = [];
+    }
+    const hasStopStateHook = settings.hooks.Stop.some(entry =>
+      entry.hooks && entry.hooks.some(h => h.command && h.command.includes('gsd-stop-state'))
+    );
+    const stopStateFile = path.join(targetDir, 'hooks', 'gsd-stop-state.sh');
+    if (!hasStopStateHook && fs.existsSync(stopStateFile) && stopStateCommand) {
+      settings.hooks.Stop.push({
+        hooks: [
+          {
+            type: 'command',
+            command: stopStateCommand,
+            timeout: 5
+          }
+        ]
+      });
+      console.log(`  ${green}✓${reset} Configured session-stop state summary hook (opt-in via config)`);
+    } else if (!hasStopStateHook && !fs.existsSync(stopStateFile)) {
+      console.warn(`  ${yellow}⚠${reset}  Skipped stop-state hook — gsd-stop-state.sh not found at target`);
+    } else if (!hasStopStateHook && !stopStateCommand) {
+      console.warn(`  ${yellow}⚠${reset}  Skipped stop-state hook — Bash executable path unavailable (#3393)`);
+    }
+
+    // Configure UserPromptSubmit hook for context orientation (#788).
+    // Fires when the user submits a prompt; injects a brief project-context
+    // reminder so orientation is retained across long sessions. Advisory-only.
+    const userPromptSubmitCommand = isGlobal
+      ? buildHookCommand(targetDir, 'gsd-user-prompt-submit.sh', hookOpts)
+      : localShellCmd('gsd-user-prompt-submit.sh');
+    if (!settings.hooks.UserPromptSubmit) {
+      settings.hooks.UserPromptSubmit = [];
+    }
+    const hasUserPromptSubmitHook = settings.hooks.UserPromptSubmit.some(entry =>
+      entry.hooks && entry.hooks.some(h => h.command && h.command.includes('gsd-user-prompt-submit'))
+    );
+    const userPromptSubmitFile = path.join(targetDir, 'hooks', 'gsd-user-prompt-submit.sh');
+    if (!hasUserPromptSubmitHook && fs.existsSync(userPromptSubmitFile) && userPromptSubmitCommand) {
+      settings.hooks.UserPromptSubmit.push({
+        hooks: [
+          {
+            type: 'command',
+            command: userPromptSubmitCommand,
+            timeout: 5
+          }
+        ]
+      });
+      console.log(`  ${green}✓${reset} Configured user-prompt-submit context orientation hook (opt-in via config)`);
+    } else if (!hasUserPromptSubmitHook && !fs.existsSync(userPromptSubmitFile)) {
+      console.warn(`  ${yellow}⚠${reset}  Skipped user-prompt-submit hook — gsd-user-prompt-submit.sh not found at target`);
+    } else if (!hasUserPromptSubmitHook && !userPromptSubmitCommand) {
+      console.warn(`  ${yellow}⚠${reset}  Skipped user-prompt-submit hook — Bash executable path unavailable (#3393)`);
+    }
   }
 
   // Compute the update-banner hook command alongside the others so
@@ -11056,6 +11182,7 @@ module.exports = {
     convertClaudeToCliineMarkdown,
     convertClaudeAgentToClineAgent,
     writeManifest,
+    writeSettings,
     saveLocalPatches,
     reportLocalPatches,
     validateHookFields,
