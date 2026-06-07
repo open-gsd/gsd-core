@@ -162,8 +162,17 @@ export function getGlobalConfigDir(runtime: string, explicitDir?: string | null)
  */
 export function getGlobalSkillsBase(runtime: string): string | null {
   if (runtime === 'cline') return null;
+  if (runtime === 'hermes') {
+    const configDir = getGlobalConfigDir(runtime);
+    return path.join(configDir, 'skills', 'gsd');
+  }
+  // Kilo Code discovers global skills from ~/.kilo/skills/ (HOME-relative),
+  // independent of the XDG-based config dir (~/.config/kilo) used for commands.
+  // See: https://kilo.ai/docs/customize/skills
+  // "Global skills are located in the `.kilo` directory within your Home
+  //  directory: ~/.kilo/skills/"
+  if (runtime === 'kilo') return path.join(os.homedir(), '.kilo', 'skills');
   const configDir = getGlobalConfigDir(runtime);
-  if (runtime === 'hermes') return path.join(configDir, 'skills', 'gsd');
   return path.join(configDir, 'skills');
 }
 
