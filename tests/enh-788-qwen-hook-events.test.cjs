@@ -55,46 +55,6 @@ const STUB_HOOKS = [
   'gsd-config-reload.js', // Added in #770
 ];
 
-const HOOKS_DIST = path.join(__dirname, '..', 'hooks', 'dist');
-let hooksDistCreatedByTest = false;
-
-/**
- * Ensure hooks/dist/ exists with stub files so the installer's copy loop can
- * populate targetDir/hooks/ for Claude Code installs.  Claude's
- * first-time-baseline migration auto-removes pre-existing bundled hook stubs
- * from targetDir/hooks/ and expects the installer to re-copy from hooks/dist/.
- */
-function ensureHooksDist() {
-  if (!fs.existsSync(HOOKS_DIST)) {
-    fs.mkdirSync(HOOKS_DIST, { recursive: true });
-    hooksDistCreatedByTest = true;
-  }
-  for (const hookFile of STUB_HOOKS) {
-    const dest = path.join(HOOKS_DIST, hookFile);
-    if (!fs.existsSync(dest)) {
-      const src = path.join(HOOKS_SRC, hookFile);
-      if (fs.existsSync(src)) {
-        fs.copyFileSync(src, dest);
-      } else {
-        fs.writeFileSync(dest, '#!/usr/bin/env node\n// stub\n');
-      }
-      try { fs.chmodSync(dest, 0o755); } catch { /* Windows */ }
-    }
-  }
-}
-
-function teardownHooksDist() {
-  if (hooksDistCreatedByTest && fs.existsSync(HOOKS_DIST)) {
-    for (const hookFile of STUB_HOOKS) {
-      try { fs.unlinkSync(path.join(HOOKS_DIST, hookFile)); } catch { /* ignore */ }
-    }
-    try {
-      if (fs.readdirSync(HOOKS_DIST).length === 0) fs.rmdirSync(HOOKS_DIST);
-    } catch { /* ignore */ }
-    hooksDistCreatedByTest = false;
-  }
-}
-
 function stubHooksIntoTarget(targetDir) {
   const hooksDest = path.join(targetDir, 'hooks');
   fs.mkdirSync(hooksDest, { recursive: true });
@@ -209,19 +169,18 @@ describe('enh-788 (updated by #770): Claude install registers context lifecycle 
   let settings;
 
   beforeEach(() => {
-    ensureHooksDist();
     tmpDir = createTempDir('gsd-788-claude-');
     previousCwd = process.cwd();
     process.chdir(tmpDir);
+    stubHooksIntoTarget(path.join(tmpDir, '.claude'));
 
-    const result = install(false, 'claude');
+    const result = install(false, 'claude', { installerMigrations: [] });
     settings = result && result.settings;
   });
 
   afterEach(() => {
     process.chdir(previousCwd);
     cleanup(tmpDir);
-    teardownHooksDist();
   });
 
   test('Claude install registers SubagentStop (since #770)', () => {

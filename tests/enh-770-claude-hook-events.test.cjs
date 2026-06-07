@@ -51,9 +51,8 @@ function matchersForEvent(settings, eventName) {
 }
 
 const HOOKS_SRC = path.join(__dirname, '..', 'hooks');
-const HOOKS_DIST = path.join(__dirname, '..', 'hooks', 'dist');
 // Hooks the installer existsSync-checks before registering; must be present
-// in hooks/dist/ so the installer copy loop places them in targetDir/hooks/.
+// in targetDir/hooks/ so the registration guards pass.
 const STUB_HOOKS = [
   'gsd-context-monitor.js',
   'gsd-prompt-guard.js',
@@ -61,54 +60,30 @@ const STUB_HOOKS = [
   'gsd-config-reload.js',
 ];
 
-// Whether hooks/dist/ existed before this test suite ran (so we can restore it).
-let hooksDistCreatedByTest = false;
-
 /**
- * Ensure hooks/dist/ exists and contains stub files for all STUB_HOOKS.
- * Claude's first-time-baseline migration auto-removes pre-existing hook
- * stubs from targetDir/hooks/ (they are bundled GSD artifacts), then expects
- * the installer copy loop to re-copy them from hooks/dist/.  If hooks/dist/
- * does not exist (dev / CI without a build step), the hooks are never
- * re-installed and the registration guards (fs.existsSync) silently skip.
+ * Pre-populate targetDir/hooks/ with stub hook files so the installer's
+ * fs.existsSync guards pass even when hooks/dist/ is absent (e.g. CI without
+ * a build step).  Each test suite passes its own per-test tmpDir/.claude path
+ * so stubs are isolated to that test's temp directory — no shared filesystem
+ * state, no cross-test races.
  *
- * By creating a minimal hooks/dist/ before calling install(), we ensure the
- * installer can find and copy the hooks into targetDir/hooks/ after migration.
- * This mirrors what a real build (npm run build:lib) produces.
+ * When hooks/dist/ DOES exist (local dev with npm run build:hooks), the
+ * installer copies real files over these stubs during install() — that is
+ * fine and correct.
  */
-function ensureHooksDist() {
-  if (!fs.existsSync(HOOKS_DIST)) {
-    fs.mkdirSync(HOOKS_DIST, { recursive: true });
-    hooksDistCreatedByTest = true;
-  }
+function stubHooksIntoTarget(targetDir) {
+  const hooksDest = path.join(targetDir, 'hooks');
+  fs.mkdirSync(hooksDest, { recursive: true });
   for (const hookFile of STUB_HOOKS) {
-    const dest = path.join(HOOKS_DIST, hookFile);
-    if (!fs.existsSync(dest)) {
-      const src = path.join(HOOKS_SRC, hookFile);
-      if (fs.existsSync(src)) {
-        fs.copyFileSync(src, dest);
-      } else {
-        fs.writeFileSync(dest, '#!/usr/bin/env node\n// stub\n');
-      }
-      try { fs.chmodSync(dest, 0o755); } catch { /* Windows */ }
+    const src = path.join(HOOKS_SRC, hookFile);
+    const dest = path.join(hooksDest, hookFile);
+    if (fs.existsSync(src)) {
+      fs.copyFileSync(src, dest);
+    } else {
+      // Minimal stub so existsSync passes
+      fs.writeFileSync(dest, '#!/usr/bin/env node\n// stub\n');
     }
-  }
-}
-
-/** Remove hooks/dist/ if this test suite created it. */
-function teardownHooksDist() {
-  if (hooksDistCreatedByTest && fs.existsSync(HOOKS_DIST)) {
-    // Only remove the stubs WE created, not any existing dist builds.
-    for (const hookFile of STUB_HOOKS) {
-      const dest = path.join(HOOKS_DIST, hookFile);
-      try { fs.unlinkSync(dest); } catch { /* ignore */ }
-    }
-    // Remove dist/ dir if now empty
-    try {
-      const remaining = fs.readdirSync(HOOKS_DIST);
-      if (remaining.length === 0) fs.rmdirSync(HOOKS_DIST);
-    } catch { /* ignore */ }
-    hooksDistCreatedByTest = false;
+    try { fs.chmodSync(dest, 0o755); } catch { /* Windows */ }
   }
 }
 
@@ -125,19 +100,18 @@ describe('enh-770: Claude install registers SubagentStop / Stop / PreCompact con
   let settings;
 
   beforeEach(() => {
-    ensureHooksDist();
     tmpDir = createTempDir('gsd-770-claude-ctx-');
     previousCwd = process.cwd();
     process.chdir(tmpDir);
+    stubHooksIntoTarget(path.join(tmpDir, '.claude'));
 
-    const result = install(false, 'claude');
+    const result = install(false, 'claude', { installerMigrations: [] });
     settings = result && result.settings;
   });
 
   afterEach(() => {
     process.chdir(previousCwd);
     cleanup(tmpDir);
-    teardownHooksDist();
   });
 
   test('install returns a settings object (not null)', () => {
@@ -182,19 +156,18 @@ describe('enh-770: Claude install registers FileChanged hook for .planning/confi
   let settings;
 
   beforeEach(() => {
-    ensureHooksDist();
     tmpDir = createTempDir('gsd-770-filechanged-');
     previousCwd = process.cwd();
     process.chdir(tmpDir);
+    stubHooksIntoTarget(path.join(tmpDir, '.claude'));
 
-    const result = install(false, 'claude');
+    const result = install(false, 'claude', { installerMigrations: [] });
     settings = result && result.settings;
   });
 
   afterEach(() => {
     process.chdir(previousCwd);
     cleanup(tmpDir);
-    teardownHooksDist();
   });
 
   test('FileChanged event is registered with at least one hook', () => {
@@ -227,24 +200,23 @@ describe('enh-770: Claude install is idempotent for the new hook events', () => 
   let previousCwd;
 
   beforeEach(() => {
-    ensureHooksDist();
     tmpDir = createTempDir('gsd-770-idem-');
     previousCwd = process.cwd();
     process.chdir(tmpDir);
+    stubHooksIntoTarget(path.join(tmpDir, '.claude'));
   });
 
   afterEach(() => {
     process.chdir(previousCwd);
     cleanup(tmpDir);
-    teardownHooksDist();
   });
 
   test('re-running after persisted first install does not duplicate context monitor hooks', () => {
-    const result1 = install(false, 'claude');
+    const result1 = install(false, 'claude', { installerMigrations: [] });
     persistSettings(result1.settingsPath, result1.settings);
 
     process.chdir(tmpDir);
-    const result2 = install(false, 'claude');
+    const result2 = install(false, 'claude', { installerMigrations: [] });
     const s2 = result2.settings;
 
     for (const event of ['SubagentStop', 'Stop', 'PreCompact']) {
@@ -255,11 +227,11 @@ describe('enh-770: Claude install is idempotent for the new hook events', () => 
   });
 
   test('re-running after persisted first install does not duplicate FileChanged hook', () => {
-    const result1 = install(false, 'claude');
+    const result1 = install(false, 'claude', { installerMigrations: [] });
     persistSettings(result1.settingsPath, result1.settings);
 
     process.chdir(tmpDir);
-    const result2 = install(false, 'claude');
+    const result2 = install(false, 'claude', { installerMigrations: [] });
     const s2 = result2.settings;
 
     const cmds = hooksForEvent(s2, 'FileChanged');
@@ -275,23 +247,22 @@ describe('enh-770: Uninstall removes new hook event entries', () => {
   let previousCwd;
 
   beforeEach(() => {
-    ensureHooksDist();
     tmpDir = createTempDir('gsd-770-uninstall-');
     previousCwd = process.cwd();
     process.chdir(tmpDir);
+    stubHooksIntoTarget(path.join(tmpDir, '.claude'));
 
-    const result = install(false, 'claude');
+    const result = install(false, 'claude', { installerMigrations: [] });
     persistSettings(result.settingsPath, result.settings);
   });
 
   afterEach(() => {
     process.chdir(previousCwd);
     cleanup(tmpDir);
-    teardownHooksDist();
   });
 
   test('settings.json hook entries are removed on uninstall', () => {
-    uninstall(false, 'claude');
+    uninstall(false, 'claude', { installerMigrations: [] });
     const settingsPath = path.join(tmpDir, '.claude', 'settings.json');
     if (!fs.existsSync(settingsPath)) return; // file removed entirely is fine
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
