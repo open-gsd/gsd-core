@@ -33,6 +33,8 @@ const _require: NodeRequire = require;
 
 interface InstallExports {
   readGsdCommandNames: () => string[];
+  computePathPrefix: (opts: { isGlobal: boolean; isOpencode: boolean; isWindowsHost: boolean; resolvedTarget: string; homeDir: string }) => string;
+  applyRuntimeContentRewritesInPlace: (stagedDir: string, runtime: string, pathPrefix: string) => void;
   [converterName: string]: unknown;
 }
 
@@ -84,6 +86,7 @@ interface ArtifactKind {
 interface Layout {
   runtime: string;
   configDir: string;
+  scope?: 'local' | 'global';
   kinds: ArtifactKind[];
 }
 
@@ -358,7 +361,7 @@ function resolveRuntimeArtifactLayout(runtime: string, configDir: string, scope:
       throw new TypeError(`Unknown runtime: '${runtime}' — add to runtime-artifact-layout.cjs table`);
   }
 
-  return { runtime, configDir, kinds };
+  return { runtime, configDir, scope, kinds };
 }
 
-export = { resolveRuntimeArtifactLayout, findInstallSourceRoot };
+export = { resolveRuntimeArtifactLayout, findInstallSourceRoot, getInstallExports };

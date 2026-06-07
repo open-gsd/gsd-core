@@ -23,6 +23,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { platformWriteSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import installProfiles = require('./install-profiles.cjs');
@@ -35,7 +36,7 @@ import { CLUSTERS } from './clusters.cjs';
 import type { ClusterMap } from './clusters.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import runtimeArtifactLayout = require('./runtime-artifact-layout.cjs');
-const { findInstallSourceRoot } = runtimeArtifactLayout;
+const { findInstallSourceRoot, getInstallExports } = runtimeArtifactLayout;
 
 const SURFACE_FILE_NAME = '.gsd-surface.json';
 
@@ -53,6 +54,7 @@ interface ArtifactKind {
 interface Layout {
   runtime: string;
   configDir: string;
+  scope?: 'local' | 'global';
   kinds: ArtifactKind[];
 }
 
@@ -256,8 +258,29 @@ function applySurface(runtimeConfigDir: string, layout: Layout, manifest: Map<st
   }
   const skillManifest = normalizeSkillManifest(layout.configDir, manifest);
   const resolved = resolveSurface(layout.configDir, skillManifest, clusterMap);
+  // Mirror installRuntimeArtifacts: skills kinds get per-runtime path rewrites
+  // so SKILL.md bodies reference the install target (pathPrefix), not the
+  // converter's default ~/.claude paths (#813). Computed lazily so command-only
+  // runtimes do not trigger the install.js require.
+  let pathPrefix: string | null = null;
   for (const kind of layout.kinds) {
     const staged = kind.stage(resolved);
+    if (kind.kind === 'skills') {
+      const installExports = getInstallExports();
+      if (pathPrefix === null) {
+        const scope = layout.scope ?? 'global';
+        const resolvedTarget = path.resolve(layout.configDir).replace(/\\/g, '/');
+        const homeDir = os.homedir().replace(/\\/g, '/');
+        pathPrefix = installExports.computePathPrefix({
+          isGlobal: scope === 'global',
+          isOpencode: layout.runtime === 'opencode',
+          isWindowsHost: process.platform === 'win32',
+          resolvedTarget,
+          homeDir,
+        });
+      }
+      installExports.applyRuntimeContentRewritesInPlace(staged, layout.runtime, pathPrefix);
+    }
     const dest = path.join(layout.configDir, kind.destSubpath);
     _syncGsdDir(staged, dest, kind, skillManifest);
   }
