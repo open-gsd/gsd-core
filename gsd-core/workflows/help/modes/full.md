@@ -550,11 +550,12 @@ Usage: `/gsd:help --full`
 Usage: `/gsd:help debug`
 Usage: `/gsd:help --brief debug`
 
-**`/gsd:update [--sync] [--reapply]`**
+**`/gsd:update [--sync] [--reapply] [--next | --rc]`**
 Update GSD to latest version with changelog preview.
 
 - `--sync` — sync managed GSD skills across runtime roots (replaces the former `gsd-sync-skills`)
 - `--reapply` — reapply local modifications after an update (replaces the former `gsd-reapply-patches`)
+- `--next` (alias `--rc`) — install/refresh from the `@next` RC dist-tag instead of `@latest` (ADR #660); omit for the stable channel
 
 - Shows installed vs latest version comparison
 - Displays changelog entries for versions you've missed

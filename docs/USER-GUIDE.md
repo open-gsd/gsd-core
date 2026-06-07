@@ -830,6 +830,18 @@ Set `commit_docs: false` during `/gsd-new-project` or via `/gsd-settings`. Add `
 
 Since v1.17, the installer backs up locally modified files to `gsd-local-patches/`. Run `/gsd-update --reapply` to merge your changes back.
 
+### Install or Refresh a Release Candidate
+
+To install or refresh GSD from the `@next` RC dist-tag (the pre-release channel established by ADR #660), run:
+
+```bash
+/gsd-update --next
+# or equivalently:
+/gsd-update --rc
+```
+
+The same scope/runtime detection, changelog preview, custom-file backup, and cache clearing apply. Omitting `--next`/`--rc` keeps targeting `@latest` (stable channel, no change). Only the `@latest` and `@next` channels are supported — no arbitrary dist-tag can be passed.
+
 ### Cannot Update via npm
 
 See [docs/manual-update.md](manual-update.md) for a step-by-step manual update procedure.
