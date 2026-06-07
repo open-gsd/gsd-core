@@ -445,7 +445,7 @@ function cmdEffortSync(cwd: string, raw: boolean, opts?: { dryRun?: boolean; con
   }
 
   // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/unbound-method
-  const { getGlobalConfigDir } = require('./runtime-homes.cjs') as { getGlobalConfigDir(runtime: string): string };
+  const { getGlobalConfigDir } = require('./runtime-homes.cjs') as { getGlobalConfigDir(runtime: string, explicitDir?: string | null): string };
   // Use install-time resolvers: they merge ~/.gsd/defaults.json with project config,
   // matching the exact logic used when agents were originally installed.
   // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/unbound-method

@@ -30,6 +30,7 @@ const {
 } = require(path.join(__dirname, '..', 'scripts', 'fix-slash-commands.cjs'));
 const {
   resolveAntigravityGlobalDir,
+  getGlobalConfigDir,
 } = require('../gsd-core/bin/lib/runtime-homes.cjs');
 const {
   applyWorktreeBaseRef,
@@ -99,6 +100,32 @@ function isCodexHooksFeatureKey(key) {
 // Copilot instructions marker constants
 const GSD_COPILOT_INSTRUCTIONS_MARKER = '<!-- GSD Configuration \u2014 managed by gsd-core installer -->';
 const GSD_COPILOT_INSTRUCTIONS_CLOSE_MARKER = '<!-- /GSD Configuration -->';
+
+// #786 \u2014 GitHub Copilot CLI lifecycle hook constants.
+// Copilot reads hook configs from <config>/hooks/*.json (repo scope: .github/hooks/,
+// user scope: ~/.copilot/hooks/) with the shape { version, hooks: { <event>: [...] } }.
+// Events use camelCase (sessionStart, preToolUse, postToolUse, ...). A `command`
+// hook runs an INLINE shell command (bash / powershell), so the GSD hook is fully
+// self-contained \u2014 there is no separate hook script to install, and therefore
+// nothing that can dangle if a script copy is skipped. See
+// https://docs.github.com/en/copilot/reference/hooks-configuration
+const GSD_COPILOT_HOOK_FILE = 'gsd-session.json';
+// Copilot parses a command hook's stdout as the hook-output JSON. For sessionStart
+// the schema is `{ additionalContext?: string }` (the text is prepended to the
+// session as context). So the hook must emit that JSON envelope — not bare text.
+// The two messages contain no JSON-special characters, so they embed verbatim.
+const GSD_COPILOT_SESSION_MSG_PRESENT =
+  'GSD: .planning/STATE.md present - review the current phase and any blockers before acting.';
+const GSD_COPILOT_SESSION_MSG_ABSENT =
+  'GSD: no .planning/ workflow found - run /gsd-new-project to start a tracked workflow.';
+const GSD_COPILOT_SESSION_HOOK_BASH =
+  'if [ -f .planning/STATE.md ]; then ' +
+  `printf '%s' '{"additionalContext":"${GSD_COPILOT_SESSION_MSG_PRESENT}"}'; else ` +
+  `printf '%s' '{"additionalContext":"${GSD_COPILOT_SESSION_MSG_ABSENT}"}'; fi`;
+const GSD_COPILOT_SESSION_HOOK_PWSH =
+  'if (Test-Path .planning/STATE.md) ' +
+  `{ '{"additionalContext":"${GSD_COPILOT_SESSION_MSG_PRESENT}"}' } ` +
+  `else { '{"additionalContext":"${GSD_COPILOT_SESSION_MSG_ABSENT}"}' }`;
 
 // GSD-managed files under hooks/lib/ (helpers required by gsd-*.sh hooks).
 // git-cmd.js does not start with "gsd-" (shared classifier for #3129), gsd-graphify-rebuild.sh does.
@@ -408,218 +435,6 @@ function getConfigDirFromHome(runtime, isGlobal) {
   return "'.claude'";
 }
 
-/**
- * Get the global config directory for OpenCode
- * OpenCode follows XDG Base Directory spec and uses ~/.config/opencode/
- * Priority: OPENCODE_CONFIG_DIR > dirname(OPENCODE_CONFIG) > XDG_CONFIG_HOME/opencode > ~/.config/opencode
- */
-function getOpencodeGlobalDir() {
-  // 1. Explicit OPENCODE_CONFIG_DIR env var
-  if (process.env.OPENCODE_CONFIG_DIR) {
-    return expandTilde(process.env.OPENCODE_CONFIG_DIR);
-  }
-
-  // 2. OPENCODE_CONFIG env var (use its directory)
-  if (process.env.OPENCODE_CONFIG) {
-    return path.dirname(expandTilde(process.env.OPENCODE_CONFIG));
-  }
-
-  // 3. XDG_CONFIG_HOME/opencode
-  if (process.env.XDG_CONFIG_HOME) {
-    return path.join(expandTilde(process.env.XDG_CONFIG_HOME), 'opencode');
-  }
-
-  // 4. Default: ~/.config/opencode (XDG default)
-  return path.join(os.homedir(), '.config', 'opencode');
-}
-
-/**
- * Get the global config directory for Kilo
- * Kilo follows XDG Base Directory spec and uses ~/.config/kilo/
- * Priority: KILO_CONFIG_DIR > dirname(KILO_CONFIG) > XDG_CONFIG_HOME/kilo > ~/.config/kilo
- */
-function getKiloGlobalDir() {
-  // 1. Explicit KILO_CONFIG_DIR env var
-  if (process.env.KILO_CONFIG_DIR) {
-    return expandTilde(process.env.KILO_CONFIG_DIR);
-  }
-
-  // 2. KILO_CONFIG env var (use its directory)
-  if (process.env.KILO_CONFIG) {
-    return path.dirname(expandTilde(process.env.KILO_CONFIG));
-  }
-
-  // 3. XDG_CONFIG_HOME/kilo
-  if (process.env.XDG_CONFIG_HOME) {
-    return path.join(expandTilde(process.env.XDG_CONFIG_HOME), 'kilo');
-  }
-
-  // 4. Default: ~/.config/kilo (XDG default)
-  return path.join(os.homedir(), '.config', 'kilo');
-}
-
-/**
- * Get the global config directory for a runtime
- * @param {string} runtime - 'claude', 'opencode', 'gemini', 'codex', or 'copilot'
- * @param {string|null} explicitDir - Explicit directory from --config-dir flag
- */
-function getGlobalDir(runtime, explicitDir = null) {
-  if (runtime === 'opencode') {
-    // For OpenCode, --config-dir overrides env vars
-    if (explicitDir) {
-      return expandTilde(explicitDir);
-    }
-    return getOpencodeGlobalDir();
-  }
-
-  if (runtime === 'kilo') {
-    // For Kilo, --config-dir overrides env vars
-    if (explicitDir) {
-      return expandTilde(explicitDir);
-    }
-    return getKiloGlobalDir();
-  }
-
-  if (runtime === 'gemini') {
-    // Gemini: --config-dir > GEMINI_CONFIG_DIR > ~/.gemini
-    if (explicitDir) {
-      return expandTilde(explicitDir);
-    }
-    if (process.env.GEMINI_CONFIG_DIR) {
-      return expandTilde(process.env.GEMINI_CONFIG_DIR);
-    }
-    return path.join(os.homedir(), '.gemini');
-  }
-
-  if (runtime === 'codex') {
-    // Codex: --config-dir > CODEX_HOME > ~/.codex
-    if (explicitDir) {
-      return expandTilde(explicitDir);
-    }
-    if (process.env.CODEX_HOME) {
-      return expandTilde(process.env.CODEX_HOME);
-    }
-    return path.join(os.homedir(), '.codex');
-  }
-
-  if (runtime === 'copilot') {
-    // Copilot: --config-dir > COPILOT_CONFIG_DIR > ~/.copilot
-    if (explicitDir) {
-      return expandTilde(explicitDir);
-    }
-    if (process.env.COPILOT_CONFIG_DIR) {
-      return expandTilde(process.env.COPILOT_CONFIG_DIR);
-    }
-    return path.join(os.homedir(), '.copilot');
-  }
-
-  if (runtime === 'antigravity') {
-    // Antigravity: --config-dir > ANTIGRAVITY_CONFIG_DIR > auto-detected
-    // ~/.gemini/{antigravity,antigravity-ide,antigravity-cli}
-    if (explicitDir) {
-      return expandTilde(explicitDir);
-    }
-    return resolveAntigravityGlobalDir();
-  }
-
-  if (runtime === 'cursor') {
-    // Cursor: --config-dir > CURSOR_CONFIG_DIR > ~/.cursor
-    if (explicitDir) {
-      return expandTilde(explicitDir);
-    }
-    if (process.env.CURSOR_CONFIG_DIR) {
-      return expandTilde(process.env.CURSOR_CONFIG_DIR);
-    }
-    return path.join(os.homedir(), '.cursor');
-  }
-
-  if (runtime === 'windsurf') {
-    // Windsurf: --config-dir > WINDSURF_CONFIG_DIR > ~/.codeium/windsurf
-    if (explicitDir) {
-      return expandTilde(explicitDir);
-    }
-    if (process.env.WINDSURF_CONFIG_DIR) {
-      return expandTilde(process.env.WINDSURF_CONFIG_DIR);
-    }
-    return path.join(os.homedir(), '.codeium', 'windsurf');
-  }
-
-  if (runtime === 'augment') {
-    // Augment: --config-dir > AUGMENT_CONFIG_DIR > ~/.augment
-    if (explicitDir) {
-      return expandTilde(explicitDir);
-    }
-    if (process.env.AUGMENT_CONFIG_DIR) {
-      return expandTilde(process.env.AUGMENT_CONFIG_DIR);
-    }
-    return path.join(os.homedir(), '.augment');
-  }
-  if (runtime === 'trae') {
-    // Trae: --config-dir > TRAE_CONFIG_DIR > ~/.trae
-    if (explicitDir) {
-      return expandTilde(explicitDir);
-    }
-    if (process.env.TRAE_CONFIG_DIR) {
-      return expandTilde(process.env.TRAE_CONFIG_DIR);
-    }
-    return path.join(os.homedir(), '.trae');
-  }
-
-  if (runtime === 'qwen') {
-    if (explicitDir) {
-      return expandTilde(explicitDir);
-    }
-    if (process.env.QWEN_CONFIG_DIR) {
-      return expandTilde(process.env.QWEN_CONFIG_DIR);
-    }
-    return path.join(os.homedir(), '.qwen');
-  }
-
-  if (runtime === 'hermes') {
-    // Hermes Agent: --config-dir > HERMES_HOME > ~/.hermes
-    // Honors HERMES_HOME which Hermes users set for profile mode / Docker
-    // deploys (docs: https://hermes-agent.nousresearch.com/docs).
-    if (explicitDir) {
-      return expandTilde(explicitDir);
-    }
-    if (process.env.HERMES_HOME) {
-      return expandTilde(process.env.HERMES_HOME);
-    }
-    return path.join(os.homedir(), '.hermes');
-  }
-
-  if (runtime === 'codebuddy') {
-    // CodeBuddy: --config-dir > CODEBUDDY_CONFIG_DIR > ~/.codebuddy
-    if (explicitDir) {
-      return expandTilde(explicitDir);
-    }
-    if (process.env.CODEBUDDY_CONFIG_DIR) {
-      return expandTilde(process.env.CODEBUDDY_CONFIG_DIR);
-    }
-    return path.join(os.homedir(), '.codebuddy');
-  }
-
-  if (runtime === 'cline') {
-    // Cline: --config-dir > CLINE_CONFIG_DIR > ~/.cline
-    if (explicitDir) {
-      return expandTilde(explicitDir);
-    }
-    if (process.env.CLINE_CONFIG_DIR) {
-      return expandTilde(process.env.CLINE_CONFIG_DIR);
-    }
-    return path.join(os.homedir(), '.cline');
-  }
-
-  // Claude Code: --config-dir > CLAUDE_CONFIG_DIR > ~/.claude
-  if (explicitDir) {
-    return expandTilde(explicitDir);
-  }
-  if (process.env.CLAUDE_CONFIG_DIR) {
-    return expandTilde(process.env.CLAUDE_CONFIG_DIR);
-  }
-  return path.join(os.homedir(), '.claude');
-}
-
 const banner = '\n' +
   cyan + '   ██████╗ ███████╗██████╗\n' +
   '  ██╔════╝ ██╔════╝██╔══██╗\n' +
@@ -688,18 +503,8 @@ if (hasUninstall) {
 
 // Show help if requested
 if (hasHelp) {
-  console.log(`  ${yellow}Usage:${reset} npx ${pkg.name} [options]\n\n  ${yellow}Options:${reset}\n    ${cyan}-g, --global${reset}              Install globally (to config directory)\n    ${cyan}-l, --local${reset}               Install locally (to current directory)\n    ${cyan}--claude${reset}                  Install for Claude Code only\n    ${cyan}--opencode${reset}                Install for OpenCode only\n    ${cyan}--gemini${reset}                  Install for Gemini only\n    ${cyan}--kilo${reset}                    Install for Kilo only\n    ${cyan}--codex${reset}                   Install for Codex only\n    ${cyan}--copilot${reset}                 Install for Copilot only\n    ${cyan}--antigravity${reset}             Install for Antigravity only\n    ${cyan}--cursor${reset}                  Install for Cursor only\n    ${cyan}--windsurf${reset}                Install for Windsurf only\n    ${cyan}--augment${reset}                 Install for Augment only\n    ${cyan}--trae${reset}                    Install for Trae only\n    ${cyan}--qwen${reset}                    Install for Qwen Code only\n    ${cyan}--hermes${reset}                  Install for Hermes Agent only\n    ${cyan}--cline${reset}                   Install for Cline only\n    ${cyan}--codebuddy${reset}              Install for CodeBuddy only\n    ${cyan}--all${reset}                     Install for all runtimes\n    ${cyan}-u, --uninstall${reset}           Uninstall GSD (remove all GSD files)\n    ${cyan}-c, --config-dir <path>${reset}   Specify custom config directory\n    ${cyan}-h, --help${reset}                Show this help message\n    ${cyan}--force-statusline${reset}        Replace existing statusline config\n    ${cyan}--portable-hooks${reset}          Emit \$HOME-relative hook paths in settings.json\n                              (for WSL/Docker bind-mount setups; also GSD_PORTABLE_HOOKS=1)\n    ${cyan}--profile=<name>${reset}         Install a named skill profile. Profiles:\n                              core     — 7 main-loop skills incl. phase (~130 desc tokens)\n                              standard — ~13 skills incl. phase, review, config (~700)\n                              full     — all 66 skills (default)\n                              Composable: --profile=core,audit installs union of closures.\n                              Profile is persisted and respected by \`gsd update\`.\n    ${cyan}--minimal${reset}                 Alias for --profile=core (back-compat).\n                              Cuts cold-start overhead from ~12k tokens to ~700.\n                              Alias: --core-only.\n\n  ${yellow}Examples:${reset}\n    ${dim}# Interactive install (prompts for runtime and location)${reset}\n    npx ${pkg.name}\n\n    ${dim}# Install for Claude Code globally${reset}\n    npx ${pkg.name} --claude --global\n\n    ${dim}# Install for Gemini globally${reset}\n    npx ${pkg.name} --gemini --global\n\n    ${dim}# Install for Kilo globally${reset}\n    npx ${pkg.name} --kilo --global\n\n    ${dim}# Install for Codex globally${reset}\n    npx ${pkg.name} --codex --global\n\n    ${dim}# Install for Copilot globally${reset}\n    npx ${pkg.name} --copilot --global\n\n    ${dim}# Install for Copilot locally${reset}\n    npx ${pkg.name} --copilot --local\n\n    ${dim}# Install for Antigravity globally${reset}\n    npx ${pkg.name} --antigravity --global\n\n    ${dim}# Install for Antigravity locally${reset}\n    npx ${pkg.name} --antigravity --local\n\n    ${dim}# Install for Cursor globally${reset}\n    npx ${pkg.name} --cursor --global\n\n    ${dim}# Install for Cursor locally${reset}\n    npx ${pkg.name} --cursor --local\n\n    ${dim}# Install for Windsurf globally${reset}\n    npx ${pkg.name} --windsurf --global\n\n    ${dim}# Install for Windsurf locally${reset}\n    npx ${pkg.name} --windsurf --local\n\n    ${dim}# Install for Augment globally${reset}\n    npx ${pkg.name} --augment --global\n\n    ${dim}# Install for Augment locally${reset}\n    npx ${pkg.name} --augment --local\n\n    ${dim}# Install for Trae globally${reset}\n    npx ${pkg.name} --trae --global\n\n    ${dim}# Install for Trae locally${reset}\n    npx ${pkg.name} --trae --local\n\n    ${dim}# Install for Hermes Agent globally${reset}\n    npx ${pkg.name} --hermes --global\n\n    ${dim}# Install for Hermes Agent locally${reset}\n    npx ${pkg.name} --hermes --local\n\n    ${dim}# Install for Cline locally${reset}\n    npx ${pkg.name} --cline --local\n\n    ${dim}# Install for CodeBuddy globally${reset}\n    npx ${pkg.name} --codebuddy --global\n\n    ${dim}# Install for CodeBuddy locally${reset}\n    npx ${pkg.name} --codebuddy --local\n\n    ${dim}# Install for all runtimes globally${reset}\n    npx ${pkg.name} --all --global\n\n    ${dim}# Install to custom config directory${reset}\n    npx ${pkg.name} --kilo --global --config-dir ~/.kilo-work\n\n    ${dim}# Install to current project only${reset}\n    npx ${pkg.name} --claude --local\n\n    ${dim}# Uninstall GSD from Cursor globally${reset}\n    npx ${pkg.name} --cursor --global --uninstall\n\n  ${yellow}Notes:${reset}\n    The --config-dir option is useful when you have multiple configurations.\n    It takes priority over CLAUDE_CONFIG_DIR / OPENCODE_CONFIG_DIR / GEMINI_CONFIG_DIR / KILO_CONFIG_DIR / CODEX_HOME / COPILOT_CONFIG_DIR / ANTIGRAVITY_CONFIG_DIR / CURSOR_CONFIG_DIR / WINDSURF_CONFIG_DIR / AUGMENT_CONFIG_DIR / TRAE_CONFIG_DIR / QWEN_CONFIG_DIR / HERMES_HOME / CLINE_CONFIG_DIR / CODEBUDDY_CONFIG_DIR environment variables.\n`);
+  console.log(`  ${yellow}Usage:${reset} npx ${pkg.name} [options]\n\n  ${yellow}Options:${reset}\n    ${cyan}-g, --global${reset}              Install globally (to config directory)\n    ${cyan}-l, --local${reset}               Install locally (to current directory)\n    ${cyan}--claude${reset}                  Install for Claude Code only\n    ${cyan}--opencode${reset}                Install for OpenCode only\n    ${cyan}--gemini${reset}                  Install for Gemini only\n    ${cyan}--kilo${reset}                    Install for Kilo only\n    ${cyan}--codex${reset}                   Install for Codex only\n    ${cyan}--copilot${reset}                 Install for Copilot only\n    ${cyan}--antigravity${reset}             Install for Antigravity only\n    ${cyan}--cursor${reset}                  Install for Cursor only\n    ${cyan}--windsurf${reset}                Install for Windsurf only\n    ${cyan}--augment${reset}                 Install for Augment only\n    ${cyan}--trae${reset}                    Install for Trae only\n    ${cyan}--qwen${reset}                    Install for Qwen Code only\n    ${cyan}--hermes${reset}                  Install for Hermes Agent only\n    ${cyan}--cline${reset}                   Install for Cline only\n    ${cyan}--codebuddy${reset}              Install for CodeBuddy only\n    ${cyan}--all${reset}                     Install for all runtimes\n    ${cyan}-u, --uninstall${reset}           Uninstall GSD (remove all GSD files)\n    ${cyan}-c, --config-dir <path>${reset}   Specify custom config directory\n    ${cyan}-h, --help${reset}                Show this help message\n    ${cyan}--force-statusline${reset}        Replace existing statusline config\n    ${cyan}--portable-hooks${reset}          Emit \$HOME-relative hook paths in settings.json\n                              (for WSL/Docker bind-mount setups; also GSD_PORTABLE_HOOKS=1)\n    ${cyan}--profile=<name>${reset}         Install a named skill profile. Profiles:\n                              core     — 7 main-loop skills incl. phase (~130 desc tokens)\n                              standard — ~13 skills incl. phase, review, config (~700)\n                              full     — all 66 skills (default)\n                              Composable: --profile=core,audit installs union of closures.\n                              Profile is persisted and respected by \`gsd update\`.\n    ${cyan}--minimal${reset}                 Alias for --profile=core (back-compat).\n                              Cuts cold-start overhead from ~12k tokens to ~700.\n                              Alias: --core-only.\n\n  ${yellow}Examples:${reset}\n    ${dim}# Interactive install (prompts for runtime and location)${reset}\n    npx ${pkg.name}\n\n    ${dim}# Install for Claude Code globally${reset}\n    npx ${pkg.name} --claude --global\n\n    ${dim}# Install for Gemini globally${reset}\n    npx ${pkg.name} --gemini --global\n\n    ${dim}# Install for Kilo globally${reset}\n    npx ${pkg.name} --kilo --global\n\n    ${dim}# Install for Codex globally${reset}\n    npx ${pkg.name} --codex --global\n\n    ${dim}# Install for Copilot globally${reset}\n    npx ${pkg.name} --copilot --global\n\n    ${dim}# Install for Copilot locally${reset}\n    npx ${pkg.name} --copilot --local\n\n    ${dim}# Install for Antigravity globally${reset}\n    npx ${pkg.name} --antigravity --global\n\n    ${dim}# Install for Antigravity locally${reset}\n    npx ${pkg.name} --antigravity --local\n\n    ${dim}# Install for Cursor globally${reset}\n    npx ${pkg.name} --cursor --global\n\n    ${dim}# Install for Cursor locally${reset}\n    npx ${pkg.name} --cursor --local\n\n    ${dim}# Install for Windsurf globally${reset}\n    npx ${pkg.name} --windsurf --global\n\n    ${dim}# Install for Windsurf locally${reset}\n    npx ${pkg.name} --windsurf --local\n\n    ${dim}# Install for Augment globally${reset}\n    npx ${pkg.name} --augment --global\n\n    ${dim}# Install for Augment locally${reset}\n    npx ${pkg.name} --augment --local\n\n    ${dim}# Install for Trae globally${reset}\n    npx ${pkg.name} --trae --global\n\n    ${dim}# Install for Trae locally${reset}\n    npx ${pkg.name} --trae --local\n\n    ${dim}# Install for Hermes Agent globally${reset}\n    npx ${pkg.name} --hermes --global\n\n    ${dim}# Install for Hermes Agent locally${reset}\n    npx ${pkg.name} --hermes --local\n\n    ${dim}# Install for Cline locally${reset}\n    npx ${pkg.name} --cline --local\n\n    ${dim}# Install for CodeBuddy globally${reset}\n    npx ${pkg.name} --codebuddy --global\n\n    ${dim}# Install for CodeBuddy locally${reset}\n    npx ${pkg.name} --codebuddy --local\n\n    ${dim}# Install for all runtimes globally${reset}\n    npx ${pkg.name} --all --global\n\n    ${dim}# Install to custom config directory${reset}\n    npx ${pkg.name} --kilo --global --config-dir ~/.kilo-work\n\n    ${dim}# Install to current project only${reset}\n    npx ${pkg.name} --claude --local\n\n    ${dim}# Uninstall GSD from Cursor globally${reset}\n    npx ${pkg.name} --cursor --global --uninstall\n\n  ${yellow}Notes:${reset}\n    The --config-dir option is useful when you have multiple configurations.\n    It takes priority over CLAUDE_CONFIG_DIR / OPENCODE_CONFIG_DIR / GEMINI_CONFIG_DIR / KILO_CONFIG_DIR / CODEX_HOME / COPILOT_CONFIG_DIR / COPILOT_HOME / ANTIGRAVITY_CONFIG_DIR / CURSOR_CONFIG_DIR / WINDSURF_CONFIG_DIR / AUGMENT_CONFIG_DIR / TRAE_CONFIG_DIR / QWEN_CONFIG_DIR / HERMES_HOME / CLINE_CONFIG_DIR / CODEBUDDY_CONFIG_DIR environment variables.\n`);
   process.exit(0);
-}
-
-/**
- * Expand ~ to home directory (shell doesn't expand in env vars passed to node)
- */
-function expandTilde(filePath) {
-  if (filePath && filePath.startsWith('~/')) {
-    return path.join(os.homedir(), filePath.slice(2));
-  }
-  return filePath;
 }
 
 /**
@@ -1774,11 +1579,11 @@ function getCommitAttribution(runtime) {
     const resolveConfigPath = runtime === 'opencode'
       ? resolveOpencodeConfigPath
       : resolveKiloConfigPath;
-    const config = readSettings(resolveConfigPath(getGlobalDir(runtime, null)));
+    const config = readSettings(resolveConfigPath(getGlobalConfigDir(runtime, null)));
     result = (config && config.disable_ai_attribution === true) ? null : undefined;
   } else if (runtime === 'gemini') {
     // Gemini: check gemini settings.json for attribution config
-    const settings = readSettings(path.join(getGlobalDir('gemini', explicitConfigDir), 'settings.json'));
+    const settings = readSettings(path.join(getGlobalConfigDir('gemini', explicitConfigDir), 'settings.json'));
     if (!settings || !settings.attribution || settings.attribution.commit === undefined) {
       result = undefined;
     } else if (settings.attribution.commit === '') {
@@ -1788,7 +1593,7 @@ function getCommitAttribution(runtime) {
     }
   } else if (runtime === 'claude') {
     // Claude Code
-    const settings = readSettings(path.join(getGlobalDir('claude', explicitConfigDir), 'settings.json'));
+    const settings = readSettings(path.join(getGlobalConfigDir('claude', explicitConfigDir), 'settings.json'));
     if (!settings || !settings.attribution || settings.attribution.commit === undefined) {
       result = undefined;
     } else if (settings.attribution.commit === '') {
@@ -2389,6 +2194,29 @@ function convertClaudeCommandToCursorSkill(content, skillName) {
   const adapter = getCursorSkillAdapterHeader(skillName);
 
   return `---\nname: ${yamlIdentifier(skillName)}\ndescription: ${yamlQuote(shortDescription)}\n---\n\n${adapter}\n\n${body.trimStart()}`;
+}
+
+/**
+ * Convert a Claude Code command to a Cursor 1.6 slash command (#785).
+ *
+ * Cursor slash commands live in `.cursor/commands/<name>.md` and are
+ * plain markdown — no YAML frontmatter, no adapter header. The filename
+ * becomes the command name (e.g. `gsd-help.md` → `/gsd-help`).
+ *
+ * Applies the same `convertClaudeToCursorMarkdown` transforms as the skill
+ * converter (tool renames, brand substitution, slash-command normalisation),
+ * then strips the YAML frontmatter block so only the prose body remains.
+ *
+ * @param {string} content   raw Claude Code command markdown (may have frontmatter)
+ * @param {string} _commandName  the target command name (unused; present for
+ *   API symmetry with other converters so the runtime-artifact-layout stage
+ *   function can call it uniformly)
+ * @returns {string} plain markdown body, no frontmatter
+ */
+function convertClaudeCommandToCursorCommand(content, _commandName) {
+  const converted = convertClaudeToCursorMarkdown(content);
+  const { body } = extractFrontmatterAndBody(converted);
+  return body.trimStart();
 }
 
 /**
@@ -5236,6 +5064,264 @@ function stripGsdFromCopilotInstructions(content) {
   return content;
 }
 
+// ── Cline directory-form rules + hooks + AGENTS.md (issue #787) ────────────────
+//
+// Cline v3.36 added a hooks system and a `.clinerules/` directory form. Because
+// `.clinerules` cannot be both a file AND a directory, emitting hooks under
+// `.clinerules/hooks/` requires migrating the rules content into the directory
+// form (`.clinerules/gsd.md`). Sources adjudicated:
+//   - https://cline.bot/blog/cline-v3-36-hooks
+//   - https://docs.cline.bot/customization/cline-rules
+
+const GSD_AGENTS_MD_MARKER = '<!-- GSD Configuration — managed by gsd-core installer -->';
+const GSD_AGENTS_MD_CLOSE_MARKER = '<!-- End GSD Configuration -->';
+
+/**
+ * The GSD instruction body shared by the Cline directory-form rules file and
+ * the cross-tool AGENTS.md block. Self-contained — references only the gsd-core
+ * engine layout, not the (separate) #782 Cline skills directory.
+ */
+function buildClineRulesBody() {
+  return [
+    '# GSD Core — Git. Ship. Done.',
+    '',
+    '- GSD workflows live in `gsd-core/workflows/`. Load the relevant workflow when',
+    '  the user runs a `/gsd-*` command.',
+    '- GSD agents live in `agents/`. Use the matching agent when spawning subagents.',
+    '- GSD tools are at `gsd-core/bin/gsd-tools.cjs`. Run with `node`.',
+    '- Planning artifacts live in `.planning/`. Never edit them outside a GSD workflow.',
+    '- Do not apply GSD workflows unless the user explicitly asks for them.',
+    '- When a GSD command triggers a deliverable (feature, fix, docs), offer the next',
+    '  step to the user using Cline\'s ask_user tool after completing it.',
+  ].join('\n') + '\n';
+}
+
+/** AGENTS.md body for the cross-tool global instruction target (`~/.agents/AGENTS.md`). */
+function buildClineAgentsMdBody() {
+  return buildClineRulesBody();
+}
+
+/**
+ * The Cline PreToolUse hook script (issue #787).
+ *
+ * Cline invokes hooks as executable scripts named exactly after the event with
+ * no extension, passing the operation context as JSON on stdin and reading a
+ * JSON decision from stdout ({ cancel, errorMessage, contextModification }).
+ *
+ * This hook is a self-standing planning-artifact guard: it cancels write-class
+ * tool calls that target `.planning/` (GSD-owned artifacts), and otherwise
+ * allows the operation. It FAILS OPEN — any parse/IO error allows the call so a
+ * hook bug can never wedge the user. No dependency on the #782 skills work.
+ */
+function buildClinePreToolUseHook() {
+  return `#!/usr/bin/env node
+'use strict';
+/* GSD-managed Cline PreToolUse hook — gsd-core issue #787.
+ * Protocol: JSON on stdin -> JSON decision on stdout.
+ * Honored fields: { cancel, errorMessage, contextModification }.
+ * Fails open: any error allows the operation. */
+let raw = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (c) => { raw += c; });
+process.stdin.on('end', () => {
+  const allow = () => process.stdout.write(JSON.stringify({ cancel: false }));
+  let input;
+  try { input = JSON.parse(raw || '{}'); } catch { return allow(); }
+  try {
+    const tool = String(
+      input.toolName || input.tool_name || input.tool ||
+      (input.toolInput && input.toolInput.name) || (input.tool_input && input.tool_input.name) || ''
+    ).toLowerCase();
+    const isWrite = /write|edit|replace|create|delete|remove|append|apply|patch|insert|mkdir/.test(tool);
+    // Collect only PATH-bearing field values (not free-form content), so a doc
+    // that merely mentions ".planning/" in its body is never falsely blocked.
+    const paths = [];
+    const PATH_KEY = /^(path|file|file_?path|filepath|target_?path|target|dir|directory|uri|filename)$/i;
+    const walk = (v, depth) => {
+      if (depth > 5 || paths.length > 64) return;
+      if (Array.isArray(v)) { for (const x of v) walk(x, depth + 1); return; }
+      if (v && typeof v === 'object') {
+        for (const k of Object.keys(v)) {
+          const val = v[k];
+          if (typeof val === 'string' && PATH_KEY.test(k)) paths.push(val);
+          else walk(val, depth + 1);
+        }
+      }
+    };
+    walk(input, 0);
+    const isPlanningPath = (s) => /(^|[\\\\/])\\.planning([\\\\/]|$)/.test(s);
+    if (isWrite && paths.some(isPlanningPath)) {
+      return process.stdout.write(JSON.stringify({
+        cancel: true,
+        errorMessage:
+          'GSD: .planning/ artifacts are managed by GSD workflows. Edit them only through a /gsd-* command, not directly.',
+      }));
+    }
+  } catch { /* fall through to allow */ }
+  return allow();
+});
+`;
+}
+
+/**
+ * Merge the GSD AGENTS.md block into an existing file (or create it), preserving
+ * any user content. Mirrors mergeCopilotInstructions: marker-delimited, idempotent.
+ */
+function mergeGsdAgentsMd(filePath, gsdContent) {
+  const gsdBlock = GSD_AGENTS_MD_MARKER + '\n' + gsdContent.trim() + '\n' + GSD_AGENTS_MD_CLOSE_MARKER;
+
+  if (!fs.existsSync(filePath)) {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, gsdBlock + '\n');
+    return;
+  }
+
+  const existing = fs.readFileSync(filePath, 'utf8');
+  const openIndex = existing.indexOf(GSD_AGENTS_MD_MARKER);
+  const closeIndex = existing.indexOf(GSD_AGENTS_MD_CLOSE_MARKER);
+
+  if (openIndex !== -1 && closeIndex !== -1) {
+    const before = existing.substring(0, openIndex).trimEnd();
+    const after = existing.substring(closeIndex + GSD_AGENTS_MD_CLOSE_MARKER.length).trimStart();
+    let newContent = '';
+    if (before) newContent += before + '\n\n';
+    newContent += gsdBlock;
+    if (after) newContent += '\n\n' + after;
+    newContent += '\n';
+    fs.writeFileSync(filePath, newContent);
+    return;
+  }
+
+  fs.writeFileSync(filePath, existing.trimEnd() + '\n\n' + gsdBlock + '\n');
+}
+
+/**
+ * Strip the GSD block from AGENTS.md content. Returns null if the file became
+ * empty (was GSD-only), the unchanged content if no markers were found, or the
+ * cleaned content otherwise.
+ */
+function stripGsdFromAgentsMd(content) {
+  const openIndex = content.indexOf(GSD_AGENTS_MD_MARKER);
+  const closeIndex = content.indexOf(GSD_AGENTS_MD_CLOSE_MARKER);
+  if (openIndex !== -1 && closeIndex !== -1) {
+    const before = content.substring(0, openIndex).trimEnd();
+    const after = content.substring(closeIndex + GSD_AGENTS_MD_CLOSE_MARKER.length).trimStart();
+    const cleaned = (before + (before && after ? '\n\n' : '') + after).trim();
+    if (!cleaned) return null;
+    return cleaned + '\n';
+  }
+  return content;
+}
+
+/**
+ * Write the full Cline runtime artifact set (directory-form rules + PreToolUse
+ * hook) into targetDir, migrating a legacy single-file `.clinerules` if present.
+ * For global installs, also merge the cross-tool ~/.agents/AGENTS.md target.
+ *
+ * Returns the list of manifest-relative paths written under targetDir (so the
+ * caller can hash-track them).
+ */
+function writeClineArtifacts(targetDir, isGlobalInstall) {
+  const written = [];
+  const clinerulesDir = path.join(targetDir, '.clinerules');
+
+  // Migrate a pre-#787 single-file `.clinerules` — a path cannot be both a
+  // file and a directory, so the legacy file must be removed first. The legacy
+  // file is GSD-authored (the installer wrote its full contents with no user
+  // merge surface), so replacing it with the newer directory form is the
+  // intended upgrade. Use lstat so a symlink is unlinked in place rather than
+  // followed (which would write GSD files through the link into an external dir).
+  try {
+    if (fs.existsSync(clinerulesDir)) {
+      const st = fs.lstatSync(clinerulesDir);
+      if (st.isFile() || st.isSymbolicLink()) {
+        fs.unlinkSync(clinerulesDir);
+        console.log(`  ${green}✓${reset} Migrated legacy .clinerules to directory form`);
+      }
+    }
+  } catch { /* best-effort migration */ }
+
+  fs.mkdirSync(clinerulesDir, { recursive: true });
+  fs.writeFileSync(path.join(clinerulesDir, 'gsd.md'), buildClineRulesBody());
+  written.push('.clinerules/gsd.md');
+  console.log(`  ${green}✓${reset} Wrote .clinerules/gsd.md`);
+
+  const hooksDir = path.join(clinerulesDir, 'hooks');
+  fs.mkdirSync(hooksDir, { recursive: true });
+  const hookPath = path.join(hooksDir, 'PreToolUse');
+  fs.writeFileSync(hookPath, buildClinePreToolUseHook());
+  try { fs.chmodSync(hookPath, 0o755); } catch { /* Windows: hooks unsupported anyway */ }
+  written.push('.clinerules/hooks/PreToolUse');
+  console.log(`  ${green}✓${reset} Wrote .clinerules/hooks/PreToolUse`);
+
+  // Global cross-tool instruction target. Cline reads ~/.agents/AGENTS.md
+  // (docs.cline.bot/customization/cline-rules). Merge-safe so we never clobber
+  // a user's or another tool's AGENTS.md. Tracked via markers (like copilot),
+  // not the per-configDir manifest, since it lives outside configDir.
+  if (isGlobalInstall) {
+    try {
+      const agentsPath = path.join(os.homedir(), '.agents', 'AGENTS.md');
+      mergeGsdAgentsMd(agentsPath, buildClineAgentsMdBody());
+      console.log(`  ${green}✓${reset} Merged GSD instructions into ~/.agents/AGENTS.md`);
+    } catch (err) {
+      console.warn(`  ${yellow}⚠${reset} Could not write ~/.agents/AGENTS.md: ${err.message}`);
+    }
+  }
+
+  return written;
+}
+
+/**
+ * #786 — Build the GSD-managed GitHub Copilot lifecycle hook config object.
+ *
+ * Returns the verbatim JSON shape Copilot CLI expects:
+ *   { version: 1, hooks: { sessionStart: [ <hook entry> ] } }
+ *
+ * The sessionStart entry is a `command` hook whose `bash`/`powershell` bodies
+ * run inline (no external script file), so the config can never reference a
+ * hook script that the installer did not also install — it is self-contained
+ * by construction. The command is advisory-only (always exits 0) and orients
+ * the agent toward the project's GSD planning state at session start.
+ *
+ * @returns {object} Copilot hooks-configuration object
+ */
+function buildCopilotHookConfig() {
+  return {
+    version: 1,
+    hooks: {
+      sessionStart: [
+        {
+          type: 'command',
+          bash: GSD_COPILOT_SESSION_HOOK_BASH,
+          powershell: GSD_COPILOT_SESSION_HOOK_PWSH,
+          timeoutSec: 10,
+        },
+      ],
+    },
+  };
+}
+
+/**
+ * #786 — Write the GSD-managed Copilot lifecycle hook config under the runtime
+ * config dir (`<targetDir>/hooks/gsd-session.json`). For local installs
+ * targetDir is `.github` (→ `.github/hooks/`); for global installs it is
+ * `~/.copilot` (→ `~/.copilot/hooks/`) — both are valid Copilot hook locations.
+ *
+ * The managed file is fully owned by GSD, so it is overwritten wholesale on
+ * every install (idempotent). User-authored sibling `*.json` hook files in the
+ * same directory are untouched.
+ *
+ * @param {string} targetDir - The Copilot config dir
+ * @returns {string} The path the hook config was written to
+ */
+function writeCopilotHookConfig(targetDir) {
+  const hooksDir = path.join(targetDir, 'hooks');
+  fs.mkdirSync(hooksDir, { recursive: true });
+  const hookPath = path.join(hooksDir, GSD_COPILOT_HOOK_FILE);
+  fs.writeFileSync(hookPath, JSON.stringify(buildCopilotHookConfig(), null, 2) + '\n');
+  return hookPath;
+}
+
 /**
  * Generate config.toml and per-agent .toml files for Codex.
  * Reads agent .md files from source, extracts metadata, writes .toml configs.
@@ -7063,10 +7149,14 @@ function uninstall(isGlobal, runtime = 'claude') {
   const isCodebuddy = runtime === 'codebuddy';
   const dirName = getDirName(runtime);
 
-  // Get the target directory based on runtime and install type
+  // Get the target directory based on runtime and install type. Cline local
+  // installs write to the project root (.clinerules/ lives at the root, not in
+  // a .cline/ subdir), mirroring the install() path resolution (#787).
   const targetDir = isGlobal
-    ? getGlobalDir(runtime, explicitConfigDir)
-    : path.join(process.cwd(), dirName);
+    ? getGlobalConfigDir(runtime, explicitConfigDir)
+    : runtime === 'cline'
+      ? process.cwd()
+      : path.join(process.cwd(), dirName);
 
   const locationLabel = isGlobal
     ? targetDir.replace(os.homedir(), '~')
@@ -7088,6 +7178,24 @@ function uninstall(isGlobal, runtime = 'claude') {
   if (runtime === 'codebuddy') runtimeLabel = 'CodeBuddy';
 
   console.log(`  Uninstalling GSD from ${cyan}${runtimeLabel}${reset} at ${cyan}${locationLabel}${reset}\n`);
+
+  // #786: AGENTS.md lives at the repo root (outside targetDir) for local Copilot
+  // installs, so its cleanup must run even when .github (targetDir) was already
+  // removed — i.e. BEFORE the "target directory missing" early-return below.
+  if (isCopilot && !isGlobal) {
+    const agentsMdPath = path.join(process.cwd(), 'AGENTS.md');
+    if (fs.existsSync(agentsMdPath)) {
+      const content = fs.readFileSync(agentsMdPath, 'utf8');
+      const cleaned = stripGsdFromCopilotInstructions(content);
+      if (cleaned === null) {
+        fs.unlinkSync(agentsMdPath);
+        console.log(`  ${green}✓${reset} Removed AGENTS.md (was GSD-only)`);
+      } else if (cleaned !== content) {
+        fs.writeFileSync(agentsMdPath, cleaned);
+        console.log(`  ${green}✓${reset} Cleaned GSD section from AGENTS.md`);
+      }
+    }
+  }
 
   // Check if target directory exists
   if (!fs.existsSync(targetDir)) {
@@ -7165,6 +7273,72 @@ function uninstall(isGlobal, runtime = 'claude') {
         removedCount++;
         console.log(`  ${green}✓${reset} Cleaned GSD section from copilot-instructions.md`);
       }
+    }
+
+    // #786: remove the GSD-managed Copilot lifecycle hook config and prune the
+    // hooks dir if we left it empty.
+    const hookPath = path.join(targetDir, 'hooks', GSD_COPILOT_HOOK_FILE);
+    if (fs.existsSync(hookPath)) {
+      fs.unlinkSync(hookPath);
+      removedCount++;
+      console.log(`  ${green}✓${reset} Removed Copilot lifecycle hook (${GSD_COPILOT_HOOK_FILE})`);
+      try {
+        const hooksDir = path.join(targetDir, 'hooks');
+        if (fs.existsSync(hooksDir) && fs.readdirSync(hooksDir).length === 0) {
+          fs.rmdirSync(hooksDir);
+        }
+      } catch { /* non-fatal: leave a non-empty/locked hooks dir in place */ }
+    }
+    // Note: AGENTS.md (repo root) is cleaned earlier, before the targetDir
+    // existence early-return, since it lives outside targetDir (#786).
+  }
+
+  // 1b-cline. Non-layout Cline side-effects (issue #787): remove the
+  // directory-form rules + PreToolUse hook, and strip the GSD block from the
+  // global cross-tool ~/.agents/AGENTS.md target.
+  if (runtime === 'cline') {
+    const clinerulesDir = path.join(targetDir, '.clinerules');
+    for (const rel of ['gsd.md', path.join('hooks', 'PreToolUse')]) {
+      const p = path.join(clinerulesDir, rel);
+      try {
+        if (fs.existsSync(p)) {
+          fs.unlinkSync(p);
+          removedCount++;
+        }
+      } catch { /* best-effort */ }
+    }
+    // Also remove a legacy single-file .clinerules left by pre-#787 installs.
+    try {
+      if (fs.existsSync(clinerulesDir) && fs.statSync(clinerulesDir).isFile()) {
+        fs.unlinkSync(clinerulesDir);
+        removedCount++;
+      }
+    } catch { /* best-effort */ }
+    // Prune now-empty GSD-created directories (leave any user-added rule files).
+    for (const dir of [path.join(clinerulesDir, 'hooks'), clinerulesDir]) {
+      try {
+        if (fs.existsSync(dir) && fs.statSync(dir).isDirectory() && fs.readdirSync(dir).length === 0) {
+          fs.rmdirSync(dir);
+        }
+      } catch { /* best-effort */ }
+    }
+    if (isGlobal) {
+      const agentsPath = path.join(os.homedir(), '.agents', 'AGENTS.md');
+      try {
+        if (fs.existsSync(agentsPath)) {
+          const content = fs.readFileSync(agentsPath, 'utf8');
+          const cleaned = stripGsdFromAgentsMd(content);
+          if (cleaned === null) {
+            fs.unlinkSync(agentsPath);
+            removedCount++;
+            console.log(`  ${green}✓${reset} Removed ~/.agents/AGENTS.md (was GSD-only)`);
+          } else if (cleaned !== content) {
+            fs.writeFileSync(agentsPath, cleaned);
+            removedCount++;
+            console.log(`  ${green}✓${reset} Cleaned GSD section from ~/.agents/AGENTS.md`);
+          }
+        }
+      } catch { /* best-effort */ }
     }
   }
 
@@ -7366,8 +7540,11 @@ function uninstall(isGlobal, runtime = 'claude') {
     }
 
     // Remove GSD hooks from settings — per-hook granularity to preserve
-    // user hooks that share an entry with a GSD hook (#1755 followup)
-    for (const eventName of ['SessionStart', 'PostToolUse', 'AfterTool', 'PreToolUse', 'BeforeTool']) {
+    // user hooks that share an entry with a GSD hook (#1755 followup).
+    // Includes the 3 Qwen-only events added in #788 (SubagentStop, Stop,
+    // PreCompact) — safe to iterate for all runtimes; non-Qwen installs
+    // simply find no entries and skip.
+    for (const eventName of ['SessionStart', 'PostToolUse', 'AfterTool', 'PreToolUse', 'BeforeTool', 'SubagentStop', 'Stop', 'PreCompact']) {
       if (settings.hooks && settings.hooks[eventName]) {
         const before = JSON.stringify(settings.hooks[eventName]);
         settings.hooks[eventName] = settings.hooks[eventName]
@@ -7578,7 +7755,7 @@ function configureOpencodePermissions(isGlobal = true, configDir = null) {
   // For local installs, use ./.opencode/
   // For global installs, use ~/.config/opencode/
   const opencodeConfigDir = configDir || (isGlobal
-    ? getGlobalDir('opencode', explicitConfigDir)
+    ? getGlobalConfigDir('opencode', explicitConfigDir)
     : path.join(process.cwd(), '.opencode'));
   // Ensure config directory exists
   fs.mkdirSync(opencodeConfigDir, { recursive: true });
@@ -7658,7 +7835,7 @@ function configureKiloPermissions(isGlobal = true, configDir = null) {
   // For local installs, use ./.kilo/
   // For global installs, use ~/.config/kilo/
   const kiloConfigDir = configDir || (isGlobal
-    ? getGlobalDir('kilo', explicitConfigDir)
+    ? getGlobalConfigDir('kilo', explicitConfigDir)
     : path.join(process.cwd(), '.kilo'));
   // Ensure config directory exists
   fs.mkdirSync(kiloConfigDir, { recursive: true });
@@ -7932,11 +8109,15 @@ function writeManifest(configDir, runtime = 'claude', options = {}) {
       }
     }
   }
-  // Track .clinerules file in manifest for Cline installs
+  // Track Cline directory-form artifacts in the manifest (issue #787): the
+  // rules file and the PreToolUse hook. (~/.agents/AGENTS.md is tracked via its
+  // marker block, not the per-configDir manifest, since it lives outside it.)
   if (isCline) {
-    const clinerulesDest = path.join(configDir, '.clinerules');
-    if (fs.existsSync(clinerulesDest)) {
-      manifest.files['.clinerules'] = fileHash(clinerulesDest);
+    for (const rel of ['.clinerules/gsd.md', '.clinerules/hooks/PreToolUse']) {
+      const dest = path.join(configDir, rel);
+      if (fs.existsSync(dest)) {
+        manifest.files[rel] = fileHash(dest);
+      }
     }
   }
 
@@ -8339,7 +8520,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   // Cline local installs write to the project root (like Claude Code) — .clinerules
   // lives at the root, not inside a .cline/ subdirectory.
   const targetDir = isGlobal
-    ? getGlobalDir(runtime, explicitConfigDir)
+    ? getGlobalConfigDir(runtime, explicitConfigDir)
     : isCline
       ? process.cwd()
       : path.join(process.cwd(), dirName);
@@ -8766,6 +8947,22 @@ function install(isGlobal, runtime = 'claude', options = {}) {
             .filter(f => f.startsWith('gsd-') && f.endsWith('.md')).length;
           if (cmdCount > 0) {
             console.log(`  ${green}✓${reset} Installed ${cmdCount} commands to commands/`);
+          } else {
+            failures.push('commands/gsd-*');
+          }
+        } else {
+          failures.push('commands/gsd-*');
+        }
+      }
+
+      // Cursor only: also report the commands/ output (#785 — Cursor 1.6 slash commands)
+      if (isCursor) {
+        const commandsDir = path.join(targetDir, 'commands');
+        if (fs.existsSync(commandsDir)) {
+          const cmdCount = fs.readdirSync(commandsDir)
+            .filter(f => f.startsWith('gsd-') && f.endsWith('.md')).length;
+          if (cmdCount > 0) {
+            console.log(`  ${green}✓${reset} Installed ${cmdCount} slash commands to commands/`);
           } else {
             failures.push('commands/gsd-*');
           }
@@ -9631,8 +9828,24 @@ function install(isGlobal, runtime = 'claude', options = {}) {
       const template = fs.readFileSync(templatePath, 'utf8');
       mergeCopilotInstructions(instructionsPath, template);
       console.log(`  ${green}✓${reset} Generated copilot-instructions.md`);
+      // #786: also emit AGENTS.md, which Copilot CLI reads as primary
+      // instructions from the repository root. AGENTS.md is a repo-root concept
+      // (no documented user-scope home), so emit it only for local installs;
+      // global scope is already covered by ~/.copilot/copilot-instructions.md.
+      if (!isGlobal) {
+        const agentsMdPath = path.join(process.cwd(), 'AGENTS.md');
+        mergeCopilotInstructions(agentsMdPath, template);
+        console.log(`  ${green}✓${reset} Generated AGENTS.md`);
+      }
     }
-    // Copilot: no settings.json, no hooks, no statusline (like Codex)
+    // #786: emit a self-contained Copilot lifecycle hook (sessionStart). Copilot
+    // command hooks run inline bash/powershell, so this needs no separate hook
+    // script and cannot dangle. Repo scope → .github/hooks/, user → ~/.copilot/hooks/.
+    // The hook is a required install artifact, so a write failure is fatal (it
+    // propagates) rather than silently producing a "successful" install missing
+    // the feature.
+    writeCopilotHookConfig(targetDir);
+    console.log(`  ${green}✓${reset} Configured Copilot lifecycle hook (sessionStart)`);
     persistActiveProfileMarker();
     return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir };
   }
@@ -9644,22 +9857,13 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   }
 
   if (configIntent.installSurface === 'cline-rules') {
-    // Cline uses .clinerules — generate a rules file with GSD system instructions
-    const clinerulesDest = path.join(targetDir, '.clinerules');
-    const clinerules = [
-      '# GSD Core — Git. Ship. Done.',
-      '',
-      '- GSD workflows live in `gsd-core/workflows/`. Load the relevant workflow when',
-      '  the user runs a `/gsd-*` command.',
-      '- GSD agents live in `agents/`. Use the matching agent when spawning subagents.',
-      '- GSD tools are at `gsd-core/bin/gsd-tools.cjs`. Run with `node`.',
-      '- Planning artifacts live in `.planning/`. Never edit them outside a GSD workflow.',
-      '- Do not apply GSD workflows unless the user explicitly asks for them.',
-      '- When a GSD command triggers a deliverable (feature, fix, docs), offer the next',
-      '  step to the user using Cline\'s ask_user tool after completing it.',
-    ].join('\n') + '\n';
-    fs.writeFileSync(clinerulesDest, clinerules);
-    console.log(`  ${green}✓${reset} Wrote .clinerules`);
+    // Cline uses the `.clinerules/` directory form (issue #787): GSD rules live
+    // at .clinerules/gsd.md and a PreToolUse lifecycle hook at
+    // .clinerules/hooks/PreToolUse. Global installs also get ~/.agents/AGENTS.md.
+    writeClineArtifacts(targetDir, isGlobal);
+    // Re-run the manifest pass: these artifacts are written *after* the earlier
+    // writeManifest() call, so a second pass is needed to hash-track them.
+    writeManifest(targetDir, runtime, { mode: _effectiveInstallMode });
     persistActiveProfileMarker();
     return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir };
   }
@@ -10163,6 +10367,52 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     } else if (!hasPhaseBoundaryHook && !phaseBoundaryCommand) {
       console.warn(`  ${yellow}⚠${reset}  Skipped phase boundary hook — Bash executable path unavailable (#3393)`);
     }
+
+    // ── Qwen-only extended hook events (#788) ────────────────────────────────
+    // Qwen Code exposes 15 hook events — a superset of Claude Code.  Three
+    // additional events are registered for Qwen installs:
+    //   SubagentStop  — subagent lifecycle completion (context headroom tracking)
+    //   Stop          — model stop / final-response moment (context headroom)
+    //   PreCompact    — fires before conversation compaction (most critical
+    //                   moment to surface context headroom warnings)
+    //
+    // Wire gsd-context-monitor to all three — the same hook already used for
+    // PostToolUse — so no new hook files are needed.
+    //
+    // Note: UserPromptSubmit is NOT wired here.  That event carries the raw
+    // user prompt text, not a tool invocation, so gsd-prompt-guard (which
+    // exits unless tool_name is Write/Edit) would be a silent no-op.  A
+    // dedicated handler for UserPromptSubmit is deferred to a follow-on issue.
+    //
+    // Guard: isQwen is defined at the top of install() (line ~8254).
+    if (isQwen) {
+      // SubagentStop, Stop, PreCompact — route through the context monitor so
+      // agents get context-headroom warnings at subagent completion, model stop,
+      // and pre-compaction (the most critical moment to surface headroom info).
+      for (const qwenEvent of ['SubagentStop', 'Stop', 'PreCompact']) {
+        if (!settings.hooks[qwenEvent]) {
+          settings.hooks[qwenEvent] = [];
+        }
+        const alreadyHasContextMonitor = settings.hooks[qwenEvent].some(entry =>
+          entry.hooks && entry.hooks.some(h => h.command && h.command.includes('gsd-context-monitor'))
+        );
+        if (!alreadyHasContextMonitor && fs.existsSync(contextMonitorFile) && contextMonitorCommand) {
+          settings.hooks[qwenEvent].push({
+            hooks: [
+              {
+                type: 'command',
+                command: contextMonitorCommand,
+                timeout: 10
+              }
+            ]
+          });
+          console.log(`  ${green}✓${reset} Configured ${qwenEvent} context monitor hook (Qwen Code)`);
+        } else if (!alreadyHasContextMonitor && !fs.existsSync(contextMonitorFile)) {
+          console.warn(`  ${yellow}⚠${reset}  Skipped ${qwenEvent} hook — gsd-context-monitor.js not found at target`);
+        }
+      }
+    }
+    // ── end Qwen-only extended hook events ────────────────────────────────────
   }
 
   // Compute the update-banner hook command alongside the others so
@@ -10675,7 +10925,7 @@ function promptLocation(runtimes) {
   });
 
   const pathExamples = runtimes.map(r => {
-    const globalPath = getGlobalDir(r, explicitConfigDir);
+    const globalPath = getGlobalConfigDir(r, explicitConfigDir);
     return globalPath.replace(os.homedir(), '~');
   }).join(', ');
 
@@ -11049,6 +11299,7 @@ module.exports = {
     computePathPrefix,
     getCodexSkillAdapterHeader,
     convertClaudeCommandToCursorSkill,
+    convertClaudeCommandToCursorCommand,
     convertClaudeAgentToCursorAgent,
     convertClaudeToGeminiMarkdown,
     convertSlashCommandsToGeminiMentions,
@@ -11084,7 +11335,6 @@ module.exports = {
     GSD_CODEX_MARKER,
     CODEX_AGENT_SANDBOX,
     getDirName,
-    getGlobalDir,
     getConfigDirFromHome,
     resolveKiloConfigPath,
     configureKiloPermissions,
@@ -11097,6 +11347,9 @@ module.exports = {
     GSD_COPILOT_INSTRUCTIONS_CLOSE_MARKER,
     mergeCopilotInstructions,
     stripGsdFromCopilotInstructions,
+    GSD_COPILOT_HOOK_FILE,
+    buildCopilotHookConfig,
+    writeCopilotHookConfig,
     convertClaudeToAntigravityContent,
     convertClaudeCommandToAntigravitySkill,
     convertClaudeAgentToAntigravityAgent,
@@ -11116,6 +11369,14 @@ module.exports = {
     convertClaudeAgentToCodebuddyAgent,
     convertClaudeToCliineMarkdown,
     convertClaudeAgentToClineAgent,
+    buildClineRulesBody,
+    buildClineAgentsMdBody,
+    buildClinePreToolUseHook,
+    writeClineArtifacts,
+    mergeGsdAgentsMd,
+    stripGsdFromAgentsMd,
+    GSD_AGENTS_MD_MARKER,
+    GSD_AGENTS_MD_CLOSE_MARKER,
     writeManifest,
     saveLocalPatches,
     reportLocalPatches,
@@ -11175,7 +11436,7 @@ if (require.main === module && !process.env.GSD_TEST_MODE) {
       console.error('Usage: node install.js --skills-root <runtime>');
       process.exit(1);
     }
-    const globalDir = getGlobalDir(runtimeArg, null);
+    const globalDir = getGlobalConfigDir(runtimeArg, null);
     // Hermes nests GSD skills under skills/gsd/ as a single category (#2841).
     // Other runtimes use a flat skills/ root.
     const skillsRoot = runtimeArg === 'hermes'

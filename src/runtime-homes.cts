@@ -61,8 +61,15 @@ export function resolveAntigravityGlobalDir(opts: ResolveAntigravityOpts = {}): 
 /**
  * Return the global config base directory for the given runtime.
  * Respects the same env-var overrides as bin/install.js getGlobalDir().
+ *
+ * @param runtime   - The runtime identifier (e.g. 'claude', 'opencode').
+ * @param explicitDir - If provided and non-empty, returned immediately after
+ *   tilde-expansion, overriding all env-var and default logic. This matches
+ *   the behaviour of bin/install.js getGlobalDir(runtime, explicitDir).
  */
-export function getGlobalConfigDir(runtime: string): string {
+export function getGlobalConfigDir(runtime: string, explicitDir?: string | null): string {
+  if (explicitDir) return expandTilde(explicitDir);
+
   const home = os.homedir();
   const env = process.env as Record<string, string | undefined>;
 
@@ -89,7 +96,9 @@ export function getGlobalConfigDir(runtime: string): string {
 
     // ── Copilot (VS Code) ────────────────────────────────────────────────────
     case 'copilot':
-      return env['COPILOT_CONFIG_DIR'] ? expandTilde(env['COPILOT_CONFIG_DIR']) : path.join(home, '.copilot');
+      if (env['COPILOT_CONFIG_DIR']) return expandTilde(env['COPILOT_CONFIG_DIR']);
+      if (env['COPILOT_HOME']) return expandTilde(env['COPILOT_HOME']);
+      return path.join(home, '.copilot');
 
     // ── Antigravity ──────────────────────────────────────────────────────────
     case 'antigravity':
@@ -128,6 +137,7 @@ export function getGlobalConfigDir(runtime: string): string {
     // ── OpenCode (XDG) ───────────────────────────────────────────────────────
     case 'opencode': {
       if (env['OPENCODE_CONFIG_DIR']) return expandTilde(env['OPENCODE_CONFIG_DIR']);
+      if (env['OPENCODE_CONFIG']) return path.dirname(expandTilde(env['OPENCODE_CONFIG']));
       if (env['XDG_CONFIG_HOME']) return path.join(expandTilde(env['XDG_CONFIG_HOME']), 'opencode');
       return path.join(home, '.config', 'opencode');
     }
@@ -135,6 +145,7 @@ export function getGlobalConfigDir(runtime: string): string {
     // ── Kilo (XDG) ───────────────────────────────────────────────────────────
     case 'kilo': {
       if (env['KILO_CONFIG_DIR']) return expandTilde(env['KILO_CONFIG_DIR']);
+      if (env['KILO_CONFIG']) return path.dirname(expandTilde(env['KILO_CONFIG']));
       if (env['XDG_CONFIG_HOME']) return path.join(expandTilde(env['XDG_CONFIG_HOME']), 'kilo');
       return path.join(home, '.config', 'kilo');
     }
@@ -153,8 +164,17 @@ export function getGlobalConfigDir(runtime: string): string {
  */
 export function getGlobalSkillsBase(runtime: string): string | null {
   if (runtime === 'cline') return null;
+  if (runtime === 'hermes') {
+    const configDir = getGlobalConfigDir(runtime);
+    return path.join(configDir, 'skills', 'gsd');
+  }
+  // Kilo Code discovers global skills from ~/.kilo/skills/ (HOME-relative),
+  // independent of the XDG-based config dir (~/.config/kilo) used for commands.
+  // See: https://kilo.ai/docs/customize/skills
+  // "Global skills are located in the `.kilo` directory within your Home
+  //  directory: ~/.kilo/skills/"
+  if (runtime === 'kilo') return path.join(os.homedir(), '.kilo', 'skills');
   const configDir = getGlobalConfigDir(runtime);
-  if (runtime === 'hermes') return path.join(configDir, 'skills', 'gsd');
   return path.join(configDir, 'skills');
 }
 

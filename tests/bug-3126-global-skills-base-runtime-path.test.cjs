@@ -63,9 +63,10 @@ describe('bug #3126: runtime-homes getGlobalConfigDir — defaults', () => {
     test(`${runtime} default configDir`, () => {
       // Clear all env vars for this runtime
       const envKeys = ['CLAUDE_CONFIG_DIR','CURSOR_CONFIG_DIR','GEMINI_CONFIG_DIR',
-        'CODEX_HOME','COPILOT_CONFIG_DIR','ANTIGRAVITY_CONFIG_DIR','WINDSURF_CONFIG_DIR',
+        'CODEX_HOME','COPILOT_CONFIG_DIR','COPILOT_HOME','ANTIGRAVITY_CONFIG_DIR','WINDSURF_CONFIG_DIR',
         'AUGMENT_CONFIG_DIR','TRAE_CONFIG_DIR','QWEN_CONFIG_DIR','HERMES_HOME',
-        'CODEBUDDY_CONFIG_DIR','CLINE_CONFIG_DIR','OPENCODE_CONFIG_DIR','KILO_CONFIG_DIR',
+        'CODEBUDDY_CONFIG_DIR','CLINE_CONFIG_DIR','OPENCODE_CONFIG_DIR','OPENCODE_CONFIG',
+        'KILO_CONFIG_DIR','KILO_CONFIG',
         'XDG_CONFIG_HOME'];
       const saved = {};
       for (const k of envKeys) { saved[k] = process.env[k]; delete process.env[k]; }
@@ -105,15 +106,19 @@ describe('bug #3126: runtime-homes env-var overrides', () => {
   });
   test('opencode uses XDG_CONFIG_HOME when OPENCODE_CONFIG_DIR absent', () => {
     withEnv('OPENCODE_CONFIG_DIR', undefined, () => {
-      withEnv('XDG_CONFIG_HOME', '/xdg', () => {
-        assert.strictEqual(getGlobalConfigDir('opencode'), path.join('/xdg', 'opencode'));
+      withEnv('OPENCODE_CONFIG', undefined, () => {
+        withEnv('XDG_CONFIG_HOME', '/xdg', () => {
+          assert.strictEqual(getGlobalConfigDir('opencode'), path.join('/xdg', 'opencode'));
+        });
       });
     });
   });
   test('kilo uses XDG_CONFIG_HOME when KILO_CONFIG_DIR absent', () => {
     withEnv('KILO_CONFIG_DIR', undefined, () => {
-      withEnv('XDG_CONFIG_HOME', '/xdg', () => {
-        assert.strictEqual(getGlobalConfigDir('kilo'), path.join('/xdg', 'kilo'));
+      withEnv('KILO_CONFIG', undefined, () => {
+        withEnv('XDG_CONFIG_HOME', '/xdg', () => {
+          assert.strictEqual(getGlobalConfigDir('kilo'), path.join('/xdg', 'kilo'));
+        });
       });
     });
   });
@@ -183,6 +188,110 @@ describe('bug #3126: runtime-homes getGlobalSkillDir', () => {
   });
   test('cline: returns null', () => {
     assert.strictEqual(getGlobalSkillDir('cline', 'gsd-executor'), null);
+  });
+});
+
+describe('getGlobalConfigDir — explicitDir override and opencode/kilo file-path precedence', () => {
+  // ── explicitDir override ──────────────────────────────────────────────────
+  test('explicitDir absolute path is returned as-is (claude)', () => {
+    assert.strictEqual(getGlobalConfigDir('claude', '/tmp/x'), '/tmp/x');
+  });
+
+  test('explicitDir with tilde is expanded (opencode)', () => {
+    assert.strictEqual(
+      getGlobalConfigDir('opencode', '~/foo'),
+      path.join(os.homedir(), 'foo'),
+    );
+  });
+
+  test('explicitDir wins even when OPENCODE_CONFIG_DIR is also set', () => {
+    withEnv('OPENCODE_CONFIG_DIR', '/should/not/win', () => {
+      assert.strictEqual(getGlobalConfigDir('opencode', '/explicit/wins'), '/explicit/wins');
+    });
+  });
+
+  // ── opencode: OPENCODE_CONFIG file-path step ──────────────────────────────
+  test('opencode: OPENCODE_CONFIG → path.dirname(expandTilde(value))', () => {
+    withEnv('OPENCODE_CONFIG_DIR', undefined, () => {
+      withEnv('XDG_CONFIG_HOME', undefined, () => {
+        withEnv('OPENCODE_CONFIG', '/home/u/cfg/opencode.json', () => {
+          assert.strictEqual(getGlobalConfigDir('opencode'), '/home/u/cfg');
+        });
+      });
+    });
+  });
+
+  test('opencode: OPENCODE_CONFIG_DIR takes precedence over OPENCODE_CONFIG', () => {
+    withEnv('OPENCODE_CONFIG_DIR', '/dir/wins', () => {
+      withEnv('OPENCODE_CONFIG', '/file/loses.json', () => {
+        assert.strictEqual(getGlobalConfigDir('opencode'), '/dir/wins');
+      });
+    });
+  });
+
+  test('opencode: OPENCODE_CONFIG takes precedence over XDG_CONFIG_HOME', () => {
+    withEnv('OPENCODE_CONFIG_DIR', undefined, () => {
+      withEnv('OPENCODE_CONFIG', '/cfg/opencode.json', () => {
+        withEnv('XDG_CONFIG_HOME', '/xdg/should/lose', () => {
+          assert.strictEqual(getGlobalConfigDir('opencode'), '/cfg');
+        });
+      });
+    });
+  });
+
+  test('opencode: default ~/.config/opencode when no env vars set', () => {
+    withEnv('OPENCODE_CONFIG_DIR', undefined, () => {
+      withEnv('OPENCODE_CONFIG', undefined, () => {
+        withEnv('XDG_CONFIG_HOME', undefined, () => {
+          assert.strictEqual(
+            getGlobalConfigDir('opencode'),
+            path.join(os.homedir(), '.config', 'opencode'),
+          );
+        });
+      });
+    });
+  });
+
+  // ── kilo: KILO_CONFIG file-path step ─────────────────────────────────────
+  test('kilo: KILO_CONFIG → path.dirname(expandTilde(value))', () => {
+    withEnv('KILO_CONFIG_DIR', undefined, () => {
+      withEnv('XDG_CONFIG_HOME', undefined, () => {
+        withEnv('KILO_CONFIG', '/home/u/cfg/kilo.json', () => {
+          assert.strictEqual(getGlobalConfigDir('kilo'), '/home/u/cfg');
+        });
+      });
+    });
+  });
+
+  test('kilo: KILO_CONFIG_DIR takes precedence over KILO_CONFIG', () => {
+    withEnv('KILO_CONFIG_DIR', '/dir/wins', () => {
+      withEnv('KILO_CONFIG', '/file/loses.json', () => {
+        assert.strictEqual(getGlobalConfigDir('kilo'), '/dir/wins');
+      });
+    });
+  });
+
+  test('kilo: KILO_CONFIG takes precedence over XDG_CONFIG_HOME', () => {
+    withEnv('KILO_CONFIG_DIR', undefined, () => {
+      withEnv('KILO_CONFIG', '/cfg/kilo.json', () => {
+        withEnv('XDG_CONFIG_HOME', '/xdg/should/lose', () => {
+          assert.strictEqual(getGlobalConfigDir('kilo'), '/cfg');
+        });
+      });
+    });
+  });
+
+  test('kilo: default ~/.config/kilo when no env vars set', () => {
+    withEnv('KILO_CONFIG_DIR', undefined, () => {
+      withEnv('KILO_CONFIG', undefined, () => {
+        withEnv('XDG_CONFIG_HOME', undefined, () => {
+          assert.strictEqual(
+            getGlobalConfigDir('kilo'),
+            path.join(os.homedir(), '.config', 'kilo'),
+          );
+        });
+      });
+    });
   });
 });
 

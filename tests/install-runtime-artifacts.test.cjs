@@ -131,6 +131,31 @@ describe('installRuntimeArtifacts — gemini commands layout', () => {
   });
 });
 
+describe('installRuntimeArtifacts — cursor commands layout (#785)', () => {
+  test('cursor: skills/ AND commands/ both created; commands/gsd-help.md is plain markdown', (t) => {
+    const configDir = createTempDir('gsd-ial-cursor-cmds-');
+    t.after(() => cleanup(configDir));
+
+    installRuntimeArtifacts('cursor', configDir, 'global', RESOLVED_CORE);
+
+    // Existing skills kind still present
+    const skillsDir = path.join(configDir, 'skills');
+    assert.ok(fs.existsSync(skillsDir), 'skills/ must exist');
+    assert.ok(fs.existsSync(path.join(skillsDir, 'gsd-help', 'SKILL.md')),
+      'skills/gsd-help/SKILL.md must exist');
+
+    // New commands kind (#785)
+    const commandsDir = path.join(configDir, 'commands');
+    assert.ok(fs.existsSync(commandsDir), 'commands/ must exist (#785)');
+    assert.ok(fs.existsSync(path.join(commandsDir, 'gsd-help.md')),
+      'commands/gsd-help.md must exist (#785)');
+
+    // Cursor commands are plain markdown — no YAML frontmatter
+    const helpContent = fs.readFileSync(path.join(commandsDir, 'gsd-help.md'), 'utf8');
+    assert.ok(!helpContent.startsWith('---'), 'cursor commands must not start with YAML frontmatter');
+  });
+});
+
 describe('installRuntimeArtifacts — cline no-op', () => {
   test('cline: no kinds — call succeeds, no dirs created', (t) => {
     const configDir = createTempDir('gsd-ial-cline-');
