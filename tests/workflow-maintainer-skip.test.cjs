@@ -29,6 +29,18 @@ describe('PR policy workflow maintainer carve-outs', () => {
     assertMaintainerSkip(workflow);
   });
 
+  test('draft PR auto-close triggers on pull_request_target so fork PRs cannot bypass it', () => {
+    const workflow = readWorkflow('.github/workflows/close-draft-prs.yml');
+
+    // A bare `pull_request` trigger hands fork PRs (how first-time/external
+    // contributors contribute) a read-only GITHUB_TOKEN, so the close/comment
+    // API calls 403 and the draft PR survives — bypassing the auto-close.
+    // `pull_request_target` runs in the base-repo context with a write-capable
+    // token. Guard against a regression back to the bypassable trigger.
+    assert.match(workflow, /^\s*pull_request_target:/m);
+    assert.doesNotMatch(workflow, /^\s*pull_request:\s*$/m);
+  });
+
   test('PR target validator does not run for maintainer-authored PRs', () => {
     const workflow = readWorkflow('.github/workflows/pr-target-validator.yml');
 
