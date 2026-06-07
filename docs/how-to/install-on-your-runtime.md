@@ -42,6 +42,22 @@ Skills land in `~/.claude/`. Commands appear as `/gsd-*` slash commands in your 
 CLAUDE_CONFIG_DIR=~/.claude-alt npx @opengsd/gsd-core@latest --claude --global
 ```
 
+**Hook coverage**
+
+GSD registers the following Claude Code hook events automatically on install:
+
+| Event | Hook | Purpose |
+|---|---|---|
+| `SessionStart` | `gsd-check-update.js`, `gsd-session-state.sh` | Update check, session orientation |
+| `PostToolUse` | `gsd-context-monitor.js`, `gsd-read-injection-scanner.js`, `gsd-phase-boundary.sh`, `gsd-graphify-update.sh` | Context monitoring, read-time scan, phase boundary detection |
+| `PreToolUse` | `gsd-prompt-guard.js`, `gsd-read-guard.js`, `gsd-workflow-guard.js`, `gsd-worktree-path-guard.js`, `gsd-validate-commit.sh` | Prompt guard, read-before-edit, workflow + worktree safety, commit validation |
+| `SubagentStop` | `gsd-context-monitor.js` | Context headroom tracking after subagent completion |
+| `Stop` | `gsd-context-monitor.js` | Context headroom tracking before model stop |
+| `PreCompact` | `gsd-context-monitor.js` | Context awareness before conversation compaction |
+| `FileChanged` (matcher: `config.json`) | `gsd-config-reload.js` | Hot-reloads `.planning/config.json` context mid-session when you edit your GSD config — no session restart required |
+
+The `FileChanged` hook is always-on and a no-op when `.planning/config.json` does not exist in the project. Editing that file while a session is running injects an `additionalContext` summary of the new configuration so the agent picks up model overrides, workflow toggles, and hook settings immediately.
+
 ---
 
 ### Claude Code — native plugin install
