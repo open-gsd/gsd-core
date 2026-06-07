@@ -82,7 +82,7 @@ const PROFILES = [
     name: 'gsd-ai-researcher',
     description:
       'Researches a chosen AI framework\'s official docs to produce implementation-ready guidance — best practices, syntax, core patterns, and pitfalls distilled for the specific use case. Writes the Framework Quick Reference and Implementation Guidance sections of AI-SPEC.md. Spawned by /gsd:ai-integration-phase orchestrator.',
-    color: '"#34D399"',
+    color: 'green',
     tools:
       'Read, Write, Edit, Bash, Grep, Glob, WebFetch, WebSearch, mcp__context7__*',
     requiredIncludes: [
@@ -99,7 +99,7 @@ const PROFILES = [
     name: 'gsd-domain-researcher',
     description:
       'Researches the business domain and real-world application context of the AI system being built. Surfaces domain expert evaluation criteria, industry-specific failure modes, regulatory context, and what "good" looks like for practitioners in this field — before the eval-planner turns it into measurable rubrics. Spawned by /gsd:ai-integration-phase orchestrator.',
-    color: '"#A78BFA"',
+    color: 'purple',
     tools:
       'Read, Write, Edit, Bash, Grep, Glob, WebSearch, WebFetch, mcp__context7__*',
     requiredIncludes: [
@@ -115,7 +115,7 @@ const PROFILES = [
     name: 'gsd-ui-researcher',
     description:
       'Produces UI-SPEC.md design contract for frontend phases. Reads upstream artifacts, detects design system state, asks only unanswered questions. Spawned by /gsd:ui-phase orchestrator.',
-    color: '"#E879F9"',
+    color: 'purple',
     tools:
       'Read, Write, Edit, Bash, Grep, Glob, WebSearch, WebFetch, mcp__context7__*, mcp__firecrawl__*, mcp__exa__*, mcp__tavily__*, mcp__ref__*, mcp__jina__*',
     requiredIncludes: [
