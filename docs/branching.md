@@ -167,6 +167,7 @@ When `next` has accumulated enough work to ship a new minor/major.
    - Each fix should also be PR'd to `next` so the next release has it too
      (or wait for the auto-back-merge after finalize)
    - Trigger `rc` action to publish RC builds: 1.28.0-rc.1, rc.2, ...
+   - Each `rc` run also prints a non-destructive preview of the curated `## [X.Y.0]` CHANGELOG section in the Actions job summary — rendered from the `.changeset/` fragments without consuming them — so you can review the upcoming release notes during RC testing.
 
 4. When stable: trigger `finalize`.
    - Publishes to npm @latest

@@ -536,6 +536,7 @@ function loadConfig(cwd: string, options: Record<string, unknown> = {}): Record<
       effort: (parsed['effort']) || null,
       fast_mode: (parsed['fast_mode']) || null,
       agent_skills: (parsed['agent_skills']) || {},
+      agent_skills_security: (parsed['agent_skills_security']) || null,
       manager: (parsed['manager']) || {},
       response_language: get('response_language') || null,
       claude_md_path: get('claude_md_path') || null,
@@ -1085,37 +1086,40 @@ function extractCurrentMilestone(content: string, cwd?: string): string {
 
   const sectionStart = selected.index;
 
-  const sectionMatch = selected;
-  const headingLevel = (sectionMatch[1].match(/^(#{1,3})\s/) ?? ['', '#'])[1].length;
-  const restContent = content.slice(sectionStart + sectionMatch[0].length);
-  const nextMilestonePattern = new RegExp(
-    `^#{1,${headingLevel}}\\s+(?!Phase\\s+\\S)(?:.*v\\d+\\.\\d+|✅|📋|🚧)`,
-    'i'
-  );
-
-  let sectionEnd = content.length;
-  let fenceChar: string | null = null;
-  let fenceLen = 0;
-  let charOffset = 0;
-  for (const line of restContent.split('\n')) {
-    const fenceMatch = line.match(/^\s{0,3}((?:`{3,}|~{3,}))(.*)/);
-    if (fenceMatch) {
-      const char = fenceMatch[1][0];
-      const len = fenceMatch[1].length;
-      const trailing = fenceMatch[2] || '';
-      if (!fenceChar) {
-        fenceChar = char;
-        fenceLen = len;
-      } else if (char === fenceChar && len >= fenceLen && /^\s*$/.test(trailing)) {
-        fenceChar = null;
-        fenceLen = 0;
+  const computeSectionEnd = (headingText: string, headingStart: number): number => {
+    const level = (headingText.match(/^(#{1,3})\s/) ?? ['', '#'])[1].length;
+    const rest = content.slice(headingStart + headingText.length);
+    const stopPattern = new RegExp(
+      `^#{1,${level}}\\s+(?!Phase\\s+\\S)(?:.*v\\d+\\.\\d+|✅|📋|🚧)`,
+      'i',
+    );
+    let end = content.length;
+    let fc: string | null = null;
+    let fl = 0;
+    let off = 0;
+    for (const line of rest.split('\n')) {
+      const fm = line.match(/^\s{0,3}((?:`{3,}|~{3,}))(.*)/);
+      if (fm) {
+        const ch = fm[1][0];
+        const ln = fm[1].length;
+        const trailing = fm[2] || '';
+        if (!fc) {
+          fc = ch;
+          fl = ln;
+        } else if (ch === fc && ln >= fl && /^\s*$/.test(trailing)) {
+          fc = null;
+          fl = 0;
+        }
+      } else if (!fc && stopPattern.test(line)) {
+        end = headingStart + headingText.length + off;
+        break;
       }
-    } else if (!fenceChar && nextMilestonePattern.test(line)) {
-      sectionEnd = sectionStart + sectionMatch[0].length + charOffset;
-      break;
+      off += line.length + 1;
     }
-    charOffset += line.length + 1;
-  }
+    return end;
+  };
+
+  const sectionEnd = computeSectionEnd(selected[0], sectionStart);
 
   const anyMilestonePattern = /^#{1,3}\s+(?!Phase\s+\S)(?:.*v\d+\.\d+|✅|📋|🚧)/im;
   const firstMilestoneMatch = content.match(anyMilestonePattern);
@@ -1125,12 +1129,46 @@ function extractCurrentMilestone(content: string, cwd?: string): string {
   const beforeMilestones = content.slice(0, preambleCutoff);
   const currentSection = content.slice(sectionStart, sectionEnd);
 
+  // Multi-milestone roadmaps split each added milestone across two version-bearing
+  // headings: a `## Phases` checklist subsection (early) and a dedicated
+  // `## Milestone … (Phase Details)` section (late) holding the `### Phase N:`
+  // detail headers. The scope window above stops at the next version-bearing
+  // heading — the current milestone's OWN Phase Details heading — leaving those
+  // detail headers outside `currentSection`. Append that section so phase
+  // resolution and counting see the current milestone's phases. Anchor the lookup
+  // to the SELECTED heading's specific version token (boundary-aware, so a
+  // `v3.0` state does not match a `v3.0-A` sub-milestone) so sibling milestones
+  // that share a version prefix do not cross-pollinate. (#730)
+  const selectedVersionToken = selected[1].match(
+    /v\d+(?:\.\d+)+(?:[-.][A-Za-z0-9]+)*/i,
+  )?.[0];
+  const detailsVersionBoundary = selectedVersionToken
+    ? new RegExp(`${escapeRegex(selectedVersionToken)}(?![\\w.-])`, 'i')
+    : null;
+  let detailsSection = '';
+  const detailsMatch = allMatches.find(
+    (m) =>
+      /\(Phase\s+Details\)/i.test(m[1]) &&
+      !isClosed(m[1]) &&
+      (!detailsVersionBoundary || detailsVersionBoundary.test(m[1])) &&
+      (m.index ?? 0) >= sectionEnd,
+  );
+  if (detailsMatch) {
+    const detailsStart = detailsMatch.index ?? 0;
+    detailsSection = content.slice(
+      detailsStart,
+      computeSectionEnd(detailsMatch[0], detailsStart),
+    );
+  }
+
   const preamble = beforeMilestones
     .replace(/<details>[\s\S]*?<\/details>/gi, '')
     .replace(/^#{2,4}\s*Phase\s+[\w][\w.-]*\s*:[^\n]*(?:\n(?!#{1,6}\s)[^\n]*)*\n?/gim, '')
     .replace(/^#{1,4}\s*Phase Details\b[^\n]*\n?/gim, '');
 
-  return preamble + currentSection;
+  return detailsSection
+    ? preamble + currentSection + '\n' + detailsSection
+    : preamble + currentSection;
 }
 
 /**
@@ -1553,7 +1591,12 @@ const VALID_GRANULARITIES = new Set(['coarse', 'standard', 'fine']);
 /**
  * Resolve the planning granularity for a phase type (#68).
  */
-function resolveGranularityInternal(cwd: string, phaseType: string | null | undefined): string {
+function resolveGranularityInternal(cwd: string, phaseType: string | null | undefined, override?: string | null): string {
+  if (override !== undefined && override !== null && override !== '') {
+    if (VALID_GRANULARITIES.has(override)) {
+      return override;
+    }
+  }
   const config = loadConfig(cwd);
   const configGranularities = config['granularities'] as Record<string, string> | null | undefined;
   const perPhase = (phaseType && configGranularities && typeof configGranularities === 'object')
@@ -1571,6 +1614,19 @@ function resolveGranularityInternal(cwd: string, phaseType: string | null | unde
     return planningGran as string;
   }
   return 'standard';
+}
+
+/**
+ * Validate a CLI granularity override at the command boundary. Empty/null/undefined
+ * are treated as "no override" (no-op). An invalid non-empty value calls `fail`.
+ */
+function assertValidGranularityOverride(
+  override: string | null | undefined,
+  fail: (msg: string) => never,
+): void {
+  if (override !== undefined && override !== null && override !== '' && !VALID_GRANULARITIES.has(override)) {
+    fail(`invalid granularity '${override}' (valid: ${[...VALID_GRANULARITIES].join(', ')})`);
+  }
 }
 
 /**
@@ -2163,6 +2219,7 @@ export = {
   resolveModelForTier,
   resolveGranularityInternal,
   VALID_GRANULARITIES,
+  assertValidGranularityOverride,
   resolveEffortInternal,
   resolveFastModeInternal,
   resolveEffortForTier,

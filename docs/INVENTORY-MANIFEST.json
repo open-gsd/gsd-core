@@ -1,5 +1,5 @@
 {
-  "generated": "2026-06-06",
+  "generated": "2026-06-07",
   "families": {
     "agents": [
       "gsd-advisor-researcher",
@@ -344,12 +344,15 @@
       "update-context.cjs",
       "validate-command-router.cjs",
       "validate.cjs",
+      "verification-command-router.cjs",
+      "verification.cjs",
       "verify-command-router.cjs",
       "verify.cjs",
       "workstream-inventory-builder.cjs",
       "workstream-inventory.cjs",
       "workstream-name-policy.cjs",
       "workstream.cjs",
+      "worktree-base-ref.cjs",
       "worktree-safety.cjs"
     ],
     "hooks": [

@@ -1158,6 +1158,127 @@ describe('config-set prototype-pollution guard (#663)', () => {
   });
 });
 
+// ─── config-set prototype-pollution guard via dynamic-key prefixes (alert #26) ─
+
+describe('config-set prototype-pollution guard via dynamic-key prefixes (alert #26)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    // Initialise config so there is a config.json to write to.
+    runGsdTools('config-ensure-section', tmpDir);
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('agent_skills.__proto__ is blocked by setConfigValue guard (not schema gate)', () => {
+    const result = runGsdTools('config-set agent_skills.__proto__ somevalue', tmpDir);
+
+    assert.strictEqual(result.success, false, `Expected failure but got: ${result.output}`);
+
+    // Must be the pollution guard, not the schema gate.
+    assert.ok(
+      result.error.includes('prototype pollution guard'),
+      `Expected "prototype pollution guard" in error, got: ${result.error}`,
+    );
+    // No schema-gate message.
+    assert.ok(
+      !result.error.includes('Unknown config key'),
+      `Should not hit schema gate, got: ${result.error}`,
+    );
+
+    // No prototype pollution occurred.
+    assert.strictEqual(({}).somevalue, undefined, 'agent_skills.__proto__: {}.somevalue should be undefined');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(Object.prototype, 'somevalue'), false,
+      'agent_skills.__proto__: Object.prototype should not gain "somevalue"');
+  });
+
+  test('agent_skills.constructor is blocked by setConfigValue guard (not schema gate)', () => {
+    const result = runGsdTools('config-set agent_skills.constructor somevalue', tmpDir);
+
+    assert.strictEqual(result.success, false, `Expected failure but got: ${result.output}`);
+
+    assert.ok(
+      result.error.includes('prototype pollution guard'),
+      `Expected "prototype pollution guard" in error, got: ${result.error}`,
+    );
+    assert.ok(
+      !result.error.includes('Unknown config key'),
+      `Should not hit schema gate, got: ${result.error}`,
+    );
+
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(Object.prototype, 'somevalue'), false,
+      'agent_skills.constructor: Object.prototype should not gain "somevalue"');
+  });
+
+  test('agent_skills.prototype is blocked by setConfigValue guard (not schema gate)', () => {
+    const result = runGsdTools('config-set agent_skills.prototype somevalue', tmpDir);
+
+    assert.strictEqual(result.success, false, `Expected failure but got: ${result.output}`);
+
+    assert.ok(
+      result.error.includes('prototype pollution guard'),
+      `Expected "prototype pollution guard" in error, got: ${result.error}`,
+    );
+    assert.ok(
+      !result.error.includes('Unknown config key'),
+      `Should not hit schema gate, got: ${result.error}`,
+    );
+
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(Object.prototype, 'somevalue'), false,
+      'agent_skills.prototype: Object.prototype should not gain "somevalue"');
+  });
+
+  test('features.__proto__ is blocked by setConfigValue guard (not schema gate)', () => {
+    const result = runGsdTools('config-set features.__proto__ somevalue', tmpDir);
+
+    assert.strictEqual(result.success, false, `Expected failure but got: ${result.output}`);
+
+    assert.ok(
+      result.error.includes('prototype pollution guard'),
+      `Expected "prototype pollution guard" in error, got: ${result.error}`,
+    );
+    assert.ok(
+      !result.error.includes('Unknown config key'),
+      `Should not hit schema gate, got: ${result.error}`,
+    );
+
+    assert.strictEqual(({}).somevalue, undefined, 'features.__proto__: {}.somevalue should be undefined');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(Object.prototype, 'somevalue'), false,
+      'features.__proto__: Object.prototype should not gain "somevalue"');
+  });
+
+  test('review.models.constructor is blocked by setConfigValue guard (not schema gate)', () => {
+    const result = runGsdTools('config-set review.models.constructor somevalue', tmpDir);
+
+    assert.strictEqual(result.success, false, `Expected failure but got: ${result.output}`);
+
+    assert.ok(
+      result.error.includes('prototype pollution guard'),
+      `Expected "prototype pollution guard" in error, got: ${result.error}`,
+    );
+    assert.ok(
+      !result.error.includes('Unknown config key'),
+      `Should not hit schema gate, got: ${result.error}`,
+    );
+
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(Object.prototype, 'somevalue'), false,
+      'review.models.constructor: Object.prototype should not gain "somevalue"');
+  });
+
+  test('positive control: agent_skills.sonnet-coder with valid value succeeds', () => {
+    const result = runGsdTools('config-set agent_skills.sonnet-coder true', tmpDir);
+
+    assert.ok(result.success, `Legitimate agent_skills key rejected unexpectedly: ${result.error}`);
+
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.agent_skills['sonnet-coder'], true,
+      'agent_skills.sonnet-coder should be written to config.json');
+  });
+});
+
 // ─── plan_review.source_grounding + _authority (#22) ─────────────────────────
 
 describe('plan_review.source_grounding and plan_review.source_grounding_authority (#22)', () => {

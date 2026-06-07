@@ -34,6 +34,7 @@ const {
   getRoadmapPhaseInternal,
   extractPhaseToken,
   resolveGranularityInternal,
+  assertValidGranularityOverride,
 } = core;
 import { renderEffortForRuntime, RUNTIMES_WITH_FAST_MODE } from './model-catalog.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -340,11 +341,12 @@ function cmdResolveModel(cwd: string, agentType: string | undefined, raw: boolea
   output(result, raw, model);
 }
 
-function cmdResolveGranularity(cwd: string, phaseType: string | undefined, raw: boolean): void {
+function cmdResolveGranularity(cwd: string, phaseType: string | undefined, raw: boolean, override?: string): void {
   if (!phaseType) {
     error('phase-type required');
   }
-  const granularity = resolveGranularityInternal(cwd, phaseType);
+  assertValidGranularityOverride(override, error);
+  const granularity = resolveGranularityInternal(cwd, phaseType, override);
   const result = (VALID_PHASE_TYPES).has(phaseType!)
     ? { granularity, phase_type: phaseType }
     : { granularity, phase_type: phaseType, unknown_phase_type: true };

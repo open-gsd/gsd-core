@@ -64,8 +64,10 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const os = require('node:os');
 const path = require('path');
 const { assertTightCeiling } = require('../scripts/lib/allowlist-ratchet.cjs');
+const { cleanup } = require('./helpers.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
 
@@ -121,10 +123,16 @@ function budgetFor(workflow) {
 }
 
 function byteCount(filePath) {
-  // Match `wc -c`: count every byte on disk, including any trailing newline.
-  // Deliberately NOT the trailing-newline-stripping logic the old lineCount()
-  // used — the byte ceilings are calibrated against raw `wc -c` output.
-  return fs.statSync(filePath).size;
+  // Count bytes as on an LF checkout, so the budget is platform-independent.
+  // The tier ceilings are calibrated against `wc -c` on a Unix (LF) checkout,
+  // but these .md files have no `eol=lf` in .gitattributes, so Windows checks
+  // them out as CRLF. Counting raw on-disk bytes there adds one byte per line,
+  // which fails CI on the high-water-mark file (execute-phase.md) on Windows
+  // ONLY — a false positive that diverges from the LF calibration basis (#683).
+  // Stripping CR yields the same LF byte count on every platform. Still a raw
+  // byte count (not the old trailing-newline-stripping lineCount()).
+  const content = fs.readFileSync(filePath, 'utf-8');
+  return Buffer.byteLength(content.replace(/\r\n/g, '\n'), 'utf-8');
 }
 
 describe('SIZE: workflow byte-size budget', () => {
@@ -400,5 +408,177 @@ describe('SIZE: discuss-phase progressive disclosure (issue #2551)', () => {
       'Parent must dispatch on $ARGUMENTS — losing the flag-parsing block would silently ' +
       'fall back to default mode and obscure user errors.'
     );
+  });
+});
+
+const AGENTS_DIR = path.join(__dirname, '..', 'agents');
+
+describe('workflow progressive disclosure — MVP bodies lazy-loaded (#720)', () => {
+  // MVP-only reference bodies (planner-mvp-mode.md, skeleton-template.md,
+  // execute-mvp-tdd.md) must NOT be eagerly @-imported at the top level of the
+  // always-loaded workflow files or agent definitions. An @-prefixed path is
+  // expanded into context the moment the file loads — regardless of whether
+  // MVP_MODE is true — inflating every session's token cost. Use a plain
+  // backtick path or a conditional "Read ..." instruction instead. See issue #720.
+
+  test('plan-phase.md does not eagerly @-import planner-mvp-mode.md', () => {
+    const planPhaseContent = fs.readFileSync(path.join(WORKFLOWS_DIR, 'plan-phase.md'), 'utf-8');
+    assert.ok(
+      !/@[~./\w-]*planner-mvp-mode\.md/.test(planPhaseContent),
+      'plan-phase.md contains an eager @-import of planner-mvp-mode.md — ' +
+      'this loads the MVP body into context for every session, even when MVP_MODE is false. ' +
+      'Replace with a conditional Read instruction or a plain backtick path. See #720.'
+    );
+  });
+
+  test('plan-phase.md does not eagerly @-import skeleton-template.md', () => {
+    const planPhaseContent = fs.readFileSync(path.join(WORKFLOWS_DIR, 'plan-phase.md'), 'utf-8');
+    assert.ok(
+      !/@[~./\w-]*skeleton-template\.md/.test(planPhaseContent),
+      'plan-phase.md contains an eager @-import of skeleton-template.md — ' +
+      'this loads the template into context on every plan-phase invocation. ' +
+      'Replace with a conditional Read instruction or a plain backtick path. See #720.'
+    );
+  });
+
+  test('plan-phase.md still references both MVP bodies (lazy reference preserved)', () => {
+    const planPhaseContent = fs.readFileSync(path.join(WORKFLOWS_DIR, 'plan-phase.md'), 'utf-8');
+    assert.ok(
+      /planner-mvp-mode\.md/.test(planPhaseContent) && /skeleton-template\.md/.test(planPhaseContent),
+      'plan-phase.md must still reference planner-mvp-mode.md and skeleton-template.md ' +
+      '(as lazy backtick paths or Read instructions) so agents know where to find them. ' +
+      'Do not delete the references — only remove the leading @ sigil. See #720.'
+    );
+  });
+
+  test('plan-phase.md does not list MVP bodies in <required_reading>', () => {
+    const planPhaseContent = fs.readFileSync(path.join(WORKFLOWS_DIR, 'plan-phase.md'), 'utf-8');
+    const requiredReadingMatch = planPhaseContent.match(/<required_reading>([\s\S]*?)<\/required_reading>/);
+    if (requiredReadingMatch) {
+      const block = requiredReadingMatch[1];
+      assert.ok(
+        !/planner-mvp-mode\.md/.test(block),
+        'planner-mvp-mode.md must NOT appear in plan-phase.md <required_reading> — ' +
+        'that block is always loaded regardless of MVP_MODE. See #720.'
+      );
+      assert.ok(
+        !/skeleton-template\.md/.test(block),
+        'skeleton-template.md must NOT appear in plan-phase.md <required_reading> — ' +
+        'that block is always loaded regardless of MVP_MODE. See #720.'
+      );
+    }
+  });
+
+  test('execute-phase.md does not eagerly @-import execute-mvp-tdd.md', () => {
+    const executePhaseContent = fs.readFileSync(path.join(WORKFLOWS_DIR, 'execute-phase.md'), 'utf-8');
+    assert.ok(
+      !/@[~./\w-]*execute-mvp-tdd\.md/.test(executePhaseContent),
+      'execute-phase.md contains an eager @-import of execute-mvp-tdd.md — ' +
+      'this loads the MVP TDD body into context for every session. ' +
+      'Replace with a conditional Read instruction or a plain backtick path. See #720.'
+    );
+  });
+
+  test('execute-phase.md still references execute-mvp-tdd.md (lazy reference preserved)', () => {
+    const executePhaseContent = fs.readFileSync(path.join(WORKFLOWS_DIR, 'execute-phase.md'), 'utf-8');
+    assert.ok(
+      /execute-mvp-tdd\.md/.test(executePhaseContent),
+      'execute-phase.md must still reference execute-mvp-tdd.md (as a lazy backtick path ' +
+      'or Read instruction) so agents know where to find it. ' +
+      'Do not delete the reference — only ensure there is no leading @ sigil. See #720.'
+    );
+  });
+
+  test('gsd-planner.md does not eagerly @-import planner-mvp-mode.md', () => {
+    const content = fs.readFileSync(path.join(AGENTS_DIR, 'gsd-planner.md'), 'utf-8');
+    assert.ok(
+      !/@[~./\w-]*planner-mvp-mode\.md/.test(content),
+      'gsd-planner.md contains an eager @-import of planner-mvp-mode.md — ' +
+      'this loads the MVP body into context for every session, even when MVP_MODE is false. ' +
+      'Replace with a conditional Read instruction or a plain backtick path. See #720.'
+    );
+  });
+
+  test('gsd-planner.md does not eagerly @-import skeleton-template.md', () => {
+    const content = fs.readFileSync(path.join(AGENTS_DIR, 'gsd-planner.md'), 'utf-8');
+    assert.ok(
+      !/@[~./\w-]*skeleton-template\.md/.test(content),
+      'gsd-planner.md contains an eager @-import of skeleton-template.md — ' +
+      'this loads the template into context on every planner invocation. ' +
+      'Replace with a conditional Read instruction or a plain backtick path. See #720.'
+    );
+  });
+
+  test('gsd-planner.md does not eagerly @-import user-story-template.md', () => {
+    const content = fs.readFileSync(path.join(AGENTS_DIR, 'gsd-planner.md'), 'utf-8');
+    assert.ok(
+      !/@[~./\w-]*user-story-template\.md/.test(content),
+      'gsd-planner.md contains an eager @-import of user-story-template.md — ' +
+      'this loads the template into context on every planner invocation. ' +
+      'Replace with a conditional Read instruction or a plain backtick path. See #720.'
+    );
+  });
+
+  test('gsd-planner.md still references the three MVP bodies', () => {
+    const content = fs.readFileSync(path.join(AGENTS_DIR, 'gsd-planner.md'), 'utf-8');
+    assert.ok(
+      /planner-mvp-mode\.md/.test(content),
+      'gsd-planner.md must still reference planner-mvp-mode.md (as a lazy path or Read instruction). ' +
+      'Do not delete the reference — only remove the leading @ sigil. See #720.'
+    );
+    assert.ok(
+      /skeleton-template\.md/.test(content),
+      'gsd-planner.md must still reference skeleton-template.md (as a lazy path or Read instruction). ' +
+      'Do not delete the reference — only remove the leading @ sigil. See #720.'
+    );
+    assert.ok(
+      /user-story-template\.md/.test(content),
+      'gsd-planner.md must still reference user-story-template.md (as a lazy path or Read instruction). ' +
+      'Do not delete the reference — only remove the leading @ sigil. See #720.'
+    );
+  });
+
+  test('gsd-executor.md does not eagerly @-import execute-mvp-tdd.md', () => {
+    const content = fs.readFileSync(path.join(AGENTS_DIR, 'gsd-executor.md'), 'utf-8');
+    assert.ok(
+      !/@[~./\w-]*execute-mvp-tdd\.md/.test(content),
+      'gsd-executor.md contains an eager @-import of execute-mvp-tdd.md — ' +
+      'this loads the MVP TDD body into context for every session. ' +
+      'Replace with a conditional Read instruction or a plain backtick path. See #720.'
+    );
+  });
+
+  test('gsd-executor.md still references execute-mvp-tdd.md', () => {
+    const content = fs.readFileSync(path.join(AGENTS_DIR, 'gsd-executor.md'), 'utf-8');
+    assert.ok(
+      /execute-mvp-tdd\.md/.test(content),
+      'gsd-executor.md must still reference execute-mvp-tdd.md (as a lazy path or Read instruction). ' +
+      'Do not delete the reference — only remove the leading @ sigil. See #720.'
+    );
+  });
+});
+
+describe('SIZE: byteCount is line-ending independent (#683 regression)', () => {
+  // The budget ceilings are calibrated against an LF (Unix) checkout; Windows
+  // checks these .md files out as CRLF, which previously inflated the count by
+  // one byte per line and failed CI only on Windows for the high-water file.
+  test('CRLF and LF content of the same logical file count identically', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-size-eol-'));
+    try {
+      const body = 'line one\nline two\nthree — with a multibyte dash\n';
+      const lfPath = path.join(dir, 'lf.md');
+      const crlfPath = path.join(dir, 'crlf.md');
+      fs.writeFileSync(lfPath, body);
+      fs.writeFileSync(crlfPath, body.replace(/\n/g, '\r\n'));
+      assert.strictEqual(
+        byteCount(crlfPath),
+        byteCount(lfPath),
+        'byteCount must normalize CRLF so the byte budget is platform-independent'
+      );
+      // And it must remain a real LF byte count (not stripped/whitespace-trimmed).
+      assert.strictEqual(byteCount(lfPath), Buffer.byteLength(body, 'utf-8'));
+    } finally {
+      cleanup(dir);
+    }
   });
 });

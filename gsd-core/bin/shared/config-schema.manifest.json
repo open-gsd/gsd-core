@@ -106,7 +106,8 @@
     "model_policy.budget",
     "model_policy.high",
     "model_policy.medium",
-    "model_policy.low"
+    "model_policy.low",
+    "agent_skills_security.trusted_global_roots"
   ],
   "runtimeStateKeys": [
     "workflow._auto_chain_active"

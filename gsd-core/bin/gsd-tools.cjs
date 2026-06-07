@@ -198,6 +198,8 @@ const learnings = require('./lib/learnings.cjs');
 const gapChecker = require('./lib/gap-checker.cjs');
 const { routeStateCommand } = require('./lib/state-command-router.cjs');
 const { routeVerifyCommand } = require('./lib/verify-command-router.cjs');
+const { routeVerificationCommand } = require('./lib/verification-command-router.cjs');
+const verification = require('./lib/verification.cjs');
 const { routeInitCommand } = require('./lib/init-command-router.cjs');
 const { routePhaseCommand } = require('./lib/phase-command-router.cjs');
 const { routePhasesCommand } = require('./lib/phases-command-router.cjs');
@@ -547,7 +549,22 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
     }
 
     case 'resolve-granularity': {
-      commands.cmdResolveGranularity(cwd, args[1], raw);
+      // Parse optional --granularity <val> flag (space form only); positional is phase-type.
+      // The =form (--granularity=<val>) is intentionally not supported: parseNamedArgs and
+      // the /gsd:plan-phase + init plan-phase paths accept only the space form, so supporting
+      // = here alone would create an inconsistency (#703).
+      const granArgs = args.slice(1);
+      let granOverride;
+      const granPositionals = [];
+      for (let i = 0; i < granArgs.length; i++) {
+        const a = granArgs[i];
+        if (a === '--granularity' && granArgs[i + 1] !== undefined && !granArgs[i + 1].startsWith('--')) {
+          if (granOverride === undefined) { granOverride = granArgs[++i]; } else { ++i; }
+        } else {
+          granPositionals.push(a);
+        }
+      }
+      commands.cmdResolveGranularity(cwd, granPositionals[0], raw, granOverride);
       break;
     }
 
@@ -753,6 +770,26 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
     case 'verify': {
       routeVerifyCommand({
         verify,
+        args,
+        cwd,
+        raw,
+        error,
+      });
+      break;
+    }
+
+    // ─── Verification Status ───────────────────────────────────────────────
+    //
+    // verification status <phaseDir>
+    //   Read the first *-VERIFICATION.md in phaseDir and return
+    //   { status, next_action, next_command } routing result.
+    //
+    // Note: `verification` (reads verifier-emitted status) is distinct from
+    // `verify` (runs verification checks like plan-structure/artifacts).
+
+    case 'verification': {
+      routeVerificationCommand({
+        verification,
         args,
         cwd,
         raw,
@@ -1232,8 +1269,12 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         worktreeSafety.cmdWorktreeCleanupWave(cwd, args.slice(2));
       } else if (subcommand === 'reap-orphans') {
         worktreeSafety.cmdWorktreeReapOrphans(cwd);
+      } else if (subcommand === 'base-check') {
+        require('./lib/worktree-base-ref.cjs').cmdWorktreeBaseCheck(cwd, args.slice(2));
+      } else if (subcommand === 'set-baseref') {
+        require('./lib/worktree-base-ref.cjs').cmdWorktreeSetBaseRef(cwd, args.slice(2));
       } else {
-        error('Unknown worktree subcommand. Available: cleanup-wave, reap-orphans', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+        error('Unknown worktree subcommand. Available: cleanup-wave, reap-orphans, base-check, set-baseref', ERROR_REASON.SDK_UNKNOWN_COMMAND);
       }
       break;
     }

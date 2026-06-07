@@ -31,6 +31,10 @@ const {
 const {
   resolveAntigravityGlobalDir,
 } = require('../gsd-core/bin/lib/runtime-homes.cjs');
+const {
+  applyWorktreeBaseRef,
+  readBaseRefFromSettings,
+} = require('../gsd-core/bin/lib/worktree-base-ref.cjs');
 
 /**
  * Runtimes that register hyphen-form `name:` per #2808 AND copy agent bodies
@@ -2797,17 +2801,22 @@ function convertClaudeAgentToClineAgent(content) {
 // ── End Cline converters ─────────────────────────────────────────────────────
 
 function convertSlashCommandsToCodexSkillMentions(content) {
-  // Convert colon-style skill invocations to Codex $ prefix
+  // Colon-style /gsd: never appears as a filesystem path segment, so no boundary guard is needed (unlike the hyphen-style below).
   let converted = content.replace(/\/gsd:([a-z0-9-]+)/gi, (_, commandName) => {
     return `$gsd-${String(commandName).toLowerCase()}`;
   });
   // Convert hyphen-style command references (workflow output) to Codex $ prefix.
-  // Negative lookbehind excludes shell path contexts where `/gsd-` is a path
-  // segment, not a slash-command mention:
-  //   - word chars / dot / slash: `bin/gsd-tools.cjs`, `.claude/gsd-core/`
-  //   - `}`: shell variable expressions `${VAR}/gsd-core/` (#704)
-  //   - `)`: command-substitution paths `$(cmd)/gsd-local-patches` (#704)
-  converted = converted.replace(/(?<![a-zA-Z0-9./})])\/gsd-([a-z0-9-]+)/gi, (_, commandName) => {
+  // A real /gsd-<cmd> MENTION is defined positively by two boundaries, so any
+  // in-path occurrence is excluded by construction (no denylist of preceding
+  // chars to maintain — see #712, supersedes the #637/#704 lookbehind treadmill):
+  //   1. Left boundary: opens at start-of-string, whitespace, or an inline-prose
+  //      delimiter (backtick/quote/paren/bracket) — e.g. `/gsd-execute-phase`.
+  //   2. Right boundary: the command token is NOT followed by a path separator
+  //      `/` (a path continues: `/gsd-core/bin/...`; a command does not). The
+  //      `(?![a-z0-9/-])` also blocks regex backtracking to a shorter command.
+  // This converts backtick-wrapped MENTIONS (`/gsd-foo`) while leaving backtick-
+  // wrapped PATHS (`/gsd-core/workflows/update.md`) untouched (#712).
+  converted = converted.replace(/(?<=^|[\s`"'([])\/gsd-([a-z0-9-]+)(?![a-z0-9/-])/gi, (_, commandName) => {
     return `$gsd-${String(commandName).toLowerCase()}`;
   });
   return converted;
@@ -8580,6 +8589,10 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   // agentsSrc is declared here (let, not const) because installCodexConfig() inside the
   // Codex config block below also references it, and that block is outside the try scope.
   let agentsSrc = path.join(src, 'agents');
+  // Capture upgrade signal BEFORE files are written (#683). Must be declared at function
+  // scope (outside the try block below) so it is accessible in the settings section later.
+  // Absent VERSION = fresh install; present VERSION = upgrade/re-install.
+  const priorInstallExisted = fs.existsSync(path.join(targetDir, 'gsd-core', 'VERSION'));
   try {
   installerMigrationResult = runInstallerMigrations({
     configDir: targetDir,
@@ -10111,6 +10124,68 @@ function install(isGlobal, runtime = 'claude', options = {}) {
       ? buildHookCommand(targetDir, 'gsd-update-banner.js', hookOpts)
       : localCmd('gsd-update-banner.js'));
 
+  // #683: Set worktree.baseRef:"head" in settings.local.json for local Claude installs.
+  // Both fresh and upgrade paths apply only when worktrees are enabled for the project.
+  // Never applies to global installs, non-Claude runtimes, or when the user already
+  // has an explicit baseRef in EITHER settings.local.json OR settings.json (no-clobber).
+  // Guard: skip entirely when settings is not a plain object (e.g. parsed to [] or primitive)
+  // to avoid crashing applyWorktreeBaseRef on unexpected top-level shapes.
+  if (isLocalClaude && settings !== null && typeof settings === 'object' && !Array.isArray(settings)) {
+    // Read shared settings.json baseRef so no-clobber spans both files (#683 FIX 1).
+    // shared settings.json no-clobber is checked here; settings.local.json no-clobber
+    // is enforced inside applyWorktreeBaseRef itself.
+    const sharedSettingsForBaseRef = readSettings(path.join(targetDir, 'settings.json')) || {};
+    const sharedBaseRef = readBaseRefFromSettings(sharedSettingsForBaseRef);
+
+    // Compute worktrees-enabled ONCE for both fresh and upgrade paths (FIX A: DRY + consistency).
+    // Read workflow.use_worktrees from .planning/config.json by walking up from
+    // targetDir (same walk-up pattern as readGsdRuntimeProfileResolver). Defaults
+    // to enabled (true) when the file is missing, unreadable, or the key is absent;
+    // only boolean false disables (string "false" stays enabled).
+    let worktreesEnabled = true; // default: enabled
+    try {
+      let probeDir = path.resolve(targetDir);
+      for (let depth = 0; depth < 8; depth += 1) {
+        const candidate = path.join(probeDir, '.planning', 'config.json');
+        if (fs.existsSync(candidate)) {
+          try {
+            const parsed = JSON.parse(stripJsonComments(fs.readFileSync(candidate, 'utf-8')));
+            if (parsed && typeof parsed === 'object' &&
+                parsed.workflow && parsed.workflow.use_worktrees === false) {
+              worktreesEnabled = false;
+            }
+          } catch {
+            // Malformed config.json — treat as enabled (safe fallback).
+          }
+          break;
+        }
+        const parent = path.dirname(probeDir);
+        if (parent === probeDir) break;
+        probeDir = parent;
+      }
+    } catch {
+      // Any unexpected error reading .planning — default to enabled.
+    }
+
+    if (worktreesEnabled && sharedBaseRef === null) {
+      if (!priorInstallExisted) {
+        // Fresh install — apply no-clobber baseRef set.
+        // canonical no-clobber logic: src/worktree-base-ref.cts applyWorktreeBaseRef (#683)
+        const { changed } = applyWorktreeBaseRef(settings);
+        if (changed) {
+          console.log(`  ${green}✓${reset} Set worktree.baseRef:"head" for Claude Code worktrees (forks phase worktrees off HEAD; #683)`);
+        }
+      } else {
+        // Upgrade — auto-apply no-clobber baseRef set when worktrees are enabled.
+        const { changed } = applyWorktreeBaseRef(settings);
+        if (changed) {
+          console.log(`  ${green}✓${reset} Enabled worktree.baseRef:"head" for Claude Code worktrees (forks phase worktrees off HEAD; #683)`);
+        }
+      }
+    }
+    // When worktreesEnabled is false: do nothing, print nothing (both fresh and upgrade).
+  }
+
   persistActiveProfileMarker();
   return {
     settingsPath,
@@ -10948,6 +11023,7 @@ module.exports = {
     install,
     installAllRuntimes,
     uninstall,
+    convertSlashCommandsToCodexSkillMentions,
     convertClaudeCommandToCodexSkill,
     convertClaudeToOpencodeFrontmatter,
     convertClaudeToKiloFrontmatter,
