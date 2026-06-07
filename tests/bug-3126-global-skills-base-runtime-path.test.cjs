@@ -56,6 +56,7 @@ describe('bug #3126: runtime-homes getGlobalConfigDir — defaults', () => {
     ['hermes',      path.join(os.homedir(), '.hermes')],
     ['codebuddy',   path.join(os.homedir(), '.codebuddy')],
     ['cline',       path.join(os.homedir(), '.cline')],
+    ['qoder',       path.join(os.homedir(), '.qoder')],
     ['opencode',    path.join(os.homedir(), '.config', 'opencode')],
     ['kilo',        path.join(os.homedir(), '.config', 'kilo')],
   ];
@@ -65,7 +66,7 @@ describe('bug #3126: runtime-homes getGlobalConfigDir — defaults', () => {
       const envKeys = ['CLAUDE_CONFIG_DIR','CURSOR_CONFIG_DIR','GEMINI_CONFIG_DIR',
         'CODEX_HOME','COPILOT_CONFIG_DIR','COPILOT_HOME','ANTIGRAVITY_CONFIG_DIR','WINDSURF_CONFIG_DIR',
         'AUGMENT_CONFIG_DIR','TRAE_CONFIG_DIR','QWEN_CONFIG_DIR','HERMES_HOME',
-        'CODEBUDDY_CONFIG_DIR','CLINE_CONFIG_DIR','OPENCODE_CONFIG_DIR','OPENCODE_CONFIG',
+        'CODEBUDDY_CONFIG_DIR','CLINE_CONFIG_DIR','QODER_CONFIG_DIR','OPENCODE_CONFIG_DIR','OPENCODE_CONFIG',
         'KILO_CONFIG_DIR','KILO_CONFIG',
         'XDG_CONFIG_HOME'];
       const saved = {};
@@ -120,6 +121,12 @@ describe('bug #3126: runtime-homes env-var overrides', () => {
           assert.strictEqual(getGlobalConfigDir('kilo'), path.join('/xdg', 'kilo'));
         });
       });
+    });
+  });
+
+  test('qoder respects QODER_CONFIG_DIR', () => {
+    withEnv('QODER_CONFIG_DIR', '/custom/qoder', () => {
+      assert.strictEqual(getGlobalConfigDir('qoder'), '/custom/qoder');
     });
   });
 

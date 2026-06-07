@@ -390,7 +390,7 @@ if (hasMinimal && _profileArgRaw) {
 
 function selectRuntimesFromArgs(runtimeArgs) {
   if (runtimeArgs.includes('--all')) {
-    return ['claude', 'kimi', 'kilo', 'opencode', 'gemini', 'codex', 'copilot', 'antigravity', 'cursor', 'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline'];
+    return ['claude', 'kimi', 'kilo', 'opencode', 'gemini', 'codex', 'copilot', 'antigravity', 'cursor', 'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'qoder'];
   }
   if (runtimeArgs.includes('--both')) {
     return ['claude', 'opencode'];
@@ -413,6 +413,7 @@ function selectRuntimesFromArgs(runtimeArgs) {
   if (runtimeArgs.includes('--kimi')) selected.push('kimi');
   if (runtimeArgs.includes('--codebuddy')) selected.push('codebuddy');
   if (runtimeArgs.includes('--cline')) selected.push('cline');
+  if (runtimeArgs.includes('--qoder')) selected.push('qoder');
   return selected;
 }
 
@@ -470,6 +471,7 @@ function getDirName(runtime) {
   if (runtime === 'kimi') return '.kimi-code';
   if (runtime === 'codebuddy') return '.codebuddy';
   if (runtime === 'cline') return '.cline';
+  if (runtime === 'qoder') return '.qoder';
   return '.claude';
 }
 
@@ -515,6 +517,7 @@ function getConfigDirFromHome(runtime, isGlobal) {
   if (runtime === 'codebuddy') return "'.codebuddy'";
   if (runtime === 'cline') return "'.cline'";
   if (runtime === 'kimi') return "'.config', 'agents'";
+  if (runtime === 'qoder') return "'.qoder'";
   return "'.claude'";
 }
 
@@ -536,7 +539,7 @@ const banner = '\n' +
   '  GSD Core ' + dim + 'v' + pkg.version + reset + '\n' +
   '  Git. Ship. Done.\n' +
   '  A meta-prompting, context engineering and spec-driven\n' +
-  '  development workflows for Claude Code, OpenCode, Gemini, Kimi CLI, Kilo, Codex, Copilot, Antigravity, Cursor, Windsurf, Augment, Trae, Qwen Code, Hermes Agent, Cline and CodeBuddy.\n';
+  '  development workflows for Claude Code, OpenCode, Gemini, Kimi CLI, Kilo, Codex, Copilot, Antigravity, Cursor, Windsurf, Augment, Trae, Qwen Code, Hermes Agent, Cline, CodeBuddy and Qoder.\n';
 
 // Pure seam: parse --config-dir / -c from an arbitrary args array.
 // Returns the path string, '' for an empty equals-form value, or null when the
@@ -3215,6 +3218,58 @@ function convertClaudeToTraeMarkdown(content) {
   converted = converted.replace(/\bClaude Code\b/g, 'Trae');
   return converted;
 }
+
+// ── Qoder converters ────────────────────────────────────────────────────────
+
+function convertClaudeToQoderMarkdown(content) {
+  let converted = convertSlashCommandsToTraeSkillMentions(content);
+  converted = converted.replace(/\.claude\/skills\//g, '.qoder/skills/');
+  converted = converted.replace(/\.\/\.claude\//g, './.qoder/');
+  converted = converted.replace(/\.claude\//g, '.qoder/');
+  // Bare forms (no trailing slash) — Cline-style word boundaries, preserves CLAUDE_CONFIG_DIR
+  converted = converted.replace(/~\/\.claude\b/g, '~/.qoder');
+  converted = converted.replace(/\$HOME\/\.claude\b/g, '$HOME/.qoder');
+  converted = converted.replace(/\.\/\.claude\b/g, './.qoder');
+  converted = converted.replace(/(?<![A-Z])\.claude\b(?!\/)/g, '.qoder');
+  converted = converted.replace(/\.claude\\/g, '.qoder\\');
+  converted = converted.replace(/\bCLAUDE\.md\b/g, 'AGENTS.md');
+  converted = converted.replace(/`CLAUDE\.md`/g, '`AGENTS.md`');
+  converted = converted.replace(/\*\*Known Claude Code bug \(classifyHandoffIfNeeded\):\*\*[^\n]*\n/g, '');
+  converted = converted.replace(/- \*\*classifyHandoffIfNeeded false failure:\*\*[^\n]*\n/g, '');
+  converted = converted.replace(/\bClaude Code\b/g, 'Qoder');
+  return converted;
+}
+
+function convertClaudeCommandToQoderSkill(content, skillName) {
+  const converted = convertClaudeToQoderMarkdown(content);
+  const { frontmatter, body } = extractFrontmatterAndBody(converted);
+  let description = `Run GSD workflow ${skillName}.`;
+  if (frontmatter) {
+    const maybeDescription = extractFrontmatterField(frontmatter, 'description');
+    if (maybeDescription) {
+      description = maybeDescription;
+    }
+  }
+  description = toSingleLine(description);
+  const shortDescription = description.length > 180 ? `${description.slice(0, 177)}...` : description;
+  return `---\nname: ${yamlIdentifier(skillName)}\ndescription: ${yamlQuote(shortDescription)}\n---\n${body}`;
+}
+
+function convertClaudeAgentToQoderAgent(content) {
+  let converted = convertClaudeToQoderMarkdown(content);
+
+  const { frontmatter, body } = extractFrontmatterAndBody(converted);
+  if (!frontmatter) return converted;
+
+  const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
+  const description = extractFrontmatterField(frontmatter, 'description') || '';
+
+  const cleanFrontmatter = `---\nname: ${yamlIdentifier(name)}\ndescription: ${yamlQuote(toSingleLine(description))}\n---`;
+
+  return `${cleanFrontmatter}\n${body}`;
+}
+
+// ── End Qoder converters ────────────────────────────────────────────────────
 
 function convertClaudeCommandToTraeSkill(content, skillName) {
   const converted = convertClaudeToTraeMarkdown(content);
@@ -7771,6 +7826,20 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix) {
       content = processAttribution(content, getCommitAttribution(runtime));
       break;
 
+    case 'qoder':
+      content = content.replace(/~\/\.claude\//g, pathPrefix);
+      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
+      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
+      content = content.replace(/~\/\.claude\b/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.claude\b/g, normalizedPathPrefix);
+      content = content.replace(/\.\/\.claude\b/g, `./${dirName}`);
+      content = content.replace(/~\/\.qoder\//g, pathPrefix);
+      content = content.replace(/\$HOME\/\.qoder\//g, pathPrefix);
+      content = content.replace(/~\/\.qoder\b/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.qoder\b/g, normalizedPathPrefix);
+      content = processAttribution(content, getCommitAttribution(runtime));
+      break;
+
     case 'kimi':
       content = content.replace(/~\/\.claude\//g, pathPrefix);
       content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
@@ -8338,6 +8407,7 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
   const isQwen = runtime === 'qwen';
   const isHermes = runtime === 'hermes';
   const isCline = runtime === 'cline';
+  const isQoder = runtime === 'qoder';
   const dirName = getDirName(runtime);
 
   // Clean install: remove existing destination to prevent orphaned files
@@ -8421,6 +8491,9 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
       } else if (isCline) {
         content = convertClaudeToCliineMarkdown(content);
         fs.writeFileSync(destPath, content);
+      } else if (isQoder) {
+        content = convertClaudeToQoderMarkdown(content);
+        fs.writeFileSync(destPath, content);
       } else if (isQwen) {
         content = content.replace(/CLAUDE\.md/g, 'QWEN.md');
         content = content.replace(/\bClaude Code\b/g, 'Qwen Code');
@@ -8474,6 +8547,10 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
       jsContent = jsContent.replace(/\.claude\/skills\//g, '.cline/skills/');
       jsContent = jsContent.replace(/CLAUDE\.md/g, '.clinerules');
       jsContent = jsContent.replace(/\bClaude Code\b/g, 'Cline');
+      fs.writeFileSync(destPath, jsContent);
+    } else if (isQoder && (entry.name.endsWith('.cjs') || entry.name.endsWith('.js'))) {
+      let jsContent = fs.readFileSync(srcPath, 'utf8');
+      jsContent = convertClaudeToQoderMarkdown(jsContent);
       fs.writeFileSync(destPath, jsContent);
     } else if (isQwen && (entry.name.endsWith('.cjs') || entry.name.endsWith('.js'))) {
       let jsContent = fs.readFileSync(srcPath, 'utf8');
@@ -8675,6 +8752,7 @@ function uninstall(isGlobal, runtime = 'claude') {
   const isQwen = runtime === 'qwen';
   const isHermes = runtime === 'hermes';
   const isCodebuddy = runtime === 'codebuddy';
+  const isQoder = runtime === 'qoder';
   const dirName = getDirName(runtime);
 
   // Get the target directory based on runtime and install type. Cline local
@@ -8705,6 +8783,7 @@ function uninstall(isGlobal, runtime = 'claude') {
   if (runtime === 'hermes') runtimeLabel = 'Hermes Agent';
   if (runtime === 'kimi') runtimeLabel = 'Kimi CLI';
   if (runtime === 'codebuddy') runtimeLabel = 'CodeBuddy';
+  if (runtime === 'qoder') runtimeLabel = 'Qoder';
 
   console.log(`  Uninstalling GSD from ${cyan}${runtimeLabel}${reset} at ${cyan}${locationLabel}${reset}\n`);
 
@@ -9685,6 +9764,7 @@ function writeManifest(configDir, runtime = 'claude', options = {}) {
   const isCline = runtime === 'cline';
   const isKimi = runtime === 'kimi';
   const isHermes = runtime === 'hermes';
+  const isQoder = runtime === 'qoder';
   const gsdDir = path.join(configDir, 'gsd-core');
   const commandsDir = path.join(configDir, 'commands', 'gsd');
   const opencodeCommandDir = path.join(configDir, 'command');
@@ -10166,6 +10246,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   const isHermes = runtime === 'hermes';
   const isCodebuddy = runtime === 'codebuddy';
   const isCline = runtime === 'cline';
+  const isQoder = runtime === 'qoder';
   const configIntent = resolveRuntimeConfigIntent(runtime);
   const dirName = getDirName(runtime);
   const src = path.join(__dirname, '..');
@@ -10323,6 +10404,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   if (isKimi) runtimeLabel = 'Kimi';
   if (isCodebuddy) runtimeLabel = 'CodeBuddy';
   if (isCline) runtimeLabel = 'Cline';
+  if (isQoder) runtimeLabel = 'Qoder';
 
   console.log(`  Installing for ${cyan}${runtimeLabel}${reset} to ${cyan}${locationLabel}${reset}\n`);
 
@@ -10610,7 +10692,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   // Cline global: emit skills to ~/.cline/skills/ (Cline >= v3.48.0 — #782).
   const _isSkillsRuntime = isCodex || isCopilot || isAntigravity || isCursor || isWindsurf ||
     isAugment || isTrae || isCodebuddy || isQwen || isHermes ||
-    isKimi ||
+    isKimi || isQoder ||
     (runtime === 'claude' && isGlobal) ||
     (isCline && isGlobal);
 
@@ -10988,6 +11070,8 @@ function install(isGlobal, runtime = 'claude', options = {}) {
           content = convertClaudeAgentToCodebuddyAgent(content);
         } else if (isCline) {
           content = convertClaudeAgentToClineAgent(content);
+        } else if (isQoder) {
+          content = convertClaudeAgentToQoderAgent(content);
         } else if (isQwen) {
           content = content.replace(/CLAUDE\.md/g, 'QWEN.md');
           content = content.replace(/\bClaude Code\b/g, 'Qwen Code');
@@ -11050,7 +11134,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     failures.push('VERSION');
   }
 
-  if (!isCodex && !isCopilot && !isCursor && !isWindsurf && !isTrae && !isCline && !isKimi) {
+  if (!isCodex && !isCopilot && !isCursor && !isWindsurf && !isTrae && !isCline && !isKimi && !isQoder) {
     // Write package.json to force CommonJS mode for GSD scripts
     // Prevents "require is not defined" errors when project has "type": "module"
     // Node.js walks up looking for package.json - this stops inheritance from project
@@ -12624,6 +12708,7 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   if (runtime === 'augment') program = 'Augment';
   if (runtime === 'trae') program = 'Trae';
   if (runtime === 'cline') program = 'Cline';
+  if (runtime === 'qoder') program = 'Qoder';
   if (runtime === 'qwen') program = 'Qwen Code';
   if (runtime === 'hermes') program = 'Hermes Agent';
   if (runtime === 'kimi') program = 'Kimi CLI';
@@ -12640,6 +12725,7 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   if (runtime === 'augment') command = '/gsd-new-project';
   if (runtime === 'trae') command = '/gsd-new-project';
   if (runtime === 'cline') command = '/gsd-new-project';
+  if (runtime === 'qoder') command = '/gsd-new-project';
   if (runtime === 'qwen') command = '/gsd-new-project';
   if (runtime === 'hermes') command = '/gsd-new-project';
   if (runtime === 'kimi') command = '/skill:gsd-new-project';
@@ -12748,10 +12834,11 @@ const runtimeMap = {
   '13': 'opencode',
   '14': 'qwen',
   '15': 'trae',
-  '16': 'windsurf'
+  '16': 'windsurf',
+  '17': 'qoder'
 };
-const allRuntimes = ['claude', 'antigravity', 'augment', 'cline', 'codebuddy', 'codex', 'copilot', 'cursor', 'gemini', 'hermes', 'kimi', 'kilo', 'opencode', 'qwen', 'trae', 'windsurf'];
-const ALL_RUNTIMES_OPTION = '17';
+const allRuntimes = ['claude', 'antigravity', 'augment', 'cline', 'codebuddy', 'codex', 'copilot', 'cursor', 'gemini', 'hermes', 'kimi', 'kilo', 'opencode', 'qwen', 'trae', 'windsurf', 'qoder'];
+const ALL_RUNTIMES_OPTION = '18';
 
 /**
  * Build the runtime-selection prompt text shown by the interactive installer.
@@ -12775,7 +12862,8 @@ function buildRuntimePromptText() {
   ${cyan}14${reset}) Qwen Code    ${dim}(~/.qwen)${reset}
   ${cyan}15${reset}) Trae         ${dim}(~/.trae)${reset}
   ${cyan}16${reset}) Windsurf     ${dim}(~/.codeium/windsurf)${reset}
-  ${cyan}17${reset}) All
+  ${cyan}17${reset}) Qoder        ${dim}(~/.qoder)${reset}
+  ${cyan}18${reset}) All
 
   ${dim}Select multiple: 1,2,6 or 1 2 6${reset}
 `;
@@ -12786,7 +12874,7 @@ function buildRuntimePromptText() {
  * Pure function — exported so tests can verify split/dedupe/fallback behavior.
  *  - Accepts comma- and/or whitespace-separated choices
  *  - Deduplicates while preserving order
- *  - Maps option 17 ("All") to every runtime
+ *  - Maps option 18 ("All") to every runtime
  *  - Falls back to ['claude'] when nothing valid is selected
  */
 function parseRuntimeInput(answer) {
@@ -13411,6 +13499,9 @@ module.exports = {
     buildClineAgentsMdBody,
     buildClinePreToolUseHook,
     writeClineArtifacts,
+    convertClaudeToQoderMarkdown,
+    convertClaudeCommandToQoderSkill,
+    convertClaudeAgentToQoderAgent,
     mergeGsdAgentsMd,
     GSD_CURSOR_SESSION_HOOK_SCRIPT,
     GSD_CURSOR_POST_TOOL_HOOK_SCRIPT,

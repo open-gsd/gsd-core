@@ -54,3 +54,14 @@ The policy module resolves *intent* as data; adapters turn that intent into byte
 - ADR-0008 — Installer Migration Module (adjacent installer seam).
 - `CONTEXT.md` § Glossary — Domain modules and seams (the architecture seam map / glossary this module is registered in).
 - Installer-refactor chain: #58 (this ADR) → #60 (explicit adapter registry) → #56 (retire legacy directory helpers) → #57.
+
+## Addendum: Qoder runtime (#860)
+
+- **Date:** 2026-06-11
+- **PR:** #1021
+
+Qoder (`qodercli`) registered in the Runtime Config Adapter Registry:
+
+- `qoder: { installSurface: 'profile-marker-only', writesSharedSettings: false, finishPermissionWriter: null }`
+
+Identical adapter shape to Trae and Windsurf. No new adapter logic needed — the `profile-marker-only` surface produces no settings writes and no permission entries. The registry entry exists solely so `resolveRuntimeConfigIntent('qoder')` resolves without throwing and the layout-driven install/uninstall pipelines include Qoder in their iteration.
