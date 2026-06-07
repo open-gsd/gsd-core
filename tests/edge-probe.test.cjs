@@ -323,6 +323,30 @@ describe('edge-probe: input validation & orphan-resolution rejection (adversaria
   test('rejects a non-string requirement text', () => {
     assert.throws(() => ep.proposeEdges({ id: 'R1', text: 42 }), /text must be a string/i);
   });
+  test('rejects a missing requirement text when no shapes override (M2 fail-open)', () => {
+    // Without text or an authored shape, prose classification yields zero shapes → zero edges →
+    // the requirement is silently DROPPED from coverage with no signal — the exact fail-open this
+    // feature exists to eliminate. The edge adapter's `text` is required, so reject it.
+    assert.throws(
+      () => ep.proposeEdges({ id: 'R1' }),
+      /text must be a non-empty string when no shapes override/i,
+    );
+    assert.throws(
+      () => ep.analyzeCoverage([{ id: 'R1' }]),
+      /text must be a non-empty string when no shapes override/i,
+    );
+  });
+  test('rejects an empty/whitespace requirement text when no shapes override (M2)', () => {
+    assert.throws(() => ep.proposeEdges({ id: 'R1', text: '' }), /text must be a non-empty string when no shapes override/i);
+    assert.throws(() => ep.proposeEdges({ id: 'R1', text: '   ' }), /text must be a non-empty string when no shapes override/i);
+  });
+  test('allows missing/empty text WHEN an explicit shapes override is provided (M2 legitimate path)', () => {
+    // An authored `shapes` array (including `[]` for "no applicable categories") opts out of prose
+    // classification, so `text` is not required — this must remain valid.
+    assert.deepEqual(ep.proposeEdges({ id: 'R1', shapes: [] }), []);
+    const edges = ep.proposeEdges({ id: 'R1', shapes: ['numeric-range'] });
+    assert.ok(edges.length > 0, 'an explicit shape override must still propose edges without text');
+  });
 });
 
 describe('edge-probe: validateResolution — explicit-needs-resolution (RR-07, re-cut)', () => {

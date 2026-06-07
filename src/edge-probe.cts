@@ -114,12 +114,24 @@ export const EDGE_VALIDATORS: Validators = {
  * Validate a single requirement — the generic id/text checks (probe-core) plus the edge's
  * `shapes`-must-be-an-array check. A bare string like `shapes:"numeric-range"` would otherwise
  * fall through to prose classification, silently ignoring the authored override.
+ *
+ * The edge adapter's `text` is REQUIRED (the prose is the classification signal), so reject a
+ * missing/empty `text` when no authored `shapes` override is present. Without this, a `{ id }`
+ * requirement classifies to zero shapes → zero edges → it is silently DROPPED from coverage
+ * with no signal — the exact fail-open this feature exists to eliminate. An explicit `shapes`
+ * array (including `[]` for "no applicable categories") is the legitimate way to opt out of
+ * prose classification, so `text` is only required when `shapes` is absent.
  */
 export function validateRequirement(requirement: Requirement): void {
   coreValidateRequirement(requirement);
-  const r = requirement as unknown as { shapes?: unknown };
+  const r = requirement as unknown as { shapes?: unknown; text?: unknown };
   if (r.shapes != null && !Array.isArray(r.shapes)) {
     throw new Error(`requirement ${requirement.id} shapes must be an array when present`);
+  }
+  if (r.shapes == null && !(typeof r.text === 'string' && r.text.trim())) {
+    throw new Error(
+      `requirement ${requirement.id} text must be a non-empty string when no shapes override is provided`,
+    );
   }
 }
 
