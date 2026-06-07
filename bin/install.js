@@ -1904,6 +1904,40 @@ function skillFrontmatterName(skillDirName) {
 }
 
 /**
+ * Qwen Code skills accept an optional numeric `priority` frontmatter field.
+ * Per the Qwen skills spec (qwen-code/docs/users/features/skills.md, verified
+ * #778): HIGHER values sort EARLIER in the `/skills` TUI listing (omitted ≈ 0;
+ * negatives sort below unset). It affects ONLY the `/skills` list order —
+ * slash-command completion and the `/help` view stay alphabetical.
+ *
+ * We assign descending priorities to GSD's main-loop commands so the most-used
+ * workflow skills surface first; utility skills are deliberately left unset
+ * (default 0) and sort below.
+ *
+ * NOTE: the #778 issue body proposed the INVERSE numbering (plan-phase: 10,
+ * utilities: 90+). The verified spec shows that would BURY the core loop below
+ * utilities, so we implement the spec-correct direction (core = high) instead.
+ * Keyed by command stem (skill dir is `gsd-<stem>`).
+ */
+const QWEN_SKILL_PRIORITY = Object.freeze({
+  'new-project': 100,
+  'discuss-phase': 95,
+  'plan-phase': 90,
+  'execute-phase': 85,
+  progress: 80,
+  'verify-work': 75,
+  phase: 70,
+  review: 65,
+  ship: 60,
+  config: 55,
+  surface: 50,
+  'resume-work': 45,
+  'pause-work': 40,
+  help: 35,
+  update: 30,
+});
+
+/**
  * Convert a Claude command (.md) to a Claude skill (SKILL.md).
  * Claude Code is the native format, so minimal conversion needed —
  * preserve allowed-tools as YAML multiline list, preserve argument-hint.
@@ -1942,6 +1976,18 @@ function convertClaudeCommandToClaudeSkill(content, skillName, runtime = null, c
   // Track GSD's package version so Hermes' skill_view() reports a stable
   // identifier per install.
   if (runtime === 'hermes') fm += `version: ${yamlQuote(pkg.version)}\n`;
+  // #778 (b) — Qwen-only numeric priority for /skills ordering. Scoped to qwen
+  // so Claude/Hermes skill frontmatter is unchanged (they ignore the field, but
+  // we keep their output byte-stable). skillName is the `gsd-<stem>` dir name.
+  if (runtime === 'qwen') {
+    const stem = typeof skillName === 'string' && skillName.startsWith('gsd-')
+      ? skillName.slice(4)
+      : skillName;
+    const priority = Object.prototype.hasOwnProperty.call(QWEN_SKILL_PRIORITY, stem)
+      ? QWEN_SKILL_PRIORITY[stem]
+      : undefined;
+    if (typeof priority === 'number') fm += `priority: ${priority}\n`;
+  }
   if (argumentHint) fm += `argument-hint: ${yamlQuote(argumentHint)}\n`;
   if (agent) fm += `agent: ${agent}\n`;
   if (toolsBlock) fm += toolsBlock;
@@ -5537,7 +5583,7 @@ function convertSlashCommandsToGeminiMentions(content) {
   });
 }
 
-function convertClaudeToGeminiMarkdown(content, { isCommand = false } = {}) {
+function convertClaudeToGeminiMarkdown(content, { isCommand = false, commandName = null } = {}) {
   // Apply Gemini-specific slash command namespacing
   let converted = convertSlashCommandsToGeminiMentions(content);
   // Gemini CLI does not expose Claude's AskUserQuestion tool. Convert body
@@ -5549,8 +5595,9 @@ function convertClaudeToGeminiMarkdown(content, { isCommand = false } = {}) {
   converted = stripSubTags(converted);
 
   if (isCommand) {
-    // Convert to Gemini TOML format
-    converted = convertClaudeToGeminiToml(converted);
+    // Convert to Gemini TOML format (threads the command name so per-command
+    // enrichment — e.g. the #778 live-state injection — can target a command).
+    converted = convertClaudeToGeminiToml(converted, { commandName });
   }
 
   return converted;
@@ -6054,7 +6101,16 @@ function convertClaudeCommandToKiloSkill(content, skillName) {
  * @param {string} content - Markdown file content with YAML frontmatter
  * @returns {string} - TOML content
  */
-function convertClaudeToGeminiToml(content) {
+function convertClaudeToGeminiToml(content, { commandName = null } = {}) {
+  // #778 (c) — Gemini {{args}} interpolation. Claude's $ARGUMENTS placeholder
+  // maps to Gemini's {{args}} so inline argument references interpolate into the
+  // command body instead of being emitted as a dead literal. Applied before
+  // frontmatter parsing so every return path benefits (a command's frontmatter
+  // never contains $ARGUMENTS, so this is body-only in practice). Gemini injects
+  // {{args}} as typed outside shell blocks; we never place it inside a !{...}
+  // block, so there is no shell-escaping/injection interaction.
+  content = content.replace(/\$ARGUMENTS\b/g, '{{args}}');
+
   // Check if content has frontmatter
   if (!content.startsWith('---')) {
     return `prompt = ${JSON.stringify(content)}\n`;
@@ -6066,7 +6122,27 @@ function convertClaudeToGeminiToml(content) {
   }
 
   const frontmatter = content.substring(3, endIndex).trim();
-  const body = content.substring(endIndex + 3).trim();
+  let body = content.substring(endIndex + 3).trim();
+
+  // #778 (c) — Gemini !{...} dynamic-output injection for the situational
+  // `progress` command (GSD's status/dashboard surface). Inject the live
+  // .planning/STATE.md so the model sees current project state without relying
+  // on session memory.
+  //
+  // SECURITY: the shell command is a FIXED `cat` with NO interpolated user
+  // input — no {{args}} appears inside the block — so there is no
+  // shell-injection vector. Gemini still shows its standard per-invocation
+  // confirmation dialog (verified behavior). `2>/dev/null` keeps an
+  // uninitialized project (missing STATE.md) from injecting stderr noise.
+  // Braces inside the block are balanced (none present), per Gemini's parser
+  // requirement. The append happens AFTER the {{args}} mapping above so the
+  // injected block can never accidentally carry interpolated arguments.
+  if (commandName === 'progress') {
+    body += '\n\n## Live project state\n'
+      + 'Current contents of `.planning/STATE.md` '
+      + '(empty if the project is not yet initialized):\n\n'
+      + '!{cat .planning/STATE.md 2>/dev/null}\n';
+  }
 
   // Extract description from frontmatter
   let description = '';
@@ -7093,8 +7169,11 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
           : convertClaudeToOpencodeFrontmatter(content);
         fs.writeFileSync(destPath, content);
       } else if (isGemini) {
-        // Apply Gemini-specific Markdown transformations (slash commands, TOML)
-        const processed = convertClaudeToGeminiMarkdown(content, { isCommand });
+        // Apply Gemini-specific Markdown transformations (slash commands, TOML).
+        // #778: thread the command name (file stem) so per-command TOML
+        // enrichment (live-state injection) can target a specific command.
+        const geminiCommandName = isCommand ? entry.name.replace(/\.md$/, '') : null;
+        const processed = convertClaudeToGeminiMarkdown(content, { isCommand, commandName: geminiCommandName });
         const finalPath = isCommand ? destPath.replace(/\.md$/, '.toml') : destPath;
         fs.writeFileSync(finalPath, processed);
       } else if (isCodex) {

@@ -699,6 +699,15 @@ To assign different models on a non-Claude runtime:
 
 See [Runtime-Aware Profiles](CONFIGURATION.md#runtime-aware-profiles-2517).
 
+#### Per-runtime command enrichment
+
+When generating artifacts, the installer adapts GSD commands to each runtime's native command schema:
+
+- **Gemini CLI** — generated TOML commands use Gemini's `{{args}}` placeholder (translated from Claude's `$ARGUMENTS`) so typed arguments interpolate into the prompt, and `/gsd:progress` injects live project state via a fixed `!{cat .planning/STATE.md 2>/dev/null}` shell block (no interpolated input, so no injection risk; Gemini shows its standard confirmation dialog).
+- **Qwen Code** — main-loop skills carry Qwen's numeric `priority` field so the most-used workflows (e.g. `new-project`, `plan-phase`, `execute-phase`) sort first in the `/skills` list; utility skills are left unset. Higher values sort earlier; the field affects only the `/skills` list order.
+
+See [How to install GSD Core on your runtime](how-to/install-on-your-runtime.md) for the full per-runtime details.
+
 ### Manual install / no-Node.js setup
 
 If you cannot run the GSD installer, you cannot use the source files in `agents/` directly — they are in Claude Code's native frontmatter format. For OpenCode, two transformations are required:
