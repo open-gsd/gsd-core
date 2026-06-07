@@ -15,6 +15,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const fc = require('./helpers/fast-check-setup.cjs');
 
 const INSTALL_PATH = path.join(__dirname, '..', 'bin', 'install.js');
 
@@ -569,5 +570,71 @@ describe('installer HOME-relative PATH detection (#2620)',
         cleanup(home);
       }
     });
+  });
+});
+
+// #323 — property-based coverage for the fish universal-variable decoder.
+// `decodeFishUniversalValue` is the inverse of fish's `full_escape`; the
+// example-based cases above cover dot/hyphen/space/$/unicode, this locks the
+// bijection itself: decode(fishEscape(p)) === p over arbitrary strings.
+// Platform-agnostic (a pure string transform), so this block is NOT skipped on
+// Windows — unlike the rc/fish-config probes above.
+describe('decodeFishUniversalValue: round-trip properties (#323)', () => {
+  let installer;
+  before(() => { installer = loadInstaller(); });
+
+  // Faithful inverse of decodeFishUniversalValue, matching fish's full_escape:
+  // keep [A-Za-z0-9/_] literal, \xHH for code units <= 0xFF, \uXXXX otherwise
+  // (each UTF-16 code unit is <= 0xFFFF, so astral code points encode as their
+  // two surrogate units and decode back identically).
+  function fishEscape(value) {
+    let out = '';
+    for (let i = 0; i < value.length; i++) {
+      const ch = value[i];
+      if (/[A-Za-z0-9/_]/.test(ch)) { out += ch; continue; }
+      const code = value.charCodeAt(i);
+      out += code <= 0xff
+        ? '\\x' + code.toString(16).padStart(2, '0')
+        : '\\u' + code.toString(16).padStart(4, '0');
+    }
+    return out;
+  }
+
+  test('decodeFishUniversalValue is exported', () => {
+    assert.strictEqual(typeof installer.decodeFishUniversalValue, 'function');
+  });
+
+  // The bijection across arbitrary unicode (spaces, dots, hyphens, $, quotes,
+  // astral code points).
+  test('decode(fishEscape(p)) === p for arbitrary strings', () => {
+    fc.assert(
+      fc.property(fc.string({ unit: 'binary', maxLength: 64 }), (p) => {
+        assert.strictEqual(installer.decodeFishUniversalValue(fishEscape(p)), p);
+      }),
+    );
+  });
+
+  // Realistic shape: absolute POSIX paths built from arbitrary segments — the
+  // actual fish_user_paths entries the detector compares — still round-trip.
+  test('decode(fishEscape(absPath)) === absPath for arbitrary path segments', () => {
+    const segment = fc.string({ unit: 'binary', minLength: 1, maxLength: 24 })
+      .filter((s) => !s.includes('/'));
+    fc.assert(
+      fc.property(fc.array(segment, { minLength: 1, maxLength: 5 }), (segs) => {
+        const abs = '/' + segs.join('/');
+        assert.strictEqual(installer.decodeFishUniversalValue(fishEscape(abs)), abs);
+      }),
+    );
+  });
+
+  // Total function: any unrecognised `\`-sequence (incl. truncated escapes)
+  // passes through verbatim and it never throws.
+  test('never throws and is total over arbitrary escaped input', () => {
+    fc.assert(
+      fc.property(fc.string({ unit: 'binary', maxLength: 64 }), (raw) => {
+        assert.doesNotThrow(() => installer.decodeFishUniversalValue(raw));
+        assert.strictEqual(typeof installer.decodeFishUniversalValue(raw), 'string');
+      }),
+    );
   });
 });

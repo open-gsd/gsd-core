@@ -10659,6 +10659,47 @@ function homePathCoveredByRc(globalBin, homeDir, rcFileNames) {
 }
 
 /**
+ * Decode fish's universal-variable value escaping (the inverse of fish's
+ * `full_escape`). fish serializes every non-`[A-Za-z0-9/_]` byte in
+ * `fish_variables` — e.g. space -> `\x20`, hyphen -> `\x2d`, dot -> `\x2e` —
+ * and joins list elements with the literal 4-char token `\x1e` (NOT a raw
+ * 0x1e byte). Callers split on `\x1e` first, then decode each element here.
+ *
+ * Pure and total: any unrecognised `\`-sequence is passed through verbatim,
+ * so `decode(fishEscape(p)) === p` holds for every path string. Exported for
+ * a fast-check round-trip property test (#323).
+ *
+ * @param {string} s  A single (already `\x1e`-split) escaped value.
+ * @returns {string}  The decoded literal.
+ */
+function decodeFishUniversalValue(s) {
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c !== '\\') { out += c; continue; }
+    const n = s[i + 1];
+    if (n === 'n') { out += '\n'; i += 1; }
+    else if (n === 'r') { out += '\r'; i += 1; }
+    else if (n === 't') { out += '\t'; i += 1; }
+    else if (n === '\\') { out += '\\'; i += 1; }
+    else if (n === 'x' || n === 'X') {
+      const hex = s.slice(i + 2, i + 4);
+      if (/^[0-9a-fA-F]{2}$/.test(hex)) { out += String.fromCharCode(parseInt(hex, 16)); i += 3; }
+      else { out += c; }
+    } else if (n === 'u') {
+      const hex = s.slice(i + 2, i + 6);
+      if (/^[0-9a-fA-F]{4}$/.test(hex)) { out += String.fromCharCode(parseInt(hex, 16)); i += 5; }
+      else { out += c; }
+    } else if (n === 'U') {
+      const hex = s.slice(i + 2, i + 10);
+      if (/^[0-9a-fA-F]{8}$/.test(hex)) { out += String.fromCodePoint(parseInt(hex, 16)); i += 9; }
+      else { out += c; }
+    } else { out += c; }
+  }
+  return out;
+}
+
+/**
  * Check whether fish's configuration already places `globalBin` on PATH (#323).
  *
  * fish does not use the sh-style `export PATH=` rc files that
@@ -10752,38 +10793,6 @@ function homePathCoveredByFishConfig(globalBin, homeDir, fishConfigDir) {
     } catch {
       return null;
     }
-  };
-
-  // Decode fish's universal-variable value escaping (the inverse of fish's
-  // `full_escape`). fish serializes every non-`[A-Za-z0-9/_]` byte in
-  // fish_variables — e.g. space -> `\x20`, hyphen -> `\x2d`, dot -> `\x2e` —
-  // and joins list elements with the literal 4-char token `\x1e` (NOT a raw
-  // 0x1e byte). Callers split on `\x1e` first, then decode each element here.
-  const decodeFishUniversalValue = (s) => {
-    let out = '';
-    for (let i = 0; i < s.length; i++) {
-      const c = s[i];
-      if (c !== '\\') { out += c; continue; }
-      const n = s[i + 1];
-      if (n === 'n') { out += '\n'; i += 1; }
-      else if (n === 'r') { out += '\r'; i += 1; }
-      else if (n === 't') { out += '\t'; i += 1; }
-      else if (n === '\\') { out += '\\'; i += 1; }
-      else if (n === 'x' || n === 'X') {
-        const hex = s.slice(i + 2, i + 4);
-        if (/^[0-9a-fA-F]{2}$/.test(hex)) { out += String.fromCharCode(parseInt(hex, 16)); i += 3; }
-        else { out += c; }
-      } else if (n === 'u') {
-        const hex = s.slice(i + 2, i + 6);
-        if (/^[0-9a-fA-F]{4}$/.test(hex)) { out += String.fromCharCode(parseInt(hex, 16)); i += 5; }
-        else { out += c; }
-      } else if (n === 'U') {
-        const hex = s.slice(i + 2, i + 10);
-        if (/^[0-9a-fA-F]{8}$/.test(hex)) { out += String.fromCodePoint(parseInt(hex, 16)); i += 9; }
-        else { out += c; }
-      } else { out += c; }
-    }
-    return out;
   };
 
   for (const baseDir of baseDirs) {
@@ -11181,6 +11190,7 @@ module.exports = {
     finishInstall,
     homePathCoveredByRc,
     homePathCoveredByFishConfig,
+    decodeFishUniversalValue,
     maybeSuggestPathExport,
     runtimeMap,
     allRuntimes,
