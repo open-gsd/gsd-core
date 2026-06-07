@@ -50,6 +50,27 @@ describe('bug #3441: PATH guidance is projected from typed shell action IR', () 
     assert.ok(!posix.shellActions[2].command.includes('export'));
   });
 
+  // #323 (ported from the closed #721): the fish suggestion is POSIX-only.
+  // On win32 the persist branch projects PowerShell / cmd.exe / Git Bash —
+  // no fish action — locking the POSIX-only contract.
+  test('no fish action is projected on win32', () => {
+    const win = projection.projectPathActionProjection({
+      mode: 'persist',
+      targetDir: 'C:\\Users\\me\\AppData\\npm',
+      platform: 'win32',
+    });
+    assert.ok(Array.isArray(win.shellActions));
+    assert.equal(
+      win.shellActions.some((a) => a.shell === 'fish' || a.label === 'fish'),
+      false,
+      'win32 persist projection must not include a fish action',
+    );
+    assert.deepEqual(
+      win.shellActions.map((a) => a.label),
+      ['PowerShell', 'cmd.exe', 'Git Bash'],
+    );
+  });
+
   test('POSIX repair mode escapes double-quoted shell metacharacters', () => {
     const projected = projection.projectPathActionProjection({
       mode: 'repair',
