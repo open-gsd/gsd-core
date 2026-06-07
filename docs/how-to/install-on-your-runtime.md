@@ -146,6 +146,19 @@ Skills land in `~/.codex/skills/gsd-*/SKILL.md`. Agents are written with per-age
 
 **Minimum supported version:** Codex CLI 0.130.0. Earlier versions had additional skill-root scanning that can produce duplicate listings.
 
+**Hook coverage**
+
+GSD registers the following Codex hook events automatically on install (requires Codex CLI 0.137.0+ for the stable hook-event schema):
+
+| Event | Hook | Purpose |
+|---|---|---|
+| `SessionStart` | `gsd-check-update.js` | Update check at session open; Windows installs also emit a `commandWindows` field pointing to the `.cmd` shim so Codex picks the correct executor on Windows without requiring per-OS config regeneration |
+| `SubagentStart` | `gsd-context-monitor.js` | Inject context / GSD_AGENT_NAME awareness at subagent open |
+| `Stop` | `gsd-context-monitor.js` | Context headroom tracking before model stop |
+| `PostToolUse` | `gsd-context-monitor.js` | Mirror the context-monitor coverage available in Claude Code |
+
+All registered hooks are managed by GSD and are removed cleanly on `--uninstall`.
+
 ---
 
 ### GitHub Copilot

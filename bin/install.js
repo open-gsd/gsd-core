@@ -1012,7 +1012,13 @@ function ensureCodexHooksJsonSessionStart(targetDir, opts = {}) {
   const hooksJsonPath = path.join(targetDir, 'hooks.json');
   if (!absoluteRunner) return { changed: false, wrote: false, path: hooksJsonPath };
 
-  const scriptPath = path.resolve(targetDir, 'hooks', 'gsd-check-update.js');
+  // Normalize backslashes to forward slashes so isManagedHookCommand can
+  // match stored commands against configDir on Windows CI runners where
+  // path.resolve returns backslash paths but the stored command may use
+  // forward slashes (or vice versa). Forward-slash paths are always valid on
+  // Windows for both Node.js and Codex, so this normalization is safe for all
+  // platforms. (#772 — same fix applied to ensureCodexHooksJsonEvent.)
+  const scriptPath = path.resolve(targetDir, 'hooks', 'gsd-check-update.js').replace(/\\/g, '/');
 
   // #772: compute the Windows .cmd shim path cross-platform so that
   // `commandWindows` can be emitted in hooks.json regardless of the host OS.
@@ -1095,7 +1101,15 @@ function ensureCodexHooksJsonEvent(targetDir, eventName, opts = {}) {
   const hooksJsonPath = path.join(targetDir, 'hooks.json');
   if (!absoluteRunner) return { changed: false, wrote: false, path: hooksJsonPath };
 
-  const scriptPath = path.resolve(targetDir, 'hooks', 'gsd-context-monitor.js');
+  // Normalize backslashes to forward slashes so that isManagedHookCommand can
+  // match the stored command against configDir on Windows. path.resolve on
+  // Windows returns backslash paths, but when platform is not 'win32'
+  // (e.g. platform: 'linux' in a test running on a Windows CI runner),
+  // projectManagedHookCommand does not normalize them — producing a mismatch
+  // between the stored command and the configDir-based hook-dir prefix used
+  // for deduplication. Forward-slash paths are always valid on Windows (Node.js
+  // and Codex both accept them), so normalizing here is safe for all platforms.
+  const scriptPath = path.resolve(targetDir, 'hooks', 'gsd-context-monitor.js').replace(/\\/g, '/');
 
   let managedCommand;
   if (platform === 'win32') {
