@@ -44,6 +44,50 @@ CLAUDE_CONFIG_DIR=~/.claude-alt npx @opengsd/gsd-core@latest --claude --global
 
 ---
 
+### Claude Code — native plugin install
+
+GSD Core ships a `.claude-plugin/plugin.json` manifest, which enables installation and lifecycle management through the Claude Code plugin system. This path is **additive** — the npm installer above remains fully supported, and the two approaches differ in namespace and lifecycle only.
+
+**Install paths**
+
+*Option A — marketplace or git install (once listed):*
+
+```bash
+claude plugin install gsd-core
+```
+
+*Option B — zero-friction skills-dir load:* Claude Code automatically discovers any directory under `~/.claude/skills/` that contains a `.claude-plugin/plugin.json` as a plugin. To use gsd-core this way, place (or symlink) the gsd-core package directory there:
+
+```bash
+# Example: place the package under ~/.claude/skills/gsd-core/
+# Claude Code loads it as gsd-core@skills-dir on the next session start.
+# No explicit install step required.
+```
+
+**Command namespace**
+
+Plugin commands are namespaced as `/gsd-core:<command>` — for example, `/gsd-core:plan-phase`. This is distinct from the classic npm/file-copy installer, which exposes commands as `/gsd:<command>`. Use whichever namespace corresponds to your install method.
+
+**Lifecycle**
+
+```bash
+claude plugin enable gsd-core
+claude plugin disable gsd-core
+claude plugin update gsd-core
+```
+
+**Hooks**
+
+The plugin wires gsd-core's always-on guard and update hooks automatically via `hooks/hooks.json`. No manual hook registration is required.
+
+**Prerequisites**
+
+The `gsd-tools` binary (installed as part of the `@opengsd/gsd-core` npm package) must be available on your `PATH` for gsd commands to execute their backing logic. The plugin delivers the command, agent, and hook surface; the npm package delivers the runtime CLI.
+
+Node.js (`node`) must also be available on your `PATH`. The plugin's always-on guard hooks (wired in `hooks/hooks.json`) are invoked as `node "${CLAUDE_PLUGIN_ROOT}/hooks/<script>"`. Some Claude Code distributions ship as a standalone binary and do not expose a `node` executable on `PATH`; in those environments the plugin's hooks will not run. Verify with `node --version` before relying on the plugin hooks.
+
+---
+
 ### Gemini CLI
 
 ```bash

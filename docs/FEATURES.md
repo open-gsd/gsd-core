@@ -1020,6 +1020,8 @@ fix(03-01): correct auth token expiry
 | Hook events | `PostToolUse` | N/A | `AfterTool` | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
 | Config | `settings.json` | `opencode.json(c)` | `settings.json` | `kilo.json(c)` | TOML | Instructions | Config | Config | `.clinerules` | Config | Config | Config |
 
+**Claude Code native plugin distribution:** GSD Core ships a `.claude-plugin/plugin.json` manifest, enabling installation and lifecycle management via `claude plugin install|enable|disable|update gsd-core`. Commands load under the `/gsd-core:` namespace (e.g. `/gsd-core:plan-phase`), avoiding slash-command collisions with the classic npm installer which uses `/gsd:`. Always-on guard and update hooks are wired automatically via `hooks/hooks.json`. The plugin path is additive — the npm installer (`npx @opengsd/gsd-core`) remains fully supported.
+
 ---
 
 ### 37. Hook System
