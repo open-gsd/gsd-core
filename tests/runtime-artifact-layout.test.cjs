@@ -203,15 +203,21 @@ describe('resolveRuntimeArtifactLayout — hermes', () => {
 });
 
 describe('resolveRuntimeArtifactLayout — codebuddy', () => {
-  test('returns correct layout for codebuddy', () => {
+  test('returns correct layout for codebuddy (commands + skills — #789)', () => {
     const layout = resolveRuntimeArtifactLayout('codebuddy', FAKE_DIR);
     assert.strictEqual(layout.runtime, 'codebuddy');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 1);
-    assert.strictEqual(layout.kinds[0].kind, 'skills');
-    assert.strictEqual(layout.kinds[0].destSubpath, 'skills');
+    assert.strictEqual(layout.kinds.length, 2);
+    // commands kind first
+    assert.strictEqual(layout.kinds[0].kind, 'commands');
+    assert.strictEqual(layout.kinds[0].destSubpath, 'commands');
     assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
     assert.strictEqual(typeof layout.kinds[0].stage, 'function');
+    // skills kind second
+    assert.strictEqual(layout.kinds[1].kind, 'skills');
+    assert.strictEqual(layout.kinds[1].destSubpath, 'skills');
+    assert.strictEqual(layout.kinds[1].prefix, 'gsd-');
+    assert.strictEqual(typeof layout.kinds[1].stage, 'function');
   });
 });
 

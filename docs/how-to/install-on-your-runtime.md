@@ -248,7 +248,7 @@ directory is created for local scope.
 npx @opengsd/gsd-core@latest --codebuddy --global
 ```
 
-Skills land in `~/.codebuddy/skills/gsd-*/SKILL.md`.
+GSD installs four surfaces. Slash command definitions land in `~/.codebuddy/commands/gsd-*.md` and appear as `/gsd-help`, `/gsd-phase`, `/gsd-ship`, etc. in the `/` menu. Subagents land in `~/.codebuddy/agents/gsd-*.md`. Skills land in `~/.codebuddy/skills/gsd-*/SKILL.md` — emitted with `user-invocable: false` so they stay out of the `/` menu (the commands surface is the sole `/` entry point) and remain available for model invocation. CodeBuddy hooks are written to `settings.json`. No `mcp.json` is written: GSD ships no MCP server.
 
 ---
 

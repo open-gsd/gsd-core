@@ -345,7 +345,17 @@ function resolveRuntimeArtifactLayout(runtime: string, configDir: string, scope:
       break;
 
     case 'codebuddy':
-      kinds = [skillsKind('skills', 'gsd-', 'convertClaudeCommandToCodebuddySkill', 'codebuddy', configDir)];
+      // CodeBuddy (Tencent) reads two user-level surfaces (codebuddy.ai/docs/cli):
+      //   1. commands/gsd-<name>.md      — slash commands shown in the '/' menu (#789)
+      //   2. skills/gsd-<name>/SKILL.md  — model-invocable skills, emitted with
+      //      user-invocable:false so they stay OUT of '/' (the commands surface is
+      //      the sole '/' entry point) — avoids a duplicated /gsd-* per workflow.
+      // Subagents (~/.codebuddy/agents/) are already emitted by the generic agents
+      // block in bin/install.js; MCP is excluded (gsd ships no MCP server).
+      kinds = [
+        convertedCommandsKind('commands', 'gsd-', 'convertClaudeCommandToCodebuddyCommand', configDir),
+        skillsKind('skills', 'gsd-', 'convertClaudeCommandToCodebuddySkill', 'codebuddy', configDir),
+      ];
       break;
 
     case 'cline':

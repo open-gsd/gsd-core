@@ -808,7 +808,7 @@ The migration-specific ownership and source snapshots live in
 | Trae | `~/.trae` | `./.trae` | `skills/gsd-*/SKILL.md` | `agents/gsd-*.md` | Rule references under `rules/`; no GSD hooks |
 | Qwen Code | `~/.qwen` | `./.qwen` | `skills/gsd-*/SKILL.md` | `agents/gsd-*.md` | Common GSD settings and hook entries where supported |
 | Hermes Agent | `~/.hermes` | `./.hermes` | `skills/gsd/DESCRIPTION.md` plus `skills/gsd/gsd-*/SKILL.md` | `agents/gsd-*.md` | Common GSD settings and hook entries where supported |
-| CodeBuddy | `~/.codebuddy` | `./.codebuddy` | `skills/gsd-*/SKILL.md` | `agents/gsd-*.md` | Common GSD settings and hook entries where supported |
+| CodeBuddy | `~/.codebuddy` | `./.codebuddy` | `skills/gsd-*/SKILL.md` (`user-invocable: false`) | `agents/gsd-*.md` | `/gsd-*` slash commands under `commands/`; common GSD settings and hook entries where supported |
 | Cline | `~/.cline` | project root | `.clinerules` | Rules only | No GSD hooks or statusline |
 
 ### Upstream Contract Sources

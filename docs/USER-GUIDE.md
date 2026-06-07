@@ -727,6 +727,8 @@ npx @opengsd/gsd-core --cline --local    # this project only
 npx @opengsd/gsd-core --codebuddy --global
 ```
 
+GSD installs four surfaces for CodeBuddy: `/gsd-*` slash commands in `~/.codebuddy/commands/`, subagents in `~/.codebuddy/agents/`, model-invocable skills in `~/.codebuddy/skills/`, and `settings.json` hooks. The skills are emitted with `user-invocable: false` so the slash commands are the single `/` menu surface (no duplicate entries).
+
 ### Installing for Qwen Code
 
 ```bash

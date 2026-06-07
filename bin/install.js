@@ -2582,7 +2582,47 @@ function convertClaudeCommandToCodebuddySkill(content, skillName) {
   const shortDescription = description.length > 180 ? `${description.slice(0, 177)}...` : description;
   // #2876: quote so YAML flow indicators (`[BETA] …`) don't break
   // CodeBuddy's frontmatter parser.
-  return `---\nname: ${yamlIdentifier(skillName)}\ndescription: ${yamlQuote(shortDescription)}\n---\n${body}`;
+  //
+  // #789: mark user-invocable:false so the skill is NOT shown in CodeBuddy's
+  // '/' menu (it defaults to true). The commands/ surface (#789) is the sole
+  // '/' entry point; skills remain model-invocable background knowledge,
+  // avoiding a duplicated /gsd-* entry per workflow.
+  return `---\nname: ${yamlIdentifier(skillName)}\ndescription: ${yamlQuote(shortDescription)}\nuser-invocable: false\n---\n${body}`;
+}
+
+/**
+ * Convert a Claude Code slash-command (.md) to a CodeBuddy slash-command (.md).
+ *
+ * CodeBuddy reads user-level slash commands from ~/.codebuddy/commands/<name>.md
+ * (https://www.codebuddy.ai/docs/cli/slash-commands). The filename determines the
+ * command name (gsd-help.md → /gsd-help), so the Claude-specific `name: gsd:<x>`
+ * frontmatter field is dropped. CodeBuddy command frontmatter supports
+ * `description` and `argument-hint`; both are preserved when present. The body is
+ * brand/path-converted via convertClaudeToCodebuddyMarkdown.
+ *
+ * @param {string} content      raw Claude command markdown
+ * @param {string} commandName  installed command name (e.g. 'gsd-help')
+ * @returns {string}
+ */
+function convertClaudeCommandToCodebuddyCommand(content, commandName) {
+  const converted = convertClaudeToCodebuddyMarkdown(content);
+  const { frontmatter, body } = extractFrontmatterAndBody(converted);
+  let description = `Run GSD workflow ${commandName}.`;
+  let argumentHint = '';
+  if (frontmatter) {
+    const maybeDescription = extractFrontmatterField(frontmatter, 'description');
+    if (maybeDescription) description = maybeDescription;
+    const maybeArgHint = extractFrontmatterField(frontmatter, 'argument-hint');
+    if (maybeArgHint) argumentHint = maybeArgHint;
+  }
+  description = toSingleLine(description);
+  const shortDescription = description.length > 180 ? `${description.slice(0, 177)}...` : description;
+  // #2876: quote values so YAML flow indicators (`[BETA] …`, `[name]`) don't
+  // break CodeBuddy's frontmatter parser.
+  const lines = ['---', `description: ${yamlQuote(shortDescription)}`];
+  if (argumentHint) lines.push(`argument-hint: ${yamlQuote(toSingleLine(argumentHint))}`);
+  lines.push('---', body.trimStart());
+  return lines.join('\n');
 }
 
 function convertClaudeAgentToCodebuddyAgent(content) {
@@ -6520,7 +6560,14 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix) {
       content = content.replace(/~\/\.claude\b/g, normalizedPathPrefix);
       content = content.replace(/\$HOME\/\.claude\b/g, normalizedPathPrefix);
       content = content.replace(/\.\/\.claude\b/g, `./${dirName}`);
+      // The codebuddy converter rewrites `.claude/` → `.codebuddy/` at stage
+      // time, so `$HOME/.claude/...` arrives here as `$HOME/.codebuddy/...`.
+      // Normalize BOTH the `~/` and `$HOME/` forms (slash + bare) to the install
+      // target so `--config-dir`/local installs don't leak the default home.
       content = content.replace(/~\/\.codebuddy\//g, pathPrefix);
+      content = content.replace(/\$HOME\/\.codebuddy\//g, pathPrefix);
+      content = content.replace(/~\/\.codebuddy\b/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.codebuddy\b/g, normalizedPathPrefix);
       content = processAttribution(content, getCommitAttribution(runtime));
       break;
 
@@ -9197,6 +9244,22 @@ function install(isGlobal, runtime = 'claude', options = {}) {
           failures.push('commands/gsd-*');
         }
       }
+
+      // CodeBuddy only: also report the commands/ output (#789 — slash commands)
+      if (isCodebuddy) {
+        const commandsDir = path.join(targetDir, 'commands');
+        if (fs.existsSync(commandsDir)) {
+          const cmdCount = fs.readdirSync(commandsDir)
+            .filter(f => f.startsWith('gsd-') && f.endsWith('.md')).length;
+          if (cmdCount > 0) {
+            console.log(`  ${green}✓${reset} Installed ${cmdCount} slash commands to commands/`);
+          } else {
+            failures.push('commands/gsd-*');
+          }
+        } else {
+          failures.push('commands/gsd-*');
+        }
+      }
     }
   } else if (isOpencode || isKilo) {
     // OpenCode/Kilo: flat structure in command/ directory
@@ -11608,6 +11671,7 @@ module.exports = {
     convertClaudeAgentToTraeAgent,
     convertClaudeToCodebuddyMarkdown,
     convertClaudeCommandToCodebuddySkill,
+    convertClaudeCommandToCodebuddyCommand,
     convertClaudeAgentToCodebuddyAgent,
     convertClaudeToCliineMarkdown,
     convertClaudeCommandToClineSkill,
