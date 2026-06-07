@@ -156,6 +156,13 @@ npx @opengsd/gsd-core@latest --copilot --global
 
 Skills land in `~/.copilot/`. GSD installs as agent `.md` files and repository instruction files.
 
+GSD also wires Copilot's lifecycle hooks and instruction files:
+
+- **`AGENTS.md`** (local installs) — written at the repository root, which GitHub Copilot CLI reads as primary instructions, alongside `copilot-instructions.md`.
+- **Lifecycle hook** — a `sessionStart` hook config is written to `.github/hooks/gsd-session.json` (local) or `~/.copilot/hooks/gsd-session.json` (global). It is a self-contained inline `command` hook (no separate hook script to install), so it can never reference a missing script. The hook is advisory-only: at session start it surfaces whether the project has a `.planning/` workflow.
+
+Both are removed (and any user-authored content preserved) on `--uninstall`.
+
 **Override the install directory:**
 
 ```bash
