@@ -2889,6 +2889,20 @@ function generateCodexAgentToml(agentName, agentContent, modelOverrides = null, 
   const _renderedEffortCodex = _getGsdEffortCatalog().renderEffortForRuntime('codex', _universalEffortCodex).value;
   lines.push(`model_reasoning_effort = ${JSON.stringify(_renderedEffortCodex)}`);
 
+  // #774 — Emit service_tier and model_verbosity for light-tier agents.
+  // Light-tier agents (routingTier: "light" in model-catalog.json) are haiku-equivalent
+  // and benefit from Codex's "flex" service tier (lower cost, background processing)
+  // and "low" verbosity (reduced token output). Both fields are validated against the
+  // Codex ConfigProfile schema (codex-rs/config/src/profile_toml.rs):
+  //   service_tier: Option<String>  — "flex" | "fast" (legacy)
+  //   model_verbosity: Option<Verbosity> — "low" | "medium" | "high"
+  const { AGENT_DEFAULT_TIERS: _agentTiers } = _getGsdEffortCatalog();
+  const _agentRoutingTier = _agentTiers?.[resolvedName] || _agentTiers?.[agentName];
+  if (_agentRoutingTier === 'light') {
+    lines.push(`service_tier = "flex"`);
+    lines.push(`model_verbosity = "low"`);
+  }
+
   // Agent prompts contain raw backslashes in regexes and shell snippets.
   // TOML literal multiline strings preserve them without escape parsing.
   lines.push(`developer_instructions = '''`);
@@ -2896,6 +2910,115 @@ function generateCodexAgentToml(agentName, agentContent, modelOverrides = null, 
   lines.push(`'''`);
 
   return lines.join('\n') + '\n';
+}
+
+/**
+ * Generate the agents/openai.yaml TUI chip metadata content for a Codex skill.
+ *
+ * This file is written alongside SKILL.md as <skill-dir>/agents/openai.yaml.
+ * Codex loads it as a SkillMetadataFile (codex-rs/core-skills/src/loader.rs),
+ * making the skill discoverable in the /skills TUI popup with a display name
+ * and short description. If the file is absent, Codex silently skips it (fails open).
+ *
+ * Schema (interface section):
+ *   display_name: short human-readable skill name (strip gsd- prefix)
+ *   short_description: 1-2 sentence description for TUI chip, ≤180 chars
+ *
+ * @param {string} skillName - Full skill name e.g. "gsd-plan-phase"
+ * @param {string} shortDescription - Description text (already truncated by caller)
+ * @returns {string} YAML content for agents/openai.yaml
+ */
+function generateCodexSkillMetadataYaml(skillName, shortDescription) {
+  // Display name: strip "gsd-" prefix and convert hyphens to spaces for readability.
+  const displayName = skillName.replace(/^gsd-/, '').replace(/-/g, ' ');
+  // yamlQuote (= JSON.stringify) handles all YAML-unsafe chars: backslashes,
+  // quotes, newlines, control characters, and Unicode escapes.
+  return [
+    'interface:',
+    `  display_name: ${yamlQuote(displayName)}`,
+    `  short_description: ${yamlQuote(shortDescription)}`,
+    '',
+  ].join('\n');
+}
+
+/**
+ * Write agents/openai.yaml TUI chip metadata for each gsd-* skill directory.
+ *
+ * Called after layout-driven skill install for Codex. Iterates every gsd-*
+ * skill directory in skillsDir, reads the SKILL.md frontmatter to extract the
+ * short-description already emitted by convertClaudeCommandToCodexSkill, then
+ * writes <skill-dir>/agents/openai.yaml using generateCodexSkillMetadataYaml.
+ *
+ * Fails open: individual skill directories that cannot be processed are silently
+ * skipped so a single malformed SKILL.md cannot block the whole install.
+ *
+ * User-owned skill directories (e.g. gsd-dev-preferences) are explicitly
+ * skipped so existing user-authored agents/openai.yaml files are never
+ * overwritten. These dirs are listed in the same USER_OWNED_SKILL_DIRS
+ * constant used by installOpencodeFamilySkills.
+ *
+ * The YAML-quoted description value is unescaped before embedding so that
+ * YAML escape sequences (e.g. \" in a double-quoted scalar) become the
+ * literal characters they represent rather than being double-escaped in the
+ * output.
+ *
+ * @param {string} skillsDir - Path to the skills/ directory (e.g. ~/.codex/skills)
+ */
+function writeCodexSkillMetadataFiles(skillsDir) {
+  if (!fs.existsSync(skillsDir)) return;
+  // Mirror the user-owned list from installOpencodeFamilySkills (#2973).
+  // We MUST skip these dirs — their contents are user-generated and must
+  // never be overwritten by GSD's install path.
+  const _userOwnedSkillDirs = new Set(['gsd-dev-preferences']);
+  for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith('gsd-')) continue;
+    if (_userOwnedSkillDirs.has(entry.name)) continue; // preserve user content
+    const skillDir = path.join(skillsDir, entry.name);
+    const skillMdPath = path.join(skillDir, 'SKILL.md');
+    try {
+      const content = fs.readFileSync(skillMdPath, 'utf8');
+      const { frontmatter } = extractFrontmatterAndBody(content);
+      // Prefer the short-description field emitted by convertClaudeCommandToCodexSkill;
+      // fall back to description, then a synthetic label from the skill name.
+      let shortDesc = '';
+      if (frontmatter) {
+        // SKILL.md uses YAML frontmatter with a nested metadata.short-description key.
+        // extractFrontmatterField handles only top-level keys; parse the metadata block
+        // by looking for "  short-description:" directly.
+        const metaMatch = frontmatter.match(/^[ \t]*metadata\s*:\s*\n((?:[ \t]+.*\n?)*)/m);
+        if (metaMatch) {
+          const metaBlock = metaMatch[1];
+          const sdMatch = metaBlock.match(/^[ \t]+short-description\s*:\s*(.+)$/m);
+          if (sdMatch) {
+            // Unescape YAML double-quoted scalar escapes before embedding.
+            // convertClaudeCommandToCodexSkill always emits a double-quoted
+            // value (via yamlQuote) so only double-quote unescaping is needed.
+            let raw = sdMatch[1].trim();
+            if (raw.startsWith('"') && raw.endsWith('"')) {
+              // Strip outer double-quotes and decode \" → " and \\ → \
+              raw = raw.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+            } else {
+              // Single-quoted or unquoted: strip surrounding quotes/whitespace
+              raw = raw.replace(/^["']|["']$/g, '');
+            }
+            shortDesc = raw;
+          }
+        }
+        if (!shortDesc) {
+          shortDesc = extractFrontmatterField(frontmatter, 'description') || '';
+        }
+      }
+      if (!shortDesc) {
+        shortDesc = `Run GSD workflow ${entry.name}.`;
+      }
+      const yamlContent = generateCodexSkillMetadataYaml(entry.name, shortDesc);
+      const agentsSubdir = path.join(skillDir, 'agents');
+      fs.mkdirSync(agentsSubdir, { recursive: true });
+      fs.writeFileSync(path.join(agentsSubdir, 'openai.yaml'), yamlContent);
+    } catch (_err) {
+      // Fail open — missing or unreadable SKILL.md must not block the install.
+    }
+  }
 }
 
 /**
@@ -9133,6 +9256,16 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     const scope = isGlobal ? 'global' : 'local';
     installRuntimeArtifacts(runtime, targetDir, scope, _resolvedProfile);
 
+    // #774 — Codex only: write agents/openai.yaml TUI chip metadata alongside each
+    // installed skill so the /skills popup shows name + description for each gsd-* skill.
+    // The SkillMetadataFile is loaded by codex-rs/core-skills/src/loader.rs from
+    // <skill-dir>/agents/openai.yaml; absence is silently tolerated (fails open).
+    // We parse the SKILL.md frontmatter to extract short-description already emitted
+    // by convertClaudeCommandToCodexSkill and use it as the TUI chip description.
+    if (isCodex) {
+      writeCodexSkillMetadataFiles(path.join(targetDir, 'skills'));
+    }
+
     // Hermes only: write DESCRIPTION.md for the gsd/ category after layout install
     if (isHermes) {
       writeHermesCategoryDescription(path.join(targetDir, 'skills', 'gsd'));
@@ -11547,6 +11680,8 @@ module.exports = {
     convertClaudeToGeminiAgent,
     convertClaudeAgentToCodexAgent,
     generateCodexAgentToml,
+    generateCodexSkillMetadataYaml,
+    writeCodexSkillMetadataFiles,
     generateCodexConfigBlock,
     stripGsdFromCodexConfig,
     migrateCodexHooksMapFormat,
