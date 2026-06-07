@@ -34,4 +34,36 @@ describe('PR policy workflow maintainer carve-outs', () => {
 
     assertMaintainerSkip(workflow);
   });
+
+  test('draft PR sweep enforces the same policy as the event-driven close', () => {
+    const workflow = readWorkflow('.github/workflows/close-draft-prs-sweep.yml');
+
+    // Timer-driven in base-repo context, plus a manual dispatch for testing.
+    // It must NOT be a fork-triggered event (no pull_request / pull_request_target trigger).
+    assert.match(workflow, /schedule:/);
+    assert.match(workflow, /cron:\s*'0 \*\/6 \* \* \*'/);
+    assert.match(workflow, /workflow_dispatch:/);
+    assert.doesNotMatch(workflow, /^\s*pull_request(_target)?:/m);
+
+    // Write-capable token (needed to close PRs from base context). Tolerant of
+    // intervening blank lines or additional permission keys.
+    assert.match(workflow, /permissions:\s+pull-requests:\s*write/);
+
+    // Identical maintainer carve-out to close-draft-prs.yml — a Set membership
+    // test over author_association, negated (no github.event.pull_request in a
+    // scheduled run).
+    assert.match(workflow, /new Set\(\['OWNER', 'MEMBER', 'COLLABORATOR'\]\)/);
+    assert.match(workflow, /!MAINTAINER_ASSOCIATIONS\.has\([^)]*\.author_association\)/);
+
+    // Paginates over open PRs and filters to drafts.
+    assert.match(workflow, /github\.paginate\(github\.rest\.pulls\.list/);
+    assert.match(workflow, /state:\s*'open'/);
+    assert.match(workflow, /pr\.draft === true/);
+
+    // Same user-facing policy message as close-draft-prs.yml (locks the core
+    // content so the sweep cannot silently drift to a weaker message).
+    assert.match(workflow, /## Draft PRs are not accepted/);
+    assert.match(workflow, /npm run test:coverage/);
+    assert.match(workflow, /CONTRIBUTING\.md#pull-request-guidelines/);
+  });
 });
