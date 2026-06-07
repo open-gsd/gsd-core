@@ -371,7 +371,11 @@ describe('applySurface', () => {
       //     change removes all such paths, this assertion will become vacuously true
       //     (no body will contain configDirPrefix either) — update the test rather than
       //     treating a silent zero-match as a pass.
-      const configDirPrefix = `${configDir}/`;
+      // Production derives pathPrefix as `path.resolve(configDir).replace(/\\/g, '/')`
+      // (mirrors installRuntimeArtifacts), so on Windows the rewritten body uses
+      // forward slashes. Normalize the expected prefix the same way so this assertion
+      // is cross-platform (Windows CI leg is not covered by local gsd-test) (#813).
+      const configDirPrefix = `${path.resolve(configDir).replace(/\\/g, '/')}/`;
       const bodiesWithAbsolutePrefix = skillBodies.filter(b => b.includes(configDirPrefix));
       assert.ok(
         bodiesWithAbsolutePrefix.length > 0,
