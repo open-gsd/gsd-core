@@ -215,6 +215,13 @@ function cmdListSeeds(cwd: string, statusFilter: string | undefined, raw: boolea
   }> = [];
   const summary: Record<string, number> = {};
 
+  // Frontmatter values are not guaranteed to be scalars: extractFrontmatter
+  // yields {} for a bare `key:` line and an array for `key: [a, b]`. Coerce every
+  // read to a string so one malformed seed cannot crash the whole audit list
+  // (`.toLowerCase()` on a non-string throws) or leak a raw object/array into the
+  // JSON contract. Mirrors the existing `typeof fm.id === 'string'` guard below.
+  const fmStr = (v: unknown): string => (typeof v === 'string' ? v : '');
+
   let files: fs.Dirent[];
   try {
     files = fs.readdirSync(seedsDir, { withFileTypes: true });
@@ -239,7 +246,7 @@ function cmdListSeeds(cwd: string, statusFilter: string | undefined, raw: boolea
     if (content === null) continue;
 
     const fm = extractFrontmatter(content) as Record<string, unknown>;
-    const status = (((fm.status as string) || 'dormant').toLowerCase()).trim() || 'dormant';
+    const status = (fmStr(fm.status) || 'dormant').toLowerCase().trim() || 'dormant';
 
     if (wantStatus && sanitizeForDisplay(status) !== wantStatus) continue;
 
@@ -258,7 +265,7 @@ function cmdListSeeds(cwd: string, statusFilter: string | undefined, raw: boolea
     const slugMatch = stem.match(/^SEED-\d+-(.+)$/i);
     const slug = slugMatch ? slugMatch[1] : stem.replace(/^SEED-/i, '');
 
-    let title = sanitizeForDisplay(fm.title || '');
+    let title = sanitizeForDisplay(fmStr(fm.title).slice(0, 100));
     if (!title) {
       const headingMatch = content.match(/^#\s*(.+)$/m);
       if (headingMatch) title = sanitizeForDisplay(headingMatch[1].trim().slice(0, 100));
@@ -271,9 +278,9 @@ function cmdListSeeds(cwd: string, statusFilter: string | undefined, raw: boolea
       seed_id: sanitizeForDisplay(seedId),
       slug: sanitizeForDisplay(slug),
       status: safeStatus,
-      scope: sanitizeForDisplay(fm.scope || 'unknown'),
-      trigger_when: sanitizeForDisplay(fm.trigger_when || ''),
-      planted: sanitizeForDisplay(fm.planted || ''),
+      scope: sanitizeForDisplay(fmStr(fm.scope) || 'unknown'),
+      trigger_when: sanitizeForDisplay(fmStr(fm.trigger_when)),
+      planted: sanitizeForDisplay(fmStr(fm.planted)),
       title,
       path: toPosixPath(path.relative(cwd, safeFilePath)),
     });
