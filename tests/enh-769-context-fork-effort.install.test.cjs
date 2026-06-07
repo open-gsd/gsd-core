@@ -93,37 +93,37 @@ function runClaudeGlobalInstall(claudeHome) {
 describe('#769 source commands: heavy skills have context: fork and effort: xhigh', () => {
   test('commands/gsd/autonomous.md has context: fork', () => {
     const fm = readFrontmatter(path.join(SOURCE_COMMANDS_DIR, 'autonomous.md'));
-    assert.match(fm, /^context:\s*fork$/m,
+    assert.match(fm, /^context:[ \t]*fork$/m,
       `autonomous.md frontmatter must have context: fork\nActual:\n${fm}`);
   });
 
   test('commands/gsd/autonomous.md has effort: xhigh', () => {
     const fm = readFrontmatter(path.join(SOURCE_COMMANDS_DIR, 'autonomous.md'));
-    assert.match(fm, /^effort:\s*xhigh$/m,
+    assert.match(fm, /^effort:[ \t]*xhigh$/m,
       `autonomous.md frontmatter must have effort: xhigh\nActual:\n${fm}`);
   });
 
   test('commands/gsd/execute-phase.md has context: fork', () => {
     const fm = readFrontmatter(path.join(SOURCE_COMMANDS_DIR, 'execute-phase.md'));
-    assert.match(fm, /^context:\s*fork$/m,
+    assert.match(fm, /^context:[ \t]*fork$/m,
       `execute-phase.md frontmatter must have context: fork\nActual:\n${fm}`);
   });
 
   test('commands/gsd/execute-phase.md has effort: xhigh', () => {
     const fm = readFrontmatter(path.join(SOURCE_COMMANDS_DIR, 'execute-phase.md'));
-    assert.match(fm, /^effort:\s*xhigh$/m,
+    assert.match(fm, /^effort:[ \t]*xhigh$/m,
       `execute-phase.md frontmatter must have effort: xhigh\nActual:\n${fm}`);
   });
 
   test('commands/gsd/plan-phase.md has context: fork', () => {
     const fm = readFrontmatter(path.join(SOURCE_COMMANDS_DIR, 'plan-phase.md'));
-    assert.match(fm, /^context:\s*fork$/m,
+    assert.match(fm, /^context:[ \t]*fork$/m,
       `plan-phase.md frontmatter must have context: fork\nActual:\n${fm}`);
   });
 
   test('commands/gsd/plan-phase.md has effort: xhigh', () => {
     const fm = readFrontmatter(path.join(SOURCE_COMMANDS_DIR, 'plan-phase.md'));
-    assert.match(fm, /^effort:\s*xhigh$/m,
+    assert.match(fm, /^effort:[ \t]*xhigh$/m,
       `plan-phase.md frontmatter must have effort: xhigh\nActual:\n${fm}`);
   });
 });
@@ -131,13 +131,13 @@ describe('#769 source commands: heavy skills have context: fork and effort: xhig
 describe('#769 source commands: quick-status skills have effort: low', () => {
   test('commands/gsd/progress.md has effort: low', () => {
     const fm = readFrontmatter(path.join(SOURCE_COMMANDS_DIR, 'progress.md'));
-    assert.match(fm, /^effort:\s*low$/m,
+    assert.match(fm, /^effort:[ \t]*low$/m,
       `progress.md frontmatter must have effort: low\nActual:\n${fm}`);
   });
 
   test('commands/gsd/stats.md has effort: low', () => {
     const fm = readFrontmatter(path.join(SOURCE_COMMANDS_DIR, 'stats.md'));
-    assert.match(fm, /^effort:\s*low$/m,
+    assert.match(fm, /^effort:[ \t]*low$/m,
       `stats.md frontmatter must have effort: low\nActual:\n${fm}`);
   });
 });
@@ -164,7 +164,7 @@ describe('#769 convertClaudeCommandToClaudeSkill: preserves context and effort f
     const end = result.indexOf('---', 3);
     const fm = result.substring(3, end);
 
-    assert.match(fm, /^context:\s*fork$/m,
+    assert.match(fm, /^context:[ \t]*fork$/m,
       `SKILL.md frontmatter must include context: fork\nActual frontmatter:\n${fm}`);
   });
 
@@ -187,7 +187,7 @@ describe('#769 convertClaudeCommandToClaudeSkill: preserves context and effort f
     const end = result.indexOf('---', 3);
     const fm = result.substring(3, end);
 
-    assert.match(fm, /^effort:\s*xhigh$/m,
+    assert.match(fm, /^effort:[ \t]*xhigh$/m,
       `SKILL.md frontmatter must include effort: xhigh\nActual frontmatter:\n${fm}`);
   });
 
@@ -208,7 +208,7 @@ describe('#769 convertClaudeCommandToClaudeSkill: preserves context and effort f
     const end = result.indexOf('---', 3);
     const fm = result.substring(3, end);
 
-    assert.match(fm, /^effort:\s*low$/m,
+    assert.match(fm, /^effort:[ \t]*low$/m,
       `SKILL.md frontmatter must include effort: low\nActual frontmatter:\n${fm}`);
   });
 
@@ -255,7 +255,7 @@ describe('#769 Claude global install: SKILL.md files preserve context: fork and 
     runClaudeGlobalInstall(claudeHome);
     const skillPath = path.join(claudeHome, 'skills', 'gsd-autonomous', 'SKILL.md');
     const fm = readFrontmatter(skillPath);
-    assert.match(fm, /^context:\s*fork$/m,
+    assert.match(fm, /^context:[ \t]*fork$/m,
       `gsd-autonomous SKILL.md must have context: fork\nActual:\n${fm}`);
   });
 
@@ -263,7 +263,7 @@ describe('#769 Claude global install: SKILL.md files preserve context: fork and 
     runClaudeGlobalInstall(claudeHome);
     const skillPath = path.join(claudeHome, 'skills', 'gsd-autonomous', 'SKILL.md');
     const fm = readFrontmatter(skillPath);
-    assert.match(fm, /^effort:\s*xhigh$/m,
+    assert.match(fm, /^effort:[ \t]*xhigh$/m,
       `gsd-autonomous SKILL.md must have effort: xhigh\nActual:\n${fm}`);
   });
 
@@ -271,23 +271,39 @@ describe('#769 Claude global install: SKILL.md files preserve context: fork and 
     runClaudeGlobalInstall(claudeHome);
     const skillPath = path.join(claudeHome, 'skills', 'gsd-execute-phase', 'SKILL.md');
     const fm = readFrontmatter(skillPath);
-    assert.match(fm, /^context:\s*fork$/m,
+    assert.match(fm, /^context:[ \t]*fork$/m,
       `gsd-execute-phase SKILL.md must have context: fork\nActual:\n${fm}`);
+  });
+
+  test('gsd-execute-phase SKILL.md has effort: xhigh after global install', () => {
+    runClaudeGlobalInstall(claudeHome);
+    const skillPath = path.join(claudeHome, 'skills', 'gsd-execute-phase', 'SKILL.md');
+    const fm = readFrontmatter(skillPath);
+    assert.match(fm, /^effort:[ \t]*xhigh$/m,
+      `gsd-execute-phase SKILL.md must have effort: xhigh\nActual:\n${fm}`);
   });
 
   test('gsd-plan-phase SKILL.md has context: fork after global install', () => {
     runClaudeGlobalInstall(claudeHome);
     const skillPath = path.join(claudeHome, 'skills', 'gsd-plan-phase', 'SKILL.md');
     const fm = readFrontmatter(skillPath);
-    assert.match(fm, /^context:\s*fork$/m,
+    assert.match(fm, /^context:[ \t]*fork$/m,
       `gsd-plan-phase SKILL.md must have context: fork\nActual:\n${fm}`);
+  });
+
+  test('gsd-plan-phase SKILL.md has effort: xhigh after global install', () => {
+    runClaudeGlobalInstall(claudeHome);
+    const skillPath = path.join(claudeHome, 'skills', 'gsd-plan-phase', 'SKILL.md');
+    const fm = readFrontmatter(skillPath);
+    assert.match(fm, /^effort:[ \t]*xhigh$/m,
+      `gsd-plan-phase SKILL.md must have effort: xhigh\nActual:\n${fm}`);
   });
 
   test('gsd-progress SKILL.md has effort: low after global install', () => {
     runClaudeGlobalInstall(claudeHome);
     const skillPath = path.join(claudeHome, 'skills', 'gsd-progress', 'SKILL.md');
     const fm = readFrontmatter(skillPath);
-    assert.match(fm, /^effort:\s*low$/m,
+    assert.match(fm, /^effort:[ \t]*low$/m,
       `gsd-progress SKILL.md must have effort: low\nActual:\n${fm}`);
   });
 
@@ -295,7 +311,7 @@ describe('#769 Claude global install: SKILL.md files preserve context: fork and 
     runClaudeGlobalInstall(claudeHome);
     const skillPath = path.join(claudeHome, 'skills', 'gsd-stats', 'SKILL.md');
     const fm = readFrontmatter(skillPath);
-    assert.match(fm, /^effort:\s*low$/m,
+    assert.match(fm, /^effort:[ \t]*low$/m,
       `gsd-stats SKILL.md must have effort: low\nActual:\n${fm}`);
   });
 });
