@@ -1,6 +1,7 @@
 'use strict';
 
 const { spawnSync } = require('child_process');
+const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 
 const CROSS_PLATFORM_TEST_REASON = Object.freeze({
   PASS: 'pass',
@@ -50,14 +51,17 @@ function runCrossPlatformTests(options = {}, deps = {}) {
 }
 
 if (require.main === module) {
-  const result = runCrossPlatformTests();
-  const line = `[cross-platform-tests] reason=${result.reason} exit=${result.exitCode}`;
-  if (result.ok) {
-    process.stdout.write(`${line}\n`);
-    process.exit(0);
+  function main() {
+    const result = runCrossPlatformTests();
+    const line = `[cross-platform-tests] reason=${result.reason} exit=${result.exitCode}`;
+    if (result.ok) {
+      process.stdout.write(`${line}\n`);
+      return 0;
+    }
+    process.stderr.write(`${line}\n`);
+    throw new ExitError(result.exitCode);
   }
-  process.stderr.write(`${line}\n`);
-  process.exit(result.exitCode);
+  runMain(main);
 }
 
 module.exports = { CROSS_PLATFORM_TEST_REASON, runCrossPlatformTests };

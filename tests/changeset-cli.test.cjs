@@ -93,7 +93,7 @@ function runExtract(args = [], changelogText = null) {
 }
 
 describe('changeset cli extract: version-range changelog extraction (#3496)', () => {
-  test('exits 2 with no output when no versions fall in range', (t) => {
+  test('exits 2 with no output when no versions fall in range', (_t) => {
     const r = runExtract(['--from', '1.5.15', '--to', '1.5.15', '--json'], EXTRACT_CHANGELOG);
     assert.equal(r.status, 2, `expected exit 2 for empty range, stderr=${r.stderr}`);
     // F11: assert JSON structure is present and releases is empty array
@@ -101,7 +101,7 @@ describe('changeset cli extract: version-range changelog extraction (#3496)', ()
     assert.strictEqual(r.json.releases.length, 0, 'releases must be empty array on exit 2');
   });
 
-  test('extracts versions strictly after from and up to and including to', (t) => {
+  test('extracts versions strictly after from and up to and including to', (_t) => {
     const r = runExtract(['--from', '1.5.13', '--to', '1.5.15', '--json'], EXTRACT_CHANGELOG);
     assert.equal(r.status, 0, `stderr=${r.stderr}`);
     assert.ok(r.json, 'stdout must be valid JSON');
@@ -112,7 +112,7 @@ describe('changeset cli extract: version-range changelog extraction (#3496)', ()
     assert.ok(!versions.includes('1.5.10'), '1.5.10 must NOT be in range (below from)');
   });
 
-  test('accepts v-prefixed version arguments', (t) => {
+  test('accepts v-prefixed version arguments', (_t) => {
     const r = runExtract(['--from', 'v1.5.13', '--to', 'v1.5.15', '--json'], EXTRACT_CHANGELOG);
     assert.equal(r.status, 0, `stderr=${r.stderr}`);
     assert.ok(r.json, 'stdout must be valid JSON');
@@ -122,7 +122,7 @@ describe('changeset cli extract: version-range changelog extraction (#3496)', ()
     assert.ok(!versions.includes('1.5.13'));
   });
 
-  test('captures multi-line bullets in extracted range', (t) => {
+  test('captures multi-line bullets in extracted range', (_t) => {
     const r = runExtract(['--from', '1.5.13', '--to', '1.5.14', '--json'], EXTRACT_CHANGELOG);
     assert.equal(r.status, 0, `stderr=${r.stderr}`);
     const release = r.json.releases.find((rel) => rel.version === '1.5.14');
@@ -132,7 +132,7 @@ describe('changeset cli extract: version-range changelog extraction (#3496)', ()
     assert.ok(prs.includes(102), 'multi-line bullet pr=102 must be captured');
   });
 
-  test('emits markdown text (non-JSON) when --json is not passed', (t) => {
+  test('emits markdown text (non-JSON) when --json is not passed', (_t) => {
     // Without --json the output is human-readable markdown, not JSON.
     // Assert on structural facts derivable from the text: exactly the two
     // matched releases appear as ## headers, using parseChangelog so we
@@ -149,13 +149,13 @@ describe('changeset cli extract: version-range changelog extraction (#3496)', ()
     assert.ok(!versions.includes('1.5.13'), '1.5.13 must not appear in output (excluded by --from)');
   });
 
-  test('missing --from or --to emits usage and exits non-zero', (t) => {
+  test('missing --from or --to emits usage and exits non-zero', (_t) => {
     const r = runExtract(['--from', '1.0.0'], EXTRACT_CHANGELOG);
     assert.notEqual(r.status, 0);
     assert.ok(r.stderr.length > 0 || r.stdout.length > 0, 'must emit usage text');
   });
 
-  test('rejects malformed --from semver (non-numeric component) with exit 1', (t) => {
+  test('rejects malformed --from semver (non-numeric component) with exit 1', (_t) => {
     const r = runExtract(['--from', '1.41.x', '--to', '1.5.15', '--json'], EXTRACT_CHANGELOG);
     assert.equal(r.status, 1, `expected exit 1 for malformed --from, stderr=${r.stderr}`);
     assert.ok(r.json, 'stdout must be valid JSON on error');
@@ -163,7 +163,7 @@ describe('changeset cli extract: version-range changelog extraction (#3496)', ()
     assert.ok(r.json.error.includes('--from'), 'error must mention --from');
   });
 
-  test('rejects malformed --to semver (alphabetic) with exit 1', (t) => {
+  test('rejects malformed --to semver (alphabetic) with exit 1', (_t) => {
     const r = runExtract(['--from', '1.5.13', '--to', 'foo', '--json'], EXTRACT_CHANGELOG);
     assert.equal(r.status, 1, `expected exit 1 for malformed --to, stderr=${r.stderr}`);
     assert.ok(r.json, 'stdout must be valid JSON on error');
@@ -171,7 +171,7 @@ describe('changeset cli extract: version-range changelog extraction (#3496)', ()
     assert.ok(r.json.error.includes('--to'), 'error must mention --to');
   });
 
-  test('preserves bullets without PR trailer in extracted output', (t) => {
+  test('preserves bullets without PR trailer in extracted output', (_t) => {
     // Fixture with one no-PR bullet and one PR bullet.
     const CHANGELOG_NO_PR = [
       '# Changelog',
@@ -196,7 +196,7 @@ describe('changeset cli extract: version-range changelog extraction (#3496)', ()
   });
 
   // F2: pre-release entries must be excluded from range queries
-  test('F2: pre-release entry 1.0.0-rc.1 is excluded from range --from 0.9.9 --to 1.0.0', (t) => {
+  test('F2: pre-release entry 1.0.0-rc.1 is excluded from range --from 0.9.9 --to 1.0.0', (_t) => {
     const CHANGELOG_WITH_PRERELEASE = [
       '# Changelog',
       '',
@@ -228,7 +228,7 @@ describe('changeset cli extract: version-range changelog extraction (#3496)', ()
   });
 
   // F3: linked-header format ## [1.42.1](url) - date must parse date correctly
-  test('F3: linked-header ## [1.42.1](url) - date parses date correctly', (t) => {
+  test('F3: linked-header ## [1.42.1](url) - date parses date correctly', (_t) => {
     const CHANGELOG_LINKED = [
       '# Changelog',
       '',
@@ -255,7 +255,7 @@ describe('changeset cli extract: version-range changelog extraction (#3496)', ()
   });
 
   // F4: nested bullets must remain as separate bullets, not fold into parent
-  test('F4: nested bullets are not folded into parent bullet', (t) => {
+  test('F4: nested bullets are not folded into parent bullet', (_t) => {
     const CHANGELOG_NESTED = [
       '# Changelog',
       '',
@@ -283,7 +283,7 @@ describe('changeset cli extract: version-range changelog extraction (#3496)', ()
   });
 
   // F5+F6: 4-part headers and v-prefix in-file headers
-  test('F5+F6: 4-part version in CHANGELOG is skipped, v-prefixed version parses without v', (t) => {
+  test('F5+F6: 4-part version in CHANGELOG is skipped, v-prefixed version parses without v', (_t) => {
     const CHANGELOG_EDGE = [
       '# Changelog',
       '',
@@ -324,7 +324,7 @@ describe('changeset cli extract: version-range changelog extraction (#3496)', ()
   // F1: workflows/update.md must reference the extract subcommand invocation.
   // allow-test-rule: reads a product workflow .md file (not CJS source) to verify
   // the user-facing instruction was wired; there is no behavioural runtime to invoke.
-  test('F1: workflows/update.md contains concrete extract subcommand invocation', (t) => {
+  test('F1: workflows/update.md contains concrete extract subcommand invocation', (_t) => {
     const workflowPath = path.join(ROOT, 'gsd-core', 'workflows', 'update.md');
     const workflowText = fs.readFileSync(workflowPath, 'utf8');
     // The invocation is: node "$GSD_DIR/gsd-core/scripts/changeset/cli.cjs" extract

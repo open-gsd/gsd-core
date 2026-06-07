@@ -43,6 +43,7 @@
     },
     "milestone": {
       "files": [
+        "bug-730-milestone-phase-details-scope.test.cjs",
         "milestone-archive.test.cjs",
         "milestone-helper.test.cjs",
         "milestone-prefixed-convention.test.cjs",

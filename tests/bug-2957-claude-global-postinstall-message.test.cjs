@@ -39,6 +39,7 @@ function captureFinishInstallOutput(runtime, isGlobal) {
     console.log = original;
   }
   // Strip ANSI color escapes so message-content assertions don't couple to colors.
+  // eslint-disable-next-line no-control-regex -- \x1b (ESC) is the required leading byte of ANSI SGR color sequences; matching it is the purpose of stripping ANSI codes from captured CLI/console output
   return lines.join('\n').replace(/\x1B\[[0-9;]*m/g, '');
 }
 

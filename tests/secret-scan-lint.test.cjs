@@ -32,7 +32,7 @@
 // protocol. Migrating to a parsed IR would add ceremony without changing
 // what is verified — the strings ARE the typed surface.
 
-const { describe, test, before, after } = require('node:test');
+const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const { execFileSync, spawnSync } = require('child_process');
 const fs = require('fs');
@@ -97,25 +97,6 @@ function runSecretScan(fileContent, extraArgs = []) {
   } finally {
     cleanup(tmpDir);
   }
-}
-
-/**
- * Run secret-scan.sh --dir <dir> [extraArgs] and count effective exclusions
- * by checking how many files in a known fixture set are skipped vs scanned.
- * Uses spawnSync with a generous timeout for large directories.
- */
-function runSecretScanDir(dirPath, extraArgs = []) {
-  const args = ['--dir', dirPath, ...extraArgs];
-  const result = spawnSync(SECRET_SCAN, args, {
-    encoding: 'utf-8',
-    timeout: 60000,
-    cwd: PROJECT_ROOT,
-  });
-  return {
-    status: result.status !== null ? result.status : 1,
-    stdout: result.stdout || '',
-    stderr: result.stderr || '',
-  };
 }
 
 // ─── Script Existence ─────────────────────────────────────────────────────────

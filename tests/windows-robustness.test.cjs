@@ -85,9 +85,6 @@ function findUnguardedInfoCommands(code) {
 // ─── Workflow Shell Robustness ────────────────────────────────────────────────
 
 describe('workflow shell robustness', () => {
-  const workflowFiles = fs.readdirSync(WORKFLOWS_DIR)
-    .filter(f => f.endsWith('.md'));
-
   // Key workflow files that must have || true guards on informational commands
   const criticalWorkflows = [
     'resume-project.md',

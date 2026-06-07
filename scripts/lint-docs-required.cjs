@@ -14,6 +14,7 @@
  */
 
 const { parseFragment, FRAGMENT_ERROR } = require('./changeset/parse.cjs');
+const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 
 const LINT_REASON = Object.freeze({
   OK_NO_TRIGGERING_FRAGMENTS: 'ok_no_triggering_fragments',
@@ -161,8 +162,7 @@ function main() {
     );
     changedFiles = out.split('\n').filter(Boolean);
   } catch (e) {
-    process.stderr.write(`could not compute diff: ${e.message}\n`);
-    process.exit(2);
+    throw new ExitError(2, `could not compute diff: ${e.message}`);
   }
 
   const { fragments, malformed } = readFragmentsFromDisk(changedFiles, rootDir);
@@ -204,10 +204,10 @@ function main() {
       `exemption via \`<!-- docs-exempt: <reason> -->\` inside the fragment body also works.\n`,
     );
   }
-  process.exit(verdict.ok ? 0 : 1);
+  return verdict.ok ? 0 : 1;
 }
 
-if (require.main === module) main();
+if (require.main === module) runMain(main);
 
 module.exports = {
   evaluateLint,

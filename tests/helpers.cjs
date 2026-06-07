@@ -328,4 +328,38 @@ function withIsolatedProcessState(fn) {
   }
 }
 
-module.exports = { runGsdTools, createTempDir, createTempProject, createTempGitProject, cleanup, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, runNpm, isolatedNpmEnv, withIsolatedProcessState, TOOLS_PATH };
+/**
+ * Async delay — yields the event loop for `ms` ms without a synchronous block.
+ * Replaces raw setTimeout / Atomics.wait sleeps in tests. `ms` is an identifier
+ * and the Promise is not awaited inline, so it does not trip the no-magic-sleep
+ * / no-restricted-syntax test rules (which only scan *.test.cjs anyway).
+ */
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Poll `predicate` until it returns truthy or the deadline elapses — the approved
+ * poll-for-condition pattern for cross-process test synchronization. Returns the
+ * predicate's truthy value; throws Error(message) on timeout.
+ *
+ * `predicate` must return a boolean or truthy value when ready; any falsy result
+ * (including `0` or `''`) is treated as "not ready yet". Do not use predicates
+ * whose meaningful result can be falsy.
+ *
+ * `predicate` should not throw — exceptions propagate out of `waitFor` uncaught
+ * and are NOT retried. If the readiness check can throw on a transient state
+ * (e.g. parsing a partially-written file), guard inside the predicate and return
+ * `false` instead.
+ */
+async function waitFor(predicate, { timeoutMs = 10000, stepMs = 25, message = 'waitFor timed out' } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = predicate();
+    if (value) return value;
+    if (Date.now() >= deadline) throw new Error(message);
+    await delay(stepMs);
+  }
+}
+
+module.exports = { runGsdTools, createTempDir, createTempProject, createTempGitProject, cleanup, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, runNpm, isolatedNpmEnv, withIsolatedProcessState, delay, waitFor, TOOLS_PATH };

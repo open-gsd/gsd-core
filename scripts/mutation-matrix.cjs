@@ -32,6 +32,8 @@
 const { execFileSync } = require('child_process');
 const { readFileSync } = require('fs');
 
+const { ExitError, runMain } = require('./lib/cli-exit.cjs');
+
 // ── Single source of truth: covered modules ───────────────────────────────────
 // Each entry: { cjs: '<built artifact>', tests: ['tests/...', ...] }
 // A module is "covered" iff its tests are wired into the Stryker command runner
@@ -121,7 +123,7 @@ function parseArgs(argv) {
         '  --base <ref>   Git ref to diff against (default: origin/${GITHUB_BASE_REF:-next})',
         '  --print        Human-readable output instead of JSON',
       ].join('\n'));
-      process.exit(0);
+      throw new ExitError(0);
     } else {
       throw new Error(`unknown argument: ${arg}`);
     }
@@ -211,9 +213,10 @@ function main() {
       console.log(JSON.stringify(result, null, 2));
     }
   } catch (err) {
+    if (err instanceof ExitError) throw err;
     console.error(`mutation-matrix: ${err.message}`);
-    process.exit(2);
+    throw new ExitError(2);
   }
 }
 
-main();
+runMain(main);

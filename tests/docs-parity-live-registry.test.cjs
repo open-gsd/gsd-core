@@ -309,10 +309,6 @@ describe('getLiveCommandTokens() — helper contract', () => {
   test('contains exactly 3 tokens per slug (slash, colon, dollar)', () => {
     const result = getLiveCommandTokens();
     // Every /gsd-slug should have a matching /gsd:slug and $gsd-slug
-    let tokenCount = 0;
-    for (const token of result) {
-      if (token.startsWith('/gsd-')) tokenCount++;
-    }
     const slashTokens = [...result].filter(t => t.startsWith('/gsd-'));
     for (const slash of slashTokens) {
       const slug = slash.slice('/gsd-'.length);

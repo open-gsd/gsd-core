@@ -44,8 +44,6 @@ const {
   shouldInstallSkill,
   stageSkillsForMode,
   cleanupStagedSkills,
-  loadSkillsManifest,
-  resolveProfile,
 } = require('../gsd-core/bin/lib/install-profiles.cjs');
 
 const {

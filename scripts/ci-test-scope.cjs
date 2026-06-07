@@ -3,7 +3,8 @@
 
 const { execFileSync } = require('child_process');
 const { existsSync, readdirSync, appendFileSync } = require('fs');
-const { join } = require('path');
+
+const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 
 const RULES = [
   {
@@ -198,7 +199,7 @@ function parseArgs(argv) {
       if (!out.files) throw new Error('--files requires a value');
     } else if (arg === '--help' || arg === '-h') {
       console.log(usage());
-      process.exit(0);
+      throw new ExitError(0);
     } else {
       throw new Error(`unknown argument: ${arg}`);
     }
@@ -318,10 +319,11 @@ function main() {
     writeOutputs(result);
     console.log(JSON.stringify(result, null, 2));
   } catch (error) {
+    if (error instanceof ExitError) throw error;
     console.error(`ci-test-scope: ${error.message}`);
     console.error(usage());
-    process.exit(2);
+    throw new ExitError(2);
   }
 }
 
-main();
+runMain(main);

@@ -33,7 +33,7 @@ function isGraphifyEnabled(planningDir: string): boolean {
       (config.graphify as Record<string, unknown>).enabled === true
     ) return true;
     return false;
-  } catch (_e) {
+  } catch {
     return false;
   }
 }
@@ -230,7 +230,7 @@ function safeReadJson(filePath: string): Graph | null {
   try {
     if (!fs.existsSync(filePath)) return null;
     return JSON.parse(fs.readFileSync(filePath, 'utf8')) as Graph;
-  } catch (_e) {
+  } catch {
     return null;
   }
 }

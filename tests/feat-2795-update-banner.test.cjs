@@ -317,6 +317,7 @@ describe('install.js update-banner wiring', () => {
     // Strip ANSI color escapes before structural assertions — the choice
     // digits are wrapped in color codes so word-boundary regex against the
     // raw text would miss them.
+    // eslint-disable-next-line no-control-regex -- \x1b (ESC) is the required leading byte of ANSI SGR color sequences; matching it is the purpose of stripping ANSI codes from captured CLI/console output
     const stripped = text.replace(/\x1b\[[0-9;]*m/g, '');
     // Prompt must offer at least two choices (default + opt-in).
     assert.match(stripped, /\b1\b/);

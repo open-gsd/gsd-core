@@ -32,7 +32,6 @@ const { cleanup } = require('./helpers.cjs');
 const REPO_ROOT = path.resolve(__dirname, '..');
 const INSTALL_PATH = path.join(REPO_ROOT, 'bin', 'install.js');
 const HOOKS_DIST_DIR = path.join(REPO_ROOT, 'hooks', 'dist');
-const HOOKS_SRC_DIR = path.join(REPO_ROOT, 'hooks');
 
 // ---------------------------------------------------------------------------
 // Helpers

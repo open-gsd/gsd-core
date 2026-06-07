@@ -60,6 +60,8 @@ function evaluateLint({ changedFiles, labels }) {
   return { ok: false, reason: LINT_REASON.FAIL_MISSING_FRAGMENT };
 }
 
+const { ExitError, runMain } = require('../lib/cli-exit.cjs');
+
 function main() {
   const fs = require('node:fs');
   const cp = require('node:child_process');
@@ -87,8 +89,7 @@ function main() {
     );
     changedFiles = out.split('\n').filter(Boolean);
   } catch (e) {
-    process.stderr.write(`could not compute diff: ${e.message}\n`);
-    process.exit(2);
+    throw new ExitError(2, `could not compute diff: ${e.message}`);
   }
 
   const verdict = evaluateLint({ changedFiles, labels });
@@ -102,9 +103,9 @@ function main() {
     process.stderr.write(`Run \`npm run changeset\` to create one, or add the \`${OPT_OUT_LABEL}\` label\n`);
     process.stderr.write(`if this PR genuinely has no user-facing impact (test refactor, CI tweak, etc.).\n`);
   }
-  process.exit(verdict.ok ? 0 : 1);
+  return verdict.ok ? 0 : 1;
 }
 
-if (require.main === module) main();
+if (require.main === module) runMain(main);
 
 module.exports = { evaluateLint, LINT_REASON, OPT_OUT_LABEL, isUserFacing, isFragment };

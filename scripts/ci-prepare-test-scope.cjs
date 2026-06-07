@@ -14,33 +14,38 @@
 const fs = require('fs');
 const path = require('path');
 
+const { ExitError, runMain } = require('./lib/cli-exit.cjs');
+
 const scope = process.env.TEST_SCOPE || '';
 const targeted = process.env.TARGETED_TESTS || '';
 const windows = process.env.WINDOWS_TESTS || '';
 
 const FALLBACK = 'tests/command-contract.test.cjs tests/commands.test.cjs tests/core.test.cjs tests/package-manifest.test.cjs';
 
-let selected;
-if (scope === 'windows') {
-  selected = windows;
-} else if (scope === 'targeted') {
-  selected = targeted;
-} else {
-  process.stderr.write(`::error::Unknown test scope: ${scope}\n`);
-  process.exit(1);
+function main() {
+  let selected;
+  if (scope === 'windows') {
+    selected = windows;
+  } else if (scope === 'targeted') {
+    selected = targeted;
+  } else {
+    throw new ExitError(1, `::error::Unknown test scope: ${scope}`);
+  }
+
+  // Trim and fall back to default set if empty.
+  if (!selected.trim()) {
+    selected = FALLBACK;
+  }
+
+  // Split on whitespace, filter blanks, join with newlines.
+  const lines = selected.split(/\s+/).filter(Boolean);
+  const content = lines.join('\n') + '\n';
+
+  const outPath = path.join(process.cwd(), '.ci-selected-tests.txt');
+  fs.writeFileSync(outPath, content, 'utf-8');
+
+  process.stdout.write('Scoped tests:\n');
+  process.stdout.write(content);
 }
 
-// Trim and fall back to default set if empty.
-if (!selected.trim()) {
-  selected = FALLBACK;
-}
-
-// Split on whitespace, filter blanks, join with newlines.
-const lines = selected.split(/\s+/).filter(Boolean);
-const content = lines.join('\n') + '\n';
-
-const outPath = path.join(process.cwd(), '.ci-selected-tests.txt');
-fs.writeFileSync(outPath, content, 'utf-8');
-
-process.stdout.write('Scoped tests:\n');
-process.stdout.write(content);
+runMain(main);

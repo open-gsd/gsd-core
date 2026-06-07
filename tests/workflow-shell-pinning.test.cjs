@@ -118,14 +118,14 @@ function findViolations(filePath) {
   let inDefaultsBlock = false;    // currently inside a `defaults:` mapping
   let inDefaultsRunBlock = false; // currently inside `defaults: run:`
   let defaultsBlockOwner = null;  // 'workflow' or 'job'
-  let defaultsBlockCol = null;    // column of the `defaults:` key
+  let _defaultsBlockCol = null;    // column of the `defaults:` key
 
   // Strategy/matrix tracking
-  let inStrategyBlock = false;
-  let inMatrixBlock = false;
-  let inMatrixOsBlock = false;
-  let strategyCol = null;
-  let matrixCol = null;
+  let _inStrategyBlock = false;
+  let _inMatrixBlock = false;
+  let _inMatrixOsBlock = false;
+  let _strategyCol = null;
+  let _matrixCol = null;
 
   // Step tracking
   let stepIndent = null;      // indent level of the `- name:/run:/uses:` items
@@ -178,7 +178,7 @@ function findViolations(filePath) {
       inDefaultsBlock = true;
       inDefaultsRunBlock = false;
       defaultsBlockOwner = 'workflow';
-      defaultsBlockCol = 0;
+      _defaultsBlockCol = 0;
       continue;
     }
 
@@ -216,9 +216,9 @@ function findViolations(filePath) {
       // Reset sub-section tracking
       inDefaultsBlock = false;
       inDefaultsRunBlock = false;
-      inStrategyBlock = false;
-      inMatrixBlock = false;
-      inMatrixOsBlock = false;
+      _inStrategyBlock = false;
+      _inMatrixBlock = false;
+      _inMatrixOsBlock = false;
       continue;
     }
 
@@ -229,7 +229,7 @@ function findViolations(filePath) {
       inDefaultsBlock = true;
       inDefaultsRunBlock = false;
       defaultsBlockOwner = 'job';
-      defaultsBlockCol = 4;
+      _defaultsBlockCol = 4;
       continue;
     }
 
@@ -248,7 +248,7 @@ function findViolations(filePath) {
 
     // ── Step list detection ───────────────────────────────────────────────
     const stepStartMatch = line.match(
-      /^(\s+)-\s+(name|run|uses|shell|if|id|env|with|continue-on-error|timeout-minutes|working-directory)\s*[:\|]/,
+      /^(\s+)-\s+(name|run|uses|shell|if|id|env|with|continue-on-error|timeout-minutes|working-directory)\s*[:|]/,
     );
     if (stepStartMatch) {
       const thisIndent = stepStartMatch[1].length;

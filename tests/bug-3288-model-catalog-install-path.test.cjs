@@ -29,7 +29,6 @@ const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const os = require('node:os');
 
 const REPO_ROOT = path.join(__dirname, '..');
 const MODEL_CATALOG_CJS = path.join(REPO_ROOT, 'gsd-core', 'bin', 'lib', 'model-catalog.cjs');

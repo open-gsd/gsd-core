@@ -25,7 +25,7 @@ const EXPECTED_AGENTS = Object.keys(MODEL_PROFILES);
  * We use --cwd to point at the project, and GSD_INSTALL_DIR env to override
  * the agents directory location for testing.
  */
-function createAgentsDir(configDir, agentNames = []) {
+function _createAgentsDir(configDir, agentNames = []) {
   const agentsDir = path.join(configDir, AGENTS_DIR_NAME);
   fs.mkdirSync(agentsDir, { recursive: true });
   for (const name of agentNames) {
