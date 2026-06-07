@@ -96,6 +96,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/config-types.cjs',
       'gsd-core/bin/lib/phases-command-router.cjs',
       'gsd-core/bin/lib/verify-command-router.cjs',
+      'gsd-core/bin/lib/verification.cjs',
+      'gsd-core/bin/lib/verification-command-router.cjs',
       'gsd-core/bin/lib/init-command-router.cjs',
       'gsd-core/bin/lib/agent-command-router.cjs',
       'gsd-core/bin/lib/task-command-router.cjs',

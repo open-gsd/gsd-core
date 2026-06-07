@@ -198,6 +198,8 @@ const learnings = require('./lib/learnings.cjs');
 const gapChecker = require('./lib/gap-checker.cjs');
 const { routeStateCommand } = require('./lib/state-command-router.cjs');
 const { routeVerifyCommand } = require('./lib/verify-command-router.cjs');
+const { routeVerificationCommand } = require('./lib/verification-command-router.cjs');
+const verification = require('./lib/verification.cjs');
 const { routeInitCommand } = require('./lib/init-command-router.cjs');
 const { routePhaseCommand } = require('./lib/phase-command-router.cjs');
 const { routePhasesCommand } = require('./lib/phases-command-router.cjs');
@@ -768,6 +770,26 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
     case 'verify': {
       routeVerifyCommand({
         verify,
+        args,
+        cwd,
+        raw,
+        error,
+      });
+      break;
+    }
+
+    // ─── Verification Status ───────────────────────────────────────────────
+    //
+    // verification status <phaseDir>
+    //   Read the first *-VERIFICATION.md in phaseDir and return
+    //   { status, next_action, next_command } routing result.
+    //
+    // Note: `verification` (reads verifier-emitted status) is distinct from
+    // `verify` (runs verification checks like plan-structure/artifacts).
+
+    case 'verification': {
+      routeVerificationCommand({
+        verification,
         args,
         cwd,
         raw,

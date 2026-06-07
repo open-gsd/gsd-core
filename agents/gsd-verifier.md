@@ -576,6 +576,8 @@ Classify status using this decision tree IN ORDER (most restrictive first):
 
 **passed is ONLY valid when the human verification section is empty.** If you identified items requiring human testing in Step 8, status MUST be human_needed.
 
+> **Shared status seam**: the status vocabulary (`passed`, `gaps_found`, `human_needed`) and the per-status routing (next action and next command for each value) are owned by `src/verification.cts` via `gsd_run query verification.status`. This agent is the single emitter of the frontmatter status field; consumers (ship.md, execute-phase.md) read routing from that query instead of re-deriving it.
+
 **Score:** `verified_truths / total_truths`
 
 ## Step 9b: Filter Deferred Items
