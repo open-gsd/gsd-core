@@ -153,6 +153,18 @@ Check whether the plan is too ambitious. Plans should have two or three tasks at
 
 For systematic diagnosis of what went wrong, see [Debug a failed execution](debug-a-failed-execution.md).
 
+### If you see "FATAL: worktree base mismatch" or the exit-42 warning
+
+This happens when your current branch is ahead of the repository's default branch (for example, an unmerged milestone or feature branch). Claude Code forks executor worktrees from `origin/HEAD`, not your `HEAD`, so plan files that exist only on your branch are absent inside the worktree.
+
+Since the fix landed, GSD automatically degrades to sequential execution on the main working tree and prints a one-line warning — the phase will complete without any action from you. To restore parallel execution permanently, run:
+
+```bash
+node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" worktree set-baseref
+```
+
+For a full explanation and all available options, see [Fix the worktree base-mismatch (exit 42) error](fix-worktree-base-mismatch.md).
+
 ### If parallel execution causes build lock errors or pre-commit hook failures
 
 This is caused by multiple agents triggering build tools simultaneously. GSD handles this automatically since v1.26. If you are on an older version, or still seeing contention, disable parallel execution:
@@ -312,12 +324,14 @@ Also audit which MCP servers are enabled. Every enabled MCP server injects its t
 | Update broke local changes | `/gsd-update --reapply` |
 | Want session summary | `/gsd-pause-work --report` |
 | Parallel execution build errors | Update GSD or set `parallelization.enabled: false` |
+| Worktree base mismatch / exit 42 | Auto-degraded to sequential (no action needed); run `worktree set-baseref` to restore parallelism |
 
 ---
 
 ## Related
 
 - [Debug a failed execution](debug-a-failed-execution.md)
+- [Fix the worktree base-mismatch (exit 42) error](fix-worktree-base-mismatch.md)
 - [Install on your runtime](install-on-your-runtime.md)
 - [Commands](../COMMANDS.md)
 - [docs index](../README.md)

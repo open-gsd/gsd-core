@@ -232,10 +232,11 @@ function assertFreshInstallContract(runtime, targetDir) {
       `${runtime} should install commands/gsd entries`
     );
   } else if (contract.surface === 'clinerules') {
+    // #787: Cline now uses the .clinerules/ directory form (rules at gsd.md).
     assert.match(
-      fs.readFileSync(path.join(targetDir, '.clinerules'), 'utf8'),
+      fs.readFileSync(path.join(targetDir, '.clinerules', 'gsd.md'), 'utf8'),
       /GSD workflows live in `gsd-core\/workflows\/`/,
-      'Cline should install root .clinerules guidance'
+      'Cline should install .clinerules/gsd.md guidance'
     );
   }
 

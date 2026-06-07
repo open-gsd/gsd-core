@@ -302,6 +302,89 @@ describe('applySurface', () => {
     assert.ok(fs.existsSync(userDir), 'user-custom-skill dir must be preserved when kindPrefix is empty (Hermes)');
     assert.ok(fs.existsSync(path.join(destDir, stem1, 'SKILL.md')), 'GSD help/SKILL.md must be copied');
   });
+
+  // Regression test for #813: applySurface must apply per-runtime path rewrites
+  // (applyRuntimeContentRewritesInPlace) just as installRuntimeArtifacts does.
+  // Without the fix, skill bodies retain the converter's default ~/.claude/ paths
+  // instead of being rewritten to the install target (pathPrefix).
+  //
+  // Both 'cursor' and 'codex' use skillsKind AND have a path-rewrite case in
+  // _applyRuntimeRewrites — so the regression guard covers both.
+  for (const runtime of ['cursor', 'codex']) {
+    test(`applySurface rewrites ${runtime} skill bodies to the install pathPrefix, not the converter default ~/.claude path (#813)`, (t) => {
+      // Use mkdtempSync under os.tmpdir() — NOT under the user's home dir — so that
+      // computePathPrefix returns an ABSOLUTE prefix `${configDir}/` for local installs,
+      // clearly distinguishable from the `~/.claude/` converter default.
+      const configDir = fs.mkdtempSync(path.join(os.tmpdir(), `gsd-surface-813-${runtime}-`));
+      t.after(() => cleanup(configDir));
+
+      writeActiveProfile(configDir, 'standard');
+      writeSurface(configDir, {
+        baseProfile: 'standard',
+        disabledClusters: [],
+        explicitAdds: [],
+        explicitRemoves: [],
+      });
+
+      const manifest = loadSkillsManifest(REAL_COMMANDS_DIR);
+      // skills/gsd-<name>/SKILL.md (destSubpath 'skills', prefix 'gsd-')
+      // scope='local' ensures computePathPrefix returns an absolute configDir prefix
+      // rather than the home-relative default (e.g. ~/.cursor/ or ~/.codex/).
+      const layout = resolveRuntimeArtifactLayout(runtime, configDir, 'local');
+      applySurface(configDir, layout, manifest, CLUSTERS);
+
+      // Collect every SKILL.md body under ${configDir}/skills/
+      const skillsRoot = path.join(configDir, 'skills');
+      const skillBodies = [];
+      if (fs.existsSync(skillsRoot)) {
+        for (const dirEntry of fs.readdirSync(skillsRoot)) {
+          const skillMd = path.join(skillsRoot, dirEntry, 'SKILL.md');
+          if (fs.existsSync(skillMd)) {
+            skillBodies.push(fs.readFileSync(skillMd, 'utf8'));
+          }
+        }
+      }
+
+      // (a) Sanity: at least one SKILL.md must have been staged
+      assert.ok(
+        skillBodies.length > 0,
+        `applySurface must stage at least one ${runtime} SKILL.md under ${skillsRoot}/ but found none`
+      );
+
+      // (b) BUG SYMPTOM (#813): after the rewrite, no body should contain '~/.claude/'
+      //     or '$HOME/.claude/' — both are converter-default forms that must be eliminated.
+      //     This assertion FAILS on unpatched code — applySurface does not call
+      //     applyRuntimeContentRewritesInPlace, so the converter's default ~/.claude/
+      //     paths are left verbatim in the staged files.
+      const bodiesWithTildeClaude = skillBodies.filter(b => b.includes('~/.claude/') || b.includes('$HOME/.claude/'));
+      assert.strictEqual(
+        bodiesWithTildeClaude.length,
+        0,
+        `#813 regression: ${bodiesWithTildeClaude.length} ${runtime} SKILL.md(s) still contain '~/.claude/' or '$HOME/.claude/' after applySurface — ` +
+        `applyRuntimeContentRewritesInPlace was not applied (mirrors installRuntimeArtifacts' rewrite step)`
+      );
+
+      // (c) The rewrite must inject the real install target path, not just remove the tilde.
+      //     This also fails on unpatched code for the same reason.
+      //     NOTE: this assertion depends on the command corpus emitting rewritable
+      //     '~/.claude/'-style paths in at least one skill body. If a future corpus
+      //     change removes all such paths, this assertion will become vacuously true
+      //     (no body will contain configDirPrefix either) — update the test rather than
+      //     treating a silent zero-match as a pass.
+      // Production derives pathPrefix as `path.resolve(configDir).replace(/\\/g, '/')`
+      // (mirrors installRuntimeArtifacts), so on Windows the rewritten body uses
+      // forward slashes. Normalize the expected prefix the same way so this assertion
+      // is cross-platform (Windows CI leg is not covered by local gsd-test) (#813).
+      const configDirPrefix = `${path.resolve(configDir).replace(/\\/g, '/')}/`;
+      const bodiesWithAbsolutePrefix = skillBodies.filter(b => b.includes(configDirPrefix));
+      assert.ok(
+        bodiesWithAbsolutePrefix.length > 0,
+        `#813 regression: no ${runtime} SKILL.md contains the absolute configDir prefix '${configDirPrefix}' — ` +
+        `the path rewrite was not applied by applySurface. ` +
+        `(If the command corpus no longer emits any '~/.claude/'-style paths, update this test.)`
+      );
+    });
+  }
 });
 
 // ─── resolveSurface ──────────────────────────────────────────────────────────

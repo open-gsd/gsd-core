@@ -1,5 +1,5 @@
 {
-  "generated": "2026-06-06",
+  "generated": "2026-06-07",
   "families": {
     "agents": [
       "gsd-advisor-researcher",
@@ -325,6 +325,7 @@
       "roadmap-upgrade.cjs",
       "roadmap.cjs",
       "runtime-artifact-layout.cjs",
+      "runtime-config-adapter-registry.cjs",
       "runtime-homes.cjs",
       "runtime-name-policy.cjs",
       "runtime-slash.cjs",
@@ -344,12 +345,15 @@
       "update-context.cjs",
       "validate-command-router.cjs",
       "validate.cjs",
+      "verification-command-router.cjs",
+      "verification.cjs",
       "verify-command-router.cjs",
       "verify.cjs",
       "workstream-inventory-builder.cjs",
       "workstream-inventory.cjs",
       "workstream-name-policy.cjs",
       "workstream.cjs",
+      "worktree-base-ref.cjs",
       "worktree-safety.cjs"
     ],
     "hooks": [

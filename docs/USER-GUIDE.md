@@ -749,7 +749,7 @@ WINDSURF_CONFIG_DIR=~/.codeium/windsurf-next npx @opengsd/gsd-core@latest --wind
 | Gemini CLI | `~/.gemini` | `GEMINI_CONFIG_DIR` |
 | OpenCode | `XDG_CONFIG_HOME/opencode` | `OPENCODE_CONFIG_DIR` |
 | Codex | (per Codex CLI) | `--config-dir` flag |
-| Copilot | `~/.copilot` | `COPILOT_CONFIG_DIR` |
+| Copilot | `~/.copilot` | `COPILOT_CONFIG_DIR` (or `COPILOT_HOME`) |
 | Cursor | `~/.cursor` | `CURSOR_CONFIG_DIR` |
 | Windsurf | `~/.codeium/windsurf` | `WINDSURF_CONFIG_DIR` |
 | Antigravity | auto-detected | `ANTIGRAVITY_CONFIG_DIR` |

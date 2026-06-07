@@ -41,15 +41,12 @@ Verify the work is ready to ship:
 
 1. **Verification passed?**
    ```bash
-   VERIFICATION_FILE=$(ls ${PHASE_DIR}/*-VERIFICATION.md 2>/dev/null | head -1)
-   STATUS=$(sed -n '/^---$/,/^---$/p' "${VERIFICATION_FILE}" 2>/dev/null | grep -m1 "^status:" | cut -d: -f2 | tr -d ' ')
+   VERIFICATION=$(gsd_run query verification.status "${PHASE_DIR}" 2>/dev/null)
+   STATUS=$(printf '%s' "$VERIFICATION" | jq -r '.status' 2>/dev/null || echo "")
+   NEXT_ACTION=$(printf '%s' "$VERIFICATION" | jq -r '.next_action' 2>/dev/null || echo "")
+   NEXT_COMMAND=$(printf '%s' "$VERIFICATION" | jq -r '.next_command' 2>/dev/null || echo "")
    ```
-   The verifier emits exactly `passed`, `gaps_found`, or `human_needed` (see the status table in `execute-phase.md`); only `passed` may ship. Route on `${STATUS}` — on any non-`passed` value, block with `PHASE_VERIFICATION_INCOMPLETE` and state the matching next action:
-   - `passed` → verification complete; continue to the next preflight check.
-   - `gaps_found` → run `/gsd:plan-phase ${PHASE_NUMBER} --gaps` to plan the fixes, then re-run `/gsd:execute-phase` before shipping.
-   - `human_needed` → complete the manual tests in `${PHASE_DIR}/*-UAT.md`, then re-run the verify step until status is `passed`.
-   - empty (no `*-VERIFICATION.md`) → the verify step never completed; re-run `/gsd:execute-phase`.
-   - any other value → unexpected status `${STATUS}`; re-run `/gsd:execute-phase` verification.
+   Only `passed` may ship. If `$STATUS` is `passed`, verification is complete — continue to the next preflight check. Any other value (including `gaps_found`, `human_needed`, `missing`, and `unknown`) blocks with `PHASE_VERIFICATION_INCOMPLETE`: present `$NEXT_ACTION` to the user and, when `$NEXT_COMMAND` is non-empty, show it as the command to run next. The query already handles missing files and unexpected values, so no per-status arm is needed.
 
 2. **Clean working tree?**
    ```bash

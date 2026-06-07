@@ -421,6 +421,34 @@ node gsd-tools.cjs websearch <query> [--limit N] [--freshness day|week|month]
 
 ---
 
+## Worktree Commands
+
+Diagnose and configure the worktree fork base used by Claude Code's `isolation="worktree"` executor dispatch. These commands address the branch-divergence condition described in [Fix the worktree base-mismatch (exit 42) error](how-to/fix-worktree-base-mismatch.md).
+
+```bash
+# Check whether the current HEAD has diverged from the worktree fork base.
+# Returns JSON: { shouldDegrade, reason, message, headSha, forkRef, forkSha }
+node gsd-tools.cjs worktree base-check
+
+# Write worktree.baseRef:"head" into .claude/settings.local.json (no-clobber).
+# Returns JSON: { changed, skipped, previous, baseRef, file }
+node gsd-tools.cjs worktree set-baseref
+```
+
+**`worktree base-check`** reads `worktree.baseRef` from `.claude/settings.local.json` (then `.claude/settings.json`) and compares the current `HEAD` SHA against `origin/HEAD`. The `shouldDegrade` field is `true` when the execute-phase orchestrator will fall back to sequential execution. Possible `reason` values:
+
+| `reason` | `shouldDegrade` | Meaning |
+|---|---|---|
+| `baseref-head` | `false` | `worktree.baseRef:"head"` is set; no mismatch possible |
+| `head-matches-fork` | `false` | HEAD and `origin/HEAD` are the same commit |
+| `head-diverged-from-fork` | `true` | Branch is ahead of or diverged from `origin/HEAD` |
+| `fork-ref-unknown` | `true` | `origin/HEAD` could not be resolved |
+| `no-head` | `false` | Not in a git repo (no `HEAD`) |
+
+**`worktree set-baseref`** applies a no-clobber write of `worktree.baseRef:"head"` to `.claude/settings.local.json`. If the file already contains an explicit `baseRef` value other than `"head"`, the existing value is preserved and `skipped:"explicit-other"` is returned. Malformed JSON causes an error rather than a silent overwrite. Both fresh installs and upgrades of GSD Core run this automatically when `workflow.use_worktrees` is enabled (the default); the command is also available for manual use — for example, to apply the setting when worktrees were toggled on after installation, or to re-apply it after a settings change.
+
+---
+
 ## Graphify
 
 Build, query, and inspect the project knowledge graph in `.planning/graphs/`. Requires `graphify.enabled: true` in `config.json` (see [Configuration Reference](CONFIGURATION.md#graphify-settings)).
@@ -471,6 +499,7 @@ User-facing entry point: `/gsd-graphify` (see [Command Reference](COMMANDS.md#gs
 | Audit | `lib/audit.cjs` | Phase/milestone audit queue handlers; `audit-open` helper |
 | GSD2 Import | `lib/gsd2-import.cjs` | Reverse-migration importer from GSD-2 projects (backs `/gsd-import --from-gsd2`) |
 | Intel | `lib/intel.cjs` | Queryable codebase intelligence index (backs `/gsd-map-codebase --query`) |
+| Worktree Base Ref | `lib/worktree-base-ref.cjs` | Worktree fork-base detection and `worktree base-check` / `set-baseref` commands (#683) |
 
 ---
 
@@ -498,4 +527,5 @@ API keys configured via `/gsd-settings` (`brave_search`, `firecrawl`, `exa_searc
 - [Commands](COMMANDS.md)
 - [Configuration](CONFIGURATION.md)
 - [Architecture](ARCHITECTURE.md)
+- [Fix the worktree base-mismatch (exit 42) error](how-to/fix-worktree-base-mismatch.md)
 - [docs index](README.md)

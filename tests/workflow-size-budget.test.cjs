@@ -64,8 +64,10 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const os = require('node:os');
 const path = require('path');
 const { assertTightCeiling } = require('../scripts/lib/allowlist-ratchet.cjs');
+const { cleanup } = require('./helpers.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
 
@@ -121,10 +123,16 @@ function budgetFor(workflow) {
 }
 
 function byteCount(filePath) {
-  // Match `wc -c`: count every byte on disk, including any trailing newline.
-  // Deliberately NOT the trailing-newline-stripping logic the old lineCount()
-  // used — the byte ceilings are calibrated against raw `wc -c` output.
-  return fs.statSync(filePath).size;
+  // Count bytes as on an LF checkout, so the budget is platform-independent.
+  // The tier ceilings are calibrated against `wc -c` on a Unix (LF) checkout,
+  // but these .md files have no `eol=lf` in .gitattributes, so Windows checks
+  // them out as CRLF. Counting raw on-disk bytes there adds one byte per line,
+  // which fails CI on the high-water-mark file (execute-phase.md) on Windows
+  // ONLY — a false positive that diverges from the LF calibration basis (#683).
+  // Stripping CR yields the same LF byte count on every platform. Still a raw
+  // byte count (not the old trailing-newline-stripping lineCount()).
+  const content = fs.readFileSync(filePath, 'utf-8');
+  return Buffer.byteLength(content.replace(/\r\n/g, '\n'), 'utf-8');
 }
 
 describe('SIZE: workflow byte-size budget', () => {
@@ -547,5 +555,30 @@ describe('workflow progressive disclosure — MVP bodies lazy-loaded (#720)', ()
       'gsd-executor.md must still reference execute-mvp-tdd.md (as a lazy path or Read instruction). ' +
       'Do not delete the reference — only remove the leading @ sigil. See #720.'
     );
+  });
+});
+
+describe('SIZE: byteCount is line-ending independent (#683 regression)', () => {
+  // The budget ceilings are calibrated against an LF (Unix) checkout; Windows
+  // checks these .md files out as CRLF, which previously inflated the count by
+  // one byte per line and failed CI only on Windows for the high-water file.
+  test('CRLF and LF content of the same logical file count identically', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-size-eol-'));
+    try {
+      const body = 'line one\nline two\nthree — with a multibyte dash\n';
+      const lfPath = path.join(dir, 'lf.md');
+      const crlfPath = path.join(dir, 'crlf.md');
+      fs.writeFileSync(lfPath, body);
+      fs.writeFileSync(crlfPath, body.replace(/\n/g, '\r\n'));
+      assert.strictEqual(
+        byteCount(crlfPath),
+        byteCount(lfPath),
+        'byteCount must normalize CRLF so the byte budget is platform-independent'
+      );
+      // And it must remain a real LF byte count (not stripped/whitespace-trimmed).
+      assert.strictEqual(byteCount(lfPath), Buffer.byteLength(body, 'utf-8'));
+    } finally {
+      cleanup(dir);
+    }
   });
 });

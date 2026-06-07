@@ -12,6 +12,7 @@
     "gsd-core",
     "assets",
     "agents",
+    ".claude-plugin",
     "hooks",
     "scripts"
   ],
