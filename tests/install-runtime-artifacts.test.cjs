@@ -210,7 +210,7 @@ describe('installOpencodeFamilySkills — emits skills/<name>/SKILL.md (#784)', 
         );
         // Regression guard for the prefix-overlap double-rewrite (e.g. kilo-alt-alt).
         assert.ok(
-          !new RegExp(`${defaultBase.replace(/[.]/g, '\\.')}-[^/\\s]*-`).test(body),
+          !new RegExp(`${defaultBase.replace(/[\\.*+?^${}()|[\]]/g, '\\$&')}-[^/\\s]*-`).test(body),
           `${skillName}: must not contain a doubled config-dir suffix`,
         );
       }
