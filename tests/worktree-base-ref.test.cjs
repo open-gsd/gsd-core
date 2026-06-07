@@ -180,8 +180,8 @@ describe('resolveEffectiveBaseRef', () => {
     const claudeDir = '/repo/.claude';
     const deps = {
       readFile: makeReadFile({
-        [`${claudeDir}/settings.local.json`]: JSON.stringify({ worktree: { baseRef: 'head' } }),
-        [`${claudeDir}/settings.json`]: JSON.stringify({ worktree: { baseRef: 'fresh' } }),
+        [path.join(claudeDir, 'settings.local.json')]: JSON.stringify({ worktree: { baseRef: 'head' } }),
+        [path.join(claudeDir, 'settings.json')]: JSON.stringify({ worktree: { baseRef: 'fresh' } }),
       }),
     };
     assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps), 'head');
@@ -191,8 +191,8 @@ describe('resolveEffectiveBaseRef', () => {
     const claudeDir = '/repo/.claude';
     const deps = {
       readFile: makeReadFile({
-        [`${claudeDir}/settings.local.json`]: JSON.stringify({ other: 'value' }),
-        [`${claudeDir}/settings.json`]: JSON.stringify({ worktree: { baseRef: 'fresh' } }),
+        [path.join(claudeDir, 'settings.local.json')]: JSON.stringify({ other: 'value' }),
+        [path.join(claudeDir, 'settings.json')]: JSON.stringify({ worktree: { baseRef: 'fresh' } }),
       }),
     };
     assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps), 'fresh');
@@ -208,8 +208,8 @@ describe('resolveEffectiveBaseRef', () => {
     const claudeDir = '/repo/.claude';
     const deps = {
       readFile: makeReadFile({
-        [`${claudeDir}/settings.local.json`]: JSON.stringify({ other: 'value' }),
-        [`${claudeDir}/settings.json`]: JSON.stringify({ other: 'value2' }),
+        [path.join(claudeDir, 'settings.local.json')]: JSON.stringify({ other: 'value' }),
+        [path.join(claudeDir, 'settings.json')]: JSON.stringify({ other: 'value2' }),
       }),
     };
     assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps), null);
@@ -219,8 +219,8 @@ describe('resolveEffectiveBaseRef', () => {
     const claudeDir = '/repo/.claude';
     const deps = {
       readFile: makeReadFile({
-        [`${claudeDir}/settings.local.json`]: 'not valid json {{{',
-        [`${claudeDir}/settings.json`]: JSON.stringify({ worktree: { baseRef: 'head' } }),
+        [path.join(claudeDir, 'settings.local.json')]: 'not valid json {{{',
+        [path.join(claudeDir, 'settings.json')]: JSON.stringify({ worktree: { baseRef: 'head' } }),
       }),
     };
     assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps), 'head');
@@ -230,8 +230,8 @@ describe('resolveEffectiveBaseRef', () => {
     const claudeDir = '/repo/.claude';
     const deps = {
       readFile: makeReadFile({
-        [`${claudeDir}/settings.local.json`]: null,
-        [`${claudeDir}/settings.json`]: 'not valid json',
+        [path.join(claudeDir, 'settings.local.json')]: null,
+        [path.join(claudeDir, 'settings.json')]: 'not valid json',
       }),
     };
     assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps), null);
@@ -241,8 +241,8 @@ describe('resolveEffectiveBaseRef', () => {
     const claudeDir = '/repo/.claude';
     const deps = {
       readFile: makeReadFile({
-        [`${claudeDir}/settings.local.json`]: JSON.stringify({ worktree: { baseRef: null } }),
-        [`${claudeDir}/settings.json`]: JSON.stringify({ worktree: { baseRef: 'fresh' } }),
+        [path.join(claudeDir, 'settings.local.json')]: JSON.stringify({ worktree: { baseRef: null } }),
+        [path.join(claudeDir, 'settings.json')]: JSON.stringify({ worktree: { baseRef: 'fresh' } }),
       }),
     };
     assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps), 'fresh');
@@ -428,7 +428,7 @@ describe('cmdWorktreeBaseCheck', () => {
     let written = '';
     const deps = {
       readFile: (p) => {
-        if (p === `${claudeDir}/settings.local.json`) return JSON.stringify({ worktree: { baseRef: 'head' } });
+        if (p === path.join(claudeDir, 'settings.local.json')) return JSON.stringify({ worktree: { baseRef: 'head' } });
         return null;
       },
       execGit: makeExecGitCheck({}),
@@ -467,7 +467,7 @@ describe('cmdWorktreeBaseCheck', () => {
 describe('cmdWorktreeSetBaseRef', () => {
   test('readFile returns {} → changed true, writeFile called with worktree.baseRef "head"', () => {
     const cwd = '/repo';
-    const file = '/repo/.claude/settings.local.json';
+    const file = path.join(cwd, '.claude', 'settings.local.json');
     let writtenPath = null;
     let writtenContent = null;
     let written = '';
@@ -512,7 +512,7 @@ describe('cmdWorktreeSetBaseRef', () => {
 
   test('readFile returns malformed JSON → throws refusing-to-modify error', () => {
     const cwd = '/repo';
-    const file = '/repo/.claude/settings.local.json';
+    const file = path.join(cwd, '.claude', 'settings.local.json');
     const deps = {
       readFile: () => '{',
       existsSync: () => true,
@@ -616,7 +616,7 @@ describe('resolveEffectiveBaseRef — JSONC (FIX 2)', () => {
     ].join('\n');
     const deps = {
       readFile: makeReadFile({
-        [`${claudeDir}/settings.local.json`]: jsonc,
+        [path.join(claudeDir, 'settings.local.json')]: jsonc,
       }),
     };
     assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps), 'head');
@@ -633,7 +633,7 @@ describe('resolveEffectiveBaseRef — JSONC (FIX 2)', () => {
     ].join('\n');
     const deps = {
       readFile: makeReadFile({
-        [`${claudeDir}/settings.local.json`]: jsonc,
+        [path.join(claudeDir, 'settings.local.json')]: jsonc,
       }),
     };
     assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps), 'fresh');
@@ -692,7 +692,7 @@ describe('cmdWorktreeSetBaseRef — JSONC (FIX 2)', () => {
 
   test('genuinely malformed JSON (after stripping comments) still throws refusing-to-modify', () => {
     const cwd = '/repo';
-    const file = '/repo/.claude/settings.local.json';
+    const file = path.join(cwd, '.claude', 'settings.local.json');
     // This is malformed even after comment stripping
     const malformed = '// comment\n{ "key": }';
     const deps = {
