@@ -63,7 +63,7 @@ describe('bug #3126: runtime-homes getGlobalConfigDir — defaults', () => {
     test(`${runtime} default configDir`, () => {
       // Clear all env vars for this runtime
       const envKeys = ['CLAUDE_CONFIG_DIR','CURSOR_CONFIG_DIR','GEMINI_CONFIG_DIR',
-        'CODEX_HOME','COPILOT_CONFIG_DIR','ANTIGRAVITY_CONFIG_DIR','WINDSURF_CONFIG_DIR',
+        'CODEX_HOME','COPILOT_CONFIG_DIR','COPILOT_HOME','ANTIGRAVITY_CONFIG_DIR','WINDSURF_CONFIG_DIR',
         'AUGMENT_CONFIG_DIR','TRAE_CONFIG_DIR','QWEN_CONFIG_DIR','HERMES_HOME',
         'CODEBUDDY_CONFIG_DIR','CLINE_CONFIG_DIR','OPENCODE_CONFIG_DIR','OPENCODE_CONFIG',
         'KILO_CONFIG_DIR','KILO_CONFIG',

@@ -78,9 +78,11 @@ describe('getDirName (Copilot)', () => {
 
 describe('getGlobalConfigDir (Copilot)', () => {
   let originalCopilotConfigDir;
+  let originalCopilotHome;
 
   beforeEach(() => {
     originalCopilotConfigDir = process.env.COPILOT_CONFIG_DIR;
+    originalCopilotHome = process.env.COPILOT_HOME;
   });
 
   afterEach(() => {
@@ -89,10 +91,16 @@ describe('getGlobalConfigDir (Copilot)', () => {
     } else {
       delete process.env.COPILOT_CONFIG_DIR;
     }
+    if (originalCopilotHome !== undefined) {
+      process.env.COPILOT_HOME = originalCopilotHome;
+    } else {
+      delete process.env.COPILOT_HOME;
+    }
   });
 
   test('returns ~/.copilot with no env var or explicit dir', () => {
     delete process.env.COPILOT_CONFIG_DIR;
+    delete process.env.COPILOT_HOME;
     const result = getGlobalConfigDir('copilot');
     assert.strictEqual(result, path.join(os.homedir(), '.copilot'));
   });
@@ -110,6 +118,34 @@ describe('getGlobalConfigDir (Copilot)', () => {
 
   test('explicit dir takes priority over COPILOT_CONFIG_DIR', () => {
     process.env.COPILOT_CONFIG_DIR = '~/env-path';
+    const result = getGlobalConfigDir('copilot', '/explicit/path');
+    assert.strictEqual(result, '/explicit/path');
+  });
+
+  test('respects COPILOT_HOME env var', () => {
+    delete process.env.COPILOT_CONFIG_DIR;
+    process.env.COPILOT_HOME = '/custom/copilot-home';
+    const result = getGlobalConfigDir('copilot');
+    assert.strictEqual(result, '/custom/copilot-home');
+  });
+
+  test('COPILOT_HOME supports tilde expansion', () => {
+    delete process.env.COPILOT_CONFIG_DIR;
+    process.env.COPILOT_HOME = '~/my-copilot';
+    const result = getGlobalConfigDir('copilot');
+    assert.strictEqual(result, path.join(os.homedir(), 'my-copilot'));
+  });
+
+  test('COPILOT_CONFIG_DIR takes priority over COPILOT_HOME', () => {
+    process.env.COPILOT_CONFIG_DIR = '/config-dir-path';
+    process.env.COPILOT_HOME = '/home-path';
+    const result = getGlobalConfigDir('copilot');
+    assert.strictEqual(result, '/config-dir-path');
+  });
+
+  test('explicit dir takes priority over COPILOT_HOME', () => {
+    delete process.env.COPILOT_CONFIG_DIR;
+    process.env.COPILOT_HOME = '/home-path';
     const result = getGlobalConfigDir('copilot', '/explicit/path');
     assert.strictEqual(result, '/explicit/path');
   });

@@ -96,7 +96,9 @@ export function getGlobalConfigDir(runtime: string, explicitDir?: string | null)
 
     // ── Copilot (VS Code) ────────────────────────────────────────────────────
     case 'copilot':
-      return env['COPILOT_CONFIG_DIR'] ? expandTilde(env['COPILOT_CONFIG_DIR']) : path.join(home, '.copilot');
+      if (env['COPILOT_CONFIG_DIR']) return expandTilde(env['COPILOT_CONFIG_DIR']);
+      if (env['COPILOT_HOME']) return expandTilde(env['COPILOT_HOME']);
+      return path.join(home, '.copilot');
 
     // ── Antigravity ──────────────────────────────────────────────────────────
     case 'antigravity':
