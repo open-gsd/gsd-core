@@ -71,5 +71,9 @@
   "cline": [
     "cline",
     "cline-cli"
+  ],
+  "qoder": [
+    "qoder",
+    "qodercli"
   ]
 }

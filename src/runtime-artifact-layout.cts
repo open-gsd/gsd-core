@@ -171,7 +171,7 @@ function findAgentsSourceRoot(runtimeConfigDir?: string): string {
 const ALLOWED_RUNTIMES = new Set([
   'claude', 'cursor', 'gemini', 'codex', 'copilot', 'antigravity',
   'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy',
-  'cline', 'opencode', 'kilo',
+  'cline', 'opencode', 'kilo', 'qoder',
 ]);
 
 // ---------------------------------------------------------------------------
@@ -378,6 +378,10 @@ function resolveRuntimeArtifactLayout(runtime: string, configDir: string, scope:
         commandsKind('command', 'gsd-', configDir),
         skillsKind('skills', 'gsd-', 'convertClaudeCommandToKiloSkill', 'kilo', configDir),
       ];
+      break;
+
+    case 'qoder':
+      kinds = [skillsKind('skills', 'gsd-', 'convertClaudeCommandToQoderSkill', 'qoder', configDir)];
       break;
 
     default:

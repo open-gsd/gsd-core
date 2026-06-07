@@ -385,6 +385,22 @@ Skills land in `~/.trae/`. GSD installs skills, agents, and rule references.
 
 ---
 
+### Qoder
+
+```bash
+npx @opengsd/gsd-core@latest --qoder --global
+```
+
+Skills land in `~/.qoder/skills/`. GSD installs skills, agents, and rule references. Qoder uses `AGENTS.md` as its memory file.
+
+**Override the install directory:**
+
+```bash
+QODER_CONFIG_DIR=~/.qoder-alt npx @opengsd/gsd-core@latest --qoder --global
+```
+
+---
+
 ## Local vs global install
 
 All examples above use `--global`, which installs GSD once for your user account. To scope an install to a single project, replace `--global` with `--local`:
