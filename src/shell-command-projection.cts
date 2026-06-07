@@ -181,6 +181,10 @@ const MANAGED_HOOK_COMMAND_BASENAMES_BY_SURFACE: Record<string, Set<string>> = {
     // reconcileCodexHooksJsonSessionStart can replace stale node-runner commands
     // with the .cmd shim on reinstall (and vice-versa on cross-platform moves).
     'gsd-check-update.cmd',
+    // #772: context-monitor is now registered for Codex SubagentStart/Stop/PostToolUse.
+    'gsd-context-monitor.js',
+    // #772: Windows .cmd shim for gsd-context-monitor — same #3426 pattern.
+    'gsd-context-monitor.cmd',
   ]),
 };
 

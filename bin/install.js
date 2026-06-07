@@ -801,9 +801,31 @@ function rewriteLegacyCodexHookBlock(content, absoluteRunner, opts) {
   return { content: updated, changed };
 }
 
-function reconcileCodexHooksJsonSessionStart(targetDir, opts = {}) {
+/**
+ * Generic reconcile helper: ensure hooks.json contains exactly one managed GSD
+ * hook entry for `eventName`, while preserving all user-owned entries.
+ *
+ * Supports both known hooks.json shapes:
+ *   1) { "<EventName>": [...] }
+ *   2) { "hooks": { "<EventName>": [...] } }
+ *
+ * @param {string} targetDir - Codex config dir (e.g. ~/.codex or <project>/.codex).
+ * @param {string} eventName - Codex hook event name (e.g. 'SessionStart', 'Stop').
+ * @param {{ managedCommand?: string|null, commandWindows?: string|null, matcher?: string|null, timeout?: number|null }} opts
+ *   managedCommand: POSIX hook command string to register, or null to remove.
+ *   commandWindows: Windows .cmd shim path to emit as `commandWindows` field
+ *     (#772). When provided, Codex uses this path on Windows and `managedCommand`
+ *     on POSIX without needing per-platform config regeneration.
+ *   matcher: optional Codex MatcherGroup pattern (e.g. 'Bash|Edit|Write').
+ *   timeout: optional timeout in seconds.
+ * @returns {{ changed: boolean, wrote: boolean, path: string }}
+ */
+function reconcileCodexHooksJsonEvent(targetDir, eventName, opts = {}) {
   const hooksJsonPath = path.join(targetDir, 'hooks.json');
   const managedCommand = typeof opts.managedCommand === 'string' ? opts.managedCommand : null;
+  const commandWindows = typeof opts.commandWindows === 'string' ? opts.commandWindows : null;
+  const matcher = typeof opts.matcher === 'string' ? opts.matcher : undefined;
+  const timeout = typeof opts.timeout === 'number' ? opts.timeout : undefined;
   let parsed = {};
   let currentContent = null;
   if (fs.existsSync(hooksJsonPath)) {
@@ -822,22 +844,22 @@ function reconcileCodexHooksJsonSessionStart(targetDir, opts = {}) {
   const usesNestedHooksObject =
     parsed.hooks && typeof parsed.hooks === 'object' && !Array.isArray(parsed.hooks);
   const hookTable = usesNestedHooksObject ? parsed.hooks : parsed;
-  const sessionStart = Array.isArray(hookTable.SessionStart) ? hookTable.SessionStart : [];
+  const eventEntries = Array.isArray(hookTable[eventName]) ? hookTable[eventName] : [];
 
   let removedLegacy = false;
-  const sanitizedSessionStart = [];
-  for (const entry of sessionStart) {
+  const sanitizedEntries = [];
+  for (const entry of eventEntries) {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
     const originalHooks = Array.isArray(entry.hooks) ? entry.hooks : [];
     if (originalHooks.length === 0) {
-      sanitizedSessionStart.push(entry);
+      sanitizedEntries.push(entry);
       continue;
     }
-      const keptHooks = originalHooks.filter((hook) => {
-        const cmd = hook && typeof hook === 'object' ? hook.command : null;
-        const managed = isManagedHookCommand(cmd, {
-          surface: 'codex-hooks-json',
-          includeLegacyAliases: true,
+    const keptHooks = originalHooks.filter((hook) => {
+      const cmd = hook && typeof hook === 'object' ? hook.command : null;
+      const managed = isManagedHookCommand(cmd, {
+        surface: 'codex-hooks-json',
+        includeLegacyAliases: true,
         configDir: targetDir,
       });
       if (managed) removedLegacy = true;
@@ -845,24 +867,26 @@ function reconcileCodexHooksJsonSessionStart(targetDir, opts = {}) {
     });
     if (keptHooks.length === 0) continue;
     const nextEntry = { ...entry, hooks: keptHooks };
-    sanitizedSessionStart.push(nextEntry);
+    sanitizedEntries.push(nextEntry);
   }
 
   if (managedCommand) {
-    sanitizedSessionStart.push({
-      hooks: [
-        {
-          type: 'command',
-          command: managedCommand,
-        },
-      ],
-    });
+    const hookEntry = { type: 'command', command: managedCommand };
+    // #772: emit commandWindows so Codex picks the .cmd shim on Windows and
+    // the POSIX command on other platforms — without requiring per-OS config
+    // regeneration. Sourced from HookHandlerConfig.command_windows field in
+    // codex-rs/config/src/hook_config.rs (alias: commandWindows).
+    if (commandWindows) hookEntry.commandWindows = commandWindows;
+    if (timeout !== undefined) hookEntry.timeout = timeout;
+    const newEntry = { hooks: [hookEntry] };
+    if (matcher !== undefined) newEntry.matcher = matcher;
+    sanitizedEntries.push(newEntry);
   }
 
-  if (sanitizedSessionStart.length > 0) {
-    hookTable.SessionStart = sanitizedSessionStart;
+  if (sanitizedEntries.length > 0) {
+    hookTable[eventName] = sanitizedEntries;
   } else {
-    delete hookTable.SessionStart;
+    delete hookTable[eventName];
   }
   if (usesNestedHooksObject) parsed.hooks = hookTable;
 
@@ -874,6 +898,18 @@ function reconcileCodexHooksJsonSessionStart(targetDir, opts = {}) {
   }
 
   return { changed: changed || removedLegacy, wrote: shouldWrite, path: hooksJsonPath };
+}
+
+/**
+ * Reconcile the GSD-managed SessionStart hook entry in hooks.json.
+ * Delegates to the generic reconcileCodexHooksJsonEvent helper.
+ *
+ * @param {string} targetDir
+ * @param {{ managedCommand?: string|null, commandWindows?: string|null }} opts
+ * @returns {{ changed: boolean, wrote: boolean, path: string }}
+ */
+function reconcileCodexHooksJsonSessionStart(targetDir, opts = {}) {
+  return reconcileCodexHooksJsonEvent(targetDir, 'SessionStart', opts);
 }
 
 /**
@@ -957,8 +993,14 @@ function buildCodexHookWindowsShimIR(scriptAbsPath, absoluteRunnerToken) {
  *   2) { "hooks": { "SessionStart": [...] } }
  *
  * On Windows, writes a .cmd shim alongside the .js hook file and uses the
- * .cmd path as the hook command to avoid the `bash.exe: cannot execute binary
- * file` failure (#3426).
+ * .cmd shim path as the hook command to avoid the `bash.exe: cannot execute
+ * binary file` failure (#3426).
+ *
+ * #772: also emits `commandWindows` in the hook entry so that a
+ * cross-platform hooks.json works on both POSIX and Windows without
+ * requiring per-OS regeneration. Codex dispatches `commandWindows` on
+ * Windows and `command` on other platforms (HookHandlerConfig in
+ * codex-rs/config/src/hook_config.rs).
  *
  * @param {string} targetDir
  * @param {{ absoluteRunner: string|null, platform?: NodeJS.Platform }} opts
@@ -971,6 +1013,11 @@ function ensureCodexHooksJsonSessionStart(targetDir, opts = {}) {
   if (!absoluteRunner) return { changed: false, wrote: false, path: hooksJsonPath };
 
   const scriptPath = path.resolve(targetDir, 'hooks', 'gsd-check-update.js');
+
+  // #772: compute the Windows .cmd shim path cross-platform so that
+  // `commandWindows` can be emitted in hooks.json regardless of the host OS.
+  // The .cmd path is always the .js script path with extension replaced.
+  const cmdShimPath = scriptPath.replace(/\.js$/, '.cmd');
 
   let managedCommand;
   if (platform === 'win32') {
@@ -1007,7 +1054,88 @@ function ensureCodexHooksJsonSessionStart(targetDir, opts = {}) {
   }
 
   if (!managedCommand) return { changed: false, wrote: false, path: hooksJsonPath };
-  return reconcileCodexHooksJsonSessionStart(targetDir, { managedCommand });
+
+  // #772: emit commandWindows — the .cmd shim path — but ONLY on Windows where
+  // the shim was actually written. On POSIX, commandWindows is omitted to avoid
+  // pointing Windows Codex at a non-existent .cmd file (the shim is only present
+  // when install() ran natively on Windows and wrote it via buildCodexHookWindowsShimIR).
+  const commandWindows = platform === 'win32'
+    ? JSON.stringify(cmdShimPath.replace(/\\/g, '/'))
+    : undefined;
+
+  return reconcileCodexHooksJsonSessionStart(targetDir, { managedCommand, commandWindows });
+}
+
+/**
+ * Ensure hooks.json contains exactly one managed GSD hook entry for the given
+ * Codex event, wired to gsd-context-monitor.js. Preserves user-owned entries.
+ *
+ * Used for the new Codex events added in #772:
+ *   SubagentStart — inject context / GSD_AGENT_NAME awareness at subagent open
+ *   Stop          — post-session context headroom tracking
+ *   PostToolUse   — mirror the Claude Code PostToolUse context monitor
+ *
+ * All three events are routed through gsd-context-monitor.js — the same hook
+ * used for PostToolUse in the Claude Code baseline — so context-headroom
+ * warnings surface at these key Codex session lifecycle moments.
+ *
+ * On Windows (#3426): writes a gsd-context-monitor.cmd shim alongside the .js
+ * file and uses the .cmd path as the hook command — exactly the same fix as
+ * SessionStart uses for gsd-check-update — to avoid the bash.exe POSIX-exec
+ * failure when Codex's hook dispatcher tries to run node.exe through Git Bash.
+ *
+ * @param {string} targetDir
+ * @param {string} eventName - One of 'SubagentStart', 'Stop', 'PostToolUse'.
+ * @param {{ absoluteRunner: string|null, platform?: NodeJS.Platform }} opts
+ * @returns {{ changed: boolean, wrote: boolean, path: string }}
+ */
+function ensureCodexHooksJsonEvent(targetDir, eventName, opts = {}) {
+  const platform = opts.platform || process.platform;
+  const absoluteRunner = opts.absoluteRunner || null;
+  const hooksJsonPath = path.join(targetDir, 'hooks.json');
+  if (!absoluteRunner) return { changed: false, wrote: false, path: hooksJsonPath };
+
+  const scriptPath = path.resolve(targetDir, 'hooks', 'gsd-context-monitor.js');
+
+  let managedCommand;
+  if (platform === 'win32') {
+    // #3426 fix pattern: on Windows, write a .cmd shim and use its path as the
+    // hook command. The same bash.exe POSIX-exec failure that affects
+    // gsd-check-update.js also affects gsd-context-monitor.js.
+    const shimIR = buildCodexHookWindowsShimIR(scriptPath, absoluteRunner);
+    if (!shimIR) return { changed: false, wrote: false, path: hooksJsonPath };
+    try {
+      atomicWriteFileSync(shimIR.cmdPath, shimIR.render.cmd(), 'utf8');
+    } catch (shimWriteErr) {
+      const reason = shimWriteErr && shimWriteErr.message ? shimWriteErr.message : String(shimWriteErr);
+      console.warn(
+        `  ${yellow}⚠${reset}  Codex Windows hook NOT installed — .cmd shim write failed for ${eventName}: ${reason}. ` +
+          `Fix the write error (permissions? disk full?) and re-run the installer.`,
+      );
+      return { changed: false, wrote: false, path: hooksJsonPath };
+    }
+    managedCommand = shimIR.hookCommand;
+  } else {
+    managedCommand = projectManagedHookCommand({
+      absoluteRunner,
+      scriptPath,
+      runtime: 'codex',
+      platform,
+    });
+  }
+
+  if (!managedCommand) return { changed: false, wrote: false, path: hooksJsonPath };
+  return reconcileCodexHooksJsonEvent(targetDir, eventName, { managedCommand, timeout: 10 });
+}
+
+/**
+ * Remove a GSD-managed event entry from hooks.json. Called during uninstall.
+ *
+ * @param {string} targetDir
+ * @param {string} eventName
+ */
+function removeCodexHooksJsonEvent(targetDir, eventName) {
+  return reconcileCodexHooksJsonEvent(targetDir, eventName, { managedCommand: null });
 }
 
 function removeCodexHooksJsonSessionStart(targetDir) {
@@ -7480,6 +7608,15 @@ function uninstall(isGlobal, runtime = 'claude') {
       removedCount++;
       console.log(`  ${green}✓${reset} Removed managed Codex SessionStart hook from hooks.json`);
     }
+
+    // #772: remove new Codex hook event registrations added by this enhancement.
+    for (const eventName of ['SubagentStart', 'Stop', 'PostToolUse']) {
+      const eventCleanup = removeCodexHooksJsonEvent(targetDir, eventName);
+      if (eventCleanup.changed) {
+        removedCount++;
+        console.log(`  ${green}✓${reset} Removed managed Codex ${eventName} hook from hooks.json`);
+      }
+    }
   }
 
   // 1b. Non-layout Copilot side-effect: copilot-instructions.md cleanup
@@ -9895,10 +10032,10 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     }
 
     // Copy only the hook files that Codex actually registers via its hook configuration (#2153).
-    // Codex primarily needs gsd-check-update.js for the SessionStart update-check hook.
+    // #772: added gsd-context-monitor.js for the new SubagentStart/Stop/PostToolUse events.
     // We deliberately do *not* copy gsd-graphify-update.sh or hooks/lib/ for Codex
     // in this change (graphify auto-update support for Codex is out of scope for #3579).
-    const CODEX_HOOKS_TO_COPY = ['gsd-check-update.js'];
+    const CODEX_HOOKS_TO_COPY = ['gsd-check-update.js', 'gsd-context-monitor.js'];
     const codexHooksSrc = path.join(src, 'hooks', 'dist');
     if (fs.existsSync(codexHooksSrc)) {
       const codexHooksDest = path.join(targetDir, 'hooks');
@@ -10028,6 +10165,39 @@ function install(isGlobal, runtime = 'claude', options = {}) {
             console.log(`  ${green}✓${reset} Verified Codex hooks (SessionStart via hooks.json)`);
           }
         }
+
+        // ── Codex extended hook events (#772) ────────────────────────────────
+        // Codex CLI stabilised a full hook-event set in rust-v0.137.0. Register
+        // three new high-value lifecycle events — all routed through
+        // gsd-context-monitor.js so context-headroom warnings surface at:
+        //   SubagentStart — subagent session open (environment / agent-name aware)
+        //   Stop          — model stop / session final-response moment
+        //   PostToolUse   — after each tool invocation (mirrors Claude baseline)
+        //
+        // Note: UserPromptSubmit is NOT wired — gsd-prompt-guard exits unless
+        // tool_name is Write|Edit (PreToolUse payload shape), so it would be a
+        // silent no-op for the UserPromptSubmit payload.  Registration deferred
+        // to a follow-on issue.
+        //
+        // Guard: only register when the context-monitor file exists and the node
+        // runner is available — same guards as the SessionStart path above.
+        const contextMonitorFile = path.join(targetDir, 'hooks', 'gsd-context-monitor.js');
+        if (codexNodeRunner && fs.existsSync(contextMonitorFile)) {
+          for (const codexEvent of ['SubagentStart', 'Stop', 'PostToolUse']) {
+            const eventWrite = ensureCodexHooksJsonEvent(targetDir, codexEvent, {
+              absoluteRunner: codexNodeRunner,
+              platform: process.platform,
+            });
+            if (eventWrite.wrote) {
+              console.log(`  ${green}✓${reset} Configured Codex hooks (${codexEvent} via hooks.json)`);
+            } else if (eventWrite.changed) {
+              console.log(`  ${green}✓${reset} Verified Codex hooks (${codexEvent} via hooks.json)`);
+            }
+          }
+        } else if (!codexNodeRunner) {
+          console.warn(`  ${yellow}⚠${reset}  Skipped Codex SubagentStart/Stop/PostToolUse hook registration — Node runner unavailable.`);
+        }
+        // ── end Codex extended hook events ────────────────────────────────────
       }
     } catch (e) {
       // #2760 — schema-validation and write failures must be loud and fatal
@@ -11648,6 +11818,9 @@ module.exports = {
     rewriteLegacyCodexHookBlock,
     buildCodexHookWindowsShimIR,
     ensureCodexHooksJsonSessionStart,
+    ensureCodexHooksJsonEvent,
+    removeCodexHooksJsonEvent,
+    reconcileCodexHooksJsonEvent,
     readGsdCommandNames,
     installRuntimeArtifacts,
     installOpencodeFamilySkills,
