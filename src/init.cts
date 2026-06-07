@@ -21,7 +21,7 @@ import { stateExtractField } from './state-document.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- commands.cjs is an export= CommonJS module
 import commandsMod = require('./commands.cjs');
-import { validatePath } from './security.cjs';
+import { validatePath, loadTrustedGlobalRoots } from './security.cjs';
 import { getGlobalSkillDir, getGlobalSkillDisplayPath, getGlobalSkillsBase } from './runtime-homes.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
 import frontmatterMod = require('./frontmatter.cjs');
@@ -1870,6 +1870,12 @@ function buildAgentSkillsBlock(
   if (typeof skillPaths === 'string') skillPaths = [skillPaths];
   if (!Array.isArray(skillPaths) || skillPaths.length === 0) return '';
 
+  // Hoist trusted roots computation before the loop: loadTrustedGlobalRoots does
+  // realpathSync I/O and should run at most once per call, not once per failing skill.
+  // It returns [] cheaply when no roots are configured, so the realpath cost only
+  // occurs when the caller has actually set trusted_global_roots.
+  const trustedGlobalRoots = loadTrustedGlobalRoots(config);
+
   const validPaths: { ref: string; display: string }[] = [];
   for (const skillPath of skillPaths) {
     if (typeof skillPath !== 'string') continue;
@@ -1905,10 +1911,17 @@ function buildAgentSkillsBlock(
       }
       const pathCheck = validatePath(globalSkillMd, globalSkillsBase, { allowAbsolute: true }) as unknown as Record<string, unknown>;
       if (!pathCheck['safe']) {
-        process.stderr.write(
-          `[agent-skills] WARNING: Global skill "${skillName}" failed path check (symlink escape?) — skipping\n`,
-        );
-        continue;
+        const acceptedViaTrustedRoot = trustedGlobalRoots.some((root) => {
+          const rootCheck = validatePath(globalSkillMd, root, { allowAbsolute: true }) as unknown as Record<string, unknown>;
+          return Boolean(rootCheck['safe']);
+        });
+        if (!acceptedViaTrustedRoot) {
+          process.stderr.write(
+            `[agent-skills] WARNING: Global skill "${skillName}" failed path check (symlink escape?) — skipping\n`,
+          );
+          continue;
+        }
+        process.stderr.write(`[agent-skills] NOTE: Global skill "${skillName}" accepted via trusted_global_roots (resolves outside the default skills dir)\n`);
       }
       validPaths.push({ ref: `${globalSkillDir}/SKILL.md`, display: displayPath });
       continue;
