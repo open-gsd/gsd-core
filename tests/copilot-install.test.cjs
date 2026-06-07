@@ -28,7 +28,6 @@ const { parseFrontmatter, createTempDir, cleanup } = require('./helpers.cjs');
 
 const {
   getDirName,
-  getGlobalDir,
   getConfigDirFromHome,
   claudeToCopilotTools,
   convertCopilotToolName,
@@ -47,6 +46,8 @@ const {
   parseRuntimeInput,
   buildRuntimePromptText,
 } = require('../bin/install.js');
+
+const { getGlobalConfigDir } = require('../gsd-core/bin/lib/runtime-homes.cjs');
 
 // ─── Profile resolution for installRuntimeArtifacts tests ────────────────────
 const _gsdLibDir = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib');
@@ -70,9 +71,9 @@ describe('getDirName (Copilot)', () => {
   });
 });
 
-// ─── getGlobalDir ───────────────────────────────────────────────────────────────
+// ─── getGlobalConfigDir ──────────────────────────────────────────────────────────
 
-describe('getGlobalDir (Copilot)', () => {
+describe('getGlobalConfigDir (Copilot)', () => {
   let originalCopilotConfigDir;
 
   beforeEach(() => {
@@ -89,30 +90,30 @@ describe('getGlobalDir (Copilot)', () => {
 
   test('returns ~/.copilot with no env var or explicit dir', () => {
     delete process.env.COPILOT_CONFIG_DIR;
-    const result = getGlobalDir('copilot');
+    const result = getGlobalConfigDir('copilot');
     assert.strictEqual(result, path.join(os.homedir(), '.copilot'));
   });
 
   test('returns explicit dir when provided', () => {
-    const result = getGlobalDir('copilot', '/custom/path');
+    const result = getGlobalConfigDir('copilot', '/custom/path');
     assert.strictEqual(result, '/custom/path');
   });
 
   test('respects COPILOT_CONFIG_DIR env var', () => {
     process.env.COPILOT_CONFIG_DIR = '~/custom-copilot';
-    const result = getGlobalDir('copilot');
+    const result = getGlobalConfigDir('copilot');
     assert.strictEqual(result, path.join(os.homedir(), 'custom-copilot'));
   });
 
   test('explicit dir takes priority over COPILOT_CONFIG_DIR', () => {
     process.env.COPILOT_CONFIG_DIR = '~/env-path';
-    const result = getGlobalDir('copilot', '/explicit/path');
+    const result = getGlobalConfigDir('copilot', '/explicit/path');
     assert.strictEqual(result, '/explicit/path');
   });
 
   test('does not break existing runtimes', () => {
-    assert.strictEqual(getGlobalDir('claude'), path.join(os.homedir(), '.claude'));
-    assert.strictEqual(getGlobalDir('codex'), path.join(os.homedir(), '.codex'));
+    assert.strictEqual(getGlobalConfigDir('claude'), path.join(os.homedir(), '.claude'));
+    assert.strictEqual(getGlobalConfigDir('codex'), path.join(os.homedir(), '.codex'));
   });
 });
 

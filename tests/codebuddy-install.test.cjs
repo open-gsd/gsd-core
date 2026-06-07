@@ -14,7 +14,6 @@ const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const {
   getDirName,
-  getGlobalDir,
   getConfigDirFromHome,
   convertClaudeToCodebuddyMarkdown,
   convertClaudeCommandToCodebuddySkill,
@@ -24,6 +23,8 @@ const {
   writeManifest,
   installRuntimeArtifacts,
 } = require('../bin/install.js');
+
+const { getGlobalConfigDir } = require('../gsd-core/bin/lib/runtime-homes.cjs');
 
 // ─── Profile resolution for installRuntimeArtifacts tests ────────────────────
 const _gsdLibDir = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib');
@@ -37,7 +38,7 @@ describe('CodeBuddy runtime directory mapping', () => {
   });
 
   test('maps CodeBuddy to ~/.codebuddy for global installs', () => {
-    assert.strictEqual(getGlobalDir('codebuddy'), path.join(os.homedir(), '.codebuddy'));
+    assert.strictEqual(getGlobalConfigDir('codebuddy'), path.join(os.homedir(), '.codebuddy'));
   });
 
   test('returns .codebuddy config fragments for local and global installs', () => {
@@ -46,7 +47,7 @@ describe('CodeBuddy runtime directory mapping', () => {
   });
 });
 
-describe('getGlobalDir (CodeBuddy)', () => {
+describe('getGlobalConfigDir (CodeBuddy)', () => {
   let originalCodebuddyConfigDir;
 
   beforeEach(() => {
@@ -63,30 +64,30 @@ describe('getGlobalDir (CodeBuddy)', () => {
 
   test('returns ~/.codebuddy with no env var or explicit dir', () => {
     delete process.env.CODEBUDDY_CONFIG_DIR;
-    const result = getGlobalDir('codebuddy');
+    const result = getGlobalConfigDir('codebuddy');
     assert.strictEqual(result, path.join(os.homedir(), '.codebuddy'));
   });
 
   test('returns explicit dir when provided', () => {
-    const result = getGlobalDir('codebuddy', '/custom/codebuddy-path');
+    const result = getGlobalConfigDir('codebuddy', '/custom/codebuddy-path');
     assert.strictEqual(result, '/custom/codebuddy-path');
   });
 
   test('respects CODEBUDDY_CONFIG_DIR env var', () => {
     process.env.CODEBUDDY_CONFIG_DIR = '~/custom-codebuddy';
-    const result = getGlobalDir('codebuddy');
+    const result = getGlobalConfigDir('codebuddy');
     assert.strictEqual(result, path.join(os.homedir(), 'custom-codebuddy'));
   });
 
   test('explicit dir takes priority over CODEBUDDY_CONFIG_DIR', () => {
     process.env.CODEBUDDY_CONFIG_DIR = '~/from-env';
-    const result = getGlobalDir('codebuddy', '/explicit/path');
+    const result = getGlobalConfigDir('codebuddy', '/explicit/path');
     assert.strictEqual(result, '/explicit/path');
   });
 
   test('does not break other runtimes', () => {
-    assert.strictEqual(getGlobalDir('claude'), path.join(os.homedir(), '.claude'));
-    assert.strictEqual(getGlobalDir('codex'), path.join(os.homedir(), '.codex'));
+    assert.strictEqual(getGlobalConfigDir('claude'), path.join(os.homedir(), '.claude'));
+    assert.strictEqual(getGlobalConfigDir('codex'), path.join(os.homedir(), '.codex'));
   });
 });
 

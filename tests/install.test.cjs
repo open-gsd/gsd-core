@@ -5,7 +5,7 @@
 /**
  * Installer Module — Sections 1–5.
  *
- * Covers: getDirName/getGlobalDir/getConfigDirFromHome, per-runtime
+ * Covers: getDirName/getGlobalConfigDir/getConfigDirFromHome, per-runtime
  * install/uninstall spot-checks (hermes/qwen/trae), uninstall skills
  * cleanup, Claude-reference leak tests, and Kilo-specific helpers.
  *
@@ -34,7 +34,6 @@ const pkg = require('../package.json');
 
 const {
   getDirName,
-  getGlobalDir,
   getConfigDirFromHome,
   install,
   uninstall,
@@ -46,13 +45,15 @@ const {
   configureKiloPermissions,
 } = require('../bin/install.js');
 
+const { getGlobalConfigDir } = require('../gsd-core/bin/lib/runtime-homes.cjs');
+
 const {
   RUNTIME_META,
   stripAnsi,
   walk,
 } = require('./helpers/install-shared.cjs');
 
-// ─── Section 1: getDirName / getGlobalDir / getConfigDirFromHome ──────────────
+// ─── Section 1: getDirName / getGlobalConfigDir / getConfigDirFromHome ──────────
 
 describe('getDirName — all runtimes', () => {
   for (const runtime of allRuntimes) {
@@ -64,11 +65,14 @@ describe('getDirName — all runtimes', () => {
   }
 });
 
-describe('getGlobalDir — all runtimes default paths', () => {
+describe('getGlobalConfigDir — all runtimes default paths', () => {
   // Test the default (no env var, no explicit dir) for each runtime
   const ENV_KEYS = [
-    'HERMES_HOME', 'QWEN_CONFIG_DIR', 'TRAE_CONFIG_DIR', 'ANTIGRAVITY_CONFIG_DIR',
-    'KILO_CONFIG_DIR', 'KILO_CONFIG', 'XDG_CONFIG_HOME',
+    'CLAUDE_CONFIG_DIR', 'CURSOR_CONFIG_DIR', 'GEMINI_CONFIG_DIR', 'CODEX_HOME',
+    'GROK_AGENTS_HOME', 'COPILOT_CONFIG_DIR', 'WINDSURF_CONFIG_DIR', 'AUGMENT_CONFIG_DIR',
+    'TRAE_CONFIG_DIR', 'QWEN_CONFIG_DIR', 'HERMES_HOME', 'CODEBUDDY_CONFIG_DIR',
+    'CLINE_CONFIG_DIR', 'OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG', 'KILO_CONFIG_DIR',
+    'KILO_CONFIG', 'ANTIGRAVITY_CONFIG_DIR', 'XDG_CONFIG_HOME',
   ];
   let savedEnv = {};
 
@@ -87,14 +91,14 @@ describe('getGlobalDir — all runtimes default paths', () => {
   });
 
   for (const runtime of allRuntimes) {
-    test(`getGlobalDir('${runtime}') returns expected home-relative path`, () => {
+    test(`getGlobalConfigDir('${runtime}') returns expected home-relative path`, () => {
       const expected = path.join(os.homedir(), RUNTIME_META[runtime].globalSuffix);
-      assert.strictEqual(getGlobalDir(runtime), expected);
+      assert.strictEqual(getGlobalConfigDir(runtime), expected);
     });
   }
 });
 
-describe('getGlobalDir/getConfigDirFromHome — antigravity 2.x layout detection', () => {
+describe('getGlobalConfigDir/getConfigDirFromHome — antigravity 2.x layout detection', () => {
   const saved = {};
   beforeEach(() => {
     saved.HOME = process.env.HOME;
@@ -118,7 +122,7 @@ describe('getGlobalDir/getConfigDirFromHome — antigravity 2.x layout detection
       process.env.HOME = home;
       process.env.USERPROFILE = home;
       assert.strictEqual(
-        getGlobalDir('antigravity'),
+        getGlobalConfigDir('antigravity'),
         path.join(home, '.gemini', 'antigravity-ide'),
       );
       assert.strictEqual(
@@ -137,7 +141,7 @@ describe('getGlobalDir/getConfigDirFromHome — antigravity 2.x layout detection
       process.env.HOME = home;
       process.env.USERPROFILE = home;
       assert.strictEqual(
-        getGlobalDir('antigravity'),
+        getGlobalConfigDir('antigravity'),
         path.join(home, '.gemini', 'antigravity-cli'),
       );
       assert.strictEqual(
@@ -150,12 +154,12 @@ describe('getGlobalDir/getConfigDirFromHome — antigravity 2.x layout detection
   });
 });
 
-describe('getGlobalDir — explicit configDir overrides env for all runtimes', () => {
+describe('getGlobalConfigDir — explicit configDir overrides env for all runtimes', () => {
   test('explicit dir overrides any env var for hermes', () => {
     const savedHome = process.env.HERMES_HOME;
     process.env.HERMES_HOME = '~/from-env';
     try {
-      assert.strictEqual(getGlobalDir('hermes', '/explicit/hermes'), '/explicit/hermes');
+      assert.strictEqual(getGlobalConfigDir('hermes', '/explicit/hermes'), '/explicit/hermes');
     } finally {
       if (savedHome !== undefined) process.env.HERMES_HOME = savedHome;
       else delete process.env.HERMES_HOME;
@@ -166,7 +170,7 @@ describe('getGlobalDir — explicit configDir overrides env for all runtimes', (
     const saved = process.env.KILO_CONFIG_DIR;
     process.env.KILO_CONFIG_DIR = '~/from-env';
     try {
-      assert.strictEqual(getGlobalDir('kilo', '/explicit/kilo'), '/explicit/kilo');
+      assert.strictEqual(getGlobalConfigDir('kilo', '/explicit/kilo'), '/explicit/kilo');
     } finally {
       if (saved !== undefined) process.env.KILO_CONFIG_DIR = saved;
       else delete process.env.KILO_CONFIG_DIR;
@@ -174,7 +178,7 @@ describe('getGlobalDir — explicit configDir overrides env for all runtimes', (
   });
 });
 
-describe('getGlobalDir — HERMES_HOME env var', () => {
+describe('getGlobalConfigDir — HERMES_HOME env var', () => {
   let saved;
   beforeEach(() => { saved = process.env.HERMES_HOME; });
   afterEach(() => {
@@ -184,11 +188,11 @@ describe('getGlobalDir — HERMES_HOME env var', () => {
 
   test('respects HERMES_HOME env var (tilde-expanded)', () => {
     process.env.HERMES_HOME = '~/custom-hermes';
-    assert.strictEqual(getGlobalDir('hermes'), path.join(os.homedir(), 'custom-hermes'));
+    assert.strictEqual(getGlobalConfigDir('hermes'), path.join(os.homedir(), 'custom-hermes'));
   });
 });
 
-describe('getGlobalDir — Kilo env var priority', () => {
+describe('getGlobalConfigDir — Kilo env var priority', () => {
   let savedEnv;
   beforeEach(() => {
     savedEnv = {
@@ -209,23 +213,23 @@ describe('getGlobalDir — Kilo env var priority', () => {
 
   test('respects KILO_CONFIG_DIR', () => {
     process.env.KILO_CONFIG_DIR = '~/custom-kilo';
-    assert.strictEqual(getGlobalDir('kilo'), path.join(os.homedir(), 'custom-kilo'));
+    assert.strictEqual(getGlobalConfigDir('kilo'), path.join(os.homedir(), 'custom-kilo'));
   });
 
   test('falls back to XDG_CONFIG_HOME/kilo', () => {
     process.env.XDG_CONFIG_HOME = '~/xdg-config';
-    assert.strictEqual(getGlobalDir('kilo'), path.join(os.homedir(), 'xdg-config', 'kilo'));
+    assert.strictEqual(getGlobalConfigDir('kilo'), path.join(os.homedir(), 'xdg-config', 'kilo'));
   });
 
   test('uses dirname(KILO_CONFIG) when KILO_CONFIG_DIR unset', () => {
     process.env.KILO_CONFIG = '~/profiles/work/kilo.jsonc';
-    assert.strictEqual(getGlobalDir('kilo'), path.join(os.homedir(), 'profiles', 'work'));
+    assert.strictEqual(getGlobalConfigDir('kilo'), path.join(os.homedir(), 'profiles', 'work'));
   });
 
   test('KILO_CONFIG_DIR takes precedence over KILO_CONFIG', () => {
     process.env.KILO_CONFIG_DIR = '~/custom-kilo';
     process.env.KILO_CONFIG = '~/profiles/work/kilo.jsonc';
-    assert.strictEqual(getGlobalDir('kilo'), path.join(os.homedir(), 'custom-kilo'));
+    assert.strictEqual(getGlobalConfigDir('kilo'), path.join(os.homedir(), 'custom-kilo'));
   });
 });
 
