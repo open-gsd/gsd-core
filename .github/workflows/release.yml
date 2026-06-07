@@ -370,6 +370,29 @@ jobs:
           node scripts/check-npm-integrity.cjs
           npm run test:coverage:unit
 
+      - name: Preview CHANGELOG (non-destructive)
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          # Non-destructive CHANGELOG preview for the version under test (#759):
+          # renders the curated section finalize will promote, without writing
+          # CHANGELOG.md or consuming .changeset fragments. Surfaced in the job
+          # summary so RC testers see the upcoming release notes.
+          #
+          # Render to a file as a standalone command so a non-zero exit (e.g. a
+          # malformed fragment) fails the step. The default GitHub Linux shell
+          # is `bash -e` without pipefail, so a `node | tee` pipeline would mask
+          # a node failure behind tee's exit 0.
+          PREVIEW_FILE="${RUNNER_TEMP:-/tmp}/changelog-preview.md"
+          node scripts/changeset/cli.cjs render \
+            --version "$VERSION" --date "$(date -u +%F)" --preview > "$PREVIEW_FILE"
+          {
+            echo "### CHANGELOG preview for v${VERSION} (not yet promoted)"
+            echo ''
+            cat "$PREVIEW_FILE"
+          } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+          cat "$PREVIEW_FILE"
+
       - name: Commit pre-release version bump
         env:
           PRE_VERSION: ${{ steps.prerelease.outputs.pre_version }}
@@ -420,6 +443,19 @@ jobs:
           # Install + Feature/Enhancement/Fix format.
           node scripts/release-notes/format-github-release-notes.cjs \
             --tag "v${PRE_VERSION}" --prerelease --apply
+
+      - name: Post Discord pre-release announcement
+        if: ${{ !inputs.dry_run }}
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_CHANGELOG_WEBHOOK }}
+          GH_TOKEN: ${{ github.token }}
+          PRE_VERSION: ${{ steps.prerelease.outputs.pre_version }}
+        run: |
+          node scripts/release-notes/discord-release-summary.cjs \
+            --tag "v${PRE_VERSION}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --post \
+            --allow-missing-webhook
 
       - name: Verify publish
         if: ${{ !inputs.dry_run }}
@@ -592,6 +628,19 @@ jobs:
           # Install + Feature/Enhancement/Fix format.
           node scripts/release-notes/format-github-release-notes.cjs \
             --tag "v${VERSION}" --latest --apply
+
+      - name: Post Discord release announcement
+        if: ${{ !inputs.dry_run }}
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_CHANGELOG_WEBHOOK }}
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          node scripts/release-notes/discord-release-summary.cjs \
+            --tag "v${VERSION}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --post \
+            --allow-missing-webhook
 
       - name: Clean up next dist-tag
         if: ${{ !inputs.dry_run }}
