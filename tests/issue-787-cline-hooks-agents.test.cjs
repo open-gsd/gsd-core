@@ -110,6 +110,25 @@ describe('#787 Cline pure helpers', () => {
     }
   });
 
+  test('PreToolUse hook does NOT cancel a write to a non-planning path whose CONTENT mentions .planning/', () => {
+    const tmp = createTempDir('gsd-787-hookfp-');
+    try {
+      const p = path.join(tmp, 'PreToolUse');
+      fs.writeFileSync(p, buildClinePreToolUseHook());
+      const res = spawnSync(process.execPath, [p], {
+        input: JSON.stringify({
+          toolName: 'write_to_file',
+          toolInput: { path: 'docs/guide.md', content: 'Edit your .planning/ROADMAP.md via /gsd commands.' },
+        }),
+        encoding: 'utf8',
+      });
+      assert.equal(res.status, 0);
+      assert.equal(JSON.parse(res.stdout).cancel, false, 'content mentioning .planning must not trigger a cancel');
+    } finally {
+      cleanup(tmp);
+    }
+  });
+
   test('PreToolUse hook fails open on malformed stdin', () => {
     const tmp = createTempDir('gsd-787-hookbad-');
     try {
@@ -209,6 +228,21 @@ describe('#787 Cline local install — directory form + PreToolUse hook', () => 
     install(false, 'cline');
     const dir = path.join(tmpDir, '.clinerules');
     assert.ok(fs.statSync(dir).isDirectory(), 'legacy file must be replaced by a directory');
+    assert.ok(fs.existsSync(path.join(dir, 'gsd.md')));
+  });
+
+  test('does not follow a symlinked .clinerules (writes the real directory in place)', () => {
+    if (process.platform === 'win32') return; // symlink perms differ on Windows
+    // Point .clinerules at an external directory via symlink; install must NOT
+    // write GSD files through the link.
+    const external = path.join(tmpDir, 'external-target');
+    fs.mkdirSync(external);
+    fs.symlinkSync(external, path.join(tmpDir, '.clinerules'));
+    install(false, 'cline');
+    const dir = path.join(tmpDir, '.clinerules');
+    assert.ok(fs.lstatSync(dir).isDirectory() && !fs.lstatSync(dir).isSymbolicLink(),
+      '.clinerules must be a real directory, not the symlink');
+    assert.ok(!fs.existsSync(path.join(external, 'gsd.md')), 'must not write through the symlink target');
     assert.ok(fs.existsSync(path.join(dir, 'gsd.md')));
   });
 

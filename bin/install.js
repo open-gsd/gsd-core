@@ -5084,16 +5084,24 @@ process.stdin.on('end', () => {
       (input.toolInput && input.toolInput.name) || (input.tool_input && input.tool_input.name) || ''
     ).toLowerCase();
     const isWrite = /write|edit|replace|create|delete|remove|append|apply|patch|insert|mkdir/.test(tool);
-    const strings = [];
+    // Collect only PATH-bearing field values (not free-form content), so a doc
+    // that merely mentions ".planning/" in its body is never falsely blocked.
+    const paths = [];
+    const PATH_KEY = /^(path|file|file_?path|filepath|target_?path|target|dir|directory|uri|filename)$/i;
     const walk = (v, depth) => {
-      if (depth > 4 || strings.length > 256) return;
-      if (typeof v === 'string') { strings.push(v); return; }
+      if (depth > 5 || paths.length > 64) return;
       if (Array.isArray(v)) { for (const x of v) walk(x, depth + 1); return; }
-      if (v && typeof v === 'object') { for (const k of Object.keys(v)) walk(v[k], depth + 1); }
+      if (v && typeof v === 'object') {
+        for (const k of Object.keys(v)) {
+          const val = v[k];
+          if (typeof val === 'string' && PATH_KEY.test(k)) paths.push(val);
+          else walk(val, depth + 1);
+        }
+      }
     };
     walk(input, 0);
-    const touchesPlanning = strings.some((s) => /(^|[\\\\/])\\.planning([\\\\/]|$)/.test(s));
-    if (isWrite && touchesPlanning) {
+    const isPlanningPath = (s) => /(^|[\\\\/])\\.planning([\\\\/]|$)/.test(s);
+    if (isWrite && paths.some(isPlanningPath)) {
       return process.stdout.write(JSON.stringify({
         cancel: true,
         errorMessage:
@@ -5169,11 +5177,18 @@ function writeClineArtifacts(targetDir, isGlobalInstall) {
   const clinerulesDir = path.join(targetDir, '.clinerules');
 
   // Migrate a pre-#787 single-file `.clinerules` — a path cannot be both a
-  // file and a directory, so the legacy file must be removed first.
+  // file and a directory, so the legacy file must be removed first. The legacy
+  // file is GSD-authored (the installer wrote its full contents with no user
+  // merge surface), so replacing it with the newer directory form is the
+  // intended upgrade. Use lstat so a symlink is unlinked in place rather than
+  // followed (which would write GSD files through the link into an external dir).
   try {
-    if (fs.existsSync(clinerulesDir) && fs.statSync(clinerulesDir).isFile()) {
-      fs.unlinkSync(clinerulesDir);
-      console.log(`  ${green}✓${reset} Migrated legacy .clinerules file to directory form`);
+    if (fs.existsSync(clinerulesDir)) {
+      const st = fs.lstatSync(clinerulesDir);
+      if (st.isFile() || st.isSymbolicLink()) {
+        fs.unlinkSync(clinerulesDir);
+        console.log(`  ${green}✓${reset} Migrated legacy .clinerules to directory form`);
+      }
     }
   } catch { /* best-effort migration */ }
 
