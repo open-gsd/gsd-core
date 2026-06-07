@@ -59,15 +59,23 @@ describe('resolveRuntimeArtifactLayout — claude global', () => {
 });
 
 describe('resolveRuntimeArtifactLayout — cursor', () => {
-  test('returns correct layout for cursor', () => {
+  test('returns correct layout for cursor — skills + commands kinds (#785)', () => {
     const layout = resolveRuntimeArtifactLayout('cursor', FAKE_DIR);
     assert.strictEqual(layout.runtime, 'cursor');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 1);
-    assert.strictEqual(layout.kinds[0].kind, 'skills');
-    assert.strictEqual(layout.kinds[0].destSubpath, 'skills');
-    assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
-    assert.strictEqual(typeof layout.kinds[0].stage, 'function');
+    assert.strictEqual(layout.kinds.length, 2);
+
+    const skillsKind = layout.kinds.find(k => k.kind === 'skills');
+    assert.ok(skillsKind, 'must have a skills kind');
+    assert.strictEqual(skillsKind.destSubpath, 'skills');
+    assert.strictEqual(skillsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof skillsKind.stage, 'function');
+
+    const commandsKind = layout.kinds.find(k => k.kind === 'commands');
+    assert.ok(commandsKind, 'must have a commands kind (#785 Cursor 1.6 slash commands)');
+    assert.strictEqual(commandsKind.destSubpath, 'commands');
+    assert.strictEqual(commandsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof commandsKind.stage, 'function');
   });
 });
 
@@ -137,15 +145,21 @@ describe('resolveRuntimeArtifactLayout — windsurf', () => {
 });
 
 describe('resolveRuntimeArtifactLayout — augment', () => {
-  test('returns correct layout for augment', () => {
+  test('returns correct layout for augment (commands + skills)', () => {
     const layout = resolveRuntimeArtifactLayout('augment', FAKE_DIR);
     assert.strictEqual(layout.runtime, 'augment');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 1);
-    assert.strictEqual(layout.kinds[0].kind, 'skills');
-    assert.strictEqual(layout.kinds[0].destSubpath, 'skills');
+    assert.strictEqual(layout.kinds.length, 2);
+    // commands kind first
+    assert.strictEqual(layout.kinds[0].kind, 'commands');
+    assert.strictEqual(layout.kinds[0].destSubpath, 'commands');
     assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
     assert.strictEqual(typeof layout.kinds[0].stage, 'function');
+    // skills kind second
+    assert.strictEqual(layout.kinds[1].kind, 'skills');
+    assert.strictEqual(layout.kinds[1].destSubpath, 'skills');
+    assert.strictEqual(layout.kinds[1].prefix, 'gsd-');
+    assert.strictEqual(typeof layout.kinds[1].stage, 'function');
   });
 });
 
@@ -202,8 +216,19 @@ describe('resolveRuntimeArtifactLayout — codebuddy', () => {
 });
 
 describe('resolveRuntimeArtifactLayout — cline', () => {
-  test('returns correct layout for cline', () => {
-    const layout = resolveRuntimeArtifactLayout('cline', FAKE_DIR);
+  test('returns correct layout for cline global (skills-capable since v3.48.0 — #782)', () => {
+    const layout = resolveRuntimeArtifactLayout('cline', FAKE_DIR, 'global');
+    assert.strictEqual(layout.runtime, 'cline');
+    assert.strictEqual(layout.configDir, FAKE_DIR);
+    assert.strictEqual(layout.kinds.length, 1);
+    assert.strictEqual(layout.kinds[0].kind, 'skills');
+    assert.strictEqual(layout.kinds[0].destSubpath, 'skills');
+    assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
+    assert.strictEqual(typeof layout.kinds[0].stage, 'function');
+  });
+
+  test('cline local: no skills kinds (global-only, #782)', () => {
+    const layout = resolveRuntimeArtifactLayout('cline', FAKE_DIR, 'local');
     assert.strictEqual(layout.runtime, 'cline');
     assert.strictEqual(layout.configDir, FAKE_DIR);
     assert.strictEqual(layout.kinds.length, 0);
@@ -261,9 +286,10 @@ describe('resolveRuntimeArtifactLayout edge-cases', () => {
     assert.strictEqual(layout.kinds[0].prefix, '');
   });
 
-  test('cline has no kinds', () => {
+  test('cline has one skills kind (#782)', () => {
     const layout = resolveRuntimeArtifactLayout('cline', '/tmp/x');
-    assert.strictEqual(layout.kinds.length, 0);
+    assert.strictEqual(layout.kinds.length, 1);
+    assert.strictEqual(layout.kinds[0].kind, 'skills');
   });
 
   test('gemini has one commands kind', () => {
@@ -277,6 +303,13 @@ describe('resolveRuntimeArtifactLayout edge-cases', () => {
     const kindNames = layout.kinds.map(k => k.kind);
     assert.ok(kindNames.includes('commands'), 'should have commands kind');
     assert.ok(kindNames.includes('agents'), 'should have agents kind');
+  });
+
+  test('cursor has both skills and commands kinds (#785)', () => {
+    const layout = resolveRuntimeArtifactLayout('cursor', '/tmp/x');
+    const kindNames = layout.kinds.map(k => k.kind);
+    assert.ok(kindNames.includes('skills'), 'cursor must have skills kind');
+    assert.ok(kindNames.includes('commands'), 'cursor must have commands kind (#785 Cursor 1.6)');
   });
 
   test('claude global has only skills kind', () => {
@@ -436,4 +469,40 @@ describe('stage — opencode/kilo skills kind (#784)', () => {
       }
     });
   }
+});
+
+describe('stage — cursor commands kind (#785)', () => {
+  test('cursor commands kind stage returns directory with converted .md files', () => {
+    const layout = resolveRuntimeArtifactLayout('cursor', FAKE_STAGE_DIR);
+    const commandsKind = layout.kinds.find(k => k.kind === 'commands');
+    assert.ok(commandsKind, 'cursor should have a commands kind (#785)');
+
+    const stagedDir = commandsKind.stage(PROFILE_CORE);
+    assert.ok(fs.existsSync(stagedDir), 'stagedDir must exist');
+
+    const entries = fs.readdirSync(stagedDir).filter(f => f.endsWith('.md'));
+    assert.ok(entries.length >= 1, 'at least one command file should be staged');
+
+    // Cursor commands are plain markdown — no YAML frontmatter
+    for (const entry of entries) {
+      const content = fs.readFileSync(path.join(stagedDir, entry), 'utf8');
+      assert.ok(!content.startsWith('---'), `${entry}: cursor commands must not start with YAML frontmatter`);
+    }
+  });
+
+  test('cursor commands stage applies Cursor-specific content transforms', () => {
+    const layout = resolveRuntimeArtifactLayout('cursor', FAKE_STAGE_DIR);
+    const commandsKind = layout.kinds.find(k => k.kind === 'commands');
+    assert.ok(commandsKind, 'cursor should have a commands kind (#785)');
+
+    const stagedDir = commandsKind.stage(PROFILE_FULL);
+    assert.ok(fs.existsSync(stagedDir), 'stagedDir must exist');
+
+    // Verify all staged files are .md only (no subdirectory SKILL.md layout)
+    const entries = fs.readdirSync(stagedDir, { withFileTypes: true });
+    for (const entry of entries) {
+      assert.ok(entry.isFile(), `${entry.name}: cursor commands dir must contain only flat files`);
+      assert.ok(entry.name.endsWith('.md'), `${entry.name}: must be .md file`);
+    }
+  });
 });

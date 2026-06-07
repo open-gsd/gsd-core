@@ -142,17 +142,19 @@ describe('Cline install (local)', () => {
     cleanup(tmpDir);
   });
 
-  test('install creates .clinerules file', () => {
+  test('install creates .clinerules directory with gsd.md (#787 directory form)', () => {
     install(false, 'cline');
-    const clinerules = path.join(tmpDir, '.clinerules');
-    assert.ok(fs.existsSync(clinerules), '.clinerules must exist after cline install');
+    const clinerulesDir = path.join(tmpDir, '.clinerules');
+    assert.ok(fs.existsSync(clinerulesDir), '.clinerules must exist after cline install');
+    assert.ok(fs.statSync(clinerulesDir).isDirectory(), '.clinerules must be a directory (#787)');
+    assert.ok(fs.existsSync(path.join(clinerulesDir, 'gsd.md')), '.clinerules/gsd.md must exist');
   });
 
-  test('.clinerules contains GSD instructions', () => {
+  test('.clinerules/gsd.md contains GSD instructions', () => {
     install(false, 'cline');
-    const clinerules = path.join(tmpDir, '.clinerules');
-    const content = fs.readFileSync(clinerules, 'utf8');
-    assert.ok(content.includes('GSD') || content.includes('gsd'), '.clinerules must reference GSD');
+    const ruleFile = path.join(tmpDir, '.clinerules', 'gsd.md');
+    const content = fs.readFileSync(ruleFile, 'utf8');
+    assert.ok(content.includes('GSD') || content.includes('gsd'), '.clinerules/gsd.md must reference GSD');
   });
 
   test('install creates gsd-core engine directory', () => {

@@ -11,9 +11,9 @@
  * Runtime-specific notes:
  *   hermes  — GSD skills nest under skills/gsd/<skillName>/ (not the flat
  *             skills/<skillName>/ layout used by all other runtimes).
- *   cline   — Rules-based; commands are embedded in .clinerules. Cline does
- *             not use a skills/ directory. getGlobalSkillDir() returns null
- *             for cline so the caller can emit an appropriate warning.
+ *   cline   — Skills-capable since v3.48.0 (#782). SKILL.md files live at
+ *             ~/.cline/skills/<skillName>/SKILL.md (same flat layout as cursor/codex).
+ *             .clinerules is also emitted (rules-based compatibility layer).
  */
 
 import os from 'node:os';
@@ -96,7 +96,9 @@ export function getGlobalConfigDir(runtime: string, explicitDir?: string | null)
 
     // ── Copilot (VS Code) ────────────────────────────────────────────────────
     case 'copilot':
-      return env['COPILOT_CONFIG_DIR'] ? expandTilde(env['COPILOT_CONFIG_DIR']) : path.join(home, '.copilot');
+      if (env['COPILOT_CONFIG_DIR']) return expandTilde(env['COPILOT_CONFIG_DIR']);
+      if (env['COPILOT_HOME']) return expandTilde(env['COPILOT_HOME']);
+      return path.join(home, '.copilot');
 
     // ── Antigravity ──────────────────────────────────────────────────────────
     case 'antigravity':
@@ -158,18 +160,25 @@ export function getGlobalConfigDir(runtime: string, explicitDir?: string | null)
  * Return the global skills base directory for the given runtime.
  * Most runtimes: <configDir>/skills
  * Hermes: <configDir>/skills/gsd  (nested category layout — #2841)
- * Cline:  null (rules-based, no skills directory)
+ * Cline ≥ v3.48.0: <configDir>/skills  (SKILL.md-based global skills — #782)
  */
 export function getGlobalSkillsBase(runtime: string): string | null {
-  if (runtime === 'cline') return null;
+  if (runtime === 'hermes') {
+    const configDir = getGlobalConfigDir(runtime);
+    return path.join(configDir, 'skills', 'gsd');
+  }
+  // Kilo Code discovers global skills from ~/.kilo/skills/ (HOME-relative),
+  // independent of the XDG-based config dir (~/.config/kilo) used for commands.
+  // See: https://kilo.ai/docs/customize/skills
+  // "Global skills are located in the `.kilo` directory within your Home
+  //  directory: ~/.kilo/skills/"
+  if (runtime === 'kilo') return path.join(os.homedir(), '.kilo', 'skills');
   const configDir = getGlobalConfigDir(runtime);
-  if (runtime === 'hermes') return path.join(configDir, 'skills', 'gsd');
   return path.join(configDir, 'skills');
 }
 
 /**
  * Return the full path to a specific skill's directory for the given runtime.
- * Returns null for runtimes that don't use a skills directory (cline).
  */
 export function getGlobalSkillDir(runtime: string, skillName: string): string | null {
   const base = getGlobalSkillsBase(runtime);
