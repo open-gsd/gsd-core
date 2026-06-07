@@ -148,6 +148,38 @@ describe('list-seeds command', () => {
     assert.strictEqual(output.seeds[0].status, 'dormant');
   });
 
+  test('tolerates non-scalar status frontmatter without crashing (#722 review)', () => {
+    // extractFrontmatter yields {} for a bare `status:` line and an array for
+    // `status: [a, b]`. A non-string status must not crash the whole audit list
+    // (`.toLowerCase()` on a non-string throws) — it falls back to dormant.
+    fs.writeFileSync(path.join(seedsDir(tmpDir), 'SEED-001-empty.md'),
+      '---\nstatus:\nid: SEED-001\n---\n# SEED-001: empty status\n');
+    fs.writeFileSync(path.join(seedsDir(tmpDir), 'SEED-002-array.md'),
+      '---\nstatus: [active, dormant]\nid: SEED-002\n---\n# SEED-002: array status\n');
+
+    const result = runGsdTools('list-seeds', tmpDir);
+    assert.ok(result.success, `non-scalar status must not crash the audit list: ${result.error}`);
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.count, 2);
+    assert.ok(output.seeds.every(s => s.status === 'dormant'), 'non-scalar status falls back to dormant');
+    assert.deepStrictEqual(output.summary, { dormant: 2 });
+  });
+
+  test('coerces non-scalar frontmatter fields to strings in the JSON contract (#722 review)', () => {
+    // A non-scalar scope/trigger_when must not leak a raw array/object into the
+    // structured output — every contract field stays a string.
+    fs.writeFileSync(path.join(seedsDir(tmpDir), 'SEED-003-nonscalar.md'),
+      '---\nid: SEED-003\nstatus: dormant\nscope: [a, b]\ntrigger_when: [x]\n---\n# SEED-003: nonscalar fields\n');
+    const result = runGsdTools('list-seeds', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const s = JSON.parse(result.output).seeds[0];
+    assert.strictEqual(typeof s.scope, 'string');
+    assert.strictEqual(typeof s.trigger_when, 'string');
+    assert.strictEqual(typeof s.title, 'string');
+    assert.strictEqual(s.scope, 'unknown', 'non-scalar scope coerces to the empty-field default, not a raw array');
+    assert.strictEqual(s.trigger_when, '');
+  });
+
   test('neutralizes prompt-injection markers in user-controlled seed content', () => {
     // Seeds are user-authored text that later lands in LLM context — fake system
     // boundaries must be neutralized (sanitizeForDisplay), not passed through raw.
