@@ -10125,35 +10125,65 @@ function install(isGlobal, runtime = 'claude', options = {}) {
       : localCmd('gsd-update-banner.js'));
 
   // #683: Set worktree.baseRef:"head" in settings.local.json for local Claude installs.
-  // Fresh install: apply no-clobber; print notice if changed.
-  // Upgrade: do NOT modify settings; print opt-in notice only when no baseRef is set.
+  // Both fresh and upgrade paths apply only when worktrees are enabled for the project.
   // Never applies to global installs, non-Claude runtimes, or when the user already
   // has an explicit baseRef in EITHER settings.local.json OR settings.json (no-clobber).
   // Guard: skip entirely when settings is not a plain object (e.g. parsed to [] or primitive)
   // to avoid crashing applyWorktreeBaseRef on unexpected top-level shapes.
   if (isLocalClaude && settings !== null && typeof settings === 'object' && !Array.isArray(settings)) {
     // Read shared settings.json baseRef so no-clobber spans both files (#683 FIX 1).
+    // shared settings.json no-clobber is checked here; settings.local.json no-clobber
+    // is enforced inside applyWorktreeBaseRef itself.
     const sharedSettingsForBaseRef = readSettings(path.join(targetDir, 'settings.json')) || {};
     const sharedBaseRef = readBaseRefFromSettings(sharedSettingsForBaseRef);
-    if (!priorInstallExisted) {
-      // Fresh install — apply no-clobber baseRef set.
-      // Skip entirely if the shared settings.json already has an explicit baseRef
-      // (local > shared precedence: writing "head" to local would silently override it).
-      if (sharedBaseRef === null) {
+
+    // Compute worktrees-enabled ONCE for both fresh and upgrade paths (FIX A: DRY + consistency).
+    // Read workflow.use_worktrees from .planning/config.json by walking up from
+    // targetDir (same walk-up pattern as readGsdRuntimeProfileResolver). Defaults
+    // to enabled (true) when the file is missing, unreadable, or the key is absent;
+    // only boolean false disables (string "false" stays enabled).
+    let worktreesEnabled = true; // default: enabled
+    try {
+      let probeDir = path.resolve(targetDir);
+      for (let depth = 0; depth < 8; depth += 1) {
+        const candidate = path.join(probeDir, '.planning', 'config.json');
+        if (fs.existsSync(candidate)) {
+          try {
+            const parsed = JSON.parse(stripJsonComments(fs.readFileSync(candidate, 'utf-8')));
+            if (parsed && typeof parsed === 'object' &&
+                parsed.workflow && parsed.workflow.use_worktrees === false) {
+              worktreesEnabled = false;
+            }
+          } catch {
+            // Malformed config.json — treat as enabled (safe fallback).
+          }
+          break;
+        }
+        const parent = path.dirname(probeDir);
+        if (parent === probeDir) break;
+        probeDir = parent;
+      }
+    } catch {
+      // Any unexpected error reading .planning — default to enabled.
+    }
+
+    if (worktreesEnabled && sharedBaseRef === null) {
+      if (!priorInstallExisted) {
+        // Fresh install — apply no-clobber baseRef set.
         // canonical no-clobber logic: src/worktree-base-ref.cts applyWorktreeBaseRef (#683)
         const { changed } = applyWorktreeBaseRef(settings);
         if (changed) {
           console.log(`  ${green}✓${reset} Set worktree.baseRef:"head" for Claude Code worktrees (forks phase worktrees off HEAD; #683)`);
         }
-      }
-    } else {
-      // Upgrade — opt-in notice only; never modify settings automatically.
-      // Only print the notice when neither file has an explicit baseRef.
-      const localBaseRef = readBaseRefFromSettings(settings);
-      if (localBaseRef === null && sharedBaseRef === null) {
-        console.log(`  ${yellow}ℹ${reset} Worktree base-mismatch mitigation available — run ${cyan}gsd-tools worktree set-baseref${reset} to fork phase worktrees off HEAD and keep parallel execution on feature/milestone branches (#683).`);
+      } else {
+        // Upgrade — auto-apply no-clobber baseRef set when worktrees are enabled.
+        const { changed } = applyWorktreeBaseRef(settings);
+        if (changed) {
+          console.log(`  ${green}✓${reset} Enabled worktree.baseRef:"head" for Claude Code worktrees (forks phase worktrees off HEAD; #683)`);
+        }
       }
     }
+    // When worktreesEnabled is false: do nothing, print nothing (both fresh and upgrade).
   }
 
   persistActiveProfileMarker();

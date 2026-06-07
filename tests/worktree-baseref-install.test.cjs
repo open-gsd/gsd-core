@@ -5,7 +5,9 @@
  * Cases:
  *  1. Fresh local install: writes worktree.baseRef:"head" automatically (no-clobber).
  *  2. Fresh install with pre-existing explicit baseRef: does NOT clobber it.
- *  3. Upgrade (re-install): does NOT modify an existing baseRef (no-clobber).
+ *  3a. Upgrade + isLocalClaude + use_worktrees absent/true → auto-applies baseRef.
+ *  3b. Upgrade + use_worktrees === false → does NOT apply baseRef.
+ *  3c. Upgrade + explicit baseRef already present (local or shared) → unchanged (no-clobber).
  *  4. Idempotency: re-running a fresh-style install when baseRef is already "head"
  *     does not duplicate or error.
  *  5. Global Claude install: does NOT set worktree.baseRef (only local Claude).
@@ -49,6 +51,16 @@ function runInstall(isGlobal, opts = {}) {
     isGlobal
   );
   return { result };
+}
+
+// ─── Helper: write .planning/config.json in the project root ─────────────────
+// For a local Claude install, targetDir = <cwd>/.claude, so project root = cwd.
+// .planning/config.json lives at <cwd>/.planning/config.json.
+
+function writePlanningConfig(projectRoot, config) {
+  const planningDir = path.join(projectRoot, '.planning');
+  fs.mkdirSync(planningDir, { recursive: true });
+  fs.writeFileSync(path.join(planningDir, 'config.json'), JSON.stringify(config, null, 2) + '\n');
 }
 
 // ─── Case 1: fresh local install writes worktree.baseRef:"head" ──────────────
@@ -125,20 +137,20 @@ describe('#683 case 2: fresh install does not clobber existing explicit worktree
   });
 });
 
-// ─── Case 3: upgrade (re-install) does NOT modify settings automatically ──────
+// ─── Case 3a: upgrade + use_worktrees absent → auto-applies baseRef ──────────
 
-describe('#683 case 3: upgrade (re-install) does not auto-modify worktree.baseRef', () => {
+describe('#683 case 3a: upgrade + use_worktrees absent → auto-applies worktree.baseRef', () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-683-upgrade-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-683-upgrade-on-'));
   });
 
   afterEach(() => {
     cleanup(tmpDir);
   });
 
-  test('upgrade does not add worktree.baseRef when gsd-core/VERSION already exists', (t) => {
+  test('upgrade auto-applies worktree.baseRef:"head" when use_worktrees is absent', (t) => {
     const origCwd = process.cwd();
     t.after(() => { process.chdir(origCwd); });
     process.chdir(tmpDir);
@@ -147,25 +159,104 @@ describe('#683 case 3: upgrade (re-install) does not auto-modify worktree.baseRe
     const versionPath = path.join(tmpDir, '.claude', 'gsd-core', 'VERSION');
     fs.mkdirSync(path.dirname(versionPath), { recursive: true });
     fs.writeFileSync(versionPath, '1.0.0');
+    // No .planning/config.json — use_worktrees defaults to enabled (true).
 
     runInstall(false);
 
-    // On upgrade, baseRef must NOT be auto-set (opt-in via notice only).
-    // The settings file will exist (install writes hooks etc.) but must not
-    // have worktree.baseRef injected automatically.
     const localSettingsPath = path.join(tmpDir, '.claude', 'settings.local.json');
-    if (fs.existsSync(localSettingsPath)) {
-      const settings = JSON.parse(fs.readFileSync(localSettingsPath, 'utf-8'));
-      assert.strictEqual(
-        settings.worktree,
-        undefined,
-        'upgrade must not auto-inject worktree block into settings.local.json (#683)'
-      );
-    }
-    // If settings.local.json wasn't written, test still passes — no injection occurred.
+    assert.ok(
+      fs.existsSync(localSettingsPath),
+      '.claude/settings.local.json must exist after upgrade'
+    );
+    const settings = JSON.parse(fs.readFileSync(localSettingsPath, 'utf-8'));
+    assert.strictEqual(
+      settings.worktree && settings.worktree.baseRef,
+      'head',
+      'upgrade must auto-apply worktree.baseRef:"head" when use_worktrees is absent (#683)'
+    );
   });
 
-  test('upgrade preserves an explicit worktree.baseRef set by the user', (t) => {
+  test('upgrade auto-applies worktree.baseRef:"head" when use_worktrees is true', (t) => {
+    const origCwd = process.cwd();
+    t.after(() => { process.chdir(origCwd); });
+    process.chdir(tmpDir);
+
+    // Simulate a prior install by pre-creating the VERSION file.
+    const versionPath = path.join(tmpDir, '.claude', 'gsd-core', 'VERSION');
+    fs.mkdirSync(path.dirname(versionPath), { recursive: true });
+    fs.writeFileSync(versionPath, '1.0.0');
+    // .planning/config.json with use_worktrees: true
+    writePlanningConfig(tmpDir, { workflow: { use_worktrees: true } });
+
+    runInstall(false);
+
+    const localSettingsPath = path.join(tmpDir, '.claude', 'settings.local.json');
+    assert.ok(fs.existsSync(localSettingsPath), '.claude/settings.local.json must exist after upgrade');
+    const settings = JSON.parse(fs.readFileSync(localSettingsPath, 'utf-8'));
+    assert.strictEqual(
+      settings.worktree && settings.worktree.baseRef,
+      'head',
+      'upgrade must auto-apply worktree.baseRef:"head" when use_worktrees:true (#683)'
+    );
+  });
+});
+
+// ─── Case 3b: upgrade + use_worktrees === false → does NOT apply baseRef ─────
+
+describe('#683 case 3b: upgrade + use_worktrees:false → does NOT apply worktree.baseRef', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-683-upgrade-off-'));
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('upgrade does not apply worktree.baseRef when use_worktrees is false', (t) => {
+    const origCwd = process.cwd();
+    t.after(() => { process.chdir(origCwd); });
+    process.chdir(tmpDir);
+
+    // Simulate a prior install by pre-creating the VERSION file.
+    const versionPath = path.join(tmpDir, '.claude', 'gsd-core', 'VERSION');
+    fs.mkdirSync(path.dirname(versionPath), { recursive: true });
+    fs.writeFileSync(versionPath, '1.0.0');
+    // .planning/config.json with use_worktrees: false
+    writePlanningConfig(tmpDir, { workflow: { use_worktrees: false } });
+
+    runInstall(false);
+
+    // finishInstall always writes settings.local.json for local Claude installs.
+    const localSettingsPath = path.join(tmpDir, '.claude', 'settings.local.json');
+    assert.ok(
+      fs.existsSync(localSettingsPath),
+      '.claude/settings.local.json must exist after upgrade (finishInstall writes it)'
+    );
+    const settings = JSON.parse(fs.readFileSync(localSettingsPath, 'utf-8'));
+    assert.strictEqual(
+      settings.worktree,
+      undefined,
+      'upgrade must NOT apply worktree block when use_worktrees:false (#683)'
+    );
+  });
+});
+
+// ─── Case 3c: upgrade + explicit baseRef already present → no-clobber ─────────
+
+describe('#683 case 3c: upgrade + explicit baseRef present → no-clobber (unchanged)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-683-upgrade-noclobber-'));
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('upgrade preserves an explicit worktree.baseRef set by the user in local settings', (t) => {
     const origCwd = process.cwd();
     t.after(() => { process.chdir(origCwd); });
     process.chdir(tmpDir);
@@ -186,7 +277,40 @@ describe('#683 case 3: upgrade (re-install) does not auto-modify worktree.baseRe
     assert.strictEqual(
       settings.worktree && settings.worktree.baseRef,
       'fresh',
-      'upgrade must preserve an explicit user-set worktree.baseRef (#683 no-clobber)'
+      'upgrade must preserve an explicit user-set worktree.baseRef in local settings (#683 no-clobber)'
+    );
+  });
+
+  test('upgrade does not inject baseRef when shared settings.json already has one', (t) => {
+    const origCwd = process.cwd();
+    t.after(() => { process.chdir(origCwd); });
+    process.chdir(tmpDir);
+
+    // Simulate prior install
+    const claudeDir = path.join(tmpDir, '.claude');
+    fs.mkdirSync(claudeDir, { recursive: true });
+    const versionPath = path.join(claudeDir, 'gsd-core', 'VERSION');
+    fs.mkdirSync(path.dirname(versionPath), { recursive: true });
+    fs.writeFileSync(versionPath, '1.0.0');
+
+    // Shared settings.json has an explicit baseRef; settings.local.json does not.
+    const sharedSettingsPath = path.join(claudeDir, 'settings.json');
+    fs.writeFileSync(sharedSettingsPath, JSON.stringify({ worktree: { baseRef: 'main' } }, null, 2) + '\n');
+
+    runInstall(false);
+
+    // finishInstall always writes settings.local.json for local Claude installs.
+    // Shared no-clobber: sharedBaseRef !== null → installer must not inject.
+    const localSettingsPath = path.join(claudeDir, 'settings.local.json');
+    assert.ok(
+      fs.existsSync(localSettingsPath),
+      '.claude/settings.local.json must exist after upgrade (finishInstall writes it)'
+    );
+    const settings = JSON.parse(fs.readFileSync(localSettingsPath, 'utf-8'));
+    assert.strictEqual(
+      settings.worktree && settings.worktree.baseRef,
+      undefined,
+      'upgrade must NOT inject worktree.baseRef to settings.local.json when shared settings.json already has one (#683 no-clobber)'
     );
   });
 });
@@ -318,6 +442,125 @@ describe('#683 FIX 1: non-object settings.local.json does not crash the installe
     // This test verifies the guard path — checking that readSettings returning null before #683 is handled.
     // The array case below covers the actual fix.
     assert.ok(true, 'placeholder: null is handled by the null early-return above the #683 block');
+  });
+});
+
+// ─── Case 7: fresh + use_worktrees:false → does NOT write worktree.baseRef ───
+
+describe('#683 case 7: fresh local Claude install + use_worktrees:false → does NOT set worktree.baseRef', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-683-fresh-off-'));
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('fresh install with use_worktrees:false does not write worktree.baseRef', (t) => {
+    const origCwd = process.cwd();
+    t.after(() => { process.chdir(origCwd); });
+    process.chdir(tmpDir);
+
+    // No VERSION file → fresh install.
+    // .planning/config.json with use_worktrees: false → must suppress baseRef.
+    writePlanningConfig(tmpDir, { workflow: { use_worktrees: false } });
+
+    runInstall(false);
+
+    // finishInstall always writes settings.local.json for local Claude installs.
+    const localSettingsPath = path.join(tmpDir, '.claude', 'settings.local.json');
+    assert.ok(
+      fs.existsSync(localSettingsPath),
+      '.claude/settings.local.json must exist after fresh local Claude install'
+    );
+    const settings = JSON.parse(fs.readFileSync(localSettingsPath, 'utf-8'));
+    assert.strictEqual(
+      settings.worktree,
+      undefined,
+      'fresh install must NOT write worktree.baseRef when use_worktrees:false (#683 FIX A)'
+    );
+  });
+
+  test('fresh install with absent .planning/config.json still applies worktree.baseRef (default enabled)', (t) => {
+    const origCwd = process.cwd();
+    t.after(() => { process.chdir(origCwd); });
+    process.chdir(tmpDir);
+
+    // No VERSION file → fresh install.
+    // No .planning/config.json → worktreesEnabled defaults to true.
+
+    runInstall(false);
+
+    const localSettingsPath = path.join(tmpDir, '.claude', 'settings.local.json');
+    assert.ok(
+      fs.existsSync(localSettingsPath),
+      '.claude/settings.local.json must exist after fresh local Claude install'
+    );
+    const settings = JSON.parse(fs.readFileSync(localSettingsPath, 'utf-8'));
+    assert.strictEqual(
+      settings.worktree && settings.worktree.baseRef,
+      'head',
+      'fresh install must apply worktree.baseRef:"head" when .planning/config.json is absent (default enabled; #683 FIX A)'
+    );
+  });
+});
+
+// ─── Case 8: upgrade idempotency — two upgrade runs produce exactly one baseRef ─
+
+describe('#683 case 8: upgrade→upgrade idempotency — two upgrade runs do not duplicate worktree.baseRef', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-683-idem2-'));
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('two consecutive upgrade runs leave settings.local.json with exactly one worktree.baseRef:"head"', (t) => {
+    const origCwd = process.cwd();
+    t.after(() => { process.chdir(origCwd); });
+    process.chdir(tmpDir);
+
+    // First upgrade run: VERSION present → upgrade path.
+    const versionPath = path.join(tmpDir, '.claude', 'gsd-core', 'VERSION');
+    fs.mkdirSync(path.dirname(versionPath), { recursive: true });
+    fs.writeFileSync(versionPath, '1.0.0');
+    // use_worktrees defaults to enabled (no .planning/config.json)
+
+    runInstall(false);
+
+    // Restore VERSION so the second run is also an upgrade.
+    if (!fs.existsSync(versionPath)) {
+      fs.mkdirSync(path.dirname(versionPath), { recursive: true });
+    }
+    fs.writeFileSync(versionPath, '1.0.0');
+
+    runInstall(false);
+
+    const localSettingsPath = path.join(tmpDir, '.claude', 'settings.local.json');
+    assert.ok(
+      fs.existsSync(localSettingsPath),
+      '.claude/settings.local.json must exist after two upgrade runs'
+    );
+    const settings = JSON.parse(fs.readFileSync(localSettingsPath, 'utf-8'));
+    assert.strictEqual(
+      settings.worktree && settings.worktree.baseRef,
+      'head',
+      'worktree.baseRef must be "head" after two upgrade runs (#683 idempotency)'
+    );
+    assert.strictEqual(
+      typeof settings.worktree,
+      'object',
+      'worktree must be a plain object after two upgrade runs'
+    );
+    assert.ok(
+      !Array.isArray(settings.worktree),
+      'worktree must not have been duplicated into an array after two upgrade runs'
+    );
   });
 });
 

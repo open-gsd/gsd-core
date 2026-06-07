@@ -81,7 +81,7 @@ Alternatively, set the value by hand in `.claude/settings.local.json`:
 }
 ```
 
-**Note:** Fresh GSD Core installs set this automatically. On upgrade it is opt-in — the installer prints a notice pointing at `worktree set-baseref`.
+**Note:** Fresh installs and upgrades of GSD Core both set `worktree.baseRef:"head"` automatically in `.claude/settings.local.json` (no-clobber) when `workflow.use_worktrees` is enabled (the default). You can also apply or re-apply it manually at any time with `gsd-tools worktree set-baseref` — for example, if you toggled worktrees on after the initial install.
 
 Use this option when:
 
