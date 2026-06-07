@@ -12,6 +12,14 @@
 
 The hyphen and colon forms are *runtime-specific spellings of the same command*. Whichever runtime you're on, the installer writes the correct form into your runtime's command directory.
 
+### Skill Runtime Behavior (Claude Code)
+
+Heavy workflow skills (`/gsd-plan-phase`, `/gsd-execute-phase`, `/gsd-autonomous`) carry `context: fork` in their frontmatter. On Claude Code, this runs each skill in an isolated subagent context window, protecting the main session's context budget. The skills also declare `effort: xhigh`, signalling maximum token budget to the runtime.
+
+Quick-status skills (`/gsd-progress`, `/gsd-stats`) declare `effort: low`, directing the runtime to use a minimal token budget for fast reads.
+
+These fields are Claude Code–specific frontmatter. On runtimes that do not recognise them (Gemini, Codex, Cursor, etc.) the fields are silently ignored — existing behaviour is unchanged.
+
 ---
 
 ## Namespace Meta-Skills
