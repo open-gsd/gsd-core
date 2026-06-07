@@ -1,7 +1,18 @@
 name: Close Draft PRs
 
+# pull_request_target (not pull_request) so the job runs in the base-repo
+# context with a write-capable token even for PRs from forks. Without this,
+# fork PRs from first-time/external contributors get a read-only GITHUB_TOKEN
+# and the close/comment API calls 403 — letting them bypass the auto-close.
+# Safe because this job only reads event metadata and never checks out or
+# executes PR-supplied code.
+# Residual platform limitation: GitHub deliberately does NOT trigger
+# pull_request_target for fork branches whose names look like a Git SHA, so a
+# contributor could still evade this by naming their head branch like a commit
+# hash. Fully closing that gap needs a scheduled base-context sweep (separate
+# concern); a draft PR that evades this still cannot merge and still fails the other gates.
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, reopened, converted_to_draft]
 
 concurrency:

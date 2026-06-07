@@ -42,6 +42,7 @@ function parseArgs(argv) {
     installCommand: `npx ${packageName}@latest`,
     json: false,
     allowEmpty: false,
+    preview: false,
   };
   if (argv.length === 0) return { ok: true, opts };
   opts.cmd = argv[0];
@@ -62,6 +63,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (a === '--json') { opts.json = true; continue; }
     if (a === '--allow-empty') { opts.allowEmpty = true; continue; }
+    if (a === '--preview') { opts.preview = true; continue; }
     if (
       a === '--repo' ||
       a === '--version' ||
@@ -133,6 +135,19 @@ function assembleChangelog(lead, releaseBlock) {
   ].join('\n');
 }
 
+// Insert a "_No notable changes._" placeholder after the dated release heading
+// of an otherwise-empty release block. serializeChangelog with no sections
+// yields just "## [v] - d\n"; we expand the trailing newline into a blank line
+// + placeholder + blank line so parseChangelog still sees the dated heading
+// first and the output is human-readable. Shared by the --allow-empty and
+// --preview zero-fragment paths so they can never drift.
+function injectEmptyPlaceholder(headerOnlyBlock) {
+  return headerOnlyBlock.replace(
+    /^(##\s+\[[^\]]+\][^\n]*)\n+/,
+    '$1\n\n_No notable changes._\n\n',
+  );
+}
+
 function cmdRender(opts) {
   const repo = path.resolve(opts.repo);
   const changesetDir = path.join(repo, '.changeset');
@@ -155,6 +170,38 @@ function cmdRender(opts) {
 
   // 2. Read priorText once; reuse in all subsequent branches.
   const priorText = fs.existsSync(changelogPath) ? fs.readFileSync(changelogPath, 'utf8') : '';
+
+  // Preview mode (#759): render the dated release section WITHOUT writing
+  // CHANGELOG.md and WITHOUT consuming .changeset fragments. Used by the rc
+  // release job to surface the curated notes for the version under test while
+  // leaving the fragment set intact for the eventual finalize render.
+  if (opts.preview) {
+    // priorChangelog is intentionally null: a preview shows ONLY the new dated
+    // section for the version under test, not the full file history.
+    // serializeChangelog appends priorChangelog verbatim, so passing the prior
+    // text here would dump every past release into the rc job summary.
+    const ir = renderChangelog({
+      fragments,
+      version: opts.version,
+      date: opts.date,
+      priorChangelog: null,
+    });
+    let releaseBlock = serializeChangelog(ir);
+    if (fragments.length === 0) {
+      // Mirror --allow-empty: a no-fragment release still shows a dated heading
+      // with a placeholder rather than an empty block.
+      releaseBlock = injectEmptyPlaceholder(releaseBlock);
+    }
+    return {
+      exitCode: 0,
+      report: {
+        consumed: 0,
+        failures: [],
+        preview: releaseBlock,
+        fragmentCount: fragments.length,
+      },
+    };
+  }
 
   // 3. FIX 1: idempotency guard — if the version is already promoted (a dated
   //    release heading for this version already exists in CHANGELOG), split on
@@ -201,15 +248,7 @@ function cmdRender(opts) {
       priorChangelog: prior || null,
     });
     const headerOnlyBlock = serializeChangelog(ir);
-    // Insert placeholder after the release header line.
-    // serializeChangelog with no sections yields just "## [v] - d\n" (single
-    // trailing newline, no blank line).  We replace that trailing newline with
-    // a blank line + placeholder + blank line so parseChangelog still sees the
-    // dated heading first and the file is human-readable.
-    const releaseBlock = headerOnlyBlock.replace(
-      /^(##\s+\[[^\]]+\][^\n]*)\n+/,
-      '$1\n\n_No notable changes._\n\n',
-    );
+    const releaseBlock = injectEmptyPlaceholder(headerOnlyBlock);
     // FIX 2: use shared assembleChangelog helper.
     const out = assembleChangelog(lead, releaseBlock);
     fs.writeFileSync(changelogPath, out);
@@ -460,7 +499,8 @@ function cmdGithubReleaseNotes(opts) {
 function usage() {
   return [
     'usage:',
-    '  changeset/cli.cjs render --repo <dir> --version V --date D [--allow-empty] [--json]',
+    '  changeset/cli.cjs render --repo <dir> --version V --date D [--allow-empty] [--preview] [--json]',
+    '    --preview renders the dated section to stdout without writing CHANGELOG.md or consuming fragments.',
     '  changeset/cli.cjs github-release-notes --repo <dir> --from REF --to REF [--output FILE] [--repo-slug OWNER/REPO] [--install-command CMD] [--json]',
     '  changeset/cli.cjs extract --from VERSION --to VERSION [--changelog FILE] [--repo <dir>] [--json]',
     '    Extracts changelog entries strictly after --from (exclusive) and up to',
@@ -525,6 +565,9 @@ function main() {
   const { exitCode, report } = opts.cmd === 'render' ? cmdRender(opts) : cmdGithubReleaseNotes(opts);
   if (opts.json) {
     process.stdout.write(JSON.stringify(report, null, 2) + '\n');
+  } else if (opts.cmd === 'render' && opts.preview) {
+    // render --preview: emit the rendered section verbatim (no mutation occurred).
+    process.stdout.write(report.preview);
   } else if (opts.cmd === 'github-release-notes' && report.body) {
     process.stdout.write(report.body);
   } else {
