@@ -342,6 +342,7 @@ Node.js CLI utility (`gsd-tools.cjs`) with domain modules split across `gsd-core
 
 | Module                 | Responsibility                                                                                      |
 | ---------------------- | --------------------------------------------------------------------------------------------------- |
+| `core-utils.cjs`       | Shared low-level utility primitives — POSIX path normalization, sub-repo/subdirectory scanning, phase file stats, slug/one-liner/plan-id helpers, time-ago (extracted from `core.cjs`, ADR-857) |
 | `core.cjs`             | Shared utilities; compatibility re-exports for planning, I/O (`io.cjs`), and phase-id helpers       |
 | `io.cjs`               | CLI I/O primitives — output/error emission, JSON-error mode, large-payload temp-file spillover     |
 | `phase-id.cjs`         | Pure phase-id parsing/matching helpers — normalize, token match, regex builders (extracted from `core.cjs`, ADR-857) |

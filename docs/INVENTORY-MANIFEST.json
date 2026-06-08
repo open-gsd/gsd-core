@@ -285,6 +285,7 @@
       "config.cjs",
       "configuration.cjs",
       "context-utilization.cjs",
+      "core-utils.cjs",
       "core.cjs",
       "decisions.cjs",
       "docs.cjs",

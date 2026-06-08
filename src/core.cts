@@ -42,8 +42,22 @@ const {
   withPlanningLock,
   getActiveWorkstream,
   setActiveWorkstream,
-  findContextMdIn,
 } = planningWorkspace;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import coreUtilsModule = require('./core-utils.cjs');
+const {
+  toPosixPath,
+  detectSubRepos,
+  extractOneLinerFromBody,
+  pathExistsInternal,
+  generateSlugInternal,
+  filterPlanFiles,
+  filterSummaryFiles,
+  getPhaseFileStats,
+  readSubdirectories,
+  timeAgo,
+  extractCanonicalPlanId,
+} = coreUtilsModule;
 import { findProjectRoot } from './project-root.cjs';
 import { getGlobalConfigDir } from './runtime-homes.cjs';
 
@@ -54,34 +68,9 @@ import configSchema = require('./config-schema.cjs');
 const { VALID_CONFIG_KEYS, DYNAMIC_KEY_PATTERNS } = configSchema;
 
 // ─── Path helpers ────────────────────────────────────────────────────────────
-
-/** Normalize a relative path to always use forward slashes (cross-platform). */
-function toPosixPath(p: string): string {
-  return p.split(path.sep).join('/');
-}
-
-/**
- * Scan immediate child directories for separate git repos.
- * Returns a sorted array of directory names that have their own `.git`.
- * Excludes hidden directories and node_modules.
- */
-function detectSubRepos(cwd: string): string[] {
-  const results: string[] = [];
-  try {
-    const entries = fs.readdirSync(cwd, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
-      const gitPath = path.join(cwd, entry.name, '.git');
-      try {
-        if (fs.existsSync(gitPath)) {
-          results.push(entry.name);
-        }
-      } catch { /* ignore */ }
-    }
-  } catch { /* ignore */ }
-  return results.sort();
-}
+// toPosixPath and detectSubRepos moved to core-utils.cjs (ADR-857 phase 2c / #877).
+// The destructured bindings above (from coreUtilsModule) make them available to
+// core-internal callers; core.cjs re-exports toPosixPath and detectSubRepos for back-compat.
 
 // findProjectRoot is now re-exported from the generated CJS module above.
 
@@ -530,16 +519,10 @@ function pruneOrphanedWorktrees(repoRoot: string): string[] {
 // extractPhaseToken, phaseTokenMatches
 // — all imported via `phaseIdModule` above; internal callers use the destructured bindings.
 
-function extractCanonicalPlanId(filename: string): string {
-  const base = filename.replace(/-PLAN\.md$/i, '').replace(/-SUMMARY\.md$/i, '').replace(/\.md$/i, '');
-  const parts = base.split('-').filter(Boolean);
-  const tokenRe = /^\d+[A-Z]?(?:\.\d+)*$/i;
-  const phaseIdx = parts.findIndex(p => tokenRe.test(p));
-  if (phaseIdx >= 0 && phaseIdx + 1 < parts.length && tokenRe.test(parts[phaseIdx + 1])) {
-    return `${parts[phaseIdx]}-${parts[phaseIdx + 1]}`;
-  }
-  return base;
-}
+// extractCanonicalPlanId moved to core-utils.cjs (ADR-857 phase 2c / #877).
+// The destructured binding above (from coreUtilsModule) makes it available to
+// core-internal callers (searchPhaseInDir). It is NOT in core.cjs's public export =
+// block (it was never public).
 
 interface PhaseSearchResult {
   found: boolean;
@@ -1307,37 +1290,14 @@ function resolveEffortForTier(cwd: string, agentType: string, attempt?: number):
   return current;
 }
 
-// ─── Summary body helpers ─────────────────────────────────────────────────
+// ─── Summary body helpers / Misc utilities / Phase file helpers ───────────────
+// extractOneLinerFromBody, pathExistsInternal, generateSlugInternal,
+// filterPlanFiles, filterSummaryFiles, getPhaseFileStats, readSubdirectories,
+// timeAgo — all moved to core-utils.cjs (ADR-857 phase 2c / #877).
+// The destructured bindings above (from coreUtilsModule) make them available
+// to core-internal callers; core.cjs re-exports the public ones for back-compat.
 
-/**
- * Extract a one-liner from the summary body when it's not in frontmatter.
- */
-function extractOneLinerFromBody(content: string | null | undefined): string | null {
-  if (!content) return null;
-  const normalized = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  const body = normalized.replace(/^---\n[\s\S]*?\n---\n*/, '');
-  const match = body.match(/^#[^\n]*\n+\*\*([^*\n]+)\*\*([^\n]*)/m);
-  if (!match) return null;
-  const boldInner = match[1].trim();
-  const afterBold = match[2];
-  if (/:\s*$/.test(boldInner)) {
-    const prose = afterBold.trim();
-    return prose.length > 0 ? prose : null;
-  }
-  return boldInner.length > 0 ? boldInner : null;
-}
-
-// ─── Misc utilities ───────────────────────────────────────────────────────────
-
-function pathExistsInternal(cwd: string, targetPath: string): boolean {
-  const fullPath = path.isAbsolute(targetPath) ? targetPath : path.join(cwd, targetPath);
-  try {
-    fs.statSync(fullPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
+// ─── Misc utilities (remaining in core) ──────────────────────────────────────
 
 interface GitWorktreeInfo {
   inside: boolean;
@@ -1369,88 +1329,8 @@ function gitWorktreeInfoInternal(cwd: string): GitWorktreeInfo {
   }
 }
 
-function generateSlugInternal(text: string | null | undefined): string | null {
-  if (!text) return null;
-  return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').substring(0, 60);
-}
-
 // MilestoneInfo, MilestonePhaseFilter, getMilestoneInfo, getMilestonePhaseFilter
 // — all re-exported from roadmap-parser.cjs via roadmapParserModule above.
-
-// ─── Phase file helpers ──────────────────────────────────────────────────────
-
-/** Filter a file list to just PLAN.md / *-PLAN.md entries. */
-function filterPlanFiles(files: string[]): string[] {
-  return files.filter(f => f.endsWith('-PLAN.md') || f === 'PLAN.md');
-}
-
-/** Filter a file list to just SUMMARY.md / *-SUMMARY.md entries. */
-function filterSummaryFiles(files: string[]): string[] {
-  return files.filter(f => f.endsWith('-SUMMARY.md') || f === 'SUMMARY.md');
-}
-
-interface PhaseFileStats {
-  plans: string[];
-  summaries: string[];
-  hasResearch: boolean;
-  hasContext: boolean;
-  hasVerification: boolean;
-  hasReviews: boolean;
-}
-
-/**
- * Read a phase directory and return counts/flags for common file types.
- */
-function getPhaseFileStats(phaseDir: string): PhaseFileStats {
-  const files = fs.readdirSync(phaseDir);
-  return {
-    plans: filterPlanFiles(files),
-    summaries: filterSummaryFiles(files),
-    hasResearch: files.some(f => f.endsWith('-RESEARCH.md') || f === 'RESEARCH.md'),
-    hasContext: findContextMdIn(files) !== null,
-    hasVerification: files.some(f => f.endsWith('-VERIFICATION.md') || f === 'VERIFICATION.md'),
-    hasReviews: files.some(f => f.endsWith('-REVIEWS.md') || f === 'REVIEWS.md'),
-  };
-}
-
-/**
- * Read immediate child directories from a path.
- * Returns [] if the path doesn't exist or can't be read.
- * Pass sort=true to apply comparePhaseNum ordering.
- */
-function readSubdirectories(dirPath: string, sort = false): string[] {
-  try {
-    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-    const dirs = entries.filter(e => e.isDirectory()).map(e => e.name);
-    return sort ? dirs.sort((a, b) => comparePhaseNum(a, b)) : dirs;
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Format a Date as a fuzzy relative time string (e.g. "5 minutes ago").
- */
-function timeAgo(date: Date): string {
-  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
-  if (seconds < 5) return 'just now';
-  if (seconds < 60) return `${seconds} seconds ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes === 1) return '1 minute ago';
-  if (minutes < 60) return `${minutes} minutes ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours === 1) return '1 hour ago';
-  if (hours < 24) return `${hours} hours ago`;
-  const days = Math.floor(hours / 24);
-  if (days === 1) return '1 day ago';
-  if (days < 30) return `${days} days ago`;
-  const months = Math.floor(days / 30);
-  if (months === 1) return '1 month ago';
-  if (months < 12) return `${months} months ago`;
-  const years = Math.floor(days / 365);
-  if (years === 1) return '1 year ago';
-  return `${years} years ago`;
-}
 
 export = {
   output,

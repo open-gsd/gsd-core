@@ -370,7 +370,7 @@ The `gsd-planner` agent is decomposed into a core agent plus reference modules t
 
 ---
 
-## CLI Modules (93 shipped)
+## CLI Modules (94 shipped)
 
 Full listing: `gsd-core/bin/lib/*.cjs`.
 
@@ -396,6 +396,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `config-types.cjs` | TypeScript type definitions for the `model_policy` config block — `ModelPolicyConfig`, `TierEntry`, `RuntimeTiers`; compiled from `src/config-types.cts` at publish time (ADR-457) |
 | `configuration.cjs` | Configuration Module — canonical config loading, legacy-key normalization, defaults merge, and explicit on-disk migration; source of truth for both SDK and CJS consumers |
 | `context-utilization.cjs` | Pure classifier for `gsd-health --context` — turns (tokensUsed, contextWindow) into a `{ percent, state }` triage result against the 60%/70% fracture-point thresholds (#2792) |
+| `core-utils.cjs` | Shared low-level utilities — POSIX path normalization, sub-repo/subdirectory scanning, phase file stats, slug/one-liner/plan-id helpers, time-ago (extracted from `core.cjs`, ADR-857) |
 | `core.cjs` | Shared utilities and runtime fallbacks; compatibility re-exports for planning-workspace and I/O (`io.cjs`) helpers |
 | `decisions.cjs` | Parses CONTEXT.md `<decisions>` blocks; accepts numeric (D-42) and alphanumeric (D-INFRA-01) IDs; returns `{id, text, category, tags, trackable}` |
 | `docs.cjs` | Docs-update workflow init, Markdown scanning, monorepo detection |
