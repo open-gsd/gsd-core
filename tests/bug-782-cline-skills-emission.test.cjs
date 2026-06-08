@@ -37,56 +37,11 @@ const {
   resolveProfile,
 } = require('../gsd-core/bin/lib/install-profiles.cjs');
 
+const { nestedSkillPath } = require('./helpers/nested-layout.cjs');
+
 const REAL_COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');
 const MANIFEST = loadSkillsManifest(REAL_COMMANDS_DIR);
 const RESOLVED_CORE = resolveProfile({ modes: ['core'], manifest: MANIFEST });
-
-/**
- * Map from concrete skill stem → ns-* router stem.
- * Used for nesting runtimes (claude, cline, qwen, etc.) when the full profile
- * is installed: concrete skills live at <skillsRoot>/gsd-<router>/skills/<stem>/SKILL.md.
- */
-const CHILD_ROUTER = {
-  // ns-workflow
-  'discuss-phase': 'ns-workflow', 'spec-phase': 'ns-workflow', 'plan-phase': 'ns-workflow',
-  'execute-phase': 'ns-workflow', 'verify-work': 'ns-workflow', 'phase': 'ns-workflow',
-  'progress': 'ns-workflow', 'ultraplan-phase': 'ns-workflow',
-  'plan-review-convergence': 'ns-workflow', 'add-tests': 'ns-workflow',
-  'ai-integration-phase': 'ns-workflow', 'autonomous': 'ns-workflow',
-  'fast': 'ns-workflow', 'mvp-phase': 'ns-workflow', 'quick': 'ns-workflow',
-  // ns-project
-  'new-project': 'ns-project', 'new-milestone': 'ns-project', 'complete-milestone': 'ns-project',
-  'audit-milestone': 'ns-project', 'milestone-summary': 'ns-project', 'import': 'ns-project',
-  'ingest-docs': 'ns-project', 'profile-user': 'ns-project', 'review-backlog': 'ns-project',
-  // ns-review
-  'code-review': 'ns-review', 'audit-uat': 'ns-review', 'secure-phase': 'ns-review',
-  'eval-review': 'ns-review', 'ui-review': 'ns-review', 'validate-phase': 'ns-review',
-  'debug': 'ns-review', 'forensics': 'ns-review', 'audit-fix': 'ns-review',
-  'review': 'ns-review', 'ui-phase': 'ns-review',
-  // ns-context
-  'map-codebase': 'ns-context', 'graphify': 'ns-context', 'docs-update': 'ns-context',
-  'extract-learnings': 'ns-context',
-  // ns-ideate
-  'capture': 'ns-ideate', 'explore': 'ns-ideate', 'sketch': 'ns-ideate',
-  'spike': 'ns-ideate',
-  // ns-manage
-  'config': 'ns-manage', 'workspace': 'ns-manage', 'workstreams': 'ns-manage',
-  'thread': 'ns-manage', 'pause-work': 'ns-manage', 'resume-work': 'ns-manage',
-  'update': 'ns-manage', 'ship': 'ns-manage', 'inbox': 'ns-manage',
-  'pr-branch': 'ns-manage', 'undo': 'ns-manage', 'cleanup': 'ns-manage',
-  'health': 'ns-manage', 'manager': 'ns-manage', 'settings': 'ns-manage',
-  'stats': 'ns-manage', 'surface': 'ns-manage', 'help': 'ns-manage',
-};
-
-/**
- * Returns the nested SKILL.md path for a concrete skill stem on cline
- * (prefix='gsd-'): <skillsRoot>/gsd-<router>/skills/<stem>/SKILL.md
- */
-function nestedClineSkillPath(skillsRoot, stem) {
-  const router = CHILD_ROUTER[stem];
-  if (!router) throw new Error(`No router mapping for stem: ${stem}`);
-  return path.join(skillsRoot, 'gsd-' + router, 'skills', stem, 'SKILL.md');
-}
 
 // ─── (a) Converter unit test ─────────────────────────────────────────────────
 
@@ -395,7 +350,7 @@ describe('install() global cline — coexistence: skills AND .clinerules', () =>
     );
 
     // full profile: gsd-help is nested under gsd-ns-manage/skills/help/SKILL.md
-    const helpSkillFile = nestedClineSkillPath(skillsDir, 'help');
+    const helpSkillFile = nestedSkillPath(skillsDir, 'gsd-', 'help');
     assert.ok(
       fs.existsSync(helpSkillFile),
       `${path.relative(tmpGlobalDir, helpSkillFile)} must exist under ${tmpGlobalDir} — skills emission broken for global cline`
@@ -486,7 +441,7 @@ describe('convertClaudeToCliineMarkdown — bare ~/.claude and CLAUDE_CONFIG_DIR
     installRuntimeArtifacts('cline', configDir, 'global', RESOLVED_FULL);
 
     // full profile: surface is nested under gsd-ns-manage/skills/surface/SKILL.md
-    const surfaceSkill = nestedClineSkillPath(path.join(configDir, 'skills'), 'surface');
+    const surfaceSkill = nestedSkillPath(path.join(configDir, 'skills'), 'gsd-', 'surface');
     assert.ok(fs.existsSync(surfaceSkill), `${path.relative(configDir, surfaceSkill)} must exist for full profile`);
 
     const content = fs.readFileSync(surfaceSkill, 'utf8');
@@ -546,7 +501,7 @@ describe('_applyRuntimeRewrites — cline custom-dir embedded path (Fix 1)', () 
     // gsd-surface SKILL.md references config paths; with a custom configDir
     // (not under $HOME), pathPrefix will be the absolute custom path.
     // full profile: surface is nested under gsd-ns-manage/skills/surface/SKILL.md
-    const surfaceSkill = nestedClineSkillPath(path.join(configDir, 'skills'), 'surface');
+    const surfaceSkill = nestedSkillPath(path.join(configDir, 'skills'), 'gsd-', 'surface');
     assert.ok(fs.existsSync(surfaceSkill), `${path.relative(configDir, surfaceSkill)} must exist`);
 
     const content = fs.readFileSync(surfaceSkill, 'utf8');

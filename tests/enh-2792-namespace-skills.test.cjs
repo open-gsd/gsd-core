@@ -9,6 +9,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const { parseRequires } = require('./helpers/nested-layout.cjs');
+
 const COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');
 
 const NAMESPACE_SKILLS = [
@@ -216,16 +218,6 @@ describe('gsd-health --context flag is wired into command + workflow', () => {
 
 const NS_FILES = NAMESPACE_SKILLS.map((ns) => ns.file);
 
-/**
- * Parse the `requires:` flow-style array from a router file's raw content.
- * Matches `requires: [a, b, c]` anywhere (frontmatter or body — always in fm).
- */
-function parseRouterRequires(content) {
-  const m = content.match(/^requires:\s*\[([^\]]*)\]/m);
-  if (!m) return [];
-  return m[1].split(',').map((s) => s.trim()).filter(Boolean);
-}
-
 describe('namespace nesting completeness (#69)', () => {
   // Build the concrete-skill set once (all *.md minus ns-*.md)
   const allFiles = fs.readdirSync(COMMANDS_DIR).filter((f) => f.endsWith('.md'));
@@ -240,7 +232,7 @@ describe('namespace nesting completeness (#69)', () => {
   for (const f of NS_FILES) {
     const stem = f.replace(/\.md$/, '');
     const content = fs.readFileSync(path.join(COMMANDS_DIR, f), 'utf-8');
-    routerRequires.set(stem, parseRouterRequires(content));
+    routerRequires.set(stem, parseRequires(content));
   }
   const allRoutedStems = new Set([...routerRequires.values()].flat());
 

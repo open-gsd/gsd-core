@@ -720,6 +720,7 @@ export = {
   readActiveProfile,
   writeActiveProfile,
   // Shared internals
+  parseRequires,
   cleanupStagedSkills,
   // Back-compat / deprecated
   MINIMAL_SKILL_ALLOWLIST,

@@ -53,42 +53,7 @@ const {
   walk,
 } = require('./helpers/install-shared.cjs');
 
-/**
- * Map from concrete skill stem → ns-* router stem for nesting runtimes.
- * These runtimes nest concrete skills at <skillsRoot>/<prefix><router>/skills/<stem>/SKILL.md
- * (claude/cline/qwen/trae/augment/antigravity: prefix='gsd-'; hermes: prefix='').
- */
-const CHILD_ROUTER = {
-  // ns-workflow
-  'discuss-phase': 'ns-workflow', 'spec-phase': 'ns-workflow', 'plan-phase': 'ns-workflow',
-  'execute-phase': 'ns-workflow', 'verify-work': 'ns-workflow', 'phase': 'ns-workflow',
-  'progress': 'ns-workflow', 'ultraplan-phase': 'ns-workflow',
-  'plan-review-convergence': 'ns-workflow', 'add-tests': 'ns-workflow',
-  'ai-integration-phase': 'ns-workflow', 'autonomous': 'ns-workflow',
-  'fast': 'ns-workflow', 'mvp-phase': 'ns-workflow', 'quick': 'ns-workflow',
-  // ns-project
-  'new-project': 'ns-project', 'new-milestone': 'ns-project', 'complete-milestone': 'ns-project',
-  'audit-milestone': 'ns-project', 'milestone-summary': 'ns-project', 'import': 'ns-project',
-  'ingest-docs': 'ns-project', 'profile-user': 'ns-project', 'review-backlog': 'ns-project',
-  // ns-review
-  'code-review': 'ns-review', 'audit-uat': 'ns-review', 'secure-phase': 'ns-review',
-  'eval-review': 'ns-review', 'ui-review': 'ns-review', 'validate-phase': 'ns-review',
-  'debug': 'ns-review', 'forensics': 'ns-review', 'audit-fix': 'ns-review',
-  'review': 'ns-review', 'ui-phase': 'ns-review',
-  // ns-context
-  'map-codebase': 'ns-context', 'graphify': 'ns-context', 'docs-update': 'ns-context',
-  'extract-learnings': 'ns-context',
-  // ns-ideate
-  'capture': 'ns-ideate', 'explore': 'ns-ideate', 'sketch': 'ns-ideate',
-  'spike': 'ns-ideate',
-  // ns-manage
-  'config': 'ns-manage', 'workspace': 'ns-manage', 'workstreams': 'ns-manage',
-  'thread': 'ns-manage', 'pause-work': 'ns-manage', 'resume-work': 'ns-manage',
-  'update': 'ns-manage', 'ship': 'ns-manage', 'inbox': 'ns-manage',
-  'pr-branch': 'ns-manage', 'undo': 'ns-manage', 'cleanup': 'ns-manage',
-  'health': 'ns-manage', 'manager': 'ns-manage', 'settings': 'ns-manage',
-  'stats': 'ns-manage', 'surface': 'ns-manage', 'help': 'ns-manage',
-};
+const { CHILD_ROUTER, nestedSkillPath } = require('./helpers/nested-layout.cjs');
 
 // ─── Section 1: getDirName / getGlobalConfigDir / getConfigDirFromHome ──────────
 
@@ -346,9 +311,7 @@ describe('install/uninstall — hermes (nested skills/gsd/<router>/skills/<stem>
     assert.strictEqual(result.configDir, fs.realpathSync(targetDir));
 
     // hermes nests: skills/gsd/<router>/skills/<stem>/SKILL.md
-    const hermesHelpPath = path.join(
-      targetDir, 'skills', 'gsd', CHILD_ROUTER['help'], 'skills', 'help', 'SKILL.md'
-    );
+    const hermesHelpPath = nestedSkillPath(path.join(targetDir, 'skills', 'gsd'), '', 'help');
     assert.ok(fs.existsSync(hermesHelpPath),
       `help SKILL.md must exist at nested path: ${path.relative(targetDir, hermesHelpPath)}`);
     assert.ok(fs.existsSync(path.join(targetDir, 'skills', 'gsd', 'DESCRIPTION.md')),
@@ -446,9 +409,7 @@ describe('install/uninstall — qwen (nested skills/gsd-<router>/skills/<stem>/ 
     assert.strictEqual(result.configDir, fs.realpathSync(targetDir));
 
     // qwen nests: skills/gsd-<router>/skills/<stem>/SKILL.md
-    const qwenHelpPath = path.join(
-      targetDir, 'skills', 'gsd-' + CHILD_ROUTER['help'], 'skills', 'help', 'SKILL.md'
-    );
+    const qwenHelpPath = nestedSkillPath(path.join(targetDir, 'skills'), 'gsd-', 'help');
     assert.ok(fs.existsSync(qwenHelpPath),
       `help SKILL.md must exist at nested path: ${path.relative(targetDir, qwenHelpPath)}`);
     assert.ok(fs.existsSync(path.join(targetDir, 'gsd-core', 'VERSION')));
@@ -496,9 +457,7 @@ describe('install/uninstall — trae (nested skills/gsd-<router>/skills/<stem>/ 
     });
 
     // trae nests: skills/gsd-<router>/skills/<stem>/SKILL.md
-    const traeHelpPath = path.join(
-      targetDir, 'skills', 'gsd-' + CHILD_ROUTER['help'], 'skills', 'help', 'SKILL.md'
-    );
+    const traeHelpPath = nestedSkillPath(path.join(targetDir, 'skills'), 'gsd-', 'help');
     assert.ok(fs.existsSync(traeHelpPath),
       `help SKILL.md must exist at nested path: ${path.relative(targetDir, traeHelpPath)}`);
     assert.ok(fs.existsSync(path.join(targetDir, 'gsd-core', 'VERSION')));

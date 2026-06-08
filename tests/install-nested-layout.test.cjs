@@ -14,9 +14,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-const ROOT = path.join(__dirname, '..');
-const COMMANDS_GSD = path.join(ROOT, 'commands', 'gsd');
-
 const {
   installRuntimeArtifacts,
 } = require('../bin/install.js');
@@ -27,6 +24,8 @@ const {
   loadSkillsManifest,
   resolveProfile,
 } = require('../gsd-core/bin/lib/install-profiles.cjs');
+
+const { COMMANDS_GSD, ROUTER_STEMS, routerChildren } = require('./helpers/nested-layout.cjs');
 
 // ---------------------------------------------------------------------------
 // Runtime parity decision matrix (#69)
@@ -52,30 +51,9 @@ const FLAT = [
   { runtime: 'kilo',      scope: 'global', skillsSub: 'skills' },
 ];
 
-const ROUTER_STEMS = ['ns-context', 'ns-ideate', 'ns-manage', 'ns-project', 'ns-review', 'ns-workflow'];
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Parse the `requires:` flow-style array from a router file's raw content.
- * Matches `requires: [a, b, c]` (inline array form).
- */
-function parseRouterRequires(content) {
-  const m = content.match(/^requires:\s*\[([^\]]*)\]/m);
-  if (!m) return [];
-  return m[1].split(',').map((s) => s.trim()).filter(Boolean);
-}
-
-/**
- * Read the requires list for a router stem from the source commands/gsd dir.
- */
-function routerChildren(routerStem) {
-  const srcFile = path.join(COMMANDS_GSD, `${routerStem}.md`);
-  const content = fs.readFileSync(srcFile, 'utf-8');
-  return parseRouterRequires(content);
-}
 
 /**
  * Create a fresh temp dir, run installRuntimeArtifacts into it, and return
