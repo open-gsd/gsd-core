@@ -417,20 +417,40 @@ describe('stage — skills kind (claude global)', () => {
     assert.ok(entries.length >= 1, 'at least one skill dir should be staged');
   });
 
-  test('stage with skills="*" stages all commands/gsd/*.md as skills', () => {
+  test('stage with skills="*" nests all commands/gsd/*.md under 6 routers (claude)', () => {
     const layout = resolveRuntimeArtifactLayout('claude', FAKE_STAGE_DIR, 'global');
     const skillsKind = layout.kinds.find(k => k.kind === 'skills');
     assert.ok(skillsKind, 'should have a skills kind');
 
     const stagedDir = skillsKind.stage(PROFILE_FULL);
     assert.ok(fs.existsSync(stagedDir), 'stagedDir must exist');
-    const entries = fs.readdirSync(stagedDir);
-    assert.ok(entries.length > 10, `full profile should have many skills, got ${entries.length}`);
-    for (const entry of entries) {
-      assert.ok(entry.startsWith('gsd-'), `entry should start with gsd-: ${entry}`);
-      const skillMd = path.join(stagedDir, entry, 'SKILL.md');
-      assert.ok(fs.existsSync(skillMd), `SKILL.md must exist in ${entry}`);
+
+    // Claude is a NESTING runtime: full profile produces exactly 6 gsd-ns-* router dirs.
+    const topEntries = fs.readdirSync(stagedDir);
+    assert.strictEqual(topEntries.length, 6, `full profile should have exactly 6 router dirs, got ${topEntries.length}`);
+    for (const entry of topEntries) {
+      assert.ok(entry.startsWith('gsd-ns-'), `top-level entry should be a gsd-ns-* router: ${entry}`);
+      // Each router has its own SKILL.md.
+      const routerSkillMd = path.join(stagedDir, entry, 'SKILL.md');
+      assert.ok(fs.existsSync(routerSkillMd), `router SKILL.md must exist in ${entry}`);
+      // Each router has a skills/ subdirectory with nested children.
+      const skillsSubdir = path.join(stagedDir, entry, 'skills');
+      assert.ok(fs.existsSync(skillsSubdir), `skills/ subdir must exist in ${entry}`);
+      assert.ok(fs.statSync(skillsSubdir).isDirectory(), `${entry}/skills must be a directory`);
     }
+
+    // Total SKILL.md files across all routers + nested children must be large (proves no skill was dropped).
+    function countSkillMdFiles(dir) {
+      let count = 0;
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) count += countSkillMdFiles(fullPath);
+        else if (entry.name === 'SKILL.md') count++;
+      }
+      return count;
+    }
+    const totalSkillMd = countSkillMdFiles(stagedDir);
+    assert.ok(totalSkillMd >= 60, `full profile should have >= 60 total SKILL.md files (routers + children), got ${totalSkillMd}`);
   });
 });
 

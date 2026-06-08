@@ -123,6 +123,7 @@
         "bug-410-install-defaults-test-mode-guard.test.cjs",
         "enh-776-install-gemini-hook-events.test.cjs",
         "install-minimal-hooks.test.cjs",
+        "install-nested-layout.test.cjs",
         "install-path-detection.test.cjs",
         "install-regressions.test.cjs",
         "install-runtime-artifacts.test.cjs",
