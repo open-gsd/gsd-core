@@ -56,8 +56,10 @@ const {
   getPhaseFileStats,
   readSubdirectories,
   timeAgo,
-  extractCanonicalPlanId,
 } = coreUtilsModule;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseLocatorModule = require('./phase-locator.cjs');
+const { searchPhaseInDir, findPhaseInternal, getArchivedPhaseDirs } = phaseLocatorModule;
 import { findProjectRoot } from './project-root.cjs';
 import { getGlobalConfigDir } from './runtime-homes.cjs';
 
@@ -520,150 +522,14 @@ function pruneOrphanedWorktrees(repoRoot: string): string[] {
 // — all imported via `phaseIdModule` above; internal callers use the destructured bindings.
 
 // extractCanonicalPlanId moved to core-utils.cjs (ADR-857 phase 2c / #877).
-// The destructured binding above (from coreUtilsModule) makes it available to
-// core-internal callers (searchPhaseInDir). It is NOT in core.cjs's public export =
-// block (it was never public).
+// It is consumed exclusively by phase-locator.cjs, which imports it from
+// core-utils.cjs directly. It is NOT destructured in core.cts and is NOT
+// in core.cjs's public export = block (it was never public).
 
-interface PhaseSearchResult {
-  found: boolean;
-  directory: string;
-  phase_number: string;
-  phase_name: string | null;
-  phase_slug: string | null;
-  plans: string[];
-  summaries: string[];
-  incomplete_plans: string[];
-  has_research: boolean;
-  has_context: boolean;
-  has_verification: boolean;
-  has_reviews: boolean;
-  archived?: string;
-}
-
-function searchPhaseInDir(baseDir: string, relBase: string, normalized: string): PhaseSearchResult | null {
-  try {
-    const dirs = readSubdirectories(baseDir, true);
-    const match = dirs.find(d => phaseTokenMatches(d, normalized));
-    if (!match) return null;
-
-    const phaseToken = extractPhaseToken(match);
-    const phaseNumber = phaseToken || normalized;
-    const afterToken = match.slice(phaseToken ? phaseToken.length : 0).replace(/^-/, '');
-    const phaseName = afterToken || null;
-    const phaseDir = path.join(baseDir, match);
-    const { plans: unsortedPlans, summaries: unsortedSummaries, hasResearch, hasContext, hasVerification, hasReviews } = getPhaseFileStats(phaseDir);
-    const plans = unsortedPlans.sort();
-    const summaries = unsortedSummaries.sort();
-
-    const completedPlanIds = new Set(
-      summaries.flatMap(s => {
-        const exact = s.replace('-SUMMARY.md', '').replace('SUMMARY.md', '');
-        const canonical = extractCanonicalPlanId(s);
-        return canonical === exact ? [exact] : [exact, canonical];
-      })
-    );
-    const incompletePlans = plans.filter(p => {
-      const planId = p.replace('-PLAN.md', '').replace('PLAN.md', '');
-      const canonical = extractCanonicalPlanId(p);
-      return !completedPlanIds.has(planId) && !completedPlanIds.has(canonical);
-    });
-
-    return {
-      found: true,
-      directory: toPosixPath(path.join(relBase, match)),
-      phase_number: phaseNumber,
-      phase_name: phaseName,
-      phase_slug: phaseName ? phaseName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') : null,
-      plans,
-      summaries,
-      incomplete_plans: incompletePlans,
-      has_research: hasResearch,
-      has_context: hasContext,
-      has_verification: hasVerification,
-      has_reviews: hasReviews,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function findPhaseInternal(cwd: string, phase: unknown): PhaseSearchResult | null {
-  if (!phase) return null;
-
-  const phasesDir = path.join(planningDir(cwd), 'phases');
-  const normalized = normalizePhaseName(phase);
-
-  const relPhasesDir = toPosixPath(path.relative(cwd, phasesDir));
-  const current = searchPhaseInDir(phasesDir, relPhasesDir, normalized);
-  if (current) return current;
-
-  const milestonesDir = path.join(cwd, '.planning', 'milestones');
-  if (!fs.existsSync(milestonesDir)) return null;
-
-  try {
-    const milestoneEntries = fs.readdirSync(milestonesDir, { withFileTypes: true });
-    const archiveDirs = milestoneEntries
-      .filter(e => e.isDirectory() && /^v[\d.]+-phases$/.test(e.name))
-      .map(e => e.name)
-      .sort()
-      .reverse();
-
-    for (const archiveName of archiveDirs) {
-      const versionMatch = archiveName.match(/^(v[\d.]+)-phases$/);
-      const version = versionMatch![1];
-      const archivePath = path.join(milestonesDir, archiveName);
-      const relBase = '.planning/milestones/' + archiveName;
-      const result = searchPhaseInDir(archivePath, relBase, normalized);
-      if (result) {
-        result.archived = version;
-        return result;
-      }
-    }
-  } catch { /* intentionally empty */ }
-
-  return null;
-}
-
-interface ArchivedPhaseDir {
-  name: string;
-  milestone: string;
-  basePath: string;
-  fullPath: string;
-}
-
-function getArchivedPhaseDirs(cwd: string): ArchivedPhaseDir[] {
-  const milestonesDir = path.join(cwd, '.planning', 'milestones');
-  const results: ArchivedPhaseDir[] = [];
-
-  if (!fs.existsSync(milestonesDir)) return results;
-
-  try {
-    const milestoneEntries = fs.readdirSync(milestonesDir, { withFileTypes: true });
-    const phaseDirs = milestoneEntries
-      .filter(e => e.isDirectory() && /^v[\d.]+-phases$/.test(e.name))
-      .map(e => e.name)
-      .sort()
-      .reverse();
-
-    for (const archiveName of phaseDirs) {
-      const versionMatch = archiveName.match(/^(v[\d.]+)-phases$/);
-      const version = versionMatch![1];
-      const archivePath = path.join(milestonesDir, archiveName);
-      const dirs = readSubdirectories(archivePath, true);
-
-      for (const dir of dirs) {
-        results.push({
-          name: dir,
-          milestone: version,
-          basePath: path.join('.planning', 'milestones', archiveName),
-          fullPath: path.join(archivePath, dir),
-        });
-      }
-    }
-  } catch { /* intentionally empty */ }
-
-  return results;
-}
+// searchPhaseInDir, findPhaseInternal, getArchivedPhaseDirs moved to phase-locator.cjs
+// (ADR-857 phase 2d / #881). The destructured bindings above (from phaseLocatorModule)
+// make them available to core-internal callers; core.cjs re-exports findPhaseInternal,
+// getArchivedPhaseDirs, and searchPhaseInDir for back-compat.
 
 // ─── Roadmap milestone scoping (re-exported from roadmap-parser.cjs) ──────────
 // stripShippedMilestones, extractCurrentMilestone, replaceInCurrentMilestone,

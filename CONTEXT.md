@@ -20,6 +20,9 @@ Module owning the pure phase-id parsing and matching helpers: phase-name normali
 ### Phase Lifecycle Module
 Module owning phase create, rename, complete, remove, list, and plan-index operations, plus phase-dir prefix validation, STATE.md staleness detection, and auto-prune behaviour. Entry point: `gsd-core/bin/lib/phase.cjs` (CJS surface). Typed phase events: `GSDPhaseStartEvent`, `GSDPhaseStepStartEvent`, `GSDPhaseStepCompleteEvent`, `GSDPhaseCompleteEvent`. (The SDK native-query surface, the `types.ts` event definitions, `phase-runner.ts`, and `phase-prompt.ts` were retired with the SDK package per ADR-0174.)
 
+### Phase Locator Module
+Module owning phase-directory search and location: active-phase discovery against the `.planning/phases/` tree (`searchPhaseInDir`, `findPhaseInternal`) and archived-phase-dir enumeration (`getArchivedPhaseDirs`), matching phase ids/tokens against the filesystem. Depends only on leaf modules (`phase-id` for token/name matching, `core-utils` for fs-scan/path helpers, `planning-workspace` for `planningDir`) — no `loadConfig`, no other core dependency. Extracted from the Core module per ADR-857 rollout phase 2d (#881); `core.cjs` re-exports `searchPhaseInDir`, `findPhaseInternal`, and `getArchivedPhaseDirs` for back-compat. Source of truth: `gsd-core/bin/lib/phase-locator.cjs` (generated from `src/phase-locator.cts`).
+
 ### Dispatch Policy Module
 Module owning dispatch error mapping, fallback policy, timeout classification, and CLI exit mapping contract.
 
