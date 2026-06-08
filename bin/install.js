@@ -12550,6 +12550,7 @@ module.exports = {
     _resetGsdCommandRoster,
     convertClaudeToGeminiAgent,
     convertClaudeAgentToCodexAgent,
+    rewriteBareGsdToolsCommandsForCodex,
     generateCodexAgentToml,
     generateCodexSkillMetadataYaml,
     writeCodexSkillMetadataFiles,
