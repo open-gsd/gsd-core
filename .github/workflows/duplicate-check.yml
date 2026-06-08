@@ -1,0 +1,54 @@
+name: Duplicate check
+
+on:
+  issues:
+    types: [opened]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const dedupe = require(`${process.env.GITHUB_WORKSPACE}/scripts/issue-dedupe.cjs`);
+            const issue = context.payload.issue;
+            if (issue.pull_request) return;
+            const existing = (issue.labels || []).map((l) => (typeof l === 'string' ? l : l.name));
+            if (existing.includes(dedupe.POSSIBLE_DUPLICATE_LABEL)) return;
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const candidates = open
+              .filter((i) => !i.pull_request && i.number !== issue.number)
+              .map((i) => ({ number: i.number, title: i.title }));
+            const matches = dedupe.scoreCandidates(issue.title, candidates, { excludeNumber: issue.number });
+            if (!matches.length) {
+              core.info('No similar open issues found.');
+              return;
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              body: dedupe.renderChallengeComment(matches, { windowHours: dedupe.DEFAULT_WINDOW_HOURS }),
+            });
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              labels: [dedupe.POSSIBLE_DUPLICATE_LABEL],
+            });
+            core.info(`Flagged #${issue.number} as possible duplicate of: ${matches.map((m) => '#' + m.number).join(', ')}`);
