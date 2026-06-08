@@ -389,6 +389,35 @@ tools: Read, Grep, Glob
     assert.ok(!result.includes('model ='), 'model field must be absent when no override');
   });
 
+  test('does not emit reasoning effort when Codex model is inherited (#838)', () => {
+    const result = generateCodexAgentToml('gsd-executor', sampleAgent, null);
+    assert.ok(!result.includes('model ='), 'model field must be absent when Codex should inherit');
+    assert.ok(
+      !result.includes('model_reasoning_effort ='),
+      'reasoning effort must stay absent when the model is inherited'
+    );
+  });
+
+  test('emits reasoning effort when model override pins Codex model (#838)', () => {
+    const overrides = { 'gsd-executor': 'gpt-5.3-codex' };
+    const result = generateCodexAgentToml('gsd-executor', sampleAgent, overrides);
+    assert.ok(result.includes('model = "gpt-5.3-codex"'), 'model override must pin model');
+    assert.ok(
+      result.includes('model_reasoning_effort ='),
+      'reasoning effort is safe to emit when GSD also pins model'
+    );
+  });
+
+  test('emits reasoning effort when runtime resolver pins Codex model (#838)', () => {
+    const runtimeResolver = { resolve: () => ({ model: 'gpt-5.5' }) };
+    const result = generateCodexAgentToml('gsd-executor', sampleAgent, null, runtimeResolver);
+    assert.ok(result.includes('model = "gpt-5.5"'), 'runtime resolver must pin model');
+    assert.ok(
+      result.includes('model_reasoning_effort ='),
+      'reasoning effort is safe to emit when runtime resolver pins model'
+    );
+  });
+
   test('does not emit model field when modelOverrides has no entry for this agent (#2256)', () => {
     const overrides = { 'gsd-planner': 'gpt-5.4' };
     const result = generateCodexAgentToml('gsd-executor', sampleAgent, overrides);
