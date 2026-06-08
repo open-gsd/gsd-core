@@ -30,6 +30,7 @@ const FALLBACK_ALIASES: Readonly<Record<string, string[]>> = {
   hermes: ['hermes', 'hermes-agent', 'hermes-cli'],
   codebuddy: ['codebuddy', 'codebuddy-cli'],
   cline: ['cline', 'cline-cli'],
+  omp: ['omp', 'oh-my-pi', 'oh-my-pi-cli'],
 };
 
 function normalizeRuntimeToken(value: string): string {

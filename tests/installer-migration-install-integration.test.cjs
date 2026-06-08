@@ -35,6 +35,7 @@ const RUNTIME_INSTALL_CONTRACTS = {
   gemini: { surface: 'commands-gsd', settings: true, packageJson: true },
   hermes: { surface: 'hermes-skills', settings: true, packageJson: true },
   kilo: { surface: 'flat-command', settings: false, packageJson: true },
+  omp: { surface: 'omp', settings: false, packageJson: false },
   opencode: { surface: 'flat-command', settings: true, packageJson: true },
   qwen: { surface: 'flat-skills', settings: true, packageJson: true },
   trae: { surface: 'flat-skills', settings: false, packageJson: false },
@@ -230,6 +231,16 @@ function assertFreshInstallContract(runtime, targetDir) {
     assert.ok(
       listDirNames(targetDir, path.join('commands', 'gsd')).length > 0,
       `${runtime} should install commands/gsd entries`
+    );
+  } else if (contract.surface === 'omp') {
+    assert.ok(
+      listDirNames(targetDir, 'commands').some((name) => name.startsWith('gsd-') && name.endsWith('.md')),
+      'omp should install flattened command markdown files'
+    );
+    assertHasGsdDirectory(targetDir, 'skills');
+    assert.ok(
+      listDirNames(targetDir, 'rules').some((name) => name.startsWith('gsd-') && name.endsWith('.md')),
+      'omp should install mapped rule markdown files'
     );
   } else if (contract.surface === 'clinerules') {
     // #787: Cline now uses the .clinerules/ directory form (rules at gsd.md).

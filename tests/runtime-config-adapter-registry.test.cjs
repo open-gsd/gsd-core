@@ -32,6 +32,7 @@ const EXPECTED_TABLE = [
   { runtime: 'copilot',     installSurface: 'copilot-instructions', writesSharedSettings: false, finishPermissionWriter: null       },
   { runtime: 'cline',       installSurface: 'cline-rules',          writesSharedSettings: false, finishPermissionWriter: null       },
   { runtime: 'cursor',      installSurface: 'cursor-hooks-json',    writesSharedSettings: false, finishPermissionWriter: null       },
+  { runtime: 'omp',         installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       },
   { runtime: 'windsurf',    installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       },
   { runtime: 'trae',        installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       },
 ];
@@ -97,7 +98,7 @@ describe('resolveRuntimeConfigIntent — unknown runtime throws TypeError', () =
 // ---------------------------------------------------------------------------
 
 describe('writesSharedSettings exclusion equivalence', () => {
-  const EXPECTED_FALSE_SET = new Set(['codex', 'copilot', 'kilo', 'cursor', 'windsurf', 'trae', 'cline']);
+  const EXPECTED_FALSE_SET = new Set(['codex', 'copilot', 'kilo', 'cursor', 'windsurf', 'trae', 'cline', 'omp']);
 
   test('runtimes with writesSharedSettings===false are exactly the exclusion set', () => {
     const falseRuntimes = EXPECTED_TABLE
@@ -205,14 +206,15 @@ describe('resolveRuntimeConfigIntent — fresh object each call', () => {
 // ---------------------------------------------------------------------------
 
 describe('ALLOWED_CONFIG_RUNTIMES completeness', () => {
-  const EXPECTED_15 = new Set([
+  const EXPECTED_16 = new Set([
     'claude', 'gemini', 'antigravity', 'augment', 'qwen', 'hermes', 'codebuddy',
     'opencode', 'kilo', 'codex', 'copilot', 'cline', 'cursor', 'windsurf', 'trae',
+    'omp',
   ]);
 
-  test('ALLOWED_CONFIG_RUNTIMES contains exactly the 15 expected runtimes', () => {
+  test('ALLOWED_CONFIG_RUNTIMES contains exactly the 16 expected runtimes', () => {
     const runtimeSet = new Set(ALLOWED_CONFIG_RUNTIMES);
-    assert.deepStrictEqual(runtimeSet, EXPECTED_15);
+    assert.deepStrictEqual(runtimeSet, EXPECTED_16);
   });
 
   test('every member of ALLOWED_CONFIG_RUNTIMES resolves without throwing', () => {
@@ -221,8 +223,8 @@ describe('ALLOWED_CONFIG_RUNTIMES completeness', () => {
     }
   });
 
-  test('ALLOWED_CONFIG_RUNTIMES has exactly 15 entries', () => {
-    assert.strictEqual([...ALLOWED_CONFIG_RUNTIMES].length, 15);
+  test('ALLOWED_CONFIG_RUNTIMES has exactly 16 entries', () => {
+    assert.strictEqual([...ALLOWED_CONFIG_RUNTIMES].length, 16);
   });
 });
 

@@ -221,6 +221,18 @@ describe('resolveRuntimeArtifactLayout — codebuddy', () => {
   });
 });
 
+describe('resolveRuntimeArtifactLayout — omp', () => {
+  test('returns OMP commands, skills, agents, rules, and extensions layout', () => {
+    const layout = resolveRuntimeArtifactLayout('omp', FAKE_DIR);
+    assert.strictEqual(layout.runtime, 'omp');
+    assert.strictEqual(layout.configDir, FAKE_DIR);
+    assert.deepStrictEqual(layout.kinds.map(k => k.kind), ['commands', 'skills', 'agents', 'rules', 'extensions']);
+    assert.deepStrictEqual(layout.kinds.map(k => k.destSubpath), ['commands', 'skills', 'agents', 'rules', 'extensions']);
+    assert.ok(layout.kinds.every(k => k.prefix === 'gsd-'));
+    assert.ok(layout.kinds.every(k => typeof k.stage === 'function'));
+  });
+});
+
 describe('resolveRuntimeArtifactLayout — cline', () => {
   test('returns correct layout for cline global (skills-capable since v3.48.0 — #782)', () => {
     const layout = resolveRuntimeArtifactLayout('cline', FAKE_DIR, 'global');
@@ -322,6 +334,11 @@ describe('resolveRuntimeArtifactLayout edge-cases', () => {
     const layout = resolveRuntimeArtifactLayout('claude', '/tmp/x', 'global');
     assert.strictEqual(layout.kinds.length, 1);
     assert.strictEqual(layout.kinds[0].kind, 'skills');
+  });
+
+  test('omp has commands, skills, agents, rules, and extensions kinds', () => {
+    const layout = resolveRuntimeArtifactLayout('omp', '/tmp/x');
+    assert.deepStrictEqual(layout.kinds.map(k => k.kind), ['commands', 'skills', 'agents', 'rules', 'extensions']);
   });
 
   test('unknown runtime grok throws TypeError containing runtime name', () => {
@@ -510,5 +527,26 @@ describe('stage — cursor commands kind (#785)', () => {
       assert.ok(entry.isFile(), `${entry.name}: cursor commands dir must contain only flat files`);
       assert.ok(entry.name.endsWith('.md'), `${entry.name}: must be .md file`);
     }
+  });
+});
+
+describe('stage — omp commands, agents, rules, and extensions kinds', () => {
+  test('omp stages converted command, agent, explicit rule markdown, and extension directory', () => {
+    const layout = resolveRuntimeArtifactLayout('omp', FAKE_STAGE_DIR);
+    const commandsKind = layout.kinds.find(k => k.kind === 'commands');
+    const agentsKind = layout.kinds.find(k => k.kind === 'agents');
+    const rulesKind = layout.kinds.find(k => k.kind === 'rules');
+    const extensionsKind = layout.kinds.find(k => k.kind === 'extensions');
+
+    const commandStage = commandsKind.stage(PROFILE_CORE);
+    const agentStage = agentsKind.stage(PROFILE_CORE);
+    const ruleStage = rulesKind.stage(PROFILE_CORE);
+    const extensionStage = extensionsKind.stage(PROFILE_CORE);
+
+    assert.ok(fs.existsSync(path.join(commandStage, 'help.md')));
+    assert.ok(fs.existsSync(path.join(agentStage, 'gsd-planner.md')));
+    assert.ok(fs.existsSync(path.join(ruleStage, 'planning-artifacts.md')));
+    assert.ok(fs.existsSync(path.join(extensionStage, 'gsd-core', 'index.js')));
+    assert.ok(fs.existsSync(path.join(extensionStage, 'gsd-core', 'package.json')));
   });
 });

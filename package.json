@@ -28,7 +28,9 @@
     "gemini",
     "gemini-cli",
     "codex",
-    "codex-cli"
+    "codex-cli",
+    "omp",
+    "oh-my-pi"
   ],
   "author": "OpenGSD",
   "license": "MIT",

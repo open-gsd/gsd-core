@@ -363,6 +363,7 @@ const hasQwen = args.includes('--qwen');
 const hasHermes = args.includes('--hermes');
 const hasCodebuddy = args.includes('--codebuddy');
 const hasCline = args.includes('--cline');
+const hasOmp = args.includes('--omp');
 const hasBoth = args.includes('--both'); // Legacy flag, keeps working
 const hasAll = args.includes('--all');
 const hasUninstall = args.includes('--uninstall') || args.includes('-u');
@@ -394,7 +395,7 @@ if (hasMinimal && _profileArgRaw) {
 // Runtime selection - can be set by flags or interactive prompt
 let selectedRuntimes = [];
 if (hasAll) {
-  selectedRuntimes = ['claude', 'kilo', 'opencode', 'gemini', 'codex', 'copilot', 'antigravity', 'cursor', 'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline'];
+  selectedRuntimes = ['claude', 'kilo', 'opencode', 'gemini', 'codex', 'copilot', 'antigravity', 'cursor', 'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'omp'];
 } else if (hasBoth) {
   selectedRuntimes = ['claude', 'opencode'];
 } else {
@@ -413,6 +414,7 @@ if (hasAll) {
   if (hasHermes) selectedRuntimes.push('hermes');
   if (hasCodebuddy) selectedRuntimes.push('codebuddy');
   if (hasCline) selectedRuntimes.push('cline');
+  if (hasOmp) selectedRuntimes.push('omp');
 }
 
 // WSL + Windows Node.js detection
@@ -465,6 +467,7 @@ function getDirName(runtime) {
   if (runtime === 'hermes') return '.hermes';
   if (runtime === 'codebuddy') return '.codebuddy';
   if (runtime === 'cline') return '.cline';
+  if (runtime === 'omp') return '.omp';
   return '.claude';
 }
 
@@ -509,6 +512,7 @@ function getConfigDirFromHome(runtime, isGlobal) {
   if (runtime === 'hermes') return "'.hermes'";
   if (runtime === 'codebuddy') return "'.codebuddy'";
   if (runtime === 'cline') return "'.cline'";
+  if (runtime === 'omp') return "'.omp', 'agent'";
   return "'.claude'";
 }
 
@@ -523,7 +527,7 @@ const banner = '\n' +
   '  GSD Core ' + dim + 'v' + pkg.version + reset + '\n' +
   '  Git. Ship. Done.\n' +
   '  A meta-prompting, context engineering and spec-driven\n' +
-  '  development workflows for Claude Code, OpenCode, Gemini, Kilo, Codex, Copilot, Antigravity, Cursor, Windsurf, Augment, Trae, Qwen Code, Hermes Agent, Cline and CodeBuddy.\n';
+  '  development workflows for Claude Code, OpenCode, Gemini, Kilo, Codex, Copilot, Antigravity, Cursor, Windsurf, Augment, Trae, Qwen Code, Hermes Agent, Cline, CodeBuddy and OMP.\n';
 
 // Pure seam: parse --config-dir / -c from an arbitrary args array.
 // Returns the path string, '' for an empty equals-form value, or null when the
@@ -580,7 +584,7 @@ if (hasUninstall) {
 
 // Show help if requested
 if (hasHelp) {
-  console.log(`  ${yellow}Usage:${reset} npx ${pkg.name} [options]\n\n  ${yellow}Options:${reset}\n    ${cyan}-g, --global${reset}              Install globally (to config directory)\n    ${cyan}-l, --local${reset}               Install locally (to current directory)\n    ${cyan}--claude${reset}                  Install for Claude Code only\n    ${cyan}--opencode${reset}                Install for OpenCode only\n    ${cyan}--gemini${reset}                  Install for Gemini only\n    ${cyan}--kilo${reset}                    Install for Kilo only\n    ${cyan}--codex${reset}                   Install for Codex only\n    ${cyan}--copilot${reset}                 Install for Copilot only\n    ${cyan}--antigravity${reset}             Install for Antigravity only\n    ${cyan}--cursor${reset}                  Install for Cursor only\n    ${cyan}--windsurf${reset}                Install for Windsurf only\n    ${cyan}--augment${reset}                 Install for Augment only\n    ${cyan}--trae${reset}                    Install for Trae only\n    ${cyan}--qwen${reset}                    Install for Qwen Code only\n    ${cyan}--hermes${reset}                  Install for Hermes Agent only\n    ${cyan}--cline${reset}                   Install for Cline only\n    ${cyan}--codebuddy${reset}              Install for CodeBuddy only\n    ${cyan}--all${reset}                     Install for all runtimes\n    ${cyan}-u, --uninstall${reset}           Uninstall GSD (remove all GSD files)\n    ${cyan}-c, --config-dir <path>${reset}   Specify custom config directory\n    ${cyan}-h, --help${reset}                Show this help message\n    ${cyan}--force-statusline${reset}        Replace existing statusline config\n    ${cyan}--portable-hooks${reset}          Emit \$HOME-relative hook paths in settings.json\n                              (for WSL/Docker bind-mount setups; also GSD_PORTABLE_HOOKS=1)\n    ${cyan}--profile=<name>${reset}         Install a named skill profile. Profiles:\n                              core     — ${PROFILES.core.length} main-loop skills incl. phase (~130 desc tokens)\n                              standard — ${PROFILES.standard.length} skills incl. phase, review, config (~700)\n                              full     — all skills (default)\n                              Composable: --profile=core,audit installs union of closures.\n                              Profile is persisted and respected by \`gsd update\`.\n    ${cyan}--minimal${reset}                 Alias for --profile=core (back-compat).\n                              Cuts cold-start overhead from ~12k tokens to ~700.\n                              Alias: --core-only.\n\n  ${yellow}Examples:${reset}\n    ${dim}# Interactive install (prompts for runtime and location)${reset}\n    npx ${pkg.name}\n\n    ${dim}# Install for Claude Code globally${reset}\n    npx ${pkg.name} --claude --global\n\n    ${dim}# Install for Gemini globally${reset}\n    npx ${pkg.name} --gemini --global\n\n    ${dim}# Install for Kilo globally${reset}\n    npx ${pkg.name} --kilo --global\n\n    ${dim}# Install for Codex globally${reset}\n    npx ${pkg.name} --codex --global\n\n    ${dim}# Install for Copilot globally${reset}\n    npx ${pkg.name} --copilot --global\n\n    ${dim}# Install for Copilot locally${reset}\n    npx ${pkg.name} --copilot --local\n\n    ${dim}# Install for Antigravity globally${reset}\n    npx ${pkg.name} --antigravity --global\n\n    ${dim}# Install for Antigravity locally${reset}\n    npx ${pkg.name} --antigravity --local\n\n    ${dim}# Install for Cursor globally${reset}\n    npx ${pkg.name} --cursor --global\n\n    ${dim}# Install for Cursor locally${reset}\n    npx ${pkg.name} --cursor --local\n\n    ${dim}# Install for Windsurf globally${reset}\n    npx ${pkg.name} --windsurf --global\n\n    ${dim}# Install for Windsurf locally${reset}\n    npx ${pkg.name} --windsurf --local\n\n    ${dim}# Install for Augment globally${reset}\n    npx ${pkg.name} --augment --global\n\n    ${dim}# Install for Augment locally${reset}\n    npx ${pkg.name} --augment --local\n\n    ${dim}# Install for Trae globally${reset}\n    npx ${pkg.name} --trae --global\n\n    ${dim}# Install for Trae locally${reset}\n    npx ${pkg.name} --trae --local\n\n    ${dim}# Install for Hermes Agent globally${reset}\n    npx ${pkg.name} --hermes --global\n\n    ${dim}# Install for Hermes Agent locally${reset}\n    npx ${pkg.name} --hermes --local\n\n    ${dim}# Install for Cline globally${reset}\n    npx ${pkg.name} --cline --global\n\n    ${dim}# Install for Cline locally${reset}\n    npx ${pkg.name} --cline --local\n\n    ${dim}# Install for CodeBuddy globally${reset}\n    npx ${pkg.name} --codebuddy --global\n\n    ${dim}# Install for CodeBuddy locally${reset}\n    npx ${pkg.name} --codebuddy --local\n\n    ${dim}# Install for all runtimes globally${reset}\n    npx ${pkg.name} --all --global\n\n    ${dim}# Install to custom config directory${reset}\n    npx ${pkg.name} --kilo --global --config-dir ~/.kilo-work\n\n    ${dim}# Install to current project only${reset}\n    npx ${pkg.name} --claude --local\n\n    ${dim}# Uninstall GSD from Cursor globally${reset}\n    npx ${pkg.name} --cursor --global --uninstall\n\n  ${yellow}Notes:${reset}\n    The --config-dir option is useful when you have multiple configurations.\n    It takes priority over CLAUDE_CONFIG_DIR / OPENCODE_CONFIG_DIR / GEMINI_CONFIG_DIR / KILO_CONFIG_DIR / CODEX_HOME / COPILOT_CONFIG_DIR / COPILOT_HOME / ANTIGRAVITY_CONFIG_DIR / CURSOR_CONFIG_DIR / WINDSURF_CONFIG_DIR / AUGMENT_CONFIG_DIR / TRAE_CONFIG_DIR / QWEN_CONFIG_DIR / HERMES_HOME / CLINE_CONFIG_DIR / CODEBUDDY_CONFIG_DIR environment variables.\n`);
+  console.log(`  ${yellow}Usage:${reset} npx ${pkg.name} [options]\n\n  ${yellow}Options:${reset}\n    ${cyan}-g, --global${reset}              Install globally (to config directory)\n    ${cyan}-l, --local${reset}               Install locally (to current directory)\n    ${cyan}--claude${reset}                  Install for Claude Code only\n    ${cyan}--opencode${reset}                Install for OpenCode only\n    ${cyan}--gemini${reset}                  Install for Gemini only\n    ${cyan}--kilo${reset}                    Install for Kilo only\n    ${cyan}--codex${reset}                   Install for Codex only\n    ${cyan}--copilot${reset}                 Install for Copilot only\n    ${cyan}--antigravity${reset}             Install for Antigravity only\n    ${cyan}--cursor${reset}                  Install for Cursor only\n    ${cyan}--windsurf${reset}                Install for Windsurf only\n    ${cyan}--augment${reset}                 Install for Augment only\n    ${cyan}--trae${reset}                    Install for Trae only\n    ${cyan}--qwen${reset}                    Install for Qwen Code only\n    ${cyan}--hermes${reset}                  Install for Hermes Agent only\n    ${cyan}--cline${reset}                   Install for Cline only\n    ${cyan}--omp${reset}                     Install for OMP only\n    ${cyan}--codebuddy${reset}              Install for CodeBuddy only\n    ${cyan}--all${reset}                     Install for all runtimes\n    ${cyan}-u, --uninstall${reset}           Uninstall GSD (remove all GSD files)\n    ${cyan}-c, --config-dir <path>${reset}   Specify custom config directory\n    ${cyan}-h, --help${reset}                Show this help message\n    ${cyan}--force-statusline${reset}        Replace existing statusline config\n    ${cyan}--portable-hooks${reset}          Emit \$HOME-relative hook paths in settings.json\n                              (for WSL/Docker bind-mount setups; also GSD_PORTABLE_HOOKS=1)\n    ${cyan}--profile=<name>${reset}         Install a named skill profile. Profiles:\n                              core     — ${PROFILES.core.length} main-loop skills incl. phase (~130 desc tokens)\n                              standard — ${PROFILES.standard.length} skills incl. phase, review, config (~700)\n                              full     — all skills (default)\n                              Composable: --profile=core,audit installs union of closures.\n                              Profile is persisted and respected by \`gsd update\`.\n    ${cyan}--minimal${reset}                 Alias for --profile=core (back-compat).\n                              Cuts cold-start overhead from ~12k tokens to ~700.\n                              Alias: --core-only.\n\n  ${yellow}Examples:${reset}\n    ${dim}# Interactive install (prompts for runtime and location)${reset}\n    npx ${pkg.name}\n\n    ${dim}# Install for Claude Code globally${reset}\n    npx ${pkg.name} --claude --global\n\n    ${dim}# Install for Gemini globally${reset}\n    npx ${pkg.name} --gemini --global\n\n    ${dim}# Install for Kilo globally${reset}\n    npx ${pkg.name} --kilo --global\n\n    ${dim}# Install for Codex globally${reset}\n    npx ${pkg.name} --codex --global\n\n    ${dim}# Install for Copilot globally${reset}\n    npx ${pkg.name} --copilot --global\n\n    ${dim}# Install for Copilot locally${reset}\n    npx ${pkg.name} --copilot --local\n\n    ${dim}# Install for Antigravity globally${reset}\n    npx ${pkg.name} --antigravity --global\n\n    ${dim}# Install for Antigravity locally${reset}\n    npx ${pkg.name} --antigravity --local\n\n    ${dim}# Install for Cursor globally${reset}\n    npx ${pkg.name} --cursor --global\n\n    ${dim}# Install for Cursor locally${reset}\n    npx ${pkg.name} --cursor --local\n\n    ${dim}# Install for Windsurf globally${reset}\n    npx ${pkg.name} --windsurf --global\n\n    ${dim}# Install for Windsurf locally${reset}\n    npx ${pkg.name} --windsurf --local\n\n    ${dim}# Install for Augment globally${reset}\n    npx ${pkg.name} --augment --global\n\n    ${dim}# Install for Augment locally${reset}\n    npx ${pkg.name} --augment --local\n\n    ${dim}# Install for Trae globally${reset}\n    npx ${pkg.name} --trae --global\n\n    ${dim}# Install for Trae locally${reset}\n    npx ${pkg.name} --trae --local\n\n    ${dim}# Install for Hermes Agent globally${reset}\n    npx ${pkg.name} --hermes --global\n\n    ${dim}# Install for Hermes Agent locally${reset}\n    npx ${pkg.name} --hermes --local\n\n    ${dim}# Install for Cline globally${reset}\n    npx ${pkg.name} --cline --global\n\n    ${dim}# Install for Cline locally${reset}\n    npx ${pkg.name} --cline --local\n\n    ${dim}# Install for CodeBuddy globally${reset}\n    npx ${pkg.name} --codebuddy --global\n\n    ${dim}# Install for CodeBuddy locally${reset}\n    npx ${pkg.name} --codebuddy --local\n\n    ${dim}# Install for all runtimes globally${reset}\n    npx ${pkg.name} --omp --local\n\n    ${dim}# Install for all runtimes globally${reset}\n    npx ${pkg.name} --all --global\n\n    ${dim}# Install to custom config directory${reset}\n    npx ${pkg.name} --kilo --global --config-dir ~/.kilo-work\n\n    ${dim}# Install to current project only${reset}\n    npx ${pkg.name} --claude --local\n\n    ${dim}# Uninstall GSD from Cursor globally${reset}\n    npx ${pkg.name} --cursor --global --uninstall\n\n  ${yellow}Notes:${reset}\n    The --config-dir option is useful when you have multiple configurations.\n    It takes priority over CLAUDE_CONFIG_DIR / OPENCODE_CONFIG_DIR / GEMINI_CONFIG_DIR / KILO_CONFIG_DIR / CODEX_HOME / COPILOT_CONFIG_DIR / COPILOT_HOME / ANTIGRAVITY_CONFIG_DIR / CURSOR_CONFIG_DIR / WINDSURF_CONFIG_DIR / AUGMENT_CONFIG_DIR / TRAE_CONFIG_DIR / QWEN_CONFIG_DIR / HERMES_HOME / CLINE_CONFIG_DIR / CODEBUDDY_CONFIG_DIR environment variables.\n`);
   process.exit(0);
 }
 
@@ -2898,6 +2902,95 @@ function convertClaudeCommandToCodebuddyCommand(content, commandName) {
   if (argumentHint) lines.push(`argument-hint: ${yamlQuote(toSingleLine(argumentHint))}`);
   lines.push('---', body.trimStart());
   return lines.join('\n');
+}
+
+
+function convertSlashCommandsToOmpMentions(content) {
+  return content
+    .replace(/\/gsd:([a-z0-9-]+)/gi, (_, commandName) => `/gsd-${commandName}`)
+    .replace(/\bgsd:([a-z0-9-]+)/gi, (_, commandName) => `gsd-${commandName}`);
+}
+
+function convertClaudeToOmpMarkdown(content) {
+  let converted = convertSlashCommandsToOmpMentions(content);
+  converted = converted.replace(/\bAskUserQuestion\b/g, 'Ask');
+  converted = converted.replace(/\$ARGUMENTS\b/g, '{{GSD_ARGS}}');
+  converted = converted.replace(/`\.\/CLAUDE\.md`/g, '`AGENTS.md`');
+  converted = converted.replace(/~\/\.claude\//g, '.omp/');
+  converted = converted.replace(/\$HOME\/\.claude\//g, '.omp/');
+  converted = converted.replace(/\$env:USERPROFILE\/\.claude\//g, '.omp/');
+  converted = converted.replace(/\$env:USERPROFILE\\\.claude\\/g, '.omp/');
+  converted = converted.replace(/~\/\.claude\b/g, '.omp');
+  converted = converted.replace(/\$HOME\/\.claude\b/g, '.omp');
+  converted = converted.replace(/\$env:USERPROFILE\/\.claude\b/g, '.omp');
+  converted = converted.replace(/\$env:USERPROFILE\\\.claude\b/g, '.omp');
+  converted = converted.replace(/\.\/CLAUDE\.md/g, 'AGENTS.md');
+  converted = converted.replace(/`CLAUDE\.md`/g, '`AGENTS.md`');
+  converted = converted.replace(/\bCLAUDE\.md\b/g, 'AGENTS.md');
+  converted = converted.replace(/\.claude\/skills\//g, '.omp/skills/');
+  converted = converted.replace(/\.\/\.claude\//g, './.omp/');
+  converted = converted.replace(/\.claude\//g, '.omp/');
+  converted = converted.replace(/\*\*Known Claude Code bug \(classifyHandoffIfNeeded\):\*\*[^\n]*\n/g, '');
+  converted = converted.replace(/- \*\*classifyHandoffIfNeeded false failure:\*\*[^\n]*\n/g, '');
+  converted = converted.replace(/\bClaude Code\b/g, 'OMP');
+  return converted;
+}
+const OMP_MODEL_ROLES = new Set(['default', 'smol', 'slow', 'vision', 'plan', 'designer', 'commit', 'task']);
+
+function normalizeOmpModelOverride(modelOverride) {
+  if (typeof modelOverride !== 'string') return '';
+  const trimmed = modelOverride.trim();
+  if (!trimmed) return '';
+  const colon = trimmed.indexOf(':');
+  const head = colon === -1 ? trimmed : trimmed.slice(0, colon);
+  if (OMP_MODEL_ROLES.has(head)) return `pi/${trimmed}`;
+  return trimmed;
+}
+
+function convertClaudeCommandToOmpCommand(content, commandName) {
+  const converted = convertClaudeToOmpMarkdown(content);
+  const { frontmatter, body } = extractFrontmatterAndBody(converted);
+  if (!frontmatter) return converted;
+
+  const description = extractFrontmatterField(frontmatter, 'description') || `Run GSD workflow ${commandName}.`;
+  const argumentHint = extractFrontmatterField(frontmatter, 'argument-hint');
+
+  let fm = `---\nname: ${yamlIdentifier(commandName)}\ndescription: ${yamlQuote(toSingleLine(description))}\n`;
+  if (argumentHint) fm += `argument-hint: ${yamlQuote(argumentHint)}\n`;
+  fm += '---';
+  return `${fm}\n${body}`;
+}
+
+function convertClaudeCommandToOmpSkill(content, skillName) {
+  const converted = convertClaudeToOmpMarkdown(content);
+  const { frontmatter, body } = extractFrontmatterAndBody(converted);
+  if (!frontmatter) return converted;
+
+  const description = extractFrontmatterField(frontmatter, 'description') || `Run GSD workflow ${skillName}.`;
+  const argumentHint = extractFrontmatterField(frontmatter, 'argument-hint');
+
+  let fm = `---\nname: ${yamlIdentifier(skillName)}\ndescription: ${yamlQuote(toSingleLine(description))}\n`;
+  if (argumentHint) fm += `argument-hint: ${yamlQuote(argumentHint)}\n`;
+  fm += '---';
+  return `${fm}\n${body}`;
+}
+
+function convertClaudeAgentToOmpAgent(content, options = {}) {
+  const converted = convertClaudeToOmpMarkdown(content);
+  const { frontmatter, body } = extractFrontmatterAndBody(converted);
+  if (!frontmatter) return converted;
+
+  const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
+  const description = extractFrontmatterField(frontmatter, 'description') || '';
+  const toolsRaw = extractFrontmatterField(frontmatter, 'tools') || '';
+  const tools = toolsRaw.split(',').map(t => t.trim()).filter(Boolean);
+
+  let fm = `---\nname: ${yamlIdentifier(name)}\ndescription: ${yamlQuote(toSingleLine(description))}\n`;
+  const modelOverride = normalizeOmpModelOverride(options?.modelOverride);
+  if (modelOverride) fm += `model: ${yamlQuote(modelOverride)}\n`;
+  if (tools.length > 0) fm += `tools: ${tools.join(', ')}\n`;
+  fm += '---';
+  return `${fm}\n${body}`;
 }
 
 function convertClaudeAgentToCodebuddyAgent(content) {
@@ -7091,18 +7184,21 @@ function migrateLegacyDevPreferencesToSkill(targetDir, saved, runtime, scope = '
  * @param {string} runtime
  * @param {string} pathPrefix  e.g. "~/.codex/" — trailing-slash string
  */
-function applyRuntimeContentRewritesInPlace(stagedDir, runtime, pathPrefix) {
+function applyRuntimeContentRewritesInPlace(stagedDir, runtime, pathPrefix, options = {}) {
   if (!fs.existsSync(stagedDir)) return;
 
-  // Walk all SKILL.md files under stagedDir
+  // Walk staged markdown. Skills runtimes normally only rewrite SKILL.md; OMP
+  // also has flat command/agent/rule files that need the same install-scope
+  // path rewrites.
+  const rewriteAllMarkdown = options.allMarkdown === true;
   const walkAndRewrite = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         walkAndRewrite(fullPath);
-      } else if (entry.name === 'SKILL.md') {
+      } else if (entry.name === 'SKILL.md' || (rewriteAllMarkdown && entry.name.endsWith('.md'))) {
         let content = fs.readFileSync(fullPath, 'utf8');
-        content = _applyRuntimeRewrites(content, runtime, pathPrefix);
+        content = _applyRuntimeRewrites(content, runtime, pathPrefix, options);
         fs.writeFileSync(fullPath, content);
       }
     }
@@ -7125,7 +7221,7 @@ function applyRuntimeContentRewritesInPlace(stagedDir, runtime, pathPrefix) {
  * @param {string} pathPrefix
  * @returns {string}  path to a temp dir with rewritten files (caller is responsible for cleanup)
  */
-function applyRuntimeContentRewritesForCommandsInPlace(stagedDir, runtime, pathPrefix) {
+function applyRuntimeContentRewritesForCommandsInPlace(stagedDir, runtime, pathPrefix, options = {}) {
   if (!fs.existsSync(stagedDir)) return stagedDir;
   // Always copy to a temp dir — stageSkillsForProfile() returns the original source
   // dir on full/default profile (skills === '*'), so writing in-place would corrupt the
@@ -7135,7 +7231,7 @@ function applyRuntimeContentRewritesForCommandsInPlace(stagedDir, runtime, pathP
     for (const entry of fs.readdirSync(stagedDir, { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
       let content = fs.readFileSync(path.join(stagedDir, entry.name), 'utf8');
-      content = _applyRuntimeRewrites(content, runtime, pathPrefix);
+      content = _applyRuntimeRewrites(content, runtime, pathPrefix, options);
       // For augment commands, apply the markdown conversion so tool references
       // and skill paths use Augment equivalents.
       if (runtime === 'augment') {
@@ -7159,7 +7255,7 @@ function applyRuntimeContentRewritesForCommandsInPlace(stagedDir, runtime, pathP
  * @param {string} pathPrefix  trailing-slash string
  * @returns {string}
  */
-function _applyRuntimeRewrites(content, runtime, pathPrefix) {
+function _applyRuntimeRewrites(content, runtime, pathPrefix, options = {}) {
   const dirName = getDirName(runtime);
   const normalizedPathPrefix = pathPrefix.replace(/\/$/, '');
 
@@ -7220,6 +7316,25 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix) {
       content = content.replace(/\$HOME\/\.claude\b/g, normalizedPathPrefix);
       content = content.replace(/\.\/\.claude\b/g, `./${dirName}`);
       content = content.replace(/~\/\.trae\//g, pathPrefix);
+      content = processAttribution(content, getCommitAttribution(runtime));
+      break;
+
+
+    case 'omp':
+      content = content.replace(/~\/\.claude\//g, pathPrefix);
+      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
+      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
+      content = content.replace(/~\/\.claude/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.claude/g, normalizedPathPrefix);
+      content = content.replace(/\.\/\.claude/g, `./${dirName}`);
+      content = content.replace(/~\/\.omp\/agent\//g, pathPrefix);
+      content = content.replace(/\$HOME\/\.omp\/agent\//g, pathPrefix);
+      if (options.rewriteRuntimeDir === true) {
+        content = content.replace(/\.\/\.omp\//g, pathPrefix);
+        content = content.replace(/(?<![A-Za-z0-9_.\-/~$])\.omp\//g, pathPrefix);
+        content = content.replace(/\.\/\.omp/g, normalizedPathPrefix);
+        content = content.replace(/(?<![A-Za-z0-9_.\-/~$])\.omp/g, normalizedPathPrefix);
+      }
       content = processAttribution(content, getCommitAttribution(runtime));
       break;
 
@@ -7321,6 +7436,16 @@ function _copyStaged(stagedDir, destDir, kind) {
 
   if (kind.kind === 'skills') {
     // Each child of stagedDir is a prefixed skill directory: gsd-help/, etc.
+    for (const entry of fs.readdirSync(stagedDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const src = path.join(stagedDir, entry.name);
+      const dest = path.join(destDir, entry.name);
+      fs.cpSync(src, dest, { recursive: true });
+    }
+    return;
+  }
+
+  if (kind.kind === 'extensions') {
     for (const entry of fs.readdirSync(stagedDir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       const src = path.join(stagedDir, entry.name);
@@ -7558,15 +7683,23 @@ function installRuntimeArtifacts(runtime, configDir, scope, resolvedProfile) {
   });
 
   for (const kind of layout.kinds) {
-    const staged = kind.stage(resolvedProfile);
-    // stagedForCopy: the directory to copy from (may differ from staged if rewrites
-    // produce a temp copy — see applyRuntimeContentRewritesForCommandsInPlace).
-    let stagedForCopy = staged;
+    let staged;
+    let stagedForCopy;
+    try {
+      staged = kind.stage(resolvedProfile);
+      // stagedForCopy: the directory to copy from (may differ from staged if rewrites
+      // produce a temp copy — see applyRuntimeContentRewritesForCommandsInPlace).
+      stagedForCopy = staged;
     if (kind.kind === 'skills') {
-      applyRuntimeContentRewritesInPlace(staged, runtime, pathPrefix);
-    } else if (kind.kind === 'commands') {
+      applyRuntimeContentRewritesInPlace(staged, runtime, pathPrefix, {
+        allMarkdown: runtime === 'omp',
+        rewriteRuntimeDir: runtime === 'omp' && scope === 'global',
+      });
+    } else if (kind.kind === 'commands' || (runtime === 'omp' && (kind.kind === 'agents' || kind.kind === 'rules'))) {
       // Returns a temp dir with rewritten content so source files are never mutated.
-      stagedForCopy = applyRuntimeContentRewritesForCommandsInPlace(staged, runtime, pathPrefix);
+      stagedForCopy = applyRuntimeContentRewritesForCommandsInPlace(staged, runtime, pathPrefix, {
+        rewriteRuntimeDir: runtime === 'omp' && scope === 'global',
+      });
     }
     // applyRuntimeContentRewritesForCommandsInPlace() returns a fresh mkdtemp dir under
     // os.tmpdir() (gsd-cmd-rewrites-*); remove it once copied so it does not accumulate (#856).
@@ -7629,6 +7762,12 @@ function installRuntimeArtifacts(runtime, configDir, scope, resolvedProfile) {
       if (tempToClean) {
         try { fs.rmSync(tempToClean, { recursive: true, force: true }); } catch { /* best-effort */ }
       }
+    }
+    } finally {
+      if (stagedForCopy !== staged) {
+        try { fs.rmSync(stagedForCopy, { recursive: true, force: true }); } catch { /* best-effort */ }
+      }
+      if (staged && typeof kind.cleanup === 'function') kind.cleanup(staged);
     }
   }
 }
@@ -7768,6 +7907,7 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
   const isQwen = runtime === 'qwen';
   const isHermes = runtime === 'hermes';
   const isCline = runtime === 'cline';
+  const isOmp = runtime === 'omp';
   const dirName = getDirName(runtime);
 
   // Clean install: remove existing destination to prevent orphaned files
@@ -7847,6 +7987,10 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
         fs.writeFileSync(destPath, content);
       } else if (isCline) {
         content = convertClaudeToCliineMarkdown(content);
+        fs.writeFileSync(destPath, content);
+      } else if (isOmp) {
+        content = convertClaudeToOmpMarkdown(content);
+        content = _applyRuntimeRewrites(content, 'omp', pathPrefix, { rewriteRuntimeDir: isGlobal });
         fs.writeFileSync(destPath, content);
       } else if (isQwen) {
         content = content.replace(/CLAUDE\.md/g, 'QWEN.md');
@@ -8102,6 +8246,7 @@ function uninstall(isGlobal, runtime = 'claude') {
   const isQwen = runtime === 'qwen';
   const isHermes = runtime === 'hermes';
   const isCodebuddy = runtime === 'codebuddy';
+  const isOmp = runtime === 'omp';
   const dirName = getDirName(runtime);
 
   // Get the target directory based on runtime and install type. Cline local
@@ -8131,6 +8276,7 @@ function uninstall(isGlobal, runtime = 'claude') {
   if (runtime === 'qwen') runtimeLabel = 'Qwen Code';
   if (runtime === 'hermes') runtimeLabel = 'Hermes Agent';
   if (runtime === 'codebuddy') runtimeLabel = 'CodeBuddy';
+  if (runtime === 'omp') runtimeLabel = 'OMP';
 
   console.log(`  Uninstalling GSD from ${cyan}${runtimeLabel}${reset} at ${cyan}${locationLabel}${reset}\n`);
 
@@ -9063,9 +9209,13 @@ function writeManifest(configDir, runtime = 'claude', options = {}) {
   const isWindsurf = runtime === 'windsurf';
   const isTrae = runtime === 'trae';
   const isCline = runtime === 'cline';
+  const isOmp = runtime === 'omp';
   const isHermes = runtime === 'hermes';
   const gsdDir = path.join(configDir, 'gsd-core');
   const commandsDir = path.join(configDir, 'commands', 'gsd');
+  const flatCommandsDir = path.join(configDir, 'commands');
+  const rulesDir = path.join(configDir, 'rules');
+  const extensionsDir = path.join(configDir, 'extensions');
   const opencodeCommandDir = path.join(configDir, 'command');
   // Hermes nests GSD skills under skills/gsd/ as a single category (#2841).
   // All other runtimes that use the Codex-style skills layout use a flat skills/ root.
@@ -9102,6 +9252,13 @@ function writeManifest(configDir, runtime = 'claude', options = {}) {
       manifest.files['commands/gsd/' + rel] = hash;
     }
   }
+  if (isOmp && fs.existsSync(flatCommandsDir)) {
+    for (const file of fs.readdirSync(flatCommandsDir)) {
+      if (file.startsWith('gsd-') && file.endsWith('.md')) {
+        manifest.files['commands/' + file] = fileHash(path.join(flatCommandsDir, file));
+      }
+    }
+  }
   if ((isOpencode || isKilo) && fs.existsSync(opencodeCommandDir)) {
     for (const file of fs.readdirSync(opencodeCommandDir)) {
       if (file.startsWith('gsd-') && file.endsWith('.md')) {
@@ -9109,7 +9266,7 @@ function writeManifest(configDir, runtime = 'claude', options = {}) {
       }
     }
   }
-  if ((isCodex || isCopilot || isAntigravity || isCursor || isWindsurf || isTrae || (!isOpencode && !isGemini)) && fs.existsSync(codexSkillsDir)) {
+  if ((isCodex || isCopilot || isAntigravity || isCursor || isWindsurf || isTrae || isOmp || (!isOpencode && !isGemini)) && fs.existsSync(codexSkillsDir)) {
     // Hermes uses prefix '' (bare stem names); all others use 'gsd-'
     const skillListPrefix = isHermes ? '' : 'gsd-';
     for (const skillName of listCodexSkillNames(codexSkillsDir, skillListPrefix)) {
@@ -9124,6 +9281,23 @@ function writeManifest(configDir, runtime = 'claude', options = {}) {
       const descPath = path.join(codexSkillsDir, 'DESCRIPTION.md');
       if (fs.existsSync(descPath)) {
         manifest.files['skills/gsd/DESCRIPTION.md'] = fileHash(descPath);
+      }
+    }
+  }
+  if (isOmp && fs.existsSync(rulesDir)) {
+    for (const file of fs.readdirSync(rulesDir)) {
+      if (file.startsWith('gsd-') && file.endsWith('.md')) {
+        manifest.files['rules/' + file] = fileHash(path.join(rulesDir, file));
+      }
+    }
+  }
+  if (isOmp && fs.existsSync(extensionsDir)) {
+    for (const entry of fs.readdirSync(extensionsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !entry.name.startsWith('gsd-')) continue;
+      const extensionRoot = path.join(extensionsDir, entry.name);
+      const extensionHashes = generateManifest(extensionRoot);
+      for (const [rel, hash] of Object.entries(extensionHashes)) {
+        manifest.files[`extensions/${entry.name}/${rel}`] = hash;
       }
     }
   }
@@ -9147,8 +9321,8 @@ function writeManifest(configDir, runtime = 'claude', options = {}) {
   }
 
   // Track hook files so saveLocalPatches() can detect user modifications
-  // Hooks are only installed for runtimes that use settings.json (not Codex/Copilot/Cline)
-  if (!isCodex && !isCopilot && !isCline) {
+  // Hooks are only installed for runtimes that use settings.json (not Codex/Copilot/Cline/OMP)
+  if (!isCodex && !isCopilot && !isCline && !isOmp) {
     const hooksDir = path.join(configDir, 'hooks');
     if (fs.existsSync(hooksDir)) {
       for (const file of fs.readdirSync(hooksDir)) {
@@ -9234,7 +9408,9 @@ function populatePristineDir({ packageSrc, pristineDir, modified, runtime, pathP
         }
         continue;
       }
-      const srcDir = path.join(packageSrc, top);
+      const srcDir = runtime === 'omp' && top === 'extensions'
+        ? path.join(packageSrc, 'gsd-core', 'omp', 'extensions')
+        : path.join(packageSrc, top);
       const stageDir = path.join(stageRoot, top);
       if (!fs.existsSync(srcDir)) continue;
       copyWithPathReplacement(srcDir, stageDir, pathPrefix, runtime, false, isGlobal);
@@ -9492,6 +9668,64 @@ function reportInstallerMigrationResult(result) {
   }
 }
 
+
+function detectGsdWorkspaceState(workspaceRoot = process.cwd()) {
+  const specsDir = path.join(workspaceRoot, 'specs');
+  if (fs.existsSync(path.join(workspaceRoot, '.planning'))) {
+    return { state: 'planning-workspace', nextAction: '/gsd-plan' };
+  }
+  if (fs.existsSync(specsDir)) {
+    for (const entry of fs.readdirSync(specsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const specDir = path.join(specsDir, entry.name);
+      if (fs.existsSync(path.join(specDir, 'tasks.md'))) {
+        return { state: 'tasks-ready', nextAction: '/speckit.implement' };
+      }
+      if (fs.existsSync(path.join(specDir, 'plan.md'))) {
+        return { state: 'plan-ready', nextAction: '/speckit.tasks' };
+      }
+      if (fs.existsSync(path.join(specDir, 'spec.md'))) {
+        return { state: 'spec-ready', nextAction: '/speckit.plan' };
+      }
+    }
+  }
+  return { state: 'fresh', nextAction: '/gsd-new-project' };
+}
+
+function countOmpArtifacts(targetDir, subdir, predicate) {
+  const dir = path.join(targetDir, subdir);
+  if (!fs.existsSync(dir)) return 0;
+  return fs.readdirSync(dir, { withFileTypes: true }).filter(predicate).length;
+}
+
+function getOmpReadinessSummary(targetDir, workspaceRoot = process.cwd()) {
+  const state = detectGsdWorkspaceState(workspaceRoot);
+  return {
+    targetDir,
+    artifactKinds: ['commands', 'skills', 'agents', 'rules', 'extensions'],
+    counts: {
+      commands: countOmpArtifacts(targetDir, 'commands', e => e.isFile() && e.name.startsWith('gsd-') && e.name.endsWith('.md')),
+      skills: countOmpArtifacts(targetDir, 'skills', e => e.isDirectory() && e.name.startsWith('gsd-')),
+      agents: countOmpArtifacts(targetDir, 'agents', e => e.isFile() && e.name.startsWith('gsd-') && e.name.endsWith('.md')),
+      rules: countOmpArtifacts(targetDir, 'rules', e => e.isFile() && e.name.startsWith('gsd-') && e.name.endsWith('.md')),
+      extensions: countOmpArtifacts(targetDir, 'extensions', e => e.isDirectory() && e.name.startsWith('gsd-')),
+    },
+    state,
+    degradedCapabilities: [],
+  };
+}
+
+function printOmpReadinessSummary(targetDir, workspaceRoot = process.cwd()) {
+  const summary = getOmpReadinessSummary(targetDir, workspaceRoot);
+  const relTarget = targetDir.replace(os.homedir(), '~').replace(workspaceRoot, '.');
+  console.log(`  ${green}✓${reset} OMP readiness: target=${relTarget}`);
+  console.log(`  ${dim}↳${reset} OMP artifacts: commands=${summary.counts.commands}, skills=${summary.counts.skills}, agents=${summary.counts.agents}, rules=${summary.counts.rules}, extensions=${summary.counts.extensions}`);
+  console.log(`  ${dim}↳${reset} Existing GSD state: ${summary.state.state}; next action: ${summary.state.nextAction}`);
+  for (const warning of summary.degradedCapabilities) {
+    console.log(`  ${yellow}⚠${reset} ${warning}`);
+  }
+}
+
 function install(isGlobal, runtime = 'claude', options = {}) {
   const isOpencode = runtime === 'opencode';
   const isGemini = runtime === 'gemini';
@@ -9507,6 +9741,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   const isHermes = runtime === 'hermes';
   const isCodebuddy = runtime === 'codebuddy';
   const isCline = runtime === 'cline';
+  const isOmp = runtime === 'omp';
   const configIntent = resolveRuntimeConfigIntent(runtime);
   const dirName = getDirName(runtime);
   const src = path.join(__dirname, '..');
@@ -9639,6 +9874,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   if (isHermes) runtimeLabel = 'Hermes Agent';
   if (isCodebuddy) runtimeLabel = 'CodeBuddy';
   if (isCline) runtimeLabel = 'Cline';
+  if (isOmp) runtimeLabel = 'OMP';
 
   console.log(`  Installing for ${cyan}${runtimeLabel}${reset} to ${cyan}${locationLabel}${reset}\n`);
 
@@ -9925,7 +10161,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   // handles per-runtime path + branding rewrites, including Qwen/Hermes.
   // Cline global: emit skills to ~/.cline/skills/ (Cline >= v3.48.0 — #782).
   const _isSkillsRuntime = isCodex || isCopilot || isAntigravity || isCursor || isWindsurf ||
-    isAugment || isTrae || isCodebuddy || isQwen || isHermes ||
+    isAugment || isTrae || isCodebuddy || isQwen || isHermes || isOmp ||
     (runtime === 'claude' && isGlobal) ||
     (isCline && isGlobal);
 
@@ -9977,6 +10213,26 @@ function install(isGlobal, runtime = 'claude', options = {}) {
       } else {
         failures.push('skills/gsd-*');
       }
+      // OMP: also verify commands/, agents/, and rules/ emitted by the native layout.
+      if (isOmp) {
+        const ompChecks = [
+          ['commands', path.join(targetDir, 'commands'), e => e.isFile() && e.name.startsWith('gsd-') && e.name.endsWith('.md')],
+          ['rules', path.join(targetDir, 'rules'), e => e.isFile() && e.name.startsWith('gsd-') && e.name.endsWith('.md')],
+        ];
+        if (!isMinimalMode(_effectiveInstallMode)) {
+          ompChecks.push(['agents', path.join(targetDir, 'agents'), e => e.isFile() && e.name.startsWith('gsd-') && e.name.endsWith('.md')]);
+        }
+        for (const [label, dir, predicate] of ompChecks) {
+          if (fs.existsSync(dir)) {
+            const count = fs.readdirSync(dir, { withFileTypes: true }).filter(predicate).length;
+            if (count > 0) console.log(`  ${green}✓${reset} Installed ${count} ${label} to ${label}/`);
+            else failures.push(`${label}/gsd-*`);
+          } else {
+            failures.push(`${label}/gsd-*`);
+          }
+        }
+      }
+
       // Augment: also verify commands/ (emitted alongside skills/)
       if (isAugment) {
         const commandsDir = path.join(targetDir, 'commands');
@@ -10189,7 +10445,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   // `--minimal` actually shrinks a previously-full install.
   // For Codex this also covers per-agent `.toml` files alongside the `.md`
   // sources so a full → minimal switch doesn't leave stale registrations.
-  if (fs.existsSync(agentsDest)) {
+  if (!isOmp && fs.existsSync(agentsDest)) {
     for (const file of fs.readdirSync(agentsDest)) {
       if (
         file.startsWith('gsd-') &&
@@ -10218,6 +10474,8 @@ function install(isGlobal, runtime = 'claude', options = {}) {
       }
     }
     console.log(`  ${dim}↳${reset} Skipping agents (minimal install — run \`gsd update\` without \`--minimal\` to add full surface)`);
+  } else if (isOmp) {
+    // OMP agents are installed through the layout-driven agent kind above.
   } else if (fs.existsSync(agentsSrc)) {
     fs.mkdirSync(agentsDest, { recursive: true });
 
@@ -10343,7 +10601,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     failures.push('VERSION');
   }
 
-  if (!isCodex && !isCopilot && !isCursor && !isWindsurf && !isTrae && !isCline) {
+  if (!isCodex && !isCopilot && !isCursor && !isWindsurf && !isTrae && !isCline && !isOmp) {
     // Write package.json to force CommonJS mode for GSD scripts
     // Prevents "require is not defined" errors when project has "type": "module"
     // Node.js walks up looking for package.json - this stops inheritance from project
@@ -10439,7 +10697,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   // the hooks/lib/ helpers — otherwise the Codex comment downstream
   // ("we deliberately do *not* copy hooks/lib/ for Codex") is contradicted in practice.
   const hooksLibSrc = path.join(src, 'hooks', 'lib');
-  if (!isCodex && !isCopilot && !isCursor && !isWindsurf && !isTrae && !isCline && fs.existsSync(hooksLibSrc)) {
+  if (!isCodex && !isCopilot && !isCursor && !isWindsurf && !isTrae && !isCline && !isOmp && fs.existsSync(hooksLibSrc)) {
     const hooksLibDest = path.join(targetDir, 'hooks', 'lib');
     fs.mkdirSync(hooksLibDest, { recursive: true });
     copyLibDir(hooksLibSrc, hooksLibDest, GSD_HOOK_LIB_FILES);
@@ -10466,6 +10724,9 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   // Write file manifest for future modification detection
   writeManifest(targetDir, runtime, { mode: _effectiveInstallMode });
   console.log(`  ${green}✓${reset} Wrote file manifest (${MANIFEST_NAME})`);
+  if (isOmp) {
+    printOmpReadinessSummary(targetDir, process.cwd());
+  }
 
   // Report any backed-up local patches
   reportLocalPatches(targetDir, runtime);
@@ -10964,6 +11225,12 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     writeManifest(targetDir, runtime, { mode: _effectiveInstallMode });
     persistActiveProfileMarker();
     return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir };
+  }
+
+  if (isOmp) {
+    // OMP discovers commands, skills, agents, and rules from the filesystem; no settings.json hooks needed.
+    persistActiveProfileMarker();
+    return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir, rollbackInstallerMigrations };
   }
 
   if (configIntent.installSurface === 'profile-marker-only') {
@@ -11732,9 +11999,10 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   const isWindsurf = runtime === 'windsurf';
   const isTrae = runtime === 'trae';
   const isCline = runtime === 'cline';
+  const isOmp = runtime === 'omp';
   const configIntent = resolveRuntimeConfigIntent(runtime);
 
-  if (shouldInstallStatusline && !isOpencode && !isKilo && !isCodex && !isCopilot && !isCursor && !isWindsurf && !isTrae) {
+  if (shouldInstallStatusline && !isOpencode && !isKilo && !isCodex && !isCopilot && !isCursor && !isWindsurf && !isTrae && !isOmp) {
     if (!isGlobal && !forceStatusline) {
       // Local installs skip statusLine by default: repo settings.json takes precedence over
       // profile-level settings.json in Claude Code, so writing here would silently clobber
@@ -11760,7 +12028,7 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   // settings.json hooks block — opencode/kilo/codex/cursor/windsurf/trae/
   // cline either lack the surface or use a different config schema.
   const { shouldInstallBanner, bannerCommand } = bannerOpts;
-  if (shouldInstallBanner && settings && !isOpencode && !isKilo && !isCodex && !isCopilot && !isCursor && !isWindsurf && !isTrae && !isCline) {
+  if (shouldInstallBanner && settings && !isOpencode && !isKilo && !isCodex && !isCopilot && !isCursor && !isWindsurf && !isTrae && !isCline && !isOmp) {
     if (!bannerCommand) {
       console.warn(`  ${yellow}⚠${reset}  Skipped update banner registration — Node executable path unavailable. See #2979 / #3002.`);
     } else {
@@ -11955,13 +12223,14 @@ const runtimeMap = {
   '9': 'gemini',
   '10': 'hermes',
   '11': 'kilo',
-  '12': 'opencode',
-  '13': 'qwen',
-  '14': 'trae',
-  '15': 'windsurf'
+  '12': 'omp',
+  '13': 'opencode',
+  '14': 'qwen',
+  '15': 'trae',
+  '16': 'windsurf'
 };
-const allRuntimes = ['claude', 'antigravity', 'augment', 'cline', 'codebuddy', 'codex', 'copilot', 'cursor', 'gemini', 'hermes', 'kilo', 'opencode', 'qwen', 'trae', 'windsurf'];
-const ALL_RUNTIMES_OPTION = '16';
+const allRuntimes = ['claude', 'antigravity', 'augment', 'cline', 'codebuddy', 'codex', 'copilot', 'cursor', 'gemini', 'hermes', 'kilo', 'omp', 'opencode', 'qwen', 'trae', 'windsurf'];
+const ALL_RUNTIMES_OPTION = '17';
 
 /**
  * Build the runtime-selection prompt text shown by the interactive installer.
@@ -11980,11 +12249,12 @@ function buildRuntimePromptText() {
   ${cyan}9${reset}) Gemini       ${dim}(~/.gemini)${reset}
   ${cyan}10${reset}) Hermes Agent ${dim}(~/.hermes)${reset}
   ${cyan}11${reset}) Kilo         ${dim}(~/.config/kilo)${reset}
-  ${cyan}12${reset}) OpenCode     ${dim}(~/.config/opencode)${reset}
-  ${cyan}13${reset}) Qwen Code    ${dim}(~/.qwen)${reset}
-  ${cyan}14${reset}) Trae         ${dim}(~/.trae)${reset}
-  ${cyan}15${reset}) Windsurf     ${dim}(~/.codeium/windsurf)${reset}
-  ${cyan}16${reset}) All
+  ${cyan}12${reset}) OMP          ${dim}(~/.omp/agent)${reset}
+  ${cyan}13${reset}) OpenCode     ${dim}(~/.config/opencode)${reset}
+  ${cyan}14${reset}) Qwen Code    ${dim}(~/.qwen)${reset}
+  ${cyan}15${reset}) Trae         ${dim}(~/.trae)${reset}
+  ${cyan}16${reset}) Windsurf     ${dim}(~/.codeium/windsurf)${reset}
+  ${cyan}17${reset}) All
 
   ${dim}Select multiple: 1,2,6 or 1 2 6${reset}
 `;
@@ -11995,14 +12265,14 @@ function buildRuntimePromptText() {
  * Pure function — exported so tests can verify split/dedupe/fallback behavior.
  *  - Accepts comma- and/or whitespace-separated choices
  *  - Deduplicates while preserving order
- *  - Maps option 16 ("All") to every runtime
+ *  - Maps option 17 ("All") to every runtime
  *  - Falls back to ['claude'] when nothing valid is selected
  */
 function parseRuntimeInput(answer) {
   const input = (answer == null ? '' : String(answer)).trim() || '1';
 
   // Tokenize first so the all-runtimes shortcut also fires for inputs the
-  // prompt encourages — "16,", "16 1", etc. — not just the bare "16".
+  // prompt encourages — "17,", "17 1", etc. — not just the bare "16".
   const choices = input.split(/[\s,]+/).filter(Boolean);
   if (choices.includes(ALL_RUNTIMES_OPTION)) {
     return allRuntimes.slice();
@@ -12573,6 +12843,7 @@ module.exports = {
     GSD_CODEX_MARKER,
     CODEX_AGENT_SANDBOX,
     getDirName,
+    getGlobalConfigDir,
     getConfigDirFromHome,
     resolveKiloConfigPath,
     configureKiloPermissions,
@@ -12606,6 +12877,12 @@ module.exports = {
     convertClaudeCommandToCodebuddySkill,
     convertClaudeCommandToCodebuddyCommand,
     convertClaudeAgentToCodebuddyAgent,
+    convertClaudeToOmpMarkdown,
+    convertClaudeCommandToOmpCommand,
+    convertClaudeCommandToOmpSkill,
+    convertClaudeAgentToOmpAgent,
+    detectGsdWorkspaceState,
+    getOmpReadinessSummary,
     convertClaudeToCliineMarkdown,
     convertClaudeCommandToClineSkill,
     convertClaudeAgentToClineAgent,

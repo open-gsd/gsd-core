@@ -49,6 +49,7 @@ interface ArtifactKind {
   destSubpath: string;
   prefix: string;
   stage: (resolvedProfile: { name: string; skills: Set<string> | '*'; agents: Set<string> }) => string;
+  cleanup?: (stagedDir: string) => void;
 }
 
 interface Layout {
@@ -264,8 +265,10 @@ function applySurface(runtimeConfigDir: string, layout: Layout, manifest: Map<st
   // runtimes do not trigger the install.js require.
   let pathPrefix: string | null = null;
   for (const kind of layout.kinds) {
-    const staged = kind.stage(resolved);
-    if (kind.kind === 'skills') {
+    let staged: string | null = null;
+    try {
+      staged = kind.stage(resolved);
+      if (kind.kind === 'skills') {
       const installExports = getInstallExports();
       if (pathPrefix === null) {
         const scope = layout.scope ?? 'global';
@@ -279,10 +282,16 @@ function applySurface(runtimeConfigDir: string, layout: Layout, manifest: Map<st
           homeDir,
         });
       }
-      installExports.applyRuntimeContentRewritesInPlace(staged, layout.runtime, pathPrefix);
+      installExports.applyRuntimeContentRewritesInPlace(staged, layout.runtime, pathPrefix, {
+        allMarkdown: layout.runtime === 'omp',
+        rewriteRuntimeDir: layout.runtime === 'omp' && (layout.scope ?? 'global') === 'global',
+      });
     }
     const dest = path.join(layout.configDir, kind.destSubpath);
     _syncGsdDir(staged, dest, kind, skillManifest);
+    } finally {
+      if (staged && typeof kind.cleanup === 'function') kind.cleanup(staged);
+    }
   }
   return resolved;
 }
@@ -409,8 +418,23 @@ function _syncGsdDir(stagedDir: string, destDir: string, kind: ArtifactKind | st
     // Prune GSD-owned dirs that are no longer in the staged set.
     // pruneSkillDirs() is the single point of truth for this logic.
     pruneSkillDirs(destDir, stagedDirs, kindPrefix, manifest);
+  } else if (kindName === 'extensions') {
+    const stagedDestNames = new Set<string>();
+    for (const entry of fs.readdirSync(stagedDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const destSubDir = path.join(destDir, entry.name);
+      fs.cpSync(path.join(stagedDir, entry.name), destSubDir, { recursive: true });
+      stagedDestNames.add(entry.name);
+    }
+
+    for (const entry of fs.readdirSync(destDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      if (kindPrefix && !entry.name.startsWith(kindPrefix)) continue;
+      if (stagedDestNames.has(entry.name)) continue;
+      try { fs.rmSync(path.join(destDir, entry.name), { recursive: true, force: true }); } catch { /* ignore */ }
+    }
   } else {
-    // commands / agents kind: mirror installRuntimeArtifacts (_copyStaged /
+    // commands / agents / rules kind: mirror installRuntimeArtifacts (_copyStaged /
     // _removeGsdEntries in bin/install.js) so surface produces the SAME files as a
     // fresh install (#816). Flat command dirs (opencode/cursor/augment/kilo) take
     // the gsd- prefix on copy; namespaced command dirs (commands/gsd) and agents
@@ -443,7 +467,7 @@ function _syncGsdDir(stagedDir: string, destDir: string, kind: ArtifactKind | st
     //   - namespaced command dirs: the whole dir is GSD-owned
     for (const file of fs.readdirSync(destDir).filter(f => f.endsWith('.md'))) {
       if (kindName === 'agents' && !file.startsWith('gsd-')) continue;
-      if (kindName === 'commands' && !namespacedByDir && kindPrefix && !file.startsWith(kindPrefix)) continue;
+      if ((kindName === 'commands' || kindName === 'rules') && !namespacedByDir && kindPrefix && !file.startsWith(kindPrefix)) continue;
       if (!stagedDestNames.has(file)) {
         try { fs.unlinkSync(path.join(destDir, file)); } catch { /* ignore */ }
       }

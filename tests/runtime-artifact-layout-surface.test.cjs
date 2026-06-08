@@ -15,6 +15,7 @@ const os = require('os');
 const { writeSurface, readSurface, resolveSurface, listSurface, applySurface } = require('../gsd-core/bin/lib/surface.cjs');
 const { loadSkillsManifest, writeActiveProfile, resolveProfile } = require('../gsd-core/bin/lib/install-profiles.cjs');
 const { resolveRuntimeArtifactLayout } = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
+const { canonicalizeRuntimeName } = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
 const { CLUSTERS, allClusteredSkills } = require('../gsd-core/bin/lib/clusters.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
@@ -55,6 +56,14 @@ function readFrontmatterDescription(markdown) {
   return '';
 }
 
+
+describe('runtime aliases', () => {
+  test('canonicalizes OMP aliases', () => {
+    assert.strictEqual(canonicalizeRuntimeName('omp'), 'omp');
+    assert.strictEqual(canonicalizeRuntimeName('oh-my-pi'), 'omp');
+    assert.strictEqual(canonicalizeRuntimeName('oh_my_pi_cli'), 'omp');
+  });
+});
 // ─── applySurface ────────────────────────────────────────────────────────────
 
 describe('applySurface', () => {
@@ -301,6 +310,34 @@ describe('applySurface', () => {
 
     assert.ok(fs.existsSync(userDir), 'user-custom-skill dir must be preserved when kindPrefix is empty (Hermes)');
     assert.ok(fs.existsSync(path.join(destDir, stem1, 'SKILL.md')), 'GSD help/SKILL.md must be copied');
+  });
+
+  test('OMP surface sync writes prefixed flat commands, rules, and extensions', (t) => {
+    const base = createTempDir('gsd-surface-omp-');
+    t.after(() => cleanup(base));
+
+    writeActiveProfile(base, 'core');
+    writeSurface(base, {
+      baseProfile: 'core',
+      disabledClusters: [],
+      explicitAdds: [],
+      explicitRemoves: [],
+    });
+
+    const userExtensionDir = path.join(base, 'extensions', 'user-extension');
+    fs.mkdirSync(userExtensionDir, { recursive: true });
+    fs.writeFileSync(path.join(userExtensionDir, 'index.js'), 'module.exports = () => {};\\n');
+
+    const manifest = loadSkillsManifest(REAL_COMMANDS_DIR);
+    const layout = resolveRuntimeArtifactLayout('omp', base, 'local');
+    applySurface(base, layout, manifest, CLUSTERS);
+
+    assert.ok(fs.existsSync(path.join(base, 'commands', 'gsd-help.md')));
+    assert.ok(!fs.existsSync(path.join(base, 'commands', 'help.md')), 'OMP commands must not be staged unprefixed');
+    assert.ok(fs.existsSync(path.join(base, 'rules', 'gsd-planning-artifacts.md')));
+    assert.ok(!fs.existsSync(path.join(base, 'rules', 'planning-artifacts.md')), 'OMP rules must not be staged unprefixed');
+    assert.ok(fs.existsSync(path.join(base, 'extensions', 'gsd-core', 'index.js')));
+    assert.ok(fs.existsSync(path.join(userExtensionDir, 'index.js')), 'non-GSD OMP extension dir must be preserved');
   });
 
   // Regression guard for #816: applySurface must write gsd-prefixed command files

@@ -134,6 +134,10 @@ export function getGlobalConfigDir(runtime: string, explicitDir?: string | null)
     case 'cline':
       return env['CLINE_CONFIG_DIR'] ? expandTilde(env['CLINE_CONFIG_DIR']) : path.join(home, '.cline');
 
+    // ── OMP native provider ─────────────────────────────────────────────────
+    case 'omp':
+      return env['OMP_CONFIG_DIR'] ? expandTilde(env['OMP_CONFIG_DIR']) : path.join(home, '.omp', 'agent');
+
     // ── OpenCode (XDG) ───────────────────────────────────────────────────────
     case 'opencode': {
       if (env['OPENCODE_CONFIG_DIR']) return expandTilde(env['OPENCODE_CONFIG_DIR']);

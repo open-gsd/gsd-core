@@ -2,7 +2,7 @@
 
 /**
  * Runtime artifact layout module — resolves the artifact directory shapes
- * (commands, agents, skills) for each supported runtime.
+ * (commands, agents, skills, rules) for each supported runtime.
  *
  * grok is intentionally absent: it is in runtime-homes.cjs but not wired
  * here. The TypeError on unknown runtime is the loud-fail signal that a
@@ -15,6 +15,7 @@
 
 import path from 'node:path';
 import fs from 'node:fs';
+import os from 'node:os';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import installProfiles = require('./install-profiles.cjs');
 const {
@@ -34,7 +35,7 @@ const _require: NodeRequire = require;
 interface InstallExports {
   readGsdCommandNames: () => string[];
   computePathPrefix: (opts: { isGlobal: boolean; isOpencode: boolean; isWindowsHost: boolean; resolvedTarget: string; homeDir: string }) => string;
-  applyRuntimeContentRewritesInPlace: (stagedDir: string, runtime: string, pathPrefix: string) => void;
+  applyRuntimeContentRewritesInPlace: (stagedDir: string, runtime: string, pathPrefix: string, options?: { allMarkdown?: boolean; rewriteRuntimeDir?: boolean }) => void;
   [converterName: string]: unknown;
 }
 
@@ -66,7 +67,7 @@ function getInstallExports(): InstallExports {
 // Types
 // ---------------------------------------------------------------------------
 
-type ArtifactKindName = 'commands' | 'agents' | 'skills';
+type ArtifactKindName = 'commands' | 'agents' | 'skills' | 'rules' | 'extensions';
 
 // Mirrors the (unexported) ResolvedProfile in install-profiles.cts.
 // Must stay in sync if that shape changes.
@@ -81,6 +82,7 @@ interface ArtifactKind {
   destSubpath: string;
   prefix: string;
   stage: (resolvedProfile: ResolvedProfile) => string;
+  cleanup?: (stagedDir: string) => void;
 }
 
 interface Layout {
@@ -171,7 +173,7 @@ function findAgentsSourceRoot(runtimeConfigDir?: string): string {
 const ALLOWED_RUNTIMES = new Set([
   'claude', 'cursor', 'gemini', 'codex', 'copilot', 'antigravity',
   'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy',
-  'cline', 'opencode', 'kilo',
+  'cline', 'opencode', 'kilo', 'omp',
 ]);
 
 // ---------------------------------------------------------------------------
@@ -194,6 +196,12 @@ function agentsKind(destSubpath: string, prefix: string, configDir: string): Art
     prefix,
     stage: (resolved) => stageAgentsForProfile(findAgentsSourceRoot(configDir), resolved),
   };
+}
+
+
+function cleanupGeneratedStageDir(stagedDir: string): void {
+  if (typeof stagedDir !== 'string') return;
+  try { fs.rmSync(stagedDir, { recursive: true, force: true }); } catch { /* best-effort */ }
 }
 
 /**
@@ -260,6 +268,73 @@ function convertedCommandsKind(
       const converter = installExports[converterName] as (content: string, commandName: string) => string;
       return stageCommandsForRuntimeFlat(findInstallSourceRoot(configDir), resolved, converter, prefix);
     },
+  };
+}
+
+
+function convertedAgentsKind(destSubpath: string, prefix: string, converterName: string, configDir: string): ArtifactKind {
+  return {
+    kind: 'agents',
+    destSubpath,
+    prefix,
+    stage: (resolved) => {
+      const installExports = getInstallExports();
+      const converter = installExports[converterName] as (content: string, options?: { modelOverride?: string }) => string;
+      const readOverrides = installExports.readGsdEffectiveModelOverrides as ((configDir: string) => Record<string, string>) | undefined;
+      const modelOverrides = converterName === 'convertClaudeAgentToOmpAgent' && typeof readOverrides === 'function'
+        ? readOverrides(configDir)
+        : null;
+      const src = stageAgentsForProfile(findAgentsSourceRoot(configDir), resolved);
+      const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-agents-'));
+      if (!fs.existsSync(src)) return dest;
+      for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+        const agentName = entry.name.slice(0, -3);
+        const content = fs.readFileSync(path.join(src, entry.name), 'utf8');
+        const modelOverride = modelOverrides?.[agentName];
+        fs.writeFileSync(path.join(dest, entry.name), converter(content, { modelOverride }));
+      }
+      return dest;
+    },
+    cleanup: cleanupGeneratedStageDir,
+  };
+}
+
+function rulesKind(destSubpath: string, prefix: string, configDir: string): ArtifactKind {
+  return {
+    kind: 'rules',
+    destSubpath,
+    prefix,
+    stage: () => {
+      const rulesDir = path.resolve(findInstallSourceRoot(configDir), '..', '..', 'gsd-core', 'omp', 'rules');
+      const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-rules-'));
+      if (!fs.existsSync(rulesDir)) return dest;
+      for (const entry of fs.readdirSync(rulesDir, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+        fs.copyFileSync(path.join(rulesDir, entry.name), path.join(dest, entry.name));
+      }
+      return dest;
+    },
+    cleanup: cleanupGeneratedStageDir,
+  };
+}
+
+function extensionsKind(destSubpath: string, prefix: string, configDir: string): ArtifactKind {
+  return {
+    kind: 'extensions',
+    destSubpath,
+    prefix,
+    stage: () => {
+      const extensionsDir = path.resolve(findInstallSourceRoot(configDir), '..', '..', 'gsd-core', 'omp', 'extensions');
+      const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-extensions-'));
+      if (!fs.existsSync(extensionsDir)) return dest;
+      for (const entry of fs.readdirSync(extensionsDir, { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.name.startsWith('.') || !entry.name.startsWith(prefix)) continue;
+        fs.cpSync(path.join(extensionsDir, entry.name), path.join(dest, entry.name), { recursive: true });
+      }
+      return dest;
+    },
+    cleanup: cleanupGeneratedStageDir,
   };
 }
 
@@ -360,6 +435,16 @@ function resolveRuntimeArtifactLayout(runtime: string, configDir: string, scope:
 
     case 'cline':
       kinds = scope === 'global' ? [skillsKind('skills', 'gsd-', 'convertClaudeCommandToClineSkill', 'cline', configDir)] : [];
+      break;
+
+    case 'omp':
+      kinds = [
+        convertedCommandsKind('commands', 'gsd-', 'convertClaudeCommandToOmpCommand', configDir),
+        skillsKind('skills', 'gsd-', 'convertClaudeCommandToOmpSkill', 'omp', configDir),
+        convertedAgentsKind('agents', 'gsd-', 'convertClaudeAgentToOmpAgent', configDir),
+        rulesKind('rules', 'gsd-', configDir),
+        extensionsKind('extensions', 'gsd-', configDir),
+      ];
       break;
 
     case 'opencode':
