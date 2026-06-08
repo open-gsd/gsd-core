@@ -1,0 +1,39 @@
+name: Clear possible-duplicate on response
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  clear:
+    if: ${{ !github.event.issue.pull_request }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const dedupe = require(`${process.env.GITHUB_WORKSPACE}/scripts/issue-dedupe.cjs`);
+            const { owner, repo } = context.repo;
+            const comment = context.payload.comment;
+            const issue = context.payload.issue;
+            if (comment.user && comment.user.type === 'Bot') return;
+            const existing = (issue.labels || []).map((l) => (typeof l === 'string' ? l : l.name));
+            if (!existing.includes(dedupe.POSSIBLE_DUPLICATE_LABEL)) return;
+            await github.rest.issues.removeLabel({
+              owner,
+              repo,
+              issue_number: issue.number,
+              name: dedupe.POSSIBLE_DUPLICATE_LABEL,
+            }).catch((e) => core.info(`removeLabel: ${e.message}`));
+            await github.rest.issues.addLabels({
+              owner,
+              repo,
+              issue_number: issue.number,
+              labels: [dedupe.HUMAN_REVIEW_LABEL],
+            });
+            core.info(`Cleared possible-duplicate on #${issue.number}; routed to ${dedupe.HUMAN_REVIEW_LABEL}.`);

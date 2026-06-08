@@ -1,0 +1,91 @@
+name: Duplicate auto-close sweep
+
+on:
+  schedule:
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const dedupe = require(`${process.env.GITHUB_WORKSPACE}/scripts/issue-dedupe.cjs`);
+            const { owner, repo } = context.repo;
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: 'open',
+              labels: dedupe.POSSIBLE_DUPLICATE_LABEL,
+              per_page: 100,
+            });
+            const now = Date.now();
+            for (const issue of issues) {
+              if (issue.pull_request) continue;
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner,
+                repo,
+                issue_number: issue.number,
+                per_page: 100,
+              });
+              const challenges = comments.filter((c) => dedupe.isChallengeComment(c.body));
+              const challenge = challenges[challenges.length - 1];
+              let challengeComment = null;
+              let laterUserComments = 0;
+              if (challenge) {
+                const challengeAt = new Date(challenge.created_at).getTime();
+                laterUserComments = comments.filter(
+                  (c) => new Date(c.created_at).getTime() > challengeAt && c.user && c.user.type !== 'Bot',
+                ).length;
+                const reactions = await github.paginate(github.rest.reactions.listForIssueComment, {
+                  owner,
+                  repo,
+                  comment_id: challenge.id,
+                  per_page: 100,
+                });
+                const downvoted = reactions.some((r) => r.content === '-1');
+                challengeComment = { createdAt: challenge.created_at, downvoted };
+              }
+              const decision = dedupe.shouldClose({
+                now,
+                labels: issue.labels,
+                challengeComment,
+                laterUserComments,
+                windowHours: dedupe.DEFAULT_WINDOW_HOURS,
+              });
+              core.info(`#${issue.number}: ${decision.reason}`);
+              if (!decision.close) continue;
+              const fresh = await github.rest.issues.get({ owner, repo, issue_number: issue.number });
+              if (fresh.data.state !== 'open') continue;
+              const freshLabels = (fresh.data.labels || []).map((l) => (typeof l === 'string' ? l : l.name));
+              if (!freshLabels.includes(dedupe.POSSIBLE_DUPLICATE_LABEL)) {
+                core.info(`#${issue.number}: possible-duplicate cleared since snapshot, skipping close`);
+                continue;
+              }
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issue.number,
+                body: `Closing as a likely duplicate — no response within ${dedupe.DEFAULT_WINDOW_HOURS}h of the duplicate check. If this was a mistake, comment and a maintainer will reopen it.`,
+              });
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: issue.number,
+                state: 'closed',
+                state_reason: 'duplicate',
+              });
+              await github.rest.issues.removeLabel({
+                owner,
+                repo,
+                issue_number: issue.number,
+                name: dedupe.POSSIBLE_DUPLICATE_LABEL,
+              }).catch((e) => core.info(`removeLabel after close: ${e.message}`));
+            }
