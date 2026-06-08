@@ -1,7 +1,7 @@
 # ADR-894: Capability declaration format + registry generation [Proposed]
 
 - **Status:** Proposed
-- **Date:** 2026-06-08 (amended same day after a design grilling — see "Grilling amendments")
+- **Date:** 2026-06-08 (amended same day across two design grillings — see "Grilling amendments")
 - **Issue:** #894
 - **Parent:** ADR-857 (Capability system) — resolves its Open question #1
 - **Phase:** ADR-857 rollout phase 3a (design-only)
@@ -12,7 +12,7 @@
 
 > *"The exact on-disk shape of a co-located Capability declaration (folder layout, declaration format)."*
 
-The generator, the federated config loader (phase 3b), and the loop seam (phase 3c) all build against that format. This ADR fixes it **as a reviewable design** with no code. It reuses the repo's proven co-located-source → generated-central pattern with a `--write`/`--check` drift gate (`scripts/gen-inventory-manifest.cjs`, `scripts/research-profiles.cjs`).
+The generator, the federated config loader (phase 3b), and the loop seam (phase 3c) all build against that format. This ADR fixes it **as a reviewable design** with no code, reusing the repo's proven co-located-source → generated-central pattern with a `--write`/`--check` drift gate (`scripts/gen-inventory-manifest.cjs`, `scripts/research-profiles.cjs`).
 
 ## Decision
 
@@ -21,140 +21,145 @@ The generator, the federated config loader (phase 3b), and the loop seam (phase 
 ```
 capabilities/
   <id>/
-    capability.json          # the declaration (this ADR's subject)
-    # (future) skills/ agents/ hooks/ loop/    — co-located owned artifacts
+    capability.json          # the declaration
+    # (future) skills/ agents/ hooks/ loop/   — co-located owned artifacts
 ```
 
-- `<id>` is the Capability id (unique, kebab-case) and **must equal the folder name**.
-- **Migration-staged ownership.** The initial generator references existing artifact locations by stem (skills in `commands/gsd/`, agents in `agents/`); the physical move into `capabilities/<id>/…` is the ADR-857 **phase-6 migration**. The declaration format is identical either way.
+- `<id>` unique, kebab-case, equals the folder name.
+- **Migration-staged ownership.** Declarations initially *reference* existing artifact locations by stem; the physical move into `capabilities/<id>/…` is the ADR-857 **phase-6 migration**. Format is identical either way.
 - Genuinely shared artifacts (e.g. `gsd-planner`) stay in a core/host home and are **referenced, not owned**.
 
 ### 2. The `capability.json` schema
 
-Schema-validated JSON. A common envelope plus a **role-typed body** (`role: feature | runtime`).
+Schema-validated JSON. Common envelope + role-typed body (`role: feature | runtime`).
 
-**Common envelope (all roles):**
+**Common envelope:**
 
 | Field | Type | Notes |
 |---|---|---|
 | `id` | string (kebab) | unique; equals folder name |
 | `role` | `"feature" \| "runtime"` | discriminator |
-| `title`, `description` | string | human label + one-line summary |
-| `tier` | `"core" \| "standard" \| "full"` | surfacing tier (maps to install profiles) |
-| `requires` | string[] | **other Capability ids only** — never host steps (the host loop is always present). Generator enforces: every id exists, graph is acyclic, and edges are **tier-monotone** (a `core` capability may not require a `standard`/`full` one; `standard` may not require `full`). |
+| `title`, `description` | string | label + summary |
+| `tier` | `"core" \| "standard" \| "full"` | **the source of truth for install-profile + cluster membership** (§4); maps via tier + requires-closure |
+| `requires` | string[] | **Capability ids only** (host is implicit). Generator enforces: exist, acyclic, **tier-monotone** (`core` may not require `standard`/`full`; `standard` may not require `full`) |
 
-**`role: "feature"` body** — note the **three typed hook arrays** (one per ADR-857 hook kind), not a single `loopHooks[]`:
+**`role: "feature"` body** — three typed hook arrays (one per ADR-857 hook kind):
 
 | Field | Type | Notes |
 |---|---|---|
-| `skills` | string[] | owned skill stems — exactly one owner per stem across all capabilities |
-| `agents` | string[] | owned agent names |
-| `hooks` | `{event, script}[]` | lifecycle hooks (`SessionStart`/`PostToolUse`/`Stop`/…) |
-| `config` | object | federated config-key schema slice `{ "<key>": {type, default, description} }` |
-| `steps` | Step[] | sequence hooks (run as their own unit) |
-| `contributions` | Contribution[] | inject markdown into a core step's agent prompt |
-| `gates` | Gate[] | check-and-maybe-block hooks |
+| `skills` / `agents` | string[] | owned stems — exactly one owner each across all capabilities |
+| `hooks` | `{event, script}[]` | lifecycle hooks |
+| `config` | object | federated config-key schema slice |
+| `steps` / `contributions` / `gates` | arrays | loop hooks (below) |
 
 ```jsonc
 // Step — runs at a point as its own unit; order derives from produces/consumes
-{ "point": "plan:pre", "ref": { "skill": "ui-phase" },   // ref is {skill:…} | {agent:…}
+{ "point": "plan:pre", "ref": { "skill": "ui-phase" },     // {skill:…} | {agent:…}
   "produces": ["UI-SPEC.md"], "consumes": ["CONTEXT.md"],
-  "onError": "skip" }                                      // "skip" (default) | "halt"
+  "when": "workflow.ui_phase",                               // config-level activation (§ below)
+  "onError": "skip" }                                        // "skip" (default) | "halt"
 
 // Contribution — injects a fragment into a NAMED agent role's prompt
-{ "point": "plan:pre", "into": "planner",                 // into ∈ the step's published agentRoles
-  "fragment": { "path": "loop/threat-model.md" },          // {path:…} | {inline:"…"}
-  "onError": "skip" }
-// Contributions carry NO produces/consumes. Multiple contributions into the same
-// agent render as ordered labeled blocks (<contribution from="<id>">…), ordered by
-// capability-id (ADR-857 decision 6). The host controls the active set, so a stable
-// arbitrary order is acceptable.
+{ "point": "plan:pre", "into": "planner",                   // into ∈ the step's published agentRoles
+  "fragment": { "path": "loop/threat-model.md" },            // {path:…} | {inline:"…"}
+  "when": "workflow.security_enforcement", "onError": "skip" }
+// No produces/consumes; multiple contributions into the same agent render as ordered
+// labeled blocks (<contribution from="<id>">…) by capability-id (ADR-857 decision 6).
 
 // Gate — checks and optionally blocks
-{ "point": "execute:wave:post", "check": { "query": "ui.safety-gate" }, // {query:…} | {agentVerdict:…}
-  "blocking": true, "onError": "halt" }
-// A query gate is deterministic (a gsd_run query). An agentVerdict gate is an LLM
-// check — RECOMMENDED advisory (blocking:false) unless its verdict is deterministic.
+{ "point": "execute:wave:post",
+  "check": { "query": "ui.safety-gate" },                    // {query:…} | {predicate:…} | {agentVerdict:…}
+  "when": "workflow.ui_safety_gate", "blocking": true, "onError": "halt" }
 ```
 
-**`role: "runtime"` body** (ADR-857 decision 8 — declarative descriptor over a *closed* primitive vocabulary; no skills/steps/contributions/gates):
+**Hook activation (`when`).** A hook may declare a cheap, **deterministic `when`** over config keys + capability-enablement (e.g. `"workflow.ui_phase"`); `loop.render-hooks` evaluates it to decide whether the hook is active. **Deeper context applicability** ("is this actually a frontend phase?", "are ORM files in scope?") is *not* declared — it stays inside the dispatched skill/agent, which no-ops if inapplicable, exactly where that judgment lives today. This deliberately avoids a phase-context predicate vocabulary that would drift from reality. Consequence: when an entry step self-gates (produces no artifact), its downstream same-capability gate/step must **degrade gracefully** (e.g. `ui.safety-gate` passes when there is no `UI-SPEC.md`) — that is the skill/query's responsibility.
+
+**Gate `check`** is one of:
+- `{ query: "<gsd_run query>" }` — deterministic first-party code; **may block**.
+- `{ predicate: { kind: "artifact-exists" | "config-equals" | …, … } }` — declarative, no code; **may block**.
+- `{ agentVerdict: { ref, prompt } }` — LLM check; **forced `blocking: false` (advisory)** — non-deterministic checks may not halt the loop.
+
+**`role: "runtime"` body** (ADR-857 decision 8 — closed primitive vocabulary; no skills/steps/etc.):
 
 | Field | Notes |
 |---|---|
-| `runtime.configHome` | config dir (`"~/.claude"`) |
-| `runtime.configFormat` | `"settings-json" \| "toml" \| "markdown" \| "markdown-dir" \| "none"` |
+| `runtime.configHome` | config dir |
+| `runtime.configFormat` | `settings-json \| toml \| markdown \| markdown-dir \| none` |
 | `runtime.artifactLayout` | `{kind, destSubpath, prefix}[]` |
-| `runtime.commandStyle`, `runtime.hooksSurface`, `runtime.sandboxTier` | closed enums |
-| `runtime.supportTier` | `1` (Claude/Codex/Antigravity, fully tested) \| `2` (shipped, lower-tier) |
+| `runtime.commandStyle` / `hooksSurface` / `sandboxTier` | closed enums (exact sets enumerated in phase 5) |
+| `runtime.supportTier` | `1` (Claude/Codex/Antigravity) \| `2` |
 
-### 3. The Loop Host Contract (host-side companion)
+### 3. The Loop Host Contract — generated from the workflows
 
-Capability hooks attach to the host, so the host must **publish what it exposes** — otherwise `into: "planner"`, `consumes: ["RESEARCH.md"]`, and `point: "plan:pre"` are unverifiable strings. gsd-core ships a host contract for the five steps; the generator validates every hook against it.
+Capability hooks attach to the host, so the host must publish what it exposes (points, agent roles, core artifacts) — otherwise `into: "planner"`, `consumes: ["RESEARCH.md"]`, and `point: "plan:pre"` are unverifiable strings.
+
+**The contract is generated from the workflows, not hand-authored** — so it cannot drift into a lie. The five step workflows carry structured markers; a parser generates the contract from them:
+
+```html
+<!-- in gsd-core/workflows/plan-phase.md -->
+<loop-point id="plan:pre"/>
+<agent-role name="planner"/> <agent-role name="researcher"/> <agent-role name="checker"/>
+<loop-artifact produces="PLAN.md" consumes="CONTEXT.md"/>
+```
+
+→ generated host contract entry:
 
 ```jsonc
-// loop-host-contract (one entry per step)
-{ "step": "plan",
-  "points": ["plan:pre", "plan:post"],
-  "agentRoles": ["researcher", "planner", "checker"],   // targetable by contribution.into
+{ "step": "plan", "points": ["plan:pre","plan:post"],
+  "agentRoles": ["researcher","planner","checker"],
   "coreArtifacts": { "produces": ["PLAN.md"], "consumes": ["CONTEXT.md"] } }
 ```
 
-The 12 points, and (illustrative) per-step agent roles:
+The 12 points (illustrative roles): discuss `pre`/`post` (orchestrator); plan `pre`/`post` (`researcher`/`planner`/`checker`); execute `pre`/`wave:pre`/`wave:post`/`post` (`executor`/`verifier`); verify `pre`/`post` (orchestrator); ship `pre`/`post` (orchestrator).
 
-| Step | Points | Agent roles |
-|---|---|---|
-| discuss | `discuss:pre` `discuss:post` | (orchestrator) |
-| plan | `plan:pre` `plan:post` | `researcher` `planner` `checker` |
-| execute | `execute:pre` `execute:wave:pre` `execute:wave:post` `execute:post` | `executor` `verifier` |
-| verify | `verify:pre` `verify:post` | (orchestrator) |
-| ship | `ship:pre` `ship:post` | (orchestrator) |
+**Generator validation against the (generated) contract:** every hook `point` ∈ host points; every `contribution.into` ∈ that step's `agentRoles`; every `step.consumes` is satisfiable by `coreArtifacts.produces` or an earlier hook's `produces`; `when` references valid config keys.
 
-**Generator validation against the contract:** every hook `point` ∈ host points; every `contribution.into` ∈ that step's `agentRoles`; every `step.consumes` is satisfiable by the step's `coreArtifacts.produces` or by an earlier hook's `produces` at/before that point (acyclic); `step.produces` names are well-formed artifacts.
+### 4. The generators
 
-### 4. The generator (`scripts/gen-capability-registry.cjs`) — design
+Two generated artifacts, both following `gen-inventory-manifest`'s `--write`/`--check` + build-wiring + CI drift-test pattern:
 
-Mirrors `gen-inventory-manifest.cjs` (`--write` / `--check` drift gate, build-wired, CI test). Inputs: every `capabilities/*/capability.json`. Validate each against the JSON-schema (§2), then enforce cross-capability invariants (fail the build on violation):
+1. **`gen-loop-host-contract.cjs`** — parses the workflow markers (§3) → the host contract.
+2. **`gen-capability-registry.cjs`** — reads every `capabilities/*/capability.json`, validates each against the JSON-schema (§2), then enforces cross-capability invariants (fail build on violation):
+   - one owner per skill/agent stem;
+   - `requires` exist, acyclic, **tier-monotone**;
+   - hooks valid against the host contract (§3);
+   - config-key ownership **exclusive AND complete** — a federated key must be owned by exactly one capability *and absent from the central `config-schema`* (presence in both = collision = a mid-flight migration; finish the move);
+   - emits the registry (§5).
 
-- exactly one owner per skill/agent stem;
-- `requires`: ids exist, acyclic, **tier-monotone**;
-- every hook `point` valid, every `contribution.into` valid, `produces`/`consumes` resolvable (§3);
-- **config-key ownership is exclusive AND complete**: a federated key must be owned by exactly one capability **and absent from the central `config-schema`** — a key present in both is a collision (it means a migration is mid-flight; finish the move).
-
-Emit the registry (§5).
+**`tier` is the source of profile/cluster membership.** Install profiles (`core`/`standard`/`full`) and surface clusters are **generated** from capability `tier` + the requires-closure — collapsing ADR-857's dual/triple toggle systems. `/gsd:surface` will operate on capabilities. (This generation lands in the phase-4 install integration; ADR-894 fixes the contract.)
 
 ### 5. The generated registry shape
 
-One `capability-registry.cjs`, **role-partitioned indexes** (feature indexes cover only `role:feature`; the `runtimes` index covers only `role:runtime`):
+One `capability-registry.cjs`, **role-partitioned indexes**; per-point hook ordering **materialized** (the generator owns ordering; `loop.render-hooks` owns runtime *activation filtering*):
 
 ```js
 module.exports = {
   version: '<schema-version>',
-  capabilities: { '<id>': { /* validated, normalized */ }, … },   // all roles, by id
-  // ── feature-role indexes ──
-  bySkill:     { '<skill-stem>': '<id>', … },
-  byAgent:     { '<agent-name>': '<id>', … },
-  byLoopPoint: { 'plan:pre': { steps:[…ordered…], contributions:[…], gates:[…] }, … },
-  configKeys:  { '<config-key>': '<id>', … },
-  // ── runtime-role index ──
-  runtimes:    { '<id>': { /* descriptor */ }, … },
-  requiresClosure(id) { /* → transitive requires set */ },
+  capabilities: { '<id>': {…validated…}, … },               // all roles, by id
+  bySkill: {…}, byAgent: {…},                                // feature-role
+  byLoopPoint: { 'plan:pre': {                                // ordering materialized
+     steps:[…produces/consumes topo-sorted, cap-id tiebreak…],
+     contributions:[…grouped by into, cap-id order…],
+     gates:[…as declared…] }, … },
+  configKeys: { '<key>': '<id>', … },
+  runtimes: { '<id>': {…descriptor…}, … },                   // runtime-role
+  requiresClosure(id) {…},
 };
 ```
 
-`byLoopPoint[point]` is partitioned by kind: `steps` ordered by the `produces`/`consumes` topological sort (capability-id tiebreak); `contributions` grouped by `into`, ordered by capability-id; `gates` as declared. This is what the phase-3c `loop.render-hooks` query reads.
+At a point, `loop.render-hooks` reads the materialized order, **filters to the active set** (`when` + enablement), and renders the concrete markdown the orchestrator executes (ADR-857 decision 5).
+
+### Rollout & migration (how this avoids double-execution)
+
+3a-impl builds the registry + host-contract artifacts and the generators **without wiring them into the live loop**. The loop keeps running its currently-inlined features. Each feature's **cutover is one atomic PR** (phase 6) that simultaneously *removes the inlined workflow call* and *activates the capability's hook* — so a feature is never both inlined and hook-fired. No double-run; the registry simply exists, validated, until each feature flips.
 
 ### Worked example — the UI capability
 
-`capabilities/ui/capability.json` (split-array shape; `requires` empty — Plan is the host, not a dependency):
-
 ```json
 {
-  "id": "ui",
-  "role": "feature",
-  "title": "UI design contracts",
+  "id": "ui", "role": "feature", "title": "UI design contracts",
   "description": "UI-SPEC design contract + retrospective UI audit for frontend phases.",
-  "tier": "standard",
-  "requires": [],
+  "tier": "standard", "requires": [],
   "skills": ["ui-phase", "ui-review"],
   "agents": ["gsd-ui-checker", "gsd-ui-auditor"],
   "hooks": [],
@@ -164,70 +169,64 @@ module.exports = {
     "workflow.ui_safety_gate": { "type": "boolean", "default": true, "description": "Block execution on unmet UI-SPEC contracts." }
   },
   "steps": [
-    { "point": "plan:pre",    "ref": { "skill": "ui-phase" },  "produces": ["UI-SPEC.md"],   "consumes": ["CONTEXT.md"], "onError": "skip" },
-    { "point": "verify:post", "ref": { "skill": "ui-review" }, "produces": ["UI-REVIEW.md"], "consumes": ["UI-SPEC.md"], "onError": "skip" }
+    { "point": "plan:pre",    "ref": { "skill": "ui-phase" },  "produces": ["UI-SPEC.md"],   "consumes": ["CONTEXT.md"], "when": "workflow.ui_phase",  "onError": "skip" },
+    { "point": "verify:post", "ref": { "skill": "ui-review" }, "produces": ["UI-REVIEW.md"], "consumes": ["UI-SPEC.md"], "when": "workflow.ui_review", "onError": "skip" }
   ],
   "contributions": [],
   "gates": [
-    { "point": "execute:wave:post", "check": { "query": "ui.safety-gate" }, "blocking": true, "onError": "halt" }
+    { "point": "execute:wave:post", "check": { "query": "ui.safety-gate" }, "when": "workflow.ui_safety_gate", "blocking": true, "onError": "halt" }
   ]
 }
 ```
 
-(For contrast, a `contribution` looks like the security capability's: `{ "point": "plan:pre", "into": "planner", "fragment": { "path": "loop/threat-model.md" }, "onError": "skip" }` — injected into the planner's prompt, no artifact produced.)
-
-Registry projection:
-
-```js
-capabilities.ui = { …above… }
-bySkill   = { 'ui-phase': 'ui', 'ui-review': 'ui' }
-byAgent   = { 'gsd-ui-checker': 'ui', 'gsd-ui-auditor': 'ui' }
-byLoopPoint['plan:pre']         = { steps: [ {capability:'ui', ref:{skill:'ui-phase'}, produces:['UI-SPEC.md'], consumes:['CONTEXT.md']}, …research etc. ordered by produces/consumes ], contributions: [ /* security → planner, … */ ], gates: [] }
-byLoopPoint['verify:post']      = { steps: [ {capability:'ui', ref:{skill:'ui-review'}, …} ], contributions: [], gates: [] }
-byLoopPoint['execute:wave:post']= { steps: [], contributions: [], gates: [ {capability:'ui', check:{query:'ui.safety-gate'}, blocking:true} ] }
-configKeys = { 'workflow.ui_phase':'ui', 'workflow.ui_review':'ui', 'workflow.ui_safety_gate':'ui' }
-```
+`when` gates each hook on its config key (cheap/deterministic); whether the phase is *actually* frontend work is decided inside `ui-phase` (self-gate). The `plan:pre` step self-skips on a non-frontend phase, producing no `UI-SPEC.md`; the `execute:wave:post` gate's `ui.safety-gate` query passes gracefully when no `UI-SPEC.md` exists. (A `contribution` looks like security's: `{ "point":"plan:pre", "into":"planner", "fragment":{"path":"loop/threat-model.md"}, "when":"workflow.security_enforcement" }`.)
 
 ## Grilling amendments
 
-This ADR was stress-tested before merge; the format changed materially as a result:
+This ADR was stress-tested in two rounds before merge; the format changed materially.
 
-1. **`loopHooks[]` → three typed arrays** (`steps`/`contributions`/`gates`). A single `ref` string only fit `step`; `contribution` (inject a fragment) and `gate` (run a check) need different shapes.
-2. **`contribution.into: <agent-role>`** — resolves "inject into the step" when a step has multiple agents; contributions drop `produces`/`consumes` and order by labeled-block + capability-id.
-3. **Loop Host Contract added (§3)** — hooks validate against a *published* host contract (points + agent roles + core artifacts), not trusted strings.
-4. **`requires` = capabilities only** — host steps are implicit; `requires:["plan"]` removed. Added the **tier-monotone** invariant.
-5. **Config federation = atomic move** — a migrated key leaves the central schema in the same PR; presence in both is a collision (the invariant is correct).
-6. **One registry, role-partitioned indexes** — feature indexes vs a `runtimes` index in one artifact.
+**Round 1 (format):** `loopHooks[]` → three typed arrays (`steps`/`contributions`/`gates`); `contribution.into: <agent-role>`; the Loop Host Contract added; `requires` = capabilities-only + tier-monotone; config federation = atomic move; one registry with role-partitioned indexes.
+
+**Round 2 (operational reality):**
+1. **Host contract is generated from workflow markers** (§3), not hand-authored — it can't drift.
+2. **Staged cutover** — registry-only until atomic per-feature cutover; no double-run.
+3. **`tier` is the source** of profile/cluster membership; profiles + clusters generated; `/gsd:surface` operates on capabilities.
+4. **Gate `check`** = query / declarative-predicate / agentVerdict; agentVerdict forced advisory; only deterministic checks may block.
+5. **Hook activation `when`** — declarative config-level gating; deeper context applicability self-gates in the skill (no phase-context vocabulary).
+6. **`byLoopPoint` ordering materialized** in the registry; resolver filters active + renders. Same-capability hooks must degrade gracefully when an entry step self-gates.
 
 ## Consequences
 
 **Positive**
 
-- A formal, *enforceable* contract: every hook is validated against the host contract at generation, not merely well-formed. The format moved from "looks right" to "the generator can check it."
-- Resolves ADR-857 Open question #1; reuses the proven `gen-*` `--write`/`--check` pattern.
-- Role-partitioned indexes keep feature vs runtime consumers from misusing each other's data.
+- The format is *enforceable*: hooks validate against a **generated** host contract (no drift), `requires`/`tier`/config invariants are machine-checked, and ordering is materialized + testable.
+- `tier`-as-source collapses ADR-857's multiple toggle systems into one generated truth.
+- Staged cutover means the whole machinery can land and be validated with zero risk to the live loop until each feature deliberately flips.
 
 **Negative / costs**
 
-- The 12 points, the agent-role vocabularies, and the schema are a stability contract — additive-only once capabilities depend on them.
-- A new host-side artifact (the Loop Host Contract) must be authored and kept in sync with the actual step workflows.
-- Config-key migration is atomic-per-feature — a partially-migrated key fails the gate by design.
+- Two new generated artifacts (registry + host contract) and workflow markup to author and keep building.
+- The 12 points + agent-role vocabularies + schema are a stability contract — additive-only.
+- Config-key migration is atomic-per-feature by design (a half-migrated key fails the gate).
 
 ## Alternatives considered
 
 | Decision | Rejected | Why |
 |---|---|---|
-| Hook shape | one `loopHooks[]` with polymorphic `ref` / string-ref-by-convention | typed arrays let the generator + resolver branch on a known shape; convention is implicit and unenforceable |
-| Contribution target | "inject into the step" | ambiguous for multi-agent steps; `into: <agent-role>` is precise |
-| `requires` | capabilities + host steps / `requires`+`loopAffinity` | host is always present (trivially satisfied); capability-only keeps the graph meaningful |
-| Registry | two registries / one flat map | role-partitioned indexes in one artifact: single generator, role-correct surfaces |
-| Config | both-allowed-if-identical / central-authoritative-until-cutover | atomic move keeps one source of truth; drift/dual-definition rejected |
-| Format | TS module / skill frontmatter | declarative data is toolchain-free + third-party-authorable (ADR-857) |
+| Hook shape | one polymorphic `loopHooks[]` | typed arrays let generator/resolver branch on a known shape |
+| Contribution target | "inject into the step" | ambiguous for multi-agent steps; `into: <role>` is precise |
+| `requires` | capabilities + host steps | host always present → trivially satisfied; capability-only keeps the graph meaningful |
+| Registry | two registries / flat map | role-partitioned indexes in one artifact: one generator, role-correct surfaces |
+| Config | both-allowed / central-until-cutover | atomic move keeps one source of truth |
+| Host contract | hand-authored + drift test / runtime-assert | generate-from-workflows makes drift impossible by construction |
+| Profiles | profiles authoritative / tier-default-with-overrides | `tier`-as-source is the ADR-857 unification goal |
+| Gate checks | query-only / agentVerdict-blockable | predicates avoid trivial code; non-deterministic blocking gates flap |
+| Activation | full `when` over phase context / enablement-only | config-level `when` is cheap+honest; phase context self-gates (no drift-prone vocab) |
+| Migration | big-bang / source-flag | atomic per-feature cutover: safe, staged, no coexistence flag to retire |
 
-## Open questions (for the generator-build sub-phase)
+## Open questions (genuinely deferred to build sub-phases — cheap to decide then)
 
-- JSON-schema `$id`/versioning and where `capability.schema.json` and the Loop Host Contract file live.
-- Whether `byLoopPoint` ordering is materialized in the registry or computed at resolve time by `loop.render-hooks` (3c).
-- How `tier` maps onto the existing install profiles (`core`/`standard`/`full`) and `clusters.cjs` (phase-4 install integration), and how the registry vs `clusters.cjs` dual-source-of-truth is reconciled during migration.
-- The exact `commandStyle`/`sandboxTier`/`hooksSurface` enums for `role: runtime` (enumerated against the 15 runtimes in phase 5).
-- Whether `agentVerdict` gates are permitted to be `blocking` at all, given LLM non-determinism (lean: advisory-only).
+- JSON-schema `$id`/versioning; where `capability.schema.json`, the workflow markers' schema, and the generated host-contract file live.
+- The declarative-predicate vocabulary for gates (`artifact-exists`, `config-equals`, …).
+- The exact `commandStyle`/`sandboxTier`/`hooksSurface` enums for `role: runtime` (phase 5, against the 15 runtimes).
+- Point/role-set deprecation policy once third-party capabilities exist (additive-only holds until then; a rename/removal needs a major bump + deprecation window — deferred with third-party loading per ADR-857).
