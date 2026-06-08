@@ -43,7 +43,7 @@ fi
 
 When `--only` is set, also set `FROM_PHASE` to the same value so existing filter logic applies.
 
-When `--interactive` is set, discuss runs inline with questions (not auto-answered), while plan and execute are dispatched as background agents. This keeps the main context lean — only discuss conversations accumulate — while preserving user input on all design decisions.
+When `--interactive` is set, discuss runs inline with questions (not auto-answered). On runtimes where a backgrounded agent can spawn subagents, plan and execute are dispatched as background agents — keeping the main context lean (only discuss conversations accumulate) and enabling overlap. On Claude Code, where a backgrounded agent cannot nest subagents, plan and execute run inline to preserve worktree isolation and independent verification, so they run sequentially and their work accumulates in the main context. Either way, user input is preserved on all design decisions.
 
 Bootstrap via milestone-level init:
 
@@ -322,9 +322,21 @@ UI_SPEC_FILE=$(ls "${PHASE_DIR}"/*-UI-SPEC.md 2>/dev/null | head -1)
 
 **3b. Plan**
 
-**If `INTERACTIVE` is set:** Dispatch plan as a background agent to keep the main context lean. While plan runs, the workflow can immediately start discussing the next phase (see step 4).
+**If `INTERACTIVE` is set:** Background dispatch is only safe where a backgrounded agent can still spawn subagents. On Claude Code a backgrounded agent has no `Agent`/`Task` tool, so the plan-checker never runs and `workflow.plan_check` silently degrades to a self-check. Resolve the runtime first:
 
-Print: `◆ Spawning background planner for phase ${PHASE_NUM}... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)`
+```bash
+RUNTIME=$(gsd_run query config-get runtime --default claude 2>/dev/null || echo "claude")
+```
+
+- **On Claude Code (`RUNTIME` is `claude`):** Run plan **inline** (do NOT background) so the plan-checker runs. The next phase's discuss does not overlap planning here — correctness over overlap.
+
+```
+Skill(skill="gsd-plan-phase", args="${PHASE_NUM}")
+```
+
+- **On other runtimes:** Dispatch plan as a background agent to keep the main context lean. While plan runs, the workflow can immediately start discussing the next phase (see step 4).
+
+  Print: `◆ Spawning background planner for phase ${PHASE_NUM}... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)`
 
 ```
 Agent(
@@ -334,7 +346,7 @@ Agent(
 )
 ```
 
-Store the agent task_id. After discuss for the next phase completes (or if no next phase), wait for the plan agent to finish before proceeding to execute.
+  Store the agent task_id. After discuss for the next phase completes (or if no next phase), wait for the plan agent to finish before proceeding to execute.
 
 **If `INTERACTIVE` is NOT set (default):** Run plan inline as before.
 
@@ -346,7 +358,19 @@ Verify plan produced output — re-run `init phase-op` and check `has_plans`. If
 
 **3c. Execute**
 
-**If `INTERACTIVE` is set:** Wait for the plan agent to complete (if not already), verify plans exist, then dispatch execute as a background agent:
+**If `INTERACTIVE` is set:** Wait for the plan agent to complete (if not already) and verify plans exist. Background dispatch is only safe where a backgrounded agent can still spawn subagents. On Claude Code a backgrounded agent has no `Agent`/`Task` tool, so the per-plan worktree-isolated executors and the verifier never run (`workflow.use_worktrees` and `workflow.verifier` silently degrade). Resolve the runtime first:
+
+```bash
+RUNTIME=$(gsd_run query config-get runtime --default claude 2>/dev/null || echo "claude")
+```
+
+- **On Claude Code (`RUNTIME` is `claude`):** Run execute **inline** (do NOT background) so worktree isolation and verification run:
+
+```
+Skill(skill="gsd-execute-phase", args="${PHASE_NUM} --no-transition")
+```
+
+- **On other runtimes:** Dispatch execute as a background agent:
 
 ```
 Agent(
@@ -356,7 +380,7 @@ Agent(
 )
 ```
 
-Store the agent task_id. The workflow can now start discussing the next phase while this phase executes in the background. Before starting post-execution routing for this phase, wait for the execute agent to complete.
+  Store the agent task_id. The workflow can now start discussing the next phase while this phase executes in the background. Before starting post-execution routing for this phase, wait for the execute agent to complete.
 
 **If `INTERACTIVE` is NOT set (default):** Run execute inline as before.
 
@@ -572,12 +596,12 @@ Check for blockers in the Blockers/Concerns section. If blockers are found, go t
 
 If incomplete phases remain: proceed to next phase, loop back to execute_phase.
 
-**Interactive mode overlap:** When `INTERACTIVE` is set, the iterate step enables pipeline parallelism:
+**Interactive mode overlap:** When `INTERACTIVE` is set, the iterate step enables pipeline parallelism **on runtimes where a backgrounded agent can spawn subagents** (on Claude Code, plan/execute run inline — see 3b/3c — so there is no overlap and phases run sequentially):
 1. After discuss completes for Phase N, dispatch plan+execute as background agents
 2. Immediately start discuss for Phase N+1 (the next incomplete phase) while Phase N builds
 3. Before starting plan for Phase N+1, wait for Phase N's execute agent to complete and handle its post-execution routing (verification, gap closure, etc.)
 
-This means the user is always answering discuss questions (lightweight, interactive) while the heavy work (planning, code generation) runs in the background. The main context only accumulates discuss conversations — plan and execute contexts are isolated in their agents.
+This means the user is always answering discuss questions (lightweight, interactive) while the heavy work (planning, code generation) runs in the background. The main context only accumulates discuss conversations — plan and execute contexts are isolated in their agents. (On Claude Code, plan and execute run inline, so they run sequentially and their work accumulates in the main context.)
 
 If all phases complete, proceed to lifecycle step.
 
@@ -789,9 +813,9 @@ When any phase operation fails or a blocker is detected, present 3 options via A
 - [ ] `--to N` handle_blocker resume message preserves --to flag
 - [ ] `--to N` skips lifecycle when not all milestone phases complete
 - [ ] `--interactive` runs discuss inline via gsd-discuss-phase (asks questions, waits for user)
-- [ ] `--interactive` dispatches plan and execute as background agents (context isolation)
-- [ ] `--interactive` enables pipeline parallelism: discuss Phase N+1 while Phase N builds
-- [ ] `--interactive` main context only accumulates discuss conversations (lean)
+- [ ] `--interactive` dispatches plan and execute as background agents on runtimes that support nested background dispatch; runs them inline on Claude Code
+- [ ] `--interactive` enables pipeline parallelism (discuss Phase N+1 while Phase N builds) on runtimes with background dispatch; phases run sequentially on Claude Code
+- [ ] `--interactive` main context only accumulates discuss conversations on runtimes with background dispatch (on Claude Code, inline plan/execute also accumulate)
 - [ ] `--interactive` waits for background agents before post-execution routing
 - [ ] `--interactive` compatible with `--only`, `--from`, and `--to` flags
 </success_criteria>

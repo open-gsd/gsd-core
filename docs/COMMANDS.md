@@ -546,7 +546,7 @@ Interactive command center for managing multiple phases from one terminal.
 **Behavior:**
 - Dashboard of all phases with visual status indicators
 - Recommends optimal next actions based on dependencies and progress
-- Dispatches work: discuss runs inline, plan/execute run as background agents
+- Dispatches work: discuss runs inline; plan/execute run as background agents on runtimes that support nested background dispatch, or inline on Claude Code
 - Designed for power users parallelizing work across phases from one terminal
 - Supports per-step passthrough flags via `manager.flags` config (see [Configuration](CONFIGURATION.md#manager-passthrough-flags))
 

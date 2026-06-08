@@ -219,16 +219,18 @@ Go to exit step.
 
 ### Compound Action (background + inline)
 
-When the user selects a compound option:
+When the user selects a compound option, behavior depends on the runtime — the Plan Phase N / Execute Phase N handlers below resolve it via `gsd_run query config-get runtime`:
 
-1. **Spawn all background agents first** (plan/execute) — dispatch them in parallel using the Plan Phase N / Execute Phase N handlers below.
-2. **Then run the inline discuss:**
+- **On Claude Code:** a backgrounded agent cannot nest the pipeline's subagents, so run the chosen plan/execute step(s) **inline** via their handlers below (in order), then run the inline discuss. There is no overlap.
+- **On other runtimes:** **Spawn all background agents first** (plan/execute) — dispatch them in parallel using the Plan Phase N / Execute Phase N handlers below — then run the inline discuss; the background agents continue while you discuss.
+
+Inline discuss:
 
 ```
 Skill(skill="gsd-discuss-phase", args="{PHASE_NUM} {manager_flags.discuss}")
 ```
 
-After discuss completes, loop back to dashboard step (background agents continue running).
+After discuss completes, loop back to dashboard step.
 
 ### Discuss Phase N
 
@@ -242,7 +244,27 @@ After discuss completes, loop back to dashboard step.
 
 ### Plan Phase N
 
-Planning runs autonomously. Spawn a background agent that delegates to the Skill pipeline with any configured flags:
+Planning runs autonomously. **First resolve the runtime.** On Claude Code a backgrounded agent has no `Agent`/`Task` tool, so it cannot spawn the plan-checker the pipeline relies on — backgrounding it there silently turns `workflow.plan_check` into a self-check. So run plan **inline** on Claude Code, and **background** it only on runtimes where a backgrounded agent can still nest subagents.
+
+```bash
+RUNTIME=$(gsd_run query config-get runtime --default claude 2>/dev/null || echo "claude")
+```
+
+**If `RUNTIME` is `claude` (Claude Code):** Run plan inline so the plan-checker and quality gates actually run — do NOT wrap it in `Agent(run_in_background=true, …)`:
+
+```
+Skill(skill="gsd-plan-phase", args="{N} --auto {manager_flags.plan}")
+```
+
+Display while it runs:
+
+```
+◆ Planning Phase {N}: {phase_name}... (runs inline so the plan-checker runs — the dashboard resumes when it returns, ~1–5 min; expected, not a freeze)
+```
+
+Then loop back to dashboard step.
+
+**If `RUNTIME` is not `claude` (e.g. Codex):** Spawn a background agent that delegates to the Skill pipeline with any configured flags:
 
 ```
 Agent(
@@ -264,7 +286,7 @@ Important: You are running in the background. Do NOT use AskUserQuestion — mak
 )
 ```
 
-> **ORCHESTRATOR RULE — CODEX RUNTIME**: After calling Agent() above with `run_in_background=true`, do NOT do any planning work for this phase independently. Return to the dashboard immediately and wait for the background agent to report back. Only resume planning-related work when the subagent result is available.
+> **ORCHESTRATOR RULE — NON-CLAUDE RUNTIME**: After calling Agent() above with `run_in_background=true`, do NOT do any planning work for this phase independently. Return to the dashboard immediately and wait for the background agent to report back. Only resume planning-related work when the subagent result is available.
 
 Display:
 
@@ -276,7 +298,27 @@ Loop back to dashboard step.
 
 ### Execute Phase N
 
-Execution runs autonomously. Spawn a background agent that delegates to the Skill pipeline with any configured flags:
+Execution runs autonomously. **First resolve the runtime.** On Claude Code a backgrounded agent has no `Agent`/`Task` tool, so it cannot spawn the per-plan worktree-isolated executors or the verifier — backgrounding it there silently disables `workflow.use_worktrees` isolation and `workflow.verifier`. So run execute **inline** on Claude Code, and **background** it only on runtimes where a backgrounded agent can still nest subagents.
+
+```bash
+RUNTIME=$(gsd_run query config-get runtime --default claude 2>/dev/null || echo "claude")
+```
+
+**If `RUNTIME` is `claude` (Claude Code):** Run execute inline so worktree isolation and the verifier actually run — do NOT wrap it in `Agent(run_in_background=true, …)`:
+
+```
+Skill(skill="gsd-execute-phase", args="{N} {manager_flags.execute}")
+```
+
+Display while it runs:
+
+```
+◆ Executing Phase {N}: {phase_name}... (runs inline so worktree isolation and verification run — the dashboard resumes when it returns; expected, not a freeze)
+```
+
+Then loop back to dashboard step.
+
+**If `RUNTIME` is not `claude` (e.g. Codex):** Spawn a background agent that delegates to the Skill pipeline with any configured flags:
 
 ```
 Agent(
@@ -298,7 +340,7 @@ Important: You are running in the background. Do NOT use AskUserQuestion — mak
 )
 ```
 
-> **ORCHESTRATOR RULE — CODEX RUNTIME**: After calling Agent() above with `run_in_background=true`, do NOT do any execution work for this phase independently. Return to the dashboard immediately and wait for the background agent to report back. Only resume execution-related work when the subagent result is available.
+> **ORCHESTRATOR RULE — NON-CLAUDE RUNTIME**: After calling Agent() above with `run_in_background=true`, do NOT do any execution work for this phase independently. Return to the dashboard immediately and wait for the background agent to report back. Only resume execution-related work when the subagent result is available.
 
 Display:
 
