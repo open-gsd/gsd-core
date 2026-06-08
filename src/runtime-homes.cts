@@ -118,6 +118,10 @@ export function getGlobalConfigDir(runtime: string, explicitDir?: string | null)
     case 'trae':
       return env['TRAE_CONFIG_DIR'] ? expandTilde(env['TRAE_CONFIG_DIR']) : path.join(home, '.trae');
 
+    // ── Command Code ──────────────────────────────────────────────────────────
+    case 'commandcode':
+      return env['COMMANDCODE_CONFIG_DIR'] ? expandTilde(env['COMMANDCODE_CONFIG_DIR']) : path.join(home, '.commandcode');
+
     // ── Qwen Code ────────────────────────────────────────────────────────────
     case 'qwen':
       return env['QWEN_CONFIG_DIR'] ? expandTilde(env['QWEN_CONFIG_DIR']) : path.join(home, '.qwen');

@@ -69,13 +69,14 @@ const REGISTRY: Record<string, Readonly<RegistryEntry>> = Object.freeze({
   cursor:      Object.freeze({ installSurface: 'cursor-hooks-json',    writesSharedSettings: false, finishPermissionWriter: null       } as const),
   windsurf:    Object.freeze({ installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       } as const),
   trae:        Object.freeze({ installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       } as const),
+  commandcode: Object.freeze({ installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       } as const),
 });
 
 // ---------------------------------------------------------------------------
 // Exports
 // ---------------------------------------------------------------------------
 
-/** The complete set of 15 supported runtimes for config-adapter dispatch. */
+/** The complete set of 16 supported runtimes for config-adapter dispatch. */
 const ALLOWED_CONFIG_RUNTIMES: ReadonlySet<string> = new Set(Object.keys(REGISTRY));
 
 /** All valid installSurface values. */

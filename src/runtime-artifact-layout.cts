@@ -171,7 +171,7 @@ function findAgentsSourceRoot(runtimeConfigDir?: string): string {
 const ALLOWED_RUNTIMES = new Set([
   'claude', 'cursor', 'gemini', 'codex', 'copilot', 'antigravity',
   'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy',
-  'cline', 'opencode', 'kilo',
+  'cline', 'opencode', 'kilo', 'commandcode',
 ]);
 
 // ---------------------------------------------------------------------------
@@ -369,6 +369,10 @@ function resolveRuntimeArtifactLayout(runtime: string, configDir: string, scope:
 
     case 'trae':
       kinds = [skillsKind('skills', 'gsd-', 'convertClaudeCommandToTraeSkill', 'trae', configDir, true /* #69 nested */)];
+      break;
+
+    case 'commandcode':
+      kinds = [skillsKind('skills', 'gsd-', 'convertClaudeCommandToCommandcodeSkill', 'commandcode', configDir, true /* #69 nested */)];
       break;
 
     case 'qwen':

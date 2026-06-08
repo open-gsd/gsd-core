@@ -27,6 +27,7 @@ const RUNTIME_SURFACES: Record<string, string[]> = {
   windsurf: ['gsd-core', 'skills', 'agents', 'rules'],
   augment: ['gsd-core', 'skills', 'agents'],
   trae: ['gsd-core', 'skills', 'agents', 'rules'],
+  commandcode: ['gsd-core', 'skills', 'agents'],
   qwen: ['gsd-core', 'skills', 'agents'],
   hermes: ['gsd-core', 'skills/gsd', 'agents'],
   cline: ['gsd-core', 'skills', 'agents'],

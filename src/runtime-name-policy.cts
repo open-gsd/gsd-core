@@ -26,6 +26,7 @@ const FALLBACK_ALIASES: Readonly<Record<string, string[]>> = {
   windsurf: ['windsurf', 'windsurf-cli', 'windsurf-next'],
   augment: ['augment', 'augment-code', 'augment-cli'],
   trae: ['trae', 'trae-cli'],
+  commandcode: ['commandcode', 'command-code', 'commandcode-cli'],
   qwen: ['qwen', 'qwen-code', 'qwen-cli'],
   hermes: ['hermes', 'hermes-agent', 'hermes-cli'],
   codebuddy: ['codebuddy', 'codebuddy-cli'],

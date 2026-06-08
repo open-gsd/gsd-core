@@ -359,6 +359,7 @@ const hasCursor = args.includes('--cursor');
 const hasWindsurf = args.includes('--windsurf');
 const hasAugment = args.includes('--augment');
 const hasTrae = args.includes('--trae');
+const hasCommandcode = args.includes('--commandcode');
 const hasQwen = args.includes('--qwen');
 const hasHermes = args.includes('--hermes');
 const hasCodebuddy = args.includes('--codebuddy');
@@ -394,7 +395,7 @@ if (hasMinimal && _profileArgRaw) {
 // Runtime selection - can be set by flags or interactive prompt
 let selectedRuntimes = [];
 if (hasAll) {
-  selectedRuntimes = ['claude', 'kilo', 'opencode', 'gemini', 'codex', 'copilot', 'antigravity', 'cursor', 'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline'];
+  selectedRuntimes = ['claude', 'kilo', 'opencode', 'gemini', 'codex', 'copilot', 'antigravity', 'cursor', 'windsurf', 'augment', 'trae', 'commandcode', 'qwen', 'hermes', 'codebuddy', 'cline'];
 } else if (hasBoth) {
   selectedRuntimes = ['claude', 'opencode'];
 } else {
@@ -409,6 +410,7 @@ if (hasAll) {
   if (hasWindsurf) selectedRuntimes.push('windsurf');
   if (hasAugment) selectedRuntimes.push('augment');
   if (hasTrae) selectedRuntimes.push('trae');
+  if (hasCommandcode) selectedRuntimes.push('commandcode');
   if (hasQwen) selectedRuntimes.push('qwen');
   if (hasHermes) selectedRuntimes.push('hermes');
   if (hasCodebuddy) selectedRuntimes.push('codebuddy');
@@ -461,6 +463,7 @@ function getDirName(runtime) {
   if (runtime === 'windsurf') return '.windsurf';
   if (runtime === 'augment') return '.augment';
   if (runtime === 'trae') return '.trae';
+  if (runtime === 'commandcode') return '.commandcode';
   if (runtime === 'qwen') return '.qwen';
   if (runtime === 'hermes') return '.hermes';
   if (runtime === 'codebuddy') return '.codebuddy';
@@ -505,6 +508,7 @@ function getConfigDirFromHome(runtime, isGlobal) {
   if (runtime === 'windsurf') return "'.windsurf'";
   if (runtime === 'augment') return "'.augment'";
   if (runtime === 'trae') return "'.trae'";
+  if (runtime === 'commandcode') return "'.commandcode'";
   if (runtime === 'qwen') return "'.qwen'";
   if (runtime === 'hermes') return "'.hermes'";
   if (runtime === 'codebuddy') return "'.codebuddy'";
@@ -523,7 +527,7 @@ const banner = '\n' +
   '  GSD Core ' + dim + 'v' + pkg.version + reset + '\n' +
   '  Git. Ship. Done.\n' +
   '  A meta-prompting, context engineering and spec-driven\n' +
-  '  development workflows for Claude Code, OpenCode, Gemini, Kilo, Codex, Copilot, Antigravity, Cursor, Windsurf, Augment, Trae, Qwen Code, Hermes Agent, Cline and CodeBuddy.\n';
+  '  development workflows for Claude Code, OpenCode, Gemini, Kilo, Codex, Copilot, Antigravity, Cursor, Windsurf, Augment, Trae, Command Code, Qwen Code, Hermes Agent, Cline and CodeBuddy.\n';
 
 // Pure seam: parse --config-dir / -c from an arbitrary args array.
 // Returns the path string, '' for an empty equals-form value, or null when the
@@ -580,7 +584,8 @@ if (hasUninstall) {
 
 // Show help if requested
 if (hasHelp) {
-  console.log(`  ${yellow}Usage:${reset} npx ${pkg.name} [options]\n\n  ${yellow}Options:${reset}\n    ${cyan}-g, --global${reset}              Install globally (to config directory)\n    ${cyan}-l, --local${reset}               Install locally (to current directory)\n    ${cyan}--claude${reset}                  Install for Claude Code only\n    ${cyan}--opencode${reset}                Install for OpenCode only\n    ${cyan}--gemini${reset}                  Install for Gemini only\n    ${cyan}--kilo${reset}                    Install for Kilo only\n    ${cyan}--codex${reset}                   Install for Codex only\n    ${cyan}--copilot${reset}                 Install for Copilot only\n    ${cyan}--antigravity${reset}             Install for Antigravity only\n    ${cyan}--cursor${reset}                  Install for Cursor only\n    ${cyan}--windsurf${reset}                Install for Windsurf only\n    ${cyan}--augment${reset}                 Install for Augment only\n    ${cyan}--trae${reset}                    Install for Trae only\n    ${cyan}--qwen${reset}                    Install for Qwen Code only\n    ${cyan}--hermes${reset}                  Install for Hermes Agent only\n    ${cyan}--cline${reset}                   Install for Cline only\n    ${cyan}--codebuddy${reset}              Install for CodeBuddy only\n    ${cyan}--all${reset}                     Install for all runtimes\n    ${cyan}-u, --uninstall${reset}           Uninstall GSD (remove all GSD files)\n    ${cyan}-c, --config-dir <path>${reset}   Specify custom config directory\n    ${cyan}-h, --help${reset}                Show this help message\n    ${cyan}--force-statusline${reset}        Replace existing statusline config\n    ${cyan}--portable-hooks${reset}          Emit \$HOME-relative hook paths in settings.json\n                              (for WSL/Docker bind-mount setups; also GSD_PORTABLE_HOOKS=1)\n    ${cyan}--profile=<name>${reset}         Install a named skill profile. Profiles:\n                              core     — ${PROFILES.core.length} main-loop skills incl. phase (~130 desc tokens)\n                              standard — ${PROFILES.standard.length} skills incl. phase, review, config (~700)\n                              full     — all skills (default)\n                              Composable: --profile=core,audit installs union of closures.\n                              Profile is persisted and respected by \`gsd update\`.\n    ${cyan}--minimal${reset}                 Alias for --profile=core (back-compat).\n                              Cuts cold-start overhead from ~12k tokens to ~700.\n                              Alias: --core-only.\n\n  ${yellow}Examples:${reset}\n    ${dim}# Interactive install (prompts for runtime and location)${reset}\n    npx ${pkg.name}\n\n    ${dim}# Install for Claude Code globally${reset}\n    npx ${pkg.name} --claude --global\n\n    ${dim}# Install for Gemini globally${reset}\n    npx ${pkg.name} --gemini --global\n\n    ${dim}# Install for Kilo globally${reset}\n    npx ${pkg.name} --kilo --global\n\n    ${dim}# Install for Codex globally${reset}\n    npx ${pkg.name} --codex --global\n\n    ${dim}# Install for Copilot globally${reset}\n    npx ${pkg.name} --copilot --global\n\n    ${dim}# Install for Copilot locally${reset}\n    npx ${pkg.name} --copilot --local\n\n    ${dim}# Install for Antigravity globally${reset}\n    npx ${pkg.name} --antigravity --global\n\n    ${dim}# Install for Antigravity locally${reset}\n    npx ${pkg.name} --antigravity --local\n\n    ${dim}# Install for Cursor globally${reset}\n    npx ${pkg.name} --cursor --global\n\n    ${dim}# Install for Cursor locally${reset}\n    npx ${pkg.name} --cursor --local\n\n    ${dim}# Install for Windsurf globally${reset}\n    npx ${pkg.name} --windsurf --global\n\n    ${dim}# Install for Windsurf locally${reset}\n    npx ${pkg.name} --windsurf --local\n\n    ${dim}# Install for Augment globally${reset}\n    npx ${pkg.name} --augment --global\n\n    ${dim}# Install for Augment locally${reset}\n    npx ${pkg.name} --augment --local\n\n    ${dim}# Install for Trae globally${reset}\n    npx ${pkg.name} --trae --global\n\n    ${dim}# Install for Trae locally${reset}\n    npx ${pkg.name} --trae --local\n\n    ${dim}# Install for Hermes Agent globally${reset}\n    npx ${pkg.name} --hermes --global\n\n    ${dim}# Install for Hermes Agent locally${reset}\n    npx ${pkg.name} --hermes --local\n\n    ${dim}# Install for Cline globally${reset}\n    npx ${pkg.name} --cline --global\n\n    ${dim}# Install for Cline locally${reset}\n    npx ${pkg.name} --cline --local\n\n    ${dim}# Install for CodeBuddy globally${reset}\n    npx ${pkg.name} --codebuddy --global\n\n    ${dim}# Install for CodeBuddy locally${reset}\n    npx ${pkg.name} --codebuddy --local\n\n    ${dim}# Install for all runtimes globally${reset}\n    npx ${pkg.name} --all --global\n\n    ${dim}# Install to custom config directory${reset}\n    npx ${pkg.name} --kilo --global --config-dir ~/.kilo-work\n\n    ${dim}# Install to current project only${reset}\n    npx ${pkg.name} --claude --local\n\n    ${dim}# Uninstall GSD from Cursor globally${reset}\n    npx ${pkg.name} --cursor --global --uninstall\n\n  ${yellow}Notes:${reset}\n    The --config-dir option is useful when you have multiple configurations.\n    It takes priority over CLAUDE_CONFIG_DIR / OPENCODE_CONFIG_DIR / GEMINI_CONFIG_DIR / KILO_CONFIG_DIR / CODEX_HOME / COPILOT_CONFIG_DIR / COPILOT_HOME / ANTIGRAVITY_CONFIG_DIR / CURSOR_CONFIG_DIR / WINDSURF_CONFIG_DIR / AUGMENT_CONFIG_DIR / TRAE_CONFIG_DIR / QWEN_CONFIG_DIR / HERMES_HOME / CLINE_CONFIG_DIR / CODEBUDDY_CONFIG_DIR environment variables.\n`);
+  console.log(`  ${yellow}Usage:${reset} npx ${pkg.name} [options]\n\n  ${yellow}Options:${reset}\n    ${cyan}-g, --global${reset}              Install globally (to config directory)\n    ${cyan}-l, --local${reset}               Install locally (to current directory)\n    ${cyan}--claude${reset}                  Install for Claude Code only\n    ${cyan}--opencode${reset}                Install for OpenCode only\n    ${cyan}--gemini${reset}                  Install for Gemini only\n    ${cyan}--kilo${reset}                    Install for Kilo only\n    ${cyan}--codex${reset}                   Install for Codex only\n    ${cyan}--copilot${reset}                 Install for Copilot only\n    ${cyan}--antigravity${reset}             Install for Antigravity only\n    ${cyan}--cursor${reset}                  Install for Cursor only\n    ${cyan}--windsurf${reset}                Install for Windsurf only\n    ${cyan}--augment${reset}                 Install for Augment only\n    ${cyan}--trae${reset}                    Install for Trae only
+    ${cyan}--commandcode${reset}             Install for Command Code only\n    ${cyan}--qwen${reset}                    Install for Qwen Code only\n    ${cyan}--hermes${reset}                  Install for Hermes Agent only\n    ${cyan}--cline${reset}                   Install for Cline only\n    ${cyan}--codebuddy${reset}              Install for CodeBuddy only\n    ${cyan}--all${reset}                     Install for all runtimes\n    ${cyan}-u, --uninstall${reset}           Uninstall GSD (remove all GSD files)\n    ${cyan}-c, --config-dir <path>${reset}   Specify custom config directory\n    ${cyan}-h, --help${reset}                Show this help message\n    ${cyan}--force-statusline${reset}        Replace existing statusline config\n    ${cyan}--portable-hooks${reset}          Emit \$HOME-relative hook paths in settings.json\n                              (for WSL/Docker bind-mount setups; also GSD_PORTABLE_HOOKS=1)\n    ${cyan}--profile=<name>${reset}         Install a named skill profile. Profiles:\n                              core     — ${PROFILES.core.length} main-loop skills incl. phase (~130 desc tokens)\n                              standard — ${PROFILES.standard.length} skills incl. phase, review, config (~700)\n                              full     — all skills (default)\n                              Composable: --profile=core,audit installs union of closures.\n                              Profile is persisted and respected by \`gsd update\`.\n    ${cyan}--minimal${reset}                 Alias for --profile=core (back-compat).\n                              Cuts cold-start overhead from ~12k tokens to ~700.\n                              Alias: --core-only.\n\n  ${yellow}Examples:${reset}\n    ${dim}# Interactive install (prompts for runtime and location)${reset}\n    npx ${pkg.name}\n\n    ${dim}# Install for Claude Code globally${reset}\n    npx ${pkg.name} --claude --global\n\n    ${dim}# Install for Gemini globally${reset}\n    npx ${pkg.name} --gemini --global\n\n    ${dim}# Install for Kilo globally${reset}\n    npx ${pkg.name} --kilo --global\n\n    ${dim}# Install for Codex globally${reset}\n    npx ${pkg.name} --codex --global\n\n    ${dim}# Install for Copilot globally${reset}\n    npx ${pkg.name} --copilot --global\n\n    ${dim}# Install for Copilot locally${reset}\n    npx ${pkg.name} --copilot --local\n\n    ${dim}# Install for Antigravity globally${reset}\n    npx ${pkg.name} --antigravity --global\n\n    ${dim}# Install for Antigravity locally${reset}\n    npx ${pkg.name} --antigravity --local\n\n    ${dim}# Install for Cursor globally${reset}\n    npx ${pkg.name} --cursor --global\n\n    ${dim}# Install for Cursor locally${reset}\n    npx ${pkg.name} --cursor --local\n\n    ${dim}# Install for Windsurf globally${reset}\n    npx ${pkg.name} --windsurf --global\n\n    ${dim}# Install for Windsurf locally${reset}\n    npx ${pkg.name} --windsurf --local\n\n    ${dim}# Install for Augment globally${reset}\n    npx ${pkg.name} --augment --global\n\n    ${dim}# Install for Augment locally${reset}\n    npx ${pkg.name} --augment --local\n\n    ${dim}# Install for Trae globally${reset}\n    npx ${pkg.name} --trae --global\n\n    ${dim}# Install for Trae locally${reset}\n    npx ${pkg.name} --trae --local\n\n    ${dim}# Install for Command Code globally${reset}\n    npx ${pkg.name} --commandcode --global\n\n    ${dim}# Install for Command Code locally${reset}\n    npx ${pkg.name} --commandcode --local\n\n    ${dim}# Install for Hermes Agent globally${reset}\n    npx ${pkg.name} --hermes --global\n\n    ${dim}# Install for Hermes Agent locally${reset}\n    npx ${pkg.name} --hermes --local\n\n    ${dim}# Install for Cline globally${reset}\n    npx ${pkg.name} --cline --global\n\n    ${dim}# Install for Cline locally${reset}\n    npx ${pkg.name} --cline --local\n\n    ${dim}# Install for CodeBuddy globally${reset}\n    npx ${pkg.name} --codebuddy --global\n\n    ${dim}# Install for CodeBuddy locally${reset}\n    npx ${pkg.name} --codebuddy --local\n\n    ${dim}# Install for all runtimes globally${reset}\n    npx ${pkg.name} --all --global\n\n    ${dim}# Install to custom config directory${reset}\n    npx ${pkg.name} --kilo --global --config-dir ~/.kilo-work\n\n    ${dim}# Install to current project only${reset}\n    npx ${pkg.name} --claude --local\n\n    ${dim}# Uninstall GSD from Cursor globally${reset}\n    npx ${pkg.name} --cursor --global --uninstall\n\n  ${yellow}Notes:${reset}\n    The --config-dir option is useful when you have multiple configurations.\n    It takes priority over CLAUDE_CONFIG_DIR / OPENCODE_CONFIG_DIR / GEMINI_CONFIG_DIR / KILO_CONFIG_DIR / CODEX_HOME / COPILOT_CONFIG_DIR / COPILOT_HOME / ANTIGRAVITY_CONFIG_DIR / CURSOR_CONFIG_DIR / WINDSURF_CONFIG_DIR / AUGMENT_CONFIG_DIR / TRAE_CONFIG_DIR / COMMANDCODE_CONFIG_DIR / QWEN_CONFIG_DIR / HERMES_HOME / CLINE_CONFIG_DIR / CODEBUDDY_CONFIG_DIR environment variables.\n`);
   process.exit(0);
 }
 
@@ -2807,6 +2812,56 @@ function convertClaudeCommandToTraeSkill(content, skillName) {
 
 function convertClaudeAgentToTraeAgent(content) {
   let converted = convertClaudeToTraeMarkdown(content);
+
+  const { frontmatter, body } = extractFrontmatterAndBody(converted);
+  if (!frontmatter) return converted;
+
+  const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
+  const description = extractFrontmatterField(frontmatter, 'description') || '';
+
+  const cleanFrontmatter = `---\nname: ${yamlIdentifier(name)}\ndescription: ${yamlQuote(toSingleLine(description))}\n---`;
+
+  return `${cleanFrontmatter}\n${body}`;
+}
+
+function convertSlashCommandsToCommandcodeSkillMentions(content) {
+  return content.replace(/\/gsd:([a-z0-9-]+)/g, (_, commandName) => {
+    return `/gsd-${commandName}`;
+  });
+}
+
+function convertClaudeToCommandcodeMarkdown(content) {
+  let converted = convertSlashCommandsToCommandcodeSkillMentions(content);
+  converted = converted.replace(/`\.\/CLAUDE\.md`/g, '`.commandcode/rules/`');
+  converted = converted.replace(/\.\/CLAUDE\.md/g, '.commandcode/rules/');
+  converted = converted.replace(/`CLAUDE\.md`/g, '`.commandcode/rules/`');
+  converted = converted.replace(/\bCLAUDE\.md\b/g, '.commandcode/rules/');
+  converted = converted.replace(/\.claude\/skills\//g, '.commandcode/skills/');
+  converted = converted.replace(/\.\/\.claude\//g, './.commandcode/');
+  converted = converted.replace(/\.claude\//g, '.commandcode/');
+  converted = converted.replace(/\*\*Known Claude Code bug \(classifyHandoffIfNeeded\):\*\*[^\n]*\n/g, '');
+  converted = converted.replace(/- \*\*classifyHandoffIfNeeded false failure:\*\*[^\n]*\n/g, '');
+  converted = converted.replace(/\bClaude Code\b/g, 'Command Code');
+  return converted;
+}
+
+function convertClaudeCommandToCommandcodeSkill(content, skillName) {
+  const converted = convertClaudeToCommandcodeMarkdown(content);
+  const { frontmatter, body } = extractFrontmatterAndBody(converted);
+  let description = `Run GSD workflow ${skillName}.`;
+  if (frontmatter) {
+    const maybeDescription = extractFrontmatterField(frontmatter, 'description');
+    if (maybeDescription) {
+      description = maybeDescription;
+    }
+  }
+  description = toSingleLine(description);
+  const shortDescription = description.length > 180 ? `${description.slice(0, 177)}...` : description;
+  return `---\nname: ${yamlIdentifier(skillName)}\ndescription: ${yamlQuote(shortDescription)}\n---\n${body}`;
+}
+
+function convertClaudeAgentToCommandcodeAgent(content) {
+  let converted = convertClaudeToCommandcodeMarkdown(content);
 
   const { frontmatter, body } = extractFrontmatterAndBody(converted);
   if (!frontmatter) return converted;
@@ -7765,6 +7820,7 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
   const isWindsurf = runtime === 'windsurf';
   const isAugment = runtime === 'augment';
   const isTrae = runtime === 'trae';
+  const isCommandcode = runtime === 'commandcode';
   const isQwen = runtime === 'qwen';
   const isHermes = runtime === 'hermes';
   const isCline = runtime === 'cline';
@@ -7845,6 +7901,9 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
       } else if (isTrae) {
         content = convertClaudeToTraeMarkdown(content);
         fs.writeFileSync(destPath, content);
+      } else if (isCommandcode) {
+        content = convertClaudeToCommandcodeMarkdown(content);
+        fs.writeFileSync(destPath, content);
       } else if (isCline) {
         content = convertClaudeToCliineMarkdown(content);
         fs.writeFileSync(destPath, content);
@@ -7895,6 +7954,15 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
       jsContent = jsContent.replace(/\.claude\/skills\//g, '.trae/skills/');
       jsContent = jsContent.replace(/CLAUDE\.md/g, '.trae/rules/');
       jsContent = jsContent.replace(/\bClaude Code\b/g, 'Trae');
+      fs.writeFileSync(destPath, jsContent);
+    } else if (isCommandcode && (entry.name.endsWith('.cjs') || entry.name.endsWith('.js'))) {
+      let jsContent = fs.readFileSync(srcPath, 'utf8');
+      jsContent = jsContent.replace(/\/gsd:([a-z0-9-]+)/g, (_, commandName) => {
+        return `/gsd-${commandName}`;
+      });
+      jsContent = jsContent.replace(/\.claude\/skills\//g, '.commandcode/skills/');
+      jsContent = jsContent.replace(/CLAUDE\.md/g, '.commandcode/rules/');
+      jsContent = jsContent.replace(/\bClaude Code\b/g, 'Command Code');
       fs.writeFileSync(destPath, jsContent);
     } else if (isCline && (entry.name.endsWith('.cjs') || entry.name.endsWith('.js'))) {
       let jsContent = fs.readFileSync(srcPath, 'utf8');
@@ -8099,6 +8167,7 @@ function uninstall(isGlobal, runtime = 'claude') {
   const isWindsurf = runtime === 'windsurf';
   const isAugment = runtime === 'augment';
   const isTrae = runtime === 'trae';
+  const isCommandcode = runtime === 'commandcode';
   const isQwen = runtime === 'qwen';
   const isHermes = runtime === 'hermes';
   const isCodebuddy = runtime === 'codebuddy';
@@ -8128,6 +8197,7 @@ function uninstall(isGlobal, runtime = 'claude') {
   if (runtime === 'windsurf') runtimeLabel = 'Windsurf';
   if (runtime === 'augment') runtimeLabel = 'Augment';
   if (runtime === 'trae') runtimeLabel = 'Trae';
+  if (runtime === 'commandcode') runtimeLabel = 'Command Code';
   if (runtime === 'qwen') runtimeLabel = 'Qwen Code';
   if (runtime === 'hermes') runtimeLabel = 'Hermes Agent';
   if (runtime === 'codebuddy') runtimeLabel = 'CodeBuddy';
@@ -9062,6 +9132,7 @@ function writeManifest(configDir, runtime = 'claude', options = {}) {
   const isCursor = runtime === 'cursor';
   const isWindsurf = runtime === 'windsurf';
   const isTrae = runtime === 'trae';
+  const isCommandcode = runtime === 'commandcode';
   const isCline = runtime === 'cline';
   const isHermes = runtime === 'hermes';
   const gsdDir = path.join(configDir, 'gsd-core');
@@ -9109,7 +9180,7 @@ function writeManifest(configDir, runtime = 'claude', options = {}) {
       }
     }
   }
-  if ((isCodex || isCopilot || isAntigravity || isCursor || isWindsurf || isTrae || (!isOpencode && !isGemini)) && fs.existsSync(codexSkillsDir)) {
+  if ((isCodex || isCopilot || isAntigravity || isCursor || isWindsurf || isTrae || isCommandcode || (!isOpencode && !isGemini)) && fs.existsSync(codexSkillsDir)) {
     // Hermes uses prefix '' (bare stem names); all others use 'gsd-'
     const skillListPrefix = isHermes ? '' : 'gsd-';
     for (const skillName of listCodexSkillNames(codexSkillsDir, skillListPrefix)) {
@@ -9503,6 +9574,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   const isWindsurf = runtime === 'windsurf';
   const isAugment = runtime === 'augment';
   const isTrae = runtime === 'trae';
+  const isCommandcode = runtime === 'commandcode';
   const isQwen = runtime === 'qwen';
   const isHermes = runtime === 'hermes';
   const isCodebuddy = runtime === 'codebuddy';
@@ -9635,6 +9707,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   if (isWindsurf) runtimeLabel = 'Windsurf';
   if (isAugment) runtimeLabel = 'Augment';
   if (isTrae) runtimeLabel = 'Trae';
+  if (isCommandcode) runtimeLabel = 'Command Code';
   if (isQwen) runtimeLabel = 'Qwen Code';
   if (isHermes) runtimeLabel = 'Hermes Agent';
   if (isCodebuddy) runtimeLabel = 'CodeBuddy';
@@ -9925,7 +9998,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   // handles per-runtime path + branding rewrites, including Qwen/Hermes.
   // Cline global: emit skills to ~/.cline/skills/ (Cline >= v3.48.0 — #782).
   const _isSkillsRuntime = isCodex || isCopilot || isAntigravity || isCursor || isWindsurf ||
-    isAugment || isTrae || isCodebuddy || isQwen || isHermes ||
+    isAugment || isTrae || isCommandcode || isCodebuddy || isQwen || isHermes ||
     (runtime === 'claude' && isGlobal) ||
     (isCline && isGlobal);
 
@@ -10277,6 +10350,8 @@ function install(isGlobal, runtime = 'claude', options = {}) {
           content = convertClaudeAgentToAugmentAgent(content);
         } else if (isTrae) {
           content = convertClaudeAgentToTraeAgent(content);
+        } else if (isCommandcode) {
+          content = convertClaudeAgentToCommandcodeAgent(content);
         } else if (isCodebuddy) {
           content = convertClaudeAgentToCodebuddyAgent(content);
         } else if (isCline) {
@@ -10343,7 +10418,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     failures.push('VERSION');
   }
 
-  if (!isCodex && !isCopilot && !isCursor && !isWindsurf && !isTrae && !isCline) {
+  if (!isCodex && !isCopilot && !isCursor && !isWindsurf && !isTrae && !isCline && !isCommandcode) {
     // Write package.json to force CommonJS mode for GSD scripts
     // Prevents "require is not defined" errors when project has "type": "module"
     // Node.js walks up looking for package.json - this stops inheritance from project
@@ -10439,7 +10514,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   // the hooks/lib/ helpers — otherwise the Codex comment downstream
   // ("we deliberately do *not* copy hooks/lib/ for Codex") is contradicted in practice.
   const hooksLibSrc = path.join(src, 'hooks', 'lib');
-  if (!isCodex && !isCopilot && !isCursor && !isWindsurf && !isTrae && !isCline && fs.existsSync(hooksLibSrc)) {
+  if (!isCodex && !isCopilot && !isCursor && !isWindsurf && !isTrae && !isCline && !isCommandcode && fs.existsSync(hooksLibSrc)) {
     const hooksLibDest = path.join(targetDir, 'hooks', 'lib');
     fs.mkdirSync(hooksLibDest, { recursive: true });
     copyLibDir(hooksLibSrc, hooksLibDest, GSD_HOOK_LIB_FILES);
@@ -11731,10 +11806,11 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   const isCursor = runtime === 'cursor';
   const isWindsurf = runtime === 'windsurf';
   const isTrae = runtime === 'trae';
+  const isCommandcode = runtime === 'commandcode';
   const isCline = runtime === 'cline';
   const configIntent = resolveRuntimeConfigIntent(runtime);
 
-  if (shouldInstallStatusline && !isOpencode && !isKilo && !isCodex && !isCopilot && !isCursor && !isWindsurf && !isTrae) {
+  if (shouldInstallStatusline && !isOpencode && !isKilo && !isCodex && !isCopilot && !isCursor && !isWindsurf && !isTrae && !isCommandcode) {
     if (!isGlobal && !forceStatusline) {
       // Local installs skip statusLine by default: repo settings.json takes precedence over
       // profile-level settings.json in Claude Code, so writing here would silently clobber
@@ -11760,7 +11836,7 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   // settings.json hooks block — opencode/kilo/codex/cursor/windsurf/trae/
   // cline either lack the surface or use a different config schema.
   const { shouldInstallBanner, bannerCommand } = bannerOpts;
-  if (shouldInstallBanner && settings && !isOpencode && !isKilo && !isCodex && !isCopilot && !isCursor && !isWindsurf && !isTrae && !isCline) {
+  if (shouldInstallBanner && settings && !isOpencode && !isKilo && !isCodex && !isCopilot && !isCursor && !isWindsurf && !isTrae && !isCline && !isCommandcode) {
     if (!bannerCommand) {
       console.warn(`  ${yellow}⚠${reset}  Skipped update banner registration — Node executable path unavailable. See #2979 / #3002.`);
     } else {
@@ -12602,6 +12678,8 @@ module.exports = {
     convertClaudeToTraeMarkdown,
     convertClaudeCommandToTraeSkill,
     convertClaudeAgentToTraeAgent,
+    convertClaudeCommandToCommandcodeSkill,
+    convertClaudeAgentToCommandcodeAgent,
     convertClaudeToCodebuddyMarkdown,
     convertClaudeCommandToCodebuddySkill,
     convertClaudeCommandToCodebuddyCommand,
