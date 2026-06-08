@@ -236,6 +236,14 @@ function main() {
   // Build the gitignored bin/lib artifact if absent, before any test requires it.
   ensureBuiltArtifacts();
 
+  // Hermeticity: in-process tests resolve `.planning` via planningDir(cwd), which
+  // honours GSD_PROJECT/GSD_WORKSTREAM. A developer shell inside a GSD workstream
+  // exports GSD_WORKSTREAM, which would redirect fixture STATE.md reads away from
+  // each <tmp>/.planning and silently diverge from the clean CI/Docker env. Strip
+  // them so the local runner matches CI; tests that need them set them explicitly.
+  delete process.env.GSD_PROJECT;
+  delete process.env.GSD_WORKSTREAM;
+
   // Log selected files to stderr for CI / harness-test visibility.
   // node:test default reporter doesn't echo filenames, so this gives
   // operators a single stable line they can grep.
