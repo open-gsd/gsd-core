@@ -280,6 +280,7 @@
       "command-arg-projection.cjs",
       "command-routing-hub.cjs",
       "commands.cjs",
+      "config-loader.cjs",
       "config-schema.cjs",
       "config-types.cjs",
       "config.cjs",
