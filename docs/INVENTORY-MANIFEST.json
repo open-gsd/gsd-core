@@ -324,6 +324,7 @@
       "research-store.cjs",
       "review-reviewer-selection.cjs",
       "roadmap-command-router.cjs",
+      "roadmap-parser.cjs",
       "roadmap-upgrade.cjs",
       "roadmap.cjs",
       "runtime-artifact-layout.cjs",

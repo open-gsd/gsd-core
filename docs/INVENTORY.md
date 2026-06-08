@@ -370,7 +370,7 @@ The `gsd-planner` agent is decomposed into a core agent plus reference modules t
 
 ---
 
-## CLI Modules (92 shipped)
+## CLI Modules (93 shipped)
 
 Full listing: `gsd-core/bin/lib/*.cjs`.
 
@@ -435,6 +435,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `research-store.cjs` | Content-addressed research cache: sha256 keys, per-source TTL staleness, two-tier (user ~/.gsd / project .planning) store |
 | `review-reviewer-selection.cjs` | Reviewer selection/normalization helpers for `/gsd-review` default reviewer policy and precedence |
 | `roadmap-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools roadmap` |
+| `roadmap-parser.cjs` | ROADMAP.md parsing — milestone slicing, current-milestone extraction, phase/milestone lookups, milestone-phase filter (extracted from `core.cjs`, ADR-857) |
 | `roadmap-upgrade.cjs` | Migration tool for converting legacy `Phase N` entries to milestone-prefixed `Phase M-NN` convention; `computeMigrationPlan` + `applyMigration` with dry-run default and atomic rollback |
 | `roadmap.cjs` | ROADMAP.md parsing, phase extraction, plan progress |
 | `runtime-artifact-layout.cjs` | Runtime artifact layout module — resolves the artifact directory shapes (commands, agents, skills) for each supported runtime; single source of truth for per-runtime artifact placement (#3663) |

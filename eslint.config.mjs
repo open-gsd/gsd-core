@@ -91,6 +91,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/core.cjs',
       'gsd-core/bin/lib/io.cjs',
       'gsd-core/bin/lib/phase-id.cjs',
+      'gsd-core/bin/lib/roadmap-parser.cjs',
       'gsd-core/bin/lib/drift.cjs',
       'gsd-core/bin/lib/cjs-command-router-adapter.cjs',
       'gsd-core/bin/lib/phase-command-router.cjs',
