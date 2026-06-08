@@ -17,6 +17,7 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const fc = require('./helpers/fast-check-setup.cjs');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
@@ -199,6 +200,41 @@ Plan: Not started
 Status: Ready for planning
 `;
 
+function buildPropertyRoadmap(activeNums, extraNums) {
+  const activeChecklist = activeNums
+    .map((num) => `- [ ] **Phase ${num}: Active ${num}**`)
+    .join('\n');
+  const activeDetails = activeNums
+    .map((num) => `### Phase ${num}: Active ${num}\n**Goal**: Active ${num}.`)
+    .join('\n\n');
+  const extraDetails = extraNums
+    .map((num) => `### Phase ${num}: Extra ${num}\n**Goal**: Extra ${num}.`)
+    .join('\n\n');
+
+  return `# Roadmap
+
+<details open>
+<summary>v1.1 Current</summary>
+
+${activeChecklist}
+
+</details>
+
+## Phase Details
+
+${activeDetails}
+
+## Backlog
+
+${extraDetails}
+`;
+}
+
+function phaseHeadingNames(content) {
+  return [...content.matchAll(/^#{2,4}\s*Phase\s+(\d+):\s*([^\n]+)/gmi)]
+    .map((match) => `${match[1]}:${match[2].trim()}`);
+}
+
 // ─── Test suite ───────────────────────────────────────────────────────────────
 
 describe('bug #557 — <details>/<summary> active milestone strip', () => {
@@ -347,6 +383,41 @@ describe('bug #557 — <details>/<summary> active milestone strip', () => {
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.phase_found, false, 'Backlog phase 999.1 must not be active for v1.1');
+  });
+
+  test('property: appended flat detail phases are exactly active references and idempotent', () => {
+    const core = require('../gsd-core/bin/lib/core.cjs');
+    const planning = path.join(tmpDir, '.planning');
+    fs.writeFileSync(path.join(planning, 'STATE.md'), '---\nmilestone: v1.1\n---\n', 'utf-8');
+
+    fc.assert(
+      fc.property(
+        fc.uniqueArray(fc.integer({ min: 1, max: 30 }), { minLength: 1, maxLength: 8 }),
+        fc.uniqueArray(fc.integer({ min: 31, max: 60 }), { minLength: 1, maxLength: 8 }),
+        (activeNums, extraNums) => {
+          const roadmap = buildPropertyRoadmap(activeNums, extraNums);
+          const scoped = core.extractCurrentMilestone(roadmap, tmpDir);
+          const scopedAgain = core.extractCurrentMilestone(scoped, tmpDir);
+          const headings = phaseHeadingNames(scoped);
+
+          assert.deepStrictEqual(scopedAgain, scoped, 'phase detail appending must be idempotent');
+
+          for (const num of activeNums) {
+            assert.ok(
+              headings.includes(`${num}:Active ${num}`),
+              `active phase ${num} must be present in scoped milestone`,
+            );
+          }
+
+          for (const num of extraNums) {
+            assert.ok(
+              !headings.includes(`${num}:Extra ${num}`),
+              `extra phase ${num} must not be appended into scoped milestone`,
+            );
+          }
+        },
+      ),
+    );
   });
 
   test('init progress scopes disk and roadmap phases to active details summary references', () => {
