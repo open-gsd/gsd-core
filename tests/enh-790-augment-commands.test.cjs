@@ -135,6 +135,41 @@ describe('enh-790 — installRuntimeArtifacts augment emits both commands and sk
   });
 });
 
+describe('enh-790 — installRuntimeArtifacts does not leak temp dirs', () => {
+  test('install cleans up gsd-cmd-rewrites-* temp dirs (no leak) — #856', (t) => {
+    const { resolveProfile } = require('../gsd-core/bin/lib/install-profiles.cjs');
+    const RESOLVED_FULL = resolveProfile({ modes: ['full'], manifest: MANIFEST });
+
+    // Isolate os.tmpdir() to a private root so parallel test processes can't race
+    // on the shared system temp dir. os.tmpdir() resolves $TMPDIR/$TEMP/$TMP per call.
+    const isolatedTmp = createTempDir('gsd-enh790-tmproot-');
+    const prev = { TMPDIR: process.env.TMPDIR, TEMP: process.env.TEMP, TMP: process.env.TMP };
+    process.env.TMPDIR = isolatedTmp;
+    process.env.TEMP = isolatedTmp;
+    process.env.TMP = isolatedTmp;
+
+    const configDir = createTempDir('gsd-enh790-leak-');
+    t.after(() => {
+      for (const k of ['TMPDIR', 'TEMP', 'TMP']) {
+        if (prev[k] === undefined) delete process.env[k];
+        else process.env[k] = prev[k];
+      }
+      cleanup(configDir);
+      cleanup(isolatedTmp);
+    });
+
+    installRuntimeArtifacts('augment', configDir, 'global', RESOLVED_FULL);
+
+    // The install creates its gsd-cmd-rewrites-* temp dirs under the isolated root;
+    // after the fix none must remain.
+    const leaked = fs.readdirSync(isolatedTmp).filter(n => n.startsWith('gsd-cmd-rewrites-'));
+    assert.ok(
+      leaked.length === 0,
+      `installer must not leak gsd-cmd-rewrites-* temp dirs; leaked: ${leaked.join(', ')}`
+    );
+  });
+});
+
 // ─── Uninstall contract ──────────────────────────────────────────────────────
 
 describe('enh-790 — uninstallRuntimeArtifacts removes augment commands', () => {

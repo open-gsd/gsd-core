@@ -7568,59 +7568,67 @@ function installRuntimeArtifacts(runtime, configDir, scope, resolvedProfile) {
       // Returns a temp dir with rewritten content so source files are never mutated.
       stagedForCopy = applyRuntimeContentRewritesForCommandsInPlace(staged, runtime, pathPrefix);
     }
-    const dest = path.join(layout.configDir, kind.destSubpath);
-    fs.mkdirSync(dest, { recursive: true });
+    // applyRuntimeContentRewritesForCommandsInPlace() returns a fresh mkdtemp dir under
+    // os.tmpdir() (gsd-cmd-rewrites-*); remove it once copied so it does not accumulate (#856).
+    const tempToClean = stagedForCopy !== staged ? stagedForCopy : null;
+    try {
+      const dest = path.join(layout.configDir, kind.destSubpath);
+      fs.mkdirSync(dest, { recursive: true });
+      if (kind.kind === 'skills' && fs.existsSync(dest)) {
+        // Pre-prune: snapshot user-owned content before _removeGsdEntries wipes it,
+        // then restore after. This preserves user dirs across a wipe-and-replace
+        // install (#2973 / #3664).
+        //
+        // For prefix='' (Hermes): _removeGsdEntries wipes the entire dest dir (skills/gsd/).
+        // Preserve every subdir that is NOT in the staged set — those are user-added dirs
+        // (e.g. user-content/) that GSD does not manage.
+        //
+        // For prefix='gsd-' (others): _removeGsdEntries removes only gsd-* entries.
+        // Non-gsd-* user dirs (e.g. my-custom-skill/) are untouched. Only preserve the
+        // explicit user-owned GSD-prefixed skill gsd-dev-preferences, which GSD does not
+        // reinstall from source but must survive the prune (#2973).
+        const toPreserve = new Map(); // dirName -> Map<relPath, Buffer>
 
-    if (kind.kind === 'skills' && fs.existsSync(dest)) {
-      // Pre-prune: snapshot user-owned content before _removeGsdEntries wipes it,
-      // then restore after. This preserves user dirs across a wipe-and-replace
-      // install (#2973 / #3664).
-      //
-      // For prefix='' (Hermes): _removeGsdEntries wipes the entire dest dir (skills/gsd/).
-      // Preserve every subdir that is NOT in the staged set — those are user-added dirs
-      // (e.g. user-content/) that GSD does not manage.
-      //
-      // For prefix='gsd-' (others): _removeGsdEntries removes only gsd-* entries.
-      // Non-gsd-* user dirs (e.g. my-custom-skill/) are untouched. Only preserve the
-      // explicit user-owned GSD-prefixed skill gsd-dev-preferences, which GSD does not
-      // reinstall from source but must survive the prune (#2973).
-      const toPreserve = new Map(); // dirName -> Map<relPath, Buffer>
+        if (kind.prefix === '') {
+          // Hermes: wipes entire dest dir — preserve anything not in staged.
+          const stagedNames = fs.existsSync(stagedForCopy)
+            ? new Set(fs.readdirSync(stagedForCopy, { withFileTypes: true })
+                .filter(e => e.isDirectory()).map(e => e.name))
+            : new Set();
+          for (const entry of fs.readdirSync(dest, { withFileTypes: true })) {
+            if (!entry.isDirectory() || stagedNames.has(entry.name)) continue;
+            const snap = _snapshotDir(path.join(dest, entry.name));
+            if (snap.size > 0) toPreserve.set(entry.name, snap);
+          }
+        } else {
+          // Non-Hermes: only preserve explicitly user-owned GSD-prefixed skill dirs.
+          // gsd-dev-preferences is the sole user-customisable skill in this category.
+          const USER_OWNED_SKILL_DIRS = ['gsd-dev-preferences'];
+          for (const dirName of USER_OWNED_SKILL_DIRS) {
+            const skillDir = path.join(dest, dirName);
+            if (!fs.existsSync(skillDir)) continue;
+            const snap = _snapshotDir(skillDir);
+            if (snap.size > 0) toPreserve.set(dirName, snap);
+          }
+        }
 
-      if (kind.prefix === '') {
-        // Hermes: wipes entire dest dir — preserve anything not in staged.
-        const stagedNames = fs.existsSync(stagedForCopy)
-          ? new Set(fs.readdirSync(stagedForCopy, { withFileTypes: true })
-              .filter(e => e.isDirectory()).map(e => e.name))
-          : new Set();
-        for (const entry of fs.readdirSync(dest, { withFileTypes: true })) {
-          if (!entry.isDirectory() || stagedNames.has(entry.name)) continue;
-          const snap = _snapshotDir(path.join(dest, entry.name));
-          if (snap.size > 0) toPreserve.set(entry.name, snap);
+        _removeGsdEntries(dest, kind);
+        _copyStaged(stagedForCopy, dest, kind);
+
+        // Restore user-owned dirs after the prune+copy
+        for (const [dirName, snap] of toPreserve) {
+          _restoreDir(path.join(dest, dirName), snap);
         }
       } else {
-        // Non-Hermes: only preserve explicitly user-owned GSD-prefixed skill dirs.
-        // gsd-dev-preferences is the sole user-customisable skill in this category.
-        const USER_OWNED_SKILL_DIRS = ['gsd-dev-preferences'];
-        for (const dirName of USER_OWNED_SKILL_DIRS) {
-          const skillDir = path.join(dest, dirName);
-          if (!fs.existsSync(skillDir)) continue;
-          const snap = _snapshotDir(skillDir);
-          if (snap.size > 0) toPreserve.set(dirName, snap);
-        }
+        // For non-skills kinds (commands, agents): no user content to preserve;
+        // just prune stale gsd-* entries and copy new ones.
+        _removeGsdEntries(dest, kind);
+        _copyStaged(stagedForCopy, dest, kind);
       }
-
-      _removeGsdEntries(dest, kind);
-      _copyStaged(stagedForCopy, dest, kind);
-
-      // Restore user-owned dirs after the prune+copy
-      for (const [dirName, snap] of toPreserve) {
-        _restoreDir(path.join(dest, dirName), snap);
+    } finally {
+      if (tempToClean) {
+        try { fs.rmSync(tempToClean, { recursive: true, force: true }); } catch { /* best-effort */ }
       }
-    } else {
-      // For non-skills kinds (commands, agents): no user content to preserve;
-      // just prune stale gsd-* entries and copy new ones.
-      _removeGsdEntries(dest, kind);
-      _copyStaged(stagedForCopy, dest, kind);
     }
   }
 }
