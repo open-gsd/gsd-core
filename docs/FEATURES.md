@@ -904,6 +904,7 @@ continues. Drift detection cannot fail verification.
 - REQ-UPDATE-03: System MUST be runtime-aware and target the correct directory
 - REQ-UPDATE-04: System MUST back up locally modified files to `gsd-local-patches/`
 - REQ-UPDATE-05: `/gsd-update --reapply` MUST restore local modifications after update
+- REQ-UPDATE-06: `/gsd-update --next` (alias `--rc`) MUST target the `@next` RC dist-tag for version check and install; omitting the flag MUST keep `@latest` behavior unchanged (ADR #660)
 
 ---
 

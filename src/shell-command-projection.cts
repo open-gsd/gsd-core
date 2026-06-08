@@ -145,6 +145,7 @@ export function projectManagedHookCommand({ absoluteRunner, scriptPath, runtime 
 const MANAGED_HOOK_BASENAMES_BY_SURFACE: Record<string, Set<string>> = {
   'settings-json': new Set([
     'gsd-check-update.js',
+    'gsd-config-reload.js',
     'gsd-statusline.js',
     'gsd-context-monitor.js',
     'gsd-prompt-guard.js',
@@ -161,6 +162,7 @@ const MANAGED_HOOK_BASENAMES_BY_SURFACE: Record<string, Set<string>> = {
 const MANAGED_HOOK_COMMAND_BASENAMES_BY_SURFACE: Record<string, Set<string>> = {
   'settings-json': new Set([
     'gsd-check-update.js',
+    'gsd-config-reload.js',
     'gsd-statusline.js',
     'gsd-context-monitor.js',
     'gsd-prompt-guard.js',

@@ -20,7 +20,6 @@ const INERT_WORKFLOWS = new Set([
   'auto-backmerge.yml',
   'close-draft-prs.yml',
   'dismiss-unauthorized-pr-approvals.yml',
-  'pr-gate.yml',
   'pr-target-validator.yml',
   'pr-template-format.yml',
   'require-issue-link.yml',
@@ -289,7 +288,12 @@ function changedFiles(args) {
   if (!args.base || !args.head) {
     throw new Error('--base/--head or --files is required');
   }
-  const stdout = execFileSync('git', ['diff', '--name-only', args.base, args.head], {
+  // Three-dot diff (merge-base...head) matches GitHub's PR "Files changed" semantics.
+  // A two-dot `git diff base head` would surface every file `next` gained after this
+  // branch's merge-base, mis-flagging product_changed/full_matrix on docs-only PRs cut
+  // from a slightly stale base (#837). The `changes` job checks out with fetch-depth: 0,
+  // so the merge-base is always available.
+  const stdout = execFileSync('git', ['diff', '--name-only', `${args.base}...${args.head}`], {
     encoding: 'utf8',
   });
   return splitFiles(stdout);

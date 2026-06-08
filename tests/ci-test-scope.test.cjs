@@ -5,6 +5,8 @@ const assert = require('node:assert/strict');
 const { spawnSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const os = require('node:os');
+const { cleanup } = require('./helpers.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const SCRIPT = path.join(ROOT, 'scripts', 'ci-test-scope.cjs');
@@ -207,6 +209,74 @@ describe('ci-test-scope.cjs', () => {
     assert.deepStrictEqual(result.targeted_tests, ['unit'],
       'targeted_tests must be [\'unit\'] when code changed but no rule matched');
   });
+
+  test('three-dot diff: docs-only PR on a stale base ignores product commits next gained after the merge-base', () => {
+    // Reproduces #837: a docs-only PR branched from a slightly older `next`.
+    // After the branch point, `next` advances with a PRODUCT commit. A two-dot
+    // `git diff base head` would surface that product file (flipping product_changed/
+    // full_matrix true); a three-dot `git diff base...head` (vs the merge-base, which is
+    // GitHub's PR semantics) must see ONLY the docs change.
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-scope-837-'));
+    try {
+      const git = (...a) => {
+        const r = spawnSync('git', a, { cwd: tmp, encoding: 'utf8' });
+        assert.strictEqual(r.status, 0, `git ${a.join(' ')} failed: ${r.stderr}`);
+        return r.stdout.trim();
+      };
+      git('init', '-q');
+      git('config', 'user.email', 'test@example.com');
+      git('config', 'user.name', 'Test');
+      git('config', 'commit.gpgsign', 'false');
+
+      // merge-base: a docs file + a product file (package.json)
+      fs.mkdirSync(path.join(tmp, 'tests'), { recursive: true }); // existingTests() reads tests/
+      fs.mkdirSync(path.join(tmp, 'docs'), { recursive: true });
+      fs.writeFileSync(path.join(tmp, 'docs', 'a.md'), 'base\n');
+      fs.writeFileSync(path.join(tmp, 'package.json'), '{"name":"x","version":"1.0.0"}\n');
+      git('add', '-A');
+      git('commit', '-qm', 'merge-base');
+      const baseBranch = git('rev-parse', '--abbrev-ref', 'HEAD');
+
+      // PR branch (head): docs-only change
+      git('checkout', '-q', '-b', 'feature');
+      fs.writeFileSync(path.join(tmp, 'docs', 'a.md'), 'base\nnew docs line\n');
+      git('add', '-A');
+      git('commit', '-qm', 'docs: add line');
+      const head = git('rev-parse', 'HEAD');
+
+      // base advances (next gains a PRODUCT commit after the merge-base)
+      git('checkout', '-q', baseBranch);
+      fs.writeFileSync(path.join(tmp, 'package.json'), '{"name":"x","version":"2.0.0"}\n');
+      git('add', '-A');
+      git('commit', '-qm', 'chore: bump version on next');
+      const base = git('rev-parse', 'HEAD');
+
+      const r = spawnSync(process.execPath, [SCRIPT, '--base', base, '--head', head], {
+        cwd: tmp,
+        encoding: 'utf8',
+      });
+      assert.strictEqual(r.status, 0, `script failed: stderr=${r.stderr}\nstdout=${r.stdout}`);
+      const result = JSON.parse(r.stdout);
+
+      assert.deepStrictEqual(
+        result.changed_files,
+        ['docs/a.md'],
+        `expected three-dot diff to see only the docs file, got: ${JSON.stringify(result.changed_files)}`,
+      );
+      assert.strictEqual(
+        result.product_changed,
+        false,
+        `docs-only PR must not set product_changed even on a stale base, got: ${JSON.stringify(result)}`,
+      );
+      assert.strictEqual(
+        result.full_matrix,
+        false,
+        `docs-only PR must not set full_matrix even on a stale base, got: ${JSON.stringify(result)}`,
+      );
+    } finally {
+      cleanup(tmp);
+    }
+  });
 });
 
 describe('ci-test-scope superset invariant (#494)', () => {
@@ -273,7 +343,7 @@ describe('INERT_WORKFLOWS allowlist integrity guard', () => {
   const knownInert = [
     'stale.yml', 'branch-cleanup.yml', 'branch-naming.yml', 'auto-label-issues.yml',
     'auto-branch.yml', 'auto-backmerge.yml', 'close-draft-prs.yml',
-    'dismiss-unauthorized-pr-approvals.yml', 'pr-gate.yml', 'pr-target-validator.yml',
+    'dismiss-unauthorized-pr-approvals.yml', 'pr-target-validator.yml',
     'pr-template-format.yml', 'require-issue-link.yml', 'changeset-required.yml',
     'docs-required.yml', 'discord-changelog.yml',
   ];
@@ -332,6 +402,40 @@ describe('INERT_WORKFLOWS allowlist integrity guard', () => {
       assert.strictEqual(result.full_matrix, false,
         `${name}: expected full_matrix=false`);
     }
+  });
+});
+
+describe('test.yml changes job contract (#837)', () => {
+  // ci-test-scope.cjs uses a three-dot `git diff base...head`, which requires the
+  // merge-base commit to be locally present. The `changes` job in test.yml guarantees
+  // this via `fetch-depth: 0` on its checkout step. This test pins that contract so
+  // any future reduction of fetch-depth fails CI loudly (#837).
+  test('changes job checkout step sets fetch-depth: 0 (required for three-dot diff merge-base)', () => {
+    const workflowPath = path.join(WORKFLOWS_DIR, 'test.yml');
+    const text = fs.readFileSync(workflowPath, 'utf8');
+    const lines = text.split('\n');
+
+    // Locate the `changes:` job (two-space-indented top-level job key).
+    const jobStart = lines.findIndex(l => /^ {2}changes:\s*$/.test(l));
+    assert.ok(jobStart !== -1, 'Could not find `  changes:` job in test.yml');
+
+    // Find the next top-level job key at the same two-space indentation to bound the region.
+    let jobEnd = lines.length;
+    for (let i = jobStart + 1; i < lines.length; i++) {
+      if (/^ {2}[A-Za-z0-9_-]+:\s*$/.test(lines[i])) {
+        jobEnd = i;
+        break;
+      }
+    }
+
+    const changesJobText = lines.slice(jobStart, jobEnd).join('\n');
+
+    assert.ok(
+      /fetch-depth:\s*0/.test(changesJobText),
+      'changes job checkout must set `fetch-depth: 0` so the three-dot `git diff base...head` ' +
+      'in ci-test-scope.cjs can resolve the merge-base locally (#837). ' +
+      'Reducing fetch-depth breaks the three-dot diff and causes incorrect scope detection.',
+    );
   });
 });
 

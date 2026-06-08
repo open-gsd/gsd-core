@@ -26,6 +26,7 @@ const EXPECTED_SH_HOOKS = [
 
 const EXPECTED_ALL_HOOKS = [
   'gsd-check-update.js',
+  'gsd-config-reload.js',
   'gsd-context-monitor.js',
   'gsd-prompt-guard.js',
   'gsd-read-guard.js',

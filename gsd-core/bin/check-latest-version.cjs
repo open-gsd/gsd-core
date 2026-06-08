@@ -37,18 +37,64 @@ const CHECK_REASON = Object.freeze({
 
 const SEMVER_RE = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
 
+// #815: the one RC channel ADR #660 sanctions, plus the stable default.
+// An allowlist (not a free string) keeps a typo from silently resolving
+// `npm view` to an empty or foreign dist-tag.
+const ALLOWED_TAGS = Object.freeze(['latest', 'next']);
+
+/**
+ * Build the `npm view` args for a dist-tag. `latest` keeps the bare package
+ * spec so the default invocation is byte-for-byte identical to before tag
+ * support existed (#815); any other allowlisted tag appends `@<tag>` so
+ * `npm view @opengsd/gsd-core@next version` resolves the RC channel (#660).
+ */
+function buildViewArgs(tag = 'latest') {
+  if (!ALLOWED_TAGS.includes(tag)) {
+    throw new RangeError(`invalid dist-tag '${tag}'; allowed: ${ALLOWED_TAGS.join(', ')}`);
+  }
+  const spec = tag === 'latest' ? PACKAGE_NAME : `${PACKAGE_NAME}@${tag}`;
+  return ['view', spec, 'version'];
+}
+
+/**
+ * Resolve the requested dist-tag from argv. Defaults to `latest` (no flag =>
+ * no behavior change). Restricted to ALLOWED_TAGS so a typo can't silently
+ * resolve to an empty/foreign tag (#815 alternative 1).
+ */
+function resolveTag(argv) {
+  let val;
+  const eq = argv.find((a) => typeof a === 'string' && a.startsWith('--tag='));
+  if (eq !== undefined) {
+    val = eq.slice('--tag='.length);
+  } else {
+    const i = argv.indexOf('--tag');
+    if (i === -1) return 'latest';
+    val = argv[i + 1];
+  }
+  if (!val || !ALLOWED_TAGS.includes(val)) {
+    throw new RangeError(
+      `invalid --tag '${val || ''}'; allowed: ${ALLOWED_TAGS.join(', ')}`,
+    );
+  }
+  return val;
+}
+
 /**
  * Pure-ish: takes an injected spawn function so tests don't actually run npm.
  * In production, defaults to execNpm() from the shell-projection seam.
  */
 function checkLatestVersion(opts = {}) {
+  const tag = opts.tag || 'latest';
+  if (!ALLOWED_TAGS.includes(tag)) {
+    throw new RangeError(`invalid dist-tag '${tag}'; allowed: ${ALLOWED_TAGS.join(', ')}`);
+  }
   // Default path routes through the shell-projection seam (execNpm owns the
   // Windows shell-flag policy and timeout default). The injection point
   // remains spawnSync-shaped for test compatibility — the adapter below
   // translates { exitCode } → { status } so the consumer logic is unchanged.
   // Bounded at 15s so a hung registry doesn't block /gsd-update (#2993 CR).
   const defaultSpawn = () => {
-    const r = execNpm(['view', PACKAGE_NAME, 'version'], { timeout: 15_000 });
+    const r = execNpm(buildViewArgs(tag), { timeout: 15_000 });
     return {
       status: r.exitCode,
       stdout: r.stdout,
@@ -90,8 +136,16 @@ function checkLatestVersion(opts = {}) {
 }
 
 function main() {
-  const json = process.argv.includes('--json');
-  const r = checkLatestVersion();
+  const argv = process.argv.slice(2);
+  const json = argv.includes('--json');
+  let tag;
+  try {
+    tag = resolveTag(argv);
+  } catch (e) {
+    process.stderr.write(`check-latest-version: ${e.message}\n`);
+    return 2;
+  }
+  const r = checkLatestVersion({ tag });
   if (json) {
     process.stdout.write(JSON.stringify(r) + '\n');
   } else if (r.ok) {
@@ -104,4 +158,4 @@ function main() {
 
 if (require.main === module) runMain(main);
 
-module.exports = { checkLatestVersion, CHECK_REASON, PACKAGE_NAME };
+module.exports = { checkLatestVersion, CHECK_REASON, PACKAGE_NAME, ALLOWED_TAGS, buildViewArgs, resolveTag };

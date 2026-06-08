@@ -124,6 +124,24 @@ Branch names map to commit types:
 | `docs/` | `docs:` | none |
 | `refactor/` | `refactor:` | none |
 
+## Manifest Version Sync
+
+Certain runtime-integration manifests carry a `version` field that must always
+match `package.json`:
+
+- `.claude-plugin/plugin.json` — Claude Code plugin manifest (issue #766)
+- `gemini-extension.json` — Gemini CLI extension manifest (issue #775)
+
+The `version` npm lifecycle script (`scripts/sync-manifest-versions.cjs --stage`)
+stamps these files automatically on every `npm version` call, and stages them so
+they are included in the release commit alongside `package.json`.
+
+To add a new manifest that must track the package version, register its path in
+the `VERSIONED_MANIFESTS` array in `scripts/sync-manifest-versions.cjs`. A
+regression test (`tests/issue-844-manifest-version-sync.test.cjs`) enforces this:
+it scans all committed JSON files for a matching `version` field and fails if any
+are missing from the registry.
+
 ## Publishing Commands (Reference)
 
 ```bash
