@@ -370,7 +370,7 @@ The `gsd-planner` agent is decomposed into a core agent plus reference modules t
 
 ---
 
-## CLI Modules (96 shipped)
+## CLI Modules (97 shipped)
 
 Full listing: `gsd-core/bin/lib/*.cjs`.
 
@@ -420,6 +420,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `milestone.cjs` | Milestone archival, requirements marking |
 | `model-catalog.cjs` | CJS adapter over the shared model catalog JSON; exports canonical runtime tier defaults, agent profile maps, alias maps, and routing metadata for all CLI consumers |
 | `model-profiles.cjs` | Backward-compatible profile helpers derived from `model-catalog.cjs`; no longer owns its own model table |
+| `model-resolver.cjs` | Model/effort resolution policy — resolves model, tier, granularity, effort, and fast-mode for an agent from config + model profiles/catalog (extracted from `core.cjs`, ADR-857) |
 | `package-identity.cjs` | Generated single source for GSD's published-package coordinates (npm name, bin name, repo slug, changelog URL, manual-install command), derived from package.json; read by the update worker, `check-latest-version`, and installer (#498) |
 | `package-legitimacy.cjs` | Registry-API package legitimacy verdicts (OK/SUS/SLOP) from npm/PyPI/crates, slopcheck optional |
 | `phase-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools phase` |

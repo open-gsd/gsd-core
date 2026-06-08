@@ -361,6 +361,7 @@ Node.js CLI utility (`gsd-tools.cjs`) with domain modules split across `gsd-core
 | `milestone.cjs`        | Milestone archival, requirements marking                                                            |
 | `commands.cjs`         | Misc commands (slug, timestamp, todos, scaffolding, stats)                                          |
 | `model-profiles.cjs`   | Model profile resolution table                                                                      |
+| `model-resolver.cjs`   | Model and effort resolution policy — resolves model, tier, granularity, effort, and fast-mode for a given agent from project config and model profiles/catalog (extracted from `core.cjs`, ADR-857) |
 | `security.cjs`         | Path traversal prevention, prompt injection detection, safe JSON parsing, shell argument validation |
 | `uat.cjs`              | UAT file parsing, verification debt tracking, audit-uat support                                     |
 | `docs.cjs`             | Docs-update workflow init, Markdown scanning, monorepo detection                                    |

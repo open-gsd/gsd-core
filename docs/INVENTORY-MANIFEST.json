@@ -309,6 +309,7 @@
       "milestone.cjs",
       "model-catalog.cjs",
       "model-profiles.cjs",
+      "model-resolver.cjs",
       "package-identity.cjs",
       "package-legitimacy.cjs",
       "phase-command-router.cjs",
