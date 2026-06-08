@@ -5,7 +5,7 @@ argument-hint: ""
 allowed-tools:
   - Read
   - Skill
-requires: [code-review, audit-uat, secure-phase, eval-review, ui-review, validate-phase, debug, forensics]
+requires: [code-review, audit-uat, secure-phase, eval-review, ui-review, validate-phase, debug, forensics, audit-fix, review, ui-phase]
 ---
 
 Route to the appropriate quality / review skill based on the user's intent.
@@ -22,5 +22,8 @@ Route to the appropriate quality / review skill based on the user's intent.
 | Validate phase outputs | gsd-validate-phase |
 | Debug a failing feature or error | gsd-debug |
 | Forensic investigation of a broken system | gsd-forensics |
+| Autonomous audit-to-fix pipeline | gsd-audit-fix |
+| Cross-AI peer review of plans | gsd-review |
+| Generate a UI design contract | gsd-ui-phase |
 
 Invoke the matched skill directly using the Skill tool.

@@ -208,6 +208,95 @@ describe('gsd-health --context flag is wired into command + workflow', () => {
   });
 });
 
+// ── Namespace nesting completeness (#69) ──────────────────────────────
+// Guards that the install-layout nesting invariant (<=6 top-level entries)
+// is always satisfiable: every router's requires list points at real files,
+// every concrete skill is covered by at least one router, and each router's
+// body table stays in sync with its requires list.
+
+const NS_FILES = NAMESPACE_SKILLS.map((ns) => ns.file);
+
+/**
+ * Parse the `requires:` flow-style array from a router file's raw content.
+ * Matches `requires: [a, b, c]` anywhere (frontmatter or body — always in fm).
+ */
+function parseRouterRequires(content) {
+  const m = content.match(/^requires:\s*\[([^\]]*)\]/m);
+  if (!m) return [];
+  return m[1].split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+describe('namespace nesting completeness (#69)', () => {
+  // Build the concrete-skill set once (all *.md minus ns-*.md)
+  const allFiles = fs.readdirSync(COMMANDS_DIR).filter((f) => f.endsWith('.md'));
+  const concreteStemSet = new Set(
+    allFiles
+      .filter((f) => !f.startsWith('ns-'))
+      .map((f) => f.replace(/\.md$/, '')),
+  );
+
+  // Build per-router requires and the union over all routers
+  const routerRequires = new Map(); // stem -> string[]
+  for (const f of NS_FILES) {
+    const stem = f.replace(/\.md$/, '');
+    const content = fs.readFileSync(path.join(COMMANDS_DIR, f), 'utf-8');
+    routerRequires.set(stem, parseRouterRequires(content));
+  }
+  const allRoutedStems = new Set([...routerRequires.values()].flat());
+
+  test('every router requires entry resolves to a real concrete skill file', () => {
+    const bad = [];
+    for (const [routerStem, children] of routerRequires) {
+      for (const child of children) {
+        if (!fs.existsSync(path.join(COMMANDS_DIR, `${child}.md`))) {
+          bad.push(`${routerStem} → ${child}`);
+        }
+      }
+    }
+    assert.deepStrictEqual(
+      bad,
+      [],
+      `Router requires entries with no matching commands/gsd/<stem>.md: ${bad.join(', ')}`,
+    );
+  });
+
+  test('every concrete skill is routed by at least one namespace router', () => {
+    const unrouted = [...concreteStemSet].filter((stem) => !allRoutedStems.has(stem));
+    assert.deepStrictEqual(
+      unrouted,
+      [],
+      `Concrete skills not routed by any ns-*.md (add to a router's requires:): ${unrouted.join(', ')}`,
+    );
+  });
+
+  test("each router's routing-table rows reference only its own required sub-skills (plus flag variants)", () => {
+    const bad = [];
+    for (const [routerStem, children] of routerRequires) {
+      const childSet = new Set(children);
+      const content = fs.readFileSync(path.join(COMMANDS_DIR, `${routerStem}.md`), 'utf-8');
+      const fm = parseFrontmatter(content);
+      // Extract gsd-<stem> tokens from table data rows (last cell), strip flags
+      for (const line of fm._body.split('\n')) {
+        if (!line.startsWith('|') || /^\|[\s\-:|]+\|?\s*$/.test(line)) continue;
+        const cells = line.split('|').map((c) => c.trim()).filter(Boolean);
+        if (cells.length < 2) continue;
+        const lastCell = cells[cells.length - 1];
+        for (const match of lastCell.matchAll(/\bgsd-([a-z][a-z0-9-]*)/g)) {
+          const stem = match[1];
+          if (!childSet.has(stem)) {
+            bad.push(`${routerStem}: body table references gsd-${stem} but it's not in requires`);
+          }
+        }
+      }
+    }
+    assert.deepStrictEqual(
+      bad,
+      [],
+      `Routing table / requires mismatch:\n${bad.join('\n')}`,
+    );
+  });
+});
+
 // ── Cross-reference: every routed sub-skill must exist ─────────────────
 // This is the regression guard the original PR lacked. Without it,
 // post-#2790 consolidations can quietly invalidate router targets again.

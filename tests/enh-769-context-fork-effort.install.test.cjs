@@ -43,6 +43,52 @@ function makeTmpDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
+/**
+ * Map from concrete skill stem → ns-* router stem for nesting runtimes.
+ * Derived from the authoritative ns-*.md `requires:` lists.
+ */
+const CHILD_ROUTER = {
+  // ns-workflow
+  'discuss-phase': 'ns-workflow', 'spec-phase': 'ns-workflow', 'plan-phase': 'ns-workflow',
+  'execute-phase': 'ns-workflow', 'verify-work': 'ns-workflow', 'phase': 'ns-workflow',
+  'progress': 'ns-workflow', 'ultraplan-phase': 'ns-workflow',
+  'plan-review-convergence': 'ns-workflow', 'add-tests': 'ns-workflow',
+  'ai-integration-phase': 'ns-workflow', 'autonomous': 'ns-workflow',
+  'fast': 'ns-workflow', 'mvp-phase': 'ns-workflow', 'quick': 'ns-workflow',
+  // ns-project
+  'new-project': 'ns-project', 'new-milestone': 'ns-project', 'complete-milestone': 'ns-project',
+  'audit-milestone': 'ns-project', 'milestone-summary': 'ns-project', 'import': 'ns-project',
+  'ingest-docs': 'ns-project', 'profile-user': 'ns-project', 'review-backlog': 'ns-project',
+  // ns-review
+  'code-review': 'ns-review', 'audit-uat': 'ns-review', 'secure-phase': 'ns-review',
+  'eval-review': 'ns-review', 'ui-review': 'ns-review', 'validate-phase': 'ns-review',
+  'debug': 'ns-review', 'forensics': 'ns-review', 'audit-fix': 'ns-review',
+  'review': 'ns-review', 'ui-phase': 'ns-review',
+  // ns-context
+  'map-codebase': 'ns-context', 'graphify': 'ns-context', 'docs-update': 'ns-context',
+  'extract-learnings': 'ns-context',
+  // ns-ideate
+  'capture': 'ns-ideate', 'explore': 'ns-ideate', 'sketch': 'ns-ideate',
+  'spike': 'ns-ideate',
+  // ns-manage
+  'config': 'ns-manage', 'workspace': 'ns-manage', 'workstreams': 'ns-manage',
+  'thread': 'ns-manage', 'pause-work': 'ns-manage', 'resume-work': 'ns-manage',
+  'update': 'ns-manage', 'ship': 'ns-manage', 'inbox': 'ns-manage',
+  'pr-branch': 'ns-manage', 'undo': 'ns-manage', 'cleanup': 'ns-manage',
+  'health': 'ns-manage', 'manager': 'ns-manage', 'settings': 'ns-manage',
+  'stats': 'ns-manage', 'surface': 'ns-manage', 'help': 'ns-manage',
+};
+
+/**
+ * Returns the nested SKILL.md path for a concrete skill stem on Claude
+ * (prefix='gsd-'): <skillsRoot>/gsd-<router>/skills/<stem>/SKILL.md
+ */
+function nestedClaudeSkillPath(skillsRoot, stem) {
+  const router = CHILD_ROUTER[stem];
+  if (!router) throw new Error(`No router mapping for stem: ${stem}`);
+  return path.join(skillsRoot, 'gsd-' + router, 'skills', stem, 'SKILL.md');
+}
+
 function readFrontmatter(mdPath) {
   const content = fs.readFileSync(mdPath, 'utf8');
   if (!content.startsWith('---')) return '';
@@ -253,7 +299,7 @@ describe('#769 Claude global install: SKILL.md files preserve context: fork and 
 
   test('gsd-autonomous SKILL.md has context: fork after global install', () => {
     runClaudeGlobalInstall(claudeHome);
-    const skillPath = path.join(claudeHome, 'skills', 'gsd-autonomous', 'SKILL.md');
+    const skillPath = nestedClaudeSkillPath(path.join(claudeHome, 'skills'), 'autonomous');
     const fm = readFrontmatter(skillPath);
     assert.match(fm, /^context:[ \t]*fork$/m,
       `gsd-autonomous SKILL.md must have context: fork\nActual:\n${fm}`);
@@ -261,7 +307,7 @@ describe('#769 Claude global install: SKILL.md files preserve context: fork and 
 
   test('gsd-autonomous SKILL.md has effort: xhigh after global install', () => {
     runClaudeGlobalInstall(claudeHome);
-    const skillPath = path.join(claudeHome, 'skills', 'gsd-autonomous', 'SKILL.md');
+    const skillPath = nestedClaudeSkillPath(path.join(claudeHome, 'skills'), 'autonomous');
     const fm = readFrontmatter(skillPath);
     assert.match(fm, /^effort:[ \t]*xhigh$/m,
       `gsd-autonomous SKILL.md must have effort: xhigh\nActual:\n${fm}`);
@@ -269,7 +315,7 @@ describe('#769 Claude global install: SKILL.md files preserve context: fork and 
 
   test('gsd-execute-phase SKILL.md has context: fork after global install', () => {
     runClaudeGlobalInstall(claudeHome);
-    const skillPath = path.join(claudeHome, 'skills', 'gsd-execute-phase', 'SKILL.md');
+    const skillPath = nestedClaudeSkillPath(path.join(claudeHome, 'skills'), 'execute-phase');
     const fm = readFrontmatter(skillPath);
     assert.match(fm, /^context:[ \t]*fork$/m,
       `gsd-execute-phase SKILL.md must have context: fork\nActual:\n${fm}`);
@@ -277,7 +323,7 @@ describe('#769 Claude global install: SKILL.md files preserve context: fork and 
 
   test('gsd-execute-phase SKILL.md has effort: xhigh after global install', () => {
     runClaudeGlobalInstall(claudeHome);
-    const skillPath = path.join(claudeHome, 'skills', 'gsd-execute-phase', 'SKILL.md');
+    const skillPath = nestedClaudeSkillPath(path.join(claudeHome, 'skills'), 'execute-phase');
     const fm = readFrontmatter(skillPath);
     assert.match(fm, /^effort:[ \t]*xhigh$/m,
       `gsd-execute-phase SKILL.md must have effort: xhigh\nActual:\n${fm}`);
@@ -285,7 +331,7 @@ describe('#769 Claude global install: SKILL.md files preserve context: fork and 
 
   test('gsd-plan-phase SKILL.md has context: fork after global install', () => {
     runClaudeGlobalInstall(claudeHome);
-    const skillPath = path.join(claudeHome, 'skills', 'gsd-plan-phase', 'SKILL.md');
+    const skillPath = nestedClaudeSkillPath(path.join(claudeHome, 'skills'), 'plan-phase');
     const fm = readFrontmatter(skillPath);
     assert.match(fm, /^context:[ \t]*fork$/m,
       `gsd-plan-phase SKILL.md must have context: fork\nActual:\n${fm}`);
@@ -293,7 +339,7 @@ describe('#769 Claude global install: SKILL.md files preserve context: fork and 
 
   test('gsd-plan-phase SKILL.md has effort: xhigh after global install', () => {
     runClaudeGlobalInstall(claudeHome);
-    const skillPath = path.join(claudeHome, 'skills', 'gsd-plan-phase', 'SKILL.md');
+    const skillPath = nestedClaudeSkillPath(path.join(claudeHome, 'skills'), 'plan-phase');
     const fm = readFrontmatter(skillPath);
     assert.match(fm, /^effort:[ \t]*xhigh$/m,
       `gsd-plan-phase SKILL.md must have effort: xhigh\nActual:\n${fm}`);
@@ -301,7 +347,7 @@ describe('#769 Claude global install: SKILL.md files preserve context: fork and 
 
   test('gsd-progress SKILL.md has effort: low after global install', () => {
     runClaudeGlobalInstall(claudeHome);
-    const skillPath = path.join(claudeHome, 'skills', 'gsd-progress', 'SKILL.md');
+    const skillPath = nestedClaudeSkillPath(path.join(claudeHome, 'skills'), 'progress');
     const fm = readFrontmatter(skillPath);
     assert.match(fm, /^effort:[ \t]*low$/m,
       `gsd-progress SKILL.md must have effort: low\nActual:\n${fm}`);
@@ -309,7 +355,7 @@ describe('#769 Claude global install: SKILL.md files preserve context: fork and 
 
   test('gsd-stats SKILL.md has effort: low after global install', () => {
     runClaudeGlobalInstall(claudeHome);
-    const skillPath = path.join(claudeHome, 'skills', 'gsd-stats', 'SKILL.md');
+    const skillPath = nestedClaudeSkillPath(path.join(claudeHome, 'skills'), 'stats');
     const fm = readFrontmatter(skillPath);
     assert.match(fm, /^effort:[ \t]*low$/m,
       `gsd-stats SKILL.md must have effort: low\nActual:\n${fm}`);

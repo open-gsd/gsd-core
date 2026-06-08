@@ -370,7 +370,7 @@ The `gsd-planner` agent is decomposed into a core agent plus reference modules t
 
 ---
 
-## CLI Modules (94 shipped)
+## CLI Modules (95 shipped)
 
 Full listing: `gsd-core/bin/lib/*.cjs`.
 
@@ -424,6 +424,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `phase-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools phase` |
 | `phase-id.cjs` | Pure phase-id parsing/matching helpers — normalize, token match, milestone/phase-dir id parsing, phase-markdown regex builders (extracted from `core.cjs`, ADR-857) |
 | `phase-lifecycle.cjs` | Pure-computation phase lifecycle helpers extracted from the phase-lifecycle SDK handler |
+| `phase-locator.cjs` | Phase-directory search/location — active + archived phase-dir discovery, phase-id matching against the filesystem (extracted from `core.cjs`, ADR-857) |
 | `phase.cjs` | Phase directory operations, decimal numbering, plan indexing |
 | `phases-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools phases` |
 | `plan-scan.cjs` | Canonical phase-plan scanner for detecting plan and summary files in flat and nested layouts (k014) |

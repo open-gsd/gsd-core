@@ -467,7 +467,7 @@ describe('roadmap-parser: getMilestonePhaseFilter', () => {
     assert.strictEqual(filter.phaseCount, 1, 'deduplication: only 1 unique phase');
   });
 
-  test('adversarial: characterizes current fence-blind behavior for backtick fence (pending #875)', () => {
+  test('adversarial: phase heading inside backtick fence is excluded (fix #875)', () => {
     writeRoadmap(tmpDir, [
       '## v1.0: Real',
       '```',
@@ -478,10 +478,10 @@ describe('roadmap-parser: getMilestonePhaseFilter', () => {
     ].join('\n'));
 
     const filter = getMilestonePhaseFilter(tmpDir);
-    // KNOWN BUG #875: getMilestonePhaseFilter is fence-blind — phase headings inside
-    // fenced code blocks are incorrectly parsed as real phases. Flip to false when #875 is fixed.
+    // Phase headings inside fenced code blocks must NOT be counted as real phases.
+    // getMilestonePhaseFilter is fence-aware (fix #875).
     assert.strictEqual(filter('01-real'), true, 'real phase matches');
-    assert.strictEqual(filter('999-fake'), true, 'characterization: getMilestonePhaseFilter is currently fence-blind (KNOWN BUG #875) — flip to false when #875 is fixed');
+    assert.strictEqual(filter('999-fake'), false, 'fenced phase heading is correctly excluded');
   });
 
   test('adversarial: unclosed fence block — does not crash', () => {
@@ -501,7 +501,7 @@ describe('roadmap-parser: getMilestonePhaseFilter', () => {
     assert.ok(typeof filter === 'function', 'filter is a function');
   });
 
-  test('adversarial: characterizes current fence-blind behavior for tilde fence (pending #875)', () => {
+  test('adversarial: phase heading inside tilde fence is excluded (fix #875)', () => {
     writeRoadmap(tmpDir, [
       '## v1.0: Tilde',
       '~~~',
@@ -511,10 +511,35 @@ describe('roadmap-parser: getMilestonePhaseFilter', () => {
     ].join('\n'));
 
     const filter = getMilestonePhaseFilter(tmpDir);
-    // KNOWN BUG #875: getMilestonePhaseFilter is fence-blind — phase headings inside
-    // tilde-fenced code blocks are incorrectly parsed as real phases. Flip to false when #875 is fixed.
+    // Phase headings inside tilde-fenced code blocks must NOT be counted as real phases.
+    // getMilestonePhaseFilter is fence-aware (fix #875).
     assert.strictEqual(filter('01-real'), true, 'real phase matches despite tilde fence');
-    assert.strictEqual(filter('999-fake'), true, 'characterization: getMilestonePhaseFilter is currently fence-blind (KNOWN BUG #875) — flip to false when #875 is fixed');
+    assert.strictEqual(filter('999-fake'), false, 'tilde-fenced phase heading is correctly excluded');
+  });
+
+  test('adversarial: phase heading inside fence is excluded with CRLF endings (fix #875)', () => {
+    const crlf = '## v1.0: CRLF Fence\r\n```\r\n### Phase 999: Fake\r\n```\r\n### Phase 1: Real\r\n';
+    writeRoadmap(tmpDir, crlf);
+    const filter = getMilestonePhaseFilter(tmpDir);
+    assert.strictEqual(filter('01-real'), true, 'real phase matches in CRLF file');
+    assert.strictEqual(filter('999-fake'), false, 'fenced phase excluded in CRLF file');
+  });
+
+  test('adversarial: phase headings in back-to-back fences are excluded (fix #875)', () => {
+    writeRoadmap(tmpDir, [
+      '## v1.0: Adjacent',
+      '```',
+      '### Phase 998: Fake A',
+      '```',
+      '```',
+      '### Phase 999: Fake B',
+      '```',
+      '### Phase 1: Real',
+    ].join('\n'));
+    const filter = getMilestonePhaseFilter(tmpDir);
+    assert.strictEqual(filter('01-real'), true, 'real phase matches');
+    assert.strictEqual(filter('998-fake'), false, 'first fenced phase excluded');
+    assert.strictEqual(filter('999-fake'), false, 'second fenced phase excluded');
   });
 
   test('adversarial: CRLF line endings in roadmap', () => {

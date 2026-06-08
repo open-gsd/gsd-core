@@ -313,6 +313,7 @@
       "phase-command-router.cjs",
       "phase-id.cjs",
       "phase-lifecycle.cjs",
+      "phase-locator.cjs",
       "phase.cjs",
       "phases-command-router.cjs",
       "plan-scan.cjs",

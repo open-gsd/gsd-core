@@ -327,6 +327,46 @@ function getMilestoneInfo(cwd: string): MilestoneInfo {
   }
 }
 
+// ─── Fence-aware text helper ──────────────────────────────────────────────────
+
+/**
+ * Return a copy of `text` with every line that lies inside a fenced code block
+ * replaced by an empty string, using the same fence semantics as
+ * `computeSectionEnd` (backtick/tilde, ≥3 chars, indent ≤3 spaces, toggle;
+ * an unclosed fence treats remaining content as fenced).
+ */
+function stripFencedLines(text: string): string {
+  let fenceChar: string | null = null;
+  let fenceLen = 0;
+  const lines = text.split('\n');
+  const result: string[] = [];
+  for (const line of lines) {
+    const fm = line.match(/^\s{0,3}((?:`{3,}|~{3,}))(.*)/);
+    if (fm) {
+      const ch = fm[1][0];
+      const ln = fm[1].length;
+      const trailing = fm[2] || '';
+      if (!fenceChar) {
+        fenceChar = ch;
+        fenceLen = ln;
+        // The fence-open line itself is not a content line — blank it.
+        result.push('');
+      } else if (ch === fenceChar && ln >= fenceLen && /^\s*$/.test(trailing)) {
+        fenceChar = null;
+        fenceLen = 0;
+        // The fence-close line — blank it.
+        result.push('');
+      } else {
+        // A fence marker that doesn't close the current fence (different char or shorter) — keep treating as fenced content.
+        result.push(fenceChar ? '' : line);
+      }
+    } else {
+      result.push(fenceChar ? '' : line);
+    }
+  }
+  return result.join('\n');
+}
+
 // ─── Milestone phase filter ───────────────────────────────────────────────────
 
 type MilestonePhaseFilter = ((dirName: string) => boolean) & {
@@ -416,8 +456,9 @@ function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null): 
     }
 
     const phasePattern = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*)\s*:/gi;
+    const roadmapUnfenced = stripFencedLines(roadmap);
     let m: RegExpExecArray | null;
-    while ((m = phasePattern.exec(roadmap)) !== null) {
+    while ((m = phasePattern.exec(roadmapUnfenced)) !== null) {
       milestonePhaseNums.add(m[1]);
     }
   } catch { /* intentionally empty */ }

@@ -123,7 +123,7 @@ User-facing entry points. Each file contains YAML frontmatter (name, description
 
 #### Two-stage hierarchical routing (v1.40, [#2792](https://github.com/open-gsd/gsd-core/issues/2792))
 
-To keep the eager skill-listing token cost low, v1.40 introduces six namespace **meta-skills** (`gsd-workflow`, `gsd-project`, `gsd-quality`, `gsd-context`, `gsd-manage`, `gsd-ideate` — sourced from `commands/gsd/ns-*.md`, but the invocable `name:` is the bare form shown here) layered above the concrete sub-skills. The model sees 6 namespace routers (~120 tokens) instead of a flat 86-skill listing (~2,150 tokens), selects a namespace, then routes to the concrete sub-skill via a routing table embedded in the namespace router's body. Namespace skills are **additive** — every concrete command is still directly invocable.
+To keep the eager skill-listing token cost low, v1.40 introduces six namespace **meta-skills** (`gsd-workflow`, `gsd-project`, `gsd-quality`, `gsd-context`, `gsd-manage`, `gsd-ideate` — sourced from `commands/gsd/ns-*.md`, but the invocable `name:` is the bare form shown here) layered above the concrete sub-skills. On runtimes with non-recursive skill loaders (claude global, cline, qwen, hermes, augment, trae, antigravity) the installer now realizes this fully: it emits only the 6 namespace router bundles as top-level skills and nests the ~61 concrete skills under `<router>/skills/<name>/SKILL.md`, so the eager listing is ≈6 entries instead of ≈67. The model selects a namespace router, which instructs it to read the nested concrete skill file via a routing table embedded in the router body. On these runtimes concrete skills are **not** directly invocable by bare name via the Skill tool; they are reachable through the router. Slash commands (`/gsd-*`, via the separate commands surface) are unaffected where the runtime has one. On runtimes with recursive or unconfirmed skill loaders (cursor, codex, copilot, windsurf, codebuddy, opencode, kilo) the layout remains flat — all skills emitted at the top level as before.
 
 The router descriptions use pipe-separated keyword tags (≤ 60 chars) per the Tool Attention research showing keyword-dense tags outperform prose for routing at ~40 % the token cost.
 
@@ -347,6 +347,7 @@ Node.js CLI utility (`gsd-tools.cjs`) with domain modules split across `gsd-core
 | `core.cjs`             | Shared utilities; compatibility re-exports for planning, I/O (`io.cjs`), and phase-id helpers       |
 | `io.cjs`               | CLI I/O primitives — output/error emission, JSON-error mode, large-payload temp-file spillover     |
 | `phase-id.cjs`         | Pure phase-id parsing/matching helpers — normalize, token match, regex builders (extracted from `core.cjs`, ADR-857) |
+| `phase-locator.cjs`    | Phase-directory search and location — active-phase discovery (`searchPhaseInDir`, `findPhaseInternal`) and archived-phase-dir enumeration (`getArchivedPhaseDirs`), matching phase ids/tokens against the filesystem (extracted from `core.cjs`, ADR-857) |
 | `roadmap-parser.cjs`   | ROADMAP.md parsing — milestone slicing, current-milestone extraction, phase/milestone lookups, milestone-phase filter (extracted from `core.cjs`, ADR-857) |
 | `planning-workspace.cjs` | Planning seam (`planningDir`, `planningPaths`, active workstream routing, `.planning/.lock`)      |
 | `state.cjs`            | STATE.md parsing, updating, progression, metrics                                                    |
@@ -547,7 +548,9 @@ UI-SPEC.md (per phase) ───────────────────
 
 ```
 ~/.claude/                          # Claude Code (global install)
-├── skills/gsd-*/SKILL.md           # Global skills (authoritative roster: docs/INVENTORY.md)
+├── skills/gsd-ns-*/SKILL.md        # Global skills — nesting runtimes: 6 namespace routers (authoritative roster: docs/INVENTORY.md)
+│   └── skills/<name>/SKILL.md     #   concrete skills nested under each router
+│   (flat runtimes: skills/gsd-*/SKILL.md — all ~67 skills at top level)
 ├── commands/gsd/*.md               # Local Claude installs use slash commands instead of global skills
 ├── gsd-core/
 │   ├── bin/gsd-tools.cjs           # CLI utility
@@ -802,22 +805,22 @@ The migration-specific ownership and source snapshots live in
 
 | Runtime | Global root | Local root | Invocation surface | Agent surface | Config and hooks |
 | --- | --- | --- | --- | --- | --- |
-| Claude Code | `~/.claude` | `./.claude` | Global `skills/gsd-*/SKILL.md`; local `commands/gsd/*.md` | `agents/gsd-*.md` | `settings.json` hook and statusLine entries |
+| Claude Code | `~/.claude` | `./.claude` | Global `skills/gsd-ns-*/SKILL.md` (6 routers) + `skills/gsd-ns-*/skills/<name>/SKILL.md` (nested concretes); local `commands/gsd/*.md` | `agents/gsd-*.md` | `settings.json` hook and statusLine entries |
 | OpenCode | `~/.config/opencode` | `./.opencode` | `command/gsd-*.md` | `agents/gsd-*.md` | `opencode.json` or `opencode.jsonc`; no GSD hooks |
 | Kilo | `~/.config/kilo` | `./.kilo` | `command/gsd-*.md` | `agents/gsd-*.md` | `kilo.json` or `kilo.jsonc`; no GSD hooks |
 | Gemini CLI | `~/.gemini` | `./.gemini` | `commands/gsd/*.toml` | `agents/gsd-*.md` | `settings.json` feature flag, hooks, and statusline |
-| Kimi CLI | First-existing generic root: `~/.config/agents` recommended, then `~/.agents` when `~/.agents/skills` exists and `~/.config/agents/skills` does not | Deferred and guarded | `skills/gsd-*/SKILL.md` invoked as `/skill:gsd-*` | `agents/gsd.yaml`, `agents/gsd.md`, and `agents/subagents/gsd-*` YAML/prompt pairs | Explicit `kimi --agent-file <configRoot>/agents/gsd.yaml`; no GSD hooks or statusline |
-| Codex | `~/.codex` | `./.codex` | `skills/gsd-*/SKILL.md` | `agents/` source markdown plus per-agent TOML | `config.toml` `[agents.gsd-*]`, `[features].hooks` (canonical; legacy alias `codex_hooks` is recognized and migrated forward on reinstall, #3566), and hook tables |
-| GitHub Copilot | `~/.copilot` | `./.github` | `skills/gsd-*/SKILL.md`, `copilot-instructions.md`, and `AGENTS.md` (repo root, local) | `.agent.md` files | Self-contained `sessionStart` hook (`hooks/gsd-session.json`, inline `command` type); no statusline |
-| Antigravity | auto-detected: `~/.gemini/antigravity`, `~/.gemini/antigravity-ide`, or `~/.gemini/antigravity-cli` | `./.agent` | `skills/gsd-*/SKILL.md` | `agents/gsd-*.md` | Gemini-style `settings.json` hook entries when installed by GSD |
-| Cursor | `~/.cursor` | `./.cursor` | `skills/gsd-*/SKILL.md` | `agents/gsd-*.md` | Rule references under `rules/`; `hooks.json` with sessionStart context injection and postToolUse STATE.md monitor (#777) |
-| Windsurf | `~/.codeium/windsurf` | `./.windsurf` | `skills/gsd-*/SKILL.md` | `agents/gsd-*.md` | Rule references under `rules/`; no GSD hooks |
-| Augment Code | `~/.augment` | `./.augment` | `skills/gsd-*/SKILL.md` | `agents/gsd-*.md` | No GSD hooks or statusline |
-| Trae | `~/.trae` | `./.trae` | `skills/gsd-*/SKILL.md` | `agents/gsd-*.md` | Rule references under `rules/`; no GSD hooks |
-| Qwen Code | `~/.qwen` | `./.qwen` | `skills/gsd-*/SKILL.md` | `agents/gsd-*.md` | Common GSD settings and hook entries where supported |
-| Hermes Agent | `~/.hermes` | `./.hermes` | `skills/gsd/DESCRIPTION.md` plus `skills/gsd/gsd-*/SKILL.md` | `agents/gsd-*.md` | Common GSD settings and hook entries where supported |
-| CodeBuddy | `~/.codebuddy` | `./.codebuddy` | `skills/gsd-*/SKILL.md` (`user-invocable: false`) | `agents/gsd-*.md` | `/gsd-*` slash commands under `commands/`; common GSD settings and hook entries where supported |
-| Cline | `~/.cline` | project root | `.clinerules` | Rules only | No GSD hooks or statusline |
+| Kimi CLI | First-existing generic root: `~/.config/agents` recommended, then `~/.agents` when `~/.agents/skills` exists and `~/.config/agents/skills` does not | Deferred and guarded | `skills/gsd-*/SKILL.md` (flat) invoked as `/skill:gsd-*` | `agents/gsd.yaml`, `agents/gsd.md`, and `agents/subagents/gsd-*` YAML/prompt pairs | Explicit `kimi --agent-file <configRoot>/agents/gsd.yaml`; no GSD hooks or statusline |
+| Codex | `~/.codex` | `./.codex` | `skills/gsd-*/SKILL.md` (flat) | `agents/` source markdown plus per-agent TOML | `config.toml` `[agents.gsd-*]`, `[features].hooks` (canonical; legacy alias `codex_hooks` is recognized and migrated forward on reinstall, #3566), and hook tables |
+| GitHub Copilot | `~/.copilot` | `./.github` | `skills/gsd-*/SKILL.md` (flat), `copilot-instructions.md`, and `AGENTS.md` (repo root, local) | `.agent.md` files | Self-contained `sessionStart` hook (`hooks/gsd-session.json`, inline `command` type); no statusline |
+| Antigravity | auto-detected: `~/.gemini/antigravity`, `~/.gemini/antigravity-ide`, or `~/.gemini/antigravity-cli` | `./.agent` | `skills/gsd-ns-*/SKILL.md` (6 routers) + `skills/gsd-ns-*/skills/<name>/SKILL.md` (nested concretes) | `agents/gsd-*.md` | Gemini-style `settings.json` hook entries when installed by GSD |
+| Cursor | `~/.cursor` | `./.cursor` | `skills/gsd-*/SKILL.md` (flat) | `agents/gsd-*.md` | Rule references under `rules/`; `hooks.json` with sessionStart context injection and postToolUse STATE.md monitor (#777) |
+| Windsurf | `~/.codeium/windsurf` | `./.windsurf` | `skills/gsd-*/SKILL.md` (flat) | `agents/gsd-*.md` | Rule references under `rules/`; no GSD hooks |
+| Augment Code | `~/.augment` | `./.augment` | `skills/gsd-ns-*/SKILL.md` (6 routers) + `skills/gsd-ns-*/skills/<name>/SKILL.md` (nested concretes) | `agents/gsd-*.md` | No GSD hooks or statusline |
+| Trae | `~/.trae` | `./.trae` | `skills/gsd-ns-*/SKILL.md` (6 routers) + `skills/gsd-ns-*/skills/<name>/SKILL.md` (nested concretes) | `agents/gsd-*.md` | Rule references under `rules/`; no GSD hooks |
+| Qwen Code | `~/.qwen` | `./.qwen` | `skills/gsd-ns-*/SKILL.md` (6 routers) + `skills/gsd-ns-*/skills/<name>/SKILL.md` (nested concretes) | `agents/gsd-*.md` | Common GSD settings and hook entries where supported |
+| Hermes Agent | `~/.hermes` | `./.hermes` | `skills/gsd/ns-*/SKILL.md` (6 routers, prefix='') + `skills/gsd/ns-*/skills/<name>/SKILL.md` (nested concretes) | `agents/gsd-*.md` | Common GSD settings and hook entries where supported |
+| CodeBuddy | `~/.codebuddy` | `./.codebuddy` | `skills/gsd-*/SKILL.md` (flat, `user-invocable: false`) | `agents/gsd-*.md` | `/gsd-*` slash commands under `commands/`; common GSD settings and hook entries where supported |
+| Cline | `~/.cline` | project root | `skills/gsd-ns-*/SKILL.md` (6 routers) + `skills/gsd-ns-*/skills/<name>/SKILL.md` (nested concretes) + `.clinerules` | Rules only | No GSD hooks or statusline |
 
 ### Upstream Contract Sources
 
