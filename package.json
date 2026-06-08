@@ -83,6 +83,7 @@
     "generate:identity": "node scripts/generate-package-identity.cjs",
     "prepack": "npm run build:lib",
     "prepare": "npm run build:lib",
+    "version": "node scripts/sync-manifest-versions.cjs --stage",
     "prepublishOnly": "npm run build:lib && npm run build:hooks",
     "pretest": "npm run build:lib && npm run lint:skill-deps",
     "pretest:coverage": "npm run build:lib && npm run lint:skill-deps",
