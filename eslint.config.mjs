@@ -89,6 +89,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/runtime-config-adapter-registry.cjs',
       'gsd-core/bin/lib/command-routing-hub.cjs',
       'gsd-core/bin/lib/core.cjs',
+      'gsd-core/bin/lib/io.cjs',
       'gsd-core/bin/lib/drift.cjs',
       'gsd-core/bin/lib/cjs-command-router-adapter.cjs',
       'gsd-core/bin/lib/phase-command-router.cjs',

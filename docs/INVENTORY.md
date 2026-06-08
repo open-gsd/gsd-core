@@ -370,7 +370,7 @@ The `gsd-planner` agent is decomposed into a core agent plus reference modules t
 
 ---
 
-## CLI Modules (90 shipped)
+## CLI Modules (91 shipped)
 
 Full listing: `gsd-core/bin/lib/*.cjs`.
 
@@ -396,7 +396,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `config-types.cjs` | TypeScript type definitions for the `model_policy` config block — `ModelPolicyConfig`, `TierEntry`, `RuntimeTiers`; compiled from `src/config-types.cts` at publish time (ADR-457) |
 | `configuration.cjs` | Configuration Module — canonical config loading, legacy-key normalization, defaults merge, and explicit on-disk migration; source of truth for both SDK and CJS consumers |
 | `context-utilization.cjs` | Pure classifier for `gsd-health --context` — turns (tokensUsed, contextWindow) into a `{ percent, state }` triage result against the 60%/70% fracture-point thresholds (#2792) |
-| `core.cjs` | Error handling, output formatting, shared utilities, runtime fallbacks; compatibility re-exports for planning-workspace helpers |
+| `core.cjs` | Shared utilities and runtime fallbacks; compatibility re-exports for planning-workspace and I/O (`io.cjs`) helpers |
 | `decisions.cjs` | Parses CONTEXT.md `<decisions>` blocks; accepts numeric (D-42) and alphanumeric (D-INFRA-01) IDs; returns `{id, text, category, tags, trackable}` |
 | `docs.cjs` | Docs-update workflow init, Markdown scanning, monorepo detection |
 | `drift.cjs` | Post-execute codebase structural drift detector (#2003): classifies file changes into new-dir/barrel/migration/route categories and round-trips `last_mapped_commit` frontmatter |
@@ -412,6 +412,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `installer-migration-report.cjs` | Installer migration report projection and blocked-action guard for install/update integration |
 | `installer-migrations.cjs` | Installer migration planning, artifact classification, install-state persistence, journaled apply, and rollback helpers |
 | `intel.cjs` | Codebase intel store backing `/gsd-map-codebase --query` and `gsd-intel-updater` |
+| `io.cjs` | CLI I/O primitives — `output`/`error` emission, JSON-error mode, and large-payload temp-file spillover (extracted from `core.cjs`, ADR-857) |
 | `learnings.cjs` | Cross-phase learnings extraction for `/gsd-extract-learnings` |
 | `legacy-cleanup.cjs` | Detect and remove leftover get-shit-done-cc artifacts; exports `planLegacyCleanup` (pure scan) and `applyLegacyCleanup` (thin IO applier) that root out stale files from the old package across every GSD-managed runtime config directory (#607) |
 | `milestone.cjs` | Milestone archival, requirements marking |

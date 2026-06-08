@@ -17,8 +17,8 @@ import path from 'node:path';
 import os from 'node:os';
 import readline from 'node:readline';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import core = require('./core.cjs');
-const { output, error, reapStaleTempFiles } = core;
+import ioModule = require('./io.cjs');
+const { output, error, reapStaleTempFiles } = ioModule;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

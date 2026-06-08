@@ -342,7 +342,8 @@ Node.js CLI utility (`gsd-tools.cjs`) with domain modules split across `gsd-core
 
 | Module                 | Responsibility                                                                                      |
 | ---------------------- | --------------------------------------------------------------------------------------------------- |
-| `core.cjs`             | Error handling, output formatting, shared utilities; compatibility re-exports for planning helpers |
+| `core.cjs`             | Shared utilities; compatibility re-exports for planning and I/O (`io.cjs`) helpers                  |
+| `io.cjs`               | CLI I/O primitives — output/error emission, JSON-error mode, large-payload temp-file spillover     |
 | `planning-workspace.cjs` | Planning seam (`planningDir`, `planningPaths`, active workstream routing, `.planning/.lock`)      |
 | `state.cjs`            | STATE.md parsing, updating, progression, metrics                                                    |
 | `phase.cjs`            | Phase directory operations, decimal numbering, plan indexing                                        |
