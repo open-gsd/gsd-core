@@ -222,7 +222,7 @@ input rather than conversation history.
 ## Related
 
 - [Context engineering](context-engineering.md) — the upstream principle that
-  motivates this design
+  motivates this design; see also [Lifecycle hooks and context headroom](context-engineering.md#lifecycle-hooks-and-context-headroom) for how per-turn headroom tracking and forked-context skills extend the same principle at runtime
 - [Configure model profiles](../how-to/configure-model-profiles.md) — how to
   assign model tiers per agent
 - [Configuration reference](../CONFIGURATION.md) — full `config.json` schema

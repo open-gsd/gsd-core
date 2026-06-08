@@ -20,7 +20,6 @@ const INERT_WORKFLOWS = new Set([
   'auto-backmerge.yml',
   'close-draft-prs.yml',
   'dismiss-unauthorized-pr-approvals.yml',
-  'pr-gate.yml',
   'pr-target-validator.yml',
   'pr-template-format.yml',
   'require-issue-link.yml',

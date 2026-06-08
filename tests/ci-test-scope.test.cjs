@@ -343,7 +343,7 @@ describe('INERT_WORKFLOWS allowlist integrity guard', () => {
   const knownInert = [
     'stale.yml', 'branch-cleanup.yml', 'branch-naming.yml', 'auto-label-issues.yml',
     'auto-branch.yml', 'auto-backmerge.yml', 'close-draft-prs.yml',
-    'dismiss-unauthorized-pr-approvals.yml', 'pr-gate.yml', 'pr-target-validator.yml',
+    'dismiss-unauthorized-pr-approvals.yml', 'pr-target-validator.yml',
     'pr-template-format.yml', 'require-issue-link.yml', 'changeset-required.yml',
     'docs-required.yml', 'discord-changelog.yml',
   ];
