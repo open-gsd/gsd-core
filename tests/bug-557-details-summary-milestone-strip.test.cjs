@@ -156,6 +156,27 @@ const ROADMAP_DETAILS_SUMMARY_WITH_FLAT_PHASE_DETAILS = `# Roadmap: mcp-server-h
 **Goal**: Future backlog item.
 `;
 
+const ROADMAP_DETAILS_SUMMARY_WITH_FENCED_PHASE_EXAMPLE = `# Roadmap: fenced example
+
+<details open>
+<summary>v1.1 Current (Phases 8-9) - PLANNED</summary>
+
+- [ ] **Phase 9: Real Phase**
+
+</details>
+
+## Phase Details
+
+\`\`\`markdown
+### Phase 9: Fenced Example Phase
+**Goal**: This example must not be treated as roadmap structure.
+\`\`\`
+
+### Phase 9: Real Phase
+**Goal**: Use the real phase details outside the fenced block.
+**Requirements**: REAL-01
+`;
+
 const STATE_V11 = `---
 gsd_state_version: 1.0
 milestone: v1.1
@@ -298,6 +319,34 @@ describe('bug #557 — <details>/<summary> active milestone strip', () => {
     assert.strictEqual(output.phase_number, '9');
     assert.strictEqual(output.phase_name, 'Samsung Raw Import and Provenance');
     assert.strictEqual(output.phase_req_ids, 'SAMSUNG-02, SAMSUNG-03, SAMSUNG-04, SAMSUNG-05, LAKE-01, LAKE-02');
+  });
+
+  test('init plan-phase ignores fenced phase-like headings when appending flat Phase Details', () => {
+    const planning = path.join(tmpDir, '.planning');
+    fs.writeFileSync(path.join(planning, 'ROADMAP.md'), ROADMAP_DETAILS_SUMMARY_WITH_FENCED_PHASE_EXAMPLE, 'utf-8');
+    fs.writeFileSync(path.join(planning, 'STATE.md'), STATE_V11, 'utf-8');
+    fs.writeFileSync(path.join(planning, 'config.json'), '{}', 'utf-8');
+
+    const result = runGsdTools(['init', 'plan-phase', '9'], tmpDir);
+    assert.ok(result.success, `init plan-phase failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_found, true, 'Phase 9 must be found from the real heading');
+    assert.strictEqual(output.phase_name, 'Real Phase');
+    assert.strictEqual(output.phase_req_ids, 'REAL-01');
+  });
+
+  test('init plan-phase does not treat unreferenced backlog phases as active details phases', () => {
+    const planning = path.join(tmpDir, '.planning');
+    fs.writeFileSync(path.join(planning, 'ROADMAP.md'), ROADMAP_DETAILS_SUMMARY_WITH_FLAT_PHASE_DETAILS, 'utf-8');
+    fs.writeFileSync(path.join(planning, 'STATE.md'), STATE_V11, 'utf-8');
+    fs.writeFileSync(path.join(planning, 'config.json'), '{}', 'utf-8');
+
+    const result = runGsdTools(['init', 'plan-phase', '999.1'], tmpDir);
+    assert.ok(result.success, `init plan-phase failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_found, false, 'Backlog phase 999.1 must not be active for v1.1');
   });
 
   test('init progress scopes disk and roadmap phases to active details summary references', () => {

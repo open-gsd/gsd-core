@@ -46,52 +46,73 @@ function normalizePhaseTokenForScope(token: string): string {
 
 function collectReferencedPhaseTokens(content: string): Set<string> {
   const refs = new Set<string>();
-  const phaseRefPattern = /\bPhase\s+([\w][\w.-]*)\s*:/gi;
-  let match: RegExpExecArray | null;
-  const unfencedContent = stripFencedLines(content);
-  while ((match = phaseRefPattern.exec(unfencedContent)) !== null) {
-    refs.add(normalizePhaseTokenForScope(match[1]));
-  }
+  forEachMarkdownLineOutsideFences(content, (line) => {
+    const phaseRefPattern = /\bPhase\s+([\w][\w.-]*)\s*:/gi;
+    let match: RegExpExecArray | null;
+    while ((match = phaseRefPattern.exec(line)) !== null) {
+      refs.add(normalizePhaseTokenForScope(match[1]));
+    }
+  });
   return refs;
 }
 
-function collectPhaseHeadingMatches(content: string): Array<{ index: number; token: string }> {
-  const matches: Array<{ index: number; token: string }> = [];
-  const phaseHeadingPattern = /^#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*)\s*:/i;
+function forEachMarkdownLineOutsideFences(
+  content: string,
+  visit: (line: string, offset: number) => void,
+): void {
   let fenceChar: string | null = null;
-  let fenceLen = 0;
+  let fenceLength = 0;
   let offset = 0;
 
   for (const line of content.split('\n')) {
     const fenceMatch = line.match(/^\s{0,3}((?:`{3,}|~{3,}))(.*)/);
     if (fenceMatch) {
-      const char = fenceMatch[1][0];
-      const len = fenceMatch[1].length;
+      const marker = fenceMatch[1];
+      const char = marker[0];
+      const length = marker.length;
       const trailing = fenceMatch[2] || '';
       if (!fenceChar) {
         fenceChar = char;
-        fenceLen = len;
-      } else if (char === fenceChar && len >= fenceLen && /^\s*$/.test(trailing)) {
+        fenceLength = length;
+      } else if (char === fenceChar && length >= fenceLength && /^\s*$/.test(trailing)) {
         fenceChar = null;
-        fenceLen = 0;
+        fenceLength = 0;
       }
     } else if (!fenceChar) {
-      const headingMatch = line.match(phaseHeadingPattern);
-      if (headingMatch) {
-        matches.push({
-          index: offset + (headingMatch.index ?? 0),
-          token: normalizePhaseTokenForScope(headingMatch[1]),
-        });
-      }
+      visit(line, offset);
     }
     offset += line.length + 1;
   }
+}
 
-  return matches;
+interface MarkdownHeading {
+  index: number;
+  level: number;
+  phaseToken: string | null;
+}
+
+function collectMarkdownHeadingsOutsideFences(content: string): MarkdownHeading[] {
+  const headings: MarkdownHeading[] = [];
+  forEachMarkdownLineOutsideFences(content, (line, offset) => {
+    const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+    if (!headingMatch) return;
+
+    const phaseMatch = headingMatch[2].match(/^(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*)\s*:/i);
+    headings.push({
+      index: offset,
+      level: headingMatch[1].length,
+      phaseToken: phaseMatch ? normalizePhaseTokenForScope(phaseMatch[1]) : null,
+    });
+  });
+  return headings;
 }
 
 function collectPhaseHeadingTokens(content: string): Set<string> {
-  return new Set(collectPhaseHeadingMatches(content).map((match) => match.token));
+  return new Set(
+    collectMarkdownHeadingsOutsideFences(content)
+      .map((heading) => heading.phaseToken)
+      .filter((token): token is string => token !== null),
+  );
 }
 
 function appendReferencedPhaseDetailSections(fullContent: string, scopedContent: string): string {
@@ -103,19 +124,23 @@ function appendReferencedPhaseDetailSections(fullContent: string, scopedContent:
   if (referenced.size === 0) return scopedContent;
 
   const searchableContent = stripShippedMilestones(fullContent);
-  const headings = collectPhaseHeadingMatches(searchableContent);
+  const headings = collectMarkdownHeadingsOutsideFences(searchableContent);
   const additions: string[] = [];
 
   for (let i = 0; i < headings.length; i++) {
     const heading = headings[i];
-    if (!referenced.has(heading.token)) continue;
+    const token = heading.phaseToken;
+    if (!token) continue;
+    if (!referenced.has(token)) continue;
 
-    const next = headings[i + 1];
+    const next = headings
+      .slice(i + 1)
+      .find((candidate) => candidate.phaseToken !== null || candidate.level <= heading.level);
     const end = next ? next.index : searchableContent.length;
     const section = searchableContent.slice(heading.index, end).trim();
     if (section && !scopedContent.includes(section)) {
       additions.push(section);
-      referenced.delete(heading.token);
+      referenced.delete(token);
     }
   }
 
