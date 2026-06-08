@@ -14,6 +14,9 @@ import { execGit, platformWriteSync, platformReadSync } from './shell-command-pr
 import ioModule = require('./io.cjs');
 const { output, error, ERROR_REASON, setJsonErrorMode, getJsonErrorMode, GSD_TEMP_DIR, reapStaleTempFiles } = ioModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseIdModule = require('./phase-id.cjs');
+const { escapeRegex, normalizePhaseName, getMilestoneFromPhaseId, getPhaseDirFromPhaseId, phaseMarkdownRegexSource, phaseMarkdownRegexSourceExact, comparePhaseNum, extractPhaseToken, phaseTokenMatches } = phaseIdModule;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 import modelProfiles = require('./model-profiles.cjs');
 const { MODEL_PROFILES, AGENT_TO_PHASE_TYPE, VALID_PHASE_TYPES: _VALID_PHASE_TYPES, AGENT_DEFAULT_TIERS, VALID_AGENT_TIERS, nextTier } = modelProfiles;
 import { MODEL_ALIAS_MAP, RUNTIME_PROFILE_MAP, KNOWN_RUNTIMES, RUNTIMES_WITH_REASONING_EFFORT, RUNTIMES_WITH_FAST_MODE, PROVIDER_PRESETS, KNOWN_PROVIDERS } from './model-catalog.cjs';
@@ -518,197 +521,11 @@ function pruneOrphanedWorktrees(repoRoot: string): string[] {
 
 // ─── Planning workspace (pathing + active workstream + lock) moved to planning-workspace.cjs ───
 
-// ─── Phase utilities ──────────────────────────────────────────────────────────
-
-function escapeRegex(value: unknown): string {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function normalizePhaseName(phase: unknown): string {
-  const str = String(phase);
-  // Strip optional project_code prefix (e.g., 'CK-01' → '01')
-  const stripped = str.replace(/^[A-Z]{1,6}-(?=\d)/, '');
-  // Milestone-prefixed phase IDs: M-NN or M-N-N (deep decomposition).
-  const milestoneMatch = stripped.match(/^(\d+)((?:-\d+)+)([A-Z]?(?:\.\d+)*)$/i);
-  if (milestoneMatch) {
-    const major = milestoneMatch[1].padStart(2, '0');
-    const subSegments = milestoneMatch[2].slice(1).split('-').map(s => s.padStart(2, '0'));
-    const suffix = milestoneMatch[3] || '';
-    return `${major}-${subSegments.join('-')}${suffix}`;
-  }
-  // Standard numeric phases: 1, 01, 12A, 12.1
-  const match = stripped.match(/^(\d+)([A-Z])?((?:\.\d+)*)/i);
-  if (match) {
-    const padded = match[1].padStart(2, '0');
-    // Preserve original case of letter suffix (#1962).
-    const letter = match[2] || '';
-    const decimal = match[3] || '';
-    return padded + letter + decimal;
-  }
-  // Custom phase IDs (e.g. PROJ-42, AUTH-101): return as-is
-  return str;
-}
-
-function getMilestoneFromPhaseId(phaseId: unknown): string | null {
-  const str = String(phaseId);
-  const stripped = str.replace(/^[A-Z]{1,6}-(?=\d)/i, '');
-  const m = stripped.match(/^0*(\d+)-\d/);
-  if (!m) return null;
-  const major = parseInt(m[1], 10);
-  if (major === 0 || major === 999) return null;
-  return `v${major}.0`;
-}
-
-function getPhaseDirFromPhaseId(phaseId: unknown, phaseName: string | null | undefined, projectCode: string | null | undefined): string | null {
-  const str = String(phaseId);
-  const stripped = str.replace(/^[A-Z]{1,6}-(?=\d)/i, '');
-  const m = stripped.match(/^0*(\d+)-(0*(\d+(?:-\d+)*))$/);
-  if (!m) return null;
-  const milestone = String(parseInt(m[1], 10)).padStart(2, '0');
-  const subParts = m[2].split('-').map(p => String(parseInt(p, 10)).padStart(2, '0'));
-  const sub = subParts.join('-');
-  const slug = phaseName
-    ? phaseName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
-    : '';
-  const parts = [milestone, sub, slug].filter(Boolean);
-  const base = parts.join('-');
-  return projectCode ? `${projectCode}-${base}` : base;
-}
-
-/**
- * Render a regex source fragment matching a phase number against ROADMAP/STATE
- * prose regardless of zero-padding on either side.
- */
-function phaseMarkdownRegexSource(phaseNum: unknown): string {
-  const stripped = String(phaseNum).replace(/^[A-Z]{1,6}-(?=\d)/i, '');
-
-  // Milestone-prefixed IDs: M-NN or M-N-N (deep).
-  const milestoneSegments = stripped.match(/^(\d+)((?:-\d+)*)([A-Z]?(?:\.\d+)*)$/i);
-  if (milestoneSegments && milestoneSegments[2]) {
-    const majorUnpadded = milestoneSegments[1].replace(/^0+/, '') || '0';
-    const subParts = milestoneSegments[2].slice(1).split('-');
-    const subFragments = subParts.map(s => {
-      const unpadded = s.replace(/^0+/, '') || '0';
-      return `0*${escapeRegex(unpadded)}`;
-    });
-    const suffix = milestoneSegments[3] || '';
-    const suffixFragment = suffix ? escapeRegex(suffix) : '';
-    return `0*${escapeRegex(majorUnpadded)}-${subFragments.join('-')}${suffixFragment}`;
-  }
-
-  // Plain numeric phase: 1, 01, 12A, 12.1
-  const match = stripped.match(/^0*(\d+)([A-Z])?((?:\.\d+)*)$/i);
-  if (!match) return escapeRegex(phaseNum);
-
-  const integer = match[1].replace(/^0+/, '') || '0';
-  const letter = match[2] ? escapeRegex(match[2]) : '';
-  const decimal = match[3] ? escapeRegex(match[3]) : '';
-  return `0*${escapeRegex(integer)}${letter}${decimal}`;
-}
-
-/**
- * #3599: when the caller passed a project-code-prefixed ID like `PROJ-42`,
- * return the exact-escaped form.
- */
-function phaseMarkdownRegexSourceExact(phaseNum: unknown): string | null {
-  const raw = String(phaseNum);
-  if (!/^[A-Z]{1,6}-(?=\d)/i.test(raw)) return null;
-  return escapeRegex(raw);
-}
-
-function comparePhaseNum(a: unknown, b: unknown): number {
-  // Strip optional project_code prefix before comparing
-  const sa = String(a).replace(/^[A-Z]{1,6}-(?=\d)/i, '');
-  const sb = String(b).replace(/^[A-Z]{1,6}-(?=\d)/i, '');
-
-  const milestoneA = sa.match(/^(\d+)((?:-\d+)+)([A-Z]?(?:\.\d+)*)$/i);
-  const milestoneB = sb.match(/^(\d+)((?:-\d+)+)([A-Z]?(?:\.\d+)*)$/i);
-
-  if (milestoneA && milestoneB) {
-    const segsA = [parseInt(milestoneA[1], 10), ...milestoneA[2].slice(1).split('-').map(s => parseInt(s, 10))];
-    const segsB = [parseInt(milestoneB[1], 10), ...milestoneB[2].slice(1).split('-').map(s => parseInt(s, 10))];
-    const maxSegs = Math.max(segsA.length, segsB.length);
-    for (let i = 0; i < maxSegs; i++) {
-      const av = segsA[i] !== undefined ? segsA[i] : 0;
-      const bv = segsB[i] !== undefined ? segsB[i] : 0;
-      if (av !== bv) return av - bv;
-    }
-    const sufA = milestoneA[3] || '';
-    const sufB = milestoneB[3] || '';
-    if (sufA !== sufB) return sufA < sufB ? -1 : 1;
-    return 0;
-  }
-
-  if (milestoneA || milestoneB) return String(a).localeCompare(String(b));
-
-  const pa = sa.match(/^(\d+)([A-Z])?((?:\.\d+)*)/i);
-  const pb = sb.match(/^(\d+)([A-Z])?((?:\.\d+)*)/i);
-  if (!pa || !pb) return String(a).localeCompare(String(b));
-  const intDiff = parseInt(pa[1], 10) - parseInt(pb[1], 10);
-  if (intDiff !== 0) return intDiff;
-  const la = (pa[2] || '').toUpperCase();
-  const lb = (pb[2] || '').toUpperCase();
-  if (la !== lb) {
-    if (!la) return -1;
-    if (!lb) return 1;
-    return la < lb ? -1 : 1;
-  }
-  const aDecParts = pa[3] ? pa[3].slice(1).split('.').map(p => parseInt(p, 10)) : [];
-  const bDecParts = pb[3] ? pb[3].slice(1).split('.').map(p => parseInt(p, 10)) : [];
-  const maxLen = Math.max(aDecParts.length, bDecParts.length);
-  if (aDecParts.length === 0 && bDecParts.length > 0) return -1;
-  if (bDecParts.length === 0 && aDecParts.length > 0) return 1;
-  for (let i = 0; i < maxLen; i++) {
-    const av = Number.isFinite(aDecParts[i]) ? aDecParts[i] : 0;
-    const bv = Number.isFinite(bDecParts[i]) ? bDecParts[i] : 0;
-    if (av !== bv) return av - bv;
-  }
-  return 0;
-}
-
-/**
- * Extract the phase token from a directory name.
- */
-function extractPhaseToken(dirName: string): string {
-  const codePrefixMatch = dirName.match(/^([A-Z]{1,6})-(\d.*)/i);
-  let prefix = '';
-  let rest = dirName;
-  if (codePrefixMatch) {
-    prefix = codePrefixMatch[1] + '-';
-    rest = codePrefixMatch[2];
-  }
-
-  const segments = rest.split('-');
-  const tokenSegments: string[] = [];
-  for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i];
-    if (/^\d/.test(seg)) {
-      tokenSegments.push(seg);
-    } else {
-      break;
-    }
-  }
-
-  if (tokenSegments.length === 0) {
-    return dirName;
-  }
-
-  return prefix + tokenSegments.join('-');
-}
-
-/**
- * Check if a directory name's phase token matches the normalized phase exactly.
- */
-function phaseTokenMatches(dirName: string, normalized: string): boolean {
-  const token = extractPhaseToken(dirName);
-  if (token.toUpperCase() === normalized.toUpperCase()) return true;
-  const stripped = dirName.replace(/^[A-Z]{1,6}-(?=\d)/i, '');
-  if (stripped !== dirName) {
-    const strippedToken = extractPhaseToken(stripped);
-    if (strippedToken.toUpperCase() === normalized.toUpperCase()) return true;
-  }
-  return false;
-}
+// ─── Phase utilities (pure helpers re-exported from phase-id.cjs) ─────────────
+// escapeRegex, normalizePhaseName, getMilestoneFromPhaseId, getPhaseDirFromPhaseId,
+// phaseMarkdownRegexSource, phaseMarkdownRegexSourceExact, comparePhaseNum,
+// extractPhaseToken, phaseTokenMatches
+// — all imported via `phaseIdModule` above; internal callers use the destructured bindings.
 
 function extractCanonicalPlanId(filename: string): string {
   const base = filename.replace(/-PLAN\.md$/i, '').replace(/-SUMMARY\.md$/i, '').replace(/\.md$/i, '');

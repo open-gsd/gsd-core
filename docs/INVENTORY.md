@@ -370,7 +370,7 @@ The `gsd-planner` agent is decomposed into a core agent plus reference modules t
 
 ---
 
-## CLI Modules (91 shipped)
+## CLI Modules (92 shipped)
 
 Full listing: `gsd-core/bin/lib/*.cjs`.
 
@@ -421,6 +421,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `package-identity.cjs` | Generated single source for GSD's published-package coordinates (npm name, bin name, repo slug, changelog URL, manual-install command), derived from package.json; read by the update worker, `check-latest-version`, and installer (#498) |
 | `package-legitimacy.cjs` | Registry-API package legitimacy verdicts (OK/SUS/SLOP) from npm/PyPI/crates, slopcheck optional |
 | `phase-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools phase` |
+| `phase-id.cjs` | Pure phase-id parsing/matching helpers — normalize, token match, milestone/phase-dir id parsing, phase-markdown regex builders (extracted from `core.cjs`, ADR-857) |
 | `phase-lifecycle.cjs` | Pure-computation phase lifecycle helpers extracted from the phase-lifecycle SDK handler |
 | `phase.cjs` | Phase directory operations, decimal numbering, plan indexing |
 | `phases-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools phases` |

@@ -14,6 +14,9 @@ Module owning `milestone complete` (archive roadmap/requirements/phases, build M
 ### Dispatch Pipeline Module
 Module that composes Dispatch Policy Module, Query Execution Policy Module, and per-stage handlers (input-validation, plan, execution, result-builder, formatting, error-mapping, observability) into the end-to-end pipeline that produces a `QueryDispatchResult`. The SDK-era pipeline collapsed onto the Command Routing Hub per ADR-0174; current dispatch seam: `gsd-core/bin/lib/command-routing-hub.cjs` (see Command Routing Hub below).
 
+### Phase Id Module
+Module owning the pure phase-id parsing and matching helpers: phase-name normalization, phase-token extraction/matching, milestone- and phase-dir id parsing, and phase-markdown regex builders (`escapeRegex`, `normalizePhaseName`, `comparePhaseNum`, `extractPhaseToken`, `phaseTokenMatches`, `phaseMarkdownRegexSource`/`phaseMarkdownRegexSourceExact`, `getMilestoneFromPhaseId`, `getPhaseDirFromPhaseId`). Pure string/regex — no I/O, no config, no other core dependency. Extracted from the Core module per ADR-857 rollout phase 2a (#865) as the cycle-free leaf that unblocks the roadmap-parser and phase-locator extractions; `core.cjs` re-exports the helpers for back-compat. Source of truth: `gsd-core/bin/lib/phase-id.cjs` (generated from `src/phase-id.cts`).
+
 ### Phase Lifecycle Module
 Module owning phase create, rename, complete, remove, list, and plan-index operations, plus phase-dir prefix validation, STATE.md staleness detection, and auto-prune behaviour. Entry point: `gsd-core/bin/lib/phase.cjs` (CJS surface). Typed phase events: `GSDPhaseStartEvent`, `GSDPhaseStepStartEvent`, `GSDPhaseStepCompleteEvent`, `GSDPhaseCompleteEvent`. (The SDK native-query surface, the `types.ts` event definitions, `phase-runner.ts`, and `phase-prompt.ts` were retired with the SDK package per ADR-0174.)
 

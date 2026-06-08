@@ -310,6 +310,7 @@
       "package-identity.cjs",
       "package-legitimacy.cjs",
       "phase-command-router.cjs",
+      "phase-id.cjs",
       "phase-lifecycle.cjs",
       "phase.cjs",
       "phases-command-router.cjs",
