@@ -75,6 +75,25 @@ If multiple runtime installs are detected and the invoking runtime cannot be det
 **If VERSION file missing (version resolves to `0.0.0`):** report the installed version as Unknown and proceed to install (treated as `0.0.0` for comparison).
 </step>
 
+<step name="parse_update_channel">
+Determine the release channel from `$ARGUMENTS`. This selects which npm dist-tag the entire update flow targets — `latest` (stable) by default, or `next` (the RC channel established by ADR #660) when the user opts in with `--next`/`--rc`:
+
+```bash
+case " $ARGUMENTS " in
+  *" --next "*|*" --rc "*)
+    TAG="next"
+    CHANNEL_LABEL="next (RC)"
+    ;;
+  *)
+    TAG="latest"
+    CHANNEL_LABEL="latest (stable)"
+    ;;
+esac
+```
+
+`TAG` is restricted to `latest`/`next` by `check-latest-version.cjs` (it rejects any other value with exit 2), so no arbitrary dist-tag can leak through. Omitting `--next`/`--rc` reproduces the prior behavior exactly: `TAG=latest`.
+</step>
+
 <step name="check_latest_version">
 Check npm for latest version via the deterministic script. **Do NOT run `npm view` or `npm search` directly** — the package name must come from the script, not from a free choice at execution time. (#2992: LLM-driven prescriptions of npm package names produced wrong-package queries; moving the package name into a script constant closes that gap.)
 
@@ -91,7 +110,7 @@ if [ -z "$GSD_DIR" ]; then
   LATEST_VERSION=""
   LATEST_REASON="no_install_detected"
 else
-  LATEST_RESULT="$(node "$GSD_DIR/gsd-core/bin/check-latest-version.cjs" --json 2>/dev/null)"
+  LATEST_RESULT="$(node "$GSD_DIR/gsd-core/bin/check-latest-version.cjs" --json --tag "$TAG" 2>/dev/null)"
   LATEST_STATUS=$?
   # #2993 CR: when node is missing or the script doesn't exist, LATEST_RESULT
   # is empty and piping it to `jq` produces a parse error on stderr while
@@ -114,7 +133,7 @@ fi
 ```text
 Couldn't check for updates (reason: {LATEST_REASON}, exit: {LATEST_STATUS}).
 
-To update manually: `npx -y --package=@opengsd/gsd-core@latest -- gsd-core --global`
+To update manually: `npx -y --package=@opengsd/gsd-core@{TAG} -- gsd-core --global`
 ```
 
 Exit.
@@ -122,6 +141,14 @@ Exit.
 
 <step name="compare_versions">
 Compare installed vs latest:
+
+**Only when `TAG=next`** (the user passed `--next`/`--rc`), prepend a channel banner so they know they are leaving the stable line — add this line immediately after the `**Latest:**` line in whichever output block renders:
+
+**Channel:** {CHANNEL_LABEL}
+
+On the default stable channel (`TAG=latest`), do NOT add a channel line — the output must match the prior stable behavior exactly.
+
+When `TAG=next`, the "latest" value is the release candidate published under `@next` (e.g. `1.4.0-rc.1`). Apply standard semver precedence for prereleases (`1.4.0-rc.1` is newer than `1.3.1` but older than the final `1.4.0`). Do NOT treat an `-rc.N` suffix as a dev install or as "behind" — offer it as an available update.
 
 **If installed == latest:**
 ```
@@ -327,17 +354,17 @@ RUNTIME_FLAG="--$TARGET_RUNTIME"
 
 **If LOCAL install:**
 ```bash
-npx -y --package=@opengsd/gsd-core@latest -- gsd-core "$RUNTIME_FLAG" --local
+npx -y --package=@opengsd/gsd-core@"$TAG" -- gsd-core "$RUNTIME_FLAG" --local
 ```
 
 **If GLOBAL install:**
 ```bash
-npx -y --package=@opengsd/gsd-core@latest -- gsd-core "$RUNTIME_FLAG" --global
+npx -y --package=@opengsd/gsd-core@"$TAG" -- gsd-core "$RUNTIME_FLAG" --global
 ```
 
 **If UNKNOWN install:**
 ```bash
-npx -y --package=@opengsd/gsd-core@latest -- gsd-core --claude --global
+npx -y --package=@opengsd/gsd-core@"$TAG" -- gsd-core --claude --global
 ```
 
 Capture output. If install fails, show error and exit.
