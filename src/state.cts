@@ -1073,6 +1073,36 @@ function syncStateFrontmatter(content: string, cwd: string | undefined): string 
     derivedFm['status'] = existingFm['status'];
   }
 
+  // Bug #905: preserve scalar fields that buildStateFrontmatter can only derive
+  // from body annotations (Current Phase:, Current Plan:, etc.). When those
+  // annotations are absent — e.g. after an agent or tool rewrites the body —
+  // buildStateFrontmatter returns no value for those keys. Mirror the same
+  // fallback pattern used in cmdStateJson so the existing frontmatter values
+  // survive every writeStateMd call.
+  if (!derivedFm['stopped_at'] && existingFm['stopped_at']) {
+    derivedFm['stopped_at'] = existingFm['stopped_at'];
+  }
+  if (!derivedFm['paused_at'] && existingFm['paused_at']) {
+    derivedFm['paused_at'] = existingFm['paused_at'];
+  }
+  if (!derivedFm['current_phase'] && existingFm['current_phase']) {
+    derivedFm['current_phase'] = existingFm['current_phase'];
+  }
+  if (!derivedFm['current_phase_name'] && existingFm['current_phase_name']) {
+    derivedFm['current_phase_name'] = existingFm['current_phase_name'];
+  }
+  if (!derivedFm['current_plan'] && existingFm['current_plan']) {
+    derivedFm['current_plan'] = existingFm['current_plan'];
+  }
+  // progress is a sub-object: fall back to existing only when the body+disk
+  // scan produced NO progress block at all. When buildStateFrontmatter did
+  // derive a progress block (even a lower one), that derived value wins — the
+  // shouldPreserveExistingProgress cross-milestone logic is applied later in
+  // cmdStateJson on the read path where it is appropriate.
+  if (!derivedFm['progress'] && existingFm['progress']) {
+    derivedFm['progress'] = normalizeProgressNumbers(existingFm['progress']);
+  }
+
   const yamlStr = reconstructFrontmatter(derivedFm as unknown as Frontmatter);
   return `---\n${yamlStr}\n---\n\n${body}`;
 }
@@ -1264,6 +1294,17 @@ function cmdStateJson(cwd: string, raw: boolean): void {
   // Preserve existing status when body-derived status is 'unknown' (same logic as syncStateFrontmatter).
   if (built['status'] === 'unknown' && existingFm && existingFm['status'] && existingFm['status'] !== 'unknown') {
     built['status'] = existingFm['status'];
+  }
+  // Bug #905: preserve scalar fields when body annotations are absent.
+  // Mirrors the same fallback pattern applied in syncStateFrontmatter.
+  if (existingFm && !built['current_phase'] && existingFm['current_phase']) {
+    built['current_phase'] = existingFm['current_phase'];
+  }
+  if (existingFm && !built['current_phase_name'] && existingFm['current_phase_name']) {
+    built['current_phase_name'] = existingFm['current_phase_name'];
+  }
+  if (existingFm && !built['current_plan'] && existingFm['current_plan']) {
+    built['current_plan'] = existingFm['current_plan'];
   }
   // Preserve curated cross-milestone aggregates when local disk scanning sees
   // only a narrower realized subset (#3242 Bug A). Stale lower counters still
