@@ -97,6 +97,7 @@
         "bug-3286-state-write-routing.test.cjs",
         "bug-3454-state-dollar-backreference-growth.test.cjs",
         "bug-397-state-preserve-executor-authored.test.cjs",
+        "bug-905-state-syncstatefrontmatter-preserve-scalars.test.cjs",
         "state-acquirestatelock-non-eexist.test.cjs",
         "state-prune.test.cjs",
         "state.test.cjs"
