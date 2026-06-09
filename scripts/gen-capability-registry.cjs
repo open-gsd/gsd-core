@@ -29,61 +29,10 @@ const SCHEMA_VERSION = '1';
 
 // ─── Loop Host Contract ───────────────────────────────────────────────────────
 //
-// Inline constant — hardcoded from ADR-894 §3 (12 points + per-step agentRoles +
-// coreArtifacts). This represents the host contract that will be generated from
-// workflow markers once the workflow-marker infrastructure is in place.
-//
-// TODO 3a-impl-2: replace this constant with the generated-from-workflows host
-// contract (ADR-894 §3). The workflow markers (<loop-point>, <agent-role>,
-// <loop-artifact>) must be authored in each of the five step workflows; the
-// gen-loop-host-contract.cjs generator will parse them and produce this object.
-const LOOP_HOST_CONTRACT = [
-  {
-    step: 'discuss',
-    points: ['discuss:pre', 'discuss:post'],
-    agentRoles: ['orchestrator'],
-    coreArtifacts: {
-      produces: ['CONTEXT.md'],
-      consumes: [],
-    },
-  },
-  {
-    step: 'plan',
-    points: ['plan:pre', 'plan:post'],
-    agentRoles: ['researcher', 'planner', 'checker'],
-    coreArtifacts: {
-      produces: ['PLAN.md'],
-      consumes: ['CONTEXT.md'],
-    },
-  },
-  {
-    step: 'execute',
-    points: ['execute:pre', 'execute:wave:pre', 'execute:wave:post', 'execute:post'],
-    agentRoles: ['executor', 'verifier'],
-    coreArtifacts: {
-      produces: ['SUMMARY.md'],
-      consumes: ['PLAN.md'],
-    },
-  },
-  {
-    step: 'verify',
-    points: ['verify:pre', 'verify:post'],
-    agentRoles: ['orchestrator'],
-    coreArtifacts: {
-      produces: ['UAT.md'],
-      consumes: ['SUMMARY.md'],
-    },
-  },
-  {
-    step: 'ship',
-    points: ['ship:pre', 'ship:post'],
-    agentRoles: ['orchestrator'],
-    coreArtifacts: {
-      produces: [],
-      consumes: ['UAT.md'],
-    },
-  },
-];
+// Generated from workflow markers by scripts/gen-loop-host-contract.cjs (ADR-894 §3).
+// Require the committed gsd-core/bin/lib/loop-host-contract.cjs artifact so the
+// registry generator and the loop-host-contract generator share one source of truth.
+const { LOOP_HOST_CONTRACT } = require('../gsd-core/bin/lib/loop-host-contract.cjs');
 
 // Canonical point order — explicit constant (do NOT rely on Set insertion order).
 // Used for point-ordering semantics in consumes-satisfiability validation and topo-sort.

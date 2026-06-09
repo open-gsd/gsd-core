@@ -1,3 +1,10 @@
+<!-- gsd:loop-host
+step: verify
+points: verify:pre, verify:post
+agent-roles: orchestrator
+produces: UAT.md
+consumes: SUMMARY.md
+-->
 <purpose>
 Validate built features through conversational testing with persistent state. Creates UAT.md that tracks test progress, survives /clear, and feeds gaps into /gsd:plan-phase --gaps.
 

@@ -370,7 +370,7 @@ The `gsd-planner` agent is decomposed into a core agent plus reference modules t
 
 ---
 
-## CLI Modules (98 shipped)
+## CLI Modules (99 shipped)
 
 Full listing: `gsd-core/bin/lib/*.cjs`.
 
@@ -418,6 +418,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `io.cjs` | CLI I/O primitives — `output`/`error` emission, JSON-error mode, and large-payload temp-file spillover (extracted from `core.cjs`, ADR-857) |
 | `learnings.cjs` | Cross-phase learnings extraction for `/gsd-extract-learnings` |
 | `legacy-cleanup.cjs` | Detect and remove leftover get-shit-done-cc artifacts; exports `planLegacyCleanup` (pure scan) and `applyLegacyCleanup` (thin IO applier) that root out stale files from the old package across every GSD-managed runtime config directory (#607) |
+| `loop-host-contract.cjs` | Generated Loop Host Contract — 12 loop points, per-step agent roles, and core artifacts for the five-step pipeline (discuss/plan/execute/verify/ship); emitted by `scripts/gen-loop-host-contract.cjs --write` (ADR-894 §3); consumed by `gen-capability-registry.cjs` |
 | `milestone.cjs` | Milestone archival, requirements marking |
 | `model-catalog.cjs` | CJS adapter over the shared model catalog JSON; exports canonical runtime tier defaults, agent profile maps, alias maps, and routing metadata for all CLI consumers |
 | `model-profiles.cjs` | Backward-compatible profile helpers derived from `model-catalog.cjs`; no longer owns its own model table |
