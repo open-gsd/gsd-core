@@ -964,6 +964,202 @@ function topoSortSteps(entries) {
   return result;
 }
 
+// ─── ADR-857 Phase 4a: Derived views ─────────────────────────────────────────
+
+// FIX 5 (lazy requires): paths are declared at top level but the actual require()
+// calls are deferred into lazy accessor functions so importing this generator for
+// its other exports does NOT fail at module-load time on a fresh/unbuilt worktree.
+const INSTALL_PROFILES_PATH = path.join(ROOT, 'gsd-core', 'bin', 'lib', 'install-profiles.cjs');
+const CLUSTERS_PATH = path.join(ROOT, 'gsd-core', 'bin', 'lib', 'clusters.cjs');
+
+let _installProfilesMod = null;
+let _clustersMod = null;
+
+function getInstallProfiles() {
+  if (!_installProfilesMod) _installProfilesMod = require(INSTALL_PROFILES_PATH);
+  return _installProfilesMod;
+}
+
+function getClusters() {
+  if (!_clustersMod) _clustersMod = require(CLUSTERS_PATH);
+  return _clustersMod;
+}
+
+/**
+ * Derive capabilityClusters: { <capId>: [<skill stems>] }
+ * Each capability's own skills array, sorted for determinism.
+ *
+ * FIX 3: scope rule = "capabilities that own skills" (non-empty skills array).
+ * Both capabilityClusters and profileMembership use this same predicate so a
+ * future non-feature role carrying skills is treated identically in both, and a
+ * feature cap with no skills appears in neither.
+ *
+ * @param {Map<string, object>} capMap
+ * @returns {object}  Object.create(null) — prototype-pollution safe
+ */
+function deriveCapabilityClusters(capMap) {
+  const result = Object.create(null);
+  for (const [capId, cap] of capMap) {
+    // S2b: inline literal guard at each write site (CodeQL barrier)
+    if (capId === '__proto__' || capId === 'constructor' || capId === 'prototype') continue;
+    // FIX 3: include any cap that owns skills (non-empty skills array), regardless of role
+    if (!Array.isArray(cap.skills) || cap.skills.length === 0) continue;
+    // Sort for determinism
+    const sorted = [...cap.skills].sort();
+    result[capId] = sorted;
+  }
+  return result;
+}
+
+/**
+ * Derive profileMembership: { <capId>: { tier: <t>, profiles: [<names>] } }
+ * profiles = suffix of PROFILE_RANK starting at the capability's tier index.
+ *   tier 'core'     → ['core', 'standard', 'full']
+ *   tier 'standard' → ['standard', 'full']
+ *   tier 'full'     → ['full']
+ *
+ * FIX 3: scope rule = "capabilities that own skills" (non-empty skills array),
+ * consistent with deriveCapabilityClusters. Both derived views cover the same set.
+ *
+ * FIX 5: tierIdx === -1 means VALID_TIERS and PROFILE_RANK have drifted; throw
+ * loudly instead of silently producing ['full'] for the affected capability.
+ *
+ * @param {Map<string, object>} capMap
+ * @returns {object}  Object.create(null) — prototype-pollution safe
+ */
+function deriveProfileMembership(capMap) {
+  const { PROFILE_RANK } = getInstallProfiles();
+  const result = Object.create(null);
+  for (const [capId, cap] of capMap) {
+    // S2b: inline literal guard at each write site (CodeQL barrier)
+    if (capId === '__proto__' || capId === 'constructor' || capId === 'prototype') continue;
+    if (!VALID_TIERS.has(cap.tier)) continue;
+    // FIX 3: consistent scope — only capabilities that own skills (non-empty skills array)
+    if (!Array.isArray(cap.skills) || cap.skills.length === 0) continue;
+    const tierIdx = PROFILE_RANK.indexOf(cap.tier);
+    // FIX 5: throw loudly on VALID_TIERS/PROFILE_RANK drift (was silent continue)
+    if (tierIdx === -1) {
+      throw new Error(
+        'deriveProfileMembership: capability "' + capId + '" tier "' + cap.tier +
+        '" is in VALID_TIERS but not in PROFILE_RANK — VALID_TIERS/PROFILE_RANK drift detected',
+      );
+    }
+    const profiles = PROFILE_RANK.slice(tierIdx);
+    result[capId] = { tier: cap.tier, profiles: [...profiles] };
+  }
+  return result;
+}
+
+/**
+ * Run consistency gates:
+ * - HARD: for each capId that matches a CLUSTERS key, derived skills must match
+ *   the hand-authored CLUSTERS[capId] set (order-insensitive). Throws on mismatch.
+ * - SOFT: for each capability, for each skill not yet in all non-full profiles it
+ *   belongs to (closure-resolved), emit ONE pending-reconciliation warning listing
+ *   the missing profiles together. Warnings are collected and returned — NOT thrown.
+ *
+ * FIX 1: load the REAL skills manifest (same as bin/install.js) so resolveProfile
+ * expands requires:-closure. Loaded once and reused across all capabilities.
+ *
+ * FIX 3: iterate capabilityClusters (which already covers "capabilities that own
+ * skills") rather than profileMembership, so both derived views share one scope.
+ *
+ * FIX 4: one warning per (capability, skill) gap, listing all missing non-full
+ * profiles together, instead of one warning per (capability, skill, profile).
+ *
+ * @param {object} capabilityClusters   From deriveCapabilityClusters()
+ * @param {object} profileMembership    From deriveProfileMembership()
+ * @param {Map<string, object>} capMap  Original capMap for skill lists
+ * @returns {string[]}  Array of pending-reconciliation warning strings
+ */
+function runConsistencyGate(capabilityClusters, profileMembership, capMap) {
+  const { CLUSTERS: clustersObj } = getClusters();
+  const { resolveProfile, loadSkillsManifest } = getInstallProfiles();
+
+  // ── HARD gate: cluster set comparison ──────────────────────────────────────
+  for (const capId of Object.keys(capabilityClusters)) {
+    // S2b: inline literal guard (CodeQL barrier)
+    if (capId === '__proto__' || capId === 'constructor' || capId === 'prototype') continue;
+    // Only check if a CLUSTERS entry with the same name exists
+    if (!Object.prototype.hasOwnProperty.call(clustersObj, capId)) continue;
+    const derivedSet = new Set(capabilityClusters[capId]);
+    const handAuthored = clustersObj[capId];
+    const handAuthoredSet = new Set(handAuthored);
+    // Compare sets (order-insensitive)
+    let mismatch = derivedSet.size !== handAuthoredSet.size;
+    if (!mismatch) {
+      for (const s of derivedSet) {
+        if (!handAuthoredSet.has(s)) { mismatch = true; break; }
+      }
+    }
+    if (mismatch) {
+      throw new Error(
+        'capability-cluster consistency gate FAILED for capId "' + capId + '":\n' +
+        '  derived set:      [' + [...derivedSet].sort().join(', ') + ']\n' +
+        '  hand-authored set: [' + [...handAuthoredSet].sort().join(', ') + ']\n' +
+        'The capability\'s skills array must match the hand-authored CLUSTERS["' + capId + '"] at cutover.',
+      );
+    }
+  }
+
+  // ── SOFT gate: profile reconciliation warnings ─────────────────────────────
+
+  // FIX 1: load the REAL skills manifest once (same path as bin/install.js uses),
+  // so resolveProfile expands requires:-closure and the effective set is accurate.
+  const commandsGsdDir = path.join(ROOT, 'commands', 'gsd');
+  const skillsManifest = loadSkillsManifest(commandsGsdDir);
+
+  // FIX 1: resolve each profile's effective set once and cache — don't reload per-capability.
+  const profileEffectiveSetCache = Object.create(null);
+  function getEffectiveSet(profileName) {
+    if (profileName in profileEffectiveSetCache) return profileEffectiveSetCache[profileName];
+    const resolved = resolveProfile({ modes: [profileName], manifest: skillsManifest });
+    const effectiveSet = resolved.skills === '*' ? null : resolved.skills;
+    profileEffectiveSetCache[profileName] = effectiveSet;
+    return effectiveSet;
+  }
+
+  const warnings = [];
+
+  // FIX 3: iterate capabilityClusters (same set as profileMembership after FIX 3 scoping).
+  for (const capId of Object.keys(capabilityClusters)) {
+    // S2b: inline literal guard (CodeQL barrier)
+    if (capId === '__proto__' || capId === 'constructor' || capId === 'prototype') continue;
+    const membership = profileMembership[capId];
+    if (!membership) continue; // no profile membership (e.g. cap has skills but invalid tier)
+    const cap = capMap.get(capId);
+    if (!cap || !Array.isArray(cap.skills)) continue;
+
+    // Collect the non-full profiles for this capability
+    const nonFullProfiles = membership.profiles.filter((p) => p !== 'full');
+
+    // FIX 4: one warning per (capability, skill) gap — list all missing profiles together
+    for (const skill of cap.skills) {
+      // S2b: inline literal guard (CodeQL barrier)
+      if (skill === '__proto__' || skill === 'constructor' || skill === 'prototype') continue;
+
+      const missingProfiles = [];
+      for (const profileName of nonFullProfiles) {
+        const effectiveSet = getEffectiveSet(profileName);
+        if (effectiveSet === null) continue; // profile resolved to full (unexpected but safe)
+        if (!effectiveSet.has(skill)) {
+          missingProfiles.push(profileName);
+        }
+      }
+
+      if (missingProfiles.length > 0) {
+        warnings.push(
+          '⚠ pending-reconciliation: capability \'' + capId + '\' (tier ' + membership.tier + ')' +
+          ' skill \'' + skill + '\' not yet in hand-authored profile(s): <' + missingProfiles.join(', ') +
+          '>; add at cutover',
+        );
+      }
+    }
+  }
+
+  return warnings;
+}
+
 // ─── Registry builder ─────────────────────────────────────────────────────────
 
 /**
@@ -1161,6 +1357,14 @@ function buildRegistry(capMap) {
     }));
   }
 
+  // ── ADR-857 phase 4a: derived views ────────────────────────────────────────
+  const capabilityClusters = deriveCapabilityClusters(capMap);
+  const profileMembership = deriveProfileMembership(capMap);
+  // runConsistencyGate: hard gate throws on mismatch; returns soft warning strings.
+  // Warnings are returned in the registry object so callers can emit them to stderr
+  // without affecting the serialized file content (determinism gate stays clean).
+  const reconciliationWarnings = runConsistencyGate(capabilityClusters, profileMembership, capMap);
+
   return {
     version: SCHEMA_VERSION,
     capabilities,
@@ -1170,6 +1374,10 @@ function buildRegistry(capMap) {
     configKeys,
     configSchema,
     runtimes,
+    capabilityClusters,
+    profileMembership,
+    // warnings are NOT serialized — returned only for caller consumption via stderr
+    _reconciliationWarnings: reconciliationWarnings,
   };
 }
 
@@ -1209,6 +1417,40 @@ function serializeRegistry(registry, capMap) {
   lines.push('const runtimes = ' + JSON.stringify(registry.runtimes, null, 2) + ';');
   lines.push('');
 
+  // ADR-857 phase 4a: derived views — globally sorted capIds for determinism.
+  // FIX 2: collect ALL capIds across both views and sort globally so feature + runtime
+  // capIds interleave correctly when both are present (phase 5 readiness).
+  const allClusterCapIds = new Set(Object.keys(registry.capabilityClusters));
+  const allProfileCapIds = new Set(Object.keys(registry.profileMembership));
+  const allCapIds = new Set([...allClusterCapIds, ...allProfileCapIds]);
+  // FIX 5: inline literal guard at write sites (CodeQL barrier)
+  allCapIds.delete('__proto__');
+  allCapIds.delete('constructor');
+  allCapIds.delete('prototype');
+  const globalSortedCapIds = [...allCapIds].sort();
+
+  const sortedCapabilityClusters = Object.create(null);
+  for (const capId of globalSortedCapIds) {
+    // S2b: inline literal guard at each write site (CodeQL barrier)
+    if (capId === '__proto__' || capId === 'constructor' || capId === 'prototype') continue;
+    if (registry.capabilityClusters[capId] !== undefined) {
+      sortedCapabilityClusters[capId] = registry.capabilityClusters[capId];
+    }
+  }
+  lines.push('const capabilityClusters = ' + JSON.stringify(sortedCapabilityClusters, null, 2) + ';');
+  lines.push('');
+
+  const sortedProfileMembership = Object.create(null);
+  for (const capId of globalSortedCapIds) {
+    // S2b: inline literal guard at each write site (CodeQL barrier)
+    if (capId === '__proto__' || capId === 'constructor' || capId === 'prototype') continue;
+    if (registry.profileMembership[capId] !== undefined) {
+      sortedProfileMembership[capId] = registry.profileMembership[capId];
+    }
+  }
+  lines.push('const profileMembership = ' + JSON.stringify(sortedProfileMembership, null, 2) + ';');
+  lines.push('');
+
   // Inline the requires graph so requiresClosure() works without re-reading files
   const requiresGraph = {};
   for (const [id, cap] of capMap) {
@@ -1244,6 +1486,8 @@ function serializeRegistry(registry, capMap) {
   lines.push('  configKeys,');
   lines.push('  configSchema,');
   lines.push('  runtimes,');
+  lines.push('  capabilityClusters,');
+  lines.push('  profileMembership,');
   lines.push('  requiresClosure,');
   lines.push('};');
   lines.push('');
@@ -1333,6 +1577,9 @@ function main() {
     }
 
     const registry = buildRegistry(capMap);
+    // ADR-857 phase 4a: emit pending-reconciliation warnings to stderr only
+    // (they do NOT affect the generated file content, so --check stays clean)
+    for (const w of (registry._reconciliationWarnings || [])) process.stderr.write(w + '\n');
     const live = serializeRegistry(registry, capMap);
 
     if (!fs.existsSync(REGISTRY_PATH)) {
@@ -1367,6 +1614,8 @@ function main() {
     }
 
     const registry = buildRegistry(capMap);
+    // ADR-857 phase 4a: emit pending-reconciliation warnings to stderr only
+    for (const w of (registry._reconciliationWarnings || [])) process.stderr.write(w + '\n');
     const content = serializeRegistry(registry, capMap);
     // Fix #5: mkdir-p before writing so --write doesn't ENOENT in a fresh worktree.
     fs.mkdirSync(path.dirname(REGISTRY_PATH), { recursive: true });
@@ -1384,6 +1633,8 @@ function main() {
       throw new ExitError(1, 'capability validation failed');
     }
     const registry = buildRegistry(capMap);
+    // ADR-857 phase 4a: emit pending-reconciliation warnings to stderr only
+    for (const w of (registry._reconciliationWarnings || [])) process.stderr.write(w + '\n');
     process.stdout.write(serializeRegistry(registry, capMap) + '\n');
   }
 }
@@ -1410,6 +1661,14 @@ module.exports = {
   POINT_TO_CONTRACT,
   HOST_ARTIFACT_EARLIEST_POINT_IDX,
   SCHEMA_VERSION,
+  // ADR-857 phase 4a: derived views + gates
+  deriveCapabilityClusters,
+  deriveProfileMembership,
+  runConsistencyGate,
+  // FIX 5 (lazy): PROFILE_RANK and CLUSTERS are loaded on first access via getters
+  // so importing the generator on a fresh/unbuilt worktree doesn't fail at module load.
+  get PROFILE_RANK() { return getInstallProfiles().PROFILE_RANK; },
+  get CLUSTERS() { return getClusters().CLUSTERS; },
 };
 
 // ─── CLI entry point ──────────────────────────────────────────────────────────

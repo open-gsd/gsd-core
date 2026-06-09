@@ -230,6 +230,23 @@ const configSchema = {
 
 const runtimes = {};
 
+const capabilityClusters = {
+  "ui": [
+    "ui-phase",
+    "ui-review"
+  ]
+};
+
+const profileMembership = {
+  "ui": {
+    "tier": "standard",
+    "profiles": [
+      "standard",
+      "full"
+    ]
+  }
+};
+
 const _requiresGraph = {
   "ui": []
 };
@@ -259,5 +276,7 @@ module.exports = {
   configKeys,
   configSchema,
   runtimes,
+  capabilityClusters,
+  profileMembership,
   requiresClosure,
 };
