@@ -270,6 +270,7 @@
       "agent-command-router.cjs",
       "artifacts.cjs",
       "audit.cjs",
+      "capability-registry.cjs",
       "check-command-router.cjs",
       "cjs-command-router-adapter.cjs",
       "cli-exit.cjs",

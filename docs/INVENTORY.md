@@ -370,7 +370,7 @@ The `gsd-planner` agent is decomposed into a core agent plus reference modules t
 
 ---
 
-## CLI Modules (97 shipped)
+## CLI Modules (98 shipped)
 
 Full listing: `gsd-core/bin/lib/*.cjs`.
 
@@ -381,6 +381,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `agent-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools agent` |
 | `artifacts.cjs` | Canonical artifact registry — known `.planning/` root file names; used by `gsd-health` W019 lint |
 | `audit.cjs` | Audit dispatch, audit open sessions, audit storage helpers |
+| `capability-registry.cjs` | Generated central Capability Registry — role-partitioned index of all co-located capability declarations (`capabilities/<id>/capability.json`); emitted by `scripts/gen-capability-registry.cjs --write` (ADR-894 §5) |
 | `check-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools check` |
 | `cli-exit.cjs` | `ExitError` class and `runMain()` helper — CLI entrypoints throw `ExitError` instead of calling `process.exit()`; `runMain()` translates the outcome into `process.exitCode` so output flushes cleanly |
 | `cjs-command-router-adapter.cjs` | Shared compatibility adapter for manifest-backed CJS command-family routers |

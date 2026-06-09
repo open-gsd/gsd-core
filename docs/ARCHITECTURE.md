@@ -368,7 +368,8 @@ Node.js CLI utility (`gsd-tools.cjs`) with domain modules split across `gsd-core
 | `workstream.cjs`       | Workstream CRUD, migration, session-scoped active pointer                                           |
 | `schema-detect.cjs`    | Schema-drift detection for ORM patterns (Prisma, Drizzle, etc.)                                     |
 | `profile-pipeline.cjs` | User behavioral profiling data pipeline, session file scanning                                      |
-| `profile-output.cjs`   | Profile rendering, USER-PROFILE.md and dev-preferences.md generation                                |
+| `profile-output.cjs`       | Profile rendering, USER-PROFILE.md and dev-preferences.md generation                                |
+| `capability-registry.cjs`  | Generated central Capability Registry — role-partitioned index of all co-located capability declarations; emitted by `scripts/gen-capability-registry.cjs` (ADR-894 §5) |
 
 
 ---
