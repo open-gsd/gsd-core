@@ -77,4 +77,53 @@ describe('issue-69: applySurface preserves nested skill layout (no re-flatten)',
       'After applySurface: gsd-plan-phase/ must NOT exist at top level (#69 re-flatten regression guard)',
     );
   });
+
+  test('omp global full: applySurface keeps 6 router dirs and nested gsd-ns-workflow/skills/plan-phase/SKILL.md', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-69-surface-omp-'));
+    t.after(() => { try { cleanup(tmpDir); } catch { /* best-effort */ } });
+
+    // Step 1: full install
+    const manifest = loadSkillsManifest(COMMANDS_GSD);
+    const resolved = resolveProfile({ modes: ['full'], manifest });
+    installRuntimeArtifacts('omp', tmpDir, 'global', resolved);
+
+    const skillsDir = path.join(tmpDir, 'skills');
+
+    // Sanity: install must produce nested layout
+    const topLevelAfterInstall = fs.readdirSync(skillsDir).filter((n) => n.startsWith('gsd-'));
+    assert.strictEqual(
+      topLevelAfterInstall.length,
+      6,
+      `Install must produce exactly 6 gsd-* top-level dirs (routers). Got ${topLevelAfterInstall.length}: [${topLevelAfterInstall.join(', ')}]`,
+    );
+    assert.ok(
+      fs.existsSync(path.join(skillsDir, 'gsd-ns-workflow', 'skills', 'plan-phase', 'SKILL.md')),
+      'After install: gsd-ns-workflow/skills/plan-phase/SKILL.md must exist',
+    );
+
+    // Step 2: applySurface (full surface, no surface state file → resolves to full)
+    const layout = resolveRuntimeArtifactLayout('omp', tmpDir, 'global');
+    applySurface(tmpDir, layout, manifest);
+
+    // Step 3: assert nested layout is preserved after applySurface
+    const topLevelAfterSurface = fs.readdirSync(skillsDir).filter((n) => n.startsWith('gsd-'));
+    assert.strictEqual(
+      topLevelAfterSurface.length,
+      6,
+      `After applySurface: expected exactly 6 gsd-* top-level dirs (routers only). Got ${topLevelAfterSurface.length}: [${topLevelAfterSurface.join(', ')}]. ` +
+      'Re-flattening detected: applySurface must preserve nested layout (#69 regression).',
+    );
+
+    // The nested SKILL.md must still exist (not re-flattened to top-level concrete dir)
+    assert.ok(
+      fs.existsSync(path.join(skillsDir, 'gsd-ns-workflow', 'skills', 'plan-phase', 'SKILL.md')),
+      'After applySurface: gsd-ns-workflow/skills/plan-phase/SKILL.md must still exist (nested layout preserved)',
+    );
+
+    // The concrete skill must NOT have been promoted to a top-level flat dir
+    assert.ok(
+      !fs.existsSync(path.join(skillsDir, 'gsd-plan-phase', 'SKILL.md')),
+      'After applySurface: gsd-plan-phase/ must NOT exist at top level (#69 re-flatten regression guard)',
+    );
+  });
 });

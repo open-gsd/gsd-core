@@ -9698,6 +9698,26 @@ function countOmpArtifacts(targetDir, subdir, predicate) {
   return fs.readdirSync(dir, { withFileTypes: true }).filter(predicate).length;
 }
 
+function countOmpSkillFiles(targetDir) {
+  const skillsDir = path.join(targetDir, 'skills');
+  if (!fs.existsSync(skillsDir)) return 0;
+  let count = 0;
+
+  function walk(dir) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.isFile() && entry.name === 'SKILL.md') {
+        count += 1;
+      }
+    }
+  }
+
+  walk(skillsDir);
+  return count;
+}
+
 function getOmpReadinessSummary(targetDir, workspaceRoot = process.cwd()) {
   const state = detectGsdWorkspaceState(workspaceRoot);
   return {
@@ -9705,7 +9725,7 @@ function getOmpReadinessSummary(targetDir, workspaceRoot = process.cwd()) {
     artifactKinds: ['commands', 'skills', 'agents', 'rules', 'extensions'],
     counts: {
       commands: countOmpArtifacts(targetDir, 'commands', e => e.isFile() && e.name.startsWith('gsd-') && e.name.endsWith('.md')),
-      skills: countOmpArtifacts(targetDir, 'skills', e => e.isDirectory() && e.name.startsWith('gsd-')),
+      skills: countOmpSkillFiles(targetDir),
       agents: countOmpArtifacts(targetDir, 'agents', e => e.isFile() && e.name.startsWith('gsd-') && e.name.endsWith('.md')),
       rules: countOmpArtifacts(targetDir, 'rules', e => e.isFile() && e.name.startsWith('gsd-') && e.name.endsWith('.md')),
       extensions: countOmpArtifacts(targetDir, 'extensions', e => e.isDirectory() && e.name.startsWith('gsd-')),

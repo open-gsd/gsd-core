@@ -107,7 +107,9 @@ describe('OMP local install and conversion', () => {
 
     const targetDir = path.join(tmpDir, '.omp');
     assert.ok(fs.existsSync(path.join(targetDir, 'commands', 'gsd-help.md')));
-    assert.ok(fs.existsSync(path.join(targetDir, 'skills', 'gsd-help', 'SKILL.md')));
+    assert.ok(!fs.existsSync(path.join(targetDir, 'skills', 'gsd-help', 'SKILL.md')), 'help must not exist as a top-level skill dir');
+    assert.ok(!fs.existsSync(path.join(targetDir, 'skills', 'gsd-plan-phase', 'SKILL.md')), 'plan-phase must not exist as a top-level skill dir');
+    assert.ok(fs.existsSync(path.join(targetDir, 'skills', 'gsd-ns-workflow', 'skills', 'plan-phase', 'SKILL.md')), 'plan-phase must be nested under gsd-ns-workflow');
     assert.ok(fs.existsSync(path.join(targetDir, 'agents', 'gsd-planner.md')));
     assert.ok(fs.existsSync(path.join(targetDir, 'rules', 'gsd-planning-artifacts.md')));
     assert.ok(fs.existsSync(path.join(targetDir, 'extensions', 'gsd-core', 'index.js')));
@@ -122,7 +124,7 @@ describe('OMP local install and conversion', () => {
 
     const manifest = readManifest(targetDir);
     assert.ok(Object.keys(manifest.files).some(file => file.startsWith('commands/gsd-help.md')));
-    assert.ok(Object.keys(manifest.files).some(file => file.startsWith('skills/gsd-help/')));
+    assert.ok(Object.keys(manifest.files).some(file => file.startsWith('skills/gsd-ns-workflow/skills/plan-phase/SKILL.md')));
     assert.ok(Object.keys(manifest.files).some(file => file.startsWith('agents/gsd-planner.md')));
     assert.ok(Object.keys(manifest.files).some(file => file.startsWith('rules/gsd-planning-artifacts.md')));
     assert.ok(Object.keys(manifest.files).includes('extensions/gsd-core/index.js'));
@@ -227,7 +229,7 @@ describe('OMP local install and conversion', () => {
     const targetDir = path.join(tmpDir, '.omp');
     const summary = getOmpReadinessSummary(targetDir, tmpDir);
     assert.ok(summary.counts.commands > 0);
-    assert.ok(summary.counts.skills > 0);
+    assert.ok(summary.counts.skills >= 60, `OMP skills count should include all nested skills, got ${summary.counts.skills}`);
     assert.ok(summary.counts.agents > 0);
     assert.ok(summary.counts.rules > 0);
     assert.strictEqual(summary.counts.extensions, 1);
@@ -241,6 +243,7 @@ describe('OMP local install and conversion', () => {
     const manifest = writeManifest(targetDir, 'omp');
     const keys = Object.keys(manifest.files);
     assert.ok(keys.some(file => file.startsWith('commands/gsd-help.md')));
+    assert.ok(keys.some(file => file.startsWith('skills/gsd-ns-workflow/skills/plan-phase/SKILL.md')), 'manifest must track nested plan-phase skill');
     assert.ok(keys.some(file => file.startsWith('rules/gsd-planning-artifacts.md')));
     assert.ok(keys.includes('extensions/gsd-core/index.js'));
     assert.ok(keys.includes('extensions/gsd-core/package.json'));
@@ -264,7 +267,7 @@ describe('OMP global install', () => {
     const target = path.join(tmpDir, 'omp-agent-home');
     const output = runInstallerCli(tmpDir, ['--global', '--omp'], { OMP_CONFIG_DIR: target });
     assert.ok(fs.existsSync(path.join(target, 'commands', 'gsd-help.md')));
-    assert.ok(fs.existsSync(path.join(target, 'skills', 'gsd-help', 'SKILL.md')));
+    assert.ok(fs.existsSync(path.join(target, 'skills', 'gsd-ns-workflow', 'skills', 'plan-phase', 'SKILL.md')));
     assert.ok(fs.existsSync(path.join(target, 'agents', 'gsd-planner.md')));
     assert.ok(fs.existsSync(path.join(target, 'extensions', 'gsd-core', 'index.js')));
     assert.ok(fs.existsSync(path.join(target, 'extensions', 'gsd-core', 'package.json')));

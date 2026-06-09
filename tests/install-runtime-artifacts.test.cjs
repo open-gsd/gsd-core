@@ -182,7 +182,8 @@ describe('installRuntimeArtifacts — omp multi-surface layout', () => {
     installRuntimeArtifacts('omp', configDir, 'local', resolvedFull);
 
     assert.ok(fs.existsSync(path.join(configDir, 'commands', 'gsd-help.md')));
-    assert.ok(fs.existsSync(path.join(configDir, 'skills', 'gsd-help', 'SKILL.md')));
+    assert.ok(!fs.existsSync(path.join(configDir, 'skills', 'gsd-plan-phase', 'SKILL.md')), 'plan-phase must be nested, not top-level');
+    assert.ok(fs.existsSync(path.join(configDir, 'skills', 'gsd-ns-workflow', 'skills', 'plan-phase', 'SKILL.md')), 'plan-phase must be nested under ns-workflow');
     assert.ok(fs.existsSync(path.join(configDir, 'agents', 'gsd-planner.md')));
     assert.ok(fs.existsSync(path.join(configDir, 'rules', 'gsd-planning-artifacts.md')));
     assert.ok(fs.existsSync(path.join(configDir, 'extensions', 'gsd-core', 'index.js')));

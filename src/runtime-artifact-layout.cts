@@ -358,6 +358,7 @@ function extensionsKind(destSubpath: string, prefix: string, configDir: string):
 //   NEST (confirmed non-recursive / one-level scan):
 //     claude     — https://code.claude.com/docs/en/skills + anthropics/claude-code#28266
 //                  (scans one level under ~/.claude/skills; nested skills not auto-listed)
+//     omp        — OMP extension filesystem discovery from .omp/agent/skills/ uses flat one-level scan
 //     cline      — cline/cline skills.ts scanSkillsDirectory uses flat fs.readdir
 //     qwen       — QwenLM/qwen-code skill-load.ts flat readdir ("depth 2 enough")
 //     hermes     — hermes-agent.nousresearch.com/docs/user-guide/features/skills
@@ -475,7 +476,7 @@ function resolveRuntimeArtifactLayout(runtime: string, configDir: string, scope:
     case 'omp':
       kinds = [
         convertedCommandsKind('commands', 'gsd-', 'convertClaudeCommandToOmpCommand', configDir),
-        skillsKind('skills', 'gsd-', 'convertClaudeCommandToOmpSkill', 'omp', configDir),
+        skillsKind('skills', 'gsd-', 'convertClaudeCommandToOmpSkill', 'omp', configDir, true /* #69 nested */),
         convertedAgentsKind('agents', 'gsd-', 'convertClaudeAgentToOmpAgent', configDir),
         rulesKind('rules', 'gsd-', configDir),
         extensionsKind('extensions', 'gsd-', configDir),

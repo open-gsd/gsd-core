@@ -39,6 +39,7 @@ const NEST = [
   { runtime: 'augment',     scope: 'global', skillsSub: 'skills',     prefix: 'gsd-' },
   { runtime: 'trae',        scope: 'global', skillsSub: 'skills',     prefix: 'gsd-' },
   { runtime: 'antigravity', scope: 'global', skillsSub: 'skills',     prefix: 'gsd-' },
+  { runtime: 'omp',         scope: 'global', skillsSub: 'skills',     prefix: 'gsd-' },
 ];
 
 const FLAT = [
