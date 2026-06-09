@@ -135,3 +135,61 @@ describe('plan-phase workflow: Artifacts this phase produces section (#22)', () 
     );
   });
 });
+
+// ─── (C) Top-level spawn guard (#913) ────────────────────────────────────────
+
+describe('plan-phase workflow: top-level spawn guard (#913)', () => {
+  // Extract the runtime_compatibility block for targeted assertions
+  const rtBlock = (() => {
+    const m = workflow.match(/<runtime_compatibility>([\s\S]*?)<\/runtime_compatibility>/);
+    return m ? m[1] : '';
+  })();
+
+  test('workflow has a runtime_compatibility block asserting Agent is available at top-level', () => {
+    assert.ok(
+      rtBlock.length > 0,
+      'plan-phase must have a <runtime_compatibility> block — prevents role-collapse regression (#913)'
+    );
+    assert.ok(
+      rtBlock.includes('Agent tool IS available') || rtBlock.includes('Agent IS available'),
+      'plan-phase runtime_compatibility must assert that the Agent tool IS available at top-level Claude Code (#913)'
+    );
+    assert.ok(
+      rtBlock.toLowerCase().includes('top-level'),
+      'plan-phase runtime_compatibility must scope the IS-available assertion to top-level Claude Code (#913)'
+    );
+    assert.ok(
+      rtBlock.includes('Always spawn') || rtBlock.includes('always spawn'),
+      'plan-phase runtime_compatibility must state that plan roles must always be spawned (#913)'
+    );
+    assert.ok(
+      rtBlock.includes('Never absorb') || rtBlock.includes('never absorb'),
+      'plan-phase runtime_compatibility must state that roles must never be absorbed inline (#913)'
+    );
+  });
+
+  test('workflow states --chain/--auto suppress prompts only, not spawns', () => {
+    assert.ok(
+      rtBlock.includes('suppress') &&
+      (rtBlock.includes('prompts only') || rtBlock.includes('interactive prompts only')),
+      'plan-phase runtime_compatibility must document that --chain/--auto suppress prompts only, not spawns (#913)'
+    );
+  });
+
+  test('workflow does not contain unscoped CODEX RUNTIME orchestrator rule labels', () => {
+    // All "wait for subagent" rules must apply to ALL RUNTIMES, not just Codex
+    assert.ok(
+      !workflow.includes('ORCHESTRATOR RULE — CODEX RUNTIME'),
+      'plan-phase must not label orchestrator wait rules as "CODEX RUNTIME" — they apply to all runtimes including top-level Claude Code (#913)'
+    );
+  });
+
+  test('workflow contains ALL RUNTIMES orchestrator rule labels (count preserved)', () => {
+    // Must have all 7 agent-spawn wait rules still present (none dropped during rename)
+    const allRuntimesCount = (workflow.match(/ORCHESTRATOR RULE — ALL RUNTIMES/g) || []).length;
+    assert.ok(
+      allRuntimesCount >= 7,
+      `plan-phase must have at least 7 "ORCHESTRATOR RULE — ALL RUNTIMES" labels (one per agent spawn site); found ${allRuntimesCount} (#913)`
+    );
+  });
+});

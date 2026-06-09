@@ -21,8 +21,11 @@ Orchestrator coordinates, not executes. Each subagent loads the full execute-pla
   instead of spawning parallel agents. Only attempt parallel spawning if the user
   explicitly requests it — and in that case, rely on the spot-check fallback in step 3
   to detect completion.
-- **Other runtimes:** If `Agent`/`agent` tool is unavailable, use sequential inline execution as the
-  fallback. Check for tool availability at runtime rather than assuming based on runtime name.
+- **Other runtimes:** If `Agent`/`agent` tool is genuinely unavailable (e.g. a backgrounded
+  Claude Code agent per #853, or a non-Claude runtime), use sequential inline execution as
+  the fallback for executor parallelization only. If `Agent` IS available (top-level Claude
+  Code), you MUST spawn gsd-executor agents — inline execution is not authorized. Check for
+  actual tool availability, not runtime name.
 
 **Fallback rule:** If a spawned agent completes its work (commits visible, SUMMARY.md exists) but
 the orchestrator never receives the completion signal, treat it as successful based on spot-checks
