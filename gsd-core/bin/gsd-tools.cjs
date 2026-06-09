@@ -169,6 +169,11 @@
  *                                        Valid points: discuss:pre/post, plan:pre/post,
  *                                        execute:pre/wave:pre/wave:post/post, verify:pre/post, ship:pre/post
  *
+ * Capability State (ADR-857 phase 4b):
+ *   capability state [--config-dir <path>]  Resolve per-capability install/surface/hook-activation state
+ *                                           Returns JSON envelope { runtimeConfigDir, capabilities[] }
+ *                                           --config-dir: runtime config dir (default: auto-detect current runtime)
+ *
  * GSD-2 Migration:
  *   from-gsd2 [--path <dir>] [--force] [--dry-run]
  *             Import a GSD-2 (.gsd/) project back to GSD v1 (.planning/) format
@@ -208,6 +213,7 @@ const { routeVerificationCommand } = require('./lib/verification-command-router.
 const verification = require('./lib/verification.cjs');
 const { routeInitCommand } = require('./lib/init-command-router.cjs');
 const loopResolver = require('./lib/loop-resolver.cjs');
+const capabilityState = require('./lib/capability-state.cjs');
 const { routePhaseCommand } = require('./lib/phase-command-router.cjs');
 const { routePhasesCommand } = require('./lib/phases-command-router.cjs');
 const { routeValidateCommand } = require('./lib/validate-command-router.cjs');
@@ -386,7 +392,7 @@ async function main() {
     'current-timestamp, detect-custom-files, docs-init, effort, extract-messages, find-phase, ' +
     'from-gsd2, frontmatter, gap-analysis, generate-claude-md, generate-claude-profile, ' +
     'generate-dev-preferences, generate-slug, graphify, history-digest, init, intel, ' +
-    'classify-confidence, learnings, list-todos, loop, milestone, package-legitimacy, phase, phase-plan-index, phases, profile-questionnaire, ' +
+    'capability, classify-confidence, learnings, list-todos, loop, milestone, package-legitimacy, phase, phase-plan-index, phases, profile-questionnaire, ' +
     'profile-sample, progress, prompt-budget, requirements, research-plan, research-store, resolve-granularity, resolve-model, roadmap, scaffold, state, ' +
     'task, template, validate, verify, verify-path-exists, verify-summary, workstream, worktree\n\n' +
     'Global flags:\n' +
@@ -427,6 +433,11 @@ async function main() {
   // Multi-repo guard: resolve project root for commands that read/write .planning/.
   // Skip for pure-utility commands that don't touch .planning/ to avoid unnecessary
   // filesystem traversal on every invocation.
+  // 'loop' and 'capability' are intentionally NOT in SKIP_ROOT_RESOLUTION.
+  // Both are registry/config queries that resolve activation via
+  // .planning/config.json; they need the project root (cwd) for correct
+  // `when` key resolution. If one is ever moved to SKIP_ROOT_RESOLUTION,
+  // move the other at the same time (keep them consistent).
   const SKIP_ROOT_RESOLUTION = new Set([
     'generate-slug', 'current-timestamp', 'verify-path-exists',
     'verify-summary', 'template', 'frontmatter', 'detect-custom-files',
@@ -1133,6 +1144,36 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       } else {
         error(
           `Unknown loop subcommand: ${loopSubcommand}. Available: render-hooks`,
+          core.ERROR_REASON ? core.ERROR_REASON.SDK_UNKNOWN_COMMAND : undefined,
+        );
+      }
+      break;
+    }
+
+    case 'capability': {
+      // capability state [--config-dir <path>]
+      // Root resolution: 'capability' is NOT in SKIP_ROOT_RESOLUTION for the
+      // same reason 'loop' is not: both are registry/config queries that need
+      // the project root (cwd) for .planning/config.json activation resolution.
+      // If 'loop' were ever added to SKIP_ROOT_RESOLUTION, 'capability' should
+      // be added at the same time to keep them consistent.
+      const capSubcommand = args[1];
+      if (capSubcommand === 'state') {
+        const configDirIdx = args.indexOf('--config-dir');
+        let configDir = null;
+        if (configDirIdx !== -1) {
+          const configDirVal = args[configDirIdx + 1];
+          // Validate that --config-dir has a following non-flag value.
+          if (!configDirVal || configDirVal.startsWith('--')) {
+            error('Missing value for --config-dir', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+          }
+          configDir = configDirVal;
+        }
+        const resolvedConfigDir = configDir ? path.resolve(configDir) : null;
+        capabilityState.cmdCapabilityState(cwd, resolvedConfigDir, raw, {});
+      } else {
+        error(
+          `Unknown capability subcommand: ${capSubcommand}. Available: state`,
           core.ERROR_REASON ? core.ERROR_REASON.SDK_UNKNOWN_COMMAND : undefined,
         );
       }

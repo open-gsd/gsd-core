@@ -370,7 +370,7 @@ The `gsd-planner` agent is decomposed into a core agent plus reference modules t
 
 ---
 
-## CLI Modules (101 shipped)
+## CLI Modules (102 shipped)
 
 Full listing: `gsd-core/bin/lib/*.cjs`.
 
@@ -382,6 +382,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `artifacts.cjs` | Canonical artifact registry — known `.planning/` root file names; used by `gsd-health` W019 lint |
 | `audit.cjs` | Audit dispatch, audit open sessions, audit storage helpers |
 | `capability-registry.cjs` | Generated central Capability Registry — role-partitioned index of all co-located capability declarations (`capabilities/<id>/capability.json`); emitted by `scripts/gen-capability-registry.cjs --write` (ADR-894 §5) |
+| `capability-state.cjs` | Unified capability-state resolver (ADR-857 phase 4b) — composes install profile, runtime surface, and config activation into one per-capability view; exports pure `resolveCapabilityState` + I/O handler `cmdCapabilityState`; command surface: `gsd-tools capability state [--config-dir <path>]` emitting `{ runtimeConfigDir, capabilities[] }` |
 | `check-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools check` |
 | `cli-exit.cjs` | `ExitError` class and `runMain()` helper — CLI entrypoints throw `ExitError` instead of calling `process.exit()`; `runMain()` translates the outcome into `process.exitCode` so output flushes cleanly |
 | `cjs-command-router-adapter.cjs` | Shared compatibility adapter for manifest-backed CJS command-family routers |

@@ -374,6 +374,7 @@ Node.js CLI utility (`gsd-tools.cjs`) with domain modules split across `gsd-core
 | `loop-host-contract.cjs`   | Generated Loop Host Contract — 12 loop points, per-step agent roles, and core artifacts; emitted by `scripts/gen-loop-host-contract.cjs` from workflow markers (ADR-894 §3); consumed by `gen-capability-registry.cjs` |
 | `capability-registry.cjs`  | Generated central Capability Registry — role-partitioned index of all co-located capability declarations; emitted by `scripts/gen-capability-registry.cjs` (ADR-894 §5) |
 | `loop-resolver.cjs`        | Loop Extension Point resolver — ADR-857 phase 3c registry-consuming query; filters `byLoopPoint` by config activation, renders active hooks as markdown, emits `{ point, activeHooks, rendered }` envelope; `gsd-tools loop render-hooks <point>` |
+| `capability-state.cjs`     | Unified capability-state resolver — ADR-857 phase 4b; composes install profile, runtime surface, and config activation into one per-capability view; pure `resolveCapabilityState` + I/O `cmdCapabilityState`; `gsd-tools capability state [--config-dir <path>]` |
 
 
 ---

@@ -271,6 +271,7 @@
       "artifacts.cjs",
       "audit.cjs",
       "capability-registry.cjs",
+      "capability-state.cjs",
       "check-command-router.cjs",
       "cjs-command-router-adapter.cjs",
       "cli-exit.cjs",
