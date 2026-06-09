@@ -131,6 +131,14 @@
         "install.test.cjs"
       ],
       "issue": "TBD"
+    },
+    "validate": {
+      "files": [
+        "bug-3129-validate-commit-git-bypass.test.cjs",
+        "bug-892-validate-checklist-roadmap-phases.test.cjs",
+        "validate-context.test.cjs"
+      ],
+      "issue": "892"
     }
   }
 }
