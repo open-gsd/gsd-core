@@ -2,7 +2,7 @@
 
 A documentação está organizada em quatro quadrantes: **tutoriais** ajudam você a aprender na prática, **guias de instruções** resolvem tarefas específicas, **referência** apresenta fatos autorizados, e **explicação** explora conceitos e decisões de design.
 
-Versões por idioma: [English](../README.md) · [Português (pt-BR)](README.md) · [日本語](../ja-JP/README.md) · [简体中文](../zh-CN/README.md)
+Versões por idioma: [English](../README.md) · [Português (pt-BR)](README.md) · [日本語](../ja-JP/README.md) · [简体中文](../zh-CN/README.md) · [繁體中文](../zh-TW/README.md)
 
 ---
 

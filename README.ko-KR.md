@@ -4,7 +4,7 @@
 
 **Git. Ship. Done.**
 
-[English](README.md) · [Português](README.pt-BR.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja-JP.md) · **한국어**
+[English](README.md) · [Português](README.pt-BR.md) · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md) · [日本語](README.ja-JP.md) · **한국어**
 
 **Claude Code, OpenCode, Gemini CLI, Kilo, Codex, Copilot, Cursor, Windsurf 등을 위한 경량 메타 프롬프팅, 컨텍스트 엔지니어링, 스펙 기반 개발 시스템.**
 
@@ -79,7 +79,7 @@ npx @opengsd/gsd-core@latest
 - [단계 루프](docs/ko-KR/explanation/the-phase-loop.md)
 - [아키텍처](docs/ko-KR/ARCHITECTURE.md)
 
-전체 색인: [docs/ko-KR/README.md](docs/ko-KR/README.md). 다른 언어: [日本語](README.ja-JP.md) · [한국어](README.ko-KR.md) · [Português](README.pt-BR.md) · [简体中文](README.zh-CN.md).
+전체 색인: [docs/ko-KR/README.md](docs/ko-KR/README.md). 다른 언어: [日本語](README.ja-JP.md) · [한국어](README.ko-KR.md) · [Português](README.pt-BR.md) · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md).
 
 ---
 

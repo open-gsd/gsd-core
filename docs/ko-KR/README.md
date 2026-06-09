@@ -2,7 +2,7 @@
 
 문서는 네 가지 유형으로 구성됩니다. **튜토리얼**은 직접 해보며 배우고, **how-to 가이드**는 특정 작업을 해결하며, **레퍼런스**는 권위 있는 사실을 제시하고, **설명**은 개념과 설계 결정을 탐구합니다.
 
-언어 버전: [English](../README.md) · [Português (pt-BR)](../pt-BR/README.md) · [日本語](../ja-JP/README.md) · [简体中文](../zh-CN/README.md) · **한국어**
+언어 버전: [English](../README.md) · [Português (pt-BR)](../pt-BR/README.md) · [日本語](../ja-JP/README.md) · [简体中文](../zh-CN/README.md) · [繁體中文](../zh-TW/README.md) · **한국어**
 
 ---
 

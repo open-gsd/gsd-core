@@ -4,7 +4,7 @@
 
 **Git. Ship. Done.**
 
-[English](README.md) · **Português** · [简体中文](README.zh-CN.md) · [日本語](README.ja-JP.md) · [한국어](README.ko-KR.md)
+[English](README.md) · **Português** · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md) · [日本語](README.ja-JP.md) · [한국어](README.ko-KR.md)
 
 **Um sistema leve de meta-prompting, engenharia de contexto e desenvolvimento orientado a especificações para Claude Code, OpenCode, Gemini CLI, Kilo, Codex, Copilot, Cursor, Windsurf e muito mais.**
 
@@ -79,7 +79,7 @@ Após a instalação, inicie seu primeiro projeto:
 - [O ciclo de fases](docs/pt-BR/explanation/the-phase-loop.md)
 - [Arquitetura](docs/pt-BR/ARCHITECTURE.md)
 
-Índice completo: [docs/pt-BR/README.md](docs/pt-BR/README.md). Outros idiomas: [日本語](README.ja-JP.md) · [한국어](README.ko-KR.md) · [Português](README.pt-BR.md) · [简体中文](README.zh-CN.md).
+Índice completo: [docs/pt-BR/README.md](docs/pt-BR/README.md). Outros idiomas: [日本語](README.ja-JP.md) · [한국어](README.ko-KR.md) · [Português](README.pt-BR.md) · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md).
 
 ---
 

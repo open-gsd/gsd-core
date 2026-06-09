@@ -4,7 +4,7 @@
 
 **Git. Ship. Done.**
 
-[English](README.md) · [Português](README.pt-BR.md) · **简体中文** · [日本語](README.ja-JP.md) · [한국어](README.ko-KR.md)
+[English](README.md) · [Português](README.pt-BR.md) · **简体中文** · [繁體中文](README.zh-TW.md) · [日本語](README.ja-JP.md) · [한국어](README.ko-KR.md)
 
 **一套轻量级的元提示、上下文工程与规范驱动开发系统，适用于 Claude Code、OpenCode、Gemini CLI、Kilo、Codex、Copilot、Cursor、Windsurf 等 AI 编程工具。**
 
@@ -79,7 +79,7 @@ npx @opengsd/gsd-core@latest
 - [阶段循环](docs/zh-CN/explanation/the-phase-loop.md)
 - [架构](docs/zh-CN/ARCHITECTURE.md)
 
-完整索引：[docs/zh-CN/README.md](docs/zh-CN/README.md)。其他语言：[日本語](README.ja-JP.md) · [한국어](README.ko-KR.md) · [Português](README.pt-BR.md) · [English](README.md)。
+完整索引：[docs/zh-CN/README.md](docs/zh-CN/README.md)。其他语言：[日本語](README.ja-JP.md) · [한국어](README.ko-KR.md) · [Português](README.pt-BR.md) · [English](README.md) · [繁體中文](README.zh-TW.md)。
 
 ---
 

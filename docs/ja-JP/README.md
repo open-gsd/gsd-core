@@ -2,7 +2,7 @@
 
 ドキュメントは 4 つの象限で構成されています。**チュートリアル**は実践で学ぶ、**ハウツーガイド**は特定のタスクを解決する、**リファレンス**は信頼できる情報を示す、**解説**はコンセプトと設計上の決定を探求する。
 
-言語バージョン: [English](../) · [Português (pt-BR)](../pt-BR/README.md) · **日本語** · [简体中文](../zh-CN/README.md) · [한국어](../ko-KR/README.md)
+言語バージョン: [English](../) · [Português (pt-BR)](../pt-BR/README.md) · **日本語** · [简体中文](../zh-CN/README.md) · [繁體中文](../zh-TW/README.md) · [한국어](../ko-KR/README.md)
 
 ---
 
