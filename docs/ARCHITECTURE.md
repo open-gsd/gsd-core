@@ -342,7 +342,8 @@ Node.js CLI utility (`gsd-tools.cjs`) with domain modules split across `gsd-core
 
 | Module                 | Responsibility                                                                                      |
 | ---------------------- | --------------------------------------------------------------------------------------------------- |
-| `config-loader.cjs`    | Project config loading — defaults merge, legacy-key migration, workstream overlay, unknown-key/profile-override validation (extracted from `core.cjs`, ADR-857) |
+| `config-loader.cjs`    | Project config loading — defaults merge, legacy-key migration, workstream overlay, unknown-key/profile-override validation, and federated config overlay (ADR-857 phase 3b) (extracted from `core.cjs`, ADR-857) |
+| `federated-config.cjs` | Defensive merge of capability-declared config slices (ADR-857 phase 3b); exports `mergeFederatedConfig`; no-op until capability keys are removed from the central config-schema at cutover |
 | `core-utils.cjs`       | Shared low-level utility primitives — POSIX path normalization, sub-repo/subdirectory scanning, phase file stats, slug/one-liner/plan-id helpers, time-ago (extracted from `core.cjs`, ADR-857) |
 | `core.cjs`             | Shared utilities; compatibility re-exports for planning, I/O (`io.cjs`), and phase-id helpers       |
 | `io.cjs`               | CLI I/O primitives — output/error emission, JSON-error mode, large-payload temp-file spillover     |

@@ -207,6 +207,27 @@ const configKeys = {
   "workflow.ui_safety_gate": "ui"
 };
 
+const configSchema = {
+  "workflow.ui_phase": {
+    "owner": "ui",
+    "type": "boolean",
+    "default": true,
+    "description": "Enable the UI design-contract gate during planning."
+  },
+  "workflow.ui_review": {
+    "owner": "ui",
+    "type": "boolean",
+    "default": true,
+    "description": "Enable the retrospective UI audit."
+  },
+  "workflow.ui_safety_gate": {
+    "owner": "ui",
+    "type": "boolean",
+    "default": true,
+    "description": "Block execution on unmet UI-SPEC contracts."
+  }
+};
+
 const runtimes = {};
 
 const _requiresGraph = {
@@ -236,6 +257,7 @@ module.exports = {
   byAgent,
   byLoopPoint,
   configKeys,
+  configSchema,
   runtimes,
   requiresClosure,
 };

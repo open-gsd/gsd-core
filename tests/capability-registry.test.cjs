@@ -29,6 +29,8 @@ const {
   computeRequiresClosure,
   topoSortSteps,
   normalizeLineEndings,
+  validateConfigSliceEntry,
+  VALID_CONFIG_SLICE_TYPES,
   SCHEMA_VERSION,
 } = require('../scripts/gen-capability-registry.cjs');
 
@@ -101,10 +103,33 @@ describe('UI pilot capability', () => {
     assert.strictEqual(uiGate.capId, 'ui');
     assert.strictEqual(uiGate.blocking, true);
 
-    // configKeys maps the 3 UI keys to 'ui'
+    // configKeys maps the 3 UI keys to 'ui' (ownership map — preserved)
     assert.strictEqual(registry.configKeys['workflow.ui_phase'], 'ui');
     assert.strictEqual(registry.configKeys['workflow.ui_review'], 'ui');
     assert.strictEqual(registry.configKeys['workflow.ui_safety_gate'], 'ui');
+
+    // configSchema index — new in phase 3b
+    assert.ok(registry.configSchema, 'registry.configSchema should exist');
+
+    // workflow.ui_phase
+    assert.ok(registry.configSchema['workflow.ui_phase'], 'configSchema should have workflow.ui_phase');
+    assert.strictEqual(registry.configSchema['workflow.ui_phase'].owner, 'ui');
+    assert.strictEqual(registry.configSchema['workflow.ui_phase'].type, 'boolean');
+    assert.strictEqual(registry.configSchema['workflow.ui_phase'].default, true);
+    assert.strictEqual(typeof registry.configSchema['workflow.ui_phase'].description, 'string');
+    assert.ok(registry.configSchema['workflow.ui_phase'].description.length > 0);
+
+    // workflow.ui_review
+    assert.ok(registry.configSchema['workflow.ui_review'], 'configSchema should have workflow.ui_review');
+    assert.strictEqual(registry.configSchema['workflow.ui_review'].owner, 'ui');
+    assert.strictEqual(registry.configSchema['workflow.ui_review'].type, 'boolean');
+    assert.strictEqual(registry.configSchema['workflow.ui_review'].default, true);
+
+    // workflow.ui_safety_gate
+    assert.ok(registry.configSchema['workflow.ui_safety_gate'], 'configSchema should have workflow.ui_safety_gate');
+    assert.strictEqual(registry.configSchema['workflow.ui_safety_gate'].owner, 'ui');
+    assert.strictEqual(registry.configSchema['workflow.ui_safety_gate'].type, 'boolean');
+    assert.strictEqual(registry.configSchema['workflow.ui_safety_gate'].default, true);
   });
 
   test('requiresClosure("ui") returns empty set (no requires)', () => {
@@ -1200,6 +1225,7 @@ describe('FIX 1: self-consume rejection in validateConsumesGlobal', () => {
     );
   });
 
+  // (this test follows the series above)
   test('a step produces:["SELF.md"] and consumes:["SELF.md"] and another capability produces SELF.md at the SAME point is accepted (different hook)', () => {
     const producerCap = {
       id: 'producer-cap', role: 'feature', title: 'Producer', description: 'Produces SELF.md',
@@ -1237,6 +1263,244 @@ describe('FIX 1: self-consume rejection in validateConsumesGlobal', () => {
     assert.deepEqual(
       selfErrors, [],
       'Expected self-cap consume of SELF.md to be accepted when a DIFFERENT cap produces it at the same point, got: ' + JSON.stringify(selfErrors),
+    );
+  });
+});
+
+// ─── 14. configSchema emission (ADR-857 phase 3b) ────────────────────────────
+
+describe('configSchema emission (ADR-857 phase 3b)', () => {
+  test('buildRegistry emits configSchema with correct shape for UI pilot', () => {
+    const capDir = makeTempCapDir({ ui: UI_CAP });
+    const { capMap, errors } = loadAndValidate(new Set(), capDir);
+    assert.deepEqual(errors, [], 'No errors expected');
+
+    const registry = buildRegistry(capMap);
+    assert.ok(registry.configSchema, 'registry.configSchema must exist');
+
+    const uiPhase = registry.configSchema['workflow.ui_phase'];
+    assert.ok(uiPhase, 'configSchema must have workflow.ui_phase');
+    assert.strictEqual(uiPhase.owner, 'ui');
+    assert.strictEqual(uiPhase.type, 'boolean');
+    assert.strictEqual(uiPhase.default, true);
+    assert.ok(typeof uiPhase.description === 'string' && uiPhase.description.length > 0);
+
+    const uiReview = registry.configSchema['workflow.ui_review'];
+    assert.ok(uiReview, 'configSchema must have workflow.ui_review');
+    assert.strictEqual(uiReview.owner, 'ui');
+    assert.strictEqual(uiReview.type, 'boolean');
+
+    const uiSafetyGate = registry.configSchema['workflow.ui_safety_gate'];
+    assert.ok(uiSafetyGate, 'configSchema must have workflow.ui_safety_gate');
+    assert.strictEqual(uiSafetyGate.type, 'boolean');
+  });
+
+  test('serializeRegistry emits a configSchema block in the generated .cjs', () => {
+    const capDir = makeTempCapDir({ ui: UI_CAP });
+    const { capMap } = loadAndValidate(new Set(), capDir);
+    const registry = buildRegistry(capMap);
+    const content = serializeRegistry(registry, capMap);
+
+    assert.ok(content.includes('const configSchema'), 'Generated file must contain "const configSchema"');
+    assert.ok(content.includes('"workflow.ui_phase"'), 'Generated file must contain "workflow.ui_phase"');
+    assert.ok(content.includes('"owner"'), 'Generated file must contain "owner" field');
+    assert.ok(content.includes('"type"'), 'Generated file must contain "type" field');
+    assert.ok(content.includes('"default"'), 'Generated file must contain "default" field');
+    assert.ok(content.includes('"description"'), 'Generated file must contain "description" field');
+    assert.ok(content.includes('configSchema,'), 'Generated module.exports must include configSchema');
+  });
+
+  test('committed capability-registry.cjs has configSchema with correct shape', () => {
+    const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
+    assert.ok(registry.configSchema, 'capability-registry.cjs must export configSchema');
+
+    const uiPhase = registry.configSchema['workflow.ui_phase'];
+    assert.ok(uiPhase, 'committed registry configSchema must have workflow.ui_phase');
+    assert.strictEqual(uiPhase.owner, 'ui', 'owner must be "ui"');
+    assert.strictEqual(uiPhase.type, 'boolean', 'type must be "boolean"');
+    assert.strictEqual(uiPhase.default, true, 'default must be true');
+    assert.ok(typeof uiPhase.description === 'string' && uiPhase.description.length > 0);
+  });
+});
+
+// ─── 15. validateConfigSliceEntry adversarial tests ───────────────────────────
+
+describe('validateConfigSliceEntry adversarial cases (ADR-857 phase 3b)', () => {
+  const CAP_ID = 'test-cap';
+  const KEY = 'test.key';
+
+  test('VALID_CONFIG_SLICE_TYPES exports expected types', () => {
+    const types = [...VALID_CONFIG_SLICE_TYPES];
+    assert.ok(types.includes('boolean'), 'Must include boolean');
+    assert.ok(types.includes('string'), 'Must include string');
+    assert.ok(types.includes('number'), 'Must include number');
+    assert.ok(types.includes('enum'), 'Must include enum');
+    assert.strictEqual(types.length, 4, 'Must have exactly 4 types');
+  });
+
+  test('valid boolean slice passes validation', () => {
+    const errors = validateConfigSliceEntry(CAP_ID, KEY, { type: 'boolean', default: true, description: 'ok' });
+    assert.deepEqual(errors, [], 'Valid boolean slice should produce no errors, got: ' + JSON.stringify(errors));
+  });
+
+  test('valid string slice passes validation', () => {
+    const errors = validateConfigSliceEntry(CAP_ID, KEY, { type: 'string', default: 'x', description: 'ok' });
+    assert.deepEqual(errors, []);
+  });
+
+  test('valid number slice passes validation', () => {
+    const errors = validateConfigSliceEntry(CAP_ID, KEY, { type: 'number', default: 5, description: 'ok' });
+    assert.deepEqual(errors, []);
+  });
+
+  test('REJECTED: enum slice without values list → error (FIX 5a: values required)', () => {
+    const errors = validateConfigSliceEntry(CAP_ID, KEY, { type: 'enum', default: 'x', description: 'ok' });
+    assert.ok(errors.length > 0, 'Expected rejection for enum without values list, got: ' + JSON.stringify(errors));
+    assert.ok(
+      errors.some((e) => e.includes('values') || e.includes('enum')),
+      'Error should mention values or enum, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('valid enum slice (with values list, default in values) passes', () => {
+    const errors = validateConfigSliceEntry(CAP_ID, KEY, {
+      type: 'enum', default: 'b', values: ['a', 'b', 'c'], description: 'ok',
+    });
+    assert.deepEqual(errors, []);
+  });
+
+  test('REJECTED: bad type ("xml") → error mentioning type', () => {
+    const errors = validateConfigSliceEntry(CAP_ID, KEY, { type: 'xml', default: '<x/>', description: 'ok' });
+    assert.ok(errors.length > 0, 'Expected rejection for bad type');
+    assert.ok(errors.some((e) => e.includes('type')), 'Error should mention type, got: ' + JSON.stringify(errors));
+  });
+
+  test('REJECTED: missing type → error', () => {
+    const errors = validateConfigSliceEntry(CAP_ID, KEY, { default: true, description: 'ok' });
+    assert.ok(errors.length > 0, 'Expected rejection for missing type');
+    assert.ok(errors.some((e) => e.includes('type')));
+  });
+
+  test('REJECTED: missing default → error mentioning default', () => {
+    const errors = validateConfigSliceEntry(CAP_ID, KEY, { type: 'boolean', description: 'ok' });
+    assert.ok(errors.length > 0, 'Expected rejection for missing default');
+    assert.ok(errors.some((e) => e.includes('default')), 'Error should mention default, got: ' + JSON.stringify(errors));
+  });
+
+  test('REJECTED: boolean type with string default → error', () => {
+    const errors = validateConfigSliceEntry(CAP_ID, KEY, { type: 'boolean', default: 'true', description: 'ok' });
+    assert.ok(errors.length > 0, 'Expected rejection for boolean type with string default');
+    assert.ok(errors.some((e) => e.includes('boolean') || e.includes('default')));
+  });
+
+  test('REJECTED: string type with boolean default → error', () => {
+    const errors = validateConfigSliceEntry(CAP_ID, KEY, { type: 'string', default: false, description: 'ok' });
+    assert.ok(errors.length > 0, 'Expected rejection for string type with boolean default');
+  });
+
+  test('REJECTED: number type with string default → error', () => {
+    const errors = validateConfigSliceEntry(CAP_ID, KEY, { type: 'number', default: 'five', description: 'ok' });
+    assert.ok(errors.length > 0, 'Expected rejection for number type with string default');
+  });
+
+  test('REJECTED: enum type with values list, default not in values → error', () => {
+    const errors = validateConfigSliceEntry(CAP_ID, KEY, {
+      type: 'enum', default: 'z', values: ['a', 'b', 'c'], description: 'ok',
+    });
+    assert.ok(errors.length > 0, 'Expected rejection for enum default not in values');
+    assert.ok(errors.some((e) => e.includes('enum') || e.includes('values') || e.includes('z')));
+  });
+
+  test('REJECTED: enum type with non-string default → error', () => {
+    const errors = validateConfigSliceEntry(CAP_ID, KEY, { type: 'enum', default: 42, description: 'ok' });
+    assert.ok(errors.length > 0, 'Expected rejection for enum with non-string default');
+  });
+
+  test('REJECTED: empty description string → error', () => {
+    const errors = validateConfigSliceEntry(CAP_ID, KEY, { type: 'boolean', default: true, description: '' });
+    assert.ok(errors.length > 0, 'Expected rejection for empty description');
+    assert.ok(errors.some((e) => e.includes('description')));
+  });
+
+  test('REJECTED: non-string description (number) → error', () => {
+    const errors = validateConfigSliceEntry(CAP_ID, KEY, { type: 'boolean', default: true, description: 42 });
+    assert.ok(errors.length > 0, 'Expected rejection for non-string description');
+    assert.ok(errors.some((e) => e.includes('description')));
+  });
+
+  test('REJECTED: missing description → error', () => {
+    const errors = validateConfigSliceEntry(CAP_ID, KEY, { type: 'boolean', default: true });
+    assert.ok(errors.length > 0, 'Expected rejection for missing description');
+    assert.ok(errors.some((e) => e.includes('description')));
+  });
+
+  test('REJECTED: null slice → error', () => {
+    const errors = validateConfigSliceEntry(CAP_ID, KEY, null);
+    assert.ok(errors.length > 0, 'Expected rejection for null slice');
+  });
+
+  test('REJECTED: array slice → error', () => {
+    const errors = validateConfigSliceEntry(CAP_ID, KEY, []);
+    assert.ok(errors.length > 0, 'Expected rejection for array slice');
+  });
+
+  // FIX 5a: enum-without-values and default-not-in-values
+  test('REJECTED: enum with empty values array → error (FIX 5a)', () => {
+    const errors = validateConfigSliceEntry(CAP_ID, KEY, { type: 'enum', default: 'x', values: [], description: 'ok' });
+    assert.ok(errors.length > 0, 'Expected rejection for enum with empty values, got: ' + JSON.stringify(errors));
+    assert.ok(errors.some((e) => e.includes('values') || e.includes('enum')));
+  });
+
+  test('REJECTED: enum with non-string values array entries → error (FIX 5a)', () => {
+    const errors = validateConfigSliceEntry(CAP_ID, KEY, { type: 'enum', default: 'x', values: ['a', 42], description: 'ok' });
+    assert.ok(errors.length > 0, 'Expected rejection for enum with non-string values, got: ' + JSON.stringify(errors));
+    assert.ok(errors.some((e) => e.includes('values') || e.includes('string')));
+  });
+
+  test('REJECTED: enum default not in values → error (FIX 5a)', () => {
+    const errors = validateConfigSliceEntry(CAP_ID, KEY, { type: 'enum', default: 'z', values: ['a', 'b'], description: 'ok' });
+    assert.ok(errors.length > 0, 'Expected rejection for enum default not in values, got: ' + JSON.stringify(errors));
+    assert.ok(errors.some((e) => e.includes('z') || e.includes('values') || e.includes('default')));
+  });
+
+  // FIX 6a: NaN and non-finite number defaults
+  test('REJECTED: NaN number default → error (FIX 6a)', () => {
+    const errors = validateConfigSliceEntry(CAP_ID, KEY, { type: 'number', default: NaN, description: 'ok' });
+    assert.ok(errors.length > 0, 'Expected rejection for NaN default, got: ' + JSON.stringify(errors));
+    assert.ok(errors.some((e) => e.includes('finite') || e.includes('NaN') || e.includes('number')));
+  });
+
+  test('REJECTED: Infinity number default → error (FIX 6a)', () => {
+    const errors = validateConfigSliceEntry(CAP_ID, KEY, { type: 'number', default: Infinity, description: 'ok' });
+    assert.ok(errors.length > 0, 'Expected rejection for Infinity default, got: ' + JSON.stringify(errors));
+    assert.ok(errors.some((e) => e.includes('finite') || e.includes('number')));
+  });
+
+  test('REJECTED: -Infinity number default → error (FIX 6a)', () => {
+    const errors = validateConfigSliceEntry(CAP_ID, KEY, { type: 'number', default: -Infinity, description: 'ok' });
+    assert.ok(errors.length > 0, 'Expected rejection for -Infinity default, got: ' + JSON.stringify(errors));
+  });
+
+  test('buildRegistry throws on malformed config slice in capability', () => {
+    // A capability with a config slice that has a missing default — buildRegistry must throw
+    const cap = {
+      ...UI_CAP,
+      config: {
+        ...UI_CAP.config,
+        'workflow.bad_key': { type: 'boolean', description: 'missing default' },
+      },
+    };
+    const capMap = new Map([['ui', cap]]);
+    assert.throws(
+      () => buildRegistry(capMap),
+      (err) => {
+        assert.ok(err instanceof Error, 'Must throw an Error');
+        assert.ok(
+          err.message.includes('configSchema') || err.message.includes('default') || err.message.includes('validation'),
+          'Error must mention configSchema validation, got: ' + err.message,
+        );
+        return true;
+      },
     );
   });
 });

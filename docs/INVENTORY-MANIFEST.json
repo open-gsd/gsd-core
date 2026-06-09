@@ -293,6 +293,7 @@
       "docs.cjs",
       "drift.cjs",
       "fallow-runner.cjs",
+      "federated-config.cjs",
       "frontmatter.cjs",
       "gap-checker.cjs",
       "graphify.cjs",

@@ -35,8 +35,30 @@ const { detectSubRepos } = coreUtilsModule;
 import { CONFIG_DEFAULTS as CANONICAL_CONFIG_DEFAULTS, normalizeLegacyKeys } from './configuration.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configSchema = require('./config-schema.cjs');
-const { VALID_CONFIG_KEYS, DYNAMIC_KEY_PATTERNS } = configSchema;
+const { VALID_CONFIG_KEYS, DYNAMIC_KEY_PATTERNS, isValidConfigKey: _isValidConfigKeyFn } = configSchema;
 import { KNOWN_RUNTIMES, KNOWN_PROVIDERS } from './model-catalog.cjs';
+// ─── Federated Config (ADR-857 phase 3b) ─────────────────────────────────────
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import federatedConfigModule = require('./federated-config.cjs');
+const { mergeFederatedConfig } = federatedConfigModule;
+// The capability-registry.cjs is generated and lives in the same gsd-core/bin/lib/ output dir.
+// Both config-loader.cjs and capability-registry.cjs land in gsd-core/bin/lib/ at build time.
+// eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
+const _capabilityRegistryReal: { configSchema?: Record<string, unknown> } = require('./capability-registry.cjs');
+
+// Module-level registry reference. Defaults to the real generated registry.
+// Overridable for tests via _setFederatedRegistryForTests.
+let _capabilityRegistry: { configSchema?: Record<string, unknown> } = _capabilityRegistryReal;
+
+/** Test-only seam: inject a synthetic registry. Call _resetFederatedRegistryForTests() to restore. */
+function _setFederatedRegistryForTests(reg: { configSchema?: Record<string, unknown> }): void {
+  _capabilityRegistry = reg;
+}
+
+/** Test-only seam: restore the real generated registry. */
+function _resetFederatedRegistryForTests(): void {
+  _capabilityRegistry = _capabilityRegistryReal;
+}
 
 // ─── File & Config utilities ──────────────────────────────────────────────────
 
@@ -272,6 +294,81 @@ function _resetRuntimeWarningCacheForTests(): void {
   _warnedConfigKeys.clear();
 }
 
+// ─── FIX 2: Federated overlay helpers ────────────────────────────────────────
+
+/**
+ * Apply federated key values into a mutable config object.
+ * Handles N-level dotted keys (e.g. "a.b.c" → obj.a.b.c).
+ * Only adds keys that are not already present (does not clobber).
+ * Inline prototype-pollution guards at every segment.
+ */
+function _applyFederatedValues(
+  obj: Record<string, unknown>,
+  values: Record<string, unknown>,
+  validKeys: string[],
+): void {
+  for (const dottedKey of validKeys) {
+    // S2: inline literal guard on full key
+    if (dottedKey === '__proto__' || dottedKey === 'constructor' || dottedKey === 'prototype') continue;
+    const parts = dottedKey.split('.');
+    if (parts.length === 1) {
+      const topKey = parts[0];
+      if (topKey !== '__proto__' && topKey !== 'constructor' && topKey !== 'prototype') {
+        if (!Object.prototype.hasOwnProperty.call(obj, topKey)) {
+          obj[topKey] = values[dottedKey];
+        }
+      }
+    } else {
+      // N-level nested key: traverse/create intermediate objects
+      let cur: Record<string, unknown> = obj;
+      let ok = true;
+      for (let i = 0; i < parts.length - 1; i++) {
+        const seg = parts[i];
+        // S2: inline literal guard on each segment
+        if (seg === '__proto__' || seg === 'constructor' || seg === 'prototype') { ok = false; break; }
+        if (!Object.prototype.hasOwnProperty.call(cur, seg) || cur[seg] === null) {
+          cur[seg] = {};
+        }
+        if (typeof cur[seg] !== 'object' || Array.isArray(cur[seg])) { ok = false; break; }
+        cur = cur[seg] as Record<string, unknown>;
+      }
+      if (!ok) continue;
+      const leafKey = parts[parts.length - 1];
+      // S2: inline literal guard on leaf
+      if (leafKey === '__proto__' || leafKey === 'constructor' || leafKey === 'prototype') continue;
+      if (!Object.prototype.hasOwnProperty.call(cur, leafKey)) {
+        cur[leafKey] = values[dottedKey];
+      }
+    }
+  }
+}
+
+/**
+ * FIX 2: Apply the federated overlay to a base config object.
+ * When validKeys is empty (current registry — all keys are central),
+ * returns the baseConfig UNCHANGED (true no-op, preserves reference identity).
+ * When validKeys is non-empty, applies values into a shallow clone to avoid
+ * mutating shared CONFIG_DEFAULTS/module constants.
+ */
+function _applyFederatedOverlay(
+  baseConfig: Record<string, unknown>,
+  userConfig: Record<string, unknown>,
+): Record<string, unknown> {
+  const _fedRegistrySchema = _capabilityRegistry.configSchema;
+  if (!_fedRegistrySchema || typeof _fedRegistrySchema !== 'object') return baseConfig;
+  const _fedOverlay = mergeFederatedConfig({
+    configSchema: _fedRegistrySchema,
+    isCentralKey: (key: string) => _isValidConfigKeyFn(key),
+    userConfig,
+  });
+  // True no-op: if no federated keys, return UNCHANGED (byte-identical, no clone)
+  if (_fedOverlay.validKeys.length === 0) return baseConfig;
+  // Clone shallowly to avoid mutating shared constants, then apply nested values
+  const cloned: Record<string, unknown> = { ...baseConfig };
+  _applyFederatedValues(cloned, _fedOverlay.values, _fedOverlay.validKeys);
+  return cloned;
+}
+
 function loadConfig(cwd: string, options: Record<string, unknown> = {}): Record<string, unknown> {
   const activeWorkstream = Object.prototype.hasOwnProperty.call(options, 'workstream')
     ? options['workstream']
@@ -397,6 +494,31 @@ function loadConfig(cwd: string, options: Record<string, unknown> = {}): Record<
       // Deprecated keys (still accepted for migration, not in config-set)
       'depth', 'multiRepo', 'branching_strategy',
     ]);
+
+    // FIX 3: Compute federated overlay BEFORE the unknown-key warning, so that
+    // federated top-level keys are added to KNOWN_TOP_LEVEL before the check runs.
+    // This is hoisted out of the try-catch below so validKeys are available here.
+    let _preWarningFedValidKeys: string[] = [];
+    try {
+      const _fedRegistrySchemaEarly = _capabilityRegistry.configSchema;
+      if (_fedRegistrySchemaEarly && typeof _fedRegistrySchemaEarly === 'object') {
+        const _earlyOverlay = mergeFederatedConfig({
+          configSchema: _fedRegistrySchemaEarly,
+          isCentralKey: (key: string) => _isValidConfigKeyFn(key),
+          userConfig: parsed,
+        });
+        _preWarningFedValidKeys = _earlyOverlay.validKeys;
+        for (const dottedKey of _preWarningFedValidKeys) {
+          const topKey = dottedKey.split('.')[0];
+          if (topKey !== '__proto__' && topKey !== 'constructor' && topKey !== 'prototype') {
+            KNOWN_TOP_LEVEL.add(topKey);
+          }
+        }
+      }
+    } catch {
+      // Defensive: if registry access fails here, proceed without pre-warning keys
+    }
+
     const unknownKeys = Object.keys(parsed).filter(k => !KNOWN_TOP_LEVEL.has(k));
     if (unknownKeys.length > 0) {
       const warnKey = unknownKeys.join(',');
@@ -429,7 +551,7 @@ function loadConfig(cwd: string, options: Record<string, unknown> = {}): Record<
       return defaults.parallelization;
     })();
 
-    return {
+    const _baseConfig: Record<string, unknown> = {
       model_profile: get('model_profile') ?? defaults.model_profile,
       commit_docs: (() => {
         const explicit = get('commit_docs', { section: 'planning', field: 'commit_docs' });
@@ -492,14 +614,54 @@ function loadConfig(cwd: string, options: Record<string, unknown> = {}): Record<
       claude_md_path: get('claude_md_path') || null,
       claude_md_assembly: (parsed['claude_md_assembly']) || null,
     };
+
+    // ─── ADR-857 phase 3b: federated config overlay ───────────────────────────
+    // FIX 2: Use the pre-computed _preWarningFedValidKeys (from the FIX 3 block above)
+    // plus a fresh overlay call to get values. The KNOWN_TOP_LEVEL was already updated.
+    // TODAY: every UI key is still in the central config-schema, so isCentralKey()
+    // returns true for all of them → validKeys is empty → _baseConfig is returned UNCHANGED
+    // (true no-op: no clone, no reorder, byte-identical output).
+    // This becomes a live channel once a key is atomically removed from the central schema.
+    try {
+      if (_preWarningFedValidKeys.length > 0) {
+        // There are actual federated values — re-use the already-computed overlay
+        // (we run mergeFederatedConfig again here to get the values map; the validKeys
+        //  are guaranteed identical since it's the same inputs).
+        const _fedRegistrySchema = _capabilityRegistry.configSchema;
+        if (_fedRegistrySchema && typeof _fedRegistrySchema === 'object') {
+          const _fedOverlay = mergeFederatedConfig({
+            configSchema: _fedRegistrySchema,
+            isCentralKey: (key: string) => _isValidConfigKeyFn(key),
+            userConfig: parsed,
+          });
+          // Apply dotted-path values (e.g. "workflow.ui_phase" → _baseConfig.workflow.ui_phase)
+          // WITHOUT clobbering existing keys. N-level nesting supported.
+          _applyFederatedValues(_baseConfig, _fedOverlay.values, _fedOverlay.validKeys);
+        }
+      }
+      // Pending-migration warnings are suppressed at load time to avoid noisy output on
+      // every loadConfig call. They are surfaced at registry-generation time (--check/--write).
+    } catch {
+      // Defensive: if the federated overlay throws for any reason, return the base config unchanged.
+      // This keeps loadConfig's no-throw contract intact regardless of capability registry state.
+    }
+    return _baseConfig;
   } catch {
     // Fall back to ~/.gsd/defaults.json only for truly pre-project contexts (#1683)
     if (fs.existsSync(planningDir(cwd, ws))) {
       if (rootParsed) {
         // Workstream has no config.json: re-parse using root config as the sole source.
+        // (FIX 2: overlay is applied recursively in the re-entrant loadConfig call)
         return loadConfig(cwd, { workstream: null });
       }
-      return defaults;
+      // FIX 2: Apply the federated overlay on the no-config path.
+      // With the current registry (all keys central), _applyFederatedOverlay returns
+      // `defaults` UNCHANGED (true no-op, preserves byte-identical output).
+      try {
+        return _applyFederatedOverlay(defaults, {});
+      } catch {
+        return defaults;
+      }
     }
     try {
       const home = process.env['GSD_HOME'] || os.homedir();
@@ -507,7 +669,7 @@ function loadConfig(cwd: string, options: Record<string, unknown> = {}): Record<
       const raw = platformReadSync(globalDefaultsPath);
       if (raw === null) throw new Error('missing');
       const globalDefaults = JSON.parse(raw) as Record<string, unknown>;
-      return {
+      const _globalBaseCfg: Record<string, unknown> = {
         ...defaults,
         model_profile: (globalDefaults['model_profile']) ?? defaults.model_profile,
         commit_docs: (globalDefaults['commit_docs']) ?? defaults.commit_docs,
@@ -534,8 +696,21 @@ function loadConfig(cwd: string, options: Record<string, unknown> = {}): Record<
         agent_skills: (globalDefaults['agent_skills']) || {},
         response_language: (globalDefaults['response_language']) || null,
       };
+      // FIX 2: Apply federated overlay on global-defaults path.
+      // With the current registry this is a true no-op (returns _globalBaseCfg unchanged).
+      try {
+        return _applyFederatedOverlay(_globalBaseCfg, globalDefaults);
+      } catch {
+        return _globalBaseCfg;
+      }
     } catch {
-      return defaults;
+      // FIX 2: Apply federated overlay on the final fallback path.
+      // With the current registry this is a true no-op (returns `defaults` unchanged).
+      try {
+        return _applyFederatedOverlay(defaults, {});
+      } catch {
+        return defaults;
+      }
     }
   }
 }
@@ -553,4 +728,6 @@ export = {
   _warnedConfigKeys,
   _gitIgnoredCache,
   RUNTIME_OVERRIDE_TIERS,
+  _setFederatedRegistryForTests,
+  _resetFederatedRegistryForTests,
 };

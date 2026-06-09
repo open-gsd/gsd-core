@@ -105,6 +105,100 @@ function loadCentralConfigKeys() {
   }
 }
 
+// ─── Config-slice validation ──────────────────────────────────────────────────
+
+const VALID_CONFIG_SLICE_TYPES = new Set(['boolean', 'string', 'number', 'enum']);
+
+/**
+ * Validate a single config-slice entry (one key's { type, default, description }).
+ * Returns an array of error strings. Empty = valid.
+ *
+ * @param {string} capId     Capability id (for error messages)
+ * @param {string} key       Config key (for error messages)
+ * @param {object} slice     The slice object from cap.config[key]
+ * @returns {string[]}
+ */
+function validateConfigSliceEntry(capId, key, slice) {
+  const errors = [];
+
+  if (typeof slice !== 'object' || slice === null || Array.isArray(slice)) {
+    errors.push('capability "' + capId + '" config["' + key + '"]: slice must be a non-null object');
+    return errors;
+  }
+
+  // type must be one of the allowed set
+  if (!VALID_CONFIG_SLICE_TYPES.has(slice.type)) {
+    errors.push(
+      'capability "' + capId + '" config["' + key + '"]: type must be one of ' +
+      [...VALID_CONFIG_SLICE_TYPES].join(', ') + ' (got: ' + JSON.stringify(slice.type) + ')',
+    );
+  }
+
+  // default must be present
+  if (!Object.prototype.hasOwnProperty.call(slice, 'default')) {
+    errors.push(
+      'capability "' + capId + '" config["' + key + '"]: default is required',
+    );
+  } else {
+    // type-consistency check
+    const def = slice.default;
+    if (slice.type === 'boolean') {
+      if (typeof def !== 'boolean') {
+        errors.push(
+          'capability "' + capId + '" config["' + key + '"]: default must be a boolean for type:"boolean" (got: ' + typeof def + ')',
+        );
+      }
+    } else if (slice.type === 'string') {
+      if (typeof def !== 'string') {
+        errors.push(
+          'capability "' + capId + '" config["' + key + '"]: default must be a string for type:"string" (got: ' + typeof def + ')',
+        );
+      }
+    } else if (slice.type === 'number') {
+      if (typeof def !== 'number') {
+        errors.push(
+          'capability "' + capId + '" config["' + key + '"]: default must be a number for type:"number" (got: ' + typeof def + ')',
+        );
+      } else if (!Number.isFinite(def)) {
+        // FIX 6a: Reject NaN and non-finite number defaults
+        errors.push(
+          'capability "' + capId + '" config["' + key + '"]: default for type:"number" must be a finite number (got: ' + String(def) + ')',
+        );
+      }
+    } else if (slice.type === 'enum') {
+      // FIX 5a: enum REQUIRES a non-empty values array (all strings), and default must be in it
+      if (!Array.isArray(slice.values) || slice.values.length === 0) {
+        errors.push(
+          'capability "' + capId + '" config["' + key + '"]: type:"enum" requires a non-empty "values" array of strings',
+        );
+      } else if (!slice.values.every((v) => typeof v === 'string')) {
+        errors.push(
+          'capability "' + capId + '" config["' + key + '"]: type:"enum" values array must contain only strings',
+        );
+      }
+      if (typeof def !== 'string') {
+        errors.push(
+          'capability "' + capId + '" config["' + key + '"]: default must be a string for type:"enum" (got: ' + typeof def + ')',
+        );
+      } else if (Array.isArray(slice.values) && slice.values.length > 0 && !slice.values.includes(def)) {
+        errors.push(
+          'capability "' + capId + '" config["' + key + '"]: default "' + def +
+          '" is not one of the declared enum values [' + slice.values.join(', ') + ']',
+        );
+      }
+    }
+  }
+
+  // description must be a non-empty string
+  if (typeof slice.description !== 'string' || slice.description.length === 0) {
+    errors.push(
+      'capability "' + capId + '" config["' + key + '"]: description must be a non-empty string (got: ' + JSON.stringify(slice.description) + ')',
+    );
+  }
+
+  return errors;
+}
+
 // ─── Per-capability validation ────────────────────────────────────────────────
 
 const KEBAB_RE = /^[a-z][a-z0-9-]*$/;
@@ -951,6 +1045,7 @@ function buildRegistry(capMap) {
   const byAgent = Object.create(null);
   const byLoopPoint = Object.create(null);
   const configKeys = Object.create(null);
+  const configSchema = Object.create(null);
   const runtimes = Object.create(null);
 
   // Initialize byLoopPoint for all valid points
@@ -989,6 +1084,29 @@ function buildRegistry(capMap) {
         // S2b: inline literal guard at each write site (CodeQL barrier)
         if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
         configKeys[key] = capId;
+
+        // Build configSchema entry — validate the slice first (throw on violation)
+        const slice = (cap.config || {})[key];
+        const sliceErrors = validateConfigSliceEntry(capId, key, slice);
+        if (sliceErrors.length > 0) {
+          throw new Error(
+            'configSchema validation failed during registry build:\n' +
+            sliceErrors.map((e) => '  ' + e).join('\n'),
+          );
+        }
+        // S2b: inline literal guard for configSchema write site
+        if (key !== '__proto__' && key !== 'constructor' && key !== 'prototype') {
+          configSchema[key] = {
+            owner: capId,
+            type: slice.type,
+            default: slice.default,
+            description: slice.description,
+          };
+          // Preserve values array for enum types if present
+          if (slice.type === 'enum' && Array.isArray(slice.values)) {
+            configSchema[key].values = slice.values;
+          }
+        }
       }
 
       for (const step of (cap.steps || [])) {
@@ -1050,6 +1168,7 @@ function buildRegistry(capMap) {
     byAgent,
     byLoopPoint,
     configKeys,
+    configSchema,
     runtimes,
   };
 }
@@ -1084,6 +1203,8 @@ function serializeRegistry(registry, capMap) {
   lines.push('const byLoopPoint = ' + JSON.stringify(registry.byLoopPoint, null, 2) + ';');
   lines.push('');
   lines.push('const configKeys = ' + JSON.stringify(registry.configKeys, null, 2) + ';');
+  lines.push('');
+  lines.push('const configSchema = ' + JSON.stringify(registry.configSchema, null, 2) + ';');
   lines.push('');
   lines.push('const runtimes = ' + JSON.stringify(registry.runtimes, null, 2) + ';');
   lines.push('');
@@ -1121,6 +1242,7 @@ function serializeRegistry(registry, capMap) {
   lines.push('  byAgent,');
   lines.push('  byLoopPoint,');
   lines.push('  configKeys,');
+  lines.push('  configSchema,');
   lines.push('  runtimes,');
   lines.push('  requiresClosure,');
   lines.push('};');
@@ -1280,6 +1402,8 @@ module.exports = {
   computeRequiresClosure,
   topoSortSteps,
   normalizeLineEndings,
+  validateConfigSliceEntry,
+  VALID_CONFIG_SLICE_TYPES,
   LOOP_HOST_CONTRACT,
   VALID_LOOP_POINTS,
   POINT_ORDER,
