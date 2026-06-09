@@ -8894,6 +8894,52 @@ function uninstall(isGlobal, runtime = 'claude') {
     }
   }
 
+  // 4a. Remove scripts/changeset/ and scripts/lib/ (#935)
+  // GSD-managed files only: enumerate the exact set the installer writes.
+  // Any file NOT in this set is user-owned and must survive uninstall.
+  // After removing GSD files, attempt to rmdir — if the directory is still
+  // non-empty (user has custom helpers) it stays; otherwise it goes cleanly.
+  const GSD_CHANGESET_FILES = [
+    'cli.cjs', 'parse.cjs', 'render.cjs', 'serialize.cjs',
+    'github-release-notes.cjs', 'lint.cjs', 'new.cjs',
+    'README.md', // documentation only — not user-authored
+  ];
+  const GSD_SCRIPTS_LIB_FILES = ['cli-exit.cjs', 'allowlist-ratchet.cjs'];
+
+  const changesetUninstallDir = path.join(targetDir, 'scripts', 'changeset');
+  if (fs.existsSync(changesetUninstallDir)) {
+    let removedChangeset = 0;
+    for (const file of GSD_CHANGESET_FILES) {
+      const fp = path.join(changesetUninstallDir, file);
+      try { fs.unlinkSync(fp); removedChangeset++; } catch (_) { /* best-effort */ }
+    }
+    // Remove directory if empty after our cleanup
+    try { fs.rmdirSync(changesetUninstallDir); } catch (_) { /* Not empty — user content present */ }
+    if (removedChangeset > 0) {
+      removedCount++;
+      console.log(`  ${green}✓${reset} Removed scripts/changeset/ GSD files`);
+    }
+  }
+  const scriptsLibUninstallDir = path.join(targetDir, 'scripts', 'lib');
+  if (fs.existsSync(scriptsLibUninstallDir)) {
+    let removedScriptsLib = 0;
+    for (const file of GSD_SCRIPTS_LIB_FILES) {
+      const fp = path.join(scriptsLibUninstallDir, file);
+      try { fs.unlinkSync(fp); removedScriptsLib++; } catch (_) { /* best-effort */ }
+    }
+    // Remove directory if empty after our cleanup
+    try { fs.rmdirSync(scriptsLibUninstallDir); } catch (_) { /* Not empty — user content present */ }
+    if (removedScriptsLib > 0) {
+      removedCount++;
+      console.log(`  ${green}✓${reset} Removed scripts/lib/ GSD files`);
+    }
+  }
+  // If scripts/ dir is now empty, remove it too
+  const scriptsUninstallDir = path.join(targetDir, 'scripts');
+  if (fs.existsSync(scriptsUninstallDir)) {
+    try { fs.rmdirSync(scriptsUninstallDir); } catch (_) { /* Not empty — leave it */ }
+  }
+
   // 5. Remove GSD package.json (CommonJS mode marker)
   const pkgJsonPath = path.join(targetDir, 'package.json');
   if (fs.existsSync(pkgJsonPath)) {
@@ -9573,6 +9619,24 @@ function writeManifest(configDir, runtime = 'claude', options = {}) {
             manifest.files['hooks/lib/' + file] = fileHash(path.join(hooksLibDir, file));
           }
         }
+      }
+    }
+  }
+
+  // Track scripts/changeset/ and scripts/lib/ so saveLocalPatches() can detect drift
+  const changesetInstallDir = path.join(configDir, 'scripts', 'changeset');
+  if (fs.existsSync(changesetInstallDir)) {
+    for (const file of fs.readdirSync(changesetInstallDir)) {
+      if (file.endsWith('.cjs')) {
+        manifest.files['scripts/changeset/' + file] = fileHash(path.join(changesetInstallDir, file));
+      }
+    }
+  }
+  const scriptsLibInstallDir = path.join(configDir, 'scripts', 'lib');
+  if (fs.existsSync(scriptsLibInstallDir)) {
+    for (const file of fs.readdirSync(scriptsLibInstallDir)) {
+      if (file.endsWith('.cjs')) {
+        manifest.files['scripts/lib/' + file] = fileHash(path.join(scriptsLibInstallDir, file));
       }
     }
   }
@@ -10896,6 +10960,64 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     fs.mkdirSync(hooksLibDest, { recursive: true });
     copyLibDir(hooksLibSrc, hooksLibDest, GSD_HOOK_LIB_FILES);
     console.log(`  ${green}✓${reset} Installed hooks/lib/ helpers (git-cmd, graphify-rebuild, ...)`);
+  }
+
+  // Install scripts/changeset/ and scripts/lib/ into <configDir>/scripts/
+  // so that `node "$GSD_DIR/scripts/changeset/cli.cjs"` resolves at runtime.
+  //
+  // The changeset CLI (scripts/changeset/cli.cjs) is invoked by the update
+  // workflow (gsd-core/workflows/update.md) to extract changelog ranges for
+  // the /gsd-update preview step. It was previously only present in the npm
+  // tarball root but never copied to the runtime config dir, causing the
+  // preview to always silently fail (#935).
+  //
+  // cli.cjs requires:
+  //   - sibling files in scripts/changeset/ (parse/render/serialize/github-release-notes)
+  //   - ../lib/cli-exit.cjs  → scripts/lib/cli-exit.cjs
+  //   - ../../gsd-core/bin/lib/semver-compare.cjs  (already installed under gsd-core/)
+  //   - ../../gsd-core/bin/lib/package-identity.cjs (already installed under gsd-core/)
+  //
+  // All runtimes that use the update workflow need this, so we copy unconditionally
+  // (same scope as gsd-core/ itself — every runtime that installs workflows gets it).
+  const changesetSrc = path.join(src, 'scripts', 'changeset');
+  const scriptsLibSrc = path.join(src, 'scripts', 'lib');
+  if (!fs.existsSync(changesetSrc)) {
+    // The changeset CLI source is missing from the package — mark as a hard failure
+    // so the user knows the changelog preview will not work rather than silently degrading.
+    failures.push('scripts/changeset/ (source missing from package — reinstall from npm)');
+  } else {
+    const changesetDest = path.join(targetDir, 'scripts', 'changeset');
+    const scriptsLibDest = path.join(targetDir, 'scripts', 'lib');
+    fs.mkdirSync(changesetDest, { recursive: true });
+    fs.mkdirSync(scriptsLibDest, { recursive: true });
+    // Copy scripts/changeset/ — all .cjs and .md files
+    for (const entry of fs.readdirSync(changesetSrc)) {
+      const srcFile = path.join(changesetSrc, entry);
+      if (fs.statSync(srcFile).isFile()) {
+        fs.copyFileSync(srcFile, path.join(changesetDest, entry));
+      }
+    }
+    // Copy scripts/lib/ — cli-exit.cjs (required by cli.cjs) and any future lib helpers.
+    // Hard-fail if missing: without cli-exit.cjs the installed CLI throws MODULE_NOT_FOUND.
+    if (!fs.existsSync(scriptsLibSrc)) {
+      failures.push('scripts/lib/ (source missing from package — reinstall from npm)');
+    } else {
+      for (const entry of fs.readdirSync(scriptsLibSrc)) {
+        const srcFile = path.join(scriptsLibSrc, entry);
+        if (fs.statSync(srcFile).isFile()) {
+          fs.copyFileSync(srcFile, path.join(scriptsLibDest, entry));
+        }
+      }
+      // Verify the critical dep cli-exit.cjs landed
+      if (!verifyFileInstalled(path.join(scriptsLibDest, 'cli-exit.cjs'), 'scripts/lib/cli-exit.cjs')) {
+        failures.push('scripts/lib/cli-exit.cjs');
+      }
+    }
+    if (verifyFileInstalled(path.join(changesetDest, 'cli.cjs'), 'scripts/changeset/cli.cjs')) {
+      console.log(`  ${green}✓${reset} Installed scripts/changeset/ (changelog preview CLI)`);
+    } else {
+      failures.push('scripts/changeset/cli.cjs');
+    }
   }
 
   // Remove legacy get-shit-done-cc artifacts and stale update caches (#607).
