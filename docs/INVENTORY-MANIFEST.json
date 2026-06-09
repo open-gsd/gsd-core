@@ -309,6 +309,7 @@
       "learnings.cjs",
       "legacy-cleanup.cjs",
       "loop-host-contract.cjs",
+      "loop-resolver.cjs",
       "milestone.cjs",
       "model-catalog.cjs",
       "model-profiles.cjs",
