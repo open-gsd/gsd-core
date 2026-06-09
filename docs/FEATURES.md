@@ -1005,7 +1005,7 @@ fix(03-01): correct auth token expiry
 **Purpose:** Run GSD across multiple AI coding agent runtimes.
 
 **Requirements:**
-- REQ-RUNTIME-01: System MUST support Claude Code, OpenCode, Gemini CLI, Kilo, Codex, Copilot, Antigravity, Trae, Cline, Augment Code, CodeBuddy, Qwen Code
+- REQ-RUNTIME-01: System MUST support Claude Code, OpenCode, Gemini CLI, Kilo, Codex, Copilot, Antigravity, Trae, Cline, Augment Code, CodeBuddy, Qwen Code, Command Code
 - REQ-RUNTIME-02: Installer MUST transform content per runtime (tool names, paths, frontmatter)
 - REQ-RUNTIME-03: Installer MUST support interactive and non-interactive (`--claude --global`) modes
 - REQ-RUNTIME-04: Installer MUST support both global and local installation
@@ -1016,13 +1016,13 @@ fix(03-01): correct auth token expiry
 
 **Runtime Transformations:**
 
-| Aspect | Claude Code | OpenCode | Gemini | Kilo | Codex | Copilot | Antigravity | Cursor | Trae | Cline | Augment | CodeBuddy | Qwen Code |
-|--------|------------|----------|--------|-------|-------|---------|-------------|--------|------|-------|---------|-----------|-----------|
-| Commands | Slash commands | Slash commands | Slash commands (`{{args}}`) | Slash commands | Skills (TOML) | Slash commands | Skills | Skills + Slash commands | Skills | Rules | Skills + Slash commands | Slash commands | Skills |
-| Agent format | Claude native | `mode: subagent` | Claude native | `mode: subagent` | Skills | Tool mapping | Skills | Skills | Skills | Rules | Skills | Skills | Skills |
-| Skills emission | N/A | On-demand SKILL.md (1.4.0) | N/A | On-demand SKILL.md (1.4.0) | `/skills` picker (1.4.0) | N/A | N/A | SKILL.md | N/A | On-demand SKILL.md (1.4.0) | N/A | N/A | N/A |
-| Hook events | `SessionStart`, `PreToolUse`, `PostToolUse`, `SubagentStop`, `Stop`, `PreCompact`, `FileChanged` | N/A | `SessionStart`, `BeforeTool`, `AfterTool`, `BeforeAgent`, `AfterAgent`, `BeforeModel` | N/A | `SessionStart`, `SubagentStart`, `Stop`, `PostToolUse` | `sessionStart` | N/A | `sessionStart`, `postToolUse` | N/A | `PreToolUse` | N/A | N/A | `SessionStart`, `PreToolUse`, `PostToolUse`, `SubagentStop`, `Stop`, `PreCompact` |
-| Config | `settings.json` | `opencode.json(c)` | `settings.json` | `kilo.json(c)` | TOML | Instructions | Config | Config | Config | `.clinerules` | Config | Config | Config |
+| Aspect | Claude Code | OpenCode | Gemini | Kilo | Codex | Copilot | Antigravity | Cursor | Trae | Cline | Augment | CodeBuddy | Qwen Code | Command Code |
+|--------|------------|----------|--------|-------|-------|---------|-------------|--------|------|-------|---------|-----------|-----------|--------------|
+| Commands | Slash commands | Slash commands | Slash commands (`{{args}}`) | Slash commands | Skills (TOML) | Slash commands | Skills | Skills + Slash commands | Skills | Rules | Skills + Slash commands | Slash commands | Skills | Skills |
+| Agent format | Claude native | `mode: subagent` | Claude native | `mode: subagent` | Skills | Tool mapping | Skills | Skills | Skills | Rules | Skills | Skills | Skills | Skills |
+| Skills emission | N/A | On-demand SKILL.md (1.4.0) | N/A | On-demand SKILL.md (1.4.0) | `/skills` picker (1.4.0) | N/A | N/A | SKILL.md | N/A | On-demand SKILL.md (1.4.0) | N/A | N/A | N/A | SKILL.md |
+| Hook events | `SessionStart`, `PreToolUse`, `PostToolUse`, `SubagentStop`, `Stop`, `PreCompact`, `FileChanged` | N/A | `SessionStart`, `BeforeTool`, `AfterTool`, `BeforeAgent`, `AfterAgent`, `BeforeModel` | N/A | `SessionStart`, `SubagentStart`, `Stop`, `PostToolUse` | `sessionStart` | N/A | `sessionStart`, `postToolUse` | N/A | `PreToolUse` | N/A | N/A | `SessionStart`, `PreToolUse`, `PostToolUse`, `SubagentStop`, `Stop`, `PreCompact` | N/A |
+| Config | `settings.json` | `opencode.json(c)` | `settings.json` | `kilo.json(c)` | TOML | Instructions | Config | Config | Config | `.clinerules` | Config | Config | Config | Config |
 
 **Cursor artifact surfaces:** `gsd install --cursor` writes two artifact kinds:
 - `~/.cursor/skills/gsd-<name>/SKILL.md` — rich skills with YAML frontmatter, Cursor tool-name mapping, and adapter context header (existing surface)
