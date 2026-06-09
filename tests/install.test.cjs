@@ -684,3 +684,126 @@ describe('Kilo source integration assertions', () => {
     assert.ok(updateContextSrc.includes('KILO_CONFIG'));
   });
 });
+
+// ─── Section N: changeset CLI install regression (#935) ──────────────────────
+
+describe('install — changeset CLI lands at scripts/changeset/cli.cjs (#935)', () => {
+  // Regression guard: the changeset CLI must be copied into the runtime config dir
+  // by the installer so $GSD_DIR/scripts/changeset/cli.cjs resolves at runtime.
+  // Before this fix, scripts/ was never copied and /gsd-update changelog preview
+  // silently failed on every real install.
+  let tmpDir;
+  let previousCwd;
+
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-changeset-install-');
+    previousCwd = process.cwd();
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    process.chdir(previousCwd);
+    cleanup(tmpDir);
+  });
+
+  test('install() copies scripts/changeset/cli.cjs to <configDir>/scripts/changeset/cli.cjs', () => {
+    install(false, 'claude');
+    const claudeDir = path.join(tmpDir, '.claude');
+    const cliPath = path.join(claudeDir, 'scripts', 'changeset', 'cli.cjs');
+    assert.ok(
+      fs.existsSync(cliPath),
+      `scripts/changeset/cli.cjs must exist at ${path.relative(tmpDir, cliPath)} after install (#935)`,
+    );
+  });
+
+  test('install() copies scripts/lib/cli-exit.cjs to <configDir>/scripts/lib/cli-exit.cjs', () => {
+    install(false, 'claude');
+    const claudeDir = path.join(tmpDir, '.claude');
+    const cliExitPath = path.join(claudeDir, 'scripts', 'lib', 'cli-exit.cjs');
+    assert.ok(
+      fs.existsSync(cliExitPath),
+      `scripts/lib/cli-exit.cjs must exist at ${path.relative(tmpDir, cliExitPath)} after install (#935)`,
+    );
+  });
+
+  test('installed cli.cjs executes without module-resolution errors', () => {
+    // Smoke test: node can load the installed changeset CLI without crashing.
+    // This catches path mismatches in require('../lib/cli-exit.cjs') etc.
+    install(false, 'claude');
+    const claudeDir = path.join(tmpDir, '.claude');
+    const cliPath = path.join(claudeDir, 'scripts', 'changeset', 'cli.cjs');
+    const { spawnSync } = require('node:child_process');
+    const result = spawnSync(process.execPath, [cliPath, '--help'], { encoding: 'utf8' });
+    // --help exits with code 1 (usage shown), but must NOT throw a MODULE_NOT_FOUND error
+    assert.ok(
+      !result.stderr.includes('MODULE_NOT_FOUND'),
+      `cli.cjs must not produce MODULE_NOT_FOUND errors; stderr=${result.stderr}`,
+    );
+    assert.ok(
+      !result.stderr.includes('Cannot find module'),
+      `cli.cjs must resolve all modules; stderr=${result.stderr}`,
+    );
+  });
+
+  test('installed cli.cjs can run extract subcommand end-to-end (#935)', () => {
+    // Integration smoke test: the installed CLI's extract path (invoked by update.md)
+    // must actually work — this catches require() path issues that --help wouldn't surface.
+    install(false, 'claude');
+    const claudeDir = path.join(tmpDir, '.claude');
+    const cliPath = path.join(claudeDir, 'scripts', 'changeset', 'cli.cjs');
+    // Use the CHANGELOG.md that was installed into gsd-core/ (installed by the installer)
+    const changelogPath = path.join(claudeDir, 'gsd-core', 'CHANGELOG.md');
+    assert.ok(fs.existsSync(changelogPath), 'CHANGELOG.md must be installed under gsd-core/');
+    const { spawnSync } = require('node:child_process');
+    const result = spawnSync(
+      process.execPath,
+      [cliPath, 'extract', '--from', '0.0.0', '--to', '9999.0.0', '--changelog', changelogPath, '--json'],
+      { encoding: 'utf8' },
+    );
+    // extract must NOT throw a MODULE_NOT_FOUND or Cannot find module error
+    assert.ok(
+      !result.stderr.includes('MODULE_NOT_FOUND') && !result.stderr.includes('Cannot find module'),
+      `installed cli.cjs extract must resolve all modules; stderr=${result.stderr}`,
+    );
+    // extract exit code 0 (found entries) or 2 (no entries in range) are both valid;
+    // any other exit code is an error
+    assert.ok(
+      result.status === 0 || result.status === 2,
+      `installed cli.cjs extract must exit 0 or 2; got ${result.status}; stderr=${result.stderr}`,
+    );
+  });
+
+  test('writeManifest() tracks scripts/changeset/ and scripts/lib/ files', () => {
+    install(false, 'claude');
+    const claudeDir = path.join(tmpDir, '.claude');
+    const manifest = writeManifest(claudeDir, 'claude');
+    const changesetKeys = Object.keys(manifest.files).filter(k => k.startsWith('scripts/changeset/'));
+    const libKeys = Object.keys(manifest.files).filter(k => k.startsWith('scripts/lib/'));
+    assert.ok(changesetKeys.length > 0, 'manifest must track scripts/changeset/ files');
+    assert.ok(libKeys.length > 0, 'manifest must track scripts/lib/ files');
+    assert.ok(
+      changesetKeys.includes('scripts/changeset/cli.cjs'),
+      'manifest must include scripts/changeset/cli.cjs',
+    );
+    assert.ok(
+      libKeys.includes('scripts/lib/cli-exit.cjs'),
+      'manifest must include scripts/lib/cli-exit.cjs',
+    );
+  });
+
+  test('uninstall() removes scripts/changeset/ and scripts/lib/', () => {
+    install(false, 'claude');
+    const claudeDir = path.join(tmpDir, '.claude');
+    assert.ok(fs.existsSync(path.join(claudeDir, 'scripts', 'changeset', 'cli.cjs')),
+      'pre-condition: cli.cjs must be installed before uninstall');
+    uninstall(false, 'claude');
+    assert.ok(
+      !fs.existsSync(path.join(claudeDir, 'scripts', 'changeset')),
+      'scripts/changeset/ must be removed on uninstall',
+    );
+    assert.ok(
+      !fs.existsSync(path.join(claudeDir, 'scripts', 'lib')),
+      'scripts/lib/ must be removed on uninstall',
+    );
+  });
+});
