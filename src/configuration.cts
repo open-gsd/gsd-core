@@ -1,6 +1,8 @@
 /**
- * Configuration Module — single source of truth for config loading,
- * legacy-key normalization, defaults merge, and explicit on-disk migration.
+ * Configuration Module — legacy-key normalization, defaults merge, and explicit
+ * on-disk migration. Pure normalization primitives consumed by config-loader.cjs
+ * and config-schema.cjs. `loadConfig` was extracted to config-loader.cjs per
+ * ADR-857 phase 2e (#885) and removed from this module per #893.
  *
  * ADR-457 build-at-publish: the hand-written bin/lib/configuration.cjs collapsed
  * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
@@ -132,11 +134,6 @@ interface NormalizeLegacyKeysResult {
   normalizations: Normalization[];
 }
 
-interface LoadConfigOptions {
-  workstream?: string;
-  onNormalizations?: (normalizations: Normalization[]) => void;
-}
-
 interface MigrateOnDiskResult {
   migrated: boolean;
   normalizations: Normalization[];
@@ -197,38 +194,6 @@ function mergeDefaults(parsed: Record<string, unknown>): Record<string, unknown>
   return deepMergeConfig(defaults, parsed);
 }
 
-function loadConfig(cwd: string, options?: LoadConfigOptions): Record<string, unknown> {
-  const configPath = join(planningDir(cwd, options?.workstream), 'config.json');
-  let raw: string;
-  try {
-    raw = readFileSync(configPath, 'utf-8');
-  }
-  catch {
-    // File missing — return defaults
-    return mergeDefaults({});
-  }
-  const trimmed = raw.trim();
-  if (trimmed === '') {
-    return mergeDefaults({});
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  }
-  catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse config at ${configPath}: ${msg}`);
-  }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new Error(`Config at ${configPath} must be a JSON object`);
-  }
-  const { parsed: normalized, normalizations } = normalizeLegacyKeys(parsed as Record<string, unknown>);
-  if (options?.onNormalizations && normalizations.length > 0) {
-    options.onNormalizations(normalizations);
-  }
-  return mergeDefaults(normalized);
-}
-
 function migrateOnDisk(cwd: string, workstream?: string): MigrateOnDiskResult {
   const configPath = join(planningDir(cwd, workstream), 'config.json');
   let raw: string;
@@ -277,7 +242,6 @@ function migrateOnDisk(cwd: string, workstream?: string): MigrateOnDiskResult {
 }
 
 export {
-  loadConfig,
   normalizeLegacyKeys,
   mergeDefaults,
   migrateOnDisk,
