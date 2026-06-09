@@ -421,9 +421,10 @@ describe('install: manifest records mode for both profiles', () => {
       const manifestPath = path.join(targetDir, MANIFEST_NAME);
       if (!fs.existsSync(manifestPath)) return { mode: '<no manifest>', skillCount: 0, agentCount: 0 };
       const m = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-      const skillCount = new Set(
-        Object.keys(m.files || {}).filter(k => k.startsWith('skills/')).map(k => k.split('/')[1]),
-      ).size;
+      // Count SKILL.md files under skills/ (works for both flat and ns-nested layouts).
+      const skillCount = Object.keys(m.files || {}).filter(
+        k => k.startsWith('skills/') && k.endsWith('/SKILL.md'),
+      ).length;
       const agentCount = Object.keys(m.files || {}).filter(k => k.startsWith('agents/')).length;
       return { mode: m.mode, skillCount, agentCount };
     } finally {
@@ -474,9 +475,10 @@ describe('install-minimal-backcompat: --minimal and --profile=core produce same 
       const manifestPath = path.join(targetDir, MANIFEST_NAME);
       if (!fs.existsSync(manifestPath)) return { mode: null, skillCount: 0, profileMarker: null };
       const m = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-      const skillCount = new Set(
-        Object.keys(m.files || {}).filter(k => k.startsWith('skills/')).map(k => k.split('/')[1]),
-      ).size;
+      // Count SKILL.md files under skills/ (works for both flat and ns-nested layouts).
+      const skillCount = Object.keys(m.files || {}).filter(
+        k => k.startsWith('skills/') && k.endsWith('/SKILL.md'),
+      ).length;
       const markerPath = path.join(targetDir, '.gsd-profile');
       const profileMarker = fs.existsSync(markerPath) ? fs.readFileSync(markerPath, 'utf8').trim() : null;
       return { mode: m.mode, skillCount, profileMarker };

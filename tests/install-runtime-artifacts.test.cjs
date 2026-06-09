@@ -56,7 +56,7 @@ const SKILLS_RUNTIMES_LAYOUT = [
 const ALL_RUNTIMES_LAYOUT = [
   'claude', 'cursor', 'gemini', 'codex', 'copilot', 'antigravity',
   'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy',
-  'cline', 'opencode', 'kilo',
+  'cline', 'opencode', 'kilo', 'omp',
 ];
 
 function countPrefixedEntries(destDir, prefix) {
@@ -170,6 +170,25 @@ describe('installRuntimeArtifacts — cline skills (#782)', () => {
       fs.existsSync(path.join(skillsDir, 'gsd-help', 'SKILL.md')),
       'gsd-help/SKILL.md must exist'
     );
+  });
+});
+
+describe('installRuntimeArtifacts — omp multi-surface layout', () => {
+  test('omp: profile staging writes commands, skills, agents, mapped rules, and extensions', (t) => {
+    const configDir = createTempDir('gsd-ial-omp-');
+    t.after(() => cleanup(configDir));
+
+    const resolvedFull = resolveProfile({ modes: ['full'], manifest: MANIFEST });
+    installRuntimeArtifacts('omp', configDir, 'local', resolvedFull);
+
+    assert.ok(fs.existsSync(path.join(configDir, 'commands', 'gsd-help.md')));
+    assert.ok(!fs.existsSync(path.join(configDir, 'skills', 'gsd-plan-phase', 'SKILL.md')), 'plan-phase must be nested, not top-level');
+    assert.ok(fs.existsSync(path.join(configDir, 'skills', 'gsd-ns-workflow', 'skills', 'plan-phase', 'SKILL.md')), 'plan-phase must be nested under ns-workflow');
+    assert.ok(fs.existsSync(path.join(configDir, 'agents', 'gsd-planner.md')));
+    assert.ok(fs.existsSync(path.join(configDir, 'rules', 'gsd-planning-artifacts.md')));
+    assert.ok(fs.existsSync(path.join(configDir, 'extensions', 'gsd-core', 'index.js')));
+    assert.ok(fs.existsSync(path.join(configDir, 'extensions', 'gsd-core', 'package.json')));
+    assert.ok(fs.existsSync(path.join(configDir, 'extensions', 'gsd-core', 'update-worker.js')));
   });
 });
 

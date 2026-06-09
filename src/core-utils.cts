@@ -1,0 +1,201 @@
+/**
+ * Core Utilities — Shared low-level utility primitives
+ *
+ * ADR-857 rollout phase 2c: extracted from core.cts (issue #877).
+ * Owns POSIX path normalization, sub-repo/subdirectory scanning,
+ * phase file stats, slug/one-liner/plan-id helpers, and time-ago.
+ * Behaviour is preserved byte-for-behaviour from the prior location;
+ * only the module boundary moved. core.cjs re-exports every public symbol
+ * here under its own `export =` object so existing consumers are unaffected.
+ *
+ * New imports should pull core-utils helpers from core-utils.cjs directly.
+ *
+ * Dependencies (leaf modules only — no core.cjs, no loadConfig):
+ *   - node:fs / node:path (stdlib)
+ *   - ./phase-id.cjs       (comparePhaseNum, used by readSubdirectories)
+ *   - ./planning-workspace.cjs (findContextMdIn, used by getPhaseFileStats)
+ */
+
+import fs from 'node:fs';
+import path from 'node:path';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseIdModule = require('./phase-id.cjs');
+const { comparePhaseNum } = phaseIdModule;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planningWorkspace = require('./planning-workspace.cjs');
+const { findContextMdIn } = planningWorkspace;
+
+// ─── Path helpers ────────────────────────────────────────────────────────────
+
+/** Normalize a relative path to always use forward slashes (cross-platform). */
+function toPosixPath(p: string): string {
+  return p.split(path.sep).join('/');
+}
+
+/**
+ * Scan immediate child directories for separate git repos.
+ * Returns a sorted array of directory names that have their own `.git`.
+ * Excludes hidden directories and node_modules.
+ */
+function detectSubRepos(cwd: string): string[] {
+  const results: string[] = [];
+  try {
+    const entries = fs.readdirSync(cwd, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+      const gitPath = path.join(cwd, entry.name, '.git');
+      try {
+        if (fs.existsSync(gitPath)) {
+          results.push(entry.name);
+        }
+      } catch { /* ignore */ }
+    }
+  } catch { /* ignore */ }
+  return results.sort();
+}
+
+// ─── Summary body helpers ─────────────────────────────────────────────────
+
+/**
+ * Extract a one-liner from the summary body when it's not in frontmatter.
+ */
+function extractOneLinerFromBody(content: string | null | undefined): string | null {
+  if (!content) return null;
+  const normalized = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const body = normalized.replace(/^---\n[\s\S]*?\n---\n*/, '');
+  const match = body.match(/^#[^\n]*\n+\*\*([^*\n]+)\*\*([^\n]*)/m);
+  if (!match) return null;
+  const boldInner = match[1].trim();
+  const afterBold = match[2];
+  if (/:\s*$/.test(boldInner)) {
+    const prose = afterBold.trim();
+    return prose.length > 0 ? prose : null;
+  }
+  return boldInner.length > 0 ? boldInner : null;
+}
+
+// ─── Misc utilities ───────────────────────────────────────────────────────────
+
+function pathExistsInternal(cwd: string, targetPath: string): boolean {
+  const fullPath = path.isAbsolute(targetPath) ? targetPath : path.join(cwd, targetPath);
+  try {
+    fs.statSync(fullPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function generateSlugInternal(text: string | null | undefined): string | null {
+  if (!text) return null;
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').substring(0, 60);
+}
+
+// ─── Phase file helpers ──────────────────────────────────────────────────────
+
+/** Filter a file list to just PLAN.md / *-PLAN.md entries. */
+function filterPlanFiles(files: string[]): string[] {
+  return files.filter(f => f.endsWith('-PLAN.md') || f === 'PLAN.md');
+}
+
+/** Filter a file list to just SUMMARY.md / *-SUMMARY.md entries. */
+function filterSummaryFiles(files: string[]): string[] {
+  return files.filter(f => f.endsWith('-SUMMARY.md') || f === 'SUMMARY.md');
+}
+
+interface PhaseFileStats {
+  plans: string[];
+  summaries: string[];
+  hasResearch: boolean;
+  hasContext: boolean;
+  hasVerification: boolean;
+  hasReviews: boolean;
+}
+
+/**
+ * Read a phase directory and return counts/flags for common file types.
+ */
+function getPhaseFileStats(phaseDir: string): PhaseFileStats {
+  const files = fs.readdirSync(phaseDir);
+  return {
+    plans: filterPlanFiles(files),
+    summaries: filterSummaryFiles(files),
+    hasResearch: files.some(f => f.endsWith('-RESEARCH.md') || f === 'RESEARCH.md'),
+    hasContext: findContextMdIn(files) !== null,
+    hasVerification: files.some(f => f.endsWith('-VERIFICATION.md') || f === 'VERIFICATION.md'),
+    hasReviews: files.some(f => f.endsWith('-REVIEWS.md') || f === 'REVIEWS.md'),
+  };
+}
+
+/**
+ * Read immediate child directories from a path.
+ * Returns [] if the path doesn't exist or can't be read.
+ * Pass sort=true to apply comparePhaseNum ordering.
+ */
+function readSubdirectories(dirPath: string, sort = false): string[] {
+  try {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    const dirs = entries.filter(e => e.isDirectory()).map(e => e.name);
+    return sort ? dirs.sort((a, b) => comparePhaseNum(a, b)) : dirs;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Format a Date as a fuzzy relative time string (e.g. "5 minutes ago").
+ */
+function timeAgo(date: Date): string {
+  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (seconds < 5) return 'just now';
+  if (seconds < 60) return `${seconds} seconds ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes === 1) return '1 minute ago';
+  if (minutes < 60) return `${minutes} minutes ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours === 1) return '1 hour ago';
+  if (hours < 24) return `${hours} hours ago`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return '1 day ago';
+  if (days < 30) return `${days} days ago`;
+  const months = Math.floor(days / 30);
+  if (months === 1) return '1 month ago';
+  if (months < 12) return `${months} months ago`;
+  const years = Math.floor(days / 365);
+  if (years === 1) return '1 year ago';
+  return `${years} years ago`;
+}
+
+// ─── Plan ID helpers ─────────────────────────────────────────────────────────
+
+/**
+ * Extract the canonical plan ID from a filename.
+ * Private to the core cluster — exported so core.cjs:searchPhaseInDir can
+ * import it from this leaf without circular dependency, but NOT re-exported
+ * from core.cjs's public `export =` block.
+ */
+function extractCanonicalPlanId(filename: string): string {
+  const base = filename.replace(/-PLAN\.md$/i, '').replace(/-SUMMARY\.md$/i, '').replace(/\.md$/i, '');
+  const parts = base.split('-').filter(Boolean);
+  const tokenRe = /^\d+[A-Z]?(?:\.\d+)*$/i;
+  const phaseIdx = parts.findIndex(p => tokenRe.test(p));
+  if (phaseIdx >= 0 && phaseIdx + 1 < parts.length && tokenRe.test(parts[phaseIdx + 1])) {
+    return `${parts[phaseIdx]}-${parts[phaseIdx + 1]}`;
+  }
+  return base;
+}
+
+export = {
+  toPosixPath,
+  detectSubRepos,
+  extractOneLinerFromBody,
+  pathExistsInternal,
+  generateSlugInternal,
+  filterPlanFiles,
+  filterSummaryFiles,
+  getPhaseFileStats,
+  readSubdirectories,
+  timeAgo,
+  extractCanonicalPlanId,
+};

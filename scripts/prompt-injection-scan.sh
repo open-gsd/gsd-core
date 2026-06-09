@@ -78,6 +78,7 @@ ALLOWLIST=(
   'hooks/gsd-read-injection-scanner.js'
   'tests/read-injection-scanner.test.cjs'
   'tests/security-prompt-injection.test.cjs'
+  'tests/omp-extension.test.cjs'
   'tests/fixtures/adversarial/security/'
   'SECURITY.md'
   # These files contain intentional injection examples / security-model prose

@@ -6,6 +6,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Native OMP extension install now ports GSD hook guardrails/status behavior into .omp/extensions/gsd-core/ instead of reporting executable hooks as degraded.
+
 ## [1.3.1](https://www.npmjs.com/package/@opengsd/gsd-core/v/1.3.1) - 2026-06-04
 
 ### Security

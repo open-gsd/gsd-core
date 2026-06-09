@@ -56,6 +56,7 @@ describe('bug #3126: runtime-homes getGlobalConfigDir — defaults', () => {
     ['hermes',      path.join(os.homedir(), '.hermes')],
     ['codebuddy',   path.join(os.homedir(), '.codebuddy')],
     ['cline',       path.join(os.homedir(), '.cline')],
+    ['omp',         path.join(os.homedir(), '.omp', 'agent')],
     ['opencode',    path.join(os.homedir(), '.config', 'opencode')],
     ['kilo',        path.join(os.homedir(), '.config', 'kilo')],
   ];
@@ -65,7 +66,7 @@ describe('bug #3126: runtime-homes getGlobalConfigDir — defaults', () => {
       const envKeys = ['CLAUDE_CONFIG_DIR','CURSOR_CONFIG_DIR','GEMINI_CONFIG_DIR',
         'CODEX_HOME','COPILOT_CONFIG_DIR','COPILOT_HOME','ANTIGRAVITY_CONFIG_DIR','WINDSURF_CONFIG_DIR',
         'AUGMENT_CONFIG_DIR','TRAE_CONFIG_DIR','QWEN_CONFIG_DIR','HERMES_HOME',
-        'CODEBUDDY_CONFIG_DIR','CLINE_CONFIG_DIR','OPENCODE_CONFIG_DIR','OPENCODE_CONFIG',
+        'CODEBUDDY_CONFIG_DIR','CLINE_CONFIG_DIR','OMP_CONFIG_DIR','OPENCODE_CONFIG_DIR','OPENCODE_CONFIG',
         'KILO_CONFIG_DIR','KILO_CONFIG',
         'XDG_CONFIG_HOME'];
       const saved = {};
@@ -123,6 +124,12 @@ describe('bug #3126: runtime-homes env-var overrides', () => {
     });
   });
 
+  test('omp respects OMP_CONFIG_DIR', () => {
+    withEnv('OMP_CONFIG_DIR', '/custom/omp-agent', () => {
+      assert.strictEqual(getGlobalConfigDir('omp'), '/custom/omp-agent');
+    });
+  });
+
   test('antigravity detects 2.x IDE dir when legacy dir is absent', () => {
     const home = require('node:fs').mkdtempSync(path.join(os.tmpdir(), 'gsd-antigravity-home-'));
     try {
@@ -164,6 +171,14 @@ describe('bug #3126: runtime-homes getGlobalSkillsBase', () => {
       );
     });
   });
+  test('omp: skills at <configDir>/skills', () => {
+    withEnv('OMP_CONFIG_DIR', undefined, () => {
+      assert.strictEqual(
+        getGlobalSkillsBase('omp'),
+        path.join(os.homedir(), '.omp', 'agent', 'skills'),
+      );
+    });
+  });
   test('cline: returns ~/.cline/skills (skills-capable since v3.48.0 — #782)', () => {
     withEnv('CLINE_CONFIG_DIR', undefined, () => {
       assert.strictEqual(
@@ -188,6 +203,14 @@ describe('bug #3126: runtime-homes getGlobalSkillDir', () => {
       assert.strictEqual(
         getGlobalSkillDir('hermes', 'gsd-executor'),
         path.join(os.homedir(), '.hermes', 'skills', 'gsd', 'gsd-executor'),
+      );
+    });
+  });
+  test('omp: <configDir>/skills/<skillName>', () => {
+    withEnv('OMP_CONFIG_DIR', undefined, () => {
+      assert.strictEqual(
+        getGlobalSkillDir('omp', 'gsd-executor'),
+        path.join(os.homedir(), '.omp', 'agent', 'skills', 'gsd-executor'),
       );
     });
   });

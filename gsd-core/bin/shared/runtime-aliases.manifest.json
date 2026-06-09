@@ -71,5 +71,10 @@
   "cline": [
     "cline",
     "cline-cli"
+  ],
+  "omp": [
+    "omp",
+    "oh-my-pi",
+    "oh-my-pi-cli"
   ]
 }

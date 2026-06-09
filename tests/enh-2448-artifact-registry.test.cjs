@@ -8,17 +8,22 @@
  * Tests for canonical artifact registry and gsd-health W019 lint (#2448).
  */
 
-const { test, describe } = require('node:test');
+const { test, describe, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const helpers = require('./helpers.cjs');
 
 const { isCanonicalPlanningFile, CANONICAL_EXACT } = require('../gsd-core/bin/lib/artifacts.cjs');
 const { cmdValidateHealth } = require('../gsd-core/bin/lib/verify.cjs');
 
+const _dirsToClean = [];
+after(() => { for (const d of _dirsToClean) helpers.cleanup(d); });
+
 function makeTempProject(files = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2448-'));
+  _dirsToClean.push(dir);
   fs.mkdirSync(path.join(dir, '.planning', 'phases'), { recursive: true });
   for (const [rel, content] of Object.entries(files)) {
     const abs = path.join(dir, rel);

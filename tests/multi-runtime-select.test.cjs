@@ -64,35 +64,35 @@ describe('multi-runtime selection parsing', () => {
     assert.deepStrictEqual(parseRuntimeInput('11'), ['kilo']);
   });
 
+  test('single choice for omp', () => {
+    assert.deepStrictEqual(parseRuntimeInput('12'), ['omp']);
+  });
+
   test('single choice for opencode', () => {
-    assert.deepStrictEqual(parseRuntimeInput('12'), ['opencode']);
+    assert.deepStrictEqual(parseRuntimeInput('13'), ['opencode']);
   });
 
   test('single choice for qwen', () => {
-    assert.deepStrictEqual(parseRuntimeInput('13'), ['qwen']);
+    assert.deepStrictEqual(parseRuntimeInput('14'), ['qwen']);
   });
 
   test('single choice for trae', () => {
-    assert.deepStrictEqual(parseRuntimeInput('14'), ['trae']);
+    assert.deepStrictEqual(parseRuntimeInput('15'), ['trae']);
   });
 
   test('single choice for windsurf', () => {
-    assert.deepStrictEqual(parseRuntimeInput('15'), ['windsurf']);
+    assert.deepStrictEqual(parseRuntimeInput('16'), ['windsurf']);
   });
 
-  test('choice 16 returns all runtimes', () => {
-    assert.deepStrictEqual(parseRuntimeInput('16'), allRuntimes);
+  test('choice 17 returns all runtimes', () => {
+    assert.deepStrictEqual(parseRuntimeInput('17'), allRuntimes);
   });
 
-  test('choice 16 returns all runtimes when mixed with separators or other tokens', () => {
-    // CR feedback: tokenized inputs that include 16 (e.g. trailing comma, or
-    // alongside other choices) must still expand to all-runtimes — previously
-    // only the bare "16" matched, so "16," or "16 1" silently installed a
-    // subset.
-    assert.deepStrictEqual(parseRuntimeInput('16,'), allRuntimes);
-    assert.deepStrictEqual(parseRuntimeInput('16 1'), allRuntimes);
-    assert.deepStrictEqual(parseRuntimeInput('1,16'), allRuntimes);
-    assert.deepStrictEqual(parseRuntimeInput('  16  '), allRuntimes);
+  test('choice 17 returns all runtimes when mixed with separators or other tokens', () => {
+    assert.deepStrictEqual(parseRuntimeInput('17,'), allRuntimes);
+    assert.deepStrictEqual(parseRuntimeInput('17 1'), allRuntimes);
+    assert.deepStrictEqual(parseRuntimeInput('1,17'), allRuntimes);
+    assert.deepStrictEqual(parseRuntimeInput('  17  '), allRuntimes);
   });
 
   test('empty input defaults to claude', () => {
@@ -101,13 +101,13 @@ describe('multi-runtime selection parsing', () => {
   });
 
   test('invalid choices are ignored, falls back to claude if all invalid', () => {
-    assert.deepStrictEqual(parseRuntimeInput('17'), ['claude']);
+    assert.deepStrictEqual(parseRuntimeInput('18'), ['claude']);
     assert.deepStrictEqual(parseRuntimeInput('0'), ['claude']);
     assert.deepStrictEqual(parseRuntimeInput('abc'), ['claude']);
   });
 
   test('invalid choices mixed with valid are filtered out', () => {
-    assert.deepStrictEqual(parseRuntimeInput('1,17,7'), ['claude', 'copilot']);
+    assert.deepStrictEqual(parseRuntimeInput('1,18,7'), ['claude', 'copilot']);
     assert.deepStrictEqual(parseRuntimeInput('abc 3 xyz'), ['augment']);
   });
 
@@ -135,15 +135,16 @@ describe('install.js exports multi-select runtime metadata', () => {
     '9': 'gemini',
     '10': 'hermes',
     '11': 'kilo',
-    '12': 'opencode',
-    '13': 'qwen',
-    '14': 'trae',
-    '15': 'windsurf',
+    '12': 'omp',
+    '13': 'opencode',
+    '14': 'qwen',
+    '15': 'trae',
+    '16': 'windsurf',
   };
   const expectedRuntimes = [
     'claude', 'antigravity', 'augment', 'cline', 'codebuddy', 'codex',
-    'copilot', 'cursor', 'gemini', 'hermes', 'kilo', 'opencode', 'qwen',
-    'trae', 'windsurf',
+    'copilot', 'cursor', 'gemini', 'hermes', 'kilo', 'omp', 'opencode',
+    'qwen', 'trae', 'windsurf',
   ];
 
   test('runtimeMap exports every option key bound to the right runtime', () => {
@@ -160,20 +161,22 @@ describe('install.js exports multi-select runtime metadata', () => {
       'allRuntimes has no duplicates');
   });
 
-  test('"All" shortcut (option 16) selects every runtime', () => {
-    assert.deepStrictEqual(parseRuntimeInput('16'), allRuntimes);
+  test('"All" shortcut (option 17) selects every runtime', () => {
+    assert.deepStrictEqual(parseRuntimeInput('17'), allRuntimes);
   });
 
-  test('prompt lists Hermes Agent (10), Qwen Code (13), Trae (14), and All (16)', () => {
+  test('prompt lists Hermes Agent (10), OMP (12), Qwen Code (14), Trae (15), and All (17)', () => {
     const prompt = stripAnsi(buildRuntimePromptText());
     assert.ok(/\b10\)\s*Hermes Agent\b/.test(prompt),
       'prompt lists Hermes Agent as option 10');
-    assert.ok(/\b13\)\s*Qwen Code\b/.test(prompt),
-      'prompt lists Qwen Code as option 13');
-    assert.ok(/\b14\)\s*Trae\b/.test(prompt),
-      'prompt lists Trae as option 14');
-    assert.ok(/\b16\)\s*All\b/.test(prompt),
-      'prompt lists All as option 16');
+    assert.ok(/\b12\)\s*OMP\b/.test(prompt),
+      'prompt lists OMP as option 12');
+    assert.ok(/\b14\)\s*Qwen Code\b/.test(prompt),
+      'prompt lists Qwen Code as option 14');
+    assert.ok(/\b15\)\s*Trae\b/.test(prompt),
+      'prompt lists Trae as option 15');
+    assert.ok(/\b17\)\s*All\b/.test(prompt),
+      'prompt lists All as option 17');
   });
 
   test('prompt text shows multi-select hint', () => {

@@ -163,6 +163,12 @@
  *   learnings prune --older-than <dur>   Remove entries older than duration (e.g. 90d)
  *   learnings delete <id>                Delete a learning by ID
  *
+ * Loop Extension Point Queries (ADR-857 phase 3c):
+ *   loop render-hooks <point>            Resolve + render active Capability hooks at a loop point
+ *                                        Returns JSON envelope { point, activeHooks, rendered }
+ *                                        Valid points: discuss:pre/post, plan:pre/post,
+ *                                        execute:pre/wave:pre/wave:post/post, verify:pre/post, ship:pre/post
+ *
  * GSD-2 Migration:
  *   from-gsd2 [--path <dir>] [--force] [--dry-run]
  *             Import a GSD-2 (.gsd/) project back to GSD v1 (.planning/) format
@@ -201,6 +207,7 @@ const { routeVerifyCommand } = require('./lib/verify-command-router.cjs');
 const { routeVerificationCommand } = require('./lib/verification-command-router.cjs');
 const verification = require('./lib/verification.cjs');
 const { routeInitCommand } = require('./lib/init-command-router.cjs');
+const loopResolver = require('./lib/loop-resolver.cjs');
 const { routePhaseCommand } = require('./lib/phase-command-router.cjs');
 const { routePhasesCommand } = require('./lib/phases-command-router.cjs');
 const { routeValidateCommand } = require('./lib/validate-command-router.cjs');
@@ -379,7 +386,7 @@ async function main() {
     'current-timestamp, detect-custom-files, docs-init, effort, extract-messages, find-phase, ' +
     'from-gsd2, frontmatter, gap-analysis, generate-claude-md, generate-claude-profile, ' +
     'generate-dev-preferences, generate-slug, graphify, history-digest, init, intel, ' +
-    'classify-confidence, learnings, list-todos, milestone, package-legitimacy, phase, phase-plan-index, phases, profile-questionnaire, ' +
+    'classify-confidence, learnings, list-todos, loop, milestone, package-legitimacy, phase, phase-plan-index, phases, profile-questionnaire, ' +
     'profile-sample, progress, prompt-budget, requirements, research-plan, research-store, resolve-granularity, resolve-model, roadmap, scaffold, state, ' +
     'task, template, validate, verify, verify-path-exists, verify-summary, workstream, worktree\n\n' +
     'Global flags:\n' +
@@ -1115,6 +1122,20 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         raw,
         error,
       });
+      break;
+    }
+
+    case 'loop': {
+      // loop render-hooks <point>
+      const loopSubcommand = args[1];
+      if (loopSubcommand === 'render-hooks') {
+        loopResolver.cmdLoopRenderHooks(cwd, args[2], raw, {});
+      } else {
+        error(
+          `Unknown loop subcommand: ${loopSubcommand}. Available: render-hooks`,
+          core.ERROR_REASON ? core.ERROR_REASON.SDK_UNKNOWN_COMMAND : undefined,
+        );
+      }
       break;
     }
 

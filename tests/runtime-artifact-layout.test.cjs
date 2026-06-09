@@ -221,6 +221,18 @@ describe('resolveRuntimeArtifactLayout — codebuddy', () => {
   });
 });
 
+describe('resolveRuntimeArtifactLayout — omp', () => {
+  test('returns OMP commands, skills, agents, rules, and extensions layout', () => {
+    const layout = resolveRuntimeArtifactLayout('omp', FAKE_DIR);
+    assert.strictEqual(layout.runtime, 'omp');
+    assert.strictEqual(layout.configDir, FAKE_DIR);
+    assert.deepStrictEqual(layout.kinds.map(k => k.kind), ['commands', 'skills', 'agents', 'rules', 'extensions']);
+    assert.deepStrictEqual(layout.kinds.map(k => k.destSubpath), ['commands', 'skills', 'agents', 'rules', 'extensions']);
+    assert.ok(layout.kinds.every(k => k.prefix === 'gsd-'));
+    assert.ok(layout.kinds.every(k => typeof k.stage === 'function'));
+  });
+});
+
 describe('resolveRuntimeArtifactLayout — cline', () => {
   test('returns correct layout for cline global (skills-capable since v3.48.0 — #782)', () => {
     const layout = resolveRuntimeArtifactLayout('cline', FAKE_DIR, 'global');
@@ -324,6 +336,11 @@ describe('resolveRuntimeArtifactLayout edge-cases', () => {
     assert.strictEqual(layout.kinds[0].kind, 'skills');
   });
 
+  test('omp has commands, skills, agents, rules, and extensions kinds', () => {
+    const layout = resolveRuntimeArtifactLayout('omp', '/tmp/x');
+    assert.deepStrictEqual(layout.kinds.map(k => k.kind), ['commands', 'skills', 'agents', 'rules', 'extensions']);
+  });
+
   test('unknown runtime grok throws TypeError containing runtime name', () => {
     assert.throws(
       () => resolveRuntimeArtifactLayout('grok', '/tmp/x'),
@@ -417,20 +434,40 @@ describe('stage — skills kind (claude global)', () => {
     assert.ok(entries.length >= 1, 'at least one skill dir should be staged');
   });
 
-  test('stage with skills="*" stages all commands/gsd/*.md as skills', () => {
+  test('stage with skills="*" nests all commands/gsd/*.md under 6 routers (claude)', () => {
     const layout = resolveRuntimeArtifactLayout('claude', FAKE_STAGE_DIR, 'global');
     const skillsKind = layout.kinds.find(k => k.kind === 'skills');
     assert.ok(skillsKind, 'should have a skills kind');
 
     const stagedDir = skillsKind.stage(PROFILE_FULL);
     assert.ok(fs.existsSync(stagedDir), 'stagedDir must exist');
-    const entries = fs.readdirSync(stagedDir);
-    assert.ok(entries.length > 10, `full profile should have many skills, got ${entries.length}`);
-    for (const entry of entries) {
-      assert.ok(entry.startsWith('gsd-'), `entry should start with gsd-: ${entry}`);
-      const skillMd = path.join(stagedDir, entry, 'SKILL.md');
-      assert.ok(fs.existsSync(skillMd), `SKILL.md must exist in ${entry}`);
+
+    // Claude is a NESTING runtime: full profile produces exactly 6 gsd-ns-* router dirs.
+    const topEntries = fs.readdirSync(stagedDir);
+    assert.strictEqual(topEntries.length, 6, `full profile should have exactly 6 router dirs, got ${topEntries.length}`);
+    for (const entry of topEntries) {
+      assert.ok(entry.startsWith('gsd-ns-'), `top-level entry should be a gsd-ns-* router: ${entry}`);
+      // Each router has its own SKILL.md.
+      const routerSkillMd = path.join(stagedDir, entry, 'SKILL.md');
+      assert.ok(fs.existsSync(routerSkillMd), `router SKILL.md must exist in ${entry}`);
+      // Each router has a skills/ subdirectory with nested children.
+      const skillsSubdir = path.join(stagedDir, entry, 'skills');
+      assert.ok(fs.existsSync(skillsSubdir), `skills/ subdir must exist in ${entry}`);
+      assert.ok(fs.statSync(skillsSubdir).isDirectory(), `${entry}/skills must be a directory`);
     }
+
+    // Total SKILL.md files across all routers + nested children must be large (proves no skill was dropped).
+    function countSkillMdFiles(dir) {
+      let count = 0;
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) count += countSkillMdFiles(fullPath);
+        else if (entry.name === 'SKILL.md') count++;
+      }
+      return count;
+    }
+    const totalSkillMd = countSkillMdFiles(stagedDir);
+    assert.ok(totalSkillMd >= 60, `full profile should have >= 60 total SKILL.md files (routers + children), got ${totalSkillMd}`);
   });
 });
 
@@ -510,5 +547,26 @@ describe('stage — cursor commands kind (#785)', () => {
       assert.ok(entry.isFile(), `${entry.name}: cursor commands dir must contain only flat files`);
       assert.ok(entry.name.endsWith('.md'), `${entry.name}: must be .md file`);
     }
+  });
+});
+
+describe('stage — omp commands, agents, rules, and extensions kinds', () => {
+  test('omp stages converted command, agent, explicit rule markdown, and extension directory', () => {
+    const layout = resolveRuntimeArtifactLayout('omp', FAKE_STAGE_DIR);
+    const commandsKind = layout.kinds.find(k => k.kind === 'commands');
+    const agentsKind = layout.kinds.find(k => k.kind === 'agents');
+    const rulesKind = layout.kinds.find(k => k.kind === 'rules');
+    const extensionsKind = layout.kinds.find(k => k.kind === 'extensions');
+
+    const commandStage = commandsKind.stage(PROFILE_CORE);
+    const agentStage = agentsKind.stage(PROFILE_CORE);
+    const ruleStage = rulesKind.stage(PROFILE_CORE);
+    const extensionStage = extensionsKind.stage(PROFILE_CORE);
+
+    assert.ok(fs.existsSync(path.join(commandStage, 'help.md')));
+    assert.ok(fs.existsSync(path.join(agentStage, 'gsd-planner.md')));
+    assert.ok(fs.existsSync(path.join(ruleStage, 'planning-artifacts.md')));
+    assert.ok(fs.existsSync(path.join(extensionStage, 'gsd-core', 'index.js')));
+    assert.ok(fs.existsSync(path.join(extensionStage, 'gsd-core', 'package.json')));
   });
 });

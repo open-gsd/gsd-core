@@ -1,0 +1,10 @@
+{
+  "rules": [
+    {
+      "source": "planning-artifacts.md",
+      "target": "gsd-planning-artifacts.md",
+      "description": "Keeps GSD planning artifacts discoverable and separates generated workflow state from user files.",
+      "safe": true
+    }
+  ]
+}

@@ -265,7 +265,10 @@ jobs:
     defaults:
       run:
         shell: ${{ matrix.shell }}
-    timeout-minutes: 15
+    # 20m, not 15m: the Windows full lane runs all 656 unit files in one job and
+    # has crept to ~14m+, so 15m started cancelling jobs mid-run (#869). Durable
+    # fix is to shard this lane — tracked separately.
+    timeout-minutes: 20
     env:
       GSD_PLUGIN_ROOT: .ci-gsd-plugin-root-disabled
     strategy:

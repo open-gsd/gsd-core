@@ -10,6 +10,7 @@ commands.html
 
 # Local test installs
 .claude/
+.omp/
 
 # Cursor IDE — local agents/skills bundle (never commit)
 .cursor/
@@ -52,6 +53,7 @@ philosophy.md
 Thumbs.db
 *.swp
 *.swo
+*.tmp
 *~
 .idea/
 .vscode/
@@ -127,8 +129,15 @@ build/
 /gsd-core/bin/lib/runtime-config-adapter-registry.cjs
 /gsd-core/bin/lib/command-routing-hub.cjs
 /gsd-core/bin/lib/core.cjs
+/gsd-core/bin/lib/core-utils.cjs
 /gsd-core/bin/lib/io.cjs
 /gsd-core/bin/lib/phase-id.cjs
+/gsd-core/bin/lib/config-loader.cjs
+/gsd-core/bin/lib/model-resolver.cjs
+/gsd-core/bin/lib/loop-resolver.cjs
+/gsd-core/bin/lib/federated-config.cjs
+/gsd-core/bin/lib/phase-locator.cjs
+/gsd-core/bin/lib/roadmap-parser.cjs
 /gsd-core/bin/lib/drift.cjs
 /gsd-core/bin/lib/cjs-command-router-adapter.cjs
 /gsd-core/bin/lib/phase-command-router.cjs
