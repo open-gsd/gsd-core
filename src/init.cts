@@ -260,7 +260,7 @@ function cmdInitExecutePhase(
       config.branching_strategy === 'phase' && phaseInfo
         ? (config.phase_branch_template as string)
             .replace('{project}', (config.project_code as string) || '')
-            .replace('{phase}', phaseInfo['phase_number'] as string)
+            .replace('{phase}', normalizePhaseName(phaseInfo['phase_number']))
             .replace('{slug}', (phaseInfo['phase_slug'] as string) || 'phase')
         : config.branching_strategy === 'milestone'
           ? (config.milestone_branch_template as string)
