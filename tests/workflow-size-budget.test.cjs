@@ -82,7 +82,7 @@ const GRACE = 3000;
 // XL high-water mark is execute-phase.md — note that under LINES it was
 // plan-phase; bytes genuinely re-rank the tier, which is the point of #717.
 // actualMax=92525 (execute-phase, #913 inline-fallback scope clarification);
-// slack=475 ≤ GRACE. plan-phase.md=90501 (#913 runtime_compatibility block + label rename), new-project.md=58110.
+// slack=475 ≤ GRACE. plan-phase.md=90748 (#922 attempt-based Agent gate), new-project.md=58110.
 const XL_BUDGET = 93000;
 // LARGE high-water mark is docs-update.md. actualMax=54410 (#891 launcher shim expansion);
 // slack=1590 ≤ GRACE. quick.md=45710, autonomous.md=38030.
@@ -96,7 +96,7 @@ const DEFAULT_BUDGET = 40000;
 // pattern that future shrinks should follow. Byte counts noted for reference.
 const XL_WORKFLOWS = new Set([
   'execute-phase',  // 92525 bytes (tier high-water mark; grew in #913 inline-fallback scope clarification)
-  'plan-phase',     // 90501 bytes (grew in #913 runtime_compatibility block + label rename)
+  'plan-phase',     // 90748 bytes (grew in #922 attempt-based Agent gate)
   'new-project',    // 55850 bytes
 ]);
 

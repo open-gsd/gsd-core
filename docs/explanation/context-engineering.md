@@ -90,13 +90,11 @@ Claude Code exposes a `FileChanged` event in addition to session-lifecycle hooks
 
 Requiring a `/clear` to pick up a config edit would destroy the very continuity the context-engineering design is trying to protect. By watching for `FileChanged` on `config.json`, GSD can reload configuration mid-session — adjusting model profiles, context-window thresholds, or routing preferences — without the user losing their place. The working context survives; the configuration updates beneath it.
 
-### Forked context for heavy skills
+### Effort signals for heavy and light skills
 
-Beyond passive monitoring, GSD uses an active strategy for skills whose work is large and bursty: they run in a **forked context** (`context: fork` in the skill definition).
+Beyond passive monitoring, GSD uses `effort:` frontmatter to signal the token budget appropriate for each skill. Heavy orchestrator skills (`plan-phase`, `execute-phase`, `autonomous`) declare `effort: xhigh`; quick-status skills (`progress`, `stats`) declare `effort: low`.
 
-Skills like `plan-phase`, `execute-phase`, and `autonomous` do a great deal of work — spawning multiple subagents, reading large files, iterating over multiple plans. If that work happened in the main session, it would consume a substantial share of the orchestrator's context budget. The forked context prevents this: the skill runs in an isolated context of its own, does its heavy lifting there, and the main session's headroom is preserved.
-
-This is the same context-engineering principle as the fresh-context subagent model — applied not at the session boundary, but at the skill-invocation boundary. The difference is one of granularity. The phase loop spawns fresh subagents to protect each agent from its siblings' noise. Forked context protects the orchestrating session from the skill's own accumulated noise while the skill runs.
+Note: an earlier version of GSD also applied `context: fork` to these three heavy skills to protect the main session's context budget. This was removed (#921) because `plan-phase`, `execute-phase`, and `autonomous` are **spawning orchestrators** — their core function is to spawn subagents (`gsd-planner`, `gsd-executor`, etc.), and a forked subagent context does not have the `Agent` tool. Context isolation for these skills comes from the subagents they spawn, not from forking the orchestrator itself.
 
 Complementing this, quick-status skills explicitly declare low effort in their definitions. This is a budget-conscious signal in the opposite direction: these skills read minimal state and return concise output, keeping their own footprint small by design.
 
@@ -108,7 +106,7 @@ This machinery is worth being honest about.
 
 **Headroom tracking is a heuristic.** The hooks give GSD a signal, not a guarantee. A single model call can consume tokens unpredictably depending on the response length, tool use, and caching behaviour. GSD uses headroom estimates to warn and steer, not to make hard guarantees about what will fit.
 
-**Forked context is isolated.** The forked work cannot see uncommitted state in the main session. This is not a bug — it is necessary for isolation — but it means anything the forked skill needs to know must be on disk before the fork occurs. This is precisely why `.planning/` exists as the shared substrate: plan files, `STATE.md`, `CONTEXT.md`, and `config.json` are all durable, file-system artefacts that any context — main or forked — can read. The context-engineering design is self-consistent: the same principle that makes fresh-context subagents work (shared state lives in files, not in a conversation) is what makes forked context viable. See also [Multi-agent orchestration](multi-agent-orchestration.md) for how `.planning/` serves the same role across the orchestrator → agent boundary.
+**Subagents are isolated.** A spawned subagent cannot see uncommitted state in the orchestrating session. This is not a bug — it is necessary for independence — but it means anything the subagent needs must be on disk before it is spawned. This is precisely why `.planning/` exists as the shared substrate: plan files, `STATE.md`, `CONTEXT.md`, and `config.json` are all durable, file-system artefacts that any context — orchestrator or subagent — can read. The context-engineering design is self-consistent: the same principle that makes fresh-context subagents work (shared state lives in files, not in a conversation) is what makes the multi-agent architecture viable. See also [Multi-agent orchestration](multi-agent-orchestration.md) for how `.planning/` serves the same role across the orchestrator → agent boundary.
 
 ---
 
