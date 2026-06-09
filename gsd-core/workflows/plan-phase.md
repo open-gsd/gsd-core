@@ -1,3 +1,10 @@
+<!-- gsd:loop-host
+step: plan
+points: plan:pre, plan:post
+agent-roles: researcher, planner, checker
+produces: PLAN.md
+consumes: CONTEXT.md
+-->
 <purpose>
 Create executable phase prompts (PLAN.md files) for a roadmap phase with integrated research and verification. Default flow: Research (if needed) -> Plan -> Verify -> Done. Orchestrates gsd-phase-researcher, gsd-planner, and gsd-plan-checker agents with a revision loop (max 3 iterations).
 </purpose>

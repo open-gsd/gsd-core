@@ -1,5 +1,5 @@
 {
-  "generated": "2026-06-08",
+  "generated": "2026-06-09",
   "families": {
     "agents": [
       "gsd-advisor-researcher",
@@ -307,6 +307,7 @@
       "io.cjs",
       "learnings.cjs",
       "legacy-cleanup.cjs",
+      "loop-host-contract.cjs",
       "milestone.cjs",
       "model-catalog.cjs",
       "model-profiles.cjs",
