@@ -3364,6 +3364,55 @@ describe('bug #1962: normalizePhaseName preserves letter suffix case', () => {
 // (consolidated from tests/bug-1998-phase-complete-checkbox.test.cjs)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Run `gsd-tools phase complete <phase>` for the phase-complete regression
+ * suites and return its stdout.
+ *
+ * `phase complete` writes ROADMAP.md as its LAST step, after a read-heavy
+ * parse/lock sequence (ROADMAP read, two extractCurrentMilestone STATE.md
+ * parses, REQUIREMENTS read, phase-dir scan, STATE read — all before the single
+ * writePlanningFileSet flush). Under the high-concurrency docker run (~672 test
+ * files in parallel), a tight 10s timeout could fire mid-parse and SIGTERM the
+ * subprocess BEFORE that write landed, leaving ROADMAP.md untouched. Call sites
+ * that used a bare `catch {}` then silently proceeded to assert on the pristine
+ * file — an intermittent "checkbox not checked" failure (bug #1998 flake).
+ *
+ * Two-part fix, no retry loop:
+ *  1. A generous timeout so the test's own timer never kills the subprocess
+ *     under load (10s cold-node startup × 672-way CPU/IO contention was the
+ *     real culprit — all I/O is scoped to tmpDir, so there is no cross-process
+ *     race to blame).
+ *  2. Never silently swallow a signal/timeout kill: it means the process was
+ *     terminated before completing its writes, so we surface it loudly with
+ *     context instead of letting it masquerade as an assertion failure. A
+ *     *clean* non-zero exit is still tolerated when `tolerateExit` is set,
+ *     because the ROADMAP write has already landed before any post-write step
+ *     that may exit non-zero in these minimal fixtures.
+ */
+function runPhaseComplete(tmpDir, { phase = '1', tolerateExit = false } = {}) {
+  try {
+    return execFileSync('node', [GSD_TOOLS_BIN, 'phase', 'complete', phase], {
+      cwd: tmpDir,
+      timeout: 60000,
+      encoding: 'utf-8',
+    });
+  } catch (err) {
+    // A signal/timeout kill terminated the process before it finished writing —
+    // never tolerate it; surface it with whatever output was captured.
+    if (err.killed || err.signal != null || err.code === 'ETIMEDOUT') {
+      throw new Error(
+        `gsd-tools phase complete ${phase} was killed before completion ` +
+          `(signal=${err.signal}, code=${err.code}). ` +
+          `stdout=${err.stdout || ''} stderr=${err.stderr || ''}`
+      );
+    }
+    if (tolerateExit) {
+      return `${err.stdout || ''}${err.stderr || ''}`;
+    }
+    throw err;
+  }
+}
+
 describe('bug #1998: phase complete updates overview checkbox', () => {
   let tmpDir;
   let planningDir;
@@ -3419,11 +3468,7 @@ describe('bug #1998: phase complete updates overview checkbox', () => {
       '| 2. Features | 0/1 | Pending | - |',
     ].join('\n'));
 
-    try {
-      execFileSync('node', [GSD_TOOLS_BIN, 'phase', 'complete', '1'], { cwd: tmpDir, timeout: 10000 });
-    } catch {
-      // Command may exit non-zero if STATE.md update fails, but ROADMAP.md update happens first
-    }
+    runPhaseComplete(tmpDir, { tolerateExit: true });
 
     const result = fs.readFileSync(roadmapPath, 'utf-8');
     assert.match(result, /- \[x\] \*\*Phase 1: Foundation\*\*/, 'overview checkbox should be checked');
@@ -3468,11 +3513,7 @@ describe('bug #1998: phase complete updates overview checkbox', () => {
       '</details>',
     ].join('\n'));
 
-    try {
-      execFileSync('node', [GSD_TOOLS_BIN, 'phase', 'complete', '1'], { cwd: tmpDir, timeout: 10000 });
-    } catch {
-      // May exit non-zero
-    }
+    runPhaseComplete(tmpDir, { tolerateExit: true });
 
     const result = fs.readFileSync(roadmapPath, 'utf-8');
     assert.match(result, /- \[x\] \*\*Phase 1: Setup\*\*/, 'current milestone checkbox should be checked');
@@ -3559,11 +3600,7 @@ describe('bug #2005: phase complete updates plan count when milestone is inside 
       '</details>',
     ].join('\n'));
 
-    try {
-      execFileSync('node', [GSD_TOOLS_BIN, 'phase', 'complete', '1'], { cwd: tmpDir, timeout: 10000 });
-    } catch {
-      // May exit non-zero if STATE.md update fails, but ROADMAP.md update is the target
-    }
+    runPhaseComplete(tmpDir, { tolerateExit: true });
 
     const result = fs.readFileSync(roadmapPath, 'utf-8');
 
@@ -3619,9 +3656,7 @@ describe('bug #2005: phase complete updates plan count when milestone is inside 
       '</details>',
     ].join('\n'));
 
-    try {
-      execFileSync('node', [GSD_TOOLS_BIN, 'phase', 'complete', '1'], { cwd: tmpDir, timeout: 10000 });
-    } catch {}
+    runPhaseComplete(tmpDir, { tolerateExit: true });
 
     const result = fs.readFileSync(roadmapPath, 'utf-8');
 
@@ -3709,22 +3744,7 @@ describe('bug #2526: phase complete warns about unregistered REQ-IDs', () => {
       '| REQ-001 | 1 | Pending |',
     ].join('\n'));
 
-    let stdout = '';
-    let stderr = '';
-    try {
-      const result = execFileSync('node', [GSD_TOOLS_BIN, 'phase', 'complete', '1'], {
-        cwd: tmpDir,
-        timeout: 10000,
-        encoding: 'utf-8',
-      });
-      stdout = result;
-    } catch (err) {
-      stdout = err.stdout || '';
-      stderr = err.stderr || '';
-      throw err;
-    }
-
-    const combined = stdout + stderr;
+    const combined = runPhaseComplete(tmpDir);
     assert.match(combined, /REQ-002/, 'output should mention REQ-002 as missing from Traceability table');
     assert.match(combined, /REQ-003/, 'output should mention REQ-003 as missing from Traceability table');
   });
@@ -3776,22 +3796,7 @@ describe('bug #2526: phase complete warns about unregistered REQ-IDs', () => {
       '| REQ-002 | 1 | Pending |',
     ].join('\n'));
 
-    let stdout = '';
-    let stderr = '';
-    try {
-      const result = execFileSync('node', [GSD_TOOLS_BIN, 'phase', 'complete', '1'], {
-        cwd: tmpDir,
-        timeout: 10000,
-        encoding: 'utf-8',
-      });
-      stdout = result;
-    } catch (err) {
-      stdout = err.stdout || '';
-      stderr = err.stderr || '';
-      throw err;
-    }
-
-    const combined = stdout + stderr;
+    const combined = runPhaseComplete(tmpDir);
     assert.doesNotMatch(
       combined,
       /unregistered|missing.*traceability|not in.*traceability/i,
@@ -3845,22 +3850,7 @@ describe('bug #2526: phase complete warns about unregistered REQ-IDs', () => {
       '| REQ-001 | 1 | Pending |',
     ].join('\n'));
 
-    let stdout = '';
-    let stderr = '';
-    try {
-      const result = execFileSync('node', [GSD_TOOLS_BIN, 'phase', 'complete', '1'], {
-        cwd: tmpDir,
-        timeout: 10000,
-        encoding: 'utf-8',
-      });
-      stdout = result;
-    } catch (err) {
-      stdout = err.stdout || '';
-      stderr = err.stderr || '';
-      throw err;
-    }
-
-    const combined = stdout + stderr;
+    const combined = runPhaseComplete(tmpDir);
     assert.match(combined, /REQ-002/, 'should warn about REQ-002');
     assert.match(combined, /REQ-003/, 'should warn about REQ-003');
     assert.match(combined, /REQ-004/, 'should warn about REQ-004');
