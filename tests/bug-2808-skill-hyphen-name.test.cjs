@@ -175,7 +175,8 @@ describe('bug-2808: SKILL.md name: uses hyphen form', () => {
     // Use the real COMMANDS_DIR as the source via .gsd-source marker.
     // installRuntimeArtifacts('claude', configDir, 'global') writes to
     // configDir/skills/ using the same converter as the shim did.
-    // With the full profile, skills are nested: gsd-ns-<router>/skills/<stem>/SKILL.md
+    // With the full profile (#924 fix), skills are FLAT: gsd-<stem>/SKILL.md
+    // (nested layout reverted for Claude — Claude Code scans only one level).
     const configDir = path.join(tmp, 'config');
     fs.mkdirSync(configDir, { recursive: true });
     fs.writeFileSync(path.join(configDir, '.gsd-source'), COMMANDS_DIR + '\n');
