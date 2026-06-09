@@ -19,7 +19,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 // Load compiled module (build:lib compiles src/*.cts -> gsd-core/bin/lib/*.cjs)
-const migration = require('../gsd-core/bin/lib/installer-migrations/004-prune-stale-pristine-get-shit-done.cjs');
+const migration = require('../gsd-core/bin/lib/installer-migrations/004-prune-stale-pristine-snapshots.cjs');
 
 function createTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-migration-004-test-'));
@@ -199,7 +199,7 @@ describe('plan() — stale pristine root is a symlink', () => {
     const externalDir = createTempDir();
     try {
       writeFile(externalDir, 'workflows/plan.md', 'pristine content\n');
-      // Create gsd-pristine/ as a real dir but make get-shit-done/ a symlink.
+      // Create gsd-pristine/ as a real dir but make get-shit-done/ a symlink. // gsd-allow-legacy-name
       fs.mkdirSync(path.join(configDir, 'gsd-pristine'), { recursive: true });
       const legacyLink = path.join(configDir, 'gsd-pristine', 'get-shit-done'); // gsd-allow-legacy-name
       fs.symlinkSync(externalDir, legacyLink);
@@ -223,7 +223,7 @@ describe('plan() — symlinked entry inside stale pristine dir is skipped', () =
     const configDir = createTempDir();
     const externalTarget = createTempDir();
     try {
-      // A real file inside gsd-pristine/get-shit-done/
+      // A real file inside gsd-pristine/get-shit-done/ // gsd-allow-legacy-name
       writeFile(configDir, 'gsd-pristine/get-shit-done/workflows/plan.md', 'real pristine\n'); // gsd-allow-legacy-name
 
       // A symlink inside the same dir pointing to external target.

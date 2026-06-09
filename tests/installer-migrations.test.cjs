@@ -1466,8 +1466,8 @@ test('shipped installer-migration checksums are locked to a committed baseline (
     '2026-06-02-rename-get-shit-done-to-gsd-core':
       'sha256:3a9f1d97f64097fb313203d19c6d93a187a38df61dd299afa5eef73e16124e95',
     // Migration 004: prune stale gsd-pristine/get-shit-done/ snapshots (#934) // gsd-allow-legacy-name
-    '2026-06-09-prune-stale-pristine-get-shit-done':
-      'sha256:2f291d0b8ac195cdee3e7b56d5d984e8b8a28cc44312374074326360c3e9d921',
+    '2026-06-09-prune-stale-pristine-get-shit-done': // gsd-allow-legacy-name
+      'sha256:6555dd044659276fbc204e81793cd92c5315d54e7316bcdd82d2c98d15a7e9e8',
   };
 
   const { DEFAULT_MIGRATIONS_DIR, migrationChecksum: computeChecksum } = require('../gsd-core/bin/lib/installer-migrations.cjs');

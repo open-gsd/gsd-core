@@ -1,6 +1,6 @@
 /**
  * Installer migration 004: remove stale gsd-pristine/get-shit-done/ snapshot // gsd-allow-legacy-name
- * files after the get-shit-done → gsd-core rename (#604, #934).
+ * files after the get-shit-done → gsd-core rename (#604, #934). // gsd-allow-legacy-name
  *
  * Background: migration 003 removed legacy runtime files from
  * get-shit-done/ but did not touch gsd-pristine/get-shit-done/, the // gsd-allow-legacy-name
@@ -97,7 +97,7 @@ const migration: InstallerMigration = {
 
     // Safety: reject symlinks in ANY ancestor component of the path we will walk
     // to prevent following a symlink out of configDir.  Check both gsd-pristine/
-    // and gsd-pristine/get-shit-done/ — either being a symlink could redirect
+    // and gsd-pristine/get-shit-done/ — either being a symlink could redirect // gsd-allow-legacy-name
     // the walk to an out-of-tree location.
     const pristineParent = path.join(ctx.configDir, 'gsd-pristine');
     try {
