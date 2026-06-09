@@ -212,6 +212,7 @@ function cleanupGeneratedStageDir(stagedDir: string): void {
  * @param converterName  name of converter function in bin/install.js exports
  * @param runtime        canonical runtime ID (gates Hermes/Qwen branding in converter)
  * @param configDir      runtime config dir (for .gsd-source marker resolution)
+ * @param nested         if true, nest concrete skills under their ns-* routers (#69)
  */
 function skillsKind(
   destSubpath: string,
@@ -219,6 +220,7 @@ function skillsKind(
   converterName: string,
   runtime: string,
   configDir: string,
+  nested = false,
 ): ArtifactKind {
   return {
     kind: 'skills',
@@ -232,7 +234,7 @@ function skillsKind(
       const cmdNames = installExports.readGsdCommandNames();
       const wrappedConverter = (content: string, skillName: string): string =>
         realConverter(content, skillName, runtime, cmdNames);
-      return stageSkillsForRuntimeAsSkills(findInstallSourceRoot(configDir), resolved, wrappedConverter, prefix);
+      return stageSkillsForRuntimeAsSkills(findInstallSourceRoot(configDir), resolved, wrappedConverter, prefix, nested);
     },
   };
 }
@@ -342,6 +344,39 @@ function extensionsKind(destSubpath: string, prefix: string, configDir: string):
 // Public API
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Nested skill-bundle support matrix (#69)
+// ---------------------------------------------------------------------------
+//
+// When a runtime's skill loader scans only one level deep (non-recursive), a
+// concrete skill nested at `<router>/skills/<name>/SKILL.md` drops out of the
+// eager top-level listing yet stays readable by file path — which is exactly
+// what namespace routing needs. Recursive loaders surface every nested SKILL.md
+// as a peer (zero token saving), so they stay flat. Unconfirmed loaders stay
+// flat conservatively. Verified June 2026:
+//
+//   NEST (confirmed non-recursive / one-level scan):
+//     claude     — https://code.claude.com/docs/en/skills + anthropics/claude-code#28266
+//                  (scans one level under ~/.claude/skills; nested skills not auto-listed)
+//     cline      — cline/cline skills.ts scanSkillsDirectory uses flat fs.readdir
+//     qwen       — QwenLM/qwen-code skill-load.ts flat readdir ("depth 2 enough")
+//     hermes     — hermes-agent.nousresearch.com/docs/user-guide/features/skills
+//                  (single-level subdir probe of the tap path)
+//     augment    — https://docs.augmentcode.com/cli/skills (flat single-level)
+//     trae       — docs.trae.ai/ide/skills + Trae-AI/TRAE#2253 (flat; nesting errors)
+//     antigravity— discuss.ai.google.dev/t/more-antigravity-issues/145875 ("will not recursive scan")
+//
+//   FLAT (recursive loader → nesting gives no saving):
+//     cursor     — https://cursor.com/docs/skills (walks skills root recursively)
+//     opencode   — sst/opencode skill/index.ts glob "skills/**/SKILL.md"
+//     kilo       — Kilo-Org/kilocode (opencode fork, same ** glob)
+//
+//   FLAT (nested-scan behaviour unconfirmed → conservative):
+//     codex      — developers.openai.com/codex/skills/
+//     copilot    — docs.github.com/en/copilot/concepts/agents/about-agent-skills
+//     windsurf   — docs.devin.ai/desktop/cascade/skills
+//     codebuddy  — codebuddy.ai/docs/cli/skills
+
 /**
  * Resolve the artifact layout for a given runtime and config directory.
  */
@@ -365,7 +400,7 @@ function resolveRuntimeArtifactLayout(runtime: string, configDir: string, scope:
           agentsKind('agents', 'gsd-', configDir),
         ];
       } else {
-        kinds = [skillsKind('skills', 'gsd-', 'convertClaudeCommandToClaudeSkill', 'claude', configDir)];
+        kinds = [skillsKind('skills', 'gsd-', 'convertClaudeCommandToClaudeSkill', 'claude', configDir, true /* #69 nested: non-recursive scan, see matrix above */)];
       }
       break;
 
@@ -393,7 +428,7 @@ function resolveRuntimeArtifactLayout(runtime: string, configDir: string, scope:
       break;
 
     case 'antigravity':
-      kinds = [skillsKind('skills', 'gsd-', 'convertClaudeCommandToAntigravitySkill', 'antigravity', configDir)];
+      kinds = [skillsKind('skills', 'gsd-', 'convertClaudeCommandToAntigravitySkill', 'antigravity', configDir, true /* #69 nested */)];
       break;
 
     case 'windsurf':
@@ -403,20 +438,20 @@ function resolveRuntimeArtifactLayout(runtime: string, configDir: string, scope:
     case 'augment':
       kinds = [
         commandsKind('commands', 'gsd-', configDir),
-        skillsKind('skills', 'gsd-', 'convertClaudeCommandToAugmentSkill', 'augment', configDir),
+        skillsKind('skills', 'gsd-', 'convertClaudeCommandToAugmentSkill', 'augment', configDir, true /* #69 nested */),
       ];
       break;
 
     case 'trae':
-      kinds = [skillsKind('skills', 'gsd-', 'convertClaudeCommandToTraeSkill', 'trae', configDir)];
+      kinds = [skillsKind('skills', 'gsd-', 'convertClaudeCommandToTraeSkill', 'trae', configDir, true /* #69 nested */)];
       break;
 
     case 'qwen':
-      kinds = [skillsKind('skills', 'gsd-', 'convertClaudeCommandToClaudeSkill', 'qwen', configDir)];
+      kinds = [skillsKind('skills', 'gsd-', 'convertClaudeCommandToClaudeSkill', 'qwen', configDir, true /* #69 nested */)];
       break;
 
     case 'hermes':
-      kinds = [skillsKind('skills/gsd', '', 'convertClaudeCommandToClaudeSkill', 'hermes', configDir)];
+      kinds = [skillsKind('skills/gsd', '', 'convertClaudeCommandToClaudeSkill', 'hermes', configDir, true /* #69 nested */)];
       break;
 
     case 'codebuddy':
@@ -434,7 +469,7 @@ function resolveRuntimeArtifactLayout(runtime: string, configDir: string, scope:
       break;
 
     case 'cline':
-      kinds = scope === 'global' ? [skillsKind('skills', 'gsd-', 'convertClaudeCommandToClineSkill', 'cline', configDir)] : [];
+      kinds = scope === 'global' ? [skillsKind('skills', 'gsd-', 'convertClaudeCommandToClineSkill', 'cline', configDir, true /* #69 nested */)] : [];
       break;
 
     case 'omp':

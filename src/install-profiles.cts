@@ -331,13 +331,113 @@ function stageAgentsForProfile(srcAgentsDir: string, resolvedProfile: ResolvedPr
   return stageDir;
 }
 
+/**
+ * Namespace-router → concrete sub-skill mapping for nested install layouts (#69).
+ */
+interface NamespaceBundleMap {
+  routerStems: Set<string>;
+  routerChildren: Map<string, string[]>;
+  childToRouters: Map<string, string[]>;
+}
+
+/**
+ * Build the namespace router → concrete sub-skill mapping (#69). The
+ * authoritative source is each `ns-*.md` router file's `requires:` frontmatter
+ * list. A concrete skill may be routed by more than one router (e.g. spec-phase
+ * is shared by ns-workflow and ns-ideate); it is nested — and physically
+ * duplicated — under every owning router.
+ */
+function buildNamespaceBundleMap(srcCommandsDir: string): NamespaceBundleMap {
+  const routerStems = new Set<string>();
+  const routerChildren = new Map<string, string[]>();
+  const childToRouters = new Map<string, string[]>();
+  if (!fs.existsSync(srcCommandsDir)) {
+    return { routerStems, routerChildren, childToRouters };
+  }
+  for (const entry of fs.readdirSync(srcCommandsDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+    if (!entry.name.startsWith('ns-')) continue;
+    const stem = entry.name.slice(0, -3);
+    let children: string[] = [];
+    try {
+      children = parseRequires(fs.readFileSync(path.join(srcCommandsDir, entry.name), 'utf8'));
+    } catch { children = []; }
+    routerStems.add(stem);
+    routerChildren.set(stem, children);
+    for (const child of children) {
+      const owners = childToRouters.get(child) || [];
+      owners.push(stem);
+      childToRouters.set(child, owners);
+    }
+  }
+  return { routerStems, routerChildren, childToRouters };
+}
+
+/**
+ * Rewrite a converted namespace-router SKILL.md so its routing table points at
+ * nested sub-skill files instead of bare Skill-tool names (#69). Each table row
+ * whose final cell carries a `gsd-<stem>` token (optionally with `--flag`
+ * suffixes) is rewritten to `Read \`skills/<stem>/SKILL.md\`` (flags preserved
+ * as a note), the `Invoke` column header becomes `Read`, and the
+ * "Invoke … using the Skill tool" trailer becomes a file-read instruction.
+ * Only lines beginning with a table pipe are touched, so the `|` inside the
+ * `description:` frontmatter field is never matched.
+ */
+function transformRouterBodyToNested(converted: string): string {
+  const lines = converted.split('\n');
+  const out = lines.map((line) => {
+    if (/Invoke the matched skill directly using the Skill tool\./.test(line)) {
+      return line.replace(
+        /Invoke the matched skill directly using the Skill tool\./,
+        "Read the matched sub-skill's SKILL.md and follow its instructions. The `skills/<name>/SKILL.md` paths in the right column are relative to this skill's own directory.",
+      );
+    }
+    if (!/^\s*\|/.test(line)) return line;
+    if (/^\s*\|[\s:|-]+\|\s*$/.test(line)) return line;
+    if (/\|\s*Invoke\s*\|/.test(line)) {
+      return line.replace(/\|\s*Invoke\s*\|/, '| Read |');
+    }
+    const cells = line.split('|');
+    const lastIdx = cells.length - 2;
+    if (lastIdx < 1) return line;
+    const cell = cells[lastIdx];
+    const m = cell.match(/gsd-([a-z0-9-]+)((?:\s+--[a-z0-9-]+)*)/i);
+    if (!m) return line;
+    const stem = m[1];
+    const flags = m[2].trim();
+    cells[lastIdx] = flags
+      ? ` Read \`skills/${stem}/SKILL.md\` (${flags}) `
+      : ` Read \`skills/${stem}/SKILL.md\` `;
+    return cells.join('|');
+  });
+  return out.join('\n');
+}
+
 function stageSkillsForRuntimeAsSkills(
   srcCommandsDir: string,
   resolvedProfile: ResolvedProfile,
   converter: (content: string, skillName: string) => string,
   prefix: string,
+  nested = false,
 ): string {
   if (!fs.existsSync(srcCommandsDir)) return srcCommandsDir;
+
+  // Nesting applies to the `full` install AND to any surface whose skill set
+  // still contains every namespace router (a full/reset surface). It must NOT
+  // depend on the `'*'` sentinel alone: applySurface() materializes `full` into
+  // a concrete Set, so a sentinel-only gate would re-flatten the layout on every
+  // surface apply/reset (#69 adversarial-review finding). A partial surface that
+  // drops a whole router cluster falls back to flat automatically.
+  const bundles = nested ? buildNamespaceBundleMap(srcCommandsDir) : null;
+  let doNest = false;
+  if (nested && bundles && bundles.routerStems.size > 0) {
+    if (resolvedProfile.skills === '*') {
+      doNest = true;
+    } else {
+      const present = resolvedProfile.skills;
+      doNest = [...bundles.routerStems].every((r) => present.has(r));
+    }
+  }
 
   const stageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-profile-runtime-skills-'));
   try {
@@ -350,6 +450,30 @@ function stageSkillsForRuntimeAsSkills(
       const content = fs.readFileSync(path.join(srcCommandsDir, entry.name), 'utf8');
       const skillName = `${prefix}${stem}`;
       const converted = converter(content, skillName);
+
+      if (doNest && bundles!.routerStems.has(stem)) {
+        // Router skill: rewrite its routing table to the nested Read pattern and
+        // emit it as the single top-level bundle entry.
+        const destDir = path.join(stageDir, skillName);
+        fs.mkdirSync(destDir, { recursive: true });
+        fs.writeFileSync(path.join(destDir, 'SKILL.md'), transformRouterBodyToNested(converted));
+        continue;
+      }
+
+      if (doNest && bundles!.childToRouters.has(stem)) {
+        // Concrete skill routed by one or more namespace routers: nest a copy
+        // under each owning router's skills/ subdir so it drops out of the
+        // top-level eager listing while staying readable by file path (#69).
+        for (const routerStem of bundles!.childToRouters.get(stem)!) {
+          const destDir = path.join(stageDir, `${prefix}${routerStem}`, 'skills', stem);
+          fs.mkdirSync(destDir, { recursive: true });
+          fs.writeFileSync(path.join(destDir, 'SKILL.md'), converted);
+        }
+        continue;
+      }
+
+      // Flat top-level skill (default behaviour; also the unrouted fallback when
+      // nesting is active).
       const destDir = path.join(stageDir, skillName);
       fs.mkdirSync(destDir, { recursive: true });
       fs.writeFileSync(path.join(destDir, 'SKILL.md'), converted);
@@ -596,6 +720,7 @@ export = {
   readActiveProfile,
   writeActiveProfile,
   // Shared internals
+  parseRequires,
   cleanupStagedSkills,
   // Back-compat / deprecated
   MINIMAL_SKILL_ALLOWLIST,

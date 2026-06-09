@@ -97,6 +97,7 @@
         "bug-3286-state-write-routing.test.cjs",
         "bug-3454-state-dollar-backreference-growth.test.cjs",
         "bug-397-state-preserve-executor-authored.test.cjs",
+        "bug-905-state-syncstatefrontmatter-preserve-scalars.test.cjs",
         "state-acquirestatelock-non-eexist.test.cjs",
         "state-prune.test.cjs",
         "state.test.cjs"
@@ -123,6 +124,7 @@
         "bug-410-install-defaults-test-mode-guard.test.cjs",
         "enh-776-install-gemini-hook-events.test.cjs",
         "install-minimal-hooks.test.cjs",
+        "install-nested-layout.test.cjs",
         "install-path-detection.test.cjs",
         "install-regressions.test.cjs",
         "install-runtime-artifacts.test.cjs",
@@ -130,6 +132,14 @@
         "install.test.cjs"
       ],
       "issue": "TBD"
+    },
+    "validate": {
+      "files": [
+        "bug-3129-validate-commit-git-bypass.test.cjs",
+        "bug-892-validate-checklist-roadmap-phases.test.cjs",
+        "validate-context.test.cjs"
+      ],
+      "issue": "892"
     }
   }
 }
