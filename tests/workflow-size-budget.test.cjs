@@ -81,35 +81,39 @@ const GRACE = 3000;
 // current high-water mark within GRACE (#597 tighten-only ratchet).
 // XL high-water mark is execute-phase.md — note that under LINES it was
 // plan-phase; bytes genuinely re-rank the tier, which is the point of #717.
-// actualMax=87005 (execute-phase); slack=2995 ≤ GRACE.
-const XL_BUDGET = 90000;
-// LARGE high-water mark is docs-update.md. actualMax=51184; slack=2816 ≤ GRACE.
-const LARGE_BUDGET = 54000;
-// DEFAULT high-water mark is settings-advanced.md. actualMax=35183; slack=2817 ≤ GRACE.
-const DEFAULT_BUDGET = 38000;
+// actualMax=91161 (execute-phase, #891 launcher shim expansion — added 17 runtime home arms);
+// slack=1839 ≤ GRACE. plan-phase.md=88120, new-project.md=58110; both well under ceiling.
+const XL_BUDGET = 93000;
+// LARGE high-water mark is docs-update.md. actualMax=54410 (#891 launcher shim expansion);
+// slack=1590 ≤ GRACE. quick.md=45710, autonomous.md=38030.
+const LARGE_BUDGET = 56000;
+// DEFAULT high-water mark is settings-advanced.md. actualMax=38409 (#891 launcher shim expansion);
+// slack=1591 ≤ GRACE.
+const DEFAULT_BUDGET = 40000;
 
 // Top-level orchestrators that own end-to-end multi-phase rubrics.
 // Grandfathered at current sizes — see PR #2551 for the progressive-disclosure
 // pattern that future shrinks should follow. Byte counts noted for reference.
 const XL_WORKFLOWS = new Set([
-  'execute-phase',  // 87005 bytes (tier high-water mark)
+  'execute-phase',  // 91161 bytes (tier high-water mark; grew in #891 launcher shim expansion)
   'plan-phase',     // 85068 bytes
   'new-project',    // 55850 bytes
 ]);
 
 // Multi-step planners and bigger feature workflows. Grandfathered.
+// Byte counts updated in #891 (launcher shim expanded with 17 runtime home arms).
 const LARGE_WORKFLOWS = new Set([
-  'docs-update',           // 51184 bytes (tier high-water mark)
-  'autonomous',            // 32655
-  'complete-milestone',    // 26284
-  'verify-work',           // 26896
-  'transition',            // 18201
-  'discuss-phase-assumptions', // 23398
-  'progress',              // 23061
-  'new-milestone',         // 26582
-  'update',                // 19334
-  'quick',                 // 42484
-  'code-review',           // 25500
+  'docs-update',           // 54410 bytes (tier high-water mark)
+  'autonomous',            // 38030
+  'complete-milestone',    // 29510
+  'verify-work',           // 30122
+  'transition',            // 21427
+  'discuss-phase-assumptions', // 26624
+  'progress',              // 26287
+  'new-milestone',         // 29808
+  'update',                // 20766
+  'quick',                 // 45710
+  'code-review',           // 28726
 ]);
 
 const ALL_WORKFLOWS = fs.readdirSync(WORKFLOWS_DIR)
@@ -191,7 +195,9 @@ describe('SIZE: discuss-phase progressive disclosure (issue #2551)', () => {
   // headroom). This is the headline metric of the refactor — every other
   // workflow above its tier is grandfathered and may shrink later via the
   // same pattern.
-  const DISCUSS_PHASE_TARGET = 30000;
+  // Target raised from 30000 to 32000 in #891 (launcher shim expansion added 17 runtime home arms,
+  // adding ~960 bytes to the preamble; the thin-dispatcher intent is preserved — actual=30935).
+  const DISCUSS_PHASE_TARGET = 32000;
   test(`discuss-phase.md is under ${DISCUSS_PHASE_TARGET} bytes (issue #2551 target)`, () => {
     const filePath = path.join(WORKFLOWS_DIR, 'discuss-phase.md');
     const bytes = byteCount(filePath);
