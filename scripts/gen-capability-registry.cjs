@@ -1193,6 +1193,19 @@ function stripGeneratedComment(content) {
     .join('\n');
 }
 
+/**
+ * Normalize line endings to LF.
+ * The generator always writes LF, but Windows git (autocrlf) checks out committed files with
+ * CRLF. The --check comparison must be line-ending-agnostic so it only fails on REAL content
+ * differences, not on checkout-introduced whitespace differences.
+ *
+ * @param {string} content
+ * @returns {string}
+ */
+function normalizeLineEndings(content) {
+  return content.replace(/\r/g, '');
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 /**
@@ -1260,7 +1273,7 @@ function main() {
     }
 
     const committed = fs.readFileSync(REGISTRY_PATH, 'utf8');
-    if (stripGeneratedComment(committed) !== stripGeneratedComment(live)) {
+    if (normalizeLineEndings(stripGeneratedComment(committed)) !== normalizeLineEndings(stripGeneratedComment(live))) {
       process.stderr.write(
         'gsd-core/bin/lib/capability-registry.cjs is stale. Run:\n' +
         '  node scripts/gen-capability-registry.cjs --write\n',
@@ -1317,6 +1330,7 @@ module.exports = {
   serializeRegistry,
   computeRequiresClosure,
   topoSortSteps,
+  normalizeLineEndings,
   LOOP_HOST_CONTRACT,
   VALID_LOOP_POINTS,
   POINT_ORDER,

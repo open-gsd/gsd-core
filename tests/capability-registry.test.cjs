@@ -28,6 +28,7 @@ const {
   serializeRegistry,
   computeRequiresClosure,
   topoSortSteps,
+  normalizeLineEndings,
   SCHEMA_VERSION,
 } = require('../scripts/gen-capability-registry.cjs');
 
@@ -354,6 +355,46 @@ describe('--check drift detection', () => {
     const content1 = serializeRegistry(registry, capMap);
     const content2 = serializeRegistry(registry, capMap);
     assert.strictEqual(content1, content2, 'Two calls to serializeRegistry should be identical');
+  });
+});
+
+// ─── 4b. normalizeLineEndings — Windows CRLF regression guard ────────────────
+
+describe('normalizeLineEndings', () => {
+  test('strips \\r so LF and CRLF content compare as equal', () => {
+    const lf = 'line1\nline2\nline3\n';
+    const crlf = 'line1\r\nline2\r\nline3\r\n';
+    assert.strictEqual(
+      normalizeLineEndings(lf),
+      normalizeLineEndings(crlf),
+      'LF and CRLF variants should normalize to the same string',
+    );
+  });
+
+  test('standalone \\r (old Mac line endings) is also stripped', () => {
+    const cr = 'line1\rline2\r';
+    const lf = 'line1\nline2\n';
+    assert.notStrictEqual(normalizeLineEndings(cr), normalizeLineEndings(lf),
+      'standalone CR collapses differently from LF — only \\r is stripped, not newlines added');
+    // The key property: \\r is gone
+    assert.ok(!normalizeLineEndings(cr).includes('\r'), 'result must not contain \\r');
+  });
+
+  test('real registry content: CRLF variant compares equal to LF variant after normalization', () => {
+    const capDir = makeTempCapDir({ ui: UI_CAP });
+    const { capMap } = loadAndValidate(new Set(), capDir);
+    const registry = buildRegistry(capMap);
+    const lfContent = serializeRegistry(registry, capMap);
+
+    // Simulate Windows git checkout by converting LF -> CRLF
+    const crlfContent = lfContent.replace(/\n/g, '\r\n');
+
+    assert.notStrictEqual(lfContent, crlfContent, 'CRLF and LF versions are byte-different');
+    assert.strictEqual(
+      normalizeLineEndings(lfContent),
+      normalizeLineEndings(crlfContent),
+      '--check must treat CRLF-checked-out registry as up to date (Windows autocrlf regression guard)',
+    );
   });
 });
 
