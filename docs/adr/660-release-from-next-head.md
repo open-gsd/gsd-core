@@ -79,7 +79,7 @@ or a movable tag — as the RC surface.** Concretely:
 4. **RC = the `@next` dist-tag, full stop.** Testers run `npm i -g @opengsd/gsd-core@next`.
    Because each `rc` run is cut from `next` HEAD, every rc.N already includes all prior fixes.
    No long-lived branch, no tag movement. `finalize` promotes the released version to `@latest`
-   (and keeps the existing `npm dist-tag add … next` so `@next` never trails `@latest`).
+   (`@next` remains the prerelease channel managed exclusively by the `rc` job; `finalize` does not repoint it).
 
 5. **Everything else stays:** custom changesets + CHANGELOG render, release-notes formatter,
    smoke-test gates, provenance, `main`/`next`, `auto-backmerge` (main→next).
