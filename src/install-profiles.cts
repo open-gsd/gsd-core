@@ -163,16 +163,53 @@ interface ResolvedProfile {
   agents: Set<string>;
 }
 
+interface CapabilityRegistry {
+  capabilityClusters?: Record<string, string[]>;
+  profileMembership?: Record<string, { tier: string; profiles: string[] }>;
+}
+
 interface ResolveProfileOpts {
   modes?: string[];
   manifest?: Map<string, string[]>;
   _profilesOverride?: Record<string, string | readonly string[]>;
+  /** ADR-857 phase 4c: optional capability registry; when present, capability
+   *  skills are unioned into the base set for each resolved mode before closure. */
+  registry?: CapabilityRegistry;
+}
+
+/**
+ * Compute the capability skills to add for a given profile mode from the registry.
+ * Returns an array of skill stems contributed by capabilities whose profileMembership
+ * includes the given mode.  Guards against prototype pollution and malformed registry.
+ */
+function _capabilitySkillsForMode(mode: string, registry: CapabilityRegistry): string[] {
+  const BANNED = ['__proto__', 'constructor', 'prototype'];
+  const clusters = registry.capabilityClusters;
+  const membership = registry.profileMembership;
+  if (!clusters || typeof clusters !== 'object' || !membership || typeof membership !== 'object') {
+    return [];
+  }
+  const result: string[] = [];
+  for (const capId of Object.keys(clusters)) {
+    if (BANNED.includes(capId)) continue;
+    const mem = membership[capId];
+    if (!mem || typeof mem !== 'object') continue;
+    const profiles = mem.profiles;
+    if (!Array.isArray(profiles)) continue;
+    if (!profiles.includes(mode)) continue;
+    const skills = clusters[capId];
+    if (!Array.isArray(skills)) continue;
+    for (const s of skills) {
+      if (typeof s === 'string' && s.length > 0) result.push(s);
+    }
+  }
+  return result;
 }
 
 /**
  * Resolve a profile (or composed profiles) to a typed result object.
  */
-function resolveProfile({ modes, manifest, _profilesOverride }: ResolveProfileOpts = {}): ResolvedProfile {
+function resolveProfile({ modes, manifest, _profilesOverride, registry }: ResolveProfileOpts = {}): ResolvedProfile {
   const profiles: Record<string, string | readonly string[]> = _profilesOverride || PROFILES;
   const activeModes = (modes && modes.length > 0) ? modes : ['full'];
   const normalizedModes = activeModes
@@ -201,7 +238,11 @@ function resolveProfile({ modes, manifest, _profilesOverride }: ResolveProfileOp
       // This profile is full — sentinel short-circuit
       return { name: 'full', skills: '*', agents: new Set() };
     }
-    const closure = computeClosure(base as Iterable<string>, man);
+    // ADR-857 phase 4c: union capability skills for this mode BEFORE closure so
+    // their requires: chains expand too.
+    const capSkills = registry ? _capabilitySkillsForMode(mode, registry) : [];
+    const baseWithCap: string[] = [...(base as Iterable<string>), ...capSkills];
+    const closure = computeClosure(baseWithCap, man);
     for (const s of closure) unionSkills.add(s);
   }
 

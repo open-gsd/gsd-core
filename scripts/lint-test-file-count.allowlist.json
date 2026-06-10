@@ -26,7 +26,7 @@
     "graphify": {
       "files": [
         "bug-622-graphify-optional-graph-html.test.cjs",
-        "graphify-auto-update.test.cjs",
+        "graphify-auto-update.slow.test.cjs",
         "graphify-query.test.cjs",
         "graphify-visualization.test.cjs",
         "graphify.test.cjs"
@@ -82,8 +82,8 @@
     },
     "security": {
       "files": [
-        "security-prompt-injection.test.cjs",
-        "security-scan.test.cjs",
+        "security-prompt-injection.security.test.cjs",
+        "security-scan.security.test.cjs",
         "security.test.cjs"
       ],
       "issue": "TBD"
@@ -98,6 +98,7 @@
         "bug-3454-state-dollar-backreference-growth.test.cjs",
         "bug-397-state-preserve-executor-authored.test.cjs",
         "bug-905-state-syncstatefrontmatter-preserve-scalars.test.cjs",
+        "bug-948-state-noop-write-guard.test.cjs",
         "state-acquirestatelock-non-eexist.test.cjs",
         "state-prune.test.cjs",
         "state.test.cjs"

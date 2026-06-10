@@ -386,7 +386,7 @@ GSD generates markdown files that become LLM system prompts. This means any user
 - `gsd-prompt-guard.js` — Scans Write/Edit calls to `.planning/` for injection patterns (always active, advisory-only)
 - `gsd-workflow-guard.js` — Warns on file edits outside GSD workflow context (opt-in via `hooks.workflow_guard`)
 
-**CI Scanner:** `prompt-injection-scan.test.cjs` scans all agent, workflow, and command files for embedded injection vectors.
+**CI Scanner:** `prompt-injection-scan.security.test.cjs` scans all agent, workflow, and command files for embedded injection vectors.
 
 ---
 

@@ -4,20 +4,28 @@
 // transformation is asserted — not inspected for string presence.
 
 /**
- * #769 — context:fork + effort: frontmatter on heavy workflow skills.
+ * #769 — effort: frontmatter on heavy workflow skills.
+ * #921 — spawning orchestrators must NOT carry context: fork.
+ *
+ * Context: context:fork was added by #769 to protect context budget, but
+ * plan-phase, execute-phase, and autonomous are spawning orchestrators — a
+ * forked subagent has no Agent/Task tool, breaking their core function.
+ * effort: xhigh is preserved; context: fork is removed from these three.
+ * The converter still passes context: fork through if a source file has it
+ * (for any future leaf skill that legitimately needs isolation).
  *
  * Verifies:
- *   1. Source commands/gsd/autonomous.md has context: fork and effort: xhigh
- *   2. Source commands/gsd/execute-phase.md has context: fork and effort: xhigh
- *   3. Source commands/gsd/plan-phase.md has context: fork and effort: xhigh
+ *   1. Source commands/gsd/autonomous.md does NOT have context: fork, has effort: xhigh
+ *   2. Source commands/gsd/execute-phase.md does NOT have context: fork, has effort: xhigh
+ *   3. Source commands/gsd/plan-phase.md does NOT have context: fork, has effort: xhigh
  *   4. Source commands/gsd/progress.md has effort: low
  *   5. Source commands/gsd/stats.md has effort: low
- *   6. Claude global install: SKILL.md for autonomous has context: fork and effort: xhigh
- *   7. Claude global install: SKILL.md for execute-phase has context: fork and effort: xhigh
- *   8. Claude global install: SKILL.md for plan-phase has context: fork and effort: xhigh
+ *   6. Claude global install: SKILL.md for autonomous has effort: xhigh, NOT context: fork
+ *   7. Claude global install: SKILL.md for execute-phase has effort: xhigh, NOT context: fork
+ *   8. Claude global install: SKILL.md for plan-phase has effort: xhigh, NOT context: fork
  *   9. Claude global install: SKILL.md for progress has effort: low
  *  10. Claude global install: SKILL.md for stats has effort: low
- *  11. convertClaudeCommandToClaudeSkill preserves context: fork field
+ *  11. convertClaudeCommandToClaudeSkill still passes context: fork through (for non-orchestrator skills)
  *  12. convertClaudeCommandToClaudeSkill preserves effort: field
  */
 
@@ -33,7 +41,12 @@ const os = require('node:os');
 
 const { install, convertClaudeCommandToClaudeSkill } = require('../bin/install.js');
 const { cleanup } = require('./helpers.cjs');
-const { nestedSkillPath } = require('./helpers/nested-layout.cjs');
+
+// #924: Claude global install is now FLAT — concrete skills are at the top level.
+// flatSkillPath returns: <skillsRoot>/gsd-<stem>/SKILL.md
+function flatSkillPath(skillsRoot, stem) {
+  return path.join(skillsRoot, `gsd-${stem}`, 'SKILL.md');
+}
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const SOURCE_COMMANDS_DIR = path.join(REPO_ROOT, 'commands', 'gsd');
@@ -91,11 +104,15 @@ function runClaudeGlobalInstall(claudeHome) {
 
 // ─── describe 1: Source command files have correct frontmatter ────────────────
 
-describe('#769 source commands: heavy skills have context: fork and effort: xhigh', () => {
-  test('commands/gsd/autonomous.md has context: fork', () => {
+// #921/#922: spawning orchestrators must NOT carry context: fork — a forked
+// subagent has no Agent/Task tool, making it impossible for orchestrators to
+// spawn their required subagents. context: fork is appropriate only for leaf
+// skills that do not themselves dispatch agents. effort: xhigh is preserved.
+describe('#769/#921 source commands: spawning orchestrators have effort: xhigh but NOT context: fork', () => {
+  test('commands/gsd/autonomous.md does NOT have context: fork (#921)', () => {
     const fm = readFrontmatter(path.join(SOURCE_COMMANDS_DIR, 'autonomous.md'));
-    assert.match(fm, /^context:[ \t]*fork$/m,
-      `autonomous.md frontmatter must have context: fork\nActual:\n${fm}`);
+    assert.doesNotMatch(fm, /^context:[ \t]*fork$/m,
+      `autonomous.md is a spawning orchestrator and must NOT have context: fork (#921)\nActual:\n${fm}`);
   });
 
   test('commands/gsd/autonomous.md has effort: xhigh', () => {
@@ -104,10 +121,10 @@ describe('#769 source commands: heavy skills have context: fork and effort: xhig
       `autonomous.md frontmatter must have effort: xhigh\nActual:\n${fm}`);
   });
 
-  test('commands/gsd/execute-phase.md has context: fork', () => {
+  test('commands/gsd/execute-phase.md does NOT have context: fork (#921)', () => {
     const fm = readFrontmatter(path.join(SOURCE_COMMANDS_DIR, 'execute-phase.md'));
-    assert.match(fm, /^context:[ \t]*fork$/m,
-      `execute-phase.md frontmatter must have context: fork\nActual:\n${fm}`);
+    assert.doesNotMatch(fm, /^context:[ \t]*fork$/m,
+      `execute-phase.md is a spawning orchestrator and must NOT have context: fork (#921)\nActual:\n${fm}`);
   });
 
   test('commands/gsd/execute-phase.md has effort: xhigh', () => {
@@ -116,10 +133,10 @@ describe('#769 source commands: heavy skills have context: fork and effort: xhig
       `execute-phase.md frontmatter must have effort: xhigh\nActual:\n${fm}`);
   });
 
-  test('commands/gsd/plan-phase.md has context: fork', () => {
+  test('commands/gsd/plan-phase.md does NOT have context: fork (#921)', () => {
     const fm = readFrontmatter(path.join(SOURCE_COMMANDS_DIR, 'plan-phase.md'));
-    assert.match(fm, /^context:[ \t]*fork$/m,
-      `plan-phase.md frontmatter must have context: fork\nActual:\n${fm}`);
+    assert.doesNotMatch(fm, /^context:[ \t]*fork$/m,
+      `plan-phase.md is a spawning orchestrator and must NOT have context: fork (#921)\nActual:\n${fm}`);
   });
 
   test('commands/gsd/plan-phase.md has effort: xhigh', () => {
@@ -238,7 +255,9 @@ describe('#769 convertClaudeCommandToClaudeSkill: preserves context and effort f
 
 // ─── describe 3: Claude global install — SKILL.md files include new fields ────
 
-describe('#769 Claude global install: SKILL.md files preserve context: fork and effort:', () => {
+// #921/#922: after install, spawning orchestrators must NOT carry context: fork
+// in their emitted SKILL.md. effort: xhigh is still emitted (preserved from source).
+describe('#769/#921 Claude global install: spawning-orchestrator SKILL.md files have effort: xhigh but NOT context: fork', () => {
   let tmpDir;
   let claudeHome;
 
@@ -252,49 +271,49 @@ describe('#769 Claude global install: SKILL.md files preserve context: fork and 
     cleanup(tmpDir);
   });
 
-  test('gsd-autonomous SKILL.md has context: fork after global install', () => {
+  test('gsd-autonomous SKILL.md does NOT have context: fork after global install (#921)', () => {
     runClaudeGlobalInstall(claudeHome);
-    const skillPath = nestedSkillPath(path.join(claudeHome, 'skills'), 'gsd-', 'autonomous');
+    const skillPath = flatSkillPath(path.join(claudeHome, 'skills'),'autonomous');
     const fm = readFrontmatter(skillPath);
-    assert.match(fm, /^context:[ \t]*fork$/m,
-      `gsd-autonomous SKILL.md must have context: fork\nActual:\n${fm}`);
+    assert.doesNotMatch(fm, /^context:[ \t]*fork$/m,
+      `gsd-autonomous is a spawning orchestrator; its SKILL.md must NOT have context: fork (#921)\nActual:\n${fm}`);
   });
 
   test('gsd-autonomous SKILL.md has effort: xhigh after global install', () => {
     runClaudeGlobalInstall(claudeHome);
-    const skillPath = nestedSkillPath(path.join(claudeHome, 'skills'), 'gsd-', 'autonomous');
+    const skillPath = flatSkillPath(path.join(claudeHome, 'skills'),'autonomous');
     const fm = readFrontmatter(skillPath);
     assert.match(fm, /^effort:[ \t]*xhigh$/m,
       `gsd-autonomous SKILL.md must have effort: xhigh\nActual:\n${fm}`);
   });
 
-  test('gsd-execute-phase SKILL.md has context: fork after global install', () => {
+  test('gsd-execute-phase SKILL.md does NOT have context: fork after global install (#921)', () => {
     runClaudeGlobalInstall(claudeHome);
-    const skillPath = nestedSkillPath(path.join(claudeHome, 'skills'), 'gsd-', 'execute-phase');
+    const skillPath = flatSkillPath(path.join(claudeHome, 'skills'),'execute-phase');
     const fm = readFrontmatter(skillPath);
-    assert.match(fm, /^context:[ \t]*fork$/m,
-      `gsd-execute-phase SKILL.md must have context: fork\nActual:\n${fm}`);
+    assert.doesNotMatch(fm, /^context:[ \t]*fork$/m,
+      `gsd-execute-phase is a spawning orchestrator; its SKILL.md must NOT have context: fork (#921)\nActual:\n${fm}`);
   });
 
   test('gsd-execute-phase SKILL.md has effort: xhigh after global install', () => {
     runClaudeGlobalInstall(claudeHome);
-    const skillPath = nestedSkillPath(path.join(claudeHome, 'skills'), 'gsd-', 'execute-phase');
+    const skillPath = flatSkillPath(path.join(claudeHome, 'skills'),'execute-phase');
     const fm = readFrontmatter(skillPath);
     assert.match(fm, /^effort:[ \t]*xhigh$/m,
       `gsd-execute-phase SKILL.md must have effort: xhigh\nActual:\n${fm}`);
   });
 
-  test('gsd-plan-phase SKILL.md has context: fork after global install', () => {
+  test('gsd-plan-phase SKILL.md does NOT have context: fork after global install (#921)', () => {
     runClaudeGlobalInstall(claudeHome);
-    const skillPath = nestedSkillPath(path.join(claudeHome, 'skills'), 'gsd-', 'plan-phase');
+    const skillPath = flatSkillPath(path.join(claudeHome, 'skills'),'plan-phase');
     const fm = readFrontmatter(skillPath);
-    assert.match(fm, /^context:[ \t]*fork$/m,
-      `gsd-plan-phase SKILL.md must have context: fork\nActual:\n${fm}`);
+    assert.doesNotMatch(fm, /^context:[ \t]*fork$/m,
+      `gsd-plan-phase is a spawning orchestrator; its SKILL.md must NOT have context: fork (#921)\nActual:\n${fm}`);
   });
 
   test('gsd-plan-phase SKILL.md has effort: xhigh after global install', () => {
     runClaudeGlobalInstall(claudeHome);
-    const skillPath = nestedSkillPath(path.join(claudeHome, 'skills'), 'gsd-', 'plan-phase');
+    const skillPath = flatSkillPath(path.join(claudeHome, 'skills'),'plan-phase');
     const fm = readFrontmatter(skillPath);
     assert.match(fm, /^effort:[ \t]*xhigh$/m,
       `gsd-plan-phase SKILL.md must have effort: xhigh\nActual:\n${fm}`);
@@ -302,7 +321,7 @@ describe('#769 Claude global install: SKILL.md files preserve context: fork and 
 
   test('gsd-progress SKILL.md has effort: low after global install', () => {
     runClaudeGlobalInstall(claudeHome);
-    const skillPath = nestedSkillPath(path.join(claudeHome, 'skills'), 'gsd-', 'progress');
+    const skillPath = flatSkillPath(path.join(claudeHome, 'skills'),'progress');
     const fm = readFrontmatter(skillPath);
     assert.match(fm, /^effort:[ \t]*low$/m,
       `gsd-progress SKILL.md must have effort: low\nActual:\n${fm}`);
@@ -310,7 +329,7 @@ describe('#769 Claude global install: SKILL.md files preserve context: fork and 
 
   test('gsd-stats SKILL.md has effort: low after global install', () => {
     runClaudeGlobalInstall(claudeHome);
-    const skillPath = nestedSkillPath(path.join(claudeHome, 'skills'), 'gsd-', 'stats');
+    const skillPath = flatSkillPath(path.join(claudeHome, 'skills'),'stats');
     const fm = readFrontmatter(skillPath);
     assert.match(fm, /^effort:[ \t]*low$/m,
       `gsd-stats SKILL.md must have effort: low\nActual:\n${fm}`);

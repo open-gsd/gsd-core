@@ -279,18 +279,36 @@ describe('ci-test-scope.cjs', () => {
   });
 });
 
-describe('ci-test-scope superset invariant (#494)', () => {
-  // Facet A: any tests/** change → full_matrix === true
-  test('A1: a specific changed test file forces full_matrix', () => {
+describe('ci-test-scope superset invariant (#494, narrowed)', () => {
+  // Facet A (narrowed): a changed test file no longer triggers the full
+  // parity matrix — instead it must ALWAYS run on the scoped windows lane,
+  // so OS-specific breakage in the changed test (the #482 class) is still
+  // exercised pre-merge. Ubuntu 22/24 coverage comes via targeted_tests.
+  test('A1: a changed test file joins the windows scoped lane without full_matrix', () => {
     const result = scopeFor(['tests/bug-1974-context-exhaustion-record.test.cjs']);
-    assert.strictEqual(result.full_matrix, true,
-      `expected full_matrix=true for tests/** change, got: ${JSON.stringify(result)}`);
+    assert.strictEqual(result.full_matrix, false,
+      `expected full_matrix=false for a tests/**-only change, got: ${JSON.stringify(result)}`);
+    assert.ok(result.targeted_tests.includes('tests/bug-1974-context-exhaustion-record.test.cjs'),
+      `expected the changed test in targeted_tests, got: ${JSON.stringify(result.targeted_tests)}`);
+    assert.ok(result.windows_tests.includes('tests/bug-1974-context-exhaustion-record.test.cjs'),
+      `expected the changed test in windows_tests, got: ${JSON.stringify(result.windows_tests)}`);
   });
 
-  test('A2: any tests/** path forces full_matrix', () => {
+  test('A2: a changed test file with no windows hint still joins the windows lane', () => {
+    // commands.test.cjs matches none of the WINDOWS_HINTS substrings — the
+    // unconditional changed-test → windows lane rule must include it anyway.
+    const result = scopeFor(['tests/commands.test.cjs']);
+    assert.strictEqual(result.full_matrix, false);
+    assert.ok(result.windows_tests.includes('tests/commands.test.cjs'),
+      `expected hint-less changed test in windows_tests, got: ${JSON.stringify(result.windows_tests)}`);
+  });
+
+  test('A3: a deleted/nonexistent test path falls back to the unit token, no full_matrix', () => {
     const result = scopeFor(['tests/some-new.test.cjs']);
-    assert.strictEqual(result.full_matrix, true,
-      `expected full_matrix=true for tests/** change, got: ${JSON.stringify(result)}`);
+    assert.strictEqual(result.full_matrix, false);
+    // The nonexistent file is filtered by existingTests(); with nothing left,
+    // the #408 fallback applies so the targeted lane still runs something.
+    assert.deepStrictEqual(result.targeted_tests, ['unit']);
   });
 
   // Facet B: commands/**, agents/** → code_changed AND docs-parity selected

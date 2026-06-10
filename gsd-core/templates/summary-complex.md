@@ -21,6 +21,7 @@ patterns-established:
   - "Pattern 1: description"
 duration: Xmin
 completed: YYYY-MM-DD
+status: complete
 ---
 
 # Phase [X]: [Name] Summary (Complex)

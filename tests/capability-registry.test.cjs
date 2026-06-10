@@ -32,6 +32,13 @@ const {
   validateConfigSliceEntry,
   VALID_CONFIG_SLICE_TYPES,
   SCHEMA_VERSION,
+  // ADR-857 phase 4a
+  deriveCapabilityClusters,
+  deriveProfileMembership,
+  runConsistencyGate,
+  PROFILE_RANK,
+  // ADR-959
+  validateCommandEntry,
 } = require('../scripts/gen-capability-registry.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -1502,5 +1509,815 @@ describe('validateConfigSliceEntry adversarial cases (ADR-857 phase 3b)', () => 
         return true;
       },
     );
+  });
+});
+
+// ─── 16. ADR-857 phase 4a: capabilityClusters + profileMembership ─────────────
+
+// Minimal valid feature capability for synthetic tests
+function makeSyntheticCap(id, tier, skills) {
+  return {
+    id,
+    role: 'feature',
+    title: id,
+    description: 'Synthetic cap for testing',
+    tier,
+    requires: [],
+    skills: [...skills],
+    agents: [],
+    hooks: [],
+    config: {},
+    steps: [],
+    contributions: [],
+    gates: [],
+  };
+}
+
+describe('ADR-857 phase 4a: capabilityClusters shape', () => {
+  test('ui capabilityClusters → [ui-phase, ui-review]', () => {
+    const capMap = new Map([['ui', UI_CAP]]);
+    const clusters = deriveCapabilityClusters(capMap);
+    assert.ok(clusters.ui, 'capabilityClusters.ui should exist');
+    // Skills are sorted for determinism
+    assert.deepEqual(
+      clusters.ui,
+      ['ui-phase', 'ui-review'],
+      'ui cluster should be [ui-phase, ui-review], got: ' + JSON.stringify(clusters.ui),
+    );
+  });
+
+  test('capabilityClusters skips runtime capabilities (no skills)', () => {
+    const runtimeCap = {
+      id: 'cursor', role: 'runtime', title: 'Cursor', description: 'Cursor runtime',
+      tier: 'standard', requires: [],
+      runtime: {
+        configHome: '~/.cursor', configFormat: 'settings-json',
+        artifactLayout: [], commandStyle: 'slash', hooksSurface: 'rules',
+        sandboxTier: 'none', supportTier: 2,
+      },
+    };
+    const capMap = new Map([['cursor', runtimeCap]]);
+    const clusters = deriveCapabilityClusters(capMap);
+    assert.ok(!clusters.cursor, 'runtime cap should not appear in capabilityClusters');
+  });
+
+  test('capabilityClusters skills are sorted for determinism', () => {
+    const cap = makeSyntheticCap('test-cap', 'standard', ['z-skill', 'a-skill', 'm-skill']);
+    const capMap = new Map([['test-cap', cap]]);
+    const clusters = deriveCapabilityClusters(capMap);
+    assert.deepEqual(
+      clusters['test-cap'],
+      ['a-skill', 'm-skill', 'z-skill'],
+      'Skills should be sorted alphabetically, got: ' + JSON.stringify(clusters['test-cap']),
+    );
+  });
+
+  test('buildRegistry includes capabilityClusters with correct ui value', () => {
+    const capDir = makeTempCapDir({ ui: UI_CAP });
+    const { capMap } = loadAndValidate(new Set(), capDir);
+    const registry = buildRegistry(capMap);
+    assert.ok(registry.capabilityClusters, 'registry.capabilityClusters should exist');
+    assert.deepEqual(
+      registry.capabilityClusters.ui,
+      ['ui-phase', 'ui-review'],
+      'registry.capabilityClusters.ui should be [ui-phase, ui-review]',
+    );
+  });
+
+  test('serializeRegistry emits capabilityClusters block in generated .cjs', () => {
+    const capDir = makeTempCapDir({ ui: UI_CAP });
+    const { capMap } = loadAndValidate(new Set(), capDir);
+    const registry = buildRegistry(capMap);
+    const content = serializeRegistry(registry, capMap);
+    assert.ok(content.includes('const capabilityClusters'), 'Generated file must contain "const capabilityClusters"');
+    assert.ok(content.includes('"ui-phase"'), 'Generated file must contain "ui-phase" in capabilityClusters');
+    assert.ok(content.includes('capabilityClusters,'), 'module.exports must include capabilityClusters');
+  });
+
+  test('committed capability-registry.cjs has capabilityClusters with ui=[ui-phase,ui-review]', () => {
+    const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
+    assert.ok(registry.capabilityClusters, 'capability-registry.cjs must export capabilityClusters');
+    assert.deepEqual(
+      registry.capabilityClusters.ui,
+      ['ui-phase', 'ui-review'],
+      'committed capabilityClusters.ui should be [ui-phase, ui-review]',
+    );
+  });
+});
+
+describe('ADR-857 phase 4a: capabilityClusters HARD consistency gate', () => {
+  test('synthetic cap whose capId matches a CLUSTERS name but with different skills throws', () => {
+    // The 'ui' name exists in CLUSTERS with ['ui-phase', 'ui-review'].
+    // A synthetic 'ui' cap with only ['ui-phase'] (missing 'ui-review') must throw.
+    const wrongUiCap = makeSyntheticCap('ui', 'standard', ['ui-phase']); // missing ui-review
+    const capMap = new Map([['ui', wrongUiCap]]);
+    const clusters = deriveCapabilityClusters(capMap);
+    const profiles = deriveProfileMembership(capMap);
+    assert.throws(
+      () => runConsistencyGate(clusters, profiles, capMap),
+      (err) => {
+        assert.ok(err instanceof Error, 'Must throw an Error');
+        assert.ok(
+          err.message.includes('ui'),
+          'Error must name the capId, got: ' + err.message,
+        );
+        assert.ok(
+          err.message.includes('ui-review') || err.message.includes('derived set') || err.message.includes('hand-authored'),
+          'Error must describe the mismatch, got: ' + err.message,
+        );
+        return true;
+      },
+    );
+  });
+
+  test('cap with capId that has NO matching CLUSTERS entry is accepted (new cluster — fine)', () => {
+    // A new capability 'payments' that has no CLUSTERS entry must NOT throw
+    const newCap = makeSyntheticCap('payments', 'standard', ['pay-phase', 'pay-review']);
+    const capMap = new Map([['payments', newCap]]);
+    const clusters = deriveCapabilityClusters(capMap);
+    const profiles = deriveProfileMembership(capMap);
+    // Must not throw
+    assert.doesNotThrow(
+      () => runConsistencyGate(clusters, profiles, capMap),
+      'A cap with no matching CLUSTERS entry should not throw (new cluster is fine)',
+    );
+  });
+
+  test('HARD gate: extra skill in derived set (more than hand-authored) also throws', () => {
+    // 'ui' cap with an extra skill triggers the mismatch
+    const extraUiCap = makeSyntheticCap('ui', 'standard', ['ui-phase', 'ui-review', 'ui-extra']);
+    const capMap = new Map([['ui', extraUiCap]]);
+    const clusters = deriveCapabilityClusters(capMap);
+    const profiles = deriveProfileMembership(capMap);
+    assert.throws(
+      () => runConsistencyGate(clusters, profiles, capMap),
+      (err) => {
+        assert.ok(err instanceof Error);
+        assert.ok(err.message.includes('ui'), 'Error must name the capId');
+        return true;
+      },
+    );
+  });
+});
+
+describe('ADR-857 phase 4a: profileMembership derivation', () => {
+  test('tier core → profiles [core, standard, full]', () => {
+    const cap = makeSyntheticCap('core-cap', 'core', ['core-skill']);
+    const capMap = new Map([['core-cap', cap]]);
+    const profiles = deriveProfileMembership(capMap);
+    assert.ok(profiles['core-cap'], 'profileMembership should have core-cap');
+    assert.strictEqual(profiles['core-cap'].tier, 'core');
+    assert.deepEqual(
+      profiles['core-cap'].profiles,
+      ['core', 'standard', 'full'],
+      'core tier should produce [core, standard, full], got: ' + JSON.stringify(profiles['core-cap'].profiles),
+    );
+  });
+
+  test('tier standard → profiles [standard, full]', () => {
+    const cap = makeSyntheticCap('std-cap', 'standard', ['std-skill']);
+    const capMap = new Map([['std-cap', cap]]);
+    const profiles = deriveProfileMembership(capMap);
+    assert.ok(profiles['std-cap'], 'profileMembership should have std-cap');
+    assert.strictEqual(profiles['std-cap'].tier, 'standard');
+    assert.deepEqual(
+      profiles['std-cap'].profiles,
+      ['standard', 'full'],
+      'standard tier should produce [standard, full], got: ' + JSON.stringify(profiles['std-cap'].profiles),
+    );
+  });
+
+  test('tier full → profiles [full]', () => {
+    const cap = makeSyntheticCap('full-cap', 'full', ['full-skill']);
+    const capMap = new Map([['full-cap', cap]]);
+    const profiles = deriveProfileMembership(capMap);
+    assert.ok(profiles['full-cap'], 'profileMembership should have full-cap');
+    assert.strictEqual(profiles['full-cap'].tier, 'full');
+    assert.deepEqual(
+      profiles['full-cap'].profiles,
+      ['full'],
+      'full tier should produce [full], got: ' + JSON.stringify(profiles['full-cap'].profiles),
+    );
+  });
+
+  test('PROFILE_RANK is imported (not hardcoded): all three tiers covered', () => {
+    // Verify PROFILE_RANK is the canonical ['core', 'standard', 'full'] from install-profiles.cjs
+    assert.deepEqual(
+      PROFILE_RANK,
+      ['core', 'standard', 'full'],
+      'PROFILE_RANK must be [core, standard, full] from install-profiles.cjs, got: ' + JSON.stringify(PROFILE_RANK),
+    );
+  });
+
+  test('ui cap (tier full after reconciliation) profileMembership is [full]', () => {
+    // ADR-857 phase 4c: ui tier changed from standard → full
+    const capMap = new Map([['ui', UI_CAP]]);
+    const profiles = deriveProfileMembership(capMap);
+    assert.deepEqual(
+      profiles.ui.profiles,
+      ['full'],
+      'ui (tier full) should have profiles [full] after reconciliation',
+    );
+  });
+
+  test('buildRegistry includes profileMembership with correct ui value', () => {
+    const capDir = makeTempCapDir({ ui: UI_CAP });
+    const { capMap } = loadAndValidate(new Set(), capDir);
+    const registry = buildRegistry(capMap);
+    assert.ok(registry.profileMembership, 'registry.profileMembership should exist');
+    // After ADR-857 phase 4c reconciliation: ui is tier:full → profiles: ['full'] only
+    assert.deepEqual(
+      registry.profileMembership.ui,
+      { tier: 'full', profiles: ['full'] },
+      'profileMembership.ui should be { tier: full, profiles: [full] } after reconciliation',
+    );
+  });
+
+  test('serializeRegistry emits profileMembership block in generated .cjs', () => {
+    const capDir = makeTempCapDir({ ui: UI_CAP });
+    const { capMap } = loadAndValidate(new Set(), capDir);
+    const registry = buildRegistry(capMap);
+    const content = serializeRegistry(registry, capMap);
+    assert.ok(content.includes('const profileMembership'), 'Generated file must contain "const profileMembership"');
+    // After ADR-857 phase 4c reconciliation: ui is tier:full → profileMembership contains "full"
+    assert.ok(content.includes('"full"'), 'Generated file must contain "full" in profileMembership');
+    assert.ok(content.includes('profileMembership,'), 'module.exports must include profileMembership');
+  });
+
+  test('committed capability-registry.cjs has profileMembership with correct ui value', () => {
+    const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
+    assert.ok(registry.profileMembership, 'capability-registry.cjs must export profileMembership');
+    // After ADR-857 phase 4c reconciliation: ui is tier:full → profiles: ['full'] only
+    assert.deepEqual(
+      registry.profileMembership.ui,
+      { tier: 'full', profiles: ['full'] },
+      'committed profileMembership.ui should be { tier: full, profiles: [full] } after reconciliation',
+    );
+  });
+});
+
+describe('ADR-857 phase 4a: pending-reconciliation warnings (SOFT gate)', () => {
+  test('ui (tier full) generates ZERO pending-reconciliation warnings (ADR-857 phase 4c reconciliation)', () => {
+    // After reconciliation: ui is tier:full. The full profile is '*' (every skill).
+    // The consistency gate must NOT fire for full-tier capabilities — their skills are
+    // always present in the full profile by definition.
+    const capMap = new Map([['ui', UI_CAP]]);
+    const clusters = deriveCapabilityClusters(capMap);
+    const profiles = deriveProfileMembership(capMap);
+    const warnings = runConsistencyGate(clusters, profiles, capMap);
+    const uiPhaseWarn = warnings.find((w) => w.includes('ui-phase'));
+    const uiReviewWarn = warnings.find((w) => w.includes('ui-review'));
+    assert.ok(
+      !uiPhaseWarn,
+      'No pending-reconciliation warning expected for ui-phase (tier:full), got: ' + JSON.stringify(warnings),
+    );
+    assert.ok(
+      !uiReviewWarn,
+      'No pending-reconciliation warning expected for ui-review (tier:full), got: ' + JSON.stringify(warnings),
+    );
+  });
+
+  test('ui reconciled: profileMembership.ui.profiles is ["full"] after tier:full reconciliation', () => {
+    // After reconciliation: ui is tier:full → profileMembership.ui.profiles = ['full'] only.
+    // ui-phase/ui-review are correctly absent from core/standard (they're full-only features).
+    // No pending-reconciliation warning fires because full='*' always satisfies the gate.
+    const capMap = new Map([['ui', UI_CAP]]);
+    const profiles = deriveProfileMembership(capMap);
+    assert.deepStrictEqual(
+      profiles.ui.profiles,
+      ['full'],
+      'After tier:full reconciliation, ui profileMembership should be ["full"] only',
+    );
+    assert.strictEqual(
+      profiles.ui.tier,
+      'full',
+      'ui tier should be "full" after reconciliation',
+    );
+
+    // Confirm ui-phase is NOT in standard profile — that's expected and correct for full-tier skills.
+    const { resolveProfile: rp } = require('../gsd-core/bin/lib/install-profiles.cjs');
+    const resolved = rp({ modes: ['standard'], manifest: new Map() });
+    assert.ok(
+      resolved.skills !== '*',
+      'standard profile should not be full',
+    );
+    assert.ok(
+      !resolved.skills.has('ui-phase'),
+      'ui-phase should NOT be in hand-authored standard profile (correctly full-only after reconciliation)',
+    );
+    assert.ok(
+      !resolved.skills.has('ui-review'),
+      'ui-review should NOT be in hand-authored standard profile (correctly full-only after reconciliation)',
+    );
+  });
+
+  test('SOFT gate does NOT throw — only returns warnings', () => {
+    // Even with reconciliation gaps, runConsistencyGate must NOT throw
+    const capMap = new Map([['ui', UI_CAP]]);
+    const clusters = deriveCapabilityClusters(capMap);
+    const profiles = deriveProfileMembership(capMap);
+    let warnings;
+    assert.doesNotThrow(
+      () => { warnings = runConsistencyGate(clusters, profiles, capMap); },
+      'SOFT gate must not throw — only collect warnings',
+    );
+    assert.ok(Array.isArray(warnings), 'runConsistencyGate must return an array');
+  });
+
+  test('buildRegistry._reconciliationWarnings is empty for reconciled ui (tier:full)', () => {
+    // After reconciliation: ui is tier:full → no pending-reconciliation warnings.
+    const capDir = makeTempCapDir({ ui: UI_CAP });
+    const { capMap } = loadAndValidate(new Set(), capDir);
+    const registry = buildRegistry(capMap);
+    assert.ok(
+      Array.isArray(registry._reconciliationWarnings),
+      'registry._reconciliationWarnings should be an array',
+    );
+    const uiWarnings = registry._reconciliationWarnings.filter(
+      (w) => w.includes('ui-phase') || w.includes('ui-review')
+    );
+    assert.deepStrictEqual(
+      uiWarnings,
+      [],
+      'No reconciliation warnings expected for reconciled ui capability, got: ' + JSON.stringify(uiWarnings),
+    );
+  });
+
+  test('reconciliation warnings are NOT in serialized registry output (determinism gate)', () => {
+    // Warnings must appear ONLY on stderr, not in the generated .cjs file
+    const capDir = makeTempCapDir({ ui: UI_CAP });
+    const { capMap } = loadAndValidate(new Set(), capDir);
+    const registry = buildRegistry(capMap);
+    const content = serializeRegistry(registry, capMap);
+    assert.ok(
+      !content.includes('pending-reconciliation'),
+      'Serialized registry must NOT contain "pending-reconciliation" text (warnings are stderr-only)',
+    );
+    assert.ok(
+      !content.includes('_reconciliationWarnings'),
+      'Serialized registry must NOT contain _reconciliationWarnings key',
+    );
+  });
+
+  test('a cap whose skill IS already in the standard profile emits no reconciliation warning', () => {
+    // 'plan-phase' IS in the hand-authored standard profile. A synthetic cap
+    // with tier=standard and skill=plan-phase should NOT generate a warning.
+    const cap = makeSyntheticCap('planner-cap', 'standard', ['plan-phase']);
+    const capMap = new Map([['planner-cap', cap]]);
+    const clusters = deriveCapabilityClusters(capMap);
+    const profiles = deriveProfileMembership(capMap);
+    const warnings = runConsistencyGate(clusters, profiles, capMap);
+    const planPhaseWarnings = warnings.filter((w) => w.includes('plan-phase'));
+    assert.deepEqual(
+      planPhaseWarnings, [],
+      'No reconciliation warning expected for plan-phase (already in standard profile), got: ' + JSON.stringify(planPhaseWarnings),
+    );
+  });
+
+  test('a core-tier cap with skills already in core profile emits no reconciliation warning', () => {
+    // 'new-project' IS in the hand-authored core profile.
+    const cap = makeSyntheticCap('np-cap', 'core', ['new-project']);
+    const capMap = new Map([['np-cap', cap]]);
+    const clusters = deriveCapabilityClusters(capMap);
+    const profiles = deriveProfileMembership(capMap);
+    const warnings = runConsistencyGate(clusters, profiles, capMap);
+    const npWarnings = warnings.filter((w) => w.includes('new-project'));
+    assert.deepEqual(
+      npWarnings, [],
+      'No reconciliation warning expected for new-project (already in core profile), got: ' + JSON.stringify(npWarnings),
+    );
+  });
+});
+
+describe('ADR-857 phase 4a: requires-closure tier-monotone (synthetic)', () => {
+  test('tier-monotone: a required capability must be same-or-lower tier', () => {
+    // Cap A at 'core' requiring cap B at 'standard' violates tier-monotone.
+    // validateCrossCapability already tests this; here we verify the rule via
+    // a profileMembership structural check: if A is core → B must have rank ≤ core.
+    const capA = makeSyntheticCap('tier-a', 'core', ['a-skill']);
+    capA.requires = ['tier-b'];
+    const capB = makeSyntheticCap('tier-b', 'standard', ['b-skill']);
+    const capMap = new Map([['tier-a', capA], ['tier-b', capB]]);
+
+    // validateCrossCapability enforces the rule
+    const { validateCrossCapability: vcc } = require('../scripts/gen-capability-registry.cjs');
+    const errors = vcc(capMap, new Set());
+    assert.ok(
+      errors.some((e) => e.includes('tier-monotone')),
+      'Expected tier-monotone error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('tier-monotone: same-tier requires is accepted', () => {
+    const capA = makeSyntheticCap('mono-a', 'standard', ['ma-skill']);
+    capA.requires = ['mono-b'];
+    const capB = makeSyntheticCap('mono-b', 'standard', ['mb-skill']);
+    const capMap = new Map([['mono-a', capA], ['mono-b', capB]]);
+
+    const { validateCrossCapability: vcc } = require('../scripts/gen-capability-registry.cjs');
+    const errors = vcc(capMap, new Set());
+    const monotoneErrors = errors.filter((e) => e.includes('tier-monotone'));
+    assert.deepEqual(monotoneErrors, [], 'Same-tier requires should be accepted, got: ' + JSON.stringify(monotoneErrors));
+  });
+
+  test('tier-monotone: higher-tier requiring lower-tier is accepted (full requires core)', () => {
+    const capA = makeSyntheticCap('full-a', 'full', ['fa-skill']);
+    capA.requires = ['core-b'];
+    const capB = makeSyntheticCap('core-b', 'core', ['cb-skill']);
+    const capMap = new Map([['full-a', capA], ['core-b', capB]]);
+
+    const { validateCrossCapability: vcc } = require('../scripts/gen-capability-registry.cjs');
+    const errors = vcc(capMap, new Set());
+    const monotoneErrors = errors.filter((e) => e.includes('tier-monotone'));
+    assert.deepEqual(
+      monotoneErrors, [],
+      'full requiring core should be accepted (higher tier can require lower tier), got: ' + JSON.stringify(monotoneErrors),
+    );
+  });
+});
+
+describe('ADR-857 phase 4a: --check determinism after --write', () => {
+  test('serializeRegistry produces identical output for two calls (determinism)', () => {
+    // Regression guard: --check would fail if output is non-deterministic
+    const capDir = makeTempCapDir({ ui: UI_CAP });
+    const { capMap } = loadAndValidate(new Set(), capDir);
+    const registry = buildRegistry(capMap);
+    const content1 = serializeRegistry(registry, capMap);
+    const content2 = serializeRegistry(registry, capMap);
+    assert.strictEqual(content1, content2, 'serializeRegistry output must be deterministic');
+  });
+});
+
+// ─── 17. FIX 1: SOFT gate uses real manifest for requires-closure expansion ────
+
+describe('FIX 1: SOFT gate uses closure-resolved manifest (not empty)', () => {
+  test('plan-phase is transitively in standard — no reconciliation warning', () => {
+    // plan-phase is in PROFILES.standard directly; resolved (with real manifest) = in standard.
+    // A standard-tier cap with skill=plan-phase must NOT generate a reconciliation warning.
+    const cap = makeSyntheticCap('plan-cap', 'standard', ['plan-phase']);
+    const capMap = new Map([['plan-cap', cap]]);
+    const clusters = deriveCapabilityClusters(capMap);
+    const profiles = deriveProfileMembership(capMap);
+    const warnings = runConsistencyGate(clusters, profiles, capMap);
+    const planWarnings = warnings.filter((w) => w.includes('plan-phase'));
+    assert.deepEqual(
+      planWarnings, [],
+      'plan-phase is in standard profile — no warning expected, got: ' + JSON.stringify(planWarnings),
+    );
+  });
+
+  test('FIX 1: skill only transitively in standard (requires-closure) emits no warning', () => {
+    // 'code-review' is brought into standard via requires-closure expansion (not in raw base).
+    // FIX 1 ensures the real manifest is used, so no false-positive warning is emitted.
+    const cap = makeSyntheticCap('cr-cap', 'standard', ['code-review']);
+    const capMap = new Map([['cr-cap', cap]]);
+    const clusters = deriveCapabilityClusters(capMap);
+    const profiles = deriveProfileMembership(capMap);
+    const warnings = runConsistencyGate(clusters, profiles, capMap);
+    const crWarnings = warnings.filter((w) => w.includes('code-review'));
+    assert.deepEqual(
+      crWarnings, [],
+      'code-review is transitively in standard via requires-closure — no warning expected, got: ' + JSON.stringify(crWarnings),
+    );
+  });
+});
+
+// ─── 18. FIX 2: globally-sorted capId emission ───────────────────────────────
+
+describe('FIX 2: globally-sorted capId emission (determinism with mixed feature+runtime)', () => {
+  test('feature cap "analytics" and feature cap "ui" are globally sorted in serialized output', () => {
+    // "analytics" < "ui" alphabetically — must appear first in both derived views
+    const analyticsCap = makeSyntheticCap('analytics', 'standard', ['analytics-skill']);
+    const capDir = makeTempCapDir({ analytics: analyticsCap, ui: UI_CAP });
+    const { capMap } = loadAndValidate(new Set(), capDir);
+    const registry = buildRegistry(capMap);
+    const content = serializeRegistry(registry, capMap);
+
+    // Find the positions of "analytics" and "ui" in the capabilityClusters block
+    const clustersStart = content.indexOf('const capabilityClusters');
+    const clustersEnd = content.indexOf('const profileMembership');
+    const clustersBlock = content.slice(clustersStart, clustersEnd);
+
+    const analyticsPos = clustersBlock.indexOf('"analytics"');
+    const uiPos = clustersBlock.indexOf('"ui"');
+    assert.ok(
+      analyticsPos < uiPos,
+      'analytics must appear before ui in capabilityClusters (global alphabetical sort)',
+    );
+
+    // Same check for profileMembership
+    const profileStart = content.indexOf('const profileMembership');
+    const profileEnd = content.indexOf('const _requiresGraph');
+    const profileBlock = content.slice(profileStart, profileEnd);
+
+    const analyticsProfilePos = profileBlock.indexOf('"analytics"');
+    const uiProfilePos = profileBlock.indexOf('"ui"');
+    assert.ok(
+      analyticsProfilePos < uiProfilePos,
+      'analytics must appear before ui in profileMembership (global alphabetical sort)',
+    );
+  });
+
+  test('serialized output is stable across two calls (determinism)', () => {
+    const analyticsCap = makeSyntheticCap('analytics', 'standard', ['analytics-skill']);
+    const capDir = makeTempCapDir({ analytics: analyticsCap, ui: UI_CAP });
+    const { capMap } = loadAndValidate(new Set(), capDir);
+    const registry = buildRegistry(capMap);
+    const s1 = serializeRegistry(registry, capMap);
+    const s2 = serializeRegistry(registry, capMap);
+    assert.strictEqual(s1, s2, 'Two serializeRegistry calls must produce identical output');
+  });
+});
+
+// ─── 19. FIX 3: consistent role scoping across both derived views ─────────────
+
+describe('FIX 3: consistent scope — capabilities that own skills', () => {
+  test('feature cap with empty skills does not appear in capabilityClusters', () => {
+    // A feature cap with an empty skills array must NOT appear in capabilityClusters
+    const emptySkillsCap = {
+      id: 'empty-skills', role: 'feature', title: 'Empty', description: 'No skills',
+      tier: 'standard', requires: [],
+      skills: [], agents: [], hooks: [], config: {}, steps: [], contributions: [], gates: [],
+    };
+    const capMap = new Map([['empty-skills', emptySkillsCap]]);
+    const clusters = deriveCapabilityClusters(capMap);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(clusters, 'empty-skills'),
+      'Cap with empty skills array must not appear in capabilityClusters',
+    );
+  });
+
+  test('feature cap with empty skills does not appear in profileMembership', () => {
+    // FIX 3: profileMembership must also exclude caps with no skills (consistent scope)
+    const emptySkillsCap = {
+      id: 'empty-skills', role: 'feature', title: 'Empty', description: 'No skills',
+      tier: 'standard', requires: [],
+      skills: [], agents: [], hooks: [], config: {}, steps: [], contributions: [], gates: [],
+    };
+    const capMap = new Map([['empty-skills', emptySkillsCap]]);
+    const profiles = deriveProfileMembership(capMap);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(profiles, 'empty-skills'),
+      'Cap with empty skills array must not appear in profileMembership (FIX 3: consistent scope)',
+    );
+  });
+});
+
+// ─── 20. FIX 4: de-duplicated reconciliation warnings ────────────────────────
+
+describe('FIX 4: de-duplicated reconciliation warnings (one per skill, not per profile)', () => {
+  test('core-tier cap with skill missing from both core and standard emits ONE warning', () => {
+    // ui-phase is not in the hand-authored core or standard profiles.
+    // A core-tier cap with ui-phase must emit exactly 1 warning (listing both profiles).
+    const cap = makeSyntheticCap('core-ui-cap', 'core', ['ui-phase']);
+    const capMap = new Map([['core-ui-cap', cap]]);
+    const clusters = deriveCapabilityClusters(capMap);
+    const profiles = deriveProfileMembership(capMap);
+    const warnings = runConsistencyGate(clusters, profiles, capMap);
+    const uiPhaseWarnings = warnings.filter((w) => w.includes('ui-phase'));
+    assert.strictEqual(
+      uiPhaseWarnings.length, 1,
+      'Expected exactly 1 warning for ui-phase (FIX 4: one per skill, not per profile), got: ' + JSON.stringify(uiPhaseWarnings),
+    );
+    // Warning must list both missing profiles
+    assert.ok(
+      uiPhaseWarnings[0].includes('core') && uiPhaseWarnings[0].includes('standard'),
+      'Warning must list both missing profiles (core and standard), got: ' + uiPhaseWarnings[0],
+    );
+  });
+
+  test('standard-tier cap with skill missing from standard emits ONE warning with <standard>', () => {
+    const cap = makeSyntheticCap('std-ui-cap', 'standard', ['ui-phase']);
+    const capMap = new Map([['std-ui-cap', cap]]);
+    const clusters = deriveCapabilityClusters(capMap);
+    const profiles = deriveProfileMembership(capMap);
+    const warnings = runConsistencyGate(clusters, profiles, capMap);
+    assert.strictEqual(warnings.length, 1, 'Expected exactly 1 warning, got: ' + JSON.stringify(warnings));
+    assert.ok(
+      warnings[0].includes('profile(s): <standard>'),
+      'Warning must use "profile(s): <standard>" format, got: ' + warnings[0],
+    );
+  });
+});
+
+// ─── 21. FIX 5: tierIdx -1 throws loudly ─────────────────────────────────────
+
+describe('FIX 5: tierIdx === -1 throws loudly (VALID_TIERS/PROFILE_RANK drift guard)', () => {
+  test('normal usage (standard/core/full) does not throw in deriveProfileMembership', () => {
+    const cap = makeSyntheticCap('drift-test', 'standard', ['s1']);
+    const capMap = new Map([['drift-test', cap]]);
+    assert.doesNotThrow(
+      () => deriveProfileMembership(capMap),
+      'deriveProfileMembership must not throw for valid tiers',
+    );
+  });
+});
+
+// ─── 22. FIX 6: UI true-negative doesNotThrow ─────────────────────────────────
+
+describe('FIX 6: runConsistencyGate does NOT throw for real UI capability (true-negative)', () => {
+  test('buildRegistry with real UI cap does not throw (HARD gate true-negative)', () => {
+    // The real UI cap has skills = [ui-phase, ui-review] which matches CLUSTERS.ui exactly.
+    // The HARD gate must NOT throw.
+    const capDir = makeTempCapDir({ ui: UI_CAP });
+    const { capMap } = loadAndValidate(new Set(), capDir);
+    assert.doesNotThrow(
+      () => buildRegistry(capMap),
+      'buildRegistry must not throw for the real UI capability (CLUSTERS match expected)',
+    );
+  });
+
+  test('runConsistencyGate does NOT throw for real UI cap (cluster match true-negative)', () => {
+    // Explicit doesNotThrow covering runConsistencyGate directly
+    const capMap = new Map([['ui', UI_CAP]]);
+    const clusters = deriveCapabilityClusters(capMap);
+    const profiles = deriveProfileMembership(capMap);
+    assert.doesNotThrow(
+      () => runConsistencyGate(clusters, profiles, capMap),
+      'runConsistencyGate must not throw for UI cap (CLUSTERS.ui matches ui.skills)',
+    );
+  });
+});
+
+// ─── 23. ADR-959: commands field + commandFamilies index ──────────────────────
+
+/**
+ * Build a minimal feature capability for ADR-959 command tests.
+ * skills/agents/etc. kept minimal-valid so validateCapability passes.
+ */
+function makeCommandCap(id, commands) {
+  return {
+    id,
+    role: 'feature',
+    title: 'Test cap ' + id,
+    description: 'Synthetic capability for ADR-959 command tests.',
+    tier: 'full',
+    requires: [],
+    skills: [],
+    agents: [],
+    hooks: [],
+    config: {},
+    steps: [],
+    contributions: [],
+    gates: [],
+    commands,
+  };
+}
+
+describe('ADR-959: validateCommandEntry — valid entry', () => {
+  test('valid minimal entry (no subcommands) passes', () => {
+    const errors = validateCommandEntry('my-cap', { family: 'foo', module: 'foo.cjs', router: 'routeFoo' }, 'commands[0]');
+    assert.deepEqual(errors, []);
+  });
+
+  test('valid entry with subcommands passes', () => {
+    const errors = validateCommandEntry('my-cap', {
+      family: 'bar',
+      module: 'bar-router.cjs',
+      router: 'routeBar',
+      subcommands: ['query', 'status'],
+    }, 'commands[0]');
+    assert.deepEqual(errors, []);
+  });
+});
+
+describe('ADR-959: validateCommandEntry — adversarial rejects', () => {
+  test('missing family → error', () => {
+    const errors = validateCommandEntry('my-cap', { module: 'foo.cjs', router: 'routeFoo' }, 'commands[0]');
+    assert.ok(errors.some((e) => e.includes('family')), 'Expected family error, got: ' + JSON.stringify(errors));
+  });
+
+  test('empty family → error', () => {
+    const errors = validateCommandEntry('my-cap', { family: '', module: 'foo.cjs', router: 'routeFoo' }, 'commands[0]');
+    assert.ok(errors.some((e) => e.includes('family')), 'Expected family error, got: ' + JSON.stringify(errors));
+  });
+
+  test('missing module → error', () => {
+    const errors = validateCommandEntry('my-cap', { family: 'foo', router: 'routeFoo' }, 'commands[0]');
+    assert.ok(errors.some((e) => e.includes('module')), 'Expected module error, got: ' + JSON.stringify(errors));
+  });
+
+  test('missing router → error', () => {
+    const errors = validateCommandEntry('my-cap', { family: 'foo', module: 'foo.cjs' }, 'commands[0]');
+    assert.ok(errors.some((e) => e.includes('router')), 'Expected router error, got: ' + JSON.stringify(errors));
+  });
+
+  test('non-string router → error', () => {
+    const errors = validateCommandEntry('my-cap', { family: 'foo', module: 'foo.cjs', router: 42 }, 'commands[0]');
+    assert.ok(errors.some((e) => e.includes('router')), 'Expected router error, got: ' + JSON.stringify(errors));
+  });
+
+  test('traversal module "../evil.cjs" → error', () => {
+    const errors = validateCommandEntry('my-cap', { family: 'foo', module: '../evil.cjs', router: 'r' }, 'commands[0]');
+    assert.ok(errors.some((e) => e.includes('module')), 'Expected module traversal error, got: ' + JSON.stringify(errors));
+  });
+
+  test('absolute module "/abs/path.cjs" → error', () => {
+    const errors = validateCommandEntry('my-cap', { family: 'foo', module: '/abs/path.cjs', router: 'r' }, 'commands[0]');
+    assert.ok(errors.some((e) => e.includes('module')), 'Expected module absolute error, got: ' + JSON.stringify(errors));
+  });
+
+  test('module with "/" separator "lib/foo.cjs" → error', () => {
+    const errors = validateCommandEntry('my-cap', { family: 'foo', module: 'lib/foo.cjs', router: 'r' }, 'commands[0]');
+    assert.ok(errors.some((e) => e.includes('module')), 'Expected module separator error, got: ' + JSON.stringify(errors));
+  });
+
+  test('subcommands non-array → error', () => {
+    const errors = validateCommandEntry('my-cap', {
+      family: 'foo', module: 'foo.cjs', router: 'r', subcommands: 'not-array',
+    }, 'commands[0]');
+    assert.ok(errors.some((e) => e.includes('subcommands')), 'Expected subcommands error, got: ' + JSON.stringify(errors));
+  });
+
+  test('subcommands with non-string entry → error', () => {
+    const errors = validateCommandEntry('my-cap', {
+      family: 'foo', module: 'foo.cjs', router: 'r', subcommands: ['ok', 42],
+    }, 'commands[0]');
+    assert.ok(errors.some((e) => e.includes('subcommands')), 'Expected subcommands[1] error, got: ' + JSON.stringify(errors));
+  });
+});
+
+describe('ADR-959: validateCrossCapability — duplicate family ownership', () => {
+  test('duplicate family across two capabilities → error', () => {
+    const capA = makeCommandCap('cap-a', [{ family: 'shared', module: 'a.cjs', router: 'rA' }]);
+    const capB = makeCommandCap('cap-b', [{ family: 'shared', module: 'b.cjs', router: 'rB' }]);
+    const capMap = new Map([['cap-a', capA], ['cap-b', capB]]);
+    const errors = validateCrossCapability(capMap, new Set());
+    assert.ok(
+      errors.some((e) => e.includes('shared') && e.includes('cap-a') && e.includes('cap-b')),
+      'Expected duplicate family error mentioning both caps, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('unique families in two capabilities → no error', () => {
+    const capA = makeCommandCap('cap-a', [{ family: 'alpha', module: 'alpha.cjs', router: 'rA' }]);
+    const capB = makeCommandCap('cap-b', [{ family: 'beta', module: 'beta.cjs', router: 'rB' }]);
+    const capMap = new Map([['cap-a', capA], ['cap-b', capB]]);
+    const errors = validateCrossCapability(capMap, new Set());
+    assert.ok(
+      !errors.some((e) => e.includes('owned by both')),
+      'Expected no duplicate-ownership error, got: ' + JSON.stringify(errors),
+    );
+  });
+});
+
+describe('ADR-959: buildRegistry — commandFamilies index shape', () => {
+  test('cap with valid commands entry produces commandFamilies entry', () => {
+    const cap = makeCommandCap('test-cmd', [
+      { family: 'myfamily', module: 'myfamily.cjs', router: 'routeMyFamily' },
+    ]);
+    const capMap = new Map([['test-cmd', cap]]);
+    const registry = buildRegistry(capMap);
+    assert.ok(registry.commandFamilies, 'commandFamilies must be present');
+    const entry = registry.commandFamilies['myfamily'];
+    assert.ok(entry, 'commandFamilies["myfamily"] must exist');
+    assert.strictEqual(entry.capId, 'test-cmd');
+    assert.strictEqual(entry.module, 'myfamily.cjs');
+    assert.strictEqual(entry.router, 'routeMyFamily');
+  });
+
+  test('cap without commands → commandFamilies is empty', () => {
+    const capDir = makeTempCapDir({ ui: UI_CAP });
+    const { capMap } = loadAndValidate(new Set(), capDir);
+    const registry = buildRegistry(capMap);
+    assert.ok(registry.commandFamilies, 'commandFamilies must be present');
+    assert.deepEqual(Object.keys(registry.commandFamilies), [], 'commandFamilies must be empty for real registry');
+  });
+
+  test('commandFamilies keys are sorted in serialized output (determinism)', () => {
+    // Two caps with commands in z→a order; expect a→z in the commandFamilies section
+    const capA = makeCommandCap('cap-a', [{ family: 'zebra', module: 'z.cjs', router: 'rZ' }]);
+    const capB = makeCommandCap('cap-b', [{ family: 'alpha', module: 'a.cjs', router: 'rA' }]);
+    const capMap = new Map([['cap-a', capA], ['cap-b', capB]]);
+    const registry = buildRegistry(capMap);
+    const serialized = serializeRegistry(registry, capMap);
+
+    // Find the commandFamilies section specifically (not the full capabilities JSON)
+    const cfStart = serialized.indexOf('const commandFamilies = ');
+    assert.ok(cfStart >= 0, 'commandFamilies section must be present');
+    const cfEnd = serialized.indexOf('\n};', cfStart) + 3; // closing }; of const assignment
+    const cfSection = serialized.slice(cfStart, cfEnd);
+
+    const alphaIdx = cfSection.indexOf('"alpha"');
+    const zebraIdx = cfSection.indexOf('"zebra"');
+    assert.ok(alphaIdx >= 0, '"alpha" must appear in commandFamilies section');
+    assert.ok(zebraIdx >= 0, '"zebra" must appear in commandFamilies section');
+    assert.ok(alphaIdx < zebraIdx, 'commandFamilies section must list "alpha" before "zebra" (sorted)');
+  });
+});
+
+describe('ADR-959: validateCapability — commands field on feature role', () => {
+  test('valid commands entry on feature cap passes validateCapability', () => {
+    const cap = makeCommandCap('cmd-cap', [
+      { family: 'testfamily', module: 'testfamily.cjs', router: 'routeTestFamily' },
+    ]);
+    const errors = validateCapability(cap, 'cmd-cap');
+    assert.deepEqual(errors, [], 'Expected no errors: ' + JSON.stringify(errors));
+  });
+
+  test('commands: null on feature cap → error', () => {
+    const cap = makeCommandCap('cmd-cap', null);
+    const errors = validateCapability(cap, 'cmd-cap');
+    assert.ok(errors.some((e) => e.includes('commands')), 'Expected commands error, got: ' + JSON.stringify(errors));
   });
 });

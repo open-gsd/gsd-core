@@ -15,7 +15,7 @@
 
 ## How-to guides
 
-- [ランタイムへのインストール](how-to/install-on-your-runtime.md) — サポートされる全 15 ランタイムのランタイム別インストール手順
+- [ランタイムへのインストール](how-to/install-on-your-runtime.md) — サポートされる全 16 ランタイムのランタイム別インストール手順
 - [フェーズを議論する](how-to/discuss-a-phase.md) — 計画を始める前に実装上の決定事項を記録する
 - [フェーズを計画する](how-to/plan-a-phase.md) — リサーチを実行し、作業を分解し、計画の品質を検証する
 - [フェーズを実行する](how-to/execute-a-phase.md) — 新鮮なコンテキストのサブエージェントで並列ウェーブとして計画を実行する

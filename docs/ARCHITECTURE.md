@@ -21,7 +21,7 @@
 
 ## System Overview
 
-GSD Core is a **meta-prompting framework** that sits between the user and AI coding agents (Claude Code, Gemini CLI, OpenCode, Kilo, Codex, Copilot, Antigravity, Trae, Cline, Augment Code). It provides:
+GSD Core is a **meta-prompting framework** that sits between the user and AI coding agents (Claude Code, Gemini CLI, Kimi CLI, OpenCode, Kilo, Codex, Copilot, Antigravity, Trae, Cline, Augment Code). It provides:
 
 1. **Context engineering** — Structured artifacts that give the AI everything it needs per task (see [Context engineering](explanation/context-engineering.md))
 2. **Multi-agent orchestration** — Thin orchestrators that spawn specialized agents with fresh context windows (see [Multi-agent orchestration](explanation/multi-agent-orchestration.md))
@@ -116,6 +116,7 @@ User-facing entry points. Each file contains YAML frontmatter (name, description
 - **Codex:** Skills (`$gsd-command-name`)
 - **Copilot:** Slash commands (hyphen form, `/gsd-command-name`)
 - **Gemini CLI:** Slash commands under the `gsd:` namespace (colon form, `/gsd:command-name`) — Gemini namespaces all custom commands under their plugin id, so the install path rewrites every body-text reference to colon form
+- **Kimi CLI:** Agent Skills (`/skill:gsd-command-name`) plus an explicit custom agent launch with `kimi --agent-file`
 - **Antigravity:** Skills
 
 **Total commands:** see [`docs/INVENTORY.md`](INVENTORY.md#commands) for the authoritative count and full roster.
@@ -373,6 +374,7 @@ Node.js CLI utility (`gsd-tools.cjs`) with domain modules split across `gsd-core
 | `loop-host-contract.cjs`   | Generated Loop Host Contract — 12 loop points, per-step agent roles, and core artifacts; emitted by `scripts/gen-loop-host-contract.cjs` from workflow markers (ADR-894 §3); consumed by `gen-capability-registry.cjs` |
 | `capability-registry.cjs`  | Generated central Capability Registry — role-partitioned index of all co-located capability declarations; emitted by `scripts/gen-capability-registry.cjs` (ADR-894 §5) |
 | `loop-resolver.cjs`        | Loop Extension Point resolver — ADR-857 phase 3c registry-consuming query; filters `byLoopPoint` by config activation, renders active hooks as markdown, emits `{ point, activeHooks, rendered }` envelope; `gsd-tools loop render-hooks <point>` |
+| `capability-state.cjs`     | Unified capability-state resolver — ADR-857 phase 4b; composes install profile, runtime surface, and config activation into one per-capability view; pure `resolveCapabilityState` + I/O `cmdCapabilityState`; `gsd-tools capability state [--config-dir <path>]` |
 
 
 ---
@@ -575,6 +577,7 @@ Equivalent paths for other runtimes:
 - **OpenCode:** `~/.config/opencode/` global or `./.opencode/` local
 - **Kilo:** `~/.config/kilo/` global or `./.kilo/` local
 - **Gemini CLI:** `~/.gemini/` global or `./.gemini/` local
+- **Kimi CLI:** first-existing generic global root (`~/.config/agents/` recommended, then `~/.agents/` if its `skills/` directory already exists); local install is deferred and guarded
 - **Codex:** `~/.codex/` global or `./.codex/` local
 - **Copilot:** `~/.copilot/` global or `./.github/` local
 - **Antigravity:** auto-detected global root (`~/.gemini/antigravity/`, `~/.gemini/antigravity-ide/`, or `~/.gemini/antigravity-cli/`) or `./.agent/` local
@@ -669,7 +672,7 @@ verification.
 
 The installer (`bin/install.js`, ~10,700 lines) handles:
 
-1. **Runtime detection** — Interactive prompt or CLI flags (`--claude`, `--opencode`, `--gemini`, `--kilo`, `--codex`, `--copilot`, `--antigravity`, `--cursor`, `--windsurf`, `--augment`, `--trae`, `--qwen`, `--hermes`, `--codebuddy`, `--cline`, `--all`)
+1. **Runtime detection** — Interactive prompt or CLI flags (`--claude`, `--opencode`, `--gemini`, `--kimi`, `--kilo`, `--codex`, `--copilot`, `--antigravity`, `--cursor`, `--windsurf`, `--augment`, `--trae`, `--qwen`, `--hermes`, `--codebuddy`, `--cline`, `--all`)
 2. **Location selection** — Global (`--global`) or local (`--local`)
 3. **File deployment** — Copies commands, skills, workflows, references, templates, agents, and hooks
 4. **Runtime adaptation** — Transforms file content per runtime:
@@ -677,6 +680,7 @@ The installer (`bin/install.js`, ~10,700 lines) handles:
   - OpenCode: Converts commands/agents to OpenCode-compatible flat command + subagent format
   - Kilo: Reuses the OpenCode conversion pipeline with Kilo config paths
   - Codex: Generates TOML config + skills from commands
+  - Kimi CLI: Generates Agent Skills under `skills/gsd-*/SKILL.md`, custom agent YAML/prompt files, and explicit `kimi_cli.tools.*` module paths
   - Copilot: Maps tool names (Read→read, Bash→execute, etc.)
   - Gemini: Adjusts hook event names (`AfterTool` instead of `PostToolUse`)
   - Antigravity: Skills-first with Google model equivalents
@@ -812,6 +816,7 @@ The migration-specific ownership and source snapshots live in
 | OpenCode | `~/.config/opencode` | `./.opencode` | `command/gsd-*.md` | `agents/gsd-*.md` | `opencode.json` or `opencode.jsonc`; no GSD hooks |
 | Kilo | `~/.config/kilo` | `./.kilo` | `command/gsd-*.md` | `agents/gsd-*.md` | `kilo.json` or `kilo.jsonc`; no GSD hooks |
 | Gemini CLI | `~/.gemini` | `./.gemini` | `commands/gsd/*.toml` | `agents/gsd-*.md` | `settings.json` feature flag, hooks, and statusline |
+| Kimi CLI | First-existing generic root: `~/.config/agents` recommended, then `~/.agents` when `~/.agents/skills` exists and `~/.config/agents/skills` does not | Deferred and guarded | `skills/gsd-*/SKILL.md` (flat) invoked as `/skill:gsd-*` | `agents/gsd.yaml`, `agents/gsd.md`, and `agents/subagents/gsd-*` YAML/prompt pairs | Explicit `kimi --agent-file <configRoot>/agents/gsd.yaml`; no GSD hooks or statusline |
 | Codex | `~/.codex` | `./.codex` | `skills/gsd-*/SKILL.md` (flat) | `agents/` source markdown plus per-agent TOML | `config.toml` `[agents.gsd-*]`, `[features].hooks` (canonical; legacy alias `codex_hooks` is recognized and migrated forward on reinstall, #3566), and hook tables |
 | GitHub Copilot | `~/.copilot` | `./.github` | `skills/gsd-*/SKILL.md` (flat), `copilot-instructions.md`, and `AGENTS.md` (repo root, local) | `.agent.md` files | Self-contained `sessionStart` hook (`hooks/gsd-session.json`, inline `command` type); no statusline |
 | Antigravity | auto-detected: `~/.gemini/antigravity`, `~/.gemini/antigravity-ide`, or `~/.gemini/antigravity-cli` | `./.agent` | `skills/gsd-ns-*/SKILL.md` (6 routers) + `skills/gsd-ns-*/skills/<name>/SKILL.md` (nested concretes) | `agents/gsd-*.md` | Gemini-style `settings.json` hook entries when installed by GSD |
@@ -827,12 +832,17 @@ The migration-specific ownership and source snapshots live in
 ### Upstream Contract Sources
 
 Runtime install expectations are checked against primary documentation where
-available. The current source snapshot is 2026-05-11:
+available. The current source snapshot is 2026-05-11, with Kimi CLI rechecked
+on 2026-06-07:
 
 - Claude Code: Anthropic slash commands, settings, hooks, and subagents docs.
 - OpenCode and Kilo: OpenCode config docs and Kilo custom subagent docs.
 - Gemini CLI and Qwen Code: command/config docs; Qwen command docs were last
   updated 2026-05-06.
+- Kimi CLI: Agent Skills docs for user-level brand roots and first-existing
+  generic roots (`~/.config/agents/skills/` recommended, then
+  `~/.agents/skills/`), plus Agents docs for YAML files, `system_prompt_path`,
+  `kimi_cli.tools.*` module paths, and explicit `kimi --agent-file` launch.
 - Codex: OpenAI Codex docs and `config-schema.json`; the installer also carries
   Codex 0.124.0 compatibility for agent table shape.
 - Copilot, Cursor, Cline, Augment, Hermes, and CodeBuddy: vendor docs for

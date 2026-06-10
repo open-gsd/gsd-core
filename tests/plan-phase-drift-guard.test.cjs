@@ -193,3 +193,70 @@ describe('plan-phase workflow: top-level spawn guard (#913)', () => {
     );
   });
 });
+
+// ─── (D) Attempt-based Agent gate (#922) ─────────────────────────────────────
+
+describe('plan-phase workflow: attempt-based Agent availability gate (#922)', () => {
+  // Extract the runtime_compatibility block for targeted assertions
+  const rtBlock = (() => {
+    const m = workflow.match(/<runtime_compatibility>([\s\S]*?)<\/runtime_compatibility>/);
+    return m ? m[1] : '';
+  })();
+
+  // Extract the "Other runtimes" clause specifically
+  const otherRuntimesClause = (() => {
+    const m = rtBlock.match(/\*\*Other runtimes[^*]*\*\*[^\n]*\n([\s\S]*?)(?=\n\*\*|$)/);
+    return m ? m[0] : rtBlock;
+  })();
+
+  test('Other runtimes clause does not authorize stopping on a self-assessed absence (#922)', () => {
+    // The pre-#922 wording ("if the Agent tool is genuinely absent") let the model
+    // self-assess and stop without ever attempting a call. The fixed wording must
+    // not contain phrasing that authorizes that pattern.
+    const forbiddenPatterns = [
+      /if the Agent tool is genuinely absent/i,
+      /if.*Agent.*genuinely absent/i,
+    ];
+    for (const pattern of forbiddenPatterns) {
+      assert.ok(
+        !pattern.test(otherRuntimesClause),
+        `plan-phase "Other runtimes" clause must not authorize stopping on a self-assessed Agent absence — ` +
+        `use attempt-based gate instead (#922). Found: ${otherRuntimesClause.trim()}`
+      );
+    }
+  });
+
+  test('Other runtimes clause pins "Always attempt the actual Agent() call" language (#922)', () => {
+    // Pin the exact contract phrase so a future edit that changes to "try to determine
+    // availability" or "check if Agent is available" does not silently reintroduce introspection.
+    assert.ok(
+      otherRuntimesClause.includes('Always attempt the actual') ||
+      otherRuntimesClause.includes('always attempt the actual'),
+      `plan-phase "Other runtimes" clause must pin "Always attempt the actual Agent() call" (or equivalent) (#922). ` +
+      `Found: ${otherRuntimesClause.trim()}`
+    );
+  });
+
+  test('Other runtimes clause pins "real tool-unavailable error" as the only valid stop signal (#922)', () => {
+    // Must tie the stop to a real returned error, not a self-assessed absence.
+    assert.ok(
+      otherRuntimesClause.includes('real tool-unavailable error') ||
+      otherRuntimesClause.includes('tool-unavailable error returned'),
+      `plan-phase "Other runtimes" clause must state only a real tool-unavailable error from Agent() authorizes stopping (#922). ` +
+      `Found: ${otherRuntimesClause.trim()}`
+    );
+  });
+
+  test('Other runtimes clause still prohibits inline role collapse (#922 preserves #913)', () => {
+    // Even after the attempt-based rewrite the clause must keep the no-inline-collapse guard.
+    const hasNoInline =
+      otherRuntimesClause.toLowerCase().includes('do not') &&
+      (otherRuntimesClause.toLowerCase().includes('inline') ||
+       otherRuntimesClause.toLowerCase().includes('collapse'));
+    assert.ok(
+      hasNoInline,
+      `plan-phase "Other runtimes" clause must still prohibit inline role collapse even with the attempt-based gate (#922). ` +
+      `Found: ${otherRuntimesClause.trim()}`
+    );
+  });
+});

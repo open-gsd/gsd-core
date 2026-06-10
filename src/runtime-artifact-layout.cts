@@ -68,6 +68,7 @@ function getInstallExports(): InstallExports {
 // ---------------------------------------------------------------------------
 
 type ArtifactKindName = 'commands' | 'agents' | 'skills' | 'rules' | 'extensions';
+type KimiArtifactKindName = ArtifactKindName | 'kimi-agents';
 
 // Mirrors the (unexported) ResolvedProfile in install-profiles.cts.
 // Must stay in sync if that shape changes.
@@ -78,7 +79,7 @@ interface ResolvedProfile {
 }
 
 interface ArtifactKind {
-  kind: ArtifactKindName;
+  kind: KimiArtifactKindName;
   destSubpath: string;
   prefix: string;
   stage: (resolvedProfile: ResolvedProfile) => string;
@@ -173,7 +174,7 @@ function findAgentsSourceRoot(runtimeConfigDir?: string): string {
 const ALLOWED_RUNTIMES = new Set([
   'claude', 'cursor', 'gemini', 'codex', 'copilot', 'antigravity',
   'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy',
-  'cline', 'opencode', 'kilo', 'omp',
+  'cline', 'kimi', 'opencode', 'kilo', 'omp',
 ]);
 
 // ---------------------------------------------------------------------------
@@ -202,6 +203,50 @@ function agentsKind(destSubpath: string, prefix: string, configDir: string): Art
 function cleanupGeneratedStageDir(stagedDir: string): void {
   if (typeof stagedDir !== 'string') return;
   try { fs.rmSync(stagedDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+}
+
+function kimiAgentsKind(destSubpath: string, prefix: string, configDir: string): ArtifactKind {
+  return {
+    kind: 'kimi-agents',
+    destSubpath,
+    prefix,
+    stage: (resolved) => {
+      const installExports = getInstallExports();
+      const buildKimiAgentArtifacts = installExports['buildKimiAgentArtifacts'] as (opts: {
+        rootAgent?: string;
+        subagents?: Array<{ path: string; content: string }>;
+      }) => {
+        root: { yaml: string; prompt: string };
+        subagents: Array<{ name: string; yaml: string; prompt: string }>;
+      };
+      const stagedAgents = stageAgentsForProfile(findAgentsSourceRoot(configDir), resolved);
+      const subagents: Array<{ path: string; content: string }> = [];
+      if (fs.existsSync(stagedAgents)) {
+        for (const entry of fs.readdirSync(stagedAgents, { withFileTypes: true })) {
+          if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+          const agentPath = path.join(stagedAgents, entry.name);
+          subagents.push({
+            path: path.join('agents', entry.name).replace(/\\/g, '/'),
+            content: fs.readFileSync(agentPath, 'utf8'),
+          });
+        }
+      }
+
+      const rootAgent = `---\nname: gsd\ndescription: Run GSD workflows in Kimi CLI.\ntools: Agent\n---\n\n# GSD for Kimi CLI\n\nCoordinate installed /skill:gsd-* workflows and route work to generated GSD subagents when a workflow requires an agent handoff.\n`;
+      const artifacts = buildKimiAgentArtifacts({ rootAgent, subagents });
+      const stageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-agents-'));
+      installProfiles.STAGED_DIRS.add(stageDir);
+      fs.writeFileSync(path.join(stageDir, 'gsd.yaml'), artifacts.root.yaml);
+      fs.writeFileSync(path.join(stageDir, 'gsd.md'), artifacts.root.prompt);
+      const subagentsDir = path.join(stageDir, 'subagents');
+      fs.mkdirSync(subagentsDir, { recursive: true });
+      for (const artifact of artifacts.subagents) {
+        fs.writeFileSync(path.join(subagentsDir, `${artifact.name}.yaml`), artifact.yaml);
+        fs.writeFileSync(path.join(subagentsDir, `${artifact.name}.md`), artifact.prompt);
+      }
+      return stageDir;
+    },
+  };
 }
 
 /**
@@ -356,8 +401,6 @@ function extensionsKind(destSubpath: string, prefix: string, configDir: string):
 // flat conservatively. Verified June 2026:
 //
 //   NEST (confirmed non-recursive / one-level scan):
-//     claude     — https://code.claude.com/docs/en/skills + anthropics/claude-code#28266
-//                  (scans one level under ~/.claude/skills; nested skills not auto-listed)
 //     omp        — OMP extension filesystem discovery from .omp/agent/skills/ uses flat one-level scan
 //     cline      — cline/cline skills.ts scanSkillsDirectory uses flat fs.readdir
 //     qwen       — QwenLM/qwen-code skill-load.ts flat readdir ("depth 2 enough")
@@ -371,6 +414,12 @@ function extensionsKind(destSubpath: string, prefix: string, configDir: string):
 //     cursor     — https://cursor.com/docs/skills (walks skills root recursively)
 //     opencode   — sst/opencode skill/index.ts glob "skills/**/SKILL.md"
 //     kilo       — Kilo-Org/kilocode (opencode fork, same ** glob)
+//
+//   FLAT (reverted from nested — nested skills not discoverable by Skill tool, #924):
+//     claude     — https://code.claude.com/docs/en/skills + anthropics/claude-code#28266
+//                  (one-level scan under ~/.claude/skills — but Skill-tool errors on unknown
+//                   names rather than re-routing via the router; concrete skills must be
+//                   at the top level so Skill(skill="gsd-plan-phase") succeeds)
 //
 //   FLAT (nested-scan behaviour unconfirmed → conservative):
 //     codex      — developers.openai.com/codex/skills/
@@ -401,7 +450,7 @@ function resolveRuntimeArtifactLayout(runtime: string, configDir: string, scope:
           agentsKind('agents', 'gsd-', configDir),
         ];
       } else {
-        kinds = [skillsKind('skills', 'gsd-', 'convertClaudeCommandToClaudeSkill', 'claude', configDir, true /* #69 nested: non-recursive scan, see matrix above */)];
+        kinds = [skillsKind('skills', 'gsd-', 'convertClaudeCommandToClaudeSkill', 'claude', configDir)];
       }
       break;
 
@@ -452,7 +501,11 @@ function resolveRuntimeArtifactLayout(runtime: string, configDir: string, scope:
       break;
 
     case 'hermes':
-      kinds = [skillsKind('skills/gsd', '', 'convertClaudeCommandToClaudeSkill', 'hermes', configDir, true /* #69 nested */)];
+      // #947: restore canonical gsd- prefix — skills land at skills/gsd/gsd-<stem>/SKILL.md
+      // and dispatch as /gsd-<stem>, consistent with every other runtime.
+      // The skills/gsd/ category bucket (introduced by #2841) is retained.
+      // Prior bare-stem layout (prefix='') used by #3664 is reversed here.
+      kinds = [skillsKind('skills/gsd', 'gsd-', 'convertClaudeCommandToClaudeSkill', 'hermes', configDir, true /* #69 nested */)];
       break;
 
     case 'codebuddy':
@@ -471,6 +524,15 @@ function resolveRuntimeArtifactLayout(runtime: string, configDir: string, scope:
 
     case 'cline':
       kinds = scope === 'global' ? [skillsKind('skills', 'gsd-', 'convertClaudeCommandToClineSkill', 'cline', configDir, true /* #69 nested */)] : [];
+      break;
+
+    case 'kimi':
+      kinds = scope === 'global'
+        ? [
+            skillsKind('skills', 'gsd-', 'convertClaudeCommandToKimiSkill', 'kimi', configDir),
+            kimiAgentsKind('agents', 'gsd', configDir),
+          ]
+        : [];
       break;
 
     case 'omp':

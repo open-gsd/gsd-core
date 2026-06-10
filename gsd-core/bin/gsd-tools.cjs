@@ -169,6 +169,11 @@
  *                                        Valid points: discuss:pre/post, plan:pre/post,
  *                                        execute:pre/wave:pre/wave:post/post, verify:pre/post, ship:pre/post
  *
+ * Capability State (ADR-857 phase 4b):
+ *   capability state [--config-dir <path>]  Resolve per-capability install/surface/hook-activation state
+ *                                           Returns JSON envelope { runtimeConfigDir, capabilities[] }
+ *                                           --config-dir: runtime config dir (default: auto-detect current runtime)
+ *
  * GSD-2 Migration:
  *   from-gsd2 [--path <dir>] [--force] [--dry-run]
  *             Import a GSD-2 (.gsd/) project back to GSD v1 (.planning/) format
@@ -208,6 +213,7 @@ const { routeVerificationCommand } = require('./lib/verification-command-router.
 const verification = require('./lib/verification.cjs');
 const { routeInitCommand } = require('./lib/init-command-router.cjs');
 const loopResolver = require('./lib/loop-resolver.cjs');
+const capabilityState = require('./lib/capability-state.cjs');
 const { routePhaseCommand } = require('./lib/phase-command-router.cjs');
 const { routePhasesCommand } = require('./lib/phases-command-router.cjs');
 const { routeValidateCommand } = require('./lib/validate-command-router.cjs');
@@ -248,6 +254,122 @@ function _dispatchNonFamily({ registryCommand, registryArgs, legacyCommand, lega
   void error;
   void output;
   return false;
+}
+
+// ─── ADR-959: Capability Command Dispatch ─────────────────────────────────────
+
+/**
+ * Dispatch a command via the capability registry's commandFamilies index.
+ *
+ * Consulted in the `default` case of `runCommand` BEFORE the unknown-command
+ * error is emitted. Returns:
+ *   true  — command was "consumed" (found in registry, or a dispatch error was
+ *            emitted); "Unknown command" is suppressed in all consumed cases.
+ *   false — command not found in the registry (including prototype-pollution
+ *            guard hits and missing/empty commandFamilies); caller falls through
+ *            to the existing unknown-command error path.
+ * Behavior-preserving when commandFamilies is empty ({}).
+ *
+ * Injectable for tests:
+ * - `registry` defaults to require('./lib/capability-registry.cjs')
+ * - `requireModule` defaults to a confinement-checked loader that resolves the
+ *   module path relative to bin/lib/ and asserts it stays within that directory
+ *   before requiring — defense-in-depth against corrupted/hand-edited registry entries.
+ *
+ * @param {object}   opts
+ * @param {string}   opts.command        The command name (top-level gsd-tools command)
+ * @param {string[]} opts.args           Remaining args passed to the router
+ * @param {string}   opts.cwd            Project working directory
+ * @param {boolean}  opts.raw            Raw output mode flag
+ * @param {Function} opts.error          Error reporter (core.error)
+ * @param {object}   [opts.registry]     Injectable registry (for tests)
+ * @param {Function} [opts.requireModule] Injectable module loader (for tests)
+ * @returns {boolean} true if the command was dispatched, false otherwise
+ */
+function dispatchCapabilityCommand({ command, args, cwd, raw, error, registry, requireModule }) {
+  // Prototype-pollution guard: reject reserved property names as command keys
+  if (command === '__proto__' || command === 'constructor' || command === 'prototype') {
+    return false;
+  }
+
+  // Resolve defaults (injectable for tests)
+  const reg = registry !== undefined ? registry : require('./lib/capability-registry.cjs');
+
+  // Default requireModule: confined to bin/lib/ — validate the module name is a
+  // safe bare .cjs basename (no path separators, no directory traversal), then
+  // resolve and assert confinement, then require the RESOLVED absolute path so
+  // the checked representation and the required representation are identical.
+  const libDir = path.join(__dirname, 'lib');
+  const defaultRequireModule = function (m) {
+    // Step 1: validate m is a bare .cjs basename — same conservative pattern the
+    // generator uses. Rejects any value with path separators (/, \, ..) or
+    // missing the .cjs extension before we even touch the filesystem.
+    if (typeof m !== 'string' || !/^[A-Za-z0-9._-]+\.cjs$/.test(m)) {
+      throw new Error('capability module must be a bare .cjs basename: ' + JSON.stringify(m));
+    }
+    // Step 2: confinement check — belt-and-suspenders even after the basename
+    // validation above. Resolved path must be inside libDir (not equal to it,
+    // and must start with libDir + sep so "libDir-suffix" can't sneak through).
+    const resolved = path.resolve(libDir, m);
+    if (resolved === libDir || !resolved.startsWith(libDir + path.sep)) {
+      throw new Error('capability module path escapes bin/lib/: ' + JSON.stringify(m));
+    }
+    // Step 3: require the resolved absolute path — the SAME representation that
+    // was checked above, not the concatenated './lib/' + m string.
+    return require(resolved);
+  };
+  const loadModule = requireModule !== undefined ? requireModule : defaultRequireModule;
+
+  // Look up the command family in the registry
+  const families = reg && reg.commandFamilies;
+  if (!families || typeof families !== 'object') return false;
+
+  const entry = families[command];
+  if (!entry || typeof entry !== 'object') return false;
+
+  // Resolve and call the router
+  let mod;
+  try {
+    mod = loadModule(entry.module);
+  } catch (_) {
+    // Module not found, load error, or confinement violation — surface a
+    // diagnostic and return true (consumed) so "Unknown command" is suppressed.
+    error('capability command "' + command + '" module "' + entry.module + '" failed to load');
+    return true; // consumed — don't emit "Unknown command"
+  }
+
+  // Own-property guard: prevent invoking inherited prototype methods
+  // (constructor, toString, hasOwnProperty, etc.) as a router when the registry
+  // entry names one of those. Must come before the typeof check.
+  if (!mod || !Object.prototype.hasOwnProperty.call(mod, entry.router)) {
+    error('capability command "' + command + '" router "' + entry.router + '" is not an own export of module "' + entry.module + '"');
+    return true; // consumed — don't emit "Unknown command"
+  }
+  const fn = mod[entry.router];
+  if (typeof fn !== 'function') {
+    // Router export not found — surface a diagnostic and return true (consumed)
+    // so "Unknown command" is suppressed.
+    error('capability command "' + command + '" router "' + entry.router + '" is not a function in module "' + entry.module + '"');
+    return true; // consumed — don't emit "Unknown command"
+  }
+
+  let _result;
+  try {
+    _result = fn({ args, cwd, raw, error });
+  } catch (e) {
+    if (e instanceof ExitError) throw e; // intentional structured error from the router (honors --json-errors) — propagate untouched
+    error(
+      'capability command "' + command + '" router "' + entry.router + '" in module "' + entry.module + '" threw: ' + (e && e.message ? e.message : String(e)),
+      ERROR_REASON.SDK_FAIL_FAST,
+    );
+  }
+  if (_result && typeof _result.then === 'function') {
+    error(
+      'capability command "' + command + '" router "' + entry.router + '" in module "' + entry.module + '" must be synchronous (returned a Promise); async capability routers are not supported.',
+      ERROR_REASON.SDK_FAIL_FAST,
+    );
+  }
+  return true;
 }
 
 // ─── Arg parsing helpers ──────────────────────────────────────────────────────
@@ -386,7 +508,7 @@ async function main() {
     'current-timestamp, detect-custom-files, docs-init, effort, extract-messages, find-phase, ' +
     'from-gsd2, frontmatter, gap-analysis, generate-claude-md, generate-claude-profile, ' +
     'generate-dev-preferences, generate-slug, graphify, history-digest, init, intel, ' +
-    'classify-confidence, learnings, list-todos, loop, milestone, package-legitimacy, phase, phase-plan-index, phases, profile-questionnaire, ' +
+    'capability, classify-confidence, learnings, list-todos, loop, milestone, package-legitimacy, phase, phase-plan-index, phases, profile-questionnaire, ' +
     'profile-sample, progress, prompt-budget, requirements, research-plan, research-store, resolve-granularity, resolve-model, roadmap, scaffold, state, ' +
     'task, template, validate, verify, verify-path-exists, verify-summary, workstream, worktree\n\n' +
     'Global flags:\n' +
@@ -427,6 +549,11 @@ async function main() {
   // Multi-repo guard: resolve project root for commands that read/write .planning/.
   // Skip for pure-utility commands that don't touch .planning/ to avoid unnecessary
   // filesystem traversal on every invocation.
+  // 'loop' and 'capability' are intentionally NOT in SKIP_ROOT_RESOLUTION.
+  // Both are registry/config queries that resolve activation via
+  // .planning/config.json; they need the project root (cwd) for correct
+  // `when` key resolution. If one is ever moved to SKIP_ROOT_RESOLUTION,
+  // move the other at the same time (keep them consistent).
   const SKIP_ROOT_RESOLUTION = new Set([
     'generate-slug', 'current-timestamp', 'verify-path-exists',
     'verify-summary', 'template', 'frontmatter', 'detect-custom-files',
@@ -1133,6 +1260,36 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       } else {
         error(
           `Unknown loop subcommand: ${loopSubcommand}. Available: render-hooks`,
+          core.ERROR_REASON ? core.ERROR_REASON.SDK_UNKNOWN_COMMAND : undefined,
+        );
+      }
+      break;
+    }
+
+    case 'capability': {
+      // capability state [--config-dir <path>]
+      // Root resolution: 'capability' is NOT in SKIP_ROOT_RESOLUTION for the
+      // same reason 'loop' is not: both are registry/config queries that need
+      // the project root (cwd) for .planning/config.json activation resolution.
+      // If 'loop' were ever added to SKIP_ROOT_RESOLUTION, 'capability' should
+      // be added at the same time to keep them consistent.
+      const capSubcommand = args[1];
+      if (capSubcommand === 'state') {
+        const configDirIdx = args.indexOf('--config-dir');
+        let configDir = null;
+        if (configDirIdx !== -1) {
+          const configDirVal = args[configDirIdx + 1];
+          // Validate that --config-dir has a following non-flag value.
+          if (!configDirVal || configDirVal.startsWith('--')) {
+            error('Missing value for --config-dir', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+          }
+          configDir = configDirVal;
+        }
+        const resolvedConfigDir = configDir ? path.resolve(configDir) : null;
+        capabilityState.cmdCapabilityState(cwd, resolvedConfigDir, raw, {});
+      } else {
+        error(
+          `Unknown capability subcommand: ${capSubcommand}. Available: state`,
           core.ERROR_REASON ? core.ERROR_REASON.SDK_UNKNOWN_COMMAND : undefined,
         );
       }
@@ -1925,6 +2082,13 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
     }
 
     default: {
+      // ADR-959: try capability-registry dispatch before emitting the unknown-command error.
+      // An unmigrated command still hits its hardcoded `case` above — untouched.
+      // A migrated command's `case` is removed at cutover, so it reaches here and
+      // dispatchCapabilityCommand routes it to the capability's registered router.
+      // With commandFamilies={} today, this always returns false and is a no-op.
+      if (dispatchCapabilityCommand({ command, args, cwd, raw, error })) break;
+
       // #3243: if the caller passed a dotted form (e.g. "foo.bar"), the shim
       // above split it so `command` here is the head ("foo"). Use
       // originalCommand to reconstruct the original dotted form and suggest
@@ -1946,4 +2110,12 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
   }
 }
 
-runMain(main);
+// ─── CLI entry point ──────────────────────────────────────────────────────────
+if (require.main === module) {
+  runMain(main);
+}
+
+// ─── Exports (for tests) ──────────────────────────────────────────────────────
+// ADR-959: export dispatchCapabilityCommand so tests can exercise it with
+// synthetic registry + requireModule injections.
+module.exports = { dispatchCapabilityCommand };

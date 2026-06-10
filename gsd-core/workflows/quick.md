@@ -728,7 +728,7 @@ SUMMARY.md and stop — the user must rerun with worktrees disabled.
 - Execute all tasks in the plan
 - Commit each task atomically (code changes only)
 - Run the <submodule_commit_guard> bash block before every \`git commit\` if SUBMODULE_PATHS is non-empty
-- Create summary at: ${QUICK_DIR}/${quick_id}-SUMMARY.md
+- Create summary at: ${QUICK_DIR}/${quick_id}-SUMMARY.md with `status: complete` in SUMMARY frontmatter (required so the audit-open milestone-close scanner recognises the task as done, not [unknown])
 - Do NOT commit docs artifacts (SUMMARY.md, STATE.md, PLAN.md) — the orchestrator handles the docs commit in Step 8
 - Do NOT update ROADMAP.md (quick tasks are separate from planned phases)
 </constraints>

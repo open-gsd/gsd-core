@@ -64,6 +64,9 @@
     "hermes-agent",
     "hermes-cli"
   ],
+  "kimi": [
+    "kimi"
+  ],
   "codebuddy": [
     "codebuddy",
     "codebuddy-cli"

@@ -1293,7 +1293,7 @@ PreToolUse hook that scans Write/Edit calls targeting `.planning/` for injection
 **3. Workflow Guard Hook** (`gsd-workflow-guard.js`)
 PreToolUse hook that detects when Claude attempts file edits outside a GSD workflow context. Advises using `/gsd-quick` or `/gsd-fast` instead of direct edits. Configurable via `hooks.workflow_guard` (default: false).
 
-**4. CI-Ready Injection Scanner** (`prompt-injection-scan.test.cjs`)
+**4. CI-Ready Injection Scanner** (`prompt-injection-scan.security.test.cjs`)
 Test suite that scans all agent, workflow, and command files for embedded injection vectors.
 
 **Requirements:**

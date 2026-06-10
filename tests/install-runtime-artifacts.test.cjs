@@ -50,13 +50,13 @@ const RESOLVED_CORE = resolveProfile({ modes: ['core'], manifest: MANIFEST });
 
 const SKILLS_RUNTIMES_LAYOUT = [
   'claude', 'cursor', 'codex', 'copilot', 'antigravity',
-  'windsurf', 'augment', 'trae', 'qwen', 'codebuddy',
+  'windsurf', 'augment', 'trae', 'qwen', 'kimi', 'codebuddy',
 ];
 
 const ALL_RUNTIMES_LAYOUT = [
   'claude', 'cursor', 'gemini', 'codex', 'copilot', 'antigravity',
   'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy',
-  'cline', 'opencode', 'kilo', 'omp',
+  'cline', 'kimi', 'opencode', 'kilo', 'omp',
 ];
 
 function countPrefixedEntries(destDir, prefix) {
@@ -95,6 +95,40 @@ describe('installRuntimeArtifacts — skills runtimes write gsd-prefixed skill d
         `${runtime}: ${skillsKind.prefix}help/SKILL.md must exist`
       );
 
+      if (runtime === 'kimi') {
+        const newProjectSkill = path.join(destDir, 'gsd-new-project', 'SKILL.md');
+        assert.ok(fs.existsSync(newProjectSkill), 'kimi: gsd-new-project/SKILL.md must exist');
+        const content = fs.readFileSync(newProjectSkill, 'utf8');
+        assert.match(content, /^name: gsd-new-project$/m);
+        assert.match(content, /\/skill:gsd-new-project/);
+        assert.doesNotMatch(content, /kimi_cli\.tools|system_prompt_path|^version: 1$/m);
+
+        const agentsDir = path.join(configDir, 'agents');
+        const rootYaml = path.join(agentsDir, 'gsd.yaml');
+        const rootPrompt = path.join(agentsDir, 'gsd.md');
+        const executorYaml = path.join(agentsDir, 'subagents', 'gsd-executor.yaml');
+        const executorPrompt = path.join(agentsDir, 'subagents', 'gsd-executor.md');
+        assert.ok(fs.existsSync(rootYaml), 'kimi: agents/gsd.yaml must exist');
+        assert.ok(fs.existsSync(rootPrompt), 'kimi: agents/gsd.md must exist');
+        assert.ok(fs.existsSync(executorYaml), 'kimi: agents/subagents/gsd-executor.yaml must exist');
+        assert.ok(fs.existsSync(executorPrompt), 'kimi: agents/subagents/gsd-executor.md must exist');
+
+        const rootYamlContent = fs.readFileSync(rootYaml, 'utf8');
+        assert.match(rootYamlContent, /^version: 1$/m);
+        assert.match(rootYamlContent, /^agent:$/m);
+        assert.match(rootYamlContent, /extend: default/);
+        assert.match(rootYamlContent, /system_prompt_path: \.\/gsd\.md/);
+        assert.match(rootYamlContent, /tools:/);
+        assert.match(rootYamlContent, /subagents:/);
+        assert.match(rootYamlContent, /kimi_cli\.tools\./);
+        assert.doesNotMatch(rootYamlContent, /mcp__/);
+
+        const executorYamlContent = fs.readFileSync(executorYaml, 'utf8');
+        assert.match(executorYamlContent, /system_prompt_path: \.\/gsd-executor\.md/);
+        assert.match(executorYamlContent, /kimi_cli\.tools\./);
+        assert.doesNotMatch(executorYamlContent, /mcp__/);
+      }
+
       if (RESOLVED_CORE.skills !== '*') {
         const prefixedCount = countPrefixedEntries(destDir, skillsKind.prefix || 'gsd-');
         assert.strictEqual(prefixedCount, RESOLVED_CORE.skills.size,
@@ -105,7 +139,7 @@ describe('installRuntimeArtifacts — skills runtimes write gsd-prefixed skill d
 });
 
 describe('installRuntimeArtifacts — hermes nested layout', () => {
-  test('hermes: skills/gsd/<stem>/SKILL.md, no gsd- prefix in name', (t) => {
+  test('hermes: skills/gsd/gsd-<stem>/SKILL.md with gsd- prefix in name (#947)', (t) => {
     const configDir = createTempDir('gsd-ial-hermes-');
     t.after(() => cleanup(configDir));
 
@@ -113,9 +147,11 @@ describe('installRuntimeArtifacts — hermes nested layout', () => {
 
     const nestedDir = path.join(configDir, 'skills', 'gsd');
     assert.ok(fs.existsSync(nestedDir));
-    assert.ok(fs.existsSync(path.join(nestedDir, 'help', 'SKILL.md')));
-    assert.ok(!fs.existsSync(path.join(nestedDir, 'gsd-help')),
-      'hermes must NOT have gsd-help prefix');
+    // #947: Hermes now uses canonical gsd- prefix — skills/gsd/gsd-<stem>/SKILL.md
+    assert.ok(fs.existsSync(path.join(nestedDir, 'gsd-help', 'SKILL.md')),
+      'skills/gsd/gsd-help/SKILL.md must exist (canonical gsd- prefix, #947)');
+    assert.ok(!fs.existsSync(path.join(nestedDir, 'help')),
+      'bare-stem skills/gsd/help/ must NOT exist (#947 fix)');
   });
 });
 
@@ -308,17 +344,23 @@ describe('uninstallRuntimeArtifacts — removes gsd-owned entries, preserves for
 
       if (runtime === 'hermes') {
         const kind = layout.kinds[0];
-        const destDir = path.join(configDir, kind.destSubpath);
+        const destDir = path.join(configDir, kind.destSubpath); // skills/gsd
+        // Seed a gsd-* prefixed skill (canonical #947 layout) and a bare-stem skill (#3664 era)
+        fs.mkdirSync(path.join(destDir, 'gsd-help'), { recursive: true });
+        fs.writeFileSync(path.join(destDir, 'gsd-help', 'SKILL.md'), '# gsd-help\n');
         fs.mkdirSync(path.join(destDir, 'help'), { recursive: true });
-        fs.writeFileSync(path.join(destDir, 'help', 'SKILL.md'), '# help\n');
+        fs.writeFileSync(path.join(destDir, 'help', 'SKILL.md'), '# bare-stem help (#3664)\n');
         const siblingDir = path.join(configDir, 'skills', 'user-skill');
         fs.mkdirSync(siblingDir, { recursive: true });
         fs.writeFileSync(path.join(siblingDir, 'SKILL.md'), '# user\n');
 
         uninstallRuntimeArtifacts(runtime, configDir, 'global');
 
-        assert.ok(!fs.existsSync(destDir));
-        assert.ok(fs.existsSync(path.join(siblingDir, 'SKILL.md')));
+        // skills/gsd/ removed (gsd-* removed by _removeGsdEntries, bare-stem by legacy cleanup,
+        // then DESCRIPTION.md removed, category dir removed as empty)
+        assert.ok(!fs.existsSync(destDir), 'skills/gsd/ must be removed after uninstall');
+        // User skill outside skills/gsd/ preserved
+        assert.ok(fs.existsSync(path.join(siblingDir, 'SKILL.md')), 'user-skill must be preserved');
         return;
       }
 
@@ -331,6 +373,14 @@ describe('uninstallRuntimeArtifacts — removes gsd-owned entries, preserves for
           const foreignDir = path.join(destDir, 'user-custom-skill');
           fs.mkdirSync(foreignDir, { recursive: true });
           fs.writeFileSync(path.join(foreignDir, 'SKILL.md'), '# user\n');
+        } else if (kind.kind === 'kimi-agents') {
+          fs.mkdirSync(path.join(destDir, 'subagents'), { recursive: true });
+          fs.writeFileSync(path.join(destDir, 'gsd.yaml'), 'version: 1\n');
+          fs.writeFileSync(path.join(destDir, 'gsd.md'), '# gsd\n');
+          fs.writeFileSync(path.join(destDir, 'subagents', 'gsd-executor.yaml'), 'version: 1\n');
+          fs.writeFileSync(path.join(destDir, 'subagents', 'gsd-executor.md'), '# executor\n');
+          fs.writeFileSync(path.join(destDir, 'user-agent.yaml'), 'version: 1\n');
+          fs.writeFileSync(path.join(destDir, 'subagents', 'user-agent.yaml'), 'version: 1\n');
         } else {
           writeCommandEntry(destDir, kind.prefix, 'help');
           writeCommandEntry(destDir, kind.prefix, 'phase');
@@ -346,6 +396,13 @@ describe('uninstallRuntimeArtifacts — removes gsd-owned entries, preserves for
           assert.ok(!fs.existsSync(path.join(destDir, `${kind.prefix}help`)));
           assert.ok(!fs.existsSync(path.join(destDir, `${kind.prefix}phase`)));
           assert.ok(fs.existsSync(path.join(destDir, 'user-custom-skill', 'SKILL.md')));
+        } else if (kind.kind === 'kimi-agents') {
+          assert.ok(!fs.existsSync(path.join(destDir, 'gsd.yaml')));
+          assert.ok(!fs.existsSync(path.join(destDir, 'gsd.md')));
+          assert.ok(!fs.existsSync(path.join(destDir, 'subagents', 'gsd-executor.yaml')));
+          assert.ok(!fs.existsSync(path.join(destDir, 'subagents', 'gsd-executor.md')));
+          assert.ok(fs.existsSync(path.join(destDir, 'user-agent.yaml')));
+          assert.ok(fs.existsSync(path.join(destDir, 'subagents', 'user-agent.yaml')));
         } else {
           assert.ok(!fs.existsSync(path.join(destDir, `${kind.prefix}help.md`)));
           assert.ok(!fs.existsSync(path.join(destDir, `${kind.prefix}phase.md`)));
@@ -406,7 +463,7 @@ describe('installRuntimeArtifacts — legacy migrations run before layout copy',
     assert.ok(fs.existsSync(path.join(configDir, 'skills', 'gsd-help', 'SKILL.md')));
   });
 
-  test('hermes: legacy flat skills/gsd-*/ migrated AND new nested skills/gsd/<stem>/ written', (t) => {
+  test('hermes: legacy flat skills/gsd-*/ migrated AND new nested skills/gsd/gsd-<stem>/ written (#947)', (t) => {
     const configDir = createTempDir('gsd-legacy-hermes-install-');
     t.after(() => cleanup(configDir));
 
@@ -416,13 +473,15 @@ describe('installRuntimeArtifacts — legacy migrations run before layout copy',
 
     installRuntimeArtifacts('hermes', configDir, 'global', RESOLVED_CORE);
 
-    assert.ok(!fs.existsSync(legacyFlatHelp));
-    assert.ok(fs.existsSync(path.join(configDir, 'skills', 'gsd', 'help', 'SKILL.md')));
+    assert.ok(!fs.existsSync(legacyFlatHelp), 'legacy flat skill must be removed');
+    // #947: canonical path is skills/gsd/gsd-<stem>/ not skills/gsd/<stem>/
+    assert.ok(fs.existsSync(path.join(configDir, 'skills', 'gsd', 'gsd-help', 'SKILL.md')),
+      'skills/gsd/gsd-help/SKILL.md must exist after install (#947)');
   });
 });
 
 describe('uninstallRuntimeArtifacts — legacy cleanup runs before layout removal', () => {
-  test('hermes: both flat and nested layouts removed', (t) => {
+  test('hermes: both flat and nested layouts removed (#947: bare-stem dirs cleaned on uninstall)', (t) => {
     const { uninstallRuntimeArtifacts } = require('../bin/install.js');
     const configDir = createTempDir('gsd-legacy-uninstall-hermes-');
     t.after(() => cleanup(configDir));
@@ -433,8 +492,9 @@ describe('uninstallRuntimeArtifacts — legacy cleanup runs before layout remova
     fs.writeFileSync(path.join(flatHelp, 'SKILL.md'), '# legacy flat\n');
 
     const nestedGsd = path.join(skillsDir, 'gsd');
+    // Seed a pre-#947 bare-stem GSD skill (no gsd- prefix, from #3664 era)
     fs.mkdirSync(path.join(nestedGsd, 'help'), { recursive: true });
-    fs.writeFileSync(path.join(nestedGsd, 'help', 'SKILL.md'), '# nested help\n');
+    fs.writeFileSync(path.join(nestedGsd, 'help', 'SKILL.md'), '# nested help (bare-stem)\n');
 
     const userSkill = path.join(skillsDir, 'user-skill');
     fs.mkdirSync(userSkill, { recursive: true });
@@ -442,9 +502,12 @@ describe('uninstallRuntimeArtifacts — legacy cleanup runs before layout remova
 
     uninstallRuntimeArtifacts('hermes', configDir, 'global');
 
-    assert.ok(!fs.existsSync(flatHelp));
-    assert.ok(!fs.existsSync(nestedGsd));
-    assert.ok(fs.existsSync(path.join(userSkill, 'SKILL.md')));
+    // Pre-#2841 flat skills/gsd-help/ removed by legacy cleanup
+    assert.ok(!fs.existsSync(flatHelp), 'flat gsd-help must be removed');
+    // skills/gsd/ removed: bare-stem dirs cleaned + no gsd-* dirs remain → empty → removed
+    assert.ok(!fs.existsSync(nestedGsd), 'skills/gsd/ must be removed after uninstall');
+    // User content outside skills/gsd/ preserved
+    assert.ok(fs.existsSync(path.join(userSkill, 'SKILL.md')), 'user-skill must be preserved');
   });
 
   test('claude: legacy commands/gsd/ cleaned AND new skills/ entries removed', (t) => {

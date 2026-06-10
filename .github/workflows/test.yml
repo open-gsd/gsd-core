@@ -103,18 +103,13 @@ jobs:
       # lint scripts) require() the built modules — so build them explicitly.
       - name: Build runtime lib (required by lint scripts)
         run: npm run build:lib
-      - name: Lint — ESLint (source-grep + timing + no-only-tests + quality)
-        run: npx eslint . --cache --cache-location node_modules/.cache/eslint/
-      - name: Lint — skill dependency graph
-        run: npm run lint:skill-deps
-      - name: Lint — test file count per module
-        run: node scripts/lint-test-file-count.cjs
-      - name: Lint — command contract (ADR-0002)
-        run: node scripts/lint-command-contract.cjs
-      - name: Lint — PR checks use projectDir
-        run: node scripts/lint-pr-check-project-dir.cjs
-      - name: Lint — legacy directory name guard (#604)
-        run: npm run lint:legacy-name
+      # Single orchestrated lint entry point (npm run lint:ci) so local and CI
+      # always run the identical set. It composes `npm run lint`, keeping one
+      # eslint invocation home; the --cache flag inside it is a no-op in CI
+      # (node_modules/.cache is never restored) but still speeds local runs.
+      # Each sub-lint prints its own banner, so a failure identifies itself.
+      - name: Lint — all (ESLint, skill deps, test-file count, command contract, PR checks, legacy name, regression-test names)
+        run: npm run lint:ci
 
   test:
     name: test (${{ matrix.os }}, ${{ matrix.node-version }})
@@ -196,9 +191,37 @@ jobs:
         if: matrix.scope != 'full'
         run: node scripts/run-tests.cjs --files-from .ci-selected-tests.txt
 
-      - name: Run unit tests
+      # The unit suite runs ONCE here, under c8 with the coverage gate — the
+      # former standalone `coverage` job duplicated this lane's entire unit
+      # run (~4 min of runner time per PR) just to collect the same numbers.
+      - name: Run unit tests (coverage gate ≥70% on gsd-core/bin/lib)
         if: matrix.scope == 'full'
-        run: npm run test:unit
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: npm run test:coverage:unit
+
+      # Second-tier floor over the CI/release/lint tooling itself. Re-slices
+      # the SAME V8 coverage data left in coverage/tmp by the run above — no
+      # extra suite execution. Audit 2026-06: scripts/ measured 65.95%; the
+      # 55% floor prevents a collapse to zero-coverage tooling while leaving
+      # headroom for variance. The threshold lives in package.json next to
+      # the 70% lib gate — raise deliberately, never lower.
+      - name: Coverage floor — scripts/ tooling (≥55%)
+        if: matrix.scope == 'full'
+        run: npm run test:coverage:scripts-floor
+
+      - name: Upload coverage artifact
+        if: always() && matrix.scope == 'full'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: coverage-unit
+          # coverage/tmp holds raw per-process V8 dumps (>1 GB for the full
+          # unit suite) — exclude it; the rendered reports are the artifact.
+          path: |
+            coverage/
+            !coverage/tmp
+            .nyc_output/
+          if-no-files-found: ignore
 
       - name: Run integration tests
         if: matrix.scope == 'full'
@@ -333,49 +356,6 @@ jobs:
       - name: Run security tests
         run: npm run test:security
 
-  coverage:
-    needs: changes
-    if: needs.changes.outputs.product_changed == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      GSD_PLUGIN_ROOT: .ci-gsd-plugin-root-disabled
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
-        with:
-          fetch-depth: 0
-          persist-credentials: true
-          token: ${{ github.token }}
-      - name: Guard — require GitHub-hosted runner
-        run: node scripts/ci-guard-runner.cjs
-      - name: Rebase check — merge PR base branch into PR head
-        if: github.event_name == 'pull_request'
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: node scripts/ci-rebase-check.cjs
-      - name: Set up Node.js 24
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f  # v6.3.0
-        with:
-          node-version: 24
-          cache: 'npm'
-      - name: Install dependencies
-        run: npm ci
-      - name: Dependency integrity gate
-        run: node scripts/check-npm-integrity.cjs
-      - name: Unit coverage
-        env:
-          NODE_OPTIONS: --max-old-space-size=6144
-        run: npm run test:coverage:unit
-      - name: Upload coverage artifact
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-        with:
-          name: coverage-unit
-          path: |
-            coverage/
-            .nyc_output/
-          if-no-files-found: ignore
-
   required-tests:
     name: Required tests
     needs:
@@ -384,7 +364,6 @@ jobs:
       - test
       - test-inert
       - test-full
-      - coverage
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 1
@@ -398,7 +377,6 @@ jobs:
           TEST_RESULT: ${{ needs.test.result }}
           INERT_RESULT: ${{ needs.test-inert.result }}
           FULL_TEST_RESULT: ${{ needs.test-full.result }}
-          COVERAGE_RESULT: ${{ needs.coverage.result }}
         run: |
           set -euo pipefail
           echo "code_changed=$CODE_CHANGED"
@@ -408,7 +386,6 @@ jobs:
           echo "test=$TEST_RESULT"
           echo "test-inert=$INERT_RESULT"
           echo "test-full=$FULL_TEST_RESULT"
-          echo "coverage=$COVERAGE_RESULT"
 
           if [ "$CHANGES_RESULT" != "success" ]; then
             echo "::error::test scope detection did not pass"
@@ -430,12 +407,10 @@ jobs:
               echo "::error::test matrix did not pass"
               exit 1
             fi
+            # The coverage gates (lib 70% + scripts/ 55% floor) run inside the
+            # ubuntu/24 full lane of the `test` matrix, so TEST_RESULT covers them.
             if [ "$FULL_TEST_RESULT" != "success" ] && [ "$FULL_TEST_RESULT" != "skipped" ]; then
               echo "::error::full parity matrix did not pass"
-              exit 1
-            fi
-            if [ "$COVERAGE_RESULT" != "success" ]; then
-              echo "::error::coverage did not pass"
               exit 1
             fi
           else

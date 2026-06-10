@@ -12,7 +12,7 @@ const capabilities = {
     "role": "feature",
     "title": "UI design contracts",
     "description": "UI-SPEC design contract + retrospective UI audit for frontend phases.",
-    "tier": "standard",
+    "tier": "full",
     "requires": [],
     "skills": [
       "ui-phase",
@@ -230,6 +230,24 @@ const configSchema = {
 
 const runtimes = {};
 
+const commandFamilies = {};
+
+const capabilityClusters = {
+  "ui": [
+    "ui-phase",
+    "ui-review"
+  ]
+};
+
+const profileMembership = {
+  "ui": {
+    "tier": "full",
+    "profiles": [
+      "full"
+    ]
+  }
+};
+
 const _requiresGraph = {
   "ui": []
 };
@@ -259,5 +277,8 @@ module.exports = {
   configKeys,
   configSchema,
   runtimes,
+  commandFamilies,
+  capabilityClusters,
+  profileMembership,
   requiresClosure,
 };

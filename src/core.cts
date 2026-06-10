@@ -241,7 +241,18 @@ function checkAgentsInstalled(runtime?: string): AgentsInstalledResult {
     const agentFile = path.join(agentsDir, `${agent}.md`);
     const agentFileCopilot = path.join(agentsDir, `${agent}.agent.md`);
     const agentFileCodex = path.join(agentsDir, `${agent}.toml`);
-    if (fs.existsSync(agentFile) || fs.existsSync(agentFileCopilot) || fs.existsSync(agentFileCodex)) {
+    const agentFileKimiYaml = path.join(agentsDir, 'subagents', `${agent}.yaml`);
+    const agentFileKimiPrompt = path.join(agentsDir, 'subagents', `${agent}.md`);
+    const kimiAgentInstalled =
+      resolvedRuntime === 'kimi' &&
+      fs.existsSync(agentFileKimiYaml) &&
+      fs.existsSync(agentFileKimiPrompt);
+    if (
+      fs.existsSync(agentFile) ||
+      fs.existsSync(agentFileCopilot) ||
+      fs.existsSync(agentFileCodex) ||
+      kimiAgentInstalled
+    ) {
       installed.push(agent);
     } else {
       missing.push(agent);
