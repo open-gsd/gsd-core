@@ -251,15 +251,25 @@ describe('bug #974: budget arg parser property tests', () => {
   const CWD = '/fake/cwd';
   const RAW = false;
 
+  // Shared valid-term generator: alphanumeric-leading, no whitespace, no leading dash.
+  // Guarantees every generated term is a realistic search token; eliminates the class of
+  // CI failures where fc.string() produced whitespace-only (" "), empty, or sign-numeric
+  // strings ("+5") that the router legitimately treats as out-of-contract inputs.
+  // These properties are about BUDGET handling — the term is a fixed valid bystander.
+  const validTerm = fc.stringMatching(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,29}$/);
+
   // Property (a): any non-numeric, non-parseable string for --budget → usage error
+  //
+  // The budget-VALUE generator is constrained to genuinely non-numeric values.
+  // The .filter(v => Number.isNaN(parseInt(v, 10))) at the end is the authoritative
+  // gate: it excludes any value that parseInt(v, 10) would accept (e.g. "+5", "-3",
+  // " 7", "0x1a", "007"). This makes the property universally true rather than
+  // relying on a runtime skip inside the property body.
+  // The term is fixed as "myterm" — this property is about the BUDGET VALUE, not
+  // the term.
   test('property: non-numeric --budget value always produces usage error', () => {
     fc.assert(
       fc.property(
-        // Strings where parseInt returns NaN: no leading digit, no sign+digit.
-        // The .filter() at the end is the authoritative gate: it excludes any
-        // value that parseInt(v, 10) would accept (e.g. "+5", "-3", " 7",
-        // "0x1a", "007"). This makes the property universally true rather than
-        // relying on a runtime skip inside the property body.
         fc.oneof(
           // Alphabetic-start strings (parseInt('abc') = NaN)
           fc.stringMatching(/^[a-zA-Z][a-zA-Z0-9_-]{0,20}$/),
@@ -282,23 +292,20 @@ describe('bug #974: budget arg parser property tests', () => {
         },
       ),
       // Explicit seed + numRuns for CI determinism.
-      { seed: 42, numRuns: 200 },
+      { seed: 1001, numRuns: 200 },
     );
   });
 
-  // Property (b): missing --budget value (last arg) → usage error, for ANY valid term
-  // Generator constraint: term must be a non-empty string that does not start with '--'.
-  // Strings starting with '--' are excluded because they are flag tokens, not search
-  // terms; feeding term='--budget' would cause args.indexOf('--budget') to find the
-  // term position (index 2) rather than the flag position (index 3), which is outside
-  // the intended contract of this property (the test exercises missing-value detection,
-  // not flag-as-term ambiguity). The router still handles that case safely but the
-  // property would be testing a different code path.
+  // Property (b): missing --budget value (last arg) → usage error, for ANY valid term.
+  // Uses the shared validTerm generator: alphanumeric-leading tokens only.
+  // This eliminates the prior fc.string().filter(!startsWith('--')) generator that
+  // could produce whitespace, empty, or special-char terms outside the budget-parse
+  // contract. The router's term-validation is a separate concern; here we fix the term
+  // as a valid search token and exercise only the missing-budget-value code path.
   test('property: --budget as last arg always produces usage error', () => {
     fc.assert(
       fc.property(
-        // Non-empty, non-flag-like term: guards that term is a real search token
-        fc.string({ minLength: 1, maxLength: 30 }).filter(s => !s.startsWith('--')),
+        validTerm,
         (term) => {
           const { mock } = makeGraphifyMock();
           const errFn = makeErrorRecorder();
@@ -312,8 +319,8 @@ describe('bug #974: budget arg parser property tests', () => {
             `--budget as last arg: term=${JSON.stringify(term)}: reason must be 'usage'; got ${errFn.calls[0].reason}`);
         },
       ),
-      // Explicit seed + numRuns for determinism in CI; mirrors fast-check-setup.cjs defaults.
-      { seed: 42, numRuns: 200 },
+      // Explicit seed + numRuns for determinism in CI.
+      { seed: 1002, numRuns: 200 },
     );
   });
 
@@ -339,15 +346,20 @@ describe('bug #974: budget arg parser property tests', () => {
         },
       ),
       // Explicit seed + numRuns for CI determinism.
-      { seed: 43, numRuns: 200 },
+      { seed: 1003, numRuns: 200 },
     );
   });
 
-  // Property (d): budget: null when --budget flag absent → always no error
+  // Property (d): budget: null when --budget flag absent → always no error.
+  // Uses the shared validTerm generator: alphanumeric-leading tokens only.
+  // The prior generator (fc.string().filter(!startsWith('--'))) could produce
+  // whitespace-only (" ") and empty-like terms that trigger the router's term-
+  // validation error path, causing errFn.calls.length to be 1, not 0. This
+  // property is about ABSENT budget; the term must be unconditionally valid.
   test('property: absence of --budget flag yields budget:null and no error', () => {
     fc.assert(
       fc.property(
-        fc.string({ minLength: 1, maxLength: 30 }).filter(s => !s.startsWith('--')),
+        validTerm,
         (term) => {
           const { calls, mock } = makeGraphifyMock();
           const errFn = makeErrorRecorder();
@@ -357,14 +369,14 @@ describe('bug #974: budget arg parser property tests', () => {
           });
           assert.strictEqual(errFn.calls.length, 0,
             `no --budget flag must not produce an error for term "${term}"`);
-          if (calls.length > 0) {
-            assert.strictEqual(calls[0].args[2].budget, null,
-              `absent --budget must pass budget:null; got: ${calls[0].args[2].budget}`);
-          }
+          assert.strictEqual(calls.length, 1,
+            `graphifyQuery must be called for term "${term}"; got calls.length=${calls.length}`);
+          assert.strictEqual(calls[0].args[2].budget, null,
+            `absent --budget must pass budget:null; got: ${calls[0].args[2].budget}`);
         },
       ),
       // Explicit seed + numRuns for CI determinism.
-      { seed: 44, numRuns: 200 },
+      { seed: 1004, numRuns: 200 },
     );
   });
 });
