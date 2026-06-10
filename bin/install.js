@@ -637,8 +637,37 @@ function computePathPrefix({ isGlobal, isOpencode, isWindowsHost: _isWindowsHost
  *
  * Non-Homebrew installs (NVM, system node, Windows, etc.) are returned as-is.
  */
-function normalizeNodePath(execPath) {
+function normalizeNodePath(execPath, opts) {
   if (!execPath) return execPath;
+  const env = (opts && opts.env) || process.env;
+  const existsSync = (opts && opts.existsSync) || fs.existsSync;
+
+  // fnm multishell shim: C:/Users/<u>/AppData/Local/fnm_multishells/<pid>_<ts>/node.exe
+  // These are per-shell-session ephemeral directories that fnm cleans up on shell exit.
+  // Probe the stable fnm alias paths instead so baked hook commands survive shell restarts.
+  // (#977)
+  // TODO: Volta (~/.volta/bin/node → ~/.volta/tools/image/node/<ver>/bin/node) and
+  // nvm-windows (AppData/Roaming/nvm/<ver>/node.exe) have analogous issues — future work.
+  const normalizedForMatch = execPath.replace(/\\/g, '/');
+  if (/\/fnm_multishells\/[0-9]+_[0-9]+\/node(\.exe)?$/i.test(normalizedForMatch)) {
+    const candidates = [];
+    if (env.FNM_DIR) {
+      // Preferred: alias installed directly under FNM_DIR/aliases/default/
+      candidates.push(`${env.FNM_DIR}/aliases/default/node.exe`);
+      // POSIX layout (no .exe)
+      candidates.push(`${env.FNM_DIR}/aliases/default/bin/node`);
+    }
+    if (env.APPDATA) {
+      // Fallback: fnm default location on Windows when FNM_DIR is not set
+      candidates.push(`${env.APPDATA}/fnm/aliases/default/node.exe`);
+    }
+    for (const candidate of candidates) {
+      if (existsSync(candidate)) return candidate;
+    }
+    // No stable alias found — return raw path unchanged (graceful fallback)
+    return execPath;
+  }
+
   // Intel Homebrew: /usr/local/Cellar/node/<version>/bin/node
   // or /usr/local/Cellar/node@20/<version>/bin/node
   if (/^\/usr\/local\/Cellar\/node(@\d+)?\/[^/]+\/bin\/node(\.exe)?$/.test(execPath)) {
@@ -667,11 +696,16 @@ function normalizeNodePath(execPath) {
  *
  * When `process.execPath` is a versioned Homebrew Cellar path, the stable
  * Homebrew symlink is returned instead to survive `brew upgrade node` (#3181).
+ *
+ * When `process.execPath` is an ephemeral fnm multishell shim, the stable fnm
+ * alias path is returned instead so managed hook commands survive shell restarts
+ * (#977). An optional `opts` bag (`{ env, existsSync }`) is accepted for
+ * testability; production callers omit it to get real env / fs.
  */
-function resolveNodeRunner() {
+function resolveNodeRunner(opts) {
   const execPath = typeof process.execPath === 'string' ? process.execPath : '';
   if (!execPath) return null;
-  const stablePath = normalizeNodePath(execPath);
+  const stablePath = normalizeNodePath(execPath, opts);
   // JSON.stringify produces a properly escaped double-quoted shell token,
   // safe for paths containing spaces or unusual characters.
   return JSON.stringify(stablePath.replace(/\\/g, '/'));
