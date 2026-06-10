@@ -22,6 +22,7 @@ Parse: `phase_dir`, `phase_number`, `phase_name`, `phase_slug`, `padded_phase`, 
 
 ```bash
 AUDITOR_MODEL=$(gsd_run query resolve-model gsd-eval-auditor 2>/dev/null | jq -r '.model' 2>/dev/null || true)
+AGENT_SKILLS_AUDITOR=$(gsd_run query agent-skills gsd-eval-auditor)
 ```
 
 Display banner:
@@ -101,6 +102,8 @@ phase_name: {phase_name}
 padded_phase: {padded_phase}
 state: {A or B}
 </input>
+
+${AGENT_SKILLS_AUDITOR}
 ```
 
 Spawn as Task with model `AUDITOR_MODEL`.
