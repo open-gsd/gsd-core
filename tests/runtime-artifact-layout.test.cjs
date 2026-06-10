@@ -221,7 +221,7 @@ describe('resolveRuntimeArtifactLayout — hermes', () => {
     assert.strictEqual(layout.kinds.length, 1);
     assert.strictEqual(layout.kinds[0].kind, 'skills');
     assert.strictEqual(layout.kinds[0].destSubpath, 'skills/gsd');
-    assert.strictEqual(layout.kinds[0].prefix, '');
+    assert.strictEqual(layout.kinds[0].prefix, 'gsd-'); // #947: restored canonical prefix
     assert.strictEqual(typeof layout.kinds[0].stage, 'function');
   });
 });
@@ -310,10 +310,10 @@ describe('resolveRuntimeArtifactLayout — kilo', () => {
 // ─── resolveRuntimeArtifactLayout — edge-cases ──────────────────────────────
 
 describe('resolveRuntimeArtifactLayout edge-cases', () => {
-  test('hermes has destSubpath skills/gsd and empty prefix', () => {
+  test('hermes has destSubpath skills/gsd and gsd- prefix (#947: restored from bare-stem)', () => {
     const layout = resolveRuntimeArtifactLayout('hermes', '/tmp/x');
     assert.strictEqual(layout.kinds[0].destSubpath, 'skills/gsd');
-    assert.strictEqual(layout.kinds[0].prefix, '');
+    assert.strictEqual(layout.kinds[0].prefix, 'gsd-'); // #947: bare-stem prefix='' reversed
   });
 
   test('cline has one skills kind (#782)', () => {

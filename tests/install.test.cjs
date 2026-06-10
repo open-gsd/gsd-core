@@ -310,8 +310,8 @@ describe('install/uninstall — hermes (nested skills/gsd/<router>/skills/<stem>
     assert.strictEqual(result.runtime, 'hermes');
     assert.strictEqual(result.configDir, fs.realpathSync(targetDir));
 
-    // hermes nests: skills/gsd/<router>/skills/<stem>/SKILL.md
-    const hermesHelpPath = nestedSkillPath(path.join(targetDir, 'skills', 'gsd'), '', 'help');
+    // hermes nests: skills/gsd/gsd-<router>/skills/<stem>/SKILL.md (#947 — canonical gsd- prefix)
+    const hermesHelpPath = nestedSkillPath(path.join(targetDir, 'skills', 'gsd'), 'gsd-', 'help');
     assert.ok(fs.existsSync(hermesHelpPath),
       `help SKILL.md must exist at nested path: ${path.relative(targetDir, hermesHelpPath)}`);
     assert.ok(fs.existsSync(path.join(targetDir, 'skills', 'gsd', 'DESCRIPTION.md')),
@@ -322,7 +322,7 @@ describe('install/uninstall — hermes (nested skills/gsd/<router>/skills/<stem>
     const manifest = writeManifest(targetDir, 'hermes');
     assert.ok(
       Object.keys(manifest.files).some(f =>
-        f.startsWith('skills/gsd/' + CHILD_ROUTER['help'] + '/skills/help/')
+        f.startsWith('skills/gsd/gsd-' + CHILD_ROUTER['help'] + '/skills/help/')
       ),
       JSON.stringify(manifest.files)
     );
