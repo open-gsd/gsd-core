@@ -1,0 +1,28 @@
+{
+  "id": "intel",
+  "role": "feature",
+  "title": "Codebase intelligence",
+  "description": "Code-intelligence store for codebase querying, diff, snapshot, and API-surface extraction; exposes `gsd-tools intel` subcommands (query, status, update, diff, snapshot, patch-meta, validate, extract-exports, api-surface) and backs `/gsd-map-codebase` and `gsd-intel-updater`.",
+  "tier": "full",
+  "requires": [],
+  "skills": [],
+  "agents": [],
+  "config": {
+    "intel.enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable the intel code-intelligence command."
+    }
+  },
+  "commands": [
+    {
+      "family": "intel",
+      "module": "intel-command-router.cjs",
+      "router": "routeIntelCommand"
+    }
+  ],
+  "hooks": [],
+  "steps": [],
+  "contributions": [],
+  "gates": []
+}

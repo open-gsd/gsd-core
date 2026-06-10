@@ -9,10 +9,10 @@
  * Verifies:
  *   1. Claude global install injects `effort:` into agent .md frontmatter.
  *   2. Gemini global install does NOT inject `effort:` (Gemini-safe .md).
- *   3. Codex global install emits `model_reasoning_effort` in .toml via the
- *      unified resolver (not the old catalog-static path).
+ *   3. Codex inherited-model installs omit `model_reasoning_effort` so model
+ *      and effort are not partially pinned (#838).
  *   4. Config-driven proof: effort.agent_overrides wins over tier defaults
- *      for both Claude .md and Codex .toml.
+ *      for Claude .md and for Codex .toml when runtime:"codex" pins a model.
  *   5. Source agents/gsd-planner.md has NO effort: key (injection is
  *      install-only, source stays Gemini-safe).
  */
@@ -189,9 +189,9 @@ describe('#443 Gemini install: effort: absent (Gemini-safe)', () => {
   });
 });
 
-// ─── describe 3: Codex install emits model_reasoning_effort in .toml ─────────
+// ─── describe 3: Codex inherited-model install omits model_reasoning_effort ──
 
-describe('#443 Codex install: model_reasoning_effort in .toml (unified resolver)', () => {
+describe('#838 Codex install: inherited model omits model_reasoning_effort', () => {
   let tmpDir;
   let codexHome;
 
@@ -205,13 +205,15 @@ describe('#443 Codex install: model_reasoning_effort in .toml (unified resolver)
     cleanup(tmpDir);
   });
 
-  test('gsd-planner.toml contains model_reasoning_effort = "xhigh" (heavy tier)', () => {
+  test('gsd-planner.toml omits both model and model_reasoning_effort when model is inherited', () => {
     runGlobalInstall('codex', codexHome);
     const tomlContent = fs.readFileSync(
       path.join(codexHome, 'agents', 'gsd-planner.toml'), 'utf8'
     );
-    assert.match(tomlContent, /^model_reasoning_effort\s*=\s*"xhigh"$/m,
-      `gsd-planner.toml should have model_reasoning_effort = "xhigh"\nActual:\n${tomlContent.slice(0, 500)}`);
+    assert.doesNotMatch(tomlContent, /^model\s*=/m,
+      `gsd-planner.toml should omit model when inheriting Codex chat model\nActual:\n${tomlContent.slice(0, 500)}`);
+    assert.doesNotMatch(tomlContent, /^model_reasoning_effort\s*=/m,
+      `gsd-planner.toml should omit model_reasoning_effort when model is inherited\nActual:\n${tomlContent.slice(0, 500)}`);
   });
 });
 
@@ -241,8 +243,11 @@ describe('#443 Config-driven: effort.agent_overrides drives install-time effort'
     fs.mkdirSync(codexHome, { recursive: true });
     fs.mkdirSync(path.join(projectDir, '.planning'), { recursive: true });
 
-    // Write a project config with effort.agent_overrides overriding gsd-planner to 'low'
+    // Write a project config with effort.agent_overrides overriding gsd-planner to 'low'.
+    // runtime:"codex" pins a Codex-native model, so emitting model_reasoning_effort
+    // remains valid under the #838 model/effort coupling rule.
     const config = {
+      runtime: 'codex',
       effort: {
         agent_overrides: {
           'gsd-planner': 'low',
@@ -273,6 +278,8 @@ describe('#443 Config-driven: effort.agent_overrides drives install-time effort'
     const tomlContent = fs.readFileSync(
       path.join(codexHome, 'agents', 'gsd-planner.toml'), 'utf8'
     );
+    assert.match(tomlContent, /^model\s*=\s*"gpt-5.5"$/m,
+      `gsd-planner.toml should pin Codex model when runtime:"codex" is configured\nActual:\n${tomlContent.slice(0, 500)}`);
     assert.match(tomlContent, /^model_reasoning_effort\s*=\s*"low"$/m,
       `gsd-planner.toml should have model_reasoning_effort = "low" from config override\nActual:\n${tomlContent.slice(0, 500)}`);
   });
@@ -281,6 +288,7 @@ describe('#443 Config-driven: effort.agent_overrides drives install-time effort'
     const projectDir = path.dirname(codexHome);
     // Overwrite config with max override
     const config = {
+      runtime: 'codex',
       effort: {
         agent_overrides: {
           'gsd-planner': 'max',
@@ -296,6 +304,8 @@ describe('#443 Config-driven: effort.agent_overrides drives install-time effort'
     const tomlContent = fs.readFileSync(
       path.join(codexHome, 'agents', 'gsd-planner.toml'), 'utf8'
     );
+    assert.match(tomlContent, /^model\s*=\s*"gpt-5.5"$/m,
+      `gsd-planner.toml should pin Codex model when runtime:"codex" is configured\nActual:\n${tomlContent.slice(0, 500)}`);
     // Codex does not support 'max' → clamped to 'xhigh'
     assert.match(tomlContent, /^model_reasoning_effort\s*=\s*"xhigh"$/m,
       `gsd-planner.toml should clamp max → xhigh for Codex\nActual:\n${tomlContent.slice(0, 500)}`);
@@ -372,13 +382,15 @@ describe('#443 resolveInstallTimeEffort: invalid tokens fall through to valid ef
     // "medium" is valid, so it should appear (or tier default if medium is invalid, but medium is valid)
   });
 
-  test('effort.default="ultra" (invalid) -> Codex .toml model_reasoning_effort is VALID', () => {
+  test('effort.default="ultra" (invalid) + runtime:"codex" -> Codex .toml model_reasoning_effort is VALID', () => {
     // BUG before fix: "ultra" written into .toml verbatim
-    writeProjectConfig({ effort: { default: 'ultra' } });
+    writeProjectConfig({ runtime: 'codex', effort: { default: 'ultra' } });
     runGlobalInstall('codex', codexHome);
     const tomlContent = fs.readFileSync(
       path.join(codexHome, 'agents', 'gsd-planner.toml'), 'utf8'
     );
+    assert.match(tomlContent, /^model\s*=\s*"gpt-5.5"$/m,
+      `gsd-planner.toml should pin Codex model when runtime:"codex" is configured\nActual:\n${tomlContent.slice(0, 500)}`);
     const match = tomlContent.match(/^model_reasoning_effort\s*=\s*"([^"]+)"/m);
     assert.ok(match, `model_reasoning_effort must be present in .toml\nActual:\n${tomlContent.slice(0, 500)}`);
     assert.ok(VALID_EFFORTS.includes(match[1]),

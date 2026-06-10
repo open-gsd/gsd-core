@@ -1,7 +1,8 @@
 // allow-test-rule: docs-parity
-// Extracts CONFIG_DEFAULTS keys from core.cjs source to verify planning-config.md
+// Extracts CONFIG_DEFAULTS keys from config-loader.cjs source to verify planning-config.md
 // stays in sync. The canonical list of defaults lives in source; there is no runtime
 // API to enumerate them. Source inspection is the only practical parity check here.
+// CONFIG_DEFAULTS was extracted from core.cjs into config-loader.cjs by ADR-857 phase 2e.
 
 /**
  * Verify planning-config.md documents all config fields from source code.
@@ -13,7 +14,7 @@ const fs = require('fs');
 const path = require('path');
 
 const REFERENCE_PATH = path.join(__dirname, '..', 'gsd-core', 'references', 'planning-config.md');
-const CORE_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'core.cjs');
+const CORE_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'config-loader.cjs');
 
 describe('config-field-docs', () => {
   let content;
@@ -59,12 +60,12 @@ describe('config-field-docs', () => {
   });
 
   test('every CONFIG_DEFAULTS key appears in the doc', () => {
-    // Extract CONFIG_DEFAULTS keys from core.cjs source
+    // Extract CONFIG_DEFAULTS keys from config-loader.cjs source (moved from core.cjs by ADR-857 phase 2e)
     const coreSource = fs.readFileSync(CORE_PATH, 'utf-8');
     const defaultsMatch = coreSource.match(
       /const CONFIG_DEFAULTS\s*=\s*\{([\s\S]*?)\n\};/
     );
-    assert.ok(defaultsMatch, 'Could not find CONFIG_DEFAULTS in core.cjs');
+    assert.ok(defaultsMatch, 'Could not find CONFIG_DEFAULTS in config-loader.cjs');
 
     const body = defaultsMatch[1];
     // Match property keys (word characters before the colon)

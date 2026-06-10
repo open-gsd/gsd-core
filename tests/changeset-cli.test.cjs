@@ -332,10 +332,13 @@ describe('changeset cli extract: version-range changelog extraction (#3496)', ()
   test('F1: workflows/update.md contains concrete extract subcommand invocation', (_t) => {
     const workflowPath = path.join(ROOT, 'gsd-core', 'workflows', 'update.md');
     const workflowText = fs.readFileSync(workflowPath, 'utf8');
-    // The invocation is: node "$GSD_DIR/gsd-core/scripts/changeset/cli.cjs" extract
-    // so the literal substring is 'cli.cjs" extract' (quote between script path and subcommand)
+    // The invocation uses either a direct path or an intermediate variable:
+    //   node "$GSD_DIR/scripts/changeset/cli.cjs" extract
+    //   node "$GSD_CHANGESET_CLI" extract
+    // Accept either form so future refactors don't immediately trip this anchor.
     assert.ok(
-      workflowText.includes('cli.cjs" extract') || workflowText.includes('cli.cjs extract'),
+      workflowText.includes('cli.cjs" extract') || workflowText.includes('cli.cjs extract') ||
+      (workflowText.includes('GSD_CHANGESET_CLI') && workflowText.includes('" extract')),
       'update.md must invoke cli.cjs extract (fix for #3496 BLOCKER 1)',
     );
     assert.ok(
@@ -349,6 +352,40 @@ describe('changeset cli extract: version-range changelog extraction (#3496)', ()
     assert.ok(
       workflowText.includes('EXTRACT_EXIT') || workflowText.includes('EXTRACT_JSON'),
       'update.md must capture exit code or JSON output from extract',
+    );
+  });
+
+  // F2: update.md must use the INSTALLED path ($GSD_DIR/scripts/changeset/cli.cjs),
+  // NOT the old broken path ($GSD_DIR/gsd-core/scripts/changeset/cli.cjs).
+  // The installer copies scripts/changeset/ into <configDir>/scripts/changeset/,
+  // so the runtime path is $GSD_DIR/scripts/changeset/cli.cjs (#935).
+  // allow-test-rule: reads a product workflow .md file (not CJS source) to verify
+  // the runtime install path contract; there is no behavioural runtime to invoke.
+  test('F2: update.md CLI path is $GSD_DIR/scripts/changeset/cli.cjs (not gsd-core/scripts/…) (#935)', (_t) => {
+    const workflowPath = path.join(ROOT, 'gsd-core', 'workflows', 'update.md');
+    const workflowText = fs.readFileSync(workflowPath, 'utf8');
+    // The correct installed path must appear somewhere in the update workflow
+    assert.ok(
+      workflowText.includes('scripts/changeset/cli.cjs'),
+      'update.md must reference scripts/changeset/cli.cjs',
+    );
+    // The old broken path ($GSD_DIR/gsd-core/scripts/changeset/cli.cjs) must not appear
+    assert.ok(
+      !workflowText.includes('gsd-core/scripts/changeset/cli.cjs'),
+      'update.md must NOT reference the old gsd-core/scripts/changeset/cli.cjs path (fix for #935)',
+    );
+  });
+
+  // F3: update.md must guard against the CLI being missing (not pure silent-swallow)
+  // allow-test-rule: reads a product workflow .md file (not CJS source) to verify
+  // the guard is present; there is no behavioural runtime to invoke.
+  test('F3: update.md has an explicit guard when changeset CLI is missing (#935)', (_t) => {
+    const workflowPath = path.join(ROOT, 'gsd-core', 'workflows', 'update.md');
+    const workflowText = fs.readFileSync(workflowPath, 'utf8');
+    // The workflow must check for CLI existence before invoking it
+    assert.ok(
+      workflowText.includes('GSD_CHANGESET_CLI') && workflowText.includes('! -f'),
+      'update.md must guard against a missing changeset CLI with [ ! -f "$GSD_CHANGESET_CLI" ] (#935)',
     );
   });
 });

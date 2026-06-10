@@ -136,9 +136,9 @@ must_haves:
     - path: "src/components/Chat.tsx"
       provides: "Message list rendering"
   key_links:
-    - from: "Chat.tsx"
-      to: "api/chat"
-      via: "fetch in useEffect"
+    - from: "src/components/Chat.tsx"
+      to: "src/app/api/chat/route.ts"
+      via: "fetch in useEffect — calls /api/chat endpoint"
 ```
 
 **Step 2c: Merge must-haves**

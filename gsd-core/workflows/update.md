@@ -195,24 +195,29 @@ CHANGELOG_TMP="/tmp/gsd-changelog-$$.md"
 curl -fsSL "https://raw.githubusercontent.com/open-gsd/gsd-core/main/CHANGELOG.md" -o "$CHANGELOG_TMP" 2>/dev/null \
   || wget -qO "$CHANGELOG_TMP" "https://raw.githubusercontent.com/open-gsd/gsd-core/main/CHANGELOG.md" 2>/dev/null
 
-EXTRACT_JSON=$(node "$GSD_DIR/gsd-core/scripts/changeset/cli.cjs" extract \
-  --from "$INSTALLED_VERSION" \
-  --to "$LATEST_VERSION" \
-  --changelog "$CHANGELOG_TMP" \
-  --json 2>/dev/null)
-EXTRACT_EXIT=$?
-
-if [ "$EXTRACT_EXIT" -eq 2 ]; then
-  # Exit 2 = no releases in range (e.g. versions are equal or changelog is sparse)
-  CHANGELOG_PREVIEW="No changelog updates between v${INSTALLED_VERSION} and v${LATEST_VERSION}."
-elif [ "$EXTRACT_EXIT" -ne 0 ] || [ -z "$EXTRACT_JSON" ]; then
-  CHANGELOG_PREVIEW="(Could not extract changelog — update will still proceed)"
+GSD_CHANGESET_CLI="$GSD_DIR/scripts/changeset/cli.cjs"
+if [ ! -f "$GSD_CHANGESET_CLI" ]; then
+  CHANGELOG_PREVIEW="(Changelog CLI not found at $GSD_CHANGESET_CLI — reinstall GSD to restore preview. Update will still proceed.)"
 else
-  # Re-run without --json to get the human-readable markdown for display
-  CHANGELOG_PREVIEW=$(node "$GSD_DIR/gsd-core/scripts/changeset/cli.cjs" extract \
+  EXTRACT_JSON=$(node "$GSD_CHANGESET_CLI" extract \
     --from "$INSTALLED_VERSION" \
     --to "$LATEST_VERSION" \
-    --changelog "$CHANGELOG_TMP" 2>/dev/null || echo "(changelog unavailable)")
+    --changelog "$CHANGELOG_TMP" \
+    --json 2>&1)
+  EXTRACT_EXIT=$?
+
+  if [ "$EXTRACT_EXIT" -eq 2 ]; then
+    # Exit 2 = no releases in range (e.g. versions are equal or changelog is sparse)
+    CHANGELOG_PREVIEW="No changelog updates between v${INSTALLED_VERSION} and v${LATEST_VERSION}."
+  elif [ "$EXTRACT_EXIT" -ne 0 ] || [ -z "$EXTRACT_JSON" ]; then
+    CHANGELOG_PREVIEW="(Could not extract changelog — update will still proceed)"
+  else
+    # Re-run without --json to get the human-readable markdown for display
+    CHANGELOG_PREVIEW=$(node "$GSD_CHANGESET_CLI" extract \
+      --from "$INSTALLED_VERSION" \
+      --to "$LATEST_VERSION" \
+      --changelog "$CHANGELOG_TMP" 2>/dev/null || echo "(changelog unavailable)")
+  fi
 fi
 # Clean up temp changelog now that both extract runs are done
 rm -f "$CHANGELOG_TMP"

@@ -15,7 +15,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 
 ## How-to guides
 
-- [Install on your runtime](how-to/install-on-your-runtime.md) — runtime-specific install steps for all 15 supported runtimes
+- [Install on your runtime](how-to/install-on-your-runtime.md) — runtime-specific install steps for all 16 supported runtimes
 - [Install a minimal GSD and add skills later](how-to/install-minimal-and-add-skills.md) — install only the core skills, then grow the surface with profiles and `/gsd:surface`
 - [Discuss a phase](how-to/discuss-a-phase.md) — capture implementation decisions before planning begins
 - [Plan a phase](how-to/plan-a-phase.md) — run research, decompose work, and verify plan quality

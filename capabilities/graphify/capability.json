@@ -1,0 +1,28 @@
+{
+  "id": "graphify",
+  "role": "feature",
+  "title": "Knowledge graph",
+  "description": "Build, query, and inspect the project knowledge graph in `.planning/graphs/`; exposes graphify CLI subcommands (build, query, status, diff) and the /gsd-graphify skill.",
+  "tier": "full",
+  "requires": [],
+  "skills": ["graphify"],
+  "agents": [],
+  "config": {
+    "graphify.enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable the graphify knowledge-graph command + skill."
+    }
+  },
+  "commands": [
+    {
+      "family": "graphify",
+      "module": "graphify-command-router.cjs",
+      "router": "routeGraphifyCommand"
+    }
+  ],
+  "hooks": [],
+  "steps": [],
+  "contributions": [],
+  "gates": []
+}

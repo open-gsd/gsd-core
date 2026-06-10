@@ -29,6 +29,15 @@
 // force a full tsc rebuild per mutant — far too slow for the 30-min CI budget.)
 // Large/low-coverage modules are excluded (the command's test set does not
 // exercise them, so they would only ever produce survived mutants).
+//
+// KNOWN BLIND SPOT (2026-06 CI audit): this list excludes ~14.2k of ~29.8k
+// lib lines (~48%), including the most central modules (state, core,
+// commands, phase, verify). Mutation results therefore speak only for the
+// well-tested half of the lib. Shrinking the list is deliberate tracked work:
+// bring one module into scope per release by first giving it per-module
+// *.unit.test.cjs / *.property.test.cjs coverage, then deleting its entry —
+// never delete an entry without that coverage (it will only produce survived
+// mutants and trip the break threshold).
 const UNMUTATED = [
   '!gsd-core/bin/lib/command-aliases.cjs',
   '!gsd-core/bin/lib/commands.cjs',

@@ -1,7 +1,7 @@
 # Adversarial security fixtures (#3596)
 
 Reusable hostile payloads consumed by
-`tests/security-prompt-injection.test.cjs`.
+`tests/security-prompt-injection.security.test.cjs`.
 
 The fixtures here are pure data — they are loaded by the test as input
 to the production code under test (hooks, validators, sanitizers, CLI).

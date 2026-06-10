@@ -34,6 +34,7 @@ const RUNTIME_INSTALL_CONTRACTS = {
   cursor: { surface: 'flat-skills', settings: false, packageJson: false },
   gemini: { surface: 'commands-gsd', settings: true, packageJson: true },
   hermes: { surface: 'hermes-skills', settings: true, packageJson: true },
+  kimi: { surface: 'kimi-skills-agents', settings: false, packageJson: false },
   kilo: { surface: 'flat-command', settings: false, packageJson: true },
   opencode: { surface: 'flat-command', settings: true, packageJson: true },
   qwen: { surface: 'flat-skills', settings: true, packageJson: true },
@@ -179,27 +180,35 @@ function assertFreshInstallContract(runtime, targetDir) {
   const contract = RUNTIME_INSTALL_CONTRACTS[runtime];
   assert.ok(contract, `missing runtime install contract for ${runtime}`);
 
-  assert.equal(
-    fs.readFileSync(path.join(targetDir, 'gsd-core', 'VERSION'), 'utf8'),
-    pkg.version,
-    `${runtime} should install the package VERSION`
-  );
-  assert.ok(
-    fs.existsSync(path.join(targetDir, 'gsd-core', 'bin', 'gsd-tools.cjs')),
-    `${runtime} should install the GSD tool payload`
-  );
-  assert.ok(
-    fs.existsSync(path.join(targetDir, 'gsd-file-manifest.json')),
-    `${runtime} should write the install manifest`
-  );
+  if (contract.workflowPayload !== false) {
+    assert.equal(
+      fs.readFileSync(path.join(targetDir, 'gsd-core', 'VERSION'), 'utf8'),
+      pkg.version,
+      `${runtime} should install the package VERSION`
+    );
+    assert.ok(
+      fs.existsSync(path.join(targetDir, 'gsd-core', 'bin', 'gsd-tools.cjs')),
+      `${runtime} should install the GSD tool payload`
+    );
+    assert.ok(
+      fs.existsSync(path.join(targetDir, 'gsd-file-manifest.json')),
+      `${runtime} should write the install manifest`
+    );
 
-  const manifest = JSON.parse(fs.readFileSync(path.join(targetDir, 'gsd-file-manifest.json'), 'utf8'));
-  assert.equal(manifest.version, pkg.version, `${runtime} manifest should record the package version`);
-  assert.equal(manifest.mode, 'full', `${runtime} manifest should record a full install`);
-  assert.ok(
-    manifest.files['gsd-core/VERSION'],
-    `${runtime} manifest should track the installed VERSION file`
-  );
+    const manifest = JSON.parse(fs.readFileSync(path.join(targetDir, 'gsd-file-manifest.json'), 'utf8'));
+    assert.equal(manifest.version, pkg.version, `${runtime} manifest should record the package version`);
+    assert.equal(manifest.mode, 'full', `${runtime} manifest should record a full install`);
+    assert.ok(
+      manifest.files['gsd-core/VERSION'],
+      `${runtime} manifest should track the installed VERSION file`
+    );
+  } else {
+    assert.equal(
+      fs.existsSync(path.join(targetDir, 'gsd-core')),
+      false,
+      `${runtime} should not install the GSD workflow payload`
+    );
+  }
 
   if (contract.surface === 'flat-skills') {
     // Pre-#3562: codex was special-cased to expect zero gsd-* skill dirs
@@ -231,6 +240,20 @@ function assertFreshInstallContract(runtime, targetDir) {
       listDirNames(targetDir, path.join('commands', 'gsd')).length > 0,
       `${runtime} should install commands/gsd entries`
     );
+  } else if (contract.surface === 'kimi-skills-agents') {
+    assertHasGsdDirectory(targetDir, 'skills');
+    assert.ok(
+      fs.existsSync(path.join(targetDir, 'agents', 'gsd.yaml')),
+      'Kimi should install the root agent YAML'
+    );
+    assert.ok(
+      fs.existsSync(path.join(targetDir, 'agents', 'gsd.md')),
+      'Kimi should install the root agent prompt'
+    );
+    assert.ok(
+      fs.existsSync(path.join(targetDir, 'agents', 'subagents', 'gsd-executor.yaml')),
+      'Kimi should install GSD subagent YAML'
+    );
   } else if (contract.surface === 'clinerules') {
     // #787: Cline now uses the .clinerules/ directory form (rules at gsd.md).
     assert.match(
@@ -240,10 +263,12 @@ function assertFreshInstallContract(runtime, targetDir) {
     );
   }
 
-  assert.ok(
-    listDirNames(targetDir, 'agents').some((name) => name.startsWith('gsd-')),
-    `${runtime} full install should install agents`
-  );
+  if (contract.surface !== 'kimi-skills-agents') {
+    assert.ok(
+      listDirNames(targetDir, 'agents').some((name) => name.startsWith('gsd-')),
+      `${runtime} full install should install agents`
+    );
+  }
 
   assert.equal(
     fs.existsSync(path.join(targetDir, 'settings.json')),
@@ -428,7 +453,11 @@ describe('installer migration install integration', { concurrency: false }, () =
       assert.match(output, /Installing for /);
       assert.match(output, /Installer migrations/);
       assert.match(output, /removed\s+hooks\/statusline\.js/);
-      assert.match(output, /Installed workflow assets/);
+      if (runtime === 'kimi') {
+        assert.match(output, /Generated Kimi root agent/);
+      } else {
+        assert.match(output, /Installed workflow assets/);
+      }
       assert.match(output, /Done!/);
       assert.equal(fs.existsSync(path.join(targetDir, 'hooks/statusline.js')), false);
 

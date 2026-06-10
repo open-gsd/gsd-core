@@ -186,10 +186,10 @@ describe('plan-review-convergence workflow: initial planning gate (#2306)', () =
     );
   });
 
-  test('workflow spawns isolated planning agent when no plans exist', () => {
+  test('workflow runs gsd-plan-phase when no plans exist', () => {
     assert.ok(
       workflow.includes('gsd-plan-phase'),
-      'workflow must spawn Agent → gsd-plan-phase when no plans exist'
+      'workflow must invoke gsd-plan-phase when no plans exist'
     );
   });
 
@@ -648,6 +648,98 @@ describe('plan-review-convergence local model CONFIGURATION.md documentation (#2
     assert.ok(
       configDoc.includes('review.models.llama_cpp'),
       'review.models.llama_cpp must be documented so users know how to configure the local model name'
+    );
+  });
+});
+
+// ─── Bug #936: plan-phase must run inline, not inside Agent() ─────────────
+//
+// Regression guard: inverted from the pre-#936 behavior that locked in the bug.
+// On Claude Code a depth-1 Agent has no Agent tool, so gsd-plan-phase wrapped in
+// Agent() cannot spawn gsd-planner / gsd-plan-checker → the replan loop breaks.
+// Fix: run plan-phase inline (bare Skill()) from the depth-0 convergence orchestrator.
+//
+// These tests FAIL on pre-fix code and PASS after the fix.
+
+describe('plan-review-convergence workflow: inline plan-phase dispatch (#936)', () => {
+  const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+
+  // Helper: extract Agent() block bodies from workflow text
+  function extractAgentBlocks(content) {
+    const blocks = [];
+    let pos = 0;
+    while (pos < content.length) {
+      const start = content.indexOf('Agent(', pos);
+      if (start === -1) break;
+      let depth = 0;
+      let i = start + 'Agent('.length - 1;
+      for (; i < content.length; i++) {
+        if (content[i] === '(') depth++;
+        else if (content[i] === ')') { depth--; if (depth === 0) break; }
+      }
+      blocks.push({ start, end: i + 1, blockText: content.slice(start, i + 1) });
+      pos = i + 1;
+    }
+    return blocks;
+  }
+
+  test('initial planning does NOT wrap gsd-plan-phase inside Agent() (#936 fix)', () => {
+    // Pre-fix: Agent( ... Skill('gsd-plan-phase') ... ) in step 4
+    // Post-fix: bare Skill(skill="gsd-plan-phase") at orchestrator level
+    const blocks = extractAgentBlocks(workflow);
+    const wrapping = blocks.filter((b) =>
+      /Skill\(\s*skill=['"]gsd-plan-phase['"]/.test(b.blockText)
+    );
+    assert.deepStrictEqual(
+      wrapping.map((b) => b.blockText.slice(0, 80).replace(/\n/g, '\\n')),
+      [],
+      'Initial planning must NOT wrap gsd-plan-phase inside Agent() — run it inline so ' +
+      'it can spawn gsd-planner/gsd-plan-checker at depth 1. See: bug #936'
+    );
+  });
+
+  test('replan step does NOT wrap gsd-plan-phase inside Agent() (#936 fix)', () => {
+    // Same check as above; explicitly named for the replan site (step 5d)
+    const blocks = extractAgentBlocks(workflow);
+    const wrapping = blocks.filter((b) =>
+      /Skill\(\s*skill=['"]gsd-plan-phase['"]/.test(b.blockText) &&
+      /--reviews/.test(b.blockText)
+    );
+    assert.deepStrictEqual(
+      wrapping.map((b) => b.blockText.slice(0, 80).replace(/\n/g, '\\n')),
+      [],
+      'Replan step must NOT wrap gsd-plan-phase inside Agent() — the replan loop can ' +
+      'never produce a plan on Claude Code when plan-phase is at depth 1. See: bug #936'
+    );
+  });
+
+  test('workflow calls gsd-plan-phase inline (bare Skill outside Agent block) (#936 fix)', () => {
+    // After the fix there must be at least one bare Skill(skill="gsd-plan-phase")
+    // OUTSIDE any Agent() block.
+    const blocks = extractAgentBlocks(workflow);
+    let masked = workflow;
+    const sorted = [...blocks].sort((a, b) => b.start - a.start);
+    for (const b of sorted) {
+      masked = masked.slice(0, b.start) + ' '.repeat(b.end - b.start) + masked.slice(b.end);
+    }
+    assert.ok(
+      /Skill\(\s*skill=["']gsd-plan-phase["']/.test(masked),
+      'plan-review-convergence must contain at least one bare Skill(skill="gsd-plan-phase") ' +
+      'outside any Agent() block — the inline call that preserves depth-0 Agent availability. See: bug #936'
+    );
+  });
+
+  test('success_criteria describes inline plan-phase, not Agent → Skill (#936 fix)', () => {
+    const successBlock = workflow.slice(workflow.lastIndexOf('<success_criteria>'));
+    // The broken criterion said "Initial planning via Agent → Skill"
+    assert.ok(
+      !successBlock.includes('via Agent → Skill("gsd-plan-phase")'),
+      'success_criteria must NOT describe plan-phase as Agent → Skill — that was the broken pattern. See: bug #936'
+    );
+    // The broken criterion said "isolated, not inline" for the replan
+    assert.ok(
+      !successBlock.includes('isolated, not inline'),
+      'success_criteria must NOT say "isolated, not inline" for plan-phase — the fix makes it inline. See: bug #936'
     );
   });
 });

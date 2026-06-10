@@ -707,8 +707,8 @@ must_haves:
       min_lines: 30
   key_links:
     - from: "src/components/LoginForm.tsx"
-      to: "/api/auth/login"
-      via: "fetch in onSubmit"
+      to: "src/app/api/auth/login/route.ts"
+      via: "fetch in onSubmit → POST /api/auth/login"
 ```
 
 Aggregate across plans for full picture of what phase delivers.

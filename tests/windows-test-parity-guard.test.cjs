@@ -49,12 +49,12 @@ const SELF = path.basename(__filename);
 const KNOWN_OFFENDERS = Object.freeze({
   splitNewlineOnFileContent: new Set([
     'release-coverage-scope.test.cjs',
-    'secret-scan-lint.test.cjs',
-    'security-scan.test.cjs',
+    'secret-scan-lint.security.test.cjs',
+    'security-scan.security.test.cjs',
   ]),
   fenceRegexLiteralNewline: new Set([
     'bug-2995-post-install-script-paths.test.cjs',
-    'security-scan.test.cjs',
+    'security-scan.security.test.cjs',
   ]),
   frontmatterAnchorLiteralNewline: new Set([
     'bug-1967-cache-invalidation.test.cjs',

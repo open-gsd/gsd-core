@@ -547,7 +547,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
         const phaseInfo = findPhaseInternal(cwd, phaseNum) as Record<string, unknown> | null;
         if (phaseInfo) {
           branchName = (config['phase_branch_template'] as string)
-            .replace('{phase}', phaseInfo['phase_number'] as string)
+            .replace('{phase}', normalizePhaseName(phaseInfo['phase_number']))
             .replace('{slug}', (phaseInfo['phase_slug'] as string) || 'phase');
         }
       }
