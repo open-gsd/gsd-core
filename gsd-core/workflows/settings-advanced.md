@@ -84,7 +84,7 @@ Runtime Model Tiers:
 - `model_profile_overrides.<runtime>.haiku` (default: built-in for the runtime, or absent)
 
 Model Policy:
-- `model_policy.provider` (default: `null` — known values: anthropic, openai, google, qwen)
+- `model_policy.provider` (default: `null` — known values: anthropic, anthropic-fable, openai, google, qwen)
 - `model_policy.budget` (default: `null` — known values: high, medium, low)
 - `model_policy.high` (default: `null` — model ID for the high-cost tier; used by generic provider path)
 - `model_policy.medium` (default: `null` — model ID for the medium-cost tier; used by generic provider path)
@@ -624,15 +624,16 @@ AskUserQuestion([
     multiSelect: false,
     options: [
       { label: "anthropic", description: "claude-opus-4-8 / claude-sonnet-4-6 / claude-haiku-4-5 (Anthropic / Claude)" },
+      { label: "anthropic-fable", description: "claude-fable-5 / claude-sonnet-4-6 / claude-haiku-4-5 (Anthropic / Claude Fable opt-in)" },
       { label: "openai", description: "gpt-5.5 / gpt-5.3-codex / gpt-5.4-mini (OpenAI / Codex)" },
-      { label: "google", description: "gemini-3-pro / gemini-3-flash / gemini-2.5-flash-lite (Google Gemini)" },
-      { label: "qwen", description: "qwen3-max-2026-01-23 / qwen3-coder-plus / qwen3-coder-next (Qwen)" }
+      { label: "Other known provider", description: "Type google or qwen; both still use the canonical tier mapping." }
     ]
   }
 ])
 ```
 
-After the user picks a provider, ask:
+If the user selects "Other known provider", ask them to type `google` or `qwen`.
+Use the typed value as the provider. After the user picks or types a provider, ask:
 
 ```text
 AskUserQuestion([
@@ -653,9 +654,12 @@ Canonical tier mappings by provider and budget:
 
 | Provider  | Budget | high                       | medium                     | low                        |
 |-----------|--------|----------------------------|----------------------------|----------------------------|
-| anthropic | high   | claude-opus-4-8            | claude-opus-4-8            | claude-opus-4-8            |
+| anthropic | high   | claude-opus-4-8            | claude-opus-4-8            | claude-sonnet-4-6          |
 | anthropic | medium | claude-opus-4-8            | claude-sonnet-4-6          | claude-haiku-4-5           |
 | anthropic | low    | claude-haiku-4-5           | claude-haiku-4-5           | claude-haiku-4-5           |
+| anthropic-fable | high   | claude-fable-5             | claude-fable-5             | claude-sonnet-4-6          |
+| anthropic-fable | medium | claude-opus-4-8            | claude-sonnet-4-6          | claude-haiku-4-5           |
+| anthropic-fable | low    | claude-haiku-4-5           | claude-haiku-4-5           | claude-haiku-4-5           |
 | openai    | high   | gpt-5.5                    | gpt-5.5                    | gpt-5.5                    |
 | openai    | medium | gpt-5.5                    | gpt-5.3-codex              | gpt-5.4-mini               |
 | openai    | low    | gpt-5.4-mini               | gpt-5.4-mini               | gpt-5.4-mini               |
@@ -713,7 +717,7 @@ Proceed to Step E.
 
 ```bash
 # Known-provider path — write all four keys atomically:
-gsd_run query config-set model_policy.provider "<provider>"   # e.g., anthropic / openai / google / qwen
+gsd_run query config-set model_policy.provider "<provider>"   # e.g., anthropic / anthropic-fable / openai / google / qwen
 gsd_run query config-set model_policy.budget   "<budget>"    # high / medium / low
 gsd_run query config-set model_policy.high     "<high-id>"
 gsd_run query config-set model_policy.medium   "<medium-id>"
@@ -775,7 +779,7 @@ Display:
 | fast_mode.routing_tier_defaults.standard   | {true/false} |
 | fast_mode.routing_tier_defaults.heavy      | {true/false} |
 | fast_mode.agent_overrides.<agent-id>       | {true/false} |
-| model_policy.provider                      | {anthropic/openai/google/qwen/custom/null} |
+| model_policy.provider                      | {anthropic/anthropic-fable/openai/google/qwen/custom/null} |
 | model_policy.budget                        | {high/medium/low/null} |
 | model_policy.high                          | {model-id/null} |
 | model_policy.medium                        | {model-id/null} |
