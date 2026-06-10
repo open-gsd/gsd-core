@@ -245,7 +245,12 @@ cat .planning/phases/*-*/*-SUMMARY.md
    - Still the right priority? Did shipping reveal a different core value?
    - Update if the ONE thing has shifted
 
-3. **Requirements audit:**
+3. **Business Context check (only if the section is present):**
+   - Skip entirely if PROJECT.md has no `## Business Context` section
+   - Customer, revenue model, and success metric still accurate after shipping?
+   - Update any field that drifted; refresh the linked strategy doc reference if it moved
+
+4. **Requirements audit:**
 
    **Validated section:**
    - All Active requirements shipped this milestone → Move to Validated
@@ -261,17 +266,17 @@ cat .planning/phases/*-*/*-SUMMARY.md
    - Remove irrelevant items
    - Add requirements invalidated during milestone
 
-4. **Context update:**
+5. **Context update:**
    - Current codebase state (LOC, tech stack)
    - User feedback themes (if any)
    - Known issues or technical debt
 
-5. **Key Decisions audit:**
+6. **Key Decisions audit:**
    - Extract all decisions from milestone phase summaries
    - Add to Key Decisions table with outcomes
    - Mark ✓ Good, ⚠️ Revisit, or — Pending
 
-6. **Constraints check:**
+7. **Constraints check:**
    - Any constraints changed during development? Update as needed
 
 Update PROJECT.md inline. Update "Last updated" footer:
@@ -355,6 +360,7 @@ Initial user testing showed demand for shape tools.
 
 - [ ] "What This Is" reviewed and updated if needed
 - [ ] Core Value verified as still correct
+- [ ] Business Context checked (or confirmed absent)
 - [ ] All shipped requirements moved to Validated
 - [ ] New requirements added to Active for next milestone
 - [ ] Out of Scope reasoning audited
