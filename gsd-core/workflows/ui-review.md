@@ -25,6 +25,10 @@ AGENT_SKILLS_UI_REVIEWER=$(gsd_run query agent-skills gsd-ui-auditor)
 Parse: `phase_dir`, `phase_number`, `phase_name`, `phase_slug`, `padded_phase`, `commit_docs`.
 
 ```bash
+IMPECCABLE_ENABLED=$(gsd_run query config-get workflow.impeccable 2>/dev/null || echo "false")
+```
+
+```bash
 UI_AUDITOR_MODEL=$(gsd_run query resolve-model gsd-ui-auditor --raw)
 ```
 
@@ -141,12 +145,36 @@ Full review: {path to UI-REVIEW.md}
 
 ───────────────────────────────────────────────────────────────
 
+{If IMPECCABLE_ENABLED is "true":}
+
+## ▶ Impeccable Refinement
+
+Pillar scores map to these refinement commands. Run any that apply, then re-run `/gsd:ui-review {N}` to confirm improvement.
+
+{Build table from auditor return — include only pillars that scored ≤ 2:}
+
+| Pillar | Score | Suggested Command |
+|--------|-------|-------------------|
+| Copywriting       | {score}/4 | `$impeccable clarify`  |
+| Visuals           | {score}/4 | `$impeccable layout`   |
+| Color             | {score}/4 | `$impeccable colorize` |
+| Typography        | {score}/4 | `$impeccable typeset`  |
+| Spacing           | {score}/4 | `$impeccable layout`   |
+| Experience Design | {score}/4 | `$impeccable harden`   |
+| Anti-patterns     | {score}/4 | `$impeccable polish`   |
+
+{If no pillars scored ≤ 2 (all ≥ 3):}
+All pillars ≥ 3. Final lift before shipping: `$impeccable polish` and/or `$impeccable harden`.
+
+{If any pillar scored 1:}
+⚠ One or more pillars scored 1/4. Run suggested commands before continuing to UAT.
+
+───────────────────────────────────────────────────────────────
+{end if IMPECCABLE_ENABLED}
+
 ## ▶ Next
 
 `/clear` then one of:
-
-- `/gsd:verify-work {N}` — UAT testing
-- `/gsd:plan-phase {N+1}` — plan next phase
 
 - `/gsd:verify-work {N}` — UAT testing
 - `/gsd:plan-phase {N+1}` — plan next phase
@@ -189,5 +217,7 @@ gsd_run query commit "docs(${padded_phase}): UI audit review" --files "${PHASE_D
 - [ ] gsd-ui-auditor spawned with correct context
 - [ ] UI-REVIEW.md created in phase directory
 - [ ] Score summary displayed to user
+- [ ] Impeccable refinement menu displayed if `workflow.impeccable` true
+- [ ] Pillar-to-command mapping applied correctly (only low-scoring pillars surfaced)
 - [ ] Next steps presented
 </success_criteria>
