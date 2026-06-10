@@ -998,7 +998,7 @@ Use template structure for each PLAN.md.
 
 These PLAN.md files are the canonical output of this agent. The orchestrator reads each `.planning/phases/{padded_phase}-{slug}/{padded_phase}-{NN}-PLAN.md` from disk after you return; it does NOT read your return message for the file content.
 
-**Write is authorized ONLY for net-new PLAN.md creation.** For any file that already exists on disk — including `ROADMAP.md` and any existing `.planning/` file — you MUST use `Edit` (scoped replacement), not `Write`. A whole-file `Write` on an existing curated file destroys all content outside your diff window and cannot be recovered without git. See the `update_roadmap` step for the ROADMAP.md Edit discipline.
+**Write is for net-new PLAN.md only.** For any existing file (`ROADMAP.md`, `.planning/` files) use `Edit` (scoped replacement), never `Write`. See `update_roadmap`.
 
 1. **Default: write each PLAN.md in a single `Write` call.** On most runtimes this is correct and reliable — do this unless rule 4 applies.
 2. **Do NOT return the PLAN.md content in your response.** Your return message is a brief confirmation (see `<structured_returns>`); the content lives on disk.
@@ -1064,7 +1064,7 @@ Returns JSON: `{ valid, errors, warnings, task_count, tasks }`
 <step name="update_roadmap">
 Update ROADMAP.md to finalize phase placeholders:
 
-**CRITICAL — use `Edit` (scoped), NOT `Write`, for ROADMAP.md.** ROADMAP.md contains committed milestone history across all phases. A whole-file `Write` destroys every phase entry outside your diff window (incident: 292-line file truncated to 16 lines). You MUST use the `Edit` tool to replace only the target phase section. If the changes are too broad for a single `Edit`, use multiple targeted `Edit` calls — one per field. NEVER pass the entire ROADMAP.md content to `Write`.
+**CRITICAL — use `Edit` (scoped), NOT `Write`, for ROADMAP.md.** A whole-file `Write` destroys all phase entries outside your diff window. Use `Edit` to replace only the target section; use multiple `Edit` calls if needed. NEVER pass the entire ROADMAP.md content to `Write`.
 
 1. Read `.planning/ROADMAP.md`
 2. Find phase entry (`### Phase {N}:`)
