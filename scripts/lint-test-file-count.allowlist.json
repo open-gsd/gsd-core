@@ -116,6 +116,7 @@
         "bug-2994-verify-reapply-patches-installed-path.test.cjs",
         "bug-3381-verify-work-workstream.test.cjs",
         "bug-3657-verify-reapply-patches-pristine-drift.test.cjs",
+        "bug-967-verify-key-links-strict-paths.test.cjs",
         "verify-health.test.cjs",
         "verify-mvp-uat.test.cjs",
         "verify-npm-publish.test.cjs",

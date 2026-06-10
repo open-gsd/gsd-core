@@ -453,7 +453,7 @@ function cmdVerifyKeyLinks(cwd: string, planFilePath: string, raw: boolean): voi
 
     const sourceContent = safeReadFile(path.join(cwd, (link['from'] as string) || ''));
     if (!sourceContent) {
-      check['detail'] = 'Source file not found';
+      check['detail'] = 'Source file not found (from: must be a relative file path; describe components/endpoints in via:)';
     } else if (link['pattern']) {
       try {
         const regex = new RegExp(link['pattern'] as string);

@@ -632,12 +632,12 @@ must_haves:
       contains: "model Message"
   key_links:
     - from: "src/components/Chat.tsx"
-      to: "/api/chat"
-      via: "fetch in useEffect"
+      to: "src/app/api/chat/route.ts"
+      via: "fetch in useEffect — calls /api/chat endpoint"
       pattern: "fetch.*api/chat"
     - from: "src/app/api/chat/route.ts"
-      to: "prisma.message"
-      via: "database query"
+      to: "prisma/schema.prisma"
+      via: "database query via prisma.message"
       pattern: "prisma\\.message\\.(find|create)"
 ```
 
