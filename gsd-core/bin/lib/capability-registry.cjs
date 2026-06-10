@@ -230,6 +230,8 @@ const configSchema = {
 
 const runtimes = {};
 
+const commandFamilies = {};
+
 const capabilityClusters = {
   "ui": [
     "ui-phase",
@@ -275,6 +277,7 @@ module.exports = {
   configKeys,
   configSchema,
   runtimes,
+  commandFamilies,
   capabilityClusters,
   profileMembership,
   requiresClosure,

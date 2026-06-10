@@ -37,6 +37,8 @@ const {
   deriveProfileMembership,
   runConsistencyGate,
   PROFILE_RANK,
+  // ADR-959
+  validateCommandEntry,
 } = require('../scripts/gen-capability-registry.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -2134,5 +2136,188 @@ describe('FIX 6: runConsistencyGate does NOT throw for real UI capability (true-
       () => runConsistencyGate(clusters, profiles, capMap),
       'runConsistencyGate must not throw for UI cap (CLUSTERS.ui matches ui.skills)',
     );
+  });
+});
+
+// ─── 23. ADR-959: commands field + commandFamilies index ──────────────────────
+
+/**
+ * Build a minimal feature capability for ADR-959 command tests.
+ * skills/agents/etc. kept minimal-valid so validateCapability passes.
+ */
+function makeCommandCap(id, commands) {
+  return {
+    id,
+    role: 'feature',
+    title: 'Test cap ' + id,
+    description: 'Synthetic capability for ADR-959 command tests.',
+    tier: 'full',
+    requires: [],
+    skills: [],
+    agents: [],
+    hooks: [],
+    config: {},
+    steps: [],
+    contributions: [],
+    gates: [],
+    commands,
+  };
+}
+
+describe('ADR-959: validateCommandEntry — valid entry', () => {
+  test('valid minimal entry (no subcommands) passes', () => {
+    const errors = validateCommandEntry('my-cap', { family: 'foo', module: 'foo.cjs', router: 'routeFoo' }, 'commands[0]');
+    assert.deepEqual(errors, []);
+  });
+
+  test('valid entry with subcommands passes', () => {
+    const errors = validateCommandEntry('my-cap', {
+      family: 'bar',
+      module: 'bar-router.cjs',
+      router: 'routeBar',
+      subcommands: ['query', 'status'],
+    }, 'commands[0]');
+    assert.deepEqual(errors, []);
+  });
+});
+
+describe('ADR-959: validateCommandEntry — adversarial rejects', () => {
+  test('missing family → error', () => {
+    const errors = validateCommandEntry('my-cap', { module: 'foo.cjs', router: 'routeFoo' }, 'commands[0]');
+    assert.ok(errors.some((e) => e.includes('family')), 'Expected family error, got: ' + JSON.stringify(errors));
+  });
+
+  test('empty family → error', () => {
+    const errors = validateCommandEntry('my-cap', { family: '', module: 'foo.cjs', router: 'routeFoo' }, 'commands[0]');
+    assert.ok(errors.some((e) => e.includes('family')), 'Expected family error, got: ' + JSON.stringify(errors));
+  });
+
+  test('missing module → error', () => {
+    const errors = validateCommandEntry('my-cap', { family: 'foo', router: 'routeFoo' }, 'commands[0]');
+    assert.ok(errors.some((e) => e.includes('module')), 'Expected module error, got: ' + JSON.stringify(errors));
+  });
+
+  test('missing router → error', () => {
+    const errors = validateCommandEntry('my-cap', { family: 'foo', module: 'foo.cjs' }, 'commands[0]');
+    assert.ok(errors.some((e) => e.includes('router')), 'Expected router error, got: ' + JSON.stringify(errors));
+  });
+
+  test('non-string router → error', () => {
+    const errors = validateCommandEntry('my-cap', { family: 'foo', module: 'foo.cjs', router: 42 }, 'commands[0]');
+    assert.ok(errors.some((e) => e.includes('router')), 'Expected router error, got: ' + JSON.stringify(errors));
+  });
+
+  test('traversal module "../evil.cjs" → error', () => {
+    const errors = validateCommandEntry('my-cap', { family: 'foo', module: '../evil.cjs', router: 'r' }, 'commands[0]');
+    assert.ok(errors.some((e) => e.includes('module')), 'Expected module traversal error, got: ' + JSON.stringify(errors));
+  });
+
+  test('absolute module "/abs/path.cjs" → error', () => {
+    const errors = validateCommandEntry('my-cap', { family: 'foo', module: '/abs/path.cjs', router: 'r' }, 'commands[0]');
+    assert.ok(errors.some((e) => e.includes('module')), 'Expected module absolute error, got: ' + JSON.stringify(errors));
+  });
+
+  test('module with "/" separator "lib/foo.cjs" → error', () => {
+    const errors = validateCommandEntry('my-cap', { family: 'foo', module: 'lib/foo.cjs', router: 'r' }, 'commands[0]');
+    assert.ok(errors.some((e) => e.includes('module')), 'Expected module separator error, got: ' + JSON.stringify(errors));
+  });
+
+  test('subcommands non-array → error', () => {
+    const errors = validateCommandEntry('my-cap', {
+      family: 'foo', module: 'foo.cjs', router: 'r', subcommands: 'not-array',
+    }, 'commands[0]');
+    assert.ok(errors.some((e) => e.includes('subcommands')), 'Expected subcommands error, got: ' + JSON.stringify(errors));
+  });
+
+  test('subcommands with non-string entry → error', () => {
+    const errors = validateCommandEntry('my-cap', {
+      family: 'foo', module: 'foo.cjs', router: 'r', subcommands: ['ok', 42],
+    }, 'commands[0]');
+    assert.ok(errors.some((e) => e.includes('subcommands')), 'Expected subcommands[1] error, got: ' + JSON.stringify(errors));
+  });
+});
+
+describe('ADR-959: validateCrossCapability — duplicate family ownership', () => {
+  test('duplicate family across two capabilities → error', () => {
+    const capA = makeCommandCap('cap-a', [{ family: 'shared', module: 'a.cjs', router: 'rA' }]);
+    const capB = makeCommandCap('cap-b', [{ family: 'shared', module: 'b.cjs', router: 'rB' }]);
+    const capMap = new Map([['cap-a', capA], ['cap-b', capB]]);
+    const errors = validateCrossCapability(capMap, new Set());
+    assert.ok(
+      errors.some((e) => e.includes('shared') && e.includes('cap-a') && e.includes('cap-b')),
+      'Expected duplicate family error mentioning both caps, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('unique families in two capabilities → no error', () => {
+    const capA = makeCommandCap('cap-a', [{ family: 'alpha', module: 'alpha.cjs', router: 'rA' }]);
+    const capB = makeCommandCap('cap-b', [{ family: 'beta', module: 'beta.cjs', router: 'rB' }]);
+    const capMap = new Map([['cap-a', capA], ['cap-b', capB]]);
+    const errors = validateCrossCapability(capMap, new Set());
+    assert.ok(
+      !errors.some((e) => e.includes('owned by both')),
+      'Expected no duplicate-ownership error, got: ' + JSON.stringify(errors),
+    );
+  });
+});
+
+describe('ADR-959: buildRegistry — commandFamilies index shape', () => {
+  test('cap with valid commands entry produces commandFamilies entry', () => {
+    const cap = makeCommandCap('test-cmd', [
+      { family: 'myfamily', module: 'myfamily.cjs', router: 'routeMyFamily' },
+    ]);
+    const capMap = new Map([['test-cmd', cap]]);
+    const registry = buildRegistry(capMap);
+    assert.ok(registry.commandFamilies, 'commandFamilies must be present');
+    const entry = registry.commandFamilies['myfamily'];
+    assert.ok(entry, 'commandFamilies["myfamily"] must exist');
+    assert.strictEqual(entry.capId, 'test-cmd');
+    assert.strictEqual(entry.module, 'myfamily.cjs');
+    assert.strictEqual(entry.router, 'routeMyFamily');
+  });
+
+  test('cap without commands → commandFamilies is empty', () => {
+    const capDir = makeTempCapDir({ ui: UI_CAP });
+    const { capMap } = loadAndValidate(new Set(), capDir);
+    const registry = buildRegistry(capMap);
+    assert.ok(registry.commandFamilies, 'commandFamilies must be present');
+    assert.deepEqual(Object.keys(registry.commandFamilies), [], 'commandFamilies must be empty for real registry');
+  });
+
+  test('commandFamilies keys are sorted in serialized output (determinism)', () => {
+    // Two caps with commands in z→a order; expect a→z in the commandFamilies section
+    const capA = makeCommandCap('cap-a', [{ family: 'zebra', module: 'z.cjs', router: 'rZ' }]);
+    const capB = makeCommandCap('cap-b', [{ family: 'alpha', module: 'a.cjs', router: 'rA' }]);
+    const capMap = new Map([['cap-a', capA], ['cap-b', capB]]);
+    const registry = buildRegistry(capMap);
+    const serialized = serializeRegistry(registry, capMap);
+
+    // Find the commandFamilies section specifically (not the full capabilities JSON)
+    const cfStart = serialized.indexOf('const commandFamilies = ');
+    assert.ok(cfStart >= 0, 'commandFamilies section must be present');
+    const cfEnd = serialized.indexOf('\n};', cfStart) + 3; // closing }; of const assignment
+    const cfSection = serialized.slice(cfStart, cfEnd);
+
+    const alphaIdx = cfSection.indexOf('"alpha"');
+    const zebraIdx = cfSection.indexOf('"zebra"');
+    assert.ok(alphaIdx >= 0, '"alpha" must appear in commandFamilies section');
+    assert.ok(zebraIdx >= 0, '"zebra" must appear in commandFamilies section');
+    assert.ok(alphaIdx < zebraIdx, 'commandFamilies section must list "alpha" before "zebra" (sorted)');
+  });
+});
+
+describe('ADR-959: validateCapability — commands field on feature role', () => {
+  test('valid commands entry on feature cap passes validateCapability', () => {
+    const cap = makeCommandCap('cmd-cap', [
+      { family: 'testfamily', module: 'testfamily.cjs', router: 'routeTestFamily' },
+    ]);
+    const errors = validateCapability(cap, 'cmd-cap');
+    assert.deepEqual(errors, [], 'Expected no errors: ' + JSON.stringify(errors));
+  });
+
+  test('commands: null on feature cap → error', () => {
+    const cap = makeCommandCap('cmd-cap', null);
+    const errors = validateCapability(cap, 'cmd-cap');
+    assert.ok(errors.some((e) => e.includes('commands')), 'Expected commands error, got: ' + JSON.stringify(errors));
   });
 });

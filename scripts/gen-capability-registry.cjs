@@ -266,6 +266,77 @@ function validateCapability(cap, folderId) {
   return errors;
 }
 
+/**
+ * ADR-959: Validate a single commands[] entry on a feature-role capability.
+ * { family: string, module: string, router: string, subcommands?: string[] }
+ *
+ * - family: non-empty string, no reserved names
+ * - module: non-empty string, no path traversal, no absolute paths, no "/"
+ *   segments other than a bare basename (expected form: "foo.cjs")
+ * - router: non-empty string
+ * - subcommands: optional array of strings (doc/introspection only)
+ *
+ * @param {string} capId     Capability id (for error messages)
+ * @param {*}      entry     The entry to validate
+ * @param {string} prefix    Path prefix (e.g. "commands[0]")
+ * @returns {string[]}       Array of error strings; empty = valid.
+ */
+function validateCommandEntry(capId, entry, prefix) {
+  const errors = [];
+  const ctx = 'capability "' + capId + '" ' + prefix;
+
+  if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+    errors.push(ctx + ' must be an object with family, module, and router');
+    return errors;
+  }
+
+  // family: non-empty string, no reserved names
+  if (typeof entry.family !== 'string' || entry.family.length === 0) {
+    errors.push(ctx + '.family must be a non-empty string');
+  } else if (entry.family === '__proto__' || entry.family === 'constructor' || entry.family === 'prototype') {
+    // S2a: inline literal reserved-name guard (CodeQL barrier)
+    errors.push(ctx + '.family "' + entry.family + '" is a reserved name');
+  }
+
+  // module: must be a safe bare basename matching /^[A-Za-z0-9._-]+\.cjs$/ —
+  // no path separators, no "..", no NUL bytes, no absolute paths, ends in .cjs.
+  // This conservative pattern subsumes all earlier traversal/absolute/separator checks.
+  if (typeof entry.module !== 'string' || entry.module.length === 0) {
+    errors.push(ctx + '.module must be a non-empty string');
+  } else {
+    const mod = entry.module;
+    const SAFE_BASENAME = /^[A-Za-z0-9._-]+\.cjs$/;
+    if (!SAFE_BASENAME.test(mod)) {
+      errors.push(
+        ctx + '.module must be a safe bare basename (pattern: /^[A-Za-z0-9._-]+\\.cjs$/, no path separators, no "..", no NUL bytes, must end in ".cjs"); got: ' +
+        JSON.stringify(mod),
+      );
+    }
+  }
+
+  // router: non-empty string
+  if (typeof entry.router !== 'string' || entry.router.length === 0) {
+    errors.push(ctx + '.router must be a non-empty string');
+  }
+
+  // subcommands: optional array of non-empty strings (doc/introspection only)
+  if (entry.subcommands !== undefined) {
+    if (!Array.isArray(entry.subcommands)) {
+      errors.push(ctx + '.subcommands must be an array of strings if present');
+    } else {
+      for (let i = 0; i < entry.subcommands.length; i++) {
+        if (typeof entry.subcommands[i] !== 'string') {
+          errors.push(ctx + '.subcommands[' + i + '] must be a string');
+        } else if (entry.subcommands[i].length === 0) {
+          errors.push(ctx + '.subcommands[' + i + '] must be a non-empty string');
+        }
+      }
+    }
+  }
+
+  return errors;
+}
+
 function validateFeatureBody(cap) {
   const errors = [];
 
@@ -278,6 +349,17 @@ function validateFeatureBody(cap) {
       } else if (s === '__proto__' || s === 'constructor' || s === 'prototype') {
         // S2a: inline literal reserved-name guard (CodeQL barrier)
         errors.push('skills entry "' + s + '" is a reserved name');
+      }
+    }
+  }
+
+  // ADR-959: optional commands array
+  if (cap.commands !== undefined) {
+    if (!Array.isArray(cap.commands)) {
+      errors.push('commands must be an array of {family, module, router} objects');
+    } else {
+      for (let i = 0; i < cap.commands.length; i++) {
+        errors.push(...validateCommandEntry(cap.id || cap.role, cap.commands[i], 'commands[' + i + ']'));
       }
     }
   }
@@ -755,6 +837,7 @@ function validateCrossCapability(capMap, centralKeys) {
   // Ownership: one owner per skill stem + agent name
   const skillOwner = new Map(); // skill → capId
   const agentOwner = new Map(); // agent → capId
+  const familyOwner = new Map(); // command family → capId (ADR-959)
   for (const [capId, cap] of capMap) {
     if (cap.role !== 'feature') continue;
     for (const skill of cap.skills) {
@@ -773,6 +856,20 @@ function validateCrossCapability(capMap, centralKeys) {
         );
       } else {
         agentOwner.set(agent, capId);
+      }
+    }
+    // ADR-959: single family ownership across the whole registry
+    if (Array.isArray(cap.commands)) {
+      for (const cmd of cap.commands) {
+        if (typeof cmd.family !== 'string' || cmd.family.length === 0) continue; // already reported
+        if (cmd.family === '__proto__' || cmd.family === 'constructor' || cmd.family === 'prototype') continue;
+        if (familyOwner.has(cmd.family)) {
+          errors.push(
+            'command family "' + cmd.family + '" is owned by both "' + familyOwner.get(cmd.family) + '" and "' + capId + '"',
+          );
+        } else {
+          familyOwner.set(cmd.family, capId);
+        }
       }
     }
   }
@@ -1357,6 +1454,24 @@ function buildRegistry(capMap) {
     }));
   }
 
+  // ── ADR-959: commandFamilies index ─────────────────────────────────────────
+  // family → { capId, module, router }
+  // Built from all feature capabilities' commands arrays.
+  const commandFamilies = Object.create(null);
+  for (const [capId, cap] of capMap) {
+    // S2b: inline literal guard at each write site (CodeQL barrier)
+    if (capId === '__proto__' || capId === 'constructor' || capId === 'prototype') continue;
+    if (cap.role !== 'feature' || !Array.isArray(cap.commands)) continue;
+    for (const cmd of cap.commands) {
+      if (typeof cmd.family !== 'string' || cmd.family.length === 0) continue;
+      // S2b: inline literal guard at family key write site (CodeQL barrier)
+      if (cmd.family === '__proto__' || cmd.family === 'constructor' || cmd.family === 'prototype') continue;
+      if (typeof cmd.module !== 'string' || cmd.module.length === 0) continue;
+      if (typeof cmd.router !== 'string' || cmd.router.length === 0) continue;
+      commandFamilies[cmd.family] = { capId, module: cmd.module, router: cmd.router };
+    }
+  }
+
   // ── ADR-857 phase 4a: derived views ────────────────────────────────────────
   const capabilityClusters = deriveCapabilityClusters(capMap);
   const profileMembership = deriveProfileMembership(capMap);
@@ -1374,6 +1489,7 @@ function buildRegistry(capMap) {
     configKeys,
     configSchema,
     runtimes,
+    commandFamilies,
     capabilityClusters,
     profileMembership,
     // warnings are NOT serialized — returned only for caller consumption via stderr
@@ -1415,6 +1531,17 @@ function serializeRegistry(registry, capMap) {
   lines.push('const configSchema = ' + JSON.stringify(registry.configSchema, null, 2) + ';');
   lines.push('');
   lines.push('const runtimes = ' + JSON.stringify(registry.runtimes, null, 2) + ';');
+  lines.push('');
+
+  // ADR-959: commandFamilies index — sort family keys for determinism.
+  const sortedCommandFamilies = Object.create(null);
+  const commandFamilyKeys = Object.keys(registry.commandFamilies || {}).sort();
+  for (const family of commandFamilyKeys) {
+    // S2b: inline literal guard at write site (CodeQL barrier)
+    if (family === '__proto__' || family === 'constructor' || family === 'prototype') continue;
+    sortedCommandFamilies[family] = registry.commandFamilies[family];
+  }
+  lines.push('const commandFamilies = ' + JSON.stringify(sortedCommandFamilies, null, 2) + ';');
   lines.push('');
 
   // ADR-857 phase 4a: derived views — globally sorted capIds for determinism.
@@ -1486,6 +1613,7 @@ function serializeRegistry(registry, capMap) {
   lines.push('  configKeys,');
   lines.push('  configSchema,');
   lines.push('  runtimes,');
+  lines.push('  commandFamilies,');
   lines.push('  capabilityClusters,');
   lines.push('  profileMembership,');
   lines.push('  requiresClosure,');
@@ -1665,6 +1793,8 @@ module.exports = {
   deriveCapabilityClusters,
   deriveProfileMembership,
   runConsistencyGate,
+  // ADR-959: command entry validation
+  validateCommandEntry,
   // FIX 5 (lazy): PROFILE_RANK and CLUSTERS are loaded on first access via getters
   // so importing the generator on a fresh/unbuilt worktree doesn't fail at module load.
   get PROFILE_RANK() { return getInstallProfiles().PROFILE_RANK; },
