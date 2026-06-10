@@ -1425,6 +1425,38 @@ This ensures new projects get the default GSD workflow-enforcement guidance and 
 gsd_run query commit "docs: create roadmap ([N] phases)" --files .planning/ROADMAP.md .planning/STATE.md .planning/REQUIREMENTS.md "$INSTRUCTION_FILE"
 ```
 
+## 8b. Impeccable Design Identity (conditional)
+
+```bash
+IMPECCABLE_ENABLED=$(gsd_run query config-get workflow.impeccable 2>/dev/null || echo "false")
+```
+
+**If `IMPECCABLE_ENABLED` is `true`:**
+
+Use AskUserQuestion:
+- header: "Design Identity"
+- question: "Impeccable integration is enabled. Create a PRODUCT.md design identity file now? This anchors visual register, scene, and color strategy across all phases before any UI work begins."
+- options:
+  - "Yes — run `$impeccable init` now (recommended)"
+  - "Later — I'll run it before the first UI phase"
+
+If "Yes": display the following and wait for user to confirm completion:
+```
+Run in your terminal:  $impeccable init
+
+This creates PRODUCT.md and DESIGN.md with your project's visual register,
+scene sentence, color strategy, and typography direction. All future UI phases
+will inherit from these files automatically.
+
+Let me know when it's done and I'll show the project summary.
+```
+
+If "Later": display reminder:
+```
+Remember: run `$impeccable init` before your first UI phase to establish design identity.
+The ui-phase workflow will prompt you if the files are missing.
+```
+
 ## 9. Done
 
 Present completion summary:
