@@ -740,7 +740,18 @@ function cmdPrSubrepo(
     error('commit message required');
   }
 
-  const repoCwd = path.resolve(cwd, repo as string);
+  // 0. Security: validate repo path is contained within the workspace root.
+  //    Uses security.cjs validatePath (symlink-safe realpathSync + startsWith guard)
+  //    to reject ../escape, absolute paths, and symlink traversal.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/unbound-method
+  const { validatePath } = require('./security.cjs') as {
+    validatePath(filePath: string, baseDir: string): { safe: boolean; resolved: string; error?: string };
+  };
+  const pathCheck = validatePath(repo as string, cwd);
+  if (!pathCheck.safe) {
+    error(`Sub-repo path is unsafe: ${pathCheck.error}`);
+  }
+  const repoCwd = pathCheck.resolved;
   if (!fs.existsSync(repoCwd)) {
     error(`Sub-repo not found: ${repoCwd}`);
   }
@@ -757,10 +768,11 @@ function cmdPrSubrepo(
     .filter(Boolean)
     .filter(line => !line.startsWith('??'))
     .flatMap(line => {
-      // execGit trims the entire stdout string, which strips the leading X-status
-      // space from the first output line only. Detect that case via line[2] and
-      // slice accordingly (3 for full "XY PATH", 2 for trimmed "Y PATH").
-      const file = (line[2] === ' ' ? line.slice(3) : line.slice(2)).trim();
+      // execGit trims the entire stdout string, which may strip the leading X-status
+      // space from the first output line. Normalize each line before slicing so
+      // "XY PATH" and trimmed "Y PATH" are handled uniformly.
+      const normalized = line.trimStart();
+      const file = normalized.slice(2).trim();
       // Porcelain renames: "old -> new" — stage both so git tracks the move
       const arrowIdx = file.indexOf(' -> ');
       return arrowIdx !== -1
@@ -783,15 +795,22 @@ function cmdPrSubrepo(
     error(`Branch already exists in ${repo}: ${branch}. Delete it first or choose a unique name.`);
   }
 
+  // Capture current HEAD before switching so rollback can return explicitly.
+  // git checkout - fails on a fresh single-branch repo with no prior HEAD.
+  const prevBranchResult = execGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: repoCwd });
+  const prevBranchName = prevBranchResult.exitCode === 0 ? prevBranchResult.stdout.trim() : null;
+
   // 3. Create branch
   const checkoutResult = execGit(['checkout', '-b', branch as string], { cwd: repoCwd });
   if (checkoutResult.exitCode !== 0) {
     error(`Failed to create branch ${branch} in ${repo}: ${checkoutResult.stderr}`);
   }
 
-  // Helper: rollback the created branch and return to the previous HEAD
+  // Helper: rollback the created branch and return to the previous HEAD.
   const rollback = (): void => {
-    execGit(['checkout', '-'], { cwd: repoCwd });
+    if (prevBranchName) {
+      execGit(['checkout', prevBranchName], { cwd: repoCwd });
+    }
     execGit(['branch', '-D', branch as string], { cwd: repoCwd });
   };
 
@@ -824,8 +843,9 @@ function cmdPrSubrepo(
     remoteSlug = m ? m[1] : null;
   }
 
-  // 8. Push with --set-upstream so gh pr create can find the branch
-  const pushResult = execGit(['push', '--set-upstream', 'origin', branch as string], { cwd: repoCwd });
+  // 8. Push with --set-upstream so gh pr create can find the branch.
+  //    Network operation — use a longer timeout than the default 10 s.
+  const pushResult = execGit(['push', '--set-upstream', 'origin', branch as string], { cwd: repoCwd, timeout: 60_000 });
   if (pushResult.exitCode !== 0) {
     rollback();
     error(`Failed to push ${branch} in ${repo}: ${pushResult.stderr}`);
