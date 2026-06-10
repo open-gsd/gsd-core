@@ -20,7 +20,7 @@
 // See docs/TESTING-SUITES.md for full grouping policy.
 'use strict';
 
-const { readdirSync, existsSync } = require('fs');
+const { readdirSync } = require('fs');
 const { join } = require('path');
 const { execFileSync } = require('child_process');
 const { ExitError, runMain } = require('./lib/cli-exit.cjs');
@@ -31,21 +31,76 @@ const SUITES = ['all', 'unit', 'integration', 'install', 'security', 'slow'];
 // src/*.cts and gitignored, so on a clean checkout (fresh CI, before any build)
 // the artifact is absent — yet test files require it. This is the universal
 // chokepoint every test path funnels through (test:unit, --files-from, direct
-// invocation), so build the artifact here if missing. It is a no-op once built
-// (dev, pretest, a prior run in the same job), which keeps the harness test's
-// spawned invocations side-effect-free. Paths resolve from __dirname (not cwd),
-// so it works regardless of GSD_TEST_DIR / temp-dir cwd. NOTE: the sentinel is
-// the pilot module; revisit (or switch to an unconditional quiet build) as more
-// modules migrate into src/.
+// invocation), so build the artifact here.
+//
+// Strategy (incremental + re-emit-on-missing, closes both #969 failure modes):
+//   1. Run tsc incrementally (fast ~380ms no-op when sources unchanged).
+//   2. Verify every src/*.cts (non-.d.cts) maps to a non-empty gsd-core/bin/lib/*.cjs.
+//   3. If any expected .cjs is missing or zero-bytes (persistent-mirror scenario:
+//      tsc no-ops because tsbuildinfo looks current even though the file was deleted),
+//      delete the tsbuildinfo and run tsc ONCE MORE (clean re-emit), then re-verify.
+//
+// Common case: fast incremental no-op. Stale/deleted-output case: detected by
+// the cheap existsSync loop and force-rebuilt. Paths resolve from __dirname so
+// it works regardless of GSD_TEST_DIR / temp-dir cwd.
 function ensureBuiltArtifacts() {
+  const { existsSync, readdirSync, statSync, unlinkSync } = require('fs');
   const root = join(__dirname, '..');
-  const sentinel = join(root, 'gsd-core', 'bin', 'lib', 'semver-compare.cjs');
-  if (existsSync(sentinel)) return;
+  const srcDir = join(root, 'src');
+  const outDir = join(root, 'gsd-core', 'bin', 'lib');
+  const tsBuildInfoPath = join(root, 'gsd-core', 'bin', 'tsconfig.build.tsbuildinfo');
   const tscBin = require.resolve('typescript/bin/tsc');
-  execFileSync(process.execPath, [tscBin, '-p', join(root, 'tsconfig.build.json')], {
-    cwd: root,
-    stdio: 'inherit',
-  });
+  const tscArgs = [tscBin, '-p', join(root, 'tsconfig.build.json')];
+
+  // Build the 1:1 map of expected output paths from src/*.cts sources.
+  // Excludes *.d.cts (declaration-only files that produce no output).
+  // Handles subdirectories (e.g. src/installer-migrations/*.cts → gsd-core/bin/lib/installer-migrations/*.cjs).
+  function gatherExpectedOutputs() {
+    const expected = [];
+    function scan(dir, relBase) {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isDirectory()) {
+          scan(join(dir, entry.name), relBase ? `${relBase}/${entry.name}` : entry.name);
+        } else if (entry.name.endsWith('.cts') && !entry.name.endsWith('.d.cts')) {
+          const stem = entry.name.slice(0, -'.cts'.length);
+          const rel = relBase ? `${relBase}/${stem}.cjs` : `${stem}.cjs`;
+          expected.push(join(outDir, rel));
+        }
+      }
+    }
+    scan(srcDir, '');
+    return expected;
+  }
+
+  function checkMissingOutputs(expectedPaths) {
+    return expectedPaths.filter(p => !existsSync(p) || statSync(p).size === 0);
+  }
+
+  // Step 1: incremental build (fast no-op when sources unchanged).
+  execFileSync(process.execPath, tscArgs, { cwd: root, stdio: 'inherit' });
+
+  // Step 2: verify expected outputs.
+  const expected = gatherExpectedOutputs();
+  const missing = checkMissingOutputs(expected);
+
+  // Step 3: if any output is missing/zero-bytes, force a clean re-emit.
+  // This handles the persistent-mirror case where tsc's incremental no-op left
+  // a deleted .cjs unregenerated (tsbuildinfo recorded it as up-to-date).
+  if (missing.length > 0) {
+    if (existsSync(tsBuildInfoPath)) {
+      unlinkSync(tsBuildInfoPath);
+    }
+    execFileSync(process.execPath, tscArgs, { cwd: root, stdio: 'inherit' });
+    // Re-verify after clean re-emit; surface any remaining gaps loudly.
+    const stillMissing = checkMissingOutputs(expected);
+    if (stillMissing.length > 0) {
+      const names = stillMissing.map(p => require('path').basename(p)).join(', ');
+      throw new Error(
+        `ensureBuiltArtifacts: tsc clean re-emit still missing outputs: ${names}. ` +
+        `Check src/ for compilation errors.`
+      );
+    }
+  }
 }
 const MARKED_SUITES = ['integration', 'install', 'security', 'slow'];
 
@@ -320,4 +375,4 @@ if (require.main === module) {
   runMain(main);
 }
 
-module.exports = { suiteOf };
+module.exports = { suiteOf, ensureBuiltArtifacts };
