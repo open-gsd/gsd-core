@@ -27,6 +27,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
+const crypto = require('node:crypto');
 
 const INSTALL_SCRIPT = path.join(__dirname, '..', 'bin', 'install.js');
 const BUILD_SCRIPT = path.join(__dirname, '..', 'scripts', 'build-hooks.js');
@@ -202,5 +203,45 @@ describe('bug #941 — managed-hooks-registry.cjs recorded in file manifest', ()
         `manifest key '${key}' must use forward slashes, not backslashes`,
       );
     }
+  });
+
+  test('manifest hash for managed-hooks-registry.cjs matches the installed file contents', () => {
+    // Strengthened assertion: proves the manifest not only records the right KEY
+    // but stores a hash that matches the ACTUAL installed file bytes.  A future
+    // refactor that records the key from the wrong path/content would fail here
+    // even if the key is present.
+    runInstaller(tmpDir);
+
+    const manifestPath = path.join(tmpDir, MANIFEST_NAME);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+
+    const key = 'hooks/managed-hooks-registry.cjs';
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(manifest.files, key),
+      `manifest.files must contain '${key}' before hash comparison`,
+    );
+
+    // Recompute the hash the same way the installer's fileHash() does:
+    // sha256 of the raw file bytes as a hex string.
+    const installedPath = path.join(tmpDir, 'hooks', 'managed-hooks-registry.cjs');
+    assert.ok(
+      fs.existsSync(installedPath),
+      `installed file must exist at ${installedPath}`,
+    );
+    const actualHash = crypto
+      .createHash('sha256')
+      .update(fs.readFileSync(installedPath))
+      .digest('hex');
+
+    assert.strictEqual(
+      manifest.files[key],
+      actualHash,
+      [
+        `manifest hash for '${key}' does not match the installed file's actual contents.`,
+        `This means writeManifest() hashed the wrong path or wrong content.`,
+        `Expected (from installed file): ${actualHash}`,
+        `Got (from manifest):            ${manifest.files[key]}`,
+      ].join('\n'),
+    );
   });
 });
