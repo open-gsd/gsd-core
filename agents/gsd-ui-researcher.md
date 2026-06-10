@@ -70,6 +70,25 @@ This ensures the design contract aligns with project-specific conventions and li
 | Success criteria | Infer what states and interactions are needed |
 
 If upstream artifacts answer a design contract question, do NOT re-ask it. Pre-populate the contract and confirm.
+
+**PRODUCT.md** (if exists, and `workflow.impeccable` is `true`) — Project design identity from Impeccable `init`
+
+| Section | How You Use It |
+|---------|----------------|
+| Register | Brand vs. product UI — determines tone, density, and visual weight for this phase |
+| Scene sentence | Who uses this, where, under what ambient light — use to validate color strategy |
+| Color strategy | Committed brand colors — pre-populate Color section of UI-SPEC; do not contradict |
+| Typography direction | Font families and scale intent — pre-populate Typography section |
+
+**DESIGN.md** (if exists, and `workflow.impeccable` is `true`) — Committed design system from Impeccable `document`
+
+| Section | How You Use It |
+|---------|----------------|
+| Tokens | Already-committed spacing, color, type tokens — use as UI-SPEC defaults, do not re-specify |
+| Component patterns | Existing visual patterns — note in Design System section |
+| Brand voice | Copy register and anti-patterns to avoid — apply to Copywriting section |
+
+If PRODUCT.md and/or DESIGN.md are present: most design contract questions are pre-answered. Pre-populate from them and ask ONLY what they don't cover. Never contradict committed identity.
 </upstream_input>
 
 <downstream_consumer>
@@ -233,6 +252,18 @@ Read all files from `<required_reading>` block. Parse:
 - RESEARCH.md → standard stack, architecture patterns
 - REQUIREMENTS.md → requirement descriptions, success criteria
 
+**Impeccable identity files (if `workflow.impeccable` is true in config):**
+
+```bash
+IMPECCABLE_ENABLED=$(cat .planning/config.json 2>/dev/null | grep -o '"workflow.impeccable":[[:space:]]*true' || echo "")
+PRODUCT_MD=$(ls .planning/PRODUCT.md 2>/dev/null || ls PRODUCT.md 2>/dev/null || echo "")
+DESIGN_MD=$(ls .planning/DESIGN.md 2>/dev/null || ls DESIGN.md 2>/dev/null || echo "")
+```
+
+If `IMPECCABLE_ENABLED` is non-empty and `PRODUCT_MD` is non-empty: read PRODUCT.md, extract register, scene sentence, color strategy, and typography direction. Pre-populate those sections of UI-SPEC from it.
+If `IMPECCABLE_ENABLED` is non-empty and `DESIGN_MD` is non-empty: read DESIGN.md, extract committed tokens and component patterns. Use as UI-SPEC defaults.
+If either file loaded: set `impeccable_identity: true` in the UI-SPEC.md frontmatter.
+
 ## Step 2: Scout Existing UI
 
 ```bash
@@ -354,6 +385,7 @@ UI-SPEC research is complete when:
 - [ ] Existing design system detected (or absence confirmed)
 - [ ] shadcn gate executed (for React/Next.js/Vite projects)
 - [ ] Upstream decisions pre-populated (not re-asked)
+- [ ] PRODUCT.md / DESIGN.md read and pre-populated into contract if present and `workflow.impeccable` true
 - [ ] Spacing scale declared (multiples of 4 only)
 - [ ] Typography declared (3-4 sizes, 2 weights max)
 - [ ] Color contract declared (60/30/10 split, accent reserved-for list)
