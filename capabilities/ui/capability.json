@@ -1,7 +1,7 @@
 {
   "id": "ui", "role": "feature", "title": "UI design contracts",
   "description": "UI-SPEC design contract + retrospective UI audit for frontend phases.",
-  "tier": "standard", "requires": [],
+  "tier": "full", "requires": [],
   "skills": ["ui-phase", "ui-review"],
   "agents": ["gsd-ui-checker", "gsd-ui-auditor"],
   "hooks": [],

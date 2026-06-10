@@ -330,6 +330,14 @@ function cmdCapabilityState(
     }
   }
 
+  // ── Load registry (ADR-857 phase 4c) ────────────────────────────────────────
+  // Load BEFORE resolveProfile and resolveSurface so both calls receive the
+  // registry and capability-contributed skills are reflected in installed/surfaced.
+  // No-op today (UI capability is tier:full → only adds to 'full', which returns
+  // '*' regardless) but cutover-ready for future tier:core/standard capabilities.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const registry = require('./capability-registry.cjs') as Record<string, unknown>;
+
   // ── Resolve installed skills (from install profile) ──────────────────────────
   // Distinguish "no profile marker → default full" (legitimate) from a thrown
   // error (surface as a warning and degrade gracefully — do NOT silently report
@@ -342,6 +350,7 @@ function cmdCapabilityState(
     const resolvedInstall = resolveProfile({
       modes: profileName.split(',').map((s: string) => s.trim()),
       manifest,
+      registry,
     });
     installedSkills = resolvedInstall.skills;
   } catch (err: unknown) {
@@ -358,7 +367,7 @@ function cmdCapabilityState(
   try {
     const commandsGsdDir = _resolveCommandsGsdDir();
     const manifest = loadSkillsManifest(commandsGsdDir);
-    const surfaceResult = resolveSurface(resolvedConfigDir, manifest);
+    const surfaceResult = resolveSurface(resolvedConfigDir, manifest, undefined, registry);
     // resolveSurface returns { name, skills: Set<string>, agents: Set<string> }
     // (always a concrete Set — full profile is materialized)
     surfacedSkills = surfaceResult.skills instanceof Set
@@ -380,9 +389,7 @@ function cmdCapabilityState(
     config = {};
   }
 
-  // ── Load registry and resolve state ─────────────────────────────────────────
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const registry = require('./capability-registry.cjs') as Record<string, unknown>;
+  // ── Resolve state ────────────────────────────────────────────────────────────
 
   const result = resolveCapabilityState({
     registry,

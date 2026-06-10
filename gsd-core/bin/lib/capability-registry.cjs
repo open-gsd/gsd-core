@@ -12,7 +12,7 @@ const capabilities = {
     "role": "feature",
     "title": "UI design contracts",
     "description": "UI-SPEC design contract + retrospective UI audit for frontend phases.",
-    "tier": "standard",
+    "tier": "full",
     "requires": [],
     "skills": [
       "ui-phase",
@@ -239,9 +239,8 @@ const capabilityClusters = {
 
 const profileMembership = {
   "ui": {
-    "tier": "standard",
+    "tier": "full",
     "profiles": [
-      "standard",
       "full"
     ]
   }

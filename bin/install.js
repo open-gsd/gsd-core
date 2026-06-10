@@ -324,6 +324,13 @@ const {
   stageAgentsForProfile,
   stageSkillsForRuntimeAsSkills,
 } = require(path.join(_gsdLibDir, 'install-profiles.cjs'));
+// ADR-857 phase 4c: load capability registry (optional; missing → falls back to undefined)
+let _capabilityRegistry;
+try {
+  _capabilityRegistry = require(path.join(_gsdLibDir, 'capability-registry.cjs'));
+} catch (_) {
+  _capabilityRegistry = undefined;
+}
 const {
   applyInstallerMigrationPlan,
   discoverInstallerMigrations,
@@ -10057,7 +10064,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   // @-references resolve correctly (#2376 Windows, #2831 macOS/Linux).
   // gsd update marker re-application (ADR-0010 Deviation 2):
   // Resolve which profile to use for this runtime's install:
-  //   1. --minimal / --core-only → back-compat path (stageSkillsForMode keeps strict core allowlist)
+  //   1. --minimal / --core-only → back-compat alias for the core profile
   //   2. Explicit --profile=<name> → use it (overrides any marker)
   //   3. Marker exists in targetDir → honor it (prevents silent expansion on update)
   //   4. Else → 'full' (back-compat for fresh non-interactive installs)
@@ -10066,8 +10073,16 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   // differ, the caller may use mostRestrictiveProfile() across the per-runtime
   // results — here we resolve each runtime independently.
   //
-  // Note: --minimal uses stageSkillsForMode (back-compat: strict allowlist, no closure).
-  // Named profiles (--profile=X or marker-driven) use resolveProfile() for transitive closure.
+  // ADR-857 phase 4c: ALL profiles (including core/minimal) use stageSkillsForProfile
+  // with the registry-aware _resolvedProfile so future tier:core capabilities are
+  // staged on core installs.  The 'minimal' back-compat distinction is now ONLY the
+  // empty manifest (core profile has no transitive deps); the registry IS consulted.
+  // MINIMAL is intentionally the same skill set as the 'core' profile
+  // (MINIMAL_ALLOWLIST_SET === Set(PROFILES.core)) — it is NOT a separately curated
+  // subset.  Any future tier:core capability therefore DOES belong in a minimal/core
+  // install.  Using stageSkillsForProfile(_resolvedProfile) honors the registry while
+  // keeping the effective skill set identical to the prior stageSkillsForMode path
+  // until a tier:core capability is registered.
   const _activeProfileName = hasMinimal
     ? 'core'  // --minimal is a back-compat alias for the core profile; marker records 'core'
     : resolveEffectiveProfile({
@@ -10078,19 +10093,18 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   const _effectiveInstallMode = _isCoreProfileAlias ? 'minimal' : 'full';
   // Load the manifest and compute resolved profile for named profiles.
   // For --minimal/core: use an empty manifest (core profile has no transitive
-  // deps) to produce a resolvedProfile with the core skill set. This allows
-  // installRuntimeArtifacts to use stageSkillsForProfile uniformly across all
-  // profile modes without a null sentinel.
+  // deps) to produce a resolvedProfile with the core skill set.  Registry IS
+  // consulted so tier:core capability skills are included when registered.
   const _commandsDir = path.join(src, 'commands', 'gsd');
   const _skillsManifest = _isCoreProfileAlias ? new Map() : loadSkillsManifest(_commandsDir);
   const _resolvedProfile = resolveProfile({
     modes: [_activeProfileName],
     manifest: _skillsManifest,
+    registry: _capabilityRegistry,
   });
-  // Unified staging function: for --minimal uses stageSkillsForMode (back-compat);
-  // for named profiles uses stageSkillsForProfile (new API with transitive closure).
+  // Unified staging function: all profiles use stageSkillsForProfile with the
+  // registry-aware _resolvedProfile (ADR-857 phase 4c cutover).
   function _stageSkills(commandsGsdDir) {
-    if (_isCoreProfileAlias) return stageSkillsForMode(commandsGsdDir, _effectiveInstallMode);
     return stageSkillsForProfile(commandsGsdDir, _resolvedProfile);
   }
   function _stageAgents(agentsDir) {

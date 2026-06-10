@@ -1707,13 +1707,14 @@ describe('ADR-857 phase 4a: profileMembership derivation', () => {
     );
   });
 
-  test('ui cap (tier standard) profileMembership is [standard, full]', () => {
+  test('ui cap (tier full after reconciliation) profileMembership is [full]', () => {
+    // ADR-857 phase 4c: ui tier changed from standard → full
     const capMap = new Map([['ui', UI_CAP]]);
     const profiles = deriveProfileMembership(capMap);
     assert.deepEqual(
       profiles.ui.profiles,
-      ['standard', 'full'],
-      'ui (tier standard) should have profiles [standard, full]',
+      ['full'],
+      'ui (tier full) should have profiles [full] after reconciliation',
     );
   });
 
@@ -1722,10 +1723,11 @@ describe('ADR-857 phase 4a: profileMembership derivation', () => {
     const { capMap } = loadAndValidate(new Set(), capDir);
     const registry = buildRegistry(capMap);
     assert.ok(registry.profileMembership, 'registry.profileMembership should exist');
+    // After ADR-857 phase 4c reconciliation: ui is tier:full → profiles: ['full'] only
     assert.deepEqual(
       registry.profileMembership.ui,
-      { tier: 'standard', profiles: ['standard', 'full'] },
-      'profileMembership.ui should be { tier: standard, profiles: [standard, full] }',
+      { tier: 'full', profiles: ['full'] },
+      'profileMembership.ui should be { tier: full, profiles: [full] } after reconciliation',
     );
   });
 
@@ -1735,62 +1737,62 @@ describe('ADR-857 phase 4a: profileMembership derivation', () => {
     const registry = buildRegistry(capMap);
     const content = serializeRegistry(registry, capMap);
     assert.ok(content.includes('const profileMembership'), 'Generated file must contain "const profileMembership"');
-    assert.ok(content.includes('"standard"'), 'Generated file must contain "standard" in profileMembership');
+    // After ADR-857 phase 4c reconciliation: ui is tier:full → profileMembership contains "full"
+    assert.ok(content.includes('"full"'), 'Generated file must contain "full" in profileMembership');
     assert.ok(content.includes('profileMembership,'), 'module.exports must include profileMembership');
   });
 
   test('committed capability-registry.cjs has profileMembership with correct ui value', () => {
     const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
     assert.ok(registry.profileMembership, 'capability-registry.cjs must export profileMembership');
+    // After ADR-857 phase 4c reconciliation: ui is tier:full → profiles: ['full'] only
     assert.deepEqual(
       registry.profileMembership.ui,
-      { tier: 'standard', profiles: ['standard', 'full'] },
-      'committed profileMembership.ui should be { tier: standard, profiles: [standard, full] }',
+      { tier: 'full', profiles: ['full'] },
+      'committed profileMembership.ui should be { tier: full, profiles: [full] } after reconciliation',
     );
   });
 });
 
 describe('ADR-857 phase 4a: pending-reconciliation warnings (SOFT gate)', () => {
-  test('ui (tier standard) generates pending-reconciliation warnings for standard profile', () => {
-    // ui skills (ui-phase, ui-review) are NOT in the hand-authored standard profile.
-    // The SOFT gate should emit one warning per skill for the standard profile.
+  test('ui (tier full) generates ZERO pending-reconciliation warnings (ADR-857 phase 4c reconciliation)', () => {
+    // After reconciliation: ui is tier:full. The full profile is '*' (every skill).
+    // The consistency gate must NOT fire for full-tier capabilities — their skills are
+    // always present in the full profile by definition.
     const capMap = new Map([['ui', UI_CAP]]);
     const clusters = deriveCapabilityClusters(capMap);
     const profiles = deriveProfileMembership(capMap);
     const warnings = runConsistencyGate(clusters, profiles, capMap);
-    assert.ok(warnings.length >= 2, 'Expected at least 2 pending-reconciliation warnings, got: ' + warnings.length);
-    const uiPhaseWarn = warnings.find((w) => w.includes('ui-phase') && w.includes('standard'));
-    const uiReviewWarn = warnings.find((w) => w.includes('ui-review') && w.includes('standard'));
+    const uiPhaseWarn = warnings.find((w) => w.includes('ui-phase'));
+    const uiReviewWarn = warnings.find((w) => w.includes('ui-review'));
     assert.ok(
-      uiPhaseWarn,
-      'Expected warning for ui-phase skill in standard profile, got: ' + JSON.stringify(warnings),
+      !uiPhaseWarn,
+      'No pending-reconciliation warning expected for ui-phase (tier:full), got: ' + JSON.stringify(warnings),
     );
     assert.ok(
-      uiReviewWarn,
-      'Expected warning for ui-review skill in standard profile, got: ' + JSON.stringify(warnings),
-    );
-    // Warning format check
-    assert.ok(
-      uiPhaseWarn.includes('pending-reconciliation'),
-      'Warning must include "pending-reconciliation", got: ' + uiPhaseWarn,
-    );
-    assert.ok(
-      uiPhaseWarn.includes('add at cutover'),
-      'Warning must include "add at cutover", got: ' + uiPhaseWarn,
+      !uiReviewWarn,
+      'No pending-reconciliation warning expected for ui-review (tier:full), got: ' + JSON.stringify(warnings),
     );
   });
 
-  test('ui pending-reconciliation: ui-phase in profileMembership.standard but NOT in resolved hand-authored standard profile', () => {
-    // Structural check: assert that ui-phase is in profileMembership.ui.profiles ('standard')
-    // yet NOT in the resolved hand-authored standard profile — which is WHY the warning fires.
+  test('ui reconciled: profileMembership.ui.profiles is ["full"] after tier:full reconciliation', () => {
+    // After reconciliation: ui is tier:full → profileMembership.ui.profiles = ['full'] only.
+    // ui-phase/ui-review are correctly absent from core/standard (they're full-only features).
+    // No pending-reconciliation warning fires because full='*' always satisfies the gate.
     const capMap = new Map([['ui', UI_CAP]]);
     const profiles = deriveProfileMembership(capMap);
-    assert.ok(
-      profiles.ui.profiles.includes('standard'),
-      'ui profileMembership should include "standard"',
+    assert.deepStrictEqual(
+      profiles.ui.profiles,
+      ['full'],
+      'After tier:full reconciliation, ui profileMembership should be ["full"] only',
+    );
+    assert.strictEqual(
+      profiles.ui.tier,
+      'full',
+      'ui tier should be "full" after reconciliation',
     );
 
-    // Confirm ui-phase is NOT in the hand-authored standard profile's effective skill set
+    // Confirm ui-phase is NOT in standard profile — that's expected and correct for full-tier skills.
     const { resolveProfile: rp } = require('../gsd-core/bin/lib/install-profiles.cjs');
     const resolved = rp({ modes: ['standard'], manifest: new Map() });
     assert.ok(
@@ -1799,11 +1801,11 @@ describe('ADR-857 phase 4a: pending-reconciliation warnings (SOFT gate)', () => 
     );
     assert.ok(
       !resolved.skills.has('ui-phase'),
-      'ui-phase should NOT be in hand-authored standard profile effective set (pending reconciliation)',
+      'ui-phase should NOT be in hand-authored standard profile (correctly full-only after reconciliation)',
     );
     assert.ok(
       !resolved.skills.has('ui-review'),
-      'ui-review should NOT be in hand-authored standard profile effective set (pending reconciliation)',
+      'ui-review should NOT be in hand-authored standard profile (correctly full-only after reconciliation)',
     );
   });
 
@@ -1820,7 +1822,8 @@ describe('ADR-857 phase 4a: pending-reconciliation warnings (SOFT gate)', () => 
     assert.ok(Array.isArray(warnings), 'runConsistencyGate must return an array');
   });
 
-  test('buildRegistry._reconciliationWarnings includes ui skill warnings', () => {
+  test('buildRegistry._reconciliationWarnings is empty for reconciled ui (tier:full)', () => {
+    // After reconciliation: ui is tier:full → no pending-reconciliation warnings.
     const capDir = makeTempCapDir({ ui: UI_CAP });
     const { capMap } = loadAndValidate(new Set(), capDir);
     const registry = buildRegistry(capMap);
@@ -1828,13 +1831,13 @@ describe('ADR-857 phase 4a: pending-reconciliation warnings (SOFT gate)', () => 
       Array.isArray(registry._reconciliationWarnings),
       'registry._reconciliationWarnings should be an array',
     );
-    assert.ok(
-      registry._reconciliationWarnings.some((w) => w.includes('ui-phase')),
-      'Expected warning for ui-phase in _reconciliationWarnings, got: ' + JSON.stringify(registry._reconciliationWarnings),
+    const uiWarnings = registry._reconciliationWarnings.filter(
+      (w) => w.includes('ui-phase') || w.includes('ui-review')
     );
-    assert.ok(
-      registry._reconciliationWarnings.some((w) => w.includes('ui-review')),
-      'Expected warning for ui-review in _reconciliationWarnings, got: ' + JSON.stringify(registry._reconciliationWarnings),
+    assert.deepStrictEqual(
+      uiWarnings,
+      [],
+      'No reconciliation warnings expected for reconciled ui capability, got: ' + JSON.stringify(uiWarnings),
     );
   });
 
