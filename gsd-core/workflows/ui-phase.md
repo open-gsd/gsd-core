@@ -54,6 +54,40 @@ UI phase is disabled in config. Enable via /gsd:settings.
 ```
 Exit workflow.
 
+Check Impeccable config and identity files:
+
+```bash
+IMPECCABLE_ENABLED=$(gsd_run query config-get workflow.impeccable 2>/dev/null || echo "false")
+PRODUCT_MD=$(ls .planning/PRODUCT.md 2>/dev/null || ls PRODUCT.md 2>/dev/null || echo "")
+DESIGN_MD=$(ls .planning/DESIGN.md 2>/dev/null || ls DESIGN.md 2>/dev/null || echo "")
+```
+
+**If `IMPECCABLE_ENABLED` is `true` AND both `PRODUCT_MD` and `DESIGN_MD` are empty:**
+
+Use AskUserQuestion:
+- header: "Impeccable Init"
+- question: "Impeccable integration is enabled but no PRODUCT.md or DESIGN.md found. These anchor design identity across all phases. Create them now?"
+- options:
+  - "Yes — run `$impeccable init` now (recommended)"
+  - "Skip — proceed without design identity files"
+
+If "Yes": display the following and wait for the user to confirm completion:
+```
+Run in your terminal:  $impeccable init
+
+This creates PRODUCT.md and DESIGN.md with your project's visual register,
+scene sentence, color strategy, and typography direction.
+
+Let me know when it's done and I'll continue.
+```
+After user confirms: re-check for PRODUCT.md and DESIGN.MD, update variables. Continue.
+
+**If `IMPECCABLE_ENABLED` is `true` AND at least one identity file exists:**
+```
+⚡ Impeccable identity detected
+   Design identity will be threaded into the UI contract.
+```
+
 **If `planning_exists` is false:** Error — run `/gsd:new-project` first.
 
 ## 2. Parse and Validate Phase
@@ -138,6 +172,8 @@ Answer: "What visual and interaction contracts does this phase need?"
 - {context_path} (USER DECISIONS from /gsd:discuss-phase)
 - {research_path} (Technical Research — stack decisions)
 - {SKETCH_FINDINGS_PATH} (Sketch Findings — validated design decisions, CSS patterns, visual direction from /gsd:sketch, if exists)
+- {PRODUCT_MD} (Impeccable project design identity — register, scene, color strategy — if exists and impeccable enabled)
+- {DESIGN_MD} (Impeccable committed design system — tokens, patterns, brand voice — if exists and impeccable enabled)
 </files_to_read>
 
 ${AGENT_SKILLS_UI}
@@ -151,6 +187,7 @@ Template: ~/.claude/gsd-core/templates/UI-SPEC.md
 commit_docs: {commit_docs}
 phase_dir: {phase_dir}
 padded_phase: {padded_phase}
+impeccable_enabled: {IMPECCABLE_ENABLED}
 </config>
 ```
 
@@ -314,6 +351,10 @@ gsd_run query state.record-session \
 
 <success_criteria>
 - [ ] Config checked (exit if ui_phase disabled)
+- [ ] Impeccable config read (workflow.impeccable)
+- [ ] PRODUCT.md / DESIGN.md detection run if impeccable enabled
+- [ ] Impeccable init offer presented if enabled and no identity files found
+- [ ] Identity files passed to researcher prompt if present
 - [ ] Phase validated against roadmap
 - [ ] Prerequisites checked (CONTEXT.md, RESEARCH.md — non-blocking warnings)
 - [ ] Existing UI-SPEC handled (update/view/skip)
