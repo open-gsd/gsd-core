@@ -94,6 +94,19 @@ describe('list-seeds command', () => {
     assert.ok(output.seeds.every(s => s.status === 'dormant'));
   });
 
+  test('status filter matching exactly one seed returns count 1 (boundary)', () => {
+    writeSeed(tmpDir, 'SEED-001-a.md', { id: 'SEED-001', status: 'dormant' }, 'SEED-001: a');
+    writeSeed(tmpDir, 'SEED-002-b.md', { id: 'SEED-002', status: 'triggered' }, 'SEED-002: b');
+    writeSeed(tmpDir, 'SEED-003-c.md', { id: 'SEED-003', status: 'dormant' }, 'SEED-003: c');
+
+    const result = runGsdTools('list-seeds triggered', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.count, 1);
+    assert.strictEqual(output.seeds[0].seed_id, 'SEED-002');
+    assert.deepStrictEqual(output.summary, { triggered: 1 });
+  });
+
   test('status filter miss returns zero count', () => {
     writeSeed(tmpDir, 'SEED-001-a.md', { id: 'SEED-001', status: 'dormant' }, 'SEED-001: a');
     const output = JSON.parse(runGsdTools('list-seeds implemented', tmpDir).output);
