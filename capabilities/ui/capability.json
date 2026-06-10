@@ -1,0 +1,21 @@
+{
+  "id": "ui", "role": "feature", "title": "UI design contracts",
+  "description": "UI-SPEC design contract + retrospective UI audit for frontend phases.",
+  "tier": "full", "requires": [],
+  "skills": ["ui-phase", "ui-review"],
+  "agents": ["gsd-ui-checker", "gsd-ui-auditor"],
+  "hooks": [],
+  "config": {
+    "workflow.ui_phase":       { "type": "boolean", "default": true, "description": "Enable the UI design-contract gate during planning." },
+    "workflow.ui_review":      { "type": "boolean", "default": true, "description": "Enable the retrospective UI audit." },
+    "workflow.ui_safety_gate": { "type": "boolean", "default": true, "description": "Block execution on unmet UI-SPEC contracts." }
+  },
+  "steps": [
+    { "point": "plan:pre",    "ref": { "skill": "ui-phase" },  "produces": ["UI-SPEC.md"],   "consumes": ["CONTEXT.md"], "when": "workflow.ui_phase",  "onError": "skip" },
+    { "point": "verify:post", "ref": { "skill": "ui-review" }, "produces": ["UI-REVIEW.md"], "consumes": ["UI-SPEC.md"], "when": "workflow.ui_review", "onError": "skip" }
+  ],
+  "contributions": [],
+  "gates": [
+    { "point": "execute:wave:post", "check": { "query": "ui.safety-gate" }, "when": "workflow.ui_safety_gate", "blocking": true, "onError": "halt" }
+  ]
+}

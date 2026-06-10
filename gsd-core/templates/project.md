@@ -17,6 +17,15 @@ Use the user's language and framing. Update whenever reality drifts from this de
 [The ONE thing that matters most. If everything else fails, this must work.
 One sentence that drives prioritization when tradeoffs arise.]
 
+## Business Context
+
+<!-- OPTIONAL — only for monetized or customer-facing projects. Delete this section otherwise. -->
+
+- **Customer**: [Who pays / who uses — one line]
+- **Revenue model**: [How it makes money — one line]
+- **Success metric**: [The number that matters — one line]
+- **Strategy notes**: [Link to external strategy doc, if any]
+
 ## Requirements
 
 ### Validated
@@ -83,6 +92,13 @@ Common types: Tech stack, Timeline, Budget, Dependencies, Compatibility, Perform
 - Drives prioritization when tradeoffs arise
 - Rarely changes; if it does, it's a significant pivot
 
+**Business Context:**
+- Optional — only for monetized or customer-facing projects
+- Delete the entire section for internal tools, experiments, or meta workspaces
+- 4 fields max, one line each — a constraint reference, not a business plan
+- Use **Strategy notes** to link out to a dedicated strategy doc rather than duplicating it here
+- Informs requirement prioritization: features serving the customer/revenue model come first
+
 **Requirements — Validated:**
 - Requirements that shipped and proved valuable
 - Format: `- ✓ [Requirement] — [version/phase]`
@@ -140,8 +156,9 @@ and implemented by workflows/transition.md and workflows/complete-milestone.md.
 **After each milestone:**
 1. Full review of all sections
 2. Core Value check — still the right priority?
-3. Audit Out of Scope — reasons still valid?
-4. Update Context with current state (users, feedback, metrics)
+3. Business Context check (if present) — customer, revenue model, success metric still accurate?
+4. Audit Out of Scope — reasons still valid?
+5. Update Context with current state (users, feedback, metrics)
 
 </evolution>
 

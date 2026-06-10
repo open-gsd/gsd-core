@@ -260,6 +260,32 @@ test('boom', () => { throw new Error('intentional'); });
     });
   });
 
+  describe('env hermeticity', () => {
+    // Regression guard for the two `delete process.env.GSD_PROJECT/GSD_WORKSTREAM`
+    // lines added in scripts/run-tests.cjs main() right after ensureBuiltArtifacts().
+    // If those deletions are removed, the fixture's assertions fail inside the child
+    // node:test process → non-zero harness exit → this test fails → CI catches it.
+    test('harness strips GSD_PROJECT and GSD_WORKSTREAM before running child tests', () => {
+      // Write a fixture that asserts both vars are absent in the child process env.
+      const FIXTURE = `'use strict';
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+test('ambient GSD workstream vars are stripped by the runner', () => {
+  assert.strictEqual(process.env.GSD_PROJECT, undefined);
+  assert.strictEqual(process.env.GSD_WORKSTREAM, undefined);
+});
+`;
+      fs.writeFileSync(path.join(tmpDir, 'env-hermeticity.test.cjs'), FIXTURE, 'utf8');
+      // Pass both vars in the ambient env given to the harness process.
+      // The harness must delete them before spawning the child node:test process.
+      const r = runHarness(tmpDir, [], {
+        GSD_PROJECT: 'ambient-proj',
+        GSD_WORKSTREAM: 'ambient-ws',
+      });
+      assert.strictEqual(r.status, 0, r.stderr);
+    });
+  });
+
   describe('Windows argv-overflow chunking (issue #3597)', () => {
     // Windows CreateProcess caps lpCommandLine at 32,767 chars. With ~550
     // tests the unchunked spawn fails instantly on Windows with no test

@@ -145,6 +145,7 @@ export function projectManagedHookCommand({ absoluteRunner, scriptPath, runtime 
 const MANAGED_HOOK_BASENAMES_BY_SURFACE: Record<string, Set<string>> = {
   'settings-json': new Set([
     'gsd-check-update.js',
+    'gsd-config-reload.js',
     'gsd-statusline.js',
     'gsd-context-monitor.js',
     'gsd-prompt-guard.js',
@@ -161,6 +162,7 @@ const MANAGED_HOOK_BASENAMES_BY_SURFACE: Record<string, Set<string>> = {
 const MANAGED_HOOK_COMMAND_BASENAMES_BY_SURFACE: Record<string, Set<string>> = {
   'settings-json': new Set([
     'gsd-check-update.js',
+    'gsd-config-reload.js',
     'gsd-statusline.js',
     'gsd-context-monitor.js',
     'gsd-prompt-guard.js',
@@ -181,6 +183,10 @@ const MANAGED_HOOK_COMMAND_BASENAMES_BY_SURFACE: Record<string, Set<string>> = {
     // reconcileCodexHooksJsonSessionStart can replace stale node-runner commands
     // with the .cmd shim on reinstall (and vice-versa on cross-platform moves).
     'gsd-check-update.cmd',
+    // #772: context-monitor is now registered for Codex SubagentStart/Stop/PostToolUse.
+    'gsd-context-monitor.js',
+    // #772: Windows .cmd shim for gsd-context-monitor — same #3426 pattern.
+    'gsd-context-monitor.cmd',
   ]),
 };
 
@@ -213,12 +219,25 @@ function managedHookCommandSurfaceSet(surface: string = 'settings-json', include
   return new Set([...base, ...aliases]);
 }
 
-export function isManagedHookCommand(commandText: unknown, opts: { surface?: string; includeLegacyAliases?: boolean; configDir?: string } = {}): boolean {
+export function isManagedHookCommand(commandText: unknown, opts: { surface?: string; includeLegacyAliases?: boolean; configDir?: string; args?: unknown[] } = {}): boolean {
   if (typeof commandText !== 'string') return false;
   const surface = opts.surface || 'settings-json';
   const includeLegacyAliases = opts.includeLegacyAliases === true;
   const managedBasenames = managedHookCommandSurfaceSet(surface, includeLegacyAliases);
   if (!managedBasenames || managedBasenames.size === 0) return false;
+
+  // args-form check: the managed hook filename may appear in args[] rather than
+  // in command when a windowless launcher wraps the Node invocation. (#976)
+  // Only treat as managed when an arg basename matches the managed hook set —
+  // prevents false-positives for non-GSD entries that happen to share a path segment.
+  if (Array.isArray(opts.args) && opts.args.length > 0) {
+    for (const arg of opts.args) {
+      if (typeof arg !== 'string') continue;
+      const argBasename = arg.replace(/\\/g, '/').split('/').pop() || '';
+      if (isManagedHookBasename(argBasename, { surface })) return true;
+    }
+  }
+
   const normalizedCommand = commandText.replace(/\\/g, '/');
 
   if (typeof opts.configDir === 'string' && opts.configDir.length > 0) {

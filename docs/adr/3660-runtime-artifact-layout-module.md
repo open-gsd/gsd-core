@@ -17,7 +17,7 @@ The root problem is the absence of a typed seam for "where does runtime R put ar
 - Each `ArtifactKind` is `{ kind: 'commands'|'agents'|'skills', destSubpath, prefix, stage }`. `stage` is a function `(resolvedProfile) → stagedDir` that closes over the per-runtime converter where one is needed (e.g. `convertClaudeCommandToClaudeSkill` for the `skills` kind on Claude global).
 - The `kinds` array is empty for runtimes with no GSD surface (a hypothetical future runtime with no integration). The `skills` kind is **absent** for runtimes that don't materialize skill directories (Cline; Gemini today). The `commands` kind is **absent** for runtimes that consume only the skills/agents layout (Claude global, Codex, etc.).
 - Per-runtime quirks live in the layout's record fields, not in caller branches:
-  - **Hermes**: `{ kind: 'skills', destSubpath: 'skills/gsd', prefix: '' }` — preserves the nested namespace from #2841.
+  - **Hermes**: `{ kind: 'skills', destSubpath: 'skills/gsd', prefix: 'gsd-' }` — preserves the nested namespace from #2841. **Note (#947):** The original decision used `prefix: ''` (bare stem) on the incorrect premise that the `skills/gsd/` category directory namespaced the leaf identifier in Hermes's loader. Research showed category dirs are purely organisational; dispatch is by the skill `name:` field. The `gsd-` prefix was restored by #947 to match every other runtime.
   - **Cline**: `kinds: []` — Cline resolves to zero kinds in Phase 1 (no `commands` kind).
   - **Gemini**: `kinds: [ { kind: 'commands', destSubpath: 'commands/gsd', prefix: 'gsd-' } ]` — no agents, no skills.
 - `applySurface` migrates from `(runtimeConfigDir, commandsDir, agentsDir, manifest, clusterMap)` to `(runtimeConfigDir, layout, manifest, clusterMap)`. Body collapses to `for (const kind of layout.kinds) _syncGsdDir(kind.stage(resolved), path.join(layout.configDir, kind.destSubpath), kind.kind)`.
@@ -73,7 +73,7 @@ Phase 1 should **not**:
  * @typedef {Object} ArtifactKind
  * @property {'commands'|'agents'|'skills'} kind
  * @property {string} destSubpath              joined to layout.configDir
- * @property {string} prefix                   'gsd-' or '' (Hermes nested case)
+ * @property {string} prefix                   'gsd-' for all runtimes (incl. Hermes after #947)
  * @property {(resolved) => string} stage      returns staged dir path
  */
 

@@ -64,8 +64,10 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const os = require('node:os');
 const path = require('path');
 const { assertTightCeiling } = require('../scripts/lib/allowlist-ratchet.cjs');
+const { cleanup } = require('./helpers.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
 
@@ -79,35 +81,39 @@ const GRACE = 3000;
 // current high-water mark within GRACE (#597 tighten-only ratchet).
 // XL high-water mark is execute-phase.md — note that under LINES it was
 // plan-phase; bytes genuinely re-rank the tier, which is the point of #717.
-// actualMax=87005 (execute-phase); slack=2995 ≤ GRACE.
-const XL_BUDGET = 90000;
-// LARGE high-water mark is docs-update.md. actualMax=51184; slack=2816 ≤ GRACE.
-const LARGE_BUDGET = 54000;
-// DEFAULT high-water mark is settings-advanced.md. actualMax=35183; slack=2817 ≤ GRACE.
-const DEFAULT_BUDGET = 38000;
+// actualMax=92525 (execute-phase, #913 inline-fallback scope clarification);
+// slack=475 ≤ GRACE. plan-phase.md=90748 (#922 attempt-based Agent gate), new-project.md=58110.
+const XL_BUDGET = 93000;
+// LARGE high-water mark is docs-update.md. actualMax=54410 (#891 launcher shim expansion);
+// slack=1590 ≤ GRACE. quick.md=45710, autonomous.md=38030.
+const LARGE_BUDGET = 56000;
+// DEFAULT high-water mark is settings-advanced.md. actualMax=38409 (#891 launcher shim expansion);
+// slack=1591 ≤ GRACE.
+const DEFAULT_BUDGET = 40000;
 
 // Top-level orchestrators that own end-to-end multi-phase rubrics.
 // Grandfathered at current sizes — see PR #2551 for the progressive-disclosure
 // pattern that future shrinks should follow. Byte counts noted for reference.
 const XL_WORKFLOWS = new Set([
-  'execute-phase',  // 87005 bytes (tier high-water mark)
-  'plan-phase',     // 85068 bytes
+  'execute-phase',  // 92525 bytes (tier high-water mark; grew in #913 inline-fallback scope clarification)
+  'plan-phase',     // 90748 bytes (grew in #922 attempt-based Agent gate)
   'new-project',    // 55850 bytes
 ]);
 
 // Multi-step planners and bigger feature workflows. Grandfathered.
+// Byte counts updated in #891 (launcher shim expanded with 17 runtime home arms).
 const LARGE_WORKFLOWS = new Set([
-  'docs-update',           // 51184 bytes (tier high-water mark)
-  'autonomous',            // 32655
-  'complete-milestone',    // 26284
-  'verify-work',           // 26896
-  'transition',            // 18201
-  'discuss-phase-assumptions', // 23398
-  'progress',              // 23061
-  'new-milestone',         // 26582
-  'update',                // 19334
-  'quick',                 // 42484
-  'code-review',           // 25500
+  'docs-update',           // 54410 bytes (tier high-water mark)
+  'autonomous',            // 38030
+  'complete-milestone',    // 29510
+  'verify-work',           // 30122
+  'transition',            // 21427
+  'discuss-phase-assumptions', // 26624
+  'progress',              // 26287
+  'new-milestone',         // 29808
+  'update',                // 20766
+  'quick',                 // 45710
+  'code-review',           // 28726
 ]);
 
 const ALL_WORKFLOWS = fs.readdirSync(WORKFLOWS_DIR)
@@ -121,10 +127,16 @@ function budgetFor(workflow) {
 }
 
 function byteCount(filePath) {
-  // Match `wc -c`: count every byte on disk, including any trailing newline.
-  // Deliberately NOT the trailing-newline-stripping logic the old lineCount()
-  // used — the byte ceilings are calibrated against raw `wc -c` output.
-  return fs.statSync(filePath).size;
+  // Count bytes as on an LF checkout, so the budget is platform-independent.
+  // The tier ceilings are calibrated against `wc -c` on a Unix (LF) checkout,
+  // but these .md files have no `eol=lf` in .gitattributes, so Windows checks
+  // them out as CRLF. Counting raw on-disk bytes there adds one byte per line,
+  // which fails CI on the high-water-mark file (execute-phase.md) on Windows
+  // ONLY — a false positive that diverges from the LF calibration basis (#683).
+  // Stripping CR yields the same LF byte count on every platform. Still a raw
+  // byte count (not the old trailing-newline-stripping lineCount()).
+  const content = fs.readFileSync(filePath, 'utf-8');
+  return Buffer.byteLength(content.replace(/\r\n/g, '\n'), 'utf-8');
 }
 
 describe('SIZE: workflow byte-size budget', () => {
@@ -183,7 +195,9 @@ describe('SIZE: discuss-phase progressive disclosure (issue #2551)', () => {
   // headroom). This is the headline metric of the refactor — every other
   // workflow above its tier is grandfathered and may shrink later via the
   // same pattern.
-  const DISCUSS_PHASE_TARGET = 30000;
+  // Target raised from 30000 to 32000 in #891 (launcher shim expansion added 17 runtime home arms,
+  // adding ~960 bytes to the preamble; the thin-dispatcher intent is preserved — actual=30935).
+  const DISCUSS_PHASE_TARGET = 32000;
   test(`discuss-phase.md is under ${DISCUSS_PHASE_TARGET} bytes (issue #2551 target)`, () => {
     const filePath = path.join(WORKFLOWS_DIR, 'discuss-phase.md');
     const bytes = byteCount(filePath);
@@ -547,5 +561,30 @@ describe('workflow progressive disclosure — MVP bodies lazy-loaded (#720)', ()
       'gsd-executor.md must still reference execute-mvp-tdd.md (as a lazy path or Read instruction). ' +
       'Do not delete the reference — only remove the leading @ sigil. See #720.'
     );
+  });
+});
+
+describe('SIZE: byteCount is line-ending independent (#683 regression)', () => {
+  // The budget ceilings are calibrated against an LF (Unix) checkout; Windows
+  // checks these .md files out as CRLF, which previously inflated the count by
+  // one byte per line and failed CI only on Windows for the high-water file.
+  test('CRLF and LF content of the same logical file count identically', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-size-eol-'));
+    try {
+      const body = 'line one\nline two\nthree — with a multibyte dash\n';
+      const lfPath = path.join(dir, 'lf.md');
+      const crlfPath = path.join(dir, 'crlf.md');
+      fs.writeFileSync(lfPath, body);
+      fs.writeFileSync(crlfPath, body.replace(/\n/g, '\r\n'));
+      assert.strictEqual(
+        byteCount(crlfPath),
+        byteCount(lfPath),
+        'byteCount must normalize CRLF so the byte budget is platform-independent'
+      );
+      // And it must remain a real LF byte count (not stripped/whitespace-trimmed).
+      assert.strictEqual(byteCount(lfPath), Buffer.byteLength(body, 'utf-8'));
+    } finally {
+      cleanup(dir);
+    }
   });
 });

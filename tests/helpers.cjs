@@ -36,46 +36,77 @@ const TEST_ENV_BASE = {
  *   config values that could be overridden by a developer's defaults.json.
  */
 function runGsdTools(args, cwd = process.cwd(), env = {}) {
-  try {
-    let result;
-    const childEnv = { ...process.env, ...TEST_ENV_BASE, ...env };
-    if (Array.isArray(args)) {
-      result = execFileSync(process.execPath, [TOOLS_PATH, ...args], {
-        cwd,
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-        env: childEnv,
-      });
-    } else {
-      // Split shell-style string into argv, stripping surrounding quotes, so we
-      // can invoke execFileSync with process.execPath instead of relying on
-      // `node` being on PATH (it isn't in Claude Code shell sessions).
-      // Apply shell-style quote removal: strip surrounding quotes from quoted
-      // sequences anywhere in a token (handles both "foo bar" and --"foo bar").
-      const argv = (args.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [])
+  // Resolve argv once so both the first attempt and the retry use the same vector.
+  const childEnv = { ...process.env, ...TEST_ENV_BASE, ...env };
+  const argv = Array.isArray(args)
+    ? args
+    : (args.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [])
         .map(t => t.replace(/"([^"]*)"/g, '$1').replace(/'([^']*)'/g, '$1'));
-      result = execFileSync(process.execPath, [TOOLS_PATH, ...argv], {
-        cwd,
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-        env: childEnv,
-      });
-    }
+
+  function attempt() {
+    // Split shell-style string into argv, stripping surrounding quotes, so we
+    // can invoke execFileSync with process.execPath instead of relying on
+    // `node` being on PATH (it isn't in Claude Code shell sessions).
+    // Apply shell-style quote removal: strip surrounding quotes from quoted
+    // sequences anywhere in a token (handles both "foo bar" and --"foo bar").
+    return execFileSync(process.execPath, [TOOLS_PATH, ...argv], {
+      cwd,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: childEnv,
+      timeout: 60000,
+    });
+  }
+
+  // isKilled: true when the subprocess was terminated by a signal or timed out.
+  // This indicates host resource starvation (OOM, scheduler contention), NOT a
+  // product assertion failure.
+  function isKilled(err) {
+    return err.killed || err.signal != null || err.code === 'ETIMEDOUT';
+  }
+
+  function throwResourceStarvation(err) {
+    throw new Error(
+      `[runGsdTools: resource-starvation / subprocess-kill after retry] ` +
+      `gsd-tools was killed before completion ` +
+      `(signal=${err.signal}, code=${err.code}, killed=${err.killed}). ` +
+      `This indicates host OOM or scheduler contention, not a product bug. ` +
+      `stdout=${err.stdout?.toString().trim() || ''} ` +
+      `stderr=${err.stderr?.toString().trim() || ''}`
+    );
+  }
+
+  try {
+    const result = attempt();
     return { success: true, output: result.trim(), exitCode: 0 };
-  } catch (err) {
-    const stderrRaw = err.stderr?.toString().trim() || '';
+  } catch (firstErr) {
+    // Kill-signal discrimination (#969): transient OOM/contention usually
+    // succeeds on retry; retry ONCE before surfacing the labeled error.
+    if (isKilled(firstErr)) {
+      try {
+        const result = attempt();
+        return { success: true, output: result.trim(), exitCode: 0 };
+      } catch (retryErr) {
+        // Still killed after retry — persistent resource starvation, throw.
+        throwResourceStarvation(retryErr);
+      }
+    }
+    // Clean non-zero exit (real command error, no kill signal): return normally.
+    // No retry, no throw — preserves existing test behavior that asserts on
+    // error shape.
+    const stderrRaw = firstErr.stderr?.toString().trim() || '';
     // Prefer actual stderr content; fall back to err.message (which contains
     // the command invocation). If stderr is empty, append a note so CI logs
     // show "stderr: (empty)" rather than silently losing the fact that the
     // child process produced no error output — empty stderr with a non-zero
     // exit code is a signal of OS-level crash (OOM kill, worker thread fatal
     // error) rather than a gsd-tools application error.
-    const error = stderrRaw || `${err.message} [stderr: (empty) exit:${err.status ?? 1}]`;
+    const error = stderrRaw || `${firstErr.message} [stderr: (empty) exit:${firstErr.status ?? 1}]`;
     return {
       success: false,
-      output: err.stdout?.toString().trim() || '',
+      output: firstErr.stdout?.toString().trim() || '',
       error,
-      exitCode: err.status ?? 1,
+      exitCode: firstErr.status ?? 1,
     };
   }
 }

@@ -100,6 +100,15 @@ export function buildRoadmapPhaseVariants(roadmapContent: string): RoadmapPhaseV
     roadmapPhases.add(m[1]);
     for (const variant of phaseVariants(m[1])) roadmapPhaseVariants.add(variant);
   }
+  // Also matches checklist-style entries (checked or unchecked):
+  //   - [x] **Phase 01: name**   - [X] **Phase 2-01: name**   - [ ] **Phase 3: name**
+  // This is a supported ROADMAP format (parallel to buildNotStartedPhaseVariants).
+  const checklistPattern = /-\s*\[[ xX]\]\s*\*{0,2}Phase\s+([\w][\w.-]*)\s*:/gi;
+  let cm: RegExpExecArray | null;
+  while ((cm = checklistPattern.exec(roadmapContent)) !== null) {
+    roadmapPhases.add(cm[1]);
+    for (const variant of phaseVariants(cm[1])) roadmapPhaseVariants.add(variant);
+  }
   return { roadmapPhases, roadmapPhaseVariants };
 }
 

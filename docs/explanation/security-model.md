@@ -158,7 +158,7 @@ injected instructions in untrusted content — catching cases where an attacker
 has embedded instructions in a file that GSD is about to incorporate into an
 agent's context.
 
-**CI scanner.** `prompt-injection-scan.test.cjs` scans all agent, workflow,
+**CI scanner.** `prompt-injection-scan.security.test.cjs` scans all agent, workflow,
 and command files for embedded injection vectors as part of the test suite.
 This catches injection attempts in the GSD source itself — for example, a
 supply-chain attack that modified a workflow file to add a role-override

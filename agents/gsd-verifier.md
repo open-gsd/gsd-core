@@ -136,9 +136,9 @@ must_haves:
     - path: "src/components/Chat.tsx"
       provides: "Message list rendering"
   key_links:
-    - from: "Chat.tsx"
-      to: "api/chat"
-      via: "fetch in useEffect"
+    - from: "src/components/Chat.tsx"
+      to: "src/app/api/chat/route.ts"
+      via: "fetch in useEffect — calls /api/chat endpoint"
 ```
 
 **Step 2c: Merge must-haves**
@@ -466,8 +466,11 @@ ls $BUILD_OUTPUT_DIR/*.{js,css} 2>/dev/null | wc -l
 # Module exports expected functions
 node -e "const m = require('$MODULE_PATH'); console.log(typeof m.$FUNCTION_NAME)" 2>/dev/null | grep -q "function"
 
-# Test suite passes (if tests exist for this phase's code)
-npm test -- --grep "$PHASE_TEST_PATTERN" 2>&1 | grep -q "passing"
+# A test EXISTS (existence proof — enumerate, do NOT run the suite)
+cargo test -- --list 2>/dev/null | grep -q "$PHASE_TEST_PATTERN"   # pytest --collect-only -q · npx vitest list · go test -list '.*'
+
+# A specific test PASSES (run ONE named test, never the whole suite)
+cargo test "$TEST_NAME" -- --exact   # pytest -k "$TEST_NAME" · npx vitest run -t "$TEST_NAME"
 ```
 
 2. **Run each check** and record pass/fail:
@@ -487,6 +490,7 @@ npm test -- --grep "$PHASE_TEST_PATTERN" 2>&1 | grep -q "passing"
 - Each check must complete in under 10 seconds
 - Do not start servers or services — only test what's already runnable
 - Do not modify state (no writes, no mutations, no side effects)
+- **Run the full workspace test command at most once per verification.** Never filter a full run per must-have (`<full-suite> 2>&1 | grep X` repeated per truth) — it re-runs everything and yields no new evidence. Prove a test exists by enumeration (`--list` / `--collect-only`); prove one passes via a single named test. If a full run is genuinely required, run it once and `grep` the saved output.
 - If the project has no runnable entry points yet, skip with: "Step 7b: SKIPPED (no runnable entry points)"
 
 ## Step 7c: Probe Execution
@@ -571,6 +575,8 @@ Classify status using this decision tree IN ORDER (most restrictive first):
    → **status: passed**
 
 **passed is ONLY valid when the human verification section is empty.** If you identified items requiring human testing in Step 8, status MUST be human_needed.
+
+> **Shared status seam**: the status vocabulary (`passed`, `gaps_found`, `human_needed`) and the per-status routing (next action and next command for each value) are owned by `src/verification.cts` via `gsd_run query verification.status`. This agent is the single emitter of the frontmatter status field; consumers (ship.md, execute-phase.md) read routing from that query instead of re-deriving it.
 
 **Score:** `verified_truths / total_truths`
 

@@ -23,7 +23,7 @@ const RUNTIME_SURFACES: Record<string, string[]> = {
   kilo: ['gsd-core', 'command', 'skills', 'agents'],
   copilot: ['gsd-core', 'skills', 'agents'],
   antigravity: ['gsd-core', 'skills', 'agents'],
-  cursor: ['gsd-core', 'skills', 'agents'],
+  cursor: ['gsd-core', 'skills', 'agents', 'hooks', 'hooks.json'],
   windsurf: ['gsd-core', 'skills', 'agents', 'rules'],
   augment: ['gsd-core', 'skills', 'agents'],
   trae: ['gsd-core', 'skills', 'agents', 'rules'],

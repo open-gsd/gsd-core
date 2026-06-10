@@ -28,6 +28,7 @@ const FALLBACK_ALIASES: Readonly<Record<string, string[]>> = {
   trae: ['trae', 'trae-cli'],
   qwen: ['qwen', 'qwen-code', 'qwen-cli'],
   hermes: ['hermes', 'hermes-agent', 'hermes-cli'],
+  kimi: ['kimi'],
   codebuddy: ['codebuddy', 'codebuddy-cli'],
   cline: ['cline', 'cline-cli'],
 };

@@ -11,9 +11,14 @@
  * Runtime-specific notes:
  *   hermes  — GSD skills nest under skills/gsd/<skillName>/ (not the flat
  *             skills/<skillName>/ layout used by all other runtimes).
- *   cline   — Rules-based; commands are embedded in .clinerules. Cline does
- *             not use a skills/ directory. getGlobalSkillDir() returns null
- *             for cline so the caller can emit an appropriate warning.
+ *   cline   — Skills-capable since v3.48.0 (#782). SKILL.md files live at
+ *             ~/.cline/skills/<skillName>/SKILL.md (same flat layout as cursor/codex).
+ *             .clinerules is also emitted (rules-based compatibility layer).
+ *   kimi    — Agent Skills are discovered from Kimi's generic user roots:
+ *             ~/.config/agents/skills (recommended) then ~/.agents/skills,
+ *             with Kimi selecting the first existing generic skills directory.
+ *             ~/.kimi-code/skills is brand-specific and can be selected as a
+ *             GSD write target with --config-dir or KIMI_CONFIG_DIR.
  */
 
 import os from 'node:os';
@@ -30,6 +35,12 @@ function expandTilde(p: string): string {
 }
 
 export interface ResolveAntigravityOpts {
+  env?: Record<string, string | undefined>;
+  home?: string;
+  existsSync?: (p: string) => boolean;
+}
+
+export interface ResolveKimiOpts {
   env?: Record<string, string | undefined>;
   home?: string;
   existsSync?: (p: string) => boolean;
@@ -59,10 +70,49 @@ export function resolveAntigravityGlobalDir(opts: ResolveAntigravityOpts = {}): 
 }
 
 /**
+ * Resolve Kimi's generic user root using Kimi CLI's documented first-existing
+ * generic skills directory policy:
+ *
+ *   1. ~/.config/agents/skills  (recommended)
+ *   2. ~/.agents/skills
+ *
+ * If neither generic skills directory exists yet, install to the recommended
+ * ~/.config/agents root so the generated skills become the first generic
+ * candidate Kimi discovers.
+ *
+ * KIMI_CONFIG_DIR is a GSD installer write-location override. It is not Kimi's
+ * upstream data-root variable, and arbitrary roots are discoverable by Kimi only
+ * when the user also configures Kimi --skills-dir or extra_skill_dirs.
+ */
+export function resolveKimiGlobalDir(opts: ResolveKimiOpts = {}): string {
+  const env: Record<string, string | undefined> = opts.env ?? process.env;
+  const home = opts.home ?? os.homedir();
+  const existsSyncFn = opts.existsSync ?? fs.existsSync;
+
+  if (env['KIMI_CONFIG_DIR']) return expandTilde(env['KIMI_CONFIG_DIR']);
+
+  const recommendedRoot = path.join(home, '.config', 'agents');
+  const fallbackRoot = path.join(home, '.agents');
+  const candidates = [recommendedRoot, fallbackRoot];
+  for (const candidate of candidates) {
+    if (existsSyncFn(path.join(candidate, 'skills'))) return candidate;
+  }
+
+  return recommendedRoot;
+}
+
+/**
  * Return the global config base directory for the given runtime.
  * Respects the same env-var overrides as bin/install.js getGlobalDir().
+ *
+ * @param runtime   - The runtime identifier (e.g. 'claude', 'opencode').
+ * @param explicitDir - If provided and non-empty, returned immediately after
+ *   tilde-expansion, overriding all env-var and default logic. This matches
+ *   the behaviour of bin/install.js getGlobalDir(runtime, explicitDir).
  */
-export function getGlobalConfigDir(runtime: string): string {
+export function getGlobalConfigDir(runtime: string, explicitDir?: string | null): string {
+  if (explicitDir) return expandTilde(explicitDir);
+
   const home = os.homedir();
   const env = process.env as Record<string, string | undefined>;
 
@@ -89,7 +139,9 @@ export function getGlobalConfigDir(runtime: string): string {
 
     // ── Copilot (VS Code) ────────────────────────────────────────────────────
     case 'copilot':
-      return env['COPILOT_CONFIG_DIR'] ? expandTilde(env['COPILOT_CONFIG_DIR']) : path.join(home, '.copilot');
+      if (env['COPILOT_CONFIG_DIR']) return expandTilde(env['COPILOT_CONFIG_DIR']);
+      if (env['COPILOT_HOME']) return expandTilde(env['COPILOT_HOME']);
+      return path.join(home, '.copilot');
 
     // ── Antigravity ──────────────────────────────────────────────────────────
     case 'antigravity':
@@ -125,9 +177,15 @@ export function getGlobalConfigDir(runtime: string): string {
     case 'cline':
       return env['CLINE_CONFIG_DIR'] ? expandTilde(env['CLINE_CONFIG_DIR']) : path.join(home, '.cline');
 
+    // ── Kimi CLI (generic agents user root) ────────────────────────────────
+    case 'kimi': {
+      return resolveKimiGlobalDir({ env, home });
+    }
+
     // ── OpenCode (XDG) ───────────────────────────────────────────────────────
     case 'opencode': {
       if (env['OPENCODE_CONFIG_DIR']) return expandTilde(env['OPENCODE_CONFIG_DIR']);
+      if (env['OPENCODE_CONFIG']) return path.dirname(expandTilde(env['OPENCODE_CONFIG']));
       if (env['XDG_CONFIG_HOME']) return path.join(expandTilde(env['XDG_CONFIG_HOME']), 'opencode');
       return path.join(home, '.config', 'opencode');
     }
@@ -135,6 +193,7 @@ export function getGlobalConfigDir(runtime: string): string {
     // ── Kilo (XDG) ───────────────────────────────────────────────────────────
     case 'kilo': {
       if (env['KILO_CONFIG_DIR']) return expandTilde(env['KILO_CONFIG_DIR']);
+      if (env['KILO_CONFIG']) return path.dirname(expandTilde(env['KILO_CONFIG']));
       if (env['XDG_CONFIG_HOME']) return path.join(expandTilde(env['XDG_CONFIG_HOME']), 'kilo');
       return path.join(home, '.config', 'kilo');
     }
@@ -149,18 +208,25 @@ export function getGlobalConfigDir(runtime: string): string {
  * Return the global skills base directory for the given runtime.
  * Most runtimes: <configDir>/skills
  * Hermes: <configDir>/skills/gsd  (nested category layout — #2841)
- * Cline:  null (rules-based, no skills directory)
+ * Cline ≥ v3.48.0: <configDir>/skills  (SKILL.md-based global skills — #782)
  */
 export function getGlobalSkillsBase(runtime: string): string | null {
-  if (runtime === 'cline') return null;
+  if (runtime === 'hermes') {
+    const configDir = getGlobalConfigDir(runtime);
+    return path.join(configDir, 'skills', 'gsd');
+  }
+  // Kilo Code discovers global skills from ~/.kilo/skills/ (HOME-relative),
+  // independent of the XDG-based config dir (~/.config/kilo) used for commands.
+  // See: https://kilo.ai/docs/customize/skills
+  // "Global skills are located in the `.kilo` directory within your Home
+  //  directory: ~/.kilo/skills/"
+  if (runtime === 'kilo') return path.join(os.homedir(), '.kilo', 'skills');
   const configDir = getGlobalConfigDir(runtime);
-  if (runtime === 'hermes') return path.join(configDir, 'skills', 'gsd');
   return path.join(configDir, 'skills');
 }
 
 /**
  * Return the full path to a specific skill's directory for the given runtime.
- * Returns null for runtimes that don't use a skills directory (cline).
  */
 export function getGlobalSkillDir(runtime: string, skillName: string): string | null {
   const base = getGlobalSkillsBase(runtime);

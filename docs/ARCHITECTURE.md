@@ -21,7 +21,7 @@
 
 ## System Overview
 
-GSD Core is a **meta-prompting framework** that sits between the user and AI coding agents (Claude Code, Gemini CLI, OpenCode, Kilo, Codex, Copilot, Antigravity, Trae, Cline, Augment Code). It provides:
+GSD Core is a **meta-prompting framework** that sits between the user and AI coding agents (Claude Code, Gemini CLI, Kimi CLI, OpenCode, Kilo, Codex, Copilot, Antigravity, Trae, Cline, Augment Code). It provides:
 
 1. **Context engineering** — Structured artifacts that give the AI everything it needs per task (see [Context engineering](explanation/context-engineering.md))
 2. **Multi-agent orchestration** — Thin orchestrators that spawn specialized agents with fresh context windows (see [Multi-agent orchestration](explanation/multi-agent-orchestration.md))
@@ -116,13 +116,14 @@ User-facing entry points. Each file contains YAML frontmatter (name, description
 - **Codex:** Skills (`$gsd-command-name`)
 - **Copilot:** Slash commands (hyphen form, `/gsd-command-name`)
 - **Gemini CLI:** Slash commands under the `gsd:` namespace (colon form, `/gsd:command-name`) — Gemini namespaces all custom commands under their plugin id, so the install path rewrites every body-text reference to colon form
+- **Kimi CLI:** Agent Skills (`/skill:gsd-command-name`) plus an explicit custom agent launch with `kimi --agent-file`
 - **Antigravity:** Skills
 
 **Total commands:** see [`docs/INVENTORY.md`](INVENTORY.md#commands) for the authoritative count and full roster.
 
 #### Two-stage hierarchical routing (v1.40, [#2792](https://github.com/open-gsd/gsd-core/issues/2792))
 
-To keep the eager skill-listing token cost low, v1.40 introduces six namespace **meta-skills** (`gsd-workflow`, `gsd-project`, `gsd-quality`, `gsd-context`, `gsd-manage`, `gsd-ideate` — sourced from `commands/gsd/ns-*.md`, but the invocable `name:` is the bare form shown here) layered above the concrete sub-skills. The model sees 6 namespace routers (~120 tokens) instead of a flat 86-skill listing (~2,150 tokens), selects a namespace, then routes to the concrete sub-skill via a routing table embedded in the namespace router's body. Namespace skills are **additive** — every concrete command is still directly invocable.
+To keep the eager skill-listing token cost low, v1.40 introduces six namespace **meta-skills** (`gsd-workflow`, `gsd-project`, `gsd-quality`, `gsd-context`, `gsd-manage`, `gsd-ideate` — sourced from `commands/gsd/ns-*.md`, but the invocable `name:` is the bare form shown here) layered above the concrete sub-skills. On runtimes with non-recursive skill loaders (claude global, cline, qwen, hermes, augment, trae, antigravity) the installer now realizes this fully: it emits only the 6 namespace router bundles as top-level skills and nests the ~61 concrete skills under `<router>/skills/<name>/SKILL.md`, so the eager listing is ≈6 entries instead of ≈67. The model selects a namespace router, which instructs it to read the nested concrete skill file via a routing table embedded in the router body. On these runtimes concrete skills are **not** directly invocable by bare name via the Skill tool; they are reachable through the router. Slash commands (`/gsd-*`, via the separate commands surface) are unaffected where the runtime has one. On runtimes with recursive or unconfirmed skill loaders (cursor, codex, copilot, windsurf, codebuddy, opencode, kilo) the layout remains flat — all skills emitted at the top level as before.
 
 The router descriptions use pipe-separated keyword tags (≤ 60 chars) per the Tool Attention research showing keyword-dense tags outperform prose for routing at ~40 % the token cost.
 
@@ -337,12 +338,19 @@ Agents always return a `RESEARCH.md` path, never raw fetched content. Context di
 
 ### CLI Tools (`gsd-core/bin/`)
 
-Node.js CLI utility (`gsd-tools.cjs`) with domain modules split across `gsd-core/bin/lib/` (see [`docs/INVENTORY.md`](INVENTORY.md#cli-modules-33-shipped) for the authoritative roster):
+Node.js CLI utility (`gsd-tools.cjs`) with domain modules split across `gsd-core/bin/lib/` (see [`docs/INVENTORY.md`](INVENTORY.md#cli-modules-104-shipped) for the authoritative roster):
 
 
 | Module                 | Responsibility                                                                                      |
 | ---------------------- | --------------------------------------------------------------------------------------------------- |
-| `core.cjs`             | Error handling, output formatting, shared utilities; compatibility re-exports for planning helpers |
+| `config-loader.cjs`    | Project config loading — defaults merge, legacy-key migration, workstream overlay, unknown-key/profile-override validation, and federated config overlay (ADR-857 phase 3b) (extracted from `core.cjs`, ADR-857) |
+| `federated-config.cjs` | Defensive merge of capability-declared config slices (ADR-857 phase 3b); exports `mergeFederatedConfig`; no-op until capability keys are removed from the central config-schema at cutover |
+| `core-utils.cjs`       | Shared low-level utility primitives — POSIX path normalization, sub-repo/subdirectory scanning, phase file stats, slug/one-liner/plan-id helpers, time-ago (extracted from `core.cjs`, ADR-857) |
+| `core.cjs`             | Shared utilities; compatibility re-exports for planning, I/O (`io.cjs`), and phase-id helpers       |
+| `io.cjs`               | CLI I/O primitives — output/error emission, JSON-error mode, large-payload temp-file spillover     |
+| `phase-id.cjs`         | Pure phase-id parsing/matching helpers — normalize, token match, regex builders (extracted from `core.cjs`, ADR-857) |
+| `phase-locator.cjs`    | Phase-directory search and location — active-phase discovery (`searchPhaseInDir`, `findPhaseInternal`) and archived-phase-dir enumeration (`getArchivedPhaseDirs`), matching phase ids/tokens against the filesystem (extracted from `core.cjs`, ADR-857) |
+| `roadmap-parser.cjs`   | ROADMAP.md parsing — milestone slicing, current-milestone extraction, phase/milestone lookups, milestone-phase filter (extracted from `core.cjs`, ADR-857) |
 | `planning-workspace.cjs` | Planning seam (`planningDir`, `planningPaths`, active workstream routing, `.planning/.lock`)      |
 | `state.cjs`            | STATE.md parsing, updating, progression, metrics                                                    |
 | `phase.cjs`            | Phase directory operations, decimal numbering, plan indexing                                        |
@@ -355,13 +363,21 @@ Node.js CLI utility (`gsd-tools.cjs`) with domain modules split across `gsd-core
 | `milestone.cjs`        | Milestone archival, requirements marking                                                            |
 | `commands.cjs`         | Misc commands (slug, timestamp, todos, scaffolding, stats)                                          |
 | `model-profiles.cjs`   | Model profile resolution table                                                                      |
+| `model-resolver.cjs`   | Model and effort resolution policy — resolves model, tier, granularity, effort, and fast-mode for a given agent from project config and model profiles/catalog (extracted from `core.cjs`, ADR-857) |
 | `security.cjs`         | Path traversal prevention, prompt injection detection, safe JSON parsing, shell argument validation |
 | `uat.cjs`              | UAT file parsing, verification debt tracking, audit-uat support                                     |
 | `docs.cjs`             | Docs-update workflow init, Markdown scanning, monorepo detection                                    |
 | `workstream.cjs`       | Workstream CRUD, migration, session-scoped active pointer                                           |
 | `schema-detect.cjs`    | Schema-drift detection for ORM patterns (Prisma, Drizzle, etc.)                                     |
 | `profile-pipeline.cjs` | User behavioral profiling data pipeline, session file scanning                                      |
-| `profile-output.cjs`   | Profile rendering, USER-PROFILE.md and dev-preferences.md generation                                |
+| `profile-output.cjs`       | Profile rendering, USER-PROFILE.md and dev-preferences.md generation                                |
+| `loop-host-contract.cjs`   | Generated Loop Host Contract — 12 loop points, per-step agent roles, and core artifacts; emitted by `scripts/gen-loop-host-contract.cjs` from workflow markers (ADR-894 §3); consumed by `gen-capability-registry.cjs` |
+| `capability-registry.cjs`  | Generated central Capability Registry — role-partitioned index of all co-located capability declarations; emitted by `scripts/gen-capability-registry.cjs` (ADR-894 §5) |
+| `loop-resolver.cjs`        | Loop Extension Point resolver — ADR-857 phase 3c registry-consuming query; filters `byLoopPoint` by config activation, renders active hooks as markdown, emits `{ point, activeHooks, rendered }` envelope; `gsd-tools loop render-hooks <point>` |
+| `capability-state.cjs`     | Unified capability-state resolver — ADR-857 phase 4b; composes install profile, runtime surface, and config activation into one per-capability view; pure `resolveCapabilityState` + I/O `cmdCapabilityState`; `gsd-tools capability state [--config-dir <path>]` |
+| `graphify-command-router.cjs` | ADR-959 capability command router — first real capability command cutover (phase 4d-impl-2); extracted from the `case 'graphify':` arm in `gsd-tools.cjs`; dispatches build/query/status/diff subcommands; discovered via `commandFamilies` in the capability registry |
+| `audit-command-router.cjs` | ADR-959 capability command router (phase 4d-impl-3); extracted from the `case 'audit-uat':` and `case 'audit-open':` arms in `gsd-tools.cjs`; `routeAuditUat` → `uat.cjs:cmdAuditUat`, `routeAuditOpen` → `audit.cjs:{auditOpenArtifacts,formatAuditReport}`; discovered via `commandFamilies` in the capability registry |
+| `intel-command-router.cjs` | ADR-959 capability command router (phase 4d-impl-4, last first-party cutover); extracted from the `case 'intel':` arm in `gsd-tools.cjs`; `routeIntelCommand` → all 9 intel subcommands via lazy `require('./intel.cjs')`; preserves non-raw `timeAgo` transform on `status.files[*].updated_at`; discovered via `commandFamilies` in the capability registry |
 
 
 ---
@@ -542,7 +558,9 @@ UI-SPEC.md (per phase) ───────────────────
 
 ```
 ~/.claude/                          # Claude Code (global install)
-├── skills/gsd-*/SKILL.md           # Global skills (authoritative roster: docs/INVENTORY.md)
+├── skills/gsd-ns-*/SKILL.md        # Global skills — nesting runtimes: 6 namespace routers (authoritative roster: docs/INVENTORY.md)
+│   └── skills/<name>/SKILL.md     #   concrete skills nested under each router
+│   (flat runtimes: skills/gsd-*/SKILL.md — all ~67 skills at top level)
 ├── commands/gsd/*.md               # Local Claude installs use slash commands instead of global skills
 ├── gsd-core/
 │   ├── bin/gsd-tools.cjs           # CLI utility
@@ -562,6 +580,7 @@ Equivalent paths for other runtimes:
 - **OpenCode:** `~/.config/opencode/` global or `./.opencode/` local
 - **Kilo:** `~/.config/kilo/` global or `./.kilo/` local
 - **Gemini CLI:** `~/.gemini/` global or `./.gemini/` local
+- **Kimi CLI:** first-existing generic global root (`~/.config/agents/` recommended, then `~/.agents/` if its `skills/` directory already exists); local install is deferred and guarded
 - **Codex:** `~/.codex/` global or `./.codex/` local
 - **Copilot:** `~/.copilot/` global or `./.github/` local
 - **Antigravity:** auto-detected global root (`~/.gemini/antigravity/`, `~/.gemini/antigravity-ide/`, or `~/.gemini/antigravity-cli/`) or `./.agent/` local
@@ -656,7 +675,7 @@ verification.
 
 The installer (`bin/install.js`, ~10,700 lines) handles:
 
-1. **Runtime detection** — Interactive prompt or CLI flags (`--claude`, `--opencode`, `--gemini`, `--kilo`, `--codex`, `--copilot`, `--antigravity`, `--cursor`, `--windsurf`, `--augment`, `--trae`, `--qwen`, `--hermes`, `--codebuddy`, `--cline`, `--all`)
+1. **Runtime detection** — Interactive prompt or CLI flags (`--claude`, `--opencode`, `--gemini`, `--kimi`, `--kilo`, `--codex`, `--copilot`, `--antigravity`, `--cursor`, `--windsurf`, `--augment`, `--trae`, `--qwen`, `--hermes`, `--codebuddy`, `--cline`, `--all`)
 2. **Location selection** — Global (`--global`) or local (`--local`)
 3. **File deployment** — Copies commands, skills, workflows, references, templates, agents, and hooks
 4. **Runtime adaptation** — Transforms file content per runtime:
@@ -664,6 +683,7 @@ The installer (`bin/install.js`, ~10,700 lines) handles:
   - OpenCode: Converts commands/agents to OpenCode-compatible flat command + subagent format
   - Kilo: Reuses the OpenCode conversion pipeline with Kilo config paths
   - Codex: Generates TOML config + skills from commands
+  - Kimi CLI: Generates Agent Skills under `skills/gsd-*/SKILL.md`, custom agent YAML/prompt files, and explicit `kimi_cli.tools.*` module paths
   - Copilot: Maps tool names (Read→read, Bash→execute, etc.)
   - Gemini: Adjusts hook event names (`AfterTool` instead of `PostToolUse`)
   - Antigravity: Skills-first with Google model equivalents
@@ -795,31 +815,37 @@ The migration-specific ownership and source snapshots live in
 
 | Runtime | Global root | Local root | Invocation surface | Agent surface | Config and hooks |
 | --- | --- | --- | --- | --- | --- |
-| Claude Code | `~/.claude` | `./.claude` | Global `skills/gsd-*/SKILL.md`; local `commands/gsd/*.md` | `agents/gsd-*.md` | `settings.json` hook and statusLine entries |
+| Claude Code | `~/.claude` | `./.claude` | Global `skills/gsd-ns-*/SKILL.md` (6 routers) + `skills/gsd-ns-*/skills/<name>/SKILL.md` (nested concretes); local `commands/gsd/*.md` | `agents/gsd-*.md` | `settings.json` hook and statusLine entries |
 | OpenCode | `~/.config/opencode` | `./.opencode` | `command/gsd-*.md` | `agents/gsd-*.md` | `opencode.json` or `opencode.jsonc`; no GSD hooks |
 | Kilo | `~/.config/kilo` | `./.kilo` | `command/gsd-*.md` | `agents/gsd-*.md` | `kilo.json` or `kilo.jsonc`; no GSD hooks |
 | Gemini CLI | `~/.gemini` | `./.gemini` | `commands/gsd/*.toml` | `agents/gsd-*.md` | `settings.json` feature flag, hooks, and statusline |
-| Codex | `~/.codex` | `./.codex` | `skills/gsd-*/SKILL.md` | `agents/` source markdown plus per-agent TOML | `config.toml` `[agents.gsd-*]`, `[features].hooks` (canonical; legacy alias `codex_hooks` is recognized and migrated forward on reinstall, #3566), and hook tables |
-| GitHub Copilot | `~/.copilot` | `./.github` | `skills/gsd-*/SKILL.md` and `copilot-instructions.md` | `.agent.md` files | No GSD hooks or statusline |
-| Antigravity | auto-detected: `~/.gemini/antigravity`, `~/.gemini/antigravity-ide`, or `~/.gemini/antigravity-cli` | `./.agent` | `skills/gsd-*/SKILL.md` | `agents/gsd-*.md` | Gemini-style `settings.json` hook entries when installed by GSD |
-| Cursor | `~/.cursor` | `./.cursor` | `skills/gsd-*/SKILL.md` | `agents/gsd-*.md` | Rule references under `rules/`; no GSD hooks |
-| Windsurf | `~/.codeium/windsurf` | `./.windsurf` | `skills/gsd-*/SKILL.md` | `agents/gsd-*.md` | Rule references under `rules/`; no GSD hooks |
-| Augment Code | `~/.augment` | `./.augment` | `skills/gsd-*/SKILL.md` | `agents/gsd-*.md` | No GSD hooks or statusline |
-| Trae | `~/.trae` | `./.trae` | `skills/gsd-*/SKILL.md` | `agents/gsd-*.md` | Rule references under `rules/`; no GSD hooks |
-| Qwen Code | `~/.qwen` | `./.qwen` | `skills/gsd-*/SKILL.md` | `agents/gsd-*.md` | Common GSD settings and hook entries where supported |
-| Hermes Agent | `~/.hermes` | `./.hermes` | `skills/gsd/DESCRIPTION.md` plus `skills/gsd/gsd-*/SKILL.md` | `agents/gsd-*.md` | Common GSD settings and hook entries where supported |
-| CodeBuddy | `~/.codebuddy` | `./.codebuddy` | `skills/gsd-*/SKILL.md` | `agents/gsd-*.md` | Common GSD settings and hook entries where supported |
-| Cline | `~/.cline` | project root | `.clinerules` | Rules only | No GSD hooks or statusline |
+| Kimi CLI | First-existing generic root: `~/.config/agents` recommended, then `~/.agents` when `~/.agents/skills` exists and `~/.config/agents/skills` does not | Deferred and guarded | `skills/gsd-*/SKILL.md` (flat) invoked as `/skill:gsd-*` | `agents/gsd.yaml`, `agents/gsd.md`, and `agents/subagents/gsd-*` YAML/prompt pairs | Explicit `kimi --agent-file <configRoot>/agents/gsd.yaml`; no GSD hooks or statusline |
+| Codex | `~/.codex` | `./.codex` | `skills/gsd-*/SKILL.md` (flat) | `agents/` source markdown plus per-agent TOML | `config.toml` `[agents.gsd-*]`, `[features].hooks` (canonical; legacy alias `codex_hooks` is recognized and migrated forward on reinstall, #3566), and hook tables |
+| GitHub Copilot | `~/.copilot` | `./.github` | `skills/gsd-*/SKILL.md` (flat), `copilot-instructions.md`, and `AGENTS.md` (repo root, local) | `.agent.md` files | Self-contained `sessionStart` hook (`hooks/gsd-session.json`, inline `command` type); no statusline |
+| Antigravity | auto-detected: `~/.gemini/antigravity`, `~/.gemini/antigravity-ide`, or `~/.gemini/antigravity-cli` | `./.agent` | `skills/gsd-ns-*/SKILL.md` (6 routers) + `skills/gsd-ns-*/skills/<name>/SKILL.md` (nested concretes) | `agents/gsd-*.md` | Gemini-style `settings.json` hook entries when installed by GSD |
+| Cursor | `~/.cursor` | `./.cursor` | `skills/gsd-*/SKILL.md` (flat) | `agents/gsd-*.md` | Rule references under `rules/`; `hooks.json` with sessionStart context injection and postToolUse STATE.md monitor (#777) |
+| Windsurf | `~/.codeium/windsurf` | `./.windsurf` | `skills/gsd-*/SKILL.md` (flat) | `agents/gsd-*.md` | Rule references under `rules/`; no GSD hooks |
+| Augment Code | `~/.augment` | `./.augment` | `skills/gsd-ns-*/SKILL.md` (6 routers) + `skills/gsd-ns-*/skills/<name>/SKILL.md` (nested concretes) | `agents/gsd-*.md` | No GSD hooks or statusline |
+| Trae | `~/.trae` | `./.trae` | `skills/gsd-ns-*/SKILL.md` (6 routers) + `skills/gsd-ns-*/skills/<name>/SKILL.md` (nested concretes) | `agents/gsd-*.md` | Rule references under `rules/`; no GSD hooks |
+| Qwen Code | `~/.qwen` | `./.qwen` | `skills/gsd-ns-*/SKILL.md` (6 routers) + `skills/gsd-ns-*/skills/<name>/SKILL.md` (nested concretes) | `agents/gsd-*.md` | Common GSD settings and hook entries where supported |
+| Hermes Agent | `~/.hermes` | `./.hermes` | `skills/gsd/ns-*/SKILL.md` (6 routers, prefix='') + `skills/gsd/ns-*/skills/<name>/SKILL.md` (nested concretes) | `agents/gsd-*.md` | Common GSD settings and hook entries where supported |
+| CodeBuddy | `~/.codebuddy` | `./.codebuddy` | `skills/gsd-*/SKILL.md` (flat, `user-invocable: false`) | `agents/gsd-*.md` | `/gsd-*` slash commands under `commands/`; common GSD settings and hook entries where supported |
+| Cline | `~/.cline` | project root | `skills/gsd-ns-*/SKILL.md` (6 routers) + `skills/gsd-ns-*/skills/<name>/SKILL.md` (nested concretes) + `.clinerules` | Rules only | No GSD hooks or statusline |
 
 ### Upstream Contract Sources
 
 Runtime install expectations are checked against primary documentation where
-available. The current source snapshot is 2026-05-11:
+available. The current source snapshot is 2026-05-11, with Kimi CLI rechecked
+on 2026-06-07:
 
 - Claude Code: Anthropic slash commands, settings, hooks, and subagents docs.
 - OpenCode and Kilo: OpenCode config docs and Kilo custom subagent docs.
 - Gemini CLI and Qwen Code: command/config docs; Qwen command docs were last
   updated 2026-05-06.
+- Kimi CLI: Agent Skills docs for user-level brand roots and first-existing
+  generic roots (`~/.config/agents/skills/` recommended, then
+  `~/.agents/skills/`), plus Agents docs for YAML files, `system_prompt_path`,
+  `kimi_cli.tools.*` module paths, and explicit `kimi --agent-file` launch.
 - Codex: OpenAI Codex docs and `config-schema.json`; the installer also carries
   Codex 0.124.0 compatibility for agent table shape.
 - Copilot, Cursor, Cline, Augment, Hermes, and CodeBuddy: vendor docs for

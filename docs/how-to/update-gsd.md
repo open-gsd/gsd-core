@@ -35,11 +35,31 @@ Restart your runtime after the update to pick up new commands and agents.
 |------|--------------|
 | `--sync` | After updating, sync skills from the GSD registry |
 | `--reapply` | After updating, merge locally modified GSD files back in from `gsd-local-patches/` |
+| `--next` / `--rc` | Target the `@next` RC dist-tag instead of `@latest` (installs or refreshes a release candidate; see ADR #660) |
 
 ```bash
 /gsd-update --sync        # Update and sync skills
 /gsd-update --reapply     # Update and reapply local patches
+/gsd-update --next        # Install from the @next RC dist-tag
 ```
+
+---
+
+## Install or refresh a release candidate
+
+GSD publishes release candidates on the `@next` npm dist-tag (established by ADR #660). To install or refresh from that channel:
+
+```bash
+/gsd-update --next
+# or equivalently:
+/gsd-update --rc
+```
+
+The full update flow applies — scope/runtime detection, changelog preview, custom-file backup, and cache clearing all run normally. The only difference is that `check-latest-version.cjs` resolves the `@next` tag and npx installs from `@opengsd/gsd-core@next`.
+
+Only `latest` and `next` are supported channels; no arbitrary dist-tag can be passed (the script enforces an allowlist and exits with code 2 on an invalid tag).
+
+Omitting `--next`/`--rc` keeps targeting `@latest` (stable channel, no change in behavior).
 
 ---
 

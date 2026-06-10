@@ -43,6 +43,7 @@ requirements-completed: []  # REQUIRED — Copy ALL requirement IDs from this pl
 # Metrics
 duration: Xmin
 completed: YYYY-MM-DD
+status: complete
 ---
 
 # Phase [X]: [Name] Summary

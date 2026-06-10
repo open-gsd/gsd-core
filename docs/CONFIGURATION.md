@@ -115,6 +115,9 @@ GSD stores project settings in `.planning/config.json`. Created during `/gsd-new
   },
   "project_code": null,
   "agent_skills": {},
+  "agent_skills_security": {
+    "trusted_global_roots": []
+  },
   "response_language": null,
   "features": {
     "thinking_partner": false,
@@ -245,7 +248,7 @@ All workflow toggles follow the **absent = enabled** pattern. If a key is missin
 | `workflow.max_discuss_passes` | number | `3` | Maximum number of question rounds in discuss-phase before the workflow stops asking. Useful in headless/auto mode to prevent infinite discussion loops. |
 | `workflow.skip_discuss` | boolean | `false` | When `true`, `/gsd-autonomous` bypasses the discuss-phase entirely, writing minimal CONTEXT.md from the ROADMAP phase goal. Useful for projects where developer preferences are fully captured in PROJECT.md/REQUIREMENTS.md. Added in v1.28 |
 | `workflow.text_mode` | boolean | `false` | Replaces AskUserQuestion TUI menus with plain-text numbered lists. Required for Claude Code remote sessions (`/rc` mode) where TUI menus don't render. Can also be set per-session with `--text` flag on discuss-phase. Added in v1.28 |
-| `workflow.use_worktrees` | boolean | `true` | When `false`, disables git worktree isolation for parallel execution. Users who prefer sequential execution or whose environment does not support worktrees can disable this. Added in v1.31 |
+| `workflow.use_worktrees` | boolean | `true` | When `false`, disables git worktree isolation for parallel execution. Users who prefer sequential execution or whose environment does not support worktrees can disable this. Added in v1.31. **Branch-divergence note:** when your branch has diverged from `origin/HEAD`, GSD auto-degrades to sequential and prints a warning. See [`worktree.baseRef`](#worktree-settings) to restore parallel execution on a diverged branch. |
 | `workflow.worktree_skip_hooks` | boolean | `false` | When `true`, executor agents in worktree mode pass `--no-verify` (skipping pre-commit hooks) and post-wave hook validation runs against the merged result instead. Opt-in escape hatch for projects whose hooks cannot run in agent worktrees. Default `false` runs hooks on every commit (#2924). |
 | `workflow.code_review` | boolean | `true` | Enable `/gsd-code-review` and `/gsd-code-review --fix` commands. When `false`, the commands exit with a configuration gate message. Added in v1.34 |
 | `workflow.code_review_depth` | string | `standard` | Default review depth for `/gsd-code-review`: `quick` (pattern-matching only), `standard` (per-file analysis), or `deep` (cross-file with import graphs). Can be overridden per-run with `--depth=`. Added in v1.34 |
@@ -272,6 +275,14 @@ All workflow toggles follow the **absent = enabled** pattern. If a key is missin
 | `workflow.drift_action` | string | `warn` | What to do when `workflow.drift_threshold` is exceeded after `/gsd-execute-phase`. `warn` prints a message suggesting `/gsd-map-codebase --paths …`; `auto-remap` spawns `gsd-codebase-mapper` scoped to the affected paths. Added in v1.39 |
 | `workflow.build_command` | string | (none) | Shell command to build the project in the post-merge build gate (Step A of step 5.6 in execute-phase). When unset, the gate auto-detects: Xcode (`.xcodeproj` present) → `xcodebuild build`, `Makefile` with `build:` target → `make build`, Justfile → `just build`, `Cargo.toml` → `cargo build`, `go.mod` → `go build ./...`, Python → `python -m py_compile`, `package.json` with `build` script → `npm run build`. Runs with a 5-minute timeout; failure increments `WAVE_FAILURE_COUNT`. Added in v1.39 |
 | `workflow.test_command` | string | (none) | Shell command to run the project's test suite in the post-merge test gate (Step B of step 5.6 in execute-phase) and the regression gate. When unset, the gate auto-detects: Xcode (`.xcodeproj` present) → `xcodebuild test`, `Makefile` with `test:` target → `make test`, Justfile → `just test`, `package.json` → `npm test`, `Cargo.toml` → `cargo test`, `go.mod` → `go test ./...`, Python → `python -m pytest`. Runs with a 5-minute timeout; failure increments `WAVE_FAILURE_COUNT`. Added in v1.39 |
+
+## Worktree Settings
+
+> **File:** `.claude/settings.local.json` — not `.planning/config.json`. Unlike all other keys in this reference, `worktree.*` settings live in the Claude Code runtime settings file. Fresh installs and upgrades auto-set `worktree.baseRef: "head"` there (no-clobber) when `workflow.use_worktrees` is enabled. The key can also be set via `gsd-tools worktree set-baseref`.
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `worktree.baseRef` | string | (unset) | Controls which ref the worktree-based parallel executor uses as the base when creating new phase/wave worktrees. When unset, the executor bases new worktrees on the repository default branch (`origin/HEAD`); if the current branch has diverged, execute-phase auto-degrades to sequential execution rather than halting (as of v1.4.0). Set to `"head"` to base new worktrees on the local `HEAD` instead — the appropriate choice when working on a branch that has diverged from the default branch, as it prevents the exit-42 base-mismatch halt and allows wave-based parallel execution to proceed normally. See [Fix the worktree base-mismatch (exit 42) error](how-to/fix-worktree-base-mismatch.md). |
 
 ## Code Quality Settings
 
@@ -395,6 +406,7 @@ Inject custom skill files into GSD subagent prompts. Skills are read by agents a
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `agent_skills` | object | `{}` | Map of agent types to skill directory paths |
+| `agent_skills_security.trusted_global_roots` | array of strings | `[]` | Opt-in allowlist of additional trusted directories for `global:` skills. See [Trusted global skill roots](#trusted-global-skill-roots-agent_skills_securitytrusted_global_roots) |
 
 ### Configuration
 
@@ -451,6 +463,50 @@ Set skills via the CLI:
 ```bash
 gsd-tools query config-set agent_skills.gsd-executor '["skills/my-skill"]'
 ```
+
+---
+
+## Trusted Global Skill Roots (`agent_skills_security.trusted_global_roots`)
+
+Widen the symlink-safety boundary for `global:` skills by declaring additional trusted root directories.
+
+### Purpose
+
+By default, a `global:<name>` skill whose `SKILL.md` real path (after resolving symlinks) escapes the runtime's global skills directory (e.g. `~/.claude/skills/`) is rejected as a symlink-escape. `agent_skills_security.trusted_global_roots` lets you declare additional trusted root directories so symlinked skills whose real target lives under one of them are accepted.
+
+Common use case: a single source-of-truth skills directory elsewhere on disk (e.g. `~/shared/skills`) symlinked into `~/.claude/skills/` so `git pull` or `rsync` keeps a team's skills up to date without maintaining copies.
+
+### Configuration
+
+```json
+{
+  "agent_skills_security": {
+    "trusted_global_roots": [
+      "~/shared/skills",
+      "/opt/shared-skills"
+    ]
+  }
+}
+```
+
+### How It Works
+
+- **Default `[]`** — behavior is byte-identical to omitting the option entirely: only skills whose real `SKILL.md` path resolves inside the default global skills directory are accepted.
+- **Absolute or tilde-prefixed paths only.** Each entry must be an absolute path (`/opt/shared-skills`) or a `~`/`~/`-prefixed path (tilde expands to your home directory). Project-relative paths are rejected, so an untrusted repo's `.planning/config.json` cannot point trust at a directory inside itself.
+- **`realpathSync` at load time.** Each declared root is resolved with `realpathSync` on every run, so trust follows the real target and cannot silently drift if a root itself later becomes a symlink. Non-existent or unreadable roots are dropped without error.
+- **Dangerously broad roots are refused.** The filesystem root (`/`), drive or UNC roots, and your home directory itself cannot be declared as trusted roots — these would make the allowlist meaningless.
+- **Acceptance rule.** A skill is accepted if and only if its real `SKILL.md` path lies inside the default global skills directory OR inside one of the resolved trusted roots. Skills resolving outside all of these are still rejected.
+- **Audit note.** When a skill is accepted via a trusted root rather than the default global skills directory, a `[agent-skills] NOTE:` line is written to stderr so the widened boundary remains visible.
+
+> **Security note:** `trusted_global_roots` is read from the project-local `.planning/config.json`. Only add roots you control and trust. Declaring a broad shared directory widens which symlinked global skills will load for every agent in this project.
+
+### CLI
+
+```bash
+gsd config-set agent_skills_security.trusted_global_roots '["~/shared/skills"]'
+```
+
+Setting the parent object (`agent_skills_security`) directly is not supported; use the dot-notation leaf form shown above.
 
 ---
 

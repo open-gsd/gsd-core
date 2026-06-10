@@ -1,7 +1,7 @@
 ---
 name: gsd-planner
 description: Creates executable phase plans with task breakdown, dependency analysis, and goal-backward verification. Spawned by /gsd:plan-phase orchestrator.
-tools: Read, Write, Bash, Glob, Grep, WebFetch, mcp__context7__*
+tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, mcp__context7__*
 color: green
 # hooks:
 #   PostToolUse:
@@ -407,6 +407,8 @@ Plans should complete within ~50% context (not 80%). No context anxiety, quality
 
 ## Granularity Calibration
 
+The resolved granularity is provided in the planning context as `**Granularity:** <value>`. Read that value and apply the corresponding row below. When no explicit value is present, default to Standard.
+
 | Granularity | Typical Plans/Phase | Tasks/Plan |
 |-------------|---------------------|------------|
 | Coarse | 1-3 | 2-3 |
@@ -630,12 +632,12 @@ must_haves:
       contains: "model Message"
   key_links:
     - from: "src/components/Chat.tsx"
-      to: "/api/chat"
-      via: "fetch in useEffect"
+      to: "src/app/api/chat/route.ts"
+      via: "fetch in useEffect — calls /api/chat endpoint"
       pattern: "fetch.*api/chat"
     - from: "src/app/api/chat/route.ts"
-      to: "prisma.message"
-      via: "database query"
+      to: "prisma/schema.prisma"
+      via: "database query via prisma.message"
       pattern: "prisma\\.message\\.(find|create)"
 ```
 
@@ -996,6 +998,8 @@ Use template structure for each PLAN.md.
 
 These PLAN.md files are the canonical output of this agent. The orchestrator reads each `.planning/phases/{padded_phase}-{slug}/{padded_phase}-{NN}-PLAN.md` from disk after you return; it does NOT read your return message for the file content.
 
+**Write is for net-new PLAN.md only.** For any existing file (`ROADMAP.md`, `.planning/` files) use `Edit` (scoped replacement), never `Write`. See `update_roadmap`.
+
 1. **Default: write each PLAN.md in a single `Write` call.** On most runtimes this is correct and reliable — do this unless rule 4 applies.
 2. **Do NOT return the PLAN.md content in your response.** Your return message is a brief confirmation (see `<structured_returns>`); the content lives on disk.
 3. **Do NOT use `Bash(cat << 'EOF')` or heredoc** for file creation. Use the `Write` tool.
@@ -1060,9 +1064,11 @@ Returns JSON: `{ valid, errors, warnings, task_count, tasks }`
 <step name="update_roadmap">
 Update ROADMAP.md to finalize phase placeholders:
 
+**CRITICAL — use `Edit` (scoped), NOT `Write`, for ROADMAP.md.** A whole-file `Write` destroys all phase entries outside your diff window. Use `Edit` to replace only the target section; use multiple `Edit` calls if needed. NEVER pass the entire ROADMAP.md content to `Write`.
+
 1. Read `.planning/ROADMAP.md`
 2. Find phase entry (`### Phase {N}:`)
-3. Update placeholders:
+3. Update placeholders using `Edit` (scoped replacement only):
 
 **Goal** (only if placeholder):
 - `[To be planned]` → derive from CONTEXT.md > RESEARCH.md > phase description
@@ -1078,7 +1084,7 @@ Plans:
 - [ ] {phase}-02-PLAN.md — {brief objective}
 ```
 
-4. Write updated ROADMAP.md
+4. Apply changes with `Edit` (scoped) — use the `gsd roadmap` subcommands (run by the orchestrator) for structural ROADMAP mutations; reserve direct `Edit` for placeholder fills only.
 </step>
 
 <step name="git_commit">

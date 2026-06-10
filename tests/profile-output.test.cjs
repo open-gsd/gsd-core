@@ -269,7 +269,8 @@ describe('generate-dev-preferences command', () => {
     assert.strictEqual(out.command_path, path.join(codexHome, 'skills', 'gsd-dev-preferences', 'SKILL.md'));
   });
 
-  test('errors for cline unless --output is supplied', () => {
+  test('uses runtime-aware skills dir for cline by default (#782)', () => {
+    // Cline >= v3.48.0 is skills-capable: ~/.cline/skills/<name>/SKILL.md
     const analysis = {
       profile_version: '1.0',
       dimensions: {
@@ -277,14 +278,16 @@ describe('generate-dev-preferences command', () => {
       },
     };
     const analysisPath = path.join(tmpDir, 'analysis.json');
+    const clineHome = path.join(tmpDir, 'cline-home');
     fs.writeFileSync(analysisPath, JSON.stringify(analysis));
 
     const result = runGsdTools(
       ['generate-dev-preferences', '--analysis', analysisPath, '--raw'],
       tmpDir,
-      { GSD_RUNTIME: 'cline' }
+      { CLINE_CONFIG_DIR: clineHome, GSD_RUNTIME: 'cline' }
     );
-    assert.ok(!result.success, 'cline should require explicit --output');
-    assert.ok(result.error.includes('does not use a skills directory'), 'should explain unsupported runtime');
+    assert.ok(result.success, `cline skills output should succeed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.command_path, path.join(clineHome, 'skills', 'gsd-dev-preferences', 'SKILL.md'));
   });
 });

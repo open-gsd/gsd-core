@@ -12,6 +12,14 @@
 
 The hyphen and colon forms are *runtime-specific spellings of the same command*. Whichever runtime you're on, the installer writes the correct form into your runtime's command directory.
 
+### Skill Runtime Behavior (Claude Code)
+
+Heavy workflow skills (`/gsd-plan-phase`, `/gsd-execute-phase`, `/gsd-autonomous`) declare `effort: xhigh`, signalling maximum token budget to the runtime. These skills are spawning orchestrators — they must run at top level so they retain the `Agent` tool needed to spawn subagents. They do **not** carry `context: fork` (see #921).
+
+Quick-status skills (`/gsd-progress`, `/gsd-stats`) declare `effort: low`, directing the runtime to use a minimal token budget for fast reads.
+
+These fields are Claude Code–specific frontmatter. On runtimes that do not recognise them (Gemini, Codex, Cursor, etc.) the fields are silently ignored — existing behaviour is unchanged.
+
 ---
 
 ## Namespace Meta-Skills
@@ -157,6 +165,7 @@ Research, plan, and verify a phase.
 | `--skip-bounce` | Skip plan bounce even if enabled in config |
 | `--mvp` | Vertical MVP mode — planner organizes tasks as feature slices (UI→API→DB) instead of horizontal layers. On Phase 1 of a new project with no prior phase summaries, also emits `SKELETON.md` (Walking Skeleton). Can be persisted on a phase via `**Mode:** mvp` in ROADMAP.md, which applies `--mvp` automatically without the flag. |
 | `--tdd` | TDD mode — planner applies `type: tdd` to eligible behavior-adding tasks so each begins with a failing test. Composable with `--mvp`: `--mvp --tdd` produces vertical slices where every behavior-adding task starts red-green. |
+| `--granularity <coarse\|standard\|fine>` | Override the planning granularity for this invocation, ignoring config. Valid values: `coarse`, `standard`, `fine`. Takes precedence over `granularities.planning`, top-level `granularity`, and `planning.granularity` config. |
 
 **Prerequisites:** `.planning/ROADMAP.md` exists
 **Produces:** `{phase}-RESEARCH.md`, `{phase}-{N}-PLAN.md`, `{phase}-VALIDATION.md`; `{phase}/SKELETON.md` when Walking Skeleton mode fires
@@ -537,7 +546,7 @@ Interactive command center for managing multiple phases from one terminal.
 **Behavior:**
 - Dashboard of all phases with visual status indicators
 - Recommends optimal next actions based on dependencies and progress
-- Dispatches work: discuss runs inline, plan/execute run as background agents
+- Dispatches work: discuss runs inline; plan/execute run as background agents on runtimes that support nested background dispatch, or inline on Claude Code
 - Designed for power users parallelizing work across phases from one terminal
 - Supports per-step passthrough flags via `manager.flags` config (see [Configuration](CONFIGURATION.md#manager-passthrough-flags))
 
@@ -1139,11 +1148,13 @@ Update GSD with changelog preview, and optionally sync skills or reapply local p
 |------|-------------|
 | `--sync` | Sync skills from the GSD registry after updating |
 | `--reapply` | Restore local modifications (patches) after updating |
+| `--next` / `--rc` | Target the `@next` RC dist-tag instead of `@latest` (installs or refreshes a release candidate, e.g. `1.4.0-rc.1`; see ADR #660) |
 
 ```bash
 /gsd-update                         # Check for updates and install
 /gsd-update --sync                  # Update and sync skills
 /gsd-update --reapply               # Update and reapply local patches
+/gsd-update --next                  # Install from the @next RC dist-tag
 ```
 
 ---

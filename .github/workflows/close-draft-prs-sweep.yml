@@ -1,0 +1,112 @@
+name: Close Draft PRs (sweep)
+
+# Companion to close-draft-prs.yml. That workflow runs per-PR on
+# pull_request_target and is the fast path. GitHub does NOT dispatch
+# pull_request_target for fork branches whose names look like a Git SHA, so a
+# fork draft PR on a SHA-named branch can never be closed by any PR-triggered
+# event (a pull_request run from a fork gets a read-only token). This scheduled
+# sweep runs in the base-repo context with a write-capable token and enforces
+# the identical policy on a timer, catching that evasion. See issue #761.
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: close-draft-prs-sweep
+  cancel-in-progress: false
+
+permissions:
+  pull-requests: write
+
+jobs:
+  sweep-draft-prs:
+    name: Sweep open draft PRs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close non-maintainer draft PRs
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            // Maintainers may use draft PRs for internal coordination — same
+            // carve-out as close-draft-prs.yml. A scheduled run has no
+            // github.event.pull_request, so the carve-out is applied here as a
+            // Set membership test over author_association.
+            const MAINTAINER_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+            const repoUrl = context.repo.owner + '/' + context.repo.repo;
+
+            const commentBody = [
+              '## Draft PRs are not accepted',
+              '',
+              'This project only accepts completed pull requests. Draft PRs are automatically closed.',
+              '',
+              '**Why?** GSD requires all PRs to be ready for review when opened \u2014 with tests passing, the correct PR template used, and a linked approved issue. Draft PRs bypass these quality gates and create review overhead.',
+              '',
+              '### What to do instead',
+              '',
+              '1. Finish your implementation locally',
+              '2. Run `npm run test:coverage` and confirm all tests pass',
+              '3. Open a **non-draft** PR using the [correct template](https://github.com/' + repoUrl + '/blob/main/CONTRIBUTING.md#pull-request-guidelines)',
+              '',
+              'See [CONTRIBUTING.md](https://github.com/' + repoUrl + '/blob/main/CONTRIBUTING.md) for the full process.',
+            ].join('\n');
+
+            const isEnforceableDraft = (pr) =>
+              !!pr && pr.state === 'open' && pr.draft === true &&
+              !MAINTAINER_ASSOCIATIONS.has(pr.author_association);
+
+            const openPulls = await github.paginate(github.rest.pulls.list, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+
+            const candidates = openPulls.filter(isEnforceableDraft);
+            core.info('Sweep found ' + candidates.length + ' non-maintainer draft PR(s) of ' + openPulls.length + ' open.');
+
+            const failures = [];
+
+            for (const candidate of candidates) {
+              try {
+                // Re-fetch immediately before mutating: the contributor may have
+                // marked the PR ready (or it may have closed) since pagination.
+                const { data: pr } = await github.rest.pulls.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: candidate.number,
+                });
+
+                if (!isEnforceableDraft(pr)) {
+                  core.info('Skipping PR #' + candidate.number + ' — no longer an open non-maintainer draft.');
+                  continue;
+                }
+
+                // Close FIRST so enforcement (the primary action) is never gated
+                // on the explanatory comment. A closed PR is never revisited by a
+                // later sweep, so this also prevents duplicate comments.
+                await github.rest.pulls.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: pr.number,
+                  state: 'closed'
+                });
+
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  body: commentBody
+                });
+
+                core.info('Closed draft PR #' + pr.number + ': ' + pr.title);
+              } catch (err) {
+                failures.push(candidate.number);
+                core.warning('Failed to process draft PR #' + candidate.number + ': ' + err.message);
+              }
+            }
+
+            if (failures.length > 0) {
+              core.setFailed('Sweep encountered errors on ' + failures.length + ' draft PR(s): ' + failures.join(', '));
+            }

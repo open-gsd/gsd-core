@@ -10,7 +10,7 @@ A narrative companion guide to GSD Core — orient yourself here, then follow th
 ## Table of Contents
 
 - [Slash-command forms](#slash-command-forms-hyphen-vs-colon)
-- [Namespace routing primer](#namespace-routing-primer-gsdnamespace-v140)
+- [Namespace routing primer](#namespace-routing-primer-gsd-ns--v140)
 - [Project lifecycle overview](#project-lifecycle-overview)
 - [Workflow Diagrams](#workflow-diagrams)
 - [UI Design Contract](#ui-design-contract)
@@ -40,20 +40,37 @@ GSD ships **the same set of skills** to every supported runtime, but two slash-f
 
 You don't need to choose — the installer writes the correct form into the command directory of each runtime you target. When following a walkthrough on a Gemini terminal, replace the hyphen after `gsd` with a colon as you read each slash command.
 
-## Namespace routing primer (`gsd:<namespace>`, v1.40)
+## Namespace routing primer (`gsd-ns-*`, v1.40+)
 
-v1.40 ships six **namespace meta-skills** as the first-stage entry points for hierarchical routing — they keep the eager skill-listing token cost low (~120 tokens for 6 routers vs ~2,150 for a flat 86-skill listing) while every concrete sub-skill remains directly invocable. Each namespace router's body contains a routing table that maps your intent to the correct concrete sub-skill.
+### Architecture
 
-| Namespace | Router | Routes to |
-|-----------|--------|-----------|
-| Phase pipeline | `/gsd-workflow` | discuss / plan / execute / verify / phase / progress |
-| Project lifecycle | `/gsd-project` | milestones, audits, summary |
-| Quality gates | `/gsd-quality` | code review, debug, audit, security, eval, ui |
-| Codebase intelligence | `/gsd-context` | map, graphify, docs, learnings |
-| Management | `/gsd-manage` | config, workspace, workstreams, thread, update, ship, inbox |
-| Exploration & capture | `/gsd-ideate` | explore, sketch, spike, spec, capture |
+GSD ships six **namespace router bundles** (`gsd-ns-workflow`, `gsd-ns-project`, `gsd-ns-review`, `gsd-ns-context`, `gsd-ns-ideate`, `gsd-ns-manage`). On runtimes with non-recursive skill loaders, the installer emits these 6 routers as the **only top-level skill entries**; the ~61 concrete skills are nested under each router at `<router>/skills/<name>/SKILL.md`. This reduces the eager skill-listing overhead to ≈6 entries instead of ≈67.
 
-You almost never need to type a namespace router yourself. Their value is in the routing layer the model uses to discover the right sub-skill — they exist so the system prompt can list 6 entries instead of 86. If you already know the concrete command (e.g. `/gsd-plan-phase`), call it directly.
+Each router's body contains a routing table. When the model receives a request, it reads the router, identifies the relevant sub-skill by name, then opens `skills/<name>/SKILL.md` via a file-path `Read`. The concrete skill is fully available — it is not invocable by bare name through the Skill tool's top-level listing, but is reachable through the router.
+
+The nested layout applies only to runtimes with confirmed non-recursive skill loaders: **Claude (global), Cline, Qwen, Hermes, Augment, Trae, Antigravity**. Recursive or unconfirmed loaders (Cursor, Codex, Copilot, Windsurf, CodeBuddy, OpenCode, Kilo) retain the flat layout unchanged.
+
+| Namespace | Router bundle | Routes to |
+|-----------|--------------|-----------|
+| Phase pipeline | `gsd-ns-workflow` | discuss / plan / execute / verify / phase / progress |
+| Project lifecycle | `gsd-ns-project` | milestones, audits, summary |
+| Quality gates | `gsd-ns-review` | code review, debug, audit, security, eval, ui |
+| Codebase intelligence | `gsd-ns-context` | map, graphify, docs, learnings |
+| Exploration & capture | `gsd-ns-ideate` | explore, sketch, spike, spec, capture |
+| Management | `gsd-ns-manage` | config, workspace, workstreams, thread, update, ship, inbox |
+
+### Slash commands are unaffected
+
+On runtimes that install a commands surface (`commands/gsd`), slash commands such as `/gsd-plan-phase` continue to work directly — the nesting applies only to the Skill tool's top-level listing, not to the commands directory.
+
+### Migration note (breaking change on nesting runtimes)
+
+On the seven nesting runtimes listed above, upgrading to v1.40 changes skill invocation behaviour:
+
+- **Before:** each of the ~67 concrete `gsd-<name>` skills appeared at the top level and was invocable by bare name through the Skill tool.
+- **After:** only the 6 `gsd-ns-*` router bundles appear at the top level. Concrete skills are reachable via the router's routing table and a `Read skills/<name>/SKILL.md` call. Direct bare-name invocation of concrete skills through the Skill tool's listing no longer works.
+- **Slash commands unchanged:** `/gsd-plan-phase`, `/gsd-discuss-phase`, etc. still work directly where a commands surface is installed.
+- **Upgrade prune:** the installer's existing prune step removes the legacy top-level `gsd-<concrete>/` skill directories on upgrade — no manual cleanup is needed.
 
 ---
 
@@ -369,7 +386,7 @@ GSD generates markdown files that become LLM system prompts. This means any user
 - `gsd-prompt-guard.js` — Scans Write/Edit calls to `.planning/` for injection patterns (always active, advisory-only)
 - `gsd-workflow-guard.js` — Warns on file edits outside GSD workflow context (opt-in via `hooks.workflow_guard`)
 
-**CI Scanner:** `prompt-injection-scan.test.cjs` scans all agent, workflow, and command files for embedded injection vectors.
+**CI Scanner:** `prompt-injection-scan.security.test.cjs` scans all agent, workflow, and command files for embedded injection vectors.
 
 ---
 
@@ -688,6 +705,16 @@ To assign different models on a non-Claude runtime:
 }
 ```
 
+#### Codex skill picker and agent scheduling (#774)
+
+GSD enriches each Codex install with two additional artifacts:
+
+- **Skill TUI chip** — each installed `gsd-*` skill directory contains an `agents/openai.yaml` file that populates the Codex `/skills` picker with a human-readable display name and a short description, so you can browse and invoke GSD skills from the Codex TUI without typing the full skill name.
+
+- **Flex-tier scheduling** — light-tier agents (haiku-equivalent) emit `service_tier = "flex"` and `model_verbosity = "low"` in their agent TOML. The Codex scheduler routes these agents to the flex tier (lower cost, background processing) and suppresses verbose token output.
+
+Both enrichments are written automatically at install time and require no manual configuration. Requires Codex CLI ≥ 0.130.0.
+
 #### Switching from Claude to Codex with one config change (#2517)
 
 ```json
@@ -698,6 +725,15 @@ To assign different models on a non-Claude runtime:
 ```
 
 See [Runtime-Aware Profiles](CONFIGURATION.md#runtime-aware-profiles-2517).
+
+#### Per-runtime command enrichment
+
+When generating artifacts, the installer adapts GSD commands to each runtime's native command schema:
+
+- **Gemini CLI** — generated TOML commands use Gemini's `{{args}}` placeholder (translated from Claude's `$ARGUMENTS`) so typed arguments interpolate into the prompt, and `/gsd:progress` injects live project state via a fixed `!{cat .planning/STATE.md 2>/dev/null}` shell block (no interpolated input, so no injection risk; Gemini shows its standard confirmation dialog).
+- **Qwen Code** — main-loop skills carry Qwen's numeric `priority` field so the most-used workflows (e.g. `new-project`, `plan-phase`, `execute-phase`) sort first in the `/skills` list; utility skills are left unset. Higher values sort earlier; the field affects only the `/skills` list order.
+
+See [How to install GSD Core on your runtime](how-to/install-on-your-runtime.md) for the full per-runtime details.
 
 ### Manual install / no-Node.js setup
 
@@ -727,11 +763,50 @@ npx @opengsd/gsd-core --cline --local    # this project only
 npx @opengsd/gsd-core --codebuddy --global
 ```
 
+GSD installs four surfaces for CodeBuddy: `/gsd-*` slash commands in `~/.codebuddy/commands/`, subagents in `~/.codebuddy/agents/`, model-invocable skills in `~/.codebuddy/skills/`, and `settings.json` hooks. The skills are emitted with `user-invocable: false` so the slash commands are the single `/` menu surface (no duplicate entries).
+
 ### Installing for Qwen Code
 
 ```bash
 npx @opengsd/gsd-core --qwen --global
 ```
+
+### Installing as a Gemini CLI extension (#775)
+
+GSD ships a `gemini-extension.json` extension manifest at the repository root, so
+Gemini CLI users can install, update, and remove GSD through Gemini's own
+extension lifecycle — and have it show up in `gemini extensions list`:
+
+```bash
+# Install (Gemini clones the repo and copies the extension)
+gemini extensions install https://github.com/open-gsd/gsd-core
+
+# Update to the latest released manifest version
+gemini extensions update gsd-core
+
+# Remove
+gemini extensions uninstall gsd-core
+```
+
+For local development against a checkout, symlink it instead of copying:
+
+```bash
+gemini extensions link /path/to/gsd-core
+```
+
+**What the extension delivers today:** it loads GSD's operating context
+(`GEMINI.md`) into every Gemini session in the project, and gives you the
+discoverable install/update/remove lifecycle above. The `/gsd:*` slash commands,
+agents, and hooks are still installed via the dedicated installer:
+
+```bash
+npx @opengsd/gsd-core --gemini --global
+```
+
+The two paths are complementary and additive — installing the extension does not
+change or replace the `npx gsd-core --gemini` install, and either can be used on
+its own. (Slash-command/agent/hook projection into the extension package itself
+is a planned follow-up.)
 
 ### Installing for Prerelease Editions
 
@@ -749,7 +824,7 @@ WINDSURF_CONFIG_DIR=~/.codeium/windsurf-next npx @opengsd/gsd-core@latest --wind
 | Gemini CLI | `~/.gemini` | `GEMINI_CONFIG_DIR` |
 | OpenCode | `XDG_CONFIG_HOME/opencode` | `OPENCODE_CONFIG_DIR` |
 | Codex | (per Codex CLI) | `--config-dir` flag |
-| Copilot | `~/.copilot` | `COPILOT_CONFIG_DIR` |
+| Copilot | `~/.copilot` | `COPILOT_CONFIG_DIR` (or `COPILOT_HOME`) |
 | Cursor | `~/.cursor` | `CURSOR_CONFIG_DIR` |
 | Windsurf | `~/.codeium/windsurf` | `WINDSURF_CONFIG_DIR` |
 | Antigravity | auto-detected | `ANTIGRAVITY_CONFIG_DIR` |
@@ -772,6 +847,18 @@ Set `commit_docs: false` during `/gsd-new-project` or via `/gsd-settings`. Add `
 
 Since v1.17, the installer backs up locally modified files to `gsd-local-patches/`. Run `/gsd-update --reapply` to merge your changes back.
 
+### Install or Refresh a Release Candidate
+
+To install or refresh GSD from the `@next` RC dist-tag (the pre-release channel established by ADR #660), run:
+
+```bash
+/gsd-update --next
+# or equivalently:
+/gsd-update --rc
+```
+
+The same scope/runtime detection, changelog preview, custom-file backup, and cache clearing apply. Omitting `--next`/`--rc` keeps targeting `@latest` (stable channel, no change). Only the `@latest` and `@next` channels are supported — no arbitrary dist-tag can be passed.
+
 ### Cannot Update via npm
 
 See [docs/manual-update.md](manual-update.md) for a step-by-step manual update procedure.
@@ -779,6 +866,35 @@ See [docs/manual-update.md](manual-update.md) for a step-by-step manual update p
 ### Workflow Diagnostics (`/gsd-forensics`)
 
 When a workflow fails in a non-obvious way, run `/gsd-forensics` to generate a diagnostic report covering git history anomalies, artifact integrity, and state inconsistencies. Output goes to `.planning/forensics/`.
+
+### Pre-populated Permissions (Claude Code)
+
+Since v1.3.1, the installer pre-populates `~/.claude/settings.json` (or
+`settings.local.json` for local installs) with the core permissions GSD needs:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx gsd-core *)",
+      "Read(.planning/*)",
+      "Write(.planning/*)",
+      "Read(STATE.md)",
+      "Write(STATE.md)"
+    ],
+    "deny": [
+      "Read(.env)",
+      "Read(.env.*)",
+      "Read(.secrets)"
+    ]
+  }
+}
+```
+
+These entries eliminate first-run approval prompts for GSD's own tool calls. The
+merge is non-destructive — your existing permissions are preserved and GSD entries
+are only appended. Uninstalling GSD removes exactly these entries and preserves
+any others.
 
 ### Executor Subagent Gets "Permission denied" on Bash Commands
 

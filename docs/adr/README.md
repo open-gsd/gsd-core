@@ -54,6 +54,8 @@ See **[CONTRIBUTING.md — "Proposing an ADR or PRD"](../../CONTRIBUTING.md#prop
 | [456-test-rigor-architecture.md](456-test-rigor-architecture.md) | Test-rigor architecture — deterministic scheduling, antagonistic tier, typed-surface mandate, delete-bad-tests policy | Accepted |
 | [457-generated-cjs-single-source.md](457-generated-cjs-single-source.md) | Collapse hand-written CJS to generated single-source | Proposed |
 | [660-release-from-next-head.md](660-release-from-next-head.md) | Release from the head of next; immutable release tags; @next dist-tag as the RC surface | Proposed |
+| [58-runtime-install-policy-module.md](58-runtime-install-policy-module.md) | Runtime Install Policy Module owns the typed install-plan projection | Accepted |
+| [766-claude-code-plugin-manifest-module.md](766-claude-code-plugin-manifest-module.md) | Claude Code Plugin Manifest Module owns the projection of gsd-core surfaces onto the Claude Code plugin contract | Accepted |
 
 ## Seam map
 

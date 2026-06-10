@@ -30,20 +30,21 @@ const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const {
   getDirName,
-  getGlobalDir,
   getConfigDirFromHome,
   convertClaudeToCliineMarkdown,
   install,
   finishInstall,
 } = require('../bin/install.js');
 
+const { getGlobalConfigDir } = require('../gsd-core/bin/lib/runtime-homes.cjs');
+
 describe('Cline runtime directory mapping', () => {
   test('getDirName returns .cline for local installs', () => {
     assert.strictEqual(getDirName('cline'), '.cline');
   });
 
-  test('getGlobalDir returns ~/.cline for global installs', () => {
-    assert.strictEqual(getGlobalDir('cline'), path.join(os.homedir(), '.cline'));
+  test('getGlobalConfigDir returns ~/.cline for global installs', () => {
+    assert.strictEqual(getGlobalConfigDir('cline'), path.join(os.homedir(), '.cline'));
   });
 
   test('getConfigDirFromHome returns .cline fragment', () => {
@@ -52,7 +53,7 @@ describe('Cline runtime directory mapping', () => {
   });
 });
 
-describe('getGlobalDir (Cline)', () => {
+describe('getGlobalConfigDir (Cline)', () => {
   let originalClineConfigDir;
 
   beforeEach(() => {
@@ -69,30 +70,30 @@ describe('getGlobalDir (Cline)', () => {
 
   test('returns ~/.cline with no env var or explicit dir', () => {
     delete process.env.CLINE_CONFIG_DIR;
-    const result = getGlobalDir('cline');
+    const result = getGlobalConfigDir('cline');
     assert.strictEqual(result, path.join(os.homedir(), '.cline'));
   });
 
   test('returns explicit dir when provided', () => {
-    const result = getGlobalDir('cline', '/custom/cline-path');
+    const result = getGlobalConfigDir('cline', '/custom/cline-path');
     assert.strictEqual(result, '/custom/cline-path');
   });
 
   test('respects CLINE_CONFIG_DIR env var', () => {
     process.env.CLINE_CONFIG_DIR = '~/custom-cline';
-    const result = getGlobalDir('cline');
+    const result = getGlobalConfigDir('cline');
     assert.strictEqual(result, path.join(os.homedir(), 'custom-cline'));
   });
 
   test('explicit dir takes priority over CLINE_CONFIG_DIR', () => {
     process.env.CLINE_CONFIG_DIR = '~/from-env';
-    const result = getGlobalDir('cline', '/explicit/path');
+    const result = getGlobalConfigDir('cline', '/explicit/path');
     assert.strictEqual(result, '/explicit/path');
   });
 
   test('does not break other runtimes', () => {
-    assert.strictEqual(getGlobalDir('claude'), path.join(os.homedir(), '.claude'));
-    assert.strictEqual(getGlobalDir('codex'), path.join(os.homedir(), '.codex'));
+    assert.strictEqual(getGlobalConfigDir('claude'), path.join(os.homedir(), '.claude'));
+    assert.strictEqual(getGlobalConfigDir('codex'), path.join(os.homedir(), '.codex'));
   });
 });
 
@@ -141,17 +142,19 @@ describe('Cline install (local)', () => {
     cleanup(tmpDir);
   });
 
-  test('install creates .clinerules file', () => {
+  test('install creates .clinerules directory with gsd.md (#787 directory form)', () => {
     install(false, 'cline');
-    const clinerules = path.join(tmpDir, '.clinerules');
-    assert.ok(fs.existsSync(clinerules), '.clinerules must exist after cline install');
+    const clinerulesDir = path.join(tmpDir, '.clinerules');
+    assert.ok(fs.existsSync(clinerulesDir), '.clinerules must exist after cline install');
+    assert.ok(fs.statSync(clinerulesDir).isDirectory(), '.clinerules must be a directory (#787)');
+    assert.ok(fs.existsSync(path.join(clinerulesDir, 'gsd.md')), '.clinerules/gsd.md must exist');
   });
 
-  test('.clinerules contains GSD instructions', () => {
+  test('.clinerules/gsd.md contains GSD instructions', () => {
     install(false, 'cline');
-    const clinerules = path.join(tmpDir, '.clinerules');
-    const content = fs.readFileSync(clinerules, 'utf8');
-    assert.ok(content.includes('GSD') || content.includes('gsd'), '.clinerules must reference GSD');
+    const ruleFile = path.join(tmpDir, '.clinerules', 'gsd.md');
+    const content = fs.readFileSync(ruleFile, 'utf8');
+    assert.ok(content.includes('GSD') || content.includes('gsd'), '.clinerules/gsd.md must reference GSD');
   });
 
   test('install creates gsd-core engine directory', () => {

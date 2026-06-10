@@ -15,7 +15,7 @@
 
 ## How-to guides
 
-- [在你的运行时上安装](how-to/install-on-your-runtime.md) — 适用于全部 15 个受支持运行时的安装步骤
+- [在你的运行时上安装](how-to/install-on-your-runtime.md) — 适用于全部 16 个受支持运行时的安装步骤
 - [讨论一个阶段](how-to/discuss-a-phase.md) — 在规划开始前记录实现决策
 - [规划一个阶段](how-to/plan-a-phase.md) — 执行调研、分解工作并验证计划质量
 - [执行一个阶段](how-to/execute-a-phase.md) — 使用全新上下文的子代理以并行波次运行计划

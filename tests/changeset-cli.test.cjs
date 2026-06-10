@@ -1,7 +1,7 @@
 'use strict';
 process.env.GSD_TEST_MODE = '1';
 
-const { test, describe, before, after } = require('node:test');
+const { test, describe, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -34,6 +34,11 @@ function runRender(args = []) {
     report: r.stdout && r.stdout.length ? JSON.parse(r.stdout) : null,
     stderr: r.stderr || '',
   };
+}
+
+function runRenderRaw(args = []) {
+  const r = cp.spawnSync(process.execPath, [SCRIPT, 'render', '--repo', tmp, ...args], { encoding: 'utf8' });
+  return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
 }
 
 before(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-changeset-')); });
@@ -327,10 +332,13 @@ describe('changeset cli extract: version-range changelog extraction (#3496)', ()
   test('F1: workflows/update.md contains concrete extract subcommand invocation', (_t) => {
     const workflowPath = path.join(ROOT, 'gsd-core', 'workflows', 'update.md');
     const workflowText = fs.readFileSync(workflowPath, 'utf8');
-    // The invocation is: node "$GSD_DIR/gsd-core/scripts/changeset/cli.cjs" extract
-    // so the literal substring is 'cli.cjs" extract' (quote between script path and subcommand)
+    // The invocation uses either a direct path or an intermediate variable:
+    //   node "$GSD_DIR/scripts/changeset/cli.cjs" extract
+    //   node "$GSD_CHANGESET_CLI" extract
+    // Accept either form so future refactors don't immediately trip this anchor.
     assert.ok(
-      workflowText.includes('cli.cjs" extract') || workflowText.includes('cli.cjs extract'),
+      workflowText.includes('cli.cjs" extract') || workflowText.includes('cli.cjs extract') ||
+      (workflowText.includes('GSD_CHANGESET_CLI') && workflowText.includes('" extract')),
       'update.md must invoke cli.cjs extract (fix for #3496 BLOCKER 1)',
     );
     assert.ok(
@@ -344,6 +352,40 @@ describe('changeset cli extract: version-range changelog extraction (#3496)', ()
     assert.ok(
       workflowText.includes('EXTRACT_EXIT') || workflowText.includes('EXTRACT_JSON'),
       'update.md must capture exit code or JSON output from extract',
+    );
+  });
+
+  // F2: update.md must use the INSTALLED path ($GSD_DIR/scripts/changeset/cli.cjs),
+  // NOT the old broken path ($GSD_DIR/gsd-core/scripts/changeset/cli.cjs).
+  // The installer copies scripts/changeset/ into <configDir>/scripts/changeset/,
+  // so the runtime path is $GSD_DIR/scripts/changeset/cli.cjs (#935).
+  // allow-test-rule: reads a product workflow .md file (not CJS source) to verify
+  // the runtime install path contract; there is no behavioural runtime to invoke.
+  test('F2: update.md CLI path is $GSD_DIR/scripts/changeset/cli.cjs (not gsd-core/scripts/…) (#935)', (_t) => {
+    const workflowPath = path.join(ROOT, 'gsd-core', 'workflows', 'update.md');
+    const workflowText = fs.readFileSync(workflowPath, 'utf8');
+    // The correct installed path must appear somewhere in the update workflow
+    assert.ok(
+      workflowText.includes('scripts/changeset/cli.cjs'),
+      'update.md must reference scripts/changeset/cli.cjs',
+    );
+    // The old broken path ($GSD_DIR/gsd-core/scripts/changeset/cli.cjs) must not appear
+    assert.ok(
+      !workflowText.includes('gsd-core/scripts/changeset/cli.cjs'),
+      'update.md must NOT reference the old gsd-core/scripts/changeset/cli.cjs path (fix for #935)',
+    );
+  });
+
+  // F3: update.md must guard against the CLI being missing (not pure silent-swallow)
+  // allow-test-rule: reads a product workflow .md file (not CJS source) to verify
+  // the guard is present; there is no behavioural runtime to invoke.
+  test('F3: update.md has an explicit guard when changeset CLI is missing (#935)', (_t) => {
+    const workflowPath = path.join(ROOT, 'gsd-core', 'workflows', 'update.md');
+    const workflowText = fs.readFileSync(workflowPath, 'utf8');
+    // The workflow must check for CLI existence before invoking it
+    assert.ok(
+      workflowText.includes('GSD_CHANGESET_CLI') && workflowText.includes('! -f'),
+      'update.md must guard against a missing changeset CLI with [ ! -f "$GSD_CHANGESET_CLI" ] (#935)',
     );
   });
 });
@@ -926,5 +968,109 @@ describe('changeset cli render --allow-empty', () => {
     } finally {
       cleanup(dir);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GROUP D — render --preview (#759)
+// ---------------------------------------------------------------------------
+
+describe('changeset cli render --preview (#759)', () => {
+  // Helper: reset the shared tmp dir to a clean state for preview tests.
+  function resetTmp() {
+    // Remove CHANGELOG.md if present.
+    const changelogPath = path.join(tmp, 'CHANGELOG.md');
+    if (fs.existsSync(changelogPath)) {
+      fs.unlinkSync(changelogPath);
+    }
+    // Remove any leftover .changeset/*.md fragments.
+    const changesetDir = path.join(tmp, '.changeset');
+    if (fs.existsSync(changesetDir)) {
+      for (const f of fs.readdirSync(changesetDir)) {
+        if (f.endsWith('.md') && f !== 'README.md') {
+          fs.unlinkSync(path.join(changesetDir, f));
+        }
+      }
+    }
+  }
+
+  // Reset state before each preview test so a new test added to this group
+  // can never inherit a CHANGELOG.md or fragments left by the previous one.
+  beforeEach(resetTmp);
+
+  test('render --preview prints the section to stdout and mutates nothing', () => {
+    writeFragment('preview-frag-one', 'Added', 900, 'preview-added-feature');
+
+    const fragmentPath = path.join(tmp, '.changeset', 'preview-frag-one.md');
+    const r = runRenderRaw(['--version', '9.9.0', '--date', '2026-01-02', '--preview']);
+
+    assert.equal(r.status, 0, `expected exit 0; stderr=${r.stderr}`);
+    assert.ok(r.stdout.includes('## [9.9.0]'), `stdout must contain ## [9.9.0]; got: ${r.stdout}`);
+    assert.ok(r.stdout.includes('### Added'), `stdout must contain ### Added; got: ${r.stdout}`);
+    assert.ok(r.stdout.includes('preview-added-feature'), `stdout must contain fragment body; got: ${r.stdout}`);
+
+    // CHANGELOG.md must NOT have been created.
+    assert.ok(!fs.existsSync(path.join(tmp, 'CHANGELOG.md')), 'CHANGELOG.md must NOT be created by --preview');
+
+    // Fragment file must still exist.
+    assert.ok(fs.existsSync(fragmentPath), 'fragment file must still exist after --preview');
+  });
+
+  test('render --preview with zero fragments emits the placeholder and writes nothing', () => {
+    // No fragments written — zero-fragment scenario.
+
+    const r = runRenderRaw(['--version', '9.9.0', '--date', '2026-01-02', '--preview']);
+
+    assert.equal(r.status, 0, `expected exit 0; stderr=${r.stderr}`);
+    assert.ok(r.stdout.includes('## ['), `stdout must contain a release heading; got: ${r.stdout}`);
+    assert.ok(r.stdout.includes('_No notable changes._'), `stdout must contain placeholder; got: ${r.stdout}`);
+
+    // CHANGELOG.md must NOT have been created.
+    assert.ok(!fs.existsSync(path.join(tmp, 'CHANGELOG.md')), 'CHANGELOG.md must NOT be created by zero-fragment --preview');
+  });
+
+  test('render --preview --json returns preview text in report with consumed 0', () => {
+    writeFragment('preview-frag-two', 'Fixed', 901, 'preview-fixed-bug');
+
+    const fragmentPath = path.join(tmp, '.changeset', 'preview-frag-two.md');
+    // runRender appends --json automatically.
+    const r = runRender(['--version', '9.9.0', '--date', '2026-01-02', '--preview']);
+
+    assert.equal(r.status, 0, `expected exit 0; stderr=${r.stderr}`);
+    assert.ok(r.report, 'report must be parseable JSON');
+    assert.strictEqual(r.report.consumed, 0, 'consumed must be 0 for preview');
+    assert.strictEqual(r.report.fragmentCount, 1, 'fragmentCount must be 1');
+    assert.ok(typeof r.report.preview === 'string', 'report.preview must be a string');
+    assert.ok(r.report.preview.includes('## [9.9.0]'), `report.preview must contain ## [9.9.0]; got: ${r.report.preview}`);
+
+    // Fragment file must still exist.
+    assert.ok(fs.existsSync(fragmentPath), 'fragment file must still exist after --preview --json');
+  });
+
+  test('render --preview with an existing CHANGELOG.md leaves it byte-identical and shows only the new section', () => {
+    // Seed an existing CHANGELOG with a prior dated release.
+    const changelogPath = path.join(tmp, 'CHANGELOG.md');
+    const existing =
+      '# Changelog\n\n## [1.0.0] - 2020-01-01\n\n### Added\n\n- old prior feature (#1)\n';
+    fs.writeFileSync(changelogPath, existing);
+    writeFragment('preview-frag-three', 'Added', 902, 'brand-new-thing');
+    const before = fs.readFileSync(changelogPath, 'utf8');
+
+    const r = runRenderRaw(['--version', '9.9.0', '--date', '2026-01-02', '--preview']);
+
+    assert.equal(r.status, 0, `expected exit 0; stderr=${r.stderr}`);
+    // Output shows the new section...
+    assert.ok(r.stdout.includes('## [9.9.0]'), `stdout must contain new heading; got: ${r.stdout}`);
+    assert.ok(r.stdout.includes('brand-new-thing'), `stdout must contain new fragment body; got: ${r.stdout}`);
+    // ...and NOT the prior release history (preview is the new section only).
+    assert.ok(!r.stdout.includes('## [1.0.0]'), `preview must NOT include prior releases; got: ${r.stdout}`);
+    assert.ok(!r.stdout.includes('old prior feature'), `preview must NOT include prior bullets; got: ${r.stdout}`);
+
+    // Existing CHANGELOG.md must be byte-identical — preview mutates nothing.
+    assert.strictEqual(
+      fs.readFileSync(changelogPath, 'utf8'),
+      before,
+      'CHANGELOG.md must be byte-identical after --preview',
+    );
   });
 });

@@ -42,6 +42,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 | **Parallelism** | 4 instances (stack, features, architecture, pitfalls) |
 | **Tools** | Read, Write, Bash, Grep, Glob, WebSearch, WebFetch, mcp (context7) |
 | **Model (balanced)** | Sonnet |
+| **Color** | Cyan |
 | **Produces** | `.planning/research/STACK.md`, `FEATURES.md`, `ARCHITECTURE.md`, `PITFALLS.md` |
 
 **Capabilities:**
@@ -61,6 +62,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 | **Parallelism** | 4 instances (same focus areas as project researcher) |
 | **Tools** | Read, Write, Bash, Grep, Glob, WebSearch, WebFetch, mcp (context7) |
 | **Model (balanced)** | Sonnet |
+| **Color** | Cyan |
 | **Produces** | `{phase}-RESEARCH.md` |
 
 **Capabilities:**
@@ -80,7 +82,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 | **Parallelism** | Single instance |
 | **Tools** | Read, Write, Bash, Grep, Glob, WebSearch, WebFetch, mcp (context7) |
 | **Model (balanced)** | Sonnet |
-| **Color** | `#E879F9` (fuchsia) |
+| **Color** | Purple |
 | **Produces** | `{phase}-UI-SPEC.md` |
 
 **Capabilities:**
@@ -159,7 +161,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 |----------|-------|
 | **Spawned by** | `/gsd-plan-phase`, `/gsd-quick` |
 | **Parallelism** | Single instance |
-| **Tools** | Read, Write, Bash, Glob, Grep, WebFetch, mcp (context7) |
+| **Tools** | Read, Write, Edit, Bash, Glob, Grep, WebFetch, mcp (context7) |
 | **Model (balanced)** | Opus |
 | **Color** | Green |
 | **Produces** | `{phase}-{N}-PLAN.md` files |
@@ -268,7 +270,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 | **Parallelism** | Single instance |
 | **Tools** | Read, Bash, Glob, Grep |
 | **Model (balanced)** | Sonnet |
-| **Color** | `#22D3EE` (cyan) |
+| **Color** | Cyan |
 | **Produces** | BLOCK/FLAG/PASS verdict |
 
 ---
@@ -292,6 +294,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 - Logs issues for `/gsd-verify-work` to address
 - Milestone scope filtering: gaps addressed in later phases are marked as "deferred", not reported as failures (v1.32)
 - **Test quality audit** (v1.32): verifies that tests prove what they claim by checking for disabled/skipped tests on requirements, circular test patterns (system generating its own expected values), assertion strength (existence vs. value vs. behavioral), and expected value provenance. Blockers from test quality audit override an otherwise passing verification
+- Runs the full workspace test suite at most once per verification — proves a test *exists* by enumeration and that it *passes* via a single named test, never re-running the whole suite per must-have.
 
 ---
 
@@ -305,6 +308,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 | **Parallelism** | Single instance |
 | **Tools** | Read, Write, Edit, Bash, Grep, Glob |
 | **Model (balanced)** | Sonnet |
+| **Color** | Purple |
 | **Produces** | Test files, updated `VALIDATION.md` |
 
 **Key behaviors:**
@@ -324,7 +328,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 | **Parallelism** | Single instance |
 | **Tools** | Read, Write, Bash, Grep, Glob |
 | **Model (balanced)** | Sonnet |
-| **Color** | `#F472B6` (pink) |
+| **Color** | Pink |
 | **Produces** | `{phase}-UI-REVIEW.md` with scores |
 
 **6 Audit Pillars (scored 1-4):**
@@ -400,7 +404,7 @@ runs its default whole-repo scan.
 | **Parallelism** | Single instance |
 | **Tools** | Read |
 | **Model (balanced)** | Sonnet |
-| **Color** | Magenta |
+| **Color** | Purple |
 | **Produces** | `USER-PROFILE.md`, `CLAUDE.md` profile section |
 
 **Behavioral Dimensions:**
@@ -466,7 +470,7 @@ Communication style, decision patterns, debugging approach, UX preferences, vend
 | **Parallelism** | Single instance |
 | **Tools** | Read, Write, Edit, Bash, Glob, Grep |
 | **Model (balanced)** | Sonnet |
-| **Color** | `#EF4444` (red) |
+| **Color** | Red |
 | **Produces** | `{phase}-SECURITY.md` |
 
 **Key behaviors:**
@@ -492,7 +496,7 @@ Twelve additional agents ship under `agents/gsd-*.md` and are used by specialty 
 | **Parallelism** | Single instance |
 | **Tools** | Read, Bash, Glob, Grep, Write |
 | **Model (balanced)** | Sonnet |
-| **Color** | Magenta |
+| **Color** | Purple |
 | **Produces** | `PATTERNS.md` in the phase directory |
 
 **Key behaviors:**
@@ -532,7 +536,7 @@ Twelve additional agents ship under `agents/gsd-*.md` and are used by specialty 
 | **Parallelism** | Typically single instance per review scope |
 | **Tools** | Read, Write, Bash, Grep, Glob |
 | **Model (balanced)** | Sonnet |
-| **Color** | `#F59E0B` (amber) |
+| **Color** | Orange |
 | **Produces** | `REVIEW.md` in the phase directory |
 
 **Key behaviors:**
@@ -552,7 +556,7 @@ Twelve additional agents ship under `agents/gsd-*.md` and are used by specialty 
 | **Parallelism** | Single instance |
 | **Tools** | Read, Edit, Write, Bash, Grep, Glob |
 | **Model (balanced)** | Sonnet |
-| **Color** | `#10B981` (emerald) |
+| **Color** | Green |
 | **Produces** | `REVIEW-FIX.md`; one atomic git commit per applied fix |
 
 **Key behaviors:**
@@ -572,7 +576,7 @@ Twelve additional agents ship under `agents/gsd-*.md` and are used by specialty 
 | **Parallelism** | Single instance (sequential with domain-researcher / eval-planner) |
 | **Tools** | Read, Write, Bash, Grep, Glob, WebFetch, WebSearch, mcp (context7) |
 | **Model (balanced)** | Sonnet |
-| **Color** | `#34D399` (green) |
+| **Color** | Green |
 | **Produces** | Sections 3–4b of `AI-SPEC.md` (framework quick reference + implementation guidance) |
 
 **Key behaviors:**
@@ -591,7 +595,7 @@ Twelve additional agents ship under `agents/gsd-*.md` and are used by specialty 
 | **Parallelism** | Single instance |
 | **Tools** | Read, Write, Bash, Grep, Glob, WebSearch, WebFetch, mcp (context7) |
 | **Model (balanced)** | Sonnet |
-| **Color** | `#A78BFA` (violet) |
+| **Color** | Purple |
 | **Produces** | Section 1b of `AI-SPEC.md` |
 
 **Key behaviors:**
@@ -610,7 +614,7 @@ Twelve additional agents ship under `agents/gsd-*.md` and are used by specialty 
 | **Parallelism** | Single instance (sequential after domain-researcher) |
 | **Tools** | Read, Write, Bash, Grep, Glob, AskUserQuestion |
 | **Model (balanced)** | Sonnet |
-| **Color** | `#F59E0B` (amber) |
+| **Color** | Orange |
 | **Produces** | Sections 5–7 of `AI-SPEC.md` (Evaluation Strategy, Guardrails, Production Monitoring) |
 
 **Required reading:** `gsd-core/references/ai-evals.md` (evaluation framework).
@@ -631,7 +635,7 @@ Twelve additional agents ship under `agents/gsd-*.md` and are used by specialty 
 | **Parallelism** | Single instance |
 | **Tools** | Read, Write, Bash, Grep, Glob |
 | **Model (balanced)** | Sonnet |
-| **Color** | `#EF4444` (red) |
+| **Color** | Red |
 | **Produces** | `EVAL-REVIEW.md` with dimension scores, findings, and remediation guidance |
 
 **Required reading:** `gsd-core/references/ai-evals.md`.
@@ -652,7 +656,7 @@ Twelve additional agents ship under `agents/gsd-*.md` and are used by specialty 
 | **Parallelism** | Single instance (interactive) |
 | **Tools** | Read, Bash, Grep, Glob, WebSearch, AskUserQuestion |
 | **Model (balanced)** | Sonnet |
-| **Color** | `#38BDF8` (sky blue) |
+| **Color** | Cyan |
 | **Produces** | Scored ranked recommendation (structured return to orchestrator) |
 
 **Required reading:** `gsd-core/references/ai-frameworks.md` (decision matrix).

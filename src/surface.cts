@@ -11,10 +11,17 @@
  * Exports:
  *   readSurface(runtimeConfigDir)
  *   writeSurface(runtimeConfigDir, surfaceState)
- *   resolveSurface(runtimeConfigDir, manifest, clusterMap)
- *   applySurface(runtimeConfigDir, layout, manifest, clusterMap)
- *   listSurface(runtimeConfigDir, manifest, clusterMap)
+ *   resolveSurface(runtimeConfigDir, manifest, clusterMap?, registry?)
+ *   applySurface(runtimeConfigDir, layout, manifest, clusterMap?, registry?)
+ *   listSurface(runtimeConfigDir, manifest, clusterMap?, registry?)
  *   pruneSkillDirs(skillsDir, retainedNames, prefix, manifest)
+ *
+ * The optional `registry` param (ADR-857 phase 4c) accepts the capability-registry
+ * object.  When present, capability clusters are merged into the effective cluster
+ * map and the registry is threaded into resolveProfile so capability-contributed
+ * skills participate in the base set and disable-ability.  Absent or undefined
+ * leaves behaviour identical to the pre-registry path (no-op for current registry
+ * where UI=full and the full profile returns '*' regardless).
  *
  * ADR-457 build-at-publish: the hand-written bin/lib/surface.cjs collapsed
  * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
@@ -23,6 +30,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { platformWriteSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import installProfiles = require('./install-profiles.cjs');
@@ -35,7 +43,7 @@ import { CLUSTERS } from './clusters.cjs';
 import type { ClusterMap } from './clusters.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import runtimeArtifactLayout = require('./runtime-artifact-layout.cjs');
-const { findInstallSourceRoot } = runtimeArtifactLayout;
+const { findInstallSourceRoot, getInstallExports } = runtimeArtifactLayout;
 
 const SURFACE_FILE_NAME = '.gsd-surface.json';
 
@@ -53,6 +61,7 @@ interface ArtifactKind {
 interface Layout {
   runtime: string;
   configDir: string;
+  scope?: 'local' | 'global';
   kinds: ArtifactKind[];
 }
 
@@ -122,9 +131,9 @@ function clustersToSkills(clusterNames: string[], clusterMap: ClusterMap | Recor
   const result = new Set<string>();
   for (const name of clusterNames) {
     const members = (clusterMap as Record<string, ReadonlyArray<string> | undefined>)[name];
-    if (members) {
-      for (const s of members) result.add(s);
-    }
+    // FIX 5: guard against non-iterable members — malformed registry must never throw
+    if (!Array.isArray(members)) continue;
+    for (const s of (members as string[])) result.add(s);
   }
   return result;
 }
@@ -172,9 +181,46 @@ function normalizeSkillManifest(runtimeConfigDir: string, manifest: Map<string, 
  * 2. Remove skills in disabled clusters
  * 3. Add explicitAdds (and their transitive closure)
  * 4. Remove explicitRemoves (only the stem itself, no cascade)
+ *
+ * ADR-857 phase 4c: optional registry param.  When present:
+ *   - capability clusters are merged into the effective cluster map so
+ *     capability-owned skill groups are disable-able.
+ *   - registry is threaded into resolveProfile so capability skills
+ *     participate in the base skill set and their requires: chains expand.
  */
-function resolveSurface(runtimeConfigDir: string, manifest: Map<string, string[]> | object, clusterMap?: ClusterMap | Record<string, string[]>): { name: string; skills: Set<string>; agents: Set<string> } {
-  const cm = clusterMap || CLUSTERS;
+function resolveSurface(runtimeConfigDir: string, manifest: Map<string, string[]> | object, clusterMap?: ClusterMap | Record<string, string[]>, registry?: { capabilityClusters?: Record<string, string[]>; profileMembership?: Record<string, { tier: string; profiles: string[] }> }): { name: string; skills: Set<string>; agents: Set<string> } {
+  // Merge capability clusters into the cluster map when registry is provided.
+  // The ADR-857 phase 4a HARD gate guarantees that when a capId matches a CLUSTERS
+  // key, the values are EQUAL — so the spread is idempotent for matching names.
+  // Defense-in-depth: if a capId collides with a hand-authored CLUSTERS key AND
+  // the values DIFFER (future drift bypassing the gate), prefer the hand-authored
+  // value so disable behavior is never silently changed by a stale registry entry.
+  // Also guard: skip entries whose value is not a string[] (malformed registry).
+  let cm: ClusterMap | Record<string, string[]> = clusterMap || CLUSTERS;
+  if (registry && registry.capabilityClusters && typeof registry.capabilityClusters === 'object') {
+    const baseCm = cm;
+    const capClusters = registry.capabilityClusters;
+    const merged: Record<string, string[]> = { ...(baseCm as Record<string, string[]>) };
+    for (const capId of Object.keys(capClusters)) {
+      const val = capClusters[capId];
+      // FIX 5: skip malformed (non-array) entries — never throw on bad registry
+      if (!Array.isArray(val)) continue;
+      // FIX 4: if the capId matches an existing cluster key, only override when
+      // the values are identical (guaranteed by 4a gate).  If they differ, the
+      // hand-authored value wins — prefer known-correct disable behavior over
+      // a potentially stale registry entry.
+      if (Object.prototype.hasOwnProperty.call(baseCm, capId)) {
+        const existing = (baseCm as Record<string, readonly string[] | string[]>)[capId];
+        if (!Array.isArray(existing)) { merged[capId] = val; continue; }
+        // Values differ → hand-authored wins (skip the override)
+        if (existing.length !== val.length || existing.some((v, i) => v !== val[i])) continue;
+      }
+      // Prototype-pollution guard (parity with _capabilitySkillsForMode in install-profiles.cts)
+      if (capId === '__proto__' || capId === 'constructor' || capId === 'prototype') continue;
+      merged[capId] = val;
+    }
+    cm = merged;
+  }
   const skillManifest = normalizeSkillManifest(runtimeConfigDir, manifest);
   const surface = readSurface(runtimeConfigDir);
 
@@ -183,10 +229,11 @@ function resolveSurface(runtimeConfigDir: string, manifest: Map<string, string[]
     ? surface.baseProfile
     : (readActiveProfile(runtimeConfigDir) || 'full');
 
-  // Resolve base profile
+  // Resolve base profile — thread registry so capability skills are included.
   const baseResolved = resolveProfile({
     modes: baseProfileName.split(',').map((s: string) => s.trim()),
     manifest: skillManifest,
+    registry,
   });
 
   // If full, we need to enumerate all skills from the manifest
@@ -250,14 +297,35 @@ function resolveSurface(runtimeConfigDir: string, manifest: Map<string, string[]
  * Re-stage the active surface using the resolved layout.
  * Iterates layout.kinds and syncs each artifact kind to its destination.
  */
-function applySurface(runtimeConfigDir: string, layout: Layout, manifest: Map<string, string[]> | object, clusterMap?: ClusterMap | Record<string, string[]>): { name: string; skills: Set<string>; agents: Set<string> } {
+function applySurface(runtimeConfigDir: string, layout: Layout, manifest: Map<string, string[]> | object, clusterMap?: ClusterMap | Record<string, string[]>, registry?: { capabilityClusters?: Record<string, string[]>; profileMembership?: Record<string, { tier: string; profiles: string[] }> }): { name: string; skills: Set<string>; agents: Set<string> } {
   if (path.resolve(runtimeConfigDir) !== path.resolve(layout.configDir)) {
     throw new TypeError('applySurface runtimeConfigDir must match layout.configDir');
   }
   const skillManifest = normalizeSkillManifest(layout.configDir, manifest);
-  const resolved = resolveSurface(layout.configDir, skillManifest, clusterMap);
+  const resolved = resolveSurface(layout.configDir, skillManifest, clusterMap, registry);
+  // Mirror installRuntimeArtifacts: skills kinds get per-runtime path rewrites
+  // so SKILL.md bodies reference the install target (pathPrefix), not the
+  // converter's default ~/.claude paths (#813). Computed lazily so command-only
+  // runtimes do not trigger the install.js require.
+  let pathPrefix: string | null = null;
   for (const kind of layout.kinds) {
     const staged = kind.stage(resolved);
+    if (kind.kind === 'skills') {
+      const installExports = getInstallExports();
+      if (pathPrefix === null) {
+        const scope = layout.scope ?? 'global';
+        const resolvedTarget = path.resolve(layout.configDir).replace(/\\/g, '/');
+        const homeDir = os.homedir().replace(/\\/g, '/');
+        pathPrefix = installExports.computePathPrefix({
+          isGlobal: scope === 'global',
+          isOpencode: layout.runtime === 'opencode',
+          isWindowsHost: process.platform === 'win32',
+          resolvedTarget,
+          homeDir,
+        });
+      }
+      installExports.applyRuntimeContentRewritesInPlace(staged, layout.runtime, pathPrefix);
+    }
     const dest = path.join(layout.configDir, kind.destSubpath);
     _syncGsdDir(staged, dest, kind, skillManifest);
   }
@@ -387,23 +455,41 @@ function _syncGsdDir(stagedDir: string, destDir: string, kind: ArtifactKind | st
     // pruneSkillDirs() is the single point of truth for this logic.
     pruneSkillDirs(destDir, stagedDirs, kindPrefix, manifest);
   } else {
-    // commands / agents kind: work with .md files
-    const stagedFiles = new Set<string>(
-      fs.readdirSync(stagedDir).filter(f => f.endsWith('.md'))
-    );
+    // commands / agents kind: mirror installRuntimeArtifacts (_copyStaged /
+    // _removeGsdEntries in bin/install.js) so surface produces the SAME files as a
+    // fresh install (#816). Flat command dirs (opencode/cursor/augment/kilo) take
+    // the gsd- prefix on copy; namespaced command dirs (commands/gsd) and agents
+    // keep their staged names. Copying staged names verbatim previously diverged
+    // from install and orphaned the installed gsd-*.md files, and the unscoped
+    // prune deleted user-owned command files.
+    //
+    // NOTE: the destName rule below intentionally mirrors bin/install.js
+    // `_copyStaged` (the `namespacedByDir` decision). Keep them in sync.
+    const destLast = (typeof kind === 'object' && kind !== null && kind.destSubpath)
+      ? path.basename(kind.destSubpath)
+      : '';
+    const prefixStem = kindPrefix ? kindPrefix.replace(/-$/, '') : '';
+    const namespacedByDir = kindName === 'commands' && destLast === prefixStem;
 
-    // Copy files from staged to dest (overwrite to keep content current)
+    const stagedFiles = fs.readdirSync(stagedDir).filter(f => f.endsWith('.md'));
+    const stagedDestNames = new Set<string>();
     for (const file of stagedFiles) {
-      fs.copyFileSync(path.join(stagedDir, file), path.join(destDir, file));
+      const destName = (kindName === 'agents' || namespacedByDir)
+        ? file
+        : `${kindPrefix}${file.slice(0, -3)}.md`;
+      fs.copyFileSync(path.join(stagedDir, file), path.join(destDir, destName));
+      stagedDestNames.add(destName);
     }
 
-    // Remove gsd-only files from dest that aren't in staged set
-    // For commands dir: all .md files are gsd skills
-    // For agents dir: only gsd-* files
-    const destEntries = fs.readdirSync(destDir).filter(f => f.endsWith('.md'));
-    for (const file of destEntries) {
+    // Prune stale GSD-owned files not in the staged set, preserving user-owned files
+    // (mirrors install's prefix-scoped _removeGsdEntries):
+    //   - agents: only gsd-* are GSD-owned
+    //   - flat command dirs: only `${kindPrefix}`-prefixed are GSD-owned
+    //   - namespaced command dirs: the whole dir is GSD-owned
+    for (const file of fs.readdirSync(destDir).filter(f => f.endsWith('.md'))) {
       if (kindName === 'agents' && !file.startsWith('gsd-')) continue;
-      if (!stagedFiles.has(file)) {
+      if (kindName === 'commands' && !namespacedByDir && kindPrefix && !file.startsWith(kindPrefix)) continue;
+      if (!stagedDestNames.has(file)) {
         try { fs.unlinkSync(path.join(destDir, file)); } catch { /* ignore */ }
       }
     }
@@ -420,9 +506,9 @@ function _syncGsdDir(stagedDir: string, destDir: string, kind: ArtifactKind | st
  * Token cost = sum of description lengths ÷ 4 (mirrors audit script).
  * Descriptions are read from the install source (findInstallSourceRoot).
  */
-function listSurface(runtimeConfigDir: string, manifest: Map<string, string[]> | object, clusterMap?: ClusterMap | Record<string, string[]>): { enabled: string[]; disabled: string[]; tokenCost: number } {
+function listSurface(runtimeConfigDir: string, manifest: Map<string, string[]> | object, clusterMap?: ClusterMap | Record<string, string[]>, registry?: { capabilityClusters?: Record<string, string[]>; profileMembership?: Record<string, { tier: string; profiles: string[] }> }): { enabled: string[]; disabled: string[]; tokenCost: number } {
   const skillManifest = normalizeSkillManifest(runtimeConfigDir, manifest);
-  const resolved = resolveSurface(runtimeConfigDir, skillManifest, clusterMap);
+  const resolved = resolveSurface(runtimeConfigDir, skillManifest, clusterMap, registry);
 
   // All known stems from manifest (exclude _calls_agents_ meta keys)
   const allStems: string[] = [];

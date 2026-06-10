@@ -168,7 +168,7 @@ de ser lido* em busca de instruções injetadas em conteúdo não confiável —
 capturando casos em que um atacante incorporou instruções em um arquivo que o
 GSD está prestes a incorporar ao contexto de um agente.
 
-**Scanner de CI.** `prompt-injection-scan.test.cjs` escaneia todos os arquivos
+**Scanner de CI.** `prompt-injection-scan.security.test.cjs` escaneia todos os arquivos
 de agente, workflow e comando em busca de vetores de injeção embutidos como
 parte do conjunto de testes. Isso detecta tentativas de injeção no próprio
 código-fonte do GSD — por exemplo, um ataque de cadeia de suprimentos que

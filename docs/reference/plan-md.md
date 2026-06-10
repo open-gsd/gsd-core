@@ -53,8 +53,8 @@ must_haves:
       exports: ["PostCard"]
   key_links:
     - from: "src/components/PostFeed.tsx"
-      to: "/api/feed"
-      via: "fetch in useEffect"
+      to: "src/app/api/feed/route.ts"
+      via: "fetch in useEffect — calls /api/feed endpoint"
       pattern: "fetch.*api/feed"
 ---
 ```
@@ -92,9 +92,9 @@ must_haves:
 | `artifacts[].exports` | array of strings (optional) | Expected named exports to verify. |
 | `artifacts[].contains` | string (optional) | Regex or literal pattern that must appear in the file. |
 | `key_links` | array of objects | Critical connections between artifacts — the wiring that makes the system work end-to-end. |
-| `key_links[].from` | string | Source file or component. |
-| `key_links[].to` | string | Target file, endpoint, or module. |
-| `key_links[].via` | string | Description of how they connect (e.g. `fetch in useEffect`, `Prisma query`, `import`). |
+| `key_links[].from` | string | Source file (relative path from project root). Must be a literal file path — describe components or symbols in `via:`. |
+| `key_links[].to` | string | Target file (relative path from project root). Must be a literal file path — describe endpoints, modules, or APIs in `via:`. |
+| `key_links[].via` | string | Description of how they connect, including any endpoint, component, or symbol name (e.g. `fetch in useEffect — calls /api/feed`, `Prisma query via prisma.message`, `import`). |
 | `key_links[].pattern` | string (optional) | Regex to verify the connection exists in source. |
 
 ---

@@ -332,6 +332,7 @@ describe('Bug #3657: pristine-drift does not produce false FAIL_USER_LINES_MISSI
         'FAIL_INSTALLED_NOT_REGULAR_FILE',
         'FAIL_READ_ERROR',
         'FAIL_USER_LINES_MISSING',
+        'OK_NO_BASELINE',
         'OK_NO_SIGNIFICANT_BACKUP_LINES',
         'OK_NO_USER_LINES_VS_PRISTINE',
         'OK_PRISTINE_DRIFT_DETECTED',
@@ -523,5 +524,158 @@ describe('Bug #3657: pristine-drift does not produce false FAIL_USER_LINES_MISSI
       driftCheckPos < verifyStatusPos,
       'drift-check block must appear before the VERIFY_STATUS non-zero check in Step 5a',
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bug #934: OK_NO_BASELINE — pristine dir provided, hash recorded, but file absent
+// ---------------------------------------------------------------------------
+
+describe('Bug #934: OK_NO_BASELINE when recordedHash present but pristine file absent', () => {
+
+  /**
+   * Core regression: backup-meta.json has a pristine_hash for the file but
+   * the gsd-pristine/ snapshot is absent from disk (the installer's
+   * saveLocalPatches discarded the only candidate because its hash did not
+   * match the old-release hash — the file changed upstream between releases).
+   * Without the fix the verifier falls to over-broad mode and treats every
+   * upstream-removed line as a "user-added line that must survive", producing
+   * FAIL_USER_LINES_MISSING false positives.
+   * With the fix the verifier returns OK_NO_BASELINE (non-blocking, advisory).
+   */
+  test('exits 0 with reason=OK_NO_BASELINE when recordedHash present but pristine absent', () => {
+    resetFixture();
+
+    const FILE = 'gsd-core/workflows/execute-phase.md';
+
+    // The backup contains both the old upstream content and the user's line.
+    const backupContent =
+      'upstream line that was present in 1.4.0 but removed in 1.4.2 release\n' +
+      'another upstream line removed upstream between gsd-core releases here\n' +
+      'model: sonnet in frontmatter — this is the real user customisation line\n';
+
+    // The installed file has the new upstream content + the user's real line.
+    const installedContent =
+      'brand-new upstream line that replaced the old content in gsd-core 1.4.2\n' +
+      'model: sonnet in frontmatter — this is the real user customisation line\n';
+
+    // backup-meta.json records a hash (modern installer) but gsd-pristine/ is absent.
+    writeBackupMeta({ pristine_hashes: { [FILE]: 'sha256:deadbeef00000000000000000000000000000000000000000000000000000001' } });
+    writeFile(path.join(patchesDir, FILE), backupContent);
+    writeFile(path.join(configDir, FILE), installedContent);
+    // Deliberately do NOT write a pristine file — this is the gap-1 scenario.
+
+    const { status, report } = runVerifier();
+
+    // Must exit 0: cannot reason without baseline → non-blocking advisory.
+    assert.equal(status, 0, `expected exit 0; got ${status}; report=${JSON.stringify(report)}`);
+    assert.equal(report.failures, 0, `expected 0 failures; got ${report.failures}`);
+    const r0 = report.results[0];
+    assert.equal(r0.status, 'ok', `expected status ok; got ${r0.status}`);
+    assert.equal(r0.reason, REASON.OK_NO_BASELINE,
+      `expected OK_NO_BASELINE; got ${r0.reason}`);
+    assert.deepEqual(r0.missing, []);
+  });
+
+  /**
+   * Counter-test: when pristine is absent but NO recordedHash is present
+   * (pre-fix installer that never wrote backup-meta.json), the verifier must
+   * still fall to over-broad mode — the old behaviour for untracked backups.
+   * OK_NO_BASELINE must NOT fire in this case.
+   */
+  test('falls through to over-broad mode when pristine absent AND no recordedHash', () => {
+    resetFixture();
+
+    const FILE = 'gsd-core/workflows/plan-phase.md';
+    const droppedLine = 'user-added instruction that was dropped from the install output';
+    const backupContent =
+      'stock upstream line long enough to be significant in the file\n' +
+      droppedLine + '\n';
+    const installedContent = 'stock upstream line long enough to be significant in the file\n';
+
+    // No backup-meta.json — simulates pre-fix installer with no hash records.
+    writeFile(path.join(patchesDir, FILE), backupContent);
+    writeFile(path.join(configDir, FILE), installedContent);
+    // No pristine file.
+
+    const { status, report } = runVerifier();
+
+    // Over-broad mode catches the genuinely dropped user line.
+    assert.equal(status, 1, 'over-broad mode should catch the dropped user line');
+    assert.equal(report.failures, 1);
+    const r0 = report.results[0];
+    assert.equal(r0.status, 'fail');
+    assert.equal(r0.reason, REASON.FAIL_USER_LINES_MISSING);
+    assert.ok(r0.missing.includes(droppedLine),
+      `dropped line must appear in .missing[]; got ${JSON.stringify(r0.missing)}`);
+    // Must NOT be OK_NO_BASELINE — that only fires when a hash WAS recorded.
+    assert.notEqual(r0.reason, REASON.OK_NO_BASELINE);
+  });
+
+  /**
+   * Presence check: when pristine IS present AND hash matches, the normal
+   * flow must proceed (not short-circuit to OK_NO_BASELINE).
+   * A real dropped user line must still be caught.
+   */
+  test('does not short-circuit to OK_NO_BASELINE when pristine exists and hash matches', () => {
+    resetFixture();
+
+    const FILE = 'gsd-core/workflows/plan-phase.md';
+    const pristineContent = 'stock upstream line long enough to be significant content\n';
+    const droppedLine = 'user customisation that was genuinely dropped from the merged output';
+    const backupContent = pristineContent + droppedLine + '\n';
+    const installedContent = pristineContent; // user line dropped — real failure
+
+    writeBackupMeta({ pristine_hashes: { [FILE]: sha256(pristineContent) } });
+    writeFile(path.join(patchesDir, FILE), backupContent);
+    writeFile(path.join(configDir, FILE), installedContent);
+    writeFile(path.join(pristineDir, FILE), pristineContent);
+
+    const { status, report } = runVerifier();
+
+    assert.equal(status, 1, 'real dropped user line must be caught');
+    assert.equal(report.failures, 1);
+    const r0 = report.results[0];
+    assert.equal(r0.status, 'fail');
+    assert.equal(r0.reason, REASON.FAIL_USER_LINES_MISSING);
+    assert.notEqual(r0.reason, REASON.OK_NO_BASELINE);
+    assert.ok(r0.missing.includes(droppedLine));
+  });
+
+  /**
+   * When --pristine-dir is NOT provided at all (old CLI invocation without the
+   * flag), the OK_NO_BASELINE path must never fire — there is no pristine dir
+   * context to consult and the old over-broad behaviour must be preserved.
+   */
+  test('does not return OK_NO_BASELINE when --pristine-dir is not provided', () => {
+    resetFixture();
+
+    const FILE = 'gsd-core/workflows/execute-phase.md';
+    const backupContent =
+      'upstream line removed in newer version but present in backup\n' +
+      'model: sonnet — user customisation line in the backup file\n';
+    const installedContent =
+      'replacement upstream line in the newer release version\n' +
+      'model: sonnet — user customisation line in the backup file\n';
+
+    // Record a hash — but no pristine dir will be passed to the verifier.
+    writeBackupMeta({ pristine_hashes: { [FILE]: 'sha256:deadbeef00000000000000000000000000000000000000000000000000000001' } });
+    writeFile(path.join(patchesDir, FILE), backupContent);
+    writeFile(path.join(configDir, FILE), installedContent);
+
+    // Run without --pristine-dir flag.
+    const { status, report } = runVerifier({ pristine: false });
+
+    // Over-broad mode: every significant backup line is required.
+    // "upstream line removed in newer version but present in backup" is NOT in
+    // the installed content → over-broad mode FAILS this file (exit 1).
+    // OK_NO_BASELINE must NOT fire — there was no pristine dir to consult.
+    assert.equal(status, 1, `over-broad mode should fail (upstream-removed line absent); got ${status}`);
+    const r0 = report.results[0];
+    assert.equal(r0.status, 'fail', `expected fail status; got ${r0.status}`);
+    assert.equal(r0.reason, REASON.FAIL_USER_LINES_MISSING,
+      `expected FAIL_USER_LINES_MISSING from over-broad mode; got ${r0.reason}`);
+    assert.notEqual(r0.reason, REASON.OK_NO_BASELINE,
+      `OK_NO_BASELINE must not fire when --pristine-dir is not provided`);
   });
 });

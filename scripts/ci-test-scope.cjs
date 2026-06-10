@@ -6,16 +6,83 @@ const { existsSync, readdirSync, appendFileSync } = require('fs');
 
 const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 
+// Workflow files that are purely administrative / policy bots. Changes to these
+// files do NOT require the cross-platform test matrix — only a lightweight
+// ubuntu lane running workflow-lint tests is needed.
+// FAIL-SAFE: any .github/workflows/*.yml NOT listed here is treated as a
+// pipeline workflow and gets the full matrix. New workflow files default to full.
+const INERT_WORKFLOWS = new Set([
+  'stale.yml',
+  'branch-cleanup.yml',
+  'branch-naming.yml',
+  'auto-label-issues.yml',
+  'auto-branch.yml',
+  'auto-backmerge.yml',
+  'close-draft-prs.yml',
+  'dismiss-unauthorized-pr-approvals.yml',
+  'pr-target-validator.yml',
+  'pr-template-format.yml',
+  'require-issue-link.yml',
+  'changeset-required.yml',
+  'docs-required.yml',
+  'discord-changelog.yml',
+]);
+
+// Workflows that gate merges, ship the product, or run security/cross-platform
+// suites — these must ALWAYS get the full pipeline treatment and can never be
+// added to INERT_WORKFLOWS. A module-load assertion enforces this so a mistaken
+// or malicious addition fails CI loudly in the `changes` job on every PR.
+const PROTECTED_WORKFLOWS = new Set([
+  'test.yml',
+  'install-smoke.yml',
+  'mutation.yml',
+  'security-scan.yml',
+  'release.yml',
+]);
+for (const wf of PROTECTED_WORKFLOWS) {
+  if (INERT_WORKFLOWS.has(wf)) {
+    throw new Error(`ci-test-scope: protected workflow "${wf}" must not be in INERT_WORKFLOWS (it requires the full test matrix).`);
+  }
+}
+
+/**
+ * Returns true if the path is an inert (non-pipeline) workflow file.
+ * Only `.github/workflows/<name>` where <name> is in INERT_WORKFLOWS qualifies.
+ */
+function isInertCi(filePath) {
+  if (!filePath.startsWith('.github/workflows/')) return false;
+  const name = filePath.slice('.github/workflows/'.length);
+  // Must be a direct child (no further slashes) and in the allowlist.
+  return !name.includes('/') && INERT_WORKFLOWS.has(name);
+}
+
+// Tests shared by both the 'workflow automation' and 'inert CI' rules.
+const WORKFLOW_LINT_TESTS = [
+  'tests/workflow-shell-pinning.test.cjs',
+  'tests/pr-template-policy.test.cjs',
+  'tests/lint-pr-check-project-dir.test.cjs',
+];
+
 const RULES = [
   {
     name: 'workflow automation',
-    match: path => path.startsWith('.github/workflows/') || path.startsWith('.github/rulesets/'),
+    // Only NON-inert .github/workflows/* and all .github/rulesets/* trigger full matrix.
+    // FAIL-SAFE: any .github/workflows/*.yml not in INERT_WORKFLOWS is treated as pipeline.
+    match: filePath => (filePath.startsWith('.github/workflows/') && !isInertCi(filePath)) ||
+      filePath.startsWith('.github/rulesets/'),
     fullMatrix: true,
     tests: [
-      'tests/workflow-shell-pinning.test.cjs',
+      ...WORKFLOW_LINT_TESTS,
       'tests/release-tarball-smoke-workflow.test.cjs',
-      'tests/lint-pr-check-project-dir.test.cjs',
-      'tests/pr-template-policy.test.cjs',
+    ],
+  },
+  {
+    name: 'inert CI',
+    match: filePath => isInertCi(filePath),
+    fullMatrix: false,
+    tests: [
+      ...WORKFLOW_LINT_TESTS,
+      'tests/policy-lint-shallow-checkout.test.cjs',
     ],
   },
   {
@@ -102,11 +169,11 @@ const RULES = [
       path.includes('prompt-injection-scan') ||
       path.startsWith('tests/fixtures/adversarial/security/'),
     tests: [
-      'tests/secret-scan-lint.test.cjs',
-      'tests/prompt-injection-scan.test.cjs',
-      'tests/security-prompt-injection.test.cjs',
-      'tests/read-injection-scanner.test.cjs',
-      'tests/security-scan.test.cjs',
+      'tests/secret-scan-lint.security.test.cjs',
+      'tests/prompt-injection-scan.security.test.cjs',
+      'tests/security-prompt-injection.security.test.cjs',
+      'tests/read-injection-scanner.security.test.cjs',
+      'tests/security-scan.security.test.cjs',
     ],
   },
   {
@@ -141,14 +208,6 @@ const RULES = [
       'tests/agent-skills.test.cjs',
       'tests/agent-skills-awareness.test.cjs',
       'tests/agent-required-reading-consistency.test.cjs',
-      'tests/docs-parity-live-registry.test.cjs',
-    ],
-  },
-  {
-    name: 'docs content',
-    match: path => path.startsWith('docs/'),
-    fullMatrix: false,
-    tests: [
       'tests/docs-parity-live-registry.test.cjs',
     ],
   },
@@ -229,7 +288,12 @@ function changedFiles(args) {
   if (!args.base || !args.head) {
     throw new Error('--base/--head or --files is required');
   }
-  const stdout = execFileSync('git', ['diff', '--name-only', args.base, args.head], {
+  // Three-dot diff (merge-base...head) matches GitHub's PR "Files changed" semantics.
+  // A two-dot `git diff base head` would surface every file `next` gained after this
+  // branch's merge-base, mis-flagging product_changed/full_matrix on docs-only PRs cut
+  // from a slightly stale base (#837). The `changes` job checks out with fetch-depth: 0,
+  // so the merge-base is always available.
+  const stdout = execFileSync('git', ['diff', '--name-only', `${args.base}...${args.head}`], {
     encoding: 'utf8',
   });
   return splitFiles(stdout);
@@ -244,31 +308,56 @@ function addAll(set, values) {
   for (const value of values) set.add(value);
 }
 
-const WINDOWS_HINTS = ['windows', 'path', 'shell', 'workflow', 'install', 'hook'];
+// Windows-sensitive filename hints — deliberately narrow. 'workflow',
+// 'install', and 'hook' were dropped from this list: workflow-lint tests are
+// platform-independent YAML/policy checks, and the installer/hooks RULES set
+// fullMatrix=true, so the full Windows lane already runs when those paths
+// change. The old six-hint list pulled 102 of ~633 test files into the scoped
+// windows lane, turning it into a ~10-minute job on every PR.
+const WINDOWS_HINTS = ['windows', 'win32', 'shell', 'path'];
 const isWindowsHint = s => WINDOWS_HINTS.some(k => s.toLowerCase().includes(k));
 
 function classify(files) {
   const targeted = new Set();
   const windows = new Set();
   const reasons = [];
-  let codeChanged = false;
+  let productOrPipelineChanged = false; // product/pipeline code (excludes docs)
+  let inertCiChanged = false;           // inert workflow files
   let fullMatrix = false;
 
   for (const file of files) {
-    if (['bin/', 'gsd-core/', 'agents/', 'commands/', 'docs/', 'hooks/', 'tests/', 'scripts/'].some(p => file.startsWith(p)) ||
+    // Determine if this file is product/pipeline code.
+    // docs/ and root-level .md files are intentionally excluded.
+    if (
+      ['bin/', 'src/', 'gsd-core/', 'agents/', 'commands/', 'hooks/', 'tests/', 'scripts/'].some(p => file.startsWith(p)) ||
       file === 'package.json' || file === 'package-lock.json' ||
       (file.startsWith('tsconfig') && file.endsWith('.json')) ||
-      file.startsWith('.github/workflows/') ||
-      file.startsWith('.github/rulesets/')) {
-      codeChanged = true;
+      file.startsWith('.github/rulesets/')
+    ) {
+      productOrPipelineChanged = true;
+    }
+
+    // Non-inert .github/workflows/* are pipeline code → full matrix.
+    if (file.startsWith('.github/workflows/') && !isInertCi(file)) {
+      productOrPipelineChanged = true;
+    }
+
+    // Inert workflow files set a lightweight signal.
+    if (isInertCi(file)) {
+      inertCiChanged = true;
     }
 
     if (file.startsWith('tests/') && file.endsWith('.test.cjs')) {
       targeted.add(file);
-      fullMatrix = true;
-      if (isWindowsHint(file)) {
-        windows.add(file);
-      }
+      // #494 invariant, narrowed: a changed test must still be exercised on
+      // the divergent OS before merge, but at per-file cost — it ALWAYS joins
+      // the scoped windows lane instead of triggering the three full parity
+      // lanes. (full_matrix fired on 15/15 sampled PRs because test-driven
+      // PRs always touch tests/, costing ~25 runner-minutes each.) Changed
+      // tests already run on ubuntu-22 and ubuntu-24 via targeted_tests; the
+      // residual macOS / windows-node-22 cross-product is covered by the full
+      // matrix on every push to next.
+      windows.add(file);
     }
 
     for (const rule of RULES) {
@@ -280,6 +369,10 @@ function classify(files) {
     }
   }
 
+  // code_changed: true when product/pipeline OR inert CI changed.
+  // Docs-only PRs (neither flag set) get code_changed=false → full matrix skip.
+  const codeChanged = productOrPipelineChanged || inertCiChanged;
+
   const targetedTests = existingTests([...targeted].sort());
 
   // When code changed but no rule matched any changed file, fall back to the
@@ -290,8 +383,25 @@ function classify(files) {
 
   const windowsTests = existingTests([...new Set([...windows, ...targetedTests.filter(isWindowsHint)])].sort());
 
+  // Inert-CI-only: full_matrix must be false (override any RULES that fired).
+  if (inertCiChanged && !productOrPipelineChanged) {
+    fullMatrix = false;
+  }
+
+  // Normalize: when code_changed is false, the output must be self-consistent.
+  // A docs file can coincidentally match a coarse content RULE (e.g. docs/installer-migrations.md
+  // matches the installer rule via path.includes('install')), leaving full_matrix=true and
+  // non-empty targeted_tests/windows_tests. The workflow skips correctly (gated on code_changed)
+  // but the output object would be self-contradictory. Force a clean "nothing to run" result.
+  if (!codeChanged) {
+    fullMatrix = false;
+    targetedTests.length = 0;
+    windowsTests.length = 0;
+  }
+
   return {
     code_changed: codeChanged,
+    product_changed: productOrPipelineChanged,
     full_matrix: fullMatrix,
     targeted_tests: targetedTests,
     windows_tests: windowsTests,
@@ -303,6 +413,7 @@ function writeOutputs(result) {
   if (!process.env.GITHUB_OUTPUT) return;
   const lines = [
     `code_changed=${result.code_changed}`,
+    `product_changed=${result.product_changed}`,
     `full_matrix=${result.full_matrix}`,
     `targeted_tests=${result.targeted_tests.join(' ')}`,
     `windows_tests=${result.windows_tests.join(' ')}`,
@@ -313,6 +424,7 @@ function writeOutputs(result) {
 function main() {
   try {
     const args = parseArgs(process.argv.slice(2));
+
     const files = changedFiles(args);
     const result = classify(files);
     result.changed_files = files;
