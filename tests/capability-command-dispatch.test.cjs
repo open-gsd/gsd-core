@@ -496,36 +496,248 @@ describe('dispatchCapabilityCommand — FIX 2: own-property guard on router expo
   });
 });
 
-// ─── 8. Router throws synchronously — propagation is intentional ──────────────
+// ─── 8. Router throws — structured error handling ────────────────────────────
 
-describe('dispatchCapabilityCommand — throwing router propagates (consistent with host routers)', () => {
-  test('a capability router that throws synchronously propagates the error', () => {
-    // The host's 12 family routers are called bare in the switch (no try/catch)
-    // and rely on the top-level runMain .catch for error propagation.
-    // dispatchCapabilityCommand is intentionally consistent — it does NOT wrap
-    // the router call in try/catch. This test documents + locks in that behavior.
+const { ExitError } = require('../gsd-core/bin/lib/cli-exit.cjs');
+
+describe('dispatchCapabilityCommand — non-ExitError from router → structured error via error()', () => {
+  test('router throws TypeError → injected error() called with attributed message, raw error does NOT propagate', () => {
+    // A capability plug-in command's unexpected failure must surface as a
+    // structured, attributed error (honoring --json-errors / SDK consumers),
+    // not a raw stack trace bypassing the error formatter.
+    const errorCalls = [];
     const registry = makeRegistry({
       foo: { capId: 'x', module: 'fake.cjs', router: 'routeFoo' },
     });
     const requireModule = () => ({
-      routeFoo: () => { throw new Error('router-threw'); },
+      routeFoo: () => { throw new TypeError('boom'); },
     });
 
-    assert.throws(
-      () => {
-        dispatchCapabilityCommand({
-          command: 'foo',
-          args: [],
-          cwd: '/p',
-          raw: false,
-          error: () => {},
-          registry,
-          requireModule,
-        });
-      },
-      (err) => err.message === 'router-threw',
-      'a throwing router must propagate the error (consistent with host router behavior)',
-    );
+    // Must NOT throw — the raw TypeError must be caught and routed through error()
+    assert.doesNotThrow(() => {
+      dispatchCapabilityCommand({
+        command: 'foo',
+        args: [],
+        cwd: '/p',
+        raw: false,
+        error: (msg, reason) => { errorCalls.push({ msg, reason }); },
+        registry,
+        requireModule,
+      });
+    });
+
+    assert.strictEqual(errorCalls.length, 1, 'error() should be called exactly once');
+    const { msg, reason } = errorCalls[0];
+    // Message must name the command, router, module, and original error message
+    assert.ok(msg.includes('foo'), 'message must name the command; got: ' + msg);
+    assert.ok(msg.includes('routeFoo'), 'message must name the router; got: ' + msg);
+    assert.ok(msg.includes('fake.cjs'), 'message must name the module; got: ' + msg);
+    assert.ok(msg.includes('boom'), 'message must include original error message; got: ' + msg);
+    // Reason must be SDK_FAIL_FAST
+    const { ERROR_REASON } = require('../gsd-core/bin/lib/core.cjs');
+    assert.strictEqual(reason, ERROR_REASON.SDK_FAIL_FAST, 'reason must be SDK_FAIL_FAST');
+  });
+
+  test('router throws a generic Error → same structured attribution, does not propagate', () => {
+    const errorCalls = [];
+    const registry = makeRegistry({
+      bar: { capId: 'y', module: 'bar.cjs', router: 'routeBar' },
+    });
+    const requireModule = () => ({
+      routeBar: () => { throw new Error('unexpected failure'); },
+    });
+
+    assert.doesNotThrow(() => {
+      dispatchCapabilityCommand({
+        command: 'bar',
+        args: [],
+        cwd: '/p',
+        raw: false,
+        error: (msg, reason) => { errorCalls.push({ msg, reason }); },
+        registry,
+        requireModule,
+      });
+    });
+
+    assert.strictEqual(errorCalls.length, 1, 'error() should be called exactly once');
+    assert.ok(errorCalls[0].msg.includes('bar'), 'message must name the command');
+    assert.ok(errorCalls[0].msg.includes('unexpected failure'), 'message must include original error');
+  });
+
+  test('router throws an ExitError → propagates unchanged, error() is NOT called', () => {
+    // An ExitError comes from the router calling its own error() (intentional
+    // structured exit). It must propagate untouched so message/code/json-mode
+    // are preserved.
+    const errorCalls = [];
+    const thrown = new ExitError(1, 'intentional-exit');
+    const registry = makeRegistry({
+      foo: { capId: 'x', module: 'fake.cjs', router: 'routeFoo' },
+    });
+    const requireModule = () => ({
+      routeFoo: () => { throw thrown; },
+    });
+
+    let caught;
+    try {
+      dispatchCapabilityCommand({
+        command: 'foo',
+        args: [],
+        cwd: '/p',
+        raw: false,
+        error: (msg, reason) => { errorCalls.push({ msg, reason }); },
+        registry,
+        requireModule,
+      });
+    } catch (e) {
+      caught = e;
+    }
+
+    // The exact ExitError must have been rethrown
+    assert.strictEqual(caught, thrown, 'the original ExitError must propagate unchanged');
+    // error() must NOT have been called
+    assert.strictEqual(errorCalls.length, 0, 'error() must not be called when an ExitError propagates');
+  });
+
+  test('router returns normally → returns true, error() not called', () => {
+    const errorCalls = [];
+    const calls = [];
+    const registry = makeRegistry({
+      foo: { capId: 'x', module: 'fake.cjs', router: 'routeFoo' },
+    });
+    const requireModule = makeRequireModule('fake.cjs', 'routeFoo', calls);
+
+    const result = dispatchCapabilityCommand({
+      command: 'foo',
+      args: ['a'],
+      cwd: '/p',
+      raw: false,
+      error: (msg, reason) => { errorCalls.push({ msg, reason }); },
+      registry,
+      requireModule,
+    });
+
+    assert.strictEqual(result, true, 'successful dispatch must return true');
+    assert.strictEqual(errorCalls.length, 0, 'error() must not be called on success');
+    assert.strictEqual(calls.length, 1, 'router must have been called once');
+  });
+});
+
+// ─── 10. Async router (thenable) → structured error ─────────────────────────
+
+describe('dispatchCapabilityCommand — async router returns a Promise → structured error', () => {
+  const { ERROR_REASON } = require('../gsd-core/bin/lib/core.cjs');
+
+  test('router returns Promise.resolve() → error() called with "must be synchronous" + SDK_FAIL_FAST', () => {
+    const errorCalls = [];
+    const registry = makeRegistry({
+      foo: { capId: 'x', module: 'fake.cjs', router: 'routeFoo' },
+    });
+    const requireModule = () => ({
+      routeFoo: () => Promise.resolve(),
+    });
+
+    // Must NOT throw — the thenable check surfaces via error(), not an exception
+    assert.doesNotThrow(() => {
+      dispatchCapabilityCommand({
+        command: 'foo',
+        args: [],
+        cwd: '/p',
+        raw: false,
+        error: (msg, reason) => { errorCalls.push({ msg, reason }); },
+        registry,
+        requireModule,
+      });
+    });
+
+    assert.strictEqual(errorCalls.length, 1, 'error() should be called exactly once');
+    const { msg, reason } = errorCalls[0];
+    assert.ok(msg.includes('must be synchronous'), 'message must say "must be synchronous"; got: ' + msg);
+    assert.ok(msg.includes('foo'), 'message must name the command; got: ' + msg);
+    assert.ok(msg.includes('routeFoo'), 'message must name the router; got: ' + msg);
+    assert.ok(msg.includes('fake.cjs'), 'message must name the module; got: ' + msg);
+    assert.strictEqual(reason, ERROR_REASON.SDK_FAIL_FAST, 'reason must be SDK_FAIL_FAST');
+  });
+
+  test('router returns Promise.reject() → error() called with "must be synchronous", async rejection does NOT escape', () => {
+    const errorCalls = [];
+    const registry = makeRegistry({
+      bar: { capId: 'y', module: 'bar.cjs', router: 'routeBar' },
+    });
+    // Attach .catch(()=>{}) immediately so the test process does not log an
+    // unhandled-rejection warning for the returned (un-awaited) rejected Promise.
+    const rejectedPromise = Promise.reject(new Error('async failure'));
+    rejectedPromise.catch(() => {});
+    const requireModule = () => ({
+      routeBar: () => rejectedPromise,
+    });
+
+    assert.doesNotThrow(() => {
+      dispatchCapabilityCommand({
+        command: 'bar',
+        args: [],
+        cwd: '/p',
+        raw: false,
+        error: (msg, reason) => { errorCalls.push({ msg, reason }); },
+        registry,
+        requireModule,
+      });
+    });
+
+    assert.strictEqual(errorCalls.length, 1, 'error() should be called exactly once');
+    const { msg, reason } = errorCalls[0];
+    assert.ok(msg.includes('must be synchronous'), 'message must say "must be synchronous"; got: ' + msg);
+    assert.ok(msg.includes('bar'), 'message must name the command; got: ' + msg);
+    assert.ok(msg.includes('routeBar'), 'message must name the router; got: ' + msg);
+    assert.ok(msg.includes('bar.cjs'), 'message must name the module; got: ' + msg);
+    assert.strictEqual(reason, ERROR_REASON.SDK_FAIL_FAST, 'reason must be SDK_FAIL_FAST');
+  });
+
+  test('sync router that returns undefined (normal) still dispatches without error', () => {
+    // Regression: ensure the thenable guard does not fire on undefined return
+    const errorCalls = [];
+    const calls = [];
+    const registry = makeRegistry({
+      foo: { capId: 'x', module: 'fake.cjs', router: 'routeFoo' },
+    });
+    const requireModule = makeRequireModule('fake.cjs', 'routeFoo', calls);
+
+    const result = dispatchCapabilityCommand({
+      command: 'foo',
+      args: [],
+      cwd: '/p',
+      raw: false,
+      error: (msg, reason) => { errorCalls.push({ msg, reason }); },
+      registry,
+      requireModule,
+    });
+
+    assert.strictEqual(result, true, 'sync router must return true');
+    assert.strictEqual(errorCalls.length, 0, 'error() must not be called for sync router');
+    assert.strictEqual(calls.length, 1, 'router must have been called');
+  });
+
+  test('sync router that returns a non-thenable object does not trigger thenable guard', () => {
+    // A router that returns a plain object (not a Promise) must not be rejected.
+    const errorCalls = [];
+    const registry = makeRegistry({
+      foo: { capId: 'x', module: 'fake.cjs', router: 'routeFoo' },
+    });
+    const requireModule = () => ({
+      routeFoo: () => ({ status: 'ok' }), // plain object, not thenable
+    });
+
+    const result = dispatchCapabilityCommand({
+      command: 'foo',
+      args: [],
+      cwd: '/p',
+      raw: false,
+      error: (msg, reason) => { errorCalls.push({ msg, reason }); },
+      registry,
+      requireModule,
+    });
+
+    assert.strictEqual(result, true, 'sync router returning plain object must return true');
+    assert.strictEqual(errorCalls.length, 0, 'error() must not be called');
   });
 });
 

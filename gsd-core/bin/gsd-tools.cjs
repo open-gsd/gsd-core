@@ -353,7 +353,22 @@ function dispatchCapabilityCommand({ command, args, cwd, raw, error, registry, r
     return true; // consumed — don't emit "Unknown command"
   }
 
-  fn({ args, cwd, raw, error });
+  let _result;
+  try {
+    _result = fn({ args, cwd, raw, error });
+  } catch (e) {
+    if (e instanceof ExitError) throw e; // intentional structured error from the router (honors --json-errors) — propagate untouched
+    error(
+      'capability command "' + command + '" router "' + entry.router + '" in module "' + entry.module + '" threw: ' + (e && e.message ? e.message : String(e)),
+      ERROR_REASON.SDK_FAIL_FAST,
+    );
+  }
+  if (_result && typeof _result.then === 'function') {
+    error(
+      'capability command "' + command + '" router "' + entry.router + '" in module "' + entry.module + '" must be synchronous (returned a Promise); async capability routers are not supported.',
+      ERROR_REASON.SDK_FAIL_FAST,
+    );
+  }
   return true;
 }
 
