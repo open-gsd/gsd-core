@@ -272,6 +272,45 @@ grep -rn "empty\|isEmpty\|no.*found\|length === 0" src --include="*.tsx" --inclu
 
 Score based on: loading states present, error boundaries exist, empty states handled, disabled states for actions, confirmation for destructive actions.
 
+### Pillar 7: Impeccable Anti-patterns (only when `workflow.impeccable` is `true`)
+
+> Skip this pillar entirely if `workflow.impeccable` is `false` or absent in `.planning/config.json`.
+> When skipped: record score as N/A and note "Impeccable integration disabled" in findings.
+
+**Audit method:** Static grep for concrete anti-pattern signatures in CSS, Tailwind classes, and string literals.
+
+```bash
+# Ghost card: 1px border element that also carries a large shadow — cross-reference by filename
+grep -rln "border.*1px\|border-\[1px\]\| border " src --include="*.tsx" --include="*.jsx" --include="*.css" 2>/dev/null > /tmp/imp-border.txt
+grep -rln "shadow-lg\|shadow-xl\|shadow-2xl\|shadow-3xl\|box-shadow" src --include="*.tsx" --include="*.jsx" --include="*.css" 2>/dev/null > /tmp/imp-shadow.txt
+comm -12 <(sort /tmp/imp-border.txt) <(sort /tmp/imp-shadow.txt) 2>/dev/null
+
+# Over-rounded cards (border-radius > 16px on card/panel elements)
+grep -rohn "rounded-2xl\|rounded-3xl\|rounded-\[2[0-9]px\]\|rounded-\[3[0-9]px\]\|rounded-\[4[0-9]px\]" src --include="*.tsx" --include="*.jsx" 2>/dev/null
+grep -rohn "border-radius:[[:space:]]*[2-9][0-9]px" src --include="*.css" --include="*.scss" 2>/dev/null
+
+# Gradient text (background-clip: text + gradient)
+grep -rn "bg-clip-text\|background-clip.*text" src --include="*.tsx" --include="*.jsx" --include="*.css" 2>/dev/null
+
+# Side-stripe accent borders (left/right border > 1px used as decoration)
+grep -rohn "border-l-[2-9]\|border-r-[2-9]" src --include="*.tsx" --include="*.jsx" 2>/dev/null
+grep -rohn "border-left:[[:space:]]*[2-9]px\|border-right:[[:space:]]*[2-9]px" src --include="*.css" --include="*.scss" 2>/dev/null
+
+# AI buzzwords in UI string literals
+grep -rn "seamless\|empower\|supercharge\|leverage\|unleash\|world.class\|next.gen\|cutting.edge\|game.changer\|mission.critical\|enterprise.grade" src --include="*.tsx" --include="*.jsx" --include="*.ts" 2>/dev/null | grep -v "^\s*//"
+
+# Warm-neutral background token names
+grep -rn "cream\|sand\|paper\|parchment\|ivory\|linen\|bone" src --include="*.css" --include="*.scss" --include="*.ts" --include="*.tsx" 2>/dev/null | grep -i "background\|--bg\|--surface\|--color-bg"
+```
+
+**Scoring:**
+- **4** — No anti-patterns found
+- **3** — 1-2 minor FLAG-level issues (buzzwords in non-prominent copy, slightly over-rounded at 20px on a secondary card)
+- **2** — 1 BLOCK-level issue (ghost card on a secondary component, gradient text on a non-critical label)
+- **1** — Multiple BLOCK-level issues, or ghost card / gradient text on a primary UI element
+
+**If UI-SPEC existed and was approved including Dimension 7:** any pattern found in code that contradicts the approved spec scores ≤ 2 — the contract said no, the executor ignored it.
+
 </audit_pillars>
 
 <registry_audit>
@@ -351,8 +390,9 @@ Write to: `$PHASE_DIR/$PADDED_PHASE-UI-REVIEW.md`
 | 4. Typography | {1-4}/4 | {one-line summary} |
 | 5. Spacing | {1-4}/4 | {one-line summary} |
 | 6. Experience Design | {1-4}/4 | {one-line summary} |
+| 7. Impeccable Anti-patterns | {1-4}/4 or N/A | {one-line summary} |
 
-**Overall: {total}/24**
+**Overall: {total}/24** (or {total}/28 if Pillar 7 scored)
 
 ---
 
@@ -423,6 +463,15 @@ For each of the 6 pillars:
 3. Score 1-4 with evidence
 4. Record findings with file:line references
 
+## Step 5b: Audit Pillar 7 (Impeccable, conditional)
+
+```bash
+IMPECCABLE_ENABLED=$(cat .planning/config.json 2>/dev/null | grep -o '"workflow.impeccable":[[:space:]]*true' || echo "")
+```
+
+If `IMPECCABLE_ENABLED` is non-empty: run the pillar 7 grep commands from `<audit_pillars>` and score 1-4.
+If empty: record Pillar 7 as N/A, note "Impeccable integration disabled" in findings.
+
 ## Step 6: Registry Safety Audit
 
 Run the registry audit from `<registry_audit>`. Only executes if `components.json` exists AND UI-SPEC.md lists third-party registries. Results feed into UI-REVIEW.md.
@@ -455,6 +504,7 @@ Use output format from `<output_format>`. If registry audit produced flags, add 
 | Typography | {N}/4 |
 | Spacing | {N}/4 |
 | Experience Design | {N}/4 |
+| Impeccable Anti-patterns | {N}/4 or N/A |
 
 ### Top 3 Fixes
 1. {fix summary}
@@ -480,6 +530,7 @@ UI audit is complete when:
 - [ ] Dev server detection attempted
 - [ ] Screenshots captured (or noted as unavailable)
 - [ ] All 6 pillars scored with evidence
+- [ ] Pillar 7 audited if `workflow.impeccable` true, recorded as N/A if false
 - [ ] Registry safety audit executed (if shadcn + third-party registries present)
 - [ ] Top 3 priority fixes identified with concrete solutions
 - [ ] UI-REVIEW.md written to correct path
