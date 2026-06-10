@@ -19,13 +19,13 @@ let sandbox;
 
 let fixtureCount = 0;
 
-function runLint({ files, allowlist }) {
+function runLint({ files, allowlist, args = [] }) {
   const testsDir = path.join(sandbox, `tests-${fixtureCount++}`);
   fs.mkdirSync(testsDir, { recursive: true });
   for (const f of files) fs.writeFileSync(path.join(testsDir, f), '');
   const allowlistPath = path.join(testsDir, 'allowlist.json');
   fs.writeFileSync(allowlistPath, JSON.stringify(allowlist));
-  return spawnSync(process.execPath, [SCRIPT], {
+  const r = spawnSync(process.execPath, [SCRIPT, ...args], {
     cwd: ROOT,
     encoding: 'utf8',
     env: {
@@ -34,6 +34,8 @@ function runLint({ files, allowlist }) {
       GSD_LINT_REGRESSION_ALLOWLIST: allowlistPath,
     },
   });
+  r.allowlistPath = allowlistPath;
+  return r;
 }
 
 describe('lint-regression-test-names', () => {
@@ -92,5 +94,49 @@ describe('lint-regression-test-names', () => {
   test('repo baseline passes (real tests/ dir against real allowlist)', () => {
     const r = spawnSync(process.execPath, [SCRIPT], { cwd: ROOT, encoding: 'utf8' });
     assert.strictEqual(r.status, 0, `stderr: ${r.stderr}\nstdout: ${r.stdout}`);
+  });
+
+  test('novel-offender failure names the --update drift-repair path', () => {
+    const r = runLint({
+      files: ['bug-500-inherited.test.cjs'],
+      allowlist: [],
+    });
+    assert.notStrictEqual(r.status, 0);
+    assert.match(r.stderr, /--update/);
+  });
+
+  test('--update regenerates the allowlist from the tests dir (grandfather + prune)', () => {
+    const r = runLint({
+      files: ['bug-100-kept.test.cjs', 'bug-200-new.test.cjs'],
+      allowlist: ['bug-100-kept.test.cjs', 'bug-300-gone.test.cjs'],
+      args: ['--update'],
+    });
+    assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+    assert.match(r.stdout, /grandfathered: bug-200-new\.test\.cjs/);
+    assert.match(r.stdout, /pruned: bug-300-gone\.test\.cjs/);
+    assert.deepStrictEqual(
+      JSON.parse(fs.readFileSync(r.allowlistPath, 'utf8')),
+      ['bug-100-kept.test.cjs', 'bug-200-new.test.cjs'],
+    );
+  });
+
+  test('--update is a no-op when already in sync', () => {
+    const r = runLint({
+      files: ['bug-100-kept.test.cjs'],
+      allowlist: ['bug-100-kept.test.cjs'],
+      args: ['--update'],
+    });
+    assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+    assert.match(r.stdout, /already in sync/);
+    assert.deepStrictEqual(
+      JSON.parse(fs.readFileSync(r.allowlistPath, 'utf8')),
+      ['bug-100-kept.test.cjs'],
+    );
+  });
+
+  test('unknown arguments are rejected', () => {
+    const r = runLint({ files: [], allowlist: [], args: ['--frobnicate'] });
+    assert.strictEqual(r.status, 2);
+    assert.match(r.stderr, /unknown argument/);
   });
 });

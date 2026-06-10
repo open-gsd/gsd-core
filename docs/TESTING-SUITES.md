@@ -45,6 +45,13 @@ identity ratchet (`npm run lint:regression-names`, part of `npm run lint:ci`):
 - A **new** `bug-*` file fails CI — fold it into the owning module's file.
 - **Deleting/consolidating** a grandfathered file requires pruning its
   allowlist entry, so the baseline only ever shrinks.
+- **Inherited drift** (the failure names files your PR didn't add — e.g. the
+  base branch merged `bug-*` files without feeding the allowlist, or you
+  rebased and carried a pre-rebase allowlist): run
+  `node scripts/lint-regression-test-names.cjs --update` and commit the
+  regenerated allowlist. Snapshot artifacts like this allowlist (and
+  `docs/INVENTORY.md`) must be regenerated **after** rebasing, never carried
+  through a rebase.
 
 The ratchet deliberately covers only `bug-*`. Files named `feat-NNNN-*` /
 `enh-NNNN-*` are *feature* test files — one (or one per suite) per feature is

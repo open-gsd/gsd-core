@@ -24,6 +24,16 @@
  *     entry from scripts/lint-regression-test-names.allowlist.json so the
  *     baseline only ever shrinks.
  *
+ * ## --update (allowlist drift repair)
+ *
+ * `node scripts/lint-regression-test-names.cjs --update` regenerates the
+ * allowlist from the files currently in tests/ and reports what changed.
+ * Use it when the failure is INHERITED drift, not your own new file — e.g.
+ * the base branch merged bug-* files without feeding the allowlist (the
+ * #947/#948/#950 race after the ratchet landed), or after a rebase. The
+ * allowlist is a snapshot artifact: regenerate it AFTER rebasing, never
+ * carry a pre-rebase copy through.
+ *
  * See docs/TESTING-SUITES.md ("Regression tests") for the placement policy.
  */
 
@@ -42,11 +52,37 @@ const ALLOWLIST_PATH =
 const BUG_FILE_RE = /^bug-\d+.*\.test\.cjs$/;
 
 function main() {
+  const args = process.argv.slice(2);
+  const update = args.includes('--update');
+  const unknown = args.filter(a => a !== '--update');
+  if (unknown.length > 0) {
+    throw new ExitError(2, `lint-regression-test-names: unknown argument(s): ${unknown.join(', ')}`);
+  }
+
   const current = fs
     .readdirSync(TESTS_DIR)
     .filter(f => BUG_FILE_RE.test(f))
     .sort();
   const known = JSON.parse(fs.readFileSync(ALLOWLIST_PATH, 'utf8'));
+
+  if (update) {
+    const knownSet = new Set(known);
+    const currentSet = new Set(current);
+    const added = current.filter(f => !knownSet.has(f));
+    const pruned = known.filter(f => !currentSet.has(f));
+    if (added.length === 0 && pruned.length === 0) {
+      console.log(`lint-regression-test-names --update: allowlist already in sync (${current.length} entries)`);
+      return;
+    }
+    fs.writeFileSync(ALLOWLIST_PATH, JSON.stringify(current, null, 2) + '\n');
+    console.log(
+      `lint-regression-test-names --update: ${known.length} -> ${current.length} entries` +
+      (added.length ? ` | grandfathered: ${added.join(', ')}` : '') +
+      (pruned.length ? ` | pruned: ${pruned.join(', ')}` : '')
+    );
+    console.log('Commit the regenerated allowlist with your change.');
+    return;
+  }
 
   const failures = [];
   const { novel } = assertWithinAllowlist({
@@ -61,10 +97,13 @@ function main() {
     for (const msg of failures) console.error(msg);
     if (novel.length > 0) {
       console.error(
-        '\nNew bug-NNNN test files are no longer accepted. Add the regression ' +
-        "case to the owning module's test file (e.g. a describe('regressions') " +
-        'block in tests/<module>.test.cjs) instead of creating a new file. ' +
-        'See docs/TESTING-SUITES.md.'
+        '\nIf this PR added the file(s) above: new bug-NNNN test files are not ' +
+        "accepted — add the regression case to the owning module's test file " +
+        "(e.g. a describe('regressions') block in tests/<module>.test.cjs) instead.\n" +
+        'If the file(s) came from the base branch (inherited allowlist drift, ' +
+        'e.g. after a rebase): run ' +
+        '`node scripts/lint-regression-test-names.cjs --update` and commit the ' +
+        'regenerated allowlist. See docs/TESTING-SUITES.md.'
       );
     }
     throw new ExitError(1);
