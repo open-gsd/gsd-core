@@ -29,6 +29,10 @@ const HOOKS_TO_COPY = [
   // Required by gsd-check-update-worker.js at runtime — must ship alongside it
   // so require('./managed-hooks-registry.cjs') resolves in the installed hooks/ dir.
   'managed-hooks-registry.cjs',
+  // Claude Code SessionStart hook (#997) — recreates the canonical
+  // ~/.claude/gsd-core compatibility path that bundled @-includes target but a
+  // marketplace plugin install never populates. No-op in classic installs.
+  'gsd-ensure-canonical-path.js',
   'gsd-context-monitor.js',
   // Cursor lifecycle hooks (issue #777): sessionStart context injection + postToolUse monitor
   'gsd-cursor-session-start.js',
