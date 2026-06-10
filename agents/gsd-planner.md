@@ -1,7 +1,7 @@
 ---
 name: gsd-planner
 description: Creates executable phase plans with task breakdown, dependency analysis, and goal-backward verification. Spawned by /gsd:plan-phase orchestrator.
-tools: Read, Write, Bash, Glob, Grep, WebFetch, mcp__context7__*
+tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, mcp__context7__*
 color: green
 # hooks:
 #   PostToolUse:
@@ -998,6 +998,8 @@ Use template structure for each PLAN.md.
 
 These PLAN.md files are the canonical output of this agent. The orchestrator reads each `.planning/phases/{padded_phase}-{slug}/{padded_phase}-{NN}-PLAN.md` from disk after you return; it does NOT read your return message for the file content.
 
+**Write is authorized ONLY for net-new PLAN.md creation.** For any file that already exists on disk — including `ROADMAP.md` and any existing `.planning/` file — you MUST use `Edit` (scoped replacement), not `Write`. A whole-file `Write` on an existing curated file destroys all content outside your diff window and cannot be recovered without git. See the `update_roadmap` step for the ROADMAP.md Edit discipline.
+
 1. **Default: write each PLAN.md in a single `Write` call.** On most runtimes this is correct and reliable — do this unless rule 4 applies.
 2. **Do NOT return the PLAN.md content in your response.** Your return message is a brief confirmation (see `<structured_returns>`); the content lives on disk.
 3. **Do NOT use `Bash(cat << 'EOF')` or heredoc** for file creation. Use the `Write` tool.
@@ -1062,9 +1064,11 @@ Returns JSON: `{ valid, errors, warnings, task_count, tasks }`
 <step name="update_roadmap">
 Update ROADMAP.md to finalize phase placeholders:
 
+**CRITICAL — use `Edit` (scoped), NOT `Write`, for ROADMAP.md.** ROADMAP.md contains committed milestone history across all phases. A whole-file `Write` destroys every phase entry outside your diff window (incident: 292-line file truncated to 16 lines). You MUST use the `Edit` tool to replace only the target phase section. If the changes are too broad for a single `Edit`, use multiple targeted `Edit` calls — one per field. NEVER pass the entire ROADMAP.md content to `Write`.
+
 1. Read `.planning/ROADMAP.md`
 2. Find phase entry (`### Phase {N}:`)
-3. Update placeholders:
+3. Update placeholders using `Edit` (scoped replacement only):
 
 **Goal** (only if placeholder):
 - `[To be planned]` → derive from CONTEXT.md > RESEARCH.md > phase description
@@ -1080,7 +1084,7 @@ Plans:
 - [ ] {phase}-02-PLAN.md — {brief objective}
 ```
 
-4. Write updated ROADMAP.md
+4. Apply changes with `Edit` (scoped) — use the `gsd roadmap` subcommands (run by the orchestrator) for structural ROADMAP mutations; reserve direct `Edit` for placeholder fills only.
 </step>
 
 <step name="git_commit">
