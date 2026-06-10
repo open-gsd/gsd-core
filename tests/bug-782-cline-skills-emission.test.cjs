@@ -37,6 +37,8 @@ const {
   resolveProfile,
 } = require('../gsd-core/bin/lib/install-profiles.cjs');
 
+const { nestedSkillPath } = require('./helpers/nested-layout.cjs');
+
 const REAL_COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');
 const MANIFEST = loadSkillsManifest(REAL_COMMANDS_DIR);
 const RESOLVED_CORE = resolveProfile({ modes: ['core'], manifest: MANIFEST });
@@ -347,11 +349,11 @@ describe('install() global cline — coexistence: skills AND .clinerules', () =>
       `skills/ directory must exist under ${tmpGlobalDir} after global cline install`
     );
 
-    // gsd-help is present in every profile (core, standard, full)
-    const helpSkillFile = path.join(skillsDir, 'gsd-help', 'SKILL.md');
+    // full profile: gsd-help is nested under gsd-ns-manage/skills/help/SKILL.md
+    const helpSkillFile = nestedSkillPath(skillsDir, 'gsd-', 'help');
     assert.ok(
       fs.existsSync(helpSkillFile),
-      `skills/gsd-help/SKILL.md must exist under ${tmpGlobalDir} — skills emission broken for global cline`
+      `${path.relative(tmpGlobalDir, helpSkillFile)} must exist under ${tmpGlobalDir} — skills emission broken for global cline`
     );
   });
 
@@ -438,8 +440,9 @@ describe('convertClaudeToCliineMarkdown — bare ~/.claude and CLAUDE_CONFIG_DIR
 
     installRuntimeArtifacts('cline', configDir, 'global', RESOLVED_FULL);
 
-    const surfaceSkill = path.join(configDir, 'skills', 'gsd-surface', 'SKILL.md');
-    assert.ok(fs.existsSync(surfaceSkill), 'gsd-surface/SKILL.md must exist for full profile');
+    // full profile: surface is nested under gsd-ns-manage/skills/surface/SKILL.md
+    const surfaceSkill = nestedSkillPath(path.join(configDir, 'skills'), 'gsd-', 'surface');
+    assert.ok(fs.existsSync(surfaceSkill), `${path.relative(configDir, surfaceSkill)} must exist for full profile`);
 
     const content = fs.readFileSync(surfaceSkill, 'utf8');
     assert.ok(
@@ -497,8 +500,9 @@ describe('_applyRuntimeRewrites — cline custom-dir embedded path (Fix 1)', () 
 
     // gsd-surface SKILL.md references config paths; with a custom configDir
     // (not under $HOME), pathPrefix will be the absolute custom path.
-    const surfaceSkill = path.join(configDir, 'skills', 'gsd-surface', 'SKILL.md');
-    assert.ok(fs.existsSync(surfaceSkill), 'gsd-surface/SKILL.md must exist');
+    // full profile: surface is nested under gsd-ns-manage/skills/surface/SKILL.md
+    const surfaceSkill = nestedSkillPath(path.join(configDir, 'skills'), 'gsd-', 'surface');
+    assert.ok(fs.existsSync(surfaceSkill), `${path.relative(configDir, surfaceSkill)} must exist`);
 
     const content = fs.readFileSync(surfaceSkill, 'utf8');
     // With a custom dir (path under /tmp, not ~/.cline), the output must NOT

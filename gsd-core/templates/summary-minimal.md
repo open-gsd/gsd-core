@@ -15,6 +15,7 @@ key-files:
 key-decisions: []
 duration: Xmin
 completed: YYYY-MM-DD
+status: complete
 ---
 
 # Phase [X]: [Name] Summary (Minimal)

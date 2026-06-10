@@ -604,7 +604,7 @@ This file is the canonical output of this step. The orchestrator reads `.plannin
 
 **Use template:** @~/.claude/gsd-core/templates/summary.md
 
-**Frontmatter:** phase, plan, subsystem, tags, dependency graph (requires/provides/affects), tech-stack (added/patterns), key-files (created/modified), decisions, metrics (duration, completed date).
+**Frontmatter:** phase, plan, subsystem, tags, dependency graph (requires/provides/affects), tech-stack (added/patterns), key-files (created/modified), decisions, metrics (duration, completed date), status (`status: complete` — required so the audit-open scanner recognises the summary as done).
 
 **Title:** `# Phase [X] Plan [Y]: [Name] Summary`
 

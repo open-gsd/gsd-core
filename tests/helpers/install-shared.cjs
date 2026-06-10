@@ -49,6 +49,7 @@ const RUNTIME_META = {
   cursor:       { localDir: '.cursor',           globalSuffix: '.cursor' },
   gemini:       { localDir: '.gemini',           globalSuffix: '.gemini' },
   hermes:       { localDir: '.hermes',           globalSuffix: '.hermes' },
+  kimi:         { localDir: '.kimi-code',        globalSuffix: path.join('.config', 'agents') },
   kilo:         { localDir: '.kilo',             globalSuffix: path.join('.config', 'kilo') },
   opencode:     { localDir: '.opencode',         globalSuffix: path.join('.config', 'opencode') },
   qwen:         { localDir: '.qwen',             globalSuffix: '.qwen' },

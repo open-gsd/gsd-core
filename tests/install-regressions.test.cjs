@@ -14,7 +14,7 @@
  * Closes #3758
  */
 
-const { test, describe } = require('node:test');
+const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -37,29 +37,56 @@ try {
   else process.env.GSD_TEST_MODE = savedTestMode;
 }
 
-const { installRuntimeArtifacts, uninstallRuntimeArtifacts, mergeClaudePermissions, GSD_CLAUDE_ALLOW_PERMISSIONS, GSD_CLAUDE_DENY_PERMISSIONS } = installExports || {};
+const { install, installRuntimeArtifacts, uninstallRuntimeArtifacts, mergeClaudePermissions, GSD_CLAUDE_ALLOW_PERMISSIONS, GSD_CLAUDE_DENY_PERMISSIONS, rewriteLegacyManagedNodeHookCommands, resolveNodeRunner } = installExports || {};
 
 const INSTALL_SCRIPT = path.join(__dirname, '..', 'bin', 'install.js');
+const HOOKS_SRC = path.join(__dirname, '..', 'hooks');
 const REAL_COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');
 const MANIFEST = loadSkillsManifest(REAL_COMMANDS_DIR);
 const RESOLVED_CORE = resolveProfile({ modes: ['core'], manifest: MANIFEST });
 
-// ─── Defect #1 — Hermes upgrade leaves stale skills/gsd/gsd-<stem>/ dirs ────
+/**
+ * Stub managed GSD hook files into targetDir/hooks/ so that
+ * fs.existsSync guards in the installer pass during tests where
+ * hooks/dist/ is not built.
+ */
+function stubHooksIntoDir(targetDir, hookNames) {
+  const hooksDest = path.join(targetDir, 'hooks');
+  fs.mkdirSync(hooksDest, { recursive: true });
+  for (const hookFile of hookNames) {
+    const src = path.join(HOOKS_SRC, hookFile);
+    const dest = path.join(hooksDest, hookFile);
+    if (fs.existsSync(src)) {
+      fs.copyFileSync(src, dest);
+    } else {
+      fs.writeFileSync(dest, '#!/usr/bin/env node\n// stub\n');
+    }
+    try { fs.chmodSync(dest, 0o755); } catch { /* Windows */ }
+  }
+}
 
-describe('Defect #1 regression (#3664): _runLegacyInstallMigrations removes skills/gsd/gsd-*/ layout', () => {
-  test('installRuntimeArtifacts removes intermediate skills/gsd/gsd-*/ dirs and writes bare-stem layout', (t) => {
+// ─── Defect #1 — Hermes upgrade: bare-stem dirs from #3664 era become stale ──
+//
+// #947 REVERSES #3664: the canonical layout is now skills/gsd/gsd-<stem>/ again.
+// The migration now removes bare-stem dirs (from #3664: prefix='') and writes
+// the gsd-prefixed layout. Pre-existing gsd-prefixed dirs (the "intermediate"
+// layout from before #3664) are now the CANONICAL dirs and are kept / updated.
+
+describe('Defect #1 regression (#3664 reversed by #947): bare-stem dirs removed, gsd- prefix written', () => {
+  test('installRuntimeArtifacts removes bare-stem skills/gsd/<stem>/ dirs and writes gsd- prefixed layout', (t) => {
     const configDir = createTempDir('gsd-hermes-reg1-');
     t.after(() => cleanup(configDir));
 
     assert.strictEqual(typeof installRuntimeArtifacts, 'function',
       'installRuntimeArtifacts must be exported from bin/install.js');
 
-    // Pre-create intermediate Hermes layout (between #2841 and #3664)
+    // Pre-create #3664-era bare-stem Hermes layout (no gsd- prefix, now stale).
+    // Use real GSD command stems (help, quick) that readGsdCommandNames() knows about.
     const nestedGsdDir = path.join(configDir, 'skills', 'gsd');
-    fs.mkdirSync(path.join(nestedGsdDir, 'gsd-help'), { recursive: true });
-    fs.writeFileSync(path.join(nestedGsdDir, 'gsd-help', 'SKILL.md'), '# legacy help\n');
-    fs.mkdirSync(path.join(nestedGsdDir, 'gsd-plan'), { recursive: true });
-    fs.writeFileSync(path.join(nestedGsdDir, 'gsd-plan', 'SKILL.md'), '# legacy plan\n');
+    fs.mkdirSync(path.join(nestedGsdDir, 'help'), { recursive: true });
+    fs.writeFileSync(path.join(nestedGsdDir, 'help', 'SKILL.md'), '# legacy bare-stem help\n');
+    fs.mkdirSync(path.join(nestedGsdDir, 'quick'), { recursive: true });
+    fs.writeFileSync(path.join(nestedGsdDir, 'quick', 'SKILL.md'), '# legacy bare-stem quick\n');
 
     // Sibling non-gsd dir inside skills/gsd/ must survive
     const userContentDir = path.join(nestedGsdDir, 'user-content');
@@ -68,12 +95,15 @@ describe('Defect #1 regression (#3664): _runLegacyInstallMigrations removes skil
 
     installRuntimeArtifacts('hermes', configDir, 'global', RESOLVED_CORE);
 
-    assert.ok(!fs.existsSync(path.join(nestedGsdDir, 'gsd-help')),
-      'skills/gsd/gsd-help/ must be removed (Defect #1)');
-    assert.ok(!fs.existsSync(path.join(nestedGsdDir, 'gsd-plan')),
-      'skills/gsd/gsd-plan/ must be removed (Defect #1)');
-    assert.ok(fs.existsSync(path.join(nestedGsdDir, 'help', 'SKILL.md')),
-      'skills/gsd/help/SKILL.md must exist after install');
+    // Bare-stem dirs from #3664 must be cleaned
+    assert.ok(!fs.existsSync(path.join(nestedGsdDir, 'help')),
+      'skills/gsd/help/ (bare-stem from #3664) must be removed (#947)');
+    assert.ok(!fs.existsSync(path.join(nestedGsdDir, 'quick')),
+      'skills/gsd/quick/ (bare-stem from #3664) must be removed (#947)');
+    // Canonical gsd- prefixed layout must be written
+    assert.ok(fs.existsSync(path.join(nestedGsdDir, 'gsd-help', 'SKILL.md')),
+      'skills/gsd/gsd-help/SKILL.md must exist after install (#947 canonical layout)');
+    // User content preserved
     assert.ok(fs.existsSync(path.join(userContentDir, 'SKILL.md')),
       'user-content must be preserved');
   });
@@ -148,7 +178,7 @@ describe('Defect #2 regression (Hermes, #3664): --hermes --profile=core writes s
 
 // ─── M1 — Hermes minimal-mode migrates dev-preferences (#2973) ───────────────
 
-describe('M1 (#2973): --hermes --global --profile=core migrates dev-preferences → skills/gsd/dev-preferences/SKILL.md', () => {
+describe('M1 (#2973, #947): --hermes --global --profile=core migrates dev-preferences → skills/gsd/gsd-dev-preferences/SKILL.md', () => {
   test('dev-preferences migrated to nested Hermes location, legacy source removed', (t) => {
     const root = createTempDir('gsd-hermes-m1-');
     t.after(() => cleanup(root));
@@ -166,9 +196,10 @@ describe('M1 (#2973): --hermes --global --profile=core migrates dev-preferences 
     assert.strictEqual(result.status, 0,
       `installer exited ${result.status}\n${result.stdout}\n${result.stderr}`);
 
-    const skillFile = path.join(root, 'skills', 'gsd', 'dev-preferences', 'SKILL.md');
+    // #947: Hermes uses prefix='gsd-' so dev-preferences lands at gsd-dev-preferences/ (not dev-preferences/)
+    const skillFile = path.join(root, 'skills', 'gsd', 'gsd-dev-preferences', 'SKILL.md');
     assert.ok(fs.existsSync(skillFile),
-      'skills/gsd/dev-preferences/SKILL.md must exist (M1: nested, not flat)');
+      'skills/gsd/gsd-dev-preferences/SKILL.md must exist (M1+#947: gsd- prefix, nested)');
     assert.strictEqual(fs.readFileSync(skillFile, 'utf8'), '# my hermes prefs\n');
     assert.ok(!fs.existsSync(path.join(legacyDir, 'dev-preferences.md')),
       'legacy source must be removed');
@@ -282,8 +313,8 @@ describe('U2 (#2973): uninstallRuntimeArtifacts claude/global migrates dev-prefe
 
 // ─── U3 — Hermes uninstall migrates dev-preferences to NESTED location (#2973) ─
 
-describe('U3 (#2973): uninstallRuntimeArtifacts hermes migrates dev-preferences → skills/gsd/dev-preferences/SKILL.md', () => {
-  test('commands/gsd/ NOT recreated, dev-preferences at nested Hermes location', (t) => {
+describe('U3 (#2973, #947): uninstallRuntimeArtifacts hermes migrates dev-preferences → skills/gsd/gsd-dev-preferences/SKILL.md', () => {
+  test('commands/gsd/ NOT recreated, dev-preferences at nested Hermes location with gsd- prefix', (t) => {
     const configDir = createTempDir('gsd-hermes-uninstall-u3-');
     t.after(() => cleanup(configDir));
 
@@ -298,9 +329,10 @@ describe('U3 (#2973): uninstallRuntimeArtifacts hermes migrates dev-preferences 
     assert.ok(!fs.existsSync(path.join(legacyDir, 'dev-preferences.md')),
       'commands/gsd/dev-preferences.md must not exist after hermes uninstall (U3)');
 
-    const skillFile = path.join(configDir, 'skills', 'gsd', 'dev-preferences', 'SKILL.md');
+    // #947: Hermes uses prefix='gsd-' so dev-preferences lands at gsd-dev-preferences/ (not dev-preferences/)
+    const skillFile = path.join(configDir, 'skills', 'gsd', 'gsd-dev-preferences', 'SKILL.md');
     assert.ok(fs.existsSync(skillFile),
-      'skills/gsd/dev-preferences/SKILL.md must exist at HERMES nested location (U3)');
+      'skills/gsd/gsd-dev-preferences/SKILL.md must exist at HERMES nested location (U3+#947)');
     assert.strictEqual(fs.readFileSync(skillFile, 'utf8'), '# my hermes prefs\n');
   });
 });
@@ -597,5 +629,144 @@ describe('mergeClaudePermissions (#768): end-to-end install writes permissions t
       'user Bash(git *) allow entry must survive uninstall');
     assert.ok(deny.includes('WebSearch'),
       'user WebSearch deny entry must survive uninstall');
+  });
+});
+
+// ─── #976 — args-form hook presence detection ─────────────────────────────────
+//
+// Claude Code hooks support a command+args form (executable in `command`,
+// script path in `args[]`) used by windowless-launcher wrappers on Windows.
+// Pre-fix, hasGsdUpdateHook (and sibling checks) only inspected h.command,
+// so an args-form entry was invisible and a stock string-command entry was
+// appended on every install/update, running the hook twice.
+
+describe('#976 regression: installer does not duplicate managed hooks when registered in command+args form', () => {
+  let tmpDir;
+  let previousCwd;
+
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-976-args-form-');
+    previousCwd = process.cwd();
+    process.chdir(tmpDir);
+
+    assert.strictEqual(typeof install, 'function',
+      'install must be exported from bin/install.js');
+  });
+
+  afterEach(() => {
+    process.chdir(previousCwd);
+    cleanup(tmpDir);
+  });
+
+  test('does not add a second SessionStart entry when gsd-check-update is already in args-form', () => {
+    const targetDir = path.join(tmpDir, '.claude');
+    fs.mkdirSync(targetDir, { recursive: true });
+
+    // Pass 1: run install with no pre-existing settings to create the
+    // gsd-file-manifest.json that the installer migration uses to decide
+    // whether a hook file is managed (kept) or foreign (removed).
+    // Without a manifest, the installer migration removes any hook stubs we
+    // place in hooks/ as "unrecognized GSD-looking files", which would make
+    // fs.existsSync(checkUpdateFile) return false and skip duplicate-adding.
+    install(false, 'claude');
+
+    // Now stub the hook files so fs.existsSync guards pass on pass 2.
+    // At this point the manifest exists, so migration classifies the stubs as
+    // manifest-managed and leaves them alone.
+    stubHooksIntoDir(targetDir, ['gsd-check-update.js']);
+
+    // Local Claude installs read/write settings.local.json (not settings.json).
+    // Overwrite settings.local.json with the hook in command+args form
+    // (wrapped launcher). The GSD hook filename appears in args[], not in command.
+    const launcherCommand = '/usr/local/bin/node-launcher';
+    const hookPath = path.join(targetDir, 'hooks', 'gsd-check-update.js');
+    const preExistingSettings = {
+      hooks: {
+        SessionStart: [
+          {
+            hooks: [
+              {
+                type: 'command',
+                command: launcherCommand,
+                args: [hookPath],
+              },
+            ],
+          },
+        ],
+      },
+    };
+    fs.writeFileSync(
+      path.join(targetDir, 'settings.local.json'),
+      JSON.stringify(preExistingSettings, null, 2) + '\n',
+    );
+
+    // Pass 2: run install again — the pre-existing args-form entry must
+    // suppress the duplicate stock string-command registration.
+    const result = install(false, 'claude');
+    const settings = result && result.settings;
+
+    assert.ok(settings && settings.hooks && Array.isArray(settings.hooks.SessionStart),
+      'settings.hooks.SessionStart must be an array after install');
+
+    // Count all hook entries (at any nesting level) that reference gsd-check-update.
+    const allEntries = settings.hooks.SessionStart.flatMap(entry =>
+      Array.isArray(entry && entry.hooks) ? entry.hooks : []
+    );
+    const matching = allEntries.filter(h =>
+      (typeof h.command === 'string' && h.command.includes('gsd-check-update')) ||
+      (Array.isArray(h.args) && h.args.some(a => typeof a === 'string' && a.includes('gsd-check-update')))
+    );
+
+    assert.strictEqual(
+      matching.length,
+      1,
+      [
+        'Expected exactly 1 hook entry referencing gsd-check-update after install,',
+        `got ${matching.length}.`,
+        'The installer added a duplicate because it could not detect the args-form registration.',
+        `All matching entries: ${JSON.stringify(matching)}`,
+      ].join(' '),
+    );
+  });
+
+  test('rewriteLegacyManagedNodeHookCommands leaves args-form launcher entries unchanged', () => {
+    assert.strictEqual(typeof rewriteLegacyManagedNodeHookCommands, 'function',
+      'rewriteLegacyManagedNodeHookCommands must be exported from bin/install.js');
+
+    const launcherCommand = '/usr/local/bin/node-launcher';
+    const hookPath = '/Users/user/.claude/hooks/gsd-check-update.js';
+    const settings = {
+      hooks: {
+        SessionStart: [
+          {
+            hooks: [
+              {
+                type: 'command',
+                command: launcherCommand,
+                args: [hookPath],
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    const runner = resolveNodeRunner() || '/usr/local/bin/node';
+    const changed = rewriteLegacyManagedNodeHookCommands(settings, runner, { platform: process.platform });
+
+    // The args-form launcher entry must NOT be rewritten — it is an intentional
+    // user wrapper and the script path lives in args[], not command.
+    assert.strictEqual(changed, false,
+      'rewriteLegacyManagedNodeHookCommands must not rewrite args-form entries (#976)');
+    assert.strictEqual(
+      settings.hooks.SessionStart[0].hooks[0].command,
+      launcherCommand,
+      'args-form command must remain unchanged after rewrite pass',
+    );
+    assert.deepStrictEqual(
+      settings.hooks.SessionStart[0].hooks[0].args,
+      [hookPath],
+      'args-form args must remain unchanged after rewrite pass',
+    );
   });
 });

@@ -58,6 +58,26 @@ Note: `--research-phase <N>` is a flag on `/gsd-plan-phase`. There is no standal
 
 ---
 
+## Override the planning granularity for one phase
+
+**If you want fewer, larger tasks** for a simple or well-understood phase:
+
+```bash
+/gsd-plan-phase 2 --granularity coarse
+```
+
+**If you want more, smaller tasks** for tighter control over a risky or complex phase:
+
+```bash
+/gsd-plan-phase 2 --granularity fine
+```
+
+`--granularity` accepts `coarse`, `standard`, or `fine`. It overrides all granularity config keys (`granularities.planning`, `granularity`, `planning.granularity`) for this invocation only — no config edit required. Invalid values are rejected immediately with an error.
+
+If you want this granularity applied permanently, set it in config — see [CONFIGURATION.md](../CONFIGURATION.md). For the full flag reference see [COMMANDS.md](../COMMANDS.md).
+
+---
+
 ## Plan vertical feature slices instead of horizontal layers
 
 **If you want tasks organised as thin end-to-end slices** (UI → API → DB per feature) rather than by technical layer:

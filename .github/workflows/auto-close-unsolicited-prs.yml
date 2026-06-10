@@ -1,0 +1,158 @@
+name: Auto-Close Unsolicited PRs
+
+# pull_request_target (not pull_request) so the job runs in the base-repo
+# context with a write-capable token even for PRs from forks. Without this,
+# fork PRs from first-time/external contributors get a read-only GITHUB_TOKEN
+# (the repo default is `read`) and the close/comment API calls 403. Worse, the
+# equivalent `pull_request`-triggered gate (require-issue-link) is held behind
+# GitHub's first-time-contributor approval policy and never runs at all, so a
+# no-issue drive-by PR sits open until a maintainer closes it by hand.
+# Safe because this job only reads event metadata and the linked issue's
+# labels via the API; it never checks out or executes PR-supplied code.
+# Residual platform limitation: GitHub deliberately does NOT trigger
+# pull_request_target for fork branches whose names look like a Git SHA, so a
+# contributor could still evade this by naming their head branch like a commit
+# hash. Fully closing that gap needs a scheduled base-context sweep (tracked as
+# a follow-up); a PR that evades this still cannot merge and still fails the
+# other gates.
+on:
+  # opened only — NOT reopened. A maintainer who reopens an external PR
+  # "closed in error" must not have it immediately re-closed (the job checks
+  # the PR author's association, which is unchanged on reopen). Re-closing is
+  # the maintainer's call; this workflow only acts at open.
+  pull_request_target:
+    types: [opened]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  pull-requests: write
+  issues: read
+
+jobs:
+  close-if-unapproved:
+    name: Reject PRs without a pre-approved issue
+    # Skip maintainers (they may open internal coordination PRs) and drafts
+    # (handled by close-draft-prs.yml). Only non-member, ready-for-review PRs
+    # are evaluated.
+    if: >-
+      github.event.pull_request.draft == false &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      # Maintainer-applied approval labels. A linked issue must carry one of
+      # these for an external PR to be accepted. Anyone can open an issue or
+      # cite a number, but only users with triage/write can apply labels — so
+      # requiring a label defeats forged or self-opened "approval" issues.
+      APPROVAL_LABELS: 'approved-feature,approved-enhancement,confirmed-bug'
+    steps:
+      - name: Close unless PR links a pre-approved issue
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const body = pr.body || '';
+            const approvalLabels = process.env.APPROVAL_LABELS
+              .split(',').map(s => s.trim()).filter(Boolean);
+
+            // Collect SAME-REPO issue numbers referenced with a GitHub closing
+            // keyword. Cross-repo and URL refs are resolved only when they point
+            // back at this repo — an approving label must live on an issue here.
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            // Ignore references inside fenced/inline code so example or template
+            // snippets (e.g. a documented `Closes #123`) don't count as a link.
+            const scanBody = body
+              .replace(/```[\s\S]*?```/g, '')
+              .replace(/`[^`]*`/g, '');
+            const refRe = /\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\b[\s:]*(?:#(\d+)|([\w.-]+)\/([\w.-]+)#(\d+)|https?:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/issues\/(\d+))/gi;
+            const numbers = new Set();
+            for (const m of scanBody.matchAll(refRe)) {
+              if (m[1]) {
+                numbers.add(Number(m[1]));
+              } else if (m[2] && m[2].toLowerCase() === owner.toLowerCase() && m[3].toLowerCase() === repo.toLowerCase()) {
+                numbers.add(Number(m[4]));
+              } else if (m[5] && m[5].toLowerCase() === owner.toLowerCase() && m[6].toLowerCase() === repo.toLowerCase()) {
+                numbers.add(Number(m[7]));
+              }
+            }
+
+            // Accept the PR only if it links at least one issue in this repo
+            // that carries a maintainer-applied approval label.
+            // Cap the number of issues we fetch: a body stuffed with hundreds
+            // of refs must not stall the job past its timeout (which would fail
+            // open and leave an unapproved PR unclosed).
+            const MAX_ISSUE_CHECKS = 20;
+            let approved = false;
+            for (const number of [...numbers].slice(0, MAX_ISSUE_CHECKS)) {
+              let issue;
+              try {
+                issue = await github.rest.issues.get({ owner, repo, issue_number: number });
+              } catch (err) {
+                if (err.status === 404) {
+                  core.info(`Referenced #${number} not found — ignoring.`);
+                  continue;
+                }
+                // Indeterminate failure (rate limit / 5xx / network). Do NOT
+                // close — failing open here avoids wrongly closing a PR whose
+                // only linked issue is genuinely approved but momentarily
+                // unreadable. A re-run or the maintainer can resolve it.
+                core.setFailed(`Could not verify issue #${number} (${err.status || err.message}); leaving PR #${pr.number} open.`);
+                return;
+              }
+              if (issue.data.pull_request) {
+                core.info(`#${number} is a pull request, not an issue — ignoring.`);
+                continue;
+              }
+              const labels = (issue.data.labels || [])
+                .map(l => (typeof l === 'string' ? l : l.name));
+              if (labels.some(l => approvalLabels.includes(l))) {
+                core.info(`#${number} carries an approval label — leaving PR #${pr.number} open.`);
+                approved = true;
+                break;
+              }
+              core.info(`#${number} has no approval label.`);
+            }
+
+            if (approved) {
+              return;
+            }
+
+            const reason = numbers.size === 0
+              ? 'it does not link an issue'
+              : 'the linked issue is not approved';
+            const repoUrl = `${owner}/${repo}`;
+            const marker = '<!-- gsd-auto-close-unsolicited -->';
+            const message = [
+              marker,
+              '## Closing — no pre-approved issue',
+              '',
+              `Thanks for your interest in GSD! This PR was closed automatically because ${reason}.`,
+              '',
+              '**GSD requires a pre-approved issue before any PR.** The PR must link an issue in this repository that carries a maintainer-applied approval label — `approved-feature`, `approved-enhancement`, or `confirmed-bug`. Opening your own issue or citing an unrelated number is not enough: the label is applied by maintainers after triage.',
+              '',
+              '### What to do',
+              '',
+              `1. [Open an issue](https://github.com/${repoUrl}/issues/new/choose) describing the change (bug, enhancement, or feature).`,
+              '2. Wait for a maintainer to approve it (`confirmed-bug`, `approved-enhancement`, or `approved-feature`).',
+              '3. Open a new PR using the matching template, with `Closes #<issue>` in the body.',
+              '',
+              `See [CONTRIBUTING.md](https://github.com/${repoUrl}/blob/main/CONTRIBUTING.md) for the full process. If you believe this was closed in error, comment here and a maintainer can reopen it.`,
+            ].join('\n');
+
+            // Upsert a sticky comment so a reopen-then-reclose doesn't spam.
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: pr.number, per_page: 100,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: message });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body: message });
+            }
+
+            await github.rest.pulls.update({ owner, repo, pull_number: pr.number, state: 'closed' });
+            core.info(`Closed PR #${pr.number} (${reason}): ${pr.title}`);

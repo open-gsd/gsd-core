@@ -165,6 +165,19 @@ const REASON = Object.freeze({
   // resolve this file; the guard here ensures the gate does not report spurious
   // failures in the meantime.
   OK_PRISTINE_DRIFT_DETECTED: 'ok_pristine_drift_detected',
+  // Bug #934: backup-meta.json records a pristine_hash for this file but the
+  // gsd-pristine/ file is absent from disk.  This happens on post-#604-rename
+  // installs where saveLocalPatches discarded the only pristine candidate
+  // because its hash did not match the old-release hash (the file changed
+  // upstream between releases).  Without a baseline the verifier cannot
+  // distinguish user-added lines from upstream-changed lines, so falling to
+  // over-broad mode would produce FAIL_USER_LINES_MISSING false positives for
+  // every upstream-removed line.  The correct posture is advisory/non-blocking:
+  // report OK_NO_BASELINE so the caller can log a warning without halting the
+  // gate on a spurious failure.  This is a bounded "cannot reason → do not
+  // block" rather than "ignore everything" — it only applies when the hash was
+  // recorded (modern installer) but the file is absent (specific gap).
+  OK_NO_BASELINE: 'ok_no_baseline',
   FAIL_INSTALLED_MISSING: 'fail_installed_missing',
   FAIL_INSTALLED_NOT_REGULAR_FILE: 'fail_installed_not_regular_file',
   FAIL_READ_ERROR: 'fail_read_error',
@@ -208,11 +221,25 @@ function verifyFile({ relPath, patchesDir, configDir, pristineDir, pristineHashe
     return result;
   }
 
+  // Normalize to forward slashes so the key lookup matches on Windows
+  // where path.join produces backslash-separated relPath values but
+  // backup-meta.json stores keys written with forward slashes.
+  const hashKey = relPath.replace(/\\/g, '/');
+  const recordedHash = pristineHashes && pristineHashes[hashKey];
+
   let pristineContent = null;
   if (pristineDir) {
     const pristinePath = path.join(pristineDir, relPath);
+    // Bug #934: track whether the pristine path EXISTS on disk (stat did not
+    // throw ENOENT).  A regular file that fails to read, or a non-file path
+    // (e.g. a directory accidentally placed at the pristine path), is treated
+    // as "present but unusable" — we fall to over-broad mode (safe side).
+    // OK_NO_BASELINE is reserved for the strictly absent case: stat throws,
+    // meaning the file was never written (the gap the bug describes).
+    let pristinePathExists = false;
     try {
       const stat = fs.statSync(pristinePath);
+      pristinePathExists = true; // path exists (any type)
       if (stat.isFile()) {
         const candidate = fs.readFileSync(pristinePath, 'utf8');
         // Bug #3657: if backup-meta.json recorded a pristine_hash for this
@@ -226,11 +253,6 @@ function verifyFile({ relPath, patchesDir, configDir, pristineDir, pristineHashe
         // Over-broad mode never false-fails for a different reason because all
         // backup lines that are genuinely user-added will still be present in a
         // correctly merged install.
-        // Normalize to forward slashes so the key lookup matches on Windows
-        // where path.join produces backslash-separated relPath values but
-        // backup-meta.json stores keys written with forward slashes.
-        const hashKey = relPath.replace(/\\/g, '/');
-        const recordedHash = pristineHashes && pristineHashes[hashKey];
         if (recordedHash) {
           if (sha256(candidate) === recordedHash) {
             // Hash matches: the on-disk pristine is the correct baseline.
@@ -251,8 +273,28 @@ function verifyFile({ relPath, patchesDir, configDir, pristineDir, pristineHashe
           pristineContent = candidate;
         }
       }
+      // Non-file at pristinePath (e.g. a directory): stat succeeded so
+      // pristinePathExists is true; we fall through to over-broad mode below,
+      // which is safe and conservative.
     } catch {
-      // Pristine missing or unreadable — fall through to over-broad mode.
+      // Pristine stat threw — path is absent (ENOENT) or inaccessible.
+      // pristinePathExists stays false.
+    }
+
+    // Bug #934: recordedHash is present (modern installer) but the pristine
+    // path does not exist on disk at all (stat threw above).  This means
+    // saveLocalPatches recorded a hash but could not write the corresponding
+    // gsd-pristine/ file (the only candidate was discarded because it was from
+    // a newer release).  Falling to over-broad mode here would treat every
+    // upstream-changed line as a "user-added line that must survive", producing
+    // false FAIL_USER_LINES_MISSING for each upstream removal.  Since we
+    // cannot reason correctly without a baseline, the safe answer is advisory/
+    // non-blocking: return OK_NO_BASELINE and let the caller decide.
+    // NOTE: this guard fires ONLY when stat threw (path absent), not when the
+    // path is present but non-file — in that case over-broad mode is safer.
+    if (!pristinePathExists && recordedHash) {
+      result.reason = REASON.OK_NO_BASELINE;
+      return result;
     }
   }
 
@@ -316,9 +358,17 @@ function main() {
   const drifted = driftedResults.length;
   const drifted_files = driftedResults.map((r) => r.file);
 
+  // Bug #934: aggregate no-baseline files into top-level report fields so the
+  // workflow can log a warning about files that could not be verified.  Like
+  // drift, this is NOT a failure (exit code stays 0) but gives the caller
+  // structured data to surface the advisory condition.
+  const noBaselineResults = results.filter((r) => r.reason === REASON.OK_NO_BASELINE);
+  const no_baseline = noBaselineResults.length;
+  const no_baseline_files = noBaselineResults.map((r) => r.file);
+
   if (opts.json) {
     process.stdout.write(
-      JSON.stringify({ checked: results.length, failures: failures.length, drifted, drifted_files, results }, null, 2) + '\n',
+      JSON.stringify({ checked: results.length, failures: failures.length, drifted, drifted_files, no_baseline, no_baseline_files, results }, null, 2) + '\n',
     );
   } else {
     process.stdout.write(`# Hunk Verification Gate (#2969)\n\n`);

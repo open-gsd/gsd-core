@@ -10,7 +10,7 @@ A narrative companion guide to GSD Core — orient yourself here, then follow th
 ## Table of Contents
 
 - [Slash-command forms](#slash-command-forms-hyphen-vs-colon)
-- [Namespace routing primer](#namespace-routing-primer-gsdnamespace-v140)
+- [Namespace routing primer](#namespace-routing-primer-gsd-ns--v140)
 - [Project lifecycle overview](#project-lifecycle-overview)
 - [Workflow Diagrams](#workflow-diagrams)
 - [UI Design Contract](#ui-design-contract)
@@ -40,20 +40,37 @@ GSD ships **the same set of skills** to every supported runtime, but two slash-f
 
 You don't need to choose — the installer writes the correct form into the command directory of each runtime you target. When following a walkthrough on a Gemini terminal, replace the hyphen after `gsd` with a colon as you read each slash command.
 
-## Namespace routing primer (`gsd:<namespace>`, v1.40)
+## Namespace routing primer (`gsd-ns-*`, v1.40+)
 
-v1.40 ships six **namespace meta-skills** as the first-stage entry points for hierarchical routing — they keep the eager skill-listing token cost low (~120 tokens for 6 routers vs ~2,150 for a flat 86-skill listing) while every concrete sub-skill remains directly invocable. Each namespace router's body contains a routing table that maps your intent to the correct concrete sub-skill.
+### Architecture
 
-| Namespace | Router | Routes to |
-|-----------|--------|-----------|
-| Phase pipeline | `/gsd-workflow` | discuss / plan / execute / verify / phase / progress |
-| Project lifecycle | `/gsd-project` | milestones, audits, summary |
-| Quality gates | `/gsd-quality` | code review, debug, audit, security, eval, ui |
-| Codebase intelligence | `/gsd-context` | map, graphify, docs, learnings |
-| Management | `/gsd-manage` | config, workspace, workstreams, thread, update, ship, inbox |
-| Exploration & capture | `/gsd-ideate` | explore, sketch, spike, spec, capture |
+GSD ships six **namespace router bundles** (`gsd-ns-workflow`, `gsd-ns-project`, `gsd-ns-review`, `gsd-ns-context`, `gsd-ns-ideate`, `gsd-ns-manage`). On runtimes with non-recursive skill loaders, the installer emits these 6 routers as the **only top-level skill entries**; the ~61 concrete skills are nested under each router at `<router>/skills/<name>/SKILL.md`. This reduces the eager skill-listing overhead to ≈6 entries instead of ≈67.
 
-You almost never need to type a namespace router yourself. Their value is in the routing layer the model uses to discover the right sub-skill — they exist so the system prompt can list 6 entries instead of 86. If you already know the concrete command (e.g. `/gsd-plan-phase`), call it directly.
+Each router's body contains a routing table. When the model receives a request, it reads the router, identifies the relevant sub-skill by name, then opens `skills/<name>/SKILL.md` via a file-path `Read`. The concrete skill is fully available — it is not invocable by bare name through the Skill tool's top-level listing, but is reachable through the router.
+
+The nested layout applies only to runtimes with confirmed non-recursive skill loaders: **Claude (global), Cline, Qwen, Hermes, Augment, Trae, Antigravity**. Recursive or unconfirmed loaders (Cursor, Codex, Copilot, Windsurf, CodeBuddy, OpenCode, Kilo) retain the flat layout unchanged.
+
+| Namespace | Router bundle | Routes to |
+|-----------|--------------|-----------|
+| Phase pipeline | `gsd-ns-workflow` | discuss / plan / execute / verify / phase / progress |
+| Project lifecycle | `gsd-ns-project` | milestones, audits, summary |
+| Quality gates | `gsd-ns-review` | code review, debug, audit, security, eval, ui |
+| Codebase intelligence | `gsd-ns-context` | map, graphify, docs, learnings |
+| Exploration & capture | `gsd-ns-ideate` | explore, sketch, spike, spec, capture |
+| Management | `gsd-ns-manage` | config, workspace, workstreams, thread, update, ship, inbox |
+
+### Slash commands are unaffected
+
+On runtimes that install a commands surface (`commands/gsd`), slash commands such as `/gsd-plan-phase` continue to work directly — the nesting applies only to the Skill tool's top-level listing, not to the commands directory.
+
+### Migration note (breaking change on nesting runtimes)
+
+On the seven nesting runtimes listed above, upgrading to v1.40 changes skill invocation behaviour:
+
+- **Before:** each of the ~67 concrete `gsd-<name>` skills appeared at the top level and was invocable by bare name through the Skill tool.
+- **After:** only the 6 `gsd-ns-*` router bundles appear at the top level. Concrete skills are reachable via the router's routing table and a `Read skills/<name>/SKILL.md` call. Direct bare-name invocation of concrete skills through the Skill tool's listing no longer works.
+- **Slash commands unchanged:** `/gsd-plan-phase`, `/gsd-discuss-phase`, etc. still work directly where a commands surface is installed.
+- **Upgrade prune:** the installer's existing prune step removes the legacy top-level `gsd-<concrete>/` skill directories on upgrade — no manual cleanup is needed.
 
 ---
 
@@ -369,7 +386,7 @@ GSD generates markdown files that become LLM system prompts. This means any user
 - `gsd-prompt-guard.js` — Scans Write/Edit calls to `.planning/` for injection patterns (always active, advisory-only)
 - `gsd-workflow-guard.js` — Warns on file edits outside GSD workflow context (opt-in via `hooks.workflow_guard`)
 
-**CI Scanner:** `prompt-injection-scan.test.cjs` scans all agent, workflow, and command files for embedded injection vectors.
+**CI Scanner:** `prompt-injection-scan.security.test.cjs` scans all agent, workflow, and command files for embedded injection vectors.
 
 ---
 

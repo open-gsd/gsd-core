@@ -16,6 +16,7 @@ key-decisions:
   - "Decision 1"
 duration: Xmin
 completed: YYYY-MM-DD
+status: complete
 ---
 
 # Phase [X]: [Name] Summary

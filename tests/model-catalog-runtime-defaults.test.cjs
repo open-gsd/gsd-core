@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { catalog, KNOWN_RUNTIMES } = require('../gsd-core/bin/lib/model-catalog.cjs');
+const { allRuntimes } = require('../bin/install.js');
 
 const ROOT = path.join(__dirname, '..');
 const SETTINGS_ADVANCED = fs.readFileSync(path.join(ROOT, 'gsd-core', 'workflows', 'settings-advanced.md'), 'utf8');
@@ -17,7 +18,12 @@ const CONFIG_DOC = fs.readFileSync(path.join(ROOT, 'docs', 'CONFIGURATION.md'), 
 describe('model catalog runtime defaults parity (#3229)', () => {
   test('known runtimes include hermes and match catalog keys', () => {
     assert.ok(KNOWN_RUNTIMES.has('hermes'));
+    assert.ok(KNOWN_RUNTIMES.has('kimi'));
     assert.deepStrictEqual([...KNOWN_RUNTIMES].sort(), Object.keys(catalog.runtimeTierDefaults).sort());
+  });
+
+  test('installer-supported runtimes are all known to the model catalog', () => {
+    assert.deepStrictEqual([...allRuntimes].sort(), [...KNOWN_RUNTIMES].sort());
   });
 
   test('settings-advanced runtime defaults table matches catalog for concrete runtimes', () => {

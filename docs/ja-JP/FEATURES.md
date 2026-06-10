@@ -1227,7 +1227,7 @@ fix(03-01): correct auth token expiry
 **3. ワークフローガードフック**（`gsd-workflow-guard.js`）
 Claude が GSD ワークフローコンテキスト外でファイル編集を試行した際に検出する PreToolUse フック。直接編集の代わりに `/gsd-quick` や `/gsd-fast` の使用をアドバイスします。`hooks.workflow_guard`（デフォルト: false）で設定可能です。
 
-**4. CI 対応インジェクションスキャナー**（`prompt-injection-scan.test.cjs`）
+**4. CI 対応インジェクションスキャナー**（`prompt-injection-scan.security.test.cjs`）
 すべてのエージェント、ワークフロー、コマンドファイルに埋め込まれたインジェクションベクターをスキャンするテストスイート。
 
 **要件:**

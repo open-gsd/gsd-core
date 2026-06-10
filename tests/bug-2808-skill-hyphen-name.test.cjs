@@ -174,56 +174,66 @@ describe('bug-2808: SKILL.md name: uses hyphen form', () => {
 
     // Use the real COMMANDS_DIR as the source via .gsd-source marker.
     // installRuntimeArtifacts('claude', configDir, 'global') writes to
-    // configDir/skills/gsd-*/SKILL.md using the same converter as the shim did.
+    // configDir/skills/ using the same converter as the shim did.
+    // With the full profile (#924 fix), skills are FLAT: gsd-<stem>/SKILL.md
+    // (nested layout reverted for Claude — Claude Code scans only one level).
     const configDir = path.join(tmp, 'config');
     fs.mkdirSync(configDir, { recursive: true });
     fs.writeFileSync(path.join(configDir, '.gsd-source'), COMMANDS_DIR + '\n');
     installRuntimeArtifacts('claude', configDir, 'global', resolvedProfileFull);
     const skillsDir = path.join(configDir, 'skills');
 
-    // Don't filter the directory listing by `startsWith('gsd-')` — that
-    // would silently hide exactly the kind of drift this test exists to
-    // catch (a `gsd:extract-learnings` colon variant or a bare
-    // `extract-learnings` without the namespace prefix would never be
-    // collected, and the loop below would never see them). Capture every
-    // generated directory and assert the namespace invariants explicitly.
-    const skillDirs = fs.readdirSync(skillsDir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name)
-      .sort();
-
-    assert.ok(skillDirs.length > 0, 'expected generated skill directories under skillsDir');
-    for (const dir of skillDirs) {
-      assert.ok(
-        dir.startsWith('gsd-'),
-        `${dir}: generated skill directory must start with the canonical 'gsd-' namespace`,
-      );
-      assert.ok(
-        !dir.includes(':'),
-        `${dir}: generated skill directory must not contain the retired colon namespace separator`,
-      );
-      assert.ok(
-        !dir.includes('_'),
-        `${dir}: generated skill directory must use hyphens, not underscores`,
-      );
+    // Recursively collect all SKILL.md files under skills/ (handles both flat and
+    // nested layouts). Don't filter any paths — that would silently hide exactly
+    // the kind of drift this test exists to catch (a `gsd:extract-learnings`
+    // colon variant or a bare `extract-learnings` without the namespace prefix
+    // would never be collected, and the loop below would never see them).
+    function collectSkillMds(dir) {
+      const results = [];
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          results.push(...collectSkillMds(full));
+        } else if (entry.name === 'SKILL.md') {
+          results.push(full);
+        }
+      }
+      return results;
     }
 
-    assert.ok(skillDirs.includes('gsd-extract-learnings'), 'autocomplete surface must include gsd-extract-learnings');
-    assert.ok(!skillDirs.includes('gsd-extract_learnings'), 'autocomplete surface must not include gsd-extract_learnings');
+    const allSkillMdPaths = collectSkillMds(skillsDir);
+    assert.ok(allSkillMdPaths.length > 0, 'expected generated SKILL.md files under skillsDir');
 
-    for (const skillDir of skillDirs) {
-      const skillContent = fs.readFileSync(path.join(skillsDir, skillDir, 'SKILL.md'), 'utf-8');
+    // Validate every SKILL.md's name: field (the consumer-facing name used in
+    // autocomplete). We also check that the containing dir name doesn't use
+    // banned characters at any level of nesting.
+    const allNames = [];
+    for (const skillMdPath of allSkillMdPaths) {
+      const relPath = path.relative(skillsDir, skillMdPath);
+      const skillContent = fs.readFileSync(skillMdPath, 'utf-8');
       // Scope the name: lookup to the YAML frontmatter block so a stray
       // `name:` line in the body cannot satisfy the assertion.
       const fmMatch = skillContent.match(/^---\n([\s\S]*?)\n---/);
-      assert.ok(fmMatch, `${skillDir}: generated SKILL.md must include frontmatter`);
+      assert.ok(fmMatch, `${relPath}: generated SKILL.md must include frontmatter`);
       const nameLine = fmMatch[1].split('\n').find((l) => /^name:\s*/.test(l));
-      assert.ok(nameLine, `${skillDir}: generated SKILL.md is missing name: frontmatter`);
+      assert.ok(nameLine, `${relPath}: generated SKILL.md is missing name: frontmatter`);
       const name = nameLine.replace(/^name:\s*/, '').trim();
-      assert.ok(name.startsWith('gsd-'), `${skillDir}: autocomplete name must start with gsd-, got ${name}`);
-      assert.ok(!name.includes(':'), `${skillDir}: autocomplete name must not contain colon, got ${name}`);
-      assert.ok(!name.includes('_'), `${skillDir}: autocomplete name must not contain underscore, got ${name}`);
+      assert.ok(name.startsWith('gsd-'), `${relPath}: autocomplete name must start with gsd-, got ${name}`);
+      assert.ok(!name.includes(':'), `${relPath}: autocomplete name must not contain colon, got ${name}`);
+      assert.ok(!name.includes('_'), `${relPath}: autocomplete name must not contain underscore, got ${name}`);
+      allNames.push(name);
+
+      // Also validate each path segment (dir name) in the relative path doesn't
+      // contain the banned characters — catches mislabeled directory names.
+      const segments = relPath.split(path.sep).slice(0, -1); // exclude 'SKILL.md' filename
+      for (const seg of segments) {
+        assert.ok(!seg.includes(':'), `${relPath}: dir segment "${seg}" must not contain colon`);
+        assert.ok(!seg.includes('_'), `${relPath}: dir segment "${seg}" must use hyphens, not underscores`);
+      }
     }
+
+    assert.ok(allNames.includes('gsd-extract-learnings'), 'autocomplete surface must include gsd-extract-learnings');
+    assert.ok(!allNames.includes('gsd-extract_learnings'), 'autocomplete surface must not include gsd-extract_learnings');
   });
 
   test('transformContentToHyphen (from fix-slash-commands.cjs) rewrites colon to hyphen for known commands', () => {

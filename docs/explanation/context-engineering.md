@@ -66,6 +66,50 @@ Context engineering requires that knowledge survive context resets. GSD Core use
 
 ---
 
+## Lifecycle hooks and context headroom
+
+The fresh-context subagent model protects each spawned agent from accumulating noise. But there is a subtler problem: the *orchestrating session itself* fills up over time. A long-running orchestration silently consumes its own context window — loading payloads, reading status output, routing between phases. Without any signal about how much headroom remains, the session can quietly degrade or, worse, trigger an automatic compaction that silently discards planning state the orchestrator was relying on.
+
+Since GSD 1.4.0, this is addressed by registering runtime lifecycle hooks. Rather than leaving headroom invisible, these hooks give GSD a per-turn signal — a moment to inspect how much context has been consumed and emit a warning before the window is exhausted. The hooks run inside the runtime itself, so the measurement is as close to authoritative as possible: GSD is not guessing from the outside.
+
+### One idea, many runtime vocabularies
+
+Each AI runtime exposes lifecycle events in its own vocabulary, but the purpose is the same across all of them: fire at boundaries that correspond to context pressure or turn transitions, so GSD can observe and react.
+
+- **Claude Code** fires `PreCompact` when a compaction is about to occur, `Stop` when a session turn ends, and `SubagentStop` when a spawned subagent completes. Together these bracket the moments when context has grown or a context-consuming task has just finished.
+- **Gemini** fires `BeforeAgent`/`AfterAgent` around each agent invocation, and `BeforeModel` before each model call — giving a per-inference opportunity to check headroom.
+- **Qwen** exposes `SubagentStop`, `Stop`, and `PreCompact`, mirroring Claude Code's shape in its own event system.
+
+Think of these as the same concept — "notify GSD at context boundaries" — expressed in each runtime's native event vocabulary. This is the multi-runtime philosophy applied at the observability layer: GSD registers the semantically equivalent hook wherever each runtime exposes it, rather than demanding every runtime adopt a single event schema.
+
+For the per-runtime event matrix, see [FEATURES.md](../FEATURES.md) under Multi-Runtime Support. For how to enable hooks on your specific runtime, see [Install on your runtime](../how-to/install-on-your-runtime.md).
+
+### Config hot-reload via `FileChanged`
+
+Claude Code exposes a `FileChanged` event in addition to session-lifecycle hooks. Claude Code's `FileChanged` hook watches for changes to `config.json` and hot-reloads the project's `.planning/config.json` into the session. The practical reason is straightforward: configuration changes should take effect without forcing the user to clear and rebuild the session.
+
+Requiring a `/clear` to pick up a config edit would destroy the very continuity the context-engineering design is trying to protect. By watching for `FileChanged` on `config.json`, GSD can reload configuration mid-session — adjusting model profiles, context-window thresholds, or routing preferences — without the user losing their place. The working context survives; the configuration updates beneath it.
+
+### Effort signals for heavy and light skills
+
+Beyond passive monitoring, GSD uses `effort:` frontmatter to signal the token budget appropriate for each skill. Heavy orchestrator skills (`plan-phase`, `execute-phase`, `autonomous`) declare `effort: xhigh`; quick-status skills (`progress`, `stats`) declare `effort: low`.
+
+Note: an earlier version of GSD also applied `context: fork` to these three heavy skills to protect the main session's context budget. This was removed (#921) because `plan-phase`, `execute-phase`, and `autonomous` are **spawning orchestrators** — their core function is to spawn subagents (`gsd-planner`, `gsd-executor`, etc.), and a forked subagent context does not have the `Agent` tool. Context isolation for these skills comes from the subagents they spawn, not from forking the orchestrator itself.
+
+Complementing this, quick-status skills explicitly declare low effort in their definitions. This is a budget-conscious signal in the opposite direction: these skills read minimal state and return concise output, keeping their own footprint small by design.
+
+### Trade-offs
+
+This machinery is worth being honest about.
+
+**Hooks add maintenance surface.** Every runtime GSD supports must have its hooks registered, tested, and kept in sync with that runtime's event API. When a runtime changes its event names or firing semantics, GSD's hook registration needs updating. This is the cost of per-runtime observability rather than a single shared mechanism.
+
+**Headroom tracking is a heuristic.** The hooks give GSD a signal, not a guarantee. A single model call can consume tokens unpredictably depending on the response length, tool use, and caching behaviour. GSD uses headroom estimates to warn and steer, not to make hard guarantees about what will fit.
+
+**Subagents are isolated.** A spawned subagent cannot see uncommitted state in the orchestrating session. This is not a bug — it is necessary for independence — but it means anything the subagent needs must be on disk before it is spawned. This is precisely why `.planning/` exists as the shared substrate: plan files, `STATE.md`, `CONTEXT.md`, and `config.json` are all durable, file-system artefacts that any context — orchestrator or subagent — can read. The context-engineering design is self-consistent: the same principle that makes fresh-context subagents work (shared state lives in files, not in a conversation) is what makes the multi-agent architecture viable. See also [Multi-agent orchestration](multi-agent-orchestration.md) for how `.planning/` serves the same role across the orchestrator → agent boundary.
+
+---
+
 ## Trade-offs
 
 Honesty about trade-offs matters here.

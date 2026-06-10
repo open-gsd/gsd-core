@@ -10,16 +10,21 @@
  * content when claude_md_assembly.mode is "link".
  */
 
-const { test } = require('node:test');
+const { test, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const helpers = require('./helpers.cjs');
 
 const { cmdGenerateClaudeMd } = require('../gsd-core/bin/lib/profile-output.cjs');
 
+const _dirsToClean = [];
+after(() => { for (const d of _dirsToClean) helpers.cleanup(d); });
+
 function makeTempProject(files = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2415-'));
+  _dirsToClean.push(dir);
   fs.mkdirSync(path.join(dir, '.planning', 'codebase'), { recursive: true });
   for (const [rel, content] of Object.entries(files)) {
     const abs = path.join(dir, rel);
