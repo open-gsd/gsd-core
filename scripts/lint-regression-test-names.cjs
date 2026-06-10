@@ -1,0 +1,78 @@
+#!/usr/bin/env node
+'use strict';
+
+/**
+ * lint-regression-test-names.cjs — ban NEW top-level bug-NNNN test files.
+ *
+ * ## Why
+ *
+ * The 2026-06 CI audit found 244 one-off `tests/bug-NNNN-*.test.cjs` files —
+ * ~38% of the suite. `node --test` spawns one child process per FILE, so file
+ * count (not test count) is the unit of CI overhead, and it is worst on the
+ * Windows lanes where every spawn is Defender-scanned. Each regression test
+ * belongs in the owning module's main test file as a regression case (e.g. a
+ * `describe('regressions')` block in `tests/<module>.test.cjs`), where it
+ * costs zero additional processes.
+ *
+ * ## What this enforces
+ *
+ * Identity ratchet (scripts/lib/allowlist-ratchet.cjs) over basenames matching
+ * /^bug-\d+.*\.test\.cjs$/ in tests/:
+ *   - A NEW bug-* file (not in the allowlist) fails: fold the regression into
+ *     the owning module's test file instead.
+ *   - A REMOVED bug-* file with a stale allowlist entry also fails: prune the
+ *     entry from scripts/lint-regression-test-names.allowlist.json so the
+ *     baseline only ever shrinks.
+ *
+ * See docs/TESTING-SUITES.md ("Regression tests") for the placement policy.
+ */
+
+const fs = require('fs');
+const path = require('path');
+const { assertWithinAllowlist } = require('./lib/allowlist-ratchet.cjs');
+const { ExitError, runMain } = require('./lib/cli-exit.cjs');
+
+const ROOT = path.join(__dirname, '..');
+// Env overrides exist for the lint's own tests only (sandbox fixture dirs).
+const TESTS_DIR = process.env.GSD_LINT_REGRESSION_TESTS_DIR || path.join(ROOT, 'tests');
+const ALLOWLIST_PATH =
+  process.env.GSD_LINT_REGRESSION_ALLOWLIST ||
+  path.join(__dirname, 'lint-regression-test-names.allowlist.json');
+
+const BUG_FILE_RE = /^bug-\d+.*\.test\.cjs$/;
+
+function main() {
+  const current = fs
+    .readdirSync(TESTS_DIR)
+    .filter(f => BUG_FILE_RE.test(f))
+    .sort();
+  const known = JSON.parse(fs.readFileSync(ALLOWLIST_PATH, 'utf8'));
+
+  const failures = [];
+  const { novel } = assertWithinAllowlist({
+    label: 'regression-test-names',
+    current,
+    known,
+    fail: msg => failures.push(msg),
+    pruneHint: 'edit scripts/lint-regression-test-names.allowlist.json',
+  });
+
+  if (failures.length > 0) {
+    for (const msg of failures) console.error(msg);
+    if (novel.length > 0) {
+      console.error(
+        '\nNew bug-NNNN test files are no longer accepted. Add the regression ' +
+        "case to the owning module's test file (e.g. a describe('regressions') " +
+        'block in tests/<module>.test.cjs) instead of creating a new file. ' +
+        'See docs/TESTING-SUITES.md.'
+      );
+    }
+    throw new ExitError(1);
+  }
+
+  console.log(
+    `ok lint-regression-test-names: ${current.length} grandfathered bug-* file(s), no novel offenders`
+  );
+}
+
+runMain(main);

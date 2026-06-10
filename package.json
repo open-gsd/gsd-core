@@ -91,6 +91,8 @@
     "pretest:coverage": "npm run build:lib && npm run lint:skill-deps",
     "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/",
     "lint:fix": "eslint . --fix",
+    "lint:ci": "eslint . && npm run lint:skill-deps && node scripts/lint-test-file-count.cjs && node scripts/lint-command-contract.cjs && node scripts/lint-pr-check-project-dir.cjs && npm run lint:legacy-name && node scripts/lint-regression-test-names.cjs",
+    "lint:regression-names": "node scripts/lint-regression-test-names.cjs",
     "lint:descriptions": "node scripts/lint-descriptions.cjs",
     "lint:skill-deps": "node scripts/lint-skill-deps.cjs",
     "lint:test-file-count": "node scripts/lint-test-file-count.cjs",
