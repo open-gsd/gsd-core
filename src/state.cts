@@ -756,17 +756,24 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
       }
     }
 
-    // Bug #944: DWIM auto-create — when the caller supplied --stopped-at or
+    // Bug #944: DWIM normalize/auto-create — when the caller supplied --stopped-at or
     // --resume-file but the body lacks the canonical labels (in-place replace
-    // returned a miss), create a canonical ## Session section so the values are
-    // durably persisted. Mirrors the DWIM pattern used by add-decision,
-    // add-blocker, and record-metric. Never silently drop caller-supplied values.
+    // returned a miss), persist the values durably. Mirrors the DWIM pattern used
+    // by add-decision, add-blocker, and record-metric. Never silently drop
+    // caller-supplied values.
     //
-    // Guard: only auto-create when the caller actually supplied a value. When no
+    // Guard: only act when the caller actually supplied a value. When no
     // --stopped-at / --resume-file are given and the body already had no session
     // labels (nothing was updated), we return recorded:false — the existing
-    // behaviour for a no-op call that didn't supply any values. Auto-creating a
-    // session scaffold on a no-value call would be unexpected DWIM.
+    // behaviour for a no-op call that didn't supply any values.
+    //
+    // Correctness invariant: both buildStateFrontmatter and cmdStateSnapshot read
+    // only the FIRST `## Session` block (via a /##\s*Session\s*\n…/i regex).
+    // If we blindly append a second `## Session` block when one already exists, the
+    // newly-written Stopped at / Resume file end up in the second (invisible) block.
+    // Fix: when a `## Session` heading already exists, normalize THAT block in place
+    // (insert / replace canonical bold-label lines within the existing section).
+    // Only append a brand-new section when NO `## Session` heading exists at all.
     const callerSuppliedValues = !!(options.stopped_at || (options.resume_file !== undefined && options.resume_file !== null));
     const needsStoppedAt = options.stopped_at && !updated.includes('Stopped At');
     const needsResumeFile = options.resume_file !== undefined && options.resume_file !== null && !updated.includes('Resume File');
@@ -778,17 +785,40 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
         : 'None';
       const stoppedAtValue = options.stopped_at || 'None';
 
-      const scaffold = [
-        '',
-        '## Session',
-        '',
-        `**Last session:** ${now}`,
-        `**Stopped at:** ${stoppedAtValue}`,
-        `**Resume file:** ${resumeValue}`,
-        '',
-      ].join('\n');
+      // Determine whether a ## Session heading already exists in the body.
+      const existingSessionHeading = /^## Session\s*$/im.test(content);
 
-      content = content.trimEnd() + '\n' + scaffold;
+      if (existingSessionHeading) {
+        // Normalize in place: replace the body of the EXISTING ## Session section
+        // with canonical bold-label lines so the first-match readers see the new
+        // values. The regex captures the heading line then everything up to the
+        // next ## section or end of string.
+        content = content.replace(
+          /(^## Session[ \t]*$)([\s\S]*?)(?=\n^## |\n*$)/im,
+          (_match: string, heading: string) =>
+            [
+              heading,
+              '',
+              `**Last session:** ${now}`,
+              `**Stopped at:** ${stoppedAtValue}`,
+              `**Resume file:** ${resumeValue}`,
+              '',
+            ].join('\n'),
+        );
+      } else {
+        // No ## Session heading exists at all — append a new canonical section.
+        const scaffold = [
+          '',
+          '## Session',
+          '',
+          `**Last session:** ${now}`,
+          `**Stopped at:** ${stoppedAtValue}`,
+          `**Resume file:** ${resumeValue}`,
+          '',
+        ].join('\n');
+        content = content.trimEnd() + '\n' + scaffold;
+      }
+
       sessionCreated = true;
 
       if (needsLastSession) updated.push('Last session');
@@ -893,8 +923,12 @@ function cmdStateSnapshot(cwd: string, raw: boolean): void {
   const sessionMatch = body.match(/##\s*Session\s*\n([\s\S]*?)(?=\n##|$)/i);
   if (sessionMatch) {
     const sessionSection = sessionMatch[1];
+    // Accept both `**Last Date:**` (canonical template form) and `**Last session:**`
+    // (the form written by the DWIM auto-create / normalize path added for #944).
     const lastDateMatch = sessionSection.match(/\*\*Last Date:\*\*\s*(.+)/i)
-      || sessionSection.match(/^Last Date:\s*(.+)/im);
+      || sessionSection.match(/^Last Date:\s*(.+)/im)
+      || sessionSection.match(/\*\*Last session:\*\*\s*(.+)/i)
+      || sessionSection.match(/^Last session:\s*(.+)/im);
     const stoppedAtMatch = sessionSection.match(/\*\*Stopped At:\*\*\s*(.+)/i)
       || sessionSection.match(/^Stopped At:\s*(.+)/im);
     const resumeFileMatch = sessionSection.match(/\*\*Resume File:\*\*\s*(.+)/i)

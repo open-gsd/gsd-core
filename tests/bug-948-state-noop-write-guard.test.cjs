@@ -554,3 +554,145 @@ describe('#948/#944: adversarial fixture variants', () => {
       '--stopped-at value must appear in STATE.md');
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Adversarial review findings: in-place update for existing ## Session heading
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('#944 adversarial: existing ## Session heading must be updated in place, not duplicated', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  /**
+   * HIGH finding: when a `## Session` heading already exists but uses
+   * non-canonical rows (e.g. a markdown table), the DWIM code was appending
+   * a second `## Session` block instead of normalizing the existing one.
+   * buildStateFrontmatter / cmdStateSnapshot both read only the FIRST match,
+   * so the newly-written Stopped at / Resume file end up in an ignored block.
+   */
+  test('record-session with existing non-canonical ## Session block: exactly one ## Session block afterward', () => {
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    const nonCanonicalWithHeading = [
+      '---',
+      'gsd_state_version: 1.0',
+      'milestone: v1.0',
+      'milestone_name: Foundation',
+      'status: executing',
+      'last_updated: 2026-01-01T00:00:00.000Z',
+      '---',
+      '',
+      '# GSD State',
+      '',
+      '## Session',
+      '',
+      '| Field | Value |',
+      '|-------|-------|',
+      '| Last Session | 2026-01-01 |',
+      '| Stopped Here | Phase 1, Plan 1 |',
+      '',
+      '## Accumulated Context',
+      '',
+      '- Decision: use TypeScript',
+      '',
+    ].join('\n');
+    fs.writeFileSync(statePath, nonCanonicalWithHeading);
+
+    const PINNED_MS = Date.parse('2026-06-09T20:00:00.000Z');
+    const result = runGsdTools(
+      'state record-session --stopped-at "Phase 4, Plan 2" --resume-file "resume.md"',
+      tmpDir,
+      { GSD_TEST_MODE: '1', GSD_NOW_MS: String(PINNED_MS) },
+    );
+    assert.ok(result.success, `record-session should exit 0: ${result.error}`);
+
+    const after = fs.readFileSync(statePath, 'utf-8');
+
+    // (a) exactly ONE ## Session block — no duplicate
+    const sessionHeadingCount = (after.match(/^## Session\s*$/gm) || []).length;
+    assert.strictEqual(sessionHeadingCount, 1,
+      'exactly ONE ## Session block must exist after record-session (no duplicate appended)');
+
+    // (b) supplied values are present in the file
+    assert.ok(after.includes('Phase 4, Plan 2'),
+      '--stopped-at value must be present in STATE.md');
+    assert.ok(after.includes('resume.md'),
+      '--resume-file value must be present in STATE.md');
+  });
+
+  test('record-session with existing non-canonical ## Session block: state-snapshot sees supplied stopped_at', () => {
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    const nonCanonicalWithHeading = [
+      '---',
+      'gsd_state_version: 1.0',
+      'milestone: v1.0',
+      'milestone_name: Foundation',
+      'status: executing',
+      'last_updated: 2026-01-01T00:00:00.000Z',
+      '---',
+      '',
+      '# GSD State',
+      '',
+      '## Session',
+      '',
+      '| Field | Value |',
+      '|-------|-------|',
+      '| Last Session | 2026-01-01 |',
+      '| Stopped Here | Phase 1, Plan 1 |',
+      '',
+    ].join('\n');
+    fs.writeFileSync(statePath, nonCanonicalWithHeading);
+
+    const PINNED_MS = Date.parse('2026-06-09T20:30:00.000Z');
+    runGsdTools(
+      'state record-session --stopped-at "Phase 4, Plan 2" --resume-file "resume.md"',
+      tmpDir,
+      { GSD_TEST_MODE: '1', GSD_NOW_MS: String(PINNED_MS) },
+    );
+
+    // (c) state-snapshot must see the written stopped_at in the session block
+    // (via buildStateFrontmatter frontmatter OR body Session section, first match)
+    const snapshotResult = runGsdTools('state-snapshot', tmpDir);
+    assert.ok(snapshotResult.success, `state-snapshot should exit 0: ${snapshotResult.error}`);
+    const snapshot = JSON.parse(snapshotResult.output);
+    assert.strictEqual(
+      snapshot.session && snapshot.session.stopped_at,
+      'Phase 4, Plan 2',
+      `state-snapshot session.stopped_at must reflect "Phase 4, Plan 2", got: ${JSON.stringify(snapshot.session)}`,
+    );
+  });
+
+  /**
+   * LOW finding: auto-created scaffold writes `**Last session:**` but
+   * cmdStateSnapshot only matched `**Last Date:**`, so session.last_date
+   * was null after auto-create despite a valid timestamp being written.
+   * Fix: teach the snapshot parser to also accept `**Last session:**`.
+   */
+  test('state-snapshot returns non-null session.last_date after auto-create on body-less file', () => {
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    fs.writeFileSync(statePath, buildStateMdWithoutSessionSection());
+
+    const PINNED_MS = Date.parse('2026-06-09T21:00:00.000Z');
+    const recResult = runGsdTools(
+      'state record-session --stopped-at "Phase 1, Plan 1"',
+      tmpDir,
+      { GSD_TEST_MODE: '1', GSD_NOW_MS: String(PINNED_MS) },
+    );
+    assert.ok(recResult.success, `record-session should exit 0: ${recResult.error}`);
+
+    const snapshotResult = runGsdTools('state-snapshot', tmpDir);
+    assert.ok(snapshotResult.success, `state-snapshot should exit 0: ${snapshotResult.error}`);
+    const snapshot = JSON.parse(snapshotResult.output);
+    assert.notStrictEqual(
+      snapshot.session && snapshot.session.last_date,
+      null,
+      `state-snapshot session.last_date must not be null after auto-create; got: ${JSON.stringify(snapshot.session)}`,
+    );
+  });
+});
