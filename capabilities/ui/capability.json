@@ -8,7 +8,8 @@
   "config": {
     "workflow.ui_phase":       { "type": "boolean", "default": true, "description": "Enable the UI design-contract gate during planning." },
     "workflow.ui_review":      { "type": "boolean", "default": true, "description": "Enable the retrospective UI audit." },
-    "workflow.ui_safety_gate": { "type": "boolean", "default": true, "description": "Block execution on unmet UI-SPEC contracts." }
+    "workflow.ui_safety_gate": { "type": "boolean", "default": true, "description": "Block execution on unmet UI-SPEC contracts." },
+    "workflow.impeccable":     { "type": "boolean", "default": false, "description": "Enable Impeccable design quality integration: anti-pattern enforcement (Dimension/Pillar 7), project design identity (PRODUCT.md/DESIGN.md), and post-review refinement menu." }
   },
   "steps": [
     { "point": "plan:pre",    "ref": { "skill": "ui-phase" },  "produces": ["UI-SPEC.md"],   "consumes": ["CONTEXT.md"], "when": "workflow.ui_phase",  "onError": "skip" },
