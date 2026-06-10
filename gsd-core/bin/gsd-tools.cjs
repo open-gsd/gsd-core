@@ -1155,7 +1155,8 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       if (subcommand === 'complete') {
         const milestoneName = parseMultiwordArg(args, 'name');
         const archivePhases = args.includes('--archive-phases');
-        milestone.cmdMilestoneComplete(cwd, args[2], { name: milestoneName, archivePhases }, raw);
+        const force = args.includes('--force');
+        milestone.cmdMilestoneComplete(cwd, args[2], { name: milestoneName, archivePhases, force }, raw);
       } else {
         error('Unknown milestone subcommand. Available: complete', ERROR_REASON.SDK_UNKNOWN_COMMAND);
       }
