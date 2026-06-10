@@ -204,6 +204,29 @@ function cmdListTodos(cwd: string, area: string | undefined, raw: boolean): void
  * displayed field is passed through sanitizeForDisplay and each file path is
  * validated with requireSafePath before reading. Read-only — never mutates.
  */
+/**
+ * Derive the canonical `{ seed_id, slug }` from a seed filename stem and the
+ * frontmatter `id:` value. Pure (no I/O) so it can be property-tested directly.
+ *
+ * seed_id: frontmatter `id:` when it matches `SEED-NNN`, else the numeric prefix
+ * of the filename (`SEED-NNN-…`), else the whole stem. slug: the descriptive
+ * remainder after `SEED-NNN-`, else the stem with a leading `SEED-` stripped.
+ * `rawFmId` is `unknown` because frontmatter values are not guaranteed strings.
+ */
+function deriveSeedIdentity(stem: string, rawFmId: unknown): { seed_id: string; slug: string } {
+  const fmId = typeof rawFmId === 'string' ? rawFmId.trim() : '';
+  let seedId: string;
+  if (/^SEED-\d+$/i.test(fmId)) {
+    seedId = fmId;
+  } else {
+    const numMatch = stem.match(/^(SEED-\d+)/i);
+    seedId = numMatch ? numMatch[1] : stem;
+  }
+  const slugMatch = stem.match(/^SEED-\d+-(.+)$/i);
+  const slug = slugMatch ? slugMatch[1] : stem.replace(/^SEED-/i, '');
+  return { seed_id: seedId, slug };
+}
+
 function cmdListSeeds(cwd: string, statusFilter: string | undefined, raw: boolean): void {
   const planDir = planningDir(cwd);
   const seedsDir = path.join(planDir, 'seeds');
@@ -248,22 +271,15 @@ function cmdListSeeds(cwd: string, statusFilter: string | undefined, raw: boolea
     const fm = extractFrontmatter(content) as Record<string, unknown>;
     const status = (fmStr(fm.status) || 'dormant').toLowerCase().trim() || 'dormant';
 
-    if (wantStatus && sanitizeForDisplay(status) !== wantStatus) continue;
+    // Match on the raw lowercased status (both sides already normalized);
+    // sanitizeForDisplay is for output, not comparison.
+    if (wantStatus && status !== wantStatus) continue;
 
     // Canonical seed id is `SEED-NNN` (frontmatter `id:`, e.g. SEED-001). Fall
     // back to the numeric prefix of the filename, then to the whole stem. The
     // descriptive remainder of the filename (`SEED-NNN-<slug>.md`) is the slug.
     const stem = path.basename(entry.name, '.md');
-    const fmId = typeof fm.id === 'string' ? fm.id.trim() : '';
-    let seedId: string;
-    if (/^SEED-\d+$/i.test(fmId)) {
-      seedId = fmId;
-    } else {
-      const numMatch = stem.match(/^(SEED-\d+)/i);
-      seedId = numMatch ? numMatch[1] : stem;
-    }
-    const slugMatch = stem.match(/^SEED-\d+-(.+)$/i);
-    const slug = slugMatch ? slugMatch[1] : stem.replace(/^SEED-/i, '');
+    const { seed_id: seedId, slug } = deriveSeedIdentity(stem, fm.id);
 
     let title = sanitizeForDisplay(fmStr(fm.title).slice(0, 100));
     if (!title) {
@@ -1496,6 +1512,7 @@ export = {
   cmdCurrentTimestamp,
   cmdListTodos,
   cmdListSeeds,
+  deriveSeedIdentity,
   cmdVerifyPathExists,
   cmdHistoryDigest,
   cmdResolveModel,
