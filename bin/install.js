@@ -3478,7 +3478,7 @@ When only the generic \`multi_agent_v1\` schema is available, typed GSD agent di
 (openai/codex#15250). **This workaround is NOT equivalent to typed gsd-planner/gsd-executor
 execution** — GSD agents carry project-aware prompts, audit logging, and workflow context
 that a generic subagent lacks. Use the following fallback:
-1. Read \`~/.codex/agents/<agent-name>.toml\` to extract the agent's system instructions.
+1. Read \`agents/<agent-name>.toml\` (relative to the Codex home directory, e.g. \`$CODEX_HOME/agents/<agent-name>.toml\`) to extract the agent's system instructions.
 2. Inject those instructions as a role-preamble into a generic \`spawn_agent(message=...)\` call.
 3. Label results and logs clearly as "generic-agent workaround" so the orchestrator and user
    know full typed-agent guarantees are not in effect.
