@@ -285,19 +285,35 @@ describe('bug #974: budget arg parser property tests', () => {
     );
   });
 
-  // Property (b): missing --budget value (last arg) → usage error
+  // Property (b): missing --budget value (last arg) → usage error, for ANY valid term
+  // Generator constraint: term must be a non-empty string that does not start with '--'.
+  // Strings starting with '--' are excluded because they are flag tokens, not search
+  // terms; feeding term='--budget' would cause args.indexOf('--budget') to find the
+  // term position (index 2) rather than the flag position (index 3), which is outside
+  // the intended contract of this property (the test exercises missing-value detection,
+  // not flag-as-term ambiguity). The router still handles that case safely but the
+  // property would be testing a different code path.
   test('property: --budget as last arg always produces usage error', () => {
-    // We can't parameterize the "missing" case further, but we can verify
-    // that any prefix of args with --budget terminal → error
-    const { mock } = makeGraphifyMock();
-    const errFn = makeErrorRecorder();
-    routeGraphifyCommand({
-      args: ['graphify', 'query', 'someterm', '--budget'],
-      cwd: CWD, raw: RAW, error: errFn, _graphify: mock,
-    });
-    assert.strictEqual(errFn.calls.length, 1,
-      'missing --budget value must always produce exactly one error call');
-    assert.strictEqual(errFn.calls[0].reason, 'usage');
+    fc.assert(
+      fc.property(
+        // Non-empty, non-flag-like term: guards that term is a real search token
+        fc.string({ minLength: 1, maxLength: 30 }).filter(s => !s.startsWith('--')),
+        (term) => {
+          const { mock } = makeGraphifyMock();
+          const errFn = makeErrorRecorder();
+          routeGraphifyCommand({
+            args: ['graphify', 'query', term, '--budget'],
+            cwd: CWD, raw: RAW, error: errFn, _graphify: mock,
+          });
+          assert.strictEqual(errFn.calls.length, 1,
+            `--budget as last arg: term=${JSON.stringify(term)}: must produce exactly one error call; got ${errFn.calls.length}`);
+          assert.strictEqual(errFn.calls[0].reason, 'usage',
+            `--budget as last arg: term=${JSON.stringify(term)}: reason must be 'usage'; got ${errFn.calls[0].reason}`);
+        },
+      ),
+      // Explicit seed + numRuns for determinism in CI; mirrors fast-check-setup.cjs defaults.
+      { seed: 42, numRuns: 200 },
+    );
   });
 
   // Property (c): valid positive integer strings → budget passed through as number, no error
