@@ -126,7 +126,7 @@ function makeCoreMock() {
 
 describe('intel router: unit tests via recording mocks', () => {
   const CWD = '/fake/cwd';
-  const PLANNING_DIR = '/fake/cwd/.planning';
+  const PLANNING_DIR = path.join(CWD, '.planning');
 
   // ── query ──────────────────────────────────────────────────────────────────
 
