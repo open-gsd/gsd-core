@@ -255,21 +255,20 @@ describe('bug #974: budget arg parser property tests', () => {
   test('property: non-numeric --budget value always produces usage error', () => {
     fc.assert(
       fc.property(
-        // Strings where parseInt returns NaN: no leading digit, no sign+digit
+        // Strings where parseInt returns NaN: no leading digit, no sign+digit.
+        // The .filter() at the end is the authoritative gate: it excludes any
+        // value that parseInt(v, 10) would accept (e.g. "+5", "-3", " 7",
+        // "0x1a", "007"). This makes the property universally true rather than
+        // relying on a runtime skip inside the property body.
         fc.oneof(
           // Alphabetic-start strings (parseInt('abc') = NaN)
           fc.stringMatching(/^[a-zA-Z][a-zA-Z0-9_-]{0,20}$/),
           // Empty string (parseInt('') = NaN)
           fc.constant(''),
-          // Strings starting with special chars
+          // Strings starting with special chars — filtered below for safety
           fc.stringMatching(/^[!@#$%^&*()_+={}\][|\\:;"'<,>?/~`][^\s]{0,10}$/),
-        ),
+        ).filter(v => Number.isNaN(parseInt(v, 10))),
         (badValue) => {
-          // Verify parseInt actually yields NaN for the generated value (sanity guard)
-          const parsed = parseInt(badValue, 10);
-          // Only proceed with values that are genuinely NaN to parseInt
-          if (!Number.isNaN(parsed)) return; // skip — the shrinker may produce digit-leading strings
-
           const { mock } = makeGraphifyMock();
           const errFn = makeErrorRecorder();
           routeGraphifyCommand({
@@ -282,6 +281,8 @@ describe('bug #974: budget arg parser property tests', () => {
             `--budget "${badValue}" error must have reason 'usage'; got: ${errFn.calls[0].reason}`);
         },
       ),
+      // Explicit seed + numRuns for CI determinism.
+      { seed: 42, numRuns: 200 },
     );
   });
 
@@ -337,6 +338,8 @@ describe('bug #974: budget arg parser property tests', () => {
             `budget must be a number, not string "${calls[0].args[2].budget}"`);
         },
       ),
+      // Explicit seed + numRuns for CI determinism.
+      { seed: 43, numRuns: 200 },
     );
   });
 
@@ -360,6 +363,8 @@ describe('bug #974: budget arg parser property tests', () => {
           }
         },
       ),
+      // Explicit seed + numRuns for CI determinism.
+      { seed: 44, numRuns: 200 },
     );
   });
 });
