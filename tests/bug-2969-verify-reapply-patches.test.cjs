@@ -88,6 +88,7 @@ describe('Bug #2969: deterministic Step 5 verification gate', () => {
     // Locks the public diagnostic surface — adding a code requires updating
     // this assertion, removing one breaks consumers that switch on the enum.
     // Bug #3657 added OK_PRISTINE_DRIFT_DETECTED.
+    // Bug #934 added OK_NO_BASELINE.
     assert.deepEqual(
       Object.keys(REASON).sort(),
       [
@@ -95,6 +96,7 @@ describe('Bug #2969: deterministic Step 5 verification gate', () => {
         'FAIL_INSTALLED_NOT_REGULAR_FILE',
         'FAIL_READ_ERROR',
         'FAIL_USER_LINES_MISSING',
+        'OK_NO_BASELINE',
         'OK_NO_SIGNIFICANT_BACKUP_LINES',
         'OK_NO_USER_LINES_VS_PRISTINE',
         'OK_PRISTINE_DRIFT_DETECTED',
@@ -178,7 +180,8 @@ describe('Bug #2969: deterministic Step 5 verification gate', () => {
     assert.equal(status, 1);
     // Bug #3657 (Finding 1): drifted + drifted_files are additive fields added to surface
     // pristine-drift skips distinctly from failures.  Shape-lock updated to include them.
-    assert.deepEqual(Object.keys(report).sort(), ['checked', 'drifted', 'drifted_files', 'failures', 'results']);
+    // Bug #934: no_baseline + no_baseline_files are additive fields for missing-pristine advisory.
+    assert.deepEqual(Object.keys(report).sort(), ['checked', 'drifted', 'drifted_files', 'failures', 'no_baseline', 'no_baseline_files', 'results']);
     const r0 = report.results[0];
     assert.deepEqual(Object.keys(r0).sort(), ['file', 'missing', 'reason', 'status']);
     assert.equal(typeof r0.file, 'string');

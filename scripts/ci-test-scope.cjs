@@ -20,7 +20,6 @@ const INERT_WORKFLOWS = new Set([
   'auto-backmerge.yml',
   'close-draft-prs.yml',
   'dismiss-unauthorized-pr-approvals.yml',
-  'pr-gate.yml',
   'pr-target-validator.yml',
   'pr-template-format.yml',
   'require-issue-link.yml',
@@ -170,11 +169,11 @@ const RULES = [
       path.includes('prompt-injection-scan') ||
       path.startsWith('tests/fixtures/adversarial/security/'),
     tests: [
-      'tests/secret-scan-lint.test.cjs',
-      'tests/prompt-injection-scan.test.cjs',
-      'tests/security-prompt-injection.test.cjs',
-      'tests/read-injection-scanner.test.cjs',
-      'tests/security-scan.test.cjs',
+      'tests/secret-scan-lint.security.test.cjs',
+      'tests/prompt-injection-scan.security.test.cjs',
+      'tests/security-prompt-injection.security.test.cjs',
+      'tests/read-injection-scanner.security.test.cjs',
+      'tests/security-scan.security.test.cjs',
     ],
   },
   {
@@ -289,7 +288,12 @@ function changedFiles(args) {
   if (!args.base || !args.head) {
     throw new Error('--base/--head or --files is required');
   }
-  const stdout = execFileSync('git', ['diff', '--name-only', args.base, args.head], {
+  // Three-dot diff (merge-base...head) matches GitHub's PR "Files changed" semantics.
+  // A two-dot `git diff base head` would surface every file `next` gained after this
+  // branch's merge-base, mis-flagging product_changed/full_matrix on docs-only PRs cut
+  // from a slightly stale base (#837). The `changes` job checks out with fetch-depth: 0,
+  // so the merge-base is always available.
+  const stdout = execFileSync('git', ['diff', '--name-only', `${args.base}...${args.head}`], {
     encoding: 'utf8',
   });
   return splitFiles(stdout);
@@ -304,7 +308,13 @@ function addAll(set, values) {
   for (const value of values) set.add(value);
 }
 
-const WINDOWS_HINTS = ['windows', 'path', 'shell', 'workflow', 'install', 'hook'];
+// Windows-sensitive filename hints — deliberately narrow. 'workflow',
+// 'install', and 'hook' were dropped from this list: workflow-lint tests are
+// platform-independent YAML/policy checks, and the installer/hooks RULES set
+// fullMatrix=true, so the full Windows lane already runs when those paths
+// change. The old six-hint list pulled 102 of ~633 test files into the scoped
+// windows lane, turning it into a ~10-minute job on every PR.
+const WINDOWS_HINTS = ['windows', 'win32', 'shell', 'path'];
 const isWindowsHint = s => WINDOWS_HINTS.some(k => s.toLowerCase().includes(k));
 
 function classify(files) {
@@ -339,10 +349,15 @@ function classify(files) {
 
     if (file.startsWith('tests/') && file.endsWith('.test.cjs')) {
       targeted.add(file);
-      fullMatrix = true;
-      if (isWindowsHint(file)) {
-        windows.add(file);
-      }
+      // #494 invariant, narrowed: a changed test must still be exercised on
+      // the divergent OS before merge, but at per-file cost — it ALWAYS joins
+      // the scoped windows lane instead of triggering the three full parity
+      // lanes. (full_matrix fired on 15/15 sampled PRs because test-driven
+      // PRs always touch tests/, costing ~25 runner-minutes each.) Changed
+      // tests already run on ubuntu-22 and ubuntu-24 via targeted_tests; the
+      // residual macOS / windows-node-22 cross-product is covered by the full
+      // matrix on every push to next.
+      windows.add(file);
     }
 
     for (const rule of RULES) {

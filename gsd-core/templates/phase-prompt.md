@@ -568,12 +568,12 @@ must_haves:
       contains: "model Message"
   key_links:
     - from: "src/components/Chat.tsx"
-      to: "/api/chat"
-      via: "fetch in useEffect"
+      to: "src/app/api/chat/route.ts"
+      via: "fetch in useEffect — calls /api/chat endpoint"
       pattern: "fetch.*api/chat"
     - from: "src/app/api/chat/route.ts"
-      to: "prisma.message"
-      via: "database query"
+      to: "prisma/schema.prisma"
+      via: "database query via prisma.message"
       pattern: "prisma\\.message\\.(find|create)"
 ```
 
@@ -589,9 +589,9 @@ must_haves:
 | `artifacts[].exports` | Optional. Expected exports to verify. |
 | `artifacts[].contains` | Optional. Pattern that must exist in file. |
 | `key_links` | Critical connections between artifacts. |
-| `key_links[].from` | Source artifact. |
-| `key_links[].to` | Target artifact or endpoint. |
-| `key_links[].via` | How they connect (description). |
+| `key_links[].from` | Source file (relative path from project root). Describe components or symbols in `via:`. |
+| `key_links[].to` | Target file (relative path from project root). Describe endpoints, APIs, or modules in `via:`. |
+| `key_links[].via` | How they connect, including any endpoint or symbol name (e.g. `fetch in useEffect — calls /api/chat`, `Prisma query via prisma.message`). |
 | `key_links[].pattern` | Optional. Regex to verify connection exists. |
 
 **Why this matters:**

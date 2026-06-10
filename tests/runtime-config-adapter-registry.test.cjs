@@ -31,9 +31,10 @@ const EXPECTED_TABLE = [
   { runtime: 'codex',       installSurface: 'codex-toml',           writesSharedSettings: false, finishPermissionWriter: null       },
   { runtime: 'copilot',     installSurface: 'copilot-instructions', writesSharedSettings: false, finishPermissionWriter: null       },
   { runtime: 'cline',       installSurface: 'cline-rules',          writesSharedSettings: false, finishPermissionWriter: null       },
-  { runtime: 'cursor',      installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       },
+  { runtime: 'cursor',      installSurface: 'cursor-hooks-json',    writesSharedSettings: false, finishPermissionWriter: null       },
   { runtime: 'windsurf',    installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       },
   { runtime: 'trae',        installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       },
+  { runtime: 'kimi',        installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       },
 ];
 
 // ---------------------------------------------------------------------------
@@ -97,7 +98,7 @@ describe('resolveRuntimeConfigIntent — unknown runtime throws TypeError', () =
 // ---------------------------------------------------------------------------
 
 describe('writesSharedSettings exclusion equivalence', () => {
-  const EXPECTED_FALSE_SET = new Set(['codex', 'copilot', 'kilo', 'cursor', 'windsurf', 'trae', 'cline']);
+  const EXPECTED_FALSE_SET = new Set(['codex', 'copilot', 'kilo', 'cursor', 'windsurf', 'trae', 'cline', 'kimi']);
 
   test('runtimes with writesSharedSettings===false are exactly the exclusion set', () => {
     const falseRuntimes = EXPECTED_TABLE
@@ -160,8 +161,8 @@ describe('installSurface correctness', () => {
     assert.strictEqual(resolveRuntimeConfigIntent('cline').installSurface, 'cline-rules');
   });
 
-  test('cursor -> "profile-marker-only"', () => {
-    assert.strictEqual(resolveRuntimeConfigIntent('cursor').installSurface, 'profile-marker-only');
+  test('cursor -> "cursor-hooks-json"', () => {
+    assert.strictEqual(resolveRuntimeConfigIntent('cursor').installSurface, 'cursor-hooks-json');
   });
 
   test('windsurf -> "profile-marker-only"', () => {
@@ -170,6 +171,10 @@ describe('installSurface correctness', () => {
 
   test('trae -> "profile-marker-only"', () => {
     assert.strictEqual(resolveRuntimeConfigIntent('trae').installSurface, 'profile-marker-only');
+  });
+
+  test('kimi -> "profile-marker-only"', () => {
+    assert.strictEqual(resolveRuntimeConfigIntent('kimi').installSurface, 'profile-marker-only');
   });
 
   test('the 7 passthroughs + opencode + kilo -> "settings-json"', () => {
@@ -205,14 +210,15 @@ describe('resolveRuntimeConfigIntent — fresh object each call', () => {
 // ---------------------------------------------------------------------------
 
 describe('ALLOWED_CONFIG_RUNTIMES completeness', () => {
-  const EXPECTED_15 = new Set([
+  const EXPECTED_16 = new Set([
     'claude', 'gemini', 'antigravity', 'augment', 'qwen', 'hermes', 'codebuddy',
     'opencode', 'kilo', 'codex', 'copilot', 'cline', 'cursor', 'windsurf', 'trae',
+    'kimi',
   ]);
 
-  test('ALLOWED_CONFIG_RUNTIMES contains exactly the 15 expected runtimes', () => {
+  test('ALLOWED_CONFIG_RUNTIMES contains exactly the 16 expected runtimes', () => {
     const runtimeSet = new Set(ALLOWED_CONFIG_RUNTIMES);
-    assert.deepStrictEqual(runtimeSet, EXPECTED_15);
+    assert.deepStrictEqual(runtimeSet, EXPECTED_16);
   });
 
   test('every member of ALLOWED_CONFIG_RUNTIMES resolves without throwing', () => {
@@ -221,8 +227,8 @@ describe('ALLOWED_CONFIG_RUNTIMES completeness', () => {
     }
   });
 
-  test('ALLOWED_CONFIG_RUNTIMES has exactly 15 entries', () => {
-    assert.strictEqual([...ALLOWED_CONFIG_RUNTIMES].length, 15);
+  test('ALLOWED_CONFIG_RUNTIMES has exactly 16 entries', () => {
+    assert.strictEqual([...ALLOWED_CONFIG_RUNTIMES].length, 16);
   });
 });
 
@@ -236,10 +242,11 @@ describe('INSTALL_SURFACES export', () => {
     'codex-toml',
     'copilot-instructions',
     'cline-rules',
+    'cursor-hooks-json',
     'profile-marker-only',
   ]);
 
-  test('INSTALL_SURFACES contains exactly the 5 surface strings', () => {
+  test('INSTALL_SURFACES contains exactly the 6 surface strings', () => {
     assert.deepStrictEqual(new Set(INSTALL_SURFACES), EXPECTED_SURFACES);
   });
 });

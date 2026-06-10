@@ -12,7 +12,7 @@
  * deeper than 50, which is intentional.
  *
  * Note: security-scan.yml legitimately uses fetch-depth: 0 and is NOT covered
- * by this test (see tests/security-scan.test.cjs).
+ * by this test (see tests/security-scan.security.test.cjs).
  */
 
 const { describe, test } = require('node:test');

@@ -1131,7 +1131,7 @@ fix(03-01): correct auth token expiry
 **3. 워크플로우 가드 훅** (`gsd-workflow-guard.js`)
 Claude가 GSD 워크플로우 컨텍스트 밖에서 파일 편집을 시도하는 것을 감지하는 PreToolUse 훅입니다. 직접 편집 대신 `/gsd-quick` 또는 `/gsd-fast` 사용을 권고합니다. `hooks.workflow_guard`로 구성 가능합니다(기본값: false).
 
-**4. CI 준비 주입 스캐너** (`prompt-injection-scan.test.cjs`)
+**4. CI 준비 주입 스캐너** (`prompt-injection-scan.security.test.cjs`)
 모든 에이전트, 워크플로우, 명령어 파일에서 포함된 주입 벡터를 스캔하는 테스트 스위트입니다.
 
 **요구사항.**

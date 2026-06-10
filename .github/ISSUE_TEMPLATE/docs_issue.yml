@@ -8,6 +8,14 @@ body:
       value: |
         Help us improve the docs. Point us to what's wrong or missing.
 
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I have searched existing issues and this documentation problem has not already been reported
+          required: true
+
   - type: dropdown
     id: type
     attributes:

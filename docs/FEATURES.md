@@ -904,6 +904,7 @@ continues. Drift detection cannot fail verification.
 - REQ-UPDATE-03: System MUST be runtime-aware and target the correct directory
 - REQ-UPDATE-04: System MUST back up locally modified files to `gsd-local-patches/`
 - REQ-UPDATE-05: `/gsd-update --reapply` MUST restore local modifications after update
+- REQ-UPDATE-06: `/gsd-update --next` (alias `--rc`) MUST target the `@next` RC dist-tag for version check and install; omitting the flag MUST keep `@latest` behavior unchanged (ADR #660)
 
 ---
 
@@ -1010,21 +1011,49 @@ fix(03-01): correct auth token expiry
 - REQ-RUNTIME-04: Installer MUST support both global and local installation
 - REQ-RUNTIME-05: Uninstall MUST cleanly remove all GSD files without affecting other configurations
 - REQ-RUNTIME-06: Installer MUST handle platform differences (Windows, macOS, Linux, WSL, Docker)
+- REQ-RUNTIME-07: Runtimes with lifecycle hook support MUST register per-turn context-headroom tracking events at install time
+- REQ-RUNTIME-08: Native packaging manifests MUST be version-stamped and enable runtime-native install/update/uninstall flows
 
 **Runtime Transformations:**
 
 | Aspect | Claude Code | OpenCode | Gemini | Kilo | Codex | Copilot | Antigravity | Cursor | Trae | Cline | Augment | CodeBuddy | Qwen Code |
 |--------|------------|----------|--------|-------|-------|---------|-------------|--------|------|-------|---------|-----------|-----------|
-| Commands | Slash commands | Slash commands | Slash commands | Slash commands | Skills (TOML) | Slash commands | Skills | Skills + Slash commands | Skills | Rules | Skills | Skills | Skills |
+| Commands | Slash commands | Slash commands | Slash commands (`{{args}}`) | Slash commands | Skills (TOML) | Slash commands | Skills | Skills + Slash commands | Skills | Rules | Skills + Slash commands | Slash commands | Skills |
 | Agent format | Claude native | `mode: subagent` | Claude native | `mode: subagent` | Skills | Tool mapping | Skills | Skills | Skills | Rules | Skills | Skills | Skills |
-| Hook events | `PostToolUse` | N/A | `AfterTool` | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
+| Skills emission | N/A | On-demand SKILL.md (1.4.0) | N/A | On-demand SKILL.md (1.4.0) | `/skills` picker (1.4.0) | N/A | N/A | SKILL.md | N/A | On-demand SKILL.md (1.4.0) | N/A | N/A | N/A |
+| Hook events | `SessionStart`, `PreToolUse`, `PostToolUse`, `SubagentStop`, `Stop`, `PreCompact`, `FileChanged` | N/A | `SessionStart`, `BeforeTool`, `AfterTool`, `BeforeAgent`, `AfterAgent`, `BeforeModel` | N/A | `SessionStart`, `SubagentStart`, `Stop`, `PostToolUse` | `sessionStart` | N/A | `sessionStart`, `postToolUse` | N/A | `PreToolUse` | N/A | N/A | `SessionStart`, `PreToolUse`, `PostToolUse`, `SubagentStop`, `Stop`, `PreCompact` |
 | Config | `settings.json` | `opencode.json(c)` | `settings.json` | `kilo.json(c)` | TOML | Instructions | Config | Config | Config | `.clinerules` | Config | Config | Config |
 
 **Cursor artifact surfaces:** `gsd install --cursor` writes two artifact kinds:
 - `~/.cursor/skills/gsd-<name>/SKILL.md` — rich skills with YAML frontmatter, Cursor tool-name mapping, and adapter context header (existing surface)
-- `~/.cursor/commands/gsd-<name>.md` — plain markdown slash commands (no frontmatter) invocable via `/` in the Agent input (Cursor 1.6+, added in #785)
+- `~/.cursor/commands/gsd-<name>.md` — plain markdown slash commands (no frontmatter) invocable via `/` in the Agent input (Cursor 1.6+)
 
-**Claude Code native plugin distribution:** GSD Core ships a `.claude-plugin/plugin.json` manifest, enabling installation and lifecycle management via `claude plugin install|enable|disable|update gsd-core`. Commands load under the `/gsd-core:` namespace (e.g. `/gsd-core:plan-phase`), avoiding slash-command collisions with the classic npm installer which uses `/gsd:`. Always-on guard and update hooks are wired automatically via `hooks/hooks.json`. The plugin path is additive — the npm installer (`npx @opengsd/gsd-core`) remains fully supported.
+**Native skills emission (1.4.0):** Three runtimes now emit GSD as on-demand native skills (`skills/<name>/SKILL.md`) at install time, in addition to their existing command and agent surfaces. Skills respect the active install profile and are removed on uninstall.
+- **Cline** (global installs, Cline >= v3.48.0) — emits skills alongside the existing `.clinerules/` directory
+- **Kilo** — emits skills alongside `command/` and `agents/`
+- **OpenCode** — emits skills alongside its existing surfaces
+
+**New slash-command surfaces (1.4.0):**
+- **CodeBuddy** — `/gsd-*` slash commands written to `~/.codebuddy/commands/`
+- **Augment** — `commands/gsd-<name>.md` written to `~/.augment/commands/`
+- **Cursor** (Cursor >= 1.6) — `.cursor/commands/gsd-<name>.md` so GSD appears in the `/` command menu
+
+**Cross-runtime lifecycle hooks (1.4.0):** Each supported runtime registers lifecycle hook events for per-turn context-headroom tracking and workflow state management. Notable registrations:
+- **Claude Code:** `SubagentStop`, `Stop`, `PreCompact` (context-headroom warnings), `FileChanged` (hot-reloads `.planning/config.json` mid-session)
+- **Gemini:** `BeforeAgent`, `AfterAgent`, `BeforeModel`
+- **Qwen Code:** `SubagentStop`, `Stop`, `PreCompact`
+- **Codex:** `SubagentStart`, `Stop`, `PostToolUse` (new in 1.4.0); on Windows the `SessionStart` hook entry gains a `commandWindows` field so the `.cmd` shim is used for native execution
+- **Cline:** `PreToolUse`
+- **Cursor:** `sessionStart` (injects workflow state), `postToolUse` (nudges `.planning` updates)
+- **Copilot:** `sessionStart`
+
+**Runtime-specific enrichments (1.4.0):**
+- Codex emits `service_tier: flex` for light-tier agents and an `agents/openai.yaml` chip so GSD skills appear in the Codex `/skills` picker
+- Gemini commands use native `{{args}}` interpolation
+
+**Native packaging:**
+- **Claude Code:** GSD Core ships a `.claude-plugin/plugin.json` manifest, enabling installation and lifecycle management via `claude plugin install|enable|disable|update gsd-core`. Commands load under the `/gsd-core:` namespace (e.g. `/gsd-core:plan-phase`), avoiding slash-command collisions with the classic npm installer which uses `/gsd:`. Always-on guard and update hooks are wired automatically via `hooks/hooks.json`. The plugin path is additive — the npm installer (`npx @opengsd/gsd-core`) remains fully supported.
+- **Gemini CLI:** Ships `gemini-extension.json`, enabling installation and lifecycle management via `gemini extensions install|update|uninstall|link`.
 
 ---
 
@@ -1264,7 +1293,7 @@ PreToolUse hook that scans Write/Edit calls targeting `.planning/` for injection
 **3. Workflow Guard Hook** (`gsd-workflow-guard.js`)
 PreToolUse hook that detects when Claude attempts file edits outside a GSD workflow context. Advises using `/gsd-quick` or `/gsd-fast` instead of direct edits. Configurable via `hooks.workflow_guard` (default: false).
 
-**4. CI-Ready Injection Scanner** (`prompt-injection-scan.test.cjs`)
+**4. CI-Ready Injection Scanner** (`prompt-injection-scan.security.test.cjs`)
 Test suite that scans all agent, workflow, and command files for embedded injection vectors.
 
 **Requirements:**
@@ -1957,18 +1986,18 @@ Test suite that scans all agent, workflow, and command files for embedded inject
 
 **Flag:** `/gsd-autonomous --interactive`
 
-**Purpose:** Lean-context autonomous mode that keeps discuss-phase interactive (user answers questions) while dispatching plan and execute as background agents.
+**Purpose:** Lean-context autonomous mode that keeps discuss-phase interactive (user answers questions) while dispatching plan and execute as background agents on runtimes that support nested background dispatch; on Claude Code, plan and execute run inline to preserve worktree isolation and independent verification.
 
 **Requirements:**
 - REQ-INTERACT-01: `--interactive` MUST run discuss-phase inline with interactive questions (not auto-answered)
-- REQ-INTERACT-02: `--interactive` MUST dispatch plan-phase and execute-phase as background agents for context isolation
-- REQ-INTERACT-03: `--interactive` MUST enable pipeline parallelism — discuss Phase N+1 while Phase N builds
-- REQ-INTERACT-04: Main context MUST only accumulate discuss conversations (lean context)
+- REQ-INTERACT-02: `--interactive` MUST dispatch plan-phase and execute-phase as background agents for context isolation on runtimes where a backgrounded agent can spawn subagents; on Claude Code, plan and execute run inline
+- REQ-INTERACT-03: `--interactive` MUST enable pipeline parallelism — discuss Phase N+1 while Phase N builds (applies on runtimes that support nested background dispatch; on Claude Code, discuss does not overlap planning/execution)
+- REQ-INTERACT-04: Main context MUST only accumulate discuss conversations (lean context) on runtimes that support nested background dispatch; on Claude Code, inline plan/execute also accumulate in the main context
 
 **Process:**
 1. **Discuss inline** — Run discuss-phase in the main context with user interaction
-2. **Dispatch** — Send plan and execute to background agents with fresh context windows
-3. **Pipeline** — While background agents build Phase N, begin discussing Phase N+1
+2. **Dispatch** — On runtimes that support nested background dispatch: send plan and execute to background agents with fresh context windows. On Claude Code: run plan and execute inline.
+3. **Pipeline** — On runtimes with background dispatch: while background agents build Phase N, begin discussing Phase N+1. On Claude Code: phases run sequentially.
 
 ---
 
@@ -2290,7 +2319,7 @@ Test suite that scans all agent, workflow, and command files for embedded inject
 
 **Requirements:**
 - REQ-CLINE-02: Cline install MUST write `.clinerules` to `~/.cline/` (global) or `./.cline/` (local). No custom slash commands — rules-based integration only. Flag: `--cline`.
-- REQ-CODEBUDDY-01: CodeBuddy install MUST deploy skills to `~/.codebuddy/skills/gsd-*/SKILL.md`. Flag: `--codebuddy`.
+- REQ-CODEBUDDY-01: CodeBuddy install MUST deploy skills to `~/.codebuddy/skills/gsd-*/SKILL.md` (emitted `user-invocable: false`), `/gsd-*` slash commands to `~/.codebuddy/commands/gsd-*.md`, and subagents to `~/.codebuddy/agents/gsd-*.md`. The commands surface is the sole `/` menu entry point. No `mcp.json` is written (gsd ships no MCP server). Flag: `--codebuddy`.
 - REQ-QWEN-01: Qwen Code install MUST deploy skills to `~/.qwen/skills/gsd-*/SKILL.md`, following the open standard used by Claude Code 2.1.88+. `QWEN_CONFIG_DIR` env var overrides the default path. Flag: `--qwen`.
 
 **Runtime summary:**

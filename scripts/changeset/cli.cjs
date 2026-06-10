@@ -324,7 +324,7 @@ function resolveChangelogPath(opts) {
  *   1  — I/O error or missing required flags.
  *
  * Fix for #3496: provides a deterministic range-aware helper so the
- * `/gsd:update` show_changes_and_confirm step no longer relies on
+ * `/gsd-update` show_changes_and_confirm step no longer relies on
  * vague/manual extraction that can silently skip intermediate versions.
  */
 function cmdExtract(opts) {

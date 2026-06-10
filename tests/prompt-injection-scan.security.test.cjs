@@ -58,7 +58,7 @@ const ALLOWLIST = new Set([
   'hooks/gsd-prompt-guard.js',                  // The prompt guard hook
   'hooks/gsd-read-injection-scanner.js',        // The read injection scanner (contains patterns)
   'tests/security.test.cjs',                    // Security tests
-  'tests/prompt-injection-scan.test.cjs',       // This file
+  'tests/prompt-injection-scan.security.test.cjs',       // This file
 ]);
 
 // Workflows that exceed the 50K strict-mode size threshold due to legitimate

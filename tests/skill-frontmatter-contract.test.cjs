@@ -77,7 +77,8 @@ describe('skill frontmatter: /gsd-plan-phase --research-phase flag absorbs the s
     // The arg-parsing section of the workflow must mention the new flag
     // by name. This is the structural seam the LLM follows.
     // Anchored to the argument/flags section to avoid false positives from prose.
-    const argsIdx = content.search(/(?:argument|args?|flags?)\b/i);
+    const argsHeader = '## 2. Parse and Normalize Arguments';
+    const argsIdx = content.indexOf(argsHeader);
     assert.ok(argsIdx >= 0, 'plan-phase workflow must contain an argument/flags section');
     const argsWindow = content.slice(argsIdx, argsIdx + 1200);
     assert.ok(

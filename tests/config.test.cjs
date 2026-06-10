@@ -39,6 +39,37 @@ async function runConfigEnsureSectionWithRetry(tmpDir, attempts = 4) {
   return last;
 }
 
+/**
+ * Seed `.planning/config.json` for a test and guarantee it lands on disk
+ * before the test body runs.
+ *
+ * `config-ensure-section` is invoked through a spawned `gsd-tools.cjs` child.
+ * On the scoped CI lane (`--test-concurrency=4`, config.test.cjs scheduled
+ * alongside the heavy install/tarball suites) that child can be transiently
+ * killed under resource pressure — surfacing as a non-zero exit with empty
+ * stderr (an OS-level kill, not a gsd-tools application error; see the
+ * `runGsdTools` catch). A bare `runGsdTools('config-ensure-section')` in
+ * `beforeEach` swallows that failure, leaving config.json absent so the first
+ * subtest's `readConfig()` throws a confusing ENOENT (#770 scoped-lane flake).
+ *
+ * This retries on ANY failure or missing file (not just the EPERM/EBUSY class
+ * `runConfigEnsureSectionWithRetry` covers) and throws a clear diagnostic if it
+ * still cannot create the file, so setup is deterministic under load.
+ */
+async function ensureConfigReady(tmpDir, attempts = 5) {
+  const configPath = path.join(tmpDir, '.planning', 'config.json');
+  let last;
+  for (let i = 0; i < attempts; i += 1) {
+    last = runGsdTools('config-ensure-section', tmpDir);
+    if (last.success && fs.existsSync(configPath)) return last;
+    if (i < attempts - 1) await delay(150 * (i + 1));
+  }
+  throw new Error(
+    `config-ensure-section failed to create ${configPath} after ${attempts} attempts: ` +
+      `${(last && last.error) || 'unknown error'}`,
+  );
+}
+
 // ─── config-ensure-section ───────────────────────────────────────────────────
 
 describe('config-ensure-section command', () => {
@@ -1106,10 +1137,12 @@ describe('config-path command (#2282)', () => {
 describe('config-set prototype-pollution guard (#663)', () => {
   let tmpDir;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     tmpDir = createTempProject();
-    // Initialise config so there is a config.json to write to.
-    runGsdTools('config-ensure-section', tmpDir);
+    // Initialise config so there is a config.json to write to. Retry + assert
+    // so a transient config-ensure-section child failure under scoped-lane load
+    // cannot leave config.json absent (#770).
+    await ensureConfigReady(tmpDir);
   });
 
   afterEach(() => {
@@ -1163,10 +1196,12 @@ describe('config-set prototype-pollution guard (#663)', () => {
 describe('config-set prototype-pollution guard via dynamic-key prefixes (alert #26)', () => {
   let tmpDir;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     tmpDir = createTempProject();
-    // Initialise config so there is a config.json to write to.
-    runGsdTools('config-ensure-section', tmpDir);
+    // Initialise config so there is a config.json to write to. Retry + assert
+    // so a transient config-ensure-section child failure under scoped-lane load
+    // cannot leave config.json absent (#770).
+    await ensureConfigReady(tmpDir);
   });
 
   afterEach(() => {

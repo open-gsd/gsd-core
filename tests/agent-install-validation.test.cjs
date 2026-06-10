@@ -10,12 +10,17 @@
 const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const { spawnSync } = require('node:child_process');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { installerEnv } = require('./helpers/install-shared.cjs');
 
 const AGENTS_DIR_NAME = 'agents';
 const MODEL_PROFILES = require('../gsd-core/bin/lib/model-profiles.cjs').MODEL_PROFILES;
 const EXPECTED_AGENTS = Object.keys(MODEL_PROFILES);
+const ROOT = path.join(__dirname, '..');
+const INSTALL_SCRIPT = path.join(ROOT, 'bin', 'install.js');
 
 /**
  * Create a fake GSD install directory structure that mirrors what the installer
@@ -273,6 +278,76 @@ describe('checkAgentsInstalled: Copilot .agent.md format (#1512)', () => {
     // The custom dir path should be reported
     assert.strictEqual(output.agents_dir, customAgentsDir,
       'agents_dir must reflect GSD_AGENTS_DIR override');
+  });
+});
+
+// ─── Kimi agents/subagents detection (#743 review) ─────────────────────────
+
+describe('checkAgentsInstalled: Kimi agents/subagents layout', () => {
+  test('Kimi install is detected by init, validate agents, and health checks', () => {
+    const tmpDir = createTempProject('gsd-kimi-agent-status-project-');
+    const tmpConfig = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-agent-status-config-'));
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-agent-status-home-'));
+    const env = installerEnv({
+      HOME: tmpHome,
+      USERPROFILE: tmpHome,
+      KIMI_CONFIG_DIR: tmpConfig,
+    });
+
+    try {
+      const installResult = spawnSync(
+        process.execPath,
+        [INSTALL_SCRIPT, '--kimi', '--global', '--config-dir', tmpConfig, '--no-sdk'],
+        {
+          cwd: tmpDir,
+          encoding: 'utf8',
+          env,
+        },
+      );
+      assert.strictEqual(
+        installResult.status,
+        0,
+        `Kimi install failed\nstdout: ${installResult.stdout}\nstderr: ${installResult.stderr}`,
+      );
+
+      fs.writeFileSync(
+        path.join(tmpDir, '.planning', 'config.json'),
+        JSON.stringify({ runtime: 'kimi', model_profile: 'balanced' }, null, 2),
+      );
+
+      const initResult = runGsdTools('init new-workspace --raw', tmpDir, env);
+      assert.ok(initResult.success, `init failed: ${initResult.error}`);
+      const initOutput = JSON.parse(initResult.output);
+      assert.strictEqual(initOutput.agent_runtime, 'kimi');
+      assert.strictEqual(initOutput.agents_dir, path.join(tmpConfig, 'agents'));
+      assert.strictEqual(initOutput.agents_installed, true);
+      assert.deepStrictEqual(initOutput.missing_agents, []);
+
+      const validateResult = runGsdTools('validate agents --raw', tmpDir, {
+        ...env,
+        GSD_RUNTIME: 'kimi',
+      });
+      assert.ok(validateResult.success, `validate agents failed: ${validateResult.error}`);
+      const validateOutput = JSON.parse(validateResult.output);
+      assert.strictEqual(validateOutput.agents_dir, path.join(tmpConfig, 'agents'));
+      assert.strictEqual(validateOutput.agents_found, true);
+      assert.deepStrictEqual(validateOutput.missing, []);
+
+      const healthResult = runGsdTools('validate health --raw', tmpDir, {
+        ...env,
+        GSD_RUNTIME: 'kimi',
+      });
+      assert.ok(healthResult.success, `validate health failed: ${healthResult.error}`);
+      const healthOutput = JSON.parse(healthResult.output);
+      const agentWarnings = (healthOutput.warnings || []).filter(
+        (warning) => warning.code === 'W010' || /GSD agents/i.test(warning.message || ''),
+      );
+      assert.deepStrictEqual(agentWarnings, []);
+    } finally {
+      cleanup(tmpDir);
+      cleanup(tmpConfig);
+      cleanup(tmpHome);
+    }
   });
 });
 

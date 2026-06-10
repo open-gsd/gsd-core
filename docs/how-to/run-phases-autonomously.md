@@ -80,8 +80,8 @@ By default, autonomous mode answers discuss questions automatically using smart 
 
 In interactive mode:
 - `/gsd-discuss-phase` runs inline and waits for your answers
-- Planning and execution are dispatched as background agents so you can discuss the next phase while the current one builds
-- The main context stays lean — only discuss conversations accumulate
+- On runtimes that support nested background dispatch, planning and execution are dispatched as background agents so you can discuss the next phase while the current one builds; on Claude Code, planning and execution run inline (the next phase's discuss does not overlap)
+- The main context stays lean — only discuss conversations accumulate (on runtimes with background dispatch; on Claude Code, inline plan/execute also accumulate)
 
 ---
 
@@ -94,7 +94,7 @@ To run autonomously on a runtime that does not support the `AskUserQuestion` too
 /gsd-autonomous --from 3 --text
 ```
 
-All interactive prompts become plain numbered lists; type the choice number to respond.
+All interactive prompts become plain numbered lists; type the choice number to respond. When combined with `--converge`, `--text` is also forwarded to the convergence loop via `CONVERGENCE_ARGS` so reviewer prompts inside plan-review convergence use the same plain-text mode.
 
 ---
 

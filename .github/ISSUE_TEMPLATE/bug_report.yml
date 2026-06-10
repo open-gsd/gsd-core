@@ -13,6 +13,14 @@ body:
         > 2. Redact usernames, paths, and API keys (e.g., replace `/Users/yourname/` with `/Users/REDACTED/`)
         > 3. Or run your logs through an anonymizer — we recommend **[presidio-anonymizer](https://microsoft.github.io/presidio/)** (open-source, local-only) or **[scrub](https://github.com/dssg/scrub)** before pasting
 
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I have searched existing issues and this bug has not already been reported
+          required: true
+
   - type: input
     id: version
     attributes:

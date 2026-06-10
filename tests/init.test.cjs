@@ -538,6 +538,35 @@ describe('init plan-phase zero-padded phase number (bug #2391)', () => {
     assert.strictEqual(out03.phase_req_ids, out3.phase_req_ids,
       'phase_req_ids must be identical regardless of padding');
   });
+
+  // ── #904: branch_name must use normalized (stripped + zero-padded) phase number ──
+  // When project_code is set (e.g. "CK") the phase directory is prefixed:
+  // "CK-01-foundation". extractPhaseToken returns "CK-01" as phase_number.
+  // branch_name must call normalizePhaseName so it strips the prefix and zero-pads,
+  // producing "gsd/phase-01-foundation" rather than "gsd/phase-CK-01-foundation".
+  test('branch_name uses normalized phase number when project_code prefixes phase dir (#904)', () => {
+    seedPhase(tmpDir, 'CK-01-foundation', {
+      'CK-01-01-PLAN.md': '# Plan',
+    });
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({
+        project_code: 'CK',
+        git: {
+          branching_strategy: 'phase',
+          phase_branch_template: 'gsd/phase-{phase}-{slug}',
+        },
+      }, null, 2)
+    );
+
+    const result = runGsdTools('init execute-phase 1', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    // branch_name must use the normalized phase number, not the raw "CK-01" token
+    assert.strictEqual(output.branch_name, 'gsd/phase-01-foundation',
+      'branch_name must use normalized phase number (strip project_code prefix, zero-pad), not raw phase_number');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

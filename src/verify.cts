@@ -453,7 +453,7 @@ function cmdVerifyKeyLinks(cwd: string, planFilePath: string, raw: boolean): voi
 
     const sourceContent = safeReadFile(path.join(cwd, (link['from'] as string) || ''));
     if (!sourceContent) {
-      check['detail'] = 'Source file not found';
+      check['detail'] = 'Source file not found (from: must be a relative file path; describe components/endpoints in via:)';
     } else if (link['pattern']) {
       try {
         const regex = new RegExp(link['pattern'] as string);
@@ -641,21 +641,8 @@ function cmdValidateConsistency(cwd: string, raw: boolean): void {
   const roadmapContentRaw = fs.readFileSync(roadmapPath, 'utf-8');
   const roadmapContent = extractCurrentMilestone(roadmapContentRaw, cwd);
 
-  const roadmapPhases = new Set<string>();
-  const phasePattern =
-    /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*)\s*:/gi;
-  let m: RegExpExecArray | null;
-  while ((m = phasePattern.exec(roadmapContent)) !== null) {
-    roadmapPhases.add(m[1]);
-  }
-
-  const fullRoadmapPhases = new Set<string>();
-  const fullPhasePattern =
-    /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*)\s*:/gi;
-  let fm: RegExpExecArray | null;
-  while ((fm = fullPhasePattern.exec(roadmapContentRaw)) !== null) {
-    fullRoadmapPhases.add(fm[1]);
-  }
+  const { roadmapPhases } = buildRoadmapPhaseVariants(roadmapContent);
+  const { roadmapPhaseVariants: fullRoadmapPhaseVariants } = buildRoadmapPhaseVariants(roadmapContentRaw);
 
   const diskPhases = collectDiskPhases(planBase);
 
@@ -666,13 +653,8 @@ function cmdValidateConsistency(cwd: string, raw: boolean): void {
   }
 
   for (const p of diskPhases) {
-    const normalized = normalizePhaseName(p);
-    const unpadded = String(parseInt(p, 10));
-    if (
-      !fullRoadmapPhases.has(p) &&
-      !fullRoadmapPhases.has(normalized) &&
-      !fullRoadmapPhases.has(unpadded)
-    ) {
+    const variants = phaseVariants(p);
+    if (![...variants].some((v) => fullRoadmapPhaseVariants.has(v))) {
       warnings.push(`Phase ${p} exists on disk but not in ROADMAP.md`);
     }
   }

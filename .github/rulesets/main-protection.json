@@ -35,7 +35,6 @@
         "strict_required_status_checks_policy": true,
         "required_status_checks": [
           { "context": "Required tests" },
-          { "context": "size-check" },
           { "context": "check-branch" },
           { "context": "changeset-lint" },
           { "context": "docs-lint" },

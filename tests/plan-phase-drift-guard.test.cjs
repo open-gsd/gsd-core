@@ -135,3 +135,128 @@ describe('plan-phase workflow: Artifacts this phase produces section (#22)', () 
     );
   });
 });
+
+// ─── (C) Top-level spawn guard (#913) ────────────────────────────────────────
+
+describe('plan-phase workflow: top-level spawn guard (#913)', () => {
+  // Extract the runtime_compatibility block for targeted assertions
+  const rtBlock = (() => {
+    const m = workflow.match(/<runtime_compatibility>([\s\S]*?)<\/runtime_compatibility>/);
+    return m ? m[1] : '';
+  })();
+
+  test('workflow has a runtime_compatibility block asserting Agent is available at top-level', () => {
+    assert.ok(
+      rtBlock.length > 0,
+      'plan-phase must have a <runtime_compatibility> block — prevents role-collapse regression (#913)'
+    );
+    assert.ok(
+      rtBlock.includes('Agent tool IS available') || rtBlock.includes('Agent IS available'),
+      'plan-phase runtime_compatibility must assert that the Agent tool IS available at top-level Claude Code (#913)'
+    );
+    assert.ok(
+      rtBlock.toLowerCase().includes('top-level'),
+      'plan-phase runtime_compatibility must scope the IS-available assertion to top-level Claude Code (#913)'
+    );
+    assert.ok(
+      rtBlock.includes('Always spawn') || rtBlock.includes('always spawn'),
+      'plan-phase runtime_compatibility must state that plan roles must always be spawned (#913)'
+    );
+    assert.ok(
+      rtBlock.includes('Never absorb') || rtBlock.includes('never absorb'),
+      'plan-phase runtime_compatibility must state that roles must never be absorbed inline (#913)'
+    );
+  });
+
+  test('workflow states --chain/--auto suppress prompts only, not spawns', () => {
+    assert.ok(
+      rtBlock.includes('suppress') &&
+      (rtBlock.includes('prompts only') || rtBlock.includes('interactive prompts only')),
+      'plan-phase runtime_compatibility must document that --chain/--auto suppress prompts only, not spawns (#913)'
+    );
+  });
+
+  test('workflow does not contain unscoped CODEX RUNTIME orchestrator rule labels', () => {
+    // All "wait for subagent" rules must apply to ALL RUNTIMES, not just Codex
+    assert.ok(
+      !workflow.includes('ORCHESTRATOR RULE — CODEX RUNTIME'),
+      'plan-phase must not label orchestrator wait rules as "CODEX RUNTIME" — they apply to all runtimes including top-level Claude Code (#913)'
+    );
+  });
+
+  test('workflow contains ALL RUNTIMES orchestrator rule labels (count preserved)', () => {
+    // Must have all 7 agent-spawn wait rules still present (none dropped during rename)
+    const allRuntimesCount = (workflow.match(/ORCHESTRATOR RULE — ALL RUNTIMES/g) || []).length;
+    assert.ok(
+      allRuntimesCount >= 7,
+      `plan-phase must have at least 7 "ORCHESTRATOR RULE — ALL RUNTIMES" labels (one per agent spawn site); found ${allRuntimesCount} (#913)`
+    );
+  });
+});
+
+// ─── (D) Attempt-based Agent gate (#922) ─────────────────────────────────────
+
+describe('plan-phase workflow: attempt-based Agent availability gate (#922)', () => {
+  // Extract the runtime_compatibility block for targeted assertions
+  const rtBlock = (() => {
+    const m = workflow.match(/<runtime_compatibility>([\s\S]*?)<\/runtime_compatibility>/);
+    return m ? m[1] : '';
+  })();
+
+  // Extract the "Other runtimes" clause specifically
+  const otherRuntimesClause = (() => {
+    const m = rtBlock.match(/\*\*Other runtimes[^*]*\*\*[^\n]*\n([\s\S]*?)(?=\n\*\*|$)/);
+    return m ? m[0] : rtBlock;
+  })();
+
+  test('Other runtimes clause does not authorize stopping on a self-assessed absence (#922)', () => {
+    // The pre-#922 wording ("if the Agent tool is genuinely absent") let the model
+    // self-assess and stop without ever attempting a call. The fixed wording must
+    // not contain phrasing that authorizes that pattern.
+    const forbiddenPatterns = [
+      /if the Agent tool is genuinely absent/i,
+      /if.*Agent.*genuinely absent/i,
+    ];
+    for (const pattern of forbiddenPatterns) {
+      assert.ok(
+        !pattern.test(otherRuntimesClause),
+        `plan-phase "Other runtimes" clause must not authorize stopping on a self-assessed Agent absence — ` +
+        `use attempt-based gate instead (#922). Found: ${otherRuntimesClause.trim()}`
+      );
+    }
+  });
+
+  test('Other runtimes clause pins "Always attempt the actual Agent() call" language (#922)', () => {
+    // Pin the exact contract phrase so a future edit that changes to "try to determine
+    // availability" or "check if Agent is available" does not silently reintroduce introspection.
+    assert.ok(
+      otherRuntimesClause.includes('Always attempt the actual') ||
+      otherRuntimesClause.includes('always attempt the actual'),
+      `plan-phase "Other runtimes" clause must pin "Always attempt the actual Agent() call" (or equivalent) (#922). ` +
+      `Found: ${otherRuntimesClause.trim()}`
+    );
+  });
+
+  test('Other runtimes clause pins "real tool-unavailable error" as the only valid stop signal (#922)', () => {
+    // Must tie the stop to a real returned error, not a self-assessed absence.
+    assert.ok(
+      otherRuntimesClause.includes('real tool-unavailable error') ||
+      otherRuntimesClause.includes('tool-unavailable error returned'),
+      `plan-phase "Other runtimes" clause must state only a real tool-unavailable error from Agent() authorizes stopping (#922). ` +
+      `Found: ${otherRuntimesClause.trim()}`
+    );
+  });
+
+  test('Other runtimes clause still prohibits inline role collapse (#922 preserves #913)', () => {
+    // Even after the attempt-based rewrite the clause must keep the no-inline-collapse guard.
+    const hasNoInline =
+      otherRuntimesClause.toLowerCase().includes('do not') &&
+      (otherRuntimesClause.toLowerCase().includes('inline') ||
+       otherRuntimesClause.toLowerCase().includes('collapse'));
+    assert.ok(
+      hasNoInline,
+      `plan-phase "Other runtimes" clause must still prohibit inline role collapse even with the attempt-based gate (#922). ` +
+      `Found: ${otherRuntimesClause.trim()}`
+    );
+  });
+});

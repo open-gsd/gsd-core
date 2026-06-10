@@ -61,13 +61,11 @@ REQUIRED_CHECKS_MAIN=(
   "security-scan"
   "Changeset Required / changeset-lint"
   "Docs Required / docs-lint"
-  "PR Gate / size-check"
   "Validate Branch Name / check-branch"
 )
 
 REQUIRED_CHECKS_NEXT=(
   "test"
-  "PR Gate / size-check"
   "Validate Branch Name / check-branch"
   "Changeset Required / changeset-lint"
   "Docs Required / docs-lint"

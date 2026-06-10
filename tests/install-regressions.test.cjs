@@ -14,7 +14,7 @@
  * Closes #3758
  */
 
-const { test, describe } = require('node:test');
+const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -37,29 +37,56 @@ try {
   else process.env.GSD_TEST_MODE = savedTestMode;
 }
 
-const { installRuntimeArtifacts, uninstallRuntimeArtifacts } = installExports || {};
+const { install, installRuntimeArtifacts, uninstallRuntimeArtifacts, mergeClaudePermissions, GSD_CLAUDE_ALLOW_PERMISSIONS, GSD_CLAUDE_DENY_PERMISSIONS, rewriteLegacyManagedNodeHookCommands, resolveNodeRunner } = installExports || {};
 
 const INSTALL_SCRIPT = path.join(__dirname, '..', 'bin', 'install.js');
+const HOOKS_SRC = path.join(__dirname, '..', 'hooks');
 const REAL_COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');
 const MANIFEST = loadSkillsManifest(REAL_COMMANDS_DIR);
 const RESOLVED_CORE = resolveProfile({ modes: ['core'], manifest: MANIFEST });
 
-// ─── Defect #1 — Hermes upgrade leaves stale skills/gsd/gsd-<stem>/ dirs ────
+/**
+ * Stub managed GSD hook files into targetDir/hooks/ so that
+ * fs.existsSync guards in the installer pass during tests where
+ * hooks/dist/ is not built.
+ */
+function stubHooksIntoDir(targetDir, hookNames) {
+  const hooksDest = path.join(targetDir, 'hooks');
+  fs.mkdirSync(hooksDest, { recursive: true });
+  for (const hookFile of hookNames) {
+    const src = path.join(HOOKS_SRC, hookFile);
+    const dest = path.join(hooksDest, hookFile);
+    if (fs.existsSync(src)) {
+      fs.copyFileSync(src, dest);
+    } else {
+      fs.writeFileSync(dest, '#!/usr/bin/env node\n// stub\n');
+    }
+    try { fs.chmodSync(dest, 0o755); } catch { /* Windows */ }
+  }
+}
 
-describe('Defect #1 regression (#3664): _runLegacyInstallMigrations removes skills/gsd/gsd-*/ layout', () => {
-  test('installRuntimeArtifacts removes intermediate skills/gsd/gsd-*/ dirs and writes bare-stem layout', (t) => {
+// ─── Defect #1 — Hermes upgrade: bare-stem dirs from #3664 era become stale ──
+//
+// #947 REVERSES #3664: the canonical layout is now skills/gsd/gsd-<stem>/ again.
+// The migration now removes bare-stem dirs (from #3664: prefix='') and writes
+// the gsd-prefixed layout. Pre-existing gsd-prefixed dirs (the "intermediate"
+// layout from before #3664) are now the CANONICAL dirs and are kept / updated.
+
+describe('Defect #1 regression (#3664 reversed by #947): bare-stem dirs removed, gsd- prefix written', () => {
+  test('installRuntimeArtifacts removes bare-stem skills/gsd/<stem>/ dirs and writes gsd- prefixed layout', (t) => {
     const configDir = createTempDir('gsd-hermes-reg1-');
     t.after(() => cleanup(configDir));
 
     assert.strictEqual(typeof installRuntimeArtifacts, 'function',
       'installRuntimeArtifacts must be exported from bin/install.js');
 
-    // Pre-create intermediate Hermes layout (between #2841 and #3664)
+    // Pre-create #3664-era bare-stem Hermes layout (no gsd- prefix, now stale).
+    // Use real GSD command stems (help, quick) that readGsdCommandNames() knows about.
     const nestedGsdDir = path.join(configDir, 'skills', 'gsd');
-    fs.mkdirSync(path.join(nestedGsdDir, 'gsd-help'), { recursive: true });
-    fs.writeFileSync(path.join(nestedGsdDir, 'gsd-help', 'SKILL.md'), '# legacy help\n');
-    fs.mkdirSync(path.join(nestedGsdDir, 'gsd-plan'), { recursive: true });
-    fs.writeFileSync(path.join(nestedGsdDir, 'gsd-plan', 'SKILL.md'), '# legacy plan\n');
+    fs.mkdirSync(path.join(nestedGsdDir, 'help'), { recursive: true });
+    fs.writeFileSync(path.join(nestedGsdDir, 'help', 'SKILL.md'), '# legacy bare-stem help\n');
+    fs.mkdirSync(path.join(nestedGsdDir, 'quick'), { recursive: true });
+    fs.writeFileSync(path.join(nestedGsdDir, 'quick', 'SKILL.md'), '# legacy bare-stem quick\n');
 
     // Sibling non-gsd dir inside skills/gsd/ must survive
     const userContentDir = path.join(nestedGsdDir, 'user-content');
@@ -68,12 +95,15 @@ describe('Defect #1 regression (#3664): _runLegacyInstallMigrations removes skil
 
     installRuntimeArtifacts('hermes', configDir, 'global', RESOLVED_CORE);
 
-    assert.ok(!fs.existsSync(path.join(nestedGsdDir, 'gsd-help')),
-      'skills/gsd/gsd-help/ must be removed (Defect #1)');
-    assert.ok(!fs.existsSync(path.join(nestedGsdDir, 'gsd-plan')),
-      'skills/gsd/gsd-plan/ must be removed (Defect #1)');
-    assert.ok(fs.existsSync(path.join(nestedGsdDir, 'help', 'SKILL.md')),
-      'skills/gsd/help/SKILL.md must exist after install');
+    // Bare-stem dirs from #3664 must be cleaned
+    assert.ok(!fs.existsSync(path.join(nestedGsdDir, 'help')),
+      'skills/gsd/help/ (bare-stem from #3664) must be removed (#947)');
+    assert.ok(!fs.existsSync(path.join(nestedGsdDir, 'quick')),
+      'skills/gsd/quick/ (bare-stem from #3664) must be removed (#947)');
+    // Canonical gsd- prefixed layout must be written
+    assert.ok(fs.existsSync(path.join(nestedGsdDir, 'gsd-help', 'SKILL.md')),
+      'skills/gsd/gsd-help/SKILL.md must exist after install (#947 canonical layout)');
+    // User content preserved
     assert.ok(fs.existsSync(path.join(userContentDir, 'SKILL.md')),
       'user-content must be preserved');
   });
@@ -148,7 +178,7 @@ describe('Defect #2 regression (Hermes, #3664): --hermes --profile=core writes s
 
 // ─── M1 — Hermes minimal-mode migrates dev-preferences (#2973) ───────────────
 
-describe('M1 (#2973): --hermes --global --profile=core migrates dev-preferences → skills/gsd/dev-preferences/SKILL.md', () => {
+describe('M1 (#2973, #947): --hermes --global --profile=core migrates dev-preferences → skills/gsd/gsd-dev-preferences/SKILL.md', () => {
   test('dev-preferences migrated to nested Hermes location, legacy source removed', (t) => {
     const root = createTempDir('gsd-hermes-m1-');
     t.after(() => cleanup(root));
@@ -166,9 +196,10 @@ describe('M1 (#2973): --hermes --global --profile=core migrates dev-preferences 
     assert.strictEqual(result.status, 0,
       `installer exited ${result.status}\n${result.stdout}\n${result.stderr}`);
 
-    const skillFile = path.join(root, 'skills', 'gsd', 'dev-preferences', 'SKILL.md');
+    // #947: Hermes uses prefix='gsd-' so dev-preferences lands at gsd-dev-preferences/ (not dev-preferences/)
+    const skillFile = path.join(root, 'skills', 'gsd', 'gsd-dev-preferences', 'SKILL.md');
     assert.ok(fs.existsSync(skillFile),
-      'skills/gsd/dev-preferences/SKILL.md must exist (M1: nested, not flat)');
+      'skills/gsd/gsd-dev-preferences/SKILL.md must exist (M1+#947: gsd- prefix, nested)');
     assert.strictEqual(fs.readFileSync(skillFile, 'utf8'), '# my hermes prefs\n');
     assert.ok(!fs.existsSync(path.join(legacyDir, 'dev-preferences.md')),
       'legacy source must be removed');
@@ -282,8 +313,8 @@ describe('U2 (#2973): uninstallRuntimeArtifacts claude/global migrates dev-prefe
 
 // ─── U3 — Hermes uninstall migrates dev-preferences to NESTED location (#2973) ─
 
-describe('U3 (#2973): uninstallRuntimeArtifacts hermes migrates dev-preferences → skills/gsd/dev-preferences/SKILL.md', () => {
-  test('commands/gsd/ NOT recreated, dev-preferences at nested Hermes location', (t) => {
+describe('U3 (#2973, #947): uninstallRuntimeArtifacts hermes migrates dev-preferences → skills/gsd/gsd-dev-preferences/SKILL.md', () => {
+  test('commands/gsd/ NOT recreated, dev-preferences at nested Hermes location with gsd- prefix', (t) => {
     const configDir = createTempDir('gsd-hermes-uninstall-u3-');
     t.after(() => cleanup(configDir));
 
@@ -298,9 +329,444 @@ describe('U3 (#2973): uninstallRuntimeArtifacts hermes migrates dev-preferences 
     assert.ok(!fs.existsSync(path.join(legacyDir, 'dev-preferences.md')),
       'commands/gsd/dev-preferences.md must not exist after hermes uninstall (U3)');
 
-    const skillFile = path.join(configDir, 'skills', 'gsd', 'dev-preferences', 'SKILL.md');
+    // #947: Hermes uses prefix='gsd-' so dev-preferences lands at gsd-dev-preferences/ (not dev-preferences/)
+    const skillFile = path.join(configDir, 'skills', 'gsd', 'gsd-dev-preferences', 'SKILL.md');
     assert.ok(fs.existsSync(skillFile),
-      'skills/gsd/dev-preferences/SKILL.md must exist at HERMES nested location (U3)');
+      'skills/gsd/gsd-dev-preferences/SKILL.md must exist at HERMES nested location (U3+#947)');
     assert.strictEqual(fs.readFileSync(skillFile, 'utf8'), '# my hermes prefs\n');
+  });
+});
+
+// ─── #768 — mergeClaudePermissions: pre-populate permissions.allow/deny ──────
+
+describe('mergeClaudePermissions (#768): exports and permission constants', () => {
+  test('mergeClaudePermissions is exported', () => {
+    assert.strictEqual(typeof mergeClaudePermissions, 'function',
+      'mergeClaudePermissions must be exported from bin/install.js');
+  });
+
+  test('GSD_CLAUDE_ALLOW_PERMISSIONS is a non-empty array of strings', () => {
+    assert.ok(Array.isArray(GSD_CLAUDE_ALLOW_PERMISSIONS),
+      'GSD_CLAUDE_ALLOW_PERMISSIONS must be an array');
+    assert.ok(GSD_CLAUDE_ALLOW_PERMISSIONS.length > 0,
+      'GSD_CLAUDE_ALLOW_PERMISSIONS must not be empty');
+    for (const entry of GSD_CLAUDE_ALLOW_PERMISSIONS) {
+      assert.strictEqual(typeof entry, 'string', `allow entry must be a string, got: ${JSON.stringify(entry)}`);
+    }
+  });
+
+  test('GSD_CLAUDE_DENY_PERMISSIONS is a non-empty array of strings', () => {
+    assert.ok(Array.isArray(GSD_CLAUDE_DENY_PERMISSIONS),
+      'GSD_CLAUDE_DENY_PERMISSIONS must be an array');
+    assert.ok(GSD_CLAUDE_DENY_PERMISSIONS.length > 0,
+      'GSD_CLAUDE_DENY_PERMISSIONS must not be empty');
+    for (const entry of GSD_CLAUDE_DENY_PERMISSIONS) {
+      assert.strictEqual(typeof entry, 'string', `deny entry must be a string, got: ${JSON.stringify(entry)}`);
+    }
+  });
+});
+
+describe('mergeClaudePermissions (#768): fresh settings object', () => {
+  test('populates permissions.allow and permissions.deny on empty settings', () => {
+    const settings = {};
+    mergeClaudePermissions(settings);
+    assert.ok(Array.isArray(settings.permissions?.allow), 'permissions.allow must be an array');
+    assert.ok(Array.isArray(settings.permissions?.deny), 'permissions.deny must be an array');
+    for (const entry of GSD_CLAUDE_ALLOW_PERMISSIONS) {
+      assert.ok(settings.permissions.allow.includes(entry),
+        `permissions.allow must contain "${entry}"`);
+    }
+    for (const entry of GSD_CLAUDE_DENY_PERMISSIONS) {
+      assert.ok(settings.permissions.deny.includes(entry),
+        `permissions.deny must contain "${entry}"`);
+    }
+  });
+
+  test('includes Bash(npx gsd-core *) in allow', () => {
+    const settings = {};
+    mergeClaudePermissions(settings);
+    assert.ok(settings.permissions.allow.includes('Bash(npx gsd-core *)'),
+      'permissions.allow must contain Bash(npx gsd-core *)');
+  });
+
+  test('includes planning path entries in allow', () => {
+    const settings = {};
+    mergeClaudePermissions(settings);
+    assert.ok(settings.permissions.allow.includes('Read(.planning/*)'),
+      'permissions.allow must contain Read(.planning/*)');
+    assert.ok(settings.permissions.allow.includes('Write(.planning/*)'),
+      'permissions.allow must contain Write(.planning/*)');
+  });
+
+  test('includes STATE.md entries in allow', () => {
+    const settings = {};
+    mergeClaudePermissions(settings);
+    assert.ok(settings.permissions.allow.includes('Read(STATE.md)'),
+      'permissions.allow must contain Read(STATE.md)');
+    assert.ok(settings.permissions.allow.includes('Write(STATE.md)'),
+      'permissions.allow must contain Write(STATE.md)');
+  });
+
+  test('includes .env denial entries in deny', () => {
+    const settings = {};
+    mergeClaudePermissions(settings);
+    assert.ok(settings.permissions.deny.includes('Read(.env)'),
+      'permissions.deny must contain Read(.env)');
+    assert.ok(settings.permissions.deny.includes('Read(.env.*)'),
+      'permissions.deny must contain Read(.env.*)');
+    assert.ok(settings.permissions.deny.includes('Read(.secrets)'),
+      'permissions.deny must contain Read(.secrets)');
+  });
+});
+
+describe('mergeClaudePermissions (#768): non-destructive merge', () => {
+  test('appends to existing allow/deny arrays without overwriting user entries', () => {
+    const settings = {
+      permissions: {
+        allow: ['Bash(git *)'],
+        deny: ['WebSearch'],
+      },
+    };
+    mergeClaudePermissions(settings);
+    // User entries must be preserved
+    assert.ok(settings.permissions.allow.includes('Bash(git *)'),
+      'existing allow entries must be preserved');
+    assert.ok(settings.permissions.deny.includes('WebSearch'),
+      'existing deny entries must be preserved');
+    // GSD entries must be added
+    assert.ok(settings.permissions.allow.includes('Bash(npx gsd-core *)'),
+      'GSD allow entry must be added');
+    assert.ok(settings.permissions.deny.includes('Read(.env)'),
+      'GSD deny entry must be added');
+  });
+
+  test('does not duplicate entries on repeated calls (idempotent)', () => {
+    const settings = {};
+    mergeClaudePermissions(settings);
+    mergeClaudePermissions(settings);
+    for (const entry of GSD_CLAUDE_ALLOW_PERMISSIONS) {
+      const count = settings.permissions.allow.filter((e) => e === entry).length;
+      assert.strictEqual(count, 1, `allow entry "${entry}" must appear exactly once after two merges`);
+    }
+    for (const entry of GSD_CLAUDE_DENY_PERMISSIONS) {
+      const count = settings.permissions.deny.filter((e) => e === entry).length;
+      assert.strictEqual(count, 1, `deny entry "${entry}" must appear exactly once after two merges`);
+    }
+  });
+
+  test('preserves other permission sub-keys (ask, disableBypassPermissionsMode)', () => {
+    const settings = {
+      permissions: {
+        ask: ['Bash'],
+        disableBypassPermissionsMode: 'disable',
+        allow: [],
+        deny: [],
+      },
+    };
+    mergeClaudePermissions(settings);
+    assert.deepStrictEqual(settings.permissions.ask, ['Bash'],
+      'permissions.ask must be preserved');
+    assert.strictEqual(settings.permissions.disableBypassPermissionsMode, 'disable',
+      'permissions.disableBypassPermissionsMode must be preserved');
+  });
+
+  test('handles permissions with non-array allow/deny gracefully (replaces with array)', () => {
+    // If allow/deny exist but are not arrays (malformed settings), must not crash
+    // and must result in valid arrays.
+    const settings = { permissions: { allow: null, deny: null } };
+    mergeClaudePermissions(settings);
+    assert.ok(Array.isArray(settings.permissions.allow));
+    assert.ok(Array.isArray(settings.permissions.deny));
+    assert.ok(settings.permissions.allow.includes('Bash(npx gsd-core *)'));
+  });
+
+  test('handles settings that are not plain objects (returns unchanged)', () => {
+    // Guard: if settings is not a plain object, do nothing
+    const badInputs = [null, undefined, [], 'string', 42];
+    for (const bad of badInputs) {
+      // Must not throw
+      assert.doesNotThrow(() => mergeClaudePermissions(bad),
+        `mergeClaudePermissions must not throw on: ${JSON.stringify(bad)}`);
+    }
+  });
+});
+
+describe('mergeClaudePermissions (#768): end-to-end install writes permissions to settings.json', () => {
+  test('--claude --global install writes GSD allow/deny entries to settings.json', (t) => {
+    const root = createTempDir('gsd-claude-perm-install-');
+    t.after(() => cleanup(root));
+
+    const result = spawnSync(
+      process.execPath,
+      [INSTALL_SCRIPT, '--claude', '--global', '--config-dir', root],
+      { encoding: 'utf8', env: { ...process.env, HOME: root, USERPROFILE: root } },
+    );
+
+    assert.strictEqual(result.status, 0,
+      `installer exited ${result.status}\n${result.stdout}\n${result.stderr}`);
+
+    const settingsPath = path.join(root, 'settings.json');
+    assert.ok(fs.existsSync(settingsPath), 'settings.json must exist after claude install');
+
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    assert.ok(Array.isArray(settings.permissions?.allow),
+      'settings.json must have permissions.allow array');
+    assert.ok(Array.isArray(settings.permissions?.deny),
+      'settings.json must have permissions.deny array');
+
+    assert.ok(settings.permissions.allow.includes('Bash(npx gsd-core *)'),
+      'settings.json permissions.allow must include Bash(npx gsd-core *)');
+    assert.ok(settings.permissions.allow.includes('Read(.planning/*)'),
+      'settings.json permissions.allow must include Read(.planning/*)');
+    assert.ok(settings.permissions.deny.includes('Read(.env)'),
+      'settings.json permissions.deny must include Read(.env)');
+  });
+
+  test('non-claude runtime (gemini) does NOT write GSD allow/deny permissions to settings.json', (t) => {
+    const root = createTempDir('gsd-gemini-perm-install-');
+    t.after(() => cleanup(root));
+
+    const result = spawnSync(
+      process.execPath,
+      [INSTALL_SCRIPT, '--gemini', '--global', '--config-dir', root],
+      { encoding: 'utf8', env: { ...process.env, HOME: root, USERPROFILE: root } },
+    );
+
+    assert.strictEqual(result.status, 0,
+      `installer exited ${result.status}\n${result.stdout}\n${result.stderr}`);
+
+    const settingsPath = path.join(root, 'settings.json');
+    // If settings.json doesn't exist, permissions are definitely not written — pass.
+    if (fs.existsSync(settingsPath)) {
+      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      const allow = settings.permissions?.allow ?? [];
+      assert.ok(!allow.includes('Bash(npx gsd-core *)'),
+        'Gemini settings.json must NOT include Bash(npx gsd-core *) in permissions.allow');
+    }
+  });
+
+  test('--claude --global reinstall is idempotent (no duplicate permission entries)', (t) => {
+    const root = createTempDir('gsd-claude-perm-idempotent-');
+    t.after(() => cleanup(root));
+
+    const spawnOpts = {
+      encoding: 'utf8',
+      env: { ...process.env, HOME: root, USERPROFILE: root },
+    };
+    const args = [INSTALL_SCRIPT, '--claude', '--global', '--config-dir', root];
+
+    // First install
+    const r1 = spawnSync(process.execPath, args, spawnOpts);
+    assert.strictEqual(r1.status, 0, `first install failed: ${r1.stderr}`);
+
+    // Second install (reinstall)
+    const r2 = spawnSync(process.execPath, args, spawnOpts);
+    assert.strictEqual(r2.status, 0, `reinstall failed: ${r2.stderr}`);
+
+    const settings = JSON.parse(fs.readFileSync(path.join(root, 'settings.json'), 'utf8'));
+    for (const entry of GSD_CLAUDE_ALLOW_PERMISSIONS) {
+      const count = (settings.permissions?.allow ?? []).filter((e) => e === entry).length;
+      assert.strictEqual(count, 1,
+        `allow entry "${entry}" must appear exactly once after two installs`);
+    }
+    for (const entry of GSD_CLAUDE_DENY_PERMISSIONS) {
+      const count = (settings.permissions?.deny ?? []).filter((e) => e === entry).length;
+      assert.strictEqual(count, 1,
+        `deny entry "${entry}" must appear exactly once after two installs`);
+    }
+  });
+
+  test('--claude --global uninstall removes GSD permission entries from settings.json', (t) => {
+    const root = createTempDir('gsd-claude-perm-uninstall-');
+    t.after(() => cleanup(root));
+
+    const spawnOpts = {
+      encoding: 'utf8',
+      env: { ...process.env, HOME: root, USERPROFILE: root },
+    };
+
+    // Install first
+    const r1 = spawnSync(
+      process.execPath,
+      [INSTALL_SCRIPT, '--claude', '--global', '--config-dir', root],
+      spawnOpts,
+    );
+    assert.strictEqual(r1.status, 0, `install failed: ${r1.stderr}`);
+
+    // Verify permissions were written
+    const settingsPath = path.join(root, 'settings.json');
+    const afterInstall = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    assert.ok((afterInstall.permissions?.allow ?? []).includes('Bash(npx gsd-core *)'),
+      'permissions.allow must contain GSD entry after install');
+
+    // Now add a user permission to make sure we don't nuke it
+    afterInstall.permissions.allow.push('Bash(git *)');
+    afterInstall.permissions.deny.push('WebSearch');
+    fs.writeFileSync(settingsPath, JSON.stringify(afterInstall, null, 2) + '\n');
+
+    // Uninstall
+    const r2 = spawnSync(
+      process.execPath,
+      [INSTALL_SCRIPT, '--claude', '--global', '--config-dir', root, '--uninstall'],
+      spawnOpts,
+    );
+    assert.strictEqual(r2.status, 0, `uninstall failed: ${r2.stderr}`);
+
+    const afterUninstall = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    const allow = afterUninstall.permissions?.allow ?? [];
+    const deny = afterUninstall.permissions?.deny ?? [];
+
+    // GSD entries must be removed
+    assert.ok(!allow.includes('Bash(npx gsd-core *)'),
+      'GSD Bash allow entry must be removed by uninstall');
+    assert.ok(!allow.includes('Read(.planning/*)'),
+      'GSD Read(.planning/*) allow entry must be removed by uninstall');
+    assert.ok(!deny.includes('Read(.env)'),
+      'GSD Read(.env) deny entry must be removed by uninstall');
+
+    // User entries must survive
+    assert.ok(allow.includes('Bash(git *)'),
+      'user Bash(git *) allow entry must survive uninstall');
+    assert.ok(deny.includes('WebSearch'),
+      'user WebSearch deny entry must survive uninstall');
+  });
+});
+
+// ─── #976 — args-form hook presence detection ─────────────────────────────────
+//
+// Claude Code hooks support a command+args form (executable in `command`,
+// script path in `args[]`) used by windowless-launcher wrappers on Windows.
+// Pre-fix, hasGsdUpdateHook (and sibling checks) only inspected h.command,
+// so an args-form entry was invisible and a stock string-command entry was
+// appended on every install/update, running the hook twice.
+
+describe('#976 regression: installer does not duplicate managed hooks when registered in command+args form', () => {
+  let tmpDir;
+  let previousCwd;
+
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-976-args-form-');
+    previousCwd = process.cwd();
+    process.chdir(tmpDir);
+
+    assert.strictEqual(typeof install, 'function',
+      'install must be exported from bin/install.js');
+  });
+
+  afterEach(() => {
+    process.chdir(previousCwd);
+    cleanup(tmpDir);
+  });
+
+  test('does not add a second SessionStart entry when gsd-check-update is already in args-form', () => {
+    const targetDir = path.join(tmpDir, '.claude');
+    fs.mkdirSync(targetDir, { recursive: true });
+
+    // Pass 1: run install with no pre-existing settings to create the
+    // gsd-file-manifest.json that the installer migration uses to decide
+    // whether a hook file is managed (kept) or foreign (removed).
+    // Without a manifest, the installer migration removes any hook stubs we
+    // place in hooks/ as "unrecognized GSD-looking files", which would make
+    // fs.existsSync(checkUpdateFile) return false and skip duplicate-adding.
+    install(false, 'claude');
+
+    // Now stub the hook files so fs.existsSync guards pass on pass 2.
+    // At this point the manifest exists, so migration classifies the stubs as
+    // manifest-managed and leaves them alone.
+    stubHooksIntoDir(targetDir, ['gsd-check-update.js']);
+
+    // Local Claude installs read/write settings.local.json (not settings.json).
+    // Overwrite settings.local.json with the hook in command+args form
+    // (wrapped launcher). The GSD hook filename appears in args[], not in command.
+    const launcherCommand = '/usr/local/bin/node-launcher';
+    const hookPath = path.join(targetDir, 'hooks', 'gsd-check-update.js');
+    const preExistingSettings = {
+      hooks: {
+        SessionStart: [
+          {
+            hooks: [
+              {
+                type: 'command',
+                command: launcherCommand,
+                args: [hookPath],
+              },
+            ],
+          },
+        ],
+      },
+    };
+    fs.writeFileSync(
+      path.join(targetDir, 'settings.local.json'),
+      JSON.stringify(preExistingSettings, null, 2) + '\n',
+    );
+
+    // Pass 2: run install again — the pre-existing args-form entry must
+    // suppress the duplicate stock string-command registration.
+    const result = install(false, 'claude');
+    const settings = result && result.settings;
+
+    assert.ok(settings && settings.hooks && Array.isArray(settings.hooks.SessionStart),
+      'settings.hooks.SessionStart must be an array after install');
+
+    // Count all hook entries (at any nesting level) that reference gsd-check-update.
+    const allEntries = settings.hooks.SessionStart.flatMap(entry =>
+      Array.isArray(entry && entry.hooks) ? entry.hooks : []
+    );
+    const matching = allEntries.filter(h =>
+      (typeof h.command === 'string' && h.command.includes('gsd-check-update')) ||
+      (Array.isArray(h.args) && h.args.some(a => typeof a === 'string' && a.includes('gsd-check-update')))
+    );
+
+    assert.strictEqual(
+      matching.length,
+      1,
+      [
+        'Expected exactly 1 hook entry referencing gsd-check-update after install,',
+        `got ${matching.length}.`,
+        'The installer added a duplicate because it could not detect the args-form registration.',
+        `All matching entries: ${JSON.stringify(matching)}`,
+      ].join(' '),
+    );
+  });
+
+  test('rewriteLegacyManagedNodeHookCommands leaves args-form launcher entries unchanged', () => {
+    assert.strictEqual(typeof rewriteLegacyManagedNodeHookCommands, 'function',
+      'rewriteLegacyManagedNodeHookCommands must be exported from bin/install.js');
+
+    const launcherCommand = '/usr/local/bin/node-launcher';
+    const hookPath = '/Users/user/.claude/hooks/gsd-check-update.js';
+    const settings = {
+      hooks: {
+        SessionStart: [
+          {
+            hooks: [
+              {
+                type: 'command',
+                command: launcherCommand,
+                args: [hookPath],
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    const runner = resolveNodeRunner() || '/usr/local/bin/node';
+    const changed = rewriteLegacyManagedNodeHookCommands(settings, runner, { platform: process.platform });
+
+    // The args-form launcher entry must NOT be rewritten — it is an intentional
+    // user wrapper and the script path lives in args[], not command.
+    assert.strictEqual(changed, false,
+      'rewriteLegacyManagedNodeHookCommands must not rewrite args-form entries (#976)');
+    assert.strictEqual(
+      settings.hooks.SessionStart[0].hooks[0].command,
+      launcherCommand,
+      'args-form command must remain unchanged after rewrite pass',
+    );
+    assert.deepStrictEqual(
+      settings.hooks.SessionStart[0].hooks[0].args,
+      [hookPath],
+      'args-form args must remain unchanged after rewrite pass',
+    );
   });
 });

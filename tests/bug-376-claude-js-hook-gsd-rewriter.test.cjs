@@ -32,6 +32,20 @@ const { cleanup } = require('./helpers.cjs');
 const REPO_ROOT = path.resolve(__dirname, '..');
 const INSTALL_PATH = path.join(REPO_ROOT, 'bin', 'install.js');
 const HOOKS_DIST_DIR = path.join(REPO_ROOT, 'hooks', 'dist');
+const BUILD_HOOKS_SCRIPT = path.join(REPO_ROOT, 'scripts', 'build-hooks.js');
+
+/**
+ * Ensure hooks/dist is populated before any suite that reads it.
+ * hooks/dist/ is gitignored and only produced by `npm run build:hooks`.
+ * In CI the scoped/windows test jobs do NOT run build:hooks before running
+ * tests, so the first test that needs hooks/dist would fail. This mirrors
+ * the pattern used in bug-3357-codex-legacy-hooks-json-migration.test.cjs.
+ */
+function ensureHooksDist() {
+  if (!fs.existsSync(HOOKS_DIST_DIR) || fs.readdirSync(HOOKS_DIST_DIR).filter(f => f.endsWith('.js')).length === 0) {
+    execFileSync(process.execPath, [BUILD_HOOKS_SCRIPT], { stdio: 'pipe' });
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -92,6 +106,12 @@ function colonRefs(content) {
 // Prerequisite: hooks/dist must exist (built by `npm run build:hooks`)
 // ---------------------------------------------------------------------------
 describe('bug #376 — prerequisite: hooks/dist is present', () => {
+  before(() => {
+    // hooks/dist is gitignored; build it on demand so this test is
+    // deterministic in CI scoped/windows jobs that don't pre-run build:hooks.
+    ensureHooksDist();
+  });
+
   test('hooks/dist directory exists (run npm run build:hooks if missing)', () => {
     assert.ok(
       fs.existsSync(HOOKS_DIST_DIR),
@@ -189,11 +209,13 @@ describe('bug #376 — Suite 1: Claude install rewrites /gsd: → /gsd- in hook 
 // ---------------------------------------------------------------------------
 // Suite 2 — Cursor install regression: /gsd: → /gsd- still works (pre-existing)
 //
-// Note: Cursor does NOT install hooks/dist files (Cursor skips the hooks
-// install step entirely — see install.js gate around line 8829). The Cursor
-// /gsd: rewrite applies in `copyWithPathReplacement` to JS files under the
-// agent/skill tree (.cursor/gsd-core/*.js etc). We verify that Cursor's
-// installed .js files under .cursor/ have no /gsd: colon refs.
+// Note: Cursor installs its own hooks (gsd-cursor-session-start.js and
+// gsd-cursor-post-tool.js) via the cursor-hooks-json installSurface (issue #777).
+// It does NOT install the bundled Claude-style hooks/dist files (no gsd-session-state.sh
+// etc.). The Cursor /gsd: rewrite applies in `copyWithPathReplacement` to JS files
+// under the agent/skill tree (.cursor/gsd-core/*.js etc). We verify that Cursor's
+// installed .js files under .cursor/ have no /gsd: colon refs, and that the hooks/
+// directory contains only the Cursor-specific managed hooks.
 // ---------------------------------------------------------------------------
 describe('bug #376 — Suite 2: Cursor install still rewrites /gsd: → /gsd- (regression)', () => {
   let tmpDir;
@@ -242,15 +264,32 @@ describe('bug #376 — Suite 2: Cursor install still rewrites /gsd: → /gsd- (r
     );
   });
 
-  test('2c: Cursor install does not install a hooks/ directory (hooks are cursor-skipped)', () => {
-    // Cursor intentionally skips the hooks/dist copy step — verify this contract
-    // is still honored so we know the regression only concerns hook .js files
-    // for runtimes that DO install hooks (claude, qwen, hermes etc.).
+  test('2c: Cursor install creates a hooks/ directory with only Cursor-specific managed hooks', () => {
+    // Since issue #777, Cursor installs gsd-cursor-session-start.js and
+    // gsd-cursor-post-tool.js into <configDir>/hooks/. These are Cursor-native
+    // hooks — NOT the bundled Claude-style hooks (no gsd-session-state.sh etc.).
+    // Verify: hooks/ exists AND does NOT contain any Claude-bundled hooks.
     const hooksDir = path.join(tmpDir, '.cursor', 'hooks');
-    assert.strictEqual(
+    assert.ok(
       fs.existsSync(hooksDir),
-      false,
-      'Cursor install must NOT create a hooks/ directory — Cursor skips the hooks install step',
+      'Cursor install must create a hooks/ directory for its managed hook scripts (#777)',
+    );
+    const CLAUDE_BUNDLED_HOOKS = ['gsd-session-state.sh', 'gsd-context-monitor.js', 'gsd-statusline.js'];
+    for (const hook of CLAUDE_BUNDLED_HOOKS) {
+      assert.strictEqual(
+        fs.existsSync(path.join(hooksDir, hook)),
+        false,
+        `Cursor hooks/ must NOT contain Claude-bundled hook ${hook} — only Cursor-native hooks are installed`,
+      );
+    }
+    // The two Cursor-specific managed hooks must be present.
+    assert.ok(
+      fs.existsSync(path.join(hooksDir, 'gsd-cursor-session-start.js')),
+      'gsd-cursor-session-start.js must be installed in .cursor/hooks/ (#777)',
+    );
+    assert.ok(
+      fs.existsSync(path.join(hooksDir, 'gsd-cursor-post-tool.js')),
+      'gsd-cursor-post-tool.js must be installed in .cursor/hooks/ (#777)',
     );
   });
 });
@@ -262,6 +301,9 @@ describe('bug #376 — Suite 3: hooks/ source files are unchanged by install', (
   let snapshotBefore;
 
   before(() => {
+    // Ensure hooks/dist is built before snapshotting; it may be absent in CI
+    // scoped/windows jobs that don't pre-run build:hooks (#777 fix).
+    ensureHooksDist();
     // Snapshot hooks/dist JS files before any install in this suite
     snapshotBefore = {};
     if (fs.existsSync(HOOKS_DIST_DIR)) {

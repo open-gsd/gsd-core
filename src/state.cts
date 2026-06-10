@@ -713,6 +713,7 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
 
   const now = realClock.nowIso();
   const updated: string[] = [];
+  let sessionCreated = false;
 
   readModifyWriteStateMd(statePath, (content) => {
     // Update Last session / Last Date
@@ -755,11 +756,85 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
       }
     }
 
+    // Bug #944: DWIM normalize/auto-create — when the caller supplied --stopped-at or
+    // --resume-file but the body lacks the canonical labels (in-place replace
+    // returned a miss), persist the values durably. Mirrors the DWIM pattern used
+    // by add-decision, add-blocker, and record-metric. Never silently drop
+    // caller-supplied values.
+    //
+    // Guard: only act when the caller actually supplied a value. When no
+    // --stopped-at / --resume-file are given and the body already had no session
+    // labels (nothing was updated), we return recorded:false — the existing
+    // behaviour for a no-op call that didn't supply any values.
+    //
+    // Correctness invariant: both buildStateFrontmatter and cmdStateSnapshot read
+    // only the FIRST `## Session` block (via a /##\s*Session\s*\n…/i regex).
+    // If we blindly append a second `## Session` block when one already exists, the
+    // newly-written Stopped at / Resume file end up in the second (invisible) block.
+    // Fix: when a `## Session` heading already exists, normalize THAT block in place
+    // (insert / replace canonical bold-label lines within the existing section).
+    // Only append a brand-new section when NO `## Session` heading exists at all.
+    const callerSuppliedValues = !!(options.stopped_at || (options.resume_file !== undefined && options.resume_file !== null));
+    const needsStoppedAt = options.stopped_at && !updated.includes('Stopped At');
+    const needsResumeFile = options.resume_file !== undefined && options.resume_file !== null && !updated.includes('Resume File');
+    const needsLastSession = !updated.includes('Last session') && !updated.includes('Last Date');
+
+    if (callerSuppliedValues && (needsStoppedAt || needsResumeFile || needsLastSession)) {
+      const resumeValue = (options.resume_file !== undefined && options.resume_file !== null)
+        ? options.resume_file
+        : 'None';
+      const stoppedAtValue = options.stopped_at || 'None';
+
+      // Determine whether a ## Session heading already exists in the body.
+      const existingSessionHeading = /^## Session\s*$/im.test(content);
+
+      if (existingSessionHeading) {
+        // Normalize in place: replace the ENTIRE BODY of the existing ## Session
+        // section (heading + all content up to the next ## heading or EOF) with
+        // canonical bold-label lines. The negative-lookahead per-line pattern
+        // `(?!^## )[\s\S]` consumes every line that doesn't start with "## ",
+        // which correctly stops at the next section boundary without consuming it.
+        // A trailing blank line is added so the next ## heading keeps its spacing.
+        content = content.replace(
+          /^(## Session[ \t]*\n(?:(?!^## )[\s\S])*)/m,
+          [
+            '## Session',
+            '',
+            `**Last session:** ${now}`,
+            `**Stopped at:** ${stoppedAtValue}`,
+            `**Resume file:** ${resumeValue}`,
+            '',
+            '',
+          ].join('\n'),
+        );
+      } else {
+        // No ## Session heading exists at all — append a new canonical section.
+        const scaffold = [
+          '',
+          '## Session',
+          '',
+          `**Last session:** ${now}`,
+          `**Stopped at:** ${stoppedAtValue}`,
+          `**Resume file:** ${resumeValue}`,
+          '',
+        ].join('\n');
+        content = content.trimEnd() + '\n' + scaffold;
+      }
+
+      sessionCreated = true;
+
+      if (needsLastSession) updated.push('Last session');
+      if (needsStoppedAt) updated.push('Stopped At');
+      if (needsResumeFile) updated.push('Resume File');
+    }
+
     return content;
   }, cwd);
 
   if (updated.length > 0) {
-    output({ recorded: true, updated }, raw, 'true');
+    const result: Record<string, unknown> = { recorded: true, updated };
+    if (sessionCreated) result['created'] = true;
+    output(result, raw, 'true');
   } else {
     output({ recorded: false, reason: 'No session fields found in STATE.md' }, raw, 'false');
   }
@@ -850,8 +925,12 @@ function cmdStateSnapshot(cwd: string, raw: boolean): void {
   const sessionMatch = body.match(/##\s*Session\s*\n([\s\S]*?)(?=\n##|$)/i);
   if (sessionMatch) {
     const sessionSection = sessionMatch[1];
+    // Accept both `**Last Date:**` (canonical template form) and `**Last session:**`
+    // (the form written by the DWIM auto-create / normalize path added for #944).
     const lastDateMatch = sessionSection.match(/\*\*Last Date:\*\*\s*(.+)/i)
-      || sessionSection.match(/^Last Date:\s*(.+)/im);
+      || sessionSection.match(/^Last Date:\s*(.+)/im)
+      || sessionSection.match(/\*\*Last session:\*\*\s*(.+)/i)
+      || sessionSection.match(/^Last session:\s*(.+)/im);
     const stoppedAtMatch = sessionSection.match(/\*\*Stopped At:\*\*\s*(.+)/i)
       || sessionSection.match(/^Stopped At:\s*(.+)/im);
     const resumeFileMatch = sessionSection.match(/\*\*Resume File:\*\*\s*(.+)/i)
@@ -1073,6 +1152,66 @@ function syncStateFrontmatter(content: string, cwd: string | undefined): string 
     derivedFm['status'] = existingFm['status'];
   }
 
+  // Bug #948: preserve `milestone_name` / `milestone` when the derived value
+  // is the template placeholder 'milestone'. getMilestoneInfo returns the
+  // literal string 'milestone' when it cannot match the version from the roadmap
+  // (e.g. no ROADMAP.md, roadmap lacks the heading for the stored version, or the
+  // milestone version read from STATE.md itself triggers the lookup before the
+  // file is fully written). A placeholder must never overwrite a real name that the
+  // existing frontmatter already holds; only an empty derived value falls through
+  // to this guard (the primary #905 preserve path below handles that).
+  const MILESTONE_NAME_PLACEHOLDER = 'milestone';
+  if (
+    derivedFm['milestone_name'] === MILESTONE_NAME_PLACEHOLDER &&
+    existingFm['milestone_name'] &&
+    existingFm['milestone_name'] !== MILESTONE_NAME_PLACEHOLDER
+  ) {
+    derivedFm['milestone_name'] = existingFm['milestone_name'];
+    // Keep the stored milestone version consistent with the preserved name.
+    if (existingFm['milestone']) {
+      derivedFm['milestone'] = existingFm['milestone'];
+    }
+  }
+
+  // Bug #905: preserve scalar fields that buildStateFrontmatter can only derive
+  // from body annotations (Current Phase:, Current Plan:, etc.). When those
+  // annotations are absent — e.g. after an agent or tool rewrites the body —
+  // buildStateFrontmatter returns no value for those keys. Mirror the same
+  // fallback pattern used in cmdStateJson so the existing frontmatter values
+  // survive every writeStateMd call.
+  //
+  // For stopped_at / paused_at: the original #905 "fall back when derived is
+  // absent" rule is preserved here. The stale-body-overwrites-frontmatter
+  // scenario from #948 is prevented by the no-op guard in
+  // readModifyWriteStateMd: when the transform produces no change the file is
+  // never written, so syncStateFrontmatter never even runs. Attempting to
+  // "always prefer frontmatter" here breaks legitimate callers like phase.complete
+  // that intentionally write a new stopped_at value to the body and expect
+  // syncStateFrontmatter to pick it up.
+  if (!derivedFm['stopped_at'] && existingFm['stopped_at']) {
+    derivedFm['stopped_at'] = existingFm['stopped_at'];
+  }
+  if (!derivedFm['paused_at'] && existingFm['paused_at']) {
+    derivedFm['paused_at'] = existingFm['paused_at'];
+  }
+  if (!derivedFm['current_phase'] && existingFm['current_phase']) {
+    derivedFm['current_phase'] = existingFm['current_phase'];
+  }
+  if (!derivedFm['current_phase_name'] && existingFm['current_phase_name']) {
+    derivedFm['current_phase_name'] = existingFm['current_phase_name'];
+  }
+  if (!derivedFm['current_plan'] && existingFm['current_plan']) {
+    derivedFm['current_plan'] = existingFm['current_plan'];
+  }
+  // progress is a sub-object: fall back to existing only when the body+disk
+  // scan produced NO progress block at all. When buildStateFrontmatter did
+  // derive a progress block (even a lower one), that derived value wins — the
+  // shouldPreserveExistingProgress cross-milestone logic is applied later in
+  // cmdStateJson on the read path where it is appropriate.
+  if (!derivedFm['progress'] && existingFm['progress']) {
+    derivedFm['progress'] = normalizeProgressNumbers(existingFm['progress']);
+  }
+
   const yamlStr = reconstructFrontmatter(derivedFm as unknown as Frontmatter);
   return `---\n${yamlStr}\n---\n\n${body}`;
 }
@@ -1217,6 +1356,18 @@ function readModifyWriteStateMd(statePath: string, transformFn: (content: string
     // restore it when resync is false.
     const preFm = resync ? null : extractFrontmatter(content) as Record<string, unknown>;
     const modified = transformFn(content);
+
+    // Bug #948: no-op guard — if the transform produced no change, do NOT write
+    // the file. An unconditional write would bump `last_updated`, reset
+    // `milestone_name` to the template placeholder, and resurrect stale
+    // body-derived `stopped_at` values via syncStateFrontmatter. Skipping the
+    // write when content is unchanged is safe because every caller that mutates
+    // content already returns the mutated string, and callers that detect a
+    // no-op explicitly return the original content unchanged.
+    if (modified === content) {
+      return;
+    }
+
     let synced = syncStateFrontmatter(modified, cwd);
 
     if (!resync && preFm && preFm['progress']) {
@@ -1264,6 +1415,17 @@ function cmdStateJson(cwd: string, raw: boolean): void {
   // Preserve existing status when body-derived status is 'unknown' (same logic as syncStateFrontmatter).
   if (built['status'] === 'unknown' && existingFm && existingFm['status'] && existingFm['status'] !== 'unknown') {
     built['status'] = existingFm['status'];
+  }
+  // Bug #905: preserve scalar fields when body annotations are absent.
+  // Mirrors the same fallback pattern applied in syncStateFrontmatter.
+  if (existingFm && !built['current_phase'] && existingFm['current_phase']) {
+    built['current_phase'] = existingFm['current_phase'];
+  }
+  if (existingFm && !built['current_phase_name'] && existingFm['current_phase_name']) {
+    built['current_phase_name'] = existingFm['current_phase_name'];
+  }
+  if (existingFm && !built['current_plan'] && existingFm['current_plan']) {
+    built['current_plan'] = existingFm['current_plan'];
   }
   // Preserve curated cross-milestone aggregates when local disk scanning sees
   // only a narrower realized subset (#3242 Bug A). Stale lower counters still

@@ -11,9 +11,10 @@
  *     'codex-toml'           → early-return after writing codex.toml.
  *     'copilot-instructions' → early-return after writing .github/copilot-instructions.md.
  *     'cline-rules'          → early-return after writing .clinerules.
+ *     'cursor-hooks-json'    → early-return after writing .cursor/hooks.json (issue #777).
  *     'profile-marker-only'  → early-return after writing only the profile marker.
  * - `writesSharedSettings` is the finishInstall writeSettings gate:
- *     false for codex / copilot / kilo / cursor / windsurf / trae / cline (legacy exclusion list).
+ *     false for codex / copilot / kilo / cursor / windsurf / trae / cline / kimi (legacy exclusion list).
  *     true for all other runtimes.
  * - `finishPermissionWriter` names the finishInstall-phase dedicated config writer:
  *     'opencode' → writes BOTH shared settings AND its own permissions file.
@@ -30,6 +31,7 @@ type ConfigInstallSurface =
   | 'codex-toml'
   | 'copilot-instructions'
   | 'cline-rules'
+  | 'cursor-hooks-json'
   | 'profile-marker-only';
 
 type FinishPermissionWriter = 'opencode' | 'kilo' | null;
@@ -64,16 +66,17 @@ const REGISTRY: Record<string, Readonly<RegistryEntry>> = Object.freeze({
   codex:       Object.freeze({ installSurface: 'codex-toml',           writesSharedSettings: false, finishPermissionWriter: null       } as const),
   copilot:     Object.freeze({ installSurface: 'copilot-instructions', writesSharedSettings: false, finishPermissionWriter: null       } as const),
   cline:       Object.freeze({ installSurface: 'cline-rules',          writesSharedSettings: false, finishPermissionWriter: null       } as const),
-  cursor:      Object.freeze({ installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       } as const),
+  cursor:      Object.freeze({ installSurface: 'cursor-hooks-json',    writesSharedSettings: false, finishPermissionWriter: null       } as const),
   windsurf:    Object.freeze({ installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       } as const),
   trae:        Object.freeze({ installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       } as const),
+  kimi:        Object.freeze({ installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       } as const),
 });
 
 // ---------------------------------------------------------------------------
 // Exports
 // ---------------------------------------------------------------------------
 
-/** The complete set of 15 supported runtimes for config-adapter dispatch. */
+/** The complete set of 16 supported runtimes for config-adapter dispatch. */
 const ALLOWED_CONFIG_RUNTIMES: ReadonlySet<string> = new Set(Object.keys(REGISTRY));
 
 /** All valid installSurface values. */
@@ -82,6 +85,7 @@ const INSTALL_SURFACES: ReadonlyArray<ConfigInstallSurface> = Object.freeze([
   'codex-toml',
   'copilot-instructions',
   'cline-rules',
+  'cursor-hooks-json',
   'profile-marker-only',
 ]);
 

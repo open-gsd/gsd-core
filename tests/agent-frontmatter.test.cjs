@@ -232,6 +232,29 @@ describe('AGENT: required frontmatter fields', () => {
   }
 });
 
+// ─── Color Value Validation ──────────────────────────────────────────────────
+
+const VALID_AGENT_COLORS = new Set(['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'pink', 'cyan']);
+
+describe('COLOR: color frontmatter must be a documented named color', () => {
+  for (const agent of ALL_AGENTS) {
+    test(`${agent} color: is a documented named color`, () => {
+      const content = fs.readFileSync(path.join(AGENTS_DIR, agent + '.md'), 'utf-8');
+      const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+      const frontmatter = fmMatch ? fmMatch[1] : '';
+      const colorMatch = frontmatter.match(/^color:\s*(.+)$/m);
+      assert.ok(colorMatch, `${agent} missing color: field in frontmatter`);
+      const rawValue = colorMatch[1].trim();
+      // Strip surrounding quotes (single or double) before validating
+      const colorValue = rawValue.replace(/^["']|["']$/g, '');
+      assert.ok(
+        VALID_AGENT_COLORS.has(colorValue),
+        `${agent} has invalid color: "${colorValue}" — must be one of: ${[...VALID_AGENT_COLORS].join(', ')}`
+      );
+    });
+  }
+});
+
 // ─── CLAUDE.md Compliance ───────────────────────────────────────────────────
 
 describe('CLAUDEMD: CLAUDE.md compliance enforcement', () => {
@@ -412,6 +435,7 @@ describe('EDITWRITE: section-writer agents must have both Write and Edit in tool
     'gsd-phase-researcher',
     'gsd-ui-researcher',
     'gsd-debug-session-manager',
+    'gsd-planner', // #973: planner lacked Edit; whole-file Write truncated ROADMAP.md
   ];
 
   for (const agent of SECTION_WRITER_AGENTS) {

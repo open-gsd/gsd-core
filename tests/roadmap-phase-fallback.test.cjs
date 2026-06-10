@@ -11,6 +11,26 @@ const fs = require('fs');
 const path = require('path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 
+// The planning-dir resolver (planningDir) is workstream-aware and honours
+// GSD_PROJECT / GSD_WORKSTREAM. These suites write STATE.md to <tmp>/.planning
+// and assume that is where it is read from, so a developer shell inside a GSD
+// workstream would otherwise redirect the read and break extractCurrentMilestone.
+// Isolate the vars so the file is hermetic when run directly via `node --test`.
+let savedGsdProject;
+let savedGsdWorkstream;
+beforeEach(() => {
+  savedGsdProject = process.env.GSD_PROJECT;
+  savedGsdWorkstream = process.env.GSD_WORKSTREAM;
+  delete process.env.GSD_PROJECT;
+  delete process.env.GSD_WORKSTREAM;
+});
+afterEach(() => {
+  if (savedGsdProject !== undefined) process.env.GSD_PROJECT = savedGsdProject;
+  else delete process.env.GSD_PROJECT;
+  if (savedGsdWorkstream !== undefined) process.env.GSD_WORKSTREAM = savedGsdWorkstream;
+  else delete process.env.GSD_WORKSTREAM;
+});
+
 /**
  * Helper: write STATE.md with a milestone version so extractCurrentMilestone
  * will slice the roadmap to only that milestone's section.
@@ -363,6 +383,51 @@ This is the active milestone body.
       !slice.includes('closed milestone body'),
       'preamble must NOT contain closed v8.0-F body text (preamble boundary fix)'
     );
+  });
+
+  test('(7) workstream-aware: STATE.md under GSD_WORKSTREAM is read from the workstream subdir', () => {
+    // Regression guard for the env-leak that made these suites pass in clean CI but
+    // fail in a developer's GSD_WORKSTREAM shell. planningDir() is workstream-aware,
+    // so STATE.md lives at <cwd>/.planning/workstreams/<ws>/STATE.md. Setting the env
+    // here makes clean CI exercise the polluted-env resolution path.
+    process.env.GSD_WORKSTREAM = 'guard-ws';
+    try {
+      const wsPlanning = path.join(tmpDir, '.planning', 'workstreams', 'guard-ws');
+      fs.mkdirSync(wsPlanning, { recursive: true });
+      fs.writeFileSync(path.join(wsPlanning, 'STATE.md'), '---\nmilestone: v8.0\n---\n');
+      const roadmap = `# Project Roadmap
+
+## v8.0 Overview — v8.0-F (CLOSED FAIL 2026-05-18)
+
+This is the closed milestone body with some text.
+
+### Phase 24: ARCHIVED
+**Goal:** This phase is done and archived.
+
+## v8.0-B Overview (STARTED 2026-05-18)
+
+This is the active milestone body.
+
+### Phase 31: EVAL
+**Goal:** Evaluate the new system.
+
+## v9.0 Future Milestone
+
+### Phase 40: FUTURE
+**Goal:** Future work.
+`;
+      const slice = core.extractCurrentMilestone(roadmap, tmpDir);
+      assert.ok(
+        slice.includes('Phase 31: EVAL'),
+        'workstream-scoped STATE.md must select the active v8.0-B section',
+      );
+      assert.ok(
+        !slice.includes('Phase 24: ARCHIVED'),
+        'closed section must still be excluded under a workstream env',
+      );
+    } finally {
+      delete process.env.GSD_WORKSTREAM;
+    }
   });
 
   test('(2) double-closed-skip: third sibling (active) selected when first two are closed', () => {

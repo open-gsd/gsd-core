@@ -84,6 +84,50 @@ describe('install-profiles: MINIMAL_SKILL_ALLOWLIST', () => {
   });
 });
 
+// ─── #834: --help profile skill counts must track PROFILES ───────────────────
+
+describe('install: --help profile counts match PROFILES (#834)', () => {
+  function helpText() {
+    return execFileSync(process.execPath, [INSTALL_SCRIPT, '--help'], {
+      encoding: 'utf8',
+      env: installerEnv(),
+    });
+  }
+
+  test('core line advertises PROFILES.core.length main-loop skills', () => {
+    const out = helpText();
+    const m = out.match(/core\s+—\s+~?(\d+)\s+main-loop skills/);
+    assert.ok(m, `--help must advertise a core profile skill count; got:\n${out}`);
+    assert.strictEqual(
+      Number(m[1]),
+      PROFILES.core.length,
+      `--help core count (${m[1]}) must equal PROFILES.core.length (${PROFILES.core.length})`,
+    );
+  });
+
+  test('standard line advertises PROFILES.standard.length skills', () => {
+    const out = helpText();
+    const m = out.match(/standard\s+—\s+~?(\d+)\s+skills/);
+    assert.ok(m, `--help must advertise a standard profile skill count; got:\n${out}`);
+    assert.strictEqual(
+      Number(m[1]),
+      PROFILES.standard.length,
+      `--help standard count (${m[1]}) must equal PROFILES.standard.length (${PROFILES.standard.length})`,
+    );
+  });
+
+  test('full line does not hardcode a drift-prone skill count', () => {
+    const out = helpText();
+    const m = out.match(/full\s+—\s+([^\n]*?)\s+\(default\)/);
+    assert.ok(m, `--help must advertise a full profile line; got:\n${out}`);
+    assert.doesNotMatch(
+      m[1],
+      /\d/,
+      `--help full line must not hardcode a numeric skill count (drifts); got: "${m[1]}"`,
+    );
+  });
+});
+
 describe('install-profiles: isMinimalMode', () => {
   test('returns true only for "minimal"', () => {
     assert.strictEqual(isMinimalMode('minimal'), true);
@@ -377,9 +421,10 @@ describe('install: manifest records mode for both profiles', () => {
       const manifestPath = path.join(targetDir, MANIFEST_NAME);
       if (!fs.existsSync(manifestPath)) return { mode: '<no manifest>', skillCount: 0, agentCount: 0 };
       const m = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-      const skillCount = new Set(
-        Object.keys(m.files || {}).filter(k => k.startsWith('skills/')).map(k => k.split('/')[1]),
-      ).size;
+      // Count SKILL.md files under skills/ (works for both flat and ns-nested layouts).
+      const skillCount = Object.keys(m.files || {}).filter(
+        k => k.startsWith('skills/') && k.endsWith('/SKILL.md'),
+      ).length;
       const agentCount = Object.keys(m.files || {}).filter(k => k.startsWith('agents/')).length;
       return { mode: m.mode, skillCount, agentCount };
     } finally {
@@ -430,9 +475,10 @@ describe('install-minimal-backcompat: --minimal and --profile=core produce same 
       const manifestPath = path.join(targetDir, MANIFEST_NAME);
       if (!fs.existsSync(manifestPath)) return { mode: null, skillCount: 0, profileMarker: null };
       const m = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-      const skillCount = new Set(
-        Object.keys(m.files || {}).filter(k => k.startsWith('skills/')).map(k => k.split('/')[1]),
-      ).size;
+      // Count SKILL.md files under skills/ (works for both flat and ns-nested layouts).
+      const skillCount = Object.keys(m.files || {}).filter(
+        k => k.startsWith('skills/') && k.endsWith('/SKILL.md'),
+      ).length;
       const markerPath = path.join(targetDir, '.gsd-profile');
       const profileMarker = fs.existsSync(markerPath) ? fs.readFileSync(markerPath, 'utf8').trim() : null;
       return { mode: m.mode, skillCount, profileMarker };
