@@ -44,22 +44,28 @@ const REAL_COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');
 const MANIFEST = loadSkillsManifest(REAL_COMMANDS_DIR);
 const RESOLVED_CORE = resolveProfile({ modes: ['core'], manifest: MANIFEST });
 
-// ─── Defect #1 — Hermes upgrade leaves stale skills/gsd/gsd-<stem>/ dirs ────
+// ─── Defect #1 — Hermes upgrade: bare-stem dirs from #3664 era become stale ──
+//
+// #947 REVERSES #3664: the canonical layout is now skills/gsd/gsd-<stem>/ again.
+// The migration now removes bare-stem dirs (from #3664: prefix='') and writes
+// the gsd-prefixed layout. Pre-existing gsd-prefixed dirs (the "intermediate"
+// layout from before #3664) are now the CANONICAL dirs and are kept / updated.
 
-describe('Defect #1 regression (#3664): _runLegacyInstallMigrations removes skills/gsd/gsd-*/ layout', () => {
-  test('installRuntimeArtifacts removes intermediate skills/gsd/gsd-*/ dirs and writes bare-stem layout', (t) => {
+describe('Defect #1 regression (#3664 reversed by #947): bare-stem dirs removed, gsd- prefix written', () => {
+  test('installRuntimeArtifacts removes bare-stem skills/gsd/<stem>/ dirs and writes gsd- prefixed layout', (t) => {
     const configDir = createTempDir('gsd-hermes-reg1-');
     t.after(() => cleanup(configDir));
 
     assert.strictEqual(typeof installRuntimeArtifacts, 'function',
       'installRuntimeArtifacts must be exported from bin/install.js');
 
-    // Pre-create intermediate Hermes layout (between #2841 and #3664)
+    // Pre-create #3664-era bare-stem Hermes layout (no gsd- prefix, now stale).
+    // Use real GSD command stems (help, quick) that readGsdCommandNames() knows about.
     const nestedGsdDir = path.join(configDir, 'skills', 'gsd');
-    fs.mkdirSync(path.join(nestedGsdDir, 'gsd-help'), { recursive: true });
-    fs.writeFileSync(path.join(nestedGsdDir, 'gsd-help', 'SKILL.md'), '# legacy help\n');
-    fs.mkdirSync(path.join(nestedGsdDir, 'gsd-plan'), { recursive: true });
-    fs.writeFileSync(path.join(nestedGsdDir, 'gsd-plan', 'SKILL.md'), '# legacy plan\n');
+    fs.mkdirSync(path.join(nestedGsdDir, 'help'), { recursive: true });
+    fs.writeFileSync(path.join(nestedGsdDir, 'help', 'SKILL.md'), '# legacy bare-stem help\n');
+    fs.mkdirSync(path.join(nestedGsdDir, 'quick'), { recursive: true });
+    fs.writeFileSync(path.join(nestedGsdDir, 'quick', 'SKILL.md'), '# legacy bare-stem quick\n');
 
     // Sibling non-gsd dir inside skills/gsd/ must survive
     const userContentDir = path.join(nestedGsdDir, 'user-content');
@@ -68,12 +74,15 @@ describe('Defect #1 regression (#3664): _runLegacyInstallMigrations removes skil
 
     installRuntimeArtifacts('hermes', configDir, 'global', RESOLVED_CORE);
 
-    assert.ok(!fs.existsSync(path.join(nestedGsdDir, 'gsd-help')),
-      'skills/gsd/gsd-help/ must be removed (Defect #1)');
-    assert.ok(!fs.existsSync(path.join(nestedGsdDir, 'gsd-plan')),
-      'skills/gsd/gsd-plan/ must be removed (Defect #1)');
-    assert.ok(fs.existsSync(path.join(nestedGsdDir, 'help', 'SKILL.md')),
-      'skills/gsd/help/SKILL.md must exist after install');
+    // Bare-stem dirs from #3664 must be cleaned
+    assert.ok(!fs.existsSync(path.join(nestedGsdDir, 'help')),
+      'skills/gsd/help/ (bare-stem from #3664) must be removed (#947)');
+    assert.ok(!fs.existsSync(path.join(nestedGsdDir, 'quick')),
+      'skills/gsd/quick/ (bare-stem from #3664) must be removed (#947)');
+    // Canonical gsd- prefixed layout must be written
+    assert.ok(fs.existsSync(path.join(nestedGsdDir, 'gsd-help', 'SKILL.md')),
+      'skills/gsd/gsd-help/SKILL.md must exist after install (#947 canonical layout)');
+    // User content preserved
     assert.ok(fs.existsSync(path.join(userContentDir, 'SKILL.md')),
       'user-content must be preserved');
   });
@@ -148,7 +157,7 @@ describe('Defect #2 regression (Hermes, #3664): --hermes --profile=core writes s
 
 // ─── M1 — Hermes minimal-mode migrates dev-preferences (#2973) ───────────────
 
-describe('M1 (#2973): --hermes --global --profile=core migrates dev-preferences → skills/gsd/dev-preferences/SKILL.md', () => {
+describe('M1 (#2973, #947): --hermes --global --profile=core migrates dev-preferences → skills/gsd/gsd-dev-preferences/SKILL.md', () => {
   test('dev-preferences migrated to nested Hermes location, legacy source removed', (t) => {
     const root = createTempDir('gsd-hermes-m1-');
     t.after(() => cleanup(root));
@@ -166,9 +175,10 @@ describe('M1 (#2973): --hermes --global --profile=core migrates dev-preferences 
     assert.strictEqual(result.status, 0,
       `installer exited ${result.status}\n${result.stdout}\n${result.stderr}`);
 
-    const skillFile = path.join(root, 'skills', 'gsd', 'dev-preferences', 'SKILL.md');
+    // #947: Hermes uses prefix='gsd-' so dev-preferences lands at gsd-dev-preferences/ (not dev-preferences/)
+    const skillFile = path.join(root, 'skills', 'gsd', 'gsd-dev-preferences', 'SKILL.md');
     assert.ok(fs.existsSync(skillFile),
-      'skills/gsd/dev-preferences/SKILL.md must exist (M1: nested, not flat)');
+      'skills/gsd/gsd-dev-preferences/SKILL.md must exist (M1+#947: gsd- prefix, nested)');
     assert.strictEqual(fs.readFileSync(skillFile, 'utf8'), '# my hermes prefs\n');
     assert.ok(!fs.existsSync(path.join(legacyDir, 'dev-preferences.md')),
       'legacy source must be removed');
@@ -282,8 +292,8 @@ describe('U2 (#2973): uninstallRuntimeArtifacts claude/global migrates dev-prefe
 
 // ─── U3 — Hermes uninstall migrates dev-preferences to NESTED location (#2973) ─
 
-describe('U3 (#2973): uninstallRuntimeArtifacts hermes migrates dev-preferences → skills/gsd/dev-preferences/SKILL.md', () => {
-  test('commands/gsd/ NOT recreated, dev-preferences at nested Hermes location', (t) => {
+describe('U3 (#2973, #947): uninstallRuntimeArtifacts hermes migrates dev-preferences → skills/gsd/gsd-dev-preferences/SKILL.md', () => {
+  test('commands/gsd/ NOT recreated, dev-preferences at nested Hermes location with gsd- prefix', (t) => {
     const configDir = createTempDir('gsd-hermes-uninstall-u3-');
     t.after(() => cleanup(configDir));
 
@@ -298,9 +308,10 @@ describe('U3 (#2973): uninstallRuntimeArtifacts hermes migrates dev-preferences 
     assert.ok(!fs.existsSync(path.join(legacyDir, 'dev-preferences.md')),
       'commands/gsd/dev-preferences.md must not exist after hermes uninstall (U3)');
 
-    const skillFile = path.join(configDir, 'skills', 'gsd', 'dev-preferences', 'SKILL.md');
+    // #947: Hermes uses prefix='gsd-' so dev-preferences lands at gsd-dev-preferences/ (not dev-preferences/)
+    const skillFile = path.join(configDir, 'skills', 'gsd', 'gsd-dev-preferences', 'SKILL.md');
     assert.ok(fs.existsSync(skillFile),
-      'skills/gsd/dev-preferences/SKILL.md must exist at HERMES nested location (U3)');
+      'skills/gsd/gsd-dev-preferences/SKILL.md must exist at HERMES nested location (U3+#947)');
     assert.strictEqual(fs.readFileSync(skillFile, 'utf8'), '# my hermes prefs\n');
   });
 });

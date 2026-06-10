@@ -36,7 +36,7 @@ const NEST = [
   // Only the 6 runtimes below keep the nested layout.
   { runtime: 'cline',       scope: 'global', skillsSub: 'skills',     prefix: 'gsd-' },
   { runtime: 'qwen',        scope: 'global', skillsSub: 'skills',     prefix: 'gsd-' },
-  { runtime: 'hermes',      scope: 'global', skillsSub: 'skills/gsd', prefix: ''     },
+  { runtime: 'hermes',      scope: 'global', skillsSub: 'skills/gsd', prefix: 'gsd-' }, // #947: restored canonical prefix
   { runtime: 'augment',     scope: 'global', skillsSub: 'skills',     prefix: 'gsd-' },
   { runtime: 'trae',        scope: 'global', skillsSub: 'skills',     prefix: 'gsd-' },
   { runtime: 'antigravity', scope: 'global', skillsSub: 'skills',     prefix: 'gsd-' },
@@ -127,8 +127,7 @@ for (const { runtime, scope, skillsSub, prefix } of NEST) {
       }
 
       // Total GSD-owned top-level entries must be EXACTLY 6 (only the routers).
-      // For prefix='gsd-' runtimes: count dirs starting with 'gsd-'.
-      // For hermes (prefix=''): count ALL dirs under skills/gsd (everything is GSD-owned).
+      // All nested runtimes (incl. Hermes after #947) use prefix='gsd-'.
       const gsdTopLevelCount = prefix !== ''
         ? topLevel.filter((n) => n.startsWith(prefix)).length
         : topLevel.filter((n) => fs.statSync(path.join(skillsDir, n)).isDirectory()).length;
