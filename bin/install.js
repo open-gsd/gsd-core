@@ -7814,25 +7814,11 @@ function _runLegacyInstallMigrations(runtime, configDir, scope = 'global') {
       }
     }
 
-    // Hermes: remove bare-stem skills/gsd/<stem>/ entries (no gsd- prefix) that
-    // existed from the #3664 era (prefix=''). #947 restores the canonical gsd-
-    // prefix (skills/gsd/gsd-<stem>/), so bare-stem dirs are now stale.
-    // Only dirs whose names exactly match a known GSD command stem are removed —
-    // user-owned dirs with non-gsd names (e.g. user-content/) are preserved.
-    const nestedGsdDir = path.join(configDir, 'skills', 'gsd');
-    if (fs.existsSync(nestedGsdDir)) {
-      // Compute the set of known GSD stems once for all removals.
-      let gsdStemsForCleanup;
-      try { gsdStemsForCleanup = new Set(readGsdCommandNames()); }
-      catch { gsdStemsForCleanup = new Set(); }
-      for (const entry of fs.readdirSync(nestedGsdDir, { withFileTypes: true })) {
-        // Remove ONLY dirs whose name is a known GSD skill stem (bare, no gsd- prefix).
-        // This preserves user-owned content like 'user-content/' or 'my-workflow/'.
-        if (entry.isDirectory() && !entry.name.startsWith('gsd-') && gsdStemsForCleanup.has(entry.name)) {
-          fs.rmSync(path.join(nestedGsdDir, entry.name), { recursive: true });
-        }
-      }
-    }
+    // Hermes: bare-stem skills/gsd/<stem>/ cleanup is deferred to AFTER the
+    // layout-driven install loop in installRuntimeArtifacts, where the exact set
+    // of staged gsd-<stem>/ dirs is known. Removing here (before staging) would
+    // require readGsdCommandNames() which misses skills like 'dev-preferences'
+    // that are not in the commands directory. See _removeHermesBareStemDirs().
   }
 
   // Migrate dev-preferences.md content → runtime-aware SKILL.md location (#2973).
@@ -7951,6 +7937,43 @@ function _restoreDir(dir, snapshot) {
   }
 }
 
+/**
+ * After the layout-driven install loop writes new gsd-<stem>/ dirs to
+ * skills/gsd/, remove any pre-existing bare-stem dirs (skills/gsd/<stem>/)
+ * that correspond to the newly installed gsd-<stem> entries.
+ *
+ * The removal set is derived from the ACTUAL installed skill dirs (every
+ * entry starting with 'gsd-' that is a directory), so it covers ALL shipped
+ * GSD skills — including 'dev-preferences' and future additions — without
+ * relying on readGsdCommandNames() which only enumerates the commands source
+ * tree and can miss skills that ship outside that directory.
+ *
+ * Safety: a bare dir is ONLY removed when a corresponding gsd-<stem>/ dir was
+ * installed this run. A user-owned dir 'skills/gsd/my-workflow/' that has no
+ * matching 'skills/gsd/gsd-my-workflow/' is never touched.
+ *
+ * @param {string} nestedGsdDir  absolute path to skills/gsd/ category dir
+ */
+function _removeHermesBareStemDirs(nestedGsdDir) {
+  if (!fs.existsSync(nestedGsdDir)) return;
+  const entries = fs.readdirSync(nestedGsdDir, { withFileTypes: true });
+
+  // Collect the set of stems that were installed as gsd-<stem>/ this run.
+  const installedStems = new Set();
+  for (const entry of entries) {
+    if (entry.isDirectory() && entry.name.startsWith('gsd-')) {
+      installedStems.add(entry.name.slice('gsd-'.length)); // e.g. 'quick', 'dev-preferences'
+    }
+  }
+
+  // Remove any bare <stem>/ dir for which gsd-<stem>/ was just installed.
+  for (const entry of entries) {
+    if (entry.isDirectory() && !entry.name.startsWith('gsd-') && installedStems.has(entry.name)) {
+      fs.rmSync(path.join(nestedGsdDir, entry.name), { recursive: true });
+    }
+  }
+}
+
 function installRuntimeArtifacts(runtime, configDir, scope, resolvedProfile) {
   // Legacy cleanup before layout-driven writes
   _runLegacyInstallMigrations(runtime, configDir, scope);
@@ -8028,6 +8051,21 @@ function installRuntimeArtifacts(runtime, configDir, scope, resolvedProfile) {
         try { fs.rmSync(tempToClean, { recursive: true, force: true }); } catch { /* best-effort */ }
       }
     }
+  }
+
+  // Hermes: after the install loop has written all gsd-<stem>/ dirs to
+  // skills/gsd/, remove any stale bare-stem dirs (skills/gsd/<stem>/) that
+  // correspond to the newly installed gsd-<stem> entries. This is the robust
+  // replacement for the readGsdCommandNames()-based pre-install cleanup that
+  // missed skills like 'dev-preferences' (#947 adversarial review).
+  //
+  // We run this AFTER the install loop so the installed set is authoritative:
+  // every gsd-<stem>/ present now was written this run (or was there before
+  // with the same prefix). User-owned bare dirs with no gsd-<stem> counterpart
+  // are untouched.
+  if (runtime === 'hermes') {
+    const nestedGsdDirForCleanup = path.join(configDir, 'skills', 'gsd');
+    _removeHermesBareStemDirs(nestedGsdDirForCleanup);
   }
 }
 

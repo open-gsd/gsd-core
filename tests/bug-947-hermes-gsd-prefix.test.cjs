@@ -290,6 +290,90 @@ describe('#947 Hermes: migration from prior bare-stem install', () => {
 });
 
 // ---------------------------------------------------------------------------
+// #947 adversarial-review: bare-stem cleanup derived from installed set
+// (not readGsdCommandNames) — covers skills missing from the commands dir
+// ---------------------------------------------------------------------------
+
+describe('#947 Hermes: adversarial-review bare-stem cleanup (installed-set derivation)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-947-adv-'));
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('bare skills/gsd/dev-preferences/ is removed when gsd-dev-preferences/ is installed this run', () => {
+    // Seed a source tree that includes a 'dev-preferences' skill (e.g. the user's
+    // commands/gsd/dev-preferences.md, or any skill whose stem is NOT normally in
+    // the shipped readGsdCommandNames() set). The old cleanup (readGsdCommandNames-
+    // based) would MISS this bare dir because readGsdCommandNames() reads GSD's
+    // shipped source, not the user's actual install state.
+    const srcDir = writeMinimalSourceTree(tmpDir, ['quick', 'dev-preferences']);
+    const configDir = path.join(tmpDir, 'dest');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(path.join(configDir, '.gsd-source'), srcDir);
+
+    // Seed the legacy bare-stem dir: skills/gsd/dev-preferences/ (pre-#947 install)
+    const bareLegacyDir = path.join(configDir, 'skills', 'gsd', 'dev-preferences');
+    fs.mkdirSync(bareLegacyDir, { recursive: true });
+    fs.writeFileSync(path.join(bareLegacyDir, 'SKILL.md'), [
+      '---',
+      'name: dev-preferences',
+      'description: My dev preferences (legacy bare-stem)',
+      '---',
+      '',
+      'Legacy body.',
+    ].join('\n'));
+
+    installRuntimeArtifacts('hermes', configDir, 'global', RESOLVED_FULL);
+
+    // gsd-dev-preferences/ must be installed (new prefixed form)
+    const newPath = path.join(configDir, 'skills', 'gsd', 'gsd-dev-preferences', 'SKILL.md');
+    assert.ok(fs.existsSync(newPath),
+      'skills/gsd/gsd-dev-preferences/SKILL.md must exist after install');
+
+    // Bare-stem dir must be gone — even though 'dev-preferences' is NOT in the
+    // shipped readGsdCommandNames() set (it was user-sourced). The fix derives
+    // the removal set from gsd-<stem>/ dirs installed this run.
+    assert.ok(!fs.existsSync(bareLegacyDir),
+      'skills/gsd/dev-preferences/ (bare-stem) must be removed when gsd-dev-preferences/ was installed');
+  });
+
+  test('user-owned bare dir with no gsd-<stem> counterpart is preserved (no over-deletion)', () => {
+    // A user has a dir 'skills/gsd/my-custom-workflow/' that is NOT a GSD shipped
+    // skill — GSD never installs 'gsd-my-custom-workflow/'. This dir must survive.
+    const srcDir = writeMinimalSourceTree(tmpDir, ['quick']);
+    const configDir = path.join(tmpDir, 'dest');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(path.join(configDir, '.gsd-source'), srcDir);
+
+    // Seed user-owned bare dir: no corresponding gsd-my-custom-workflow/ will be installed
+    const userOwnedDir = path.join(configDir, 'skills', 'gsd', 'my-custom-workflow');
+    fs.mkdirSync(userOwnedDir, { recursive: true });
+    fs.writeFileSync(path.join(userOwnedDir, 'SKILL.md'), [
+      '---',
+      'name: my-custom-workflow',
+      'description: My personal workflow',
+      '---',
+      '',
+      'Custom body.',
+    ].join('\n'));
+
+    installRuntimeArtifacts('hermes', configDir, 'global', RESOLVED_FULL);
+
+    // User-owned dir must survive — no gsd-my-custom-workflow/ was installed,
+    // so the removal rule (only remove <stem>/ when gsd-<stem>/ exists) protects it.
+    assert.ok(fs.existsSync(userOwnedDir),
+      'User-owned skills/gsd/my-custom-workflow/ must be preserved (no gsd-my-custom-workflow/ installed)');
+    assert.ok(fs.existsSync(path.join(userOwnedDir, 'SKILL.md')),
+      'User-owned SKILL.md inside the dir must be preserved');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // #947 regression: manifest/listing prefix
 // ---------------------------------------------------------------------------
 
