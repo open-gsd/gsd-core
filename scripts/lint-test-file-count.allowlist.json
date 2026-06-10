@@ -3,6 +3,7 @@
   "modules": {
     "audit": {
       "files": [
+        "audit-command-cutover.test.cjs",
         "audit-fix-command.test.cjs",
         "bug-2659-audit-open-crash.test.cjs",
         "bug-2836-audit-open-summary-uat-drift.test.cjs",

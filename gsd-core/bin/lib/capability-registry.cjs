@@ -7,6 +7,33 @@
  */
 
 const capabilities = {
+  "audit": {
+    "id": "audit",
+    "role": "feature",
+    "title": "Audit",
+    "description": "Open-artifact audit and UAT-gap audit for milestone close gates; exposes `gsd-tools audit-uat` (cross-phase UAT outstanding items) and `gsd-tools audit-open` (structured open-artifact scan across debug, tasks, threads, todos, seeds, UAT, verification, context-questions).",
+    "tier": "full",
+    "requires": [],
+    "skills": [],
+    "agents": [],
+    "config": {},
+    "commands": [
+      {
+        "family": "audit-uat",
+        "module": "audit-command-router.cjs",
+        "router": "routeAuditUat"
+      },
+      {
+        "family": "audit-open",
+        "module": "audit-command-router.cjs",
+        "router": "routeAuditOpen"
+      }
+    ],
+    "hooks": [],
+    "steps": [],
+    "contributions": [],
+    "gates": []
+  },
   "graphify": {
     "id": "graphify",
     "role": "feature",
@@ -269,6 +296,16 @@ const configSchema = {
 const runtimes = {};
 
 const commandFamilies = {
+  "audit-open": {
+    "capId": "audit",
+    "module": "audit-command-router.cjs",
+    "router": "routeAuditOpen"
+  },
+  "audit-uat": {
+    "capId": "audit",
+    "module": "audit-command-router.cjs",
+    "router": "routeAuditUat"
+  },
   "graphify": {
     "capId": "graphify",
     "module": "graphify-command-router.cjs",
@@ -302,6 +339,7 @@ const profileMembership = {
 };
 
 const _requiresGraph = {
+  "audit": [],
   "graphify": [],
   "ui": []
 };

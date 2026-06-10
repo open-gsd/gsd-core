@@ -370,7 +370,7 @@ The `gsd-planner` agent is decomposed into a core agent plus reference modules t
 
 ---
 
-## CLI Modules (103 shipped)
+## CLI Modules (104 shipped)
 
 Full listing: `gsd-core/bin/lib/*.cjs`.
 
@@ -380,6 +380,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `adr-parser.cjs` | ADR decision parser for plan-phase ingest express path; normalizes section synonyms, parses status/decision/scope fences, and enforces status rejection gates |
 | `agent-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools agent` |
 | `artifacts.cjs` | Canonical artifact registry — known `.planning/` root file names; used by `gsd-health` W019 lint |
+| `audit-command-router.cjs` | ADR-959 capability command router for `gsd-tools audit-uat` and `gsd-tools audit-open` — extracted from hardcoded cases in `gsd-tools.cjs`; dispatches to `uat.cjs:cmdAuditUat` and `audit.cjs:{auditOpenArtifacts,formatAuditReport}`; phase 4d-impl-3 |
 | `audit.cjs` | Audit dispatch, audit open sessions, audit storage helpers |
 | `capability-registry.cjs` | Generated central Capability Registry — role-partitioned index of all co-located capability declarations (`capabilities/<id>/capability.json`); emitted by `scripts/gen-capability-registry.cjs --write` (ADR-894 §5) |
 | `capability-state.cjs` | Unified capability-state resolver (ADR-857 phase 4b) — composes install profile, runtime surface, and config activation into one per-capability view; exports pure `resolveCapabilityState` + I/O handler `cmdCapabilityState`; command surface: `gsd-tools capability state [--config-dir <path>]` emitting `{ runtimeConfigDir, capabilities[] }` |

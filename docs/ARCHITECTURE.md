@@ -338,7 +338,7 @@ Agents always return a `RESEARCH.md` path, never raw fetched content. Context di
 
 ### CLI Tools (`gsd-core/bin/`)
 
-Node.js CLI utility (`gsd-tools.cjs`) with domain modules split across `gsd-core/bin/lib/` (see [`docs/INVENTORY.md`](INVENTORY.md#cli-modules-33-shipped) for the authoritative roster):
+Node.js CLI utility (`gsd-tools.cjs`) with domain modules split across `gsd-core/bin/lib/` (see [`docs/INVENTORY.md`](INVENTORY.md#cli-modules-104-shipped) for the authoritative roster):
 
 
 | Module                 | Responsibility                                                                                      |
@@ -376,6 +376,7 @@ Node.js CLI utility (`gsd-tools.cjs`) with domain modules split across `gsd-core
 | `loop-resolver.cjs`        | Loop Extension Point resolver — ADR-857 phase 3c registry-consuming query; filters `byLoopPoint` by config activation, renders active hooks as markdown, emits `{ point, activeHooks, rendered }` envelope; `gsd-tools loop render-hooks <point>` |
 | `capability-state.cjs`     | Unified capability-state resolver — ADR-857 phase 4b; composes install profile, runtime surface, and config activation into one per-capability view; pure `resolveCapabilityState` + I/O `cmdCapabilityState`; `gsd-tools capability state [--config-dir <path>]` |
 | `graphify-command-router.cjs` | ADR-959 capability command router — first real capability command cutover (phase 4d-impl-2); extracted from the `case 'graphify':` arm in `gsd-tools.cjs`; dispatches build/query/status/diff subcommands; discovered via `commandFamilies` in the capability registry |
+| `audit-command-router.cjs` | ADR-959 capability command router (phase 4d-impl-3); extracted from the `case 'audit-uat':` and `case 'audit-open':` arms in `gsd-tools.cjs`; `routeAuditUat` → `uat.cjs:cmdAuditUat`, `routeAuditOpen` → `audit.cjs:{auditOpenArtifacts,formatAuditReport}`; discovered via `commandFamilies` in the capability registry |
 
 
 ---

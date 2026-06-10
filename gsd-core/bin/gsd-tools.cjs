@@ -1180,27 +1180,6 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       break;
     }
 
-    case 'audit-uat': {
-      const uat = require('./lib/uat.cjs');
-      uat.cmdAuditUat(cwd, raw);
-      break;
-    }
-
-    case 'audit-open': {
-      const { auditOpenArtifacts, formatAuditReport } = require('./lib/audit.cjs');
-      const wantJson = args.includes('--json');
-      const result = auditOpenArtifacts(cwd);
-      if (wantJson) {
-        // core.output JSON-stringifies its first arg; pass the object directly.
-        core.output(result, raw);
-      } else {
-        // Human-readable report must bypass JSON encoding — use the rawValue
-        // form (third arg) which core.output emits verbatim.
-        core.output(null, true, formatAuditReport(result));
-      }
-      break;
-    }
-
     case 'uat': {
       const subcommand = args[1];
       const uat = require('./lib/uat.cjs');

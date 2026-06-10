@@ -269,6 +269,7 @@
       "adr-parser.cjs",
       "agent-command-router.cjs",
       "artifacts.cjs",
+      "audit-command-router.cjs",
       "audit.cjs",
       "capability-registry.cjs",
       "capability-state.cjs",
