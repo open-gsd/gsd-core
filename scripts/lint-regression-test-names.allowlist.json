@@ -247,6 +247,7 @@
   "bug-730-milestone-phase-details-scope.test.cjs",
   "bug-782-cline-skills-emission.test.cjs",
   "bug-783-kilo-global-skills-base.test.cjs",
+  "bug-851-codex-quick-adapter-agent-type-fallback.test.cjs",
   "bug-853-bg-dispatch-runtime-gating.test.cjs",
   "bug-866-profile-pipeline-temp-root.test.cjs",
   "bug-891-non-claude-runtime-home-fallback.test.cjs",
@@ -255,5 +256,8 @@
   "bug-924-claude-flat-skill-layout.test.cjs",
   "bug-925-context-monitor-hook-event-name.test.cjs",
   "bug-936-no-nested-spawner-wrap.test.cjs",
-  "bug-941-managed-hooks-registry-manifest.test.cjs"
+  "bug-941-managed-hooks-registry-manifest.test.cjs",
+  "bug-947-hermes-gsd-prefix.test.cjs",
+  "bug-948-state-noop-write-guard.test.cjs",
+  "bug-950-quick-summary-status-complete.test.cjs"
 ]
