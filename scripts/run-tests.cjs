@@ -43,14 +43,15 @@ const SUITES = ['all', 'unit', 'integration', 'install', 'security', 'slow'];
 // Common case: fast incremental no-op. Stale/deleted-output case: detected by
 // the cheap existsSync loop and force-rebuilt. Paths resolve from __dirname so
 // it works regardless of GSD_TEST_DIR / temp-dir cwd.
-function ensureBuiltArtifacts() {
+function ensureBuiltArtifacts(overrides = {}) {
   const { existsSync, readdirSync, statSync, unlinkSync } = require('fs');
-  const root = join(__dirname, '..');
-  const srcDir = join(root, 'src');
-  const outDir = join(root, 'gsd-core', 'bin', 'lib');
-  const tsBuildInfoPath = join(root, 'gsd-core', 'bin', 'tsconfig.build.tsbuildinfo');
+  const root = overrides.root || join(__dirname, '..');
+  const srcDir = overrides.srcDir || join(root, 'src');
+  const outDir = overrides.outDir || join(root, 'gsd-core', 'bin', 'lib');
+  const tsBuildInfoPath = overrides.tsBuildInfoPath || join(root, 'tsconfig.build.tsbuildinfo');
+  const tsconfigPath = overrides.tsconfigPath || join(root, 'tsconfig.build.json');
   const tscBin = require.resolve('typescript/bin/tsc');
-  const tscArgs = [tscBin, '-p', join(root, 'tsconfig.build.json')];
+  const tscArgs = [tscBin, '-p', tsconfigPath];
 
   // Build the 1:1 map of expected output paths from src/*.cts sources.
   // Excludes *.d.cts (declaration-only files that produce no output).
@@ -75,6 +76,13 @@ function ensureBuiltArtifacts() {
   function checkMissingOutputs(expectedPaths) {
     return expectedPaths.filter(p => !existsSync(p) || statSync(p).size === 0);
   }
+
+  // #996 placed the tsbuildinfo inside gsd-core/bin/ (a copied/shipped tree), which
+  // raced install-test copies. It now lives at the repo root. Best-effort purge any
+  // stale bin-local copy so persistent workspaces/mirrors self-heal (no-op on a temp
+  // override root or a clean checkout).
+  const legacyTsBuildInfo = join(root, 'gsd-core', 'bin', 'tsconfig.build.tsbuildinfo');
+  try { if (existsSync(legacyTsBuildInfo)) unlinkSync(legacyTsBuildInfo); } catch { /* best-effort */ }
 
   // Step 1: incremental build (fast no-op when sources unchanged).
   execFileSync(process.execPath, tscArgs, { cwd: root, stdio: 'inherit' });

@@ -39,6 +39,47 @@ const { cleanup } = require('./helpers.cjs');
 
 describe('bug #969 A — ensureBuiltArtifacts rebuilds stale artifacts', () => {
   /**
+   * Helper: create a self-contained temp TypeScript project with two source files
+   * (sentinelmod.cts and targetmod.cts) and a tsconfig that emits to <tmp>/out.
+   * Returns { tmp, overrides, sentinelOut, targetOut, tsBuildInfoPath }.
+   *
+   * HERMETIC: all destructive tests use this helper. They NEVER touch the real
+   * gsd-core/bin/lib/*.cjs or the real tsbuildinfo. (Regression from #996 fixed here.)
+   */
+  function makeTempProject() {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-bug969-'));
+    const srcDir = path.join(tmp, 'src');
+    const outDir = path.join(tmp, 'out');
+    const tsBuildInfoPath = path.join(outDir, '.tsbuildinfo');
+    const tsconfigPath = path.join(tmp, 'tsconfig.build.json');
+
+    fs.mkdirSync(srcDir, { recursive: true });
+    fs.mkdirSync(outDir, { recursive: true });
+
+    fs.writeFileSync(path.join(srcDir, 'sentinelmod.cts'), 'export const sentinelValue = 1;\n');
+    fs.writeFileSync(path.join(srcDir, 'targetmod.cts'), 'export const targetValue = 2;\n');
+
+    fs.writeFileSync(tsconfigPath, JSON.stringify({
+      compilerOptions: {
+        rootDir: 'src',
+        outDir: 'out',
+        module: 'commonjs',
+        target: 'es2022',
+        esModuleInterop: true,
+        noEmitOnError: true,
+        incremental: true,
+        tsBuildInfoFile: 'out/.tsbuildinfo',
+      },
+      include: ['src/**/*.cts'],
+    }, null, 2));
+
+    const overrides = { root: tmp, srcDir, outDir, tsBuildInfoPath, tsconfigPath };
+    const sentinelOut = path.join(outDir, 'sentinelmod.cjs');
+    const targetOut = path.join(outDir, 'targetmod.cjs');
+    return { tmp, overrides, sentinelOut, targetOut, tsBuildInfoPath };
+  }
+
+  /**
    * FAIL-BEFORE (origin/next behavior):
    *   The old code contained `if (existsSync(sentinel)) return;`. When the
    *   sentinel (semver-compare.cjs) was present, the function returned early
@@ -50,72 +91,56 @@ describe('bug #969 A — ensureBuiltArtifacts rebuilds stale artifacts', () => {
    *   the artifact would remain absent. On the fix, tsc runs unconditionally
    *   and recreates it.
    *
-   *   NOTE: this case simulates the "fresh CI checkout" scenario — no tsbuildinfo
-   *   present. With "incremental": true the tsbuildinfo had to be absent too (or
-   *   sources modified) to force a full emit; with the non-incremental build, tsc
-   *   always re-emits regardless, so we only need to delete the target artifact.
-   *   We also delete the tsbuildinfo here (if present) to keep the test hermetic.
-   *
    * PASS-AFTER (fix):
    *   The sentinel guard is removed. ensureBuiltArtifacts() always invokes tsc.
    *   With no tsbuildinfo present (clean state), tsc performs a full emit and
    *   recreates all .cjs outputs including the deleted non-sentinel artifact.
+   *
+   * HERMETIC: this test operates on a self-contained temp project. It NEVER
+   * touches gsd-core/bin/lib/core.cjs or the real tsbuildinfo. (Fixed from #996.)
    */
   test('rebuilds a non-sentinel artifact (with no tsbuildinfo) even when sentinel exists', () => {
-    const root = path.join(__dirname, '..');
-    const sentinelPath = path.join(root, 'gsd-core', 'bin', 'lib', 'semver-compare.cjs');
-    // Pick a second built artifact that is NOT the sentinel.
-    const targetPath = path.join(root, 'gsd-core', 'bin', 'lib', 'core.cjs');
-    // tsbuildinfo must also be absent to force a full (non-incremental) re-emit.
-    const tsBuildInfoPath = path.join(root, 'gsd-core', 'bin', 'tsconfig.build.tsbuildinfo');
-
-    // Pre-condition: both files must already exist (built). If not, skip so
-    // we don't break on a worktree that hasn't been built yet (CI pre-build).
-    if (!fs.existsSync(sentinelPath) || !fs.existsSync(targetPath)) {
-      // Not a test failure — just skip the behavioral assertion because the
-      // build hasn't run yet. The unconditional build will handle this path.
-      return;
-    }
-
-    // Snapshot originals so we can always restore after the test.
-    const originalTarget = fs.readFileSync(targetPath, 'utf-8');
-    const originalTsBuildInfo = fs.existsSync(tsBuildInfoPath)
-      ? fs.readFileSync(tsBuildInfoPath, 'utf-8')
-      : null;
-
+    const { tmp, overrides, sentinelOut, targetOut, tsBuildInfoPath } = makeTempProject();
     try {
-      // Simulate: fresh CI checkout — target artifact stale/missing, no tsbuildinfo.
-      fs.unlinkSync(targetPath);
+      // Initial build — both outputs must appear.
+      ensureBuiltArtifacts(overrides);
+      assert.ok(fs.existsSync(sentinelOut), 'initial build: sentinelmod.cjs must exist');
+      assert.ok(fs.existsSync(targetOut), 'initial build: targetmod.cjs must exist');
+
+      // Simulate: fresh CI checkout — target artifact missing, no tsbuildinfo.
+      fs.unlinkSync(targetOut);
       if (fs.existsSync(tsBuildInfoPath)) fs.unlinkSync(tsBuildInfoPath);
 
-      assert.ok(!fs.existsSync(targetPath), 'pre-condition: target must be absent');
-      assert.ok(fs.existsSync(sentinelPath), 'pre-condition: sentinel must be present');
+      assert.ok(!fs.existsSync(targetOut), 'pre-condition: targetmod.cjs must be absent');
+      assert.ok(fs.existsSync(sentinelOut), 'pre-condition: sentinelmod.cjs must still be present');
 
       // Under the OLD code this returned immediately (sentinel present → return).
       // Under the NEW code this calls tsc unconditionally → full emit → recreated.
-      ensureBuiltArtifacts();
+      ensureBuiltArtifacts(overrides);
 
       assert.ok(
-        fs.existsSync(targetPath),
-        `ensureBuiltArtifacts must recreate ${path.basename(targetPath)} ` +
-        `even when sentinel exists (sentinel-short-circuit was removed in fix #969)`
+        fs.existsSync(targetOut),
+        'ensureBuiltArtifacts must recreate targetmod.cjs even when sentinelmod.cjs ' +
+        'exists (sentinel-short-circuit was removed in fix #969)'
       );
     } finally {
-      // Always restore state so other tests see a valid build.
-      if (!fs.existsSync(targetPath)) {
-        fs.writeFileSync(targetPath, originalTarget);
-      }
-      if (originalTsBuildInfo !== null && !fs.existsSync(tsBuildInfoPath)) {
-        fs.writeFileSync(tsBuildInfoPath, originalTsBuildInfo);
-      }
+      cleanup(tmp);
     }
   });
 
+  /**
+   * PASS-AFTER: the unconditional build emits the expected output (sentinelmod.cjs).
+   * Uses the temp project helper so this test is fully hermetic — it never touches
+   * the real gsd-core/bin/lib tree.
+   */
   test('sentinel (semver-compare.cjs) still exists after unconditional build', () => {
-    const root = path.join(__dirname, '..');
-    const sentinelPath = path.join(root, 'gsd-core', 'bin', 'lib', 'semver-compare.cjs');
-    ensureBuiltArtifacts();
-    assert.ok(fs.existsSync(sentinelPath), 'sentinel must exist after ensureBuiltArtifacts');
+    const { tmp, overrides, sentinelOut } = makeTempProject();
+    try {
+      ensureBuiltArtifacts(overrides);
+      assert.ok(fs.existsSync(sentinelOut), 'sentinel output (sentinelmod.cjs) must exist after ensureBuiltArtifacts');
+    } finally {
+      cleanup(tmp);
+    }
   });
 
   /**
@@ -130,31 +155,18 @@ describe('bug #969 A — ensureBuiltArtifacts rebuilds stale artifacts', () => {
    *     2. A stale tsbuildinfo is present (from that same branch)
    *     3. ensureBuiltArtifacts() calls tsc (incremental)
    *     4. tsc sees "sources unchanged vs tsbuildinfo" → no-ops → stale .cjs served
-   *   With "incremental": true this test would FAIL because core.cjs remains absent.
+   *   With "incremental": true this test would FAIL because targetmod.cjs remains absent.
    *
-   * PASS-AFTER (incremental removed — non-incremental full build):
-   *   tsc always re-emits every output regardless of tsbuildinfo state. Even if a
-   *   stale tsbuildinfo is present on disk, the non-incremental build overwrites all
-   *   outputs from scratch. The deleted core.cjs is always regenerated.
+   * PASS-AFTER (step-3 unlink+clean-reemit logic):
+   *   When a missing/zero-bytes output is detected after the incremental pass,
+   *   ensureBuiltArtifacts() unlinks the tsbuildinfo and runs tsc a second time
+   *   (clean re-emit). The stale/missing output is always regenerated.
+   *
+   * HERMETIC: this test operates on a self-contained temp project. It NEVER
+   * touches gsd-core/bin/lib/core.cjs or the real tsbuildinfo. (Fixed from #996.)
    */
   test('PERSISTENT-MIRROR: rebuilds stale output even when tsbuildinfo is present (non-incremental is authoritative)', () => {
-    const root = path.join(__dirname, '..');
-    const targetPath = path.join(root, 'gsd-core', 'bin', 'lib', 'core.cjs');
-    const tsBuildInfoPath = path.join(root, 'gsd-core', 'bin', 'tsconfig.build.tsbuildinfo');
-
-    // Pre-condition: target must already exist from a prior build.
-    if (!fs.existsSync(targetPath)) {
-      // Worktree hasn't been built yet — skip; the unconditional build will handle it.
-      return;
-    }
-
-    const originalTarget = fs.readFileSync(targetPath, 'utf-8');
-    // Inject a synthetic stale tsbuildinfo to simulate the persistent-mirror state
-    // (a prior branch left a tsbuildinfo from its own incremental build on disk).
-    const hadRealTsBuildInfo = fs.existsSync(tsBuildInfoPath);
-    const originalTsBuildInfo = hadRealTsBuildInfo
-      ? fs.readFileSync(tsBuildInfoPath, 'utf-8')
-      : null;
+    const { tmp, overrides, targetOut, tsBuildInfoPath } = makeTempProject();
     const STALE_TSBUILDINFO = JSON.stringify({
       program: { fileNames: [], options: { incremental: true } },
       version: '5.0.0',
@@ -162,46 +174,43 @@ describe('bug #969 A — ensureBuiltArtifacts rebuilds stale artifacts', () => {
     });
 
     try {
+      // Initial build to populate outputs.
+      ensureBuiltArtifacts(overrides);
+      assert.ok(fs.existsSync(targetOut), 'initial build: targetmod.cjs must exist');
+
       // Inject a stale tsbuildinfo (mirrors: old branch rsync'd state onto workspace).
       fs.writeFileSync(tsBuildInfoPath, STALE_TSBUILDINFO);
       // Delete the output .cjs (mirrors: stale/missing output on the persistent mirror).
-      fs.unlinkSync(targetPath);
+      fs.unlinkSync(targetOut);
 
-      assert.ok(!fs.existsSync(targetPath), 'pre-condition: target must be absent');
+      assert.ok(!fs.existsSync(targetOut), 'pre-condition: targetmod.cjs must be absent');
       assert.ok(fs.existsSync(tsBuildInfoPath), 'pre-condition: tsbuildinfo must be present');
 
-      // FAIL-BEFORE (incremental: true): tsc would read the stale tsbuildinfo, see
-      // "sources unchanged", and skip re-emitting core.cjs → it would remain absent.
+      // FAIL-BEFORE (incremental: true, no step-3): tsc would read the stale
+      // tsbuildinfo, see "sources unchanged", and skip re-emitting targetmod.cjs
+      // → it would remain absent.
       //
-      // PASS-AFTER (non-incremental): tsc ignores the tsbuildinfo and does a full
-      // emit → core.cjs is regenerated unconditionally.
-      ensureBuiltArtifacts();
+      // PASS-AFTER (step-3 unlink+clean-reemit): missing output detected after
+      // incremental pass → tsbuildinfo unlinked → tsc runs again → targetmod.cjs
+      // is regenerated unconditionally.
+      ensureBuiltArtifacts(overrides);
 
       assert.ok(
-        fs.existsSync(targetPath),
-        `ensureBuiltArtifacts must regenerate ${path.basename(targetPath)} ` +
-        `even when a stale tsbuildinfo is present on disk ` +
-        `(persistent-mirror scenario — incremental:true would have no-op'd here)`
+        fs.existsSync(targetOut),
+        'ensureBuiltArtifacts must regenerate targetmod.cjs even when a stale ' +
+        'tsbuildinfo is present on disk (persistent-mirror scenario — ' +
+        'incremental:true alone would have no-op\'d here)'
       );
 
-      // Verify the regenerated file is valid JS (non-empty, parseable require target).
-      const regenerated = fs.readFileSync(targetPath, 'utf-8');
-      assert.ok(regenerated.length > 100, 'regenerated core.cjs must be non-trivially non-empty');
+      // Verify the regenerated file is valid JS.
+      const regenerated = fs.readFileSync(targetOut, 'utf-8');
+      assert.ok(regenerated.length > 0, 'regenerated targetmod.cjs must be non-empty');
       assert.ok(
-        regenerated.includes('use strict') || regenerated.includes('exports.'),
-        'regenerated core.cjs must look like a valid CommonJS module'
+        regenerated.includes('exports.') || regenerated.includes('"use strict"'),
+        'regenerated targetmod.cjs must look like a valid CommonJS module'
       );
     } finally {
-      // Always restore state so subsequent tests see a valid build.
-      if (!fs.existsSync(targetPath)) {
-        fs.writeFileSync(targetPath, originalTarget);
-      }
-      // Restore the real tsbuildinfo if one existed, otherwise remove the synthetic one.
-      if (originalTsBuildInfo !== null) {
-        fs.writeFileSync(tsBuildInfoPath, originalTsBuildInfo);
-      } else if (fs.existsSync(tsBuildInfoPath)) {
-        fs.unlinkSync(tsBuildInfoPath);
-      }
+      cleanup(tmp);
     }
   });
 });

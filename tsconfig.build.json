@@ -16,7 +16,7 @@
     "noEmitOnError": true,
     "skipLibCheck": true,
     "incremental": true,
-    "tsBuildInfoFile": "gsd-core/bin/tsconfig.build.tsbuildinfo"
+    "tsBuildInfoFile": "tsconfig.build.tsbuildinfo"
   },
   "include": ["src/**/*.cts"]
 }
