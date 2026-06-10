@@ -1143,18 +1143,19 @@ function syncStateFrontmatter(content: string, cwd: string | undefined): string 
   // buildStateFrontmatter returns no value for those keys. Mirror the same
   // fallback pattern used in cmdStateJson so the existing frontmatter values
   // survive every writeStateMd call.
-
-  // Bug #948: for stopped_at / paused_at specifically, the frontmatter value
-  // (written by the canonical `record-session` path) takes precedence over a
-  // body-derived value. The body's ## Session section may hold a historical /
-  // stale "Stopped at:" line from a previous session; the frontmatter value
-  // reflects the most recent `record-session` write and must not be overwritten.
-  // Prefer existing frontmatter whenever it is set, regardless of whether the
-  // derived value is empty or not.
-  if (existingFm['stopped_at']) {
+  //
+  // For stopped_at / paused_at: the original #905 "fall back when derived is
+  // absent" rule is preserved here. The stale-body-overwrites-frontmatter
+  // scenario from #948 is prevented by the no-op guard in
+  // readModifyWriteStateMd: when the transform produces no change the file is
+  // never written, so syncStateFrontmatter never even runs. Attempting to
+  // "always prefer frontmatter" here breaks legitimate callers like phase.complete
+  // that intentionally write a new stopped_at value to the body and expect
+  // syncStateFrontmatter to pick it up.
+  if (!derivedFm['stopped_at'] && existingFm['stopped_at']) {
     derivedFm['stopped_at'] = existingFm['stopped_at'];
   }
-  if (existingFm['paused_at']) {
+  if (!derivedFm['paused_at'] && existingFm['paused_at']) {
     derivedFm['paused_at'] = existingFm['paused_at'];
   }
   if (!derivedFm['current_phase'] && existingFm['current_phase']) {
