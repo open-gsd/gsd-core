@@ -713,6 +713,7 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
 
   const now = realClock.nowIso();
   const updated: string[] = [];
+  let sessionCreated = false;
 
   readModifyWriteStateMd(statePath, (content) => {
     // Update Last session / Last Date
@@ -755,11 +756,53 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
       }
     }
 
+    // Bug #944: DWIM auto-create — when the caller supplied --stopped-at or
+    // --resume-file but the body lacks the canonical labels (in-place replace
+    // returned a miss), create a canonical ## Session section so the values are
+    // durably persisted. Mirrors the DWIM pattern used by add-decision,
+    // add-blocker, and record-metric. Never silently drop caller-supplied values.
+    //
+    // Guard: only auto-create when the caller actually supplied a value. When no
+    // --stopped-at / --resume-file are given and the body already had no session
+    // labels (nothing was updated), we return recorded:false — the existing
+    // behaviour for a no-op call that didn't supply any values. Auto-creating a
+    // session scaffold on a no-value call would be unexpected DWIM.
+    const callerSuppliedValues = !!(options.stopped_at || (options.resume_file !== undefined && options.resume_file !== null));
+    const needsStoppedAt = options.stopped_at && !updated.includes('Stopped At');
+    const needsResumeFile = options.resume_file !== undefined && options.resume_file !== null && !updated.includes('Resume File');
+    const needsLastSession = !updated.includes('Last session') && !updated.includes('Last Date');
+
+    if (callerSuppliedValues && (needsStoppedAt || needsResumeFile || needsLastSession)) {
+      const resumeValue = (options.resume_file !== undefined && options.resume_file !== null)
+        ? options.resume_file
+        : 'None';
+      const stoppedAtValue = options.stopped_at || 'None';
+
+      const scaffold = [
+        '',
+        '## Session',
+        '',
+        `**Last session:** ${now}`,
+        `**Stopped at:** ${stoppedAtValue}`,
+        `**Resume file:** ${resumeValue}`,
+        '',
+      ].join('\n');
+
+      content = content.trimEnd() + '\n' + scaffold;
+      sessionCreated = true;
+
+      if (needsLastSession) updated.push('Last session');
+      if (needsStoppedAt) updated.push('Stopped At');
+      if (needsResumeFile) updated.push('Resume File');
+    }
+
     return content;
   }, cwd);
 
   if (updated.length > 0) {
-    output({ recorded: true, updated }, raw, 'true');
+    const result: Record<string, unknown> = { recorded: true, updated };
+    if (sessionCreated) result['created'] = true;
+    output(result, raw, 'true');
   } else {
     output({ recorded: false, reason: 'No session fields found in STATE.md' }, raw, 'false');
   }
@@ -1073,16 +1116,45 @@ function syncStateFrontmatter(content: string, cwd: string | undefined): string 
     derivedFm['status'] = existingFm['status'];
   }
 
+  // Bug #948: preserve `milestone_name` / `milestone` when the derived value
+  // is the template placeholder 'milestone'. getMilestoneInfo returns the
+  // literal string 'milestone' when it cannot match the version from the roadmap
+  // (e.g. no ROADMAP.md, roadmap lacks the heading for the stored version, or the
+  // milestone version read from STATE.md itself triggers the lookup before the
+  // file is fully written). A placeholder must never overwrite a real name that the
+  // existing frontmatter already holds; only an empty derived value falls through
+  // to this guard (the primary #905 preserve path below handles that).
+  const MILESTONE_NAME_PLACEHOLDER = 'milestone';
+  if (
+    derivedFm['milestone_name'] === MILESTONE_NAME_PLACEHOLDER &&
+    existingFm['milestone_name'] &&
+    existingFm['milestone_name'] !== MILESTONE_NAME_PLACEHOLDER
+  ) {
+    derivedFm['milestone_name'] = existingFm['milestone_name'];
+    // Keep the stored milestone version consistent with the preserved name.
+    if (existingFm['milestone']) {
+      derivedFm['milestone'] = existingFm['milestone'];
+    }
+  }
+
   // Bug #905: preserve scalar fields that buildStateFrontmatter can only derive
   // from body annotations (Current Phase:, Current Plan:, etc.). When those
   // annotations are absent — e.g. after an agent or tool rewrites the body —
   // buildStateFrontmatter returns no value for those keys. Mirror the same
   // fallback pattern used in cmdStateJson so the existing frontmatter values
   // survive every writeStateMd call.
-  if (!derivedFm['stopped_at'] && existingFm['stopped_at']) {
+
+  // Bug #948: for stopped_at / paused_at specifically, the frontmatter value
+  // (written by the canonical `record-session` path) takes precedence over a
+  // body-derived value. The body's ## Session section may hold a historical /
+  // stale "Stopped at:" line from a previous session; the frontmatter value
+  // reflects the most recent `record-session` write and must not be overwritten.
+  // Prefer existing frontmatter whenever it is set, regardless of whether the
+  // derived value is empty or not.
+  if (existingFm['stopped_at']) {
     derivedFm['stopped_at'] = existingFm['stopped_at'];
   }
-  if (!derivedFm['paused_at'] && existingFm['paused_at']) {
+  if (existingFm['paused_at']) {
     derivedFm['paused_at'] = existingFm['paused_at'];
   }
   if (!derivedFm['current_phase'] && existingFm['current_phase']) {
@@ -1247,6 +1319,18 @@ function readModifyWriteStateMd(statePath: string, transformFn: (content: string
     // restore it when resync is false.
     const preFm = resync ? null : extractFrontmatter(content) as Record<string, unknown>;
     const modified = transformFn(content);
+
+    // Bug #948: no-op guard — if the transform produced no change, do NOT write
+    // the file. An unconditional write would bump `last_updated`, reset
+    // `milestone_name` to the template placeholder, and resurrect stale
+    // body-derived `stopped_at` values via syncStateFrontmatter. Skipping the
+    // write when content is unchanged is safe because every caller that mutates
+    // content already returns the mutated string, and callers that detect a
+    // no-op explicitly return the original content unchanged.
+    if (modified === content) {
+      return;
+    }
+
     let synced = syncStateFrontmatter(modified, cwd);
 
     if (!resync && preFm && preFm['progress']) {
