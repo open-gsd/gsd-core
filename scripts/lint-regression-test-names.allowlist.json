@@ -261,6 +261,7 @@
   "bug-948-state-noop-write-guard.test.cjs",
   "bug-950-quick-summary-status-complete.test.cjs",
   "bug-967-verify-key-links-strict-paths.test.cjs",
+  "bug-969-test-infra-flake-hardening.test.cjs",
   "bug-974-graphify-budget-missing-value.test.cjs",
   "bug-977-fnm-multishell-path.test.cjs",
   "bug-978-milestone-complete-force.test.cjs",

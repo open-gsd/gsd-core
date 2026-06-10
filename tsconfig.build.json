@@ -14,7 +14,9 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "noEmitOnError": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "incremental": true,
+    "tsBuildInfoFile": "gsd-core/bin/tsconfig.build.tsbuildinfo"
   },
   "include": ["src/**/*.cts"]
 }
