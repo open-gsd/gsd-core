@@ -260,5 +260,6 @@
   "bug-947-hermes-gsd-prefix.test.cjs",
   "bug-948-state-noop-write-guard.test.cjs",
   "bug-950-quick-summary-status-complete.test.cjs",
+  "bug-974-graphify-budget-missing-value.test.cjs",
   "bug-978-milestone-complete-force.test.cjs"
 ]

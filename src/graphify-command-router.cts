@@ -64,7 +64,15 @@ function routeGraphifyCommand({ args, cwd, raw, error, _graphify }: RouteGraphif
       return;
     }
     const budgetIdx = args.indexOf('--budget');
-    const budget = budgetIdx !== -1 ? parseInt(args[budgetIdx + 1], 10) : null;
+    let budget: number | null = null;
+    if (budgetIdx !== -1) {
+      const rawBudget = args[budgetIdx + 1];
+      if (rawBudget === undefined || Number.isNaN(parseInt(rawBudget, 10))) {
+        error('Usage: gsd-tools graphify query <term> [--budget <N>]', ERROR_REASON.USAGE);
+        return;
+      }
+      budget = parseInt(rawBudget, 10);
+    }
     core.output(g.graphifyQuery(cwd, term, { budget }), raw);
   } else if (subcommand === 'status') {
     core.output(g.graphifyStatus(cwd), raw);
