@@ -426,7 +426,11 @@ function resolveRuntimeArtifactLayout(runtime: string, configDir: string, scope:
       break;
 
     case 'hermes':
-      kinds = [skillsKind('skills/gsd', '', 'convertClaudeCommandToClaudeSkill', 'hermes', configDir, true /* #69 nested */)];
+      // #947: restore canonical gsd- prefix — skills land at skills/gsd/gsd-<stem>/SKILL.md
+      // and dispatch as /gsd-<stem>, consistent with every other runtime.
+      // The skills/gsd/ category bucket (introduced by #2841) is retained.
+      // Prior bare-stem layout (prefix='') used by #3664 is reversed here.
+      kinds = [skillsKind('skills/gsd', 'gsd-', 'convertClaudeCommandToClaudeSkill', 'hermes', configDir, true /* #69 nested */)];
       break;
 
     case 'codebuddy':
