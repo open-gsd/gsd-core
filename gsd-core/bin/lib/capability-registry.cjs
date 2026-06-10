@@ -7,6 +7,36 @@
  */
 
 const capabilities = {
+  "graphify": {
+    "id": "graphify",
+    "role": "feature",
+    "title": "Knowledge graph",
+    "description": "Build, query, and inspect the project knowledge graph in `.planning/graphs/`; exposes graphify CLI subcommands (build, query, status, diff) and the /gsd-graphify skill.",
+    "tier": "full",
+    "requires": [],
+    "skills": [
+      "graphify"
+    ],
+    "agents": [],
+    "config": {
+      "graphify.enabled": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable the graphify knowledge-graph command + skill."
+      }
+    },
+    "commands": [
+      {
+        "family": "graphify",
+        "module": "graphify-command-router.cjs",
+        "router": "routeGraphifyCommand"
+      }
+    ],
+    "hooks": [],
+    "steps": [],
+    "contributions": [],
+    "gates": []
+  },
   "ui": {
     "id": "ui",
     "role": "feature",
@@ -86,6 +116,7 @@ const capabilities = {
 };
 
 const bySkill = {
+  "graphify": "graphify",
   "ui-phase": "ui",
   "ui-review": "ui"
 };
@@ -202,12 +233,19 @@ const byLoopPoint = {
 };
 
 const configKeys = {
+  "graphify.enabled": "graphify",
   "workflow.ui_phase": "ui",
   "workflow.ui_review": "ui",
   "workflow.ui_safety_gate": "ui"
 };
 
 const configSchema = {
+  "graphify.enabled": {
+    "owner": "graphify",
+    "type": "boolean",
+    "default": false,
+    "description": "Enable the graphify knowledge-graph command + skill."
+  },
   "workflow.ui_phase": {
     "owner": "ui",
     "type": "boolean",
@@ -230,9 +268,18 @@ const configSchema = {
 
 const runtimes = {};
 
-const commandFamilies = {};
+const commandFamilies = {
+  "graphify": {
+    "capId": "graphify",
+    "module": "graphify-command-router.cjs",
+    "router": "routeGraphifyCommand"
+  }
+};
 
 const capabilityClusters = {
+  "graphify": [
+    "graphify"
+  ],
   "ui": [
     "ui-phase",
     "ui-review"
@@ -240,6 +287,12 @@ const capabilityClusters = {
 };
 
 const profileMembership = {
+  "graphify": {
+    "tier": "full",
+    "profiles": [
+      "full"
+    ]
+  },
   "ui": {
     "tier": "full",
     "profiles": [
@@ -249,6 +302,7 @@ const profileMembership = {
 };
 
 const _requiresGraph = {
+  "graphify": [],
   "ui": []
 };
 

@@ -1507,33 +1507,6 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       break;
     }
 
-    // ─── Graphify ──────────────────────────────────────────────────────────
-
-    case 'graphify': {
-      const graphify = require('./lib/graphify.cjs');
-      const subcommand = args[1];
-      if (subcommand === 'query') {
-        const term = args[2];
-        if (!term) error('Usage: gsd-tools graphify query <term>', ERROR_REASON.USAGE);
-        const budgetIdx = args.indexOf('--budget');
-        const budget = budgetIdx !== -1 ? parseInt(args[budgetIdx + 1], 10) : null;
-        core.output(graphify.graphifyQuery(cwd, term, { budget }), raw);
-      } else if (subcommand === 'status') {
-        core.output(graphify.graphifyStatus(cwd), raw);
-      } else if (subcommand === 'diff') {
-        core.output(graphify.graphifyDiff(cwd), raw);
-      } else if (subcommand === 'build') {
-        if (args[2] === 'snapshot') {
-          core.output(graphify.writeSnapshot(cwd), raw);
-        } else {
-          core.output(graphify.graphifyBuild(cwd), raw);
-        }
-      } else {
-        error('Unknown graphify subcommand. Available: build, query, status, diff', ERROR_REASON.SDK_UNKNOWN_COMMAND);
-      }
-      break;
-    }
-
     // ─── Documentation ────────────────────────────────────────────────────
 
     case 'docs-init': {
@@ -2086,7 +2059,8 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       // An unmigrated command still hits its hardcoded `case` above — untouched.
       // A migrated command's `case` is removed at cutover, so it reaches here and
       // dispatchCapabilityCommand routes it to the capability's registered router.
-      // With commandFamilies={} today, this always returns false and is a no-op.
+      // commandFamilies now includes migrated capabilities (e.g. graphify → graphify-command-router.cjs);
+      // this returns true when a registered capability owns the command, false otherwise.
       if (dispatchCapabilityCommand({ command, args, cwd, raw, error })) break;
 
       // #3243: if the caller passed a dotted form (e.g. "foo.bar"), the shim

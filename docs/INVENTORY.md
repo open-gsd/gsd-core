@@ -370,7 +370,7 @@ The `gsd-planner` agent is decomposed into a core agent plus reference modules t
 
 ---
 
-## CLI Modules (102 shipped)
+## CLI Modules (103 shipped)
 
 Full listing: `gsd-core/bin/lib/*.cjs`.
 
@@ -409,6 +409,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `frontmatter.cjs` | YAML frontmatter CRUD operations |
 | `gap-checker.cjs` | Post-planning gap analysis (#2493): unified REQUIREMENTS.md + CONTEXT.md decisions vs PLAN.md coverage report (`gsd-tools gap-analysis`) |
 | `graphify.cjs` | Knowledge-graph build/query/status/diff for `/gsd-graphify` |
+| `graphify-command-router.cjs` | ADR-959 capability command router for `gsd-tools graphify` — dispatches build/query/status/diff subcommands; first real capability command cutover (phase 4d-impl-2) |
 | `gsd2-import.cjs` | External-plan ingest for `/gsd-import --from-gsd2` |
 | `init-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools init` |
 | `init.cjs` | Compound context loading for each workflow type |

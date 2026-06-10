@@ -1,5 +1,5 @@
 {
-  "generated": "2026-06-09",
+  "generated": "2026-06-10",
   "families": {
     "agents": [
       "gsd-advisor-researcher",
@@ -297,6 +297,7 @@
       "federated-config.cjs",
       "frontmatter.cjs",
       "gap-checker.cjs",
+      "graphify-command-router.cjs",
       "graphify.cjs",
       "gsd2-import.cjs",
       "init-command-router.cjs",
