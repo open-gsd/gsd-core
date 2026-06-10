@@ -2975,6 +2975,14 @@ function convertClaudeToWindsurfMarkdown(content) {
   converted = converted.replace(/`CLAUDE\.md`/g, '`.windsurf/rules`');
   converted = converted.replace(/\bCLAUDE\.md\b/g, '.windsurf/rules');
   converted = converted.replace(/\.claude\/skills\//g, '.windsurf/skills/');
+  converted = converted.replace(/\.\/\.claude\//g, './.windsurf/');
+  converted = converted.replace(/\.claude\//g, '.windsurf/');
+  // Bare forms (no trailing slash) — after slash forms to avoid double-rewrite.
+  // Use negative lookahead (?![\w-]) to preserve .claude-plugin and .claudeignore.
+  converted = converted.replace(/~\/\.claude(?![\w-])/g, '~/.windsurf');
+  converted = converted.replace(/\$HOME\/\.claude(?![\w-])/g, '$HOME/.windsurf');
+  // Environment variable name rewrite
+  converted = converted.replace(/\bCLAUDE_CONFIG_DIR\b/g, 'WINDSURF_CONFIG_DIR');
   // Remove Claude Code-specific bug workarounds before brand replacement
   converted = converted.replace(/\*\*Known Claude Code bug \(classifyHandoffIfNeeded\):\*\*[^\n]*\n/g, '');
   converted = converted.replace(/- \*\*classifyHandoffIfNeeded false failure:\*\*[^\n]*\n/g, '');
@@ -3196,6 +3204,12 @@ function convertClaudeToTraeMarkdown(content) {
   converted = converted.replace(/\.claude\/skills\//g, '.trae/skills/');
   converted = converted.replace(/\.\/\.claude\//g, './.trae/');
   converted = converted.replace(/\.claude\//g, '.trae/');
+  // Bare forms (no trailing slash) — after slash forms to avoid double-rewrite.
+  // Use negative lookahead (?![\w-]) to preserve .claude-plugin and .claudeignore.
+  converted = converted.replace(/~\/\.claude(?![\w-])/g, '~/.trae');
+  converted = converted.replace(/\$HOME\/\.claude(?![\w-])/g, '$HOME/.trae');
+  // Environment variable name rewrite
+  converted = converted.replace(/\bCLAUDE_CONFIG_DIR\b/g, 'TRAE_CONFIG_DIR');
   converted = converted.replace(/\*\*Known Claude Code bug \(classifyHandoffIfNeeded\):\*\*[^\n]*\n/g, '');
   converted = converted.replace(/- \*\*classifyHandoffIfNeeded false failure:\*\*[^\n]*\n/g, '');
   converted = converted.replace(/\bClaude Code\b/g, 'Trae');
@@ -7638,6 +7652,11 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix) {
       content = content.replace(/~\/\.claude\//g, pathPrefix);
       content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
       content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
+      // Bare forms (no trailing slash) — use (?![\w-]) instead of \b so that
+      // .claude-plugin / .claudeignore are NOT corrupted (the \b word-boundary
+      // fires between 'e' and '-', which rewrites .claude-plugin → .windsurf-plugin).
+      content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
       content = content.replace(/~\/\.codeium\/windsurf\//g, pathPrefix);
       content = processAttribution(content, getCommitAttribution(runtime));
       break;
