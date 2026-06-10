@@ -173,7 +173,8 @@ Your final response MUST also include this section immediately after the CYCLE_S
 
 ## Current Actionable Non-HIGH Concerns
 [List each unresolved actionable MEDIUM/LOW with a brief description and the PLAN.md change still needed, one per bullet]
-[If none: write exactly 'None.']",
+[If none: write exactly 'None.']
+These two sections MUST be the final content of your response, in this exact order, with no additional "## " headings after them (the source-grounding "Verification coverage" block is appended to REVIEWS.md, not to this return message).",
   mode="auto"
 )
 ```

@@ -88,10 +88,17 @@ describe('plan-review-convergence command source (#2306)', () => {
     );
   });
 
-  test('command declares Agent in allowed-tools (required for spawning sub-agents)', () => {
+  test('command declares Agent in allowed-tools (required for spawning review sub-agents)', () => {
     assert.ok(
       command.includes('- Agent'),
-      'Agent must be in allowed-tools — command spawns isolated agents for planning and reviewing'
+      'Agent must be in allowed-tools — command spawns isolated agents for reviewing'
+    );
+  });
+
+  test('command declares Skill in allowed-tools (required for inline plan-phase invocations)', () => {
+    assert.ok(
+      command.includes('- Skill'),
+      'Skill must be in allowed-tools — command invokes gsd-plan-phase inline via Skill() at depth 0 (#936 fix)'
     );
   });
 
@@ -190,7 +197,7 @@ describe('plan-review-convergence workflow: initial planning gate (#2306)', () =
   test('workflow skips initial planning when plans already exist', () => {
     assert.ok(
       workflow.includes('has_plans') || workflow.includes('plan_count'),
-      'workflow must check whether plans already exist before spawning planning agent'
+      'workflow must check whether plans already exist before running inline planning'
     );
   });
 
@@ -294,17 +301,17 @@ describe('plan-review-convergence workflow: convergence loop (#2306)', () => {
     );
   });
 
-  test('workflow spawns replan agent with --reviews flag', () => {
+  test('workflow invokes inline replan with --reviews flag', () => {
     assert.ok(
       workflow.includes('--reviews'),
-      'replan agent must pass --reviews so gsd-plan-phase incorporates review feedback'
+      'inline replan must pass --reviews so gsd-plan-phase incorporates review feedback'
     );
   });
 
-  test('workflow passes --skip-research to replan agent (research already done)', () => {
+  test('workflow passes --skip-research to inline replan (research already done)', () => {
     assert.ok(
       workflow.includes('--skip-research'),
-      'replan agent must skip research — only initial planning needs research'
+      'inline replan must skip research — only initial planning needs research'
     );
   });
 });
@@ -559,7 +566,7 @@ describe('plan-review-convergence reviews-mode incorporation contract (#724)', (
   test('workflow replans while actionable non-HIGH findings remain', () => {
     assert.ok(
       workflow.includes('Actionable MEDIUM/LOW findings must be incorporated into executable PLAN.md content'),
-      'replan agent prompt must route actionable non-HIGH findings back through plan-phase --reviews (#724)'
+      'inline replan must route actionable non-HIGH findings back through plan-phase --reviews (#724)'
     );
   });
 
@@ -596,6 +603,18 @@ describe('plan-review-convergence reviews-mode incorporation contract (#724)', (
         planChecker.includes('current_actionable=<M>') &&
         planChecker.includes('remains only in REVIEWS.md'),
       'plan checker must validate review incorporation when REVIEWS.md is present (#724)'
+    );
+    // The current_actionable=<M> reference must appear in a prohibition context,
+    // not as an instruction to parse machine-readable fields from REVIEWS.md.
+    // The CYCLE_SUMMARY line exists only in the convergence orchestrator's return message.
+    assert.ok(
+      planChecker.includes('Do NOT look for') || planChecker.includes('do NOT look for'),
+      'plan checker must explicitly prohibit looking for CYCLE_SUMMARY/current_actionable=<M> in REVIEWS.md — those machine-readable fields are only on the orchestrator return message, never in the file'
+    );
+    assert.ok(
+      planChecker.includes('CYCLE_SUMMARY') &&
+        (planChecker.includes('Do NOT look for') || planChecker.includes('do NOT look for')),
+      'CYCLE_SUMMARY must appear in plan-checker only as a prohibited pattern, not as a parsing instruction'
     );
   });
 });

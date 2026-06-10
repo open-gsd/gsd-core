@@ -1283,6 +1283,7 @@ Checker prompt:
 <verification_context>
 **Phase:** {phase_number}
 **Phase Goal:** {goal from ROADMAP}
+**Mode:** {standard | gap_closure | reviews}
 
 <files_to_read>
 - {PHASE_DIR}/*-PLAN.md (Plans to verify)

@@ -205,7 +205,7 @@ See [Package Legitimacy Gate in the User Guide](USER-GUIDE.md#package-legitimacy
 
 ### `/gsd-plan-review-convergence`
 
-Cross-AI plan convergence loop — replan with review feedback until no HIGH concerns remain and no actionable MEDIUM/LOW findings remain outside `PLAN.md`. Runs `plan-phase → review → replan → re-review` cycles (max 3 cycles by default). Spawns isolated agents for planning and review; orchestrator handles loop control, unresolved review counting, stall detection, and escalation.
+Cross-AI plan convergence loop — replan with review feedback until no HIGH concerns remain and no actionable MEDIUM/LOW findings remain outside `PLAN.md`. Runs `plan-phase → review → replan → re-review` cycles (max 3 cycles by default). Plan-phase runs inline (bare Skill at depth 0 so it can spawn gsd-planner/gsd-plan-checker at depth 1); only gsd-review runs in an isolated Agent. Orchestrator handles loop control, unresolved review counting (HIGH + actionable non-HIGH), stall detection, and escalation.
 
 | Argument / Flag | Required | Description |
 |-----------------|----------|-------------|

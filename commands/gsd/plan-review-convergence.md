@@ -9,6 +9,7 @@ allowed-tools:
   - Glob
   - Grep
   - Agent
+  - Skill
   - AskUserQuestion
 requires: [phase, review]
 ---
@@ -17,7 +18,7 @@ requires: [phase, review]
 Cross-AI plan convergence loop — an outer revision gate around gsd-review and gsd-planner.
 Repeatedly: review plans with external AI CLIs → if HIGH or actionable non-HIGH concerns remain → replan with --reviews feedback → re-review. Stops when no unresolved HIGH concerns or actionable MEDIUM/LOW findings remain outside PLAN.md, or when max cycles is reached.
 
-**Flow:** Skill("gsd-plan-phase") → Agent→Skill("gsd-review") → check unresolved review counts → Skill("gsd-plan-phase --reviews") → Agent→Skill("gsd-review") → ... → Converge or escalate
+**Flow:** Skill("gsd-plan-phase") → Agent→Skill("gsd-review") → check unresolved HIGH + actionable non-HIGH → Skill("gsd-plan-phase --reviews") → Agent→Skill("gsd-review") → ... → Converge or escalate
 
 Replaces gsd-plan-phase's internal gsd-plan-checker with external AI reviewers (codex, gemini, etc.). Plan-phase runs **inline** (bare Skill at depth 0) so it can spawn gsd-planner/gsd-plan-checker at depth 1. Review runs inside an isolated Agent (gsd-review is a Bash leaf — no sub-agents needed). Orchestrator only does loop control.
 
