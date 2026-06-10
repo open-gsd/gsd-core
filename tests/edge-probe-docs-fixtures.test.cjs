@@ -1,4 +1,4 @@
-// allow-test-rule: docs-parity
+// allow-test-rule: runtime-contract-is-the-product — the rendered reference/SPEC/ADR vocab surfaces are the runtime contract; this pins their bijection to the code (docs-parity)
 // Asserts the portable reference doc (gsd-core/references/edge-probe.md) keeps its
 // worked-example JSON blocks in sync with the source-of-truth fixture files under
 // gsd-core/references/edge-probe-fixtures/. The fixtures are the canonical data; the
