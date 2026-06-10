@@ -189,6 +189,40 @@ severity: PASS
 description: "Third-party registry 'magic-ui' — Safety Gate shows 'view passed — no flags — 2025-01-15'"
 ```
 
+## Dimension 7: Impeccable Anti-patterns (only when `workflow.impeccable` is `true`)
+
+> Skip this dimension entirely if `workflow.impeccable` is `false` or absent in `.planning/config.json`.
+
+**Question:** Does the UI-SPEC prescribe AI-slop design patterns that will produce a generic, instantly-recognisable AI output?
+
+**BLOCK if:**
+- Color section declares a warm-neutral body background in the cream/sand/paper band (descriptions like "cream", "sand", "paper", "parchment", "ivory", "linen", "bone", or OKLCH/HSL values approximating L>0.84 C<0.06 hue 40-100)
+- Color section declares gradient text as an accent technique (`background-clip: text` + gradient fill)
+- Typography section lists more than 3 font families
+- Typography section declares a display heading letter-spacing tighter than `-0.04em` (e.g. `-0.05em`, `-0.08em`)
+- Typography section declares a display heading clamp() max value larger than 6rem / 96px
+- Design System section explicitly describes glassmorphism as the primary card or container style
+- Copywriting section contains any of these buzzwords: seamless, empower, supercharge, leverage, unleash, transform, world-class, next-generation, cutting-edge, game-changer, mission-critical, enterprise-grade
+
+**FLAG if:**
+- Color section uses warm-tinted neutral descriptions without committing to a saturated brand color strategy
+- No register choice stated (brand vs. product UI) — missing scene sentence or register rationale in the spec
+- Copywriting section has more than one instance of "theater" phrasing (e.g. "productivity theater", "engagement theater")
+
+**Example issues:**
+```yaml
+dimension: 7
+severity: BLOCK
+description: "Color declares 'cream' body background — warm-neutral band is the saturated AI default of 2026"
+fix_hint: "Pick: (a) saturated brand color as body, (b) true off-white at chroma 0, or (c) darker mid-tone tinted toward brand hue"
+```
+```yaml
+dimension: 7
+severity: BLOCK
+description: "Copywriting uses 'seamless' — Impeccable absolute ban on marketing buzzwords"
+fix_hint: "Replace with a specific noun + verb that describes what the feature literally does (e.g. 'connects in one tap' not 'seamless connection')"
+```
+
 </verification_dimensions>
 
 <verdict_format>
@@ -198,12 +232,13 @@ description: "Third-party registry 'magic-ui' — Safety Gate shows 'view passed
 ```
 UI-SPEC Review — Phase {N}
 
-Dimension 1 — Copywriting:     {PASS / FLAG / BLOCK}
-Dimension 2 — Visuals:         {PASS / FLAG / BLOCK}
-Dimension 3 — Color:           {PASS / FLAG / BLOCK}
-Dimension 4 — Typography:      {PASS / FLAG / BLOCK}
-Dimension 5 — Spacing:         {PASS / FLAG / BLOCK}
-Dimension 6 — Registry Safety: {PASS / FLAG / BLOCK}
+Dimension 1 — Copywriting:              {PASS / FLAG / BLOCK}
+Dimension 2 — Visuals:                  {PASS / FLAG / BLOCK}
+Dimension 3 — Color:                    {PASS / FLAG / BLOCK}
+Dimension 4 — Typography:               {PASS / FLAG / BLOCK}
+Dimension 5 — Spacing:                  {PASS / FLAG / BLOCK}
+Dimension 6 — Registry Safety:          {PASS / FLAG / BLOCK}
+Dimension 7 — Impeccable Anti-patterns: {PASS / FLAG / BLOCK / SKIPPED}
 
 Status: {APPROVED / BLOCKED}
 
@@ -238,6 +273,7 @@ If APPROVED: update UI-SPEC.md frontmatter `status: approved` and `reviewed_at: 
 | 4 Typography | {PASS/FLAG} | {brief note} |
 | 5 Spacing | {PASS/FLAG} | {brief note} |
 | 6 Registry Safety | {PASS/FLAG} | {brief note} |
+| 7 Impeccable Anti-patterns | {PASS/FLAG/SKIPPED} | {brief note} |
 
 ### Recommendations
 {If any FLAGs: list each as non-blocking recommendation}
@@ -292,6 +328,7 @@ Verification is complete when:
 
 - [ ] All `<required_reading>` loaded before any action
 - [ ] All 6 dimensions evaluated (none skipped unless config disables)
+- [ ] Dimension 7 evaluated if `workflow.impeccable` is `true`, recorded as SKIPPED if `false`
 - [ ] Each dimension has PASS, FLAG, or BLOCK verdict
 - [ ] BLOCK verdicts have exact fix descriptions
 - [ ] FLAG verdicts have recommendations (non-blocking)
