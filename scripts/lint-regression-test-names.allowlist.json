@@ -263,5 +263,6 @@
   "bug-967-verify-key-links-strict-paths.test.cjs",
   "bug-974-graphify-budget-missing-value.test.cjs",
   "bug-977-fnm-multishell-path.test.cjs",
-  "bug-978-milestone-complete-force.test.cjs"
+  "bug-978-milestone-complete-force.test.cjs",
+  "bug-983-trae-windsurf-claude-path-leak.test.cjs"
 ]
