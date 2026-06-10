@@ -200,6 +200,18 @@ describe('bug #666 — cmdPrSubrepo seam (behavioral)', () => {
       `Got: ${res.error}`
     );
   });
+
+  test('pr-subrepo: path traversal (../escape) is rejected', () => {
+    const res = runGsdTools(
+      ['query', 'pr-subrepo', 'fix: msg', '--repo', '../escape', '--branch', 'some-branch'],
+      rootDir
+    );
+    assert.ok(!res.success, 'Expected failure on path traversal attempt');
+    assert.ok(
+      res.error.includes('unsafe') || res.error.includes('escape'),
+      `Got: ${res.error}`
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
