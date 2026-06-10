@@ -64,6 +64,34 @@ const capabilities = {
     "contributions": [],
     "gates": []
   },
+  "intel": {
+    "id": "intel",
+    "role": "feature",
+    "title": "Codebase intelligence",
+    "description": "Code-intelligence store for codebase querying, diff, snapshot, and API-surface extraction; exposes `gsd-tools intel` subcommands (query, status, update, diff, snapshot, patch-meta, validate, extract-exports, api-surface) and backs `/gsd-map-codebase` and `gsd-intel-updater`.",
+    "tier": "full",
+    "requires": [],
+    "skills": [],
+    "agents": [],
+    "config": {
+      "intel.enabled": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable the intel code-intelligence command."
+      }
+    },
+    "commands": [
+      {
+        "family": "intel",
+        "module": "intel-command-router.cjs",
+        "router": "routeIntelCommand"
+      }
+    ],
+    "hooks": [],
+    "steps": [],
+    "contributions": [],
+    "gates": []
+  },
   "ui": {
     "id": "ui",
     "role": "feature",
@@ -261,6 +289,7 @@ const byLoopPoint = {
 
 const configKeys = {
   "graphify.enabled": "graphify",
+  "intel.enabled": "intel",
   "workflow.ui_phase": "ui",
   "workflow.ui_review": "ui",
   "workflow.ui_safety_gate": "ui"
@@ -272,6 +301,12 @@ const configSchema = {
     "type": "boolean",
     "default": false,
     "description": "Enable the graphify knowledge-graph command + skill."
+  },
+  "intel.enabled": {
+    "owner": "intel",
+    "type": "boolean",
+    "default": false,
+    "description": "Enable the intel code-intelligence command."
   },
   "workflow.ui_phase": {
     "owner": "ui",
@@ -310,6 +345,11 @@ const commandFamilies = {
     "capId": "graphify",
     "module": "graphify-command-router.cjs",
     "router": "routeGraphifyCommand"
+  },
+  "intel": {
+    "capId": "intel",
+    "module": "intel-command-router.cjs",
+    "router": "routeIntelCommand"
   }
 };
 
@@ -341,6 +381,7 @@ const profileMembership = {
 const _requiresGraph = {
   "audit": [],
   "graphify": [],
+  "intel": [],
   "ui": []
 };
 

@@ -1436,56 +1436,6 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       break;
     }
 
-    // ─── Intel ────────────────────────────────────────────────────────────
-
-    case 'intel': {
-      const intel = require('./lib/intel.cjs');
-      const subcommand = args[1];
-      if (subcommand === 'query') {
-        const term = args[2];
-        if (!term) error('Usage: gsd-tools intel query <term>', ERROR_REASON.USAGE);
-        const planningDir = path.join(cwd, '.planning');
-        core.output(intel.intelQuery(term, planningDir), raw);
-      } else if (subcommand === 'status') {
-        const planningDir = path.join(cwd, '.planning');
-        const status = intel.intelStatus(planningDir);
-        if (!raw && status.files) {
-          for (const file of Object.values(status.files)) {
-            if (file.updated_at) {
-              file.updated_at = core.timeAgo(new Date(file.updated_at));
-            }
-          }
-        }
-        core.output(status, raw);
-      } else if (subcommand === 'diff') {
-        const planningDir = path.join(cwd, '.planning');
-        core.output(intel.intelDiff(planningDir), raw);
-      } else if (subcommand === 'snapshot') {
-        const planningDir = path.join(cwd, '.planning');
-        core.output(intel.intelSnapshot(planningDir), raw);
-      } else if (subcommand === 'patch-meta') {
-        const filePath = args[2];
-        if (!filePath) error('Usage: gsd-tools intel patch-meta <file-path>', ERROR_REASON.USAGE);
-        core.output(intel.intelPatchMeta(path.resolve(cwd, filePath)), raw);
-      } else if (subcommand === 'validate') {
-        const planningDir = path.join(cwd, '.planning');
-        core.output(intel.intelValidate(planningDir), raw);
-      } else if (subcommand === 'extract-exports') {
-        const filePath = args[2];
-        if (!filePath) error('Usage: gsd-tools intel extract-exports <file-path>', ERROR_REASON.USAGE);
-        core.output(intel.intelExtractExports(path.resolve(cwd, filePath)), raw);
-      } else if (subcommand === 'update') {
-        const planningDir = path.join(cwd, '.planning');
-        core.output(intel.intelUpdate(planningDir), raw);
-      } else if (subcommand === 'api-surface') {
-        const planningDir = path.join(cwd, '.planning');
-        core.output(intel.intelApiSurface(planningDir), raw);
-      } else {
-        error('Unknown intel subcommand. Available: query, status, update, diff, snapshot, patch-meta, validate, extract-exports, api-surface', ERROR_REASON.SDK_UNKNOWN_COMMAND);
-      }
-      break;
-    }
-
     // ─── Documentation ────────────────────────────────────────────────────
 
     case 'docs-init': {

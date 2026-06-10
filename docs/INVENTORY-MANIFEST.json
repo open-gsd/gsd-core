@@ -307,6 +307,7 @@
       "installer-migration-authoring.cjs",
       "installer-migration-report.cjs",
       "installer-migrations.cjs",
+      "intel-command-router.cjs",
       "intel.cjs",
       "io.cjs",
       "learnings.cjs",

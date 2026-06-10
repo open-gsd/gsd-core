@@ -86,6 +86,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/graphify.cjs',
       'gsd-core/bin/lib/graphify-command-router.cjs',
       'gsd-core/bin/lib/audit-command-router.cjs',
+      'gsd-core/bin/lib/intel-command-router.cjs',
       'gsd-core/bin/lib/install-profiles.cjs',
       'gsd-core/bin/lib/intel.cjs',
       'gsd-core/bin/lib/installer-migrations.cjs',

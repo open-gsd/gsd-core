@@ -39,6 +39,7 @@
       "files": [
         "bug-2351-intel-kilo-layout.test.cjs",
         "bug-3290-intel-updater-layout-block.test.cjs",
+        "intel-command-cutover.test.cjs",
         "intel.test.cjs"
       ],
       "issue": "TBD"

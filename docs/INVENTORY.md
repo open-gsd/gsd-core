@@ -370,7 +370,7 @@ The `gsd-planner` agent is decomposed into a core agent plus reference modules t
 
 ---
 
-## CLI Modules (104 shipped)
+## CLI Modules (105 shipped)
 
 Full listing: `gsd-core/bin/lib/*.cjs`.
 
@@ -419,6 +419,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `installer-migration-report.cjs` | Installer migration report projection and blocked-action guard for install/update integration |
 | `installer-migrations.cjs` | Installer migration planning, artifact classification, install-state persistence, journaled apply, and rollback helpers |
 | `intel.cjs` | Codebase intel store backing `/gsd-map-codebase --query` and `gsd-intel-updater` |
+| `intel-command-router.cjs` | ADR-959 capability command router for `gsd-tools intel` — extracted from the `case 'intel':` arm in `gsd-tools.cjs`; dispatches query/status/diff/snapshot/patch-meta/validate/extract-exports/update/api-surface subcommands; preserves `timeAgo` transform on `status.files[*].updated_at` in non-raw mode; phase 4d-impl-4 (last first-party cutover) |
 | `io.cjs` | CLI I/O primitives — `output`/`error` emission, JSON-error mode, and large-payload temp-file spillover (extracted from `core.cjs`, ADR-857) |
 | `learnings.cjs` | Cross-phase learnings extraction for `/gsd-extract-learnings` |
 | `legacy-cleanup.cjs` | Detect and remove leftover get-shit-done-cc artifacts; exports `planLegacyCleanup` (pure scan) and `applyLegacyCleanup` (thin IO applier) that root out stale files from the old package across every GSD-managed runtime config directory (#607) |
