@@ -789,21 +789,23 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
       const existingSessionHeading = /^## Session\s*$/im.test(content);
 
       if (existingSessionHeading) {
-        // Normalize in place: replace the body of the EXISTING ## Session section
-        // with canonical bold-label lines so the first-match readers see the new
-        // values. The regex captures the heading line then everything up to the
-        // next ## section or end of string.
+        // Normalize in place: replace the ENTIRE BODY of the existing ## Session
+        // section (heading + all content up to the next ## heading or EOF) with
+        // canonical bold-label lines. The negative-lookahead per-line pattern
+        // `(?!^## )[\s\S]` consumes every line that doesn't start with "## ",
+        // which correctly stops at the next section boundary without consuming it.
+        // A trailing blank line is added so the next ## heading keeps its spacing.
         content = content.replace(
-          /(^## Session[ \t]*$)([\s\S]*?)(?=\n^## |\n*$)/im,
-          (_match: string, heading: string) =>
-            [
-              heading,
-              '',
-              `**Last session:** ${now}`,
-              `**Stopped at:** ${stoppedAtValue}`,
-              `**Resume file:** ${resumeValue}`,
-              '',
-            ].join('\n'),
+          /^(## Session[ \t]*\n(?:(?!^## )[\s\S])*)/m,
+          [
+            '## Session',
+            '',
+            `**Last session:** ${now}`,
+            `**Stopped at:** ${stoppedAtValue}`,
+            `**Resume file:** ${resumeValue}`,
+            '',
+            '',
+          ].join('\n'),
         );
       } else {
         // No ## Session heading exists at all — append a new canonical section.
