@@ -77,6 +77,13 @@ function ensureBuiltArtifacts(overrides = {}) {
     return expectedPaths.filter(p => !existsSync(p) || statSync(p).size === 0);
   }
 
+  // #996 placed the tsbuildinfo inside gsd-core/bin/ (a copied/shipped tree), which
+  // raced install-test copies. It now lives at the repo root. Best-effort purge any
+  // stale bin-local copy so persistent workspaces/mirrors self-heal (no-op on a temp
+  // override root or a clean checkout).
+  const legacyTsBuildInfo = join(root, 'gsd-core', 'bin', 'tsconfig.build.tsbuildinfo');
+  try { if (existsSync(legacyTsBuildInfo)) unlinkSync(legacyTsBuildInfo); } catch { /* best-effort */ }
+
   // Step 1: incremental build (fast no-op when sources unchanged).
   execFileSync(process.execPath, tscArgs, { cwd: root, stdio: 'inherit' });
 

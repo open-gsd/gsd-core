@@ -128,11 +128,19 @@ describe('bug #969 A — ensureBuiltArtifacts rebuilds stale artifacts', () => {
     }
   });
 
+  /**
+   * PASS-AFTER: the unconditional build emits the expected output (sentinelmod.cjs).
+   * Uses the temp project helper so this test is fully hermetic — it never touches
+   * the real gsd-core/bin/lib tree.
+   */
   test('sentinel (semver-compare.cjs) still exists after unconditional build', () => {
-    const root = path.join(__dirname, '..');
-    const sentinelPath = path.join(root, 'gsd-core', 'bin', 'lib', 'semver-compare.cjs');
-    ensureBuiltArtifacts();
-    assert.ok(fs.existsSync(sentinelPath), 'sentinel must exist after ensureBuiltArtifacts');
+    const { tmp, overrides, sentinelOut } = makeTempProject();
+    try {
+      ensureBuiltArtifacts(overrides);
+      assert.ok(fs.existsSync(sentinelOut), 'sentinel output (sentinelmod.cjs) must exist after ensureBuiltArtifacts');
+    } finally {
+      cleanup(tmp);
+    }
   });
 
   /**
