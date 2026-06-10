@@ -38,6 +38,12 @@ const {
   readBaseRefFromSettings,
 } = require('../gsd-core/bin/lib/worktree-base-ref.cjs');
 const { resolveRuntimeConfigIntent } = require('../gsd-core/bin/lib/runtime-config-adapter-registry.cjs');
+// Canonical set of hook files shipped to users. Imported here so writeManifest()
+// records exactly the same set that build-hooks.js copies to hooks/dist/, making
+// the manifest and the installed hooks/ dir structurally identical. Avoids the
+// prefix/extension-regex approach that missed managed-hooks-registry.cjs (#941).
+const { HOOKS_TO_COPY: _HOOKS_TO_COPY } = require('../scripts/build-hooks.js');
+const INSTALLED_HOOK_FILES = new Set(_HOOKS_TO_COPY);
 
 /**
  * Runtimes that register hyphen-form `name:` per #2808 AND copy agent bodies
@@ -9605,9 +9611,17 @@ function writeManifest(configDir, runtime = 'claude', options = {}) {
   if (!isCodex && !isCopilot && !isCline && !isKimi) {
     const hooksDir = path.join(configDir, 'hooks');
     if (fs.existsSync(hooksDir)) {
-      for (const file of fs.readdirSync(hooksDir)) {
-        if (file.startsWith('gsd-') && (file.endsWith('.js') || file.endsWith('.sh'))) {
-          manifest.files['hooks/' + file] = fileHash(path.join(hooksDir, file));
+      // Drive from INSTALLED_HOOK_FILES (the canonical HOOKS_TO_COPY set from
+      // scripts/build-hooks.js) rather than a prefix/extension regex, so the
+      // manifest set is structurally identical to the build set. The old regex
+      // `file.startsWith('gsd-') && (file.endsWith('.js') || file.endsWith('.sh'))`
+      // missed managed-hooks-registry.cjs (wrong prefix, .cjs extension), causing
+      // detect-custom-files to flag it as a perpetual false-positive custom file
+      // on every /gsd-update. See #941.
+      for (const hook of INSTALLED_HOOK_FILES) {
+        const hookPath = path.join(hooksDir, hook);
+        if (fs.existsSync(hookPath)) {
+          manifest.files['hooks/' + hook] = fileHash(hookPath);
         }
       }
       // Track hooks/lib/ helpers so saveLocalPatches() can back up user edits
