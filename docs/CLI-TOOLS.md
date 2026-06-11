@@ -118,6 +118,10 @@ node gsd-tools.cjs phase remove <phase> [--force]
 # Mark phase complete, update state + roadmap
 node gsd-tools.cjs phase complete <phase>
 
+# Evaluate HUMAN-UAT results for a phase (markdown-aware; ignores false-positive contexts)
+# Returns JSON: { passed, uat_files[], verification_files[], checks[], blockers[], policy }
+node gsd-tools.cjs phase uat-passed <phase> [--require-verification]
+
 # Index plans with waves and status
 node gsd-tools.cjs phase-plan-index <phase>
 

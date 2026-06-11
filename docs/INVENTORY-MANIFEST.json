@@ -357,6 +357,7 @@
       "surface.cjs",
       "task-command-router.cjs",
       "template.cjs",
+      "uat-predicate.cjs",
       "uat.cjs",
       "ui-safety-gate.cjs",
       "update-context.cjs",

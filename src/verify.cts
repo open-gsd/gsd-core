@@ -150,6 +150,104 @@ function cmdVerifySummary(
   output(result, raw, passed ? 'passed' : 'failed');
 }
 
+/**
+ * Issue #429 — negative-grep comment-text echo gate.
+ * A literal that an acceptance criterion negative-greps for (grep -c 'LIT' file == 0)
+ * must not also appear verbatim inside an <action> body, or the executor's commit-time
+ * verify gate fails on the comment echo rather than a real regression. Conservative:
+ * errors only on a confidently-extracted QUOTED literal; ambiguous (bareword) → warning.
+ */
+function scanNegativeGrepCommentEcho(content: string): { errors: string[]; warnings: string[] } {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  // Normalize newlines; join backslash line-continuations so a verify command wrapped
+  // across lines (grep ... \ <newline> == 0) is still seen as one segment.
+  const text = (content || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/\\\n/g, ' ');
+
+  // 1. Allowlisted literals: <!-- planner-discipline-allow: LIT -->
+  const allow = new Set<string>();
+  const allowRe = /<!--\s*planner-discipline-allow:\s*(.+?)\s*-->/g;
+  let am: RegExpExecArray | null;
+  while ((am = allowRe.exec(text)) !== null) allow.add(am[1]);
+
+  // Zero-equality comparison (the negative grep). The required leading whitespace
+  // before the operator distinguishes a shell comparison (`[ $c == 0 ]`, `... == 0`,
+  // always spaced) from an assignment (`VAR=0`, never spaced) and naturally excludes
+  // `>= 0`, `<= 0`, `!= 0`, `!== 0`, `=== 0`.
+  const zeroCmp = (s: string): boolean =>
+    /\s==?\s*0\b/.test(s) || /-eq\s+0\b/.test(s) || /\bequals\s+0\b/.test(s);
+
+  // A grep invocation using a count flag (-c / -cF / -Fc / --count), capturing the
+  // search pattern (first quoted token, else first bareword) after a run of options.
+  // The options run lets `grep -c -F 'LIT'`, `grep -F -c 'LIT'`, `grep -c -e 'LIT'`
+  // and `grep --count 'LIT'` all resolve to the LIT pattern.
+  const countGrepRe =
+    /grep((?:\s+-{1,2}[A-Za-z][A-Za-z-]*)+)\s+(?:'([^']*)'|"([^"]*)"|([^\s'"|>&;]+))/g;
+  const optsHaveCount = (opts: string): boolean =>
+    /(?:^|\s)-[A-Za-z]*c[A-Za-z]*(?=\s|$)/.test(opts) || /--count\b/.test(opts);
+  // `grep -cv 'pat' == 0` counts NON-matching lines, so == 0 there asserts "all lines
+  // match" — a POSITIVE gate, not our negative gate. Skip inverted greps.
+  const optsHaveInvert = (opts: string): boolean =>
+    /(?:^|\s)-[A-Za-z]*v[A-Za-z]*(?=\s|$)/.test(opts) || /--invert-match\b/.test(opts);
+  // Bareword sanity: a real grep target, not a stray operator/number/flag.
+  const plausibleBare = (s: string): boolean => /[A-Za-z0-9_]/.test(s) && !/^[-=!<>0-9]+$/.test(s);
+
+  // 2. <action> text to scan, with negative-grep COMMAND SPANS removed (only the
+  //    command, not the whole line) so a pasted verify command does not self-flag
+  //    while a prose echo on the same line is still caught.
+  const cmdSpanRe =
+    /grep(?:\s+-{1,2}[A-Za-z][A-Za-z-]*)+\s+(?:'[^']*'|"[^"]*"|[^\s'"|>&;]+)[^\n]*?(?:==|-eq|=)\s*0\b/g;
+  const actionZones: string[] = [];
+  const actionRe = /<action>([\s\S]*?)<\/action>/g;
+  let acm: RegExpExecArray | null;
+  while ((acm = actionRe.exec(text)) !== null) actionZones.push(acm[1]);
+  const scannableActionText = actionZones.map((zone) => zone.replace(cmdSpanRe, ' ')).join('\n');
+
+  // 3. Per shell SEGMENT (split lines on && / ||) extract count-grep literals and
+  //    check echoes. Per-segment splitting keeps a positive gate (`== 1`) from
+  //    poisoning a negative gate (`== 0`) sharing the same physical line.
+  const seenErr = new Set<string>();
+  const seenWarn = new Set<string>();
+  const segments = text.split('\n').flatMap((line) => line.split(/\s*(?:&&|\|\|)\s*/));
+  for (const seg of segments) {
+    if (!/grep(?:\s+-{1,2}[A-Za-z])/.test(seg) || !zeroCmp(seg)) continue;
+    countGrepRe.lastIndex = 0;
+    const quotedLits: string[] = [];
+    const bareLits: string[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = countGrepRe.exec(seg)) !== null) {
+      if (!optsHaveCount(m[1]) || optsHaveInvert(m[1])) continue; // need count, not invert (-cv is positive)
+      if (m[2] !== undefined) quotedLits.push(m[2]);
+      else if (m[3] !== undefined) quotedLits.push(m[3]);
+      else if (m[4] !== undefined && plausibleBare(m[4])) bareLits.push(m[4]);
+    }
+    for (const quoted of quotedLits) {
+      if (!quoted || allow.has(quoted) || seenErr.has(quoted)) continue;
+      if (scannableActionText.includes(quoted)) {
+        seenErr.add(quoted);
+        errors.push(
+          `Plan body contains forbidden literal "${quoted}" in an <action> block, but an acceptance criterion negative-greps for it (grep -c ... == 0). Rephrase the literal by concept, remove it from the plan body, or add <!-- planner-discipline-allow: ${quoted} --> if it must legitimately appear.`,
+        );
+      }
+    }
+    if (quotedLits.length === 0) {
+      for (const bare of bareLits) {
+        if (allow.has(bare) || seenWarn.has(bare)) continue;
+        if (scannableActionText.includes(bare)) {
+          seenWarn.add(bare);
+          warnings.push(
+            `Possible comment-text echo (#429): negative-grep target "${bare}" is unquoted so its literal could not be extracted unambiguously, but it appears in an <action> block. Quote the grep literal and add an allowlist marker if the echo is intended, or rephrase by concept.`,
+          );
+        }
+      }
+    }
+  }
+  return { errors, warnings };
+}
+
 function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): void {
   if (!filePath) {
     error('file path required');
@@ -207,6 +305,10 @@ function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): vo
   if (hasCheckpoints && fm['autonomous'] !== 'false' && String(fm['autonomous']) !== 'false') {
     errors.push('Has checkpoint tasks but autonomous is not false');
   }
+
+  const echoScan = scanNegativeGrepCommentEcho(content);
+  errors.push(...echoScan.errors);
+  warnings.push(...echoScan.warnings);
 
   output(
     {
@@ -1733,6 +1835,7 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
 }
 
 export = {
+  scanNegativeGrepCommentEcho,
   cmdVerifySummary,
   cmdVerifyPlanStructure,
   cmdVerifyPhaseCompleteness,

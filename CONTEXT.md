@@ -201,6 +201,9 @@ The GSD-RESEARCH capability behind an L2-hybrid seam: code owns cache + provider
 - `GSD-RESEARCH.CONTEXT-DISCIPLINE=less-context levers: subagent isolation + compact provider output + fetches-to-disk + cache-returns-digest; API clear_tool_uses/memory tool are the conceptual model, not a Claude Code harness knob`
 - `DEFECT.RESEARCH-PROVIDER-PROSE-DRIFT=provider waterfall duplicated across N researcher agent .md files drifts independently (META.RULE.brief-no-paraphrase); fix-forward=research-provider.cjs single source of truth + generated agents (#657)`
 
+### UAT-Passed Predicate
+Runtime-neutral predicate evaluating `*-UAT.md` / `*-VERIFICATION.md` result fields with markdown-aware parsing that ignores false-positive contexts (frontmatter body, fenced code, HTML comments, blockquotes). Returns `passed: true` only when all required checks pass; supports `--require-verification` to demand at least one VERIFICATION.md file alongside UAT results. Output envelope: `{ passed, uat_files[], verification_files[], checks[], blockers[], policy }`. Source: `gsd-core/bin/lib/uat-predicate.cjs` (generated from `src/uat-predicate.cts`). Wired via `phase uat-passed` alias → `phase-command-router` → `cmdPhaseUatPassed`.
+
 ### MVP Mode
 Phase-level planning mode that frames work as a vertical slice (UI → API → DB) of one user-visible capability instead of horizontal layers. Resolved at workflow init via the precedence chain: `--mvp` CLI flag → ROADMAP.md `**Mode:** mvp` field → `workflow.mvp_mode` config → false. All-or-nothing per phase (PRD #2826 Q1). Surfaced as `MVP_MODE=true|false` to the planner, executor, verifier, and discovery surfaces (progress, stats, graphify). Canonical parser: `roadmap.cjs` `**Mode:**` field; canonical resolution chain documented in `workflows/plan-phase.md`. Concept index: `references/mvp-concepts.md`.
 

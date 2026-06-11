@@ -469,6 +469,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `task-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools task` |
 | `template.cjs` | Template selection and filling with variable substitution |
 | `uat.cjs` | UAT file parsing, verification debt tracking, audit-uat support |
+| `uat-predicate.cjs` | UAT-passed predicate — markdown-aware evaluation of HUMAN-UAT results; returns pass only when all required checks pass; ignores false-positive contexts (frontmatter, fenced code, blockquotes, HTML comments) |
 | `ui-safety-gate.cjs` | Shell-free word-boundary UI token detector (#3706, #3718); reads phase-section text from stdin, exits 0 (UI found) or 1 (no UI); also deployed to `gsd-core/bin/lib/` so the GSD installer ships it to `$RUNTIME_DIR` (#448) |
 | `update-context.cjs` | Pure install-context resolver for `/gsd:update` — runtime/scope/config-dir/version detection (LOCAL/GLOBAL/UNKNOWN) ported from update.md bash; backs `gsd-tools update-context` (#498) |
 | `validate-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools validate` |
