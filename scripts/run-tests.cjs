@@ -319,14 +319,13 @@ function main() {
   // Default concurrency: 4 on Linux/macOS, 2 on Windows.
   //
   // Windows has significantly higher per-subprocess overhead than Linux/macOS:
-  //   - Windows Defender scans each spawned process
-  //   - NTFS has higher file-system latency under concurrent access
-  //   - synckit worker_threads (used by the SDK bridge in gsd-tools.cjs) spawn
-  //     native threads that contend on SharedArrayBuffer + Atomics.wait; under
-  //     Node 24 on Windows, 4-way concurrent gsd-tools invocations (each spawning
-  //     a synckit worker) caused intermittent process crashes with empty stderr —
-  //     a signature of OS-level resource exhaustion killing worker threads before
-  //     they could flush. Reducing to 2 halves the peak concurrent worker count.
+  //   - Windows Defender scans each spawned process on first execution, adding
+  //     latency proportional to the number of concurrent spawns.
+  //   - NTFS has higher file-system latency under concurrent access compared to
+  //     ext4/APFS, which amplifies contention when multiple test chunks run in
+  //     parallel and all read/write the same fixture directories.
+  // Reducing to 2 halves the peak concurrent subprocess count on Windows and
+  // keeps per-chunk wall-clock time well within the 20m CI job cap.
   //
   // Operator override via TEST_CONCURRENCY env var for local debugging.
   const defaultConcurrency = process.platform === 'win32' ? 2 : 4;
@@ -343,7 +342,21 @@ function main() {
   const MAX_CMDLINE_CHARS = process.env.RUN_TESTS_MAX_CMDLINE_CHARS
     ? Number(process.env.RUN_TESTS_MAX_CMDLINE_CHARS)
     : 28000; // headroom below the 32,767 Windows ceiling
-  const FIXED_OVERHEAD = process.execPath.length + '--test'.length + concurrency.length + 8;
+
+  // node:test does not exit until the event loop drains. A unit test that leaks
+  // an open handle (un-terminated Worker, un-killed child_process, ref'd timer)
+  // makes a chunk's `node --test` child hang ~150s on Windows AFTER its last test
+  // prints; two such stalls push the windows full lane past its 20m cap and the
+  // job is CANCELLED with no failed step — a false-negative gate (#1051, recurrence
+  // of #869). --test-force-exit (Node >=22; engines requires >=22.0.0) exits the
+  // runner once all tests finish regardless of lingering handles. The leaking
+  // tests are also fixed at the source; this is the defensive backstop.
+  // RUN_TESTS_NO_FORCE_EXIT=1 disables it (used by the harness regression test to
+  // observe the pre-fix hang).
+  const nodeMajor = Number(process.versions.node.split('.')[0]);
+  const forceExit = nodeMajor >= 22 && !process.env.RUN_TESTS_NO_FORCE_EXIT;
+
+  const FIXED_OVERHEAD = process.execPath.length + '--test'.length + concurrency.length + (forceExit ? '--test-force-exit'.length + 1 : 0) + 8;
   const chunks = [];
   let current = [];
   let currentLen = FIXED_OVERHEAD;
@@ -359,17 +372,45 @@ function main() {
   }
   if (current.length > 0) chunks.push(current);
 
+  // A chunk that still hangs (a leak the backstop somehow misses, or a wedged
+  // subprocess) must fail loudly rather than silently burn the job's wall-clock
+  // budget until the CI runner cancels the whole job. Default 10 min per chunk:
+  // well above a healthy chunk (~4-5 min on the windows lane) but below the 20m
+  // job cap. Operator/test override via RUN_TESTS_CHUNK_TIMEOUT_MS.
+  const chunkTimeoutMs = process.env.RUN_TESTS_CHUNK_TIMEOUT_MS
+    ? Number(process.env.RUN_TESTS_CHUNK_TIMEOUT_MS)
+    : 600000;
+
   let firstFailureExit = 0;
   for (let i = 0; i < chunks.length; i++) {
     if (chunks.length > 1) {
       console.error(`run-tests: chunk ${i + 1}/${chunks.length} — ${chunks[i].length} files`);
     }
     try {
-      execFileSync(process.execPath, ['--test', concurrency, ...chunks[i]], {
-        stdio: 'inherit',
-        env: { ...process.env },
-      });
+      execFileSync(
+        process.execPath,
+        ['--test', ...(forceExit ? ['--test-force-exit'] : []), concurrency, ...chunks[i]],
+        {
+          stdio: 'inherit',
+          env: { ...process.env },
+          timeout: chunkTimeoutMs,
+        },
+      );
     } catch (err) {
+      // When the per-chunk timeout fires, execFileSync kills the child and
+      // surfaces it as err.code === 'ETIMEDOUT' (POSIX) and/or err.killed === true
+      // (platform-dependent). Check both so detection holds on Windows and POSIX.
+      const timedOut = err.killed === true || err.code === 'ETIMEDOUT';
+      if (timedOut) {
+        console.error(
+          `run-tests: chunk ${i + 1}/${chunks.length} exceeded the per-chunk timeout ` +
+            `of ${chunkTimeoutMs}ms and was killed — a test in this chunk is likely leaking ` +
+            `an open handle (un-terminated Worker, un-killed child process, or ref'd timer) ` +
+            `so node --test never exits. Files: ${chunks[i]
+              .map(f => f.split(/[\\/]/).pop())
+              .join(' ')}`,
+        );
+      }
       const code = err.status || 1;
       // Run every chunk so the operator sees all failures in one pass; report
       // the first non-zero exit at the end.

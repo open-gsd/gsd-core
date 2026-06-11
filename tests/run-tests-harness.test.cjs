@@ -315,4 +315,60 @@ test('ambient GSD workstream vars are stripped by the runner', () => {
       );
     });
   });
+
+  describe('per-chunk timeout + force-exit (windows hang guard, #1051)', () => {
+    // A unit test that leaks an open handle (un-terminated Worker, un-killed
+    // child_process, ref'd timer) causes node --test to hang ~150s after its
+    // last test prints. Two such stalls push the windows full lane past its
+    // 20m CI cap and the job is CANCELLED — a false-negative gate. The harness
+    // now adds --test-force-exit (exits once all tests finish) and a per-chunk
+    // timeout (kills a hung child loudly instead of silently burning the budget).
+
+    // Leaky fixture: the test passes immediately, then a ref'd setInterval keeps
+    // the event loop alive so `node --test` hangs unless --test-force-exit is on.
+    const LEAKY_BODY = `const { test } = require('node:test');
+test('passes but leaks a ref-d timer', () => {});
+setInterval(() => {}, 1 << 30);
+`;
+
+    test('a hung chunk hits the per-chunk timeout and fails with a clear message', () => {
+      // Regression proof: pre-fix (no timeout guard) this hung until the OS/CI
+      // killed it; now it fails fast with a diagnostic message.
+      fs.writeFileSync(path.join(tmpDir, 'leaky.test.cjs'), LEAKY_BODY, 'utf8');
+      const r = runHarness(tmpDir, [], {
+        RUN_TESTS_NO_FORCE_EXIT: '1',
+        RUN_TESTS_CHUNK_TIMEOUT_MS: '2000',
+      });
+      assert.notStrictEqual(
+        r.status,
+        0,
+        `expected non-zero exit from timed-out chunk; got status=${r.status}\nSTDERR:\n${r.stderr}`,
+      );
+      assert.match(
+        r.stderr,
+        /exceeded the per-chunk timeout/,
+        `expected timeout diagnostic in stderr; STDERR:\n${r.stderr}`,
+      );
+    });
+
+    test('force-exit lets a chunk with a leaked handle exit cleanly', () => {
+      const nodeMajor = Number(process.versions.node.split('.')[0]);
+      // --test-force-exit was added in Node 22; skip on older engines.
+      if (nodeMajor < 22) {
+        return; // skip — harness test options object not available here; just return
+      }
+      fs.writeFileSync(path.join(tmpDir, 'leaky.test.cjs'), LEAKY_BODY, 'utf8');
+      // force-exit is ON by default (RUN_TESTS_NO_FORCE_EXIT not set).
+      // 30s timeout: if force-exit works the child exits promptly after the test
+      // passes; if force-exit failed, the 30s timeout would fire and status ≠ 0.
+      const r = runHarness(tmpDir, [], {
+        RUN_TESTS_CHUNK_TIMEOUT_MS: '30000',
+      });
+      assert.strictEqual(
+        r.status,
+        0,
+        `expected zero exit with force-exit enabled; got status=${r.status} signal=${r.signal}\nSTDERR:\n${r.stderr}`,
+      );
+    });
+  });
 });

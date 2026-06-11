@@ -202,6 +202,7 @@ describe('#1925 TOCTOU: state commands use readModifyWriteStateMd', () => {
     // ── Spawn both subprocesses ───────────────────────────────────────────────
     // Both start immediately; both block at the barrier until the orchestrator
     // confirms both are ready, then both proceed to contend on the STATE.md lock.
+    const children = [];
     function spawnWrapper(fieldName, fieldValue, readyFile) {
       return new Promise((resolve, reject) => {
         const child = spawn(nodeBin, [wrapperPath], {
@@ -216,8 +217,10 @@ describe('#1925 TOCTOU: state commands use readModifyWriteStateMd', () => {
           },
           stdio: 'pipe',
         });
+        children.push(child);
         let stderr = '';
         child.stderr.on('data', (d) => { stderr += d.toString(); });
+        child.on('error', reject);
         child.on('close', (code) => {
           if (code !== 0) reject(new Error(`wrapper exited ${code}: ${stderr}`));
           else resolve();
@@ -229,16 +232,20 @@ describe('#1925 TOCTOU: state commands use readModifyWriteStateMd', () => {
     const promiseB = spawnWrapper('Current Phase', '02', readyB);
 
     // ── Orchestrate: wait for both ready-signals, then drop the barrier ───────
-    await waitFor(() => fs.existsSync(readyA) && fs.existsSync(readyB), {
-      timeoutMs: 10000,
-      stepMs: 10,
-      message: 'Timed out waiting for both subprocesses to reach barrier',
-    });
-    // Both subprocesses are at the gate — drop the barrier simultaneously.
-    fs.unlinkSync(barrierPath);
+    try {
+      await waitFor(() => fs.existsSync(readyA) && fs.existsSync(readyB), {
+        timeoutMs: 10000,
+        stepMs: 10,
+        message: 'Timed out waiting for both subprocesses to reach barrier',
+      });
+      // Both subprocesses are at the gate — drop the barrier simultaneously.
+      fs.unlinkSync(barrierPath);
 
-    // ── Collect results ───────────────────────────────────────────────────────
-    await Promise.all([promiseA, promiseB]);
+      // ── Collect results ───────────────────────────────────────────────────────
+      await Promise.all([promiseA, promiseB]);
+    } finally {
+      for (const c of children) { try { c.kill(); } catch { /* already exited */ } }
+    }
 
     const content = readStateMd(tmpDir);
     assert.ok(
@@ -335,6 +342,7 @@ describe('#1925 TOCTOU: state commands use readModifyWriteStateMd', () => {
     // ── Spawn both subprocesses ───────────────────────────────────────────────
     // Both start immediately; both block at the barrier until the orchestrator
     // confirms both are ready, then both proceed to contend on the STATE.md lock.
+    const children = [];
     function spawnWrapper(blockerId, readyFile) {
       return new Promise((resolve, reject) => {
         const child = spawn(nodeBin, [wrapperPath], {
@@ -348,8 +356,10 @@ describe('#1925 TOCTOU: state commands use readModifyWriteStateMd', () => {
           },
           stdio: 'pipe',
         });
+        children.push(child);
         let stderr = '';
         child.stderr.on('data', (d) => { stderr += d.toString(); });
+        child.on('error', reject);
         child.on('close', (code) => {
           if (code !== 0) reject(new Error(`wrapper exited ${code}: ${stderr}`));
           else resolve();
@@ -361,16 +371,20 @@ describe('#1925 TOCTOU: state commands use readModifyWriteStateMd', () => {
     const promiseB = spawnWrapper('Waiting for design review', readyB);
 
     // ── Orchestrate: wait for both ready-signals, then drop the barrier ───────
-    await waitFor(() => fs.existsSync(readyA) && fs.existsSync(readyB), {
-      timeoutMs: 10000,
-      stepMs: 10,
-      message: 'Timed out waiting for both subprocesses to reach barrier',
-    });
-    // Both subprocesses are at the gate — drop the barrier simultaneously.
-    fs.unlinkSync(barrierPath);
+    try {
+      await waitFor(() => fs.existsSync(readyA) && fs.existsSync(readyB), {
+        timeoutMs: 10000,
+        stepMs: 10,
+        message: 'Timed out waiting for both subprocesses to reach barrier',
+      });
+      // Both subprocesses are at the gate — drop the barrier simultaneously.
+      fs.unlinkSync(barrierPath);
 
-    // ── Collect results ───────────────────────────────────────────────────────
-    await Promise.all([promiseA, promiseB]);
+      // ── Collect results ───────────────────────────────────────────────────────
+      await Promise.all([promiseA, promiseB]);
+    } finally {
+      for (const c of children) { try { c.kill(); } catch { /* already exited */ } }
+    }
 
     const content = readStateMd(tmpDir);
     assert.ok(
@@ -455,6 +469,7 @@ describe('#1927 config.json: setConfigValue must hold planning lock', () => {
 
     const nodeBin = process.execPath;
 
+    const children = [];
     function spawnWrapper(configKey, configVal, readyFile) {
       return new Promise((resolve, reject) => {
         const child = spawn(nodeBin, [wrapperPath], {
@@ -469,8 +484,10 @@ describe('#1927 config.json: setConfigValue must hold planning lock', () => {
           },
           stdio: 'pipe',
         });
+        children.push(child);
         let stderr = '';
         child.stderr.on('data', (d) => { stderr += d.toString(); });
+        child.on('error', reject);
         child.on('close', (code) => {
           if (code !== 0) reject(new Error(`wrapper exited ${code}: ${stderr}`));
           else resolve();
@@ -482,14 +499,18 @@ describe('#1927 config.json: setConfigValue must hold planning lock', () => {
     const promiseB = spawnWrapper('workflow.research', 'false', readyB);
 
     // ── Wait for both to reach barrier, then release ──────────────────────────
-    await waitFor(() => fs.existsSync(readyA) && fs.existsSync(readyB), {
-      timeoutMs: 10000,
-      stepMs: 10,
-      message: 'Timed out waiting for both config-set subprocesses to reach barrier',
-    });
-    fs.unlinkSync(barrierPath);
+    try {
+      await waitFor(() => fs.existsSync(readyA) && fs.existsSync(readyB), {
+        timeoutMs: 10000,
+        stepMs: 10,
+        message: 'Timed out waiting for both config-set subprocesses to reach barrier',
+      });
+      fs.unlinkSync(barrierPath);
 
-    await Promise.all([promiseA, promiseB]);
+      await Promise.all([promiseA, promiseB]);
+    } finally {
+      for (const c of children) { try { c.kill(); } catch { /* already exited */ } }
+    }
 
     const config = readConfig(tmpDir);
     assert.strictEqual(
