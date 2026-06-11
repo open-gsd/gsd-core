@@ -185,7 +185,7 @@ interface IntelQueryResult {
 
 /**
  * Query intel files for a search term.
- * Searches across all JSON intel files (keys and values) and arch.md (text lines).
+ * Searches across all JSON intel files in INTEL_FILES (keys and values), including arch-decisions.json (parsed as JSON, not as text).
  */
 function intelQuery(term: string, planningDir: string): IntelQueryResult | DisabledResponse {
   if (!isIntelEnabled(planningDir)) return disabledResponse();
@@ -417,7 +417,7 @@ function intelValidate(planningDir: string): IntelValidateResult | DisabledRespo
 
     // Validate entries are objects with expected fields
     if (data.entries && typeof data.entries === 'object') {
-      // files.json: check exports are actual symbol names (no spaces)
+      // file-roles.json (INTEL_FILES key 'files'): check exports are actual symbol names (no spaces)
       if (key === 'files') {
         for (const [entryPath, entry] of Object.entries(data.entries)) {
           const entryObj = entry as Record<string, unknown>;
@@ -438,7 +438,7 @@ function intelValidate(planningDir: string): IntelValidateResult | DisabledRespo
         }
       }
 
-      // deps.json: check entries have version, type, used_by
+      // dependency-graph.json (INTEL_FILES key 'deps'): check entries have version, type, used_by
       if (key === 'deps') {
         for (const [depName, entry] of Object.entries(data.entries)) {
           const entryObj = entry as Record<string, unknown>;
