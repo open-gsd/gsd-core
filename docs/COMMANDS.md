@@ -490,6 +490,37 @@ Retroactively audit and fill Nyquist validation gaps.
 
 ---
 
+### `phase uat-passed <N> [--require-verification]`
+
+Runtime-neutral predicate that evaluates HUMAN-UAT results for a phase and reports whether all required checks passed. Uses markdown-aware parsing that ignores false-positive contexts (YAML frontmatter, fenced code blocks, HTML comments, and blockquotes), so incomplete checkbox fragments in prose sections never trigger a false pass.
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `N` | **Yes** | Phase number to evaluate |
+| `--require-verification` | No | Require at least one `*-VERIFICATION.md` file alongside UAT results; fails if none are found |
+
+**Output fields (JSON):**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `passed` | `boolean` | `true` only when at least one check exists AND all checks pass AND no blockers — fail-closed (no vacuous pass) |
+| `uat_files` | `string[]` | Filenames of `*-UAT.md` files evaluated |
+| `verification_files` | `string[]` | Filenames of `*-VERIFICATION.md` files evaluated |
+| `checks[]` | `{ file, test, name, result, passing }[]` | Per-item evaluation results parsed from heading blocks |
+| `blockers[]` | `string[]` | Human-readable reasons for failure (frontmatter issues, failing/missing test items, policy violations, malformed markdown) — NOT a subset of `checks[]` |
+| `no_uat_artifacts` | `boolean` | `true` when no real UAT test items were parsed (no `*-UAT.md` files, unreadable dir, or files with no test blocks); when `true`, `passed` is always `false` |
+| `policy.require_verification` | `boolean` | Whether `--require-verification` was active |
+
+**Programmatic access:** `node gsd-tools.cjs phase uat-passed <N> [--require-verification] [--raw]` — see [CLI Tools Reference](CLI-TOOLS.md)
+
+```bash
+node gsd-tools.cjs phase uat-passed 3                        # Evaluate UAT for phase 3
+node gsd-tools.cjs phase uat-passed 3 --require-verification # Also require VERIFICATION.md
+node gsd-tools.cjs phase uat-passed 3 --raw                  # Machine-readable JSON output
+```
+
+---
+
 ## Navigation Commands
 
 ### `/gsd-progress`

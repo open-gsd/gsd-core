@@ -137,6 +137,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/profile-pipeline.cjs',
       'gsd-core/bin/lib/template.cjs',
       'gsd-core/bin/lib/uat.cjs',
+      'gsd-core/bin/lib/uat-predicate.cjs',
       'gsd-core/bin/lib/workstream.cjs',
       'gsd-core/bin/lib/roadmap.cjs',
       'gsd-core/bin/lib/audit.cjs',

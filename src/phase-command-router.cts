@@ -32,6 +32,7 @@ interface PhaseHandlers {
   cmdPhaseInsert: (cwd: string, pos: string | undefined, desc: string, raw: boolean) => void;
   cmdPhaseRemove: (cwd: string, phaseNum: string, opts: { force: boolean }, raw: boolean) => void;
   cmdPhaseComplete: (cwd: string, phaseNum: string | undefined, raw: boolean) => void;
+  cmdPhaseUatPassed: (cwd: string, phaseNum: string | undefined, raw: boolean, opts?: { policy?: { requireVerification?: boolean } }) => void;
 }
 
 interface RoutePhaseCommandOptions {
@@ -162,6 +163,23 @@ function routePhaseCommand({ phase, args, cwd, raw, error }: RoutePhaseCommandOp
       },
       complete: (_ctx: Record<string, unknown>): { ok: true; data: null } => {
         phase.cmdPhaseComplete(cwd, args[2], raw);
+        return { ok: true as const, data: null };
+      },
+      'uat-passed': (_ctx: Record<string, unknown>): { ok: true; data: null } => {
+        let requireVerification = false;
+        const positional: string[] = [];
+        for (const token of args.slice(2)) {
+          if (token === '--require-verification') {
+            requireVerification = true;
+          } else if (token === '--raw') {
+            // --raw is handled by the outer CLI layer; accepted here silently
+          } else if (token.startsWith('--')) {
+            return makeInvalidArgs(token, `phase uat-passed does not support ${token}`) as never;
+          } else {
+            positional.push(token);
+          }
+        }
+        phase.cmdPhaseUatPassed(cwd, positional[0], raw, { policy: { requireVerification } });
         return { ok: true as const, data: null };
       },
     },

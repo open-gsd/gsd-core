@@ -29,6 +29,9 @@ import stateMod = require('./state.cjs');
 import { platformWriteSync, platformReadSync, platformEnsureDir } from './shell-command-projection.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { deriveProgressFromRoadmap, clampPercent } from './phase-lifecycle.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- uat-predicate.cjs is an export= CommonJS module
+import uatPredicate = require('./uat-predicate.cjs');
+const { evaluateUatPassed } = uatPredicate;
 
 const {
   escapeRegex,
@@ -1712,6 +1715,28 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
   output(result, raw);
 }
 
+function cmdPhaseUatPassed(
+  cwd: string,
+  phaseNum: string | undefined,
+  raw: boolean,
+  opts: { policy?: { requireVerification?: boolean } } = {},
+): void {
+  if (!phaseNum) {
+    error('phase number required for phase uat-passed');
+  }
+
+  const phaseInfoRaw = findPhaseInternal(cwd, phaseNum!);
+  if (!phaseInfoRaw) {
+    error(`Phase ${phaseNum} not found`);
+  }
+  const phaseInfo = phaseInfoRaw as unknown as Record<string, unknown>;
+  const phaseFullDir = path.join(cwd, phaseInfo['directory'] as string);
+
+  const report = evaluateUatPassed(phaseFullDir, { policy: opts.policy });
+
+  output({ phase: phaseNum, ...report }, raw);
+}
+
 export = {
   cmdPhasesList,
   cmdPhaseNextDecimal,
@@ -1723,5 +1748,6 @@ export = {
   cmdPhaseInsert,
   cmdPhaseRemove,
   cmdPhaseComplete,
+  cmdPhaseUatPassed,
   computeDependencyLevels,
 };
