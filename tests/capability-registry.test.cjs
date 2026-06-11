@@ -100,6 +100,18 @@ describe('UI pilot capability', () => {
     assert.ok(uiPhaseStep, 'plan:pre.steps should contain the ui-phase step');
     assert.strictEqual(uiPhaseStep.capId, 'ui');
 
+    // byLoopPoint['plan:pre'].gates contains the new ui.plan-gate (#1026)
+    const planPreGates = registry.byLoopPoint['plan:pre'].gates;
+    assert.ok(Array.isArray(planPreGates), 'plan:pre.gates should be an array');
+    const uiPlanGate = planPreGates.find(
+      (g) => g.check && g.check.query === 'ui.plan-gate',
+    );
+    assert.ok(uiPlanGate, 'plan:pre.gates should contain the ui.plan-gate (#1026)');
+    assert.strictEqual(uiPlanGate.capId, 'ui');
+    assert.strictEqual(uiPlanGate.blocking, true);
+    assert.strictEqual(uiPlanGate.when, 'workflow.ui_safety_gate');
+    assert.strictEqual(uiPlanGate.onError, 'halt');
+
     // byLoopPoint['execute:wave:post'].gates contains the UI safety gate
     const execWavePostGates = registry.byLoopPoint['execute:wave:post'].gates;
     assert.ok(Array.isArray(execWavePostGates), 'execute:wave:post.gates should be an array');
@@ -727,6 +739,169 @@ describe('Fix #4: step.ref must be exclusive skill XOR agent', () => {
   });
 });
 
+describe('double-prefix guard: step.ref.skill must not start with "gsd-"', () => {
+  // ref.skill is an unprefixed stem (e.g. "ui-review"). Workflow dispatch prepends
+  // "gsd-" at runtime. A stem already starting with "gsd-" would produce "gsd-gsd-..."
+  // at dispatch time, silently invoking a non-existent skill.
+
+  test('ref.skill starting with "gsd-" is rejected', () => {
+    const cap = {
+      ...UI_CAP,
+      steps: [
+        {
+          point: 'verify:post',
+          ref: { skill: 'gsd-ui-review' },  // wrong: stem must NOT have gsd- prefix
+          produces: ['UI-REVIEW.md'],
+          consumes: ['UI-SPEC.md'],
+          when: 'workflow.ui_review',
+          onError: 'skip',
+        },
+      ],
+    };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(errors.length > 0, 'Expected an error for gsd-prefixed ref.skill');
+    assert.ok(
+      errors.some((e) => e.includes('gsd-') && (e.includes('double') || e.includes('unprefixed') || e.includes('must not start'))),
+      'Error should mention the double-prefix problem, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('ref.skill without "gsd-" prefix is accepted (stem only)', () => {
+    const cap = {
+      ...UI_CAP,
+      steps: [
+        {
+          point: 'verify:post',
+          ref: { skill: 'ui-review' },  // correct: unprefixed stem
+          produces: ['UI-REVIEW.md'],
+          consumes: ['UI-SPEC.md'],
+          when: 'workflow.ui_review',
+          onError: 'skip',
+        },
+      ],
+    };
+    const prefixErrors = validateCapability(cap, 'ui').filter((e) => e.includes('gsd-') && e.includes('stem'));
+    assert.deepEqual(prefixErrors, [], 'No prefix errors expected for unprefixed stem, got: ' + JSON.stringify(prefixErrors));
+  });
+
+  test('real UI capability.json uses unprefixed ref.skill values', () => {
+    // Verify the live capability uses unprefixed stems and therefore passes the new guard.
+    const errors = validateCapability(UI_CAP, 'ui');
+    const prefixErrors = errors.filter((e) => e.includes('must not start with'));
+    assert.deepEqual(prefixErrors, [], 'Live UI capability.json should not trigger the double-prefix guard: ' + JSON.stringify(prefixErrors));
+  });
+});
+
+// ─── Fix: ref.skill/ref.agent membership in declared skills/agents ────────────
+
+describe('ref membership check: step.ref.skill must be in cap.skills', () => {
+  // A capability declares skills: ["ui-phase", "ui-review"].
+  // A step with ref.skill "typo-skill" (not in skills) must be rejected.
+
+  test('step.ref.skill NOT in cap.skills is rejected', () => {
+    const cap = {
+      ...UI_CAP,
+      steps: [
+        {
+          point: 'plan:pre',
+          ref: { skill: 'typo-skill' },  // not in skills: ["ui-phase", "ui-review"]
+          produces: ['UI-SPEC.md'],
+          consumes: ['CONTEXT.md'],
+          when: 'workflow.ui_phase',
+          onError: 'skip',
+        },
+      ],
+    };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(errors.length > 0, 'Expected errors for undeclared ref.skill');
+    assert.ok(
+      errors.some((e) => e.includes('typo-skill') && e.includes('not declared')),
+      'Error should mention "typo-skill" and "not declared", got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('step.ref.skill IN cap.skills is accepted', () => {
+    const cap = {
+      ...UI_CAP,
+      steps: [
+        {
+          point: 'plan:pre',
+          ref: { skill: 'ui-phase' },  // declared in skills: ["ui-phase", "ui-review"]
+          produces: ['UI-SPEC.md'],
+          consumes: ['CONTEXT.md'],
+          when: 'workflow.ui_phase',
+          onError: 'skip',
+        },
+      ],
+    };
+    const errors = validateCapability(cap, 'ui');
+    const membershipErrors = errors.filter((e) => e.includes('not declared') && e.includes('ui-phase'));
+    assert.deepEqual(
+      membershipErrors, [],
+      'No membership errors expected for declared ref.skill, got: ' + JSON.stringify(membershipErrors),
+    );
+  });
+
+  test('real UI capability passes: ui-phase and ui-review are both in skills', () => {
+    // Regression guard: the real UI capability must not trigger the new membership check.
+    const errors = validateCapability(UI_CAP, 'ui');
+    const membershipErrors = errors.filter((e) => e.includes('not declared'));
+    assert.deepEqual(
+      membershipErrors, [],
+      'Real UI capability should pass membership check for all ref.skill values, got: ' + JSON.stringify(membershipErrors),
+    );
+  });
+});
+
+describe('ref membership check: step.ref.agent must be in cap.agents', () => {
+  // A capability declares agents: ["gsd-ui-checker", "gsd-ui-auditor"].
+  // A step with ref.agent "gsd-unknown-agent" (not in agents) must be rejected.
+
+  test('step.ref.agent NOT in cap.agents is rejected', () => {
+    const cap = {
+      ...UI_CAP,
+      steps: [
+        {
+          point: 'plan:pre',
+          ref: { agent: 'gsd-unknown-agent' },  // not in agents: ["gsd-ui-checker", "gsd-ui-auditor"]
+          produces: ['UI-SPEC.md'],
+          consumes: ['CONTEXT.md'],
+          when: 'workflow.ui_phase',
+          onError: 'skip',
+        },
+      ],
+    };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(errors.length > 0, 'Expected errors for undeclared ref.agent');
+    assert.ok(
+      errors.some((e) => e.includes('gsd-unknown-agent') && e.includes('not declared')),
+      'Error should mention "gsd-unknown-agent" and "not declared", got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('step.ref.agent IN cap.agents is accepted', () => {
+    const cap = {
+      ...UI_CAP,
+      steps: [
+        {
+          point: 'plan:pre',
+          ref: { agent: 'gsd-ui-checker' },  // declared in agents
+          produces: ['UI-SPEC.md'],
+          consumes: ['CONTEXT.md'],
+          when: 'workflow.ui_phase',
+          onError: 'skip',
+        },
+      ],
+    };
+    const errors = validateCapability(cap, 'ui');
+    const membershipErrors = errors.filter((e) => e.includes('not declared') && e.includes('gsd-ui-checker'));
+    assert.deepEqual(
+      membershipErrors, [],
+      'No membership errors expected for declared ref.agent, got: ' + JSON.stringify(membershipErrors),
+    );
+  });
+});
+
 describe('Fix: 3-node requires cycle (A→B→C→A) is detected', () => {
   test('three-node requires cycle is reported as an error', () => {
     const capA = {
@@ -975,15 +1150,19 @@ describe('C2: cross-capability consumes satisfiability (global pass)', () => {
 // ─── 10. C3: role:runtime validation ─────────────────────────────────────────
 
 describe('C3: role:runtime body validation', () => {
+  // ADR-1016 phase 5a: fixture updated to match tightened structured-value shapes.
+  // configHome is now an object (Decision 1), artifactLayout is { global, local } (Decision 3),
+  // commandStyle is closed enum (Decision 4), hooksSurface is closed enum (Decision 5).
   const VALID_RUNTIME_CAP = {
     id: 'cursor', role: 'runtime', title: 'Cursor', description: 'Cursor IDE runtime',
     tier: 'standard', requires: [],
     runtime: {
-      configHome: '~/.cursor',
+      configHome: { kind: 'dot-home', name: '.cursor', env: ['CURSOR_CONFIG_DIR'] },
       configFormat: 'settings-json',
-      artifactLayout: [],
-      commandStyle: 'slash',
-      hooksSurface: 'rules',
+      artifactLayout: { global: [], local: [] },
+      commandStyle: 'slash-hyphen',
+      hooksSurface: 'cursor-hooks-json',
+      hookEvents: 'claude',
       sandboxTier: 'none',
       supportTier: 2,
     },
@@ -2319,5 +2498,786 @@ describe('ADR-959: validateCapability — commands field on feature role', () =>
     const cap = makeCommandCap('cmd-cap', null);
     const errors = validateCapability(cap, 'cmd-cap');
     assert.ok(errors.some((e) => e.includes('commands')), 'Expected commands error, got: ' + JSON.stringify(errors));
+  });
+});
+
+// ─── 24. ADR-1016 phase 5a: runtime capability descriptors ───────────────────
+
+const {
+  validateConfigHome,
+  validateArtifactLayout,
+  VALID_CONFIG_HOME_KINDS,
+  VALID_COMMAND_STYLES,
+  VALID_HOOKS_SURFACES,
+  VALID_HOOK_EVENTS,
+  VALID_SANDBOX_TIERS,
+  VALID_ARTIFACT_KIND_NAMES,
+  VALID_ARTIFACT_NESTINGS,
+} = require('../scripts/gen-capability-registry.cjs');
+
+const RUNTIME_IDS = [
+  'claude', 'codex', 'antigravity', 'gemini', 'cursor', 'opencode',
+  'kilo', 'copilot', 'augment', 'trae', 'qwen', 'hermes',
+  'codebuddy', 'cline', 'kimi', 'windsurf',
+];
+
+// Helper: build a minimal valid runtime capability object for fixture-based tests
+function makeRuntimeCap(overrides) {
+  return {
+    id: 'test-rt',
+    role: 'runtime',
+    title: 'Test Runtime',
+    description: 'A synthetic runtime capability for testing.',
+    tier: 'core',
+    requires: [],
+    runtime: {
+      configHome: { kind: 'dot-home', name: '.test-rt', env: ['TEST_RT_DIR'] },
+      configFormat: 'settings-json',
+      artifactLayout: { global: [], local: [] },
+      commandStyle: 'slash-hyphen',
+      hooksSurface: 'settings-json',
+      hookEvents: 'claude',
+      sandboxTier: 'none',
+      supportTier: 1,
+      ...((overrides && overrides.runtime) ? overrides.runtime : {}),
+    },
+    ...overrides,
+  };
+}
+
+// ── 24a. All 16 runtime ids appear in the runtimes index ─────────────────────
+
+describe('ADR-1016 phase 5a: all 16 runtimes in registry index', () => {
+  let registry;
+
+  test('loadAndValidate + buildRegistry produces runtimes index with 16 entries', () => {
+    const { capMap, errors } = loadAndValidate(new Set());
+    const hardErrors = errors.filter((e) => !e.includes('pending-migration'));
+    assert.deepEqual(hardErrors, [], 'Expected no hard errors: ' + JSON.stringify(hardErrors));
+    registry = buildRegistry(capMap);
+    const runtimeKeys = Object.keys(registry.runtimes).sort();
+    assert.strictEqual(runtimeKeys.length, 16, 'Expected 16 runtime entries, got: ' + runtimeKeys.join(', '));
+    for (const id of RUNTIME_IDS) {
+      assert.ok(
+        Object.prototype.hasOwnProperty.call(registry.runtimes, id),
+        'runtimes index must contain "' + id + '"',
+      );
+    }
+  });
+
+  test('every runtimes entry has role: "runtime"', () => {
+    const { capMap } = loadAndValidate(new Set());
+    registry = buildRegistry(capMap);
+    for (const id of RUNTIME_IDS) {
+      assert.strictEqual(
+        registry.runtimes[id] && registry.runtimes[id].role, 'runtime',
+        'runtimes["' + id + '"].role must be "runtime"',
+      );
+    }
+  });
+
+  test('every runtimes entry has all 6 axes present in runtime object', () => {
+    const { capMap } = loadAndValidate(new Set());
+    registry = buildRegistry(capMap);
+    const requiredAxes = ['configHome', 'configFormat', 'artifactLayout', 'commandStyle', 'hooksSurface', 'sandboxTier'];
+    for (const id of RUNTIME_IDS) {
+      const rt = registry.runtimes[id] && registry.runtimes[id].runtime;
+      assert.ok(rt, 'runtimes["' + id + '"].runtime must exist');
+      for (const axis of requiredAxes) {
+        assert.ok(
+          Object.prototype.hasOwnProperty.call(rt, axis),
+          'runtimes["' + id + '"].runtime.' + axis + ' must be present',
+        );
+      }
+      // supportTier also required
+      assert.ok(
+        rt.supportTier === 1 || rt.supportTier === 2,
+        'runtimes["' + id + '"].runtime.supportTier must be 1 or 2 (got: ' + rt.supportTier + ')',
+      );
+    }
+  });
+});
+
+// ── 24b. Sample axis value assertions ────────────────────────────────────────
+
+describe('ADR-1016 phase 5a: sample axis value assertions', () => {
+  test('codex: commandStyle === shell-var and sandboxTier === codex-agent-sandbox', () => {
+    const { capMap } = loadAndValidate(new Set());
+    const registry = buildRegistry(capMap);
+    const rt = registry.runtimes['codex'].runtime;
+    assert.strictEqual(rt.commandStyle, 'shell-var', 'codex.commandStyle must be "shell-var"');
+    assert.strictEqual(rt.sandboxTier, 'codex-agent-sandbox', 'codex.sandboxTier must be "codex-agent-sandbox"');
+  });
+
+  test('codex: configHome.kind === dot-home, name === .codex', () => {
+    const { capMap } = loadAndValidate(new Set());
+    const registry = buildRegistry(capMap);
+    const rt = registry.runtimes['codex'].runtime;
+    assert.strictEqual(rt.configHome.kind, 'dot-home', 'codex.configHome.kind must be "dot-home"');
+    assert.strictEqual(rt.configHome.name, '.codex', 'codex.configHome.name must be ".codex"');
+    assert.ok(Array.isArray(rt.configHome.env) && rt.configHome.env.includes('CODEX_HOME'),
+      'codex.configHome.env must include "CODEX_HOME"');
+  });
+
+  test('claude: commandStyle === slash-hyphen, sandboxTier === none', () => {
+    const { capMap } = loadAndValidate(new Set());
+    const registry = buildRegistry(capMap);
+    const rt = registry.runtimes['claude'].runtime;
+    assert.strictEqual(rt.commandStyle, 'slash-hyphen', 'claude.commandStyle must be "slash-hyphen"');
+    assert.strictEqual(rt.sandboxTier, 'none', 'claude.sandboxTier must be "none"');
+  });
+
+  test('claude: configHome.kind === dot-home', () => {
+    const { capMap } = loadAndValidate(new Set());
+    const registry = buildRegistry(capMap);
+    const rt = registry.runtimes['claude'].runtime;
+    assert.strictEqual(rt.configHome.kind, 'dot-home', 'claude.configHome.kind must be "dot-home"');
+  });
+
+  test('antigravity: configHome.kind === dot-home-nested with parent .gemini', () => {
+    const { capMap } = loadAndValidate(new Set());
+    const registry = buildRegistry(capMap);
+    const rt = registry.runtimes['antigravity'].runtime;
+    assert.strictEqual(rt.configHome.kind, 'dot-home-nested', 'antigravity.configHome.kind must be "dot-home-nested"');
+    assert.strictEqual(rt.configHome.parent, '.gemini', 'antigravity.configHome.parent must be ".gemini"');
+    assert.ok(Array.isArray(rt.configHome.probe), 'antigravity.configHome.probe must be an array');
+    assert.ok(rt.configHome.probe.length > 0, 'antigravity.configHome.probe must be non-empty');
+  });
+
+  test('kilo: configHome.skillsHome is present', () => {
+    const { capMap } = loadAndValidate(new Set());
+    const registry = buildRegistry(capMap);
+    const rt = registry.runtimes['kilo'].runtime;
+    assert.ok(rt.configHome.skillsHome, 'kilo.configHome.skillsHome must be present');
+    assert.ok(typeof rt.configHome.skillsHome.kind === 'string', 'kilo.configHome.skillsHome.kind must be a string');
+  });
+
+  test('windsurf: configHome.kind === dot-home-nested with parent .codeium', () => {
+    const { capMap } = loadAndValidate(new Set());
+    const registry = buildRegistry(capMap);
+    const rt = registry.runtimes['windsurf'].runtime;
+    assert.strictEqual(rt.configHome.kind, 'dot-home-nested', 'windsurf.configHome.kind must be "dot-home-nested"');
+    assert.strictEqual(rt.configHome.parent, '.codeium', 'windsurf.configHome.parent must be ".codeium"');
+  });
+
+  test('kimi: configHome.kind === generic-agents-root', () => {
+    const { capMap } = loadAndValidate(new Set());
+    const registry = buildRegistry(capMap);
+    const rt = registry.runtimes['kimi'].runtime;
+    assert.strictEqual(rt.configHome.kind, 'generic-agents-root', 'kimi.configHome.kind must be "generic-agents-root"');
+  });
+
+  test('antigravity: hookEvents === gemini', () => {
+    const { capMap } = loadAndValidate(new Set());
+    const registry = buildRegistry(capMap);
+    const rt = registry.runtimes['antigravity'].runtime;
+    assert.strictEqual(rt.hookEvents, 'gemini', 'antigravity.hookEvents must be "gemini"');
+  });
+
+  test('opencode: hooksSurface === none, no hookEvents (registers zero lifecycle hooks)', () => {
+    const { capMap } = loadAndValidate(new Set());
+    const registry = buildRegistry(capMap);
+    const rt = registry.runtimes['opencode'].runtime;
+    assert.strictEqual(rt.hooksSurface, 'none', 'opencode.hooksSurface must be "none" (no managed lifecycle hooks)');
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(rt, 'hookEvents'),
+      'opencode.runtime must NOT have hookEvents (no lifecycle hook registration)',
+    );
+  });
+
+  test('kilo: hooksSurface === none, no hookEvents (registers zero lifecycle hooks)', () => {
+    const { capMap } = loadAndValidate(new Set());
+    const registry = buildRegistry(capMap);
+    const rt = registry.runtimes['kilo'].runtime;
+    assert.strictEqual(rt.hooksSurface, 'none', 'kilo.hooksSurface must be "none" (no managed lifecycle hooks)');
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(rt, 'hookEvents'),
+      'kilo.runtime must NOT have hookEvents (no lifecycle hook registration)',
+    );
+  });
+
+  test('kimi: configHome.probeExists === "skills" (probe selects first candidate with skills/ dir)', () => {
+    const { capMap } = loadAndValidate(new Set());
+    const registry = buildRegistry(capMap);
+    const rt = registry.runtimes['kimi'].runtime;
+    assert.strictEqual(
+      rt.configHome.probeExists, 'skills',
+      'kimi.configHome.probeExists must be "skills" (selects first probe candidate where <candidate>/skills exists)',
+    );
+  });
+
+  test('copilot/trae/kimi/windsurf/cline/opencode/kilo: hooksSurface none or copilot-inline/cline-rules, no hookEvents', () => {
+    const { capMap } = loadAndValidate(new Set());
+    const registry = buildRegistry(capMap);
+    // opencode and kilo register ZERO lifecycle hooks → hooksSurface none, no hookEvents
+    const noEventsRuntimes = ['trae', 'kimi', 'windsurf', 'opencode', 'kilo'];
+    for (const id of noEventsRuntimes) {
+      const rt = registry.runtimes[id].runtime;
+      assert.ok(
+        !Object.prototype.hasOwnProperty.call(rt, 'hookEvents'),
+        id + '.runtime must NOT have hookEvents (no hook events for this runtime)',
+      );
+    }
+    // cline has cline-rules surface but no hookEvents
+    const clineRt = registry.runtimes['cline'].runtime;
+    assert.strictEqual(clineRt.hooksSurface, 'cline-rules', 'cline.hooksSurface must be "cline-rules"');
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(clineRt, 'hookEvents'),
+      'cline.runtime must NOT have hookEvents',
+    );
+    // copilot has copilot-inline surface but no hookEvents
+    const copilotRt = registry.runtimes['copilot'].runtime;
+    assert.strictEqual(copilotRt.hooksSurface, 'copilot-inline', 'copilot.hooksSurface must be "copilot-inline"');
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(copilotRt, 'hookEvents'),
+      'copilot.runtime must NOT have hookEvents',
+    );
+  });
+
+  test('codex: hooksSurface === codex-hooks-json, cursor: hooksSurface === cursor-hooks-json', () => {
+    const { capMap } = loadAndValidate(new Set());
+    const registry = buildRegistry(capMap);
+    assert.strictEqual(registry.runtimes['codex'].runtime.hooksSurface, 'codex-hooks-json',
+      'codex.hooksSurface must be "codex-hooks-json"');
+    assert.strictEqual(registry.runtimes['cursor'].runtime.hooksSurface, 'cursor-hooks-json',
+      'cursor.hooksSurface must be "cursor-hooks-json"');
+  });
+
+  test('tier-1 runtimes: claude, codex, antigravity have supportTier === 1', () => {
+    const { capMap } = loadAndValidate(new Set());
+    const registry = buildRegistry(capMap);
+    for (const id of ['claude', 'codex', 'antigravity']) {
+      assert.strictEqual(
+        registry.runtimes[id].runtime.supportTier, 1,
+        id + '.runtime.supportTier must be 1 (tier-1 support)',
+      );
+    }
+  });
+
+  test('tier-2 runtimes: gemini through windsurf have supportTier === 2', () => {
+    const { capMap } = loadAndValidate(new Set());
+    const registry = buildRegistry(capMap);
+    const tier2 = ['gemini', 'cursor', 'opencode', 'kilo', 'copilot', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'kimi', 'windsurf'];
+    for (const id of tier2) {
+      assert.strictEqual(
+        registry.runtimes[id].runtime.supportTier, 2,
+        id + '.runtime.supportTier must be 2 (tier-2 support)',
+      );
+    }
+  });
+});
+
+// ── 24c. Closed-vocab REJECTION tests ────────────────────────────────────────
+
+describe('ADR-1016 phase 5a: closed-vocab rejection — tightened validateRuntimeBody', () => {
+  test('bad configHome.kind → validation error', () => {
+    const cap = makeRuntimeCap({ id: 'test-rt', runtime: { configHome: { kind: 'custom-home', name: '.test', env: [] } } });
+    const errors = validateCapability(cap, 'test-rt');
+    assert.ok(
+      errors.some((e) => e.includes('configHome') && e.includes('kind')),
+      'Expected configHome.kind error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('configHome is a string (old shape) → validation error', () => {
+    const cap = makeRuntimeCap({ id: 'test-rt', runtime: { configHome: '~/.test-rt' } });
+    const errors = validateCapability(cap, 'test-rt');
+    assert.ok(
+      errors.some((e) => e.includes('configHome')),
+      'Expected configHome object error (string not accepted), got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('dot-home-nested without parent → validation error', () => {
+    const cap = makeRuntimeCap({ id: 'test-rt', runtime: { configHome: { kind: 'dot-home-nested', name: 'foo', env: [] } } });
+    const errors = validateCapability(cap, 'test-rt');
+    assert.ok(
+      errors.some((e) => e.includes('parent') && e.includes('dot-home-nested')),
+      'Expected parent required for dot-home-nested, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('bad commandStyle → validation error', () => {
+    const cap = makeRuntimeCap({ id: 'test-rt', runtime: { commandStyle: 'slash-colon' } });
+    const errors = validateCapability(cap, 'test-rt');
+    assert.ok(
+      errors.some((e) => e.includes('commandStyle')),
+      'Expected commandStyle error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('bad hooksSurface → validation error', () => {
+    const cap = makeRuntimeCap({ id: 'test-rt', runtime: { hooksSurface: 'custom-hooks' } });
+    const errors = validateCapability(cap, 'test-rt');
+    assert.ok(
+      errors.some((e) => e.includes('hooksSurface')),
+      'Expected hooksSurface error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('bad hookEvents → validation error', () => {
+    const cap = makeRuntimeCap({ id: 'test-rt', runtime: { hookEvents: 'my-dialect' } });
+    const errors = validateCapability(cap, 'test-rt');
+    assert.ok(
+      errors.some((e) => e.includes('hookEvents')),
+      'Expected hookEvents error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('bad sandboxTier → validation error', () => {
+    const cap = makeRuntimeCap({ id: 'test-rt', runtime: { sandboxTier: 'workspace-sandbox' } });
+    const errors = validateCapability(cap, 'test-rt');
+    assert.ok(
+      errors.some((e) => e.includes('sandboxTier')),
+      'Expected sandboxTier error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('artifactLayout is an array (old shape) → validation error', () => {
+    const cap = makeRuntimeCap({ id: 'test-rt', runtime: { artifactLayout: [] } });
+    const errors = validateCapability(cap, 'test-rt');
+    assert.ok(
+      errors.some((e) => e.includes('artifactLayout')),
+      'Expected artifactLayout shape error (old array not accepted), got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('bad ArtifactKind.kind in artifactLayout → validation error', () => {
+    const cap = makeRuntimeCap({
+      id: 'test-rt',
+      runtime: {
+        artifactLayout: {
+          global: [{ kind: 'magic-kind', destSubpath: 'x', prefix: 'g-', nesting: 'flat', recursive: false, converter: null }],
+          local: [],
+        },
+      },
+    });
+    const errors = validateCapability(cap, 'test-rt');
+    assert.ok(
+      errors.some((e) => e.includes('kind')),
+      'Expected ArtifactKind.kind error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('bad ArtifactKind.nesting → validation error', () => {
+    const cap = makeRuntimeCap({
+      id: 'test-rt',
+      runtime: {
+        artifactLayout: {
+          global: [{ kind: 'skills', destSubpath: 'skills', prefix: 'gsd-', nesting: 'deep', recursive: false, converter: null }],
+          local: [],
+        },
+      },
+    });
+    const errors = validateCapability(cap, 'test-rt');
+    assert.ok(
+      errors.some((e) => e.includes('nesting')),
+      'Expected nesting error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('valid runtime descriptor passes validateCapability with no errors', () => {
+    const cap = makeRuntimeCap({ id: 'test-rt' });
+    const errors = validateCapability(cap, 'test-rt');
+    assert.deepEqual(errors, [], 'Expected no errors for valid runtime cap: ' + JSON.stringify(errors));
+  });
+});
+
+// ── 24d. validateConfigHome + validateArtifactLayout unit tests ───────────────
+
+describe('ADR-1016 phase 5a: validateConfigHome unit tests', () => {
+  test('valid dot-home with env → no errors', () => {
+    const errors = validateConfigHome('test', { kind: 'dot-home', name: '.test', env: ['TEST_DIR'] });
+    assert.deepEqual(errors, []);
+  });
+
+  test('valid dot-home-nested with parent → no errors', () => {
+    const errors = validateConfigHome('test', { kind: 'dot-home-nested', name: 'foo', parent: '.bar', env: [] });
+    assert.deepEqual(errors, []);
+  });
+
+  test('valid xdg → no errors', () => {
+    const errors = validateConfigHome('test', { kind: 'xdg', name: 'opencode', env: ['OPENCODE_CONFIG_DIR', 'XDG_CONFIG_HOME'] });
+    assert.deepEqual(errors, []);
+  });
+
+  test('valid generic-agents-root with probe → no errors', () => {
+    const errors = validateConfigHome('test', { kind: 'generic-agents-root', name: 'agents', env: ['KIMI_CONFIG_DIR'], probe: ['~/.config/agents'] });
+    assert.deepEqual(errors, []);
+  });
+
+  test('null configHome → error', () => {
+    const errors = validateConfigHome('test', null);
+    assert.ok(errors.length > 0 && errors.some((e) => e.includes('configHome')));
+  });
+
+  test('string configHome → error', () => {
+    const errors = validateConfigHome('test', '~/.test');
+    assert.ok(errors.length > 0 && errors.some((e) => e.includes('configHome')));
+  });
+
+  test('unknown kind → error mentioning the valid set', () => {
+    const errors = validateConfigHome('test', { kind: 'unknown', name: '.x', env: [] });
+    assert.ok(errors.some((e) => e.includes('kind') && e.includes('dot-home')),
+      'Error should list valid kinds, got: ' + JSON.stringify(errors));
+  });
+
+  test('dot-home-nested missing parent → error', () => {
+    const errors = validateConfigHome('test', { kind: 'dot-home-nested', name: 'x', env: [] });
+    assert.ok(errors.some((e) => e.includes('parent')));
+  });
+
+  test('skillsHome with valid kind → no errors', () => {
+    const errors = validateConfigHome('test', {
+      kind: 'xdg', name: 'kilo', env: [],
+      skillsHome: { kind: 'dot-home', name: '.kilo', env: [] },
+    });
+    assert.deepEqual(errors, []);
+  });
+
+  test('skillsHome with bad kind → error', () => {
+    const errors = validateConfigHome('test', {
+      kind: 'xdg', name: 'kilo', env: [],
+      skillsHome: { kind: 'exotic', name: '.kilo', env: [] },
+    });
+    assert.ok(errors.some((e) => e.includes('skillsHome') && e.includes('kind')));
+  });
+});
+
+describe('ADR-1016 phase 5a: validateArtifactLayout unit tests', () => {
+  test('valid empty global/local → no errors', () => {
+    const errors = validateArtifactLayout('test', { global: [], local: [] });
+    assert.deepEqual(errors, []);
+  });
+
+  test('valid skills entry in global → no errors', () => {
+    const errors = validateArtifactLayout('test', {
+      global: [{ kind: 'skills', destSubpath: 'skills', prefix: 'gsd-', nesting: 'flat', recursive: false, converter: null }],
+      local: [],
+    });
+    assert.deepEqual(errors, []);
+  });
+
+  test('array (old shape) → error', () => {
+    const errors = validateArtifactLayout('test', []);
+    assert.ok(errors.some((e) => e.includes('artifactLayout')));
+  });
+
+  test('missing global → error', () => {
+    const errors = validateArtifactLayout('test', { local: [] });
+    assert.ok(errors.some((e) => e.includes('global')));
+  });
+
+  test('missing local → error', () => {
+    const errors = validateArtifactLayout('test', { global: [] });
+    assert.ok(errors.some((e) => e.includes('local')));
+  });
+
+  test('bad kind in global[0] → error', () => {
+    const errors = validateArtifactLayout('test', {
+      global: [{ kind: 'bad-kind', destSubpath: 'x', prefix: '', nesting: 'flat', recursive: false, converter: null }],
+      local: [],
+    });
+    assert.ok(errors.some((e) => e.includes('kind')));
+  });
+
+  test('bad nesting in global[0] → error', () => {
+    const errors = validateArtifactLayout('test', {
+      global: [{ kind: 'skills', destSubpath: 'x', prefix: '', nesting: 'trilateral', recursive: false, converter: null }],
+      local: [],
+    });
+    assert.ok(errors.some((e) => e.includes('nesting')));
+  });
+
+  test('kimi-agents kind → no errors', () => {
+    const errors = validateArtifactLayout('test', {
+      global: [{ kind: 'kimi-agents', destSubpath: 'agents', prefix: 'gsd', nesting: 'flat', recursive: false, converter: null }],
+      local: [],
+    });
+    assert.deepEqual(errors, []);
+  });
+});
+
+// ── 24d-extra. FIX 3: tightened validateRuntimeBody / validateConfigHome ──────
+
+describe('FIX 3: tightened runtime validator — configHome.env required', () => {
+  test('configHome missing env → validation error', () => {
+    // env is now required; omitting it must produce an error
+    const cap = makeRuntimeCap({
+      id: 'test-rt',
+      runtime: { configHome: { kind: 'dot-home', name: '.test-rt' } },  // no env
+    });
+    const errors = validateCapability(cap, 'test-rt');
+    assert.ok(
+      errors.some((e) => e.includes('env') && (e.includes('required') || e.includes('array'))),
+      'Expected configHome.env required error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('configHome with env: [] (empty array) is accepted', () => {
+    const cap = makeRuntimeCap({
+      id: 'test-rt',
+      runtime: { configHome: { kind: 'dot-home', name: '.test-rt', env: [] } },
+    });
+    const errors = validateCapability(cap, 'test-rt');
+    const envErrors = errors.filter((e) => e.includes('env'));
+    assert.deepEqual(envErrors, [], 'Empty env array should be accepted, got: ' + JSON.stringify(envErrors));
+  });
+
+  test('configHome with env: null → validation error (not an array)', () => {
+    const cap = makeRuntimeCap({
+      id: 'test-rt',
+      runtime: { configHome: { kind: 'dot-home', name: '.test-rt', env: null } },
+    });
+    const errors = validateCapability(cap, 'test-rt');
+    assert.ok(
+      errors.some((e) => e.includes('env')),
+      'Expected env error for null, got: ' + JSON.stringify(errors),
+    );
+  });
+});
+
+describe('FIX 3: tightened runtime validator — skillsHome recursive validation', () => {
+  test('skillsHome with bad kind → validation error via full recursive check', () => {
+    const cap = makeRuntimeCap({
+      id: 'test-rt',
+      runtime: {
+        configHome: {
+          kind: 'xdg', name: 'test', env: [],
+          skillsHome: { kind: 'exotic-kind', name: '.test', env: [] },
+        },
+      },
+    });
+    const errors = validateCapability(cap, 'test-rt');
+    assert.ok(
+      errors.some((e) => e.includes('skillsHome') && e.includes('kind')),
+      'Expected skillsHome.kind error for exotic-kind, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('skillsHome missing env → validation error (env required in recursive check)', () => {
+    const cap = makeRuntimeCap({
+      id: 'test-rt',
+      runtime: {
+        configHome: {
+          kind: 'xdg', name: 'test', env: [],
+          skillsHome: { kind: 'dot-home', name: '.test' },  // no env
+        },
+      },
+    });
+    const errors = validateCapability(cap, 'test-rt');
+    assert.ok(
+      errors.some((e) => e.includes('skillsHome') && e.includes('env')),
+      'Expected skillsHome.env required error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('kilo descriptor: skillsHome passes full validation', () => {
+    // kilo has skillsHome: { kind: "dot-home", name: ".kilo", env: [] } — must pass
+    const { capMap, errors } = loadAndValidate(new Set());
+    const hardErrors = errors.filter((e) => !e.includes('pending-migration'));
+    assert.deepEqual(hardErrors, [], 'No hard errors expected for kilo, got: ' + JSON.stringify(hardErrors));
+    const kiloRt = capMap.get('kilo');
+    assert.ok(kiloRt, 'kilo must be in capMap');
+    assert.ok(kiloRt.runtime.configHome.skillsHome, 'kilo.configHome.skillsHome must be present');
+    assert.strictEqual(kiloRt.runtime.configHome.skillsHome.kind, 'dot-home');
+    assert.strictEqual(kiloRt.runtime.configHome.skillsHome.name, '.kilo');
+  });
+});
+
+describe('FIX 3: tightened runtime validator — ArtifactKind field type checks', () => {
+  test('ArtifactKind with recursive: "yes" (non-boolean) → validation error', () => {
+    const cap = makeRuntimeCap({
+      id: 'test-rt',
+      runtime: {
+        artifactLayout: {
+          global: [{ kind: 'skills', destSubpath: 'skills', prefix: 'gsd-', nesting: 'flat', recursive: 'yes', converter: null }],
+          local: [],
+        },
+      },
+    });
+    const errors = validateCapability(cap, 'test-rt');
+    assert.ok(
+      errors.some((e) => e.includes('recursive') && e.includes('boolean')),
+      'Expected recursive non-boolean error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('ArtifactKind with recursive: true (boolean) → no error', () => {
+    const cap = makeRuntimeCap({
+      id: 'test-rt',
+      runtime: {
+        artifactLayout: {
+          global: [{ kind: 'skills', destSubpath: 'skills', prefix: 'gsd-', nesting: 'flat', recursive: true, converter: null }],
+          local: [],
+        },
+      },
+    });
+    const errors = validateCapability(cap, 'test-rt');
+    const recursiveErrors = errors.filter((e) => e.includes('recursive'));
+    assert.deepEqual(recursiveErrors, [], 'recursive: true must be accepted, got: ' + JSON.stringify(recursiveErrors));
+  });
+
+  test('ArtifactKind with prefix: 42 (non-string) → validation error', () => {
+    const cap = makeRuntimeCap({
+      id: 'test-rt',
+      runtime: {
+        artifactLayout: {
+          global: [{ kind: 'skills', destSubpath: 'skills', prefix: 42, nesting: 'flat', recursive: false, converter: null }],
+          local: [],
+        },
+      },
+    });
+    const errors = validateCapability(cap, 'test-rt');
+    assert.ok(
+      errors.some((e) => e.includes('prefix') && e.includes('string')),
+      'Expected prefix non-string error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('ArtifactKind with converter: 123 (non-string, non-null) → validation error', () => {
+    const cap = makeRuntimeCap({
+      id: 'test-rt',
+      runtime: {
+        artifactLayout: {
+          global: [{ kind: 'skills', destSubpath: 'skills', prefix: 'gsd-', nesting: 'flat', recursive: false, converter: 123 }],
+          local: [],
+        },
+      },
+    });
+    const errors = validateCapability(cap, 'test-rt');
+    assert.ok(
+      errors.some((e) => e.includes('converter') && (e.includes('string') || e.includes('null'))),
+      'Expected converter type error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('ArtifactKind with converter: null → no error', () => {
+    const cap = makeRuntimeCap({
+      id: 'test-rt',
+      runtime: {
+        artifactLayout: {
+          global: [{ kind: 'skills', destSubpath: 'skills', prefix: 'gsd-', nesting: 'flat', recursive: false, converter: null }],
+          local: [],
+        },
+      },
+    });
+    const errors = validateCapability(cap, 'test-rt');
+    const converterErrors = errors.filter((e) => e.includes('converter'));
+    assert.deepEqual(converterErrors, [], 'converter: null must be accepted, got: ' + JSON.stringify(converterErrors));
+  });
+
+  test('ArtifactKind with converter: "convertClaudeCommandToKiloSkill" (string) → no error', () => {
+    const cap = makeRuntimeCap({
+      id: 'test-rt',
+      runtime: {
+        artifactLayout: {
+          global: [{ kind: 'skills', destSubpath: 'skills', prefix: 'gsd-', nesting: 'flat', recursive: true, converter: 'convertClaudeCommandToKiloSkill' }],
+          local: [],
+        },
+      },
+    });
+    const errors = validateCapability(cap, 'test-rt');
+    const converterErrors = errors.filter((e) => e.includes('converter'));
+    assert.deepEqual(converterErrors, [], 'converter: string must be accepted, got: ' + JSON.stringify(converterErrors));
+  });
+});
+
+describe('FIX 3: tightened runtime validator — probeExists optional string', () => {
+  test('probeExists: "skills" is accepted', () => {
+    const errors = validateConfigHome('test', {
+      kind: 'generic-agents-root', name: 'agents', env: ['KIMI_CONFIG_DIR'],
+      probe: ['~/.config/agents', '~/.agents'],
+      probeExists: 'skills',
+    });
+    assert.deepEqual(errors, [], 'probeExists: "skills" must be accepted, got: ' + JSON.stringify(errors));
+  });
+
+  test('probeExists: "" (empty string) → error', () => {
+    const errors = validateConfigHome('test', {
+      kind: 'generic-agents-root', name: 'agents', env: [],
+      probeExists: '',
+    });
+    assert.ok(
+      errors.some((e) => e.includes('probeExists')),
+      'Expected probeExists empty string error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('probeExists: 42 (non-string) → error', () => {
+    const errors = validateConfigHome('test', {
+      kind: 'generic-agents-root', name: 'agents', env: [],
+      probeExists: 42,
+    });
+    assert.ok(
+      errors.some((e) => e.includes('probeExists')),
+      'Expected probeExists non-string error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('probeExists absent → no error (optional)', () => {
+    const errors = validateConfigHome('test', {
+      kind: 'generic-agents-root', name: 'agents', env: ['KIMI_CONFIG_DIR'],
+      probe: ['~/.config/agents'],
+    });
+    const probeExistsErrors = errors.filter((e) => e.includes('probeExists'));
+    assert.deepEqual(probeExistsErrors, [], 'probeExists is optional — no error when absent, got: ' + JSON.stringify(probeExistsErrors));
+  });
+});
+
+// ── 24e. Closed-vocab set exports are correct ─────────────────────────────────
+
+describe('ADR-1016 phase 5a: closed-vocab set exports', () => {
+  test('VALID_CONFIG_HOME_KINDS has exactly the 4 expected values', () => {
+    assert.ok(VALID_CONFIG_HOME_KINDS instanceof Set);
+    for (const v of ['dot-home', 'dot-home-nested', 'xdg', 'generic-agents-root']) {
+      assert.ok(VALID_CONFIG_HOME_KINDS.has(v), 'VALID_CONFIG_HOME_KINDS must contain "' + v + '"');
+    }
+    assert.strictEqual(VALID_CONFIG_HOME_KINDS.size, 4, 'VALID_CONFIG_HOME_KINDS must have exactly 4 members');
+  });
+
+  test('VALID_COMMAND_STYLES has exactly 2 values', () => {
+    assert.ok(VALID_COMMAND_STYLES instanceof Set);
+    assert.ok(VALID_COMMAND_STYLES.has('slash-hyphen'));
+    assert.ok(VALID_COMMAND_STYLES.has('shell-var'));
+    assert.strictEqual(VALID_COMMAND_STYLES.size, 2);
+  });
+
+  test('VALID_HOOKS_SURFACES has exactly 6 values', () => {
+    assert.ok(VALID_HOOKS_SURFACES instanceof Set);
+    for (const v of ['settings-json', 'codex-hooks-json', 'cursor-hooks-json', 'copilot-inline', 'cline-rules', 'none']) {
+      assert.ok(VALID_HOOKS_SURFACES.has(v), 'VALID_HOOKS_SURFACES must contain "' + v + '"');
+    }
+    assert.strictEqual(VALID_HOOKS_SURFACES.size, 6);
+  });
+
+  test('VALID_HOOK_EVENTS has exactly 3 values', () => {
+    assert.ok(VALID_HOOK_EVENTS instanceof Set);
+    for (const v of ['claude', 'gemini', 'opencode-subset']) {
+      assert.ok(VALID_HOOK_EVENTS.has(v), 'VALID_HOOK_EVENTS must contain "' + v + '"');
+    }
+    assert.strictEqual(VALID_HOOK_EVENTS.size, 3);
+  });
+
+  test('VALID_SANDBOX_TIERS has exactly 2 values', () => {
+    assert.ok(VALID_SANDBOX_TIERS instanceof Set);
+    assert.ok(VALID_SANDBOX_TIERS.has('none'));
+    assert.ok(VALID_SANDBOX_TIERS.has('codex-agent-sandbox'));
+    assert.strictEqual(VALID_SANDBOX_TIERS.size, 2);
+  });
+
+  test('VALID_ARTIFACT_KIND_NAMES has exactly 4 values', () => {
+    assert.ok(VALID_ARTIFACT_KIND_NAMES instanceof Set);
+    for (const v of ['commands', 'agents', 'skills', 'kimi-agents']) {
+      assert.ok(VALID_ARTIFACT_KIND_NAMES.has(v), 'VALID_ARTIFACT_KIND_NAMES must contain "' + v + '"');
+    }
+    assert.strictEqual(VALID_ARTIFACT_KIND_NAMES.size, 4);
+  });
+
+  test('VALID_ARTIFACT_NESTINGS has exactly 2 values', () => {
+    assert.ok(VALID_ARTIFACT_NESTINGS instanceof Set);
+    assert.ok(VALID_ARTIFACT_NESTINGS.has('flat'));
+    assert.ok(VALID_ARTIFACT_NESTINGS.has('nested'));
+    assert.strictEqual(VALID_ARTIFACT_NESTINGS.size, 2);
   });
 });

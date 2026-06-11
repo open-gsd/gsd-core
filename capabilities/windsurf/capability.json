@@ -1,0 +1,34 @@
+{
+  "id": "windsurf",
+  "role": "runtime",
+  "title": "Windsurf",
+  "description": "Windsurf (Codeium) — nested under ~/.codeium/windsurf; skills-only artifact layout; no hook surface; no hook events; tier-2 support.",
+  "tier": "core",
+  "requires": [],
+  "runtime": {
+    "configHome": {
+      "kind": "dot-home-nested",
+      "name": "windsurf",
+      "parent": ".codeium",
+      "env": ["WINDSURF_CONFIG_DIR"]
+    },
+    "configFormat": "none",
+    "artifactLayout": {
+      "global": [
+        {
+          "kind": "skills",
+          "destSubpath": "skills",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeCommandToWindsurfSkill"
+        }
+      ],
+      "local": []
+    },
+    "commandStyle": "slash-hyphen",
+    "hooksSurface": "none",
+    "sandboxTier": "none",
+    "supportTier": 2
+  }
+}

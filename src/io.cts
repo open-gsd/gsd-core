@@ -69,6 +69,63 @@ function reapStaleTempFiles(prefix = 'gsd-', { maxAgeMs = 5 * 60 * 1000, dirsOnl
 
 // ─── Output helpers ───────────────────────────────────────────────────────────
 
+/**
+ * Transient write errnos. When stdout/stderr is a NON-BLOCKING pipe — as it is
+ * under the parallel `node --test` runner on Linux CI — a full pipe buffer makes
+ * `fs.writeSync` throw EAGAIN, and a signal can interrupt it with EINTR. Both
+ * clear on retry once the reader drains. This is the same transient class the
+ * STATE.md lock path already retries (ACQUIRE_LOCK_RETRY_ERRNOS, #3776); #1008.
+ */
+const WRITE_RETRY_ERRNOS = new Set(['EAGAIN', 'EINTR']);
+
+// Bounded so a pathological never-draining fd cannot spin forever. Each retry
+// yields the thread for ~1ms via Atomics.wait (the project's sync-sleep idiom —
+// see clock.cts realClock.sleep), so the cap is ~1s of total back-pressure wait.
+const WRITE_MAX_RETRIES = 1000;
+const WRITE_RETRY_BACKOFF_MS = 1;
+
+// Sleep buffer is lazily allocated on the FIRST back-pressure retry (rare — only
+// when a non-blocking pipe is full) and then reused. Keeping it out of module
+// load costs nothing on the overwhelmingly common no-retry path and avoids
+// perturbing SharedArrayBuffer-allocation accounting in other modules (perf-316).
+let _writeSleepBuf: Int32Array | null = null;
+function backoffOnce(): void {
+  if (_writeSleepBuf === null) _writeSleepBuf = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(_writeSleepBuf, 0, 0, WRITE_RETRY_BACKOFF_MS);
+}
+
+/**
+ * Write the entire payload to `fd`, tolerating non-blocking-pipe back-pressure.
+ *
+ * `fs.writeSync` does NOT block on a non-blocking pipe: a full buffer throws
+ * EAGAIN, and a partially-drained buffer returns a SHORT count (fewer bytes than
+ * requested). The previous bare `fs.writeSync(fd, string)` call assumed it always
+ * blocked until the kernel accepted every byte — false under load, which both
+ * threw spurious errors and risked silently truncating output (#1008).
+ *
+ * This loops on short counts (advancing the offset) and retries EAGAIN/EINTR with
+ * a brief Atomics.wait backoff that yields the thread so the reader can drain.
+ * Non-transient errors (e.g. EPIPE) propagate unchanged.
+ */
+function writeAllSync(fd: number, data: string): void {
+  const buf = Buffer.from(data, 'utf8');
+  let offset = 0;
+  let retries = 0;
+  while (offset < buf.length) {
+    try {
+      offset += fs.writeSync(fd, buf, offset, buf.length - offset);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code ?? '';
+      if (WRITE_RETRY_ERRNOS.has(code) && retries < WRITE_MAX_RETRIES) {
+        retries += 1;
+        backoffOnce();
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 function output(result: unknown, raw: boolean, rawValue?: unknown): void {
   let data: string;
   if (raw && rawValue !== undefined) {
@@ -89,10 +146,10 @@ function output(result: unknown, raw: boolean, rawValue?: unknown): void {
     }
   }
   // process.stdout.write() is async when stdout is a pipe — process.exit()
-  // can tear down the process before the reader consumes the buffer.
-  // fs.writeSync(1, ...) blocks until the kernel accepts the bytes, and
-  // skipping process.exit() lets the event loop drain naturally.
-  fs.writeSync(1, data);
+  // can tear down the process before the reader consumes the buffer. writeAllSync
+  // pushes every byte synchronously (looping short counts, retrying EAGAIN/EINTR),
+  // and skipping process.exit() lets the event loop drain naturally.
+  writeAllSync(1, data);
 }
 
 /**
@@ -155,9 +212,9 @@ function getJsonErrorMode(): boolean { return _jsonErrorMode; }
 function error(message: string, reason: ErrorReasonValue = ERROR_REASON.UNKNOWN): never {
   if (_jsonErrorMode) {
     const payload = JSON.stringify({ ok: false, reason, message }) + '\n';
-    fs.writeSync(2, payload);
+    writeAllSync(2, payload);
   } else {
-    fs.writeSync(2, 'Error: ' + message + '\n');
+    writeAllSync(2, 'Error: ' + message + '\n');
   }
   process.exit(1);
 }

@@ -1,0 +1,142 @@
+# ADR-1016: Runtime Capability Descriptor
+
+- **Status:** Proposed
+- **Date:** 2026-06-10
+- **Issue:** [#1016](https://github.com/open-gsd/gsd-core/issues/1016)
+- **Epic:** [#857](https://github.com/open-gsd/gsd-core/issues/857) (Capability system) — rollout phase 5
+- **Realizes:** [ADR-857](857-capability-system.md) Branch 8 (host-CLI support as `role: runtime` Capabilities)
+- **Materializes:** [ADR-58](58-runtime-install-policy-module.md) (the typed `InstallPlan` projection)
+- **Builds on:** [ADR-3660](3660-runtime-artifact-layout-module.md) (artifact layout), [ADR-894](894-capability-declaration-format.md) (the `role: runtime` body, already validated)
+
+## Context
+
+GSD installs into 16 host CLIs (claude, codex, gemini, opencode, kilo, cursor, copilot, antigravity, windsurf, augment, trae, qwen, hermes, codebuddy, cline, kimi). Today the per-runtime differences are encoded as **~287 conditional branches + 15 `is<Runtime>` boolean flags** in `bin/install.js`, plus scattered per-runtime switches in `runtime-homes.cts`, `runtime-config-adapter-registry.cts`, `runtime-artifact-layout.cts`, `runtime-slash.cts`, `runtime-name-policy.cts`, and `model-catalog.json`. **Adding one runtime touches ~18 hardcoded sites.** This is exactly the feature-scattering ADR-857 set out to end — for runtimes rather than features.
+
+ADR-857 Branch 8 decided: host-CLI support becomes a `role: runtime` variant of the unified Capability. Feature Capabilities *produce* artifacts; Runtime Capabilities *project* them onto one host's conventions. Install composes **active Features × the chosen Runtime** at ADR-58's `InstallPlan` seam. A runtime descriptor is a **declarative value over a CLOSED named-primitive vocabulary** — not a code adapter; a genuinely new shape requires adding a first-party primitive (code + enum value), which is the dogfood path a future third-party would also use.
+
+Two enabling pieces already exist:
+
+- **The descriptor schema is authored and validated.** `gen-capability-registry.cjs` `validateRuntimeBody` validates a `role: runtime` capability's `runtime: { configHome, configFormat, artifactLayout, commandStyle, hooksSurface, sandboxTier, supportTier }`, forbids feature-only fields (`skills`/`agents`/`steps`/`contributions`/`gates`/`hooks`), and the registry exposes a `runtimes` index (currently `{}` — no descriptor authored yet).
+- **ADR-58 defines the `InstallPlan`** as a pure typed projection (placements + command text + config intentions → adapters execute) but it is **not materialized**; `runtime-config-adapter-registry.cts` realizes only the adapter-selection half.
+
+What is missing, and what this ADR fixes: only `configFormat` is a real closed enum (5 values); `commandStyle`/`hooksSurface`/`sandboxTier` are loose strings and `artifactLayout` is an unconstrained array. This ADR **closes the vocabulary for all six axes**, decides how the seven hard-case runtimes are absorbed as data, and fixes the staged migration that drives `install.js` from descriptors.
+
+## Decision
+
+**Core principle:** every per-runtime difference is expressed as a value over a closed primitive vocabulary on six axes. A runtime that needs a shape no existing primitive expresses is supported by adding a first-party primitive (a new enum member + the code that honors it) — never by embedding arbitrary code or an open escape hatch in the descriptor. All 16 current runtimes MUST be expressible as data under the vocabulary below; any residue that genuinely cannot be is named explicitly as retained first-party code (§ Decision 8).
+
+### 1. `configHome` — a structured value, not a path string
+
+```
+configHome: {
+  kind: 'dot-home' | 'dot-home-nested' | 'xdg' | 'generic-agents-root',
+  name: string,                 // e.g. 'claude', 'opencode'
+  parent?: string,              // for dot-home-nested: e.g. '.gemini' (antigravity), '.codeium' (windsurf)
+  env: string[],                // ordered override env vars, e.g. ['CLAUDE_CONFIG_DIR'] (required; may be empty)
+  probe?: string[],             // ordered candidate subpaths; first existing wins (antigravity, kimi)
+  probeExists?: string,         // if set, select the first probe candidate where <candidate>/<probeExists> exists (kimi: 'skills')
+  skillsHome?: { kind, name, ... }  // override when the skills dir ≠ config dir (kilo only)
+}
+```
+
+- `dot-home` → `~/.{name}` (claude, cursor, codex, copilot, augment, trae, qwen, hermes, codebuddy, cline).
+- `dot-home-nested` → `~/{parent}/{name}` (antigravity `~/.gemini/antigravity` + probe; windsurf `~/.codeium/windsurf`).
+- `xdg` → `$XDG_CONFIG_HOME/{name}` ?? `~/.config/{name}` (opencode, kilo).
+- `generic-agents-root` → the shared `~/.config/agents` / `~/.agents` first-existing root (kimi).
+
+This absorbs kilo (`skillsHome` split), kimi & antigravity (`probe`), windsurf (`dot-home-nested`). `runtime-homes.cts` becomes a pure interpreter of this value.
+
+`configHome` resolution is **pure and read-only** (a first-existing probe; no `mkdirSync` — verified in `runtime-homes.cts`). Any directory creation at install time is the `configFormat` permissions-writer's responsibility (opencode/kilo), never the descriptor-resolution step — so `configHome` carries no `createIfMissing` flag.
+
+### 2. `configFormat` — the existing closed enum (unchanged)
+
+`settings-json | toml | markdown | markdown-dir | none`. Cursor is `none` (it writes no settings file — its only managed file is the hooks manifest, captured by `hooksSurface`, not `configFormat`). opencode/kilo are `settings-json` with a JSONC **permissions sidecar** expressed by an optional `permissions: 'opencode-jsonc' | 'kilo-jsonc' | 'none'` sub-field (the only two runtimes that write one).
+
+Claude's `permissions.allow/deny` (a tool-approval allowlist) rides as a sub-field of the `settings-json` variant — it is **not** a sandbox tier (see Decision 6).
+
+### 3. `artifactLayout` — ADR-3660 `kinds[]`, keyed by scope
+
+```
+artifactLayout: {
+  global: ArtifactKind[],
+  local:  ArtifactKind[]
+}
+ArtifactKind = { kind: 'commands'|'agents'|'skills'|'kimi-agents', destSubpath: string, prefix: string,
+                 nesting: 'flat'|'nested', recursive: boolean, stage: string }
+```
+
+Scope-keying is required generally, not just for the hard case: **claude itself differs** (global = `skills/`, local = `commands/gsd/` + `agents/`), and **cline** differs (global = skills + `.clinerules/`, local = `.clinerules/` only). ADR-3660 already absorbs hermes (`destSubpath: 'skills/gsd'`), opencode/kilo (`destSubpath: 'command'` singular), and gemini (commands-only, `.toml`) via `destSubpath`/`prefix`. The `nesting`/`recursive` flags carry the ns-* router nesting + non-recursive-loader facts (#924/#28266). The descriptor's `artifactLayout` IS the ADR-3660 layout, declared per runtime; `runtime-artifact-layout.cts` becomes its lookup table.
+
+Each `ArtifactKind` names its per-runtime body converter (e.g. `convertClaudeCommandToGeminiToml`, the codex agent-TOML emitter) via a **closed `ConverterName` enum** — verified as 15 named first-party functions covering the 16 runtimes (three share Claude's). The converter is referenced by closed name, never embedded; closing it into a union type (vs today's open string) is what makes the "closed vocabulary" claim type-enforced rather than convention.
+
+### 4. `commandStyle` — closed enum (2 values)
+
+`slash-hyphen` (`/gsd-<cmd>`, 15 runtimes) | `shell-var` (`$gsd-<cmd>`, codex only). Gemini's own `gsd:`-namespaced TOML routing is a property of its command artifacts (a `commands/gsd/*.toml` layout fact), not GSD's emission style — it stays `slash-hyphen`.
+
+### 5. `hooksSurface` — closed enum + a hook-event dialect
+
+```
+hooksSurface: 'settings-json' | 'codex-hooks-json' | 'cursor-hooks-json'
+            | 'copilot-inline' | 'cline-rules' | 'none',
+hookEvents?: 'claude'   // SessionStart/PreToolUse/PostToolUse
+           | 'gemini'   // BeforeTool/AfterTool (gemini, antigravity)
+           | 'opencode-subset'  // settings-json surface but SessionStart/PostToolUse skipped
+```
+
+`settings-json` covers claude, gemini, antigravity, augment, qwen, hermes, codebuddy; the event-name and registration-subset differences ride on `hookEvents` rather than splitting the surface enum. `none` = windsurf, trae, kimi, kilo, opencode — these five runtimes register **zero** managed lifecycle hooks today; `opencode-subset` is reserved ADR vocabulary with no current consumer (opencode and kilo write a `settings.json` for config/permissions, which is the `configFormat` axis, not the hook-registration axis).
+
+### 6. `sandboxTier` — the agent-sandbox primitive (closed enum)
+
+`none` (default — no per-agent sandbox) | `codex-agent-sandbox` (codex's `CODEX_AGENT_SANDBOX` map of agent → `workspace-write` | `read-only`, baked into each agent `.toml`). Codex is the **only** runtime with a non-`none` value today, so this is the thinnest axis — kept distinct from `supportTier` (coverage) and from model-catalog routing.
+
+**Explicitly NOT on this axis** (verified, to prevent conflation): Claude's `permissions.allow/deny` is a *tool-approval allowlist* → it belongs on `configFormat`'s `settings-json` variant (Decision 2). The opencode/kilo permissions sidecar is a *filesystem read-grant* → it belongs on `configFormat`'s `permissions` sub-field (Decision 2). These three are categorically different mechanisms; only codex's per-agent sandbox mode is `sandboxTier`.
+
+### 7. `supportTier` — GSD coverage tier (unchanged: 1 | 2)
+
+`1` = fully tested first-party (claude, codex, antigravity); `2` = shipped, lower-tier (the other 13). None dropped. Drives the cross-runtime test matrix, not behavior.
+
+### 8. Staged consumption — author registry-only, then drive install one axis at a time
+
+The migration is staged the way phases 3–4 were (registry-only → consume incrementally → equivalence-proven no-op → retire the hardcoded branch). **Four of the six axes already live in dedicated modules** that `install.js` merely consumes, so driving them from the descriptor is per-axis and low-risk; the rest is staged behind a prerequisite and assembled last — **no big-bang `install()` rewrite**.
+
+1. **5a — author the 16 descriptors** (`capabilities/<runtime>/capability.json`, `role: runtime`) registry-only; nothing consumes them. The generator already validates them; the `runtimes` index populates.
+2. **5b — drive `configHome`** ← descriptor (`runtime-homes.cts` already centralizes it; swap its switch for a descriptor lookup). Smallest blast radius.
+3. **5c — drive `commandStyle`** ← descriptor (`runtime-slash.cts`, 2 values). Trivial.
+4. **5d — drive `artifactLayout`** ← descriptor (`runtime-artifact-layout.cts`, ADR-3660; this is ADR-3660's Phase 2 / #3664 — the largest LOC reduction).
+5. **5e — drive `configFormat`** ← descriptor (`runtime-config-adapter-registry.cts`) **and close the `ConverterName` enum** (Decision 3). Model-catalog routing stays orthogonal — referenced by descriptor `name`, not an axis; codex's install-time model-embedding is an implementation detail of its converter, not a 7th axis.
+6. **5f — extract `hooksSurface` into its own module, then drive it** ← descriptor. `hooks-surface` is the one axis still scattered across `install.js`; its module extraction is a prerequisite, exactly as ADR-3660 was for `artifactLayout`.
+7. **5g — materialize the `InstallPlan`** (ADR-58): collect the now-descriptor-driven per-axis projections into one typed value, so `install()` becomes *resolve chosen Runtime descriptor × active Feature Capabilities → `InstallPlan` → adapters execute*. This is **reachable by collection, not a rewrite** — the interleaving that made `install.js` look monolithic is already dissolved by 5b–5f *before* the plan is assembled. It is a phase-5 **deliverable**, not an aspiration.
+
+Each rung is its own approved-enhancement + PR + equivalence proof (`sandbox-tier`, codex-only, is tiny and rides along in 5e/5g). **Irreducible first-party code, named not hidden:** the artifact converter *functions* remain first-party code, selected by the descriptor's closed `ConverterName` — the descriptor never embeds them.
+
+### 9. Two axes: the descriptor dogfoods the *runtime* interface only
+
+Two orthogonal axes were conflated under "third-party" in earlier ADRs (grilled against #956/#999):
+
+- **Authorship / distribution** — *who wrote it & how it ships*: built-in (in-repo) vs third-party (installed). The welcoming, common word "plugin / third-party plugin" stays here, untouched.
+- **Integration shape** — *where the code runs*: an in-host **Capability** (declarative artifacts + in-tree first-party code referenced by closed name) or a **Connected Capability** (brings its own external process / service / state — e.g. MemPalace's MCP server + database, #956).
+
+All 16 runtimes are authored through the same descriptor (dogfooding) — but the descriptor dogfoods the **runtime-descriptor interface only**. It does **not** validate the third-party *feature-plugin* interface, because the hard feature plugins third parties actually write are **Connected Capabilities**, whose contract — MCP-server / external-process / backend-provider contributions + a §7 trust/load gate — **does not exist yet**. Third-party *runtime* loading stays purely additive (a loader + light trust gate over the descriptor: schema validation + write-confinement to the declared `configHome` + opt-in). The third-party *feature-plugin / Connected Capability* path is a **named, tracked gap**, not de-risked by this work; #956 is its design vehicle.
+
+## Alternatives considered
+
+1. **Keep per-runtime branches; just extract helpers** — rejected: leaves the ~18-site add-a-runtime tax and the scattering ADR-857 exists to end; no path to third-party runtimes.
+2. **Open escape hatch / arbitrary code in the descriptor** (a `customInstall(fn)`) — rejected: violates the closed-vocabulary principle, reintroduces code-in-data, and breaks the third-party trust story. Hard shapes are absorbed by *adding a named primitive*, reviewed first-party.
+3. **Big-bang `InstallPlan` materialization** (drive all axes at once) — rejected: `install.js` is ~287 branches; a single cutover can't be equivalence-proven incrementally. Per-axis staging (Decision 8) keeps every step a provable no-op, matching phases 3–4.
+4. **A single `configHome` path string** — rejected: cannot express kilo's config≠skills split, antigravity/kimi probes, or env overrides without re-scattering logic; the structured value (Decision 1) is the minimal shape that absorbs all 16.
+
+## Consequences
+
+**Positive:** adding a runtime becomes authoring one `capability.json` (no `install.js` surgery); per-runtime knowledge lives in one declarative place; the third-party door is additive; `install.js` shrinks substantially (ADR-3660 alone projects ~250 lines off the artifact axis); the descriptor dogfoods the third-party *runtime* interface (it does **not** validate the third-party *feature-plugin* / Connected Capability interface — a separate, undesigned contract).
+
+**Negative:** the closed vocabulary must grow (reviewed) when a genuinely new host shape appears — intentional friction, the trust boundary. The staged migration is many small PRs. The `sandboxTier` axis is thin (only codex non-`none`) and may feel speculative until a second sandboxed runtime appears.
+
+**Neutral:** behavior is unchanged throughout (every axis cutover is equivalence-proven); model-catalog routing stays where it is, referenced by descriptor `name`.
+
+## Out of scope
+
+Authoring the 16 descriptors and the per-axis install cutovers (the impl phases); third-party runtime loading (its own additive ADR + trust gate); the per-feature loop-hook wiring (phase-6 cleanup); moving feature `*.enabled` keys out of the central config-schema (phase-6 cleanup).
+
+- The **Connected Capability** contract (MCP-server / external-process / backend-provider contributions + the §7 trust/load gate) — future design, vehicle #956.
+- The **hook-firing spike** — proving `loop.render-hooks` → workflow execution end-to-end with a *host-computed aggregate* (a phase-6-flavored de-risk that should land **before** phase-5 build, since #956/#999 both depend on it).
+- The structural **"off means off"** rule (the host derives shared outputs from the active hook set; hooks add or are counted, never mutate host source) — an ADR-894 contribution-model concern, recorded there, not in this ADR.

@@ -146,3 +146,32 @@ Phase 1 implementation landed on `feat/3663-runtime-artifact-layout-module-phase
 - Tests: `runtime-artifact-layout-resolve.test.cjs` (16), `runtime-artifact-layout-edge-cases.test.cjs` (10), `runtime-artifact-layout-stage.test.cjs` (5), `install-profiles-stage.test.cjs` (+7 new), `surface-apply.test.cjs` (updated 5 call sites + new skills-kind test).
 
 Phase 2 (separate issue #3664 — `bin/install.js` install/uninstall pipeline migration) is blocked on Phase 1 merge.
+
+## Amendment (2026-06-11): adding a runtime that rides the established layout is an addendum, not a new ADR
+
+**Maintainer governance decision.** Registering an additional runtime that reuses the *existing* install machinery — the `profile-marker-only` install surface (ADR-58 / the config-adapter registry) plus a single `skills` kind in this module's layout table — is an **enhancement governed by this ADR via this addendum**, not a change that requires its own ADR. New design rationale (and a fuller amendment) is required only when a runtime introduces something this ADR has not already decided: a **new install surface**, a **new `ArtifactKind`**, or a layout quirk not expressible in the existing record fields (cf. the Hermes nested-namespace and Cline zero-kinds cases in the Decision section).
+
+This codifies the lightweight path the project has used since Phase 1 for Codex, Copilot, Trae, Windsurf, Qwen, CodeBuddy, Cline, Kimi, et al., and makes the addendum-vs-new-ADR test explicit so contributors and reviewers stop re-litigating it per runtime.
+
+### Qualifying criteria (all three) for the addendum path
+
+1. **No new install surface** — the runtime maps to an existing `installSurface` value in the config-adapter registry (`profile-marker-only`, etc.); `writesSharedSettings: false`; `finishPermissionWriter: null` or an existing writer.
+2. **No new artifact kind** — the layout entry is composed only of the existing `commands` / `agents` / `skills` kinds via the existing `skillsKind(...)` / record-field machinery; no new `ArtifactKind` shape.
+3. **Reuses the converter contract** — per-runtime converters follow the established shape (see the agent-frontmatter contract below); only the path/name substitutions differ.
+
+A runtime failing any of the three needs a fuller amendment here (or a new ADR) documenting the new surface/kind and its rationale.
+
+### Agent-frontmatter contract (normative)
+
+Per-runtime **agent** converters emit a **sanitized minimal frontmatter** — `name` + `description` only — rebuilt through `yamlIdentifier(name)` / `yamlQuote(toSingleLine(description))`, matching `convertClaudeAgentToTraeAgent` / `convertClaudeAgentToClineAgent` / `convertClaudeAgentToCodebuddyAgent`. Claude-specific fields (`tools:`, `color:`, commented hook blocks) MUST NOT be passed through verbatim. A runtime that genuinely requires richer agent frontmatter must document the target schema in an amendment here and emit it deliberately — not arrive at pass-through by accident. (Recorded because PR #1021's first cut of `convertClaudeAgentToQoderAgent` fell through to full pass-through; it must be brought onto the sibling contract.)
+
+### Qoder (issue #860 / PR #1021) — first runtime recorded under this addendum
+
+Qoder qualifies on all three criteria and is added as a layout-table entry, not a new design:
+
+- **Install surface:** `profile-marker-only` (config-adapter registry), identical shape to Trae/Windsurf — no statusline, no `package.json`, no shared `settings.json`/permission writes.
+- **Layout:** `case 'qoder'` → `[ skillsKind('skills', 'gsd-', 'convertClaudeCommandToQoderSkill', 'qoder', configDir) ]`; `'qoder'` added to `ALLOWED_RUNTIMES`.
+- **Home:** `~/.qoder` (or `QODER_CONFIG_DIR`), via `runtime-homes`.
+- **Converters:** `convertClaudeToQoderMarkdown`, `convertClaudeCommandToQoderSkill`, `convertClaudeAgentToQoderAgent` — the agent converter is subject to the contract above.
+
+**Path note:** since ADR-457's `.cts` migration, the canonical module source is `src/runtime-artifact-layout.cts` (built to `gsd-core/bin/lib/runtime-artifact-layout.cjs`); the runtime enumeration is owned by `src/runtime-homes.cts` and `src/runtime-config-adapter-registry.cts`. The original body above predates that move; paths read accordingly.

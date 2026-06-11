@@ -17,6 +17,8 @@
  * (F) Regression locks: the snippet file contains no /gsd-tools substring; and
  *     no line in workflows/do.md matches /\/gsd[:-][a-z]/ (dispatcher-parity
  *     scanner must not read the preamble as a slash-command stub).
+ * (H) Codex shim fallback: when PATH has no gsd-tools, $HOME/.codex/gsd-core/bin
+ *     can satisfy gsd_run for Codex shim-only installs.
  */
 
 // allow-test-rule: structural parity/drift guard — asserts literal presence/absence of the canonical gsd_run launcher and the retired $GSD_SDK / `/gsd-tools` tokens across workflow markdown; there is no typed IR for "this source file does not contain substring X".
@@ -393,6 +395,97 @@ describe('runtime-launcher-parity (#373)', () => {
         `Run \`node scripts/sync-runtime-launcher.cjs\` to propagate:\n` +
         missing.join('\n'),
     );
+  });
+
+  // ─── (H) Codex shim fallback behavioral ------------------------------------
+  test('(H) gsd_run resolves $HOME/.codex/gsd-core/bin/ shim when PATH has no gsd-tools', () => {
+    const CODEX_HOME_PROBE = '.codex/gsd-core/bin/';
+
+    const snippetContent = fs.readFileSync(SNIPPET_FILE, 'utf8');
+    assert.ok(
+      snippetContent.includes(CODEX_HOME_PROBE),
+      `_runtime-launcher.snippet.sh must contain the Codex fallback arm (probing "${CODEX_HOME_PROBE}").`,
+    );
+
+    const missing = [];
+    for (const f of collectWorkflowFiles()) {
+      const content = fs.readFileSync(f, 'utf8');
+      const blocks = extractShellBlocks(content);
+      const allBlockLines = blocks.flatMap((b) => b.lines);
+      const fileHasGsdRun = allBlockLines.some((l) => /\bgsd_run\b/.test(l));
+      if (!fileHasGsdRun) continue;
+      if (!allBlockLines.join('\n').includes(CODEX_HOME_PROBE)) {
+        missing.push(path.relative(WORKFLOWS_DIR, f));
+      }
+    }
+    assert.deepStrictEqual(
+      missing,
+      [],
+      `These workflow files use gsd_run but are missing the Codex fallback arm ("${CODEX_HOME_PROBE}"). ` +
+        `Run \`node scripts/sync-runtime-launcher.cjs\` to propagate:\n` +
+        missing.join('\n'),
+    );
+
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-codex-home-'));
+    const fakeRuntime = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-codex-rt-'));
+    try {
+      const codexBinDir = path.join(fakeHome, '.codex', 'gsd-core', 'bin');
+      fs.mkdirSync(codexBinDir, { recursive: true });
+      const stubPath = path.join(codexBinDir, 'gsd-tools.cjs');
+      fs.writeFileSync(
+        stubPath,
+        '#!/usr/bin/env node\nconsole.log("CODEX_HOME_STUB:" + process.argv.slice(2).join(","));\n',
+      );
+      fs.chmodSync(stubPath, 0o755);
+
+      const snippet = fs.readFileSync(SNIPPET_FILE, 'utf8');
+      const scriptContent =
+        `unset GSD_TOOLS\n` +
+        `export RUNTIME_DIR=${JSON.stringify(fakeRuntime)}\n` +
+        `export HOME=${JSON.stringify(fakeHome)}\n` +
+        snippet +
+        `\nprintf "GSD_TOOLS=%s\\n" "$GSD_TOOLS"\n` +
+        `gsd_run query init.quick\n`;
+
+      const scriptPath = path.join(fakeRuntime, 'test-codex-home-fb.sh');
+      fs.writeFileSync(scriptPath, scriptContent);
+
+      const hasExecutable = (dir, name) => {
+        try {
+          fs.accessSync(path.join(dir, name), fs.constants.X_OK);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      const systemPaths = (process.env.PATH || '/usr/bin:/bin')
+        .split(path.delimiter)
+        .filter((p) => !hasExecutable(p, 'gsd-tools'));
+      if (!systemPaths.some((p) => hasExecutable(p, 'node'))) {
+        const nodeShimDir = path.join(fakeRuntime, 'node-shim');
+        fs.mkdirSync(nodeShimDir, { recursive: true });
+        fs.symlinkSync(process.execPath, path.join(nodeShimDir, 'node'));
+        systemPaths.unshift(nodeShimDir);
+      }
+
+      const stdout = execFileSync('bash', [scriptPath], {
+        encoding: 'utf8',
+        env: { ...process.env, PATH: systemPaths.join(path.delimiter), HOME: fakeHome },
+      });
+
+      const normStdout = stdout.replace(/\\/g, '/');
+      assert.ok(
+        normStdout.includes('.codex/gsd-core/bin/'),
+        `Expected GSD_TOOLS to resolve into .codex/gsd-core/bin/, got:\n${stdout.trim()}`,
+      );
+      assert.ok(
+        stdout.includes('CODEX_HOME_STUB:query,init.quick'),
+        `Expected Codex shim stub output, got:\n${stdout.trim()}`,
+      );
+    } finally {
+      cleanup(fakeHome);
+      cleanup(fakeRuntime);
+    }
   });
 
   // ─── (F) Regression locks: no /gsd-tools substring; no do.md dispatcher false-positive ──

@@ -1,0 +1,51 @@
+{
+  "id": "claude",
+  "role": "runtime",
+  "title": "Claude Code",
+  "description": "Anthropic Claude Code — primary development runtime; tier-1 support with full hook surface and skills-based global install.",
+  "tier": "core",
+  "requires": [],
+  "runtime": {
+    "configHome": {
+      "kind": "dot-home",
+      "name": ".claude",
+      "env": ["CLAUDE_CONFIG_DIR"]
+    },
+    "configFormat": "settings-json",
+    "artifactLayout": {
+      "global": [
+        {
+          "kind": "skills",
+          "destSubpath": "skills",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeCommandToClaudeSkill"
+        }
+      ],
+      "local": [
+        {
+          "kind": "commands",
+          "destSubpath": "commands/gsd",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": null
+        },
+        {
+          "kind": "agents",
+          "destSubpath": "agents",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": null
+        }
+      ]
+    },
+    "commandStyle": "slash-hyphen",
+    "hooksSurface": "settings-json",
+    "hookEvents": "claude",
+    "sandboxTier": "none",
+    "supportTier": 1
+  }
+}

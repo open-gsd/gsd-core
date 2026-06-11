@@ -741,16 +741,22 @@ describe('dispatchCapabilityCommand — async router returns a Promise → struc
   });
 });
 
-// ─── 9. Behavior-preservation: real registry has empty commandFamilies ────────
+// ─── 9. Behavior-preservation: real registry commandFamilies ────────────────
 
 describe('dispatchCapabilityCommand — real registry behavior-preservation', () => {
-  test('real capability-registry.cjs commandFamilies is {} (no capability declares commands)', () => {
+  test('real capability-registry.cjs commandFamilies is exported and is an object', () => {
+    // Phase 4d-impl-2: graphify was the first capability to declare a command family.
+    // This test was originally written as "commandFamilies must be empty today" but
+    // now asserts the structural contract instead (exported, object) since the graphify
+    // cutover populates it.
     const realRegistry = require('../gsd-core/bin/lib/capability-registry.cjs');
     assert.ok(realRegistry.commandFamilies, 'commandFamilies must be exported');
-    assert.deepEqual(
-      Object.keys(realRegistry.commandFamilies),
-      [],
-      'real registry commandFamilies must be empty today',
+    assert.strictEqual(typeof realRegistry.commandFamilies, 'object',
+      'commandFamilies must be an object');
+    // graphify is the first (and currently only) real capability command family
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(realRegistry.commandFamilies, 'graphify'),
+      'real registry commandFamilies must include graphify after 4d-impl-2 cutover',
     );
   });
 

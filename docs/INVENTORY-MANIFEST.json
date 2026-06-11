@@ -1,5 +1,5 @@
 {
-  "generated": "2026-06-09",
+  "generated": "2026-06-11",
   "families": {
     "agents": [
       "gsd-advisor-researcher",
@@ -269,6 +269,7 @@
       "adr-parser.cjs",
       "agent-command-router.cjs",
       "artifacts.cjs",
+      "audit-command-router.cjs",
       "audit.cjs",
       "capability-registry.cjs",
       "capability-state.cjs",
@@ -297,6 +298,7 @@
       "federated-config.cjs",
       "frontmatter.cjs",
       "gap-checker.cjs",
+      "graphify-command-router.cjs",
       "graphify.cjs",
       "gsd2-import.cjs",
       "init-command-router.cjs",
@@ -305,6 +307,7 @@
       "installer-migration-authoring.cjs",
       "installer-migration-report.cjs",
       "installer-migrations.cjs",
+      "intel-command-router.cjs",
       "intel.cjs",
       "io.cjs",
       "learnings.cjs",

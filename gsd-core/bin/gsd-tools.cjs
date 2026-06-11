@@ -1155,7 +1155,8 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       if (subcommand === 'complete') {
         const milestoneName = parseMultiwordArg(args, 'name');
         const archivePhases = args.includes('--archive-phases');
-        milestone.cmdMilestoneComplete(cwd, args[2], { name: milestoneName, archivePhases }, raw);
+        const force = args.includes('--force');
+        milestone.cmdMilestoneComplete(cwd, args[2], { name: milestoneName, archivePhases, force }, raw);
       } else {
         error('Unknown milestone subcommand. Available: complete', ERROR_REASON.SDK_UNKNOWN_COMMAND);
       }
@@ -1177,27 +1178,6 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
     case 'progress': {
       const subcommand = args[1] || 'json';
       commands.cmdProgressRender(cwd, subcommand, raw);
-      break;
-    }
-
-    case 'audit-uat': {
-      const uat = require('./lib/uat.cjs');
-      uat.cmdAuditUat(cwd, raw);
-      break;
-    }
-
-    case 'audit-open': {
-      const { auditOpenArtifacts, formatAuditReport } = require('./lib/audit.cjs');
-      const wantJson = args.includes('--json');
-      const result = auditOpenArtifacts(cwd);
-      if (wantJson) {
-        // core.output JSON-stringifies its first arg; pass the object directly.
-        core.output(result, raw);
-      } else {
-        // Human-readable report must bypass JSON encoding — use the rawValue
-        // form (third arg) which core.output emits verbatim.
-        core.output(null, true, formatAuditReport(result));
-      }
       break;
     }
 
@@ -1453,83 +1433,6 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         require('./lib/worktree-base-ref.cjs').cmdWorktreeSetBaseRef(cwd, args.slice(2));
       } else {
         error('Unknown worktree subcommand. Available: cleanup-wave, reap-orphans, base-check, set-baseref', ERROR_REASON.SDK_UNKNOWN_COMMAND);
-      }
-      break;
-    }
-
-    // ─── Intel ────────────────────────────────────────────────────────────
-
-    case 'intel': {
-      const intel = require('./lib/intel.cjs');
-      const subcommand = args[1];
-      if (subcommand === 'query') {
-        const term = args[2];
-        if (!term) error('Usage: gsd-tools intel query <term>', ERROR_REASON.USAGE);
-        const planningDir = path.join(cwd, '.planning');
-        core.output(intel.intelQuery(term, planningDir), raw);
-      } else if (subcommand === 'status') {
-        const planningDir = path.join(cwd, '.planning');
-        const status = intel.intelStatus(planningDir);
-        if (!raw && status.files) {
-          for (const file of Object.values(status.files)) {
-            if (file.updated_at) {
-              file.updated_at = core.timeAgo(new Date(file.updated_at));
-            }
-          }
-        }
-        core.output(status, raw);
-      } else if (subcommand === 'diff') {
-        const planningDir = path.join(cwd, '.planning');
-        core.output(intel.intelDiff(planningDir), raw);
-      } else if (subcommand === 'snapshot') {
-        const planningDir = path.join(cwd, '.planning');
-        core.output(intel.intelSnapshot(planningDir), raw);
-      } else if (subcommand === 'patch-meta') {
-        const filePath = args[2];
-        if (!filePath) error('Usage: gsd-tools intel patch-meta <file-path>', ERROR_REASON.USAGE);
-        core.output(intel.intelPatchMeta(path.resolve(cwd, filePath)), raw);
-      } else if (subcommand === 'validate') {
-        const planningDir = path.join(cwd, '.planning');
-        core.output(intel.intelValidate(planningDir), raw);
-      } else if (subcommand === 'extract-exports') {
-        const filePath = args[2];
-        if (!filePath) error('Usage: gsd-tools intel extract-exports <file-path>', ERROR_REASON.USAGE);
-        core.output(intel.intelExtractExports(path.resolve(cwd, filePath)), raw);
-      } else if (subcommand === 'update') {
-        const planningDir = path.join(cwd, '.planning');
-        core.output(intel.intelUpdate(planningDir), raw);
-      } else if (subcommand === 'api-surface') {
-        const planningDir = path.join(cwd, '.planning');
-        core.output(intel.intelApiSurface(planningDir), raw);
-      } else {
-        error('Unknown intel subcommand. Available: query, status, update, diff, snapshot, patch-meta, validate, extract-exports, api-surface', ERROR_REASON.SDK_UNKNOWN_COMMAND);
-      }
-      break;
-    }
-
-    // ─── Graphify ──────────────────────────────────────────────────────────
-
-    case 'graphify': {
-      const graphify = require('./lib/graphify.cjs');
-      const subcommand = args[1];
-      if (subcommand === 'query') {
-        const term = args[2];
-        if (!term) error('Usage: gsd-tools graphify query <term>', ERROR_REASON.USAGE);
-        const budgetIdx = args.indexOf('--budget');
-        const budget = budgetIdx !== -1 ? parseInt(args[budgetIdx + 1], 10) : null;
-        core.output(graphify.graphifyQuery(cwd, term, { budget }), raw);
-      } else if (subcommand === 'status') {
-        core.output(graphify.graphifyStatus(cwd), raw);
-      } else if (subcommand === 'diff') {
-        core.output(graphify.graphifyDiff(cwd), raw);
-      } else if (subcommand === 'build') {
-        if (args[2] === 'snapshot') {
-          core.output(graphify.writeSnapshot(cwd), raw);
-        } else {
-          core.output(graphify.graphifyBuild(cwd), raw);
-        }
-      } else {
-        error('Unknown graphify subcommand. Available: build, query, status, diff', ERROR_REASON.SDK_UNKNOWN_COMMAND);
       }
       break;
     }
@@ -2086,7 +1989,8 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       // An unmigrated command still hits its hardcoded `case` above — untouched.
       // A migrated command's `case` is removed at cutover, so it reaches here and
       // dispatchCapabilityCommand routes it to the capability's registered router.
-      // With commandFamilies={} today, this always returns false and is a no-op.
+      // commandFamilies now includes migrated capabilities (e.g. graphify → graphify-command-router.cjs);
+      // this returns true when a registered capability owns the command, false otherwise.
       if (dispatchCapabilityCommand({ command, args, cwd, raw, error })) break;
 
       // #3243: if the caller passed a dotted form (e.g. "foo.bar"), the shim

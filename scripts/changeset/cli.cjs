@@ -565,8 +565,15 @@ function main() {
   const { exitCode, report } = opts.cmd === 'render' ? cmdRender(opts) : cmdGithubReleaseNotes(opts);
   if (opts.json) {
     process.stdout.write(JSON.stringify(report, null, 2) + '\n');
-  } else if (opts.cmd === 'render' && opts.preview) {
+  } else if (opts.cmd === 'render' && opts.preview && typeof report.preview === 'string') {
     // render --preview: emit the rendered section verbatim (no mutation occurred).
+    // The `typeof report.preview === 'string'` guard is load-bearing: cmdRender
+    // early-returns on a fragment parse failure (failures.length > 0) WITHOUT a
+    // `preview` key, so writing report.preview unguarded crashed the rc release
+    // job with ERR_INVALID_ARG_TYPE, masking the real cause (a malformed
+    // fragment). When preview is absent we fall through to the failure reporter
+    // below, which names the offending file and exits non-zero — identical to a
+    // non-preview render.
     process.stdout.write(report.preview);
   } else if (opts.cmd === 'github-release-notes' && report.body) {
     process.stdout.write(report.body);

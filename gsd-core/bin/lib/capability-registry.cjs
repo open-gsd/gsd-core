@@ -7,6 +7,711 @@
  */
 
 const capabilities = {
+  "antigravity": {
+    "id": "antigravity",
+    "role": "runtime",
+    "title": "Antigravity",
+    "description": "Google Antigravity IDE — nested under ~/.gemini/antigravity; probed across 1.x and 2.x layouts; Gemini hook event dialect; nested skill layout; tier-1 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home-nested",
+        "name": "antigravity",
+        "parent": ".gemini",
+        "env": [
+          "ANTIGRAVITY_CONFIG_DIR"
+        ],
+        "probe": [
+          "antigravity",
+          "antigravity-ide",
+          "antigravity-cli"
+        ]
+      },
+      "configFormat": "settings-json",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToAntigravitySkill"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "settings-json",
+      "hookEvents": "gemini",
+      "sandboxTier": "none",
+      "supportTier": 1
+    }
+  },
+  "audit": {
+    "id": "audit",
+    "role": "feature",
+    "title": "Audit",
+    "description": "Open-artifact audit and UAT-gap audit for milestone close gates; exposes `gsd-tools audit-uat` (cross-phase UAT outstanding items) and `gsd-tools audit-open` (structured open-artifact scan across debug, tasks, threads, todos, seeds, UAT, verification, context-questions).",
+    "tier": "full",
+    "requires": [],
+    "skills": [],
+    "agents": [],
+    "config": {},
+    "commands": [
+      {
+        "family": "audit-uat",
+        "module": "audit-command-router.cjs",
+        "router": "routeAuditUat"
+      },
+      {
+        "family": "audit-open",
+        "module": "audit-command-router.cjs",
+        "router": "routeAuditOpen"
+      }
+    ],
+    "hooks": [],
+    "steps": [],
+    "contributions": [],
+    "gates": []
+  },
+  "augment": {
+    "id": "augment",
+    "role": "runtime",
+    "title": "Augment Code",
+    "description": "Augment Code CLI — commands + nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".augment",
+        "env": [
+          "AUGMENT_CONFIG_DIR"
+        ]
+      },
+      "configFormat": "settings-json",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "commands",
+            "destSubpath": "commands",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          },
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToAugmentSkill"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "settings-json",
+      "hookEvents": "claude",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
+  "claude": {
+    "id": "claude",
+    "role": "runtime",
+    "title": "Claude Code",
+    "description": "Anthropic Claude Code — primary development runtime; tier-1 support with full hook surface and skills-based global install.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".claude",
+        "env": [
+          "CLAUDE_CONFIG_DIR"
+        ]
+      },
+      "configFormat": "settings-json",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          }
+        ],
+        "local": [
+          {
+            "kind": "commands",
+            "destSubpath": "commands/gsd",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          }
+        ]
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "settings-json",
+      "hookEvents": "claude",
+      "sandboxTier": "none",
+      "supportTier": 1
+    }
+  },
+  "cline": {
+    "id": "cline",
+    "role": "runtime",
+    "title": "Cline",
+    "description": "Cline (VS Code extension) — global-only nested-skill layout; cline-rules hook surface (.clinerules); no hook events emitted; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".cline",
+        "env": [
+          "CLINE_CONFIG_DIR"
+        ]
+      },
+      "configFormat": "markdown-dir",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClineSkill"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "cline-rules",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
+  "codebuddy": {
+    "id": "codebuddy",
+    "role": "runtime",
+    "title": "CodeBuddy",
+    "description": "CodeBuddy (Tencent) — converted commands + skills artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".codebuddy",
+        "env": [
+          "CODEBUDDY_CONFIG_DIR"
+        ]
+      },
+      "configFormat": "settings-json",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "commands",
+            "destSubpath": "commands",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToCodebuddyCommand"
+          },
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToCodebuddySkill"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "settings-json",
+      "hookEvents": "claude",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
+  "codex": {
+    "id": "codex",
+    "role": "runtime",
+    "title": "OpenAI Codex CLI",
+    "description": "OpenAI Codex CLI — shell-var command style; per-agent sandbox tiers; config.toml + hooks.json hook surface; tier-1 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".codex",
+        "env": [
+          "CODEX_HOME"
+        ]
+      },
+      "configFormat": "toml",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToCodexSkill"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "shell-var",
+      "hooksSurface": "codex-hooks-json",
+      "hookEvents": "claude",
+      "sandboxTier": "codex-agent-sandbox",
+      "supportTier": 1
+    }
+  },
+  "copilot": {
+    "id": "copilot",
+    "role": "runtime",
+    "title": "GitHub Copilot",
+    "description": "GitHub Copilot (VS Code) — markdown config format; copilot-inline hook surface; no hook events emitted; flat skill nesting (unconfirmed recursive loader); tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".copilot",
+        "env": [
+          "COPILOT_CONFIG_DIR",
+          "COPILOT_HOME"
+        ]
+      },
+      "configFormat": "markdown",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToCopilotSkill"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "copilot-inline",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
+  "cursor": {
+    "id": "cursor",
+    "role": "runtime",
+    "title": "Cursor",
+    "description": "Cursor IDE — skills + converted commands artifact layout; hooks.json surface; Claude hook event dialect; recursive skill loader (flat nesting); tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".cursor",
+        "env": [
+          "CURSOR_CONFIG_DIR"
+        ]
+      },
+      "configFormat": "none",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": true,
+            "converter": "convertClaudeCommandToCursorSkill"
+          },
+          {
+            "kind": "commands",
+            "destSubpath": "commands",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToCursorCommand"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "cursor-hooks-json",
+      "hookEvents": "claude",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
+  "gemini": {
+    "id": "gemini",
+    "role": "runtime",
+    "title": "Gemini CLI",
+    "description": "Google Gemini CLI — commands-only artifact layout (TOML); Gemini hook event dialect; settings-json hook surface; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".gemini",
+        "env": [
+          "GEMINI_CONFIG_DIR"
+        ]
+      },
+      "configFormat": "settings-json",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "commands",
+            "destSubpath": "commands/gsd",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "settings-json",
+      "hookEvents": "gemini",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
+  "graphify": {
+    "id": "graphify",
+    "role": "feature",
+    "title": "Knowledge graph",
+    "description": "Build, query, and inspect the project knowledge graph in `.planning/graphs/`; exposes graphify CLI subcommands (build, query, status, diff) and the /gsd-graphify skill.",
+    "tier": "full",
+    "requires": [],
+    "skills": [
+      "graphify"
+    ],
+    "agents": [],
+    "config": {
+      "graphify.enabled": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable the graphify knowledge-graph command + skill."
+      }
+    },
+    "commands": [
+      {
+        "family": "graphify",
+        "module": "graphify-command-router.cjs",
+        "router": "routeGraphifyCommand"
+      }
+    ],
+    "hooks": [],
+    "steps": [],
+    "contributions": [],
+    "gates": []
+  },
+  "hermes": {
+    "id": "hermes",
+    "role": "runtime",
+    "title": "Hermes Agent",
+    "description": "Hermes Agent (NousResearch) — skills nest under skills/gsd/ category bucket; nested skill layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".hermes",
+        "env": [
+          "HERMES_HOME"
+        ]
+      },
+      "configFormat": "settings-json",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills/gsd",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "settings-json",
+      "hookEvents": "claude",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
+  "intel": {
+    "id": "intel",
+    "role": "feature",
+    "title": "Codebase intelligence",
+    "description": "Code-intelligence store for codebase querying, diff, snapshot, and API-surface extraction; exposes `gsd-tools intel` subcommands (query, status, update, diff, snapshot, patch-meta, validate, extract-exports, api-surface) and backs `/gsd-map-codebase` and `gsd-intel-updater`.",
+    "tier": "full",
+    "requires": [],
+    "skills": [],
+    "agents": [],
+    "config": {
+      "intel.enabled": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable the intel code-intelligence command."
+      }
+    },
+    "commands": [
+      {
+        "family": "intel",
+        "module": "intel-command-router.cjs",
+        "router": "routeIntelCommand"
+      }
+    ],
+    "hooks": [],
+    "steps": [],
+    "contributions": [],
+    "gates": []
+  },
+  "kilo": {
+    "id": "kilo",
+    "role": "runtime",
+    "title": "Kilo Code",
+    "description": "Kilo Code — XDG-based config dir; global skills at ~/.kilo/skills (separate from XDG config); flat command/ + skills artifact layout; no lifecycle hook registration; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "xdg",
+        "name": "kilo",
+        "env": [
+          "KILO_CONFIG_DIR",
+          "KILO_CONFIG",
+          "XDG_CONFIG_HOME"
+        ],
+        "skillsHome": {
+          "kind": "dot-home",
+          "name": ".kilo",
+          "env": []
+        }
+      },
+      "configFormat": "settings-json",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "commands",
+            "destSubpath": "command",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          },
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": true,
+            "converter": "convertClaudeCommandToKiloSkill"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "none",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
+  "kimi": {
+    "id": "kimi",
+    "role": "runtime",
+    "title": "Kimi CLI",
+    "description": "Kimi CLI (Moonshot AI) — generic agents root at ~/.config/agents; skills + kimi-agents artifact layout; no hook surface; no hook events; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "generic-agents-root",
+        "name": "agents",
+        "env": [
+          "KIMI_CONFIG_DIR"
+        ],
+        "probe": [
+          "~/.config/agents",
+          "~/.agents"
+        ],
+        "probeExists": "skills"
+      },
+      "configFormat": "none",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToKimiSkill"
+          },
+          {
+            "kind": "kimi-agents",
+            "destSubpath": "agents",
+            "prefix": "gsd",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "none",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
+  "opencode": {
+    "id": "opencode",
+    "role": "runtime",
+    "title": "OpenCode",
+    "description": "OpenCode — XDG-based config dir; flat command/ + skills artifact layout; settings-json config format; no lifecycle hook registration; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "xdg",
+        "name": "opencode",
+        "env": [
+          "OPENCODE_CONFIG_DIR",
+          "OPENCODE_CONFIG",
+          "XDG_CONFIG_HOME"
+        ]
+      },
+      "configFormat": "settings-json",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "commands",
+            "destSubpath": "command",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          },
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": true,
+            "converter": "convertClaudeCommandToOpencodeSkill"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "none",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
+  "qwen": {
+    "id": "qwen",
+    "role": "runtime",
+    "title": "Qwen Code",
+    "description": "Qwen Code (Alibaba) — nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".qwen",
+        "env": [
+          "QWEN_CONFIG_DIR"
+        ]
+      },
+      "configFormat": "settings-json",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "settings-json",
+      "hookEvents": "claude",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
+  "trae": {
+    "id": "trae",
+    "role": "runtime",
+    "title": "Trae IDE",
+    "description": "Trae IDE — nested-skill artifact layout; no hook surface (profile-marker-only config); tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".trae",
+        "env": [
+          "TRAE_CONFIG_DIR"
+        ]
+      },
+      "configFormat": "none",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToTraeSkill"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "none",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
   "ui": {
     "id": "ui",
     "role": "feature",
@@ -73,6 +778,15 @@ const capabilities = {
     "contributions": [],
     "gates": [
       {
+        "point": "plan:pre",
+        "check": {
+          "query": "ui.plan-gate"
+        },
+        "when": "workflow.ui_safety_gate",
+        "blocking": true,
+        "onError": "halt"
+      },
+      {
         "point": "execute:wave:post",
         "check": {
           "query": "ui.safety-gate"
@@ -82,10 +796,47 @@ const capabilities = {
         "onError": "halt"
       }
     ]
+  },
+  "windsurf": {
+    "id": "windsurf",
+    "role": "runtime",
+    "title": "Windsurf",
+    "description": "Windsurf (Codeium) — nested under ~/.codeium/windsurf; skills-only artifact layout; no hook surface; no hook events; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home-nested",
+        "name": "windsurf",
+        "parent": ".codeium",
+        "env": [
+          "WINDSURF_CONFIG_DIR"
+        ]
+      },
+      "configFormat": "none",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToWindsurfSkill"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "none",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
   }
 };
 
 const bySkill = {
+  "graphify": "graphify",
   "ui-phase": "ui",
   "ui-review": "ui"
 };
@@ -125,7 +876,18 @@ const byLoopPoint = {
       }
     ],
     "contributions": [],
-    "gates": []
+    "gates": [
+      {
+        "capId": "ui",
+        "point": "plan:pre",
+        "check": {
+          "query": "ui.plan-gate"
+        },
+        "when": "workflow.ui_safety_gate",
+        "blocking": true,
+        "onError": "halt"
+      }
+    ]
   },
   "plan:post": {
     "steps": [],
@@ -202,12 +964,26 @@ const byLoopPoint = {
 };
 
 const configKeys = {
+  "graphify.enabled": "graphify",
+  "intel.enabled": "intel",
   "workflow.ui_phase": "ui",
   "workflow.ui_review": "ui",
   "workflow.ui_safety_gate": "ui"
 };
 
 const configSchema = {
+  "graphify.enabled": {
+    "owner": "graphify",
+    "type": "boolean",
+    "default": false,
+    "description": "Enable the graphify knowledge-graph command + skill."
+  },
+  "intel.enabled": {
+    "owner": "intel",
+    "type": "boolean",
+    "default": false,
+    "description": "Enable the intel code-intelligence command."
+  },
   "workflow.ui_phase": {
     "owner": "ui",
     "type": "boolean",
@@ -228,11 +1004,692 @@ const configSchema = {
   }
 };
 
-const runtimes = {};
+const runtimes = {
+  "antigravity": {
+    "id": "antigravity",
+    "role": "runtime",
+    "title": "Antigravity",
+    "description": "Google Antigravity IDE — nested under ~/.gemini/antigravity; probed across 1.x and 2.x layouts; Gemini hook event dialect; nested skill layout; tier-1 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home-nested",
+        "name": "antigravity",
+        "parent": ".gemini",
+        "env": [
+          "ANTIGRAVITY_CONFIG_DIR"
+        ],
+        "probe": [
+          "antigravity",
+          "antigravity-ide",
+          "antigravity-cli"
+        ]
+      },
+      "configFormat": "settings-json",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToAntigravitySkill"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "settings-json",
+      "hookEvents": "gemini",
+      "sandboxTier": "none",
+      "supportTier": 1
+    }
+  },
+  "augment": {
+    "id": "augment",
+    "role": "runtime",
+    "title": "Augment Code",
+    "description": "Augment Code CLI — commands + nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".augment",
+        "env": [
+          "AUGMENT_CONFIG_DIR"
+        ]
+      },
+      "configFormat": "settings-json",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "commands",
+            "destSubpath": "commands",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          },
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToAugmentSkill"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "settings-json",
+      "hookEvents": "claude",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
+  "claude": {
+    "id": "claude",
+    "role": "runtime",
+    "title": "Claude Code",
+    "description": "Anthropic Claude Code — primary development runtime; tier-1 support with full hook surface and skills-based global install.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".claude",
+        "env": [
+          "CLAUDE_CONFIG_DIR"
+        ]
+      },
+      "configFormat": "settings-json",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          }
+        ],
+        "local": [
+          {
+            "kind": "commands",
+            "destSubpath": "commands/gsd",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          }
+        ]
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "settings-json",
+      "hookEvents": "claude",
+      "sandboxTier": "none",
+      "supportTier": 1
+    }
+  },
+  "cline": {
+    "id": "cline",
+    "role": "runtime",
+    "title": "Cline",
+    "description": "Cline (VS Code extension) — global-only nested-skill layout; cline-rules hook surface (.clinerules); no hook events emitted; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".cline",
+        "env": [
+          "CLINE_CONFIG_DIR"
+        ]
+      },
+      "configFormat": "markdown-dir",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClineSkill"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "cline-rules",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
+  "codebuddy": {
+    "id": "codebuddy",
+    "role": "runtime",
+    "title": "CodeBuddy",
+    "description": "CodeBuddy (Tencent) — converted commands + skills artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".codebuddy",
+        "env": [
+          "CODEBUDDY_CONFIG_DIR"
+        ]
+      },
+      "configFormat": "settings-json",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "commands",
+            "destSubpath": "commands",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToCodebuddyCommand"
+          },
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToCodebuddySkill"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "settings-json",
+      "hookEvents": "claude",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
+  "codex": {
+    "id": "codex",
+    "role": "runtime",
+    "title": "OpenAI Codex CLI",
+    "description": "OpenAI Codex CLI — shell-var command style; per-agent sandbox tiers; config.toml + hooks.json hook surface; tier-1 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".codex",
+        "env": [
+          "CODEX_HOME"
+        ]
+      },
+      "configFormat": "toml",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToCodexSkill"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "shell-var",
+      "hooksSurface": "codex-hooks-json",
+      "hookEvents": "claude",
+      "sandboxTier": "codex-agent-sandbox",
+      "supportTier": 1
+    }
+  },
+  "copilot": {
+    "id": "copilot",
+    "role": "runtime",
+    "title": "GitHub Copilot",
+    "description": "GitHub Copilot (VS Code) — markdown config format; copilot-inline hook surface; no hook events emitted; flat skill nesting (unconfirmed recursive loader); tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".copilot",
+        "env": [
+          "COPILOT_CONFIG_DIR",
+          "COPILOT_HOME"
+        ]
+      },
+      "configFormat": "markdown",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToCopilotSkill"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "copilot-inline",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
+  "cursor": {
+    "id": "cursor",
+    "role": "runtime",
+    "title": "Cursor",
+    "description": "Cursor IDE — skills + converted commands artifact layout; hooks.json surface; Claude hook event dialect; recursive skill loader (flat nesting); tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".cursor",
+        "env": [
+          "CURSOR_CONFIG_DIR"
+        ]
+      },
+      "configFormat": "none",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": true,
+            "converter": "convertClaudeCommandToCursorSkill"
+          },
+          {
+            "kind": "commands",
+            "destSubpath": "commands",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToCursorCommand"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "cursor-hooks-json",
+      "hookEvents": "claude",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
+  "gemini": {
+    "id": "gemini",
+    "role": "runtime",
+    "title": "Gemini CLI",
+    "description": "Google Gemini CLI — commands-only artifact layout (TOML); Gemini hook event dialect; settings-json hook surface; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".gemini",
+        "env": [
+          "GEMINI_CONFIG_DIR"
+        ]
+      },
+      "configFormat": "settings-json",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "commands",
+            "destSubpath": "commands/gsd",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "settings-json",
+      "hookEvents": "gemini",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
+  "hermes": {
+    "id": "hermes",
+    "role": "runtime",
+    "title": "Hermes Agent",
+    "description": "Hermes Agent (NousResearch) — skills nest under skills/gsd/ category bucket; nested skill layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".hermes",
+        "env": [
+          "HERMES_HOME"
+        ]
+      },
+      "configFormat": "settings-json",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills/gsd",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "settings-json",
+      "hookEvents": "claude",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
+  "kilo": {
+    "id": "kilo",
+    "role": "runtime",
+    "title": "Kilo Code",
+    "description": "Kilo Code — XDG-based config dir; global skills at ~/.kilo/skills (separate from XDG config); flat command/ + skills artifact layout; no lifecycle hook registration; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "xdg",
+        "name": "kilo",
+        "env": [
+          "KILO_CONFIG_DIR",
+          "KILO_CONFIG",
+          "XDG_CONFIG_HOME"
+        ],
+        "skillsHome": {
+          "kind": "dot-home",
+          "name": ".kilo",
+          "env": []
+        }
+      },
+      "configFormat": "settings-json",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "commands",
+            "destSubpath": "command",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          },
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": true,
+            "converter": "convertClaudeCommandToKiloSkill"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "none",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
+  "kimi": {
+    "id": "kimi",
+    "role": "runtime",
+    "title": "Kimi CLI",
+    "description": "Kimi CLI (Moonshot AI) — generic agents root at ~/.config/agents; skills + kimi-agents artifact layout; no hook surface; no hook events; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "generic-agents-root",
+        "name": "agents",
+        "env": [
+          "KIMI_CONFIG_DIR"
+        ],
+        "probe": [
+          "~/.config/agents",
+          "~/.agents"
+        ],
+        "probeExists": "skills"
+      },
+      "configFormat": "none",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToKimiSkill"
+          },
+          {
+            "kind": "kimi-agents",
+            "destSubpath": "agents",
+            "prefix": "gsd",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "none",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
+  "opencode": {
+    "id": "opencode",
+    "role": "runtime",
+    "title": "OpenCode",
+    "description": "OpenCode — XDG-based config dir; flat command/ + skills artifact layout; settings-json config format; no lifecycle hook registration; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "xdg",
+        "name": "opencode",
+        "env": [
+          "OPENCODE_CONFIG_DIR",
+          "OPENCODE_CONFIG",
+          "XDG_CONFIG_HOME"
+        ]
+      },
+      "configFormat": "settings-json",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "commands",
+            "destSubpath": "command",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          },
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": true,
+            "converter": "convertClaudeCommandToOpencodeSkill"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "none",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
+  "qwen": {
+    "id": "qwen",
+    "role": "runtime",
+    "title": "Qwen Code",
+    "description": "Qwen Code (Alibaba) — nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".qwen",
+        "env": [
+          "QWEN_CONFIG_DIR"
+        ]
+      },
+      "configFormat": "settings-json",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "settings-json",
+      "hookEvents": "claude",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
+  "trae": {
+    "id": "trae",
+    "role": "runtime",
+    "title": "Trae IDE",
+    "description": "Trae IDE — nested-skill artifact layout; no hook surface (profile-marker-only config); tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".trae",
+        "env": [
+          "TRAE_CONFIG_DIR"
+        ]
+      },
+      "configFormat": "none",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToTraeSkill"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "none",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
+  "windsurf": {
+    "id": "windsurf",
+    "role": "runtime",
+    "title": "Windsurf",
+    "description": "Windsurf (Codeium) — nested under ~/.codeium/windsurf; skills-only artifact layout; no hook surface; no hook events; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home-nested",
+        "name": "windsurf",
+        "parent": ".codeium",
+        "env": [
+          "WINDSURF_CONFIG_DIR"
+        ]
+      },
+      "configFormat": "none",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToWindsurfSkill"
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "none",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  }
+};
 
-const commandFamilies = {};
+const commandFamilies = {
+  "audit-open": {
+    "capId": "audit",
+    "module": "audit-command-router.cjs",
+    "router": "routeAuditOpen"
+  },
+  "audit-uat": {
+    "capId": "audit",
+    "module": "audit-command-router.cjs",
+    "router": "routeAuditUat"
+  },
+  "graphify": {
+    "capId": "graphify",
+    "module": "graphify-command-router.cjs",
+    "router": "routeGraphifyCommand"
+  },
+  "intel": {
+    "capId": "intel",
+    "module": "intel-command-router.cjs",
+    "router": "routeIntelCommand"
+  }
+};
 
 const capabilityClusters = {
+  "graphify": [
+    "graphify"
+  ],
   "ui": [
     "ui-phase",
     "ui-review"
@@ -240,6 +1697,12 @@ const capabilityClusters = {
 };
 
 const profileMembership = {
+  "graphify": {
+    "tier": "full",
+    "profiles": [
+      "full"
+    ]
+  },
   "ui": {
     "tier": "full",
     "profiles": [
@@ -249,7 +1712,26 @@ const profileMembership = {
 };
 
 const _requiresGraph = {
-  "ui": []
+  "antigravity": [],
+  "audit": [],
+  "augment": [],
+  "claude": [],
+  "cline": [],
+  "codebuddy": [],
+  "codex": [],
+  "copilot": [],
+  "cursor": [],
+  "gemini": [],
+  "graphify": [],
+  "hermes": [],
+  "intel": [],
+  "kilo": [],
+  "kimi": [],
+  "opencode": [],
+  "qwen": [],
+  "trae": [],
+  "ui": [],
+  "windsurf": []
 };
 
 function requiresClosure(id) {

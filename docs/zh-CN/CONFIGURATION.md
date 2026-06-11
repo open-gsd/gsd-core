@@ -141,7 +141,7 @@ GSD 将项目设置存储在 `.planning/config.json` 中。该文件在 `/gsd-ne
 | `model_profile` | enum | `quality`, `balanced`, `budget`, `adaptive`, `inherit` | `balanced` | 每个 agent 的模型层级（参见[模型配置文件](#模型配置文件)）。`adaptive` 根据 [#1713](https://github.com/open-gsd/gsd-core/issues/1713) / [#1806](https://github.com/open-gsd/gsd-core/issues/1806) 添加，在运行时感知的配置文件下与其他层级以相同方式解析。 |
 | `runtime` | string | `claude`, `codex` 或任意字符串 | （无） | [运行时感知配置文件解析](#运行时感知配置文件-2517)的活跃运行时。设置后，配置文件层级（opus/sonnet/haiku）解析为运行时原生模型 ID。目前仅 Codex 安装路径通过此解析器为每个 agent 生成模型 ID；其他运行时（`opencode`、`gemini`、`qwen`、`copilot` 等）在 spawn 时消费该解析器，并在 [#2612](https://github.com/open-gsd/gsd-core/issues/2612) 中获得专用安装路径支持。未设置时（默认），行为与之前版本相同。v1.39 新增 |
 | `model_profile_overrides.<runtime>.<tier>` | string \| object | 按运行时的层级覆盖 | （无） | 覆盖特定 `(runtime, tier)` 的运行时感知层级映射。层级为 `opus`、`sonnet`、`haiku` 之一。值为模型 ID 字符串（如 `"gpt-5-pro"`）或 `{ model, reasoning_effort }`。参见[运行时感知配置文件](#运行时感知配置文件-2517)。v1.39 新增 |
-| `model_policy.provider` | string | `openai`, `anthropic`, `google`, `qwen`, `generic` | （无） | 声明模型提供商。已知提供商（`openai`、`anthropic`、`google`、`qwen`）启用基于目录的预设。`generic` 将所有模型 ID 视为不透明字符串——无前缀推断，无推理努力默认值。`model_policy.runtime_tiers` 在旧版 `model_profile_overrides` 之前解析。参见[模型策略预设](#模型策略预设-model_policy--v142-新增)。v1.42 新增（[#49](https://github.com/open-gsd/gsd-core/issues/49)） |
+| `model_policy.provider` | string | `openai`, `anthropic`, `anthropic-fable`, `google`, `qwen`, `generic` | （无） | 声明模型提供商。已知提供商（`openai`、`anthropic`、`anthropic-fable`、`google`、`qwen`）启用基于目录的预设。`generic` 将所有模型 ID 视为不透明字符串——无前缀推断，无推理努力默认值。`model_policy.runtime_tiers` 在旧版 `model_profile_overrides` 之前解析。参见[模型策略预设](#模型策略预设-model_policy--v142-新增)。v1.42 新增（[#49](https://github.com/open-gsd/gsd-core/issues/49)） |
 | `model_policy.budget` | enum | `high`, `medium`, `low` | （无） | 使用已知提供商时选择预算层级。GSD 在解析时将匹配的目录预设具体化为显式层级映射。当 `provider` 为 `generic` 或 `custom` 时忽略。v1.42 新增（[#49](https://github.com/open-gsd/gsd-core/issues/49)） |
 | `model_policy.high` | string | 模型 ID | （无） | `generic`/`custom` 提供商的高成本层级模型 ID。当 `provider: "generic"` 或 `"custom"` 时使用。v1.42 新增（[#49](https://github.com/open-gsd/gsd-core/issues/49)） |
 | `model_policy.medium` | string | 模型 ID | （无） | `generic`/`custom` 提供商的中等成本层级模型 ID。v1.42 新增（[#49](https://github.com/open-gsd/gsd-core/issues/49)） |
@@ -155,7 +155,7 @@ GSD 将项目设置存储在 `.planning/config.json` 中。该文件在 `/gsd-ne
 | `project_code` | string | 任意短字符串 | （无） | 阶段目录名称的前缀（如 `"ABC"` 生成 `ABC-01-setup/`）。v1.31 新增 |
 | `phase_id_convention` | enum | `"milestone-prefixed"`, `null` | `null` | 阶段 ID 命名规范。`null` = 旧版数字 ID（`Phase 1`、`Phase 2`）。`"milestone-prefixed"` = 编码所属里程碑的全局唯一 ID（`Phase 1-01`、`Phase 1-02`）。运行 `gsd-tools roadmap upgrade --convention milestone-prefixed` 迁移现有 ROADMAP.md。 |
 | `response_language` | string | 语言代码 | （无） | agent 响应语言（如 `"pt"`、`"ko"`、`"ja"`）。传播至所有派生 agent，实现跨阶段语言一致性。v1.32 新增 |
-| `context_window` | number | 任意整数 | `200000` | 上下文窗口大小（token 数）。对于 1M 上下文模型（如 `claude-opus-4-7[1m]`），设置为 `1000000`。`>= 500000` 的值启用自适应上下文增强（完整读取之前的 SUMMARY.md，更深入的反模式读取）。通过 `/gsd-config --advanced` 配置。 |
+| `context_window` | number | 任意整数 | `200000` | 上下文窗口大小（token 数）。对于 1M 上下文模型（如 `claude-fable-5`），设置为 `1000000`。`>= 500000` 的值启用自适应上下文增强（完整读取之前的 SUMMARY.md，更深入的反模式读取）。通过 `/gsd-config --advanced` 配置。 |
 | `context_profile` | string | `dev`, `research`, `review` | （无） | 执行上下文预设，为当前工作类型应用预配置的模式、模型和工作流设置包。v1.34 新增 |
 | `claude_md_path` | string | 任意文件路径 | `./CLAUDE.md` | 生成的 CLAUDE.md 文件的自定义输出路径。适用于需要将 CLAUDE.md 放在非根目录位置的 monorepo 或项目。默认为项目根目录下的 `./CLAUDE.md`。v1.36 新增 |
 | `claude_md_assembly.mode` | enum | `embed`, `link` | `embed` | 控制如何将受管理的节写入 CLAUDE.md。`embed`（默认）在 GSD 标记之间内联内容。`link` 改为写入 `@.planning/<source-path>`——Claude Code 在运行时展开引用，在典型项目中将 CLAUDE.md 大小减少约 65%。`link` 仅适用于有真实源文件的节；`workflow` 和回退节始终嵌入。按块覆盖：`claude_md_assembly.blocks.<section>`（如 `claude_md_assembly.blocks.architecture: link`）。v1.38 新增 |
@@ -963,7 +963,7 @@ minimal < low < medium < high < xhigh < max
 2. `effort.agent_overrides[<agent-id>]`
 3. `effort.routing_tier_defaults[<light|standard|heavy>]`
 4. `effort.default`
-5. `"high"`（Anthropic Opus 4.8 通用默认值）
+5. `"high"`（Claude 通用默认值）
 
 ```json
 {
@@ -1198,7 +1198,7 @@ minimal < low < medium < high < xhigh < max
 }
 ```
 
-已知提供商：`openai`、`anthropic`、`google`、`qwen`。预算级别：`high`、`medium`、`low`。
+已知提供商：`openai`、`anthropic`、`anthropic-fable`、`google`、`qwen`。预算级别：`high`、`medium`、`low`。使用 `anthropic` 保留基于 Opus 4.8 的 Claude 预设，或使用 `anthropic-fable` 在高预算路由中选择 Claude Fable 5。
 
 对于高级的按运行时控制，`runtime_tiers` 接受使用内部配置文件层级名称（`opus`、`sonnet`、`haiku`）的显式条目：
 

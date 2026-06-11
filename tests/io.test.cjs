@@ -339,3 +339,113 @@ describe('core.cjs re-export shims', () => {
     assert.strictEqual(core.GSD_TEMP_DIR, io.GSD_TEMP_DIR);
   });
 });
+
+// ─── bug #1008: output()/error() tolerate a full / slow non-blocking pipe ─────
+//
+// The pre-fix bare `fs.writeSync(fd, data)` assumed it blocks until the kernel
+// accepts every byte — false when fd is a non-blocking pipe (the parallel
+// node:test runner on Linux): a full pipe throws EAGAIN and a partially-drained
+// pipe returns a SHORT count. These behavioral tests inject fs.writeSync via
+// mock.method (the approved fault-injection seam) and assert the observable
+// contract (no throw, full payload, real errors still surface). They are red
+// against the pre-fix io.cjs (throw / truncate).
+
+// Normalize either writeSync call form to the chunk it emits:
+//   buffer form:  writeSync(fd, buffer, offset, length)  ← the fixed writeAllSync loop
+//   string form:  writeSync(fd, string)                  ← the pre-fix bare call
+function bug1008ChunkOf(data, offset, length) {
+  if (Buffer.isBuffer(data)) {
+    const start = offset ?? 0;
+    const end = length === undefined ? data.length : start + length;
+    return data.subarray(start, end).toString('utf8');
+  }
+  return String(data);
+}
+
+function bug1008WriteError(code, errno) {
+  const e = new Error(`${code}: write`);
+  e.code = code;
+  e.errno = errno;
+  e.syscall = 'write';
+  return e;
+}
+
+describe('bug #1008: io.output() tolerates a full / slow non-blocking pipe', () => {
+  test('retries on EAGAIN and emits the full payload without throwing', (t) => {
+    const written = [];
+    let calls = 0;
+    t.mock.method(fs, 'writeSync', (fd, data, offset, length) => {
+      calls += 1;
+      if (calls === 1) throw bug1008WriteError('EAGAIN', -11); // pipe momentarily full
+      const chunk = bug1008ChunkOf(data, offset, length);
+      written.push(chunk);
+      return Buffer.byteLength(chunk, 'utf8');
+    });
+
+    const payload = { ok: true, n: 42 };
+    assert.doesNotThrow(() => io.output(payload, false));
+    assert.ok(calls >= 2, `expected a retry after EAGAIN, got ${calls} call(s)`);
+    assert.equal(written.join(''), JSON.stringify(payload, null, 2), 'full payload must reach the fd');
+  });
+
+  test('retries on EINTR (signal-interrupted write) too', (t) => {
+    const written = [];
+    let calls = 0;
+    t.mock.method(fs, 'writeSync', (fd, data, offset, length) => {
+      calls += 1;
+      if (calls === 1) throw bug1008WriteError('EINTR', -4);
+      const chunk = bug1008ChunkOf(data, offset, length);
+      written.push(chunk);
+      return Buffer.byteLength(chunk, 'utf8');
+    });
+
+    assert.doesNotThrow(() => io.output('plain', true, 'PLAIN-RAW'));
+    assert.equal(written.join(''), 'PLAIN-RAW');
+  });
+
+  test('handles short (partial) writes without truncating', (t) => {
+    const written = [];
+    const CAP = 3; // each writeSync accepts at most 3 bytes, like a draining pipe
+    t.mock.method(fs, 'writeSync', (fd, data, offset, length) => {
+      const chunk = bug1008ChunkOf(data, offset, length);
+      const part = chunk.slice(0, CAP);
+      written.push(part);
+      return Buffer.byteLength(part, 'utf8');
+    });
+
+    const payload = { message: 'a reasonably long ascii payload to force many short writes' };
+    io.output(payload, false);
+    assert.equal(written.join(''), JSON.stringify(payload, null, 2), 'no bytes may be dropped on short writes');
+  });
+
+  test('does NOT swallow a genuine, non-transient write error (EPIPE)', (t) => {
+    t.mock.method(fs, 'writeSync', () => { throw bug1008WriteError('EPIPE', -32); });
+    assert.throws(
+      () => io.output({ ok: true }, false),
+      (err) => err.code === 'EPIPE',
+      'real (non-transient) errors must still surface',
+    );
+  });
+});
+
+describe('bug #1008: io.error() tolerates a full non-blocking stderr pipe', () => {
+  test('retries on EAGAIN, emits the full message, and still exits', (t) => {
+    const written = [];
+    let calls = 0;
+    let exitCode = null;
+    t.mock.method(process, 'exit', (code) => { exitCode = code; }); // neutralize the hard exit
+    t.mock.method(fs, 'writeSync', (fd, data, offset, length) => {
+      calls += 1;
+      if (calls === 1) throw bug1008WriteError('EAGAIN', -11);
+      assert.equal(fd, 2, 'error() must write to stderr');
+      const chunk = bug1008ChunkOf(data, offset, length);
+      written.push(chunk);
+      return Buffer.byteLength(chunk, 'utf8');
+    });
+
+    assert.doesNotThrow(() => io.error('boom', io.ERROR_REASON.UNKNOWN));
+    assert.ok(calls >= 2, 'error() should retry after EAGAIN');
+    assert.equal(written.join(''), 'Error: boom\n');
+    assert.equal(exitCode, 1, 'error() must still exit(1) after a retried write');
+  });
+});

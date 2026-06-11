@@ -5,7 +5,7 @@
  *
  *   {
  *     "model_policy": {
- *       "provider": "anthropic",
+ *       "provider": "anthropic-fable",
  *       "budget": "high",
  *       "runtime_tiers": {
  *         "opencode": {
@@ -120,9 +120,29 @@ describe('#49 resolveModelPolicy Sub-path B: provider presets', () => {
     const result = resolveModelPolicy(policy, 'opus');
     assert.ok(typeof result === 'string' && result.length > 0,
       `expected a non-empty model ID string, got: ${JSON.stringify(result)}`);
-    // Anthropic opus model IDs contain "claude" and "opus"
-    assert.match(result, /claude.*opus|opus.*claude/i,
-      `expected anthropic opus model ID to contain "claude" and "opus", got: ${result}`);
+    assert.strictEqual(result, 'claude-opus-4-8',
+      `expected anthropic opus/high to resolve to claude-opus-4-8, got: ${result}`);
+  });
+
+  test('known provider "anthropic" + tier "sonnet" + budget "high" preserves Opus 4.8 routing', () => {
+    const policy = { provider: 'anthropic', budget: 'high' };
+    const result = resolveModelPolicy(policy, 'sonnet');
+    assert.strictEqual(result, 'claude-opus-4-8',
+      `expected anthropic sonnet/high to resolve to claude-opus-4-8, got: ${result}`);
+  });
+
+  test('known provider "anthropic-fable" + tier "opus" + budget "high" resolves to Claude Fable 5', () => {
+    const policy = { provider: 'anthropic-fable', budget: 'high' };
+    const result = resolveModelPolicy(policy, 'opus');
+    assert.strictEqual(result, 'claude-fable-5',
+      `expected anthropic-fable opus/high to resolve to claude-fable-5, got: ${result}`);
+  });
+
+  test('known provider "anthropic-fable" + tier "haiku" + budget "high" keeps low tier on Sonnet', () => {
+    const policy = { provider: 'anthropic-fable', budget: 'high' };
+    const result = resolveModelPolicy(policy, 'haiku');
+    assert.strictEqual(result, 'claude-sonnet-4-6',
+      `expected anthropic-fable haiku/high to resolve to claude-sonnet-4-6, got: ${result}`);
   });
 
   test('known provider "openai" + tier "sonnet" + budget "low" returns model with reasoning_effort from preset', () => {
@@ -287,9 +307,8 @@ describe('#49 resolveModelInternal: model_policy in the resolution chain', () =>
       'model_policy must fire before model_profile_overrides and win');
     assert.ok(typeof result === 'string' && result.length > 0,
       'must return a non-empty model ID');
-    // model_policy anthropic/opus/high should return a claude opus model ID
-    assert.match(result, /claude.*opus|opus.*claude/i,
-      'expected anthropic preset opus model, got: ' + result);
+    assert.strictEqual(result, 'claude-opus-4-8',
+      'expected anthropic preset opus/high to resolve to claude-opus-4-8');
   });
 
   test('model_policy with provider:"anthropic" + budget:"high" + runtime:"opencode" resolves to preset model', () => {
@@ -304,8 +323,22 @@ describe('#49 resolveModelInternal: model_policy in the resolution chain', () =>
     const result = resolveModelInternal(projectDir, 'gsd-planner');
     assert.ok(typeof result === 'string' && result.length > 0,
       'expected a non-empty model ID');
-    assert.match(result, /claude.*opus|opus.*claude/i,
-      'anthropic/opus/high must resolve to an opus model ID');
+    assert.strictEqual(result, 'claude-opus-4-8',
+      'anthropic/opus/high must resolve to claude-opus-4-8');
+  });
+
+  test('model_policy with provider:"anthropic-fable" + budget:"high" resolves to Fable preset model', () => {
+    writeConfig(projectDir, {
+      runtime: 'opencode',
+      model_profile: 'quality',
+      model_policy: {
+        provider: 'anthropic-fable',
+        budget: 'high',
+      },
+    });
+    const result = resolveModelInternal(projectDir, 'gsd-planner');
+    assert.strictEqual(result, 'claude-fable-5',
+      'anthropic-fable/opus/high must resolve to claude-fable-5');
   });
 
   test('model_policy is skipped when runtime is absent', () => {
@@ -661,6 +694,8 @@ describe('#49 KNOWN_PROVIDERS exports from model-catalog.cjs and core.cjs', () =
     // 'anthropic' must be in the set since it is a required provider preset
     assert.ok(providers.includes('anthropic'),
       'KNOWN_PROVIDERS must include "anthropic"');
+    assert.ok(providers.includes('anthropic-fable'),
+      'KNOWN_PROVIDERS must include "anthropic-fable"');
     // 'generic' is a special fallback, not a real provider — it must NOT be in KNOWN_PROVIDERS
     // (KNOWN_PROVIDERS lists only providers with catalog entries)
     assert.ok(!providers.includes('generic'),

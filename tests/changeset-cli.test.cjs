@@ -1073,4 +1073,42 @@ describe('changeset cli render --preview (#759)', () => {
       'CHANGELOG.md must be byte-identical after --preview',
     );
   });
+
+  // Regression (#939 / rc-job crash): a fragment that fails to parse (e.g. an
+  // un-backfilled `pr: 0` placeholder) makes cmdRender early-return WITHOUT a
+  // `preview` key. Before the fix, main() wrote report.preview unguarded, so
+  // `process.stdout.write(undefined)` threw ERR_INVALID_ARG_TYPE and the rc
+  // "Preview CHANGELOG" step died with a cryptic TypeError that masked the real
+  // cause. The preview failure path must now exit non-zero and NAME the bad
+  // fragment, identical to a non-preview render.
+  test('render --preview with an unparseable fragment fails cleanly (names the file, no TypeError crash)', () => {
+    // pr: 0 is the never-backfilled placeholder → parseFragment returns invalid_pr.
+    writeFragment('bad-fragment', 'Fixed', 0, '**Bad** — placeholder never backfilled. (#123)');
+
+    // The crash lived on the NON-json path: process.stdout.write(report.preview)
+    // with report.preview === undefined. Exercise it directly and assert it no
+    // longer crashes — non-zero exit and NO TypeError stack in the output (QA
+    // matrix: "No stack trace in non-debug failure output").
+    const raw = runRenderRaw(['--version', '9.9.0', '--date', '2026-01-02', '--preview']);
+    assert.notStrictEqual(raw.status, 0, `parse-failure preview must exit non-zero; stdout=${raw.stdout} stderr=${raw.stderr}`);
+    const combined = `${raw.stdout}\n${raw.stderr}`;
+    assert.ok(
+      !combined.includes('ERR_INVALID_ARG_TYPE'),
+      `preview must NOT crash with ERR_INVALID_ARG_TYPE; got: ${combined}`,
+    );
+
+    // Structured surface (--json) proves the failure NAMES the offending fragment
+    // and reports the typed parse reason — asserted on the typed report shape,
+    // not on rendered prose.
+    const json = runRender(['--version', '9.9.0', '--date', '2026-01-02', '--preview']);
+    assert.notStrictEqual(json.status, 0, 'json preview must also exit non-zero on parse failure');
+    assert.ok(Array.isArray(json.report.failures), `report.failures must be an array; got: ${JSON.stringify(json.report)}`);
+    const bad = json.report.failures.find((f) => f.file.endsWith('bad-fragment.md'));
+    assert.ok(bad, `failures must name the offending fragment; got: ${JSON.stringify(json.report.failures)}`);
+    assert.equal(bad.reason, 'invalid_pr', `failure reason must be the typed invalid_pr; got: ${bad && bad.reason}`);
+
+    // Still non-destructive: no CHANGELOG.md written, fragment left in place.
+    assert.ok(!fs.existsSync(path.join(tmp, 'CHANGELOG.md')), 'CHANGELOG.md must NOT be created by a failed preview');
+    assert.ok(fs.existsSync(path.join(tmp, '.changeset', 'bad-fragment.md')), 'fragment must still exist after failed preview');
+  });
 });
