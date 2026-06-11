@@ -157,11 +157,20 @@ function _stripFencedBlocks(content: string): StripFencedResult {
  * so an earlier closed comment does not mask a later unterminated one.
  */
 function analyzeMarkdown(raw: string): { unterminatedFence: boolean; unterminatedComment: boolean } {
-  // Strip all properly-balanced comments first, then check for a leftover <!--
-  const afterBalanced = raw.replace(/<!--[\s\S]*?-->/g, '');
-  const unterminatedComment = afterBalanced.includes('<!--');
+  // Detect an unterminated HTML comment via a paired scan: every `<!--` must
+  // have a following `-->`. Using indexOf (not a regex .replace of the comment
+  // token) avoids the js/incomplete-multi-character-sanitization pattern — and
+  // is exact: a closed earlier comment never masks a later unterminated one.
+  let unterminatedComment = false;
+  for (let i = 0; ; ) {
+    const open = raw.indexOf('<!--', i);
+    if (open === -1) break;
+    const close = raw.indexOf('-->', open + 4);
+    if (close === -1) { unterminatedComment = true; break; }
+    i = close + 3;
+  }
 
-  // Run the fence state machine on the raw content for an accurate unterminated-fence signal
+  // Fence state machine gives the accurate unterminated-fence signal.
   const { unterminatedFence } = _stripFencedBlocks(raw);
 
   return { unterminatedFence, unterminatedComment };
