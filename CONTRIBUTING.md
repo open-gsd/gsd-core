@@ -856,9 +856,10 @@ gsd-core/
                           If you legitimately grow or shrink a workflow file,
                           run `npm run size:baseline` to update the snapshot and
                           justify any growth in your PR (or extract content
-                          lazily). Full how-to + reference in
-                          docs/TESTING-SUITES.md (Workflow size budget); see
-                          issue #1074.
+                          lazily). The same guard covers agent files
+                          (agents/gsd-*.md). Full how-to + reference in
+                          docs/TESTING-SUITES.md (Workflow & agent size
+                          budget); see issue #1074.
   references/           — Reference documentation (.md)
   templates/            — File templates
 agents/                 — Agent definitions (.md) — CANONICAL SOURCE

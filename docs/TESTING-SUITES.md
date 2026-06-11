@@ -59,17 +59,21 @@ the sanctioned layout (see the #443 strategy below), not a one-off regression
 pattern. If `issue-*`/`perf-*` one-offs start accumulating the same way
 `bug-*` did, extend the ratchet's regex and regenerate the allowlist.
 
-## Workflow size budget
+## Workflow & agent size budget
 
 > Tracked by issue [#1074](https://github.com/open-gsd/gsd-core/issues/1074).
 > Bytes (not lines) per [#717](https://github.com/open-gsd/gsd-core/issues/717);
 > LF-normalized per [#683](https://github.com/open-gsd/gsd-core/issues/683).
 
-Workflow files (`gsd-core/workflows/*.md`) ship in the installed runtime and are
-loaded into the agent's context, so their byte size is a real cost. The size
-guard in `tests/workflow-size-budget.test.cjs` keeps that cost from creeping up
-invisibly. It is an **anti-creep ratchet**, sibling to the regression-name
-ratchet above — three layers, ordered from day-to-day to last-resort:
+Workflow files (`gsd-core/workflows/*.md`) and agent files (`agents/gsd-*.md`)
+both ship in the installed runtime and are loaded into context — workflows on
+every command, agents on every subagent dispatch — so their byte size is a real
+cost. Two sibling guards (`tests/workflow-size-budget.test.cjs` and
+`tests/agent-size-budget.test.cjs`) keep that cost from creeping up invisibly,
+sharing one byte-counter (`measureMdFiles`) and one `npm run size:baseline`
+command that regenerates **both** snapshots. Each is an **anti-creep ratchet**,
+sibling to the regression-name ratchet above — three layers (workflows), ordered
+from day-to-day to last-resort:
 
 | Layer | What it does | Where |
 |---|---|---|
@@ -80,9 +84,18 @@ ratchet above — three layers, ordered from day-to-day to last-resort:
 `discuss-phase.md` additionally has a thin-dispatcher target of `< 32000` bytes
 (issue [#2551](https://github.com/open-gsd/gsd-core/issues/2551)).
 
-### How-to: a workflow grew and CI is red
+**Agents** (`tests/agent-size-budget.test.cjs`) use the same per-agent baseline
+(`tests/agent-size-baseline.json`) + loose tier hard caps — `XL ≤ 57344` /
+`LARGE ≤ 49152` / `DEFAULT ≤ 24576` bytes. There is no new-agent cap: a net-new
+agent is DEFAULT-tier and already bounded by the DEFAULT cap. (This is distinct
+from the separate 45 KB-*char* extraction-evidence threshold on `gsd-planner`
+enforced by `tests/planner-decomposition.test.cjs` — that one proves mode
+sections were extracted; this one bounds total agent bytes.)
 
-The baseline guard reports the file and the byte delta. To resolve:
+### How-to: a workflow or agent grew and CI is red
+
+The baseline guard reports the file and the byte delta (the same flow for both
+the workflow and agent guards). To resolve:
 
 1. **Regenerate the snapshot** and inspect the one-line diff:
    ```bash
@@ -93,9 +106,10 @@ The baseline guard reports the file and the byte delta. To resolve:
    the committed baseline diff is the review record that the larger size was a
    deliberate, seen decision, not silent drift.
 3. **Or shrink it instead of baselining.** Prefer extraction when the growth is
-   incidental: move per-mode bodies to `workflows/<name>/modes/`, templates to
-   `workflows/<name>/templates/`, and shared prose to `gsd-core/references/` —
-   then load them **LAZILY**. Do *not* convert them to eager `@-required_reading`
+   incidental: for a workflow, move per-mode bodies to `workflows/<name>/modes/`,
+   templates to `workflows/<name>/templates/`, and shared prose to
+   `gsd-core/references/`; for an agent, lift shared boilerplate into
+   `gsd-core/references/` and `@`-reference it — then load it **LAZILY**. Do *not* convert them to eager `@-required_reading`
    includes: that shrinks the file's bytes without shrinking loaded context, so
    it games the guard while making the real cost worse. See
    `workflows/discuss-phase/` for the progressive-disclosure pattern.
@@ -107,10 +121,12 @@ that is the signal to extract, per step 3.
 
 | Artifact | Role |
 |---|---|
-| `scripts/workflow-size.cjs` | Single source of truth — LF-normalized byte counter (`lfByteCount`) plus workflow enumeration (`listWorkflowStems`, `measureWorkflows`). Imported by **both** the guard and the generator so they can never measure or enumerate differently. |
-| `scripts/update-size-baseline.cjs` (`npm run size:baseline`) | Regenerates `tests/workflow-size-baseline.json` — sorted keys, trailing newline, idempotent. |
-| `tests/workflow-size-baseline.json` | The committed per-file snapshot (one entry per workflow). |
-| `tests/workflow-size-budget.test.cjs` | The three guards above, plus the `discuss-phase` progressive-disclosure checks. |
+| `scripts/workflow-size.cjs` | Single source of truth — LF-normalized byte counter (`lfByteCount`) + generic `measureMdFiles(dir, predicate)` (backs both workflows and agents) + workflow enumeration (`listWorkflowStems`, `measureWorkflows`). Imported by **both** the guards and the generator so they can never measure differently. |
+| `scripts/update-size-baseline.cjs` (`npm run size:baseline`) | Regenerates **both** `tests/workflow-size-baseline.json` and `tests/agent-size-baseline.json` — sorted keys, trailing newline, idempotent. |
+| `tests/workflow-size-baseline.json` | The committed per-workflow snapshot (one entry per workflow). |
+| `tests/agent-size-baseline.json` | The committed per-agent snapshot (one entry per `gsd-*` agent). |
+| `tests/workflow-size-budget.test.cjs` | The three workflow guards above, plus the `discuss-phase` progressive-disclosure checks. |
+| `tests/agent-size-budget.test.cjs` | The per-agent baseline + tier hard-cap guards (the agent analog). |
 
 ## Running suites locally
 
