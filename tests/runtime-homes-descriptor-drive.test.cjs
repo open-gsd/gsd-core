@@ -415,7 +415,7 @@ describe('descriptor-driven equivalence: dot-home-nested antigravity probe hit/m
       },
       { env: {}, home: '/home/u', existsSync: () => true },
     );
-    assert.strictEqual(result, '/home/u/.codeium/windsurf');
+    assert.strictEqual(result, path.join('/home/u', '.codeium', 'windsurf'));
   });
 });
 
