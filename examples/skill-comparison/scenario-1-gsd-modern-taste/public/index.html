@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SandboxVR Store Explorer</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#store-list">Skip to stores</a>
+    <main class="page-shell">
+      <section class="hero-card">
+        <p class="eyebrow">SandboxVR location explorer</p>
+        <div class="hero-copy">
+          <div>
+            <h1>Find a SandboxVR venue and track engagement.</h1>
+            <p class="lede">A polished comparison app with a tactile placeholder map, focused store details, and persisted click analytics in SQLite.</p>
+          </div>
+          <dl class="hero-stats" aria-label="Explorer summary">
+            <div>
+              <dt>Locations</dt>
+              <dd id="store-count">0</dd>
+            </div>
+            <div>
+              <dt>Total clicks</dt>
+              <dd id="total-clicks">0</dd>
+            </div>
+          </dl>
+        </div>
+      </section>
+
+      <section class="content-grid" aria-label="Store explorer">
+        <section class="map-card" aria-labelledby="map-heading">
+          <div class="card-heading">
+            <div>
+              <p class="section-label">Map surface</p>
+              <h2 id="map-heading">Interactive map placeholder</h2>
+            </div>
+            <p class="card-hint">Select any venue marker or store card to inspect details.</p>
+          </div>
+          <div class="map-stage" id="map-stage" aria-live="polite"></div>
+        </section>
+
+        <section class="detail-card" aria-labelledby="detail-heading">
+          <div class="card-heading">
+            <div>
+              <p class="section-label">Venue details</p>
+              <h2 id="detail-heading">Store details</h2>
+            </div>
+          </div>
+          <div id="detail-panel" class="detail-panel"></div>
+        </section>
+      </section>
+
+      <section class="list-card" aria-labelledby="list-heading">
+        <div class="card-heading">
+          <div>
+            <p class="section-label">Locations</p>
+            <h2 id="list-heading">SandboxVR store list</h2>
+          </div>
+        </div>
+        <div id="store-list" class="store-list" role="list"></div>
+      </section>
+    </main>
+    <script src="/client.js" defer></script>
+  </body>
+</html>

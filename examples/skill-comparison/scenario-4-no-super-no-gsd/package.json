@@ -1,0 +1,15 @@
+{
+  "name": "s4-no-super-no-gsd-store-map",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Standalone scenario 4 control app for SandboxVR store map comparison.",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test test/*.test.cjs",
+    "start": "node src/server.cjs",
+    "smoke": "node scripts/smoke.cjs"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0"
+  }
+}

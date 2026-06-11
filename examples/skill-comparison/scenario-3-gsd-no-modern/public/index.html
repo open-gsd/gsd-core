@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SandboxVR Store Map</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="layout">
+      <header class="page-header">
+        <h1>SandboxVR Store Map</h1>
+        <p>Standalone scenario app with a placeholder map surface and persisted local click counts.</p>
+      </header>
+      <section class="map-panel">
+        <div class="placeholder-map" data-testid="map" aria-label="Placeholder map surface"></div>
+      </section>
+      <section class="stores-panel">
+        <h2>Store locations</h2>
+        <ul class="store-list" data-testid="store-list"></ul>
+      </section>
+      <aside class="detail-panel" data-testid="store-detail"></aside>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,18 @@
+{
+  "name": "sandboxvr-store-map-s2-gsd-modern",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Standalone SandboxVR store map comparison app for gsd-core scenario 2",
+  "main": "src/server.cjs",
+  "scripts": {
+    "test": "node --test test/*.test.cjs",
+    "start": "node src/server.cjs",
+    "smoke": "node src/smoke.cjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "name": "sandboxvr-store-map-s1",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Standalone SandboxVR store locator spike for controlled comparison scenario 1.",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test \"tests/**/*.test.js\"",
+    "smoke": "node scripts/smoke.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.4.1"
+  },
+  "devDependencies": {
+    "jsdom": "^26.1.0"
+  }
+}

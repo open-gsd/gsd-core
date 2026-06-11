@@ -1,0 +1,228 @@
+:root {
+  color-scheme: light dark;
+  --bg: #08111f;
+  --panel: color-mix(in srgb, canvas 82%, #0f2d52 18%);
+  --border: color-mix(in srgb, canvastext 20%, transparent);
+  --accent: #68d5ff;
+  --accent-strong: #1b84ff;
+  --text-soft: color-mix(in srgb, canvastext 75%, transparent);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  background:
+    radial-gradient(circle at top, color-mix(in srgb, var(--accent) 20%, transparent), transparent 30%),
+    var(--bg);
+  color: canvas;
+  min-height: 100vh;
+}
+
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: 1rem;
+  padding: 0.75rem 1rem;
+  background: canvas;
+  color: canvastext;
+  transform: translateY(-200%);
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+:where(button, a):focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.page-header,
+.layout {
+  width: min(1100px, calc(100% - 2rem));
+  margin-inline: auto;
+}
+
+.page-header {
+  padding: 3rem 0 1.5rem;
+}
+
+.eyebrow,
+.section-kicker {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.8rem;
+  color: var(--accent);
+}
+
+.lede {
+  max-width: 68ch;
+  color: var(--text-soft);
+}
+
+.layout {
+  display: grid;
+  gap: 1rem;
+  padding-bottom: 2rem;
+}
+
+.surface,
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 1.25rem;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+}
+
+.cluster {
+  padding: 1.25rem;
+  display: grid;
+  gap: 1rem;
+}
+
+.map {
+  min-height: 22rem;
+  position: relative;
+  overflow: hidden;
+  border-radius: 1rem;
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
+  background:
+    linear-gradient(180deg, rgba(104, 213, 255, 0.08), rgba(104, 213, 255, 0.02)),
+    linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px),
+    linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
+    color-mix(in srgb, var(--bg) 76%, black 24%);
+  background-size: auto, 3rem 3rem, 3rem 3rem, auto;
+}
+
+.map::before {
+  content: 'USA placeholder map surface';
+  position: absolute;
+  left: 1rem;
+  top: 1rem;
+  color: var(--text-soft);
+  font-size: 0.95rem;
+}
+
+.map-marker {
+  position: absolute;
+  left: var(--x);
+  top: var(--y);
+  translate: -50% -50%;
+  border: 0;
+  border-radius: 999px;
+  padding: 0.55rem 0.8rem;
+  background: color-mix(in srgb, var(--accent-strong) 80%, black 20%);
+  color: white;
+  cursor: pointer;
+}
+
+.panel-grid {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.panel {
+  padding: 1rem;
+}
+
+.panel-list {
+  container-type: inline-size;
+}
+
+.store-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.store-button {
+  width: 100%;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, canvas 12%, transparent);
+  color: inherit;
+  border-radius: 1rem;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.store-button[aria-pressed='true'],
+.map-marker[aria-pressed='true'] {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+.store-button__name {
+  font-weight: 700;
+}
+
+.store-button__meta,
+.store-button__count,
+.detail-location,
+.error {
+  color: var(--text-soft);
+}
+
+.detail-card {
+  display: grid;
+  gap: 1rem;
+}
+
+.detail-grid {
+  display: grid;
+  gap: 0.85rem;
+  margin: 0;
+}
+
+.detail-grid dt {
+  font-weight: 700;
+}
+
+.detail-grid dd {
+  margin: 0.2rem 0 0;
+  color: var(--text-soft);
+}
+
+@media (min-width: 900px) {
+  .panel-grid {
+    grid-template-columns: minmax(18rem, 24rem) 1fr;
+  }
+}
+
+@supports (container-type: inline-size) {
+  @container (min-width: 420px) {
+    .store-button {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+    }
+
+    .store-button__name,
+    .store-button__meta {
+      grid-column: 1;
+    }
+
+    .store-button__count {
+      grid-column: 2;
+      grid-row: 1 / span 2;
+      justify-self: end;
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    scroll-behavior: auto;
+    transition: none !important;
+  }
+}

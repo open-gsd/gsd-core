@@ -1,0 +1,121 @@
+:root {
+  color-scheme: light;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+body {
+  margin: 0;
+  background: #f4f7fb;
+  color: #142033;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr;
+  grid-template-rows: auto 1fr;
+  gap: 1rem;
+  padding: 1rem;
+  min-height: 100vh;
+  box-sizing: border-box;
+}
+
+.page-header,
+.map-panel,
+.stores-panel,
+.detail-panel {
+  background: #ffffff;
+  border: 1px solid #d7deeb;
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(20, 32, 51, 0.08);
+}
+
+.page-header {
+  grid-column: 1 / -1;
+  padding: 1rem 1.25rem;
+}
+
+.map-panel,
+.stores-panel,
+.detail-panel {
+  padding: 1rem;
+}
+
+.placeholder-map {
+  position: relative;
+  min-height: 420px;
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(32, 69, 126, 0.12), rgba(32, 69, 126, 0.04)),
+    repeating-linear-gradient(90deg, rgba(20, 32, 51, 0.08), rgba(20, 32, 51, 0.08) 1px, transparent 1px, transparent 64px),
+    repeating-linear-gradient(0deg, rgba(20, 32, 51, 0.08), rgba(20, 32, 51, 0.08) 1px, transparent 1px, transparent 64px);
+  overflow: hidden;
+}
+
+.map-surface-copy {
+  position: absolute;
+  inset: 16px auto auto 16px;
+  padding: 0.5rem 0.75rem;
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 999px;
+  font-weight: 700;
+}
+
+.map-marker-layer {
+  position: absolute;
+  inset: 0;
+}
+
+.map-marker {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  border: 0;
+  background: #275efe;
+  color: #fff;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.map-marker.is-selected {
+  background: #e14d2a;
+}
+
+.store-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.store-list-item {
+  width: 100%;
+  border: 1px solid #d7deeb;
+  background: #f8faff;
+  border-radius: 12px;
+  padding: 0.75rem;
+  text-align: left;
+  display: grid;
+  gap: 0.25rem;
+  cursor: pointer;
+}
+
+.store-list-item.is-selected {
+  border-color: #275efe;
+  background: #eef3ff;
+}
+
+.detail-panel {
+  grid-column: 2;
+}
+
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-panel {
+    grid-column: auto;
+  }
+}

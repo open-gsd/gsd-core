@@ -1,0 +1,19 @@
+{
+  "name": "sandboxvr-store-map-s3-gsd-no-modern",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Standalone SandboxVR store map scenario app for controlled comparison scenario 3.",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "start": "node src/server.cjs",
+    "test": "node --test tests/*.test.cjs",
+    "smoke:click": "node scripts/smoke-click.cjs"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "jsdom": "^26.1.0"
+  }
+}
