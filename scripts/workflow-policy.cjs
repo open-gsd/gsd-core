@@ -37,6 +37,26 @@ function runnerDefault(runner) {
 }
 
 // ---------------------------------------------------------------------------
+// Matrix expansion helpers
+// ---------------------------------------------------------------------------
+
+// Build the GitHub Actions Cartesian product of the given base-list matrix
+// keys. Returns one context object per realized job, each mapping every key
+// to a stringified value. A single key yields one context per value (identical
+// to the legacy base-list expansion); N keys yield the full cross-product.
+// Values are stringified to match runner-label comparison and matrix-expression
+// resolution, which operate on strings.
+function cartesianProduct(keys, matrix) {
+  return keys.reduce(
+    (contexts, key) =>
+      contexts.flatMap((context) =>
+        matrix[key].map((value) => ({ ...context, [key]: String(value) })),
+      ),
+    [{}],
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Matrix expansion
 // ---------------------------------------------------------------------------
 
@@ -88,19 +108,32 @@ function expandRunsOn(runsOnRaw, matrix) {
     }
   }
 
-  // Collect values from matrix.<key> list (e.g. matrix.os: [ubuntu, macos])
-  // These base-list entries have no extra context beyond the key itself.
-  // Each entry is pushed unconditionally — deduplicating by runner alone
-  // would collapse distinct Cartesian rows (e.g. duplicate os values paired
-  // with different shell values) and hide policy violations on later rows.
+  // GitHub Actions realizes one job per element of the Cartesian product of all
+  // base-list matrix keys (every matrix.<k> that is an array, excluding the
+  // include/exclude control keys), and each realized job's context carries a
+  // value for EVERY matrix key — so ${{ matrix.<key> }} references (e.g. in a
+  // shell: field) resolve against any realization, not only the runs-on key.
+  // Single-axis matrices yield exactly one realization per value, identical to
+  // the prior behavior; only multi-axis matrices change shape.
+  // Each realization is pushed unconditionally — deduplicating by runner label
+  // would collapse distinct Cartesian rows (e.g. matrix.os: [macos-latest,
+  // macos-latest] paired with different shells) and hide policy violations.
   if (Array.isArray(matrix[key])) {
-    for (const val of matrix[key]) {
-      const runner = String(val);
-      realizations.push({ runner, resolvable: true, context: { [key]: runner } });
+    const baseListKeys = Object.keys(matrix).filter(
+      (k) => k !== 'include' && k !== 'exclude' && Array.isArray(matrix[k]),
+    );
+    for (const context of cartesianProduct(baseListKeys, matrix)) {
+      realizations.push({ runner: context[key], resolvable: true, context });
     }
   }
 
-  // matrix.exclude: remove matches
+  // matrix.exclude: remove matches by runner label (first match only).
+  // KNOWN LIMITATION (out of scope for #435, tracked as a follow-up): this
+  // matches on the runs-on key's runner label rather than the full exclude
+  // tuple, so a multi-axis exclude like { os: macos-latest, shell: bash } can
+  // remove the wrong cross-product cell. Full GitHub Actions tuple-match
+  // (including the include-rows-are-not-excluded rule) is deferred; #435 scopes
+  // only the base-list cross-product expansion above.
   if (Array.isArray(matrix.exclude)) {
     for (const excl of matrix.exclude) {
       if (excl && excl[key] != null) {
