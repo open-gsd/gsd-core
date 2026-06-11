@@ -45,6 +45,11 @@ const { resolveRuntimeConfigIntent } = require('../gsd-core/bin/lib/runtime-conf
 const { HOOKS_TO_COPY: _HOOKS_TO_COPY } = require('../scripts/build-hooks.js');
 const INSTALLED_HOOK_FILES = new Set(_HOOKS_TO_COPY);
 
+// ADR-857 phase 5f-1: hook-surface writer functions extracted to a dedicated module.
+// bin/install.js re-exports everything from hooksSurface so existing callers
+// (require('../bin/install.js').writeCursorHooksJson etc.) continue to work.
+const hooksSurface = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
+
 /**
  * Runtimes that register hyphen-form `name:` per #2808 AND copy agent bodies
  * verbatim (only branding swaps, no namespace conversion), so retired
@@ -622,215 +627,15 @@ function computePathPrefix({ isGlobal, isOpencode, isWindowsHost: _isWindowsHost
   return `${resolvedTarget}/`;
 }
 
-/**
- * Normalize a raw `process.execPath` to a stable, upgrade-safe node binary
- * path. On Homebrew installs, `process.execPath` resolves symlinks and returns
- * the versioned Cellar path (e.g.
- * `/usr/local/Cellar/node/25.8.1/bin/node`). Baking that path into hook
- * commands causes `dyld: Library not loaded` errors after `brew upgrade node`
- * because the shared libraries referenced by the Cellar binary have changed
- * SOVERSION. (#3181)
- *
- * The stable Homebrew symlinks (`/usr/local/bin/node` for Intel,
- * `/opt/homebrew/bin/node` for Apple Silicon) survive upgrades — Homebrew
- * re-points them atomically. We prefer those when a Cellar path is detected.
- *
- * Non-Homebrew installs (NVM, system node, Windows, etc.) are returned as-is.
- */
-function normalizeNodePath(execPath, opts) {
-  if (!execPath) return execPath;
-  const env = (opts && opts.env) || process.env;
-  const existsSync = (opts && opts.existsSync) || fs.existsSync;
-
-  // fnm multishell shim: C:/Users/<u>/AppData/Local/fnm_multishells/<pid>_<ts>/node.exe
-  // These are per-shell-session ephemeral directories that fnm cleans up on shell exit.
-  // Probe the stable fnm alias paths instead so baked hook commands survive shell restarts.
-  // (#977)
-  // TODO: Volta (~/.volta/bin/node → ~/.volta/tools/image/node/<ver>/bin/node) and
-  // nvm-windows (AppData/Roaming/nvm/<ver>/node.exe) have analogous issues — future work.
-  const normalizedForMatch = execPath.replace(/\\/g, '/');
-  if (/\/fnm_multishells\/[0-9]+_[0-9]+\/node(\.exe)?$/i.test(normalizedForMatch)) {
-    const candidates = [];
-    if (env.FNM_DIR) {
-      // Preferred: alias installed directly under FNM_DIR/aliases/default/
-      candidates.push(`${env.FNM_DIR}/aliases/default/node.exe`);
-      // POSIX layout (no .exe)
-      candidates.push(`${env.FNM_DIR}/aliases/default/bin/node`);
-    }
-    if (env.APPDATA) {
-      // Fallback: fnm default location on Windows when FNM_DIR is not set
-      candidates.push(`${env.APPDATA}/fnm/aliases/default/node.exe`);
-    }
-    for (const candidate of candidates) {
-      if (existsSync(candidate)) return candidate;
-    }
-    // No stable alias found — return raw path unchanged (graceful fallback)
-    return execPath;
-  }
-
-  // Intel Homebrew: /usr/local/Cellar/node/<version>/bin/node
-  // or /usr/local/Cellar/node@20/<version>/bin/node
-  if (/^\/usr\/local\/Cellar\/node(@\d+)?\/[^/]+\/bin\/node(\.exe)?$/.test(execPath)) {
-    return '/usr/local/bin/node';
-  }
-  // Apple Silicon Homebrew: /opt/homebrew/Cellar/node/<version>/bin/node
-  // or /opt/homebrew/Cellar/node@18/<version>/bin/node
-  if (/^\/opt\/homebrew\/Cellar\/node(@\d+)?\/[^/]+\/bin\/node(\.exe)?$/.test(execPath)) {
-    return '/opt/homebrew/bin/node';
-  }
-  return execPath;
-}
-
-/**
- * Resolve the absolute path to the node binary running the installer.
- * Used as the runner for .js hooks so they execute in GUI/minimal-PATH
- * runtimes (Gemini, Antigravity, Codex CLIs launched from a Finder
- * shortcut etc.) where bare `node` is not on `/usr/bin:/bin:/usr/sbin:/sbin`
- * and the hook would fail with `node: command not found` (#2979).
- *
- * Returns a forward-slash-normalized, double-quoted path so the emitted
- * command is shell-safe across POSIX and Windows. `process.execPath`
- * gives the absolute path of the node binary actively running the
- * installer — that is the version the user just installed under, and
- * the right default runtime for hooks invoked under the same install.
- *
- * When `process.execPath` is a versioned Homebrew Cellar path, the stable
- * Homebrew symlink is returned instead to survive `brew upgrade node` (#3181).
- *
- * When `process.execPath` is an ephemeral fnm multishell shim, the stable fnm
- * alias path is returned instead so managed hook commands survive shell restarts
- * (#977). An optional `opts` bag (`{ env, existsSync }`) is accepted for
- * testability; production callers omit it to get real env / fs.
- */
-function resolveNodeRunner(opts) {
-  const execPath = typeof process.execPath === 'string' ? process.execPath : '';
-  if (!execPath) return null;
-  const stablePath = normalizeNodePath(execPath, opts);
-  // JSON.stringify produces a properly escaped double-quoted shell token,
-  // safe for paths containing spaces or unusual characters.
-  return JSON.stringify(stablePath.replace(/\\/g, '/'));
-}
-
-/**
- * Rewrite legacy `node .../gsd-*.js` command strings in settings.hooks to use
- * the absolute Node binary path (#2979 follow-up: CR feedback on #3002).
- *
- * The original #2979 fix only emitted absolute paths for *newly registered*
- * hooks. Pre-existing entries kept their bare `node ` prefix on reinstall,
- * which left them broken under minimal-PATH GUI runtimes — exactly the
- * failure mode the original fix was meant to close. This walker normalizes
- * any managed-hook entry whose command starts with bare `node ` to
- * `<absoluteRunner> <script>` while leaving non-managed and non-bare-node
- * entries (user-authored hooks, shell scripts, etc.) untouched.
- *
- * Returns true if any entry was rewritten.
- */
-function resolveBashRunner(opts) {
-  const platform = (opts && opts.platform) || process.platform;
-  if (platform !== 'win32') return 'bash';
-
-  const env = (opts && opts.env) || process.env;
-  const exists = (opts && opts.existsSync) || fs.existsSync;
-  const candidates = [];
-  if (env.GSD_BASH_PATH) candidates.push(env.GSD_BASH_PATH);
-  if (env.ProgramFiles) candidates.push(path.win32.join(env.ProgramFiles, 'Git', 'bin', 'bash.exe'));
-  if (env['ProgramFiles(x86)']) candidates.push(path.win32.join(env['ProgramFiles(x86)'], 'Git', 'bin', 'bash.exe'));
-  if (env.SystemDrive) {
-    candidates.push(path.win32.join(env.SystemDrive, 'Program Files', 'Git', 'bin', 'bash.exe'));
-    candidates.push(path.win32.join(env.SystemDrive, 'Program Files (x86)', 'Git', 'bin', 'bash.exe'));
-  }
-
-  for (const candidate of candidates) {
-    if (candidate && exists(candidate)) {
-      return JSON.stringify(candidate.replace(/\\/g, '/'));
-    }
-  }
-  return null;
-}
+// normalizeNodePath, resolveNodeRunner, resolveBashRunner are now owned by
+// the runtime-hooks-surface module. Import them here so install.js callers
+// continue to work and so there is a single implementation of these helpers.
+const normalizeNodePath = hooksSurface.normalizeNodePath;
+const resolveNodeRunner = hooksSurface.resolveNodeRunner;
+const resolveBashRunner = hooksSurface.resolveBashRunner;
 
 function rewriteLegacyManagedNodeHookCommands(settings, absoluteRunner, opts) {
-  if (!settings || !settings.hooks || !absoluteRunner) return false;
-  if (!opts) opts = {};
-  const platform = opts.platform || process.platform;
-  let changed = false;
-  for (const entries of Object.values(settings.hooks)) {
-    if (!Array.isArray(entries)) continue;
-    for (const entry of entries) {
-      if (!entry || !Array.isArray(entry.hooks)) continue;
-      for (const h of entry.hooks) {
-        if (!h || typeof h.command !== 'string') continue;
-        // args-form entries have the script path in h.args[] and h.command is
-        // the launcher executable (not a managed hook command).  These are
-        // intentional user wrappers — do not rewrite them. (#976)
-        if (Array.isArray(h.args) && h.args.length > 0) continue;
-        let trimmed = h.command.trim();
-        const hadPowerShellCallOperator = platform === 'win32' && /^&\s+/.test(trimmed);
-        if (hadPowerShellCallOperator) {
-          trimmed = trimmed.replace(/^&\s+/, '').trim();
-        }
-        // Match two runner forms:
-        //   1. Legacy bare-node form: `node <script>` (#2979/#3002)
-        //   2. Cellar-path form: `"/usr/local/Cellar/node/<v>/bin/node" <script>`
-        //      or `"/opt/homebrew/Cellar/node/<v>/bin/node" <script>` (#3181)
-        //
-        // Both patterns use the same script-token capture group so the rewrite
-        // is uniform. We detect the Cellar form by extracting the runner token
-        // and running it through normalizeNodePath.
-        //
-        // The previous shape used `trimmed.includes(<filename>)` which would
-        // false-positive on user-authored hooks whose path merely contained
-        // a managed filename as a substring (e.g.
-        // /home/me/scripts/wraps-gsd-check-update.js-and-more.js). #3002 CR.
-        const m = trimmed.match(/^node\s+("([^"]+)"|'([^']+)'|(\S+))\s*$/) ||
-                  trimmed.match(/^("([^"]+)"|'([^']+)'|(\S+))\s+("([^"]+)"|'([^']+)'|(\S+))\s*$/);
-        if (!m) continue;
-
-        let runnerToken, scriptToken, scriptPath;
-        if (/^node\s+/.test(trimmed)) {
-          // bare-node form
-          runnerToken = 'node';
-          scriptToken = m[1];
-          scriptPath = m[2] || m[3] || m[4] || '';
-        } else {
-          // quoted/unquoted runner form — check whether runner is a Cellar path
-          runnerToken = m[1];
-          const runnerPath = (m[2] || m[3] || m[4] || '').replace(/\\/g, '/');
-          const stableRunner = normalizeNodePath(runnerPath);
-          // Process Cellar paths so they normalize to a stable symlink. On
-          // Windows, already-absolute runners still flow through the projection
-          // seam because some runtimes need additional wrapper policy while
-          // others must stay shell-neutral (#3362, #3413).
-          if (stableRunner === runnerPath && platform !== 'win32') continue;
-          scriptToken = m[5];
-          scriptPath = m[6] || m[7] || m[8] || '';
-        }
-
-        // Take the basename — match against MANAGED_HOOK_FILES by exact
-        // equality, not substring containment. Handles both forward and
-        // backslash separators (Windows).
-        if (!isManagedHookBasename(scriptPath, { surface: 'settings-json' })) continue;
-
-        const projectedCommand = projectLegacySettingsHookCommand({
-          absoluteRunner,
-          scriptPath,
-          scriptToken,
-          runtime: opts.runtime || 'generic',
-          platform,
-        });
-        if (!projectedCommand) continue;
-
-        // Skip only when the existing managed command already matches the
-        // desired runtime-aware projected shape. This preserves Gemini's
-        // required PowerShell prefix while still letting Claude strip stale
-        // prefixes on reinstall (#3413).
-        if (h.command === projectedCommand) continue;
-
-        h.command = projectedCommand;
-        changed = true;
-      }
-    }
-  }
-  return changed;
+  return hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, absoluteRunner, opts);
 }
 
 /**
@@ -856,22 +661,7 @@ function rewriteLegacyManagedNodeHookCommands(settings, absoluteRunner, opts) {
  * @returns {string|null} The toml block to append, or null on missing runner.
  */
 function buildCodexHookBlock(targetDir, opts) {
-  const absoluteRunner = opts && opts.absoluteRunner;
-  if (!absoluteRunner) return null;
-  const eol = (opts && opts.eol) || '\n';
-  const platform = (opts && opts.platform) || process.platform;
-  const updateCheckScript = path.resolve(targetDir, 'hooks', 'gsd-check-update.js');
-  const commandValue = projectCodexHookTomlCommand({
-    absoluteRunner,
-    scriptPath: updateCheckScript,
-    platform,
-  });
-  return `${eol}# GSD Hooks${eol}` +
-    `[[hooks.SessionStart]]${eol}` +
-    `${eol}` +
-    `[[hooks.SessionStart.hooks]]${eol}` +
-    `type = "command"${eol}` +
-    `command = "${commandValue}"${eol}`;
+  return hooksSurface.buildCodexHookBlock(targetDir, opts);
 }
 
 /**
@@ -888,45 +678,7 @@ function buildCodexHookBlock(targetDir, opts) {
  * @returns {{ content: string, changed: boolean }}
  */
 function rewriteLegacyCodexHookBlock(content, absoluteRunner, opts) {
-  if (!content || !absoluteRunner) return { content, changed: false };
-  const platform = (opts && opts.platform) || process.platform;
-  let changed = false;
-  // Match `command = "node <scriptToken>"` lines where scriptToken is
-  // either an unquoted path (no spaces) or a toml-escaped quoted path.
-  // The whole RHS is a toml-double-quoted string; interior quotes are \".
-  // Examples we want to migrate:
-  //   command = "node /Users/x/.codex/hooks/gsd-check-update.js"
-  //   command = "node \"/Users/x/.codex/hooks/gsd-check-update.js\""
-  // Examples we must leave alone:
-  //   command = "\"/usr/local/bin/node\" \"/path/to/gsd-check-update.js\""  ← already absolute
-  //   command = "node /home/me/my-custom.js"                                ← user-owned filename
-  const updated = content.replace(
-    /^(command\s*=\s*")node\s+((?:\\"[^"]+\\"|\S+))("\s*)$/gm,
-    (full, prefix, scriptToken, suffix) => {
-      // Extract the underlying script path from the captured token —
-      // either the bare token or the decoded inner content of \"...\".
-      const quoted = scriptToken.match(/^\\"([\s\S]+)\\"$/);
-      let scriptPath = scriptToken;
-      if (quoted) {
-        try {
-          scriptPath = String(parseTomlValue(`"${quoted[1]}"`, 0).value);
-        } catch {
-          scriptPath = quoted[1];
-        }
-      }
-      if (!isManagedHookBasename(scriptPath, { surface: 'codex-toml' })) return full;
-      const desiredCommand = projectCodexHookTomlCommand({
-        absoluteRunner,
-        scriptPath,
-        platform,
-      });
-      const currentCommand = `${prefix}${scriptToken}${suffix}`.replace(/^(command\s*=\s*")|("\s*)$/g, '');
-      if (currentCommand === desiredCommand) return full;
-      changed = true;
-      return `${prefix}${desiredCommand}${suffix}`;
-    },
-  );
-  return { content: updated, changed };
+  return hooksSurface.rewriteLegacyCodexHookBlock(content, absoluteRunner, opts);
 }
 
 /**
@@ -949,83 +701,7 @@ function rewriteLegacyCodexHookBlock(content, absoluteRunner, opts) {
  * @returns {{ changed: boolean, wrote: boolean, path: string }}
  */
 function reconcileCodexHooksJsonEvent(targetDir, eventName, opts = {}) {
-  const hooksJsonPath = path.join(targetDir, 'hooks.json');
-  const managedCommand = typeof opts.managedCommand === 'string' ? opts.managedCommand : null;
-  const commandWindows = typeof opts.commandWindows === 'string' ? opts.commandWindows : null;
-  const matcher = typeof opts.matcher === 'string' ? opts.matcher : undefined;
-  const timeout = typeof opts.timeout === 'number' ? opts.timeout : undefined;
-  let parsed = {};
-  let currentContent = null;
-  if (fs.existsSync(hooksJsonPath)) {
-    const raw = fs.readFileSync(hooksJsonPath, 'utf8');
-    currentContent = raw;
-    if (raw.trim()) {
-      try {
-        parsed = JSON.parse(raw);
-      } catch (err) {
-        throw new Error(`hooks.json parse failed: ${err && err.message ? err.message : String(err)}`);
-      }
-    }
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) parsed = {};
-
-  const usesNestedHooksObject =
-    parsed.hooks && typeof parsed.hooks === 'object' && !Array.isArray(parsed.hooks);
-  const hookTable = usesNestedHooksObject ? parsed.hooks : parsed;
-  const eventEntries = Array.isArray(hookTable[eventName]) ? hookTable[eventName] : [];
-
-  let removedLegacy = false;
-  const sanitizedEntries = [];
-  for (const entry of eventEntries) {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
-    const originalHooks = Array.isArray(entry.hooks) ? entry.hooks : [];
-    if (originalHooks.length === 0) {
-      sanitizedEntries.push(entry);
-      continue;
-    }
-    const keptHooks = originalHooks.filter((hook) => {
-      const cmd = hook && typeof hook === 'object' ? hook.command : null;
-      const managed = isManagedHookCommand(cmd, {
-        surface: 'codex-hooks-json',
-        includeLegacyAliases: true,
-        configDir: targetDir,
-      });
-      if (managed) removedLegacy = true;
-      return !managed;
-    });
-    if (keptHooks.length === 0) continue;
-    const nextEntry = { ...entry, hooks: keptHooks };
-    sanitizedEntries.push(nextEntry);
-  }
-
-  if (managedCommand) {
-    const hookEntry = { type: 'command', command: managedCommand };
-    // #772: emit commandWindows so Codex picks the .cmd shim on Windows and
-    // the POSIX command on other platforms — without requiring per-OS config
-    // regeneration. Sourced from HookHandlerConfig.command_windows field in
-    // codex-rs/config/src/hook_config.rs (alias: commandWindows).
-    if (commandWindows) hookEntry.commandWindows = commandWindows;
-    if (timeout !== undefined) hookEntry.timeout = timeout;
-    const newEntry = { hooks: [hookEntry] };
-    if (matcher !== undefined) newEntry.matcher = matcher;
-    sanitizedEntries.push(newEntry);
-  }
-
-  if (sanitizedEntries.length > 0) {
-    hookTable[eventName] = sanitizedEntries;
-  } else {
-    delete hookTable[eventName];
-  }
-  if (usesNestedHooksObject) parsed.hooks = hookTable;
-
-  const nextContent = `${JSON.stringify(parsed, null, 2)}\n`;
-  const changed = currentContent !== nextContent;
-  const shouldWrite = changed && (currentContent !== null || Object.keys(parsed).length > 0);
-  if (shouldWrite) {
-    atomicWriteFileSync(hooksJsonPath, nextContent, 'utf8');
-  }
-
-  return { changed: changed || removedLegacy, wrote: shouldWrite, path: hooksJsonPath };
+  return hooksSurface.reconcileCodexHooksJsonEvent(targetDir, eventName, opts);
 }
 
 /**
@@ -1037,7 +713,7 @@ function reconcileCodexHooksJsonEvent(targetDir, eventName, opts = {}) {
  * @returns {{ changed: boolean, wrote: boolean, path: string }}
  */
 function reconcileCodexHooksJsonSessionStart(targetDir, opts = {}) {
-  return reconcileCodexHooksJsonEvent(targetDir, 'SessionStart', opts);
+  return hooksSurface.reconcileCodexHooksJsonSessionStart(targetDir, opts);
 }
 
 /**
@@ -1070,41 +746,7 @@ function reconcileCodexHooksJsonSessionStart(targetDir, opts = {}) {
  * @returns {{ invocation: { interpreter: string, target: string }, cmdPath: string, hookCommand: string, render: { cmd: () => string } }|null}
  */
 function buildCodexHookWindowsShimIR(scriptAbsPath, absoluteRunnerToken) {
-  if (!absoluteRunnerToken) return null;
-  // absoluteRunnerToken is JSON-quoted (e.g. '"C:/path/node.exe"'). Unwrap to
-  // get the raw interpreter path for the invocation record and render output.
-  let interpreter;
-  try {
-    interpreter = JSON.parse(absoluteRunnerToken);
-  } catch {
-    interpreter = absoluteRunnerToken;
-  }
-  // Normalise to forward slashes for cross-shell safety (same as other Windows
-  // hook path normalisations in this codebase).
-  const targetAbs = scriptAbsPath.replace(/\\/g, '/');
-  const scriptQuoted = JSON.stringify(targetAbs);
-  // .cmd shim lives alongside the .js file, replacing the extension.
-  const cmdPath = scriptAbsPath.replace(/\.js$/, '.cmd');
-  // The hook command written to hooks.json is just the .cmd path (double-quoted
-  // for spaces-in-path safety). cmd.exe executes .cmd files natively via
-  // CreateProcess — no runner prefix required.
-  const hookCommand = JSON.stringify(cmdPath.replace(/\\/g, '/'));
-  const runnerQuoted = JSON.stringify(interpreter);
-  return {
-    invocation: { interpreter, target: scriptAbsPath },
-    cmdPath,
-    hookCommand,
-    // Typed fields for IR-level assertions (CONTRIBUTING.md L558-L565).
-    // These describe the render semantics in a structured way so tests can
-    // assert on the generator contract without coupling to rendered text.
-    eol: { cmd: '\r\n' },            // CRLF — canonical for cmd.exe .cmd files
-    passthroughArgs: true,           // the shim forwards all args via %*
-    render: {
-      // Use CRLF line endings for strict cmd.exe compatibility (LF-only
-      // .cmd files work in modern Windows but CRLF is the canonical format).
-      cmd: () => `@ECHO OFF\r\n@SETLOCAL\r\n@${runnerQuoted} ${scriptQuoted} %*\r\n`,
-    },
-  };
+  return hooksSurface.buildCodexHookWindowsShimIR(scriptAbsPath, absoluteRunnerToken);
 }
 
 /**
@@ -1135,69 +777,7 @@ function buildCodexHookWindowsShimIR(scriptAbsPath, absoluteRunnerToken) {
  * @returns {{ changed: boolean, wrote: boolean, path: string }}
  */
 function ensureCodexHooksJsonSessionStart(targetDir, opts = {}) {
-  const platform = opts.platform || process.platform;
-  const absoluteRunner = opts.absoluteRunner || null;
-  const hooksJsonPath = path.join(targetDir, 'hooks.json');
-  if (!absoluteRunner) return { changed: false, wrote: false, path: hooksJsonPath };
-
-  // Normalize backslashes to forward slashes so isManagedHookCommand can
-  // match stored commands against configDir on Windows CI runners where
-  // path.resolve returns backslash paths but the stored command may use
-  // forward slashes (or vice versa). Forward-slash paths are always valid on
-  // Windows for both Node.js and Codex, so this normalization is safe for all
-  // platforms. (#772 — same fix applied to ensureCodexHooksJsonEvent.)
-  const scriptPath = path.resolve(targetDir, 'hooks', 'gsd-check-update.js').replace(/\\/g, '/');
-
-  // #772: compute the Windows .cmd shim path cross-platform so that
-  // `commandWindows` can be emitted in hooks.json regardless of the host OS.
-  // The .cmd path is always the .js script path with extension replaced.
-  const cmdShimPath = scriptPath.replace(/\.js$/, '.cmd');
-
-  let managedCommand;
-  if (platform === 'win32') {
-    // #3426 fix: on Windows, write a .cmd shim and use its path as the hook
-    // command. This avoids the MSYS bash.exe POSIX-exec failure when Codex's
-    // hook dispatcher tries to run node.exe through the Git Bash exec layer.
-    const shimIR = buildCodexHookWindowsShimIR(scriptPath, absoluteRunner);
-    if (!shimIR) return { changed: false, wrote: false, path: hooksJsonPath };
-    try {
-      atomicWriteFileSync(shimIR.cmdPath, shimIR.render.cmd(), 'utf8');
-    } catch (shimWriteErr) {
-      // Shim write failed — do NOT fall back to the old "node.exe script.js"
-      // command. That form triggers the `bash.exe: cannot execute binary file`
-      // failure that #3426 exists to fix, so a silent fallback would silently
-      // restore the original bug. Instead: warn loudly and skip the registration
-      // for this runtime so the user sees an actionable message rather than a
-      // successful install that fails at hook-dispatch time.
-      const reason = shimWriteErr && shimWriteErr.message ? shimWriteErr.message : String(shimWriteErr);
-      console.warn(
-        `  ${yellow}⚠${reset}  Codex Windows hook NOT installed — .cmd shim write failed: ${reason}. ` +
-          `Fix the write error (permissions? disk full?) and re-run the installer. ` +
-          `Do NOT use the legacy node.exe command path — it triggers the #3426 bash.exe POSIX-exec failure.`,
-      );
-      return { changed: false, wrote: false, path: hooksJsonPath };
-    }
-    managedCommand = shimIR.hookCommand;
-  } else {
-    managedCommand = projectManagedHookCommand({
-      absoluteRunner,
-      scriptPath,
-      runtime: 'codex',
-      platform,
-    });
-  }
-
-  if (!managedCommand) return { changed: false, wrote: false, path: hooksJsonPath };
-
-  // #772: emit commandWindows — the .cmd shim path — but ONLY on Windows where
-  // the shim was actually written. On POSIX, commandWindows is omitted to avoid
-  // pointing Windows Codex at a non-existent .cmd file (the shim is only present
-  // when install() ran natively on Windows and wrote it via buildCodexHookWindowsShimIR).
-  const commandWindows = platform === 'win32'
-    ? JSON.stringify(cmdShimPath.replace(/\\/g, '/'))
-    : undefined;
-
-  return reconcileCodexHooksJsonSessionStart(targetDir, { managedCommand, commandWindows });
+  return hooksSurface.ensureCodexHooksJsonSessionStart(targetDir, opts);
 }
 
 /**
@@ -1224,50 +804,7 @@ function ensureCodexHooksJsonSessionStart(targetDir, opts = {}) {
  * @returns {{ changed: boolean, wrote: boolean, path: string }}
  */
 function ensureCodexHooksJsonEvent(targetDir, eventName, opts = {}) {
-  const platform = opts.platform || process.platform;
-  const absoluteRunner = opts.absoluteRunner || null;
-  const hooksJsonPath = path.join(targetDir, 'hooks.json');
-  if (!absoluteRunner) return { changed: false, wrote: false, path: hooksJsonPath };
-
-  // Normalize backslashes to forward slashes so that isManagedHookCommand can
-  // match the stored command against configDir on Windows. path.resolve on
-  // Windows returns backslash paths, but when platform is not 'win32'
-  // (e.g. platform: 'linux' in a test running on a Windows CI runner),
-  // projectManagedHookCommand does not normalize them — producing a mismatch
-  // between the stored command and the configDir-based hook-dir prefix used
-  // for deduplication. Forward-slash paths are always valid on Windows (Node.js
-  // and Codex both accept them), so normalizing here is safe for all platforms.
-  const scriptPath = path.resolve(targetDir, 'hooks', 'gsd-context-monitor.js').replace(/\\/g, '/');
-
-  let managedCommand;
-  if (platform === 'win32') {
-    // #3426 fix pattern: on Windows, write a .cmd shim and use its path as the
-    // hook command. The same bash.exe POSIX-exec failure that affects
-    // gsd-check-update.js also affects gsd-context-monitor.js.
-    const shimIR = buildCodexHookWindowsShimIR(scriptPath, absoluteRunner);
-    if (!shimIR) return { changed: false, wrote: false, path: hooksJsonPath };
-    try {
-      atomicWriteFileSync(shimIR.cmdPath, shimIR.render.cmd(), 'utf8');
-    } catch (shimWriteErr) {
-      const reason = shimWriteErr && shimWriteErr.message ? shimWriteErr.message : String(shimWriteErr);
-      console.warn(
-        `  ${yellow}⚠${reset}  Codex Windows hook NOT installed — .cmd shim write failed for ${eventName}: ${reason}. ` +
-          `Fix the write error (permissions? disk full?) and re-run the installer.`,
-      );
-      return { changed: false, wrote: false, path: hooksJsonPath };
-    }
-    managedCommand = shimIR.hookCommand;
-  } else {
-    managedCommand = projectManagedHookCommand({
-      absoluteRunner,
-      scriptPath,
-      runtime: 'codex',
-      platform,
-    });
-  }
-
-  if (!managedCommand) return { changed: false, wrote: false, path: hooksJsonPath };
-  return reconcileCodexHooksJsonEvent(targetDir, eventName, { managedCommand, timeout: 10 });
+  return hooksSurface.ensureCodexHooksJsonEvent(targetDir, eventName, opts);
 }
 
 /**
@@ -1277,11 +814,11 @@ function ensureCodexHooksJsonEvent(targetDir, eventName, opts = {}) {
  * @param {string} eventName
  */
 function removeCodexHooksJsonEvent(targetDir, eventName) {
-  return reconcileCodexHooksJsonEvent(targetDir, eventName, { managedCommand: null });
+  return hooksSurface.removeCodexHooksJsonEvent(targetDir, eventName);
 }
 
 function removeCodexHooksJsonSessionStart(targetDir) {
-  return reconcileCodexHooksJsonSessionStart(targetDir, { managedCommand: null });
+  return hooksSurface.removeCodexHooksJsonSessionStart(targetDir);
 }
 
 /**
@@ -1298,62 +835,7 @@ function removeCodexHooksJsonSessionStart(targetDir) {
  *   runtime: target runtime name for shell projection policy.
  */
 function buildHookCommand(configDir, hookName, opts) {
-  if (!opts) opts = {};
-  const platform = opts.platform || process.platform;
-  const runtime = opts.runtime || 'generic';
-  const isShellHook = hookName.endsWith('.sh');
-
-  // #166: Claude Code executes these hook commands inside a bash context on
-  // Windows, so wrapping `.sh` hooks with an explicit `bash.exe` path can
-  // trigger `bash.exe: ... cannot execute binary file`. Emit only the quoted
-  // script path for Claude on Windows.
-  if (shellHookOmitsBashRunner({ platform, runtime, isShellHook })) {
-    if (opts.portableHooks) {
-      const portableBaseDir = projectPortableHookBaseDir({
-        configDir,
-        homeDir: os.homedir(),
-      });
-      return JSON.stringify(`${portableBaseDir}/hooks/${hookName}`);
-    }
-    return JSON.stringify(configDir.replace(/\\/g, '/') + '/hooks/' + hookName);
-  }
-
-  // POSIX .sh hooks run under PATH-resolved `bash`: POSIX guarantees /bin/sh
-  // but not /bin/bash, and distros like NixOS do not ship /bin/bash by default.
-  // Windows Codex launches hooks from PowerShell/cmd environments where bare
-  // `bash` may not be on PATH, so resolve Git Bash explicitly or return null so
-  // callers skip registration instead of installing a known-broken hook (#3393).
-  // .js hooks still need the absolute node path because GUI-launched runtimes
-  // start with a minimal PATH that may not include nvm/Homebrew/Volta node
-  // binaries (#2979).
-  const nodeRunner = resolveNodeRunner();
-  const runner = isShellHook ? resolveBashRunner(opts) : nodeRunner;
-  // Runner resolvers return null when the executable path is unavailable.
-  // Fall through with null so callers can skip registration with a warning
-  // instead of emitting a command that recreates the original hook failure.
-  if (runner === null) return null;
-
-  if (opts.portableHooks) {
-    const portableBaseDir = projectPortableHookBaseDir({
-      configDir,
-      homeDir: os.homedir(),
-    });
-    return projectManagedHookCommand({
-      absoluteRunner: runner,
-      scriptPath: `${portableBaseDir}/hooks/${hookName}`,
-      runtime: opts.runtime || 'generic',
-      platform,
-    });
-  }
-
-  // Default: absolute path with forward slashes (Windows-safe, fixes #2045/#2046).
-  const hooksPath = configDir.replace(/\\/g, '/') + '/hooks/' + hookName;
-  return projectManagedHookCommand({
-    absoluteRunner: runner,
-    scriptPath: hooksPath,
-    runtime,
-    platform,
-  });
+  return hooksSurface.buildHookCommand(configDir, hookName, opts);
 }
 
 /**
@@ -5671,36 +5153,14 @@ function rewriteTomlKeyLines(content, matches, key) {
   return rewritten;
 }
 
-/**
- * Atomic write — write to <target>.tmp-<pid>-<n> first, then renameSync over
- * the target. Eliminates the partial-write corruption window: an interrupted
- * write leaves the temp file (which we clean up) but never truncates the
- * original target. Used for any mutation of Codex config.toml so we cannot
- * leave the user with a half-written file (#2760 fix 4).
- *
- * Every temp path written is recorded in __atomicWrittenTmps so that
- * _cleanTmpFiles() can scope cleanup to files this installer process actually
- * created, avoiding accidental deletion of unrelated tools' temp files.
- */
-let __atomicWriteCounter = 0;
-// Set<string> — absolute paths of .tmp-<pid>-<n> files this process created.
-const __atomicWrittenTmps = new Set();
-function atomicWriteFileSync(target, data, options) {
-  __atomicWriteCounter += 1;
-  const tmp = `${target}.tmp-${process.pid}-${__atomicWriteCounter}`;
-  __atomicWrittenTmps.add(tmp);
-  try {
-    fs.writeFileSync(tmp, data, options);
-    fs.renameSync(tmp, target);
-    // Successful rename: the tmp path no longer exists, but leave it in the
-    // Set so _cleanTmpFiles can recognise it as installer-owned if it somehow
-    // lingers (e.g. a rename succeeded but left a stale entry on some FS).
-  } catch (e) {
-    // Best-effort cleanup of the partial temp file; never mask the real error.
-    try { fs.rmSync(tmp, { force: true }); } catch (_) { /* ignore */ }
-    throw e;
-  }
-}
+// atomicWriteFileSync and __atomicWrittenTmps are now owned by the
+// runtime-hooks-surface module and imported here so both install.js's
+// direct config.toml writes and the module's Cursor/Codex hooks.json
+// writes share the SAME tracking Set. _cleanTmpFiles() below reads
+// hooksSurface.__atomicWrittenTmps to scope cleanup to installer-owned
+// temps only.
+const atomicWriteFileSync = hooksSurface.atomicWriteFileSync;
+const __atomicWrittenTmps = hooksSurface.__atomicWrittenTmps;
 
 /**
  * Merge GSD config block into an existing or new config.toml.
@@ -6038,23 +5498,12 @@ const GSD_AGENTS_MD_CLOSE_MARKER = '<!-- End GSD Configuration -->';
  * engine layout, not the (separate) #782 Cline skills directory.
  */
 function buildClineRulesBody() {
-  return [
-    '# GSD Core — Git. Ship. Done.',
-    '',
-    '- GSD workflows live in `gsd-core/workflows/`. Load the relevant workflow when',
-    '  the user runs a `/gsd-*` command.',
-    '- GSD agents live in `agents/`. Use the matching agent when spawning subagents.',
-    '- GSD tools are at `gsd-core/bin/gsd-tools.cjs`. Run with `node`.',
-    '- Planning artifacts live in `.planning/`. Never edit them outside a GSD workflow.',
-    '- Do not apply GSD workflows unless the user explicitly asks for them.',
-    '- When a GSD command triggers a deliverable (feature, fix, docs), offer the next',
-    '  step to the user using Cline\'s ask_user tool after completing it.',
-  ].join('\n') + '\n';
+  return hooksSurface.buildClineRulesBody();
 }
 
 /** AGENTS.md body for the cross-tool global instruction target (`~/.agents/AGENTS.md`). */
 function buildClineAgentsMdBody() {
-  return buildClineRulesBody();
+  return hooksSurface.buildClineAgentsMdBody();
 }
 
 /**
@@ -6070,53 +5519,7 @@ function buildClineAgentsMdBody() {
  * hook bug can never wedge the user. No dependency on the #782 skills work.
  */
 function buildClinePreToolUseHook() {
-  return `#!/usr/bin/env node
-'use strict';
-/* GSD-managed Cline PreToolUse hook — gsd-core issue #787.
- * Protocol: JSON on stdin -> JSON decision on stdout.
- * Honored fields: { cancel, errorMessage, contextModification }.
- * Fails open: any error allows the operation. */
-let raw = '';
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', (c) => { raw += c; });
-process.stdin.on('end', () => {
-  const allow = () => process.stdout.write(JSON.stringify({ cancel: false }));
-  let input;
-  try { input = JSON.parse(raw || '{}'); } catch { return allow(); }
-  try {
-    const tool = String(
-      input.toolName || input.tool_name || input.tool ||
-      (input.toolInput && input.toolInput.name) || (input.tool_input && input.tool_input.name) || ''
-    ).toLowerCase();
-    const isWrite = /write|edit|replace|create|delete|remove|append|apply|patch|insert|mkdir/.test(tool);
-    // Collect only PATH-bearing field values (not free-form content), so a doc
-    // that merely mentions ".planning/" in its body is never falsely blocked.
-    const paths = [];
-    const PATH_KEY = /^(path|file|file_?path|filepath|target_?path|target|dir|directory|uri|filename)$/i;
-    const walk = (v, depth) => {
-      if (depth > 5 || paths.length > 64) return;
-      if (Array.isArray(v)) { for (const x of v) walk(x, depth + 1); return; }
-      if (v && typeof v === 'object') {
-        for (const k of Object.keys(v)) {
-          const val = v[k];
-          if (typeof val === 'string' && PATH_KEY.test(k)) paths.push(val);
-          else walk(val, depth + 1);
-        }
-      }
-    };
-    walk(input, 0);
-    const isPlanningPath = (s) => /(^|[\\\\/])\\.planning([\\\\/]|$)/.test(s);
-    if (isWrite && paths.some(isPlanningPath)) {
-      return process.stdout.write(JSON.stringify({
-        cancel: true,
-        errorMessage:
-          'GSD: .planning/ artifacts are managed by GSD workflows. Edit them only through a /gsd-* command, not directly.',
-      }));
-    }
-  } catch { /* fall through to allow */ }
-  return allow();
-});
-`;
+  return hooksSurface.buildClinePreToolUseHook();
 }
 
 /**
@@ -6124,31 +5527,7 @@ process.stdin.on('end', () => {
  * any user content. Mirrors mergeCopilotInstructions: marker-delimited, idempotent.
  */
 function mergeGsdAgentsMd(filePath, gsdContent) {
-  const gsdBlock = GSD_AGENTS_MD_MARKER + '\n' + gsdContent.trim() + '\n' + GSD_AGENTS_MD_CLOSE_MARKER;
-
-  if (!fs.existsSync(filePath)) {
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, gsdBlock + '\n');
-    return;
-  }
-
-  const existing = fs.readFileSync(filePath, 'utf8');
-  const openIndex = existing.indexOf(GSD_AGENTS_MD_MARKER);
-  const closeIndex = existing.indexOf(GSD_AGENTS_MD_CLOSE_MARKER);
-
-  if (openIndex !== -1 && closeIndex !== -1) {
-    const before = existing.substring(0, openIndex).trimEnd();
-    const after = existing.substring(closeIndex + GSD_AGENTS_MD_CLOSE_MARKER.length).trimStart();
-    let newContent = '';
-    if (before) newContent += before + '\n\n';
-    newContent += gsdBlock;
-    if (after) newContent += '\n\n' + after;
-    newContent += '\n';
-    fs.writeFileSync(filePath, newContent);
-    return;
-  }
-
-  fs.writeFileSync(filePath, existing.trimEnd() + '\n\n' + gsdBlock + '\n');
+  return hooksSurface.mergeGsdAgentsMd(filePath, gsdContent);
 }
 
 /**
@@ -6178,53 +5557,7 @@ function stripGsdFromAgentsMd(content) {
  * caller can hash-track them).
  */
 function writeClineArtifacts(targetDir, isGlobalInstall) {
-  const written = [];
-  const clinerulesDir = path.join(targetDir, '.clinerules');
-
-  // Migrate a pre-#787 single-file `.clinerules` — a path cannot be both a
-  // file and a directory, so the legacy file must be removed first. The legacy
-  // file is GSD-authored (the installer wrote its full contents with no user
-  // merge surface), so replacing it with the newer directory form is the
-  // intended upgrade. Use lstat so a symlink is unlinked in place rather than
-  // followed (which would write GSD files through the link into an external dir).
-  try {
-    if (fs.existsSync(clinerulesDir)) {
-      const st = fs.lstatSync(clinerulesDir);
-      if (st.isFile() || st.isSymbolicLink()) {
-        fs.unlinkSync(clinerulesDir);
-        console.log(`  ${green}✓${reset} Migrated legacy .clinerules to directory form`);
-      }
-    }
-  } catch { /* best-effort migration */ }
-
-  fs.mkdirSync(clinerulesDir, { recursive: true });
-  fs.writeFileSync(path.join(clinerulesDir, 'gsd.md'), buildClineRulesBody());
-  written.push('.clinerules/gsd.md');
-  console.log(`  ${green}✓${reset} Wrote .clinerules/gsd.md`);
-
-  const hooksDir = path.join(clinerulesDir, 'hooks');
-  fs.mkdirSync(hooksDir, { recursive: true });
-  const hookPath = path.join(hooksDir, 'PreToolUse');
-  fs.writeFileSync(hookPath, buildClinePreToolUseHook());
-  try { fs.chmodSync(hookPath, 0o755); } catch { /* Windows: hooks unsupported anyway */ }
-  written.push('.clinerules/hooks/PreToolUse');
-  console.log(`  ${green}✓${reset} Wrote .clinerules/hooks/PreToolUse`);
-
-  // Global cross-tool instruction target. Cline reads ~/.agents/AGENTS.md
-  // (docs.cline.bot/customization/cline-rules). Merge-safe so we never clobber
-  // a user's or another tool's AGENTS.md. Tracked via markers (like copilot),
-  // not the per-configDir manifest, since it lives outside configDir.
-  if (isGlobalInstall) {
-    try {
-      const agentsPath = path.join(os.homedir(), '.agents', 'AGENTS.md');
-      mergeGsdAgentsMd(agentsPath, buildClineAgentsMdBody());
-      console.log(`  ${green}✓${reset} Merged GSD instructions into ~/.agents/AGENTS.md`);
-    } catch (err) {
-      console.warn(`  ${yellow}⚠${reset} Could not write ~/.agents/AGENTS.md: ${err.message}`);
-    }
-  }
-
-  return written;
+  return hooksSurface.writeClineArtifacts(targetDir, isGlobalInstall);
 }
 
 // ── Cursor hooks.json reconciler (issue #777) ────────────────────────────────
@@ -6254,11 +5587,7 @@ function writeClineArtifacts(targetDir, isGlobalInstall) {
  * @returns {object} Cursor hook entry object
  */
 function buildCursorHookEntry(scriptPath) {
-  return {
-    type: 'command',
-    command: scriptPath.replace(/\\/g, '/'),
-    [GSD_CURSOR_HOOK_MARKER]: true,
-  };
+  return hooksSurface.buildCursorHookEntry(scriptPath);
 }
 
 /**
@@ -6269,7 +5598,7 @@ function buildCursorHookEntry(scriptPath) {
  * @returns {boolean}
  */
 function isManagedCursorHookEntry(entry) {
-  return Boolean(entry && typeof entry === 'object' && entry[GSD_CURSOR_HOOK_MARKER]);
+  return hooksSurface.isManagedCursorHookEntry(entry);
 }
 
 /**
@@ -6290,74 +5619,7 @@ function isManagedCursorHookEntry(entry) {
  * @returns {{ changed: boolean, wrote: boolean, path: string }}
  */
 function reconcileCursorHooksJson(hooksJsonPath, managedEntries) {
-  let parsed = {};
-  let currentContent = null;
-
-  if (fs.existsSync(hooksJsonPath)) {
-    const raw = fs.readFileSync(hooksJsonPath, 'utf8');
-    currentContent = raw;
-    if (raw.trim()) {
-      try {
-        parsed = JSON.parse(raw);
-      } catch (err) {
-        throw new Error(`Cursor hooks.json parse failed: ${err && err.message ? err.message : String(err)}`);
-      }
-    }
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) parsed = {};
-
-  // Cursor's canonical hooks.json schema is { "version": 1, "hooks": { ... } }.
-  // GSD always writes (and migrates to) the nested shape so Cursor reads it correctly.
-  // The flat shape { "sessionStart": [...] } is accepted on read for backwards compat
-  // with manually-written files, but the output always uses the nested form.
-  const hasNestedHooksObject =
-    parsed.hooks && typeof parsed.hooks === 'object' && !Array.isArray(parsed.hooks);
-  if (!hasNestedHooksObject) {
-    // Migrate flat shape (or empty {}) to nested: lift event keys into hooks:{}.
-    const eventKeys = ['sessionStart', 'postToolUse'];
-    const lifted = {};
-    for (const k of eventKeys) {
-      if (Array.isArray(parsed[k])) {
-        lifted[k] = parsed[k];
-        delete parsed[k];
-      }
-    }
-    parsed.hooks = lifted;
-  }
-  if (!parsed.version) parsed.version = 1;
-  const hookTable = parsed.hooks;
-
-  // Events GSD manages.
-  const MANAGED_EVENTS = ['sessionStart', 'postToolUse'];
-  const entries = managedEntries || {};
-
-  for (const event of MANAGED_EVENTS) {
-    const existing = Array.isArray(hookTable[event]) ? hookTable[event] : [];
-    // Strip all prior GSD-managed entries for this event.
-    const userOwned = existing.filter((e) => !isManagedCursorHookEntry(e));
-    const newEntry = entries[event] || null;
-    if (newEntry) {
-      hookTable[event] = [...userOwned, newEntry];
-    } else {
-      // Remove-only: keep user entries, or delete the key if it would be empty.
-      if (userOwned.length > 0) {
-        hookTable[event] = userOwned;
-      } else {
-        delete hookTable[event];
-      }
-    }
-  }
-
-  // hookTable is parsed.hooks (always nested now); no reassignment needed.
-  // Write only if content changed or if we're creating the file for the first time.
-  const nextContent = `${JSON.stringify(parsed, null, 2)}\n`;
-  const changed = currentContent !== nextContent;
-  const shouldWrite = changed && (currentContent !== null || Object.keys(parsed).length > 0);
-  if (shouldWrite) {
-    atomicWriteFileSync(hooksJsonPath, nextContent, 'utf8');
-  }
-
-  return { changed: changed, wrote: shouldWrite, path: hooksJsonPath };
+  return hooksSurface.reconcileCursorHooksJson(hooksJsonPath, managedEntries);
 }
 
 /**
@@ -6373,65 +5635,7 @@ function reconcileCursorHooksJson(hooksJsonPath, managedEntries) {
  * @returns {{ hooksJsonPath: string, changed: boolean }}
  */
 function writeCursorHooksJson(targetDir, src, opts) {
-  opts = opts || {};
-  const hooksDir = path.join(targetDir, 'hooks');
-  fs.mkdirSync(hooksDir, { recursive: true });
-
-  // Copy the two GSD-managed hook scripts from the GSD source hooks/ directory.
-  // Apply the same /gsd:/gi → gsd- rewrite used by copyWithPathReplacement for Cursor
-  // JS files, so the installed hook scripts contain no /gsd: colon refs (bug-376 2b).
-  // Track which scripts were successfully installed so we never register a hook entry
-  // that references a script that wasn't copied (dangling command guard).
-  const hookScripts = [GSD_CURSOR_SESSION_HOOK_SCRIPT, GSD_CURSOR_POST_TOOL_HOOK_SCRIPT];
-  const srcHooksDir = path.join(src, 'hooks');
-  const installedScripts = new Set();
-  for (const script of hookScripts) {
-    const srcPath = path.join(srcHooksDir, script);
-    const destPath = path.join(hooksDir, script);
-    if (fs.existsSync(srcPath)) {
-      let content = fs.readFileSync(srcPath, 'utf8');
-      // Rewrite /gsd:<cmd> → gsd-<cmd> so installed hook scripts are consistent
-      // with the Cursor convention (no colon-form slash commands in agent context).
-      content = content.replace(/gsd:/gi, 'gsd-');
-      fs.writeFileSync(destPath, content);
-      try { fs.chmodSync(destPath, 0o755); } catch { /* Windows: ignore chmod */ }
-      installedScripts.add(script);
-    }
-  }
-
-  // Build command strings using the same buildHookCommand helper used by other runtimes.
-  // buildHookCommand resolves the node runner + emits "<runner>" "<targetDir>/hooks/<name>".
-  const hookOpts = { runtime: 'cursor', platform: opts.platform || process.platform };
-  // buildHookCommand('gsd-cursor-session-start.js', ...): sessionStart → context injection
-  // Only register the hook entry if the script was actually installed (dangling guard).
-  const sessionStartCmd = installedScripts.has('gsd-cursor-session-start.js')
-    ? buildHookCommand(targetDir, 'gsd-cursor-session-start.js', hookOpts)
-    : null;
-  // buildHookCommand('gsd-cursor-post-tool.js', ...): postToolUse → STATE.md update monitor
-  const postToolCmd = installedScripts.has('gsd-cursor-post-tool.js')
-    ? buildHookCommand(targetDir, 'gsd-cursor-post-tool.js', hookOpts)
-    : null;
-
-  // Build managed entries; skip events whose command couldn't be resolved (e.g. no node).
-  const managedEntries = {};
-  if (sessionStartCmd) {
-    managedEntries.sessionStart = {
-      type: 'command',
-      command: sessionStartCmd,
-      [GSD_CURSOR_HOOK_MARKER]: true,
-    };
-  }
-  if (postToolCmd) {
-    managedEntries.postToolUse = {
-      type: 'command',
-      command: postToolCmd,
-      [GSD_CURSOR_HOOK_MARKER]: true,
-    };
-  }
-
-  const hooksJsonPath = path.join(targetDir, 'hooks.json');
-  const result = reconcileCursorHooksJson(hooksJsonPath, managedEntries);
-  return { hooksJsonPath, changed: result.changed };
+  return hooksSurface.writeCursorHooksJson(targetDir, src, opts);
 }
 
 /**
@@ -6442,31 +5646,7 @@ function writeCursorHooksJson(targetDir, src, opts) {
  * @returns {{ changed: boolean }}
  */
 function removeCursorHooksJson(targetDir) {
-  const hooksJsonPath = path.join(targetDir, 'hooks.json');
-  if (!fs.existsSync(hooksJsonPath)) return { changed: false };
-  const result = reconcileCursorHooksJson(hooksJsonPath, null);
-  // If the resulting file has no meaningful hook content, remove it.
-  // A file is "empty" if it contains only the scaffolding (version, empty hooks
-  // object, or a bare {}) with no user-authored hook entries.
-  if (result.changed) {
-    try {
-      const contentRaw = fs.readFileSync(hooksJsonPath, 'utf8');
-      const parsed = JSON.parse(contentRaw);
-      // reconcileCursorHooksJson always writes the nested { version, hooks:{} } shape.
-      // The file is "empty" when there are no remaining hook events with entries.
-      const hookTable = (parsed.hooks && typeof parsed.hooks === 'object' && !Array.isArray(parsed.hooks))
-        ? parsed.hooks
-        : {};
-      const hasAnyEvents = Object.keys(hookTable).some(
-        (k) => Array.isArray(hookTable[k]) && hookTable[k].length > 0,
-      );
-      if (!hasAnyEvents) {
-        fs.unlinkSync(hooksJsonPath);
-        return { changed: true };
-      }
-    } catch { /* best-effort: leave the file */ }
-  }
-  return { changed: result.changed };
+  return hooksSurface.removeCursorHooksJson(targetDir);
 }
 
 /**
@@ -6484,19 +5664,7 @@ function removeCursorHooksJson(targetDir) {
  * @returns {object} Copilot hooks-configuration object
  */
 function buildCopilotHookConfig() {
-  return {
-    version: 1,
-    hooks: {
-      sessionStart: [
-        {
-          type: 'command',
-          bash: GSD_COPILOT_SESSION_HOOK_BASH,
-          powershell: GSD_COPILOT_SESSION_HOOK_PWSH,
-          timeoutSec: 10,
-        },
-      ],
-    },
-  };
+  return hooksSurface.buildCopilotHookConfig();
 }
 
 /**
@@ -6513,11 +5681,7 @@ function buildCopilotHookConfig() {
  * @returns {string} The path the hook config was written to
  */
 function writeCopilotHookConfig(targetDir) {
-  const hooksDir = path.join(targetDir, 'hooks');
-  fs.mkdirSync(hooksDir, { recursive: true });
-  const hookPath = path.join(hooksDir, GSD_COPILOT_HOOK_FILE);
-  fs.writeFileSync(hookPath, JSON.stringify(buildCopilotHookConfig(), null, 2) + '\n');
-  return hookPath;
+  return hooksSurface.writeCopilotHookConfig(targetDir);
 }
 
 /**

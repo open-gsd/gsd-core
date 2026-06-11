@@ -29,11 +29,24 @@ const path = require('path');
 
 const INSTALL_SRC = path.join(__dirname, '..', 'bin', 'install.js');
 
+// buildHookCommand was extracted to gsd-core/bin/lib/runtime-hooks-surface.cjs
+// (ADR-857 phase 5f-1) and re-exported via install.js.  Import through install.js
+// so the test exercises the same public surface that the rest of the codebase uses.
+const INSTALL = require(path.join(__dirname, '..', 'bin', 'install.js'));
+const { buildHookCommand } = INSTALL;
+
 const SH_HOOKS = [
   { name: 'gsd-validate-commit.sh', commandVar: 'validateCommitCommand' },
   { name: 'gsd-session-state.sh',   commandVar: 'sessionStateCommand' },
   { name: 'gsd-phase-boundary.sh',  commandVar: 'phaseBoundaryCommand' },
 ];
+
+// Use a fixed configDir that is unambiguously absolute so the assertions below
+// are not accidentally satisfied by a relative path in the output.
+const TEST_CONFIG_DIR = '/test-home/.claude';
+// Force a non-Windows platform so resolveBashRunner reliably returns 'bash'
+// (Windows candidates need filesystem probing; platform:linux is hermetic).
+const HOOK_OPTS = { platform: 'linux', runtime: 'claude' };
 
 describe('bugs #2045 #2046: .sh hook paths must be absolute and quoted', () => {
   let src;
@@ -44,57 +57,52 @@ describe('bugs #2045 #2046: .sh hook paths must be absolute and quoted', () => {
     src = '';
   }
 
-  // ── Test 1: buildHookCommand supports .sh files ──────────────────────────
+  // ── Test 1: buildHookCommand supports .sh files (BEHAVIORAL) ─────────────
   describe('buildHookCommand', () => {
     test('returns a bash command for .sh hookName', () => {
-      // Extract buildHookCommand from source and verify it branches on .sh
-      const fnStart = src.indexOf('function buildHookCommand(');
-      assert.ok(fnStart !== -1, 'buildHookCommand function not found in install.js');
+      // Behavioral: call the exported function and assert on the returned string.
+      // buildHookCommand was extracted to runtime-hooks-surface.cjs; source-grep
+      // on install.js no longer works (the wrapper body just delegates).
+      assert.equal(typeof buildHookCommand, 'function',
+        'buildHookCommand must be exported from install.js');
 
-      // Find the closing brace of the function (scan for the balanced brace)
-      let depth = 0;
-      let fnEnd = fnStart;
-      for (let i = fnStart; i < src.length; i++) {
-        if (src[i] === '{') depth++;
-        else if (src[i] === '}') {
-          depth--;
-          if (depth === 0) { fnEnd = i + 1; break; }
-        }
-      }
-      const fnBody = src.slice(fnStart, fnEnd);
+      const cmd = buildHookCommand(TEST_CONFIG_DIR, 'gsd-validate-commit.sh', HOOK_OPTS);
+      assert.ok(typeof cmd === 'string' && cmd.length > 0,
+        'buildHookCommand must return a non-empty string for .sh hooks');
 
       assert.ok(
-        fnBody.includes('.sh') || fnBody.includes('bash'),
-        'buildHookCommand must handle .sh files by using "bash" as the runner. ' +
-        'The function body must contain ".sh" or "bash" for branching logic.'
+        cmd.includes('bash'),
+        'buildHookCommand must use "bash" as the runner for .sh hooks. ' +
+        `Got: ${cmd}`
       );
     });
 
     test('buildHookCommand produces bash runner for .sh and node runner for .js', () => {
-      const fnStart = src.indexOf('function buildHookCommand(');
-      assert.ok(fnStart !== -1, 'buildHookCommand function not found in install.js');
+      assert.equal(typeof buildHookCommand, 'function',
+        'buildHookCommand must be exported from install.js');
 
-      let depth = 0;
-      let fnEnd = fnStart;
-      for (let i = fnStart; i < src.length; i++) {
-        if (src[i] === '{') depth++;
-        else if (src[i] === '}') {
-          depth--;
-          if (depth === 0) { fnEnd = i + 1; break; }
-        }
-      }
-      const fnBody = src.slice(fnStart, fnEnd);
-
-      // Must still produce "node" for .js (existing behavior)
+      // .sh hook must contain "bash"
+      const shCmd = buildHookCommand(TEST_CONFIG_DIR, 'gsd-validate-commit.sh', HOOK_OPTS);
       assert.ok(
-        fnBody.includes('node'),
-        'buildHookCommand must still produce a "node" command for .js hooks'
+        typeof shCmd === 'string' && shCmd.includes('bash'),
+        'buildHookCommand must produce a "bash" command for .sh hooks. ' +
+        `Got: ${shCmd}`
       );
 
-      // Must produce "bash" for .sh
+      // .js hook must contain "node" (absolute path will include the word "node")
+      const jsCmd = buildHookCommand(TEST_CONFIG_DIR, 'gsd-something.js', HOOK_OPTS);
       assert.ok(
-        fnBody.includes('bash'),
-        'buildHookCommand must produce a "bash" command for .sh hooks'
+        typeof jsCmd === 'string' && jsCmd.includes('node'),
+        'buildHookCommand must produce a "node" command for .js hooks. ' +
+        `Got: ${jsCmd}`
+      );
+
+      // Non-vacuousness guard: the two commands must be DIFFERENT so that if
+      // buildHookCommand stops branching on .sh the test actually fails.
+      assert.notEqual(
+        shCmd.split('"')[0], // runner token before the first quoted path
+        jsCmd.split('"')[0],
+        'buildHookCommand must use different runners for .sh vs .js hooks'
       );
     });
   });

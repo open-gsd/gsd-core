@@ -12,13 +12,23 @@
  *
  * Also tests the broader anti-pattern: every hook in gsdHooks that is a JS
  * PreToolUse/PostToolUse hook should have a corresponding registration block.
+ * Hooks owned by the runtime-hooks-surface module (Cursor) are validated
+ * behaviorally rather than by source-scan of install.js.
  */
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const INSTALL_JS = path.join(__dirname, '..', 'bin', 'install.js');
+
+// Hooks whose registration lives in runtime-hooks-surface module, not install.js.
+// These are excluded from the install.js source-scan and validated behaviorally.
+const MODULE_OWNED_HOOKS = new Set([
+  'gsd-cursor-session-start.js',
+  'gsd-cursor-post-tool.js',
+]);
 
 describe('workflow-guard hook registration (#1767)', () => {
   test('install.js constructs a command path variable for gsd-workflow-guard.js', () => {
@@ -76,13 +86,16 @@ describe('workflow-guard hook registration (#1767)', () => {
 });
 
 describe('hook registration completeness anti-pattern guard', () => {
-  test('every JS hook in gsdHooks has a command construction in install.js', () => {
+  test('every JS hook in gsdHooks (except module-owned) has a command construction in install.js', () => {
     const content = fs.readFileSync(INSTALL_JS, 'utf-8');
     // Use the typed export instead of source-grep regex (branch #455: retire source-grep)
     const { GSD_UNINSTALL_HOOKS } = require('../bin/install.js');
     assert.ok(Array.isArray(GSD_UNINSTALL_HOOKS), 'GSD_UNINSTALL_HOOKS must be exported from install.js');
 
-    const jsHooks = GSD_UNINSTALL_HOOKS.filter(h => h.endsWith('.js'));
+    // Cursor hooks (gsd-cursor-*.js) are registered by writeCursorHooksJson in
+    // runtime-hooks-surface module, not by direct buildHookCommand calls in install.js.
+    // They are validated behaviorally in the describe block below.
+    const jsHooks = GSD_UNINSTALL_HOOKS.filter(h => h.endsWith('.js') && !MODULE_OWNED_HOOKS.has(h));
 
     const missing = [];
     for (const hook of jsHooks) {
@@ -100,10 +113,122 @@ describe('hook registration completeness anti-pattern guard', () => {
     assert.strictEqual(
       missing.length, 0,
       [
-        'Every JS hook in gsdHooks must have a command construction in install.js.',
-        'Missing registration for:',
+        'Every JS hook in gsdHooks (excluding module-owned cursor hooks) must have a command',
+        'construction in install.js. Missing registration for:',
         ...missing.map(h => `  - ${h}`),
       ].join('\n')
+    );
+  });
+});
+
+describe('atomic write temp-tracking — shared Set parity guard', () => {
+  // FIX 1 verification: atomic writes from the runtime-hooks-surface module
+  // must register their temp paths into the SAME __atomicWrittenTmps Set that
+  // install.js's _cleanTmpFiles() uses. If the module had its own separate Set,
+  // temp files from Cursor/Codex writes would never be cleaned up.
+  test('writeCursorHooksJson atomic write registers temp path in shared __atomicWrittenTmps', (t) => {
+    const targetDir = createTempDir('atomic-track-target-');
+    const srcDir = createTempDir('atomic-track-src-');
+    t.after(() => {
+      cleanup(targetDir);
+      cleanup(srcDir);
+    });
+
+    const srcHooksDir = path.join(srcDir, 'hooks');
+    fs.mkdirSync(srcHooksDir, { recursive: true });
+    fs.writeFileSync(path.join(srcHooksDir, 'gsd-cursor-session-start.js'), '// stub\n');
+    fs.writeFileSync(path.join(srcHooksDir, 'gsd-cursor-post-tool.js'), '// stub\n');
+
+    // Capture the Set BEFORE the call so we can diff it after.
+    const hooksSurface = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
+    const tmpsSet = hooksSurface.__atomicWrittenTmps;
+    assert.ok(tmpsSet instanceof Set, '__atomicWrittenTmps must be a Set');
+    const sizeBefore = tmpsSet.size;
+
+    const { writeCursorHooksJson } = require('../bin/install.js');
+    writeCursorHooksJson(targetDir, srcDir, {});
+
+    // After the write, the Set must have grown: the hooks.json temp path
+    // was recorded so _cleanTmpFiles can clean it if it lingers.
+    assert.ok(
+      tmpsSet.size > sizeBefore,
+      `__atomicWrittenTmps must grow after writeCursorHooksJson (was ${sizeBefore}, now ${tmpsSet.size})`
+    );
+
+    // Every new entry must be an absolute path matching the tmp pattern.
+    for (const tmp of tmpsSet) {
+      if (tmp.startsWith(targetDir)) {
+        // This is the entry we added; it must look like hooks.json.tmp-<pid>-<n>
+        assert.ok(
+          /hooks\.json\.tmp-\d+-\d+$/.test(tmp),
+          `Registered temp path must match hooks.json.tmp-<pid>-<n> pattern, got: ${tmp}`
+        );
+      }
+    }
+  });
+});
+
+describe('cursor hook registration — behavioral guard (module-owned hooks)', () => {
+  // The cursor hook scripts are registered by writeCursorHooksJson inside
+  // runtime-hooks-surface. This test calls the function directly and asserts
+  // that both managed entries appear in hooks.json. Deleting either cursor
+  // hook registration from the module will cause this test to fail.
+  test('writeCursorHooksJson writes both gsd-cursor-session-start and gsd-cursor-post-tool to hooks.json', (t) => {
+    // Create a temp target dir (simulated ~/.cursor) and a src dir with stub scripts.
+    const targetDir = createTempDir('cursor-guard-target-');
+    const srcDir = createTempDir('cursor-guard-src-');
+    t.after(() => {
+      cleanup(targetDir);
+      cleanup(srcDir);
+    });
+
+    // Stub the hook scripts in srcDir/hooks/ so writeCursorHooksJson can copy them.
+    const srcHooksDir = path.join(srcDir, 'hooks');
+    fs.mkdirSync(srcHooksDir, { recursive: true });
+    fs.writeFileSync(path.join(srcHooksDir, 'gsd-cursor-session-start.js'), '// stub\n');
+    fs.writeFileSync(path.join(srcHooksDir, 'gsd-cursor-post-tool.js'), '// stub\n');
+
+    const { writeCursorHooksJson, GSD_CURSOR_HOOK_MARKER } = require('../bin/install.js');
+    const result = writeCursorHooksJson(targetDir, srcDir, {});
+
+    assert.ok(result, 'writeCursorHooksJson must return a result');
+
+    const hooksJsonPath = path.join(targetDir, 'hooks.json');
+    assert.ok(fs.existsSync(hooksJsonPath), 'hooks.json must be created in targetDir');
+
+    const parsed = JSON.parse(fs.readFileSync(hooksJsonPath, 'utf8'));
+    const hookTable = (parsed.hooks && typeof parsed.hooks === 'object') ? parsed.hooks : parsed;
+
+    // Both cursor hook entries must be present.
+    assert.ok(
+      Array.isArray(hookTable.sessionStart) && hookTable.sessionStart.length > 0,
+      'hooks.json must contain a sessionStart entry (gsd-cursor-session-start.js)'
+    );
+    assert.ok(
+      Array.isArray(hookTable.postToolUse) && hookTable.postToolUse.length > 0,
+      'hooks.json must contain a postToolUse entry (gsd-cursor-post-tool.js)'
+    );
+
+    // Both entries must be GSD-managed (not user-authored stubs).
+    assert.equal(
+      hookTable.sessionStart[0][GSD_CURSOR_HOOK_MARKER], true,
+      'sessionStart entry must carry the GSD managed marker'
+    );
+    assert.equal(
+      hookTable.postToolUse[0][GSD_CURSOR_HOOK_MARKER], true,
+      'postToolUse entry must carry the GSD managed marker'
+    );
+
+    // Both commands must reference the correct script filenames.
+    const sessionCmd = hookTable.sessionStart[0].command || '';
+    const postToolCmd = hookTable.postToolUse[0].command || '';
+    assert.ok(
+      sessionCmd.includes('gsd-cursor-session-start.js'),
+      `sessionStart command must reference gsd-cursor-session-start.js, got: ${sessionCmd}`
+    );
+    assert.ok(
+      postToolCmd.includes('gsd-cursor-post-tool.js'),
+      `postToolUse command must reference gsd-cursor-post-tool.js, got: ${postToolCmd}`
     );
   });
 });
