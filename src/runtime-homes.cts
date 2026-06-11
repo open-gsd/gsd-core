@@ -182,6 +182,10 @@ export function getGlobalConfigDir(runtime: string, explicitDir?: string | null)
       return resolveKimiGlobalDir({ env, home });
     }
 
+    // ── Qoder ────────────────────────────────────────────────────────────────
+    case 'qoder':
+      return env['QODER_CONFIG_DIR'] ? expandTilde(env['QODER_CONFIG_DIR']) : path.join(home, '.qoder');
+
     // ── OpenCode (XDG) ───────────────────────────────────────────────────────
     case 'opencode': {
       if (env['OPENCODE_CONFIG_DIR']) return expandTilde(env['OPENCODE_CONFIG_DIR']);

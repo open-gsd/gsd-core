@@ -31,6 +31,7 @@ const FALLBACK_ALIASES: Readonly<Record<string, string[]>> = {
   kimi: ['kimi'],
   codebuddy: ['codebuddy', 'codebuddy-cli'],
   cline: ['cline', 'cline-cli'],
+  qoder: ['qoder', 'qodercli'],
 };
 
 function normalizeRuntimeToken(value: string): string {

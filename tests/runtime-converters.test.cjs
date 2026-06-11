@@ -20,6 +20,7 @@ const {
   convertClaudeToGeminiAgent,
   convertClaudeCommandToOpencodeSkill,
   convertClaudeCommandToKiloSkill,
+  convertClaudeToQoderMarkdown,
   neutralizeAgentReferences,
 } = require('../bin/install.js');
 
@@ -412,4 +413,46 @@ describe('convertClaudeCommandToOpencodeSkill / convertClaudeCommandToKiloSkill 
       });
     });
   }
+});
+
+describe('convertClaudeToQoderMarkdown — bare .claude rewriting', () => {
+  test('rewrites ~/.claude to ~/.qoder (bare form, no trailing slash)', () => {
+    const out = convertClaudeToQoderMarkdown('Store config in ~/.claude for best results.');
+    assert.ok(out.includes('~/.qoder'), 'bare ~/.claude rewritten to ~/.qoder');
+    assert.ok(!out.includes('.claude'), 'no unreplaced .claude remains');
+  });
+
+  test('rewrites $HOME/.claude to $HOME/.qoder (bare form)', () => {
+    const out = convertClaudeToQoderMarkdown('export PATH="$HOME/.claude/bin:$PATH"');
+    assert.ok(out.includes('$HOME/.qoder'), '$HOME/.claude rewritten');
+    assert.ok(!out.includes('.claude'), 'no unreplaced .claude remains');
+  });
+
+  test('rewrites ./.claude to ./.qoder (bare form)', () => {
+    const out = convertClaudeToQoderMarkdown('See ./.claude for local config.');
+    assert.ok(out.includes('./.qoder'), './.claude rewritten to ./.qoder');
+    assert.ok(!out.includes('.claude'), 'no unreplaced .claude remains');
+  });
+
+  test('preserves CLAUDE_CONFIG_DIR environment variable name', () => {
+    const input = 'Set CLAUDE_CONFIG_DIR=~/.claude to override the config path.';
+    const out = convertClaudeToQoderMarkdown(input);
+    assert.ok(out.includes('CLAUDE_CONFIG_DIR'), 'CLAUDE_CONFIG_DIR is NOT rewritten');
+    assert.ok(out.includes('~/.qoder'), 'but the path value IS rewritten');
+  });
+
+  test('rewrites all .claude/ slash forms before bare forms', () => {
+    const input = 'Skills in .claude/skills/ and config in ~/.claude and env CLAUDE_CONFIG_DIR.';
+    const out = convertClaudeToQoderMarkdown(input);
+    assert.ok(out.includes('.qoder/skills/'), 'slash form rewritten');
+    assert.ok(out.includes('~/.qoder'), 'bare form rewritten');
+    assert.ok(out.includes('CLAUDE_CONFIG_DIR'), 'env var name preserved');
+    assert.ok(!out.match(/(?<![A-Z])\.claude\b/), 'no bare .claude remains (excluding env var)');
+  });
+
+  test('rewrites CLAUDE.md to AGENTS.md and Claude Code to Qoder', () => {
+    const out = convertClaudeToQoderMarkdown('See CLAUDE.md for Claude Code instructions.');
+    assert.ok(out.includes('AGENTS.md'), 'CLAUDE.md rewritten');
+    assert.ok(out.includes('Qoder'), 'Claude Code rewritten');
+  });
 });

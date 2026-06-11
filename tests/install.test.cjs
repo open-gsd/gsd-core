@@ -74,7 +74,7 @@ describe('getGlobalConfigDir — all runtimes default paths', () => {
     'GROK_AGENTS_HOME', 'COPILOT_CONFIG_DIR', 'COPILOT_HOME', 'WINDSURF_CONFIG_DIR', 'AUGMENT_CONFIG_DIR',
     'TRAE_CONFIG_DIR', 'QWEN_CONFIG_DIR', 'HERMES_HOME', 'CODEBUDDY_CONFIG_DIR',
     'CLINE_CONFIG_DIR', 'OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG', 'KILO_CONFIG_DIR',
-    'KILO_CONFIG', 'ANTIGRAVITY_CONFIG_DIR', 'XDG_CONFIG_HOME',
+    'KILO_CONFIG', 'ANTIGRAVITY_CONFIG_DIR', 'QODER_CONFIG_DIR', 'XDG_CONFIG_HOME',
   ];
   let savedEnv = {};
 
@@ -472,6 +472,53 @@ describe('install/uninstall — trae (nested skills/gsd-<router>/skills/<stem>/ 
 
     uninstall(false, 'trae');
     assert.ok(!fs.existsSync(traeHelpPath));
+    assert.ok(!fs.existsSync(path.join(targetDir, 'gsd-core')));
+  });
+});
+
+describe('install/uninstall — qoder (flat skills/gsd-<name>/SKILL.md layout)', () => {
+  let tmpDir;
+  let previousCwd;
+
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-qoder-install-');
+    previousCwd = process.cwd();
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    process.chdir(previousCwd);
+    cleanup(tmpDir);
+  });
+
+  test('installs GSD into ./.qoder and removes it cleanly (typed IR result)', () => {
+    const result = install(false, 'qoder');
+    const targetDir = path.join(tmpDir, '.qoder');
+
+    assert.deepStrictEqual(result, {
+      settingsPath: null,
+      settings: null,
+      statuslineCommand: null,
+      updateBannerCommand: null,
+      runtime: 'qoder',
+      configDir: fs.realpathSync(targetDir),
+    });
+
+    // qoder uses flat layout: skills/gsd-<name>/SKILL.md (same as windsurf/codebuddy)
+    const qoderHelpPath = path.join(targetDir, 'skills', 'gsd-help', 'SKILL.md');
+    assert.ok(fs.existsSync(qoderHelpPath),
+      `help SKILL.md must exist at flat path: skills/gsd-help/SKILL.md`);
+    assert.ok(fs.existsSync(path.join(targetDir, 'gsd-core', 'VERSION')));
+    assert.ok(fs.existsSync(path.join(targetDir, 'agents')));
+
+    const manifest = writeManifest(targetDir, 'qoder');
+    assert.ok(
+      Object.keys(manifest.files).some(f => f.startsWith('skills/gsd-help/')),
+      JSON.stringify(Object.keys(manifest.files))
+    );
+
+    uninstall(false, 'qoder');
+    assert.ok(!fs.existsSync(qoderHelpPath));
     assert.ok(!fs.existsSync(path.join(targetDir, 'gsd-core')));
   });
 });
