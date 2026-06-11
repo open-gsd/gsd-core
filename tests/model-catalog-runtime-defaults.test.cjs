@@ -14,6 +14,8 @@ const { allRuntimes } = require('../bin/install.js');
 const ROOT = path.join(__dirname, '..');
 const SETTINGS_ADVANCED = fs.readFileSync(path.join(ROOT, 'gsd-core', 'workflows', 'settings-advanced.md'), 'utf8');
 const CONFIG_DOC = fs.readFileSync(path.join(ROOT, 'docs', 'CONFIGURATION.md'), 'utf8');
+const catalogPath = path.join(ROOT, 'gsd-core', 'bin', 'shared', 'model-catalog.json');
+const CATALOG_RAW = fs.readFileSync(catalogPath, 'utf8');
 
 describe('model catalog runtime defaults parity (#3229)', () => {
   test('known runtimes include hermes and match catalog keys', () => {
@@ -67,5 +69,13 @@ describe('model catalog runtime defaults parity (#3229)', () => {
     }
     assert.ok(SETTINGS_ADVANCED.includes('Group B'));
     assert.ok(CONFIG_DOC.includes('Group B'));
+  });
+
+  test('catalog contains no retired/invalid model IDs', () => {
+    // Retired per issue #779 verify-first audit (gemini-cli source + OpenAI Codex models page).
+    const RETIRED = ['"gemini-3-pro"', '"gpt-5.3-codex"'];
+    for (const id of RETIRED) {
+      assert.ok(!CATALOG_RAW.includes(id), `retired model ID ${id} must not appear in model-catalog.json (see #779)`);
+    }
   });
 });

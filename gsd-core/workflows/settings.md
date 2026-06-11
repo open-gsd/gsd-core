@@ -73,7 +73,7 @@ Parse current values (default to `true` if not present):
 ```
 Note: Quality, Balanced, Budget, and Adaptive profiles assign semantic tiers
 (Opus/Sonnet/Haiku) to each agent. When `runtime` is set in .planning/config.json,
-tiers resolve to runtime-native model IDs — on Codex that's gpt-5.4 / gpt-5.3-codex /
+tiers resolve to runtime-native model IDs — on Codex that's gpt-5.5 / gpt-5.4 /
 gpt-5.4-mini with appropriate reasoning effort. See "Runtime-Aware Profiles" in
 docs/CONFIGURATION.md.
 

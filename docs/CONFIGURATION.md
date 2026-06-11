@@ -1203,13 +1203,15 @@ When `runtime` is set, profile tiers (`opus`/`sonnet`/`haiku`) resolve to runtim
 | Runtime | `opus` | `sonnet` | `haiku` | reasoning_effort |
 |---------|--------|----------|---------|------------------|
 | `claude` | `claude-opus-4-8` | `claude-sonnet-4-6` | `claude-haiku-4-5` | (not used) |
-| `codex` | `gpt-5.5` | `gpt-5.3-codex` | `gpt-5.4-mini` | `xhigh` / `medium` / `medium` |
-| `gemini` | `gemini-3-pro` | `gemini-3-flash` | `gemini-2.5-flash-lite` | (not used) |
+| `codex` | `gpt-5.5` | `gpt-5.4` | `gpt-5.4-mini` | `xhigh` / `medium` / `medium` |
+| `gemini` | `gemini-3.1-pro-preview` | `gemini-3-flash` | `gemini-2.5-flash-lite` | (not used) |
 | `qwen` | `qwen3-max-2026-01-23` | `qwen3-coder-plus` | `qwen3-coder-next` | (not used) |
 | `opencode` | `anthropic/claude-opus-4-8` | `anthropic/claude-sonnet-4-6` | `anthropic/claude-haiku-4-5` | (not used) |
 | `copilot` | `claude-opus-4-8` | `claude-sonnet-4-6` | `claude-haiku-4-5` | (not used) |
 | `hermes` | `anthropic/claude-opus-4-8` | `anthropic/claude-sonnet-4-6` | `anthropic/claude-haiku-4-5` | (not used) |
 | Group B (`kilo`, `cline`, `cursor`, `windsurf`, `augment`, `trae`, `codebuddy`, `antigravity`) | (no built-in default — your runtime handles model selection) | | | |
+
+> **How these model IDs are sourced.** The catalog (`bin/shared/model-catalog.json`) pins each runtime's tier defaults to that provider's current frontier IDs, and may intentionally carry forward-dated IDs ahead of a provider's public docs. To verify an ID is live before changing it, check the provider's own source/API — e.g. Gemini: gemini-cli `packages/core/src/config/models.ts` or `gemini --model <id> --prompt ping`; Codex: `codex debug models` or the OpenAI Codex models page; Qwen: Alibaba Model Studio model list. Only change an ID that the provider actually rejects — absence from documentation alone is not proof of invalidity.
 
 **Codex example** — one config, tiered models, no large `model_overrides` block:
 
@@ -1220,7 +1222,7 @@ When `runtime` is set, profile tiers (`opus`/`sonnet`/`haiku`) resolve to runtim
 }
 ```
 
-This resolves `gsd-planner` → `gpt-5.5` (xhigh), `gsd-executor` → `gpt-5.3-codex` (medium), `gsd-codebase-mapper` → `gpt-5.4-mini` (medium). The Codex installer embeds `model = "..."` and `model_reasoning_effort = "..."` in each generated agent TOML.
+This resolves `gsd-planner` → `gpt-5.5` (xhigh), `gsd-executor` → `gpt-5.4` (medium), `gsd-codebase-mapper` → `gpt-5.4-mini` (medium). The Codex installer embeds `model = "..."` and `model_reasoning_effort = "..."` in each generated agent TOML.
 
 **Claude example** — explicit opt-in resolves to full Claude IDs (no `resolve_model_ids: true` needed):
 
@@ -1286,7 +1288,7 @@ Choose a provider and budget level via the settings workflow; GSD writes the can
     "provider": "openai",
     "budget": "medium",
     "high":   "gpt-5.5",
-    "medium": "gpt-5.3-codex",
+    "medium": "gpt-5.4",
     "low":    "gpt-5.4-mini"
   }
 }
@@ -1304,7 +1306,7 @@ For advanced per-runtime control, `runtime_tiers` accepts explicit entries using
     "runtime_tiers": {
       "codex": {
         "opus":   { "model": "gpt-5.5",        "reasoning_effort": "high" },
-        "sonnet": { "model": "gpt-5.3-codex",  "reasoning_effort": "medium" },
+        "sonnet": { "model": "gpt-5.4",         "reasoning_effort": "medium" },
         "haiku":  { "model": "gpt-5.4-mini",   "reasoning_effort": "low" }
       }
     }

@@ -5748,7 +5748,7 @@ function mergeCodexConfig(configPath, gsdBlock) {
 
 /**
  * Repair config.toml files corrupted by pre-#1346 GSD installs.
- * Non-boolean keys (e.g. model = "gpt-5.3-codex") that ended up under [features]
+ * Non-boolean keys (e.g. model = "gpt-5.4") that ended up under [features]
  * are relocated before the [features] header so Codex can parse them correctly.
  * Returns the content unchanged if no trapped keys are found.
  */

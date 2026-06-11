@@ -14,11 +14,11 @@
     },
     "codex": {
       "opus": { "model": "gpt-5.5", "reasoning_effort": "xhigh" },
-      "sonnet": { "model": "gpt-5.3-codex", "reasoning_effort": "medium" },
+      "sonnet": { "model": "gpt-5.4", "reasoning_effort": "medium" },
       "haiku": { "model": "gpt-5.4-mini", "reasoning_effort": "medium" }
     },
     "gemini": {
-      "opus": { "model": "gemini-3-pro" },
+      "opus": { "model": "gemini-3.1-pro-preview" },
       "sonnet": { "model": "gemini-3-flash" },
       "haiku": { "model": "gemini-2.5-flash-lite" }
     },
@@ -100,12 +100,12 @@
       "haiku":  { "low": { "model": "claude-haiku-4-5" }, "medium": { "model": "claude-haiku-4-5" }, "high": { "model": "claude-sonnet-4-6" } }
     },
     "openai": {
-      "opus":   { "low": { "model": "gpt-5.3-codex", "reasoning_effort": "medium" }, "medium": { "model": "gpt-5.5", "reasoning_effort": "high" }, "high": { "model": "gpt-5.5", "reasoning_effort": "xhigh" } },
-      "sonnet": { "low": { "model": "gpt-5.4-mini", "reasoning_effort": "low" }, "medium": { "model": "gpt-5.3-codex", "reasoning_effort": "medium" }, "high": { "model": "gpt-5.5", "reasoning_effort": "medium" } },
-      "haiku":  { "low": { "model": "gpt-5.4-mini", "reasoning_effort": "minimal" }, "medium": { "model": "gpt-5.4-mini", "reasoning_effort": "medium" }, "high": { "model": "gpt-5.3-codex", "reasoning_effort": "medium" } }
+      "opus":   { "low": { "model": "gpt-5.4", "reasoning_effort": "medium" }, "medium": { "model": "gpt-5.5", "reasoning_effort": "high" }, "high": { "model": "gpt-5.5", "reasoning_effort": "xhigh" } },
+      "sonnet": { "low": { "model": "gpt-5.4-mini", "reasoning_effort": "low" }, "medium": { "model": "gpt-5.4", "reasoning_effort": "medium" }, "high": { "model": "gpt-5.5", "reasoning_effort": "medium" } },
+      "haiku":  { "low": { "model": "gpt-5.4-mini", "reasoning_effort": "minimal" }, "medium": { "model": "gpt-5.4-mini", "reasoning_effort": "medium" }, "high": { "model": "gpt-5.4", "reasoning_effort": "medium" } }
     },
     "google": {
-      "opus":   { "low": { "model": "gemini-2.5-flash-lite" }, "medium": { "model": "gemini-3-flash" }, "high": { "model": "gemini-3-pro" } },
+      "opus":   { "low": { "model": "gemini-2.5-flash-lite" }, "medium": { "model": "gemini-3-flash" }, "high": { "model": "gemini-3.1-pro-preview" } },
       "sonnet": { "low": { "model": "gemini-2.5-flash-lite" }, "medium": { "model": "gemini-3-flash" }, "high": { "model": "gemini-3-flash" } },
       "haiku":  { "low": { "model": "gemini-2.5-flash-lite" }, "medium": { "model": "gemini-2.5-flash-lite" }, "high": { "model": "gemini-3-flash" } }
     },

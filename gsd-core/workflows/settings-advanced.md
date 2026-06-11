@@ -354,8 +354,8 @@ Built-in tier defaults by runtime:
 | Runtime    | `opus`                        | `sonnet`                        | `haiku`                       |
 |------------|-------------------------------|---------------------------------|-------------------------------|
 | `claude`   | `claude-opus-4-8`             | `claude-sonnet-4-6`             | `claude-haiku-4-5`            |
-| `codex`    | `gpt-5.5`                     | `gpt-5.3-codex`                 | `gpt-5.4-mini`                |
-| `gemini`   | `gemini-3-pro`                | `gemini-3-flash`                | `gemini-2.5-flash-lite`       |
+| `codex`    | `gpt-5.5`                     | `gpt-5.4`                       | `gpt-5.4-mini`                |
+| `gemini`   | `gemini-3.1-pro-preview`      | `gemini-3-flash`                | `gemini-2.5-flash-lite`       |
 | `qwen`     | `qwen3-max-2026-01-23`        | `qwen3-coder-plus`              | `qwen3-coder-next`            |
 | `opencode` | `anthropic/claude-opus-4-8`   | `anthropic/claude-sonnet-4-6`   | `anthropic/claude-haiku-4-5`  |
 | `copilot`  | `claude-opus-4-8`             | `claude-sonnet-4-6`             | `claude-haiku-4-5`            |
@@ -625,7 +625,7 @@ AskUserQuestion([
     options: [
       { label: "anthropic", description: "claude-opus-4-8 / claude-sonnet-4-6 / claude-haiku-4-5 (Anthropic / Claude)" },
       { label: "anthropic-fable", description: "claude-fable-5 / claude-sonnet-4-6 / claude-haiku-4-5 (Anthropic / Claude Fable opt-in)" },
-      { label: "openai", description: "gpt-5.5 / gpt-5.3-codex / gpt-5.4-mini (OpenAI / Codex)" },
+      { label: "openai", description: "gpt-5.5 / gpt-5.4 / gpt-5.4-mini (OpenAI / Codex)" },
       { label: "Other known provider", description: "Type google or qwen; both still use the canonical tier mapping." }
     ]
   }
@@ -661,10 +661,10 @@ Canonical tier mappings by provider and budget:
 | anthropic-fable | medium | claude-opus-4-8            | claude-sonnet-4-6          | claude-haiku-4-5           |
 | anthropic-fable | low    | claude-haiku-4-5           | claude-haiku-4-5           | claude-haiku-4-5           |
 | openai    | high   | gpt-5.5                    | gpt-5.5                    | gpt-5.5                    |
-| openai    | medium | gpt-5.5                    | gpt-5.3-codex              | gpt-5.4-mini               |
+| openai    | medium | gpt-5.5                    | gpt-5.4                    | gpt-5.4-mini               |
 | openai    | low    | gpt-5.4-mini               | gpt-5.4-mini               | gpt-5.4-mini               |
-| google    | high   | gemini-3-pro               | gemini-3-pro               | gemini-3-pro               |
-| google    | medium | gemini-3-pro               | gemini-3-flash             | gemini-2.5-flash-lite      |
+| google    | high   | gemini-3.1-pro-preview     | gemini-3.1-pro-preview     | gemini-3.1-pro-preview     |
+| google    | medium | gemini-3.1-pro-preview     | gemini-3-flash             | gemini-2.5-flash-lite      |
 | google    | low    | gemini-2.5-flash-lite      | gemini-2.5-flash-lite      | gemini-2.5-flash-lite      |
 | qwen      | high   | qwen3-max-2026-01-23       | qwen3-max-2026-01-23       | qwen3-max-2026-01-23       |
 | qwen      | medium | qwen3-max-2026-01-23       | qwen3-coder-plus           | qwen3-coder-next           |

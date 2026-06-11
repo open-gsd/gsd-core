@@ -8,7 +8,7 @@
  * When `runtime` is set to a non-Claude value, profile tiers resolve to runtime-
  * native model IDs.
  *
- *   Codex:   opus -> gpt-5.4 (xhigh), sonnet -> gpt-5.3-codex (medium), haiku -> gpt-5.4-mini (medium)
+ *   Codex:   opus -> gpt-5.5 (xhigh), sonnet -> gpt-5.4 (medium), haiku -> gpt-5.4-mini (medium)
  *
  * `runtime: "claude"` is the implicit default and is treated as a no-op for
  * resolution — it does not override `resolve_model_ids: "omit"` or any other
@@ -176,9 +176,9 @@ describe('issue #2517: runtime "codex" — Codex tier resolution', () => {
     assert.strictEqual(rendered.value, 'xhigh');
   });
 
-  test('sonnet tier -> gpt-5.3-codex model; heavy-tier agent -> xhigh effort on codex', () => {
+  test('sonnet tier -> gpt-5.4 model; heavy-tier agent -> xhigh effort on codex', () => {
     writeConfig(tmpDir, { runtime: 'codex', model_profile: 'balanced' });
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-roadmapper'), 'gpt-5.3-codex');
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-roadmapper'), 'gpt-5.4');
     // gsd-roadmapper is heavy routing tier → effort 'xhigh' (not catalog medium)
     const eff = resolveEffortInternal(tmpDir, 'gsd-roadmapper');
     const rendered = renderEffortForRuntime('codex', eff);
@@ -251,8 +251,8 @@ describe('issue #2517: precedence chain', () => {
     // gsd-planner quality -> opus -> overridden to gpt-5-pro
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'gpt-5-pro');
     // haiku not overridden — fall back to spec defaults
-    // gsd-codebase-mapper quality -> sonnet -> gpt-5.3-codex
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-codebase-mapper'), 'gpt-5.3-codex');
+    // gsd-codebase-mapper quality -> sonnet -> gpt-5.4
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-codebase-mapper'), 'gpt-5.4');
   });
 
   test('partial profile_overrides — only opus overridden, sonnet uses default', () => {
@@ -266,7 +266,7 @@ describe('issue #2517: precedence chain', () => {
     // gsd-planner balanced -> opus -> overridden to gpt-5-pro
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'gpt-5-pro');
     // gsd-roadmapper balanced -> sonnet -> spec default
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-roadmapper'), 'gpt-5.3-codex');
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-roadmapper'), 'gpt-5.4');
   });
 
   test('per-agent override beats profile override beats default', () => {
@@ -643,9 +643,9 @@ describe('issue #2612: runtime "gemini" — Gemini tier resolution', () => {
   beforeEach(() => { isolateHome(); tmpDir = createTempProject(); _resetRuntimeWarningCacheForTests(); });
   afterEach(() => { cleanup(tmpDir); restoreHome(); });
 
-  test('opus tier -> gemini-3-pro', () => {
+  test('opus tier -> gemini-3.1-pro-preview', () => {
     writeConfig(tmpDir, { runtime: 'gemini', model_profile: 'quality' });
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'gemini-3-pro');
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'gemini-3.1-pro-preview');
   });
 
   test('sonnet tier -> gemini-3-flash', () => {
