@@ -74,6 +74,14 @@ Schema-validated JSON. Common envelope + role-typed body (`role: feature | runti
 
 **Hook activation (`when`).** A hook may declare a cheap, **deterministic `when`** over config keys + capability-enablement (e.g. `"workflow.ui_phase"`); `loop.render-hooks` evaluates it to decide whether the hook is active. **Deeper context applicability** ("is this actually a frontend phase?", "are ORM files in scope?") is *not* declared — it stays inside the dispatched skill/agent, which no-ops if inapplicable, exactly where that judgment lives today. This deliberately avoids a phase-context predicate vocabulary that would drift from reality. Consequence: when an entry step self-gates (produces no artifact), its downstream same-capability gate/step must **degrade gracefully** (e.g. `ui.safety-gate` passes when there is no `UI-SPEC.md`) — that is the skill/query's responsibility.
 
+### Clarification — steps are additive, gates block, mode self-gates (resolving #1022)
+
+A **`step` is purely additive** — it invokes a skill and may produce artifacts, but it **never halts or redirects the host workflow**. A host-blocking precondition (e.g. *"do not plan a frontend phase without a UI design contract"*) is modeled as a **`gate`** (`blocking: true`, `onError: halt`); gates already block, so steps gain no halt power. (Surfaced cutting over `plan-phase.md` §5.6, whose manual-mode branch hard-exits the host — that behavior is a gate, mis-inlined as step logic.)
+
+**Runtime/mode context** — whether we are in a `--auto`/`--chain` pipeline vs a manual invocation — is likewise **not** a hook-activation concern (`when` is config-only and deterministic). It **self-gates inside the skill**, exactly as phase-context applicability does: the skill no-ops when its mode precondition isn't met.
+
+**§5.6 worked decomposition.** The `plan:pre` **step** (`ref.skill: ui-phase`, `when: workflow.ui_phase`) auto-fires `gsd-ui-phase`, which self-gates on (a) frontend detection and (b) pipeline context — auto-generating `UI-SPEC.md` only in `--auto`/`--chain` runs. A new `plan:pre` **gate** (`check`: a "frontend phase with no `UI-SPEC.md`" query, `blocking: true`, `onError: halt`, `when: workflow.ui_safety_gate`) blocks planning in manual mode when a frontend phase still lacks a UI-SPEC — preserving today's "run `/gsd:ui-phase` first (or `--skip-ui`)" UX without forcing the interactive skill inline. Consequently the `loop.render-hooks` dispatch template handles **both** active steps (invoke the skill) and active gates (run the check; halt if blocking + failed), not steps alone.
+
 **Gate `check`** is one of:
 - `{ query: "<gsd_run query>" }` — deterministic first-party code; **may block**.
 - `{ predicate: { kind: "artifact-exists" | "config-equals" | …, … } }` — declarative, no code; **may block**.
