@@ -450,6 +450,26 @@ function validateFeatureBody(cap) {
   return errors;
 }
 
+// ADR-857 phase 5e: Closed ConverterName enum — complete set used across 16 runtime descriptors,
+// all exported by bin/install.js. Any ArtifactKind with a non-null converter must use one of these.
+const VALID_CONVERTER_NAMES = new Set([
+  'convertClaudeCommandToAntigravitySkill',
+  'convertClaudeCommandToAugmentSkill',
+  'convertClaudeCommandToClineSkill',
+  'convertClaudeCommandToClaudeSkill',
+  'convertClaudeCommandToCodebuddyCommand',
+  'convertClaudeCommandToCodebuddySkill',
+  'convertClaudeCommandToCodexSkill',
+  'convertClaudeCommandToCopilotSkill',
+  'convertClaudeCommandToCursorCommand',
+  'convertClaudeCommandToCursorSkill',
+  'convertClaudeCommandToKiloSkill',
+  'convertClaudeCommandToKimiSkill',
+  'convertClaudeCommandToOpencodeSkill',
+  'convertClaudeCommandToTraeSkill',
+  'convertClaudeCommandToWindsurfSkill',
+]);
+
 // C3: Validate role:runtime body
 const VALID_CONFIG_FORMATS = new Set(['settings-json', 'toml', 'markdown', 'markdown-dir', 'none']);
 const VALID_CONFIG_HOME_KINDS = new Set(['dot-home', 'dot-home-nested', 'xdg', 'generic-agents-root']);
@@ -605,11 +625,15 @@ function validateArtifactKindEntry(capId, entry, prefix) {
     }
   }
 
-  // converter — required; must be a string or null (closed ConverterName enum in phase 5e)
+  // converter — required; must be a string or null (closed ConverterName enum — now enforced in phase 5e)
   if (!Object.prototype.hasOwnProperty.call(entry, 'converter')) {
     errors.push(ctx + '.converter is required (must be a string or null)');
   } else if (entry.converter !== null && typeof entry.converter !== 'string') {
     errors.push(ctx + '.converter must be a string or null (got: ' + typeof entry.converter + ')');
+  } else if (entry.converter !== null && typeof entry.converter === 'string' &&
+             !VALID_CONVERTER_NAMES.has(entry.converter)) {
+    // Closed ConverterName enum (ADR-857 phase 5e): reject unknown converter names
+    errors.push(ctx + '.converter "' + entry.converter + '" is not a known ConverterName');
   }
 
   return errors;
@@ -1525,6 +1549,122 @@ function runConsistencyGate(capabilityClusters, profileMembership, capMap) {
   return warnings;
 }
 
+// ─── ADR-857 phase 5e: configFormat ↔ installSurface parity gate ─────────────
+
+// Paths are declared at top level; the actual require() call is deferred (lazy) so importing
+// this generator on an unbuilt worktree doesn't fail at module load. Mirrors the pattern
+// used for install-profiles.cjs and clusters.cjs above.
+const RUNTIME_CONFIG_ADAPTER_REGISTRY_PATH = path.join(
+  ROOT, 'gsd-core', 'bin', 'lib', 'runtime-config-adapter-registry.cjs',
+);
+
+let _runtimeConfigAdapterMod = null;
+
+function getRuntimeConfigAdapterRegistry() {
+  if (!_runtimeConfigAdapterMod) {
+    _runtimeConfigAdapterMod = require(RUNTIME_CONFIG_ADAPTER_REGISTRY_PATH);
+  }
+  return _runtimeConfigAdapterMod;
+}
+
+// Map: installSurface → expected configFormat
+// Derived from the pairing of runtime-config-adapter-registry.cjs (installSurface)
+// and the capability.json descriptors (configFormat). DEFECT.GENERATIVE-FIX: this map
+// is the single parity contract between the two generated surfaces.
+const INSTALL_SURFACE_TO_CONFIG_FORMAT = new Map([
+  ['settings-json',        'settings-json'],
+  ['codex-toml',           'toml'],
+  ['copilot-instructions', 'markdown'],
+  ['cline-rules',          'markdown-dir'],
+  ['cursor-hooks-json',    'none'],
+  ['profile-marker-only',  'none'],
+]);
+
+/**
+ * ADR-857 phase 5e: configFormat ↔ installSurface parity gate.
+ *
+ * For each runtime capability that also appears in INSTALL_SURFACES (i.e. is a
+ * known config-adapter runtime), assert that its capability.json configFormat
+ * matches the expected value derived from its installSurface.
+ *
+ * HARD gate — throws on mismatch (DEFECT.GENERATIVE-FIX: this invariant is
+ * derived from two parallel generated surfaces and must fail loudly).
+ * SOFT skip — if the runtime-config-adapter-registry.cjs module is not loadable
+ * (unbuilt worktree), emits a warning to stderr and returns without throwing.
+ *
+ * @param {Map<string, object>} capMap  Fully-validated capability map.
+ * @returns {void}  Throws on mismatch; returns normally on success or soft-skip.
+ */
+function runConfigFormatParityGate(capMap) {
+  let adapterMod;
+  try {
+    adapterMod = getRuntimeConfigAdapterRegistry();
+  } catch (_err) {
+    // Module not loadable (unbuilt worktree) — soft-skip with warning
+    process.stderr.write(
+      '⚠ configFormat parity gate SKIPPED: runtime-config-adapter-registry.cjs not loadable ' +
+      '(run `npm run build` first)\n',
+    );
+    return;
+  }
+
+  // Check that REGISTRY is present and is an object-like registry
+  // (the .cjs exports resolveRuntimeConfigIntent, ALLOWED_CONFIG_RUNTIMES, INSTALL_SURFACES —
+  //  not REGISTRY directly; we need to reconstruct per-runtime installSurface from the adapter).
+  // We use ALLOWED_CONFIG_RUNTIMES to know which runtimes are in the adapter, then resolve each.
+  const { resolveRuntimeConfigIntent, ALLOWED_CONFIG_RUNTIMES: allowedRuntimes } = adapterMod;
+
+  if (typeof resolveRuntimeConfigIntent !== 'function' || !(allowedRuntimes instanceof Set)) {
+    process.stderr.write(
+      '⚠ configFormat parity gate SKIPPED: runtime-config-adapter-registry.cjs missing expected exports\n',
+    );
+    return;
+  }
+
+  // Only check runtimes present in BOTH the capability registry and INSTALL_SURFACES
+  for (const [capId, cap] of capMap) {
+    if (cap.role !== 'runtime') continue;
+    if (!allowedRuntimes.has(capId)) continue; // grok etc. excluded — not in adapter
+
+    const r = cap.runtime;
+    if (!r || typeof r.configFormat !== 'string') continue; // already validated above
+
+    let intent;
+    try {
+      intent = resolveRuntimeConfigIntent(capId);
+    } catch (_err) {
+      // Should not happen (we checked allowedRuntimes.has(capId)), but be defensive
+      process.stderr.write(
+        '⚠ configFormat parity gate: could not resolve installSurface for "' + capId + '" — skipping\n',
+      );
+      continue;
+    }
+
+    const installSurface = intent.installSurface;
+    const expectedConfigFormat = INSTALL_SURFACE_TO_CONFIG_FORMAT.get(installSurface);
+
+    if (expectedConfigFormat === undefined) {
+      // Unknown installSurface — the mapping needs to be updated
+      throw new Error(
+        'configFormat parity gate: runtime "' + capId + '" has installSurface "' + installSurface +
+        '" which is not in the INSTALL_SURFACE_TO_CONFIG_FORMAT mapping — ' +
+        'update the mapping in scripts/gen-capability-registry.cjs',
+      );
+    }
+
+    if (r.configFormat !== expectedConfigFormat) {
+      throw new Error(
+        'configFormat parity gate FAILED for runtime "' + capId + '":\n' +
+        '  installSurface:       ' + installSurface + '\n' +
+        '  expected configFormat: ' + expectedConfigFormat + '\n' +
+        '  actual configFormat:   ' + r.configFormat + '\n' +
+        'The capability.json configFormat must match the value derived from installSurface ' +
+        '(src: scripts/gen-capability-registry.cjs INSTALL_SURFACE_TO_CONFIG_FORMAT)',
+      );
+    }
+  }
+}
+
 // ─── Registry builder ─────────────────────────────────────────────────────────
 
 /**
@@ -1747,6 +1887,10 @@ function buildRegistry(capMap) {
   // Warnings are returned in the registry object so callers can emit them to stderr
   // without affecting the serialized file content (determinism gate stays clean).
   const reconciliationWarnings = runConsistencyGate(capabilityClusters, profileMembership, capMap);
+
+  // ADR-857 phase 5e: configFormat ↔ installSurface parity gate.
+  // HARD gate — throws on mismatch; SOFT skip if adapter module not loadable.
+  runConfigFormatParityGate(capMap);
 
   return {
     version: SCHEMA_VERSION,
@@ -2074,6 +2218,11 @@ module.exports = {
   VALID_SANDBOX_TIERS,
   VALID_ARTIFACT_KIND_NAMES,
   VALID_ARTIFACT_NESTINGS,
+  // ADR-857 phase 5e: closed ConverterName enum
+  VALID_CONVERTER_NAMES,
+  // ADR-857 phase 5e: configFormat ↔ installSurface parity gate
+  runConfigFormatParityGate,
+  INSTALL_SURFACE_TO_CONFIG_FORMAT,
   // FIX 5 (lazy): PROFILE_RANK and CLUSTERS are loaded on first access via getters
   // so importing the generator on a fresh/unbuilt worktree doesn't fail at module load.
   get PROFILE_RANK() { return getInstallProfiles().PROFILE_RANK; },

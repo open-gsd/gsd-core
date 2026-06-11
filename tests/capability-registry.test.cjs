@@ -39,6 +39,11 @@ const {
   PROFILE_RANK,
   // ADR-959
   validateCommandEntry,
+  // ADR-857 phase 5e
+  VALID_CONVERTER_NAMES,
+  validateArtifactKindEntry,
+  runConfigFormatParityGate,
+  INSTALL_SURFACE_TO_CONFIG_FORMAT,
 } = require('../scripts/gen-capability-registry.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -3279,5 +3284,279 @@ describe('ADR-1016 phase 5a: closed-vocab set exports', () => {
     assert.ok(VALID_ARTIFACT_NESTINGS.has('flat'));
     assert.ok(VALID_ARTIFACT_NESTINGS.has('nested'));
     assert.strictEqual(VALID_ARTIFACT_NESTINGS.size, 2);
+  });
+});
+
+// ─── 25. ADR-857 phase 5e: closed ConverterName enum (Part B) ─────────────────
+
+describe('ADR-857 phase 5e: VALID_CONVERTER_NAMES closed enum', () => {
+  test('VALID_CONVERTER_NAMES has exactly 15 entries', () => {
+    assert.ok(VALID_CONVERTER_NAMES instanceof Set, 'VALID_CONVERTER_NAMES must be a Set');
+    assert.strictEqual(VALID_CONVERTER_NAMES.size, 15, 'VALID_CONVERTER_NAMES must have exactly 15 entries, got: ' + VALID_CONVERTER_NAMES.size);
+  });
+
+  test('VALID_CONVERTER_NAMES contains all expected converter names', () => {
+    const expected = [
+      'convertClaudeCommandToAntigravitySkill',
+      'convertClaudeCommandToAugmentSkill',
+      'convertClaudeCommandToClineSkill',
+      'convertClaudeCommandToClaudeSkill',
+      'convertClaudeCommandToCodebuddyCommand',
+      'convertClaudeCommandToCodebuddySkill',
+      'convertClaudeCommandToCodexSkill',
+      'convertClaudeCommandToCopilotSkill',
+      'convertClaudeCommandToCursorCommand',
+      'convertClaudeCommandToCursorSkill',
+      'convertClaudeCommandToKiloSkill',
+      'convertClaudeCommandToKimiSkill',
+      'convertClaudeCommandToOpencodeSkill',
+      'convertClaudeCommandToTraeSkill',
+      'convertClaudeCommandToWindsurfSkill',
+    ];
+    for (const name of expected) {
+      assert.ok(VALID_CONVERTER_NAMES.has(name), 'VALID_CONVERTER_NAMES must contain "' + name + '"');
+    }
+  });
+});
+
+describe('ADR-857 phase 5e: validateArtifactKindEntry — ConverterName enum (FAIL-FIRST regression)', () => {
+  // Helper to build a minimal valid ArtifactKind entry
+  function makeArtifactEntry(overrides) {
+    return {
+      kind: 'skills',
+      destSubpath: 'skills',
+      nesting: 'flat',
+      prefix: 'gsd-',
+      recursive: false,
+      converter: null,
+      ...overrides,
+    };
+  }
+
+  // FAIL-FIRST: unknown converter name must be rejected
+  test('REJECTED: converter "convertClaudeCommandToUnknownRuntime" is not a known ConverterName', () => {
+    const entry = makeArtifactEntry({ converter: 'convertClaudeCommandToUnknownRuntime' });
+    const errors = validateArtifactKindEntry('test-cap', entry, 'artifactLayout.global[0]');
+    assert.ok(errors.length > 0, 'Expected rejection for unknown converter name, got: ' + JSON.stringify(errors));
+    assert.ok(
+      errors.some((e) => e.includes('convertClaudeCommandToUnknownRuntime') && e.includes('not a known ConverterName')),
+      'Error must name the bad converter and say "not a known ConverterName", got: ' + JSON.stringify(errors),
+    );
+  });
+
+  // Valid known name must be accepted
+  test('ACCEPTED: converter "convertClaudeCommandToKiloSkill" is a known ConverterName', () => {
+    const entry = makeArtifactEntry({ converter: 'convertClaudeCommandToKiloSkill' });
+    const errors = validateArtifactKindEntry('test-cap', entry, 'artifactLayout.global[0]');
+    const converterErrors = errors.filter((e) => e.includes('converter'));
+    assert.deepEqual(converterErrors, [], 'Known converter name must be accepted, got: ' + JSON.stringify(converterErrors));
+  });
+
+  // null converter is always accepted (means "no conversion")
+  test('ACCEPTED: converter: null is always accepted', () => {
+    const entry = makeArtifactEntry({ converter: null });
+    const errors = validateArtifactKindEntry('test-cap', entry, 'artifactLayout.global[0]');
+    const converterErrors = errors.filter((e) => e.includes('converter'));
+    assert.deepEqual(converterErrors, [], 'converter: null must always be accepted, got: ' + JSON.stringify(converterErrors));
+  });
+
+  // Parity: all 16 runtime descriptors must have converters in the valid set (or null)
+  test('all 16 real runtime descriptors have converters in VALID_CONVERTER_NAMES or null', () => {
+    const { capMap, errors } = loadAndValidate(new Set());
+    const hardErrors = errors.filter((e) => !e.includes('pending-migration'));
+    assert.deepEqual(hardErrors, [], 'Expected no hard errors from real capabilities, got: ' + JSON.stringify(hardErrors));
+
+    const runtimeIds = [
+      'claude', 'codex', 'antigravity', 'gemini', 'cursor', 'opencode',
+      'kilo', 'copilot', 'augment', 'trae', 'qwen', 'hermes',
+      'codebuddy', 'cline', 'kimi', 'windsurf',
+    ];
+    for (const id of runtimeIds) {
+      const cap = capMap.get(id);
+      assert.ok(cap, 'capMap must contain "' + id + '"');
+      const r = cap.runtime;
+      const allEntries = [
+        ...(r.artifactLayout && Array.isArray(r.artifactLayout.global) ? r.artifactLayout.global : []),
+        ...(r.artifactLayout && Array.isArray(r.artifactLayout.local) ? r.artifactLayout.local : []),
+      ];
+      for (let i = 0; i < allEntries.length; i++) {
+        const entry = allEntries[i];
+        if (entry.converter !== null) {
+          assert.ok(
+            VALID_CONVERTER_NAMES.has(entry.converter),
+            id + ' artifactLayout[' + i + '].converter "' + entry.converter +
+            '" is not in VALID_CONVERTER_NAMES',
+          );
+        }
+      }
+    }
+  });
+
+  // validateCapability end-to-end: unknown converter propagates through the full chain
+  test('validateCapability REJECTS a runtime cap with unknown converter in artifactLayout', () => {
+    const cap = {
+      id: 'test-rt',
+      role: 'runtime',
+      title: 'Test Runtime',
+      description: 'Test runtime with unknown converter.',
+      tier: 'core',
+      requires: [],
+      runtime: {
+        configHome: { kind: 'dot-home', name: '.test-rt', env: [] },
+        configFormat: 'settings-json',
+        artifactLayout: {
+          global: [{
+            kind: 'skills',
+            destSubpath: 'skills',
+            nesting: 'flat',
+            prefix: 'gsd-',
+            recursive: false,
+            converter: 'convertClaudeCommandToUnknownRuntime',
+          }],
+          local: [],
+        },
+        commandStyle: 'slash-hyphen',
+        hooksSurface: 'settings-json',
+        sandboxTier: 'none',
+        supportTier: 1,
+      },
+    };
+    const errors = validateCapability(cap, 'test-rt');
+    assert.ok(errors.length > 0, 'Expected validation errors for unknown converter, got: ' + JSON.stringify(errors));
+    assert.ok(
+      errors.some((e) => e.includes('convertClaudeCommandToUnknownRuntime') && e.includes('not a known ConverterName')),
+      'Error must mention the unknown converter name, got: ' + JSON.stringify(errors),
+    );
+  });
+});
+
+// ─── 26. ADR-857 phase 5e: configFormat ↔ installSurface parity gate (Part A) ─
+
+describe('ADR-857 phase 5e: configFormat ↔ installSurface parity gate', () => {
+  // Helper: build a minimal runtime capMap for parity tests
+  function makeRuntimeCapMap(runtimeId, configFormat) {
+    const cap = {
+      id: runtimeId,
+      role: 'runtime',
+      title: 'Test ' + runtimeId,
+      description: 'Synthetic runtime for parity gate testing.',
+      tier: 'core',
+      requires: [],
+      runtime: {
+        configHome: { kind: 'dot-home', name: '.' + runtimeId, env: [] },
+        configFormat,
+        artifactLayout: { global: [], local: [] },
+        commandStyle: 'slash-hyphen',
+        hooksSurface: 'none',
+        sandboxTier: 'none',
+        supportTier: 1,
+      },
+    };
+    return new Map([[runtimeId, cap]]);
+  }
+
+  // FAIL-FIRST: parity mismatch must throw
+  test('THROWS: claude with wrong configFormat "toml" (installSurface=settings-json → expected settings-json)', () => {
+    // claude has installSurface=settings-json → expected configFormat=settings-json
+    // Giving it configFormat=toml must trigger the HARD gate
+    const capMap = makeRuntimeCapMap('claude', 'toml');
+    assert.throws(
+      () => runConfigFormatParityGate(capMap),
+      (err) => {
+        assert.ok(err instanceof Error, 'Must throw an Error');
+        assert.ok(
+          err.message.includes('claude') && err.message.includes('parity gate FAILED'),
+          'Error must name the runtime and say "parity gate FAILED", got: ' + err.message,
+        );
+        assert.ok(
+          err.message.includes('settings-json') && err.message.includes('toml'),
+          'Error must name both the expected and actual configFormat, got: ' + err.message,
+        );
+        return true;
+      },
+    );
+  });
+
+  test('THROWS: codex with wrong configFormat "settings-json" (installSurface=codex-toml → expected toml)', () => {
+    const capMap = makeRuntimeCapMap('codex', 'settings-json');
+    assert.throws(
+      () => runConfigFormatParityGate(capMap),
+      (err) => {
+        assert.ok(err instanceof Error);
+        assert.ok(err.message.includes('codex') && err.message.includes('parity gate FAILED'));
+        return true;
+      },
+    );
+  });
+
+  // All 16 real runtime descriptors must pass the parity gate (true-negative)
+  test('all 16 real runtime descriptors pass the configFormat parity gate (DOES NOT THROW)', () => {
+    const { capMap, errors } = loadAndValidate(new Set());
+    const hardErrors = errors.filter((e) => !e.includes('pending-migration'));
+    assert.deepEqual(hardErrors, [], 'No hard errors expected: ' + JSON.stringify(hardErrors));
+
+    // runConfigFormatParityGate must not throw for the real registry
+    assert.doesNotThrow(
+      () => runConfigFormatParityGate(capMap),
+      'runConfigFormatParityGate must not throw for the real 16 runtime descriptors',
+    );
+  });
+
+  // buildRegistry must not throw for the real registry (end-to-end integration)
+  test('buildRegistry with real 16 runtime descriptors does not throw (parity gate integrated)', () => {
+    const { capMap } = loadAndValidate(new Set());
+    assert.doesNotThrow(
+      () => buildRegistry(capMap),
+      'buildRegistry must not throw for the real registry (parity gate must pass)',
+    );
+  });
+
+  // INSTALL_SURFACE_TO_CONFIG_FORMAT export check
+  test('INSTALL_SURFACE_TO_CONFIG_FORMAT covers all 6 installSurface values with correct mappings', () => {
+    assert.ok(INSTALL_SURFACE_TO_CONFIG_FORMAT instanceof Map, 'Must be a Map');
+    assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.size, 6, 'Must cover 6 installSurface values');
+    assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.get('settings-json'),        'settings-json');
+    assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.get('codex-toml'),           'toml');
+    assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.get('copilot-instructions'), 'markdown');
+    assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.get('cline-rules'),          'markdown-dir');
+    assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.get('cursor-hooks-json'),    'none');
+    assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.get('profile-marker-only'),  'none');
+  });
+
+  // Feature capabilities (role:feature) are silently ignored by the gate
+  test('feature capabilities (role:feature) are ignored by the parity gate — does not throw', () => {
+    // Use the real UI cap (role:feature, has no installSurface) — gate must pass silently
+    const capMap = new Map([['ui', UI_CAP]]);
+    assert.doesNotThrow(
+      () => runConfigFormatParityGate(capMap),
+      'Feature capabilities must be ignored by the configFormat parity gate',
+    );
+  });
+
+  // Unknown runtimes (not in ALLOWED_CONFIG_RUNTIMES) are excluded from the gate
+  test('runtime capId not in adapter registry (e.g. "grok") is excluded from parity gate — does not throw', () => {
+    // 'grok' is not in the adapter registry → must be soft-skipped
+    const grokCap = {
+      id: 'grok',
+      role: 'runtime',
+      title: 'Grok',
+      description: 'Hypothetical grok runtime',
+      tier: 'core',
+      requires: [],
+      runtime: {
+        configHome: { kind: 'dot-home', name: '.grok', env: [] },
+        configFormat: 'settings-json',  // any value — gate should not check this
+        artifactLayout: { global: [], local: [] },
+        commandStyle: 'slash-hyphen',
+        hooksSurface: 'none',
+        sandboxTier: 'none',
+        supportTier: 2,
+      },
+    };
+    const capMap = new Map([['grok', grokCap]]);
+    assert.doesNotThrow(
+      () => runConfigFormatParityGate(capMap),
+      'Unknown runtimes not in the adapter registry must be excluded from the parity gate',
+    );
   });
 });
