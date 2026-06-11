@@ -433,6 +433,8 @@ describe('cmdWorktreeBaseCheck', () => {
       },
       execGit: makeExecGitCheck({}),
       write: (s) => { written += s; },
+      // Hermetic: point userClaudeDir at a non-existent path so real ~/.claude is never read
+      userClaudeDir: '/nonexistent-hermetic-user-dir',
     };
     const result = cmdWorktreeBaseCheck(cwd, [], deps);
     assert.strictEqual(result.shouldDegrade, false);
@@ -453,6 +455,8 @@ describe('cmdWorktreeBaseCheck', () => {
         'rev-parse --verify --quiet origin/HEAD': { exitCode: 0, stdout: FORK_SHA, stderr: '', signal: null, error: null },
       }),
       write: (s) => { written += s; },
+      // Hermetic: point userClaudeDir at a non-existent path so real ~/.claude is never read
+      userClaudeDir: '/nonexistent-hermetic-user-dir',
     };
     const result = cmdWorktreeBaseCheck(cwd, [], deps);
     assert.strictEqual(result.shouldDegrade, true);
@@ -769,5 +773,149 @@ describe('evaluateWorktreeBaseDegrade — defensive trim on SHAs (FIX 3)', () =>
     assert.strictEqual(result.forkRef, 'origin/next');
     assert.strictEqual(result.forkSha, FORK_SHA);
     assert.strictEqual(result.shouldDegrade, true);
+  });
+});
+
+// ─── resolveEffectiveBaseRef — user/global layer (#1013) ─────────────────────
+
+describe('resolveEffectiveBaseRef — user/global layer (#1013)', () => {
+  function makeReadFile(files) {
+    return (p) => (Object.prototype.hasOwnProperty.call(files, p) ? files[p] : null);
+  }
+
+  const USER_CLAUDE_DIR = '/home/user/.claude';
+  const claudeDir = '/repo/.claude';
+
+  test('(a) user/global settings.json provides baseRef:"head" when both project files absent', () => {
+    const deps = {
+      readFile: makeReadFile({
+        [path.join(USER_CLAUDE_DIR, 'settings.json')]: JSON.stringify({ worktree: { baseRef: 'head' } }),
+      }),
+    };
+    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps, USER_CLAUDE_DIR), 'head');
+  });
+
+  test('(b) project local "fresh" OVERRIDES user/global "head" → returns "fresh"', () => {
+    const deps = {
+      readFile: makeReadFile({
+        [path.join(claudeDir, 'settings.local.json')]: JSON.stringify({ worktree: { baseRef: 'fresh' } }),
+        [path.join(USER_CLAUDE_DIR, 'settings.json')]: JSON.stringify({ worktree: { baseRef: 'head' } }),
+      }),
+    };
+    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps, USER_CLAUDE_DIR), 'fresh');
+  });
+
+  test('(c) project shared "fresh" (no local) OVERRIDES user/global "head" → returns "fresh"', () => {
+    const deps = {
+      readFile: makeReadFile({
+        [path.join(claudeDir, 'settings.json')]: JSON.stringify({ worktree: { baseRef: 'fresh' } }),
+        [path.join(USER_CLAUDE_DIR, 'settings.json')]: JSON.stringify({ worktree: { baseRef: 'head' } }),
+      }),
+    };
+    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps, USER_CLAUDE_DIR), 'fresh');
+  });
+
+  test('(d) userClaudeDir undefined → behaves as before, returns null when both project files absent', () => {
+    const deps = { readFile: () => null };
+    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps, undefined), null);
+  });
+
+  test('(d) userClaudeDir null → behaves as before, returns null when both project files absent', () => {
+    const deps = { readFile: () => null };
+    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps, null), null);
+  });
+
+  test('user/global settings.json absent → returns null (no fallback beyond user layer)', () => {
+    const deps = {
+      readFile: makeReadFile({
+        // user settings.json present but has no baseRef
+        [path.join(USER_CLAUDE_DIR, 'settings.json')]: JSON.stringify({ other: 'value' }),
+      }),
+    };
+    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps, USER_CLAUDE_DIR), null);
+  });
+
+  test('userClaudeDir === claudeDir → does not double-read (avoids re-reading shared settings.json)', () => {
+    // When project dir IS the user dir (cwd is home), the user layer should be skipped
+    // to avoid reading settings.json twice. This is enforced by the path.resolve comparison.
+    const sameDir = '/home/.claude';
+    let readCount = 0;
+    const deps = {
+      readFile: (p) => {
+        readCount++;
+        if (p === path.join(sameDir, 'settings.local.json')) return null;
+        if (p === path.join(sameDir, 'settings.json')) return JSON.stringify({ worktree: { baseRef: 'head' } });
+        return null;
+      },
+    };
+    // resolveEffectiveBaseRef(sameDir, deps, sameDir) — userClaudeDir === claudeDir
+    const result = resolveEffectiveBaseRef(sameDir, deps, sameDir);
+    assert.strictEqual(result, 'head'); // still reads shared settings.json (the project layer)
+    // The shared settings.json should have been read exactly once (project layer), not twice
+    assert.strictEqual(readCount, 2, 'only local + shared should be read; user layer skipped when same dir');
+  });
+});
+
+// ─── cmdWorktreeBaseCheck — user/global cascade (#1013 KEY REGRESSION) ───────
+
+describe('cmdWorktreeBaseCheck — user/global cascade (#1013)', () => {
+  // Phase-lane execGit: origin/HEAD probe fails (no symref either) → fork-ref-unknown → degrade
+  function makePhaseLaneExecGit(HEAD_SHA) {
+    return function stubExecGit(args, _opts) {
+      const key = args.join(' ');
+      if (key === 'rev-parse HEAD') {
+        return { exitCode: 0, stdout: HEAD_SHA, stderr: '', signal: null, error: null };
+      }
+      if (key === 'rev-parse --verify --quiet origin/HEAD') {
+        return { exitCode: 1, stdout: '', stderr: '', signal: null, error: null };
+      }
+      if (key === 'symbolic-ref --quiet refs/remotes/origin/HEAD') {
+        return { exitCode: 1, stdout: '', stderr: '', signal: null, error: null };
+      }
+      throw new Error(`Unexpected execGit call: ${JSON.stringify(args)}`);
+    };
+  }
+
+  const HEAD_SHA = 'phase1lane11223344phase1lane11223344phase';
+  const USER_CLAUDE_DIR = '/home/user/.claude';
+  const cwd = '/repo';
+  const claudeDir = '/repo/.claude';
+
+  test('(e positive) user/global head + phase lane → shouldDegrade:false (KEY REGRESSION)', () => {
+    // This is the exact bug: user set worktree.baseRef:"head" in their global settings,
+    // but without the fix that setting was invisible and the phase lane triggered degrade.
+    const deps = {
+      execGit: makePhaseLaneExecGit(HEAD_SHA),
+      readFile: (p) => {
+        // Project files: no baseRef
+        if (p === path.join(claudeDir, 'settings.local.json')) return null;
+        if (p === path.join(claudeDir, 'settings.json')) return null;
+        // User/global file: baseRef = "head"
+        if (p === path.join(USER_CLAUDE_DIR, 'settings.json')) {
+          return JSON.stringify({ worktree: { baseRef: 'head' } });
+        }
+        return null;
+      },
+      write: () => {},
+      userClaudeDir: USER_CLAUDE_DIR,
+    };
+    const result = cmdWorktreeBaseCheck(cwd, [], deps);
+    assert.strictEqual(result.shouldDegrade, false,
+      'user/global worktree.baseRef:"head" must suppress degrade on a phase lane');
+    assert.strictEqual(result.reason, 'baseref-head');
+  });
+
+  test('(e negative) NO user/global head + same phase lane → shouldDegrade:true (proves lane degrades)', () => {
+    // Without a user/global head, the phase lane must still degrade (proves the positive test is real)
+    const deps = {
+      execGit: makePhaseLaneExecGit(HEAD_SHA),
+      readFile: () => null, // no project or user settings
+      write: () => {},
+      userClaudeDir: '/nonexistent-hermetic-dir-no-global',
+    };
+    const result = cmdWorktreeBaseCheck(cwd, [], deps);
+    assert.strictEqual(result.shouldDegrade, true,
+      'without user/global head, a phase lane must degrade');
+    assert.strictEqual(result.reason, 'fork-ref-unknown');
   });
 });
