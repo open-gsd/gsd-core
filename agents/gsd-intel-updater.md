@@ -250,7 +250,7 @@ gsd_run intel patch-meta .planning/intel/dependency-graph.json
 Synthesize patterns from steps 2-5 into structured JSON.
 Write `arch-decisions.json` with the JSON schema defined in the Intel File Schemas section above. Then patch its timestamp:
 ```bash
-gsd-tools intel patch-meta .planning/intel/arch-decisions.json
+gsd_run intel patch-meta .planning/intel/arch-decisions.json
 ```
 
 ### Step 6.5: Self-Check
