@@ -79,6 +79,7 @@
     },
     "runtime-artifact-layout": {
       "files": [
+        "runtime-artifact-layout-descriptor-drive.test.cjs",
         "runtime-artifact-layout-install-profiles.test.cjs",
         "runtime-artifact-layout-surface.test.cjs",
         "runtime-artifact-layout.test.cjs"

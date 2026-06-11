@@ -36,7 +36,24 @@
           "converter": "convertClaudeCommandToKiloSkill"
         }
       ],
-      "local": []
+      "local": [
+        {
+          "kind": "commands",
+          "destSubpath": "command",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": null
+        },
+        {
+          "kind": "skills",
+          "destSubpath": "skills",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": true,
+          "converter": "convertClaudeCommandToKiloSkill"
+        }
+      ]
     },
     "commandStyle": "slash-hyphen",
     "hooksSurface": "none",

@@ -31,7 +31,24 @@
           "converter": "convertClaudeCommandToCursorCommand"
         }
       ],
-      "local": []
+      "local": [
+        {
+          "kind": "skills",
+          "destSubpath": "skills",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": true,
+          "converter": "convertClaudeCommandToCursorSkill"
+        },
+        {
+          "kind": "commands",
+          "destSubpath": "commands",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeCommandToCursorCommand"
+        }
+      ]
     },
     "commandStyle": "slash-hyphen",
     "hooksSurface": "cursor-hooks-json",

@@ -23,7 +23,16 @@
           "converter": "convertClaudeCommandToClaudeSkill"
         }
       ],
-      "local": []
+      "local": [
+        {
+          "kind": "skills",
+          "destSubpath": "skills/gsd",
+          "prefix": "gsd-",
+          "nesting": "nested",
+          "recursive": false,
+          "converter": "convertClaudeCommandToClaudeSkill"
+        }
+      ]
     },
     "commandStyle": "slash-hyphen",
     "hooksSurface": "settings-json",

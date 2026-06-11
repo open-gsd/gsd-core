@@ -40,7 +40,16 @@ const capabilities = {
             "converter": "convertClaudeCommandToAntigravitySkill"
           }
         ],
-        "local": []
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToAntigravitySkill"
+          }
+        ]
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "settings-json",
@@ -111,7 +120,24 @@ const capabilities = {
             "converter": "convertClaudeCommandToAugmentSkill"
           }
         ],
-        "local": []
+        "local": [
+          {
+            "kind": "commands",
+            "destSubpath": "commands",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          },
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToAugmentSkill"
+          }
+        ]
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "settings-json",
@@ -243,7 +269,24 @@ const capabilities = {
             "converter": "convertClaudeCommandToCodebuddySkill"
           }
         ],
-        "local": []
+        "local": [
+          {
+            "kind": "commands",
+            "destSubpath": "commands",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToCodebuddyCommand"
+          },
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToCodebuddySkill"
+          }
+        ]
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "settings-json",
@@ -279,7 +322,16 @@ const capabilities = {
             "converter": "convertClaudeCommandToCodexSkill"
           }
         ],
-        "local": []
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToCodexSkill"
+          }
+        ]
       },
       "commandStyle": "shell-var",
       "hooksSurface": "codex-hooks-json",
@@ -316,7 +368,16 @@ const capabilities = {
             "converter": "convertClaudeCommandToCopilotSkill"
           }
         ],
-        "local": []
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToCopilotSkill"
+          }
+        ]
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "copilot-inline",
@@ -359,7 +420,24 @@ const capabilities = {
             "converter": "convertClaudeCommandToCursorCommand"
           }
         ],
-        "local": []
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": true,
+            "converter": "convertClaudeCommandToCursorSkill"
+          },
+          {
+            "kind": "commands",
+            "destSubpath": "commands",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToCursorCommand"
+          }
+        ]
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "cursor-hooks-json",
@@ -395,7 +473,16 @@ const capabilities = {
             "converter": null
           }
         ],
-        "local": []
+        "local": [
+          {
+            "kind": "commands",
+            "destSubpath": "commands/gsd",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          }
+        ]
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "settings-json",
@@ -461,7 +548,16 @@ const capabilities = {
             "converter": "convertClaudeCommandToClaudeSkill"
           }
         ],
-        "local": []
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills/gsd",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          }
+        ]
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "settings-json",
@@ -540,7 +636,24 @@ const capabilities = {
             "converter": "convertClaudeCommandToKiloSkill"
           }
         ],
-        "local": []
+        "local": [
+          {
+            "kind": "commands",
+            "destSubpath": "command",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          },
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": true,
+            "converter": "convertClaudeCommandToKiloSkill"
+          }
+        ]
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "none",
@@ -633,7 +746,24 @@ const capabilities = {
             "converter": "convertClaudeCommandToOpencodeSkill"
           }
         ],
-        "local": []
+        "local": [
+          {
+            "kind": "commands",
+            "destSubpath": "command",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          },
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": true,
+            "converter": "convertClaudeCommandToOpencodeSkill"
+          }
+        ]
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "none",
@@ -668,7 +798,16 @@ const capabilities = {
             "converter": "convertClaudeCommandToClaudeSkill"
           }
         ],
-        "local": []
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          }
+        ]
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "settings-json",
@@ -704,7 +843,16 @@ const capabilities = {
             "converter": "convertClaudeCommandToTraeSkill"
           }
         ],
-        "local": []
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToTraeSkill"
+          }
+        ]
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "none",
@@ -825,7 +973,16 @@ const capabilities = {
             "converter": "convertClaudeCommandToWindsurfSkill"
           }
         ],
-        "local": []
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToWindsurfSkill"
+          }
+        ]
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "none",
@@ -1038,7 +1195,16 @@ const runtimes = {
             "converter": "convertClaudeCommandToAntigravitySkill"
           }
         ],
-        "local": []
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToAntigravitySkill"
+          }
+        ]
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "settings-json",
@@ -1082,7 +1248,24 @@ const runtimes = {
             "converter": "convertClaudeCommandToAugmentSkill"
           }
         ],
-        "local": []
+        "local": [
+          {
+            "kind": "commands",
+            "destSubpath": "commands",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          },
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToAugmentSkill"
+          }
+        ]
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "settings-json",
@@ -1214,7 +1397,24 @@ const runtimes = {
             "converter": "convertClaudeCommandToCodebuddySkill"
           }
         ],
-        "local": []
+        "local": [
+          {
+            "kind": "commands",
+            "destSubpath": "commands",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToCodebuddyCommand"
+          },
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToCodebuddySkill"
+          }
+        ]
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "settings-json",
@@ -1250,7 +1450,16 @@ const runtimes = {
             "converter": "convertClaudeCommandToCodexSkill"
           }
         ],
-        "local": []
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToCodexSkill"
+          }
+        ]
       },
       "commandStyle": "shell-var",
       "hooksSurface": "codex-hooks-json",
@@ -1287,7 +1496,16 @@ const runtimes = {
             "converter": "convertClaudeCommandToCopilotSkill"
           }
         ],
-        "local": []
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToCopilotSkill"
+          }
+        ]
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "copilot-inline",
@@ -1330,7 +1548,24 @@ const runtimes = {
             "converter": "convertClaudeCommandToCursorCommand"
           }
         ],
-        "local": []
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": true,
+            "converter": "convertClaudeCommandToCursorSkill"
+          },
+          {
+            "kind": "commands",
+            "destSubpath": "commands",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToCursorCommand"
+          }
+        ]
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "cursor-hooks-json",
@@ -1366,7 +1601,16 @@ const runtimes = {
             "converter": null
           }
         ],
-        "local": []
+        "local": [
+          {
+            "kind": "commands",
+            "destSubpath": "commands/gsd",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          }
+        ]
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "settings-json",
@@ -1402,7 +1646,16 @@ const runtimes = {
             "converter": "convertClaudeCommandToClaudeSkill"
           }
         ],
-        "local": []
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills/gsd",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          }
+        ]
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "settings-json",
@@ -1453,7 +1706,24 @@ const runtimes = {
             "converter": "convertClaudeCommandToKiloSkill"
           }
         ],
-        "local": []
+        "local": [
+          {
+            "kind": "commands",
+            "destSubpath": "command",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          },
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": true,
+            "converter": "convertClaudeCommandToKiloSkill"
+          }
+        ]
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "none",
@@ -1546,7 +1816,24 @@ const runtimes = {
             "converter": "convertClaudeCommandToOpencodeSkill"
           }
         ],
-        "local": []
+        "local": [
+          {
+            "kind": "commands",
+            "destSubpath": "command",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          },
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": true,
+            "converter": "convertClaudeCommandToOpencodeSkill"
+          }
+        ]
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "none",
@@ -1581,7 +1868,16 @@ const runtimes = {
             "converter": "convertClaudeCommandToClaudeSkill"
           }
         ],
-        "local": []
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          }
+        ]
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "settings-json",
@@ -1617,7 +1913,16 @@ const runtimes = {
             "converter": "convertClaudeCommandToTraeSkill"
           }
         ],
-        "local": []
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToTraeSkill"
+          }
+        ]
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "none",
@@ -1653,7 +1958,16 @@ const runtimes = {
             "converter": "convertClaudeCommandToWindsurfSkill"
           }
         ],
-        "local": []
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToWindsurfSkill"
+          }
+        ]
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "none",

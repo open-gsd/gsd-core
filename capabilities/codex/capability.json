@@ -23,7 +23,16 @@
           "converter": "convertClaudeCommandToCodexSkill"
         }
       ],
-      "local": []
+      "local": [
+        {
+          "kind": "skills",
+          "destSubpath": "skills",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeCommandToCodexSkill"
+        }
+      ]
     },
     "commandStyle": "shell-var",
     "hooksSurface": "codex-hooks-json",

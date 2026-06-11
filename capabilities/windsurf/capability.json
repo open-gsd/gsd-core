@@ -24,7 +24,16 @@
           "converter": "convertClaudeCommandToWindsurfSkill"
         }
       ],
-      "local": []
+      "local": [
+        {
+          "kind": "skills",
+          "destSubpath": "skills",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeCommandToWindsurfSkill"
+        }
+      ]
     },
     "commandStyle": "slash-hyphen",
     "hooksSurface": "none",

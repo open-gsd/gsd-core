@@ -31,7 +31,24 @@
           "converter": "convertClaudeCommandToAugmentSkill"
         }
       ],
-      "local": []
+      "local": [
+        {
+          "kind": "commands",
+          "destSubpath": "commands",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": null
+        },
+        {
+          "kind": "skills",
+          "destSubpath": "skills",
+          "prefix": "gsd-",
+          "nesting": "nested",
+          "recursive": false,
+          "converter": "convertClaudeCommandToAugmentSkill"
+        }
+      ]
     },
     "commandStyle": "slash-hyphen",
     "hooksSurface": "settings-json",

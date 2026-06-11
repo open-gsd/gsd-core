@@ -23,7 +23,16 @@
           "converter": null
         }
       ],
-      "local": []
+      "local": [
+        {
+          "kind": "commands",
+          "destSubpath": "commands/gsd",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": null
+        }
+      ]
     },
     "commandStyle": "slash-hyphen",
     "hooksSurface": "settings-json",

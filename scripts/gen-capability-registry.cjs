@@ -581,21 +581,21 @@ function validateArtifactKindEntry(capId, entry, prefix) {
     errors.push(ctx + '.destSubpath must be a non-empty string');
   }
 
-  // nesting — optional; if present must be in closed vocab
-  if (entry.nesting !== undefined) {
-    if (!VALID_ARTIFACT_NESTINGS.has(entry.nesting)) {
-      errors.push(
-        ctx + '.nesting must be one of: ' + [...VALID_ARTIFACT_NESTINGS].join(', ') +
-        ' (got: ' + JSON.stringify(entry.nesting) + ')',
-      );
-    }
+  // nesting — required; must be in closed vocab (ADR-857 §5d: now drives install)
+  if (entry.nesting === undefined || entry.nesting === null) {
+    errors.push(ctx + '.nesting is required and must be one of: ' + [...VALID_ARTIFACT_NESTINGS].join(', '));
+  } else if (!VALID_ARTIFACT_NESTINGS.has(entry.nesting)) {
+    errors.push(
+      ctx + '.nesting must be one of: ' + [...VALID_ARTIFACT_NESTINGS].join(', ') +
+      ' (got: ' + JSON.stringify(entry.nesting) + ')',
+    );
   }
 
-  // prefix — optional; if present must be a string
-  if (entry.prefix !== undefined) {
-    if (typeof entry.prefix !== 'string') {
-      errors.push(ctx + '.prefix must be a string if present (got: ' + typeof entry.prefix + ')');
-    }
+  // prefix — required; must be a string (may be empty string '')
+  if (entry.prefix === undefined || entry.prefix === null) {
+    errors.push(ctx + '.prefix is required (must be a string, may be empty)');
+  } else if (typeof entry.prefix !== 'string') {
+    errors.push(ctx + '.prefix must be a string (got: ' + typeof entry.prefix + ')');
   }
 
   // recursive — optional; if present must be a boolean
@@ -605,11 +605,11 @@ function validateArtifactKindEntry(capId, entry, prefix) {
     }
   }
 
-  // converter — optional; if present must be a string or null (closed ConverterName enum in phase 5e)
-  if (entry.converter !== undefined) {
-    if (entry.converter !== null && typeof entry.converter !== 'string') {
-      errors.push(ctx + '.converter must be a string or null if present (got: ' + typeof entry.converter + ')');
-    }
+  // converter — required; must be a string or null (closed ConverterName enum in phase 5e)
+  if (!Object.prototype.hasOwnProperty.call(entry, 'converter')) {
+    errors.push(ctx + '.converter is required (must be a string or null)');
+  } else if (entry.converter !== null && typeof entry.converter !== 'string') {
+    errors.push(ctx + '.converter must be a string or null (got: ' + typeof entry.converter + ')');
   }
 
   return errors;

@@ -25,7 +25,16 @@
           "converter": "convertClaudeCommandToAntigravitySkill"
         }
       ],
-      "local": []
+      "local": [
+        {
+          "kind": "skills",
+          "destSubpath": "skills",
+          "prefix": "gsd-",
+          "nesting": "nested",
+          "recursive": false,
+          "converter": "convertClaudeCommandToAntigravitySkill"
+        }
+      ]
     },
     "commandStyle": "slash-hyphen",
     "hooksSurface": "settings-json",

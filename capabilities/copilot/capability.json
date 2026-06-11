@@ -23,7 +23,16 @@
           "converter": "convertClaudeCommandToCopilotSkill"
         }
       ],
-      "local": []
+      "local": [
+        {
+          "kind": "skills",
+          "destSubpath": "skills",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeCommandToCopilotSkill"
+        }
+      ]
     },
     "commandStyle": "slash-hyphen",
     "hooksSurface": "copilot-inline",

@@ -31,7 +31,24 @@
           "converter": "convertClaudeCommandToCodebuddySkill"
         }
       ],
-      "local": []
+      "local": [
+        {
+          "kind": "commands",
+          "destSubpath": "commands",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeCommandToCodebuddyCommand"
+        },
+        {
+          "kind": "skills",
+          "destSubpath": "skills",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeCommandToCodebuddySkill"
+        }
+      ]
     },
     "commandStyle": "slash-hyphen",
     "hooksSurface": "settings-json",
