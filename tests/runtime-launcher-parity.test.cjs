@@ -32,6 +32,7 @@ const { execFileSync } = require('node:child_process');
 const { cleanup } = require('./helpers.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
+const AGENTS_DIR = path.join(__dirname, '..', 'agents');
 const SNIPPET_FILE = path.join(WORKFLOWS_DIR, '_runtime-launcher.snippet.sh');
 
 /**
@@ -112,6 +113,26 @@ function collectWorkflowFiles() {
     }
   }
   walk(WORKFLOWS_DIR);
+  return results;
+}
+
+/**
+ * Collect all agent .md files under AGENTS_DIR (non-recursive — agents/ has no subdirs,
+ * but collectFiles in the sync script is recursive-safe; we mirror that here).
+ */
+function collectAgentFiles() {
+  const results = [];
+  function walk(dir) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.isFile() && entry.name.endsWith('.md')) {
+        results.push(full);
+      }
+    }
+  }
+  walk(AGENTS_DIR);
   return results;
 }
 
@@ -521,6 +542,73 @@ describe('runtime-launcher-parity (#373)', () => {
         `scanner (bug-2954) misreads as a slash-command stub. Use \${_GSD_SHIM_NAME} indirection. ` +
         `Offending lines:\n` +
         offendingLines.join('\n'),
+    );
+  });
+});
+
+// ─── Agent parity — runtime-launcher-parity — agents (#1041) ─────────────────
+describe('runtime-launcher-parity — agents (#1041)', () => {
+  // ─── (B-agents) Exactly ONE canonical preamble per using agent file ────────
+  test('(B-agents) each agent .md using gsd_run contains exactly ONE canonical preamble, before the first gsd_run call', () => {
+    const preamble = expectedPreamble();
+    const preambleStr = preamble.join('\n');
+    const files = collectAgentFiles();
+    assert.ok(files.length > 0, 'expected at least one agent .md file');
+
+    const violations = [];
+
+    for (const f of files) {
+      const rel = path.relative(AGENTS_DIR, f);
+      const content = fs.readFileSync(f, 'utf8');
+      const blocks = extractShellBlocks(content);
+
+      // Collect all block lines in document order for flat analysis
+      const allBlockLines = [];
+      for (const blk of blocks) {
+        allBlockLines.push(...blk.lines);
+      }
+
+      // Does this file use gsd_run at all?
+      const fileHasGsdRun = allBlockLines.some((l) => /\bgsd_run\b/.test(l));
+      if (!fileHasGsdRun) continue; // agents without gsd_run are not checked
+
+      // Count preamble occurrences across all shell content of this file
+      const allContent = allBlockLines.join('\n');
+      let preambleCount = 0;
+      let searchPos = 0;
+      while (true) {
+        const idx = allContent.indexOf(preambleStr, searchPos);
+        if (idx === -1) break;
+        preambleCount++;
+        searchPos = idx + preambleStr.length;
+      }
+
+      if (preambleCount !== 1) {
+        violations.push(
+          `${rel}: expected exactly 1 canonical preamble occurrence in bash blocks, found ${preambleCount}. ` +
+            `Run \`node scripts/sync-runtime-launcher.cjs\` to fix.`,
+        );
+        continue;
+      }
+
+      // Verify preamble appears BEFORE the first gsd_run call (in document order)
+      const preamblePos = allContent.indexOf(preambleStr);
+      const firstGsdRunPos = allContent.search(/\bgsd_run\b/);
+
+      // The first gsd_run WITHIN the preamble itself (the function definition) is fine.
+      // Simple check: preamble starts at or before the first gsd_run occurrence.
+      if (preamblePos > firstGsdRunPos) {
+        violations.push(
+          `${rel}: preamble appears AFTER the first gsd_run reference — it must precede all gsd_run calls.`,
+        );
+      }
+    }
+
+    assert.deepStrictEqual(
+      violations,
+      [],
+      'Agent files with gsd_run calls have wrong preamble count or ordering:\n' +
+        violations.join('\n---\n'),
     );
   });
 });

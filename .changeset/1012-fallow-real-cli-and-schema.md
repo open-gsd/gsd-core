@@ -1,0 +1,5 @@
+---
+type: Fixed
+pr: 1044
+---
+**`/gsd-code-review`'s fallow structural pre-pass now actually runs and delivers findings** — it invoked fallow with flags no published fallow version accepts (`--json`, `--profile`, `--stdin-files`), so the pre-pass failed on every run and silently degraded (the structural-findings feature never delivered on any fallow version). It now uses fallow's real CLI (`audit --format json --quiet`, `--changed-since` for phase scope, and `--max-crap` mapped from the `code_quality.fallow.profile` preset: minimal→50, standard→30, strict→15), treats fallow's exit code 1 ("issues found") as a successful run instead of a crash (gating on a valid JSON report, not the exit code), and normalizes fallow's real `audit --format json` schema (`dead_code.*`, `duplication.clone_groups`) into the reviewer's `<structural_findings>` contract. The report normalizer — previously dead code parsing a schema fallow never shipped — is wired to the real schema and exercised against real fallow output. (#1012)

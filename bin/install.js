@@ -11926,15 +11926,18 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   }
 
   // Helper: detect whether a hook entry references a managed hook by name.
-  // Checks both the plain command string (standard form) and the args array
-  // (command+args / wrapped-launcher form used by windowless launchers on
-  // Windows and some custom PATH-less environments).  Without this check the
-  // presence guards below only inspect h.command, so an args-form wrapper is
-  // invisible and a stock string-command entry is appended on every
-  // install/update, running the hook twice. (#976)
+  // Checks all three registration shapes:
+  //   • plain command string (standard form)
+  //   • args array (command+args / wrapped-launcher form used by windowless
+  //     launchers on Windows and some custom PATH-less environments) (#976)
+  //   • url field (type:"http" local-server routing form) (#1004)
+  // Without covering all three, an http-form or args-form entry is invisible
+  // and a stock string-command entry is appended on every install/update,
+  // running the hook twice.
   function referencesHook(h, hookName) {
     return (typeof h.command === 'string' && h.command.includes(hookName)) ||
-      (Array.isArray(h.args) && h.args.some(a => typeof a === 'string' && a.includes(hookName)));
+      (Array.isArray(h.args) && h.args.some(a => typeof a === 'string' && a.includes(hookName))) ||
+      (typeof h.url === 'string' && h.url.includes(hookName));
   }
 
   // Configure SessionStart hook for update checking (skip for opencode)

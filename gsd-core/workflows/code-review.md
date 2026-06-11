@@ -329,12 +329,19 @@ FALLOW_ENABLED=$(gsd_run query config-get code_quality.fallow.enabled 2>/dev/nul
 FALLOW_SCOPE=$(gsd_run query config-get code_quality.fallow.scope 2>/dev/null || echo "phase")
 FALLOW_PROFILE=$(gsd_run query config-get code_quality.fallow.profile 2>/dev/null || echo "standard")
 FALLOW_MCP=$(gsd_run query config-get code_quality.fallow.mcp 2>/dev/null || echo "false")
+# profile maps to a --max-crap threshold since fallow has no native profile concept.
+# minimal=50 (more lenient), standard=30 (default), strict=15 (tighter).
+case "$FALLOW_PROFILE" in
+  minimal) FALLOW_MAX_CRAP=50 ;;
+  strict)  FALLOW_MAX_CRAP=15 ;;
+  *)       FALLOW_MAX_CRAP=30 ;;  # standard (default)
+esac
 ```
 
 Defaults are fail-closed and opt-in:
 - `enabled=false` (skip entirely)
 - `scope=phase`
-- `profile=standard`
+- `profile=standard` (maps to `--max-crap 30`; minimal=50, standard=30, strict=15 — fallow has no native profile concept)
 - `mcp=false`
 
 When `FALLOW_ENABLED=true`:
@@ -357,30 +364,49 @@ if [ -z \"$FALLOW_BIN\" ]; then
 fi
 ```
 
-3) Execute structural pass and persist JSON (bounded at 120s; on timeout, behaves as a fallow crash):
+3) Execute structural pass and persist JSON (bounded at 120s). Note: `fallow audit` exits 0 when clean and 1 when issues are found — BOTH are successful runs. Only a timeout (124), usage error (2), or crash yields no usable JSON; success is decided by whether the output parses as a valid fallow report, not by exit code:
 ```bash
 FALLOW_JSON_PATH="${PHASE_DIR}/FALLOW.json"
 FALLOW_STDERR_TMP=$(mktemp)
-if [ \"$FALLOW_SCOPE\" = \"repo\" ]; then
-  timeout 120 \"$FALLOW_BIN\" audit --json --profile \"$FALLOW_PROFILE\" > \"${FALLOW_JSON_PATH}.tmp\" 2>\"$FALLOW_STDERR_TMP\"
-  FALLOW_EXIT=$?
-else
-  # phase scope: pass the already-computed review file set
-  printf '%s\n' \"${REVIEW_FILES[@]}\" | timeout 120 \"$FALLOW_BIN\" audit --json --profile \"$FALLOW_PROFILE\" --stdin-files > \"${FALLOW_JSON_PATH}.tmp\" 2>\"$FALLOW_STDERR_TMP\"
-  FALLOW_EXIT=$?
+
+# Phase scope uses fallow's native changed-files scoping (--changed-since <base>).
+# Derive the phase base commit; if none is found, fall back to repo scope (fallow
+# auto-detects the base branch).
+FALLOW_SCOPE_ARGS=()
+if [ \"$FALLOW_SCOPE\" = \"phase\" ]; then
+  FALLOW_PHASE_COMMITS=$(git log --oneline --all --grep=\"${PADDED_PHASE}\" --format=\"%H\" 2>/dev/null)
+  if [ -n \"$FALLOW_PHASE_COMMITS\" ]; then
+    FALLOW_BASE=$(echo \"$FALLOW_PHASE_COMMITS\" | tail -1)^
+    FALLOW_SCOPE_ARGS=(--changed-since \"$FALLOW_BASE\")
+  fi
 fi
-if [ $FALLOW_EXIT -ne 0 ]; then
+
+timeout 120 \"$FALLOW_BIN\" audit --format json --quiet --max-crap \"$FALLOW_MAX_CRAP\" \"${FALLOW_SCOPE_ARGS[@]+\"${FALLOW_SCOPE_ARGS[@]}\"}\" > \"${FALLOW_JSON_PATH}.tmp\" 2>\"$FALLOW_STDERR_TMP\"
+FALLOW_EXIT=$?
+
+# fallow exits 0 (clean) or 1 (issues found) — BOTH are successful runs that produce a
+# valid JSON report. Only a timeout (124), usage error (2), or crash yields no usable JSON.
+# Decide success by whether the output parses as a fallow report, not by exit code.
+FALLOW_OK=$(FALLOW_TMP=\"${FALLOW_JSON_PATH}.tmp\" node -e \"
+  try {
+    const fs = require('fs');
+    const txt = fs.readFileSync(process.env.FALLOW_TMP, 'utf8');
+    const o = JSON.parse(txt);
+    process.stdout.write(o && typeof o === 'object' && 'verdict' in o ? '1' : '0');
+  } catch { process.stdout.write('0'); }
+\")
+if [ \"$FALLOW_OK\" != \"1\" ]; then
   FALLOW_STDERR_SUMMARY=$(head -5 \"$FALLOW_STDERR_TMP\")
   rm -f \"${FALLOW_JSON_PATH}.tmp\" \"$FALLOW_STDERR_TMP\"
-  echo \"WARNING: fallow structural pre-pass failed: ${FALLOW_STDERR_SUMMARY}\"
-  FALLOW_JSON_PATH=""
+  echo \"WARNING: fallow structural pre-pass failed (exit ${FALLOW_EXIT}): ${FALLOW_STDERR_SUMMARY}\"
+  FALLOW_JSON_PATH=\"\"
 else
   mv \"${FALLOW_JSON_PATH}.tmp\" \"$FALLOW_JSON_PATH\"
   rm -f \"$FALLOW_STDERR_TMP\"
 fi
 ```
 
-On any failure of the structural pre-pass (binary missing, non-zero exit, timeout, or JSON parse error), the workflow continues with no `<structural_findings>` injection; the reviewer agent receives a normal review request.
+On any failure of the structural pre-pass (binary missing, timeout, empty output, or unparseable JSON), the workflow continues with no `<structural_findings>` injection; the reviewer agent receives a normal review request.
 
 4) Optional MCP bridge path (runtime-dependent):
 - If `FALLOW_MCP=true`, set reviewer input mode to MCP-backed structural findings.
@@ -429,10 +455,19 @@ Build structural findings block for agent:
 STRUCTURAL_FINDINGS_BLOCK=""
 MAX_FINDINGS_SIZE=50000
 if [ -n "$FALLOW_JSON_PATH" ] && [ -f "$FALLOW_JSON_PATH" ]; then
-  FALLOW_JSON_SIZE=$(wc -c < "$FALLOW_JSON_PATH" | tr -d '[:space:]')
+  # Normalize fallow's raw report into the compact {summary, findings[]} contract
+  # the reviewer consumes (real fallow schema -> normalized findings).
+  FALLOW_NORMALIZED_PATH="${PHASE_DIR}/FALLOW-normalized.json"
+  FALLOW_SRC="$FALLOW_JSON_PATH" FALLOW_OUT="$FALLOW_NORMALIZED_PATH" node -e "
+    const fs = require('fs');
+    const { normalizeFallowReportFile } = require('./gsd-core/bin/lib/fallow-runner.cjs');
+    const n = normalizeFallowReportFile(process.env.FALLOW_SRC);
+    fs.writeFileSync(process.env.FALLOW_OUT, JSON.stringify(n, null, 2));
+  " 2>/dev/null && FALLOW_EMBED_PATH="$FALLOW_NORMALIZED_PATH" || FALLOW_EMBED_PATH="$FALLOW_JSON_PATH"
+  FALLOW_JSON_SIZE=$(wc -c < "$FALLOW_EMBED_PATH" | tr -d '[:space:]')
   if [ "$FALLOW_JSON_SIZE" -le "$MAX_FINDINGS_SIZE" ]; then
     # Escape any literal closing tag before embedding; the closing tag literal is escaped to prevent prompt-structure breakage if a fallow finding's file path or message contains the sequence.
-    SAFE_FALLOW_JSON=$(sed 's#</structural_findings>#<\/structural_findings>#g' "$FALLOW_JSON_PATH")
+    SAFE_FALLOW_JSON=$(sed 's#</structural_findings>#<\/structural_findings>#g' "$FALLOW_EMBED_PATH")
     STRUCTURAL_FINDINGS_BLOCK=$(printf '<structural_findings>\n%s\n</structural_findings>\n' "$SAFE_FALLOW_JSON")
   else
     echo "Warning: skipping structural findings embed (${FALLOW_JSON_SIZE} bytes > ${MAX_FINDINGS_SIZE} bytes). Re-run with narrower scope/profile if needed."

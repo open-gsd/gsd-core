@@ -4,6 +4,9 @@
  * ADR-457 build-at-publish: the hand-written bin/lib/fallow-runner.cjs
  * collapsed to a TypeScript source of truth. Behaviour is preserved
  * byte-for-behaviour from the prior hand-written .cjs; only types are added.
+ *
+ * Parses the real fallow `audit --format json` schema (schema_version 3
+ * envelope, nested dead_code/duplication sections). See fallow 2.70.0+.
  */
 
 import fs from 'node:fs';
@@ -67,35 +70,79 @@ export function requireFallowBinary({ cwd, envPath = process.env['PATH'] ?? '' }
   );
 }
 
+// --- Real fallow audit --format json schema (schema_version 3) interfaces ---
+
 interface FallowUnusedExport {
-  symbol?: string;
-  file?: string;
+  path?: string;
+  export_name?: string;
+  is_type_only?: boolean;
   line?: number | null;
+  col?: number | null;
+  span_start?: number | null;
+  is_re_export?: boolean;
+  actions?: unknown[];
+  introduced?: boolean;
 }
 
-interface FallowDuplicateItem {
+interface FallowUnusedFile {
+  path?: string;
+  actions?: unknown[];
+  introduced?: boolean;
+}
+
+interface FallowCircularDependency {
+  files?: string[];
+  length?: number;
+  line?: number | null;
+  col?: number | null;
+  actions?: unknown[];
+  introduced?: boolean;
+}
+
+interface FallowCloneInstance {
   file?: string;
-  start?: number | null;
+  start_line?: number | null;
+  end_line?: number | null;
+  start_col?: number | null;
+  end_col?: number | null;
+  fragment?: string;
 }
 
-interface FallowDuplicate {
-  similarity?: number;
-  left?: FallowDuplicateItem;
-  right?: FallowDuplicateItem;
+interface FallowCloneGroup {
+  instances?: FallowCloneInstance[];
 }
 
-interface FallowCircular {
-  cycle?: string[];
+interface FallowDeadCode {
+  unused_exports?: FallowUnusedExport[];
+  unused_files?: FallowUnusedFile[];
+  circular_dependencies?: FallowCircularDependency[];
+  summary?: unknown;
+  schema_version?: number;
+}
+
+interface FallowDuplication {
+  clone_groups?: FallowCloneGroup[];
+  stats?: unknown;
 }
 
 interface FallowReport {
-  unusedExports?: unknown[];
-  duplicates?: unknown[];
-  circularDependencies?: unknown[];
+  schema_version?: number;
+  version?: string;
+  command?: string;
+  verdict?: string;
+  changed_files_count?: number;
+  base_ref?: string;
+  head_sha?: string;
+  elapsed_ms?: number;
+  summary?: unknown;
+  attribution?: unknown;
+  dead_code?: FallowDeadCode;
+  duplication?: FallowDuplication;
+  complexity?: unknown;
 }
 
 export interface FallowFinding {
-  type: 'unused_export' | 'duplicate_block' | 'circular_dependency';
+  type: 'unused_export' | 'unused_file' | 'duplicate_block' | 'circular_dependency';
   message: string;
   file: string;
   line: number | null;
@@ -105,6 +152,7 @@ export interface FallowFinding {
 export interface NormalizedFallowReport {
   summary: {
     unused_exports: number;
+    unused_files: number;
     duplicates: number;
     circular_dependencies: number;
     total: number;
@@ -113,53 +161,84 @@ export interface NormalizedFallowReport {
 }
 
 export function normalizeFallowReport(report: FallowReport | null | undefined): NormalizedFallowReport {
-  const unused: FallowUnusedExport[] = Array.isArray(report?.unusedExports)
-    ? (report.unusedExports as FallowUnusedExport[])
-    : [];
-  const duplicates: FallowDuplicate[] = Array.isArray(report?.duplicates)
-    ? (report.duplicates as FallowDuplicate[])
-    : [];
-  const circular: FallowCircular[] = Array.isArray(report?.circularDependencies)
-    ? (report.circularDependencies as FallowCircular[])
-    : [];
+  const deadCodeRaw = report?.dead_code;
+  const duplicationRaw = report?.duplication;
+  const unusedExports: FallowUnusedExport[] = (Array.isArray(deadCodeRaw?.unused_exports)
+    ? (deadCodeRaw?.unused_exports ?? [])
+    : []).filter((x): x is FallowUnusedExport => x !== null && typeof x === 'object');
+  const unusedFiles: FallowUnusedFile[] = (Array.isArray(deadCodeRaw?.unused_files)
+    ? (deadCodeRaw?.unused_files ?? [])
+    : []).filter((x): x is FallowUnusedFile => x !== null && typeof x === 'object');
+  const circularDeps: FallowCircularDependency[] = (Array.isArray(deadCodeRaw?.circular_dependencies)
+    ? (deadCodeRaw?.circular_dependencies ?? [])
+    : []).filter((x): x is FallowCircularDependency => x !== null && typeof x === 'object');
+  const cloneGroups: FallowCloneGroup[] = (Array.isArray(duplicationRaw?.clone_groups)
+    ? (duplicationRaw?.clone_groups ?? [])
+    : []).filter((x): x is FallowCloneGroup => x !== null && typeof x === 'object');
 
   const findings: FallowFinding[] = [];
 
-  for (const item of unused) {
+  for (const item of unusedExports) {
+    if (!item || typeof item !== 'object') continue;
     findings.push({
       type: 'unused_export',
-      message: `Unused export ${item.symbol ?? '<unknown>'}`,
-      file: item.file ?? '',
+      message: `Unused export ${item.export_name ?? '<unknown>'}`,
+      file: item.path ?? '',
       line: item.line ?? null,
     });
   }
 
-  for (const item of duplicates) {
+  for (const item of unusedFiles) {
+    if (!item || typeof item !== 'object') continue;
     findings.push({
-      type: 'duplicate_block',
-      message: `Duplicate block (${Math.round((item.similarity ?? 0) * 100)}% similarity)`,
-      file: item.left?.file ?? '',
-      line: item.left?.start ?? null,
-      related_file: item.right?.file ?? '',
+      type: 'unused_file',
+      message: `Unused file ${item.path ?? '<unknown>'}`,
+      file: item.path ?? '',
+      line: null,
     });
   }
 
-  for (const item of circular) {
+  for (const item of circularDeps) {
+    if (!item || typeof item !== 'object') continue;
+    const files = Array.isArray(item.files) ? item.files : [];
     findings.push({
       type: 'circular_dependency',
-      message: `Circular dependency: ${(item.cycle ?? []).join(' -> ')}`,
-      file: Array.isArray(item.cycle) && item.cycle.length > 0 ? item.cycle[0] : '',
-      line: null,
+      message: `Circular dependency: ${files.join(' -> ')}`,
+      file: files.length > 0 ? files[0] : '',
+      line: item.line ?? null,
+    });
+  }
+
+  for (const group of cloneGroups) {
+    if (!group || typeof group !== 'object') continue;
+    const instances = Array.isArray(group.instances) ? group.instances : [];
+    findings.push({
+      type: 'duplicate_block',
+      message: `Duplicate block (${instances.length} instances)`,
+      file: instances[0]?.file ?? '',
+      line: instances[0]?.start_line ?? null,
+      related_file: instances[1]?.file ?? '',
     });
   }
 
   return {
     summary: {
-      unused_exports: unused.length,
-      duplicates: duplicates.length,
-      circular_dependencies: circular.length,
+      unused_exports: unusedExports.length,
+      unused_files: unusedFiles.length,
+      duplicates: cloneGroups.length,
+      circular_dependencies: circularDeps.length,
       total: findings.length,
     },
     findings,
   };
+}
+
+export function normalizeFallowReportFile(filePath: string): NormalizedFallowReport {
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const parsed = JSON.parse(raw) as FallowReport;
+    return normalizeFallowReport(parsed);
+  } catch {
+    return normalizeFallowReport(null);
+  }
 }
