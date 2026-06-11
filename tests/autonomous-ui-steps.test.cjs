@@ -83,33 +83,86 @@ describe('autonomous workflow ui-phase and ui-review integration (#1375)', () =>
       );
     });
 
-    test('UI review step checks for UI-SPEC existence before running', () => {
-      // The UI review should only run if a UI-SPEC was created/exists
+    test('UI review step dispatches loop render-hooks verify:post', () => {
+      // Phase 6 cutover: §3d.5 now dispatches render-hooks verify:post instead of
+      // inlining a direct skill="gsd-ui-review" call.
+      const reviewSection = content.slice(content.indexOf('3d.5'));
+      assert.ok(
+        reviewSection.includes('loop render-hooks verify:post'),
+        'UI review step should dispatch loop render-hooks verify:post to resolve active hooks'
+      );
+    });
+
+    test('UI review step constructs skill via gsd- prefix dispatch and is non-blocking', () => {
+      // Phase 6 cutover: §3d.5 dispatches loop render-hooks verify:post, invokes skills via
+      // gsd-${ref.skill} prefix, gates on UI_SPEC_FILE for consumes:UI-SPEC.md hooks,
+      // and is explicitly advisory/non-blocking.
+      // All four properties must be present within the §3d.5 section itself.
+      const sectionStart = content.indexOf('3d.5');
+      // Bound to the closing </step> tag of the execute_phase step
+      const sectionEnd = content.indexOf('</step>', sectionStart);
+      assert.ok(sectionStart !== -1, '§3d.5 heading must be present in autonomous.md');
+      assert.ok(sectionEnd !== -1, '</step> must follow §3d.5');
+      const reviewSection = content.slice(sectionStart, sectionEnd);
+
+      assert.ok(
+        reviewSection.includes('loop render-hooks verify:post'),
+        '§3d.5 must dispatch `loop render-hooks verify:post` to resolve active capability hooks'
+      );
+      assert.ok(
+        reviewSection.includes('gsd-${ref.skill}'),
+        '§3d.5 must construct skill name via `gsd-${ref.skill}` prefix (capability-driven dispatch)'
+      );
+      assert.ok(
+        reviewSection.includes('UI_SPEC_FILE'),
+        '§3d.5 must gate on UI_SPEC_FILE for hooks that consume UI-SPEC.md'
+      );
+      assert.ok(
+        reviewSection.includes('advisory') || reviewSection.includes('non-blocking') || reviewSection.includes('regardless of result'),
+        '§3d.5 must be explicitly advisory/non-blocking'
+      );
+    });
+
+    test('UI review step gates on UI-SPEC file via consumes check', () => {
+      // The consumes:[UI-SPEC.md] gate is still enforced; UI_SPEC_FILE is still defined
+      // and used as the precondition for hooks that consume UI-SPEC.md.
       const reviewSection = content.slice(content.indexOf('3d.5'));
       assert.ok(
         reviewSection.includes('UI_SPEC_FILE'),
-        'UI review step should check for UI-SPEC file existence'
+        'UI review step should still gate on UI_SPEC_FILE for hooks that consume UI-SPEC.md'
+      );
+      assert.ok(
+        reviewSection.includes('consumes'),
+        'UI review step should reference hook consumes array for the UI-SPEC gate'
       );
     });
 
-    test('UI review step respects workflow.ui_review config toggle', () => {
-      assert.ok(
-        content.includes('workflow.ui_review'),
-        'should respect workflow.ui_review config toggle'
-      );
-    });
+    test('UI review step respects workflow.ui_review config toggle (resolved via render-hooks)', () => {
+      // Phase 6 cutover: workflow.ui_review is no longer inlined as `config-get workflow.ui_review`.
+      // Instead, §3d.5 calls `loop render-hooks verify:post` which internally honours the
+      // `when: workflow.ui_review` field declared in the capability registry.
+      // The §3d.5 section must use render-hooks (not a literal `config-get workflow.ui_review`)
+      // so the toggle is resolved by the capability system, not duplicated inline.
+      const sectionStart = content.indexOf('3d.5');
+      const sectionEnd = content.indexOf('</step>', sectionStart);
+      assert.ok(sectionStart !== -1, '§3d.5 heading must be present in autonomous.md');
+      assert.ok(sectionEnd !== -1, '</step> must follow §3d.5');
+      const reviewSection = content.slice(sectionStart, sectionEnd);
 
-    test('UI review step invokes gsd:ui-review skill', () => {
       assert.ok(
-        content.includes('skill="gsd-ui-review"'),
-        'should invoke gsd-ui-review via Skill()'
+        reviewSection.includes('render-hooks'),
+        '§3d.5 must resolve the workflow.ui_review toggle via render-hooks (not inline config-get)'
+      );
+      assert.ok(
+        !reviewSection.includes('config-get workflow.ui_review'),
+        '§3d.5 must NOT inline `config-get workflow.ui_review` — the toggle is owned by the capability registry'
       );
     });
 
     test('UI review is advisory (non-blocking)', () => {
       const reviewSection = content.slice(content.indexOf('3d.5'));
       assert.ok(
-        reviewSection.includes('advisory') || reviewSection.includes('non-blocking') || reviewSection.includes('regardless of score'),
+        reviewSection.includes('advisory') || reviewSection.includes('non-blocking') || reviewSection.includes('regardless of result'),
         'UI review should be advisory and not block phase progression'
       );
     });

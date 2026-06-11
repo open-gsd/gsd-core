@@ -418,11 +418,16 @@ function validateFeatureBody(cap) {
     }
   }
 
+  // Build the declared skill/agent sets for ref membership checks (used in validateStep).
+  // Only build these if the arrays are valid (already validated above).
+  const declaredSkills = Array.isArray(cap.skills) ? new Set(cap.skills.filter((s) => typeof s === 'string')) : null;
+  const declaredAgents = Array.isArray(cap.agents) ? new Set(cap.agents.filter((a) => typeof a === 'string')) : null;
+
   if (!Array.isArray(cap.steps)) {
     errors.push('steps must be an array');
   } else {
     for (let i = 0; i < cap.steps.length; i++) {
-      errors.push(...validateStep(cap.steps[i], 'steps[' + i + ']'));
+      errors.push(...validateStep(cap.steps[i], 'steps[' + i + ']', declaredSkills, declaredAgents));
     }
   }
 
@@ -491,7 +496,18 @@ function validateRuntimeBody(cap) {
   return errors;
 }
 
-function validateStep(step, prefix) {
+/**
+ * Validate a single step entry.
+ *
+ * @param {object}   step            The step to validate.
+ * @param {string}   prefix          Path prefix for error messages (e.g. "steps[0]").
+ * @param {Set|null} declaredSkills  Set of skill stems declared in this capability's skills array,
+ *                                   or null if the skills array was not valid (skip membership check).
+ * @param {Set|null} declaredAgents  Set of agent names declared in this capability's agents array,
+ *                                   or null if the agents array was not valid (skip membership check).
+ * @returns {string[]}
+ */
+function validateStep(step, prefix, declaredSkills, declaredAgents) {
   const errors = [];
 
   if (!VALID_LOOP_POINTS.has(step.point)) {
@@ -511,9 +527,31 @@ function validateStep(step, prefix) {
     }
     if (hasSkill && typeof step.ref.skill !== 'string') {
       errors.push(prefix + '.ref.skill must be a string');
+    } else if (hasSkill && typeof step.ref.skill === 'string' && step.ref.skill.startsWith('gsd-')) {
+      // Double-prefix guard: ref.skill is an unprefixed stem (e.g. "ui-review").
+      // Workflow dispatch prepends "gsd-" at runtime → "gsd-ui-review".
+      // A stem that already starts with "gsd-" would produce "gsd-gsd-..." at dispatch.
+      errors.push(
+        prefix + '.ref.skill "' + step.ref.skill + '" must not start with "gsd-" ' +
+        '(it is an unprefixed stem; the workflow prepends "gsd-" at dispatch — ' +
+        'starting with "gsd-" would produce "gsd-' + step.ref.skill + '")',
+      );
+    } else if (hasSkill && typeof step.ref.skill === 'string' && declaredSkills !== null && !declaredSkills.has(step.ref.skill)) {
+      // Membership check: ref.skill must be declared in this capability's skills array.
+      // This catches typos and ensures every dispatched skill is owned by this capability.
+      errors.push(
+        prefix + '.ref.skill "' + step.ref.skill + '" is not declared in this capability\'s skills: [' +
+        [...declaredSkills].join(', ') + ']',
+      );
     }
     if (hasAgent && typeof step.ref.agent !== 'string') {
       errors.push(prefix + '.ref.agent must be a string');
+    } else if (hasAgent && typeof step.ref.agent === 'string' && declaredAgents !== null && !declaredAgents.has(step.ref.agent)) {
+      // Membership check: ref.agent must be declared in this capability's agents array.
+      errors.push(
+        prefix + '.ref.agent "' + step.ref.agent + '" is not declared in this capability\'s agents: [' +
+        [...declaredAgents].join(', ') + ']',
+      );
     }
   }
 

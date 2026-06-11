@@ -575,33 +575,27 @@ On **"Stop autonomous mode"**: Go to handle_blocker with "User stopped — gaps 
 
 > Run after any successful execution routing (passed, human_needed accepted, or gaps deferred/accepted) — before proceeding to the iterate step.
 
-Check if this phase had a UI-SPEC (created in step 3a.5 or pre-existing):
+Resolve the active post-verification hooks and the UI-SPEC gate:
 
 ```bash
 UI_SPEC_FILE=$(ls "${PHASE_DIR}"/*-UI-SPEC.md 2>/dev/null | head -1)
+HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)
 ```
 
-Check if UI review is enabled:
+Read the `activeHooks` array directly from the `HOOKS_JSON` value already in context (do not invoke a shell `jq` pipeline — parse as the JSON object it is). **If `activeHooks` is empty or absent:** skip silently to the iterate step.
 
-```bash
-UI_REVIEW_CFG=$(gsd_run query config-get workflow.ui_review 2>/dev/null || echo "true")
-```
+For each entry in `activeHooks` in array order where `kind == "step"` and `ref.skill` is set:
 
-**If `UI_SPEC_FILE` is not empty AND `UI_REVIEW_CFG` is not `false`:**
-
-Display:
+- **Honor `consumes`:** if the hook's `consumes` array includes `"UI-SPEC.md"` and `UI_SPEC_FILE` is empty (no `*-UI-SPEC.md` exists in `PHASE_DIR`) → skip that hook (`onError: skip`). Hooks that do not declare `"UI-SPEC.md"` in their `consumes` proceed normally regardless of `UI_SPEC_FILE`.
+- Invoke:
 
 ```
-Phase ${PHASE_NUM}: Frontend phase with UI-SPEC — running UI review audit...
+Skill(skill="gsd-${ref.skill}", args="${PHASE_NUM}")
 ```
 
-```
-Skill(skill="gsd-ui-review", args="${PHASE_NUM}")
-```
+(i.e. prepend `gsd-` to `ref.skill` — so `ui-review` → `gsd-ui-review`.)
 
-Display the review result summary (score from UI-REVIEW.md if produced). Continue to iterate step regardless of score — UI review is advisory, not blocking.
-
-**If `UI_SPEC_FILE` is empty OR `UI_REVIEW_CFG` is `false`:** Skip silently to iterate step.
+Display the review result summary and score from UI-REVIEW.md if produced. Continue to iterate step regardless of result — hooks at this point are advisory, not blocking.
 
 </step>
 
