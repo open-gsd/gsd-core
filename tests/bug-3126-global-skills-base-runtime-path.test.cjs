@@ -61,13 +61,17 @@ describe('bug #3126: runtime-homes getGlobalConfigDir — defaults', () => {
   ];
   for (const [runtime, expected] of defaults) {
     test(`${runtime} default configDir`, () => {
-      // Clear all env vars for this runtime
-      const envKeys = ['CLAUDE_CONFIG_DIR','CURSOR_CONFIG_DIR','GEMINI_CONFIG_DIR',
-        'CODEX_HOME','COPILOT_CONFIG_DIR','COPILOT_HOME','ANTIGRAVITY_CONFIG_DIR','WINDSURF_CONFIG_DIR',
-        'AUGMENT_CONFIG_DIR','TRAE_CONFIG_DIR','QWEN_CONFIG_DIR','HERMES_HOME',
-        'CODEBUDDY_CONFIG_DIR','CLINE_CONFIG_DIR','OPENCODE_CONFIG_DIR','OPENCODE_CONFIG',
-        'KILO_CONFIG_DIR','KILO_CONFIG',
-        'XDG_CONFIG_HOME'];
+      // Derive env-var list from the registry so new runtimes are auto-covered.
+      // GROK_AGENTS_HOME is kept explicitly (grok has no registry entry).
+      const { runtimes: _reg3126 } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'capability-registry.cjs'));
+      const _regEnvKeys3126 = Object.values(_reg3126).flatMap((r) => {
+        const ch = r.runtime?.configHome;
+        if (!ch) return [];
+        const envs = Array.isArray(ch.env) ? ch.env : [];
+        const skillsEnvs = ch.skillsHome && Array.isArray(ch.skillsHome.env) ? ch.skillsHome.env : [];
+        return [...envs, ...skillsEnvs];
+      });
+      const envKeys = [...new Set([..._regEnvKeys3126, 'GROK_AGENTS_HOME', 'XDG_CONFIG_HOME'])];
       const saved = {};
       for (const k of envKeys) { saved[k] = process.env[k]; delete process.env[k]; }
       try {

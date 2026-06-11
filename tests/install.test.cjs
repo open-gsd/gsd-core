@@ -68,14 +68,18 @@ describe('getDirName — all runtimes', () => {
 });
 
 describe('getGlobalConfigDir — all runtimes default paths', () => {
-  // Test the default (no env var, no explicit dir) for each runtime
-  const ENV_KEYS = [
-    'CLAUDE_CONFIG_DIR', 'CURSOR_CONFIG_DIR', 'GEMINI_CONFIG_DIR', 'CODEX_HOME',
-    'GROK_AGENTS_HOME', 'COPILOT_CONFIG_DIR', 'COPILOT_HOME', 'WINDSURF_CONFIG_DIR', 'AUGMENT_CONFIG_DIR',
-    'TRAE_CONFIG_DIR', 'QWEN_CONFIG_DIR', 'HERMES_HOME', 'CODEBUDDY_CONFIG_DIR',
-    'CLINE_CONFIG_DIR', 'OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG', 'KILO_CONFIG_DIR',
-    'KILO_CONFIG', 'ANTIGRAVITY_CONFIG_DIR', 'XDG_CONFIG_HOME',
-  ];
+  // Derive env-var list from the registry so it stays auto-correct when new
+  // runtimes are added. GROK_AGENTS_HOME is kept explicitly because grok has
+  // no registry entry.
+  const { runtimes: _registryRuntimes } = require('../gsd-core/bin/lib/capability-registry.cjs');
+  const _registryEnvKeys = Object.values(_registryRuntimes).flatMap((r) => {
+    const ch = r.runtime?.configHome;
+    if (!ch) return [];
+    const envs = Array.isArray(ch.env) ? ch.env : [];
+    const skillsEnvs = ch.skillsHome && Array.isArray(ch.skillsHome.env) ? ch.skillsHome.env : [];
+    return [...envs, ...skillsEnvs];
+  });
+  const ENV_KEYS = [...new Set([..._registryEnvKeys, 'GROK_AGENTS_HOME', 'XDG_CONFIG_HOME'])];
   let savedEnv = {};
 
   beforeEach(() => {
