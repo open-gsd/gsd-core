@@ -269,6 +269,54 @@ Avoid arbitrary `KIMI_CONFIG_DIR` roots unless your Kimi configuration also adds
 
 ---
 
+### MiMoCode
+
+```bash
+npx @opengsd/gsd-core@latest --mimo --global
+```
+
+Skills land in `~/.config/mimocode/skills/gsd-*/SKILL.md`. Subagents land in `~/.config/mimocode/agents/gsd-*.md` with MiMoCode-native frontmatter (`tools:` as a YAML record, `#RRGGBB` colors, `mode: subagent`). Hooks are not installed — MiMoCode has no lifecycle hook surface.
+
+**Project-local install** (when you run `mimo` from a specific repo):
+
+```bash
+cd /path/to/your/project
+npx @opengsd/gsd-core@latest --mimo --local
+```
+
+This writes `.mimocode/` in the project root. From a source checkout, use `node /path/to/gsd-core/bin/install.js --mimo --local` instead of `npx` until the release is published.
+
+**Override the install directory:**
+
+```bash
+npx @opengsd/gsd-core@latest --mimo --global --config-dir ~/.mimocode-work
+```
+
+---
+
+### Command Code
+
+```bash
+npx @opengsd/gsd-core@latest --commandcode --global
+```
+
+Skills land in `~/.commandcode/skills/gsd-*/SKILL.md`. Subagents land in `~/.commandcode/agents/gsd-*.md` with the same subagent frontmatter schema as MiMoCode. Hooks are not installed.
+
+**Project-local install:**
+
+```bash
+cd /path/to/your/project
+npx @opengsd/gsd-core@latest --commandcode --local
+```
+
+**Override the install directory:**
+
+```bash
+COMMANDCODE_CONFIG_DIR=~/.commandcode-alt npx @opengsd/gsd-core@latest --commandcode --global
+```
+
+---
+
 ### GitHub Copilot
 
 ```bash
