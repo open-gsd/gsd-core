@@ -147,7 +147,7 @@ function findAgentsSourceRoot(runtimeConfigDir) {
 const ALLOWED_RUNTIMES = new Set([
   'claude', 'cursor', 'gemini', 'codex', 'copilot', 'antigravity',
   'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy',
-  'cline', 'opencode', 'kilo',
+  'cline', 'opencode', 'kilo', 'mimo',
 ]);
 
 // ---------------------------------------------------------------------------
@@ -281,6 +281,11 @@ function resolveRuntimeArtifactLayout(runtime, configDir, scope = 'global') {
 
     case 'cline':
       kinds = [];
+      break;
+
+    case 'mimo':
+      // MiMoCode uses Claude Code-style skills; same layout as Claude global
+      kinds = [skillsKind('skills', 'gsd-', 'convertClaudeCommandToClaudeSkill', 'mimo', configDir)];
       break;
 
     case 'opencode':

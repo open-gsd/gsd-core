@@ -11,6 +11,9 @@ commands.html
 # Cursor IDE — local agents/skills bundle (never commit)
 .cursor/
 
+# MiMoCode — local agents/skills bundle (never commit)
+.mimocode/
+
 # Build artifacts (committed to npm, not git)
 hooks/dist/
 

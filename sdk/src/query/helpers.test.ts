@@ -334,6 +334,7 @@ describe('getRuntimeConfigDir', () => {
     codebuddy: join(homedir(), '.codebuddy'),
     cline: join(homedir(), '.cline'),
     hermes: join(homedir(), '.hermes'),
+    mimo: join(homedir(), '.config', 'mimocode'),
   };
 
   for (const runtime of SUPPORTED_RUNTIMES) {

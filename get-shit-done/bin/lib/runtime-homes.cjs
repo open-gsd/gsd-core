@@ -112,6 +112,10 @@ function getGlobalConfigDir(runtime) {
     case 'cline':
       return env.CLINE_CONFIG_DIR ? expandTilde(env.CLINE_CONFIG_DIR) : path.join(home, '.cline');
 
+    // ── MiMoCode ─────────────────────────────────────────────────────────────
+    case 'mimo':
+      return path.join(home, '.config', 'mimocode');
+
     // ── OpenCode (XDG) ───────────────────────────────────────────────────────
     case 'opencode': {
       if (env.OPENCODE_CONFIG_DIR) return expandTilde(env.OPENCODE_CONFIG_DIR);
