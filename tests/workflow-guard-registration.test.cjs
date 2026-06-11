@@ -22,6 +22,10 @@ const path = require('path');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const INSTALL_JS = path.join(__dirname, '..', 'bin', 'install.js');
+// ADR-857 phase 5f-1b: settings-json hook registration moved from install.js into
+// applySettingsJsonHooks in src/runtime-hooks-surface.cts. Source-scan checks must
+// include both files so structural invariants are verified against the correct source.
+const HOOKS_SURFACE_SRC = path.join(__dirname, '..', 'src', 'runtime-hooks-surface.cts');
 
 // Hooks whose registration lives in runtime-hooks-surface module, not install.js.
 // These are excluded from the install.js source-scan and validated behaviorally.
@@ -30,9 +34,18 @@ const MODULE_OWNED_HOOKS = new Set([
   'gsd-cursor-post-tool.js',
 ]);
 
+// ADR-857 phase 5f-1b: settings-json hook registration moved to runtime-hooks-surface.cts.
+// Concatenate both sources so structural assertions find patterns in either file.
+function readInstallSources() {
+  const installSrc = fs.readFileSync(INSTALL_JS, 'utf-8');
+  let hooksSurfaceSrc = '';
+  try { hooksSurfaceSrc = fs.readFileSync(HOOKS_SURFACE_SRC, 'utf-8'); } catch { /* ok */ }
+  return installSrc + '\n' + hooksSurfaceSrc;
+}
+
 describe('workflow-guard hook registration (#1767)', () => {
   test('install.js constructs a command path variable for gsd-workflow-guard.js', () => {
-    const content = fs.readFileSync(INSTALL_JS, 'utf-8');
+    const content = readInstallSources();
     const lines = content.split('\n');
     // Every registered JS hook has a command variable constructed via
     // buildHookCommand() or string concatenation. Filter out references
@@ -52,7 +65,7 @@ describe('workflow-guard hook registration (#1767)', () => {
   });
 
   test('install.js has a hasWorkflowGuardHook dedup check', () => {
-    const content = fs.readFileSync(INSTALL_JS, 'utf-8');
+    const content = readInstallSources();
     // Every registered hook has a dedup check: hasXxxHook = settings.hooks[...].some(...)
     const hasDedup = content.includes('hasWorkflowGuardHook') ||
       content.includes('hasWorkflowGuard');
@@ -63,7 +76,7 @@ describe('workflow-guard hook registration (#1767)', () => {
   });
 
   test('install.js pushes workflow-guard entry with correct matcher', () => {
-    const content = fs.readFileSync(INSTALL_JS, 'utf-8');
+    const content = readInstallSources();
     // Extract the workflow-guard registration section. It should install the
     // Bash-aware matcher and upgrade old edit-only entries on reinstall.
     const workflowGuardSection = content.match(
@@ -87,7 +100,7 @@ describe('workflow-guard hook registration (#1767)', () => {
 
 describe('hook registration completeness anti-pattern guard', () => {
   test('every JS hook in gsdHooks (except module-owned) has a command construction in install.js', () => {
-    const content = fs.readFileSync(INSTALL_JS, 'utf-8');
+    const content = readInstallSources();
     // Use the typed export instead of source-grep regex (branch #455: retire source-grep)
     const { GSD_UNINSTALL_HOOKS } = require('../bin/install.js');
     assert.ok(Array.isArray(GSD_UNINSTALL_HOOKS), 'GSD_UNINSTALL_HOOKS must be exported from install.js');

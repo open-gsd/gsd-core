@@ -28,6 +28,10 @@ const fs = require('fs');
 const path = require('path');
 
 const INSTALL_SRC = path.join(__dirname, '..', 'bin', 'install.js');
+// ADR-857 phase 5f-1b: the sh-hook command-construction code moved from install.js
+// into applySettingsJsonHooks in src/runtime-hooks-surface.cts. Source-scan checks
+// that reference commandVar patterns must target the new canonical source.
+const HOOKS_SURFACE_SRC = path.join(__dirname, '..', 'src', 'runtime-hooks-surface.cts');
 
 // buildHookCommand was extracted to gsd-core/bin/lib/runtime-hooks-surface.cjs
 // (ADR-857 phase 5f-1) and re-exported via install.js.  Import through install.js
@@ -52,7 +56,11 @@ describe('bugs #2045 #2046: .sh hook paths must be absolute and quoted', () => {
   let src;
 
   try {
-    src = fs.readFileSync(INSTALL_SRC, 'utf-8');
+    // ADR-857 phase 5f-1b: command-construction code moved to runtime-hooks-surface.cts.
+    // Concatenate both sources so structural assertions find patterns in either file.
+    const installSrc = fs.readFileSync(INSTALL_SRC, 'utf-8');
+    const hooksSurfaceSrc = fs.readFileSync(HOOKS_SURFACE_SRC, 'utf-8');
+    src = installSrc + '\n' + hooksSurfaceSrc;
   } catch {
     src = '';
   }

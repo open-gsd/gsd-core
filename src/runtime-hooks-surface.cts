@@ -1085,6 +1085,541 @@ function writeCopilotHookConfig(targetDir: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// applySettingsJsonHooks
+//
+// MUTATES `settings` by reference — registers all GSD-managed hook entries
+// into settings.hooks.* for runtimes that use a settings.json hook surface
+// (Claude Code, Gemini, Antigravity, Qwen Code, and others).
+// Skipped entirely for opencode and kilo (which have their own hook surface).
+//
+// Extracted from the `if (!isOpencode && !isKilo) { … }` block inside
+// install() (ADR-857 phase 5f-1b).  No behavior change — all guards,
+// event-name dialect branches, and idempotency checks are preserved verbatim.
+//
+// @param settings  - The settings object already read from disk. Mutated in place.
+// @param opts      - Closure values the block read from install()'s scope.
+//   runtime                   - runtime ID string (e.g. 'claude', 'gemini', 'qwen')
+//   isGlobal                  - true for global installs
+//   targetDir                 - absolute path to the runtime config dir
+//   postToolEvent             - 'PostToolUse' | 'AfterTool' (pre-computed by caller)
+//   updateCheckCommand        - command string or null
+//   contextMonitorCommand     - command string or null
+//   promptGuardCommand        - command string or null
+//   readGuardCommand          - command string or null
+//   readInjectionScannerCommand - command string or null
+//   configReloadCommand       - command string or null
+//   hookOpts                  - { portableHooks, runtime } passed to buildHookCommand
+//   localCmd                  - (hookFile: string) => string|null
+//   localShellCmd             - (hookFile: string) => string|null
+// ---------------------------------------------------------------------------
+
+interface ApplySettingsJsonHooksOpts {
+  runtime: string;
+  isGlobal: boolean;
+  targetDir: string;
+  postToolEvent: string;
+  updateCheckCommand: string | null;
+  contextMonitorCommand: string | null;
+  promptGuardCommand: string | null;
+  readGuardCommand: string | null;
+  readInjectionScannerCommand: string | null;
+  configReloadCommand: string | null;
+  hookOpts: BuildHookCommandOpts;
+  localCmd: (hookFile: string) => string | null;
+  localShellCmd: (hookFile: string) => string | null;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function applySettingsJsonHooks(settings: any, opts: ApplySettingsJsonHooksOpts): void {
+  /* eslint-disable @typescript-eslint/no-unsafe-member-access,
+                    @typescript-eslint/no-unsafe-call,
+                    @typescript-eslint/no-unsafe-assignment */
+  const {
+    runtime,
+    isGlobal,
+    targetDir,
+    postToolEvent,
+    updateCheckCommand,
+    contextMonitorCommand,
+    promptGuardCommand,
+    readGuardCommand,
+    readInjectionScannerCommand,
+    configReloadCommand,
+    hookOpts,
+    localCmd,
+    localShellCmd,
+  } = opts;
+
+  // Derived from runtime — same as install() top-of-function declarations.
+  const isOpencode = runtime === 'opencode';
+  const isKilo = runtime === 'kilo';
+  const isGemini = runtime === 'gemini';
+  const isQwen = runtime === 'qwen';
+
+  // Configure SessionStart hook for update checking (skip for opencode / kilo)
+  if (!isOpencode && !isKilo) {
+    if (!settings.hooks) {
+      settings.hooks = {};
+    }
+    if (!settings.hooks.SessionStart) {
+      settings.hooks.SessionStart = [];
+    }
+
+    const hasGsdUpdateHook = settings.hooks.SessionStart.some((entry: HookGroup) =>
+      entry.hooks && entry.hooks.some((h: HookEntry) => referencesHook(h as Record<string, unknown>, 'gsd-check-update'))
+    );
+
+    // Guard: only register if the hook file was actually installed (#1754).
+    // When hooks/dist/ is missing from the npm package (as in v1.32.0), the
+    // copy step produces no files but the registration step ran unconditionally,
+    // causing "hook error" on every tool invocation.
+    const checkUpdateFile = path.join(targetDir, 'hooks', 'gsd-check-update.js');
+    if (!hasGsdUpdateHook && fs.existsSync(checkUpdateFile) && updateCheckCommand) {
+      settings.hooks.SessionStart.push({
+        hooks: [
+          {
+            type: 'command',
+            command: updateCheckCommand
+          }
+        ]
+      });
+      console.log(`  ${green}✓${reset} Configured update check hook`);
+    } else if (!hasGsdUpdateHook && !fs.existsSync(checkUpdateFile)) {
+      console.warn(`  ${yellow}⚠${reset}  Skipped update check hook — gsd-check-update.js not found at target`);
+    }
+
+    // Configure post-tool hook for context window monitoring
+    if (!settings.hooks[postToolEvent]) {
+      settings.hooks[postToolEvent] = [];
+    }
+
+    const hasContextMonitorHook = settings.hooks[postToolEvent].some((entry: HookGroup) =>
+      entry.hooks && entry.hooks.some((h: HookEntry) => referencesHook(h as Record<string, unknown>, 'gsd-context-monitor'))
+    );
+
+    const contextMonitorFile = path.join(targetDir, 'hooks', 'gsd-context-monitor.js');
+    if (!hasContextMonitorHook && fs.existsSync(contextMonitorFile) && contextMonitorCommand) {
+      settings.hooks[postToolEvent].push({
+        matcher: 'Bash|Edit|Write|MultiEdit|Agent|Task',
+        hooks: [
+          {
+            type: 'command',
+            command: contextMonitorCommand,
+            timeout: 10
+          }
+        ]
+      });
+      console.log(`  ${green}✓${reset} Configured context window monitor hook`);
+    } else if (!hasContextMonitorHook && !fs.existsSync(contextMonitorFile)) {
+      console.warn(`  ${yellow}⚠${reset}  Skipped context monitor hook — gsd-context-monitor.js not found at target`);
+    } else {
+      // Migrate existing context monitor hooks: add matcher and timeout if missing
+      for (const entry of settings.hooks[postToolEvent]) {
+        if (entry.hooks && entry.hooks.some((h: HookEntry) => referencesHook(h as Record<string, unknown>, 'gsd-context-monitor'))) {
+          let migrated = false;
+          if (!entry.matcher) {
+            entry.matcher = 'Bash|Edit|Write|MultiEdit|Agent|Task';
+            migrated = true;
+          }
+          for (const h of entry.hooks) {
+            if (referencesHook(h as Record<string, unknown>, 'gsd-context-monitor') && !h.timeout) {
+              h.timeout = 10;
+              migrated = true;
+            }
+          }
+          if (migrated) {
+            console.log(`  ${green}✓${reset} Updated context monitor hook (added matcher + timeout)`);
+          }
+        }
+      }
+    }
+
+    // Configure PreToolUse hook for prompt injection detection
+    // Gemini and Antigravity use BeforeTool instead of PreToolUse for pre-tool hooks
+    const preToolEvent = (runtime === 'gemini' || runtime === 'antigravity') ? 'BeforeTool' : 'PreToolUse';
+    if (!settings.hooks[preToolEvent]) {
+      settings.hooks[preToolEvent] = [];
+    }
+
+    const hasPromptGuardHook = settings.hooks[preToolEvent].some((entry: HookGroup) =>
+      entry.hooks && entry.hooks.some((h: HookEntry) => referencesHook(h as Record<string, unknown>, 'gsd-prompt-guard'))
+    );
+
+    const promptGuardFile = path.join(targetDir, 'hooks', 'gsd-prompt-guard.js');
+    if (!hasPromptGuardHook && fs.existsSync(promptGuardFile) && promptGuardCommand) {
+      settings.hooks[preToolEvent].push({
+        matcher: 'Write|Edit',
+        hooks: [
+          {
+            type: 'command',
+            command: promptGuardCommand,
+            timeout: 5
+          }
+        ]
+      });
+      console.log(`  ${green}✓${reset} Configured prompt injection guard hook`);
+    } else if (!hasPromptGuardHook && !fs.existsSync(promptGuardFile)) {
+      console.warn(`  ${yellow}⚠${reset}  Skipped prompt guard hook — gsd-prompt-guard.js not found at target`);
+    }
+
+    // Configure PreToolUse hook for read-before-edit guidance (#1628)
+    // Prevents infinite retry loops when non-Claude models attempt to edit
+    // files without reading them first. Advisory-only — does not block.
+    const hasReadGuardHook = settings.hooks[preToolEvent].some((entry: HookGroup) =>
+      entry.hooks && entry.hooks.some((h: HookEntry) => referencesHook(h as Record<string, unknown>, 'gsd-read-guard'))
+    );
+
+    const readGuardFile = path.join(targetDir, 'hooks', 'gsd-read-guard.js');
+    if (!hasReadGuardHook && fs.existsSync(readGuardFile) && readGuardCommand) {
+      settings.hooks[preToolEvent].push({
+        matcher: 'Write|Edit',
+        hooks: [
+          {
+            type: 'command',
+            command: readGuardCommand,
+            timeout: 5
+          }
+        ]
+      });
+      console.log(`  ${green}✓${reset} Configured read-before-edit guard hook`);
+    } else if (!hasReadGuardHook && !fs.existsSync(readGuardFile)) {
+      console.warn(`  ${yellow}⚠${reset}  Skipped read guard hook — gsd-read-guard.js not found at target`);
+    }
+
+    // Configure PostToolUse hook for read-time prompt injection scanning (#2201)
+    // Scans content returned by the Read tool for injection patterns, including
+    // summarisation-specific patterns that survive context compression.
+    const hasReadInjectionScannerHook = settings.hooks[postToolEvent].some((entry: HookGroup) =>
+      entry.hooks && entry.hooks.some((h: HookEntry) => referencesHook(h as Record<string, unknown>, 'gsd-read-injection-scanner'))
+    );
+
+    const readInjectionScannerFile = path.join(targetDir, 'hooks', 'gsd-read-injection-scanner.js');
+    if (!hasReadInjectionScannerHook && fs.existsSync(readInjectionScannerFile) && readInjectionScannerCommand) {
+      settings.hooks[postToolEvent].push({
+        matcher: 'Read',
+        hooks: [
+          {
+            type: 'command',
+            command: readInjectionScannerCommand,
+            timeout: 5
+          }
+        ]
+      });
+      console.log(`  ${green}✓${reset} Configured read injection scanner hook`);
+    } else if (!hasReadInjectionScannerHook && !fs.existsSync(readInjectionScannerFile)) {
+      console.warn(`  ${yellow}⚠${reset}  Skipped read injection scanner hook — gsd-read-injection-scanner.js not found at target`);
+    }
+
+    // Community hooks — registered on install but opt-in at runtime.
+    // Each hook checks .planning/config.json for hooks.community: true
+    // and exits silently (no-op) if not enabled. This lets users enable
+    // them per-project by adding: "hooks": { "community": true }
+
+    // Configure workflow guard hook (opt-in via hooks.workflow_guard: true)
+    // Detects file edits outside GSD workflow context and advises using
+    // /gsd-quick or /gsd-fast for state-tracked changes. Also hard-blocks
+    // unsafe Bash commands that violate worktree-agent isolation.
+    const workflowGuardCommand = isGlobal
+      ? buildHookCommand(targetDir, 'gsd-workflow-guard.js', hookOpts)
+      : localCmd('gsd-workflow-guard.js');
+    const workflowGuardMatcher = 'Bash|Edit|Write|MultiEdit';
+    const workflowGuardHookEntry = settings.hooks[preToolEvent].find((entry: HookGroup) =>
+      entry.hooks && entry.hooks.some((h: HookEntry) => referencesHook(h as Record<string, unknown>, 'gsd-workflow-guard'))
+    );
+    const hasWorkflowGuardHook = Boolean(workflowGuardHookEntry);
+
+    const workflowGuardFile = path.join(targetDir, 'hooks', 'gsd-workflow-guard.js');
+    if (hasWorkflowGuardHook && workflowGuardHookEntry.matcher !== workflowGuardMatcher) {
+      workflowGuardHookEntry.matcher = workflowGuardMatcher;
+      console.log(`  ${green}✓${reset} Updated workflow guard hook matcher`);
+    } else if (!hasWorkflowGuardHook && fs.existsSync(workflowGuardFile) && workflowGuardCommand) {
+      settings.hooks[preToolEvent].push({
+        matcher: workflowGuardMatcher,
+        hooks: [
+          {
+            type: 'command',
+            command: workflowGuardCommand,
+            timeout: 5
+          }
+        ]
+      });
+      console.log(`  ${green}✓${reset} Configured workflow guard hook (opt-in via hooks.workflow_guard)`);
+    } else if (!hasWorkflowGuardHook && !fs.existsSync(workflowGuardFile)) {
+      console.warn(`  ${yellow}⚠${reset}  Skipped workflow guard hook — gsd-workflow-guard.js not found at target`);
+    }
+
+    // Configure PreToolUse hook for worktree absolute-path safety (#260)
+    // Hard-blocks Edit/Write/MultiEdit tool calls with absolute paths that resolve
+    // outside the current worktree root. Prevents executor agents from
+    // accidentally writing to the main checkout when running in isolation="worktree".
+    const worktreePathGuardCommand = isGlobal
+      ? buildHookCommand(targetDir, 'gsd-worktree-path-guard.js', hookOpts)
+      : localCmd('gsd-worktree-path-guard.js');
+    const hasWorktreePathGuardHook = settings.hooks[preToolEvent].some((entry: HookGroup) =>
+      entry.hooks && entry.hooks.some((h: HookEntry) => referencesHook(h as Record<string, unknown>, 'gsd-worktree-path-guard'))
+    );
+    const worktreePathGuardFile = path.join(targetDir, 'hooks', 'gsd-worktree-path-guard.js');
+    if (!hasWorktreePathGuardHook && fs.existsSync(worktreePathGuardFile) && worktreePathGuardCommand) {
+      settings.hooks[preToolEvent].push({
+        matcher: 'Write|Edit|MultiEdit',
+        hooks: [
+          {
+            type: 'command',
+            command: worktreePathGuardCommand,
+            timeout: 5
+          }
+        ]
+      });
+      console.log(`  ${green}✓${reset} Configured worktree path guard hook`);
+    } else if (!hasWorktreePathGuardHook && !fs.existsSync(worktreePathGuardFile)) {
+      console.warn(`  ${yellow}⚠${reset}  Skipped worktree path guard hook — gsd-worktree-path-guard.js not found at target`);
+    }
+
+    // Configure commit validation hook (Conventional Commits enforcement, opt-in)
+    const validateCommitCommand = isGlobal
+      ? buildHookCommand(targetDir, 'gsd-validate-commit.sh', hookOpts)
+      : localShellCmd('gsd-validate-commit.sh');
+    const hasValidateCommitHook = settings.hooks[preToolEvent].some((entry: HookGroup) =>
+      entry.hooks && entry.hooks.some((h: HookEntry) => referencesHook(h as Record<string, unknown>, 'gsd-validate-commit'))
+    );
+    // Guard: only register if the .sh file was actually installed. If the npm package
+    // omitted the file (as happened in v1.32.0, bug #1817), registering a missing hook
+    // causes a hook error on every Bash tool invocation.
+    const validateCommitFile = path.join(targetDir, 'hooks', 'gsd-validate-commit.sh');
+    if (!hasValidateCommitHook && fs.existsSync(validateCommitFile) && validateCommitCommand) {
+      settings.hooks[preToolEvent].push({
+        matcher: 'Bash',
+        hooks: [
+          {
+            type: 'command',
+            command: validateCommitCommand,
+            timeout: 5
+          }
+        ]
+      });
+      console.log(`  ${green}✓${reset} Configured commit validation hook (opt-in via config)`);
+    } else if (!hasValidateCommitHook && !fs.existsSync(validateCommitFile)) {
+      console.warn(`  ${yellow}⚠${reset}  Skipped commit validation hook — gsd-validate-commit.sh not found at target`);
+    } else if (!hasValidateCommitHook && !validateCommitCommand) {
+      console.warn(`  ${yellow}⚠${reset}  Skipped commit validation hook — Bash executable path unavailable (#3393)`);
+    }
+
+    // Configure graphify auto-update hook (opt-in via graphify.auto_update; default false, #3347).
+    // PostToolUse Bash matcher — fires after git commit/merge/pull/rebase --continue/cherry-pick
+    // on the default branch, dispatches `graphify update .` in a detached subprocess. No-op unless
+    // .planning/config.json has BOTH graphify.enabled=true AND graphify.auto_update=true.
+    const graphifyUpdateCommand = isGlobal
+      ? buildHookCommand(targetDir, 'gsd-graphify-update.sh', hookOpts)
+      : localShellCmd('gsd-graphify-update.sh');
+    const hasGraphifyUpdateHook = settings.hooks[postToolEvent].some((entry: HookGroup) =>
+      entry.hooks && entry.hooks.some((h: HookEntry) => referencesHook(h as Record<string, unknown>, 'gsd-graphify-update'))
+    );
+    const graphifyUpdateFile = path.join(targetDir, 'hooks', 'gsd-graphify-update.sh');
+    if (!hasGraphifyUpdateHook && fs.existsSync(graphifyUpdateFile) && graphifyUpdateCommand) {
+      settings.hooks[postToolEvent].push({
+        matcher: 'Bash',
+        hooks: [
+          {
+            type: 'command',
+            command: graphifyUpdateCommand,
+            timeout: 5
+          }
+        ]
+      });
+      console.log(`  ${green}✓${reset} Configured graphify auto-update hook (opt-in via graphify.auto_update)`);
+    } else if (!hasGraphifyUpdateHook && !fs.existsSync(graphifyUpdateFile)) {
+      console.warn(`  ${yellow}⚠${reset}  Skipped graphify auto-update hook — gsd-graphify-update.sh not found at target`);
+    } else if (!hasGraphifyUpdateHook && !graphifyUpdateCommand) {
+      console.warn(`  ${yellow}⚠${reset}  Skipped graphify auto-update hook — Bash executable path unavailable (#3393)`);
+    }
+
+    // Configure session state orientation hook (opt-in)
+    const sessionStateCommand = isGlobal
+      ? buildHookCommand(targetDir, 'gsd-session-state.sh', hookOpts)
+      : localShellCmd('gsd-session-state.sh');
+    const hasSessionStateHook = settings.hooks.SessionStart.some((entry: HookGroup) =>
+      entry.hooks && entry.hooks.some((h: HookEntry) => referencesHook(h as Record<string, unknown>, 'gsd-session-state'))
+    );
+    const sessionStateFile = path.join(targetDir, 'hooks', 'gsd-session-state.sh');
+    if (!hasSessionStateHook && fs.existsSync(sessionStateFile) && sessionStateCommand) {
+      settings.hooks.SessionStart.push({
+        hooks: [
+          {
+            type: 'command',
+            command: sessionStateCommand
+          }
+        ]
+      });
+      console.log(`  ${green}✓${reset} Configured session state orientation hook (opt-in via config)`);
+    } else if (!hasSessionStateHook && !fs.existsSync(sessionStateFile)) {
+      console.warn(`  ${yellow}⚠${reset}  Skipped session state hook — gsd-session-state.sh not found at target`);
+    } else if (!hasSessionStateHook && !sessionStateCommand) {
+      console.warn(`  ${yellow}⚠${reset}  Skipped session state hook — Bash executable path unavailable (#3393)`);
+    }
+
+    // Configure phase boundary detection hook (opt-in)
+    const phaseBoundaryCommand = isGlobal
+      ? buildHookCommand(targetDir, 'gsd-phase-boundary.sh', hookOpts)
+      : localShellCmd('gsd-phase-boundary.sh');
+    const hasPhaseBoundaryHook = settings.hooks[postToolEvent].some((entry: HookGroup) =>
+      entry.hooks && entry.hooks.some((h: HookEntry) => referencesHook(h as Record<string, unknown>, 'gsd-phase-boundary'))
+    );
+    const phaseBoundaryFile = path.join(targetDir, 'hooks', 'gsd-phase-boundary.sh');
+    if (!hasPhaseBoundaryHook && fs.existsSync(phaseBoundaryFile) && phaseBoundaryCommand) {
+      settings.hooks[postToolEvent].push({
+        matcher: 'Write|Edit',
+        hooks: [
+          {
+            type: 'command',
+            command: phaseBoundaryCommand,
+            timeout: 5
+          }
+        ]
+      });
+      console.log(`  ${green}✓${reset} Configured phase boundary detection hook (opt-in via config)`);
+    } else if (!hasPhaseBoundaryHook && !fs.existsSync(phaseBoundaryFile)) {
+      console.warn(`  ${yellow}⚠${reset}  Skipped phase boundary hook — gsd-phase-boundary.sh not found at target`);
+    } else if (!hasPhaseBoundaryHook && !phaseBoundaryCommand) {
+      console.warn(`  ${yellow}⚠${reset}  Skipped phase boundary hook — Bash executable path unavailable (#3393)`);
+    }
+
+    // ── Extended hook events: SubagentStop / Stop / PreCompact (#788 + #770) ──
+    // Claude Code (since #770) and Qwen Code (since #788) both support these
+    // three lifecycle events.  Wire gsd-context-monitor so agents get context-
+    // headroom warnings at subagent completion, model stop, and pre-compaction
+    // (the most critical moment to surface headroom info).
+    //
+    //   SubagentStop  — subagent lifecycle completion (context headroom tracking)
+    //   Stop          — model stop / final-response moment (context headroom)
+    //   PreCompact    — fires before conversation compaction (most critical
+    //                   moment to surface context headroom warnings)
+    //
+    // Note: UserPromptSubmit is NOT wired here.  That event carries the raw
+    // user prompt text, not a tool invocation, so gsd-prompt-guard (which
+    // exits unless tool_name is Write/Edit) would be a silent no-op.  A
+    // dedicated handler for UserPromptSubmit is deferred to a follow-on issue.
+    if (isQwen || runtime === 'claude') {
+      const runtimeLabel = isQwen ? 'Qwen Code' : 'Claude Code';
+      // SubagentStop, Stop, PreCompact — route through the context monitor.
+      for (const event of ['SubagentStop', 'Stop', 'PreCompact']) {
+        if (!settings.hooks[event]) {
+          settings.hooks[event] = [];
+        }
+        const alreadyHasContextMonitor = settings.hooks[event].some((entry: HookGroup) =>
+          entry.hooks && entry.hooks.some((h: HookEntry) => referencesHook(h as Record<string, unknown>, 'gsd-context-monitor'))
+        );
+        if (!alreadyHasContextMonitor && fs.existsSync(contextMonitorFile) && contextMonitorCommand) {
+          settings.hooks[event].push({
+            hooks: [
+              {
+                type: 'command',
+                command: contextMonitorCommand,
+                timeout: 10
+              }
+            ]
+          });
+          console.log(`  ${green}✓${reset} Configured ${event} context monitor hook (${runtimeLabel})`);
+        } else if (!alreadyHasContextMonitor && !fs.existsSync(contextMonitorFile)) {
+          console.warn(`  ${yellow}⚠${reset}  Skipped ${event} hook — gsd-context-monitor.js not found at target`);
+        }
+      }
+    }
+    // ── end SubagentStop / Stop / PreCompact events ────────────────────────────
+
+    // ── Gemini-only extended hook events (#776) ───────────────────────────────
+    // Gemini CLI exposes several hook events beyond BeforeTool/AfterTool that
+    // gsd previously did not register.  Three high-value events are added here:
+    //
+    //   BeforeAgent  — fires after user submits a prompt, before the agent
+    //                  plans.  Wire gsd-context-monitor for context headroom
+    //                  awareness at prompt time.
+    //   AfterAgent   — fires once per turn after the model generates its final
+    //                  response.  Wire gsd-context-monitor to track headroom
+    //                  after each agent turn completes.
+    //   BeforeModel  — fires before each LLM call (per-turn, not per-session).
+    //                  Wire gsd-context-monitor for per-turn context injection
+    //                  — more precise than session-start-only injection.
+    //
+    // All three reuse gsd-context-monitor.js — no new hook files needed.
+    // The `decision:"deny"` retry capability of AfterAgent is intentionally
+    // left to the hook script to implement when triggered (gsd-context-monitor
+    // exits 0 / advisory-only today; an active quality gate is a follow-on).
+    //
+    // Note: BeforeToolSelection is NOT wired.  That event does not map to a
+    // gsd hook use case at this time; deferred to a follow-on issue.
+    //
+    // Guard: isGemini is derived from runtime at the top of this function.
+    if (isGemini) {
+      for (const geminiEvent of ['BeforeAgent', 'AfterAgent', 'BeforeModel']) {
+        if (!Array.isArray(settings.hooks[geminiEvent])) {
+          settings.hooks[geminiEvent] = [];
+        }
+        const alreadyHasContextMonitor = settings.hooks[geminiEvent].some((entry: HookGroup) =>
+          entry.hooks && entry.hooks.some((h: HookEntry) => referencesHook(h as Record<string, unknown>, 'gsd-context-monitor'))
+        );
+        if (!alreadyHasContextMonitor && fs.existsSync(contextMonitorFile) && contextMonitorCommand) {
+          settings.hooks[geminiEvent].push({
+            hooks: [
+              {
+                type: 'command',
+                command: contextMonitorCommand,
+                timeout: 10
+              }
+            ]
+          });
+          console.log(`  ${green}✓${reset} Configured ${geminiEvent} context monitor hook (Gemini)`);
+        } else if (!alreadyHasContextMonitor && !fs.existsSync(contextMonitorFile)) {
+          console.warn(`  ${yellow}⚠${reset}  Skipped ${geminiEvent} hook — gsd-context-monitor.js not found at target`);
+        }
+      }
+    }
+    // ── end Gemini-only extended hook events ──────────────────────────────────
+
+    // ── FileChanged hook: hot-reload gsd config on .planning/config.json edits ─
+    // Claude Code fires FileChanged when a watched file changes on disk.  Wire
+    // gsd-config-reload.js to reload the gsd config context whenever the user
+    // edits .planning/config.json mid-session, eliminating the need to restart.
+    //
+    // The matcher "config.json" watches for changes to any file named config.json
+    // (Claude Code matches by filename, not full path).  The hook exits silently
+    // when the changed file is not the gsd config.
+    //
+    // Scoped to Claude Code only: Qwen Code's FileChanged support is not yet
+    // verified; extend in a follow-on if empirically confirmed.
+    if (runtime === 'claude') {
+      if (!settings.hooks.FileChanged) {
+        settings.hooks.FileChanged = [];
+      }
+      const configReloadFile = path.join(targetDir, 'hooks', 'gsd-config-reload.js');
+      const alreadyHasConfigReload = settings.hooks.FileChanged.some((entry: HookGroup) =>
+        entry.hooks && entry.hooks.some((h: HookEntry) => referencesHook(h as Record<string, unknown>, 'gsd-config-reload'))
+      );
+      if (!alreadyHasConfigReload && fs.existsSync(configReloadFile) && configReloadCommand) {
+        settings.hooks.FileChanged.push({
+          matcher: 'config.json',
+          hooks: [
+            {
+              type: 'command',
+              command: configReloadCommand,
+              timeout: 8
+            }
+          ]
+        });
+        console.log(`  ${green}✓${reset} Configured FileChanged config-reload hook (Claude Code)`);
+      } else if (!alreadyHasConfigReload && !fs.existsSync(configReloadFile)) {
+        console.warn(`  ${yellow}⚠${reset}  Skipped FileChanged hook — gsd-config-reload.js not found at target`);
+      } else if (!alreadyHasConfigReload && !configReloadCommand) {
+        console.warn(`  ${yellow}⚠${reset}  Skipped FileChanged hook — Node executable path unavailable`);
+      }
+    }
+    // ── end FileChanged hook ────────────────────────────────────────────────────
+  }
+  /* eslint-enable @typescript-eslint/no-unsafe-member-access,
+                   @typescript-eslint/no-unsafe-call,
+                   @typescript-eslint/no-unsafe-assignment */
+}
+
+// ---------------------------------------------------------------------------
 // referencesHook
 //
 // Pure predicate — checks whether a hook entry object references a managed
@@ -1155,6 +1690,7 @@ export = {
 
   // Shared
   buildHookCommand,
+  applySettingsJsonHooks,
   referencesHook,
   rewriteLegacyManagedNodeHookCommands,
   normalizeNodePath,

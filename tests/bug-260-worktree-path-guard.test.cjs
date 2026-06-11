@@ -28,6 +28,8 @@ const { cleanup } = require('./helpers.cjs');
 
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-worktree-path-guard.js');
 const INSTALL_SRC = path.join(__dirname, '..', 'bin', 'install.js');
+// ADR-857 phase 5f-1b: settings-json hook registration moved to runtime-hooks-surface.cts.
+const HOOKS_SURFACE_SRC = path.join(__dirname, '..', 'src', 'runtime-hooks-surface.cts');
 
 /**
  * Resolve symlinks in a path so that we compare the same canonical form
@@ -384,7 +386,12 @@ describe('install.js guard for gsd-worktree-path-guard.js', () => {
   let src;
 
   before(() => {
-    src = fs.readFileSync(INSTALL_SRC, 'utf-8');
+    // ADR-857 phase 5f-1b: hook registration moved to runtime-hooks-surface.cts.
+    // Concatenate both sources so structural assertions find patterns in either file.
+    const installSrc = fs.readFileSync(INSTALL_SRC, 'utf-8');
+    let hooksSurfaceSrc = '';
+    try { hooksSurfaceSrc = fs.readFileSync(HOOKS_SURFACE_SRC, 'utf-8'); } catch { /* ok */ }
+    src = installSrc + '\n' + hooksSurfaceSrc;
   });
 
   test('install.js has hasWorktreePathGuardHook variable', () => {

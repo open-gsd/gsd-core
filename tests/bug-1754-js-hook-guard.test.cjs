@@ -20,6 +20,8 @@ const fs = require('fs');
 const path = require('path');
 
 const INSTALL_SRC = path.join(__dirname, '..', 'bin', 'install.js');
+// ADR-857 phase 5f-1b: settings-json hook registration moved to runtime-hooks-surface.cts.
+const HOOKS_SURFACE_SRC = path.join(__dirname, '..', 'src', 'runtime-hooks-surface.cts');
 
 const JS_HOOKS = [
   { name: 'gsd-check-update.js',      registrationAnchor: 'hasGsdUpdateHook' },
@@ -34,7 +36,12 @@ describe('bug #1754: .js hook registration guards', () => {
   let src;
 
   before(() => {
-    src = fs.readFileSync(INSTALL_SRC, 'utf-8');
+    // ADR-857 phase 5f-1b: hook registration moved to runtime-hooks-surface.cts.
+    // Concatenate both sources so structural assertions find patterns in either file.
+    const installSrc = fs.readFileSync(INSTALL_SRC, 'utf-8');
+    let hooksSurfaceSrc = '';
+    try { hooksSurfaceSrc = fs.readFileSync(HOOKS_SURFACE_SRC, 'utf-8'); } catch { /* ok */ }
+    src = installSrc + '\n' + hooksSurfaceSrc;
   });
 
   for (const { name, registrationAnchor } of JS_HOOKS) {
@@ -80,10 +87,9 @@ describe('bug #1754: .js hook registration guards', () => {
     // Count existsSync calls in the hook registration section.
     // There should be guards for all JS hooks plus the existing SH hooks.
     // This test ensures new hooks added in the future follow the same pattern.
-    const registrationSection = src.slice(
-      src.indexOf('// Configure SessionStart hook'),
-      src.indexOf('return { settingsPath, settings, statuslineCommand')
-    );
+    // ADR-857 phase 5f-1b: registration moved to runtime-hooks-surface.cts so scan the
+    // full concatenated source (install.js + runtime-hooks-surface.cts) rather than slicing.
+    const registrationSection = src;
 
     // Count unique hook file existence checks (pattern: path.join(targetDir, 'hooks', 'gsd-*.js'))
     const jsGuards = (registrationSection.match(/gsd-[\w-]+\.js.*not found at target/g) || []);
