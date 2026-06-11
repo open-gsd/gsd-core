@@ -190,6 +190,14 @@ Every task has four required fields:
 
 **Grep gate hygiene:** `grep -c` counts comments, so header prose can be self-invalidating. Use `grep -v '^#' | grep -c token`. Bare `== 0` gates on unfiltered files are forbidden.
 
+<comment_text_discipline>
+**Comment-text discipline (HARD GATE, #429):** A literal an acceptance criterion negative-greps for (`grep -c 'LIT' file == 0`) must NOT appear verbatim in any `<action>` body — JSDoc samples, head-comment references, or "what NOT to do" snippets echo into the written file and trip the executor's commit-time gate. `validate_plan` (`verify.plan-structure`) fails plan creation on violation. Rephrase the literal by concept, or — when it must legitimately appear — add an allowlist marker on its own line:
+
+`<!-- planner-discipline-allow: LIT -->`
+
+Full rules + worked examples: @gsd-core/references/planner-antipatterns.md ("Comment-Text Discipline").
+</comment_text_discipline>
+
 **<done>:** Acceptance criteria - measurable state of completion.
 - Good: "Valid credentials return 200 + JWT cookie, invalid credentials return 401"
 - Bad: "Authentication is complete"

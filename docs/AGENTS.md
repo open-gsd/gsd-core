@@ -173,6 +173,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 - Includes `read_first` and `acceptance_criteria` sections
 - Groups plans into dependency waves
 - Performs reachability check to validate plan steps reference accessible files and APIs (v1.32)
+- Enforces a comment-text discipline HARD GATE at plan-write time (`verify.plan-structure`): a literal that an acceptance criterion negative-greps for (`grep -c 'LIT' file == 0`) must not appear verbatim in an `<action>` body; violations fail plan creation. Use `<!-- planner-discipline-allow: LIT -->` to allowlist a legitimate occurrence. (#429)
 
 ---
 
