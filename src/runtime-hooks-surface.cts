@@ -1085,6 +1085,33 @@ function writeCopilotHookConfig(targetDir: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// referencesHook
+//
+// Pure predicate — checks whether a hook entry object references a managed
+// hook by name.  Covers all three registration shapes used by GSD:
+//   • plain command string (standard form)
+//   • args array (command+args / wrapped-launcher form used by windowless
+//     launchers on Windows and some custom PATH-less environments) (#976)
+//   • url field (type:"http" local-server routing form) (#1004)
+// Without covering all three, an http-form or args-form entry is invisible
+// and a stock string-command entry is appended on every install/update,
+// running the hook twice.
+//
+// Originally declared inside install()/finishInstall() as a local function;
+// promoted here so applySettingsJsonHooks() and finishInstall() share one
+// copy (ADR-857 phase 5f-1b).
+// ---------------------------------------------------------------------------
+
+function referencesHook(h: Record<string, unknown>, hookName: string): boolean {
+  const cmd = h['command'];
+  const args = h['args'];
+  const url = h['url'];
+  return (typeof cmd === 'string' && cmd.includes(hookName)) ||
+    (Array.isArray(args) && args.some(a => typeof a === 'string' && a.includes(hookName))) ||
+    (typeof url === 'string' && url.includes(hookName));
+}
+
+// ---------------------------------------------------------------------------
 // Exports
 // ---------------------------------------------------------------------------
 
@@ -1128,6 +1155,7 @@ export = {
 
   // Shared
   buildHookCommand,
+  referencesHook,
   rewriteLegacyManagedNodeHookCommands,
   normalizeNodePath,
   resolveNodeRunner,

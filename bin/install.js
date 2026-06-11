@@ -627,12 +627,16 @@ function computePathPrefix({ isGlobal, isOpencode, isWindowsHost: _isWindowsHost
   return `${resolvedTarget}/`;
 }
 
-// normalizeNodePath, resolveNodeRunner, resolveBashRunner are now owned by
-// the runtime-hooks-surface module. Import them here so install.js callers
-// continue to work and so there is a single implementation of these helpers.
+// normalizeNodePath, resolveNodeRunner, resolveBashRunner, referencesHook are
+// now owned by the runtime-hooks-surface module. Import them here so
+// install.js callers continue to work and so there is a single implementation
+// of these helpers.
 const normalizeNodePath = hooksSurface.normalizeNodePath;
 const resolveNodeRunner = hooksSurface.resolveNodeRunner;
 const resolveBashRunner = hooksSurface.resolveBashRunner;
+// referencesHook: pure predicate over hook entry objects, shared between
+// install() and finishInstall() (ADR-857 phase 5f-1b).
+const referencesHook = hooksSurface.referencesHook;
 
 function rewriteLegacyManagedNodeHookCommands(settings, absoluteRunner, opts) {
   return hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, absoluteRunner, opts);
@@ -11089,22 +11093,8 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     }
   }
 
-  // Helper: detect whether a hook entry references a managed hook by name.
-  // Checks all three registration shapes:
-  //   • plain command string (standard form)
-  //   • args array (command+args / wrapped-launcher form used by windowless
-  //     launchers on Windows and some custom PATH-less environments) (#976)
-  //   • url field (type:"http" local-server routing form) (#1004)
-  // Without covering all three, an http-form or args-form entry is invisible
-  // and a stock string-command entry is appended on every install/update,
-  // running the hook twice.
-  function referencesHook(h, hookName) {
-    return (typeof h.command === 'string' && h.command.includes(hookName)) ||
-      (Array.isArray(h.args) && h.args.some(a => typeof a === 'string' && a.includes(hookName))) ||
-      (typeof h.url === 'string' && h.url.includes(hookName));
-  }
-
   // Configure SessionStart hook for update checking (skip for opencode)
+  // referencesHook is imported from hooksSurface (ADR-857 phase 5f-1b).
   if (!isOpencode && !isKilo) {
     if (!settings.hooks) {
       settings.hooks = {};
@@ -12614,6 +12604,7 @@ module.exports = {
     buildHookCommand,
     normalizeNodePath,
     resolveNodeRunner,
+    referencesHook,
     rewriteLegacyManagedNodeHookCommands,
     buildCodexHookBlock,
     rewriteLegacyCodexHookBlock,
