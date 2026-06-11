@@ -1,0 +1,42 @@
+{
+  "id": "cursor",
+  "role": "runtime",
+  "title": "Cursor",
+  "description": "Cursor IDE — skills + converted commands artifact layout; hooks.json surface; Claude hook event dialect; recursive skill loader (flat nesting); tier-2 support.",
+  "tier": "core",
+  "requires": [],
+  "runtime": {
+    "configHome": {
+      "kind": "dot-home",
+      "name": ".cursor",
+      "env": ["CURSOR_CONFIG_DIR"]
+    },
+    "configFormat": "none",
+    "artifactLayout": {
+      "global": [
+        {
+          "kind": "skills",
+          "destSubpath": "skills",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": true,
+          "converter": "convertClaudeCommandToCursorSkill"
+        },
+        {
+          "kind": "commands",
+          "destSubpath": "commands",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeCommandToCursorCommand"
+        }
+      ],
+      "local": []
+    },
+    "commandStyle": "slash-hyphen",
+    "hooksSurface": "cursor-hooks-json",
+    "hookEvents": "claude",
+    "sandboxTier": "none",
+    "supportTier": 2
+  }
+}

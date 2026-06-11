@@ -1,0 +1,33 @@
+{
+  "id": "trae",
+  "role": "runtime",
+  "title": "Trae IDE",
+  "description": "Trae IDE — nested-skill artifact layout; no hook surface (profile-marker-only config); tier-2 support.",
+  "tier": "core",
+  "requires": [],
+  "runtime": {
+    "configHome": {
+      "kind": "dot-home",
+      "name": ".trae",
+      "env": ["TRAE_CONFIG_DIR"]
+    },
+    "configFormat": "none",
+    "artifactLayout": {
+      "global": [
+        {
+          "kind": "skills",
+          "destSubpath": "skills",
+          "prefix": "gsd-",
+          "nesting": "nested",
+          "recursive": false,
+          "converter": "convertClaudeCommandToTraeSkill"
+        }
+      ],
+      "local": []
+    },
+    "commandStyle": "slash-hyphen",
+    "hooksSurface": "none",
+    "sandboxTier": "none",
+    "supportTier": 2
+  }
+}

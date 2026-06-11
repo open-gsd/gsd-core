@@ -1,0 +1,34 @@
+{
+  "id": "gemini",
+  "role": "runtime",
+  "title": "Gemini CLI",
+  "description": "Google Gemini CLI — commands-only artifact layout (TOML); Gemini hook event dialect; settings-json hook surface; tier-2 support.",
+  "tier": "core",
+  "requires": [],
+  "runtime": {
+    "configHome": {
+      "kind": "dot-home",
+      "name": ".gemini",
+      "env": ["GEMINI_CONFIG_DIR"]
+    },
+    "configFormat": "settings-json",
+    "artifactLayout": {
+      "global": [
+        {
+          "kind": "commands",
+          "destSubpath": "commands/gsd",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": null
+        }
+      ],
+      "local": []
+    },
+    "commandStyle": "slash-hyphen",
+    "hooksSurface": "settings-json",
+    "hookEvents": "gemini",
+    "sandboxTier": "none",
+    "supportTier": 2
+  }
+}

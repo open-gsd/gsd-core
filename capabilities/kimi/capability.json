@@ -1,0 +1,43 @@
+{
+  "id": "kimi",
+  "role": "runtime",
+  "title": "Kimi CLI",
+  "description": "Kimi CLI (Moonshot AI) — generic agents root at ~/.config/agents; skills + kimi-agents artifact layout; no hook surface; no hook events; tier-2 support.",
+  "tier": "core",
+  "requires": [],
+  "runtime": {
+    "configHome": {
+      "kind": "generic-agents-root",
+      "name": "agents",
+      "env": ["KIMI_CONFIG_DIR"],
+      "probe": ["~/.config/agents", "~/.agents"],
+      "probeExists": "skills"
+    },
+    "configFormat": "none",
+    "artifactLayout": {
+      "global": [
+        {
+          "kind": "skills",
+          "destSubpath": "skills",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeCommandToKimiSkill"
+        },
+        {
+          "kind": "kimi-agents",
+          "destSubpath": "agents",
+          "prefix": "gsd",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": null
+        }
+      ],
+      "local": []
+    },
+    "commandStyle": "slash-hyphen",
+    "hooksSurface": "none",
+    "sandboxTier": "none",
+    "supportTier": 2
+  }
+}

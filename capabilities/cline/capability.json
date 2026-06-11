@@ -1,0 +1,33 @@
+{
+  "id": "cline",
+  "role": "runtime",
+  "title": "Cline",
+  "description": "Cline (VS Code extension) — global-only nested-skill layout; cline-rules hook surface (.clinerules); no hook events emitted; tier-2 support.",
+  "tier": "core",
+  "requires": [],
+  "runtime": {
+    "configHome": {
+      "kind": "dot-home",
+      "name": ".cline",
+      "env": ["CLINE_CONFIG_DIR"]
+    },
+    "configFormat": "markdown-dir",
+    "artifactLayout": {
+      "global": [
+        {
+          "kind": "skills",
+          "destSubpath": "skills",
+          "prefix": "gsd-",
+          "nesting": "nested",
+          "recursive": false,
+          "converter": "convertClaudeCommandToClineSkill"
+        }
+      ],
+      "local": []
+    },
+    "commandStyle": "slash-hyphen",
+    "hooksSurface": "cline-rules",
+    "sandboxTier": "none",
+    "supportTier": 2
+  }
+}

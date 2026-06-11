@@ -32,8 +32,9 @@ configHome: {
   kind: 'dot-home' | 'dot-home-nested' | 'xdg' | 'generic-agents-root',
   name: string,                 // e.g. 'claude', 'opencode'
   parent?: string,              // for dot-home-nested: e.g. '.gemini' (antigravity), '.codeium' (windsurf)
-  env: string[],                // ordered override env vars, e.g. ['CLAUDE_CONFIG_DIR']
+  env: string[],                // ordered override env vars, e.g. ['CLAUDE_CONFIG_DIR'] (required; may be empty)
   probe?: string[],             // ordered candidate subpaths; first existing wins (antigravity, kimi)
+  probeExists?: string,         // if set, select the first probe candidate where <candidate>/<probeExists> exists (kimi: 'skills')
   skillsHome?: { kind, name, ... }  // override when the skills dir ≠ config dir (kilo only)
 }
 ```
@@ -82,7 +83,7 @@ hookEvents?: 'claude'   // SessionStart/PreToolUse/PostToolUse
            | 'opencode-subset'  // settings-json surface but SessionStart/PostToolUse skipped
 ```
 
-`settings-json` covers claude, gemini, antigravity, augment, qwen, hermes, codebuddy, opencode; the event-name and registration-subset differences ride on `hookEvents` rather than splitting the surface enum. `none` = windsurf, trae, kimi, kilo.
+`settings-json` covers claude, gemini, antigravity, augment, qwen, hermes, codebuddy; the event-name and registration-subset differences ride on `hookEvents` rather than splitting the surface enum. `none` = windsurf, trae, kimi, kilo, opencode — these five runtimes register **zero** managed lifecycle hooks today; `opencode-subset` is reserved ADR vocabulary with no current consumer (opencode and kilo write a `settings.json` for config/permissions, which is the `configFormat` axis, not the hook-registration axis).
 
 ### 6. `sandboxTier` — the agent-sandbox primitive (closed enum)
 

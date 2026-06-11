@@ -1,0 +1,36 @@
+{
+  "id": "antigravity",
+  "role": "runtime",
+  "title": "Antigravity",
+  "description": "Google Antigravity IDE — nested under ~/.gemini/antigravity; probed across 1.x and 2.x layouts; Gemini hook event dialect; nested skill layout; tier-1 support.",
+  "tier": "core",
+  "requires": [],
+  "runtime": {
+    "configHome": {
+      "kind": "dot-home-nested",
+      "name": "antigravity",
+      "parent": ".gemini",
+      "env": ["ANTIGRAVITY_CONFIG_DIR"],
+      "probe": ["antigravity", "antigravity-ide", "antigravity-cli"]
+    },
+    "configFormat": "settings-json",
+    "artifactLayout": {
+      "global": [
+        {
+          "kind": "skills",
+          "destSubpath": "skills",
+          "prefix": "gsd-",
+          "nesting": "nested",
+          "recursive": false,
+          "converter": "convertClaudeCommandToAntigravitySkill"
+        }
+      ],
+      "local": []
+    },
+    "commandStyle": "slash-hyphen",
+    "hooksSurface": "settings-json",
+    "hookEvents": "gemini",
+    "sandboxTier": "none",
+    "supportTier": 1
+  }
+}
