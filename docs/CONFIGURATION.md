@@ -292,7 +292,7 @@ The `code_quality.*` namespace gates optional structural-analysis tooling that a
 |---------|------|---------|-------------|
 | `code_quality.fallow.enabled` | boolean | `false` | Enables fallow structural pre-pass for `/gsd-code-review`. When `false`, no fallow binary probe or JSON artifact is produced. |
 | `code_quality.fallow.scope` | string | `phase` | Scope for fallow analysis: `phase` (current review file scope) or `repo` (entire repository). |
-| `code_quality.fallow.profile` | string | `standard` | Fallow profile selector passed to the pre-pass runner (`minimal`, `standard`, `strict`). |
+| `code_quality.fallow.profile` | string | `standard` | Strictness preset for the fallow pre-pass (`minimal`, `standard`, `strict`). Fallow has no native profile concept, so this maps to its `--max-crap` complexity threshold: `minimal`→50, `standard`→30, `strict`→15 (lower = stricter). |
 | `code_quality.fallow.mcp` | boolean | `false` | **Reserved — not yet implemented.** When `true`, enables MCP-backed structural findings mode for runtimes that support MCP server routing. Setting this to `true` is currently a no-op and emits a runtime warning. |
 
 ## Ship Settings
