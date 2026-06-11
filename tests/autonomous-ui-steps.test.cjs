@@ -22,6 +22,15 @@ describe('autonomous workflow ui-phase and ui-review integration (#1375)', () =>
   });
 
   describe('step 3a.5 — UI design contract before planning', () => {
+    // Helper: extract the §3a.5 section text (from heading to the next "**3b." heading)
+    function getSection3a5(c) {
+      const start = c.indexOf('**3a.5.');
+      const end = c.indexOf('**3b.', start);
+      assert.ok(start !== -1, '§3a.5 heading must be present in autonomous.md');
+      assert.ok(end !== -1, '**3b. must follow §3a.5 in autonomous.md');
+      return c.slice(start, end);
+    }
+
     test('autonomous.md contains a UI design contract step between discuss and plan', () => {
       assert.ok(
         content.includes('3a.5'),
@@ -29,43 +38,144 @@ describe('autonomous workflow ui-phase and ui-review integration (#1375)', () =>
       );
     });
 
-    test('UI design contract step detects frontend indicators via shell-free Node gate (#3718)', () => {
-      // After #3718: the gate is implemented in bin/lib/ui-safety-gate.cjs (Node.js)
-      // piped from stdin, avoiding silent failure on Windows PowerShell and ARG_MAX.
-      // After #448: the helper is resolved against the GSD install dir (RUNTIME_DIR),
-      // not the consuming project's git root, so it is actually found at runtime.
+    test('§3a.5 dispatches loop render-hooks plan:pre to resolve active capability hooks', () => {
+      // Phase 5.6/ui-phase cutover: §3a.5 now dispatches render-hooks plan:pre instead of
+      // inlining ui-safety-gate.cjs RUNTIME_DIR probe + config-get workflow.ui_phase.
+      const section = getSection3a5(content);
       assert.ok(
-        content.includes('ui-safety-gate.cjs'),
-        'should invoke shell-free Node gate for cross-platform portability (#3718)'
-      );
-      assert.ok(
-        content.includes('RUNTIME_DIR'),
-        'should resolve the gate helper against the GSD install dir (RUNTIME_DIR), not the consuming project root (#448)'
+        section.includes('loop render-hooks plan:pre'),
+        '§3a.5 must dispatch `loop render-hooks plan:pre` to resolve active capability hooks'
       );
     });
 
-    test('UI design contract step checks for existing UI-SPEC.md', () => {
+    test('§3a.5 uses check ui-plan-gate to determine frontend and hasUiSpec', () => {
+      const section = getSection3a5(content);
       assert.ok(
-        content.includes('UI-SPEC.md'),
-        'should check for existing UI-SPEC.md'
+        section.includes('check ui-plan-gate'),
+        '§3a.5 must call `check ui-plan-gate` to gate on frontend indicators and existing UI-SPEC'
+      );
+      assert.ok(
+        section.includes('frontend'),
+        '§3a.5 must read the `frontend` field from the gate result'
+      );
+      assert.ok(
+        section.includes('hasUiSpec'),
+        '§3a.5 must read the `hasUiSpec` field from the gate result'
       );
     });
 
-    test('UI design contract step respects workflow.ui_phase config toggle', () => {
+    test('§3a.5 constructs skill via gsd-${ref.skill} prefix (capability-driven dispatch)', () => {
+      const section = getSection3a5(content);
       assert.ok(
-        content.includes('workflow.ui_phase'),
-        'should respect workflow.ui_phase config toggle'
+        section.includes('gsd-${ref.skill}'),
+        '§3a.5 must construct skill name via `gsd-${ref.skill}` prefix (matches §3d.5 style)'
       );
     });
 
-    test('UI design contract step invokes gsd:ui-phase skill', () => {
+    test('§3a.5 checks for existing UI-SPEC.md', () => {
+      const section = getSection3a5(content);
       assert.ok(
-        content.includes('skill="gsd-ui-phase"'),
-        'should invoke gsd-ui-phase via Skill()'
+        section.includes('UI-SPEC.md'),
+        '§3a.5 must check for existing UI-SPEC.md'
       );
     });
 
-    test('UI design contract step appears before plan step (3b)', () => {
+    test('§3a.5 does NOT inline ui-safety-gate.cjs or RUNTIME_DIR probe (replaced by registry)', () => {
+      const section = getSection3a5(content);
+      assert.ok(
+        !section.includes('ui-safety-gate.cjs'),
+        '§3a.5 must NOT inline ui-safety-gate.cjs (replaced by check ui-plan-gate)'
+      );
+      assert.ok(
+        !section.includes('RUNTIME_DIR'),
+        '§3a.5 must NOT probe RUNTIME_DIR (replaced by check ui-plan-gate via capability registry)'
+      );
+    });
+
+    test('§3a.5 does NOT inline config-get workflow.ui_phase (resolved by registry via render-hooks)', () => {
+      const section = getSection3a5(content);
+      assert.ok(
+        !section.includes('config-get workflow.ui_phase'),
+        '§3a.5 must NOT inline `config-get workflow.ui_phase` — toggle is owned by the capability registry'
+      );
+    });
+
+    test('§3a.5 is step-only and non-blocking — no gate-halt or exit', () => {
+      const section = getSection3a5(content);
+      // Must not introduce blocking gate language
+      assert.ok(
+        !section.includes('EXIT') && !section.includes('exit the') && !section.includes('halt'),
+        '§3a.5 must NOT introduce any gate-halt or exit — it is step-only and non-blocking'
+      );
+      // Must be explicitly non-blocking
+      assert.ok(
+        section.includes('NON-BLOCKING') || section.includes('non-blocking') || section.includes('continue') || section.includes('proceed'),
+        '§3a.5 must be explicitly non-blocking (warning + continue)'
+      );
+    });
+
+    test('§3a.5 skip condition is "no active step hooks" — not "empty activeHooks"', () => {
+      // Equivalence-preservation fix (#1031): the skip must key on KIND=="step" hooks,
+      // not on activeHooks being empty. A gate-only result (ui_phase=false +
+      // ui_safety_gate=true → activeHooks=[{kind:"gate"}]) must also skip silently.
+      const section = getSection3a5(content);
+
+      // Must compute active step hooks (kind=="step") before deciding to skip
+      assert.ok(
+        section.includes('kind == "step"') || section.includes("kind == 'step'") || section.includes('kind=="step"'),
+        '§3a.5 must gate the skip decision on kind=="step" entries'
+      );
+
+      // The skip condition must explicitly mention "no active step" (or equivalent),
+      // NOT "empty or absent" (which was the old incorrect condition)
+      assert.ok(
+        section.includes('NO active step') || section.includes('no active step') || section.includes('no active UI step'),
+        '§3a.5 skip condition must reference "no active step hook(s)" — not just empty activeHooks'
+      );
+
+      // The prose must NOT use the old "empty or absent" language as the skip guard
+      assert.ok(
+        !section.includes('empty or absent'),
+        '§3a.5 must NOT use "empty or absent" as the skip condition — that misses gate-only sets'
+      );
+    });
+
+    test('§3a.5 gate-only case: {ui_phase:false, ui_safety_gate:true} → silent skip, no warning', () => {
+      // Scenario: workflow.ui_phase=false AND workflow.ui_safety_gate=true.
+      // render-hooks plan:pre returns activeHooks=[{kind:"gate"}] (gate is controlled
+      // separately by ui_safety_gate, default true). There are NO step hooks.
+      // §3a.5 must skip silently to 3b — no warning, no gate run, no skill dispatch.
+      // The warning must ONLY be reachable after an active step hook actually fired.
+      const section = getSection3a5(content);
+
+      // The gate-only/ui_phase=false case must be documented as a silent skip
+      assert.ok(
+        section.includes('ui_phase') || section.includes('ui_safety_gate') || section.includes('gate-only'),
+        '§3a.5 must document the gate-only / ui_phase=false silent-skip case'
+      );
+
+      // Must NOT invoke check ui-plan-gate before filtering for step hooks
+      // i.e. the step-hook filter must appear before the GATE command in prose order
+      const stepCheckPos = section.indexOf('kind == "step"');
+      const gateRunPos = section.indexOf('check ui-plan-gate');
+      assert.ok(
+        stepCheckPos !== -1 && gateRunPos !== -1,
+        '§3a.5 must contain both kind=="step" check and check ui-plan-gate'
+      );
+      assert.ok(
+        stepCheckPos < gateRunPos,
+        '§3a.5 must check for active step hooks BEFORE running check ui-plan-gate — ' +
+        'gate-only case (no step hooks) must skip before the gate command is reached'
+      );
+
+      // Confirm gate entries are explicitly excluded from dispatch
+      assert.ok(
+        section.includes('gate') && (section.includes('ignored') || section.includes('silently')),
+        '§3a.5 must explicitly note kind=="gate" entries are silently ignored'
+      );
+    });
+
+    test('§3a.5 appears before plan step (3b)', () => {
       const uiPhasePos = content.indexOf('3a.5');
       const planPos = content.indexOf('**3b. Plan**');
       assert.ok(

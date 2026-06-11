@@ -318,47 +318,42 @@ Check `has_context`. If false → go to handle_blocker: "Discuss for phase ${PHA
 
 **3a.5. UI Design Contract (Frontend Phases)**
 
-Check if this phase has frontend indicators and whether a UI-SPEC already exists:
-
-```bash
-PHASE_SECTION=$(gsd_run query roadmap.get-phase ${PHASE_NUM} 2>/dev/null)
-# Shell-free word-boundary gate (#3718): Node.js helper — no locale env-var dependency.
-# Reads via stdin to avoid OS ARG_MAX limits on large phase text.
-# Resolve the helper against the GSD install dir via RUNTIME_DIR (#448) — NOT the consuming
-# project's git root — falling back to git toplevel / $HOME/.claude. Exit codes mirror grep (0=UI,1=none).
-_GSD_RT="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
-UI_GATE_JS=$(for _c in "$_GSD_RT/gsd-core/bin/lib/ui-safety-gate.cjs" "$_GSD_RT/bin/lib/ui-safety-gate.cjs" "$_GSD_RT/.claude/bin/lib/ui-safety-gate.cjs" "$HOME/.claude/gsd-core/bin/lib/ui-safety-gate.cjs" "$HOME/.claude/bin/lib/ui-safety-gate.cjs"; do [ -f "$_c" ] && { echo "$_c"; break; }; done)
-if [ -n "$UI_GATE_JS" ]; then printf '%s' "$PHASE_SECTION" | node "$UI_GATE_JS" >/dev/null 2>&1; HAS_UI=$?; else echo "WARN: ui-safety-gate.cjs not found via RUNTIME_DIR/\$HOME (#448) — assuming UI present" >&2; HAS_UI=0; fi
-UI_SPEC_FILE=$(ls "${PHASE_DIR}"/*-UI-SPEC.md 2>/dev/null | head -1)
-```
-
-Check if UI phase workflow is enabled:
-
-```bash
-UI_PHASE_CFG=$(gsd_run query config-get workflow.ui_phase 2>/dev/null || echo "true")
-```
-
-**If `HAS_UI` is 0 (frontend indicators found) AND `UI_SPEC_FILE` is empty (no UI-SPEC exists) AND `UI_PHASE_CFG` is not `false`:**
-
-Display:
-
-```
-Phase ${PHASE_NUM}: Frontend phase detected — generating UI design contract...
-```
-
-```
-Skill(skill="gsd-ui-phase", args="${PHASE_NUM}")
-```
-
-Verify UI-SPEC was created:
+Resolve active `plan:pre` hooks:
 
 ```bash
 UI_SPEC_FILE=$(ls "${PHASE_DIR}"/*-UI-SPEC.md 2>/dev/null | head -1)
+HOOKS_JSON=$(gsd_run loop render-hooks plan:pre --raw)
 ```
 
-**If `UI_SPEC_FILE` is still empty after ui-phase:** Display warning `Phase ${PHASE_NUM}: UI-SPEC generation did not produce output — continuing without design contract.` and proceed to 3b.
+Read the `activeHooks` array directly from `HOOKS_JSON` (in-context — do NOT invoke a shell pipeline). **Compute the active UI step hooks** = entries from `activeHooks` where `kind == "step"` and `ref.skill` is set. **If there are NO active step hooks → skip silently to 3b.** (This covers `workflow.ui_phase=false` — including configurations where only a gate-only entry is present, e.g. `ui_phase=false` + `ui_safety_gate=true` produces `activeHooks=[{kind:"gate"}]`. Autonomous never runs the plan:pre gate — it is always pipeline mode — so a gate-only active set is equivalent to no active step and is silently skipped here. This matches OLD §3a.5 behaviour.)
 
-**If `HAS_UI` is 1 (no frontend indicators) OR `UI_SPEC_FILE` is not empty (UI-SPEC already exists) OR `UI_PHASE_CFG` is `false`:** Skip silently to 3b.
+(At least one active step hook ⇒ `workflow.ui_phase` is on.) Run the UI-SPEC gate:
+
+```bash
+GATE=$(gsd_run check ui-plan-gate "${PHASE_NUM}" --raw)
+```
+
+Read `frontend` and `hasUiSpec` from `GATE` (in-context).
+
+**If `frontend` is false:** Skip silently to 3b.
+
+**If `hasUiSpec` is true (UI-SPEC already exists):** Skip silently to 3b.
+
+**Otherwise (frontend phase + no UI-SPEC):** For each active step hook (the `kind == "step"` set from above, in array order):
+
+```
+Skill(skill="gsd-${ref.skill}", args="${PHASE_NUM}")
+```
+
+(Prepend `gsd-` to `ref.skill` — so `ui-phase` → `gsd-ui-phase`. Bare `${PHASE_NUM}` args — autonomous style, same pattern as the verify:post dispatch.) Entries where `kind == "gate"` are silently ignored — autonomous is always pipeline mode, there is no blocking gate here.
+
+After all step hooks return, re-read:
+
+```bash
+UI_SPEC_FILE=$(ls "${PHASE_DIR}"/*-UI-SPEC.md 2>/dev/null | head -1)
+```
+
+**If `UI_SPEC_FILE` is still empty:** Display warning `Phase ${PHASE_NUM}: UI-SPEC generation did not produce output — continuing without design contract.` and proceed to 3b. NON-BLOCKING.
 
 **3b. Plan**
 
