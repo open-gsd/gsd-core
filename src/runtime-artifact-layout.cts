@@ -173,7 +173,7 @@ function findAgentsSourceRoot(runtimeConfigDir?: string): string {
 const ALLOWED_RUNTIMES = new Set([
   'claude', 'cursor', 'gemini', 'codex', 'copilot', 'antigravity',
   'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy',
-  'cline', 'kimi', 'opencode', 'kilo',
+  'cline', 'kimi', 'mimo', 'opencode', 'kilo',
 ]);
 
 // ---------------------------------------------------------------------------

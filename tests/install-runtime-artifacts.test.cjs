@@ -50,13 +50,13 @@ const RESOLVED_CORE = resolveProfile({ modes: ['core'], manifest: MANIFEST });
 
 const SKILLS_RUNTIMES_LAYOUT = [
   'claude', 'cursor', 'codex', 'copilot', 'antigravity',
-  'windsurf', 'augment', 'trae', 'qwen', 'kimi', 'codebuddy',
+  'windsurf', 'augment', 'trae', 'qwen', 'kimi', 'mimo', 'codebuddy',
 ];
 
 const ALL_RUNTIMES_LAYOUT = [
   'claude', 'cursor', 'gemini', 'codex', 'copilot', 'antigravity',
   'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy',
-  'cline', 'kimi', 'opencode', 'kilo',
+  'cline', 'kimi', 'mimo', 'opencode', 'kilo',
 ];
 
 function countPrefixedEntries(destDir, prefix) {

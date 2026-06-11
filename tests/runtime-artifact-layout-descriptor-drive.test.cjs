@@ -195,6 +195,15 @@ const GOLDEN = {
     { kind: 'commands', destSubpath: 'command', prefix: 'gsd-' },
     { kind: 'skills',   destSubpath: 'skills',  prefix: 'gsd-' },
   ],
+
+  // ── mimo ─────────────────────────────────────────────────────────────────────
+  // Descriptor: flat Claude-style skills; local == global.
+  'mimo/global': [
+    { kind: 'skills', destSubpath: 'skills', prefix: 'gsd-' },
+  ],
+  'mimo/local': [
+    { kind: 'skills', destSubpath: 'skills', prefix: 'gsd-' },
+  ],
 };
 
 // ── Parametrized tests ────────────────────────────────────────────────────────
@@ -202,7 +211,7 @@ const GOLDEN = {
 const RUNTIMES = [
   'claude', 'cursor', 'gemini', 'codex', 'copilot',
   'antigravity', 'windsurf', 'augment', 'trae', 'qwen',
-  'hermes', 'codebuddy', 'cline', 'kimi', 'opencode', 'kilo',
+  'hermes', 'codebuddy', 'cline', 'kimi', 'mimo', 'opencode', 'kilo',
 ];
 
 for (const runtime of RUNTIMES) {

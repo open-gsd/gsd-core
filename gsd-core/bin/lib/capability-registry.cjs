@@ -709,6 +709,51 @@ const capabilities = {
       "supportTier": 2
     }
   },
+  "mimo": {
+    "id": "mimo",
+    "role": "runtime",
+    "title": "MiMoCode",
+    "description": "MiMoCode — XDG-based config dir at ~/.config/mimocode; Claude-style flat skills layout; subagent frontmatter conversion; no lifecycle hook registration; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "xdg",
+        "name": "mimocode",
+        "env": [
+          "MIMOCODE_CONFIG_DIR",
+          "XDG_CONFIG_HOME"
+        ]
+      },
+      "configFormat": "none",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          }
+        ],
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          }
+        ]
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "none",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
   "opencode": {
     "id": "opencode",
     "role": "runtime",
@@ -1779,6 +1824,51 @@ const runtimes = {
       "supportTier": 2
     }
   },
+  "mimo": {
+    "id": "mimo",
+    "role": "runtime",
+    "title": "MiMoCode",
+    "description": "MiMoCode — XDG-based config dir at ~/.config/mimocode; Claude-style flat skills layout; subagent frontmatter conversion; no lifecycle hook registration; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "xdg",
+        "name": "mimocode",
+        "env": [
+          "MIMOCODE_CONFIG_DIR",
+          "XDG_CONFIG_HOME"
+        ]
+      },
+      "configFormat": "none",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          }
+        ],
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          }
+        ]
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "none",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
   "opencode": {
     "id": "opencode",
     "role": "runtime",
@@ -2041,6 +2131,7 @@ const _requiresGraph = {
   "intel": [],
   "kilo": [],
   "kimi": [],
+  "mimo": [],
   "opencode": [],
   "qwen": [],
   "trae": [],

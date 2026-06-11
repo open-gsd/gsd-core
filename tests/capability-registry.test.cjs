@@ -2523,7 +2523,7 @@ const {
 const RUNTIME_IDS = [
   'claude', 'codex', 'antigravity', 'gemini', 'cursor', 'opencode',
   'kilo', 'copilot', 'augment', 'trae', 'qwen', 'hermes',
-  'codebuddy', 'cline', 'kimi', 'windsurf',
+  'codebuddy', 'cline', 'kimi', 'mimo', 'windsurf',
 ];
 
 // Helper: build a minimal valid runtime capability object for fixture-based tests
@@ -2552,16 +2552,16 @@ function makeRuntimeCap(overrides) {
 
 // ── 24a. All 16 runtime ids appear in the runtimes index ─────────────────────
 
-describe('ADR-1016 phase 5a: all 16 runtimes in registry index', () => {
+describe('ADR-1016 phase 5a: all 17 runtimes in registry index', () => {
   let registry;
 
-  test('loadAndValidate + buildRegistry produces runtimes index with 16 entries', () => {
+  test('loadAndValidate + buildRegistry produces runtimes index with 17 entries', () => {
     const { capMap, errors } = loadAndValidate(new Set());
     const hardErrors = errors.filter((e) => !e.includes('pending-migration'));
     assert.deepEqual(hardErrors, [], 'Expected no hard errors: ' + JSON.stringify(hardErrors));
     registry = buildRegistry(capMap);
     const runtimeKeys = Object.keys(registry.runtimes).sort();
-    assert.strictEqual(runtimeKeys.length, 16, 'Expected 16 runtime entries, got: ' + runtimeKeys.join(', '));
+    assert.strictEqual(runtimeKeys.length, 17, 'Expected 17 runtime entries, got: ' + runtimeKeys.join(', '));
     for (const id of RUNTIME_IDS) {
       assert.ok(
         Object.prototype.hasOwnProperty.call(registry.runtimes, id),
