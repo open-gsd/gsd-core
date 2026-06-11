@@ -998,7 +998,16 @@ function cmdValidateHealth(
   try {
     const agentStatus = checkAgentsInstalled();
     if (!agentStatus.agents_installed) {
-      if ((agentStatus.installed_agents).length === 0) {
+      if (agentStatus.agent_pair_drift) {
+        const tomlOnly = (agentStatus.agent_pair_drift_toml_only || []).join(', ') || 'none';
+        const mdOnly = (agentStatus.agent_pair_drift_md_only || []).join(', ') || 'none';
+        addIssue(
+          'warning',
+          'W010',
+          `GSD agent pair drift in ${agentStatus.agents_dir}: toml-only [${tomlOnly}], md-only [${mdOnly}]`,
+          `Run the GSD installer/update: npx ${PACKAGE_NAME}@latest`,
+        );
+      } else if ((agentStatus.installed_agents).length === 0) {
         addIssue(
           'warning',
           'W010',
@@ -1522,6 +1531,10 @@ function cmdValidateAgents(cwd: string, raw: boolean): void {
       agents_found: agentStatus.agents_installed,
       installed: agentStatus.installed_agents,
       missing: agentStatus.missing_agents,
+      agent_pair_drift_checked: agentStatus.agent_pair_drift_checked,
+      agent_pair_drift: agentStatus.agent_pair_drift,
+      agent_pair_drift_toml_only: agentStatus.agent_pair_drift_toml_only,
+      agent_pair_drift_md_only: agentStatus.agent_pair_drift_md_only,
       expected,
     },
     raw,

@@ -213,6 +213,128 @@ interface AgentsInstalledResult {
   installed_agents: string[];
   agents_dir: string;
   agent_runtime: string;
+  agent_pair_drift_checked: boolean;
+  agent_pair_drift: boolean;
+  agent_pair_drift_toml_only: string[];
+  agent_pair_drift_md_only: string[];
+}
+
+interface AgentPairNames {
+  md: Set<string>;
+  toml: Set<string>;
+}
+
+interface AgentPairDriftResult {
+  checked: boolean;
+  has_drift: boolean;
+  toml_only: string[];
+  md_only: string[];
+}
+
+function emptyAgentPairDrift(): AgentPairDriftResult {
+  return {
+    checked: false,
+    has_drift: false,
+    toml_only: [],
+    md_only: [],
+  };
+}
+
+function collectLiveAgentPairs(agentsDir: string): AgentPairNames {
+  const pairs: AgentPairNames = { md: new Set<string>(), toml: new Set<string>() };
+
+  const agentFiles = fs
+    .readdirSync(agentsDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile());
+
+  for (const entry of agentFiles) {
+    if (/^gsd-[a-z0-9-]+\.toml$/i.test(entry.name)) {
+      pairs.toml.add(entry.name.slice(0, -'.toml'.length));
+    } else if (/^gsd-[a-z0-9-]+\.md$/i.test(entry.name) && !entry.name.endsWith('.agent.md')) {
+      pairs.md.add(entry.name.slice(0, -'.md'.length));
+    }
+  }
+
+  return pairs;
+}
+
+function readManifestAgentPairs(manifestPath: string): AgentPairNames | null {
+  if (!fs.existsSync(manifestPath)) {
+    return null;
+  }
+
+  try {
+    const manifest: unknown = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+
+    const files =
+      manifest &&
+      typeof manifest === 'object' &&
+      'files' in manifest &&
+      manifest.files &&
+      typeof manifest.files === 'object'
+        ? manifest.files
+        : null;
+
+    if (!files) {
+      return null;
+    }
+
+    return Object.keys(files).reduce<AgentPairNames>(
+      (pairs, key) => {
+        const mdMatch = key.match(/^agents\/(gsd-[a-z0-9-]+)\.md$/i);
+
+        if (mdMatch && !key.endsWith('.agent.md')) {
+          pairs.md.add(mdMatch[1]);
+
+          return pairs;
+        }
+
+        const tomlMatch = key.match(/^agents\/(gsd-[a-z0-9-]+)\.toml$/i);
+
+        if (tomlMatch) {
+          pairs.toml.add(tomlMatch[1]);
+        }
+
+        return pairs;
+      },
+      { md: new Set<string>(), toml: new Set<string>() },
+    );
+  } catch {
+    return null;
+  }
+}
+
+function compareAgentPairs(expected: AgentPairNames, actual: AgentPairNames): AgentPairDriftResult {
+  const tomlOnly = [...expected.toml].filter((agent) => !actual.md.has(agent)).sort();
+  const mdOnly = [...expected.md].filter((agent) => !actual.toml.has(agent)).sort();
+
+  return {
+    checked: true,
+    has_drift: tomlOnly.length > 0 || mdOnly.length > 0,
+    toml_only: tomlOnly,
+    md_only: mdOnly,
+  };
+}
+
+function collectAgentPairDrift(agentsDir: string): AgentPairDriftResult {
+  if (!fs.existsSync(agentsDir)) {
+    return emptyAgentPairDrift();
+  }
+
+  const livePairs = collectLiveAgentPairs(agentsDir);
+  const manifestPairs = readManifestAgentPairs(
+    path.join(path.dirname(agentsDir), 'gsd-file-manifest.json'),
+  );
+
+  if (manifestPairs && manifestPairs.md.size > 0 && manifestPairs.toml.size > 0) {
+    return compareAgentPairs(manifestPairs, livePairs);
+  }
+
+  if (livePairs.md.size === 0 || livePairs.toml.size === 0) {
+    return emptyAgentPairDrift();
+  }
+
+  return compareAgentPairs(livePairs, livePairs);
 }
 
 /**
@@ -228,12 +350,17 @@ function checkAgentsInstalled(runtime?: string): AgentsInstalledResult {
   const missing: string[] = [];
 
   if (!fs.existsSync(agentsDir)) {
+    const pairDrift = collectAgentPairDrift(agentsDir);
     return {
       agents_installed: false,
       missing_agents: expectedAgents,
       installed_agents: [],
       agents_dir: agentsDir,
       agent_runtime: resolvedRuntime,
+      agent_pair_drift_checked: pairDrift.checked,
+      agent_pair_drift: pairDrift.has_drift,
+      agent_pair_drift_toml_only: pairDrift.toml_only,
+      agent_pair_drift_md_only: pairDrift.md_only,
     };
   }
 
@@ -259,12 +386,18 @@ function checkAgentsInstalled(runtime?: string): AgentsInstalledResult {
     }
   }
 
+  const pairDrift = collectAgentPairDrift(agentsDir);
+
   return {
-    agents_installed: installed.length > 0 && missing.length === 0,
+    agents_installed: installed.length > 0 && missing.length === 0 && !pairDrift.has_drift,
     missing_agents: missing,
     installed_agents: installed,
     agents_dir: agentsDir,
     agent_runtime: resolvedRuntime,
+    agent_pair_drift_checked: pairDrift.checked,
+    agent_pair_drift: pairDrift.has_drift,
+    agent_pair_drift_toml_only: pairDrift.toml_only,
+    agent_pair_drift_md_only: pairDrift.md_only,
   };
 }
 

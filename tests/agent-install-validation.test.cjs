@@ -373,6 +373,8 @@ describe('validate agents subcommand (#1371)', () => {
     assert.ok('installed' in output, 'Must include installed array');
     assert.ok('missing' in output, 'Must include missing array');
     assert.ok('agents_found' in output, 'Must include agents_found boolean');
+    assert.ok('agent_pair_drift_checked' in output, 'Must include agent_pair_drift_checked boolean');
+    assert.ok('agent_pair_drift' in output, 'Must include agent_pair_drift boolean');
   });
 
   test('validate agents lists all expected agent types', () => {
@@ -382,5 +384,57 @@ describe('validate agents subcommand (#1371)', () => {
     const output = JSON.parse(result.output);
     // The expected agents come from MODEL_PROFILES keys
     assert.ok(output.expected.length > 0, 'Must have expected agents');
+  });
+
+  test('validate agents does not flag md-only agents as pair drift for non-Codex runtimes', () => {
+    const agentsDir = path.join(tmpDir, 'agents-md-only');
+    fs.mkdirSync(agentsDir, { recursive: true });
+    for (const name of EXPECTED_AGENTS) {
+      fs.writeFileSync(
+        path.join(agentsDir, `${name}.md`),
+        `---\nname: ${name}\ndescription: Test agent\n---\nAgent content.\n`
+      );
+    }
+
+    const result = runGsdTools('validate agents --raw', tmpDir, { GSD_AGENTS_DIR: agentsDir });
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.agents_found, true);
+    assert.strictEqual(output.agent_pair_drift_checked, false);
+    assert.strictEqual(output.agent_pair_drift, false);
+    assert.deepStrictEqual(output.agent_pair_drift_toml_only, []);
+    assert.deepStrictEqual(output.agent_pair_drift_md_only, []);
+  });
+
+  test('validate agents flags manifest-backed generated agent pair drift', () => {
+    const agentsDir = path.join(tmpDir, 'agents');
+    fs.mkdirSync(agentsDir, { recursive: true });
+    const manifestFiles = {};
+    for (const name of EXPECTED_AGENTS) {
+      fs.writeFileSync(
+        path.join(agentsDir, `${name}.md`),
+        `---\nname: ${name}\ndescription: Test agent\n---\nAgent content.\n`
+      );
+      manifestFiles[`agents/${name}.md`] = 'test-md-hash';
+      manifestFiles[`agents/${name}.toml`] = 'test-toml-hash';
+    }
+    fs.writeFileSync(
+      path.join(tmpDir, 'gsd-file-manifest.json'),
+      JSON.stringify({ version: 'test', files: manifestFiles }, null, 2)
+    );
+
+    const result = runGsdTools('validate agents --raw', tmpDir, {
+      GSD_AGENTS_DIR: agentsDir,
+      GSD_RUNTIME: 'codex',
+    });
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.agents_found, false);
+    assert.strictEqual(output.agent_pair_drift_checked, true);
+    assert.strictEqual(output.agent_pair_drift, true);
+    assert.deepStrictEqual(output.agent_pair_drift_toml_only, []);
+    assert.deepStrictEqual(output.agent_pair_drift_md_only, EXPECTED_AGENTS.slice().sort());
   });
 });
