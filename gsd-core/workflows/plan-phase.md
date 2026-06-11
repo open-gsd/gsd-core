@@ -648,60 +648,63 @@ Continue to step 5.6. Security config is passed to the planner in step 8.
 
 ## 5.6. UI Design Contract Gate
 
-> Skip if `workflow.ui_phase` is explicitly `false` AND `workflow.ui_safety_gate` is explicitly `false` in `.planning/config.json`. If keys are absent, treat as enabled.
+> Capability-driven dispatch. Resolves active `plan:pre` hooks via the capability registry; each hook's `when` condition (`workflow.ui_phase` for step hooks, `workflow.ui_safety_gate` for gate hooks) is evaluated by the registry — no inline config-get needed.
+>
+> **Config semantics (cutover fix):** `workflow.ui_phase` gates UI-SPEC *generation* (step); `workflow.ui_safety_gate` gates the *planning block* (gate). Both-on = identical to OLD §5.6. Intended change: `{ui_phase:true, ui_safety_gate:false}` now auto-generates in pipelines but does NOT block manual planning (each key controls exactly what its description says).
 
 ```bash
-UI_PHASE_CFG=$(gsd_run query config-get workflow.ui_phase 2>/dev/null || echo "true")
-UI_GATE_CFG=$(gsd_run query config-get workflow.ui_safety_gate 2>/dev/null || echo "true")
+HOOKS_JSON=$(gsd_run loop render-hooks plan:pre --raw)
 ```
 
-**If both are `false`:** Skip to step 6.
+Read the `activeHooks` array directly from `HOOKS_JSON` (in-context — do NOT invoke a shell pipeline).
 
-Check if phase has frontend indicators:
+**Branch 1 — both toggles off (`activeHooks` is empty or absent):** Skip to step 6.
+
+Run whenever **any** `plan:pre` UI hook is active — including the step-only case (`workflow.ui_safety_gate` off). (`check.query` = `"ui.plan-gate"`; router normalizes dots→hyphens.)
 
 ```bash
-PHASE_SECTION=$(gsd_run query roadmap.get-phase "${PHASE}" 2>/dev/null)
-# Shell-free word-boundary gate (#3718): Node.js helper — no locale env-var dependency.
-# Reads via stdin to avoid OS ARG_MAX limits on large phase text.
-# Resolve the helper against the GSD install dir via RUNTIME_DIR (#448) — NOT the consuming
-# project's git root — falling back to git toplevel / $HOME/.claude. Exit codes mirror grep (0=UI,1=none).
-_GSD_RT="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
-UI_GATE_JS=$(for _c in "$_GSD_RT/gsd-core/bin/lib/ui-safety-gate.cjs" "$_GSD_RT/bin/lib/ui-safety-gate.cjs" "$_GSD_RT/.claude/bin/lib/ui-safety-gate.cjs" "$HOME/.claude/gsd-core/bin/lib/ui-safety-gate.cjs" "$HOME/.claude/bin/lib/ui-safety-gate.cjs"; do [ -f "$_c" ] && { echo "$_c"; break; }; done)
-if [ -n "$UI_GATE_JS" ]; then printf '%s' "$PHASE_SECTION" | node "$UI_GATE_JS" >/dev/null 2>&1; HAS_UI=$?; else echo "WARN: ui-safety-gate.cjs not found via RUNTIME_DIR/\$HOME (#448) — assuming UI present" >&2; HAS_UI=0; fi
+GATE=$(gsd_run check ui-plan-gate "${PHASE}" --raw)
 ```
 
-**If `HAS_UI` is 0 (frontend indicators found):**
+Read `frontend`, `hasUiSpec`, and `block` from `GATE`.
 
-Check for existing UI-SPEC:
-```bash
-UI_SPEC_FILE=$(ls "${PHASE_DIR}"/*-UI-SPEC.md 2>/dev/null | head -1)
-```
+**Branch 2 — no frontend indicators (`frontend` is `false`):** Skip silently to step 5.7.
 
-**If UI-SPEC.md found:** Set `UI_SPEC_PATH=$UI_SPEC_FILE`. Display: `Using UI design contract: ${UI_SPEC_PATH}`
+**Branch 3 — UI-SPEC already exists (`hasUiSpec` is `true`):**
 
-**If UI-SPEC.md missing AND `--skip-ui` flag is present in $ARGUMENTS:** Skip silently to step 6.
-
-**If UI-SPEC.md missing AND `UI_GATE_CFG` is `true`:**
-
-Read ephemeral chain flag (same field as `check.auto-mode` → `auto_chain_active`):
-```bash
-AUTO_CHAIN=$(gsd_run query check auto-mode --pick auto_chain_active 2>/dev/null || echo "false")
-```
-
-**If `AUTO_CHAIN` is `true` (running inside a `--chain` or `--auto` pipeline):**
-
-Auto-generate UI-SPEC without prompting:
-```
-Skill(skill="gsd-ui-phase", args="${PHASE} --auto ${GSD_WS}")
-```
-After `gsd-ui-phase` returns, re-read:
 ```bash
 UI_SPEC_FILE=$(ls "${PHASE_DIR}"/*-UI-SPEC.md 2>/dev/null | head -1)
 UI_SPEC_PATH="${UI_SPEC_FILE}"
 ```
+
+Display: `Using UI design contract: ${UI_SPEC_PATH}`. Continue to step 6.
+
+**Branch 4 — `--skip-ui` in `$ARGUMENTS`:** Skip silently to step 6.
+
+**Branches 5 & 6 — frontend detected, UI-SPEC missing, no `--skip-ui`.**
+
+Read the ephemeral auto-chain flag:
+
+```bash
+AUTO_CHAIN=$(gsd_run query check auto-mode --pick auto_chain_active 2>/dev/null || echo "false")
+```
+
+**Branch 5 — `AUTO_CHAIN` is `true` (pipeline / `--auto`):** Fire each active **step** hook — runs independently of whether a gate is active (covers `{ui_phase:true, ui_safety_gate:false}`). For each entry in `activeHooks` (in array order) where `kind == "step"` and `ref.skill` is set:
+
+```
+Skill(skill="gsd-${ref.skill}", args="${PHASE} --auto ${GSD_WS}")
+```
+
+(prepend `gsd-` to `ref.skill` — `ui-phase` → `gsd-ui-phase`.) After all step hooks return, re-read:
+
+```bash
+UI_SPEC_FILE=$(ls "${PHASE_DIR}"/*-UI-SPEC.md 2>/dev/null | head -1)
+UI_SPEC_PATH="${UI_SPEC_FILE}"
+```
+
 Continue to step 6.
 
-**If `AUTO_CHAIN` is `false` (manual invocation):**
+**Branch 6 — `AUTO_CHAIN` is `false` (manual): generic gate handling.** For each entry in `activeHooks` where `kind == "gate"` and `blocking` is `true`: if `block:true` (from `GATE`), output the block below and **EXIT the plan-phase workflow**. If no active blocking gate (e.g. `workflow.ui_safety_gate` is off), continue to step 6 — no block.
 
 Output this markdown directly (not as a code block):
 
@@ -715,8 +718,6 @@ Also available:
 ```
 
 **Exit the plan-phase workflow. Do not continue.**
-
-**If `HAS_UI` is 1 (no frontend indicators):** Skip silently to step 5.7.
 
 ## 5.7. Schema Push Detection Gate
 

@@ -66,49 +66,71 @@ describe('Workflow .md structural guard (#3718)', () => {
   // The UI safety gate invocation is embedded in workflow prose-as-code.
   // These structural tests guard against regression where someone re-introduces
   // the shell-based locale-prefix invocation that silently breaks on Windows PowerShell.
-  for (const [label, filePath] of [
-    ['plan-phase.md', PLAN_PHASE_PATH],
-    ['autonomous.md', AUTONOMOUS_PATH],
-  ]) {
-    test(`${label} must invoke ui-safety-gate.cjs via stdin, anchored to the GSD install dir`, () => {
-      const content = fs.readFileSync(filePath, 'utf-8');
-      assert.ok(
-        content.includes('ui-safety-gate.cjs'),
-        `${label}: must reference ui-safety-gate.cjs for cross-shell portability (#3718)`
-      );
 
-      // Scope structural assertions to the gate invocation region so we test the
-      // gate's OWN resolution, not §1's unrelated RUNTIME_DIR usage for gsd-tools.
-      const gi = content.indexOf('ui-safety-gate.cjs');
-      const region = content.slice(Math.max(0, gi - 800), gi + 200);
+  // plan-phase.md (post-#1026): §5.6 now delegates UI gate evaluation to
+  // `gsd_run check ui-plan-gate` (a CLI command that internally calls checkUiPresence
+  // from ui-safety-gate.cjs). The direct shell invocation of ui-safety-gate.cjs was
+  // intentionally removed from the workflow — cross-shell portability is now provided
+  // by the CLI command layer, not inline shell code.
+  test('plan-phase.md must invoke check ui-plan-gate (capability-driven UI gate — #1026)', () => {
+    const content = fs.readFileSync(PLAN_PHASE_PATH, 'utf-8');
+    assert.ok(
+      content.includes('check ui-plan-gate'),
+      'plan-phase.md: §5.6 must delegate to `check ui-plan-gate` (capability-driven, #1026)'
+    );
+    assert.ok(
+      !content.includes('LC_ALL=C grep'),
+      'plan-phase.md: must NOT contain LC_ALL=C grep — that silently fails on Windows PowerShell (#3718)'
+    );
+    // Must NOT reintroduce the old shell-based path-search loop for ui-safety-gate.cjs
+    assert.ok(
+      !content.includes('UI_GATE_JS=$(for _c in'),
+      'plan-phase.md: must NOT contain the old shell-based ui-safety-gate.cjs path-search (old §5.6 pattern)'
+    );
+  });
 
-      // #448: the helper ships inside the GSD package, so it must be resolved
-      // against the GSD install dir (RUNTIME_DIR), NOT the consuming project's
-      // git root — otherwise the node call fails and the gate silently no-ops.
-      assert.ok(
-        region.includes('RUNTIME_DIR'),
-        `${label}: UI gate must resolve ui-safety-gate.cjs against RUNTIME_DIR (the GSD install dir), not the consuming project's git root (#448)`
-      );
-      assert.ok(
-        !region.includes('GSD_REPO_ROOT'),
-        `${label}: UI gate must NOT anchor the helper to GSD_REPO_ROOT (the consuming project's git root) — that silently no-ops in installed repos (#448)`
-      );
-      // Retain a git rev-parse --show-toplevel fallback when RUNTIME_DIR is unset (#3718).
-      assert.ok(
-        region.includes('git rev-parse --show-toplevel'),
-        `${label}: must retain a git rev-parse --show-toplevel fallback for the install-dir resolution`
-      );
-      // Confirm stdin pipe usage (printf or echo piped to node)
-      assert.ok(
-        content.includes('printf') || content.includes('echo'),
-        `${label}: must pipe phase section via stdin (printf/echo | node) to avoid ARG_MAX`
-      );
-      assert.ok(
-        !content.includes('LC_ALL=C grep'),
-        `${label}: must NOT contain LC_ALL=C grep — that silently fails on Windows PowerShell (#3718)`
-      );
-    });
-  }
+  // autonomous.md: still directly invokes ui-safety-gate.cjs via node stdin.
+  // This test is unchanged — autonomous.md §3a.5 has not been cut over to the
+  // capability-driven pattern yet (deferred per #1026 implementation notes).
+  test('autonomous.md must invoke ui-safety-gate.cjs via stdin, anchored to the GSD install dir', () => {
+    const label = 'autonomous.md';
+    const content = fs.readFileSync(AUTONOMOUS_PATH, 'utf-8');
+    assert.ok(
+      content.includes('ui-safety-gate.cjs'),
+      `${label}: must reference ui-safety-gate.cjs for cross-shell portability (#3718)`
+    );
+
+    // Scope structural assertions to the gate invocation region so we test the
+    // gate's OWN resolution, not §1's unrelated RUNTIME_DIR usage for gsd-tools.
+    const gi = content.indexOf('ui-safety-gate.cjs');
+    const region = content.slice(Math.max(0, gi - 800), gi + 200);
+
+    // #448: the helper ships inside the GSD package, so it must be resolved
+    // against the GSD install dir (RUNTIME_DIR), NOT the consuming project's
+    // git root — otherwise the node call fails and the gate silently no-ops.
+    assert.ok(
+      region.includes('RUNTIME_DIR'),
+      `${label}: UI gate must resolve ui-safety-gate.cjs against RUNTIME_DIR (the GSD install dir), not the consuming project's git root (#448)`
+    );
+    assert.ok(
+      !region.includes('GSD_REPO_ROOT'),
+      `${label}: UI gate must NOT anchor the helper to GSD_REPO_ROOT (the consuming project's git root) — that silently no-ops in installed repos (#448)`
+    );
+    // Retain a git rev-parse --show-toplevel fallback when RUNTIME_DIR is unset (#3718).
+    assert.ok(
+      region.includes('git rev-parse --show-toplevel'),
+      `${label}: must retain a git rev-parse --show-toplevel fallback for the install-dir resolution`
+    );
+    // Confirm stdin pipe usage (printf or echo piped to node)
+    assert.ok(
+      content.includes('printf') || content.includes('echo'),
+      `${label}: must pipe phase section via stdin (printf/echo | node) to avoid ARG_MAX`
+    );
+    assert.ok(
+      !content.includes('LC_ALL=C grep'),
+      `${label}: must NOT contain LC_ALL=C grep — that silently fails on Windows PowerShell (#3718)`
+    );
+  });
 });
 
 // ── Cross-shell spawn test (#3718) ────────────────────────────────────────────

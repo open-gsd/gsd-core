@@ -110,40 +110,81 @@ describe('spike #1018 — off means off (structural proof)', () => {
       "onError must be 'skip' as declared in the registry");
   });
 
-  // ── Case 2: UI off ─────────────────────────────────────────────────────────
+  // ── Case 2: STEP-only-off (ui_phase=false, ui_safety_gate=true) ──────────────
   //
-  // config { workflow: { ui_phase: false } } → step filtered out.
-  // hostConsume must report activeCount=0, skillsToInvoke=[], and
-  // rendered must equal the base/no-active form — the OFF output IS the base.
+  // (#1026) plan:pre now has TWO hooks — a step (when: workflow.ui_phase) and a
+  // gate (when: workflow.ui_safety_gate). They are INDEPENDENT toggles by design.
+  // Turning off ui_phase suppresses the step but the gate (ui_safety_gate=true)
+  // still fires → rendered is NOT the zero-hooks base (it contains the gate block).
+  //
+  // This case proves the step surface is a pure function of step-kind hooks:
+  //   activeCount=0, skillsToInvoke=[] — "step off means step off".
+  // It also asserts the gate IS present in activeHooks and rendered differs from
+  // the empty base, documenting that the two toggles are genuinely independent.
 
-  test('UI off: config {workflow:{ui_phase:false}} → activeCount=0, skillsToInvoke=[], rendered equals zero-hooks base', () => {
-    const offConfig = { workflow: { ui_phase: false } };
+  test('STEP-only-off: config {workflow:{ui_phase:false, ui_safety_gate:true}} → step absent, gate present, rendered ≠ base', () => {
+    const stepOffConfig = { workflow: { ui_phase: false, ui_safety_gate: true } };
     const resolved = resolveLoopHooks({
       point: 'plan:pre',
       registry: realRegistry,
-      config: offConfig,
+      config: stepOffConfig,
     });
     const envelope = { activeHooks: resolved.activeHooks, rendered: renderLoopHooks(resolved) };
     const consumed = hostConsume(envelope);
 
-    const base = makeBaseEnvelope('plan:pre');
-    const baseConsumed = hostConsume(base);
-
+    // Step-level aggregate: step is off
     assert.strictEqual(consumed.activeCount, 0,
       'Expected 0 active steps when ui_phase=false');
     assert.deepEqual(consumed.skillsToInvoke, [],
       'skillsToInvoke must be [] when ui_phase=false');
 
-    // STRUCTURAL ASSERTION (the spike's point):
-    // The off-state host output is identical to the host's zero-hooks base.
-    // The aggregate is a pure function of activeHooks — nothing in host source
-    // was mutated. This proves "off means off" by construction.
-    assert.strictEqual(consumed.rendered, baseConsumed.rendered,
-      'OFF rendered output must be byte-identical to the zero-hooks base rendered output (pure function of activeHooks)');
-    assert.strictEqual(consumed.activeCount, baseConsumed.activeCount,
-      'OFF activeCount must equal base activeCount');
-    assert.deepEqual(consumed.skillsToInvoke, baseConsumed.skillsToInvoke,
-      'OFF skillsToInvoke must equal base skillsToInvoke');
+    // Gate is still active: activeHooks is NOT empty (contains the gate hook)
+    const gateHooks = resolved.activeHooks.filter(h => h.kind === 'gate');
+    assert.ok(gateHooks.length > 0,
+      'Gate hook must still be present in activeHooks when ui_safety_gate=true');
+
+    // Rendered is NOT the zero-hooks base because the gate block is present
+    const base = makeBaseEnvelope('plan:pre');
+    assert.notStrictEqual(consumed.rendered, base.rendered,
+      'rendered must NOT equal the zero-hooks base when the gate is still active (ui_safety_gate=true)');
+
+    // Rendered must NOT include a step block for ui-phase
+    assert.ok(
+      !consumed.rendered.includes('### Step') || !consumed.rendered.includes('ui-phase'),
+      'OFF rendered must not include an active step block for ui-phase',
+    );
+  });
+
+  // ── Case 2b: ALL-OFF (ui_phase=false, ui_safety_gate=false) ─────────────────
+  //
+  // Both toggles off → activeHooks is genuinely empty → rendered is byte-identical
+  // to the zero-hooks base produced by the empty-registry helper.
+  //
+  // THIS is the clean structural "off means off → base output" proof.
+  // It must exist as a concrete, computable assertion — not be elided because a
+  // partial-off case happens to have a gate. The empty base is computed, not
+  // hand-coded, so if renderLoopHooks ever changes its empty format this still holds.
+
+  test('ALL-OFF: config {workflow:{ui_phase:false, ui_safety_gate:false}} → activeHooks empty AND rendered === base', () => {
+    const allOffConfig = { workflow: { ui_phase: false, ui_safety_gate: false } };
+    const resolved = resolveLoopHooks({
+      point: 'plan:pre',
+      registry: realRegistry,
+      config: allOffConfig,
+    });
+    const envelope = { activeHooks: resolved.activeHooks, rendered: renderLoopHooks(resolved) };
+
+    // STRUCTURAL ASSERTION (the spike's core proof — restored):
+    // When every hook at this point is toggled off, activeHooks must be empty
+    // and rendered must be byte-identical to the computed zero-hooks base.
+    // This proves the host aggregate is a pure function of activeHooks — no
+    // capability leaks through when all its controlling config keys are false.
+    assert.strictEqual(resolved.activeHooks.length, 0,
+      'ALL-OFF: activeHooks must be empty when both ui_phase and ui_safety_gate are false');
+
+    const base = makeBaseEnvelope('plan:pre');
+    assert.strictEqual(envelope.rendered, base.rendered,
+      'ALL-OFF: rendered must be byte-identical to the zero-hooks base when activeHooks is empty');
   });
 
   // ── Case 3: Synthetic multi-hook ──────────────────────────────────────────

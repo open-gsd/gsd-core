@@ -158,6 +158,15 @@ const capabilities = {
     "contributions": [],
     "gates": [
       {
+        "point": "plan:pre",
+        "check": {
+          "query": "ui.plan-gate"
+        },
+        "when": "workflow.ui_safety_gate",
+        "blocking": true,
+        "onError": "halt"
+      },
+      {
         "point": "execute:wave:post",
         "check": {
           "query": "ui.safety-gate"
@@ -211,7 +220,18 @@ const byLoopPoint = {
       }
     ],
     "contributions": [],
-    "gates": []
+    "gates": [
+      {
+        "capId": "ui",
+        "point": "plan:pre",
+        "check": {
+          "query": "ui.plan-gate"
+        },
+        "when": "workflow.ui_safety_gate",
+        "blocking": true,
+        "onError": "halt"
+      }
+    ]
   },
   "plan:post": {
     "steps": [],

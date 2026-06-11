@@ -100,6 +100,18 @@ describe('UI pilot capability', () => {
     assert.ok(uiPhaseStep, 'plan:pre.steps should contain the ui-phase step');
     assert.strictEqual(uiPhaseStep.capId, 'ui');
 
+    // byLoopPoint['plan:pre'].gates contains the new ui.plan-gate (#1026)
+    const planPreGates = registry.byLoopPoint['plan:pre'].gates;
+    assert.ok(Array.isArray(planPreGates), 'plan:pre.gates should be an array');
+    const uiPlanGate = planPreGates.find(
+      (g) => g.check && g.check.query === 'ui.plan-gate',
+    );
+    assert.ok(uiPlanGate, 'plan:pre.gates should contain the ui.plan-gate (#1026)');
+    assert.strictEqual(uiPlanGate.capId, 'ui');
+    assert.strictEqual(uiPlanGate.blocking, true);
+    assert.strictEqual(uiPlanGate.when, 'workflow.ui_safety_gate');
+    assert.strictEqual(uiPlanGate.onError, 'halt');
+
     // byLoopPoint['execute:wave:post'].gates contains the UI safety gate
     const execWavePostGates = registry.byLoopPoint['execute:wave:post'].gates;
     assert.ok(Array.isArray(execWavePostGates), 'execute:wave:post.gates should be an array');
