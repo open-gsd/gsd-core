@@ -2162,6 +2162,155 @@ describe('state planned-phase command', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// bug #1070 regression: "Complete ✓" terminal status must yield to planned-phase
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('bug #1070: "Complete ✓" terminal status yields to Ready to execute on planned-phase', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createFixture();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  // Full STATE.md shape that matches the canonical fixture used across state tests.
+  // Both **Status:** frontmatter and Current Position `Status:` are set to the given value.
+  function makeStateMd(statusValue) {
+    return `# Project State
+
+**Current Phase:** 1
+**Current Phase Name:** setup
+**Total Phases:** 5
+**Current Plan:** 0
+**Total Plans in Phase:** 0
+**Status:** ${statusValue}
+**Last Activity:** 2026-03-20
+**Last Activity Description:** Phase 1 complete
+
+## Current Position
+Phase: 1 of 5 (setup)
+Plan: 0 of 5 in current phase
+Status: ${statusValue}
+Last activity: 2026-03-20 -- Phase 1 complete
+Progress: [##########] 20%
+
+## Decisions Made
+
+| Phase | Decision | Rationale |
+|-------|----------|-----------|
+`;
+  }
+
+  // Case 1: the bug — Complete ✓ blocks the state machine
+  test('case 1: Complete ✓ in both frontmatter and Current Position is overwritten by planned-phase', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      makeStateMd('Complete ✓')
+    );
+
+    const result = runGsdTools(
+      ['state', 'planned-phase', '--phase', '2', '--name', 'Core', '--plans', '5'],
+      tmpDir
+    );
+    assert.ok(result.success, `Command should succeed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+
+    // The updated array must include Status (both paths ran the replacement)
+    assert.ok(
+      Array.isArray(output.updated) && output.updated.includes('Status'),
+      `Expected output.updated to include "Status", got: ${JSON.stringify(output.updated)}`
+    );
+
+    const stateContent = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+
+    // The checkmark form must be gone
+    assert.ok(
+      !stateContent.includes('Complete ✓'),
+      'STATE.md must not contain "Complete ✓" after planned-phase'
+    );
+
+    // Frontmatter **Status:** line must now be "Ready to execute"
+    const fmStatusMatch = stateContent.match(/\*\*Status:\*\*\s*(.+)/);
+    assert.ok(fmStatusMatch, '**Status:** frontmatter line not found');
+    assert.strictEqual(
+      fmStatusMatch[1].trim(),
+      'Ready to execute',
+      `Frontmatter **Status:** should be "Ready to execute", got: "${fmStatusMatch[1].trim()}"`
+    );
+
+    // Current Position Status: line must also be "Ready to execute"
+    const posMatch = stateContent.match(/## Current Position\s*\n([\s\S]*?)(?=\n##|$)/i);
+    assert.ok(posMatch, 'Current Position section not found');
+    const posStatusMatch = posMatch[1].match(/^Status:\s*(.+)/m);
+    assert.ok(posStatusMatch, 'Status field not found in Current Position section');
+    assert.strictEqual(
+      posStatusMatch[1].trim(),
+      'Ready to execute',
+      `Current Position Status should be "Ready to execute", got: "${posStatusMatch[1].trim()}"`
+    );
+  });
+
+  // Case 2: a genuinely executor-authored non-terminal status must NOT be overwritten
+  // (frontmatter **Status:** path via stateReplaceFieldIfTemplate)
+  test('case 2: executor-authored non-terminal status is preserved by planned-phase (#397 narrowness check)', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      makeStateMd('Blocked on infra review')
+    );
+
+    const result = runGsdTools(
+      ['state', 'planned-phase', '--phase', '2', '--name', 'Core', '--plans', '5'],
+      tmpDir
+    );
+    assert.ok(result.success, `Command should succeed: ${result.error}`);
+
+    const stateContent = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+
+    // The executor-authored Status must survive in the frontmatter
+    const fmStatusMatch = stateContent.match(/\*\*Status:\*\*\s*(.+)/);
+    assert.ok(fmStatusMatch, '**Status:** frontmatter line not found');
+    assert.strictEqual(
+      fmStatusMatch[1].trim(),
+      'Blocked on infra review',
+      `Frontmatter **Status:** should be preserved as "Blocked on infra review", got: "${fmStatusMatch[1].trim()}"`
+    );
+  });
+
+  // Case 3: executor-authored non-terminal status in the Current Position section
+  // must NOT be overwritten (exercises updateCurrentPositionFields in src/state.cts,
+  // a separate code path from the frontmatter matcher).
+  test('case 3: executor-authored non-terminal status in Current Position is preserved by planned-phase', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      makeStateMd('Blocked on infra review')
+    );
+
+    const result = runGsdTools(
+      ['state', 'planned-phase', '--phase', '2', '--name', 'Core', '--plans', '5'],
+      tmpDir
+    );
+    assert.ok(result.success, `Command should succeed: ${result.error}`);
+
+    const stateContent = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+
+    // Locate the Current Position section and verify the Status line there.
+    const posMatch = stateContent.match(/## Current Position\s*\n([\s\S]*?)(?=\n##|$)/i);
+    assert.ok(posMatch, 'Current Position section not found');
+    const posStatusMatch = posMatch[1].match(/^Status:\s*(.+)/m);
+    assert.ok(posStatusMatch, 'Status field not found in Current Position section');
+    assert.strictEqual(
+      posStatusMatch[1].trim(),
+      'Blocked on infra review',
+      `Current Position Status should be preserved as "Blocked on infra review", got: "${posStatusMatch[1].trim()}"`
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // state validate (Step 4 — Gate 1)
 // ─────────────────────────────────────────────────────────────────────────────
 

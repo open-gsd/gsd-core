@@ -190,6 +190,14 @@ export const KNOWN_STATUS_PATTERNS: RegExp[] = [
   /^Phase\s+\d+\s+complete/i,
   /^Verifying Phase\s+\d+/i,
   /^Phase complete/i,
+  // #1070: LLM executors (e.g. OpenCode) may write "Complete ✓" or bare "Complete"
+  // when finishing a phase.  Only bare terminal markers yield to the next phase's
+  // "Ready to execute" during planned-phase.  The pattern is anchored at both ends
+  // so that statuses with trailing prose (e.g. "Complete but needs manual QA",
+  // "Complete — ready for verification") are NOT matched and are preserved as
+  // executor-authored values.  Only exact forms like "Complete", "Complete ✓",
+  // "Complete✓", or "Complete ☑ " (trailing whitespace) match.
+  /^Complete\s*[✓✔✅☑]?\s*$/i,
 ];
 
 /**
