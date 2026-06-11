@@ -11,6 +11,7 @@ commands.html
 # Local test installs
 .claude/
 .mimocode/
+.commandcode/
 
 # Cursor IDE — local agents/skills bundle (never commit)
 .cursor/

@@ -340,6 +340,50 @@ const capabilities = {
       "supportTier": 1
     }
   },
+  "commandcode": {
+    "id": "commandcode",
+    "role": "runtime",
+    "title": "Command Code",
+    "description": "Command Code — dot-home config at ~/.commandcode; Claude-style flat skills layout; subagent frontmatter conversion; no lifecycle hook registration; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".commandcode",
+        "env": [
+          "COMMANDCODE_CONFIG_DIR"
+        ]
+      },
+      "configFormat": "none",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          }
+        ],
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          }
+        ]
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "none",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
   "copilot": {
     "id": "copilot",
     "role": "runtime",
@@ -1513,6 +1557,50 @@ const runtimes = {
       "supportTier": 1
     }
   },
+  "commandcode": {
+    "id": "commandcode",
+    "role": "runtime",
+    "title": "Command Code",
+    "description": "Command Code — dot-home config at ~/.commandcode; Claude-style flat skills layout; subagent frontmatter conversion; no lifecycle hook registration; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".commandcode",
+        "env": [
+          "COMMANDCODE_CONFIG_DIR"
+        ]
+      },
+      "configFormat": "none",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          }
+        ],
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          }
+        ]
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "none",
+      "sandboxTier": "none",
+      "supportTier": 2
+    }
+  },
   "copilot": {
     "id": "copilot",
     "role": "runtime",
@@ -2123,6 +2211,7 @@ const _requiresGraph = {
   "cline": [],
   "codebuddy": [],
   "codex": [],
+  "commandcode": [],
   "copilot": [],
   "cursor": [],
   "gemini": [],

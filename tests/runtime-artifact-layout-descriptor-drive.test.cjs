@@ -204,6 +204,14 @@ const GOLDEN = {
   'mimo/local': [
     { kind: 'skills', destSubpath: 'skills', prefix: 'gsd-' },
   ],
+
+  // ── commandcode ──────────────────────────────────────────────────────────────
+  'commandcode/global': [
+    { kind: 'skills', destSubpath: 'skills', prefix: 'gsd-' },
+  ],
+  'commandcode/local': [
+    { kind: 'skills', destSubpath: 'skills', prefix: 'gsd-' },
+  ],
 };
 
 // ── Parametrized tests ────────────────────────────────────────────────────────
@@ -211,7 +219,7 @@ const GOLDEN = {
 const RUNTIMES = [
   'claude', 'cursor', 'gemini', 'codex', 'copilot',
   'antigravity', 'windsurf', 'augment', 'trae', 'qwen',
-  'hermes', 'codebuddy', 'cline', 'kimi', 'mimo', 'opencode', 'kilo',
+  'hermes', 'codebuddy', 'cline', 'kimi', 'mimo', 'commandcode', 'opencode', 'kilo',
 ];
 
 for (const runtime of RUNTIMES) {

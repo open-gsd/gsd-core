@@ -210,15 +210,15 @@ describe('resolveRuntimeConfigIntent — fresh object each call', () => {
 // ---------------------------------------------------------------------------
 
 describe('ALLOWED_CONFIG_RUNTIMES completeness', () => {
-  const EXPECTED_17 = new Set([
+  const EXPECTED_18 = new Set([
     'claude', 'gemini', 'antigravity', 'augment', 'qwen', 'hermes', 'codebuddy',
     'opencode', 'kilo', 'codex', 'copilot', 'cline', 'cursor', 'windsurf', 'trae',
-    'kimi', 'mimo',
+    'kimi', 'mimo', 'commandcode',
   ]);
 
-  test('ALLOWED_CONFIG_RUNTIMES contains exactly the 17 expected runtimes', () => {
+  test('ALLOWED_CONFIG_RUNTIMES contains exactly the 18 expected runtimes', () => {
     const runtimeSet = new Set(ALLOWED_CONFIG_RUNTIMES);
-    assert.deepStrictEqual(runtimeSet, EXPECTED_17);
+    assert.deepStrictEqual(runtimeSet, EXPECTED_18);
   });
 
   test('every member of ALLOWED_CONFIG_RUNTIMES resolves without throwing', () => {
@@ -227,8 +227,8 @@ describe('ALLOWED_CONFIG_RUNTIMES completeness', () => {
     }
   });
 
-  test('ALLOWED_CONFIG_RUNTIMES has exactly 17 entries', () => {
-    assert.strictEqual([...ALLOWED_CONFIG_RUNTIMES].length, 17);
+  test('ALLOWED_CONFIG_RUNTIMES has exactly 18 entries', () => {
+    assert.strictEqual([...ALLOWED_CONFIG_RUNTIMES].length, 18);
   });
 });
 

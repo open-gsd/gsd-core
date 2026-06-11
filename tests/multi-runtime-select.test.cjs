@@ -85,19 +85,23 @@ describe('multi-runtime selection parsing', () => {
     assert.deepStrictEqual(parseRuntimeInput('17'), ['mimo']);
   });
 
+  test('single choice for commandcode', () => {
+    assert.deepStrictEqual(parseRuntimeInput('18'), ['commandcode']);
+  });
+
   test('single choice for kimi', () => {
     assert.deepStrictEqual(parseRuntimeInput('11'), ['kimi']);
   });
 
-  test('choice 18 returns all runtimes', () => {
-    assert.deepStrictEqual(parseRuntimeInput('18'), allRuntimes);
+  test('choice 19 returns all runtimes', () => {
+    assert.deepStrictEqual(parseRuntimeInput('19'), allRuntimes);
   });
 
-  test('choice 18 returns all runtimes when mixed with separators or other tokens', () => {
-    assert.deepStrictEqual(parseRuntimeInput('18,'), allRuntimes);
-    assert.deepStrictEqual(parseRuntimeInput('18 1'), allRuntimes);
-    assert.deepStrictEqual(parseRuntimeInput('1,18'), allRuntimes);
-    assert.deepStrictEqual(parseRuntimeInput('  18  '), allRuntimes);
+  test('choice 19 returns all runtimes when mixed with separators or other tokens', () => {
+    assert.deepStrictEqual(parseRuntimeInput('19,'), allRuntimes);
+    assert.deepStrictEqual(parseRuntimeInput('19 1'), allRuntimes);
+    assert.deepStrictEqual(parseRuntimeInput('1,19'), allRuntimes);
+    assert.deepStrictEqual(parseRuntimeInput('  19  '), allRuntimes);
   });
 
   test('empty input defaults to claude', () => {
@@ -106,13 +110,13 @@ describe('multi-runtime selection parsing', () => {
   });
 
   test('invalid choices are ignored, falls back to claude if all invalid', () => {
-    assert.deepStrictEqual(parseRuntimeInput('19'), ['claude']);
+    assert.deepStrictEqual(parseRuntimeInput('20'), ['claude']);
     assert.deepStrictEqual(parseRuntimeInput('0'), ['claude']);
     assert.deepStrictEqual(parseRuntimeInput('abc'), ['claude']);
   });
 
   test('invalid choices mixed with valid are filtered out', () => {
-    assert.deepStrictEqual(parseRuntimeInput('1,19,7'), ['claude', 'copilot']);
+    assert.deepStrictEqual(parseRuntimeInput('1,20,7'), ['claude', 'copilot']);
     assert.deepStrictEqual(parseRuntimeInput('abc 3 xyz'), ['augment']);
   });
 
@@ -146,9 +150,10 @@ describe('install.js exports multi-select runtime metadata', () => {
     '15': 'trae',
     '16': 'windsurf',
     '17': 'mimo',
+    '18': 'commandcode',
   };
   const expectedRuntimes = [
-    'claude', 'antigravity', 'augment', 'cline', 'codebuddy', 'codex',
+    'claude', 'antigravity', 'augment', 'cline', 'codebuddy', 'codex', 'commandcode',
     'copilot', 'cursor', 'gemini', 'hermes', 'kimi', 'kilo', 'mimo', 'opencode',
     'qwen', 'trae', 'windsurf',
   ];
@@ -167,8 +172,8 @@ describe('install.js exports multi-select runtime metadata', () => {
       'allRuntimes has no duplicates');
   });
 
-  test('"All" shortcut (option 18) selects every runtime', () => {
-    assert.deepStrictEqual(parseRuntimeInput('18'), allRuntimes);
+  test('"All" shortcut (option 19) selects every runtime', () => {
+    assert.deepStrictEqual(parseRuntimeInput('19'), allRuntimes);
   });
 
   test('--kimi flag selects Kimi without interactive prompt', () => {
@@ -182,7 +187,7 @@ describe('install.js exports multi-select runtime metadata', () => {
       '--all includes kimi exactly once');
   });
 
-  test('prompt lists Hermes Agent (10), Kimi (11), Qwen Code (14), Trae (15), MiMoCode (17), and All (18)', () => {
+  test('prompt lists Hermes Agent (10), Kimi (11), Qwen Code (14), Trae (15), MiMoCode (17), Command Code (18), and All (19)', () => {
     const prompt = stripAnsi(buildRuntimePromptText());
     assert.ok(/\b10\)\s*Hermes Agent\b/.test(prompt),
       'prompt lists Hermes Agent as option 10');
@@ -196,8 +201,10 @@ describe('install.js exports multi-select runtime metadata', () => {
       'prompt lists Trae as option 15');
     assert.ok(/\b17\)\s*MiMoCode\b/.test(prompt),
       'prompt lists MiMoCode as option 17');
-    assert.ok(/\b18\)\s*All\b/.test(prompt),
-      'prompt lists All as option 18');
+    assert.ok(/\b18\)\s*Command Code\b/.test(prompt),
+      'prompt lists Command Code as option 18');
+    assert.ok(/\b19\)\s*All\b/.test(prompt),
+      'prompt lists All as option 19');
   });
 
   test('prompt text shows multi-select hint', () => {
