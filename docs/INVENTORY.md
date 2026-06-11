@@ -371,7 +371,7 @@ The `gsd-planner` agent is decomposed into a core agent plus reference modules t
 
 ---
 
-## CLI Modules (106 shipped)
+## CLI Modules (107 shipped)
 
 Full listing: `gsd-core/bin/lib/*.cjs`.
 
