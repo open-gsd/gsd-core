@@ -225,6 +225,7 @@
       "planner-chunked.md",
       "planner-gap-closure.md",
       "planner-graphify-auto-update.md",
+      "planner-guidance.md",
       "planner-human-verify-mode.md",
       "planner-interface-context.md",
       "planner-load-graph-context.md",

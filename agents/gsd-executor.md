@@ -73,7 +73,8 @@ Before executing, discover project context:
 Load execution context:
 
 ```bash
-INIT=$(gsd-tools query init.execute-phase "${PHASE}")
+_GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"; GSD_TOOLS="${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}"; if [ -f "$GSD_TOOLS" ]; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${_GSD_RUNTIME_ROOT}/.claude/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${_GSD_RUNTIME_ROOT}/.claude/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${_GSD_RUNTIME_ROOT}/.codex/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${_GSD_RUNTIME_ROOT}/.codex/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif command -v gsd-tools >/dev/null 2>&1; then GSD_TOOLS="$(command -v gsd-tools)"; gsd_run() { "$GSD_TOOLS" "$@"; }; elif [ -f "$HOME/.claude/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="$HOME/.claude/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${HERMES_HOME:-$HOME/.hermes}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${HERMES_HOME:-$HOME/.hermes}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${CURSOR_CONFIG_DIR:-$HOME/.cursor}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${CURSOR_CONFIG_DIR:-$HOME/.cursor}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${CODEX_HOME:-$HOME/.codex}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${CODEX_HOME:-$HOME/.codex}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${GEMINI_CONFIG_DIR:-$HOME/.gemini}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${GEMINI_CONFIG_DIR:-$HOME/.gemini}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${COPILOT_CONFIG_DIR:-$HOME/.copilot}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${COPILOT_CONFIG_DIR:-$HOME/.copilot}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${WINDSURF_CONFIG_DIR:-$HOME/.codeium/windsurf}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${WINDSURF_CONFIG_DIR:-$HOME/.codeium/windsurf}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${AUGMENT_CONFIG_DIR:-$HOME/.augment}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${AUGMENT_CONFIG_DIR:-$HOME/.augment}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${TRAE_CONFIG_DIR:-$HOME/.trae}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${TRAE_CONFIG_DIR:-$HOME/.trae}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${QWEN_CONFIG_DIR:-$HOME/.qwen}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${QWEN_CONFIG_DIR:-$HOME/.qwen}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${CODEBUDDY_CONFIG_DIR:-$HOME/.codebuddy}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${CODEBUDDY_CONFIG_DIR:-$HOME/.codebuddy}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${CLINE_CONFIG_DIR:-$HOME/.cline}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${CLINE_CONFIG_DIR:-$HOME/.cline}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${GROK_AGENTS_HOME:-$HOME/.agents}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${GROK_AGENTS_HOME:-$HOME/.agents}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${ANTIGRAVITY_CONFIG_DIR:-$HOME/.gemini/antigravity}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${ANTIGRAVITY_CONFIG_DIR:-$HOME/.gemini/antigravity}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${KILO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/kilo}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${KILO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/kilo}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; else echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and gsd-tools is not on PATH. Run: npx -y @opengsd/gsd-core@latest --claude --local" >&2; exit 1; fi
+INIT=$(gsd_run query init.execute-phase "${PHASE}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
 
@@ -81,7 +82,7 @@ Extract from init JSON: `executor_model`, `commit_docs`, `sub_repos`, `phase_dir
 
 Also load planning state (position, decisions, blockers) via the SDK — **use `node` to invoke the CLI** (not `npx`):
 ```bash
-gsd-tools query state.load 2>/dev/null
+gsd_run query state.load 2>/dev/null
 ```
 If STATE.md missing but .planning/ exists: offer to reconstruct or continue without.
 If .planning/ missing: Error — project not initialized.
@@ -271,8 +272,8 @@ Do NOT continue reading. Analysis without action is a stuck signal.
 Check if auto mode is active at executor start (chain flag or user preference):
 
 ```bash
-AUTO_CHAIN=$(gsd-tools query config-get workflow._auto_chain_active 2>/dev/null || echo "false")
-AUTO_CFG=$(gsd-tools query config-get workflow.auto_advance 2>/dev/null || echo "false")
+AUTO_CHAIN=$(gsd_run query config-get workflow._auto_chain_active 2>/dev/null || echo "false")
+AUTO_CFG=$(gsd_run query config-get workflow.auto_advance 2>/dev/null || echo "false")
 ```
 
 Auto mode is active if either `AUTO_CHAIN` or `AUTO_CFG` is `"true"`. Store the result for checkpoint handling below.
@@ -397,7 +398,7 @@ If RED or GREEN gate commits are missing, add a warning to SUMMARY.md under a `#
 **Behavior-Adding Task detection** (the gate only fires when this predicate returns true): apply via the centralized verb instead of inlining the three checks:
 
 ```bash
-IS_BEHAVIOR_ADDING=$(gsd-tools query task.is-behavior-adding "$TASK_FILE" --pick is_behavior_adding)
+IS_BEHAVIOR_ADDING=$(gsd_run query task.is-behavior-adding "$TASK_FILE" --pick is_behavior_adding)
 ```
 
 The verb owns the canonical predicate (tdd="true" frontmatter AND `<behavior>` block AND non-test source files in `<files>`). Pure doc-only / config-only / test-only tasks return `false` and are exempt. Full result also exposes per-check breakdown (`checks.tdd_true`, `checks.has_behavior_block`, `checks.has_source_files`) and a human-readable `reason` — use these in the halt-and-report payload when the gate trips. See `references/execute-mvp-tdd.md` for halt protocol.
@@ -497,7 +498,7 @@ git add src/types/user.ts
 
 **If `sub_repos` is configured (non-empty array from init context):** Use `commit-to-subrepo` to route files to their correct sub-repo:
 ```bash
-gsd-tools query commit-to-subrepo "{type}({phase}-{plan}): {concise task description}" --files file1 file2 ...
+gsd_run query commit-to-subrepo "{type}({phase}-{plan}): {concise task description}" --files file1 file2 ...
 ```
 Returns JSON with per-repo commit hashes: `{ committed: true, repos: { "backend": { hash: "abc", files: [...] }, ... } }`. Record all hashes for SUMMARY.
 
@@ -674,32 +675,32 @@ After SUMMARY.md, update STATE.md using `gsd-tools query` state handlers (positi
 
 ```bash
 # Advance plan counter (handles edge cases automatically)
-gsd-tools query state.advance-plan
+gsd_run query state.advance-plan
 
 # Recalculate progress bar from disk state
-gsd-tools query state.update-progress
+gsd_run query state.update-progress
 
 # Record execution metrics (phase, plan, duration, tasks, files)
-gsd-tools query state.record-metric \
+gsd_run query state.record-metric \
   "${PHASE}" "${PLAN}" "${DURATION}" "${TASK_COUNT}" "${FILE_COUNT}"
 
 # Add decisions (extract from SUMMARY.md key-decisions)
 for decision in "${DECISIONS[@]}"; do
-  gsd-tools query state.add-decision "${decision}"
+  gsd_run query state.add-decision "${decision}"
 done
 
 # Update session info (timestamp, stopped-at, resume-file)
-gsd-tools query state.record-session \
+gsd_run query state.record-session \
   "" "Completed ${PHASE}-${PLAN}-PLAN.md" "None"
 ```
 
 ```bash
 # Update ROADMAP.md progress for this phase (plan counts, status)
-gsd-tools query roadmap.update-plan-progress "${PHASE_NUMBER}"
+gsd_run query roadmap.update-plan-progress "${PHASE_NUMBER}"
 
 # Mark completed requirements from PLAN.md frontmatter
 # Extract the `requirements` array from the plan's frontmatter, then mark each complete
-gsd-tools query requirements.mark-complete ${REQ_IDS}
+gsd_run query requirements.mark-complete ${REQ_IDS}
 ```
 
 **Requirement IDs:** Extract from the PLAN.md frontmatter `requirements:` field (e.g., `requirements: [AUTH-01, AUTH-02]`). Pass all IDs to `requirements mark-complete`. If the plan has no requirements field, skip this step.
@@ -717,13 +718,13 @@ gsd-tools query requirements.mark-complete ${REQ_IDS}
 
 **For blockers found during execution:**
 ```bash
-gsd-tools query state.add-blocker "Blocker description"
+gsd_run query state.add-blocker "Blocker description"
 ```
 </state_updates>
 
 <final_commit>
 ```bash
-gsd-tools query commit "docs({phase}-{plan}): complete [plan-name] plan" --files \
+gsd_run query commit "docs({phase}-{plan}): complete [plan-name] plan" --files \
   .planning/phases/XX-name/{phase}-{plan}-SUMMARY.md .planning/STATE.md .planning/ROADMAP.md .planning/REQUIREMENTS.md
 ```
 

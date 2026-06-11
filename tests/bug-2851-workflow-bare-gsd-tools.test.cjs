@@ -119,6 +119,37 @@ function lineHasBareGsdTools(line) {
   return false;
 }
 
+const AGENTS_DIR = path.join(__dirname, '..', 'agents');
+
+describe('bug #1041: agent files must not call bare gsd-tools (all-runtime resolver)', () => {
+  test('no agents/gsd-*.md file contains a bare gsd-tools command', () => {
+    const files = fs.readdirSync(AGENTS_DIR).filter((f) => f.startsWith('gsd-') && f.endsWith('.md'));
+    assert.ok(files.length > 0, 'expected agent files to exist');
+
+    const violations = [];
+    for (const f of files) {
+      const full = path.join(AGENTS_DIR, f);
+      const content = fs.readFileSync(full, 'utf-8');
+      const blocks = extractShellBlocks(content);
+      for (const blk of blocks) {
+        for (let i = 0; i < blk.lines.length; i++) {
+          if (lineHasBareGsdTools(blk.lines[i])) {
+            violations.push(`${f}:${blk.startLine + i}: ${blk.lines[i].trim()}`);
+          }
+        }
+      }
+    }
+
+    assert.deepStrictEqual(
+      violations,
+      [],
+      'Bare `gsd-tools` invocations found in agent shell blocks. ' +
+        'Inject the runtime-launcher preamble (_runtime-launcher.snippet.sh) and use `gsd_run` instead.\n' +
+        violations.join('\n'),
+    );
+  });
+});
+
 describe('bug-2851: workflow files must not call bare `gsd-tools` (#2245 sweep regression)', () => {
   test('no gsd-core/workflows/*.md file contains a bare gsd-tools command', () => {
     const files = fs.readdirSync(WORKFLOWS_DIR).filter((f) => f.endsWith('.md'));

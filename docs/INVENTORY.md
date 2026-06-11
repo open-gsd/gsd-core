@@ -264,7 +264,7 @@ Full roster at `gsd-core/workflows/*.md`. Workflows are thin orchestrators that 
 
 ---
 
-## References (67 shipped)
+## References (68 shipped)
 
 Full roster at `gsd-core/references/*.md`. References are shared knowledge documents that workflows and agents `@-reference`. The groupings below match [`docs/ARCHITECTURE.md`](ARCHITECTURE.md#references-gsd-corereferencesmd) — core, workflow, thinking-model clusters, and the modular planner decomposition.
 
@@ -354,6 +354,7 @@ The `gsd-planner` agent is decomposed into a core agent plus reference modules t
 | `planner-antipatterns.md` | Planner anti-patterns and specificity examples. |
 | `planner-chunked.md` | Chunked mode return formats (`## OUTLINE COMPLETE`, `## PLAN COMPLETE`) for Windows stdio hang mitigation. |
 | `planner-gap-closure.md` | Gap-closure mode behavior (reads VERIFICATION.md, targeted replanning). |
+| `planner-guidance.md` | Expository planner guidance: philosophy, task types/sizing, interface-first ordering, user setup, dependency graph, granularity calibration, and structured-return templates. |
 | `planner-reviews.md` | Cross-AI review integration (reads REVIEWS.md from `/gsd-review`). |
 | `planner-revision.md` | Plan revision patterns for iterative refinement. |
 | `planner-source-audit.md` | Planner source-audit and authority-limit rules. |

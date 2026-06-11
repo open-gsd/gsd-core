@@ -655,7 +655,8 @@ issue:
 
 Load phase operation context:
 ```bash
-INIT=$(gsd-tools query init.phase-op "${PHASE_ARG}")
+_GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"; GSD_TOOLS="${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}"; if [ -f "$GSD_TOOLS" ]; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${_GSD_RUNTIME_ROOT}/.claude/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${_GSD_RUNTIME_ROOT}/.claude/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${_GSD_RUNTIME_ROOT}/.codex/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${_GSD_RUNTIME_ROOT}/.codex/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif command -v gsd-tools >/dev/null 2>&1; then GSD_TOOLS="$(command -v gsd-tools)"; gsd_run() { "$GSD_TOOLS" "$@"; }; elif [ -f "$HOME/.claude/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="$HOME/.claude/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${HERMES_HOME:-$HOME/.hermes}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${HERMES_HOME:-$HOME/.hermes}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${CURSOR_CONFIG_DIR:-$HOME/.cursor}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${CURSOR_CONFIG_DIR:-$HOME/.cursor}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${CODEX_HOME:-$HOME/.codex}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${CODEX_HOME:-$HOME/.codex}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${GEMINI_CONFIG_DIR:-$HOME/.gemini}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${GEMINI_CONFIG_DIR:-$HOME/.gemini}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${COPILOT_CONFIG_DIR:-$HOME/.copilot}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${COPILOT_CONFIG_DIR:-$HOME/.copilot}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${WINDSURF_CONFIG_DIR:-$HOME/.codeium/windsurf}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${WINDSURF_CONFIG_DIR:-$HOME/.codeium/windsurf}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${AUGMENT_CONFIG_DIR:-$HOME/.augment}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${AUGMENT_CONFIG_DIR:-$HOME/.augment}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${TRAE_CONFIG_DIR:-$HOME/.trae}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${TRAE_CONFIG_DIR:-$HOME/.trae}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${QWEN_CONFIG_DIR:-$HOME/.qwen}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${QWEN_CONFIG_DIR:-$HOME/.qwen}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${CODEBUDDY_CONFIG_DIR:-$HOME/.codebuddy}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${CODEBUDDY_CONFIG_DIR:-$HOME/.codebuddy}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${CLINE_CONFIG_DIR:-$HOME/.cline}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${CLINE_CONFIG_DIR:-$HOME/.cline}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${GROK_AGENTS_HOME:-$HOME/.agents}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${GROK_AGENTS_HOME:-$HOME/.agents}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${ANTIGRAVITY_CONFIG_DIR:-$HOME/.gemini/antigravity}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${ANTIGRAVITY_CONFIG_DIR:-$HOME/.gemini/antigravity}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; elif [ -f "${KILO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/kilo}/gsd-core/bin/${_GSD_SHIM_NAME}" ]; then GSD_TOOLS="${KILO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/kilo}/gsd-core/bin/${_GSD_SHIM_NAME}"; gsd_run() { node "$GSD_TOOLS" "$@"; }; else echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and gsd-tools is not on PATH. Run: npx -y @opengsd/gsd-core@latest --claude --local" >&2; exit 1; fi
+INIT=$(gsd_run query init.phase-op "${PHASE_ARG}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
 
@@ -664,11 +665,11 @@ Extract from init JSON: `phase_dir`, `phase_number`, `has_plans`, `plan_count`.
 Orchestrator provides CONTEXT.md content in the verification prompt. If provided, parse for locked decisions, discretion areas, deferred ideas.
 
 ```bash
-gsd-tools query phase.list-plans "$phase_number"
+gsd_run query phase.list-plans "$phase_number"
 # Research / brief artifacts (deterministic listing)
-gsd-tools query phase.list-artifacts "$phase_number" --type research
-gsd-tools query roadmap.get-phase "$phase_number"
-gsd-tools query phase.list-artifacts "$phase_number" --type summary
+gsd_run query phase.list-artifacts "$phase_number" --type research
+gsd_run query roadmap.get-phase "$phase_number"
+gsd_run query phase.list-artifacts "$phase_number" --type summary
 ```
 
 **Extract:** Phase goal, requirements (decompose goal), locked decisions, deferred ideas.
@@ -680,7 +681,7 @@ Use `gsd-tools query` to validate plan structure:
 ```bash
 for plan in "$PHASE_DIR"/*-PLAN.md; do
   echo "=== $plan ==="
-  PLAN_STRUCTURE=$(gsd-tools query verify.plan-structure "$plan")
+  PLAN_STRUCTURE=$(gsd_run query verify.plan-structure "$plan")
   echo "$PLAN_STRUCTURE"
 done
 ```
@@ -698,7 +699,7 @@ Map errors/warnings to verification dimensions:
 Extract must_haves from each plan using `gsd-tools query`:
 
 ```bash
-MUST_HAVES=$(gsd-tools query frontmatter.get "$PLAN_PATH" must_haves)
+MUST_HAVES=$(gsd_run query frontmatter.get "$PLAN_PATH" must_haves)
 ```
 
 Returns JSON: `{ truths: [...], artifacts: [...], key_links: [...] }`
@@ -743,7 +744,7 @@ For each requirement: find covering task(s), verify action is specific, flag gap
 Use `verify.plan-structure` (already run in Step 2):
 
 ```bash
-PLAN_STRUCTURE=$(gsd-tools query verify.plan-structure "$PLAN_PATH")
+PLAN_STRUCTURE=$(gsd_run query verify.plan-structure "$PLAN_PATH")
 ```
 
 The `tasks` array in the result shows each task's completeness:
@@ -756,7 +757,7 @@ The `tasks` array in the result shows each task's completeness:
 
 **For manual validation of specificity** (`verify.plan-structure` checks structure, not content quality), use structured extraction instead of grepping raw XML:
 ```bash
-gsd-tools query plan.task-structure "$PLAN_PATH"
+gsd_run query plan.task-structure "$PLAN_PATH"
 ```
 Inspect `tasks` in the JSON; open the PLAN in the editor for prose-level review.
 
@@ -783,8 +784,8 @@ Missing: No mention of fetch/API call → Issue: Key link not planned
 ## Step 8: Assess Scope
 
 ```bash
-gsd-tools query plan.task-structure "$PHASE_DIR/$PHASE-01-PLAN.md"
-gsd-tools query frontmatter.get "$PHASE_DIR/$PHASE-01-PLAN.md" files_modified
+gsd_run query plan.task-structure "$PHASE_DIR/$PHASE-01-PLAN.md"
+gsd_run query frontmatter.get "$PHASE_DIR/$PHASE-01-PLAN.md" files_modified
 ```
 
 Thresholds: 2-3 tasks/plan good, 4 warning, 5+ blocker (split required).

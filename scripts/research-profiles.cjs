@@ -13,7 +13,7 @@
  *   color            — verbatim frontmatter `color:` value
  *   tools            — verbatim frontmatter `tools:` value (single string, comma-separated)
  *   requiredIncludes — @~/.claude/gsd-core/references/<file>.md strings the body MUST contain
- *   requiredSeamCalls — `gsd-tools query <cmd>` strings the body MUST contain
+ *   requiredSeamCalls — `gsd_run query <cmd>` strings the body MUST contain
  *   outputContract   — strings the body MUST contain (output path, return marker, etc.)
  */
 
@@ -31,9 +31,9 @@ const PROFILES = [
       '@~/.claude/gsd-core/references/research-verification-protocol.md',
     ],
     requiredSeamCalls: [
-      'gsd-tools query research-plan',
-      'gsd-tools query research-store put',
-      'gsd-tools query classify-confidence',
+      'gsd_run query research-plan',
+      'gsd_run query research-store put',
+      'gsd_run query classify-confidence',
     ],
     outputContract: [
       '.planning/research/',
@@ -53,10 +53,10 @@ const PROFILES = [
       '@~/.claude/gsd-core/references/research-verification-protocol.md',
     ],
     requiredSeamCalls: [
-      'gsd-tools query research-plan',
-      'gsd-tools query research-store put',
-      'gsd-tools query classify-confidence',
-      'gsd-tools query package-legitimacy check',
+      'gsd_run query research-plan',
+      'gsd_run query research-store put',
+      'gsd_run query classify-confidence',
+      'gsd_run query package-legitimacy check',
     ],
     outputContract: [
       '.planning/phases/XX-name/{phase_num}-RESEARCH.md',
@@ -122,7 +122,7 @@ const PROFILES = [
       '@~/.claude/gsd-core/references/research-documentation-lookup.md',
     ],
     requiredSeamCalls: [
-      'gsd-tools query commit',
+      'gsd_run query commit',
     ],
     outputContract: [
       'UI-SPEC.md',
@@ -137,7 +137,7 @@ const PROFILES = [
     tools: 'Read, Write, Bash',
     requiredIncludes: [],
     requiredSeamCalls: [
-      'gsd-tools query commit',
+      'gsd_run query commit',
     ],
     outputContract: [
       '.planning/research/SUMMARY.md',
