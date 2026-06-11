@@ -88,7 +88,7 @@ EXCLUDE from counts and analysis:
 - `.planning/` -- Planning docs, not project code
 - `node_modules/`, `dist/`, `build/`, `.git/`
 
-**Count accuracy:** When reporting component counts in stack.json or arch.md, always derive
+**Count accuracy:** When reporting component counts in stack.json or arch-decisions.json, always derive
 counts by running Glob on the layout-resolved canonical locations above, not from memory or CLAUDE.md.
 Example (standard layout): `Glob("agents/*.md")`. Example (kilo): `Glob(".kilo/agents/*.md")`.
 
@@ -108,7 +108,7 @@ If encountered, skip silently. Do NOT include contents.
 
 All JSON files include a `_meta` object with `updated_at` (ISO timestamp) and `version` (integer, start at 1, increment on update).
 
-### files.json -- File Graph
+### file-roles.json -- File Graph
 
 ```json
 {
@@ -127,7 +127,7 @@ All JSON files include a `_meta` object with `updated_at` (ISO timestamp) and `v
 
 Types: `entry-point`, `module`, `config`, `test`, `script`, `type-def`, `style`, `template`, `data`.
 
-### apis.json -- API Surfaces
+### api-map.json -- API Surfaces
 
 ```json
 {
@@ -144,7 +144,7 @@ Types: `entry-point`, `module`, `config`, `test`, `script`, `type-def`, `style`,
 }
 ```
 
-### deps.json -- Dependency Chains
+### dependency-graph.json -- Dependency Chains
 
 ```json
 {
@@ -180,30 +180,23 @@ Each dependency entry should also include `"invocation": "<method or npm script>
 
 Identify non-code content formats that are structurally important to the project and include them in `content_formats`.
 
-### arch.md -- Architecture Summary
+### arch-decisions.json -- Architecture Summary
 
-```markdown
----
-updated_at: "ISO-8601"
----
+arch-decisions.json is JSON (NOT markdown). The `gsd-tools intel` CLI reads, validates, and queries it as JSON. Capture the architecture as descriptive keyed entries:
 
-## Architecture Overview
-
-{pattern name and description}
-
-## Key Components
-
-| Component | Path | Responsibility |
-|-----------|------|---------------|
-
-## Data Flow
-
-{entry point} -> {processing} -> {output}
-
-## Conventions
-
-{naming, file organization, import patterns}
+```json
+{
+  "_meta": { "updated_at": "ISO-8601", "version": 1 },
+  "entries": {
+    "overview": { "pattern": "{architecture pattern name}", "description": "{what it is and why}" },
+    "data-flow": { "flow": "{entry} -> {processing} -> {output}", "description": "{detail}" },
+    "conventions": { "naming": "{...}", "file-organization": "{...}", "imports": "{...}" },
+    "component:{Name}": { "path": "{path}", "responsibility": "{what it does}" }
+  }
+}
 ```
+
+Add one `component:{Name}` entry per key component, plus any other descriptive keys that fit (e.g. `security`, `modes`, a domain engine). Keys and string values are what `intel query <term>` searches, so keep them descriptive.
 
 <execution_flow>
 ## Exploration Process
@@ -226,9 +219,9 @@ gsd-tools intel patch-meta .planning/intel/stack.json
 
 Glob source files (`**/*.ts`, `**/*.js`, `**/*.py`, etc., excluding node_modules/dist/build).
 Read key files (entry points, configs, core modules) for imports/exports.
-Write `files.json`. Then patch its timestamp:
+Write `file-roles.json`. Then patch its timestamp:
 ```bash
-gsd-tools intel patch-meta .planning/intel/files.json 
+gsd-tools intel patch-meta .planning/intel/file-roles.json 
 ```
 
 Focus on files that matter -- entry points, core modules, configs. Skip test files and generated code unless they reveal architecture.
@@ -237,24 +230,27 @@ Focus on files that matter -- entry points, core modules, configs. Skip test fil
 
 Grep for route definitions, endpoint declarations, CLI command registrations.
 Patterns to search: `app.get(`, `router.post(`, `@GetMapping`, `def route`, express route patterns.
-Write `apis.json`. If no API endpoints found, write an empty entries object. Then patch its timestamp:
+Write `api-map.json`. If no API endpoints found, write an empty entries object. Then patch its timestamp:
 ```bash
-gsd-tools intel patch-meta .planning/intel/apis.json 
+gsd-tools intel patch-meta .planning/intel/api-map.json 
 ```
 
 ### Step 5: Dependencies
 
 Read package.json (dependencies, devDependencies), requirements.txt, go.mod, Cargo.toml.
 Cross-reference with actual imports to populate `used_by`.
-Write `deps.json`. Then patch its timestamp:
+Write `dependency-graph.json`. Then patch its timestamp:
 ```bash
-gsd-tools intel patch-meta .planning/intel/deps.json 
+gsd-tools intel patch-meta .planning/intel/dependency-graph.json 
 ```
 
 ### Step 6: Architecture
 
-Synthesize patterns from steps 2-5 into a human-readable summary.
-Write `arch.md`.
+Synthesize patterns from steps 2-5 into structured JSON.
+Write `arch-decisions.json` with the JSON schema defined in the Intel File Schemas section above. Then patch its timestamp:
+```bash
+gsd-tools intel patch-meta .planning/intel/arch-decisions.json
+```
 
 ### Step 6.5: Self-Check
 
@@ -278,8 +274,8 @@ This writes `.last-refresh.json` with accurate timestamps and hashes. Do NOT wri
 ## Partial Updates
 
 When `focus: partial --files <paths>` is specified:
-1. Only update entries in files.json/apis.json/deps.json that reference the given paths
-2. Do NOT rewrite stack.json or arch.md (these need full context)
+1. Only update entries in file-roles.json/api-map.json/dependency-graph.json that reference the given paths
+2. Do NOT rewrite stack.json or arch-decisions.json (these need full context)
 3. Preserve existing entries not related to the specified paths
 4. Read existing intel files first, merge updates, write back
 
@@ -287,13 +283,13 @@ When `focus: partial --files <paths>` is specified:
 
 | File | Target | Hard Limit |
 |------|--------|------------|
-| files.json | <=2000 tokens | 3000 tokens |
-| apis.json | <=1500 tokens | 2500 tokens |
-| deps.json | <=1000 tokens | 1500 tokens |
+| file-roles.json | <=2000 tokens | 3000 tokens |
+| api-map.json | <=1500 tokens | 2500 tokens |
+| dependency-graph.json | <=1000 tokens | 1500 tokens |
 | stack.json | <=500 tokens | 800 tokens |
-| arch.md | <=1500 tokens | 2000 tokens |
+| arch-decisions.json | <=1500 tokens | 2000 tokens |
 
-For large codebases, prioritize coverage of key files over exhaustive listing. Include the most important 50-100 source files in files.json rather than attempting to list every file.
+For large codebases, prioritize coverage of key files over exhaustive listing. Include the most important 50-100 source files in file-roles.json rather than attempting to list every file.
 
 <success_criteria>
 - [ ] All 5 intel files written to .planning/intel/

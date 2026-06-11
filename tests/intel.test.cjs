@@ -25,6 +25,7 @@ const {
   intelApiSurface,
   ensureIntelDir,
   isIntelEnabled,
+  INTEL_FILES,
 } = require('../gsd-core/bin/lib/intel.cjs');
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -844,5 +845,44 @@ describe('intelApiSurface', () => {
     assert.ok('written' in result, 'result must have written field');
     assert.ok('symbolCount' in result, 'result must have symbolCount field');
     assert.ok('stale' in result, 'result must have stale field');
+  });
+});
+
+describe('#1000 regression: gsd-intel-updater emits canonical intel filenames', () => {
+  // allow-test-rule: source-text-is-the-product — agents/gsd-intel-updater.md IS the
+  // system prompt the intel-updater agent runs under; asserting its filename references
+  // verifies the deployed agent surface contract matches the INTEL_FILES the CLI reads.
+  const agentPromptPath = path.join(__dirname, '..', 'agents', 'gsd-intel-updater.md');
+  const agentPrompt = fs.readFileSync(agentPromptPath, 'utf8');
+
+  test('references every canonical INTEL_FILES name', () => {
+    for (const filename of Object.values(INTEL_FILES)) {
+      assert.ok(
+        agentPrompt.includes(filename),
+        `gsd-intel-updater.md must instruct writing the canonical intel file "${filename}" (from INTEL_FILES) that the gsd-tools intel CLI reads; it was missing.`,
+      );
+    }
+  });
+
+  test('does not reference orphaned short filenames the CLI never reads', () => {
+    // Short forms `${key}.json` that are NOT canonical INTEL_FILES values are orphaned —
+    // the agent must not emit them. Also forbid the markdown arch.md output.
+    const canonical = new Set(Object.values(INTEL_FILES));
+    const forbidden = Object.keys(INTEL_FILES)
+      .map((k) => `${k}.json`)
+      .filter((short) => !canonical.has(short));
+    forbidden.push('arch.md');
+    for (const shortName of forbidden) {
+      // Guard against substring false-positives (e.g. 'files.json' inside 'file-roles.json'):
+      // canonical long names never contain these short tokens, verified by the canonical set.
+      const offendingLines = agentPrompt
+        .split('\n')
+        .filter((line) => line.includes(shortName));
+      assert.strictEqual(
+        offendingLines.length,
+        0,
+        `gsd-intel-updater.md must not reference orphaned short name "${shortName}" the intel CLI never reads. Offending line(s):\n${offendingLines.join('\n')}`,
+      );
+    }
   });
 });
