@@ -20,7 +20,7 @@ import os from 'node:os';
 import core = require('./core.cjs');
 const { output, error, loadConfig } = core;
 import { platformReadSync as safeReadFile, platformWriteSync, platformEnsureDir } from './shell-command-projection.cjs';
-import { getGlobalSkillDir } from './runtime-homes.cjs';
+import { getGlobalSkillDir, getGlobalConfigDir } from './runtime-homes.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { resolveRuntimeNameFromCandidates } from './runtime-name-policy.cjs';
 
@@ -729,7 +729,27 @@ function cmdWriteProfile(cwd: string, options: CmdWriteProfileOptions, raw: bool
 
   let outputPath = options.output;
   if (!outputPath) {
-    outputPath = path.join(os.homedir(), '.claude', 'gsd-core', 'USER-PROFILE.md');
+    // #1114: resolve the ACTIVE runtime's config home so the profile is written
+    // where the runtime's own workflows look for it. Previously this hardcoded the
+    // Claude home, so a Codex run wrote the profile under the Claude config dir
+    // while Codex advisor-mode (installed under the Codex home) checked the Codex
+    // dir and never found it. Mirrors cmdGenerateDevPreferences' runtime resolution.
+    let effectiveRuntime = 'claude';
+    try {
+      const config = loadConfig(cwd);
+      effectiveRuntime = resolveRuntimeNameFromCandidates(
+        process.env['GSD_RUNTIME'],
+        config['runtime'],
+        'claude'
+      ) || 'claude';
+    } catch {
+      effectiveRuntime = resolveRuntimeNameFromCandidates(
+        process.env['GSD_RUNTIME'],
+        'claude'
+      ) || 'claude';
+    }
+    // path.join (not a string literal) keeps the cline-install leaked-path lint quiet.
+    outputPath = path.join(getGlobalConfigDir(effectiveRuntime), 'gsd-core', 'USER-PROFILE.md');
   } else if (!path.isAbsolute(outputPath)) {
     outputPath = path.join(cwd, outputPath);
   }

@@ -117,6 +117,73 @@ describe('write-profile command', () => {
     assert.ok(out.dimensions_scored > 0, 'should have scored dimensions');
   });
 
+  test('#1114: default output resolves the active runtime config home (codex)', () => {
+    const analysis = {
+      profile_version: '1.0',
+      dimensions: { communication_style: { rating: 'terse-direct', confidence: 'HIGH' } },
+    };
+    const analysisPath = path.join(tmpDir, 'analysis.json');
+    const codexHome = path.join(tmpDir, 'codex-home');
+    fs.writeFileSync(analysisPath, JSON.stringify(analysis));
+
+    const result = runGsdTools(
+      ['write-profile', '--input', analysisPath, '--raw'],
+      tmpDir,
+      { CODEX_HOME: codexHome, GSD_RUNTIME: 'codex' }
+    );
+    assert.ok(result.success, `Failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    // Must land in the Codex home (so Codex advisor-mode finds it), NOT .claude.
+    assert.strictEqual(out.profile_path, path.join(codexHome, 'gsd-core', 'USER-PROFILE.md'));
+    assert.ok(!out.profile_path.includes(`${path.sep}.claude${path.sep}`),
+      `codex profile must not be written under .claude; got ${out.profile_path}`);
+    assert.ok(fs.existsSync(out.profile_path), 'runtime-aware profile should be written to disk');
+  });
+
+  test('#1114: default output is the .claude config home for the claude runtime', () => {
+    const analysis = {
+      profile_version: '1.0',
+      dimensions: { communication_style: { rating: 'terse-direct', confidence: 'HIGH' } },
+    };
+    const analysisPath = path.join(tmpDir, 'analysis.json');
+    fs.writeFileSync(analysisPath, JSON.stringify(analysis));
+
+    // Clear ambient runtime vars so the test is hermetic regardless of the
+    // developer's shell (a stray GSD_RUNTIME/CLAUDE_CONFIG_DIR would redirect it).
+    const result = runGsdTools(['write-profile', '--input', analysisPath, '--raw'], tmpDir,
+      { HOME: tmpDir, GSD_RUNTIME: '', CLAUDE_CONFIG_DIR: '', CODEX_HOME: '' });
+    assert.ok(result.success, `Failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    // os.homedir() returns HOME verbatim, so assert on the suffix to stay
+    // robust against macOS /var → /private/var symlink normalization.
+    assert.ok(
+      out.profile_path.endsWith(path.join('.claude', 'gsd-core', 'USER-PROFILE.md')),
+      `claude profile must be under .claude/gsd-core; got ${out.profile_path}`
+    );
+    assert.ok(fs.existsSync(out.profile_path), 'profile should be written to disk');
+  });
+
+  test('#1114: config.runtime=codex (no GSD_RUNTIME) also resolves the Codex home', () => {
+    const analysis = {
+      profile_version: '1.0',
+      dimensions: { communication_style: { rating: 'terse-direct', confidence: 'HIGH' } },
+    };
+    const analysisPath = path.join(tmpDir, 'analysis.json');
+    const codexHome = path.join(tmpDir, 'codex-home');
+    fs.writeFileSync(analysisPath, JSON.stringify(analysis));
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify({ runtime: 'codex' }));
+
+    // No GSD_RUNTIME — the runtime must be read from config.runtime.
+    const result = runGsdTools(
+      ['write-profile', '--input', analysisPath, '--raw'],
+      tmpDir,
+      { CODEX_HOME: codexHome, GSD_RUNTIME: '' }
+    );
+    assert.ok(result.success, `Failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.profile_path, path.join(codexHome, 'gsd-core', 'USER-PROFILE.md'));
+  });
+
   test('errors when --input is missing', () => {
     const result = runGsdTools('write-profile --raw', tmpDir);
     assert.ok(!result.success, 'should fail without --input');
