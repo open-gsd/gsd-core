@@ -11110,6 +11110,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     postToolEvent,
     hookEvents: _hookEventsDialect,
     extendedHookEvents: _capabilityRegistry?.runtimes?.[runtime]?.runtime?.extendedHookEvents ?? [],
+    hooksSurface: _capabilityRegistry?.runtimes?.[runtime]?.runtime?.hooksSurface,
     updateCheckCommand,
     contextMonitorCommand,
     promptGuardCommand,

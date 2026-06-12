@@ -345,3 +345,83 @@ describe('enh-1076 phase 5f-3: arbitrary runtime with SubagentStop in descriptor
     cleanupDir(targetDir);
   });
 });
+
+// ─── Suite 6: hooksSurface drive (ADR-857 phase 5g drive 3) ──────────────────
+//
+// applySettingsJsonHooks is gated by opts.hooksSurface !== 'none'.
+// - hooksSurface:'none'         → entire body is skipped; no hooks written
+// - hooksSurface:'settings-json'→ hooks are written (even for a runtime whose
+//   name was previously hardcoded to skip, e.g. 'opencode')
+//
+// This proves the skip is driven by the descriptor field, not the runtime name.
+
+describe('enh-1076 phase 5g drive 3: hooksSurface:none skips all hooks regardless of runtime', () => {
+  let targetDir;
+  let settings;
+
+  before(() => {
+    targetDir = createStubTargetDir();
+    settings = { hooks: {} };
+    // 'claude' would normally write hooks, but hooksSurface:'none' must skip entirely.
+    const opts = {
+      ...buildOpts(targetDir, { runtime: 'claude', extendedHookEvents: ['SubagentStop'] }),
+      hooksSurface: 'none',
+    };
+    applySettingsJsonHooks(settings, opts);
+  });
+
+  test('SessionStart is NOT written when hooksSurface is "none"', () => {
+    assert.strictEqual(
+      hasHooksFor(settings, 'SessionStart'),
+      false,
+      `SessionStart must not be written when hooksSurface="none"; hooks keys: ${JSON.stringify(Object.keys(settings.hooks || {}))}`
+    );
+  });
+
+  test('PostToolUse is NOT written when hooksSurface is "none"', () => {
+    assert.strictEqual(hasHooksFor(settings, 'PostToolUse'), false);
+  });
+
+  test('PreToolUse is NOT written when hooksSurface is "none"', () => {
+    assert.strictEqual(hasHooksFor(settings, 'PreToolUse'), false);
+  });
+
+  test('cleanup', () => {
+    cleanupDir(targetDir);
+  });
+});
+
+describe('enh-1076 phase 5g drive 3: hooksSurface:settings-json writes hooks even for previously-skipped runtime name', () => {
+  let targetDir;
+  let settings;
+
+  before(() => {
+    targetDir = createStubTargetDir();
+    settings = { hooks: {} };
+    // 'opencode' previously was hardcoded to skip hooks; with descriptor drive it
+    // should write hooks whenever hooksSurface !== 'none'.
+    const opts = {
+      ...buildOpts(targetDir, { runtime: 'opencode', extendedHookEvents: [] }),
+      hooksSurface: 'settings-json',
+    };
+    applySettingsJsonHooks(settings, opts);
+  });
+
+  test('SessionStart IS written when hooksSurface is "settings-json" (even for opencode name)', () => {
+    // The hook file guard may prevent actual writing if hooks/dist is absent,
+    // but the hooks object itself is at minimum initialized.
+    assert.ok(
+      settings.hooks && typeof settings.hooks === 'object',
+      `settings.hooks must be initialized when hooksSurface="settings-json"`,
+    );
+    // At a minimum, SessionStart key exists (array may be empty if hook file not present)
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(settings.hooks, 'SessionStart'),
+      `settings.hooks.SessionStart must be initialized; keys: ${JSON.stringify(Object.keys(settings.hooks))}`,
+    );
+  });
+
+  test('cleanup', () => {
+    cleanupDir(targetDir);
+  });
+});

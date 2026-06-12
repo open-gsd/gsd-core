@@ -27,8 +27,8 @@
  *     null       → no dedicated permission writer.
  */
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const { runtimes } = require('./capability-registry.cjs') as { runtimes: Record<string, { runtime?: Record<string, unknown> }> };
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { runtimes } = require('./capability-registry.cjs') as { runtimes: Record<string, { runtime: Record<string, unknown> | undefined }> };
 
 // ---------------------------------------------------------------------------
 // Types
@@ -58,7 +58,7 @@ interface RuntimeConfigIntent {
 /** The complete set of 16 supported runtimes for config-adapter dispatch. */
 const ALLOWED_CONFIG_RUNTIMES: ReadonlySet<string> = new Set(
   Object.entries(runtimes)
-    .filter(([, cap]) => cap && cap.runtime && typeof (cap.runtime as Record<string, unknown>).installSurface === 'string')
+    .filter(([, cap]) => cap && cap.runtime && typeof cap.runtime['installSurface'] === 'string')
     .map(([id]) => id),
 );
 
@@ -81,13 +81,13 @@ const INSTALL_SURFACES: ReadonlyArray<ConfigInstallSurface> = Object.freeze([
  * @throws {TypeError} if runtime is not a known supported runtime.
  */
 function resolveRuntimeConfigIntent(runtime: string): RuntimeConfigIntent {
-  const entry = runtimes[runtime] && runtimes[runtime].runtime;
+  const entry = runtimes[runtime]?.runtime;
   if (!entry) throw new TypeError(`Unknown runtime for config adapter: ${runtime}`);
-  const permissionWriter = (entry as Record<string, unknown>).permissionWriter;
+  const permissionWriter = entry['permissionWriter'];
   return {
     runtime,
-    installSurface:         (entry as Record<string, unknown>).installSurface as ConfigInstallSurface,
-    writesSharedSettings:   (entry as Record<string, unknown>).writesSharedSettings as boolean,
+    installSurface:         entry['installSurface'] as ConfigInstallSurface,
+    writesSharedSettings:   entry['writesSharedSettings'] as boolean,
     finishPermissionWriter: permissionWriter == null ? null : permissionWriter as FinishPermissionWriter,
   };
 }
