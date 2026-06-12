@@ -643,6 +643,27 @@ describe('renderLoopHooks', () => {
     assert.match(rendered, /skip/);
   });
 
+  test('step hook renders agent ref and inline prompt fragment', () => {
+    const registry = makeRegistry({
+      point: 'plan:pre',
+      steps: [{
+        capId: 'research',
+        point: 'plan:pre',
+        ref: { agent: 'gsd-phase-researcher' },
+        fragment: { inline: 'Research the phase before planning.' },
+        produces: ['RESEARCH.md'],
+        consumes: ['CONTEXT.md'],
+        onError: 'skip',
+      }],
+    });
+    const resolved = resolveLoopHooks({ point: 'plan:pre', registry, config: {} });
+    assert.deepEqual(resolved.activeHooks[0].fragment, { inline: 'Research the phase before planning.' });
+
+    const rendered = renderLoopHooks(resolved);
+    assert.match(rendered, /agent:gsd-phase-researcher/);
+    assert.match(rendered, /Research the phase before planning\./);
+  });
+
   test('contribution hook renders into role', () => {
     const resolved = {
       point: 'plan:pre',

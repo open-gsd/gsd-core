@@ -630,6 +630,37 @@ describe('registry structure', () => {
   });
 });
 
+describe('ADR-857 phase 6 planning feature capabilities', () => {
+  const realRegistry = require('../gsd-core/bin/lib/capability-registry.cjs');
+
+  test('real registry declares research, ai-integration, and pattern-mapper capabilities', () => {
+    for (const capId of ['research', 'ai-integration', 'pattern-mapper']) {
+      assert.ok(realRegistry.capabilities[capId], `${capId} capability must be declared`);
+      assert.strictEqual(realRegistry.capabilities[capId].role, 'feature');
+    }
+  });
+
+  test('planning feature capabilities own their workflow config keys', () => {
+    assert.strictEqual(realRegistry.configKeys['workflow.research'], 'research');
+    assert.strictEqual(realRegistry.configKeys['workflow.ai_integration_phase'], 'ai-integration');
+    assert.strictEqual(realRegistry.configKeys['workflow.pattern_mapper'], 'pattern-mapper');
+  });
+
+  test('planning feature capabilities register plan:pre hooks', () => {
+    const hooks = [
+      ...realRegistry.byLoopPoint['plan:pre'].steps,
+      ...realRegistry.byLoopPoint['plan:pre'].contributions,
+      ...realRegistry.byLoopPoint['plan:pre'].gates,
+    ];
+    for (const capId of ['research', 'ai-integration', 'pattern-mapper']) {
+      assert.ok(
+        hooks.some((hook) => hook.capId === capId),
+        `${capId} must participate in plan:pre through the Capability Registry`,
+      );
+    }
+  });
+});
+
 // ─── 6. Fix regression guards ────────────────────────────────────────────────
 
 describe('Fix #1: consumes-satisfiability is point-order-aware', () => {
@@ -1122,6 +1153,23 @@ describe('S1: fragment.path traversal guard', () => {
     assert.ok(errors.some((e) => e.includes('fragment.path')));
   });
 
+  test('array fragment shape is rejected', () => {
+    const cap = {
+      ...UI_CAP,
+      contributions: [
+        {
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: [],
+          when: 'workflow.ui_phase',
+          onError: 'skip',
+        },
+      ],
+    };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(errors.some((e) => e.includes('fragment') && e.includes('object')));
+  });
+
   test('non-string fragment.inline is rejected', () => {
     const cap = {
       ...UI_CAP,
@@ -1192,6 +1240,94 @@ describe('S1: fragment.path traversal guard', () => {
     };
     const errors = validateCapability(cap, 'ui');
     assert.ok(errors.some((e) => e.includes('consumes entries') && e.includes('strings')));
+  });
+
+  test('fragment.path is materialized into inline registry content', (t) => {
+    const capsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-cap-fragment-'));
+    t.after(() => cleanup(capsDir));
+    const capDir = path.join(capsDir, 'planning-advice');
+    fs.mkdirSync(path.join(capDir, 'fragments'), { recursive: true });
+    fs.writeFileSync(
+      path.join(capDir, 'fragments', 'plan-pre.md'),
+      'Use the capability-owned planning fragment.\n',
+    );
+    fs.writeFileSync(
+      path.join(capDir, 'capability.json'),
+      JSON.stringify({
+        id: 'planning-advice',
+        role: 'feature',
+        title: 'Planning advice',
+        description: 'Synthetic fixture for fragment path materialization.',
+        tier: 'full',
+        requires: [],
+        skills: [],
+        agents: [],
+        hooks: [],
+        config: {},
+        steps: [],
+        contributions: [{
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { path: 'fragments/plan-pre.md' },
+          produces: [],
+          consumes: ['CONTEXT.md'],
+          onError: 'skip',
+        }],
+        gates: [],
+      }),
+    );
+
+    const { capMap, errors } = loadAndValidate(new Set(), capsDir);
+    assert.deepEqual(errors, []);
+    const registry = buildRegistry(capMap);
+    assert.strictEqual(
+      registry.byLoopPoint['plan:pre'].contributions[0].fragment.inline,
+      'Use the capability-owned planning fragment.\n',
+    );
+  });
+
+  test('step fragment.path is materialized into inline registry content', (t) => {
+    const capsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-cap-step-fragment-'));
+    t.after(() => cleanup(capsDir));
+    const capDir = path.join(capsDir, 'research');
+    fs.mkdirSync(path.join(capDir, 'fragments'), { recursive: true });
+    fs.writeFileSync(
+      path.join(capDir, 'fragments', 'plan-pre.md'),
+      'Research prompt owned by the capability.\n',
+    );
+    fs.writeFileSync(
+      path.join(capDir, 'capability.json'),
+      JSON.stringify({
+        id: 'research',
+        role: 'feature',
+        title: 'Research',
+        description: 'Synthetic fixture for step fragment materialization.',
+        tier: 'standard',
+        requires: [],
+        skills: [],
+        agents: ['gsd-phase-researcher'],
+        hooks: [],
+        config: {},
+        steps: [{
+          point: 'plan:pre',
+          ref: { agent: 'gsd-phase-researcher' },
+          fragment: { path: 'fragments/plan-pre.md' },
+          produces: ['RESEARCH.md'],
+          consumes: ['CONTEXT.md'],
+          onError: 'skip',
+        }],
+        contributions: [],
+        gates: [],
+      }),
+    );
+
+    const { capMap, errors } = loadAndValidate(new Set(), capsDir);
+    assert.deepEqual(errors, []);
+    const registry = buildRegistry(capMap);
+    assert.strictEqual(
+      registry.byLoopPoint['plan:pre'].steps[0].fragment.inline,
+      'Research prompt owned by the capability.\n',
+    );
   });
 });
 

@@ -347,11 +347,13 @@ function resolveLoopHooks(input: ResolveLoopHooksInput): ResolveLoopHooksResult 
       ? (hook['ref'] as HookRef)
       : undefined;
     const when = typeof hook['when'] === 'string' ? hook['when'] : undefined;
+    const fragment = toFragment(hook['fragment']);
     const produces = toStringArray(hook['produces']);
     const consumes = toStringArray(hook['consumes']);
     const onError = typeof hook['onError'] === 'string' ? hook['onError'] : undefined;
     const active: ActiveHook = { capId, kind: 'step' };
     if (ref !== undefined) active.ref = ref;
+    if (fragment !== undefined) active.fragment = fragment;
     if (when !== undefined) active.when = when;
     if (produces.length > 0) active.produces = produces;
     if (consumes.length > 0) active.consumes = consumes;
@@ -429,7 +431,9 @@ function renderLoopHooks(resolved: ResolveLoopHooksResult): string {
       stepOrdinal += 1;
       const refStr = hook.ref?.skill
         ? `skill:${hook.ref.skill}`
-        : JSON.stringify(hook.ref ?? {});
+        : hook.ref?.agent
+          ? `agent:${hook.ref.agent}`
+          : JSON.stringify(hook.ref ?? {});
       lines.push(`### Step ${stepOrdinal}: ${refStr} (${hook.capId})`);
       if (hook.produces && hook.produces.length > 0) {
         lines.push(`- produces: ${hook.produces.join(', ')}`);
@@ -442,6 +446,13 @@ function renderLoopHooks(resolved: ResolveLoopHooksResult): string {
       }
       if (hook.onError) {
         lines.push(`- onError: ${hook.onError}`);
+      }
+      if (hook.fragment?.inline) {
+        lines.push('');
+        lines.push(hook.fragment.inline);
+      } else if (hook.fragment?.path) {
+        lines.push('');
+        lines.push(`_Step fragment path is declared but not rendered by loop-resolver: ${hook.fragment.path}_`);
       }
       lines.push('');
     } else if (hook.kind === 'contribution') {

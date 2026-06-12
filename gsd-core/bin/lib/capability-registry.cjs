@@ -7,6 +7,49 @@
  */
 
 const capabilities = {
+  "ai-integration": {
+    "id": "ai-integration",
+    "role": "feature",
+    "title": "AI design contract",
+    "description": "AI-SPEC design contract workflow for phases that build AI systems; owns the AI integration command, agents, and workflow.ai_integration_phase activation key.",
+    "tier": "full",
+    "requires": [],
+    "skills": [
+      "ai-integration-phase"
+    ],
+    "agents": [
+      "gsd-framework-selector",
+      "gsd-ai-researcher",
+      "gsd-domain-researcher",
+      "gsd-eval-planner"
+    ],
+    "hooks": [],
+    "config": {
+      "workflow.ai_integration_phase": {
+        "type": "boolean",
+        "default": true,
+        "description": "Prompt for an AI-SPEC design contract before planning phases that involve AI systems."
+      }
+    },
+    "steps": [
+      {
+        "point": "plan:pre",
+        "ref": {
+          "skill": "ai-integration-phase"
+        },
+        "produces": [
+          "AI-SPEC.md"
+        ],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "workflow.ai_integration_phase",
+        "onError": "skip"
+      }
+    ],
+    "contributions": [],
+    "gates": []
+  },
   "antigravity": {
     "id": "antigravity",
     "role": "runtime",
@@ -832,6 +875,50 @@ const capabilities = {
       "extendedHookEvents": []
     }
   },
+  "pattern-mapper": {
+    "id": "pattern-mapper",
+    "role": "feature",
+    "title": "Pattern mapping",
+    "description": "Optional codebase-pattern mapping before planning; owns the pattern mapper agent and workflow.pattern_mapper activation key.",
+    "tier": "full",
+    "requires": [
+      "research"
+    ],
+    "skills": [],
+    "agents": [
+      "gsd-pattern-mapper"
+    ],
+    "hooks": [],
+    "config": {
+      "workflow.pattern_mapper": {
+        "type": "boolean",
+        "default": true,
+        "description": "Run the pattern mapper before planning when context or research is available."
+      }
+    },
+    "steps": [
+      {
+        "point": "plan:pre",
+        "ref": {
+          "agent": "gsd-pattern-mapper"
+        },
+        "fragment": {
+          "path": "fragments/plan-pre.md",
+          "inline": "<pattern_mapping_context>\n**Phase:** {phase_number} - {phase_name}\n**Phase directory:** {phase_dir}\n**Padded phase:** {padded_phase}\n\n<files_to_read>\n- {context_path} (USER DECISIONS from /gsd:discuss-phase)\n- {research_path} (Technical Research)\n</files_to_read>\n\n**Output file:** {phase_dir}/{padded_phase}-PATTERNS.md\n\nExtract the list of files to be created/modified from CONTEXT.md and RESEARCH.md. For each file, classify by role and data flow, find the closest existing analog in the codebase, extract concrete code excerpts, and produce PATTERNS.md.\n</pattern_mapping_context>\n"
+        },
+        "produces": [
+          "PATTERNS.md"
+        ],
+        "consumes": [
+          "RESEARCH.md"
+        ],
+        "when": "workflow.pattern_mapper",
+        "onError": "skip"
+      }
+    ],
+    "contributions": [],
+    "gates": []
+  },
   "qwen": {
     "id": "qwen",
     "role": "runtime",
@@ -884,6 +971,48 @@ const capabilities = {
         "PreCompact"
       ]
     }
+  },
+  "research": {
+    "id": "research",
+    "role": "feature",
+    "title": "Phase research",
+    "description": "Optional phase research before planning; owns the phase researcher agent and workflow.research activation key.",
+    "tier": "standard",
+    "requires": [],
+    "skills": [],
+    "agents": [
+      "gsd-phase-researcher"
+    ],
+    "hooks": [],
+    "config": {
+      "workflow.research": {
+        "type": "boolean",
+        "default": true,
+        "description": "Run phase research before planning when research artifacts are missing or explicitly refreshed."
+      }
+    },
+    "steps": [
+      {
+        "point": "plan:pre",
+        "ref": {
+          "agent": "gsd-phase-researcher"
+        },
+        "fragment": {
+          "path": "fragments/plan-pre.md",
+          "inline": "<objective>\nResearch how to implement Phase {phase_number}: {phase_name}\nAnswer: \"What do I need to know to PLAN this phase well?\"\n</objective>\n\n<files_to_read>\n- {context_path} (USER DECISIONS from /gsd:discuss-phase)\n- {requirements_path} (Project requirements)\n- {state_path} (Project decisions and history)\n</files_to_read>\n\n${AGENT_SKILLS_RESEARCHER}\n\n<additional_context>\n**Phase description:** {phase_description}\n**Phase requirement IDs (MUST address):** {phase_req_ids}\n\n**Project instructions:** Read ./CLAUDE.md or ./.claude/CLAUDE.md if either exists; follow project-specific guidelines.\n**Project skills:** Check .claude/skills/ or .agents/skills/ directory if either exists. Read SKILL.md files and account for project skill patterns.\n</additional_context>\n\n<output>\nWrite to: {phase_dir}/{phase_num}-RESEARCH.md\n</output>\n"
+        },
+        "produces": [
+          "RESEARCH.md"
+        ],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "workflow.research",
+        "onError": "skip"
+      }
+    ],
+    "contributions": [],
+    "gates": []
   },
   "trae": {
     "id": "trae",
@@ -1070,12 +1199,19 @@ const capabilities = {
 };
 
 const bySkill = {
+  "ai-integration-phase": "ai-integration",
   "graphify": "graphify",
   "ui-phase": "ui",
   "ui-review": "ui"
 };
 
 const byAgent = {
+  "gsd-framework-selector": "ai-integration",
+  "gsd-ai-researcher": "ai-integration",
+  "gsd-domain-researcher": "ai-integration",
+  "gsd-eval-planner": "ai-integration",
+  "gsd-pattern-mapper": "pattern-mapper",
+  "gsd-phase-researcher": "research",
   "gsd-ui-checker": "ui",
   "gsd-ui-auditor": "ui"
 };
@@ -1094,6 +1230,40 @@ const byLoopPoint = {
   "plan:pre": {
     "steps": [
       {
+        "capId": "ai-integration",
+        "point": "plan:pre",
+        "ref": {
+          "skill": "ai-integration-phase"
+        },
+        "produces": [
+          "AI-SPEC.md"
+        ],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "workflow.ai_integration_phase",
+        "onError": "skip"
+      },
+      {
+        "capId": "research",
+        "point": "plan:pre",
+        "ref": {
+          "agent": "gsd-phase-researcher"
+        },
+        "fragment": {
+          "path": "fragments/plan-pre.md",
+          "inline": "<objective>\nResearch how to implement Phase {phase_number}: {phase_name}\nAnswer: \"What do I need to know to PLAN this phase well?\"\n</objective>\n\n<files_to_read>\n- {context_path} (USER DECISIONS from /gsd:discuss-phase)\n- {requirements_path} (Project requirements)\n- {state_path} (Project decisions and history)\n</files_to_read>\n\n${AGENT_SKILLS_RESEARCHER}\n\n<additional_context>\n**Phase description:** {phase_description}\n**Phase requirement IDs (MUST address):** {phase_req_ids}\n\n**Project instructions:** Read ./CLAUDE.md or ./.claude/CLAUDE.md if either exists; follow project-specific guidelines.\n**Project skills:** Check .claude/skills/ or .agents/skills/ directory if either exists. Read SKILL.md files and account for project skill patterns.\n</additional_context>\n\n<output>\nWrite to: {phase_dir}/{phase_num}-RESEARCH.md\n</output>\n"
+        },
+        "produces": [
+          "RESEARCH.md"
+        ],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "workflow.research",
+        "onError": "skip"
+      },
+      {
         "capId": "ui",
         "point": "plan:pre",
         "ref": {
@@ -1106,6 +1276,25 @@ const byLoopPoint = {
           "CONTEXT.md"
         ],
         "when": "workflow.ui_phase",
+        "onError": "skip"
+      },
+      {
+        "capId": "pattern-mapper",
+        "point": "plan:pre",
+        "ref": {
+          "agent": "gsd-pattern-mapper"
+        },
+        "fragment": {
+          "path": "fragments/plan-pre.md",
+          "inline": "<pattern_mapping_context>\n**Phase:** {phase_number} - {phase_name}\n**Phase directory:** {phase_dir}\n**Padded phase:** {padded_phase}\n\n<files_to_read>\n- {context_path} (USER DECISIONS from /gsd:discuss-phase)\n- {research_path} (Technical Research)\n</files_to_read>\n\n**Output file:** {phase_dir}/{padded_phase}-PATTERNS.md\n\nExtract the list of files to be created/modified from CONTEXT.md and RESEARCH.md. For each file, classify by role and data flow, find the closest existing analog in the codebase, extract concrete code excerpts, and produce PATTERNS.md.\n</pattern_mapping_context>\n"
+        },
+        "produces": [
+          "PATTERNS.md"
+        ],
+        "consumes": [
+          "RESEARCH.md"
+        ],
+        "when": "workflow.pattern_mapper",
         "onError": "skip"
       }
     ],
@@ -1198,14 +1387,23 @@ const byLoopPoint = {
 };
 
 const configKeys = {
+  "workflow.ai_integration_phase": "ai-integration",
   "graphify.enabled": "graphify",
   "intel.enabled": "intel",
+  "workflow.pattern_mapper": "pattern-mapper",
+  "workflow.research": "research",
   "workflow.ui_phase": "ui",
   "workflow.ui_review": "ui",
   "workflow.ui_safety_gate": "ui"
 };
 
 const configSchema = {
+  "workflow.ai_integration_phase": {
+    "owner": "ai-integration",
+    "type": "boolean",
+    "default": true,
+    "description": "Prompt for an AI-SPEC design contract before planning phases that involve AI systems."
+  },
   "graphify.enabled": {
     "owner": "graphify",
     "type": "boolean",
@@ -1217,6 +1415,18 @@ const configSchema = {
     "type": "boolean",
     "default": false,
     "description": "Enable the intel code-intelligence command."
+  },
+  "workflow.pattern_mapper": {
+    "owner": "pattern-mapper",
+    "type": "boolean",
+    "default": true,
+    "description": "Run the pattern mapper before planning when context or research is available."
+  },
+  "workflow.research": {
+    "owner": "research",
+    "type": "boolean",
+    "default": true,
+    "description": "Run phase research before planning when research artifacts are missing or explicitly refreshed."
   },
   "workflow.ui_phase": {
     "owner": "ui",
@@ -2155,6 +2365,9 @@ const commandFamilies = {
 };
 
 const capabilityClusters = {
+  "ai-integration": [
+    "ai-integration-phase"
+  ],
   "graphify": [
     "graphify"
   ],
@@ -2165,6 +2378,12 @@ const capabilityClusters = {
 };
 
 const profileMembership = {
+  "ai-integration": {
+    "tier": "full",
+    "profiles": [
+      "full"
+    ]
+  },
   "graphify": {
     "tier": "full",
     "profiles": [
@@ -2180,6 +2399,7 @@ const profileMembership = {
 };
 
 const _requiresGraph = {
+  "ai-integration": [],
   "antigravity": [],
   "audit": [],
   "augment": [],
@@ -2196,7 +2416,11 @@ const _requiresGraph = {
   "kilo": [],
   "kimi": [],
   "opencode": [],
+  "pattern-mapper": [
+    "research"
+  ],
   "qwen": [],
+  "research": [],
   "trae": [],
   "ui": [],
   "windsurf": []

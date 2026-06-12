@@ -1,0 +1,31 @@
+{
+  "id": "research",
+  "role": "feature",
+  "title": "Phase research",
+  "description": "Optional phase research before planning; owns the phase researcher agent and workflow.research activation key.",
+  "tier": "standard",
+  "requires": [],
+  "skills": [],
+  "agents": ["gsd-phase-researcher"],
+  "hooks": [],
+  "config": {
+    "workflow.research": {
+      "type": "boolean",
+      "default": true,
+      "description": "Run phase research before planning when research artifacts are missing or explicitly refreshed."
+    }
+  },
+  "steps": [
+    {
+      "point": "plan:pre",
+      "ref": { "agent": "gsd-phase-researcher" },
+      "fragment": { "path": "fragments/plan-pre.md" },
+      "produces": ["RESEARCH.md"],
+      "consumes": ["CONTEXT.md"],
+      "when": "workflow.research",
+      "onError": "skip"
+    }
+  ],
+  "contributions": [],
+  "gates": []
+}

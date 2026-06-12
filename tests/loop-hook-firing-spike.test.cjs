@@ -29,15 +29,19 @@ const realRegistry = require('../gsd-core/bin/lib/capability-registry.cjs');
 // ─── hostConsume helper ───────────────────────────────────────────────────────
 //
 // Models host consumption of the resolved+rendered envelope:
-//   activeCount    — number of step-kind hooks (the host's execution list length)
+//   activeCount    — number of step-kind hooks for the selected capability
 //   skillsToInvoke — ordered skill refs from step hooks (the host's dispatch list)
 //   rendered       — the markdown string the host would embed in its prompt
 //
-// This is the aggregate that must be IDENTICAL to the zero-hooks base when
-// the capability is off (structural "off means off" — no host-source mutation).
+// This is the aggregate that must be IDENTICAL to the same extension point
+// with the selected capability removed when that capability is off (structural
+// "off means off" — no host-source mutation). Other Phase 6 capabilities may
+// still be active at the same Loop Extension Point.
 
-function hostConsume(envelope) {
-  const steps = envelope.activeHooks.filter(h => h.kind === 'step');
+function hostConsume(envelope, capId) {
+  const steps = envelope.activeHooks.filter(
+    h => h.kind === 'step' && (!capId || h.capId === capId),
+  );
   return {
     activeCount: steps.length,
     skillsToInvoke: steps.map(h => h.ref && h.ref.skill).filter(Boolean),
@@ -45,12 +49,12 @@ function hostConsume(envelope) {
   };
 }
 
-// ─── Compute the zero-hooks base for comparison ───────────────────────────────
+// ─── Compute bases for comparison ─────────────────────────────────────────────
 //
-// The base is what hostConsume produces when activeHooks is empty.
-// We derive it from a fresh call with an empty registry so it is computed, not
-// hand-coded — if renderLoopHooks ever changes its empty-string format, the
-// base updates automatically and the "off = base" assertion still holds.
+// The zero-hooks base is what hostConsume produces when activeHooks is empty.
+// The capability-removed base is what the same extension point produces when
+// just one capability's hooks are removed. Phase 6 uses the latter for UI,
+// because research / AI / pattern-mapper can be active at plan:pre too.
 
 function makeBaseEnvelope(point) {
   const emptyByLoopPoint = {};
@@ -59,6 +63,32 @@ function makeBaseEnvelope(point) {
   }
   const emptyRegistry = { byLoopPoint: emptyByLoopPoint, configSchema: {} };
   const resolved = resolveLoopHooks({ point, registry: emptyRegistry, config: {} });
+  return {
+    activeHooks: resolved.activeHooks,
+    rendered: renderLoopHooks(resolved),
+  };
+}
+
+function makeRegistryWithoutCapability(registry, capId) {
+  const byLoopPoint = {};
+  for (const p of CANONICAL_POINTS) {
+    const point = registry.byLoopPoint[p] || {};
+    byLoopPoint[p] = {
+      steps: Array.isArray(point.steps) ? point.steps.filter(h => h.capId !== capId) : [],
+      contributions: Array.isArray(point.contributions) ? point.contributions.filter(h => h.capId !== capId) : [],
+      gates: Array.isArray(point.gates) ? point.gates.filter(h => h.capId !== capId) : [],
+    };
+  }
+  const configSchema = {};
+  for (const [key, slice] of Object.entries(registry.configSchema || {})) {
+    if (!slice || slice.owner !== capId) configSchema[key] = slice;
+  }
+  return { ...registry, byLoopPoint, configSchema };
+}
+
+function makeCapabilityRemovedEnvelope(point, capId, config) {
+  const registry = makeRegistryWithoutCapability(realRegistry, capId);
+  const resolved = resolveLoopHooks({ point, registry, config });
   return {
     activeHooks: resolved.activeHooks,
     rendered: renderLoopHooks(resolved),
@@ -82,25 +112,25 @@ describe('spike #1018 — off means off (structural proof)', () => {
 
   // ── Case 1: UI active by default ──────────────────────────────────────────
   //
-  // config {} → workflow.ui_phase falls to configSchema default true → step active.
-  // hostConsume must report activeCount=1, skillsToInvoke=['ui-phase'], and
-  // rendered must include the ui-phase block.
+  // config {} → workflow.ui_phase falls to configSchema default true → UI step active.
+  // hostConsume for capId=ui must report activeCount=1, skillsToInvoke=['ui-phase'],
+  // and rendered must include the ui-phase block.
   // The hook's onError must be carried through to activeHooks.
 
-  test('UI active by default: config {} → activeCount=1, skillsToInvoke=[ui-phase], rendered includes ui-phase block', () => {
+  test('UI active by default: config {} → ui activeCount=1, skillsToInvoke=[ui-phase], rendered includes ui-phase block', () => {
     const resolved = resolveLoopHooks({
       point: 'plan:pre',
       registry: realRegistry,
       config: {},
     });
     const envelope = { activeHooks: resolved.activeHooks, rendered: renderLoopHooks(resolved) };
-    const consumed = hostConsume(envelope);
+    const consumed = hostConsume(envelope, 'ui');
 
     assert.strictEqual(consumed.activeCount, 1,
-      'Expected exactly 1 active step when ui_phase defaults to true');
+      'Expected exactly 1 active UI step when ui_phase defaults to true');
     assert.deepEqual(consumed.skillsToInvoke, ['ui-phase'],
-      'skillsToInvoke must be [ui-phase]');
-    assert.match(consumed.rendered, /### Step 1: skill:ui-phase \(ui\)/,
+      'UI skillsToInvoke must be [ui-phase]');
+    assert.match(consumed.rendered, /### Step \d+: skill:ui-phase \(ui\)/,
       'rendered must include the properly-structured Step block heading for ui-phase');
 
     // onError='skip' must be carried into the active hook entry
@@ -117,8 +147,8 @@ describe('spike #1018 — off means off (structural proof)', () => {
   // Turning off ui_phase suppresses the step but the gate (ui_safety_gate=true)
   // still fires → rendered is NOT the zero-hooks base (it contains the gate block).
   //
-  // This case proves the step surface is a pure function of step-kind hooks:
-  //   activeCount=0, skillsToInvoke=[] — "step off means step off".
+  // This case proves the UI step surface is a pure function of UI step-kind hooks:
+  //   activeCount=0, skillsToInvoke=[] — "UI step off means UI step off".
   // It also asserts the gate IS present in activeHooks and rendered differs from
   // the empty base, documenting that the two toggles are genuinely independent.
 
@@ -130,23 +160,23 @@ describe('spike #1018 — off means off (structural proof)', () => {
       config: stepOffConfig,
     });
     const envelope = { activeHooks: resolved.activeHooks, rendered: renderLoopHooks(resolved) };
-    const consumed = hostConsume(envelope);
+    const consumed = hostConsume(envelope, 'ui');
 
     // Step-level aggregate: step is off
     assert.strictEqual(consumed.activeCount, 0,
-      'Expected 0 active steps when ui_phase=false');
+      'Expected 0 active UI steps when ui_phase=false');
     assert.deepEqual(consumed.skillsToInvoke, [],
-      'skillsToInvoke must be [] when ui_phase=false');
+      'UI skillsToInvoke must be [] when ui_phase=false');
 
     // Gate is still active: activeHooks is NOT empty (contains the gate hook)
-    const gateHooks = resolved.activeHooks.filter(h => h.kind === 'gate');
+    const gateHooks = resolved.activeHooks.filter(h => h.kind === 'gate' && h.capId === 'ui');
     assert.ok(gateHooks.length > 0,
-      'Gate hook must still be present in activeHooks when ui_safety_gate=true');
+      'UI gate hook must still be present in activeHooks when ui_safety_gate=true');
 
-    // Rendered is NOT the zero-hooks base because the gate block is present
-    const base = makeBaseEnvelope('plan:pre');
+    // Rendered is NOT the UI-removed base because the UI gate block is present
+    const base = makeCapabilityRemovedEnvelope('plan:pre', 'ui', stepOffConfig);
     assert.notStrictEqual(consumed.rendered, base.rendered,
-      'rendered must NOT equal the zero-hooks base when the gate is still active (ui_safety_gate=true)');
+      'rendered must NOT equal the UI-removed base when the UI gate is still active (ui_safety_gate=true)');
 
     // Rendered must NOT include a step block for ui-phase
     assert.ok(
@@ -157,15 +187,16 @@ describe('spike #1018 — off means off (structural proof)', () => {
 
   // ── Case 2b: ALL-OFF (ui_phase=false, ui_safety_gate=false) ─────────────────
   //
-  // Both toggles off → activeHooks is genuinely empty → rendered is byte-identical
-  // to the zero-hooks base produced by the empty-registry helper.
+  // Both UI toggles off → no UI activeHooks → rendered is byte-identical
+  // to the same registry with UI hooks removed. Other plan:pre capabilities may
+  // still be active, and that is correct after Phase 6.
   //
-  // THIS is the clean structural "off means off → base output" proof.
+  // THIS is the clean structural "UI off means no UI output" proof.
   // It must exist as a concrete, computable assertion — not be elided because a
   // partial-off case happens to have a gate. The empty base is computed, not
   // hand-coded, so if renderLoopHooks ever changes its empty format this still holds.
 
-  test('ALL-OFF: config {workflow:{ui_phase:false, ui_safety_gate:false}} → activeHooks empty AND rendered === base', () => {
+  test('ALL-OFF: config {workflow:{ui_phase:false, ui_safety_gate:false}} → UI hooks empty AND rendered === UI-removed base', () => {
     const allOffConfig = { workflow: { ui_phase: false, ui_safety_gate: false } };
     const resolved = resolveLoopHooks({
       point: 'plan:pre',
@@ -175,16 +206,16 @@ describe('spike #1018 — off means off (structural proof)', () => {
     const envelope = { activeHooks: resolved.activeHooks, rendered: renderLoopHooks(resolved) };
 
     // STRUCTURAL ASSERTION (the spike's core proof — restored):
-    // When every hook at this point is toggled off, activeHooks must be empty
-    // and rendered must be byte-identical to the computed zero-hooks base.
+    // When every UI hook at this point is toggled off, UI activeHooks must be empty
+    // and rendered must be byte-identical to the computed UI-removed base.
     // This proves the host aggregate is a pure function of activeHooks — no
-    // capability leaks through when all its controlling config keys are false.
-    assert.strictEqual(resolved.activeHooks.length, 0,
-      'ALL-OFF: activeHooks must be empty when both ui_phase and ui_safety_gate are false');
+    // UI capability leaks through when all its controlling config keys are false.
+    assert.strictEqual(resolved.activeHooks.filter(h => h.capId === 'ui').length, 0,
+      'ALL-OFF: UI activeHooks must be empty when both ui_phase and ui_safety_gate are false');
 
-    const base = makeBaseEnvelope('plan:pre');
+    const base = makeCapabilityRemovedEnvelope('plan:pre', 'ui', allOffConfig);
     assert.strictEqual(envelope.rendered, base.rendered,
-      'ALL-OFF: rendered must be byte-identical to the zero-hooks base when activeHooks is empty');
+      'ALL-OFF: rendered must be byte-identical to the UI-removed base when UI activeHooks are empty');
   });
 
   // ── Case 3: Synthetic multi-hook ──────────────────────────────────────────
@@ -255,11 +286,11 @@ describe('spike #1018 — off means off (structural proof)', () => {
       config: { workflow: { ui_phase: true } },
     });
 
-    const offConsumed = hostConsume({ activeHooks: offResolved.activeHooks, rendered: renderLoopHooks(offResolved) });
-    const onConsumed  = hostConsume({ activeHooks: onResolved.activeHooks,  rendered: renderLoopHooks(onResolved) });
+    const offConsumed = hostConsume({ activeHooks: offResolved.activeHooks, rendered: renderLoopHooks(offResolved) }, 'ui');
+    const onConsumed  = hostConsume({ activeHooks: onResolved.activeHooks,  rendered: renderLoopHooks(onResolved) }, 'ui');
 
-    assert.strictEqual(offConsumed.activeCount, 0, 'OFF: activeCount must be 0');
-    assert.strictEqual(onConsumed.activeCount,  1, 'ON: activeCount must be 1');
+    assert.strictEqual(offConsumed.activeCount, 0, 'OFF: UI activeCount must be 0');
+    assert.strictEqual(onConsumed.activeCount,  1, 'ON: UI activeCount must be 1');
     assert.notStrictEqual(onConsumed.rendered, offConsumed.rendered,
       'ON and OFF rendered outputs must differ');
   });
