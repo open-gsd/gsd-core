@@ -410,7 +410,7 @@ function selectRuntimesFromArgs(runtimeArgs) {
   if (runtimeArgs.includes('--copilot')) selected.push('copilot');
   if (runtimeArgs.includes('--antigravity')) selected.push('antigravity');
   if (runtimeArgs.includes('--cursor')) selected.push('cursor');
-  if (runtimeArgs.includes('--windsurf')) selected.push('windsurf');
+  if (runtimeArgs.includes('--windsurf') || runtimeArgs.includes('--devin-desktop')) selected.push('windsurf');
   if (runtimeArgs.includes('--augment')) selected.push('augment');
   if (runtimeArgs.includes('--trae')) selected.push('trae');
   if (runtimeArgs.includes('--qwen')) selected.push('qwen');

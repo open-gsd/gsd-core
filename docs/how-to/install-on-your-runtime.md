@@ -308,13 +308,17 @@ CURSOR_CONFIG_DIR=~/.cursor-alt npx @opengsd/gsd-core@latest --cursor --global
 
 ---
 
-### Windsurf
+### Windsurf / Devin Desktop
+
+Windsurf has rebranded to **Devin Desktop**. Both runtime names are accepted — use either `--windsurf` or `--devin-desktop`.
 
 ```bash
 npx @opengsd/gsd-core@latest --windsurf --global
+# or equivalently:
+npx @opengsd/gsd-core@latest --devin-desktop --global
 ```
 
-Skills land in `~/.codeium/windsurf/`. GSD installs skills, agents, and workspace rules.
+Skills land in `~/.codeium/windsurf/` (global path unchanged). GSD installs skills, agents, and workspace rules.
 
 **Override the install directory:**
 
@@ -456,7 +460,7 @@ A local install writes into the `.claude/` directory at your project root. Local
 
 ## Installing prerelease editions (Next / Nightly / Insiders / Preview)
 
-Prerelease editions of runtimes (Windsurf Next, Cursor Nightly, VS Code Insiders, Codex preview channels, etc.) read from a sibling config directory. Set the matching `*_CONFIG_DIR` env var before running the installer:
+Prerelease editions of runtimes (Windsurf Next / Devin Desktop Next, Cursor Nightly, VS Code Insiders, Codex preview channels, etc.) read from a sibling config directory. Set the matching `*_CONFIG_DIR` env var before running the installer:
 
 ```bash
 WINDSURF_CONFIG_DIR=~/.codeium/windsurf-next npx @opengsd/gsd-core@latest --windsurf --global

@@ -43,6 +43,7 @@ const {
   buildRuntimePromptText,
   resolveKiloConfigPath,
   configureKiloPermissions,
+  selectRuntimesFromArgs,
 } = require('../bin/install.js');
 
 const { getGlobalConfigDir } = require('../gsd-core/bin/lib/runtime-homes.cjs');
@@ -832,5 +833,20 @@ describe('install — changeset CLI lands at scripts/changeset/cli.cjs (#935)', 
       !fs.existsSync(path.join(claudeDir, 'scripts', 'lib')),
       'scripts/lib/ must be removed on uninstall',
     );
+  });
+});
+
+// ─── Section 6: Windsurf / devin-desktop alias (#792) ───────────────────────
+
+describe('install — --devin-desktop CLI flag routes to windsurf runtime (#792)', () => {
+  test('--devin-desktop resolves to ["windsurf"] via selectRuntimesFromArgs', () => {
+    const runtimes = selectRuntimesFromArgs(['--devin-desktop']);
+    assert.deepStrictEqual(runtimes, ['windsurf'],
+      '--devin-desktop must resolve to ["windsurf"] via selectRuntimesFromArgs');
+  });
+
+  test('--windsurf and --devin-desktop both resolve to ["windsurf"]', () => {
+    assert.deepStrictEqual(selectRuntimesFromArgs(['--windsurf']), ['windsurf']);
+    assert.deepStrictEqual(selectRuntimesFromArgs(['--devin-desktop']), ['windsurf']);
   });
 });
