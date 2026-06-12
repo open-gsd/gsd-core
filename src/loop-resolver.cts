@@ -5,7 +5,9 @@
  * filters the materialized Capability Registry by config activation and returns
  * the active hooks as a JSON envelope with a rendered-markdown field.
  *
- * REGISTRY-ONLY: no workflow calls this yet (phase-6 cutover is out of scope).
+ * Consumed live by the landed phase-6 loop-hook cutovers: plan-phase.md / autonomous.md
+ * at plan:pre (ui-phase) and autonomous.md at verify:post (ui-review). Further per-feature
+ * cutovers are ongoing.
  *
  * Command surface: gsd-tools loop render-hooks <point>
  *

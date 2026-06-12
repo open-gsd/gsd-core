@@ -4,7 +4,8 @@
  * Unified capability-state resolver that composes the three toggle systems
  * (install profile, runtime surface, config activation) into one per-capability
  * view. ADDITIVE — install/surface/workflows are untouched; this resolver is
- * consumed by nothing yet (phase-6 wiring is out of scope).
+ * exposed only as the `gsd-tools capability state` diagnostic, not yet consumed by
+ * any workflow (workflow wiring is the phase-6 cutover).
  *
  * Exports (three things, mirroring loop-resolver):
  *   resolveCapabilityState({ registry, installedSkills, surfacedSkills, config, cwd })
