@@ -219,21 +219,39 @@ describe('generate-claude-md command', () => {
     }
   });
 
-  test('does not overwrite existing CLAUDE.md without --force', () => {
+  test('does not overwrite existing marker-less CLAUDE.md without --force (#1098)', () => {
+    const outputPath = path.join(tmpDir, 'CLAUDE.md');
+    const original = '# Custom CLAUDE.md\n\nUser content.\n';
+    fs.writeFileSync(outputPath, original);
+
+    // No GSD markers in the file → the #1098 guard must leave it untouched.
+    const result = runGsdTools(['generate-claude-md', '--output', outputPath, '--auto'], tmpDir);
+    assert.ok(result.success, `command should exit 0 even when skipping: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).action, 'skipped');
+
+    const content = fs.readFileSync(outputPath, 'utf-8');
+    assert.strictEqual(content, original, 'hand-crafted file must be byte-identical (not overwritten)');
+  });
+
+  test('overwrites existing marker-less CLAUDE.md with --force (#1098)', () => {
     const outputPath = path.join(tmpDir, 'CLAUDE.md');
     fs.writeFileSync(outputPath, '# Custom CLAUDE.md\n\nUser content.\n');
 
-    runGsdTools(['generate-claude-md', '--output', outputPath, '--auto', '--raw'], tmpDir);
-    // Should merge, not overwrite
+    const result = runGsdTools(['generate-claude-md', '--output', outputPath, '--force'], tmpDir);
+    assert.ok(result.success, `Failed: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).action, 'updated');
+
     const content = fs.readFileSync(outputPath, 'utf-8');
-    assert.ok(content.length > 0, 'should still have content');
+    assert.ok(content.includes('User content.'), '--force preserves existing content while adding sections');
+    assert.ok(content.includes('## GSD Workflow Enforcement'), '--force injects GSD sections');
   });
 
   test('skills fallback mentions the normalized project roots', () => {
     const result = runGsdTools('generate-claude-md', tmpDir);
     assert.ok(result.success, `Failed: ${result.error}`);
 
-    const content = fs.readFileSync(path.join(tmpDir, 'CLAUDE.md'), 'utf-8');
+    // #1098: default Claude output is now .claude/CLAUDE.md
+    const content = fs.readFileSync(path.join(tmpDir, '.claude', 'CLAUDE.md'), 'utf-8');
     assert.ok(content.includes('.claude/skills/'));
     assert.ok(content.includes('.agents/skills/'));
     assert.ok(content.includes('.cursor/skills/'));

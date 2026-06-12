@@ -547,7 +547,7 @@ ${AGENT_SKILLS_RESEARCHER}
 **Phase description:** {phase_description}
 **Phase requirement IDs (MUST address):** {phase_req_ids}
 
-**Project instructions:** Read ./CLAUDE.md if exists — follow project-specific guidelines
+**Project instructions:** Read ./CLAUDE.md or ./.claude/CLAUDE.md if either exists — follow project-specific guidelines
 **Project skills:** Check .claude/skills/ or .agents/skills/ directory (if either exists) — read SKILL.md files, research should account for project skill patterns
 </additional_context>
 
@@ -977,7 +977,7 @@ Historical findings already incorporated, explicitly deferred/rejected in PLAN.m
 
 **Phase requirement IDs (every ID MUST appear in a plan's `requirements` field):** {phase_req_ids}
 
-**Project instructions:** Read ./CLAUDE.md if exists — follow project-specific guidelines
+**Project instructions:** Read ./CLAUDE.md or ./.claude/CLAUDE.md if either exists — follow project-specific guidelines
 **Project skills:** Check .claude/skills/ or .agents/skills/ directory (if either exists) — read SKILL.md files, plans should account for project skill rules
 
 ${TDD_MODE === 'true' ? `
@@ -1316,7 +1316,7 @@ If an actionable finding remains only in REVIEWS.md and would be invisible to /g
 
 **Phase requirement IDs (MUST ALL be covered):** {phase_req_ids}
 
-**Project instructions:** Read ./CLAUDE.md if exists — verify plans honor project guidelines
+**Project instructions:** Read ./CLAUDE.md or ./.claude/CLAUDE.md if either exists — verify plans honor project guidelines
 **Project skills:** Check .claude/skills/ or .agents/skills/ directory (if either exists) — verify plans account for project skill rules
 </verification_context>
 
