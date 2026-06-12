@@ -231,6 +231,7 @@ interface RawHook {
   point?: unknown;
   ref?: unknown;
   into?: unknown;
+  fragment?: unknown;
   produces?: unknown;
   consumes?: unknown;
   when?: unknown;
@@ -246,6 +247,7 @@ interface ActiveHook {
   kind: HookKind;
   ref?: HookRef;
   into?: string;
+  fragment?: { inline?: string; path?: string };
   when?: string;
   produces?: string[];
   consumes?: string[];
@@ -325,6 +327,15 @@ function resolveLoopHooks(input: ResolveLoopHooksInput): ResolveLoopHooksResult 
     return v.filter((x): x is string => typeof x === 'string');
   }
 
+  function toFragment(v: unknown): { inline?: string; path?: string } | undefined {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+    const raw = v as Record<string, unknown>;
+    const fragment: { inline?: string; path?: string } = {};
+    if (typeof raw.inline === 'string') fragment.inline = raw.inline;
+    if (typeof raw.path === 'string') fragment.path = raw.path;
+    return Object.keys(fragment).length > 0 ? fragment : undefined;
+  }
+
   // Process steps
   const stepsRaw = entryMap['steps'];
   const steps: RawHook[] = Array.isArray(stepsRaw) ? (stepsRaw as RawHook[]) : [];
@@ -356,12 +367,14 @@ function resolveLoopHooks(input: ResolveLoopHooksInput): ResolveLoopHooksResult 
     if (!isActive(hook)) continue;
     const capId = typeof hook['capId'] === 'string' ? hook['capId'] : '';
     const into = typeof hook['into'] === 'string' ? hook['into'] : undefined;
+    const fragment = toFragment(hook['fragment']);
     const when = typeof hook['when'] === 'string' ? hook['when'] : undefined;
     const produces = toStringArray(hook['produces']);
     const consumes = toStringArray(hook['consumes']);
     const onError = typeof hook['onError'] === 'string' ? hook['onError'] : undefined;
     const active: ActiveHook = { capId, kind: 'contribution' };
     if (into !== undefined) active.into = into;
+    if (fragment !== undefined) active.fragment = fragment;
     if (when !== undefined) active.when = when;
     if (produces.length > 0) active.produces = produces;
     if (consumes.length > 0) active.consumes = consumes;
@@ -432,7 +445,12 @@ function renderLoopHooks(resolved: ResolveLoopHooksResult): string {
       }
       lines.push('');
     } else if (hook.kind === 'contribution') {
-      lines.push(`<contribution from="${hook.capId}" into="${hook.into ?? '(unset)'}"/>`);
+      lines.push(`<contribution from="${hook.capId}" into="${hook.into ?? '(unset)'}">`);
+      if (hook.fragment?.inline) {
+        lines.push(hook.fragment.inline);
+      } else if (hook.fragment?.path) {
+        lines.push(`_Contribution fragment path is declared but not rendered by loop-resolver: ${hook.fragment.path}_`);
+      }
       if (hook.produces && hook.produces.length > 0) {
         lines.push(`- produces: ${hook.produces.join(', ')}`);
       }
@@ -442,6 +460,10 @@ function renderLoopHooks(resolved: ResolveLoopHooksResult): string {
       if (hook.when) {
         lines.push(`- when: \`${hook.when}\``);
       }
+      if (hook.onError) {
+        lines.push(`- onError: ${hook.onError}`);
+      }
+      lines.push('</contribution>');
       lines.push('');
     } else if (hook.kind === 'gate') {
       let checkStr = '(none)';

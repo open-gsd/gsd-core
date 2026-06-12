@@ -970,6 +970,22 @@ function validateContribution(contrib, prefix) {
     errors.push(prefix + '.into must be a string (agent role name)');
   }
 
+  if (!Array.isArray(contrib.produces)) {
+    errors.push(prefix + '.produces must be an array');
+  } else {
+    for (const p of contrib.produces) {
+      if (typeof p !== 'string') errors.push(prefix + '.produces entries must be strings');
+    }
+  }
+
+  if (!Array.isArray(contrib.consumes)) {
+    errors.push(prefix + '.consumes must be an array');
+  } else {
+    for (const c of contrib.consumes) {
+      if (typeof c !== 'string') errors.push(prefix + '.consumes entries must be strings');
+    }
+  }
+
   if (typeof contrib.fragment !== 'object' || contrib.fragment === null) {
     errors.push(prefix + '.fragment must be an object with path or inline key');
   } else {
@@ -977,6 +993,14 @@ function validateContribution(contrib, prefix) {
     const hasInline = Object.prototype.hasOwnProperty.call(contrib.fragment, 'inline');
     if (!hasPath && !hasInline) {
       errors.push(prefix + '.fragment must have a "path" or "inline" key');
+    }
+    if (hasInline) {
+      const inline = contrib.fragment.inline;
+      if (typeof inline !== 'string') {
+        errors.push(prefix + '.fragment.inline must be a string');
+      } else if (inline === '') {
+        errors.push(prefix + '.fragment.inline must be a non-empty string');
+      }
     }
     // S1: fragment.path traversal guard — must be a relative path with no ".." segments
     if (hasPath) {
@@ -1440,14 +1464,7 @@ function computeRequiresClosure(id, capMap) {
 
 // ─── Topological ordering ─────────────────────────────────────────────────────
 
-/**
- * Topologically sort steps at a given point by produces/consumes.
- * Capability-id tiebreak for determinism.
- *
- * @param {{ capId: string, step: object }[]} entries
- * @returns {{ capId: string, step: object }[]}
- */
-function topoSortSteps(entries) {
+function topoSortHookEntries(entries, hookKey, hookKind) {
   if (entries.length <= 1) return entries;
 
   // Build adjacency: entry A must come before entry B if B consumes something A produces
@@ -1456,10 +1473,10 @@ function topoSortSteps(entries) {
   const adj = Array.from({ length: n }, () => []);
 
   for (let i = 0; i < n; i++) {
-    const producesI = new Set(entries[i].step.produces || []);
+    const producesI = new Set(entries[i][hookKey].produces || []);
     for (let j = 0; j < n; j++) {
       if (i === j) continue;
-      const consumesJ = entries[j].step.consumes || [];
+      const consumesJ = entries[j][hookKey].consumes || [];
       for (const artifact of consumesJ) {
         if (producesI.has(artifact)) {
           adj[i].push(j);
@@ -1497,13 +1514,28 @@ function topoSortSteps(entries) {
   if (result.length < n) {
     const sortedIds = entries.map((e) => e.capId).join(', ');
     throw new Error(
-      'produces/consumes cycle detected in steps at point "' +
-      (entries[0] && entries[0].step ? entries[0].step.point : '?') +
+      'produces/consumes cycle detected in ' + hookKind + ' at point "' +
+      (entries[0] && entries[0][hookKey] ? entries[0][hookKey].point : '?') +
       '" among capabilities [' + sortedIds + ']: ' +
       'a cycle in hook produces/consumes prevents deterministic ordering',
     );
   }
   return result;
+}
+
+/**
+ * Topologically sort steps at a given point by produces/consumes.
+ * Capability-id tiebreak for determinism.
+ *
+ * @param {{ capId: string, step: object }[]} entries
+ * @returns {{ capId: string, step: object }[]}
+ */
+function topoSortSteps(entries) {
+  return topoSortHookEntries(entries, 'step', 'steps');
+}
+
+function topoSortContributions(entries) {
+  return topoSortHookEntries(entries, 'contrib', 'contributions');
 }
 
 // ─── ADR-857 Phase 4a: Derived views ─────────────────────────────────────────
@@ -1948,14 +1980,9 @@ function buildRegistry(capMap) {
       ...e.step,
     }));
 
-    // Contributions: group by into, then capability-id order within group
-    const contribs = pointContribs.get(point);
-    contribs.sort((a, b) => {
-      const intoCompare = a.contrib.into.localeCompare(b.contrib.into);
-      if (intoCompare !== 0) return intoCompare;
-      return a.capId.localeCompare(b.capId);
-    });
-    byLoopPoint[point].contributions = contribs.map((e) => ({
+    // Contributions: topological sort by produces/consumes, cap-id tiebreak
+    const sortedContribs = topoSortContributions(pointContribs.get(point));
+    byLoopPoint[point].contributions = sortedContribs.map((e) => ({
       capId: e.capId,
       ...e.contrib,
     }));

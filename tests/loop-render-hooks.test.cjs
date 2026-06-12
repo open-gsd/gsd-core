@@ -650,12 +650,42 @@ describe('renderLoopHooks', () => {
         capId: 'contrib-cap',
         kind: 'contribution',
         into: 'planner',
+        fragment: { inline: 'Apply the project-specific planning guardrails.' },
       }],
     };
     const rendered = renderLoopHooks(resolved);
     assert.match(rendered, /contribution/);
     assert.match(rendered, /contrib-cap/);
     assert.match(rendered, /planner/);
+    assert.match(rendered, /Apply the project-specific planning guardrails\./);
+    assert.match(rendered, /<contribution from="contrib-cap" into="planner">/);
+    assert.match(rendered, /<\/contribution>/);
+    assert.doesNotMatch(rendered, /<contribution[^>]+\/>/);
+  });
+
+  test('resolveLoopHooks preserves contribution fragment data', () => {
+    const registry = makeRegistry({
+      point: 'plan:pre',
+      contributions: [{
+        capId: 'contrib-cap',
+        point: 'plan:pre',
+        into: 'planner',
+        fragment: { inline: 'Use artifact-backed evidence.' },
+        produces: ['PLAN-NOTES.md'],
+        consumes: ['CONTEXT.md'],
+        when: 'workflow.contrib',
+        onError: 'halt',
+      }],
+      configSchema: {
+        'workflow.contrib': { type: 'boolean', default: true, description: 'Enable test contribution.' },
+      },
+    });
+    const resolved = resolveLoopHooks({ point: 'plan:pre', registry, config: {} });
+    assert.strictEqual(resolved.activeHooks.length, 1);
+    assert.deepEqual(resolved.activeHooks[0].fragment, { inline: 'Use artifact-backed evidence.' });
+    assert.deepEqual(resolved.activeHooks[0].produces, ['PLAN-NOTES.md']);
+    assert.deepEqual(resolved.activeHooks[0].consumes, ['CONTEXT.md']);
+    assert.strictEqual(resolved.activeHooks[0].onError, 'halt');
   });
 
   test('gate hook renders check, blocking, onError', () => {
