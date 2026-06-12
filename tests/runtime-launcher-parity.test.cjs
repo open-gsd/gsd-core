@@ -632,20 +632,25 @@ describe('runtime-launcher-parity — standalone executable (#381)', () => {
         `Expected envfile to contain :"$PATH" (double-quoted, expands at source time), got: ${envFileContent.trim()}`,
       );
 
-      // Simulate a LATER fresh block that SOURCES the env file to get gsd_run on PATH.
-      // The later shell does NOT have the bin dir on PATH beforehand — it only gets it
-      // by sourcing the env file.  We use a minimal PATH (no temp bin dir pre-injected).
-      const stdout = execFileSync('bash', ['-c', '. "$CLAUDE_ENV_FILE"; gsd_run hello'], {
-        encoding: 'utf8',
-        env: {
-          CLAUDE_ENV_FILE: envFile,
-          PATH: process.env.PATH,
-        },
-      });
-      assert.ok(
-        stdout.includes('GSD_RUN_STUB:hello'),
-        `Expected stdout to contain "GSD_RUN_STUB:hello" after sourcing env file, got: ${stdout.trim()}`,
-      );
+      // Windows Git Bash (msys2) does not honor Node's chmod exec bit for PATH-executing
+      // extension-less scripts; the env-file persistence above is the cross-platform proof.
+      // Global installs on Windows are covered by npm's generated bin shim.
+      if (process.platform !== 'win32') {
+        // Simulate a LATER fresh block that SOURCES the env file to get gsd_run on PATH.
+        // The later shell does NOT have the bin dir on PATH beforehand — it only gets it
+        // by sourcing the env file.  We use a minimal PATH (no temp bin dir pre-injected).
+        const stdout = execFileSync('bash', ['-c', '. "$CLAUDE_ENV_FILE"; gsd_run hello'], {
+          encoding: 'utf8',
+          env: {
+            CLAUDE_ENV_FILE: envFile,
+            PATH: process.env.PATH,
+          },
+        });
+        assert.ok(
+          stdout.includes('GSD_RUN_STUB:hello'),
+          `Expected stdout to contain "GSD_RUN_STUB:hello" after sourcing env file, got: ${stdout.trim()}`,
+        );
+      }
     } finally {
       cleanup(baseParent);
     }
