@@ -262,6 +262,88 @@ export function analyzeCoverage<V extends string>(
   return { items: merged, coverage: { applicable, resolved, unresolved, byVerification } };
 }
 
+/* ------------------------------------------------------------------------- *
+ * Prohibition adapter surface (#644 — the SECOND probe-core adapter).
+ *
+ * Unlike the edge adapter, the prohibition probe has NO deterministic propose stage: recall
+ * is an LLM prose pass (ADR-550 Decision 7b), so there is intentionally no `proposeProhibitions`
+ * here. What IS deterministic — and therefore real code that belongs in core — is (1) the
+ * injected verification validators (`test | judgment`) and (2) `projectProhibitions`, the
+ * SPEC<->`must_haves.prohibitions:` projection the DEFECT.GENERATIVE-FIX parity assertion
+ * round-trips as a FUNCTION rather than a prompt (ADR-550 Decision 5c).
+ * ------------------------------------------------------------------------- */
+
+/** The prohibition probe's verification tiers (the `verification` axis values for a resolved item). */
+export type ProhibitionVerification = 'test' | 'judgment';
+
+/**
+ * A surfaced prohibition item. Structurally a probe-core `Item` specialized to the prohibition
+ * verification vocabulary, but the load-bearing payload field is `statement` (the must-NOT
+ * sentence) rather than the edge adapter's `probe` question. Both fields are optional on the
+ * shared shape so a single `Item` type serves both adapters.
+ */
+export interface Prohibition {
+  requirement_id: string;
+  category: string;
+  status: Status;
+  verification: ProhibitionVerification | null;
+  resolution: string | null;
+  reason: string | null;
+  statement: string;
+}
+
+/**
+ * The prohibition adapter's injected runtime validators (ADR-550 #5). There is no closed
+ * category taxonomy (recall is open-vocabulary values/safety/ethics prose), so `categories`
+ * is intentionally empty — `analyzeCoverage` is not the prohibition entry point and the
+ * round-trip schema layer does not gate on category. The verification tiers are
+ * `test | judgment` (ADR-550 D7a); both require only a present `resolution`/`reason` per their
+ * lifecycle (a resolved prohibition's checkable content is the `statement`, validated by the
+ * schema layer, not a `resolution` string), so `requiredFieldsByVerification` is the minimal
+ * fail-closed set: a dismissed item still needs its reason (enforced by `validateResolution`).
+ */
+export const PROHIBITION_VALIDATORS: Validators = {
+  categories: [],
+  verification: ['test', 'judgment'],
+  requiredFieldsByVerification: { test: ['resolution'], judgment: ['resolution'] },
+};
+
+/** Validate a prohibition resolution against the prohibition verification vocabulary. */
+export function validateProhibitionResolution(resolution: Resolution<ProhibitionVerification>): true {
+  return validateResolution(resolution, PROHIBITION_VALIDATORS);
+}
+
+/**
+ * Deterministically project resolved prohibition items into the `must_haves.prohibitions:`
+ * list shape (the SPEC<->plan projection; ADR-550 Decision 5c). This is a FUNCTION the parity
+ * assertion round-trips, never a prompt: the same input always yields the same output, and the
+ * output is the exact re-readable block shape `parseMustHavesBlock(content, 'prohibitions')`
+ * returns — `{ statement, status, verification }` plus `reason` only when present (a dismissed
+ * item's audit trail). `resolution`/`requirement_id`/`category` are recall-stage bookkeeping
+ * and are intentionally NOT projected into the plan block (which is keyed on the must-NOT
+ * statement, not the source requirement). A non-array input projects to `[]` (fail-soft on the
+ * empty/zero-prohibition case), never a throw.
+ */
+export function projectProhibitions(
+  items: unknown,
+): Array<Record<string, string>> {
+  if (!Array.isArray(items)) return [];
+  const out: Array<Record<string, string>> = [];
+  for (const item of items) {
+    if (item == null || typeof item !== 'object') continue;
+    const p = item as Partial<Prohibition>;
+    const statement = typeof p.statement === 'string' ? p.statement : '';
+    const entry: Record<string, string> = {
+      statement,
+      status: typeof p.status === 'string' ? p.status : 'unresolved',
+    };
+    if (p.verification != null) entry.verification = String(p.verification);
+    if (p.reason != null && String(p.reason).trim()) entry.reason = String(p.reason);
+    out.push(entry);
+  }
+  return out;
+}
+
 /*
  * CLI scaffold (the EP-06 invokable surface, generalized). Each probe ships one bin that
  * calls `runProbeCli` with its own `analyze` (closing over the adapter's propose + validators)
