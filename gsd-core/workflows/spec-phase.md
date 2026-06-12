@@ -312,11 +312,73 @@ failure being eliminated). Log: `[auto] edge coverage: C covered, B backstop, U 
 
 Populate the `## Edge Coverage` section of SPEC.md from the resolved edges.
 
+## Step 5.6: Prohibition-Completeness Probe (must-NOT)
+
+Run AFTER Step 5.5 (you probe the must-NOT axis of clear requirements, over the same
+requirement list). Reference: @~/.claude/gsd-core/references/prohibition-probe.md — the
+portable two-stage protocol, the canon-referral rule, and the status×verification schema
+live there (size-cap discipline; keep this step lean).
+
+**D1 — no compiled engine (ADR-550 D7b).** Unlike Step 5.5, the prohibition probe has NO
+compiled recall engine and runs NO `node` invocation here. The recall stage is an LLM prose
+pass: the closed eight-category edge taxonomy a classifier can apply does not exist for the
+open values/safety/ethics must-NOT axis. Do NOT copy the Step 5.5 engine-resolution block.
+Only the schema/projection layer is real code; the recall is prose.
+
+For each Requirement gathered so far, run the two-stage recall→precision pass:
+
+1. **Stage 1 — Recall (adversarial prose probe).** Ask the single adversarial question of the
+   requirement: *"What could this feature silently become that the author would NOT want, but
+   the spec does not forbid?"* Over-produce (~10 raw must-NOT candidates) — recall first.
+2. **Stage 2 — Precision (one-pass classifier).** Filter the raw list in a single pass:
+   **DROP routine-engineering** items (normal correctness/hygiene — "must not mutate input",
+   "must not throw on empty" — owned by the edge probe or code review); **KEEP
+   values / safety / ethics** items (manipulative framing, protected-attribute proxies, raw
+   PII in plaintext). This collapses ~10 → ~2–3 genuine prohibitions.
+3. **Canon-referral (ADR-550 D6, PROB-13).** A kept candidate that is canon security/compliance
+   (OWASP / prototype-pollution / path-traversal / injection / GDPR / generic fairness) is
+   NOT minted here — emit a one-line breadcrumb (*"prototype-pollution is canon — owned by
+   /gsd:secure-phase + eslint; not minted here"*) and DROP it. Minting canon items duplicates
+   /gsd:secure-phase and drowns the bespoke signal.
+4. **Resolve each surfaced (non-canon) prohibition** (AskUserQuestion; text mode → numbered list):
+   - **Keep it** → write a NEGATIVE acceptance criterion (a must-NOT line) into Acceptance
+     Criteria AND mark the prohibition `resolved` with a verification tier: `test` (a
+     mechanical negative test/lint/assertion exists) or `judgment` (real but not mechanically
+     checkable — routes to judgment review).
+   - **Dismiss (reason)** → mark `dismissed` with a REQUIRED non-empty reason (PROB-05). The
+     reason string is the audit trail; silence is not a valid dismissal.
+   - **Defer** → leave `unresolved`.
+
+**Soft gate (after resolving) — PROB-06:**
+- All applicable prohibitions resolved → proceed to Step 6.
+- Any `unresolved` → AskUserQuestion:
+  - header: "Prohibitions"
+  - question: "[N] prohibition(s) are unresolved: [list]. What do you want to do?"
+  - options: "Resolve now" (loop back) / "Write SPEC.md anyway — flag unresolved" /
+    "Keep probing"
+  - On "anyway": write SPEC.md with those rows marked `⚠ Prohibition unresolved — planner
+    must treat as assumption`. This is a soft gate (write-anyway-with-flags), never a silent
+    skip — the soft gate IS the control.
+
+**`--auto` mode:** auto-`resolved` where a defensible negative acceptance criterion can be
+written (test or judgment tier); otherwise leave `unresolved`. **`--auto` NEVER auto-dismisses
+a prohibition** — a wrong dismissal is the exact silent failure this probe eliminates (PROB-06,
+the load-bearing safety property). Log: `[auto] prohibitions: R resolved, U unresolved`.
+
+**Text mode (PROB-09):** per Step 5's text-mode rule, replace the AskUserQuestion menus above
+with plain-text numbered lists — there is NO hard AskUserQuestion dependency, so the probe
+runs identically for non-Claude / text-mode hosts.
+
+Populate the `## Prohibitions` section of SPEC.md from the resolved prohibitions (each
+`resolved`/`test` row is a checkable negative acceptance criterion; `resolved`/`judgment`
+rows route to judgment review; `⚠ UNRESOLVED` rows are flagged as assumptions).
+
 ## Step 6: Generate SPEC.md
 
 Use the SPEC.md template from @~/.claude/gsd-core/templates/spec.md.
 
 - Populate the **Edge Coverage** section from Step 5.5 (covered/dismissed/backstop/unresolved rows).
+- Populate the **Prohibitions** section from Step 5.6 (resolved/dismissed/unresolved rows with the test|judgment tier).
 
 **Requirements for every requirement entry:**
 - One specific, testable statement
@@ -377,6 +439,7 @@ Next: /gsd:discuss-phase {X}
 - Scout the codebase BEFORE the first question — grounded questions only
 - Max 2–3 questions per round — do not frontload all questions at once
 - Step 5.5 edge probe runs after the ambiguity gate; dismissals require a reason; --auto never auto-dismisses
+- Step 5.6 prohibition probe runs after the edge probe; dismissals require a reason; --auto never auto-dismisses a prohibition
 </critical_rules>
 
 <success_criteria>
@@ -389,4 +452,5 @@ Next: /gsd:discuss-phase {X}
 - SPEC.md committed atomically (when commit_docs is true)
 - User directed to /gsd:discuss-phase as next step
 - Edge-completeness probe run; Edge Coverage section populated; unresolved edges flagged as assumptions
+- Prohibition-completeness probe run; Prohibitions section populated; unresolved prohibitions flagged as assumptions
 </success_criteria>
