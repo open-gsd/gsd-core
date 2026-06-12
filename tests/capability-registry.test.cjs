@@ -3441,8 +3441,22 @@ describe('ADR-857 phase 5e: validateArtifactKindEntry — ConverterName enum (FA
 // ─── 26. ADR-857 phase 5e: configFormat ↔ installSurface parity gate (Part A) ─
 
 describe('ADR-857 phase 5e: configFormat ↔ installSurface parity gate', () => {
-  // Helper: build a minimal runtime capMap for parity tests
-  function makeRuntimeCapMap(runtimeId, configFormat) {
+  // Helper: build a minimal runtime capMap for parity tests.
+  // installSurface must be supplied for any runtime that should be checked by the gate;
+  // omit it (undefined) to simulate a runtime with no installSurface (gate skips it).
+  function makeRuntimeCapMap(runtimeId, configFormat, installSurface) {
+    const runtime = {
+      configHome: { kind: 'dot-home', name: '.' + runtimeId, env: [] },
+      configFormat,
+      artifactLayout: { global: [], local: [] },
+      commandStyle: 'slash-hyphen',
+      hooksSurface: 'none',
+      sandboxTier: 'none',
+      supportTier: 1,
+    };
+    if (installSurface !== undefined) {
+      runtime.installSurface = installSurface;
+    }
     const cap = {
       id: runtimeId,
       role: 'runtime',
@@ -3450,15 +3464,7 @@ describe('ADR-857 phase 5e: configFormat ↔ installSurface parity gate', () => 
       description: 'Synthetic runtime for parity gate testing.',
       tier: 'core',
       requires: [],
-      runtime: {
-        configHome: { kind: 'dot-home', name: '.' + runtimeId, env: [] },
-        configFormat,
-        artifactLayout: { global: [], local: [] },
-        commandStyle: 'slash-hyphen',
-        hooksSurface: 'none',
-        sandboxTier: 'none',
-        supportTier: 1,
-      },
+      runtime,
     };
     return new Map([[runtimeId, cap]]);
   }
@@ -3467,7 +3473,7 @@ describe('ADR-857 phase 5e: configFormat ↔ installSurface parity gate', () => 
   test('THROWS: claude with wrong configFormat "toml" (installSurface=settings-json → expected settings-json)', () => {
     // claude has installSurface=settings-json → expected configFormat=settings-json
     // Giving it configFormat=toml must trigger the HARD gate
-    const capMap = makeRuntimeCapMap('claude', 'toml');
+    const capMap = makeRuntimeCapMap('claude', 'toml', 'settings-json');
     assert.throws(
       () => runConfigFormatParityGate(capMap),
       (err) => {
@@ -3486,7 +3492,7 @@ describe('ADR-857 phase 5e: configFormat ↔ installSurface parity gate', () => 
   });
 
   test('THROWS: codex with wrong configFormat "settings-json" (installSurface=codex-toml → expected toml)', () => {
-    const capMap = makeRuntimeCapMap('codex', 'settings-json');
+    const capMap = makeRuntimeCapMap('codex', 'settings-json', 'codex-toml');
     assert.throws(
       () => runConfigFormatParityGate(capMap),
       (err) => {
