@@ -410,7 +410,7 @@ function selectRuntimesFromArgs(runtimeArgs) {
   if (runtimeArgs.includes('--copilot')) selected.push('copilot');
   if (runtimeArgs.includes('--antigravity')) selected.push('antigravity');
   if (runtimeArgs.includes('--cursor')) selected.push('cursor');
-  if (runtimeArgs.includes('--windsurf')) selected.push('windsurf');
+  if (runtimeArgs.includes('--windsurf') || runtimeArgs.includes('--devin-desktop')) selected.push('windsurf');
   if (runtimeArgs.includes('--augment')) selected.push('augment');
   if (runtimeArgs.includes('--trae')) selected.push('trae');
   if (runtimeArgs.includes('--qwen')) selected.push('qwen');
@@ -1208,6 +1208,52 @@ function injectEffortFrontmatter(content, effortValue) {
   const after = content.slice(closingStart);
   return `${before}effort: ${effortValue}${eol}${after}`;
 }
+
+/**
+ * #767 — Inject `disallowedTools: <value>` into the YAML frontmatter of a Claude .md agent.
+ * Mirrors injectEffortFrontmatter: idempotent (skips if disallowedTools: already present),
+ * inserts immediately before the closing `---`. Claude-only — never call for other runtimes,
+ * which break on unknown frontmatter keys.
+ */
+function injectDisallowedToolsFrontmatter(content, disallowedValue) {
+  // Detect the dominant EOL from the first line (the opening `---`).
+  // If the very first `---` is followed by \r\n, treat the whole file as CRLF.
+  const eol = /^---\r\n/.test(content) ? '\r\n' : '\n';
+
+  // Build a frontmatter-matching regex that tolerates an optional \r before
+  // each \n, so we handle both LF and CRLF files without needing to normalise
+  // the whole content.
+  const fmRe = /^---\r?\n([\s\S]*?)^---\r?$/m;
+  const match = fmRe.exec(content);
+  if (!match) return content; // no YAML frontmatter — leave unchanged
+
+  // Idempotency guard: don't insert a second disallowedTools: line.
+  const fmBody = match[1]; // content between the two `---` lines
+  if (/^disallowedTools:/m.test(fmBody)) return content;
+
+  // Locate the exact position of the closing `---` line so we can insert
+  // before it using a simple string splice.
+  const openLen = 3 + eol.length; // "---" + eol
+  const closingStart = match.index + openLen + fmBody.length;
+
+  const before = content.slice(0, closingStart);
+  const after = content.slice(closingStart);
+  return `${before}disallowedTools: ${disallowedValue}${eol}${after}`;
+}
+
+// #767 — Read-only verifier/auditor agents get a Claude-Code disallowedTools deny-list.
+// Group A (pure read-only) deny Write,Edit,MultiEdit. Group B report-writers Write one
+// output file so they deny only Edit,MultiEdit. gsd-nyquist-auditor is intentionally
+// excluded (it legitimately uses Write AND Edit to create/patch test files).
+const READONLY_AGENT_DISALLOWED_TOOLS = {
+  'gsd-plan-checker': 'Write, Edit, MultiEdit',
+  'gsd-integration-checker': 'Write, Edit, MultiEdit',
+  'gsd-ui-checker': 'Write, Edit, MultiEdit',
+  'gsd-verifier': 'Edit, MultiEdit',
+  'gsd-doc-verifier': 'Edit, MultiEdit',
+  'gsd-eval-auditor': 'Edit, MultiEdit',
+  'gsd-ui-auditor': 'Edit, MultiEdit',
+};
 
 /**
  * #2517 — Read a single GSD config file (defaults.json or per-project
@@ -10185,6 +10231,8 @@ function install(isGlobal, runtime = 'claude', options = {}) {
           const _universalEffort = resolveInstallTimeEffort(_effortCfg, _agentName);
           const _renderedEffort = _getGsdEffortCatalog().renderEffortForRuntime('claude', _universalEffort).value;
           content = injectEffortFrontmatter(content, _renderedEffort);
+          const _disallowedTools = READONLY_AGENT_DISALLOWED_TOOLS[_agentName];
+          if (_disallowedTools) content = injectDisallowedToolsFrontmatter(content, _disallowedTools);
         }
         // #3677 — normalize retired `/gsd:<cmd>` colon refs in the agent body
         // to the canonical hyphen form `/gsd-<cmd>` for hyphen-`name:`

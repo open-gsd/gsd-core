@@ -81,9 +81,10 @@ const GRACE = 3000;
 // current high-water mark within GRACE (#597 tighten-only ratchet).
 // XL high-water mark is execute-phase.md — note that under LINES it was
 // plan-phase; bytes genuinely re-rank the tier, which is the point of #717.
-// actualMax=92525 (execute-phase, #913 inline-fallback scope clarification);
-// slack=475 ≤ GRACE. plan-phase.md=90748 (#922 attempt-based Agent gate), new-project.md=58110.
-const XL_BUDGET = 93000;
+// actualMax=93130 (plan-phase, #381 CLAUDE_ENV_FILE persist clause in per-file launcher preamble);
+// slack=70 ≤ GRACE. execute-phase.md=92880, new-project.md=61685.
+// 93200: +200B headroom for the #381 CLAUDE_ENV_FILE persist clause added to every per-file launcher preamble (legit content growth, ratchet-up per #717).
+const XL_BUDGET = 93200;
 // LARGE high-water mark is docs-update.md. actualMax=54410 (#891 launcher shim expansion);
 // slack=1590 ≤ GRACE. quick.md=45710, autonomous.md=38030.
 const LARGE_BUDGET = 56000;
@@ -95,9 +96,9 @@ const DEFAULT_BUDGET = 40000;
 // Grandfathered at current sizes — see PR #2551 for the progressive-disclosure
 // pattern that future shrinks should follow. Byte counts noted for reference.
 const XL_WORKFLOWS = new Set([
-  'execute-phase',  // 92525 bytes (tier high-water mark; grew in #913 inline-fallback scope clarification)
-  'plan-phase',     // 90748 bytes (grew in #922 attempt-based Agent gate)
-  'new-project',    // 55850 bytes
+  'execute-phase',  // 92880 bytes (grew in #381 CLAUDE_ENV_FILE persist clause)
+  'plan-phase',     // 93130 bytes (tier high-water mark; grew in #381 CLAUDE_ENV_FILE persist clause)
+  'new-project',    // 61685 bytes
 ]);
 
 // Multi-step planners and bigger feature workflows. Grandfathered.

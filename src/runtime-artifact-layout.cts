@@ -333,6 +333,7 @@ function convertedCommandsKind(
 //                  (single-level subdir probe of the tap path)
 //     augment    — https://docs.augmentcode.com/cli/skills (flat single-level)
 //     trae       — docs.trae.ai/ide/skills + Trae-AI/TRAE#2253 (flat; nesting errors)
+//                  Trae IDE (trae.ai), not trae-agent — see runtime-homes.cts header note
 //     antigravity— discuss.ai.google.dev/t/more-antigravity-issues/145875 ("will not recursive scan")
 //
 //   FLAT (recursive loader → nesting gives no saving):

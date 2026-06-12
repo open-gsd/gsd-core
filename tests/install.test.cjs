@@ -43,6 +43,7 @@ const {
   buildRuntimePromptText,
   resolveKiloConfigPath,
   configureKiloPermissions,
+  selectRuntimesFromArgs,
 } = require('../bin/install.js');
 
 const { getGlobalConfigDir } = require('../gsd-core/bin/lib/runtime-homes.cjs');
@@ -938,4 +939,247 @@ describe('antigravity local install writes to .agents/ canonical dir (#791)', ()
       cleanup(homeDir);
     }
   });
+});
+// ─── Section 6: Windsurf / devin-desktop alias (#792) ───────────────────────
+
+describe('install — --devin-desktop CLI flag routes to windsurf runtime (#792)', () => {
+  test('--devin-desktop resolves to ["windsurf"] via selectRuntimesFromArgs', () => {
+    const runtimes = selectRuntimesFromArgs(['--devin-desktop']);
+    assert.deepStrictEqual(runtimes, ['windsurf'],
+      '--devin-desktop must resolve to ["windsurf"] via selectRuntimesFromArgs');
+  });
+
+  test('--windsurf and --devin-desktop both resolve to ["windsurf"]', () => {
+    assert.deepStrictEqual(selectRuntimesFromArgs(['--windsurf']), ['windsurf']);
+    assert.deepStrictEqual(selectRuntimesFromArgs(['--devin-desktop']), ['windsurf']);
+  });
+});
+// ─── Section N+1: #767 — disallowedTools injection for read-only agents ──────
+//
+// Verifies (installer-behavioral test — drives install() to a temp dir):
+//   1. Claude install: Group A agents have disallowedTools == {Write, Edit, MultiEdit} exactly.
+//   2. Claude install: Group B agents have disallowedTools == {Edit, MultiEdit} exactly.
+//   3. Negative: gsd-nyquist-auditor has NO disallowedTools key (legitimately writes+edits).
+//   4. Cross-runtime no-leak: Gemini-installed read-only agents do NOT contain disallowedTools.
+//   5. Source purity: source agents/*.md must not contain disallowedTools (inject-only).
+//   6. Parity: docs/AGENTS.md "Disallowed Tools" rows match READONLY_AGENT_DISALLOWED_TOOLS.
+//      (DEFECT.GENERATIVE-FIX guard)
+
+// #767 — must mirror READONLY_AGENT_DISALLOWED_TOOLS in bin/install.js.
+// If you change the map there, update this too (the parity test will catch drift).
+const READONLY_AGENT_DISALLOWED_TOOLS_767 = {
+  'gsd-plan-checker': 'Write, Edit, MultiEdit',
+  'gsd-integration-checker': 'Write, Edit, MultiEdit',
+  'gsd-ui-checker': 'Write, Edit, MultiEdit',
+  'gsd-verifier': 'Edit, MultiEdit',
+  'gsd-doc-verifier': 'Edit, MultiEdit',
+  'gsd-eval-auditor': 'Edit, MultiEdit',
+  'gsd-ui-auditor': 'Edit, MultiEdit',
+};
+
+const GROUP_A_767 = ['gsd-plan-checker', 'gsd-integration-checker', 'gsd-ui-checker'];
+const GROUP_B_767 = ['gsd-verifier', 'gsd-doc-verifier', 'gsd-eval-auditor', 'gsd-ui-auditor'];
+
+const REPO_ROOT_767 = path.resolve(__dirname, '..');
+const SOURCE_AGENTS_DIR_767 = path.join(REPO_ROOT_767, 'agents');
+const AGENTS_DOC_PATH_767 = path.join(REPO_ROOT_767, 'docs', 'AGENTS.md');
+
+function readFrontmatterText(mdPath) {
+  const content = fs.readFileSync(mdPath, 'utf8');
+  if (!content.startsWith('---')) return '';
+  const end = content.indexOf('---', 3);
+  if (end === -1) return '';
+  return content.substring(3, end);
+}
+
+function parseDisallowedToolsSet(fm) {
+  const match = fm.match(/^disallowedTools:\s*(.+)$/m);
+  if (!match) return null;
+  return new Set(match[1].split(',').map((t) => t.trim()).filter(Boolean));
+}
+
+/**
+ * Run a global install for the given runtime, redirecting its home dir to
+ * tmpHome. Stubs both HOME and USERPROFILE for Windows parity, and
+ * suppresses the stale-SDK npm subprocess.
+ */
+function runGlobalInstall767(runtime, tmpHome) {
+  const envVarMap = {
+    claude: 'CLAUDE_CONFIG_DIR',
+    gemini: 'GEMINI_CONFIG_DIR',
+    qwen: 'QWEN_CONFIG_DIR',
+  };
+  const envVar = envVarMap[runtime];
+  if (!envVar) throw new Error(`Unsupported runtime in #767 test: ${runtime}`);
+
+  const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-767-home-'));
+
+  const prevEnvVar = process.env[envVar];
+  const prevCwd = process.cwd();
+  const prevHome = process.env.HOME;
+  const prevUserProfile = process.env.USERPROFILE;
+  const prevSkipStale = process.env.GSD_SKIP_STALE_SDK_CHECK;
+
+  process.env[envVar] = tmpHome;
+  process.env.HOME = isolatedHome;
+  process.env.USERPROFILE = isolatedHome;
+  process.env.GSD_SKIP_STALE_SDK_CHECK = '1';
+  process.chdir(REPO_ROOT_767);
+
+  try {
+    install(true, runtime);
+  } finally {
+    process.chdir(prevCwd);
+    if (prevEnvVar === undefined) delete process.env[envVar];
+    else process.env[envVar] = prevEnvVar;
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+    if (prevUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = prevUserProfile;
+    if (prevSkipStale === undefined) delete process.env.GSD_SKIP_STALE_SDK_CHECK;
+    else process.env.GSD_SKIP_STALE_SDK_CHECK = prevSkipStale;
+    cleanup(isolatedHome);
+  }
+
+  return tmpHome;
+}
+
+describe('#767 Claude install: Group A agents have disallowedTools = {Write, Edit, MultiEdit}', () => {
+  let tmpDir;
+  let claudeHome;
+
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-767-claude-a-');
+    claudeHome = path.join(tmpDir, 'claude-home');
+    fs.mkdirSync(claudeHome, { recursive: true });
+    runGlobalInstall767('claude', claudeHome);
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  const EXPECTED_A_767 = new Set(['Write', 'Edit', 'MultiEdit']);
+
+  for (const agent of GROUP_A_767) {
+    test(`${agent}: disallowedTools is exactly {Write, Edit, MultiEdit}`, () => {
+      const fm = readFrontmatterText(path.join(claudeHome, 'agents', `${agent}.md`));
+      const tools = parseDisallowedToolsSet(fm);
+      assert.ok(tools !== null,
+        `${agent} must have a disallowedTools key in Claude frontmatter\nFrontmatter:\n${fm}`);
+      assert.deepEqual(tools, EXPECTED_A_767,
+        `${agent} disallowedTools must be exactly {Write, Edit, MultiEdit}\nGot: ${[...tools].join(', ')}`);
+    });
+  }
+});
+
+describe('#767 Claude install: Group B agents have disallowedTools = {Edit, MultiEdit}', () => {
+  let tmpDir;
+  let claudeHome;
+
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-767-claude-b-');
+    claudeHome = path.join(tmpDir, 'claude-home');
+    fs.mkdirSync(claudeHome, { recursive: true });
+    runGlobalInstall767('claude', claudeHome);
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  const EXPECTED_B_767 = new Set(['Edit', 'MultiEdit']);
+
+  for (const agent of GROUP_B_767) {
+    test(`${agent}: disallowedTools is exactly {Edit, MultiEdit}`, () => {
+      const fm = readFrontmatterText(path.join(claudeHome, 'agents', `${agent}.md`));
+      const tools = parseDisallowedToolsSet(fm);
+      assert.ok(tools !== null,
+        `${agent} must have a disallowedTools key in Claude frontmatter\nFrontmatter:\n${fm}`);
+      assert.deepEqual(tools, EXPECTED_B_767,
+        `${agent} disallowedTools must be exactly {Edit, MultiEdit}\nGot: ${[...tools].join(', ')}`);
+    });
+  }
+});
+
+describe('#767 Claude install: gsd-nyquist-auditor has no disallowedTools (legitimately writes+edits)', () => {
+  let tmpDir;
+  let claudeHome;
+
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-767-claude-nyquist-');
+    claudeHome = path.join(tmpDir, 'claude-home');
+    fs.mkdirSync(claudeHome, { recursive: true });
+    runGlobalInstall767('claude', claudeHome);
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('gsd-nyquist-auditor.md has NO disallowedTools key', () => {
+    const fm = readFrontmatterText(path.join(claudeHome, 'agents', 'gsd-nyquist-auditor.md'));
+    const tools = parseDisallowedToolsSet(fm);
+    assert.equal(tools, null,
+      `gsd-nyquist-auditor must NOT have disallowedTools in Claude frontmatter\nFrontmatter:\n${fm}`);
+  });
+});
+
+describe('#767 Gemini install: read-only agents do NOT contain disallowedTools (cross-runtime leak guard)', () => {
+  let tmpDir;
+  let geminiHome;
+
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-767-gemini-');
+    geminiHome = path.join(tmpDir, 'gemini-home');
+    fs.mkdirSync(geminiHome, { recursive: true });
+    runGlobalInstall767('gemini', geminiHome);
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  for (const agent of [...GROUP_A_767, ...GROUP_B_767]) {
+    test(`Gemini ${agent}.md has no disallowedTools`, () => {
+      const agentPath = path.join(geminiHome, 'agents', `${agent}.md`);
+      const content = fs.readFileSync(agentPath, 'utf8');
+      assert.ok(!content.includes('disallowedTools'),
+        `${agent} (Gemini) must NOT contain disallowedTools\nContent excerpt:\n${content.slice(0, 400)}`);
+    });
+  }
+});
+
+describe('#767 Source purity: source agents/*.md must not contain disallowedTools (inject-only)', () => {
+  for (const agent of [...GROUP_A_767, ...GROUP_B_767]) {
+    test(`source agents/${agent}.md has no disallowedTools`, () => {
+      const content = fs.readFileSync(path.join(SOURCE_AGENTS_DIR_767, `${agent}.md`), 'utf8');
+      assert.ok(!content.includes('disallowedTools'),
+        `Source agents/${agent}.md must NOT contain disallowedTools (injection is install-time only, source must stay runtime-neutral)`);
+    });
+  }
+});
+
+describe('#767 Parity: docs/AGENTS.md "Disallowed Tools" rows match READONLY_AGENT_DISALLOWED_TOOLS', () => {
+  const agentsDoc = fs.readFileSync(AGENTS_DOC_PATH_767, 'utf8');
+
+  for (const [agent, expectedTools] of Object.entries(READONLY_AGENT_DISALLOWED_TOOLS_767)) {
+    test(`docs/AGENTS.md has matching Disallowed Tools row for ${agent}`, () => {
+      const agentHeaderIdx = agentsDoc.indexOf(`### ${agent}`);
+      assert.ok(agentHeaderIdx !== -1,
+        `docs/AGENTS.md must contain a ### ${agent} section`);
+
+      const nextSectionIdx = agentsDoc.indexOf('\n### ', agentHeaderIdx + 1);
+      const sectionEnd = nextSectionIdx === -1 ? agentsDoc.length : nextSectionIdx;
+      const section = agentsDoc.slice(agentHeaderIdx, sectionEnd);
+
+      const disallowedMatch = section.match(/\|\s*\*\*Disallowed Tools\*\*\s*\|\s*([^|]+)\|/);
+      assert.ok(disallowedMatch,
+        `docs/AGENTS.md section for ${agent} must have a "Disallowed Tools" table row`);
+
+      const docTools = disallowedMatch[1].trim();
+      assert.equal(docTools, expectedTools,
+        `docs/AGENTS.md "Disallowed Tools" for ${agent} must be "${expectedTools}" but got "${docTools}"`);
+    });
+  }
 });
