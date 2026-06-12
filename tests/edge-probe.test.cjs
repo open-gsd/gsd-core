@@ -219,6 +219,57 @@ describe('edge-probe: proposeEdges — empty-shapes override (RR-06)', () => {
   });
 });
 
+describe('edge-probe: proposeEdges — unclassified candidate for prose-zero-cue (#1110)', () => {
+  // A requirement with non-empty prose that matches NO shape cue must not be silently
+  // dropped (zero edges, no signal). It now surfaces ONE soft "unclassified — review
+  // manually" candidate instead. The explicit `shapes: []` opt-out stays silent.
+  test('prose with no shape cue surfaces a single unclassified candidate', () => {
+    const edges = ep.proposeEdges({ id: 'R1', text: 'Display the company logo' });
+    assert.equal(edges.length, 1, 'prose-zero-cue must surface exactly one unclassified candidate');
+    assert.deepEqual(edges[0], {
+      requirement_id: 'R1',
+      category: 'unclassified',
+      status: 'unresolved',
+      verification: null,
+      resolution: null,
+      reason: null,
+      probe: 'unclassified — review manually',
+    });
+  });
+
+  test('UNCLASSIFIED_CATEGORY is a valid item category but NOT a taxonomy category', () => {
+    assert.equal(ep.UNCLASSIFIED_CATEGORY, 'unclassified');
+    assert.ok(ep.EDGE_VALIDATORS.categories.includes('unclassified'), 'analyzeCoverage must accept the unclassified item category');
+    assert.ok(!ep.TAXONOMY.some((c) => c.id === 'unclassified'), 'unclassified must NOT pollute the closed 8-category taxonomy');
+  });
+
+  test('explicit shapes: [] stays silent (deliberate opt-out — NOT unclassified)', () => {
+    const edges = ep.proposeEdges({ id: 'R1', text: 'Display the company logo', shapes: [] });
+    assert.deepEqual(edges, []);
+  });
+
+  test('prose that DOES classify proposes real edges, never an unclassified candidate', () => {
+    const edges = ep.proposeEdges({ id: 'R1', text: 'Round a number to N decimal places' });
+    assert.ok(edges.length > 0);
+    assert.ok(!edges.some((e) => e.category === 'unclassified'), 'a classifiable requirement must not emit unclassified');
+  });
+
+  test('analyzeCoverage surfaces the unclassified candidate as unresolved (no throw)', () => {
+    const report = ep.analyzeCoverage([{ id: 'R1', text: 'Display the company logo' }]);
+    assert.equal(report.coverage.applicable, 1);
+    assert.equal(report.coverage.unresolved, 1);
+    assert.equal(report.items[0].category, 'unclassified');
+  });
+
+  test('an unclassified candidate can be dismissed with a reason (edge-probe parity)', () => {
+    const report = ep.analyzeCoverage(
+      [{ id: 'R1', text: 'Display the company logo' }],
+      [{ requirement_id: 'R1', category: 'unclassified', status: 'dismissed', reason: 'genuinely edge-free — static asset' }],
+    );
+    assert.equal(report.items[0].status, 'dismissed');
+  });
+});
+
 describe('edge-probe: proposeEdges — invalid authored shapes fail closed (re-review #3 High)', () => {
   // A non-empty but INVALID shapes array must NOT silently suppress every probe.
   // shapes:['numeric'] (typo for the locked 'numeric-range') previously passed

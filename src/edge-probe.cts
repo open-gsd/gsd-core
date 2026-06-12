@@ -104,8 +104,16 @@ export function applicableCategories(shapes: Shape[]): string[] {
  * taxonomy; both verification tiers require a non-empty `resolution` (an explicit AC's text
  * or a backstop note) so plan-phase has a criterion to lift.
  */
+/**
+ * Pseudo-category for a requirement whose prose matched NO shape cue (#1110). It is a soft
+ * "review manually" signal, NOT a 9th taxonomy category: it stays out of `TAXONOMY` (the closed
+ * eight) and only joins `EDGE_VALIDATORS.categories` so `analyzeCoverage` accepts the item.
+ */
+export const UNCLASSIFIED_CATEGORY = 'unclassified';
+const UNCLASSIFIED_PROBE = 'unclassified — review manually';
+
 export const EDGE_VALIDATORS: Validators = {
-  categories: TAXONOMY.map((c) => c.id),
+  categories: [...TAXONOMY.map((c) => c.id), UNCLASSIFIED_CATEGORY],
   verification: ['explicit', 'backstop'],
   requiredFieldsByVerification: { explicit: ['resolution'], backstop: ['resolution'] },
 };
@@ -162,6 +170,22 @@ export function proposeEdges(requirement: Requirement): Edge[] {
     shapes = requirement.shapes;
   } else {
     shapes = classifyShape(requirement.text);
+    if (shapes.length === 0) {
+      // Prose present but no shape cue matched. Do NOT silently drop it (#1110): an
+      // edge-relevant requirement whose phrasing missed every cue would otherwise vanish from
+      // coverage with no signal — the exact blind spot this probe exists to catch. Surface ONE
+      // soft, dismissible "unclassified — review manually" candidate. The explicit `shapes: []`
+      // opt-out (handled above) stays silent — that is the author's deliberate "no edge surface".
+      return [{
+        requirement_id: requirement.id,
+        category: UNCLASSIFIED_CATEGORY,
+        status: 'unresolved',
+        verification: null,
+        resolution: null,
+        reason: null,
+        probe: UNCLASSIFIED_PROBE,
+      }];
+    }
   }
   return applicableCategories(shapes).map((catId): Edge => {
     const cat = TAXONOMY.find((c) => c.id === catId);

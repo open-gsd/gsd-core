@@ -77,6 +77,17 @@ Two rules keep the probe honest and prevent an "everything is N/A" failure mode:
 2. **Dismissal requires a reason string.** "N/A — input is a bounded enum, no boundary
    exists" is valid; silence is not. The reason string is the audit trail.
 
+**Zero-classification surfaces an `unclassified` candidate (#1110).** The relevance filter is
+a heuristic over prose cues, so a requirement whose wording *is* edge-relevant but matches no
+shape cue would otherwise classify to zero shapes → zero edges and vanish from coverage with
+no signal — the same silent blind spot the probe exists to catch. Instead, a requirement with
+non-empty prose, no authored `shapes`, and zero matched shapes surfaces exactly one soft
+`unclassified — review manually` candidate (`category: "unclassified"`, `status: "unresolved"`).
+It is a dismissible nudge — resolve it, or dismiss it with a reason (e.g. a genuinely edge-free
+static-asset requirement) — never a hard block. `unclassified` is a review signal, **not** a
+ninth taxonomy category: the closed eight above are unchanged, and an explicit `shapes: []`
+opt-out stays silent (the author's deliberate "no edge surface").
+
 Each raised edge carries two orthogonal axes — a resolution **lifecycle** and, when
 resolved, a **verification** tier (ADR-550 Decision 7, the shared probe-core model):
 
