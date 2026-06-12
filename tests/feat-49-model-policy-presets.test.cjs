@@ -376,34 +376,72 @@ describe('#49 resolveModelInternal: model_policy in the resolution chain', () =>
       'runtime_tiers must not fire when config.runtime is absent');
   });
 
-  test('model_policy is skipped when runtime:"claude" (no-op gate)', () => {
-    // runtime:"claude" is the implicit default and is treated as a no-op
-    // for model_policy resolution (same as the no-op gate in the existing
-    // runtime-aware resolution step). model_policy provider preset
-    // for anthropic may still fire — but runtime_tiers for claude is a no-op
-    // because claude-native resolution already handles that path.
+  test('model_policy provider preset resolves to a Claude alias on runtime:"claude" (#1133)', () => {
     writeConfig(projectDir, {
       runtime: 'claude',
-      model_profile: 'quality',
+      model_profile: 'balanced',
+      model_policy: { provider: 'anthropic-fable', budget: 'high' },
+    });
+    // gsd-planner -> opus tier; anthropic-fable opus/high = claude-fable-5 -> alias "fable"
+    assert.strictEqual(resolveModelInternal(projectDir, 'gsd-planner'), 'fable');
+  });
+
+  test('model_policy works with implicit claude runtime (no runtime key) (#1133)', () => {
+    writeConfig(projectDir, {
+      model_profile: 'balanced',
+      model_policy: { provider: 'anthropic-fable', budget: 'high' },
+    });
+    // gsd-executor -> sonnet tier; anthropic-fable sonnet/high = claude-fable-5 -> "fable"
+    assert.strictEqual(resolveModelInternal(projectDir, 'gsd-executor'), 'fable');
+  });
+
+  test('unmappable model_policy ID warns and falls back to the tier alias on claude (#1133)', () => {
+    _resetRuntimeWarningCacheForTests();
+    writeConfig(projectDir, {
+      runtime: 'claude',
+      model_profile: 'balanced',
+      model_policy: { provider: 'anthropic-fable', budget: 'low' },
+    });
+    // gsd-planner -> opus tier; anthropic-fable opus/low = claude-opus-4-5 (no alias) -> fall back to "opus"
+    assert.strictEqual(resolveModelInternal(projectDir, 'gsd-planner'), 'opus');
+  });
+
+  test('model_policy.runtime_tiers applies on runtime:"claude", mapped to alias (#1133)', () => {
+    writeConfig(projectDir, {
+      runtime: 'claude',
+      model_profile: 'balanced',
       model_policy: {
         provider: 'anthropic',
         budget: 'high',
-        runtime_tiers: {
-          claude: {
-            opus: { model: 'claude-runtime-tiers-should-not-appear' },
-          },
-        },
+        runtime_tiers: { claude: { opus: { model: 'claude-fable-5' } } },
       },
     });
-    let result;
-    assert.doesNotThrow(() => {
-      result = resolveModelInternal(projectDir, 'gsd-planner');
+    // gsd-planner -> opus tier; runtime_tiers.claude.opus = claude-fable-5 -> "fable" (was a no-op pre-#1133)
+    assert.strictEqual(resolveModelInternal(projectDir, 'gsd-planner'), 'fable');
+  });
+
+  test('model_policy maps a built-in catalog model ID to its Claude alias via MODEL_ALIAS_MAP (#1133)', () => {
+    writeConfig(projectDir, {
+      runtime: 'claude',
+      model_profile: 'balanced',
+      model_policy: {
+        provider: 'anthropic',
+        budget: 'high',
+        runtime_tiers: { claude: { opus: { model: 'claude-opus-4-8' } } },
+      },
     });
-    assert.ok(typeof result === 'string', 'must return a string');
-    // The claude runtime_tiers entry must not appear — model_policy runtime_tiers
-    // is a no-op for runtime:"claude"
-    assert.notStrictEqual(result, 'claude-runtime-tiers-should-not-appear',
-      'model_policy.runtime_tiers must be a no-op when runtime is "claude"');
+    // gsd-planner -> opus tier; runtime_tiers.claude.opus = claude-opus-4-8 ->
+    // reverse of MODEL_ALIAS_MAP -> "opus" (exercises the non-fable reverse-map path)
+    assert.strictEqual(resolveModelInternal(projectDir, 'gsd-planner'), 'opus');
+  });
+
+  test('model_policy still returns full IDs on non-claude runtimes (#1133 regression)', () => {
+    writeConfig(projectDir, {
+      runtime: 'opencode',
+      model_profile: 'balanced',
+      model_policy: { provider: 'anthropic-fable', budget: 'high' },
+    });
+    assert.strictEqual(resolveModelInternal(projectDir, 'gsd-planner'), 'claude-fable-5');
   });
 
   test('model_policy is skipped when tier:"inherit"', () => {
@@ -816,5 +854,19 @@ describe('#49 resolveModelForTier: model_policy beats dynamic_routing', () => {
       },
     });
     assert.strictEqual(resolveModelForTier(tmpDir, 'gsd-executor', 0), 'my-sonnet');
+  });
+
+  test('model_policy value that is already a bare Claude alias is returned as-is on claude (#1133)', () => {
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      model_profile: 'balanced',
+      model_policy: {
+        provider: 'anthropic',
+        budget: 'high',
+        runtime_tiers: { claude: { opus: { model: 'fable' } } },
+      },
+    });
+    // gsd-planner → opus tier; runtime_tiers.claude.opus = "fable" is already a valid alias → "fable"
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'fable');
   });
 });
