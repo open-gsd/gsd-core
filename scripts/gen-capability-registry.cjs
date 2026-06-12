@@ -873,6 +873,78 @@ function validateRuntimeBody(cap) {
   return errors;
 }
 
+function materializeHookFragments(cap, capDir) {
+  const errors = [];
+  const hookGroups = [
+    ['steps', Array.isArray(cap.steps) ? cap.steps : []],
+    ['contributions', Array.isArray(cap.contributions) ? cap.contributions : []],
+  ];
+
+  for (const [groupName, hooks] of hookGroups) {
+    for (let i = 0; i < hooks.length; i++) {
+      const hook = hooks[i];
+      if (!hook || typeof hook !== 'object' || Array.isArray(hook)) continue;
+      const fragment = hook.fragment;
+      if (!fragment || typeof fragment !== 'object' || Array.isArray(fragment)) continue;
+      if (typeof fragment.inline === 'string') continue;
+      if (typeof fragment.path !== 'string') continue;
+
+      const abs = path.resolve(capDir, fragment.path);
+      const capRoot = path.resolve(capDir);
+      if (abs !== capRoot && !abs.startsWith(capRoot + path.sep)) {
+        errors.push(
+          cap.id + '/' + groupName + '[' + i + '].fragment.path escapes capability directory: ' +
+          fragment.path,
+        );
+        continue;
+      }
+
+      try {
+        fragment.inline = fs.readFileSync(abs, 'utf8');
+      } catch (err) {
+        errors.push(
+          cap.id + '/' + groupName + '[' + i + '].fragment.path could not be read: ' +
+          fragment.path + ' (' + err.message + ')',
+        );
+      }
+    }
+  }
+
+  return errors;
+}
+
+function validateFragment(fragment, prefix) {
+  const errors = [];
+
+  if (typeof fragment !== 'object' || fragment === null || Array.isArray(fragment)) {
+    errors.push(prefix + ' must be an object with path or inline key');
+    return errors;
+  }
+
+  const hasPath = Object.prototype.hasOwnProperty.call(fragment, 'path');
+  const hasInline = Object.prototype.hasOwnProperty.call(fragment, 'inline');
+  if (!hasPath && !hasInline) {
+    errors.push(prefix + ' must have a "path" or "inline" key');
+  }
+  if (hasInline) {
+    const inline = fragment.inline;
+    if (typeof inline !== 'string') {
+      errors.push(prefix + '.inline must be a string');
+    } else if (inline === '') {
+      errors.push(prefix + '.inline must be a non-empty string');
+    }
+  }
+  // S1: fragment.path traversal guard — must be a relative path with no ".." segments
+  if (hasPath) {
+    const p = fragment.path;
+    if (typeof p !== 'string' || p === '' || path.isAbsolute(p) || p.split(/[\\/]/).includes('..')) {
+      errors.push(prefix + '.path must be a relative path with no ".." segments');
+    }
+  }
+
+  return errors;
+}
+
 /**
  * Validate a single step entry.
  *
@@ -952,6 +1024,10 @@ function validateStep(step, prefix, declaredSkills, declaredAgents) {
     errors.push(prefix + '.when must be a string if present');
   }
 
+  if (step.fragment !== undefined) {
+    errors.push(...validateFragment(step.fragment, prefix + '.fragment'));
+  }
+
   if (!VALID_ON_ERROR.has(step.onError)) {
     errors.push(prefix + '.onError must be "skip" or "halt" (got: ' + step.onError + ')');
   }
@@ -986,30 +1062,7 @@ function validateContribution(contrib, prefix) {
     }
   }
 
-  if (typeof contrib.fragment !== 'object' || contrib.fragment === null) {
-    errors.push(prefix + '.fragment must be an object with path or inline key');
-  } else {
-    const hasPath = Object.prototype.hasOwnProperty.call(contrib.fragment, 'path');
-    const hasInline = Object.prototype.hasOwnProperty.call(contrib.fragment, 'inline');
-    if (!hasPath && !hasInline) {
-      errors.push(prefix + '.fragment must have a "path" or "inline" key');
-    }
-    if (hasInline) {
-      const inline = contrib.fragment.inline;
-      if (typeof inline !== 'string') {
-        errors.push(prefix + '.fragment.inline must be a string');
-      } else if (inline === '') {
-        errors.push(prefix + '.fragment.inline must be a non-empty string');
-      }
-    }
-    // S1: fragment.path traversal guard — must be a relative path with no ".." segments
-    if (hasPath) {
-      const p = contrib.fragment.path;
-      if (typeof p !== 'string' || p === '' || path.isAbsolute(p) || p.split(/[\\/]/).includes('..')) {
-        errors.push(prefix + '.fragment.path must be a relative path with no ".." segments');
-      }
-    }
-  }
+  errors.push(...validateFragment(contrib.fragment, prefix + '.fragment'));
 
   if (contrib.when !== undefined && typeof contrib.when !== 'string') {
     errors.push(prefix + '.when must be a string if present');
@@ -1853,6 +1906,12 @@ function loadAndValidate(centralKeys, capabilitiesDir) {
       for (const e of contractErrors) errors.push(folderId + '/capability.json: ' + e);
       // Fix #6: do NOT add contract-invalid caps to capMap — validateCrossCapability should
       // only see fully-valid capabilities so its invariants are meaningful.
+      continue;
+    }
+
+    const fragmentErrors = materializeHookFragments(cap, path.dirname(capPath));
+    if (fragmentErrors.length > 0) {
+      for (const e of fragmentErrors) errors.push(folderId + '/capability.json: ' + e);
       continue;
     }
 

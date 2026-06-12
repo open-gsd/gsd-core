@@ -109,15 +109,15 @@ function extractSection(content, heading) {
 // "Check AI-SPEC" is skipped on every non-AI phase (ai_integration_phase_enabled false /
 // --skip-ai-spec), so a resolution placed there leaves SPEC_PATH unbound and the planner
 // never receives the SPEC — exactly the #550 silent no-op. Assert it is NOT in §4.5.
-test('RR-01 reachability: SPEC_FILE resolution is NOT gated inside the skippable "## 4.5 Check AI-SPEC" section', () => {
+test('RR-01 reachability: SPEC_FILE resolution is NOT gated inside the AI-SPEC artifact section', () => {
   const content = readPlanPhase();
-  const aiSpecSection = extractSection(content, '## 4.5. Check AI-SPEC');
+  const aiSpecSection = extractSection(content, '## 4.5. Resolve AI-SPEC Artifact');
   const specResolution = new RegExp('SPEC_FILE=\\$\\(ls "\\$\\{[A-Z_]*PHASE_DIR[A-Z_]*\\}"[/][*]-SPEC\\.md');
-  assert.ok(aiSpecSection.length > 0, 'sanity: the §4.5 Check AI-SPEC section must exist to scope this test');
+  assert.ok(aiSpecSection.length > 0, 'sanity: the §4.5 AI-SPEC artifact section must exist to scope this test');
   assert.doesNotMatch(
     aiSpecSection,
     specResolution,
-    'SPEC_FILE resolution must NOT live inside the skippable §4.5 "Check AI-SPEC" block — gating it there silently starves the planner of the SPEC on non-AI phases (the original #550 no-op)'
+    'SPEC_FILE resolution must NOT live inside the §4.5 AI-SPEC artifact block — gating it there silently starves the planner of the SPEC on non-AI phases (the original #550 no-op)'
   );
   assert.match(content, specResolution, 'SPEC_FILE resolution must still exist on an un-gated path elsewhere in plan-phase.md');
 });
