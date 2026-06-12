@@ -90,6 +90,34 @@ Manage GSD workspaces — create, list, or remove isolated workspace environment
 
 ---
 
+### `/gsd-spec-phase`
+
+Clarify WHAT a phase delivers through Socratic questioning with quantitative ambiguity scoring, then probe for omitted edges. Produces `SPEC.md` before discuss-phase.
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `N` | Yes | Phase number |
+
+| Flag | Description |
+|------|-------------|
+| `--auto` | Skip interactive questions; Claude selects recommended defaults and writes SPEC.md |
+| `--text` | Use plain-text numbered lists instead of TUI menus (required for `/rc` remote sessions) |
+
+**Position in workflow:** `spec-phase → discuss-phase → plan-phase → execute-phase → verify`
+
+**Edge Coverage (Step 5.5):** After the ambiguity gate passes, spec-phase runs an edge-completeness probe over each requirement. It raises only applicable categories from a closed 8-category taxonomy (boundary, adjacency, empty, encoding, ordering, precision, idempotency, concurrency), proposes one concrete candidate edge per category, and records each as `covered` / `dismissed` (reason required) / `backstop` / `unresolved` in a `## Edge Coverage` SPEC section. Unresolved applicable edges soft-gate the spec (Resolve / Write-anyway-flagged / Keep-probing); `covered` and `backstop` edges are later lifted into plan-phase `must_haves`. Under `--auto` the probe **never auto-dismisses** — it auto-covers where a defensible acceptance criterion exists, otherwise auto-backstops.
+
+**Prerequisites:** `.planning/ROADMAP.md` exists
+**Produces:** `{phase}-SPEC.md` (with a `## Edge Coverage` section)
+
+```bash
+/gsd-spec-phase 1                  # Interactive spec + edge probe for phase 1
+/gsd-spec-phase 3 --auto           # Auto-select defaults; never auto-dismisses an edge
+/gsd-spec-phase 2 --text           # Plain-text menus for remote sessions
+```
+
+---
+
 ### `/gsd-discuss-phase`
 
 Gather phase context through adaptive questioning before planning.

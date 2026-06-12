@@ -1,0 +1,7 @@
+{
+  "items": [
+    { "requirement_id": "R1", "category": "boundary", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "What happens exactly at each min/max/threshold — and one step either side?" },
+    { "requirement_id": "R1", "category": "precision", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "Where can precision loss or overflow occur, and what is the contract?" }
+  ],
+  "coverage": { "applicable": 2, "resolved": 0, "unresolved": 2, "byVerification": { "explicit": 0, "backstop": 0 } }
+}

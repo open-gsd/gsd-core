@@ -151,6 +151,15 @@
         "validate-context.test.cjs"
       ],
       "issue": "892"
+    },
+    "edge-probe": {
+      "files": [
+        "edge-probe-docs-fixtures.test.cjs",
+        "edge-probe-planner-contract.test.cjs",
+        "edge-probe-spec-phase-contract.test.cjs",
+        "edge-probe.test.cjs"
+      ],
+      "issue": "550"
     }
   }
 }

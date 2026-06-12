@@ -1,0 +1,7 @@
+{
+  "items": [
+    { "requirement_id": "R1", "category": "empty", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "What is the result for empty, single-element, or null input?" },
+    { "requirement_id": "R1", "category": "encoding", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "Whose definition of length/equality applies — bytes, code points, grapheme clusters, or normalized form?" }
+  ],
+  "coverage": { "applicable": 2, "resolved": 0, "unresolved": 2, "byVerification": { "explicit": 0, "backstop": 0 } }
+}

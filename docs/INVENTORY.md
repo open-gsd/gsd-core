@@ -264,7 +264,7 @@ Full roster at `gsd-core/workflows/*.md`. Workflows are thin orchestrators that 
 
 ---
 
-## References (68 shipped)
+## References (69 shipped)
 
 Full roster at `gsd-core/references/*.md`. References are shared knowledge documents that workflows and agents `@-reference`. The groupings below match [`docs/ARCHITECTURE.md`](ARCHITECTURE.md#references-gsd-corereferencesmd) — core, workflow, thinking-model clusters, and the modular planner decomposition.
 
@@ -300,6 +300,7 @@ Full roster at `gsd-core/references/*.md`. References are shared knowledge docum
 | `context-budget.md` | Context window budget allocation rules. |
 | `continuation-format.md` | Session continuation/resume format. |
 | `domain-probes.md` | Domain-specific probing questions for discuss-phase. |
+| `edge-probe.md` | Spec-phase edge-completeness probe — 8-category edge taxonomy, shape classification, and the `requirements → checks → verifier` resolution model (Step 5.5). |
 | `gate-prompts.md` | Gate/checkpoint prompt templates. |
 | `scout-codebase.md` | Phase-type→codebase-map selection table for discuss-phase scout step (extracted via #2551). |
 | `revision-loop.md` | Plan revision iteration patterns. |
@@ -407,6 +408,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `decisions.cjs` | Parses CONTEXT.md `<decisions>` blocks; accepts numeric (D-42) and alphanumeric (D-INFRA-01) IDs; returns `{id, text, category, tags, trackable}` |
 | `docs.cjs` | Docs-update workflow init, Markdown scanning, monorepo detection |
 | `drift.cjs` | Post-execute codebase structural drift detector (#2003): classifies file changes into new-dir/barrel/migration/route categories and round-trips `last_mapped_commit` frontmatter |
+| `edge-probe.cjs` | Spec-completeness edge probe (compiled from `src/edge-probe.cts`, gitignored) — the first adapter of the `probe-core` resolution model (ADR-550 Decision 7): shape classification, applicable-category relevance filter, edge proposal, and the `{explicit, backstop}` verification validators; delegates merge/rollup/CLI to `probe-core`; exports `classifyShape`, `applicableCategories`, `proposeEdges`, `analyzeCoverage`, `validateResolution`, `TAXONOMY` (#550) |
 | `fallow-runner.cjs` | Fallow audit adapter for `/gsd-code-review`: binary resolution (`PATH` then `node_modules/.bin`), actionable missing-binary errors, and structural findings normalization |
 | `federated-config.cjs` | Defensive merge of capability-declared config slices into the loadConfig return value — ADR-857 phase 3b; exports `mergeFederatedConfig({ configSchema, isCentralKey, userConfig })` → `{ values, validKeys, warnings }`; no-op until a key is atomically removed from the central config-schema (the cutover step) |
 | `frontmatter.cjs` | YAML frontmatter CRUD operations |
@@ -447,6 +449,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `prompt-budget.cjs` | Pure token-budget accounting for review prompts — estimates tokens, applies deterministic trim priority (head-shrink PROJECT.md, proportional plan truncation, drop context/research/requirements, hard-fail guard), returns structured metadata for `review.max_prompt_tokens` (#3081) |
 | `research-provider.cjs` | Research provider waterfall, confidence tiers, and planResearch (cache-hits + fetch plan) |
 | `research-store.cjs` | Content-addressed research cache: sha256 keys, per-source TTL staleness, two-tier (user ~/.gsd / project .planning) store |
+| `probe-core.cjs` | Generic spec-phase probe resolution model (compiled from `src/probe-core.cts`, gitignored; ADR-550 Decision 7) — the status×verification re-cut (`status: resolved/dismissed/unresolved` × per-probe `verification`), `validateResolution`/`validateRequirement`, `analyzeCoverage(items, resolutions?, validators)` merge/rollup/orphan-reject, the `byVerification` rollup, and the `runProbeCli` I/O scaffold; the shared seam consumed by `edge-probe` (and the prohibition probe #644); exports `VALID_STATUS`, `validateResolution`, `validateRequirement`, `analyzeCoverage`, `runProbeCli` (#550) |
 | `review-reviewer-selection.cjs` | Reviewer selection/normalization helpers for `/gsd-review` default reviewer policy and precedence |
 | `roadmap-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools roadmap` |
 | `roadmap-parser.cjs` | ROADMAP.md parsing — milestone slicing, current-milestone extraction, phase/milestone lookups, milestone-phase filter (extracted from `core.cjs`, ADR-857) |

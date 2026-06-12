@@ -18,6 +18,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Install on your runtime](how-to/install-on-your-runtime.md) — runtime-specific install steps for all 16 supported runtimes
 - [Install a minimal GSD and add skills later](how-to/install-minimal-and-add-skills.md) — install only the core skills, then grow the surface with profiles and `/gsd:surface`
 - [Discuss a phase](how-to/discuss-a-phase.md) — capture implementation decisions before planning begins
+- [Resolve edge-coverage findings](how-to/resolve-edge-coverage-findings.md) — turn the spec phase's surfaced domain-boundary edges into covered, dismissed, or backstopped spec decisions
 - [Plan a phase](how-to/plan-a-phase.md) — run research, decompose work, and verify plan quality
 - [Execute a phase](how-to/execute-a-phase.md) — run plans in parallel waves with fresh-context subagents
 - [Verify and ship](how-to/verify-and-ship.md) — walk through completed work, diagnose failures, and create the PR
