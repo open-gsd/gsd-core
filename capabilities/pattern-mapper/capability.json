@@ -1,0 +1,31 @@
+{
+  "id": "pattern-mapper",
+  "role": "feature",
+  "title": "Pattern mapping",
+  "description": "Optional codebase-pattern mapping before planning; owns the pattern mapper agent and workflow.pattern_mapper activation key.",
+  "tier": "full",
+  "requires": ["research"],
+  "skills": [],
+  "agents": ["gsd-pattern-mapper"],
+  "hooks": [],
+  "config": {
+    "workflow.pattern_mapper": {
+      "type": "boolean",
+      "default": true,
+      "description": "Run the pattern mapper before planning when context or research is available."
+    }
+  },
+  "steps": [
+    {
+      "point": "plan:pre",
+      "ref": { "agent": "gsd-pattern-mapper" },
+      "fragment": { "path": "fragments/plan-pre.md" },
+      "produces": ["PATTERNS.md"],
+      "consumes": ["RESEARCH.md"],
+      "when": "workflow.pattern_mapper",
+      "onError": "skip"
+    }
+  ],
+  "contributions": [],
+  "gates": []
+}
