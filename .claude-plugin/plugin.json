@@ -1,7 +1,7 @@
 {
   "name": "gsd-core",
   "displayName": "GSD Core",
-  "version": "1.3.1-dev.0",
+  "version": "1.5.0-rc.2",
   "description": "GSD Core is a meta-prompting, context engineering, and spec-driven development system for AI coding agents.",
   "author": {
     "name": "open-gsd",
@@ -10,7 +10,14 @@
   "homepage": "https://github.com/open-gsd/gsd-core",
   "repository": "https://github.com/open-gsd/gsd-core",
   "license": "MIT",
-  "keywords": ["spec-driven-development", "planning", "workflow", "context-engineering", "claude-code", "gsd"],
+  "keywords": [
+    "spec-driven-development",
+    "planning",
+    "workflow",
+    "context-engineering",
+    "claude-code",
+    "gsd"
+  ],
   "commands": "./commands/gsd/",
   "hooks": "./hooks/hooks.json"
 }

@@ -151,3 +151,26 @@ right; only the *movable placeholder* mechanic was wrong.
    *(Recommend: keep the rc tags — harmless, immutable, and they anchor the GitHub prerelease.)*
 3. `-dev` floor increment: next-patch (`A.B.(C+1)-dev.0`, the precedence-safe default above) or
    next-minor (`A.(B+1).0-dev.0`)? *(Recommend: next-patch floor.)*
+
+## Amendment (2026-06-12, #1104): `next` tracks the last published release
+
+**Supersedes** the §2 / "Resolved by maintainer" choice to rest `next` on a `-dev` stream.
+
+The `-dev` floor (e.g. `1.3.1-dev.0`) was never published to npm, yet it became the
+source-of-truth version on the default branch and leaked to the real world via source/dev
+installs that report `package.json`'s version — a version no release ever bore. To eliminate
+phantom versions, `next` now **rests at the last published release** and is synced
+automatically by the release pipeline for **every** release type:
+
+- **finalize / hotfix** (these push `main`): the existing `main → next` back-merge
+  (`.github/workflows/auto-backmerge.yml`) sets `next`'s version to `main`'s released version,
+  folded into the same back-merge PR.
+- **rc** (publishes a pre-release to the `release/<version>` branch + `@next`; does **not** push
+  `main`): the `rc` job in `.github/workflows/release.yml` opens and admin-merges a
+  `chore: sync next package version` PR after a confirmed publish.
+
+Both paths share `scripts/sync-next-version.cjs`, which sets `package.json` and stamps the
+runtime manifests (`plugin.json`, `gemini-extension.json`) via the `version` lifecycle hook,
+and **refuses any non-release version string** (fail-closed — a `-dev`/placeholder can never be
+written to `next` again). Open question 3 (the `-dev` floor increment) is therefore moot: there
+is no `-dev` floor.
