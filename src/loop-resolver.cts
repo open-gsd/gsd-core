@@ -223,6 +223,7 @@ function _resolveActivationValue(
 
 interface HookRef {
   skill?: string;
+  agent?: string;
   [key: string]: unknown;
 }
 

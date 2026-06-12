@@ -56,19 +56,6 @@ function hostConsume(envelope, capId) {
 // just one capability's hooks are removed. Phase 6 uses the latter for UI,
 // because research / AI / pattern-mapper can be active at plan:pre too.
 
-function makeBaseEnvelope(point) {
-  const emptyByLoopPoint = {};
-  for (const p of CANONICAL_POINTS) {
-    emptyByLoopPoint[p] = { steps: [], contributions: [], gates: [] };
-  }
-  const emptyRegistry = { byLoopPoint: emptyByLoopPoint, configSchema: {} };
-  const resolved = resolveLoopHooks({ point, registry: emptyRegistry, config: {} });
-  return {
-    activeHooks: resolved.activeHooks,
-    rendered: renderLoopHooks(resolved),
-  };
-}
-
 function makeRegistryWithoutCapability(registry, capId) {
   const byLoopPoint = {};
   for (const p of CANONICAL_POINTS) {
