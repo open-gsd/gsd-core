@@ -93,16 +93,42 @@ for (const entry of LOOP_HOST_CONTRACT) {
  * Loads the set of keys from the central config-schema manifest.
  * Returns a Set<string>. Used for collision detection.
  *
- * TODO: distinguish file-not-found (ok, return empty Set) from JSON-parse-error
- * (should warn — a parse error means the schema is broken, not just absent).
+ * Contract:
+ *   - ENOENT (file not found): returns empty Set silently — legitimate absent case.
+ *   - Any other read error OR JSON parse error: writes a prominent warning to stderr
+ *     naming the schema path and the underlying error, then throws ExitError(1).
+ *     A parse error clearly states the schema is broken (not merely absent).
+ *
+ * @param {string} [schemaPath]  Path to the config-schema manifest. Defaults to
+ *                               CONFIG_SCHEMA_PATH (the real production path).
+ *                               Overridable for unit testing with fixture paths.
+ * @returns {Set<string>}
  */
-function loadCentralConfigKeys() {
+function loadCentralConfigKeys(schemaPath = CONFIG_SCHEMA_PATH) {
+  let raw;
   try {
-    const manifest = JSON.parse(fs.readFileSync(CONFIG_SCHEMA_PATH, 'utf8'));
-    return new Set(Array.isArray(manifest.validKeys) ? manifest.validKeys : []);
-  } catch (_) {
-    return new Set();
+    raw = fs.readFileSync(schemaPath, 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      return new Set();
+    }
+    process.stderr.write(
+      '  ERROR  Failed to read config-schema manifest at ' + schemaPath + ': ' + err.message + '\n',
+    );
+    throw new ExitError(1, 'could not read config-schema manifest');
   }
+
+  let manifest;
+  try {
+    manifest = JSON.parse(raw);
+  } catch (err) {
+    process.stderr.write(
+      '  ERROR  Config-schema manifest at ' + schemaPath + ' is broken (JSON parse error): ' + err.message + '\n',
+    );
+    throw new ExitError(1, 'config-schema manifest JSON is malformed');
+  }
+
+  return new Set(Array.isArray(manifest.validKeys) ? manifest.validKeys : []);
 }
 
 // ─── Config-slice validation ──────────────────────────────────────────────────
@@ -1146,8 +1172,38 @@ function validateConsumesGlobal(capMap) {
     }
   }
 
-  // TODO: duplicate-producer invariant — if two capability steps produce the same artifact
-  // at the same point, that's ambiguous. Detect and reject as a follow-up.
+  // Duplicate-producer invariant: two capability steps may not produce the same artifact
+  // at the same Loop Extension Point. Same-point dual production makes data-flow resolution
+  // ambiguous and is rejected at gen time (Decision #6).
+  for (const artifact of Object.keys(capHookProducers)) {
+    if (artifact === '__proto__' || artifact === 'constructor' || artifact === 'prototype') continue;
+    const producers = capHookProducers[artifact];
+    // Group by pointIdx
+    const byPoint = Object.create(null);
+    for (const entry of producers) {
+      if (!byPoint[entry.pointIdx]) byPoint[entry.pointIdx] = [];
+      byPoint[entry.pointIdx].push(entry);
+    }
+    for (const pointIdxStr of Object.keys(byPoint)) {
+      const group = byPoint[pointIdxStr];
+      // Count distinct (capId, stepIdx) producer steps — a single step listing the same
+      // artifact twice in its produces array pushes duplicate entries but represents only
+      // ONE producer step and must not false-positive the cross-step gate.
+      const distinctProducers = new Set(group.map((e) => e.capId + ' ' + e.stepIdx));
+      if (distinctProducers.size >= 2) {
+        const pointIdx = Number(pointIdxStr);
+        const pointName = POINT_ORDER[pointIdx];
+        const capIds = [...new Set(group.map((e) => e.capId))].sort().join(', ');
+        throw new Error(
+          'duplicate-producer invariant violated: artifact "' + artifact + '" is produced by ' +
+          'two or more capability steps at the same Loop Extension Point "' + pointName + '" ' +
+          '(capabilities: ' + capIds + '). ' +
+          'Two capability steps producing the same artifact at the same Loop Extension Point ' +
+          'makes data-flow resolution ambiguous and is rejected at gen time.',
+        );
+      }
+    }
+  }
 
   // Now check every hook step's consumes.
   // Self-consume rule: a step H cannot satisfy its own consumes[A] from its own produces[A].
@@ -2238,6 +2294,7 @@ module.exports = {
   validateConsumesGlobal,
   validateCrossCapability,
   classifyCrossErrors,
+  loadCentralConfigKeys,
   loadAndValidate,
   buildRegistry,
   serializeRegistry,
