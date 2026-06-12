@@ -463,6 +463,13 @@ jobs:
           PRE_VERSION: ${{ steps.prerelease.outputs.pre_version }}
         run: node scripts/verify-npm-publish.cjs --package @opengsd/gsd-core --version "$PRE_VERSION" --dist-tag next
 
+      - name: Sync next branch to the published pre-release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          PRE_VERSION: ${{ steps.prerelease.outputs.pre_version }}
+        run: node scripts/sync-next-version.cjs "$PRE_VERSION"
+
       - name: Summary
         env:
           PRE_VERSION: ${{ steps.prerelease.outputs.pre_version }}

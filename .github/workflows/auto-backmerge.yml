@@ -24,6 +24,9 @@ permissions:
   contents: write
   pull-requests: write
 
+env:
+  NODE_VERSION: 24
+
 jobs:
   backmerge:
     # Phase-1 gate: leave false until `next` exists. Flip to `true` in Phase 2.
@@ -35,6 +38,10 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f  # v6.3.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Verify next branch exists
         id: check
@@ -98,6 +105,15 @@ jobs:
             git push --force origin "$BR"
             echo "reused=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Sync next's version to main's released version
+        if: steps.check.outputs.next_exists == 'true'
+        run: |
+          VERSION=$(git show origin/main:package.json | node -pe "JSON.parse(require('fs').readFileSync(0,'utf8')).version")
+          node scripts/sync-next-version.cjs "$VERSION" --in-place
+          git add -A
+          git diff --cached --quiet || git commit -m "chore: sync next package version to ${VERSION}"
+          git push origin HEAD
 
       - name: Open or update PR
         if: steps.check.outputs.next_exists == 'true'
