@@ -133,3 +133,82 @@ describe('#2189: progress --forensic flag', () => {
     );
   });
 });
+
+/**
+ * Regression — issue #1107
+ *
+ * /gsd-progress reported a phase as complete and routed to the next phase even
+ * when its VERIFICATION.md ended `human_needed` / `gaps_found`, because routing
+ * derived completeness from plan/summary counts only and never consulted the
+ * `verification.status` query (built in #651). The fix adds a Step 1.7 consult
+ * and routing rows that send non-`passed` phases back to close the debt.
+ */
+describe('#1107: progress routing consults verification.status before reporting complete', () => {
+  function readWorkflow() {
+    return fs.readFileSync(
+      path.join(__dirname, '..', 'gsd-core', 'workflows', 'progress.md'), 'utf8'
+    );
+  }
+
+  test('workflow consults verification.status for the current phase', () => {
+    const workflow = readWorkflow();
+    assert.ok(
+      workflow.includes('verification.status'),
+      'progress workflow must query verification.status (the #651 seam)'
+    );
+    assert.ok(
+      workflow.includes('verification_status'),
+      'progress workflow must track a verification_status value for routing'
+    );
+  });
+
+  test('routing table has gaps_found and human_needed rows BEFORE the generic complete row', () => {
+    const workflow = readWorkflow();
+    const gapsIdx = workflow.indexOf('verification_status = gaps_found');
+    const humanIdx = workflow.indexOf('verification_status = human_needed');
+    const completeIdx = workflow.indexOf('Phase complete (verification passed');
+    assert.ok(gapsIdx > -1, 'routing table must have a gaps_found row');
+    assert.ok(humanIdx > -1, 'routing table must have a human_needed row');
+    assert.ok(completeIdx > -1, 'routing table must keep a generic complete row');
+    assert.ok(
+      gapsIdx < completeIdx && humanIdx < completeIdx,
+      'verification rows must precede the generic "summaries = plans" complete row (first-match-wins)'
+    );
+  });
+
+  test('gaps_found routes to plan-phase --gaps (Route V.gaps)', () => {
+    const workflow = readWorkflow();
+    // Anchor on the definition heading (`**Route V.gaps:`), not the routing-table
+    // reference (`Go to **Route V.gaps**`).
+    assert.ok(workflow.includes('**Route V.gaps:'), 'must define a Route V.gaps section');
+    const route = workflow.slice(
+      workflow.indexOf('**Route V.gaps:'),
+      workflow.indexOf('**Route V.human:')
+    );
+    assert.ok(
+      route.includes('--gaps') && route.includes('plan-phase'),
+      'Route V.gaps must route to /gsd:plan-phase {phase} --gaps'
+    );
+  });
+
+  test('human_needed routes to verify-work (Route V.human)', () => {
+    const workflow = readWorkflow();
+    assert.ok(workflow.includes('**Route V.human:'), 'must define a Route V.human section');
+    const route = workflow.slice(
+      workflow.indexOf('**Route V.human:'),
+      workflow.indexOf('**Step 3', workflow.indexOf('**Route V.human:'))
+    );
+    assert.ok(
+      route.includes('verify-work'),
+      'Route V.human must route to /gsd:verify-work {phase}'
+    );
+  });
+
+  test('missing/passed verification still routes as complete (no false blocker)', () => {
+    const workflow = readWorkflow();
+    assert.ok(
+      workflow.includes('Phase complete (verification passed, missing, or n/a)'),
+      'the generic complete row must still cover passed/missing/unknown so unverified phases are not falsely blocked'
+    );
+  });
+});
