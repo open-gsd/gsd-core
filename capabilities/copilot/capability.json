@@ -37,6 +37,10 @@
     "commandStyle": "slash-hyphen",
     "hooksSurface": "copilot-inline",
     "sandboxTier": "none",
-    "supportTier": 2
+    "supportTier": 2,
+    "installSurface": "copilot-instructions",
+    "writesSharedSettings": false,
+    "permissionWriter": null,
+    "extendedHookEvents": []
   }
 }

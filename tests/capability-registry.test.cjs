@@ -1170,6 +1170,10 @@ describe('C3: role:runtime body validation', () => {
       hookEvents: 'claude',
       sandboxTier: 'none',
       supportTier: 2,
+      installSurface: 'cursor-hooks-json',
+      writesSharedSettings: false,
+      permissionWriter: null,
+      extendedHookEvents: [],
     },
   };
 
@@ -2544,6 +2548,10 @@ function makeRuntimeCap(overrides) {
       hookEvents: 'claude',
       sandboxTier: 'none',
       supportTier: 1,
+      installSurface: 'settings-json',
+      writesSharedSettings: true,
+      permissionWriter: null,
+      extendedHookEvents: [],
       ...((overrides && overrides.runtime) ? overrides.runtime : {}),
     },
     ...overrides,

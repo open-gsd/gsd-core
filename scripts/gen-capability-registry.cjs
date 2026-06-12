@@ -480,6 +480,9 @@ const VALID_SANDBOX_TIERS = new Set(['none', 'codex-agent-sandbox']);
 const VALID_ARTIFACT_KIND_NAMES = new Set(['commands', 'agents', 'skills', 'kimi-agents']);
 const VALID_ARTIFACT_NESTINGS = new Set(['flat', 'nested']);
 const FEATURE_FIELDS_FORBIDDEN_ON_RUNTIME = ['skills', 'agents', 'steps', 'contributions', 'gates', 'hooks'];
+const VALID_INSTALL_SURFACES = new Set(['settings-json', 'codex-toml', 'copilot-instructions', 'cline-rules', 'cursor-hooks-json', 'profile-marker-only']);
+const VALID_PERMISSION_WRITERS = new Set(['opencode', 'kilo']);
+const VALID_EXTENDED_HOOK_EVENTS = new Set(['SubagentStop', 'Stop', 'PreCompact', 'FileChanged', 'BeforeAgent', 'AfterAgent', 'BeforeModel']);
 
 /**
  * Validate a runtime.configHome object per ADR-1016 Decision 1.
@@ -745,6 +748,48 @@ function validateRuntimeBody(cap) {
   // supportTier — 1 or 2 (unchanged)
   if (r.supportTier !== 1 && r.supportTier !== 2) {
     errors.push('runtime.supportTier must be 1 or 2 (got: ' + r.supportTier + ')');
+  }
+
+  // installSurface — required string in closed enum
+  if (!VALID_INSTALL_SURFACES.has(r.installSurface)) {
+    errors.push(
+      'runtime.installSurface must be one of: ' + [...VALID_INSTALL_SURFACES].join(', ') +
+      ' (got: ' + JSON.stringify(r.installSurface) + ')',
+    );
+  }
+
+  // writesSharedSettings — required boolean
+  if (typeof r.writesSharedSettings !== 'boolean') {
+    errors.push(
+      'runtime.writesSharedSettings must be a boolean (got: ' + JSON.stringify(r.writesSharedSettings) + ')',
+    );
+  }
+
+  // permissionWriter — required key; value must be null or a string in VALID_PERMISSION_WRITERS
+  if (!Object.prototype.hasOwnProperty.call(r, 'permissionWriter')) {
+    errors.push('runtime.permissionWriter is required (must be null or one of: ' + [...VALID_PERMISSION_WRITERS].join(', ') + ')');
+  } else if (r.permissionWriter !== null && !VALID_PERMISSION_WRITERS.has(r.permissionWriter)) {
+    errors.push(
+      'runtime.permissionWriter must be null or one of: ' + [...VALID_PERMISSION_WRITERS].join(', ') +
+      ' (got: ' + JSON.stringify(r.permissionWriter) + ')',
+    );
+  }
+
+  // extendedHookEvents — required array; every element must be in closed enum
+  if (!Array.isArray(r.extendedHookEvents)) {
+    errors.push(
+      'runtime.extendedHookEvents must be an array (got: ' + JSON.stringify(r.extendedHookEvents) + ')',
+    );
+  } else {
+    for (let i = 0; i < r.extendedHookEvents.length; i++) {
+      const ev = r.extendedHookEvents[i];
+      if (typeof ev !== 'string' || !VALID_EXTENDED_HOOK_EVENTS.has(ev)) {
+        errors.push(
+          'runtime.extendedHookEvents[' + i + '] must be one of: ' + [...VALID_EXTENDED_HOOK_EVENTS].join(', ') +
+          ' (got: ' + JSON.stringify(ev) + ')',
+        );
+      }
+    }
   }
 
   return errors;

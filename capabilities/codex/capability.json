@@ -38,6 +38,10 @@
     "hooksSurface": "codex-hooks-json",
     "hookEvents": "claude",
     "sandboxTier": "codex-agent-sandbox",
-    "supportTier": 1
+    "supportTier": 1,
+    "installSurface": "codex-toml",
+    "writesSharedSettings": false,
+    "permissionWriter": null,
+    "extendedHookEvents": []
   }
 }

@@ -38,6 +38,10 @@
     "commandStyle": "slash-hyphen",
     "hooksSurface": "none",
     "sandboxTier": "none",
-    "supportTier": 2
+    "supportTier": 2,
+    "installSurface": "profile-marker-only",
+    "writesSharedSettings": false,
+    "permissionWriter": null,
+    "extendedHookEvents": []
   }
 }
