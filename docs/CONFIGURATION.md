@@ -1284,7 +1284,7 @@ Choose a provider and budget level via the settings workflow; GSD writes the can
 }
 ```
 
-Known providers: `openai`, `anthropic`, `anthropic-fable`, `google`, `qwen`. Budget levels: `high`, `medium`, `low`. Use `anthropic` to keep the Opus 4.8-backed Claude preset, or `anthropic-fable` to opt into Claude Fable 5 for high-budget top-tier routing.
+Known providers: `openai`, `anthropic`, `anthropic-fable`, `google`, `qwen`. Budget levels: `high`, `medium`, `low`. Use `anthropic` to keep the Opus 4.8-backed Claude preset, or `anthropic-fable` to opt into Claude Fable 5 for high-budget top-tier routing. On the default `claude` runtime, policy-resolved model IDs are mapped to Claude Code agent aliases (for example `claude-fable-5` → `fable`); an ID with no corresponding Claude alias emits a warning and falls back to the configured tier.
 
 For advanced per-runtime control, `runtime_tiers` accepts explicit entries using the internal profile tier names (`opus`, `sonnet`, `haiku`):
 

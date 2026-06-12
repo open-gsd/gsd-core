@@ -672,6 +672,8 @@ Canonical tier mappings by provider and budget:
 
 Look up the selected (provider, budget) row and proceed to Step E to write those values.
 
+> **claude runtime note:** On the default `claude` runtime, policy-resolved model IDs (e.g. `claude-fable-5`) are mapped to Claude Code agent aliases (`fable`, `opus`, `sonnet`, `haiku`); an ID with no corresponding alias emits a stderr warning and falls back to the configured tier alias.
+
 **Step D — Generic-provider path:**
 
 Prompt the user to enter each model ID as a free-text input. An empty input means "keep
