@@ -260,7 +260,7 @@ describe('getConfigDirFromHome — spot-checks', () => {
     assert.strictEqual(getConfigDirFromHome('trae', true), "'.trae'");
   });
 
-  test('antigravity returns .agent (local) and legacy fallback global path when no 2.x dirs exist', () => {
+  test('antigravity returns .agents (local) and legacy fallback global path when no 2.x dirs exist', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-antigravity-empty-'));
     const savedHome = process.env.HOME;
     const savedUserProfile = process.env.USERPROFILE;
@@ -269,7 +269,7 @@ describe('getConfigDirFromHome — spot-checks', () => {
     process.env.HOME = home;
     process.env.USERPROFILE = home;
     try {
-      assert.strictEqual(getConfigDirFromHome('antigravity', false), "'.agent'");
+      assert.strictEqual(getConfigDirFromHome('antigravity', false), "'.agents'");
       assert.strictEqual(getConfigDirFromHome('antigravity', true), "'.gemini', 'antigravity'");
     } finally {
       if (savedHome === undefined) delete process.env.HOME;
@@ -832,5 +832,110 @@ describe('install — changeset CLI lands at scripts/changeset/cli.cjs (#935)', 
       !fs.existsSync(path.join(claudeDir, 'scripts', 'lib')),
       'scripts/lib/ must be removed on uninstall',
     );
+  });
+});
+
+// ─── Section N: Antigravity .agents canonical workspace dir (#791) ─────────────
+// allow-test-rule: runtime-contract-is-the-product
+// Reads deployed agent .md files whose text IS the product surface the
+// Antigravity runtime loads at startup (path references, command names).
+
+describe('antigravity local install writes to .agents/ canonical dir (#791)', () => {
+  let tmpDir;
+  let previousCwd;
+
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-antigravity-791-');
+    previousCwd = process.cwd();
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    process.chdir(previousCwd);
+    cleanup(tmpDir);
+  });
+
+  test('install writes workspace skills under .agents/skills/', () => {
+    const result = install(false, 'antigravity');
+    const agentsDir = path.join(tmpDir, '.agents');
+    assert.strictEqual(result.runtime, 'antigravity');
+    assert.ok(fs.existsSync(agentsDir), '.agents/ must be created for local antigravity install');
+    const skillsDir = path.join(agentsDir, 'skills');
+    assert.ok(fs.existsSync(skillsDir), '.agents/skills/ must exist after install');
+    const skillEntries = fs.readdirSync(skillsDir, { withFileTypes: true })
+      .filter(e => e.isDirectory() && e.name.startsWith('gsd-'));
+    assert.ok(skillEntries.length > 0, 'at least one gsd-* skill must be installed under .agents/skills/');
+    const firstSkill = path.join(skillsDir, skillEntries[0].name, 'SKILL.md');
+    assert.ok(fs.existsSync(firstSkill), `SKILL.md must exist at ${firstSkill}`);
+  });
+
+  test('installed agent files reference .agents/ not ~/.claude/ or bare .agent/', () => {
+    // NOTE: skill content is intentionally NOT asserted here. The installer calls
+    // convertClaudeCommandToAntigravitySkill(content, skillName, runtime, cmdNames)
+    // where the 3rd arg is the string "antigravity" (truthy), routing local skills
+    // through the global content branch — a pre-existing quirk tracked separately.
+    // Agent files are NOT affected: convertClaudeAgentToAntigravityAgent(content, isGlobal)
+    // receives the boolean isGlobal correctly, so local agents use the local (.agents/) branch.
+    install(false, 'antigravity');
+    const agentsDest = path.join(tmpDir, '.agents', 'agents');
+    assert.ok(fs.existsSync(agentsDest), '.agents/agents/ must exist after local install');
+    const agentFiles = fs.readdirSync(agentsDest)
+      .filter(f => f.startsWith('gsd-') && f.endsWith('.md'));
+    assert.ok(agentFiles.length > 0, 'pre-condition: at least one gsd-* agent must be installed');
+    for (const file of agentFiles) {
+      const content = fs.readFileSync(path.join(agentsDest, file), 'utf8');
+      // Local agent content must not contain global home-dir paths (should be .agents/)
+      assert.ok(
+        !content.includes('~/.claude/') && !content.includes('$HOME/.claude/'),
+        `${file} must not contain ~/.claude/ or $HOME/.claude/ in a local install; content uses .agents/`,
+      );
+      // Local agent content must not reference the legacy singular .agent/ path
+      const bareAgentRefs = content.match(/(?<!\w)\.agent(?!s)\//g) || [];
+      assert.strictEqual(
+        bareAgentRefs.length, 0,
+        `${file} must not reference legacy .agent/ path; found: ${bareAgentRefs.join(', ')}`,
+      );
+    }
+  });
+
+  test('legacy .agent/ is NOT written on a fresh local install', () => {
+    install(false, 'antigravity');
+    const legacyDir = path.join(tmpDir, '.agent');
+    assert.ok(!fs.existsSync(legacyDir),
+      '.agent/ must not be created by a fresh install (new installs use .agents/)');
+  });
+
+  test('global antigravity install still writes to ~/.gemini/antigravity (unchanged)', () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-ag-global-'));
+    const savedHome = process.env.HOME;
+    const savedUserProfile = process.env.USERPROFILE;
+    const savedAntigravityConfig = process.env.ANTIGRAVITY_CONFIG_DIR;
+    delete process.env.ANTIGRAVITY_CONFIG_DIR;
+    process.env.HOME = homeDir;
+    process.env.USERPROFILE = homeDir;
+    try {
+      const result = install(true, 'antigravity');
+      assert.strictEqual(result.runtime, 'antigravity');
+      assert.ok(
+        result.configDir.startsWith(homeDir),
+        `global antigravity install must go under HOME, got: ${result.configDir}`,
+      );
+      assert.ok(
+        fs.existsSync(path.join(result.configDir, 'skills')),
+        'global antigravity install must create skills/ under ~/.gemini/antigravity',
+      );
+      assert.ok(
+        !fs.existsSync(path.join(homeDir, '.agents')),
+        '.agents/ must NOT be created by a global install (global path is ~/.gemini/antigravity)',
+      );
+    } finally {
+      if (savedHome === undefined) delete process.env.HOME;
+      else process.env.HOME = savedHome;
+      if (savedUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = savedUserProfile;
+      if (savedAntigravityConfig === undefined) delete process.env.ANTIGRAVITY_CONFIG_DIR;
+      else process.env.ANTIGRAVITY_CONFIG_DIR = savedAntigravityConfig;
+      cleanup(homeDir);
+    }
   });
 });

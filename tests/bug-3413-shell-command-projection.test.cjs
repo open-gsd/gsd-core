@@ -112,7 +112,7 @@ describe('bug #3439: shell projection module owns managed-hook policy and legacy
 
   test('projectLocalHookPrefix centralizes runtime-specific project-dir interpolation policy', () => {
     assert.equal(projectLocalHookPrefix({ runtime: 'gemini', dirName: '.gemini' }), '.gemini');
-    assert.equal(projectLocalHookPrefix({ runtime: 'antigravity', dirName: '.agent' }), '.agent');
+    assert.equal(projectLocalHookPrefix({ runtime: 'antigravity', dirName: '.agents' }), '.agents');
     assert.equal(
       projectLocalHookPrefix({ runtime: 'claude', dirName: '.claude' }),
       '"$CLAUDE_PROJECT_DIR"/.claude',

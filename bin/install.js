@@ -465,7 +465,7 @@ function getDirName(runtime) {
   if (runtime === 'gemini') return '.gemini';
   if (runtime === 'kilo') return '.kilo';
   if (runtime === 'codex') return '.codex';
-  if (runtime === 'antigravity') return '.agent';
+  if (runtime === 'antigravity') return '.agents';
   if (runtime === 'cursor') return '.cursor';
   if (runtime === 'windsurf') return '.windsurf';
   if (runtime === 'augment') return '.augment';
@@ -500,7 +500,7 @@ function getConfigDirFromHome(runtime, isGlobal) {
   if (runtime === 'kilo') return "'.config', 'kilo'";
   if (runtime === 'codex') return "'.codex'";
   if (runtime === 'antigravity') {
-    if (!isGlobal) return "'.agent'";
+    if (!isGlobal) return "'.agents'";
     const antigravityDir = resolveAntigravityGlobalDir();
     const rel = path.relative(os.homedir(), antigravityDir);
     const segments = rel.split(path.sep).filter(Boolean);
@@ -2164,8 +2164,8 @@ function convertClaudeAgentToCopilotAgent(content, isGlobal = false) {
 /**
  * Apply Antigravity-specific content conversion — path replacement + command name conversion.
  * Path mappings depend on install mode:
- *   Global: ~/.claude/ → ~/.gemini/antigravity/, ./.claude/ → ./.agent/
- *   Local:  ~/.claude/ → .agent/, ./.claude/ → ./.agent/
+ *   Global: ~/.claude/ → ~/.gemini/antigravity/, ./.claude/ → ./.agents/
+ *   Local:  ~/.claude/ → .agents/, ./.claude/ → ./.agents/
  * Applied to ALL Antigravity content (skills, agents, engine files).
  * @param {string} content - Source content to convert
  * @param {boolean} [isGlobal=false] - Whether this is a global install
@@ -2179,14 +2179,14 @@ function convertClaudeToAntigravityContent(content, isGlobal = false) {
     c = c.replace(/\$HOME\/\.claude\b/g, '$HOME/.gemini/antigravity');
     c = c.replace(/~\/\.claude\b/g, '~/.gemini/antigravity');
   } else {
-    c = c.replace(/\$HOME\/\.claude\//g, '.agent/');
-    c = c.replace(/~\/\.claude\//g, '.agent/');
+    c = c.replace(/\$HOME\/\.claude\//g, '.agents/');
+    c = c.replace(/~\/\.claude\//g, '.agents/');
     // Bare form (no trailing slash) — must come after slash form to avoid double-replace
-    c = c.replace(/\$HOME\/\.claude\b/g, '.agent');
-    c = c.replace(/~\/\.claude\b/g, '.agent');
+    c = c.replace(/\$HOME\/\.claude\b/g, '.agents');
+    c = c.replace(/~\/\.claude\b/g, '.agents');
   }
-  c = c.replace(/\.\/\.claude\//g, './.agent/');
-  c = c.replace(/\.claude\//g, '.agent/');
+  c = c.replace(/\.\/\.claude\//g, './.agents/');
+  c = c.replace(/\.claude\//g, '.agents/');
   // Command name conversion (all gsd: references → gsd-)
   c = c.replace(/gsd:/g, 'gsd-');
   // Runtime-neutral agent name replacement (#766)
@@ -9391,6 +9391,10 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   // Get the target directory based on runtime and install type.
   // Cline local installs write to the project root (like Claude Code) — .clinerules
   // lives at the root, not inside a .cline/ subdirectory.
+  // #791: antigravity local installs write to .agents/ (canonical). The legacy .agent/
+  // directory is recognized by RUNTIME_DIRS (update-context) and _LEGACY_SCAN_SUBDIR_NAMES
+  // but NOT auto-removed here; legacy .agent/ gsd artifacts are recognized but not
+  // auto-removed on reinstall (dual-read fallback per issue #791 spec).
   const targetDir = isGlobal
     ? getGlobalConfigDir(runtime, explicitConfigDir)
     : isCline
@@ -11845,7 +11849,8 @@ const _LEGACY_SCAN_SUBDIR_NAMES = [
   '.codex',
   '.copilot',
   '.github',    // copilot local form
-  '.agent',     // antigravity local form
+  '.agents',    // antigravity local form (canonical, #791)
+  '.agent',     // antigravity local form (legacy, backward-compat)
   '.cursor',
   '.windsurf',
   '.codeium/windsurf',

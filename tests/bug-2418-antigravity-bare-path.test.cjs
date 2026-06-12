@@ -73,12 +73,12 @@ describe('convertClaudeToAntigravityContent bare path replacement (#2418)', () =
   });
 
   describe('local install', () => {
-    test('replaces ~/.claude (bare, no trailing slash) with .agent', () => {
+    test('replaces ~/.claude (bare, no trailing slash) with .agents', () => {
       const input = 'configDir = ~/.claude';
       const result = convertClaudeToAntigravityContent(input, false);
       assert.ok(
-        result.includes('.agent'),
-        `Expected .agent in output, got: ${result}`
+        result.includes('.agents'),
+        `Expected .agents in output, got: ${result}`
       );
       assert.ok(
         !result.includes('~/.claude'),
@@ -86,12 +86,12 @@ describe('convertClaudeToAntigravityContent bare path replacement (#2418)', () =
       );
     });
 
-    test('replaces $HOME/.claude (bare, no trailing slash) with .agent', () => {
+    test('replaces $HOME/.claude (bare, no trailing slash) with .agents', () => {
       const input = 'export DIR=$HOME/.claude';
       const result = convertClaudeToAntigravityContent(input, false);
       assert.ok(
-        result.includes('.agent'),
-        `Expected .agent in output, got: ${result}`
+        result.includes('.agents'),
+        `Expected .agents in output, got: ${result}`
       );
       assert.ok(
         !result.includes('$HOME/.claude'),
@@ -102,8 +102,8 @@ describe('convertClaudeToAntigravityContent bare path replacement (#2418)', () =
     test('does not double-replace ~/.claude/ paths', () => {
       const input = 'See ~/.claude/gsd-core/';
       const result = convertClaudeToAntigravityContent(input, false);
-      // .agent/ should appear exactly once
-      const count = (result.match(/\.agent\//g) || []).length;
+      // .agents/ should appear exactly once
+      const count = (result.match(/\.agents\//g) || []).length;
       assert.strictEqual(count, 1, `Expected exactly 1 replacement, got ${count} in: ${result}`);
     });
   });

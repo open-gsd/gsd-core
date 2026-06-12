@@ -40,7 +40,7 @@ const EXPECTED_ALL_HOOKS = [
 
 const RUNTIME_META = {
   claude:       { localDir: '.claude',           globalSuffix: '.claude' },
-  antigravity:  { localDir: '.agent',            globalSuffix: path.join('.gemini', 'antigravity') },
+  antigravity:  { localDir: '.agents',           globalSuffix: path.join('.gemini', 'antigravity') },
   augment:      { localDir: '.augment',          globalSuffix: '.augment' },
   cline:        { localDir: '.cline',            globalSuffix: '.cline' },
   codebuddy:    { localDir: '.codebuddy',        globalSuffix: '.codebuddy' },
@@ -111,7 +111,7 @@ function runMinimalInstall({ runtime, scope, extraArgs = [] }) {
   try {
     const LOCAL_DIR_NAME = {
       claude: '.claude', opencode: '.opencode', gemini: '.gemini', kilo: '.kilo',
-      codex: '.codex', copilot: '.github', antigravity: '.agent', cursor: '.cursor',
+      codex: '.codex', copilot: '.github', antigravity: '.agents', cursor: '.cursor',
       windsurf: '.windsurf', augment: '.augment', trae: '.trae', qwen: '.qwen',
       codebuddy: '.codebuddy', cline: '.',
     };
