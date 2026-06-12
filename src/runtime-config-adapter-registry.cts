@@ -44,11 +44,33 @@ type ConfigInstallSurface =
 
 type FinishPermissionWriter = 'opencode' | 'kilo' | null;
 
+type HooksSurface =
+  | 'settings-json'
+  | 'codex-hooks-json'
+  | 'cursor-hooks-json'
+  | 'cline-rules'
+  | 'copilot-inline'
+  | 'none';
+
 interface RuntimeConfigIntent {
   runtime: string;
   installSurface: ConfigInstallSurface;
   writesSharedSettings: boolean;
   finishPermissionWriter: FinishPermissionWriter;
+}
+
+/**
+ * The full install plan for a runtime: config-intent axes PLUS the three
+ * hook axes that install() reads from the capability descriptor.
+ * ADR-857 phase 5g capstone — single seam for all install-level descriptor reads.
+ */
+interface InstallPlan extends RuntimeConfigIntent {
+  /** Hook event dialect: 'claude' | 'gemini' | undefined */
+  hookEvents: string | undefined;
+  /** Extended hook event names registered beyond the core tool events (may be empty). */
+  extendedHookEvents: string[];
+  /** Which surface owns the hook registration for this runtime. */
+  hooksSurface: HooksSurface;
 }
 
 // ---------------------------------------------------------------------------
@@ -92,4 +114,33 @@ function resolveRuntimeConfigIntent(runtime: string): RuntimeConfigIntent {
   };
 }
 
-export = { resolveRuntimeConfigIntent, ALLOWED_CONFIG_RUNTIMES, INSTALL_SURFACES };
+/**
+ * Resolve the complete install plan for a given runtime.
+ *
+ * Composes the config-intent axes from resolveRuntimeConfigIntent PLUS the
+ * three hook axes (hookEvents / extendedHookEvents / hooksSurface) that
+ * install() previously read scattered from the capability registry.
+ *
+ * ADR-857 phase 5g capstone — single typed seam for all install-level
+ * descriptor reads. Returns a fresh object each call.
+ *
+ * @throws {TypeError} if runtime is not a known supported runtime.
+ */
+function resolveInstallPlan(runtime: string): InstallPlan {
+  const desc = runtimes[runtime]?.runtime;
+  if (!desc) throw new TypeError(`Unknown runtime for install plan: ${runtime}`);
+  const configIntent = resolveRuntimeConfigIntent(runtime);
+  return {
+    runtime,
+    installSurface:         configIntent.installSurface,
+    writesSharedSettings:   configIntent.writesSharedSettings,
+    finishPermissionWriter: configIntent.finishPermissionWriter,
+    hookEvents:             desc['hookEvents'] as string | undefined,
+    extendedHookEvents:     Array.isArray(desc['extendedHookEvents']) ? desc['extendedHookEvents'] as string[] : [],
+    hooksSurface:           desc['hooksSurface'] != null
+      ? desc['hooksSurface'] as HooksSurface
+      : ((runtime === 'opencode' || runtime === 'kilo') ? 'none' : 'settings-json'),
+  };
+}
+
+export = { resolveRuntimeConfigIntent, resolveInstallPlan, ALLOWED_CONFIG_RUNTIMES, INSTALL_SURFACES };

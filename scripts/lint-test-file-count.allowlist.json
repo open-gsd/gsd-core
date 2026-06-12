@@ -132,6 +132,7 @@
       "files": [
         "bug-410-install-defaults-test-mode-guard.test.cjs",
         "enh-1077-install-hook-events-dialect-drive.test.cjs",
+        "enh-1082-install-plan-capstone.test.cjs",
         "enh-776-install-gemini-hook-events.test.cjs",
         "install-minimal-hooks.test.cjs",
         "install-nested-layout.test.cjs",
