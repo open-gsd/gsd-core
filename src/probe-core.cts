@@ -305,7 +305,13 @@ export interface Prohibition {
 export const PROHIBITION_VALIDATORS: Validators = {
   categories: [],
   verification: ['test', 'judgment'],
-  requiredFieldsByVerification: { test: ['resolution'], judgment: ['resolution'] },
+  // A resolved prohibition's checkable content is the `statement` (schema-layer validated), NOT a
+  // `resolution` string — the canonical fixtures and the reference doc's worked examples all carry
+  // `resolution: null`. So the per-tier required set is empty: `resolved` still requires a present
+  // verification tier (enforced in validateResolution) and `dismissed` still requires a reason
+  // (enforced unconditionally), but neither tier requires a `resolution`. This matches the corpus
+  // the docs-fixtures parity test pins; the validators.test.cjs regression keeps them aligned.
+  requiredFieldsByVerification: { test: [], judgment: [] },
 };
 
 /** Validate a prohibition resolution against the prohibition verification vocabulary. */
@@ -407,11 +413,25 @@ export function dispositionForProhibition(
     };
   }
 
+  // D4 GUARD: a judgment-tier (or unknown-tier) prohibition is NEVER a silent green from this
+  // deterministic helper — it always routes to human/LLM judgment review (ADR-550 D4; verify-phase.md).
+  // Only a test-tier item with wired enforcement evidence may go green, and even that is the deferred
+  // heavy half until the real negative-test enforcement mechanism lands (no #644 caller passes evidence).
+  if (tier === 'test') {
+    return {
+      status: 'green',
+      flagged: false,
+      tier,
+      reason: 'test-tier prohibition has wired enforcement evidence',
+    };
+  }
+
   return {
-    status: 'green',
-    flagged: false,
+    status: 'unverified',
+    flagged: true,
     tier,
-    reason: 'prohibition has wired enforcement evidence',
+    reason:
+      'judgment-tier prohibition routes to judgment review — never a silent green (ADR-550 D4)',
   };
 }
 
