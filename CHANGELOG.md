@@ -6,6 +6,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.4.5] - 2026-06-12
+
+### Fixed
+
+- **`model_policy` is now honored on the default `claude` runtime** — including the `anthropic-fable` Claude Fable 5 preset. Policy-resolved model IDs map to Claude Code agent aliases (e.g. `claude-fable-5` → `fable`), and IDs without a Claude alias warn and fall back to the configured tier. Previously the entire `model_policy` block was silently ignored on `claude`. (#1133) (#1133)
+
 ## [1.4.4] - 2026-06-11
 
 ### Changed
