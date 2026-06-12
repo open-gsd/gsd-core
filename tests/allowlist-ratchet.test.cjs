@@ -14,6 +14,7 @@ const assert = require('node:assert/strict');
 const {
   assertWithinAllowlist,
   assertTightCeiling,
+  assertFileBaseline,
 } = require('../scripts/lib/allowlist-ratchet.cjs');
 
 // ─── Fake fail helper ────────────────────────────────────────────────────────
@@ -293,5 +294,152 @@ describe('assertTightCeiling', () => {
       fail,
     });
     assert.ok(calls[0].includes('my-special-guard'), 'label should appear in message');
+  });
+});
+
+// ─── assertFileBaseline ──────────────────────────────────────────────────────
+
+describe('assertFileBaseline', () => {
+  test('exact match: current equals baseline — fail never called', () => {
+    const { fail, calls } = makeFail();
+    const result = assertFileBaseline({
+      label: 'workflow-size',
+      current: { 'a.md': 100, 'b.md': 200 },
+      baseline: { 'a.md': 100, 'b.md': 200 },
+      fail,
+    });
+    assert.strictEqual(calls.length, 0, 'fail should not be called on an exact match');
+    assert.deepStrictEqual(result.grown, []);
+    assert.deepStrictEqual(result.shrunk, []);
+    assert.deepStrictEqual(result.added, []);
+    assert.deepStrictEqual(result.removed, []);
+  });
+
+  test('growth: a file larger than baseline — fail called, delta reported', () => {
+    const { fail, calls } = makeFail();
+    const result = assertFileBaseline({
+      label: 'workflow-size',
+      current: { 'a.md': 154, 'b.md': 200 },
+      baseline: { 'a.md': 100, 'b.md': 200 },
+      fail,
+    });
+    assert.strictEqual(calls.length, 1, 'fail should be called once for growth');
+    assert.ok(calls[0].includes('grew') || calls[0].includes('grow'), 'message should describe growth');
+    assert.ok(calls[0].includes('a.md'), 'message should name the grown file');
+    assert.ok(calls[0].includes('100') && calls[0].includes('154'), 'message should show from → to');
+    assert.ok(calls[0].includes('54'), 'message should show the +delta');
+    assert.deepStrictEqual(result.grown.map((g) => g.name), ['a.md']);
+    assert.strictEqual(result.grown[0].delta, 54);
+  });
+
+  test('shrink: a file smaller than baseline — fail called as stale (auto-tighten)', () => {
+    const { fail, calls } = makeFail();
+    const result = assertFileBaseline({
+      label: 'workflow-size',
+      current: { 'a.md': 80, 'b.md': 200 },
+      baseline: { 'a.md': 100, 'b.md': 200 },
+      fail,
+    });
+    assert.strictEqual(calls.length, 1, 'fail should be called once for a stale (shrunk) baseline');
+    assert.ok(/stale|smaller|shrank|shrunk/i.test(calls[0]), 'message should flag a stale/shrunk baseline');
+    assert.ok(calls[0].includes('a.md'), 'message should name the shrunk file');
+    assert.deepStrictEqual(result.shrunk.map((s) => s.name), ['a.md']);
+    assert.strictEqual(result.shrunk[0].delta, 20);
+  });
+
+  test('added: a file absent from baseline — fail called', () => {
+    const { fail, calls } = makeFail();
+    const result = assertFileBaseline({
+      label: 'workflow-size',
+      current: { 'a.md': 100, 'new.md': 50 },
+      baseline: { 'a.md': 100 },
+      fail,
+    });
+    assert.strictEqual(calls.length, 1, 'fail should be called once for an unbaselined new file');
+    assert.ok(/not in the baseline|new|missing/i.test(calls[0]), 'message should flag the unbaselined file');
+    assert.ok(calls[0].includes('new.md'), 'message should name the new file');
+    assert.deepStrictEqual(result.added, ['new.md']);
+  });
+
+  test('removed: a baseline entry with no current file — fail called', () => {
+    const { fail, calls } = makeFail();
+    const result = assertFileBaseline({
+      label: 'workflow-size',
+      current: { 'a.md': 100 },
+      baseline: { 'a.md': 100, 'gone.md': 70 },
+      fail,
+    });
+    assert.strictEqual(calls.length, 1, 'fail should be called once for an orphaned baseline entry');
+    assert.ok(/no longer exist|removed|orphan/i.test(calls[0]), 'message should flag the orphaned entry');
+    assert.ok(calls[0].includes('gone.md'), 'message should name the orphaned entry');
+    assert.deepStrictEqual(result.removed, ['gone.md']);
+  });
+
+  test('multiple categories at once — one fail per non-empty category', () => {
+    const { fail, calls } = makeFail();
+    const result = assertFileBaseline({
+      label: 'workflow-size',
+      current: { 'grow.md': 150, 'shrink.md': 50, 'new.md': 10 },
+      baseline: { 'grow.md': 100, 'shrink.md': 100, 'gone.md': 30 },
+      fail,
+    });
+    // grown(1) + shrunk(1) + added(1) + removed(1) = 4 categories
+    assert.strictEqual(calls.length, 4, 'one fail per non-empty category');
+    assert.deepStrictEqual(result.grown.map((g) => g.name), ['grow.md']);
+    assert.deepStrictEqual(result.shrunk.map((s) => s.name), ['shrink.md']);
+    assert.deepStrictEqual(result.added, ['new.md']);
+    assert.deepStrictEqual(result.removed, ['gone.md']);
+  });
+
+  test('updateHint appears in every failure message', () => {
+    const { fail, calls } = makeFail();
+    assertFileBaseline({
+      label: 'workflow-size',
+      current: { 'grow.md': 150, 'new.md': 10 },
+      baseline: { 'grow.md': 100, 'gone.md': 30 },
+      fail,
+      updateHint: 'Run `npm run size:baseline`',
+    });
+    assert.ok(calls.length >= 2, 'multiple categories should each fail');
+    for (const msg of calls) {
+      assert.ok(msg.includes('Run `npm run size:baseline`'), 'every message should carry the updateHint');
+    }
+  });
+
+  test('empty inputs — fail never called', () => {
+    const { fail, calls } = makeFail();
+    const result = assertFileBaseline({
+      label: 'workflow-size',
+      current: {},
+      baseline: {},
+      fail,
+    });
+    assert.strictEqual(calls.length, 0);
+    assert.deepStrictEqual(result.grown, []);
+    assert.deepStrictEqual(result.shrunk, []);
+    assert.deepStrictEqual(result.added, []);
+    assert.deepStrictEqual(result.removed, []);
+  });
+
+  test('returned category lists are sorted by name', () => {
+    const { fail } = makeFail();
+    const result = assertFileBaseline({
+      label: 'workflow-size',
+      current: { 'z.md': 10, 'a.md': 10, 'm.md': 10 },
+      baseline: {},
+      fail,
+    });
+    assert.deepStrictEqual(result.added, ['a.md', 'm.md', 'z.md'], 'added should be sorted');
+  });
+
+  test('label appears in failure messages', () => {
+    const { fail, calls } = makeFail();
+    assertFileBaseline({
+      label: 'my-size-guard',
+      current: { 'a.md': 200 },
+      baseline: { 'a.md': 100 },
+      fail,
+    });
+    assert.ok(calls[0].includes('my-size-guard'), 'label should appear in message');
   });
 });

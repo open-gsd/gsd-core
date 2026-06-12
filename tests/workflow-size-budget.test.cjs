@@ -66,10 +66,12 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('node:os');
 const path = require('path');
-const { assertTightCeiling } = require('../scripts/lib/allowlist-ratchet.cjs');
+const { assertTightCeiling, assertFileBaseline } = require('../scripts/lib/allowlist-ratchet.cjs');
+const { lfByteCount: byteCount, measureWorkflows } = require('../scripts/workflow-size.cjs');
 const { cleanup } = require('./helpers.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
+const BASELINE_PATH = path.join(__dirname, 'workflow-size-baseline.json');
 
 // Grace band: maximum allowed slack (ceiling − actualMax) in BYTES before a
 // ceiling is considered too loose. 3000 bytes ≈ the prior 60-line grace
@@ -127,18 +129,10 @@ function budgetFor(workflow) {
   return { tier: 'DEFAULT', limit: DEFAULT_BUDGET };
 }
 
-function byteCount(filePath) {
-  // Count bytes as on an LF checkout, so the budget is platform-independent.
-  // The tier ceilings are calibrated against `wc -c` on a Unix (LF) checkout,
-  // but these .md files have no `eol=lf` in .gitattributes, so Windows checks
-  // them out as CRLF. Counting raw on-disk bytes there adds one byte per line,
-  // which fails CI on the high-water-mark file (execute-phase.md) on Windows
-  // ONLY — a false positive that diverges from the LF calibration basis (#683).
-  // Stripping CR yields the same LF byte count on every platform. Still a raw
-  // byte count (not the old trailing-newline-stripping lineCount()).
-  const content = fs.readFileSync(filePath, 'utf-8');
-  return Buffer.byteLength(content.replace(/\r\n/g, '\n'), 'utf-8');
-}
+// byteCount (LF-normalized, #683) is imported as `lfByteCount` from
+// scripts/workflow-size.cjs — the single source of truth shared with the
+// baseline generator so the guard and the snapshot can never measure
+// differently. See the #683 regression test at the bottom of this file.
 
 describe('SIZE: workflow byte-size budget', () => {
   for (const workflow of ALL_WORKFLOWS) {
@@ -157,6 +151,31 @@ describe('SIZE: workflow byte-size budget', () => {
       );
     });
   }
+});
+
+describe('SIZE: per-file workflow baseline (issue #1074)', () => {
+  // Per-file exact-size ratchet. Unlike the tier anti-creep block below — which
+  // only binds the single largest file in each tier — this guards EVERY
+  // workflow file by name against a committed snapshot
+  // (tests/workflow-size-baseline.json). Growth fails with the file and delta;
+  // shrinkage fails as a stale snapshot (regenerate to ratchet down). The fix
+  // for any failure is `npm run size:baseline` plus a PR justification for
+  // genuine growth (or lazy extraction). Runs side-by-side with the tier tests
+  // during the #1074 migration; the tier anti-creep block is removed in a
+  // follow-up once this is established.
+  test('every workflow file matches its committed baseline', () => {
+    const baseline = JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf-8'));
+    const current = measureWorkflows();
+    assertFileBaseline({
+      label: 'workflow-size',
+      current,
+      baseline,
+      fail: assert.fail,
+      updateHint:
+        'Run `npm run size:baseline` to update tests/workflow-size-baseline.json, ' +
+        'then justify any growth in your PR (or extract content lazily — see workflows/discuss-phase/).',
+    });
+  });
 });
 
 describe('SIZE: tier anti-creep (tighten-only ceilings, issue #597)', () => {

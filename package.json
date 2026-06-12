@@ -103,6 +103,7 @@
     "lint:docs": "node scripts/lint-docs-required.cjs",
     "lint:legacy-name": "node scripts/lint-legacy-dir-name.cjs",
     "ci:test-scope": "node scripts/ci-test-scope.cjs",
+    "size:baseline": "node scripts/update-size-baseline.cjs",
     "changeset": "node scripts/changeset/new.cjs",
     "changelog:render": "node scripts/changeset/cli.cjs render",
     "test": "node scripts/run-tests.cjs",

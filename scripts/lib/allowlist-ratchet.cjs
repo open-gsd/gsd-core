@@ -133,4 +133,104 @@ function assertTightCeiling({ label, actualMax, ceiling, grace, fail }) {
   return { ok, slack };
 }
 
-module.exports = { assertWithinAllowlist, assertTightCeiling };
+/**
+ * Assert that each artifact's measured size matches a committed per-file
+ * baseline snapshot.  Growth, shrinkage, additions, and removals are each
+ * surfaced by name — there is no aggregate "max" that can mask one file's
+ * growth behind another file's size.
+ *
+ * Fails when, for the union of `current` and `baseline` keys:
+ * - `current[name] > baseline[name]` → GROWTH: the file grew past its recorded
+ *   size.  Regenerate the baseline and justify the growth in the PR (or extract
+ *   the content lazily).  This is the headline guard.
+ * - `current[name] < baseline[name]` → STALE: the file shrank but the baseline
+ *   still records the old (larger) size.  Regenerate to auto-tighten — the
+ *   per-file analogue of `assertWithinAllowlist`'s stale-entry rule, so the
+ *   snapshot can only ratchet downward.
+ * - name in `current` but not `baseline` → ADDED: a new artifact with no
+ *   recorded baseline.  Regenerate to record it.
+ * - name in `baseline` but not `current` → REMOVED: an orphaned baseline entry
+ *   whose artifact no longer exists.  Regenerate to drop it.
+ *
+ * ## Why per-file, not a tier max (issue #1074)
+ *
+ * A `max(group) within grace` ceiling only binds the single largest file in the
+ * group; every other file inherits that ceiling and can grow silently beneath
+ * it.  Recording each file's exact size removes the masking blind spot — the
+ * same reason `assertWithinAllowlist` enforces on identity rather than a count
+ * (issue #597).
+ *
+ * @param {object} opts
+ * @param {string} opts.label   - Human-readable guard name (used in messages).
+ * @param {Object<string, number>} opts.current  - Measured sizes by name.
+ * @param {Object<string, number>} opts.baseline - Committed sizes by name.
+ * @param {function(string): void} opts.fail - Callback invoked once per
+ *                                    non-empty violation category with a
+ *                                    descriptive message.  Injected so callers
+ *                                    control the failure mode (assert.fail, a
+ *                                    thrower, or a collector in unit tests).
+ * @param {string} [opts.updateHint] - Optional remediation hint appended to
+ *                                    every failure message (e.g. the regen
+ *                                    command).
+ * @returns {{ grown: Array<{name:string,from:number,to:number,delta:number}>,
+ *             shrunk: Array<{name:string,from:number,to:number,delta:number}>,
+ *             added: string[], removed: string[] }}
+ *   Sorted-by-name breakdown of every difference.
+ */
+function assertFileBaseline({ label, current, baseline, fail, updateHint }) {
+  const currentNames = new Set(Object.keys(current));
+  const baselineNames = new Set(Object.keys(baseline));
+
+  const added = [...currentNames].filter((n) => !baselineNames.has(n)).sort();
+  const removed = [...baselineNames].filter((n) => !currentNames.has(n)).sort();
+
+  const grown = [];
+  const shrunk = [];
+  const shared = [...currentNames].filter((n) => baselineNames.has(n)).sort();
+  for (const name of shared) {
+    const from = baseline[name];
+    const to = current[name];
+    if (to > from) grown.push({ name, from, to, delta: to - from });
+    else if (to < from) shrunk.push({ name, from, to, delta: from - to });
+  }
+
+  const hint = updateHint ? `\n${updateHint}` : '';
+
+  if (grown.length > 0) {
+    const list = grown
+      .map((g) => `  - ${g.name}: ${g.from} → ${g.to} (+${g.delta})`)
+      .join('\n');
+    fail(
+      `[${label}] ${grown.length} file(s) grew past the committed baseline. ` +
+        `Regenerate the baseline and justify the growth in your PR, or extract the content lazily.\n${list}${hint}`
+    );
+  }
+
+  if (shrunk.length > 0) {
+    const list = shrunk
+      .map((s) => `  - ${s.name}: ${s.from} → ${s.to} (-${s.delta})`)
+      .join('\n');
+    fail(
+      `[${label}] ${shrunk.length} file(s) are SMALLER than the baseline — the snapshot is stale ` +
+        `and MUST be regenerated so the budget ratchets downward.\n${list}${hint}`
+    );
+  }
+
+  if (added.length > 0) {
+    const list = added.map((n) => `  - ${n}`).join('\n');
+    fail(
+      `[${label}] ${added.length} file(s) are not in the baseline — regenerate to record them.\n${list}${hint}`
+    );
+  }
+
+  if (removed.length > 0) {
+    const list = removed.map((n) => `  - ${n}`).join('\n');
+    fail(
+      `[${label}] ${removed.length} baseline entry(ies) no longer exist — regenerate to drop them.\n${list}${hint}`
+    );
+  }
+
+  return { grown, shrunk, added, removed };
+}
+
+module.exports = { assertWithinAllowlist, assertTightCeiling, assertFileBaseline };

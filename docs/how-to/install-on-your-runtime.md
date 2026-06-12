@@ -318,7 +318,7 @@ npx @opengsd/gsd-core@latest --windsurf --global
 npx @opengsd/gsd-core@latest --devin-desktop --global
 ```
 
-Skills land in `~/.codeium/windsurf/` (global path unchanged). GSD installs skills, agents, and workspace rules.
+Global skills land in `~/.codeium/windsurf/` (unchanged). Local workspace installs write to `.devin/skills/` (Devin Desktop's preferred location, #1085); the legacy `.windsurf/skills/` layout is still recognized for backward-compat. GSD installs skills, agents, and workspace rules.
 
 **Override the install directory:**
 
