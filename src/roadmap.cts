@@ -730,9 +730,12 @@ function cmdRoadmapAnnotateDependencies(cwd: string, phaseNum: string | null | u
     }
 
     const newListBlock = annotatedLines.join('\n') + '\n';
+    // #1103: when `(?:^|\n)` consumed a leading `\n` (mid-string match), re-emit it
+    // so the line preceding the Plans: header is not fused onto it.
+    const leadingNewline = plansBlockMatch[0].startsWith('\n') ? '\n' : '';
     const newPhaseSection = phaseSection.replace(
       plansBlockMatch[0],
-      plansHeader + newListBlock
+      leadingNewline + plansHeader + newListBlock
     );
 
     const nextContent = content.slice(0, phaseStart) + newPhaseSection + content.slice(phaseEnd);
