@@ -344,6 +344,77 @@ export function projectProhibitions(
   return out;
 }
 
+/**
+ * The structured verify-time disposition of a single prohibition (ADR-550 Decision 5d, the
+ * "B-with-guard" safety half — maintainer decision 2026-06-12). `status` is the verdict the
+ * verifier reads; `flagged` marks an item that must surface in SUMMARY/verdict rather than pass
+ * silently. `tier` echoes the verification axis so the caller can route. `reason` is human-readable.
+ */
+export interface ProhibitionDisposition {
+  status: 'green' | 'unverified';
+  flagged: boolean;
+  tier: ProhibitionVerification | null;
+  reason: string;
+}
+
+/** Optional enforcement context handed to `dispositionForProhibition`. */
+export interface ProhibitionDispositionContext {
+  /** Evidence that a resolved prohibition is actually enforced (e.g. a wired negative test). */
+  enforcementEvidence?: unknown[];
+}
+
+/**
+ * Deterministic verify-time disposition for a single prohibition — the FAIL-CLOSED default
+ * (ADR-550 Decision 5d, the safety half of the 2026-06-12 "B-with-guard" maintainer decision).
+ *
+ * This is the cheap safety guarantee: a well-formed prohibition that reaches verify-phase with NO
+ * wired enforcement evidence can NEVER be a silent pass. It is `{ status: 'unverified', flagged:
+ * true }` — never `green` — exactly like an unresolved judgment item. The HEAVY half (a real
+ * fail-first negative-test enforcement mechanism that, given evidence, would flip a test-tier item
+ * to green) is OUT of #644 scope and defers to a follow-up PR: #644's corpus is entirely
+ * judgment-tier, so wiring a contrived test-tier consumer here would be the delete-bad-tests /
+ * gold-plating failure mode. Until that follow-up lands, ANY prohibition without enforcement
+ * evidence — test- or judgment-tier — disposes as flagged-unverified.
+ *
+ * The function is pure: same input always yields the same disposition (no LLM judgment, ADR-550
+ * D5). The LLM-judge soft-gate for judgment-tier items is a verify-phase PROSE concern (the
+ * verifier records a non-authoritative verdict + the unverified-prohibition flag); this helper
+ * only owns the deterministic fail-closed default that the plan-01-01 CI safety assertion pins.
+ */
+export function dispositionForProhibition(
+  prohibition: unknown,
+  context: ProhibitionDispositionContext = {},
+): ProhibitionDisposition {
+  const p = (prohibition ?? {}) as Partial<Prohibition>;
+  const tier: ProhibitionVerification | null =
+    p.verification === 'test' || p.verification === 'judgment' ? p.verification : null;
+  const evidence = Array.isArray(context.enforcementEvidence) ? context.enforcementEvidence : [];
+  const hasEnforcement = evidence.length > 0;
+
+  // FAIL CLOSED: no wired enforcement evidence -> flagged unverified, never green. This holds for
+  // every tier today (the real enforcement mechanism that could flip a test-tier item to green is
+  // deferred to a follow-up PR). The guard the safety assertion proves: an unwired item can never
+  // be silently skipped.
+  if (!hasEnforcement) {
+    return {
+      status: 'unverified',
+      flagged: true,
+      tier,
+      reason:
+        tier === 'test'
+          ? 'test-tier prohibition has no wired enforcement evidence — flagged unverified (fail-closed; real negative-test enforcement deferred to a follow-up PR, ADR-550 D5d)'
+          : 'prohibition has no enforcement evidence — flagged unverified (fail-closed; never a silent pass, ADR-550 D5d)',
+    };
+  }
+
+  return {
+    status: 'green',
+    flagged: false,
+    tier,
+    reason: 'prohibition has wired enforcement evidence',
+  };
+}
+
 /*
  * CLI scaffold (the EP-06 invokable surface, generalized). Each probe ships one bin that
  * calls `runProbeCli` with its own `analyze` (closing over the adapter's propose + validators)
