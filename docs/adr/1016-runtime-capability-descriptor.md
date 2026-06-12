@@ -16,14 +16,14 @@ ADR-857 Branch 8 decided: host-CLI support becomes a `role: runtime` variant of 
 
 Two enabling pieces already exist:
 
-- **The descriptor schema is authored and validated.** `gen-capability-registry.cjs` `validateRuntimeBody` validates a `role: runtime` capability's `runtime: { configHome, configFormat, artifactLayout, commandStyle, hooksSurface, sandboxTier, supportTier }`, forbids feature-only fields (`skills`/`agents`/`steps`/`contributions`/`gates`/`hooks`), and the registry exposes a `runtimes` index (currently `{}` — no descriptor authored yet).
+- **The descriptor schema is authored and validated.** `gen-capability-registry.cjs` `validateRuntimeBody` validates a `role: runtime` capability's `runtime: { configHome, configFormat, artifactLayout, commandStyle, hooksSurface, hookEvents, sandboxTier, supportTier, installSurface, writesSharedSettings, permissionWriter, extendedHookEvents }`, forbids feature-only fields (`skills`/`agents`/`steps`/`contributions`/`gates`/`hooks`), and the registry exposes a `runtimes` index (currently `{}` — no descriptor authored yet).
 - **ADR-58 defines the `InstallPlan`** as a pure typed projection (placements + command text + config intentions → adapters execute) but it is **not materialized**; `runtime-config-adapter-registry.cts` realizes only the adapter-selection half.
 
-What is missing, and what this ADR fixes: only `configFormat` is a real closed enum (5 values); `commandStyle`/`hooksSurface`/`sandboxTier` are loose strings and `artifactLayout` is an unconstrained array. This ADR **closes the vocabulary for all six axes**, decides how the seven hard-case runtimes are absorbed as data, and fixes the staged migration that drives `install.js` from descriptors.
+What is missing, and what this ADR fixes: only `configFormat` is a real closed enum (5 values); `commandStyle`/`hooksSurface`/`sandboxTier` are loose strings and `artifactLayout` is an unconstrained array. This ADR **closes the vocabulary for all eight original axes**, decides how the seven hard-case runtimes are absorbed as data, and fixes the staged migration that drives `install.js` from descriptors. Four additional axes — `installSurface`, `writesSharedSettings`, `permissionWriter`, and `extendedHookEvents` — were added to the descriptor and validator in the 5f-completion pass; they are documented in Decision 7a below.
 
 ## Decision
 
-**Core principle:** every per-runtime difference is expressed as a value over a closed primitive vocabulary on six axes. A runtime that needs a shape no existing primitive expresses is supported by adding a first-party primitive (a new enum member + the code that honors it) — never by embedding arbitrary code or an open escape hatch in the descriptor. All 16 current runtimes MUST be expressible as data under the vocabulary below; any residue that genuinely cannot be is named explicitly as retained first-party code (§ Decision 8).
+**Core principle:** every per-runtime difference is expressed as a value over a closed primitive vocabulary on twelve axes. A runtime that needs a shape no existing primitive expresses is supported by adding a first-party primitive (a new enum member + the code that honors it) — never by embedding arbitrary code or an open escape hatch in the descriptor. All 16 current runtimes MUST be expressible as data under the vocabulary below; any residue that genuinely cannot be is named explicitly as retained first-party code (§ Decision 8).
 
 ### 1. `configHome` — a structured value, not a path string
 
@@ -95,16 +95,59 @@ hookEvents?: 'claude'   // SessionStart/PreToolUse/PostToolUse
 
 `1` = fully tested first-party (claude, codex, antigravity); `2` = shipped, lower-tier (the other 13). None dropped. Drives the cross-runtime test matrix, not behavior.
 
+### 7a. Install-surface axes — config-writing + the per-event hook SET (added in 5f completion)
+
+Four axes added to the descriptor (and to `gen-capability-registry.cjs` `validateRuntimeBody`) in the 5f-completion pass. Together they retire the last hardcoded per-runtime tables in `runtime-config-adapter-registry` and `applySettingsJsonHooks`.
+
+#### `installSurface` — closed enum (6 values)
+
+```
+installSurface: 'settings-json' | 'codex-toml' | 'copilot-instructions'
+              | 'cline-rules' | 'cursor-hooks-json' | 'profile-marker-only'
+```
+
+Selects which config-writing adapter `resolveRuntimeConfigIntent` (in `runtime-config-adapter-registry`) returns. Previously `runtime-config-adapter-registry` held a hand-kept `REGISTRY` table mapping runtime names to adapter types; `installSurface` in the descriptor is now the **single source of truth** — the `REGISTRY` table has been retired.
+
+#### `writesSharedSettings` — boolean
+
+Whether the runtime writes a shared `settings.json`. Replaces the former inline boolean per runtime in `runtime-config-adapter-registry`. Together with `installSurface` this fully parameterises the adapter-selection path.
+
+#### `permissionWriter` — `null | 'opencode' | 'kilo'`
+
+The finish-time permissions-sidecar writer (the JSONC file opencode and kilo require). Replaces the old `finishPermissionWriter` field in the `runtime-config-adapter-registry` `REGISTRY` table. All 14 runtimes that write no permissions sidecar carry `null`.
+
+#### `extendedHookEvents` — `string[]` over a closed event vocabulary
+
+The per-runtime set of **bonus lifecycle events** beyond the coarse `hookEvents` dialect. Vocabulary:
+
+```
+SubagentStop | Stop | PreCompact | FileChanged | BeforeAgent | AfterAgent | BeforeModel
+```
+
+Values per runtime:
+- `claude` → `[SubagentStop, Stop, PreCompact, FileChanged]`
+- `qwen` → `[SubagentStop, Stop, PreCompact]`
+- `gemini` → `[BeforeAgent, AfterAgent, BeforeModel]`
+- all 13 others → `[]`
+
+This replaces three hardcoded per-event guards in `applySettingsJsonHooks`: the `if (isQwen || runtime==='claude')` block (SubagentStop/Stop/PreCompact) and the `if (runtime==='claude')` block (FileChanged) and the `if (isGemini)` block (BeforeAgent/AfterAgent/BeforeModel). The loop now iterates `extendedHookEvents` for the active runtime; no per-runtime conditionals remain.
+
+**Relationship to `hookEvents`:** `hookEvents` (the coarse 2-value dialect — `'claude'` vs `'gemini'`) governs the *event-name vocabulary* the hook adapter emits. `extendedHookEvents` governs the *additional lifecycle events* each runtime registers beyond the base set. They are independent: antigravity carries `hookEvents: 'gemini'` (so its hook bodies use Gemini event names) but `extendedHookEvents: []` — it does **not** receive the per-agent Gemini events (`BeforeAgent`/`AfterAgent`/`BeforeModel`), which are gemini-only.
+
+#### `hooksSurface` is now load-bearing
+
+The `hooksSurface === 'none'` value now drives the settings-json hook-skip path in `applySettingsJsonHooks`, replacing the former `isOpencode || isKilo` boolean guards. This is not a new axis — `hooksSurface` was already Decision 5 — but it is now actively consumed (load-bearing) rather than advisory.
+
 ### 8. Staged consumption — author registry-only, then drive install one axis at a time
 
-The migration is staged the way phases 3–4 were (registry-only → consume incrementally → equivalence-proven no-op → retire the hardcoded branch). **Four of the six axes already live in dedicated modules** that `install.js` merely consumes, so driving them from the descriptor is per-axis and low-risk; the rest is staged behind a prerequisite and assembled last — **no big-bang `install()` rewrite**.
+The migration is staged the way phases 3–4 were (registry-only → consume incrementally → equivalence-proven no-op → retire the hardcoded branch). **Four of the original eight axes already live in dedicated modules** that `install.js` merely consumes, so driving them from the descriptor is per-axis and low-risk; the rest is staged behind a prerequisite and assembled last — **no big-bang `install()` rewrite**.
 
 1. **5a — author the 16 descriptors** (`capabilities/<runtime>/capability.json`, `role: runtime`) registry-only; nothing consumes them. The generator already validates them; the `runtimes` index populates.
 2. **5b — drive `configHome`** ← descriptor (`runtime-homes.cts` already centralizes it; swap its switch for a descriptor lookup). Smallest blast radius.
 3. **5c — drive `commandStyle`** ← descriptor (`runtime-slash.cts`, 2 values). Trivial.
 4. **5d — drive `artifactLayout`** ← descriptor (`runtime-artifact-layout.cts`, ADR-3660; this is ADR-3660's Phase 2 / #3664 — the largest LOC reduction).
 5. **5e — drive `configFormat`** ← descriptor (`runtime-config-adapter-registry.cts`) **and close the `ConverterName` enum** (Decision 3). Model-catalog routing stays orthogonal — referenced by descriptor `name`, not an axis; codex's install-time model-embedding is an implementation detail of its converter, not a 7th axis.
-6. **5f — extract `hooksSurface` into its own module, then drive it** ← descriptor. `hooks-surface` is the one axis still scattered across `install.js`; its module extraction is a prerequisite, exactly as ADR-3660 was for `artifactLayout`.
+6. **5f — extract `hooksSurface` into its own module, then drive it** ← descriptor. `hooks-surface` is the one axis still scattered across `install.js`; its module extraction is a prerequisite, exactly as ADR-3660 was for `artifactLayout`. **5f-completion (done):** `installSurface` drives the config-writing adapter in `runtime-config-adapter-registry` (#1055, retiring the hand-kept `REGISTRY` table); `extendedHookEvents` drives per-event hook registration in `applySettingsJsonHooks` (#1076, retiring the three hardcoded per-event guards); `hooksSurface === 'none'` is now load-bearing for the hook-skip path (replacing `isOpencode/isKilo` flags). `writesSharedSettings` and `permissionWriter` complete the adapter-selection and permissions-writer parameterisation (all four axes added to `validateRuntimeBody`).
 7. **5g — materialize the `InstallPlan`** (ADR-58): collect the now-descriptor-driven per-axis projections into one typed value, so `install()` becomes *resolve chosen Runtime descriptor × active Feature Capabilities → `InstallPlan` → adapters execute*. This is **reachable by collection, not a rewrite** — the interleaving that made `install.js` look monolithic is already dissolved by 5b–5f *before* the plan is assembled. It is a phase-5 **deliverable**, not an aspiration.
 
 Each rung is its own approved-enhancement + PR + equivalence proof (`sandbox-tier`, codex-only, is tiny and rides along in 5e/5g). **Irreducible first-party code, named not hidden:** the artifact converter *functions* remain first-party code, selected by the descriptor's closed `ConverterName` — the descriptor never embeds them.
@@ -135,7 +178,7 @@ All 16 runtimes are authored through the same descriptor (dogfooding) — but th
 
 ## Out of scope
 
-Authoring the 16 descriptors and the per-axis install cutovers (the impl phases); third-party runtime loading (its own additive ADR + trust gate); the per-feature loop-hook wiring (phase-6 cleanup); moving feature `*.enabled` keys out of the central config-schema (phase-6 cleanup).
+Authoring the 16 descriptors and the per-axis install cutovers (the impl phases — note: 5f-completion install-surface drives are **done**, see Decision 7a); third-party runtime loading (its own additive ADR + trust gate); the per-feature loop-hook wiring (phase-6 cleanup); moving feature `*.enabled` keys out of the central config-schema (phase-6 cleanup). The remaining open phase is **5g** — the `InstallPlan` capstone (ADR-58).
 
 - The **Connected Capability** contract (MCP-server / external-process / backend-provider contributions + the §7 trust/load gate) — future design, vehicle #956.
 - The **hook-firing spike** — proving `loop.render-hooks` → workflow execution end-to-end with a *host-computed aggregate* (a phase-6-flavored de-risk that should land **before** phase-5 build, since #956/#999 both depend on it).
