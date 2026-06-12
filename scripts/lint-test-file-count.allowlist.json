@@ -1,5 +1,5 @@
 {
-  "_doc": "Baseline of modules currently exceeding the 2-test-file limit. Each entry locks in TODAY's exact test filenames as the allowlisted set (identity ratchet). Adding a NEW test file to a capped module fails (novel). Removing one requires pruning this list (stale, ratchet-down). When a cluster drops to \u2264 2, remove its entry entirely. New entries require justification in PR description.",
+  "_doc": "Baseline of modules currently exceeding the 2-test-file limit. Each entry locks in TODAY's exact test filenames as the allowlisted set (identity ratchet). Adding a NEW test file to a capped module fails (novel). Removing one requires pruning this list (stale, ratchet-down). When a cluster drops to ≤ 2, remove its entry entirely. New entries require justification in PR description.",
   "modules": {
     "audit": {
       "files": [
@@ -130,6 +130,7 @@
     "install": {
       "files": [
         "bug-410-install-defaults-test-mode-guard.test.cjs",
+        "enh-1077-install-hook-events-dialect-drive.test.cjs",
         "enh-776-install-gemini-hook-events.test.cjs",
         "install-minimal-hooks.test.cjs",
         "install-nested-layout.test.cjs",

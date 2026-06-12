@@ -10921,8 +10921,12 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   }
 
   // Configure statusline and hooks in settings.json (or settings.local.json for local Claude installs).
-  // Gemini and Antigravity use AfterTool instead of PostToolUse for post-tool hooks
-  const postToolEvent = (runtime === 'gemini' || runtime === 'antigravity') ? 'AfterTool' : 'PostToolUse';
+  // ADR-857 phase 5f-2: drive the hook event dialect from the registry descriptor.
+  // runtimes with hookEvents='gemini' use AfterTool/BeforeTool; all others use PostToolUse/PreToolUse.
+  // Equivalence: hookEvents='gemini' iff runtime∈{gemini,antigravity} — identical to the old check.
+  // A missing registry or missing descriptor defaults to 'not gemini' → PostToolUse (safe).
+  const _hookEventsDialect = _capabilityRegistry?.runtimes?.[runtime]?.runtime?.hookEvents;
+  const postToolEvent = _hookEventsDialect === 'gemini' ? 'AfterTool' : 'PostToolUse';
   // #338: local Claude installs write to settings.local.json (Claude Code's per-user/gitignored slot)
   // so engineer-specific absolute paths (Node binary, home dir) never land in the repo-shared
   // settings.json. Global installs and all other runtimes continue to use settings.json.
@@ -11104,6 +11108,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     isGlobal,
     targetDir,
     postToolEvent,
+    hookEvents: _hookEventsDialect,
     updateCheckCommand,
     contextMonitorCommand,
     promptGuardCommand,

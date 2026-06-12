@@ -1101,7 +1101,8 @@ function writeCopilotHookConfig(targetDir: string): string {
 //   runtime                   - runtime ID string (e.g. 'claude', 'gemini', 'qwen')
 //   isGlobal                  - true for global installs
 //   targetDir                 - absolute path to the runtime config dir
-//   postToolEvent             - 'PostToolUse' | 'AfterTool' (pre-computed by caller)
+//   postToolEvent             - 'PostToolUse' | 'AfterTool' (pre-computed by caller from descriptor)
+//   hookEvents                - registry hookEvents dialect ('gemini'|'claude'|undefined)
 //   updateCheckCommand        - command string or null
 //   contextMonitorCommand     - command string or null
 //   promptGuardCommand        - command string or null
@@ -1118,6 +1119,8 @@ interface ApplySettingsJsonHooksOpts {
   isGlobal: boolean;
   targetDir: string;
   postToolEvent: string;
+  /** ADR-857 phase 5f-2: hookEvents dialect from the registry descriptor ('gemini'|'claude'|undefined). */
+  hookEvents?: string;
   updateCheckCommand: string | null;
   contextMonitorCommand: string | null;
   promptGuardCommand: string | null;
@@ -1139,6 +1142,7 @@ function applySettingsJsonHooks(settings: any, opts: ApplySettingsJsonHooksOpts)
     isGlobal,
     targetDir,
     postToolEvent,
+    hookEvents,
     updateCheckCommand,
     contextMonitorCommand,
     promptGuardCommand,
@@ -1235,8 +1239,10 @@ function applySettingsJsonHooks(settings: any, opts: ApplySettingsJsonHooksOpts)
     }
 
     // Configure PreToolUse hook for prompt injection detection
-    // Gemini and Antigravity use BeforeTool instead of PreToolUse for pre-tool hooks
-    const preToolEvent = (runtime === 'gemini' || runtime === 'antigravity') ? 'BeforeTool' : 'PreToolUse';
+    // ADR-857 phase 5f-2: drive dialect from opts.hookEvents (registry descriptor).
+    // hookEvents='gemini' → BeforeTool; all others → PreToolUse.
+    // Equivalence: hookEvents='gemini' iff runtime∈{gemini,antigravity} (same as old check).
+    const preToolEvent = hookEvents === 'gemini' ? 'BeforeTool' : 'PreToolUse';
     if (!settings.hooks[preToolEvent]) {
       settings.hooks[preToolEvent] = [];
     }
