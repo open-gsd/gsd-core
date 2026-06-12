@@ -166,6 +166,7 @@
   - [Structured JSON Error Mode](#142-structured-json-error-mode)
   - [UAT-Passed Predicate](#143-uat-passed-predicate)
   - [Spec-Phase Edge-Completeness Probe](#144-spec-phase-edge-completeness-probe)
+  - [Spec-Phase Prohibition Probe](#145-spec-phase-prohibition-probe)
 
 ---
 
@@ -3118,3 +3119,36 @@ The load-bearing wire is the `plan-phase` lift: `covered` and `backstop` edges b
 - REQ-EDGE-06: `plan-phase` MUST lift `covered` criteria and `backstop` notes into `must_haves.truths`.
 
 **Reference:** [Edge Probe](../gsd-core/references/edge-probe.md)
+
+### 145. Spec-Phase Prohibition Probe
+
+**Command:** `/gsd-spec-phase`
+
+**Purpose:** Surface the unwritten *must-NOT* constraints — the values/safety/ethics interpretations a feature could silently become that the author would never want but the spec does not forbid — before any code is written. The edge probe reaches data-shape edges; it structurally cannot reach prohibitions. This is the missing instrument, running as `Step 5.6` of spec-phase, after the edge probe.
+
+**Behavior:** A two-stage, prose-orchestrated pass per requirement (no compiled recall engine — recall is inherently model-driven, ADR-550 D7b):
+
+1. **Recall (adversarial probe):** *"What could this feature silently become that the author would NOT want, but the spec does not forbid?"* — model-robust open-vocabulary elicitation across values/safety/ethics.
+2. **Precision (one-pass classifier):** drop routine-engineering items, keep genuine values/safety/ethics prohibitions — collapses the raw list to the load-bearing few.
+
+Each surfaced prohibition is resolved to exactly one of three states:
+
+| State | Meaning | Downstream effect |
+|-------|---------|-------------------|
+| `resolved` | Confirmed a real must-NOT | NEGATIVE acceptance criterion written into the SPEC `## Prohibitions (must-NOT)` section; lifted into `plan-phase` `must_haves.prohibitions` (its own sibling block, never `truths`) |
+| `dismissed` | Not a genuine prohibition (requires a non-empty reason) | Recorded with its reason; empty dismissals are rejected |
+| `unresolved` | Deferred | Soft-gates the spec; surfaced as a planner assumption |
+
+Each resolved prohibition carries a `verification` tier — `test` (a negative test can enforce it) or `judgment` (only human/LLM judgment can). At verify time, judgment-tier prohibitions route to a never-silent / never-hard-halt soft gate (autonomous emits an `unverified-prohibition — human review recommended` flag); test-tier prohibitions fail closed when unwired (never silently green). Under `--auto`, the probe **never auto-dismisses**. Canon-bound concerns (OWASP / GDPR / fairness) are referred to `/gsd:secure-phase` rather than minting SPEC prohibitions (ADR-550 D6).
+
+The load-bearing wire is the `plan-phase` lift into `must_haves.prohibitions`, so the section is not merely documentation.
+
+**Requirements:**
+- REQ-PROHIB-01: The prohibition pass MUST run after the edge probe and emit a `## Prohibitions (must-NOT)` SPEC section.
+- REQ-PROHIB-02: Stage 1 MUST ask the adversarial recall question; Stage 2 MUST drop routine-engineering items and keep values/safety/ethics prohibitions.
+- REQ-PROHIB-03: A `dismissed` resolution MUST require a non-empty reason.
+- REQ-PROHIB-04: `--auto` MUST never auto-dismiss.
+- REQ-PROHIB-05: `plan-phase` MUST lift resolved prohibitions into `must_haves.prohibitions` (never `truths`).
+- REQ-PROHIB-06: A well-formed but unwired `test`-tier prohibition MUST fail closed at verify time — never a silent pass.
+
+**Reference:** [Prohibition Probe](../gsd-core/references/prohibition-probe.md)

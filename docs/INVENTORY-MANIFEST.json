@@ -1,5 +1,5 @@
 {
-  "generated": "2026-06-11",
+  "generated": "2026-06-12",
   "families": {
     "agents": [
       "gsd-advisor-researcher",
@@ -235,6 +235,7 @@
       "planner-revision.md",
       "planner-source-audit.md",
       "planning-config.md",
+      "prohibition-probe.md",
       "project-skills-discovery.md",
       "questioning.md",
       "research-documentation-lookup.md",
