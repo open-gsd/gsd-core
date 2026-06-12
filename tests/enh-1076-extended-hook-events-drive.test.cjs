@@ -407,17 +407,17 @@ describe('enh-1076 phase 5g drive 3: hooksSurface:settings-json writes hooks eve
     applySettingsJsonHooks(settings, opts);
   });
 
-  test('SessionStart IS written when hooksSurface is "settings-json" (even for opencode name)', () => {
-    // The hook file guard may prevent actual writing if hooks/dist is absent,
-    // but the hooks object itself is at minimum initialized.
+  test('SessionStart IS written with at least one command when hooksSurface is "settings-json" (even for opencode name)', () => {
+    // ensureHooksDist() in before() guarantees hooks/dist is built, so the
+    // existsSync guards inside applySettingsJsonHooks pass and commands are registered.
     assert.ok(
       settings.hooks && typeof settings.hooks === 'object',
       `settings.hooks must be initialized when hooksSurface="settings-json"`,
     );
-    // At a minimum, SessionStart key exists (array may be empty if hook file not present)
     assert.ok(
-      Object.prototype.hasOwnProperty.call(settings.hooks, 'SessionStart'),
-      `settings.hooks.SessionStart must be initialized; keys: ${JSON.stringify(Object.keys(settings.hooks))}`,
+      hasHooksFor(settings, 'SessionStart'),
+      `settings.hooks.SessionStart must contain at least one registered command when hooksSurface="settings-json"; ` +
+      `keys: ${JSON.stringify(Object.keys(settings.hooks))}`,
     );
   });
 

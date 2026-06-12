@@ -3553,9 +3553,12 @@ describe('ADR-857 phase 5e: configFormat ↔ installSurface parity gate', () => 
     );
   });
 
-  // Unknown runtimes (not in ALLOWED_CONFIG_RUNTIMES) are excluded from the gate
-  test('runtime capId not in adapter registry (e.g. "grok") is excluded from parity gate — does not throw', () => {
-    // 'grok' is not in the adapter registry → must be soft-skipped
+  // Runtimes with no installSurface in their descriptor are excluded from the gate.
+  // The gate reads installSurface from cap.runtime.installSurface (the descriptor level);
+  // if it is absent (typeof !== 'string'), the runtime is soft-skipped.
+  // NOTE: the gate no longer uses the adapter registry — it reads purely from the descriptor.
+  test('runtime with no installSurface in descriptor (e.g. hypothetical "grok") is excluded from parity gate — does not throw', () => {
+    // 'grok' has no installSurface → gate must soft-skip (typeof r.installSurface !== 'string')
     const grokCap = {
       id: 'grok',
       role: 'runtime',
@@ -3565,18 +3568,19 @@ describe('ADR-857 phase 5e: configFormat ↔ installSurface parity gate', () => 
       requires: [],
       runtime: {
         configHome: { kind: 'dot-home', name: '.grok', env: [] },
-        configFormat: 'settings-json',  // any value — gate should not check this
+        configFormat: 'settings-json',  // any value — gate should not check this (no installSurface)
         artifactLayout: { global: [], local: [] },
         commandStyle: 'slash-hyphen',
         hooksSurface: 'none',
         sandboxTier: 'none',
         supportTier: 2,
+        // intentionally no installSurface — gate must skip this entry
       },
     };
     const capMap = new Map([['grok', grokCap]]);
     assert.doesNotThrow(
       () => runConfigFormatParityGate(capMap),
-      'Unknown runtimes not in the adapter registry must be excluded from the parity gate',
+      'Runtimes with no installSurface in their descriptor must be excluded from the parity gate',
     );
   });
 });

@@ -11110,7 +11110,8 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     postToolEvent,
     hookEvents: _hookEventsDialect,
     extendedHookEvents: _capabilityRegistry?.runtimes?.[runtime]?.runtime?.extendedHookEvents ?? [],
-    hooksSurface: _capabilityRegistry?.runtimes?.[runtime]?.runtime?.hooksSurface,
+    // descriptor is source of truth; literal fallback preserves the pre-5f opencode/kilo hook-skip if the committed registry ever fails to load
+    hooksSurface: _capabilityRegistry?.runtimes?.[runtime]?.runtime?.hooksSurface ?? ((runtime === 'opencode' || runtime === 'kilo') ? 'none' : 'settings-json'),
     updateCheckCommand,
     contextMonitorCommand,
     promptGuardCommand,

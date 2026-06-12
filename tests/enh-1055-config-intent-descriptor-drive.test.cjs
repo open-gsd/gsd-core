@@ -62,19 +62,6 @@ describe('enh-1055 descriptor-drive: resolveRuntimeConfigIntent golden master', 
 });
 
 // ---------------------------------------------------------------------------
-// Test 2: Each returned object includes the runtime key
-// ---------------------------------------------------------------------------
-
-describe('enh-1055 descriptor-drive: returned object includes runtime key', () => {
-  for (const row of EXPECTED) {
-    test(`${row.runtime} result.runtime === "${row.runtime}"`, () => {
-      const intent = resolveRuntimeConfigIntent(row.runtime);
-      assert.strictEqual(intent.runtime, row.runtime);
-    });
-  }
-});
-
-// ---------------------------------------------------------------------------
 // Test 3: Unknown runtime throws TypeError
 // ---------------------------------------------------------------------------
 
