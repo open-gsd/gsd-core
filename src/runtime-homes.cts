@@ -19,6 +19,15 @@
  *             with Kimi selecting the first existing generic skills directory.
  *             ~/.kimi-code/skills is brand-specific and can be selected as a
  *             GSD write target with --config-dir or KIMI_CONFIG_DIR.
+ *   trae    — Targets Trae IDE (trae.ai), the Electron-based IDE — NOT
+ *             trae-agent (github.com/bytedance/trae-agent), a Python CLI that
+ *             uses trae_config.yaml, has no ~/.trae directory, and has no
+ *             skills system. Both are ByteDance "Trae" products; they are
+ *             entirely distinct. The global ~/.trae/skills/ path is
+ *             community-soft-confirmed: docs.trae.ai/ide/skills documents the
+ *             SKILL.md format and project-level .trae/skills/, but does NOT
+ *             publish the global on-disk path; ~/.trae/skills/ rests on
+ *             community evidence incl. Trae-AI/TRAE#2253. Best-effort only.
  */
 
 import os from 'node:os';

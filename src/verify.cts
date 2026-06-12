@@ -1107,6 +1107,20 @@ function cmdValidateHealth(
           `No GSD agents found in ${agentStatus.agents_dir} — Task(subagent_type="gsd-*") will fall back to general-purpose`,
           `Run the GSD installer: npx ${PACKAGE_NAME}@latest`,
         );
+      } else if ((agentStatus.incomplete_agents).length > 0 && (agentStatus.missing_agents).length === 0) {
+        addIssue(
+          'warning',
+          'W010',
+          `Incomplete agent installs (missing generated file): ${(agentStatus.incomplete_agents).join(', ')} — affected workflows may fall back to general-purpose`,
+          `Re-run the GSD installer to complete the install: npx ${PACKAGE_NAME}@latest`,
+        );
+      } else if ((agentStatus.incomplete_agents).length > 0) {
+        addIssue(
+          'warning',
+          'W010',
+          `Missing ${(agentStatus.missing_agents).length} GSD agents: ${(agentStatus.missing_agents).join(', ')}; incomplete agent installs (missing generated file): ${(agentStatus.incomplete_agents).join(', ')} — affected workflows will fall back to general-purpose`,
+          `Run the GSD installer: npx ${PACKAGE_NAME}@latest`,
+        );
       } else {
         addIssue(
           'warning',
@@ -1624,6 +1638,7 @@ function cmdValidateAgents(cwd: string, raw: boolean): void {
       agents_found: agentStatus.agents_installed,
       installed: agentStatus.installed_agents,
       missing: agentStatus.missing_agents,
+      incomplete: agentStatus.incomplete_agents,
       expected,
     },
     raw,
