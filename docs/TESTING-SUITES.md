@@ -59,6 +59,59 @@ the sanctioned layout (see the #443 strategy below), not a one-off regression
 pattern. If `issue-*`/`perf-*` one-offs start accumulating the same way
 `bug-*` did, extend the ratchet's regex and regenerate the allowlist.
 
+## Workflow size budget
+
+> Tracked by issue [#1074](https://github.com/open-gsd/gsd-core/issues/1074).
+> Bytes (not lines) per [#717](https://github.com/open-gsd/gsd-core/issues/717);
+> LF-normalized per [#683](https://github.com/open-gsd/gsd-core/issues/683).
+
+Workflow files (`gsd-core/workflows/*.md`) ship in the installed runtime and are
+loaded into the agent's context, so their byte size is a real cost. The size
+guard in `tests/workflow-size-budget.test.cjs` keeps that cost from creeping up
+invisibly. It is an **anti-creep ratchet**, sibling to the regression-name
+ratchet above — three layers, ordered from day-to-day to last-resort:
+
+| Layer | What it does | Where |
+|---|---|---|
+| **Per-file baseline** (primary) | Pins every workflow's *exact* current size in a committed snapshot. Any growth, shrink, add, or removal fails until the snapshot is regenerated — so sub-ceiling creep is caught by name and delta, not just at the tier's single largest file. | `tests/workflow-size-baseline.json` |
+| **Loose tier hard caps** (backstop) | Absolute outer red lines per tier — `XL ≤ 98304`, `LARGE ≤ 61440`, `DEFAULT ≤ 40960` bytes. Unlike the old tighten-only ceiling, a cap is **never raised** when a file approaches it: crossing it means *extract*, not bump. | `XL/LARGE/DEFAULT_CAP` |
+| **New-file cap** | A workflow not yet in the baseline must stay under `32768` bytes (the Codex `project_doc_max_bytes` anchor) unless explicitly tiered into `XL_WORKFLOWS`/`LARGE_WORKFLOWS` in the same PR. Keeps net-new orchestrators from being born oversized. | `NEW_FILE_CAP` |
+
+`discuss-phase.md` additionally has a thin-dispatcher target of `< 32000` bytes
+(issue [#2551](https://github.com/open-gsd/gsd-core/issues/2551)).
+
+### How-to: a workflow grew and CI is red
+
+The baseline guard reports the file and the byte delta. To resolve:
+
+1. **Regenerate the snapshot** and inspect the one-line diff:
+   ```bash
+   npm run size:baseline
+   git diff tests/workflow-size-baseline.json
+   ```
+2. **Justify the growth in your PR** (a sentence in the description is enough) —
+   the committed baseline diff is the review record that the larger size was a
+   deliberate, seen decision, not silent drift.
+3. **Or shrink it instead of baselining.** Prefer extraction when the growth is
+   incidental: move per-mode bodies to `workflows/<name>/modes/`, templates to
+   `workflows/<name>/templates/`, and shared prose to `gsd-core/references/` —
+   then load them **LAZILY**. Do *not* convert them to eager `@-required_reading`
+   includes: that shrinks the file's bytes without shrinking loaded context, so
+   it games the guard while making the real cost worse. See
+   `workflows/discuss-phase/` for the progressive-disclosure pattern.
+
+If a hard cap (not the baseline) is what failed, regeneration will **not** help —
+that is the signal to extract, per step 3.
+
+### Reference
+
+| Artifact | Role |
+|---|---|
+| `scripts/workflow-size.cjs` | Single source of truth — LF-normalized byte counter (`lfByteCount`) plus workflow enumeration (`listWorkflowStems`, `measureWorkflows`). Imported by **both** the guard and the generator so they can never measure or enumerate differently. |
+| `scripts/update-size-baseline.cjs` (`npm run size:baseline`) | Regenerates `tests/workflow-size-baseline.json` — sorted keys, trailing newline, idempotent. |
+| `tests/workflow-size-baseline.json` | The committed per-file snapshot (one entry per workflow). |
+| `tests/workflow-size-budget.test.cjs` | The three guards above, plus the `discuss-phase` progressive-disclosure checks. |
+
 ## Running suites locally
 
 ```bash

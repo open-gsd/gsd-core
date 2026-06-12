@@ -850,8 +850,15 @@ gsd-core/
                           the canonical example (#2551). New modes for
                           discuss-phase land in
                           workflows/discuss-phase/modes/<mode>.md.
-                          Per-file budgets enforced by
-                          tests/workflow-size-budget.test.cjs.
+                          Per-file sizes are pinned by a committed baseline
+                          (tests/workflow-size-baseline.json) plus loose tier
+                          hard caps, both in tests/workflow-size-budget.test.cjs.
+                          If you legitimately grow or shrink a workflow file,
+                          run `npm run size:baseline` to update the snapshot and
+                          justify any growth in your PR (or extract content
+                          lazily). Full how-to + reference in
+                          docs/TESTING-SUITES.md (Workflow size budget); see
+                          issue #1074.
   references/           — Reference documentation (.md)
   templates/            — File templates
 agents/                 — Agent definitions (.md) — CANONICAL SOURCE
