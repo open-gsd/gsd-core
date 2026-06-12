@@ -223,6 +223,16 @@ CODEX_MODEL=$(gsd_run query config-get review.models.codex 2>/dev/null | jq -r '
 OPENCODE_MODEL=$(gsd_run query config-get review.models.opencode 2>/dev/null | jq -r '.' 2>/dev/null || true)
 # review.models.agy is reserved for future model-pinning support; agy selects its model internally
 AGY_MODEL=$(gsd_run query config-get review.models.agy 2>/dev/null | jq -r '.' 2>/dev/null || true)
+
+# #1115: `--dangerously-bypass-hook-trust` only exists on codex-cli >= 0.137.0.
+# Capability-probe it so older installs don't fail with "unexpected argument"
+# (which, with stderr suppressed, produced a silent empty review). The codex
+# invocation works fine without the flag on older versions.
+if codex exec --help 2>/dev/null | grep -q -- '--dangerously-bypass-hook-trust'; then
+  CODEX_BYPASS_FLAG="--dangerously-bypass-hook-trust"
+else
+  CODEX_BYPASS_FLAG=""
+fi
 ```
 
 For each selected CLI, invoke in sequence (not parallel — avoid rate limits):
@@ -247,10 +257,17 @@ fi
 
 **Codex:**
 ```bash
+# $CODEX_BYPASS_FLAG is capability-gated above (#1115). Capture stderr to a .err
+# file (not /dev/null) so a non-zero exit — e.g. a flag the installed codex-cli
+# does not support — is diagnosable instead of a silent empty review.
 if [ -n "$CODEX_MODEL" ] && [ "$CODEX_MODEL" != "null" ]; then
-  cat /tmp/gsd-review-prompt-{phase}.md | codex exec --ephemeral --dangerously-bypass-hook-trust --model "$CODEX_MODEL" --skip-git-repo-check - 2>/dev/null > /tmp/gsd-review-codex-{phase}.md
+  cat /tmp/gsd-review-prompt-{phase}.md | codex exec --ephemeral $CODEX_BYPASS_FLAG --model "$CODEX_MODEL" --skip-git-repo-check - 2>/tmp/gsd-review-codex-{phase}.err > /tmp/gsd-review-codex-{phase}.md
 else
-  cat /tmp/gsd-review-prompt-{phase}.md | codex exec --ephemeral --dangerously-bypass-hook-trust --skip-git-repo-check - 2>/dev/null > /tmp/gsd-review-codex-{phase}.md
+  cat /tmp/gsd-review-prompt-{phase}.md | codex exec --ephemeral $CODEX_BYPASS_FLAG --skip-git-repo-check - 2>/tmp/gsd-review-codex-{phase}.err > /tmp/gsd-review-codex-{phase}.md
+fi
+if [ ! -s /tmp/gsd-review-codex-{phase}.md ]; then
+  echo "Codex review failed or returned empty output. stderr:" > /tmp/gsd-review-codex-{phase}.md
+  cat /tmp/gsd-review-codex-{phase}.err >> /tmp/gsd-review-codex-{phase}.md
 fi
 ```
 
