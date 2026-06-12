@@ -621,13 +621,12 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
 /**
  * Route a list of changed files to their sub-repo prefixes.
  *
- * Bucket sub-repos by their first path segment. Any file that matches a
+ * Bucket sub-repos by their first path segment (#311). Any file that matches a
  * sub-repo prefix must share that sub-repo's first segment, so we only scan
- * the (small) bucket for the file's first segment instead of all sub-repos
- * — O(F + R) expected vs the prior O(F*R) find-in-loop. Candidates stay in
- * sub-repo array order, preserving the original first-match semantics
- * (incl. multi-segment sub-repos like "vendor/pkg", which resolve via the
- * inner startsWith). (#311)
+ * the (small) same-first-segment bucket instead of all sub-repos. Within that
+ * bucket all candidates are scanned to find the longest (most-specific)
+ * matching prefix, so nested sub_repos (e.g. ['packages', 'packages/core'])
+ * route to the deepest match regardless of sub_repos array order (#391).
  *
  * @param files    - changed file paths (relative to project root)
  * @param subRepos - sub-repo path prefixes from config.sub_repos
@@ -644,7 +643,23 @@ function groupFilesBySubrepo(files: string[], subRepos: string[]): GroupFilesByS
   const unmatched: string[] = [];
   for (const file of files) {
     const candidates = reposByFirstSeg.get(file.split('/')[0]);
-    const match = candidates ? candidates.find(repo => file.startsWith(repo + '/')) : undefined;
+    // Select the longest (most-specific) matching sub-repo prefix so nested
+    // sub_repos (e.g. ['packages', 'packages/core']) route correctly regardless
+    // of array order. (#391) String() guards the length read so non-string
+    // entries never throw, matching the tolerance of the prior `.find` path.
+    let match: string | undefined;
+    let matchLen = -1;
+    if (candidates) {
+      for (const repo of candidates) {
+        if (file.startsWith(repo + '/')) {
+          const repoLen = String(repo).length;
+          if (repoLen > matchLen) {
+            match = repo;
+            matchLen = repoLen;
+          }
+        }
+      }
+    }
     if (match) {
       (grouped[match] ||= []).push(file);
     } else {
