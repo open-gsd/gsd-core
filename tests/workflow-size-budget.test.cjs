@@ -39,25 +39,34 @@
  * content Read only at the step that needs it (see the discuss-phase mode/
  * template tests below, which forbid templates in <required_reading>).
  *
- * Tiered the same way as agent budgets (#2361):
+ * ## Enforcement model (issue #1074)
+ *
+ * Two complementary guards, neither of which is a tier-max ceiling:
+ *
+ *   1. Per-file baseline (the anti-creep): every workflow is pinned to its
+ *      exact size in `tests/workflow-size-baseline.json`. Any growth fails with
+ *      the file and delta; `npm run size:baseline` records a deliberate change
+ *      as a one-line reviewable diff. This replaced the tier-max tighten-only
+ *      ratchet (#597), which only bound the single largest file per tier and
+ *      left the other ~85 files able to grow silently.
+ *
+ *   2. Tier hard caps (the outer bound): XL/LARGE/DEFAULT are absolute red
+ *      lines with real headroom, never raised in normal work. Crossing one
+ *      means lazy extraction (the `workflows/discuss-phase/modes/`
+ *      progressive-disclosure pattern), not a +N bump. New workflow files get
+ *      the Codex `project_doc_max_bytes` anchor (32 KiB) unless explicitly
+ *      tiered in the same PR.
+ *
+ * Tiers:
  *   - XL       : top-level orchestrators (e.g., execute-phase, plan-phase)
  *   - LARGE    : multi-step planners
  *   - DEFAULT  : focused single-purpose workflows (target tier)
  *
- * Raising a budget is a deliberate choice — adjust the constant, write a
- * rationale in the PR, and confirm the bloat is not duplicated content
- * that belongs in `gsd-core/references/` (lazily loaded) or a per-mode
- * subdirectory (see `workflows/discuss-phase/modes/`, #2551).
- *
- * Tighten-only invariant (issue #597): ceilings track the tier high-water mark
- * within GRACE bytes. Budgets may only decrease, never silently creep upward.
- * The assertTightCeiling() call below enforces this automatically.
- *
  * See:
+ *   - https://github.com/open-gsd/gsd-core/issues/1074 (per-file baseline + hard caps)
  *   - https://github.com/open-gsd/gsd-core/issues/717  (bytes re-base + rationale)
- *   - https://github.com/open-gsd/gsd-core/issues/2551 (this test)
- *   - https://github.com/open-gsd/gsd-core/issues/2361 (agent budget)
- *   - https://developers.openai.com/codex/guides/agents-md (Codex 32 KB cap)
+ *   - https://github.com/open-gsd/gsd-core/issues/683  (LF-normalized byte count)
+ *   - https://developers.openai.com/codex/guides/agents-md (Codex 32 KiB cap)
  *   - https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents
  */
 
@@ -66,33 +75,31 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('node:os');
 const path = require('path');
-const { assertTightCeiling, assertFileBaseline } = require('../scripts/lib/allowlist-ratchet.cjs');
-const { lfByteCount: byteCount, measureWorkflows } = require('../scripts/workflow-size.cjs');
+const { assertFileBaseline } = require('../scripts/lib/allowlist-ratchet.cjs');
+const { lfByteCount: byteCount, listWorkflowStems, measureWorkflows } = require('../scripts/workflow-size.cjs');
 const { cleanup } = require('./helpers.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
 const BASELINE_PATH = path.join(__dirname, 'workflow-size-baseline.json');
 
-// Grace band: maximum allowed slack (ceiling − actualMax) in BYTES before a
-// ceiling is considered too loose. 3000 bytes ≈ the prior 60-line grace
-// re-expressed for the #717 unit swap (these files run ~36–50 bytes/line, so
-// ~60–80 lines of breathing room) without permitting gross inflation.
-const GRACE = 3000;
+// Tier HARD CAPS (#1074) — absolute red lines, not high-water-hugging ceilings.
+// Day-to-day creep is caught per-file by the baseline guard below; these exist
+// only as the outer bound where the correct response is lazy extraction, never
+// a raise. Each sits above its tier's current high-water mark with real
+// headroom (vs the old GRACE=3000 hug):
+//   XL      96 KiB — high-water plan-phase.md 92,965 → ~5.2 KB headroom
+//   LARGE   60 KiB — high-water docs-update.md 54,600 → ~6.6 KB headroom
+//   DEFAULT 40 KiB — high-water settings-advanced.md 39,160 → ~1.8 KB headroom
+// (DEFAULT is deliberately the tightest: a single-purpose workflow approaching
+// 40 KiB is the strongest extraction signal of the three.)
+const XL_CAP = 98304;       // 96 KiB
+const LARGE_CAP = 61440;    // 60 KiB
+const DEFAULT_CAP = 40960;  // 40 KiB
 
-// Byte ceilings (#717 re-base from lines). Each tier's ceiling tracks the
-// current high-water mark within GRACE (#597 tighten-only ratchet).
-// XL high-water mark is execute-phase.md — note that under LINES it was
-// plan-phase; bytes genuinely re-rank the tier, which is the point of #717.
-// actualMax=93130 (plan-phase, #381 CLAUDE_ENV_FILE persist clause in per-file launcher preamble);
-// slack=70 ≤ GRACE. execute-phase.md=92880, new-project.md=61685.
-// 93200: +200B headroom for the #381 CLAUDE_ENV_FILE persist clause added to every per-file launcher preamble (legit content growth, ratchet-up per #717).
-const XL_BUDGET = 93200;
-// LARGE high-water mark is docs-update.md. actualMax=54410 (#891 launcher shim expansion);
-// slack=1590 ≤ GRACE. quick.md=45710, autonomous.md=38030.
-const LARGE_BUDGET = 56000;
-// DEFAULT high-water mark is settings-advanced.md. actualMax=38409 (#891 launcher shim expansion);
-// slack=1591 ≤ GRACE.
-const DEFAULT_BUDGET = 40000;
+// New workflow files (not yet in the committed baseline) must stay under the
+// Codex project_doc_max_bytes anchor unless explicitly tiered into XL/LARGE in
+// the same PR. Keeps net-new orchestrators from being born oversized.
+const NEW_FILE_CAP = 32768; // 32 KiB
 
 // Top-level orchestrators that own end-to-end multi-phase rubrics.
 // Grandfathered at current sizes — see PR #2551 for the progressive-disclosure
@@ -119,14 +126,19 @@ const LARGE_WORKFLOWS = new Set([
   'code-review',           // 28726
 ]);
 
-const ALL_WORKFLOWS = fs.readdirSync(WORKFLOWS_DIR)
-  .filter(f => f.endsWith('.md'))
-  .map(f => f.replace('.md', ''));
+// Single source of truth for BOTH enumeration and measurement (#1074; finishes
+// the consolidation flagged in trek-e's #1089 review). The tier guards below
+// iterate exactly the files measureWorkflows() measured and read their bytes
+// from the same map, so enumeration and byte-counting can never split-brain.
+// `byteCount` (lfByteCount) is retained only for the single-file discuss-phase
+// checks below, which target files outside the workflow root.
+const SIZES = measureWorkflows();           // { 'execute-phase.md': 92880, ... }
+const ALL_WORKFLOWS = listWorkflowStems();  // ['execute-phase', ...] — same source
 
-function budgetFor(workflow) {
-  if (XL_WORKFLOWS.has(workflow)) return { tier: 'XL', limit: XL_BUDGET };
-  if (LARGE_WORKFLOWS.has(workflow)) return { tier: 'LARGE', limit: LARGE_BUDGET };
-  return { tier: 'DEFAULT', limit: DEFAULT_BUDGET };
+function capFor(workflow) {
+  if (XL_WORKFLOWS.has(workflow)) return { tier: 'XL', cap: XL_CAP };
+  if (LARGE_WORKFLOWS.has(workflow)) return { tier: 'LARGE', cap: LARGE_CAP };
+  return { tier: 'DEFAULT', cap: DEFAULT_CAP };
 }
 
 // byteCount (LF-normalized, #683) is imported as `lfByteCount` from
@@ -134,35 +146,55 @@ function budgetFor(workflow) {
 // baseline generator so the guard and the snapshot can never measure
 // differently. See the #683 regression test at the bottom of this file.
 
-describe('SIZE: workflow byte-size budget', () => {
+describe('SIZE: workflow tier hard caps (issue #1074)', () => {
+  // Absolute outer bound per tier. Unlike the old tighten-only ceiling, a cap
+  // is NOT raised when a file approaches it — crossing it means extract, not
+  // bump. Per-file creep is handled by the baseline guard below; this only
+  // catches a file that has grown to the point where lazy extraction is the
+  // only correct answer.
   for (const workflow of ALL_WORKFLOWS) {
-    const { tier, limit } = budgetFor(workflow);
-    test(`${workflow} (${tier}) stays under ${limit} bytes`, () => {
-      const filePath = path.join(WORKFLOWS_DIR, workflow + '.md');
-      const bytes = byteCount(filePath);
+    const { tier, cap } = capFor(workflow);
+    test(`${workflow} (${tier}) stays under the ${tier} hard cap (${cap} bytes)`, () => {
+      const bytes = SIZES[`${workflow}.md`];
       assert.ok(
-        bytes <= limit,
-        `${workflow}.md is ${bytes} bytes — exceeds ${tier} budget of ${limit}. ` +
-        `Extract per-mode bodies to a workflows/${workflow}/modes/ subdirectory, ` +
-        `templates to workflows/${workflow}/templates/, or shared references ` +
-        `to gsd-core/references/ — and load them LAZILY (not via @-required_reading, ` +
-        `which would shrink this file's bytes without shrinking loaded context). ` +
-        `See workflows/discuss-phase/ for the pattern.`
+        bytes <= cap,
+        `${workflow}.md is ${bytes} bytes — exceeds the ${tier} hard cap of ${cap}. ` +
+        `This cap is a red line, NOT a budget to raise: extract per-mode bodies to a ` +
+        `workflows/${workflow}/modes/ subdirectory, templates to ` +
+        `workflows/${workflow}/templates/, or shared references to gsd-core/references/ — ` +
+        `and load them LAZILY (not via @-required_reading, which would shrink this ` +
+        `file's bytes without shrinking loaded context). See workflows/discuss-phase/.`
       );
     });
   }
+
+  test('new workflow files (not yet baselined) stay under the 32 KiB Codex anchor', () => {
+    const baseline = JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf-8'));
+    for (const workflow of ALL_WORKFLOWS) {
+      const key = `${workflow}.md`;
+      const isNew = !(key in baseline);
+      const isTiered = XL_WORKFLOWS.has(workflow) || LARGE_WORKFLOWS.has(workflow);
+      if (!isNew || isTiered) continue;
+      const bytes = SIZES[key];
+      assert.ok(
+        bytes < NEW_FILE_CAP,
+        `${key} is a new workflow at ${bytes} bytes — new files must stay under ` +
+        `${NEW_FILE_CAP} (the Codex project_doc_max_bytes anchor) unless explicitly ` +
+        `tiered into XL_WORKFLOWS/LARGE_WORKFLOWS in this same PR with a rationale.`
+      );
+    }
+  });
 });
 
 describe('SIZE: per-file workflow baseline (issue #1074)', () => {
-  // Per-file exact-size ratchet. Unlike the tier anti-creep block below — which
-  // only binds the single largest file in each tier — this guards EVERY
-  // workflow file by name against a committed snapshot
+  // Per-file exact-size ratchet — the primary anti-creep guard (it replaced the
+  // tier-max tighten-only ceilings, which only bound the single largest file in
+  // each tier). Guards EVERY workflow file by name against a committed snapshot
   // (tests/workflow-size-baseline.json). Growth fails with the file and delta;
   // shrinkage fails as a stale snapshot (regenerate to ratchet down). The fix
   // for any failure is `npm run size:baseline` plus a PR justification for
-  // genuine growth (or lazy extraction). Runs side-by-side with the tier tests
-  // during the #1074 migration; the tier anti-creep block is removed in a
-  // follow-up once this is established.
+  // genuine growth (or lazy extraction). The tier hard caps above are the outer
+  // bound; this is the day-to-day creep control.
   test('every workflow file matches its committed baseline', () => {
     const baseline = JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf-8'));
     const current = measureWorkflows();
@@ -175,35 +207,6 @@ describe('SIZE: per-file workflow baseline (issue #1074)', () => {
         'Run `npm run size:baseline` to update tests/workflow-size-baseline.json, ' +
         'then justify any growth in your PR (or extract content lazily — see workflows/discuss-phase/).',
     });
-  });
-});
-
-describe('SIZE: tier anti-creep (tighten-only ceilings, issue #597)', () => {
-  // For each tier, compute the high-water mark (in bytes) across all files in
-  // that tier and assert the ceiling stays tight. Prevents budgets from
-  // silently drifting upward: ceiling − actualMax must not exceed GRACE.
-  test('XL tier: ceiling tracks high-water mark within GRACE', () => {
-    const values = ALL_WORKFLOWS
-      .filter(w => XL_WORKFLOWS.has(w))
-      .map(w => byteCount(path.join(WORKFLOWS_DIR, w + '.md')));
-    const actualMax = Math.max(...values);
-    assertTightCeiling({ label: 'XL', actualMax, ceiling: XL_BUDGET, grace: GRACE, fail: assert.fail });
-  });
-
-  test('LARGE tier: ceiling tracks high-water mark within GRACE', () => {
-    const values = ALL_WORKFLOWS
-      .filter(w => LARGE_WORKFLOWS.has(w))
-      .map(w => byteCount(path.join(WORKFLOWS_DIR, w + '.md')));
-    const actualMax = Math.max(...values);
-    assertTightCeiling({ label: 'LARGE', actualMax, ceiling: LARGE_BUDGET, grace: GRACE, fail: assert.fail });
-  });
-
-  test('DEFAULT tier: ceiling tracks high-water mark within GRACE', () => {
-    const values = ALL_WORKFLOWS
-      .filter(w => !XL_WORKFLOWS.has(w) && !LARGE_WORKFLOWS.has(w))
-      .map(w => byteCount(path.join(WORKFLOWS_DIR, w + '.md')));
-    const actualMax = Math.max(...values);
-    assertTightCeiling({ label: 'DEFAULT', actualMax, ceiling: DEFAULT_BUDGET, grace: GRACE, fail: assert.fail });
   });
 });
 

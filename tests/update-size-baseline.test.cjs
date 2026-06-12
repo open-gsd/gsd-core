@@ -124,4 +124,21 @@ describe('generateBaseline', () => {
       /ENOENT/
     );
   });
+
+  test('predicate filters which files are baselined (agent path)', () => {
+    const agentDir = path.join(dir, 'agents');
+    fs.mkdirSync(agentDir);
+    fs.writeFileSync(path.join(agentDir, 'gsd-one.md'), 'a\n');
+    fs.writeFileSync(path.join(agentDir, 'gsd-two.md'), 'bb\n');
+    fs.writeFileSync(path.join(agentDir, 'README.md'), 'not an agent\n');
+
+    const result = generateBaseline({
+      dir: agentDir,
+      outPath,
+      predicate: (f) => f.startsWith('gsd-'),
+    });
+    assert.strictEqual(result.count, 2, 'only gsd-*.md files should be baselined');
+    const written = JSON.parse(fs.readFileSync(outPath, 'utf-8'));
+    assert.deepStrictEqual(Object.keys(written), ['gsd-one.md', 'gsd-two.md']);
+  });
 });

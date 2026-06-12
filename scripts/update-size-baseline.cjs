@@ -16,9 +16,12 @@
 
 const fs = require('fs');
 const path = require('path');
-const { measureWorkflows, WORKFLOWS_DIR } = require('./workflow-size.cjs');
+const { measureMdFiles, WORKFLOWS_DIR } = require('./workflow-size.cjs');
 
 const BASELINE_PATH = path.join(__dirname, '..', 'tests', 'workflow-size-baseline.json');
+const AGENTS_DIR = path.join(__dirname, '..', 'agents');
+const AGENT_BASELINE_PATH = path.join(__dirname, '..', 'tests', 'agent-size-baseline.json');
+const isGsdAgent = (f) => f.startsWith('gsd-');
 
 /**
  * Serialize a size map to the on-disk baseline format: keys sorted, 2-space
@@ -34,25 +37,32 @@ function serializeBaseline(sizes) {
 }
 
 /**
- * Write the baseline file from the measured workflow sizes.
+ * Write a baseline file from the measured `.md` sizes in a directory.
  *
  * @param {object} [opts]
- * @param {string} [opts.dir]      - Workflows dir to measure (default canonical).
- * @param {string} [opts.outPath]  - Baseline file to write (default canonical).
+ * @param {string} [opts.dir]       - Directory to measure (default: workflows).
+ * @param {string} [opts.outPath]   - Baseline file to write (default: workflow).
+ * @param {function(string): boolean} [opts.predicate] - Filename filter.
  * @returns {{ outPath: string, count: number, content: string }}
  */
-function generateBaseline({ dir = WORKFLOWS_DIR, outPath = BASELINE_PATH } = {}) {
-  const sizes = measureWorkflows(dir);
+function generateBaseline({ dir = WORKFLOWS_DIR, outPath = BASELINE_PATH, predicate } = {}) {
+  const sizes = measureMdFiles(dir, predicate);
   const content = serializeBaseline(sizes);
   fs.writeFileSync(outPath, content);
   return { outPath, count: Object.keys(sizes).length, content };
 }
 
 if (require.main === module) {
-  const { outPath, count } = generateBaseline();
-  process.stdout.write(
-    `Wrote ${count} workflow sizes to ${path.relative(process.cwd(), outPath)}\n`
-  );
+  const targets = [
+    { label: 'workflow', dir: WORKFLOWS_DIR, outPath: BASELINE_PATH },
+    { label: 'agent', dir: AGENTS_DIR, outPath: AGENT_BASELINE_PATH, predicate: isGsdAgent },
+  ];
+  for (const t of targets) {
+    const { outPath, count } = generateBaseline(t);
+    process.stdout.write(
+      `Wrote ${count} ${t.label} sizes to ${path.relative(process.cwd(), outPath)}\n`
+    );
+  }
 }
 
-module.exports = { generateBaseline, serializeBaseline, BASELINE_PATH };
+module.exports = { generateBaseline, serializeBaseline, BASELINE_PATH, AGENT_BASELINE_PATH };

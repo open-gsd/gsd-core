@@ -51,18 +51,40 @@ function listWorkflowStems(dir = WORKFLOWS_DIR) {
 }
 
 /**
- * Measure every top-level workflow file, keyed by filename (`<stem>.md`).
+ * Measure every top-level `.md` file in `dir`, keyed by filename, byte sizes.
+ * Generic over directory and an optional filename predicate — used for both
+ * workflows (`gsd-core/workflows/*.md`) and agents (`agents/gsd-*.md`) so the
+ * size guards and the baseline generator share one measurement path (#1074).
+ * Non-recursive by design.
  *
- * @param {string} [dir] - Workflows directory (defaults to the canonical one).
- * @returns {Object<string, number>} Map of `<stem>.md` → LF byte size, with
- *   keys inserted in sorted order.
+ * @param {string} dir - Directory to scan.
+ * @param {function(string): boolean} [predicate] - Filename filter (default: all `.md`).
+ * @returns {Object<string, number>} Map of filename → LF byte size, keys sorted.
  */
-function measureWorkflows(dir = WORKFLOWS_DIR) {
+function measureMdFiles(dir, predicate = () => true) {
   const out = {};
-  for (const stem of listWorkflowStems(dir)) {
-    out[`${stem}.md`] = lfByteCount(path.join(dir, `${stem}.md`));
-  }
+  const names = fs
+    .readdirSync(dir)
+    .filter((f) => f.endsWith('.md') && predicate(f))
+    .sort();
+  for (const name of names) out[name] = lfByteCount(path.join(dir, name));
   return out;
 }
 
-module.exports = { WORKFLOWS_DIR, lfByteCount, listWorkflowStems, measureWorkflows };
+/**
+ * Measure every top-level workflow file, keyed by filename (`<stem>.md`).
+ *
+ * @param {string} [dir] - Workflows directory (defaults to the canonical one).
+ * @returns {Object<string, number>} Map of `<stem>.md` → LF byte size, sorted.
+ */
+function measureWorkflows(dir = WORKFLOWS_DIR) {
+  return measureMdFiles(dir);
+}
+
+module.exports = {
+  WORKFLOWS_DIR,
+  lfByteCount,
+  listWorkflowStems,
+  measureMdFiles,
+  measureWorkflows,
+};
