@@ -546,6 +546,112 @@ describe('runtime-launcher-parity (#373)', () => {
   });
 });
 
+// ─── Issue #381: standalone gsd_run executable + CLAUDE_ENV_FILE persistence ──
+describe('runtime-launcher-parity — standalone executable (#381)', () => {
+  const BIN_DIR = path.join(__dirname, '..', 'gsd-core', 'bin');
+  const GSD_RUN_SRC = path.join(BIN_DIR, 'gsd_run');
+
+  // ─── (I) gsd_run executable delegates to gsd-tools.cjs beside it ──────────
+  test('(I) gsd_run executable delegates to gsd-tools.cjs beside it', () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-381-I-'));
+    try {
+      const binDir = path.join(base, 'gsd-core', 'bin');
+      fs.mkdirSync(binDir, { recursive: true });
+
+      // Copy the real gsd_run executable into the temp bin dir
+      fs.copyFileSync(GSD_RUN_SRC, path.join(binDir, 'gsd_run'));
+      fs.chmodSync(path.join(binDir, 'gsd_run'), 0o755);
+
+      // Write a stub gsd-tools.cjs that echoes its args
+      fs.writeFileSync(
+        path.join(binDir, 'gsd-tools.cjs'),
+        `console.log('GSD_TOOLS_STUB:' + process.argv.slice(2).join(' '))`,
+      );
+
+      const stdout = execFileSync('sh', [path.join(binDir, 'gsd_run'), 'query', 'x'], {
+        encoding: 'utf8',
+      });
+      assert.ok(
+        stdout.includes('GSD_TOOLS_STUB:query x'),
+        `Expected stdout to contain "GSD_TOOLS_STUB:query x", got: ${stdout.trim()}`,
+      );
+    } finally {
+      cleanup(base);
+    }
+  });
+
+  // ─── (J) preamble persists bin dir to CLAUDE_ENV_FILE ─────────────────────
+  test('(J) preamble persists bin dir to CLAUDE_ENV_FILE so a fresh shell resolves gsd_run', () => {
+    // Use a RUNTIME_DIR whose path contains a SPACE to prove single-quote safety.
+    const baseParent = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-381-J-'));
+    const base = path.join(baseParent, 'has space');
+    try {
+      const binDir = path.join(base, 'gsd-core', 'bin');
+      fs.mkdirSync(binDir, { recursive: true });
+
+      // gsd_run stub that prints GSD_RUN_STUB:<args>
+      const gsdRunStub = path.join(binDir, 'gsd_run');
+      fs.writeFileSync(gsdRunStub, '#!/bin/sh\necho "GSD_RUN_STUB:$*"\n');
+      fs.chmodSync(gsdRunStub, 0o755);
+
+      // gsd-tools.cjs stub (must exist for preamble first arm to win)
+      fs.writeFileSync(path.join(binDir, 'gsd-tools.cjs'), '// stub');
+
+      const envFile = path.join(baseParent, 'envfile');
+      const snippet = fs.readFileSync(SNIPPET_FILE, 'utf8');
+
+      // Script: just source the preamble with RUNTIME_DIR + CLAUDE_ENV_FILE set
+      const preambleScript = path.join(baseParent, 'run-preamble.sh');
+      fs.writeFileSync(preambleScript, snippet);
+
+      execFileSync('bash', [preambleScript], {
+        encoding: 'utf8',
+        env: {
+          RUNTIME_DIR: base,
+          CLAUDE_ENV_FILE: envFile,
+          PATH: process.env.PATH,
+        },
+      });
+
+      // Assert envfile exists and the persisted line is single-quoted
+      assert.ok(fs.existsSync(envFile), `Expected CLAUDE_ENV_FILE (${envFile}) to be created after preamble runs`);
+      const envFileContent = fs.readFileSync(envFile, 'utf8');
+      // The persisted line must single-quote the directory (neutralising $, spaces, etc.)
+      // and keep "$PATH" expanding at source time.
+      // Expected form: export PATH='<dir>':"$PATH"
+      assert.ok(
+        envFileContent.includes("export PATH='"),
+        `Expected envfile to contain single-quoted export PATH line, got: ${envFileContent.trim()}`,
+      );
+      assert.ok(
+        envFileContent.includes('has space/gsd-core/bin'),
+        `Expected envfile to contain the spaced bin dir, got: ${envFileContent.trim()}`,
+      );
+      assert.ok(
+        envFileContent.includes(':"$PATH"'),
+        `Expected envfile to contain :"$PATH" (double-quoted, expands at source time), got: ${envFileContent.trim()}`,
+      );
+
+      // Simulate a LATER fresh block that SOURCES the env file to get gsd_run on PATH.
+      // The later shell does NOT have the bin dir on PATH beforehand — it only gets it
+      // by sourcing the env file.  We use a minimal PATH (no temp bin dir pre-injected).
+      const stdout = execFileSync('bash', ['-c', '. "$CLAUDE_ENV_FILE"; gsd_run hello'], {
+        encoding: 'utf8',
+        env: {
+          CLAUDE_ENV_FILE: envFile,
+          PATH: process.env.PATH,
+        },
+      });
+      assert.ok(
+        stdout.includes('GSD_RUN_STUB:hello'),
+        `Expected stdout to contain "GSD_RUN_STUB:hello" after sourcing env file, got: ${stdout.trim()}`,
+      );
+    } finally {
+      cleanup(baseParent);
+    }
+  });
+});
+
 // ─── Agent parity — runtime-launcher-parity — agents (#1041) ─────────────────
 describe('runtime-launcher-parity — agents (#1041)', () => {
   // ─── (B-agents) Exactly ONE canonical preamble per using agent file ────────

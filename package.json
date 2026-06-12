@@ -4,7 +4,8 @@
   "description": "GSD Core is a meta-prompting, context engineering, and spec-driven development system for AI coding agents.",
   "bin": {
     "gsd-core": "bin/install.js",
-    "gsd-tools": "gsd-core/bin/gsd-tools.cjs"
+    "gsd-tools": "gsd-core/bin/gsd-tools.cjs",
+    "gsd_run": "gsd-core/bin/gsd_run"
   },
   "files": [
     "bin",
