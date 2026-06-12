@@ -88,7 +88,7 @@ export const TAXONOMY: TaxonomyEntry[] = [
   { id: 'empty', name: 'Empty / degenerate', shapes: ['collection', 'text'], probe: 'What is the result for empty, single-element, or null input?' },
   { id: 'encoding', name: 'Encoding / representation', shapes: ['text'], probe: 'Whose definition of length/equality applies — bytes, code points, grapheme clusters, or normalized form?' },
   { id: 'ordering', name: 'Ordering / stability', shapes: ['collection'], probe: 'When elements compare equal, is output order specified and stable?' },
-  { id: 'precision', name: 'Precision / overflow', shapes: ['numeric-range'], probe: 'Where can precision loss or overflow occur, and what is the contract?' },
+  { id: 'precision', name: 'Precision / overflow', shapes: ['numeric-range'], probe: 'Where can precision loss, overflow, or rounding/tie-breaking occur — and what is the exact contract (e.g. half-up vs half-to-even, ceil/floor/truncate)?' },
   { id: 'idempotency', name: 'Idempotency / repetition', shapes: ['stateful'], probe: 'What happens if this runs twice on the same input?' },
   { id: 'concurrency', name: 'Concurrency / effect ordering', shapes: ['stateful', 'io'], probe: 'If interrupted or run in parallel, what is guaranteed?' },
 ];

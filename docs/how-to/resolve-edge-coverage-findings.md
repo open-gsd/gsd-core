@@ -12,7 +12,7 @@ For the category taxonomy and the reasoning behind front-of-pipeline edge analys
 
 Each finding is one **applicable** edge for one requirement — a boundary the probe's relevance filter decided is in scope for that requirement's shape, and that you have not yet addressed. A finding is phrased as a probe question, for example:
 
-> **R3 · precision** — Where can precision loss or overflow occur, and what is the contract?
+> **R3 · precision** — Where can precision loss, overflow, or rounding/tie-breaking occur — and what is the exact contract (e.g. half-up vs half-to-even, ceil/floor/truncate)?
 
 You must resolve each finding into exactly one of four states. Claude presents them as a numbered choice (or an `AskUserQuestion` menu).
 
