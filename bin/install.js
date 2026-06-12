@@ -467,7 +467,7 @@ function getDirName(runtime) {
   if (runtime === 'codex') return '.codex';
   if (runtime === 'antigravity') return '.agents';
   if (runtime === 'cursor') return '.cursor';
-  if (runtime === 'windsurf') return '.windsurf';
+  if (runtime === 'windsurf') return '.devin';
   if (runtime === 'augment') return '.augment';
   if (runtime === 'trae') return '.trae';
   if (runtime === 'qwen') return '.qwen';
@@ -2504,18 +2504,20 @@ function convertClaudeToWindsurfMarkdown(content) {
   // Replace subagent_type from Claude to Windsurf format
   converted = converted.replace(/subagent_type="general-purpose"/g, 'subagent_type="generalPurpose"');
   converted = converted.replace(/\$ARGUMENTS\b/g, '{{GSD_ARGS}}');
-  // Replace project-level Claude conventions with Windsurf equivalents
-  converted = converted.replace(/`\.\/CLAUDE\.md`/g, '`.windsurf/rules`');
-  converted = converted.replace(/\.\/CLAUDE\.md/g, '.windsurf/rules');
-  converted = converted.replace(/`CLAUDE\.md`/g, '`.windsurf/rules`');
-  converted = converted.replace(/\bCLAUDE\.md\b/g, '.windsurf/rules');
-  converted = converted.replace(/\.claude\/skills\//g, '.windsurf/skills/');
-  converted = converted.replace(/\.\/\.claude\//g, './.windsurf/');
-  converted = converted.replace(/\.claude\//g, '.windsurf/');
+  // Replace project-level Claude conventions with Windsurf/Devin equivalents
+  // Workspace skills install to .devin/ (Devin Desktop preferred dir, #1085).
+  // Legacy .windsurf/ is still recognized on read but new installs use .devin/.
+  converted = converted.replace(/`\.\/CLAUDE\.md`/g, '`.devin/rules`');
+  converted = converted.replace(/\.\/CLAUDE\.md/g, '.devin/rules');
+  converted = converted.replace(/`CLAUDE\.md`/g, '`.devin/rules`');
+  converted = converted.replace(/\bCLAUDE\.md\b/g, '.devin/rules');
+  converted = converted.replace(/\.claude\/skills\//g, '.devin/skills/');
+  converted = converted.replace(/\.\/\.claude\//g, './.devin/');
+  converted = converted.replace(/\.claude\//g, '.devin/');
   // Bare forms (no trailing slash) — after slash forms to avoid double-rewrite.
   // Use negative lookahead (?![\w-]) to preserve .claude-plugin and .claudeignore.
-  converted = converted.replace(/~\/\.claude(?![\w-])/g, '~/.windsurf');
-  converted = converted.replace(/\$HOME\/\.claude(?![\w-])/g, '$HOME/.windsurf');
+  converted = converted.replace(/~\/\.claude(?![\w-])/g, '~/.devin');
+  converted = converted.replace(/\$HOME\/\.claude(?![\w-])/g, '$HOME/.devin');
   // Environment variable name rewrite
   converted = converted.replace(/\bCLAUDE_CONFIG_DIR\b/g, 'WINDSURF_CONFIG_DIR');
   // Remove Claude Code-specific bug workarounds before brand replacement
@@ -6782,8 +6784,9 @@ function migrateLegacyDevPreferencesToSkill(targetDir, saved, runtime, scope = '
  * @param {string} stagedDir
  * @param {string} runtime
  * @param {string} pathPrefix  e.g. "~/.codex/" — trailing-slash string
+ * @param {boolean} [isGlobal=false]  true when the install is a global (home-dir) install
  */
-function applyRuntimeContentRewritesInPlace(stagedDir, runtime, pathPrefix) {
+function applyRuntimeContentRewritesInPlace(stagedDir, runtime, pathPrefix, isGlobal = false) {
   if (!fs.existsSync(stagedDir)) return;
 
   // Walk all SKILL.md files under stagedDir
@@ -6794,7 +6797,7 @@ function applyRuntimeContentRewritesInPlace(stagedDir, runtime, pathPrefix) {
         walkAndRewrite(fullPath);
       } else if (entry.name.endsWith('.md')) {
         let content = fs.readFileSync(fullPath, 'utf8');
-        content = _applyRuntimeRewrites(content, runtime, pathPrefix);
+        content = _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal);
         fs.writeFileSync(fullPath, content);
       }
     }
@@ -6815,9 +6818,10 @@ function applyRuntimeContentRewritesInPlace(stagedDir, runtime, pathPrefix) {
  * @param {string} stagedDir  directory of staged flat .md command files (may be source dir)
  * @param {string} runtime
  * @param {string} pathPrefix
+ * @param {boolean} [isGlobal=false]  true when the install is a global (home-dir) install
  * @returns {string}  path to a temp dir with rewritten files (caller is responsible for cleanup)
  */
-function applyRuntimeContentRewritesForCommandsInPlace(stagedDir, runtime, pathPrefix) {
+function applyRuntimeContentRewritesForCommandsInPlace(stagedDir, runtime, pathPrefix, isGlobal = false) {
   if (!fs.existsSync(stagedDir)) return stagedDir;
   // Always copy to a temp dir — stageSkillsForProfile() returns the original source
   // dir on full/default profile (skills === '*'), so writing in-place would corrupt the
@@ -6827,7 +6831,7 @@ function applyRuntimeContentRewritesForCommandsInPlace(stagedDir, runtime, pathP
     for (const entry of fs.readdirSync(stagedDir, { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
       let content = fs.readFileSync(path.join(stagedDir, entry.name), 'utf8');
-      content = _applyRuntimeRewrites(content, runtime, pathPrefix);
+      content = _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal);
       // For augment commands, apply the markdown conversion so tool references
       // and skill paths use Augment equivalents.
       if (runtime === 'augment') {
@@ -6849,9 +6853,10 @@ function applyRuntimeContentRewritesForCommandsInPlace(stagedDir, runtime, pathP
  * @param {string} content
  * @param {string} runtime
  * @param {string} pathPrefix  trailing-slash string
+ * @param {boolean} [isGlobal=false]  true when the install is a global (home-dir) install
  * @returns {string}
  */
-function _applyRuntimeRewrites(content, runtime, pathPrefix) {
+function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false) {
   const dirName = getDirName(runtime);
   const normalizedPathPrefix = pathPrefix.replace(/\/$/, '');
 
@@ -6888,18 +6893,30 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix) {
       content = processAttribution(content, getCommitAttribution(runtime));
       break;
 
-    case 'windsurf':
+    case 'windsurf': {
       content = content.replace(/~\/\.claude\//g, pathPrefix);
       content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
       content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
       // Bare forms (no trailing slash) — use (?![\w-]) instead of \b so that
       // .claude-plugin / .claudeignore are NOT corrupted (the \b word-boundary
-      // fires between 'e' and '-', which rewrites .claude-plugin → .windsurf-plugin).
+      // fires between 'e' and '-', which rewrites .claude-plugin → .devin-plugin).
       content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
       content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
       content = content.replace(/~\/\.codeium\/windsurf\//g, pathPrefix);
+      // Stage-1 converter rewrites .claude/skills/ → .devin/skills/ (workspace-relative
+      // form). For global installs the real path is pathPrefix + skills/, so fix that up
+      // here using the real isGlobal flag (threaded from installRuntimeArtifacts scope,
+      // not derived from pathPrefix substring which misclassifies custom config dirs).
+      // For local installs, the relative .devin/ form is correct — leave it. (#1085)
+      if (isGlobal) {
+        content = content.replace(/\.devin\/skills\//g, `${pathPrefix}skills/`);
+        content = content.replace(/\.\/\.devin\//g, pathPrefix);
+        content = content.replace(/~\/\.devin(?![\w-])/g, normalizedPathPrefix);
+        content = content.replace(/\$HOME\/\.devin(?![\w-])/g, normalizedPathPrefix);
+      }
       content = processAttribution(content, getCommitAttribution(runtime));
       break;
+    }
 
     case 'augment':
       content = content.replace(/~\/\.claude\//g, pathPrefix);
@@ -7331,11 +7348,12 @@ function installRuntimeArtifacts(runtime, configDir, scope, resolvedProfile) {
     // stagedForCopy: the directory to copy from (may differ from staged if rewrites
     // produce a temp copy — see applyRuntimeContentRewritesForCommandsInPlace).
     let stagedForCopy = staged;
+    const isGlobal = scope === 'global';
     if (kind.kind === 'skills' || kind.kind === 'kimi-agents') {
-      applyRuntimeContentRewritesInPlace(staged, runtime, pathPrefix);
+      applyRuntimeContentRewritesInPlace(staged, runtime, pathPrefix, isGlobal);
     } else if (kind.kind === 'commands') {
       // Returns a temp dir with rewritten content so source files are never mutated.
-      stagedForCopy = applyRuntimeContentRewritesForCommandsInPlace(staged, runtime, pathPrefix);
+      stagedForCopy = applyRuntimeContentRewritesForCommandsInPlace(staged, runtime, pathPrefix, isGlobal);
     }
     // applyRuntimeContentRewritesForCommandsInPlace() returns a fresh mkdtemp dir under
     // os.tmpdir() (gsd-cmd-rewrites-*); remove it once copied so it does not accumulate (#856).
@@ -7670,11 +7688,12 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
       jsContent = jsContent.replace(/\bClaude Code\b/g, 'Cursor');
       fs.writeFileSync(destPath, jsContent);
     } else if (isWindsurf && (entry.name.endsWith('.cjs') || entry.name.endsWith('.js'))) {
-      // For Windsurf, also convert Claude references in JS/CJS utility scripts
+      // For Windsurf/Devin, also convert Claude references in JS/CJS utility scripts.
+      // Workspace skills install to .devin/ (Devin Desktop preferred dir, #1085).
       let jsContent = fs.readFileSync(srcPath, 'utf8');
       jsContent = jsContent.replace(/gsd:/gi, 'gsd-');
-      jsContent = jsContent.replace(/\.claude\/skills\//g, '.windsurf/skills/');
-      jsContent = jsContent.replace(/CLAUDE\.md/g, '.windsurf/rules');
+      jsContent = jsContent.replace(/\.claude\/skills\//g, '.devin/skills/');
+      jsContent = jsContent.replace(/CLAUDE\.md/g, '.devin/rules');
       jsContent = jsContent.replace(/\bClaude Code\b/g, 'Windsurf');
       fs.writeFileSync(destPath, jsContent);
     } else if (isTrae && (entry.name.endsWith('.cjs') || entry.name.endsWith('.js'))) {
@@ -11907,7 +11926,8 @@ const _LEGACY_SCAN_SUBDIR_NAMES = [
   '.agents',    // antigravity local form (canonical, #791)
   '.agent',     // antigravity local form (legacy, backward-compat)
   '.cursor',
-  '.windsurf',
+  '.devin',     // windsurf local form (canonical, #1085; Devin Desktop preferred dir)
+  '.windsurf',  // windsurf local form (legacy, backward-compat with pre-#1085 installs)
   '.codeium/windsurf',
   '.augment',
   '.trae',
