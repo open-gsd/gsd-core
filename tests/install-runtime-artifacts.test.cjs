@@ -75,6 +75,21 @@ function writeCommandEntry(destDir, prefix, stem) {
   fs.writeFileSync(path.join(destDir, `${prefix}${stem}.md`), `# ${stem}\n`);
 }
 
+function readAllSkillMd(dir) {
+  const out = [];
+  if (!fs.existsSync(dir)) return '';
+  const stack = [dir];
+  while (stack.length) {
+    const cur = stack.pop();
+    for (const ent of fs.readdirSync(cur, { withFileTypes: true })) {
+      const p = path.join(cur, ent.name);
+      if (ent.isDirectory()) stack.push(p);
+      else if (ent.name === 'SKILL.md') out.push(fs.readFileSync(p, 'utf8'));
+    }
+  }
+  return out.join('\n');
+}
+
 describe('installRuntimeArtifacts — skills runtimes write gsd-prefixed skill dirs', () => {
   for (const runtime of SKILLS_RUNTIMES_LAYOUT) {
     test(`${runtime}: gsd-prefixed skill dirs in skills/`, (t) => {
@@ -515,4 +530,45 @@ describe('uninstallRuntimeArtifacts — legacy cleanup runs before layout remova
     assert.ok(!fs.existsSync(legacyDir));
     assert.ok(fs.existsSync(path.join(userSkill, 'SKILL.md')));
   });
+});
+
+describe('skills wrapper threads install scope into converter isGlobal (regression: local installs must not leak global home paths)', () => {
+  // Bug: the skills wrapper in runtime-artifact-layout passed `runtime` (a truthy
+  // string) as the converter's 3rd positional arg. For antigravity/copilot that
+  // param was `isGlobal`, so LOCAL installs always took the GLOBAL path branch and
+  // leaked ~/.gemini/antigravity or ~/.copilot instead of the workspace path.
+  for (const { runtime, globalMarker, localMarker } of [
+    { runtime: 'antigravity', globalMarker: '~/.gemini/antigravity', localMarker: '.agents' },
+    { runtime: 'copilot', globalMarker: '~/.copilot', localMarker: '.github' },
+  ]) {
+    test(`${runtime}: local skill content uses workspace path, not global home`, (t) => {
+      const globalDir = createTempDir(`gsd-ial-g-${runtime}-`);
+      const localDir = createTempDir(`gsd-ial-l-${runtime}-`);
+      t.after(() => { cleanup(globalDir); cleanup(localDir); });
+
+      installRuntimeArtifacts(runtime, globalDir, 'global', RESOLVED_CORE);
+      installRuntimeArtifacts(runtime, localDir, 'local', RESOLVED_CORE);
+
+      const gSkills = resolveRuntimeArtifactLayout(runtime, globalDir, 'global').kinds.find(k => k.kind === 'skills');
+      const lSkills = resolveRuntimeArtifactLayout(runtime, localDir, 'local').kinds.find(k => k.kind === 'skills');
+      assert.ok(gSkills && lSkills, `${runtime}: must resolve a skills kind for both scopes`);
+
+      const gCombined = readAllSkillMd(path.join(globalDir, gSkills.destSubpath));
+      const lCombined = readAllSkillMd(path.join(localDir, lSkills.destSubpath));
+
+      // Precondition (non-vacuity guard): some core skill carries a ~/.claude
+      // reference, so the GLOBAL install surfaces the global home marker. If this
+      // assertion ever fails, the source skills lost their path references — fix
+      // the fixture/source, do not delete this test.
+      assert.ok(gCombined.includes(globalMarker),
+        `${runtime}: precondition — global install should contain '${globalMarker}'`);
+
+      // The actual regression: a LOCAL install must NOT leak the global home path…
+      assert.ok(!lCombined.includes(globalMarker),
+        `${runtime}: local install must NOT leak global home path '${globalMarker}'`);
+      // …and SHOULD reference the workspace-relative path.
+      assert.ok(lCombined.includes(localMarker),
+        `${runtime}: local install must reference workspace path '${localMarker}'`);
+    });
+  }
 });

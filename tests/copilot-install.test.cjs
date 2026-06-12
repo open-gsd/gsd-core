@@ -538,7 +538,7 @@ description: Test skill
 
 Check ~/.claude/settings and ./.claude/local and $HOME/.claude/global.`;
 
-    const result = convertClaudeCommandToCopilotSkill(input, 'gsd-test', true);
+    const result = convertClaudeCommandToCopilotSkill(input, 'gsd-test', null, null, true);
     assert.ok(result.includes('~/.copilot/settings'), 'tilde path converted to global');
     assert.ok(result.includes('./.github/local'), 'dot-slash path converted');
     assert.ok(result.includes('$HOME/.copilot/global'), '$HOME path converted to global');

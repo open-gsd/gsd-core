@@ -1737,12 +1737,13 @@ function convertClaudeToCopilotContent(content, isGlobal = false) {
   return c;
 }
 
+// isGlobal is the 5th positional arg (3rd/4th are runtime/cmdNames passed by the skills wrapper). See runtime-artifact-layout skillsKind.
 /**
  * Convert a Claude command (.md) to a Copilot skill (SKILL.md).
  * Transforms frontmatter only — body passes through with CONV-06/07 applied.
  * Skills keep original tool names (no mapping) per CONTEXT.md decision.
  */
-function convertClaudeCommandToCopilotSkill(content, skillName, isGlobal = false) {
+function convertClaudeCommandToCopilotSkill(content, skillName, _runtime = null, _cmdNames = null, isGlobal = false) {
   const converted = convertClaudeToCopilotContent(content, isGlobal);
   const { frontmatter, body } = extractFrontmatterAndBody(converted);
   if (!frontmatter) return converted;
@@ -2240,12 +2241,13 @@ function convertClaudeToAntigravityContent(content, isGlobal = false) {
   return c;
 }
 
+// isGlobal is the 5th positional arg (3rd/4th are runtime/cmdNames passed by the skills wrapper). See runtime-artifact-layout skillsKind.
 /**
  * Convert a Claude command (.md) to an Antigravity skill (SKILL.md).
  * Transforms frontmatter to minimal name + description only.
  * Body passes through with path/command conversions applied.
  */
-function convertClaudeCommandToAntigravitySkill(content, skillName, isGlobal = false) {
+function convertClaudeCommandToAntigravitySkill(content, skillName, _runtime = null, _cmdNames = null, isGlobal = false) {
   const converted = convertClaudeToAntigravityContent(content, isGlobal);
   const { frontmatter, body } = extractFrontmatterAndBody(converted);
   if (!frontmatter) return converted;

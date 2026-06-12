@@ -251,6 +251,10 @@ function kimiAgentsKind(destSubpath: string, prefix: string, configDir: string):
  * @param runtime        canonical runtime ID (gates Hermes/Qwen branding in converter)
  * @param configDir      runtime config dir (for .gsd-source marker resolution)
  * @param nested         if true, nest concrete skills under their ns-* routers (#69)
+ * @param scope          install scope; converted to isGlobal and passed as 5th positional
+ *                       arg so scope-aware converters (antigravity, copilot) can choose
+ *                       between global home paths and workspace-relative paths without
+ *                       colliding with the `runtime` string at position 3.
  */
 function skillsKind(
   destSubpath: string,
@@ -259,6 +263,7 @@ function skillsKind(
   runtime: string,
   configDir: string,
   nested = false,
+  scope: 'local' | 'global' = 'global',
 ): ArtifactKind {
   return {
     kind: 'skills',
@@ -266,12 +271,17 @@ function skillsKind(
     prefix,
     stage: (resolved) => {
       const installExports = getInstallExports();
-      const realConverter = installExports[converterName] as (content: string, skillName: string, runtime: string, cmdNames: string[]) => string;
+      const realConverter = installExports[converterName] as (content: string, skillName: string, runtime: string, cmdNames: string[], isGlobal: boolean) => string;
       // Compute cmdNames once per stage call for performance (#3583).
-      // Extra args are ignored by converters that don't need runtime/cmdNames.
+      // Extra trailing args are ignored by converters that don't need them. The
+      // isGlobal flag is the 5th positional (NOT the 3rd): the 3rd positional is
+      // `runtime` for the claude/kimi/cline converters, so the scope-aware
+      // converters (antigravity, copilot) read isGlobal from position 5 to avoid
+      // colliding with `runtime` and always taking the global branch.
       const cmdNames = installExports.readGsdCommandNames();
+      const isGlobal = scope === 'global';
       const wrappedConverter = (content: string, skillName: string): string =>
-        realConverter(content, skillName, runtime, cmdNames);
+        realConverter(content, skillName, runtime, cmdNames, isGlobal);
       return stageSkillsForRuntimeAsSkills(findInstallSourceRoot(configDir), resolved, wrappedConverter, prefix, nested);
     },
   };
@@ -382,7 +392,7 @@ function getRegistry(): { runtimes: Record<string, { runtime?: { artifactLayout?
  * Map a single ArtifactKindDescriptor entry to an ArtifactKind using the
  * matching builder function. Mirrors the hand-built calls in the old switch.
  */
-function dispatchKindEntry(entry: ArtifactKindDescriptor, runtime: string, configDir: string): ArtifactKind {
+function dispatchKindEntry(entry: ArtifactKindDescriptor, runtime: string, configDir: string, scope: 'local' | 'global'): ArtifactKind {
   const { kind, destSubpath, prefix, nesting, converter } = entry;
   const nested = nesting === 'nested';
 
@@ -402,7 +412,7 @@ function dispatchKindEntry(entry: ArtifactKindDescriptor, runtime: string, confi
           `resolveRuntimeArtifactLayout: skills entry for '${runtime}' has converter=null (converter is required for skills)`,
         );
       }
-      return skillsKind(destSubpath, prefix, converter, runtime, configDir, nested);
+      return skillsKind(destSubpath, prefix, converter, runtime, configDir, nested, scope);
 
     case 'kimi-agents':
       return kimiAgentsKind(destSubpath, prefix, configDir);
@@ -438,7 +448,7 @@ function resolveRuntimeArtifactLayout(runtime: string, configDir: string, scope:
   }
 
   const entries: ArtifactKindDescriptor[] = desc[scope] ?? [];
-  const kinds: ArtifactKind[] = entries.map((entry) => dispatchKindEntry(entry, runtime, configDir));
+  const kinds: ArtifactKind[] = entries.map((entry) => dispatchKindEntry(entry, runtime, configDir, scope));
 
   return { runtime, configDir, scope, kinds };
 }
