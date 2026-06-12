@@ -373,6 +373,116 @@ describe('topological step ordering', () => {
     assert.strictEqual(sorted[0].capId, 'a-cap', 'a-cap should come first (alphabetical tiebreak)');
     assert.strictEqual(sorted[1].capId, 'z-cap');
   });
+
+  test('contributions at one point use produces/consumes dependency order', () => {
+    const capMap = new Map([
+      ['a-consumer', {
+        id: 'a-consumer',
+        role: 'feature',
+        title: 'Consumer',
+        tier: 'full',
+        requires: [],
+        skills: [],
+        agents: [],
+        hooks: [],
+        config: {},
+        steps: [],
+        contributions: [{
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { inline: 'Consume produced planning note.' },
+          produces: [],
+          consumes: ['PLAN-NOTE.md'],
+          onError: 'skip',
+        }],
+        gates: [],
+      }],
+      ['b-producer', {
+        id: 'b-producer',
+        role: 'feature',
+        title: 'Producer',
+        tier: 'full',
+        requires: [],
+        skills: [],
+        agents: [],
+        hooks: [],
+        config: {},
+        steps: [],
+        contributions: [{
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { inline: 'Produce planning note.' },
+          produces: ['PLAN-NOTE.md'],
+          consumes: [],
+          onError: 'skip',
+        }],
+        gates: [],
+      }],
+    ]);
+
+    const registry = buildRegistry(capMap);
+    assert.deepEqual(
+      registry.byLoopPoint['plan:pre'].contributions.map((c) => c.capId),
+      ['b-producer', 'a-consumer'],
+    );
+  });
+
+  test('contribution produces/consumes cycle throws a clear error', () => {
+    const capMap = new Map([
+      ['cap-a', {
+        id: 'cap-a',
+        role: 'feature',
+        title: 'A',
+        tier: 'full',
+        requires: [],
+        skills: [],
+        agents: [],
+        hooks: [],
+        config: {},
+        steps: [],
+        contributions: [{
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { inline: 'A.' },
+          produces: ['A.md'],
+          consumes: ['B.md'],
+          onError: 'skip',
+        }],
+        gates: [],
+      }],
+      ['cap-b', {
+        id: 'cap-b',
+        role: 'feature',
+        title: 'B',
+        tier: 'full',
+        requires: [],
+        skills: [],
+        agents: [],
+        hooks: [],
+        config: {},
+        steps: [],
+        contributions: [{
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { inline: 'B.' },
+          produces: ['B.md'],
+          consumes: ['A.md'],
+          onError: 'skip',
+        }],
+        gates: [],
+      }],
+    ]);
+
+    assert.throws(
+      () => buildRegistry(capMap),
+      (err) => {
+        assert.ok(err instanceof Error);
+        assert.match(err.message, /contributions/);
+        assert.match(err.message, /cycle/);
+        return true;
+      },
+    );
+  });
 });
 
 // ─── 4. --check drift detection ──────────────────────────────────────────────
@@ -1010,6 +1120,78 @@ describe('S1: fragment.path traversal guard', () => {
     const errors = validateCapability(makeCapWithContribPath(''), 'ui');
     assert.ok(errors.length > 0, 'Expected rejection for empty path');
     assert.ok(errors.some((e) => e.includes('fragment.path')));
+  });
+
+  test('non-string fragment.inline is rejected', () => {
+    const cap = {
+      ...UI_CAP,
+      contributions: [
+        {
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { inline: 42 },
+          when: 'workflow.ui_phase',
+          onError: 'skip',
+        },
+      ],
+    };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(errors.some((e) => e.includes('fragment.inline') && e.includes('string')));
+  });
+
+  test('empty fragment.inline string is rejected', () => {
+    const cap = {
+      ...UI_CAP,
+      contributions: [
+        {
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { inline: '' },
+          when: 'workflow.ui_phase',
+          onError: 'skip',
+        },
+      ],
+    };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(errors.some((e) => e.includes('fragment.inline') && e.includes('non-empty')));
+  });
+
+  test('non-array contribution produces is rejected', () => {
+    const cap = {
+      ...UI_CAP,
+      contributions: [
+        {
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { inline: 'Plan with UI context.' },
+          produces: 'PLAN-NOTE.md',
+          consumes: [],
+          when: 'workflow.ui_phase',
+          onError: 'skip',
+        },
+      ],
+    };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(errors.some((e) => e.includes('produces') && e.includes('array')));
+  });
+
+  test('non-string contribution consumes entry is rejected', () => {
+    const cap = {
+      ...UI_CAP,
+      contributions: [
+        {
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { inline: 'Plan with UI context.' },
+          produces: [],
+          consumes: [42],
+          when: 'workflow.ui_phase',
+          onError: 'skip',
+        },
+      ],
+    };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(errors.some((e) => e.includes('consumes entries') && e.includes('strings')));
   });
 });
 
