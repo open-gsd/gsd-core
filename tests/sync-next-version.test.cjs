@@ -115,10 +115,12 @@ test('syncViaPr — happy path: syncs and returns "synced"', () => {
     { cmd: 'git', args0: 'checkout', returns: '' },
     { cmd: 'npm', returns: '' },
     { cmd: 'git', args0: 'add', returns: '' },
-    // diff --cached --quiet throws → there IS a staged diff
+    // diff --cached --quiet throws with status 1 → there IS a staged diff
     { cmd: 'git', args0: 'diff', throws: Object.assign(new Error('diff'), { status: 1 }) },
     { cmd: 'git', args0: 'commit', returns: '' },
     { cmd: 'git', args0: 'push', returns: '' },
+    // gh pr list returns '' → no existing PR, so create path runs
+    { cmd: 'gh', args0: 'pr', args1: 'list', returns: '' },
     { cmd: 'gh', args0: 'pr', args1: 'create', returns: 'https://github.com/o/r/pull/777\n' },
     { cmd: 'gh', args0: 'pr', args1: 'edit', returns: '' },
     { cmd: 'gh', args0: 'pr', args1: 'merge', returns: '' },
@@ -188,4 +190,59 @@ test('main (no --in-place) with matching version → noop via syncViaPr', () => 
   // Should not throw; syncViaPr returns 'noop'
   main(['1.5.0'], { run });
   assert.ok(!run.calls.some((c) => c.cmd === 'gh'), 'should not call gh on noop');
+});
+
+// ---------------------------------------------------------------------------
+// H. syncViaPr — reuses existing open PR
+// ---------------------------------------------------------------------------
+test('syncViaPr — reuses an existing open PR instead of creating', () => {
+  const run = makeRun([
+    { cmd: 'git', args0: 'fetch', returns: '' },
+    { cmd: 'git', args0: 'show', returns: '{"version":"1.4.0"}' },
+    { cmd: 'git', args0: 'checkout', returns: '' },
+    { cmd: 'npm', returns: '' },
+    { cmd: 'git', args0: 'add', returns: '' },
+    { cmd: 'git', args0: 'diff', throws: Object.assign(new Error('diff'), { status: 1 }) },
+    { cmd: 'git', args0: 'commit', returns: '' },
+    { cmd: 'git', args0: 'push', returns: '' },
+    // gh pr list returns an existing PR URL
+    { cmd: 'gh', args0: 'pr', args1: 'list', returns: 'https://github.com/o/r/pull/555\n' },
+    { cmd: 'gh', args0: 'pr', args1: 'edit', returns: '' },
+    { cmd: 'gh', args0: 'pr', args1: 'merge', returns: '' },
+  ]);
+
+  const result = syncViaPr('1.5.0-rc.2', { run });
+  assert.equal(result, 'synced');
+
+  // Must NOT have called gh pr create
+  assert.ok(
+    !run.calls.some((c) => c.cmd === 'gh' && c.args[0] === 'pr' && c.args[1] === 'create'),
+    'should not call gh pr create when existing PR found',
+  );
+
+  // Admin merge must target PR 555
+  const mergeCall = run.calls.find((c) => c.cmd === 'gh' && c.args[0] === 'pr' && c.args[1] === 'merge');
+  assert.ok(mergeCall, 'should call gh pr merge');
+  assert.ok(mergeCall.args.includes('555'), 'merge should target PR 555');
+});
+
+// ---------------------------------------------------------------------------
+// I. syncViaPr — rethrows when git diff fails for a non-diff reason
+// ---------------------------------------------------------------------------
+test('syncViaPr — rethrows when git diff fails for a non-diff reason', () => {
+  const run = makeRun([
+    { cmd: 'git', args0: 'fetch', returns: '' },
+    { cmd: 'git', args0: 'show', returns: '{"version":"1.4.0"}' },
+    { cmd: 'git', args0: 'checkout', returns: '' },
+    { cmd: 'npm', returns: '' },
+    { cmd: 'git', args0: 'add', returns: '' },
+    // git diff throws with status 128 → real error, not a diff signal
+    { cmd: 'git', args0: 'diff', throws: Object.assign(new Error('fatal: not a git repo'), { status: 128 }) },
+  ]);
+
+  assert.throws(
+    () => syncViaPr('1.5.0-rc.2', { run }),
+    /fatal: not a git repo/,
+    'should rethrow the real error',
+  );
 });

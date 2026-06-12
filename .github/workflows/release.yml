@@ -465,6 +465,7 @@ jobs:
 
       - name: Sync next branch to the published pre-release
         if: ${{ !inputs.dry_run }}
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN || secrets.GITHUB_TOKEN }}
           PRE_VERSION: ${{ steps.prerelease.outputs.pre_version }}

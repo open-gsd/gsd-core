@@ -109,9 +109,14 @@ jobs:
       - name: Sync next's version to main's released version
         if: steps.check.outputs.next_exists == 'true'
         run: |
+          set -euo pipefail
           VERSION=$(git show origin/main:package.json | node -pe "JSON.parse(require('fs').readFileSync(0,'utf8')).version")
+          case "$VERSION" in
+            [0-9]*.[0-9]*.[0-9]*) : ;;
+            *) echo "refusing to sync next: unexpected version '$VERSION' from origin/main" >&2; exit 1 ;;
+          esac
           node scripts/sync-next-version.cjs "$VERSION" --in-place
-          git add -A
+          git add -u
           git diff --cached --quiet || git commit -m "chore: sync next package version to ${VERSION}"
           git push origin HEAD
 
