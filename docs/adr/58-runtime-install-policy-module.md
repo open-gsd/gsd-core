@@ -46,6 +46,10 @@ The policy module resolves *intent* as data; adapters turn that intent into byte
 - The plan/adapter contract becomes a stability surface that must be held narrow; drift there reintroduces the very divergence this seam removes.
 - Rollout is incremental, not big-bang: this ADR establishes the boundary (#58); the explicit Runtime Adapter Registry lands next (#60); legacy helper retirement follows (#56); downstream cleanup in #57.
 
+## Implementation (2026-06-11)
+
+The `InstallPlan` is realized as the exported `resolveInstallPlan(runtime)` in `runtime-config-adapter-registry` (co-located with adapter-selection, not a standalone module). It collects the install-level descriptor axes — `installSurface`, `writesSharedSettings`, `finishPermissionWriter`, `hookEvents`, `extendedHookEvents`, and `hooksSurface` — into one typed `InstallPlan` value. `install()` and `finishInstall()` in `bin/install.js` consume it directly. The spatial axes (`configHome`, `artifactLayout`, `commandStyle`) remain behind their self-resolving adapter modules (`runtime-homes`, `runtime-artifact-layout`, `runtime-slash`) as the execution adapters — consistent with this ADR's adapters-execute boundary.
+
 ## References
 
 - ADR-0001 — Dispatch Policy Module (pure-policy-projects / thin-adapters-execute precedent).
