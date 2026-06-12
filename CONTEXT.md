@@ -611,6 +611,12 @@ The canonical lint infrastructure adopted in ADR 452 (`docs/adr/452-eslint-lint-
 `DEFECT.TEST-SHELL-PIPELINE-NONPORTABLE.detect=test does readFileSync(md).match for a bash fence with literal \n, OR execFileSync('bash',...) gated only on a bash-presence probe; also verifying a new test with a file-scoped run instead of the full suite hides repo-wide static guards`
 `DEFECT.TEST-SHELL-PIPELINE-NONPORTABLE.fix-forward=match the fence with \r?\n and normalize the captured block to LF; gate pipeline execution on process.platform !== 'win32' && hasBash since the extraction LOGIC is platform-independent and POSIX coverage suffices; run the full suite (or the parity/lint guards) before push when adding a test file`
 
+`DEFECT.WINDOWS-TEST-PORTABILITY.symptom=local gsd-test runs Mac+Linux only (no Windows host); Windows-only test failures (chmod exec-bit not honored for PATH-executing extension-less scripts in Git Bash msys2; / vs \ path-separator in assertions; Git Bash msys2 shell semantics) surface ONLY in CI test (windows-latest,*) / full test (windows-latest,*) lanes, never locally`
+`DEFECT.WINDOWS-TEST-PORTABILITY.examples=PR #1084 (chmod 0o755 + bare-command execution failed on windows lane); test files that assert path.join result without normalizing to forward slashes`
+`DEFECT.WINDOWS-TEST-PORTABILITY.detect=npm run lint:windows-test-portability (tripwire: flags tests combining chmod exec-bit with sh/bash -c and no platform guard); watch CI windows matrix green before declaring a PR done`
+`DEFECT.WINDOWS-TEST-PORTABILITY.fix-forward=gate platform-specific execution with if (process.platform !== 'win32'); normalize path expectations to forward slashes with .replace(/\\/g, '/'); invoke scripts via explicit interpreter (sh <path>) rather than relying on exec-bit; annotate // windows-portability-ok: <reason> when a bypass is intentional`
+`DEFECT.WINDOWS-TEST-PORTABILITY.prevention=run lint:ci before opening a PR; treat the CI windows lane as the only true Windows signal — gsd-test (Mac/Linux only) cannot substitute for it`
+
 
 ---
 
