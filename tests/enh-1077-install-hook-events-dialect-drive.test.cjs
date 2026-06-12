@@ -23,13 +23,40 @@ process.env.GSD_TEST_MODE = '1';
  * AfterTool/BeforeTool dialect; all others get PostToolUse/PreToolUse.
  */
 
-const { test, describe, beforeEach, afterEach } = require('node:test');
+const { test, describe, before, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 
 const { install } = require('../bin/install.js');
 const { createTempDir, cleanup } = require('./helpers.cjs');
+
+// ─── hooks/dist build guard ───────────────────────────────────────────────────
+//
+// hooks/dist/ is gitignored and only produced by `npm run build:hooks`.
+// In CI the scoped/windows test jobs do NOT run build:hooks before running
+// tests, so install() finds no hook files → event arrays come back empty →
+// every "expected AfterTool/PostToolUse/BeforeTool/PreToolUse hooks" assertion
+// fails. This mirrors the pattern in bug-376-claude-js-hook-gsd-rewriter.test.cjs.
+
+const REPO_ROOT = path.resolve(__dirname, '..');
+const HOOKS_DIST_DIR = path.join(REPO_ROOT, 'hooks', 'dist');
+const BUILD_HOOKS_SCRIPT = path.join(REPO_ROOT, 'scripts', 'build-hooks.js');
+
+/**
+ * Idempotently ensure hooks/dist contains built .js files.
+ * Runs build-hooks.js only when the directory is absent or empty of .js files.
+ */
+function ensureHooksDist() {
+  if (!fs.existsSync(HOOKS_DIST_DIR) || fs.readdirSync(HOOKS_DIST_DIR).filter(f => f.endsWith('.js')).length === 0) {
+    execFileSync(process.execPath, [BUILD_HOOKS_SCRIPT], { stdio: 'pipe' });
+  }
+}
+
+before(() => {
+  ensureHooksDist();
+});
 
 // ─── Registry lookup ──────────────────────────────────────────────────────────
 
