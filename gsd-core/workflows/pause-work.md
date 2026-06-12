@@ -47,8 +47,9 @@ If phase is detected, proceed with phase handoff path. Otherwise use the first m
 5. **Blockers/issues**: Anything stuck
 6. **Human actions pending**: Things that need manual intervention (MCP setup, API keys, approvals, manual testing)
 7. **Background processes**: Any running servers/watchers that were part of the workflow
-8. **Files modified**: What's changed but not committed
-9. **Blocking constraints**: Anti-patterns or methodological failures encountered during this session that a resuming agent MUST be aware of before proceeding. Only include items discovered through actual failure — not warnings or predictions. Assign each constraint a `severity`:
+8. **GSD-ASYNC-PAUSE-GATHER — Async external jobs**: Any `.planning/async-jobs/*.json` manifests, SLURM job ids, statuses, expected artifacts, watcher/cron state, and exact resume command
+9. **Files modified**: What's changed but not committed
+10. **Blocking constraints**: Anti-patterns or methodological failures encountered during this session that a resuming agent MUST be aware of before proceeding. Only include items discovered through actual failure — not warnings or predictions. Assign each constraint a `severity`:
    - `blocking` — The resuming agent MUST demonstrate understanding before proceeding. The discuss-phase and execute-phase workflows will enforce a mandatory understanding check.
    - `advisory` — Important context but does not gate resumption.
 
@@ -95,6 +96,9 @@ timestamp=$(gsd_run query current-timestamp full --raw)
   ],
   "human_actions_pending": [
     {"action": "{what needs to be done}", "context": "{why}", "blocking": true}
+  ],
+  "async_jobs": [
+    {"manifest": ".planning/async-jobs/{manifest}.json", "job_id": "{slurm_job_id}", "status": "submitted|running|completed_unverified|failed", "blocking": true}
   ],
   "decisions": [
     {"decision": "{what}", "rationale": "{why}", "phase": "{phase_number}"}
@@ -181,6 +185,7 @@ Completed Tasks:
 
 ## Infrastructure State
 <!-- Running services, external state, environment specifics -->
+<!-- GSD-ASYNC-INFRASTRUCTURE-STATE: include async SLURM manifests/job ids/status, watcher/cron state, log paths, expected artifacts, and first resume command. -->
 - [service/env]: [current state]
 
 ## Pre-Execution Critique Required

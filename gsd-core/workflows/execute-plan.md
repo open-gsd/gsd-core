@@ -7,15 +7,21 @@ Read STATE.md before any operation to load project context.
 Read config.json for planning behavior settings.
 
 @~/.claude/gsd-core/references/git-integration.md
+<!-- GSD-ASYNC-GUARD-REQUIRED-READING -->
+@~/.claude/gsd-core/references/long-running-operations.md
+@~/.claude/gsd-core/references/async-slurm.md
 </required_reading>
 
 <atomic_close_out_invariant>
 For each executed plan, the only complete close-out order is:
 `production-code commit(s) -> SUMMARY commit -> STATE/ROADMAP update`.
 
-The only legal half-state is mid-production-commits while the executor is still
-actively working. Once production commits for a plan exist, returning without a
-committed SUMMARY.md is an illegal partial-plan state. The next execute-phase
+The normal legal half-state is mid-production-commits while the executor is still
+actively working. The explicit exception is a GSD async external-job checkpoint:
+input/code commits + committed `.planning/async-jobs/*.json` manifest + committed
+handoff, with no SUMMARY until the external job is verified. Once production
+commits for a plan exist, returning without a committed SUMMARY.md and without a
+matching async manifest is an illegal partial-plan state. The next execute-phase
 resume must detect that condition before dispatching another executor.
 </atomic_close_out_invariant>
 
@@ -170,6 +176,7 @@ If previous SUMMARY has unresolved "Issues Encountered" or "Next Phase Readiness
 Deviations are normal — handle via rules below.
 
 1. Read @context files from prompt
+   - **GSD-ASYNC-GUARD:** Before any shell/Python/test/solver/training command whose runtime is unknown or may exceed ~2 minutes, apply `references/long-running-operations.md`: classify quick/medium/unknown/long, define progress signals, set first-health and soft-review deadlines, and pivot to cancel/debug or async SLURM before the child timeout is consumed.
 2. **MCP tools:** If CLAUDE.md or project instructions reference MCP tools (e.g. jCodeMunch for code navigation), prefer them over Grep/Glob when available. Fall back to Grep/Glob if MCP tools are not accessible.
 3. Per task:
    - **MANDATORY read_first gate:** If the task has a `<read_first>` field, you MUST read every listed file BEFORE making any edits. This is not optional. Do not skip files because you "already know" what's in them — read them. The read_first files establish ground truth for the task.
@@ -282,6 +289,57 @@ Canonical per-task commit rules live in **`agents/gsd-executor.md`** (`<task_com
 **Orchestrator note:** After each task, the spawned executor reports commit hashes; this workflow does not re-specify commit semantics beyond pointing at the executor.
 
 </task_commit>
+
+<long_running_operation_guard>
+## GSD-ASYNC-GUARD — unexpected long-running operation guard
+
+Before any command likely to run longer than ~2 minutes, read and apply
+`@~/.claude/gsd-core/references/long-running-operations.md`.
+
+Hard rule: no executor may let an unknown-runtime command consume the child-agent
+timeout without an intervening progress review.
+
+Minimum behavior:
+1. Classify runtime: quick, medium, unknown, or long compute.
+2. Define progress signal, first health-check deadline, soft-review deadline,
+   abort conditions, and verification output.
+3. Use foreground only for quick bounded commands. Use monitored background or
+   explicit polling for medium/unknown work.
+4. At the soft review, classify as completed, healthy-long, suspicious-long, or unclear.
+5. Healthy-long compute becomes an async SLURM checkpoint. Suspicious-long work is
+   cancelled, diagnosed, fixed, and restarted from a smaller canary/smoke test.
+
+The child-agent timeout is an emergency fuse for the agent process, not permission
+to run silent commands until that fuse expires.
+</long_running_operation_guard>
+
+<async_slurm_checkpoint_protocol>
+## GSD-ASYNC-SLURM-CHECKPOINT-PROTOCOL
+
+Use this when a task is explicitly `type="async:slurm"`, when a plan calls for
+hours-long compute, or when the long-running operation guard classifies an
+operation as healthy-long compute (>30-60 minutes).
+
+Read `@~/.claude/gsd-core/references/async-slurm.md` and
+follow it exactly:
+
+1. Commit or explicitly record all code/config/input changes needed by the job.
+2. Run a smoke/canary first when feasible.
+3. Submit with `JOBID=$(sbatch --parsable slurm/<job>.sbatch)`.
+4. Write `.planning/async-jobs/<phase>-<plan>-<task>-slurm-<JOBID>.json` using
+   `templates/async-slurm-manifest.json` as the schema.
+5. Write/update `.planning/HANDOFF.json` and the phase `.continue-here.md` with
+   exact resume instructions and must-read files.
+6. Commit the manifest + handoff with a `wip(<phase>-<plan>): await SLURM job ...`
+   docs commit.
+7. Return `external_job_waiting` to the orchestrator. Do NOT create `SUMMARY.md`
+   and do NOT update ROADMAP/STATE as complete until a later agent verifies the
+   SLURM outputs.
+
+Legal async half-state:
+`input/code commit(s) -> SLURM submit -> async-job manifest commit -> handoff commit -> pause`.
+</async_slurm_checkpoint_protocol>
+
 
 <step name="checkpoint_protocol">
 On `type="checkpoint:*"`: automate everything possible first. Checkpoints are for verification/decisions only.

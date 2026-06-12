@@ -77,6 +77,9 @@ cat .planning/HANDOFF.json 2>/dev/null || true
 find .planning -maxdepth 3 -name '.continue-here*.md' -print 2>/dev/null || true
 find . -maxdepth 1 -name '.continue-here*.md' -print 2>/dev/null || true
 
+# GSD-ASYNC-RESUME-FIND-MANIFESTS: Check for async external-job manifests.
+find .planning/async-jobs -maxdepth 1 -name '*.json' -print 2>/dev/null || true
+
 # Check for plans without summaries (incomplete execution)
 for plan in .planning/phases/*/*-PLAN.md; do
   [ -e "$plan" ] || continue
@@ -100,6 +103,14 @@ fi
 - Use `context_notes` to restore mental model
 - Flag: "Found structured handoff — resuming from task {task}/{total_tasks}"
 - **After successful resumption, delete HANDOFF.json** (it's a one-shot artifact)
+
+**If async SLURM manifest exists (`.planning/async-jobs/*.json`):**
+
+- Treat it as durable external-job state, not normal incomplete work.
+- Run `python "$(dirname "$GSD_TOOLS")/gsd-slurm-watch.py" .planning/async-jobs/*.json --verbose` or inspect `squeue`/`sacct` directly.
+- If any matching manifest is `submitted`, `pending`, or `running`: report that the plan is waiting on external compute and do not resubmit.
+- If a manifest is `completed_unverified`: primary next action is to verify the job outputs by reading the manifest, logs, expected artifacts, and running every verification command. Only after verification may the plan continue to SUMMARY.
+- If a manifest is `failed`, `cancelled`, or `timeout`: primary next action is diagnosis/repair, not re-execution from scratch.
 
 **If .continue-here file exists (phase/non-phase/legacy fallback):**
 
@@ -163,6 +174,11 @@ Present complete project status to user:
 
 <step name="determine_next_action">
 Based on project state, determine the most logical next action:
+
+**If async SLURM manifest exists:**
+→ If pending/running: Primary: wait/poll external job; Secondary: work only on independent tasks.
+→ If completed_unverified: Primary: verify SLURM outputs and resume the blocked plan from manifest instructions.
+→ If failed/cancelled/timeout: Primary: diagnose job failure before resubmission.
 
 **If interrupted agent exists:**
 → Primary: Resume interrupted agent (Task tool with resume parameter)

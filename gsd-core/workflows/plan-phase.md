@@ -949,6 +949,8 @@ Planner prompt:
 - {SPIKE_FINDINGS_PATH} (Spike Findings — validated patterns, constraints, landmines from experiments, if exists)
 - {SKETCH_FINDINGS_PATH} (Sketch Findings — validated design decisions, CSS patterns, visual direction, if exists)
 - {API_SURFACE_PATH} (API Surface — HINT ONLY, if intel.enabled; see <intel_surface_hint> below)
+- @~/.claude/gsd-core/references/long-running-operations.md (GSD-ASYNC-PLANNER-RUNTIME-BUDGET — required when any task may run commands >2 min)
+- @~/.claude/gsd-core/references/async-slurm.md (GSD-ASYNC-PLANNER-SLURM — required when any task may require >30-60 min external compute)
 ${CONTEXT_WINDOW >= 500000 ? `
 **Cross-phase context (1M model enrichment):**
 - CONTEXT.md files from the 3 most recent completed phases (locked decisions — maintain consistency)
@@ -1006,6 +1008,7 @@ ${MVP_MODE === 'true' ? `
 Output consumed by /gsd:execute-phase. Plans need:
 - Frontmatter (wave, depends_on, files_modified, autonomous)
 - Tasks in XML format with read_first and acceptance_criteria fields (MANDATORY on every task)
+- Runtime budgets/progress contracts for commands that may exceed ~2 minutes; use `type="async:slurm"` for legitimate >30-60 min compute and require smoke/canary + manifest/handoff
 - Verification criteria
 - must_haves for goal-backward verification
 - If the SPEC has an `## Edge Coverage` section, lift every `covered` edge's acceptance criterion into `must_haves.truths`, and every `backstop` edge into `must_haves.truths` as a non-inferable check (note it needs a held-out/property-based test). `unresolved` edges are explicit assumptions — surface them in the plan, do not silently drop them.
@@ -1033,7 +1036,9 @@ Every task MUST include these fields — they are NOT optional:
      - Docs: `README.md contains '## Installation'` / `API.md lists all endpoints`
      - Infra: `deploy.yml has rollback step` / `docker-compose.yml has healthcheck for db`
 
-3. **`<action>`** — Must include CONCRETE values, not references. Rules:
+3. **`<runtime_budget>`** — Required when a task may run a shell/Python/test/build/solver/training command longer than ~2 minutes. Include expected class (`quick`, `medium`, `unknown`, or `long_compute`), first health check, soft review deadline, progress signals, abort conditions, and verification output. If expected runtime is >30-60 minutes, make the task `type="async:slurm"` and require the async SLURM manifest/handoff protocol.
+
+4. **`<action>`** — Must include CONCRETE values, not references. Rules:
    - NEVER say "align X with Y", "match X to Y", "update to be consistent" without specifying the exact target state
    - Include concrete identifiers and reference values: config keys, function signatures, SQL table names, class names, import paths, env vars, endpoint paths, etc.
    - If CONTEXT.md has a comparison table or expected values, copy only the target identifiers/values needed to remove ambiguity
@@ -1049,6 +1054,7 @@ Every task MUST include these fields — they are NOT optional:
 - [ ] Tasks are specific and actionable
 - [ ] Every task has `<read_first>` with at least the file being modified
 - [ ] Every task has `<acceptance_criteria>` with behavior, test-command, CLI, or source assertions
+- [ ] Every task that may run >2 minute commands has `<runtime_budget>`; every legitimate >30-60 minute compute task is `type="async:slurm"` with manifest/handoff verification
 - [ ] Every `<action>` contains concrete identifiers without fenced code blocks or full implementations
 - [ ] Dependencies correctly identified
 - [ ] Waves assigned for parallel execution

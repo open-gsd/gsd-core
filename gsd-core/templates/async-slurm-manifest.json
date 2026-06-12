@@ -1,0 +1,61 @@
+{
+  "schema_version": "1.0",
+  "status": "submitted",
+  "kind": "slurm",
+  "blocking": true,
+  "phase": "<phase-number>",
+  "phase_dir": ".planning/phases/<phase-dir>",
+  "plan_id": "<phase-plan>",
+  "task_id": "<task-id>",
+  "submitted_at": "<UTC ISO timestamp>",
+  "repo": "<absolute repo path>",
+  "branch": "<git branch>",
+  "submit_commit": "<git sha>",
+  "worktree_clean_at_submit": true,
+  "slurm": {
+    "job_id": "<job id>",
+    "submit_command": "sbatch --parsable slurm/<job>.sbatch",
+    "script": "slurm/<job>.sbatch",
+    "partition": "<partition>",
+    "time_limit": "<HH:MM:SS>",
+    "stdout": "Artifacts/jobs/<jobid>/stdout.log",
+    "stderr": "Artifacts/jobs/<jobid>/stderr.log",
+    "last_squeue": "",
+    "last_sacct": ""
+  },
+  "expected_outputs": [
+    "<artifact path>"
+  ],
+  "verification": {
+    "commands": [
+      "sacct -j <jobid> --format=JobID,JobName,State,ExitCode,Elapsed,MaxRSS,ReqMem,AllocCPUS",
+      "test -f <artifact path>",
+      "<domain validation command>"
+    ],
+    "success_contract": [
+      "SLURM state is COMPLETED",
+      "ExitCode is 0:0",
+      "expected artifacts exist",
+      "domain validation exits 0"
+    ],
+    "results": []
+  },
+  "resume": {
+    "must_read": [
+      "<plan path>",
+      "<manifest path>",
+      "Artifacts/jobs/<jobid>/stdout.log",
+      "Artifacts/jobs/<jobid>/stderr.log"
+    ],
+    "completed_before_wait": [],
+    "next_action": "Check SLURM final status, inspect logs, run verification commands, then continue from the post-job validation point. Do not resubmit unless the job is missing/failed and the repair policy permits it.",
+    "do_not": [
+      "Do not mark the plan complete just because the SLURM job ended",
+      "Do not regenerate inputs unless submit_commit and manifest prove they are stale",
+      "Do not rerun long compute without explicit failure classification"
+    ]
+  },
+  "last_checked_at": null,
+  "terminal_state_at": null,
+  "notified_at": null
+}

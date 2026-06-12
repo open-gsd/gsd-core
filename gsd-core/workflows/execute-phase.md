@@ -188,8 +188,30 @@ CURRENT_PLAN_ID="{phase_number}-{plan_padded}"
 SUMMARY_PATH="{phase_dir}/{plan_padded}-SUMMARY.md"
 PLAN_COMMITS=$(git log --oneline --grep="${CURRENT_PLAN_ID}" -30)
 ```
-If production commits exist and `SUMMARY.md is missing`, stop before spawning a
-new executor; continuing risks duplicate work and stale `STATE.md`/ROADMAP progress.
+If production commits exist and `SUMMARY.md is missing`, first check for a matching
+async external-job manifest before treating the state as anomalous:
+
+```bash
+# GSD-ASYNC-RESUME-GATE
+ASYNC_MANIFESTS=$(find .planning/async-jobs -maxdepth 1 -name "*.json" -print 2>/dev/null || true)
+# Prefer manifests whose plan_id/phase/task match CURRENT_PLAN_ID; inspect JSON rather than filename only.
+# If present, run the watcher/status probe:
+python "$(dirname "$GSD_TOOLS")/gsd-slurm-watch.py" $ASYNC_MANIFESTS --verbose 2>/dev/null || true
+```
+
+If a matching manifest exists:
+- `submitted`, `pending`, or `running`: do not spawn a duplicate executor and do not
+  mark the plan failed. Report that the plan is waiting on external compute; continue
+  only with independent work that has no dependency on this job.
+- `completed_unverified`: route a fresh executor to read the manifest, inspect logs,
+  run every verification command, update the manifest to `verified` only if evidence
+  passes, then continue the plan from the post-job validation point and create SUMMARY.
+- `failed`, `cancelled`, `timeout`, or verification failure: halt for diagnosis/repair.
+  Do not silently resubmit long compute.
+
+Only if no matching async manifest exists should production commits without
+`SUMMARY.md` be treated as an illegal partial-plan state. In that case, stop before
+spawning a new executor; continuing risks duplicate work and stale `STATE.md`/ROADMAP progress.
 Offer these recovery options:
 - `close out manually` — inspect commits, write SUMMARY.md, then update STATE/ROADMAP.
 - `re-execute from scratch` — revert or supersede partial commits before dispatch.
