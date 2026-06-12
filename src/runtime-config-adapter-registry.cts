@@ -1,9 +1,14 @@
 'use strict';
 
 /**
- * Runtime config adapter registry — explicit dispatch table for install-phase
- * config mutations (issue #60), replacing inline `runtime === '...'` branching
- * in bin/install.js.
+ * Runtime config adapter registry — dispatch table for install-phase config
+ * mutations (issue #60), replacing inline `runtime === '...'` branching in
+ * bin/install.js.
+ *
+ * ADR-857 phase 5g drive 2: The hand-kept REGISTRY const has been retired.
+ * Values are now read directly from the capability-registry.cjs descriptor
+ * (capabilities/<id>/capability.json runtime block) so a single source of
+ * truth drives all surfaces.
  *
  * Design notes:
  * - `installSurface` selects which config handler install() runs:
@@ -22,6 +27,9 @@
  *     null       → no dedicated permission writer.
  */
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { runtimes } = require('./capability-registry.cjs') as { runtimes: Record<string, { runtime: Record<string, unknown> | undefined }> };
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -36,6 +44,14 @@ type ConfigInstallSurface =
 
 type FinishPermissionWriter = 'opencode' | 'kilo' | null;
 
+type HooksSurface =
+  | 'settings-json'
+  | 'codex-hooks-json'
+  | 'cursor-hooks-json'
+  | 'cline-rules'
+  | 'copilot-inline'
+  | 'none';
+
 interface RuntimeConfigIntent {
   runtime: string;
   installSurface: ConfigInstallSurface;
@@ -43,41 +59,30 @@ interface RuntimeConfigIntent {
   finishPermissionWriter: FinishPermissionWriter;
 }
 
-interface RegistryEntry {
-  installSurface: ConfigInstallSurface;
-  writesSharedSettings: boolean;
-  finishPermissionWriter: FinishPermissionWriter;
+/**
+ * The full install plan for a runtime: config-intent axes PLUS the three
+ * hook axes that install() reads from the capability descriptor.
+ * ADR-857 phase 5g capstone — single seam for all install-level descriptor reads.
+ */
+interface InstallPlan extends RuntimeConfigIntent {
+  /** Hook event dialect: 'claude' | 'gemini' | undefined */
+  hookEvents: string | undefined;
+  /** Extended hook event names registered beyond the core tool events (may be empty). */
+  extendedHookEvents: string[];
+  /** Which surface owns the hook registration for this runtime. */
+  hooksSurface: HooksSurface;
 }
-
-// ---------------------------------------------------------------------------
-// Registry
-// ---------------------------------------------------------------------------
-
-const REGISTRY: Record<string, Readonly<RegistryEntry>> = Object.freeze({
-  claude:      Object.freeze({ installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null       } as const),
-  gemini:      Object.freeze({ installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null       } as const),
-  antigravity: Object.freeze({ installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null       } as const),
-  augment:     Object.freeze({ installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null       } as const),
-  qwen:        Object.freeze({ installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null       } as const),
-  hermes:      Object.freeze({ installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null       } as const),
-  codebuddy:   Object.freeze({ installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null       } as const),
-  opencode:    Object.freeze({ installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: 'opencode' } as const),
-  kilo:        Object.freeze({ installSurface: 'settings-json',        writesSharedSettings: false, finishPermissionWriter: 'kilo'     } as const),
-  codex:       Object.freeze({ installSurface: 'codex-toml',           writesSharedSettings: false, finishPermissionWriter: null       } as const),
-  copilot:     Object.freeze({ installSurface: 'copilot-instructions', writesSharedSettings: false, finishPermissionWriter: null       } as const),
-  cline:       Object.freeze({ installSurface: 'cline-rules',          writesSharedSettings: false, finishPermissionWriter: null       } as const),
-  cursor:      Object.freeze({ installSurface: 'cursor-hooks-json',    writesSharedSettings: false, finishPermissionWriter: null       } as const),
-  windsurf:    Object.freeze({ installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       } as const),
-  trae:        Object.freeze({ installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       } as const),
-  kimi:        Object.freeze({ installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       } as const),
-});
 
 // ---------------------------------------------------------------------------
 // Exports
 // ---------------------------------------------------------------------------
 
 /** The complete set of 16 supported runtimes for config-adapter dispatch. */
-const ALLOWED_CONFIG_RUNTIMES: ReadonlySet<string> = new Set(Object.keys(REGISTRY));
+const ALLOWED_CONFIG_RUNTIMES: ReadonlySet<string> = new Set(
+  Object.entries(runtimes)
+    .filter(([, cap]) => cap && cap.runtime && typeof cap.runtime['installSurface'] === 'string')
+    .map(([id]) => id),
+);
 
 /** All valid installSurface values. */
 const INSTALL_SURFACES: ReadonlyArray<ConfigInstallSurface> = Object.freeze([
@@ -98,16 +103,44 @@ const INSTALL_SURFACES: ReadonlyArray<ConfigInstallSurface> = Object.freeze([
  * @throws {TypeError} if runtime is not a known supported runtime.
  */
 function resolveRuntimeConfigIntent(runtime: string): RuntimeConfigIntent {
-  if (!Object.hasOwn(REGISTRY, runtime)) {
-    throw new TypeError(`Unknown runtime for config adapter: ${runtime}`);
-  }
-  const entry = REGISTRY[runtime];
+  const entry = runtimes[runtime]?.runtime;
+  if (!entry) throw new TypeError(`Unknown runtime for config adapter: ${runtime}`);
+  const permissionWriter = entry['permissionWriter'];
   return {
     runtime,
-    installSurface:        entry.installSurface,
-    writesSharedSettings:  entry.writesSharedSettings,
-    finishPermissionWriter: entry.finishPermissionWriter,
+    installSurface:         entry['installSurface'] as ConfigInstallSurface,
+    writesSharedSettings:   entry['writesSharedSettings'] as boolean,
+    finishPermissionWriter: permissionWriter == null ? null : permissionWriter as FinishPermissionWriter,
   };
 }
 
-export = { resolveRuntimeConfigIntent, ALLOWED_CONFIG_RUNTIMES, INSTALL_SURFACES };
+/**
+ * Resolve the complete install plan for a given runtime.
+ *
+ * Composes the config-intent axes from resolveRuntimeConfigIntent PLUS the
+ * three hook axes (hookEvents / extendedHookEvents / hooksSurface) that
+ * install() previously read scattered from the capability registry.
+ *
+ * ADR-857 phase 5g capstone — single typed seam for all install-level
+ * descriptor reads. Returns a fresh object each call.
+ *
+ * @throws {TypeError} if runtime is not a known supported runtime.
+ */
+function resolveInstallPlan(runtime: string): InstallPlan {
+  const desc = runtimes[runtime]?.runtime;
+  if (!desc) throw new TypeError(`Unknown runtime for install plan: ${runtime}`);
+  const configIntent = resolveRuntimeConfigIntent(runtime);
+  return {
+    runtime,
+    installSurface:         configIntent.installSurface,
+    writesSharedSettings:   configIntent.writesSharedSettings,
+    finishPermissionWriter: configIntent.finishPermissionWriter,
+    hookEvents:             desc['hookEvents'] as string | undefined,
+    extendedHookEvents:     Array.isArray(desc['extendedHookEvents']) ? desc['extendedHookEvents'] as string[] : [],
+    hooksSurface:           desc['hooksSurface'] != null
+      ? desc['hooksSurface'] as HooksSurface
+      : ((runtime === 'opencode' || runtime === 'kilo') ? 'none' : 'settings-json'),
+  };
+}
+
+export = { resolveRuntimeConfigIntent, resolveInstallPlan, ALLOWED_CONFIG_RUNTIMES, INSTALL_SURFACES };

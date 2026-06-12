@@ -37,7 +37,7 @@ const {
   applyWorktreeBaseRef,
   readBaseRefFromSettings,
 } = require('../gsd-core/bin/lib/worktree-base-ref.cjs');
-const { resolveRuntimeConfigIntent } = require('../gsd-core/bin/lib/runtime-config-adapter-registry.cjs');
+const { resolveInstallPlan } = require('../gsd-core/bin/lib/runtime-config-adapter-registry.cjs');
 // Canonical set of hook files shipped to users. Imported here so writeManifest()
 // records exactly the same set that build-hooks.js copies to hooks/dist/, making
 // the manifest and the installed hooks/ dir structurally identical. Avoids the
@@ -9383,7 +9383,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   const isHermes = runtime === 'hermes';
   const isCodebuddy = runtime === 'codebuddy';
   const isCline = runtime === 'cline';
-  const configIntent = resolveRuntimeConfigIntent(runtime);
+  const plan = resolveInstallPlan(runtime);
   const dirName = getDirName(runtime);
   const src = path.join(__dirname, '..');
 
@@ -10526,7 +10526,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     throw _earlyInstallErr;
   }
 
-  if (configIntent.installSurface === 'codex-toml' && !isMinimalMode(_effectiveInstallMode)) {
+  if (plan.installSurface === 'codex-toml' && !isMinimalMode(_effectiveInstallMode)) {
     // Capture pre-install snapshots before ANY GSD mutation
     // (#2760 fix 3). On post-write schema-validation failure OR any throw
     // during the mutation sequence (write failure, merge throw, etc.) we
@@ -10905,7 +10905,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir };
   }
 
-  if (configIntent.installSurface === 'copilot-instructions') {
+  if (plan.installSurface === 'copilot-instructions') {
     // Generate copilot-instructions.md
     const templatePath = path.join(targetDir, 'gsd-core', 'templates', 'copilot-instructions.md');
     const instructionsPath = path.join(targetDir, 'copilot-instructions.md');
@@ -10935,7 +10935,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir };
   }
 
-  if (configIntent.installSurface === 'cursor-hooks-json') {
+  if (plan.installSurface === 'cursor-hooks-json') {
     // #777: Cursor v2.4+ supports hooks.json. Register sessionStart + postToolUse.
     // Hook scripts are copied to <targetDir>/hooks/ and referenced by hooks.json.
     const cursorHookResult = writeCursorHooksJson(targetDir, src, {});
@@ -10950,13 +10950,13 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir };
   }
 
-  if (configIntent.installSurface === 'profile-marker-only') {
+  if (plan.installSurface === 'profile-marker-only') {
     // Windsurf/Trae/Kimi use artifact-only surfaces — no config.toml or settings.json hooks needed.
     persistActiveProfileMarker();
     return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir };
   }
 
-  if (configIntent.installSurface === 'cline-rules') {
+  if (plan.installSurface === 'cline-rules') {
     // Cline uses the `.clinerules/` directory form (issue #787): GSD rules live
     // at .clinerules/gsd.md and a PreToolUse lifecycle hook at
     // .clinerules/hooks/PreToolUse. Global installs also get ~/.agents/AGENTS.md.
@@ -10969,8 +10969,12 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   }
 
   // Configure statusline and hooks in settings.json (or settings.local.json for local Claude installs).
-  // Gemini and Antigravity use AfterTool instead of PostToolUse for post-tool hooks
-  const postToolEvent = (runtime === 'gemini' || runtime === 'antigravity') ? 'AfterTool' : 'PostToolUse';
+  // ADR-857 phase 5f-2: drive the hook event dialect from the registry descriptor.
+  // runtimes with hookEvents='gemini' use AfterTool/BeforeTool; all others use PostToolUse/PreToolUse.
+  // Equivalence: hookEvents='gemini' iff runtime∈{gemini,antigravity} — identical to the old check.
+  // A missing registry or missing descriptor defaults to 'not gemini' → PostToolUse (safe).
+  const _hookEventsDialect = plan.hookEvents;
+  const postToolEvent = _hookEventsDialect === 'gemini' ? 'AfterTool' : 'PostToolUse';
   // #338: local Claude installs write to settings.local.json (Claude Code's per-user/gitignored slot)
   // so engineer-specific absolute paths (Node binary, home dir) never land in the repo-shared
   // settings.json. Global installs and all other runtimes continue to use settings.json.
@@ -11152,6 +11156,9 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     isGlobal,
     targetDir,
     postToolEvent,
+    hookEvents: _hookEventsDialect,
+    extendedHookEvents: plan.extendedHookEvents,
+    hooksSurface: plan.hooksSurface,
     updateCheckCommand,
     contextMonitorCommand,
     promptGuardCommand,
@@ -11276,9 +11283,9 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   const isWindsurf = runtime === 'windsurf';
   const isTrae = runtime === 'trae';
   const isCline = runtime === 'cline';
-  const configIntent = resolveRuntimeConfigIntent(runtime);
+  const plan = resolveInstallPlan(runtime);
 
-  if (shouldInstallStatusline && configIntent.writesSharedSettings && !isOpencode) {
+  if (shouldInstallStatusline && plan.writesSharedSettings && !isOpencode) {
     if (!isGlobal && !forceStatusline) {
       // Local installs skip statusLine by default: repo settings.json takes precedence over
       // profile-level settings.json in Claude Code, so writing here would silently clobber
@@ -11304,7 +11311,7 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   // settings.json hooks block — opencode/kilo/codex/cursor/windsurf/trae/
   // cline either lack the surface or use a different config schema.
   const { shouldInstallBanner, bannerCommand } = bannerOpts;
-  if (shouldInstallBanner && settings && configIntent.writesSharedSettings && !isOpencode) {
+  if (shouldInstallBanner && settings && plan.writesSharedSettings && !isOpencode) {
     if (!bannerCommand) {
       console.warn(`  ${yellow}⚠${reset}  Skipped update banner registration — Node executable path unavailable. See #2979 / #3002.`);
     } else {
@@ -11344,17 +11351,17 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   // {type: 'command', command: null} items that the runtime hook schema
   // rejects at parse time. validateHookFields filters those out so the file
   // we write is always schema-valid.
-  if (settingsPath && settings && configIntent.writesSharedSettings) {
+  if (settingsPath && settings && plan.writesSharedSettings) {
     writeSettings(settingsPath, validateHookFields(settings));
   }
 
   // Configure OpenCode permissions
-  if (configIntent.finishPermissionWriter === 'opencode' && !process.env.GSD_TEST_MODE) {
+  if (plan.finishPermissionWriter === 'opencode' && !process.env.GSD_TEST_MODE) {
     configureOpencodePermissions(isGlobal, configDir);
   }
 
   // Configure Kilo permissions
-  if (configIntent.finishPermissionWriter === 'kilo') {
+  if (plan.finishPermissionWriter === 'kilo') {
     configureKiloPermissions(isGlobal, configDir);
   }
 

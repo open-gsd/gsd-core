@@ -1090,18 +1090,22 @@ function writeCopilotHookConfig(targetDir: string): string {
 // MUTATES `settings` by reference — registers all GSD-managed hook entries
 // into settings.hooks.* for runtimes that use a settings.json hook surface
 // (Claude Code, Gemini, Antigravity, Qwen Code, and others).
-// Skipped entirely for opencode and kilo (which have their own hook surface).
+// Skipped entirely for runtimes whose hooksSurface descriptor field is 'none'
+// (opencode and kilo, which have their own hook surface).
 //
 // Extracted from the `if (!isOpencode && !isKilo) { … }` block inside
-// install() (ADR-857 phase 5f-1b).  No behavior change — all guards,
-// event-name dialect branches, and idempotency checks are preserved verbatim.
+// install() (ADR-857 phase 5f-1b).  The hook-skip guard is now descriptor-driven
+// (ADR-857 phase 5g drive 3): pass opts.hooksSurface from the runtime descriptor
+// instead of deriving isOpencode/isKilo from the runtime name.
 //
 // @param settings  - The settings object already read from disk. Mutated in place.
 // @param opts      - Closure values the block read from install()'s scope.
 //   runtime                   - runtime ID string (e.g. 'claude', 'gemini', 'qwen')
+//   hooksSurface              - descriptor hooksSurface field ('settings-json'|'none'|…); if !== 'none', hooks are written
 //   isGlobal                  - true for global installs
 //   targetDir                 - absolute path to the runtime config dir
-//   postToolEvent             - 'PostToolUse' | 'AfterTool' (pre-computed by caller)
+//   postToolEvent             - 'PostToolUse' | 'AfterTool' (pre-computed by caller from descriptor)
+//   hookEvents                - registry hookEvents dialect ('gemini'|'claude'|undefined)
 //   updateCheckCommand        - command string or null
 //   contextMonitorCommand     - command string or null
 //   promptGuardCommand        - command string or null
@@ -1118,6 +1122,12 @@ interface ApplySettingsJsonHooksOpts {
   isGlobal: boolean;
   targetDir: string;
   postToolEvent: string;
+  /** ADR-857 phase 5f-2: hookEvents dialect from the registry descriptor ('gemini'|'claude'|undefined). */
+  hookEvents?: string;
+  /** ADR-857 phase 5f-3: extended hook event names from the registry descriptor. */
+  extendedHookEvents?: string[];
+  /** ADR-857 phase 5g drive 3: hooksSurface from the runtime descriptor ('settings-json'|'none'|…). */
+  hooksSurface?: string;
   updateCheckCommand: string | null;
   contextMonitorCommand: string | null;
   promptGuardCommand: string | null;
@@ -1139,6 +1149,9 @@ function applySettingsJsonHooks(settings: any, opts: ApplySettingsJsonHooksOpts)
     isGlobal,
     targetDir,
     postToolEvent,
+    hookEvents,
+    extendedHookEvents,
+    hooksSurface,
     updateCheckCommand,
     contextMonitorCommand,
     promptGuardCommand,
@@ -1150,14 +1163,16 @@ function applySettingsJsonHooks(settings: any, opts: ApplySettingsJsonHooksOpts)
     localShellCmd,
   } = opts;
 
-  // Derived from runtime — same as install() top-of-function declarations.
-  const isOpencode = runtime === 'opencode';
-  const isKilo = runtime === 'kilo';
-  const isGemini = runtime === 'gemini';
-  const isQwen = runtime === 'qwen';
+  // ADR-857 phase 5f-3: extended hook events are now driven by the registry
+  // descriptor field rather than hardcoded runtime-name checks.
+  const extendedEvents = Array.isArray(extendedHookEvents) ? extendedHookEvents : [];
 
-  // Configure SessionStart hook for update checking (skip for opencode / kilo)
-  if (!isOpencode && !isKilo) {
+  // ADR-857 phase 5g drive 3: hook-skip guard is driven by the hooksSurface
+  // descriptor field. Only runtimes with hooksSurface === 'settings-json'
+  // register settings.json hooks; runtimes with hooksSurface === 'none'
+  // (opencode, kilo) are skipped. Equivalence: hooksSurface !== 'none' iff
+  // the old !isOpencode && !isKilo check.
+  if (hooksSurface !== 'none') {
     if (!settings.hooks) {
       settings.hooks = {};
     }
@@ -1235,8 +1250,10 @@ function applySettingsJsonHooks(settings: any, opts: ApplySettingsJsonHooksOpts)
     }
 
     // Configure PreToolUse hook for prompt injection detection
-    // Gemini and Antigravity use BeforeTool instead of PreToolUse for pre-tool hooks
-    const preToolEvent = (runtime === 'gemini' || runtime === 'antigravity') ? 'BeforeTool' : 'PreToolUse';
+    // ADR-857 phase 5f-2: drive dialect from opts.hookEvents (registry descriptor).
+    // hookEvents='gemini' → BeforeTool; all others → PreToolUse.
+    // Equivalence: hookEvents='gemini' iff runtime∈{gemini,antigravity} (same as old check).
+    const preToolEvent = hookEvents === 'gemini' ? 'BeforeTool' : 'PreToolUse';
     if (!settings.hooks[preToolEvent]) {
       settings.hooks[preToolEvent] = [];
     }
@@ -1498,10 +1515,12 @@ function applySettingsJsonHooks(settings: any, opts: ApplySettingsJsonHooksOpts)
     // user prompt text, not a tool invocation, so gsd-prompt-guard (which
     // exits unless tool_name is Write/Edit) would be a silent no-op.  A
     // dedicated handler for UserPromptSubmit is deferred to a follow-on issue.
-    if (isQwen || runtime === 'claude') {
-      const runtimeLabel = isQwen ? 'Qwen Code' : 'Claude Code';
-      // SubagentStop, Stop, PreCompact — route through the context monitor.
+    // SubagentStop, Stop, PreCompact — route through the context monitor.
+    // Guard is now descriptor-driven: only events present in extendedEvents are wired.
+    {
+      const runtimeLabel = runtime === 'qwen' ? 'Qwen Code' : runtime === 'claude' ? 'Claude Code' : runtime;
       for (const event of ['SubagentStop', 'Stop', 'PreCompact']) {
+        if (!extendedEvents.includes(event)) continue;
         if (!settings.hooks[event]) {
           settings.hooks[event] = [];
         }
@@ -1548,29 +1567,28 @@ function applySettingsJsonHooks(settings: any, opts: ApplySettingsJsonHooksOpts)
     // Note: BeforeToolSelection is NOT wired.  That event does not map to a
     // gsd hook use case at this time; deferred to a follow-on issue.
     //
-    // Guard: isGemini is derived from runtime at the top of this function.
-    if (isGemini) {
-      for (const geminiEvent of ['BeforeAgent', 'AfterAgent', 'BeforeModel']) {
-        if (!Array.isArray(settings.hooks[geminiEvent])) {
-          settings.hooks[geminiEvent] = [];
-        }
-        const alreadyHasContextMonitor = settings.hooks[geminiEvent].some((entry: HookGroup) =>
-          entry.hooks && entry.hooks.some((h: HookEntry) => referencesHook(h as Record<string, unknown>, 'gsd-context-monitor'))
-        );
-        if (!alreadyHasContextMonitor && fs.existsSync(contextMonitorFile) && contextMonitorCommand) {
-          settings.hooks[geminiEvent].push({
-            hooks: [
-              {
-                type: 'command',
-                command: contextMonitorCommand,
-                timeout: 10
-              }
-            ]
-          });
-          console.log(`  ${green}✓${reset} Configured ${geminiEvent} context monitor hook (Gemini)`);
-        } else if (!alreadyHasContextMonitor && !fs.existsSync(contextMonitorFile)) {
-          console.warn(`  ${yellow}⚠${reset}  Skipped ${geminiEvent} hook — gsd-context-monitor.js not found at target`);
-        }
+    // Guard is now descriptor-driven: only events present in extendedEvents are wired.
+    for (const geminiEvent of ['BeforeAgent', 'AfterAgent', 'BeforeModel']) {
+      if (!extendedEvents.includes(geminiEvent)) continue;
+      if (!Array.isArray(settings.hooks[geminiEvent])) {
+        settings.hooks[geminiEvent] = [];
+      }
+      const alreadyHasContextMonitor = settings.hooks[geminiEvent].some((entry: HookGroup) =>
+        entry.hooks && entry.hooks.some((h: HookEntry) => referencesHook(h as Record<string, unknown>, 'gsd-context-monitor'))
+      );
+      if (!alreadyHasContextMonitor && fs.existsSync(contextMonitorFile) && contextMonitorCommand) {
+        settings.hooks[geminiEvent].push({
+          hooks: [
+            {
+              type: 'command',
+              command: contextMonitorCommand,
+              timeout: 10
+            }
+          ]
+        });
+        console.log(`  ${green}✓${reset} Configured ${geminiEvent} context monitor hook (Gemini)`);
+      } else if (!alreadyHasContextMonitor && !fs.existsSync(contextMonitorFile)) {
+        console.warn(`  ${yellow}⚠${reset}  Skipped ${geminiEvent} hook — gsd-context-monitor.js not found at target`);
       }
     }
     // ── end Gemini-only extended hook events ──────────────────────────────────
@@ -1586,7 +1604,7 @@ function applySettingsJsonHooks(settings: any, opts: ApplySettingsJsonHooksOpts)
     //
     // Scoped to Claude Code only: Qwen Code's FileChanged support is not yet
     // verified; extend in a follow-on if empirically confirmed.
-    if (runtime === 'claude') {
+    if (extendedEvents.includes('FileChanged')) {
       if (!settings.hooks.FileChanged) {
         settings.hooks.FileChanged = [];
       }

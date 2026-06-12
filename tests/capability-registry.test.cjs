@@ -44,6 +44,12 @@ const {
   validateArtifactKindEntry,
   runConfigFormatParityGate,
   INSTALL_SURFACE_TO_CONFIG_FORMAT,
+  // ADR-857 phase 5f: cross-field consistency gates
+  INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES,
+  VALID_INSTALL_SURFACES,
+  VALID_EXTENDED_HOOK_EVENTS,
+  VALID_PERMISSION_WRITERS,
+  validateRuntimeBody,
 } = require('../scripts/gen-capability-registry.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -1170,6 +1176,10 @@ describe('C3: role:runtime body validation', () => {
       hookEvents: 'claude',
       sandboxTier: 'none',
       supportTier: 2,
+      installSurface: 'cursor-hooks-json',
+      writesSharedSettings: false,
+      permissionWriter: null,
+      extendedHookEvents: [],
     },
   };
 
@@ -2544,6 +2554,10 @@ function makeRuntimeCap(overrides) {
       hookEvents: 'claude',
       sandboxTier: 'none',
       supportTier: 1,
+      installSurface: 'settings-json',
+      writesSharedSettings: true,
+      permissionWriter: null,
+      extendedHookEvents: [],
       ...((overrides && overrides.runtime) ? overrides.runtime : {}),
     },
     ...overrides,
@@ -3433,8 +3447,22 @@ describe('ADR-857 phase 5e: validateArtifactKindEntry — ConverterName enum (FA
 // ─── 26. ADR-857 phase 5e: configFormat ↔ installSurface parity gate (Part A) ─
 
 describe('ADR-857 phase 5e: configFormat ↔ installSurface parity gate', () => {
-  // Helper: build a minimal runtime capMap for parity tests
-  function makeRuntimeCapMap(runtimeId, configFormat) {
+  // Helper: build a minimal runtime capMap for parity tests.
+  // installSurface must be supplied for any runtime that should be checked by the gate;
+  // omit it (undefined) to simulate a runtime with no installSurface (gate skips it).
+  function makeRuntimeCapMap(runtimeId, configFormat, installSurface) {
+    const runtime = {
+      configHome: { kind: 'dot-home', name: '.' + runtimeId, env: [] },
+      configFormat,
+      artifactLayout: { global: [], local: [] },
+      commandStyle: 'slash-hyphen',
+      hooksSurface: 'none',
+      sandboxTier: 'none',
+      supportTier: 1,
+    };
+    if (installSurface !== undefined) {
+      runtime.installSurface = installSurface;
+    }
     const cap = {
       id: runtimeId,
       role: 'runtime',
@@ -3442,15 +3470,7 @@ describe('ADR-857 phase 5e: configFormat ↔ installSurface parity gate', () => 
       description: 'Synthetic runtime for parity gate testing.',
       tier: 'core',
       requires: [],
-      runtime: {
-        configHome: { kind: 'dot-home', name: '.' + runtimeId, env: [] },
-        configFormat,
-        artifactLayout: { global: [], local: [] },
-        commandStyle: 'slash-hyphen',
-        hooksSurface: 'none',
-        sandboxTier: 'none',
-        supportTier: 1,
-      },
+      runtime,
     };
     return new Map([[runtimeId, cap]]);
   }
@@ -3459,7 +3479,7 @@ describe('ADR-857 phase 5e: configFormat ↔ installSurface parity gate', () => 
   test('THROWS: claude with wrong configFormat "toml" (installSurface=settings-json → expected settings-json)', () => {
     // claude has installSurface=settings-json → expected configFormat=settings-json
     // Giving it configFormat=toml must trigger the HARD gate
-    const capMap = makeRuntimeCapMap('claude', 'toml');
+    const capMap = makeRuntimeCapMap('claude', 'toml', 'settings-json');
     assert.throws(
       () => runConfigFormatParityGate(capMap),
       (err) => {
@@ -3478,7 +3498,7 @@ describe('ADR-857 phase 5e: configFormat ↔ installSurface parity gate', () => 
   });
 
   test('THROWS: codex with wrong configFormat "settings-json" (installSurface=codex-toml → expected toml)', () => {
-    const capMap = makeRuntimeCapMap('codex', 'settings-json');
+    const capMap = makeRuntimeCapMap('codex', 'settings-json', 'codex-toml');
     assert.throws(
       () => runConfigFormatParityGate(capMap),
       (err) => {
@@ -3533,9 +3553,12 @@ describe('ADR-857 phase 5e: configFormat ↔ installSurface parity gate', () => 
     );
   });
 
-  // Unknown runtimes (not in ALLOWED_CONFIG_RUNTIMES) are excluded from the gate
-  test('runtime capId not in adapter registry (e.g. "grok") is excluded from parity gate — does not throw', () => {
-    // 'grok' is not in the adapter registry → must be soft-skipped
+  // Runtimes with no installSurface in their descriptor are excluded from the gate.
+  // The gate reads installSurface from cap.runtime.installSurface (the descriptor level);
+  // if it is absent (typeof !== 'string'), the runtime is soft-skipped.
+  // NOTE: the gate no longer uses the adapter registry — it reads purely from the descriptor.
+  test('runtime with no installSurface in descriptor (e.g. hypothetical "grok") is excluded from parity gate — does not throw', () => {
+    // 'grok' has no installSurface → gate must soft-skip (typeof r.installSurface !== 'string')
     const grokCap = {
       id: 'grok',
       role: 'runtime',
@@ -3545,18 +3568,161 @@ describe('ADR-857 phase 5e: configFormat ↔ installSurface parity gate', () => 
       requires: [],
       runtime: {
         configHome: { kind: 'dot-home', name: '.grok', env: [] },
-        configFormat: 'settings-json',  // any value — gate should not check this
+        configFormat: 'settings-json',  // any value — gate should not check this (no installSurface)
         artifactLayout: { global: [], local: [] },
         commandStyle: 'slash-hyphen',
         hooksSurface: 'none',
         sandboxTier: 'none',
         supportTier: 2,
+        // intentionally no installSurface — gate must skip this entry
       },
     };
     const capMap = new Map([['grok', grokCap]]);
     assert.doesNotThrow(
       () => runConfigFormatParityGate(capMap),
-      'Unknown runtimes not in the adapter registry must be excluded from the parity gate',
+      'Runtimes with no installSurface in their descriptor must be excluded from the parity gate',
     );
+  });
+});
+
+// ─── 27. ADR-857 phase 5f: cross-field consistency gate rejection tests ────────
+
+describe('ADR-857 phase 5f: cross-field consistency gate rejection tests (DEFECT.GENERATIVE-FIX)', () => {
+  // Helper: build a minimal VALID runtime cap for cross-field rejection tests.
+  // Override any field via the overrides object.
+  function makeValidRuntimeCap(overrides) {
+    const base = {
+      id: 'test-runtime',
+      role: 'runtime',
+      title: 'Test runtime',
+      description: 'Synthetic runtime for cross-field gate rejection testing.',
+      tier: 'core',
+      requires: [],
+      runtime: {
+        configHome: { kind: 'dot-home', name: '.test-runtime', env: [] },
+        configFormat: 'settings-json',
+        artifactLayout: { global: [], local: [] },
+        commandStyle: 'slash-hyphen',
+        hooksSurface: 'settings-json',
+        hookEvents: 'claude',
+        sandboxTier: 'none',
+        supportTier: 1,
+        installSurface: 'settings-json',
+        writesSharedSettings: true,
+        permissionWriter: null,
+        extendedHookEvents: [],
+      },
+    };
+    if (overrides && typeof overrides === 'object') {
+      for (const [k, v] of Object.entries(overrides)) {
+        if (k === 'runtime' && typeof v === 'object') {
+          Object.assign(base.runtime, v);
+        } else {
+          base[k] = v;
+        }
+      }
+    }
+    return base;
+  }
+
+  test('REJECTS: installSurface not in VALID_INSTALL_SURFACES → throws validation error', () => {
+    const cap = makeValidRuntimeCap({ runtime: { installSurface: 'bogus-surface' } });
+    const errors = validateRuntimeBody(cap);
+    assert.ok(
+      errors.some((e) => e.includes('installSurface') && e.includes('bogus-surface')),
+      'Expected error about invalid installSurface, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('REJECTS: permissionWriter not null and not in {opencode,kilo} → throws validation error', () => {
+    const cap = makeValidRuntimeCap({ runtime: { permissionWriter: 'notarealwriter' } });
+    const errors = validateRuntimeBody(cap);
+    assert.ok(
+      errors.some((e) => e.includes('permissionWriter') && e.includes('notarealwriter')),
+      'Expected error about invalid permissionWriter, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('REJECTS: extendedHookEvents containing a bogus event ("SubagentStopTypo") → throws validation error', () => {
+    const cap = makeValidRuntimeCap({ runtime: { extendedHookEvents: ['SubagentStopTypo'] } });
+    const errors = validateRuntimeBody(cap);
+    assert.ok(
+      errors.some((e) => e.includes('extendedHookEvents') && e.includes('SubagentStopTypo')),
+      'Expected error about invalid extendedHookEvents entry, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('REJECTS: writesSharedSettings not a boolean → throws validation error', () => {
+    const cap = makeValidRuntimeCap({ runtime: { writesSharedSettings: 'yes' } });
+    const errors = validateRuntimeBody(cap);
+    assert.ok(
+      errors.some((e) => e.includes('writesSharedSettings') && e.includes('"yes"')),
+      'Expected error about writesSharedSettings not boolean, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('GATE A REJECTS: profile-marker-only + hooksSurface="settings-json" → validation error', () => {
+    // profile-marker-only installSurface only allows hooksSurface='none'
+    const cap = makeValidRuntimeCap({
+      runtime: {
+        installSurface: 'profile-marker-only',
+        hooksSurface: 'settings-json',
+        configFormat: 'none', // correct for profile-marker-only
+      },
+    });
+    const errors = validateRuntimeBody(cap);
+    assert.ok(
+      errors.some((e) => e.includes('hooksSurface') && e.includes('profile-marker-only')),
+      'Expected GATE A error for profile-marker-only + hooksSurface=settings-json, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('GATE B REJECTS: hookEvents="claude" + extendedHookEvents=["BeforeAgent"] → validation error', () => {
+    // BeforeAgent is a Gemini agent-event — requires hookEvents='gemini', not 'claude'
+    const cap = makeValidRuntimeCap({
+      runtime: {
+        hookEvents: 'claude',
+        extendedHookEvents: ['BeforeAgent'],
+      },
+    });
+    const errors = validateRuntimeBody(cap);
+    assert.ok(
+      errors.some((e) => e.includes('BeforeAgent') && e.includes('"gemini"')),
+      'Expected GATE B error for hookEvents=claude + extendedHookEvents=[BeforeAgent], got: ' + JSON.stringify(errors),
+    );
+  });
+
+  // Verify the new constants are well-formed
+  test('INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES covers all 6 installSurface values', () => {
+    assert.ok(INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES instanceof Map, 'Must be a Map');
+    assert.strictEqual(INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES.size, 6, 'Must cover 6 installSurface values');
+    for (const installSurface of VALID_INSTALL_SURFACES) {
+      assert.ok(
+        INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES.has(installSurface),
+        'INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES must include installSurface "' + installSurface + '"',
+      );
+    }
+  });
+
+  test('VALID_EXTENDED_HOOK_EVENTS covers all 7 known extended events', () => {
+    assert.ok(VALID_EXTENDED_HOOK_EVENTS instanceof Set, 'Must be a Set');
+    assert.strictEqual(VALID_EXTENDED_HOOK_EVENTS.size, 7, 'Must cover 7 extended hook events');
+    for (const ev of ['SubagentStop', 'Stop', 'PreCompact', 'FileChanged', 'BeforeAgent', 'AfterAgent', 'BeforeModel']) {
+      assert.ok(VALID_EXTENDED_HOOK_EVENTS.has(ev), 'Must include event "' + ev + '"');
+    }
+  });
+
+  test('VALID_PERMISSION_WRITERS covers exactly {opencode, kilo}', () => {
+    assert.ok(VALID_PERMISSION_WRITERS instanceof Set, 'Must be a Set');
+    assert.strictEqual(VALID_PERMISSION_WRITERS.size, 2, 'Must cover 2 permission writers');
+    assert.ok(VALID_PERMISSION_WRITERS.has('opencode'), 'Must include opencode');
+    assert.ok(VALID_PERMISSION_WRITERS.has('kilo'), 'Must include kilo');
+  });
+
+  // Confirm the valid base fixture does NOT produce errors (sanity)
+  test('valid runtime fixture produces no validation errors', () => {
+    const cap = makeValidRuntimeCap({});
+    const errors = validateRuntimeBody(cap);
+    assert.deepEqual(errors, [], 'Valid fixture must produce no errors, got: ' + JSON.stringify(errors));
   });
 });

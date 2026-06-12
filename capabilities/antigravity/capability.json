@@ -40,6 +40,10 @@
     "hooksSurface": "settings-json",
     "hookEvents": "gemini",
     "sandboxTier": "none",
-    "supportTier": 1
+    "supportTier": 1,
+    "installSurface": "settings-json",
+    "writesSharedSettings": true,
+    "permissionWriter": null,
+    "extendedHookEvents": []
   }
 }

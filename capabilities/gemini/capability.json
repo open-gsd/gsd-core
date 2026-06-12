@@ -38,6 +38,10 @@
     "hooksSurface": "settings-json",
     "hookEvents": "gemini",
     "sandboxTier": "none",
-    "supportTier": 2
+    "supportTier": 2,
+    "installSurface": "settings-json",
+    "writesSharedSettings": true,
+    "permissionWriter": null,
+    "extendedHookEvents": ["BeforeAgent", "AfterAgent", "BeforeModel"]
   }
 }

@@ -55,7 +55,11 @@ const capabilities = {
       "hooksSurface": "settings-json",
       "hookEvents": "gemini",
       "sandboxTier": "none",
-      "supportTier": 1
+      "supportTier": 1,
+      "installSurface": "settings-json",
+      "writesSharedSettings": true,
+      "permissionWriter": null,
+      "extendedHookEvents": []
     }
   },
   "audit": {
@@ -143,7 +147,11 @@ const capabilities = {
       "hooksSurface": "settings-json",
       "hookEvents": "claude",
       "sandboxTier": "none",
-      "supportTier": 2
+      "supportTier": 2,
+      "installSurface": "settings-json",
+      "writesSharedSettings": true,
+      "permissionWriter": null,
+      "extendedHookEvents": []
     }
   },
   "claude": {
@@ -196,7 +204,16 @@ const capabilities = {
       "hooksSurface": "settings-json",
       "hookEvents": "claude",
       "sandboxTier": "none",
-      "supportTier": 1
+      "supportTier": 1,
+      "installSurface": "settings-json",
+      "writesSharedSettings": true,
+      "permissionWriter": null,
+      "extendedHookEvents": [
+        "SubagentStop",
+        "Stop",
+        "PreCompact",
+        "FileChanged"
+      ]
     }
   },
   "cline": {
@@ -231,7 +248,11 @@ const capabilities = {
       "commandStyle": "slash-hyphen",
       "hooksSurface": "cline-rules",
       "sandboxTier": "none",
-      "supportTier": 2
+      "supportTier": 2,
+      "installSurface": "cline-rules",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": []
     }
   },
   "codebuddy": {
@@ -292,7 +313,11 @@ const capabilities = {
       "hooksSurface": "settings-json",
       "hookEvents": "claude",
       "sandboxTier": "none",
-      "supportTier": 2
+      "supportTier": 2,
+      "installSurface": "settings-json",
+      "writesSharedSettings": true,
+      "permissionWriter": null,
+      "extendedHookEvents": []
     }
   },
   "codex": {
@@ -337,7 +362,11 @@ const capabilities = {
       "hooksSurface": "codex-hooks-json",
       "hookEvents": "claude",
       "sandboxTier": "codex-agent-sandbox",
-      "supportTier": 1
+      "supportTier": 1,
+      "installSurface": "codex-toml",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": []
     }
   },
   "copilot": {
@@ -382,7 +411,11 @@ const capabilities = {
       "commandStyle": "slash-hyphen",
       "hooksSurface": "copilot-inline",
       "sandboxTier": "none",
-      "supportTier": 2
+      "supportTier": 2,
+      "installSurface": "copilot-instructions",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": []
     }
   },
   "cursor": {
@@ -443,7 +476,11 @@ const capabilities = {
       "hooksSurface": "cursor-hooks-json",
       "hookEvents": "claude",
       "sandboxTier": "none",
-      "supportTier": 2
+      "supportTier": 2,
+      "installSurface": "cursor-hooks-json",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": []
     }
   },
   "gemini": {
@@ -488,7 +525,15 @@ const capabilities = {
       "hooksSurface": "settings-json",
       "hookEvents": "gemini",
       "sandboxTier": "none",
-      "supportTier": 2
+      "supportTier": 2,
+      "installSurface": "settings-json",
+      "writesSharedSettings": true,
+      "permissionWriter": null,
+      "extendedHookEvents": [
+        "BeforeAgent",
+        "AfterAgent",
+        "BeforeModel"
+      ]
     }
   },
   "graphify": {
@@ -563,7 +608,11 @@ const capabilities = {
       "hooksSurface": "settings-json",
       "hookEvents": "claude",
       "sandboxTier": "none",
-      "supportTier": 2
+      "supportTier": 2,
+      "installSurface": "settings-json",
+      "writesSharedSettings": true,
+      "permissionWriter": null,
+      "extendedHookEvents": []
     }
   },
   "intel": {
@@ -658,7 +707,11 @@ const capabilities = {
       "commandStyle": "slash-hyphen",
       "hooksSurface": "none",
       "sandboxTier": "none",
-      "supportTier": 2
+      "supportTier": 2,
+      "installSurface": "settings-json",
+      "writesSharedSettings": false,
+      "permissionWriter": "kilo",
+      "extendedHookEvents": []
     }
   },
   "kimi": {
@@ -706,7 +759,11 @@ const capabilities = {
       "commandStyle": "slash-hyphen",
       "hooksSurface": "none",
       "sandboxTier": "none",
-      "supportTier": 2
+      "supportTier": 2,
+      "installSurface": "profile-marker-only",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": []
     }
   },
   "opencode": {
@@ -768,7 +825,11 @@ const capabilities = {
       "commandStyle": "slash-hyphen",
       "hooksSurface": "none",
       "sandboxTier": "none",
-      "supportTier": 2
+      "supportTier": 2,
+      "installSurface": "settings-json",
+      "writesSharedSettings": true,
+      "permissionWriter": "opencode",
+      "extendedHookEvents": []
     }
   },
   "qwen": {
@@ -813,7 +874,15 @@ const capabilities = {
       "hooksSurface": "settings-json",
       "hookEvents": "claude",
       "sandboxTier": "none",
-      "supportTier": 2
+      "supportTier": 2,
+      "installSurface": "settings-json",
+      "writesSharedSettings": true,
+      "permissionWriter": null,
+      "extendedHookEvents": [
+        "SubagentStop",
+        "Stop",
+        "PreCompact"
+      ]
     }
   },
   "trae": {
@@ -857,7 +926,11 @@ const capabilities = {
       "commandStyle": "slash-hyphen",
       "hooksSurface": "none",
       "sandboxTier": "none",
-      "supportTier": 2
+      "supportTier": 2,
+      "installSurface": "profile-marker-only",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": []
     }
   },
   "ui": {
@@ -987,7 +1060,11 @@ const capabilities = {
       "commandStyle": "slash-hyphen",
       "hooksSurface": "none",
       "sandboxTier": "none",
-      "supportTier": 2
+      "supportTier": 2,
+      "installSurface": "profile-marker-only",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": []
     }
   }
 };
@@ -1210,7 +1287,11 @@ const runtimes = {
       "hooksSurface": "settings-json",
       "hookEvents": "gemini",
       "sandboxTier": "none",
-      "supportTier": 1
+      "supportTier": 1,
+      "installSurface": "settings-json",
+      "writesSharedSettings": true,
+      "permissionWriter": null,
+      "extendedHookEvents": []
     }
   },
   "augment": {
@@ -1271,7 +1352,11 @@ const runtimes = {
       "hooksSurface": "settings-json",
       "hookEvents": "claude",
       "sandboxTier": "none",
-      "supportTier": 2
+      "supportTier": 2,
+      "installSurface": "settings-json",
+      "writesSharedSettings": true,
+      "permissionWriter": null,
+      "extendedHookEvents": []
     }
   },
   "claude": {
@@ -1324,7 +1409,16 @@ const runtimes = {
       "hooksSurface": "settings-json",
       "hookEvents": "claude",
       "sandboxTier": "none",
-      "supportTier": 1
+      "supportTier": 1,
+      "installSurface": "settings-json",
+      "writesSharedSettings": true,
+      "permissionWriter": null,
+      "extendedHookEvents": [
+        "SubagentStop",
+        "Stop",
+        "PreCompact",
+        "FileChanged"
+      ]
     }
   },
   "cline": {
@@ -1359,7 +1453,11 @@ const runtimes = {
       "commandStyle": "slash-hyphen",
       "hooksSurface": "cline-rules",
       "sandboxTier": "none",
-      "supportTier": 2
+      "supportTier": 2,
+      "installSurface": "cline-rules",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": []
     }
   },
   "codebuddy": {
@@ -1420,7 +1518,11 @@ const runtimes = {
       "hooksSurface": "settings-json",
       "hookEvents": "claude",
       "sandboxTier": "none",
-      "supportTier": 2
+      "supportTier": 2,
+      "installSurface": "settings-json",
+      "writesSharedSettings": true,
+      "permissionWriter": null,
+      "extendedHookEvents": []
     }
   },
   "codex": {
@@ -1465,7 +1567,11 @@ const runtimes = {
       "hooksSurface": "codex-hooks-json",
       "hookEvents": "claude",
       "sandboxTier": "codex-agent-sandbox",
-      "supportTier": 1
+      "supportTier": 1,
+      "installSurface": "codex-toml",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": []
     }
   },
   "copilot": {
@@ -1510,7 +1616,11 @@ const runtimes = {
       "commandStyle": "slash-hyphen",
       "hooksSurface": "copilot-inline",
       "sandboxTier": "none",
-      "supportTier": 2
+      "supportTier": 2,
+      "installSurface": "copilot-instructions",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": []
     }
   },
   "cursor": {
@@ -1571,7 +1681,11 @@ const runtimes = {
       "hooksSurface": "cursor-hooks-json",
       "hookEvents": "claude",
       "sandboxTier": "none",
-      "supportTier": 2
+      "supportTier": 2,
+      "installSurface": "cursor-hooks-json",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": []
     }
   },
   "gemini": {
@@ -1616,7 +1730,15 @@ const runtimes = {
       "hooksSurface": "settings-json",
       "hookEvents": "gemini",
       "sandboxTier": "none",
-      "supportTier": 2
+      "supportTier": 2,
+      "installSurface": "settings-json",
+      "writesSharedSettings": true,
+      "permissionWriter": null,
+      "extendedHookEvents": [
+        "BeforeAgent",
+        "AfterAgent",
+        "BeforeModel"
+      ]
     }
   },
   "hermes": {
@@ -1661,7 +1783,11 @@ const runtimes = {
       "hooksSurface": "settings-json",
       "hookEvents": "claude",
       "sandboxTier": "none",
-      "supportTier": 2
+      "supportTier": 2,
+      "installSurface": "settings-json",
+      "writesSharedSettings": true,
+      "permissionWriter": null,
+      "extendedHookEvents": []
     }
   },
   "kilo": {
@@ -1728,7 +1854,11 @@ const runtimes = {
       "commandStyle": "slash-hyphen",
       "hooksSurface": "none",
       "sandboxTier": "none",
-      "supportTier": 2
+      "supportTier": 2,
+      "installSurface": "settings-json",
+      "writesSharedSettings": false,
+      "permissionWriter": "kilo",
+      "extendedHookEvents": []
     }
   },
   "kimi": {
@@ -1776,7 +1906,11 @@ const runtimes = {
       "commandStyle": "slash-hyphen",
       "hooksSurface": "none",
       "sandboxTier": "none",
-      "supportTier": 2
+      "supportTier": 2,
+      "installSurface": "profile-marker-only",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": []
     }
   },
   "opencode": {
@@ -1838,7 +1972,11 @@ const runtimes = {
       "commandStyle": "slash-hyphen",
       "hooksSurface": "none",
       "sandboxTier": "none",
-      "supportTier": 2
+      "supportTier": 2,
+      "installSurface": "settings-json",
+      "writesSharedSettings": true,
+      "permissionWriter": "opencode",
+      "extendedHookEvents": []
     }
   },
   "qwen": {
@@ -1883,7 +2021,15 @@ const runtimes = {
       "hooksSurface": "settings-json",
       "hookEvents": "claude",
       "sandboxTier": "none",
-      "supportTier": 2
+      "supportTier": 2,
+      "installSurface": "settings-json",
+      "writesSharedSettings": true,
+      "permissionWriter": null,
+      "extendedHookEvents": [
+        "SubagentStop",
+        "Stop",
+        "PreCompact"
+      ]
     }
   },
   "trae": {
@@ -1927,7 +2073,11 @@ const runtimes = {
       "commandStyle": "slash-hyphen",
       "hooksSurface": "none",
       "sandboxTier": "none",
-      "supportTier": 2
+      "supportTier": 2,
+      "installSurface": "profile-marker-only",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": []
     }
   },
   "windsurf": {
@@ -1972,7 +2122,11 @@ const runtimes = {
       "commandStyle": "slash-hyphen",
       "hooksSurface": "none",
       "sandboxTier": "none",
-      "supportTier": 2
+      "supportTier": 2,
+      "installSurface": "profile-marker-only",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": []
     }
   }
 };

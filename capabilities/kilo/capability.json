@@ -58,6 +58,10 @@
     "commandStyle": "slash-hyphen",
     "hooksSurface": "none",
     "sandboxTier": "none",
-    "supportTier": 2
+    "supportTier": 2,
+    "installSurface": "settings-json",
+    "writesSharedSettings": false,
+    "permissionWriter": "kilo",
+    "extendedHookEvents": []
   }
 }

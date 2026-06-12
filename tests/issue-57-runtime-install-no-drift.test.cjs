@@ -194,8 +194,8 @@ describe('issue-57 AC2 — config-mutation dispatch is closed over the explicit 
       'bin/install.js no longer requires the runtime config adapter registry',
     );
     assert.ok(
-      src.includes('resolveRuntimeConfigIntent('),
-      'bin/install.js no longer dispatches config through resolveRuntimeConfigIntent',
+      src.includes('resolveInstallPlan('),
+      'bin/install.js no longer dispatches config through resolveInstallPlan',
     );
   });
 });

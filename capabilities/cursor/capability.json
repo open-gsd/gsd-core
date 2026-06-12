@@ -54,6 +54,10 @@
     "hooksSurface": "cursor-hooks-json",
     "hookEvents": "claude",
     "sandboxTier": "none",
-    "supportTier": 2
+    "supportTier": 2,
+    "installSurface": "cursor-hooks-json",
+    "writesSharedSettings": false,
+    "permissionWriter": null,
+    "extendedHookEvents": []
   }
 }

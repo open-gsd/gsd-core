@@ -480,6 +480,25 @@ const VALID_SANDBOX_TIERS = new Set(['none', 'codex-agent-sandbox']);
 const VALID_ARTIFACT_KIND_NAMES = new Set(['commands', 'agents', 'skills', 'kimi-agents']);
 const VALID_ARTIFACT_NESTINGS = new Set(['flat', 'nested']);
 const FEATURE_FIELDS_FORBIDDEN_ON_RUNTIME = ['skills', 'agents', 'steps', 'contributions', 'gates', 'hooks'];
+const VALID_INSTALL_SURFACES = new Set(['settings-json', 'codex-toml', 'copilot-instructions', 'cline-rules', 'cursor-hooks-json', 'profile-marker-only']);
+const VALID_PERMISSION_WRITERS = new Set(['opencode', 'kilo']);
+const VALID_EXTENDED_HOOK_EVENTS = new Set(['SubagentStop', 'Stop', 'PreCompact', 'FileChanged', 'BeforeAgent', 'AfterAgent', 'BeforeModel']);
+
+// GATE A: installSurface → allowed hooksSurface values (DEFECT.GENERATIVE-FIX: parity invariant)
+// Derived from the actual pairings in the 16 real runtime descriptors.
+const INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES = new Map([
+  ['settings-json',        new Set(['settings-json', 'none'])],
+  ['codex-toml',           new Set(['codex-hooks-json'])],
+  ['copilot-instructions', new Set(['copilot-inline'])],
+  ['cline-rules',          new Set(['cline-rules'])],
+  ['cursor-hooks-json',    new Set(['cursor-hooks-json'])],
+  ['profile-marker-only',  new Set(['none'])],
+]);
+
+// GATE B: extended hook event families → required hookEvents value
+// Gemini agent-events require hookEvents='gemini'; Claude-family events require hookEvents='claude'.
+const GEMINI_AGENT_EVENTS = new Set(['BeforeAgent', 'AfterAgent', 'BeforeModel']);
+const CLAUDE_FAMILY_EVENTS = new Set(['SubagentStop', 'Stop', 'PreCompact', 'FileChanged']);
 
 /**
  * Validate a runtime.configHome object per ADR-1016 Decision 1.
@@ -745,6 +764,84 @@ function validateRuntimeBody(cap) {
   // supportTier — 1 or 2 (unchanged)
   if (r.supportTier !== 1 && r.supportTier !== 2) {
     errors.push('runtime.supportTier must be 1 or 2 (got: ' + r.supportTier + ')');
+  }
+
+  // installSurface — required string in closed enum
+  if (!VALID_INSTALL_SURFACES.has(r.installSurface)) {
+    errors.push(
+      'runtime.installSurface must be one of: ' + [...VALID_INSTALL_SURFACES].join(', ') +
+      ' (got: ' + JSON.stringify(r.installSurface) + ')',
+    );
+  }
+
+  // writesSharedSettings — required boolean
+  if (typeof r.writesSharedSettings !== 'boolean') {
+    errors.push(
+      'runtime.writesSharedSettings must be a boolean (got: ' + JSON.stringify(r.writesSharedSettings) + ')',
+    );
+  }
+
+  // permissionWriter — required key; value must be null or a string in VALID_PERMISSION_WRITERS
+  if (!Object.prototype.hasOwnProperty.call(r, 'permissionWriter')) {
+    errors.push('runtime.permissionWriter is required (must be null or one of: ' + [...VALID_PERMISSION_WRITERS].join(', ') + ')');
+  } else if (r.permissionWriter !== null && !VALID_PERMISSION_WRITERS.has(r.permissionWriter)) {
+    errors.push(
+      'runtime.permissionWriter must be null or one of: ' + [...VALID_PERMISSION_WRITERS].join(', ') +
+      ' (got: ' + JSON.stringify(r.permissionWriter) + ')',
+    );
+  }
+
+  // extendedHookEvents — required array; every element must be in closed enum
+  if (!Array.isArray(r.extendedHookEvents)) {
+    errors.push(
+      'runtime.extendedHookEvents must be an array (got: ' + JSON.stringify(r.extendedHookEvents) + ')',
+    );
+  } else {
+    for (let i = 0; i < r.extendedHookEvents.length; i++) {
+      const ev = r.extendedHookEvents[i];
+      if (typeof ev !== 'string' || !VALID_EXTENDED_HOOK_EVENTS.has(ev)) {
+        errors.push(
+          'runtime.extendedHookEvents[' + i + '] must be one of: ' + [...VALID_EXTENDED_HOOK_EVENTS].join(', ') +
+          ' (got: ' + JSON.stringify(ev) + ')',
+        );
+      }
+    }
+  }
+
+  // GATE A: installSurface ↔ hooksSurface consistency (DEFECT.GENERATIVE-FIX)
+  // Only check if both fields are valid strings (individual field validators above report type errors).
+  if (typeof r.installSurface === 'string' && typeof r.hooksSurface === 'string') {
+    const allowedHooksSurfaces = INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES.get(r.installSurface);
+    if (allowedHooksSurfaces !== undefined && !allowedHooksSurfaces.has(r.hooksSurface)) {
+      errors.push(
+        'runtime.hooksSurface "' + r.hooksSurface + '" is not valid for installSurface "' + r.installSurface + '"' +
+        ' — allowed: ' + [...allowedHooksSurfaces].join(', ') +
+        ' (src: INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES in scripts/gen-capability-registry.cjs)',
+      );
+    }
+  }
+
+  // GATE B: extendedHookEvents ↔ hookEvents consistency (DEFECT.GENERATIVE-FIX)
+  // If extendedHookEvents contains Gemini agent-events, hookEvents must be 'gemini'.
+  // If it contains Claude-family events, hookEvents must be 'claude'.
+  // Empty extendedHookEvents imposes no constraint.
+  if (Array.isArray(r.extendedHookEvents) && r.extendedHookEvents.length > 0) {
+    const hasGeminiEvents = r.extendedHookEvents.some((ev) => GEMINI_AGENT_EVENTS.has(ev));
+    const hasClaudeEvents = r.extendedHookEvents.some((ev) => CLAUDE_FAMILY_EVENTS.has(ev));
+    if (hasGeminiEvents && r.hookEvents !== 'gemini') {
+      errors.push(
+        'runtime.extendedHookEvents contains Gemini agent-events (' +
+        r.extendedHookEvents.filter((ev) => GEMINI_AGENT_EVENTS.has(ev)).join(', ') +
+        ') but runtime.hookEvents is "' + r.hookEvents + '" — must be "gemini"',
+      );
+    }
+    if (hasClaudeEvents && r.hookEvents !== 'claude') {
+      errors.push(
+        'runtime.extendedHookEvents contains Claude-family events (' +
+        r.extendedHookEvents.filter((ev) => CLAUDE_FAMILY_EVENTS.has(ev)).join(', ') +
+        ') but runtime.hookEvents is "' + r.hookEvents + '" — must be "claude"',
+      );
+    }
   }
 
   return errors;
@@ -1551,26 +1648,13 @@ function runConsistencyGate(capabilityClusters, profileMembership, capMap) {
 
 // ─── ADR-857 phase 5e: configFormat ↔ installSurface parity gate ─────────────
 
-// Paths are declared at top level; the actual require() call is deferred (lazy) so importing
-// this generator on an unbuilt worktree doesn't fail at module load. Mirrors the pattern
-// used for install-profiles.cjs and clusters.cjs above.
-const RUNTIME_CONFIG_ADAPTER_REGISTRY_PATH = path.join(
-  ROOT, 'gsd-core', 'bin', 'lib', 'runtime-config-adapter-registry.cjs',
-);
-
-let _runtimeConfigAdapterMod = null;
-
-function getRuntimeConfigAdapterRegistry() {
-  if (!_runtimeConfigAdapterMod) {
-    _runtimeConfigAdapterMod = require(RUNTIME_CONFIG_ADAPTER_REGISTRY_PATH);
-  }
-  return _runtimeConfigAdapterMod;
-}
-
 // Map: installSurface → expected configFormat
-// Derived from the pairing of runtime-config-adapter-registry.cjs (installSurface)
-// and the capability.json descriptors (configFormat). DEFECT.GENERATIVE-FIX: this map
+// Derived from the pairing of capability.json descriptors (installSurface)
+// and capability.json descriptors (configFormat). DEFECT.GENERATIVE-FIX: this map
 // is the single parity contract between the two generated surfaces.
+// NOTE: both values come from the descriptor bodies in capMap — no dependency on
+// runtime-config-adapter-registry.cjs, which now requires capability-registry.cjs
+// (the file this gen-script produces), and thus must not be required here.
 const INSTALL_SURFACE_TO_CONFIG_FORMAT = new Map([
   ['settings-json',        'settings-json'],
   ['codex-toml',           'toml'],
@@ -1583,64 +1667,31 @@ const INSTALL_SURFACE_TO_CONFIG_FORMAT = new Map([
 /**
  * ADR-857 phase 5e: configFormat ↔ installSurface parity gate.
  *
- * For each runtime capability that also appears in INSTALL_SURFACES (i.e. is a
- * known config-adapter runtime), assert that its capability.json configFormat
- * matches the expected value derived from its installSurface.
+ * For each runtime capability that has an installSurface in its descriptor,
+ * assert that its configFormat matches the expected value derived from its
+ * installSurface.  Both values are read directly from the capMap descriptor
+ * bodies — no dependency on runtime-config-adapter-registry.cjs.
  *
  * HARD gate — throws on mismatch (DEFECT.GENERATIVE-FIX: this invariant is
  * derived from two parallel generated surfaces and must fail loudly).
- * SOFT skip — if the runtime-config-adapter-registry.cjs module is not loadable
- * (unbuilt worktree), emits a warning to stderr and returns without throwing.
  *
  * @param {Map<string, object>} capMap  Fully-validated capability map.
- * @returns {void}  Throws on mismatch; returns normally on success or soft-skip.
+ * @returns {void}  Throws on mismatch; returns normally on success.
  */
 function runConfigFormatParityGate(capMap) {
-  let adapterMod;
-  try {
-    adapterMod = getRuntimeConfigAdapterRegistry();
-  } catch (_err) {
-    // Module not loadable (unbuilt worktree) — soft-skip with warning
-    process.stderr.write(
-      '⚠ configFormat parity gate SKIPPED: runtime-config-adapter-registry.cjs not loadable ' +
-      '(run `npm run build` first)\n',
-    );
-    return;
-  }
-
-  // Check that REGISTRY is present and is an object-like registry
-  // (the .cjs exports resolveRuntimeConfigIntent, ALLOWED_CONFIG_RUNTIMES, INSTALL_SURFACES —
-  //  not REGISTRY directly; we need to reconstruct per-runtime installSurface from the adapter).
-  // We use ALLOWED_CONFIG_RUNTIMES to know which runtimes are in the adapter, then resolve each.
-  const { resolveRuntimeConfigIntent, ALLOWED_CONFIG_RUNTIMES: allowedRuntimes } = adapterMod;
-
-  if (typeof resolveRuntimeConfigIntent !== 'function' || !(allowedRuntimes instanceof Set)) {
-    process.stderr.write(
-      '⚠ configFormat parity gate SKIPPED: runtime-config-adapter-registry.cjs missing expected exports\n',
-    );
-    return;
-  }
-
-  // Only check runtimes present in BOTH the capability registry and INSTALL_SURFACES
+  // Read installSurface directly from the descriptor bodies already loaded into
+  // capMap — eliminates the require cycle introduced when adapter-registry was
+  // changed to require capability-registry.cjs (ADR-857 phase 5g drive 2).
   for (const [capId, cap] of capMap) {
     if (cap.role !== 'runtime') continue;
-    if (!allowedRuntimes.has(capId)) continue; // grok etc. excluded — not in adapter
 
     const r = cap.runtime;
     if (!r || typeof r.configFormat !== 'string') continue; // already validated above
 
-    let intent;
-    try {
-      intent = resolveRuntimeConfigIntent(capId);
-    } catch (_err) {
-      // Should not happen (we checked allowedRuntimes.has(capId)), but be defensive
-      process.stderr.write(
-        '⚠ configFormat parity gate: could not resolve installSurface for "' + capId + '" — skipping\n',
-      );
-      continue;
-    }
+    // Only check runtimes that have an installSurface (i.e. are config-adapter runtimes)
+    if (typeof r.installSurface !== 'string') continue; // grok etc. excluded — no installSurface
 
-    const installSurface = intent.installSurface;
+    const installSurface = r.installSurface;
     const expectedConfigFormat = INSTALL_SURFACE_TO_CONFIG_FORMAT.get(installSurface);
 
     if (expectedConfigFormat === undefined) {
@@ -2223,6 +2274,12 @@ module.exports = {
   // ADR-857 phase 5e: configFormat ↔ installSurface parity gate
   runConfigFormatParityGate,
   INSTALL_SURFACE_TO_CONFIG_FORMAT,
+  // ADR-857 phase 5f: cross-field consistency gates
+  INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES,
+  VALID_INSTALL_SURFACES,
+  VALID_EXTENDED_HOOK_EVENTS,
+  VALID_PERMISSION_WRITERS,
+  validateRuntimeBody,
   // FIX 5 (lazy): PROFILE_RANK and CLUSTERS are loaded on first access via getters
   // so importing the generator on a fresh/unbuilt worktree doesn't fail at module load.
   get PROFILE_RANK() { return getInstallProfiles().PROFILE_RANK; },
