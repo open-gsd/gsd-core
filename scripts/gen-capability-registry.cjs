@@ -1596,26 +1596,13 @@ function runConsistencyGate(capabilityClusters, profileMembership, capMap) {
 
 // ─── ADR-857 phase 5e: configFormat ↔ installSurface parity gate ─────────────
 
-// Paths are declared at top level; the actual require() call is deferred (lazy) so importing
-// this generator on an unbuilt worktree doesn't fail at module load. Mirrors the pattern
-// used for install-profiles.cjs and clusters.cjs above.
-const RUNTIME_CONFIG_ADAPTER_REGISTRY_PATH = path.join(
-  ROOT, 'gsd-core', 'bin', 'lib', 'runtime-config-adapter-registry.cjs',
-);
-
-let _runtimeConfigAdapterMod = null;
-
-function getRuntimeConfigAdapterRegistry() {
-  if (!_runtimeConfigAdapterMod) {
-    _runtimeConfigAdapterMod = require(RUNTIME_CONFIG_ADAPTER_REGISTRY_PATH);
-  }
-  return _runtimeConfigAdapterMod;
-}
-
 // Map: installSurface → expected configFormat
-// Derived from the pairing of runtime-config-adapter-registry.cjs (installSurface)
-// and the capability.json descriptors (configFormat). DEFECT.GENERATIVE-FIX: this map
+// Derived from the pairing of capability.json descriptors (installSurface)
+// and capability.json descriptors (configFormat). DEFECT.GENERATIVE-FIX: this map
 // is the single parity contract between the two generated surfaces.
+// NOTE: both values come from the descriptor bodies in capMap — no dependency on
+// runtime-config-adapter-registry.cjs, which now requires capability-registry.cjs
+// (the file this gen-script produces), and thus must not be required here.
 const INSTALL_SURFACE_TO_CONFIG_FORMAT = new Map([
   ['settings-json',        'settings-json'],
   ['codex-toml',           'toml'],
@@ -1628,64 +1615,31 @@ const INSTALL_SURFACE_TO_CONFIG_FORMAT = new Map([
 /**
  * ADR-857 phase 5e: configFormat ↔ installSurface parity gate.
  *
- * For each runtime capability that also appears in INSTALL_SURFACES (i.e. is a
- * known config-adapter runtime), assert that its capability.json configFormat
- * matches the expected value derived from its installSurface.
+ * For each runtime capability that has an installSurface in its descriptor,
+ * assert that its configFormat matches the expected value derived from its
+ * installSurface.  Both values are read directly from the capMap descriptor
+ * bodies — no dependency on runtime-config-adapter-registry.cjs.
  *
  * HARD gate — throws on mismatch (DEFECT.GENERATIVE-FIX: this invariant is
  * derived from two parallel generated surfaces and must fail loudly).
- * SOFT skip — if the runtime-config-adapter-registry.cjs module is not loadable
- * (unbuilt worktree), emits a warning to stderr and returns without throwing.
  *
  * @param {Map<string, object>} capMap  Fully-validated capability map.
- * @returns {void}  Throws on mismatch; returns normally on success or soft-skip.
+ * @returns {void}  Throws on mismatch; returns normally on success.
  */
 function runConfigFormatParityGate(capMap) {
-  let adapterMod;
-  try {
-    adapterMod = getRuntimeConfigAdapterRegistry();
-  } catch (_err) {
-    // Module not loadable (unbuilt worktree) — soft-skip with warning
-    process.stderr.write(
-      '⚠ configFormat parity gate SKIPPED: runtime-config-adapter-registry.cjs not loadable ' +
-      '(run `npm run build` first)\n',
-    );
-    return;
-  }
-
-  // Check that REGISTRY is present and is an object-like registry
-  // (the .cjs exports resolveRuntimeConfigIntent, ALLOWED_CONFIG_RUNTIMES, INSTALL_SURFACES —
-  //  not REGISTRY directly; we need to reconstruct per-runtime installSurface from the adapter).
-  // We use ALLOWED_CONFIG_RUNTIMES to know which runtimes are in the adapter, then resolve each.
-  const { resolveRuntimeConfigIntent, ALLOWED_CONFIG_RUNTIMES: allowedRuntimes } = adapterMod;
-
-  if (typeof resolveRuntimeConfigIntent !== 'function' || !(allowedRuntimes instanceof Set)) {
-    process.stderr.write(
-      '⚠ configFormat parity gate SKIPPED: runtime-config-adapter-registry.cjs missing expected exports\n',
-    );
-    return;
-  }
-
-  // Only check runtimes present in BOTH the capability registry and INSTALL_SURFACES
+  // Read installSurface directly from the descriptor bodies already loaded into
+  // capMap — eliminates the require cycle introduced when adapter-registry was
+  // changed to require capability-registry.cjs (ADR-857 phase 5g drive 2).
   for (const [capId, cap] of capMap) {
     if (cap.role !== 'runtime') continue;
-    if (!allowedRuntimes.has(capId)) continue; // grok etc. excluded — not in adapter
 
     const r = cap.runtime;
     if (!r || typeof r.configFormat !== 'string') continue; // already validated above
 
-    let intent;
-    try {
-      intent = resolveRuntimeConfigIntent(capId);
-    } catch (_err) {
-      // Should not happen (we checked allowedRuntimes.has(capId)), but be defensive
-      process.stderr.write(
-        '⚠ configFormat parity gate: could not resolve installSurface for "' + capId + '" — skipping\n',
-      );
-      continue;
-    }
+    // Only check runtimes that have an installSurface (i.e. are config-adapter runtimes)
+    if (typeof r.installSurface !== 'string') continue; // grok etc. excluded — no installSurface
 
-    const installSurface = intent.installSurface;
+    const installSurface = r.installSurface;
     const expectedConfigFormat = INSTALL_SURFACE_TO_CONFIG_FORMAT.get(installSurface);
 
     if (expectedConfigFormat === undefined) {

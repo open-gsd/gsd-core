@@ -1,9 +1,14 @@
 'use strict';
 
 /**
- * Runtime config adapter registry — explicit dispatch table for install-phase
- * config mutations (issue #60), replacing inline `runtime === '...'` branching
- * in bin/install.js.
+ * Runtime config adapter registry — dispatch table for install-phase config
+ * mutations (issue #60), replacing inline `runtime === '...'` branching in
+ * bin/install.js.
+ *
+ * ADR-857 phase 5g drive 2: The hand-kept REGISTRY const has been retired.
+ * Values are now read directly from the capability-registry.cjs descriptor
+ * (capabilities/<id>/capability.json runtime block) so a single source of
+ * truth drives all surfaces.
  *
  * Design notes:
  * - `installSurface` selects which config handler install() runs:
@@ -21,6 +26,9 @@
  *     'kilo'     → writes only its own permissions file.
  *     null       → no dedicated permission writer.
  */
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { runtimes } = require('./capability-registry.cjs') as { runtimes: Record<string, { runtime?: Record<string, unknown> }> };
 
 // ---------------------------------------------------------------------------
 // Types
@@ -43,41 +51,16 @@ interface RuntimeConfigIntent {
   finishPermissionWriter: FinishPermissionWriter;
 }
 
-interface RegistryEntry {
-  installSurface: ConfigInstallSurface;
-  writesSharedSettings: boolean;
-  finishPermissionWriter: FinishPermissionWriter;
-}
-
-// ---------------------------------------------------------------------------
-// Registry
-// ---------------------------------------------------------------------------
-
-const REGISTRY: Record<string, Readonly<RegistryEntry>> = Object.freeze({
-  claude:      Object.freeze({ installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null       } as const),
-  gemini:      Object.freeze({ installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null       } as const),
-  antigravity: Object.freeze({ installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null       } as const),
-  augment:     Object.freeze({ installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null       } as const),
-  qwen:        Object.freeze({ installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null       } as const),
-  hermes:      Object.freeze({ installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null       } as const),
-  codebuddy:   Object.freeze({ installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null       } as const),
-  opencode:    Object.freeze({ installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: 'opencode' } as const),
-  kilo:        Object.freeze({ installSurface: 'settings-json',        writesSharedSettings: false, finishPermissionWriter: 'kilo'     } as const),
-  codex:       Object.freeze({ installSurface: 'codex-toml',           writesSharedSettings: false, finishPermissionWriter: null       } as const),
-  copilot:     Object.freeze({ installSurface: 'copilot-instructions', writesSharedSettings: false, finishPermissionWriter: null       } as const),
-  cline:       Object.freeze({ installSurface: 'cline-rules',          writesSharedSettings: false, finishPermissionWriter: null       } as const),
-  cursor:      Object.freeze({ installSurface: 'cursor-hooks-json',    writesSharedSettings: false, finishPermissionWriter: null       } as const),
-  windsurf:    Object.freeze({ installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       } as const),
-  trae:        Object.freeze({ installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       } as const),
-  kimi:        Object.freeze({ installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       } as const),
-});
-
 // ---------------------------------------------------------------------------
 // Exports
 // ---------------------------------------------------------------------------
 
 /** The complete set of 16 supported runtimes for config-adapter dispatch. */
-const ALLOWED_CONFIG_RUNTIMES: ReadonlySet<string> = new Set(Object.keys(REGISTRY));
+const ALLOWED_CONFIG_RUNTIMES: ReadonlySet<string> = new Set(
+  Object.entries(runtimes)
+    .filter(([, cap]) => cap && cap.runtime && typeof (cap.runtime as Record<string, unknown>).installSurface === 'string')
+    .map(([id]) => id),
+);
 
 /** All valid installSurface values. */
 const INSTALL_SURFACES: ReadonlyArray<ConfigInstallSurface> = Object.freeze([
@@ -98,15 +81,14 @@ const INSTALL_SURFACES: ReadonlyArray<ConfigInstallSurface> = Object.freeze([
  * @throws {TypeError} if runtime is not a known supported runtime.
  */
 function resolveRuntimeConfigIntent(runtime: string): RuntimeConfigIntent {
-  if (!Object.hasOwn(REGISTRY, runtime)) {
-    throw new TypeError(`Unknown runtime for config adapter: ${runtime}`);
-  }
-  const entry = REGISTRY[runtime];
+  const entry = runtimes[runtime] && runtimes[runtime].runtime;
+  if (!entry) throw new TypeError(`Unknown runtime for config adapter: ${runtime}`);
+  const permissionWriter = (entry as Record<string, unknown>).permissionWriter;
   return {
     runtime,
-    installSurface:        entry.installSurface,
-    writesSharedSettings:  entry.writesSharedSettings,
-    finishPermissionWriter: entry.finishPermissionWriter,
+    installSurface:         (entry as Record<string, unknown>).installSurface as ConfigInstallSurface,
+    writesSharedSettings:   (entry as Record<string, unknown>).writesSharedSettings as boolean,
+    finishPermissionWriter: permissionWriter == null ? null : permissionWriter as FinishPermissionWriter,
   };
 }
 

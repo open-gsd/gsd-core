@@ -20,7 +20,8 @@
         "config-field-docs.test.cjs",
         "config-get-default.test.cjs",
         "config-schema.property.test.cjs",
-        "config.test.cjs"
+        "config.test.cjs",
+        "enh-1055-config-intent-descriptor-drive.test.cjs"
       ],
       "issue": "TBD"
     },
