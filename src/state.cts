@@ -773,7 +773,9 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
     // newly-written Stopped at / Resume file end up in the second (invisible) block.
     // Fix: when a `## Session` heading already exists, normalize THAT block in place
     // (insert / replace canonical bold-label lines within the existing section).
-    // Only append a brand-new section when NO `## Session` heading exists at all.
+    // A `## Session Continuity` heading (bootstrap shape) is handled additively —
+    // missing canonical fields are inserted while the heading and any prose are
+    // preserved (#1101). Only append a brand-new section when NEITHER heading exists.
     const callerSuppliedValues = !!(options.stopped_at || (options.resume_file !== undefined && options.resume_file !== null));
     const needsStoppedAt = options.stopped_at && !updated.includes('Stopped At');
     const needsResumeFile = options.resume_file !== undefined && options.resume_file !== null && !updated.includes('Resume File');
@@ -785,10 +787,15 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
         : 'None';
       const stoppedAtValue = options.stopped_at || 'None';
 
-      // Determine whether a ## Session heading already exists in the body.
-      const existingSessionHeading = /^## Session\s*$/im.test(content);
+      // Determine whether a session heading already exists in the body. The
+      // canonical normalized form is `## Session`; the bootstrap templates
+      // (workstream.cts, gsd2-import.cts, templates/state.md) instead emit
+      // `## Session Continuity`. Treat each separately so we never append a
+      // duplicate section alongside an existing one.
+      const existingCanonicalSession = /^## Session[ \t]*$/im.test(content);
+      const existingSessionContinuity = /^## Session Continuity[ \t]*$/im.test(content);
 
-      if (existingSessionHeading) {
+      if (existingCanonicalSession) {
         // Normalize in place: replace the ENTIRE BODY of the existing ## Session
         // section (heading + all content up to the next ## heading or EOF) with
         // canonical bold-label lines. The negative-lookahead per-line pattern
@@ -807,8 +814,30 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
             '',
           ].join('\n'),
         );
+      } else if (existingSessionContinuity) {
+        // #1101: a `## Session Continuity` section already exists (bootstrap
+        // shape). Previously this fell through to the append branch and created
+        // a SECOND `## Session` block — a duplicate. Instead, insert only the
+        // canonical fields that are still missing, right after the heading,
+        // preserving the `## Session Continuity` heading and ALL existing lines
+        // (e.g. prose like "Next recommended action"). Fields already updated in
+        // place above (needs* false) are not re-inserted. A function replacement
+        // is used so `$`-bearing caller values are inserted literally (#3454).
+        const linesToInsert: string[] = [];
+        if (needsLastSession) linesToInsert.push(`**Last session:** ${now}`);
+        if (needsStoppedAt) linesToInsert.push(`**Stopped at:** ${stoppedAtValue}`);
+        if (needsResumeFile) linesToInsert.push(`**Resume file:** ${resumeValue}`);
+        if (linesToInsert.length > 0) {
+          // Case-insensitive to match the `existingSessionContinuity` detection
+          // above (#1101 review F3) — otherwise a lowercase heading would detect
+          // but no-op the insert while still reporting the fields as updated.
+          content = content.replace(
+            /^(## Session Continuity[ \t]*\n)/im,
+            (_m, heading: string) => heading + linesToInsert.join('\n') + '\n',
+          );
+        }
       } else {
-        // No ## Session heading exists at all — append a new canonical section.
+        // No session heading exists at all — append a new canonical section.
         const scaffold = [
           '',
           '## Session',
@@ -838,6 +867,21 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
   } else {
     output({ recorded: false, reason: 'No session fields found in STATE.md' }, raw, 'false');
   }
+}
+
+/**
+ * Match the session section body from a STATE.md body. #1101: recognise the
+ * bootstrap `## Session Continuity` heading but PREFER the normalized `## Session`
+ * block when both exist (legacy duplicate files), so the reader agrees with the
+ * writer (which updates `## Session` first). `(?:^|\n)` line-anchors (kept out of
+ * `/m` so `$` stays end-of-string for the `(?=\n##|$)` section boundary), which
+ * excludes an h3 `### Session Continuity`; the trailing-` Archive` boundary still
+ * excludes `## Session Continuity Archive` (preserving the #2444 scoping).
+ * Returns the match whose group 1 is the section body, or null.
+ */
+function matchSessionSection(body: string): RegExpMatchArray | null {
+  return body.match(/(?:^|\n)##[ \t]*Session[ \t]*\n([\s\S]*?)(?=\n##|$)/i)
+    || body.match(/(?:^|\n)##[ \t]*Session Continuity[ \t]*\n([\s\S]*?)(?=\n##|$)/i);
 }
 
 function cmdStateSnapshot(cwd: string, raw: boolean): void {
@@ -922,7 +966,9 @@ function cmdStateSnapshot(cwd: string, raw: boolean): void {
     resume_file: null,
   };
 
-  const sessionMatch = body.match(/##\s*Session\s*\n([\s\S]*?)(?=\n##|$)/i);
+  // #1101: prefer the canonical `## Session` block, falling back to the bootstrap
+  // `## Session Continuity` heading. See matchSessionSection for the anchoring.
+  const sessionMatch = matchSessionSection(body);
   if (sessionMatch) {
     const sessionSection = sessionMatch[1];
     // Accept both `**Last Date:**` (canonical template form) and `**Last session:**`
@@ -980,7 +1026,9 @@ function buildStateFrontmatter(bodyContent: string, cwd: string | undefined): Re
   // historical "Stopped at:" prose elsewhere in the body (e.g. in a
   // Session Continuity Archive section) never overwrites the current value.
   // Fall back to full-body search only when no ## Session section exists.
-  const sessionSectionMatch = bodyContent.match(/##\s*Session\s*\n([\s\S]*?)(?=\n##|$)/i);
+  // #1101: prefer the canonical `## Session` block, falling back to the bootstrap
+  // `## Session Continuity` heading. See matchSessionSection for the anchoring.
+  const sessionSectionMatch = matchSessionSection(bodyContent);
   const sessionBodyScope = sessionSectionMatch ? sessionSectionMatch[1] : bodyContent;
   const stoppedAt = stateExtractField(sessionBodyScope, 'Stopped At') || stateExtractField(sessionBodyScope, 'Stopped at');
   const pausedAt = stateExtractField(bodyContent, 'Paused At');
