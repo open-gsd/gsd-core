@@ -196,6 +196,7 @@ export default tseslint.config(
       'no-unsafe-finally': 'warn',
       // eslint-plugin-n rules
       'n/no-process-exit': 'error',
+      'n/no-path-concat': 'error',
       // Local rules — warn for now; flip to error after cleanup phases
       'local/no-source-grep': 'warn',
     },
