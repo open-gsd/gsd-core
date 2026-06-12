@@ -484,6 +484,22 @@ const VALID_INSTALL_SURFACES = new Set(['settings-json', 'codex-toml', 'copilot-
 const VALID_PERMISSION_WRITERS = new Set(['opencode', 'kilo']);
 const VALID_EXTENDED_HOOK_EVENTS = new Set(['SubagentStop', 'Stop', 'PreCompact', 'FileChanged', 'BeforeAgent', 'AfterAgent', 'BeforeModel']);
 
+// GATE A: installSurface → allowed hooksSurface values (DEFECT.GENERATIVE-FIX: parity invariant)
+// Derived from the actual pairings in the 16 real runtime descriptors.
+const INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES = new Map([
+  ['settings-json',        new Set(['settings-json', 'none'])],
+  ['codex-toml',           new Set(['codex-hooks-json'])],
+  ['copilot-instructions', new Set(['copilot-inline'])],
+  ['cline-rules',          new Set(['cline-rules'])],
+  ['cursor-hooks-json',    new Set(['cursor-hooks-json'])],
+  ['profile-marker-only',  new Set(['none'])],
+]);
+
+// GATE B: extended hook event families → required hookEvents value
+// Gemini agent-events require hookEvents='gemini'; Claude-family events require hookEvents='claude'.
+const GEMINI_AGENT_EVENTS = new Set(['BeforeAgent', 'AfterAgent', 'BeforeModel']);
+const CLAUDE_FAMILY_EVENTS = new Set(['SubagentStop', 'Stop', 'PreCompact', 'FileChanged']);
+
 /**
  * Validate a runtime.configHome object per ADR-1016 Decision 1.
  * Returns an array of error strings.
@@ -789,6 +805,42 @@ function validateRuntimeBody(cap) {
           ' (got: ' + JSON.stringify(ev) + ')',
         );
       }
+    }
+  }
+
+  // GATE A: installSurface ↔ hooksSurface consistency (DEFECT.GENERATIVE-FIX)
+  // Only check if both fields are valid strings (individual field validators above report type errors).
+  if (typeof r.installSurface === 'string' && typeof r.hooksSurface === 'string') {
+    const allowedHooksSurfaces = INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES.get(r.installSurface);
+    if (allowedHooksSurfaces !== undefined && !allowedHooksSurfaces.has(r.hooksSurface)) {
+      errors.push(
+        'runtime.hooksSurface "' + r.hooksSurface + '" is not valid for installSurface "' + r.installSurface + '"' +
+        ' — allowed: ' + [...allowedHooksSurfaces].join(', ') +
+        ' (src: INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES in scripts/gen-capability-registry.cjs)',
+      );
+    }
+  }
+
+  // GATE B: extendedHookEvents ↔ hookEvents consistency (DEFECT.GENERATIVE-FIX)
+  // If extendedHookEvents contains Gemini agent-events, hookEvents must be 'gemini'.
+  // If it contains Claude-family events, hookEvents must be 'claude'.
+  // Empty extendedHookEvents imposes no constraint.
+  if (Array.isArray(r.extendedHookEvents) && r.extendedHookEvents.length > 0) {
+    const hasGeminiEvents = r.extendedHookEvents.some((ev) => GEMINI_AGENT_EVENTS.has(ev));
+    const hasClaudeEvents = r.extendedHookEvents.some((ev) => CLAUDE_FAMILY_EVENTS.has(ev));
+    if (hasGeminiEvents && r.hookEvents !== 'gemini') {
+      errors.push(
+        'runtime.extendedHookEvents contains Gemini agent-events (' +
+        r.extendedHookEvents.filter((ev) => GEMINI_AGENT_EVENTS.has(ev)).join(', ') +
+        ') but runtime.hookEvents is "' + r.hookEvents + '" — must be "gemini"',
+      );
+    }
+    if (hasClaudeEvents && r.hookEvents !== 'claude') {
+      errors.push(
+        'runtime.extendedHookEvents contains Claude-family events (' +
+        r.extendedHookEvents.filter((ev) => CLAUDE_FAMILY_EVENTS.has(ev)).join(', ') +
+        ') but runtime.hookEvents is "' + r.hookEvents + '" — must be "claude"',
+      );
     }
   }
 
@@ -2222,6 +2274,12 @@ module.exports = {
   // ADR-857 phase 5e: configFormat ↔ installSurface parity gate
   runConfigFormatParityGate,
   INSTALL_SURFACE_TO_CONFIG_FORMAT,
+  // ADR-857 phase 5f: cross-field consistency gates
+  INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES,
+  VALID_INSTALL_SURFACES,
+  VALID_EXTENDED_HOOK_EVENTS,
+  VALID_PERMISSION_WRITERS,
+  validateRuntimeBody,
   // FIX 5 (lazy): PROFILE_RANK and CLUSTERS are loaded on first access via getters
   // so importing the generator on a fresh/unbuilt worktree doesn't fail at module load.
   get PROFILE_RANK() { return getInstallProfiles().PROFILE_RANK; },
