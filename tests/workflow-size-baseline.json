@@ -51,7 +51,7 @@
   "note.md": 6563,
   "pause-work.md": 13654,
   "plan-milestone-gaps.md": 11765,
-  "plan-phase.md": 94253,
+  "plan-phase.md": 94892,
   "plan-review-convergence.md": 22949,
   "plant-seed.md": 11741,
   "pr-branch.md": 4994,
@@ -72,7 +72,7 @@
   "ship.md": 20896,
   "sketch-wrap-up.md": 14223,
   "sketch.md": 19960,
-  "spec-phase.md": 23094,
+  "spec-phase.md": 27589,
   "spike-wrap-up.md": 15092,
   "spike.md": 24517,
   "stats.md": 6718,
@@ -85,6 +85,6 @@
   "undo.md": 10431,
   "update.md": 21053,
   "validate-phase.md": 10630,
-  "verify-phase.md": 28430,
+  "verify-phase.md": 30875,
   "verify-work.md": 30614
 }
