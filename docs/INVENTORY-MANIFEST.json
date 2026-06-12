@@ -1,5 +1,5 @@
 {
-  "generated": "2026-06-11",
+  "generated": "2026-06-12",
   "families": {
     "agents": [
       "gsd-advisor-researcher",
@@ -282,6 +282,7 @@
       "code-review-flags.cjs",
       "command-aliases.cjs",
       "command-arg-projection.cjs",
+      "command-roster.cjs",
       "command-routing-hub.cjs",
       "commands.cjs",
       "config-loader.cjs",
@@ -340,6 +341,7 @@
       "roadmap-parser.cjs",
       "roadmap-upgrade.cjs",
       "roadmap.cjs",
+      "runtime-artifact-conversion.cjs",
       "runtime-artifact-layout.cjs",
       "runtime-config-adapter-registry.cjs",
       "runtime-homes.cjs",

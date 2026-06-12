@@ -371,7 +371,7 @@ The `gsd-planner` agent is decomposed into a core agent plus reference modules t
 
 ---
 
-## CLI Modules (107 shipped)
+## CLI Modules (109 shipped)
 
 Full listing: `gsd-core/bin/lib/*.cjs`.
 
@@ -393,6 +393,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `code-review-flags.cjs` | Typed flag parser for `/gsd:code-review`; exports `parseCodeReviewFlags(argv)` (→ `{ fix, all, auto, depth, files }`) and `resolveCodeReviewWorkflow(flags)` (→ `'code-review.md' \| 'code-review-fix.md'`); canonical dispatch seam for `--fix`/`--all`/`--auto` routing |
 | `command-aliases.cjs` | Alias/subcommand metadata for manifest-backed family routers |
 | `command-arg-projection.cjs` | Typed flag and positional argument projection helpers shared across command-family routers |
+| `command-roster.cjs` | Read-only discovery of canonical `commands/gsd/*.md` command stems for runtime artifact conversion and namespace rewrites |
 | `command-routing-hub.cjs` | Pure-result dispatch hub that centralizes mode decision (SDK vs CJS), error taxonomy, and no-throw contract for all command-family routers (#3788) |
 | `commands.cjs` | Misc CLI commands (slug, timestamp, todos, scaffolding, stats) |
 | `config-loader.cjs` | Project config loading — defaults merge, legacy-key migration, workstream overlay, unknown-key/profile-override validation (extracted from `core.cjs`, ADR-857) |
@@ -451,6 +452,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `roadmap-parser.cjs` | ROADMAP.md parsing — milestone slicing, current-milestone extraction, phase/milestone lookups, milestone-phase filter (extracted from `core.cjs`, ADR-857) |
 | `roadmap-upgrade.cjs` | Migration tool for converting legacy `Phase N` entries to milestone-prefixed `Phase M-NN` convention; `computeMigrationPlan` + `applyMigration` with dry-run default and atomic rollback |
 | `roadmap.cjs` | ROADMAP.md parsing, phase extraction, plan progress |
+| `runtime-artifact-conversion.cjs` | Runtime artifact conversion module — projects Claude-authored commands, agents, and skills into runtime-specific artifact bodies while preserving installer compatibility exports |
 | `runtime-artifact-layout.cjs` | Runtime artifact layout module — resolves the artifact directory shapes (commands, agents, skills) for each supported runtime; single source of truth for per-runtime artifact placement (#3663) |
 | `runtime-config-adapter-registry.cjs` | Explicit runtime config adapter registry — resolves per-runtime config-mutation install intent (install surface, shared-settings gate, finish-phase permission writer); see ADR-58. |
 | `runtime-hooks-surface.cjs` | Runtime hooks surface module — standalone hook-surface writer functions extracted from bin/install.js (ADR-857 phase 5f-1); owns Cline/Cursor/Copilot/Codex hook artifact generation and reconciliation. |
