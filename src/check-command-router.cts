@@ -875,8 +875,10 @@ function routeCheckCommand({ args, cwd, raw }: RouteCheckCommandOptions): void {
   if (subcommand === 'verify-schema-drift') {
     // Delegates to verify.schema-drift — drift capability gate at execute:wave:post (blocking).
     // Dot-to-hyphen normalization means query "verify.schema-drift" routes here.
+    // Honor GSD_SKIP_SCHEMA_CHECK=true to bypass the gate (preserves the original inline gate behavior).
     const phaseArg = typeof args[2] === 'string' ? args[2] : '';
-    cmdVerifySchemaDrift(cwd, phaseArg, false, raw);
+    const skipSchemaCheck = process.env['GSD_SKIP_SCHEMA_CHECK'] === 'true';
+    cmdVerifySchemaDrift(cwd, phaseArg, skipSchemaCheck, raw);
     return;
   }
   if (subcommand === 'verify-codebase-drift') {

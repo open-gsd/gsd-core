@@ -15,6 +15,22 @@ const WORKFLOW = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-ph
 function parseGateContract(content) {
   const lines = content.split(/\r?\n/);
   const lowerLines = lines.map(line => line.toLowerCase());
+
+  // Detect whether the proceed-past-tdd-escalation is conditional on the MVP+TDD block
+  // being ABSENT (correct) or unconditional (contradicts the block — regression).
+  //
+  // A contradicting unconditional proceed looks like:
+  //   "regardless ... gate results ... always proceed"
+  // That pattern is illegal once the MVP+TDD block is documented, because it nullifies it.
+  // The proceed must be guarded ("if ... not blocked ... proceed").
+  const hasUnconditionalProceed = /regardless[\s\S]{0,60}gate results[\s\S]{0,60}always proceed/i.test(content)
+    || /always proceed[\s\S]{0,80}regardless/i.test(content);
+
+  // The corrected proceed must co-occur with a conditional guard near the block mention.
+  // We accept either: explicit conditional keyword ("if ... not ... block" / "otherwise proceed")
+  // adjacent to the block text, OR absence of the unconditional pattern altogether.
+  const hasProceedConditional = !hasUnconditionalProceed;
+
   return {
     hasMvpModeVariable: lowerLines.some(line => line.includes('mvp_mode')),
     hasRoadmapModeResolution: lowerLines.some(line => line.includes('phase.mvp-mode') || line.includes('roadmap') && line.includes('mode')),
@@ -28,6 +44,9 @@ function parseGateContract(content) {
       && (content.toLowerCase().includes('refuse to mark the phase complete')
         || content.toLowerCase().includes('phase blocked')),
     hasReferenceDoc: lowerLines.some(line => line.includes('execute-mvp-tdd.md')),
+    // Must NOT have an unconditional "proceed regardless of gate results" that overrides the block.
+    // hasProceedConditional is true when the proceed is properly gated (or absent entirely).
+    hasProceedConditional,
   };
 }
 
@@ -50,6 +69,13 @@ describe('execute-phase — MVP+TDD gate', () => {
 
   test('end-of-phase TDD review escalates to blocking under MVP+TDD', () => {
     assert.ok(contract.hasBlockingEscalation, 'must escalate end-of-phase review to blocking');
+  });
+
+  test('proceed past TDD escalation is conditional — not an unconditional override', () => {
+    assert.ok(
+      contract.hasProceedConditional,
+      'workflow must NOT contain an unconditional "regardless of gate results, ALWAYS proceed" that nullifies the MVP+TDD block; the proceed must be guarded by the absence of an MVP+TDD block',
+    );
   });
 
   test('workflow references execute-mvp-tdd.md', () => {

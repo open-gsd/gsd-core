@@ -1709,18 +1709,21 @@ function cmdVerifySchemaDrift(
 
   const result = checkSchemaDrift(allFiles, executionLog, { skipCheck: !!skipFlag }) as unknown as Record<string, unknown>;
 
+  const isSkipped = !!result['skipped'];
   output(
     {
       // Uniform gate contract: `block` = true means "this gate's bad condition is met".
+      // When skipCheck is true (GSD_SKIP_SCHEMA_CHECK=true), the gate is bypassed —
+      // block must be false regardless of whether drift was detected.
       // drift_detected and blocking are kept for compatibility.
-      block: !!result['driftDetected'],
+      block: isSkipped ? false : !!result['driftDetected'],
       drift_detected: result['driftDetected'],
       blocking: result['blocking'],
       schema_files: result['schemaFiles'],
       orms: result['orms'],
       unpushed_orms: result['unpushedOrms'],
       message: result['message'],
-      skipped: result['skipped'] || false,
+      skipped: isSkipped,
     },
     raw,
   );
