@@ -1,5 +1,5 @@
 ---
 type: Fixed
-pr: 0
+pr: 1152
 ---
 **`sandbox_mode` emission in Codex TOML is now gated on the runtime descriptor's `sandboxTier` axis** — previously `installCodexConfig` emitted `sandbox_mode` unconditionally from a hardcoded policy map regardless of whether the runtime descriptor declared a sandbox tier, making the descriptor field cosmetic. `resolveInstallPlan` now projects `sandboxTier` from the capability registry, and `generateCodexAgentToml` / `installCodexConfig` gate emission on `sandboxTier !== 'none'`. The per-agent mode table `CODEX_AGENT_SANDBOX` remains GSD agent policy (not a runtime-descriptor property). For codex (`sandboxTier === 'codex-agent-sandbox'`) output is byte-identical to before; for all other runtimes (`sandboxTier === 'none'`) `sandbox_mode` is correctly omitted. `resolveInstallPlan` now fails loud (throws `TypeError`) on a missing or invalid `sandboxTier` descriptor axis rather than silently coercing garbage to `'none'`, preventing a corrupt/stale registry from silently dropping sandbox enforcement. Full removal of the per-agent registration-tax map remains tracked under #1138. (#1151)
