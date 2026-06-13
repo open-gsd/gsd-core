@@ -29,6 +29,7 @@
  */
 
 import path from 'node:path';
+import fs from 'node:fs';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import core = require('./core.cjs');
@@ -44,7 +45,7 @@ const { loadConfig } = configLoaderMod;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import installProfilesMod = require('./install-profiles.cjs');
-const { readActiveProfile, loadSkillsManifest, resolveProfile } = installProfilesMod;
+const { readActiveProfile, loadSkillsManifest, resolveProfile, parseRequires } = installProfilesMod;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import surfaceMod = require('./surface.cjs');
@@ -279,6 +280,88 @@ function _resolveCommandsGsdDir(): string {
 }
 
 /**
+ * Build a skill dependency manifest from an INSTALLED runtime's skills directory.
+ *
+ * In an installed runtime (e.g. Codex at ~/.codex), gsd skills live as
+ * configDir/skills/gsd-STEM/SKILL.md. There is no commands/gsd source tree.
+ * This function scans that installed layout and builds the same
+ * Map shape that loadSkillsManifest produces from sources.
+ *
+ * Stem extraction: a directory named gsd-secure-phase maps to stem secure-phase.
+ * Only directories whose names start with gsd- are included so user-created
+ * skills (without the gsd- prefix) are not accidentally pulled in.
+ *
+ * The requires: field is parsed via the shared parseRequires helper (the same
+ * parser loadSkillsManifest uses), so the two paths cannot drift.
+ *
+ * Returns an empty Map when the skills dir does not exist.
+ */
+function _loadInstalledSkillsManifest(configDir: string): Map<string, string[]> {
+  const manifest = new Map<string, string[]>();
+  const skillsDir = path.join(configDir, 'skills');
+  if (!fs.existsSync(skillsDir)) return manifest;
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(skillsDir, { withFileTypes: true });
+  } catch {
+    return manifest;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    if (!entry.name.startsWith('gsd-')) continue;
+    // Strip the 'gsd-' prefix to get the skill stem
+    const stem = entry.name.slice(4); // 'gsd-'.length === 4
+    if (!stem) continue;
+    const skillMdPath = path.join(skillsDir, entry.name, 'SKILL.md');
+    // Parity with loadSkillsManifest: a stem exists only when its artifact
+    // file is present. loadSkillsManifest registers a stem per .md FILE (and
+    // tolerates an unreadable file as []), but never invents a stem for which
+    // no file exists. Mirror that here: a stale gsd-<stem>/ directory with no
+    // SKILL.md must NOT register the stem — otherwise the capability would be
+    // wrongly reported surfaced/enabled and a verify:post hook would render
+    // for a skill that cannot run.
+    if (!fs.existsSync(skillMdPath)) continue;
+    let content = '';
+    try {
+      content = fs.readFileSync(skillMdPath, 'utf8');
+    } catch {
+      // SKILL.md present but unreadable — register with no deps (parity with
+      // loadSkillsManifest's readFileSync catch branch).
+    }
+    // Parse requires: via the SAME shared parser loadSkillsManifest uses, so
+    // installed-runtime dependency resolution can never silently diverge from
+    // the source-tree path (single source of truth — no duplicated regex).
+    manifest.set(stem, content ? parseRequires(content) : []);
+    // Mirror loadSkillsManifest's Map shape: it always sets a companion
+    // `_calls_agents_<stem>` key. Installed SKILL.md bodies carry no
+    // recoverable agent-call refs, so [] (the no-agents case) keeps the two
+    // manifest shapes identical and prevents undefined-vs-[] drift for any
+    // consumer that reads the agent-refs companion key.
+    manifest.set(`_calls_agents_${stem}`, []);
+  }
+  return manifest;
+}
+
+/**
+ * Resolve the skill dependency manifest for capability-state resolution.
+ *
+ * Resolution order (fixes #1160 — installed-runtime capability surface):
+ *   1. If commandsGsdDir exists, load from source (repo-checkout behavior).
+ *   2. Otherwise, fall back to installed skills at configDir/skills/gsd-[stem]/SKILL.md.
+ *
+ * In an installed runtime the commands/gsd source tree is absent; only the
+ * skills/ layout exists. Returning an empty manifest caused resolveSurface to
+ * materialise the full-sentinel to an empty Set, making every capability appear
+ * unsurfaced even when the skill was physically installed.
+ */
+function _resolveManifest(commandsGsdDir: string, configDir: string): Map<string, string[]> {
+  if (fs.existsSync(commandsGsdDir)) {
+    return loadSkillsManifest(commandsGsdDir);
+  }
+  return _loadInstalledSkillsManifest(configDir);
+}
+
+/**
  * Command entry point: resolve install profile, surface, and config; compute
  * capability state; emit the envelope via core.output.
  *
@@ -357,7 +440,9 @@ function resolveCapabilityRuntimeState(
   let installedSkills: Set<string> | '*';
   try {
     const commandsGsdDir = _resolveCommandsGsdDir();
-    const manifest = loadSkillsManifest(commandsGsdDir);
+    // Fix #1160: use _resolveManifest so installed-runtime layouts (where
+    // commands/gsd is absent) fall back to <configDir>/skills/gsd-*/SKILL.md.
+    const manifest = _resolveManifest(commandsGsdDir, resolvedConfigDir);
     const profileName = readActiveProfile(resolvedConfigDir) ?? 'full';
     const resolvedInstall = resolveProfile({
       modes: profileName.split(',').map((s: string) => s.trim()),
@@ -377,7 +462,9 @@ function resolveCapabilityRuntimeState(
   let surfacedSkills: Set<string>;
   try {
     const commandsGsdDir = _resolveCommandsGsdDir();
-    const manifest = loadSkillsManifest(commandsGsdDir);
+    // Fix #1160: use _resolveManifest so installed-runtime layouts (where
+    // commands/gsd is absent) fall back to <configDir>/skills/gsd-*/SKILL.md.
+    const manifest = _resolveManifest(commandsGsdDir, resolvedConfigDir);
     const surfaceResult = resolveSurface(resolvedConfigDir, manifest, undefined, registry);
     // resolveSurface returns { name, skills: Set<string>, agents: Set<string> }
     // (always a concrete Set — full profile is materialized)
@@ -452,5 +539,7 @@ export = {
   cmdCapabilityState,
   // Exported for tests
   _resolveCommandsGsdDir,
+  _loadInstalledSkillsManifest,
+  _resolveManifest,
   _isSafePropKey,
 };
