@@ -69,6 +69,15 @@ interface StateAddBlockerOptions {
   text_file?: string;
 }
 
+interface StateAddRoadmapEvolutionOptions {
+  phase?: string;
+  action?: string;
+  after?: string;
+  note?: string;
+  note_file?: string;
+  urgent?: boolean;
+}
+
 interface StateRecordSessionOptions {
   stopped_at?: string;
   resume_file?: string | null;
@@ -666,6 +675,102 @@ function cmdStateAddBlocker(cwd: string, text: string | StateAddBlockerOptions, 
   // Auto-create fallback guarantees added === true; no else branch needed.
   const result: Record<string, unknown> = { added: true, blocker: blockerText };
   if (created) result['created'] = true;
+  output(result, raw, 'true');
+}
+
+function cmdStateAddRoadmapEvolution(cwd: string, options: StateAddRoadmapEvolutionOptions, raw: boolean): void {
+  const statePath = planningPaths(cwd).state;
+  if (!fs.existsSync(statePath)) { output({ error: 'STATE.md not found' }, raw, undefined); return; }
+
+  const { phase, action, after, note, note_file, urgent } = options;
+  let noteText: string | undefined = undefined;
+  try {
+    noteText = readTextArgOrFile(cwd, note, note_file, 'note');
+  } catch (err) {
+    output({ added: false, reason: (err as Error).message }, raw, 'false');
+    return;
+  }
+  // Reject missing / empty / whitespace-only notes — an evolution entry with no
+  // narrative is meaningless and would corrupt the section with a dangling bullet.
+  if (!noteText || !noteText.trim()) { output({ error: 'note required' }, raw, undefined); return; }
+  // Flatten line breaks so the entry is always a single Markdown bullet. The
+  // dedupe + rendering contract is line-oriented; a multiline --note-file would
+  // otherwise spill continuation lines outside the bullet and defeat dedupe.
+  // Internal spacing (e.g. dollar columns) is preserved.
+  const flatNote = noteText.replace(/\s*[\r\n]+\s*/g, ' ').trim();
+
+  const actionText = (action && action.trim()) || 'changed';
+  const afterText = after && after.trim() ? ` after Phase ${after.trim()}` : '';
+  const urgentText = urgent ? ' (URGENT)' : '';
+  const entry = `- Phase ${phase || '?'} ${actionText}${afterText}: ${flatNote}${urgentText}`;
+
+  let duplicate = false;
+  let created = false;
+  let subsectionCreated = false;
+
+  // The Roadmap Evolution subsection lives under `## Accumulated Context`. Scope
+  // every lookup to that section's body so a `### Roadmap Evolution` heading in an
+  // unrelated h2 section (or a fenced example) can never be matched or mutated.
+  // The accBody lookahead stops only at the next h2 (`\n##[^#]`), so nested h3
+  // subsections stay inside the captured Accumulated Context body.
+  // Section boundaries mirror the sibling handlers (add-decision/add-blocker):
+  // a trailing CR on a CRLF STATE.md is absorbed by the lazy body and trimmed,
+  // so following sections are preserved without data loss (see the CRLF test).
+  readModifyWriteStateMd(statePath, (content) => {
+    const accPattern = /(##\s*Accumulated Context\s*\n)([\s\S]*?)(?=\n##[^#]|$)/i;
+    const accMatch = content.match(accPattern);
+
+    if (accMatch) {
+      const accHeader = accMatch[1];
+      const accBody = accMatch[2];
+      // Find `### Roadmap Evolution` WITHIN the Accumulated Context body only.
+      // Bounded by the next h3/h2 or the end of the section body.
+      const subPattern = /(###\s*Roadmap Evolution\s*\n)([\s\S]*?)(?=\n###?|$)/i;
+      const subMatch = accBody.match(subPattern);
+
+      if (subMatch) {
+        let subBody = subMatch[2];
+        // Dedupe: exact (trimmed) line already present is a no-op replay.
+        if (subBody.split('\n').some((line) => line.trim() === entry.trim())) {
+          duplicate = true;
+          return content;
+        }
+        subBody = subBody.replace(/None yet\.?\s*\n?/gi, '');
+        subBody = subBody.trimEnd() + '\n' + entry + '\n';
+        const newAccBody = accBody.replace(subPattern, (_m, header: string) => `${header}${subBody}`);
+        return content.replace(accPattern, () => `${accHeader}${newAccBody}`);
+      }
+
+      // Subsection missing — append it at the end of the Accumulated Context body.
+      subsectionCreated = true;
+      const trimmedAcc = accBody.trimEnd();
+      const block = `${trimmedAcc ? `${trimmedAcc}\n\n` : ''}### Roadmap Evolution\n\n${entry}\n`;
+      return content.replace(accPattern, () => `${accHeader}${block}`);
+    }
+
+    // No `## Accumulated Context` — DWIM: create both at end of file.
+    // Mirrors the add-decision / add-blocker auto-create behavior.
+    created = true;
+    subsectionCreated = true;
+    const scaffold = [
+      '',
+      '## Accumulated Context',
+      '',
+      '### Roadmap Evolution',
+      '',
+      entry,
+      '',
+    ].join('\n');
+    return content.trimEnd() + '\n' + scaffold;
+  }, cwd);
+
+  if (duplicate) {
+    output({ added: false, reason: 'duplicate', entry }, raw, 'false');
+    return;
+  }
+  const result: Record<string, unknown> = { added: true, entry };
+  if (created) result['created'] = true;
+  if (subsectionCreated) result['subsection_created'] = true;
   output(result, raw, 'true');
 }
 
@@ -2348,6 +2453,7 @@ export = {
   cmdStateUpdateProgress,
   cmdStateAddDecision,
   cmdStateAddBlocker,
+  cmdStateAddRoadmapEvolution,
   cmdStateResolveBlocker,
   cmdStateRecordSession,
   cmdStateSnapshot,

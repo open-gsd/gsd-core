@@ -298,6 +298,57 @@ const capabilities = {
       "extendedHookEvents": []
     }
   },
+  "code-review": {
+    "id": "code-review",
+    "role": "feature",
+    "title": "Code review",
+    "description": "Source-file code review and review-fix workflow support for completed execution work.",
+    "tier": "full",
+    "requires": [],
+    "skills": [
+      "code-review"
+    ],
+    "agents": [
+      "gsd-code-reviewer",
+      "gsd-code-fixer"
+    ],
+    "hooks": [],
+    "config": {
+      "workflow.code_review": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable code-review participation in post-execution review flows."
+      },
+      "workflow.code_review_depth": {
+        "type": "enum",
+        "values": [
+          "quick",
+          "standard",
+          "deep"
+        ],
+        "default": "standard",
+        "description": "Default depth for code review when no --depth override is supplied."
+      }
+    },
+    "steps": [
+      {
+        "point": "execute:post",
+        "ref": {
+          "skill": "code-review"
+        },
+        "produces": [
+          "REVIEW.md"
+        ],
+        "consumes": [
+          "SUMMARY.md"
+        ],
+        "when": "workflow.code_review",
+        "onError": "skip"
+      }
+    ],
+    "contributions": [],
+    "gates": []
+  },
   "codebuddy": {
     "id": "codebuddy",
     "role": "runtime",
@@ -809,6 +860,46 @@ const capabilities = {
       "extendedHookEvents": []
     }
   },
+  "nyquist": {
+    "id": "nyquist",
+    "role": "feature",
+    "title": "Nyquist validation",
+    "description": "Validation coverage audit that maps executed work back to tests and manual-only evidence.",
+    "tier": "full",
+    "requires": [],
+    "skills": [
+      "validate-phase"
+    ],
+    "agents": [
+      "gsd-nyquist-auditor"
+    ],
+    "hooks": [],
+    "config": {
+      "workflow.nyquist_validation": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable Nyquist validation coverage auditing."
+      }
+    },
+    "steps": [
+      {
+        "point": "verify:post",
+        "ref": {
+          "skill": "validate-phase"
+        },
+        "produces": [
+          "VALIDATION.md"
+        ],
+        "consumes": [
+          "SUMMARY.md"
+        ],
+        "when": "workflow.nyquist_validation",
+        "onError": "halt"
+      }
+    ],
+    "contributions": [],
+    "gates": []
+  },
   "opencode": {
     "id": "opencode",
     "role": "runtime",
@@ -1014,6 +1105,91 @@ const capabilities = {
     "contributions": [],
     "gates": []
   },
+  "security": {
+    "id": "security",
+    "role": "feature",
+    "title": "Security enforcement",
+    "description": "Threat mitigation verification and ship-time security blocking for phases with security enforcement enabled.",
+    "tier": "full",
+    "requires": [],
+    "skills": [
+      "secure-phase"
+    ],
+    "agents": [
+      "gsd-security-auditor"
+    ],
+    "hooks": [],
+    "config": {
+      "workflow.security_enforcement": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable security threat-mitigation verification before phase advancement."
+      },
+      "workflow.security_asvs_level": {
+        "type": "number",
+        "default": 1,
+        "description": "OWASP ASVS level used by security review guidance."
+      },
+      "workflow.security_block_on": {
+        "type": "enum",
+        "values": [
+          "critical",
+          "high",
+          "medium",
+          "low",
+          "none"
+        ],
+        "default": "high",
+        "description": "Minimum open threat severity that blocks advancement."
+      }
+    },
+    "steps": [
+      {
+        "point": "verify:post",
+        "ref": {
+          "skill": "secure-phase"
+        },
+        "produces": [
+          "SECURITY.md"
+        ],
+        "consumes": [
+          "SUMMARY.md"
+        ],
+        "when": "workflow.security_enforcement",
+        "onError": "halt"
+      }
+    ],
+    "contributions": [
+      {
+        "point": "plan:pre",
+        "into": "planner",
+        "fragment": {
+          "inline": "Each PLAN.md must include a <threat_model> block when security enforcement is active. Use the configured ASVS level and blocking threshold from workflow.security_asvs_level and workflow.security_block_on."
+        },
+        "produces": [],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "workflow.security_enforcement"
+      }
+    ],
+    "gates": [
+      {
+        "point": "ship:pre",
+        "check": {
+          "predicate": {
+            "kind": "artifact-frontmatter-equals",
+            "artifact": "SECURITY.md",
+            "field": "threats_open",
+            "equals": 0
+          }
+        },
+        "when": "workflow.security_enforcement",
+        "blocking": true,
+        "onError": "halt"
+      }
+    ]
+  },
   "trae": {
     "id": "trae",
     "role": "runtime",
@@ -1200,7 +1376,10 @@ const capabilities = {
 
 const bySkill = {
   "ai-integration-phase": "ai-integration",
+  "code-review": "code-review",
   "graphify": "graphify",
+  "validate-phase": "nyquist",
+  "secure-phase": "security",
   "ui-phase": "ui",
   "ui-review": "ui"
 };
@@ -1210,8 +1389,12 @@ const byAgent = {
   "gsd-ai-researcher": "ai-integration",
   "gsd-domain-researcher": "ai-integration",
   "gsd-eval-planner": "ai-integration",
+  "gsd-code-reviewer": "code-review",
+  "gsd-code-fixer": "code-review",
+  "gsd-nyquist-auditor": "nyquist",
   "gsd-pattern-mapper": "pattern-mapper",
   "gsd-phase-researcher": "research",
+  "gsd-security-auditor": "security",
   "gsd-ui-checker": "ui",
   "gsd-ui-auditor": "ui"
 };
@@ -1298,7 +1481,21 @@ const byLoopPoint = {
         "onError": "skip"
       }
     ],
-    "contributions": [],
+    "contributions": [
+      {
+        "capId": "security",
+        "point": "plan:pre",
+        "into": "planner",
+        "fragment": {
+          "inline": "Each PLAN.md must include a <threat_model> block when security enforcement is active. Use the configured ASVS level and blocking threshold from workflow.security_asvs_level and workflow.security_block_on."
+        },
+        "produces": [],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "workflow.security_enforcement"
+      }
+    ],
     "gates": [
       {
         "capId": "ui",
@@ -1344,7 +1541,23 @@ const byLoopPoint = {
     ]
   },
   "execute:post": {
-    "steps": [],
+    "steps": [
+      {
+        "capId": "code-review",
+        "point": "execute:post",
+        "ref": {
+          "skill": "code-review"
+        },
+        "produces": [
+          "REVIEW.md"
+        ],
+        "consumes": [
+          "SUMMARY.md"
+        ],
+        "when": "workflow.code_review",
+        "onError": "skip"
+      }
+    ],
     "contributions": [],
     "gates": []
   },
@@ -1355,6 +1568,36 @@ const byLoopPoint = {
   },
   "verify:post": {
     "steps": [
+      {
+        "capId": "nyquist",
+        "point": "verify:post",
+        "ref": {
+          "skill": "validate-phase"
+        },
+        "produces": [
+          "VALIDATION.md"
+        ],
+        "consumes": [
+          "SUMMARY.md"
+        ],
+        "when": "workflow.nyquist_validation",
+        "onError": "halt"
+      },
+      {
+        "capId": "security",
+        "point": "verify:post",
+        "ref": {
+          "skill": "secure-phase"
+        },
+        "produces": [
+          "SECURITY.md"
+        ],
+        "consumes": [
+          "SUMMARY.md"
+        ],
+        "when": "workflow.security_enforcement",
+        "onError": "halt"
+      },
       {
         "capId": "ui",
         "point": "verify:post",
@@ -1377,7 +1620,23 @@ const byLoopPoint = {
   "ship:pre": {
     "steps": [],
     "contributions": [],
-    "gates": []
+    "gates": [
+      {
+        "capId": "security",
+        "point": "ship:pre",
+        "check": {
+          "predicate": {
+            "kind": "artifact-frontmatter-equals",
+            "artifact": "SECURITY.md",
+            "field": "threats_open",
+            "equals": 0
+          }
+        },
+        "when": "workflow.security_enforcement",
+        "blocking": true,
+        "onError": "halt"
+      }
+    ]
   },
   "ship:post": {
     "steps": [],
@@ -1388,10 +1647,16 @@ const byLoopPoint = {
 
 const configKeys = {
   "workflow.ai_integration_phase": "ai-integration",
+  "workflow.code_review": "code-review",
+  "workflow.code_review_depth": "code-review",
   "graphify.enabled": "graphify",
   "intel.enabled": "intel",
+  "workflow.nyquist_validation": "nyquist",
   "workflow.pattern_mapper": "pattern-mapper",
   "workflow.research": "research",
+  "workflow.security_enforcement": "security",
+  "workflow.security_asvs_level": "security",
+  "workflow.security_block_on": "security",
   "workflow.ui_phase": "ui",
   "workflow.ui_review": "ui",
   "workflow.ui_safety_gate": "ui"
@@ -1403,6 +1668,23 @@ const configSchema = {
     "type": "boolean",
     "default": true,
     "description": "Prompt for an AI-SPEC design contract before planning phases that involve AI systems."
+  },
+  "workflow.code_review": {
+    "owner": "code-review",
+    "type": "boolean",
+    "default": true,
+    "description": "Enable code-review participation in post-execution review flows."
+  },
+  "workflow.code_review_depth": {
+    "owner": "code-review",
+    "type": "enum",
+    "default": "standard",
+    "description": "Default depth for code review when no --depth override is supplied.",
+    "values": [
+      "quick",
+      "standard",
+      "deep"
+    ]
   },
   "graphify.enabled": {
     "owner": "graphify",
@@ -1416,6 +1698,12 @@ const configSchema = {
     "default": false,
     "description": "Enable the intel code-intelligence command."
   },
+  "workflow.nyquist_validation": {
+    "owner": "nyquist",
+    "type": "boolean",
+    "default": true,
+    "description": "Enable Nyquist validation coverage auditing."
+  },
   "workflow.pattern_mapper": {
     "owner": "pattern-mapper",
     "type": "boolean",
@@ -1427,6 +1715,31 @@ const configSchema = {
     "type": "boolean",
     "default": true,
     "description": "Run phase research before planning when research artifacts are missing or explicitly refreshed."
+  },
+  "workflow.security_enforcement": {
+    "owner": "security",
+    "type": "boolean",
+    "default": true,
+    "description": "Enable security threat-mitigation verification before phase advancement."
+  },
+  "workflow.security_asvs_level": {
+    "owner": "security",
+    "type": "number",
+    "default": 1,
+    "description": "OWASP ASVS level used by security review guidance."
+  },
+  "workflow.security_block_on": {
+    "owner": "security",
+    "type": "enum",
+    "default": "high",
+    "description": "Minimum open threat severity that blocks advancement.",
+    "values": [
+      "critical",
+      "high",
+      "medium",
+      "low",
+      "none"
+    ]
   },
   "workflow.ui_phase": {
     "owner": "ui",
@@ -2368,8 +2681,17 @@ const capabilityClusters = {
   "ai-integration": [
     "ai-integration-phase"
   ],
+  "code-review": [
+    "code-review"
+  ],
   "graphify": [
     "graphify"
+  ],
+  "nyquist": [
+    "validate-phase"
+  ],
+  "security": [
+    "secure-phase"
   ],
   "ui": [
     "ui-phase",
@@ -2384,7 +2706,25 @@ const profileMembership = {
       "full"
     ]
   },
+  "code-review": {
+    "tier": "full",
+    "profiles": [
+      "full"
+    ]
+  },
   "graphify": {
+    "tier": "full",
+    "profiles": [
+      "full"
+    ]
+  },
+  "nyquist": {
+    "tier": "full",
+    "profiles": [
+      "full"
+    ]
+  },
+  "security": {
     "tier": "full",
     "profiles": [
       "full"
@@ -2405,6 +2745,7 @@ const _requiresGraph = {
   "augment": [],
   "claude": [],
   "cline": [],
+  "code-review": [],
   "codebuddy": [],
   "codex": [],
   "copilot": [],
@@ -2415,12 +2756,14 @@ const _requiresGraph = {
   "intel": [],
   "kilo": [],
   "kimi": [],
+  "nyquist": [],
   "opencode": [],
   "pattern-mapper": [
     "research"
   ],
   "qwen": [],
   "research": [],
+  "security": [],
   "trae": [],
   "ui": [],
   "windsurf": []

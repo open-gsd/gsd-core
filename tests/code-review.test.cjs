@@ -462,11 +462,18 @@ describe('CR-INTEGRATION: workflow integration points', () => {
       'execute-phase.md missing code_review_gate step name');
   });
 
-  test('execute-phase.md contains config-get workflow.code_review', { skip: !PLUGIN_AVAILABLE ? 'Plugin dir not installed' : false }, () => {
-    const content = fs.readFileSync(path.join(PLUGIN_WORKFLOWS_DIR, 'execute-phase.md'), 'utf-8');
+  test('execute-phase.md resolves code-review capability hook', () => {
+    const content = fs.readFileSync(path.join(WORKFLOWS_DIR, 'execute-phase.md'), 'utf-8');
+    const gateMatch = content.match(/<step name="code_review_gate"[^>]*>([\s\S]*?)<\/step>/);
+    assert.ok(gateMatch, 'execute-phase.md missing code_review_gate step');
+    const gateContent = gateMatch[1];
 
-    assert.match(content, /config-get\s+workflow\.code_review/,
-      'execute-phase.md missing config-get workflow.code_review call');
+    assert.ok(gateContent.includes('loop render-hooks execute:post'),
+      'execute-phase.md code_review_gate must resolve execute:post capability hooks');
+    assert.ok(gateContent.includes('ref.skill == "code-review"'),
+      'execute-phase.md code_review_gate must identify the code-review capability hook');
+    assert.ok(!gateContent.match(/config-get\s+workflow\.code_review/),
+      'execute-phase.md code_review_gate must not read workflow.code_review directly');
   });
 
   test('execute-phase.md does NOT contain ls.*REVIEW.md.*head pattern', { skip: !PLUGIN_AVAILABLE ? 'Plugin dir not installed' : false }, () => {
@@ -488,11 +495,19 @@ describe('CR-INTEGRATION: workflow integration points', () => {
       'quick.md missing code-review invocation');
   });
 
-  test('quick.md contains config-get workflow.code_review', { skip: !PLUGIN_AVAILABLE ? 'Plugin dir not installed' : false }, () => {
-    const content = fs.readFileSync(path.join(PLUGIN_WORKFLOWS_DIR, 'quick.md'), 'utf-8');
+  test('quick.md resolves code-review capability hook', () => {
+    const content = fs.readFileSync(path.join(WORKFLOWS_DIR, 'quick.md'), 'utf-8');
+    const start = content.indexOf('**Step 6.25: Code review (auto)**');
+    const end = content.indexOf('**Step 6.5: Verification', start);
+    assert.ok(start !== -1 && end !== -1, 'quick.md missing Step 6.25 code review section');
+    const reviewContent = content.slice(start, end);
 
-    assert.match(content, /config-get\s+workflow\.code_review/,
-      'quick.md missing config-get workflow.code_review call');
+    assert.ok(reviewContent.includes('loop render-hooks execute:post'),
+      'quick.md code review step must resolve execute:post capability hooks');
+    assert.ok(reviewContent.includes('ref.skill == "code-review"'),
+      'quick.md code review step must identify the code-review capability hook');
+    assert.ok(!reviewContent.match(/config-get\s+workflow\.code_review/),
+      'quick.md code review step must not read workflow.code_review directly');
   });
 
   // autonomous.md tests read from the repo's canonical workflow source (WORKFLOWS_DIR),

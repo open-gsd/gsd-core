@@ -1,0 +1,67 @@
+{
+  "id": "security",
+  "role": "feature",
+  "title": "Security enforcement",
+  "description": "Threat mitigation verification and ship-time security blocking for phases with security enforcement enabled.",
+  "tier": "full",
+  "requires": [],
+  "skills": ["secure-phase"],
+  "agents": ["gsd-security-auditor"],
+  "hooks": [],
+  "config": {
+    "workflow.security_enforcement": {
+      "type": "boolean",
+      "default": true,
+      "description": "Enable security threat-mitigation verification before phase advancement."
+    },
+    "workflow.security_asvs_level": {
+      "type": "number",
+      "default": 1,
+      "description": "OWASP ASVS level used by security review guidance."
+    },
+    "workflow.security_block_on": {
+      "type": "enum",
+      "values": ["critical", "high", "medium", "low", "none"],
+      "default": "high",
+      "description": "Minimum open threat severity that blocks advancement."
+    }
+  },
+  "steps": [
+    {
+      "point": "verify:post",
+      "ref": { "skill": "secure-phase" },
+      "produces": ["SECURITY.md"],
+      "consumes": ["SUMMARY.md"],
+      "when": "workflow.security_enforcement",
+      "onError": "halt"
+    }
+  ],
+  "contributions": [
+    {
+      "point": "plan:pre",
+      "into": "planner",
+      "fragment": {
+        "inline": "Each PLAN.md must include a <threat_model> block when security enforcement is active. Use the configured ASVS level and blocking threshold from workflow.security_asvs_level and workflow.security_block_on."
+      },
+      "produces": [],
+      "consumes": ["CONTEXT.md"],
+      "when": "workflow.security_enforcement"
+    }
+  ],
+  "gates": [
+    {
+      "point": "ship:pre",
+      "check": {
+        "predicate": {
+          "kind": "artifact-frontmatter-equals",
+          "artifact": "SECURITY.md",
+          "field": "threats_open",
+          "equals": 0
+        }
+      },
+      "when": "workflow.security_enforcement",
+      "blocking": true,
+      "onError": "halt"
+    }
+  ]
+}
