@@ -1323,6 +1323,48 @@ const capabilities = {
     "contributions": [],
     "gates": []
   },
+  "schema-gate": {
+    "id": "schema-gate",
+    "role": "feature",
+    "title": "Schema push detection gate",
+    "description": "Detects ORM schema-relevant files in the phase scope during planning and injects a mandatory [BLOCKING] schema push task into the plan. Prevents false-positive verification where build/types pass because TypeScript types come from config, not the live database.",
+    "tier": "full",
+    "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
+    "skills": [],
+    "agents": [],
+    "hooks": [],
+    "config": {
+      "workflow.schema_push_detection": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable ORM schema push detection during planning. When schema-relevant files are detected in the phase scope, a [BLOCKING] push task is injected into the plan."
+      }
+    },
+    "steps": [],
+    "contributions": [
+      {
+        "point": "plan:pre",
+        "into": "planner",
+        "fragment": {
+          "path": "fragments/plan-pre.md",
+          "inline": "# Schema Push Detection Gate\n\n> Detects schema-relevant files in the phase scope and injects a mandatory `[BLOCKING]` schema push task into the plan. Prevents false-positive verification where build/types pass because TypeScript types come from config, not the live database.\n\nCheck if any files in the phase scope match schema patterns:\n\n```bash\nPHASE_SECTION=$(gsd_run query roadmap.get-phase \"${PHASE}\" --pick section 2>/dev/null)\n```\n\nScan `PHASE_SECTION`, `CONTEXT.md` (if loaded), and `RESEARCH.md` (if exists) for file paths matching these ORM patterns:\n\n| ORM | File Patterns |\n|-----|--------------|\n| Payload CMS | `src/collections/**/*.ts`, `src/globals/**/*.ts` |\n| Prisma | `prisma/schema.prisma`, `prisma/schema/*.prisma` |\n| Drizzle | `drizzle/schema.ts`, `src/db/schema.ts`, `drizzle/*.ts` |\n| Supabase | `supabase/migrations/*.sql` |\n| TypeORM | `src/entities/**/*.ts`, `src/migrations/**/*.ts` |\n\nAlso check if any existing PLAN.md files for this phase already reference these file patterns in `files_modified`.\n\n**If schema-relevant files detected:**\n\nSet `SCHEMA_PUSH_REQUIRED=true` and `SCHEMA_ORM={detected_orm}`.\n\nDetermine the push command for the detected ORM:\n\n| ORM | Push Command | Non-TTY Workaround |\n|-----|-------------|-------------------|\n| Payload CMS | `npx payload migrate` | `CI=true PAYLOAD_MIGRATING=true npx payload migrate` |\n| Prisma | `npx prisma db push` | `npx prisma db push --accept-data-loss` (if destructive) |\n| Drizzle | `npx drizzle-kit push` | `npx drizzle-kit push` |\n| Supabase | `supabase db push` | Set `SUPABASE_ACCESS_TOKEN` env var |\n| TypeORM | `npx typeorm migration:run` | `npx typeorm migration:run -d src/data-source.ts` |\n\nInject the following into the planner prompt (step 8) as an additional constraint:\n\n```markdown\n<schema_push_requirement>\n**[BLOCKING] Schema Push Required**\n\nThis phase modifies schema-relevant files ({detected_files}). The planner MUST include\na `[BLOCKING]` task that runs the database schema push command AFTER all schema file\nmodifications are complete but BEFORE verification.\n\n- ORM detected: {SCHEMA_ORM}\n- Push command: {push_command}\n- Non-TTY workaround: {env_hint}\n- If push requires interactive prompts that cannot be suppressed, flag the task for\n  manual intervention with `autonomous: false`\n\nThis task is mandatory — the phase CANNOT pass verification without it. Build and\ntype checks will pass without the push (types come from config, not the live database),\ncreating a false-positive verification state.\n</schema_push_requirement>\n```\n\nDisplay: `Schema files detected ({SCHEMA_ORM}) — [BLOCKING] push task will be injected into plans`\n\n**If no schema-relevant files detected:** Skip silently.\n"
+        },
+        "produces": [],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "workflow.schema_push_detection",
+        "onError": "skip"
+      }
+    ],
+    "gates": []
+  },
   "security": {
     "id": "security",
     "role": "feature",
@@ -1764,6 +1806,21 @@ const byLoopPoint = {
     ],
     "contributions": [
       {
+        "capId": "schema-gate",
+        "point": "plan:pre",
+        "into": "planner",
+        "fragment": {
+          "path": "fragments/plan-pre.md",
+          "inline": "# Schema Push Detection Gate\n\n> Detects schema-relevant files in the phase scope and injects a mandatory `[BLOCKING]` schema push task into the plan. Prevents false-positive verification where build/types pass because TypeScript types come from config, not the live database.\n\nCheck if any files in the phase scope match schema patterns:\n\n```bash\nPHASE_SECTION=$(gsd_run query roadmap.get-phase \"${PHASE}\" --pick section 2>/dev/null)\n```\n\nScan `PHASE_SECTION`, `CONTEXT.md` (if loaded), and `RESEARCH.md` (if exists) for file paths matching these ORM patterns:\n\n| ORM | File Patterns |\n|-----|--------------|\n| Payload CMS | `src/collections/**/*.ts`, `src/globals/**/*.ts` |\n| Prisma | `prisma/schema.prisma`, `prisma/schema/*.prisma` |\n| Drizzle | `drizzle/schema.ts`, `src/db/schema.ts`, `drizzle/*.ts` |\n| Supabase | `supabase/migrations/*.sql` |\n| TypeORM | `src/entities/**/*.ts`, `src/migrations/**/*.ts` |\n\nAlso check if any existing PLAN.md files for this phase already reference these file patterns in `files_modified`.\n\n**If schema-relevant files detected:**\n\nSet `SCHEMA_PUSH_REQUIRED=true` and `SCHEMA_ORM={detected_orm}`.\n\nDetermine the push command for the detected ORM:\n\n| ORM | Push Command | Non-TTY Workaround |\n|-----|-------------|-------------------|\n| Payload CMS | `npx payload migrate` | `CI=true PAYLOAD_MIGRATING=true npx payload migrate` |\n| Prisma | `npx prisma db push` | `npx prisma db push --accept-data-loss` (if destructive) |\n| Drizzle | `npx drizzle-kit push` | `npx drizzle-kit push` |\n| Supabase | `supabase db push` | Set `SUPABASE_ACCESS_TOKEN` env var |\n| TypeORM | `npx typeorm migration:run` | `npx typeorm migration:run -d src/data-source.ts` |\n\nInject the following into the planner prompt (step 8) as an additional constraint:\n\n```markdown\n<schema_push_requirement>\n**[BLOCKING] Schema Push Required**\n\nThis phase modifies schema-relevant files ({detected_files}). The planner MUST include\na `[BLOCKING]` task that runs the database schema push command AFTER all schema file\nmodifications are complete but BEFORE verification.\n\n- ORM detected: {SCHEMA_ORM}\n- Push command: {push_command}\n- Non-TTY workaround: {env_hint}\n- If push requires interactive prompts that cannot be suppressed, flag the task for\n  manual intervention with `autonomous: false`\n\nThis task is mandatory — the phase CANNOT pass verification without it. Build and\ntype checks will pass without the push (types come from config, not the live database),\ncreating a false-positive verification state.\n</schema_push_requirement>\n```\n\nDisplay: `Schema files detected ({SCHEMA_ORM}) — [BLOCKING] push task will be injected into plans`\n\n**If no schema-relevant files detected:** Skip silently.\n"
+        },
+        "produces": [],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "workflow.schema_push_detection",
+        "onError": "skip"
+      },
+      {
         "capId": "security",
         "point": "plan:pre",
         "into": "planner",
@@ -1994,6 +2051,7 @@ const configKeys = {
   "workflow.pattern_mapper": "pattern-mapper",
   "profile-pipeline.enabled": "profile-pipeline",
   "workflow.research": "research",
+  "workflow.schema_push_detection": "schema-gate",
   "workflow.security_enforcement": "security",
   "workflow.security_asvs_level": "security",
   "workflow.security_block_on": "security",
@@ -2090,6 +2148,12 @@ const configSchema = {
     "type": "boolean",
     "default": true,
     "description": "Run phase research before planning when research artifacts are missing or explicitly refreshed."
+  },
+  "workflow.schema_push_detection": {
+    "owner": "schema-gate",
+    "type": "boolean",
+    "default": true,
+    "description": "Enable ORM schema push detection during planning. When schema-relevant files are detected in the phase scope, a [BLOCKING] push task is injected into the plan."
   },
   "workflow.security_enforcement": {
     "owner": "security",
@@ -3196,6 +3260,7 @@ const _requiresGraph = {
   "profile-pipeline": [],
   "qwen": [],
   "research": [],
+  "schema-gate": [],
   "security": [],
   "tdd": [],
   "trae": [],
