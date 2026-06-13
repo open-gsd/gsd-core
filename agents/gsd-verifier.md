@@ -85,7 +85,7 @@ cat "$PHASE_DIR"/*-VERIFICATION.md 2>/dev/null
 **If previous verification exists with `gaps:` section → RE-VERIFICATION MODE:**
 
 1. Parse previous VERIFICATION.md frontmatter
-2. Extract `must_haves` (truths, artifacts, key_links)
+2. Extract `must_haves` (truths, artifacts, key_links, prohibitions)
 3. Extract `gaps` (items that failed)
 4. Set `is_re_verification = true`
 5. **Skip to Step 3** with optimization:
@@ -140,7 +140,18 @@ must_haves:
     - from: "src/components/Chat.tsx"
       to: "src/app/api/chat/route.ts"
       via: "fetch in useEffect — calls /api/chat endpoint"
+  prohibitions:
+    - statement: "MUST NOT store raw SSN in plaintext"
+      status: "resolved"
+      verification: "judgment"
 ```
+
+**Also extract `must_haves.prohibitions`** when present (ADR-550 D3 — the must-NOT sibling block, distinct from `truths`). Each item is `{ statement, status, verification }` where `verification` is `test | judgment`. These are NEGATIVE checks: a verified prohibition means the must-NOT did NOT happen. Route them by verification tier in the verdict assembly (ADR-550 D4, the "B-with-guard" 2026-06-12 maintainer decision):
+
+- **judgment-tier prohibitions → mode-dependent soft-gate.** Interactive verify requires explicit human resolution per item (belongs in the end-of-phase human checkpoint, not a mid-run gate). Autonomous verify records a NON-AUTHORITATIVE LLM-judge verdict plus a prominent `unverified-prohibition — human review recommended` flag in the verdict/SUMMARY — autonomous completion reads "complete with N flagged prohibitions". NEVER a silent pass; NEVER a hard halt of an AFK run.
+- **test-tier prohibitions → FAIL CLOSED (accept-and-flag, not reject-at-parse).** Accept the `verification: test` value (the SPEC↔must_haves.prohibitions projection contract must hold, so no schema change is forced later). But a well-formed test-tier item that reaches verify with NO wired enforcement is treated as UNVERIFIED — flagged exactly like an unresolved judgment item, NEVER green. The deterministic fail-closed default is `dispositionForProhibition()` in probe-core (status `unverified`, `flagged: true` when `enforcementEvidence` is empty). Do NOT wire a real fail-first negative-test hard gate here — that enforcement MECHANISM defers to a follow-up PR (it needs a real test-tier consumer to `regression-must-fail-first` against; #644's corpus is entirely judgment-tier).
+
+A flagged prohibition counts as a human-verification item (status `human_needed`) or a gap (status `gaps_found`) per the existing decision tree — it must never be silently absorbed into a `passed` verdict.
 
 **Step 2c: Merge must-haves**
 

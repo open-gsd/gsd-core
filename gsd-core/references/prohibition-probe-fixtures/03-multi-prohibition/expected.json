@@ -1,0 +1,32 @@
+{
+  "items": [
+    {
+      "requirement_id": "R1",
+      "category": "fairness",
+      "status": "resolved",
+      "verification": "judgment",
+      "resolution": null,
+      "reason": null,
+      "statement": "MUST NOT use protected attributes (race, gender, age, national origin) or their proxies (zip code, name) in the loan decision or rate"
+    },
+    {
+      "requirement_id": "R1",
+      "category": "privacy",
+      "status": "resolved",
+      "verification": "test",
+      "resolution": null,
+      "reason": null,
+      "statement": "MUST NOT store raw PII / financial secrets (SSN, full account or card numbers) in plaintext in the audit log"
+    },
+    {
+      "requirement_id": "R1",
+      "category": "transparency",
+      "status": "resolved",
+      "verification": "judgment",
+      "resolution": null,
+      "reason": null,
+      "statement": "MUST NOT mislead or omit the true rate/APR/terms in the explanation; an adverse decision must state the real principal reason (adverse-action)"
+    }
+  ],
+  "coverage": { "applicable": 3, "resolved": 3, "unresolved": 0, "byVerification": { "test": 1, "judgment": 2 } }
+}
