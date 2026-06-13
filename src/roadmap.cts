@@ -8,6 +8,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { realClock } from './clock.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import core = require('./core.cjs');
 const { escapeRegex, normalizePhaseName, phaseMarkdownRegexSource, phaseMarkdownRegexSourceExact, output, error, findPhaseInternal, phaseTokenMatches } = core;
@@ -470,7 +471,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
 
   const isComplete = summaryCount >= planCount;
   const status = isComplete ? 'Complete' : summaryCount > 0 ? 'In Progress' : 'Planned';
-  const today = new Date().toISOString().split('T')[0];
+  const today = realClock.today();
 
   if (!fs.existsSync(roadmapPath)) {
     output({ updated: false, reason: 'ROADMAP.md not found', plan_count: planCount, summary_count: summaryCount }, raw, 'no roadmap');
@@ -487,19 +488,26 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       `^(\\|\\s*${phasePattern}\\.?\\s[^|]*(?:\\|[^\\n]*))$`,
       'im'
     );
-    const dateField = isComplete ? ` ${today} ` : '  ';
     roadmapContent = roadmapContent.replace(tableRowPattern, (fullRow) => {
       const cells = fullRow.split('|').slice(1, -1); // drop leading/trailing empty from split
       if (cells.length === 5) {
         // 5-col: Phase | Milestone | Plans | Status | Completed
         cells[2] = ` ${summaryCount}/${planCount} `;
         cells[3] = ` ${status.padEnd(11)}`;
-        cells[4] = dateField;
+        // Preserve existing non-empty completion date (#1161: idempotent date stamp)
+        const existingDate5 = cells[4].trim();
+        cells[4] = isComplete
+          ? (existingDate5 && existingDate5 !== '-' ? cells[4] : ` ${today} `)
+          : '  ';
       } else if (cells.length === 4) {
         // 4-col: Phase | Plans | Status | Completed
         cells[1] = ` ${summaryCount}/${planCount} `;
         cells[2] = ` ${status.padEnd(11)}`;
-        cells[3] = dateField;
+        // Preserve existing non-empty completion date (#1161: idempotent date stamp)
+        const existingDate4 = cells[3].trim();
+        cells[3] = isComplete
+          ? (existingDate4 && existingDate4 !== '-' ? cells[3] : ` ${today} `)
+          : '  ';
       }
       return '|' + cells.join('|') + '|';
     });
