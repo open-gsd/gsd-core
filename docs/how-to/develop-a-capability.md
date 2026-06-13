@@ -134,12 +134,15 @@ The rendered JSON should include the active hook, the declared `ref`, and the ma
 
 Host workflows should ask the resolver for active hooks and then dispatch from the resolved data. Do not add new direct `config-get workflow.<feature>` checks to a host workflow for a migrated feature.
 
-The Phase 6 planning migration follows this pattern:
+The Phase 6 migrations follow this pattern:
 
 - `research` registers a `plan:pre` step that invokes `gsd-phase-researcher`.
 - `ai-integration` owns the AI-SPEC planning activation and config key.
 - `pattern-mapper` registers a `plan:pre` step that invokes `gsd-pattern-mapper`.
 - `plan-phase.md` reads the resolved `PLAN_PRE_HOOKS_JSON` and dispatches `ref.agent` or `ref.skill` from that data.
+- `code-review` registers an `execute:post` step and review workflows dispatch from the active hook's `ref.skill`.
+- `security` registers a `plan:pre` contribution, a `verify:post` step, and a blocking `ship:pre` gate.
+- `nyquist` registers a `verify:post` step for validation coverage auditing.
 
 This keeps "off means off" enforceable by construction: disabled Capabilities are absent from the active hook set, so the host workflow has nothing feature-specific to run.
 

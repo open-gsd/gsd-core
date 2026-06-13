@@ -776,11 +776,14 @@ Note: For quick tasks producing multiple plans (rare), spawn executors in parall
 
 Skip this step entirely if `$FULL_MODE` is false.
 
-**Config gate:**
+**Capability gate:**
 ```bash
-CODE_REVIEW_ENABLED=$(gsd_run query config-get workflow.code_review 2>/dev/null || echo "true")
+EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw)
 ```
-If `"false"`, skip with message "Code review skipped (workflow.code_review=false)".
+
+Resolve active step hooks from `EXECUTE_POST_HOOKS_JSON` where `kind == "step"` and `ref.skill == "code-review"`.
+
+If no active code-review step hook exists, skip with message "Code review skipped (code-review capability inactive)".
 
 **Scope files from executor's commits:**
 ```bash

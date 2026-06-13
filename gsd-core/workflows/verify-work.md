@@ -457,16 +457,31 @@ Present summary:
 **If issues == 0:**
 
 ```bash
-SECURITY_CFG=$(gsd_run query config-get workflow.security_enforcement --raw 2>/dev/null || echo "true")
+VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)
 SECURITY_FILE=$(ls "${PHASE_DIR}"/*-SECURITY.md 2>/dev/null | head -1)
 ```
 
-If `SECURITY_CFG` is `true` AND `SECURITY_FILE` is empty:
-```
-⚠ Security enforcement enabled — /gsd:secure-phase {phase} has not run.
-Run before advancing to the next phase.
+Resolve active step hooks from `VERIFY_POST_HOOKS_JSON` where `kind == "step"` and `ref.skill == "secure-phase"`.
 
-All tests passed. Ready to continue.
+If an active secure-phase step hook exists AND `SECURITY_FILE` is empty, dispatch the registry-provided skill stem:
+
+```
+Skill(skill="gsd-${ref.skill}", args="{phase}")
+```
+
+After the skill returns, refresh `SECURITY_FILE`:
+
+```bash
+SECURITY_FILE=$(ls "${PHASE_DIR}"/*-SECURITY.md 2>/dev/null | head -1)
+```
+
+If `SECURITY_FILE` is still empty, stop before phase advancement and present:
+
+```
+⚠ Security enforcement enabled — /gsd:secure-phase {phase} did not produce SECURITY.md.
+Resolve the security review failure before advancing to the next phase.
+
+All tests passed, but phase advancement is blocked until security review produces SECURITY.md.
 
 - `/gsd:secure-phase {phase}` — security review (required before advancing)
 - `/gsd:plan-phase {next}` — Plan next phase
@@ -474,13 +489,13 @@ All tests passed. Ready to continue.
 - `/gsd:ui-review {phase}` — visual quality audit (if frontend files were modified)
 ```
 
-If `SECURITY_CFG` is `true` AND `SECURITY_FILE` exists: check frontmatter `threats_open`. If > 0:
+If an active secure-phase step hook exists AND `SECURITY_FILE` exists: check frontmatter `threats_open`. If > 0:
 ```
 ⚠ Security gate: {threats_open} threats open
   /gsd:secure-phase {phase} — resolve before advancing
 ```
 
-If `SECURITY_CFG` is `false` OR (`SECURITY_FILE` exists AND `threats_open` is `0`):
+If no active secure-phase step hook exists OR (`SECURITY_FILE` exists AND `threats_open` is `0`):
 
 **Auto-transition: mark phase complete in ROADMAP.md and STATE.md**
 

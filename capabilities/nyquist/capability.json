@@ -1,0 +1,30 @@
+{
+  "id": "nyquist",
+  "role": "feature",
+  "title": "Nyquist validation",
+  "description": "Validation coverage audit that maps executed work back to tests and manual-only evidence.",
+  "tier": "full",
+  "requires": [],
+  "skills": ["validate-phase"],
+  "agents": ["gsd-nyquist-auditor"],
+  "hooks": [],
+  "config": {
+    "workflow.nyquist_validation": {
+      "type": "boolean",
+      "default": true,
+      "description": "Enable Nyquist validation coverage auditing."
+    }
+  },
+  "steps": [
+    {
+      "point": "verify:post",
+      "ref": { "skill": "validate-phase" },
+      "produces": ["VALIDATION.md"],
+      "consumes": ["SUMMARY.md"],
+      "when": "workflow.nyquist_validation",
+      "onError": "halt"
+    }
+  ],
+  "contributions": [],
+  "gates": []
+}

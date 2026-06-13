@@ -1061,20 +1061,22 @@ After all waves:
 
 **Security gate check:**
 ```bash
-SECURITY_CFG=$(gsd_run query config-get workflow.security_enforcement --raw 2>/dev/null || echo "true")
+VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)
 SECURITY_FILE=$(ls "${PHASE_DIR}"/*-SECURITY.md 2>/dev/null | head -1)
 ```
 
-If `SECURITY_CFG` is `false`: skip.
+Resolve active step hooks from `VERIFY_POST_HOOKS_JSON` where `kind == "step"` and `ref.skill == "secure-phase"`.
 
-If `SECURITY_CFG` is `true` AND `SECURITY_FILE` is empty (no SECURITY.md yet):
+If no active secure-phase step hook exists: skip.
+
+If an active secure-phase step hook exists AND `SECURITY_FILE` is empty (no SECURITY.md yet):
 Include in the next-steps routing output:
 ```
 ⚠ Security enforcement enabled — run before advancing:
   /gsd:secure-phase {PHASE} ${GSD_WS}
 ```
 
-If `SECURITY_CFG` is `true` AND SECURITY.md exists: check frontmatter `threats_open`. If > 0:
+If an active secure-phase step hook exists AND SECURITY.md exists: check frontmatter `threats_open`. If > 0:
 ```
 ⚠ Security gate: {threats_open} threats open
   /gsd:secure-phase {PHASE} — resolve before advancing
@@ -1166,18 +1168,20 @@ Selected wave finished successfully. This phase still has incomplete plans, so p
 </step>
 
 <step name="code_review_gate" required="true">
-**This step is REQUIRED and must not be skipped.** Auto-invoke code review on the phase's source changes. Advisory only — never blocks execution flow.
+**This step is REQUIRED to evaluate the capability hook.** When the code-review capability is active, auto-invoke code review on the phase's source changes. Advisory only — never blocks execution flow.
 
-**Config gate:**
+**Capability gate:**
 ```bash
-CODE_REVIEW_ENABLED=$(gsd_run query config-get workflow.code_review 2>/dev/null || echo "true")
+EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw)
 ```
 
-If `CODE_REVIEW_ENABLED` is `"false"`: display "Code review skipped (workflow.code_review=false)" and proceed to next step.
+Resolve active step hooks from `EXECUTE_POST_HOOKS_JSON` where `kind == "step"` and `ref.skill == "code-review"`.
+
+If no active code-review step hook exists: display "Code review skipped (code-review capability inactive)" and proceed to next step.
 
 **Invoke review:**
 ```
-Skill(skill="gsd-code-review", args="${PHASE_NUMBER}")
+Skill(skill="gsd-${ref.skill}", args="${PHASE_NUMBER}")
 ```
 
 **Check results using deterministic path (not glob):**

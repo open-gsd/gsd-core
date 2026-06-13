@@ -73,19 +73,21 @@ fi
 </step>
 
 <step name="check_config_gate">
-Check if code review is enabled via config:
+Check if code review is active via the capability registry:
 
 ```bash
-CODE_REVIEW_ENABLED=$(gsd_run query config-get workflow.code_review 2>/dev/null || echo "true")
+EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw)
 ```
 
-If CODE_REVIEW_ENABLED is "false":
+Resolve active step hooks from `EXECUTE_POST_HOOKS_JSON` where `kind == "step"` and `ref.skill == "code-review"`.
+
+If no active code-review step hook exists:
 ```
-Code review skipped (workflow.code_review=false in config)
+Code review skipped (code-review capability inactive)
 ```
 Exit workflow.
 
-Default is true — only skip on explicit false. This check runs AFTER phase validation so invalid phase errors are shown first.
+Default is active through the Capability Registry schema — only skip when the registry resolves no active code-review step hook. This check runs AFTER phase validation so invalid phase errors are shown first.
 </step>
 
 <step name="resolve_depth">
@@ -678,7 +680,7 @@ If `--files` validation fails unexpectedly on macOS, install coreutils or use ab
 
 <success_criteria>
 - [ ] Phase validated before config gate check
-- [ ] Config gate checked (workflow.code_review)
+- [ ] Capability gate checked (execute:post code-review hook)
 - [ ] --fix/--all/--auto flags parsed via code-review-flags.cjs typed IR (not ad-hoc bash)
 - [ ] Depth resolved with validation (quick|standard|deep)
 - [ ] File scope computed with 3 tiers: --files > SUMMARY.md > git diff

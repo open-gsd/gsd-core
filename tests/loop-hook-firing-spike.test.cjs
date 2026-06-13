@@ -252,7 +252,7 @@ describe('spike #1018 — off means off (structural proof)', () => {
       "onError must be 'skip' on the ui-review step at verify:post");
     // Also verify the rendered output contains the structured heading for this point
     const rendered = renderLoopHooks(resolved);
-    assert.match(rendered, /### Step 1: skill:ui-review \(ui\)/,
+    assert.match(rendered, /### Step \d+: skill:ui-review \(ui\)/,
       'rendered must include the properly-structured Step block heading for ui-review at verify:post');
   });
 

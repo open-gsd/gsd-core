@@ -1,20 +1,37 @@
 'use strict';
 
 // Policy regression test for issue #138:
-// config-get workflow.nyquist_validation calls in validate-phase.md and
-// audit-milestone.md MUST include --default so they don't error / emit
-// stderr noise when the key is absent.
-//
-// Form-agnostic: matches on `config-get workflow.nyquist_validation` + `--default`
-// regardless of the runtime prefix ($GSD_SDK vs gsd_run), so this test
-// survives PR #379's prefix rename.
+// Nyquist activation must be absent-safe. ADR-857 phase 6 moved that defaulting
+// into `loop render-hooks verify:post`, so workflows must consume the capability
+// hook instead of calling config-get directly.
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
+
+function readWorkflow(name) {
+  return fs.readFileSync(path.join(WORKFLOWS_DIR, name), 'utf8');
+}
+
+function assertNyquistCapabilityGate(name) {
+  const content = readWorkflow(name);
+  assert.ok(
+    content.includes('loop render-hooks verify:post'),
+    `${name} must resolve Nyquist activation through verify:post capability hooks`
+  );
+  assert.ok(
+    content.includes('ref.skill == "validate-phase"'),
+    `${name} must identify the validate-phase capability hook`
+  );
+  assert.ok(
+    !content.includes('config-get workflow.nyquist_validation'),
+    `${name} must not read workflow.nyquist_validation directly after capability cutover`
+  );
+}
 
 function findNyquistConfigLine(filePath) {
   const content = fs.readFileSync(filePath, 'utf8');
@@ -27,22 +44,26 @@ function findNyquistConfigLine(filePath) {
   return null;
 }
 
-test('validate-phase.md: config-get workflow.nyquist_validation must include --default', () => {
-  const filePath = path.join(WORKFLOWS_DIR, 'validate-phase.md');
-  const result = findNyquistConfigLine(filePath);
-  assert.ok(result, 'Should find a line containing config-get workflow.nyquist_validation in validate-phase.md');
-  assert.ok(
-    result.line.includes('--default'),
-    `Line ${result.lineNumber} of validate-phase.md is missing --default flag.\nFound: ${result.line.trim()}`
-  );
+test('validate-phase.md: Nyquist activation uses verify:post capability hook', () => {
+  assertNyquistCapabilityGate('validate-phase.md');
 });
 
-test('audit-milestone.md: config-get workflow.nyquist_validation must include --default', () => {
-  const filePath = path.join(WORKFLOWS_DIR, 'audit-milestone.md');
-  const result = findNyquistConfigLine(filePath);
-  assert.ok(result, 'Should find a line containing config-get workflow.nyquist_validation in audit-milestone.md');
-  assert.ok(
-    result.line.includes('--default'),
-    `Line ${result.lineNumber} of audit-milestone.md is missing --default flag.\nFound: ${result.line.trim()}`
-  );
+test('audit-milestone.md: Nyquist activation uses verify:post capability hook', () => {
+  assertNyquistCapabilityGate('audit-milestone.md');
+});
+
+test('legacy Nyquist config helper still detects unsafe direct reads', () => {
+  const tmp = path.join(os.tmpdir(), `policy-138-synthetic-${process.pid}.md`);
+  try {
+    fs.writeFileSync(tmp, 'NYQUIST_CFG=$(gsd_run query config-get workflow.nyquist_validation --raw)\n');
+    const result = findNyquistConfigLine(tmp);
+    assert.ok(result, 'synthetic direct config read should be detected');
+    assert.ok(!result.line.includes('--default'), 'synthetic unsafe read intentionally lacks --default');
+  } finally {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      // Best-effort cleanup for synthetic file.
+    }
+  }
 });

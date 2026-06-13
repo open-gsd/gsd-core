@@ -52,6 +52,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [CONTEXT.md schema](reference/context-md.md) — field-by-field reference for `.planning/phases/<N>/CONTEXT.md`
 - [PLAN.md schema](reference/plan-md.md) — field-by-field reference for `.planning/phases/<N>/PLAN.md`
 - [Planning artifacts](reference/planning-artifacts.md) — all `.planning/` files and their roles
+- [Review and verification capabilities](reference/review-verification-capabilities.md) — code review, security, and Nyquist capability ownership and hook contracts
 
 ---
 

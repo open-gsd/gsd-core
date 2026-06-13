@@ -178,11 +178,19 @@ describe('SECURE: secure-phase workflow file', () => {
     );
   });
 
-  test('contains security_enforcement config check', () => {
+  test('contains security capability hook check', () => {
     const content = fs.readFileSync(wfPath, 'utf-8');
     assert.ok(
-      content.includes('security_enforcement'),
-      'must check security_enforcement config setting'
+      content.includes('loop render-hooks verify:post'),
+      'must resolve security activation through verify:post capability hooks'
+    );
+    assert.ok(
+      content.includes('ref.skill == "secure-phase"'),
+      'must identify the secure-phase capability hook'
+    );
+    assert.ok(
+      !content.includes('config-get workflow.security_enforcement'),
+      'must not read workflow.security_enforcement directly after capability cutover'
     );
   });
 

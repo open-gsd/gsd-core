@@ -26,10 +26,12 @@ Parse: `phase_dir`, `phase_number`, `phase_name`, `phase_slug`, `padded_phase`.
 
 ```bash
 AUDITOR_MODEL=$(gsd_run query resolve-model gsd-nyquist-auditor --raw)
-NYQUIST_CFG=$(gsd_run query config-get workflow.nyquist_validation --raw --default true)
+VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)
 ```
 
-If `NYQUIST_CFG` is `false`: exit with "Nyquist validation is disabled. Enable via /gsd:settings."
+Resolve active step hooks from `VERIFY_POST_HOOKS_JSON` where `kind == "step"` and `ref.skill == "validate-phase"`.
+
+If no active validate-phase step hook exists: exit with "Nyquist validation is disabled. Enable via /gsd:settings."
 
 Display banner: `GSD > VALIDATE PHASE {N}: {name}`
 

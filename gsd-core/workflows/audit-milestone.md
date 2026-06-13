@@ -143,13 +143,15 @@ For each REQ-ID, determine status using all three sources:
 
 ## 5.5. Nyquist Compliance Discovery
 
-Skip if `workflow.nyquist_validation` is explicitly `false` (absent = enabled).
+Skip if the Nyquist capability is inactive.
 
 ```bash
-NYQUIST_CONFIG=$(gsd_run query config-get workflow.nyquist_validation --raw --default true 2>/dev/null)
+VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)
 ```
 
-If `false`: skip entirely.
+Resolve active step hooks from `VERIFY_POST_HOOKS_JSON` where `kind == "step"` and `ref.skill == "validate-phase"`.
+
+If no active validate-phase step hook exists: skip entirely.
 
 For each phase directory, check `*-VALIDATION.md`. If exists, parse frontmatter (`nyquist_compliant`, `wave_0_complete`).
 

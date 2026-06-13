@@ -577,17 +577,19 @@ test -f "${PHASE_DIR}/${PADDED_PHASE}-VALIDATION.md" && echo "VALIDATION_CREATED
 
 ## 5.55. Security Threat Model Gate
 
-> Skip if `workflow.security_enforcement` is explicitly `false`. Absent = enabled.
+> Capability-driven dispatch. Resolves active `plan:pre` hooks via the capability registry; the security hook's `when` condition is evaluated by the registry.
 
 ```bash
-SECURITY_CFG=$(gsd_run query config-get workflow.security_enforcement --raw 2>/dev/null || echo "true")
+PLAN_PRE_HOOKS_JSON=$(gsd_run loop render-hooks plan:pre --raw)
 SECURITY_ASVS=$(gsd_run query config-get workflow.security_asvs_level --raw 2>/dev/null || echo "1")
 SECURITY_BLOCK=$(gsd_run query config-get workflow.security_block_on --raw 2>/dev/null || echo "high")
 ```
 
-**If `SECURITY_CFG` is `false`:** Skip to step 5.6.
+Resolve active contribution hooks from `PLAN_PRE_HOOKS_JSON` where `kind == "contribution"` and `capId == "security"`.
 
-**If `SECURITY_CFG` is `true`:** Display banner:
+**If no active security contribution hook exists:** Skip to step 5.6.
+
+**If an active security contribution hook exists:** Display banner:
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

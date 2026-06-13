@@ -48,27 +48,28 @@ describe('verify-work.md — auto-transition after UAT passes with 0 issues', ()
 
   test('security gate check gates the transition (no auto-transition when security pending)', () => {
     const content = fs.readFileSync(VERIFY_WORK, 'utf-8');
-    // The security check must appear before the transition reference
-    const securityCfgIdx = content.indexOf('SECURITY_CFG');
+    // The capability-resolved security check must appear before the transition reference.
+    const securityHookIdx = content.indexOf('loop render-hooks verify:post');
     const transitionIdx = content.indexOf('transition.md');
     assert.ok(
-      securityCfgIdx !== -1,
-      'verify-work.md must check SECURITY_CFG before transitioning'
+      securityHookIdx !== -1,
+      'verify-work.md must resolve verify:post capability hooks before transitioning'
     );
     assert.ok(
-      securityCfgIdx < transitionIdx,
-      'SECURITY_CFG check must appear before transition.md reference'
+      securityHookIdx < transitionIdx,
+      'verify:post capability hook check must appear before transition.md reference'
     );
   });
 
   test('transition is only invoked when security gate is cleared or disabled', () => {
     const content = fs.readFileSync(VERIFY_WORK, 'utf-8');
     // Transition must be guarded by security check:
-    // Either SECURITY_CFG is false, or security file exists with 0 open threats
+    // Either no active secure-phase hook exists, or security file exists with 0 open threats.
     const hasGuardedTransition =
       content.includes('transition.md') &&
       (
-        content.includes("SECURITY_CFG") &&
+        content.includes('loop render-hooks verify:post') &&
+        content.includes('ref.skill == "secure-phase"') &&
         (content.includes('threats_open') || content.includes('SECURITY_FILE'))
       );
     assert.ok(
