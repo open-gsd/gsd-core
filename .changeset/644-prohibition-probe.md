@@ -1,5 +1,5 @@
 ---
 type: Added
-pr: 0
+pr: 1149
 ---
 spec-phase: prohibition probe — a prose-orchestrated Step 5.6 that surfaces the unwritten *must-NOT* constraints (values/safety/ethics) a feature could silently become but the spec never forbids. Two stages per requirement: an adversarial recall question ("what could this silently become that the author would NOT want?") then a one-pass precision classifier that drops routine engineering and keeps genuine prohibitions. Confirmed prohibitions become NEGATIVE SPEC acceptance criteria carrying a `test`/`judgment` verification tier, which plan-phase lifts into the `must_haves.prohibitions` sibling block (`truths` untouched). Judgment-tier items soft-gate at verify time (never silent, never hard-halt); unwired test-tier items fail closed. The recall stage is model-driven (no compiled engine); canon-bound concerns (OWASP/GDPR/fairness) are referred to `/gsd:secure-phase`. Additive and optional: existing SPECs without a Prohibitions section remain valid. Second adapter of the `probe-core` resolution model (ADR-550 Decision 7).
