@@ -30,7 +30,6 @@
     "workflow.plan_bounce_passes",
     "workflow.plan_chunked",
     "workflow.plan_review_convergence",
-    "workflow.post_planning_gaps",
     "workflow.drift_threshold",
     "workflow.drift_action",
     "code_quality.fallow.enabled",

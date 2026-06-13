@@ -595,6 +595,43 @@ const capabilities = {
       "extendedHookEvents": []
     }
   },
+  "gap-analysis": {
+    "id": "gap-analysis",
+    "role": "feature",
+    "title": "Post-planning gap analysis",
+    "description": "Proactive, non-blocking post-planning coverage report. After all PLAN.md files are generated, cross-references every REQ-ID and D-ID from REQUIREMENTS.md and CONTEXT.md against plan bodies. Emits a Source | Item | Status table. Does not block phase advancement.",
+    "tier": "standard",
+    "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
+    "skills": [],
+    "agents": [],
+    "hooks": [],
+    "config": {
+      "workflow.post_planning_gaps": {
+        "type": "boolean",
+        "default": true,
+        "description": "Run the post-planning gap analysis report after plans are generated."
+      }
+    },
+    "steps": [],
+    "contributions": [],
+    "gates": [
+      {
+        "point": "plan:post",
+        "check": {
+          "query": "gap-analysis.plan-post"
+        },
+        "when": "workflow.post_planning_gaps",
+        "blocking": false,
+        "onError": "skip"
+      }
+    ]
+  },
   "gemini": {
     "id": "gemini",
     "role": "runtime",
@@ -1572,7 +1609,18 @@ const byLoopPoint = {
   "plan:post": {
     "steps": [],
     "contributions": [],
-    "gates": []
+    "gates": [
+      {
+        "capId": "gap-analysis",
+        "point": "plan:post",
+        "check": {
+          "query": "gap-analysis.plan-post"
+        },
+        "when": "workflow.post_planning_gaps",
+        "blocking": false,
+        "onError": "skip"
+      }
+    ]
   },
   "execute:pre": {
     "steps": [],
@@ -1709,6 +1757,7 @@ const configKeys = {
   "workflow.ai_integration_phase": "ai-integration",
   "workflow.code_review": "code-review",
   "workflow.code_review_depth": "code-review",
+  "workflow.post_planning_gaps": "gap-analysis",
   "graphify.enabled": "graphify",
   "intel.enabled": "intel",
   "workflow.nyquist_validation": "nyquist",
@@ -1745,6 +1794,12 @@ const configSchema = {
       "standard",
       "deep"
     ]
+  },
+  "workflow.post_planning_gaps": {
+    "owner": "gap-analysis",
+    "type": "boolean",
+    "default": true,
+    "description": "Run the post-planning gap analysis report after plans are generated."
   },
   "graphify.enabled": {
     "owner": "graphify",
@@ -2810,6 +2865,7 @@ const _requiresGraph = {
   "codex": [],
   "copilot": [],
   "cursor": [],
+  "gap-analysis": [],
   "gemini": [],
   "graphify": [],
   "hermes": [],

@@ -362,9 +362,22 @@ describe('workflow.post_planning_gaps config (#2493)', () => {
   beforeEach(() => { tmpDir = createTempProject(); });
   afterEach(() => { cleanup(tmpDir); });
 
-  test('VALID_CONFIG_KEYS contains workflow.post_planning_gaps', () => {
+  test('workflow.post_planning_gaps is owned by the gap-analysis capability (ADR-857 federation)', () => {
+    // After ADR-857 phase-6 migration, workflow.post_planning_gaps is federally owned by
+    // the gap-analysis capability — it must NOT be in the central VALID_CONFIG_KEYS schema
+    // and MUST appear in the capability registry configKeys map.
     const { VALID_CONFIG_KEYS } = require('../gsd-core/bin/lib/config-schema.cjs');
-    assert.ok(VALID_CONFIG_KEYS.has('workflow.post_planning_gaps'));
+    const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
+    assert.equal(
+      VALID_CONFIG_KEYS.has('workflow.post_planning_gaps'),
+      false,
+      'workflow.post_planning_gaps must NOT be in central VALID_CONFIG_KEYS after ADR-857 federation',
+    );
+    assert.equal(
+      registry.configKeys['workflow.post_planning_gaps'],
+      'gap-analysis',
+      'workflow.post_planning_gaps must be owned by gap-analysis capability in the registry',
+    );
   });
 
   test('CONFIG_DEFAULTS contains post_planning_gaps default true', () => {

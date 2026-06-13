@@ -18,6 +18,9 @@ import { checkUiPresence } from './ui-safety-gate.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapModule = require('./roadmap.cjs');
 const { getRoadmapPhaseWithFallback } = roadmapModule;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import gapCheckerModule = require('./gap-checker.cjs');
+const { runGapAnalysis } = gapCheckerModule;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -462,6 +465,36 @@ function cmdUiPlanGate(projectDir: string, args: string[], raw: boolean): void {
   output(computeUiPlanGate(projectDir, phase), raw, undefined);
 }
 
+// ─── gap-analysis-plan-post ───────────────────────────────────────────────────
+
+/**
+ * gap-analysis-plan-post: non-blocking advisory check that runs the post-planning
+ * gap analysis after all PLAN.md files are generated for a phase.
+ *
+ * Cross-references every REQ-ID and D-ID from REQUIREMENTS.md and CONTEXT.md
+ * against the concatenated text of all *-PLAN.md files, emitting a coverage table.
+ *
+ * This gate is always advisory (passed: true) — it never blocks phase advancement.
+ *
+ * Args: check gap-analysis.plan-post <phase-dir> [phase-req-ids]
+ * Invocable as: gsd_run check gap-analysis.plan-post <phase-dir> [phase-req-ids]
+ */
+function cmdGapAnalysisPlanPost(projectDir: string, args: string[], raw: boolean): void {
+  // args[0] = 'check', args[1] = 'gap-analysis-plan-post' (normalized), args[2] = phaseDir, args[3] = phaseReqIds
+  const phaseDir = args[2] || '';
+  if (!phaseDir) {
+    error('gap-analysis.plan-post requires a phase-dir argument: check gap-analysis.plan-post <phase-dir> [phase-req-ids]', ERROR_REASON.SDK_MISSING_ARG);
+    return;
+  }
+  const phaseReqIds = args[3] ?? undefined;
+  const result = runGapAnalysis(projectDir, phaseDir, { phaseReqIds });
+  output(
+    { passed: true, enabled: result.enabled, table: result.table, summary: result.summary, counts: result.counts },
+    raw,
+    result.table || result.summary || undefined,
+  );
+}
+
 interface RouteCheckCommandOptions {
   args: string[];
   cwd: string;
@@ -493,7 +526,11 @@ function routeCheckCommand({ args, cwd, raw }: RouteCheckCommandOptions): void {
     cmdUiPlanGate(cwd, args, raw);
     return;
   }
-  error('Unknown check subcommand. Available: auto-mode, decision-coverage-plan, decision-coverage-verify, ui-plan-gate', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+  if (subcommand === 'gap-analysis-plan-post') {
+    cmdGapAnalysisPlanPost(cwd, args, raw);
+    return;
+  }
+  error('Unknown check subcommand. Available: auto-mode, decision-coverage-plan, decision-coverage-verify, gap-analysis-plan-post, ui-plan-gate', ERROR_REASON.SDK_UNKNOWN_COMMAND);
 }
 
 export = {
@@ -501,4 +538,5 @@ export = {
   decisionMentioned,
   extractPlanDesignatedSections,
   computeUiPlanGate,
+  cmdGapAnalysisPlanPost,
 };

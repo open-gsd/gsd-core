@@ -1632,51 +1632,20 @@ This commits all PLAN.md files for the phase plus the updated STATE.md and ROADM
 
 ## 13e. Post-Planning Gap Analysis
 
-After all plans are generated, committed, and the Requirements Coverage Gate (§13)
-has run, emit a single unified gap report covering both REQUIREMENTS.md and the
-CONTEXT.md `<decisions>` section. This is a **proactive, post-hoc report** — it
-does not block phase advancement and does not re-plan. It exists so that any
-requirement or decision that slipped through the per-plan checks is surfaced in
-one place before execution begins.
-
-**Skip if:** `workflow.post_planning_gaps` is `false`. Default is `true`.
+Proactive, non-blocking coverage report gated on `workflow.post_planning_gaps`
+(default `true`). Dispatched via the `plan:post` capability gate owned by the
+`gap-analysis` capability (ADR-857 §53). Reads REQUIREMENTS.md and CONTEXT.md
+`<decisions>` and cross-references each REQ-ID / D-ID against `${PHASE_DIR}/*-PLAN.md`.
 
 ```bash
-POST_PLANNING_GAPS=$(gsd_run query config-get workflow.post_planning_gaps --default true 2>/dev/null || echo true)
-if [ "$POST_PLANNING_GAPS" = "true" ]; then
-  # Scope to this phase's mapped REQ-IDs (#447); null/TBD skips the requirements comparison (CONTEXT.md decisions still reported), mirroring §13.
-  gsd_run gap-analysis --phase-dir "${PHASE_DIR}" --phase-req-ids "$(gsd_run query init.plan-phase "$PHASE" --pick phase_req_ids 2>/dev/null || echo TBD)"
-fi
+PLAN_POST_HOOKS_JSON=$(gsd_run loop render-hooks plan:post --raw)
+PHASE_REQ_IDS=$(gsd_run query init.plan-phase "$PHASE" --pick phase_req_ids 2>/dev/null || echo TBD)
+gsd_run check gap-analysis.plan-post "${PHASE_DIR}" "${PHASE_REQ_IDS}" || true
 ```
 
-(`gsd-tools.cjs gap-analysis` reads `.planning/REQUIREMENTS.md`, `${PHASE_DIR}/CONTEXT.md`,
-and `${PHASE_DIR}/*-PLAN.md`, then prints a markdown table with one row per
-REQ-ID and D-ID. Word-boundary matching prevents `REQ-1` from being mistaken for
-`REQ-10`.)
-
-**Output format (deterministic; sorted REQUIREMENTS.md → CONTEXT.md, then natural
-sort within source):**
-
-```
-## Post-Planning Gap Analysis
-
-| Source | Item | Status |
-|--------|------|--------|
-| REQUIREMENTS.md | REQ-01 | ✓ Covered |
-| REQUIREMENTS.md | REQ-02 | ✗ Not covered |
-| CONTEXT.md | D-01 | ✓ Covered |
-| CONTEXT.md | D-02 | ✗ Not covered |
-
-⚠ N items not covered by any plan
-```
-
-**Skip-gracefully behavior:**
-- REQUIREMENTS.md missing → CONTEXT-only report.
-- CONTEXT.md missing → REQUIREMENTS-only report.
-- Both missing or `<decisions>` block missing → "No requirements or decisions to check" line, no error.
-
-This step is non-blocking. If items are reported as not covered, the user may
-re-run `/gsd:plan-phase --gaps` to add plans, or proceed to execute-phase as-is.
+Read the `activeHooks` array from `PLAN_POST_HOOKS_JSON` in-context. If the
+`gap-analysis` gate hook is absent (capability inactive), skip this step.
+The check is non-blocking; output the gap table from the JSON result if present.
 
 ## 14. Present Final Status
 
