@@ -411,45 +411,20 @@ If "Run discuss-phase first":
   ```
   **Exit the plan-phase workflow. Do not continue.**
 
-## 4.5. Check AI-SPEC
+## 4.5. Resolve AI-SPEC Artifact
 
-**Skip if:** `ai_integration_phase_enabled` from config is false, or `--skip-ai-spec` flag provided.
+AI integration activation is owned by the `ai-integration` capability's `plan:pre` step hook. The plan-phase host only discovers existing artifacts here so the planner can consume them; it must not read the capability's config key directly.
 
 ```bash
 AI_SPEC_FILE=$(ls "${PHASE_DIR}"/*-AI-SPEC.md 2>/dev/null | head -1)
-AI_PHASE_CFG=$(gsd_run query config-get workflow.ai_integration_phase 2>/dev/null || echo "true")
+AI_SPEC_PATH="${AI_SPEC_FILE}"
+FRAMEWORK_LINE=""
+if [ -n "$AI_SPEC_FILE" ]; then
+  FRAMEWORK_LINE=$(grep "Selected Framework:" "${AI_SPEC_FILE}" | head -1)
+fi
 ```
 
-**Skip if `AI_PHASE_CFG` is `false`.**
-
-**If `AI_SPEC_FILE` is empty:** Check phase goal for AI keywords:
-```bash
-echo "${phase_goal}" | grep -qi "agent\|llm\|rag\|chatbot\|embedding\|langchain\|llamaindex\|crewai\|langgraph\|openai\|anthropic\|vector\|eval\|ai system"
-```
-
-**If AI keywords detected AND no AI-SPEC.md:**
-```
-◆ Note: This phase appears to involve AI system development.
-  Consider running /gsd:ai-integration-phase {N} before planning to:
-  - Select the right framework for your use case
-  - Research its docs and best practices
-  - Design an evaluation strategy
-
-  Continue planning without AI-SPEC? (non-blocking — /gsd:ai-integration-phase can be run after)
-```
-
-Use AskUserQuestion with options:
-- "Continue — plan without AI-SPEC"
-- "Stop — I'll run /gsd:ai-integration-phase {N} first"
-
-If "Stop": Exit with `/gsd:ai-integration-phase {N}` reminder.
-If "Continue": Proceed. (Non-blocking — planner will note AI-SPEC is absent.)
-
-**If `AI_SPEC_FILE` is non-empty:** Extract framework for planner context:
-```bash
-FRAMEWORK_LINE=$(grep "Selected Framework:" "${AI_SPEC_FILE}" | head -1)
-```
-Pass `ai_spec_path` and `framework_line` to planner in step 7 so it can reference the AI design contract.
+If `AI_SPEC_FILE` is non-empty, pass `AI_SPEC_PATH` and `FRAMEWORK_LINE` to the planner in step 8 so it can reference the AI design contract. If it is empty, the active `ai-integration` capability hook in step 5.6 handles any AI-system nudge or `/gsd:ai-integration-phase` dispatch.
 
 ## 5. Handle Research
 
@@ -525,41 +500,21 @@ Display banner:
 
 ```bash
 PHASE_DESC=$(gsd_run query roadmap.get-phase "${PHASE}" --pick section)
+if [ -z "${PLAN_PRE_HOOKS_JSON:-}" ]; then
+  PLAN_PRE_HOOKS_JSON=$(gsd_run loop render-hooks plan:pre --raw)
+fi
 ```
 
-Research prompt:
+Find the active `research` step hook in `PLAN_PRE_HOOKS_JSON`. Use the hook's `fragment.inline` as the prompt template and substitute the phase fields below before spawning its declared `ref.agent`.
 
 ```markdown
-<objective>
-Research how to implement Phase {phase_number}: {phase_name}
-Answer: "What do I need to know to PLAN this phase well?"
-</objective>
-
-<files_to_read>
-- {context_path} (USER DECISIONS from /gsd:discuss-phase)
-- {requirements_path} (Project requirements)
-- {state_path} (Project decisions and history)
-</files_to_read>
-
-${AGENT_SKILLS_RESEARCHER}
-
-<additional_context>
-**Phase description:** {phase_description}
-**Phase requirement IDs (MUST address):** {phase_req_ids}
-
-**Project instructions:** Read ./CLAUDE.md if exists — follow project-specific guidelines
-**Project skills:** Check .claude/skills/ or .agents/skills/ directory (if either exists) — read SKILL.md files, research should account for project skill patterns
-</additional_context>
-
-<output>
-Write to: {phase_dir}/{phase_num}-RESEARCH.md
-</output>
+{research_hook.fragment.inline}
 ```
 
 ```
 Agent(
-  prompt=research_prompt,
-  subagent_type="gsd-phase-researcher",
+  prompt=filled_research_hook_fragment,
+  subagent_type=research_hook.ref.agent,
   model="{researcher_model}",
   description="Research Phase {phase}"
 )
@@ -646,21 +601,31 @@ Opt out: set security_enforcement: false in .planning/config.json
 
 Continue to step 5.6. Security config is passed to the planner in step 8.
 
-## 5.6. UI Design Contract Gate
+## 5.6. Plan:Pre Capability Dispatch and UI Design Contract Gate
 
-> Capability-driven dispatch. Resolves active `plan:pre` hooks via the capability registry; each hook's `when` condition (`workflow.ui_phase` for step hooks, `workflow.ui_safety_gate` for gate hooks) is evaluated by the registry — no inline config-get needed.
+> Capability-driven dispatch. Resolves active `plan:pre` hooks via the capability registry; each hook's `when` condition is evaluated by the registry — no inline config-get needed. This section handles skill-based planning preflights such as `ai-integration`, agent-backed hooks through `ref.agent`, and the UI gate whose deterministic check comes from `check.query`.
 >
 > **Config semantics (cutover fix):** `workflow.ui_phase` gates UI-SPEC *generation* (step); `workflow.ui_safety_gate` gates the *planning block* (gate). Both-on = identical to OLD §5.6. Intended change: `{ui_phase:true, ui_safety_gate:false}` now auto-generates in pipelines but does NOT block manual planning (each key controls exactly what its description says).
 
 ```bash
-HOOKS_JSON=$(gsd_run loop render-hooks plan:pre --raw)
+PLAN_PRE_HOOKS_JSON=${PLAN_PRE_HOOKS_JSON:-$(gsd_run loop render-hooks plan:pre --raw)}
+HOOKS_JSON="$PLAN_PRE_HOOKS_JSON"
 ```
 
-Read the `activeHooks` array directly from `HOOKS_JSON` (in-context — do NOT invoke a shell pipeline).
+Read the `activeHooks` array directly from `PLAN_PRE_HOOKS_JSON` / `HOOKS_JSON` (in-context — do NOT invoke a shell pipeline).
 
-**Branch 1 — both toggles off (`activeHooks` is empty or absent):** Skip to step 6.
+**Branch 1 — all plan:pre hooks inactive (`activeHooks` is empty or absent):** Skip to step 6.
 
-Run whenever **any** `plan:pre` UI hook is active — including the step-only case (`workflow.ui_safety_gate` off). (`check.query` = `"ui.plan-gate"`; router normalizes dots→hyphens.)
+**Generic step hook dispatch contract:** For each active entry where `kind == "step"`:
+- If `ref.skill` is set, dispatch with `Skill(skill="gsd-${ref.skill}", args="${PHASE} --auto ${GSD_WS}")` when pipeline mode allows auto-chaining. Prepend `gsd-` to `ref.skill` — `ui-phase` → `gsd-ui-phase`.
+- If `ref.agent` is set, dispatch with `Agent(prompt=filled_hook_fragment, subagent_type=ref.agent, model="{researcher_model}")`. Use the hook's `fragment.inline` as the prompt body and fill phase fields before spawning.
+- The `research` hook is handled by §5.1's research decision. The `pattern-mapper` hook is handled by §7.8 after `RESEARCH_PATH` is known. Future plan:pre agent hooks use the same `ref.agent` fragment contract.
+
+**AI integration capability:** If the active `ai-integration` step hook is present, `AI_SPEC_PATH` is empty, and the phase goal contains AI keywords (`agent`, `llm`, `rag`, `chatbot`, `embedding`, `langchain`, `llamaindex`, `crewai`, `langgraph`, `openai`, `anthropic`, `vector`, `eval`, `ai system`), then:
+- In pipeline / `--auto` mode, invoke the hook's `ref.skill` via `Skill(skill="gsd-${ref.skill}", args="${PHASE} --auto ${GSD_WS}")`.
+- In manual mode, display the existing non-blocking `/gsd:ai-integration-phase {N}` recommendation and let the user continue planning without AI-SPEC or stop to run the capability workflow first.
+
+Run the UI deterministic gate whenever **any** `plan:pre` UI hook is active — including the step-only case (`workflow.ui_safety_gate` off). (`check.query` = `"ui.plan-gate"`; router normalizes dots→hyphens.)
 
 ```bash
 GATE=$(gsd_run check ui-plan-gate "${PHASE}" --raw)
@@ -689,13 +654,13 @@ Read the ephemeral auto-chain flag:
 AUTO_CHAIN=$(gsd_run query check auto-mode --pick auto_chain_active 2>/dev/null || echo "false")
 ```
 
-**Branch 5 — `AUTO_CHAIN` is `true` (pipeline / `--auto`):** Fire each active **step** hook — runs independently of whether a gate is active (covers `{ui_phase:true, ui_safety_gate:false}`). For each entry in `activeHooks` (in array order) where `kind == "step"` and `ref.skill` is set:
+**Branch 5 — `AUTO_CHAIN` is `true` (pipeline / `--auto`):** Fire each active UI **step** hook — runs independently of whether a gate is active (covers `{ui_phase:true,ui_safety_gate:false}`). For each entry in `activeHooks` (in array order) where `kind == "step"` and `ref.skill` is set:
 
 ```
 Skill(skill="gsd-${ref.skill}", args="${PHASE} --auto ${GSD_WS}")
 ```
 
-(prepend `gsd-` to `ref.skill` — `ui-phase` → `gsd-ui-phase`.) After all step hooks return, re-read:
+After all UI step hooks return, re-read:
 
 ```bash
 UI_SPEC_FILE=$(ls "${PHASE_DIR}"/*-UI-SPEC.md 2>/dev/null | head -1)
@@ -845,14 +810,7 @@ Proceed to Step 7.8 (or Step 8 if pattern mapper is disabled) only if user selec
 
 ## 7.8. Spawn gsd-pattern-mapper Agent (Optional)
 
-**Skip if** `workflow.pattern_mapper` is explicitly set to `false` in config.json (absent key = enabled). Also skip if no CONTEXT.md and no RESEARCH.md exist for this phase (nothing to extract file lists from).
-
-Check config:
-```bash
-PATTERN_MAPPER_CFG=$(gsd_run query config-get workflow.pattern_mapper 2>/dev/null || echo "true")
-```
-
-**If `PATTERN_MAPPER_CFG` is `false`:** Skip to step 8.
+Pattern mapper activation is owned by the `pattern-mapper` capability's `plan:pre` step hook. Read `PLAN_PRE_HOOKS_JSON` and skip if no active step hook has `capId == "pattern-mapper"` and `ref.agent == "gsd-pattern-mapper"`. Also skip if no CONTEXT.md and no RESEARCH.md exist for this phase (nothing to extract file lists from).
 
 **If PATTERNS.md already exists** (`PATTERNS_PATH` is non-empty from step 7): Skip to step 8 (use existing).
 
@@ -865,30 +823,17 @@ Display banner:
 ◆ Spawning pattern mapper... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)
 ```
 
-Pattern mapper prompt:
+Use the active `pattern-mapper` hook's `fragment.inline` as the prompt template and substitute the phase fields below before spawning its declared `ref.agent`.
 
 ```markdown
-<pattern_mapping_context>
-**Phase:** {phase_number} - {phase_name}
-**Phase directory:** {phase_dir}
-**Padded phase:** {padded_phase}
-
-<files_to_read>
-- {context_path} (USER DECISIONS from /gsd:discuss-phase)
-- {research_path} (Technical Research)
-</files_to_read>
-
-**Output file:** {phase_dir}/{padded_phase}-PATTERNS.md
-
-Extract the list of files to be created/modified from CONTEXT.md and RESEARCH.md. For each file, classify by role and data flow, find the closest existing analog in the codebase, extract concrete code excerpts, and produce PATTERNS.md.
-</pattern_mapping_context>
+{pattern_mapper_hook.fragment.inline}
 ```
 
 Spawn with:
 ```
 Agent(
-  prompt="{above}",
-  subagent_type="gsd-pattern-mapper",
+  prompt=filled_pattern_mapper_hook_fragment,
+  subagent_type=pattern_mapper_hook.ref.agent,
   model="{researcher_model}",
 )
 ```
@@ -944,6 +889,7 @@ Planner prompt:
 - {verification_path} (Verification Gaps - if --gaps)
 - {uat_path} (UAT Gaps - if --gaps)
 - {reviews_path} (Cross-AI Review Feedback - if --reviews; actionable findings must be incorporated or explicitly deferred/rejected in PLAN.md)
+- {AI_SPEC_PATH} (AI Design Contract — framework and evaluation strategy, if exists)
 - {UI_SPEC_PATH} (UI Design Contract — visual/interaction specs, if exists)
 - {SPEC_PATH} (Phase SPEC — carries the ## Edge Coverage section to lift covered/backstop edges from, if exists)
 - {SPIKE_FINDINGS_PATH} (Spike Findings — validated patterns, constraints, landmines from experiments, if exists)
@@ -977,7 +923,7 @@ Historical findings already incorporated, explicitly deferred/rejected in PLAN.m
 
 **Phase requirement IDs (every ID MUST appear in a plan's `requirements` field):** {phase_req_ids}
 
-**Project instructions:** Read ./CLAUDE.md if exists — follow project-specific guidelines
+**Project instructions:** Read ./CLAUDE.md or ./.claude/CLAUDE.md if either exists — follow project-specific guidelines
 **Project skills:** Check .claude/skills/ or .agents/skills/ directory (if either exists) — read SKILL.md files, plans should account for project skill rules
 
 ${TDD_MODE === 'true' ? `
@@ -1318,7 +1264,7 @@ If an actionable finding remains only in REVIEWS.md and would be invisible to /g
 
 **Phase requirement IDs (MUST ALL be covered):** {phase_req_ids}
 
-**Project instructions:** Read ./CLAUDE.md if exists — verify plans honor project guidelines
+**Project instructions:** Read ./CLAUDE.md or ./.claude/CLAUDE.md if either exists — verify plans honor project guidelines
 **Project skills:** Check .claude/skills/ or .agents/skills/ directory (if either exists) — verify plans account for project skill rules
 </verification_context>
 

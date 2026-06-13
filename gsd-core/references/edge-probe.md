@@ -62,7 +62,7 @@ truncation). Growth happens via optional domain packs, not by bloating the core.
 | empty | Empty / degenerate | collection, text | What is the result for empty, single-element, or null input? |
 | encoding | Encoding / representation | text | Whose definition of length/equality applies — bytes, code points, grapheme clusters, or normalized form? |
 | ordering | Ordering / stability | collection | When elements compare equal, is output order specified and stable? |
-| precision | Precision / overflow | numeric-range | Where can precision loss or overflow occur, and what is the contract? |
+| precision | Precision / overflow | numeric-range | Where can precision loss, overflow, or rounding/tie-breaking occur — and what is the exact contract (e.g. half-up vs half-to-even, ceil/floor/truncate)? |
 | idempotency | Idempotency / repetition | stateful | What happens if this runs twice on the same input? |
 | concurrency | Concurrency / effect ordering | stateful, io | If interrupted or run in parallel, what is guaranteed? |
 
@@ -170,7 +170,7 @@ rule, the requirement classifies as `numeric-range`, which raises `boundary` and
 {
   "items": [
     { "requirement_id": "R1", "category": "boundary", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "What happens exactly at each min/max/threshold — and one step either side?" },
-    { "requirement_id": "R1", "category": "precision", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "Where can precision loss or overflow occur, and what is the contract?" }
+    { "requirement_id": "R1", "category": "precision", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "Where can precision loss, overflow, or rounding/tie-breaking occur — and what is the exact contract (e.g. half-up vs half-to-even, ceil/floor/truncate)?" }
   ],
   "coverage": { "applicable": 2, "resolved": 0, "unresolved": 2, "byVerification": { "explicit": 0, "backstop": 0 } }
 }
@@ -209,7 +209,7 @@ classifies as `numeric-range`, which raises `boundary` and `precision`:
 {
   "items": [
     { "requirement_id": "R1", "category": "boundary", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "What happens exactly at each min/max/threshold — and one step either side?" },
-    { "requirement_id": "R1", "category": "precision", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "Where can precision loss or overflow occur, and what is the contract?" }
+    { "requirement_id": "R1", "category": "precision", "status": "unresolved", "verification": null, "resolution": null, "reason": null, "probe": "Where can precision loss, overflow, or rounding/tie-breaking occur — and what is the exact contract (e.g. half-up vs half-to-even, ceil/floor/truncate)?" }
   ],
   "coverage": { "applicable": 2, "resolved": 0, "unresolved": 2, "byVerification": { "explicit": 0, "backstop": 0 } }
 }

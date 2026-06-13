@@ -414,9 +414,11 @@ Then list paths for each generated artifact:
 ```
 Artifacts:
   ✓ /gsd-dev-preferences   $HOME/.claude/skills/gsd-dev-preferences/SKILL.md
-  ✓ CLAUDE.md section       ./CLAUDE.md
+  ✓ CLAUDE.md section       <resolved claude_md_path, default ./.claude/CLAUDE.md>
   ✓ Global CLAUDE.md        $HOME/.claude/CLAUDE.md
 ```
+
+(Show the `claude_md_path` actually returned by the command — it defaults to `./.claude/CLAUDE.md` but may be overridden by config or `--output`.)
 
 (Only show artifacts that were actually generated.)
 
