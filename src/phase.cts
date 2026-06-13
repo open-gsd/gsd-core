@@ -1409,18 +1409,19 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         );
         roadmapContent = roadmapContent.replace(tableRowPattern, (fullRow) => {
           const cells = fullRow.split('|').slice(1, -1);
+          const dateShape = /^\d{4}-\d{2}-\d{2}$/;
           if (cells.length === 5) {
             cells[2] = ` ${summaryCount}/${planCount} `;
             cells[3] = ' Complete    ';
-            // Preserve existing non-empty completion date (#1161: idempotent date stamp)
+            // Preserve only a valid ISO date (#1161: idempotent; self-heal garbage)
             const existingDate5 = cells[4].trim();
-            cells[4] = (existingDate5 && existingDate5 !== '-') ? cells[4] : ` ${today} `;
+            cells[4] = dateShape.test(existingDate5) ? cells[4] : ` ${today} `;
           } else if (cells.length === 4) {
             cells[1] = ` ${summaryCount}/${planCount} `;
             cells[2] = ' Complete    ';
-            // Preserve existing non-empty completion date (#1161: idempotent date stamp)
+            // Preserve only a valid ISO date (#1161: idempotent; self-heal garbage)
             const existingDate4 = cells[3].trim();
-            cells[3] = (existingDate4 && existingDate4 !== '-') ? cells[3] : ` ${today} `;
+            cells[3] = dateShape.test(existingDate4) ? cells[3] : ` ${today} `;
           }
           return '|' + cells.join('|') + '|';
         });

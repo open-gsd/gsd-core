@@ -490,23 +490,24 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     );
     roadmapContent = roadmapContent.replace(tableRowPattern, (fullRow) => {
       const cells = fullRow.split('|').slice(1, -1); // drop leading/trailing empty from split
+      const dateShape = /^\d{4}-\d{2}-\d{2}$/;
       if (cells.length === 5) {
         // 5-col: Phase | Milestone | Plans | Status | Completed
         cells[2] = ` ${summaryCount}/${planCount} `;
         cells[3] = ` ${status.padEnd(11)}`;
-        // Preserve existing non-empty completion date (#1161: idempotent date stamp)
+        // Preserve only a valid ISO date (#1161: idempotent; self-heal garbage)
         const existingDate5 = cells[4].trim();
         cells[4] = isComplete
-          ? (existingDate5 && existingDate5 !== '-' ? cells[4] : ` ${today} `)
+          ? (dateShape.test(existingDate5) ? cells[4] : ` ${today} `)
           : '  ';
       } else if (cells.length === 4) {
         // 4-col: Phase | Plans | Status | Completed
         cells[1] = ` ${summaryCount}/${planCount} `;
         cells[2] = ` ${status.padEnd(11)}`;
-        // Preserve existing non-empty completion date (#1161: idempotent date stamp)
+        // Preserve only a valid ISO date (#1161: idempotent; self-heal garbage)
         const existingDate4 = cells[3].trim();
         cells[3] = isComplete
-          ? (existingDate4 && existingDate4 !== '-' ? cells[3] : ` ${today} `)
+          ? (dateShape.test(existingDate4) ? cells[3] : ` ${today} `)
           : '  ';
       }
       return '|' + cells.join('|') + '|';

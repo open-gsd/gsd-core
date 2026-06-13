@@ -365,12 +365,21 @@ describe('issue #4 (CJS): cmdPhaseComplete — idempotency (blind-increment bug)
 // end-to-end rather than hitting the roadmap.cjs helper in isolation.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Extract the Completed cell from the progress table row for a given phase number. */
+/** Extract the Completed cell from the progress table row for a given phase number.
+ * The Completed column is always the LAST cell, regardless of whether the table is
+ * 4-col (Phase | Plans | Status | Completed) or 5-col (Phase | Milestone | Plans | Status | Completed).
+ */
 function extractCompletedCell(roadmapContent, phaseNum) {
-  // Match progress table rows like: | 01. Foundation | 1/1 | Complete    | 2026-01-01 |
-  const re = new RegExp(`^\\|\\s*${phaseNum}[^|]*\\|[^|]*\\|[^|]*\\|([^|]*)\\|`, 'm');
+  // Match the full progress table row whose first cell starts with the phase number.
+  // Use [^|\n] to avoid crossing line boundaries. Capture everything up to the final '|'.
+  const re = new RegExp(`^(\\|\\s*${phaseNum}[^|\\n]*(?:\\|[^|\\n]*)*)\\|\\s*$`, 'm');
   const m = roadmapContent.match(re);
-  return m ? m[1].trim() : null;
+  if (!m) return null;
+  // m[1] = '| 01. Foundation | 1/1 | Complete    | 2026-01-01 '
+  // Split on '|' → ['', ' 01. Foundation ', ' 1/1 ', ' Complete    ', ' 2026-01-01 ']
+  // Drop the leading empty string and take the last element.
+  const cells = m[1].split('|').slice(1); // drop leading ''
+  return cells[cells.length - 1].trim();
 }
 
 /**
@@ -556,10 +565,7 @@ describe('regressions: phase complete preserves completion date (#1161)', () => 
 
     // Assert: Completed cell must still be '2026-01-01', NOT the pinned '2021-03-22'.
     const after = fs.readFileSync(roadmapPath, 'utf8');
-    // 5-col: Completed is cells[4] — extractCompletedCell reads the 4th | ... | segment
-    const re5 = /^\|\s*01[^|]*\|[^|]*\|[^|]*\|[^|]*\|([^|]*)\|/m;
-    const m5 = after.match(re5);
-    const completedCell5 = m5 ? m5[1].trim() : null;
+    const completedCell5 = extractCompletedCell(after, '01');
     assert.strictEqual(
       completedCell5,
       '2026-01-01',
@@ -610,6 +616,32 @@ describe('regressions: phase complete preserves completion date (#1161)', () => 
       completedCell,
       PINNED_DATE_1161,
       `#1161 (d) FAILED: whitespace-only Completed cell should be stamped '${PINNED_DATE_1161}', got '${completedCell}'.\n\n` +
+      `ROADMAP after:\n${after}`,
+    );
+  });
+
+  // ── (e) Non-date garbage in Completed cell is self-healed and gets re-stamped ──
+
+  test('#1161 (e): 5-col ROADMAP — non-date garbage Completed cell is self-healed and re-stamped', () => {
+    // Arrange: 5-col row is already Complete but the Completed cell contains 'TBD'
+    // (a non-date garbage value that the old guard would have preserved).
+    tmpDir = create5ColFixture('TBD', true);
+    const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+
+    // Act: run `phase complete 1` via the real CLI handler, clock pinned to PINNED_DATE.
+    const result = runGsdTools('phase complete 1', tmpDir, PINNED_CLOCK_ENV);
+    assert.ok(result.success, `phase complete failed: ${result.error || result.output}`);
+
+    // Assert: garbage 'TBD' must be replaced with the pinned date (self-heal).
+    // Pre-Fix 2: the old guard (existingDate && existingDate !== '-') would preserve 'TBD'.
+    // Post-Fix 2: the date-shape guard (/^\d{4}-\d{2}-\d{2}$/) rejects 'TBD' → re-stamps.
+    const after = fs.readFileSync(roadmapPath, 'utf8');
+    const completedCell = extractCompletedCell(after, '01');
+    assert.strictEqual(
+      completedCell,
+      PINNED_DATE_1161,
+      `#1161 (e) FAILED: non-date garbage 'TBD' in Completed cell should be self-healed to '${PINNED_DATE_1161}', got '${completedCell}'.\n` +
+      `Old guard (non-empty && !== '-') would preserve 'TBD'. New guard must require a date shape.\n\n` +
       `ROADMAP after:\n${after}`,
     );
   });
