@@ -160,6 +160,14 @@
         "edge-probe.test.cjs"
       ],
       "issue": "550"
+    },
+    "federated-config": {
+      "files": [
+        "federated-config.test.cjs",
+        "federated-config-loadconfig.test.cjs",
+        "federated-config-key-removal.test.cjs"
+      ],
+      "issue": "TBD"
     }
   }
 }
