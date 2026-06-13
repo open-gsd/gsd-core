@@ -214,6 +214,42 @@ describe('ADR-857 Phase 6 capstone conformance (#1139)', () => {
     );
   });
 
+describe('ADR-857 phase 6 — capabilities must not bake install paths into the registry', () => {
+  // Matches GSD install paths that LEAK when copied verbatim to non-Claude runtimes.
+  // (~/.claude/projects is a legit runtime feature and is intentionally NOT matched.)
+  const LEAK = /(?:~|\$HOME)\/\.claude\/(?:gsd-core|commands|agents|hooks)/;
+
+  test('no capability source (capability.json or fragment) embeds a ~/.claude install path', () => {
+    const capsDir = path.join(__dirname, '..', 'capabilities');
+    const offenders = [];
+    for (const id of fs.readdirSync(capsDir)) {
+      const dir = path.join(capsDir, id);
+      if (!fs.statSync(dir).isDirectory()) continue;
+      const cj = path.join(dir, 'capability.json');
+      if (fs.existsSync(cj) && LEAK.test(fs.readFileSync(cj, 'utf8'))) {
+        offenders.push(`capabilities/${id}/capability.json`);
+      }
+      const fragDir = path.join(dir, 'fragments');
+      if (fs.existsSync(fragDir)) {
+        for (const f of fs.readdirSync(fragDir)) {
+          if (LEAK.test(fs.readFileSync(path.join(fragDir, f), 'utf8'))) {
+            offenders.push(`capabilities/${id}/fragments/${f}`);
+          }
+        }
+      }
+    }
+    assert.deepEqual(offenders, [],
+      `capability sources embed ~/.claude install paths — these leak into the verbatim-copied capability-registry.cjs on non-Claude runtimes. Make the fragment path-free. Offenders: ${offenders.join(', ')}`);
+  });
+
+  test('generated capability-registry.cjs contains no ~/.claude install path', () => {
+    const reg = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'capability-registry.cjs'), 'utf8');
+    const leakLines = reg.split('\n').map((l, i) => [i + 1, l]).filter(([, l]) => LEAK.test(l)).map(([n]) => n);
+    assert.deepEqual(leakLines, [],
+      `capability-registry.cjs leaks ~/.claude install paths at line(s) ${leakLines.join(', ')} — the registry is copied verbatim to non-Claude runtimes (only workflow .md files are path-converted at install). Make the source capability fragment path-free.`);
+  });
+});
+
   test('every plan:pre planner contribution is injected generically (not per-capId hardcode)', () => {
     // FIX C regression guard: plan-phase.md must inject planner contributions
     // generically (by into == "planner") rather than only injecting a single

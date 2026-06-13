@@ -18,14 +18,12 @@
  * the event loop drains. Unhandled rejections are caught by the .catch() wrapper
  * to surface errors via the error() callback.
  */
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 const { ERROR_REASON } = require('./io.cjs');
 
 // ─── Pipeline phase commands ───────────────────────────────────────────────────
 
 function routeScanSessions({ args, cwd, raw, error, _pipeline }) {
   void cwd; void error;
-  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
   const p = _pipeline ?? require('./profile-pipeline.cjs');
   const pathIdx = args.indexOf('--path');
   const sessionsPath = pathIdx !== -1 ? args[pathIdx + 1] : null;
@@ -36,7 +34,6 @@ function routeScanSessions({ args, cwd, raw, error, _pipeline }) {
 }
 
 function routeExtractMessages({ args, cwd, raw, error, _pipeline }) {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
   const p = _pipeline ?? require('./profile-pipeline.cjs');
   const sessionIdx = args.indexOf('--session');
   const sessionId = sessionIdx !== -1 ? args[sessionIdx + 1] : null;
@@ -59,7 +56,6 @@ function routeExtractMessages({ args, cwd, raw, error, _pipeline }) {
 
 function routeProfileSample({ args, cwd, raw, error, _pipeline }) {
   void cwd; void error;
-  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
   const p = _pipeline ?? require('./profile-pipeline.cjs');
   const pathIdx = args.indexOf('--path');
   const sessionsPath = pathIdx !== -1 ? args[pathIdx + 1] : null;
@@ -77,7 +73,6 @@ function routeProfileSample({ args, cwd, raw, error, _pipeline }) {
 // ─── Output phase commands ─────────────────────────────────────────────────────
 
 function routeWriteProfile({ args, cwd, raw, error, _output }) {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
   const o = _output ?? require('./profile-output.cjs');
   const inputIdx = args.indexOf('--input');
   const inputPath = inputIdx !== -1 ? args[inputIdx + 1] : null;
@@ -92,7 +87,6 @@ function routeWriteProfile({ args, cwd, raw, error, _output }) {
 
 function routeProfileQuestionnaire({ args, cwd, raw, error, _output }) {
   void cwd; void error;
-  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
   const o = _output ?? require('./profile-output.cjs');
   const answersIdx = args.indexOf('--answers');
   const answers = answersIdx !== -1 ? args[answersIdx + 1] : null;
@@ -101,7 +95,6 @@ function routeProfileQuestionnaire({ args, cwd, raw, error, _output }) {
 
 function routeGenerateDevPreferences({ args, cwd, raw, error, _output }) {
   void error;
-  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
   const o = _output ?? require('./profile-output.cjs');
   const analysisIdx = args.indexOf('--analysis');
   const analysisPath = analysisIdx !== -1 ? args[analysisIdx + 1] : null;
@@ -114,7 +107,6 @@ function routeGenerateDevPreferences({ args, cwd, raw, error, _output }) {
 
 function routeGenerateClaudeProfile({ args, cwd, raw, error, _output }) {
   void error;
-  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
   const o = _output ?? require('./profile-output.cjs');
   const analysisIdx = args.indexOf('--analysis');
   const analysisPath = analysisIdx !== -1 ? args[analysisIdx + 1] : null;
@@ -126,7 +118,6 @@ function routeGenerateClaudeProfile({ args, cwd, raw, error, _output }) {
 
 function routeGenerateClaudeMd({ args, cwd, raw, error, _output }) {
   void error;
-  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
   const o = _output ?? require('./profile-output.cjs');
   const outputIdx = args.indexOf('--output');
   const outputPath = outputIdx !== -1 ? args[outputIdx + 1] : null;

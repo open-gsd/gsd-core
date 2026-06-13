@@ -178,7 +178,7 @@ MVP_FLAG_ARG=""
 if [[ "$ARGUMENTS" =~ (^|[[:space:]])--mvp([[:space:]]|$) ]]; then MVP_FLAG_ARG="--cli-flag"; fi
 MVP_MODE=$(gsd_run query phase.mvp-mode "${PHASE_NUMBER}" $MVP_FLAG_ARG --pick active)
 EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw)
-TDD_MODE=$(node -e "const h=JSON.parse(process.argv[1]); process.stdout.write(h.activeHooks&&h.activeHooks.some(function(x){return x.capId==='tdd';})?'true':'false')" "$EXECUTE_POST_HOOKS_JSON" 2>/dev/null || echo "false")
+TDD_MODE=$(printf '%s' "$EXECUTE_POST_HOOKS_JSON" | jq -r '((.activeHooks // []) | any(.capId == "tdd")) | if . then "true" else "false" end' 2>/dev/null || echo "false")
 ```
 
 <step name="safe_resume_gate">
@@ -1200,16 +1200,7 @@ GATE_RESULT=$(gsd_run check ${hook.check.query} "${PHASE_NUMBER}" --raw)
 CHECK_EXIT=$?
 ```
 
-**Step 1 — did the CHECK COMMAND itself succeed?**
-If the check command failed (non-zero `CHECK_EXIT`, empty output, or unparseable JSON):
-- `onError == "halt"` → halt; surface command error and stop.
-- `onError == "skip"` → log a warning and continue to the next hook.
-
-**Step 2 — read `GATE_RESULT.block` (boolean).** Only reached when command succeeded.
-
-- If `hook.blocking == true` and `GATE_RESULT.block == true`: halt with the gate's message/table output before proceeding. This halt is NOT bypassed by `onError`.
-- If `hook.blocking == false` (advisory): if `GATE_RESULT.block == true` or non-empty `message`, display the gate's `table` or summary output and continue. Advisory gates never block execution.
-- If `hook.blocking == true` and `GATE_RESULT.block == false`: continue silently.
+**Gate evaluation** uses the same two-step contract as `execute:wave:post` above: **Step 1** — if the check command failed (non-zero `CHECK_EXIT`, empty/unparseable output), `onError == "halt"` stops and surfaces the error, `onError == "skip"` warns and continues to the next hook (do not read `block`). **Step 2** (command succeeded) — a blocking gate (`hook.blocking == true`) halts on `GATE_RESULT.block == true` with its message/table (never bypassed by `onError`); an advisory gate (`hook.blocking == false`) shows its `table`/summary when `block == true` or `message` is non-empty, then continues; a blocking gate with `block == false` continues silently.
 
 **TDD review escalation (overrides the advisory default for the `tdd.review-checkpoint` gate only).** The tdd `execute:post` gate is declared `blocking: false`, so by the generic contract above it displays its `message`/table and continues. There is ONE documented exception (see `~/.claude/gsd-core/references/execute-mvp-tdd.md`): when `MVP_MODE=true` AND `TDD_MODE=true` AND `GATE_RESULT.block == true` (one or more TDD plans miss a RED or GREEN gate commit), the end-of-phase TDD review escalates from advisory to **blocking under MVP+TDD** — refuse to mark the phase complete and present:
 
@@ -1343,7 +1334,7 @@ Options:
 3. Abort phase — roll back and re-plan
 ```
 
-Use AskUserQuestion to present the options.
+If `TEXT_MODE` is true, present as a plain-text numbered list and ask the user to type their choice number. Otherwise, use AskUserQuestion to present the options.
 </step>
 
 <step name="verify_phase_goal">

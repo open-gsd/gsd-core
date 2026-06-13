@@ -22,7 +22,7 @@
       "point": "plan:pre",
       "into": "planner",
       "fragment": {
-        "inline": "<tdd_mode_active>\n**TDD Mode is ENABLED.** Apply TDD heuristics from @~/.claude/gsd-core/references/tdd.md to all eligible tasks:\n- Business logic with defined I/O → type: tdd\n- API endpoints with request/response contracts → type: tdd\n- Data transformations, validation, algorithms → type: tdd\n- UI, config, glue code, CRUD → standard plan (type: execute)\nEach TDD plan gets one feature with RED/GREEN/REFACTOR gate sequence.\n</tdd_mode_active>"
+        "inline": "<tdd_mode_active>\n**TDD Mode is ENABLED.** Apply TDD heuristics to all eligible tasks:\n- Business logic with defined I/O → type: tdd\n- API endpoints with request/response contracts → type: tdd\n- Data transformations, validation, algorithms → type: tdd\n- UI, config, glue code, CRUD → standard plan (type: execute)\nEach TDD plan gets one feature with RED/GREEN/REFACTOR gate sequence.\n</tdd_mode_active>"
       },
       "produces": [],
       "consumes": [],

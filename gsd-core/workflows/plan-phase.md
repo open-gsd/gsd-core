@@ -636,7 +636,7 @@ GATE=$(gsd_run check ui-plan-gate "${PHASE}" --raw)
 
 Read `frontend`, `hasUiSpec`, and `block` from `GATE`.
 
-**Branch 2 — no frontend indicators (`frontend` is `false`):** Skip silently to step 5.7.
+**Branch 2 — no frontend indicators (`frontend` is `false`):** Skip silently to step 6.
 
 **Branch 3 — UI-SPEC already exists (`hasUiSpec` is `true`):**
 
