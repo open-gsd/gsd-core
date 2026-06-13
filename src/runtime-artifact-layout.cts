@@ -24,6 +24,11 @@ const {
   stageSkillsForRuntimeAsSkills,
   stageCommandsForRuntimeFlat,
 } = installProfiles;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import runtimeArtifactConversion = require('./runtime-artifact-conversion.cjs');
+const conversionExports = runtimeArtifactConversion as Record<string, unknown> & {
+  readGsdCommandNames?: () => string[];
+};
 
 // In .cts (CommonJS output) files, `require` is available as a global.
 const _require: NodeRequire = require;
@@ -33,7 +38,6 @@ const _require: NodeRequire = require;
 // ---------------------------------------------------------------------------
 
 interface InstallExports {
-  readGsdCommandNames: () => string[];
   computePathPrefix: (opts: { isGlobal: boolean; isOpencode: boolean; isWindowsHost: boolean; resolvedTarget: string; homeDir: string }) => string;
   applyRuntimeContentRewritesInPlace: (stagedDir: string, runtime: string, pathPrefix: string) => void;
   [converterName: string]: unknown;
@@ -194,8 +198,7 @@ function kimiAgentsKind(destSubpath: string, prefix: string, configDir: string):
     destSubpath,
     prefix,
     stage: (resolved) => {
-      const installExports = getInstallExports();
-      const buildKimiAgentArtifacts = installExports['buildKimiAgentArtifacts'] as (opts: {
+      const buildKimiAgentArtifacts = conversionExports['buildKimiAgentArtifacts'] as (opts: {
         rootAgent?: string;
         subagents?: Array<{ path: string; content: string }>;
       }) => {
@@ -237,7 +240,7 @@ function kimiAgentsKind(destSubpath: string, prefix: string, configDir: string):
  *
  * @param destSubpath
  * @param prefix
- * @param converterName  name of converter function in bin/install.js exports
+ * @param converterName  name of converter function in Runtime Artifact Conversion exports
  * @param runtime        canonical runtime ID (gates Hermes/Qwen branding in converter)
  * @param configDir      runtime config dir (for .gsd-source marker resolution)
  * @param nested         if true, nest concrete skills under their ns-* routers (#69)
@@ -260,15 +263,16 @@ function skillsKind(
     destSubpath,
     prefix,
     stage: (resolved) => {
-      const installExports = getInstallExports();
-      const realConverter = installExports[converterName] as (content: string, skillName: string, runtime: string, cmdNames: string[], isGlobal: boolean) => string;
+      const realConverter = conversionExports[converterName] as (content: string, skillName: string, runtime: string, cmdNames: string[], isGlobal: boolean) => string;
       // Compute cmdNames once per stage call for performance (#3583).
       // Extra trailing args are ignored by converters that don't need them. The
       // isGlobal flag is the 5th positional (NOT the 3rd): the 3rd positional is
       // `runtime` for the claude/kimi/cline converters, so the scope-aware
       // converters (antigravity, copilot) read isGlobal from position 5 to avoid
       // colliding with `runtime` and always taking the global branch.
-      const cmdNames = installExports.readGsdCommandNames();
+      const cmdNames = conversionExports.readGsdCommandNames
+        ? conversionExports.readGsdCommandNames()
+        : [];
       const isGlobal = scope === 'global';
       const wrappedConverter = (content: string, skillName: string): string =>
         realConverter(content, skillName, runtime, cmdNames, isGlobal);
@@ -282,7 +286,7 @@ function skillsKind(
  * commands directory with per-file conversion (e.g. Cursor 1.6 slash commands).
  *
  * Unlike `commandsKind` (which passes raw source files through), this kind
- * applies `converterName` from bin/install.js exports to each file during
+ * applies `converterName` from Runtime Artifact Conversion exports to each file during
  * staging, writing flat `${prefix}${stem}.md` files to the staged directory.
  *
  * The staged files are then written by `_copyStaged` (commands branch) which
@@ -290,7 +294,7 @@ function skillsKind(
  *
  * @param destSubpath   destination subpath within configDir (e.g. 'commands')
  * @param prefix        filename prefix, e.g. 'gsd-'
- * @param converterName name of converter function in bin/install.js exports
+ * @param converterName name of converter function in Runtime Artifact Conversion exports
  * @param configDir     runtime config dir (for .gsd-source marker resolution)
  */
 function convertedCommandsKind(
@@ -304,8 +308,7 @@ function convertedCommandsKind(
     destSubpath,
     prefix,
     stage: (resolved) => {
-      const installExports = getInstallExports();
-      const converter = installExports[converterName] as (content: string, commandName: string) => string;
+      const converter = conversionExports[converterName] as (content: string, commandName: string) => string;
       return stageCommandsForRuntimeFlat(findInstallSourceRoot(configDir), resolved, converter, prefix);
     },
   };

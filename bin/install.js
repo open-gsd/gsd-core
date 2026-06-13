@@ -26,8 +26,8 @@ const {
 // fs.readdirSync + RegExp work for every skill.
 const {
   transformContentToHyphen,
-  readCmdNames: readGsdCommandNames,
-} = require(path.join(__dirname, '..', 'scripts', 'fix-slash-commands.cjs'));
+  readGsdCommandNames,
+} = require('../gsd-core/bin/lib/command-roster.cjs');
 const {
   resolveAntigravityGlobalDir,
   getGlobalConfigDir,
@@ -38,6 +38,7 @@ const {
   readBaseRefFromSettings,
 } = require('../gsd-core/bin/lib/worktree-base-ref.cjs');
 const { resolveInstallPlan } = require('../gsd-core/bin/lib/runtime-config-adapter-registry.cjs');
+const runtimeArtifactConversion = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
 // Canonical set of hook files shipped to users. Imported here so writeManifest()
 // records exactly the same set that build-hooks.js copies to hooks/dist/, making
 // the manifest and the installed hooks/ dir structurally identical. Avoids the
@@ -12281,6 +12282,7 @@ module.exports = {
     parseConfigDirFromArgs,
     cleanupLegacyGsdCc,
     _applyRuntimeRewrites,
+    ...runtimeArtifactConversion,
   };
 
 // Main logic — only run when not loaded as a module for testing
