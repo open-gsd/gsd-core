@@ -112,7 +112,9 @@ function parseCallsAgents(content: string): string[] {
  * `gsd-*` agent name references. Agent stems are stored under the special
  * key `_calls_agents_<stem>` so they don't conflict with skill stems.
  */
-function loadSkillsManifest(commandsDir: string): Map<string, string[]> {
+const DEFAULT_COMMANDS_DIR = path.resolve(__dirname, '..', '..', '..', 'commands', 'gsd');
+
+function loadSkillsManifest(commandsDir: string = DEFAULT_COMMANDS_DIR): Map<string, string[]> {
   const manifest = new Map<string, string[]>();
   if (!fs.existsSync(commandsDir)) return manifest;
   const entries = fs.readdirSync(commandsDir, { withFileTypes: true });

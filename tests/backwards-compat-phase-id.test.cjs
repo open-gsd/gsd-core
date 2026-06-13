@@ -109,8 +109,11 @@ describe('backwards-compat: legacy Phase N roadmap entries', () => {
     const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
     const before = fs.readFileSync(roadmapPath, 'utf-8');
 
-    // Trigger a load — must not silently migrate the file.
-    getMilestonePhaseFilter(tmpDir);
+    // Trigger a load — must not silently migrate the file. The deprecation
+    // warning is covered by the previous test, so keep this fixture quiet.
+    captureConsole(() => {
+      getMilestonePhaseFilter(tmpDir);
+    });
 
     const after = fs.readFileSync(roadmapPath, 'utf-8');
     assert.equal(after, before, 'ROADMAP.md must not be rewritten during load');

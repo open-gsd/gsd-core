@@ -7,6 +7,55 @@
  */
 
 const capabilities = {
+  "ai-integration": {
+    "id": "ai-integration",
+    "role": "feature",
+    "title": "AI design contract",
+    "description": "AI-SPEC design contract workflow for phases that build AI systems; owns the AI integration command, agents, and workflow.ai_integration_phase activation key.",
+    "tier": "full",
+    "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
+    "skills": [
+      "ai-integration-phase"
+    ],
+    "agents": [
+      "gsd-framework-selector",
+      "gsd-ai-researcher",
+      "gsd-domain-researcher",
+      "gsd-eval-planner"
+    ],
+    "hooks": [],
+    "config": {
+      "workflow.ai_integration_phase": {
+        "type": "boolean",
+        "default": true,
+        "description": "Prompt for an AI-SPEC design contract before planning phases that involve AI systems."
+      }
+    },
+    "steps": [
+      {
+        "point": "plan:pre",
+        "ref": {
+          "skill": "ai-integration-phase"
+        },
+        "produces": [
+          "AI-SPEC.md"
+        ],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "workflow.ai_integration_phase",
+        "onError": "skip"
+      }
+    ],
+    "contributions": [],
+    "gates": []
+  },
   "antigravity": {
     "id": "antigravity",
     "role": "runtime",
@@ -69,6 +118,12 @@ const capabilities = {
     "description": "Open-artifact audit and UAT-gap audit for milestone close gates; exposes `gsd-tools audit-uat` (cross-phase UAT outstanding items) and `gsd-tools audit-open` (structured open-artifact scan across debug, tasks, threads, todos, seeds, UAT, verification, context-questions).",
     "tier": "full",
     "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
     "skills": [],
     "agents": [],
     "config": {},
@@ -254,6 +309,63 @@ const capabilities = {
       "permissionWriter": null,
       "extendedHookEvents": []
     }
+  },
+  "code-review": {
+    "id": "code-review",
+    "role": "feature",
+    "title": "Code review",
+    "description": "Source-file code review and review-fix workflow support for completed execution work.",
+    "tier": "full",
+    "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
+    "skills": [
+      "code-review"
+    ],
+    "agents": [
+      "gsd-code-reviewer",
+      "gsd-code-fixer"
+    ],
+    "hooks": [],
+    "config": {
+      "workflow.code_review": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable code-review participation in post-execution review flows."
+      },
+      "workflow.code_review_depth": {
+        "type": "enum",
+        "values": [
+          "quick",
+          "standard",
+          "deep"
+        ],
+        "default": "standard",
+        "description": "Default depth for code review when no --depth override is supplied."
+      }
+    },
+    "steps": [
+      {
+        "point": "execute:post",
+        "ref": {
+          "skill": "code-review"
+        },
+        "produces": [
+          "REVIEW.md"
+        ],
+        "consumes": [
+          "SUMMARY.md"
+        ],
+        "when": "workflow.code_review",
+        "onError": "skip"
+      }
+    ],
+    "contributions": [],
+    "gates": []
   },
   "codebuddy": {
     "id": "codebuddy",
@@ -543,6 +655,12 @@ const capabilities = {
     "description": "Build, query, and inspect the project knowledge graph in `.planning/graphs/`; exposes graphify CLI subcommands (build, query, status, diff) and the /gsd-graphify skill.",
     "tier": "full",
     "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
     "skills": [
       "graphify"
     ],
@@ -622,6 +740,12 @@ const capabilities = {
     "description": "Code-intelligence store for codebase querying, diff, snapshot, and API-surface extraction; exposes `gsd-tools intel` subcommands (query, status, update, diff, snapshot, patch-meta, validate, extract-exports, api-surface) and backs `/gsd-map-codebase` and `gsd-intel-updater`.",
     "tier": "full",
     "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
     "skills": [],
     "agents": [],
     "config": {
@@ -766,6 +890,52 @@ const capabilities = {
       "extendedHookEvents": []
     }
   },
+  "nyquist": {
+    "id": "nyquist",
+    "role": "feature",
+    "title": "Nyquist validation",
+    "description": "Validation coverage audit that maps executed work back to tests and manual-only evidence.",
+    "tier": "full",
+    "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
+    "skills": [
+      "validate-phase"
+    ],
+    "agents": [
+      "gsd-nyquist-auditor"
+    ],
+    "hooks": [],
+    "config": {
+      "workflow.nyquist_validation": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable Nyquist validation coverage auditing."
+      }
+    },
+    "steps": [
+      {
+        "point": "verify:post",
+        "ref": {
+          "skill": "validate-phase"
+        },
+        "produces": [
+          "VALIDATION.md"
+        ],
+        "consumes": [
+          "SUMMARY.md"
+        ],
+        "when": "workflow.nyquist_validation",
+        "onError": "halt"
+      }
+    ],
+    "contributions": [],
+    "gates": []
+  },
   "opencode": {
     "id": "opencode",
     "role": "runtime",
@@ -832,6 +1002,56 @@ const capabilities = {
       "extendedHookEvents": []
     }
   },
+  "pattern-mapper": {
+    "id": "pattern-mapper",
+    "role": "feature",
+    "title": "Pattern mapping",
+    "description": "Optional codebase-pattern mapping before planning; owns the pattern mapper agent and workflow.pattern_mapper activation key.",
+    "tier": "full",
+    "requires": [
+      "research"
+    ],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
+    "skills": [],
+    "agents": [
+      "gsd-pattern-mapper"
+    ],
+    "hooks": [],
+    "config": {
+      "workflow.pattern_mapper": {
+        "type": "boolean",
+        "default": true,
+        "description": "Run the pattern mapper before planning when context or research is available."
+      }
+    },
+    "steps": [
+      {
+        "point": "plan:pre",
+        "ref": {
+          "agent": "gsd-pattern-mapper"
+        },
+        "fragment": {
+          "path": "fragments/plan-pre.md",
+          "inline": "<pattern_mapping_context>\n**Phase:** {phase_number} - {phase_name}\n**Phase directory:** {phase_dir}\n**Padded phase:** {padded_phase}\n\n<files_to_read>\n- {context_path} (USER DECISIONS from /gsd:discuss-phase)\n- {research_path} (Technical Research)\n</files_to_read>\n\n**Output file:** {phase_dir}/{padded_phase}-PATTERNS.md\n\nExtract the list of files to be created/modified from CONTEXT.md and RESEARCH.md. For each file, classify by role and data flow, find the closest existing analog in the codebase, extract concrete code excerpts, and produce PATTERNS.md.\n</pattern_mapping_context>\n"
+        },
+        "produces": [
+          "PATTERNS.md"
+        ],
+        "consumes": [
+          "RESEARCH.md"
+        ],
+        "when": "workflow.pattern_mapper",
+        "onError": "skip"
+      }
+    ],
+    "contributions": [],
+    "gates": []
+  },
   "qwen": {
     "id": "qwen",
     "role": "runtime",
@@ -884,6 +1104,145 @@ const capabilities = {
         "PreCompact"
       ]
     }
+  },
+  "research": {
+    "id": "research",
+    "role": "feature",
+    "title": "Phase research",
+    "description": "Optional phase research before planning; owns the phase researcher agent and workflow.research activation key.",
+    "tier": "standard",
+    "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
+    "skills": [],
+    "agents": [
+      "gsd-phase-researcher"
+    ],
+    "hooks": [],
+    "config": {
+      "workflow.research": {
+        "type": "boolean",
+        "default": true,
+        "description": "Run phase research before planning when research artifacts are missing or explicitly refreshed."
+      }
+    },
+    "steps": [
+      {
+        "point": "plan:pre",
+        "ref": {
+          "agent": "gsd-phase-researcher"
+        },
+        "fragment": {
+          "path": "fragments/plan-pre.md",
+          "inline": "<objective>\nResearch how to implement Phase {phase_number}: {phase_name}\nAnswer: \"What do I need to know to PLAN this phase well?\"\n</objective>\n\n<files_to_read>\n- {context_path} (USER DECISIONS from /gsd:discuss-phase)\n- {requirements_path} (Project requirements)\n- {state_path} (Project decisions and history)\n</files_to_read>\n\n${AGENT_SKILLS_RESEARCHER}\n\n<additional_context>\n**Phase description:** {phase_description}\n**Phase requirement IDs (MUST address):** {phase_req_ids}\n\n**Project instructions:** Read ./CLAUDE.md or ./.claude/CLAUDE.md if either exists; follow project-specific guidelines.\n**Project skills:** Check .claude/skills/ or .agents/skills/ directory if either exists. Read SKILL.md files and account for project skill patterns.\n</additional_context>\n\n<output>\nWrite to: {phase_dir}/{phase_num}-RESEARCH.md\n</output>\n"
+        },
+        "produces": [
+          "RESEARCH.md"
+        ],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "workflow.research",
+        "onError": "skip"
+      }
+    ],
+    "contributions": [],
+    "gates": []
+  },
+  "security": {
+    "id": "security",
+    "role": "feature",
+    "title": "Security enforcement",
+    "description": "Threat mitigation verification and ship-time security blocking for phases with security enforcement enabled.",
+    "tier": "full",
+    "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
+    "skills": [
+      "secure-phase"
+    ],
+    "agents": [
+      "gsd-security-auditor"
+    ],
+    "hooks": [],
+    "config": {
+      "workflow.security_enforcement": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable security threat-mitigation verification before phase advancement."
+      },
+      "workflow.security_asvs_level": {
+        "type": "number",
+        "default": 1,
+        "description": "OWASP ASVS level used by security review guidance."
+      },
+      "workflow.security_block_on": {
+        "type": "enum",
+        "values": [
+          "critical",
+          "high",
+          "medium",
+          "low",
+          "none"
+        ],
+        "default": "high",
+        "description": "Minimum open threat severity that blocks advancement."
+      }
+    },
+    "steps": [
+      {
+        "point": "verify:post",
+        "ref": {
+          "skill": "secure-phase"
+        },
+        "produces": [
+          "SECURITY.md"
+        ],
+        "consumes": [
+          "SUMMARY.md"
+        ],
+        "when": "workflow.security_enforcement",
+        "onError": "halt"
+      }
+    ],
+    "contributions": [
+      {
+        "point": "plan:pre",
+        "into": "planner",
+        "fragment": {
+          "inline": "Each PLAN.md must include a <threat_model> block when security enforcement is active. Use the configured ASVS level and blocking threshold from workflow.security_asvs_level and workflow.security_block_on."
+        },
+        "produces": [],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "workflow.security_enforcement"
+      }
+    ],
+    "gates": [
+      {
+        "point": "ship:pre",
+        "check": {
+          "predicate": {
+            "kind": "artifact-frontmatter-equals",
+            "artifact": "SECURITY.md",
+            "field": "threats_open",
+            "equals": 0
+          }
+        },
+        "when": "workflow.security_enforcement",
+        "blocking": true,
+        "onError": "halt"
+      }
+    ]
   },
   "trae": {
     "id": "trae",
@@ -940,6 +1299,12 @@ const capabilities = {
     "description": "UI-SPEC design contract + retrospective UI audit for frontend phases.",
     "tier": "full",
     "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
     "skills": [
       "ui-phase",
       "ui-review"
@@ -1070,12 +1435,26 @@ const capabilities = {
 };
 
 const bySkill = {
+  "ai-integration-phase": "ai-integration",
+  "code-review": "code-review",
   "graphify": "graphify",
+  "validate-phase": "nyquist",
+  "secure-phase": "security",
   "ui-phase": "ui",
   "ui-review": "ui"
 };
 
 const byAgent = {
+  "gsd-framework-selector": "ai-integration",
+  "gsd-ai-researcher": "ai-integration",
+  "gsd-domain-researcher": "ai-integration",
+  "gsd-eval-planner": "ai-integration",
+  "gsd-code-reviewer": "code-review",
+  "gsd-code-fixer": "code-review",
+  "gsd-nyquist-auditor": "nyquist",
+  "gsd-pattern-mapper": "pattern-mapper",
+  "gsd-phase-researcher": "research",
+  "gsd-security-auditor": "security",
   "gsd-ui-checker": "ui",
   "gsd-ui-auditor": "ui"
 };
@@ -1094,6 +1473,40 @@ const byLoopPoint = {
   "plan:pre": {
     "steps": [
       {
+        "capId": "ai-integration",
+        "point": "plan:pre",
+        "ref": {
+          "skill": "ai-integration-phase"
+        },
+        "produces": [
+          "AI-SPEC.md"
+        ],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "workflow.ai_integration_phase",
+        "onError": "skip"
+      },
+      {
+        "capId": "research",
+        "point": "plan:pre",
+        "ref": {
+          "agent": "gsd-phase-researcher"
+        },
+        "fragment": {
+          "path": "fragments/plan-pre.md",
+          "inline": "<objective>\nResearch how to implement Phase {phase_number}: {phase_name}\nAnswer: \"What do I need to know to PLAN this phase well?\"\n</objective>\n\n<files_to_read>\n- {context_path} (USER DECISIONS from /gsd:discuss-phase)\n- {requirements_path} (Project requirements)\n- {state_path} (Project decisions and history)\n</files_to_read>\n\n${AGENT_SKILLS_RESEARCHER}\n\n<additional_context>\n**Phase description:** {phase_description}\n**Phase requirement IDs (MUST address):** {phase_req_ids}\n\n**Project instructions:** Read ./CLAUDE.md or ./.claude/CLAUDE.md if either exists; follow project-specific guidelines.\n**Project skills:** Check .claude/skills/ or .agents/skills/ directory if either exists. Read SKILL.md files and account for project skill patterns.\n</additional_context>\n\n<output>\nWrite to: {phase_dir}/{phase_num}-RESEARCH.md\n</output>\n"
+        },
+        "produces": [
+          "RESEARCH.md"
+        ],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "workflow.research",
+        "onError": "skip"
+      },
+      {
         "capId": "ui",
         "point": "plan:pre",
         "ref": {
@@ -1107,9 +1520,42 @@ const byLoopPoint = {
         ],
         "when": "workflow.ui_phase",
         "onError": "skip"
+      },
+      {
+        "capId": "pattern-mapper",
+        "point": "plan:pre",
+        "ref": {
+          "agent": "gsd-pattern-mapper"
+        },
+        "fragment": {
+          "path": "fragments/plan-pre.md",
+          "inline": "<pattern_mapping_context>\n**Phase:** {phase_number} - {phase_name}\n**Phase directory:** {phase_dir}\n**Padded phase:** {padded_phase}\n\n<files_to_read>\n- {context_path} (USER DECISIONS from /gsd:discuss-phase)\n- {research_path} (Technical Research)\n</files_to_read>\n\n**Output file:** {phase_dir}/{padded_phase}-PATTERNS.md\n\nExtract the list of files to be created/modified from CONTEXT.md and RESEARCH.md. For each file, classify by role and data flow, find the closest existing analog in the codebase, extract concrete code excerpts, and produce PATTERNS.md.\n</pattern_mapping_context>\n"
+        },
+        "produces": [
+          "PATTERNS.md"
+        ],
+        "consumes": [
+          "RESEARCH.md"
+        ],
+        "when": "workflow.pattern_mapper",
+        "onError": "skip"
       }
     ],
-    "contributions": [],
+    "contributions": [
+      {
+        "capId": "security",
+        "point": "plan:pre",
+        "into": "planner",
+        "fragment": {
+          "inline": "Each PLAN.md must include a <threat_model> block when security enforcement is active. Use the configured ASVS level and blocking threshold from workflow.security_asvs_level and workflow.security_block_on."
+        },
+        "produces": [],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "workflow.security_enforcement"
+      }
+    ],
     "gates": [
       {
         "capId": "ui",
@@ -1155,7 +1601,23 @@ const byLoopPoint = {
     ]
   },
   "execute:post": {
-    "steps": [],
+    "steps": [
+      {
+        "capId": "code-review",
+        "point": "execute:post",
+        "ref": {
+          "skill": "code-review"
+        },
+        "produces": [
+          "REVIEW.md"
+        ],
+        "consumes": [
+          "SUMMARY.md"
+        ],
+        "when": "workflow.code_review",
+        "onError": "skip"
+      }
+    ],
     "contributions": [],
     "gates": []
   },
@@ -1166,6 +1628,36 @@ const byLoopPoint = {
   },
   "verify:post": {
     "steps": [
+      {
+        "capId": "nyquist",
+        "point": "verify:post",
+        "ref": {
+          "skill": "validate-phase"
+        },
+        "produces": [
+          "VALIDATION.md"
+        ],
+        "consumes": [
+          "SUMMARY.md"
+        ],
+        "when": "workflow.nyquist_validation",
+        "onError": "halt"
+      },
+      {
+        "capId": "security",
+        "point": "verify:post",
+        "ref": {
+          "skill": "secure-phase"
+        },
+        "produces": [
+          "SECURITY.md"
+        ],
+        "consumes": [
+          "SUMMARY.md"
+        ],
+        "when": "workflow.security_enforcement",
+        "onError": "halt"
+      },
       {
         "capId": "ui",
         "point": "verify:post",
@@ -1188,7 +1680,23 @@ const byLoopPoint = {
   "ship:pre": {
     "steps": [],
     "contributions": [],
-    "gates": []
+    "gates": [
+      {
+        "capId": "security",
+        "point": "ship:pre",
+        "check": {
+          "predicate": {
+            "kind": "artifact-frontmatter-equals",
+            "artifact": "SECURITY.md",
+            "field": "threats_open",
+            "equals": 0
+          }
+        },
+        "when": "workflow.security_enforcement",
+        "blocking": true,
+        "onError": "halt"
+      }
+    ]
   },
   "ship:post": {
     "steps": [],
@@ -1198,14 +1706,46 @@ const byLoopPoint = {
 };
 
 const configKeys = {
+  "workflow.ai_integration_phase": "ai-integration",
+  "workflow.code_review": "code-review",
+  "workflow.code_review_depth": "code-review",
   "graphify.enabled": "graphify",
   "intel.enabled": "intel",
+  "workflow.nyquist_validation": "nyquist",
+  "workflow.pattern_mapper": "pattern-mapper",
+  "workflow.research": "research",
+  "workflow.security_enforcement": "security",
+  "workflow.security_asvs_level": "security",
+  "workflow.security_block_on": "security",
   "workflow.ui_phase": "ui",
   "workflow.ui_review": "ui",
   "workflow.ui_safety_gate": "ui"
 };
 
 const configSchema = {
+  "workflow.ai_integration_phase": {
+    "owner": "ai-integration",
+    "type": "boolean",
+    "default": true,
+    "description": "Prompt for an AI-SPEC design contract before planning phases that involve AI systems."
+  },
+  "workflow.code_review": {
+    "owner": "code-review",
+    "type": "boolean",
+    "default": true,
+    "description": "Enable code-review participation in post-execution review flows."
+  },
+  "workflow.code_review_depth": {
+    "owner": "code-review",
+    "type": "enum",
+    "default": "standard",
+    "description": "Default depth for code review when no --depth override is supplied.",
+    "values": [
+      "quick",
+      "standard",
+      "deep"
+    ]
+  },
   "graphify.enabled": {
     "owner": "graphify",
     "type": "boolean",
@@ -1217,6 +1757,49 @@ const configSchema = {
     "type": "boolean",
     "default": false,
     "description": "Enable the intel code-intelligence command."
+  },
+  "workflow.nyquist_validation": {
+    "owner": "nyquist",
+    "type": "boolean",
+    "default": true,
+    "description": "Enable Nyquist validation coverage auditing."
+  },
+  "workflow.pattern_mapper": {
+    "owner": "pattern-mapper",
+    "type": "boolean",
+    "default": true,
+    "description": "Run the pattern mapper before planning when context or research is available."
+  },
+  "workflow.research": {
+    "owner": "research",
+    "type": "boolean",
+    "default": true,
+    "description": "Run phase research before planning when research artifacts are missing or explicitly refreshed."
+  },
+  "workflow.security_enforcement": {
+    "owner": "security",
+    "type": "boolean",
+    "default": true,
+    "description": "Enable security threat-mitigation verification before phase advancement."
+  },
+  "workflow.security_asvs_level": {
+    "owner": "security",
+    "type": "number",
+    "default": 1,
+    "description": "OWASP ASVS level used by security review guidance."
+  },
+  "workflow.security_block_on": {
+    "owner": "security",
+    "type": "enum",
+    "default": "high",
+    "description": "Minimum open threat severity that blocks advancement.",
+    "values": [
+      "critical",
+      "high",
+      "medium",
+      "low",
+      "none"
+    ]
   },
   "workflow.ui_phase": {
     "owner": "ui",
@@ -2155,8 +2738,20 @@ const commandFamilies = {
 };
 
 const capabilityClusters = {
+  "ai-integration": [
+    "ai-integration-phase"
+  ],
+  "code-review": [
+    "code-review"
+  ],
   "graphify": [
     "graphify"
+  ],
+  "nyquist": [
+    "validate-phase"
+  ],
+  "security": [
+    "secure-phase"
   ],
   "ui": [
     "ui-phase",
@@ -2165,7 +2760,31 @@ const capabilityClusters = {
 };
 
 const profileMembership = {
+  "ai-integration": {
+    "tier": "full",
+    "profiles": [
+      "full"
+    ]
+  },
+  "code-review": {
+    "tier": "full",
+    "profiles": [
+      "full"
+    ]
+  },
   "graphify": {
+    "tier": "full",
+    "profiles": [
+      "full"
+    ]
+  },
+  "nyquist": {
+    "tier": "full",
+    "profiles": [
+      "full"
+    ]
+  },
+  "security": {
     "tier": "full",
     "profiles": [
       "full"
@@ -2180,11 +2799,13 @@ const profileMembership = {
 };
 
 const _requiresGraph = {
+  "ai-integration": [],
   "antigravity": [],
   "audit": [],
   "augment": [],
   "claude": [],
   "cline": [],
+  "code-review": [],
   "codebuddy": [],
   "codex": [],
   "copilot": [],
@@ -2195,8 +2816,14 @@ const _requiresGraph = {
   "intel": [],
   "kilo": [],
   "kimi": [],
+  "nyquist": [],
   "opencode": [],
+  "pattern-mapper": [
+    "research"
+  ],
   "qwen": [],
+  "research": [],
+  "security": [],
   "trae": [],
   "ui": [],
   "windsurf": []

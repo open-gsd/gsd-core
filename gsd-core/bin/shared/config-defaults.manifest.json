@@ -13,7 +13,7 @@
   "project_code": null,
   "phase_id_convention": null,
   "mode": "interactive",
-  "claude_md_path": "./CLAUDE.md",
+  "claude_md_path": "./.claude/CLAUDE.md",
   "git": {
     "branching_strategy": "none",
     "create_tag": true,

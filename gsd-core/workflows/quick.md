@@ -409,7 +409,7 @@ Agent(
 <files_to_read>
 - .planning/STATE.md (Project state — what's already built)
 - .planning/PROJECT.md (Project context)
-- ./CLAUDE.md (if exists — project-specific guidelines)
+- ./CLAUDE.md or ./.claude/CLAUDE.md (if exists — project-specific guidelines)
 ${DISCUSS_MODE ? '- ' + QUICK_DIR + '/' + quick_id + '-CONTEXT.md (User decisions — research should align with these)' : ''}
 </files_to_read>
 
@@ -468,7 +468,7 @@ Agent(
 
 <files_to_read>
 - .planning/STATE.md (Project State)
-- ./CLAUDE.md (if exists — follow project-specific guidelines)
+- ./CLAUDE.md or ./.claude/CLAUDE.md (if exists — follow project-specific guidelines)
 ${DISCUSS_MODE ? '- ' + QUICK_DIR + '/' + quick_id + '-CONTEXT.md (User decisions — locked, do not revisit)' : ''}
 ${RESEARCH_MODE ? '- ' + QUICK_DIR + '/' + quick_id + '-RESEARCH.md (Research findings — use to inform implementation choices)' : ''}
 </files_to_read>
@@ -684,7 +684,7 @@ ORCHESTRATOR build-time embed (NOT a sub-agent runtime step): before this dispat
 <files_to_read>
 - ${QUICK_DIR}/${quick_id}-PLAN.md (Plan)
 - .planning/STATE.md (Project state)
-- ./CLAUDE.md (Project instructions, if exists)
+- ./CLAUDE.md or ./.claude/CLAUDE.md (Project instructions, if exists)
 - .claude/skills/ or .agents/skills/ (Project skills, if either exists — list skills, read SKILL.md for each, follow relevant rules during implementation)
 </files_to_read>
 
@@ -776,11 +776,14 @@ Note: For quick tasks producing multiple plans (rare), spawn executors in parall
 
 Skip this step entirely if `$FULL_MODE` is false.
 
-**Config gate:**
+**Capability gate:**
 ```bash
-CODE_REVIEW_ENABLED=$(gsd_run query config-get workflow.code_review 2>/dev/null || echo "true")
+EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw)
 ```
-If `"false"`, skip with message "Code review skipped (workflow.code_review=false)".
+
+Resolve active step hooks from `EXECUTE_POST_HOOKS_JSON` where `kind == "step"` and `ref.skill == "code-review"`.
+
+If no active code-review step hook exists, skip with message "Code review skipped (code-review capability inactive)".
 
 **Scope files from executor's commits:**
 ```bash

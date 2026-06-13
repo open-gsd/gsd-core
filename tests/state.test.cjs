@@ -732,8 +732,20 @@ describe('stateReplaceFieldWithFallback', () => {
 
   test('returns content unchanged when neither field matches', () => {
     const content = '# State\n\n**Phase:** 3\n';
-    const result = stateReplaceFieldWithFallback(content, 'Status', 'state', 'New');
+    let warning = '';
+    const origErrWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk) => {
+      warning += String(chunk);
+      return true;
+    };
+    let result;
+    try {
+      result = stateReplaceFieldWithFallback(content, 'Status', 'state', 'New');
+    } finally {
+      process.stderr.write = origErrWrite;
+    }
     assert.strictEqual(result, content, 'content should be unchanged');
+    assert.match(warning, /STATE\.md field "Status"/, 'missing field warning should be emitted');
   });
 
   test('prefers primary over fallback when both exist', () => {
@@ -2864,3 +2876,357 @@ describe('state complete-phase: decorated Phase fallback (#2761 nitpick)', () =>
 // ─────────────────────────────────────────────────────────────────────────────
 // summary-extract command
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// state add-roadmap-evolution (regression: bug #1140)
+//
+// `query state.add-roadmap-evolution` was unreachable: the CJS state router
+// listed it in its `unsupported` map with a message pointing back at the exact
+// command that just failed ("...is SDK-only. Use: gsd-tools query
+// state.add-roadmap-evolution ..."), and no CJS handler existed after the SDK
+// retirement (ADR-0174). Every `/gsd:phase insert` and `/gsd:phase --edit` run
+// hit a circular dead end. The fix re-implements `cmdStateAddRoadmapEvolution`
+// in CJS and wires it into the state router. These cases follow the CLI/parser
+// QA matrix in CONTRIBUTING.md (all invocations use argv arrays, no shell).
+// ─────────────────────────────────────────────────────────────────────────────
+describe('state add-roadmap-evolution (bug #1140)', () => {
+  let tmpDir;
+
+  const STATE_WITH_ACC_CONTEXT = `# Project State
+
+## Current Status
+
+**Current Phase:** 103.1
+
+## Accumulated Context
+
+### Decisions
+
+- Some earlier decision
+`;
+
+  const writeState = (dir, body) => fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'), body);
+  const readState = (dir) => fs.readFileSync(path.join(dir, '.planning', 'STATE.md'), 'utf-8');
+  // Body of `## Accumulated Context` bounded by the next h2 (or EOF), so
+  // placement assertions prove a subsection sits INSIDE that section.
+  const accumulatedContextBody = (state) => {
+    const m = state.match(/##\s*Accumulated Context\s*\n([\s\S]*?)(?=\n##[^#]|$)/);
+    return m ? m[1] : null;
+  };
+
+  beforeEach(() => {
+    tmpDir = createFixture();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  // The literal issue repro: negative proof the circular dead end is gone.
+  test('query state.add-roadmap-evolution no longer routes to the circular SDK-only rejection', () => {
+    writeState(tmpDir, STATE_WITH_ACC_CONTEXT);
+
+    const result = runGsdTools(
+      ['query', 'state.add-roadmap-evolution',
+        '--phase', '103.2', '--action', 'inserted', '--after', '103.1',
+        '--note', 'test', '--urgent'],
+      tmpDir
+    );
+
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.ok(
+      !/SDK-only/i.test(result.output) && !/SDK-only/i.test(result.error || ''),
+      `must not emit the circular "SDK-only" rejection; got output=${result.output} error=${result.error}`
+    );
+    const parsed = JSON.parse(result.output);
+    assert.strictEqual(parsed.added, true);
+    assert.match(parsed.entry, /\(URGENT\)$/);
+  });
+
+  test('appends an entry, creating the ### Roadmap Evolution subsection under ## Accumulated Context', () => {
+    writeState(tmpDir, STATE_WITH_ACC_CONTEXT);
+
+    const result = runGsdTools(
+      ['state', 'add-roadmap-evolution',
+        '--phase', '103.2', '--action', 'inserted', '--after', '103.1',
+        '--note', 'Add OAuth login', '--urgent'],
+      tmpDir
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const state = readState(tmpDir);
+    assert.ok(
+      state.includes('- Phase 103.2 inserted after Phase 103.1: Add OAuth login (URGENT)'),
+      `entry not found in:\n${state}`
+    );
+    assert.strictEqual((state.match(/^### Roadmap Evolution$/gm) || []).length, 1, 'subsection must not be duplicated');
+    const accBody = accumulatedContextBody(state);
+    assert.ok(accBody && accBody.includes('### Roadmap Evolution'), 'subsection must be inside Accumulated Context');
+    assert.ok(accBody.includes('- Phase 103.2 inserted after Phase 103.1: Add OAuth login (URGENT)'), 'entry must be inside Accumulated Context');
+    assert.ok(state.includes('- Some earlier decision'), 'existing content preserved');
+  });
+
+  test('omitting --urgent and --after produces a plain entry', () => {
+    writeState(tmpDir, STATE_WITH_ACC_CONTEXT);
+
+    const result = runGsdTools(
+      ['state', 'add-roadmap-evolution', '--phase', '103.2', '--action', 'edited',
+        '--note', 'edited fields: goal, depends_on'],
+      tmpDir
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const state = readState(tmpDir);
+    assert.ok(state.includes('- Phase 103.2 edited: edited fields: goal, depends_on'), `missing entry:\n${state}`);
+    assert.ok(!/\(URGENT\)/.test(state), 'no URGENT suffix when --urgent absent');
+  });
+
+  test('creates ### Roadmap Evolution when ## Accumulated Context exists without it', () => {
+    writeState(tmpDir, `# Project State
+
+## Accumulated Context
+
+### Decisions
+
+- prior decision
+
+## Next Steps
+
+- do the thing
+`);
+
+    const result = runGsdTools(
+      ['state', 'add-roadmap-evolution', '--phase', '4', '--action', 'added', '--note', 'caching layer'],
+      tmpDir
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const state = readState(tmpDir);
+    assert.ok(state.includes('### Roadmap Evolution'), 'subsection created');
+    assert.ok(state.includes('- Phase 4 added: caching layer'), 'entry appended');
+    const subIdx = state.indexOf('### Roadmap Evolution');
+    const nextIdx = state.indexOf('## Next Steps');
+    assert.ok(subIdx !== -1 && nextIdx !== -1 && subIdx < nextIdx, 'subsection must be inside Accumulated Context');
+    assert.ok(state.includes('- do the thing'), 'sibling section preserved');
+  });
+
+  test('creates both ## Accumulated Context and ### Roadmap Evolution when neither exists', () => {
+    writeState(tmpDir, `# Project State
+
+## Current Status
+
+**Current Phase:** 1
+`);
+
+    const result = runGsdTools(
+      ['state', 'add-roadmap-evolution', '--phase', '2', '--action', 'inserted', '--after', '1', '--note', 'bootstrap'],
+      tmpDir
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).added, true);
+
+    const state = readState(tmpDir);
+    assert.strictEqual((state.match(/^## Accumulated Context$/gm) || []).length, 1, 'Accumulated Context created once');
+    assert.strictEqual((state.match(/^### Roadmap Evolution$/gm) || []).length, 1, 'subsection created once');
+    assert.ok(state.includes('- Phase 2 inserted after Phase 1: bootstrap'), 'entry appended');
+  });
+
+  test('targets the subsection under Accumulated Context, never a decoy heading elsewhere', () => {
+    writeState(tmpDir, `# Project State
+
+## Accumulated Context
+
+### Decisions
+
+- prior decision
+
+## Reference Notes
+
+### Roadmap Evolution
+
+- DECOY entry that must never be touched
+`);
+
+    const result = runGsdTools(
+      ['state', 'add-roadmap-evolution', '--phase', '8', '--action', 'inserted', '--note', 'real entry'],
+      tmpDir
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const state = readState(tmpDir);
+    const accBody = accumulatedContextBody(state);
+    assert.ok(accBody && accBody.includes('- Phase 8 inserted: real entry'), 'entry must be inside Accumulated Context');
+    assert.ok(state.includes('- DECOY entry that must never be touched'), 'decoy preserved');
+    assert.ok(!accBody.includes('DECOY'), 'decoy must not be pulled into Accumulated Context');
+    assert.strictEqual((state.match(/^### Roadmap Evolution$/gm) || []).length, 2, 'a new subsection is created under Accumulated Context; decoy heading remains');
+  });
+
+  test('flattens a multiline note into a single bullet so dedupe and rendering hold', () => {
+    writeState(tmpDir, STATE_WITH_ACC_CONTEXT);
+
+    const notePath = path.join(tmpDir, 'note.txt');
+    fs.writeFileSync(notePath, 'line one\nline two\nline three\n');
+
+    const first = runGsdTools(
+      ['state', 'add-roadmap-evolution', '--phase', '9', '--action', 'edited', '--note-file', notePath],
+      tmpDir
+    );
+    assert.ok(first.success, `Command failed: ${first.error}`);
+
+    const state = readState(tmpDir);
+    assert.ok(state.includes('- Phase 9 edited: line one line two line three'), `note not flattened:\n${state}`);
+    assert.ok(!/\n\s*line two/.test(state), 'continuation lines must not spill outside the bullet');
+
+    const second = runGsdTools(
+      ['state', 'add-roadmap-evolution', '--phase', '9', '--action', 'edited', '--note-file', notePath],
+      tmpDir
+    );
+    assert.strictEqual(JSON.parse(second.output).reason, 'duplicate', 'flattened entry must dedupe on replay');
+  });
+
+  test('deduplicates an identical entry on replay', () => {
+    writeState(tmpDir, STATE_WITH_ACC_CONTEXT);
+
+    const args = ['state', 'add-roadmap-evolution', '--phase', '103.2', '--action', 'inserted',
+      '--after', '103.1', '--note', 'Add OAuth login', '--urgent'];
+
+    const first = runGsdTools(args, tmpDir);
+    assert.ok(first.success, `first call failed: ${first.error}`);
+    assert.strictEqual(JSON.parse(first.output).added, true);
+
+    const second = runGsdTools(args, tmpDir);
+    assert.ok(second.success, `second call failed: ${second.error}`);
+    const parsed = JSON.parse(second.output);
+    assert.strictEqual(parsed.added, false, 'replay must not add');
+    assert.strictEqual(parsed.reason, 'duplicate');
+
+    const state = readState(tmpDir);
+    const occurrences = (state.match(/- Phase 103\.2 inserted after Phase 103\.1: Add OAuth login \(URGENT\)/g) || []).length;
+    assert.strictEqual(occurrences, 1, 'entry must appear exactly once after replay');
+  });
+
+  test('CRLF STATE.md: appends under Accumulated Context while preserving later sections', () => {
+    const crlf = [
+      '# Project State', '',
+      '## Accumulated Context', '',
+      '### Decisions', '',
+      '- prior decision', '',
+      '## Blockers', '',
+      '- keep me', '',
+      '## History', '',
+      '- also keep me', '',
+    ].join('\r\n');
+    writeState(tmpDir, crlf);
+
+    const result = runGsdTools(
+      ['state', 'add-roadmap-evolution', '--phase', '4', '--action', 'inserted', '--note', 'crlf safe'],
+      tmpDir
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const state = readState(tmpDir);
+    assert.ok(state.includes('## Blockers'), '## Blockers must be preserved');
+    assert.strictEqual((state.match(/^## Blockers/gm) || []).length, 1, '## Blockers not duplicated/corrupted');
+    assert.ok(state.includes('- keep me'), 'Blockers content must be preserved');
+    assert.ok(state.includes('## History'), '## History must be preserved');
+    assert.ok(state.includes('- also keep me'), 'History content must be preserved');
+    assert.ok(/### Roadmap Evolution/.test(state), 'subsection created');
+    assert.ok(/- Phase 4 inserted: crlf safe/.test(state), 'entry appended');
+  });
+
+  test('missing --note is rejected without mutating STATE.md', () => {
+    writeState(tmpDir, STATE_WITH_ACC_CONTEXT);
+    const before = readState(tmpDir);
+
+    const result = runGsdTools(
+      ['state', 'add-roadmap-evolution', '--phase', '5', '--action', 'inserted'],
+      tmpDir
+    );
+    const combined = `${result.output}\n${result.error || ''}`;
+    assert.match(combined, /note required/, 'should report the missing-note error');
+    assert.ok(!/"added"\s*:\s*true/.test(result.output), 'must not report added:true');
+    assert.ok(!/\bat .*\(.*:\d+:\d+\)/.test(result.error || ''), 'no stack trace in failure output');
+    assert.strictEqual(readState(tmpDir), before, 'STATE.md not mutated on missing note');
+  });
+
+  test('empty --note "" is rejected without mutating STATE.md', () => {
+    writeState(tmpDir, STATE_WITH_ACC_CONTEXT);
+    const before = readState(tmpDir);
+
+    runGsdTools(['state', 'add-roadmap-evolution', '--phase', '5', '--action', 'inserted', '--note', ''], tmpDir);
+    assert.strictEqual(readState(tmpDir), before, 'STATE.md must be untouched for empty note');
+  });
+
+  test('whitespace-only --note is rejected without mutating STATE.md', () => {
+    writeState(tmpDir, STATE_WITH_ACC_CONTEXT);
+    const before = readState(tmpDir);
+
+    runGsdTools(['state', 'add-roadmap-evolution', '--phase', '5', '--action', 'inserted', '--note', '   '], tmpDir);
+    assert.strictEqual(readState(tmpDir), before, 'STATE.md must be untouched for whitespace-only note');
+  });
+
+  test('--note followed by a flag-shaped token is treated as missing note', () => {
+    writeState(tmpDir, STATE_WITH_ACC_CONTEXT);
+    const before = readState(tmpDir);
+
+    runGsdTools(['state', 'add-roadmap-evolution', '--phase', '5', '--note', '--weird'], tmpDir);
+    assert.strictEqual(readState(tmpDir), before, 'flag-shaped value must not be consumed as the note');
+  });
+
+  test('duplicate --phase flags do not crash; first value wins', () => {
+    writeState(tmpDir, STATE_WITH_ACC_CONTEXT);
+
+    const result = runGsdTools(
+      ['state', 'add-roadmap-evolution', '--phase', '7', '--phase', '9', '--action', 'inserted', '--note', 'dup flags'],
+      tmpDir
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const state = readState(tmpDir);
+    assert.ok(state.includes('- Phase 7 inserted: dup flags'), `expected phase 7 entry:\n${state}`);
+    assert.ok(!state.includes('Phase 9'), 'second --phase value must not be used');
+  });
+
+  test('shell metacharacters in --note are stored literally, never executed', () => {
+    writeState(tmpDir, STATE_WITH_ACC_CONTEXT);
+
+    // Probe path lives under the test's tmpDir (no hardcoded /tmp literal, which
+    // the Windows-parity guard forbids). If command substitution executed, this
+    // file would exist afterward.
+    const probe = path.join(tmpDir, 'gsd-pwn-1140');
+    const hostile = `pwn $(touch ${probe}) \`id\` ; rm -rf / && echo done`;
+    const result = runGsdTools(
+      ['state', 'add-roadmap-evolution', '--phase', '5', '--action', 'inserted', '--note', hostile],
+      tmpDir
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const state = readState(tmpDir);
+    assert.ok(state.includes(hostile), 'hostile note must be stored verbatim');
+    assert.ok(!fs.existsSync(probe), 'command substitution must not have executed');
+  });
+
+  test('Unicode note content is preserved', () => {
+    writeState(tmpDir, STATE_WITH_ACC_CONTEXT);
+
+    const note = 'café — 日本語 — 🚀 reroute';
+    const result = runGsdTools(
+      ['state', 'add-roadmap-evolution', '--phase', '5', '--action', 'edited', '--note', note],
+      tmpDir
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.ok(readState(tmpDir).includes(note), 'Unicode preserved');
+  });
+
+  test('missing STATE.md returns a structured error, not a crash', () => {
+    // Guarantee STATE.md is absent (force: no-op if the fixture didn't create one).
+    // eslint-disable-next-line local/no-raw-rmsync-in-tests -- deleting a single fixture file to simulate the missing-STATE.md case, not a temp-dir teardown
+    fs.rmSync(path.join(tmpDir, '.planning', 'STATE.md'), { force: true });
+
+    const result = runGsdTools(
+      ['state', 'add-roadmap-evolution', '--phase', '5', '--action', 'inserted', '--note', 'x'],
+      tmpDir
+    );
+    const combined = `${result.output}\n${result.error || ''}`;
+    assert.match(combined, /STATE\.md not found/, 'should report STATE.md not found');
+    assert.ok(!/\bat .*\(.*:\d+:\d+\)/.test(result.error || ''), 'no stack trace');
+  });
+});

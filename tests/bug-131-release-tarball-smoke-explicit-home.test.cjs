@@ -225,5 +225,20 @@ describe('bug-131: runNpm isolates HOME from the caller environment', () => {
       typeof env.npm_config_userconfig === 'string' && env.npm_config_userconfig.startsWith(env.HOME),
       `npm_config_userconfig ${env.npm_config_userconfig} should be under isolated HOME ${env.HOME}`,
     );
+    assert.equal(
+      env.npm_config_loglevel,
+      'error',
+      'isolatedNpmEnv() should suppress npm notice/warn chatter in test gates',
+    );
+    assert.equal(
+      env.npm_config_update_notifier,
+      'false',
+      'isolatedNpmEnv() should disable npm update-notifier notices in test gates',
+    );
+    assert.equal(
+      env.NO_UPDATE_NOTIFIER,
+      '1',
+      'isolatedNpmEnv() should disable npm update-notifier notices for npm versions that honor NO_UPDATE_NOTIFIER',
+    );
   });
 });

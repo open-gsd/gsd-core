@@ -54,6 +54,8 @@ let tmpProjectDir;
 let tmpEmptyProjectDir;
 // A project where ui_phase is explicitly false in root config
 let tmpFalseConfigProjectDir;
+// Runtime config dir whose surface disables the UI capability
+let tmpUiDisabledConfigDir;
 
 before(() => {
   tmpProjectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'loop-resolver-test-'));
@@ -79,12 +81,25 @@ before(() => {
     JSON.stringify({ workflow: { ui_phase: false, ui_review: false, ui_safety_gate: false } }),
     'utf8',
   );
+
+  tmpUiDisabledConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'loop-resolver-ui-disabled-'));
+  fs.writeFileSync(
+    path.join(tmpUiDisabledConfigDir, '.gsd-surface.json'),
+    JSON.stringify({
+      baseProfile: 'full',
+      disabledClusters: ['ui'],
+      explicitAdds: [],
+      explicitRemoves: [],
+    }, null, 2),
+    'utf8',
+  );
 });
 
 after(() => {
   if (tmpProjectDir) cleanup(tmpProjectDir);
   if (tmpEmptyProjectDir) cleanup(tmpEmptyProjectDir);
   if (tmpFalseConfigProjectDir) cleanup(tmpFalseConfigProjectDir);
+  if (tmpUiDisabledConfigDir) cleanup(tmpUiDisabledConfigDir);
 });
 
 // ─── 1. Canonical-point validation ───────────────────────────────────────────
@@ -643,6 +658,27 @@ describe('renderLoopHooks', () => {
     assert.match(rendered, /skip/);
   });
 
+  test('step hook renders agent ref and inline prompt fragment', () => {
+    const registry = makeRegistry({
+      point: 'plan:pre',
+      steps: [{
+        capId: 'research',
+        point: 'plan:pre',
+        ref: { agent: 'gsd-phase-researcher' },
+        fragment: { inline: 'Research the phase before planning.' },
+        produces: ['RESEARCH.md'],
+        consumes: ['CONTEXT.md'],
+        onError: 'skip',
+      }],
+    });
+    const resolved = resolveLoopHooks({ point: 'plan:pre', registry, config: {} });
+    assert.deepEqual(resolved.activeHooks[0].fragment, { inline: 'Research the phase before planning.' });
+
+    const rendered = renderLoopHooks(resolved);
+    assert.match(rendered, /agent:gsd-phase-researcher/);
+    assert.match(rendered, /Research the phase before planning\./);
+  });
+
   test('contribution hook renders into role', () => {
     const resolved = {
       point: 'plan:pre',
@@ -650,12 +686,42 @@ describe('renderLoopHooks', () => {
         capId: 'contrib-cap',
         kind: 'contribution',
         into: 'planner',
+        fragment: { inline: 'Apply the project-specific planning guardrails.' },
       }],
     };
     const rendered = renderLoopHooks(resolved);
     assert.match(rendered, /contribution/);
     assert.match(rendered, /contrib-cap/);
     assert.match(rendered, /planner/);
+    assert.match(rendered, /Apply the project-specific planning guardrails\./);
+    assert.match(rendered, /<contribution from="contrib-cap" into="planner">/);
+    assert.match(rendered, /<\/contribution>/);
+    assert.doesNotMatch(rendered, /<contribution[^>]+\/>/);
+  });
+
+  test('resolveLoopHooks preserves contribution fragment data', () => {
+    const registry = makeRegistry({
+      point: 'plan:pre',
+      contributions: [{
+        capId: 'contrib-cap',
+        point: 'plan:pre',
+        into: 'planner',
+        fragment: { inline: 'Use artifact-backed evidence.' },
+        produces: ['PLAN-NOTES.md'],
+        consumes: ['CONTEXT.md'],
+        when: 'workflow.contrib',
+        onError: 'halt',
+      }],
+      configSchema: {
+        'workflow.contrib': { type: 'boolean', default: true, description: 'Enable test contribution.' },
+      },
+    });
+    const resolved = resolveLoopHooks({ point: 'plan:pre', registry, config: {} });
+    assert.strictEqual(resolved.activeHooks.length, 1);
+    assert.deepEqual(resolved.activeHooks[0].fragment, { inline: 'Use artifact-backed evidence.' });
+    assert.deepEqual(resolved.activeHooks[0].produces, ['PLAN-NOTES.md']);
+    assert.deepEqual(resolved.activeHooks[0].consumes, ['CONTEXT.md']);
+    assert.strictEqual(resolved.activeHooks[0].onError, 'halt');
   });
 
   test('gate hook renders check, blocking, onError', () => {
@@ -746,6 +812,31 @@ describe('cmdLoopRenderHooks end-to-end (via gsd-tools)', () => {
       'Expected ui step active by default. Got: ' + JSON.stringify(envelope.activeHooks),
     );
     assert.match(envelope.rendered, /ui-phase/);
+  });
+
+  test('loop render-hooks plan:pre with ui capability disabled in surface → ui hooks absent', () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        GSD_TOOLS,
+        'loop',
+        'render-hooks',
+        'plan:pre',
+        '--cwd',
+        tmpEmptyProjectDir,
+        '--config-dir',
+        tmpUiDisabledConfigDir,
+      ],
+      { cwd: ROOT, encoding: 'utf8' },
+    );
+    assert.strictEqual(result.status, 0, 'Expected exit 0. stderr: ' + (result.stderr || ''));
+    const envelope = JSON.parse(result.stdout.trim());
+    const uiHooks = envelope.activeHooks.filter(h => h.capId === 'ui');
+    assert.deepStrictEqual(
+      uiHooks,
+      [],
+      'UI hooks must be absent when the UI capability is disabled at the runtime surface',
+    );
   });
 
   // FIX 4: explicit false in config.json overrides schema default

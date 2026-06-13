@@ -69,6 +69,15 @@ interface StateAddBlockerOptions {
   text_file?: string;
 }
 
+interface StateAddRoadmapEvolutionOptions {
+  phase?: string;
+  action?: string;
+  after?: string;
+  note?: string;
+  note_file?: string;
+  urgent?: boolean;
+}
+
 interface StateRecordSessionOptions {
   stopped_at?: string;
   resume_file?: string | null;
@@ -669,6 +678,102 @@ function cmdStateAddBlocker(cwd: string, text: string | StateAddBlockerOptions, 
   output(result, raw, 'true');
 }
 
+function cmdStateAddRoadmapEvolution(cwd: string, options: StateAddRoadmapEvolutionOptions, raw: boolean): void {
+  const statePath = planningPaths(cwd).state;
+  if (!fs.existsSync(statePath)) { output({ error: 'STATE.md not found' }, raw, undefined); return; }
+
+  const { phase, action, after, note, note_file, urgent } = options;
+  let noteText: string | undefined = undefined;
+  try {
+    noteText = readTextArgOrFile(cwd, note, note_file, 'note');
+  } catch (err) {
+    output({ added: false, reason: (err as Error).message }, raw, 'false');
+    return;
+  }
+  // Reject missing / empty / whitespace-only notes — an evolution entry with no
+  // narrative is meaningless and would corrupt the section with a dangling bullet.
+  if (!noteText || !noteText.trim()) { output({ error: 'note required' }, raw, undefined); return; }
+  // Flatten line breaks so the entry is always a single Markdown bullet. The
+  // dedupe + rendering contract is line-oriented; a multiline --note-file would
+  // otherwise spill continuation lines outside the bullet and defeat dedupe.
+  // Internal spacing (e.g. dollar columns) is preserved.
+  const flatNote = noteText.replace(/\s*[\r\n]+\s*/g, ' ').trim();
+
+  const actionText = (action && action.trim()) || 'changed';
+  const afterText = after && after.trim() ? ` after Phase ${after.trim()}` : '';
+  const urgentText = urgent ? ' (URGENT)' : '';
+  const entry = `- Phase ${phase || '?'} ${actionText}${afterText}: ${flatNote}${urgentText}`;
+
+  let duplicate = false;
+  let created = false;
+  let subsectionCreated = false;
+
+  // The Roadmap Evolution subsection lives under `## Accumulated Context`. Scope
+  // every lookup to that section's body so a `### Roadmap Evolution` heading in an
+  // unrelated h2 section (or a fenced example) can never be matched or mutated.
+  // The accBody lookahead stops only at the next h2 (`\n##[^#]`), so nested h3
+  // subsections stay inside the captured Accumulated Context body.
+  // Section boundaries mirror the sibling handlers (add-decision/add-blocker):
+  // a trailing CR on a CRLF STATE.md is absorbed by the lazy body and trimmed,
+  // so following sections are preserved without data loss (see the CRLF test).
+  readModifyWriteStateMd(statePath, (content) => {
+    const accPattern = /(##\s*Accumulated Context\s*\n)([\s\S]*?)(?=\n##[^#]|$)/i;
+    const accMatch = content.match(accPattern);
+
+    if (accMatch) {
+      const accHeader = accMatch[1];
+      const accBody = accMatch[2];
+      // Find `### Roadmap Evolution` WITHIN the Accumulated Context body only.
+      // Bounded by the next h3/h2 or the end of the section body.
+      const subPattern = /(###\s*Roadmap Evolution\s*\n)([\s\S]*?)(?=\n###?|$)/i;
+      const subMatch = accBody.match(subPattern);
+
+      if (subMatch) {
+        let subBody = subMatch[2];
+        // Dedupe: exact (trimmed) line already present is a no-op replay.
+        if (subBody.split('\n').some((line) => line.trim() === entry.trim())) {
+          duplicate = true;
+          return content;
+        }
+        subBody = subBody.replace(/None yet\.?\s*\n?/gi, '');
+        subBody = subBody.trimEnd() + '\n' + entry + '\n';
+        const newAccBody = accBody.replace(subPattern, (_m, header: string) => `${header}${subBody}`);
+        return content.replace(accPattern, () => `${accHeader}${newAccBody}`);
+      }
+
+      // Subsection missing — append it at the end of the Accumulated Context body.
+      subsectionCreated = true;
+      const trimmedAcc = accBody.trimEnd();
+      const block = `${trimmedAcc ? `${trimmedAcc}\n\n` : ''}### Roadmap Evolution\n\n${entry}\n`;
+      return content.replace(accPattern, () => `${accHeader}${block}`);
+    }
+
+    // No `## Accumulated Context` — DWIM: create both at end of file.
+    // Mirrors the add-decision / add-blocker auto-create behavior.
+    created = true;
+    subsectionCreated = true;
+    const scaffold = [
+      '',
+      '## Accumulated Context',
+      '',
+      '### Roadmap Evolution',
+      '',
+      entry,
+      '',
+    ].join('\n');
+    return content.trimEnd() + '\n' + scaffold;
+  }, cwd);
+
+  if (duplicate) {
+    output({ added: false, reason: 'duplicate', entry }, raw, 'false');
+    return;
+  }
+  const result: Record<string, unknown> = { added: true, entry };
+  if (created) result['created'] = true;
+  if (subsectionCreated) result['subsection_created'] = true;
+  output(result, raw, 'true');
+}
+
 function cmdStateResolveBlocker(cwd: string, text: string, raw: boolean): void {
   const statePath = planningPaths(cwd).state;
   if (!fs.existsSync(statePath)) { output({ error: 'STATE.md not found' }, raw, undefined); return; }
@@ -773,7 +878,9 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
     // newly-written Stopped at / Resume file end up in the second (invisible) block.
     // Fix: when a `## Session` heading already exists, normalize THAT block in place
     // (insert / replace canonical bold-label lines within the existing section).
-    // Only append a brand-new section when NO `## Session` heading exists at all.
+    // A `## Session Continuity` heading (bootstrap shape) is handled additively —
+    // missing canonical fields are inserted while the heading and any prose are
+    // preserved (#1101). Only append a brand-new section when NEITHER heading exists.
     const callerSuppliedValues = !!(options.stopped_at || (options.resume_file !== undefined && options.resume_file !== null));
     const needsStoppedAt = options.stopped_at && !updated.includes('Stopped At');
     const needsResumeFile = options.resume_file !== undefined && options.resume_file !== null && !updated.includes('Resume File');
@@ -785,10 +892,15 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
         : 'None';
       const stoppedAtValue = options.stopped_at || 'None';
 
-      // Determine whether a ## Session heading already exists in the body.
-      const existingSessionHeading = /^## Session\s*$/im.test(content);
+      // Determine whether a session heading already exists in the body. The
+      // canonical normalized form is `## Session`; the bootstrap templates
+      // (workstream.cts, gsd2-import.cts, templates/state.md) instead emit
+      // `## Session Continuity`. Treat each separately so we never append a
+      // duplicate section alongside an existing one.
+      const existingCanonicalSession = /^## Session[ \t]*$/im.test(content);
+      const existingSessionContinuity = /^## Session Continuity[ \t]*$/im.test(content);
 
-      if (existingSessionHeading) {
+      if (existingCanonicalSession) {
         // Normalize in place: replace the ENTIRE BODY of the existing ## Session
         // section (heading + all content up to the next ## heading or EOF) with
         // canonical bold-label lines. The negative-lookahead per-line pattern
@@ -807,8 +919,30 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
             '',
           ].join('\n'),
         );
+      } else if (existingSessionContinuity) {
+        // #1101: a `## Session Continuity` section already exists (bootstrap
+        // shape). Previously this fell through to the append branch and created
+        // a SECOND `## Session` block — a duplicate. Instead, insert only the
+        // canonical fields that are still missing, right after the heading,
+        // preserving the `## Session Continuity` heading and ALL existing lines
+        // (e.g. prose like "Next recommended action"). Fields already updated in
+        // place above (needs* false) are not re-inserted. A function replacement
+        // is used so `$`-bearing caller values are inserted literally (#3454).
+        const linesToInsert: string[] = [];
+        if (needsLastSession) linesToInsert.push(`**Last session:** ${now}`);
+        if (needsStoppedAt) linesToInsert.push(`**Stopped at:** ${stoppedAtValue}`);
+        if (needsResumeFile) linesToInsert.push(`**Resume file:** ${resumeValue}`);
+        if (linesToInsert.length > 0) {
+          // Case-insensitive to match the `existingSessionContinuity` detection
+          // above (#1101 review F3) — otherwise a lowercase heading would detect
+          // but no-op the insert while still reporting the fields as updated.
+          content = content.replace(
+            /^(## Session Continuity[ \t]*\n)/im,
+            (_m, heading: string) => heading + linesToInsert.join('\n') + '\n',
+          );
+        }
       } else {
-        // No ## Session heading exists at all — append a new canonical section.
+        // No session heading exists at all — append a new canonical section.
         const scaffold = [
           '',
           '## Session',
@@ -838,6 +972,21 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
   } else {
     output({ recorded: false, reason: 'No session fields found in STATE.md' }, raw, 'false');
   }
+}
+
+/**
+ * Match the session section body from a STATE.md body. #1101: recognise the
+ * bootstrap `## Session Continuity` heading but PREFER the normalized `## Session`
+ * block when both exist (legacy duplicate files), so the reader agrees with the
+ * writer (which updates `## Session` first). `(?:^|\n)` line-anchors (kept out of
+ * `/m` so `$` stays end-of-string for the `(?=\n##|$)` section boundary), which
+ * excludes an h3 `### Session Continuity`; the trailing-` Archive` boundary still
+ * excludes `## Session Continuity Archive` (preserving the #2444 scoping).
+ * Returns the match whose group 1 is the section body, or null.
+ */
+function matchSessionSection(body: string): RegExpMatchArray | null {
+  return body.match(/(?:^|\n)##[ \t]*Session[ \t]*\n([\s\S]*?)(?=\n##|$)/i)
+    || body.match(/(?:^|\n)##[ \t]*Session Continuity[ \t]*\n([\s\S]*?)(?=\n##|$)/i);
 }
 
 function cmdStateSnapshot(cwd: string, raw: boolean): void {
@@ -922,7 +1071,9 @@ function cmdStateSnapshot(cwd: string, raw: boolean): void {
     resume_file: null,
   };
 
-  const sessionMatch = body.match(/##\s*Session\s*\n([\s\S]*?)(?=\n##|$)/i);
+  // #1101: prefer the canonical `## Session` block, falling back to the bootstrap
+  // `## Session Continuity` heading. See matchSessionSection for the anchoring.
+  const sessionMatch = matchSessionSection(body);
   if (sessionMatch) {
     const sessionSection = sessionMatch[1];
     // Accept both `**Last Date:**` (canonical template form) and `**Last session:**`
@@ -980,7 +1131,9 @@ function buildStateFrontmatter(bodyContent: string, cwd: string | undefined): Re
   // historical "Stopped at:" prose elsewhere in the body (e.g. in a
   // Session Continuity Archive section) never overwrites the current value.
   // Fall back to full-body search only when no ## Session section exists.
-  const sessionSectionMatch = bodyContent.match(/##\s*Session\s*\n([\s\S]*?)(?=\n##|$)/i);
+  // #1101: prefer the canonical `## Session` block, falling back to the bootstrap
+  // `## Session Continuity` heading. See matchSessionSection for the anchoring.
+  const sessionSectionMatch = matchSessionSection(bodyContent);
   const sessionBodyScope = sessionSectionMatch ? sessionSectionMatch[1] : bodyContent;
   const stoppedAt = stateExtractField(sessionBodyScope, 'Stopped At') || stateExtractField(sessionBodyScope, 'Stopped at');
   const pausedAt = stateExtractField(bodyContent, 'Paused At');
@@ -2300,6 +2453,7 @@ export = {
   cmdStateUpdateProgress,
   cmdStateAddDecision,
   cmdStateAddBlocker,
+  cmdStateAddRoadmapEvolution,
   cmdStateResolveBlocker,
   cmdStateRecordSession,
   cmdStateSnapshot,

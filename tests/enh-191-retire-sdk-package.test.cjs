@@ -8,6 +8,9 @@ const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 const PKG_PATH = path.join(ROOT, 'package.json');
 const INSTALL_PATH = path.join(ROOT, 'bin', 'install.js');
+const ACTIVE_GUIDANCE_PATHS = [
+  'docs/contributing/bootstrap.md',
+];
 
 function readPackageJson() {
   return JSON.parse(fs.readFileSync(PKG_PATH, 'utf8'));
@@ -44,4 +47,24 @@ test('enhancement #191: installer does not maintain gsd-sdk shim compatibility p
     'bin/install.js must not expose --no-sdk flag');
   assert.equal(/installSdkIfNeeded\(\{/.test(installJs), false,
     'bin/install.js must not run installSdkIfNeeded during installation');
+});
+
+test('enhancement #191: root AGENTS.md is not an active source of truth', () => {
+  assert.equal(
+    fs.existsSync(path.join(ROOT, 'AGENTS.md')),
+    false,
+    'root AGENTS.md must not exist; use CONTEXT.md and docs/adr/ as the repository source of truth',
+  );
+});
+
+test('enhancement #191: active contributor guidance does not reference retired SDK build steps', () => {
+  for (const relPath of ACTIVE_GUIDANCE_PATHS) {
+    const body = fs.readFileSync(path.join(ROOT, relPath), 'utf8');
+
+    assert.equal(
+      /\bbuild:sdk\b|\bcd sdk\b|\bsdk\/dist\b|\bsdk\/src\b/.test(body),
+      false,
+      `${relPath} must not direct contributors or agents to use the retired SDK package workflow`,
+    );
+  }
 });

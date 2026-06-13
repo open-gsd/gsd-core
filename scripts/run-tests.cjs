@@ -342,6 +342,9 @@ function main() {
   const MAX_CMDLINE_CHARS = process.env.RUN_TESTS_MAX_CMDLINE_CHARS
     ? Number(process.env.RUN_TESTS_MAX_CMDLINE_CHARS)
     : 28000; // headroom below the 32,767 Windows ceiling
+  const MAX_FILES_PER_CHUNK = process.env.RUN_TESTS_MAX_FILES_PER_CHUNK
+    ? Number(process.env.RUN_TESTS_MAX_FILES_PER_CHUNK)
+    : 180;
 
   // node:test does not exit until the event loop drains. A unit test that leaks
   // an open handle (un-terminated Worker, un-killed child_process, ref'd timer)
@@ -362,7 +365,10 @@ function main() {
   let currentLen = FIXED_OVERHEAD;
   for (const file of selected) {
     const add = file.length + 1; // +1 for the inter-arg separator
-    if (current.length > 0 && currentLen + add > MAX_CMDLINE_CHARS) {
+    if (
+      current.length > 0 &&
+      (currentLen + add > MAX_CMDLINE_CHARS || current.length >= MAX_FILES_PER_CHUNK)
+    ) {
       chunks.push(current);
       current = [];
       currentLen = FIXED_OVERHEAD;

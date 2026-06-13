@@ -91,6 +91,7 @@ const {
   resolveEffortInternal,
   resolveFastModeInternal,
   resolveEffortForTier,
+  _resetModelPolicyWarningCacheForTests,
 } = modelResolverModule;
 
 // ─── Path helpers ────────────────────────────────────────────────────────────
@@ -416,7 +417,10 @@ export = {
   resolveTierEntry,
   resolveModelPolicy,
   KNOWN_PROVIDERS,
-  _resetRuntimeWarningCacheForTests,
+  _resetRuntimeWarningCacheForTests: (): void => {
+    _resetRuntimeWarningCacheForTests();
+    _resetModelPolicyWarningCacheForTests();
+  },
   pathExistsInternal,
   gitWorktreeInfoInternal,
   generateSlugInternal,

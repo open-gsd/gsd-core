@@ -67,6 +67,7 @@ interface DotHomeDescriptor {
   kind: 'dot-home';
   name: string;
   env: string[];
+  skillsHome?: ConfigHomeDescriptor;
 }
 
 interface DotHomeNestedDescriptor {
@@ -75,13 +76,14 @@ interface DotHomeNestedDescriptor {
   parent: string;
   env: string[];
   probe?: string[];
+  skillsHome?: ConfigHomeDescriptor;
 }
 
 interface XdgDescriptor {
   kind: 'xdg';
   name: string;
   env: string[];
-  skillsHome?: unknown;
+  skillsHome?: ConfigHomeDescriptor;
 }
 
 interface GenericAgentsRootDescriptor {
@@ -90,6 +92,7 @@ interface GenericAgentsRootDescriptor {
   env: string[];
   probe: string[];
   probeExists: string;
+  skillsHome?: ConfigHomeDescriptor;
 }
 
 type ConfigHomeDescriptor =
@@ -97,6 +100,33 @@ type ConfigHomeDescriptor =
   | DotHomeNestedDescriptor
   | XdgDescriptor
   | GenericAgentsRootDescriptor;
+
+interface RuntimeArtifactKindDescriptor {
+  kind: string;
+  destSubpath: string;
+}
+
+interface RuntimeDescriptor {
+  configHome: ConfigHomeDescriptor;
+  artifactLayout?: {
+    global?: RuntimeArtifactKindDescriptor[];
+  };
+}
+
+function resolveDescriptorWithOptions(configHome: ConfigHomeDescriptor): string {
+  return resolveConfigHomeFromDescriptor(configHome, {
+    env: process.env,
+    home: os.homedir(),
+    existsSync: fs.existsSync,
+  });
+}
+
+function getRegistry(): { runtimes: Record<string, { runtime?: RuntimeDescriptor }> } {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require('./capability-registry.cjs') as {
+    runtimes: Record<string, { runtime?: RuntimeDescriptor }>;
+  };
+}
 
 /**
  * Resolve a configHome descriptor to an absolute directory path.
@@ -267,18 +297,11 @@ export function getGlobalConfigDir(runtime: string, explicitDir?: string | null)
   }
 
   // ── Descriptor-driven: look up in capability-registry ────────────────────
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { runtimes } = require('./capability-registry.cjs') as {
-    runtimes: Record<string, { runtime?: { configHome: ConfigHomeDescriptor } }>;
-  };
+  const { runtimes } = getRegistry();
 
   const runtimeEntry = runtimes[runtime];
   if (runtimeEntry?.runtime?.configHome) {
-    return resolveConfigHomeFromDescriptor(runtimeEntry.runtime.configHome, {
-      env: process.env,
-      home: os.homedir(),
-      existsSync: fs.existsSync,
-    });
+    return resolveDescriptorWithOptions(runtimeEntry.runtime.configHome);
   }
 
   // ── Default (unknown runtime → Claude fallback) ───────────────────────────
@@ -288,21 +311,30 @@ export function getGlobalConfigDir(runtime: string, explicitDir?: string | null)
 
 /**
  * Return the global skills base directory for the given runtime.
- * Most runtimes: <configDir>/skills
- * Hermes: <configDir>/skills/gsd  (nested category layout — #2841)
- * Cline ≥ v3.48.0: <configDir>/skills  (SKILL.md-based global skills — #782)
+ * Descriptor-backed runtimes derive the base home from configHome.skillsHome
+ * when present, then append the first global skills artifact destSubpath.
  */
+export function resolveSkillsBaseFromDescriptor(
+  configHome: ConfigHomeDescriptor,
+  opts: ResolveConfigHomeOpts = {},
+  skillsDestSubpath = 'skills',
+): string {
+  const baseDescriptor = configHome.skillsHome ?? configHome;
+  const base = resolveConfigHomeFromDescriptor(baseDescriptor, opts);
+  return path.join(base, skillsDestSubpath);
+}
+
 export function getGlobalSkillsBase(runtime: string): string | null {
-  if (runtime === 'hermes') {
-    const configDir = getGlobalConfigDir(runtime);
-    return path.join(configDir, 'skills', 'gsd');
+  const runtimeEntry = getRegistry().runtimes[runtime];
+  const descriptor = runtimeEntry?.runtime;
+  const globalSkillsKind = descriptor?.artifactLayout?.global?.find((entry) => entry.kind === 'skills');
+  if (descriptor?.configHome && globalSkillsKind?.destSubpath) {
+    return resolveSkillsBaseFromDescriptor(
+      descriptor.configHome,
+      { env: process.env, home: os.homedir(), existsSync: fs.existsSync },
+      globalSkillsKind.destSubpath,
+    );
   }
-  // Kilo Code discovers global skills from ~/.kilo/skills/ (HOME-relative),
-  // independent of the XDG-based config dir (~/.config/kilo) used for commands.
-  // See: https://kilo.ai/docs/customize/skills
-  // "Global skills are located in the `.kilo` directory within your Home
-  //  directory: ~/.kilo/skills/"
-  if (runtime === 'kilo') return path.join(os.homedir(), '.kilo', 'skills');
   const configDir = getGlobalConfigDir(runtime);
   return path.join(configDir, 'skills');
 }

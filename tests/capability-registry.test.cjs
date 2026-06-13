@@ -17,6 +17,8 @@ const path = require('node:path');
 
 const { spawnSync } = require('node:child_process');
 
+const { cleanup } = require('./helpers.cjs');
+
 const {
   validateCapability,
   validateAgainstContract,
@@ -49,7 +51,9 @@ const {
   VALID_INSTALL_SURFACES,
   VALID_EXTENDED_HOOK_EVENTS,
   VALID_PERMISSION_WRITERS,
+  validateRuntimeCompat,
   validateRuntimeBody,
+  loadCentralConfigKeys,
 } = require('../scripts/gen-capability-registry.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -95,6 +99,11 @@ describe('UI pilot capability', () => {
     // capabilities.ui exists
     assert.ok(registry.capabilities.ui, 'registry.capabilities.ui should exist');
     assert.strictEqual(registry.version, SCHEMA_VERSION);
+    assert.deepStrictEqual(
+      registry.capabilities.ui.runtimeCompat,
+      { supported: ['*'], unsupported: [] },
+      'feature runtime compatibility contract should be preserved in the registry',
+    );
 
     // bySkill maps ui-phase and ui-review to 'ui'
     assert.strictEqual(registry.bySkill['ui-phase'], 'ui');
@@ -197,6 +206,32 @@ describe('validateCapability adversarial cases', () => {
     assert.ok(errors.some((e) => e.includes('role')));
   });
 
+  test('feature capability without runtimeCompat is rejected', () => {
+    const cap = { ...UI_CAP };
+    delete cap.runtimeCompat;
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(
+      errors.some((e) => e.includes('runtimeCompat')),
+      'Expected missing runtimeCompat validation error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('runtimeCompat.supported must be a non-empty array', () => {
+    const errors = validateRuntimeCompat('ui', { supported: [], unsupported: [] });
+    assert.ok(
+      errors.some((e) => e.includes('runtimeCompat.supported')),
+      'Expected supported-array validation error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('runtimeCompat.supported wildcard cannot be mixed with runtime ids', () => {
+    const errors = validateRuntimeCompat('ui', { supported: ['*', 'claude'], unsupported: [] });
+    assert.ok(
+      errors.some((e) => e.includes('wildcard')),
+      'Expected wildcard validation error, got: ' + JSON.stringify(errors),
+    );
+  });
+
   test('bad tier enum rejected', () => {
     const cap = { ...UI_CAP, tier: 'premium' };
     const errors = validateCapability(cap, 'ui');
@@ -279,6 +314,40 @@ describe('validateCrossCapability adversarial cases', () => {
     const errors = validateCrossCapability(capMap, new Set());
     assert.ok(errors.length > 0);
     assert.ok(errors.some((e) => e.includes('nonexistent-cap')));
+  });
+
+  test('runtimeCompat explicit runtime ids must exist', () => {
+    const cap = {
+      ...UI_CAP,
+      runtimeCompat: { supported: ['claude', 'future-runtime'], unsupported: [] },
+    };
+    const runtime = {
+      id: 'claude',
+      role: 'runtime',
+      title: 'Claude',
+      description: 'Runtime fixture.',
+      tier: 'core',
+      requires: [],
+      runtime: {
+        configHome: { kind: 'dot-home', name: '.claude', env: ['CLAUDE_CONFIG_DIR'] },
+        configFormat: 'settings-json',
+        artifactLayout: { global: [], local: [] },
+        commandStyle: 'slash-hyphen',
+        hooksSurface: 'settings-json',
+        sandboxTier: 'none',
+        supportTier: 1,
+        installSurface: 'settings-json',
+        writesSharedSettings: true,
+        permissionWriter: null,
+        extendedHookEvents: [],
+      },
+    };
+    const capMap = new Map([['ui', cap], ['claude', runtime]]);
+    const errors = validateCrossCapability(capMap, new Set());
+    assert.ok(
+      errors.some((e) => e.includes('runtimeCompat.supported') && e.includes('future-runtime')),
+      'Expected unknown runtimeCompat runtime error, got: ' + JSON.stringify(errors),
+    );
   });
 
   test('requires cycle rejected', () => {
@@ -369,6 +438,117 @@ describe('topological step ordering', () => {
     const sorted = topoSortSteps([stepZ, stepA]);
     assert.strictEqual(sorted[0].capId, 'a-cap', 'a-cap should come first (alphabetical tiebreak)');
     assert.strictEqual(sorted[1].capId, 'z-cap');
+  });
+
+  test('contributions at one point use produces/consumes dependency order', () => {
+    const capMap = new Map([
+      ['a-consumer', {
+        id: 'a-consumer',
+        role: 'feature',
+        title: 'Consumer',
+        tier: 'full',
+        requires: [],
+        runtimeCompat: { supported: ['*'], unsupported: [] },
+        skills: [],
+        agents: [],
+        hooks: [],
+        config: {},
+        steps: [],
+        contributions: [{
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { inline: 'Consume produced planning note.' },
+          produces: [],
+          consumes: ['PLAN-NOTE.md'],
+          onError: 'skip',
+        }],
+        gates: [],
+      }],
+      ['b-producer', {
+        id: 'b-producer',
+        role: 'feature',
+        title: 'Producer',
+        tier: 'full',
+        requires: [],
+        skills: [],
+        agents: [],
+        hooks: [],
+        config: {},
+        steps: [],
+        contributions: [{
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { inline: 'Produce planning note.' },
+          produces: ['PLAN-NOTE.md'],
+          consumes: [],
+          onError: 'skip',
+        }],
+        gates: [],
+      }],
+    ]);
+
+    const registry = buildRegistry(capMap);
+    assert.deepEqual(
+      registry.byLoopPoint['plan:pre'].contributions.map((c) => c.capId),
+      ['b-producer', 'a-consumer'],
+    );
+  });
+
+  test('contribution produces/consumes cycle throws a clear error', () => {
+    const capMap = new Map([
+      ['cap-a', {
+        id: 'cap-a',
+        role: 'feature',
+        title: 'A',
+        tier: 'full',
+        requires: [],
+        skills: [],
+        agents: [],
+        hooks: [],
+        config: {},
+        steps: [],
+        contributions: [{
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { inline: 'A.' },
+          produces: ['A.md'],
+          consumes: ['B.md'],
+          onError: 'skip',
+        }],
+        gates: [],
+      }],
+      ['cap-b', {
+        id: 'cap-b',
+        role: 'feature',
+        title: 'B',
+        tier: 'full',
+        requires: [],
+        skills: [],
+        agents: [],
+        hooks: [],
+        config: {},
+        steps: [],
+        contributions: [{
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { inline: 'B.' },
+          produces: ['B.md'],
+          consumes: ['A.md'],
+          onError: 'skip',
+        }],
+        gates: [],
+      }],
+    ]);
+
+    assert.throws(
+      () => buildRegistry(capMap),
+      (err) => {
+        assert.ok(err instanceof Error);
+        assert.match(err.message, /contributions/);
+        assert.match(err.message, /cycle/);
+        return true;
+      },
+    );
   });
 });
 
@@ -514,6 +694,37 @@ describe('registry structure', () => {
     assert.ok(closure.has('cap-b'), 'closure should include cap-b');
     assert.ok(closure.has('cap-c'), 'closure should include cap-c (transitive)');
     assert.strictEqual(closure.size, 2);
+  });
+});
+
+describe('ADR-857 phase 6 planning feature capabilities', () => {
+  const realRegistry = require('../gsd-core/bin/lib/capability-registry.cjs');
+
+  test('real registry declares research, ai-integration, and pattern-mapper capabilities', () => {
+    for (const capId of ['research', 'ai-integration', 'pattern-mapper']) {
+      assert.ok(realRegistry.capabilities[capId], `${capId} capability must be declared`);
+      assert.strictEqual(realRegistry.capabilities[capId].role, 'feature');
+    }
+  });
+
+  test('planning feature capabilities own their workflow config keys', () => {
+    assert.strictEqual(realRegistry.configKeys['workflow.research'], 'research');
+    assert.strictEqual(realRegistry.configKeys['workflow.ai_integration_phase'], 'ai-integration');
+    assert.strictEqual(realRegistry.configKeys['workflow.pattern_mapper'], 'pattern-mapper');
+  });
+
+  test('planning feature capabilities register plan:pre hooks', () => {
+    const hooks = [
+      ...realRegistry.byLoopPoint['plan:pre'].steps,
+      ...realRegistry.byLoopPoint['plan:pre'].contributions,
+      ...realRegistry.byLoopPoint['plan:pre'].gates,
+    ];
+    for (const capId of ['research', 'ai-integration', 'pattern-mapper']) {
+      assert.ok(
+        hooks.some((hook) => hook.capId === capId),
+        `${capId} must participate in plan:pre through the Capability Registry`,
+      );
+    }
   });
 });
 
@@ -1008,6 +1219,185 @@ describe('S1: fragment.path traversal guard', () => {
     assert.ok(errors.length > 0, 'Expected rejection for empty path');
     assert.ok(errors.some((e) => e.includes('fragment.path')));
   });
+
+  test('array fragment shape is rejected', () => {
+    const cap = {
+      ...UI_CAP,
+      contributions: [
+        {
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: [],
+          when: 'workflow.ui_phase',
+          onError: 'skip',
+        },
+      ],
+    };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(errors.some((e) => e.includes('fragment') && e.includes('object')));
+  });
+
+  test('non-string fragment.inline is rejected', () => {
+    const cap = {
+      ...UI_CAP,
+      contributions: [
+        {
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { inline: 42 },
+          when: 'workflow.ui_phase',
+          onError: 'skip',
+        },
+      ],
+    };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(errors.some((e) => e.includes('fragment.inline') && e.includes('string')));
+  });
+
+  test('empty fragment.inline string is rejected', () => {
+    const cap = {
+      ...UI_CAP,
+      contributions: [
+        {
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { inline: '' },
+          when: 'workflow.ui_phase',
+          onError: 'skip',
+        },
+      ],
+    };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(errors.some((e) => e.includes('fragment.inline') && e.includes('non-empty')));
+  });
+
+  test('non-array contribution produces is rejected', () => {
+    const cap = {
+      ...UI_CAP,
+      contributions: [
+        {
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { inline: 'Plan with UI context.' },
+          produces: 'PLAN-NOTE.md',
+          consumes: [],
+          when: 'workflow.ui_phase',
+          onError: 'skip',
+        },
+      ],
+    };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(errors.some((e) => e.includes('produces') && e.includes('array')));
+  });
+
+  test('non-string contribution consumes entry is rejected', () => {
+    const cap = {
+      ...UI_CAP,
+      contributions: [
+        {
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { inline: 'Plan with UI context.' },
+          produces: [],
+          consumes: [42],
+          when: 'workflow.ui_phase',
+          onError: 'skip',
+        },
+      ],
+    };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(errors.some((e) => e.includes('consumes entries') && e.includes('strings')));
+  });
+
+  test('fragment.path is materialized into inline registry content', (t) => {
+    const capsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-cap-fragment-'));
+    t.after(() => cleanup(capsDir));
+    const capDir = path.join(capsDir, 'planning-advice');
+    fs.mkdirSync(path.join(capDir, 'fragments'), { recursive: true });
+    fs.writeFileSync(
+      path.join(capDir, 'fragments', 'plan-pre.md'),
+      'Use the capability-owned planning fragment.\n',
+    );
+    fs.writeFileSync(
+      path.join(capDir, 'capability.json'),
+      JSON.stringify({
+        id: 'planning-advice',
+        role: 'feature',
+        title: 'Planning advice',
+        description: 'Synthetic fixture for fragment path materialization.',
+        tier: 'full',
+        requires: [],
+        runtimeCompat: { supported: ['*'], unsupported: [] },
+        skills: [],
+        agents: [],
+        hooks: [],
+        config: {},
+        steps: [],
+        contributions: [{
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { path: 'fragments/plan-pre.md' },
+          produces: [],
+          consumes: ['CONTEXT.md'],
+          onError: 'skip',
+        }],
+        gates: [],
+      }),
+    );
+
+    const { capMap, errors } = loadAndValidate(new Set(), capsDir);
+    assert.deepEqual(errors, []);
+    const registry = buildRegistry(capMap);
+    assert.strictEqual(
+      registry.byLoopPoint['plan:pre'].contributions[0].fragment.inline,
+      'Use the capability-owned planning fragment.\n',
+    );
+  });
+
+  test('step fragment.path is materialized into inline registry content', (t) => {
+    const capsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-cap-step-fragment-'));
+    t.after(() => cleanup(capsDir));
+    const capDir = path.join(capsDir, 'research');
+    fs.mkdirSync(path.join(capDir, 'fragments'), { recursive: true });
+    fs.writeFileSync(
+      path.join(capDir, 'fragments', 'plan-pre.md'),
+      'Research prompt owned by the capability.\n',
+    );
+    fs.writeFileSync(
+      path.join(capDir, 'capability.json'),
+      JSON.stringify({
+        id: 'research',
+        role: 'feature',
+        title: 'Research',
+        description: 'Synthetic fixture for step fragment materialization.',
+        tier: 'standard',
+        requires: [],
+        runtimeCompat: { supported: ['*'], unsupported: [] },
+        skills: [],
+        agents: ['gsd-phase-researcher'],
+        hooks: [],
+        config: {},
+        steps: [{
+          point: 'plan:pre',
+          ref: { agent: 'gsd-phase-researcher' },
+          fragment: { path: 'fragments/plan-pre.md' },
+          produces: ['RESEARCH.md'],
+          consumes: ['CONTEXT.md'],
+          onError: 'skip',
+        }],
+        contributions: [],
+        gates: [],
+      }),
+    );
+
+    const { capMap, errors } = loadAndValidate(new Set(), capsDir);
+    assert.deepEqual(errors, []);
+    const registry = buildRegistry(capMap);
+    assert.strictEqual(
+      registry.byLoopPoint['plan:pre'].steps[0].fragment.inline,
+      'Research prompt owned by the capability.\n',
+    );
+  });
 });
 
 // ─── 8. Security: prototype pollution (S2) ────────────────────────────────────
@@ -1427,14 +1817,20 @@ describe('FIX 1: self-consume rejection in validateConsumesGlobal', () => {
   });
 
   // (this test follows the series above)
-  test('a step produces:["SELF.md"] and consumes:["SELF.md"] and another capability produces SELF.md at the SAME point is accepted (different hook)', () => {
+  // Updated fixture: producer-cap produces SELF.md at plan:pre; self-cap CONSUMES (not produces)
+  // SELF.md at plan:pre — a single producer at that point satisfies the consume.
+  // The prior fixture had BOTH caps producing SELF.md at plan:pre, which now violates the
+  // duplicate-producer invariant added in Issue #1123. The consume-satisfiability logic being
+  // tested here is unaffected — the key assertion remains: a step consuming an artifact that
+  // a DIFFERENT cap produces at the SAME point is satisfied.
+  test('a step consumes:["SELF.md"] and another capability produces SELF.md at the SAME point is accepted (different cap)', () => {
     const producerCap = {
       id: 'producer-cap', role: 'feature', title: 'Producer', description: 'Produces SELF.md',
       tier: 'standard', requires: [],
       skills: ['producer-skill'], agents: ['gsd-producer-agent'], hooks: [], config: {},
       steps: [
         {
-          point: 'plan:pre',  // same point as self-cap
+          point: 'plan:pre',
           ref: { skill: 'producer-skill' },
           produces: ['SELF.md'],
           consumes: [],
@@ -1443,22 +1839,22 @@ describe('FIX 1: self-consume rejection in validateConsumesGlobal', () => {
       ],
       contributions: [], gates: [],
     };
-    const selfCap = {
-      id: 'self-cap', role: 'feature', title: 'Self', description: 'Self consume test',
+    const consumerCap = {
+      id: 'self-cap', role: 'feature', title: 'Self', description: 'Consume test',
       tier: 'standard', requires: [],
       skills: ['self-skill'], agents: ['gsd-self-agent'], hooks: [], config: {},
       steps: [
         {
-          point: 'plan:pre',  // same point — different hook (producer-cap) satisfies it
+          point: 'plan:pre',  // same point — producer-cap (different cap) satisfies the consume
           ref: { skill: 'self-skill' },
-          produces: ['SELF.md'],
+          produces: [],
           consumes: ['SELF.md'],
           onError: 'skip',
         },
       ],
       contributions: [], gates: [],
     };
-    const capMap = new Map([['producer-cap', producerCap], ['self-cap', selfCap]]);
+    const capMap = new Map([['producer-cap', producerCap], ['self-cap', consumerCap]]);
     const errors = validateConsumesGlobal(capMap);
     const selfErrors = errors.filter((e) => e.includes('SELF.md') && e.includes('self-cap'));
     assert.deepEqual(
@@ -2347,6 +2743,7 @@ function makeCommandCap(id, commands) {
     description: 'Synthetic capability for ADR-959 command tests.',
     tier: 'full',
     requires: [],
+    runtimeCompat: { supported: ['*'], unsupported: [] },
     skills: [],
     agents: [],
     hooks: [],
@@ -3724,5 +4121,209 @@ describe('ADR-857 phase 5f: cross-field consistency gate rejection tests (DEFECT
     const cap = makeValidRuntimeCap({});
     const errors = validateRuntimeBody(cap);
     assert.deepEqual(errors, [], 'Valid fixture must produce no errors, got: ' + JSON.stringify(errors));
+  });
+});
+
+// ─── Change A: loadCentralConfigKeys ENOENT vs parse-error distinction ────────
+
+describe('loadCentralConfigKeys — ENOENT vs parse-error (Issue #1124)', () => {
+  test('ENOENT: nonexistent path returns empty Set without throwing or writing stderr', () => {
+    const stderrWrites = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (msg, ...rest) => { stderrWrites.push(msg); return origWrite(msg, ...rest); };
+    let result;
+    try {
+      const nonexistent = path.join(os.tmpdir(), 'cfgkeys-nonexistent-' + Date.now() + '.json');
+      result = loadCentralConfigKeys(nonexistent);
+    } finally {
+      process.stderr.write = origWrite;
+    }
+    assert.ok(result instanceof Set, 'should return a Set');
+    assert.strictEqual(result.size, 0, 'Set should be empty for ENOENT');
+    const warnings = stderrWrites.filter((m) => typeof m === 'string' && m.length > 0);
+    assert.deepEqual(warnings, [], 'No stderr output expected for ENOENT, got: ' + JSON.stringify(warnings));
+  });
+
+  test('malformed JSON: throws and writes stderr containing the file path', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cfgkeys-'));
+    const badFile = path.join(tmpDir, 'bad-schema.json');
+    fs.writeFileSync(badFile, '<<<<<<< HEAD\nnot json\n>>>>>>> main', 'utf8');
+    const stderrWrites = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (msg, ...rest) => { stderrWrites.push(msg); return origWrite(msg, ...rest); };
+    let thrownErr;
+    try {
+      loadCentralConfigKeys(badFile);
+    } catch (err) {
+      thrownErr = err;
+    } finally {
+      process.stderr.write = origWrite;
+    }
+    // Clean up
+    cleanup(tmpDir);
+    assert.ok(thrownErr !== undefined, 'Expected loadCentralConfigKeys to throw on malformed JSON');
+    assert.strictEqual(thrownErr.name, 'ExitError', 'thrown error must be an ExitError, got: ' + thrownErr.name);
+    assert.strictEqual(thrownErr.code, 1, 'ExitError must have code 1, got: ' + thrownErr.code);
+    const combined = stderrWrites.join('');
+    assert.ok(
+      combined.includes(badFile),
+      'stderr should include the file path, got: ' + combined,
+    );
+  });
+
+  test('valid file: returns Set containing the declared keys', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cfgkeys-'));
+    const goodFile = path.join(tmpDir, 'good-schema.json');
+    fs.writeFileSync(goodFile, JSON.stringify({ validKeys: ['a', 'b'] }), 'utf8');
+    let result;
+    try {
+      result = loadCentralConfigKeys(goodFile);
+    } finally {
+      cleanup(tmpDir);
+    }
+    assert.ok(result instanceof Set, 'should return a Set');
+    assert.ok(result.has('a'), "Set should contain 'a'");
+    assert.ok(result.has('b'), "Set should contain 'b'");
+    assert.strictEqual(result.size, 2, 'Set should have exactly 2 entries');
+  });
+
+  test('non-ENOENT read error (path is a directory) throws ExitError and warns', () => {
+    // fs.readFileSync on a directory throws EISDIR (code !== 'ENOENT'), which must
+    // hit the non-ENOENT read-error branch: throw ExitError(1) and write stderr.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cfgkeys-dir-'));
+    const stderrWrites = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (msg, ...rest) => { stderrWrites.push(msg); return origWrite(msg, ...rest); };
+    let thrownErr;
+    try {
+      loadCentralConfigKeys(tmpDir);
+    } catch (err) {
+      thrownErr = err;
+    } finally {
+      process.stderr.write = origWrite;
+    }
+    cleanup(tmpDir);
+    assert.ok(thrownErr !== undefined, 'Expected loadCentralConfigKeys to throw on EISDIR (directory path)');
+    assert.strictEqual(thrownErr.name, 'ExitError', 'thrown error must be an ExitError, got: ' + thrownErr.name);
+    assert.strictEqual(thrownErr.code, 1, 'ExitError must have code 1, got: ' + thrownErr.code);
+    const combined = stderrWrites.join('');
+    assert.ok(
+      combined.includes(tmpDir),
+      'stderr should include the directory path, got: ' + combined,
+    );
+  });
+});
+
+// ─── Change B: duplicate-producer invariant at gen time (Issue #1123) ─────────
+
+describe('duplicate-producer invariant — same artifact same point (Issue #1123)', () => {
+  // Minimal base capability clone helper (deep-clone UI_CAP then override key fields)
+  function makeFeatureCap(overrides) {
+    return Object.assign(JSON.parse(JSON.stringify(UI_CAP)), overrides);
+  }
+
+  test('REJECTION: two caps each producing DUP.md at plan:pre → throws with artifact/point/ids in message', () => {
+    // Note: omit 'when' and use config:{} so there are no config-key validation errors.
+    // Caps must pass per-capability validation to enter capMap and trigger the global check.
+    const capA = makeFeatureCap({
+      id: 'dup-a',
+      skills: ['dup-a-skill'],
+      agents: ['gsd-dup-a-agent'],
+      config: {},
+      steps: [
+        {
+          point: 'plan:pre',
+          ref: { skill: 'dup-a-skill' },
+          produces: ['DUP.md'],
+          consumes: ['CONTEXT.md'],
+          onError: 'skip',
+        },
+      ],
+      gates: [],
+      contributions: [],
+    });
+    const capB = makeFeatureCap({
+      id: 'dup-b',
+      skills: ['dup-b-skill'],
+      agents: ['gsd-dup-b-agent'],
+      config: {},
+      steps: [
+        {
+          point: 'plan:pre',
+          ref: { skill: 'dup-b-skill' },
+          produces: ['DUP.md'],
+          consumes: ['CONTEXT.md'],
+          onError: 'skip',
+        },
+      ],
+      gates: [],
+      contributions: [],
+    });
+    // The duplicate-producer check fires during loadAndValidate (in validateConsumesGlobal)
+    // or during buildRegistry — test wraps the entire build flow.
+    const capDir = makeTempCapDir({ 'dup-a': capA, 'dup-b': capB });
+    let threw = false;
+    let errorMsg = '';
+    try {
+      const { capMap } = loadAndValidate(new Set(), capDir);
+      buildRegistry(capMap);
+    } catch (err) {
+      threw = true;
+      errorMsg = err.message || String(err);
+    }
+    assert.ok(threw, 'Expected build flow to throw for duplicate producers at the same point');
+    assert.ok(errorMsg.includes('DUP.md'), 'Error message should mention DUP.md, got: ' + errorMsg);
+    assert.ok(errorMsg.includes('plan:pre'), 'Error message should mention the point, got: ' + errorMsg);
+    assert.ok(
+      errorMsg.includes('dup-a') && errorMsg.includes('dup-b'),
+      'Error message should mention both cap ids, got: ' + errorMsg,
+    );
+  });
+
+  test('PASSING: same artifact at DIFFERENT points does not trigger duplicate-producer error', () => {
+    // cap-diff-a produces SAME.md at plan:pre; cap-diff-b produces SAME.md at execute:pre
+    // Different pointIdx → must not throw the duplicate-producer error.
+    const capDiffA = makeFeatureCap({
+      id: 'diff-a',
+      skills: ['diff-a-skill'],
+      agents: ['gsd-diff-a-agent'],
+      config: {},
+      steps: [
+        {
+          point: 'plan:pre',
+          ref: { skill: 'diff-a-skill' },
+          produces: ['SAME.md'],
+          consumes: ['CONTEXT.md'],
+          onError: 'skip',
+        },
+      ],
+      gates: [],
+      contributions: [],
+    });
+    const capDiffB = makeFeatureCap({
+      id: 'diff-b',
+      skills: ['diff-b-skill'],
+      agents: ['gsd-diff-b-agent'],
+      config: {},
+      steps: [
+        {
+          point: 'execute:pre',
+          ref: { skill: 'diff-b-skill' },
+          produces: ['SAME.md'],
+          consumes: [],
+          onError: 'skip',
+        },
+      ],
+      gates: [],
+      contributions: [],
+    });
+    const capDir = makeTempCapDir({ 'diff-a': capDiffA, 'diff-b': capDiffB });
+    const { capMap, errors } = loadAndValidate(new Set(), capDir);
+    assert.deepEqual(errors, [], 'Expected no validation errors for different-point fixtures, got: ' + JSON.stringify(errors));
+    // buildRegistry must NOT throw — if the duplicate-producer bug regressed it would throw here
+    assert.doesNotThrow(
+      () => buildRegistry(capMap),
+      'Should NOT throw duplicate-producer error for same artifact at DIFFERENT points',
+    );
   });
 });

@@ -1137,7 +1137,7 @@ describe('getMilestonePhaseFilter', () => {
   test('handles letter-suffix phases (e.g. 3A)', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'ROADMAP.md'),
-      '### Phase 3A: Sub-feature\n**Goal:** Sub work\n'
+      '## Roadmap v1.0: Current\n\n### Phase 3A: Sub-feature\n**Goal:** Sub work\n'
     );
 
     const filter = getMilestonePhaseFilter(tmpDir);
@@ -1150,7 +1150,7 @@ describe('getMilestonePhaseFilter', () => {
   test('handles decimal phases (e.g. 5.1)', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'ROADMAP.md'),
-      '### Phase 5: Main\n**Goal:** Main work\n\n### Phase 5.1: Patch\n**Goal:** Patch work\n'
+      '## Roadmap v1.0: Current\n\n### Phase 5: Main\n**Goal:** Main work\n\n### Phase 5.1: Patch\n**Goal:** Patch work\n'
     );
 
     const filter = getMilestonePhaseFilter(tmpDir);
@@ -1163,7 +1163,7 @@ describe('getMilestonePhaseFilter', () => {
   test('returns false for non-phase directory names', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'ROADMAP.md'),
-      '### Phase 1: Init\n**Goal:** Start\n'
+      '## Roadmap v1.0: Current\n\n### Phase 1: Init\n**Goal:** Start\n'
     );
 
     const filter = getMilestonePhaseFilter(tmpDir);
@@ -1175,7 +1175,7 @@ describe('getMilestonePhaseFilter', () => {
   test('phaseCount reflects ROADMAP phase count', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'ROADMAP.md'),
-      '### Phase 5: Auth\n### Phase 6: Dashboard\n### Phase 7: Polish\n'
+      '## Roadmap v1.0: Current\n\n### Phase 5: Auth\n### Phase 6: Dashboard\n### Phase 7: Polish\n'
     );
 
     const filter = getMilestonePhaseFilter(tmpDir);

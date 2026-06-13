@@ -3167,7 +3167,7 @@ purpose: ${toSingleLine(description)}
  * @param {object|null} runtimeResolver  — runtime-aware tier resolver from readGsdRuntimeProfileResolver
  * @param {object|null} effortCfg        — #443: merged effort config from readGsdEffectiveEffortConfig
  */
-function generateCodexAgentToml(agentName, agentContent, modelOverrides = null, runtimeResolver = null, effortCfg = null) {
+function generateCodexAgentToml(agentName, agentContent, modelOverrides = null, runtimeResolver = null, effortCfg = null, sandboxTier = 'codex-agent-sandbox') {
   const sandboxMode = CODEX_AGENT_SANDBOX[agentName] || 'read-only';
   const { frontmatter, body } = extractFrontmatterAndBody(agentContent);
   const frontmatterText = frontmatter || '';
@@ -3180,8 +3180,10 @@ function generateCodexAgentToml(agentName, agentContent, modelOverrides = null, 
   const lines = [
     `name = ${JSON.stringify(resolvedName)}`,
     `description = ${JSON.stringify(resolvedDescription)}`,
-    `sandbox_mode = "${sandboxMode}"`,
   ];
+  if (sandboxTier != null && sandboxTier !== 'none') {
+    lines.push(`sandbox_mode = "${sandboxMode}"`);
+  }
 
   // Embed model override when configured in ~/.gsd/defaults.json so that
   // model_overrides is respected on Codex (which uses static TOML, not inline
@@ -5746,7 +5748,7 @@ function writeCopilotHookConfig(targetDir) {
  * Generate config.toml and per-agent .toml files for Codex.
  * Reads agent .md files from source, extracts metadata, writes .toml configs.
  */
-function installCodexConfig(targetDir, agentsSrc) {
+function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-sandbox') {
   const configPath = path.join(targetDir, 'config.toml');
   const agentsTomlDir = path.join(targetDir, 'agents');
   fs.mkdirSync(agentsTomlDir, { recursive: true });
@@ -5792,7 +5794,7 @@ function installCodexConfig(targetDir, agentsSrc) {
     // #443 — pass unified effort config so model_reasoning_effort in the .toml
     // follows the same config-driven precedence as the Claude .md effort key.
     const effortCfg = readGsdEffectiveEffortConfig(targetDir);
-    const tomlContent = generateCodexAgentToml(name, content, modelOverrides, runtimeResolver, effortCfg);
+    const tomlContent = generateCodexAgentToml(name, content, modelOverrides, runtimeResolver, effortCfg, sandboxTier);
     fs.writeFileSync(path.join(agentsTomlDir, `${name}.toml`), tomlContent);
   }
 
@@ -6925,7 +6927,13 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false) {
       content = content.replace(/~\/\.claude\//g, pathPrefix);
       content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
       content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
+      content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\.\/\.claude(?![\w-])/g, `./${dirName}`);
       content = content.replace(/~\/\.augment\//g, pathPrefix);
+      content = content.replace(/\$HOME\/\.augment\//g, pathPrefix);
+      content = content.replace(/~\/\.augment(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.augment(?![\w-])/g, normalizedPathPrefix);
       content = processAttribution(content, getCommitAttribution(runtime));
       break;
 
@@ -6985,6 +6993,10 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false) {
       content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
       content = content.replace(/~\/\.qwen\//g, pathPrefix);
       content = content.replace(/\$HOME\/\.qwen\//g, pathPrefix);
+      content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/~\/\.qwen(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.qwen(?![\w-])/g, normalizedPathPrefix);
       // Bare relative .claude/ → .qwen/ (residual refs not matched above)
       content = content.replace(/\.claude\//g, '.qwen/');
       content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
@@ -7001,6 +7013,10 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false) {
       content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
       content = content.replace(/~\/\.hermes\//g, pathPrefix);
       content = content.replace(/\$HOME\/\.hermes\//g, pathPrefix);
+      content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/~\/\.hermes(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.hermes(?![\w-])/g, normalizedPathPrefix);
       // Bare relative .claude/ → .hermes/ (residual refs)
       content = content.replace(/\.claude\//g, '.hermes/');
       content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
@@ -10718,7 +10734,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     if (!isMinimalMode(_effectiveInstallMode)) {
       try {
         // Generate Codex config.toml and per-agent .toml files.
-        agentCount = installCodexConfig(targetDir, agentsSrc);
+        agentCount = installCodexConfig(targetDir, agentsSrc, plan.sandboxTier);
       } catch (e) {
         restoreCodexSnapshot();
         throw e;

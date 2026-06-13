@@ -1481,13 +1481,50 @@ describe('groupFilesBySubrepo (#311)', () => {
     assert.deepStrictEqual(result.unmatched, ['vendor/other.js']);
   });
 
-  test('first-match-in-array-order wins (not longest-prefix)', () => {
-    // 'app' comes before 'app/sub' in subRepos array; 'app/sub/f.js' matches 'app' first
+  test('longest-prefix wins, not first-match-in-array-order (#391)', () => {
+    // 'app' precedes 'app/sub' in array order, but 'app/sub' is the more specific
+    // configured sub-repo, so 'app/sub/f.js' must route to 'app/sub'.
     const result = groupFilesBySubrepo(
       ['app/sub/f.js'],
       ['app', 'app/sub']
     );
-    assert.deepStrictEqual(result.grouped, { app: ['app/sub/f.js'] });
+    assert.deepStrictEqual(result.grouped, { 'app/sub': ['app/sub/f.js'] });
+    assert.deepStrictEqual(result.unmatched, []);
+  });
+
+  test('longest-prefix selection is independent of sub_repos array order (#391)', () => {
+    // Reverse array order: longest-prefix must still win (no array-order workaround).
+    const result = groupFilesBySubrepo(
+      ['app/sub/f.js'],
+      ['app/sub', 'app']
+    );
+    assert.deepStrictEqual(result.grouped, { 'app/sub': ['app/sub/f.js'] });
+    assert.deepStrictEqual(result.unmatched, []);
+  });
+
+  test('nested sub-repos route by specificity; shallow files stay shallow (#391)', () => {
+    // Exact repro from #391 plus a shallow sibling file under the parent sub-repo.
+    const result = groupFilesBySubrepo(
+      ['packages/core/widget.js', 'packages/util.js'],
+      ['packages', 'packages/core']
+    );
+    assert.deepStrictEqual(result.grouped, {
+      'packages/core': ['packages/core/widget.js'],
+      packages: ['packages/util.js'],
+    });
+    assert.deepStrictEqual(result.unmatched, []);
+  });
+
+  test('three-level nesting routes to the deepest matching prefix (#391)', () => {
+    const result = groupFilesBySubrepo(
+      ['a/b/c/f.js', 'a/b/g.js', 'a/h.js'],
+      ['a', 'a/b', 'a/b/c']
+    );
+    assert.deepStrictEqual(result.grouped, {
+      'a/b/c': ['a/b/c/f.js'],
+      'a/b': ['a/b/g.js'],
+      a: ['a/h.js'],
+    });
     assert.deepStrictEqual(result.unmatched, []);
   });
 
@@ -1523,6 +1560,17 @@ describe('groupFilesBySubrepo (#311)', () => {
     });
     assert.deepStrictEqual(result.grouped, { a: ['a/b'] });
     assert.deepStrictEqual(result.unmatched, ['README.md']);
+  });
+
+  test('non-string entry in a matched bucket does not throw (#391)', () => {
+    // A null sub_repos entry shares the 'null' first-segment bucket with a real
+    // multi-segment entry; longest-prefix selection must not throw reading length.
+    let result;
+    assert.doesNotThrow(() => {
+      result = groupFilesBySubrepo(['null/a/f.js'], [null, 'null/a']);
+    });
+    assert.deepStrictEqual(result.grouped, { 'null/a': ['null/a/f.js'] });
+    assert.deepStrictEqual(result.unmatched, []);
   });
 });
 

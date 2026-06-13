@@ -453,17 +453,22 @@ Skill(skill="gsd-execute-phase", args="${PHASE_NUM} --no-transition")
 
 Auto-invoke code review and fix chain. Autonomous mode chains both review and fix (unlike execute-phase/quick which only suggest fix).
 
-**Config gate:**
+**Capability dispatch:**
 ```bash
-CODE_REVIEW_ENABLED=$(gsd_run query config-get workflow.code_review 2>/dev/null || echo "true")
-```
-If `"false"`: display "Code review skipped (workflow.code_review=false)" and proceed to 3d.
-
-```
-Skill(skill="gsd-code-review", args="${PHASE_NUM}")
+EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw)
 ```
 
-Parse status from REVIEW.md frontmatter. If "clean" or "skipped": proceed to 3d. If findings found: auto-invoke:
+Resolve active step hooks from `EXECUTE_POST_HOOKS_JSON` where `kind == "step"` and `ref.skill == "code-review"`.
+
+If no active code-review step hook exists: display "Code review skipped (code-review capability inactive)" and proceed to 3d. This covers `workflow.code_review=false` through the Capability Registry; do not query the code-review toggle directly here.
+
+For each active code-review step hook, dispatch the skill using the registry-provided stem:
+
+```
+Skill(skill="gsd-${ref.skill}", args="${PHASE_NUM}")
+```
+
+Parse status from REVIEW.md frontmatter. If "clean" or "skipped": proceed to 3d. If findings found after the capability-dispatched review, auto-invoke the consolidated fix entry point:
 ```
 Skill(skill="gsd-code-review", args="${PHASE_NUM} --fix --auto")
 ```

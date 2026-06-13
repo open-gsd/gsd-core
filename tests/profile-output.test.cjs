@@ -117,6 +117,73 @@ describe('write-profile command', () => {
     assert.ok(out.dimensions_scored > 0, 'should have scored dimensions');
   });
 
+  test('#1114: default output resolves the active runtime config home (codex)', () => {
+    const analysis = {
+      profile_version: '1.0',
+      dimensions: { communication_style: { rating: 'terse-direct', confidence: 'HIGH' } },
+    };
+    const analysisPath = path.join(tmpDir, 'analysis.json');
+    const codexHome = path.join(tmpDir, 'codex-home');
+    fs.writeFileSync(analysisPath, JSON.stringify(analysis));
+
+    const result = runGsdTools(
+      ['write-profile', '--input', analysisPath, '--raw'],
+      tmpDir,
+      { CODEX_HOME: codexHome, GSD_RUNTIME: 'codex' }
+    );
+    assert.ok(result.success, `Failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    // Must land in the Codex home (so Codex advisor-mode finds it), NOT .claude.
+    assert.strictEqual(out.profile_path, path.join(codexHome, 'gsd-core', 'USER-PROFILE.md'));
+    assert.ok(!out.profile_path.includes(`${path.sep}.claude${path.sep}`),
+      `codex profile must not be written under .claude; got ${out.profile_path}`);
+    assert.ok(fs.existsSync(out.profile_path), 'runtime-aware profile should be written to disk');
+  });
+
+  test('#1114: default output is the .claude config home for the claude runtime', () => {
+    const analysis = {
+      profile_version: '1.0',
+      dimensions: { communication_style: { rating: 'terse-direct', confidence: 'HIGH' } },
+    };
+    const analysisPath = path.join(tmpDir, 'analysis.json');
+    fs.writeFileSync(analysisPath, JSON.stringify(analysis));
+
+    // Clear ambient runtime vars so the test is hermetic regardless of the
+    // developer's shell (a stray GSD_RUNTIME/CLAUDE_CONFIG_DIR would redirect it).
+    const result = runGsdTools(['write-profile', '--input', analysisPath, '--raw'], tmpDir,
+      { HOME: tmpDir, GSD_RUNTIME: '', CLAUDE_CONFIG_DIR: '', CODEX_HOME: '' });
+    assert.ok(result.success, `Failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    // os.homedir() returns HOME verbatim, so assert on the suffix to stay
+    // robust against macOS /var → /private/var symlink normalization.
+    assert.ok(
+      out.profile_path.endsWith(path.join('.claude', 'gsd-core', 'USER-PROFILE.md')),
+      `claude profile must be under .claude/gsd-core; got ${out.profile_path}`
+    );
+    assert.ok(fs.existsSync(out.profile_path), 'profile should be written to disk');
+  });
+
+  test('#1114: config.runtime=codex (no GSD_RUNTIME) also resolves the Codex home', () => {
+    const analysis = {
+      profile_version: '1.0',
+      dimensions: { communication_style: { rating: 'terse-direct', confidence: 'HIGH' } },
+    };
+    const analysisPath = path.join(tmpDir, 'analysis.json');
+    const codexHome = path.join(tmpDir, 'codex-home');
+    fs.writeFileSync(analysisPath, JSON.stringify(analysis));
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify({ runtime: 'codex' }));
+
+    // No GSD_RUNTIME — the runtime must be read from config.runtime.
+    const result = runGsdTools(
+      ['write-profile', '--input', analysisPath, '--raw'],
+      tmpDir,
+      { CODEX_HOME: codexHome, GSD_RUNTIME: '' }
+    );
+    assert.ok(result.success, `Failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.profile_path, path.join(codexHome, 'gsd-core', 'USER-PROFILE.md'));
+  });
+
   test('errors when --input is missing', () => {
     const result = runGsdTools('write-profile --raw', tmpDir);
     assert.ok(!result.success, 'should fail without --input');
@@ -152,21 +219,39 @@ describe('generate-claude-md command', () => {
     }
   });
 
-  test('does not overwrite existing CLAUDE.md without --force', () => {
+  test('does not overwrite existing marker-less CLAUDE.md without --force (#1098)', () => {
+    const outputPath = path.join(tmpDir, 'CLAUDE.md');
+    const original = '# Custom CLAUDE.md\n\nUser content.\n';
+    fs.writeFileSync(outputPath, original);
+
+    // No GSD markers in the file → the #1098 guard must leave it untouched.
+    const result = runGsdTools(['generate-claude-md', '--output', outputPath, '--auto'], tmpDir);
+    assert.ok(result.success, `command should exit 0 even when skipping: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).action, 'skipped');
+
+    const content = fs.readFileSync(outputPath, 'utf-8');
+    assert.strictEqual(content, original, 'hand-crafted file must be byte-identical (not overwritten)');
+  });
+
+  test('overwrites existing marker-less CLAUDE.md with --force (#1098)', () => {
     const outputPath = path.join(tmpDir, 'CLAUDE.md');
     fs.writeFileSync(outputPath, '# Custom CLAUDE.md\n\nUser content.\n');
 
-    runGsdTools(['generate-claude-md', '--output', outputPath, '--auto', '--raw'], tmpDir);
-    // Should merge, not overwrite
+    const result = runGsdTools(['generate-claude-md', '--output', outputPath, '--force'], tmpDir);
+    assert.ok(result.success, `Failed: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).action, 'updated');
+
     const content = fs.readFileSync(outputPath, 'utf-8');
-    assert.ok(content.length > 0, 'should still have content');
+    assert.ok(content.includes('User content.'), '--force preserves existing content while adding sections');
+    assert.ok(content.includes('## GSD Workflow Enforcement'), '--force injects GSD sections');
   });
 
   test('skills fallback mentions the normalized project roots', () => {
     const result = runGsdTools('generate-claude-md', tmpDir);
     assert.ok(result.success, `Failed: ${result.error}`);
 
-    const content = fs.readFileSync(path.join(tmpDir, 'CLAUDE.md'), 'utf-8');
+    // #1098: default Claude output is now .claude/CLAUDE.md
+    const content = fs.readFileSync(path.join(tmpDir, '.claude', 'CLAUDE.md'), 'utf-8');
     assert.ok(content.includes('.claude/skills/'));
     assert.ok(content.includes('.agents/skills/'));
     assert.ok(content.includes('.cursor/skills/'));

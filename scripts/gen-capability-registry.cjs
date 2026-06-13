@@ -93,16 +93,42 @@ for (const entry of LOOP_HOST_CONTRACT) {
  * Loads the set of keys from the central config-schema manifest.
  * Returns a Set<string>. Used for collision detection.
  *
- * TODO: distinguish file-not-found (ok, return empty Set) from JSON-parse-error
- * (should warn — a parse error means the schema is broken, not just absent).
+ * Contract:
+ *   - ENOENT (file not found): returns empty Set silently — legitimate absent case.
+ *   - Any other read error OR JSON parse error: writes a prominent warning to stderr
+ *     naming the schema path and the underlying error, then throws ExitError(1).
+ *     A parse error clearly states the schema is broken (not merely absent).
+ *
+ * @param {string} [schemaPath]  Path to the config-schema manifest. Defaults to
+ *                               CONFIG_SCHEMA_PATH (the real production path).
+ *                               Overridable for unit testing with fixture paths.
+ * @returns {Set<string>}
  */
-function loadCentralConfigKeys() {
+function loadCentralConfigKeys(schemaPath = CONFIG_SCHEMA_PATH) {
+  let raw;
   try {
-    const manifest = JSON.parse(fs.readFileSync(CONFIG_SCHEMA_PATH, 'utf8'));
-    return new Set(Array.isArray(manifest.validKeys) ? manifest.validKeys : []);
-  } catch (_) {
-    return new Set();
+    raw = fs.readFileSync(schemaPath, 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      return new Set();
+    }
+    process.stderr.write(
+      '  ERROR  Failed to read config-schema manifest at ' + schemaPath + ': ' + err.message + '\n',
+    );
+    throw new ExitError(1, 'could not read config-schema manifest');
   }
+
+  let manifest;
+  try {
+    manifest = JSON.parse(raw);
+  } catch (err) {
+    process.stderr.write(
+      '  ERROR  Config-schema manifest at ' + schemaPath + ' is broken (JSON parse error): ' + err.message + '\n',
+    );
+    throw new ExitError(1, 'config-schema manifest JSON is malformed');
+  }
+
+  return new Set(Array.isArray(manifest.validKeys) ? manifest.validKeys : []);
 }
 
 // ─── Config-slice validation ──────────────────────────────────────────────────
@@ -205,6 +231,7 @@ const KEBAB_RE = /^[a-z][a-z0-9-]*$/;
 const VALID_ROLES = new Set(['feature', 'runtime']);
 const VALID_TIERS = new Set(['core', 'standard', 'full']);
 const VALID_ON_ERROR = new Set(['skip', 'halt']);
+const RUNTIME_COMPAT_WILDCARD = '*';
 
 /**
  * Validate a single capability declaration.
@@ -337,8 +364,73 @@ function validateCommandEntry(capId, entry, prefix) {
   return errors;
 }
 
+function validateRuntimeCompat(capId, runtimeCompat) {
+  const errors = [];
+  const ctx = 'capability "' + capId + '" runtimeCompat';
+
+  if (typeof runtimeCompat !== 'object' || runtimeCompat === null || Array.isArray(runtimeCompat)) {
+    errors.push(ctx + ' must be an object with supported and unsupported arrays');
+    return errors;
+  }
+
+  const validateRuntimeArray = (field, { allowWildcard }) => {
+    const value = runtimeCompat[field];
+    if (!Array.isArray(value)) {
+      errors.push(ctx + '.' + field + ' must be an array of runtime ids' + (allowWildcard ? ' or ["*"]' : ''));
+      return;
+    }
+    if (field === 'supported' && value.length === 0) {
+      errors.push(ctx + '.supported must be a non-empty array');
+    }
+    let hasWildcard = false;
+    for (let i = 0; i < value.length; i++) {
+      const entry = value[i];
+      if (typeof entry !== 'string' || entry.length === 0) {
+        errors.push(ctx + '.' + field + '[' + i + '] must be a non-empty string');
+        continue;
+      }
+      if (entry === '__proto__' || entry === 'constructor' || entry === 'prototype') {
+        errors.push(ctx + '.' + field + '[' + i + '] "' + entry + '" is a reserved name');
+      }
+      if (entry === RUNTIME_COMPAT_WILDCARD) {
+        if (!allowWildcard) {
+          errors.push(ctx + '.' + field + ' must not include wildcard "*"');
+        }
+        hasWildcard = true;
+      } else if (!KEBAB_RE.test(entry)) {
+        errors.push(ctx + '.' + field + '[' + i + '] must be a kebab-case runtime id or "*"');
+      }
+    }
+    if (hasWildcard && value.length > 1) {
+      errors.push(ctx + '.' + field + ' wildcard "*" cannot be mixed with runtime ids');
+    }
+  };
+
+  validateRuntimeArray('supported', { allowWildcard: true });
+  validateRuntimeArray('unsupported', { allowWildcard: false });
+
+  if (runtimeCompat.notes !== undefined) {
+    if (typeof runtimeCompat.notes !== 'object' || runtimeCompat.notes === null || Array.isArray(runtimeCompat.notes)) {
+      errors.push(ctx + '.notes must be an object of runtime id to string if present');
+    } else {
+      for (const [key, value] of Object.entries(runtimeCompat.notes)) {
+        if (key !== RUNTIME_COMPAT_WILDCARD && !KEBAB_RE.test(key)) {
+          errors.push(ctx + '.notes key "' + key + '" must be a kebab-case runtime id or "*"');
+        }
+        if (typeof value !== 'string' || value.length === 0) {
+          errors.push(ctx + '.notes["' + key + '"] must be a non-empty string');
+        }
+      }
+    }
+  }
+
+  return errors;
+}
+
 function validateFeatureBody(cap) {
   const errors = [];
+
+  errors.push(...validateRuntimeCompat(cap.id || '(unknown)', cap.runtimeCompat));
 
   if (!Array.isArray(cap.skills)) {
     errors.push('skills must be an array of strings');
@@ -847,6 +939,78 @@ function validateRuntimeBody(cap) {
   return errors;
 }
 
+function materializeHookFragments(cap, capDir) {
+  const errors = [];
+  const hookGroups = [
+    ['steps', Array.isArray(cap.steps) ? cap.steps : []],
+    ['contributions', Array.isArray(cap.contributions) ? cap.contributions : []],
+  ];
+
+  for (const [groupName, hooks] of hookGroups) {
+    for (let i = 0; i < hooks.length; i++) {
+      const hook = hooks[i];
+      if (!hook || typeof hook !== 'object' || Array.isArray(hook)) continue;
+      const fragment = hook.fragment;
+      if (!fragment || typeof fragment !== 'object' || Array.isArray(fragment)) continue;
+      if (typeof fragment.inline === 'string') continue;
+      if (typeof fragment.path !== 'string') continue;
+
+      const abs = path.resolve(capDir, fragment.path);
+      const capRoot = path.resolve(capDir);
+      if (abs !== capRoot && !abs.startsWith(capRoot + path.sep)) {
+        errors.push(
+          cap.id + '/' + groupName + '[' + i + '].fragment.path escapes capability directory: ' +
+          fragment.path,
+        );
+        continue;
+      }
+
+      try {
+        fragment.inline = fs.readFileSync(abs, 'utf8');
+      } catch (err) {
+        errors.push(
+          cap.id + '/' + groupName + '[' + i + '].fragment.path could not be read: ' +
+          fragment.path + ' (' + err.message + ')',
+        );
+      }
+    }
+  }
+
+  return errors;
+}
+
+function validateFragment(fragment, prefix) {
+  const errors = [];
+
+  if (typeof fragment !== 'object' || fragment === null || Array.isArray(fragment)) {
+    errors.push(prefix + ' must be an object with path or inline key');
+    return errors;
+  }
+
+  const hasPath = Object.prototype.hasOwnProperty.call(fragment, 'path');
+  const hasInline = Object.prototype.hasOwnProperty.call(fragment, 'inline');
+  if (!hasPath && !hasInline) {
+    errors.push(prefix + ' must have a "path" or "inline" key');
+  }
+  if (hasInline) {
+    const inline = fragment.inline;
+    if (typeof inline !== 'string') {
+      errors.push(prefix + '.inline must be a string');
+    } else if (inline === '') {
+      errors.push(prefix + '.inline must be a non-empty string');
+    }
+  }
+  // S1: fragment.path traversal guard — must be a relative path with no ".." segments
+  if (hasPath) {
+    const p = fragment.path;
+    if (typeof p !== 'string' || p === '' || path.isAbsolute(p) || p.split(/[\\/]/).includes('..')) {
+      errors.push(prefix + '.path must be a relative path with no ".." segments');
+    }
+  }
+
+  return errors;
+}
+
 /**
  * Validate a single step entry.
  *
@@ -926,6 +1090,10 @@ function validateStep(step, prefix, declaredSkills, declaredAgents) {
     errors.push(prefix + '.when must be a string if present');
   }
 
+  if (step.fragment !== undefined) {
+    errors.push(...validateFragment(step.fragment, prefix + '.fragment'));
+  }
+
   if (!VALID_ON_ERROR.has(step.onError)) {
     errors.push(prefix + '.onError must be "skip" or "halt" (got: ' + step.onError + ')');
   }
@@ -944,22 +1112,23 @@ function validateContribution(contrib, prefix) {
     errors.push(prefix + '.into must be a string (agent role name)');
   }
 
-  if (typeof contrib.fragment !== 'object' || contrib.fragment === null) {
-    errors.push(prefix + '.fragment must be an object with path or inline key');
+  if (!Array.isArray(contrib.produces)) {
+    errors.push(prefix + '.produces must be an array');
   } else {
-    const hasPath = Object.prototype.hasOwnProperty.call(contrib.fragment, 'path');
-    const hasInline = Object.prototype.hasOwnProperty.call(contrib.fragment, 'inline');
-    if (!hasPath && !hasInline) {
-      errors.push(prefix + '.fragment must have a "path" or "inline" key');
-    }
-    // S1: fragment.path traversal guard — must be a relative path with no ".." segments
-    if (hasPath) {
-      const p = contrib.fragment.path;
-      if (typeof p !== 'string' || p === '' || path.isAbsolute(p) || p.split(/[\\/]/).includes('..')) {
-        errors.push(prefix + '.fragment.path must be a relative path with no ".." segments');
-      }
+    for (const p of contrib.produces) {
+      if (typeof p !== 'string') errors.push(prefix + '.produces entries must be strings');
     }
   }
+
+  if (!Array.isArray(contrib.consumes)) {
+    errors.push(prefix + '.consumes must be an array');
+  } else {
+    for (const c of contrib.consumes) {
+      if (typeof c !== 'string') errors.push(prefix + '.consumes entries must be strings');
+    }
+  }
+
+  errors.push(...validateFragment(contrib.fragment, prefix + '.fragment'));
 
   if (contrib.when !== undefined && typeof contrib.when !== 'string') {
     errors.push(prefix + '.when must be a string if present');
@@ -1146,8 +1315,38 @@ function validateConsumesGlobal(capMap) {
     }
   }
 
-  // TODO: duplicate-producer invariant — if two capability steps produce the same artifact
-  // at the same point, that's ambiguous. Detect and reject as a follow-up.
+  // Duplicate-producer invariant: two capability steps may not produce the same artifact
+  // at the same Loop Extension Point. Same-point dual production makes data-flow resolution
+  // ambiguous and is rejected at gen time (Decision #6).
+  for (const artifact of Object.keys(capHookProducers)) {
+    if (artifact === '__proto__' || artifact === 'constructor' || artifact === 'prototype') continue;
+    const producers = capHookProducers[artifact];
+    // Group by pointIdx
+    const byPoint = Object.create(null);
+    for (const entry of producers) {
+      if (!byPoint[entry.pointIdx]) byPoint[entry.pointIdx] = [];
+      byPoint[entry.pointIdx].push(entry);
+    }
+    for (const pointIdxStr of Object.keys(byPoint)) {
+      const group = byPoint[pointIdxStr];
+      // Count distinct (capId, stepIdx) producer steps — a single step listing the same
+      // artifact twice in its produces array pushes duplicate entries but represents only
+      // ONE producer step and must not false-positive the cross-step gate.
+      const distinctProducers = new Set(group.map((e) => e.capId + ' ' + e.stepIdx));
+      if (distinctProducers.size >= 2) {
+        const pointIdx = Number(pointIdxStr);
+        const pointName = POINT_ORDER[pointIdx];
+        const capIds = [...new Set(group.map((e) => e.capId))].sort().join(', ');
+        throw new Error(
+          'duplicate-producer invariant violated: artifact "' + artifact + '" is produced by ' +
+          'two or more capability steps at the same Loop Extension Point "' + pointName + '" ' +
+          '(capabilities: ' + capIds + '). ' +
+          'Two capability steps producing the same artifact at the same Loop Extension Point ' +
+          'makes data-flow resolution ambiguous and is rejected at gen time.',
+        );
+      }
+    }
+  }
 
   // Now check every hook step's consumes.
   // Self-consume rule: a step H cannot satisfy its own consumes[A] from its own produces[A].
@@ -1297,6 +1496,39 @@ function validateCrossCapability(capMap, centralKeys) {
     }
   }
 
+  // runtimeCompat: explicit runtime ids must reference runtime capabilities.
+  // The wildcard "*" means descriptor-backed runtimes are supported by default.
+  const runtimeIds = new Set();
+  for (const [id, cap] of capMap) {
+    if (cap.role === 'runtime') runtimeIds.add(id);
+  }
+  for (const [capId, cap] of capMap) {
+    if (cap.role !== 'feature' || typeof cap.runtimeCompat !== 'object' || cap.runtimeCompat === null) continue;
+    for (const field of ['supported', 'unsupported']) {
+      const entries = Array.isArray(cap.runtimeCompat[field]) ? cap.runtimeCompat[field] : [];
+      for (const runtimeId of entries) {
+        if (runtimeId === RUNTIME_COMPAT_WILDCARD) continue;
+        if (typeof runtimeId !== 'string' || runtimeId.length === 0) continue;
+        if (!runtimeIds.has(runtimeId)) {
+          errors.push(
+            'capability "' + capId + '" runtimeCompat.' + field +
+            ' references unknown runtime "' + runtimeId + '"',
+          );
+        }
+      }
+    }
+    if (cap.runtimeCompat.notes && typeof cap.runtimeCompat.notes === 'object') {
+      for (const runtimeId of Object.keys(cap.runtimeCompat.notes)) {
+        if (runtimeId === RUNTIME_COMPAT_WILDCARD) continue;
+        if (!runtimeIds.has(runtimeId)) {
+          errors.push(
+            'capability "' + capId + '" runtimeCompat.notes references unknown runtime "' + runtimeId + '"',
+          );
+        }
+      }
+    }
+  }
+
   // requires: acyclic
   const cycleErrors = detectRequiresCycles(capMap);
   errors.push(...cycleErrors);
@@ -1384,14 +1616,7 @@ function computeRequiresClosure(id, capMap) {
 
 // ─── Topological ordering ─────────────────────────────────────────────────────
 
-/**
- * Topologically sort steps at a given point by produces/consumes.
- * Capability-id tiebreak for determinism.
- *
- * @param {{ capId: string, step: object }[]} entries
- * @returns {{ capId: string, step: object }[]}
- */
-function topoSortSteps(entries) {
+function topoSortHookEntries(entries, hookKey, hookKind) {
   if (entries.length <= 1) return entries;
 
   // Build adjacency: entry A must come before entry B if B consumes something A produces
@@ -1400,10 +1625,10 @@ function topoSortSteps(entries) {
   const adj = Array.from({ length: n }, () => []);
 
   for (let i = 0; i < n; i++) {
-    const producesI = new Set(entries[i].step.produces || []);
+    const producesI = new Set(entries[i][hookKey].produces || []);
     for (let j = 0; j < n; j++) {
       if (i === j) continue;
-      const consumesJ = entries[j].step.consumes || [];
+      const consumesJ = entries[j][hookKey].consumes || [];
       for (const artifact of consumesJ) {
         if (producesI.has(artifact)) {
           adj[i].push(j);
@@ -1441,13 +1666,28 @@ function topoSortSteps(entries) {
   if (result.length < n) {
     const sortedIds = entries.map((e) => e.capId).join(', ');
     throw new Error(
-      'produces/consumes cycle detected in steps at point "' +
-      (entries[0] && entries[0].step ? entries[0].step.point : '?') +
+      'produces/consumes cycle detected in ' + hookKind + ' at point "' +
+      (entries[0] && entries[0][hookKey] ? entries[0][hookKey].point : '?') +
       '" among capabilities [' + sortedIds + ']: ' +
       'a cycle in hook produces/consumes prevents deterministic ordering',
     );
   }
   return result;
+}
+
+/**
+ * Topologically sort steps at a given point by produces/consumes.
+ * Capability-id tiebreak for determinism.
+ *
+ * @param {{ capId: string, step: object }[]} entries
+ * @returns {{ capId: string, step: object }[]}
+ */
+function topoSortSteps(entries) {
+  return topoSortHookEntries(entries, 'step', 'steps');
+}
+
+function topoSortContributions(entries) {
+  return topoSortHookEntries(entries, 'contrib', 'contributions');
 }
 
 // ─── ADR-857 Phase 4a: Derived views ─────────────────────────────────────────
@@ -1768,6 +2008,12 @@ function loadAndValidate(centralKeys, capabilitiesDir) {
       continue;
     }
 
+    const fragmentErrors = materializeHookFragments(cap, path.dirname(capPath));
+    if (fragmentErrors.length > 0) {
+      for (const e of fragmentErrors) errors.push(folderId + '/capability.json: ' + e);
+      continue;
+    }
+
     capMap.set(cap.id, cap);
   }
 
@@ -1892,14 +2138,9 @@ function buildRegistry(capMap) {
       ...e.step,
     }));
 
-    // Contributions: group by into, then capability-id order within group
-    const contribs = pointContribs.get(point);
-    contribs.sort((a, b) => {
-      const intoCompare = a.contrib.into.localeCompare(b.contrib.into);
-      if (intoCompare !== 0) return intoCompare;
-      return a.capId.localeCompare(b.capId);
-    });
-    byLoopPoint[point].contributions = contribs.map((e) => ({
+    // Contributions: topological sort by produces/consumes, cap-id tiebreak
+    const sortedContribs = topoSortContributions(pointContribs.get(point));
+    byLoopPoint[point].contributions = sortedContribs.map((e) => ({
       capId: e.capId,
       ...e.contrib,
     }));
@@ -2238,6 +2479,7 @@ module.exports = {
   validateConsumesGlobal,
   validateCrossCapability,
   classifyCrossErrors,
+  loadCentralConfigKeys,
   loadAndValidate,
   buildRegistry,
   serializeRegistry,
@@ -2258,6 +2500,7 @@ module.exports = {
   runConsistencyGate,
   // ADR-959: command entry validation
   validateCommandEntry,
+  validateRuntimeCompat,
   // ADR-1016 phase 5a: runtime body validators + closed-vocab sets
   validateConfigHome,
   validateArtifactLayout,

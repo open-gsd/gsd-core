@@ -4,9 +4,9 @@
  * Runtime artifact layout module — resolves the artifact directory shapes
  * (commands, agents, skills) for each supported runtime.
  *
- * grok is intentionally absent: it is in runtime-homes.cjs but not wired
- * here. The TypeError on unknown runtime is the loud-fail signal that a
- * runtime was added to the homes list without a layout entry.
+ * grok is intentionally absent: it is in runtime-homes.cjs but has no runtime
+ * capability descriptor. The TypeError on unknown runtime is the loud-fail
+ * signal that a runtime was added without an artifact layout descriptor.
  *
  * ADR-457 build-at-publish: the hand-written bin/lib/runtime-artifact-layout.cjs
  * collapsed to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
@@ -169,16 +169,6 @@ function findAgentsSourceRoot(runtimeConfigDir?: string): string {
 
   throw new Error(`findAgentsSourceRoot: could not locate agents/ from ${__dirname}`);
 }
-
-// ---------------------------------------------------------------------------
-// Allowlisted runtimes
-// ---------------------------------------------------------------------------
-
-const ALLOWED_RUNTIMES = new Set([
-  'claude', 'cursor', 'gemini', 'codex', 'copilot', 'antigravity',
-  'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy',
-  'cline', 'kimi', 'opencode', 'kilo',
-]);
 
 // ---------------------------------------------------------------------------
 // Layout table builders
@@ -385,7 +375,11 @@ interface ArtifactLayoutDescriptor {
 }
 
 /** Lazy registry accessor — mirrors pattern from 5b/5c (runtime-homes.cts). */
-function getRegistry(): { runtimes: Record<string, { runtime?: { artifactLayout?: ArtifactLayoutDescriptor } }> } {
+interface RegistryLike {
+  runtimes: Record<string, { runtime?: { artifactLayout?: ArtifactLayoutDescriptor } }>;
+}
+
+function getRegistry(): RegistryLike {
   return _require('./capability-registry.cjs') as {
     runtimes: Record<string, { runtime?: { artifactLayout?: ArtifactLayoutDescriptor } }>;
   };
@@ -434,19 +428,24 @@ function dispatchKindEntry(entry: ArtifactKindDescriptor, runtime: string, confi
  * instead of a hardcoded switch statement.
  */
 function resolveRuntimeArtifactLayout(runtime: string, configDir: string, scope: 'local' | 'global' = 'global'): Layout {
+  return resolveRuntimeArtifactLayoutFromRegistry(getRegistry(), runtime, configDir, scope);
+}
+
+function resolveRuntimeArtifactLayoutFromRegistry(
+  registry: RegistryLike,
+  runtime: string,
+  configDir: string,
+  scope: 'local' | 'global' = 'global',
+): Layout {
   if (typeof configDir !== 'string' || configDir === '') {
     throw new TypeError('configDir must be a non-empty string');
   }
   if (scope !== 'local' && scope !== 'global') {
     throw new TypeError('scope must be "local" or "global"');
   }
-  if (!ALLOWED_RUNTIMES.has(runtime)) {
-    throw new TypeError(`Unknown runtime: '${runtime}' — add to runtime-artifact-layout.cjs table`);
-  }
 
-  const desc = getRegistry().runtimes[runtime]?.runtime?.artifactLayout;
+  const desc = registry.runtimes[runtime]?.runtime?.artifactLayout;
   if (!desc) {
-    // Runtime is in ALLOWED_RUNTIMES but has no descriptor — reproduce old default: throw.
     throw new TypeError(`Unknown runtime: '${runtime}' — add to runtime-artifact-layout.cjs table`);
   }
 
@@ -456,4 +455,4 @@ function resolveRuntimeArtifactLayout(runtime: string, configDir: string, scope:
   return { runtime, configDir, scope, kinds };
 }
 
-export = { resolveRuntimeArtifactLayout, findInstallSourceRoot, getInstallExports };
+export = { resolveRuntimeArtifactLayout, resolveRuntimeArtifactLayoutFromRegistry, findInstallSourceRoot, getInstallExports };

@@ -288,6 +288,7 @@ describe('resolveCapabilityState — UI capability with real registry', () => {
     assert.ok(uiCap, 'ui capability should be present');
     assert.strictEqual(uiCap.installed, true);
     assert.strictEqual(uiCap.surfaced, true);
+    assert.strictEqual(uiCap.enabled, true);
   });
 
   test('UI cap: installed=false when ui-review missing from installedSkills', () => {
@@ -301,6 +302,7 @@ describe('resolveCapabilityState — UI capability with real registry', () => {
     const uiCap = result.capabilities.find((c) => c.id === 'ui');
     assert.ok(uiCap);
     assert.strictEqual(uiCap.installed, false);
+    assert.strictEqual(uiCap.enabled, false);
   });
 
   test('UI cap: surfaced=false when ui-review missing from surfacedSkills', () => {
@@ -314,13 +316,14 @@ describe('resolveCapabilityState — UI capability with real registry', () => {
     const uiCap = result.capabilities.find((c) => c.id === 'ui');
     assert.ok(uiCap);
     assert.strictEqual(uiCap.surfaced, false);
+    assert.strictEqual(uiCap.enabled, false);
   });
 
   test('UI cap step hook: workflow.ui_phase true → active=true', () => {
     const result = resolveCapabilityState({
       registry: realRegistry,
       installedSkills: '*',
-      surfacedSkills: new Set(),
+      surfacedSkills: new Set(['ui-phase', 'ui-review']),
       config: { workflow: { ui_phase: true, ui_review: true, ui_safety_gate: true } },
       cwd: tmpProjectDir,
     });
@@ -331,7 +334,27 @@ describe('resolveCapabilityState — UI capability with real registry', () => {
       (h) => h.kind === 'step' && h.when === 'workflow.ui_phase',
     );
     assert.ok(planPreStep, 'should have plan:pre step with when=workflow.ui_phase');
+    assert.strictEqual(planPreStep.configured, true);
     assert.strictEqual(planPreStep.active, true);
+  });
+
+  test('UI cap step hook: surfaced=false and workflow.ui_phase true → configured=true but active=false', () => {
+    const result = resolveCapabilityState({
+      registry: realRegistry,
+      installedSkills: '*',
+      surfacedSkills: new Set(),
+      config: { workflow: { ui_phase: true, ui_review: true, ui_safety_gate: true } },
+      cwd: tmpProjectDir,
+    });
+    const uiCap = result.capabilities.find((c) => c.id === 'ui');
+    assert.ok(uiCap);
+    assert.strictEqual(uiCap.enabled, false);
+    const planPreStep = uiCap.hooks.find(
+      (h) => h.kind === 'step' && h.when === 'workflow.ui_phase',
+    );
+    assert.ok(planPreStep, 'should have plan:pre step with when=workflow.ui_phase');
+    assert.strictEqual(planPreStep.configured, true);
+    assert.strictEqual(planPreStep.active, false);
   });
 
   test('UI cap step hook: workflow.ui_phase false → active=false', () => {
@@ -348,6 +371,7 @@ describe('resolveCapabilityState — UI capability with real registry', () => {
       (h) => h.kind === 'step' && h.when === 'workflow.ui_phase',
     );
     assert.ok(planPreStep, 'should have plan:pre step with when=workflow.ui_phase');
+    assert.strictEqual(planPreStep.configured, false);
     assert.strictEqual(planPreStep.active, false);
   });
 
@@ -355,7 +379,7 @@ describe('resolveCapabilityState — UI capability with real registry', () => {
     const result = resolveCapabilityState({
       registry: realRegistry,
       installedSkills: '*',
-      surfacedSkills: new Set(),
+      surfacedSkills: new Set(['ui-phase', 'ui-review']),
       config: { workflow: { ui_phase: true, ui_review: true, ui_safety_gate: true } },
       cwd: tmpProjectDir,
     });
@@ -365,6 +389,7 @@ describe('resolveCapabilityState — UI capability with real registry', () => {
       (h) => h.kind === 'gate' && h.when === 'workflow.ui_safety_gate',
     );
     assert.ok(safetyGate, 'should have gate with when=workflow.ui_safety_gate');
+    assert.strictEqual(safetyGate.configured, true);
     assert.strictEqual(safetyGate.active, true);
   });
 
@@ -382,6 +407,7 @@ describe('resolveCapabilityState — UI capability with real registry', () => {
       (h) => h.kind === 'gate' && h.when === 'workflow.ui_safety_gate',
     );
     assert.ok(safetyGate, 'should have gate with when=workflow.ui_safety_gate');
+    assert.strictEqual(safetyGate.configured, false);
     assert.strictEqual(safetyGate.active, false);
   });
 });
@@ -643,6 +669,7 @@ function runCapabilityState(cwd, configDir) {
 describe('cmdCapabilityState — end-to-end via gsd-tools CLI', () => {
   let tmpConfigDir;
   let tmpConfigDirCore;
+  let tmpConfigDirUiDisabled;
 
   before(() => {
     // Tmp runtime config dir without .gsd-profile (defaults to 'full')
@@ -651,11 +678,24 @@ describe('cmdCapabilityState — end-to-end via gsd-tools CLI', () => {
     // Tmp runtime config dir with core profile marker
     tmpConfigDirCore = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-state-cfg-core-'));
     fs.writeFileSync(path.join(tmpConfigDirCore, '.gsd-profile'), 'core\n', 'utf8');
+
+    tmpConfigDirUiDisabled = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-state-cfg-ui-disabled-'));
+    fs.writeFileSync(
+      path.join(tmpConfigDirUiDisabled, '.gsd-surface.json'),
+      JSON.stringify({
+        baseProfile: 'full',
+        disabledClusters: ['ui'],
+        explicitAdds: [],
+        explicitRemoves: [],
+      }, null, 2),
+      'utf8',
+    );
   });
 
   after(() => {
     cleanup(tmpConfigDir);
     cleanup(tmpConfigDirCore);
+    cleanup(tmpConfigDirUiDisabled);
   });
 
   test('emits envelope with runtimeConfigDir and capabilities array', () => {
@@ -684,5 +724,22 @@ describe('cmdCapabilityState — end-to-end via gsd-tools CLI', () => {
     assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}: ${result.stderr}`);
     const envelope = JSON.parse(result.stdout);
     assert.strictEqual(envelope.runtimeConfigDir, tmpConfigDir);
+  });
+
+  test('surface-disabled UI capability reports enabled=false and inactive hooks', () => {
+    const result = runCapabilityState(tmpProjectDir, tmpConfigDirUiDisabled);
+    assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}: ${result.stderr}`);
+    const envelope = JSON.parse(result.stdout);
+    const uiCap = envelope.capabilities.find((c) => c.id === 'ui');
+    assert.ok(uiCap, 'ui capability should be present in output');
+    assert.strictEqual(uiCap.installed, true, 'full base profile still installs UI');
+    assert.strictEqual(uiCap.surfaced, false, 'surface disables UI capability skills');
+    assert.strictEqual(uiCap.enabled, false, 'disabled surface must disable the capability');
+    const planPreStep = uiCap.hooks.find(
+      (h) => h.kind === 'step' && h.when === 'workflow.ui_phase',
+    );
+    assert.ok(planPreStep, 'ui plan step should be present in diagnostic state');
+    assert.strictEqual(planPreStep.configured, true, 'project config/schema still configures UI on');
+    assert.strictEqual(planPreStep.active, false, 'effective hook activity must match workflow dispatch');
   });
 });

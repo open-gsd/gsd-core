@@ -197,11 +197,14 @@ function capturePhaseComplete(cwd, phaseNum) {
   // directly and redirect output capture.
   const chunks = [];
   const origWrite = process.stdout.write.bind(process.stdout);
+  const origErrWrite = process.stderr.write.bind(process.stderr);
   process.stdout.write = (chunk) => { chunks.push(chunk); return true; };
+  process.stderr.write = () => true;
   try {
     cmdPhaseComplete(cwd, phaseNum, false);
   } finally {
     process.stdout.write = origWrite;
+    process.stderr.write = origErrWrite;
   }
   return chunks.join('');
 }

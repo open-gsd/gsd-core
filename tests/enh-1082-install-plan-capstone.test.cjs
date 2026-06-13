@@ -26,6 +26,7 @@ const EXPECTED = {
     hookEvents: 'claude',
     extendedHookEvents: ['SubagentStop', 'Stop', 'PreCompact', 'FileChanged'],
     hooksSurface: 'settings-json',
+    sandboxTier: 'none',
   },
   codex: {
     runtime: 'codex',
@@ -35,6 +36,7 @@ const EXPECTED = {
     hookEvents: 'claude',
     extendedHookEvents: [],
     hooksSurface: 'codex-hooks-json',
+    sandboxTier: 'codex-agent-sandbox',
   },
   antigravity: {
     runtime: 'antigravity',
@@ -44,6 +46,7 @@ const EXPECTED = {
     hookEvents: 'gemini',
     extendedHookEvents: [],
     hooksSurface: 'settings-json',
+    sandboxTier: 'none',
   },
   gemini: {
     runtime: 'gemini',
@@ -53,6 +56,7 @@ const EXPECTED = {
     hookEvents: 'gemini',
     extendedHookEvents: ['BeforeAgent', 'AfterAgent', 'BeforeModel'],
     hooksSurface: 'settings-json',
+    sandboxTier: 'none',
   },
   cursor: {
     runtime: 'cursor',
@@ -62,6 +66,7 @@ const EXPECTED = {
     hookEvents: 'claude',
     extendedHookEvents: [],
     hooksSurface: 'cursor-hooks-json',
+    sandboxTier: 'none',
   },
   opencode: {
     runtime: 'opencode',
@@ -71,6 +76,7 @@ const EXPECTED = {
     hookEvents: undefined,
     extendedHookEvents: [],
     hooksSurface: 'none',
+    sandboxTier: 'none',
   },
   kilo: {
     runtime: 'kilo',
@@ -80,6 +86,7 @@ const EXPECTED = {
     hookEvents: undefined,
     extendedHookEvents: [],
     hooksSurface: 'none',
+    sandboxTier: 'none',
   },
   copilot: {
     runtime: 'copilot',
@@ -89,6 +96,7 @@ const EXPECTED = {
     hookEvents: undefined,
     extendedHookEvents: [],
     hooksSurface: 'copilot-inline',
+    sandboxTier: 'none',
   },
   augment: {
     runtime: 'augment',
@@ -98,6 +106,7 @@ const EXPECTED = {
     hookEvents: 'claude',
     extendedHookEvents: [],
     hooksSurface: 'settings-json',
+    sandboxTier: 'none',
   },
   trae: {
     runtime: 'trae',
@@ -107,6 +116,7 @@ const EXPECTED = {
     hookEvents: undefined,
     extendedHookEvents: [],
     hooksSurface: 'none',
+    sandboxTier: 'none',
   },
   qwen: {
     runtime: 'qwen',
@@ -116,6 +126,7 @@ const EXPECTED = {
     hookEvents: 'claude',
     extendedHookEvents: ['SubagentStop', 'Stop', 'PreCompact'],
     hooksSurface: 'settings-json',
+    sandboxTier: 'none',
   },
   hermes: {
     runtime: 'hermes',
@@ -125,6 +136,7 @@ const EXPECTED = {
     hookEvents: 'claude',
     extendedHookEvents: [],
     hooksSurface: 'settings-json',
+    sandboxTier: 'none',
   },
   codebuddy: {
     runtime: 'codebuddy',
@@ -134,6 +146,7 @@ const EXPECTED = {
     hookEvents: 'claude',
     extendedHookEvents: [],
     hooksSurface: 'settings-json',
+    sandboxTier: 'none',
   },
   cline: {
     runtime: 'cline',
@@ -143,6 +156,7 @@ const EXPECTED = {
     hookEvents: undefined,
     extendedHookEvents: [],
     hooksSurface: 'cline-rules',
+    sandboxTier: 'none',
   },
   kimi: {
     runtime: 'kimi',
@@ -152,6 +166,7 @@ const EXPECTED = {
     hookEvents: undefined,
     extendedHookEvents: [],
     hooksSurface: 'none',
+    sandboxTier: 'none',
   },
   windsurf: {
     runtime: 'windsurf',
@@ -161,6 +176,7 @@ const EXPECTED = {
     hookEvents: undefined,
     extendedHookEvents: [],
     hooksSurface: 'none',
+    sandboxTier: 'none',
   },
 };
 
