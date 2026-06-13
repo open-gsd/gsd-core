@@ -35,7 +35,7 @@ const { detectSubRepos } = coreUtilsModule;
 import { CONFIG_DEFAULTS as CANONICAL_CONFIG_DEFAULTS, normalizeLegacyKeys } from './configuration.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configSchema = require('./config-schema.cjs');
-const { VALID_CONFIG_KEYS, DYNAMIC_KEY_PATTERNS, isValidConfigKey: _isValidConfigKeyFn } = configSchema;
+const { VALID_CONFIG_KEYS, DYNAMIC_KEY_PATTERNS, isCentralConfigKey: _isCentralConfigKeyFn } = configSchema;
 import { KNOWN_RUNTIMES, KNOWN_PROVIDERS } from './model-catalog.cjs';
 // ─── Federated Config (ADR-857 phase 3b) ─────────────────────────────────────
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -358,7 +358,7 @@ function _applyFederatedOverlay(
   if (!_fedRegistrySchema || typeof _fedRegistrySchema !== 'object') return baseConfig;
   const _fedOverlay = mergeFederatedConfig({
     configSchema: _fedRegistrySchema,
-    isCentralKey: (key: string) => _isValidConfigKeyFn(key),
+    isCentralKey: (key: string) => _isCentralConfigKeyFn(key),
     userConfig,
   });
   // True no-op: if no federated keys, return UNCHANGED (byte-identical, no clone)
@@ -492,7 +492,7 @@ function loadConfig(cwd: string, options: Record<string, unknown> = {}): Record<
       // Internal keys loadConfig reads but config-set doesn't expose
       'model_overrides', 'context_window', 'resolve_model_ids', 'claude_md_path', 'effort', 'fast_mode',
       // Deprecated keys (still accepted for migration, not in config-set)
-      'depth', 'multiRepo', 'branching_strategy',
+      'depth', 'multiRepo', 'branching_strategy', 'research',
     ]);
 
     // FIX 3: Compute federated overlay BEFORE the unknown-key warning, so that
@@ -504,7 +504,7 @@ function loadConfig(cwd: string, options: Record<string, unknown> = {}): Record<
       if (_fedRegistrySchemaEarly && typeof _fedRegistrySchemaEarly === 'object') {
         const _earlyOverlay = mergeFederatedConfig({
           configSchema: _fedRegistrySchemaEarly,
-          isCentralKey: (key: string) => _isValidConfigKeyFn(key),
+          isCentralKey: (key: string) => _isCentralConfigKeyFn(key),
           userConfig: parsed,
         });
         _preWarningFedValidKeys = _earlyOverlay.validKeys;
@@ -631,7 +631,7 @@ function loadConfig(cwd: string, options: Record<string, unknown> = {}): Record<
         if (_fedRegistrySchema && typeof _fedRegistrySchema === 'object') {
           const _fedOverlay = mergeFederatedConfig({
             configSchema: _fedRegistrySchema,
-            isCentralKey: (key: string) => _isValidConfigKeyFn(key),
+            isCentralKey: (key: string) => _isCentralConfigKeyFn(key),
             userConfig: parsed,
           });
           // Apply dotted-path values (e.g. "workflow.ui_phase" → _baseConfig.workflow.ui_phase)
@@ -655,8 +655,8 @@ function loadConfig(cwd: string, options: Record<string, unknown> = {}): Record<
         return loadConfig(cwd, { workstream: null });
       }
       // FIX 2: Apply the federated overlay on the no-config path.
-      // With the current registry (all keys central), _applyFederatedOverlay returns
-      // `defaults` UNCHANGED (true no-op, preserves byte-identical output).
+      // Migrated Capability keys are surfaced from the generated registry even
+      // when the project has no config.json, so schema defaults still apply.
       try {
         return _applyFederatedOverlay(defaults, {});
       } catch {

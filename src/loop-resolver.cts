@@ -40,6 +40,10 @@ import configLoaderModule = require('./config-loader.cjs');
 const { loadConfig } = configLoaderModule;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+import capabilityStateModule = require('./capability-state.cjs');
+const { resolveCapabilityRuntimeState } = capabilityStateModule;
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspaceMod = require('./planning-workspace.cjs');
 const { planningDir, planningRoot } = planningWorkspaceMod;
 
@@ -263,6 +267,8 @@ interface ResolveLoopHooksInput {
   config: Record<string, unknown>;
   /** Optional cwd — enables raw config.json fallback reads (FIX 1 precedence level 2). */
   cwd?: string;
+  /** Optional capability-state map; when present, disabled capabilities do not render hooks. */
+  capabilityStatesById?: Map<string, { enabled?: boolean }> | Record<string, { enabled?: boolean }>;
 }
 
 interface ResolveLoopHooksResult {
@@ -286,7 +292,7 @@ interface ResolveLoopHooksResult {
  * resolved against `config`; active iff truthy. Inactive hooks are filtered out.
  */
 function resolveLoopHooks(input: ResolveLoopHooksInput): ResolveLoopHooksResult {
-  const { point, registry, config, cwd } = input;
+  const { point, registry, config, cwd, capabilityStatesById } = input;
 
   // Validate point
   const canonicalPoints = _getCanonicalPoints(registry);
@@ -322,6 +328,15 @@ function resolveLoopHooks(input: ResolveLoopHooksInput): ResolveLoopHooksResult 
     return _resolveActivationValue(when, config, cwd, registry);
   }
 
+  function isCapabilityEnabled(capId: string): boolean {
+    if (!capabilityStatesById) return true;
+    const state = capabilityStatesById instanceof Map
+      ? capabilityStatesById.get(capId)
+      : capabilityStatesById[capId];
+    if (!state) return false;
+    return state.enabled !== false;
+  }
+
   // Helper: safe string array
   function toStringArray(v: unknown): string[] {
     if (!Array.isArray(v)) return [];
@@ -342,8 +357,9 @@ function resolveLoopHooks(input: ResolveLoopHooksInput): ResolveLoopHooksResult 
   const steps: RawHook[] = Array.isArray(stepsRaw) ? (stepsRaw as RawHook[]) : [];
   for (const hook of steps) {
     if (!hook || typeof hook !== 'object') continue;
-    if (!isActive(hook)) continue;
     const capId = typeof hook['capId'] === 'string' ? hook['capId'] : '';
+    if (!isCapabilityEnabled(capId)) continue;
+    if (!isActive(hook)) continue;
     const ref = (typeof hook['ref'] === 'object' && hook['ref'] !== null)
       ? (hook['ref'] as HookRef)
       : undefined;
@@ -367,8 +383,9 @@ function resolveLoopHooks(input: ResolveLoopHooksInput): ResolveLoopHooksResult 
   const contributions: RawHook[] = Array.isArray(contributionsRaw) ? (contributionsRaw as RawHook[]) : [];
   for (const hook of contributions) {
     if (!hook || typeof hook !== 'object') continue;
-    if (!isActive(hook)) continue;
     const capId = typeof hook['capId'] === 'string' ? hook['capId'] : '';
+    if (!isCapabilityEnabled(capId)) continue;
+    if (!isActive(hook)) continue;
     const into = typeof hook['into'] === 'string' ? hook['into'] : undefined;
     const fragment = toFragment(hook['fragment']);
     const when = typeof hook['when'] === 'string' ? hook['when'] : undefined;
@@ -390,8 +407,9 @@ function resolveLoopHooks(input: ResolveLoopHooksInput): ResolveLoopHooksResult 
   const gates: RawHook[] = Array.isArray(gatesRaw) ? (gatesRaw as RawHook[]) : [];
   for (const hook of gates) {
     if (!hook || typeof hook !== 'object') continue;
-    if (!isActive(hook)) continue;
     const capId = typeof hook['capId'] === 'string' ? hook['capId'] : '';
+    if (!isCapabilityEnabled(capId)) continue;
+    if (!isActive(hook)) continue;
     const when = typeof hook['when'] === 'string' ? hook['when'] : undefined;
     const check = hook['check'] !== undefined ? hook['check'] : undefined;
     const blocking = typeof hook['blocking'] === 'boolean' ? hook['blocking'] : undefined;
@@ -522,24 +540,32 @@ function cmdLoopRenderHooks(
   cwd: string,
   point: string,
   raw: boolean,
-  _options: Record<string, unknown> = {},
+  options: Record<string, unknown> = {},
 ): void {
   if (!point) {
     coreError('loop render-hooks requires a <point> argument. Valid points: ' + CANONICAL_POINTS.join(', '));
     return;
   }
 
-  // Load registry at call time (generated file, not at module load time)
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const registry = require('./capability-registry.cjs') as Record<string, unknown>;
-  // FIX 1: Pass loadConfig result as `config` (level 1 of precedence);
-  // raw config.json reads (levels 2+3) happen per-hook inside _resolveActivationValue
-  // via the `cwd` argument passed to resolveLoopHooks.
-  const config = loadConfig(cwd);
+  const runtimeConfigDir = typeof options['configDir'] === 'string'
+    ? options['configDir']
+    : undefined;
+  const state = resolveCapabilityRuntimeState(cwd, runtimeConfigDir) as {
+    warnings?: string[];
+    registry: Record<string, unknown>;
+    config: Record<string, unknown>;
+    capabilities: Array<{ id: string; enabled?: boolean }>;
+  };
+  const registry = state.registry;
+  const config = state.config || loadConfig(cwd);
+  const capabilityStatesById = new Map<string, { enabled?: boolean }>();
+  for (const cap of state.capabilities || []) {
+    capabilityStatesById.set(cap.id, cap);
+  }
 
   let resolved: ResolveLoopHooksResult;
   try {
-    resolved = resolveLoopHooks({ point, registry, config, cwd });
+    resolved = resolveLoopHooks({ point, registry, config, cwd, capabilityStatesById });
   } catch (err: unknown) {
     const msg = (err instanceof Error) ? err.message : String(err);
     coreError(msg);
@@ -547,11 +573,19 @@ function cmdLoopRenderHooks(
   }
 
   const rendered = renderLoopHooks(resolved);
-  const envelope = {
+  const envelope: {
+    point: string;
+    activeHooks: ActiveHook[];
+    rendered: string;
+    warnings?: string[];
+  } = {
     point: resolved.point,
     activeHooks: resolved.activeHooks,
     rendered,
   };
+  if (state.warnings && state.warnings.length > 0) {
+    envelope.warnings = state.warnings;
+  }
 
   coreOutput(envelope, raw);
 }

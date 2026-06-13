@@ -130,6 +130,31 @@ In installed workflow prose, the same resolver surface appears as `gsd-tools loo
 
 The rendered JSON should include the active hook, the declared `ref`, and the materialised `fragment.inline`.
 
+To verify a runtime-specific surface, pass the same config directory that the runtime installation uses:
+
+```bash
+node gsd-core/bin/gsd-tools.cjs loop render-hooks plan:pre --config-dir ~/.claude --raw
+node gsd-core/bin/gsd-tools.cjs capability state --config-dir ~/.claude --raw
+```
+
+`capability state` is the diagnostic view for the same state that workflow dispatch consumes. For each Capability, `enabled` is true only when the Capability is both installed by the active profile and surfaced by the runtime surface. A hook's `configured` field reflects the `when` config key; `active` is true only when the Capability is enabled and the hook is configured on.
+
+## Own config in the Capability
+
+Declare feature config keys in the Capability manifest:
+
+```json
+"config": {
+  "workflow.example_enabled": {
+    "type": "boolean",
+    "default": true,
+    "description": "Enable the example planning step."
+  }
+}
+```
+
+Do not add migrated Capability keys to `gsd-core/bin/shared/config-schema.manifest.json`. The central schema remains for host/core keys; Capability-owned keys validate through the generated registry and are merged into `loadConfig` by the federated config overlay. Existing nested `.planning/config.json` values such as `{ "workflow": { "example_enabled": false } }` continue to override the Capability default.
+
 ## Wire the workflow through the registry
 
 Host workflows should ask the resolver for active hooks and then dispatch from the resolved data. Do not add new direct `config-get workflow.<feature>` checks to a host workflow for a migrated feature.

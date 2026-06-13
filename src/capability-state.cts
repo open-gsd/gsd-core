@@ -3,9 +3,8 @@
  *
  * Unified capability-state resolver that composes the three toggle systems
  * (install profile, runtime surface, config activation) into one per-capability
- * view. ADDITIVE — install/surface/workflows are untouched; this resolver is
- * exposed only as the `gsd-tools capability state` diagnostic, not yet consumed by
- * any workflow (workflow wiring is the phase-6 cutover).
+ * view. The loop resolver consumes this state so workflow dispatch and the
+ * `gsd-tools capability state` diagnostic share the same enablement answer.
  *
  * Exports (three things, mirroring loop-resolver):
  *   resolveCapabilityState({ registry, installedSkills, surfacedSkills, config, cwd })
@@ -19,9 +18,9 @@
  * cmdCapabilityState is the I/O handler.
  *
  * Dependencies (leaf modules only — no core.cjs circular risk):
- *   - node:path (used by _resolveActivationValue via loop-resolver)
+ *   - node:path
  *   - ./core.cjs               (output, error)
- *   - ./loop-resolver.cjs      (_resolveActivationValue — reuse the export)
+ *   - ./capability-activation.cjs (_resolveActivationValue)
  *   - ./install-profiles.cjs   (readActiveProfile, loadSkillsManifest, resolveProfile)
  *   - ./surface.cjs            (resolveSurface)
  *   - ./config-loader.cjs      (loadConfig)
@@ -36,8 +35,8 @@ import core = require('./core.cjs');
 const { output: coreOutput, error: coreError } = core;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import loopResolverMod = require('./loop-resolver.cjs');
-const { _resolveActivationValue } = loopResolverMod;
+import activationMod = require('./capability-activation.cjs');
+const { _resolveActivationValue } = activationMod;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoaderMod = require('./config-loader.cjs');
@@ -66,6 +65,8 @@ interface HookEntry {
    */
   when: unknown;
   /** Whether this hook is currently active based on config */
+  configured: boolean;
+  /** Whether this hook participates after capability enablement is applied */
   active: boolean;
 }
 
@@ -85,6 +86,8 @@ interface CapabilityStateEntry {
    * Vacuously true for capabilities with an empty skills array.
    */
   surfaced: boolean;
+  /** True when the capability is both installed and surfaced. */
+  enabled: boolean;
   /** Resolved hook activation state across steps, gates, and contributions */
   hooks: HookEntry[];
 }
@@ -105,6 +108,14 @@ interface ResolveCapabilityStateInput {
 }
 
 interface ResolveCapabilityStateResult {
+  capabilities: CapabilityStateEntry[];
+}
+
+interface ResolveCapabilityRuntimeStateResult {
+  runtimeConfigDir: string;
+  warnings: string[];
+  registry: Record<string, unknown>;
+  config: Record<string, unknown>;
   capabilities: CapabilityStateEntry[];
 }
 
@@ -197,6 +208,8 @@ function resolveCapabilityState(input: ResolveCapabilityStateInput): ResolveCapa
       surfaced = skills.every((s) => surfacedSkills.has(s));
     }
 
+    const enabled = installed && surfaced;
+
     // ── hooks ──────────────────────────────────────────────────────────────────
     // Collect from steps, gates, contributions. Each may have a `when` key.
     // Activation semantics (mirrors loop-resolver.isActive exactly):
@@ -216,19 +229,19 @@ function resolveCapabilityState(input: ResolveCapabilityStateInput): ResolveCapa
         const point = typeof h['point'] === 'string' ? h['point'] : '';
         // Carry the raw `when` value through for visibility
         const whenRaw: unknown = h['when'];
-        let active: boolean;
+        let configured: boolean;
         if (whenRaw === undefined || whenRaw === null) {
           // No `when` field → unconditional, always active
-          active = true;
+          configured = true;
         } else if (typeof whenRaw === 'string' && whenRaw.length > 0) {
           // Non-empty string `when` → resolve via _resolveActivationValue
-          active = _resolveActivationValue(whenRaw, config, cwd, registry);
+          configured = _resolveActivationValue(whenRaw, config, cwd, registry);
         } else {
           // Present-but-empty-string or non-string `when` → malformed, inactive
           // (mirrors loop-resolver.isActive: `typeof when !== 'string' || when.length === 0` → false)
-          active = false;
+          configured = false;
         }
-        hooks.push({ point, kind, when: whenRaw, active });
+        hooks.push({ point, kind, when: whenRaw, configured, active: enabled && configured });
       }
     }
 
@@ -240,7 +253,7 @@ function resolveCapabilityState(input: ResolveCapabilityStateInput): ResolveCapa
     processHooks(Array.isArray(gatesRaw) ? gatesRaw : [], 'gate');
     processHooks(Array.isArray(contributionsRaw) ? contributionsRaw : [], 'contribution');
 
-    results.push({ id: capId, tier, skills, installed, surfaced, hooks });
+    results.push({ id: capId, tier, skills, installed, surfaced, enabled, hooks });
   }
 
   // Deterministic sort by id for stable output across calls
@@ -295,12 +308,10 @@ function _resolveCommandsGsdDir(): string {
  * @param raw              Whether to emit raw JSON (core.output raw mode)
  * @param _options         Reserved for future use
  */
-function cmdCapabilityState(
+function resolveCapabilityRuntimeState(
   cwd: string,
   runtimeConfigDir: string | undefined | null,
-  raw: boolean,
-  _options: Record<string, unknown> = {},
-): void {
+): ResolveCapabilityRuntimeStateResult {
   const warnings: string[] = [];
 
   // Resolve runtimeConfigDir using the canonical runtime-homes resolver.
@@ -358,7 +369,6 @@ function cmdCapabilityState(
     // Genuine resolution failure — surface it so the caller is not misled.
     const msg = err instanceof Error ? err.message : String(err);
     warnings.push(`profile-resolution failed: ${msg}`);
-    coreError(`capability state: profile resolution failed: ${msg}`);
     // Degrade to empty set (not '*') so installed=false is reported accurately.
     installedSkills = new Set<string>();
   }
@@ -378,7 +388,6 @@ function cmdCapabilityState(
     // Genuine surface resolution failure — surface it so the caller is not misled.
     const msg = err instanceof Error ? err.message : String(err);
     warnings.push(`surface-resolution failed: ${msg}`);
-    coreError(`capability state: surface resolution failed: ${msg}`);
     surfacedSkills = new Set<string>();
   }
 
@@ -400,6 +409,26 @@ function cmdCapabilityState(
     cwd,
   });
 
+  return {
+    runtimeConfigDir: resolvedConfigDir,
+    warnings,
+    registry,
+    config,
+    capabilities: result.capabilities,
+  };
+}
+
+function cmdCapabilityState(
+  cwd: string,
+  runtimeConfigDir: string | undefined | null,
+  raw: boolean,
+  _options: Record<string, unknown> = {},
+): void {
+  const result = resolveCapabilityRuntimeState(cwd, runtimeConfigDir);
+  for (const warning of result.warnings) {
+    coreError(`capability state: ${warning}`);
+  }
+
   // Build envelope — include warnings array only when non-empty so the nominal
   // path keeps the output clean and callers can check `warnings` for degraded state.
   const envelope: {
@@ -407,11 +436,11 @@ function cmdCapabilityState(
     warnings?: string[];
     capabilities: CapabilityStateEntry[];
   } = {
-    runtimeConfigDir: resolvedConfigDir,
+    runtimeConfigDir: result.runtimeConfigDir,
     capabilities: result.capabilities,
   };
-  if (warnings.length > 0) {
-    envelope.warnings = warnings;
+  if (result.warnings.length > 0) {
+    envelope.warnings = result.warnings;
   }
 
   coreOutput(envelope, raw);
@@ -419,6 +448,7 @@ function cmdCapabilityState(
 
 export = {
   resolveCapabilityState,
+  resolveCapabilityRuntimeState,
   cmdCapabilityState,
   // Exported for tests
   _resolveCommandsGsdDir,

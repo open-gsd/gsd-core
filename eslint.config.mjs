@@ -78,6 +78,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/model-resolver.cjs',
       'gsd-core/bin/lib/loop-resolver.cjs',
       'gsd-core/bin/lib/capability-state.cjs',
+      'gsd-core/bin/lib/capability-activation.cjs',
       'gsd-core/bin/lib/federated-config.cjs',
       'gsd-core/bin/lib/installer-migrations/002-codex-legacy-hooks-json.cjs',
       'gsd-core/bin/lib/installer-migrations/003-rename-get-shit-done-to-gsd-core.cjs',

@@ -4,7 +4,7 @@
  * Regression tests for config key bugs:
  * #2530 — workflow._auto_chain_active is internal state, must not be in VALID_CONFIG_KEYS
  * #2531 — hooks.workflow_guard is used by hook and documented but missing from VALID_CONFIG_KEYS
- * #2532 — workflow.ui_review is used in autonomous.md but missing from VALID_CONFIG_KEYS
+ * #2532 — workflow.ui_review is used in autonomous.md but missing from config validation
  * #2533 — workflow.max_discuss_passes is used in discuss-phase.md but missing from VALID_CONFIG_KEYS
  * #2535 — sub_repos and plan_checker legacy keys need CONFIG_KEY_SUGGESTIONS migration hints
  * #3162 — resolve_model_ids missing from VALID_CONFIG_KEYS; workflow._auto_chain_active must be
@@ -15,7 +15,13 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
 
-const { VALID_CONFIG_KEYS, isValidConfigKey } = require('../gsd-core/bin/lib/config-schema.cjs');
+const {
+  VALID_CONFIG_KEYS,
+  isCentralConfigKey,
+  isValidConfigKey,
+} = require('../gsd-core/bin/lib/config-schema.cjs');
+
+const capabilityRegistry = require('../gsd-core/bin/lib/capability-registry.cjs');
 
 describe('VALID_CONFIG_KEYS correctness', () => {
   test('#2530: workflow._auto_chain_active must not be in VALID_CONFIG_KEYS (internal state)', () => {
@@ -32,10 +38,16 @@ describe('VALID_CONFIG_KEYS correctness', () => {
     );
   });
 
-  test('#2532: workflow.ui_review must be in VALID_CONFIG_KEYS (used in autonomous.md)', () => {
-    assert.ok(
-      VALID_CONFIG_KEYS.has('workflow.ui_review'),
-      'workflow.ui_review is read in autonomous.md via gsd-sdk query config-get'
+  test('#2532: workflow.ui_review must remain valid but is no longer centrally owned', () => {
+    assert.strictEqual(
+      isValidConfigKey('workflow.ui_review'),
+      true,
+      'workflow.ui_review is still user-facing config and must validate'
+    );
+    assert.strictEqual(
+      isCentralConfigKey('workflow.ui_review'),
+      false,
+      'workflow.ui_review is owned by the UI capability after ADR-857 Phase 6 cutover'
     );
   });
 
@@ -59,6 +71,19 @@ describe('VALID_CONFIG_KEYS correctness', () => {
       true,
       'workflow._auto_chain_active is written by plan-phase, execute-phase, discuss-phase, transition workflows via config-set'
     );
+  });
+});
+
+describe('ADR-857 Phase 6 capability config ownership', () => {
+  test('migrated capability config keys are valid through the registry, not central schema residue', () => {
+    const capabilityKeys = Object.keys(capabilityRegistry.configSchema || {}).sort();
+    assert.ok(capabilityKeys.length > 0, 'expected generated registry config schema keys');
+
+    for (const key of capabilityKeys) {
+      assert.strictEqual(isValidConfigKey(key), true, `${key} must remain accepted by config validation`);
+      assert.strictEqual(isCentralConfigKey(key), false, `${key} must be capability-owned, not central`);
+      assert.strictEqual(VALID_CONFIG_KEYS.has(key), false, `${key} must not remain in central VALID_CONFIG_KEYS`);
+    }
   });
 });
 
