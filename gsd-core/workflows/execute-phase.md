@@ -898,6 +898,39 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
    **If no plan in this wave used worktrees** (project-level `USE_WORKTREES=false` OR `WAVE_WORKTREE_PLANS` is empty): sequential agents already updated STATE.md and ROADMAP.md themselves — skip this step.
 
+5.75. **Execute:wave:post capability dispatch:**
+
+   After worktree merge, post-merge tests, and tracking updates, dispatch capability hooks registered at `execute:wave:post`. The primary hook is the `ui.safety-gate` gate from the UI capability — it verifies that any frontend files changed in this wave conform to the UI-SPEC contract.
+
+   ```bash
+   WAVE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:wave:post --raw)
+   ```
+
+   Read the `activeHooks` array from `WAVE_POST_HOOKS_JSON` in-context (do NOT pipe through a shell parser).
+
+   **If `activeHooks` is empty or absent:** Skip silently to step 5.8.
+
+   **For each active entry where `kind == "gate"` and `blocking == true`:**
+
+   Run the gate check:
+
+   ```bash
+   GATE_RESULT=$(gsd_run check ${hook.check.query} "${PHASE_NUMBER}" --raw)
+   ```
+
+   Read `block` from `GATE_RESULT`. If `block` is `true`:
+
+   - If `onError == "halt"`: stop wave completion and present the gate's error message. Do not proceed to step 5.8. Present:
+
+     ```
+     ⚠ Wave {N} blocked by capability gate ({hook.capId}): {GATE_RESULT.message}
+     Resolve before continuing to next wave.
+     ```
+
+   - If `onError == "skip"`: log the gate failure as a warning and continue.
+
+   **If no active blocking gate or all gates pass:** continue to step 5.8.
+
 5.8. **Handle test gate failures (when `WAVE_FAILURE_COUNT > 0`):**
 
    ```

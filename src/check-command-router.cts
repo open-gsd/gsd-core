@@ -465,6 +465,141 @@ function cmdUiPlanGate(projectDir: string, args: string[], raw: boolean): void {
   output(computeUiPlanGate(projectDir, phase), raw, undefined);
 }
 
+// ─── ui-safety-gate ───────────────────────────────────────────────────────────
+
+/**
+ * ui-safety-gate: post-wave check that verifies UI-changed files conform to
+ * the active UI-SPEC for the phase. Called after each wave by execute:wave:post.
+ *
+ * Returns JSON: { frontend: boolean, hasUiFiles: boolean, hasUiSpec: boolean, block: boolean, message?: string }
+ *   block = frontend && hasUiFiles && !hasUiSpec
+ *
+ * Args: check ui-safety-gate <phase>
+ * Invocable as: gsd_run check ui-safety-gate <phase>
+ *             or gsd_run check ui.safety-gate <phase> (dots normalized to hyphens)
+ *
+ * Uses checkUiPresence from ui-safety-gate.cjs — does NOT reimplement frontend detection.
+ * Checks whether any files changed in recent git history match frontend file patterns.
+ * Also checks whether a *-UI-SPEC.md exists in the phase directory (same as ui-plan-gate).
+ *
+ * Limitation: uses git diff HEAD~1..HEAD which covers only the last commit; in a
+ * multi-plan wave the wave-start commit would be more accurate but is not yet stored
+ * in the wave manifest. This is tracked as a known limitation.
+ */
+const UI_FILE_EXTENSIONS_RE = /\.(tsx|jsx|css|scss|sass|less|vue|svelte|html)$/i;
+const UI_PATH_PATTERNS_RE = /\/(components|pages|views|screens|layouts|ui|frontend)\//i;
+
+/**
+ * Pure logic for ui-safety-gate — exposed for direct behavioral testing.
+ *
+ * Given a projectDir and phase number:
+ *   (a) Reads the phase section from ROADMAP.md via getRoadmapPhaseWithFallback —
+ *       same lookup as computeUiPlanGate — to determine if this is a frontend phase.
+ *   (b) Runs checkUiPresence (frontend detection) — no reimplementation.
+ *   (c) Checks git diff HEAD~1..HEAD for UI file changes in the current worktree.
+ *   (d) Resolves the phase directory via core.findPhaseInternal; checks for *-UI-SPEC.md.
+ *
+ * Returns: { frontend, hasUiFiles, hasUiSpec, block, message?, phaseLookupFailed? }
+ *   block = frontend && hasUiFiles && !hasUiSpec
+ *   phaseLookupFailed = ROADMAP.md present but phase header not found
+ */
+function computeUiSafetyGate(projectDir: string, phase: string): {
+  frontend: boolean;
+  hasUiFiles: boolean;
+  hasUiSpec: boolean;
+  block: boolean;
+  message?: string;
+  phaseLookupFailed?: boolean;
+} {
+  // (a) Read the phase section text (same two-pass lookup as computeUiPlanGate)
+  let phaseSection = '';
+  let phaseLookupFailed: boolean | undefined;
+  try {
+    const section = getRoadmapPhaseWithFallback(projectDir, phase);
+    if (section === null) {
+      const planDir: string = typeof (core as unknown as Record<string, unknown>)['planningDir'] === 'function'
+        ? (core as unknown as Record<string, (cwd: string) => string>)['planningDir'](projectDir)
+        : path.join(projectDir, '.planning');
+      const roadmapPath = path.join(planDir, 'ROADMAP.md');
+      if (fs.existsSync(roadmapPath)) {
+        phaseLookupFailed = true;
+      }
+    } else {
+      phaseSection = section;
+    }
+  } catch { /* roadmap read failure → treat as empty (non-frontend) */ }
+
+  // (b) Run checkUiPresence (frontend detection) — reuse existing helper; no reimplementation
+  const presenceResult = checkUiPresence(phaseSection);
+  const frontend = presenceResult.hasUI;
+
+  // (c) Check whether any UI files were changed in recent git commits
+  // Uses git diff HEAD~1..HEAD to detect frontend file changes since last commit.
+  // Known limitation: multi-plan waves may need the wave-start commit for full coverage.
+  let hasUiFiles = false;
+  try {
+    const changed = execFileSync('git', ['diff', '--name-only', 'HEAD~1', 'HEAD'], {
+      cwd: projectDir,
+      encoding: 'utf-8',
+      maxBuffer: 2 * 1024 * 1024,
+      windowsHide: true,
+    });
+    hasUiFiles = changed.split('\n').some((f) =>
+      f.trim() && (UI_FILE_EXTENSIONS_RE.test(f) || UI_PATH_PATTERNS_RE.test(f)),
+    );
+  } catch { /* git unavailable or no prior commit — treat as no UI files changed */ }
+
+  // (d) Resolve phase directory and check for *-UI-SPEC.md (same as computeUiPlanGate)
+  const coreModule = core as unknown as Record<string, unknown>;
+  let phaseDir = '';
+  try {
+    const findPhase = coreModule['findPhaseInternal'] as ((cwd: string, phase: string) => Record<string, unknown> | string | null) | undefined;
+    if (typeof findPhase === 'function') {
+      const result = findPhase(projectDir, phase);
+      if (result && typeof result === 'object') {
+        const relDir = typeof result['directory'] === 'string' ? result['directory'] : '';
+        if (relDir) {
+          phaseDir = path.resolve(projectDir, relDir);
+        }
+      } else if (typeof result === 'string') {
+        phaseDir = result;
+      }
+    }
+  } catch { /* phase dir lookup failure → hasUiSpec=false */ }
+
+  const uiSpecPath = findUiSpecInDir(phaseDir);
+  const hasUiSpec = uiSpecPath !== '';
+
+  // block only when: this is a frontend phase AND UI files were changed AND no UI-SPEC exists
+  const block = frontend && hasUiFiles && !hasUiSpec;
+
+  const result: {
+    frontend: boolean;
+    hasUiFiles: boolean;
+    hasUiSpec: boolean;
+    block: boolean;
+    message?: string;
+    phaseLookupFailed?: boolean;
+  } = { frontend, hasUiFiles, hasUiSpec, block };
+
+  if (block) {
+    result.message = `UI files changed in this wave but no UI-SPEC.md exists for Phase ${phase}. ` +
+      `Run /gsd:ui-phase ${phase} to generate the design contract before continuing.`;
+  }
+  if (phaseLookupFailed) result.phaseLookupFailed = true;
+  return result;
+}
+
+function cmdUiSafetyGate(projectDir: string, args: string[], raw: boolean): void {
+  // args[0] = 'check', args[1] = 'ui-safety-gate', args[2] = phase
+  const phase = args[2] || '';
+  if (!phase) {
+    error('ui-safety-gate requires a phase argument: check ui-safety-gate <phase>', ERROR_REASON.SDK_MISSING_ARG);
+    return;
+  }
+  output(computeUiSafetyGate(projectDir, phase), raw, undefined);
+}
+
 // ─── gap-analysis-plan-post ───────────────────────────────────────────────────
 
 /**
@@ -530,7 +665,11 @@ function routeCheckCommand({ args, cwd, raw }: RouteCheckCommandOptions): void {
     cmdGapAnalysisPlanPost(cwd, args, raw);
     return;
   }
-  error('Unknown check subcommand. Available: auto-mode, decision-coverage-plan, decision-coverage-verify, gap-analysis-plan-post, ui-plan-gate', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+  if (subcommand === 'ui-safety-gate') {
+    cmdUiSafetyGate(cwd, args, raw);
+    return;
+  }
+  error('Unknown check subcommand. Available: auto-mode, decision-coverage-plan, decision-coverage-verify, gap-analysis-plan-post, ui-plan-gate, ui-safety-gate', ERROR_REASON.SDK_UNKNOWN_COMMAND);
 }
 
 export = {
@@ -538,5 +677,6 @@ export = {
   decisionMentioned,
   extractPlanDesignatedSections,
   computeUiPlanGate,
+  computeUiSafetyGate,
   cmdGapAnalysisPlanPost,
 };
