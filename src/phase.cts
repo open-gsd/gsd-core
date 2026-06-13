@@ -29,6 +29,7 @@ import stateMod = require('./state.cjs');
 import { platformWriteSync, platformReadSync, platformEnsureDir } from './shell-command-projection.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { deriveProgressFromRoadmap, clampPercent } from './phase-lifecycle.cjs';
+import { realClock } from './clock.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- uat-predicate.cjs is an export= CommonJS module
 import uatPredicate = require('./uat-predicate.cjs');
 const { evaluateUatPassed } = uatPredicate;
@@ -1339,7 +1340,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
   const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
   const statePath = path.join(planningDir(cwd), 'STATE.md');
   const phasesDir = path.join(planningDir(cwd), 'phases');
-  const today = new Date().toISOString().split('T')[0];
+  const today = realClock.today();
 
   const phaseInfoRaw = findPhaseInternal(cwd, phaseNum);
   if (!phaseInfoRaw) {
@@ -1411,11 +1412,15 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           if (cells.length === 5) {
             cells[2] = ` ${summaryCount}/${planCount} `;
             cells[3] = ' Complete    ';
-            cells[4] = ` ${today} `;
+            // Preserve existing non-empty completion date (#1161: idempotent date stamp)
+            const existingDate5 = cells[4].trim();
+            cells[4] = (existingDate5 && existingDate5 !== '-') ? cells[4] : ` ${today} `;
           } else if (cells.length === 4) {
             cells[1] = ` ${summaryCount}/${planCount} `;
             cells[2] = ' Complete    ';
-            cells[3] = ` ${today} `;
+            // Preserve existing non-empty completion date (#1161: idempotent date stamp)
+            const existingDate4 = cells[3].trim();
+            cells[3] = (existingDate4 && existingDate4 !== '-') ? cells[3] : ` ${today} `;
           }
           return '|' + cells.join('|') + '|';
         });
