@@ -92,7 +92,7 @@ Module owning workstream directory discovery, per-workstream state projection, p
 Module owning project-root resolution from any starting directory. Walks the ancestor chain (bounded by `FIND_PROJECT_ROOT_MAX_DEPTH = 10`) applying four heuristics in order: (0) own `.planning/` guard (#1362), (1) parent `.planning/config.json` `sub_repos` traversal, (2) legacy `multiRepo: true` boolean + ancestor `.git`, (3) `.git` heuristic with parent `.planning/`. Returns `startDir` when no ancestor qualifies. Sync `node:fs` I/O. Source of truth: `gsd-core/bin/lib/project-root.cjs`; consumed via a thin re-export at `gsd-core/bin/lib/core.cjs`.
 
 ### Planning Path Projection Module
-SDK query Module owning projection from project/workstream context to concrete `.planning` paths. Policy precedence is `explicit workstream > env workstream > env project > root`. Invalid workspace context is a validation error at this seam rather than a silent fallback.
+Module owning projection from project/workstream context to concrete `.planning` paths. Policy precedence is `explicit workstream > env workstream > env project > root`. Invalid workspace context is a validation error at this seam rather than a silent fallback.
 
 ### Worktree Safety Policy Module
 CJS Module owning worktree lifecycle safety policy for the GSD orchestration layer. Interface: `resolveWorktreeContext(cwd, deps) → WorktreeContext` (linked-worktree root mapping), `parseWorktreePorcelain(output) → WorktreeEntry[]` (porcelain parser, skips detached HEAD), `planWorktreePrune(repoRoot, opts, deps) → PrunePlan` (metadata-prune plan, never destructive by default), `executeWorktreePrunePlan(plan, deps) → PruneResult` (executes prune; degrades gracefully on git timeout), `listLinkedWorktreePaths(repoRoot, deps) → LinkedPathsResult`, `inspectWorktreeHealth(repoRoot, opts, deps) → HealthResult` (orphan + stale detection), `snapshotWorktreeInventory(repoRoot, opts, deps) → InventoryResult`, `planWorktreeWaveCleanup(repoRoot, manifest) → CleanupPlan` (manifest-scoped, fail-closed), `executeWorktreeWaveCleanupPlan(plan, deps) → CleanupResult`. Source of truth: `gsd-core/bin/lib/worktree-safety.cjs`. Timeout path: all git subprocess calls are bounded; callers receive `ok:false, reason:'git_timed_out'` rather than a thrown exception. Test anchor: `tests/worktree-safety.test.cjs`.
@@ -352,8 +352,8 @@ The canonical lint infrastructure adopted in ADR 452 (`docs/adr/452-eslint-lint-
 `WORKTREE.SEAM.caller-rule=verify.cjs must consume inspectWorktreeHealth for W017 classification; no ad-hoc porcelain parsing in callers`
 `WORKTREE.SEAM.test-anchor-w017=tests/orphan-worktree-detection.test.cjs + tests/worktree-safety-policy.test.cjs`
 `WORKTREE.SEAM.inventory-snapshot=snapshotWorktreeInventory(repoRoot,{staleAfterMs,nowMs}) is canonical linked-worktree health snapshot for callers`
-`PLANNING.PATH.PARITY.sdk-project-scope=.planning/<project> (never .planning/projects/<project>); mirror planning-workspace.cjs planningDir()`
-`PLANNING.PATH.SEAM.sdk=helpers.planningPaths delegates to workspacePlanningPaths + resolveWorkspaceContext; precedence explicit-ws > env-ws > env-project > root`
+`PLANNING.PATH.PARITY.project-scope=.planning/<project> (never .planning/projects/<project>); mirror planning-workspace.cjs planningDir()`
+`PLANNING.PATH.SEAM.helpers=helpers.planningPaths delegates to workspacePlanningPaths + resolveWorkspaceContext; precedence explicit-ws > env-ws > env-project > root`
 `PLANNING.PATH.SEAM.init-handlers=[initExecutePhase, initPlanPhase, initPhaseOp, initMilestoneOp] consume helpers.planningPaths().planning (no direct relPlanningPath join)`
 `WORKSTREAM.NAME.POLICY.cjs-module=gsd-core/bin/lib/workstream-name-policy.cjs owns toWorkstreamSlug + active-name/path-segment validation`
 `WORKSTREAM.POINTER.SEAM.cjs-module=gsd-core/bin/lib/active-workstream-store.cjs owns read/write self-heal for .planning/active-workstream`

@@ -14,6 +14,12 @@ const capabilities = {
     "description": "AI-SPEC design contract workflow for phases that build AI systems; owns the AI integration command, agents, and workflow.ai_integration_phase activation key.",
     "tier": "full",
     "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
     "skills": [
       "ai-integration-phase"
     ],
@@ -112,6 +118,12 @@ const capabilities = {
     "description": "Open-artifact audit and UAT-gap audit for milestone close gates; exposes `gsd-tools audit-uat` (cross-phase UAT outstanding items) and `gsd-tools audit-open` (structured open-artifact scan across debug, tasks, threads, todos, seeds, UAT, verification, context-questions).",
     "tier": "full",
     "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
     "skills": [],
     "agents": [],
     "config": {},
@@ -305,6 +317,12 @@ const capabilities = {
     "description": "Source-file code review and review-fix workflow support for completed execution work.",
     "tier": "full",
     "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
     "skills": [
       "code-review"
     ],
@@ -637,6 +655,12 @@ const capabilities = {
     "description": "Build, query, and inspect the project knowledge graph in `.planning/graphs/`; exposes graphify CLI subcommands (build, query, status, diff) and the /gsd-graphify skill.",
     "tier": "full",
     "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
     "skills": [
       "graphify"
     ],
@@ -716,6 +740,12 @@ const capabilities = {
     "description": "Code-intelligence store for codebase querying, diff, snapshot, and API-surface extraction; exposes `gsd-tools intel` subcommands (query, status, update, diff, snapshot, patch-meta, validate, extract-exports, api-surface) and backs `/gsd-map-codebase` and `gsd-intel-updater`.",
     "tier": "full",
     "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
     "skills": [],
     "agents": [],
     "config": {
@@ -867,6 +897,12 @@ const capabilities = {
     "description": "Validation coverage audit that maps executed work back to tests and manual-only evidence.",
     "tier": "full",
     "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
     "skills": [
       "validate-phase"
     ],
@@ -975,6 +1011,12 @@ const capabilities = {
     "requires": [
       "research"
     ],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
     "skills": [],
     "agents": [
       "gsd-pattern-mapper"
@@ -1070,6 +1112,12 @@ const capabilities = {
     "description": "Optional phase research before planning; owns the phase researcher agent and workflow.research activation key.",
     "tier": "standard",
     "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
     "skills": [],
     "agents": [
       "gsd-phase-researcher"
@@ -1112,6 +1160,12 @@ const capabilities = {
     "description": "Threat mitigation verification and ship-time security blocking for phases with security enforcement enabled.",
     "tier": "full",
     "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
     "skills": [
       "secure-phase"
     ],
@@ -1245,6 +1299,12 @@ const capabilities = {
     "description": "UI-SPEC design contract + retrospective UI audit for frontend phases.",
     "tier": "full",
     "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
     "skills": [
       "ui-phase",
       "ui-review"

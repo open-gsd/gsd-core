@@ -57,6 +57,11 @@ const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 // https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners/about-github-hosted-runners#standard-github-hosted-runners-for-public-repositories
 // ). Raise to 600 s (the same ceiling the before() helper uses for pack+install).
 const CHILD_TIMEOUT_MS = process.platform === 'win32' ? 600_000 : 120_000;
+const QUIET_NPM_ENV = Object.freeze({
+  npm_config_loglevel: 'error',
+  npm_config_update_notifier: 'false',
+  NO_UPDATE_NOTIFIER: '1',
+});
 
 // ---------------------------------------------------------------------------
 // Frozen result-code enum
@@ -304,7 +309,7 @@ function runSmoke({
   // Use the caller-supplied npmEnv if provided (allows HOME isolation on Docker
   // hosts where HOME may be unwritable — same pattern as runNpm() in helpers.cjs).
   // Falls back to process.env to preserve existing CLI / programmatic behaviour. (#131)
-  const effectiveNpmEnv = npmEnv !== undefined ? npmEnv : process.env;
+  const effectiveNpmEnv = { ...(npmEnv !== undefined ? npmEnv : process.env), ...QUIET_NPM_ENV };
   const installResult = spawnSync(
     npmCmd,
     ['install', '-g', '--prefix', installPrefix, tarballPath],
@@ -570,6 +575,7 @@ function cliMain() {
         encoding: 'utf-8',
         shell: process.platform === 'win32',
         timeout: CHILD_TIMEOUT_MS,
+        env: { ...process.env, ...QUIET_NPM_ENV },
       },
     ).trim();
     // npm pack outputs the filename on stdout (last line when verbose)

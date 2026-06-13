@@ -28,7 +28,7 @@ const { execFileSync } = require('child_process');
 const INSTALL_SRC = path.join(__dirname, '..', 'bin', 'install.js');
 const BUILD_SCRIPT = path.join(__dirname, '..', 'scripts', 'build-hooks.js');
 const { install, finishInstall } = require(INSTALL_SRC);
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, captureConsole } = require('./helpers.cjs');
 
 // ─── Ensure hooks/dist/ is populated before install tests ────────────────────
 before(() => {
@@ -63,13 +63,20 @@ describe('#2248: local Claude install does not clobber profile-level statusLine'
     // Phase 2: configure settings.local.json (mirrors installAllRuntimes → finalize)
     // #338: local Claude installs now write to settings.local.json, not settings.json.
     // shouldInstallStatusline=true mirrors what handleStatusline picks for a fresh install
-    finishInstall(
-      result.settingsPath,
-      result.settings,
-      result.statuslineCommand,
-      true,   // shouldInstallStatusline
-      'claude',
-      false   // isGlobal=false → local install
+    const { stdout } = captureConsole(() => {
+      finishInstall(
+        result.settingsPath,
+        result.settings,
+        result.statuslineCommand,
+        true,   // shouldInstallStatusline
+        'claude',
+        false   // isGlobal=false -> local install
+      );
+    });
+    assert.match(
+      stdout,
+      /Skipping statusLine for local install/,
+      'Local install must explain that it skipped statusLine unless --force-statusline is passed'
     );
 
     // #338: local installs write to settings.local.json, not settings.json

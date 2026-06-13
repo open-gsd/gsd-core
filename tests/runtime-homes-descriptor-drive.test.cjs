@@ -24,9 +24,11 @@ const { cleanup } = require('./helpers.cjs');
 const ROOT = path.join(__dirname, '..');
 const {
   getGlobalConfigDir,
+  getGlobalSkillsBase,
   resolveAntigravityGlobalDir,
   resolveKimiGlobalDir,
   resolveConfigHomeFromDescriptor,
+  resolveSkillsBaseFromDescriptor,
 } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'runtime-homes.cjs'));
 
 const HOME = os.homedir();
@@ -629,6 +631,48 @@ describe('descriptor-driven equivalence: unknown runtime fallback', () => {
     withEnv({ CLAUDE_CONFIG_DIR: '/custom/claude-for-unknown' }, () => {
       assert.strictEqual(getGlobalConfigDir('no-such-runtime'), '/custom/claude-for-unknown');
     });
+  });
+});
+
+describe('descriptor-driven global skills base', () => {
+  test('hermes skills base is derived from descriptor artifact layout', () => {
+    const saved = clearAllEnvKeys();
+    try {
+      assert.strictEqual(getGlobalSkillsBase('hermes'), path.join(HOME, '.hermes', 'skills', 'gsd'));
+    } finally {
+      restoreEnvKeys(saved);
+    }
+  });
+
+  test('kilo skills base is derived from configHome.skillsHome descriptor', () => {
+    const saved = clearAllEnvKeys();
+    try {
+      assert.strictEqual(getGlobalSkillsBase('kilo'), path.join(HOME, '.kilo', 'skills'));
+    } finally {
+      restoreEnvKeys(saved);
+    }
+  });
+
+  test('synthetic runtime skillsHome descriptor resolves without a runtime-name branch', () => {
+    const base = resolveSkillsBaseFromDescriptor(
+      {
+        kind: 'xdg',
+        name: 'futurecli',
+        env: ['FUTURE_CONFIG_DIR', 'FUTURE_CONFIG', 'XDG_CONFIG_HOME'],
+        skillsHome: {
+          kind: 'dot-home',
+          name: '.futurecli',
+          env: ['FUTURE_SKILLS_HOME'],
+        },
+      },
+      {
+        env: { FUTURE_SKILLS_HOME: '/custom/future-skills' },
+        home: '/home/u',
+        existsSync: () => false,
+      },
+    );
+
+    assert.strictEqual(base, path.join('/custom/future-skills', 'skills'));
   });
 });
 

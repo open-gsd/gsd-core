@@ -51,6 +51,7 @@ const {
   VALID_INSTALL_SURFACES,
   VALID_EXTENDED_HOOK_EVENTS,
   VALID_PERMISSION_WRITERS,
+  validateRuntimeCompat,
   validateRuntimeBody,
   loadCentralConfigKeys,
 } = require('../scripts/gen-capability-registry.cjs');
@@ -98,6 +99,11 @@ describe('UI pilot capability', () => {
     // capabilities.ui exists
     assert.ok(registry.capabilities.ui, 'registry.capabilities.ui should exist');
     assert.strictEqual(registry.version, SCHEMA_VERSION);
+    assert.deepStrictEqual(
+      registry.capabilities.ui.runtimeCompat,
+      { supported: ['*'], unsupported: [] },
+      'feature runtime compatibility contract should be preserved in the registry',
+    );
 
     // bySkill maps ui-phase and ui-review to 'ui'
     assert.strictEqual(registry.bySkill['ui-phase'], 'ui');
@@ -200,6 +206,32 @@ describe('validateCapability adversarial cases', () => {
     assert.ok(errors.some((e) => e.includes('role')));
   });
 
+  test('feature capability without runtimeCompat is rejected', () => {
+    const cap = { ...UI_CAP };
+    delete cap.runtimeCompat;
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(
+      errors.some((e) => e.includes('runtimeCompat')),
+      'Expected missing runtimeCompat validation error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('runtimeCompat.supported must be a non-empty array', () => {
+    const errors = validateRuntimeCompat('ui', { supported: [], unsupported: [] });
+    assert.ok(
+      errors.some((e) => e.includes('runtimeCompat.supported')),
+      'Expected supported-array validation error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('runtimeCompat.supported wildcard cannot be mixed with runtime ids', () => {
+    const errors = validateRuntimeCompat('ui', { supported: ['*', 'claude'], unsupported: [] });
+    assert.ok(
+      errors.some((e) => e.includes('wildcard')),
+      'Expected wildcard validation error, got: ' + JSON.stringify(errors),
+    );
+  });
+
   test('bad tier enum rejected', () => {
     const cap = { ...UI_CAP, tier: 'premium' };
     const errors = validateCapability(cap, 'ui');
@@ -282,6 +314,40 @@ describe('validateCrossCapability adversarial cases', () => {
     const errors = validateCrossCapability(capMap, new Set());
     assert.ok(errors.length > 0);
     assert.ok(errors.some((e) => e.includes('nonexistent-cap')));
+  });
+
+  test('runtimeCompat explicit runtime ids must exist', () => {
+    const cap = {
+      ...UI_CAP,
+      runtimeCompat: { supported: ['claude', 'future-runtime'], unsupported: [] },
+    };
+    const runtime = {
+      id: 'claude',
+      role: 'runtime',
+      title: 'Claude',
+      description: 'Runtime fixture.',
+      tier: 'core',
+      requires: [],
+      runtime: {
+        configHome: { kind: 'dot-home', name: '.claude', env: ['CLAUDE_CONFIG_DIR'] },
+        configFormat: 'settings-json',
+        artifactLayout: { global: [], local: [] },
+        commandStyle: 'slash-hyphen',
+        hooksSurface: 'settings-json',
+        sandboxTier: 'none',
+        supportTier: 1,
+        installSurface: 'settings-json',
+        writesSharedSettings: true,
+        permissionWriter: null,
+        extendedHookEvents: [],
+      },
+    };
+    const capMap = new Map([['ui', cap], ['claude', runtime]]);
+    const errors = validateCrossCapability(capMap, new Set());
+    assert.ok(
+      errors.some((e) => e.includes('runtimeCompat.supported') && e.includes('future-runtime')),
+      'Expected unknown runtimeCompat runtime error, got: ' + JSON.stringify(errors),
+    );
   });
 
   test('requires cycle rejected', () => {
@@ -382,6 +448,7 @@ describe('topological step ordering', () => {
         title: 'Consumer',
         tier: 'full',
         requires: [],
+        runtimeCompat: { supported: ['*'], unsupported: [] },
         skills: [],
         agents: [],
         hooks: [],
@@ -1260,6 +1327,7 @@ describe('S1: fragment.path traversal guard', () => {
         description: 'Synthetic fixture for fragment path materialization.',
         tier: 'full',
         requires: [],
+        runtimeCompat: { supported: ['*'], unsupported: [] },
         skills: [],
         agents: [],
         hooks: [],
@@ -1304,6 +1372,7 @@ describe('S1: fragment.path traversal guard', () => {
         description: 'Synthetic fixture for step fragment materialization.',
         tier: 'standard',
         requires: [],
+        runtimeCompat: { supported: ['*'], unsupported: [] },
         skills: [],
         agents: ['gsd-phase-researcher'],
         hooks: [],
@@ -2674,6 +2743,7 @@ function makeCommandCap(id, commands) {
     description: 'Synthetic capability for ADR-959 command tests.',
     tier: 'full',
     requires: [],
+    runtimeCompat: { supported: ['*'], unsupported: [] },
     skills: [],
     agents: [],
     hooks: [],

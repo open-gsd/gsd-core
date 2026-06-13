@@ -6926,7 +6926,13 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false) {
       content = content.replace(/~\/\.claude\//g, pathPrefix);
       content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
       content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
+      content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\.\/\.claude(?![\w-])/g, `./${dirName}`);
       content = content.replace(/~\/\.augment\//g, pathPrefix);
+      content = content.replace(/\$HOME\/\.augment\//g, pathPrefix);
+      content = content.replace(/~\/\.augment(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.augment(?![\w-])/g, normalizedPathPrefix);
       content = processAttribution(content, getCommitAttribution(runtime));
       break;
 
@@ -6986,6 +6992,10 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false) {
       content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
       content = content.replace(/~\/\.qwen\//g, pathPrefix);
       content = content.replace(/\$HOME\/\.qwen\//g, pathPrefix);
+      content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/~\/\.qwen(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.qwen(?![\w-])/g, normalizedPathPrefix);
       // Bare relative .claude/ → .qwen/ (residual refs not matched above)
       content = content.replace(/\.claude\//g, '.qwen/');
       content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
@@ -7002,6 +7012,10 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false) {
       content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
       content = content.replace(/~\/\.hermes\//g, pathPrefix);
       content = content.replace(/\$HOME\/\.hermes\//g, pathPrefix);
+      content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/~\/\.hermes(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.hermes(?![\w-])/g, normalizedPathPrefix);
       // Bare relative .claude/ → .hermes/ (residual refs)
       content = content.replace(/\.claude\//g, '.hermes/');
       content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);

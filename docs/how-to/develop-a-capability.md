@@ -57,6 +57,7 @@ At minimum, a feature Capability declares:
   "description": "Adds an example planning step.",
   "tier": "standard",
   "requires": [],
+  "runtimeCompat": { "supported": ["*"], "unsupported": [] },
   "skills": [],
   "agents": ["gsd-example-agent"],
   "hooks": [],
@@ -77,6 +78,33 @@ At minimum, a feature Capability declares:
 ```
 
 The registry generator validates the shape, ownership, and cross-capability contracts. `ref.skill` must name a skill declared by the same Capability. `ref.agent` must name an agent declared by the same Capability.
+
+## Declare runtime compatibility
+
+Every feature Capability must declare `runtimeCompat`. This is part of the GSD 1.5+ developer contract: a Capability says which runtime descriptors it can surface through, and the generator validates that declaration before the central registry is written.
+
+Use the wildcard when the Capability is runtime-agnostic:
+
+```json
+"runtimeCompat": {
+  "supported": ["*"],
+  "unsupported": []
+}
+```
+
+Use explicit runtime ids when the Capability is intentionally narrower:
+
+```json
+"runtimeCompat": {
+  "supported": ["claude", "codex"],
+  "unsupported": ["kilo"],
+  "notes": {
+    "kilo": "Requires a hook surface Kilo does not expose yet."
+  }
+}
+```
+
+`supported` is required and must be non-empty. `"*"` means every descriptor-backed runtime, including future first-party runtime descriptors, is compatible unless it is listed in `unsupported`. Explicit runtime ids and `notes` keys must match runtime Capability ids such as `claude`, `codex`, `opencode`, or `kilo`; typos fail `node scripts/gen-capability-registry.cjs --check`.
 
 ## Add hooks
 
@@ -138,6 +166,18 @@ node gsd-core/bin/gsd-tools.cjs capability state --config-dir ~/.claude --raw
 ```
 
 `capability state` is the diagnostic view for the same state that workflow dispatch consumes. For each Capability, `enabled` is true only when the Capability is both installed by the active profile and surfaced by the runtime surface. A hook's `configured` field reflects the `when` config key; `active` is true only when the Capability is enabled and the hook is configured on.
+
+## Add or change a runtime descriptor
+
+Runtime-specific facts belong in the runtime Capability declaration, not in a parallel allowlist or runtime-name branch. When adding a first-party runtime under `capabilities/<runtime>/capability.json`, declare these fields in the `runtime` object:
+
+- `configHome`: the global config root resolver, including env overrides and probes.
+- `configHome.skillsHome`: optional separate base home for runtimes whose global skills root differs from the config root.
+- `artifactLayout.global` and `artifactLayout.local`: command, agent, skill, and Kimi-agent destinations.
+- `hooksSurface`, `hookEvents`, and `extendedHookEvents`: hook registration surface and event dialect.
+- `installSurface`, `writesSharedSettings`, and `permissionWriter`: install-time config mutation behavior.
+
+The runtime homes, artifact layout, and install-plan resolvers read those descriptor fields directly. Adding a descriptor-backed runtime should not require editing a second list in `runtime-artifact-layout` or a fallback branch in `runtime-config-adapter-registry`.
 
 ## Own config in the Capability
 

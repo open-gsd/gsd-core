@@ -2,6 +2,7 @@
   "id": "ui", "role": "feature", "title": "UI design contracts",
   "description": "UI-SPEC design contract + retrospective UI audit for frontend phases.",
   "tier": "full", "requires": [],
+  "runtimeCompat": { "supported": ["*"], "unsupported": [] },
   "skills": ["ui-phase", "ui-review"],
   "agents": ["gsd-ui-checker", "gsd-ui-auditor"],
   "hooks": [],

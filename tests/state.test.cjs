@@ -732,8 +732,20 @@ describe('stateReplaceFieldWithFallback', () => {
 
   test('returns content unchanged when neither field matches', () => {
     const content = '# State\n\n**Phase:** 3\n';
-    const result = stateReplaceFieldWithFallback(content, 'Status', 'state', 'New');
+    let warning = '';
+    const origErrWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk) => {
+      warning += String(chunk);
+      return true;
+    };
+    let result;
+    try {
+      result = stateReplaceFieldWithFallback(content, 'Status', 'state', 'New');
+    } finally {
+      process.stderr.write = origErrWrite;
+    }
     assert.strictEqual(result, content, 'content should be unchanged');
+    assert.match(warning, /STATE\.md field "Status"/, 'missing field warning should be emitted');
   });
 
   test('prefers primary over fallback when both exist', () => {

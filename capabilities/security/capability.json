@@ -5,6 +5,7 @@
   "description": "Threat mitigation verification and ship-time security blocking for phases with security enforcement enabled.",
   "tier": "full",
   "requires": [],
+  "runtimeCompat": { "supported": ["*"], "unsupported": [] },
   "skills": ["secure-phase"],
   "agents": ["gsd-security-auditor"],
   "hooks": [],

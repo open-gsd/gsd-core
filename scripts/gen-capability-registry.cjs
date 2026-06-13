@@ -231,6 +231,7 @@ const KEBAB_RE = /^[a-z][a-z0-9-]*$/;
 const VALID_ROLES = new Set(['feature', 'runtime']);
 const VALID_TIERS = new Set(['core', 'standard', 'full']);
 const VALID_ON_ERROR = new Set(['skip', 'halt']);
+const RUNTIME_COMPAT_WILDCARD = '*';
 
 /**
  * Validate a single capability declaration.
@@ -363,8 +364,73 @@ function validateCommandEntry(capId, entry, prefix) {
   return errors;
 }
 
+function validateRuntimeCompat(capId, runtimeCompat) {
+  const errors = [];
+  const ctx = 'capability "' + capId + '" runtimeCompat';
+
+  if (typeof runtimeCompat !== 'object' || runtimeCompat === null || Array.isArray(runtimeCompat)) {
+    errors.push(ctx + ' must be an object with supported and unsupported arrays');
+    return errors;
+  }
+
+  const validateRuntimeArray = (field, { allowWildcard }) => {
+    const value = runtimeCompat[field];
+    if (!Array.isArray(value)) {
+      errors.push(ctx + '.' + field + ' must be an array of runtime ids' + (allowWildcard ? ' or ["*"]' : ''));
+      return;
+    }
+    if (field === 'supported' && value.length === 0) {
+      errors.push(ctx + '.supported must be a non-empty array');
+    }
+    let hasWildcard = false;
+    for (let i = 0; i < value.length; i++) {
+      const entry = value[i];
+      if (typeof entry !== 'string' || entry.length === 0) {
+        errors.push(ctx + '.' + field + '[' + i + '] must be a non-empty string');
+        continue;
+      }
+      if (entry === '__proto__' || entry === 'constructor' || entry === 'prototype') {
+        errors.push(ctx + '.' + field + '[' + i + '] "' + entry + '" is a reserved name');
+      }
+      if (entry === RUNTIME_COMPAT_WILDCARD) {
+        if (!allowWildcard) {
+          errors.push(ctx + '.' + field + ' must not include wildcard "*"');
+        }
+        hasWildcard = true;
+      } else if (!KEBAB_RE.test(entry)) {
+        errors.push(ctx + '.' + field + '[' + i + '] must be a kebab-case runtime id or "*"');
+      }
+    }
+    if (hasWildcard && value.length > 1) {
+      errors.push(ctx + '.' + field + ' wildcard "*" cannot be mixed with runtime ids');
+    }
+  };
+
+  validateRuntimeArray('supported', { allowWildcard: true });
+  validateRuntimeArray('unsupported', { allowWildcard: false });
+
+  if (runtimeCompat.notes !== undefined) {
+    if (typeof runtimeCompat.notes !== 'object' || runtimeCompat.notes === null || Array.isArray(runtimeCompat.notes)) {
+      errors.push(ctx + '.notes must be an object of runtime id to string if present');
+    } else {
+      for (const [key, value] of Object.entries(runtimeCompat.notes)) {
+        if (key !== RUNTIME_COMPAT_WILDCARD && !KEBAB_RE.test(key)) {
+          errors.push(ctx + '.notes key "' + key + '" must be a kebab-case runtime id or "*"');
+        }
+        if (typeof value !== 'string' || value.length === 0) {
+          errors.push(ctx + '.notes["' + key + '"] must be a non-empty string');
+        }
+      }
+    }
+  }
+
+  return errors;
+}
+
 function validateFeatureBody(cap) {
   const errors = [];
+
+  errors.push(...validateRuntimeCompat(cap.id || '(unknown)', cap.runtimeCompat));
 
   if (!Array.isArray(cap.skills)) {
     errors.push('skills must be an array of strings');
@@ -1430,6 +1496,39 @@ function validateCrossCapability(capMap, centralKeys) {
     }
   }
 
+  // runtimeCompat: explicit runtime ids must reference runtime capabilities.
+  // The wildcard "*" means descriptor-backed runtimes are supported by default.
+  const runtimeIds = new Set();
+  for (const [id, cap] of capMap) {
+    if (cap.role === 'runtime') runtimeIds.add(id);
+  }
+  for (const [capId, cap] of capMap) {
+    if (cap.role !== 'feature' || typeof cap.runtimeCompat !== 'object' || cap.runtimeCompat === null) continue;
+    for (const field of ['supported', 'unsupported']) {
+      const entries = Array.isArray(cap.runtimeCompat[field]) ? cap.runtimeCompat[field] : [];
+      for (const runtimeId of entries) {
+        if (runtimeId === RUNTIME_COMPAT_WILDCARD) continue;
+        if (typeof runtimeId !== 'string' || runtimeId.length === 0) continue;
+        if (!runtimeIds.has(runtimeId)) {
+          errors.push(
+            'capability "' + capId + '" runtimeCompat.' + field +
+            ' references unknown runtime "' + runtimeId + '"',
+          );
+        }
+      }
+    }
+    if (cap.runtimeCompat.notes && typeof cap.runtimeCompat.notes === 'object') {
+      for (const runtimeId of Object.keys(cap.runtimeCompat.notes)) {
+        if (runtimeId === RUNTIME_COMPAT_WILDCARD) continue;
+        if (!runtimeIds.has(runtimeId)) {
+          errors.push(
+            'capability "' + capId + '" runtimeCompat.notes references unknown runtime "' + runtimeId + '"',
+          );
+        }
+      }
+    }
+  }
+
   // requires: acyclic
   const cycleErrors = detectRequiresCycles(capMap);
   errors.push(...cycleErrors);
@@ -2401,6 +2500,7 @@ module.exports = {
   runConsistencyGate,
   // ADR-959: command entry validation
   validateCommandEntry,
+  validateRuntimeCompat,
   // ADR-1016 phase 5a: runtime body validators + closed-vocab sets
   validateConfigHome,
   validateArtifactLayout,

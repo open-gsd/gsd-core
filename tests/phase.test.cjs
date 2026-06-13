@@ -3395,6 +3395,7 @@ function runPhaseComplete(tmpDir, { phase = '1', tolerateExit = false } = {}) {
       cwd: tmpDir,
       timeout: 60000,
       encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
   } catch (err) {
     // A signal/timeout kill terminated the process before it finished writing —

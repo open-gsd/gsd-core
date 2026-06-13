@@ -82,6 +82,8 @@ interface InstallPlan extends RuntimeConfigIntent {
 // Exports
 // ---------------------------------------------------------------------------
 
+type RuntimeDescriptorMap = Record<string, { runtime: Record<string, unknown> | undefined }>;
+
 /** The complete set of 16 supported runtimes for config-adapter dispatch. */
 const ALLOWED_CONFIG_RUNTIMES: ReadonlySet<string> = new Set(
   Object.entries(runtimes)
@@ -119,6 +121,29 @@ function resolveRuntimeConfigIntent(runtime: string): RuntimeConfigIntent {
   };
 }
 
+function resolveInstallPlanFromRuntimes(runtimeDescriptors: RuntimeDescriptorMap, runtime: string): InstallPlan {
+  const desc = runtimeDescriptors[runtime]?.runtime;
+  if (!desc) throw new TypeError(`Unknown runtime for install plan: ${runtime}`);
+  if (desc['hooksSurface'] == null) {
+    throw new TypeError(`runtime.hooksSurface is required for install plan: ${runtime}`);
+  }
+  const sandboxTier = desc['sandboxTier'];
+  if (typeof sandboxTier !== 'string' || !VALID_SANDBOX_TIERS.has(sandboxTier)) {
+    throw new TypeError(`Runtime '${runtime}' has a missing or invalid sandboxTier descriptor axis: ${JSON.stringify(sandboxTier)}`);
+  }
+  const permissionWriter = desc['permissionWriter'];
+  return {
+    runtime,
+    installSurface:         desc['installSurface'] as ConfigInstallSurface,
+    writesSharedSettings:   desc['writesSharedSettings'] as boolean,
+    finishPermissionWriter: permissionWriter == null ? null : permissionWriter as FinishPermissionWriter,
+    hookEvents:             desc['hookEvents'] as string | undefined,
+    extendedHookEvents:     Array.isArray(desc['extendedHookEvents']) ? [...desc['extendedHookEvents'] as string[]] : [],
+    hooksSurface:           desc['hooksSurface'] as HooksSurface,
+    sandboxTier,
+  };
+}
+
 /**
  * Resolve the complete install plan for a given runtime.
  *
@@ -132,25 +157,7 @@ function resolveRuntimeConfigIntent(runtime: string): RuntimeConfigIntent {
  * @throws {TypeError} if runtime is not a known supported runtime.
  */
 function resolveInstallPlan(runtime: string): InstallPlan {
-  const desc = runtimes[runtime]?.runtime;
-  if (!desc) throw new TypeError(`Unknown runtime for install plan: ${runtime}`);
-  const configIntent = resolveRuntimeConfigIntent(runtime);
-  const sandboxTier = desc['sandboxTier'];
-  if (typeof sandboxTier !== 'string' || !VALID_SANDBOX_TIERS.has(sandboxTier)) {
-    throw new TypeError(`Runtime '${runtime}' has a missing or invalid sandboxTier descriptor axis: ${JSON.stringify(sandboxTier)}`);
-  }
-  return {
-    runtime,
-    installSurface:         configIntent.installSurface,
-    writesSharedSettings:   configIntent.writesSharedSettings,
-    finishPermissionWriter: configIntent.finishPermissionWriter,
-    hookEvents:             desc['hookEvents'] as string | undefined,
-    extendedHookEvents:     Array.isArray(desc['extendedHookEvents']) ? desc['extendedHookEvents'] as string[] : [],
-    hooksSurface:           desc['hooksSurface'] != null
-      ? desc['hooksSurface'] as HooksSurface
-      : ((runtime === 'opencode' || runtime === 'kilo') ? 'none' : 'settings-json'),
-    sandboxTier,
-  };
+  return resolveInstallPlanFromRuntimes(runtimes, runtime);
 }
 
-export = { resolveRuntimeConfigIntent, resolveInstallPlan, ALLOWED_CONFIG_RUNTIMES, INSTALL_SURFACES };
+export = { resolveRuntimeConfigIntent, resolveInstallPlan, resolveInstallPlanFromRuntimes, ALLOWED_CONFIG_RUNTIMES, INSTALL_SURFACES };
