@@ -134,10 +134,11 @@ describe('plan:pre intel step — ref.command and rendered text', () => {
       envelope.rendered.includes('intel api-surface'),
       `rendered must contain 'intel api-surface'. Got: ${envelope.rendered.slice(0, 200)}`,
     );
-    // Rendered must NOT contain only an opaque JSON blob (it must have the expected sub-string)
+    // Rendered must be structured step text, not a bare JSON object dump.
+    // A structured render includes human-readable step metadata (- produces:, - when:).
     assert.ok(
-      envelope.rendered.includes('intel api-surface'),
-      'rendered must be readable, not an opaque JSON blob without the command name',
+      envelope.rendered.includes('- produces:') && envelope.rendered.includes('- when:'),
+      'intel step must render as a structured step (with produces/when labels), not an opaque blob',
     );
     // Also assert the produces path appears
     assert.ok(

@@ -217,7 +217,7 @@ describe('ADR-857 Phase 6 capstone conformance (#1139)', () => {
 describe('ADR-857 phase 6 — capabilities must not bake install paths into the registry', () => {
   // Matches GSD install paths that LEAK when copied verbatim to non-Claude runtimes.
   // (~/.claude/projects is a legit runtime feature and is intentionally NOT matched.)
-  const LEAK = /(?:~|\$HOME)\/\.claude\/(?:gsd-core|commands|agents|hooks)/;
+  const LEAK = /\.claude[/\\](?:gsd-core|commands|agents|hooks)\b/;
 
   test('no capability source (capability.json or fragment) embeds a ~/.claude install path', () => {
     const capsDir = path.join(__dirname, '..', 'capabilities');

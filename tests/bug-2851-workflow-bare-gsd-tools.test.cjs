@@ -184,7 +184,7 @@ describe('bug-2851: workflow files must not call bare `gsd-tools` (#2245 sweep r
     let foundPlanPostDispatch = false;
     for (const blk of blocks) {
       for (const line of blk.lines) {
-        if (/gsd_run\s+loop\s+render-hooks\s+plan:post/.test(line) && !/^\s*#/.test(line)) {
+        if (/gsd_run\s+loop\s+render-hooks\s+plan:post\s+--raw/.test(line) && !/^\s*#/.test(line)) {
           foundPlanPostDispatch = true;
         }
       }

@@ -297,21 +297,18 @@ describe('[BVA] orphaned user value is silently dropped after capability removal
 
     const result = loadConfig(tmpDir);
 
-    // The orphaned value must not appear as a federated key
-    // (it may appear as a pass-through raw key depending on loadConfig internals,
-    //  but it must NOT appear via the federated overlay under a validated validKey)
-    // We can't assert its absence from the raw result (loadConfig pass-through is allowed),
-    // but we CAN assert the federated channel didn't re-validate it.
-    // The real check: model_profile (a central key) must still be present.
+    // The orphaned capability key must NOT be surfaced in the resolved config object.
+    // loadConfig extracts only known/central/federated keys into _baseConfig — any key
+    // whose capability has been uninstalled (configSchema: {}) must not appear in the result.
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(result, 'orphancap'),
+      'orphaned top-level key must not appear in resolved config when capability is removed',
+    );
+    // Central keys must remain unaffected by capability removal.
     assert.ok(
       Object.prototype.hasOwnProperty.call(result, 'model_profile'),
       'model_profile must still be present (central key unaffected by federated removal)',
     );
-    // Confirm the orphan is not surfaced under a NESTED federated-resolved section
-    // that would only exist if the registry had validated it.
-    // Since configSchema is empty, any 'orphancap' key present is from raw user pass-through,
-    // not federated overlay. Skip this sub-assertion as it depends on loadConfig raw-passthrough.
-    // SKIP: testing raw-passthrough of unregistered keys is out of scope for federated removal.
   });
 });
 
