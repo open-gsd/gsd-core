@@ -108,16 +108,17 @@ Continue to `create_uat_file`.
 <step name="automated_ui_verification">
 **Automated UI Verification (when Playwright-MCP is available)**
 
-Before running manual UAT, check whether this phase has a UI component and whether
-`mcp__playwright__*` or `mcp__puppeteer__*` tools are available in the current session.
+Before UAT, check UI capability activation and whether Playwright/Puppeteer MCP tools are available.
 
 ```bash
-UI_PHASE_FLAG=$(gsd_run query config-get workflow.ui_phase --raw 2>/dev/null || echo "true")
+PLAN_HOOKS_JSON=$(gsd_run loop render-hooks plan:pre --raw)
 UI_SPEC_FILE=$(ls "${PHASE_DIR}"/*-UI-SPEC.md 2>/dev/null | head -1)
 ```
 
+Set `UI_PHASE_ACTIVE=true` when `PLAN_HOOKS_JSON.activeHooks` contains an active `ui` step hook.
+
 **If Playwright-MCP tools are available in this session (`mcp__playwright__*` tools
-respond to tool calls) AND (`UI_PHASE_FLAG` is `true` OR `UI_SPEC_FILE` is non-empty):**
+respond to tool calls) AND (`UI_PHASE_ACTIVE` is `true` OR `UI_SPEC_FILE` is non-empty):**
 
 For each UI checkpoint listed in the phase's UI-SPEC.md (or inferred from SUMMARY.md):
 

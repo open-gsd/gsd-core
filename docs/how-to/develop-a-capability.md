@@ -225,8 +225,11 @@ Run the smallest affected tests first, then the full suite before opening a read
 ```bash
 node --test tests/capability-registry.test.cjs
 node --test tests/phase6-planning-capabilities.test.cjs
+node --test tests/phase6-capstone-conformance.test.cjs
 npm test
 ```
+
+Run the Phase 6 capstone test whenever a Capability adds a `when` key or moves activation logic in a host workflow. It checks that migrated activation keys are resolved through Capability hooks or state, and that Capability-owned config keys stay out of the central schema. If a host workflow must keep core behaviour behind a `workflow.*` key, document why it is core rather than Capability-owned before adding it.
 
 ## Keep the docs with the slice
 
