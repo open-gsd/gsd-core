@@ -1,5 +1,5 @@
 {
-  "generated": "2026-06-11",
+  "generated": "2026-06-13",
   "families": {
     "agents": [
       "gsd-advisor-researcher",
@@ -273,6 +273,7 @@
       "artifacts.cjs",
       "audit-command-router.cjs",
       "audit.cjs",
+      "capability-activation.cjs",
       "capability-registry.cjs",
       "capability-state.cjs",
       "check-command-router.cjs",

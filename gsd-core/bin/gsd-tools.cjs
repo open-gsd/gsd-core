@@ -1236,7 +1236,23 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       // loop render-hooks <point>
       const loopSubcommand = args[1];
       if (loopSubcommand === 'render-hooks') {
-        loopResolver.cmdLoopRenderHooks(cwd, args[2], raw, {});
+        let loopConfigDir = null;
+        const configDirEqArg = args.find(arg => arg.startsWith('--config-dir='));
+        const configDirIdx = args.indexOf('--config-dir');
+        if (configDirEqArg) {
+          const value = configDirEqArg.slice('--config-dir='.length).trim();
+          if (!value) error('Missing value for --config-dir', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+          loopConfigDir = value;
+        } else if (configDirIdx !== -1) {
+          const value = args[configDirIdx + 1];
+          if (!value || value.startsWith('--')) {
+            error('Missing value for --config-dir', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+          }
+          loopConfigDir = value;
+        }
+        loopResolver.cmdLoopRenderHooks(cwd, args[2], raw, {
+          configDir: loopConfigDir ? path.resolve(loopConfigDir) : undefined,
+        });
       } else {
         error(
           `Unknown loop subcommand: ${loopSubcommand}. Available: render-hooks`,

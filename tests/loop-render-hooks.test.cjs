@@ -54,6 +54,8 @@ let tmpProjectDir;
 let tmpEmptyProjectDir;
 // A project where ui_phase is explicitly false in root config
 let tmpFalseConfigProjectDir;
+// Runtime config dir whose surface disables the UI capability
+let tmpUiDisabledConfigDir;
 
 before(() => {
   tmpProjectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'loop-resolver-test-'));
@@ -79,12 +81,25 @@ before(() => {
     JSON.stringify({ workflow: { ui_phase: false, ui_review: false, ui_safety_gate: false } }),
     'utf8',
   );
+
+  tmpUiDisabledConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'loop-resolver-ui-disabled-'));
+  fs.writeFileSync(
+    path.join(tmpUiDisabledConfigDir, '.gsd-surface.json'),
+    JSON.stringify({
+      baseProfile: 'full',
+      disabledClusters: ['ui'],
+      explicitAdds: [],
+      explicitRemoves: [],
+    }, null, 2),
+    'utf8',
+  );
 });
 
 after(() => {
   if (tmpProjectDir) cleanup(tmpProjectDir);
   if (tmpEmptyProjectDir) cleanup(tmpEmptyProjectDir);
   if (tmpFalseConfigProjectDir) cleanup(tmpFalseConfigProjectDir);
+  if (tmpUiDisabledConfigDir) cleanup(tmpUiDisabledConfigDir);
 });
 
 // ─── 1. Canonical-point validation ───────────────────────────────────────────
@@ -797,6 +812,31 @@ describe('cmdLoopRenderHooks end-to-end (via gsd-tools)', () => {
       'Expected ui step active by default. Got: ' + JSON.stringify(envelope.activeHooks),
     );
     assert.match(envelope.rendered, /ui-phase/);
+  });
+
+  test('loop render-hooks plan:pre with ui capability disabled in surface → ui hooks absent', () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        GSD_TOOLS,
+        'loop',
+        'render-hooks',
+        'plan:pre',
+        '--cwd',
+        tmpEmptyProjectDir,
+        '--config-dir',
+        tmpUiDisabledConfigDir,
+      ],
+      { cwd: ROOT, encoding: 'utf8' },
+    );
+    assert.strictEqual(result.status, 0, 'Expected exit 0. stderr: ' + (result.stderr || ''));
+    const envelope = JSON.parse(result.stdout.trim());
+    const uiHooks = envelope.activeHooks.filter(h => h.capId === 'ui');
+    assert.deepStrictEqual(
+      uiHooks,
+      [],
+      'UI hooks must be absent when the UI capability is disabled at the runtime surface',
+    );
   });
 
   // FIX 4: explicit false in config.json overrides schema default

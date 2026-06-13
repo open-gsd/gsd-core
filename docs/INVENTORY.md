@@ -372,7 +372,7 @@ The `gsd-planner` agent is decomposed into a core agent plus reference modules t
 
 ---
 
-## CLI Modules (109 shipped)
+## CLI Modules (110 shipped)
 
 Full listing: `gsd-core/bin/lib/*.cjs`.
 
@@ -384,8 +384,9 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `artifacts.cjs` | Canonical artifact registry — known `.planning/` root file names; used by `gsd-health` W019 lint |
 | `audit-command-router.cjs` | ADR-959 capability command router for `gsd-tools audit-uat` and `gsd-tools audit-open` — extracted from hardcoded cases in `gsd-tools.cjs`; dispatches to `uat.cjs:cmdAuditUat` and `audit.cjs:{auditOpenArtifacts,formatAuditReport}`; phase 4d-impl-3 |
 | `audit.cjs` | Audit dispatch, audit open sessions, audit storage helpers |
+| `capability-activation.cjs` | Capability activation resolver shared by config validation and capability-state consumers — resolves registry-owned config keys from raw runtime config without re-centralizing migrated settings |
 | `capability-registry.cjs` | Generated central Capability Registry — role-partitioned index of all co-located capability declarations (`capabilities/<id>/capability.json`); emitted by `scripts/gen-capability-registry.cjs --write` (ADR-894 §5) |
-| `capability-state.cjs` | Unified capability-state resolver (ADR-857 phase 4b) — composes install profile, runtime surface, and config activation into one per-capability view; exports pure `resolveCapabilityState` + I/O handler `cmdCapabilityState`; command surface: `gsd-tools capability state [--config-dir <path>]` emitting `{ runtimeConfigDir, capabilities[] }` |
+| `capability-state.cjs` | Unified capability-state resolver (ADR-857 phase 4b/6) — composes install profile, runtime surface, and config activation into one per-capability view consumed by workflow hook rendering; exports pure `resolveCapabilityState`, reusable `resolveCapabilityRuntimeState`, and I/O handler `cmdCapabilityState`; command surface: `gsd-tools capability state [--config-dir <path>]` emitting `{ runtimeConfigDir, capabilities[] }` |
 | `check-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools check` |
 | `cli-exit.cjs` | `ExitError` class and `runMain()` helper — CLI entrypoints throw `ExitError` instead of calling `process.exit()`; `runMain()` translates the outcome into `process.exitCode` so output flushes cleanly |
 | `cjs-command-router-adapter.cjs` | Shared compatibility adapter for manifest-backed CJS command-family routers |
@@ -409,7 +410,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `drift.cjs` | Post-execute codebase structural drift detector (#2003): classifies file changes into new-dir/barrel/migration/route categories and round-trips `last_mapped_commit` frontmatter |
 | `edge-probe.cjs` | Spec-completeness edge probe (compiled from `src/edge-probe.cts`, gitignored) — the first adapter of the `probe-core` resolution model (ADR-550 Decision 7): shape classification, applicable-category relevance filter, edge proposal, and the `{explicit, backstop}` verification validators; delegates merge/rollup/CLI to `probe-core`; exports `classifyShape`, `applicableCategories`, `proposeEdges`, `analyzeCoverage`, `validateResolution`, `TAXONOMY` (#550) |
 | `fallow-runner.cjs` | Fallow audit adapter for `/gsd-code-review`: binary resolution (`PATH` then `node_modules/.bin`), actionable missing-binary errors, and structural findings normalization |
-| `federated-config.cjs` | Defensive merge of capability-declared config slices into the loadConfig return value — ADR-857 phase 3b; exports `mergeFederatedConfig({ configSchema, isCentralKey, userConfig })` → `{ values, validKeys, warnings }`; no-op until a key is atomically removed from the central config-schema (the cutover step) |
+| `federated-config.cjs` | Defensive merge of capability-declared config slices into the loadConfig return value — ADR-857 phase 3b; exports `mergeFederatedConfig({ configSchema, isCentralKey, userConfig })` → `{ values, validKeys, warnings }`; live for migrated Capability keys that are atomically removed from the central config schema |
 | `frontmatter.cjs` | YAML frontmatter CRUD operations |
 | `gap-checker.cjs` | Post-planning gap analysis (#2493): unified REQUIREMENTS.md + CONTEXT.md decisions vs PLAN.md coverage report (`gsd-tools gap-analysis`) |
 | `graphify.cjs` | Knowledge-graph build/query/status/diff for `/gsd-graphify` |
@@ -427,7 +428,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `learnings.cjs` | Cross-phase learnings extraction for `/gsd-extract-learnings` |
 | `legacy-cleanup.cjs` | Detect and remove leftover get-shit-done-cc artifacts; exports `planLegacyCleanup` (pure scan) and `applyLegacyCleanup` (thin IO applier) that root out stale files from the old package across every GSD-managed runtime config directory (#607) |
 | `loop-host-contract.cjs` | Generated Loop Host Contract — 12 loop points, per-step agent roles, and core artifacts for the five-step pipeline (discuss/plan/execute/verify/ship); emitted by `scripts/gen-loop-host-contract.cjs --write` (ADR-894 §3); consumed by `gen-capability-registry.cjs` |
-| `loop-resolver.cjs` | Loop Extension Point resolver — ADR-857 phase 3c registry-consuming query; given a canonical loop point, filters `byLoopPoint` by config activation (`when` key traversal with prototype-pollution guard), returns `{ point, activeHooks, rendered }` envelope; `resolveLoopHooks` and `renderLoopHooks` are pure (no I/O); command surface: `gsd-tools loop render-hooks <point>` |
+| `loop-resolver.cjs` | Loop Extension Point resolver — ADR-857 phase 3c/6 registry-consuming query; given a canonical loop point, filters `byLoopPoint` by resolved Capability State plus config activation (`when` key traversal with prototype-pollution guard), returns `{ point, activeHooks, rendered }` envelope; `resolveLoopHooks` and `renderLoopHooks` are pure (no I/O); command surface: `gsd-tools loop render-hooks <point> [--config-dir <path>]` |
 | `milestone.cjs` | Milestone archival, requirements marking |
 | `model-catalog.cjs` | CJS adapter over the shared model catalog JSON; exports canonical runtime tier defaults, agent profile maps, alias maps, and routing metadata for all CLI consumers |
 | `model-profiles.cjs` | Backward-compatible profile helpers derived from `model-catalog.cjs`; no longer owns its own model table |

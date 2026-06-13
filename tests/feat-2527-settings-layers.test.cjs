@@ -5,8 +5,8 @@
  * six visual sections. Adds 8 new fields (pattern_mapper, tdd_mode, code_review,
  * code_review_depth, ui_review, commit_docs, intel.enabled, graphify.enabled)
  * and verifies each is present in the AskUserQuestion block, the update_config
- * step, the confirmation table, the ~/.gsd/defaults.json save step, and
- * VALID_CONFIG_KEYS.
+ * step, the confirmation table, the ~/.gsd/defaults.json save step, and the
+ * effective config-key validator.
  *
  * Closes: #2527
  */
@@ -18,7 +18,11 @@ const path = require('path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 
 const SETTINGS_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'settings.md');
-const { VALID_CONFIG_KEYS } = require('../gsd-core/bin/lib/config-schema.cjs');
+const {
+  VALID_CONFIG_KEYS,
+  isCentralConfigKey,
+  isValidConfigKey,
+} = require('../gsd-core/bin/lib/config-schema.cjs');
 
 const NEW_FIELDS = [
   'workflow.pattern_mapper',
@@ -30,6 +34,13 @@ const NEW_FIELDS = [
   'intel.enabled',
   'graphify.enabled',
 ];
+
+const CENTRAL_NEW_FIELDS = [
+  'workflow.tdd_mode',
+  'commit_docs',
+];
+
+const CAPABILITY_OWNED_NEW_FIELDS = NEW_FIELDS.filter((field) => !CENTRAL_NEW_FIELDS.includes(field));
 
 const SECTION_HEADERS = ['Planning', 'Execution', 'Docs & Output', 'Features', 'Model & Pipeline', 'Misc'];
 
@@ -134,12 +145,40 @@ describe('#2527: settings.md adds grouped settings layers', () => {
     });
   });
 
-  describe('Acceptance: all 8 new fields registered in VALID_CONFIG_KEYS', () => {
+  describe('Acceptance: all 8 new fields accepted by the config validator', () => {
     for (const field of NEW_FIELDS) {
-      test(`VALID_CONFIG_KEYS contains ${field}`, () => {
+      test(`config validator accepts ${field}`, () => {
+        assert.ok(
+          isValidConfigKey(field),
+          `${field} must be accepted so config-set can write it`
+        );
+      });
+    }
+  });
+
+  describe('Acceptance: migrated capability fields are no longer central config keys', () => {
+    for (const field of CAPABILITY_OWNED_NEW_FIELDS) {
+      test(`${field} is capability-owned, not central-schema residue`, () => {
+        assert.equal(
+          isCentralConfigKey(field),
+          false,
+          `${field} must be owned by the capability registry instead of the central schema`
+        );
+        assert.equal(
+          VALID_CONFIG_KEYS.has(field),
+          false,
+          `${field} must not be duplicated in VALID_CONFIG_KEYS after Phase 6 migration`
+        );
+      });
+    }
+  });
+
+  describe('Acceptance: still-central settings remain in VALID_CONFIG_KEYS', () => {
+    for (const field of CENTRAL_NEW_FIELDS) {
+      test(`VALID_CONFIG_KEYS contains central setting ${field}`, () => {
         assert.ok(
           VALID_CONFIG_KEYS.has(field),
-          `${field} must be in VALID_CONFIG_KEYS so config-set accepts it`
+          `${field} is not a migrated capability key and must remain in VALID_CONFIG_KEYS`
         );
       });
     }
