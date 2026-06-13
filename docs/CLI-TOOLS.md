@@ -382,6 +382,9 @@ node gsd-tools.cjs current-timestamp [full|date|filename]
 # Count and list pending todos
 node gsd-tools.cjs list-todos [area]
 
+# List captured seeds (optionally filter by status: dormant|active|triggered)
+node gsd-tools.cjs list-seeds [status]
+
 # Check file/directory existence
 node gsd-tools.cjs verify-path-exists <path>
 
