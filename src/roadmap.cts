@@ -504,9 +504,11 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       return '|' + cells.join('|') + '|';
     });
 
-    // Update plan count in phase detail section
+    // Update plan count in phase detail section.
+    // Tolerate both bold `**Plans:**` and plain `Plans:` to cover both
+    // template variants (#1163 — plain Plans: was silently skipped).
     const planCountPattern = new RegExp(
-      `(#{2,4}\\s*Phase\\s+${phasePattern}(?=[:\\s])[\\s\\S]*?\\*\\*Plans:\\*\\*\\s*)[^\\n]+`,
+      `(#{2,4}\\s*Phase\\s+${phasePattern}(?=[:\\s])[\\s\\S]*?(?:\\*\\*Plans:\\*\\*|(?:^|\\n)Plans:)\\s*)[^\\n]+`,
       'i'
     );
     const planCountText = isComplete
@@ -524,6 +526,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     }
 
     // Mark completed plan checkboxes (e.g. "- [ ] 50-01-PLAN.md", "- [ ] 50-01:", or "- [ ] **50-01**")
+    let anyCheckboxMatched = false;
     for (const summaryFile of phaseInfo!.summaries) {
       const planId = summaryFile.replace('-SUMMARY.md', '').replace('SUMMARY.md', '');
       if (!planId) continue;
@@ -532,7 +535,50 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
         `(-\\s*\\[) (\\]\\s*(?:\\*\\*)?${planEscaped}(?:\\*\\*)?)`,
         'i'
       );
-      roadmapContent = roadmapContent.replace(planCheckboxPattern, '$1x$2');
+      if (planCheckboxPattern.test(roadmapContent)) {
+        anyCheckboxMatched = true;
+        roadmapContent = roadmapContent.replace(planCheckboxPattern, '$1x$2');
+      }
+    }
+
+    // Determine whether any per-plan checkbox rows already exist for this phase.
+    // Check if ANY plan file from the phase already has a checkbox row (checked or
+    // unchecked) anywhere in the ROADMAP.  This covers both the top-level
+    // `- [ ] NN-XX-PLAN.md` form and the indented `  - [ ] NN-XX-PLAN.md` form
+    // used by some template variants.  If at least one plan file is already
+    // mentioned as a checkbox, the section is considered populated — we must NOT
+    // insert duplicates.
+    const rowsAlreadyPresent = anyCheckboxMatched || phaseInfo!.plans.some((planFile) => {
+      const planEscaped = escapeRegex(planFile);
+      return new RegExp(`-\\s*\\[[x ]\\]\\s*(?:\\*\\*)?${planEscaped}`, 'i').test(roadmapContent);
+    });
+
+    if (!rowsAlreadyPresent) {
+      // Insert missing plan checklist rows (#1163): no per-plan checkbox rows
+      // exist yet (fresh template).  Append a `- [ ] NN-XX-PLAN.md` line for
+      // each plan file, sorted, immediately after the Plans: line in the phase
+      // detail section.
+      const insertRowsPattern = new RegExp(
+        `(#{2,4}\\s*Phase\\s+${phasePattern}(?=[:\\s])[\\s\\S]*?(?:\\*\\*Plans:\\*\\*|Plans:)[^\\n]*)`,
+        'i'
+      );
+      const sortedPlans = [...phaseInfo!.plans].sort();
+      const newRows = sortedPlans.map(p => `- [ ] ${p}`).join('\n');
+      const withRows = roadmapContent.replace(insertRowsPattern, (match) => `${match}\n${newRows}`);
+      if (withRows !== roadmapContent) {
+        roadmapContent = withRows;
+        // Now mark any that have summaries
+        for (const summaryFile of phaseInfo!.summaries) {
+          const planId = summaryFile.replace('-SUMMARY.md', '').replace('SUMMARY.md', '');
+          if (!planId) continue;
+          const planEscaped = escapeRegex(planId);
+          const planCheckboxPattern = new RegExp(
+            `(-\\s*\\[) (\\]\\s*(?:\\*\\*)?${planEscaped}(?:\\*\\*)?)`,
+            'i'
+          );
+          roadmapContent = roadmapContent.replace(planCheckboxPattern, '$1x$2');
+        }
+      }
     }
 
     platformWriteSync(roadmapPath, roadmapContent);
