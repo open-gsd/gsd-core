@@ -145,17 +145,29 @@ describe('ADR-857 Phase 6 capstone conformance (#1139)', () => {
     );
   });
 
-  test('all ADR-857-named optional features are migrated to Capabilities (#1169)', () => {
+  test('all ADR-857-named optional features are real Capabilities, not empty stubs (#1169)', () => {
     // ADR-857 §53 + Decision 7 enumerate these optional, non-loop modules as
-    // Capabilities. Until each is a registered feature capability (or documented
-    // as core substrate), phase 6 is incomplete and the capstone is a false green.
+    // Capabilities. "Migrated" means the feature OWNS its behavior: hook-based
+    // features (tdd/schema-gate/drift/gap-analysis) must declare >=1 hook;
+    // command-family features (profile-pipeline) must declare a command family.
+    // A registration-only stub (role:feature but no hooks/commands) games this
+    // gate while the logic stays welded into the loop — rejected here.
     const REQUIRED = ['tdd', 'schema-gate', 'drift', 'gap-analysis', 'profile-pipeline'];
-    const unmigrated = REQUIRED.filter((id) => registry.capabilities[id]?.role !== 'feature');
+    const problems = [];
+    for (const id of REQUIRED) {
+      const cap = registry.capabilities[id];
+      if (!cap) { problems.push(`${id}: not registered`); continue; }
+      if (cap.role !== 'feature') { problems.push(`${id}: role="${cap.role}", must be "feature"`); continue; }
+      const hookCount = (cap.steps?.length || 0) + (cap.contributions?.length || 0) + (cap.gates?.length || 0);
+      const isCommandFamily = (cap.commands?.length || 0) > 0;
+      if (hookCount === 0 && !isCommandFamily) {
+        problems.push(`${id}: EMPTY STUB (no hooks, no command family) — inline logic was not migrated; declare the real hooks/commands and remove the inline branch`);
+      }
+    }
     assert.deepEqual(
-      unmigrated, [],
-      `ADR-857 phase 6 is NOT complete: these ADR-named optional features are not yet ` +
-      `feature Capabilities (still inline in plan-phase.md / execute-phase.md): ` +
-      `${unmigrated.join(', ')}. Migrate each, or document it as core substrate (#1169).`,
+      problems, [],
+      `ADR-857 phase 6 is NOT complete:\n  ${problems.join('\n  ')}\n` +
+      `Each feature must OWN its behavior via hooks or a command family — not exist as a registration-only stub (#1169).`,
     );
   });
 
@@ -178,6 +190,25 @@ describe('ADR-857 Phase 6 capstone conformance (#1139)', () => {
       leaks, [],
       `ADR-857 phase 6 is NOT complete: the host loop reads capability-owned config keys ` +
       `inline:\n  ${leaks.join('\n  ')}\nThe owning capability must render/consume these (#1169).`,
+    );
+  });
+
+  test('host loop bodies are materially smaller than the pre-phase-6 baseline (#1168)', () => {
+    // #1139 AC: plan-phase.md / execute-phase.md must shrink as optional features
+    // extract to capabilities. Frozen pre-phase-6 sizes (LF bytes); the files must
+    // drop strictly below these. This also defeats double-run gaming — declaring a
+    // hook while leaving the inline block keeps the file from shrinking -> red.
+    const { lfByteCount } = require('../scripts/workflow-size.cjs');
+    const PRE_PHASE6 = { 'plan-phase.md': 94519, 'execute-phase.md': 93166 };
+    const notShrunk = [];
+    for (const [file, frozen] of Object.entries(PRE_PHASE6)) {
+      const now = lfByteCount(path.join(ROOT, 'gsd-core', 'workflows', file));
+      if (now >= frozen) notShrunk.push(`${file}: ${now} bytes (must be < pre-phase-6 ${frozen})`);
+    }
+    assert.deepEqual(
+      notShrunk, [],
+      `ADR-857 phase 6 is NOT complete: host loop bodies have not shrunk — the optional ` +
+      `feature logic has not actually been extracted:\n  ${notShrunk.join('\n  ')}`,
     );
   });
 });
