@@ -860,7 +860,20 @@ const capabilities = {
       }
     ],
     "hooks": [],
-    "steps": [],
+    "steps": [
+      {
+        "point": "plan:pre",
+        "ref": {
+          "command": "intel api-surface"
+        },
+        "produces": [
+          ".planning/intel/API-SURFACE.md"
+        ],
+        "consumes": [],
+        "when": "intel.enabled",
+        "onError": "skip"
+      }
+    ],
     "contributions": [],
     "gates": []
   },
@@ -1432,6 +1445,10 @@ const capabilities = {
         "fragment": {
           "inline": "Each PLAN.md must include a <threat_model> block when security enforcement is active. Use the configured ASVS level and blocking threshold from workflow.security_asvs_level and workflow.security_block_on."
         },
+        "configValues": {
+          "security_asvs_level": "workflow.security_asvs_level",
+          "security_block_on": "workflow.security_block_on"
+        },
         "produces": [],
         "consumes": [
           "CONTEXT.md"
@@ -1751,6 +1768,19 @@ const byLoopPoint = {
         "onError": "skip"
       },
       {
+        "capId": "intel",
+        "point": "plan:pre",
+        "ref": {
+          "command": "intel api-surface"
+        },
+        "produces": [
+          ".planning/intel/API-SURFACE.md"
+        ],
+        "consumes": [],
+        "when": "intel.enabled",
+        "onError": "skip"
+      },
+      {
         "capId": "research",
         "point": "plan:pre",
         "ref": {
@@ -1826,6 +1856,10 @@ const byLoopPoint = {
         "into": "planner",
         "fragment": {
           "inline": "Each PLAN.md must include a <threat_model> block when security enforcement is active. Use the configured ASVS level and blocking threshold from workflow.security_asvs_level and workflow.security_block_on."
+        },
+        "configValues": {
+          "security_asvs_level": "workflow.security_asvs_level",
+          "security_block_on": "workflow.security_block_on"
         },
         "produces": [],
         "consumes": [

@@ -259,6 +259,8 @@ interface ActiveHook {
   blocking?: boolean;
   check?: unknown;
   onError?: string;
+  /** Resolved capability-owned config values declared in the contribution's configValues map. */
+  configValues?: Record<string, unknown>;
 }
 
 interface ResolveLoopHooksInput {
@@ -352,6 +354,47 @@ function resolveLoopHooks(input: ResolveLoopHooksInput): ResolveLoopHooksResult 
     return Object.keys(fragment).length > 0 ? fragment : undefined;
   }
 
+  /**
+   * Resolve declared configValues for a contribution hook.
+   * The hook may carry `configValues: { alias: "dotted.key", ... }`.
+   * Each key is resolved using the same four-level precedence as activation resolution,
+   * but returning the raw value (not coerced to boolean) so numeric/string config values
+   * are preserved (e.g. security_asvs_level: 2, security_block_on: "medium").
+   */
+  function resolveConfigValues(hook: RawHook): Record<string, unknown> | undefined {
+    const raw = (hook as Record<string, unknown>)['configValues'];
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+    const rawMap = raw as Record<string, unknown>;
+    const resolved: Record<string, unknown> = {};
+    for (const [alias, dotKey] of Object.entries(rawMap)) {
+      // Prototype-pollution guard (inline literal, CodeQL barrier)
+      if (alias === '__proto__' || alias === 'constructor' || alias === 'prototype') continue;
+      if (typeof dotKey !== 'string') continue;
+      // Level 1: loadConfig result
+      const fromConfig = _getNestedConfigValue(config, dotKey);
+      if (fromConfig.found) { resolved[alias] = fromConfig.value; continue; }
+      // Level 2 + 3: raw config.json files
+      if (cwd) {
+        const wsConfigPath = path.join(planningDir(cwd), 'config.json');
+        const rootConfigPath = path.join(planningRoot(cwd), 'config.json');
+        const fromWs = _readRawConfigKey(wsConfigPath, dotKey);
+        if (fromWs.found) { resolved[alias] = fromWs.value; continue; }
+        if (wsConfigPath !== rootConfigPath) {
+          const fromRoot = _readRawConfigKey(rootConfigPath, dotKey);
+          if (fromRoot.found) { resolved[alias] = fromRoot.value; continue; }
+        }
+      }
+      // Level 4: registry configSchema default
+      const schemaEntry = (registry['configSchema'] as Record<string, unknown> | undefined)?.[dotKey];
+      if (schemaEntry && typeof schemaEntry === 'object' && schemaEntry !== null) {
+        const def = (schemaEntry as Record<string, unknown>)['default'];
+        if (def !== undefined) { resolved[alias] = def; continue; }
+      }
+      // Level 5: absent → undefined (omit from resolved map)
+    }
+    return Object.keys(resolved).length > 0 ? resolved : undefined;
+  }
+
   // Process steps
   const stepsRaw = entryMap['steps'];
   const steps: RawHook[] = Array.isArray(stepsRaw) ? (stepsRaw as RawHook[]) : [];
@@ -392,6 +435,7 @@ function resolveLoopHooks(input: ResolveLoopHooksInput): ResolveLoopHooksResult 
     const produces = toStringArray(hook['produces']);
     const consumes = toStringArray(hook['consumes']);
     const onError = typeof hook['onError'] === 'string' ? hook['onError'] : undefined;
+    const configValuesResolved = resolveConfigValues(hook);
     const active: ActiveHook = { capId, kind: 'contribution' };
     if (into !== undefined) active.into = into;
     if (fragment !== undefined) active.fragment = fragment;
@@ -399,6 +443,7 @@ function resolveLoopHooks(input: ResolveLoopHooksInput): ResolveLoopHooksResult 
     if (produces.length > 0) active.produces = produces;
     if (consumes.length > 0) active.consumes = consumes;
     if (onError !== undefined) active.onError = onError;
+    if (configValuesResolved !== undefined) active.configValues = configValuesResolved;
     activeHooks.push(active);
   }
 
