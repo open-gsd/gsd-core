@@ -277,8 +277,11 @@ describe('bug #1162: state update on table-format STATE.md', () => {
     assert.equal(parsed.updated, true, 'extra-whitespace table cell not matched');
   });
 
-  test('table field value with pipe-like content does not corrupt surrounding cells', () => {
-    // A value containing '|' is unusual but should not shatter adjacent cells.
+  test('updating one row in a multi-row table does not corrupt adjacent rows', () => {
+    // Regression: updating `Status` must leave the `Phase` row untouched.
+    // NOTE: values containing literal '|' (e.g., "blocked | waiting") are NOT
+    // supported — the current value regex [^|\n]*? stops at the first pipe.
+    // Escaped-pipe values are out of scope for single-token status fields.
     const content = [
       '---',
       'gsd_state_version: 1.0',
