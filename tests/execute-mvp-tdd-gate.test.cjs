@@ -21,7 +21,12 @@ function parseGateContract(content) {
     hasDualGateCondition: lowerLines.some(line => line.includes('mvp_mode') && line.includes('tdd_mode')),
     hasGateLabel: lowerLines.some(line => line.includes('mvp+tdd gate') || line.includes('mvp-tdd gate')),
     hasRedCommitRule: lowerLines.some(line => line.includes('failing-test commit') || line.includes('missing red commit') || line.includes('test(')),
-    hasBlockingEscalation: lowerLines.some(line => line.includes('blocking') && line.includes('mvp+tdd')),
+    // Must assert the REAL refusal semantics, not merely the words "blocking" + "mvp+tdd"
+    // (which "advisory (blocking: false) ... under MVP+TDD" would satisfy as a false green).
+    hasBlockingEscalation:
+      content.toLowerCase().includes('mvp+tdd')
+      && (content.toLowerCase().includes('refuse to mark the phase complete')
+        || content.toLowerCase().includes('phase blocked')),
     hasReferenceDoc: lowerLines.some(line => line.includes('execute-mvp-tdd.md')),
   };
 }

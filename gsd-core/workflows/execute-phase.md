@@ -1214,7 +1214,14 @@ If the check command failed (non-zero `CHECK_EXIT`, empty output, or unparseable
 - If `hook.blocking == false` (advisory): if `GATE_RESULT.block == true` or non-empty `message`, display the gate's `table` or summary output and continue. Advisory gates never block execution.
 - If `hook.blocking == true` and `GATE_RESULT.block == false`: continue silently.
 
-The tdd capability's `execute:post` gate (`tdd.review-checkpoint`) is advisory (`blocking: false`). When active (TDD_MODE=true), the gate result table is displayed for human review; it does not block phase completion. Under MVP+TDD mode (`MVP_MODE=true` AND `TDD_MODE=true`), escalate violations to the operator as a strong advisory recommendation to resolve before advancing.
+**TDD review escalation (overrides the advisory default for the `tdd.review-checkpoint` gate only).** The tdd `execute:post` gate is declared `blocking: false`, so by the generic contract above it displays its `message`/table and continues. There is ONE documented exception (see `~/.claude/gsd-core/references/execute-mvp-tdd.md`): when `MVP_MODE=true` AND `TDD_MODE=true` AND `GATE_RESULT.block == true` (one or more TDD plans miss a RED or GREEN gate commit), the end-of-phase TDD review escalates from advisory to **blocking under MVP+TDD** — refuse to mark the phase complete and present:
+
+```
+Phase blocked: {N} TDD plan(s) violate the RED→GREEN gate sequence under MVP+TDD.
+Resolve and re-run /gsd execute-phase, or override with /gsd execute-phase {phase} --force-mvp-gate to ship anyway.
+```
+
+(`--force-mvp-gate` is the documented, not-yet-implemented escape hatch.) Outside MVP+TDD, TDD-review violations remain advisory (table shown, execution continues).
 
 Regardless of review and gate results, ALWAYS proceed to close_parent_artifacts → regression_gate → verify_phase_goal.
 </step>
