@@ -79,6 +79,32 @@ Verify the work is ready to ship:
    which gh && gh auth status 2>&1
    ```
    If `gh` not found or not authenticated: provide setup instructions and exit.
+
+6. **Security ship gate (capability-driven).**
+
+   Resolve active `ship:pre` gate hooks from the capability registry — the registry evaluates each hook's `when` condition, so do **not** read `workflow.security_enforcement` directly:
+
+   ```bash
+   SHIP_PRE_HOOKS_JSON=$(gsd_run loop render-hooks ship:pre --raw)
+   SECURITY_FILE=$(ls "${PHASE_DIR}"/*-SECURITY.md 2>/dev/null | head -1)
+   ```
+
+   Read the `activeHooks` array from `SHIP_PRE_HOOKS_JSON` in-context (do NOT pipe it through a shell parser).
+
+   If an active entry exists with `kind == "gate"`, `capId == "security"`, and `blocking == true`, enforce its predicate (`SECURITY.md` frontmatter `threats_open == 0`) before shipping:
+
+   - **`SECURITY_FILE` is empty** → block with `SECURITY_SHIP_GATE_NO_REVIEW`:
+     ```
+     ⚠ Security enforcement is enabled but no SECURITY.md exists for this phase.
+     Run /gsd:secure-phase {phase} and resolve findings before shipping.
+     ```
+   - **`SECURITY_FILE` exists** → read its frontmatter `threats_open`. The gate passes **only** when `threats_open` is exactly `0`. For any other value — `threats_open` > 0, or a missing / non-numeric / unparsable field — **fail closed and block** with `SECURITY_SHIP_GATE_OPEN_THREATS` (the predicate is strict equality to `0`; never ship on an ambiguous value):
+     ```
+     ⚠ Security ship gate: SECURITY.md does not assert threats_open == 0 (found: {threats_open|unset}).
+     Resolve open threats (or re-run /gsd:secure-phase {phase}) before shipping.
+     ```
+
+   If no active security `ship:pre` gate hook is present (security enforcement off), skip this check silently.
 </step>
 
 <step name="push_branch">
