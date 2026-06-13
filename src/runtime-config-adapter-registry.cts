@@ -30,6 +30,9 @@
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { runtimes } = require('./capability-registry.cjs') as { runtimes: Record<string, { runtime: Record<string, unknown> | undefined }> };
 
+/** Valid sandboxTier enum values — mirrors the gen-capability-registry validator vocabulary. */
+const VALID_SANDBOX_TIERS = new Set(['none', 'codex-agent-sandbox']);
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -71,6 +74,8 @@ interface InstallPlan extends RuntimeConfigIntent {
   extendedHookEvents: string[];
   /** Which surface owns the hook registration for this runtime. */
   hooksSurface: HooksSurface;
+  /** Runtime sandbox tier ('none' | 'codex-agent-sandbox'); gates per-agent sandbox_mode emission. */
+  sandboxTier: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -130,6 +135,10 @@ function resolveInstallPlan(runtime: string): InstallPlan {
   const desc = runtimes[runtime]?.runtime;
   if (!desc) throw new TypeError(`Unknown runtime for install plan: ${runtime}`);
   const configIntent = resolveRuntimeConfigIntent(runtime);
+  const sandboxTier = desc['sandboxTier'];
+  if (typeof sandboxTier !== 'string' || !VALID_SANDBOX_TIERS.has(sandboxTier)) {
+    throw new TypeError(`Runtime '${runtime}' has a missing or invalid sandboxTier descriptor axis: ${JSON.stringify(sandboxTier)}`);
+  }
   return {
     runtime,
     installSurface:         configIntent.installSurface,
@@ -140,6 +149,7 @@ function resolveInstallPlan(runtime: string): InstallPlan {
     hooksSurface:           desc['hooksSurface'] != null
       ? desc['hooksSurface'] as HooksSurface
       : ((runtime === 'opencode' || runtime === 'kilo') ? 'none' : 'settings-json'),
+    sandboxTier,
   };
 }
 
