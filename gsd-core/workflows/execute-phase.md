@@ -915,26 +915,35 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
    ```bash
    GATE_RESULT=$(gsd_run check ${hook.check.query} "${PHASE_NUMBER}" --raw)
+   CHECK_EXIT=$?
    ```
 
-   Then act on `${hook.blocking}` and `GATE_RESULT`:
+   **Step 1 — did the CHECK COMMAND itself succeed?**
 
-   - **Blocking gate (`blocking == true`) with `GATE_RESULT.block` `true`:**
-     - If `onError == "halt"`: stop wave completion, do NOT proceed to step 5.8, and present:
+   If the check command failed (non-zero `CHECK_EXIT`, empty output, or unparseable JSON):
+   - `onError == "halt"` → treat as a fatal error: stop wave completion, do NOT proceed to step 5.8, and surface: `⚠ Gate check command failed ({hook.capId}): command error. Resolve before continuing.`
+   - `onError == "skip"` → log a warning and continue to the next hook. Do NOT read `GATE_RESULT.block`.
 
-       ```
-       ⚠ Wave {N} blocked by capability gate ({hook.capId}): {GATE_RESULT.message}
-       Resolve before continuing to next wave.
-       ```
-     - If `onError == "skip"`: log the gate failure as a warning and continue.
+   **Step 2 — read `GATE_RESULT.block` (boolean).** This step is only reached when the command succeeded.
 
-   - **Non-blocking gate (`blocking == false`):** never halts. If `GATE_RESULT` reports a finding (any of `block`, `drift_detected`, or `action_required` is `true`, or a non-empty `message`), surface it as an advisory and continue:
+   - **Blocking gate (`hook.blocking == true`) AND `GATE_RESULT.block == true`:** HALT — stop wave completion, do NOT proceed to step 5.8, and present:
 
-       ```
-       ⚠ {hook.capId} advisory (wave {N}): {GATE_RESULT.message}
-       ```
+     ```
+     ⚠ Wave {N} blocked by capability gate ({hook.capId}): {GATE_RESULT.message}
+     Resolve before continuing to next wave.
+     ```
+
+     This halt is **not** bypassed by `onError` — `onError` only covers command errors (step 1 above), not the gate's block decision.
+
+   - **Non-blocking gate (`hook.blocking == false`):** never halts. If `GATE_RESULT.block` is `true` (or a non-empty `message`), surface it as an advisory and continue:
+
+     ```
+     ⚠ {hook.capId} advisory (wave {N}): {GATE_RESULT.message}
+     ```
 
      Otherwise continue silently.
+
+   - **Blocking gate (`hook.blocking == true`) AND `GATE_RESULT.block == false`:** continue silently.
 
    **When all active gates are processed without a blocking halt:** continue to step 5.8.
 
@@ -1191,13 +1200,19 @@ Code review found issues. Consider running:
 For each active gate hook:
 ```bash
 GATE_RESULT=$(gsd_run check ${hook.check.query} "${PHASE_NUMBER}" --raw)
+CHECK_EXIT=$?
 ```
 
-Read `passed`, `violations`, `table` (or `block`) from `GATE_RESULT`.
+**Step 1 — did the CHECK COMMAND itself succeed?**
+If the check command failed (non-zero `CHECK_EXIT`, empty output, or unparseable JSON):
+- `onError == "halt"` → halt; surface command error and stop.
+- `onError == "skip"` → log a warning and continue to the next hook.
 
-- If `blocking == true` and the gate returns `block: true`: halt with the gate's error/table output before proceeding.
-- If `blocking == false` (advisory): display the gate's `table` or summary output and continue. Advisory gates never block execution.
-- If `onError == "skip"` and the check command fails or errors: log the failure as a warning and continue.
+**Step 2 — read `GATE_RESULT.block` (boolean).** Only reached when command succeeded.
+
+- If `hook.blocking == true` and `GATE_RESULT.block == true`: halt with the gate's message/table output before proceeding. This halt is NOT bypassed by `onError`.
+- If `hook.blocking == false` (advisory): if `GATE_RESULT.block == true` or non-empty `message`, display the gate's `table` or summary output and continue. Advisory gates never block execution.
+- If `hook.blocking == true` and `GATE_RESULT.block == false`: continue silently.
 
 The tdd capability's `execute:post` gate (`tdd.review-checkpoint`) is advisory (`blocking: false`). When active (TDD_MODE=true), the gate result table is displayed for human review; it does not block phase completion. Under MVP+TDD mode (`MVP_MODE=true` AND `TDD_MODE=true`), escalate violations to the operator as a strong advisory recommendation to resolve before advancing.
 

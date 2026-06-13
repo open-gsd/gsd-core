@@ -872,7 +872,7 @@ Historical findings already incorporated, explicitly deferred/rejected in PLAN.m
 **Project instructions:** Read ./CLAUDE.md or ./.claude/CLAUDE.md if either exists — follow project-specific guidelines
 **Project skills:** Check .claude/skills/ or .agents/skills/ directory (if either exists) — read SKILL.md files, plans should account for project skill rules
 
-{If the tdd capability's plan:pre contribution is active (read from `PLAN_PRE_HOOKS_JSON` where `kind == "contribution"` and `capId == "tdd"`): inject the contribution's `fragment.inline` verbatim here. The fragment contains the `<tdd_mode_active>` block instructing the planner to apply type:tdd to eligible tasks. If no tdd contribution is active, omit this block entirely.}
+{For each active entry in `PLAN_PRE_HOOKS_JSON` where `kind == "contribution"` and `into == "planner"` (in array order): inject the entry's `fragment.inline` verbatim here. This delivers all planner-targeted contributions — including tdd's `<tdd_mode_active>` block (type:tdd heuristics), schema-gate's schema-push detection guidance (if active at plan:pre), and security's threat-model guidance. For the security contribution, also surface the resolved `configValues`: `security_asvs_level` (ASVS enforcement level) and `security_block_on` (severity threshold) so the planner uses the configured values when generating `<threat_model>` blocks. If no active planner contributions exist, omit this block entirely.}
 
 **MVP_MODE:** ${MVP_MODE} (when true, follow vertical-slice rules from `~/.claude/gsd-core/references/planner-mvp-mode.md`; when false, ignore MVP guidance entirely.)
 **WALKING_SKELETON:** ${WALKING_SKELETON} (when true, the first deliverable must be a Walking Skeleton — Read the template at `~/.claude/gsd-core/references/skeleton-template.md` and produce SKELETON.md alongside PLAN.md.)
@@ -1565,7 +1565,7 @@ gsd_run query commit "docs(${PADDED_PHASE}): create phase plan" --files "${PHASE
 
 This commits all PLAN.md files for the phase plus the updated STATE.md and ROADMAP.md to version-control the planning artifacts. Skip this step if `commit_docs` is false.
 
-## 13e. Post-Planning Gap Analysis
+## 13e. Post-Planning Gap Analysis (plan:post capability gate dispatch)
 
 Proactive, non-blocking coverage report gated on `workflow.post_planning_gaps`
 (default `true`). Dispatched via the `plan:post` capability gate owned by the
@@ -1575,12 +1575,28 @@ Proactive, non-blocking coverage report gated on `workflow.post_planning_gaps`
 ```bash
 PLAN_POST_HOOKS_JSON=$(gsd_run loop render-hooks plan:post --raw)
 PHASE_REQ_IDS=$(gsd_run query init.plan-phase "$PHASE" --pick phase_req_ids 2>/dev/null || echo TBD)
-gsd_run check gap-analysis.plan-post "${PHASE_DIR}" "${PHASE_REQ_IDS}" || true
 ```
 
 Read the `activeHooks` array from `PLAN_POST_HOOKS_JSON` in-context. If the
 `gap-analysis` gate hook is absent (capability inactive), skip this step.
-The check is non-blocking; output the gap table from the JSON result if present.
+
+**For each active entry where `kind == "gate"`** (process in array order):
+
+```bash
+GATE_RESULT=$(gsd_run check ${hook.check.query} "${PHASE_DIR}" "${PHASE_REQ_IDS}" --raw)
+CHECK_EXIT=$?
+```
+
+**Step 1 — did the CHECK COMMAND itself succeed?**
+If the check command failed (non-zero `CHECK_EXIT`, empty output, or unparseable JSON):
+- `onError == "halt"` → halt and surface command error.
+- `onError == "skip"` → log a warning and continue to the next hook.
+
+**Step 2 — read `GATE_RESULT.block` (boolean).** Only reached when command succeeded.
+
+- If `hook.blocking == true` and `GATE_RESULT.block == true`: halt. (gap-analysis is always `blocking: false` so this branch is informational only.)
+- If `hook.blocking == false` (advisory): if `GATE_RESULT.block == true` or non-empty `table`/`summary`, output the gap table and continue. Advisory gates never block phase completion.
+- If `hook.blocking == true` and `GATE_RESULT.block == false`: continue silently.
 
 ## 14. Present Final Status
 

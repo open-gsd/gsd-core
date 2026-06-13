@@ -675,6 +675,8 @@ function cmdTddReviewCheckpoint(projectDir: string, args: string[], raw: boolean
 
   if (tddPlanFiles.length === 0) {
     const result = {
+      // Uniform gate contract: block = violations > 0 (advisory; never truly blocks).
+      block: false,
       passed: true,
       tddPlans: 0,
       violations: 0,
@@ -682,7 +684,10 @@ function cmdTddReviewCheckpoint(projectDir: string, args: string[], raw: boolean
       rows: [] as TddPlanRow[],
       message: `No type:tdd plans found in phase ${phase}. TDD review skipped.`,
     };
-    output(result, raw, result.message);
+    // Pass undefined as rawValue so --raw emits JSON (not plain text).
+    // The human-readable report is carried in `result.message` for the
+    // dispatch's advisory branch to surface.
+    output(result, raw, undefined);
     return;
   }
 
@@ -761,13 +766,24 @@ function cmdTddReviewCheckpoint(projectDir: string, args: string[], raw: boolean
   }
 
   const result = {
+    // Uniform gate contract: block = violations > 0.
+    // This gate is advisory (blocking: false in capability.json) so block:true
+    // only surfaces as a warning, never halts. Kept here so the host-loop
+    // dispatch can read a single consistent `block` field.
+    block: violations > 0,
     passed: true,
     tddPlans: tddPlanFiles.length,
     violations,
     table,
     rows,
+    // Human-readable report in `message` so the dispatch's advisory branch
+    // can surface it. --raw emits JSON (rawValue=undefined), not plain text.
+    message: table,
   };
-  output(result, raw, table);
+  // Pass undefined as rawValue so --raw emits JSON (not the raw table text).
+  // The review table is carried in `result.message` and `result.table` so
+  // the host-loop dispatch's advisory branch can surface it.
+  output(result, raw, undefined);
 }
 
 // ─── gap-analysis-plan-post ───────────────────────────────────────────────────
@@ -793,10 +809,23 @@ function cmdGapAnalysisPlanPost(projectDir: string, args: string[], raw: boolean
   }
   const phaseReqIds = args[3] ?? undefined;
   const result = runGapAnalysis(projectDir, phaseDir, { phaseReqIds });
+  // Uniform gate contract: block = false (gap-analysis is always advisory, never blocks).
+  // `message` carries the human-readable gap analysis report so the dispatch's
+  // advisory branch can surface it. --raw emits JSON (rawValue=undefined), not
+  // plain markdown text.
   output(
-    { passed: true, enabled: result.enabled, table: result.table, summary: result.summary, counts: result.counts },
+    {
+      block: false,
+      passed: true,
+      enabled: result.enabled,
+      table: result.table,
+      summary: result.summary,
+      counts: result.counts,
+      // Human-readable report in `message` for the host-loop advisory branch.
+      message: result.table || result.summary || '',
+    },
     raw,
-    result.table || result.summary || undefined,
+    undefined,
   );
 }
 

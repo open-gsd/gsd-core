@@ -1659,7 +1659,7 @@ function cmdVerifySchemaDrift(
   const pDir = planningDir(cwd);
   const phasesDir = path.join(pDir, 'phases');
   if (!fs.existsSync(phasesDir)) {
-    output({ drift_detected: false, blocking: false, message: 'No phases directory' }, raw);
+    output({ block: false, drift_detected: false, blocking: false, message: 'No phases directory' }, raw);
     return;
   }
 
@@ -1679,7 +1679,7 @@ function cmdVerifySchemaDrift(
 
   if (!phaseDir) {
     output(
-      { drift_detected: false, blocking: false, message: `Phase directory not found: ${phaseArg}` },
+      { block: false, drift_detected: false, blocking: false, message: `Phase directory not found: ${phaseArg}` },
       raw,
     );
     return;
@@ -1711,6 +1711,9 @@ function cmdVerifySchemaDrift(
 
   output(
     {
+      // Uniform gate contract: `block` = true means "this gate's bad condition is met".
+      // drift_detected and blocking are kept for compatibility.
+      block: !!result['driftDetected'],
       drift_detected: result['driftDetected'],
       blocking: result['blocking'],
       schema_files: result['schemaFiles'],
@@ -1735,6 +1738,8 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
     const structurePath = path.join(codebaseDir, 'STRUCTURE.md');
     if (!fs.existsSync(structurePath)) {
       emit({
+        // Uniform gate contract: block = action_required (false when skipped).
+        block: false,
         skipped: true,
         reason: 'no-structure-md',
         action_required: false,
@@ -1749,6 +1754,7 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
       structureMd = fs.readFileSync(structurePath, 'utf-8');
     } catch (err) {
       emit({
+        block: false,
         skipped: true,
         reason: 'cannot-read-structure-md: ' + (err instanceof Error ? err.message : String(err)),
         action_required: false,
@@ -1763,6 +1769,7 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
     const revProbe = execGit(['rev-parse', 'HEAD'], { cwd }) as unknown as { exitCode: number; stdout: string };
     if (revProbe.exitCode !== 0) {
       emit({
+        block: false,
         skipped: true,
         reason: 'not-a-git-repo',
         action_required: false,
@@ -1784,6 +1791,7 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
     const diff = execGit(['diff', '--name-status', base, 'HEAD'], { cwd }) as unknown as { exitCode: number; stdout: string };
     if (diff.exitCode !== 0) {
       emit({
+        block: false,
         skipped: true,
         reason: 'git-diff-failed',
         action_required: false,
@@ -1825,10 +1833,13 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
       runtime: resolveRuntime(cwd),
     });
 
+    const actionRequired = !!driftResult['actionRequired'];
     emit({
+      // Uniform gate contract: block = action_required.
+      block: actionRequired,
       skipped: !!driftResult['skipped'],
       reason: driftResult['reason'] || null,
-      action_required: !!driftResult['actionRequired'],
+      action_required: actionRequired,
       directive: driftResult['directive'],
       spawn_mapper: !!driftResult['spawnMapper'],
       affected_paths: driftResult['affectedPaths'] || [],
@@ -1840,6 +1851,7 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
     });
   } catch (err) {
     emit({
+      block: false,
       skipped: true,
       reason: 'exception: ' + (err && err instanceof Error ? err.message : String(err)),
       action_required: false,
