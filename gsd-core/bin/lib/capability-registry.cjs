@@ -595,6 +595,66 @@ const capabilities = {
       "extendedHookEvents": []
     }
   },
+  "drift": {
+    "id": "drift",
+    "role": "feature",
+    "title": "Drift detection gates",
+    "description": "Post-execution drift detection gates that run after each wave completes. Provides two gates at execute:wave:post: a blocking schema drift gate (detects schema files changed without a database push) and a non-blocking codebase drift gate (detects structural additions not reflected in STRUCTURE.md).",
+    "tier": "full",
+    "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
+    "skills": [],
+    "agents": [],
+    "hooks": [],
+    "config": {
+      "workflow.drift_threshold": {
+        "type": "number",
+        "default": 3,
+        "description": "Minimum number of new structural elements (directories, barrel exports, migrations, routes) before the codebase drift gate triggers a warn or auto-remap action."
+      },
+      "workflow.drift_action": {
+        "type": "enum",
+        "values": [
+          "warn",
+          "auto-remap"
+        ],
+        "default": "warn",
+        "description": "Action taken by the codebase drift gate when the threshold is exceeded: warn (advisory message) or auto-remap (spawn gsd-codebase-mapper agent to refresh STRUCTURE.md)."
+      },
+      "workflow.schema_drift_gate": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable the drift gates at execute:wave:post. When enabled, the schema drift gate blocks verification if schema-relevant files changed during execution but no database push command was executed; the codebase drift gate (non-blocking) warns when structural additions exceed the drift_threshold."
+      }
+    },
+    "steps": [],
+    "contributions": [],
+    "gates": [
+      {
+        "point": "execute:wave:post",
+        "check": {
+          "query": "verify.schema-drift"
+        },
+        "when": "workflow.schema_drift_gate",
+        "blocking": true,
+        "onError": "skip"
+      },
+      {
+        "point": "execute:wave:post",
+        "check": {
+          "query": "verify.codebase-drift"
+        },
+        "when": "workflow.schema_drift_gate",
+        "blocking": false,
+        "onError": "skip"
+      }
+    ]
+  },
   "gap-analysis": {
     "id": "gap-analysis",
     "role": "feature",
@@ -1712,6 +1772,26 @@ const byLoopPoint = {
     "contributions": [],
     "gates": [
       {
+        "capId": "drift",
+        "point": "execute:wave:post",
+        "check": {
+          "query": "verify.schema-drift"
+        },
+        "when": "workflow.schema_drift_gate",
+        "blocking": true,
+        "onError": "skip"
+      },
+      {
+        "capId": "drift",
+        "point": "execute:wave:post",
+        "check": {
+          "query": "verify.codebase-drift"
+        },
+        "when": "workflow.schema_drift_gate",
+        "blocking": false,
+        "onError": "skip"
+      },
+      {
         "capId": "ui",
         "point": "execute:wave:post",
         "check": {
@@ -1832,6 +1912,9 @@ const configKeys = {
   "workflow.ai_integration_phase": "ai-integration",
   "workflow.code_review": "code-review",
   "workflow.code_review_depth": "code-review",
+  "workflow.drift_threshold": "drift",
+  "workflow.drift_action": "drift",
+  "workflow.schema_drift_gate": "drift",
   "workflow.post_planning_gaps": "gap-analysis",
   "graphify.enabled": "graphify",
   "intel.enabled": "intel",
@@ -1870,6 +1953,28 @@ const configSchema = {
       "standard",
       "deep"
     ]
+  },
+  "workflow.drift_threshold": {
+    "owner": "drift",
+    "type": "number",
+    "default": 3,
+    "description": "Minimum number of new structural elements (directories, barrel exports, migrations, routes) before the codebase drift gate triggers a warn or auto-remap action."
+  },
+  "workflow.drift_action": {
+    "owner": "drift",
+    "type": "enum",
+    "default": "warn",
+    "description": "Action taken by the codebase drift gate when the threshold is exceeded: warn (advisory message) or auto-remap (spawn gsd-codebase-mapper agent to refresh STRUCTURE.md).",
+    "values": [
+      "warn",
+      "auto-remap"
+    ]
+  },
+  "workflow.schema_drift_gate": {
+    "owner": "drift",
+    "type": "boolean",
+    "default": true,
+    "description": "Enable the drift gates at execute:wave:post. When enabled, the schema drift gate blocks verification if schema-relevant files changed during execution but no database push command was executed; the codebase drift gate (non-blocking) warns when structural additions exceed the drift_threshold."
   },
   "workflow.post_planning_gaps": {
     "owner": "gap-analysis",
@@ -2996,6 +3101,7 @@ const _requiresGraph = {
   "codex": [],
   "copilot": [],
   "cursor": [],
+  "drift": [],
   "gap-analysis": [],
   "gemini": [],
   "graphify": [],

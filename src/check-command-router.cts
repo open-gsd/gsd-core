@@ -16,6 +16,9 @@ import { parseDecisions } from './decisions.cjs';
 import type { Decision } from './decisions.cjs';
 import { checkUiPresence } from './ui-safety-gate.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+import verifyModule = require('./verify.cjs');
+const { cmdVerifySchemaDrift, cmdVerifyCodebaseDrift } = verifyModule;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapModule = require('./roadmap.cjs');
 const { getRoadmapPhaseWithFallback } = roadmapModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -669,7 +672,20 @@ function routeCheckCommand({ args, cwd, raw }: RouteCheckCommandOptions): void {
     cmdUiSafetyGate(cwd, args, raw);
     return;
   }
-  error('Unknown check subcommand. Available: auto-mode, decision-coverage-plan, decision-coverage-verify, gap-analysis-plan-post, ui-plan-gate, ui-safety-gate', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+  if (subcommand === 'verify-schema-drift') {
+    // Delegates to verify.schema-drift — drift capability gate at execute:wave:post (blocking).
+    // Dot-to-hyphen normalization means query "verify.schema-drift" routes here.
+    const phaseArg = typeof args[2] === 'string' ? args[2] : '';
+    cmdVerifySchemaDrift(cwd, phaseArg, false, raw);
+    return;
+  }
+  if (subcommand === 'verify-codebase-drift') {
+    // Delegates to verify.codebase-drift — drift capability gate at execute:wave:post (non-blocking).
+    // Dot-to-hyphen normalization means query "verify.codebase-drift" routes here.
+    cmdVerifyCodebaseDrift(cwd, raw);
+    return;
+  }
+  error('Unknown check subcommand. Available: auto-mode, decision-coverage-plan, decision-coverage-verify, gap-analysis-plan-post, ui-plan-gate, ui-safety-gate, verify-schema-drift, verify-codebase-drift', ERROR_REASON.SDK_UNKNOWN_COMMAND);
 }
 
 export = {
