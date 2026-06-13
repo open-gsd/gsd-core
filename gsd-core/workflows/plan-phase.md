@@ -74,11 +74,10 @@ AGENT_SKILLS_RESEARCHER=$(gsd_run query agent-skills gsd-phase-researcher)
 AGENT_SKILLS_PLANNER=$(gsd_run query agent-skills gsd-planner)
 AGENT_SKILLS_CHECKER=$(gsd_run query agent-skills gsd-plan-checker)
 CONTEXT_WINDOW=$(gsd_run query config-get context_window 2>/dev/null || echo "200000")
-TDD_MODE=$(gsd_run query config-get workflow.tdd_mode 2>/dev/null || echo "false")
 MVP_MODE_CFG=$(gsd_run query config-get workflow.mvp_mode 2>/dev/null || echo "false")
 ```
 
-When `TDD_MODE` is `true`, the planner agent is instructed to apply `type: tdd` to eligible tasks using heuristics from `references/tdd.md`. The planner's `<required_reading>` is extended to include `@~/.claude/gsd-core/references/tdd.md` so gate enforcement rules are available during planning.
+When the tdd capability's `workflow.tdd_mode` is active (resolved via the plan:pre render-hooks), the planner agent is instructed to apply `type: tdd` to eligible tasks using heuristics from `references/tdd.md`. The TDD guidance is injected via the tdd capability's contribution hook at §5.6; no inline config-get is needed.
 
 When `CONTEXT_WINDOW >= 500000`, the planner prompt includes the 3 most recent prior phase CONTEXT.md and SUMMARY.md files PLUS any phases explicitly listed in the current phase's `Depends on:` field in ROADMAP.md. Explicit dependencies always load regardless of recency (e.g., Phase 7 declaring `Depends on: Phase 2` always sees Phase 2's context). Bounded recency keeps the planner's context budget focused on recent work.
 
@@ -165,7 +164,9 @@ Set `TEXT_MODE=true` if `--text` is present in $ARGUMENTS OR `text_mode` from in
 ```bash
 MVP_FLAG_ARG=""
 if [[ "$ARGUMENTS" =~ (^|[[:space:]])--mvp([[:space:]]|$) ]]; then MVP_FLAG_ARG="--cli-flag"; fi
-if [[ "$ARGUMENTS" =~ (^|[[:space:]])--tdd([[:space:]]|$) ]]; then TDD_MODE=true; fi
+if [[ "$ARGUMENTS" =~ (^|[[:space:]])--tdd([[:space:]]|$) ]]; then
+  gsd_run query config-set workflow.tdd_mode true 2>/dev/null || true
+fi
 ```
 
 Defer the `phase.mvp-mode` query until `PHASE` is finalized (after explicit argument parsing/fallback phase detection + validation). The verb returns `true|false`; full result also exposes `source` (`cli_flag` | `roadmap` | `config` | `none`) for diagnostics. Mode is **all-or-nothing per phase** (PRD decision Q1).
@@ -928,16 +929,7 @@ Historical findings already incorporated, explicitly deferred/rejected in PLAN.m
 **Project instructions:** Read ./CLAUDE.md or ./.claude/CLAUDE.md if either exists — follow project-specific guidelines
 **Project skills:** Check .claude/skills/ or .agents/skills/ directory (if either exists) — read SKILL.md files, plans should account for project skill rules
 
-${TDD_MODE === 'true' ? `
-<tdd_mode_active>
-**TDD Mode is ENABLED.** Apply TDD heuristics from @~/.claude/gsd-core/references/tdd.md to all eligible tasks:
-- Business logic with defined I/O → type: tdd
-- API endpoints with request/response contracts → type: tdd
-- Data transformations, validation, algorithms → type: tdd
-- UI, config, glue code, CRUD → standard plan (type: execute)
-Each TDD plan gets one feature with RED/GREEN/REFACTOR gate sequence.
-</tdd_mode_active>
-` : ''}
+{If the tdd capability's plan:pre contribution is active (read from `PLAN_PRE_HOOKS_JSON` where `kind == "contribution"` and `capId == "tdd"`): inject the contribution's `fragment.inline` verbatim here. The fragment contains the `<tdd_mode_active>` block instructing the planner to apply type:tdd to eligible tasks. If no tdd contribution is active, omit this block entirely.}
 
 **MVP_MODE:** ${MVP_MODE} (when true, follow vertical-slice rules from `~/.claude/gsd-core/references/planner-mvp-mode.md`; when false, ignore MVP guidance entirely.)
 **WALKING_SKELETON:** ${WALKING_SKELETON} (when true, the first deliverable must be a Walking Skeleton — Read the template at `~/.claude/gsd-core/references/skeleton-template.md` and produce SKELETON.md alongside PLAN.md.)

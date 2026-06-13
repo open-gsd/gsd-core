@@ -1414,6 +1414,55 @@ const capabilities = {
       }
     ]
   },
+  "tdd": {
+    "id": "tdd",
+    "role": "feature",
+    "title": "Test-driven development",
+    "description": "Injects TDD heuristics into the planner and enforces RED/GREEN gate compliance on type:tdd plans after execution. Owns workflow.tdd_mode; the --tdd CLI flag is the ephemeral override.",
+    "tier": "full",
+    "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
+    "skills": [],
+    "agents": [],
+    "hooks": [],
+    "config": {
+      "workflow.tdd_mode": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable TDD mode: planner annotates eligible tasks type:tdd and executor enforces RED/GREEN/REFACTOR gate sequence."
+      }
+    },
+    "steps": [],
+    "contributions": [
+      {
+        "point": "plan:pre",
+        "into": "planner",
+        "fragment": {
+          "inline": "<tdd_mode_active>\n**TDD Mode is ENABLED.** Apply TDD heuristics from @~/.claude/gsd-core/references/tdd.md to all eligible tasks:\n- Business logic with defined I/O → type: tdd\n- API endpoints with request/response contracts → type: tdd\n- Data transformations, validation, algorithms → type: tdd\n- UI, config, glue code, CRUD → standard plan (type: execute)\nEach TDD plan gets one feature with RED/GREEN/REFACTOR gate sequence.\n</tdd_mode_active>"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "workflow.tdd_mode",
+        "onError": "skip"
+      }
+    ],
+    "gates": [
+      {
+        "point": "execute:post",
+        "check": {
+          "query": "tdd.review-checkpoint"
+        },
+        "when": "workflow.tdd_mode",
+        "blocking": false,
+        "onError": "skip"
+      }
+    ]
+  },
   "trae": {
     "id": "trae",
     "role": "runtime",
@@ -1726,6 +1775,18 @@ const byLoopPoint = {
           "CONTEXT.md"
         ],
         "when": "workflow.security_enforcement"
+      },
+      {
+        "capId": "tdd",
+        "point": "plan:pre",
+        "into": "planner",
+        "fragment": {
+          "inline": "<tdd_mode_active>\n**TDD Mode is ENABLED.** Apply TDD heuristics from @~/.claude/gsd-core/references/tdd.md to all eligible tasks:\n- Business logic with defined I/O → type: tdd\n- API endpoints with request/response contracts → type: tdd\n- Data transformations, validation, algorithms → type: tdd\n- UI, config, glue code, CRUD → standard plan (type: execute)\nEach TDD plan gets one feature with RED/GREEN/REFACTOR gate sequence.\n</tdd_mode_active>"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "workflow.tdd_mode",
+        "onError": "skip"
       }
     ],
     "gates": [
@@ -1822,7 +1883,18 @@ const byLoopPoint = {
       }
     ],
     "contributions": [],
-    "gates": []
+    "gates": [
+      {
+        "capId": "tdd",
+        "point": "execute:post",
+        "check": {
+          "query": "tdd.review-checkpoint"
+        },
+        "when": "workflow.tdd_mode",
+        "blocking": false,
+        "onError": "skip"
+      }
+    ]
   },
   "verify:pre": {
     "steps": [],
@@ -1925,6 +1997,7 @@ const configKeys = {
   "workflow.security_enforcement": "security",
   "workflow.security_asvs_level": "security",
   "workflow.security_block_on": "security",
+  "workflow.tdd_mode": "tdd",
   "workflow.ui_phase": "ui",
   "workflow.ui_review": "ui",
   "workflow.ui_safety_gate": "ui"
@@ -2042,6 +2115,12 @@ const configSchema = {
       "low",
       "none"
     ]
+  },
+  "workflow.tdd_mode": {
+    "owner": "tdd",
+    "type": "boolean",
+    "default": false,
+    "description": "Enable TDD mode: planner annotates eligible tasks type:tdd and executor enforces RED/GREEN/REFACTOR gate sequence."
   },
   "workflow.ui_phase": {
     "owner": "ui",
@@ -3118,6 +3197,7 @@ const _requiresGraph = {
   "qwen": [],
   "research": [],
   "security": [],
+  "tdd": [],
   "trae": [],
   "ui": [],
   "windsurf": []

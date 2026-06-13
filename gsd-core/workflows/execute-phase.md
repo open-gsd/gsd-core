@@ -177,7 +177,8 @@ Resolve `MVP_MODE` once via the centralized `phase.mvp-mode` query verb (precede
 MVP_FLAG_ARG=""
 if [[ "$ARGUMENTS" =~ (^|[[:space:]])--mvp([[:space:]]|$) ]]; then MVP_FLAG_ARG="--cli-flag"; fi
 MVP_MODE=$(gsd_run query phase.mvp-mode "${PHASE_NUMBER}" $MVP_FLAG_ARG --pick active)
-TDD_MODE=$(gsd_run query config-get workflow.tdd_mode 2>/dev/null || echo "false")
+EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw)
+TDD_MODE=$(node -e "const h=JSON.parse(process.argv[1]); process.stdout.write(h.activeHooks&&h.activeHooks.some(function(x){return x.capId==='tdd';})?'true':'false')" "$EXECUTE_POST_HOOKS_JSON" 2>/dev/null || echo "false")
 ```
 
 <step name="safe_resume_gate">
@@ -1122,59 +1123,6 @@ If an active secure-phase step hook exists AND SECURITY.md exists: check frontma
 ```
 </step>
 
-<step name="tdd_review_checkpoint">
-**Optional step — TDD collaborative review.**
-
-```bash
-TDD_MODE=$(gsd_run query config-get workflow.tdd_mode 2>/dev/null || echo "false")
-```
-
-**Skip if `TDD_MODE` is `false`.**
-
-When `TDD_MODE` is `true`, check whether any completed plans in this phase have `type: tdd` in their frontmatter:
-
-```bash
-TDD_PLANS=$(grep -rl "^type: tdd" "${PHASE_DIR}"/*-PLAN.md 2>/dev/null | wc -l | tr -d ' ')
-```
-
-**If `TDD_PLANS` > 0:** Insert end-of-phase collaborative review checkpoint.
-
-1. Collect all SUMMARY.md files for TDD plans
-2. For each TDD plan summary, verify the RED/GREEN/REFACTOR gate sequence:
-   - RED gate: A failing test commit exists (`test(...)` commit with MUST-fail evidence)
-   - GREEN gate: An implementation commit exists (`feat(...)` commit making tests pass)
-   - REFACTOR gate: Optional cleanup commit (`refactor(...)` commit, tests still pass)
-3. If any TDD plan is missing the RED or GREEN gate commits, flag it:
-   ```
-   ⚠ TDD gate violation: Plan {plan_id} missing {RED|GREEN} phase commit.
-     Expected commit pattern: test({phase}-{plan}): ... → feat({phase}-{plan}): ...
-   ```
-4. Present collaborative review summary:
-   ```
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    TDD REVIEW — Phase {X}
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-   TDD Plans: {TDD_PLANS} | Gate violations: {count}
-
-   | Plan | RED | GREEN | REFACTOR | Status |
-   |------|-----|-------|----------|--------|
-   | {id} |  ✓  |   ✓   |    ✓     | Pass   |
-   | {id} |  ✓  |   ✗   |    —     | FAIL   |
-   ```
-
-**Escalation under MVP+TDD.** When `MVP_MODE=true` AND `TDD_MODE=true`, the review verdict escalates from advisory to **blocking**: missing RED or GREEN gate commits prevent marking the phase complete.
-```text
-Phase blocked: {N} TDD plan(s) violate the RED→GREEN gate sequence under MVP+TDD.
-Resolve and re-run /gsd execute-phase, or override with
-/gsd execute-phase {phase} --force-mvp-gate to ship anyway.
-```
-`--force-mvp-gate` is the escape hatch (documented, not yet implemented). Policy is:
-- `MVP_MODE=true` AND `TDD_MODE=true`: violations are **blocking** unless explicitly overridden.
-- otherwise: violations are advisory/non-blocking and are surfaced for review.
-The verifier agent (step `verify_phase_goal`) still checks TDD discipline in both cases.
-</step>
-
 <step name="handle_partial_wave_execution">
 If `WAVE_FILTER` was used, re-run plan discovery after execution:
 
@@ -1207,16 +1155,16 @@ Selected wave finished successfully. This phase still has incomplete plans, so p
 </step>
 
 <step name="code_review_gate" required="true">
-**This step is REQUIRED to evaluate the capability hook.** When the code-review capability is active, auto-invoke code review on the phase's source changes. Advisory only — never blocks execution flow.
+**This step is REQUIRED to evaluate the capability hook.** When the code-review capability is active, auto-invoke code review on the phase's source changes. Advisory only — never blocks execution flow. Also dispatches advisory execute:post gate hooks (e.g. tdd.review-checkpoint).
 
 **Capability gate:**
 ```bash
-EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw)
+EXECUTE_POST_HOOKS_JSON=${EXECUTE_POST_HOOKS_JSON:-$(gsd_run loop render-hooks execute:post --raw)}
 ```
 
 Resolve active step hooks from `EXECUTE_POST_HOOKS_JSON` where `kind == "step"` and `ref.skill == "code-review"`.
 
-If no active code-review step hook exists: display "Code review skipped (code-review capability inactive)" and proceed to next step.
+If no active code-review step hook exists: display "Code review skipped (code-review capability inactive)" and proceed to gate dispatch.
 
 **Invoke review:**
 ```
@@ -1236,9 +1184,24 @@ Code review found issues. Consider running:
 /gsd:code-review ${PHASE_NUMBER} --fix
 ```
 
-**Error handling:** If the Skill invocation fails or throws, catch the error, display "Code review encountered an error (non-blocking): {error}" and proceed to next step. Review failures must never block execution.
+**Error handling:** If the Skill invocation fails or throws, catch the error, display "Code review encountered an error (non-blocking): {error}" and proceed to gate dispatch. Review failures must never block execution.
 
-Regardless of review result, ALWAYS proceed to close_parent_artifacts → regression_gate → verify_phase_goal.
+**Execute:post gate hook dispatch.** After code review, dispatch all active gate hooks from `EXECUTE_POST_HOOKS_JSON` where `kind == "gate"`:
+
+For each active gate hook:
+```bash
+GATE_RESULT=$(gsd_run check ${hook.check.query} "${PHASE_NUMBER}" --raw)
+```
+
+Read `passed`, `violations`, `table` (or `block`) from `GATE_RESULT`.
+
+- If `blocking == true` and the gate returns `block: true`: halt with the gate's error/table output before proceeding.
+- If `blocking == false` (advisory): display the gate's `table` or summary output and continue. Advisory gates never block execution.
+- If `onError == "skip"` and the check command fails or errors: log the failure as a warning and continue.
+
+The tdd capability's `execute:post` gate (`tdd.review-checkpoint`) is advisory (`blocking: false`). When active (TDD_MODE=true), the gate result table is displayed for human review; it does not block phase completion. Under MVP+TDD mode (`MVP_MODE=true` AND `TDD_MODE=true`), escalate violations to the operator as a strong advisory recommendation to resolve before advancing.
+
+Regardless of review and gate results, ALWAYS proceed to close_parent_artifacts → regression_gate → verify_phase_goal.
 </step>
 
 <step name="close_parent_artifacts">

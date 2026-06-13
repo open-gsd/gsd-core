@@ -15,7 +15,6 @@
     "workflow.auto_advance",
     "workflow.node_repair",
     "workflow.node_repair_budget",
-    "workflow.tdd_mode",
     "workflow.human_verify_mode",
     "workflow.text_mode",
     "workflow.research_before_questions",

@@ -603,6 +603,173 @@ function cmdUiSafetyGate(projectDir: string, args: string[], raw: boolean): void
   output(computeUiSafetyGate(projectDir, phase), raw, undefined);
 }
 
+// ─── tdd-review-checkpoint ────────────────────────────────────────────────────
+
+/**
+ * tdd-review-checkpoint: end-of-phase advisory check that scans type:tdd plans
+ * for RED/GREEN/REFACTOR gate-sequence compliance and surfaces a review table.
+ *
+ * Logic from gsd-core/references/tdd.md <end_of_phase_review> and
+ * execute-phase.md <step name="tdd_review_checkpoint"> (now removed).
+ *
+ * Returns JSON:
+ *   { passed: true, tddPlans: N, violations: N, table: string, rows: PlanRow[] }
+ * where passed is always true (advisory gate — never blocks).
+ *
+ * Args: check tdd.review-checkpoint <phase>
+ *   Phase can be a number or phase-dir path; if not resolvable the check
+ *   returns passed:true with tddPlans:0 (no plans to review).
+ */
+interface TddPlanRow {
+  planId: string;
+  red: boolean;
+  green: boolean;
+  refactor: boolean;
+  status: 'Pass' | 'FAIL';
+  missing: string[];
+}
+
+function cmdTddReviewCheckpoint(projectDir: string, args: string[], raw: boolean): void {
+  // args[0] = 'check', args[1] = 'tdd-review-checkpoint' (normalized), args[2] = phase
+  const phase = args[2] || '';
+  if (!phase) {
+    error('tdd.review-checkpoint requires a phase argument: check tdd.review-checkpoint <phase>', ERROR_REASON.SDK_MISSING_ARG);
+    return;
+  }
+
+  // Resolve phase directory
+  const coreModule = core as unknown as Record<string, unknown>;
+  let phaseDir = '';
+  try {
+    const findPhase = coreModule['findPhaseInternal'] as ((cwd: string, phase: string) => Record<string, unknown> | string | null) | undefined;
+    if (typeof findPhase === 'function') {
+      const result = findPhase(projectDir, phase);
+      if (result && typeof result === 'object') {
+        const relDir = typeof result['directory'] === 'string' ? result['directory'] : '';
+        if (relDir) phaseDir = path.resolve(projectDir, relDir);
+      } else if (typeof result === 'string') {
+        phaseDir = result;
+      }
+    }
+  } catch { /* phase dir lookup failure */ }
+
+  // Find all PLAN.md files with type: tdd in frontmatter
+  const tddPlanFiles: string[] = [];
+  if (phaseDir) {
+    try {
+      const files = fs.readdirSync(phaseDir).filter(f => f.endsWith('-PLAN.md'));
+      for (const file of files) {
+        const planPath = path.join(phaseDir, file);
+        const content = readIfExists(planPath);
+        // Check frontmatter for type: tdd
+        const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
+        if (frontmatterMatch) {
+          const fm = frontmatterMatch[1];
+          if (/^type:\s*tdd\s*$/m.test(fm)) {
+            tddPlanFiles.push(planPath);
+          }
+        }
+      }
+    } catch { /* directory read failure */ }
+  }
+
+  if (tddPlanFiles.length === 0) {
+    const result = {
+      passed: true,
+      tddPlans: 0,
+      violations: 0,
+      table: '',
+      rows: [] as TddPlanRow[],
+      message: `No type:tdd plans found in phase ${phase}. TDD review skipped.`,
+    };
+    output(result, raw, result.message);
+    return;
+  }
+
+  // For each TDD plan, extract the plan ID (padded plan number) and check git log
+  const rows: TddPlanRow[] = [];
+  for (const planPath of tddPlanFiles) {
+    // Extract plan ID from filename (e.g. "01-02-PLAN.md" → "01-02", or "03-PLAN.md" → "03")
+    const basename = path.basename(planPath, '-PLAN.md');
+    // planId for commit grep: phase-plan format, e.g. "01-02"
+    const planId = basename;
+
+    // Check for RED gate commit: test({planId}):
+    let red = false;
+    let green = false;
+    let refactor = false;
+    try {
+      const redCommit = execFileSync(
+        'git', ['log', '--oneline', `--grep=^test(${planId}):`, '--', '.'],
+        { cwd: projectDir, encoding: 'utf-8', maxBuffer: 1024 * 1024, windowsHide: true },
+      );
+      red = redCommit.trim().length > 0;
+    } catch { /* git unavailable or no match */ }
+
+    try {
+      const greenCommit = execFileSync(
+        'git', ['log', '--oneline', `--grep=^feat(${planId}):`, '--', '.'],
+        { cwd: projectDir, encoding: 'utf-8', maxBuffer: 1024 * 1024, windowsHide: true },
+      );
+      green = greenCommit.trim().length > 0;
+    } catch { /* git unavailable or no match */ }
+
+    try {
+      const refactorCommit = execFileSync(
+        'git', ['log', '--oneline', `--grep=^refactor(${planId}):`, '--', '.'],
+        { cwd: projectDir, encoding: 'utf-8', maxBuffer: 1024 * 1024, windowsHide: true },
+      );
+      refactor = refactorCommit.trim().length > 0;
+    } catch { /* git unavailable or no match */ }
+
+    const missing: string[] = [];
+    if (!red) missing.push('RED');
+    if (!green) missing.push('GREEN');
+    const status: 'Pass' | 'FAIL' = missing.length === 0 ? 'Pass' : 'FAIL';
+
+    rows.push({ planId, red, green, refactor, status, missing });
+  }
+
+  const violations = rows.filter(r => r.status === 'FAIL').length;
+
+  // Build review table
+  const sep = '━'.repeat(53);
+  const tableHeader = '| Plan | RED | GREEN | REFACTOR | Status |';
+  const tableDivider = '|------|-----|-------|----------|--------|';
+  const tableRows = rows.map(r =>
+    `| ${r.planId.padEnd(4)} | ${r.red ? ' ✓ ' : ' ✗ '} | ${r.green ? '  ✓  ' : '  ✗  '} | ${r.refactor ? '   ✓    ' : '   —    '} | ${r.status.padEnd(6)} |`,
+  );
+
+  let table = [
+    sep,
+    ` TDD REVIEW — Phase ${phase}`,
+    sep,
+    '',
+    `TDD Plans: ${tddPlanFiles.length} | Gate violations: ${violations}`,
+    '',
+    tableHeader,
+    tableDivider,
+    ...tableRows,
+  ].join('\n');
+
+  if (violations > 0) {
+    table += '\n\n⚠ Gate violations are advisory — review before advancing.';
+    for (const r of rows.filter(row => row.status === 'FAIL')) {
+      table += `\n  Plan ${r.planId} missing: ${r.missing.join(', ')} gate commit(s).`;
+      table += `\n  Expected commit pattern: test(${r.planId}): ... → feat(${r.planId}): ...`;
+    }
+  }
+
+  const result = {
+    passed: true,
+    tddPlans: tddPlanFiles.length,
+    violations,
+    table,
+    rows,
+  };
+  output(result, raw, table);
+}
+
 // ─── gap-analysis-plan-post ───────────────────────────────────────────────────
 
 /**
@@ -668,6 +835,10 @@ function routeCheckCommand({ args, cwd, raw }: RouteCheckCommandOptions): void {
     cmdGapAnalysisPlanPost(cwd, args, raw);
     return;
   }
+  if (subcommand === 'tdd-review-checkpoint') {
+    cmdTddReviewCheckpoint(cwd, args, raw);
+    return;
+  }
   if (subcommand === 'ui-safety-gate') {
     cmdUiSafetyGate(cwd, args, raw);
     return;
@@ -685,7 +856,7 @@ function routeCheckCommand({ args, cwd, raw }: RouteCheckCommandOptions): void {
     cmdVerifyCodebaseDrift(cwd, raw);
     return;
   }
-  error('Unknown check subcommand. Available: auto-mode, decision-coverage-plan, decision-coverage-verify, gap-analysis-plan-post, ui-plan-gate, ui-safety-gate, verify-schema-drift, verify-codebase-drift', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+  error('Unknown check subcommand. Available: auto-mode, decision-coverage-plan, decision-coverage-verify, gap-analysis-plan-post, tdd-review-checkpoint, ui-plan-gate, ui-safety-gate, verify-schema-drift, verify-codebase-drift', ERROR_REASON.SDK_UNKNOWN_COMMAND);
 }
 
 export = {
@@ -695,4 +866,5 @@ export = {
   computeUiPlanGate,
   computeUiSafetyGate,
   cmdGapAnalysisPlanPost,
+  cmdTddReviewCheckpoint,
 };
