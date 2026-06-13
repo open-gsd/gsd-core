@@ -326,3 +326,128 @@ describe('bug #1162: state update on table-format STATE.md', () => {
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Finding 2 (code-review round 2): updateCurrentPositionFields table branches
+// must honour the same preserve-authored-values invariants as inline branches.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('bug #1162 finding 2: updateCurrentPositionFields table-format preserve-authored invariants', () => {
+  let tmpDir;
+  let statePath;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-1162-f2-');
+    statePath = path.join(tmpDir, '.planning', 'STATE.md');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  // Helper: a STATE.md with table-format Current Position section.
+  // We use planned-phase to exercise updateCurrentPositionFields indirectly,
+  // because that is the call-site that writes Status/Last Activity.
+  function buildMixedFormatState(opts) {
+    const {
+      status = 'Ready to plan',
+      lastActivity = '2026-01-01',
+    } = opts || {};
+    return [
+      '---',
+      'gsd_state_version: 1.0',
+      'status: planning',
+      '---',
+      '',
+      '# GSD State',
+      '',
+      '**Status:** Ready to plan',
+      '**Total Plans in Phase:** 0',
+      `**Last Activity:** ${lastActivity}`,
+      '**Last Activity Description:** initial',
+      '',
+      '## Current Position',
+      '',
+      '| Field | Value |',
+      '| --- | --- |',
+      `| Status | ${status} |`,
+      `| Last Activity | ${lastActivity} |`,
+      '',
+    ].join('\n');
+  }
+
+  // (a) Custom Status in table format must NOT be overwritten by planned-phase.
+  test('(Finding 2a) custom Status in table format is preserved by updateCurrentPositionFields', () => {
+    // "Blocked: waiting on infra" is executor-authored — not in KNOWN_TEMPLATE_DEFAULTS.
+    // planned-phase calls updateCurrentPositionFields with status="Ready to execute".
+    // The table-format branch must honour the same guard as the inline branch:
+    // only overwrite when the existing value is a known template default.
+    const content = buildMixedFormatState({ status: 'Blocked: waiting on infra', lastActivity: '2026-01-01' });
+    fs.writeFileSync(statePath, content);
+
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '2-test-phase');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '2-01-PLAN.md'), '# Plan\n');
+
+    const result = runGsdTools(['state', 'planned-phase', '2', '--plan-count', '1'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const written = fs.readFileSync(statePath, 'utf-8');
+    assert.ok(
+      written.includes('| Status | Blocked: waiting on infra |'),
+      'Custom Status was overwritten by updateCurrentPositionFields table branch.\nContent:\n' + written,
+    );
+    assert.ok(
+      !written.includes('| Status | Ready to execute |'),
+      'Custom Status replaced with Ready to execute in table branch.\nContent:\n' + written,
+    );
+  });
+
+  // (b) Narrative Last Activity in table format must NOT be overwritten.
+  test('(Finding 2b) narrative Last Activity in table format is preserved', () => {
+    // "2026-02-15 -- blocked" has trailing prose — executor-authored.
+    // planned-phase calls updateCurrentPositionFields with today's ISO date.
+    // Must be preserved.
+    const content = buildMixedFormatState({ status: 'Ready to plan', lastActivity: '2026-02-15 -- blocked' });
+    fs.writeFileSync(statePath, content);
+
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '2-test-phase');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '2-01-PLAN.md'), '# Plan\n');
+
+    const result = runGsdTools(['state', 'planned-phase', '2', '--plan-count', '1'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const written = fs.readFileSync(statePath, 'utf-8');
+    assert.ok(
+      written.includes('| Last Activity | 2026-02-15 -- blocked |'),
+      'Narrative Last Activity was overwritten in table branch.\nContent:\n' + written,
+    );
+  });
+
+  // (c) Known-default Status and bare-date Last Activity ARE updated.
+  test('(Finding 2c) known-default Status and bare-date Last Activity ARE updated in table format', () => {
+    // "Ready to plan" is a known default; "2026-01-01" is a bare ISO date.
+    // Both should be replaced by planned-phase.
+    const content = buildMixedFormatState({ status: 'Ready to plan', lastActivity: '2026-01-01' });
+    fs.writeFileSync(statePath, content);
+
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '2-test-phase');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '2-01-PLAN.md'), '# Plan\n');
+
+    const result = runGsdTools(['state', 'planned-phase', '2', '--plan-count', '1'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const written = fs.readFileSync(statePath, 'utf-8');
+    assert.ok(
+      written.includes('| Status | Ready to execute |'),
+      'Known-default Status not updated in table branch.\nContent:\n' + written,
+    );
+    // Last Activity should be today's date (not 2026-01-01)
+    assert.ok(
+      !written.includes('| Last Activity | 2026-01-01 |'),
+      'Bare-date Last Activity was NOT updated in table branch.\nContent:\n' + written,
+    );
+  });
+});

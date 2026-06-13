@@ -543,4 +543,42 @@ describe('bug #1163 adversarial: partial-row gaps, canonical template shape, sco
     const activeSection = written.slice(detailsEnd + '</details>'.length);
     assert.ok(activeSection.includes('5-03-PLAN.md'), '5-03 row not inserted in active milestone section');
   });
+
+  // ── Finding 1 (code-review round 2): detection scoped to active region ───
+  // When an archived <details> block contains checkbox rows for the SAME plan
+  // files as the current phase, the missingPlans filter must detect those plans
+  // as MISSING from the ACTIVE section and insert them there — not skip them
+  // because they appear anywhere in the full file content.
+
+  test('(Finding 1 code-review) inserts ALL missing rows in active section even when archived section has same plans', () => {
+    // Archived section has 5-01 and 5-02 (checked off for v0.9).
+    // Active section has NO checkbox rows yet (empty Plans: block).
+    // Phase 5 on disk has 5-01, 5-02, 5-03.
+    // Expected: active section gets rows for ALL THREE plans (5-01, 5-02, 5-03).
+    // Bug (pre-fix): detection runs against full content → 5-01 and 5-02 found in
+    // archived block → missingPlans = [5-03 only] → only 5-03 inserted.
+    fs.writeFileSync(roadmapPath, buildRoadmapWithArchivedDuplicate('5'));
+    createPhaseWithPlans(tmpDir, '5', [
+      '5-01-PLAN.md',
+      '5-02-PLAN.md',
+      '5-03-PLAN.md',
+    ]);
+
+    const result = runGsdTools(['roadmap', 'update-plan-progress', '5'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const written = fs.readFileSync(roadmapPath, 'utf-8');
+    const detailsEnd = written.indexOf('</details>');
+    const activeSection = written.slice(detailsEnd + '</details>'.length);
+
+    // All three plans must be present in the active section
+    assert.ok(activeSection.includes('5-01-PLAN.md'), '5-01-PLAN.md not inserted in active section (detection not scoped to active region)');
+    assert.ok(activeSection.includes('5-02-PLAN.md'), '5-02-PLAN.md not inserted in active section (detection not scoped to active region)');
+    assert.ok(activeSection.includes('5-03-PLAN.md'), '5-03-PLAN.md not inserted in active section');
+
+    // Archived section must remain untouched (still exactly 2 rows)
+    const archivedSection = written.slice(written.indexOf('<details>'), detailsEnd + '</details>'.length);
+    const archivedRows = (archivedSection.match(/- \[.\] 5-\d+-PLAN\.md/g) || []);
+    assert.equal(archivedRows.length, 2, `Archived section row count changed:\n${archivedSection}`);
+  });
 });

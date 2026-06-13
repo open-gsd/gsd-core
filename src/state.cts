@@ -364,10 +364,17 @@ function updateCurrentPositionFields(content: string, fields: { status?: string;
         posBody = posBody.replace(/^Status:.*$/m, `Status: ${fields.status}`);
       }
     } else {
-      // Table format: | Status | value | — delegate to stateReplaceField which
-      // understands the pipe-table VALUE CELL format.
-      const replaced = stateReplaceField(posBody, 'Status', fields.status);
-      if (replaced !== null) posBody = replaced;
+      // Table format: | Status | value | — apply the same preserve-authored guard
+      // as the inline branch: only overwrite a known template default.
+      // (Finding 2 code-review: the table branch was unconditional before this fix.)
+      const existingStatus = stateExtractField(posBody, 'Status');
+      const isInList = existingStatus && statusDefaults.some(d => d.toLowerCase() === existingStatus.toLowerCase());
+      const matchesPattern = existingStatus && KNOWN_STATUS_PATTERNS.some(p => p.test(existingStatus));
+      const isDefault = !existingStatus || isInList || matchesPattern;
+      if (isDefault) {
+        const replaced = stateReplaceField(posBody, 'Status', fields.status);
+        if (replaced !== null) posBody = replaced;
+      }
     }
   }
   if (fields.lastActivity) {
@@ -386,10 +393,19 @@ function updateCurrentPositionFields(content: string, fields: { status?: string;
         posBody = posBody.replace(/^Last activity:.*$/im, `Last activity: ${fields.lastActivity}`);
       }
     } else {
-      // Table format — try "Last Activity" (canonical casing) then alias.
-      const replaced = stateReplaceField(posBody, 'Last Activity', fields.lastActivity)
-        ?? stateReplaceField(posBody, 'Last activity', fields.lastActivity);
-      if (replaced !== null) posBody = replaced;
+      // Table format — apply the same preserve-authored guard as the inline branch:
+      // only overwrite a bare ISO date or a known default; preserve narrative prose.
+      // (Finding 2 code-review: the table branch was unconditional before this fix.)
+      const existingActivity = stateExtractField(posBody, 'Last Activity')
+        ?? stateExtractField(posBody, 'Last activity');
+      const isDateShape = existingActivity && /^\d{4}-\d{2}-\d{2}$/.test(existingActivity);
+      const inList = existingActivity && lastActivityDefaults.some(d => d.toLowerCase() === existingActivity.toLowerCase());
+      const isDefault = !existingActivity || isDateShape || inList;
+      if (isDefault) {
+        const replaced = stateReplaceField(posBody, 'Last Activity', fields.lastActivity)
+          ?? stateReplaceField(posBody, 'Last activity', fields.lastActivity);
+        if (replaced !== null) posBody = replaced;
+      }
     }
   }
   if (fields.plan) {

@@ -539,18 +539,29 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       roadmapContent = roadmapContent.replace(planCheckboxPattern, '$1x$2');
     }
 
-    // Compute which plan files are MISSING a checkbox row in the current content.
+    // Compute the active (post-</details>) region offset ONCE.  Both the
+    // missing-plan DETECTION and the row INSERTION must use the same active
+    // region string so that a plan row that exists only in an archived <details>
+    // block is not counted as "already present" in the active milestone section.
+    // (Finding 1 code-review: detection was previously running against the full
+    //  roadmapContent, causing archived rows to suppress active-section inserts.)
+    const lastDetailsClose = roadmapContent.lastIndexOf('</details>');
+    const activeRegion = lastDetailsClose === -1
+      ? roadmapContent
+      : roadmapContent.slice(lastDetailsClose + '</details>'.length);
+
+    // Compute which plan files are MISSING a checkbox row in the ACTIVE region.
     // This handles three cases:
     //   (a) Fresh template — no rows at all: all plans are missing.
     //   (b) Partial gap — some rows exist, others don't: only the absent ones.
     //   (c) All rows present — nothing to insert (idempotent).
     //
-    // Scoped to the active (post-</details>) region via replaceInCurrentMilestone
-    // so a duplicate phase heading in an archived <details> block never receives
-    // new rows (Finding 3 from Codex adversarial review).
+    // Detection is scoped to the active region so a plan that appears in an
+    // archived <details> block is still correctly detected as missing from the
+    // active milestone section.
     const missingPlans = phaseInfo!.plans.filter((planFile) => {
       const planEscaped = escapeRegex(planFile);
-      return !new RegExp(`-\\s*\\[[x ]\\]\\s*(?:\\*\\*)?${planEscaped}`, 'i').test(roadmapContent);
+      return !new RegExp(`-\\s*\\[[x ]\\]\\s*(?:\\*\\*)?${planEscaped}`, 'i').test(activeRegion);
     });
 
     if (missingPlans.length > 0) {
@@ -569,7 +580,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       // Pattern A: anchor to bare `Plans:` header (preferred).
       // Pattern B: fallback to bold summary when no bare header exists.
       const insertRowsPatternA = new RegExp(
-        `(#{2,4}\\s*Phase\\s+${phasePattern}(?=[:\\s])[\\s\\S]*?(?:^|\\n)(Plans:)[^\\n]*)`,
+        `(#{2,4}\\s*Phase\\s+${phasePattern}(?=[:\\s])[\\s\\S]*?(?:^|\\n)(?:Plans:)[^\\n]*)`,
         'i'
       );
       const insertRowsPatternB = new RegExp(
@@ -585,18 +596,17 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       // prevent duplicate phase headings in archived sections from receiving rows.
       // replaceInCurrentMilestone only accepts a string replacement, so we
       // perform the scoped replace manually here (same strategy as that helper).
-      const lastDetailsClose = roadmapContent.lastIndexOf('</details>');
+      // Note: lastDetailsClose was computed above (shared with detection).
       const scopedReplace = (src: string, pat: RegExp) => src.replace(pat, inserter);
       let withRows: string;
       if (lastDetailsClose === -1) {
-        const regionA = scopedReplace(roadmapContent, insertRowsPatternA);
-        withRows = regionA !== roadmapContent ? regionA : scopedReplace(roadmapContent, insertRowsPatternB);
+        // activeRegion === roadmapContent when there are no </details> blocks.
+        const regionA = scopedReplace(activeRegion, insertRowsPatternA);
+        withRows = regionA !== activeRegion ? regionA : scopedReplace(activeRegion, insertRowsPatternB);
       } else {
-        const offset = lastDetailsClose + '</details>'.length;
-        const beforeDetails = roadmapContent.slice(0, offset);
-        const afterDetails = roadmapContent.slice(offset);
-        const regionA = scopedReplace(afterDetails, insertRowsPatternA);
-        const afterWithRows = regionA !== afterDetails ? regionA : scopedReplace(afterDetails, insertRowsPatternB);
+        const beforeDetails = roadmapContent.slice(0, lastDetailsClose + '</details>'.length);
+        const regionA = scopedReplace(activeRegion, insertRowsPatternA);
+        const afterWithRows = regionA !== activeRegion ? regionA : scopedReplace(activeRegion, insertRowsPatternB);
         withRows = beforeDetails + afterWithRows;
       }
       if (withRows !== roadmapContent) {
