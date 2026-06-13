@@ -1089,6 +1089,79 @@ const capabilities = {
     "contributions": [],
     "gates": []
   },
+  "profile-pipeline": {
+    "id": "profile-pipeline",
+    "role": "feature",
+    "title": "Developer profiling pipeline",
+    "description": "Developer behavioral profiling from Claude Code session history; scans session JSONL files, extracts and samples user messages, and generates profile artifacts (USER-PROFILE.md, dev-preferences.md, CLAUDE.md sections). Exposes eight `gsd-tools` commands: scan-sessions, extract-messages, profile-sample (pipeline phase) and write-profile, profile-questionnaire, generate-dev-preferences, generate-claude-profile, generate-claude-md (output phase). Backs the /gsd-profile-user skill and gsd-user-profiler agent.",
+    "tier": "full",
+    "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
+    "skills": [
+      "profile-user"
+    ],
+    "agents": [
+      "gsd-user-profiler"
+    ],
+    "config": {
+      "profile-pipeline.enabled": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable the developer profiling pipeline commands (scan-sessions, extract-messages, profile-sample, write-profile, etc.)."
+      }
+    },
+    "commands": [
+      {
+        "family": "scan-sessions",
+        "module": "profile-pipeline-command-router.cjs",
+        "router": "routeScanSessions"
+      },
+      {
+        "family": "extract-messages",
+        "module": "profile-pipeline-command-router.cjs",
+        "router": "routeExtractMessages"
+      },
+      {
+        "family": "profile-sample",
+        "module": "profile-pipeline-command-router.cjs",
+        "router": "routeProfileSample"
+      },
+      {
+        "family": "write-profile",
+        "module": "profile-pipeline-command-router.cjs",
+        "router": "routeWriteProfile"
+      },
+      {
+        "family": "profile-questionnaire",
+        "module": "profile-pipeline-command-router.cjs",
+        "router": "routeProfileQuestionnaire"
+      },
+      {
+        "family": "generate-dev-preferences",
+        "module": "profile-pipeline-command-router.cjs",
+        "router": "routeGenerateDevPreferences"
+      },
+      {
+        "family": "generate-claude-profile",
+        "module": "profile-pipeline-command-router.cjs",
+        "router": "routeGenerateClaudeProfile"
+      },
+      {
+        "family": "generate-claude-md",
+        "module": "profile-pipeline-command-router.cjs",
+        "router": "routeGenerateClaudeMd"
+      }
+    ],
+    "hooks": [],
+    "steps": [],
+    "contributions": [],
+    "gates": []
+  },
   "qwen": {
     "id": "qwen",
     "role": "runtime",
@@ -1476,6 +1549,7 @@ const bySkill = {
   "code-review": "code-review",
   "graphify": "graphify",
   "validate-phase": "nyquist",
+  "profile-user": "profile-pipeline",
   "secure-phase": "security",
   "ui-phase": "ui",
   "ui-review": "ui"
@@ -1490,6 +1564,7 @@ const byAgent = {
   "gsd-code-fixer": "code-review",
   "gsd-nyquist-auditor": "nyquist",
   "gsd-pattern-mapper": "pattern-mapper",
+  "gsd-user-profiler": "profile-pipeline",
   "gsd-phase-researcher": "research",
   "gsd-security-auditor": "security",
   "gsd-ui-checker": "ui",
@@ -1762,6 +1837,7 @@ const configKeys = {
   "intel.enabled": "intel",
   "workflow.nyquist_validation": "nyquist",
   "workflow.pattern_mapper": "pattern-mapper",
+  "profile-pipeline.enabled": "profile-pipeline",
   "workflow.research": "research",
   "workflow.security_enforcement": "security",
   "workflow.security_asvs_level": "security",
@@ -1824,6 +1900,12 @@ const configSchema = {
     "type": "boolean",
     "default": true,
     "description": "Run the pattern mapper before planning when context or research is available."
+  },
+  "profile-pipeline.enabled": {
+    "owner": "profile-pipeline",
+    "type": "boolean",
+    "default": false,
+    "description": "Enable the developer profiling pipeline commands (scan-sessions, extract-messages, profile-sample, write-profile, etc.)."
   },
   "workflow.research": {
     "owner": "research",
@@ -2780,6 +2862,26 @@ const commandFamilies = {
     "module": "audit-command-router.cjs",
     "router": "routeAuditUat"
   },
+  "extract-messages": {
+    "capId": "profile-pipeline",
+    "module": "profile-pipeline-command-router.cjs",
+    "router": "routeExtractMessages"
+  },
+  "generate-claude-md": {
+    "capId": "profile-pipeline",
+    "module": "profile-pipeline-command-router.cjs",
+    "router": "routeGenerateClaudeMd"
+  },
+  "generate-claude-profile": {
+    "capId": "profile-pipeline",
+    "module": "profile-pipeline-command-router.cjs",
+    "router": "routeGenerateClaudeProfile"
+  },
+  "generate-dev-preferences": {
+    "capId": "profile-pipeline",
+    "module": "profile-pipeline-command-router.cjs",
+    "router": "routeGenerateDevPreferences"
+  },
   "graphify": {
     "capId": "graphify",
     "module": "graphify-command-router.cjs",
@@ -2789,6 +2891,26 @@ const commandFamilies = {
     "capId": "intel",
     "module": "intel-command-router.cjs",
     "router": "routeIntelCommand"
+  },
+  "profile-questionnaire": {
+    "capId": "profile-pipeline",
+    "module": "profile-pipeline-command-router.cjs",
+    "router": "routeProfileQuestionnaire"
+  },
+  "profile-sample": {
+    "capId": "profile-pipeline",
+    "module": "profile-pipeline-command-router.cjs",
+    "router": "routeProfileSample"
+  },
+  "scan-sessions": {
+    "capId": "profile-pipeline",
+    "module": "profile-pipeline-command-router.cjs",
+    "router": "routeScanSessions"
+  },
+  "write-profile": {
+    "capId": "profile-pipeline",
+    "module": "profile-pipeline-command-router.cjs",
+    "router": "routeWriteProfile"
   }
 };
 
@@ -2804,6 +2926,9 @@ const capabilityClusters = {
   ],
   "nyquist": [
     "validate-phase"
+  ],
+  "profile-pipeline": [
+    "profile-user"
   ],
   "security": [
     "secure-phase"
@@ -2834,6 +2959,12 @@ const profileMembership = {
     ]
   },
   "nyquist": {
+    "tier": "full",
+    "profiles": [
+      "full"
+    ]
+  },
+  "profile-pipeline": {
     "tier": "full",
     "profiles": [
       "full"
@@ -2877,6 +3008,7 @@ const _requiresGraph = {
   "pattern-mapper": [
     "research"
   ],
+  "profile-pipeline": [],
   "qwen": [],
   "research": [],
   "security": [],
