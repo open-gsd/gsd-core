@@ -68,6 +68,7 @@
     },
     "roadmap": {
       "files": [
+        "bug-1163-roadmap-insert-plan-rows.test.cjs",
         "bug-2661-roadmap-sync-parallel.test.cjs",
         "bug-3128-roadmap-plan-count-slug-layout.test.cjs",
         "bug-3599-roadmap-get-phase-project-code-prefix.test.cjs",
@@ -97,6 +98,7 @@
     },
     "state": {
       "files": [
+        "bug-1162-state-table-format.test.cjs",
         "bug-21-state-md-template-frontmatter.test.cjs",
         "bug-2630-state-frontmatter-milestone-switch.test.cjs",
         "bug-3127-state-begin-phase-idempotent.test.cjs",

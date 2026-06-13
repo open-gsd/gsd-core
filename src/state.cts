@@ -351,34 +351,54 @@ function updateCurrentPositionFields(content: string, fields: { status?: string;
   const statusDefaults = KNOWN_TEMPLATE_DEFAULTS['Status'];
   const lastActivityDefaults = KNOWN_TEMPLATE_DEFAULTS['Last Activity'];
 
-  if (fields.status && /^Status:/m.test(posBody)) {
-    // Only replace when the existing Current Position Status is a known template default.
-    const existingStatusMatch = posBody.match(/^Status:\s*(.+)$/m);
-    const existingStatus = existingStatusMatch ? existingStatusMatch[1].trim() : null;
-    const isInList = existingStatus && statusDefaults.some(d => d.toLowerCase() === existingStatus.toLowerCase());
-    const matchesPattern = existingStatus && KNOWN_STATUS_PATTERNS.some(p => p.test(existingStatus));
-    const isDefault = !existingStatus || isInList || matchesPattern;
-    if (isDefault) {
-      posBody = posBody.replace(/^Status:.*$/m, `Status: ${fields.status}`);
+  if (fields.status) {
+    if (/^Status:/m.test(posBody)) {
+      // Inline format: Status: value — only replace when the existing value is a
+      // known template default (Knuth invariant: preserve executor-authored values).
+      const existingStatusMatch = posBody.match(/^Status:\s*(.+)$/m);
+      const existingStatus = existingStatusMatch ? existingStatusMatch[1].trim() : null;
+      const isInList = existingStatus && statusDefaults.some(d => d.toLowerCase() === existingStatus.toLowerCase());
+      const matchesPattern = existingStatus && KNOWN_STATUS_PATTERNS.some(p => p.test(existingStatus));
+      const isDefault = !existingStatus || isInList || matchesPattern;
+      if (isDefault) {
+        posBody = posBody.replace(/^Status:.*$/m, `Status: ${fields.status}`);
+      }
+    } else {
+      // Table format: | Status | value | — delegate to stateReplaceField which
+      // understands the pipe-table VALUE CELL format.
+      const replaced = stateReplaceField(posBody, 'Status', fields.status);
+      if (replaced !== null) posBody = replaced;
     }
   }
-  if (fields.lastActivity && /^Last activity:/im.test(posBody)) {
-    // Only replace when the existing Current Position Last activity is a known template
-    // default (a bare ISO date).  Executor-authored narrative prose is preserved.
-    const existingActivityMatch = posBody.match(/^Last activity:\s*(.+)$/im);
-    const existingActivity = existingActivityMatch ? existingActivityMatch[1].trim() : null;
-    // A bare ISO date (YYYY-MM-DD with nothing after) is handler-generated.
-    // A date with a narrative suffix (e.g. "2026-02-15 -- blocked by infra...")
-    // was authored by the executor and must be preserved.
-    const isDateShape = existingActivity && /^\d{4}-\d{2}-\d{2}$/.test(existingActivity);
-    const inList = existingActivity && lastActivityDefaults.some(d => d.toLowerCase() === existingActivity.toLowerCase());
-    const isDefault = !existingActivity || isDateShape || inList;
-    if (isDefault) {
-      posBody = posBody.replace(/^Last activity:.*$/im, `Last activity: ${fields.lastActivity}`);
+  if (fields.lastActivity) {
+    if (/^Last activity:/im.test(posBody)) {
+      // Inline format — only replace when the existing value is a known template
+      // default (a bare ISO date).  Executor-authored narrative prose is preserved.
+      const existingActivityMatch = posBody.match(/^Last activity:\s*(.+)$/im);
+      const existingActivity = existingActivityMatch ? existingActivityMatch[1].trim() : null;
+      // A bare ISO date (YYYY-MM-DD with nothing after) is handler-generated.
+      // A date with a narrative suffix (e.g. "2026-02-15 -- blocked by infra...")
+      // was authored by the executor and must be preserved.
+      const isDateShape = existingActivity && /^\d{4}-\d{2}-\d{2}$/.test(existingActivity);
+      const inList = existingActivity && lastActivityDefaults.some(d => d.toLowerCase() === existingActivity.toLowerCase());
+      const isDefault = !existingActivity || isDateShape || inList;
+      if (isDefault) {
+        posBody = posBody.replace(/^Last activity:.*$/im, `Last activity: ${fields.lastActivity}`);
+      }
+    } else {
+      // Table format — try "Last Activity" (canonical casing) then alias.
+      const replaced = stateReplaceField(posBody, 'Last Activity', fields.lastActivity)
+        ?? stateReplaceField(posBody, 'Last activity', fields.lastActivity);
+      if (replaced !== null) posBody = replaced;
     }
   }
-  if (fields.plan && /^Plan:/m.test(posBody)) {
-    posBody = posBody.replace(/^Plan:.*$/m, `Plan: ${fields.plan}`);
+  if (fields.plan) {
+    if (/^Plan:/m.test(posBody)) {
+      posBody = posBody.replace(/^Plan:.*$/m, `Plan: ${fields.plan}`);
+    } else {
+      const replaced = stateReplaceField(posBody, 'Plan', fields.plan);
+      if (replaced !== null) posBody = replaced;
+    }
   }
 
   return content.replace(posPattern, () => `${posMatch[1]}${posBody}`);
