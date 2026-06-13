@@ -39,11 +39,36 @@ describe('bug #3441: PATH guidance is projected from typed shell action IR', () 
       platform: 'linux',
     });
     assert.ok(Array.isArray(posix.shellActions));
-    assert.equal(posix.shellActions.length, 2);
+    assert.equal(posix.shellActions.length, 3);
     assert.equal(posix.shellActions[0].label, 'zsh');
     assert.equal(posix.shellActions[1].label, 'bash');
+    assert.equal(posix.shellActions[2].label, 'fish');
     assert.ok(posix.shellActions[0].command.includes('~/.zshrc'));
     assert.ok(posix.shellActions[1].command.includes('~/.bashrc'));
+    // #323: fish gets a fish-native fish_add_path suggestion, not `export`.
+    assert.ok(posix.shellActions[2].command.startsWith('fish_add_path '));
+    assert.ok(!posix.shellActions[2].command.includes('export'));
+  });
+
+  // #323 (ported from the closed #721): the fish suggestion is POSIX-only.
+  // On win32 the persist branch projects PowerShell / cmd.exe / Git Bash —
+  // no fish action — locking the POSIX-only contract.
+  test('no fish action is projected on win32', () => {
+    const win = projection.projectPathActionProjection({
+      mode: 'persist',
+      targetDir: 'C:\\Users\\me\\AppData\\npm',
+      platform: 'win32',
+    });
+    assert.ok(Array.isArray(win.shellActions));
+    assert.equal(
+      win.shellActions.some((a) => a.shell === 'fish' || a.label === 'fish'),
+      false,
+      'win32 persist projection must not include a fish action',
+    );
+    assert.deepEqual(
+      win.shellActions.map((a) => a.label),
+      ['PowerShell', 'cmd.exe', 'Git Bash'],
+    );
   });
 
   test('POSIX repair mode escapes double-quoted shell metacharacters', () => {
@@ -67,6 +92,9 @@ describe('bug #3441: PATH guidance is projected from typed shell action IR', () 
     });
     assert.equal(projected.shellActions[0].command.includes("/tmp/O'\\''Neil/bin"), true);
     assert.equal(projected.shellActions[1].command.includes("/tmp/O'\\''Neil/bin"), true);
+    // #323: fish entry single-quotes the dir with the same POSIX literal
+    // escaping (`'\''` is also a valid escaped quote in fish unquoted context).
+    assert.equal(projected.shellActions[2].command, "fish_add_path '/tmp/O'\\''Neil/bin'");
   });
 
   test('maybeSuggestPathExport renders commands projected by path-action seam', () => {
