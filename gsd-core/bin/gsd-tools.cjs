@@ -1248,8 +1248,24 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
           }
           loopConfigDir = value;
         }
+        // --active-cap <capId>: parse and validate before delegating
+        let loopActiveCap = undefined;
+        const activeCapEqArg = args.find(arg => arg.startsWith('--active-cap='));
+        const activeCapIdx = args.indexOf('--active-cap');
+        if (activeCapEqArg) {
+          const value = activeCapEqArg.slice('--active-cap='.length).trim();
+          if (!value) error('Missing value for --active-cap (e.g. --active-cap tdd)', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+          loopActiveCap = value;
+        } else if (activeCapIdx !== -1) {
+          const value = args[activeCapIdx + 1];
+          if (!value || value.startsWith('--')) {
+            error('Missing value for --active-cap (e.g. --active-cap tdd)', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+          }
+          loopActiveCap = value;
+        }
         loopResolver.cmdLoopRenderHooks(cwd, args[2], raw, {
           configDir: loopConfigDir ? path.resolve(loopConfigDir) : undefined,
+          activeCap: loopActiveCap,
         });
       } else {
         error(

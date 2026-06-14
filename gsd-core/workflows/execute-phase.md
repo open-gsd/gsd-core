@@ -178,7 +178,7 @@ MVP_FLAG_ARG=""
 if [[ "$ARGUMENTS" =~ (^|[[:space:]])--mvp([[:space:]]|$) ]]; then MVP_FLAG_ARG="--cli-flag"; fi
 MVP_MODE=$(gsd_run query phase.mvp-mode "${PHASE_NUMBER}" $MVP_FLAG_ARG --pick active)
 EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw)
-TDD_MODE=$(node -e "const h=JSON.parse(process.argv[1]); process.stdout.write(h.activeHooks&&h.activeHooks.some(function(x){return x.capId==='tdd';})?'true':'false')" "$EXECUTE_POST_HOOKS_JSON" 2>/dev/null || echo "false")
+TDD_MODE=$(gsd_run loop render-hooks execute:post --active-cap tdd)
 ```
 
 <step name="safe_resume_gate">

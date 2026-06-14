@@ -580,6 +580,13 @@ function renderLoopHooks(resolved: ResolveLoopHooksResult): string {
  * merged-object-from-untrusted-keys security concern and correctly handles
  * pre-cutover keys like `workflow.ui_phase` that live in config.json but are not
  * yet exposed through loadConfig's whitelist.
+ *
+ * --active-cap <capId>: when present, resolves hooks for <point> exactly as the
+ * normal path does, then prints exactly `true` (if any resolved activeHook has
+ * capId === <capId>) or `false` followed by a single newline, and exits 0.
+ * No JSON envelope is emitted — output is clean for shell $(…) capture.
+ * Missing <capId> value → coreError + non-zero exit.
+ * Unknown/inactive capId → `false` (not an error).
  */
 function cmdLoopRenderHooks(
   cwd: string,
@@ -589,6 +596,13 @@ function cmdLoopRenderHooks(
 ): void {
   if (!point) {
     coreError('loop render-hooks requires a <point> argument. Valid points: ' + CANONICAL_POINTS.join(', '));
+    return;
+  }
+
+  // --active-cap <capId> mode: emit 'true' or 'false' only (scanner-safe, no JSON envelope)
+  const activeCapId = typeof options['activeCap'] === 'string' ? options['activeCap'] : undefined;
+  if (activeCapId !== undefined && activeCapId === '') {
+    coreError('--active-cap requires a <capId> value (e.g. --active-cap tdd)');
     return;
   }
 
@@ -614,6 +628,13 @@ function cmdLoopRenderHooks(
   } catch (err: unknown) {
     const msg = (err instanceof Error) ? err.message : String(err);
     coreError(msg);
+    return;
+  }
+
+  // --active-cap mode: print exactly 'true' or 'false' with no envelope
+  if (activeCapId !== undefined) {
+    const isActive = resolved.activeHooks.some((h) => h.capId === activeCapId);
+    process.stdout.write(isActive ? 'true\n' : 'false\n');
     return;
   }
 
