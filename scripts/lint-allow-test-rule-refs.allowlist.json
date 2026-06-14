@@ -215,6 +215,8 @@
   "tests/forensics.test.cjs :: source-text-is-the-product",
   "tests/frontmatter-cli.test.cjs :: source-text-is-the-product",
   "tests/gates-taxonomy.test.cjs :: source-text-is-the-product",
+  "tests/git-base-branch.test.cjs :: runtime-contract-is-the-product",
+  "tests/git-base-branch.test.cjs :: runtime-contract-is-the-product — the workflow .md content IS",
   "tests/gsd-check-update-worker-platform-gate.test.cjs :: structural assertion on spawn-options shape; the behavior",
   "tests/gsd-researcher-app-aware.test.cjs :: source-text-is-the-product",
   "tests/gsd-researcher-flow-diagram.test.cjs :: source-text-is-the-product",
