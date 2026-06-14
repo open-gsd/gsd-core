@@ -201,11 +201,18 @@ describe('run-tests.cjs harness (issue #3597)', () => {
   });
 
   describe('empty-suite behavior', () => {
-    test('--suite security with zero matching files exits 0 with a notice', () => {
+    test('--suite security with zero matching files exits non-zero with an error', () => {
       seed(tmpDir, ['a.test.cjs']);
       const r = runHarness(tmpDir, ['--suite', 'security']);
+      assert.notStrictEqual(r.status, 0);
+      assert.match(r.stderr, /0 test files selected/i);
+    });
+
+    test('GSD_ALLOW_EMPTY_SUITE=1 downgrades empty suite to a warning and exits 0', () => {
+      seed(tmpDir, ['a.test.cjs']);
+      const r = runHarness(tmpDir, ['--suite', 'security'], { GSD_ALLOW_EMPTY_SUITE: '1' });
       assert.strictEqual(r.status, 0);
-      assert.match(r.stderr, /no tests in suite/i);
+      assert.match(r.stderr, /WARNING.*0 test files selected/i);
     });
 
     test('completely empty test dir still exits non-zero (preserves prior behavior)', () => {
