@@ -31,6 +31,7 @@ interface ProviderAvailabilityConfig {
   tavily_search?: unknown;
   brave_search?: unknown;
   firecrawl?: unknown;
+  crw?: unknown;
   ref_search?: unknown;
   perplexity?: unknown;
   jina?: unknown;
@@ -98,13 +99,14 @@ interface PlanResearchResult {
 
 // ---------------------------------------------------------------------------
 // Cycle 1 / Cycle 6: PROVIDER_WATERFALL (Balanced-set decision)
-// firecrawl appears ONLY in scrape — demoted to known-URL scrape, NOT in docs/web
+// firecrawl/crw appear ONLY in scrape — demoted to known-URL scrape, NOT in docs/web
+// crw (fastCRW) is a Firecrawl-compatible web scraper; single binary, self-host or cloud.
 // ---------------------------------------------------------------------------
 
 const PROVIDER_WATERFALL: ProviderWaterfall = {
   docs: ['context7', 'ref', 'jina', 'websearch'],
   web: ['exa', 'tavily', 'perplexity', 'brave', 'websearch'],
-  scrape: ['firecrawl', 'jina'],
+  scrape: ['firecrawl', 'crw', 'jina'],
 };
 
 // ---------------------------------------------------------------------------
@@ -135,6 +137,7 @@ function authorityOf(provider: unknown): ProviderAuthority {
       return 'official';
     case 'jina':
     case 'firecrawl':
+    case 'crw':
       return 'scrape';
     case 'exa':
     case 'tavily':
@@ -196,6 +199,7 @@ function providerAvailability(config?: ProviderAvailabilityConfig): Record<strin
     tavily: Boolean(cfg.tavily_search),
     brave: Boolean(cfg.brave_search),
     firecrawl: Boolean(cfg.firecrawl),
+    crw: Boolean(cfg.crw),
     ref: Boolean(cfg.ref_search),
     perplexity: Boolean(cfg.perplexity),
   };

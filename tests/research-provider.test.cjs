@@ -33,6 +33,7 @@ const FULL_CONFIG = {
   tavily_search: true,
   brave_search: true,
   firecrawl: true,
+  crw: true,
   ref_search: true,
   perplexity: true,
 };
@@ -129,6 +130,10 @@ describe('research-provider: classifyConfidence', () => {
     assert.equal(classifyConfidence({ provider: 'firecrawl' }), 'MEDIUM');
   });
 
+  test('crw -> MEDIUM', () => {
+    assert.equal(classifyConfidence({ provider: 'crw' }), 'MEDIUM');
+  });
+
   test('exa without verification -> LOW', () => {
     assert.equal(classifyConfidence({ provider: 'exa', verifiedAgainstOfficial: false }), 'LOW');
   });
@@ -181,6 +186,11 @@ describe('research-provider: providerAvailability', () => {
     assert.equal(avail.websearch, true);
   });
 
+  test('crw flag toggles crw availability (false by default, true when set)', () => {
+    assert.equal(providerAvailability({}).crw, false);
+    assert.equal(providerAvailability({ crw: true }).crw, true);
+  });
+
   test('planResearch web question with exa disabled picks tavily', async () => {
     const result = await planResearch({
       questions: [{ text: 'latest trends in AI', kind: 'web' }],
@@ -213,6 +223,18 @@ describe('research-provider: PROVIDER_WATERFALL shape', () => {
   test('scrape array exists and contains firecrawl', () => {
     assert.ok(Array.isArray(PROVIDER_WATERFALL.scrape));
     assert.ok(PROVIDER_WATERFALL.scrape.includes('firecrawl'));
+  });
+
+  test('scrape array contains crw (fastCRW)', () => {
+    assert.ok(PROVIDER_WATERFALL.scrape.includes('crw'));
+  });
+
+  test('crw NOT in docs (scrape-only, like firecrawl)', () => {
+    assert.ok(!PROVIDER_WATERFALL.docs.includes('crw'));
+  });
+
+  test('crw NOT in web (scrape-only, like firecrawl)', () => {
+    assert.ok(!PROVIDER_WATERFALL.web.includes('crw'));
   });
 
   test('firecrawl NOT in docs (Balanced-set decision)', () => {
