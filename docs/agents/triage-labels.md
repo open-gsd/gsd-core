@@ -6,7 +6,7 @@ Maps the five canonical triage roles to the actual label strings in `open-gsd/gs
 |-------------------|--------------------------|----------------------------------------------------------------|
 | `needs-triage`    | `needs-triage`           | Auto-applied by GitHub Action on every new issue               |
 | `needs-info`      | `needs-reproduction`     | Waiting on reporter — cannot reproduce, more info required     |
-| `ready-for-agent` | `confirmed`              | Bug verified + fully specified — AFK agent can pick up         |
+| `ready-for-agent` | `confirmed-bug`          | Bug verified + fully specified — AFK agent can pick up. This is the fix gate (`RULESET.CONTRIB.CLASSIFY.fix`); bug-remediation workflows scope on it. |
 | `ready-for-human` | `approved-enhancement` / `approved-feature` | Enhancement/feature approved by maintainer — human codes it |
 | `wontfix`         | `wontfix`                | Will not be actioned                                           |
 | `possible-duplicate` | `possible-duplicate` | Applied by the Duplicate check workflow when a new issue's title closely matches existing open issues. The reporter (or a maintainer) replies justifying why it is not a duplicate within 24h, or the Duplicate auto-close sweep closes it. A reply clears this label and applies needs-maintainer-review for human adjudication. React 👎 to the bot comment to veto auto-close. |
@@ -15,7 +15,7 @@ Maps the five canonical triage roles to the actual label strings in `open-gsd/gs
 
 ## Notes on this repo's label model
 
-- `confirmed` is the AFK-agent-ready signal for **bugs**. It means "verified to exist and reproducible."
+- `confirmed-bug` is the AFK-agent-ready signal for **bugs**. It means "verified reproducible bug" and is the gate the fix workflow requires before any code is written. Apply it (in addition to `bug`) when triage reproduces/verifies a bug. The legacy `confirmed` label ("bug verified to exist") is retained only for back-compat in the duplicate-sweep exempt list — use `confirmed-bug` for new triage.
 - For **enhancements** and **features**, maintainer approval is `approved-enhancement` / `approved-feature` respectively. A contributor (human or agent) may not write code until one of these is applied.
 - There is no separate "ready-for-human" vs "ready-for-agent" distinction for enhancements — both flow through the same `approved-*` labels. If the work requires human judgment (design decisions, external access), note it in the issue body.
 - `needs-triage` is removed when any other state label is applied.
