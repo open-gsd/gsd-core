@@ -249,4 +249,87 @@ describe('context-utilization property tests', () => {
       )
     );
   });
+
+  // ─── STATES string-literal mutation killers ───────────────────────────────
+  // Stryker survivors: HEALTHY/WARNING/CRITICAL → "" (StringLiteral mutants).
+  // The property tests above use STATES.HEALTHY etc. which would still pass
+  // even if all strings were emptied (self-comparison). These tests assert the
+  // LITERAL string values — the documented public API contract of STATES.
+
+  test('STATES.HEALTHY literal value is "healthy"', () => {
+    assert.strictEqual(
+      STATES.HEALTHY,
+      'healthy',
+      'STATES.HEALTHY must be the string "healthy" (catches StringLiteral mutant → "")'
+    );
+  });
+
+  test('STATES.WARNING literal value is "warning"', () => {
+    assert.strictEqual(
+      STATES.WARNING,
+      'warning',
+      'STATES.WARNING must be the string "warning" (catches StringLiteral mutant → "")'
+    );
+  });
+
+  test('STATES.CRITICAL literal value is "critical"', () => {
+    assert.strictEqual(
+      STATES.CRITICAL,
+      'critical',
+      'STATES.CRITICAL must be the string "critical" (catches StringLiteral mutant → "")'
+    );
+  });
+
+  test('classifyContextUtilization state values are the documented string literals', () => {
+    // Asserts the actual returned state strings — not just STATES membership.
+    // Kills mutants that swap the STATES object values to empty strings.
+    const healthy = classifyContextUtilization(0, 10000);
+    assert.strictEqual(healthy.state, 'healthy', 'zero tokens must produce state "healthy"');
+
+    const warning = classifyContextUtilization(6000, 10000);
+    assert.strictEqual(warning.state, 'warning', '60% tokens must produce state "warning"');
+
+    const critical = classifyContextUtilization(7000, 10000);
+    assert.strictEqual(critical.state, 'critical', '70% tokens must produce state "critical"');
+  });
+
+  // ─── Error message content mutation killers ───────────────────────────────
+  // Stryker survivors: error message template → "" (StringLiteral mutants).
+  // Asserting only TypeError type doesn't kill these — need message content.
+
+  test('TypeError for bad tokensUsed includes descriptive message mentioning the value', () => {
+    const badValue = -5;
+    try {
+      classifyContextUtilization(badValue, 10000);
+      assert.fail('Expected TypeError was not thrown');
+    } catch (err) {
+      assert.ok(err instanceof TypeError);
+      assert.ok(
+        err.message.includes(String(badValue)),
+        `Error message must include the bad value (${badValue}), got: "${err.message}"`
+      );
+      assert.ok(
+        err.message.length > 0,
+        'Error message must not be empty (catches StringLiteral → "" mutant)'
+      );
+    }
+  });
+
+  test('TypeError for bad contextWindow includes descriptive message mentioning the value', () => {
+    const badValue = 0;
+    try {
+      classifyContextUtilization(100, badValue);
+      assert.fail('Expected TypeError was not thrown');
+    } catch (err) {
+      assert.ok(err instanceof TypeError);
+      assert.ok(
+        err.message.includes(String(badValue)),
+        `Error message must include the bad value (${badValue}), got: "${err.message}"`
+      );
+      assert.ok(
+        err.message.length > 0,
+        'Error message must not be empty (catches StringLiteral → "" mutant)'
+      );
+    }
+  });
 });

@@ -34,17 +34,52 @@ const { readFileSync } = require('fs');
 
 const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 
+// ── Per-module mutation score ratchet ─────────────────────────────────────────
+// ADR-456 / issue #1187: every covered module declares a minScore floor.
+//
+// HOW THE RATCHET WORKS:
+//   • minScore locks in the current measured mutation score (minus a 1–2 pt
+//     margin for run-to-run timeout variance).
+//   • CI fails a shard if the module's live score drops below its minScore.
+//   • Raise minScore (never lower) as a module's tests improve.
+//   • The goal is every module reaching TARGET_MUTATION_SCORE (80).
+//
+// GOODHART SAFETY: scores are improved by writing genuine behavioural
+// assertions that kill real mutants — never by adding brittle exact-string
+// matches on incidental output. A justified `// Stryker disable` on a
+// confirmed equivalent mutant is acceptable.
+//
+// HOW TO UPDATE:
+//   1. Run the per-module Stryker shard locally.
+//   2. Note the reported score.
+//   3. Set minScore = floor(score) - 1 (never lower than current value).
+//   4. Open a PR — the CI gate will enforce the new floor on every future run.
+
+/** Long-run target for all modules (ADR-456). */
+const TARGET_MUTATION_SCORE = 80;
+
 // ── Single source of truth: covered modules ───────────────────────────────────
-// Each entry: { cjs: '<built artifact>', tests: ['tests/...', ...] }
-// A module is "covered" iff its tests are wired into the Stryker command runner
-// (stryker.config.mjs commandRunner.command). Mutating an uncovered module can
-// only ever produce survived mutants — so we scope strictly to these 6.
+// Each entry: { cjs: '<built artifact>', tests: ['tests/...', ...], minScore: N }
+//
+// minScore is the CI break threshold for this module's shard.
+// Floors are measured scores minus 1–2 pts for run-to-run variance.
+// Measured 2026-06-13 (issue #1187):
+//   context-utilization   79.5% → floor 79
+//   prompt-budget         99.6% → floor 90   (conservative; high score is robust)
+//   frontmatter           63.5% → floor 62
+//   adr-parser            69.5% → floor 68
+//   config-schema         69.7% → floor 68
+//   active-workstream-store 81.9% → floor 80
 const COVERED = {
   'context-utilization': {
     cjs: 'gsd-core/bin/lib/context-utilization.cjs',
     tests: [
       'tests/context-utilization.property.test.cjs',
     ],
+    // After mutation-killer assertions added in #1187: measured 92.31% (2026-06-14).
+    // 3 survivors are __esModule boilerplate (genuinely equivalent CJS interop mutants).
+    // minScore raised to TARGET (80) — module now meets ADR-456 goal.
+    minScore: 80,
   },
   'prompt-budget': {
     cjs: 'gsd-core/bin/lib/prompt-budget.cjs',
@@ -52,6 +87,7 @@ const COVERED = {
       'tests/prompt-budget.property.test.cjs',
       'tests/prompt-budget.unit.test.cjs',
     ],
+    minScore: 90,
   },
   frontmatter: {
     cjs: 'gsd-core/bin/lib/frontmatter.cjs',
@@ -59,6 +95,7 @@ const COVERED = {
       'tests/frontmatter.property.test.cjs',
       'tests/frontmatter.unit.test.cjs',
     ],
+    minScore: 62,
   },
   'adr-parser': {
     cjs: 'gsd-core/bin/lib/adr-parser.cjs',
@@ -67,12 +104,14 @@ const COVERED = {
       'tests/adr-parser.test.cjs',
       'tests/adr-parser.unit.test.cjs',
     ],
+    minScore: 68,
   },
   'config-schema': {
     cjs: 'gsd-core/bin/lib/config-schema.cjs',
     tests: [
       'tests/config-schema.property.test.cjs',
     ],
+    minScore: 68,
   },
   'active-workstream-store': {
     cjs: 'gsd-core/bin/lib/active-workstream-store.cjs',
@@ -80,6 +119,14 @@ const COVERED = {
       'tests/active-workstream-store.test.cjs',
       'tests/active-workstream-store.unit.test.cjs',
     ],
+    minScore: 80,
+  },
+  'core-utils': {
+    cjs: 'gsd-core/bin/lib/core-utils.cjs',
+    tests: [
+      'tests/core-utils.test.cjs',
+    ],
+    minScore: 75,  // measured 77.52% (2026-06-14, issue #1187); floor = 77 - 2
   },
 };
 
@@ -178,6 +225,7 @@ function buildResult(moduleNames) {
     name,
     mutate: COVERED[name].cjs,
     tests: COVERED[name].tests.join(' '),
+    minScore: COVERED[name].minScore,
   }));
 
   return {
@@ -194,8 +242,9 @@ function printHuman(result, changedFiles) {
   console.log(`Shards (${result.matrix.include.length}):`);
   for (const shard of result.matrix.include) {
     console.log(`  [${shard.name}]`);
-    console.log(`    mutate: ${shard.mutate}`);
-    console.log(`    tests:  ${shard.tests}`);
+    console.log(`    mutate:   ${shard.mutate}`);
+    console.log(`    tests:    ${shard.tests}`);
+    console.log(`    minScore: ${shard.minScore}`);
   }
 }
 
@@ -219,4 +268,8 @@ function main() {
   }
 }
 
-runMain(main);
+// Export internals for programmatic use (tests/mutation-matrix-ratchet.test.cjs).
+// The require.main guard prevents main() from running when this file is require()d.
+module.exports = { COVERED, TARGET_MUTATION_SCORE };
+
+if (require.main === module) runMain(main);

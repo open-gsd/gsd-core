@@ -20,6 +20,7 @@ on:
       - 'tests/**/*.unit.test.cjs'
       - 'tests/adr-parser.test.cjs'
       - 'tests/active-workstream-store.test.cjs'
+      - 'tests/core-utils.test.cjs'
       - 'stryker.config.mjs'
       - 'scripts/mutation-matrix.cjs'
   workflow_dispatch:
@@ -106,15 +107,18 @@ jobs:
         # MUTATION_TEST_CMD scopes the command runner to only this module's tests.
         # --mutate scopes mutation to only the changed module's built artifact.
         # --incremental reuses cached results for unchanged mutants.
-        # The break threshold (50) is read from stryker.config.mjs.
+        # --break uses the per-module minScore ratchet floor from the matrix
+        #   (set by scripts/mutation-matrix.cjs; see ADR-456 / issue #1187).
+        #   This overrides stryker.config.mjs's global break (60, local backstop).
         env:
           NODE_OPTIONS: '--max-old-space-size=4096'
           MUTATION_TEST_CMD: node --test ${{ matrix.tests }}
         run: |
-          echo "Module:  ${{ matrix.name }}"
-          echo "Mutate:  ${{ matrix.mutate }}"
-          echo "Tests:   ${{ matrix.tests }}"
-          npx stryker run --incremental --mutate "${{ matrix.mutate }}"
+          echo "Module:   ${{ matrix.name }}"
+          echo "Mutate:   ${{ matrix.mutate }}"
+          echo "Tests:    ${{ matrix.tests }}"
+          echo "MinScore: ${{ matrix.minScore }}"
+          npx stryker run --incremental --mutate "${{ matrix.mutate }}" --break "${{ matrix.minScore }}"
 
       - name: Upload mutation report — ${{ matrix.name }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
