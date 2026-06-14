@@ -49,6 +49,12 @@ function sanitizeWorkstreamSessionToken(value: unknown): string | null {
   return token ? token.slice(0, 160) : null;
 }
 
+/** Test-only seam: clear the memoized controlling-TTY probe cache (#1191). */
+function _resetControllingTtyCacheForTests(): void {
+  cachedControllingTtyToken = null;
+  didProbeControllingTtyToken = false;
+}
+
 function probeControllingTtyToken(): string | null {
   if (didProbeControllingTtyToken) return cachedControllingTtyToken;
   didProbeControllingTtyToken = true;
@@ -347,4 +353,5 @@ export = {
   parseCliWorkstream,
   resolveActiveWorkstream,
   applyResolvedWorkstreamEnv,
+  _resetControllingTtyCacheForTests,
 };

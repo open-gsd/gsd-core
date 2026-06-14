@@ -2565,6 +2565,7 @@ module.exports = {
   computeRequiresClosure,
   topoSortSteps,
   normalizeLineEndings,
+  stripGeneratedComment,
   validateConfigSliceEntry,
   VALID_CONFIG_SLICE_TYPES,
   LOOP_HOST_CONTRACT,

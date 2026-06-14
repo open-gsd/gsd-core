@@ -930,13 +930,11 @@ function readSettings(settingsPath) {
   if (fs.existsSync(settingsPath)) {
     try {
       const raw = fs.readFileSync(settingsPath, 'utf8');
+      let parsed;
       // Try standard JSON first (fast path)
-      try {
-        return JSON.parse(raw);
-      } catch {
-        // Fall back to JSONC stripping
-        return JSON.parse(stripJsonComments(raw));
-      }
+      try { parsed = JSON.parse(raw); }
+      catch { parsed = JSON.parse(stripJsonComments(raw)); }
+      return parsed === null ? {} : parsed;   // valid JSON null = empty settings, not malformed
     } catch (e) {
       // If even JSONC stripping fails, warn instead of silently returning {}
       console.warn('  ' + yellow + '⚠' + reset + '  Warning: Could not parse ' + settingsPath + ' — file may be malformed. Existing settings preserved.');
@@ -12260,6 +12258,9 @@ module.exports = {
     parseConfigDirFromArgs,
     cleanupLegacyGsdCc,
     _applyRuntimeRewrites,
+    // #1191 — exported so tests exercise the REAL readSettings, not a replica
+    readSettings,
+    stripJsonComments,
     ...runtimeArtifactConversion,
   };
 
