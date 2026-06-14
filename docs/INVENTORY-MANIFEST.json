@@ -279,6 +279,7 @@
       "capability-activation.cjs",
       "capability-registry.cjs",
       "capability-state.cjs",
+      "capability-writer.cjs",
       "check-command-router.cjs",
       "cjs-command-router-adapter.cjs",
       "cli-exit.cjs",

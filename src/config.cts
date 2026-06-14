@@ -408,6 +408,47 @@ function cmdConfigEnsureSection(cwd: string, raw: boolean): void {
 }
 
 /**
+ * Shared helper: write a single key-path into an in-memory config object.
+ *
+ * Prototype-pollution guard: reject dangerous segments via inline literal
+ * comparisons on the exact key used to index `current`, immediately before
+ * each write. The inline comparison is the barrier CodeQL's
+ * js/prototype-pollution-utility query recognises — the previous Set-based
+ * pre-loop check was functionally correct but not traced through, so
+ * code-scanning alert #26 kept firing. Behaviour is unchanged from #663.
+ *
+ * Returns the previous value at the leaf key (undefined if absent).
+ * Never writes to disk — callers handle persistence.
+ * Calls error() (process.exit(1)) on prototype-pollution attempts.
+ */
+function _setNestedValue(
+  config: Record<string, unknown>,
+  keyPath: string,
+  parsedValue: unknown,
+): unknown {
+  const keys = keyPath.split('.');
+  let current: Record<string, unknown> = config;
+  for (let i = 0; i < keys.length - 1; i++) {
+    const key = keys[i];
+    if (key === '__proto__' || key === 'prototype' || key === 'constructor') {
+      error('Invalid config key (prototype pollution guard): ' + keyPath, ERROR_REASON.CONFIG_PARSE_FAILED);
+    }
+    const existingChild = current[key];
+    if (existingChild === undefined || existingChild === null || typeof existingChild !== 'object' || Array.isArray(existingChild)) {
+      current[key] = {};
+    }
+    current = current[key] as Record<string, unknown>;
+  }
+  const lastKey = keys[keys.length - 1];
+  if (lastKey === '__proto__' || lastKey === 'prototype' || lastKey === 'constructor') {
+    error('Invalid config key (prototype pollution guard): ' + keyPath, ERROR_REASON.CONFIG_PARSE_FAILED);
+  }
+  const previousValue = current[lastKey];
+  current[lastKey] = parsedValue;
+  return previousValue;
+}
+
+/**
  * Sets a value in the config file, allowing nested values via dot notation (e.g.,
  * "workflow.research").
  *
@@ -428,31 +469,7 @@ function setConfigValue(cwd: string, keyPath: string, parsedValue: unknown): Set
       error('Failed to read config.json: ' + (err as Error).message, ERROR_REASON.CONFIG_PARSE_FAILED);
     }
 
-    // Set nested value using dot notation (e.g., "workflow.research").
-    // Prototype-pollution guard: reject dangerous segments via inline literal
-    // comparisons on the exact key used to index `current`, immediately before
-    // each write. The inline comparison is the barrier CodeQL's
-    // js/prototype-pollution-utility query recognises — the previous Set-based
-    // pre-loop check was functionally correct but not traced through, so
-    // code-scanning alert #26 kept firing. Behaviour is unchanged from #663.
-    const keys = keyPath.split('.');
-    let current: Record<string, unknown> = config;
-    for (let i = 0; i < keys.length - 1; i++) {
-      const key = keys[i];
-      if (key === '__proto__' || key === 'prototype' || key === 'constructor') {
-        error('Invalid config key (prototype pollution guard): ' + keyPath, ERROR_REASON.CONFIG_PARSE_FAILED);
-      }
-      if (current[key] === undefined || typeof current[key] !== 'object') {
-        current[key] = {};
-      }
-      current = current[key] as Record<string, unknown>;
-    }
-    const lastKey = keys[keys.length - 1];
-    if (lastKey === '__proto__' || lastKey === 'prototype' || lastKey === 'constructor') {
-      error('Invalid config key (prototype pollution guard): ' + keyPath, ERROR_REASON.CONFIG_PARSE_FAILED);
-    }
-    const previousValue = current[lastKey]; // Capture previous value before overwriting
-    current[lastKey] = parsedValue;
+    const previousValue = _setNestedValue(config, keyPath, parsedValue);
 
     // Write back
     try {
@@ -462,6 +479,53 @@ function setConfigValue(cwd: string, keyPath: string, parsedValue: unknown): Set
       error('Failed to write config.json: ' + (err as Error).message);
     }
   }) as SetConfigValueResult;
+}
+
+/**
+ * Batched sibling of setConfigValue: apply multiple key-path writes in a
+ * single load → set-all → write cycle inside ONE withPlanningLock call.
+ *
+ * Returns { updated: true, results: SetConfigValueResult[] } on success.
+ * An empty entries array is a no-op and returns { updated: false, results: [] }.
+ *
+ * Prototype-pollution guards are enforced per entry (identical inline-literal
+ * guards as setConfigValue — CodeQL barrier requirement).
+ */
+function setConfigValues(
+  cwd: string,
+  entries: Array<{ keyPath: string; value: unknown }>,
+): { updated: boolean; results: SetConfigValueResult[] } {
+  if (entries.length === 0) {
+    return { updated: false, results: [] };
+  }
+
+  const configPath = path.join(planningDir(cwd), 'config.json');
+
+  return withPlanningLock(cwd, () => {
+    // Load existing config or start with empty object
+    let config: Record<string, unknown> = {};
+    try {
+      if (fs.existsSync(configPath)) {
+        config = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+      }
+    } catch (err) {
+      error('Failed to read config.json: ' + (err as Error).message, ERROR_REASON.CONFIG_PARSE_FAILED);
+    }
+
+    const results: SetConfigValueResult[] = [];
+    for (const entry of entries) {
+      const previousValue = _setNestedValue(config, entry.keyPath, entry.value);
+      results.push({ updated: true, key: entry.keyPath, value: entry.value, previousValue });
+    }
+
+    // Write back once for all entries
+    try {
+      platformWriteSync(configPath, JSON.stringify(config, null, 2));
+      return { updated: true, results };
+    } catch (err) {
+      error('Failed to write config.json: ' + (err as Error).message);
+    }
+  }) as { updated: boolean; results: SetConfigValueResult[] };
 }
 
 /**
@@ -800,4 +864,7 @@ export = {
   cmdConfigNewProject,
   cmdConfigPath,
   cmdMigrateConfig,
+  // Exported for programmatic use by capability-writer and tests
+  setConfigValue,
+  setConfigValues,
 };
