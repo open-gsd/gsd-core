@@ -152,6 +152,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/research-store.cjs',
       'gsd-core/bin/lib/research-provider.cjs',
       'gsd-core/bin/lib/package-legitimacy.cjs',
+      // ADR-457: tsc-generated runtime artifact — lint the src/git-base-branch.cts source.
+      'gsd-core/bin/lib/git-base-branch.cjs',
     ],
   },
 

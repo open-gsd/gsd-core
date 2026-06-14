@@ -103,6 +103,9 @@ Workflow contract seam covering agent worktree lifecycle orchestration rules. Th
 ### Worktree Root Resolution Adapter Module
 Adapter Module owning linked-worktree root mapping and metadata-prune policy (`git worktree prune` non-destructive default) for planning/workstream callers.
 
+### Git Base-Branch Resolver Module
+Module owning the single source of truth for detecting the repository's default/base branch (`gsd_run query git.base-branch`). Implements a full precedence ladder: (1) `git.base_branch` config override from `.planning/config.json`; (2) `git symbolic-ref --short refs/remotes/origin/HEAD`; (3) `git remote show origin` HEAD branch (authoritative when origin/HEAD is unset — the common case for `git init + remote add + fetch` without `set-head`); (4) local branch existence (`master` present and `main` absent → `master`; `main` present → `main`); (5) `"main"` last-resort default. All git subprocesses are bounded with timeouts (5–15 s) and degrade gracefully to the next tier; the function never throws. Replaces duplicated per-workflow bash detection that silently fell through to `:-main` on master repos (#1146). Source: `src/git-base-branch.cts` → `gsd-core/bin/lib/git-base-branch.cjs`. Wired into `execute-phase.md`, `quick.md`, `ship.md`, `complete-milestone.md`, and `pr-branch.md`.
+
 ### Runtime Name Policy Module
 Module owning runtime identity normalization at runtime-selection seams. Canonicalizes alias signals from env/config (`GSD_RUNTIME`, `.planning/config.json:runtime`) to supported runtime IDs so output emitters and query runtime gates stay consistent across naming variants (for example `codex-app`/`codex-cli` -> `codex`). Sources: `gsd-core/bin/lib/runtime-name-policy.cjs`, alias manifest `gsd-core/bin/shared/runtime-aliases.manifest.json`.
 

@@ -306,6 +306,7 @@
       "federated-config.cjs",
       "frontmatter.cjs",
       "gap-checker.cjs",
+      "git-base-branch.cjs",
       "graphify-command-router.cjs",
       "graphify.cjs",
       "gsd2-import.cjs",

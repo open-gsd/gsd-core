@@ -225,6 +225,7 @@ const { routeAgentCommand } = require('./lib/agent-command-router.cjs');
 const { routeCheckCommand } = require('./lib/check-command-router.cjs');
 const { routeTaskCommand } = require('./lib/task-command-router.cjs');
 const { parseNamedArgs, parseMultiwordArg } = require('./lib/command-arg-projection.cjs');
+const { cmdGitBaseBranch } = require('./lib/git-base-branch.cjs');
 
 // ─── Bridge collapsed (Phase 4) ────────────────────────────────────────────────
 // Non-family commands now run through their CJS handlers directly. Keep the
@@ -511,7 +512,7 @@ async function main() {
     'current-timestamp, detect-custom-files, docs-init, effort, extract-messages, find-phase, ' +
     'from-gsd2, frontmatter, gap-analysis, generate-claude-md, generate-claude-profile, ' +
     'generate-dev-preferences, generate-slug, graphify, history-digest, init, intel, ' +
-    'capability, classify-confidence, learnings, list-todos, loop, milestone, package-legitimacy, phase, phase-plan-index, phases, profile-questionnaire, ' +
+    'capability, classify-confidence, git, learnings, list-todos, loop, milestone, package-legitimacy, phase, phase-plan-index, phases, profile-questionnaire, ' +
     'profile-sample, progress, prompt-budget, requirements, research-plan, research-store, resolve-granularity, resolve-model, roadmap, scaffold, state, ' +
     'task, template, user-story, validate, verify, verify-path-exists, verify-summary, workstream, worktree\n\n' +
     'Global flags:\n' +
@@ -1948,6 +1949,23 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
     //   Each slot must be non-empty and contain non-whitespace content.
     //
     // No .planning/ access needed — pure string validation.
+
+    // #1146: single base-branch resolver for all forking workflows.
+    // Workflows call `gsd_run query git.base-branch` (dotted form normalised to
+    // command='git', args=['git','base-branch']).
+    case 'git': {
+      const subcommand = args[1];
+      if (subcommand !== 'base-branch') {
+        error(
+          `Unknown git subcommand: ${subcommand || '(none)'}. Available: base-branch`,
+          ERROR_REASON.SDK_UNKNOWN_COMMAND,
+        );
+        break;
+      }
+      cmdGitBaseBranch(cwd, args.slice(2));
+      break;
+    }
+
     case 'user-story': {
       const subcommand = args[1];
       if (subcommand !== 'validate') {

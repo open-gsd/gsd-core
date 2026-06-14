@@ -418,6 +418,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `federated-config.cjs` | Defensive merge of capability-declared config slices into the loadConfig return value — ADR-857 phase 3b; exports `mergeFederatedConfig({ configSchema, isCentralKey, userConfig })` → `{ values, validKeys, warnings }`; live for migrated Capability keys that are atomically removed from the central config schema |
 | `frontmatter.cjs` | YAML frontmatter CRUD operations |
 | `gap-checker.cjs` | Post-planning gap analysis (#2493): unified REQUIREMENTS.md + CONTEXT.md decisions vs PLAN.md coverage report (`gsd-tools gap-analysis`) |
+| `git-base-branch.cjs` | Single base-branch resolver (`gsd_run query git.base-branch`) with full precedence ladder: config override → origin/HEAD symref → `git remote show origin` → local branch presence → "main". Eliminates per-workflow duplicated bash detection (#1146) |
 | `graphify.cjs` | Knowledge-graph build/query/status/diff for `/gsd-graphify` |
 | `graphify-command-router.cjs` | ADR-959 capability command router for `gsd-tools graphify` — dispatches build/query/status/diff subcommands; first real capability command cutover (phase 4d-impl-2) |
 | `gsd2-import.cjs` | External-plan ingest for `/gsd-import --from-gsd2` |

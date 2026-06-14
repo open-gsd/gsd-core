@@ -10,11 +10,12 @@ Uses git cherry-pick with path filtering to rebuild a clean history.
 <process>
 
 <step name="detect_state">
-Parse `$ARGUMENTS` for target branch (default: `main`).
+Parse `$ARGUMENTS` for target branch. If no argument is supplied, detect the
+default branch via the single resolver (#1146).
 
 ```bash
 CURRENT_BRANCH=$(git branch --show-current)
-TARGET=${1:-main}
+TARGET=${1:-$(gsd_run query git.base-branch)}
 ```
 
 Check preconditions:
