@@ -1037,24 +1037,62 @@ describe('_resetControllingTtyCacheForTests: proves BOTH cache fields cleared (#
     }
   });
 
-  test('source confirms both cache fields are zeroed in _resetControllingTtyCacheForTests', () => {
-    // Belt-and-suspenders structural assertion: if either field assignment is removed
-    // from the source, this catches it at review/build time.
-    const storePath = path.join(
-      __dirname, '..', 'gsd-core', 'bin', 'lib', 'active-workstream-store.cjs'
-    );
-    const src = fs.readFileSync(storePath, 'utf8');
-    // Locate the _reset function body
-    const resetStart = src.indexOf('function _resetControllingTtyCacheForTests()');
-    assert.ok(resetStart >= 0, 'reset function must exist in built .cjs');
-    const resetBody = src.slice(resetStart, resetStart + 300);
-    assert.ok(
-      resetBody.includes('cachedControllingTtyToken = null'),
-      'reset must clear cachedControllingTtyToken'
-    );
-    assert.ok(
-      resetBody.includes('didProbeControllingTtyToken = false'),
-      'reset must clear didProbeControllingTtyToken — mutation: if this is absent, the seam is broken'
-    );
+  test('reset clears didProbeControllingTtyToken: isTTY getter re-invoked after reset (mutation kill)', () => {
+    // MUTATION TRAP: if _resetControllingTtyCacheForTests() does NOT clear
+    // didProbeControllingTtyToken (i.e. leaves it true), probeControllingTtyToken()
+    // short-circuits on the first `if (didProbeControllingTtyToken) return cached`
+    // guard and never accesses process.stdin.isTTY.
+    //
+    // Strategy: spy on the process.stdin.isTTY getter via Object.defineProperty to
+    // count how many times the probe body accesses it.
+    //
+    //   Probe #1 (after reset): didProbe=false → probe body runs → isTTY accessed → count+1
+    //   Probe #2 (no reset):    didProbe=true  → short-circuit  → isTTY NOT accessed → count unchanged
+    //   Probe #3 (after reset): if reset cleared didProbe → probe body runs → isTTY accessed → count+1
+    //                           if reset did NOT clear didProbe (mutant) → short-circuit → count unchanged
+    //
+    // Assert: count increases between probe #1 and probe #2 baseline, and again after probe #3.
+    // The failing assert for the mutant is: count after probe #3 > count before probe #3.
+    const saved = saveSessionEnv();
+    clearSessionEnv();
+    const origDescriptor = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+    let accessCount = 0;
+    try {
+      // Install getter spy — return false so probeTty is not invoked (CI-safe).
+      Object.defineProperty(process.stdin, 'isTTY', {
+        get() { accessCount++; return false; },
+        configurable: true,
+      });
+
+      // Probe #1: fresh start, didProbe=false → body runs → isTTY read
+      _resetControllingTtyCacheForTests();
+      getWorkstreamSessionKey(); // falls through all session env keys → probeControllingTtyToken()
+      const countAfterProbe1 = accessCount;
+      assert.ok(countAfterProbe1 >= 1,
+        'probe #1: isTTY must be accessed at least once (probe body ran)');
+
+      // Probe #2: no reset → didProbe=true → short-circuit → isTTY NOT accessed
+      getWorkstreamSessionKey();
+      const countAfterProbe2 = accessCount;
+      assert.equal(countAfterProbe2, countAfterProbe1,
+        'probe #2: isTTY must NOT be accessed again (memoized — didProbe=true)');
+
+      // Probe #3: reset → didProbe must be false again → probe body runs → isTTY accessed
+      _resetControllingTtyCacheForTests();
+      getWorkstreamSessionKey();
+      const countAfterProbe3 = accessCount;
+      assert.ok(countAfterProbe3 > countAfterProbe2,
+        'probe #3: isTTY must be accessed again after reset (proves didProbeControllingTtyToken was cleared)');
+    } finally {
+      // Restore original descriptor (may be undefined if property was inherited)
+      if (origDescriptor) {
+        Object.defineProperty(process.stdin, 'isTTY', origDescriptor);
+      } else {
+        // Delete the spy property so the prototype value is visible again
+        delete (process.stdin).isTTY;
+      }
+      restoreSessionEnv(saved);
+      _resetControllingTtyCacheForTests();
+    }
   });
 });
