@@ -48,7 +48,7 @@ Define a **Host-Integration Interface**: a versioned, negotiated contract over t
 At load, host-plugin and engine exchange `protocolVersion` + a capability object. New axes the research requires:
 
 - **`embeddingMode`**: `imperative` | `declarative` — does the host run GSD as code or interpret GSD's artifacts?
-- **`commandSurface`**: `slash-file` (Claude/OpenCode) | `slash-programmatic` (pi/VS-Code-chat) | `slash-toml` (Gemini) | `palette` (VS Code) | `prose-only` (Codex). Drives how interface point 1 binds; `prose-only` is a real degradation.
+- **`commandSurface`**: `slash-file` (Claude/OpenCode, `gsd:`-namespaced) | `slash-programmatic` (pi/VS-Code-chat) | `slash-toml` (Gemini, `gsd.`-namespaced) | `palette` (VS Code) | `prose-only` (Codex). Drives how interface point 1 binds; `prose-only` is a real degradation.
 - **`dispatch`**: `{ namedDispatch: bool, nested: bool, maxDepth: int, background: bool, subagentToolkit: 'full'|'read-only' }`. GSD's orchestration **flattens** when `maxDepth`/`nested` are insufficient (run plan/execute inline) — the #853 rule, generalized and tested.
 - **`modelMode`**: `active` (host exposes `sendRequest`/provider registration → GSD calls the model: VS Code, pi) | `passive` (GSD can only inject prompts/instructions: Gemini/Cursor/Cline/Codex/OpenCode). Two model-layer adapters; `passive` means GSD expresses orchestration declaratively.
 - **`hookBus`**: `host` (host fires events GSD subscribes to: Gemini/Cursor/Hermes/Codex/pi/OpenCode) | `engine` (host has no bus → GSD owns it internally and fires its own: VS Code) | `none` (no bus → degrade lifecycle gating to rule-text instructions: Cline-rules). Plus the **portable event floor** (`SessionStart`/`PreToolUse`/`PostToolUse`/`Stop`/`SessionEnd` — the "claude dialect" all hook-capable hosts share) and negotiated extended events.
@@ -62,7 +62,7 @@ The **primitive vocabulary stays closed and first-party** (ADR-857 Decision 8): 
 
 | Interface point | Full | Degraded | Absent → fallback |
 |---|---|---|---|
-| 1 Command | `slash-file`/`slash-programmatic` (Claude, OpenCode, pi, Gemini, Cursor) | `slash-toml` namespacing (Gemini `/gsd.x`) | `prose-only` (Codex): commands become AGENTS.md prose + `/skills` menu |
+| 1 Command | `slash-file`/`slash-programmatic` (Claude, OpenCode, pi, Gemini, Cursor) | `slash-toml` namespacing (Gemini `gsd.`-prefixed) | `prose-only` (Codex): commands become AGENTS.md prose + skills menu |
 | 2 Dispatch | nested + background + full toolkit (Claude fg) | shallow/flat/read-only (Codex d1, Gemini flat, Cline d2 read-only) | no named dispatch (pi): single-agent inline; build via SDK sub-session |
 | 3 Model | `active` (VS Code `lm`, pi providers, `before_provider_request`) | per-agent model field only (OpenCode, Gemini sub-agent) | `passive`: instruction-injection only; no tier routing |
 | 4 Hooks | host bus, rich events (Claude 30, pi 30, Cursor 19) | host bus, thin events (Hermes 6, Codex 10 command-only) | `engine`-owns-bus (VS Code) / `none` → rule-text (Cline) |
@@ -111,12 +111,12 @@ Each phase is its own `approved-*` issue + PR with equivalence/parity proof.
 
 | Host | Mode | Cmd surface | Dispatch | Model | Hook bus (events) | MCP | Runtime |
 |---|---|---|---|---|---|---|---|
-| Claude Code | imperative | slash-file (`/gsd:x`) | nested fg ∞ / bg depth-5; `Agent()` | passive (per-subagent `model`) | host (30) | yes (bundle) | node |
+| Claude Code | imperative | slash-file (`gsd:`-ns) | nested fg ∞ / bg depth-5; `Agent()` | passive (per-subagent `model`) | host (30) | yes (bundle) | node |
 | pi (pi.dev) | imperative | slash-programmatic | no named dispatch; SDK sub-session | **active** (providers + `before_provider_request`) | host (~30 fine) | community ext | **bun** |
 | OpenCode | imperative | slash-file | `mode:subagent`/`@`; `subtask` sync | per-agent model | host (~25) | yes | node |
 | VS Code | imperative/**IDE** | palette + chat `/` | DIY `lm` tool-loop | **active** (`vscode.lm`, no system msg) | **engine-owned** (none) | yes (provider) | node / **sandboxed-web** |
 | Codex | declarative | **prose-only** + `/skills` | `max_depth=1` | passive (session-only) | host (10, command-only) | yes | node |
-| Gemini CLI | declarative | slash-toml (`/gsd.x`) | **flat** (no nesting) | passive (sub-agent `model:`) | host (10: BeforeAgent/Model/Tool) | yes | node |
-| Cursor | declarative | slash-file (`/gsd-x`) | host sub-agents; 19 hook events | passive | host (19) | yes | node |
+| Gemini CLI | declarative | slash-toml (`gsd.`-ns) | **flat** (no nesting) | passive (sub-agent `model:`) | host (10: BeforeAgent/Model/Tool) | yes | node |
+| Cursor | declarative | slash-file (`gsd-`-ns) | host sub-agents; 19 hook events | passive | host (19) | yes | node |
 | Cline | declarative (rules) | slash-file | `use_subagents` depth-2 read-only | passive | **none** (rules) / SDK `beforeTool` | yes | node |
 | Hermes | declarative | slash-file | `delegate_task` depth-2 + kanban | passive (`pre/post_llm_call` unbound) | host (6) writes shared config | yes | node |
