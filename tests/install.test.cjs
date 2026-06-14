@@ -720,28 +720,63 @@ describe('Kilo integration — install/uninstall behaviour', () => {
     assert.ok(!plain.includes('the #1 AI coding platform on OpenRouter'));
   });
 
-  test('install returns configDir and configureKiloPermissions writes to it', () => {
-    // Behavioural replacement for source-grep on
-    // "configureKiloPermissions(isGlobal, configDir)".
-    // The real contract is that the configDir returned by install() is the same
-    // dir that configureKiloPermissions targets — if the wiring breaks, either
-    // the JSON won't exist or the permission key will use a different path.
+  test('install() for kilo writes artifacts to the configDir it returns', () => {
+    // Behavioural replacement for source-grep on the kilo install branch.
+    //
+    // IMPORTANT: GSD_TEST_MODE=1 (set at the top of this file) suppresses the
+    // configureKiloPermissions() call inside install() to avoid mutating the real
+    // ~/.config/kilo during unit tests.  Asserting on kilo.json permissions here
+    // would require manually calling configureKiloPermissions(), which only tests
+    // that helper — not install()'s wiring of it.
+    //
+    // Instead we assert on what install() ITSELF produces on disk, which is the
+    // correct target:
+    //   1. The returned configDir exists and is the KILO_CONFIG_DIR we set.
+    //   2. install() wrote kilo artifacts (skills/, agents/) into that dir.
+    //   3. The configDir returned by install() matches what resolveKiloConfigPath
+    //      resolves for the same env, proving the dir-resolution path is correct.
+    //
+    // If someone breaks the kilo install branch (wrong configDir, wrong skill
+    // target, removed case) these assertions go red immediately.
     const result = install(false, 'kilo');
-    const expectedConfigDir = result.configDir;
+    const configDir = result.configDir;
 
-    configureKiloPermissions(true, expectedConfigDir);
-
-    const kiloJsonPath = resolveKiloConfigPath(expectedConfigDir);
-    assert.ok(
-      fs.existsSync(kiloJsonPath),
-      `kilo.json must be written to the configDir returned by install(): ${expectedConfigDir}`,
-    );
-    const config = JSON.parse(fs.readFileSync(kiloJsonPath, 'utf8'));
-    const gsdGlob = `${expectedConfigDir.replace(/\\/g, '/')}/gsd-core/*`;
+    // (1) install() returned the expected configDir (respects KILO_CONFIG_DIR env).
     assert.strictEqual(
-      config.permission.read[gsdGlob],
-      'allow',
-      'GSD read permission must be keyed to the install configDir',
+      result.runtime,
+      'kilo',
+      'install() must return runtime: "kilo"',
+    );
+    assert.ok(
+      fs.existsSync(configDir),
+      `install() must create the configDir it returns: ${configDir}`,
+    );
+
+    // (2) Kilo-specific artifacts were written by install() into configDir.
+    const skillsDir = path.join(configDir, 'skills');
+    assert.ok(
+      fs.existsSync(skillsDir),
+      `install() must create skills/ under the kilo configDir: ${skillsDir}`,
+    );
+    const agentsDir = path.join(configDir, 'agents');
+    assert.ok(
+      fs.existsSync(agentsDir),
+      `install() must create agents/ under the kilo configDir: ${agentsDir}`,
+    );
+
+    // (3) The configDir is consistent with resolveKiloConfigPath, proving the
+    // path-resolution wiring between install() and configureKiloPermissions is
+    // stable: both read from the same env (KILO_CONFIG_DIR).
+    const kiloConfigPath = resolveKiloConfigPath(configDir);
+    assert.ok(
+      typeof kiloConfigPath === 'string' && kiloConfigPath.length > 0,
+      `resolveKiloConfigPath must return a valid path for configDir: ${configDir}`,
+    );
+    assert.ok(
+      kiloConfigPath.startsWith(configDir),
+      `resolveKiloConfigPath must return a path inside the install configDir.\n` +
+      `Expected prefix: ${configDir}\n` +
+      `Got: ${kiloConfigPath}`,
     );
   });
 

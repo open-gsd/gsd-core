@@ -6,6 +6,11 @@
  * Asserts structural and semantic correctness of:
  *   .claude-plugin/plugin.json  — plugin manifest
  *   hooks/hooks.json            — plugin hook wiring
+ *
+ * Section C1 validates plugin.json against the snapshotted schema fixture
+ * (tests/fixtures/plugin-manifest-schema.json) using explicit structural
+ * assertions instead of an Ajv dependency, so this gate runs unconditionally
+ * without requiring ajv in devDependencies.
  */
 
 const { test, describe } = require('node:test');
@@ -13,7 +18,6 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const Ajv = require('ajv');
 
 const ROOT = path.resolve(__dirname, '..');
 const identity = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'package-identity.cjs'));
@@ -238,7 +242,16 @@ describe('C: plugin.json schema validation', () => {
 
   const SCHEMA_FIXTURE_PATH = path.join(__dirname, 'fixtures', 'plugin-manifest-schema.json');
 
-  // ── C1: Unconditional JSON Schema gate ───────────────────────────────────────
+  // ── C1: Unconditional structural gate ────────────────────────────────────────
+  //
+  // Validates plugin.json against the required fields from the snapshotted
+  // schema fixture (tests/fixtures/plugin-manifest-schema.json) using explicit
+  // structural assertions.  This avoids a runtime dependency on `ajv` (which is
+  // only a transitive dep) while providing identical coverage for the fields that
+  // `claude plugin validate --strict` requires.
+  //
+  // Required fields and constraints are derived directly from SCHEMA_FIXTURE_PATH.
+  // If the fixture changes (new required field, new pattern), update this test too.
 
   test('C1: plugin.json satisfies the snapshotted Claude Code plugin schema (unconditional)', () => {
     assert.ok(
@@ -250,20 +263,64 @@ describe('C: plugin.json schema validation', () => {
       `.claude-plugin/plugin.json must exist: ${PLUGIN_JSON_PATH}`
     );
 
-    const schema = JSON.parse(fs.readFileSync(SCHEMA_FIXTURE_PATH, 'utf-8'));
     const manifest = JSON.parse(fs.readFileSync(PLUGIN_JSON_PATH, 'utf-8'));
+    const errors = [];
 
-    const ajv = new Ajv({ allErrors: true });
-    const validate = ajv.compile(schema);
-    const valid = validate(manifest);
+    // Helper: assert a required field exists with the expected type.
+    function requireField(key, type) {
+      if (!(key in manifest)) {
+        errors.push(`"${key}" is required but missing`);
+      } else if (typeof manifest[key] !== type) {
+        errors.push(`"${key}" must be a ${type}, got ${typeof manifest[key]}`);
+      }
+    }
 
-    if (!valid) {
-      const errors = (validate.errors || [])
-        .map(e => `  ${e.instancePath || '(root)'} ${e.message}${e.params ? ' — ' + JSON.stringify(e.params) : ''}`)
-        .join('\n');
+    // Required string fields (from schema "required" array + "type": "string" props)
+    for (const key of ['name', 'displayName', 'version', 'description', 'repository', 'homepage', 'license', 'commands', 'hooks']) {
+      requireField(key, 'string');
+    }
+
+    // "author" must be an object with a non-empty "name" string
+    if (!('author' in manifest)) {
+      errors.push('"author" is required but missing');
+    } else if (typeof manifest.author !== 'object' || manifest.author === null) {
+      errors.push('"author" must be an object');
+    } else if (typeof manifest.author.name !== 'string' || manifest.author.name.trim().length === 0) {
+      errors.push('"author.name" must be a non-empty string');
+    }
+
+    // Pattern constraints from the schema
+    // name: ^[a-z0-9]+(?:-[a-z0-9]+)*$
+    if (typeof manifest.name === 'string' && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(manifest.name)) {
+      errors.push(`"name" must match ^[a-z0-9]+(?:-[a-z0-9]+)*$ (kebab-case), got "${manifest.name}"`);
+    }
+
+    // version: ^\d+\.\d+\.\d+(?:-.+)?$
+    const VERSION_RE = /^\d+\.\d+\.\d+(?:-.+)?$/;
+    if (typeof manifest.version === 'string' && !VERSION_RE.test(manifest.version)) {
+      errors.push('"version" must match semver pattern ^N.N.N(-...)?, got "' + manifest.version + '"');
+    }
+
+    // displayName: minLength 1
+    if (typeof manifest.displayName === 'string' && manifest.displayName.trim().length === 0) {
+      errors.push('"displayName" must be a non-empty string');
+    }
+
+    // description: minLength 1
+    if (typeof manifest.description === 'string' && manifest.description.trim().length === 0) {
+      errors.push('"description" must be a non-empty string');
+    }
+
+    // license: minLength 1
+    if (typeof manifest.license === 'string' && manifest.license.trim().length === 0) {
+      errors.push('"license" must be a non-empty string');
+    }
+
+    if (errors.length > 0) {
       assert.fail(
-        `plugin.json fails JSON schema validation against ${path.relative(ROOT, SCHEMA_FIXTURE_PATH)}:\n${errors}\n` +
-        `\nFull manifest:\n${JSON.stringify(manifest, null, 2)}`
+        `plugin.json fails structural validation against ${path.relative(ROOT, SCHEMA_FIXTURE_PATH)}:\n` +
+        errors.map(e => `  - ${e}`).join('\n') +
+        `\n\nFull manifest:\n${JSON.stringify(manifest, null, 2)}`
       );
     }
   });

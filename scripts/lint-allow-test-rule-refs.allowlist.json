@@ -88,6 +88,7 @@
   "tests/bug-3582-codex-skills-materialized.test.cjs :: source-text-is-the-product",
   "tests/bug-3605-stale-research-insert-phase-agent-refs.test.cjs :: source-text-is-the-product",
   "tests/bug-3628-bundled-hook-classifier-whitelist.test.cjs :: architectural-invariant",
+  "tests/bug-3657-verify-reapply-patches-pristine-drift.test.cjs :: source-text-is-the-product.",
   "tests/bug-3657-verify-reapply-patches-pristine-drift.test.cjs :: source-text-is-the-product — Finding 2 reads reapply-patches.md to",
   "tests/bug-3677-agent-colon-namespace-leak.test.cjs :: source-text-is-the-product",
   "tests/bug-3678-executor-commit-docs-respect.test.cjs :: source-text-is-the-product",

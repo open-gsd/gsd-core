@@ -55,8 +55,24 @@ const ALLOWLIST_PATH =
   process.env.GSD_LINT_ALLOW_TEST_RULE_ALLOWLIST ||
   path.join(__dirname, 'lint-allow-test-rule-refs.allowlist.json');
 
-/** Matches the reason text after `allow-test-rule:` */
-const ALLOW_TEST_RULE_RE = /\/\/\s*allow-test-rule:\s*(.+)/;
+/**
+ * Extracts the reason text after `allow-test-rule:` from a single line of source
+ * text in any comment form that the no-source-grep ESLint rule honours.
+ *
+ * The ESLint rule tests `c.value` (AST comment node value, delimiters stripped)
+ * with /allow-test-rule:\s*\S/, which fires on BOTH:
+ *   // allow-test-rule: <reason>    (line comment)
+ *   /* allow-test-rule: <reason> * / (block comment, single-line)
+ *
+ * By scanning line-by-line and extracting everything after `allow-test-rule:` on
+ * each line, we cover both forms without a cross-line regex (which was previously
+ * matching arbitrary `/* ... * /` pairs spanning hundreds of lines, causing false
+ * positives).
+ *
+ * The trailing `*\/` and whitespace are stripped so block-comment closers don't
+ * bleed into the extracted reason.
+ */
+const ALLOW_TEST_RULE_LINE_RE = /allow-test-rule:\s*(.+)/;
 /** Matches a compliant issue reference or URL */
 const ISSUE_REF_RE = /#\d+|https?:\/\//;
 
@@ -83,10 +99,20 @@ function collectOffenders(dir) {
           // skip unreadable files (e.g. binary)
           continue;
         }
+        // Scan line-by-line.  By testing each line for `allow-test-rule:` we
+        // cover BOTH comment forms without a cross-line regex:
+        //   // allow-test-rule: <reason>         ← line comment
+        //   /* allow-test-rule: <reason> */      ← single-line block comment
+        //
+        // For each matching line we extract the reason (everything after the
+        // colon), then strip any trailing block-comment closer `*/` and
+        // whitespace so the identifier stays clean.
         for (const line of content.split('\n')) {
-          const m = ALLOW_TEST_RULE_RE.exec(line);
+          const m = ALLOW_TEST_RULE_LINE_RE.exec(line);
           if (!m) continue;
-          const reason = m[1].trim();
+          // Strip trailing block-comment closer and whitespace if present
+          const reason = m[1].replace(/\s*\*\/\s*$/, '').trim();
+          if (!reason) continue;
           if (ISSUE_REF_RE.test(reason)) continue; // compliant — skip
           offenders.add(`${relpath} :: ${reason}`);
         }
