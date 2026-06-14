@@ -268,8 +268,45 @@ function main() {
   }
 }
 
+// ── MUTATION_BREAK resolver ───────────────────────────────────────────────────
+/**
+ * Resolves the per-shard mutation break threshold from the MUTATION_BREAK env var.
+ *
+ * Fail-closed contract:
+ *   - undefined  → 60  (local run: no env set, documented backstop)
+ *   - set but empty (e.g. CI matrix.minScore missing) → throws (wiring error)
+ *   - non-numeric or out-of-range [1, 100] → throws (invalid config)
+ *   - valid integer string → returns that number
+ *
+ * This function is the single call site for reading MUTATION_BREAK.
+ * stryker.config.mjs imports and calls it so CI shards with a bad
+ * MUTATION_BREAK fail immediately rather than silently falling back to 60
+ * and bypassing a per-module floor above 60 (e.g. prompt-budget: 90).
+ *
+ * @param {string|undefined} raw - value of process.env.MUTATION_BREAK
+ * @returns {number}
+ */
+function resolveMutationBreak(raw) {
+  if (raw === undefined) {
+    // Local run with no MUTATION_BREAK set — use documented backstop.
+    return 60;
+  }
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    throw new Error(
+      'MUTATION_BREAK is set but empty — CI shard wiring is broken (matrix.minScore missing?)'
+    );
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 1 || n > 100) {
+    throw new Error(
+      `MUTATION_BREAK invalid: "${raw}" (expected a per-module minScore 1-100)`
+    );
+  }
+  return n;
+}
+
 // Export internals for programmatic use (tests/mutation-matrix-ratchet.test.cjs).
 // The require.main guard prevents main() from running when this file is require()d.
-module.exports = { COVERED, TARGET_MUTATION_SCORE };
+module.exports = { COVERED, TARGET_MUTATION_SCORE, resolveMutationBreak };
 
 if (require.main === module) runMain(main);

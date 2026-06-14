@@ -21,6 +21,12 @@
  * to stay bounded. Full runs are for local exploration only.
  */
 
+import { createRequire } from 'node:module';
+const _require = createRequire(import.meta.url);
+// resolveMutationBreak: fail-closed resolver for MUTATION_BREAK env var.
+// undefined → 60 (local backstop); set-but-empty or non-numeric → throws.
+const { resolveMutationBreak } = _require('./scripts/mutation-matrix.cjs');
+
 // ADR-457: bin/lib/*.cjs are gitignored build artifacts (compiled from
 // src/*.cts by `npm run build:lib`, which the mutation CI job runs via `npm ci`
 // → prepare before Stryker). Stryker mutates the *built* .cjs directly — the
@@ -93,7 +99,7 @@ export default {
   thresholds: {
     high: 80,
     low: 60,
-    break: Number(process.env.MUTATION_BREAK) || 60,
+    break: resolveMutationBreak(process.env.MUTATION_BREAK),
   },
 
   // ── Incremental mode ─────────────────────────────────────────────────────────

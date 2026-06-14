@@ -175,16 +175,18 @@ describe('mutation-matrix ratchet: guard detects missing minScore', () => {
   });
 });
 
-// ── (e) monotonic ratchet: minScore may only increase ────────────────────────
-// RATCHET_BASELINE captures the committed floors as of the initial #1187 measurement.
+// ── (e) monotonic ratchet: minScore must exactly match baseline ───────────────
+// RATCHET_BASELINE is a deliberate review-visible mirror of the floors in COVERED.
 //
-// CONTRACT: a module's minScore in COVERED must NEVER drop below its entry here.
-// Raising a floor is always allowed (no assertion fails when score goes up).
-// LOWERING a floor requires editing this baseline — that edit is the visible,
-// reviewable red flag that a deliberate regression is being introduced.
+// CONTRACT: every COVERED module's minScore must EQUAL its entry here.
+// ANY change to a floor (up or down) requires updating RATCHET_BASELINE in the
+// same diff, making the change explicit in code review. This prevents a floor
+// from being raised in COVERED and later silently lowered back to baseline.
 //
-// To ADD a new module to COVERED: also add a baseline entry here before merging.
+// To ADD a new module to COVERED: add a baseline entry here in the same diff.
 // The assertion "every COVERED module has a baseline" enforces this.
+// The assertion "every baseline module still exists in COVERED" enforces the
+// reverse: removing a module from COVERED also requires updating the baseline.
 const RATCHET_BASELINE = {
   'context-utilization':     80,
   'prompt-budget':           90,
@@ -195,7 +197,7 @@ const RATCHET_BASELINE = {
   'core-utils':              75,
 };
 
-describe('mutation-matrix ratchet: monotonic floor enforcement', () => {
+describe('mutation-matrix ratchet: floor equality enforcement', () => {
   const covered = matrix.COVERED || {};
   const coveredNames = Object.keys(covered);
 
@@ -208,8 +210,17 @@ describe('mutation-matrix ratchet: monotonic floor enforcement', () => {
     }
   });
 
+  test('every RATCHET_BASELINE module still exists in COVERED (removed modules must drop their baseline entry)', () => {
+    for (const name of Object.keys(RATCHET_BASELINE)) {
+      assert.ok(
+        Object.prototype.hasOwnProperty.call(covered, name),
+        `RATCHET_BASELINE has entry for '${name}' but it no longer exists in COVERED — remove the baseline entry`
+      );
+    }
+  });
+
   for (const name of coveredNames) {
-    test(`${name}: minScore >= baseline (${RATCHET_BASELINE[name] ?? 'NO BASELINE'}) — never lower the floor`, () => {
+    test(`${name}: minScore === baseline (${RATCHET_BASELINE[name] ?? 'NO BASELINE'}) — any floor change must update RATCHET_BASELINE`, () => {
       const baseline = RATCHET_BASELINE[name];
       if (baseline === undefined) {
         // Already caught by the presence check above; skip the numeric compare
@@ -218,10 +229,67 @@ describe('mutation-matrix ratchet: monotonic floor enforcement', () => {
         return;
       }
       const actual = covered[name].minScore;
-      assert.ok(
-        actual >= baseline,
-        `COVERED['${name}'].minScore (${actual}) dropped below RATCHET_BASELINE (${baseline}) — ratchet violation`
+      assert.strictEqual(
+        actual,
+        baseline,
+        `COVERED['${name}'].minScore (${actual}) !== RATCHET_BASELINE (${baseline}) — update RATCHET_BASELINE to match the new floor`
       );
     });
   }
+});
+
+// ── (f) resolveMutationBreak behaviour ───────────────────────────────────────
+describe('resolveMutationBreak: fail-closed env-var resolver', () => {
+  const { resolveMutationBreak } = matrix;
+
+  test('exports resolveMutationBreak as a function', () => {
+    assert.strictEqual(typeof resolveMutationBreak, 'function');
+  });
+
+  test('undefined → 60 (local run backstop)', () => {
+    assert.strictEqual(resolveMutationBreak(undefined), 60);
+  });
+
+  test("'' (empty string) → throws (CI shard wiring error)", () => {
+    assert.throws(
+      () => resolveMutationBreak(''),
+      /MUTATION_BREAK is set but empty/
+    );
+  });
+
+  test("'   ' (whitespace-only) → throws (CI shard wiring error)", () => {
+    assert.throws(
+      () => resolveMutationBreak('   '),
+      /MUTATION_BREAK is set but empty/
+    );
+  });
+
+  test("'abc' → throws (non-numeric)", () => {
+    assert.throws(
+      () => resolveMutationBreak('abc'),
+      /MUTATION_BREAK invalid/
+    );
+  });
+
+  test("'0' → throws (out of range: below 1)", () => {
+    assert.throws(
+      () => resolveMutationBreak('0'),
+      /MUTATION_BREAK invalid/
+    );
+  });
+
+  test("'150' → throws (out of range: above 100)", () => {
+    assert.throws(
+      () => resolveMutationBreak('150'),
+      /MUTATION_BREAK invalid/
+    );
+  });
+
+  test("'80' → 80", () => {
+    assert.strictEqual(resolveMutationBreak('80'), 80);
+  });
+
+  test("'62' → 62", () => {
+    assert.strictEqual(resolveMutationBreak('62'), 62);
+  });
 });
