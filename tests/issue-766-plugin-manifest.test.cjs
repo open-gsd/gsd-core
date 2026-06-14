@@ -13,6 +13,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const Ajv = require('ajv');
 
 const ROOT = path.resolve(__dirname, '..');
 const identity = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'package-identity.cjs'));
@@ -217,8 +218,57 @@ describe('B: hooks/hooks.json', () => {
   });
 });
 
-// ─── Section C: Optional CLI integration test ─────────────────────────────────
-describe('C: claude plugin validate (CLI integration)', () => {
+// ─── Section C: Unconditional JSON schema gate + opportunistic CLI integration ──
+//
+// The `claude plugin validate --strict` binary is absent on CI, so Section C was
+// previously SKIPPED there — the only full-schema gate never ran.  This section
+// replaces the skip-on-absent pattern with two tiers:
+//
+//   C1 (UNCONDITIONAL) — Validate plugin.json against a snapshotted JSON schema
+//        fixture that captures the fields `--strict` requires.  Runs on every
+//        platform, every CI job, every local run.  A bug that removes `version`
+//        or changes `name` to an invalid form goes red immediately.
+//
+//   C2 (OPPORTUNISTIC) — When the `claude` binary IS on PATH, also run
+//        `claude plugin validate . --strict` as an end-to-end smoke test.
+//        This tier provides defence-in-depth for schema changes Claude Code
+//        may introduce that the fixture hasn't yet captured.
+//
+describe('C: plugin.json schema validation', () => {
+
+  const SCHEMA_FIXTURE_PATH = path.join(__dirname, 'fixtures', 'plugin-manifest-schema.json');
+
+  // ── C1: Unconditional JSON Schema gate ───────────────────────────────────────
+
+  test('C1: plugin.json satisfies the snapshotted Claude Code plugin schema (unconditional)', () => {
+    assert.ok(
+      fs.existsSync(SCHEMA_FIXTURE_PATH),
+      `Schema fixture must exist: ${SCHEMA_FIXTURE_PATH}`
+    );
+    assert.ok(
+      fs.existsSync(PLUGIN_JSON_PATH),
+      `.claude-plugin/plugin.json must exist: ${PLUGIN_JSON_PATH}`
+    );
+
+    const schema = JSON.parse(fs.readFileSync(SCHEMA_FIXTURE_PATH, 'utf-8'));
+    const manifest = JSON.parse(fs.readFileSync(PLUGIN_JSON_PATH, 'utf-8'));
+
+    const ajv = new Ajv({ allErrors: true });
+    const validate = ajv.compile(schema);
+    const valid = validate(manifest);
+
+    if (!valid) {
+      const errors = (validate.errors || [])
+        .map(e => `  ${e.instancePath || '(root)'} ${e.message}${e.params ? ' — ' + JSON.stringify(e.params) : ''}`)
+        .join('\n');
+      assert.fail(
+        `plugin.json fails JSON schema validation against ${path.relative(ROOT, SCHEMA_FIXTURE_PATH)}:\n${errors}\n` +
+        `\nFull manifest:\n${JSON.stringify(manifest, null, 2)}`
+      );
+    }
+  });
+
+  // ── C2: Opportunistic CLI integration (skipped when claude not on PATH) ──────
 
   const claudeAvailable = (() => {
     try {
@@ -230,8 +280,8 @@ describe('C: claude plugin validate (CLI integration)', () => {
   })();
 
   test(
-    'claude plugin validate . --strict exits 0 (skip if claude not on PATH)',
-    { skip: !claudeAvailable ? 'claude binary not available on PATH' : false },
+    'C2: claude plugin validate . --strict exits 0 (opportunistic — skip when claude not on PATH)',
+    { skip: !claudeAvailable ? 'claude binary not on PATH' : false },
     () => {
       const result = spawnSync('claude', ['plugin', 'validate', '.', '--strict'], {
         cwd: ROOT,

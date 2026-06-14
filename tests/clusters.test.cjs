@@ -49,10 +49,11 @@ describe('CLUSTERS', () => {
 
   test('utility cluster is the largest by membership', () => {
     const utilitySize = CLUSTERS.utility.length;
+    // utility must meet the design-intent floor: at least 15 distinct skill stems
+    assert.ok(utilitySize >= 15, `utility cluster must have at least 15 members, got ${utilitySize}`);
     for (const [name, skills] of Object.entries(CLUSTERS)) {
       if (name !== 'utility') {
-        // utility is expected to be large
-        assert.ok(utilitySize >= skills.length || true, `utility (${utilitySize}) vs ${name} (${skills.length})`);
+        assert.ok(utilitySize >= skills.length, `utility (${utilitySize}) should be >= ${name} (${skills.length})`);
       }
     }
   });

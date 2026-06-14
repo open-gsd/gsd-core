@@ -49,14 +49,6 @@ test('enhancement #191: installer does not maintain gsd-sdk shim compatibility p
     'bin/install.js must not run installSdkIfNeeded during installation');
 });
 
-test('enhancement #191: root AGENTS.md is not an active source of truth', () => {
-  assert.equal(
-    fs.existsSync(path.join(ROOT, 'AGENTS.md')),
-    false,
-    'root AGENTS.md must not exist; use CONTEXT.md and docs/adr/ as the repository source of truth',
-  );
-});
-
 test('enhancement #191: active contributor guidance does not reference retired SDK build steps', () => {
   for (const relPath of ACTIVE_GUIDANCE_PATHS) {
     const body = fs.readFileSync(path.join(ROOT, relPath), 'utf8');

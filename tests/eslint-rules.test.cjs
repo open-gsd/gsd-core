@@ -29,6 +29,10 @@ const ruleTester = new RuleTester({
 // ─── no-source-grep ──────────────────────────────────────────────────────────
 
 describe('no-source-grep rule', () => {
+  test('rule module exports a create function', () => {
+    assert.strictEqual(typeof noSourceGrep.create, 'function');
+  });
+
   test('valid: readFileSync on .md file is allowed', () => {
     ruleTester.run('no-source-grep', noSourceGrep, {
       valid: [
@@ -53,7 +57,6 @@ describe('no-source-grep rule', () => {
       ],
       invalid: [],
     });
-    assert.ok(true, 'no-source-grep valid cases passed');
   });
 
   test('invalid: readFileSync on .cjs source file followed by .includes()', () => {
@@ -72,7 +75,6 @@ describe('no-source-grep rule', () => {
         },
       ],
     });
-    assert.ok(true, 'no-source-grep invalid case detected');
   });
 
   test('invalid: readFileSync on .cjs source file followed by .match()', () => {
@@ -91,7 +93,6 @@ describe('no-source-grep rule', () => {
         },
       ],
     });
-    assert.ok(true, 'no-source-grep match case detected');
   });
 
   test('valid: file with allow-test-rule annotation is exempt', () => {
@@ -111,7 +112,6 @@ describe('no-source-grep rule', () => {
       ],
       invalid: [],
     });
-    assert.ok(true, 'no-source-grep allow-test-rule annotation works');
   });
 
   test('valid: require() of a .cjs file is allowed (not readFileSync)', () => {
@@ -127,13 +127,16 @@ describe('no-source-grep rule', () => {
       ],
       invalid: [],
     });
-    assert.ok(true, 'no-source-grep require() is allowed');
   });
 });
 
 // ─── no-magic-sleep-in-tests ─────────────────────────────────────────────────
 
 describe('no-magic-sleep-in-tests rule', () => {
+  test('rule module exports a create function', () => {
+    assert.strictEqual(typeof noMagicSleepInTests.create, 'function');
+  });
+
   test('valid: setTimeout used outside tests (no-op since rule only applies to *.test.cjs)', () => {
     // Rule only applies to *.test.cjs files; a non-test filename is always valid
     ruleTester.run('no-magic-sleep-in-tests', noMagicSleepInTests, {
@@ -147,7 +150,6 @@ describe('no-magic-sleep-in-tests rule', () => {
       ],
       invalid: [],
     });
-    assert.ok(true, 'no-magic-sleep-in-tests does not apply outside test files');
   });
 
   test('invalid: Atomics.wait() in test file', () => {
@@ -165,7 +167,6 @@ describe('no-magic-sleep-in-tests rule', () => {
         },
       ],
     });
-    assert.ok(true, 'no-magic-sleep-in-tests flags Atomics.wait()');
   });
 
   test('invalid: setTimeout used for synchronization in Promise in test file', () => {
@@ -183,7 +184,6 @@ describe('no-magic-sleep-in-tests rule', () => {
         },
       ],
     });
-    assert.ok(true, 'no-magic-sleep-in-tests flags setTimeout in Promise');
   });
 
   test('valid: setTimeout with callback (not synchronization pattern) in test file', () => {
@@ -202,13 +202,16 @@ describe('no-magic-sleep-in-tests rule', () => {
       ],
       invalid: [],
     });
-    assert.ok(true, 'no-magic-sleep-in-tests allows simple callback setTimeout');
   });
 });
 
 // ─── no-elapsed-assertion ─────────────────────────────────────────────────────
 
 describe('no-elapsed-assertion rule', () => {
+  test('rule module exports a create function', () => {
+    assert.strictEqual(typeof noElapsedAssertion.create, 'function');
+  });
+
   test('valid: assert on non-timing property', () => {
     ruleTester.run('no-elapsed-assertion', noElapsedAssertion, {
       valid: [
@@ -230,7 +233,6 @@ describe('no-elapsed-assertion rule', () => {
       ],
       invalid: [],
     });
-    assert.ok(true, 'no-elapsed-assertion valid cases passed');
   });
 
   test('invalid: assert on .elapsed property', () => {
@@ -248,7 +250,6 @@ describe('no-elapsed-assertion rule', () => {
         },
       ],
     });
-    assert.ok(true, 'no-elapsed-assertion flags assert on .elapsed');
   });
 
   test('invalid: assert on .duration property', () => {
@@ -265,7 +266,6 @@ describe('no-elapsed-assertion rule', () => {
         },
       ],
     });
-    assert.ok(true, 'no-elapsed-assertion flags assert on .duration');
   });
 
   test('invalid: assert on .took property', () => {
@@ -282,7 +282,6 @@ describe('no-elapsed-assertion rule', () => {
         },
       ],
     });
-    assert.ok(true, 'no-elapsed-assertion flags assert on .took');
   });
 
   test('invalid: assert on .ms property', () => {
@@ -299,7 +298,6 @@ describe('no-elapsed-assertion rule', () => {
         },
       ],
     });
-    assert.ok(true, 'no-elapsed-assertion flags assert on .ms');
   });
 
   test('invalid: assert.equal with timing comparison', () => {
@@ -316,13 +314,16 @@ describe('no-elapsed-assertion rule', () => {
         },
       ],
     });
-    assert.ok(true, 'no-elapsed-assertion flags assert.equal with timing comparison');
   });
 });
 
 // ─── no-raw-rmsync-in-tests ──────────────────────────────────────────────────
 
 describe('no-raw-rmsync-in-tests rule', () => {
+  test('rule module exports a create function', () => {
+    assert.strictEqual(typeof noRawRmsyncInTests.create, 'function');
+  });
+
   // ── INVALID cases (must error) ────────────────────────────────────────────
 
   test('invalid: fs.rmSync() in a test file', () => {
@@ -339,7 +340,6 @@ describe('no-raw-rmsync-in-tests rule', () => {
         },
       ],
     });
-    assert.ok(true, 'no-raw-rmsync-in-tests flags fs.rmSync() in test file');
   });
 
   test('invalid: computed member fs["rmSync"]() in a test file', () => {
@@ -356,7 +356,6 @@ describe('no-raw-rmsync-in-tests rule', () => {
         },
       ],
     });
-    assert.ok(true, 'no-raw-rmsync-in-tests flags fs["rmSync"]() in test file');
   });
 
   test('invalid: destructured rmSync from require("fs") in a test file', () => {
@@ -373,7 +372,6 @@ describe('no-raw-rmsync-in-tests rule', () => {
         },
       ],
     });
-    assert.ok(true, 'no-raw-rmsync-in-tests flags destructured rmSync from require("fs")');
   });
 
   test('invalid: aliased const del = fs.rmSync; del() in a test file', () => {
@@ -391,7 +389,6 @@ describe('no-raw-rmsync-in-tests rule', () => {
         },
       ],
     });
-    assert.ok(true, 'no-raw-rmsync-in-tests flags aliased fs.rmSync');
   });
 
   test('invalid: allow-test-rule annotation no longer suppresses this rule (Defect 1 fixed)', () => {
@@ -411,7 +408,6 @@ describe('no-raw-rmsync-in-tests rule', () => {
         },
       ],
     });
-    assert.ok(true, 'no-raw-rmsync-in-tests is NOT suppressed by allow-test-rule annotation');
   });
 
   // ── VALID cases (must NOT error) ──────────────────────────────────────────
@@ -429,7 +425,6 @@ describe('no-raw-rmsync-in-tests rule', () => {
       ],
       invalid: [],
     });
-    assert.ok(true, 'no-raw-rmsync-in-tests allows helpers.cleanup()');
   });
 
   test('valid: bare rmSync() that is NOT fs-derived (local function) is not flagged', () => {
@@ -447,7 +442,6 @@ describe('no-raw-rmsync-in-tests rule', () => {
       ],
       invalid: [],
     });
-    assert.ok(true, 'no-raw-rmsync-in-tests does not flag a locally-defined rmSync()');
   });
 
   // NOTE: The inline `// eslint-disable-next-line local/no-raw-rmsync-in-tests -- reason`
@@ -469,7 +463,6 @@ describe('no-raw-rmsync-in-tests rule', () => {
       ],
       invalid: [],
     });
-    assert.ok(true, 'no-raw-rmsync-in-tests is inert in non-test files');
   });
 
   test('valid: member access / assignment without calling (not a CallExpression)', () => {
@@ -486,6 +479,5 @@ describe('no-raw-rmsync-in-tests rule', () => {
       ],
       invalid: [],
     });
-    assert.ok(true, 'no-raw-rmsync-in-tests ignores member access / assignment without call');
   });
 });

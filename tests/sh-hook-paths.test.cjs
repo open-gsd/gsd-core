@@ -24,14 +24,7 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('fs');
 const path = require('path');
-
-const INSTALL_SRC = path.join(__dirname, '..', 'bin', 'install.js');
-// ADR-857 phase 5f-1b: the sh-hook command-construction code moved from install.js
-// into applySettingsJsonHooks in src/runtime-hooks-surface.cts. Source-scan checks
-// that reference commandVar patterns must target the new canonical source.
-const HOOKS_SURFACE_SRC = path.join(__dirname, '..', 'src', 'runtime-hooks-surface.cts');
 
 // buildHookCommand was extracted to gsd-core/bin/lib/runtime-hooks-surface.cjs
 // (ADR-857 phase 5f-1) and re-exported via install.js.  Import through install.js
@@ -40,9 +33,9 @@ const INSTALL = require(path.join(__dirname, '..', 'bin', 'install.js'));
 const { buildHookCommand } = INSTALL;
 
 const SH_HOOKS = [
-  { name: 'gsd-validate-commit.sh', commandVar: 'validateCommitCommand' },
-  { name: 'gsd-session-state.sh',   commandVar: 'sessionStateCommand' },
-  { name: 'gsd-phase-boundary.sh',  commandVar: 'phaseBoundaryCommand' },
+  { name: 'gsd-validate-commit.sh' },
+  { name: 'gsd-session-state.sh' },
+  { name: 'gsd-phase-boundary.sh' },
 ];
 
 // Use a fixed configDir that is unambiguously absolute so the assertions below
@@ -53,18 +46,6 @@ const TEST_CONFIG_DIR = '/test-home/.claude';
 const HOOK_OPTS = { platform: 'linux', runtime: 'claude' };
 
 describe('bugs #2045 #2046: .sh hook paths must be absolute and quoted', () => {
-  let src;
-
-  try {
-    // ADR-857 phase 5f-1b: command-construction code moved to runtime-hooks-surface.cts.
-    // Concatenate both sources so structural assertions find patterns in either file.
-    const installSrc = fs.readFileSync(INSTALL_SRC, 'utf-8');
-    const hooksSurfaceSrc = fs.readFileSync(HOOKS_SURFACE_SRC, 'utf-8');
-    src = installSrc + '\n' + hooksSurfaceSrc;
-  } catch {
-    src = '';
-  }
-
   // ── Test 1: buildHookCommand supports .sh files (BEHAVIORAL) ─────────────
   describe('buildHookCommand', () => {
     test('returns a bash command for .sh hookName', () => {
@@ -115,81 +96,61 @@ describe('bugs #2045 #2046: .sh hook paths must be absolute and quoted', () => {
     });
   });
 
-  // ── Test 2: each .sh command variable uses a quoted path ─────────────────
-  for (const { name, commandVar } of SH_HOOKS) {
-    describe(`${name} command`, () => {
-      test(`${commandVar} uses double-quoted path (fixes #2045 Windows spaces)`, () => {
-        const varIdx = src.indexOf(commandVar);
-        assert.ok(varIdx !== -1, `${commandVar} not found in install.js`);
+  // ── Tests 2-4: behavioral buildHookCommand checks for each .sh hook ────────
+  // These replace the former source-grep variable-name scans.  We call
+  // buildHookCommand directly for each .sh hook on both linux and win32 and
+  // assert three properties that the bugs required:
+  //   (a) the returned command is non-empty
+  //   (b) a bash runner appears in the command (linux path; win32 uses the
+  //       path directly as the invocation, so the check is conditioned on OS)
+  //   (c) the configDir is embedded as an absolute, double-quoted prefix
 
-        // Extract the assignment block (~300 chars should cover a single declaration)
-        const blockEnd = Math.min(src.length, varIdx + 400);
-        const block = src.slice(varIdx, blockEnd);
+  // Absolute configDir with a space in it exercises the #2045 quoting bug.
+  const SPACED_CONFIG_DIR = '/home/first last/.claude';
 
-        // The command string for the global branch must contain a quoted path:
-        // bash "..." — the path must be wrapped in double quotes.
+  for (const { name } of SH_HOOKS) {
+    describe(`${name} — buildHookCommand output`, () => {
+      // ── Test 2: non-empty command on linux ─────────────────────────────────
+      test(`linux: returns non-empty command (fixes #2046 relative-path crash)`, () => {
+        const cmd = buildHookCommand(TEST_CONFIG_DIR, name, { platform: 'linux', runtime: 'claude' });
         assert.ok(
-          block.includes('bash "') || block.includes("bash '") || block.includes('buildHookCommand'),
-          `${commandVar} must use buildHookCommand() (which quotes the path) or manually ` +
-          `quote the path. Found: ${block.slice(0, 200)}`
+          typeof cmd === 'string' && cmd.length > 0,
+          `buildHookCommand must return a non-empty string for ${name} on linux. Got: ${String(cmd)}`
         );
       });
 
-      test(`${commandVar} does not use bare localPrefix without quoting (fixes #2046 relative path)`, () => {
-        const varIdx = src.indexOf(commandVar);
-        assert.ok(varIdx !== -1, `${commandVar} not found in install.js`);
-
-        const blockEnd = Math.min(src.length, varIdx + 400);
-        const block = src.slice(varIdx, blockEnd);
-
-        // The old bad pattern was: 'bash ' + localPrefix + '/hooks/...'
-        // where localPrefix === '.claude' (relative, no quotes).
-        // The fix routes through buildHookCommand which emits bash "absolutePath".
-        // So the raw string '.claude/hooks' must NOT appear unquoted in this block.
-        const hasBareRelativePath = /bash ['"]?\.claude\/hooks/.test(block);
+      // ── Test 3: bash runner present on linux ───────────────────────────────
+      test(`linux: command starts with bash runner (fixes #2046 sh dispatch)`, () => {
+        const cmd = buildHookCommand(TEST_CONFIG_DIR, name, { platform: 'linux', runtime: 'claude' });
+        // Acceptable forms: "bash <path>", "/usr/bin/bash <path>", etc.
         assert.ok(
-          !hasBareRelativePath,
-          `${commandVar} must not use a bare relative path ".claude/hooks". ` +
-          `Use buildHookCommand() so the path is absolute and quoted.`
+          /\bbash\b/.test(cmd),
+          `buildHookCommand must include "bash" runner for ${name} on linux. Got: ${cmd}`
         );
       });
+
+      // ── Test 4: absolute, double-quoted configDir on both platforms ─────────
+      // Uses a configDir containing a space to prove quoting is not incidental.
+      for (const platform of ['linux', 'win32']) {
+        test(`${platform}: configDir is absolute and double-quoted (fixes #2045 spaces)`, () => {
+          const cmd = buildHookCommand(SPACED_CONFIG_DIR, name, { platform, runtime: 'claude' });
+          // The configDir must appear verbatim inside double quotes in the command.
+          // e.g. bash "/home/first last/.claude/hooks/gsd-validate-commit.sh"
+          //       or  "/home/first last/.claude/hooks/gsd-validate-commit.sh"
+          assert.ok(
+            cmd.includes(`"${SPACED_CONFIG_DIR}`),
+            `buildHookCommand must embed configDir inside double quotes for ${name} on ${platform}. ` +
+            `Got: ${cmd}`
+          );
+          // Confirm the path is absolute (starts with / or drive letter) — not ".claude/..."
+          const quotedPath = cmd.match(/"([^"]+)"/)?.[1] ?? '';
+          assert.ok(
+            path.isAbsolute(quotedPath),
+            `The quoted path in buildHookCommand output must be absolute for ${name} on ${platform}. ` +
+            `Got quoted segment: "${quotedPath}" in: ${cmd}`
+          );
+        });
+      }
     });
   }
-
-  // ── Test 3: global .sh hooks must not use unquoted manual concatenation ───
-  test('global .sh hook commands use buildHookCommand, not unquoted string concat', () => {
-    // Old bad pattern for global installs:
-    //   'bash ' + targetDir.replace(/\\/g, '/') + '/hooks/gsd-*.sh'
-    // This left the absolute path unquoted, breaking paths with spaces (#2045).
-    // The fix routes all global .sh hooks through buildHookCommand() which
-    // wraps the path in double quotes: bash "/absolute/path/hooks/gsd-*.sh"
-    const oldGlobalPattern = /'bash ' \+ targetDir/g;
-    const globalMatches = src.match(oldGlobalPattern) || [];
-
-    assert.strictEqual(
-      globalMatches.length, 0,
-      `Found ${globalMatches.length} occurrence(s) of unquoted global .sh path construction ` +
-      `('bash ' + targetDir). Use buildHookCommand(targetDir, 'gsd-*.sh') instead.`
-    );
-  });
-
-  // ── Test 4: global .sh hook commands contain double-quoted absolute paths ─
-  test('global .sh hook commands in source use bash with double-quoted path', () => {
-    // After the fix, buildHookCommand produces: bash "/abs/path/hooks/gsd-*.sh"
-    // Verify each hook's command variable is assigned via buildHookCommand for the global branch.
-    for (const { commandVar } of SH_HOOKS) {
-      const varIdx = src.indexOf(commandVar);
-      assert.ok(varIdx !== -1, `${commandVar} not found in install.js`);
-
-      // The ternary assignment: const xCommand = isGlobal ? buildHookCommand(...) : ...
-      const blockEnd = Math.min(src.length, varIdx + 300);
-      const block = src.slice(varIdx, blockEnd);
-
-      assert.ok(
-        block.includes('buildHookCommand'),
-        `${commandVar} global branch must use buildHookCommand() to produce a quoted absolute path. ` +
-        `Found: ${block.slice(0, 150)}`
-      );
-    }
-  });
 });

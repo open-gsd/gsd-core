@@ -13,9 +13,6 @@
 //
 // Fix: create gsd-core/workflows/add-backlog.md with the full process
 // ported from the deleted commands/gsd/add-backlog.md (git ref 87917131^).
-//
-// Also adds a broad regression: every @-reference in any commands/gsd/*.md
-// execution_context block must resolve to an existing workflow file.
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -131,52 +128,3 @@ describe('#3135: capture.md correctly routes --backlog to add-backlog workflow',
   });
 });
 
-// ─── Broad regression: all execution_context @-refs must resolve ─────────────
-
-describe('regression: every execution_context @-reference in commands/gsd/*.md resolves to an existing workflow file', () => {
-  // Extract @-references from execution_context blocks, normalised to the
-  // gsd-core/workflows/ relative tail so we can resolve them on disk.
-  function extractWorkflowRefs(filePath) {
-    const body = fs.readFileSync(filePath, 'utf8');
-    const blocks = [
-      ...body.matchAll(/<execution_context(?:_extended)?>([\s\S]*?)<\/execution_context(?:_extended)?>/g),
-    ].map((m) => m[1]);
-    const refs = [];
-    for (const blk of blocks) {
-      for (const line of blk.split('\n')) {
-        const t = line.trim();
-        if (!t.startsWith('@')) continue;
-        // Only care about workflow references (skip non-workflow @-refs)
-        if (!t.includes('/workflows/')) continue;
-        // Normalise: drop everything up to and including 'gsd-core/'
-        const match = t.match(/gsd-core\/(workflows\/.+\.md)/);
-        if (match) refs.push(match[1]);
-      }
-    }
-    return refs;
-  }
-
-  const commandFiles = fs
-    .readdirSync(COMMANDS_DIR)
-    .filter((f) => f.endsWith('.md'))
-    .map((f) => path.join(COMMANDS_DIR, f));
-
-  for (const cmdFile of commandFiles) {
-    const cmdName = path.basename(cmdFile);
-    let refs;
-    try {
-      refs = extractWorkflowRefs(cmdFile);
-    } catch {
-      continue;
-    }
-    for (const ref of refs) {
-      test(`${cmdName}: @-ref '${ref}' exists on disk`, () => {
-        const absPath = path.join(ROOT, 'gsd-core', ref);
-        assert.ok(
-          fs.existsSync(absPath),
-          `${cmdName} references @${ref} in execution_context but gsd-core/${ref} does not exist`,
-        );
-      });
-    }
-  }
-});

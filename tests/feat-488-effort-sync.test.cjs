@@ -179,11 +179,15 @@ describe('feat-488: effort sync command', () => {
     // after install, but the project .planning/config.json has no effort section.
     // cmdEffortSync must pick up the home config (via readGsdEffectiveEffortConfig),
     // not fall back to 'high' (which loadConfig would return).
+    //
+    // readGsdEffectiveEffortConfig calls os.homedir() directly, and os.homedir()
+    // is live (respects process.env.HOME).  We redirect HOME to an isolated
+    // tmpHome so the test is hermetic and can assert the real outcome.
     const tmpHome = makeTmpDir('effort-sync-homecfg-');
     const tmpDir = makeTmpDir('effort-sync-project-');
     const agentsDir = makeAgentsDir(tmpDir);
     const agentPath = path.join(agentsDir, 'gsd-planner.md');
-    fs.writeFileSync(agentPath, AGENT_WITH_EFFORT); // current: medium
+    fs.writeFileSync(agentPath, AGENT_WITH_EFFORT); // current: effort: medium
 
     // Project has .planning/config.json with NO effort section
     const planningDir = path.join(tmpDir, '.planning');
@@ -195,24 +199,31 @@ describe('feat-488: effort sync command', () => {
     fs.mkdirSync(gsdDir, { recursive: true });
     fs.writeFileSync(path.join(gsdDir, 'defaults.json'), JSON.stringify({ effort: { default: 'low' } }));
 
-    const { cmdEffortSync } = require('../gsd-core/bin/lib/commands.cjs');
-    const result = captureOutput(() =>
-      cmdEffortSync(tmpDir, false, {
-        dryRun: false,
-        configDir: tmpDir,
-        runtime: 'claude',
-        _homeOverride: tmpHome,  // not used by cmdEffortSync, but HOME env is what matters
-      })
-    );
+    // Isolate HOME so readGsdEffectiveEffortConfig reads our fixture, not the
+    // developer's real ~/.gsd/defaults.json.
+    const origHome = process.env.HOME;
+    process.env.HOME = tmpHome;
 
-    // The sync resolves effort via readGsdEffectiveEffortConfig which reads
-    // GSD_HOME (~/.gsd/defaults.json). Redirect GSD_HOME to our fake home.
-    // (This test validates the LOGIC PATH — the env redirect is done by the CLI test below.)
-    // Direct unit test: just validate that synced agents used the home-default effort.
-    // Since GSD_HOME isn't redirected here, the result depends on the real home.
-    // We assert the structure is correct regardless of the resolved value.
-    assert.ok(typeof result.synced === 'number', 'synced must be a number');
-    assert.ok(Array.isArray(result.changes), 'changes must be array');
+    const { cmdEffortSync } = require('../gsd-core/bin/lib/commands.cjs');
+    let result;
+    try {
+      result = captureOutput(() =>
+        cmdEffortSync(tmpDir, false, { dryRun: false, configDir: tmpDir, runtime: 'claude' })
+      );
+    } finally {
+      process.env.HOME = origHome;
+    }
+
+    // With home effort.default = 'low' and the agent currently at 'medium',
+    // cmdEffortSync must sync exactly 1 agent and set it to 'low'.
+    assert.equal(result.synced, 1, 'should sync 1 agent whose effort differs from home default');
+    assert.equal(result.changes[0].agent, 'gsd-planner');
+    assert.equal(result.changes[0].from, 'medium');
+    assert.equal(result.changes[0].to, 'low', 'effort must be updated to the home-default value');
+    assert.ok(
+      fs.readFileSync(agentPath, 'utf8').includes('effort: low'),
+      'agent file must be rewritten with the home-default effort value'
+    );
 
     cleanup(tmpHome);
     cleanup(tmpDir);

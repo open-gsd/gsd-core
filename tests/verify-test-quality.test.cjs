@@ -1,209 +1,177 @@
 // allow-test-rule: source-text-is-the-product
-// Tests write synthetic fixture files and apply regex detectors to them.
-// The fixture text IS the product being tested (testing linter/detector logic,
-// not GSD command JSON output). Migrated from pending-migration-to-typed-ir per #455.
+// Structural guard: reads gsd-core/workflows/verify-phase.md and asserts that
+// the audit_test_quality step contains the skip-pattern marker, circular-detection
+// marker, and assertion-strength table markers. Goes red if that workflow guidance
+// is removed or the step is renamed/deleted.
 
-/**
- * Tests for the audit_test_quality step in verify-phase.md
- *
- * Validates that the verifier's test quality audit detects:
- * - Disabled tests (it.skip) covering requirements
- * - Circular tests (system generating its own expected values)
- * - Weak assertions on requirement-linked tests
- */
+'use strict';
 
-const { describe, test, beforeEach, afterEach } = require('node:test');
+const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { createTempProject, cleanup } = require('./helpers.cjs');
 
-describe('audit_test_quality step', () => {
-  let tmpDir;
+const WORKFLOW_PATH = path.join(
+  __dirname,
+  '..',
+  'gsd-core',
+  'workflows',
+  'verify-phase.md'
+);
 
-  beforeEach(() => {
-    tmpDir = createTempProject();
+// Read once at module load so every test sees the same snapshot.
+const workflowSrc = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+
+// Locate the audit_test_quality step boundaries so sub-assertions are scoped
+// to that step only, not the full file.
+const STEP_OPEN = '<step name="audit_test_quality">';
+const STEP_CLOSE = '</step>';
+
+function extractAuditStep(src) {
+  const start = src.indexOf(STEP_OPEN);
+  if (start === -1) return null;
+  const end = src.indexOf(STEP_CLOSE, start + STEP_OPEN.length);
+  if (end === -1) return null;
+  return src.slice(start, end + STEP_CLOSE.length);
+}
+
+const auditStepSrc = extractAuditStep(workflowSrc);
+
+describe('verify-phase.md audit_test_quality structural guard', () => {
+  test('verify-phase.md exists at gsd-core/workflows/verify-phase.md', () => {
+    assert.ok(
+      fs.existsSync(WORKFLOW_PATH),
+      `missing workflow file: ${WORKFLOW_PATH}`
+    );
   });
 
-  afterEach(() => {
-    cleanup(tmpDir);
+  test('audit_test_quality step is present in verify-phase.md', () => {
+    assert.ok(
+      auditStepSrc !== null,
+      `<step name="audit_test_quality"> not found in ${WORKFLOW_PATH} — the step ` +
+        'may have been renamed or removed'
+    );
   });
 
-  describe('disabled test detection', () => {
-    test('detects it.skip in test files', () => {
-      const testDir = path.join(tmpDir, 'tests');
-      fs.mkdirSync(testDir, { recursive: true });
-
-      fs.writeFileSync(path.join(testDir, 'parity.test.js'), [
-        'describe("parity", () => {',
-        '  it.skip("matches PHP output", async () => {',
-        '    expect(result).toBeCloseTo(155.96, 2);',
-        '  });',
-        '});',
-      ].join('\n'));
-
-      const content = fs.readFileSync(path.join(testDir, 'parity.test.js'), 'utf8');
-      const skipPatterns = /it\.skip|describe\.skip|test\.skip|xit\(|xdescribe\(|xtest\(/g;
-      const matches = content.match(skipPatterns);
-
-      assert.ok(matches, 'Should detect skip patterns');
-      assert.strictEqual(matches.length, 1);
+  describe('skip-pattern marker', () => {
+    test('audit_test_quality step contains the disabled-test grep pattern', () => {
+      // The step must instruct the verifier to search for skip patterns such as
+      // it\.skip / describe\.skip / test\.skip (regex-escaped, as used in the bash grep).
+      // Removing this guidance would mean skipped requirement tests are no longer flagged.
+      assert.ok(
+        auditStepSrc !== null,
+        'Cannot check skip-pattern marker: audit_test_quality step not found'
+      );
+      // The markdown shows a bash grep -E pattern, so dots are backslash-escaped:
+      // 'it\\.skip' in JS is the string  it\.skip  (backslash + dot).
+      const hasSkipPattern =
+        auditStepSrc.includes('it\\.skip') &&
+        auditStepSrc.includes('describe\\.skip') &&
+        auditStepSrc.includes('test\\.skip');
+      assert.ok(
+        hasSkipPattern,
+        'audit_test_quality step must reference it\\.skip, describe\\.skip, and test\\.skip ' +
+          'as the disabled-test grep pattern — one or more are missing'
+      );
     });
 
-    test('detects multiple skip patterns across frameworks', () => {
-      const testDir = path.join(tmpDir, 'tests');
-      fs.mkdirSync(testDir, { recursive: true });
-
-      fs.writeFileSync(path.join(testDir, 'multi.test.js'), [
-        'describe.skip("suite", () => {});',
-        'xit("old jasmine", () => {});',
-        'test.skip("jest skip", () => {});',
-        'it.todo("not implemented");',
-      ].join('\n'));
-
-      const content = fs.readFileSync(path.join(testDir, 'multi.test.js'), 'utf8');
-      const skipPatterns = /it\.skip|describe\.skip|test\.skip|xit\(|xdescribe\(|xtest\(|it\.todo|test\.todo/g;
-      const matches = content.match(skipPatterns);
-
-      assert.ok(matches, 'Should detect all skip variants');
-      assert.strictEqual(matches.length, 4);
-    });
-
-    test('does not flag active tests as skipped', () => {
-      const testDir = path.join(tmpDir, 'tests');
-      fs.mkdirSync(testDir, { recursive: true });
-
-      fs.writeFileSync(path.join(testDir, 'active.test.js'), [
-        'describe("active suite", () => {',
-        '  it("does the thing", () => {',
-        '    expect(result).toBe(true);',
-        '  });',
-        '  test("also works", () => {',
-        '    expect(other).toBe(42);',
-        '  });',
-        '});',
-      ].join('\n'));
-
-      const content = fs.readFileSync(path.join(testDir, 'active.test.js'), 'utf8');
-      const skipPatterns = /it\.skip|describe\.skip|test\.skip|xit\(|xdescribe\(|xtest\(|it\.todo|test\.todo/g;
-      const matches = content.match(skipPatterns);
-
-      assert.strictEqual(matches, null, 'Active tests should not match skip patterns');
-    });
-  });
-
-  describe('circular test detection', () => {
-    test('detects script that imports system-under-test and writes fixtures', () => {
-      const testDir = path.join(tmpDir, 'tests');
-      fs.mkdirSync(testDir, { recursive: true });
-
-      fs.writeFileSync(path.join(testDir, 'captureBaseline.js'), [
-        'import { CalculationService } from "../server/services/calculationService.js";',
-        'import { writeFileSync } from "fs";',
-        '',
-        'const result = await CalculationService.execute(input);',
-        'fixture.expectedOutput = result.value;',
-        'writeFileSync("fixtures/data.json", JSON.stringify(fixture));',
-      ].join('\n'));
-
-      const content = fs.readFileSync(path.join(testDir, 'captureBaseline.js'), 'utf8');
-
-      const importsSystem = /import.*(?:Service|Engine|Calculator|Controller)/.test(content);
-      const writesFiles = /writeFileSync|writeFile|fs\.write/.test(content);
-
-      assert.ok(importsSystem, 'Should detect system-under-test import');
-      assert.ok(writesFiles, 'Should detect file writing');
-      assert.ok(importsSystem && writesFiles, 'Script that imports SUT and writes fixtures is CIRCULAR');
-    });
-
-    test('does not flag test helpers that only read fixtures', () => {
-      const testDir = path.join(tmpDir, 'tests');
-      fs.mkdirSync(testDir, { recursive: true });
-
-      fs.writeFileSync(path.join(testDir, 'loadFixtures.js'), [
-        'import { readFileSync } from "fs";',
-        'export function loadFixture(name) {',
-        '  return JSON.parse(readFileSync(`fixtures/${name}.json`, "utf8"));',
-        '}',
-      ].join('\n'));
-
-      const content = fs.readFileSync(path.join(testDir, 'loadFixtures.js'), 'utf8');
-
-      const importsSystem = /import.*(?:Service|Engine|Calculator|Controller)/.test(content);
-      const writesFiles = /writeFileSync|writeFile|fs\.write/.test(content);
-
-      assert.ok(!importsSystem, 'Should not flag read-only helper as importing SUT');
-      assert.ok(!writesFiles, 'Should not flag read-only helper as writing files');
+    test('audit_test_quality step references todo variants alongside skip variants', () => {
+      // it\.todo / test\.todo are also considered disabled patterns by the step.
+      assert.ok(
+        auditStepSrc !== null,
+        'Cannot check todo marker: audit_test_quality step not found'
+      );
+      const hasTodo =
+        auditStepSrc.includes('it\\.todo') || auditStepSrc.includes('test\\.todo');
+      assert.ok(
+        hasTodo,
+        'audit_test_quality step must reference it\\.todo or test\\.todo as a disabled pattern'
+      );
     });
   });
 
-  describe('assertion strength classification', () => {
-    test('classifies existence-only assertions as INSUFFICIENT for value requirements', () => {
-      const assertions = [
-        'expect(result).toBeDefined()',
-        'expect(result).not.toBeNull()',
-        'assert.ok(result)',
-      ];
-
-      const existencePattern = /toBeDefined|not\.toBeNull|assert\.ok\(/;
-      const valuePattern = /toEqual|toBeCloseTo|strictEqual|deepStrictEqual/;
-
-      for (const assertion of assertions) {
-        assert.ok(existencePattern.test(assertion), `"${assertion}" should match existence pattern`);
-        assert.ok(!valuePattern.test(assertion), `"${assertion}" should NOT match value pattern`);
-      }
+  describe('circular-detection marker', () => {
+    test('audit_test_quality step contains the circular file-write grep pattern', () => {
+      // The step must tell the verifier to grep for writeFileSync / writeFile / fs\.write
+      // to locate scripts that might be generating expected values from the SUT.
+      // The markdown shows a bash grep -E pattern, so the dot in fs.write is escaped:
+      // 'fs\\.write' in JS is the string  fs\.write  (backslash + dot).
+      assert.ok(
+        auditStepSrc !== null,
+        'Cannot check circular-detection marker: audit_test_quality step not found'
+      );
+      const hasWritePattern =
+        auditStepSrc.includes('writeFileSync') &&
+        auditStepSrc.includes('writeFile') &&
+        auditStepSrc.includes('fs\\.write');
+      assert.ok(
+        hasWritePattern,
+        'audit_test_quality step must include writeFileSync, writeFile, and fs\\.write ' +
+          'in the circular-detection grep pattern — one or more are missing'
+      );
     });
 
-    test('classifies value assertions as sufficient', () => {
-      const assertions = [
-        'expect(result).toBeCloseTo(155.96, 2)',
-        'expect(result).toEqual({ amount: 100 })',
-        'assert.strictEqual(result, 42)',
-      ];
-
-      const valuePattern = /toEqual|toBeCloseTo|strictEqual|deepStrictEqual/;
-
-      for (const assertion of assertions) {
-        assert.ok(valuePattern.test(assertion), `"${assertion}" should match value pattern`);
-      }
+    test('audit_test_quality step defines CIRCULAR as a blocker verdict', () => {
+      // The step must explicitly name CIRCULAR as an outcome and mark it as a blocker.
+      assert.ok(
+        auditStepSrc !== null,
+        'Cannot check CIRCULAR verdict: audit_test_quality step not found'
+      );
+      assert.ok(
+        auditStepSrc.includes('CIRCULAR'),
+        'audit_test_quality step must define CIRCULAR as a verdict for circular tests'
+      );
     });
   });
 
-  describe('provenance classification', () => {
-    test('fixture with legacy system comment classified as VALID', () => {
-      const fixture = {
-        legacyId: 10341,
-        comment: 'Real PHP fixture - output from legacy system',
-        dbDependent: true,
-        expectedOutput: { value: 155.96 },
-      };
-
-      const hasLegacySource = /legacy|php|real|manual|captured from/i.test(fixture.comment || '');
-      assert.ok(hasLegacySource, 'Comment referencing legacy system = VALID provenance');
+  describe('assertion-strength table markers', () => {
+    test('audit_test_quality step contains the assertion-strength section header', () => {
+      // The "5. Assertion strength" section heading anchors the classification table.
+      assert.ok(
+        auditStepSrc !== null,
+        'Cannot check assertion-strength header: audit_test_quality step not found'
+      );
+      assert.ok(
+        auditStepSrc.includes('Assertion strength'),
+        'audit_test_quality step must contain the "Assertion strength" section header'
+      );
     });
 
-    test('fixture with synthetic/baseline comment classified as SUSPECT', () => {
-      const fixture = {
-        legacyId: null,
-        comment: 'Synthetic offline fixture - computed from known algorithm',
-        dbDependent: false,
-        expectedOutput: { value: 1240.68 },
-      };
-
-      const hasSyntheticSource = /synthetic|computed|baseline|generated|captured from engine/i.test(fixture.comment || '');
-      const hasLegacySource = /legacy|php|real output|manual capture/i.test(fixture.comment || '');
-
-      assert.ok(hasSyntheticSource, 'Comment indicating synthetic source detected');
-      assert.ok(!hasLegacySource, 'Should NOT be classified as legacy source');
+    test('audit_test_quality step lists existence-only examples in the assertion table', () => {
+      // The table must include toBeDefined as an example of an existence-level assertion.
+      assert.ok(
+        auditStepSrc !== null,
+        'Cannot check assertion table: audit_test_quality step not found'
+      );
+      assert.ok(
+        auditStepSrc.includes('toBeDefined'),
+        'audit_test_quality step must include toBeDefined as an existence-level assertion example'
+      );
     });
 
-    test('fixture with no comment classified as UNKNOWN', () => {
-      const fixture = {
-        expectedOutput: { value: 42 },
-      };
+    test('audit_test_quality step lists value-level examples in the assertion table', () => {
+      // The table must include toBeCloseTo as an example of a value-level assertion.
+      assert.ok(
+        auditStepSrc !== null,
+        'Cannot check value assertion example: audit_test_quality step not found'
+      );
+      assert.ok(
+        auditStepSrc.includes('toBeCloseTo'),
+        'audit_test_quality step must include toBeCloseTo as a value-level assertion example'
+      );
+    });
 
-      const hasAnyProvenance = (fixture.comment || '').length > 0;
-      assert.ok(!hasAnyProvenance, 'No comment = UNKNOWN provenance');
+    test('audit_test_quality step defines INSUFFICIENT verdict for weak assertions', () => {
+      // The step must explicitly name INSUFFICIENT as the verdict when assertion strength
+      // is below what the requirement demands.
+      assert.ok(
+        auditStepSrc !== null,
+        'Cannot check INSUFFICIENT verdict: audit_test_quality step not found'
+      );
+      assert.ok(
+        auditStepSrc.includes('INSUFFICIENT'),
+        'audit_test_quality step must define INSUFFICIENT as a verdict for weak assertions'
+      );
     });
   });
 });

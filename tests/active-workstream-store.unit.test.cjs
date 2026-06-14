@@ -357,10 +357,14 @@ describe('getWorkstreamSessionKey', () => {
   });
   afterEach(() => restoreSessionEnv(saved));
 
-  test('returns null when no env keys set', () => {
+  test('returns null when no env keys set and no controlling TTY', { skip: process.stdin.isTTY ? 'real TTY present — probeControllingTtyToken may return non-null' : false }, () => {
+    // TTY and SSH_TTY are already cleared by beforeEach (clearSessionEnv).
+    // With no session env vars and no real controlling TTY (process.stdin.isTTY falsy),
+    // getWorkstreamSessionKey() must return null deterministically.
+    // Previously this used assert.ok(key === null || typeof key === 'string'), which is
+    // a tautology that always passes and never catches regressions.
     const key = getWorkstreamSessionKey();
-    // will return null or a tty token (depends on environment); just check type
-    assert.ok(key === null || typeof key === 'string');
+    assert.strictEqual(key, null);
   });
 
   test('returns gsd-session-key prefixed key for GSD_SESSION_KEY', () => {

@@ -396,31 +396,43 @@ describe('FINDING-1: package-legitimacy check flag parser correctness', () => {
     }
   });
 
-  test('package immediately after --ecosystem value is retained (not silently consumed as flag value)', () => {
+  test('--bad-flag pkgA pkgB → unknown-flag error on stderr, non-zero exit, pkgA and pkgB not consumed as flag values', () => {
     const tmpDir = makeTempDir();
     try {
-      // With the bug, in `check --ecosystem npm pkgA pkgB`, pkgA and pkgB are both
-      // correctly parsed currently — but when an unknown boolean flag appears, the NEXT
-      // arg (which should be a package) is silently consumed as the flag value.
-      // This test verifies that --ecosystem is the ONLY flag that takes a value; all
-      // other non-flag args are packages.
-      // We can't make a real network call, so we test the arg-validation path:
-      // two packages with no unknown flags → must not produce a usage error about 0 packages.
-      // We just confirm the CLI reaches checkPackages (it may fail on network, but the error
-      // message should NOT say "Usage: ... pkg1 ..." meaning 0 packages were collected).
-      // Actually: since we can't do network, we rely on the fact that the OLD code with
-      // an unknown flag would CONSUME the following package as the flag value, leaving 0 packages.
-      // We simulate this: --bad-flag pkgA pkgB → with old code pkgA is consumed by --bad-flag,
-      // pkgB is collected, 1 package left, no usage error; with new code → usage error.
-      // (Tested in the test above.)
-      // This test instead checks the POSITIVE: valid invocation reaches checkPackages (non-usage error path).
-      // We can confirm by checking: a 0-package error does NOT appear when 2 packages are given.
-      // Use a known-offline approach: we just verify that the CLI outputs something JSON-like
-      // (not a usage error) when given 2 valid packages.
-      // Since network will fail, we expect either success with SLOP or a network error — NOT a
-      // "Usage: ... 0 packages" error.
-      // NOTE: This is a weaker positive assertion. The main regression is the unknown-flag test above.
-      assert.ok(true, 'placeholder — the unknown-flag test above is the primary regression');
+      // The 2-package arg-parse regression:
+      // A buggy parser that treats unknown flags as taking a value would silently
+      // consume pkgA as the value of --bad-flag, leaving only pkgB in the package
+      // list — proceeding without a usage error (exit 0).
+      // The correct parser must reject --bad-flag with a usage error (non-zero exit)
+      // so that neither pkgA nor pkgB is silently swallowed.
+      //
+      // Red proof: if the unknown-flag check is removed so --bad-flag consumes pkgA,
+      // the CLI would exit 0 (pkgB remains as the sole package) and result.success
+      // would be true — the assertions below would both FAIL.
+      //
+      // Green proof: the current parser (gsd-tools.cjs lines 1951-1952) hits
+      //   if (a.startsWith('--')) { error(`package-legitimacy: unknown flag ${a}`, ...) }
+      // which writes to stderr and exits 1.
+      const result = runGsdTools(
+        ['package-legitimacy', 'check', '--ecosystem', 'npm', '--bad-flag', 'pkgA', 'pkgB'],
+        tmpDir,
+      );
+      assert.ok(
+        !result.success,
+        `expected non-zero exit for --bad-flag; got success with output: ${result.output}`,
+      );
+      assert.ok(
+        result.exitCode !== 0,
+        `expected non-zero exit code, got ${result.exitCode}`,
+      );
+      // The error text must mention the offending flag so the caller can diagnose it,
+      // not a generic "0 packages" usage error (which would indicate pkgA was silently
+      // consumed as the flag value, leaving pkgB as the sole package without triggering
+      // the unknown-flag guard at all).
+      assert.ok(
+        result.error.includes('--bad-flag'),
+        `expected stderr to mention '--bad-flag', got: ${result.error}`,
+      );
     } finally {
       cleanup(tmpDir);
     }

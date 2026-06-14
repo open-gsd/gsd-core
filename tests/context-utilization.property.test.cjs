@@ -178,13 +178,25 @@ describe('context-utilization property tests', () => {
   });
 
   // ─── (c) Return shape: all valid inputs produce typed { percent, state } ──────
+  //
+  // Previously used Math.random() inside fc.property which broke reproducibility
+  // under the pinned seed (seed=42). Fixed: tokensUsed is now a seeded fc.integer
+  // arbitrary, making both inputs part of the shrinkable, reproducible input tuple.
+  //
+  // Split into two sub-properties:
+  //   (c1) shape-only — result is an object with the right field types and ranges
+  //   (c2) value-correctness — percent value matches the expected ratio arithmetic
+  //        at three known representative ratios (0%, 50%, 100%)
+
   test('property: valid inputs always return { percent: number[0..100], state: string }', () => {
     fc.assert(
       fc.property(
         fc.integer({ min: 1, max: 1_000_000 }), // contextWindow
-        (contextWindow) => {
-          // tokensUsed in [0, contextWindow]
-          const tokensUsed = Math.floor(Math.random() * (contextWindow + 1));
+        fc.integer({ min: 0, max: 1_000_000 }), // tokensUsed (upper-bound clamped below)
+        (contextWindow, rawTokens) => {
+          // Clamp so tokensUsed is always in [0, contextWindow] — same domain as
+          // the former Math.random() draw but now seeded and shrinkable.
+          const tokensUsed = rawTokens % (contextWindow + 1);
           const r = classifyContextUtilization(tokensUsed, contextWindow);
 
           assert.ok(typeof r === 'object' && r !== null, 'result must be object');
@@ -198,6 +210,29 @@ describe('context-utilization property tests', () => {
         }
       )
     );
+  });
+
+  test('property: percent value matches ratio arithmetic at known representative ratios', () => {
+    // Use a fixed contextWindow of 10000 so exact percent values are predictable.
+    // Three known points: 0% (healthy), 50% (healthy), 100% (critical).
+    const knownCases = [
+      { tokensUsed: 0,      expectedPercent: 0,   expectedState: STATES.HEALTHY },
+      { tokensUsed: 5000,   expectedPercent: 50,  expectedState: STATES.HEALTHY },
+      { tokensUsed: 10000,  expectedPercent: 100, expectedState: STATES.CRITICAL },
+    ];
+    for (const { tokensUsed, expectedPercent, expectedState } of knownCases) {
+      const r = classifyContextUtilization(tokensUsed, WINDOW);
+      assert.equal(
+        r.percent,
+        expectedPercent,
+        `tokensUsed=${tokensUsed}/${WINDOW}: expected percent=${expectedPercent} got ${r.percent}`
+      );
+      assert.equal(
+        r.state,
+        expectedState,
+        `tokensUsed=${tokensUsed}/${WINDOW}: expected state=${expectedState} got ${r.state}`
+      );
+    }
   });
 
   test('property: tokensUsed exceeding contextWindow clamps to 100% critical', () => {

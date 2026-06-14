@@ -685,11 +685,68 @@ describe('plan-review-convergence workflow: source-grounding reviewer pass (#22)
     );
   });
 
-  test('workflow defines all four symbol verdicts: VERIFIED, MISSING, AMBIGUOUS, UNCHECKABLE', () => {
-    assert.ok(workflow.includes('VERIFIED'), 'workflow must define VERIFIED verdict');
-    assert.ok(workflow.includes('MISSING'), 'workflow must define MISSING verdict');
-    assert.ok(workflow.includes('AMBIGUOUS'), 'workflow must define AMBIGUOUS verdict');
-    assert.ok(workflow.includes('UNCHECKABLE'), 'workflow must define UNCHECKABLE verdict');
+  test('source-grounding section defines all four symbol verdicts and their severity mappings within the section prose', () => {
+    // Extract the source-grounding section slice so verdicts buried in dead text,
+    // comments, or success-criteria prose outside this section cannot produce a
+    // false green.  The section runs from the '### Source-grounding pass' heading
+    // to the 'After agent returns' paragraph that immediately follows it.
+    const SECTION_ANCHOR = '### Source-grounding pass';
+    const SECTION_END    = 'After agent returns';
+    const anchorIdx = workflow.indexOf(SECTION_ANCHOR);
+    assert.ok(
+      anchorIdx !== -1,
+      `workflow must contain a '${SECTION_ANCHOR}' heading as the canonical location for verdict definitions (#22)`
+    );
+    const endIdx = workflow.indexOf(SECTION_END, anchorIdx);
+    assert.ok(
+      endIdx !== -1,
+      `'${SECTION_END}' paragraph must follow '${SECTION_ANCHOR}' to bound the section (#22)`
+    );
+    const section = workflow.slice(anchorIdx, endIdx);
+
+    // ── Four verdicts must appear in the resolve-step of the section ──────────
+    assert.ok(
+      section.includes('VERIFIED'),
+      'source-grounding section must define VERIFIED verdict within its prose (not just in surrounding text)'
+    );
+    assert.ok(
+      section.includes('MISSING'),
+      'source-grounding section must define MISSING verdict within its prose'
+    );
+    assert.ok(
+      section.includes('AMBIGUOUS'),
+      'source-grounding section must define AMBIGUOUS verdict within its prose'
+    );
+    assert.ok(
+      section.includes('UNCHECKABLE'),
+      'source-grounding section must define UNCHECKABLE verdict within its prose'
+    );
+
+    // ── Severity mappings: AMBIGUOUS→MEDIUM and UNCHECKABLE→INFO must appear
+    //    on the SAME line inside the section, not just anywhere in the file ────
+    const severityLine = section.split('\n').find((line) =>
+      line.includes('AMBIGUOUS') && line.includes('MEDIUM') &&
+      line.includes('UNCHECKABLE') && line.includes('INFO')
+    );
+    assert.ok(
+      severityLine !== undefined,
+      'source-grounding section must have a single severity-mapping line that states ' +
+      'AMBIGUOUS→MEDIUM AND UNCHECKABLE→INFO together (e.g. "**AMBIGUOUS** → MEDIUM. **UNCHECKABLE** → INFO.") (#22)'
+    );
+
+    // ── Guard the exact direction of each mapping ─────────────────────────────
+    // The line must pair AMBIGUOUS with MEDIUM (not INFO) and UNCHECKABLE with
+    // INFO (not MEDIUM) — a swap would be a contract bug the old tests couldn't catch.
+    const ambiguousBeforeMedium = severityLine.indexOf('AMBIGUOUS') < severityLine.indexOf('MEDIUM');
+    const uncheckableBeforeInfo = severityLine.indexOf('UNCHECKABLE') < severityLine.indexOf('INFO');
+    assert.ok(
+      ambiguousBeforeMedium,
+      'severity-mapping line must list AMBIGUOUS before MEDIUM (AMBIGUOUS→MEDIUM) (#22)'
+    );
+    assert.ok(
+      uncheckableBeforeInfo,
+      'severity-mapping line must list UNCHECKABLE before INFO (UNCHECKABLE→INFO) (#22)'
+    );
   });
 
   test('workflow specifies needs-acknowledgement gating for MISSING symbols', () => {
