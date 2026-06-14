@@ -236,6 +236,8 @@ export default tseslint.config(
       'local/no-raw-rmsync-in-tests': 'error',
       // Ban tautological assertions (always-truthy arg or identical-literal equality)
       'local/no-tautological-assert': 'error',
+      // Ban source-grep pattern in tests — use require() + behavior assertions instead
+      'local/no-source-grep': 'error',
       // Ban raw setTimeout sync + elapsed/duration-style assertions via no-restricted-syntax
       'no-restricted-syntax': [
         'error',
