@@ -34,6 +34,9 @@ const SCHEMA_VERSION = '1';
 // registry generator and the loop-host-contract generator share one source of truth.
 const { LOOP_HOST_CONTRACT } = require('../gsd-core/bin/lib/loop-host-contract.cjs');
 
+// Wired-points helper — tells us which points actually have render-hooks call sites.
+const { getWiredLoopPoints } = require('./gen-loop-host-contract.cjs');
+
 // Canonical point order — explicit constant (do NOT rely on Set insertion order).
 // Used for point-ordering semantics in consumes-satisfiability validation and topo-sort.
 const POINT_ORDER = [
@@ -1961,6 +1964,54 @@ function runConfigFormatParityGate(capMap) {
   }
 }
 
+// ─── Gen-time wired guard ─────────────────────────────────────────────────────
+
+/**
+ * Validate that every hook point declared by a capability has a corresponding
+ * `loop render-hooks <point>` call site in one of the host-loop workflow files.
+ *
+ * Only valid loop points (in VALID_LOOP_POINTS) are checked here. Invalid points
+ * are already caught by validateStep/validateContribution/validateGate — do not
+ * double-report.
+ *
+ * @param {object}   cap       Validated capability object.
+ * @param {Set<string>} wiredSet  Set of points that have call sites in host workflows.
+ * @returns {string[]}          Array of error strings; empty means all points are wired.
+ */
+function validateHooksWired(cap, wiredSet) {
+  const errors = [];
+  const capId = cap.id || '(unknown)';
+
+  function checkPoint(point, groupName, idx) {
+    // Only flag valid points that are unwired — invalid points are schema-validator's job.
+    if (!VALID_LOOP_POINTS.has(point)) return;
+    if (!wiredSet.has(point)) {
+      errors.push(
+        'capability "' + capId + '" ' + groupName + '[' + idx + '].point "' + point +
+        '" is declared but not wired in any host-loop workflow ' +
+        '(no `loop render-hooks ' + point + '` call site). ' +
+        'Wire the call site in the host workflow ' +
+        '(see scripts/gen-loop-host-contract.cjs STEP_WORKFLOWS) or remove the hook.',
+      );
+    }
+  }
+
+  for (let i = 0; i < (cap.steps || []).length; i++) {
+    const hook = cap.steps[i];
+    if (hook.point !== undefined) checkPoint(hook.point, 'steps', i);
+  }
+  for (let i = 0; i < (cap.contributions || []).length; i++) {
+    const hook = cap.contributions[i];
+    if (hook.point !== undefined) checkPoint(hook.point, 'contributions', i);
+  }
+  for (let i = 0; i < (cap.gates || []).length; i++) {
+    const hook = cap.gates[i];
+    if (hook.point !== undefined) checkPoint(hook.point, 'gates', i);
+  }
+
+  return errors;
+}
+
 // ─── Registry builder ─────────────────────────────────────────────────────────
 
 /**
@@ -1981,6 +2032,10 @@ function loadAndValidate(centralKeys, capabilitiesDir) {
   if (!fs.existsSync(resolvedCapDir)) {
     return { capMap, errors };
   }
+
+  // Compute wired points ONCE before iterating capabilities so the filesystem
+  // scan is not repeated per-capability. ROOT is the repo root (defined at top of file).
+  const wiredSet = getWiredLoopPoints(ROOT);
 
   const folderEntries = fs.readdirSync(resolvedCapDir, { withFileTypes: true })
     .filter((e) => e.isDirectory())
@@ -2010,6 +2065,13 @@ function loadAndValidate(centralKeys, capabilitiesDir) {
       for (const e of contractErrors) errors.push(folderId + '/capability.json: ' + e);
       // Fix #6: do NOT add contract-invalid caps to capMap — validateCrossCapability should
       // only see fully-valid capabilities so its invariants are meaningful.
+      continue;
+    }
+
+    // Gen-time wired guard: reject hooks that declare a valid point with no call site.
+    const wiredErrors = validateHooksWired(cap, wiredSet);
+    if (wiredErrors.length > 0) {
+      for (const e of wiredErrors) errors.push(folderId + '/capability.json: ' + e);
       continue;
     }
 
@@ -2499,6 +2561,7 @@ module.exports = {
   POINT_TO_CONTRACT,
   HOST_ARTIFACT_EARLIEST_POINT_IDX,
   SCHEMA_VERSION,
+  validateHooksWired,
   // ADR-857 phase 4a: derived views + gates
   deriveCapabilityClusters,
   deriveProfileMembership,

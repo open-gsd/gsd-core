@@ -54,7 +54,21 @@ const {
   validateRuntimeCompat,
   validateRuntimeBody,
   loadCentralConfigKeys,
+  validateHooksWired,
+  POINT_ORDER,
 } = require('../scripts/gen-capability-registry.cjs');
+
+const {
+  STEP_WORKFLOWS,
+  HOST_LOOP_FILES,
+  scanWiredPoints,
+  getWiredLoopPoints,
+  CANONICAL_POINTS,
+} = require('../scripts/gen-loop-host-contract.cjs');
+
+const { LOOP_HOST_CONTRACT } = require('../gsd-core/bin/lib/loop-host-contract.cjs');
+
+const fc = require('fast-check');
 
 const ROOT = path.resolve(__dirname, '..');
 
@@ -4383,8 +4397,10 @@ describe('duplicate-producer invariant — same artifact same point (Issue #1123
   });
 
   test('PASSING: same artifact at DIFFERENT points does not trigger duplicate-producer error', () => {
-    // cap-diff-a produces SAME.md at plan:pre; cap-diff-b produces SAME.md at execute:pre
+    // cap-diff-a produces SAME.md at plan:pre; cap-diff-b produces SAME.md at execute:post
     // Different pointIdx → must not throw the duplicate-producer error.
+    // NOTE: both points must be wired (have render-hooks call sites in host workflows)
+    // to pass the validateHooksWired gen-time guard added in #1196.
     const capDiffA = makeFeatureCap({
       id: 'diff-a',
       skills: ['diff-a-skill'],
@@ -4409,7 +4425,7 @@ describe('duplicate-producer invariant — same artifact same point (Issue #1123
       config: {},
       steps: [
         {
-          point: 'execute:pre',
+          point: 'execute:post',
           ref: { skill: 'diff-b-skill' },
           produces: ['SAME.md'],
           consumes: [],
@@ -4427,5 +4443,290 @@ describe('duplicate-producer invariant — same artifact same point (Issue #1123
       () => buildRegistry(capMap),
       'Should NOT throw duplicate-producer error for same artifact at DIFFERENT points',
     );
+  });
+});
+
+// ─── #1196 — discuss loop wiring + wired-point guard ─────────────────────────
+
+describe('#1196 — discuss loop wiring + wired-point guard', () => {
+  // ─── Defect 1 — discuss is now wireable ─────────────────────────────────────
+
+  describe('Defect 1: discuss is a wireable loop host', () => {
+    test('HOST_LOOP_FILES includes discuss-phase.md', () => {
+      assert.ok(
+        Array.isArray(HOST_LOOP_FILES),
+        'HOST_LOOP_FILES must be an array',
+      );
+      assert.ok(
+        HOST_LOOP_FILES.includes('gsd-core/workflows/discuss-phase.md'),
+        `HOST_LOOP_FILES must include 'gsd-core/workflows/discuss-phase.md'. Got: ${JSON.stringify(HOST_LOOP_FILES)}`,
+      );
+    });
+
+    test('getWiredLoopPoints(ROOT) contains discuss:pre', () => {
+      const wired = getWiredLoopPoints(ROOT);
+      assert.ok(
+        wired instanceof Set,
+        'getWiredLoopPoints must return a Set',
+      );
+      assert.ok(
+        wired.has('discuss:pre'),
+        `getWiredLoopPoints(ROOT) must contain 'discuss:pre'. Got: ${JSON.stringify([...wired])}`,
+      );
+    });
+
+    test('getWiredLoopPoints(ROOT) contains discuss:post', () => {
+      const wired = getWiredLoopPoints(ROOT);
+      assert.ok(
+        wired.has('discuss:post'),
+        `getWiredLoopPoints(ROOT) must contain 'discuss:post'. Got: ${JSON.stringify([...wired])}`,
+      );
+    });
+  });
+
+  // ─── Defect 2 — gen-time wired guard ────────────────────────────────────────
+
+  describe('Defect 2: validateHooksWired gen-time guard', () => {
+    /** Minimal capability fixture with one hook at a given point */
+    function makeCapWithStep(point) {
+      return {
+        id: 'test-cap',
+        role: 'feature',
+        steps: [{ point, ref: { skill: 'my-skill' }, produces: [], consumes: [], onError: 'skip' }],
+        contributions: [],
+        gates: [],
+        config: {},
+      };
+    }
+
+    function makeCapWithContribution(point) {
+      return {
+        id: 'test-cap',
+        role: 'feature',
+        steps: [],
+        contributions: [{ point, into: 'orchestrator', fragment: { inline: 'hi' }, produces: [], consumes: [] }],
+        gates: [],
+        config: {},
+      };
+    }
+
+    function makeCapWithGate(point) {
+      return {
+        id: 'test-cap',
+        role: 'feature',
+        steps: [],
+        contributions: [],
+        gates: [{ point, check: { query: 'test-query' }, blocking: false, onError: 'skip' }],
+        config: {},
+      };
+    }
+
+    test('returns non-empty error array mentioning "not wired" when step point is not in wiredSet', () => {
+      const cap = makeCapWithStep('discuss:pre');
+      const wiredSet = new Set(['plan:pre', 'plan:post']); // discuss:pre absent
+      const errs = validateHooksWired(cap, wiredSet);
+      assert.ok(Array.isArray(errs), 'must return an array');
+      assert.ok(errs.length > 0, 'must return errors when point is unwired');
+      const joined = errs.join(' ');
+      assert.match(joined, /not wired/i, 'error must mention "not wired"');
+      assert.match(joined, /discuss:pre/, 'error must name the point');
+      assert.match(joined, /test-cap/, 'error must name the capability id');
+    });
+
+    test('returns non-empty error array when contribution point is not in wiredSet', () => {
+      const cap = makeCapWithContribution('discuss:pre');
+      const wiredSet = new Set(['plan:pre']); // discuss:pre absent
+      const errs = validateHooksWired(cap, wiredSet);
+      assert.ok(errs.length > 0, 'must return errors for unwired contribution point');
+      assert.match(errs.join(' '), /not wired/i);
+    });
+
+    test('returns non-empty error array when gate point is not in wiredSet', () => {
+      const cap = makeCapWithGate('discuss:pre');
+      const wiredSet = new Set(['plan:pre']); // discuss:pre absent
+      const errs = validateHooksWired(cap, wiredSet);
+      assert.ok(errs.length > 0, 'must return errors for unwired gate point');
+      assert.match(errs.join(' '), /not wired/i);
+    });
+
+    test('returns empty array when all declared points are in wiredSet', () => {
+      const cap = makeCapWithStep('plan:pre');
+      const wiredSet = new Set(['plan:pre', 'plan:post', 'execute:post']);
+      const errs = validateHooksWired(cap, wiredSet);
+      assert.deepEqual(errs, [], 'must return empty array when all points are wired');
+    });
+
+    test('boundary: cap declaring discuss:pre is rejected against wiredSet lacking it', () => {
+      const cap = makeCapWithStep('discuss:pre');
+      const smallSet = new Set(['plan:pre', 'plan:post']);
+      const errs = validateHooksWired(cap, smallSet);
+      assert.ok(errs.length > 0, 'must reject discuss:pre against a set that lacks it');
+    });
+
+    test('boundary: cap declaring discuss:pre is accepted against real getWiredLoopPoints(ROOT) post-fix', () => {
+      const cap = makeCapWithStep('discuss:pre');
+      const realWired = getWiredLoopPoints(ROOT);
+      const errs = validateHooksWired(cap, realWired);
+      assert.deepEqual(
+        errs, [],
+        `discuss:pre must be wired after the fix. Errors: ${errs.join('; ')}`,
+      );
+    });
+
+    test('boundary: cap declaring discuss:post is accepted against real getWiredLoopPoints(ROOT) post-fix', () => {
+      const cap = makeCapWithContribution('discuss:post');
+      const realWired = getWiredLoopPoints(ROOT);
+      const errs = validateHooksWired(cap, realWired);
+      assert.deepEqual(
+        errs, [],
+        `discuss:post must be wired after the fix. Errors: ${errs.join('; ')}`,
+      );
+    });
+
+    test('invalid points (not in VALID_LOOP_POINTS) are not flagged as "unwired" (already caught by schema validator)', () => {
+      const cap = {
+        id: 'test-cap',
+        role: 'feature',
+        steps: [{ point: 'not:a:real:point', ref: { skill: 'x' }, produces: [], consumes: [], onError: 'skip' }],
+        contributions: [],
+        gates: [],
+        config: {},
+      };
+      const wiredSet = new Set(['plan:pre']); // the invalid point is not here either
+      const errs = validateHooksWired(cap, wiredSet);
+      // Should NOT flag it — invalid points are the schema validator's job
+      const notWiredErrors = errs.filter((e) => /not wired/i.test(e));
+      assert.deepEqual(
+        notWiredErrors, [],
+        'validateHooksWired must not flag invalid points as "not wired" (those are caught by schema validation)',
+      );
+    });
+  });
+
+  // ─── Anti-pattern parity guards ──────────────────────────────────────────────
+
+  describe('Anti-pattern parity: host-file set has a single source of truth', () => {
+    test('every STEP_WORKFLOWS entry file exists on disk and contains a gsd:loop-host marker', () => {
+      for (const { file, step } of STEP_WORKFLOWS) {
+        const absPath = path.join(ROOT, 'gsd-core', 'workflows', file);
+        assert.ok(
+          fs.existsSync(absPath),
+          `STEP_WORKFLOWS entry ${file} (step: ${step}) does not exist on disk at ${absPath}`,
+        );
+        const content = fs.readFileSync(absPath, 'utf8');
+        assert.match(
+          content,
+          /<!--\s*gsd:loop-host/,
+          `${file} (step: ${step}) is listed in STEP_WORKFLOWS but lacks a gsd:loop-host marker`,
+        );
+      }
+    });
+
+    test('HOST_LOOP_FILES matches STEP_WORKFLOWS (single source of truth)', () => {
+      const expectedFromStepWorkflows = STEP_WORKFLOWS.map((w) => 'gsd-core/workflows/' + w.file);
+      assert.deepEqual(
+        HOST_LOOP_FILES,
+        expectedFromStepWorkflows,
+        'HOST_LOOP_FILES must be derived from STEP_WORKFLOWS, not a separate hardcoded list',
+      );
+    });
+
+    test('every workflow file carrying a gsd:loop-host marker is present in STEP_WORKFLOWS', () => {
+      const workflowsDir = path.join(ROOT, 'gsd-core', 'workflows');
+
+      // Find all .md files in workflows dir (non-recursive — top-level only, subdirs are mode files)
+      const allMdFiles = fs.readdirSync(workflowsDir)
+        .filter((f) => f.endsWith('.md'))
+        .sort();
+
+      const stepWorkflowFiles = new Set(STEP_WORKFLOWS.map((w) => w.file));
+      const missingFromStepWorkflows = [];
+
+      for (const mdFile of allMdFiles) {
+        const absPath = path.join(workflowsDir, mdFile);
+        const content = fs.readFileSync(absPath, 'utf8');
+        if (/<!--\s*gsd:loop-host/.test(content) && !stepWorkflowFiles.has(mdFile)) {
+          missingFromStepWorkflows.push(mdFile);
+        }
+      }
+
+      assert.deepEqual(
+        missingFromStepWorkflows, [],
+        `These workflow files have a gsd:loop-host marker but are absent from STEP_WORKFLOWS: ` +
+        `${missingFromStepWorkflows.join(', ')}. Add them to STEP_WORKFLOWS in scripts/gen-loop-host-contract.cjs.`,
+      );
+    });
+
+    test('POINT_ORDER (capability-registry) === flattened LOOP_HOST_CONTRACT points — schema/contract drift guard', () => {
+      // Flatten all contract points in order
+      const contractPoints = [];
+      for (const entry of LOOP_HOST_CONTRACT) {
+        contractPoints.push(...entry.points);
+      }
+
+      assert.deepEqual(
+        POINT_ORDER,
+        contractPoints,
+        'POINT_ORDER in gen-capability-registry must equal the flattened LOOP_HOST_CONTRACT points in order. ' +
+        `POINT_ORDER: ${JSON.stringify(POINT_ORDER)}, contract flatten: ${JSON.stringify(contractPoints)}`,
+      );
+    });
+
+    test('CANONICAL_POINTS (gen-loop-host-contract) matches POINT_ORDER (gen-capability-registry)', () => {
+      assert.deepEqual(
+        [...CANONICAL_POINTS],
+        POINT_ORDER,
+        'CANONICAL_POINTS in gen-loop-host-contract must equal POINT_ORDER in gen-capability-registry',
+      );
+    });
+  });
+
+  // ─── Property test ────────────────────────────────────────────────────────────
+
+  describe('Property: scanWiredPoints is a correct extractor', () => {
+    test('fc: scanWiredPoints(text) returns exactly the set of points whose call sites appear in text', () => {
+      // The canonical 12 points from CANONICAL_POINTS
+      const allPoints = [...CANONICAL_POINTS];
+
+      fc.assert(
+        fc.property(
+          fc.subarray(allPoints, { minLength: 0, maxLength: allPoints.length }),
+          (subset) => {
+            // Build a synthetic text containing one call site per point in the subset
+            const lines = subset.map((p) => `HOOKS_JSON=$(gsd_run loop render-hooks ${p} --raw)`);
+            // Add some noise to exercise robustness
+            const noise = ['# comment', 'echo hello', `gsd_run loop some-other-command`, ''];
+            const text = [...lines, ...noise].join('\n');
+
+            const result = scanWiredPoints(text);
+
+            // result must be a Set
+            if (!(result instanceof Set)) return false;
+
+            // result must contain exactly the subset points
+            const resultArr = [...result].sort();
+            const subsetArr = [...subset].sort();
+            if (resultArr.length !== subsetArr.length) return false;
+            for (let i = 0; i < subsetArr.length; i++) {
+              if (resultArr[i] !== subsetArr[i]) return false;
+            }
+            return true;
+          },
+        ),
+        { numRuns: 200 },
+      );
+    });
+
+    test('NIT-02: scanWiredPoints does not match an incomplete occurrence (no point token after render-hooks)', () => {
+      // A line with `loop render-hooks` but no following point token must not match
+      const incompleteText = 'HOOKS_JSON=$(gsd_run loop render-hooks\n)';
+      const result = scanWiredPoints(incompleteText);
+      assert.strictEqual(
+        result.size,
+        0,
+        'scanWiredPoints must return an empty Set when the render-hooks call has no point token. ' +
+        `Got: ${JSON.stringify([...result])}`,
+      );
+    });
   });
 });
