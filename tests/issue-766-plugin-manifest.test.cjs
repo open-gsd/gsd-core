@@ -264,7 +264,11 @@ describe('C: plugin.json schema validation', () => {
     );
 
     const manifest = JSON.parse(fs.readFileSync(PLUGIN_JSON_PATH, 'utf-8'));
+    const schema = JSON.parse(fs.readFileSync(SCHEMA_FIXTURE_PATH, 'utf-8'));
     const errors = [];
+
+    const schemaRequired = Array.isArray(schema.required) ? schema.required : [];
+    const schemaProps = (schema.properties && typeof schema.properties === 'object') ? schema.properties : {};
 
     // Helper: assert a required field exists with the expected type.
     function requireField(key, type) {
@@ -275,45 +279,69 @@ describe('C: plugin.json schema validation', () => {
       }
     }
 
-    // Required string fields (from schema "required" array + "type": "string" props)
-    for (const key of ['name', 'displayName', 'version', 'description', 'repository', 'homepage', 'license', 'commands', 'hooks']) {
-      requireField(key, 'string');
+    // Derive required fields and their types directly from the schema fixture.
+    // Each required field whose "properties" entry has a primitive "type" is
+    // checked via requireField; "object"-typed fields are handled below.
+    for (const key of schemaRequired) {
+      const propDef = schemaProps[key];
+      const fieldType = propDef && propDef.type;
+      if (fieldType === 'object') {
+        // Object fields are validated with deeper checks below.
+        continue;
+      }
+      requireField(key, fieldType || 'string');
     }
 
-    // "author" must be an object with a non-empty "name" string
-    if (!('author' in manifest)) {
-      errors.push('"author" is required but missing');
-    } else if (typeof manifest.author !== 'object' || manifest.author === null) {
-      errors.push('"author" must be an object');
-    } else if (typeof manifest.author.name !== 'string' || manifest.author.name.trim().length === 0) {
-      errors.push('"author.name" must be a non-empty string');
+    // Validate "object"-typed required fields from the schema.
+    // For each such field, check existence, type, and any nested "required" sub-fields.
+    for (const key of schemaRequired) {
+      const propDef = schemaProps[key];
+      if (!propDef || propDef.type !== 'object') continue;
+
+      if (!(key in manifest)) {
+        errors.push(`"${key}" is required but missing`);
+      } else if (typeof manifest[key] !== 'object' || manifest[key] === null) {
+        errors.push(`"${key}" must be an object`);
+      } else {
+        // Validate nested required sub-fields declared in the schema.
+        const nestedRequired = Array.isArray(propDef.required) ? propDef.required : [];
+        const nestedProps = (propDef.properties && typeof propDef.properties === 'object') ? propDef.properties : {};
+        for (const subKey of nestedRequired) {
+          const subDef = nestedProps[subKey];
+          const subType = subDef && subDef.type;
+          if (!(subKey in manifest[key])) {
+            errors.push(`"${key}.${subKey}" is required but missing`);
+          } else if (subType && typeof manifest[key][subKey] !== subType) {
+            errors.push(`"${key}.${subKey}" must be a ${subType}, got ${typeof manifest[key][subKey]}`);
+          }
+          // minLength check for nested string sub-fields
+          if (subType === 'string' && subDef.minLength !== undefined) {
+            if (typeof manifest[key][subKey] === 'string' && manifest[key][subKey].length < subDef.minLength) {
+              errors.push(`"${key}.${subKey}" must have minLength ${subDef.minLength}`);
+            }
+          }
+        }
+      }
     }
 
-    // Pattern constraints from the schema
-    // name: ^[a-z0-9]+(?:-[a-z0-9]+)*$
-    if (typeof manifest.name === 'string' && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(manifest.name)) {
-      errors.push(`"name" must match ^[a-z0-9]+(?:-[a-z0-9]+)*$ (kebab-case), got "${manifest.name}"`);
-    }
+    // Derive pattern and minLength constraints from the schema fixture properties.
+    for (const key of schemaRequired) {
+      const propDef = schemaProps[key];
+      if (!propDef || propDef.type === 'object') continue;
+      const value = manifest[key];
 
-    // version: ^\d+\.\d+\.\d+(?:-.+)?$
-    const VERSION_RE = /^\d+\.\d+\.\d+(?:-.+)?$/;
-    if (typeof manifest.version === 'string' && !VERSION_RE.test(manifest.version)) {
-      errors.push('"version" must match semver pattern ^N.N.N(-...)?, got "' + manifest.version + '"');
-    }
+      if (propDef.pattern && typeof value === 'string') {
+        const re = new RegExp(propDef.pattern);
+        if (!re.test(value)) {
+          errors.push(`"${key}" must match ${propDef.pattern}, got "${value}"`);
+        }
+      }
 
-    // displayName: minLength 1
-    if (typeof manifest.displayName === 'string' && manifest.displayName.trim().length === 0) {
-      errors.push('"displayName" must be a non-empty string');
-    }
-
-    // description: minLength 1
-    if (typeof manifest.description === 'string' && manifest.description.trim().length === 0) {
-      errors.push('"description" must be a non-empty string');
-    }
-
-    // license: minLength 1
-    if (typeof manifest.license === 'string' && manifest.license.trim().length === 0) {
-      errors.push('"license" must be a non-empty string');
+      if (propDef.minLength !== undefined && typeof value === 'string') {
+        if (value.length < propDef.minLength) {
+          errors.push(`"${key}" must have minLength ${propDef.minLength}, got length ${value.length}`);
+        }
+      }
     }
 
     if (errors.length > 0) {

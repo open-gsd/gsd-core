@@ -85,24 +85,47 @@ const rule = {
         return isAlwaysTruthyLiteral(node.argument.argument);
       }
 
-      // LogicalExpression `cond || true`
+      // LogicalExpression `cond || true` OR `true || cond`
+      // Either form short-circuits to always be truthy.
       if (
         node.type === 'LogicalExpression' &&
-        node.operator === '||' &&
-        node.right.type === 'Literal' &&
-        node.right.value === true
+        node.operator === '||'
       ) {
-        return true;
+        if (node.right.type === 'Literal' && node.right.value === true) return true;
+        if (node.left.type === 'Literal' && node.left.value === true) return true;
       }
 
       return false;
     }
 
     /**
-     * Returns true when both nodes are Literals of the SAME type and SAME value.
+     * Returns true when both nodes are Literals of the SAME type and SAME value,
+     * OR when both are empty ArrayExpressions ([]) or empty ObjectExpressions ({}).
+     * Empty [] and {} are always deep-equal to each other.
      */
     function areIdenticalLiterals(a, b) {
       if (!a || !b) return false;
+
+      // Two empty array literals: [] deepStrictEqual [] is always true
+      if (
+        a.type === 'ArrayExpression' &&
+        b.type === 'ArrayExpression' &&
+        a.elements.length === 0 &&
+        b.elements.length === 0
+      ) {
+        return true;
+      }
+
+      // Two empty object literals: {} deepStrictEqual {} is always true
+      if (
+        a.type === 'ObjectExpression' &&
+        b.type === 'ObjectExpression' &&
+        a.properties.length === 0 &&
+        b.properties.length === 0
+      ) {
+        return true;
+      }
+
       if (a.type !== 'Literal' || b.type !== 'Literal') return false;
       // Compare by type tag and value
       if (typeof a.value !== typeof b.value) return false;

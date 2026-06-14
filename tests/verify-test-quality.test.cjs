@@ -1,12 +1,12 @@
 // allow-test-rule: source-text-is-the-product
 // Structural guard: reads gsd-core/workflows/verify-phase.md and asserts that
 // the audit_test_quality step contains the skip-pattern marker, circular-detection
-// marker, and assertion-strength table markers. Goes red if that workflow guidance
-// is removed or the step is renamed/deleted.
+// marker, provenance-classification contract, and assertion-strength table markers.
+// Goes red if that workflow guidance is removed or the step is renamed/deleted.
 
 'use strict';
 
-const { describe, test } = require('node:test');
+const { describe, test, before } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
@@ -18,9 +18,6 @@ const WORKFLOW_PATH = path.join(
   'workflows',
   'verify-phase.md'
 );
-
-// Read once at module load so every test sees the same snapshot.
-const workflowSrc = fs.readFileSync(WORKFLOW_PATH, 'utf8');
 
 // Locate the audit_test_quality step boundaries so sub-assertions are scoped
 // to that step only, not the full file.
@@ -35,7 +32,21 @@ function extractAuditStep(src) {
   return src.slice(start, end + STEP_CLOSE.length);
 }
 
-const auditStepSrc = extractAuditStep(workflowSrc);
+// workflowSrc and auditStepSrc are populated in the before() hook so that a
+// missing or renamed verify-phase.md produces a descriptive test FAILURE rather
+// than a module-load crash that prevents any test from registering.
+let workflowSrc = null;
+let auditStepSrc = null;
+
+before(() => {
+  assert.ok(
+    fs.existsSync(WORKFLOW_PATH),
+    `verify-phase.md not found at expected path: ${WORKFLOW_PATH} — ` +
+      'the file may have been renamed or moved'
+  );
+  workflowSrc = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+  auditStepSrc = extractAuditStep(workflowSrc);
+});
 
 describe('verify-phase.md audit_test_quality structural guard', () => {
   test('verify-phase.md exists at gsd-core/workflows/verify-phase.md', () => {
@@ -91,23 +102,49 @@ describe('verify-phase.md audit_test_quality structural guard', () => {
   });
 
   describe('circular-detection marker', () => {
-    test('audit_test_quality step contains the circular file-write grep pattern', () => {
-      // The step must tell the verifier to grep for writeFileSync / writeFile / fs\.write
-      // to locate scripts that might be generating expected values from the SUT.
-      // The markdown shows a bash grep -E pattern, so the dot in fs.write is escaped:
-      // 'fs\\.write' in JS is the string  fs\.write  (backslash + dot).
+    test('audit_test_quality step contains writeFileSync in the circular file-write grep pattern', () => {
+      // The step must tell the verifier to grep for writeFileSync in the circular
+      // detection pattern. Removing writeFileSync from the pattern would miss the
+      // most common Node.js synchronous file-write idiom.
       assert.ok(
         auditStepSrc !== null,
         'Cannot check circular-detection marker: audit_test_quality step not found'
       );
-      const hasWritePattern =
-        auditStepSrc.includes('writeFileSync') &&
-        auditStepSrc.includes('writeFile') &&
-        auditStepSrc.includes('fs\\.write');
       assert.ok(
-        hasWritePattern,
-        'audit_test_quality step must include writeFileSync, writeFile, and fs\\.write ' +
-          'in the circular-detection grep pattern — one or more are missing'
+        auditStepSrc.includes('writeFileSync'),
+        'audit_test_quality step must include writeFileSync in the circular-detection grep pattern'
+      );
+    });
+
+    test('audit_test_quality step contains standalone writeFile (not just as part of writeFileSync) in the circular file-write grep pattern', () => {
+      // The pattern must also catch the async fs.writeFile variant, not just the
+      // synchronous writeFileSync.  A plain includes('writeFile') check is satisfied
+      // by the 'writeFileSync' substring and would pass even if the standalone
+      // 'writeFile' alternative were removed.  Use a word-boundary / non-Sync regex
+      // to detect the standalone form specifically.
+      assert.ok(
+        auditStepSrc !== null,
+        'Cannot check writeFile marker: audit_test_quality step not found'
+      );
+      // Match 'writeFile' that is NOT followed by 'Sync' — i.e. the standalone form.
+      const standaloneWriteFile = /writeFile(?!Sync)/.test(auditStepSrc);
+      assert.ok(
+        standaloneWriteFile,
+        'audit_test_quality step must reference standalone writeFile (not just writeFileSync) ' +
+          'in the circular-detection grep pattern — narrowing the pattern to writeFileSync only ' +
+          'would be caught by this test'
+      );
+    });
+
+    test('audit_test_quality step contains fs\\.write in the circular file-write grep pattern', () => {
+      // The fs\.write pattern (dot backslash-escaped) covers lower-level write calls.
+      assert.ok(
+        auditStepSrc !== null,
+        'Cannot check fs\\.write marker: audit_test_quality step not found'
+      );
+      assert.ok(
+        auditStepSrc.includes('fs\\.write'),
+        'audit_test_quality step must include fs\\.write in the circular-detection grep pattern'
       );
     });
 
@@ -120,6 +157,104 @@ describe('verify-phase.md audit_test_quality structural guard', () => {
       assert.ok(
         auditStepSrc.includes('CIRCULAR'),
         'audit_test_quality step must define CIRCULAR as a verdict for circular tests'
+      );
+    });
+  });
+
+  describe('provenance-classification contract', () => {
+    // Finding #5: the redesign dropped all coverage of the provenance-classification
+    // contract.  These tests assert that the audit_test_quality step still defines the
+    // provenance keywords and classification tiers so that removing them goes RED.
+
+    test('audit_test_quality step defines the VALID provenance classification', () => {
+      assert.ok(
+        auditStepSrc !== null,
+        'Cannot check provenance classifications: audit_test_quality step not found'
+      );
+      assert.ok(
+        auditStepSrc.includes('VALID'),
+        'audit_test_quality step must define VALID as a provenance classification'
+      );
+    });
+
+    test('audit_test_quality step defines the UNKNOWN provenance classification', () => {
+      assert.ok(
+        auditStepSrc !== null,
+        'Cannot check provenance classifications: audit_test_quality step not found'
+      );
+      assert.ok(
+        auditStepSrc.includes('UNKNOWN'),
+        'audit_test_quality step must define UNKNOWN as a provenance classification'
+      );
+    });
+
+    test('audit_test_quality step maps UNKNOWN to SUSPECT treatment', () => {
+      // The contract requires "UNKNOWN: No provenance information — treat as SUSPECT"
+      // so consumers know UNKNOWN is handled the same as SUSPECT.
+      assert.ok(
+        auditStepSrc !== null,
+        'Cannot check SUSPECT treatment: audit_test_quality step not found'
+      );
+      assert.ok(
+        auditStepSrc.includes('SUSPECT'),
+        'audit_test_quality step must mention SUSPECT (UNKNOWN must map to treat as SUSPECT)'
+      );
+    });
+
+    test('audit_test_quality step names "legacy" as a VALID provenance keyword', () => {
+      // VALID is defined as "Expected value from external/legacy system output,
+      // manual capture, or independent oracle".  The word "legacy" is load-bearing:
+      // it clarifies that values captured from a superseded system are authoritative.
+      assert.ok(
+        auditStepSrc !== null,
+        'Cannot check "legacy" keyword: audit_test_quality step not found'
+      );
+      assert.ok(
+        auditStepSrc.includes('legacy'),
+        'audit_test_quality step must name "legacy" as a VALID provenance source ' +
+          '(e.g. "external/legacy system output")'
+      );
+    });
+
+    test('audit_test_quality step names "manual" as a VALID provenance keyword', () => {
+      // "manual capture" is the second example of a VALID provenance source and
+      // distinguishes human-curated expected values from machine-generated ones.
+      assert.ok(
+        auditStepSrc !== null,
+        'Cannot check "manual" keyword: audit_test_quality step not found'
+      );
+      assert.ok(
+        auditStepSrc.includes('manual'),
+        'audit_test_quality step must name "manual" as a VALID provenance source ' +
+          '(e.g. "manual capture")'
+      );
+    });
+
+    test('audit_test_quality step names "computed" as a SUSPECT provenance indicator', () => {
+      // The circular indicator comments list "computed from engine" as an example
+      // of a SUSPECT expected-value comment.  Removing it would mean verifiers no
+      // longer know to flag tests whose fixtures declare computed provenance.
+      assert.ok(
+        auditStepSrc !== null,
+        'Cannot check "computed" indicator: audit_test_quality step not found'
+      );
+      assert.ok(
+        auditStepSrc.includes('computed'),
+        'audit_test_quality step must name "computed" as a SUSPECT provenance indicator ' +
+          '(e.g. "computed from engine" comment example)'
+      );
+    });
+
+    test('audit_test_quality step names "baseline" as a SUSPECT provenance indicator', () => {
+      // "captured from baseline" is the other canonical SUSPECT comment example.
+      assert.ok(
+        auditStepSrc !== null,
+        'Cannot check "baseline" indicator: audit_test_quality step not found'
+      );
+      assert.ok(
+        auditStepSrc.includes('baseline'),
+        'audit_test_quality step must name "baseline" as a SUSPECT provenance indicator ' +
+          '(e.g. "captured from baseline" comment example)'
       );
     });
   });

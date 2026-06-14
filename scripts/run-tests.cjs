@@ -231,7 +231,8 @@ function splitFileList(value) {
     .split(/[,\s]+/)
     .map(v => v.trim())
     .filter(Boolean)
-    .map(v => v.replace(/^tests[\\/]/, ''));
+    .map(v => v.replace(/\\/g, '/'))   // normalize Windows backslashes
+    .map(v => v.replace(/^tests\//, ''));
 }
 
 function selectExplicitFiles(allFiles, filesValue, filesFrom) {
@@ -240,8 +241,19 @@ function selectExplicitFiles(allFiles, filesValue, filesFrom) {
     ? splitFileList(fs.readFileSync(filesFrom, 'utf8'))
     : splitFileList(filesValue);
   const available = new Set(allFiles);
+
+  // Build a basename -> [relpath, ...] index for bare-basename resolution.
+  // A bare basename (no directory separator) may match exactly one subdir file.
+  const basenameIndex = new Map();
+  for (const f of allFiles) {
+    const b = basename(f);
+    if (!basenameIndex.has(b)) basenameIndex.set(b, []);
+    basenameIndex.get(b).push(f);
+  }
+
   const selected = [];
   const missing = [];
+  const errors = [];
   for (const file of requested) {
     // If the token is a bare suite name (e.g. "unit" written by ci-test-scope
     // as the #408 fallback sentinel), delegate to the existing suite resolver
@@ -252,10 +264,26 @@ function selectExplicitFiles(allFiles, filesValue, filesFrom) {
         selected.push(f);
       }
     } else if (available.has(file)) {
+      // Exact relpath match (e.g. "installer-migrations/001-legacy-orphan-files.test.cjs").
       selected.push(file);
+    } else if (!file.includes('/')) {
+      // Bare basename (no directory separator): resolve via index.
+      const candidates = basenameIndex.get(file);
+      if (!candidates || candidates.length === 0) {
+        missing.push(file);
+      } else if (candidates.length > 1) {
+        errors.push(
+          `ambiguous basename "${file}" matches multiple files: ${candidates.join(', ')} — pass the subdir path instead`,
+        );
+      } else {
+        selected.push(candidates[0]);
+      }
     } else {
       missing.push(file);
     }
+  }
+  if (errors.length > 0) {
+    return { error: errors.join('; ') };
   }
   if (missing.length > 0) {
     return {

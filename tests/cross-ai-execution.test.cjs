@@ -79,6 +79,7 @@ describe('workflow.cross_ai_execution feature', () => {
       const discoverIdx = executePhaseContent.indexOf('<step name="discover_and_group_plans">');
       const crossAiIdx = executePhaseContent.indexOf(CROSS_AI_STEP_OPEN);
       const executeIdx = executePhaseContent.indexOf('<step name="execute_waves">');
+      assert.ok(crossAiIdx >= 0, 'cross_ai_delegation step is missing from execute-phase.md');
       assert.ok(discoverIdx < crossAiIdx, 'cross_ai_delegation must come after discover_and_group_plans');
       assert.ok(crossAiIdx < executeIdx, 'cross_ai_delegation must come before execute_waves');
     });

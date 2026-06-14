@@ -30,7 +30,9 @@ test('noop', () => {});
 
 function seed(dir, names) {
   for (const name of names) {
-    fs.writeFileSync(path.join(dir, name), PASS_BODY, 'utf8');
+    const full = path.join(dir, name);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, PASS_BODY, 'utf8');
   }
 }
 
@@ -248,6 +250,48 @@ describe('run-tests.cjs harness (issue #3597)', () => {
       const r = runHarness(tmpDir, ['--files', 'a.test.cjs missing.test.cjs']);
       assert.notStrictEqual(r.status, 0);
       assert.match(r.stderr, /requested test file\(s\) not found: missing\.test\.cjs/i);
+    });
+  });
+
+  describe('subdir file matching (findings #1 and #9)', () => {
+    test('bare basename resolves to its single subdir file', () => {
+      seed(tmpDir, ['sub/001-foo.test.cjs', 'b.test.cjs']);
+      const r = runHarness(tmpDir, ['--files', '001-foo.test.cjs']);
+      assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+      assert.ok(r.stderr.includes('001-foo.test.cjs'));
+      assert.ok(!r.stderr.includes('b.test.cjs'));
+    });
+
+    test('full subdir relpath matches exactly', () => {
+      seed(tmpDir, ['sub/001-foo.test.cjs', 'b.test.cjs']);
+      const r = runHarness(tmpDir, ['--files', 'sub/001-foo.test.cjs']);
+      assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+      assert.ok(r.stderr.includes('001-foo.test.cjs'));
+      assert.ok(!r.stderr.includes('b.test.cjs'));
+    });
+
+    test('backslash-separated subdir path resolves on all platforms', () => {
+      seed(tmpDir, ['sub/001-foo.test.cjs', 'b.test.cjs']);
+      // Simulate a Windows caller passing backslash path
+      const r = runHarness(tmpDir, ['--files', 'sub\\001-foo.test.cjs']);
+      assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+      assert.ok(r.stderr.includes('001-foo.test.cjs'));
+    });
+
+    test('tests/ prefix is stripped before subdir matching', () => {
+      seed(tmpDir, ['sub/001-foo.test.cjs']);
+      const r = runHarness(tmpDir, ['--files', 'tests/sub/001-foo.test.cjs']);
+      assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+      assert.ok(r.stderr.includes('001-foo.test.cjs'));
+    });
+
+    test('ambiguous bare basename exits non-zero with clear error', () => {
+      seed(tmpDir, ['sub1/dup.test.cjs', 'sub2/dup.test.cjs']);
+      const r = runHarness(tmpDir, ['--files', 'dup.test.cjs']);
+      assert.notStrictEqual(r.status, 0);
+      assert.match(r.stderr, /ambiguous basename/i);
+      assert.match(r.stderr, /dup\.test\.cjs/);
+      assert.match(r.stderr, /subdir path/i);
     });
   });
 

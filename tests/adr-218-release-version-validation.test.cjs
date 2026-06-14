@@ -44,6 +44,69 @@ function extractGrepPatterns(text) {
   return found;
 }
 
+/**
+ * Parse the `needs:` list of a GitHub Actions job.
+ *
+ * @param {string} src    - Full YAML source text.
+ * @param {number} jobIdx - Index of the '\n  <job-name>:\n' match in src.
+ * @returns {string[] | null} Array of job-name strings listed under `needs:`,
+ *                            or null if no `needs:` key was found for the job.
+ *
+ * Strategy: slice from jobIdx to the next top-level (two-space-indented) job
+ * header, then scan that segment for the `needs:` key.  The key accepts two
+ * YAML forms:
+ *   needs: validate-version                    (scalar)
+ *   needs: [validate-version, install-smoke]   (flow sequence)
+ *   needs:                                     (block sequence)
+ *     - validate-version
+ *     - install-smoke
+ *
+ * This deliberately only inspects the `needs:` line and its immediate list
+ * items — it will NOT match "validate-version" appearing later in a step
+ * expression such as `${{ needs.validate-version.outputs.branch }}`.
+ */
+function parseJobNeeds(src, jobIdx) {
+  // Isolate the job's YAML block: from the job header to the next top-level
+  // job (same two-space indentation) or end of file.
+  const rest = src.slice(jobIdx + 1); // skip the leading newline of the match
+  // Next top-level job starts with "\n  <word>:\n" at column 2
+  const nextJobMatch = rest.match(/\n {2}[a-z][a-z0-9_-]*:\n/);
+  const segment = nextJobMatch
+    ? rest.slice(0, rest.indexOf(nextJobMatch[0]) + 1)
+    : rest;
+
+  // Match the `needs:` line within the segment
+  const needsLineMatch = segment.match(/^ {4}needs:\s*(.*)$/m);
+  if (!needsLineMatch) return null;
+
+  const inline = needsLineMatch[1].trim();
+
+  if (inline === '') {
+    // Block sequence form: lines following `needs:` at deeper indent
+    //   needs:
+    //     - job-one
+    //     - job-two
+    const blockItems = [];
+    const blockRe = /^ {6}- ([a-z][a-z0-9_-]*)$/gm;
+    // Only scan text after the `needs:` line
+    const afterNeeds = segment.slice(needsLineMatch.index + needsLineMatch[0].length);
+    let bm;
+    while ((bm = blockRe.exec(afterNeeds)) !== null) {
+      blockItems.push(bm[1]);
+    }
+    return blockItems.length > 0 ? blockItems : null;
+  }
+
+  if (inline.startsWith('[')) {
+    // Flow sequence form: needs: [job-one, job-two]
+    const inner = inline.replace(/^\[|\]$/g, '');
+    return inner.split(',').map(s => s.trim()).filter(Boolean);
+  }
+
+  // Scalar form: needs: single-job
+  return [inline];
+}
+
 // ---------------------------------------------------------------------------
 // (A) Behavioral regex tests
 // ---------------------------------------------------------------------------
@@ -203,19 +266,59 @@ describe('ADR-218 — leading-zero rejection regex (behavioral)', () => {
     const src = loadWorkflow();
     const patterns = extractGrepPatterns(src);
 
-    // The old, vulnerable pattern used [0-9]+ which allows leading zeros.
-    // Every version-validation pattern must NOT be the bare [0-9]+ form on
-    // every segment. At least one pattern must contain the (0|[1-9][0-9]*)
-    // grouping from ADR-218 Decision #1.
-    const hasStrictGuard = patterns.some(p =>
-      p.includes('(0|[1-9][0-9]*)') || p.includes('[1-9][0-9]*')
-    );
+    // ADR-218 Decision #1: the X.Y.0 (minor/major) pattern and the X.0.0
+    // (major-only) pattern MUST guard their major and minor segments with
+    // (0|[1-9][0-9]*), not the old bare [0-9]+ form.
+    //
+    // The hotfix pattern contains "[1-9][0-9]*" for its PATCH segment, so
+    // testing .some(p => p.includes('[1-9][0-9]*')) would still pass even if
+    // the major/minor patterns were weakened back to [0-9]+.  We therefore
+    // assert specifically against the patterns that guard major/minor segments.
+
+    // Identify the minor/major pattern: matches X.Y.0 (both 1.0.0 and 1.1.0)
+    const minorMajorPatterns = patterns.filter(p => {
+      const re = new RegExp(p);
+      return re.test('1.0.0') && re.test('1.1.0') && re.test('10.20.0');
+    });
 
     assert.ok(
-      hasStrictGuard,
-      `None of the grep -qE patterns in release.yml contain the (0|[1-9][0-9]*) ` +
-      `guard required by ADR-218. Found patterns: ${JSON.stringify(patterns)}\n` +
-      `This is the regression this ADR was written to prevent.`
+      minorMajorPatterns.length >= 1,
+      `Could not locate the minor/major (X.Y.0) grep pattern in release.yml.\n` +
+      `Extracted patterns: ${JSON.stringify(patterns)}`
+    );
+
+    // The minor/major pattern must contain (0|[1-9][0-9]*) to guard BOTH the
+    // major AND minor segments.  A pattern that uses [0-9]+ on those segments
+    // would allow "01.0.0" or "1.01.0" — the ADR-218 regression.
+    assert.ok(
+      minorMajorPatterns[0].includes('(0|[1-9][0-9]*)'),
+      `The minor/major (X.Y.0) grep pattern does NOT contain the strict ` +
+      `"(0|[1-9][0-9]*)" guard required by ADR-218 Decision #1.\n` +
+      `Pattern found: ${minorMajorPatterns[0]}\n` +
+      `This is the leading-zero regression. Restore (0|[1-9][0-9]*) grouping ` +
+      `on every major/minor segment.`
+    );
+
+    // Identify the major-only pattern: matches X.0.0 but NOT X.Y.0 with Y>0
+    const majorOnlyPatterns = patterns.filter(p => {
+      const re = new RegExp(p);
+      return re.test('1.0.0') && !re.test('1.1.0');
+    });
+
+    assert.ok(
+      majorOnlyPatterns.length >= 1,
+      `Could not locate the major-only (X.0.0) grep pattern in release.yml.\n` +
+      `Extracted patterns: ${JSON.stringify(patterns)}`
+    );
+
+    // The major-only pattern must also contain (0|[1-9][0-9]*) to guard the
+    // major segment.
+    assert.ok(
+      majorOnlyPatterns[0].includes('(0|[1-9][0-9]*)'),
+      `The major-only (X.0.0) grep pattern does NOT contain the strict ` +
+      `"(0|[1-9][0-9]*)" guard required by ADR-218 Decision #1.\n` +
+      `Pattern found: ${majorOnlyPatterns[0]}\n` +
+      `ADR-218: IS_MAJOR check must also use (0|[1-9][0-9]*) grouping.`
     );
   });
 });
@@ -294,10 +397,22 @@ describe('ADR-218 — structural wiring of release.yml', () => {
     const rcJobIdx = src.indexOf('\n  rc:\n');
     assert.ok(rcJobIdx !== -1, 'release.yml must have an `rc:` job');
 
-    const afterRc = src.slice(rcJobIdx, rcJobIdx + 500);
+    // Parse the `needs:` list from the rc job header region.  We look for the
+    // `needs:` key in the lines immediately following the job header, stopping
+    // at the first non-indented (top-level) keyword.  This avoids false passes
+    // where "validate-version" only appears inside a step expression such as
+    // `${{ needs.validate-version.outputs.branch }}` but is absent from the
+    // actual `needs:` dependency declaration.
+    const needsList = parseJobNeeds(src, rcJobIdx);
     assert.ok(
-      afterRc.includes('validate-version'),
-      'The `rc` job must declare validate-version in its `needs:` (ADR-218 gate must run before rc)'
+      needsList !== null,
+      'Could not locate a `needs:` declaration in the `rc` job of release.yml'
+    );
+    assert.ok(
+      needsList.includes('validate-version'),
+      `The \`rc\` job must list validate-version as a member of its \`needs:\` ` +
+      `(ADR-218 gate must run before rc).\n` +
+      `Parsed needs list: ${JSON.stringify(needsList)}`
     );
   });
 
@@ -306,10 +421,17 @@ describe('ADR-218 — structural wiring of release.yml', () => {
     const finalizeIdx = src.indexOf('\n  finalize:\n');
     assert.ok(finalizeIdx !== -1, 'release.yml must have a `finalize:` job');
 
-    const afterFinalize = src.slice(finalizeIdx, finalizeIdx + 500);
+    // Same targeted parse as the rc test above.
+    const needsList = parseJobNeeds(src, finalizeIdx);
     assert.ok(
-      afterFinalize.includes('validate-version'),
-      'The `finalize` job must declare validate-version in its `needs:` (ADR-218 gate must run before finalize)'
+      needsList !== null,
+      'Could not locate a `needs:` declaration in the `finalize` job of release.yml'
+    );
+    assert.ok(
+      needsList.includes('validate-version'),
+      `The \`finalize\` job must list validate-version as a member of its \`needs:\` ` +
+      `(ADR-218 gate must run before finalize).\n` +
+      `Parsed needs list: ${JSON.stringify(needsList)}`
     );
   });
 

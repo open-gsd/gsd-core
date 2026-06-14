@@ -357,14 +357,41 @@ describe('getWorkstreamSessionKey', () => {
   });
   afterEach(() => restoreSessionEnv(saved));
 
-  test('returns null when no env keys set and no controlling TTY', { skip: process.stdin.isTTY ? 'real TTY present — probeControllingTtyToken may return non-null' : false }, () => {
-    // TTY and SSH_TTY are already cleared by beforeEach (clearSessionEnv).
-    // With no session env vars and no real controlling TTY (process.stdin.isTTY falsy),
-    // getWorkstreamSessionKey() must return null deterministically.
-    // Previously this used assert.ok(key === null || typeof key === 'string'), which is
-    // a tautology that always passes and never catches regressions.
-    const key = getWorkstreamSessionKey();
-    assert.strictEqual(key, null);
+  test('returns null when no env keys set and no controlling TTY', () => {
+    // Force a deterministic non-TTY environment so the probe path is exercised
+    // regardless of whether this runs in a real developer terminal.
+    //
+    // Rationale for require.cache bust: active-workstream-store.cjs caches the
+    // controlling-TTY probe result in module-level vars (cachedControllingTtyToken /
+    // didProbeControllingTtyToken).  By the time this test runs, an earlier
+    // pickActiveWorkstreamAdapter call has already set didProbeControllingTtyToken=true
+    // with whatever the real TTY probe returned.  Busting the module cache gives us a
+    // fresh module with zeroed-out state, so overriding process.stdin.isTTY=false
+    // actually reaches the isTTY branch and returns null.
+    //
+    // Residual: if a reset seam (e.g. resetControllingTtyCache()) is ever exposed by
+    // the module, replace the cache-bust with that call (tracked in #1191).
+    const modulePath = require.resolve('../gsd-core/bin/lib/active-workstream-store.cjs');
+    const savedIsTTY = process.stdin.isTTY;
+    try {
+      // Clear TTY/SSH_TTY (already done by beforeEach, but be explicit).
+      delete process.env.TTY;
+      delete process.env.SSH_TTY;
+      // Override isTTY so probeControllingTtyToken() takes the non-TTY branch.
+      Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true, writable: true });
+      // Bust the module cache so didProbeControllingTtyToken resets to false.
+      delete require.cache[modulePath];
+      const fresh = require(modulePath);
+      const key = fresh.getWorkstreamSessionKey();
+      assert.strictEqual(key, null);
+    } finally {
+      // Restore isTTY and module cache entry.
+      Object.defineProperty(process.stdin, 'isTTY', { value: savedIsTTY, configurable: true, writable: true });
+      delete require.cache[modulePath];
+      // Re-prime the cache with the original module instance so the rest of
+      // this describe block continues to use the top-level import binding.
+      require(modulePath);
+    }
   });
 
   test('returns gsd-session-key prefixed key for GSD_SESSION_KEY', () => {

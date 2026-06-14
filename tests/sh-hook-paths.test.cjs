@@ -153,4 +153,68 @@ describe('bugs #2045 #2046: .sh hook paths must be absolute and quoted', () => {
       }
     });
   }
+
+  // ── Tests 5-7: GLOBAL-install branch (isGlobal=true) for each .sh hook ─────
+  // The #2045 path-with-spaces bug originally lived in the global-install branch
+  // of hook registration.  These tests call buildHookCommand with isGlobal:true
+  // for each .sh hook on both linux and win32 and assert:
+  //   (a) the command is non-empty
+  //   (b) bash is used as the runner on linux (not bare concatenation)
+  //   (c) the configDir with spaces is wrapped in double quotes
+  //   (d) the quoted path is absolute (not a relative ".claude/..." fragment)
+  //
+  // A regression that reintroduces bare string concatenation on the isGlobal
+  // branch will produce e.g. `bash /home/first last/.claude/hooks/...` (no
+  // quotes), which fails assertion (c) and makes these tests go RED.
+
+  for (const { name } of SH_HOOKS) {
+    describe(`${name} — buildHookCommand isGlobal=true`, () => {
+      // ── Test 5: non-empty command on linux (global) ────────────────────────
+      test(`linux isGlobal: returns non-empty command`, () => {
+        const cmd = buildHookCommand(TEST_CONFIG_DIR, name, {
+          platform: 'linux', runtime: 'claude', isGlobal: true,
+        });
+        assert.ok(
+          typeof cmd === 'string' && cmd.length > 0,
+          `buildHookCommand(isGlobal=true) must return a non-empty string for ${name} on linux. Got: ${String(cmd)}`
+        );
+      });
+
+      // ── Test 6: bash runner present on linux (global) ─────────────────────
+      test(`linux isGlobal: command delegates to bash runner (not bare concatenation)`, () => {
+        const cmd = buildHookCommand(TEST_CONFIG_DIR, name, {
+          platform: 'linux', runtime: 'claude', isGlobal: true,
+        });
+        // Must contain 'bash' — bare concatenation produces "bash /path with space/..."
+        // which crashes the shell; the fix puts the path in quotes.
+        assert.ok(
+          /\bbash\b/.test(cmd),
+          `buildHookCommand(isGlobal=true) must include "bash" runner for ${name} on linux. Got: ${cmd}`
+        );
+      });
+
+      // ── Test 7: absolute, double-quoted configDir on both platforms (global) ─
+      // Uses SPACED_CONFIG_DIR (contains a space) to ensure the test goes RED
+      // when bare concatenation is reintroduced: `bash /home/first last/...`
+      // fails the `cmd.includes('"' + SPACED_CONFIG_DIR)` check.
+      for (const platform of ['linux', 'win32']) {
+        test(`${platform} isGlobal: configDir is absolute and double-quoted (guards #2045 global path)`, () => {
+          const cmd = buildHookCommand(SPACED_CONFIG_DIR, name, {
+            platform, runtime: 'claude', isGlobal: true,
+          });
+          assert.ok(
+            cmd.includes(`"${SPACED_CONFIG_DIR}`),
+            `buildHookCommand(isGlobal=true) must embed configDir inside double quotes for ${name} on ${platform}. ` +
+            `Got: ${cmd}`
+          );
+          const quotedPath = cmd.match(/"([^"]+)"/)?.[1] ?? '';
+          assert.ok(
+            path.isAbsolute(quotedPath),
+            `The quoted path in buildHookCommand(isGlobal=true) output must be absolute for ${name} on ${platform}. ` +
+            `Got quoted segment: "${quotedPath}" in: ${cmd}`
+          );
+        });
+      }
+    });
+  }
 });

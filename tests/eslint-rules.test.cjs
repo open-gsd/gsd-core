@@ -711,4 +711,104 @@ describe('no-tautological-assert rule', () => {
       ],
     });
   });
+
+  // ── Fix #3: true || cond (left-side true) ────────────────────────────────
+
+  test('invalid: assert.ok(true || x) — left side is literal true (always short-circuits)', () => {
+    ruleTester.run('no-tautological-assert', noTautologicalAssert, {
+      valid: [],
+      invalid: [
+        {
+          code: `
+            const assert = require('node:assert/strict');
+            assert.ok(true || x);
+          `,
+          filename: 'tests/foo.test.cjs',
+          errors: [{ messageId: 'tautologicalTruthiness' }],
+        },
+      ],
+    });
+  });
+
+  test('invalid: assert(true || y) — bare assert, left side is literal true', () => {
+    ruleTester.run('no-tautological-assert', noTautologicalAssert, {
+      valid: [],
+      invalid: [
+        {
+          code: `
+            const assert = require('node:assert');
+            assert(true || y);
+          `,
+          filename: 'tests/foo.test.cjs',
+          errors: [{ messageId: 'tautologicalTruthiness' }],
+        },
+      ],
+    });
+  });
+
+  // ── Fix #4: empty [] / {} deep-equality ──────────────────────────────────
+
+  test('invalid: assert.deepStrictEqual([], []) — two empty arrays are always deep-equal', () => {
+    ruleTester.run('no-tautological-assert', noTautologicalAssert, {
+      valid: [],
+      invalid: [
+        {
+          code: `
+            const assert = require('node:assert/strict');
+            assert.deepStrictEqual([], []);
+          `,
+          filename: 'tests/foo.test.cjs',
+          errors: [{ messageId: 'tautologicalEquality' }],
+        },
+      ],
+    });
+  });
+
+  test('invalid: assert.deepStrictEqual({}, {}) — two empty objects are always deep-equal', () => {
+    ruleTester.run('no-tautological-assert', noTautologicalAssert, {
+      valid: [],
+      invalid: [
+        {
+          code: `
+            const assert = require('node:assert/strict');
+            assert.deepStrictEqual({}, {});
+          `,
+          filename: 'tests/foo.test.cjs',
+          errors: [{ messageId: 'tautologicalEquality' }],
+        },
+      ],
+    });
+  });
+
+  // ── Conservative: non-empty arrays/objects must NOT be flagged ────────────
+
+  test('valid: assert.deepStrictEqual([1], [2]) — non-empty arrays with different content are not flagged', () => {
+    ruleTester.run('no-tautological-assert', noTautologicalAssert, {
+      valid: [
+        {
+          code: `
+            const assert = require('node:assert/strict');
+            assert.deepStrictEqual([1], [2]);
+          `,
+          filename: 'tests/foo.test.cjs',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: assert.deepStrictEqual(got, expected) — identifier arguments are not flagged', () => {
+    ruleTester.run('no-tautological-assert', noTautologicalAssert, {
+      valid: [
+        {
+          code: `
+            const assert = require('node:assert/strict');
+            assert.deepStrictEqual(got, expected);
+          `,
+          filename: 'tests/foo.test.cjs',
+        },
+      ],
+      invalid: [],
+    });
+  });
 });

@@ -259,10 +259,21 @@ function shouldRunFullSuite(changedFiles) {
 }
 
 function listTestFiles(repoRoot) {
-  return readdirSync(path.join(repoRoot, 'tests'))
-    .filter(file => file.endsWith('.test.cjs'))
-    .map(file => `tests/${file}`)
-    .sort();
+  const results = [];
+  function walk(dir, relBase) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (entry.name === 'node_modules') continue;
+        const nextRel = relBase ? `${relBase}/${entry.name}` : entry.name;
+        walk(path.join(dir, entry.name), nextRel);
+      } else if (entry.name.endsWith('.test.cjs')) {
+        const rel = relBase ? `${relBase}/${entry.name}` : entry.name;
+        results.push(`tests/${rel}`);
+      }
+    }
+  }
+  walk(path.join(repoRoot, 'tests'), '');
+  return results.sort();
 }
 
 /**
@@ -531,6 +542,7 @@ module.exports = {
   buildForwardGraph,
   buildReverseIndex,
   buildTransitiveReverseIndex,
+  listTestFiles,
   parseRelativeSpecifiers,
   pickAffectedTests,
   resolveBaseRef,

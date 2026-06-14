@@ -7,6 +7,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 
 const {
+  listTestFiles,
   parseRelativeSpecifiers,
   pickAffectedTests,
   resolveRunPlan,
@@ -689,5 +690,46 @@ test('regression(delete-only-test): deleting a test file does not trigger widen 
     plan.suite,
     'unit',
     `Delete-only test-file diff must run unit smoke, got suite:${plan.suite}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// listTestFiles — recurse into subdirectories (finding #2)
+// ---------------------------------------------------------------------------
+
+test('listTestFiles: subdir test files are included and selectable by pickAffectedTests', (t) => {
+  // Arrange: fixture with a root-level test AND a subdirectory test (mirrors
+  // tests/dispatch/, tests/observability/, tests/installer-migrations/).
+  const dir = makeFixture({
+    'tests/root.test.cjs': `'use strict';\n// root level test\n`,
+    'tests/dispatch/agent-dispatch.test.cjs': `'use strict';\nconst lib = require('../../gsd-core/bin/lib/dispatch.cjs');\n`,
+    'gsd-core/bin/lib/dispatch.cjs': `'use strict';\nmodule.exports = { dispatch: true };\n`,
+  });
+  t.after(() => cleanup(dir));
+
+  // Act: listTestFiles must recurse and return the subdir test with forward slashes
+  const files = listTestFiles(dir);
+
+  assert.ok(
+    files.includes('tests/dispatch/agent-dispatch.test.cjs'),
+    `Expected tests/dispatch/agent-dispatch.test.cjs in listTestFiles output, got: ${JSON.stringify(files)}`,
+  );
+  assert.ok(
+    files.includes('tests/root.test.cjs'),
+    `Expected tests/root.test.cjs in listTestFiles output, got: ${JSON.stringify(files)}`,
+  );
+
+  // The set membership check that allTestsSet.has('tests/dispatch/...') must succeed
+  // so that a directly-changed subdir test is not silently dropped.
+  const reverseIndex = buildTransitiveReverseIndex(dir, files);
+  const selected = pickAffectedTests(
+    ['tests/dispatch/agent-dispatch.test.cjs'],
+    files,
+    reverseIndex,
+  );
+
+  assert.ok(
+    selected.includes('tests/dispatch/agent-dispatch.test.cjs'),
+    `Directly-changed subdir test must be selected; got: ${JSON.stringify(selected)}`,
   );
 });
