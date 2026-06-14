@@ -121,17 +121,46 @@ function extractShellBlocks(content) {
 }
 
 /**
- * Build a PATH with no gsd-tools binary so the PATH fallback branch is skipped.
- * Returns the isolated PATH string (system paths minus any dir containing gsd-tools).
+ * Build a PATH with no gsd-tools binary so the PATH fallback branch is skipped,
+ * while guaranteeing that a bare `node` lookup still resolves regardless of whether
+ * the real node binary co-locates with a global gsd-tools shim (e.g. fnm/nvm/Homebrew).
+ *
+ * Strategy (POSIX only): create a temp dir containing only a `node` symlink →
+ * process.execPath, prepend it to the gsd-tools-filtered PATH.  The filtered
+ * PATH excludes any directory that contains an executable `gsd-tools`.
+ *
+ * On Windows the co-location bug does not apply (gsd-tools resolves via .cmd/.ps1,
+ * not the bare binary probed here), and symlinks may require elevated privileges,
+ * so we skip the symlink step entirely on that platform.
+ *
+ * The caller is responsible for cleaning up `result.nodeBinDir` when non-null
+ * (pass it to `cleanup()` in a `t.after` or `finally` block).
+ *
+ * @returns {{ isolatedPath: string, nodeBinDir: string|null }}
  */
 function buildIsolatedPath() {
-  return (process.env.PATH || '/usr/bin:/bin')
+  const filteredPath = (process.env.PATH || '/usr/bin:/bin')
     .split(path.delimiter)
     .filter((p) => {
       try { fs.accessSync(path.join(p, 'gsd-tools'), fs.constants.X_OK); return false; }
       catch { return true; }
     })
     .join(path.delimiter);
+
+  // Windows: no symlink (see JSDoc above); callers must handle nodeBinDir === null.
+  if (process.platform === 'win32') {
+    return { isolatedPath: filteredPath, nodeBinDir: null };
+  }
+
+  const nodeBinDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-891-node-'));
+  try {
+    fs.symlinkSync(process.execPath, path.join(nodeBinDir, 'node'));
+  } catch (err) {
+    cleanup(nodeBinDir);
+    throw err;
+  }
+
+  return { isolatedPath: nodeBinDir + path.delimiter + filteredPath, nodeBinDir };
 }
 
 describe('bug-891: non-Claude runtime home fallback arms', () => {
@@ -179,11 +208,83 @@ describe('bug-891: non-Claude runtime home fallback arms', () => {
     }
   });
 
+  // ── (B0) Regression: buildIsolatedPath keeps node resolvable when node and ──
+  //        gsd-tools co-locate in the same PATH directory.                     ─
+  //
+  // Machine-independence guarantee: PATH is set to ONLY two controlled dirs —
+  // fakeBinDir (holds both fake gsd-tools AND a node symlink) plus a fresh
+  // empty dir (no executables at all). The real system PATH is NOT appended.
+  //
+  //   Old logic: filters out fakeBinDir → only the empty dir remains → node
+  //              UNresolvable → assertion (ii) FAILS (true-red on any machine).
+  //   New logic: prepends its own nodeBinDir → node resolvable despite fakeBinDir
+  //              being filtered → both assertions pass.
+  test(
+    '(B0) buildIsolatedPath: node is resolvable and gsd-tools is not when they share a PATH dir',
+    { skip: process.platform === 'win32' ? 'POSIX-only co-location scenario' : false },
+    (t) => {
+      // Build a fake bin dir that contains BOTH a gsd-tools executable and a node
+      // symlink, simulating a dev setup (fnm/nvm/Homebrew) where both land in the
+      // same bin directory.
+      const fakeBinDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-891-colocated-'));
+      // A second fresh empty dir — contains neither gsd-tools nor node.
+      const emptyDir   = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-891-empty-'));
+      t.after(() => cleanup(fakeBinDir));
+      t.after(() => cleanup(emptyDir));
+
+      // Fake gsd-tools shim (executable file)
+      const fakeGsdTools = path.join(fakeBinDir, 'gsd-tools');
+      fs.writeFileSync(fakeGsdTools, '#!/bin/sh\necho fake-gsd-tools\n');
+      fs.chmodSync(fakeGsdTools, 0o755);
+
+      // node symlink pointing at the real interpreter (co-located with gsd-tools)
+      fs.symlinkSync(process.execPath, path.join(fakeBinDir, 'node'));
+
+      // Set PATH to ONLY the two controlled dirs (no real system dirs).
+      // This makes the test machine-independent: on any machine, the only place
+      // node *could* come from before the fix is fakeBinDir — which gets filtered.
+      const origPath = process.env.PATH;
+      process.env.PATH = fakeBinDir + path.delimiter + emptyDir;
+      let result;
+      try {
+        result = buildIsolatedPath();
+      } finally {
+        process.env.PATH = origPath;
+      }
+      t.after(() => cleanup(result.nodeBinDir));
+
+      const returnedDirs = result.isolatedPath.split(path.delimiter);
+
+      // (i) gsd-tools must NOT be resolvable on the returned PATH
+      const gsdToolsResolvable = returnedDirs.some((dir) => {
+        try { fs.accessSync(path.join(dir, 'gsd-tools'), fs.constants.X_OK); return true; }
+        catch { return false; }
+      });
+      assert.equal(
+        gsdToolsResolvable,
+        false,
+        'gsd-tools must not be resolvable on the isolated PATH (home-fallback would be bypassed)',
+      );
+
+      // (ii) node must BE resolvable on the returned PATH (the new nodeBinDir makes it so)
+      const nodeResolvable = returnedDirs.some((dir) => {
+        try { fs.accessSync(path.join(dir, 'node'), fs.constants.X_OK); return true; }
+        catch { return false; }
+      });
+      assert.equal(
+        nodeResolvable,
+        true,
+        'node must be resolvable on the isolated PATH (launcher runs: node "$GSD_TOOLS" "$@")',
+      );
+    },
+  );
+
   // ── (B) Behavioral: HERMES_HOME stub is resolved ──────────────────────────
   test('(B) gsd_run resolves ${HERMES_HOME}/gsd-core/bin/ stub when set and local+PATH both miss', () => {
     const fakeHome       = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-891-home-b-'));
     const fakeHermesHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-891-hermes-'));
     const fakeRuntime    = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-891-rt-'));
+    const { isolatedPath, nodeBinDir } = buildIsolatedPath();
     try {
       const hermesBinDir = path.join(fakeHermesHome, 'gsd-core', 'bin');
       fs.mkdirSync(hermesBinDir, { recursive: true });
@@ -212,7 +313,7 @@ describe('bug-891: non-Claude runtime home fallback arms', () => {
 
       const stdout = execFileSync('bash', [scriptPath], {
         encoding: 'utf8',
-        env: { ...process.env, PATH: buildIsolatedPath(), HOME: fakeHome, HERMES_HOME: fakeHermesHome },
+        env: { ...process.env, PATH: isolatedPath, HOME: fakeHome, HERMES_HOME: fakeHermesHome },
       });
 
       const normStdout = stdout.replace(/\\/g, '/');
@@ -228,6 +329,7 @@ describe('bug-891: non-Claude runtime home fallback arms', () => {
       cleanup(fakeHome);
       cleanup(fakeHermesHome);
       cleanup(fakeRuntime);
+      if (nodeBinDir) cleanup(nodeBinDir);
     }
   });
 
@@ -235,6 +337,7 @@ describe('bug-891: non-Claude runtime home fallback arms', () => {
   test('(C) gsd_run resolves $HOME/.hermes/gsd-core/bin/ stub when HERMES_HOME is unset', () => {
     const fakeHome    = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-891-home-'));
     const fakeRuntime = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-891-rt2-'));
+    const { isolatedPath, nodeBinDir } = buildIsolatedPath();
     try {
       const hermesBinDir = path.join(fakeHome, '.hermes', 'gsd-core', 'bin');
       fs.mkdirSync(hermesBinDir, { recursive: true });
@@ -260,7 +363,7 @@ describe('bug-891: non-Claude runtime home fallback arms', () => {
 
       const stdout = execFileSync('bash', [scriptPath], {
         encoding: 'utf8',
-        env: { ...process.env, PATH: buildIsolatedPath(), HOME: fakeHome },
+        env: { ...process.env, PATH: isolatedPath, HOME: fakeHome },
       });
 
       const normStdout = stdout.replace(/\\/g, '/');
@@ -275,6 +378,7 @@ describe('bug-891: non-Claude runtime home fallback arms', () => {
     } finally {
       cleanup(fakeHome);
       cleanup(fakeRuntime);
+      if (nodeBinDir) cleanup(nodeBinDir);
     }
   });
 
