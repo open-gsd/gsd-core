@@ -3106,7 +3106,9 @@ explicit reviewer flags -> --all -> review.default_reviewers -> all detected rev
 | `backstop` | Intent recorded, needs a held-out/property-based test | Lifted into `must_haves.truths` as a non-inferable check |
 | `unresolved` | Deferred | Soft-gates the spec; row stamped `⚠ Edge unresolved — planner must treat as assumption` |
 
-The resolved edges populate a `## Edge Coverage` section in `SPEC.md`. Unresolved *applicable* edges trigger a soft gate (Resolve / Write-anyway-flagged / Keep-probing) rather than a hard block. Under `--auto`, the probe **never auto-dismisses** — it auto-covers where a defensible criterion exists, otherwise auto-backstops, and logs `[auto] edge coverage: C covered, B backstop, U unresolved`.
+When a requirement's prose matches **no** shape cue, the probe does not silently drop it (#1110): it emits a single `unclassified — review manually` candidate so the zero-cue requirement is surfaced for the author to resolve like any other (specify / dismiss-with-reason / defer) — a manual-review nudge, not a hard block.
+
+The resolved edges populate a `## Edge Coverage` section in `SPEC.md`. Unresolved *applicable* edges trigger a soft gate (Resolve / Write-anyway-flagged / Keep-probing) rather than a hard block. Under `--auto`, the probe **never auto-dismisses** — it auto-covers where a defensible criterion exists, otherwise auto-backstops, and logs `[auto] edge coverage: C covered, B backstop, U unresolved`. The one exception is an `unclassified` candidate: `--auto` leaves it **`unresolved`** (surfaced as a flagged assumption), never auto-`backstop` — a missing shape is not evidence an edge exists, so minting a held-out edge obligation would be a false claim.
 
 The load-bearing wire is the `plan-phase` lift: `covered` and `backstop` edges become `must_haves.truths` the verifier can check, so the section is not merely documentation.
 
@@ -3117,5 +3119,6 @@ The load-bearing wire is the `plan-phase` lift: `covered` and `backstop` edges b
 - REQ-EDGE-04: An unresolved applicable edge MUST trigger the soft gate; write-anyway stamps the row as a planner assumption.
 - REQ-EDGE-05: `--auto` MUST never auto-dismiss — auto-cover or auto-backstop only.
 - REQ-EDGE-06: `plan-phase` MUST lift `covered` criteria and `backstop` notes into `must_haves.truths`.
+- REQ-EDGE-07: A requirement whose prose matches no shape cue MUST surface an `unclassified — review manually` candidate (never silently dropped); `--auto` MUST leave it `unresolved`, never auto-`backstop`.
 
 **Reference:** [Edge Probe](../gsd-core/references/edge-probe.md)

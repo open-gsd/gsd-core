@@ -313,6 +313,14 @@ For each Requirement gathered so far:
 otherwise auto-`backstop` (never auto-dismiss — a wrong dismissal is the exact silent
 failure being eliminated). Log: `[auto] edge coverage: C covered, B backstop, U unresolved`.
 
+**`unclassified` exception (#1110):** `--auto` leaves an `unclassified` candidate
+**`unresolved`** (the soft gate surfaces it as a flagged planner assumption) — it never
+auto-`backstop`s it. A missing shape is not evidence an edge exists, so minting a held-out
+edge obligation on a requirement that may be genuinely edge-free would be a false claim and
+risks a vacuous edge test. Leaving it `unresolved` keeps the zero-cue requirement visible
+(never a silent drop) without fabricating an edge — which is exactly #1110's purpose: surface
+it for review, do not auto-handle it.
+
 Populate the `## Edge Coverage` section of SPEC.md from the resolved edges.
 
 ## Step 6: Generate SPEC.md
