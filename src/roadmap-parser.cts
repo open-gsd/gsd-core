@@ -402,7 +402,7 @@ function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null, p
       console.warn(
         '[gsd] Deprecated: free-form ROADMAP.md detected (no versioned milestone headings). ' +
         'The project has phase_id_convention set to "milestone-prefixed" in config.json but the ' +
-        'ROADMAP does not use versioned milestone headings. Run `gsd roadmap upgrade --apply` to migrate.'
+        'ROADMAP does not use versioned milestone headings. Run `gsd-tools roadmap upgrade --convention milestone-prefixed` to migrate (dry-run by default).'
       );
     }
 
