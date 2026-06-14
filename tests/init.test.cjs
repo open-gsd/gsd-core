@@ -1655,5 +1655,228 @@ describe('withProjectRoot project identity', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ADR-0006: init handlers honor GSD_WORKSTREAM (planningPaths/planningDir consumption)
+// Issue #1189 — regression guard: workstream-scoped paths must be resolved
+// through planningDir(cwd) which picks up GSD_WORKSTREAM from env.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('init handlers honor GSD_WORKSTREAM (ADR-0006 planningPaths consumption)', () => {
+  const { seedWorkstream } = require('./fixtures/index.cjs');
+
+  /**
+   * Build a workstream-scoped fixture under tmpDir.
+   * Only workstream-scoped files exist; flat .planning/ has only the phases dir.
+   */
+  function buildWsFixture(tmpDir, ws = 'wsx') {
+    const wsDir = seedWorkstream(tmpDir, { name: ws });
+    // Write the planning files ONLY under the workstream path
+    fs.writeFileSync(
+      path.join(wsDir, 'STATE.md'),
+      '# State\n'
+    );
+    fs.writeFileSync(
+      path.join(wsDir, 'ROADMAP.md'),
+      '# Roadmap\n\n### Phase 1: Setup\n**Goal:** Bootstrap\n**Requirements**: R-01\n**Plans:** 1 plans\n'
+    );
+    fs.writeFileSync(
+      path.join(wsDir, 'config.json'),
+      JSON.stringify({})
+    );
+    // Create a phase plan under the workstream
+    fs.mkdirSync(path.join(wsDir, 'phases', '01-setup'), { recursive: true });
+    fs.writeFileSync(path.join(wsDir, 'phases', '01-setup', '01-01-PLAN.md'), '# Plan\n');
+    return wsDir;
+  }
+
+  // ── Test 1: execute-phase — workstream-scoped path fields (happy) ─────────
+
+  describe('execute-phase — workstream-scoped path fields', () => {
+    let tmpDir;
+
+    beforeEach(() => {
+      tmpDir = createFixture();
+      buildWsFixture(tmpDir, 'wsx');
+    });
+
+    afterEach(() => {
+      cleanup(tmpDir);
+    });
+
+    test('execute-phase emits workstream-scoped state/roadmap/config paths (ADR-0006)', () => {
+      const result = runGsdTools('init execute-phase 1', tmpDir, { GSD_WORKSTREAM: 'wsx', GSD_PROJECT: '' });
+      assert.ok(result.success, `Command failed: ${result.error}`);
+
+      const output = JSON.parse(result.output);
+      // Positive: paths must be workstream-scoped
+      assert.strictEqual(output.state_path, '.planning/workstreams/wsx/STATE.md');
+      assert.strictEqual(output.roadmap_path, '.planning/workstreams/wsx/ROADMAP.md');
+      assert.strictEqual(output.config_path, '.planning/workstreams/wsx/config.json');
+      // Goodhart both-directions: must NOT be the flat form
+      assert.notStrictEqual(output.state_path, '.planning/STATE.md');
+      assert.notStrictEqual(output.roadmap_path, '.planning/ROADMAP.md');
+      assert.notStrictEqual(output.config_path, '.planning/config.json');
+      // phase_dir is emitted and must be workstream-scoped
+      assert.ok(
+        output.phase_dir && output.phase_dir.includes('workstreams/wsx'),
+        `phase_dir should include workstreams/wsx, got: ${output.phase_dir}`
+      );
+    });
+
+    test('execute-phase WITHOUT GSD_WORKSTREAM resolves flat paths (boundary control)', () => {
+      // Flat fixture: the workstream fixture exists but we do NOT pass GSD_WORKSTREAM.
+      // Handler should resolve flat .planning/ → state/roadmap/config are flat,
+      // and the workstream phase is NOT found (flat phases/ is empty).
+      const result = runGsdTools('init execute-phase 1', tmpDir, { GSD_WORKSTREAM: '', GSD_PROJECT: '' });
+      assert.ok(result.success, `Command failed: ${result.error}`);
+
+      const output = JSON.parse(result.output);
+      // Flat paths must be returned when no workstream is active
+      assert.strictEqual(output.state_path, '.planning/STATE.md');
+      assert.strictEqual(output.roadmap_path, '.planning/ROADMAP.md');
+      assert.strictEqual(output.config_path, '.planning/config.json');
+      // Phase is NOT found in flat .planning/phases/ (only exists under workstream)
+      assert.strictEqual(output.phase_found, false,
+        'phase should not be found in flat path when only workstream fixture exists');
+    });
+  });
+
+  // ── Test 2: milestone-op — reads workstream-scoped roadmap/state/phases ───
+
+  describe('milestone-op — reads workstream-scoped planning files', () => {
+    let tmpDir;
+
+    beforeEach(() => {
+      // Do NOT call createFixture (which would add flat .planning/phases/).
+      // Create a bare temp dir so files only exist under the workstream path.
+      const os = require('os');
+      tmpDir = fs.mkdtempSync(require('path').join(os.tmpdir(), 'gsd-test-'));
+      buildWsFixture(tmpDir, 'wsx');
+    });
+
+    afterEach(() => {
+      cleanup(tmpDir);
+    });
+
+    test('milestone-op with GSD_WORKSTREAM finds roadmap/state/phases in workstream scope (ADR-0006)', () => {
+      const result = runGsdTools('init milestone-op', tmpDir, { GSD_WORKSTREAM: 'wsx', GSD_PROJECT: '' });
+      assert.ok(result.success, `Command failed: ${result.error}`);
+
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.roadmap_exists, true,
+        'roadmap_exists must be true: ROADMAP.md exists only under workstream path');
+      assert.strictEqual(output.state_exists, true,
+        'state_exists must be true: STATE.md exists only under workstream path');
+      assert.strictEqual(output.phases_dir_exists, true,
+        'phases_dir_exists must be true: phases/ exists under workstream path');
+    });
+
+    test('milestone-op WITHOUT GSD_WORKSTREAM misses workstream-only files (negative discrimination)', () => {
+      const result = runGsdTools('init milestone-op', tmpDir, { GSD_WORKSTREAM: '', GSD_PROJECT: '' });
+      assert.ok(result.success, `Command failed: ${result.error}`);
+
+      const output = JSON.parse(result.output);
+      // Handler looked at flat .planning/ — no files there → all false
+      assert.strictEqual(output.roadmap_exists, false,
+        'roadmap_exists must be false: ROADMAP.md is only under workstream, not flat .planning/');
+      assert.strictEqual(output.state_exists, false,
+        'state_exists must be false: STATE.md is only under workstream, not flat .planning/');
+    });
+  });
+
+  // ── Test 3: plan-phase — workstream-scoped resolution ────────────────────
+
+  describe('plan-phase — workstream-scoped path resolution', () => {
+    let tmpDir;
+
+    beforeEach(() => {
+      tmpDir = createFixture();
+      buildWsFixture(tmpDir, 'wsx');
+    });
+
+    afterEach(() => {
+      cleanup(tmpDir);
+    });
+
+    test('plan-phase emits workstream-scoped state/roadmap/requirements paths (ADR-0006)', () => {
+      const result = runGsdTools('init plan-phase 1', tmpDir, { GSD_WORKSTREAM: 'wsx', GSD_PROJECT: '' });
+      assert.ok(result.success, `Command failed: ${result.error}`);
+
+      const output = JSON.parse(result.output);
+      // Path fields must be scoped to the workstream
+      assert.strictEqual(output.state_path, '.planning/workstreams/wsx/STATE.md');
+      assert.strictEqual(output.roadmap_path, '.planning/workstreams/wsx/ROADMAP.md');
+      assert.strictEqual(output.requirements_path, '.planning/workstreams/wsx/REQUIREMENTS.md');
+      // Must NOT be flat
+      assert.notStrictEqual(output.state_path, '.planning/STATE.md');
+      assert.notStrictEqual(output.roadmap_path, '.planning/ROADMAP.md');
+      // phase_dir is workstream-scoped and phase is found
+      assert.strictEqual(output.phase_found, true);
+      assert.ok(
+        output.phase_dir && output.phase_dir.includes('workstreams/wsx'),
+        `phase_dir should include workstreams/wsx, got: ${output.phase_dir}`
+      );
+    });
+
+    test('plan-phase WITHOUT GSD_WORKSTREAM resolves flat paths (boundary control)', () => {
+      const result = runGsdTools('init plan-phase 1', tmpDir, { GSD_WORKSTREAM: '', GSD_PROJECT: '' });
+      assert.ok(result.success, `Command failed: ${result.error}`);
+
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.state_path, '.planning/STATE.md');
+      assert.strictEqual(output.roadmap_path, '.planning/ROADMAP.md');
+      assert.strictEqual(output.requirements_path, '.planning/REQUIREMENTS.md');
+      // Phase only exists under workstream, so not found via flat path
+      assert.strictEqual(output.phase_found, false);
+    });
+  });
+
+  // ── Test 4: phase-op — workstream-scoped phase resolution ────────────────
+
+  describe('phase-op — workstream-scoped phase resolution', () => {
+    let tmpDir;
+
+    beforeEach(() => {
+      tmpDir = createFixture();
+      buildWsFixture(tmpDir, 'wsx');
+    });
+
+    afterEach(() => {
+      cleanup(tmpDir);
+    });
+
+    test('phase-op with GSD_WORKSTREAM finds phase in workstream scope and emits scoped paths (ADR-0006)', () => {
+      const result = runGsdTools('init phase-op 1', tmpDir, { GSD_WORKSTREAM: 'wsx', GSD_PROJECT: '' });
+      assert.ok(result.success, `Command failed: ${result.error}`);
+
+      const output = JSON.parse(result.output);
+      // Phase is found via workstream-scoped phases dir
+      assert.strictEqual(output.phase_found, true,
+        'phase_found must be true: phase exists under workstream path');
+      assert.ok(
+        output.phase_dir && output.phase_dir.includes('workstreams/wsx'),
+        `phase_dir should include workstreams/wsx, got: ${output.phase_dir}`
+      );
+      // Path fields are workstream-scoped
+      assert.strictEqual(output.state_path, '.planning/workstreams/wsx/STATE.md');
+      assert.strictEqual(output.roadmap_path, '.planning/workstreams/wsx/ROADMAP.md');
+      assert.notStrictEqual(output.state_path, '.planning/STATE.md');
+    });
+
+    test('phase-op WITHOUT GSD_WORKSTREAM does not find workstream-only phase (negative discrimination)', () => {
+      const result = runGsdTools('init phase-op 1', tmpDir, { GSD_WORKSTREAM: '', GSD_PROJECT: '' });
+      assert.ok(result.success, `Command failed: ${result.error}`);
+
+      const output = JSON.parse(result.output);
+      // Phase only exists under workstream path — flat path has no matching phase dir
+      assert.strictEqual(output.phase_found, false,
+        'phase_found must be false: phase only exists under workstream path');
+      // Flat paths are emitted
+      assert.strictEqual(output.state_path, '.planning/STATE.md');
+      assert.strictEqual(output.roadmap_path, '.planning/ROADMAP.md');
+    });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // roadmap analyze command
 // ─────────────────────────────────────────────────────────────────────────────
