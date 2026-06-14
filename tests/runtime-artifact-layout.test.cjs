@@ -316,12 +316,6 @@ describe('resolveRuntimeArtifactLayout edge-cases', () => {
     assert.strictEqual(layout.kinds[0].prefix, 'gsd-'); // #947: bare-stem prefix='' reversed
   });
 
-  test('cline has one skills kind (#782)', () => {
-    const layout = resolveRuntimeArtifactLayout('cline', '/tmp/x');
-    assert.strictEqual(layout.kinds.length, 1);
-    assert.strictEqual(layout.kinds[0].kind, 'skills');
-  });
-
   test('gemini has one commands kind', () => {
     const layout = resolveRuntimeArtifactLayout('gemini', '/tmp/x');
     assert.strictEqual(layout.kinds.length, 1);

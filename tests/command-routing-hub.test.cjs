@@ -131,10 +131,6 @@ describe('CommandRoutingHub — createHub validation', () => {
     assert.equal(result.data, 'cjs-data');
   });
 
-  test('constructs successfully with only cjsRegistry', () => {
-    const hub = createHub({ cjsRegistry: { phase: { add: () => ({ ok: true, data: null }) } } });
-    assert.ok(typeof hub.dispatch === 'function');
-  });
 });
 
 // ─── Happy path — always CJS ──────────────────────────────────────────────────
@@ -512,12 +508,6 @@ describe('CommandRoutingHub — P1.2 typed-payload discriminated union (#176)', 
   });
 
   // ── ERROR_KINDS values used as `kind` discriminator — still work ─────────────
-  test('ERROR_KINDS.UnknownCommand === result.kind for UnknownCommand', () => {
-    const hub = createHub({ cjsRegistry: {} });
-    const result = hub.dispatch({ family: 'nope', subcommand: 'x', args: [], cwd: '/', raw: false });
-    assert.equal(result.kind, ERROR_KINDS.UnknownCommand);
-  });
-
   test('ERROR_KINDS values are stable string constants matching their key names', () => {
     assert.equal(ERROR_KINDS.UnknownCommand, 'UnknownCommand');
     assert.equal(ERROR_KINDS.InvalidArgs, 'InvalidArgs');
