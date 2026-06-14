@@ -185,13 +185,23 @@ Run this pass unless `plan_review.source_grounding` is `false`. It verifies ever
 
 1. **Enumerate cited symbols.** List every referenced symbol by kind, quoting the plan line for each (coverage must be auditable): decorators (`@name`), classes/methods (`Class.method`), functions (`module.function`), CLI flags (`--name`), file paths, dataclass/struct fields.
 2. **Exclude new artifacts.** Do NOT verify symbols the plan declares under its "Artifacts this phase produces" section — those are created by this phase, not references to existing code.
-3. **Resolve each remaining symbol** using the adapter named by `plan_review.source_grounding_authority` (default `grep`):
+3. **Resolve each remaining symbol** using the effective authority adapter (resolved deterministically — see step 4a):
    - `grep` — ripgrep / Read the source; confirm the name appears as a real declaration.
    - `intel` — consult `.planning/intel/API-SURFACE.md` / `api-map.json` (only when `intel.enabled`).
    Record one verdict per symbol: **VERIFIED** (quote `file:line`), **MISSING** (adapter can check this language/kind and the symbol is absent), **AMBIGUOUS** (multiple candidates), or **UNCHECKABLE** (adapter cannot analyze this language/kind — e.g. non-JS under `intel`, or any signature under `grep`). Never treat UNCHECKABLE as verified or missing.
-4. **Severity & gating:**
-   - **MISSING** at authority `grep`/`intel` → `needs-acknowledgement`: the plan proceeds only if the author confirms the symbol is genuinely new or dynamically resolved, and that acknowledgement is recorded. A hard block is reserved for higher-authority adapters (LSP/SCIP) that can prove absence.
-   - **AMBIGUOUS** → MEDIUM. **UNCHECKABLE** → INFO.
+4a. **Resolve effective authority** (deterministic — replaces manual `intel.enabled` reasoning):
+   ```bash
+   EFFECTIVE_AUTHORITY=$(gsd_run drift-guard authority --raw)
+   ```
+4. **Severity & gating** — classify each symbol's verdict using the seam (do not apply the table manually):
+   ```bash
+   # For each symbol, e.g.:
+   RESULT=$(gsd_run drift-guard severity --status <verdict> --authority "$EFFECTIVE_AUTHORITY")
+   # $RESULT is JSON: {"severity":"…","hardBlock":true|false}
+   ```
+   - `hardBlock: true` (HIGH at authority `lsp`/`scip`) — stops the review cycle immediately; do not proceed until the plan author resolves the missing symbol.
+   - `hardBlock: false`, severity `needs-acknowledgement` — plan proceeds only if the author confirms the symbol is genuinely new or dynamically resolved, and that acknowledgement is recorded.
+   - `AMBIGUOUS` → MEDIUM. `UNCHECKABLE` → INFO.
    - Signature mismatches cannot be asserted under `grep`/`intel`; report the signature as UNCHECKABLE.
 5. **Coverage block.** Append a "Verification coverage" section to `REVIEWS.md` listing every UNCHECKABLE/skipped symbol and why — a clean review must never silently mean "nothing was checked."
 
