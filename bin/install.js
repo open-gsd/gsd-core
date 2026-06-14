@@ -8314,6 +8314,10 @@ function uninstall(isGlobal, runtime = 'claude') {
       console.log(`  ${green}✓${reset} Removed scripts/lib/ GSD files`);
     }
   }
+  // Remove scripts/fix-slash-commands.cjs (#1223) — must come before the scripts/ rmdir
+  const fixSlashUninstallPath = path.join(targetDir, 'scripts', 'fix-slash-commands.cjs');
+  try { fs.unlinkSync(fixSlashUninstallPath); } catch (_) { /* best-effort */ }
+
   // If scripts/ dir is now empty, remove it too
   const scriptsUninstallDir = path.join(targetDir, 'scripts');
   if (fs.existsSync(scriptsUninstallDir)) {
@@ -9027,6 +9031,12 @@ function writeManifest(configDir, runtime = 'claude', options = {}) {
         manifest.files['scripts/lib/' + file] = fileHash(path.join(scriptsLibInstallDir, file));
       }
     }
+  }
+
+  // Track scripts/fix-slash-commands.cjs (top-level scripts/ file, not covered by changeset/lib loops)
+  const fixSlashInstallPath = path.join(configDir, 'scripts', 'fix-slash-commands.cjs');
+  if (fs.existsSync(fixSlashInstallPath)) {
+    manifest.files['scripts/fix-slash-commands.cjs'] = fileHash(fixSlashInstallPath);
   }
 
   fs.writeFileSync(path.join(configDir, MANIFEST_NAME), JSON.stringify(manifest, null, 2));
@@ -10418,6 +10428,25 @@ function install(isGlobal, runtime = 'claude', options = {}) {
       console.log(`  ${green}✓${reset} Installed scripts/changeset/ (changelog preview CLI)`);
     } else {
       failures.push('scripts/changeset/cli.cjs');
+    }
+  }
+
+  // Copy scripts/fix-slash-commands.cjs — required by gsd-core/bin/lib/command-roster.cjs
+  // at load time via require('../../../scripts/fix-slash-commands.cjs'). Without this file
+  // every gsd-tools command crashes with MODULE_NOT_FOUND (#1223).
+  // This copy is independent of scripts/changeset/ — it must land even when the
+  // changeset CLI source is absent.
+  {
+    const fixSlashSrc = path.join(src, 'scripts', 'fix-slash-commands.cjs');
+    const fixSlashDest = path.join(targetDir, 'scripts', 'fix-slash-commands.cjs');
+    fs.mkdirSync(path.join(targetDir, 'scripts'), { recursive: true });
+    if (!fs.existsSync(fixSlashSrc)) {
+      failures.push('scripts/fix-slash-commands.cjs (source missing from package — reinstall from npm)');
+    } else {
+      fs.copyFileSync(fixSlashSrc, fixSlashDest);
+      if (!verifyFileInstalled(fixSlashDest, 'scripts/fix-slash-commands.cjs')) {
+        failures.push('scripts/fix-slash-commands.cjs');
+      }
     }
   }
 
