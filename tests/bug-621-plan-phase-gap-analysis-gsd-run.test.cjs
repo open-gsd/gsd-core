@@ -35,10 +35,10 @@ const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf8');
 // ─── #621 regression: gap-analysis routes through gsd_run ────────────────────
 
 describe('plan-phase workflow: post-planning-gaps gap-analysis uses gsd_run launcher (#621)', () => {
-  test('gap-analysis call routes through gsd_run, not hardcoded node path', () => {
+  test('gap-analysis dispatches via gsd_run loop render-hooks plan:post (ADR-857 capability gate)', () => {
     assert.ok(
-      workflow.includes('gsd_run gap-analysis'),
-      'workflow must invoke gap-analysis via gsd_run, not a hardcoded node path'
+      workflow.includes('gsd_run loop render-hooks plan:post'),
+      'workflow must dispatch gap-analysis via gsd_run loop render-hooks plan:post, not a hardcoded node path or direct gsd_run gap-analysis call'
     );
   });
 
@@ -66,7 +66,7 @@ describe('plan-phase workflow: post-planning-gaps gap-analysis uses gsd_run laun
 
   test('post-planning-gaps block still gates on workflow.post_planning_gaps and preserves required args', () => {
     const hasGate = workflow.includes('workflow.post_planning_gaps');
-    const hasPhaseDir = workflow.includes('--phase-dir "${PHASE_DIR}"');
+    const hasPhaseDir = workflow.includes('gsd_run check ${hook.check.query} "${PHASE_DIR}" "${PHASE_REQ_IDS}"');
     const hasPickArg = workflow.includes('--pick phase_req_ids');
     assert.ok(
       hasGate,
@@ -74,7 +74,7 @@ describe('plan-phase workflow: post-planning-gaps gap-analysis uses gsd_run laun
     );
     assert.ok(
       hasPhaseDir,
-      'gap-analysis invocation must still pass --phase-dir "${PHASE_DIR}"'
+      'gap-analysis check dispatch must pass "${PHASE_DIR}" (and "${PHASE_REQ_IDS}") positionally to gsd_run check'
     );
     assert.ok(
       hasPickArg,

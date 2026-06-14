@@ -24,9 +24,11 @@ const { cleanup } = require('./helpers.cjs');
 const ROOT = path.join(__dirname, '..');
 const {
   getGlobalConfigDir,
+  getGlobalSkillsBase,
   resolveAntigravityGlobalDir,
   resolveKimiGlobalDir,
   resolveConfigHomeFromDescriptor,
+  resolveSkillsBaseFromDescriptor,
 } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'runtime-homes.cjs'));
 
 const HOME = os.homedir();
@@ -115,10 +117,10 @@ describe('descriptor-driven equivalence: defaults (no env vars, no probe hits)',
   for (const [runtime, expected] of Object.entries(GOLDEN_DEFAULTS).filter(
     ([r]) => r !== 'antigravity',
   )) {
-    test(`${runtime} default → ${expected}`, () => {
+    test(`${runtime} default resolves to its golden config dir`, () => {
       const saved = clearAllEnvKeys();
       try {
-        assert.strictEqual(getGlobalConfigDir(runtime), expected);
+        assert.strictEqual(getGlobalConfigDir(runtime), expected, `${runtime} default → ${expected}`);
       } finally {
         restoreEnvKeys(saved);
       }
@@ -632,6 +634,48 @@ describe('descriptor-driven equivalence: unknown runtime fallback', () => {
   });
 });
 
+describe('descriptor-driven global skills base', () => {
+  test('hermes skills base is derived from descriptor artifact layout', () => {
+    const saved = clearAllEnvKeys();
+    try {
+      assert.strictEqual(getGlobalSkillsBase('hermes'), path.join(HOME, '.hermes', 'skills', 'gsd'));
+    } finally {
+      restoreEnvKeys(saved);
+    }
+  });
+
+  test('kilo skills base is derived from configHome.skillsHome descriptor', () => {
+    const saved = clearAllEnvKeys();
+    try {
+      assert.strictEqual(getGlobalSkillsBase('kilo'), path.join(HOME, '.kilo', 'skills'));
+    } finally {
+      restoreEnvKeys(saved);
+    }
+  });
+
+  test('synthetic runtime skillsHome descriptor resolves without a runtime-name branch', () => {
+    const base = resolveSkillsBaseFromDescriptor(
+      {
+        kind: 'xdg',
+        name: 'futurecli',
+        env: ['FUTURE_CONFIG_DIR', 'FUTURE_CONFIG', 'XDG_CONFIG_HOME'],
+        skillsHome: {
+          kind: 'dot-home',
+          name: '.futurecli',
+          env: ['FUTURE_SKILLS_HOME'],
+        },
+      },
+      {
+        env: { FUTURE_SKILLS_HOME: '/custom/future-skills' },
+        home: '/home/u',
+        existsSync: () => false,
+      },
+    );
+
+    assert.strictEqual(base, path.join('/custom/future-skills', 'skills'));
+  });
+});
+
 // ── GOLDEN PARITY: getGlobalConfigDir via process.env for all 16 registry runtimes ──
 
 describe('descriptor-driven parity: 14 non-probe registry runtimes × no-env-vars = golden defaults', () => {
@@ -649,13 +693,13 @@ describe('descriptor-driven parity: 14 non-probe registry runtimes × no-env-var
   );
 
   for (const runtime of registryRuntimes) {
-    test(`${runtime} via getGlobalConfigDir matches golden: ${GOLDEN_DEFAULTS[runtime]}`, () => {
+    test(`${runtime} via getGlobalConfigDir matches its golden default`, () => {
       const saved = clearAllEnvKeys();
       try {
         assert.strictEqual(
           getGlobalConfigDir(runtime),
           GOLDEN_DEFAULTS[runtime],
-          `getGlobalConfigDir('${runtime}') diverged from golden`,
+          `${runtime} via getGlobalConfigDir matches golden: ${GOLDEN_DEFAULTS[runtime]}`,
         );
       } finally {
         restoreEnvKeys(saved);

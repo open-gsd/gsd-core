@@ -10,7 +10,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 
 ### Agent Categories
 
-> The table below covers the **21 primary agents** detailed in this section. Twelve additional shipped agents (pattern-mapper, debug-session-manager, code-reviewer, code-fixer, ai-researcher, domain-researcher, eval-planner, eval-auditor, framework-selector, intel-updater, doc-classifier, doc-synthesizer) have concise stubs in the [Advanced and Specialized Agents](#advanced-and-specialized-agents) section below. For the authoritative 33-agent roster, see [`docs/INVENTORY.md`](INVENTORY.md) and the `agents/` directory.
+> The table below covers the **21 primary agents** detailed in this section. Thirteen additional shipped agents (pattern-mapper, debug-session-manager, code-reviewer, code-fixer, ai-researcher, domain-researcher, eval-planner, eval-auditor, framework-selector, intel-updater, doc-classifier, doc-synthesizer, mempalace-curator) have concise stubs in the [Advanced and Specialized Agents](#advanced-and-specialized-agents) section below. For the authoritative 34-agent roster, see [`docs/INVENTORY.md`](INVENTORY.md) and the `agents/` directory.
 
 | Category | Count | Agents |
 |----------|-------|--------|
@@ -732,9 +732,30 @@ Twelve additional agents ship under `agents/gsd-*.md` and are used by specialty 
 
 ---
 
+### gsd-mempalace-curator
+
+**Role:** Ship-time memory curation — writes per-agent diary entries, proposes and creates cross-project tunnels, runs wing-scoped sync pruning, and mirrors `extract-learnings` output into MemPalace's temporal knowledge graph with provenance.
+
+| Property | Value |
+|----------|-------|
+| **Spawned by** | MemPalace capability at `ship:post` (when `mempalace.enabled = true`); diary/tunnels/KG-mirror are then refined by their own toggles |
+| **Parallelism** | Single instance |
+| **Tools** | Read, Bash, Grep, Glob |
+| **Model (balanced)** | Sonnet |
+| **Produces** | Diary entry in MemPalace, wing tunnel proposals, KG provenance records |
+
+**Key behaviors:**
+- Best-effort only — every operation is `onError: skip`; a MemPalace failure never halts the loop
+- Wing-scoped sync pruning (`mempalace sync --wing <wing> --apply`) — never runs a global prune
+- Cross-project tunnel proposals when `mempalace.cross_project_tunnels = true`
+- Mirrors `extract-learnings` decisions, lessons, patterns, and surprises into the KG with `source_drawer_id` provenance
+- Requires MemPalace MCP server or CLI to be reachable; writes a skip-notice stub when unavailable
+
+---
+
 ## Agent Tool Permissions Summary
 
-> **Scope:** this table covers the 21 primary agents only. The 12 advanced/specialized agents listed above carry their own tool surfaces in their `agents/gsd-*.md` frontmatter (summarized in the per-agent stubs above and in [`docs/INVENTORY.md`](INVENTORY.md)).
+> **Scope:** this table covers the 21 primary agents only. The 13 advanced/specialized agents listed above carry their own tool surfaces in their `agents/gsd-*.md` frontmatter (summarized in the per-agent stubs above and in [`docs/INVENTORY.md`](INVENTORY.md)).
 
 | Agent | Read | Write | Edit | Bash | Grep | Glob | WebSearch | WebFetch | MCP |
 |-------|------|-------|------|------|------|------|-----------|----------|-----|

@@ -199,6 +199,35 @@ for (const { runtime, scope, skillsSub, prefix } of NEST) {
         }
       }
     });
+
+    test(`${runtime}: installed nested skill bodies contain no leaked Claude home paths`, () => {
+      const skillsDir = path.join(tmpDir, skillsSub);
+      const leakedPathRegex = /(?:~|\$HOME)\/\.claude\b/g;
+      const leaks = [];
+
+      const scan = (dir) => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const fullPath = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            scan(fullPath);
+            continue;
+          }
+          if (!entry.name.endsWith('.md')) continue;
+          const relPath = path.relative(skillsDir, fullPath);
+          const content = fs.readFileSync(fullPath, 'utf8');
+          const matches = content.match(leakedPathRegex);
+          if (matches) leaks.push(`${relPath} (${matches.length})`);
+        }
+      };
+
+      scan(skillsDir);
+
+      assert.deepStrictEqual(
+        leaks,
+        [],
+        `${runtime} nested skills must not leak Claude home paths: ${leaks.join(', ')}`,
+      );
+    });
   });
 }
 

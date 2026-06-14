@@ -612,11 +612,7 @@ Extract `branching_strategy`, `phase_branch_template`, `milestone_branch_templat
 
 Detect base branch:
 ```bash
-BASE_BRANCH=$(gsd_run query config-get git.base_branch 2>/dev/null || echo "")
-if [ -z "$BASE_BRANCH" ] || [ "$BASE_BRANCH" = "null" ]; then
-  BASE_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|^refs/remotes/origin/||')
-  BASE_BRANCH="${BASE_BRANCH:-main}"
-fi
+BASE_BRANCH=$(gsd_run query git.base-branch)
 ```
 
 **If "none":** Skip to git_tag.

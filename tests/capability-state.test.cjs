@@ -20,6 +20,8 @@ const { cleanup } = require('./helpers.cjs');
 const {
   resolveCapabilityState,
   _isSafePropKey,
+  _loadInstalledSkillsManifest,
+  _resolveManifest,
 } = require('../gsd-core/bin/lib/capability-state.cjs');
 
 // The real capability registry
@@ -288,6 +290,7 @@ describe('resolveCapabilityState — UI capability with real registry', () => {
     assert.ok(uiCap, 'ui capability should be present');
     assert.strictEqual(uiCap.installed, true);
     assert.strictEqual(uiCap.surfaced, true);
+    assert.strictEqual(uiCap.enabled, true);
   });
 
   test('UI cap: installed=false when ui-review missing from installedSkills', () => {
@@ -301,6 +304,7 @@ describe('resolveCapabilityState — UI capability with real registry', () => {
     const uiCap = result.capabilities.find((c) => c.id === 'ui');
     assert.ok(uiCap);
     assert.strictEqual(uiCap.installed, false);
+    assert.strictEqual(uiCap.enabled, false);
   });
 
   test('UI cap: surfaced=false when ui-review missing from surfacedSkills', () => {
@@ -314,13 +318,14 @@ describe('resolveCapabilityState — UI capability with real registry', () => {
     const uiCap = result.capabilities.find((c) => c.id === 'ui');
     assert.ok(uiCap);
     assert.strictEqual(uiCap.surfaced, false);
+    assert.strictEqual(uiCap.enabled, false);
   });
 
   test('UI cap step hook: workflow.ui_phase true → active=true', () => {
     const result = resolveCapabilityState({
       registry: realRegistry,
       installedSkills: '*',
-      surfacedSkills: new Set(),
+      surfacedSkills: new Set(['ui-phase', 'ui-review']),
       config: { workflow: { ui_phase: true, ui_review: true, ui_safety_gate: true } },
       cwd: tmpProjectDir,
     });
@@ -331,7 +336,27 @@ describe('resolveCapabilityState — UI capability with real registry', () => {
       (h) => h.kind === 'step' && h.when === 'workflow.ui_phase',
     );
     assert.ok(planPreStep, 'should have plan:pre step with when=workflow.ui_phase');
+    assert.strictEqual(planPreStep.configured, true);
     assert.strictEqual(planPreStep.active, true);
+  });
+
+  test('UI cap step hook: surfaced=false and workflow.ui_phase true → configured=true but active=false', () => {
+    const result = resolveCapabilityState({
+      registry: realRegistry,
+      installedSkills: '*',
+      surfacedSkills: new Set(),
+      config: { workflow: { ui_phase: true, ui_review: true, ui_safety_gate: true } },
+      cwd: tmpProjectDir,
+    });
+    const uiCap = result.capabilities.find((c) => c.id === 'ui');
+    assert.ok(uiCap);
+    assert.strictEqual(uiCap.enabled, false);
+    const planPreStep = uiCap.hooks.find(
+      (h) => h.kind === 'step' && h.when === 'workflow.ui_phase',
+    );
+    assert.ok(planPreStep, 'should have plan:pre step with when=workflow.ui_phase');
+    assert.strictEqual(planPreStep.configured, true);
+    assert.strictEqual(planPreStep.active, false);
   });
 
   test('UI cap step hook: workflow.ui_phase false → active=false', () => {
@@ -348,6 +373,7 @@ describe('resolveCapabilityState — UI capability with real registry', () => {
       (h) => h.kind === 'step' && h.when === 'workflow.ui_phase',
     );
     assert.ok(planPreStep, 'should have plan:pre step with when=workflow.ui_phase');
+    assert.strictEqual(planPreStep.configured, false);
     assert.strictEqual(planPreStep.active, false);
   });
 
@@ -355,7 +381,7 @@ describe('resolveCapabilityState — UI capability with real registry', () => {
     const result = resolveCapabilityState({
       registry: realRegistry,
       installedSkills: '*',
-      surfacedSkills: new Set(),
+      surfacedSkills: new Set(['ui-phase', 'ui-review']),
       config: { workflow: { ui_phase: true, ui_review: true, ui_safety_gate: true } },
       cwd: tmpProjectDir,
     });
@@ -365,6 +391,7 @@ describe('resolveCapabilityState — UI capability with real registry', () => {
       (h) => h.kind === 'gate' && h.when === 'workflow.ui_safety_gate',
     );
     assert.ok(safetyGate, 'should have gate with when=workflow.ui_safety_gate');
+    assert.strictEqual(safetyGate.configured, true);
     assert.strictEqual(safetyGate.active, true);
   });
 
@@ -382,6 +409,7 @@ describe('resolveCapabilityState — UI capability with real registry', () => {
       (h) => h.kind === 'gate' && h.when === 'workflow.ui_safety_gate',
     );
     assert.ok(safetyGate, 'should have gate with when=workflow.ui_safety_gate');
+    assert.strictEqual(safetyGate.configured, false);
     assert.strictEqual(safetyGate.active, false);
   });
 });
@@ -643,6 +671,7 @@ function runCapabilityState(cwd, configDir) {
 describe('cmdCapabilityState — end-to-end via gsd-tools CLI', () => {
   let tmpConfigDir;
   let tmpConfigDirCore;
+  let tmpConfigDirUiDisabled;
 
   before(() => {
     // Tmp runtime config dir without .gsd-profile (defaults to 'full')
@@ -651,11 +680,24 @@ describe('cmdCapabilityState — end-to-end via gsd-tools CLI', () => {
     // Tmp runtime config dir with core profile marker
     tmpConfigDirCore = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-state-cfg-core-'));
     fs.writeFileSync(path.join(tmpConfigDirCore, '.gsd-profile'), 'core\n', 'utf8');
+
+    tmpConfigDirUiDisabled = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-state-cfg-ui-disabled-'));
+    fs.writeFileSync(
+      path.join(tmpConfigDirUiDisabled, '.gsd-surface.json'),
+      JSON.stringify({
+        baseProfile: 'full',
+        disabledClusters: ['ui'],
+        explicitAdds: [],
+        explicitRemoves: [],
+      }, null, 2),
+      'utf8',
+    );
   });
 
   after(() => {
     cleanup(tmpConfigDir);
     cleanup(tmpConfigDirCore);
+    cleanup(tmpConfigDirUiDisabled);
   });
 
   test('emits envelope with runtimeConfigDir and capabilities array', () => {
@@ -685,4 +727,453 @@ describe('cmdCapabilityState — end-to-end via gsd-tools CLI', () => {
     const envelope = JSON.parse(result.stdout);
     assert.strictEqual(envelope.runtimeConfigDir, tmpConfigDir);
   });
+
+  test('surface-disabled UI capability reports enabled=false and inactive hooks', () => {
+    const result = runCapabilityState(tmpProjectDir, tmpConfigDirUiDisabled);
+    assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}: ${result.stderr}`);
+    const envelope = JSON.parse(result.stdout);
+    const uiCap = envelope.capabilities.find((c) => c.id === 'ui');
+    assert.ok(uiCap, 'ui capability should be present in output');
+    assert.strictEqual(uiCap.installed, true, 'full base profile still installs UI');
+    assert.strictEqual(uiCap.surfaced, false, 'surface disables UI capability skills');
+    assert.strictEqual(uiCap.enabled, false, 'disabled surface must disable the capability');
+    const planPreStep = uiCap.hooks.find(
+      (h) => h.kind === 'step' && h.when === 'workflow.ui_phase',
+    );
+    assert.ok(planPreStep, 'ui plan step should be present in diagnostic state');
+    assert.strictEqual(planPreStep.configured, true, 'project config/schema still configures UI on');
+    assert.strictEqual(planPreStep.active, false, 'effective hook activity must match workflow dispatch');
+  });
+});
+
+// ─── regressions: installed-runtime capability surface (#1160) ────────────────
+//
+// In an installed runtime (e.g. Codex) the commands/gsd source tree is absent.
+// Only <configDir>/skills/gsd-*/SKILL.md files exist. Prior to this fix,
+// loadSkillsManifest returned an empty map → resolveSurface materialized '*'
+// to an empty Set → security.enabled=false / nyquist.enabled=false even when
+// the project config had security_enforcement=true / nyquist_validation=true.
+//
+// These tests directly exercise the new _loadInstalledSkillsManifest and
+// _resolveManifest functions with a non-existent commandsGsdDir path so they
+// FAIL before the fix and PASS after, regardless of whether commands/gsd
+// happens to exist in the current checkout.
+
+describe('regressions: installed-runtime capability surface (#1160)', () => {
+  // Minimal valid SKILL.md content (frontmatter only — matches what install emits)
+  function makeSkillMd(stem) {
+    return [
+      '---',
+      `name: gsd:${stem}`,
+      `description: ${stem} skill`,
+      'argument-hint: "[phase number]"',
+      'allowed-tools:',
+      '  - Read',
+      'requires: [phase]',
+      '---',
+      'Execute end-to-end.',
+    ].join('\n') + '\n';
+  }
+
+  // ── Unit tests for _loadInstalledSkillsManifest ──────────────────────────────
+
+  test('_loadInstalledSkillsManifest: returns empty map when skills dir absent', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-ism-empty-'));
+    try {
+      const manifest = _loadInstalledSkillsManifest(tmpDir);
+      assert.ok(manifest instanceof Map, 'should return a Map');
+      assert.strictEqual(manifest.size, 0, 'should be empty when no skills/ dir');
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('_loadInstalledSkillsManifest: scans gsd-<stem>/SKILL.md dirs and produces stems', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-ism-scan-'));
+    try {
+      // Create installed skill dirs
+      const secureDir = path.join(tmpDir, 'skills', 'gsd-secure-phase');
+      const validateDir = path.join(tmpDir, 'skills', 'gsd-validate-phase');
+      fs.mkdirSync(secureDir, { recursive: true });
+      fs.mkdirSync(validateDir, { recursive: true });
+      fs.writeFileSync(path.join(secureDir, 'SKILL.md'), makeSkillMd('secure-phase'), 'utf8');
+      fs.writeFileSync(path.join(validateDir, 'SKILL.md'), makeSkillMd('validate-phase'), 'utf8');
+      // Add a non-gsd- dir that should be ignored
+      fs.mkdirSync(path.join(tmpDir, 'skills', 'user-custom'), { recursive: true });
+
+      const manifest = _loadInstalledSkillsManifest(tmpDir);
+      assert.ok(manifest instanceof Map);
+      assert.ok(manifest.has('secure-phase'), 'should have secure-phase stem');
+      assert.ok(manifest.has('validate-phase'), 'should have validate-phase stem');
+      assert.ok(!manifest.has('user-custom'), 'non-gsd- dir must not appear');
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('_loadInstalledSkillsManifest: parses requires from SKILL.md frontmatter', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-ism-req-'));
+    try {
+      const skillDir = path.join(tmpDir, 'skills', 'gsd-my-skill');
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(skillDir, 'SKILL.md'),
+        '---\nname: gsd:my-skill\nrequires: [dep-a, dep-b]\n---\nbody\n',
+        'utf8',
+      );
+      const manifest = _loadInstalledSkillsManifest(tmpDir);
+      assert.deepStrictEqual(manifest.get('my-skill'), ['dep-a', 'dep-b']);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('_loadInstalledSkillsManifest: directory with no SKILL.md is NOT registered (parity with loadSkillsManifest)', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-ism-nodoc-'));
+    try {
+      fs.mkdirSync(path.join(tmpDir, 'skills', 'gsd-nodoc'), { recursive: true });
+      // No SKILL.md written — a stale/empty skill dir must not invent a stem,
+      // mirroring loadSkillsManifest which only registers stems for files that exist.
+      const manifest = _loadInstalledSkillsManifest(tmpDir);
+      assert.ok(!manifest.has('nodoc'), 'stem must NOT be registered when SKILL.md is absent');
+      assert.ok(!manifest.has('_calls_agents_nodoc'), 'companion agents key must also be absent');
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // ── Unit tests for _resolveManifest ─────────────────────────────────────────
+
+  test('_resolveManifest: uses commandsGsdDir when it exists', () => {
+    const realCommandsGsdDir = path.resolve(__dirname, '..', 'commands', 'gsd');
+    if (!fs.existsSync(realCommandsGsdDir)) {
+      // Skip if not in a repo checkout
+      return;
+    }
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-rm-src-'));
+    try {
+      // No skills/ dir — if _resolveManifest uses source, it returns real skills
+      const manifest = _resolveManifest(realCommandsGsdDir, tmpDir);
+      assert.ok(manifest instanceof Map);
+      // The real commands/gsd has many skills; manifest should be non-empty
+      assert.ok(manifest.size > 0, 'should load skills from real source dir');
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('_resolveManifest: falls back to installed skills when commandsGsdDir absent', () => {
+    const nonExistentDir = path.join(os.tmpdir(), 'cap-rm-nonexistent-' + Date.now());
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-rm-installed-'));
+    try {
+      // Create installed skill layout under tmpDir
+      const secureDir = path.join(tmpDir, 'skills', 'gsd-secure-phase');
+      const validateDir = path.join(tmpDir, 'skills', 'gsd-validate-phase');
+      fs.mkdirSync(secureDir, { recursive: true });
+      fs.mkdirSync(validateDir, { recursive: true });
+      fs.writeFileSync(path.join(secureDir, 'SKILL.md'), makeSkillMd('secure-phase'), 'utf8');
+      fs.writeFileSync(path.join(validateDir, 'SKILL.md'), makeSkillMd('validate-phase'), 'utf8');
+
+      const manifest = _resolveManifest(nonExistentDir, tmpDir);
+      assert.ok(manifest instanceof Map);
+      assert.ok(manifest.has('secure-phase'), 'must have secure-phase from installed skills');
+      assert.ok(manifest.has('validate-phase'), 'must have validate-phase from installed skills');
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // ── Integration tests: capability state with installed-layout config dir ────
+  // These tests use a config dir that has NO .gsd-source and where _resolveCommandsGsdDir
+  // would return the real repo path. To force the installed-path, we call
+  // resolveCapabilityState directly with manifests derived from _resolveManifest
+  // using a non-existent commandsGsdDir.
+
+  test('resolveCapabilityState: security enabled when secure-phase in installedSkills+surfacedSkills', () => {
+    const securitySkills = ['secure-phase'];
+    const result = resolveCapabilityState({
+      registry: realRegistry,
+      installedSkills: new Set(securitySkills),
+      surfacedSkills: new Set(securitySkills),
+      config: { workflow: { security_enforcement: true } },
+    });
+    const secCap = result.capabilities.find((c) => c.id === 'security');
+    assert.ok(secCap, 'security capability must be present');
+    assert.strictEqual(secCap.installed, true, 'secure-phase in installedSkills → installed');
+    assert.strictEqual(secCap.surfaced, true, 'secure-phase in surfacedSkills → surfaced');
+    assert.strictEqual(secCap.enabled, true, 'installed+surfaced → enabled');
+  });
+
+  test('resolveCapabilityState: security NOT enabled when surfacedSkills empty (pre-fix scenario)', () => {
+    // Simulates the pre-fix behavior: manifest empty → surface materializes to empty Set
+    const result = resolveCapabilityState({
+      registry: realRegistry,
+      installedSkills: '*', // full profile → installed=true
+      surfacedSkills: new Set(), // empty set (what empty manifest causes)
+      config: { workflow: { security_enforcement: true } },
+    });
+    const secCap = result.capabilities.find((c) => c.id === 'security');
+    assert.ok(secCap, 'security capability must be present');
+    assert.strictEqual(secCap.installed, true);
+    assert.strictEqual(secCap.surfaced, false, 'empty surfacedSkills → surfaced=false (pre-fix bug)');
+    assert.strictEqual(secCap.enabled, false, 'surfaced=false → enabled=false (pre-fix bug)');
+  });
+
+  // ── End-to-end CLI tests: capability state + loop render-hooks ───────────────
+
+  describe('end-to-end CLI with installed skill layout', () => {
+    let tmpInstalledConfigDir;
+    let tmpInstalledProjectDir;
+
+    before(() => {
+      tmpInstalledConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-state-installed-'));
+      fs.writeFileSync(path.join(tmpInstalledConfigDir, '.gsd-profile'), 'full\n', 'utf8');
+      const secureDir = path.join(tmpInstalledConfigDir, 'skills', 'gsd-secure-phase');
+      const validateDir = path.join(tmpInstalledConfigDir, 'skills', 'gsd-validate-phase');
+      fs.mkdirSync(secureDir, { recursive: true });
+      fs.mkdirSync(validateDir, { recursive: true });
+      fs.writeFileSync(path.join(secureDir, 'SKILL.md'), makeSkillMd('secure-phase'), 'utf8');
+      fs.writeFileSync(path.join(validateDir, 'SKILL.md'), makeSkillMd('validate-phase'), 'utf8');
+
+      tmpInstalledProjectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-state-installed-proj-'));
+      fs.mkdirSync(path.join(tmpInstalledProjectDir, '.planning'), { recursive: true });
+      fs.writeFileSync(
+        path.join(tmpInstalledProjectDir, '.planning', 'config.json'),
+        JSON.stringify({ workflow: { security_enforcement: true, nyquist_validation: true } }),
+        'utf8',
+      );
+    });
+
+    after(() => {
+      cleanup(tmpInstalledConfigDir);
+      cleanup(tmpInstalledProjectDir);
+    });
+
+    test('security capability: enabled=true in installed runtime with security_enforcement=true', () => {
+      const result = runCapabilityState(tmpInstalledProjectDir, tmpInstalledConfigDir);
+      assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+      const envelope = JSON.parse(result.stdout);
+      const secCap = envelope.capabilities.find((c) => c.id === 'security');
+      assert.ok(secCap, 'security capability must be present in output');
+      assert.strictEqual(secCap.installed, true, 'security skill secure-phase is installed');
+      assert.strictEqual(secCap.surfaced, true, 'security skill secure-phase is surfaced (full profile)');
+      assert.strictEqual(secCap.enabled, true, 'security capability must be enabled');
+    });
+
+    test('nyquist capability: enabled=true in installed runtime with nyquist_validation=true', () => {
+      const result = runCapabilityState(tmpInstalledProjectDir, tmpInstalledConfigDir);
+      assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+      const envelope = JSON.parse(result.stdout);
+      const nyqCap = envelope.capabilities.find((c) => c.id === 'nyquist');
+      assert.ok(nyqCap, 'nyquist capability must be present in output');
+      assert.strictEqual(nyqCap.installed, true, 'nyquist skill validate-phase is installed');
+      assert.strictEqual(nyqCap.surfaced, true, 'nyquist skill validate-phase is surfaced (full profile)');
+      assert.strictEqual(nyqCap.enabled, true, 'nyquist capability must be enabled');
+    });
+
+    test('security hook at verify:post is active in installed runtime', () => {
+      const result = spawnSync(
+        process.execPath,
+        [
+          gsdToolsPath,
+          'loop', 'render-hooks', 'verify:post',
+          '--config-dir', tmpInstalledConfigDir,
+          '--cwd', tmpInstalledProjectDir,
+        ],
+        { encoding: 'utf8', timeout: 15000 },
+      );
+      assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+      const envelope = JSON.parse(result.stdout.trim());
+      assert.strictEqual(envelope.point, 'verify:post');
+      assert.ok(Array.isArray(envelope.activeHooks), 'activeHooks must be an array');
+      const securityHook = envelope.activeHooks.find(
+        (h) => h.capId === 'security' && h.kind === 'step',
+      );
+      assert.ok(
+        securityHook,
+        'verify:post must include security step hook when security_enforcement=true. Got: ' +
+          JSON.stringify(envelope.activeHooks),
+      );
+      assert.ok(
+        securityHook.ref && securityHook.ref.skill === 'secure-phase',
+        'security hook ref.skill must be secure-phase',
+      );
+    });
+
+    test('nyquist hook at verify:post is active in installed runtime', () => {
+      const result = spawnSync(
+        process.execPath,
+        [
+          gsdToolsPath,
+          'loop', 'render-hooks', 'verify:post',
+          '--config-dir', tmpInstalledConfigDir,
+          '--cwd', tmpInstalledProjectDir,
+        ],
+        { encoding: 'utf8', timeout: 15000 },
+      );
+      assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+      const envelope = JSON.parse(result.stdout.trim());
+      const nyquistHook = envelope.activeHooks.find(
+        (h) => h.capId === 'nyquist' && h.kind === 'step',
+      );
+      assert.ok(
+        nyquistHook,
+        'verify:post must include nyquist step hook when nyquist_validation=true. Got: ' +
+          JSON.stringify(envelope.activeHooks),
+      );
+      assert.ok(
+        nyquistHook.ref && nyquistHook.ref.skill === 'validate-phase',
+        'nyquist hook ref.skill must be validate-phase',
+      );
+    });
+  });
+
+  // ── TRUE installed-runtime layout: gsd-tools runs where commands/gsd is unreachable ──
+  // The block above runs the repo's gsd-tools.cjs, where commands/gsd source IS
+  // reachable by walk-up, so it cannot exercise the bug. This block copies the
+  // runtime executable tree (gsd-core/bin + scripts + package.json) into a temp
+  // install root that has NO commands/ sibling — faithfully reproducing a global
+  // skills-runtime install (e.g. Codex at ~/.codex). There, the source manifest
+  // is genuinely empty, so pre-fix the '*' profile materialized to an empty
+  // surfaced set → enabled=false → verify:post activeHooks: []. This test FAILS
+  // before the fix and PASSES after.
+  describe('true installed layout (commands/gsd unreachable)', () => {
+    let installRoot;
+    let installedConfigDir;
+    let installedProjectDir;
+    let installedGsdTools;
+
+    before(() => {
+      const repoRoot = path.resolve(__dirname, '..');
+      // 1. Faithful install root: copy the executable runtime WITHOUT commands/.
+      installRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-state-installroot-'));
+      fs.mkdirSync(path.join(installRoot, 'gsd-core'), { recursive: true });
+      fs.cpSync(
+        path.join(repoRoot, 'gsd-core', 'bin'),
+        path.join(installRoot, 'gsd-core', 'bin'),
+        { recursive: true },
+      );
+      fs.cpSync(
+        path.join(repoRoot, 'scripts'),
+        path.join(installRoot, 'scripts'),
+        { recursive: true },
+      );
+      fs.copyFileSync(
+        path.join(repoRoot, 'package.json'),
+        path.join(installRoot, 'package.json'),
+      );
+      installedGsdTools = path.join(installRoot, 'gsd-core', 'bin', 'gsd-tools.cjs');
+
+      // 2. Installed runtime config dir: full profile + skills/gsd-*/SKILL.md only.
+      installedConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-state-instcfg-'));
+      fs.writeFileSync(path.join(installedConfigDir, '.gsd-profile'), 'full\n', 'utf8');
+      for (const stem of ['secure-phase', 'validate-phase']) {
+        const skillDir = path.join(installedConfigDir, 'skills', `gsd-${stem}`);
+        fs.mkdirSync(skillDir, { recursive: true });
+        fs.writeFileSync(path.join(skillDir, 'SKILL.md'), makeSkillMd(stem), 'utf8');
+      }
+
+      // 3. Project enabling both gates.
+      installedProjectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-state-instproj-'));
+      fs.mkdirSync(path.join(installedProjectDir, '.planning'), { recursive: true });
+      fs.writeFileSync(
+        path.join(installedProjectDir, '.planning', 'config.json'),
+        JSON.stringify({ workflow: { security_enforcement: true, nyquist_validation: true } }),
+        'utf8',
+      );
+    });
+
+    after(() => {
+      cleanup(installRoot);
+      cleanup(installedConfigDir);
+      cleanup(installedProjectDir);
+    });
+
+    test('commands/gsd is genuinely unreachable from the installed gsd-tools', () => {
+      // Sanity: no commands/gsd anywhere under the install root.
+      const probe = path.join(installRoot, 'commands', 'gsd');
+      assert.strictEqual(fs.existsSync(probe), false, 'install root must have no commands/gsd');
+    });
+
+    test('capability state: security & nyquist enabled in true installed runtime', () => {
+      const result = spawnSync(
+        process.execPath,
+        [
+          installedGsdTools,
+          'capability', 'state',
+          '--config-dir', installedConfigDir,
+          '--cwd', installedProjectDir,
+          '--raw',
+        ],
+        { encoding: 'utf8', timeout: 20000 },
+      );
+      assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+      const envelope = JSON.parse(result.stdout);
+      const secCap = envelope.capabilities.find((c) => c.id === 'security');
+      const nyqCap = envelope.capabilities.find((c) => c.id === 'nyquist');
+      assert.ok(secCap && nyqCap, 'security and nyquist capabilities must be present');
+      assert.strictEqual(secCap.surfaced, true, 'security surfaced from installed skills (pre-fix: false)');
+      assert.strictEqual(secCap.enabled, true, 'security enabled in installed runtime (pre-fix: false)');
+      assert.strictEqual(nyqCap.surfaced, true, 'nyquist surfaced from installed skills (pre-fix: false)');
+      assert.strictEqual(nyqCap.enabled, true, 'nyquist enabled in installed runtime (pre-fix: false)');
+    });
+
+    test('loop render-hooks verify:post: includes security & nyquist in true installed runtime', () => {
+      const result = spawnSync(
+        process.execPath,
+        [
+          installedGsdTools,
+          'loop', 'render-hooks', 'verify:post',
+          '--config-dir', installedConfigDir,
+          '--cwd', installedProjectDir,
+        ],
+        { encoding: 'utf8', timeout: 20000 },
+      );
+      assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+      const envelope = JSON.parse(result.stdout.trim());
+      assert.strictEqual(envelope.point, 'verify:post');
+      assert.ok(Array.isArray(envelope.activeHooks), 'activeHooks must be an array');
+      const sec = envelope.activeHooks.find((h) => h.capId === 'security' && h.kind === 'step');
+      const nyq = envelope.activeHooks.find((h) => h.capId === 'nyquist' && h.kind === 'step');
+      assert.ok(
+        sec && sec.ref && sec.ref.skill === 'secure-phase',
+        'verify:post must include security -> secure-phase (pre-fix: activeHooks was []). Got: ' + JSON.stringify(envelope.activeHooks),
+      );
+      assert.ok(
+        nyq && nyq.ref && nyq.ref.skill === 'validate-phase',
+        'verify:post must include nyquist -> validate-phase (pre-fix: activeHooks was []). Got: ' + JSON.stringify(envelope.activeHooks),
+      );
+    });
+
+    test('negative: when both gates disabled, hooks stay inactive (no over-activation)', () => {
+      const disabledProj = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-state-instproj-off-'));
+      try {
+        fs.mkdirSync(path.join(disabledProj, '.planning'), { recursive: true });
+        fs.writeFileSync(
+          path.join(disabledProj, '.planning', 'config.json'),
+          JSON.stringify({ workflow: { security_enforcement: false, nyquist_validation: false } }),
+          'utf8',
+        );
+        const result = spawnSync(
+          process.execPath,
+          [
+            installedGsdTools,
+            'loop', 'render-hooks', 'verify:post',
+            '--config-dir', installedConfigDir,
+            '--cwd', disabledProj,
+          ],
+          { encoding: 'utf8', timeout: 20000 },
+        );
+        assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstderr: ${result.stderr}`);
+        const envelope = JSON.parse(result.stdout.trim());
+        const sec = (envelope.activeHooks || []).find((h) => h.capId === 'security' && h.kind === 'step');
+        const nyq = (envelope.activeHooks || []).find((h) => h.capId === 'nyquist' && h.kind === 'step');
+        assert.ok(!sec, 'security step must NOT be active when security_enforcement=false');
+        assert.ok(!nyq, 'nyquist step must NOT be active when nyquist_validation=false');
+      } finally {
+        cleanup(disabledProj);
+      }
+    });
+  });
+
 });

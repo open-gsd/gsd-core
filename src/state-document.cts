@@ -32,26 +32,78 @@ function existingProgressExceedsDerived(existingProgress: ProgressRecord, derive
   return existing !== null && derived !== null && existing > derived;
 }
 
+/**
+ * Return true if a pipe-table row's first cell is a separator cell (`---`
+ * variants) rather than a field name.  Prevents the separator row
+ * `| --- | --- |` from being treated as a field named "---".
+ */
+function isTableSeparatorRow(firstCell: string): boolean {
+  // A separator cell contains only dashes, colons (alignment hints), and whitespace.
+  return /^[\s\-:]+$/.test(firstCell.trim());
+}
+
+/**
+ * Build a regex that matches a pipe-table row `| FieldName | value |` for the
+ * given (already-escaped) field name.  The match is case-insensitive and
+ * tolerates variable amounts of whitespace around the cell contents.
+ *
+ * Capture group 1: leading pipe + whitespace before the field cell
+ * Capture group 2: the field name cell text (trimmed)
+ * Capture group 3: whitespace between field cell and separator pipe
+ * Capture group 4: the value cell text (trimmed)
+ * Capture group 5: trailing whitespace + closing pipe(s)
+ *
+ * We use a single-line match (`m` flag so ^ anchors work on each line) to
+ * avoid cross-row replacement.
+ */
+function tableRowPattern(escapedFieldName: string): RegExp {
+  return new RegExp(
+    `^(\\|[ \\t]*)(${escapedFieldName})([ \\t]*\\|[ \\t]*)([^|\\n]*?)([ \\t]*\\|[ \\t]*)$`,
+    'im',
+  );
+}
+
 export function stateExtractField(content: string, fieldName: string): string | null {
   const escaped = escapeRegex(fieldName);
+  // Bold inline format: **FieldName:** value
   const boldPattern = new RegExp(`\\*\\*${escaped}:\\*\\*[ \\t]*(.+)`, 'i');
   const boldMatch = content.match(boldPattern);
   if (boldMatch)
     return boldMatch[1].trim();
+  // Plain line-start format: FieldName: value
   const plainPattern = new RegExp(`^${escaped}:[ \\t]*(.+)`, 'im');
   const plainMatch = content.match(plainPattern);
-  return plainMatch ? plainMatch[1].trim() : null;
+  if (plainMatch)
+    return plainMatch[1].trim();
+  // Pipe-table format: | FieldName | value |
+  // (Separator rows such as `| --- | --- |` are excluded.)
+  const tableMatch = content.match(tableRowPattern(escaped));
+  if (tableMatch && !isTableSeparatorRow(tableMatch[2]))
+    return tableMatch[4].trim();
+  return null;
 }
 
 export function stateReplaceField(content: string, fieldName: string, newValue: string): string | null {
   const escaped = escapeRegex(fieldName);
+  // Bold inline format: **FieldName:** value
   const boldPattern = new RegExp(`(\\*\\*${escaped}:\\*\\*\\s*)(.*)`, 'i');
   if (boldPattern.test(content)) {
     return content.replace(boldPattern, (_match, prefix: string) => `${prefix}${newValue}`);
   }
+  // Plain line-start format: FieldName: value
   const plainPattern = new RegExp(`(^${escaped}:\\s*)(.*)`, 'im');
   if (plainPattern.test(content)) {
     return content.replace(plainPattern, (_match, prefix: string) => `${prefix}${newValue}`);
+  }
+  // Pipe-table format: | FieldName | value |
+  // Preserve the surrounding pipe/whitespace structure; only swap the value cell.
+  const tblPat = tableRowPattern(escaped);
+  const tblMatch = content.match(tblPat);
+  if (tblMatch && !isTableSeparatorRow(tblMatch[2])) {
+    // Reconstruct the row, preserving the original surrounding whitespace/pipes.
+    return content.replace(tblPat, (_m, leadPipe: string, fieldCell: string, midPipe: string, _oldVal: string, trailPipe: string) =>
+      `${leadPipe}${fieldCell}${midPipe}${newValue}${trailPipe}`,
+    );
   }
   return null;
 }

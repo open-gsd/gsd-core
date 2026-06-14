@@ -5,6 +5,7 @@
   "description": "Optional phase research before planning; owns the phase researcher agent and workflow.research activation key.",
   "tier": "standard",
   "requires": [],
+  "runtimeCompat": { "supported": ["*"], "unsupported": [] },
   "skills": [],
   "agents": ["gsd-phase-researcher"],
   "hooks": [],

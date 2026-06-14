@@ -34,6 +34,9 @@ const SCHEMA_VERSION = '1';
 // registry generator and the loop-host-contract generator share one source of truth.
 const { LOOP_HOST_CONTRACT } = require('../gsd-core/bin/lib/loop-host-contract.cjs');
 
+// Wired-points helper — tells us which points actually have render-hooks call sites.
+const { getWiredLoopPoints } = require('./gen-loop-host-contract.cjs');
+
 // Canonical point order — explicit constant (do NOT rely on Set insertion order).
 // Used for point-ordering semantics in consumes-satisfiability validation and topo-sort.
 const POINT_ORDER = [
@@ -231,6 +234,7 @@ const KEBAB_RE = /^[a-z][a-z0-9-]*$/;
 const VALID_ROLES = new Set(['feature', 'runtime']);
 const VALID_TIERS = new Set(['core', 'standard', 'full']);
 const VALID_ON_ERROR = new Set(['skip', 'halt']);
+const RUNTIME_COMPAT_WILDCARD = '*';
 
 /**
  * Validate a single capability declaration.
@@ -363,8 +367,73 @@ function validateCommandEntry(capId, entry, prefix) {
   return errors;
 }
 
+function validateRuntimeCompat(capId, runtimeCompat) {
+  const errors = [];
+  const ctx = 'capability "' + capId + '" runtimeCompat';
+
+  if (typeof runtimeCompat !== 'object' || runtimeCompat === null || Array.isArray(runtimeCompat)) {
+    errors.push(ctx + ' must be an object with supported and unsupported arrays');
+    return errors;
+  }
+
+  const validateRuntimeArray = (field, { allowWildcard }) => {
+    const value = runtimeCompat[field];
+    if (!Array.isArray(value)) {
+      errors.push(ctx + '.' + field + ' must be an array of runtime ids' + (allowWildcard ? ' or ["*"]' : ''));
+      return;
+    }
+    if (field === 'supported' && value.length === 0) {
+      errors.push(ctx + '.supported must be a non-empty array');
+    }
+    let hasWildcard = false;
+    for (let i = 0; i < value.length; i++) {
+      const entry = value[i];
+      if (typeof entry !== 'string' || entry.length === 0) {
+        errors.push(ctx + '.' + field + '[' + i + '] must be a non-empty string');
+        continue;
+      }
+      if (entry === '__proto__' || entry === 'constructor' || entry === 'prototype') {
+        errors.push(ctx + '.' + field + '[' + i + '] "' + entry + '" is a reserved name');
+      }
+      if (entry === RUNTIME_COMPAT_WILDCARD) {
+        if (!allowWildcard) {
+          errors.push(ctx + '.' + field + ' must not include wildcard "*"');
+        }
+        hasWildcard = true;
+      } else if (!KEBAB_RE.test(entry)) {
+        errors.push(ctx + '.' + field + '[' + i + '] must be a kebab-case runtime id or "*"');
+      }
+    }
+    if (hasWildcard && value.length > 1) {
+      errors.push(ctx + '.' + field + ' wildcard "*" cannot be mixed with runtime ids');
+    }
+  };
+
+  validateRuntimeArray('supported', { allowWildcard: true });
+  validateRuntimeArray('unsupported', { allowWildcard: false });
+
+  if (runtimeCompat.notes !== undefined) {
+    if (typeof runtimeCompat.notes !== 'object' || runtimeCompat.notes === null || Array.isArray(runtimeCompat.notes)) {
+      errors.push(ctx + '.notes must be an object of runtime id to string if present');
+    } else {
+      for (const [key, value] of Object.entries(runtimeCompat.notes)) {
+        if (key !== RUNTIME_COMPAT_WILDCARD && !KEBAB_RE.test(key)) {
+          errors.push(ctx + '.notes key "' + key + '" must be a kebab-case runtime id or "*"');
+        }
+        if (typeof value !== 'string' || value.length === 0) {
+          errors.push(ctx + '.notes["' + key + '"] must be a non-empty string');
+        }
+      }
+    }
+  }
+
+  return errors;
+}
+
 function validateFeatureBody(cap) {
   const errors = [];
+
+  errors.push(...validateRuntimeCompat(cap.id || '(unknown)', cap.runtimeCompat));
 
   if (!Array.isArray(cap.skills)) {
     errors.push('skills must be an array of strings');
@@ -477,8 +546,10 @@ function validateFeatureBody(cap) {
 }
 
 // ADR-857 phase 5e: Closed ConverterName enum — complete set used across 16 runtime descriptors,
-// all exported by bin/install.js. Any ArtifactKind with a non-null converter must use one of these.
+// all exported by bin/install.js (commands/skills) and src/runtime-artifact-conversion.cts (agents).
+// Any ArtifactKind with a non-null converter must use one of these.
 const VALID_CONVERTER_NAMES = new Set([
+  // commands / skills converters (pre-existing)
   'convertClaudeCommandToAntigravitySkill',
   'convertClaudeCommandToAugmentSkill',
   'convertClaudeCommandToClineSkill',
@@ -494,6 +565,16 @@ const VALID_CONVERTER_NAMES = new Set([
   'convertClaudeCommandToOpencodeSkill',
   'convertClaudeCommandToTraeSkill',
   'convertClaudeCommandToWindsurfSkill',
+  // agent converters (#1173 — descriptor-driven agent conversion wiring)
+  'convertClaudeAgentToCopilotAgent',
+  'convertClaudeAgentToAntigravityAgent',
+  'convertClaudeAgentToCursorAgent',
+  'convertClaudeAgentToWindsurfAgent',
+  'convertClaudeAgentToAugmentAgent',
+  'convertClaudeAgentToTraeAgent',
+  'convertClaudeAgentToCodebuddyAgent',
+  'convertClaudeAgentToClineAgent',
+  'convertClaudeAgentToCodexAgent',
 ]);
 
 // C3: Validate role:runtime body
@@ -964,15 +1045,17 @@ function validateStep(step, prefix, declaredSkills, declaredAgents) {
   }
 
   if (typeof step.ref !== 'object' || step.ref === null) {
-    errors.push(prefix + '.ref must be an object with skill or agent key');
+    errors.push(prefix + '.ref must be an object with skill, agent, or command key');
   } else {
     const hasSkill = Object.prototype.hasOwnProperty.call(step.ref, 'skill');
     const hasAgent = Object.prototype.hasOwnProperty.call(step.ref, 'agent');
-    if (!hasSkill && !hasAgent) {
-      errors.push(prefix + '.ref must have a "skill" or "agent" key');
-    } else if (hasSkill && hasAgent) {
-      // Fix #4: ref must be exclusive {skill} XOR {agent}
-      errors.push(prefix + '.ref must have exactly one of "skill" or "agent", not both');
+    const hasCommand = Object.prototype.hasOwnProperty.call(step.ref, 'command');
+    const dispatchCount = [hasSkill, hasAgent, hasCommand].filter(Boolean).length;
+    if (dispatchCount === 0) {
+      errors.push(prefix + '.ref must have a "skill", "agent", or "command" key');
+    } else if (dispatchCount > 1) {
+      // ref must be exclusive: skill XOR agent XOR command
+      errors.push(prefix + '.ref must have exactly one of "skill", "agent", or "command", not multiple');
     }
     if (hasSkill && typeof step.ref.skill !== 'string') {
       errors.push(prefix + '.ref.skill must be a string');
@@ -1001,6 +1084,9 @@ function validateStep(step, prefix, declaredSkills, declaredAgents) {
         prefix + '.ref.agent "' + step.ref.agent + '" is not declared in this capability\'s agents: [' +
         [...declaredAgents].join(', ') + ']',
       );
+    }
+    if (hasCommand && typeof step.ref.command !== 'string') {
+      errors.push(prefix + '.ref.command must be a string');
     }
   }
 
@@ -1426,6 +1512,39 @@ function validateCrossCapability(capMap, centralKeys) {
         errors.push(
           'capability "' + capId + '" requires "' + req + '" which does not exist',
         );
+      }
+    }
+  }
+
+  // runtimeCompat: explicit runtime ids must reference runtime capabilities.
+  // The wildcard "*" means descriptor-backed runtimes are supported by default.
+  const runtimeIds = new Set();
+  for (const [id, cap] of capMap) {
+    if (cap.role === 'runtime') runtimeIds.add(id);
+  }
+  for (const [capId, cap] of capMap) {
+    if (cap.role !== 'feature' || typeof cap.runtimeCompat !== 'object' || cap.runtimeCompat === null) continue;
+    for (const field of ['supported', 'unsupported']) {
+      const entries = Array.isArray(cap.runtimeCompat[field]) ? cap.runtimeCompat[field] : [];
+      for (const runtimeId of entries) {
+        if (runtimeId === RUNTIME_COMPAT_WILDCARD) continue;
+        if (typeof runtimeId !== 'string' || runtimeId.length === 0) continue;
+        if (!runtimeIds.has(runtimeId)) {
+          errors.push(
+            'capability "' + capId + '" runtimeCompat.' + field +
+            ' references unknown runtime "' + runtimeId + '"',
+          );
+        }
+      }
+    }
+    if (cap.runtimeCompat.notes && typeof cap.runtimeCompat.notes === 'object') {
+      for (const runtimeId of Object.keys(cap.runtimeCompat.notes)) {
+        if (runtimeId === RUNTIME_COMPAT_WILDCARD) continue;
+        if (!runtimeIds.has(runtimeId)) {
+          errors.push(
+            'capability "' + capId + '" runtimeCompat.notes references unknown runtime "' + runtimeId + '"',
+          );
+        }
       }
     }
   }
@@ -1857,6 +1976,54 @@ function runConfigFormatParityGate(capMap) {
   }
 }
 
+// ─── Gen-time wired guard ─────────────────────────────────────────────────────
+
+/**
+ * Validate that every hook point declared by a capability has a corresponding
+ * `loop render-hooks <point>` call site in one of the host-loop workflow files.
+ *
+ * Only valid loop points (in VALID_LOOP_POINTS) are checked here. Invalid points
+ * are already caught by validateStep/validateContribution/validateGate — do not
+ * double-report.
+ *
+ * @param {object}   cap       Validated capability object.
+ * @param {Set<string>} wiredSet  Set of points that have call sites in host workflows.
+ * @returns {string[]}          Array of error strings; empty means all points are wired.
+ */
+function validateHooksWired(cap, wiredSet) {
+  const errors = [];
+  const capId = cap.id || '(unknown)';
+
+  function checkPoint(point, groupName, idx) {
+    // Only flag valid points that are unwired — invalid points are schema-validator's job.
+    if (!VALID_LOOP_POINTS.has(point)) return;
+    if (!wiredSet.has(point)) {
+      errors.push(
+        'capability "' + capId + '" ' + groupName + '[' + idx + '].point "' + point +
+        '" is declared but not wired in any host-loop workflow ' +
+        '(no `loop render-hooks ' + point + '` call site). ' +
+        'Wire the call site in the host workflow ' +
+        '(see scripts/gen-loop-host-contract.cjs STEP_WORKFLOWS) or remove the hook.',
+      );
+    }
+  }
+
+  for (let i = 0; i < (cap.steps || []).length; i++) {
+    const hook = cap.steps[i];
+    if (hook.point !== undefined) checkPoint(hook.point, 'steps', i);
+  }
+  for (let i = 0; i < (cap.contributions || []).length; i++) {
+    const hook = cap.contributions[i];
+    if (hook.point !== undefined) checkPoint(hook.point, 'contributions', i);
+  }
+  for (let i = 0; i < (cap.gates || []).length; i++) {
+    const hook = cap.gates[i];
+    if (hook.point !== undefined) checkPoint(hook.point, 'gates', i);
+  }
+
+  return errors;
+}
+
 // ─── Registry builder ─────────────────────────────────────────────────────────
 
 /**
@@ -1877,6 +2044,10 @@ function loadAndValidate(centralKeys, capabilitiesDir) {
   if (!fs.existsSync(resolvedCapDir)) {
     return { capMap, errors };
   }
+
+  // Compute wired points ONCE before iterating capabilities so the filesystem
+  // scan is not repeated per-capability. ROOT is the repo root (defined at top of file).
+  const wiredSet = getWiredLoopPoints(ROOT);
 
   const folderEntries = fs.readdirSync(resolvedCapDir, { withFileTypes: true })
     .filter((e) => e.isDirectory())
@@ -1906,6 +2077,13 @@ function loadAndValidate(centralKeys, capabilitiesDir) {
       for (const e of contractErrors) errors.push(folderId + '/capability.json: ' + e);
       // Fix #6: do NOT add contract-invalid caps to capMap — validateCrossCapability should
       // only see fully-valid capabilities so its invariants are meaningful.
+      continue;
+    }
+
+    // Gen-time wired guard: reject hooks that declare a valid point with no call site.
+    const wiredErrors = validateHooksWired(cap, wiredSet);
+    if (wiredErrors.length > 0) {
+      for (const e of wiredErrors) errors.push(folderId + '/capability.json: ' + e);
       continue;
     }
 
@@ -2395,12 +2573,14 @@ module.exports = {
   POINT_TO_CONTRACT,
   HOST_ARTIFACT_EARLIEST_POINT_IDX,
   SCHEMA_VERSION,
+  validateHooksWired,
   // ADR-857 phase 4a: derived views + gates
   deriveCapabilityClusters,
   deriveProfileMembership,
   runConsistencyGate,
   // ADR-959: command entry validation
   validateCommandEntry,
+  validateRuntimeCompat,
   // ADR-1016 phase 5a: runtime body validators + closed-vocab sets
   validateConfigHome,
   validateArtifactLayout,

@@ -4,7 +4,7 @@
 
 **Prerequisites:** A phase whose `/gsd-spec-phase` run has passed the ambiguity gate and the edge-completeness probe (Step 5.5). The prohibition probe (Step 5.6) then runs automatically over the same requirements and presents its findings — you do not invoke it separately.
 
-For the two-stage recall→precision protocol, the canon-referral rule, and the `status × verification` schema, see [Spec-Phase Prohibition Probe](../FEATURES.md#145-spec-phase-prohibition-probe). This guide covers only how to *act* on the findings.
+For the two-stage recall→precision protocol, the canon-referral rule, and the `status × verification` schema, see [Spec-Phase Prohibition Probe](../FEATURES.md#146-spec-phase-prohibition-probe). This guide covers only how to *act* on the findings.
 
 ---
 
@@ -101,7 +101,7 @@ This is the payoff: a resolved prohibition becomes a checkable negative the goal
 
 ## Related
 
-- [Spec-Phase Prohibition Probe](../FEATURES.md#145-spec-phase-prohibition-probe) — protocol, schema, host-mapping table, and the front-of-pipeline rationale
+- [Spec-Phase Prohibition Probe](../FEATURES.md#146-spec-phase-prohibition-probe) — protocol, schema, host-mapping table, and the front-of-pipeline rationale
 - [Resolve edge-coverage findings](resolve-edge-coverage-findings.md) — the sibling probe on the data/behavior-shape axis
 - [`/gsd-spec-phase`](../COMMANDS.md#gsd-spec-phase) — command reference and flags
 - [Plan a phase](plan-a-phase.md) — where resolved prohibitions become `must_haves.prohibitions`

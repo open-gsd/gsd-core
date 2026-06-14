@@ -358,11 +358,13 @@ describe('context meter respects CLAUDE_CODE_AUTO_COMPACT_WINDOW (#2219)', () =>
     assert.strictEqual(normalizedUsed, 60);
   });
 
-  test('CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000: 50% remaining → ~83% normalized bar display', () => {
-    // With 1M total, 400k window → buffer = 40%. usableRemaining = (50 - 40) / (100 - 40) * 100 ≈ 16.67%
-    // normalized used ≈ 100 - 16.67 = 83.33 → rounded 83 (shown in statusline bar)
+  test('CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000: 50% remaining → 100% normalized bar display', () => {
+    // ACW = 400k usable tokens out of 1M total → usable fraction = 40%, buffer = 60%.
+    // (1 - 400000/1000000) * 100 = 60% buffer. With 50% remaining already below the
+    // 60% buffer threshold, usableRemaining = max(0, (50-60)/(100-60)*100) = 0%,
+    // normalized used = 100 (bar shows full — context is within the compact-trigger buffer).
     const { normalizedUsed } = runHook(50, 1_000_000, 400_000);
-    assert.strictEqual(normalizedUsed, 83);
+    assert.strictEqual(normalizedUsed, 100);
   });
 
   test('CLAUDE_CODE_AUTO_COMPACT_WINDOW=0 falls back to default buffer', () => {
@@ -371,12 +373,12 @@ describe('context meter respects CLAUDE_CODE_AUTO_COMPACT_WINDOW (#2219)', () =>
     assert.strictEqual(normalizedUsed, 60);
   });
 
-  test('buffer capped at 100% when ACW exceeds total context', () => {
-    // Pathological: ACW > totalCtx → buffer = 100%. With no usable range left,
-    // usableRemaining = max(0, (50-100)/(100-100)*100) = max(0, -Inf) = 0,
-    // so normalized used = 100 (context reported as completely full in bar).
+  test('ACW exceeds total context: buffer clamped to 0% — used reflects real remaining', () => {
+    // Pathological: ACW > totalCtx → (1 - 2M/1M) * 100 = -100% → clamped to 0%.
+    // With 0% buffer, usableRemaining = 50%, normalized used = 50.
+    // The Math.max(0, ...) clamp prevents negative buffer from inverting the display.
     const { normalizedUsed } = runHook(50, 1_000_000, 2_000_000);
-    assert.strictEqual(normalizedUsed, 100);
+    assert.strictEqual(normalizedUsed, 50);
   });
 
   test('bridge used_pct is raw (CC-consistent) regardless of ACW setting (#2451)', () => {
@@ -386,6 +388,120 @@ describe('context meter respects CLAUDE_CODE_AUTO_COMPACT_WINDOW (#2219)', () =>
     const { rawUsedPct } = runHook(50, 1_000_000, 400_000);
     assert.strictEqual(rawUsedPct, 50,
       'bridge used_pct must be raw (100-50=50) regardless of CLAUDE_CODE_AUTO_COMPACT_WINDOW');
+  });
+});
+
+// ─── auto-compact buffer boundary tests (#1194) ─────────────────────────────
+
+describe('context meter boundary: acw at/near totalCtx does not pin used at 100% (#1194)', () => {
+  const { execFileSync } = require('node:child_process');
+  const hookPath = path.join(__dirname, '..', 'hooks', 'gsd-statusline.js');
+
+  /**
+   * Run the hook with a given acw and totalTokens; remaining fixed at 50%.
+   * Returns the normalizedUsed percentage shown in the statusline bar.
+   */
+  function runBoundaryHook(remainingPct, totalTokens, acwEnv) {
+    const sessionId = `test-1194-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const payload = JSON.stringify({
+      model: { display_name: 'Claude' },
+      workspace: { current_dir: os.tmpdir() },
+      session_id: sessionId,
+      context_window: {
+        remaining_percentage: remainingPct,
+        total_tokens: totalTokens,
+      },
+    });
+
+    const env = { ...process.env };
+    if (acwEnv != null) {
+      env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(acwEnv);
+    } else {
+      delete env.CLAUDE_CODE_AUTO_COMPACT_WINDOW;
+    }
+
+    let stdout = '';
+    try {
+      stdout = execFileSync(process.execPath, [hookPath], {
+        input: payload,
+        env,
+        encoding: 'utf8',
+        timeout: 4000,
+      });
+    } catch (e) {
+      stdout = e.stdout || '';
+    }
+
+    // Strip ANSI escape codes then extract the percentage digit(s) before "%"
+    // eslint-disable-next-line no-control-regex -- \x1b is the required leading byte of ANSI SGR sequences
+    const clean = stdout.replace(/\x1b\[[0-9;]*m/g, '');
+    const match = clean.match(/(\d+)%/);
+    return match ? parseInt(match[1], 10) : null;
+  }
+
+  // acw == totalCtx - 1 (one token below total): buffer is near-zero (≈0%),
+  // so the full window is usable. With 50% remaining the bar should show ~50%.
+  test('acw = totalCtx - 1: used reflects actual remaining context (≈50%)', () => {
+    const totalCtx = 1_000_000;
+    const acw = totalCtx - 1; // 999999
+    const used = runBoundaryHook(50, totalCtx, acw);
+    // buffer ≈ 0% → usableRemaining ≈ 50% → used ≈ 50. Accept 49-51 for rounding.
+    assert.ok(
+      used !== null && used >= 49 && used <= 51,
+      `expected used ≈ 50 when acw=totalCtx-1, got: ${used}`
+    );
+  });
+
+  // acw == totalCtx (the triggering edge case): buffer should be 0%,
+  // NOT 100%.  The "used" value must reflect real remaining context, not 100.
+  test('acw = totalCtx: used MUST NOT stick at 100 (division-by-zero boundary)', () => {
+    const totalCtx = 1_000_000;
+    const acw = totalCtx; // 1000000
+    const used = runBoundaryHook(50, totalCtx, acw);
+    // Buffer = 0% → usableRemaining = 50% → used ≈ 50. Must not be 100.
+    assert.ok(
+      used !== null && used !== 100,
+      `expected used != 100 when acw==totalCtx (div-by-zero boundary), got: ${used}`
+    );
+    // Also assert the bar is in a sane range (should be around 50%)
+    assert.ok(
+      used >= 0 && used <= 99,
+      `expected used in 0-99 when acw==totalCtx, got: ${used}`
+    );
+  });
+
+  // acw == totalCtx + 1 (exceeds total): buffer would be negative without a clamp;
+  // the Math.max(0,...) clamp should keep buffer=0%, not a negative value.
+  test('acw = totalCtx + 1: does not produce negative buffer (clamp prevents it)', () => {
+    const totalCtx = 1_000_000;
+    const acw = totalCtx + 1; // 1000001
+    const used = runBoundaryHook(50, totalCtx, acw);
+    // Buffer clamped to 0 → used ≈ 50 (reflects real remaining, not 100)
+    assert.ok(
+      used !== null && used !== 100,
+      `expected used != 100 when acw=totalCtx+1, got: ${used}`
+    );
+    assert.ok(
+      used >= 0 && used <= 99,
+      `expected used in 0-99 when acw=totalCtx+1, got: ${used}`
+    );
+  });
+
+  // Default path (no env var / acw==0): must be unchanged. 50% remaining → ~60%.
+  test('acw = 0 (default path): unchanged, ~60% normalized for 50% remaining', () => {
+    const used = runBoundaryHook(50, 1_000_000, 0);
+    assert.strictEqual(used, 60, `default path must still produce 60, got: ${used}`);
+  });
+
+  // Normal partial value: 93% remaining → ~usesd ≈ 7% with default buffer.
+  test('normal partial value: 93% remaining → ~7% normalized used', () => {
+    // Default 16.5% buffer: usableRemaining = (93 - 16.5) / (100 - 16.5) * 100 = 91.6%
+    // used ≈ 100 - 91.6 = 8.4 → rounded 8
+    const used = runBoundaryHook(93, 1_000_000, null);
+    assert.ok(
+      used !== null && used >= 7 && used <= 10,
+      `expected used ≈ 7-10 for 93% remaining with default buffer, got: ${used}`
+    );
   });
 });
 

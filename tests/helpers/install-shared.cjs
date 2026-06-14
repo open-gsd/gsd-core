@@ -28,6 +28,8 @@ const EXPECTED_ALL_HOOKS = [
   'gsd-check-update.js',
   'gsd-config-reload.js',
   'gsd-context-monitor.js',
+  // #997: SessionStart canonical-path bootstrap for plugin installs.
+  'gsd-ensure-canonical-path.js',
   'gsd-prompt-guard.js',
   'gsd-read-guard.js',
   'gsd-read-injection-scanner.js',

@@ -3,9 +3,8 @@
  *
  * Unified capability-state resolver that composes the three toggle systems
  * (install profile, runtime surface, config activation) into one per-capability
- * view. ADDITIVE — install/surface/workflows are untouched; this resolver is
- * exposed only as the `gsd-tools capability state` diagnostic, not yet consumed by
- * any workflow (workflow wiring is the phase-6 cutover).
+ * view. The loop resolver consumes this state so workflow dispatch and the
+ * `gsd-tools capability state` diagnostic share the same enablement answer.
  *
  * Exports (three things, mirroring loop-resolver):
  *   resolveCapabilityState({ registry, installedSkills, surfacedSkills, config, cwd })
@@ -19,9 +18,9 @@
  * cmdCapabilityState is the I/O handler.
  *
  * Dependencies (leaf modules only — no core.cjs circular risk):
- *   - node:path (used by _resolveActivationValue via loop-resolver)
+ *   - node:path
  *   - ./core.cjs               (output, error)
- *   - ./loop-resolver.cjs      (_resolveActivationValue — reuse the export)
+ *   - ./capability-activation.cjs (_resolveActivationValue)
  *   - ./install-profiles.cjs   (readActiveProfile, loadSkillsManifest, resolveProfile)
  *   - ./surface.cjs            (resolveSurface)
  *   - ./config-loader.cjs      (loadConfig)
@@ -30,14 +29,15 @@
  */
 
 import path from 'node:path';
+import fs from 'node:fs';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import core = require('./core.cjs');
 const { output: coreOutput, error: coreError } = core;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import loopResolverMod = require('./loop-resolver.cjs');
-const { _resolveActivationValue } = loopResolverMod;
+import activationMod = require('./capability-activation.cjs');
+const { _resolveActivationValue } = activationMod;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoaderMod = require('./config-loader.cjs');
@@ -45,7 +45,7 @@ const { loadConfig } = configLoaderMod;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import installProfilesMod = require('./install-profiles.cjs');
-const { readActiveProfile, loadSkillsManifest, resolveProfile } = installProfilesMod;
+const { readActiveProfile, loadSkillsManifest, resolveProfile, parseRequires } = installProfilesMod;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import surfaceMod = require('./surface.cjs');
@@ -66,6 +66,8 @@ interface HookEntry {
    */
   when: unknown;
   /** Whether this hook is currently active based on config */
+  configured: boolean;
+  /** Whether this hook participates after capability enablement is applied */
   active: boolean;
 }
 
@@ -85,6 +87,8 @@ interface CapabilityStateEntry {
    * Vacuously true for capabilities with an empty skills array.
    */
   surfaced: boolean;
+  /** True when the capability is both installed and surfaced. */
+  enabled: boolean;
   /** Resolved hook activation state across steps, gates, and contributions */
   hooks: HookEntry[];
 }
@@ -105,6 +109,14 @@ interface ResolveCapabilityStateInput {
 }
 
 interface ResolveCapabilityStateResult {
+  capabilities: CapabilityStateEntry[];
+}
+
+interface ResolveCapabilityRuntimeStateResult {
+  runtimeConfigDir: string;
+  warnings: string[];
+  registry: Record<string, unknown>;
+  config: Record<string, unknown>;
   capabilities: CapabilityStateEntry[];
 }
 
@@ -197,6 +209,8 @@ function resolveCapabilityState(input: ResolveCapabilityStateInput): ResolveCapa
       surfaced = skills.every((s) => surfacedSkills.has(s));
     }
 
+    const enabled = installed && surfaced;
+
     // ── hooks ──────────────────────────────────────────────────────────────────
     // Collect from steps, gates, contributions. Each may have a `when` key.
     // Activation semantics (mirrors loop-resolver.isActive exactly):
@@ -216,19 +230,19 @@ function resolveCapabilityState(input: ResolveCapabilityStateInput): ResolveCapa
         const point = typeof h['point'] === 'string' ? h['point'] : '';
         // Carry the raw `when` value through for visibility
         const whenRaw: unknown = h['when'];
-        let active: boolean;
+        let configured: boolean;
         if (whenRaw === undefined || whenRaw === null) {
           // No `when` field → unconditional, always active
-          active = true;
+          configured = true;
         } else if (typeof whenRaw === 'string' && whenRaw.length > 0) {
           // Non-empty string `when` → resolve via _resolveActivationValue
-          active = _resolveActivationValue(whenRaw, config, cwd, registry);
+          configured = _resolveActivationValue(whenRaw, config, cwd, registry);
         } else {
           // Present-but-empty-string or non-string `when` → malformed, inactive
           // (mirrors loop-resolver.isActive: `typeof when !== 'string' || when.length === 0` → false)
-          active = false;
+          configured = false;
         }
-        hooks.push({ point, kind, when: whenRaw, active });
+        hooks.push({ point, kind, when: whenRaw, configured, active: enabled && configured });
       }
     }
 
@@ -240,7 +254,7 @@ function resolveCapabilityState(input: ResolveCapabilityStateInput): ResolveCapa
     processHooks(Array.isArray(gatesRaw) ? gatesRaw : [], 'gate');
     processHooks(Array.isArray(contributionsRaw) ? contributionsRaw : [], 'contribution');
 
-    results.push({ id: capId, tier, skills, installed, surfaced, hooks });
+    results.push({ id: capId, tier, skills, installed, surfaced, enabled, hooks });
   }
 
   // Deterministic sort by id for stable output across calls
@@ -263,6 +277,88 @@ function _resolveCommandsGsdDir(): string {
   // __dirname = gsd-core/bin/lib/
   const repoRoot = path.resolve(__dirname, '..', '..', '..');
   return path.join(repoRoot, 'commands', 'gsd');
+}
+
+/**
+ * Build a skill dependency manifest from an INSTALLED runtime's skills directory.
+ *
+ * In an installed runtime (e.g. Codex at ~/.codex), gsd skills live as
+ * configDir/skills/gsd-STEM/SKILL.md. There is no commands/gsd source tree.
+ * This function scans that installed layout and builds the same
+ * Map shape that loadSkillsManifest produces from sources.
+ *
+ * Stem extraction: a directory named gsd-secure-phase maps to stem secure-phase.
+ * Only directories whose names start with gsd- are included so user-created
+ * skills (without the gsd- prefix) are not accidentally pulled in.
+ *
+ * The requires: field is parsed via the shared parseRequires helper (the same
+ * parser loadSkillsManifest uses), so the two paths cannot drift.
+ *
+ * Returns an empty Map when the skills dir does not exist.
+ */
+function _loadInstalledSkillsManifest(configDir: string): Map<string, string[]> {
+  const manifest = new Map<string, string[]>();
+  const skillsDir = path.join(configDir, 'skills');
+  if (!fs.existsSync(skillsDir)) return manifest;
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(skillsDir, { withFileTypes: true });
+  } catch {
+    return manifest;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    if (!entry.name.startsWith('gsd-')) continue;
+    // Strip the 'gsd-' prefix to get the skill stem
+    const stem = entry.name.slice(4); // 'gsd-'.length === 4
+    if (!stem) continue;
+    const skillMdPath = path.join(skillsDir, entry.name, 'SKILL.md');
+    // Parity with loadSkillsManifest: a stem exists only when its artifact
+    // file is present. loadSkillsManifest registers a stem per .md FILE (and
+    // tolerates an unreadable file as []), but never invents a stem for which
+    // no file exists. Mirror that here: a stale gsd-<stem>/ directory with no
+    // SKILL.md must NOT register the stem — otherwise the capability would be
+    // wrongly reported surfaced/enabled and a verify:post hook would render
+    // for a skill that cannot run.
+    if (!fs.existsSync(skillMdPath)) continue;
+    let content = '';
+    try {
+      content = fs.readFileSync(skillMdPath, 'utf8');
+    } catch {
+      // SKILL.md present but unreadable — register with no deps (parity with
+      // loadSkillsManifest's readFileSync catch branch).
+    }
+    // Parse requires: via the SAME shared parser loadSkillsManifest uses, so
+    // installed-runtime dependency resolution can never silently diverge from
+    // the source-tree path (single source of truth — no duplicated regex).
+    manifest.set(stem, content ? parseRequires(content) : []);
+    // Mirror loadSkillsManifest's Map shape: it always sets a companion
+    // `_calls_agents_<stem>` key. Installed SKILL.md bodies carry no
+    // recoverable agent-call refs, so [] (the no-agents case) keeps the two
+    // manifest shapes identical and prevents undefined-vs-[] drift for any
+    // consumer that reads the agent-refs companion key.
+    manifest.set(`_calls_agents_${stem}`, []);
+  }
+  return manifest;
+}
+
+/**
+ * Resolve the skill dependency manifest for capability-state resolution.
+ *
+ * Resolution order (fixes #1160 — installed-runtime capability surface):
+ *   1. If commandsGsdDir exists, load from source (repo-checkout behavior).
+ *   2. Otherwise, fall back to installed skills at configDir/skills/gsd-[stem]/SKILL.md.
+ *
+ * In an installed runtime the commands/gsd source tree is absent; only the
+ * skills/ layout exists. Returning an empty manifest caused resolveSurface to
+ * materialise the full-sentinel to an empty Set, making every capability appear
+ * unsurfaced even when the skill was physically installed.
+ */
+function _resolveManifest(commandsGsdDir: string, configDir: string): Map<string, string[]> {
+  if (fs.existsSync(commandsGsdDir)) {
+    return loadSkillsManifest(commandsGsdDir);
+  }
+  return _loadInstalledSkillsManifest(configDir);
 }
 
 /**
@@ -295,12 +391,10 @@ function _resolveCommandsGsdDir(): string {
  * @param raw              Whether to emit raw JSON (core.output raw mode)
  * @param _options         Reserved for future use
  */
-function cmdCapabilityState(
+function resolveCapabilityRuntimeState(
   cwd: string,
   runtimeConfigDir: string | undefined | null,
-  raw: boolean,
-  _options: Record<string, unknown> = {},
-): void {
+): ResolveCapabilityRuntimeStateResult {
   const warnings: string[] = [];
 
   // Resolve runtimeConfigDir using the canonical runtime-homes resolver.
@@ -346,7 +440,9 @@ function cmdCapabilityState(
   let installedSkills: Set<string> | '*';
   try {
     const commandsGsdDir = _resolveCommandsGsdDir();
-    const manifest = loadSkillsManifest(commandsGsdDir);
+    // Fix #1160: use _resolveManifest so installed-runtime layouts (where
+    // commands/gsd is absent) fall back to <configDir>/skills/gsd-*/SKILL.md.
+    const manifest = _resolveManifest(commandsGsdDir, resolvedConfigDir);
     const profileName = readActiveProfile(resolvedConfigDir) ?? 'full';
     const resolvedInstall = resolveProfile({
       modes: profileName.split(',').map((s: string) => s.trim()),
@@ -358,7 +454,6 @@ function cmdCapabilityState(
     // Genuine resolution failure — surface it so the caller is not misled.
     const msg = err instanceof Error ? err.message : String(err);
     warnings.push(`profile-resolution failed: ${msg}`);
-    coreError(`capability state: profile resolution failed: ${msg}`);
     // Degrade to empty set (not '*') so installed=false is reported accurately.
     installedSkills = new Set<string>();
   }
@@ -367,7 +462,9 @@ function cmdCapabilityState(
   let surfacedSkills: Set<string>;
   try {
     const commandsGsdDir = _resolveCommandsGsdDir();
-    const manifest = loadSkillsManifest(commandsGsdDir);
+    // Fix #1160: use _resolveManifest so installed-runtime layouts (where
+    // commands/gsd is absent) fall back to <configDir>/skills/gsd-*/SKILL.md.
+    const manifest = _resolveManifest(commandsGsdDir, resolvedConfigDir);
     const surfaceResult = resolveSurface(resolvedConfigDir, manifest, undefined, registry);
     // resolveSurface returns { name, skills: Set<string>, agents: Set<string> }
     // (always a concrete Set — full profile is materialized)
@@ -378,7 +475,6 @@ function cmdCapabilityState(
     // Genuine surface resolution failure — surface it so the caller is not misled.
     const msg = err instanceof Error ? err.message : String(err);
     warnings.push(`surface-resolution failed: ${msg}`);
-    coreError(`capability state: surface resolution failed: ${msg}`);
     surfacedSkills = new Set<string>();
   }
 
@@ -400,6 +496,26 @@ function cmdCapabilityState(
     cwd,
   });
 
+  return {
+    runtimeConfigDir: resolvedConfigDir,
+    warnings,
+    registry,
+    config,
+    capabilities: result.capabilities,
+  };
+}
+
+function cmdCapabilityState(
+  cwd: string,
+  runtimeConfigDir: string | undefined | null,
+  raw: boolean,
+  _options: Record<string, unknown> = {},
+): void {
+  const result = resolveCapabilityRuntimeState(cwd, runtimeConfigDir);
+  for (const warning of result.warnings) {
+    coreError(`capability state: ${warning}`);
+  }
+
   // Build envelope — include warnings array only when non-empty so the nominal
   // path keeps the output clean and callers can check `warnings` for degraded state.
   const envelope: {
@@ -407,11 +523,11 @@ function cmdCapabilityState(
     warnings?: string[];
     capabilities: CapabilityStateEntry[];
   } = {
-    runtimeConfigDir: resolvedConfigDir,
+    runtimeConfigDir: result.runtimeConfigDir,
     capabilities: result.capabilities,
   };
-  if (warnings.length > 0) {
-    envelope.warnings = warnings;
+  if (result.warnings.length > 0) {
+    envelope.warnings = result.warnings;
   }
 
   coreOutput(envelope, raw);
@@ -419,8 +535,11 @@ function cmdCapabilityState(
 
 export = {
   resolveCapabilityState,
+  resolveCapabilityRuntimeState,
   cmdCapabilityState,
   // Exported for tests
   _resolveCommandsGsdDir,
+  _loadInstalledSkillsManifest,
+  _resolveManifest,
   _isSafePropKey,
 };

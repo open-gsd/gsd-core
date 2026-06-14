@@ -229,11 +229,13 @@ function cmdInitExecutePhase(
     : null;
   const phase_req_ids = reqExtracted && reqExtracted !== 'TBD' ? reqExtracted : null;
 
+  const wf = (config.workflow ?? {}) as Record<string, unknown>;
+
   const result: Record<string, unknown> = {
     executor_model: resolveModelInternal(cwd, 'gsd-executor'),
     verifier_model: resolveModelInternal(cwd, 'gsd-verifier'),
 
-    tdd_mode: options['tdd'] || config.tdd_mode || false,
+    tdd_mode: options['tdd'] || Boolean(wf['tdd_mode']) || false,
     commit_docs: config.commit_docs,
     sub_repos: config.sub_repos,
     parallelization: config.parallelization,
@@ -381,16 +383,18 @@ function cmdInitPlanPhase(
   assertValidGranularityOverride(granularityOverride, error);
   const granularity = resolveGranularityInternal(cwd, 'planning', granularityOverride || undefined);
 
+  const wf = (config.workflow ?? {}) as Record<string, unknown>;
+
   const result: Record<string, unknown> = {
     researcher_model: resolveModelInternal(cwd, 'gsd-phase-researcher'),
     planner_model: resolveModelInternal(cwd, 'gsd-planner'),
     checker_model: resolveModelInternal(cwd, 'gsd-plan-checker'),
 
-    tdd_mode: options['tdd'] || config.tdd_mode || false,
+    tdd_mode: options['tdd'] || Boolean(wf['tdd_mode']) || false,
     granularity,
-    research_enabled: config.research,
+    research_enabled: wf['research'],
     plan_checker_enabled: config.plan_checker,
-    nyquist_validation_enabled: config.nyquist_validation,
+    nyquist_validation_enabled: wf['nyquist_validation'],
     commit_docs: config.commit_docs,
     text_mode: config.text_mode,
     auto_advance: !!(config.auto_advance),
@@ -641,13 +645,15 @@ function cmdInitNewMilestone(cwd: string, raw: boolean): void {
     /* intentionally empty */
   }
 
+  const wf = (config.workflow ?? {}) as Record<string, unknown>;
+
   const result: Record<string, unknown> = {
     researcher_model: resolveModelInternal(cwd, 'gsd-project-researcher'),
     synthesizer_model: resolveModelInternal(cwd, 'gsd-research-synthesizer'),
     roadmapper_model: resolveModelInternal(cwd, 'gsd-roadmapper'),
 
     commit_docs: config.commit_docs,
-    research_enabled: config.research,
+    research_enabled: wf['research'],
 
     current_milestone: milestone['version'],
     current_milestone_name: milestone['name'],

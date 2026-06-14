@@ -5,6 +5,7 @@
   "description": "Validation coverage audit that maps executed work back to tests and manual-only evidence.",
   "tier": "full",
   "requires": [],
+  "runtimeCompat": { "supported": ["*"], "unsupported": [] },
   "skills": ["validate-phase"],
   "agents": ["gsd-nyquist-auditor"],
   "hooks": [],

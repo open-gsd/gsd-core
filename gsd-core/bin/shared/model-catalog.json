@@ -153,6 +153,7 @@
     "gsd-eval-planner":           { "golden": "opus",   "balanced": "opus",   "budget": "sonnet", "phaseType": "planning",     "routingTier": "heavy" },
     "gsd-framework-selector":     { "golden": "opus",   "balanced": "sonnet", "budget": "sonnet", "phaseType": "planning",     "routingTier": "heavy" },
     "gsd-intel-updater":          { "golden": "opus",   "balanced": "sonnet", "budget": "haiku",  "phaseType": "research",     "routingTier": "light" },
+    "gsd-mempalace-curator":      { "golden": "sonnet", "balanced": "sonnet", "budget": "haiku",  "phaseType": "research",     "routingTier": "light" },
     "gsd-security-auditor":       { "golden": "opus",   "balanced": "sonnet", "budget": "sonnet", "phaseType": "verification", "routingTier": "heavy" },
     "gsd-user-profiler":          { "golden": "opus",   "balanced": "sonnet", "budget": "sonnet", "phaseType": "research",     "routingTier": "heavy" }
   }

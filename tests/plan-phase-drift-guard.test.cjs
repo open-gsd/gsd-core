@@ -84,11 +84,11 @@ describe('plan-phase workflow: intel.enabled gate for API-SURFACE injection (#22
   });
 
   test('workflow skips surface injection when intel.enabled is false', () => {
-    // The gate must have an explicit false/skip branch
     assert.ok(
-      workflow.includes("INTEL_CFG") &&
-      (workflow.includes("'false'") || workflow.includes('"false"') || workflow.includes('false')),
-      'workflow must skip the intel step when intel.enabled is false (config defaults to false)'
+      workflow.includes('no active intel step hook exists') &&
+      workflow.includes('API_SURFACE_PATH') &&
+      (workflow.includes('when: intel.enabled') || workflow.includes('"when": "intel.enabled"')),
+      'workflow must skip the intel step when intel.enabled is false — enforced via capability registry when: gate and explicit no-active-hook skip branch'
     );
   });
 });

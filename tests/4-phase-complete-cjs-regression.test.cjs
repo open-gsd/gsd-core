@@ -30,7 +30,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, runGsdTools } = require('./helpers.cjs');
 
 // ── Load cmdPhaseComplete directly from phase.cjs (bypass the SDK router) ────
 // phase-command-router.cjs delegates to SDK when available; we must test the
@@ -197,11 +197,14 @@ function capturePhaseComplete(cwd, phaseNum) {
   // directly and redirect output capture.
   const chunks = [];
   const origWrite = process.stdout.write.bind(process.stdout);
+  const origErrWrite = process.stderr.write.bind(process.stderr);
   process.stdout.write = (chunk) => { chunks.push(chunk); return true; };
+  process.stderr.write = () => true;
   try {
     cmdPhaseComplete(cwd, phaseNum, false);
   } finally {
     process.stdout.write = origWrite;
+    process.stderr.write = origErrWrite;
   }
   return chunks.join('');
 }
@@ -355,6 +358,295 @@ describe('issue #4 (CJS): cmdPhaseComplete — idempotency (blind-increment bug)
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Regressions: phase complete preserves completion date (#1161)
+// Tests drive the REAL handler (cmdPhaseComplete) via the CLI entry point
+// `runGsdTools('phase complete <N>')` so the fix in phase.cts is exercised
+// end-to-end rather than hitting the roadmap.cjs helper in isolation.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Extract the Completed cell from the progress table row for a given phase number.
+ * The Completed column is always the LAST cell, regardless of whether the table is
+ * 4-col (Phase | Plans | Status | Completed) or 5-col (Phase | Milestone | Plans | Status | Completed).
+ */
+function extractCompletedCell(roadmapContent, phaseNum) {
+  // Match the full progress table row whose first cell starts with the phase number.
+  // Use [^|\n] to avoid crossing line boundaries. Capture everything up to the final '|'.
+  const re = new RegExp(`^(\\|\\s*${phaseNum}[^|\\n]*(?:\\|[^|\\n]*)*)\\|\\s*$`, 'm');
+  const m = roadmapContent.match(re);
+  if (!m) return null;
+  // m[1] = '| 01. Foundation | 1/1 | Complete    | 2026-01-01 '
+  // Split on '|' → ['', ' 01. Foundation ', ' 1/1 ', ' Complete    ', ' 2026-01-01 ']
+  // Drop the leading empty string and take the last element.
+  const cells = m[1].split('|').slice(1); // drop leading ''
+  return cells[cells.length - 1].trim();
+}
+
+/**
+ * Build a minimal 4-col ROADMAP project fixture whose Phase 01 row already has
+ * the Completed cell set to `existingDate` and Status `Complete`.
+ * The phase directory has plan+summary so `phase complete 1` can run.
+ *
+ * @param {string} existingDate  - value in the Completed cell ('2026-01-01', '-', '   ', etc.)
+ * @param {boolean} [alreadyComplete] - if true the checkbox is already checked and status Complete
+ */
+function create4ColFixture(existingDate, alreadyComplete = true) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-1161-4col-'));
+  const planDir = path.join(tmpDir, '.planning');
+  const phasesDir = path.join(planDir, 'phases');
+  fs.mkdirSync(phasesDir, { recursive: true });
+
+  const checkbox = alreadyComplete ? '[x]' : '[ ]';
+  const checkboxSuffix = alreadyComplete ? ' (completed 2026-01-01)' : '';
+  const status = alreadyComplete ? 'Complete    ' : 'Not started';
+
+  const roadmap = [
+    '# Roadmap',
+    '',
+    `- ${checkbox} Phase 01: Foundation${checkboxSuffix}`,
+    '- [ ] Phase 02: API',
+    '',
+    '### Phase 01: Foundation',
+    '**Goal:** Build the foundation',
+    '**Plans:** 1/1 plans complete',
+    '',
+    '### Phase 02: API',
+    '**Goal:** Build the API',
+    '',
+    '## Progress',
+    '',
+    '| Phase | Plans Complete | Status | Completed |',
+    '|-------|----------------|--------|-----------|',
+    `| 01. Foundation | 1/1 | ${status} | ${existingDate} |`,
+    '| 02. API | 0/1 | Not started | - |',
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.join(planDir, 'ROADMAP.md'), roadmap);
+
+  const state = [
+    '# State',
+    '',
+    '**Current Phase:** 01',
+    '**Current Phase Name:** Foundation',
+    '**Status:** In progress',
+    '**Current Plan:** 01-01',
+    '**Last Activity:** 2025-01-01',
+    '**Last Activity Description:** Working on phase 1',
+    '**Completed Phases:** 0',
+    '**Total Phases:** 2',
+    '**Progress:** 0%',
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.join(planDir, 'STATE.md'), state);
+
+  const phase01Dir = path.join(phasesDir, '01-foundation');
+  fs.mkdirSync(phase01Dir, { recursive: true });
+  fs.writeFileSync(path.join(phase01Dir, '01-01-PLAN.md'), '# Plan 1\nDo the work.\n');
+  fs.writeFileSync(path.join(phase01Dir, '01-01-SUMMARY.md'), '# Summary 1\nDone.\n');
+
+  fs.mkdirSync(path.join(phasesDir, '02-api'), { recursive: true });
+
+  return tmpDir;
+}
+
+/**
+ * Build a minimal 5-col ROADMAP project fixture (Phase | Milestone | Plans | Status | Completed).
+ * Phase 01 row already has Completed cell set to `existingDate`.
+ */
+function create5ColFixture(existingDate, alreadyComplete = true) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-1161-5col-'));
+  const planDir = path.join(tmpDir, '.planning');
+  const phasesDir = path.join(planDir, 'phases');
+  fs.mkdirSync(phasesDir, { recursive: true });
+
+  const checkbox = alreadyComplete ? '[x]' : '[ ]';
+  const checkboxSuffix = alreadyComplete ? ' (completed 2026-01-01)' : '';
+  const status = alreadyComplete ? 'Complete    ' : 'Not started';
+
+  const roadmap = [
+    '# Roadmap',
+    '',
+    `- ${checkbox} Phase 01: Foundation${checkboxSuffix}`,
+    '- [ ] Phase 02: API',
+    '',
+    '### Phase 01: Foundation',
+    '**Goal:** Build the foundation',
+    '**Plans:** 1/1 plans complete',
+    '',
+    '### Phase 02: API',
+    '**Goal:** Build the API',
+    '',
+    '## Progress',
+    '',
+    '| Phase | Milestone | Plans | Status | Completed |',
+    '|-------|-----------|-------|--------|-----------|',
+    `| 01. Foundation | v1.0 | 1/1 | ${status} | ${existingDate} |`,
+    '| 02. API | v1.0 | 0/1 | Not started | - |',
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.join(planDir, 'ROADMAP.md'), roadmap);
+
+  const state = [
+    '# State',
+    '',
+    '**Current Phase:** 01',
+    '**Current Phase Name:** Foundation',
+    '**Status:** In progress',
+    '**Current Plan:** 01-01',
+    '**Last Activity:** 2025-01-01',
+    '**Last Activity Description:** Working on phase 1',
+    '**Completed Phases:** 0',
+    '**Total Phases:** 2',
+    '**Progress:** 0%',
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.join(planDir, 'STATE.md'), state);
+
+  const phase01Dir = path.join(phasesDir, '01-foundation');
+  fs.mkdirSync(phase01Dir, { recursive: true });
+  fs.writeFileSync(path.join(phase01Dir, '01-01-PLAN.md'), '# Plan 1\nDo the work.\n');
+  fs.writeFileSync(path.join(phase01Dir, '01-01-SUMMARY.md'), '# Summary 1\nDone.\n');
+
+  fs.mkdirSync(path.join(phasesDir, '02-api'), { recursive: true });
+
+  return tmpDir;
+}
+
+// Fixed historical instant — will never collide with a real today() in CI.
+const PINNED_MS_1161 = Date.parse('2021-03-22T10:00:00.000Z');
+const PINNED_DATE_1161 = '2021-03-22';
+// Env passed to runGsdTools to pin the clock in the subprocess SUT.
+const PINNED_CLOCK_ENV = {
+  GSD_TEST_MODE: '1',
+  GSD_NOW_MS: String(PINNED_MS_1161),
+};
+
+describe('regressions: phase complete preserves completion date (#1161)', () => {
+  let tmpDir;
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  // ── (a) 4-col: already Complete with a date — repeat phase complete must NOT overwrite ──
+
+  test('#1161 (a): 4-col ROADMAP — repeat `phase complete 1` preserves existing Completed date', () => {
+    // Arrange: Row is already Complete with '2026-01-01'.
+    tmpDir = create4ColFixture('2026-01-01', true);
+    const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+
+    // Act: run `phase complete 1` via the real CLI handler, clock pinned to PINNED_DATE.
+    const result = runGsdTools('phase complete 1', tmpDir, PINNED_CLOCK_ENV);
+    assert.ok(result.success, `phase complete failed: ${result.error || result.output}`);
+
+    // Assert: Completed cell must still be '2026-01-01', NOT the pinned '2021-03-22'.
+    const after = fs.readFileSync(roadmapPath, 'utf8');
+    const completedCell = extractCompletedCell(after, '01');
+    assert.strictEqual(
+      completedCell,
+      '2026-01-01',
+      `#1161 (a) FAILED: repeat phase complete on 4-col table overwrote the existing date.\n` +
+      `Expected '2026-01-01', got '${completedCell}'.\n` +
+      `Pinned clock was '${PINNED_DATE_1161}' — if that appears the date was overwritten.\n\n` +
+      `ROADMAP after:\n${after}`,
+    );
+  });
+
+  // ── (b) 5-col: already Complete with a date — repeat phase complete must NOT overwrite ──
+
+  test('#1161 (b): 5-col ROADMAP — repeat `phase complete 1` preserves existing Completed date', () => {
+    // Arrange: 5-col table row is already Complete with '2026-01-01'.
+    tmpDir = create5ColFixture('2026-01-01', true);
+    const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+
+    // Act: run `phase complete 1` via the real CLI handler, clock pinned to PINNED_DATE.
+    const result = runGsdTools('phase complete 1', tmpDir, PINNED_CLOCK_ENV);
+    assert.ok(result.success, `phase complete failed: ${result.error || result.output}`);
+
+    // Assert: Completed cell must still be '2026-01-01', NOT the pinned '2021-03-22'.
+    const after = fs.readFileSync(roadmapPath, 'utf8');
+    const completedCell5 = extractCompletedCell(after, '01');
+    assert.strictEqual(
+      completedCell5,
+      '2026-01-01',
+      `#1161 (b) FAILED: repeat phase complete on 5-col table overwrote the existing date.\n` +
+      `Expected '2026-01-01', got '${completedCell5}'.\n` +
+      `Pinned clock was '${PINNED_DATE_1161}' — if that appears the date was overwritten.\n\n` +
+      `ROADMAP after:\n${after}`,
+    );
+  });
+
+  // ── (c) First-time completion (placeholder '-') must stamp the pinned date ──
+
+  test('#1161 (c): 4-col ROADMAP — first `phase complete 1` (placeholder date) stamps pinned date', () => {
+    // Arrange: Row has '-' as Completed cell and is Not started (never completed).
+    tmpDir = create4ColFixture('-', false);
+    const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+
+    // Act: first-time phase complete.
+    const result = runGsdTools('phase complete 1', tmpDir, PINNED_CLOCK_ENV);
+    assert.ok(result.success, `phase complete failed: ${result.error || result.output}`);
+
+    // Assert: Completed cell is now the pinned date.
+    const after = fs.readFileSync(roadmapPath, 'utf8');
+    const completedCell = extractCompletedCell(after, '01');
+    assert.strictEqual(
+      completedCell,
+      PINNED_DATE_1161,
+      `#1161 (c) FAILED: first-time completion should stamp '${PINNED_DATE_1161}', got '${completedCell}'.\n\n` +
+      `ROADMAP after:\n${after}`,
+    );
+  });
+
+  // ── (d) Whitespace-only Completed cell is treated as empty and gets stamped ──
+
+  test('#1161 (d): 4-col ROADMAP — whitespace-only Completed cell treated as empty, gets stamped', () => {
+    // Arrange: Row has '   ' (spaces) as Completed cell.
+    tmpDir = create4ColFixture('   ', false);
+    const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+
+    // Act: first-time phase complete.
+    const result = runGsdTools('phase complete 1', tmpDir, PINNED_CLOCK_ENV);
+    assert.ok(result.success, `phase complete failed: ${result.error || result.output}`);
+
+    // Assert: Completed cell is now the pinned date (whitespace was treated as empty).
+    const after = fs.readFileSync(roadmapPath, 'utf8');
+    const completedCell = extractCompletedCell(after, '01');
+    assert.strictEqual(
+      completedCell,
+      PINNED_DATE_1161,
+      `#1161 (d) FAILED: whitespace-only Completed cell should be stamped '${PINNED_DATE_1161}', got '${completedCell}'.\n\n` +
+      `ROADMAP after:\n${after}`,
+    );
+  });
+
+  // ── (e) Non-date garbage in Completed cell is self-healed and gets re-stamped ──
+
+  test('#1161 (e): 5-col ROADMAP — non-date garbage Completed cell is self-healed and re-stamped', () => {
+    // Arrange: 5-col row is already Complete but the Completed cell contains 'TBD'
+    // (a non-date garbage value that the old guard would have preserved).
+    tmpDir = create5ColFixture('TBD', true);
+    const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+
+    // Act: run `phase complete 1` via the real CLI handler, clock pinned to PINNED_DATE.
+    const result = runGsdTools('phase complete 1', tmpDir, PINNED_CLOCK_ENV);
+    assert.ok(result.success, `phase complete failed: ${result.error || result.output}`);
+
+    // Assert: garbage 'TBD' must be replaced with the pinned date (self-heal).
+    // Pre-Fix 2: the old guard (existingDate && existingDate !== '-') would preserve 'TBD'.
+    // Post-Fix 2: the date-shape guard (/^\d{4}-\d{2}-\d{2}$/) rejects 'TBD' → re-stamps.
+    const after = fs.readFileSync(roadmapPath, 'utf8');
+    const completedCell = extractCompletedCell(after, '01');
+    assert.strictEqual(
+      completedCell,
+      PINNED_DATE_1161,
+      `#1161 (e) FAILED: non-date garbage 'TBD' in Completed cell should be self-healed to '${PINNED_DATE_1161}', got '${completedCell}'.\n` +
+      `Old guard (non-empty && !== '-') would preserve 'TBD'. New guard must require a date shape.\n\n` +
+      `ROADMAP after:\n${after}`,
+    );
+  });
+});
+
 // ── T2: Progress percent must never exceed 100% ──────────────────────────────
 
 describe('issue #4 (CJS): cmdPhaseComplete — progress percent clamp', () => {
@@ -424,4 +716,376 @@ describe('issue #4 (CJS): cmdPhaseComplete — progress percent clamp', () => {
       `STATE:\n${stateAfterBoth}`,
     );
   });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Regressions: issue #1159 — Defect A
+// VERIFICATION.md with `previous_status: gaps_found` in the body but
+// `status: passed` in frontmatter must NOT emit a "has unresolved gaps" warning.
+// The bug: /status: gaps_found/.test(fullContent) matches the substring inside
+// `previous_status: gaps_found`, causing a false positive.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Build a minimal project fixture with a VERIFICATION.md file whose
+ * frontmatter status is `verFmStatus` and whose body contains `previous_status: gaps_found`.
+ * Phase 01 has a plan+summary; Phase 02 exists for next-phase detection.
+ */
+function createVerificationFixture(verFmStatus) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-1159-verif-'));
+  const planDir = path.join(tmpDir, '.planning');
+  const phasesDir = path.join(planDir, 'phases');
+  const phase01Dir = path.join(phasesDir, '01-foundation');
+  fs.mkdirSync(phase01Dir, { recursive: true });
+  fs.mkdirSync(path.join(phasesDir, '02-api'), { recursive: true });
+
+  fs.writeFileSync(path.join(planDir, 'ROADMAP.md'), [
+    '# Roadmap',
+    '',
+    '- [ ] Phase 01: Foundation',
+    '- [ ] Phase 02: API',
+    '',
+    '### Phase 01: Foundation',
+    '**Goal:** Build the foundation',
+    '**Plans:** 1 plans',
+    '',
+    '## Progress',
+    '',
+    '| Phase | Plans Complete | Status | Completed |',
+    '|-------|----------------|--------|-----------|',
+    '| 01. Foundation | 0/1 | Not started | - |',
+    '| 02. API | 0/1 | Not started | - |',
+    '',
+  ].join('\n'));
+
+  fs.writeFileSync(path.join(planDir, 'STATE.md'), [
+    '# State',
+    '',
+    '**Current Phase:** 01',
+    '**Current Phase Name:** Foundation',
+    '**Status:** In progress',
+    '**Completed Phases:** 0',
+    '**Total Phases:** 2',
+    '**Progress:** 0%',
+    '',
+  ].join('\n'));
+
+  // No REQUIREMENTS.md intentionally (not needed for this defect check)
+
+  fs.writeFileSync(path.join(phase01Dir, '01-01-PLAN.md'), '# Plan 1\nDo the work.\n');
+  fs.writeFileSync(path.join(phase01Dir, '01-01-SUMMARY.md'), '# Summary 1\nDone.\n');
+
+  // The VERIFICATION.md has the CURRENT status in frontmatter but historical
+  // `previous_status: gaps_found` in the body — this is the false-positive trigger.
+  fs.writeFileSync(path.join(phase01Dir, '01-VERIFICATION.md'), [
+    '---',
+    `status: ${verFmStatus}`,
+    'phase: "01"',
+    '---',
+    '',
+    '# Verification',
+    '',
+    '<!-- Historical context from previous run -->',
+    'previous_status: gaps_found',
+    '',
+    '## Summary',
+    'All checks passed on re-run.',
+    '',
+  ].join('\n'));
+
+  return tmpDir;
+}
+
+describe('issue #1159 (Defect A): VERIFICATION.md historical metadata must not trigger gap warning', () => {
+  let tmpDir;
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test(
+    '#1159-A-1: status:passed + previous_status:gaps_found in body → NO "has unresolved gaps" warning',
+    () => {
+      tmpDir = createVerificationFixture('passed');
+      const { output } = runGsdTools(['phase', 'complete', '1'], tmpDir);
+      // The output is JSON; parse and check warnings array
+      const parsed = JSON.parse(output);
+      const warnings = parsed.warnings || [];
+      const gapWarnings = warnings.filter((w) => /unresolved gaps/i.test(w));
+      assert.equal(
+        gapWarnings.length,
+        0,
+        `#1159-A-1 FAILED: got false gap warning(s) when frontmatter status=passed.\n` +
+        `Warnings: ${JSON.stringify(warnings)}\n` +
+        `(The regex /status: gaps_found/ matched 'previous_status: gaps_found' in the body.)`,
+      );
+    },
+  );
+
+  test(
+    '#1159-A-2 (boundary): status:gaps_found in frontmatter → DOES emit "has unresolved gaps" warning',
+    () => {
+      tmpDir = createVerificationFixture('gaps_found');
+      const { output } = runGsdTools(['phase', 'complete', '1'], tmpDir);
+      const parsed = JSON.parse(output);
+      const warnings = parsed.warnings || [];
+      const gapWarnings = warnings.filter((w) => /unresolved gaps/i.test(w));
+      assert.ok(
+        gapWarnings.length > 0,
+        `#1159-A-2 FAILED: expected a gap warning when frontmatter status=gaps_found but got none.\n` +
+        `Warnings: ${JSON.stringify(warnings)}`,
+      );
+    },
+  );
+
+  test(
+    '#1159-A-3 (boundary): status:human_needed in frontmatter → DOES emit "needs human verification" warning',
+    () => {
+      tmpDir = createVerificationFixture('human_needed');
+      const { output } = runGsdTools(['phase', 'complete', '1'], tmpDir);
+      const parsed = JSON.parse(output);
+      const warnings = parsed.warnings || [];
+      const humanWarnings = warnings.filter((w) => /human verification/i.test(w));
+      assert.ok(
+        humanWarnings.length > 0,
+        `#1159-A-3 FAILED: expected human-verification warning when frontmatter status=human_needed.\n` +
+        `Warnings: ${JSON.stringify(warnings)}`,
+      );
+    },
+  );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Regressions: issue #1159 — Defect B
+// Requirement IDs (e.g. FILE-001) that appear under explicitly deferred/future/v2
+// sections in REQUIREMENTS.md must NOT be flagged as "missing from Traceability".
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Build a minimal project fixture with a REQUIREMENTS.md that has:
+ * - An active requirement ACTIVE-001 that IS in the Traceability table
+ * - A deferred requirement DEFER-001 under a "Deferred v2 Requirements" heading
+ *   that is NOT in the Traceability table (correctly out of scope)
+ * - Optionally a truly-missing active requirement MISSING-001 (not in table)
+ */
+function createDeferredReqFixture({ includeMissingActive = false } = {}) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-1159-deferred-'));
+  const planDir = path.join(tmpDir, '.planning');
+  const phasesDir = path.join(planDir, 'phases');
+  const phase01Dir = path.join(phasesDir, '01-foundation');
+  fs.mkdirSync(phase01Dir, { recursive: true });
+  fs.mkdirSync(path.join(phasesDir, '02-api'), { recursive: true });
+
+  const missingActiveLines = includeMissingActive
+    ? ['', '- **MISSING-001** Active req not in traceability table.']
+    : [];
+
+  fs.writeFileSync(path.join(planDir, 'REQUIREMENTS.md'), [
+    '# Requirements',
+    '',
+    '## Functional Requirements',
+    '',
+    '- **ACTIVE-001** Core feature must work.',
+    ...missingActiveLines,
+    '',
+    '## Deferred v2 Requirements',
+    '',
+    '- **DEFER-001** Nice-to-have for v2, explicitly out of scope.',
+    '',
+    '## Future Backlog',
+    '',
+    '- **FUTURE-001** Consider for next major release.',
+    '',
+    '## Traceability',
+    '',
+    '| Requirement | Phase | Status |',
+    '|-------------|-------|--------|',
+    '| ACTIVE-001 | Phase 01 | Pending |',
+    '',
+  ].join('\n'));
+
+  // Roadmap references ACTIVE-001 for phase 01
+  fs.writeFileSync(path.join(planDir, 'ROADMAP.md'), [
+    '# Roadmap',
+    '',
+    '- [ ] Phase 01: Foundation',
+    '- [ ] Phase 02: API',
+    '',
+    '### Phase 01: Foundation',
+    '**Goal:** Build the foundation',
+    '**Requirements:** ACTIVE-001',
+    '**Plans:** 1 plans',
+    '',
+    '## Progress',
+    '',
+    '| Phase | Plans Complete | Status | Completed |',
+    '|-------|----------------|--------|-----------|',
+    '| 01. Foundation | 0/1 | Not started | - |',
+    '| 02. API | 0/1 | Not started | - |',
+    '',
+  ].join('\n'));
+
+  fs.writeFileSync(path.join(planDir, 'STATE.md'), [
+    '# State',
+    '',
+    '**Current Phase:** 01',
+    '**Current Phase Name:** Foundation',
+    '**Status:** In progress',
+    '**Completed Phases:** 0',
+    '**Total Phases:** 2',
+    '**Progress:** 0%',
+    '',
+  ].join('\n'));
+
+  fs.writeFileSync(path.join(phase01Dir, '01-01-PLAN.md'), '# Plan 1\nDo the work.\n');
+  fs.writeFileSync(path.join(phase01Dir, '01-01-SUMMARY.md'), '# Summary 1\nDone.\n');
+
+  return tmpDir;
+}
+
+describe('issue #1159 (Defect B): deferred/future requirement IDs must not trigger traceability warning', () => {
+  let tmpDir;
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test(
+    '#1159-B-1: IDs under "Deferred v2 Requirements" and "Future Backlog" sections → NO traceability warning',
+    () => {
+      tmpDir = createDeferredReqFixture({ includeMissingActive: false });
+      const { output } = runGsdTools(['phase', 'complete', '1'], tmpDir);
+      const parsed = JSON.parse(output);
+      const warnings = parsed.warnings || [];
+      const traceWarnings = warnings.filter((w) => /Traceability/i.test(w));
+      assert.equal(
+        traceWarnings.length,
+        0,
+        `#1159-B-1 FAILED: got false traceability warning(s) for deferred/future IDs.\n` +
+        `Warnings: ${JSON.stringify(warnings)}\n` +
+        `(DEFER-001 and FUTURE-001 are under deferred/future sections and must be ignored.)`,
+      );
+    },
+  );
+
+  test(
+    '#1159-B-2 (boundary): truly-missing ACTIVE ID (not in table, not in deferred section) → DOES warn',
+    () => {
+      tmpDir = createDeferredReqFixture({ includeMissingActive: true });
+      const { output } = runGsdTools(['phase', 'complete', '1'], tmpDir);
+      const parsed = JSON.parse(output);
+      const warnings = parsed.warnings || [];
+      const traceWarnings = warnings.filter((w) => /Traceability/i.test(w));
+      assert.ok(
+        traceWarnings.length > 0,
+        `#1159-B-2 FAILED: expected traceability warning for MISSING-001 (active, not in table) but got none.\n` +
+        `Warnings: ${JSON.stringify(warnings)}`,
+      );
+      // Verify MISSING-001 is specifically mentioned
+      const mentionsMissing = traceWarnings.some((w) => w.includes('MISSING-001'));
+      assert.ok(
+        mentionsMissing,
+        `#1159-B-2 FAILED: warning exists but MISSING-001 not mentioned.\n` +
+        `Traceability warnings: ${JSON.stringify(traceWarnings)}`,
+      );
+    },
+  );
+
+  test(
+    '#1159-B-3 (boundary): deferred IDs must not contaminate warning even when active ID is also missing',
+    () => {
+      tmpDir = createDeferredReqFixture({ includeMissingActive: true });
+      const { output } = runGsdTools(['phase', 'complete', '1'], tmpDir);
+      const parsed = JSON.parse(output);
+      const warnings = parsed.warnings || [];
+      const traceWarnings = warnings.filter((w) => /Traceability/i.test(w));
+      // DEFER-001 and FUTURE-001 must NOT appear in the traceability warnings
+      const mentionsDefer = traceWarnings.some((w) => w.includes('DEFER-001') || w.includes('FUTURE-001'));
+      assert.ok(
+        !mentionsDefer,
+        `#1159-B-3 FAILED: deferred IDs (DEFER-001/FUTURE-001) appeared in traceability warning.\n` +
+        `Traceability warnings: ${JSON.stringify(traceWarnings)}`,
+      );
+    },
+  );
+
+  test(
+    '#1159-B-4 (subheading): IDs under sub-headings of a deferred section are also suppressed',
+    () => {
+      // Codex adversarial finding: splitting on EVERY heading failed to propagate
+      // deferred status to sub-headings (e.g. "## Future Backlog" → "### Sub").
+      // The fix uses heading-depth tracking so sub-headings inherit deferred state.
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-1159-subhead-'));
+      const planDir = path.join(tmpDir, '.planning');
+      const phasesDir = path.join(planDir, 'phases');
+      const phase01Dir = path.join(phasesDir, '01-foundation');
+      fs.mkdirSync(phase01Dir, { recursive: true });
+      fs.mkdirSync(path.join(phasesDir, '02-api'), { recursive: true });
+
+      fs.writeFileSync(path.join(planDir, 'REQUIREMENTS.md'), [
+        '# Requirements',
+        '',
+        '## Functional Requirements',
+        '',
+        '- **ACTIVE-001** Core feature.',
+        '',
+        '## Future Backlog',
+        '',
+        '### Sub-category A',
+        '',
+        '- **SUB-001** This is under a sub-heading of a deferred section.',
+        '',
+        '## Traceability',
+        '',
+        '| Requirement | Phase | Status |',
+        '|-------------|-------|--------|',
+        '| ACTIVE-001 | Phase 01 | Pending |',
+        '',
+      ].join('\n'));
+
+      fs.writeFileSync(path.join(planDir, 'ROADMAP.md'), [
+        '# Roadmap',
+        '',
+        '- [ ] Phase 01: Foundation',
+        '- [ ] Phase 02: API',
+        '',
+        '### Phase 01: Foundation',
+        '**Goal:** Build the foundation',
+        '**Requirements:** ACTIVE-001',
+        '**Plans:** 1 plans',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans Complete | Status | Completed |',
+        '|-------|----------------|--------|-----------|',
+        '| 01. Foundation | 0/1 | Not started | - |',
+        '| 02. API | 0/1 | Not started | - |',
+        '',
+      ].join('\n'));
+
+      fs.writeFileSync(path.join(planDir, 'STATE.md'), [
+        '# State',
+        '',
+        '**Current Phase:** 01',
+        '**Completed Phases:** 0',
+        '**Total Phases:** 2',
+        '**Progress:** 0%',
+        '',
+      ].join('\n'));
+
+      fs.writeFileSync(path.join(phase01Dir, '01-01-PLAN.md'), '# Plan 1\n');
+      fs.writeFileSync(path.join(phase01Dir, '01-01-SUMMARY.md'), '# Summary 1\n');
+
+      const { output } = runGsdTools(['phase', 'complete', '1'], tmpDir);
+      const parsed = JSON.parse(output);
+      const warnings = parsed.warnings || [];
+      const traceWarnings = warnings.filter((w) => /Traceability/i.test(w));
+      const mentionsSub = traceWarnings.some((w) => w.includes('SUB-001'));
+      assert.ok(
+        !mentionsSub,
+        `#1159-B-4 FAILED: SUB-001 (under sub-heading of deferred section) appeared in warning.\n` +
+        `Traceability warnings: ${JSON.stringify(traceWarnings)}`,
+      );
+    },
+  );
 });

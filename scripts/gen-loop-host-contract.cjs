@@ -449,6 +449,58 @@ function main() {
   }
 }
 
+// ─── Derived single-source-of-truth exports ───────────────────────────────────
+
+/**
+ * Repo-relative paths to every host-loop workflow file, derived from STEP_WORKFLOWS.
+ * This is the ONLY canonical enumeration of host-loop files — all consumers (tests,
+ * registry generator, conformance gate) must derive from this rather than maintaining
+ * a separate hardcoded list.
+ */
+const HOST_LOOP_FILES = STEP_WORKFLOWS.map((w) => 'gsd-core/workflows/' + w.file);
+
+/**
+ * Pure function: scan a text string for `loop render-hooks <point>` call sites.
+ * Returns a Set of matched point strings.
+ *
+ * @param {string} text  Content of a workflow file (or any text).
+ * @returns {Set<string>}
+ */
+function scanWiredPoints(text) {
+  const re = /loop render-hooks\s+([a-z:]+)/g;
+  const result = new Set();
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    result.add(m[1]);
+  }
+  return result;
+}
+
+/**
+ * Read every host-loop workflow file and return the union of all wired loop points
+ * (i.e. points that have a `loop render-hooks <point>` call site).
+ *
+ * @param {string} [repoRoot]  Path to the repository root. Defaults to ROOT.
+ * @returns {Set<string>}
+ */
+function getWiredLoopPoints(repoRoot) {
+  const resolvedRoot = repoRoot !== undefined ? repoRoot : ROOT;
+  const result = new Set();
+  for (const relPath of HOST_LOOP_FILES) {
+    const absPath = path.join(resolvedRoot, relPath);
+    let content;
+    try {
+      content = fs.readFileSync(absPath, 'utf8');
+    } catch (err) {
+      throw new Error('getWiredLoopPoints: cannot read host-loop file ' + absPath + ': ' + err.message);
+    }
+    for (const point of scanWiredPoints(content)) {
+      result.add(point);
+    }
+  }
+  return result;
+}
+
 // ─── Exports (for tests) ─────────────────────────────────────────────────────
 
 module.exports = {
@@ -459,9 +511,12 @@ module.exports = {
   serializeContract,
   normalizeLineEndings,
   STEP_WORKFLOWS,
+  HOST_LOOP_FILES,
   CANONICAL_POINTS,
   EXPECTED_POINTS_BY_STEP,
   ROLE_TO_AGENT,
+  scanWiredPoints,
+  getWiredLoopPoints,
 };
 
 // ─── CLI entry point ──────────────────────────────────────────────────────────

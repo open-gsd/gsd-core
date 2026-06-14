@@ -5,6 +5,7 @@
   "description": "Source-file code review and review-fix workflow support for completed execution work.",
   "tier": "full",
   "requires": [],
+  "runtimeCompat": { "supported": ["*"], "unsupported": [] },
   "skills": ["code-review"],
   "agents": ["gsd-code-reviewer", "gsd-code-fixer"],
   "hooks": [],

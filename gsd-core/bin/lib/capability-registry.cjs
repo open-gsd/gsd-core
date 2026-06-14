@@ -14,6 +14,12 @@ const capabilities = {
     "description": "AI-SPEC design contract workflow for phases that build AI systems; owns the AI integration command, agents, and workflow.ai_integration_phase activation key.",
     "tier": "full",
     "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
     "skills": [
       "ai-integration-phase"
     ],
@@ -112,6 +118,12 @@ const capabilities = {
     "description": "Open-artifact audit and UAT-gap audit for milestone close gates; exposes `gsd-tools audit-uat` (cross-phase UAT outstanding items) and `gsd-tools audit-open` (structured open-artifact scan across debug, tasks, threads, todos, seeds, UAT, verification, context-questions).",
     "tier": "full",
     "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
     "skills": [],
     "agents": [],
     "config": {},
@@ -305,6 +317,12 @@ const capabilities = {
     "description": "Source-file code review and review-fix workflow support for completed execution work.",
     "tier": "full",
     "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
     "skills": [
       "code-review"
     ],
@@ -577,6 +595,103 @@ const capabilities = {
       "extendedHookEvents": []
     }
   },
+  "drift": {
+    "id": "drift",
+    "role": "feature",
+    "title": "Drift detection gates",
+    "description": "Post-execution drift detection gates that run after each wave completes. Provides two gates at execute:wave:post: a blocking schema drift gate (detects schema files changed without a database push) and a non-blocking codebase drift gate (detects structural additions not reflected in STRUCTURE.md).",
+    "tier": "full",
+    "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
+    "skills": [],
+    "agents": [],
+    "hooks": [],
+    "config": {
+      "workflow.drift_threshold": {
+        "type": "number",
+        "default": 3,
+        "description": "Minimum number of new structural elements (directories, barrel exports, migrations, routes) before the codebase drift gate triggers a warn or auto-remap action."
+      },
+      "workflow.drift_action": {
+        "type": "enum",
+        "values": [
+          "warn",
+          "auto-remap"
+        ],
+        "default": "warn",
+        "description": "Action taken by the codebase drift gate when the threshold is exceeded: warn (advisory message) or auto-remap (spawn gsd-codebase-mapper agent to refresh STRUCTURE.md)."
+      },
+      "workflow.schema_drift_gate": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable the drift gates at execute:wave:post. When enabled, the schema drift gate blocks verification if schema-relevant files changed during execution but no database push command was executed; the codebase drift gate (non-blocking) warns when structural additions exceed the drift_threshold."
+      }
+    },
+    "steps": [],
+    "contributions": [],
+    "gates": [
+      {
+        "point": "execute:wave:post",
+        "check": {
+          "query": "verify.schema-drift"
+        },
+        "when": "workflow.schema_drift_gate",
+        "blocking": true,
+        "onError": "skip"
+      },
+      {
+        "point": "execute:wave:post",
+        "check": {
+          "query": "verify.codebase-drift"
+        },
+        "when": "workflow.schema_drift_gate",
+        "blocking": false,
+        "onError": "skip"
+      }
+    ]
+  },
+  "gap-analysis": {
+    "id": "gap-analysis",
+    "role": "feature",
+    "title": "Post-planning gap analysis",
+    "description": "Proactive, non-blocking post-planning coverage report. After all PLAN.md files are generated, cross-references every REQ-ID and D-ID from REQUIREMENTS.md and CONTEXT.md against plan bodies. Emits a Source | Item | Status table. Does not block phase advancement.",
+    "tier": "standard",
+    "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
+    "skills": [],
+    "agents": [],
+    "hooks": [],
+    "config": {
+      "workflow.post_planning_gaps": {
+        "type": "boolean",
+        "default": true,
+        "description": "Run the post-planning gap analysis report after plans are generated."
+      }
+    },
+    "steps": [],
+    "contributions": [],
+    "gates": [
+      {
+        "point": "plan:post",
+        "check": {
+          "query": "gap-analysis.plan-post"
+        },
+        "when": "workflow.post_planning_gaps",
+        "blocking": false,
+        "onError": "skip"
+      }
+    ]
+  },
   "gemini": {
     "id": "gemini",
     "role": "runtime",
@@ -637,6 +752,12 @@ const capabilities = {
     "description": "Build, query, and inspect the project knowledge graph in `.planning/graphs/`; exposes graphify CLI subcommands (build, query, status, diff) and the /gsd-graphify skill.",
     "tier": "full",
     "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
     "skills": [
       "graphify"
     ],
@@ -716,6 +837,12 @@ const capabilities = {
     "description": "Code-intelligence store for codebase querying, diff, snapshot, and API-surface extraction; exposes `gsd-tools intel` subcommands (query, status, update, diff, snapshot, patch-meta, validate, extract-exports, api-surface) and backs `/gsd-map-codebase` and `gsd-intel-updater`.",
     "tier": "full",
     "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
     "skills": [],
     "agents": [],
     "config": {
@@ -733,7 +860,20 @@ const capabilities = {
       }
     ],
     "hooks": [],
-    "steps": [],
+    "steps": [
+      {
+        "point": "plan:pre",
+        "ref": {
+          "command": "intel api-surface"
+        },
+        "produces": [
+          ".planning/intel/API-SURFACE.md"
+        ],
+        "consumes": [],
+        "when": "intel.enabled",
+        "onError": "skip"
+      }
+    ],
     "contributions": [],
     "gates": []
   },
@@ -860,6 +1000,176 @@ const capabilities = {
       "extendedHookEvents": []
     }
   },
+  "mempalace": {
+    "id": "mempalace",
+    "role": "feature",
+    "title": "MemPalace memory",
+    "description": "Cross-session, cross-project memory: deliberate recall before discuss/plan and verbatim capture + temporal-KG sync at phase boundaries, via the MemPalace MCP server and CLI.",
+    "tier": "full",
+    "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
+    "skills": [
+      "mempalace-recall",
+      "mempalace-capture"
+    ],
+    "agents": [
+      "gsd-mempalace-curator"
+    ],
+    "hooks": [],
+    "config": {
+      "mempalace.enabled": {
+        "type": "boolean",
+        "default": false,
+        "description": "Master toggle for the MemPalace memory capability."
+      },
+      "mempalace.memory_mode": {
+        "type": "enum",
+        "values": [
+          "augment",
+          "kg_backend",
+          "replace"
+        ],
+        "default": "augment",
+        "description": "How MemPalace relates to GSD native memory. Only 'augment' (additive) is implemented today; 'kg_backend' and 'replace' are forward-declared (routing seam not yet built) and currently behave as 'augment'."
+      },
+      "mempalace.wing": {
+        "type": "string",
+        "default": "",
+        "description": "Palace wing name; empty derives from project_code / project dir."
+      },
+      "mempalace.recall_on_discuss": {
+        "type": "boolean",
+        "default": true,
+        "description": "Inject wake-up + search recall at discuss:pre."
+      },
+      "mempalace.recall_on_plan": {
+        "type": "boolean",
+        "default": true,
+        "description": "Produce MEMORY-RECALL.md at plan:pre."
+      },
+      "mempalace.capture_artifacts": {
+        "type": "boolean",
+        "default": true,
+        "description": "File CONTEXT/PLAN/SUMMARY and learnings into the palace at phase boundaries."
+      },
+      "mempalace.mirror_kg": {
+        "type": "boolean",
+        "default": true,
+        "description": "Mirror decisions/learnings into MemPalace's temporal knowledge graph."
+      },
+      "mempalace.cross_project_tunnels": {
+        "type": "boolean",
+        "default": false,
+        "description": "Propose/create cross-wing tunnels at ship:post."
+      },
+      "mempalace.diary_journal": {
+        "type": "boolean",
+        "default": true,
+        "description": "Write a per-agent diary entry at ship:post."
+      },
+      "mempalace.auto_capture_hooks": {
+        "type": "boolean",
+        "default": false,
+        "description": "Reserved / not yet implemented: will install MemPalace's native stop/precompact Claude Code hooks for passive mid-session capture (the capability's hooks array is currently empty)."
+      }
+    },
+    "steps": [
+      {
+        "point": "discuss:post",
+        "ref": {
+          "skill": "mempalace-capture"
+        },
+        "produces": [],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "mempalace.enabled",
+        "onError": "skip"
+      },
+      {
+        "point": "plan:pre",
+        "ref": {
+          "skill": "mempalace-recall"
+        },
+        "produces": [
+          "MEMORY-RECALL.md"
+        ],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "mempalace.enabled",
+        "onError": "skip"
+      },
+      {
+        "point": "plan:post",
+        "ref": {
+          "skill": "mempalace-capture"
+        },
+        "produces": [],
+        "consumes": [
+          "PLAN.md"
+        ],
+        "when": "mempalace.enabled",
+        "onError": "skip"
+      },
+      {
+        "point": "verify:post",
+        "ref": {
+          "skill": "mempalace-capture"
+        },
+        "produces": [],
+        "consumes": [
+          "SUMMARY.md"
+        ],
+        "when": "mempalace.enabled",
+        "onError": "skip"
+      },
+      {
+        "point": "ship:post",
+        "ref": {
+          "agent": "gsd-mempalace-curator"
+        },
+        "produces": [],
+        "consumes": [
+          "UAT.md"
+        ],
+        "when": "mempalace.enabled",
+        "onError": "skip"
+      }
+    ],
+    "contributions": [
+      {
+        "point": "discuss:pre",
+        "into": "orchestrator",
+        "fragment": {
+          "path": "fragments/recall-discuss.md",
+          "inline": "<!--\n  MemPalace capability — contribution fragment.\n  Rendered into the discuss:pre orchestrator prompt when `mempalace.recall_on_discuss` is true.\n  Contributes DATA (recall instructions), not control flow. onError: skip — never blocks discussion.\n-->\n### Memory recall (MemPalace)\n\n**Gate first.** Read `.planning/config.json`. If `mempalace.enabled` is not `true`, or `mempalace.recall_on_discuss` is `false`, **skip this entire section** and continue the discussion unchanged. (This contribution is only injected when the capability is enabled; the `recall_on_discuss` check lets you turn discuss-time recall off without disabling the rest of the capability.)\n\nOtherwise — before gathering new context, surface what you already know. This is read-only and side-effect-free; if MemPalace is unreachable, note \"memory unavailable\" and continue — recall never blocks discussion.\n\n1. **Resolve the wing.** Use `mempalace.wing` if set; otherwise derive it from `project_code` (fall back to the project directory name).\n2. **Wake up (cheap, ~600–900 tokens).**\n   - Interactive run → call `mempalace_search` after a wake-up read of the wing.\n   - Headless/cron run (no MCP server) → run `mempalace wake-up --wing <wing>` via the CLI.\n3. **Targeted recall.** Search the palace for prior work on this phase's topic:\n   - Interactive → `mempalace_search(query=<phase topic>, wing=<wing>)` and, when `mempalace.mirror_kg` is on, `mempalace_kg_query` / `mempalace_kg_timeline` for decision facts and their validity windows.\n   - Headless → `mempalace search \"<phase topic>\" --wing <wing>`.\n4. **Mode awareness.** Only `augment` is currently wired: always treat the palace as an *additional* recall layer on top of GSD's native memory — never skip `.planning/graphs/` or STATE. `kg_backend`/`replace` are forward-declared and behave as `augment` today.\n5. **Surface, don't dump.** Fold the top relevant drawers, decisions, patterns, and *surprises* into the discussion as prior context — cite drawer/fact provenance. Do not paste raw search output.\n\nIf any MemPalace call errors or times out, skip the rest of recall and proceed with discussion as normal.\n"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "mempalace.enabled",
+        "onError": "skip"
+      },
+      {
+        "point": "execute:wave:post",
+        "into": "verifier",
+        "fragment": {
+          "path": "fragments/capture-problems.md",
+          "inline": "<!--\n  MemPalace capability — contribution fragment.\n  Rendered into the execute:wave:post verifier prompt when `mempalace.capture_artifacts` is true.\n  Contributes DATA (capture instructions), not control flow. onError: skip — never fails a wave.\n-->\n### Capture problems → fixes (MemPalace)\n\n**Gate first.** Read `.planning/config.json`. If `mempalace.enabled` is not `true`, or `mempalace.capture_artifacts` is `false`, **skip this entire section** and let the wave complete unchanged. (This contribution is only injected when the capability is enabled; the `capture_artifacts` check lets you turn capture off without disabling the rest of the capability.)\n\nOtherwise — after verifying this wave, persist any *confirmed* problem→fix pairs into the palace so they are recalled in future phases. This is best-effort; if MemPalace is unreachable, skip silently — capture never fails a wave.\n\nFor each confirmed bug/issue resolved in this wave:\n\n1. **Resolve the wing** (`mempalace.wing`, else `project_code`, else project dir) and target `room: problems`.\n2. **Dedupe first.** Call `mempalace_check_duplicate` (interactive) before filing so re-runs don't create duplicate drawers.\n3. **File the drawer verbatim.** Store the problem statement and its fix as a drawer in `room: problems` — interactive: `mempalace_add_drawer`; headless: `mempalace mine` / `mempalace hook run`. Include provenance (`source_file`, phase id).\n4. **Mirror the KG fact** when `mempalace.mirror_kg` is on: add `(<bug>, fixed_by, <fix>)` with `valid_from` = the phase date via `mempalace_kg_add`.\n5. **Mode awareness.** Only `augment` is currently wired: the fact is an *additive* mirror alongside `.planning/graphs/` (never a replacement). `kg_backend`/`replace` are forward-declared and behave as `augment` today.\n\nCaptures are idempotent: deterministic drawer IDs + `check_duplicate` mean re-running the wave re-files the same content without duplication. On any error, skip and let the wave complete normally.\n"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "mempalace.enabled",
+        "onError": "skip"
+      }
+    ],
+    "gates": []
+  },
   "nyquist": {
     "id": "nyquist",
     "role": "feature",
@@ -867,6 +1177,12 @@ const capabilities = {
     "description": "Validation coverage audit that maps executed work back to tests and manual-only evidence.",
     "tier": "full",
     "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
     "skills": [
       "validate-phase"
     ],
@@ -975,6 +1291,12 @@ const capabilities = {
     "requires": [
       "research"
     ],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
     "skills": [],
     "agents": [
       "gsd-pattern-mapper"
@@ -1007,6 +1329,79 @@ const capabilities = {
         "onError": "skip"
       }
     ],
+    "contributions": [],
+    "gates": []
+  },
+  "profile-pipeline": {
+    "id": "profile-pipeline",
+    "role": "feature",
+    "title": "Developer profiling pipeline",
+    "description": "Developer behavioral profiling from Claude Code session history; scans session JSONL files, extracts and samples user messages, and generates profile artifacts (USER-PROFILE.md, dev-preferences.md, CLAUDE.md sections). Exposes eight `gsd-tools` commands: scan-sessions, extract-messages, profile-sample (pipeline phase) and write-profile, profile-questionnaire, generate-dev-preferences, generate-claude-profile, generate-claude-md (output phase). Backs the /gsd-profile-user skill and gsd-user-profiler agent.",
+    "tier": "full",
+    "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
+    "skills": [
+      "profile-user"
+    ],
+    "agents": [
+      "gsd-user-profiler"
+    ],
+    "config": {
+      "profile-pipeline.enabled": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable the developer profiling pipeline commands (scan-sessions, extract-messages, profile-sample, write-profile, etc.)."
+      }
+    },
+    "commands": [
+      {
+        "family": "scan-sessions",
+        "module": "profile-pipeline-command-router.cjs",
+        "router": "routeScanSessions"
+      },
+      {
+        "family": "extract-messages",
+        "module": "profile-pipeline-command-router.cjs",
+        "router": "routeExtractMessages"
+      },
+      {
+        "family": "profile-sample",
+        "module": "profile-pipeline-command-router.cjs",
+        "router": "routeProfileSample"
+      },
+      {
+        "family": "write-profile",
+        "module": "profile-pipeline-command-router.cjs",
+        "router": "routeWriteProfile"
+      },
+      {
+        "family": "profile-questionnaire",
+        "module": "profile-pipeline-command-router.cjs",
+        "router": "routeProfileQuestionnaire"
+      },
+      {
+        "family": "generate-dev-preferences",
+        "module": "profile-pipeline-command-router.cjs",
+        "router": "routeGenerateDevPreferences"
+      },
+      {
+        "family": "generate-claude-profile",
+        "module": "profile-pipeline-command-router.cjs",
+        "router": "routeGenerateClaudeProfile"
+      },
+      {
+        "family": "generate-claude-md",
+        "module": "profile-pipeline-command-router.cjs",
+        "router": "routeGenerateClaudeMd"
+      }
+    ],
+    "hooks": [],
+    "steps": [],
     "contributions": [],
     "gates": []
   },
@@ -1070,6 +1465,12 @@ const capabilities = {
     "description": "Optional phase research before planning; owns the phase researcher agent and workflow.research activation key.",
     "tier": "standard",
     "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
     "skills": [],
     "agents": [
       "gsd-phase-researcher"
@@ -1105,6 +1506,48 @@ const capabilities = {
     "contributions": [],
     "gates": []
   },
+  "schema-gate": {
+    "id": "schema-gate",
+    "role": "feature",
+    "title": "Schema push detection gate",
+    "description": "Detects ORM schema-relevant files in the phase scope during planning and injects a mandatory [BLOCKING] schema push task into the plan. Prevents false-positive verification where build/types pass because TypeScript types come from config, not the live database.",
+    "tier": "full",
+    "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
+    "skills": [],
+    "agents": [],
+    "hooks": [],
+    "config": {
+      "workflow.schema_push_detection": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable ORM schema push detection during planning. When schema-relevant files are detected in the phase scope, a [BLOCKING] push task is injected into the plan."
+      }
+    },
+    "steps": [],
+    "contributions": [
+      {
+        "point": "plan:pre",
+        "into": "planner",
+        "fragment": {
+          "path": "fragments/plan-pre.md",
+          "inline": "# Schema Push Detection Gate\n\n> Detects schema-relevant files in the phase scope and injects a mandatory `[BLOCKING]` schema push task into the plan. Prevents false-positive verification where build/types pass because TypeScript types come from config, not the live database.\n\nCheck if any files in the phase scope match schema patterns:\n\n```bash\nPHASE_SECTION=$(gsd_run query roadmap.get-phase \"${PHASE}\" --pick section 2>/dev/null)\n```\n\nScan `PHASE_SECTION`, `CONTEXT.md` (if loaded), and `RESEARCH.md` (if exists) for file paths matching these ORM patterns:\n\n| ORM | File Patterns |\n|-----|--------------|\n| Payload CMS | `src/collections/**/*.ts`, `src/globals/**/*.ts` |\n| Prisma | `prisma/schema.prisma`, `prisma/schema/*.prisma` |\n| Drizzle | `drizzle/schema.ts`, `src/db/schema.ts`, `drizzle/*.ts` |\n| Supabase | `supabase/migrations/*.sql` |\n| TypeORM | `src/entities/**/*.ts`, `src/migrations/**/*.ts` |\n\nAlso check if any existing PLAN.md files for this phase already reference these file patterns in `files_modified`.\n\n**If schema-relevant files detected:**\n\nSet `SCHEMA_PUSH_REQUIRED=true` and `SCHEMA_ORM={detected_orm}`.\n\nDetermine the push command for the detected ORM:\n\n| ORM | Push Command | Non-TTY Workaround |\n|-----|-------------|-------------------|\n| Payload CMS | `npx payload migrate` | `CI=true PAYLOAD_MIGRATING=true npx payload migrate` |\n| Prisma | `npx prisma db push` | `npx prisma db push --accept-data-loss` (if destructive) |\n| Drizzle | `npx drizzle-kit push` | `npx drizzle-kit push` |\n| Supabase | `supabase db push` | Set `SUPABASE_ACCESS_TOKEN` env var |\n| TypeORM | `npx typeorm migration:run` | `npx typeorm migration:run -d src/data-source.ts` |\n\nInject the following into the planner prompt (step 8) as an additional constraint:\n\n```markdown\n<schema_push_requirement>\n**[BLOCKING] Schema Push Required**\n\nThis phase modifies schema-relevant files ({detected_files}). The planner MUST include\na `[BLOCKING]` task that runs the database schema push command AFTER all schema file\nmodifications are complete but BEFORE verification.\n\n- ORM detected: {SCHEMA_ORM}\n- Push command: {push_command}\n- Non-TTY workaround: {env_hint}\n- If push requires interactive prompts that cannot be suppressed, flag the task for\n  manual intervention with `autonomous: false`\n\nThis task is mandatory — the phase CANNOT pass verification without it. Build and\ntype checks will pass without the push (types come from config, not the live database),\ncreating a false-positive verification state.\n</schema_push_requirement>\n```\n\nDisplay: `Schema files detected ({SCHEMA_ORM}) — [BLOCKING] push task will be injected into plans`\n\n**If no schema-relevant files detected:** Skip silently.\n"
+        },
+        "produces": [],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "workflow.schema_push_detection",
+        "onError": "skip"
+      }
+    ],
+    "gates": []
+  },
   "security": {
     "id": "security",
     "role": "feature",
@@ -1112,6 +1555,12 @@ const capabilities = {
     "description": "Threat mitigation verification and ship-time security blocking for phases with security enforcement enabled.",
     "tier": "full",
     "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
     "skills": [
       "secure-phase"
     ],
@@ -1166,6 +1615,10 @@ const capabilities = {
         "fragment": {
           "inline": "Each PLAN.md must include a <threat_model> block when security enforcement is active. Use the configured ASVS level and blocking threshold from workflow.security_asvs_level and workflow.security_block_on."
         },
+        "configValues": {
+          "security_asvs_level": "workflow.security_asvs_level",
+          "security_block_on": "workflow.security_block_on"
+        },
         "produces": [],
         "consumes": [
           "CONTEXT.md"
@@ -1187,6 +1640,55 @@ const capabilities = {
         "when": "workflow.security_enforcement",
         "blocking": true,
         "onError": "halt"
+      }
+    ]
+  },
+  "tdd": {
+    "id": "tdd",
+    "role": "feature",
+    "title": "Test-driven development",
+    "description": "Injects TDD heuristics into the planner and enforces RED/GREEN gate compliance on type:tdd plans after execution. Owns workflow.tdd_mode; the --tdd CLI flag is the ephemeral override.",
+    "tier": "full",
+    "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
+    "skills": [],
+    "agents": [],
+    "hooks": [],
+    "config": {
+      "workflow.tdd_mode": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable TDD mode: planner annotates eligible tasks type:tdd and executor enforces RED/GREEN/REFACTOR gate sequence."
+      }
+    },
+    "steps": [],
+    "contributions": [
+      {
+        "point": "plan:pre",
+        "into": "planner",
+        "fragment": {
+          "inline": "<tdd_mode_active>\n**TDD Mode is ENABLED.** Apply TDD heuristics to all eligible tasks:\n- Business logic with defined I/O → type: tdd\n- API endpoints with request/response contracts → type: tdd\n- Data transformations, validation, algorithms → type: tdd\n- UI, config, glue code, CRUD → standard plan (type: execute)\nEach TDD plan gets one feature with RED/GREEN/REFACTOR gate sequence.\n</tdd_mode_active>"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "workflow.tdd_mode",
+        "onError": "skip"
+      }
+    ],
+    "gates": [
+      {
+        "point": "execute:post",
+        "check": {
+          "query": "tdd.review-checkpoint"
+        },
+        "when": "workflow.tdd_mode",
+        "blocking": false,
+        "onError": "skip"
       }
     ]
   },
@@ -1245,6 +1747,12 @@ const capabilities = {
     "description": "UI-SPEC design contract + retrospective UI audit for frontend phases.",
     "tier": "full",
     "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
     "skills": [
       "ui-phase",
       "ui-review"
@@ -1378,7 +1886,10 @@ const bySkill = {
   "ai-integration-phase": "ai-integration",
   "code-review": "code-review",
   "graphify": "graphify",
+  "mempalace-recall": "mempalace",
+  "mempalace-capture": "mempalace",
   "validate-phase": "nyquist",
+  "profile-user": "profile-pipeline",
   "secure-phase": "security",
   "ui-phase": "ui",
   "ui-review": "ui"
@@ -1391,8 +1902,10 @@ const byAgent = {
   "gsd-eval-planner": "ai-integration",
   "gsd-code-reviewer": "code-review",
   "gsd-code-fixer": "code-review",
+  "gsd-mempalace-curator": "mempalace",
   "gsd-nyquist-auditor": "nyquist",
   "gsd-pattern-mapper": "pattern-mapper",
+  "gsd-user-profiler": "profile-pipeline",
   "gsd-phase-researcher": "research",
   "gsd-security-auditor": "security",
   "gsd-ui-checker": "ui",
@@ -1402,11 +1915,39 @@ const byAgent = {
 const byLoopPoint = {
   "discuss:pre": {
     "steps": [],
-    "contributions": [],
+    "contributions": [
+      {
+        "capId": "mempalace",
+        "point": "discuss:pre",
+        "into": "orchestrator",
+        "fragment": {
+          "path": "fragments/recall-discuss.md",
+          "inline": "<!--\n  MemPalace capability — contribution fragment.\n  Rendered into the discuss:pre orchestrator prompt when `mempalace.recall_on_discuss` is true.\n  Contributes DATA (recall instructions), not control flow. onError: skip — never blocks discussion.\n-->\n### Memory recall (MemPalace)\n\n**Gate first.** Read `.planning/config.json`. If `mempalace.enabled` is not `true`, or `mempalace.recall_on_discuss` is `false`, **skip this entire section** and continue the discussion unchanged. (This contribution is only injected when the capability is enabled; the `recall_on_discuss` check lets you turn discuss-time recall off without disabling the rest of the capability.)\n\nOtherwise — before gathering new context, surface what you already know. This is read-only and side-effect-free; if MemPalace is unreachable, note \"memory unavailable\" and continue — recall never blocks discussion.\n\n1. **Resolve the wing.** Use `mempalace.wing` if set; otherwise derive it from `project_code` (fall back to the project directory name).\n2. **Wake up (cheap, ~600–900 tokens).**\n   - Interactive run → call `mempalace_search` after a wake-up read of the wing.\n   - Headless/cron run (no MCP server) → run `mempalace wake-up --wing <wing>` via the CLI.\n3. **Targeted recall.** Search the palace for prior work on this phase's topic:\n   - Interactive → `mempalace_search(query=<phase topic>, wing=<wing>)` and, when `mempalace.mirror_kg` is on, `mempalace_kg_query` / `mempalace_kg_timeline` for decision facts and their validity windows.\n   - Headless → `mempalace search \"<phase topic>\" --wing <wing>`.\n4. **Mode awareness.** Only `augment` is currently wired: always treat the palace as an *additional* recall layer on top of GSD's native memory — never skip `.planning/graphs/` or STATE. `kg_backend`/`replace` are forward-declared and behave as `augment` today.\n5. **Surface, don't dump.** Fold the top relevant drawers, decisions, patterns, and *surprises* into the discussion as prior context — cite drawer/fact provenance. Do not paste raw search output.\n\nIf any MemPalace call errors or times out, skip the rest of recall and proceed with discussion as normal.\n"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "mempalace.enabled",
+        "onError": "skip"
+      }
+    ],
     "gates": []
   },
   "discuss:post": {
-    "steps": [],
+    "steps": [
+      {
+        "capId": "mempalace",
+        "point": "discuss:post",
+        "ref": {
+          "skill": "mempalace-capture"
+        },
+        "produces": [],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "mempalace.enabled",
+        "onError": "skip"
+      }
+    ],
     "contributions": [],
     "gates": []
   },
@@ -1425,6 +1966,34 @@ const byLoopPoint = {
           "CONTEXT.md"
         ],
         "when": "workflow.ai_integration_phase",
+        "onError": "skip"
+      },
+      {
+        "capId": "intel",
+        "point": "plan:pre",
+        "ref": {
+          "command": "intel api-surface"
+        },
+        "produces": [
+          ".planning/intel/API-SURFACE.md"
+        ],
+        "consumes": [],
+        "when": "intel.enabled",
+        "onError": "skip"
+      },
+      {
+        "capId": "mempalace",
+        "point": "plan:pre",
+        "ref": {
+          "skill": "mempalace-recall"
+        },
+        "produces": [
+          "MEMORY-RECALL.md"
+        ],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "mempalace.enabled",
         "onError": "skip"
       },
       {
@@ -1483,17 +2052,48 @@ const byLoopPoint = {
     ],
     "contributions": [
       {
+        "capId": "schema-gate",
+        "point": "plan:pre",
+        "into": "planner",
+        "fragment": {
+          "path": "fragments/plan-pre.md",
+          "inline": "# Schema Push Detection Gate\n\n> Detects schema-relevant files in the phase scope and injects a mandatory `[BLOCKING]` schema push task into the plan. Prevents false-positive verification where build/types pass because TypeScript types come from config, not the live database.\n\nCheck if any files in the phase scope match schema patterns:\n\n```bash\nPHASE_SECTION=$(gsd_run query roadmap.get-phase \"${PHASE}\" --pick section 2>/dev/null)\n```\n\nScan `PHASE_SECTION`, `CONTEXT.md` (if loaded), and `RESEARCH.md` (if exists) for file paths matching these ORM patterns:\n\n| ORM | File Patterns |\n|-----|--------------|\n| Payload CMS | `src/collections/**/*.ts`, `src/globals/**/*.ts` |\n| Prisma | `prisma/schema.prisma`, `prisma/schema/*.prisma` |\n| Drizzle | `drizzle/schema.ts`, `src/db/schema.ts`, `drizzle/*.ts` |\n| Supabase | `supabase/migrations/*.sql` |\n| TypeORM | `src/entities/**/*.ts`, `src/migrations/**/*.ts` |\n\nAlso check if any existing PLAN.md files for this phase already reference these file patterns in `files_modified`.\n\n**If schema-relevant files detected:**\n\nSet `SCHEMA_PUSH_REQUIRED=true` and `SCHEMA_ORM={detected_orm}`.\n\nDetermine the push command for the detected ORM:\n\n| ORM | Push Command | Non-TTY Workaround |\n|-----|-------------|-------------------|\n| Payload CMS | `npx payload migrate` | `CI=true PAYLOAD_MIGRATING=true npx payload migrate` |\n| Prisma | `npx prisma db push` | `npx prisma db push --accept-data-loss` (if destructive) |\n| Drizzle | `npx drizzle-kit push` | `npx drizzle-kit push` |\n| Supabase | `supabase db push` | Set `SUPABASE_ACCESS_TOKEN` env var |\n| TypeORM | `npx typeorm migration:run` | `npx typeorm migration:run -d src/data-source.ts` |\n\nInject the following into the planner prompt (step 8) as an additional constraint:\n\n```markdown\n<schema_push_requirement>\n**[BLOCKING] Schema Push Required**\n\nThis phase modifies schema-relevant files ({detected_files}). The planner MUST include\na `[BLOCKING]` task that runs the database schema push command AFTER all schema file\nmodifications are complete but BEFORE verification.\n\n- ORM detected: {SCHEMA_ORM}\n- Push command: {push_command}\n- Non-TTY workaround: {env_hint}\n- If push requires interactive prompts that cannot be suppressed, flag the task for\n  manual intervention with `autonomous: false`\n\nThis task is mandatory — the phase CANNOT pass verification without it. Build and\ntype checks will pass without the push (types come from config, not the live database),\ncreating a false-positive verification state.\n</schema_push_requirement>\n```\n\nDisplay: `Schema files detected ({SCHEMA_ORM}) — [BLOCKING] push task will be injected into plans`\n\n**If no schema-relevant files detected:** Skip silently.\n"
+        },
+        "produces": [],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "workflow.schema_push_detection",
+        "onError": "skip"
+      },
+      {
         "capId": "security",
         "point": "plan:pre",
         "into": "planner",
         "fragment": {
           "inline": "Each PLAN.md must include a <threat_model> block when security enforcement is active. Use the configured ASVS level and blocking threshold from workflow.security_asvs_level and workflow.security_block_on."
         },
+        "configValues": {
+          "security_asvs_level": "workflow.security_asvs_level",
+          "security_block_on": "workflow.security_block_on"
+        },
         "produces": [],
         "consumes": [
           "CONTEXT.md"
         ],
         "when": "workflow.security_enforcement"
+      },
+      {
+        "capId": "tdd",
+        "point": "plan:pre",
+        "into": "planner",
+        "fragment": {
+          "inline": "<tdd_mode_active>\n**TDD Mode is ENABLED.** Apply TDD heuristics to all eligible tasks:\n- Business logic with defined I/O → type: tdd\n- API endpoints with request/response contracts → type: tdd\n- Data transformations, validation, algorithms → type: tdd\n- UI, config, glue code, CRUD → standard plan (type: execute)\nEach TDD plan gets one feature with RED/GREEN/REFACTOR gate sequence.\n</tdd_mode_active>"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "workflow.tdd_mode",
+        "onError": "skip"
       }
     ],
     "gates": [
@@ -1510,9 +2110,34 @@ const byLoopPoint = {
     ]
   },
   "plan:post": {
-    "steps": [],
+    "steps": [
+      {
+        "capId": "mempalace",
+        "point": "plan:post",
+        "ref": {
+          "skill": "mempalace-capture"
+        },
+        "produces": [],
+        "consumes": [
+          "PLAN.md"
+        ],
+        "when": "mempalace.enabled",
+        "onError": "skip"
+      }
+    ],
     "contributions": [],
-    "gates": []
+    "gates": [
+      {
+        "capId": "gap-analysis",
+        "point": "plan:post",
+        "check": {
+          "query": "gap-analysis.plan-post"
+        },
+        "when": "workflow.post_planning_gaps",
+        "blocking": false,
+        "onError": "skip"
+      }
+    ]
   },
   "execute:pre": {
     "steps": [],
@@ -1526,8 +2151,42 @@ const byLoopPoint = {
   },
   "execute:wave:post": {
     "steps": [],
-    "contributions": [],
+    "contributions": [
+      {
+        "capId": "mempalace",
+        "point": "execute:wave:post",
+        "into": "verifier",
+        "fragment": {
+          "path": "fragments/capture-problems.md",
+          "inline": "<!--\n  MemPalace capability — contribution fragment.\n  Rendered into the execute:wave:post verifier prompt when `mempalace.capture_artifacts` is true.\n  Contributes DATA (capture instructions), not control flow. onError: skip — never fails a wave.\n-->\n### Capture problems → fixes (MemPalace)\n\n**Gate first.** Read `.planning/config.json`. If `mempalace.enabled` is not `true`, or `mempalace.capture_artifacts` is `false`, **skip this entire section** and let the wave complete unchanged. (This contribution is only injected when the capability is enabled; the `capture_artifacts` check lets you turn capture off without disabling the rest of the capability.)\n\nOtherwise — after verifying this wave, persist any *confirmed* problem→fix pairs into the palace so they are recalled in future phases. This is best-effort; if MemPalace is unreachable, skip silently — capture never fails a wave.\n\nFor each confirmed bug/issue resolved in this wave:\n\n1. **Resolve the wing** (`mempalace.wing`, else `project_code`, else project dir) and target `room: problems`.\n2. **Dedupe first.** Call `mempalace_check_duplicate` (interactive) before filing so re-runs don't create duplicate drawers.\n3. **File the drawer verbatim.** Store the problem statement and its fix as a drawer in `room: problems` — interactive: `mempalace_add_drawer`; headless: `mempalace mine` / `mempalace hook run`. Include provenance (`source_file`, phase id).\n4. **Mirror the KG fact** when `mempalace.mirror_kg` is on: add `(<bug>, fixed_by, <fix>)` with `valid_from` = the phase date via `mempalace_kg_add`.\n5. **Mode awareness.** Only `augment` is currently wired: the fact is an *additive* mirror alongside `.planning/graphs/` (never a replacement). `kg_backend`/`replace` are forward-declared and behave as `augment` today.\n\nCaptures are idempotent: deterministic drawer IDs + `check_duplicate` mean re-running the wave re-files the same content without duplication. On any error, skip and let the wave complete normally.\n"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "mempalace.enabled",
+        "onError": "skip"
+      }
+    ],
     "gates": [
+      {
+        "capId": "drift",
+        "point": "execute:wave:post",
+        "check": {
+          "query": "verify.schema-drift"
+        },
+        "when": "workflow.schema_drift_gate",
+        "blocking": true,
+        "onError": "skip"
+      },
+      {
+        "capId": "drift",
+        "point": "execute:wave:post",
+        "check": {
+          "query": "verify.codebase-drift"
+        },
+        "when": "workflow.schema_drift_gate",
+        "blocking": false,
+        "onError": "skip"
+      },
       {
         "capId": "ui",
         "point": "execute:wave:post",
@@ -1559,7 +2218,18 @@ const byLoopPoint = {
       }
     ],
     "contributions": [],
-    "gates": []
+    "gates": [
+      {
+        "capId": "tdd",
+        "point": "execute:post",
+        "check": {
+          "query": "tdd.review-checkpoint"
+        },
+        "when": "workflow.tdd_mode",
+        "blocking": false,
+        "onError": "skip"
+      }
+    ]
   },
   "verify:pre": {
     "steps": [],
@@ -1568,6 +2238,19 @@ const byLoopPoint = {
   },
   "verify:post": {
     "steps": [
+      {
+        "capId": "mempalace",
+        "point": "verify:post",
+        "ref": {
+          "skill": "mempalace-capture"
+        },
+        "produces": [],
+        "consumes": [
+          "SUMMARY.md"
+        ],
+        "when": "mempalace.enabled",
+        "onError": "skip"
+      },
       {
         "capId": "nyquist",
         "point": "verify:post",
@@ -1639,7 +2322,21 @@ const byLoopPoint = {
     ]
   },
   "ship:post": {
-    "steps": [],
+    "steps": [
+      {
+        "capId": "mempalace",
+        "point": "ship:post",
+        "ref": {
+          "agent": "gsd-mempalace-curator"
+        },
+        "produces": [],
+        "consumes": [
+          "UAT.md"
+        ],
+        "when": "mempalace.enabled",
+        "onError": "skip"
+      }
+    ],
     "contributions": [],
     "gates": []
   }
@@ -1649,14 +2346,31 @@ const configKeys = {
   "workflow.ai_integration_phase": "ai-integration",
   "workflow.code_review": "code-review",
   "workflow.code_review_depth": "code-review",
+  "workflow.drift_threshold": "drift",
+  "workflow.drift_action": "drift",
+  "workflow.schema_drift_gate": "drift",
+  "workflow.post_planning_gaps": "gap-analysis",
   "graphify.enabled": "graphify",
   "intel.enabled": "intel",
+  "mempalace.enabled": "mempalace",
+  "mempalace.memory_mode": "mempalace",
+  "mempalace.wing": "mempalace",
+  "mempalace.recall_on_discuss": "mempalace",
+  "mempalace.recall_on_plan": "mempalace",
+  "mempalace.capture_artifacts": "mempalace",
+  "mempalace.mirror_kg": "mempalace",
+  "mempalace.cross_project_tunnels": "mempalace",
+  "mempalace.diary_journal": "mempalace",
+  "mempalace.auto_capture_hooks": "mempalace",
   "workflow.nyquist_validation": "nyquist",
   "workflow.pattern_mapper": "pattern-mapper",
+  "profile-pipeline.enabled": "profile-pipeline",
   "workflow.research": "research",
+  "workflow.schema_push_detection": "schema-gate",
   "workflow.security_enforcement": "security",
   "workflow.security_asvs_level": "security",
   "workflow.security_block_on": "security",
+  "workflow.tdd_mode": "tdd",
   "workflow.ui_phase": "ui",
   "workflow.ui_review": "ui",
   "workflow.ui_safety_gate": "ui"
@@ -1686,6 +2400,34 @@ const configSchema = {
       "deep"
     ]
   },
+  "workflow.drift_threshold": {
+    "owner": "drift",
+    "type": "number",
+    "default": 3,
+    "description": "Minimum number of new structural elements (directories, barrel exports, migrations, routes) before the codebase drift gate triggers a warn or auto-remap action."
+  },
+  "workflow.drift_action": {
+    "owner": "drift",
+    "type": "enum",
+    "default": "warn",
+    "description": "Action taken by the codebase drift gate when the threshold is exceeded: warn (advisory message) or auto-remap (spawn gsd-codebase-mapper agent to refresh STRUCTURE.md).",
+    "values": [
+      "warn",
+      "auto-remap"
+    ]
+  },
+  "workflow.schema_drift_gate": {
+    "owner": "drift",
+    "type": "boolean",
+    "default": true,
+    "description": "Enable the drift gates at execute:wave:post. When enabled, the schema drift gate blocks verification if schema-relevant files changed during execution but no database push command was executed; the codebase drift gate (non-blocking) warns when structural additions exceed the drift_threshold."
+  },
+  "workflow.post_planning_gaps": {
+    "owner": "gap-analysis",
+    "type": "boolean",
+    "default": true,
+    "description": "Run the post-planning gap analysis report after plans are generated."
+  },
   "graphify.enabled": {
     "owner": "graphify",
     "type": "boolean",
@@ -1697,6 +2439,71 @@ const configSchema = {
     "type": "boolean",
     "default": false,
     "description": "Enable the intel code-intelligence command."
+  },
+  "mempalace.enabled": {
+    "owner": "mempalace",
+    "type": "boolean",
+    "default": false,
+    "description": "Master toggle for the MemPalace memory capability."
+  },
+  "mempalace.memory_mode": {
+    "owner": "mempalace",
+    "type": "enum",
+    "default": "augment",
+    "description": "How MemPalace relates to GSD native memory. Only 'augment' (additive) is implemented today; 'kg_backend' and 'replace' are forward-declared (routing seam not yet built) and currently behave as 'augment'.",
+    "values": [
+      "augment",
+      "kg_backend",
+      "replace"
+    ]
+  },
+  "mempalace.wing": {
+    "owner": "mempalace",
+    "type": "string",
+    "default": "",
+    "description": "Palace wing name; empty derives from project_code / project dir."
+  },
+  "mempalace.recall_on_discuss": {
+    "owner": "mempalace",
+    "type": "boolean",
+    "default": true,
+    "description": "Inject wake-up + search recall at discuss:pre."
+  },
+  "mempalace.recall_on_plan": {
+    "owner": "mempalace",
+    "type": "boolean",
+    "default": true,
+    "description": "Produce MEMORY-RECALL.md at plan:pre."
+  },
+  "mempalace.capture_artifacts": {
+    "owner": "mempalace",
+    "type": "boolean",
+    "default": true,
+    "description": "File CONTEXT/PLAN/SUMMARY and learnings into the palace at phase boundaries."
+  },
+  "mempalace.mirror_kg": {
+    "owner": "mempalace",
+    "type": "boolean",
+    "default": true,
+    "description": "Mirror decisions/learnings into MemPalace's temporal knowledge graph."
+  },
+  "mempalace.cross_project_tunnels": {
+    "owner": "mempalace",
+    "type": "boolean",
+    "default": false,
+    "description": "Propose/create cross-wing tunnels at ship:post."
+  },
+  "mempalace.diary_journal": {
+    "owner": "mempalace",
+    "type": "boolean",
+    "default": true,
+    "description": "Write a per-agent diary entry at ship:post."
+  },
+  "mempalace.auto_capture_hooks": {
+    "owner": "mempalace",
+    "type": "boolean",
+    "default": false,
+    "description": "Reserved / not yet implemented: will install MemPalace's native stop/precompact Claude Code hooks for passive mid-session capture (the capability's hooks array is currently empty)."
   },
   "workflow.nyquist_validation": {
     "owner": "nyquist",
@@ -1710,11 +2517,23 @@ const configSchema = {
     "default": true,
     "description": "Run the pattern mapper before planning when context or research is available."
   },
+  "profile-pipeline.enabled": {
+    "owner": "profile-pipeline",
+    "type": "boolean",
+    "default": false,
+    "description": "Enable the developer profiling pipeline commands (scan-sessions, extract-messages, profile-sample, write-profile, etc.)."
+  },
   "workflow.research": {
     "owner": "research",
     "type": "boolean",
     "default": true,
     "description": "Run phase research before planning when research artifacts are missing or explicitly refreshed."
+  },
+  "workflow.schema_push_detection": {
+    "owner": "schema-gate",
+    "type": "boolean",
+    "default": true,
+    "description": "Enable ORM schema push detection during planning. When schema-relevant files are detected in the phase scope, a [BLOCKING] push task is injected into the plan."
   },
   "workflow.security_enforcement": {
     "owner": "security",
@@ -1740,6 +2559,12 @@ const configSchema = {
       "low",
       "none"
     ]
+  },
+  "workflow.tdd_mode": {
+    "owner": "tdd",
+    "type": "boolean",
+    "default": false,
+    "description": "Enable TDD mode: planner annotates eligible tasks type:tdd and executor enforces RED/GREEN/REFACTOR gate sequence."
   },
   "workflow.ui_phase": {
     "owner": "ui",
@@ -2665,6 +3490,26 @@ const commandFamilies = {
     "module": "audit-command-router.cjs",
     "router": "routeAuditUat"
   },
+  "extract-messages": {
+    "capId": "profile-pipeline",
+    "module": "profile-pipeline-command-router.cjs",
+    "router": "routeExtractMessages"
+  },
+  "generate-claude-md": {
+    "capId": "profile-pipeline",
+    "module": "profile-pipeline-command-router.cjs",
+    "router": "routeGenerateClaudeMd"
+  },
+  "generate-claude-profile": {
+    "capId": "profile-pipeline",
+    "module": "profile-pipeline-command-router.cjs",
+    "router": "routeGenerateClaudeProfile"
+  },
+  "generate-dev-preferences": {
+    "capId": "profile-pipeline",
+    "module": "profile-pipeline-command-router.cjs",
+    "router": "routeGenerateDevPreferences"
+  },
   "graphify": {
     "capId": "graphify",
     "module": "graphify-command-router.cjs",
@@ -2674,6 +3519,26 @@ const commandFamilies = {
     "capId": "intel",
     "module": "intel-command-router.cjs",
     "router": "routeIntelCommand"
+  },
+  "profile-questionnaire": {
+    "capId": "profile-pipeline",
+    "module": "profile-pipeline-command-router.cjs",
+    "router": "routeProfileQuestionnaire"
+  },
+  "profile-sample": {
+    "capId": "profile-pipeline",
+    "module": "profile-pipeline-command-router.cjs",
+    "router": "routeProfileSample"
+  },
+  "scan-sessions": {
+    "capId": "profile-pipeline",
+    "module": "profile-pipeline-command-router.cjs",
+    "router": "routeScanSessions"
+  },
+  "write-profile": {
+    "capId": "profile-pipeline",
+    "module": "profile-pipeline-command-router.cjs",
+    "router": "routeWriteProfile"
   }
 };
 
@@ -2687,8 +3552,15 @@ const capabilityClusters = {
   "graphify": [
     "graphify"
   ],
+  "mempalace": [
+    "mempalace-capture",
+    "mempalace-recall"
+  ],
   "nyquist": [
     "validate-phase"
+  ],
+  "profile-pipeline": [
+    "profile-user"
   ],
   "security": [
     "secure-phase"
@@ -2718,7 +3590,19 @@ const profileMembership = {
       "full"
     ]
   },
+  "mempalace": {
+    "tier": "full",
+    "profiles": [
+      "full"
+    ]
+  },
   "nyquist": {
+    "tier": "full",
+    "profiles": [
+      "full"
+    ]
+  },
+  "profile-pipeline": {
     "tier": "full",
     "profiles": [
       "full"
@@ -2750,20 +3634,26 @@ const _requiresGraph = {
   "codex": [],
   "copilot": [],
   "cursor": [],
+  "drift": [],
+  "gap-analysis": [],
   "gemini": [],
   "graphify": [],
   "hermes": [],
   "intel": [],
   "kilo": [],
   "kimi": [],
+  "mempalace": [],
   "nyquist": [],
   "opencode": [],
   "pattern-mapper": [
     "research"
   ],
+  "profile-pipeline": [],
   "qwen": [],
   "research": [],
+  "schema-gate": [],
   "security": [],
+  "tdd": [],
   "trae": [],
   "ui": [],
   "windsurf": []

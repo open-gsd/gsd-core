@@ -24,7 +24,7 @@ For the system design, see [ADR-857: Capability system](../adr/857-capability-sy
 | `security` | `secure-phase` | `gsd-security-auditor` | `workflow.security_enforcement`, `workflow.security_asvs_level`, `workflow.security_block_on` |
 | `nyquist` | `validate-phase` | `gsd-nyquist-auditor` | `workflow.nyquist_validation` |
 
-The central config schema still accepts these keys during migration, but workflows must not branch directly on the boolean activation keys. Workflows resolve activation by calling `gsd-tools loop render-hooks <point>`.
+These keys are Capability-owned config keys. They remain valid for `.planning/config.json`, but they are not central schema keys; validation and defaults come from the generated Capability Registry. Workflows must not branch directly on the boolean activation keys. Workflows resolve activation by calling `gsd-tools loop render-hooks <point>`.
 
 ## Hook Map
 
@@ -45,7 +45,20 @@ EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw)
 VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)
 ```
 
-The resolver evaluates each hook's `when` key against the project config and the capability config default. If the key is absent and the capability declaration default is `true`, the hook is active.
+The resolver evaluates each hook's `when` key against the project config and the capability config default. If the key is absent and the capability declaration default is `true`, the hook is configured on.
+
+A hook is active only when both conditions are true:
+
+- The Capability is enabled by the resolved Capability State: installed by `.gsd-profile` and surfaced by `.gsd-surface.json`.
+- The hook is configured on by its `when` key.
+
+Use the diagnostic state view to inspect the same answer the workflows consume:
+
+```bash
+gsd-tools capability state --config-dir ~/.claude --raw
+```
+
+In that output, `configured` reflects config/default resolution, while `active` reflects final participation after install and surface state. Disabling a migrated Capability at the runtime surface removes its active hooks even when the project config default is `true`.
 
 Direct command workflows self-gate the same way:
 

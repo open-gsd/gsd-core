@@ -5,6 +5,7 @@
   "description": "AI-SPEC design contract workflow for phases that build AI systems; owns the AI integration command, agents, and workflow.ai_integration_phase activation key.",
   "tier": "full",
   "requires": [],
+  "runtimeCompat": { "supported": ["*"], "unsupported": [] },
   "skills": ["ai-integration-phase"],
   "agents": [
     "gsd-framework-selector",

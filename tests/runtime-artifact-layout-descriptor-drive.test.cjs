@@ -23,8 +23,7 @@
  *   the STEP-0 golden matches the descriptor exactly and is left unchanged.
  *
  * Unknown runtime case:
- *   ALLOWED_RUNTIMES guard throws TypeError BEFORE the descriptor lookup,
- *   so unknown runtimes still throw:
+ *   Missing runtime descriptors throw the same TypeError as the old table:
  *     TypeError: Unknown runtime: 'grok' — add to runtime-artifact-layout.cjs table
  */
 
@@ -33,7 +32,10 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
-const { resolveRuntimeArtifactLayout } = require(
+const {
+  resolveRuntimeArtifactLayout,
+  resolveRuntimeArtifactLayoutFromRegistry,
+} = require(
   path.join(ROOT, 'gsd-core', 'bin', 'lib', 'runtime-artifact-layout.cjs'),
 );
 
@@ -262,10 +264,10 @@ for (const runtime of RUNTIMES) {
 }
 
 // ── Unknown runtime ───────────────────────────────────────────────────────────
-// ALLOWED_RUNTIMES guard fires BEFORE descriptor lookup — reproduces old behaviour.
+// Missing descriptors reproduce the old loud-fail behaviour.
 
 describe('resolveRuntimeArtifactLayout — unknown runtime (descriptor-driven)', () => {
-  test('throws TypeError for grok (not in ALLOWED_RUNTIMES)', () => {
+  test('throws TypeError for grok (no artifact layout descriptor)', () => {
     assert.throws(
       () => resolveRuntimeArtifactLayout('grok', FAKE_DIR, 'global'),
       (err) => {
@@ -288,6 +290,48 @@ describe('resolveRuntimeArtifactLayout — unknown runtime (descriptor-driven)',
         return true;
       },
     );
+  });
+});
+
+describe('resolveRuntimeArtifactLayout — descriptor-only future runtime', () => {
+  test('accepts a synthetic descriptor-backed runtime without a parallel allowlist update', () => {
+    const registry = {
+      runtimes: {
+        futurecli: {
+          runtime: {
+            artifactLayout: {
+              global: [
+                {
+                  kind: 'commands',
+                  destSubpath: 'commands',
+                  prefix: 'gsd-',
+                  nesting: 'flat',
+                  recursive: false,
+                  converter: null,
+                },
+              ],
+              local: [],
+            },
+          },
+        },
+      },
+    };
+
+    const layout = resolveRuntimeArtifactLayoutFromRegistry(
+      registry,
+      'futurecli',
+      FAKE_DIR,
+      'global',
+    );
+
+    assert.strictEqual(layout.runtime, 'futurecli');
+    assert.strictEqual(layout.configDir, FAKE_DIR);
+    assert.strictEqual(layout.scope, 'global');
+    assert.strictEqual(layout.kinds.length, 1);
+    assert.strictEqual(layout.kinds[0].kind, 'commands');
+    assert.strictEqual(layout.kinds[0].destSubpath, 'commands');
+    assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
+    assert.strictEqual(typeof layout.kinds[0].stage, 'function');
   });
 });
 

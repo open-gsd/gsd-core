@@ -19,16 +19,21 @@ const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
-function writePlanWithKeyLinks(tmpDir, keyLinksYaml) {
+function writePlanWithKeyLinks(tmpDir, keyLinksYaml, opts) {
   // parseMustHavesBlock expects 4-space indent for block name, 6-space for items
+  const wave = (opts && opts.wave != null) ? opts.wave : 1;
+  const filesModified = (opts && opts.filesModified) ? opts.filesModified : ['src/a.js'];
+  const filesModifiedYaml = filesModified.length === 1
+    ? `[${filesModified[0]}]`
+    : `[${filesModified.join(', ')}]`;
   const content = [
     '---',
     'phase: 01-test',
     'plan: 01',
     'type: execute',
-    'wave: 1',
+    `wave: ${wave}`,
     'depends_on: []',
-    'files_modified: [src/a.js]',
+    `files_modified: ${filesModifiedYaml}`,
     'autonomous: true',
     'must_haves:',
     '    key_links:',
@@ -47,6 +52,39 @@ function writePlanWithKeyLinks(tmpDir, keyLinksYaml) {
   ].join('\n');
   const planPath = path.join(tmpDir, '.planning', 'phases', '01-test', '01-01-PLAN.md');
   fs.mkdirSync(path.dirname(planPath), { recursive: true });
+  fs.writeFileSync(planPath, content);
+}
+
+/**
+ * Write an additional plan file in the same phase directory with specific
+ * wave + files_modified (no key_links, just declaring future artifacts).
+ */
+function writeCompanionPlan(tmpDir, planFileName, wave, filesModified) {
+  const filesModifiedYaml = `[${filesModified.join(', ')}]`;
+  const content = [
+    '---',
+    'phase: 01-test',
+    'plan: 02',
+    'type: execute',
+    `wave: ${wave}`,
+    'depends_on: []',
+    `files_modified: ${filesModifiedYaml}`,
+    'autonomous: true',
+    'must_haves:',
+    '    key_links: []',
+    '---',
+    '',
+    '<tasks>',
+    '<task type="auto">',
+    '  <name>Task 2: Create file</name>',
+    '  <files>src/b.js</files>',
+    '  <action>Create it</action>',
+    '  <verify><automated>echo ok</automated></verify>',
+    '  <done>Done</done>',
+    '</task>',
+    '</tasks>',
+  ].join('\n');
+  const planPath = path.join(tmpDir, '.planning', 'phases', '01-test', planFileName);
   fs.writeFileSync(planPath, content);
 }
 
@@ -122,10 +160,123 @@ describe('bug-967 verify key-links strict file-path contract', () => {
     );
   });
 
-  // ── 3. Doc-contract guard: reference example must use a file path for to: ──
+  // ── 3. Regression #1202: missing from: file promised by a same-wave plan → pending:true ──
+  //
+  // A from: file absent on disk but listed in files_modified of another plan at
+  // the same wave must be reported pending:true (not verified:false) and must NOT
+  // count against the all_verified gate.
+  //
+  // This test MUST FAIL before the fix is applied (the gate hard-fails today).
+  test('pending:true and all_verified:true when from: file is promised by a same-wave plan', () => {
+    // Plan under test is wave 2; it references src/future-artifact.js which does not
+    // exist on disk yet.
+    writePlanWithKeyLinks(tmpDir, [
+      '- from: "src/future-artifact.js"',
+      '  to: "src/consumer.js"',
+      '  via: "requires future-artifact"',
+      '  pattern: "future-artifact"',
+    ], { wave: 2, filesModified: ['src/consumer.js'] });
+
+    // A companion plan also at wave 2 declares src/future-artifact.js in files_modified
+    writeCompanionPlan(tmpDir, '01-02-PLAN.md', 2, ['src/future-artifact.js']);
+
+    // Do NOT create src/future-artifact.js on disk — it is a planned future file
+
+    const result = runGsdTools(
+      'verify key-links .planning/phases/01-test/01-01-PLAN.md',
+      tmpDir,
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const out = JSON.parse(result.output);
+    assert.strictEqual(
+      out.links[0].pending,
+      true,
+      `Expected pending:true for a from: file promised by a same-wave plan. Got: ${JSON.stringify(out.links[0])}`,
+    );
+    assert.strictEqual(
+      out.all_verified,
+      true,
+      `Expected all_verified:true (pending links should not fail the gate). Got: ${JSON.stringify(out)}`,
+    );
+    assert.strictEqual(
+      out.links[0].verified,
+      false,
+      `Expected verified:false (file is not yet verified — just pending). Got: ${JSON.stringify(out.links[0])}`,
+    );
+  });
+
+  // ── 4. Regression #1202: missing from: file promised by a LATER-wave plan → pending:true ──
+  test('pending:true and all_verified:true when from: file is promised by a later-wave plan', () => {
+    // Plan under test is wave 1; companion plan is wave 3 (later wave promises the file)
+    writePlanWithKeyLinks(tmpDir, [
+      '- from: "src/later-artifact.js"',
+      '  to: "src/consumer.js"',
+      '  via: "later wave dependency"',
+    ], { wave: 1, filesModified: ['src/consumer.js'] });
+
+    writeCompanionPlan(tmpDir, '01-02-PLAN.md', 3, ['src/later-artifact.js']);
+
+    const result = runGsdTools(
+      'verify key-links .planning/phases/01-test/01-01-PLAN.md',
+      tmpDir,
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const out = JSON.parse(result.output);
+    assert.strictEqual(
+      out.links[0].pending,
+      true,
+      `Expected pending:true for from: file promised by a later-wave plan. Got: ${JSON.stringify(out.links[0])}`,
+    );
+    assert.strictEqual(
+      out.all_verified,
+      true,
+      `Expected all_verified:true (pending links not counted against gate). Got: ${JSON.stringify(out)}`,
+    );
+  });
+
+  // ── 5. Regression #1202: missing from: file NOT promised by any plan → hard failure ──
+  //
+  // Absence of from: file with no plan promising it must remain a genuine verified:false failure.
+  test('verified:false and all_verified:false when from: file is absent and not promised by any plan', () => {
+    writePlanWithKeyLinks(tmpDir, [
+      '- from: "src/truly-missing.js"',
+      '  to: "src/consumer.js"',
+      '  via: "no plan promises this"',
+    ], { wave: 1, filesModified: ['src/consumer.js'] });
+
+    // No companion plan that promises src/truly-missing.js
+
+    const result = runGsdTools(
+      'verify key-links .planning/phases/01-test/01-01-PLAN.md',
+      tmpDir,
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const out = JSON.parse(result.output);
+    assert.strictEqual(
+      out.links[0].verified,
+      false,
+      `Expected verified:false for absent+unpromised from: file. Got: ${JSON.stringify(out.links[0])}`,
+    );
+    assert.strictEqual(
+      out.all_verified,
+      false,
+      `Expected all_verified:false (hard failure). Got: ${JSON.stringify(out)}`,
+    );
+    // pending must not be true
+    assert.notStrictEqual(
+      out.links[0].pending,
+      true,
+      `Expected pending not to be true for an absent+unpromised file. Got: ${JSON.stringify(out.links[0])}`,
+    );
+  });
+
+  // ── 6. Doc-contract guard: reference example must use a file path for to: ──
   //
   // The old reference example had  to: "/api/feed"  (an HTTP endpoint).
-  // After the fix, to: must be a relative file path like "app/api/feed/route.ts".
+  // After fix #967, to: must be a relative file path like "app/api/feed/route.ts".
   // This test reads the canonical docs file and asserts the example is consistent
   // with the strict-path contract.
   //

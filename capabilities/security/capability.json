@@ -5,6 +5,7 @@
   "description": "Threat mitigation verification and ship-time security blocking for phases with security enforcement enabled.",
   "tier": "full",
   "requires": [],
+  "runtimeCompat": { "supported": ["*"], "unsupported": [] },
   "skills": ["secure-phase"],
   "agents": ["gsd-security-auditor"],
   "hooks": [],
@@ -42,6 +43,10 @@
       "into": "planner",
       "fragment": {
         "inline": "Each PLAN.md must include a <threat_model> block when security enforcement is active. Use the configured ASVS level and blocking threshold from workflow.security_asvs_level and workflow.security_block_on."
+      },
+      "configValues": {
+        "security_asvs_level": "workflow.security_asvs_level",
+        "security_block_on": "workflow.security_block_on"
       },
       "produces": [],
       "consumes": ["CONTEXT.md"],

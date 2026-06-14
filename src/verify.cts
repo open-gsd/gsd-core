@@ -21,6 +21,8 @@ import frontmatterMod = require('./frontmatter.cjs');
 import stateMod = require('./state.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- model-profiles.cjs is an export= CommonJS module
 import modelProfilesMod = require('./model-profiles.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- plan-scan.cjs is an export= CommonJS module
+import planScanMod = require('./plan-scan.cjs');
 import { execGit, platformReadSync as safeReadFile, platformWriteSync } from './shell-command-projection.cjs';
 import { PACKAGE_NAME } from './package-identity.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
@@ -525,6 +527,36 @@ function cmdVerifyArtifacts(cwd: string, planFilePath: string, raw: boolean): vo
   );
 }
 
+/**
+ * Returns a Set of file paths (relative to cwd) that are promised by plans in
+ * the same phase directory at a wave number >= minWave.
+ *
+ * Used by cmdVerifyKeyLinks to avoid hard-failing a missing `from:` file that
+ * is a planned future artifact (fix #1202).
+ */
+function collectPromisedFilesAtOrAfterWave(phaseDir: string, minWave: number): Set<string> {
+  const promised = new Set<string>();
+  const { planFiles } = planScanMod.scanPhasePlans(phaseDir);
+  for (const planFile of planFiles) {
+    const planFullPath = path.join(phaseDir, planFile);
+    const planContent = safeReadFile(planFullPath);
+    if (!planContent) continue;
+    const fm = extractFrontmatter(planContent);
+    const waveRaw = fm['wave'];
+    const wave = typeof waveRaw === 'string' ? parseInt(waveRaw, 10) : (typeof waveRaw === 'number' ? waveRaw : NaN);
+    if (isNaN(wave) || wave < minWave) continue;
+    const filesModified = fm['files_modified'];
+    if (!filesModified) continue;
+    const files: unknown[] = Array.isArray(filesModified)
+      ? filesModified
+      : (typeof filesModified === 'string' ? [filesModified] : []);
+    for (const f of files) {
+      if (typeof f === 'string' && f.trim()) promised.add(f.trim());
+    }
+  }
+  return promised;
+}
+
 function cmdVerifyKeyLinks(cwd: string, planFilePath: string, raw: boolean): void {
   if (!planFilePath) {
     error('plan file path required');
@@ -542,7 +574,27 @@ function cmdVerifyKeyLinks(cwd: string, planFilePath: string, raw: boolean): voi
     return;
   }
 
+  // Derive the current plan's wave number and phase directory for wave-aware
+  // missing-file handling (fix #1202).
+  const currentFm = extractFrontmatter(content);
+  const currentWaveRaw = currentFm['wave'];
+  const currentWave = typeof currentWaveRaw === 'string'
+    ? parseInt(currentWaveRaw, 10)
+    : (typeof currentWaveRaw === 'number' ? currentWaveRaw : 1);
+  const phaseDir = path.dirname(fullPath);
+
+  // Collect files promised by plans at wave >= currentWave (lazy: computed once
+  // the first time a missing source is encountered).
+  let promisedFiles: Set<string> | null = null;
+  function getPromisedFiles(): Set<string> {
+    if (promisedFiles === null) {
+      promisedFiles = collectPromisedFilesAtOrAfterWave(phaseDir, isNaN(currentWave) ? 1 : currentWave);
+    }
+    return promisedFiles;
+  }
+
   const results: Record<string, unknown>[] = [];
+  let pendingCount = 0;
   for (const link of keyLinks) {
     if (typeof link === 'string') continue;
     const check: Record<string, unknown> = {
@@ -553,9 +605,19 @@ function cmdVerifyKeyLinks(cwd: string, planFilePath: string, raw: boolean): voi
       detail: '',
     };
 
-    const sourceContent = safeReadFile(path.join(cwd, (link['from'] as string) || ''));
+    const fromPath = (link['from'] as string) || '';
+    const sourceContent = safeReadFile(path.join(cwd, fromPath));
     if (!sourceContent) {
-      check['detail'] = 'Source file not found (from: must be a relative file path; describe components/endpoints in via:)';
+      // Check if the missing file is promised by a plan at the same or later wave.
+      const promised = getPromisedFiles();
+      const isPromised = fromPath.trim() !== '' && promised.has(fromPath.trim());
+      if (isPromised) {
+        check['pending'] = true;
+        check['detail'] = 'Source file not yet created — declared in files_modified of a same-or-later-wave plan';
+        pendingCount++;
+      } else {
+        check['detail'] = 'Source file not found (from: must be a relative file path; describe components/endpoints in via:)';
+      }
     } else if (link['pattern']) {
       try {
         const regex = new RegExp(link['pattern'] as string);
@@ -587,15 +649,20 @@ function cmdVerifyKeyLinks(cwd: string, planFilePath: string, raw: boolean): voi
   }
 
   const verified = results.filter((r) => r['verified']).length;
+  // A pending link (from: file promised by a same-or-later-wave plan) is not a
+  // hard failure — it should not count against the all_verified gate (#1202).
+  const hardFailed = results.filter((r) => !r['verified'] && !r['pending']).length;
+  const allVerified = hardFailed === 0;
   output(
     {
-      all_verified: verified === results.length,
+      all_verified: allVerified,
       verified,
+      pending: pendingCount,
       total: results.length,
       links: results,
     },
     raw,
-    verified === results.length ? 'valid' : 'invalid',
+    allVerified ? 'valid' : 'invalid',
   );
 }
 
@@ -1659,7 +1726,7 @@ function cmdVerifySchemaDrift(
   const pDir = planningDir(cwd);
   const phasesDir = path.join(pDir, 'phases');
   if (!fs.existsSync(phasesDir)) {
-    output({ drift_detected: false, blocking: false, message: 'No phases directory' }, raw);
+    output({ block: false, drift_detected: false, blocking: false, message: 'No phases directory' }, raw);
     return;
   }
 
@@ -1679,7 +1746,7 @@ function cmdVerifySchemaDrift(
 
   if (!phaseDir) {
     output(
-      { drift_detected: false, blocking: false, message: `Phase directory not found: ${phaseArg}` },
+      { block: false, drift_detected: false, blocking: false, message: `Phase directory not found: ${phaseArg}` },
       raw,
     );
     return;
@@ -1709,15 +1776,21 @@ function cmdVerifySchemaDrift(
 
   const result = checkSchemaDrift(allFiles, executionLog, { skipCheck: !!skipFlag }) as unknown as Record<string, unknown>;
 
+  const isSkipped = !!result['skipped'];
   output(
     {
+      // Uniform gate contract: `block` = true means "this gate's bad condition is met".
+      // When skipCheck is true (GSD_SKIP_SCHEMA_CHECK=true), the gate is bypassed —
+      // block must be false regardless of whether drift was detected.
+      // drift_detected and blocking are kept for compatibility.
+      block: isSkipped ? false : !!result['driftDetected'],
       drift_detected: result['driftDetected'],
       blocking: result['blocking'],
       schema_files: result['schemaFiles'],
       orms: result['orms'],
       unpushed_orms: result['unpushedOrms'],
       message: result['message'],
-      skipped: result['skipped'] || false,
+      skipped: isSkipped,
     },
     raw,
   );
@@ -1735,6 +1808,8 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
     const structurePath = path.join(codebaseDir, 'STRUCTURE.md');
     if (!fs.existsSync(structurePath)) {
       emit({
+        // Uniform gate contract: block = action_required (false when skipped).
+        block: false,
         skipped: true,
         reason: 'no-structure-md',
         action_required: false,
@@ -1749,6 +1824,7 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
       structureMd = fs.readFileSync(structurePath, 'utf-8');
     } catch (err) {
       emit({
+        block: false,
         skipped: true,
         reason: 'cannot-read-structure-md: ' + (err instanceof Error ? err.message : String(err)),
         action_required: false,
@@ -1763,6 +1839,7 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
     const revProbe = execGit(['rev-parse', 'HEAD'], { cwd }) as unknown as { exitCode: number; stdout: string };
     if (revProbe.exitCode !== 0) {
       emit({
+        block: false,
         skipped: true,
         reason: 'not-a-git-repo',
         action_required: false,
@@ -1784,6 +1861,7 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
     const diff = execGit(['diff', '--name-status', base, 'HEAD'], { cwd }) as unknown as { exitCode: number; stdout: string };
     if (diff.exitCode !== 0) {
       emit({
+        block: false,
         skipped: true,
         reason: 'git-diff-failed',
         action_required: false,
@@ -1825,10 +1903,13 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
       runtime: resolveRuntime(cwd),
     });
 
+    const actionRequired = !!driftResult['actionRequired'];
     emit({
+      // Uniform gate contract: block = action_required.
+      block: actionRequired,
       skipped: !!driftResult['skipped'],
       reason: driftResult['reason'] || null,
-      action_required: !!driftResult['actionRequired'],
+      action_required: actionRequired,
       directive: driftResult['directive'],
       spawn_mapper: !!driftResult['spawnMapper'],
       affected_paths: driftResult['affectedPaths'] || [],
@@ -1840,6 +1921,7 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
     });
   } catch (err) {
     emit({
+      block: false,
       skipped: true,
       reason: 'exception: ' + (err && err instanceof Error ? err.message : String(err)),
       action_required: false,

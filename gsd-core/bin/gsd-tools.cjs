@@ -58,6 +58,11 @@
  *     [--name <name>]
  *     [--archive-phases]               Move phase dirs to milestones/vX.Y-phases/
  *
+ * User Story Validation:
+ *   user-story validate --story "..."  Validate "As a / I want to / so that" format
+ *                                      Returns JSON { valid, errors[], slots: {role,capability,outcome} | null }
+ *                                      --pick valid  Emit bare boolean (for workflow boolean checks)
+ *
  * Validation:
  *   validate consistency               Check phase numbering, disk/roadmap sync
  *   validate health [--repair]         Check .planning/ integrity, optionally repair
@@ -201,8 +206,6 @@ const milestone = require('./lib/milestone.cjs');
 const commands = require('./lib/commands.cjs');
 const init = require('./lib/init.cjs');
 const frontmatter = require('./lib/frontmatter.cjs');
-const profilePipeline = require('./lib/profile-pipeline.cjs');
-const profileOutput = require('./lib/profile-output.cjs');
 const workstream = require('./lib/workstream.cjs');
 const docs = require('./lib/docs.cjs');
 const learnings = require('./lib/learnings.cjs');
@@ -214,6 +217,7 @@ const verification = require('./lib/verification.cjs');
 const { routeInitCommand } = require('./lib/init-command-router.cjs');
 const loopResolver = require('./lib/loop-resolver.cjs');
 const capabilityState = require('./lib/capability-state.cjs');
+const capabilityWriter = require('./lib/capability-writer.cjs');
 const { routePhaseCommand } = require('./lib/phase-command-router.cjs');
 const { routePhasesCommand } = require('./lib/phases-command-router.cjs');
 const { routeValidateCommand } = require('./lib/validate-command-router.cjs');
@@ -222,6 +226,7 @@ const { routeAgentCommand } = require('./lib/agent-command-router.cjs');
 const { routeCheckCommand } = require('./lib/check-command-router.cjs');
 const { routeTaskCommand } = require('./lib/task-command-router.cjs');
 const { parseNamedArgs, parseMultiwordArg } = require('./lib/command-arg-projection.cjs');
+const { cmdGitBaseBranch } = require('./lib/git-base-branch.cjs');
 
 // ─── Bridge collapsed (Phase 4) ────────────────────────────────────────────────
 // Non-family commands now run through their CJS handlers directly. Keep the
@@ -508,9 +513,9 @@ async function main() {
     'current-timestamp, detect-custom-files, docs-init, effort, extract-messages, find-phase, ' +
     'from-gsd2, frontmatter, gap-analysis, generate-claude-md, generate-claude-profile, ' +
     'generate-dev-preferences, generate-slug, graphify, history-digest, init, intel, ' +
-    'capability, classify-confidence, learnings, list-todos, loop, milestone, package-legitimacy, phase, phase-plan-index, phases, profile-questionnaire, ' +
+    'capability, classify-confidence, git, learnings, list-todos, loop, milestone, package-legitimacy, phase, phase-plan-index, phases, profile-questionnaire, ' +
     'profile-sample, progress, prompt-budget, requirements, research-plan, research-store, resolve-granularity, resolve-model, roadmap, scaffold, state, ' +
-    'task, template, validate, verify, verify-path-exists, verify-summary, workstream, worktree\n\n' +
+    'task, template, user-story, validate, verify, verify-path-exists, verify-summary, workstream, worktree\n\n' +
     'Global flags:\n' +
     '  --raw              Emit raw output without post-processing\n' +
     '  --pick <field>     Extract a single field from JSON output (dot/bracket notation)\n' +
@@ -559,6 +564,7 @@ async function main() {
     'verify-summary', 'template', 'frontmatter', 'detect-custom-files',
     'worktree', 'prompt-budget',
     'research-store', 'research-plan', 'package-legitimacy', 'classify-confidence',
+    'user-story', // pure string validation — no .planning/ access needed
   ]);
   if (!SKIP_ROOT_RESOLUTION.has(command)) {
     cwd = findProjectRoot(cwd);
@@ -1236,7 +1242,39 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       // loop render-hooks <point>
       const loopSubcommand = args[1];
       if (loopSubcommand === 'render-hooks') {
-        loopResolver.cmdLoopRenderHooks(cwd, args[2], raw, {});
+        let loopConfigDir = null;
+        const configDirEqArg = args.find(arg => arg.startsWith('--config-dir='));
+        const configDirIdx = args.indexOf('--config-dir');
+        if (configDirEqArg) {
+          const value = configDirEqArg.slice('--config-dir='.length).trim();
+          if (!value) error('Missing value for --config-dir', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+          loopConfigDir = value;
+        } else if (configDirIdx !== -1) {
+          const value = args[configDirIdx + 1];
+          if (!value || value.startsWith('--')) {
+            error('Missing value for --config-dir', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+          }
+          loopConfigDir = value;
+        }
+        // --active-cap <capId>: parse and validate before delegating
+        let loopActiveCap = undefined;
+        const activeCapEqArg = args.find(arg => arg.startsWith('--active-cap='));
+        const activeCapIdx = args.indexOf('--active-cap');
+        if (activeCapEqArg) {
+          const value = activeCapEqArg.slice('--active-cap='.length).trim();
+          if (!value) error('Missing value for --active-cap (e.g. --active-cap tdd)', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+          loopActiveCap = value;
+        } else if (activeCapIdx !== -1) {
+          const value = args[activeCapIdx + 1];
+          if (!value || value.startsWith('--')) {
+            error('Missing value for --active-cap (e.g. --active-cap tdd)', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+          }
+          loopActiveCap = value;
+        }
+        loopResolver.cmdLoopRenderHooks(cwd, args[2], raw, {
+          configDir: loopConfigDir ? path.resolve(loopConfigDir) : undefined,
+          activeCap: loopActiveCap,
+        });
       } else {
         error(
           `Unknown loop subcommand: ${loopSubcommand}. Available: render-hooks`,
@@ -1267,9 +1305,85 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         }
         const resolvedConfigDir = configDir ? path.resolve(configDir) : null;
         capabilityState.cmdCapabilityState(cwd, resolvedConfigDir, raw, {});
+      } else if (capSubcommand === 'set') {
+        // capability set <id> [--on|--off|--enable|--disable] [--gate <key>=<bool>]... [--config-dir <dir>] [--runtime <r>] [--scope <s>]
+        const capId = args[2];
+        if (!capId || capId.startsWith('--')) {
+          error('Missing capability id for: capability set <id>', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+        }
+        // Parse --config-dir
+        const setConfigDirIdx = args.indexOf('--config-dir');
+        let setConfigDir = null;
+        if (setConfigDirIdx !== -1) {
+          const setConfigDirVal = args[setConfigDirIdx + 1];
+          if (!setConfigDirVal || setConfigDirVal.startsWith('--')) {
+            error('Missing value for --config-dir', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+          }
+          setConfigDir = setConfigDirVal;
+        }
+        const resolvedSetConfigDir = setConfigDir ? path.resolve(setConfigDir) : null;
+        // Parse --on/--enable and --off/--disable (mutually exclusive)
+        const hasOn = args.includes('--on') || args.includes('--enable');
+        const hasOff = args.includes('--off') || args.includes('--disable');
+        if (hasOn && hasOff) {
+          error('Conflicting flags: --on/--enable and --off/--disable cannot both be present', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+        }
+        let setEnabled;
+        if (hasOn) {
+          setEnabled = true;
+        } else if (hasOff) {
+          setEnabled = false;
+        }
+        // Parse --gate <key>=<bool> (repeatable)
+        const setGates = {};
+        for (let gi = 0; gi < args.length; gi++) {
+          if (args[gi] === '--gate') {
+            const gateVal = args[gi + 1];
+            if (!gateVal || gateVal.startsWith('--')) {
+              error('Missing value for --gate (expected <key>=<true|false>)', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+            }
+            const eqIdx = gateVal.indexOf('=');
+            if (eqIdx === -1) {
+              error(`Malformed --gate value "${gateVal}": expected <key>=<true|false>`, core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+            }
+            const gateKey = gateVal.slice(0, eqIdx);
+            const gateBoolStr = gateVal.slice(eqIdx + 1);
+            if (gateBoolStr !== 'true' && gateBoolStr !== 'false') {
+              error(`Malformed --gate value "${gateVal}": bool must be true or false`, core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+            }
+            setGates[gateKey] = gateBoolStr === 'true';
+            gi++; // skip consumed value
+          }
+        }
+        // Parse --runtime and --scope (validate that values are present and not flags)
+        const runtimeIdx = args.indexOf('--runtime');
+        let setRuntime;
+        if (runtimeIdx !== -1) {
+          const runtimeVal = args[runtimeIdx + 1];
+          if (!runtimeVal || runtimeVal.startsWith('--')) {
+            error('Missing value for --runtime', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+          }
+          setRuntime = runtimeVal;
+        }
+        const scopeIdx = args.indexOf('--scope');
+        let setScope;
+        if (scopeIdx !== -1) {
+          const scopeVal = args[scopeIdx + 1];
+          if (!scopeVal || scopeVal.startsWith('--')) {
+            error('Missing value for --scope', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+          }
+          setScope = scopeVal;
+        }
+        capabilityWriter.cmdCapabilitySet(
+          cwd,
+          resolvedSetConfigDir,
+          capId,
+          { enabled: setEnabled, gates: Object.keys(setGates).length > 0 ? setGates : undefined, runtime: setRuntime, scope: setScope },
+          raw,
+        );
       } else {
         error(
-          `Unknown capability subcommand: ${capSubcommand}. Available: state`,
+          `Unknown capability subcommand: ${capSubcommand}. Available: state, set`,
           core.ERROR_REASON ? core.ERROR_REASON.SDK_UNKNOWN_COMMAND : undefined,
         );
       }
@@ -1302,94 +1416,6 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         limit: limitIdx !== -1 ? parseInt(args[limitIdx + 1], 10) : 10,
         freshness: freshnessIdx !== -1 ? args[freshnessIdx + 1] : null,
       }, raw);
-      break;
-    }
-
-    // ─── Profiling Pipeline ────────────────────────────────────────────────
-
-    case 'scan-sessions': {
-      const pathIdx = args.indexOf('--path');
-      const sessionsPath = pathIdx !== -1 ? args[pathIdx + 1] : null;
-      const verboseFlag = args.includes('--verbose');
-      const jsonFlag = args.includes('--json');
-      await profilePipeline.cmdScanSessions(sessionsPath, { verbose: verboseFlag, json: jsonFlag }, raw);
-      break;
-    }
-
-    case 'extract-messages': {
-      const sessionIdx = args.indexOf('--session');
-      const sessionId = sessionIdx !== -1 ? args[sessionIdx + 1] : null;
-      const limitIdx = args.indexOf('--limit');
-      const limit = limitIdx !== -1 ? parseInt(args[limitIdx + 1], 10) : null;
-      const pathIdx = args.indexOf('--path');
-      const sessionsPath = pathIdx !== -1 ? args[pathIdx + 1] : null;
-      const projectArg = args[1];
-      if (!projectArg || projectArg.startsWith('--')) {
-        error('Usage: gsd-tools extract-messages <project> [--session <id>] [--limit N] [--path <dir>]\nRun scan-sessions first to see available projects.', ERROR_REASON.USAGE);
-      }
-      await profilePipeline.cmdExtractMessages(projectArg, { sessionId, limit }, raw, sessionsPath);
-      break;
-    }
-
-    case 'profile-sample': {
-      const pathIdx = args.indexOf('--path');
-      const sessionsPath = pathIdx !== -1 ? args[pathIdx + 1] : null;
-      const limitIdx = args.indexOf('--limit');
-      const limit = limitIdx !== -1 ? parseInt(args[limitIdx + 1], 10) : 150;
-      const maxPerIdx = args.indexOf('--max-per-project');
-      const maxPerProject = maxPerIdx !== -1 ? parseInt(args[maxPerIdx + 1], 10) : null;
-      const maxCharsIdx = args.indexOf('--max-chars');
-      const maxChars = maxCharsIdx !== -1 ? parseInt(args[maxCharsIdx + 1], 10) : 500;
-      await profilePipeline.cmdProfileSample(sessionsPath, { limit, maxPerProject, maxChars }, raw);
-      break;
-    }
-
-    // ─── Profile Output ──────────────────────────────────────────────────
-
-    case 'write-profile': {
-      const inputIdx = args.indexOf('--input');
-      const inputPath = inputIdx !== -1 ? args[inputIdx + 1] : null;
-      if (!inputPath) error('--input <analysis-json-path> is required', ERROR_REASON.USAGE);
-      const outputIdx = args.indexOf('--output');
-      const outputPath = outputIdx !== -1 ? args[outputIdx + 1] : null;
-      profileOutput.cmdWriteProfile(cwd, { input: inputPath, output: outputPath }, raw);
-      break;
-    }
-
-    case 'profile-questionnaire': {
-      const answersIdx = args.indexOf('--answers');
-      const answers = answersIdx !== -1 ? args[answersIdx + 1] : null;
-      profileOutput.cmdProfileQuestionnaire({ answers }, raw);
-      break;
-    }
-
-    case 'generate-dev-preferences': {
-      const analysisIdx = args.indexOf('--analysis');
-      const analysisPath = analysisIdx !== -1 ? args[analysisIdx + 1] : null;
-      const outputIdx = args.indexOf('--output');
-      const outputPath = outputIdx !== -1 ? args[outputIdx + 1] : null;
-      const stackIdx = args.indexOf('--stack');
-      const stack = stackIdx !== -1 ? args[stackIdx + 1] : null;
-      profileOutput.cmdGenerateDevPreferences(cwd, { analysis: analysisPath, output: outputPath, stack }, raw);
-      break;
-    }
-
-    case 'generate-claude-profile': {
-      const analysisIdx = args.indexOf('--analysis');
-      const analysisPath = analysisIdx !== -1 ? args[analysisIdx + 1] : null;
-      const outputIdx = args.indexOf('--output');
-      const outputPath = outputIdx !== -1 ? args[outputIdx + 1] : null;
-      const globalFlag = args.includes('--global');
-      profileOutput.cmdGenerateClaudeProfile(cwd, { analysis: analysisPath, output: outputPath, global: globalFlag }, raw);
-      break;
-    }
-
-    case 'generate-claude-md': {
-      const outputIdx = args.indexOf('--output');
-      const outputPath = outputIdx !== -1 ? args[outputIdx + 1] : null;
-      const autoFlag = args.includes('--auto');
-      const forceFlag = args.includes('--force');
-      profileOutput.cmdGenerateClaudeMd(cwd, { output: outputPath, auto: autoFlag, force: forceFlag }, raw);
       break;
     }
 
@@ -1981,6 +2007,93 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       } else {
         error('Unknown effort subcommand. Available: sync', ERROR_REASON.SDK_UNKNOWN_COMMAND);
       }
+      break;
+    }
+
+    // ─── User Story Validation (bug #1145) ────────────────────────────────────
+    //
+    // Invocation shapes (from mvp-phase.md and verify-work.md):
+    //   gsd_run query user-story.validate --story "$USER_STORY"
+    //   gsd_run query user-story.validate --story "$PHASE_GOAL" --pick valid
+    //
+    // Returns JSON: { valid: boolean, errors: string[], slots: { role, capability, outcome } | null }
+    //   - valid: true only when the story fully matches the canonical format
+    //   - errors: per-slot diagnostic strings (empty on success)
+    //   - slots: extracted role/capability/outcome on success; null on failure
+    //
+    // Canonical format (user-story-template.md):
+    //   "As a [user role], I want to [capability], so that [outcome]."
+    //   Each slot must be non-empty and contain non-whitespace content.
+    //
+    // No .planning/ access needed — pure string validation.
+
+    // #1146: single base-branch resolver for all forking workflows.
+    // Workflows call `gsd_run query git.base-branch` (dotted form normalised to
+    // command='git', args=['git','base-branch']).
+    case 'git': {
+      const subcommand = args[1];
+      if (subcommand !== 'base-branch') {
+        error(
+          `Unknown git subcommand: ${subcommand || '(none)'}. Available: base-branch`,
+          ERROR_REASON.SDK_UNKNOWN_COMMAND,
+        );
+        break;
+      }
+      cmdGitBaseBranch(cwd, args.slice(2));
+      break;
+    }
+
+    case 'user-story': {
+      const subcommand = args[1];
+      if (subcommand !== 'validate') {
+        error(`Unknown user-story subcommand: ${subcommand || '(none)'}. Available: validate`, ERROR_REASON.SDK_UNKNOWN_COMMAND);
+        break;
+      }
+
+      const storyIdx = args.indexOf('--story');
+      const story = (storyIdx !== -1 && args[storyIdx + 1] && !args[storyIdx + 1].startsWith('--'))
+        ? args[storyIdx + 1]
+        : '';
+
+      // Canonical extraction regex — requires non-whitespace content in each slot
+      // (\S.*? ensures the slot isn't whitespace-only).
+      // Named groups: role / capability / outcome.
+      const USER_STORY_RE = /^As a (\S.*?), I want to (\S.*?), so that (\S.*?)\.$/;
+
+      const errors = [];
+      const trimmed = story.trim();
+      let slots = null;
+
+      if (!trimmed) {
+        errors.push('Story is empty. Required format: "As a [role], I want to [capability], so that [outcome]."');
+      } else {
+        // Per-clause guards produce targeted, actionable error messages before
+        // attempting the full regex. Guards are ordered: role → capability → outcome → period.
+        if (!/^As a \S/i.test(trimmed)) {
+          errors.push('Story must start with "As a [user role]," (role must be non-empty).');
+        }
+        if (!/, I want to \S/i.test(trimmed)) {
+          errors.push('Story must include ", I want to [capability]," (capability must be non-empty).');
+        }
+        if (!/, so that \S/i.test(trimmed)) {
+          errors.push('Story must include ", so that [outcome]." (outcome must be non-empty).');
+        }
+        if (!trimmed.endsWith('.')) {
+          errors.push('Story must end with a period (.).');
+        }
+        // Full-regex check only when per-clause guards all passed — avoids
+        // redundant "format mismatch" noise on top of specific error messages.
+        if (errors.length === 0) {
+          const m = USER_STORY_RE.exec(trimmed);
+          if (!m) {
+            errors.push('Story does not match the canonical format: "As a [role], I want to [capability], so that [outcome]."');
+          } else {
+            slots = { role: m[1], capability: m[2], outcome: m[3] };
+          }
+        }
+      }
+
+      core.output({ valid: errors.length === 0, errors, slots }, raw);
       break;
     }
 

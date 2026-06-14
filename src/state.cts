@@ -351,34 +351,70 @@ function updateCurrentPositionFields(content: string, fields: { status?: string;
   const statusDefaults = KNOWN_TEMPLATE_DEFAULTS['Status'];
   const lastActivityDefaults = KNOWN_TEMPLATE_DEFAULTS['Last Activity'];
 
-  if (fields.status && /^Status:/m.test(posBody)) {
-    // Only replace when the existing Current Position Status is a known template default.
-    const existingStatusMatch = posBody.match(/^Status:\s*(.+)$/m);
-    const existingStatus = existingStatusMatch ? existingStatusMatch[1].trim() : null;
-    const isInList = existingStatus && statusDefaults.some(d => d.toLowerCase() === existingStatus.toLowerCase());
-    const matchesPattern = existingStatus && KNOWN_STATUS_PATTERNS.some(p => p.test(existingStatus));
-    const isDefault = !existingStatus || isInList || matchesPattern;
-    if (isDefault) {
-      posBody = posBody.replace(/^Status:.*$/m, `Status: ${fields.status}`);
+  if (fields.status) {
+    if (/^Status:/m.test(posBody)) {
+      // Inline format: Status: value — only replace when the existing value is a
+      // known template default (Knuth invariant: preserve executor-authored values).
+      const existingStatusMatch = posBody.match(/^Status:\s*(.+)$/m);
+      const existingStatus = existingStatusMatch ? existingStatusMatch[1].trim() : null;
+      const isInList = existingStatus && statusDefaults.some(d => d.toLowerCase() === existingStatus.toLowerCase());
+      const matchesPattern = existingStatus && KNOWN_STATUS_PATTERNS.some(p => p.test(existingStatus));
+      const isDefault = !existingStatus || isInList || matchesPattern;
+      if (isDefault) {
+        posBody = posBody.replace(/^Status:.*$/m, `Status: ${fields.status}`);
+      }
+    } else {
+      // Table format: | Status | value | — apply the same preserve-authored guard
+      // as the inline branch: only overwrite a known template default.
+      // (Finding 2 code-review: the table branch was unconditional before this fix.)
+      const existingStatus = stateExtractField(posBody, 'Status');
+      const isInList = existingStatus && statusDefaults.some(d => d.toLowerCase() === existingStatus.toLowerCase());
+      const matchesPattern = existingStatus && KNOWN_STATUS_PATTERNS.some(p => p.test(existingStatus));
+      const isDefault = !existingStatus || isInList || matchesPattern;
+      if (isDefault) {
+        const replaced = stateReplaceField(posBody, 'Status', fields.status);
+        if (replaced !== null) posBody = replaced;
+      }
     }
   }
-  if (fields.lastActivity && /^Last activity:/im.test(posBody)) {
-    // Only replace when the existing Current Position Last activity is a known template
-    // default (a bare ISO date).  Executor-authored narrative prose is preserved.
-    const existingActivityMatch = posBody.match(/^Last activity:\s*(.+)$/im);
-    const existingActivity = existingActivityMatch ? existingActivityMatch[1].trim() : null;
-    // A bare ISO date (YYYY-MM-DD with nothing after) is handler-generated.
-    // A date with a narrative suffix (e.g. "2026-02-15 -- blocked by infra...")
-    // was authored by the executor and must be preserved.
-    const isDateShape = existingActivity && /^\d{4}-\d{2}-\d{2}$/.test(existingActivity);
-    const inList = existingActivity && lastActivityDefaults.some(d => d.toLowerCase() === existingActivity.toLowerCase());
-    const isDefault = !existingActivity || isDateShape || inList;
-    if (isDefault) {
-      posBody = posBody.replace(/^Last activity:.*$/im, `Last activity: ${fields.lastActivity}`);
+  if (fields.lastActivity) {
+    if (/^Last activity:/im.test(posBody)) {
+      // Inline format — only replace when the existing value is a known template
+      // default (a bare ISO date).  Executor-authored narrative prose is preserved.
+      const existingActivityMatch = posBody.match(/^Last activity:\s*(.+)$/im);
+      const existingActivity = existingActivityMatch ? existingActivityMatch[1].trim() : null;
+      // A bare ISO date (YYYY-MM-DD with nothing after) is handler-generated.
+      // A date with a narrative suffix (e.g. "2026-02-15 -- blocked by infra...")
+      // was authored by the executor and must be preserved.
+      const isDateShape = existingActivity && /^\d{4}-\d{2}-\d{2}$/.test(existingActivity);
+      const inList = existingActivity && lastActivityDefaults.some(d => d.toLowerCase() === existingActivity.toLowerCase());
+      const isDefault = !existingActivity || isDateShape || inList;
+      if (isDefault) {
+        posBody = posBody.replace(/^Last activity:.*$/im, `Last activity: ${fields.lastActivity}`);
+      }
+    } else {
+      // Table format — apply the same preserve-authored guard as the inline branch:
+      // only overwrite a bare ISO date or a known default; preserve narrative prose.
+      // (Finding 2 code-review: the table branch was unconditional before this fix.)
+      const existingActivity = stateExtractField(posBody, 'Last Activity')
+        ?? stateExtractField(posBody, 'Last activity');
+      const isDateShape = existingActivity && /^\d{4}-\d{2}-\d{2}$/.test(existingActivity);
+      const inList = existingActivity && lastActivityDefaults.some(d => d.toLowerCase() === existingActivity.toLowerCase());
+      const isDefault = !existingActivity || isDateShape || inList;
+      if (isDefault) {
+        const replaced = stateReplaceField(posBody, 'Last Activity', fields.lastActivity)
+          ?? stateReplaceField(posBody, 'Last activity', fields.lastActivity);
+        if (replaced !== null) posBody = replaced;
+      }
     }
   }
-  if (fields.plan && /^Plan:/m.test(posBody)) {
-    posBody = posBody.replace(/^Plan:.*$/m, `Plan: ${fields.plan}`);
+  if (fields.plan) {
+    if (/^Plan:/m.test(posBody)) {
+      posBody = posBody.replace(/^Plan:.*$/m, `Plan: ${fields.plan}`);
+    } else {
+      const replaced = stateReplaceField(posBody, 'Plan', fields.plan);
+      if (replaced !== null) posBody = replaced;
+    }
   }
 
   return content.replace(posPattern, () => `${posMatch[1]}${posBody}`);
@@ -1404,6 +1440,22 @@ function acquireStateLock(statePath: string, clock?: StateLockClock): string {
   const maxWaitMs = 30000;
   const startedAt = clock.now();
 
+  // Shared helper: check the time budget then back off with jitter before the
+  // next retry.  Both the EEXIST contention path and the recoverable-errno path
+  // must go through this so neither can busy-spin (#1217).
+  const checkBudgetAndSleep = (context: string) => {
+    if (clock.now() - startedAt >= maxWaitMs) {
+      const e = new Error(
+        'acquireStateLock: ' + lockPath + ' ' + context + ' for ' +
+        (clock.now() - startedAt) + 'ms (exceeded ' + maxWaitMs + 'ms budget)'
+      );
+      (e as unknown as Record<string, unknown>).lockBudgetExceeded = true;
+      throw e;
+    }
+    const jitter = Math.floor(Math.random() * 50);
+    clock.sleep(retryDelay + jitter);
+  };
+
   while (true) {
     try {
       const fd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
@@ -1414,9 +1466,13 @@ function acquireStateLock(statePath: string, clock?: StateLockClock): string {
       return lockPath;
     } catch (err) {
       // Transient filesystem errors (Docker overlay-fs, NFS, OS signals, AV scanners)
-      // are recoverable — retry the acquisition loop rather than propagating.
+      // are recoverable — retry with the same budget + backoff as the EEXIST path so
+      // a permanently-failing errno cannot busy-spin at 100% CPU (#1217).
       // See ACQUIRE_LOCK_RETRY_ERRNOS for the full list and rationale.
-      if (ACQUIRE_LOCK_RETRY_ERRNOS.has((err as NodeJS.ErrnoException).code as string)) { continue; }
+      if (ACQUIRE_LOCK_RETRY_ERRNOS.has((err as NodeJS.ErrnoException).code as string)) {
+        checkBudgetAndSleep((err as NodeJS.ErrnoException).code + ' persisted');
+        continue;
+      }
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err; // propagate — silent bypass causes lost updates
       // Only unlink a lock we did not place when it has crossed the staleness
       // threshold (crashed holder). Nuking a fresh lock held by a slow-but-live
@@ -1424,18 +1480,33 @@ function acquireStateLock(statePath: string, clock?: StateLockClock): string {
       try {
         const stat = fs.statSync(lockPath);
         if ((clock).now() - stat.mtimeMs > staleThresholdMs) {
-          try { fs.unlinkSync(lockPath); } catch { /* already gone */ }
+          let removed = false;
+          try { fs.unlinkSync(lockPath); removed = true; } catch { /* swallow: bounded below */ }
+          if (removed) {
+            // Successful steal — retry immediately to grab the just-freed lock.
+            // Must NOT call checkBudgetAndSleep here: a throw-after-delete would
+            // corrupt the filesystem state, and the budget is already bounded on
+            // the next iteration's EEXIST or open attempt (#1217 regression fix).
+            continue;
+          }
+          // Persistent unlinkSync failure — apply budget + backoff so it cannot
+          // busy-spin (#1217).
+          checkBudgetAndSleep('stale lock removal failed');
           continue;
         }
-      } catch { continue; /* released between EEXIST and stat */ }
-      if ((clock).now() - startedAt >= maxWaitMs) {
-        throw new Error(
-          'acquireStateLock: ' + lockPath + ' held by live process for ' +
-          ((clock).now() - startedAt) + 'ms (exceeded ' + maxWaitMs + 'ms budget)'
-        );
+      } catch (err) {
+        // Re-throw a budget-exceeded error from the unlinkSync failure path above
+        // unchanged — its message already names the real cause ("stale lock removal
+        // failed") and double-wrapping it would replace that with the misleading
+        // "statSync failed after EEXIST" context string (#1217 diagnostic fix).
+        if ((err as Record<string, unknown>)?.lockBudgetExceeded) throw err;
+        // statSync failed — lock was likely released between our EEXIST and this
+        // stat call.  Apply budget + backoff so a persistent statSync failure
+        // cannot busy-spin (#1217).
+        checkBudgetAndSleep('statSync failed after EEXIST');
+        continue;
       }
-      const jitter = Math.floor(Math.random() * 50);
-      (clock).sleep(retryDelay + jitter);
+      checkBudgetAndSleep('held by live process');
     }
   }
 }

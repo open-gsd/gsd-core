@@ -203,6 +203,54 @@ See [PLAN.md schema](plan-md.md) for the full field reference.
 | **Produced by** | `/gsd-pause-work`. |
 | **Consumed by** | Any workflow that starts on a phase — `discuss-phase` and `plan-phase` both check for this file at entry and require the agent to demonstrate understanding of any `blocking` anti-patterns before proceeding. |
 
+### `.planning/async-jobs/<job>.json`
+
+**Purpose**: Durable manifest for an async external job dispatched during Execute (long-running compute, e.g. HPC solver/training jobs). Its presence makes an Execute step's SUMMARY-absent state a *legal* `external_job_waiting` deferral rather than an illegal partial-plan state.
+
+**Stability contract (Hyrum's Law).** This schema is a depended-upon interface across the core loop and every scheduler backend. The core loop consumes only the named fields below and ignores any others; producers MUST write these fields and MAY add their own. The `version` field is the escape hatch for evolving the schema without breaking consumers. Coordinate any change with both the core half (#1165) and the producer capability (#1164).
+
+**Produced by**: a scheduler-adapter Capability at the `execute:wave:post` loop extension point (the capability half — tracked in #1164, default-off). Core never writes this file.
+
+**Consumed by**: `execute-phase` safe-resume, `resume-project`, and `pause-work` (the core half — #1165).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `version` | string | Manifest schema version (`"1.0"`). |
+| `job_id` | string | Backend-assigned job identifier. |
+| `plan_id` | string | `<phase>-<plan>` this job belongs to — the key tying the job to its Execute step. |
+| `phase` | string | Phase number. |
+| `backend` | string | Scheduler/backend name (e.g. `slurm`). **Opaque to core** — core never interprets or invokes it. |
+| `submit_command` | string | Exact command used to submit the job (audit / resubmit). |
+| `status` | enum | Scheduler-agnostic lifecycle state (see below). |
+| `expected_artifacts` | string[] | Paths the job is expected to produce; verified before the plan is closed. |
+| `verification_command` | string | Command that verifies the job's output before close-out. |
+| `resume_command` | string | Exact command to resume GSD reconciliation (re-enter the loop to re-check the job), e.g. `/gsd:execute-phase <phase>`. This is a GSD reconciliation entry point, not a scheduler resubmit. |
+| `submitted_at` | string | ISO 8601 submission timestamp. |
+| `terminal_details` | object \| null | Failure/terminal-state detail; `null` while non-terminal. |
+
+**`status` enum** — closed and scheduler-agnostic; producers map backend states onto these, and core reads only these:
+
+- `submitted`, `running` — **non-terminal**. The plan is in the legal `external_job_waiting` half-state; resume re-checks and never re-dispatches the plan.
+- `completed-unverified` — job finished but output not yet verified; resume MUST verify `expected_artifacts` / run `verification_command` before writing SUMMARY.md and closing the plan.
+- `failed`, `cancelled`, `timeout` — **terminal failure**; resume surfaces `terminal_details` and offers recovery: re-run reconciliation (`resume_command`), abort, or mark-and-skip. Resubmitting compute is a Capability/user action, never an automatic core action.
+
+**Trust boundary — manifest commands are untrusted input.** The manifest crosses a trust seam: a Capability (or anything that can write `.planning/`) produces it; the core loop consumes it. `submit_command`, `verification_command`, and `resume_command` are therefore UNTRUSTED. The core loop MUST NOT auto-execute them — before running any manifest-sourced command, surface the exact command and its manifest path to the user and require explicit confirmation. Validate before trusting a manifest: `version` is a recognized schema version, `plan_id` matches the plan under reconciliation, and `status` is one of the closed enum values. If a manifest is malformed or unrecognized, surface the anomaly and stop rather than acting on it.
+
+**Matching, multiple, and malformed manifests.** Match a manifest to a plan by its exact `plan_id` (string-equal — phase ids may contain `.`). If more than one manifest matches a single `plan_id`, or a matched manifest is not valid JSON, fail closed: surface the conflict and stop; never pick one heuristically.
+
+**No auto-dispatch (duplicate-execution guard).** A plan whose `plan_id` matches a manifest (any status) is excluded from EVERY dispatch path — `execute-phase` `safe_resume_gate`, `execute-phase` `discover_and_group_plans` (normal and cross-AI), and `execute-plan` plan-selection. Never spawn a fresh executor for such a plan; reconcile instead. Re-dispatching would duplicate the external job.
+
+**Matching a manifest to a plan** (glob-safe — tolerates an absent directory):
+```bash
+ASYNC_MANIFEST=$(find .planning/async-jobs -maxdepth 1 -name '*.json' -exec grep -lE "\"plan_id\"[[:space:]]*:[[:space:]]*\"${CURRENT_PLAN_ID}\"" {} + 2>/dev/null || true)
+```
+Match by exact `plan_id`. If more than one manifest matches, or any matched manifest is not valid JSON, fail closed: surface the conflict and stop.
+
+**Reconciliation by status** (manifest commands are untrusted — surface + require explicit user confirmation before running any):
+- `submitted` / `running` → non-terminal; still waiting. Report the job and stop; resume later. Never re-dispatch.
+- `completed-unverified` → after confirmation, verify `expected_artifacts` / run `verification_command`; only on success write SUMMARY.md and close the plan. If artifacts are missing, surface the anomaly — do not close.
+- `failed` / `cancelled` / `timeout` → terminal failure; surface `terminal_details` and offer recovery (re-run reconciliation via `resume_command`, abort, or mark-and-skip). Resubmitting compute is a Capability/user action, never automatic.
+
 ---
 
 ## Naming conventions

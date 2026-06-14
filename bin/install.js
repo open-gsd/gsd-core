@@ -26,8 +26,8 @@ const {
 // fs.readdirSync + RegExp work for every skill.
 const {
   transformContentToHyphen,
-  readCmdNames: readGsdCommandNames,
-} = require(path.join(__dirname, '..', 'scripts', 'fix-slash-commands.cjs'));
+  readGsdCommandNames,
+} = require('../gsd-core/bin/lib/command-roster.cjs');
 const {
   resolveAntigravityGlobalDir,
   getGlobalConfigDir,
@@ -38,6 +38,7 @@ const {
   readBaseRefFromSettings,
 } = require('../gsd-core/bin/lib/worktree-base-ref.cjs');
 const { resolveInstallPlan } = require('../gsd-core/bin/lib/runtime-config-adapter-registry.cjs');
+const runtimeArtifactConversion = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
 // Canonical set of hook files shipped to users. Imported here so writeManifest()
 // records exactly the same set that build-hooks.js copies to hooks/dist/, making
 // the manifest and the installed hooks/ dir structurally identical. Avoids the
@@ -2334,22 +2335,6 @@ const claudeToCursorTools = {
   SlashCommand: null,    // No equivalent — skills are auto-discovered
 };
 
-/**
- * Convert a Claude Code tool name to Cursor CLI format
- * @returns {string|null} Cursor tool name, or null if tool should be excluded
- */
-function convertCursorToolName(claudeTool) {
-  if (claudeTool in claudeToCursorTools) {
-    return claudeToCursorTools[claudeTool];
-  }
-  // MCP tools keep their format (Cursor supports MCP)
-  if (claudeTool.startsWith('mcp__')) {
-    return claudeTool;
-  }
-  // Most tools share the same name (Read, Write, Glob, Grep, Task, WebSearch, WebFetch, TodoWrite)
-  return claudeTool;
-}
-
 function convertSlashCommandsToCursorSkillMentions(content) {
   // Keep leading "/" for slash commands; only normalize gsd: -> gsd-.
   // This preserves rendered "next step" commands like "/gsd-execute-phase 17".
@@ -2476,22 +2461,6 @@ const claudeToWindsurfTools = {
   SlashCommand: null,    // No equivalent — skills are auto-discovered
 };
 
-/**
- * Convert a Claude Code tool name to Windsurf Cascade format
- * @returns {string|null} Windsurf tool name, or null if tool should be excluded
- */
-function convertWindsurfToolName(claudeTool) {
-  if (claudeTool in claudeToWindsurfTools) {
-    return claudeToWindsurfTools[claudeTool];
-  }
-  // MCP tools keep their format (Windsurf supports MCP)
-  if (claudeTool.startsWith('mcp__')) {
-    return claudeTool;
-  }
-  // Most tools share the same name (Read, Write, Glob, Grep, Task, WebSearch, WebFetch, TodoWrite)
-  return claudeTool;
-}
-
 function convertSlashCommandsToWindsurfSkillMentions(content) {
   // Keep leading "/" for slash commands; only normalize gsd: -> gsd-.
   return content.replace(/gsd:/gi, 'gsd-');
@@ -2603,25 +2572,6 @@ const claudeToAugmentTools = {
   SlashCommand: null,
   TodoWrite: 'add_tasks',
 };
-
-function convertAugmentToolName(claudeTool) {
-  if (claudeTool in claudeToAugmentTools) {
-    return claudeToAugmentTools[claudeTool];
-  }
-  if (claudeTool.startsWith('mcp__')) {
-    return claudeTool;
-  }
-  const toolMapping = {
-    Read: 'view',
-    Write: 'save-file',
-    Glob: 'view',
-    Grep: 'grep',
-    Task: null,
-    WebSearch: 'web-search',
-    WebFetch: 'web-fetch',
-  };
-  return toolMapping[claudeTool] || claudeTool;
-}
 
 function convertSlashCommandsToAugmentSkillMentions(content) {
   return content.replace(/gsd:/gi, 'gsd-');
@@ -3166,7 +3116,7 @@ purpose: ${toSingleLine(description)}
  * @param {object|null} runtimeResolver  — runtime-aware tier resolver from readGsdRuntimeProfileResolver
  * @param {object|null} effortCfg        — #443: merged effort config from readGsdEffectiveEffortConfig
  */
-function generateCodexAgentToml(agentName, agentContent, modelOverrides = null, runtimeResolver = null, effortCfg = null) {
+function generateCodexAgentToml(agentName, agentContent, modelOverrides = null, runtimeResolver = null, effortCfg = null, sandboxTier = 'codex-agent-sandbox') {
   const sandboxMode = CODEX_AGENT_SANDBOX[agentName] || 'read-only';
   const { frontmatter, body } = extractFrontmatterAndBody(agentContent);
   const frontmatterText = frontmatter || '';
@@ -3179,8 +3129,10 @@ function generateCodexAgentToml(agentName, agentContent, modelOverrides = null, 
   const lines = [
     `name = ${JSON.stringify(resolvedName)}`,
     `description = ${JSON.stringify(resolvedDescription)}`,
-    `sandbox_mode = "${sandboxMode}"`,
   ];
+  if (sandboxTier != null && sandboxTier !== 'none') {
+    lines.push(`sandbox_mode = "${sandboxMode}"`);
+  }
 
   // Embed model override when configured in ~/.gsd/defaults.json so that
   // model_overrides is respected on Codex (which uses static TOML, not inline
@@ -5745,7 +5697,7 @@ function writeCopilotHookConfig(targetDir) {
  * Generate config.toml and per-agent .toml files for Codex.
  * Reads agent .md files from source, extracts metadata, writes .toml configs.
  */
-function installCodexConfig(targetDir, agentsSrc) {
+function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-sandbox') {
   const configPath = path.join(targetDir, 'config.toml');
   const agentsTomlDir = path.join(targetDir, 'agents');
   fs.mkdirSync(agentsTomlDir, { recursive: true });
@@ -5791,7 +5743,7 @@ function installCodexConfig(targetDir, agentsSrc) {
     // #443 — pass unified effort config so model_reasoning_effort in the .toml
     // follows the same config-driven precedence as the Claude .md effort key.
     const effortCfg = readGsdEffectiveEffortConfig(targetDir);
-    const tomlContent = generateCodexAgentToml(name, content, modelOverrides, runtimeResolver, effortCfg);
+    const tomlContent = generateCodexAgentToml(name, content, modelOverrides, runtimeResolver, effortCfg, sandboxTier);
     fs.writeFileSync(path.join(agentsTomlDir, `${name}.toml`), tomlContent);
   }
 
@@ -6924,7 +6876,13 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false) {
       content = content.replace(/~\/\.claude\//g, pathPrefix);
       content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
       content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
+      content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\.\/\.claude(?![\w-])/g, `./${dirName}`);
       content = content.replace(/~\/\.augment\//g, pathPrefix);
+      content = content.replace(/\$HOME\/\.augment\//g, pathPrefix);
+      content = content.replace(/~\/\.augment(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.augment(?![\w-])/g, normalizedPathPrefix);
       content = processAttribution(content, getCommitAttribution(runtime));
       break;
 
@@ -6984,6 +6942,10 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false) {
       content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
       content = content.replace(/~\/\.qwen\//g, pathPrefix);
       content = content.replace(/\$HOME\/\.qwen\//g, pathPrefix);
+      content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/~\/\.qwen(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.qwen(?![\w-])/g, normalizedPathPrefix);
       // Bare relative .claude/ → .qwen/ (residual refs not matched above)
       content = content.replace(/\.claude\//g, '.qwen/');
       content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
@@ -7000,6 +6962,10 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false) {
       content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
       content = content.replace(/~\/\.hermes\//g, pathPrefix);
       content = content.replace(/\$HOME\/\.hermes\//g, pathPrefix);
+      content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/~\/\.hermes(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.hermes(?![\w-])/g, normalizedPathPrefix);
       // Bare relative .claude/ → .hermes/ (residual refs)
       content = content.replace(/\.claude\//g, '.hermes/');
       content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
@@ -10717,7 +10683,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     if (!isMinimalMode(_effectiveInstallMode)) {
       try {
         // Generate Codex config.toml and per-agent .toml files.
-        agentCount = installCodexConfig(targetDir, agentsSrc);
+        agentCount = installCodexConfig(targetDir, agentsSrc, plan.sandboxTier);
       } catch (e) {
         restoreCodexSnapshot();
         throw e;
@@ -12265,6 +12231,7 @@ module.exports = {
     parseConfigDirFromArgs,
     cleanupLegacyGsdCc,
     _applyRuntimeRewrites,
+    ...runtimeArtifactConversion,
   };
 
 // Main logic — only run when not loaded as a module for testing

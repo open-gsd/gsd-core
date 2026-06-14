@@ -65,7 +65,7 @@ jobs:
             if echo "$VERSION" | grep -qE '^(0|[1-9][0-9]*)\.0\.0$'; then
               IS_MAJOR="true"
             fi
-          elif echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[1-9][0-9]*$'; then
+          elif echo "$VERSION" | grep -qE '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.[1-9][0-9]*$'; then
             # Patch / hotfix release (X.Y.Z, Z>0)
             IS_HOTFIX="true"
             if [ "$ACTION" = "rc" ]; then

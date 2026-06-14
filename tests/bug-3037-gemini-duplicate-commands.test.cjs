@@ -15,9 +15,8 @@
  * directory already exists with managed-shape content, skip the local copy
  * and emit a clear warning explaining the conflict avoidance.
  *
- * Tests are structural: they assert on the post-install filesystem shape
- * (existence and overlap count of typed paths), not on warning-message
- * substrings.
+ * Tests assert on the post-install filesystem shape and capture the skip
+ * warning so the full test log remains warning-clean.
  */
 
 'use strict';
@@ -28,7 +27,7 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { createTempDir, cleanup } = require('./helpers.cjs');
+const { createTempDir, cleanup, captureConsole } = require('./helpers.cjs');
 
 const { install } = require('../bin/install.js');
 
@@ -78,8 +77,12 @@ describe('bug #3037: Gemini global+local install must not create duplicate comma
     return out.sort();
   }
 
+  function runInstall(...args) {
+    return captureConsole(() => install(...args));
+  }
+
   test('global install populates HOME/.gemini/commands/gsd', () => {
-    install(true, 'gemini');
+    runInstall(true, 'gemini');
     const globalCmds = path.join(tmpHome, '.gemini', 'commands', 'gsd');
     const files = listCommandFiles(globalCmds);
     assert.ok(
@@ -90,14 +93,19 @@ describe('bug #3037: Gemini global+local install must not create duplicate comma
 
   test('local install after global does NOT populate PROJECT/.gemini/commands/gsd (avoids /gsd:* namespace conflict)', () => {
     // Step 1: global install
-    install(true, 'gemini');
+    runInstall(true, 'gemini');
     const globalCmds = path.join(tmpHome, '.gemini', 'commands', 'gsd');
     const globalFiles = listCommandFiles(globalCmds);
     assert.ok(globalFiles.length > 0, 'precondition: global install must succeed');
 
     // Step 2: local install in a temp project
     process.chdir(tmpProject);
-    install(false, 'gemini');
+    const { stdout } = runInstall(false, 'gemini');
+    assert.match(
+      stdout,
+      /Skipping commands\/gsd\/ for local install/,
+      'local install must explain why it skips duplicate Gemini commands'
+    );
 
     // Assertion: the local commands/gsd/ directory must NOT exist (or must
     // be empty) so Gemini's conflict detection has nothing to rename. The
@@ -117,7 +125,7 @@ describe('bug #3037: Gemini global+local install must not create duplicate comma
     // No global install first — local should proceed normally so users who
     // only ever run --local still get GSD commands in their project.
     process.chdir(tmpProject);
-    install(false, 'gemini');
+    runInstall(false, 'gemini');
 
     const localCmds = path.join(tmpProject, '.gemini', 'commands', 'gsd');
     const localFiles = listCommandFiles(localCmds);
@@ -145,7 +153,7 @@ describe('bug #3037: Gemini global+local install must not create duplicate comma
     );
 
     process.chdir(tmpProject);
-    install(false, 'gemini');
+    runInstall(false, 'gemini');
 
     const localCmds = path.join(tmpProject, '.gemini', 'commands', 'gsd');
     const localFiles = listCommandFiles(localCmds);
@@ -171,7 +179,7 @@ describe('bug #3037: Gemini global+local install must not create duplicate comma
     );
 
     process.chdir(tmpProject);
-    install(false, 'gemini');
+    runInstall(false, 'gemini');
 
     const localCmds = path.join(tmpProject, '.gemini', 'commands', 'gsd');
     const localFiles = listCommandFiles(localCmds);

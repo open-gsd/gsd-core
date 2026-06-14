@@ -29,6 +29,7 @@ import stateMod = require('./state.cjs');
 import { platformWriteSync, platformReadSync, platformEnsureDir } from './shell-command-projection.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { deriveProgressFromRoadmap, clampPercent } from './phase-lifecycle.cjs';
+import { realClock } from './clock.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- uat-predicate.cjs is an export= CommonJS module
 import uatPredicate = require('./uat-predicate.cjs');
 const { evaluateUatPassed } = uatPredicate;
@@ -1339,7 +1340,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
   const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
   const statePath = path.join(planningDir(cwd), 'STATE.md');
   const phasesDir = path.join(planningDir(cwd), 'phases');
-  const today = new Date().toISOString().split('T')[0];
+  const today = realClock.today();
 
   const phaseInfoRaw = findPhaseInternal(cwd, phaseNum);
   if (!phaseInfoRaw) {
@@ -1372,8 +1373,16 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
       (f) => f.includes('-VERIFICATION') && f.endsWith('.md'),
     )) {
       const content = fs.readFileSync(path.join(phaseFullDir, file), 'utf-8');
-      if (/status: human_needed/.test(content)) warnings.push(`${file}: needs human verification`);
-      if (/status: gaps_found/.test(content)) warnings.push(`${file}: has unresolved gaps`);
+      // #1159 (Defect A): read ONLY the frontmatter `status` key to avoid false positives
+      // from historical metadata in the file body (e.g. `previous_status: gaps_found`).
+      // A full-text regex like /status: gaps_found/ matches the substring inside
+      // `previous_status: gaps_found`, producing spurious warnings even when the
+      // current frontmatter status is `passed`.
+      const verFm = extractFrontmatter(content) as Record<string, unknown>;
+      // Normalise to lower-case so `status: Passed` (title-case) is not missed.
+      const verStatus = typeof verFm['status'] === 'string' ? verFm['status'].trim().toLowerCase() : '';
+      if (verStatus === 'human_needed') warnings.push(`${file}: needs human verification`);
+      if (verStatus === 'gaps_found') warnings.push(`${file}: has unresolved gaps`);
     }
   } catch {
     /* intentionally empty */
@@ -1408,14 +1417,19 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         );
         roadmapContent = roadmapContent.replace(tableRowPattern, (fullRow) => {
           const cells = fullRow.split('|').slice(1, -1);
+          const dateShape = /^\d{4}-\d{2}-\d{2}$/;
           if (cells.length === 5) {
             cells[2] = ` ${summaryCount}/${planCount} `;
             cells[3] = ' Complete    ';
-            cells[4] = ` ${today} `;
+            // Preserve only a valid ISO date (#1161: idempotent; self-heal garbage)
+            const existingDate5 = cells[4].trim();
+            cells[4] = dateShape.test(existingDate5) ? cells[4] : ` ${today} `;
           } else if (cells.length === 4) {
             cells[1] = ` ${summaryCount}/${planCount} `;
             cells[2] = ' Complete    ';
-            cells[3] = ` ${today} `;
+            // Preserve only a valid ISO date (#1161: idempotent; self-heal garbage)
+            const existingDate4 = cells[3].trim();
+            cells[3] = dateShape.test(existingDate4) ? cells[3] : ` ${today} `;
           }
           return '|' + cells.join('|') + '|';
         });
@@ -1489,12 +1503,58 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             }
           }
 
+          // #1159 (Defect B): collect requirement IDs only from ACTIVE sections.
+          // Requirements under headings whose text contains "deferred", "backlog",
+          // "future", or "v2" (case-insensitive) are explicitly out of current scope
+          // and must not be flagged as missing from the Traceability table.
+          //
+          // Strategy: walk lines, track heading depth, and toggle a "deferred" flag
+          // when a heading matching the pattern is encountered.  A sub-heading (higher
+          // depth) that is ITSELF in a deferred parent remains deferred unless it
+          // opens a same-or-shallower heading that does NOT match the pattern.
+          // Lines inside fenced code blocks (``` or ~~~) are treated as content, not
+          // headings, to avoid false deferred-section detection from code examples.
+          const DEFERRED_HEADING_RE = /\b(?:deferred|backlog|future|v\d+)\b/i;
           const bodyReqIds: string[] = [];
-          const bodyReqPattern = /\*\*([A-Z][A-Z0-9]*-\d+)\*\*/g;
-          let bodyMatch: RegExpExecArray | null;
-          while ((bodyMatch = bodyReqPattern.exec(reqContent)) !== null) {
-            const id = bodyMatch[1];
-            if (!bodyReqIds.includes(id)) bodyReqIds.push(id);
+          // deferredDepth: the heading level that opened the current deferred block,
+          // or 0 when we are in an active section.
+          let deferredDepth = 0;
+          let inFence = false;
+          for (const line of reqContent.split(/\r?\n/)) {
+            // Track fenced code blocks (``` or ~~~).
+            if (/^\s*(?:```|~~~)/.test(line)) {
+              inFence = !inFence;
+              continue;
+            }
+            if (inFence) continue; // ignore content inside a code fence
+
+            const headingM = line.match(/^(#{1,6})\s+(.*)/);
+            if (headingM) {
+              const depth = headingM[1].length;
+              const text = headingM[2];
+              if (deferredDepth > 0 && depth > deferredDepth) {
+                // Sub-heading inside a deferred block: stays deferred regardless of name.
+                continue;
+              }
+              // Heading at same level or shallower than current deferred opener,
+              // or no active deferred block yet.
+              if (DEFERRED_HEADING_RE.test(text)) {
+                deferredDepth = depth; // enter a deferred block
+              } else {
+                deferredDepth = 0; // back in an active section
+              }
+              continue;
+            }
+
+            if (deferredDepth > 0) continue; // skip content in deferred sections
+
+            // Collect bold REQ-ID patterns from active-section lines.
+            const reqPat = /\*\*([A-Z][A-Z0-9]*-\d+)\*\*/g;
+            let bodyMatch: RegExpExecArray | null;
+            while ((bodyMatch = reqPat.exec(line)) !== null) {
+              const id = bodyMatch[1];
+              if (!bodyReqIds.includes(id)) bodyReqIds.push(id);
+            }
           }
 
           const traceabilityHeadingMatch = reqContent.match(/^#{1,6}\s+Traceability\b/im);

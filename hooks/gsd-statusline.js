@@ -312,7 +312,7 @@ function runStatusline() {
     const totalCtx = data.context_window?.total_tokens || 1_000_000;
     const acw = parseInt(process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW || '0', 10);
     const AUTO_COMPACT_BUFFER_PCT = acw > 0
-      ? Math.min(100, (acw / totalCtx) * 100)
+      ? Math.min(100, Math.max(0, (1 - acw / totalCtx) * 100))
       : 16.5;
     let ctx = '';
     if (remaining != null) {

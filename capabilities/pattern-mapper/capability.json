@@ -5,6 +5,7 @@
   "description": "Optional codebase-pattern mapping before planning; owns the pattern mapper agent and workflow.pattern_mapper activation key.",
   "tier": "full",
   "requires": ["research"],
+  "runtimeCompat": { "supported": ["*"], "unsupported": [] },
   "skills": [],
   "agents": ["gsd-pattern-mapper"],
   "hooks": [],

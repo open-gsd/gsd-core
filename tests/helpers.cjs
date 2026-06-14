@@ -296,6 +296,9 @@ function runNpm(args, options = {}) {
     HOME: _npmIsolatedHome,
     npm_config_cache: path.join(_npmIsolatedHome, '.npm'),
     npm_config_userconfig: path.join(_npmIsolatedHome, '.npmrc'),
+    npm_config_loglevel: 'error',
+    npm_config_update_notifier: 'false',
+    NO_UPDATE_NOTIFIER: '1',
   };
   const defaults = {
     encoding: 'utf-8',
@@ -326,6 +329,9 @@ function isolatedNpmEnv() {
     HOME: _npmIsolatedHome,
     npm_config_cache: path.join(_npmIsolatedHome, '.npm'),
     npm_config_userconfig: path.join(_npmIsolatedHome, '.npmrc'),
+    npm_config_loglevel: 'error',
+    npm_config_update_notifier: 'false',
+    NO_UPDATE_NOTIFIER: '1',
   };
 }
 

@@ -38,6 +38,7 @@ function run(args, cwd) {
         cwd,
         timeout: 15000,
         encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
       }),
       ok: true,
     };

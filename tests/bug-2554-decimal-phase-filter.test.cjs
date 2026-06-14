@@ -63,6 +63,8 @@ describe('bug #2554 — getMilestonePhaseFilter decimal phase dirs', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'ROADMAP.md'),
       [
+        '## Roadmap v1.0: Current',
+        '',
         '### Phase 01: One',
         '**Goal:** g',
         '',

@@ -69,10 +69,10 @@ function mkTemp() {
   return d;
 }
 
-// ─── 1. Equivalence / no-op with real registry ───────────────────────────────
+// ─── 1. Real registry overlay after Phase 6 cutover ──────────────────────────
 
-describe('EQUIVALENCE: real registry is a no-op overlay', () => {
-  test('loadConfig with an empty config.json returns base config without extra federated keys', () => {
+describe('REAL REGISTRY: capability config keys are surfaced by federated overlay', () => {
+  test('loadConfig with an empty config.json returns capability-owned defaults', () => {
     const tmpDir = mkTemp();
     // Write an empty config to trigger the try-branch (federated overlay path)
     writeConfig(tmpDir, {});
@@ -99,30 +99,14 @@ describe('EQUIVALENCE: real registry is a no-op overlay', () => {
       );
     }
 
-    // UI-capability keys must NOT appear as new top-level keys (they're still central
-    // and the overlay is empty — so these keys should not be added)
-    // Note: 'workflow' IS an existing top-level key concept via VALID_CONFIG_KEYS,
-    // but the nested keys like 'ui_phase' must not be present.
     const workflowSection = result['workflow'];
-    if (workflowSection && typeof workflowSection === 'object') {
-      // workflow section may already exist from user config but should not have ui_phase
-      // in the default no-config case
-      assert.ok(
-        !Object.prototype.hasOwnProperty.call(workflowSection, 'ui_phase'),
-        'workflow.ui_phase should not be injected by the federated overlay (key is still central)',
-      );
-      assert.ok(
-        !Object.prototype.hasOwnProperty.call(workflowSection, 'ui_review'),
-        'workflow.ui_review should not be injected by the federated overlay (key is still central)',
-      );
-      assert.ok(
-        !Object.prototype.hasOwnProperty.call(workflowSection, 'ui_safety_gate'),
-        'workflow.ui_safety_gate should not be injected by the federated overlay (key is still central)',
-      );
-    }
+    assert.ok(typeof workflowSection === 'object' && workflowSection !== null, 'workflow section must be created by federated overlay');
+    assert.strictEqual(workflowSection.ui_phase, true, 'workflow.ui_phase comes from the UI capability default');
+    assert.strictEqual(workflowSection.ui_review, true, 'workflow.ui_review comes from the UI capability default');
+    assert.strictEqual(workflowSection.ui_safety_gate, true, 'workflow.ui_safety_gate comes from the UI capability default');
   });
 
-  test('loadConfig with a real config.json returns expected values + no unexpected keys from overlay', () => {
+  test('loadConfig with a real config.json returns expected values plus capability defaults', () => {
     const tmpDir = mkTemp();
     writeConfig(tmpDir, { model_profile: 'balanced', research: true });
     const result = loadConfig(tmpDir);
@@ -130,10 +114,8 @@ describe('EQUIVALENCE: real registry is a no-op overlay', () => {
     assert.strictEqual(result['model_profile'], 'balanced', 'model_profile from config');
     assert.strictEqual(result['research'], true, 'research from config');
 
-    // The overlay must not have added any unexpected keys from the registry
-    // (all UI keys are central → skipped → no additions)
-    // Verify a spot-check: 'ui_phase' should not exist anywhere
     assert.strictEqual(result['ui_phase'], undefined, 'ui_phase should not appear as top-level key');
+    assert.strictEqual(result.workflow.ui_phase, true, 'workflow.ui_phase must be nested under workflow');
   });
 });
 
@@ -309,8 +291,7 @@ describe('FIX 2: overlay applied on the no-config path', () => {
     );
   });
 
-  test('no-config path with REAL registry (all keys central) → output is byte-identical to defaults (no-op)', () => {
-    // No config.json — use real registry which has all keys central
+  test('no-config path with REAL registry → capability defaults are surfaced', () => {
     _resetFederatedRegistryForTests();
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-fed-noconfig-real-'));
     tmpDirs.push(tmpDir);
@@ -320,16 +301,9 @@ describe('FIX 2: overlay applied on the no-config path', () => {
     const result = loadConfig(tmpDir);
     assert.ok(typeof result === 'object' && result !== null, 'result must be an object');
 
-    // With real registry (all keys central → overlay is empty → no-op), the result
-    // should be the defaults object WITHOUT any extra injected keys.
-    // Spot-check: ui_phase / ui_review / ui_safety_gate must NOT be injected
     const workflowSection = result['workflow'];
-    if (workflowSection && typeof workflowSection === 'object') {
-      assert.ok(
-        !Object.prototype.hasOwnProperty.call(workflowSection, 'ui_phase'),
-        'workflow.ui_phase must not be injected on no-config path (no-op)',
-      );
-    }
+    assert.ok(typeof workflowSection === 'object' && workflowSection !== null, 'workflow section must be created by real registry overlay');
+    assert.strictEqual(workflowSection.ui_phase, true, 'workflow.ui_phase must be injected on no-config path');
     // model_profile must be present (it comes from defaults)
     assert.ok(Object.prototype.hasOwnProperty.call(result, 'model_profile'), 'model_profile must be present');
   });

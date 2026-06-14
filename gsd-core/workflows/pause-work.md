@@ -48,7 +48,8 @@ If phase is detected, proceed with phase handoff path. Otherwise use the first m
 6. **Human actions pending**: Things that need manual intervention (MCP setup, API keys, approvals, manual testing)
 7. **Background processes**: Any running servers/watchers that were part of the workflow
 8. **Files modified**: What's changed but not committed
-9. **Blocking constraints**: Anti-patterns or methodological failures encountered during this session that a resuming agent MUST be aware of before proceeding. Only include items discovered through actual failure — not warnings or predictions. Assign each constraint a `severity`:
+9. **Outstanding async external jobs**: any `.planning/async-jobs/*.json` manifests for non-terminal jobs — record job id, backend, status, expected artifacts, verification + resume commands, and any watcher/daemon state. Do NOT cancel the external job; it keeps running across the pause.
+10. **Blocking constraints**: Anti-patterns or methodological failures encountered during this session that a resuming agent MUST be aware of before proceeding. Only include items discovered through actual failure — not warnings or predictions. Assign each constraint a `severity`:
    - `blocking` — The resuming agent MUST demonstrate understanding before proceeding. The discuss-phase and execute-phase workflows will enforce a mandatory understanding check.
    - `advisory` — Important context but does not gate resumption.
 
@@ -93,6 +94,9 @@ timestamp=$(gsd_run query current-timestamp full --raw)
   "blockers": [
     {"description": "{blocker}", "type": "technical|human_action|external", "workaround": "{if any}"}
   ],
+  "async_jobs": [
+    {"manifest": ".planning/async-jobs/{job}.json", "job_id": "{id}", "backend": "{backend}", "status": "running", "submit_command": "{cmd}", "submitted_at": "{iso8601}", "expected_artifacts": ["..."], "verification_command": "{cmd}", "resume_command": "{cmd}"}
+  ],
   "human_actions_pending": [
     {"action": "{what needs to be done}", "context": "{why}", "blocking": true}
   ],
@@ -104,6 +108,8 @@ timestamp=$(gsd_run query current-timestamp full --raw)
   "context_notes": "{mental state, approach, what you were thinking}"
 }
 ```
+
+Any recorded `async_jobs` entries are the primary resume context on the next session — check them first before treating a PLAN-without-SUMMARY as incomplete work.
 </step>
 
 <step name="write">
