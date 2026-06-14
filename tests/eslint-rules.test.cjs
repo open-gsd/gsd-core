@@ -18,6 +18,7 @@ const noSourceGrep = require('../eslint-rules/no-source-grep.cjs');
 const noMagicSleepInTests = require('../eslint-rules/no-magic-sleep-in-tests.cjs');
 const noElapsedAssertion = require('../eslint-rules/no-elapsed-assertion.cjs');
 const noRawRmsyncInTests = require('../eslint-rules/no-raw-rmsync-in-tests.cjs');
+const noTautologicalAssert = require('../eslint-rules/no-tautological-assert.cjs');
 
 const ruleTester = new RuleTester({
   languageOptions: {
@@ -478,6 +479,236 @@ describe('no-raw-rmsync-in-tests rule', () => {
         },
       ],
       invalid: [],
+    });
+  });
+});
+
+// ─── no-tautological-assert ──────────────────────────────────────────────────
+
+describe('no-tautological-assert rule', () => {
+  test('rule module exports a create function', () => {
+    assert.strictEqual(typeof noTautologicalAssert.create, 'function');
+  });
+
+  // ── VALID cases (must NOT error) ──────────────────────────────────────────
+
+  test('valid: assert.ok with a non-literal identifier argument', () => {
+    ruleTester.run('no-tautological-assert', noTautologicalAssert, {
+      valid: [
+        {
+          code: `
+            const assert = require('node:assert/strict');
+            assert.ok(result);
+          `,
+          filename: 'tests/foo.test.cjs',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: assert.strictEqual with mixed literal/identifier arguments', () => {
+    ruleTester.run('no-tautological-assert', noTautologicalAssert, {
+      valid: [
+        {
+          code: `
+            const assert = require('node:assert/strict');
+            assert.strictEqual(actual, true);
+          `,
+          filename: 'tests/foo.test.cjs',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: assert.strictEqual with identifier and numeric literal', () => {
+    ruleTester.run('no-tautological-assert', noTautologicalAssert, {
+      valid: [
+        {
+          code: `
+            const assert = require('node:assert/strict');
+            assert.strictEqual(x, 5);
+          `,
+          filename: 'tests/foo.test.cjs',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: assert.ok with a CallExpression argument', () => {
+    ruleTester.run('no-tautological-assert', noTautologicalAssert, {
+      valid: [
+        {
+          code: `
+            const assert = require('node:assert/strict');
+            assert.ok(fn());
+          `,
+          filename: 'tests/foo.test.cjs',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: assert.deepStrictEqual with two identifier arguments', () => {
+    ruleTester.run('no-tautological-assert', noTautologicalAssert, {
+      valid: [
+        {
+          code: `
+            const assert = require('node:assert/strict');
+            assert.deepStrictEqual(got, expected);
+          `,
+          filename: 'tests/foo.test.cjs',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: assert.strictEqual with two different identifier arguments', () => {
+    ruleTester.run('no-tautological-assert', noTautologicalAssert, {
+      valid: [
+        {
+          code: `
+            const assert = require('node:assert/strict');
+            assert.strictEqual(a, b);
+          `,
+          filename: 'tests/foo.test.cjs',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  // ── INVALID cases (must error) ────────────────────────────────────────────
+
+  test('invalid: assert.ok(true) — always-truthy boolean literal', () => {
+    ruleTester.run('no-tautological-assert', noTautologicalAssert, {
+      valid: [],
+      invalid: [
+        {
+          code: `
+            const assert = require('node:assert/strict');
+            assert.ok(true);
+          `,
+          filename: 'tests/foo.test.cjs',
+          errors: [{ messageId: 'tautologicalTruthiness' }],
+        },
+      ],
+    });
+  });
+
+  test('invalid: assert(true) — bare assert with always-truthy boolean literal', () => {
+    ruleTester.run('no-tautological-assert', noTautologicalAssert, {
+      valid: [],
+      invalid: [
+        {
+          code: `
+            const assert = require('node:assert');
+            assert(true);
+          `,
+          filename: 'tests/foo.test.cjs',
+          errors: [{ messageId: 'tautologicalTruthiness' }],
+        },
+      ],
+    });
+  });
+
+  test('invalid: assert.ok(1) — always-truthy non-zero numeric literal', () => {
+    ruleTester.run('no-tautological-assert', noTautologicalAssert, {
+      valid: [],
+      invalid: [
+        {
+          code: `
+            const assert = require('node:assert/strict');
+            assert.ok(1);
+          `,
+          filename: 'tests/foo.test.cjs',
+          errors: [{ messageId: 'tautologicalTruthiness' }],
+        },
+      ],
+    });
+  });
+
+  test('invalid: assert.ok("always") — always-truthy non-empty string literal', () => {
+    ruleTester.run('no-tautological-assert', noTautologicalAssert, {
+      valid: [],
+      invalid: [
+        {
+          code: `
+            const assert = require('node:assert/strict');
+            assert.ok('always');
+          `,
+          filename: 'tests/foo.test.cjs',
+          errors: [{ messageId: 'tautologicalTruthiness' }],
+        },
+      ],
+    });
+  });
+
+  test('invalid: assert.ok([]) — always-truthy array literal', () => {
+    ruleTester.run('no-tautological-assert', noTautologicalAssert, {
+      valid: [],
+      invalid: [
+        {
+          code: `
+            const assert = require('node:assert/strict');
+            assert.ok([]);
+          `,
+          filename: 'tests/foo.test.cjs',
+          errors: [{ messageId: 'tautologicalTruthiness' }],
+        },
+      ],
+    });
+  });
+
+  test('invalid: assert.ok(cond || true) — logical OR whose right side is true', () => {
+    ruleTester.run('no-tautological-assert', noTautologicalAssert, {
+      valid: [],
+      invalid: [
+        {
+          code: `
+            const assert = require('node:assert/strict');
+            assert.ok(cond || true);
+          `,
+          filename: 'tests/foo.test.cjs',
+          errors: [{ messageId: 'tautologicalTruthiness' }],
+        },
+      ],
+    });
+  });
+
+  test('invalid: assert.strictEqual(true, true) — identical boolean literals', () => {
+    ruleTester.run('no-tautological-assert', noTautologicalAssert, {
+      valid: [],
+      invalid: [
+        {
+          code: `
+            const assert = require('node:assert/strict');
+            assert.strictEqual(true, true);
+          `,
+          filename: 'tests/foo.test.cjs',
+          errors: [{ messageId: 'tautologicalEquality' }],
+        },
+      ],
+    });
+  });
+
+  test('invalid: assert.equal(1, 1) — identical numeric literals', () => {
+    ruleTester.run('no-tautological-assert', noTautologicalAssert, {
+      valid: [],
+      invalid: [
+        {
+          code: `
+            const assert = require('node:assert/strict');
+            assert.equal(1, 1);
+          `,
+          filename: 'tests/foo.test.cjs',
+          errors: [{ messageId: 'tautologicalEquality' }],
+        },
+      ],
     });
   });
 });

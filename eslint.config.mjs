@@ -13,6 +13,7 @@ import noSourceGrep from './eslint-rules/no-source-grep.cjs';
 import noMagicSleepInTests from './eslint-rules/no-magic-sleep-in-tests.cjs';
 import noElapsedAssertion from './eslint-rules/no-elapsed-assertion.cjs';
 import noRawRmsyncInTests from './eslint-rules/no-raw-rmsync-in-tests.cjs';
+import noTautologicalAssert from './eslint-rules/no-tautological-assert.cjs';
 
 const localPlugin = {
   rules: {
@@ -20,6 +21,7 @@ const localPlugin = {
     'no-magic-sleep-in-tests': noMagicSleepInTests,
     'no-elapsed-assertion': noElapsedAssertion,
     'no-raw-rmsync-in-tests': noRawRmsyncInTests,
+    'no-tautological-assert': noTautologicalAssert,
   },
 };
 
@@ -228,6 +230,8 @@ export default tseslint.config(
       'local/no-elapsed-assertion': 'warn',
       // Ban raw fs.rmSync in tests — use helpers.cleanup() for Windows-EBUSY retry budget
       'local/no-raw-rmsync-in-tests': 'error',
+      // Ban tautological assertions (always-truthy arg or identical-literal equality)
+      'local/no-tautological-assert': 'error',
       // Ban raw setTimeout sync + elapsed/duration-style assertions via no-restricted-syntax
       'no-restricted-syntax': [
         'error',
