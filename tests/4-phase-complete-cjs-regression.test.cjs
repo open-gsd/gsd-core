@@ -717,3 +717,295 @@ describe('issue #4 (CJS): cmdPhaseComplete — progress percent clamp', () => {
     );
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Regressions: issue #1159 — Defect A
+// VERIFICATION.md with `previous_status: gaps_found` in the body but
+// `status: passed` in frontmatter must NOT emit a "has unresolved gaps" warning.
+// The bug: /status: gaps_found/.test(fullContent) matches the substring inside
+// `previous_status: gaps_found`, causing a false positive.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Build a minimal project fixture with a VERIFICATION.md file whose
+ * frontmatter status is `verFmStatus` and whose body contains `previous_status: gaps_found`.
+ * Phase 01 has a plan+summary; Phase 02 exists for next-phase detection.
+ */
+function createVerificationFixture(verFmStatus) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-1159-verif-'));
+  const planDir = path.join(tmpDir, '.planning');
+  const phasesDir = path.join(planDir, 'phases');
+  const phase01Dir = path.join(phasesDir, '01-foundation');
+  fs.mkdirSync(phase01Dir, { recursive: true });
+  fs.mkdirSync(path.join(phasesDir, '02-api'), { recursive: true });
+
+  fs.writeFileSync(path.join(planDir, 'ROADMAP.md'), [
+    '# Roadmap',
+    '',
+    '- [ ] Phase 01: Foundation',
+    '- [ ] Phase 02: API',
+    '',
+    '### Phase 01: Foundation',
+    '**Goal:** Build the foundation',
+    '**Plans:** 1 plans',
+    '',
+    '## Progress',
+    '',
+    '| Phase | Plans Complete | Status | Completed |',
+    '|-------|----------------|--------|-----------|',
+    '| 01. Foundation | 0/1 | Not started | - |',
+    '| 02. API | 0/1 | Not started | - |',
+    '',
+  ].join('\n'));
+
+  fs.writeFileSync(path.join(planDir, 'STATE.md'), [
+    '# State',
+    '',
+    '**Current Phase:** 01',
+    '**Current Phase Name:** Foundation',
+    '**Status:** In progress',
+    '**Completed Phases:** 0',
+    '**Total Phases:** 2',
+    '**Progress:** 0%',
+    '',
+  ].join('\n'));
+
+  // No REQUIREMENTS.md intentionally (not needed for this defect check)
+
+  fs.writeFileSync(path.join(phase01Dir, '01-01-PLAN.md'), '# Plan 1\nDo the work.\n');
+  fs.writeFileSync(path.join(phase01Dir, '01-01-SUMMARY.md'), '# Summary 1\nDone.\n');
+
+  // The VERIFICATION.md has the CURRENT status in frontmatter but historical
+  // `previous_status: gaps_found` in the body — this is the false-positive trigger.
+  fs.writeFileSync(path.join(phase01Dir, '01-VERIFICATION.md'), [
+    '---',
+    `status: ${verFmStatus}`,
+    'phase: "01"',
+    '---',
+    '',
+    '# Verification',
+    '',
+    '<!-- Historical context from previous run -->',
+    'previous_status: gaps_found',
+    '',
+    '## Summary',
+    'All checks passed on re-run.',
+    '',
+  ].join('\n'));
+
+  return tmpDir;
+}
+
+describe('issue #1159 (Defect A): VERIFICATION.md historical metadata must not trigger gap warning', () => {
+  let tmpDir;
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test(
+    '#1159-A-1: status:passed + previous_status:gaps_found in body → NO "has unresolved gaps" warning',
+    () => {
+      tmpDir = createVerificationFixture('passed');
+      const { output } = runGsdTools(['phase', 'complete', '1'], tmpDir);
+      // The output is JSON; parse and check warnings array
+      const parsed = JSON.parse(output);
+      const warnings = parsed.warnings || [];
+      const gapWarnings = warnings.filter((w) => /unresolved gaps/i.test(w));
+      assert.equal(
+        gapWarnings.length,
+        0,
+        `#1159-A-1 FAILED: got false gap warning(s) when frontmatter status=passed.\n` +
+        `Warnings: ${JSON.stringify(warnings)}\n` +
+        `(The regex /status: gaps_found/ matched 'previous_status: gaps_found' in the body.)`,
+      );
+    },
+  );
+
+  test(
+    '#1159-A-2 (boundary): status:gaps_found in frontmatter → DOES emit "has unresolved gaps" warning',
+    () => {
+      tmpDir = createVerificationFixture('gaps_found');
+      const { output } = runGsdTools(['phase', 'complete', '1'], tmpDir);
+      const parsed = JSON.parse(output);
+      const warnings = parsed.warnings || [];
+      const gapWarnings = warnings.filter((w) => /unresolved gaps/i.test(w));
+      assert.ok(
+        gapWarnings.length > 0,
+        `#1159-A-2 FAILED: expected a gap warning when frontmatter status=gaps_found but got none.\n` +
+        `Warnings: ${JSON.stringify(warnings)}`,
+      );
+    },
+  );
+
+  test(
+    '#1159-A-3 (boundary): status:human_needed in frontmatter → DOES emit "needs human verification" warning',
+    () => {
+      tmpDir = createVerificationFixture('human_needed');
+      const { output } = runGsdTools(['phase', 'complete', '1'], tmpDir);
+      const parsed = JSON.parse(output);
+      const warnings = parsed.warnings || [];
+      const humanWarnings = warnings.filter((w) => /human verification/i.test(w));
+      assert.ok(
+        humanWarnings.length > 0,
+        `#1159-A-3 FAILED: expected human-verification warning when frontmatter status=human_needed.\n` +
+        `Warnings: ${JSON.stringify(warnings)}`,
+      );
+    },
+  );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Regressions: issue #1159 — Defect B
+// Requirement IDs (e.g. FILE-001) that appear under explicitly deferred/future/v2
+// sections in REQUIREMENTS.md must NOT be flagged as "missing from Traceability".
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Build a minimal project fixture with a REQUIREMENTS.md that has:
+ * - An active requirement ACTIVE-001 that IS in the Traceability table
+ * - A deferred requirement DEFER-001 under a "Deferred v2 Requirements" heading
+ *   that is NOT in the Traceability table (correctly out of scope)
+ * - Optionally a truly-missing active requirement MISSING-001 (not in table)
+ */
+function createDeferredReqFixture({ includeMissingActive = false } = {}) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-1159-deferred-'));
+  const planDir = path.join(tmpDir, '.planning');
+  const phasesDir = path.join(planDir, 'phases');
+  const phase01Dir = path.join(phasesDir, '01-foundation');
+  fs.mkdirSync(phase01Dir, { recursive: true });
+  fs.mkdirSync(path.join(phasesDir, '02-api'), { recursive: true });
+
+  const missingActiveLines = includeMissingActive
+    ? ['', '- **MISSING-001** Active req not in traceability table.']
+    : [];
+
+  fs.writeFileSync(path.join(planDir, 'REQUIREMENTS.md'), [
+    '# Requirements',
+    '',
+    '## Functional Requirements',
+    '',
+    '- **ACTIVE-001** Core feature must work.',
+    ...missingActiveLines,
+    '',
+    '## Deferred v2 Requirements',
+    '',
+    '- **DEFER-001** Nice-to-have for v2, explicitly out of scope.',
+    '',
+    '## Future Backlog',
+    '',
+    '- **FUTURE-001** Consider for next major release.',
+    '',
+    '## Traceability',
+    '',
+    '| Requirement | Phase | Status |',
+    '|-------------|-------|--------|',
+    '| ACTIVE-001 | Phase 01 | Pending |',
+    '',
+  ].join('\n'));
+
+  // Roadmap references ACTIVE-001 for phase 01
+  fs.writeFileSync(path.join(planDir, 'ROADMAP.md'), [
+    '# Roadmap',
+    '',
+    '- [ ] Phase 01: Foundation',
+    '- [ ] Phase 02: API',
+    '',
+    '### Phase 01: Foundation',
+    '**Goal:** Build the foundation',
+    '**Requirements:** ACTIVE-001',
+    '**Plans:** 1 plans',
+    '',
+    '## Progress',
+    '',
+    '| Phase | Plans Complete | Status | Completed |',
+    '|-------|----------------|--------|-----------|',
+    '| 01. Foundation | 0/1 | Not started | - |',
+    '| 02. API | 0/1 | Not started | - |',
+    '',
+  ].join('\n'));
+
+  fs.writeFileSync(path.join(planDir, 'STATE.md'), [
+    '# State',
+    '',
+    '**Current Phase:** 01',
+    '**Current Phase Name:** Foundation',
+    '**Status:** In progress',
+    '**Completed Phases:** 0',
+    '**Total Phases:** 2',
+    '**Progress:** 0%',
+    '',
+  ].join('\n'));
+
+  fs.writeFileSync(path.join(phase01Dir, '01-01-PLAN.md'), '# Plan 1\nDo the work.\n');
+  fs.writeFileSync(path.join(phase01Dir, '01-01-SUMMARY.md'), '# Summary 1\nDone.\n');
+
+  return tmpDir;
+}
+
+describe('issue #1159 (Defect B): deferred/future requirement IDs must not trigger traceability warning', () => {
+  let tmpDir;
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test(
+    '#1159-B-1: IDs under "Deferred v2 Requirements" and "Future Backlog" sections → NO traceability warning',
+    () => {
+      tmpDir = createDeferredReqFixture({ includeMissingActive: false });
+      const { output } = runGsdTools(['phase', 'complete', '1'], tmpDir);
+      const parsed = JSON.parse(output);
+      const warnings = parsed.warnings || [];
+      const traceWarnings = warnings.filter((w) => /Traceability/i.test(w));
+      assert.equal(
+        traceWarnings.length,
+        0,
+        `#1159-B-1 FAILED: got false traceability warning(s) for deferred/future IDs.\n` +
+        `Warnings: ${JSON.stringify(warnings)}\n` +
+        `(DEFER-001 and FUTURE-001 are under deferred/future sections and must be ignored.)`,
+      );
+    },
+  );
+
+  test(
+    '#1159-B-2 (boundary): truly-missing ACTIVE ID (not in table, not in deferred section) → DOES warn',
+    () => {
+      tmpDir = createDeferredReqFixture({ includeMissingActive: true });
+      const { output } = runGsdTools(['phase', 'complete', '1'], tmpDir);
+      const parsed = JSON.parse(output);
+      const warnings = parsed.warnings || [];
+      const traceWarnings = warnings.filter((w) => /Traceability/i.test(w));
+      assert.ok(
+        traceWarnings.length > 0,
+        `#1159-B-2 FAILED: expected traceability warning for MISSING-001 (active, not in table) but got none.\n` +
+        `Warnings: ${JSON.stringify(warnings)}`,
+      );
+      // Verify MISSING-001 is specifically mentioned
+      const mentionsMissing = traceWarnings.some((w) => w.includes('MISSING-001'));
+      assert.ok(
+        mentionsMissing,
+        `#1159-B-2 FAILED: warning exists but MISSING-001 not mentioned.\n` +
+        `Traceability warnings: ${JSON.stringify(traceWarnings)}`,
+      );
+    },
+  );
+
+  test(
+    '#1159-B-3 (boundary): deferred IDs must not contaminate warning even when active ID is also missing',
+    () => {
+      tmpDir = createDeferredReqFixture({ includeMissingActive: true });
+      const { output } = runGsdTools(['phase', 'complete', '1'], tmpDir);
+      const parsed = JSON.parse(output);
+      const warnings = parsed.warnings || [];
+      const traceWarnings = warnings.filter((w) => /Traceability/i.test(w));
+      // DEFER-001 and FUTURE-001 must NOT appear in the traceability warnings
+      const mentionsDefer = traceWarnings.some((w) => w.includes('DEFER-001') || w.includes('FUTURE-001'));
+      assert.ok(
+        !mentionsDefer,
+        `#1159-B-3 FAILED: deferred IDs (DEFER-001/FUTURE-001) appeared in traceability warning.\n` +
+        `Traceability warnings: ${JSON.stringify(traceWarnings)}`,
+      );
+    },
+  );
+});

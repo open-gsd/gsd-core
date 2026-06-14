@@ -110,9 +110,15 @@ function determinePhaseStatus(plans: number, summaries: number, phaseDir: string
     const verificationFile = files.find(f => f === 'VERIFICATION.md' || f.endsWith('-VERIFICATION.md'));
     if (verificationFile) {
       const content = platformReadSync(path.join(phaseDir, verificationFile)) || '';
-      if (/status:\s*passed/i.test(content)) return 'Complete';
-      if (/status:\s*human_needed/i.test(content)) return 'Needs Review';
-      if (/status:\s*gaps_found/i.test(content)) return 'Executed';
+      // #1159 (Defect A): read ONLY the frontmatter `status` key to avoid false
+      // matches from historical body metadata such as `previous_status: gaps_found`.
+      // Full-text regexes like /status:\s*gaps_found/ match the substring inside
+      // `previous_status: gaps_found`, producing incorrect phase status labels.
+      const fm = extractFrontmatter(content) as Record<string, unknown>;
+      const fmStatus = typeof fm['status'] === 'string' ? fm['status'].trim() : '';
+      if (fmStatus === 'passed') return 'Complete';
+      if (fmStatus === 'human_needed') return 'Needs Review';
+      if (fmStatus === 'gaps_found') return 'Executed';
       // Verification exists but unrecognized status — treat as executed
       return 'Executed';
     }

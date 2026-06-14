@@ -1373,8 +1373,15 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
       (f) => f.includes('-VERIFICATION') && f.endsWith('.md'),
     )) {
       const content = fs.readFileSync(path.join(phaseFullDir, file), 'utf-8');
-      if (/status: human_needed/.test(content)) warnings.push(`${file}: needs human verification`);
-      if (/status: gaps_found/.test(content)) warnings.push(`${file}: has unresolved gaps`);
+      // #1159 (Defect A): read ONLY the frontmatter `status` key to avoid false positives
+      // from historical metadata in the file body (e.g. `previous_status: gaps_found`).
+      // A full-text regex like /status: gaps_found/ matches the substring inside
+      // `previous_status: gaps_found`, producing spurious warnings even when the
+      // current frontmatter status is `passed`.
+      const verFm = extractFrontmatter(content) as Record<string, unknown>;
+      const verStatus = typeof verFm['status'] === 'string' ? verFm['status'].trim() : '';
+      if (verStatus === 'human_needed') warnings.push(`${file}: needs human verification`);
+      if (verStatus === 'gaps_found') warnings.push(`${file}: has unresolved gaps`);
     }
   } catch {
     /* intentionally empty */
@@ -1495,12 +1502,29 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             }
           }
 
+          // #1159 (Defect B): collect requirement IDs only from ACTIVE sections.
+          // Requirements under headings whose text contains "deferred", "backlog",
+          // "future", or "v2" (case-insensitive) are explicitly out of current scope
+          // and must not be flagged as missing from the Traceability table.
+          // Strategy: split the body into sections by markdown headings (# … ######),
+          // skip any section whose heading matches the deferred/future pattern, and
+          // collect IDs (**REQ-ID** bold notation) only from the remaining sections.
+          const DEFERRED_HEADING_RE = /\b(?:deferred|backlog|future|v\d+)\b/i;
           const bodyReqIds: string[] = [];
-          const bodyReqPattern = /\*\*([A-Z][A-Z0-9]*-\d+)\*\*/g;
-          let bodyMatch: RegExpExecArray | null;
-          while ((bodyMatch = bodyReqPattern.exec(reqContent)) !== null) {
-            const id = bodyMatch[1];
-            if (!bodyReqIds.includes(id)) bodyReqIds.push(id);
+          // Split on heading lines, keeping the delimiter so we can inspect each heading.
+          const sections = reqContent.split(/^(?=#{1,6}\s)/m);
+          for (const section of sections) {
+            const headingMatch = section.match(/^(#{1,6})\s+([^\n]+)/);
+            if (headingMatch && DEFERRED_HEADING_RE.test(headingMatch[2])) {
+              // Skip this entire section — it is explicitly deferred/out-of-scope.
+              continue;
+            }
+            const sectionReqPattern = /\*\*([A-Z][A-Z0-9]*-\d+)\*\*/g;
+            let bodyMatch: RegExpExecArray | null;
+            while ((bodyMatch = sectionReqPattern.exec(section)) !== null) {
+              const id = bodyMatch[1];
+              if (!bodyReqIds.includes(id)) bodyReqIds.push(id);
+            }
           }
 
           const traceabilityHeadingMatch = reqContent.match(/^#{1,6}\s+Traceability\b/im);
