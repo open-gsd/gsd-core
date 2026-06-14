@@ -231,7 +231,7 @@
   "tests/install.test.cjs :: source-text-is-the-product",
   "tests/intel.test.cjs :: source-text-is-the-product — agents/gsd-intel-updater.md IS the",
   "tests/intel.test.cjs :: source-text-is-the-product — readFileSync assertions target API-SURFACE.md, which is the generated product of intelApiSurface; asserting on its text content is the only way to verify correct generation.",
-  "tests/inventory-counts.test.cjs :: source-text-is-the-product",
+  "tests/inventory-headings-countfree.test.cjs :: runtime-contract-is-the-product — INVENTORY.md heading format is the shipped doc surface being locked",
   "tests/ios-scaffold-safety.test.cjs :: source-text-is-the-product",
   "tests/issue-2639-codex-toml-neutralization.test.cjs :: source-text-is-the-product",
   "tests/issue-429-comment-text-gate.test.cjs :: source-text-is-the-product",
