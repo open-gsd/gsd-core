@@ -217,6 +217,7 @@ const verification = require('./lib/verification.cjs');
 const { routeInitCommand } = require('./lib/init-command-router.cjs');
 const loopResolver = require('./lib/loop-resolver.cjs');
 const capabilityState = require('./lib/capability-state.cjs');
+const capabilityWriter = require('./lib/capability-writer.cjs');
 const { routePhaseCommand } = require('./lib/phase-command-router.cjs');
 const { routePhasesCommand } = require('./lib/phases-command-router.cjs');
 const { routeValidateCommand } = require('./lib/validate-command-router.cjs');
@@ -1304,9 +1305,85 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         }
         const resolvedConfigDir = configDir ? path.resolve(configDir) : null;
         capabilityState.cmdCapabilityState(cwd, resolvedConfigDir, raw, {});
+      } else if (capSubcommand === 'set') {
+        // capability set <id> [--on|--off|--enable|--disable] [--gate <key>=<bool>]... [--config-dir <dir>] [--runtime <r>] [--scope <s>]
+        const capId = args[2];
+        if (!capId || capId.startsWith('--')) {
+          error('Missing capability id for: capability set <id>', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+        }
+        // Parse --config-dir
+        const setConfigDirIdx = args.indexOf('--config-dir');
+        let setConfigDir = null;
+        if (setConfigDirIdx !== -1) {
+          const setConfigDirVal = args[setConfigDirIdx + 1];
+          if (!setConfigDirVal || setConfigDirVal.startsWith('--')) {
+            error('Missing value for --config-dir', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+          }
+          setConfigDir = setConfigDirVal;
+        }
+        const resolvedSetConfigDir = setConfigDir ? path.resolve(setConfigDir) : null;
+        // Parse --on/--enable and --off/--disable (mutually exclusive)
+        const hasOn = args.includes('--on') || args.includes('--enable');
+        const hasOff = args.includes('--off') || args.includes('--disable');
+        if (hasOn && hasOff) {
+          error('Conflicting flags: --on/--enable and --off/--disable cannot both be present', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+        }
+        let setEnabled;
+        if (hasOn) {
+          setEnabled = true;
+        } else if (hasOff) {
+          setEnabled = false;
+        }
+        // Parse --gate <key>=<bool> (repeatable)
+        const setGates = {};
+        for (let gi = 0; gi < args.length; gi++) {
+          if (args[gi] === '--gate') {
+            const gateVal = args[gi + 1];
+            if (!gateVal || gateVal.startsWith('--')) {
+              error('Missing value for --gate (expected <key>=<true|false>)', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+            }
+            const eqIdx = gateVal.indexOf('=');
+            if (eqIdx === -1) {
+              error(`Malformed --gate value "${gateVal}": expected <key>=<true|false>`, core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+            }
+            const gateKey = gateVal.slice(0, eqIdx);
+            const gateBoolStr = gateVal.slice(eqIdx + 1);
+            if (gateBoolStr !== 'true' && gateBoolStr !== 'false') {
+              error(`Malformed --gate value "${gateVal}": bool must be true or false`, core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+            }
+            setGates[gateKey] = gateBoolStr === 'true';
+            gi++; // skip consumed value
+          }
+        }
+        // Parse --runtime and --scope (validate that values are present and not flags)
+        const runtimeIdx = args.indexOf('--runtime');
+        let setRuntime;
+        if (runtimeIdx !== -1) {
+          const runtimeVal = args[runtimeIdx + 1];
+          if (!runtimeVal || runtimeVal.startsWith('--')) {
+            error('Missing value for --runtime', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+          }
+          setRuntime = runtimeVal;
+        }
+        const scopeIdx = args.indexOf('--scope');
+        let setScope;
+        if (scopeIdx !== -1) {
+          const scopeVal = args[scopeIdx + 1];
+          if (!scopeVal || scopeVal.startsWith('--')) {
+            error('Missing value for --scope', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+          }
+          setScope = scopeVal;
+        }
+        capabilityWriter.cmdCapabilitySet(
+          cwd,
+          resolvedSetConfigDir,
+          capId,
+          { enabled: setEnabled, gates: Object.keys(setGates).length > 0 ? setGates : undefined, runtime: setRuntime, scope: setScope },
+          raw,
+        );
       } else {
         error(
-          `Unknown capability subcommand: ${capSubcommand}. Available: state`,
+          `Unknown capability subcommand: ${capSubcommand}. Available: state, set`,
           core.ERROR_REASON ? core.ERROR_REASON.SDK_UNKNOWN_COMMAND : undefined,
         );
       }

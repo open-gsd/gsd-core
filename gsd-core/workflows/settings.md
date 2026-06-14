@@ -441,7 +441,33 @@ Merge new settings into existing config.json:
 }
 ```
 
-**Safe merge:** Apply each chosen value via `gsd-tools.cjs query config-set <key.path> <value>` so unrelated keys are never clobbered. `code_review_depth` is written only if the code_review question was answered `on`; otherwise leave the existing value in place. `model_profile` is written on Q1 "Adaptive (Recommended)" (→ adaptive) or Q1 "Inherit" (→ inherit) immediately; for Q1 "Standard tier…", `model_profile` is written from Q2's answer. If Q1 = "Standard tier…" but Q2 is cancelled, leave the existing `model_profile` value unchanged — do not write any new value.
+**Safe merge:** Apply each chosen value so unrelated keys are never clobbered. Use the appropriate write path per key:
+
+- **Capability hook-gate keys** (owned by a capability in the registry — see `registry.configSchema`): write via the capability writer:
+  ```bash
+  gsd_run capability set <owner> --gate <key>=<value> [--config-dir "$RUNTIME_CONFIG_DIR"]
+  ```
+  The capability-owned keys written by this workflow and their owners are:
+  | Key | Owner capability |
+  |---|---|
+  | `workflow.research` | `research` |
+  | `workflow.nyquist_validation` | `nyquist` |
+  | `workflow.pattern_mapper` | `pattern-mapper` |
+  | `workflow.ui_phase` | `ui` |
+  | `workflow.ui_safety_gate` | `ui` |
+  | `workflow.ai_integration_phase` | `ai-integration` |
+  | `workflow.tdd_mode` | `tdd` |
+  | `workflow.code_review` | `code-review` |
+  | `workflow.code_review_depth` | `code-review` |
+  | `workflow.ui_review` | `ui` |
+  | `intel.enabled` | `intel` |
+  | `graphify.enabled` | `graphify` |
+
+  `code_review_depth` is written only if the `code_review` question was answered `on`; otherwise leave the existing value in place.
+
+- **Non-capability keys** (`model_profile`, `commit_docs`, `workflow.plan_check`, `workflow.verifier`, `workflow.auto_advance`, `workflow.text_mode`, `workflow.research_before_questions`, `workflow.discuss_mode`, `workflow.skip_discuss`, `workflow.use_worktrees`, `plan_review.source_grounding`, `graphify.auto_update`, `git.*`, `hooks.*`, `model_policy.*`): write via `gsd_run query config-set <key.path> <value>` as before.
+
+`model_profile` is written on Q1 "Adaptive (Recommended)" (→ adaptive) or Q1 "Inherit" (→ inherit) immediately; for Q1 "Standard tier…", `model_profile` is written from Q2's answer. If Q1 = "Standard tier…" but Q2 is cancelled, leave the existing `model_profile` value unchanged — do not write any new value.
 
 Write updated config to `$GSD_CONFIG_PATH` (the workstream-aware path resolved in `ensure_and_load_config`). Never hardcode `.planning/config.json` — workstream installs route to `.planning/workstreams/<slug>/config.json`.
 </step>
