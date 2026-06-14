@@ -391,6 +391,180 @@ test('ambient GSD workstream vars are stripped by the runner', () => {
     });
   });
 
+  describe('shard partitioning CLI (#1212)', () => {
+    // The windows full-test lane is sharded across N parallel runners via a
+    // GitHub Actions matrix shard dimension; each shard runs
+    // `run-tests.cjs --suite unit --shard i/n`. Selection is a deterministic
+    // round-robin over the SORTED file list so duration variance spreads
+    // across shards. The CLI surface is validated here; the pure partition
+    // contract (completeness/disjointness/balance/determinism) is validated
+    // against the exported selectShard() in the separate describe block below.
+
+    // 9 files, sorted: shard-00..shard-08. With n=3, round-robin gives
+    // shard 1 -> {00,03,06}, shard 2 -> {01,04,07}, shard 3 -> {02,05,08}.
+    const SHARD_NAMES = Array.from(
+      { length: 9 },
+      (_, i) => `shard-${String(i).padStart(2, '0')}.test.cjs`,
+    );
+
+    test('--shard 1/3 runs a balanced round-robin slice of the sorted files', () => {
+      seed(tmpDir, SHARD_NAMES);
+      const r = runHarness(tmpDir, ['--shard', '1/3']);
+      assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+      // The harness echoes the selected basenames on its `files=N:` line.
+      assert.match(r.stderr, /files=3:/);
+      assert.match(r.stderr, /shard-00\.test\.cjs/);
+      assert.match(r.stderr, /shard-03\.test\.cjs/);
+      assert.match(r.stderr, /shard-06\.test\.cjs/);
+      // Files belonging to other shards must NOT appear in this shard's run.
+      assert.doesNotMatch(r.stderr, /shard-01\.test\.cjs/);
+      assert.doesNotMatch(r.stderr, /shard-02\.test\.cjs/);
+    });
+
+    test('--shard 2/3 selects the second round-robin slice', () => {
+      seed(tmpDir, SHARD_NAMES);
+      const r = runHarness(tmpDir, ['--shard', '2/3']);
+      assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+      assert.match(r.stderr, /files=3:/);
+      assert.match(r.stderr, /shard-01\.test\.cjs/);
+      assert.match(r.stderr, /shard-04\.test\.cjs/);
+      assert.match(r.stderr, /shard-07\.test\.cjs/);
+      assert.doesNotMatch(r.stderr, /shard-00\.test\.cjs/);
+    });
+
+    test('--shard composes with --suite (shards the post-filter selection)', () => {
+      // 6 unit files + 2 security files. `--suite unit --shard 1/2` must shard
+      // only the unit selection, never pulling in the security files.
+      seed(tmpDir, [
+        'u0.test.cjs',
+        'u1.test.cjs',
+        'u2.test.cjs',
+        'u3.test.cjs',
+        's0.security.test.cjs',
+        's1.security.test.cjs',
+      ]);
+      const r = runHarness(tmpDir, ['--suite', 'unit', '--shard', '1/2']);
+      assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+      assert.doesNotMatch(r.stderr, /\.security\.test\.cjs/);
+    });
+
+    test('--shard 1/1 is a pure no-op (runs every file)', () => {
+      seed(tmpDir, SHARD_NAMES);
+      const r = runHarness(tmpDir, ['--shard', '1/1']);
+      assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+      assert.match(r.stderr, /files=9:/);
+    });
+
+    test('an empty shard (n > file count) exits 0 without crashing', () => {
+      // n=5 with only 2 files: shards 3,4,5 are legitimately empty. An empty
+      // shard must NOT take the "discovery is broken" hard-error path.
+      seed(tmpDir, ['only-a.test.cjs', 'only-b.test.cjs']);
+      const r = runHarness(tmpDir, ['--shard', '5/5']);
+      assert.strictEqual(
+        r.status,
+        0,
+        `empty shard must exit 0; got status=${r.status} signal=${r.signal}\nSTDERR:\n${r.stderr}`,
+      );
+    });
+
+    test('an empty suite BEFORE sharding still hits the discovery hard error', () => {
+      // Regression (Codex #1212 review): a genuinely empty selection
+      // (e.g. --suite security with zero security files) must NOT be masked
+      // by the empty-shard escape hatch. Only a shard that emptied a NON-empty
+      // list is a legitimate no-op; a pre-empty selection is a broken filter.
+      seed(tmpDir, ['a.test.cjs', 'b.test.cjs']); // unit files only, no security
+      const r = runHarness(tmpDir, ['--suite', 'security', '--shard', '1/3']);
+      assert.notStrictEqual(
+        r.status,
+        0,
+        `empty-before-shard must fail; got status=${r.status}\nSTDERR:\n${r.stderr}`,
+      );
+      assert.match(r.stderr, /0 test files selected|discovery/i);
+    });
+
+    test('--shard over --files is order-independent (sorted before partition)', () => {
+      // Regression (Codex #1212 review): the partition keys off array index,
+      // so the same file set passed in different --files order must produce
+      // the same per-shard assignment. The runner sorts the selection before
+      // sharding to guarantee this.
+      seed(tmpDir, ['x0.test.cjs', 'x1.test.cjs', 'x2.test.cjs', 'x3.test.cjs']);
+      const forward = runHarness(tmpDir, [
+        '--files', 'x0.test.cjs x1.test.cjs x2.test.cjs x3.test.cjs',
+        '--shard', '1/2',
+      ]);
+      const reversed = runHarness(tmpDir, [
+        '--files', 'x3.test.cjs x2.test.cjs x1.test.cjs x0.test.cjs',
+        '--shard', '1/2',
+      ]);
+      assert.strictEqual(forward.status, 0, `stderr: ${forward.stderr}`);
+      assert.strictEqual(reversed.status, 0, `stderr: ${reversed.stderr}`);
+      // Both runs select the SAME files (sorted shard 1/2 of x0..x3 = x0,x2).
+      const filesLine = (s) => (s.match(/files=\d+: (.*)$/m) || [])[1] || '';
+      const a = filesLine(forward.stderr).split(' ').sort().join(' ');
+      const b = filesLine(reversed.stderr).split(' ').sort().join(' ');
+      assert.strictEqual(a, b, `order-dependent shard assignment:\nforward=${a}\nreversed=${b}`);
+      assert.match(a, /x0\.test\.cjs/);
+      assert.match(a, /x2\.test\.cjs/);
+    });
+
+    test('--shard rejects i outside 1..n', () => {
+      seed(tmpDir, SHARD_NAMES);
+      const r = runHarness(tmpDir, ['--shard', '0/3']);
+      assert.notStrictEqual(r.status, 0);
+      assert.match(r.stderr, /shard/i);
+    });
+
+    test('--shard rejects i greater than n', () => {
+      seed(tmpDir, SHARD_NAMES);
+      const r = runHarness(tmpDir, ['--shard', '4/3']);
+      assert.notStrictEqual(r.status, 0);
+      assert.match(r.stderr, /shard/i);
+    });
+
+    test('--shard rejects n < 1', () => {
+      seed(tmpDir, SHARD_NAMES);
+      const r = runHarness(tmpDir, ['--shard', '1/0']);
+      assert.notStrictEqual(r.status, 0);
+      assert.match(r.stderr, /shard/i);
+    });
+
+    test('--shard rejects malformed (no slash) value', () => {
+      seed(tmpDir, SHARD_NAMES);
+      const r = runHarness(tmpDir, ['--shard', '2']);
+      assert.notStrictEqual(r.status, 0);
+      assert.match(r.stderr, /shard/i);
+    });
+
+    test('--shard rejects non-integer parts', () => {
+      seed(tmpDir, SHARD_NAMES);
+      const r = runHarness(tmpDir, ['--shard', '1.5/3']);
+      assert.notStrictEqual(r.status, 0);
+      assert.match(r.stderr, /shard/i);
+    });
+
+    test('duplicate --shard flag is rejected', () => {
+      seed(tmpDir, SHARD_NAMES);
+      const r = runHarness(tmpDir, ['--shard', '1/3', '--shard', '2/3']);
+      assert.notStrictEqual(r.status, 0);
+      assert.match(r.stderr, /duplicate/i);
+    });
+
+    test('--shard chunking engages within a shard (argv-overflow preserved)', () => {
+      // Each shard must still chunk its own slice so a large shard cannot
+      // overflow the Windows 32,767-char command-line ceiling (#3597).
+      const longPrefix = 'a-deliberately-long-test-filename-to-force-chunking-within-a-shard-';
+      const names = Array.from(
+        { length: 30 },
+        (_, i) => `${longPrefix}${String(i).padStart(4, '0')}.test.cjs`,
+      );
+      seed(tmpDir, names);
+      // n=2 -> each shard gets 15 files; a 1500-char ceiling forces chunking.
+      const r = runHarness(tmpDir, ['--shard', '1/2'], { RUN_TESTS_MAX_CMDLINE_CHARS: '1500' });
+      assert.strictEqual(r.status, 0, `stderr (tail):\n${r.stderr.split('\n').slice(-20).join('\n')}`);
+      assert.match(r.stderr, /run-tests: chunk \d+\/\d+ — \d+ files/);
+    });
+  });
+
   describe('per-chunk timeout + force-exit (windows hang guard, #1051)', () => {
     // A unit test that leaks an open handle (un-terminated Worker, un-killed
     // child_process, ref'd timer) causes node --test to hang ~150s after its
@@ -446,4 +620,144 @@ setInterval(() => {}, 1 << 30);
       );
     });
   });
+});
+
+// Pure partition contract for the shard selector (#1212). Imported directly
+// (no subprocess) because these are deterministic in-memory assertions about
+// the round-robin partition — the cheapest, most precise way to pin
+// completeness / disjointness / balance / determinism, including a fast-check
+// property test (RULESET.TESTS.property-based-testing: partition is a
+// bijective transformation contract).
+const { parseShardArg, selectShard } = require('../scripts/run-tests.cjs');
+
+describe('selectShard round-robin partition (#1212)', () => {
+  // A deterministic sorted file list; selectShard MUST NOT re-sort — the caller
+  // sorts once and the partition keys off array index so ordering is identical
+  // across Windows/macOS/Linux.
+  const files = Array.from({ length: 25 }, (_, i) => `f${String(i).padStart(3, '0')}.test.cjs`);
+
+  test('n=1 returns the full list unchanged (pure no-op)', () => {
+    assert.deepStrictEqual(selectShard(files, { index: 1, total: 1 }), files);
+  });
+
+  test('completeness: the union of all shards equals the full list', () => {
+    const n = 4;
+    const union = [];
+    for (let i = 1; i <= n; i++) union.push(...selectShard(files, { index: i, total: n }));
+    assert.deepStrictEqual([...union].sort(), [...files].sort());
+  });
+
+  test('disjointness: no file appears in two shards', () => {
+    const n = 4;
+    const seen = new Set();
+    for (let i = 1; i <= n; i++) {
+      for (const f of selectShard(files, { index: i, total: n })) {
+        assert.ok(!seen.has(f), `file ${f} appeared in more than one shard`);
+        seen.add(f);
+      }
+    }
+    assert.strictEqual(seen.size, files.length);
+  });
+
+  test('balance: shard sizes differ by at most 1', () => {
+    const n = 4;
+    const sizes = [];
+    for (let i = 1; i <= n; i++) sizes.push(selectShard(files, { index: i, total: n }).length);
+    assert.ok(Math.max(...sizes) - Math.min(...sizes) <= 1, `sizes=${sizes}`);
+  });
+
+  test('determinism: same input yields the same partition', () => {
+    const a = selectShard(files, { index: 2, total: 3 });
+    const b = selectShard(files, { index: 2, total: 3 });
+    assert.deepStrictEqual(a, b);
+  });
+
+  test('round-robin: shard i gets indices i-1, i-1+n, i-1+2n, …', () => {
+    const n = 3;
+    assert.deepStrictEqual(
+      selectShard(files, { index: 1, total: n }),
+      files.filter((_, k) => k % n === 0),
+    );
+    assert.deepStrictEqual(
+      selectShard(files, { index: 2, total: n }),
+      files.filter((_, k) => k % n === 1),
+    );
+    assert.deepStrictEqual(
+      selectShard(files, { index: 3, total: n }),
+      files.filter((_, k) => k % n === 2),
+    );
+  });
+
+  test('preserves relative order within a shard', () => {
+    const slice = selectShard(files, { index: 1, total: 3 });
+    const sorted = [...slice].sort();
+    assert.deepStrictEqual(slice, sorted);
+  });
+
+  test('empty shard when total > file count returns []', () => {
+    const two = ['a.test.cjs', 'b.test.cjs'];
+    assert.deepStrictEqual(selectShard(two, { index: 5, total: 5 }), []);
+    assert.deepStrictEqual(selectShard(two, { index: 3, total: 5 }), []);
+    // shards 1 and 2 still get the two files
+    assert.deepStrictEqual(selectShard(two, { index: 1, total: 5 }), ['a.test.cjs']);
+    assert.deepStrictEqual(selectShard(two, { index: 2, total: 5 }), ['b.test.cjs']);
+  });
+
+  test('boundary: total exactly equals file count → one file per shard', () => {
+    const three = ['a.test.cjs', 'b.test.cjs', 'c.test.cjs'];
+    for (let i = 1; i <= 3; i++) {
+      assert.strictEqual(selectShard(three, { index: i, total: 3 }).length, 1);
+    }
+  });
+
+  test('boundary: total = count-1 and count+1', () => {
+    const four = ['a.test.cjs', 'b.test.cjs', 'c.test.cjs', 'd.test.cjs'];
+    // count-1 = 3 shards over 4 files → sizes {2,1,1}
+    const sizes3 = [1, 2, 3].map(i => selectShard(four, { index: i, total: 3 }).length).sort();
+    assert.deepStrictEqual(sizes3, [1, 1, 2]);
+    // count+1 = 5 shards over 4 files → one shard empty
+    const sizes5 = [1, 2, 3, 4, 5].map(i => selectShard(four, { index: i, total: 5 }).length).sort();
+    assert.deepStrictEqual(sizes5, [0, 1, 1, 1, 1]);
+  });
+
+  test('property: partition is complete, disjoint, and balanced for any n,N', () => {
+    const fc = require('fast-check');
+    fc.assert(
+      fc.property(
+        fc.array(fc.string(), { minLength: 0, maxLength: 50 }),
+        fc.integer({ min: 1, max: 12 }),
+        (rawFiles, n) => {
+          // Caller contract: deduped + sorted list. Mirror it so the property
+          // exercises the same shape the runner feeds selectShard.
+          const list = [...new Set(rawFiles)].sort();
+          const shards = [];
+          for (let i = 1; i <= n; i++) shards.push(selectShard(list, { index: i, total: n }));
+          // completeness + disjointness
+          const flat = shards.flat();
+          assert.deepStrictEqual([...flat].sort(), [...list].sort());
+          assert.strictEqual(new Set(flat).size, list.length);
+          // balance — shard sizes differ by at most 1 (sizes is never empty
+          // because n >= 1, so there is always at least one shard).
+          const sizes = shards.map(s => s.length);
+          assert.ok(Math.max(...sizes) - Math.min(...sizes) <= 1, `sizes=${sizes}`);
+        },
+      ),
+      { numRuns: 200 },
+    );
+  });
+});
+
+describe('parseShardArg (#1212)', () => {
+  test('parses i/n into { index, total }', () => {
+    assert.deepStrictEqual(parseShardArg('2/3'), { index: 2, total: 3 });
+    assert.deepStrictEqual(parseShardArg('1/1'), { index: 1, total: 1 });
+  });
+
+  const bad = ['', '2', '0/3', '4/3', '1/0', '-1/3', '1.5/3', 'a/b', '1/3/2', ' 1/3', '1 / 3'];
+  for (const v of bad) {
+    test(`rejects malformed/out-of-range value ${JSON.stringify(v)}`, () => {
+      const r = parseShardArg(v);
+      assert.ok(r && r.error, `expected an error result for ${JSON.stringify(v)}, got ${JSON.stringify(r)}`);
+    });
+  }
 });

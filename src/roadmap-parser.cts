@@ -377,8 +377,17 @@ type MilestonePhaseFilter = ((dirName: string) => boolean) & {
 /**
  * Returns a filter function that checks whether a phase directory belongs
  * to the current milestone based on ROADMAP.md phase headings.
+ *
+ * @param cwd - Project working directory.
+ * @param versionOverride - Optional version string to scope the phase filter
+ *   to a specific milestone (e.g. 'v1.2').
+ * @param phaseIdConvention - The resolved `phase_id_convention` config value.
+ *   When `'milestone-prefixed'`, a deprecation warning is emitted for
+ *   free-form ROADMAPs that lack versioned milestone headings. When absent or
+ *   any other value, the warning is suppressed — legacy/default projects must
+ *   never see spurious warnings.
  */
-function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null): MilestonePhaseFilter {
+function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null, phaseIdConvention?: string | null): MilestonePhaseFilter {
   const milestonePhaseNums = new Set<string>();
   let missingExplicitVersion = false;
   try {
@@ -389,10 +398,11 @@ function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null): 
 
     const hasVersionedMilestonesGlobal = /^#{1,3}\s+.*v\d+\.\d+/mi.test(roadmapContent);
     const hasPhaseHeadings = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+[\w]/i.test(roadmapContent);
-    if (!hasVersionedMilestonesGlobal && hasPhaseHeadings) {
+    if (!hasVersionedMilestonesGlobal && hasPhaseHeadings && phaseIdConvention === 'milestone-prefixed') {
       console.warn(
         '[gsd] Deprecated: free-form ROADMAP.md detected (no versioned milestone headings). ' +
-        'Set phase_id_convention in config.json to suppress this warning.'
+        'The project has phase_id_convention set to "milestone-prefixed" in config.json but the ' +
+        'ROADMAP does not use versioned milestone headings. Run `gsd-tools roadmap upgrade --convention milestone-prefixed` to migrate (dry-run by default).'
       );
     }
 

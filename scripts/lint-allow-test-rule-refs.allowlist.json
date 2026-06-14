@@ -291,7 +291,6 @@
   "tests/research-agent-profiles.test.cjs :: <runtime-contract-is-the-product> research agent .md content is the governed surface",
   "tests/review-default-reviewers-workflow.test.cjs :: source-text-is-the-product",
   "tests/roadmap.test.cjs :: source-text-is-the-product",
-  "tests/roadmapper-granularity.test.cjs :: source-text-is-the-product",
   "tests/run-tests-harness.test.cjs :: run-tests.cjs is a CLI test harness whose only IR is its",
   "tests/runtime-launcher-parity.test.cjs :: structural parity/drift guard — asserts literal presence/absence of the canonical gsd_run launcher and the retired $GSD_SDK / `/gsd-tools` tokens across workflow markdown; there is no typed IR for \"this source file does not contain substring X\".",
   "tests/runtime-name-policy.test.cjs :: runtime-contract-is-the-product — FALLBACK_ALIASES source text IS the",

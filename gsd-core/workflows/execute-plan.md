@@ -13,10 +13,23 @@ Read config.json for planning behavior settings.
 For each executed plan, the only complete close-out order is:
 `production-code commit(s) -> SUMMARY commit -> STATE/ROADMAP update`.
 
-The only legal half-state is mid-production-commits while the executor is still
-actively working. Once production commits for a plan exist, returning without a
-committed SUMMARY.md is an illegal partial-plan state. The next execute-phase
-resume must detect that condition before dispatching another executor.
+For a synchronous executor, the only legal half-state is mid-production-commits
+while the executor is still actively working. Once production commits for a plan
+exist, returning without a committed SUMMARY.md is an illegal partial-plan state.
+The next execute-phase resume must detect that condition before dispatching
+another executor.
+
+**Async exception — `external_job_waiting`.** When an executor dispatches an
+async external job (long-running compute) it commits an async-job manifest at
+`.planning/async-jobs/<job>.json` and returns *without* SUMMARY.md. With a
+manifest recording a non-terminal job for this plan, the SUMMARY-absent state is
+a **legal deferred state** (`external_job_waiting`), not an illegal partial.
+SUMMARY.md is deferred until the external job reaches a terminal state and its
+output is verified. Resume reconciles against the manifest and must NOT
+re-dispatch a fresh executor for a plan with a non-terminal manifest (that would
+duplicate the external job). The manifest schema is the stability contract in
+`docs/reference/planning-artifacts.md`; the scheduler adapter that *writes* it is
+a capability (#1164), not core.
 </atomic_close_out_invariant>
 
 <available_agent_types>
@@ -47,7 +60,9 @@ If `.planning/` missing: error.
 (ls .planning/phases/XX-name/*-SUMMARY.md 2>/dev/null || true) | sort
 ```
 
-Find first PLAN without matching SUMMARY. Decimal phases supported (`01.1-hotfix/`):
+Find first PLAN without matching SUMMARY. Decimal phases supported (`01.1-hotfix/`).
+
+**Exclude `external_job_waiting` plans from selection.** When choosing the first PLAN that lacks a matching SUMMARY, skip any plan whose `plan_id` matches an async-job manifest in `.planning/async-jobs/` (any status) — that plan is `external_job_waiting` or awaiting reconciliation, never work to (re-)dispatch (re-dispatching would duplicate the external job). Reconcile via the manifest / safe_resume_gate instead.
 
 ```bash
 PHASE=$(echo "$PLAN_PATH" | grep -oE '[0-9]+(\.[0-9]+)?-[0-9]+')
@@ -504,7 +519,7 @@ If `USER_SETUP_CREATED=true`: display `⚠️ USER SETUP REQUIRED` with path + e
 
 | Condition | Route | Action |
 |-----------|-------|--------|
-| summaries < plans | **A: More plans** | Find next PLAN without SUMMARY. Yolo: auto-continue. Interactive: show next plan, suggest `/gsd:execute-phase {phase}` + `/gsd:verify-work`. STOP here. |
+| summaries < plans | **A: More plans** | Find next PLAN without SUMMARY — skip any plan whose `plan_id` matches a non-terminal async-job manifest (`external_job_waiting`; see `identify_plan`). Yolo: auto-continue. Interactive: show next plan, suggest `/gsd:execute-phase {phase}` + `/gsd:verify-work`. STOP here. |
 | summaries = plans, current < highest phase | **B: Phase done** | Show completion, suggest `/gsd:plan-phase {Z+1}` + `/gsd:verify-work {Z}` + `/gsd:discuss-phase {Z+1}` |
 | summaries = plans, current = highest phase | **C: Milestone done** | Show banner, suggest `/gsd:complete-milestone` + `/gsd:verify-work` + `/gsd-add-phase` |
 
