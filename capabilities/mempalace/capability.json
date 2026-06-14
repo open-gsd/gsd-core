@@ -1,0 +1,128 @@
+{
+  "id": "mempalace",
+  "role": "feature",
+  "title": "MemPalace memory",
+  "description": "Cross-session, cross-project memory: deliberate recall before discuss/plan and verbatim capture + temporal-KG sync at phase boundaries, via the MemPalace MCP server and CLI.",
+  "tier": "full",
+  "requires": [],
+  "runtimeCompat": { "supported": ["*"], "unsupported": [] },
+  "skills": ["mempalace-recall", "mempalace-capture"],
+  "agents": ["gsd-mempalace-curator"],
+  "hooks": [],
+  "config": {
+    "mempalace.enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Master toggle for the MemPalace memory capability."
+    },
+    "mempalace.memory_mode": {
+      "type": "enum",
+      "values": ["augment", "kg_backend", "replace"],
+      "default": "augment",
+      "description": "How MemPalace relates to GSD native memory. Only 'augment' (additive) is implemented today; 'kg_backend' and 'replace' are forward-declared (routing seam not yet built) and currently behave as 'augment'."
+    },
+    "mempalace.wing": {
+      "type": "string",
+      "default": "",
+      "description": "Palace wing name; empty derives from project_code / project dir."
+    },
+    "mempalace.recall_on_discuss": {
+      "type": "boolean",
+      "default": true,
+      "description": "Inject wake-up + search recall at discuss:pre."
+    },
+    "mempalace.recall_on_plan": {
+      "type": "boolean",
+      "default": true,
+      "description": "Produce MEMORY-RECALL.md at plan:pre."
+    },
+    "mempalace.capture_artifacts": {
+      "type": "boolean",
+      "default": true,
+      "description": "File CONTEXT/PLAN/SUMMARY and learnings into the palace at phase boundaries."
+    },
+    "mempalace.mirror_kg": {
+      "type": "boolean",
+      "default": true,
+      "description": "Mirror decisions/learnings into MemPalace's temporal knowledge graph."
+    },
+    "mempalace.cross_project_tunnels": {
+      "type": "boolean",
+      "default": false,
+      "description": "Propose/create cross-wing tunnels at ship:post."
+    },
+    "mempalace.diary_journal": {
+      "type": "boolean",
+      "default": true,
+      "description": "Write a per-agent diary entry at ship:post."
+    },
+    "mempalace.auto_capture_hooks": {
+      "type": "boolean",
+      "default": false,
+      "description": "Reserved / not yet implemented: will install MemPalace's native stop/precompact Claude Code hooks for passive mid-session capture (the capability's hooks array is currently empty)."
+    }
+  },
+  "steps": [
+    {
+      "point": "discuss:post",
+      "ref": { "skill": "mempalace-capture" },
+      "produces": [],
+      "consumes": ["CONTEXT.md"],
+      "when": "mempalace.enabled",
+      "onError": "skip"
+    },
+    {
+      "point": "plan:pre",
+      "ref": { "skill": "mempalace-recall" },
+      "produces": ["MEMORY-RECALL.md"],
+      "consumes": ["CONTEXT.md"],
+      "when": "mempalace.enabled",
+      "onError": "skip"
+    },
+    {
+      "point": "plan:post",
+      "ref": { "skill": "mempalace-capture" },
+      "produces": [],
+      "consumes": ["PLAN.md"],
+      "when": "mempalace.enabled",
+      "onError": "skip"
+    },
+    {
+      "point": "verify:post",
+      "ref": { "skill": "mempalace-capture" },
+      "produces": [],
+      "consumes": ["SUMMARY.md"],
+      "when": "mempalace.enabled",
+      "onError": "skip"
+    },
+    {
+      "point": "ship:post",
+      "ref": { "agent": "gsd-mempalace-curator" },
+      "produces": [],
+      "consumes": ["UAT.md"],
+      "when": "mempalace.enabled",
+      "onError": "skip"
+    }
+  ],
+  "contributions": [
+    {
+      "point": "discuss:pre",
+      "into": "orchestrator",
+      "fragment": { "path": "fragments/recall-discuss.md" },
+      "produces": [],
+      "consumes": [],
+      "when": "mempalace.enabled",
+      "onError": "skip"
+    },
+    {
+      "point": "execute:wave:post",
+      "into": "verifier",
+      "fragment": { "path": "fragments/capture-problems.md" },
+      "produces": [],
+      "consumes": [],
+      "when": "mempalace.enabled",
+      "onError": "skip"
+    }
+  ],
+  "gates": []
+}

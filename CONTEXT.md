@@ -181,6 +181,24 @@ A Capability whose integration shape brings its own external process, service, o
 
 `RULESET.CAPABILITY.step-additive-gate-blocks=a `step` hook is purely additive (invoke skill + produce artifacts, NEVER halts the host); host-blocking preconditions are `gate`s (blocking:true, onError:halt); runtime/mode context (auto/chain vs manual) self-gates IN THE SKILL, not via `when` (config-only). §5.6 = plan:pre step (ui-phase; skill self-gates on frontend+pipeline, auto-fires only in pipelines) + a NEW plan:pre gate (frontend-and-no-UI-SPEC → halt, when:workflow.ui_safety_gate); the loop.render-hooks dispatch template handles steps AND gates. Resolves #1022.`
 
+### Wing
+A MemPalace organizational unit corresponding to one project or repository. GSD derives the wing name from `project_code` or the project directory when `mempalace.wing` is unset. A wing contains Rooms. Cross-project Tunnels connect rooms across wings. MemPalace vocabulary — see Connected Capability, MemPalace memory capability (issue #956).
+
+### Room
+A named bucket inside a Wing that groups drawers by semantic kind. GSD maps its phase artifacts to five fixed rooms: `decisions` (CONTEXT.md), `planning` (PLAN.md), `milestones` (SUMMARY.md/UAT.md excerpts), `problems` (confirmed bug→fix pairs), and `learnings` (extract-learnings output). MemPalace vocabulary — see Wing.
+
+### Drawer
+A verbatim-content unit stored inside a Room. GSD files phase artifacts as drawers using `mempalace_add_drawer`; duplicate-check via `mempalace_check_duplicate` makes capture idempotent. GSD stores verbatim text (not AAAK summaries) to preserve recall fidelity. MemPalace vocabulary — see Room.
+
+### Tunnel
+A cross-Wing knowledge connection created by `mempalace_create_tunnel`. GSD proposes tunnels at `ship:post` when `mempalace.cross_project_tunnels: true`, linking rooms in the current wing to semantically related rooms in other project wings. MemPalace vocabulary — see Wing.
+
+### Diary
+A per-agent narrative entry written by `mempalace_diary_write`. GSD's `gsd-mempalace-curator` writes a diary entry at `ship:post` when `mempalace.diary_journal: true`, recording a session summary scoped to the project and agent role. MemPalace vocabulary — see Connected Capability.
+
+### memory_mode
+The `mempalace.memory_mode` config key controlling how tightly MemPalace couples to GSD's native memory. Three declared values: `augment` (default — **implemented**; palace is an additional write-mostly recall layer; lowest coupling), `kg_backend` (**declared; routing seam not yet implemented** — intended to route graphify KG queries through MemPalace's temporal graph; selecting today behaves as `augment`), `replace` (**declared; not yet functional** — intended to make the palace the durable store; selecting today behaves as `augment`). Only `augment` has effect in the current release; `kg_backend` and `replace` are forward-declared for a future release. Read at hook-render time; switching is a config change, not a reinstall. See MemPalace Settings in `docs/CONFIGURATION.md`.
+
 ### Runtime Hooks Surface Module
 Standalone hook-surface writer module extracted from `bin/install.js` as ADR-857 phase 5f-1 (behavior-preserving relocation, no logic change). Owns: Cline rules-body/agents-md/pre-tool-use hook generation (`buildClineRulesBody`, `buildClineAgentsMdBody`, `buildClinePreToolUseHook`, `mergeGsdAgentsMd`, `writeClineArtifacts`); Cursor `hooks.json` lifecycle (`buildCursorHookEntry`, `isManagedCursorHookEntry`, `reconcileCursorHooksJson`, `writeCursorHooksJson`, `removeCursorHooksJson`); Copilot session-hook config (`buildCopilotHookConfig`, `writeCopilotHookConfig`); Codex hook-block and event management (`buildCodexHookBlock`, `rewriteLegacyCodexHookBlock`, `reconcileCodexHooksJsonEvent`, `reconcileCodexHooksJsonSessionStart`, `ensureCodexHooksJsonSessionStart`, `ensureCodexHooksJsonEvent`, `removeCodexHooksJsonEvent`, `removeCodexHooksJsonSessionStart`, `buildCodexHookWindowsShimIR`); and shared hook command helpers (`buildHookCommand`, `rewriteLegacyManagedNodeHookCommands`, `normalizeNodePath`, `resolveNodeRunner`). `bin/install.js` delegates to this module via thin wrappers and re-exports its functions unchanged so existing tests require no modification. Source: `src/runtime-hooks-surface.cts`. Built output: `gsd-core/bin/lib/runtime-hooks-surface.cjs`.
 

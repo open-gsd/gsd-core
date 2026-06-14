@@ -1157,6 +1157,41 @@ Build, query, and inspect the project knowledge graph stored in `.planning/graph
 
 **Programmatic access:** `node gsd-tools.cjs graphify <build|query|status|diff|snapshot>` — see [CLI Tools Reference](CLI-TOOLS.md).
 
+### `/gsd-mempalace-recall`
+
+Recall prior decisions, patterns, and surprises from MemPalace into `MEMORY-RECALL.md` before planning. Reads `CONTEXT.md` to derive a search query, runs `mempalace wake-up` + `mempalace_search` + `mempalace_kg_query`/timeline, and writes a deduped recall document. When MemPalace is unavailable the skill writes a stub and continues. Opt-in via `mempalace.enabled: true` and `mempalace.recall_on_plan: true` (see [Configuration Reference](CONFIGURATION.md#mempalace-settings)).
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `phase-slug` | No | Phase slug used to scope the search query (defaults to the active phase from CONTEXT.md) |
+
+**Produces:** `MEMORY-RECALL.md` in the active phase directory (or an "unavailable" stub when MemPalace is unreachable)
+
+```bash
+/gsd-mempalace-recall          # Recall for the current phase
+/gsd-mempalace-recall 03-auth  # Recall scoped to a specific phase slug
+```
+
+---
+
+### `/gsd-mempalace-capture`
+
+File a phase artifact (`CONTEXT.md`, `PLAN.md`, or `SUMMARY.md`) verbatim into MemPalace and mirror decision facts into its temporal knowledge graph. Uses `mempalace_check_duplicate` before filing, so re-running the same phase is idempotent. Opt-in via `mempalace.enabled: true` and `mempalace.capture_artifacts: true` (see [Configuration Reference](CONFIGURATION.md#mempalace-settings)).
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `CONTEXT.md\|PLAN.md\|SUMMARY.md` | No | Artifact to capture (defaults to `CONTEXT.md` when called at `discuss:post`) |
+
+**Produces:** A drawer in the appropriate MemPalace room (`decisions`, `planning`, or `milestones`) plus KG facts when `mempalace.mirror_kg: true`
+
+```bash
+/gsd-mempalace-capture CONTEXT.md   # File CONTEXT.md → decisions room
+/gsd-mempalace-capture PLAN.md      # File PLAN.md → planning room
+/gsd-mempalace-capture SUMMARY.md   # File SUMMARY.md → milestones room
+```
+
+---
+
 ### `gsd-tools intel api-surface`
 
 Render the `.planning/intel/api-map.json` index (built by `/gsd-map-codebase`) into a human-readable `API-SURFACE.md` in `.planning/intel/`. Gated on `intel.enabled: true` in `config.json`; when Intel is disabled the command prints an activation hint and exits. The output path is always `.planning/intel/API-SURFACE.md` — there is no `--out` or `--format` flag. When `api-map.json` is absent or empty the command still writes the file with an explicit "incomplete" banner so consumers never mistake silence for "nothing exists".

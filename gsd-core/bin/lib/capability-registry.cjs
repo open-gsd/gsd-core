@@ -1000,6 +1000,176 @@ const capabilities = {
       "extendedHookEvents": []
     }
   },
+  "mempalace": {
+    "id": "mempalace",
+    "role": "feature",
+    "title": "MemPalace memory",
+    "description": "Cross-session, cross-project memory: deliberate recall before discuss/plan and verbatim capture + temporal-KG sync at phase boundaries, via the MemPalace MCP server and CLI.",
+    "tier": "full",
+    "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
+    "skills": [
+      "mempalace-recall",
+      "mempalace-capture"
+    ],
+    "agents": [
+      "gsd-mempalace-curator"
+    ],
+    "hooks": [],
+    "config": {
+      "mempalace.enabled": {
+        "type": "boolean",
+        "default": false,
+        "description": "Master toggle for the MemPalace memory capability."
+      },
+      "mempalace.memory_mode": {
+        "type": "enum",
+        "values": [
+          "augment",
+          "kg_backend",
+          "replace"
+        ],
+        "default": "augment",
+        "description": "How MemPalace relates to GSD native memory. Only 'augment' (additive) is implemented today; 'kg_backend' and 'replace' are forward-declared (routing seam not yet built) and currently behave as 'augment'."
+      },
+      "mempalace.wing": {
+        "type": "string",
+        "default": "",
+        "description": "Palace wing name; empty derives from project_code / project dir."
+      },
+      "mempalace.recall_on_discuss": {
+        "type": "boolean",
+        "default": true,
+        "description": "Inject wake-up + search recall at discuss:pre."
+      },
+      "mempalace.recall_on_plan": {
+        "type": "boolean",
+        "default": true,
+        "description": "Produce MEMORY-RECALL.md at plan:pre."
+      },
+      "mempalace.capture_artifacts": {
+        "type": "boolean",
+        "default": true,
+        "description": "File CONTEXT/PLAN/SUMMARY and learnings into the palace at phase boundaries."
+      },
+      "mempalace.mirror_kg": {
+        "type": "boolean",
+        "default": true,
+        "description": "Mirror decisions/learnings into MemPalace's temporal knowledge graph."
+      },
+      "mempalace.cross_project_tunnels": {
+        "type": "boolean",
+        "default": false,
+        "description": "Propose/create cross-wing tunnels at ship:post."
+      },
+      "mempalace.diary_journal": {
+        "type": "boolean",
+        "default": true,
+        "description": "Write a per-agent diary entry at ship:post."
+      },
+      "mempalace.auto_capture_hooks": {
+        "type": "boolean",
+        "default": false,
+        "description": "Reserved / not yet implemented: will install MemPalace's native stop/precompact Claude Code hooks for passive mid-session capture (the capability's hooks array is currently empty)."
+      }
+    },
+    "steps": [
+      {
+        "point": "discuss:post",
+        "ref": {
+          "skill": "mempalace-capture"
+        },
+        "produces": [],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "mempalace.enabled",
+        "onError": "skip"
+      },
+      {
+        "point": "plan:pre",
+        "ref": {
+          "skill": "mempalace-recall"
+        },
+        "produces": [
+          "MEMORY-RECALL.md"
+        ],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "mempalace.enabled",
+        "onError": "skip"
+      },
+      {
+        "point": "plan:post",
+        "ref": {
+          "skill": "mempalace-capture"
+        },
+        "produces": [],
+        "consumes": [
+          "PLAN.md"
+        ],
+        "when": "mempalace.enabled",
+        "onError": "skip"
+      },
+      {
+        "point": "verify:post",
+        "ref": {
+          "skill": "mempalace-capture"
+        },
+        "produces": [],
+        "consumes": [
+          "SUMMARY.md"
+        ],
+        "when": "mempalace.enabled",
+        "onError": "skip"
+      },
+      {
+        "point": "ship:post",
+        "ref": {
+          "agent": "gsd-mempalace-curator"
+        },
+        "produces": [],
+        "consumes": [
+          "UAT.md"
+        ],
+        "when": "mempalace.enabled",
+        "onError": "skip"
+      }
+    ],
+    "contributions": [
+      {
+        "point": "discuss:pre",
+        "into": "orchestrator",
+        "fragment": {
+          "path": "fragments/recall-discuss.md",
+          "inline": "<!--\n  MemPalace capability — contribution fragment.\n  Rendered into the discuss:pre orchestrator prompt when `mempalace.recall_on_discuss` is true.\n  Contributes DATA (recall instructions), not control flow. onError: skip — never blocks discussion.\n-->\n### Memory recall (MemPalace)\n\n**Gate first.** Read `.planning/config.json`. If `mempalace.enabled` is not `true`, or `mempalace.recall_on_discuss` is `false`, **skip this entire section** and continue the discussion unchanged. (This contribution is only injected when the capability is enabled; the `recall_on_discuss` check lets you turn discuss-time recall off without disabling the rest of the capability.)\n\nOtherwise — before gathering new context, surface what you already know. This is read-only and side-effect-free; if MemPalace is unreachable, note \"memory unavailable\" and continue — recall never blocks discussion.\n\n1. **Resolve the wing.** Use `mempalace.wing` if set; otherwise derive it from `project_code` (fall back to the project directory name).\n2. **Wake up (cheap, ~600–900 tokens).**\n   - Interactive run → call `mempalace_search` after a wake-up read of the wing.\n   - Headless/cron run (no MCP server) → run `mempalace wake-up --wing <wing>` via the CLI.\n3. **Targeted recall.** Search the palace for prior work on this phase's topic:\n   - Interactive → `mempalace_search(query=<phase topic>, wing=<wing>)` and, when `mempalace.mirror_kg` is on, `mempalace_kg_query` / `mempalace_kg_timeline` for decision facts and their validity windows.\n   - Headless → `mempalace search \"<phase topic>\" --wing <wing>`.\n4. **Mode awareness.** Only `augment` is currently wired: always treat the palace as an *additional* recall layer on top of GSD's native memory — never skip `.planning/graphs/` or STATE. `kg_backend`/`replace` are forward-declared and behave as `augment` today.\n5. **Surface, don't dump.** Fold the top relevant drawers, decisions, patterns, and *surprises* into the discussion as prior context — cite drawer/fact provenance. Do not paste raw search output.\n\nIf any MemPalace call errors or times out, skip the rest of recall and proceed with discussion as normal.\n"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "mempalace.enabled",
+        "onError": "skip"
+      },
+      {
+        "point": "execute:wave:post",
+        "into": "verifier",
+        "fragment": {
+          "path": "fragments/capture-problems.md",
+          "inline": "<!--\n  MemPalace capability — contribution fragment.\n  Rendered into the execute:wave:post verifier prompt when `mempalace.capture_artifacts` is true.\n  Contributes DATA (capture instructions), not control flow. onError: skip — never fails a wave.\n-->\n### Capture problems → fixes (MemPalace)\n\n**Gate first.** Read `.planning/config.json`. If `mempalace.enabled` is not `true`, or `mempalace.capture_artifacts` is `false`, **skip this entire section** and let the wave complete unchanged. (This contribution is only injected when the capability is enabled; the `capture_artifacts` check lets you turn capture off without disabling the rest of the capability.)\n\nOtherwise — after verifying this wave, persist any *confirmed* problem→fix pairs into the palace so they are recalled in future phases. This is best-effort; if MemPalace is unreachable, skip silently — capture never fails a wave.\n\nFor each confirmed bug/issue resolved in this wave:\n\n1. **Resolve the wing** (`mempalace.wing`, else `project_code`, else project dir) and target `room: problems`.\n2. **Dedupe first.** Call `mempalace_check_duplicate` (interactive) before filing so re-runs don't create duplicate drawers.\n3. **File the drawer verbatim.** Store the problem statement and its fix as a drawer in `room: problems` — interactive: `mempalace_add_drawer`; headless: `mempalace mine` / `mempalace hook run`. Include provenance (`source_file`, phase id).\n4. **Mirror the KG fact** when `mempalace.mirror_kg` is on: add `(<bug>, fixed_by, <fix>)` with `valid_from` = the phase date via `mempalace_kg_add`.\n5. **Mode awareness.** Only `augment` is currently wired: the fact is an *additive* mirror alongside `.planning/graphs/` (never a replacement). `kg_backend`/`replace` are forward-declared and behave as `augment` today.\n\nCaptures are idempotent: deterministic drawer IDs + `check_duplicate` mean re-running the wave re-files the same content without duplication. On any error, skip and let the wave complete normally.\n"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "mempalace.enabled",
+        "onError": "skip"
+      }
+    ],
+    "gates": []
+  },
   "nyquist": {
     "id": "nyquist",
     "role": "feature",
@@ -1716,6 +1886,8 @@ const bySkill = {
   "ai-integration-phase": "ai-integration",
   "code-review": "code-review",
   "graphify": "graphify",
+  "mempalace-recall": "mempalace",
+  "mempalace-capture": "mempalace",
   "validate-phase": "nyquist",
   "profile-user": "profile-pipeline",
   "secure-phase": "security",
@@ -1730,6 +1902,7 @@ const byAgent = {
   "gsd-eval-planner": "ai-integration",
   "gsd-code-reviewer": "code-review",
   "gsd-code-fixer": "code-review",
+  "gsd-mempalace-curator": "mempalace",
   "gsd-nyquist-auditor": "nyquist",
   "gsd-pattern-mapper": "pattern-mapper",
   "gsd-user-profiler": "profile-pipeline",
@@ -1742,11 +1915,39 @@ const byAgent = {
 const byLoopPoint = {
   "discuss:pre": {
     "steps": [],
-    "contributions": [],
+    "contributions": [
+      {
+        "capId": "mempalace",
+        "point": "discuss:pre",
+        "into": "orchestrator",
+        "fragment": {
+          "path": "fragments/recall-discuss.md",
+          "inline": "<!--\n  MemPalace capability — contribution fragment.\n  Rendered into the discuss:pre orchestrator prompt when `mempalace.recall_on_discuss` is true.\n  Contributes DATA (recall instructions), not control flow. onError: skip — never blocks discussion.\n-->\n### Memory recall (MemPalace)\n\n**Gate first.** Read `.planning/config.json`. If `mempalace.enabled` is not `true`, or `mempalace.recall_on_discuss` is `false`, **skip this entire section** and continue the discussion unchanged. (This contribution is only injected when the capability is enabled; the `recall_on_discuss` check lets you turn discuss-time recall off without disabling the rest of the capability.)\n\nOtherwise — before gathering new context, surface what you already know. This is read-only and side-effect-free; if MemPalace is unreachable, note \"memory unavailable\" and continue — recall never blocks discussion.\n\n1. **Resolve the wing.** Use `mempalace.wing` if set; otherwise derive it from `project_code` (fall back to the project directory name).\n2. **Wake up (cheap, ~600–900 tokens).**\n   - Interactive run → call `mempalace_search` after a wake-up read of the wing.\n   - Headless/cron run (no MCP server) → run `mempalace wake-up --wing <wing>` via the CLI.\n3. **Targeted recall.** Search the palace for prior work on this phase's topic:\n   - Interactive → `mempalace_search(query=<phase topic>, wing=<wing>)` and, when `mempalace.mirror_kg` is on, `mempalace_kg_query` / `mempalace_kg_timeline` for decision facts and their validity windows.\n   - Headless → `mempalace search \"<phase topic>\" --wing <wing>`.\n4. **Mode awareness.** Only `augment` is currently wired: always treat the palace as an *additional* recall layer on top of GSD's native memory — never skip `.planning/graphs/` or STATE. `kg_backend`/`replace` are forward-declared and behave as `augment` today.\n5. **Surface, don't dump.** Fold the top relevant drawers, decisions, patterns, and *surprises* into the discussion as prior context — cite drawer/fact provenance. Do not paste raw search output.\n\nIf any MemPalace call errors or times out, skip the rest of recall and proceed with discussion as normal.\n"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "mempalace.enabled",
+        "onError": "skip"
+      }
+    ],
     "gates": []
   },
   "discuss:post": {
-    "steps": [],
+    "steps": [
+      {
+        "capId": "mempalace",
+        "point": "discuss:post",
+        "ref": {
+          "skill": "mempalace-capture"
+        },
+        "produces": [],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "mempalace.enabled",
+        "onError": "skip"
+      }
+    ],
     "contributions": [],
     "gates": []
   },
@@ -1778,6 +1979,21 @@ const byLoopPoint = {
         ],
         "consumes": [],
         "when": "intel.enabled",
+        "onError": "skip"
+      },
+      {
+        "capId": "mempalace",
+        "point": "plan:pre",
+        "ref": {
+          "skill": "mempalace-recall"
+        },
+        "produces": [
+          "MEMORY-RECALL.md"
+        ],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "mempalace.enabled",
         "onError": "skip"
       },
       {
@@ -1894,7 +2110,21 @@ const byLoopPoint = {
     ]
   },
   "plan:post": {
-    "steps": [],
+    "steps": [
+      {
+        "capId": "mempalace",
+        "point": "plan:post",
+        "ref": {
+          "skill": "mempalace-capture"
+        },
+        "produces": [],
+        "consumes": [
+          "PLAN.md"
+        ],
+        "when": "mempalace.enabled",
+        "onError": "skip"
+      }
+    ],
     "contributions": [],
     "gates": [
       {
@@ -1921,7 +2151,21 @@ const byLoopPoint = {
   },
   "execute:wave:post": {
     "steps": [],
-    "contributions": [],
+    "contributions": [
+      {
+        "capId": "mempalace",
+        "point": "execute:wave:post",
+        "into": "verifier",
+        "fragment": {
+          "path": "fragments/capture-problems.md",
+          "inline": "<!--\n  MemPalace capability — contribution fragment.\n  Rendered into the execute:wave:post verifier prompt when `mempalace.capture_artifacts` is true.\n  Contributes DATA (capture instructions), not control flow. onError: skip — never fails a wave.\n-->\n### Capture problems → fixes (MemPalace)\n\n**Gate first.** Read `.planning/config.json`. If `mempalace.enabled` is not `true`, or `mempalace.capture_artifacts` is `false`, **skip this entire section** and let the wave complete unchanged. (This contribution is only injected when the capability is enabled; the `capture_artifacts` check lets you turn capture off without disabling the rest of the capability.)\n\nOtherwise — after verifying this wave, persist any *confirmed* problem→fix pairs into the palace so they are recalled in future phases. This is best-effort; if MemPalace is unreachable, skip silently — capture never fails a wave.\n\nFor each confirmed bug/issue resolved in this wave:\n\n1. **Resolve the wing** (`mempalace.wing`, else `project_code`, else project dir) and target `room: problems`.\n2. **Dedupe first.** Call `mempalace_check_duplicate` (interactive) before filing so re-runs don't create duplicate drawers.\n3. **File the drawer verbatim.** Store the problem statement and its fix as a drawer in `room: problems` — interactive: `mempalace_add_drawer`; headless: `mempalace mine` / `mempalace hook run`. Include provenance (`source_file`, phase id).\n4. **Mirror the KG fact** when `mempalace.mirror_kg` is on: add `(<bug>, fixed_by, <fix>)` with `valid_from` = the phase date via `mempalace_kg_add`.\n5. **Mode awareness.** Only `augment` is currently wired: the fact is an *additive* mirror alongside `.planning/graphs/` (never a replacement). `kg_backend`/`replace` are forward-declared and behave as `augment` today.\n\nCaptures are idempotent: deterministic drawer IDs + `check_duplicate` mean re-running the wave re-files the same content without duplication. On any error, skip and let the wave complete normally.\n"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "mempalace.enabled",
+        "onError": "skip"
+      }
+    ],
     "gates": [
       {
         "capId": "drift",
@@ -1995,6 +2239,19 @@ const byLoopPoint = {
   "verify:post": {
     "steps": [
       {
+        "capId": "mempalace",
+        "point": "verify:post",
+        "ref": {
+          "skill": "mempalace-capture"
+        },
+        "produces": [],
+        "consumes": [
+          "SUMMARY.md"
+        ],
+        "when": "mempalace.enabled",
+        "onError": "skip"
+      },
+      {
         "capId": "nyquist",
         "point": "verify:post",
         "ref": {
@@ -2065,7 +2322,21 @@ const byLoopPoint = {
     ]
   },
   "ship:post": {
-    "steps": [],
+    "steps": [
+      {
+        "capId": "mempalace",
+        "point": "ship:post",
+        "ref": {
+          "agent": "gsd-mempalace-curator"
+        },
+        "produces": [],
+        "consumes": [
+          "UAT.md"
+        ],
+        "when": "mempalace.enabled",
+        "onError": "skip"
+      }
+    ],
     "contributions": [],
     "gates": []
   }
@@ -2081,6 +2352,16 @@ const configKeys = {
   "workflow.post_planning_gaps": "gap-analysis",
   "graphify.enabled": "graphify",
   "intel.enabled": "intel",
+  "mempalace.enabled": "mempalace",
+  "mempalace.memory_mode": "mempalace",
+  "mempalace.wing": "mempalace",
+  "mempalace.recall_on_discuss": "mempalace",
+  "mempalace.recall_on_plan": "mempalace",
+  "mempalace.capture_artifacts": "mempalace",
+  "mempalace.mirror_kg": "mempalace",
+  "mempalace.cross_project_tunnels": "mempalace",
+  "mempalace.diary_journal": "mempalace",
+  "mempalace.auto_capture_hooks": "mempalace",
   "workflow.nyquist_validation": "nyquist",
   "workflow.pattern_mapper": "pattern-mapper",
   "profile-pipeline.enabled": "profile-pipeline",
@@ -2158,6 +2439,71 @@ const configSchema = {
     "type": "boolean",
     "default": false,
     "description": "Enable the intel code-intelligence command."
+  },
+  "mempalace.enabled": {
+    "owner": "mempalace",
+    "type": "boolean",
+    "default": false,
+    "description": "Master toggle for the MemPalace memory capability."
+  },
+  "mempalace.memory_mode": {
+    "owner": "mempalace",
+    "type": "enum",
+    "default": "augment",
+    "description": "How MemPalace relates to GSD native memory. Only 'augment' (additive) is implemented today; 'kg_backend' and 'replace' are forward-declared (routing seam not yet built) and currently behave as 'augment'.",
+    "values": [
+      "augment",
+      "kg_backend",
+      "replace"
+    ]
+  },
+  "mempalace.wing": {
+    "owner": "mempalace",
+    "type": "string",
+    "default": "",
+    "description": "Palace wing name; empty derives from project_code / project dir."
+  },
+  "mempalace.recall_on_discuss": {
+    "owner": "mempalace",
+    "type": "boolean",
+    "default": true,
+    "description": "Inject wake-up + search recall at discuss:pre."
+  },
+  "mempalace.recall_on_plan": {
+    "owner": "mempalace",
+    "type": "boolean",
+    "default": true,
+    "description": "Produce MEMORY-RECALL.md at plan:pre."
+  },
+  "mempalace.capture_artifacts": {
+    "owner": "mempalace",
+    "type": "boolean",
+    "default": true,
+    "description": "File CONTEXT/PLAN/SUMMARY and learnings into the palace at phase boundaries."
+  },
+  "mempalace.mirror_kg": {
+    "owner": "mempalace",
+    "type": "boolean",
+    "default": true,
+    "description": "Mirror decisions/learnings into MemPalace's temporal knowledge graph."
+  },
+  "mempalace.cross_project_tunnels": {
+    "owner": "mempalace",
+    "type": "boolean",
+    "default": false,
+    "description": "Propose/create cross-wing tunnels at ship:post."
+  },
+  "mempalace.diary_journal": {
+    "owner": "mempalace",
+    "type": "boolean",
+    "default": true,
+    "description": "Write a per-agent diary entry at ship:post."
+  },
+  "mempalace.auto_capture_hooks": {
+    "owner": "mempalace",
+    "type": "boolean",
+    "default": false,
+    "description": "Reserved / not yet implemented: will install MemPalace's native stop/precompact Claude Code hooks for passive mid-session capture (the capability's hooks array is currently empty)."
   },
   "workflow.nyquist_validation": {
     "owner": "nyquist",
@@ -3206,6 +3552,10 @@ const capabilityClusters = {
   "graphify": [
     "graphify"
   ],
+  "mempalace": [
+    "mempalace-capture",
+    "mempalace-recall"
+  ],
   "nyquist": [
     "validate-phase"
   ],
@@ -3235,6 +3585,12 @@ const profileMembership = {
     ]
   },
   "graphify": {
+    "tier": "full",
+    "profiles": [
+      "full"
+    ]
+  },
+  "mempalace": {
     "tier": "full",
     "profiles": [
       "full"
@@ -3286,6 +3642,7 @@ const _requiresGraph = {
   "intel": [],
   "kilo": [],
   "kimi": [],
+  "mempalace": [],
   "nyquist": [],
   "opencode": [],
   "pattern-mapper": [

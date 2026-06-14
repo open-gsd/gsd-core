@@ -629,12 +629,14 @@ describe('F. Real registry execute:wave:post shape — guard against accidental 
       `ui.safety-gate onError must be 'halt'; got ${uiGate.onError}`);
   });
 
-  test('[happy] real registry: execute:wave:post has no steps and no contributions — pure gate point', () => {
+  test('[happy] real registry: execute:wave:post has no steps and 1 contribution (mempalace capture-problems) — gate point with mempalace contribution', () => {
     const point = realRegistry.byLoopPoint['execute:wave:post'];
     assert.strictEqual(point.steps.length, 0,
       `execute:wave:post steps must be empty; got ${point.steps.length}`);
-    assert.strictEqual(point.contributions.length, 0,
-      `execute:wave:post contributions must be empty; got ${point.contributions.length}`);
+    assert.strictEqual(point.contributions.length, 1,
+      `execute:wave:post must have 1 contribution (mempalace); got ${point.contributions.length}`);
+    assert.strictEqual(point.contributions[0].capId, 'mempalace',
+      `execute:wave:post contribution must be from mempalace; got ${point.contributions[0].capId}`);
   });
 
 });

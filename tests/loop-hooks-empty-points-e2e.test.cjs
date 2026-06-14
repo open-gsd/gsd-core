@@ -585,7 +585,8 @@ describe('ship:post — real registry empty-resolution + resilience to registry 
     }
   });
 
-  it('[happy] resolveLoopHooks with real capability-registry at ship:post returns empty activeHooks and well-formed byLoopPoint entry', () => {
+  it('[happy] resolveLoopHooks with real capability-registry at ship:post returns empty activeHooks (mempalace step inactive by default) and well-formed byLoopPoint entry with 1 step', () => {
+    // mempalace.enabled defaults to false → step not activated with empty config
     const resolved = resolveLoopHooks({ point: 'ship:post', registry: realRegistry, config: {} });
     assert.strictEqual(resolved.point, 'ship:post');
     assert.ok(Array.isArray(resolved.activeHooks));
@@ -593,7 +594,8 @@ describe('ship:post — real registry empty-resolution + resilience to registry 
 
     const entry = realRegistry.byLoopPoint['ship:post'];
     assert.ok(entry, 'ship:post must be present in real registry byLoopPoint');
-    assert.strictEqual(entry.steps.length, 0, 'ship:post must have 0 steps');
+    assert.strictEqual(entry.steps.length, 1, 'ship:post must have 1 step (mempalace curator)');
+    assert.strictEqual(entry.steps[0].capId, 'mempalace', 'ship:post step must be from mempalace');
     assert.strictEqual(entry.contributions.length, 0, 'ship:post must have 0 contributions');
     assert.strictEqual(entry.gates.length, 0, 'ship:post must have 0 gates');
   });
@@ -665,12 +667,13 @@ describe('ship:post — real registry empty-resolution + resilience to registry 
     }
   });
 
-  it('[empty-resolution] ship:post byLoopPoint entry exists in the real registry with all three arrays empty — no capability has silently self-registered here', () => {
+  it('[happy] ship:post byLoopPoint entry exists in the real registry with 1 step (mempalace), 0 contributions, 0 gates', () => {
     const entry = realRegistry.byLoopPoint['ship:post'];
     assert.ok(entry, 'ship:post must be present in real registry byLoopPoint');
-    assert.strictEqual(entry.steps.length, 0, 'ship:post must have 0 steps — accidental registration guard');
-    assert.strictEqual(entry.contributions.length, 0, 'ship:post must have 0 contributions — accidental registration guard');
-    assert.strictEqual(entry.gates.length, 0, 'ship:post must have 0 gates — accidental registration guard');
+    assert.strictEqual(entry.steps.length, 1, 'ship:post must have 1 step (mempalace curator step)');
+    assert.strictEqual(entry.steps[0].capId, 'mempalace', 'ship:post step must be from mempalace capability');
+    assert.strictEqual(entry.contributions.length, 0, 'ship:post must have 0 contributions');
+    assert.strictEqual(entry.gates.length, 0, 'ship:post must have 0 gates');
   });
 });
 
@@ -715,14 +718,13 @@ describe('CLI contract — missing/invalid point argument (shared across all 6 e
 // SECTION 8: Parametric empty-point sweep across all 6 points (E2E regression guard)
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('Parametric E2E sweep — all 6 empty points return correct envelope shape via real registry', () => {
+describe('Parametric E2E sweep — 5 empty points return correct envelope shape via real registry (ship:post excluded — mempalace registers 1 step there)', () => {
   const EMPTY_POINTS = [
     'discuss:pre',
     'discuss:post',
     'execute:pre',
     'execute:wave:pre',
     'verify:pre',
-    'ship:post',
   ];
 
   for (const point of EMPTY_POINTS) {

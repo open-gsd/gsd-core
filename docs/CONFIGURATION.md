@@ -531,6 +531,49 @@ The `plan_review.*` namespace controls the plan drift guard, which verifies that
 | `plan_review.source_grounding` | boolean | `true` | Enable the plan drift guard. When `true` (the default), plan review resolves every symbol reference cited in a PLAN.md against the live source tree. Plans that cite a non-existent function, class, decorator, or CLI flag produce a `needs-acknowledgement` notice before the plan is approved. Disable with `false` to skip symbol verification entirely. Toggle during setup (`/gsd:new-project`) or at any time via `/gsd:settings`. |
 | `plan_review.source_grounding_authority` | enum | `grep` | Selects the resolver adapter used to verify symbol existence. Allowed values: `grep` (default — ripgrep/grep search of source files, works in any project without additional tooling), `intel` (query the `.planning/intel/api-map.json` index built by `/gsd:map-codebase`; requires `intel.enabled: true`), `treesitter` (reserved for future tree-sitter adapter), `lsp` (reserved for future LSP adapter), `scip` (reserved for future SCIP/LSIF adapter). Use `intel` when you have run `/gsd:map-codebase` and want the faster, pre-indexed lookup. All other values beyond `grep` and `intel` are reserved and have no effect in the current release. |
 
+<a id="mempalace-settings"></a>
+### MemPalace Settings
+
+MemPalace is an opt-in, default-resilient memory capability. Every hook is `onError: skip` — a missing or unreachable MemPalace installation never halts or fails the loop. Enable with `mempalace.enabled: true` after installing MemPalace (`pip install mempalace`).
+
+`mempalace.enabled` is the **master gate**: all five loop hooks (discuss, plan, execute-wave, verify, ship) and both curator contributions are gated on this key. When it is `false` (the default), nothing fires and the GSD loop is byte-for-byte unchanged. The remaining keys only refine behavior when `mempalace.enabled` is `true`; they are honored at runtime by the skills, curator, and fragments — they do not add independent hook gating.
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `mempalace.enabled` | boolean | `false` | Master gate for the MemPalace memory capability. When `false` (the default) every recall/capture hook is inactive and the loop is unchanged. All other `mempalace.*` keys are inert while this is `false`. |
+| `mempalace.memory_mode` | enum: `augment`, `kg_backend`, `replace` | `augment` | How MemPalace relates to GSD native memory. `augment` (**implemented** — MemPalace is an additional write-mostly recall layer alongside GSD's native graphs/learnings; lowest coupling). `kg_backend` (**declared; routing seam not yet implemented** — intended to route graphify KG queries through MemPalace's temporal graph instead of `.planning/graphs/`; selecting this today behaves the same as `augment`). `replace` (**declared; not yet functional** — intended to make the palace the durable store for GSD memory reads; selecting this today behaves the same as `augment`). |
+| `mempalace.wing` | string | `""` | Palace wing name for this project. Empty (the default) derives the wing from `project_code` or the project directory name. |
+| `mempalace.recall_on_discuss` | boolean | `true` | When `mempalace.enabled` is `true`: inject a wake-up + semantic-search recall fragment into the orchestrator at `discuss:pre`. Surfaces prior decisions, patterns, and surprises before the discussion starts. |
+| `mempalace.recall_on_plan` | boolean | `true` | When `mempalace.enabled` is `true`: run the `mempalace-recall` skill at `plan:pre` to produce `MEMORY-RECALL.md` from prior decisions, patterns, and surprises relevant to the plan. |
+| `mempalace.capture_artifacts` | boolean | `true` | When `mempalace.enabled` is `true`: file phase artifacts (`CONTEXT.md`, `PLAN.md`, `SUMMARY.md`) verbatim into MemPalace at their respective phase boundaries (`discuss:post`, `plan:post`, `verify:post`). Also captures confirmed bug→fix pairs at `execute:wave:post`. |
+| `mempalace.mirror_kg` | boolean | `true` | When `mempalace.enabled` is `true`: mirror decisions and learnings into MemPalace's temporal knowledge graph (`mempalace_kg_add` with `valid_from` = phase date) alongside drawer capture. |
+| `mempalace.cross_project_tunnels` | boolean | `false` | When `mempalace.enabled` is `true`: at `ship:post`, propose and create tunnels between this wing's rooms and semantically related wings in other projects (`mempalace_find_tunnels`, `mempalace_create_tunnel`). |
+| `mempalace.diary_journal` | boolean | `true` | When `mempalace.enabled` is `true`: at `ship:post`, write a per-agent diary entry (`mempalace_diary_write`) summarising the session. |
+| `mempalace.auto_capture_hooks` | boolean | `false` | **Reserved — not yet implemented.** Intended to install MemPalace's native Claude Code hooks (`session-start`, `stop`, `precompact`) for passive mid-session capture between loop points. The capability's `hooks` array is currently empty; no native hooks are installed by setting this key. This key is forward-declared for the future "Connected Capability" phase. |
+
+#### Memory modes in detail
+
+| Mode | `.planning/graphs` KG | Recall source | Coupling | Status |
+|------|-----------------------|---------------|---------|--------|
+| `augment` (default) | stays native | GSD native + palace search | lowest | **Implemented** |
+| `kg_backend` | intended: routed to MemPalace temporal graph | intended: KG queries hit MemPalace | medium | **Declared — routing seam not yet implemented; behaves as `augment`** |
+| `replace` | intended: backed by palace | intended: palace is the durable store | highest | **Declared — not yet functional; behaves as `augment`** |
+
+Mode is read at hook-render time; switching modes is a config change, not a reinstall. Only `augment` has effect today — `kg_backend` and `replace` are forward-declared for a future release.
+
+#### Example
+
+```bash
+# Enable MemPalace (augment mode — the only implemented mode today)
+gsd-tools query config-set mempalace.enabled true
+
+# Forward-declared: kg_backend/replace are not yet functional (declared for future release)
+# gsd-tools query config-set mempalace.memory_mode kg_backend
+
+# Enable cross-project tunnel proposals at ship:post
+gsd-tools query config-set mempalace.cross_project_tunnels true
+```
+
 <a id="graphify-settings"></a>
 ### Graphify Settings
 

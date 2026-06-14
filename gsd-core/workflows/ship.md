@@ -13,6 +13,11 @@ Create a pull request from completed phase/milestone work, generate a rich PR bo
 Read all files referenced by the invoking prompt's execution_context before starting.
 </required_reading>
 
+<available_agent_types>
+Valid GSD subagent types (use exact names — do not fall back to 'general-purpose'):
+- gsd-mempalace-curator — Ship-time MemPalace curation (diary, KG mirror, cross-project tunnels, wing-scoped prune); dispatched at ship:post when the mempalace capability is enabled.
+</available_agent_types>
+
 <process>
 
 <step name="initialize">
@@ -395,6 +400,32 @@ If `commit_docs` is true:
 ```bash
 gsd_run query commit "docs(${padded_phase}): ship phase ${PHASE_NUMBER} — PR #${PR_NUMBER}" --files .planning/STATE.md
 ```
+</step>
+
+<step name="ship_post_capability_dispatch">
+
+> Capability-driven dispatch. Resolves active `ship:post` hooks via the capability registry; each hook's `when` is evaluated by the registry — no inline `config-get`. All `ship:post` hooks are post-ship and additive (`onError: skip`); a failure here never affects the already-created PR.
+
+```bash
+SHIP_POST_HOOKS_JSON=$(gsd_run loop render-hooks ship:post --raw)
+```
+
+Read the `activeHooks` array directly from `SHIP_POST_HOOKS_JSON` in-context (do NOT pipe it through a shell parser).
+
+**Branch 1 — no active `ship:post` step hooks (`activeHooks` has no entry with `kind == "step"`):** Skip silently to the report.
+
+**Generic step hook dispatch contract:** For each active entry where `kind == "step"`:
+- Honor `consumes`: if it lists `UAT.md`, resolve `ls "${PHASE_DIR}"/*-UAT.md 2>/dev/null | head -1` and pass it to the dispatch; if a consumed artifact is absent, skip that hook.
+- If `ref.agent` is set, first show the spawn banner, then dispatch the agent named by `ref.agent` (use the exact `ref.agent` value as the subagent type — e.g. `gsd-mempalace-curator` — never `general-purpose`):
+
+  ```
+  ◆ Spawning ship:post capability agent... (runs in a subagent — no output until it returns, ~1–2 min; expected, not a freeze)
+  ```
+
+  `Agent(subagent_type=ref.agent, prompt="Ship-time capability hook for phase ${PHASE_NUMBER}. Phase dir: ${PHASE_DIR}. Consume: ${consumed_files}. Follow your agent instructions.", model="{balanced_model}")`
+- If `ref.skill` is set, dispatch with `Skill(skill="gsd-${ref.skill}", args="${PHASE_NUMBER} --auto ${GSD_WS}")` (prepend `gsd-` to `ref.skill`).
+
+Each dispatch is best-effort: if it errors, record a warning and continue — never re-raise (`onError: skip`).
 </step>
 
 <step name="report">

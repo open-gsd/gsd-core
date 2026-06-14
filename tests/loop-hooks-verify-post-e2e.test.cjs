@@ -522,22 +522,22 @@ describe('verify:post — envelope shape pins Hyrum\'s Law contract', () => {
 
 // ─── 10. Real registry byLoopPoint shape check (no drift guard) ───────────────
 
-describe('verify:post — real registry has exactly 3 steps and 0 contributions+gates', () => {
-  test('[happy] realRegistry.byLoopPoint[verify:post] has 3 steps, 0 contributions, 0 gates', () => {
+describe('verify:post — real registry has exactly 4 steps and 0 contributions+gates', () => {
+  test('[happy] realRegistry.byLoopPoint[verify:post] has 4 steps, 0 contributions, 0 gates', () => {
     const entry = realRegistry.byLoopPoint['verify:post'];
     assert.ok(entry, 'verify:post must exist in registry');
-    assert.strictEqual(entry.steps.length, 3,
-      `Expected 3 steps at verify:post, got ${entry.steps.length}`);
+    assert.strictEqual(entry.steps.length, 4,
+      `Expected 4 steps at verify:post, got ${entry.steps.length}`);
     assert.strictEqual(entry.contributions.length, 0,
       `Expected 0 contributions at verify:post, got ${entry.contributions.length}`);
     assert.strictEqual(entry.gates.length, 0,
       `Expected 0 gates at verify:post, got ${entry.gates.length}`);
   });
 
-  test('[happy] registry steps at verify:post have correct capIds in order', () => {
+  test('[happy] registry steps at verify:post have correct capIds in order (mempalace→nyquist→security→ui)', () => {
     const entry = realRegistry.byLoopPoint['verify:post'];
     const capIds = entry.steps.map(s => s.capId);
-    assert.deepEqual(capIds, ['nyquist', 'security', 'ui'],
-      `Registry must have steps in nyquist→security→ui order, got ${JSON.stringify(capIds)}`);
+    assert.deepEqual(capIds, ['mempalace', 'nyquist', 'security', 'ui'],
+      `Registry must have steps in mempalace→nyquist→security→ui order, got ${JSON.stringify(capIds)}`);
   });
 });

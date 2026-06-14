@@ -166,6 +166,8 @@
   - [Structured JSON Error Mode](#142-structured-json-error-mode)
   - [UAT-Passed Predicate](#143-uat-passed-predicate)
   - [Spec-Phase Edge-Completeness Probe](#144-spec-phase-edge-completeness-probe)
+- [v1.43.0 Features](#v1430-features)
+  - [MemPalace Memory Capability](#145-mempalace-memory-capability)
 
 ---
 
@@ -3119,3 +3121,27 @@ The load-bearing wire is the `plan-phase` lift: `covered` and `backstop` edges b
 - REQ-EDGE-06: `plan-phase` MUST lift `covered` criteria and `backstop` notes into `must_haves.truths`.
 
 **Reference:** [Edge Probe](../gsd-core/references/edge-probe.md)
+
+---
+
+## v1.43.0 Features
+
+### 145. MemPalace Memory Capability
+
+**Purpose:** Opt-in cross-session and cross-project memory via the [MemPalace](https://github.com/MemPalace/mempalace) external service (local-first, MCP + CLI). Wires deliberate recall before discuss/plan and verbatim capture + temporal-KG sync at phase boundaries through the ADR-857 capability mechanism. Default-resilient: disabled by default, every hook is `onError: skip`, and an absent MemPalace installation leaves the loop unchanged.
+
+**Commands:** `/gsd-mempalace-recall`, `/gsd-mempalace-capture`
+
+**Requirements:**
+- REQ-MP-01: Opt-in via `mempalace.enabled: true`. Default `false` — the loop is unchanged when unset.
+- REQ-MP-02: At `plan:pre`, skill `mempalace-recall` produces `MEMORY-RECALL.md` from prior decisions, patterns, and surprises retrieved via wake-up + semantic search + KG timeline. When MemPalace is unreachable, writes an "unavailable" stub and continues.
+- REQ-MP-03: At `discuss:post`, `plan:post`, and `verify:post`, skill `mempalace-capture` files the phase artifact verbatim into the appropriate MemPalace room (`decisions`, `planning`, `milestones`). Capture is idempotent via `mempalace_check_duplicate`.
+- REQ-MP-04: At `ship:post`, agent `gsd-mempalace-curator` writes a diary entry, proposes cross-project tunnels (when `mempalace.cross_project_tunnels: true`), and runs wing-scoped sync pruning.
+- REQ-MP-05: `mempalace.memory_mode` declares three values: `augment` (default, **implemented** — palace is an additional recall layer alongside GSD native memory), `kg_backend` (**forward-declared; routing seam not yet implemented** — selecting this today behaves identically to `augment`), `replace` (**forward-declared; not yet functional** — selecting this today behaves identically to `augment`). Only `augment` has effect in the current release.
+- REQ-MP-06: Every hook is `onError: skip`. No hook carries `blocking: true`. Memory never halts or fails a phase.
+- REQ-MP-07: Interactive runs prefer MCP tools; headless/cron runs prefer the MemPalace CLI (`mempalace wake-up`, `mempalace search`, `mempalace mine`, `mempalace sync`).
+- REQ-MP-08: `mempalace.auto_capture_hooks` is **forward-declared and not yet functional**. No native Claude Code hooks (`stop`, `precompact`, `session-start`) are installed by this key; the capability's hooks array is empty. This key is reserved for the future "Connected Capability" phase. Default `false`.
+
+**Configuration:** `mempalace.enabled`, `mempalace.memory_mode`, `mempalace.wing`, `mempalace.recall_on_discuss`, `mempalace.recall_on_plan`, `mempalace.capture_artifacts`, `mempalace.mirror_kg`, `mempalace.cross_project_tunnels`, `mempalace.diary_journal`, `mempalace.auto_capture_hooks`
+
+See [Configuration Reference](CONFIGURATION.md#mempalace-settings) for full schema and [How to enable cross-session memory with MemPalace](how-to/enable-cross-session-memory-with-mempalace.md) for a setup walkthrough.

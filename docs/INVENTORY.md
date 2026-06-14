@@ -51,6 +51,7 @@ Full roster at `agents/gsd-*.md`. The "Primary doc" column flags whether [`docs/
 | gsd-intel-updater | Writes structured intel files (`.planning/intel/*.json`) used as a queryable codebase knowledge base. | `/gsd-map-codebase --query` | advanced stub |
 | gsd-doc-classifier | Classifies a single planning document as ADR, PRD, SPEC, DOC, or UNKNOWN; spawned in parallel to process the doc corpus. | `/gsd-ingest-docs` | advanced stub |
 | gsd-doc-synthesizer | Synthesizes classified planning docs into a single consolidated context with precedence rules, cycle detection, and three-bucket conflicts report. | `/gsd-ingest-docs` | advanced stub |
+| gsd-mempalace-curator | Ship-time MemPalace curation — diary entry, cross-project tunnel proposals, wing-scoped sync pruning, and extract-learnings → KG mirroring with provenance. | MemPalace capability at `ship:post` | advanced stub |
 
 **Coverage note.** `docs/AGENTS.md` gives full role cards for the primary agents plus concise stubs for the advanced agents. The Agent Tool Permissions Summary in that file covers only the primary agents; the advanced agents' tool lists are captured in their per-agent frontmatter in `agents/gsd-*.md`.
 
@@ -138,6 +139,8 @@ These six routers are descriptor-only entries that the model picks first; the bo
 | `/gsd-map-codebase` | Analyze codebase with parallel mapper agents; use `--fast` for lightweight scan or `--query` for intel queries. | [commands/gsd/map-codebase.md](../commands/gsd/map-codebase.md) |
 | `/gsd-graphify` | Build, query, and inspect the project knowledge graph in `.planning/graphs/`. | [commands/gsd/graphify.md](../commands/gsd/graphify.md) |
 | `/gsd-extract-learnings` | Extract decisions, lessons, patterns, and surprises from completed phase artifacts. | [commands/gsd/extract-learnings.md](../commands/gsd/extract-learnings.md) |
+| `/gsd-mempalace-recall` | Recall prior decisions, patterns, and surprises from MemPalace into MEMORY-RECALL.md before planning. | [commands/gsd/mempalace-recall.md](../commands/gsd/mempalace-recall.md) |
+| `/gsd-mempalace-capture` | File a phase artifact (CONTEXT/PLAN/SUMMARY) verbatim into MemPalace and mirror decision facts into its temporal KG. | [commands/gsd/mempalace-capture.md](../commands/gsd/mempalace-capture.md) |
 
 ### Review, Debug & Recovery
 

@@ -45,6 +45,8 @@ const KNOWN_SKILLS = new Set([
   'ingest-docs.md',
   'manager.md',
   'map-codebase.md',
+  'mempalace-capture.md',
+  'mempalace-recall.md',
   'milestone-summary.md',
   'mvp-phase.md',
   'new-milestone.md',

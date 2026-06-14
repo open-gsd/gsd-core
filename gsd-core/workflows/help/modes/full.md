@@ -606,6 +606,8 @@ The commands above cover the most common day-to-day flows. Every command listed 
 ### Knowledge & Context
 
 - **`/gsd:graphify [build|query <term>|status|diff]`** — Build, query, and inspect the project knowledge graph in `.planning/graphs/`.
+- **`/gsd:mempalace-recall`** — Recall prior decisions, patterns, and surprises from MemPalace before planning.
+- **`/gsd:mempalace-capture [artifact-type]`** — File a phase artifact into MemPalace and mirror decision facts into its temporal KG.
 - **`/gsd:thread [list [--open|--resolved] | close <slug> | status <slug> | name | description]`** — Manage persistent context threads for cross-session work.
 - **`/gsd:profile-user [--questionnaire] [--refresh]`** — Generate developer behavioral profile and create Claude-discoverable artifacts.
 - **`/gsd:stats`** — Display project statistics: phases, plans, requirements, git metrics, and timeline.
@@ -626,7 +628,7 @@ The commands above cover the most common day-to-day flows. Every command listed 
 
 These six skills exist primarily for the model to perform two-stage hierarchical routing across 60+ skills. You can invoke them directly when you want to browse a category interactively.
 
-- **`/gsd-context`** — Codebase intelligence routing (map, graphify, docs, learnings).
+- **`/gsd-context`** — Codebase intelligence routing (map, graphify, docs, learnings, mempalace).
 - **`/gsd-ideate`** — Exploration / capture routing (explore, sketch, spike, spec, capture).
 - **`/gsd-manage`** — Configuration and workspace routing (workstreams, thread, update, ship, inbox).
 - **`/gsd-project`** — Project-lifecycle routing (milestones, audits, summary).
