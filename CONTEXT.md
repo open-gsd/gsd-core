@@ -276,6 +276,9 @@ Stryker injects small code mutations (e.g., flipping a `>` to `>=`, deleting a `
 ### ESLint harness
 The canonical lint infrastructure adopted in ADR 452 (`docs/adr/452-eslint-lint-harness.md`): ESLint flat config (`eslint.config.mjs`) with `typescript-eslint`, `eslint-plugin-n`, `eslint-plugin-no-only-tests`, and a local AST-rule plugin at `scripts/eslint-rules/`. Replaces the homegrown `scripts/lint-*.cjs` regex scanners. The three custom test-rigor rules (`local/no-source-grep`, `local/no-magic-sleep-in-tests`, `local/no-elapsed-assertion`) initially ship at `warn`; they become `error` after the cleanup sweep tracked at issue #453 merges.
 
+### External-job-waiting half-state
+A legal deferred state of an Execute step (`external_job_waiting`): the executor has dispatched a long-running async external job and committed an async-job manifest at `.planning/async-jobs/<job>.json` instead of a SUMMARY.md. Distinct from the synchronous "mid-production-commits" half-state and from an illegal partial-plan state. The core loop's step-completion + safe-resume/pause contract treats a non-terminal manifest as legal and reconciles against it (never re-dispatching the plan, which would duplicate the external job); SUMMARY.md is deferred until the job reaches a terminal state and its `expected_artifacts` are verified. The manifest is a versioned stability contract (`docs/reference/planning-artifacts.md`); core *consumes* it while a default-off scheduler-adapter Capability (#1164) *produces* it at `execute:wave:post` — the contract-is-core / producer-is-capability seam mirrors ADR-857's verification-substrate decision. Status enum is closed and scheduler-agnostic: `submitted`, `running`, `completed-unverified`, `failed`, `cancelled`, `timeout`.
+
 ---
 
 ## Test rules and lint

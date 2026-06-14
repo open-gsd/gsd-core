@@ -189,7 +189,7 @@ CURRENT_PLAN_ID="{phase_number}-{plan_padded}"
 SUMMARY_PATH="{phase_dir}/{plan_padded}-SUMMARY.md"
 PLAN_COMMITS=$(git log --oneline --grep="${CURRENT_PLAN_ID}" -30)
 ```
-If production commits exist and `SUMMARY.md is missing`, stop before spawning a
+If production commits exist and `SUMMARY.md is missing` (no `.planning/async-jobs/*.json` manifest matches it: a match is a legal `external_job_waiting` deferral - reconcile per `docs/reference/planning-artifacts.md`, never re-dispatch), stop before spawning a
 new executor; continuing risks duplicate work and stale `STATE.md`/ROADMAP progress.
 Offer these recovery options:
 - `close out manually` — inspect commits, write SUMMARY.md, then update STATE/ROADMAP.
