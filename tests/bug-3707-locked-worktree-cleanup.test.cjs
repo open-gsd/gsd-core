@@ -19,6 +19,34 @@ const {
   reapOrphanWorktrees,
 } = require('../gsd-core/bin/lib/worktree-safety.cjs');
 
+// ─── Fixed timestamps for deterministic stale-lock boundary ──────────────────
+//
+// ADR-456 clock-seam mandate: tests must not read the live clock to compute
+// fixture mtimes.  The SUT compares `Date.now() - lockMtime.getTime()` against
+// REAP_MTIME_GUARD_MS (5 minutes).  Because `reapOrphanWorktrees` accepts a
+// `deps.mtimeSafe` injection, we can supply fixed Date objects that sit
+// unconditionally on the "stale" or "fresh" side of the boundary regardless of
+// when the test runs, without touching the real filesystem mtime at all.
+//
+//   STALE_MTIME  → Unix epoch (1970-01-01T00:00:00Z).  At any point in time
+//                   after that epoch `Date.now() - 0` is orders of magnitude
+//                   larger than any staleness threshold.
+//
+//   FRESH_MTIME  → Far-future sentinel (year 9999 + large offset).
+//                   `Date.now() - FRESH_MTIME.getTime()` is always negative,
+//                   which is always < REAP_MTIME_GUARD_MS.
+//
+// Tests that need stale behaviour pass `{ mtimeSafe: () => STALE_MTIME }` in
+// deps.  Tests that need fresh behaviour pass `{ mtimeSafe: () => FRESH_MTIME }`.
+// No `fs.utimesSync` calls are needed and no live `Date.now()` reads appear in
+// fixture setup.
+
+/** Always older than any staleness threshold. */
+const STALE_MTIME = new Date(0); // 1970-01-01T00:00:00.000Z
+
+/** Always newer than the current time, so always treated as "fresh". */
+const FRESH_MTIME = new Date(8640000000000000); // max safe JS Date (year ~275760)
+
 // ─── PID helpers ──────────────────────────────────────────────────────────────
 
 /**
@@ -242,9 +270,10 @@ describe('bug-3707: reapOrphanWorktrees', () => {
     const lockedFile = path.join(metaDir, 'locked');
     fs.writeFileSync(lockedFile, String(deadPid()));
 
-    // Back-date mtime so the stale-lock guard passes (> 5 minutes old)
-    const staleTime = new Date(Date.now() - 10 * 60 * 1000);
-    fs.utimesSync(lockedFile, staleTime, staleTime);
+    // Inject a fixed stale mtime (STALE_MTIME = Unix epoch) so the staleness
+    // check is deterministic and does not depend on the real clock or utimesSync.
+    // STALE_MTIME is always older than REAP_MTIME_GUARD_MS (5 min) regardless
+    // of when this test runs.  No fs.utimesSync call is needed.
 
     // Pre-compute canonical path BEFORE reaping — the directory will be gone
     // afterward, so fs.realpathSync.native will fail and canonicalPath falls
@@ -254,7 +283,7 @@ describe('bug-3707: reapOrphanWorktrees', () => {
     // canonical before removal ensures we compare the resolved forms.
     const wtDirCanonical = canonicalPath(wtDir);
 
-    const result = reapOrphanWorktrees(repoDir);
+    const result = reapOrphanWorktrees(repoDir, { mtimeSafe: () => STALE_MTIME });
 
     assert.ok(Array.isArray(result), 'reapOrphanWorktrees should return an array');
     const reaped = result.find((r) => canonicalPath(r.path) === wtDirCanonical);
@@ -279,10 +308,10 @@ describe('bug-3707: reapOrphanWorktrees', () => {
     const metaDir = worktreeMeta(repoDir, wtDir);
     const lockedFile = path.join(metaDir, 'locked');
     fs.writeFileSync(lockedFile, String(process.pid));
-    const staleTime = new Date(Date.now() - 10 * 60 * 1000);
-    fs.utimesSync(lockedFile, staleTime, staleTime);
 
-    const result = reapOrphanWorktrees(repoDir);
+    // Inject STALE_MTIME so the staleness guard passes deterministically,
+    // ensuring the live-PID check is the only reason the entry is skipped.
+    const result = reapOrphanWorktrees(repoDir, { mtimeSafe: () => STALE_MTIME });
 
     const skipped = result.find((r) => canonicalPath(r.path) === canonicalPath(wtDir));
     if (skipped) {
@@ -305,10 +334,10 @@ describe('bug-3707: reapOrphanWorktrees', () => {
     const metaDir = worktreeMeta(repoDir, wtDir);
     const lockedFile = path.join(metaDir, 'locked');
     fs.writeFileSync(lockedFile, String(deadPid()));
-    const staleTime = new Date(Date.now() - 10 * 60 * 1000);
-    fs.utimesSync(lockedFile, staleTime, staleTime);
 
-    const result = reapOrphanWorktrees(repoDir);
+    // Inject STALE_MTIME so the staleness guard passes deterministically,
+    // ensuring the unmerged-branch check is the only reason the entry is skipped.
+    const result = reapOrphanWorktrees(repoDir, { mtimeSafe: () => STALE_MTIME });
 
     const entry = result.find((r) => canonicalPath(r.path) === canonicalPath(wtDir));
     if (entry) {
@@ -331,9 +360,13 @@ describe('bug-3707: reapOrphanWorktrees', () => {
     const metaDir = worktreeMeta(repoDir, wtDir);
     const lockedFile = path.join(metaDir, 'locked');
     fs.writeFileSync(lockedFile, String(deadPid()));
-    // Fresh mtime: within the race-guard window (< 5 minutes old); no utimes needed
 
-    const result = reapOrphanWorktrees(repoDir);
+    // Inject FRESH_MTIME (far future) so the staleness boundary is crossed
+    // deterministically: Date.now() - FRESH_MTIME.getTime() is always negative,
+    // which is always less than REAP_MTIME_GUARD_MS.  No utimesSync needed.
+    // Previously, this test relied on the file being just-created (real clock
+    // within 5 minutes) which is fragile on heavily-loaded CI hosts.
+    const result = reapOrphanWorktrees(repoDir, { mtimeSafe: () => FRESH_MTIME });
 
     const entry = result.find((r) => canonicalPath(r.path) === canonicalPath(wtDir));
     if (entry) {
@@ -356,15 +389,16 @@ describe('bug-3707: reapOrphanWorktrees', () => {
     const metaDir = worktreeMeta(repoDir, wtDir);
     const lockedFile = path.join(metaDir, 'locked');
     fs.writeFileSync(lockedFile, String(deadPid()));
-    const staleTime = new Date(Date.now() - 10 * 60 * 1000);
-    fs.utimesSync(lockedFile, staleTime, staleTime);
 
-    const result1 = reapOrphanWorktrees(repoDir);
+    // Inject STALE_MTIME so the staleness guard is deterministically satisfied.
+    const staleDeps = { mtimeSafe: () => STALE_MTIME };
+
+    const result1 = reapOrphanWorktrees(repoDir, staleDeps);
     const reaped1 = result1.filter((r) => r.status === 'reaped');
     assert.equal(reaped1.length, 1, 'first invocation should reap exactly one entry');
 
     // Second invocation: nothing left to reap
-    const result2 = reapOrphanWorktrees(repoDir);
+    const result2 = reapOrphanWorktrees(repoDir, staleDeps);
     const reaped2 = result2.filter((r) => r.status === 'reaped');
     assert.equal(reaped2.length, 0, 'second invocation should reap nothing (idempotent)');
   });
@@ -446,11 +480,9 @@ describe('bug-3707: reapOrphanWorktrees — adversarial edge cases', () => {
     // Write the real Claude Code lock format (non-numeric)
     fs.writeFileSync(lockedFile, 'Locked by claude-code agent-a1b2c3d4e5f6');
 
-    // Back-date mtime so the stale-lock guard passes
-    const staleTime = new Date(Date.now() - 10 * 60 * 1000);
-    fs.utimesSync(lockedFile, staleTime, staleTime);
-
-    const result = reapOrphanWorktrees(repoDir);
+    // Inject STALE_MTIME so the staleness guard passes deterministically,
+    // ensuring the non-numeric content check is the only reason the entry is skipped.
+    const result = reapOrphanWorktrees(repoDir, { mtimeSafe: () => STALE_MTIME });
 
     const entry = result.find((r) => canonicalPath(r.path) === canonicalPath(wtDir));
     if (entry) {
@@ -481,17 +513,19 @@ describe('bug-3707: reapOrphanWorktrees — adversarial edge cases', () => {
     const metaDir = worktreeMeta(repoDir, wtDir);
     const lockedFile = path.join(metaDir, 'locked');
     fs.writeFileSync(lockedFile, String(deadPid()));
-    const staleTime = new Date(Date.now() - 10 * 60 * 1000);
-    fs.utimesSync(lockedFile, staleTime, staleTime);
 
-    // Inject an isPidAlive that always throws EPERM — simulates Windows cross-user scenario
+    // Inject an isPidAlive that always throws EPERM — simulates Windows cross-user scenario.
+    // Also inject STALE_MTIME so the staleness guard is deterministically satisfied.
     const epermIsPidAlive = (_pid) => {
       const err = new Error('EPERM: operation not permitted');
       err.code = 'EPERM';
       throw err;
     };
 
-    const result = reapOrphanWorktrees(repoDir, { isPidAlive: epermIsPidAlive });
+    const result = reapOrphanWorktrees(repoDir, {
+      isPidAlive: epermIsPidAlive,
+      mtimeSafe: () => STALE_MTIME,
+    });
 
     const entry = result.find((r) => canonicalPath(r.path) === canonicalPath(wtDir));
     if (entry) {
@@ -532,17 +566,16 @@ describe('bug-3707: reapOrphanWorktrees — adversarial edge cases', () => {
     const metaDir = worktreeMeta(repoDir, wtDir);
     const lockedFile = path.join(metaDir, 'locked');
     fs.writeFileSync(lockedFile, String(deadPid()));
-    const staleTime = new Date(Date.now() - 10 * 60 * 1000);
-    fs.utimesSync(lockedFile, staleTime, staleTime);
 
-    // Pre-compute canonical before reaping (symlink resolution may fail post-removal)
+    // Inject STALE_MTIME so the staleness guard is deterministically satisfied.
+    // Pre-compute canonical before reaping (symlink resolution may fail post-removal).
     const wtDirCanonical = canonicalPath(wtDir);
 
-    const result = reapOrphanWorktrees(repoDir);
+    const result = reapOrphanWorktrees(repoDir, { mtimeSafe: () => STALE_MTIME });
 
     // The reaper must either reap the worktree (using trunk as the default branch)
     // OR skip it for a safe reason — it must NOT return an empty result (which
-    // would mean it bailed out entirely, silently skipping orphan detection).
+    // would mean it bailed out entirely, silently skipping all orphan detection).
     assert.ok(Array.isArray(result), 'reapOrphanWorktrees must return an array');
     assert.ok(result.length > 0, 'reaper must not bail out entirely for trunk-default repos — must inspect the worktree');
     const entry = result.find((r) => canonicalPath(r.path) === wtDirCanonical);

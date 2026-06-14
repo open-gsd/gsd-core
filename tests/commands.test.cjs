@@ -2223,3 +2223,145 @@ describe('_wsParseRetryAfter (#308)', () => {
     assert.strictEqual(_wsParseRetryAfter(null), null);
   });
 });
+
+// ─── Regressions: bug #1145 — query user-story.validate phantom command ────
+//
+// `query user-story.validate` was invoked by mvp-phase.md and verify-work.md
+// but had no CJS handler (phantom command). Every invocation errored with
+// "Unknown command: user-story — did you mean: user-story validate?".
+//
+// Calls the CLI via runGsdTools; no readFileSync source-grep.
+
+describe('user-story validate command (bug #1145)', () => {
+  // Helper: call `query user-story.validate --story <story>` and parse JSON.
+  function validateStory(story) {
+    const result = runGsdTools(['query', 'user-story.validate', '--story', story]);
+    assert.equal(result.success, true, `user-story.validate exited non-zero: ${result.error || result.output}`);
+    let parsed;
+    try { parsed = JSON.parse(result.output); } catch {
+      assert.fail(`output was not valid JSON: ${result.output}`);
+    }
+    return parsed;
+  }
+
+  // Helper: call with --pick valid, return trimmed output string.
+  function validateStoryPickValid(story) {
+    const result = runGsdTools(['query', 'user-story.validate', '--story', story, '--pick', 'valid']);
+    assert.equal(result.success, true, `user-story.validate --pick valid exited non-zero: ${result.error || result.output}`);
+    return result.output.trim();
+  }
+
+  test('command is reachable — not a phantom (negative proof of bug #1145)', () => {
+    // Before the fix: exit 1 with "Unknown command: user-story"
+    const result = runGsdTools(['query', 'user-story.validate', '--story', 'As a user, I want to log in, so that I can access my account.']);
+    assert.equal(result.success, true, `Expected exit 0 but got: ${result.error || result.output}`);
+  });
+
+  test('canonical well-formed story returns { valid: true, errors: [], slots }', () => {
+    const out = validateStory('As a new user, I want to register and log in, so that I can access my account.');
+    assert.equal(typeof out, 'object');
+    assert.equal(out.valid, true, `expected valid:true, got: ${JSON.stringify(out)}`);
+    assert.ok(!out.errors || out.errors.length === 0, `unexpected errors: ${JSON.stringify(out.errors)}`);
+    // Slot extraction (see verify-work.md: "returns slot extractions")
+    assert.ok(out.slots && typeof out.slots === 'object', `expected slots object, got: ${JSON.stringify(out.slots)}`);
+    assert.equal(out.slots.role, 'new user');
+    assert.equal(out.slots.capability, 'register and log in');
+    assert.equal(out.slots.outcome, 'I can access my account');
+  });
+
+  test('whitespace-only role slot returns { valid: false } (Codex finding: .+ accepted spaces)', () => {
+    // "As a  ," — role is whitespace-only; must be rejected
+    const out = validateStory('As a  , I want to build reports, so that I can share status.');
+    assert.equal(out.valid, false, `whitespace role must be invalid: ${JSON.stringify(out)}`);
+    assert.ok(Array.isArray(out.errors) && out.errors.length > 0);
+    assert.equal(out.slots, null, 'slots must be null on invalid story');
+  });
+
+  test('whitespace-only capability slot returns { valid: false }', () => {
+    // ", I want to  ," — capability is whitespace-only
+    const out = validateStory('As a user, I want to  , so that I can share status.');
+    assert.equal(out.valid, false, `whitespace capability must be invalid: ${JSON.stringify(out)}`);
+    assert.ok(Array.isArray(out.errors) && out.errors.length > 0);
+  });
+
+  test('whitespace-only outcome slot returns { valid: false }', () => {
+    // ", so that  ." — outcome is whitespace-only
+    const out = validateStory('As a user, I want to build reports, so that  .');
+    assert.equal(out.valid, false, `whitespace outcome must be invalid: ${JSON.stringify(out)}`);
+    assert.ok(Array.isArray(out.errors) && out.errors.length > 0);
+  });
+
+  test('empty string returns { valid: false } with non-empty errors array', () => {
+    const out = validateStory('');
+    assert.equal(out.valid, false);
+    assert.ok(Array.isArray(out.errors) && out.errors.length > 0);
+  });
+
+  test('story missing "As a" prefix returns { valid: false }', () => {
+    const out = validateStory('I want to register so that I can log in.');
+    assert.equal(out.valid, false);
+    assert.ok(Array.isArray(out.errors) && out.errors.length > 0);
+  });
+
+  test('story missing ", I want to" clause returns { valid: false }', () => {
+    const out = validateStory('As a user, so that I can log in.');
+    assert.equal(out.valid, false);
+    assert.ok(Array.isArray(out.errors) && out.errors.length > 0);
+  });
+
+  test('story missing ", so that" clause returns { valid: false }', () => {
+    const out = validateStory('As a user, I want to register and log in.');
+    assert.equal(out.valid, false);
+    assert.ok(Array.isArray(out.errors) && out.errors.length > 0);
+  });
+
+  test('story missing trailing period returns { valid: false }', () => {
+    const out = validateStory('As a user, I want to register, so that I can log in');
+    assert.equal(out.valid, false);
+    assert.ok(Array.isArray(out.errors) && out.errors.length > 0);
+  });
+
+  test('whitespace-only story returns { valid: false }', () => {
+    const out = validateStory('   ');
+    assert.equal(out.valid, false);
+    assert.ok(Array.isArray(out.errors) && out.errors.length > 0);
+  });
+
+  test('--pick valid returns bare "true" for valid story (verify-work.md call shape)', () => {
+    const out = validateStoryPickValid('As a developer, I want to run tests, so that I can catch regressions.');
+    assert.equal(out, 'true', `expected bare "true" but got: ${JSON.stringify(out)}`);
+  });
+
+  test('--pick valid returns bare "false" for invalid story (verify-work.md call shape)', () => {
+    const out = validateStoryPickValid('Not a user story at all.');
+    assert.equal(out, 'false', `expected bare "false" but got: ${JSON.stringify(out)}`);
+  });
+
+  test('mvp-phase.md call shape: result has .valid boolean, .errors array, and .slots', () => {
+    // gsd_run query user-story.validate --story "$USER_STORY"
+    // mvp-phase.md uses: jq -r '.valid' and jq -r '.errors[]'
+    const out = validateStory('As a product manager, I want to export reports, so that I can share progress with stakeholders.');
+    assert.ok(Object.prototype.hasOwnProperty.call(out, 'valid'), 'missing "valid" field');
+    assert.ok(Object.prototype.hasOwnProperty.call(out, 'errors'), 'missing "errors" field');
+    assert.ok(Object.prototype.hasOwnProperty.call(out, 'slots'), 'missing "slots" field');
+    assert.equal(typeof out.valid, 'boolean');
+    assert.ok(Array.isArray(out.errors));
+    // slots is object on success, null on failure
+    assert.equal(out.valid, true);
+    assert.equal(typeof out.slots, 'object');
+    assert.notEqual(out.slots, null);
+  });
+
+  test('dotted-form (user-story.validate) works identically to spaced form', () => {
+    // Canonical dotted invocation used by workflows
+    const result = runGsdTools(['query', 'user-story.validate', '--story', 'As a user, I want to log in, so that I can see my dashboard.']);
+    assert.equal(result.success, true, `dotted form failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.equal(out.valid, true);
+  });
+
+  test('boundary — minimal valid story passes', () => {
+    const out = validateStory('As a X, I want to Y, so that Z.');
+    assert.equal(out.valid, true, `minimal valid story should pass: ${JSON.stringify(out)}`);
+  });
+});

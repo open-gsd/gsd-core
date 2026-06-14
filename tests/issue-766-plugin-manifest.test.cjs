@@ -6,6 +6,11 @@
  * Asserts structural and semantic correctness of:
  *   .claude-plugin/plugin.json  — plugin manifest
  *   hooks/hooks.json            — plugin hook wiring
+ *
+ * Section C1 validates plugin.json against the snapshotted schema fixture
+ * (tests/fixtures/plugin-manifest-schema.json) using explicit structural
+ * assertions instead of an Ajv dependency, so this gate runs unconditionally
+ * without requiring ajv in devDependencies.
  */
 
 const { test, describe } = require('node:test');
@@ -217,8 +222,138 @@ describe('B: hooks/hooks.json', () => {
   });
 });
 
-// ─── Section C: Optional CLI integration test ─────────────────────────────────
-describe('C: claude plugin validate (CLI integration)', () => {
+// ─── Section C: Unconditional JSON schema gate + opportunistic CLI integration ──
+//
+// The `claude plugin validate --strict` binary is absent on CI, so Section C was
+// previously SKIPPED there — the only full-schema gate never ran.  This section
+// replaces the skip-on-absent pattern with two tiers:
+//
+//   C1 (UNCONDITIONAL) — Validate plugin.json against a snapshotted JSON schema
+//        fixture that captures the fields `--strict` requires.  Runs on every
+//        platform, every CI job, every local run.  A bug that removes `version`
+//        or changes `name` to an invalid form goes red immediately.
+//
+//   C2 (OPPORTUNISTIC) — When the `claude` binary IS on PATH, also run
+//        `claude plugin validate . --strict` as an end-to-end smoke test.
+//        This tier provides defence-in-depth for schema changes Claude Code
+//        may introduce that the fixture hasn't yet captured.
+//
+describe('C: plugin.json schema validation', () => {
+
+  const SCHEMA_FIXTURE_PATH = path.join(__dirname, 'fixtures', 'plugin-manifest-schema.json');
+
+  // ── C1: Unconditional structural gate ────────────────────────────────────────
+  //
+  // Validates plugin.json against the required fields from the snapshotted
+  // schema fixture (tests/fixtures/plugin-manifest-schema.json) using explicit
+  // structural assertions.  This avoids a runtime dependency on `ajv` (which is
+  // only a transitive dep) while providing identical coverage for the fields that
+  // `claude plugin validate --strict` requires.
+  //
+  // Required fields and constraints are derived directly from SCHEMA_FIXTURE_PATH.
+  // If the fixture changes (new required field, new pattern), update this test too.
+
+  test('C1: plugin.json satisfies the snapshotted Claude Code plugin schema (unconditional)', () => {
+    assert.ok(
+      fs.existsSync(SCHEMA_FIXTURE_PATH),
+      `Schema fixture must exist: ${SCHEMA_FIXTURE_PATH}`
+    );
+    assert.ok(
+      fs.existsSync(PLUGIN_JSON_PATH),
+      `.claude-plugin/plugin.json must exist: ${PLUGIN_JSON_PATH}`
+    );
+
+    const manifest = JSON.parse(fs.readFileSync(PLUGIN_JSON_PATH, 'utf-8'));
+    const schema = JSON.parse(fs.readFileSync(SCHEMA_FIXTURE_PATH, 'utf-8'));
+    const errors = [];
+
+    const schemaRequired = Array.isArray(schema.required) ? schema.required : [];
+    const schemaProps = (schema.properties && typeof schema.properties === 'object') ? schema.properties : {};
+
+    // Helper: assert a required field exists with the expected type.
+    function requireField(key, type) {
+      if (!(key in manifest)) {
+        errors.push(`"${key}" is required but missing`);
+      } else if (typeof manifest[key] !== type) {
+        errors.push(`"${key}" must be a ${type}, got ${typeof manifest[key]}`);
+      }
+    }
+
+    // Derive required fields and their types directly from the schema fixture.
+    // Each required field whose "properties" entry has a primitive "type" is
+    // checked via requireField; "object"-typed fields are handled below.
+    for (const key of schemaRequired) {
+      const propDef = schemaProps[key];
+      const fieldType = propDef && propDef.type;
+      if (fieldType === 'object') {
+        // Object fields are validated with deeper checks below.
+        continue;
+      }
+      requireField(key, fieldType || 'string');
+    }
+
+    // Validate "object"-typed required fields from the schema.
+    // For each such field, check existence, type, and any nested "required" sub-fields.
+    for (const key of schemaRequired) {
+      const propDef = schemaProps[key];
+      if (!propDef || propDef.type !== 'object') continue;
+
+      if (!(key in manifest)) {
+        errors.push(`"${key}" is required but missing`);
+      } else if (typeof manifest[key] !== 'object' || manifest[key] === null) {
+        errors.push(`"${key}" must be an object`);
+      } else {
+        // Validate nested required sub-fields declared in the schema.
+        const nestedRequired = Array.isArray(propDef.required) ? propDef.required : [];
+        const nestedProps = (propDef.properties && typeof propDef.properties === 'object') ? propDef.properties : {};
+        for (const subKey of nestedRequired) {
+          const subDef = nestedProps[subKey];
+          const subType = subDef && subDef.type;
+          if (!(subKey in manifest[key])) {
+            errors.push(`"${key}.${subKey}" is required but missing`);
+          } else if (subType && typeof manifest[key][subKey] !== subType) {
+            errors.push(`"${key}.${subKey}" must be a ${subType}, got ${typeof manifest[key][subKey]}`);
+          }
+          // minLength check for nested string sub-fields
+          if (subType === 'string' && subDef.minLength !== undefined) {
+            if (typeof manifest[key][subKey] === 'string' && manifest[key][subKey].length < subDef.minLength) {
+              errors.push(`"${key}.${subKey}" must have minLength ${subDef.minLength}`);
+            }
+          }
+        }
+      }
+    }
+
+    // Derive pattern and minLength constraints from the schema fixture properties.
+    for (const key of schemaRequired) {
+      const propDef = schemaProps[key];
+      if (!propDef || propDef.type === 'object') continue;
+      const value = manifest[key];
+
+      if (propDef.pattern && typeof value === 'string') {
+        const re = new RegExp(propDef.pattern);
+        if (!re.test(value)) {
+          errors.push(`"${key}" must match ${propDef.pattern}, got "${value}"`);
+        }
+      }
+
+      if (propDef.minLength !== undefined && typeof value === 'string') {
+        if (value.length < propDef.minLength) {
+          errors.push(`"${key}" must have minLength ${propDef.minLength}, got length ${value.length}`);
+        }
+      }
+    }
+
+    if (errors.length > 0) {
+      assert.fail(
+        `plugin.json fails structural validation against ${path.relative(ROOT, SCHEMA_FIXTURE_PATH)}:\n` +
+        errors.map(e => `  - ${e}`).join('\n') +
+        `\n\nFull manifest:\n${JSON.stringify(manifest, null, 2)}`
+      );
+    }
+  });
+
+  // ── C2: Opportunistic CLI integration (skipped when claude not on PATH) ──────
 
   const claudeAvailable = (() => {
     try {
@@ -230,8 +365,8 @@ describe('C: claude plugin validate (CLI integration)', () => {
   })();
 
   test(
-    'claude plugin validate . --strict exits 0 (skip if claude not on PATH)',
-    { skip: !claudeAvailable ? 'claude binary not available on PATH' : false },
+    'C2: claude plugin validate . --strict exits 0 (opportunistic — skip when claude not on PATH)',
+    { skip: !claudeAvailable ? 'claude binary not on PATH' : false },
     () => {
       const result = spawnSync('claude', ['plugin', 'validate', '.', '--strict'], {
         cwd: ROOT,

@@ -1830,51 +1830,88 @@ describe('findProjectRoot', () => {
 });
 
 // ─── reapStaleTempFiles ─────────────────────────────────────────────────────
+//
+// Isolation strategy: reapStaleTempFiles always scans the shared GSD_TEMP_DIR
+// (os.tmpdir()/gsd) and has no { dir } option, so we cannot redirect it to a
+// per-test directory. Instead we isolate via a per-test unique prefix that
+// embeds a random hex token, guaranteeing no two concurrent test workers can
+// share the same prefix. Each test records every path it creates in `created`
+// and afterEach removes them unconditionally so a failed assertion cannot leak
+// files into a sibling test's prefix scan.
 
 describe('reapStaleTempFiles', () => {
   const gsdTmpDir = path.join(os.tmpdir(), 'gsd');
 
-  test('removes stale gsd-*.json files older than maxAgeMs', () => {
+  // Unique token per describe-run so parallel test files never collide.
+  const runToken = Math.random().toString(36).slice(2, 10);
+
+  /** Paths created by the current test; cleaned up in afterEach. */
+  let created = [];
+  /** Per-test prefix derived from runToken + sequential counter. */
+  let testPrefix;
+  let testCounter = 0;
+
+  beforeEach(() => {
+    created = [];
+    testCounter += 1;
+    testPrefix = `gsd-core-reap-${runToken}-${testCounter}-`;
     fs.mkdirSync(gsdTmpDir, { recursive: true });
-    const stalePath = path.join(gsdTmpDir, `gsd-reap-test-${Date.now()}.json`);
+  });
+
+  afterEach(() => {
+    for (const p of created) {
+      try {
+        // eslint-disable-next-line local/no-raw-rmsync-in-tests -- afterEach cleanup of per-test fixture paths tracked in `created`
+        fs.rmSync(p, { recursive: true, force: true });
+      } catch {
+        // Best-effort: already removed by the SUT or a prior cleanup
+      }
+    }
+    created = [];
+  });
+
+  test('removes stale gsd-*.json files older than maxAgeMs', () => {
+    const stalePath = path.join(gsdTmpDir, `${testPrefix}stale.json`);
     fs.writeFileSync(stalePath, '{}');
-    // Set mtime to 10 minutes ago
+    created.push(stalePath); // guard against assertion failure leaking the file
+    // Set mtime to 10 minutes ago so it exceeds the 5-minute maxAgeMs
     const oldTime = new Date(Date.now() - 10 * 60 * 1000);
     fs.utimesSync(stalePath, oldTime, oldTime);
 
-    reapStaleTempFiles('gsd-reap-test-', { maxAgeMs: 5 * 60 * 1000 });
+    reapStaleTempFiles(testPrefix, { maxAgeMs: 5 * 60 * 1000 });
 
-    assert.ok(!fs.existsSync(stalePath), 'stale file should be removed');
+    assert.ok(!fs.existsSync(stalePath), 'stale file should be removed by reapStaleTempFiles');
   });
 
-  test('preserves fresh gsd-*.json files', () => {
-    fs.mkdirSync(gsdTmpDir, { recursive: true });
-    const freshPath = path.join(gsdTmpDir, `gsd-reap-fresh-${Date.now()}.json`);
+  test('preserves fresh gsd-*.json files within maxAgeMs', () => {
+    const freshPath = path.join(gsdTmpDir, `${testPrefix}fresh.json`);
     fs.writeFileSync(freshPath, '{}');
+    created.push(freshPath); // afterEach will clean up regardless of assertion outcome
 
-    reapStaleTempFiles('gsd-reap-fresh-', { maxAgeMs: 5 * 60 * 1000 });
+    reapStaleTempFiles(testPrefix, { maxAgeMs: 5 * 60 * 1000 });
 
-    assert.ok(fs.existsSync(freshPath), 'fresh file should be preserved');
-    // Clean up
-    fs.unlinkSync(freshPath);
+    assert.ok(fs.existsSync(freshPath), 'fresh file should be preserved by reapStaleTempFiles');
   });
 
   test('removes stale temp directories when present', () => {
-    fs.mkdirSync(gsdTmpDir, { recursive: true });
-    const staleDir = fs.mkdtempSync(path.join(gsdTmpDir, 'gsd-reap-dir-'));
+    const staleDir = path.join(gsdTmpDir, `${testPrefix}dir`);
+    fs.mkdirSync(staleDir, { recursive: true });
     fs.writeFileSync(path.join(staleDir, 'data.jsonl'), 'test');
-    // Set mtime to 10 minutes ago
+    created.push(staleDir); // guard against assertion failure leaking the dir
+    // Set mtime to 10 minutes ago so it exceeds the 5-minute maxAgeMs
     const oldTime = new Date(Date.now() - 10 * 60 * 1000);
     fs.utimesSync(staleDir, oldTime, oldTime);
 
-    reapStaleTempFiles('gsd-reap-dir-', { maxAgeMs: 5 * 60 * 1000 });
+    reapStaleTempFiles(testPrefix, { maxAgeMs: 5 * 60 * 1000 });
 
-    assert.ok(!fs.existsSync(staleDir), 'stale directory should be removed');
+    assert.ok(!fs.existsSync(staleDir), 'stale directory should be removed by reapStaleTempFiles');
   });
 
-  test('does not throw on empty or missing prefix matches', () => {
+  test('does not throw when no entries match the prefix', () => {
+    // Use a prefix that is guaranteed to match nothing (unique nonce appended)
+    const absentPrefix = `gsd-core-reap-absent-${runToken}-`;
     assert.doesNotThrow(() => {
-      reapStaleTempFiles('gsd-nonexistent-prefix-xyz-', { maxAgeMs: 0 });
+      reapStaleTempFiles(absentPrefix, { maxAgeMs: 0 });
     });
   });
 });

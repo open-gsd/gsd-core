@@ -670,8 +670,9 @@ describe('configureKiloPermissions', () => {
   });
 });
 
-describe('Kilo source integration assertions', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'bin', 'install.js'), 'utf8');
+describe('Kilo integration — install/uninstall behaviour', () => {
+  // Product-text reads for test 6 only — update.md and update-context.cjs
+  // are deployed artifacts whose text IS the runtime contract (allow-test-rule).
   const updateWorkflowSrc = fs.readFileSync(
     path.join(__dirname, '..', 'gsd-core', 'workflows', 'update.md'), 'utf8');
   // #498: update.md's runtime/scope/config-dir resolution moved into the tested
@@ -680,8 +681,32 @@ describe('Kilo source integration assertions', () => {
   const updateContextSrc = fs.readFileSync(
     path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'update-context.cjs'), 'utf8');
 
-  test('--kilo flag parsing exists', () => {
-    assert.ok(src.includes("runtimeArgs.includes('--kilo')"));
+  let tmpDir;
+  let previousCwd;
+  let savedKiloConfigDir;
+
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-kilo-integration-');
+    previousCwd = process.cwd();
+    process.chdir(tmpDir);
+    savedKiloConfigDir = process.env.KILO_CONFIG_DIR;
+    // Point KILO_CONFIG_DIR at the install target so configureKiloPermissions
+    // and uninstall resolve to the same dir without needing the real ~/.config/kilo.
+    process.env.KILO_CONFIG_DIR = path.join(tmpDir, '.kilo');
+  });
+
+  afterEach(() => {
+    process.chdir(previousCwd);
+    if (savedKiloConfigDir !== undefined) process.env.KILO_CONFIG_DIR = savedKiloConfigDir;
+    else delete process.env.KILO_CONFIG_DIR;
+    cleanup(tmpDir);
+  });
+
+  test('--kilo flag routes to kilo runtime via selectRuntimesFromArgs', () => {
+    // Behavioural replacement for source-grep on runtimeArgs.includes('--kilo').
+    // The flag must produce ['kilo'] — a rename or deletion of the flag branch
+    // would make this go red.
+    assert.deepStrictEqual(selectRuntimesFromArgs(['--kilo']), ['kilo']);
   });
 
   test('runtimeMap has Kilo as option 12 after Kimi', () => {
@@ -695,12 +720,98 @@ describe('Kilo source integration assertions', () => {
     assert.ok(!plain.includes('the #1 AI coding platform on OpenRouter'));
   });
 
-  test('finishInstall passes the actual config dir to Kilo permissions', () => {
-    assert.ok(src.includes('configureKiloPermissions(isGlobal, configDir);'));
+  test('install() for kilo writes artifacts to the configDir it returns', () => {
+    // Behavioural replacement for source-grep on the kilo install branch.
+    //
+    // IMPORTANT: GSD_TEST_MODE=1 (set at the top of this file) suppresses the
+    // configureKiloPermissions() call inside install() to avoid mutating the real
+    // ~/.config/kilo during unit tests.  Asserting on kilo.json permissions here
+    // would require manually calling configureKiloPermissions(), which only tests
+    // that helper — not install()'s wiring of it.
+    //
+    // Instead we assert on what install() ITSELF produces on disk, which is the
+    // correct target:
+    //   1. The returned configDir exists and is the KILO_CONFIG_DIR we set.
+    //   2. install() wrote kilo artifacts (skills/, agents/) into that dir.
+    //   3. The configDir returned by install() matches what resolveKiloConfigPath
+    //      resolves for the same env, proving the dir-resolution path is correct.
+    //
+    // If someone breaks the kilo install branch (wrong configDir, wrong skill
+    // target, removed case) these assertions go red immediately.
+    const result = install(false, 'kilo');
+    const configDir = result.configDir;
+
+    // (1) install() returned the expected configDir (respects KILO_CONFIG_DIR env).
+    assert.strictEqual(
+      result.runtime,
+      'kilo',
+      'install() must return runtime: "kilo"',
+    );
+    assert.ok(
+      fs.existsSync(configDir),
+      `install() must create the configDir it returns: ${configDir}`,
+    );
+
+    // (2) Kilo-specific artifacts were written by install() into configDir.
+    const skillsDir = path.join(configDir, 'skills');
+    assert.ok(
+      fs.existsSync(skillsDir),
+      `install() must create skills/ under the kilo configDir: ${skillsDir}`,
+    );
+    const agentsDir = path.join(configDir, 'agents');
+    assert.ok(
+      fs.existsSync(agentsDir),
+      `install() must create agents/ under the kilo configDir: ${agentsDir}`,
+    );
+
+    // (3) The configDir is consistent with resolveKiloConfigPath, proving the
+    // path-resolution wiring between install() and configureKiloPermissions is
+    // stable: both read from the same env (KILO_CONFIG_DIR).
+    const kiloConfigPath = resolveKiloConfigPath(configDir);
+    assert.ok(
+      typeof kiloConfigPath === 'string' && kiloConfigPath.length > 0,
+      `resolveKiloConfigPath must return a valid path for configDir: ${configDir}`,
+    );
+    assert.ok(
+      kiloConfigPath.startsWith(configDir),
+      `resolveKiloConfigPath must return a path inside the install configDir.\n` +
+      `Expected prefix: ${configDir}\n` +
+      `Got: ${kiloConfigPath}`,
+    );
   });
 
-  test('uninstall cleans Kilo permissions from the resolved target dir', () => {
-    assert.ok(src.includes('const configPath = resolveKiloConfigPath(targetDir);'));
+  test('uninstall removes GSD permissions from the resolved kilo config path', () => {
+    // Behavioural replacement for source-grep on
+    // "const configPath = resolveKiloConfigPath(targetDir)".
+    // The contract: after install + configureKiloPermissions, an uninstall must
+    // strip the GSD permission entries from kilo.json at the resolved path.
+    const result = install(false, 'kilo');
+    const configDir = result.configDir;
+    configureKiloPermissions(true, configDir);
+
+    const kiloJsonPath = resolveKiloConfigPath(configDir);
+    const beforeConfig = JSON.parse(fs.readFileSync(kiloJsonPath, 'utf8'));
+    const gsdGlob = `${configDir.replace(/\\/g, '/')}/gsd-core/*`;
+    assert.ok(
+      beforeConfig.permission.read[gsdGlob] === 'allow',
+      'pre-condition: GSD read permission must exist before uninstall',
+    );
+
+    uninstall(false, 'kilo');
+
+    // After uninstall the GSD permission keys must be absent. The file may
+    // still exist (Kilo preserves user settings) but the gsd-core/* entries
+    // must be gone.
+    const afterConfig = JSON.parse(fs.readFileSync(kiloJsonPath, 'utf8'));
+    assert.ok(
+      !(afterConfig.permission && afterConfig.permission.read && afterConfig.permission.read[gsdGlob]),
+      `GSD read permission must be removed from ${kiloJsonPath} after uninstall`,
+    );
+    assert.ok(
+      !(afterConfig.permission && afterConfig.permission.external_directory &&
+        afterConfig.permission.external_directory[gsdGlob]),
+      `GSD external_directory permission must be removed from ${kiloJsonPath} after uninstall`,
+    );
   });
 
   test('update workflow checks preferred custom config dirs', () => {

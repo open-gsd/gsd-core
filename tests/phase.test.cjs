@@ -4350,17 +4350,30 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
       const state = fs.readFileSync(statePath, 'utf8');
       const lastUpdatedMatch = state.match(/last_updated:\s*(.+)/);
       assert.ok(lastUpdatedMatch, 'last_updated not found in frontmatter');
+
+      const raw = lastUpdatedMatch[1].trim().replace(/^"(.*)"$/, '$1');
+
+      // Must have been refreshed — not the stale seed value from setupPhase3517Project
       assert.notEqual(
-        lastUpdatedMatch[1].trim(),
+        raw,
         '2026-05-10T08:00:00.000Z',
-        `last_updated must be refreshed, but it is still the stale value: ${lastUpdatedMatch[1]}`,
+        `last_updated must be refreshed, but it is still the stale seed value: ${raw}`,
       );
-      const updatedAt = new Date(lastUpdatedMatch[1].trim().replace(/^"(.*)"$/, '$1'));
-      const now = new Date();
-      const diffMs = Math.abs(now - updatedAt);
+
+      // Must parse as a valid ISO timestamp
+      const updatedAt = new Date(raw);
       assert.ok(
-        diffMs < 60_000,
-        `last_updated should be approximately now (within 60s), got: ${lastUpdatedMatch[1]} (diff: ${diffMs}ms)`,
+        !isNaN(updatedAt.getTime()),
+        `last_updated must be a valid ISO timestamp, got: ${raw}`,
+      );
+
+      // Date portion must equal today's UTC date — avoids any wall-clock window comparison
+      const todayUtc = new Date().toISOString().slice(0, 10);
+      const updatedDateUtc = updatedAt.toISOString().slice(0, 10);
+      assert.equal(
+        updatedDateUtc,
+        todayUtc,
+        `last_updated date portion must equal today's UTC date (${todayUtc}), got: ${updatedDateUtc}`,
       );
     });
 

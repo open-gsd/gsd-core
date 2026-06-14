@@ -21,7 +21,7 @@
 'use strict';
 
 const { readdirSync } = require('fs');
-const { join } = require('path');
+const { join, basename } = require('path');
 const { execFileSync } = require('child_process');
 const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 
@@ -112,6 +112,21 @@ function ensureBuiltArtifacts(overrides = {}) {
 }
 const MARKED_SUITES = ['integration', 'install', 'security', 'slow'];
 
+// Recursively collect *.test.cjs files under dir, returning paths relative to dir.
+// Skips node_modules to avoid accidentally picking up decoy files.
+function walkTestFiles(dir, relBase) {
+  const results = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      if (entry.name === 'node_modules') continue;
+      results.push(...walkTestFiles(join(dir, entry.name), relBase ? `${relBase}/${entry.name}` : entry.name));
+    } else if (entry.name.endsWith('.test.cjs')) {
+      results.push(relBase ? `${relBase}/${entry.name}` : entry.name);
+    }
+  }
+  return results;
+}
+
 function parseArgs(argv) {
   let suite = null;
   let seen = false;
@@ -188,9 +203,12 @@ function parseArgs(argv) {
 // Return the marked suite name embedded in a filename, or null if it's unmarked.
 // foo.security.test.cjs -> "security"
 // foo.test.cjs          -> null (unit)
+// Accepts either a bare filename or a relative subdir path; classification is
+// based on the basename only so subdir paths classify identically to root files.
 function suiteOf(filename) {
-  if (!filename.endsWith('.test.cjs')) return null;
-  const base = filename.slice(0, -'.test.cjs'.length);
+  const name = basename(filename);
+  if (!name.endsWith('.test.cjs')) return null;
+  const base = name.slice(0, -'.test.cjs'.length);
   const lastDot = base.lastIndexOf('.');
   if (lastDot === -1) return null;
   const marker = base.slice(lastDot + 1);
@@ -213,7 +231,8 @@ function splitFileList(value) {
     .split(/[,\s]+/)
     .map(v => v.trim())
     .filter(Boolean)
-    .map(v => v.replace(/^tests[\\/]/, ''));
+    .map(v => v.replace(/\\/g, '/'))   // normalize Windows backslashes
+    .map(v => v.replace(/^tests\//, ''));
 }
 
 function selectExplicitFiles(allFiles, filesValue, filesFrom) {
@@ -222,8 +241,19 @@ function selectExplicitFiles(allFiles, filesValue, filesFrom) {
     ? splitFileList(fs.readFileSync(filesFrom, 'utf8'))
     : splitFileList(filesValue);
   const available = new Set(allFiles);
+
+  // Build a basename -> [relpath, ...] index for bare-basename resolution.
+  // A bare basename (no directory separator) may match exactly one subdir file.
+  const basenameIndex = new Map();
+  for (const f of allFiles) {
+    const b = basename(f);
+    if (!basenameIndex.has(b)) basenameIndex.set(b, []);
+    basenameIndex.get(b).push(f);
+  }
+
   const selected = [];
   const missing = [];
+  const errors = [];
   for (const file of requested) {
     // If the token is a bare suite name (e.g. "unit" written by ci-test-scope
     // as the #408 fallback sentinel), delegate to the existing suite resolver
@@ -234,10 +264,26 @@ function selectExplicitFiles(allFiles, filesValue, filesFrom) {
         selected.push(f);
       }
     } else if (available.has(file)) {
+      // Exact relpath match (e.g. "installer-migrations/001-legacy-orphan-files.test.cjs").
       selected.push(file);
+    } else if (!file.includes('/')) {
+      // Bare basename (no directory separator): resolve via index.
+      const candidates = basenameIndex.get(file);
+      if (!candidates || candidates.length === 0) {
+        missing.push(file);
+      } else if (candidates.length > 1) {
+        errors.push(
+          `ambiguous basename "${file}" matches multiple files: ${candidates.join(', ')} — pass the subdir path instead`,
+        );
+      } else {
+        selected.push(candidates[0]);
+      }
     } else {
       missing.push(file);
     }
+  }
+  if (errors.length > 0) {
+    return { error: errors.join('; ') };
   }
   if (missing.length > 0) {
     return {
@@ -266,17 +312,16 @@ function main() {
     ? process.env.GSD_TEST_DIR
     : join(__dirname, '..', 'tests');
 
-  const allFiles = readdirSync(testDir)
-    .filter(f => f.endsWith('.test.cjs'))
-    .sort();
+  const allFiles = walkTestFiles(testDir, '').sort();
 
   if (allFiles.length === 0) {
     console.error(`No test files found in ${testDir}`);
     throw new ExitError(1);
   }
 
+  const usingExplicitFiles = parsed.files !== null || parsed.filesFrom !== null;
   let selectedNames;
-  if (parsed.files !== null || parsed.filesFrom !== null) {
+  if (usingExplicitFiles) {
     const explicit = selectExplicitFiles(allFiles, parsed.files, parsed.filesFrom);
     if (explicit.error) {
       console.error(`run-tests: ${explicit.error}`);
@@ -289,11 +334,20 @@ function main() {
   const selected = selectedNames.map(f => join(testDir, f));
 
   if (selected.length === 0) {
-    // Empty suite: report and exit 0 so empty lanes (e.g. `security` before
-    // adversarial tests land) don't gate CI. CI consumers wanting strictness
-    // can grep stderr for "no tests in suite".
-    console.error(`run-tests: no tests in suite "${suite || 'all'}"`);
-    return 0;
+    if (usingExplicitFiles) {
+      // Empty file list from --files/--files-from: allowed (e.g. CI passes an
+      // empty .ci-selected-tests.txt on docs-only/inert PRs). Exit 0 silently.
+      console.error(`run-tests: no tests in suite "${suite || 'all'}"`);
+      return 0;
+    }
+    // Empty suite/default run: this means discovery or the suite filter is broken.
+    // Allow GSD_ALLOW_EMPTY_SUITE=1 as an escape hatch (downgrades to a warning).
+    if (process.env.GSD_ALLOW_EMPTY_SUITE === '1') {
+      console.error(`run-tests: WARNING: 0 test files selected for suite "${suite || 'all'}" — discovery or suite filter may be broken (GSD_ALLOW_EMPTY_SUITE=1 suppressed the error)`);
+      return 0;
+    }
+    console.error(`run-tests: ERROR: 0 test files selected for suite "${suite || 'all'}" — discovery or suite filter is broken`);
+    throw new ExitError(1);
   }
 
   // Build the gitignored bin/lib artifact if absent, before any test requires it.

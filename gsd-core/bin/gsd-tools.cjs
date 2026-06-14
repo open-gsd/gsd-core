@@ -58,6 +58,11 @@
  *     [--name <name>]
  *     [--archive-phases]               Move phase dirs to milestones/vX.Y-phases/
  *
+ * User Story Validation:
+ *   user-story validate --story "..."  Validate "As a / I want to / so that" format
+ *                                      Returns JSON { valid, errors[], slots: {role,capability,outcome} | null }
+ *                                      --pick valid  Emit bare boolean (for workflow boolean checks)
+ *
  * Validation:
  *   validate consistency               Check phase numbering, disk/roadmap sync
  *   validate health [--repair]         Check .planning/ integrity, optionally repair
@@ -508,7 +513,7 @@ async function main() {
     'generate-dev-preferences, generate-slug, graphify, history-digest, init, intel, ' +
     'capability, classify-confidence, learnings, list-todos, loop, milestone, package-legitimacy, phase, phase-plan-index, phases, profile-questionnaire, ' +
     'profile-sample, progress, prompt-budget, requirements, research-plan, research-store, resolve-granularity, resolve-model, roadmap, scaffold, state, ' +
-    'task, template, validate, verify, verify-path-exists, verify-summary, workstream, worktree\n\n' +
+    'task, template, user-story, validate, verify, verify-path-exists, verify-summary, workstream, worktree\n\n' +
     'Global flags:\n' +
     '  --raw              Emit raw output without post-processing\n' +
     '  --pick <field>     Extract a single field from JSON output (dot/bracket notation)\n' +
@@ -557,6 +562,7 @@ async function main() {
     'verify-summary', 'template', 'frontmatter', 'detect-custom-files',
     'worktree', 'prompt-budget',
     'research-store', 'research-plan', 'package-legitimacy', 'classify-confidence',
+    'user-story', // pure string validation — no .planning/ access needed
   ]);
   if (!SKIP_ROOT_RESOLUTION.has(command)) {
     cwd = findProjectRoot(cwd);
@@ -1923,6 +1929,76 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       } else {
         error('Unknown effort subcommand. Available: sync', ERROR_REASON.SDK_UNKNOWN_COMMAND);
       }
+      break;
+    }
+
+    // ─── User Story Validation (bug #1145) ────────────────────────────────────
+    //
+    // Invocation shapes (from mvp-phase.md and verify-work.md):
+    //   gsd_run query user-story.validate --story "$USER_STORY"
+    //   gsd_run query user-story.validate --story "$PHASE_GOAL" --pick valid
+    //
+    // Returns JSON: { valid: boolean, errors: string[], slots: { role, capability, outcome } | null }
+    //   - valid: true only when the story fully matches the canonical format
+    //   - errors: per-slot diagnostic strings (empty on success)
+    //   - slots: extracted role/capability/outcome on success; null on failure
+    //
+    // Canonical format (user-story-template.md):
+    //   "As a [user role], I want to [capability], so that [outcome]."
+    //   Each slot must be non-empty and contain non-whitespace content.
+    //
+    // No .planning/ access needed — pure string validation.
+    case 'user-story': {
+      const subcommand = args[1];
+      if (subcommand !== 'validate') {
+        error(`Unknown user-story subcommand: ${subcommand || '(none)'}. Available: validate`, ERROR_REASON.SDK_UNKNOWN_COMMAND);
+        break;
+      }
+
+      const storyIdx = args.indexOf('--story');
+      const story = (storyIdx !== -1 && args[storyIdx + 1] && !args[storyIdx + 1].startsWith('--'))
+        ? args[storyIdx + 1]
+        : '';
+
+      // Canonical extraction regex — requires non-whitespace content in each slot
+      // (\S.*? ensures the slot isn't whitespace-only).
+      // Named groups: role / capability / outcome.
+      const USER_STORY_RE = /^As a (\S.*?), I want to (\S.*?), so that (\S.*?)\.$/;
+
+      const errors = [];
+      const trimmed = story.trim();
+      let slots = null;
+
+      if (!trimmed) {
+        errors.push('Story is empty. Required format: "As a [role], I want to [capability], so that [outcome]."');
+      } else {
+        // Per-clause guards produce targeted, actionable error messages before
+        // attempting the full regex. Guards are ordered: role → capability → outcome → period.
+        if (!/^As a \S/i.test(trimmed)) {
+          errors.push('Story must start with "As a [user role]," (role must be non-empty).');
+        }
+        if (!/, I want to \S/i.test(trimmed)) {
+          errors.push('Story must include ", I want to [capability]," (capability must be non-empty).');
+        }
+        if (!/, so that \S/i.test(trimmed)) {
+          errors.push('Story must include ", so that [outcome]." (outcome must be non-empty).');
+        }
+        if (!trimmed.endsWith('.')) {
+          errors.push('Story must end with a period (.).');
+        }
+        // Full-regex check only when per-clause guards all passed — avoids
+        // redundant "format mismatch" noise on top of specific error messages.
+        if (errors.length === 0) {
+          const m = USER_STORY_RE.exec(trimmed);
+          if (!m) {
+            errors.push('Story does not match the canonical format: "As a [role], I want to [capability], so that [outcome]."');
+          } else {
+            slots = { role: m[1], capability: m[2], outcome: m[3] };
+          }
+        }
+      }
+
+      core.output({ valid: errors.length === 0, errors, slots }, raw);
       break;
     }
 

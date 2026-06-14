@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "Snapshot of the Claude Code plugin.json schema contract as exercised by `claude plugin validate --strict`. Fields marked required mirror the strict-validation failures documented in issue #766 / PR #797. Update this fixture when the upstream Claude Code plugin contract changes.",
+  "type": "object",
+  "required": [
+    "name",
+    "displayName",
+    "version",
+    "description",
+    "author",
+    "repository",
+    "homepage",
+    "license",
+    "commands",
+    "hooks"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Plugin identifier — must be kebab-case (no colon, uppercase, or space) for namespace safety. Drives the /<name>: command namespace.",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "displayName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "type": "string",
+      "description": "SemVer string. Required by --strict; must track package.json version.",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(?:-.+)?$"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "author": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "url": {
+          "type": "string"
+        }
+      }
+    },
+    "repository": {
+      "type": "string",
+      "description": "Must be a URL (string form, not an object) pointing to the canonical repo."
+    },
+    "homepage": {
+      "type": "string"
+    },
+    "license": {
+      "type": "string",
+      "minLength": 1
+    },
+    "commands": {
+      "type": "string",
+      "description": "Path (relative to plugin root) to the commands directory, ending with '/'."
+    },
+    "hooks": {
+      "type": "string",
+      "description": "Path (relative to plugin root) to the hooks.json file."
+    },
+    "keywords": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}
