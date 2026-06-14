@@ -702,15 +702,31 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
       if (!_newPhaseId) error('--id required when phase_naming is "custom"');
       _dirName = `${prefix}${_newPhaseId}-${slug}`;
     } else {
-      const phasePattern = /#{2,4}\s*Phase\s+(\d+)[A-Z]?(?:\.\d+)*:/gi;
-      let maxPhase = 0;
+      // Collect all phase numbers visible in the current-milestone content.
+      // Three sources are scanned so that a phase in ANY representation
+      // (section header, roadmap bullet, or on-disk directory) is counted:
+
+      // 1) Section headers: ### Phase N: / ## Phase N: / #### Phase N:
+      const headerPattern = /#{2,4}\s*Phase\s+(\d+)[A-Z]?(?:\.\d+)*:/gi;
+      // 2) Roadmap bullet entries: - [ ] **Phase N: ...** (all checkbox variants)
+      // The lookahead accepts colon, decimal-dot, whitespace, bold-close asterisk,
+      // or end-of-line so titleless forms ("- [ ] **Phase 11**", "- [ ] Phase 11")
+      // are counted and cannot collide with a freshly-added phase. (#1229)
+      const bulletPattern = /^[ \t]*-[ \t]*\[[^\]]*\][ \t]*\*{0,2}Phase[ \t]+(\d+)(?=[:.\s*]|$)/gim;
+
+      const usedPhaseNums = new Set<number>();
       let m: RegExpExecArray | null;
-      while ((m = phasePattern.exec(content)) !== null) {
+
+      while ((m = headerPattern.exec(content)) !== null) {
         const num = parseInt(m[1], 10);
-        if (num === 999) continue;
-        if (num > maxPhase) maxPhase = num;
+        if (num !== 999) usedPhaseNums.add(num);
+      }
+      while ((m = bulletPattern.exec(content)) !== null) {
+        const num = parseInt(m[1], 10);
+        if (num !== 999) usedPhaseNums.add(num);
       }
 
+      // 3) On-disk phase directories (e.g. phases/11-foo/ with no header yet)
       const phasesOnDisk = path.join(planningDir(cwd), 'phases');
       if (fs.existsSync(phasesOnDisk)) {
         const dirNumPattern = /^(?:[A-Z][A-Z0-9]*-)?(\d+)-/;
@@ -718,12 +734,16 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
           const match = entry.match(dirNumPattern);
           if (!match) continue;
           const num = parseInt(match[1], 10);
-          if (num === 999) continue;
-          if (num > maxPhase) maxPhase = num;
+          if (num !== 999) usedPhaseNums.add(num);
         }
       }
 
-      _newPhaseId = maxPhase + 1;
+      // phase.add appends after the highest *used* number. Collecting numbers from
+      // section headers, roadmap bullets, AND on-disk dirs above is what prevents the
+      // #1229 collision (a bullet-only Phase N is now counted), so max+1 cannot reuse
+      // an existing number.
+      const maxUsed = usedPhaseNums.size > 0 ? Math.max(...usedPhaseNums) : 0;
+      _newPhaseId = maxUsed + 1;
       const paddedNum = String(_newPhaseId).padStart(2, '0');
       _dirName = `${prefix}${paddedNum}-${slug}`;
     }
