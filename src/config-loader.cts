@@ -576,7 +576,6 @@ function loadConfig(cwd: string, options: Record<string, unknown> = {}): Record<
       brave_search: get('brave_search') ?? defaults.brave_search,
       firecrawl: get('firecrawl') ?? defaults.firecrawl,
       exa_search: get('exa_search') ?? defaults.exa_search,
-      tdd_mode: get('tdd_mode', { section: 'workflow', field: 'tdd_mode' }) ?? false,
       mvp_mode: get('mvp_mode', { section: 'workflow', field: 'mvp_mode' }) ?? false,
       text_mode: get('text_mode', { section: 'workflow', field: 'text_mode' }) ?? defaults.text_mode,
       auto_advance: get('auto_advance', { section: 'workflow', field: 'auto_advance' }) ?? false,

@@ -36,7 +36,6 @@ const NEW_FIELDS = [
 ];
 
 const CENTRAL_NEW_FIELDS = [
-  'workflow.tdd_mode',
   'commit_docs',
 ];
 

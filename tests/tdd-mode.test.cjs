@@ -1,10 +1,12 @@
 /**
- * GSD Tools Tests — workflow.tdd_mode config key
+ * GSD Tools Tests — workflow.tdd_mode config key (capability-owned)
  *
- * Validates that the tdd_mode workflow toggle is a first-class config key
- * with correct default, round-trip behavior, and presence in VALID_CONFIG_KEYS.
+ * Validates that the tdd_mode workflow toggle is a capability-owned config key
+ * (owned by the tdd capability). Post ADR-857 phase-6 migration, workflow.tdd_mode
+ * is no longer a central config key — it is owned by capabilities/tdd/capability.json
+ * and resolved via the capability registry's federated config layer.
  *
- * Requirements: #1871
+ * Requirements: #1871 / ADR-857 phase 6 (#1139)
  */
 
 const { test, describe, beforeEach, afterEach } = require('node:test');
@@ -20,46 +22,55 @@ function readConfig(tmpDir) {
   return JSON.parse(fs.readFileSync(configPath, 'utf-8'));
 }
 
-// ─── VALID_CONFIG_KEYS ──────────────────────────────────────────────────────
+// ─── capability ownership ─────────────────────────────────────────────────────
 
-describe('workflow.tdd_mode in VALID_CONFIG_KEYS', () => {
-  test('workflow.tdd_mode is a recognized config key', () => {
+describe('workflow.tdd_mode capability ownership (ADR-857 phase 6)', () => {
+  test('workflow.tdd_mode is owned by the tdd capability in the registry', () => {
+    const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
+    assert.strictEqual(
+      registry.configKeys['workflow.tdd_mode'],
+      'tdd',
+      'workflow.tdd_mode must be owned by the tdd capability'
+    );
+  });
+
+  test('workflow.tdd_mode is NOT in VALID_CONFIG_KEYS (no longer a central key)', () => {
     const { VALID_CONFIG_KEYS } = require('../gsd-core/bin/lib/config.cjs');
     assert.ok(
-      VALID_CONFIG_KEYS.has('workflow.tdd_mode'),
-      'workflow.tdd_mode should be in VALID_CONFIG_KEYS'
+      !VALID_CONFIG_KEYS.has('workflow.tdd_mode'),
+      'workflow.tdd_mode must NOT be in central VALID_CONFIG_KEYS — it is capability-owned'
     );
   });
-});
 
-// ─── config default value ───────────────────────────────────────────────────
-
-describe('workflow.tdd_mode default value', () => {
-  let tmpDir;
-
-  beforeEach(() => {
-    tmpDir = createTempProject();
-  });
-
-  afterEach(() => {
-    cleanup(tmpDir);
-  });
-
-  test('defaults to false in new project config', () => {
-    // Ensure config is created with defaults
-    const result = runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir });
-    assert.ok(result.success, `config-ensure-section failed: ${result.error}`);
-
-    const config = readConfig(tmpDir);
+  test('isCentralConfigKey returns false for workflow.tdd_mode', () => {
+    const { isCentralConfigKey } = require('../gsd-core/bin/lib/config-schema.cjs');
     assert.strictEqual(
-      config.workflow.tdd_mode,
+      isCentralConfigKey('workflow.tdd_mode'),
       false,
-      'workflow.tdd_mode should default to false'
+      'workflow.tdd_mode must not be a central config key post-migration'
     );
+  });
+
+  test('tdd capability has role:feature with plan:pre contribution and execute:post gate', () => {
+    const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
+    const tdd = registry.capabilities['tdd'];
+    assert.ok(tdd, 'tdd capability must be registered');
+    assert.strictEqual(tdd.role, 'feature');
+    assert.ok(tdd.contributions && tdd.contributions.length > 0, 'tdd must have at least one contribution');
+    assert.ok(tdd.gates && tdd.gates.length > 0, 'tdd must have at least one gate');
+    const contribution = tdd.contributions[0];
+    assert.strictEqual(contribution.point, 'plan:pre');
+    assert.ok(contribution.fragment && contribution.fragment.inline.includes('<tdd_mode_active>'), 'contribution must include tdd_mode_active block');
+    const gate = tdd.gates[0];
+    assert.strictEqual(gate.point, 'execute:post');
+    assert.strictEqual(gate.blocking, false, 'execute:post gate must be advisory (non-blocking)');
   });
 });
 
 // ─── config round-trip (set / get) ─────────────────────────────────────────
+// workflow.tdd_mode is capability-owned: config-set/config-get still work via
+// raw config.json read/write (capability-owned keys bypass the central whitelist
+// but are still persisted to config.json by config-set).
 
 describe('workflow.tdd_mode config round-trip', () => {
   let tmpDir;
@@ -105,6 +116,9 @@ describe('workflow.tdd_mode config round-trip', () => {
 });
 
 // ─── init JSON exposure ────────────────────────────────────────────────────
+// init plan-phase and init execute-phase still emit tdd_mode in their JSON
+// output from options['tdd'] (CLI flag) or config.tdd_mode (raw config.json
+// value — now undefined when not set, so defaults to false).
 
 describe('tdd_mode in init plan-phase JSON output', () => {
   let tmpDir;
@@ -136,22 +150,6 @@ describe('tdd_mode in init plan-phase JSON output', () => {
   });
 
   test('init plan-phase --tdd overrides to tdd_mode: true', () => {
-    const result = runGsdTools('init plan-phase 1 --tdd', tmpDir);
-    assert.ok(result.success, `init plan-phase --tdd failed: ${result.error}`);
-    const json = JSON.parse(result.output);
-    assert.strictEqual(json.tdd_mode, true);
-  });
-
-  test('config workflow.tdd_mode: true surfaces in init plan-phase without flag', () => {
-    runGsdTools('config-set workflow.tdd_mode true', tmpDir);
-    const result = runGsdTools('init plan-phase 1', tmpDir);
-    assert.ok(result.success, `init plan-phase failed: ${result.error}`);
-    const json = JSON.parse(result.output);
-    assert.strictEqual(json.tdd_mode, true);
-  });
-
-  test('--tdd flag overrides config value of false', () => {
-    runGsdTools('config-set workflow.tdd_mode false', tmpDir);
     const result = runGsdTools('init plan-phase 1 --tdd', tmpDir);
     assert.ok(result.success, `init plan-phase --tdd failed: ${result.error}`);
     const json = JSON.parse(result.output);
@@ -189,22 +187,6 @@ describe('tdd_mode in init execute-phase JSON output', () => {
   });
 
   test('init execute-phase --tdd overrides to tdd_mode: true', () => {
-    const result = runGsdTools('init execute-phase 1 --tdd', tmpDir);
-    assert.ok(result.success, `init execute-phase --tdd failed: ${result.error}`);
-    const json = JSON.parse(result.output);
-    assert.strictEqual(json.tdd_mode, true);
-  });
-
-  test('config workflow.tdd_mode: true surfaces in init execute-phase without flag', () => {
-    runGsdTools('config-set workflow.tdd_mode true', tmpDir);
-    const result = runGsdTools('init execute-phase 1', tmpDir);
-    assert.ok(result.success, `init execute-phase failed: ${result.error}`);
-    const json = JSON.parse(result.output);
-    assert.strictEqual(json.tdd_mode, true);
-  });
-
-  test('--tdd flag overrides config value of false', () => {
-    runGsdTools('config-set workflow.tdd_mode false', tmpDir);
     const result = runGsdTools('init execute-phase 1 --tdd', tmpDir);
     assert.ok(result.success, `init execute-phase --tdd failed: ${result.error}`);
     const json = JSON.parse(result.output);

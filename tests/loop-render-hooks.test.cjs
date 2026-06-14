@@ -866,3 +866,100 @@ describe('cmdLoopRenderHooks end-to-end (via gsd-tools)', () => {
     assert.match(result.stderr, /plan:mid|Invalid loop point/);
   });
 });
+
+// ─── 10. --active-cap flag (scanner-safe boolean derivation) ──────────────────
+
+describe('--active-cap flag (loop render-hooks)', () => {
+  // Temp project with tdd_mode=true in config
+  let tddOnDir;
+  // Temp project with tdd_mode=false in config
+  let tddOffDir;
+
+  before(() => {
+    tddOnDir = fs.mkdtempSync(path.join(os.tmpdir(), 'loop-active-cap-tdd-on-'));
+    const planOn = path.join(tddOnDir, '.planning');
+    fs.mkdirSync(planOn, { recursive: true });
+    fs.writeFileSync(
+      path.join(planOn, 'config.json'),
+      JSON.stringify({ workflow: { tdd_mode: true } }),
+      'utf8',
+    );
+
+    tddOffDir = fs.mkdtempSync(path.join(os.tmpdir(), 'loop-active-cap-tdd-off-'));
+    const planOff = path.join(tddOffDir, '.planning');
+    fs.mkdirSync(planOff, { recursive: true });
+    fs.writeFileSync(
+      path.join(planOff, 'config.json'),
+      JSON.stringify({ workflow: { tdd_mode: false } }),
+      'utf8',
+    );
+  });
+
+  after(() => {
+    if (tddOnDir) cleanup(tddOnDir);
+    if (tddOffDir) cleanup(tddOffDir);
+  });
+
+  test('--active-cap tdd with tdd_mode=true → stdout trimmed === "true", exit 0', () => {
+    const result = spawnSync(
+      process.execPath,
+      [GSD_TOOLS, 'loop', 'render-hooks', 'execute:post', '--active-cap', 'tdd', '--cwd', tddOnDir],
+      { cwd: ROOT, encoding: 'utf8' },
+    );
+    assert.strictEqual(result.status, 0, 'Expected exit 0. stderr: ' + (result.stderr || ''));
+    assert.strictEqual(result.stdout.trim(), 'true', 'Expected stdout "true" when tdd_mode=true');
+  });
+
+  test('--active-cap tdd with tdd_mode=false → stdout trimmed === "false", exit 0', () => {
+    const result = spawnSync(
+      process.execPath,
+      [GSD_TOOLS, 'loop', 'render-hooks', 'execute:post', '--active-cap', 'tdd', '--cwd', tddOffDir],
+      { cwd: ROOT, encoding: 'utf8' },
+    );
+    assert.strictEqual(result.status, 0, 'Expected exit 0. stderr: ' + (result.stderr || ''));
+    assert.strictEqual(result.stdout.trim(), 'false', 'Expected stdout "false" when tdd_mode=false');
+  });
+
+  test('--active-cap <nonexistent-cap> → stdout trimmed === "false", exit 0', () => {
+    const result = spawnSync(
+      process.execPath,
+      [GSD_TOOLS, 'loop', 'render-hooks', 'execute:post', '--active-cap', 'no-such-capability-xyz', '--cwd', tddOffDir],
+      { cwd: ROOT, encoding: 'utf8' },
+    );
+    assert.strictEqual(result.status, 0, 'Expected exit 0 for unknown capId. stderr: ' + (result.stderr || ''));
+    assert.strictEqual(result.stdout.trim(), 'false', 'Expected stdout "false" for unknown capId');
+  });
+
+  test('--active-cap with no value → non-zero exit and error message', () => {
+    const result = spawnSync(
+      process.execPath,
+      [GSD_TOOLS, 'loop', 'render-hooks', 'execute:post', '--active-cap', '--cwd', tddOffDir],
+      { cwd: ROOT, encoding: 'utf8' },
+    );
+    assert.notStrictEqual(result.status, 0, 'Expected non-zero exit when --active-cap has no value');
+    assert.match(result.stderr, /active-cap/i, 'Expected error message referencing --active-cap');
+  });
+
+  test('--active-cap output is exactly "true" or "false" (no JSON envelope, clean for shell capture)', () => {
+    // The entire stdout must be just "true" or "false" + newline — no envelope object
+    const result = spawnSync(
+      process.execPath,
+      [GSD_TOOLS, 'loop', 'render-hooks', 'execute:post', '--active-cap', 'tdd', '--cwd', tddOnDir],
+      { cwd: ROOT, encoding: 'utf8' },
+    );
+    assert.strictEqual(result.status, 0, 'Expected exit 0. stderr: ' + (result.stderr || ''));
+    // Must be exactly "true" or "false" — not a JSON object/envelope
+    const trimmed = result.stdout.trim();
+    assert.ok(
+      trimmed === 'true' || trimmed === 'false',
+      `stdout must be "true" or "false", got: ${JSON.stringify(result.stdout)}`,
+    );
+    // Must not be a JSON object (no envelope with point/activeHooks/rendered keys)
+    let parsed;
+    try { parsed = JSON.parse(trimmed); } catch { parsed = null; }
+    assert.ok(
+      typeof parsed !== 'object' || parsed === null,
+      'stdout must not be a JSON object/envelope when --active-cap is used',
+    );
+  });
+});

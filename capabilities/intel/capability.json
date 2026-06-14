@@ -23,7 +23,16 @@
     }
   ],
   "hooks": [],
-  "steps": [],
+  "steps": [
+    {
+      "point": "plan:pre",
+      "ref": { "command": "intel api-surface" },
+      "produces": [".planning/intel/API-SURFACE.md"],
+      "consumes": [],
+      "when": "intel.enabled",
+      "onError": "skip"
+    }
+  ],
   "contributions": [],
   "gates": []
 }

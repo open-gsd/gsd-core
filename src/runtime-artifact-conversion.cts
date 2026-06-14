@@ -48,20 +48,6 @@ const claudeToOpencodeTools = {
   WebSearch: 'websearch',  // Plugin/MCP - keep for compatibility
 };
 
-// Tool name mapping from Claude Code to Gemini CLI
-// Gemini CLI uses snake_case built-in tool names
-const claudeToGeminiTools = {
-  Read: 'read_file',
-  Write: 'write_file',
-  Edit: 'replace',
-  Bash: 'run_shell_command',
-  Glob: 'glob',
-  Grep: 'search_file_content',
-  WebSearch: 'google_web_search',
-  WebFetch: 'web_fetch',
-  TodoWrite: 'write_todos',
-};
-
 // Tool name mapping from Claude/GSD agents to Kimi CLI module paths.
 // Kimi custom agent YAML requires fully-qualified module paths.
 const claudeToKimiTools = {
@@ -106,37 +92,6 @@ function convertToolName(claudeTool) {
     return claudeTool;
   }
   // Default: convert to lowercase
-  return claudeTool.toLowerCase();
-}
-
-/**
- * Convert a Claude Code tool name to Gemini CLI format
- * - Applies Claude→Gemini mapping (Read→read_file, Bash→run_shell_command, etc.)
- * - Filters out MCP tools (mcp__*) — they are auto-discovered at runtime in Gemini
- * - Filters out Task/Agent — agents are auto-registered as tools in Gemini
- * @returns {string|null} Gemini tool name, or null if tool should be excluded
- */
-function convertGeminiToolName(claudeTool) {
-  // MCP tools: exclude — auto-discovered from mcpServers config at runtime
-  if (claudeTool.startsWith('mcp__')) {
-    return null;
-  }
-  // Task/Agent: exclude — agents are auto-registered as callable tools.
-  // AskUserQuestion: exclude — Gemini CLI does not expose an ask_user tool;
-  // emitting it causes frontmatter validation errors (#3362).
-  if (
-    claudeTool === 'Task' ||
-    claudeTool === 'Agent' ||
-    claudeTool === 'AskUserQuestion' ||
-    claudeTool === 'ask_user'
-  ) {
-    return null;
-  }
-  // Check for explicit mapping
-  if (claudeToGeminiTools[claudeTool]) {
-    return claudeToGeminiTools[claudeTool];
-  }
-  // Default: lowercase
   return claudeTool.toLowerCase();
 }
 
@@ -261,27 +216,6 @@ function replaceRelativePathReference(content, fromPath, toPath) {
     new RegExp(`(^|[^A-Za-z0-9_./-])${escapedPath}`, 'g'),
     (_, prefix) => `${prefix}${toPath}`,
   );
-}
-
-/**
- * Convert a Claude Code tool name to GitHub Copilot format.
- * - Applies explicit mapping from claudeToCopilotTools
- * - Handles mcp__context7__* prefix → io.github.upstash/context7/*
- * - Falls back to lowercase for unknown tools
- */
-function convertCopilotToolName(claudeTool) {
-  // mcp__context7__* wildcard → io.github.upstash/context7/*
-  if (claudeTool.startsWith('mcp__context7__')) {
-    return 'io.github.upstash/context7/' + claudeTool.slice('mcp__context7__'.length);
-  }
-  // Check explicit mapping
-  if (claudeToCopilotTools[claudeTool]) {
-    return claudeToCopilotTools[claudeTool];
-  }
-  // mcp__{tavily,ref,jina,exa,firecrawl}__* use the generic MCP passthrough like exa/firecrawl;
-  // add explicit Copilot registry mappings when the io.github ids are confirmed (#657 follow-up)
-  // Default: lowercase
-  return claudeTool.toLowerCase();
 }
 
 /**
@@ -756,39 +690,6 @@ function buildKimiAgentArtifacts({
 }
 
 /**
- * Convert a Claude agent (.md) to a Copilot agent (.agent.md).
- * Applies tool mapping + deduplication, formats tools as JSON array.
- * CONV-04: JSON array format. CONV-05: Tool name mapping.
- */
-function convertClaudeAgentToCopilotAgent(content, isGlobal = false) {
-  const converted = convertClaudeToCopilotContent(content, isGlobal);
-  const { frontmatter, body } = extractFrontmatterAndBody(converted);
-  if (!frontmatter) return converted;
-
-  const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
-  const description = extractFrontmatterField(frontmatter, 'description') || '';
-  const color = extractFrontmatterField(frontmatter, 'color');
-  const toolsRaw = extractFrontmatterField(frontmatter, 'tools') || '';
-
-  // CONV-04 + CONV-05: Map tools, deduplicate, format as JSON array
-  const claudeTools = toolsRaw.split(',').map(t => t.trim()).filter(Boolean);
-  const mappedTools = claudeTools.map(t => convertCopilotToolName(t));
-  const uniqueTools = [...new Set(mappedTools)];
-  const toolsArray = uniqueTools.length > 0
-    ? "['" + uniqueTools.join("', '") + "']"
-    : '[]';
-
-  // Reconstruct frontmatter in Copilot format. Quote description (#2876)
-  // so a leading YAML flow indicator (`[BETA] …`, `{ … }`, etc.) doesn't
-  // crash the Copilot frontmatter loader.
-  let fm = `---\nname: ${name}\ndescription: ${yamlQuote(description)}\ntools: ${toolsArray}\n`;
-  if (color) fm += `color: ${color}\n`;
-  fm += '---';
-
-  return `${fm}\n${body}`;
-}
-
-/**
  * Apply Antigravity-specific content conversion — path replacement + command name conversion.
  * Path mappings depend on install mode:
  *   Global: ~/.claude/ → ~/.gemini/antigravity/, ./.claude/ → ./.agents/
@@ -841,32 +742,6 @@ function convertClaudeCommandToAntigravitySkill(content, skillName, _runtime = n
   return `${fm}\n${body}`;
 }
 
-/**
- * Convert a Claude agent (.md) to an Antigravity agent.
- * Uses Gemini tool names since Antigravity runs on Gemini 3 backend.
- */
-function convertClaudeAgentToAntigravityAgent(content, isGlobal = false) {
-  const converted = convertClaudeToAntigravityContent(content, isGlobal);
-  const { frontmatter, body } = extractFrontmatterAndBody(converted);
-  if (!frontmatter) return converted;
-
-  const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
-  const description = extractFrontmatterField(frontmatter, 'description') || '';
-  const color = extractFrontmatterField(frontmatter, 'color');
-  const toolsRaw = extractFrontmatterField(frontmatter, 'tools') || '';
-
-  // Map tools to Gemini equivalents (reuse existing convertGeminiToolName)
-  const claudeTools = toolsRaw.split(',').map(t => t.trim()).filter(Boolean);
-  const mappedTools = claudeTools.map(t => convertGeminiToolName(t)).filter(Boolean);
-
-  // #2876: quote description for the same reason as the skill variant.
-  let fm = `---\nname: ${name}\ndescription: ${yamlQuote(description)}\ntools: ${mappedTools.join(', ')}\n`;
-  if (color) fm += `color: ${color}\n`;
-  fm += '---';
-
-  return `${fm}\n${body}`;
-}
-
 function toSingleLine(value) {
   return value.replace(/\s+/g, ' ').trim();
 }
@@ -904,30 +779,6 @@ function extractFrontmatterField(frontmatter, fieldName) {
   const match = frontmatter.match(regex);
   if (!match) return null;
   return match[1].trim().replace(/^['"]|['"]$/g, '');
-}
-
-// Tool name mapping from Claude Code to Cursor CLI
-const claudeToCursorTools = {
-  Bash: 'Shell',
-  Edit: 'StrReplace',
-  AskUserQuestion: null, // No direct equivalent — use conversational prompting
-  SlashCommand: null,    // No equivalent — skills are auto-discovered
-};
-
-/**
- * Convert a Claude Code tool name to Cursor CLI format
- * @returns {string|null} Cursor tool name, or null if tool should be excluded
- */
-function convertCursorToolName(claudeTool) {
-  if (claudeTool in claudeToCursorTools) {
-    return claudeToCursorTools[claudeTool];
-  }
-  // MCP tools keep their format (Cursor supports MCP)
-  if (claudeTool.startsWith('mcp__')) {
-    return claudeTool;
-  }
-  // Most tools share the same name (Read, Write, Glob, Grep, Task, WebSearch, WebFetch, TodoWrite)
-  return claudeTool;
 }
 
 function convertSlashCommandsToCursorSkillMentions(content) {
@@ -1025,52 +876,9 @@ function convertClaudeCommandToCursorCommand(content, _commandName) {
   return body.trimStart();
 }
 
-/**
- * Convert Claude Code agent markdown to Cursor agent format.
- * Strips frontmatter fields Cursor doesn't support (color, skills),
- * converts tool references, and adds a role context header.
- */
-function convertClaudeAgentToCursorAgent(content) {
-  const converted = convertClaudeToCursorMarkdown(content);
-
-  const { frontmatter, body } = extractFrontmatterAndBody(converted);
-  if (!frontmatter) return converted;
-
-  const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
-  const description = extractFrontmatterField(frontmatter, 'description') || '';
-
-  const cleanFrontmatter = `---\nname: ${yamlIdentifier(name)}\ndescription: ${yamlQuote(toSingleLine(description))}\n---`;
-
-  return `${cleanFrontmatter}\n${body}`;
-}
-
 // --- Windsurf converters ---
 // Windsurf uses a tool set similar to Cursor.
 // Config lives in .windsurf/ (local) and ~/.codeium/windsurf/ (global).
-
-// Tool name mapping from Claude Code to Windsurf Cascade
-const claudeToWindsurfTools = {
-  Bash: 'Shell',
-  Edit: 'StrReplace',
-  AskUserQuestion: null, // No direct equivalent — use conversational prompting
-  SlashCommand: null,    // No equivalent — skills are auto-discovered
-};
-
-/**
- * Convert a Claude Code tool name to Windsurf Cascade format
- * @returns {string|null} Windsurf tool name, or null if tool should be excluded
- */
-function convertWindsurfToolName(claudeTool) {
-  if (claudeTool in claudeToWindsurfTools) {
-    return claudeToWindsurfTools[claudeTool];
-  }
-  // MCP tools keep their format (Windsurf supports MCP)
-  if (claudeTool.startsWith('mcp__')) {
-    return claudeTool;
-  }
-  // Most tools share the same name (Read, Write, Glob, Grep, Task, WebSearch, WebFetch, TodoWrite)
-  return claudeTool;
-}
 
 function convertSlashCommandsToWindsurfSkillMentions(content) {
   // Keep leading "/" for slash commands; only normalize gsd: -> gsd-.
@@ -1153,55 +961,9 @@ function convertClaudeCommandToWindsurfSkill(content, skillName) {
   return `---\nname: ${yamlIdentifier(skillName)}\ndescription: ${yamlQuote(shortDescription)}\n---\n\n${adapter}\n\n${body.trimStart()}`;
 }
 
-/**
- * Convert Claude Code agent markdown to Windsurf agent format.
- * Strips frontmatter fields Windsurf doesn't support (color, skills),
- * converts tool references, and adds a role context header.
- */
-function convertClaudeAgentToWindsurfAgent(content) {
-  const converted = convertClaudeToWindsurfMarkdown(content);
-
-  const { frontmatter, body } = extractFrontmatterAndBody(converted);
-  if (!frontmatter) return converted;
-
-  const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
-  const description = extractFrontmatterField(frontmatter, 'description') || '';
-
-  const cleanFrontmatter = `---\nname: ${yamlIdentifier(name)}\ndescription: ${yamlQuote(toSingleLine(description))}\n---`;
-
-  return `${cleanFrontmatter}\n${body}`;
-}
-
 // --- Augment converters ---
 // Augment uses a tool set similar to Cursor/Windsurf.
 // Config lives in .augment/ (local) and ~/.augment/ (global).
-
-const claudeToAugmentTools = {
-  Bash: 'launch-process',
-  Edit: 'str-replace-editor',
-  AskUserQuestion: null,
-  SlashCommand: null,
-  TodoWrite: 'add_tasks',
-};
-
-function convertAugmentToolName(claudeTool) {
-  if (claudeTool in claudeToAugmentTools) {
-    return claudeToAugmentTools[claudeTool];
-  }
-  if (claudeTool.startsWith('mcp__')) {
-    return claudeTool;
-  }
-  const toolMapping = {
-    Read: 'view',
-    Write: 'save-file',
-    Glob: 'view',
-    Grep: 'grep',
-    Task: null,
-    WebSearch: 'web-search',
-    WebFetch: 'web-fetch',
-  };
-  return toolMapping[claudeTool] || claudeTool;
-}
 
 function convertSlashCommandsToAugmentSkillMentions(content) {
   return content.replace(/gsd:/gi, 'gsd-');
@@ -1279,30 +1041,6 @@ function convertClaudeCommandToAugmentSkill(content, skillName) {
   return `---\nname: ${yamlIdentifier(skillName)}\ndescription: ${yamlQuote(shortDescription)}\n---\n\n${adapter}\n\n${body.trimStart()}`;
 }
 
-/**
- * Convert Claude Code agent markdown to Augment agent format.
- * Strips frontmatter fields Augment doesn't support (color, skills),
- * converts tool references, and cleans up for Augment agents.
- */
-function convertClaudeAgentToAugmentAgent(content) {
-  const converted = convertClaudeToAugmentMarkdown(content);
-
-  const { frontmatter, body } = extractFrontmatterAndBody(converted);
-  if (!frontmatter) return converted;
-
-  const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
-  const description = extractFrontmatterField(frontmatter, 'description') || '';
-
-  const cleanFrontmatter = `---\nname: ${yamlIdentifier(name)}\ndescription: ${yamlQuote(toSingleLine(description))}\n---`;
-
-  return `${cleanFrontmatter}\n${body}`;
-}
-
-/**
- * Copy Claude commands as Augment skills — one folder per skill with SKILL.md.
- * Mirrors copyCommandsAsCursorSkills but uses Augment converters.
- */
-
 function convertSlashCommandsToTraeSkillMentions(content) {
   return content.replace(/\/gsd:([a-z0-9-]+)/g, (_, commandName) => {
     return `/gsd-${commandName}`;
@@ -1350,20 +1088,6 @@ function convertClaudeCommandToTraeSkill(content, skillName) {
   // #2876: quote so YAML flow indicators (`[BETA] …`) don't break Trae's
   // frontmatter parser.
   return `---\nname: ${yamlIdentifier(skillName)}\ndescription: ${yamlQuote(shortDescription)}\n---\n${body}`;
-}
-
-function convertClaudeAgentToTraeAgent(content) {
-  const converted = convertClaudeToTraeMarkdown(content);
-
-  const { frontmatter, body } = extractFrontmatterAndBody(converted);
-  if (!frontmatter) return converted;
-
-  const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
-  const description = extractFrontmatterField(frontmatter, 'description') || '';
-
-  const cleanFrontmatter = `---\nname: ${yamlIdentifier(name)}\ndescription: ${yamlQuote(toSingleLine(description))}\n---`;
-
-  return `${cleanFrontmatter}\n${body}`;
 }
 
 function convertSlashCommandsToCodebuddySkillMentions(content) {
@@ -1447,20 +1171,6 @@ function convertClaudeCommandToCodebuddyCommand(content, commandName) {
   return lines.join('\n');
 }
 
-function convertClaudeAgentToCodebuddyAgent(content) {
-  const converted = convertClaudeToCodebuddyMarkdown(content);
-
-  const { frontmatter, body } = extractFrontmatterAndBody(converted);
-  if (!frontmatter) return converted;
-
-  const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
-  const description = extractFrontmatterField(frontmatter, 'description') || '';
-
-  const cleanFrontmatter = `---\nname: ${yamlIdentifier(name)}\ndescription: ${yamlQuote(toSingleLine(description))}\n---`;
-
-  return `${cleanFrontmatter}\n${body}`;
-}
-
 // ── Cline converters ────────────────────────────────────────────────────────
 
 function convertClaudeToCliineMarkdown(content) {
@@ -1485,16 +1195,6 @@ function convertClaudeToCliineMarkdown(content) {
   return converted;
 }
 
-function convertClaudeAgentToClineAgent(content) {
-  const converted = convertClaudeToCliineMarkdown(content);
-  const { frontmatter, body } = extractFrontmatterAndBody(converted);
-  if (!frontmatter) return converted;
-  const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
-  const description = extractFrontmatterField(frontmatter, 'description') || '';
-  const cleanFrontmatter = `---\nname: ${yamlIdentifier(name)}\ndescription: ${yamlQuote(toSingleLine(description))}\n---`;
-  return `${cleanFrontmatter}\n${body}`;
-}
-
 /**
  * Convert a Claude command (.md) to a Cline skill (SKILL.md).
  * Emits ONLY name + description frontmatter per the Cline skills spec
@@ -1505,7 +1205,7 @@ function convertClaudeAgentToClineAgent(content) {
  * Cline uses Claude-Code-compatible tool names, so no adapter header is needed.
  * Targets ~/.cline/skills/<name>/SKILL.md for Cline >= v3.48.0.
  */
-function convertClaudeCommandToClineSkill(content, skillName, runtime = null, cmdNames = null) {
+function convertClaudeCommandToClineSkill(content, skillName, _runtime = null, cmdNames = null) {
   const { frontmatter, body } = extractFrontmatterAndBody(content);
   if (!frontmatter) return content;
 

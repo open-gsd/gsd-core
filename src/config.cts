@@ -235,7 +235,6 @@ function buildNewProjectConfig(userChoices: Record<string, unknown>): Record<str
       ui_phase: true,
       ui_safety_gate: true,
       ai_integration_phase: true,
-      tdd_mode: false,
       human_verify_mode: 'end-of-phase',
       text_mode: false,
       research_before_questions: false,

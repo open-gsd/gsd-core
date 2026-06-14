@@ -298,15 +298,13 @@ The canonical lint infrastructure adopted in ADR 452 (`docs/adr/452-eslint-lint-
 `RULESET.GEMINI.TEST_SENTINEL=convertClaudeToGeminiAgent regression should assert tools excludes ask_user, body excludes AskUserQuestion/ask_user, and Read still maps to read_file`
 
 `RULESET.ADR-HEADER=every docs/adr/NNNN-*.md must open with - **Status:** Accepted|Proposed|Deprecated + - **Date:** YYYY-MM-DD immediately after title`
-`RULESET.MANIFEST-CANONICAL-KEY=docs/INVENTORY-MANIFEST.json — only families.workflows is canonical (read by tooling); top-level workflows key is stale, delete if present`
+`RULESET.MANIFEST-CANONICAL-KEY=docs/INVENTORY-MANIFEST.json has a single top-level key: families; ALL SIX families.* arrays (agents/commands/workflows/references/cli_modules/hooks) are canonical, consumed by test suites — tests/inventory-manifest-sync.test.cjs reads all six, edit-phase/enh-2380/enh-2430 tests read commands+workflows; the old generated date field and the stale top-level workflows key are both gone; regen via node scripts/gen-inventory-manifest.cjs --write`
 
 `RULESET.PR-SCOPE.one-concern-per-pr=split unrelated changes into separate PRs; cherry-pick doc changes to dedicated docs/ branch immediately, then force-push original to remove the commit`
 
 `RULESET.TRIAGE-EXISTING-WORK=before writing agent brief for confirmed bug, check (1) local branches git branch -a | grep <issue>, (2) untracked/modified files on that branch, (3) stash, (4) open PRs with matching head branch — recover existing work rather than re-implement`
 
 `RULESET.CR-THREAD-RESOLVE=after adding // allow-test-rule: to silence lint, resolve existing inline CR threads via graphql resolveReviewThread mutation before merge — open threads mislead future reviewers; pattern: gh api graphql -f query='mutation { resolveReviewThread(input:{threadId:"PRRT_..."}) { thread { isResolved } } }'`
-
-`RULESET.DOC-CONSISTENCY=when heading says (N shipped) and footnote says N-1 top-level references, update both; CR catches every time`
 
 ---
 
@@ -558,14 +556,10 @@ The canonical lint infrastructure adopted in ADR 452 (`docs/adr/452-eslint-lint-
 `DEFECT.PROMPT-INJECTION-SCAN-COLLISION.detect=any new bare <system|assistant|human|user> tag in agents/*.md`
 `DEFECT.PROMPT-INJECTION-SCAN-COLLISION.fix-forward=hyphenate the tag (<human-check>, <assistant-prompt>) — scanner regex matches bare names only`
 
-`DEFECT.INVENTORY-DRIFT.symptom=new file added under gsd-core/references/ or gsd-core/workflows/ without updating docs/INVENTORY.md count + row AND docs/INVENTORY-MANIFEST.json`
-`DEFECT.INVENTORY-DRIFT.examples=#3309 planner-human-verify-mode.md (caught by tests/inventory-counts.test.cjs + tests/inventory-manifest-sync.test.cjs)`
-`DEFECT.INVENTORY-DRIFT.detect=tests/inventory-* fails with "References (N shipped) disagrees with filesystem" or "New surfaces not in manifest"`
-`DEFECT.INVENTORY-DRIFT.fix-forward=update INVENTORY.md headline count + row entry + footnote count; run node scripts/gen-inventory-manifest.cjs --write to regen INVENTORY-MANIFEST.json; only families.workflows is canonical (top-level workflows key is stale)`
-`DEFECT.INVENTORY-MERGE-UNDERCOUNT.symptom=docs/INVENTORY.md "## CLI Modules (N shipped)" (and the other family headlines) is an ABSOLUTE count of gsd-core/bin/lib/*.cjs, NOT a delta; two branches that each add a module both bump N->N+1, so merging them keeps N+1 while the merged filesystem has N+2`
-`DEFECT.INVENTORY-MERGE-UNDERCOUNT.detect=tests/inventory-counts.test.cjs HARD-FAILS ("CLI Modules (N shipped) matches gsd-core/bin/lib/", "headline counts match the filesystem") on the CI MERGE-COMMIT across ALL platforms (macos/ubuntu/windows) even though the branch passed local gsd-test; gsd-test runs the branch ALONE, CI tests branch MERGED with current next, so concurrent module-adds on next are invisible locally (hit #844, #1059)`
-`DEFECT.INVENTORY-MERGE-UNDERCOUNT.fix-forward=after merging origin/next into ANY branch that adds/removes an inventoried artifact (bin/lib module, references/*, workflows/*), rebuild then RE-DERIVE the count from "ls gsd-core/bin/lib/*.cjs | wc -l" (plus per-family counts), set the INVENTORY.md headline to match, run node scripts/gen-inventory-manifest.cjs --write; NEVER trust the merged headline integer`
-`DEFECT.INVENTORY-MERGE-UNDERCOUNT.prevention=for any module-adding branch, merge origin/next + reconcile INVENTORY BEFORE EVERY push (not only at branch creation); the longer the branch lives the more certain the drift`
+`DEFECT.INVENTORY-DRIFT.symptom=new file added under gsd-core/references/ or gsd-core/workflows/ without updating docs/INVENTORY.md row AND docs/INVENTORY-MANIFEST.json`
+`DEFECT.INVENTORY-DRIFT.examples=#3309 planner-human-verify-mode.md (caught by tests/inventory-manifest-sync.test.cjs)`
+`DEFECT.INVENTORY-DRIFT.detect=tests/inventory-manifest-sync.test.cjs fails with "New surfaces not in manifest"; tests/inventory-headings-countfree.test.cjs fails if a (N shipped) count is re-added to a heading`
+`DEFECT.INVENTORY-DRIFT.fix-forward=update INVENTORY.md row entry; run node scripts/gen-inventory-manifest.cjs --write to regen INVENTORY-MANIFEST.json (all six families.* arrays are canonical — see RULESET.MANIFEST-CANONICAL-KEY)`
 
 `DEFECT.AGENT-FILE-SIZE-CAP-BREACH.symptom=adding to agents/gsd-planner.md (or other large agent files) exceeds the 45K char extraction-evidence threshold`
 `DEFECT.AGENT-FILE-SIZE-CAP-BREACH.state=gsd-planner.md is already 49,121 chars on main (over 45K); test fails on main; net-new content makes it strictly worse`
@@ -763,9 +757,9 @@ Full detail in `~/.claude/skills/gsd-pr-fix-discipline/SKILL.md`. AI agents MUST
 
 ### INVENTORY / manifest drift
 
-- **Symptom:** `inventory-counts.test.cjs` fails — `"<dir> (N shipped)" disagrees with filesystem (N+1)`
+- **Symptom:** `tests/inventory-manifest-sync.test.cjs` fails — `"New surfaces not in manifest"`; or `tests/inventory-headings-countfree.test.cjs` fails if a `(N shipped)` count was re-added to a heading
 - **Affected this session:** #154, #156, #143, #155, #169
-- **Fix:** Add row to `docs/INVENTORY.md` CLI Modules table + increment headline count + `node scripts/gen-inventory-manifest.cjs --write`
+- **Fix:** Add row to `docs/INVENTORY.md` + `node scripts/gen-inventory-manifest.cjs --write`
 
 ### Slash command two-tier confusion
 

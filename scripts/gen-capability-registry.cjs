@@ -1030,15 +1030,17 @@ function validateStep(step, prefix, declaredSkills, declaredAgents) {
   }
 
   if (typeof step.ref !== 'object' || step.ref === null) {
-    errors.push(prefix + '.ref must be an object with skill or agent key');
+    errors.push(prefix + '.ref must be an object with skill, agent, or command key');
   } else {
     const hasSkill = Object.prototype.hasOwnProperty.call(step.ref, 'skill');
     const hasAgent = Object.prototype.hasOwnProperty.call(step.ref, 'agent');
-    if (!hasSkill && !hasAgent) {
-      errors.push(prefix + '.ref must have a "skill" or "agent" key');
-    } else if (hasSkill && hasAgent) {
-      // Fix #4: ref must be exclusive {skill} XOR {agent}
-      errors.push(prefix + '.ref must have exactly one of "skill" or "agent", not both');
+    const hasCommand = Object.prototype.hasOwnProperty.call(step.ref, 'command');
+    const dispatchCount = [hasSkill, hasAgent, hasCommand].filter(Boolean).length;
+    if (dispatchCount === 0) {
+      errors.push(prefix + '.ref must have a "skill", "agent", or "command" key');
+    } else if (dispatchCount > 1) {
+      // ref must be exclusive: skill XOR agent XOR command
+      errors.push(prefix + '.ref must have exactly one of "skill", "agent", or "command", not multiple');
     }
     if (hasSkill && typeof step.ref.skill !== 'string') {
       errors.push(prefix + '.ref.skill must be a string');
@@ -1067,6 +1069,9 @@ function validateStep(step, prefix, declaredSkills, declaredAgents) {
         prefix + '.ref.agent "' + step.ref.agent + '" is not declared in this capability\'s agents: [' +
         [...declaredAgents].join(', ') + ']',
       );
+    }
+    if (hasCommand && typeof step.ref.command !== 'string') {
+      errors.push(prefix + '.ref.command must be a string');
     }
   }
 
