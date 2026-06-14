@@ -52,6 +52,49 @@ const { MODEL_PROFILES } = modelProfilesMod;
 void stripShippedMilestones;
 void detectSchemaFiles;
 
+function normalizePlanRelPath(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed || path.isAbsolute(trimmed)) return null;
+  return trimmed.replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+function frontmatterStringList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => (typeof item === 'string' ? [item] : []));
+  }
+  return typeof value === 'string' && value.trim() ? [value] : [];
+}
+
+function collectCurrentOrFuturePlanFiles(phaseDir: string, currentPlanPath: string, currentWave: number | null): Set<string> {
+  const planned = new Set<string>();
+
+  let entries: string[] = [];
+  try {
+    entries = fs.readdirSync(phaseDir).filter((file) => file.endsWith('-PLAN.md') || file === 'PLAN.md');
+  } catch {
+    entries = [path.basename(currentPlanPath)];
+  }
+
+  for (const entry of entries) {
+    const planPath = path.join(phaseDir, entry);
+    const planContent = safeReadFile(planPath);
+    if (!planContent) continue;
+    const fm = extractFrontmatter(planContent) as Record<string, unknown>;
+    const waveValue = Number(fm['wave']);
+    const planWave = Number.isFinite(waveValue) ? waveValue : null;
+    if (currentWave !== null && planWave !== null && planWave < currentWave) continue;
+    if (currentWave !== null && planWave === null && planPath !== currentPlanPath) continue;
+
+    for (const file of frontmatterStringList(fm['files_modified'])) {
+      const normalized = normalizePlanRelPath(file);
+      if (normalized) planned.add(normalized);
+    }
+  }
+
+  return planned;
+}
+
 function cmdVerifySummary(
   cwd: string,
   summaryPath: string,
@@ -542,20 +585,41 @@ function cmdVerifyKeyLinks(cwd: string, planFilePath: string, raw: boolean): voi
     return;
   }
 
+  const currentFm = extractFrontmatter(content) as Record<string, unknown>;
+  const currentWaveValue = Number(currentFm['wave']);
+  const currentWave = Number.isFinite(currentWaveValue) ? currentWaveValue : null;
+  const plannedCurrentOrFutureFiles = collectCurrentOrFuturePlanFiles(
+    path.dirname(fullPath),
+    fullPath,
+    currentWave,
+  );
+
   const results: Record<string, unknown>[] = [];
   for (const link of keyLinks) {
     if (typeof link === 'string') continue;
+    const fromPath = normalizePlanRelPath(link['from']);
+    const toPath = normalizePlanRelPath(link['to']);
+    const linkTouchesCurrentOrFuturePlan = Boolean(
+      (fromPath && plannedCurrentOrFutureFiles.has(fromPath)) ||
+      (toPath && plannedCurrentOrFutureFiles.has(toPath)),
+    );
     const check: Record<string, unknown> = {
       from: link['from'],
       to: link['to'],
       via: link['via'] || '',
       verified: false,
+      pending: false,
       detail: '',
     };
 
     const sourceContent = safeReadFile(path.join(cwd, (link['from'] as string) || ''));
     if (!sourceContent) {
-      check['detail'] = 'Source file not found (from: must be a relative file path; describe components/endpoints in via:)';
+      if (linkTouchesCurrentOrFuturePlan) {
+        check['pending'] = true;
+        check['detail'] = 'Pending current/upcoming wave file; skipped before execution';
+      } else {
+        check['detail'] = 'Source file not found (from: must be a relative file path; describe components/endpoints in via:)';
+      }
     } else if (link['pattern']) {
       try {
         const regex = new RegExp(link['pattern'] as string);
@@ -567,6 +631,9 @@ function cmdVerifyKeyLinks(cwd: string, planFilePath: string, raw: boolean): voi
           if (targetContent && regex.test(targetContent)) {
             check['verified'] = true;
             check['detail'] = 'Pattern found in target';
+          } else if (!targetContent && linkTouchesCurrentOrFuturePlan) {
+            check['pending'] = true;
+            check['detail'] = 'Pending current/upcoming wave target; skipped before execution';
           } else {
             check['detail'] = `Pattern "${link['pattern'] as string}" not found in source or target`;
           }
@@ -578,6 +645,9 @@ function cmdVerifyKeyLinks(cwd: string, planFilePath: string, raw: boolean): voi
       if (sourceContent.includes((link['to'] as string) || '')) {
         check['verified'] = true;
         check['detail'] = 'Target referenced in source';
+      } else if (linkTouchesCurrentOrFuturePlan) {
+        check['pending'] = true;
+        check['detail'] = 'Pending current/upcoming wave link; skipped before execution';
       } else {
         check['detail'] = 'Target not referenced in source';
       }
@@ -587,15 +657,18 @@ function cmdVerifyKeyLinks(cwd: string, planFilePath: string, raw: boolean): voi
   }
 
   const verified = results.filter((r) => r['verified']).length;
+  const pending = results.filter((r) => r['pending']).length;
+  const passedOrPending = verified + pending;
   output(
     {
-      all_verified: verified === results.length,
+      all_verified: passedOrPending === results.length,
       verified,
+      pending,
       total: results.length,
       links: results,
     },
     raw,
-    verified === results.length ? 'valid' : 'invalid',
+    passedOrPending === results.length ? 'valid' : 'invalid',
   );
 }
 

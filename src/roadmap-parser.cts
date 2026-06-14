@@ -29,6 +29,31 @@ import { platformReadSync } from './shell-command-projection.cjs';
 
 // ─── Roadmap milestone scoping ───────────────────────────────────────────────
 
+function readPhaseIdConvention(cwd: string, roadmapContent: string): string | null {
+  const configPath = path.join(planningDir(cwd), 'config.json');
+  const configRaw = platformReadSync(configPath);
+  if (configRaw !== null) {
+    try {
+      const config = JSON.parse(configRaw) as Record<string, unknown>;
+      const value = config['phase_id_convention'];
+      return typeof value === 'string' && value.trim() ? value.trim() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  const fmMatch = roadmapContent.match(/^---\r?\n([\s\S]+?)\r?\n---/);
+  if (fmMatch) {
+    const kvMatch = fmMatch[1].match(/^phase_id_convention:\s*(.*)$/m);
+    if (kvMatch) {
+      const raw = kvMatch[1].trim().replace(/^["']|["']$/g, '');
+      return raw && raw !== 'null' ? raw : null;
+    }
+  }
+
+  return null;
+}
+
 /**
  * Strip shipped milestone content wrapped in <details> blocks.
  */
@@ -389,10 +414,11 @@ function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null): 
 
     const hasVersionedMilestonesGlobal = /^#{1,3}\s+.*v\d+\.\d+/mi.test(roadmapContent);
     const hasPhaseHeadings = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+[\w]/i.test(roadmapContent);
-    if (!hasVersionedMilestonesGlobal && hasPhaseHeadings) {
+    const phaseIdConvention = readPhaseIdConvention(cwd, roadmapContent);
+    if (phaseIdConvention !== null && !hasVersionedMilestonesGlobal && hasPhaseHeadings) {
       console.warn(
         '[gsd] Deprecated: free-form ROADMAP.md detected (no versioned milestone headings). ' +
-        'Set phase_id_convention in config.json to suppress this warning.'
+        'Set phase_id_convention to null for legacy free-form ROADMAP.md, or migrate to versioned milestone headings.'
       );
     }
 

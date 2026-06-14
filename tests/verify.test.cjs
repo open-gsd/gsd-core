@@ -980,6 +980,60 @@ describe('verify key-links command', () => {
     );
   });
 
+  test('skips missing source file when key link points to current wave planned file', () => {
+    writePlanWithKeyLinks(tmpDir, [
+      '- from: "src/a.js"',
+      '  to: "src/b.js"',
+      '  pattern: "exports\\.newThing"',
+    ]);
+
+    const result = runGsdTools('verify key-links .planning/phases/01-test/01-01-PLAN.md', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.all_verified, true, `Expected pending current-wave link not to fail: ${JSON.stringify(output)}`);
+    assert.strictEqual(output.pending, 1, 'one key link should be pending');
+    assert.strictEqual(output.links[0].pending, true, 'link should be marked pending');
+    assert.ok(
+      output.links[0].detail.includes('current/upcoming wave'),
+      `Expected current/upcoming wave detail: ${output.links[0].detail}`,
+    );
+  });
+
+  test('skips missing source file when key link points to a later-wave planned file', () => {
+    writePlanWithKeyLinks(tmpDir, [
+      '- from: "src/future-wave.js"',
+      '  to: "src/b.js"',
+      '  pattern: "exports\\.futureThing"',
+    ]);
+
+    const laterPlan = [
+      '---',
+      'phase: 01-test',
+      'plan: 02',
+      'type: execute',
+      'wave: 2',
+      'depends_on: ["01-01"]',
+      'files_modified: [src/future-wave.js]',
+      'autonomous: true',
+      '---',
+      '',
+      '<tasks></tasks>',
+    ].join('\n');
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'phases', '01-test', '01-02-PLAN.md'),
+      laterPlan,
+    );
+
+    const result = runGsdTools('verify key-links .planning/phases/01-test/01-01-PLAN.md', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.all_verified, true, `Expected pending later-wave link not to fail: ${JSON.stringify(output)}`);
+    assert.strictEqual(output.pending, 1, 'one key link should be pending');
+    assert.strictEqual(output.links[0].pending, true, 'link should be marked pending');
+  });
+
   test('returns error when no key_links in frontmatter', () => {
     const content = [
       '---',

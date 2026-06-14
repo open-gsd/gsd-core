@@ -4,7 +4,7 @@
  * Covers:
  *   1. Legacy 'Phase N' ROADMAP entries still work when phase_id_convention
  *      is null (the default — no config key set).
- *   2. Deprecated warning fires for free-form roadmaps (non-fatal).
+ *   2. Default/null convention does not spam warnings for free-form roadmaps.
  *   3. No automatic migration happens when a free-form roadmap is loaded.
  *   4. isDirInMilestone still works for old-style dirs ('02-setup') against
  *      ROADMAP entries 'Phase 2:'.
@@ -73,9 +73,9 @@ describe('backwards-compat: legacy Phase N roadmap entries', () => {
     assert.strictEqual(filter('03-deploy'), false, 'unlisted phase must not match');
   });
 
-  // ── test 2: deprecated warning fires for free-form roadmaps ───────────────
+  // ── test 2: default/null convention does not warn for free-form roadmaps ──
 
-  test('deprecated warning fires (non-fatal) when roadmap has no versioned milestone headings', () => {
+  test('deprecated warning does NOT fire when phase_id_convention is null/default for free-form roadmaps', () => {
     // A "free-form" roadmap: phase headings but no ## vX.Y milestone section.
     writeRoadmap(tmpDir, [
       '### Phase 1: Setup',
@@ -89,11 +89,34 @@ describe('backwards-compat: legacy Phase N roadmap entries', () => {
       getMilestonePhaseFilter(tmpDir);
     });
 
-    // Warning must fire but must not throw — non-fatal.
+    assert.doesNotMatch(
+      stderr,
+      /deprecated|free.form|phase_id_convention/i,
+      'default legacy/free-form ROADMAP mode must not spam deprecation warnings'
+    );
+  });
+
+  test('deprecated warning fires when milestone-prefixed convention is explicit but ROADMAP is free-form', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ phase_id_convention: 'milestone-prefixed' }, null, 2),
+    );
+    writeRoadmap(tmpDir, [
+      '### Phase 1: Setup',
+      '**Goal:** setup',
+      '',
+      '### Phase 2: Build',
+      '**Goal:** build',
+    ].join('\n'));
+
+    const { stderr } = captureConsole(() => {
+      getMilestonePhaseFilter(tmpDir);
+    });
+
     assert.match(
       stderr,
       /deprecated|free.form|phase_id_convention/i,
-      'a deprecation warning must be emitted for free-form roadmaps'
+      'explicit milestone-prefixed convention should warn on free-form roadmaps',
     );
   });
 
