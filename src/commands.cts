@@ -775,7 +775,7 @@ function cmdPrSubrepo(
 
   // 1. Collect changed files via porcelain status — explicit, never git add -A.
   //    ?? (untracked) lines are excluded — only stage tracked modifications.
-  const statusResult = execGit(['status', '--porcelain'], { cwd: repoCwd });
+  const statusResult = execGit(['-c', 'core.quotePath=false', 'status', '--porcelain'], { cwd: repoCwd });
   if (statusResult.exitCode !== 0) {
     error(`git status failed in ${repo}: ${statusResult.stderr}`);
   }
