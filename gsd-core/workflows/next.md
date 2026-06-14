@@ -230,7 +230,7 @@ If the current phase directory exists but has neither CONTEXT.md nor RESEARCH.md
 
 **Route 3: Phase has context but no plans → plan**
 If the current phase has CONTEXT.md (or RESEARCH.md) but no PLAN.md files:
-→ Next action: `/gsd:plan-phase <current-phase>`
+→ Next action: `/gsd:plan-phase <current-phase>` (or `/gsd:plan-review-convergence <current-phase>` when `PLAN_STRATEGY=converge`)
 
 **Route 4: Phase has plans but incomplete summaries → execute**
 If plans exist but not all have matching summaries:
@@ -254,6 +254,47 @@ If STATE.md shows paused_at:
 </step>
 
 <step name="show_and_execute">
+Parse the arguments passed to this workflow to detect the plan strategy and build convergence pass-through args:
+
+```bash
+PLAN_STRATEGY="local"
+if echo "$ARGUMENTS" | grep -qE '(^|[[:space:]])\-\-(converge|cross-ai)([[:space:]]|$)'; then
+  PLAN_STRATEGY="converge"
+fi
+
+CONVERGENCE_ARGS=""
+for REVIEW_FLAG in --codex --gemini --claude --opencode --ollama --lm-studio --llama-cpp --all --text; do
+  if echo "$ARGUMENTS" | grep -qE "(^|[[:space:]])${REVIEW_FLAG}([[:space:]]|$)"; then
+    CONVERGENCE_ARGS="${CONVERGENCE_ARGS} ${REVIEW_FLAG}"
+  fi
+done
+
+MAX_CYCLES_ARG=""
+if echo "$ARGUMENTS" | grep -qE '\-\-max-cycles\s+[0-9]+'; then
+  MAX_CYCLES_ARG=$(echo "$ARGUMENTS" | grep -oE '\-\-max-cycles\s+[0-9]+' | awk '{print $2}')
+  CONVERGENCE_ARGS="${CONVERGENCE_ARGS} --max-cycles ${MAX_CYCLES_ARG}"
+fi
+```
+
+If `PLAN_STRATEGY` is `converge`, fail fast unless the convergence feature gate is enabled:
+
+```bash
+if [ "$PLAN_STRATEGY" = "converge" ]; then
+  CONVERGENCE_ENABLED=$(gsd_run query config-get workflow.plan_review_convergence 2>/dev/null || echo "false")
+  if [ "$CONVERGENCE_ENABLED" != "true" ]; then
+    printf '%s\n' \
+      '/gsd:progress --next --converge is disabled (workflow.plan_review_convergence=false).' \
+      '' \
+      'Enable plan convergence with:' \
+      '' \
+      '  gsd config-set workflow.plan_review_convergence true' \
+      '' \
+      'Then re-run with --converge.'
+    exit 1
+  fi
+fi
+```
+
 Display the determination:
 
 ```
@@ -269,7 +310,9 @@ Display the determination:
 Then immediately invoke the determined command via SlashCommand.
 Do not ask for confirmation — the whole point of `/gsd:progress --next` is zero-friction advancement.
 
-**If `--auto` was passed:** after the determined command completes, automatically re-invoke `/gsd:progress --next --auto` to continue chaining to the next step. Repeat until one of:
+**Route 3 convergence override:** When the routing decision is Route 3 (plan) and `PLAN_STRATEGY=converge`, invoke `/gsd:plan-review-convergence <current-phase> ${CONVERGENCE_ARGS}` instead of `/gsd:plan-phase <current-phase>`.
+
+**If `--auto` was passed:** after the determined command completes, automatically re-invoke `/gsd:progress --next --auto` (forwarding `--converge`/`--cross-ai` and any reviewer flags if they were originally passed) to continue chaining to the next step. Repeat until one of:
 - A milestone completes (`/gsd:complete-milestone` is reached)
 - A blocking decision is required (safety gate triggers, prior-phase completeness prompt, user input needed)
 - An error or paused state is detected
@@ -296,4 +339,9 @@ Resume with: `/gsd:progress --next --auto` once resolved.
 - [ ] Next action correctly determined from routing rules
 - [ ] Command invoked immediately without user confirmation
 - [ ] Clear status shown before invoking
+- [ ] `--converge` routes Route 3 planning through `gsd-plan-review-convergence`
+- [ ] `--cross-ai` is accepted as an alias for `--converge`
+- [ ] `--converge` fails fast with enable instructions when `workflow.plan_review_convergence=false`
+- [ ] `--converge` forwards reviewer selector flags and `--max-cycles N`
+- [ ] Default planning remains `gsd-plan-phase` when convergence is not requested
 </success_criteria>
