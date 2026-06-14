@@ -248,6 +248,12 @@ describe('bug #376 — Suite 2: Cursor install still rewrites /gsd: → /gsd- (r
 
     const offenders = [];
     for (const { rel, full } of jsFiles) {
+      // scripts/fix-slash-commands.cjs IS the namespace transformer (#1223).
+      // Its `/gsd:` occurrences are transform-rule literals and template code
+      // (e.g. `/gsd:${cmd}`), not user-facing command refs — rewriting them
+      // would corrupt the module, so the installer ships it verbatim (same
+      // contract as the unmutated hook sources in Suite 3).
+      if (path.basename(rel) === 'fix-slash-commands.cjs') continue;
       const content = fs.readFileSync(full, 'utf-8');
       const badLines = colonRefs(content);
       if (badLines.length > 0) {
