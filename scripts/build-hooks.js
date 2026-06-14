@@ -26,6 +26,13 @@ const STAGE_DIR = path.join(HOOKS_DIR, `.dist-staging-${process.pid}`);
 const HOOKS_TO_COPY = [
   'gsd-check-update-worker.js',
   'gsd-check-update.js',
+  // SessionStart canonical-path bootstrap (#997). In a Claude Code marketplace
+  // plugin install, ~/.claude/gsd-core is never created, so every
+  // `@~/.claude/gsd-core/...` include in agents/commands/templates resolves to
+  // nothing. This hook symlinks the canonical path's immutable subdirs to the
+  // plugin's bundled gsd-core/ tree; no-op in classic installs. Must ship to
+  // dist so the installer copies it into the target hooks/ dir.
+  'gsd-ensure-canonical-path.js',
   // Required by gsd-check-update-worker.js at runtime — must ship alongside it
   // so require('./managed-hooks-registry.cjs') resolves in the installed hooks/ dir.
   'managed-hooks-registry.cjs',
