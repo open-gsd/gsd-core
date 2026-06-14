@@ -177,7 +177,8 @@ Resolve `MVP_MODE` once via the centralized `phase.mvp-mode` query verb (precede
 MVP_FLAG_ARG=""
 if [[ "$ARGUMENTS" =~ (^|[[:space:]])--mvp([[:space:]]|$) ]]; then MVP_FLAG_ARG="--cli-flag"; fi
 MVP_MODE=$(gsd_run query phase.mvp-mode "${PHASE_NUMBER}" $MVP_FLAG_ARG --pick active)
-TDD_MODE=$(gsd_run query config-get workflow.tdd_mode 2>/dev/null || echo "false")
+EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw)
+TDD_MODE=$(gsd_run loop render-hooks execute:post --active-cap tdd)
 ```
 
 <step name="safe_resume_gate">
@@ -898,6 +899,51 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
    **If no plan in this wave used worktrees** (project-level `USE_WORKTREES=false` OR `WAVE_WORKTREE_PLANS` is empty): sequential agents already updated STATE.md and ROADMAP.md themselves — skip this step.
 
+5.75. **Execute:wave:post capability dispatch:**
+
+   After worktree merge, post-merge tests, and tracking updates, dispatch capability hooks registered at `execute:wave:post`. The primary hook is the `ui.safety-gate` gate from the UI capability — it verifies that any frontend files changed in this wave conform to the UI-SPEC contract.
+
+   ```bash
+   WAVE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:wave:post --raw)
+   ```
+
+   Read the `activeHooks` array from `WAVE_POST_HOOKS_JSON` in-context (do NOT pipe through a shell parser).
+
+   **If `activeHooks` is empty or absent:** Skip silently to step 5.8.
+
+   **For each active entry where `kind == "gate"`** (process in array order), run the gate check:
+
+   ```bash
+   GATE_RESULT=$(gsd_run check ${hook.check.query} "${PHASE_NUMBER}" --raw)
+   CHECK_EXIT=$?
+   ```
+
+   **Step 1 — did the CHECK COMMAND itself succeed?**
+
+   If the check command failed (non-zero `CHECK_EXIT`, empty output, or unparseable JSON):
+   - `onError == "halt"` → treat as a fatal error: stop wave completion, do NOT proceed to step 5.8, and surface: `⚠ Gate check command failed ({hook.capId}): command error. Resolve before continuing.`
+   - `onError == "skip"` → log a warning and continue to the next hook. Do NOT read `GATE_RESULT.block`.
+
+   **Step 2 — read `GATE_RESULT.block` (boolean).** This step is only reached when the command succeeded.
+
+   - **Blocking gate (`hook.blocking == true`) AND `GATE_RESULT.block == true`:** HALT — stop wave completion, do NOT proceed to step 5.8, and present:
+
+     ```
+     ⚠ Wave {N} blocked by capability gate ({hook.capId}): {GATE_RESULT.message}
+     Resolve before continuing to next wave.
+     ```
+
+     This halt is **not** bypassed by `onError` — `onError` only covers command errors (step 1 above), not the gate's block decision.
+
+   - **Non-blocking gate (`hook.blocking == false`):** never halts. If `GATE_RESULT.block` is `true` (or non-empty `message`), print `⚠ {hook.capId} advisory (wave {N}): {GATE_RESULT.message}`, then:
+     - If `GATE_RESULT.spawn_mapper == true` OR `GATE_RESULT.directive == "auto-remap"`: spawn `gsd-codebase-mapper` per `execute-phase/steps/codebase-drift-gate.md`; pass `--paths {GATE_RESULT.affected_paths}`. Continue regardless (wave NOT failed by remap failure).
+     - Otherwise: continue after advisory.
+     - If block `false` and no `message`: continue silently.
+
+   - **Blocking gate (`hook.blocking == true`) AND `GATE_RESULT.block == false`:** continue silently.
+
+   **When all active gates are processed without a blocking halt:** continue to step 5.8.
+
 5.8. **Handle test gate failures (when `WAVE_FAILURE_COUNT > 0`):**
 
    ```
@@ -1083,59 +1129,6 @@ If an active secure-phase step hook exists AND SECURITY.md exists: check frontma
 ```
 </step>
 
-<step name="tdd_review_checkpoint">
-**Optional step — TDD collaborative review.**
-
-```bash
-TDD_MODE=$(gsd_run query config-get workflow.tdd_mode 2>/dev/null || echo "false")
-```
-
-**Skip if `TDD_MODE` is `false`.**
-
-When `TDD_MODE` is `true`, check whether any completed plans in this phase have `type: tdd` in their frontmatter:
-
-```bash
-TDD_PLANS=$(grep -rl "^type: tdd" "${PHASE_DIR}"/*-PLAN.md 2>/dev/null | wc -l | tr -d ' ')
-```
-
-**If `TDD_PLANS` > 0:** Insert end-of-phase collaborative review checkpoint.
-
-1. Collect all SUMMARY.md files for TDD plans
-2. For each TDD plan summary, verify the RED/GREEN/REFACTOR gate sequence:
-   - RED gate: A failing test commit exists (`test(...)` commit with MUST-fail evidence)
-   - GREEN gate: An implementation commit exists (`feat(...)` commit making tests pass)
-   - REFACTOR gate: Optional cleanup commit (`refactor(...)` commit, tests still pass)
-3. If any TDD plan is missing the RED or GREEN gate commits, flag it:
-   ```
-   ⚠ TDD gate violation: Plan {plan_id} missing {RED|GREEN} phase commit.
-     Expected commit pattern: test({phase}-{plan}): ... → feat({phase}-{plan}): ...
-   ```
-4. Present collaborative review summary:
-   ```
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    TDD REVIEW — Phase {X}
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-   TDD Plans: {TDD_PLANS} | Gate violations: {count}
-
-   | Plan | RED | GREEN | REFACTOR | Status |
-   |------|-----|-------|----------|--------|
-   | {id} |  ✓  |   ✓   |    ✓     | Pass   |
-   | {id} |  ✓  |   ✗   |    —     | FAIL   |
-   ```
-
-**Escalation under MVP+TDD.** When `MVP_MODE=true` AND `TDD_MODE=true`, the review verdict escalates from advisory to **blocking**: missing RED or GREEN gate commits prevent marking the phase complete.
-```text
-Phase blocked: {N} TDD plan(s) violate the RED→GREEN gate sequence under MVP+TDD.
-Resolve and re-run /gsd execute-phase, or override with
-/gsd execute-phase {phase} --force-mvp-gate to ship anyway.
-```
-`--force-mvp-gate` is the escape hatch (documented, not yet implemented). Policy is:
-- `MVP_MODE=true` AND `TDD_MODE=true`: violations are **blocking** unless explicitly overridden.
-- otherwise: violations are advisory/non-blocking and are surfaced for review.
-The verifier agent (step `verify_phase_goal`) still checks TDD discipline in both cases.
-</step>
-
 <step name="handle_partial_wave_execution">
 If `WAVE_FILTER` was used, re-run plan discovery after execution:
 
@@ -1168,16 +1161,16 @@ Selected wave finished successfully. This phase still has incomplete plans, so p
 </step>
 
 <step name="code_review_gate" required="true">
-**This step is REQUIRED to evaluate the capability hook.** When the code-review capability is active, auto-invoke code review on the phase's source changes. Advisory only — never blocks execution flow.
+**This step is REQUIRED to evaluate the capability hook.** When the code-review capability is active, auto-invoke code review on the phase's source changes. Advisory only — never blocks execution flow. Also dispatches advisory execute:post gate hooks (e.g. tdd.review-checkpoint).
 
 **Capability gate:**
 ```bash
-EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw)
+EXECUTE_POST_HOOKS_JSON=${EXECUTE_POST_HOOKS_JSON:-$(gsd_run loop render-hooks execute:post --raw)}
 ```
 
 Resolve active step hooks from `EXECUTE_POST_HOOKS_JSON` where `kind == "step"` and `ref.skill == "code-review"`.
 
-If no active code-review step hook exists: display "Code review skipped (code-review capability inactive)" and proceed to next step.
+If no active code-review step hook exists: display "Code review skipped (code-review capability inactive)" and proceed to gate dispatch.
 
 **Invoke review:**
 ```
@@ -1197,9 +1190,28 @@ Code review found issues. Consider running:
 /gsd:code-review ${PHASE_NUMBER} --fix
 ```
 
-**Error handling:** If the Skill invocation fails or throws, catch the error, display "Code review encountered an error (non-blocking): {error}" and proceed to next step. Review failures must never block execution.
+**Error handling:** If the Skill invocation fails or throws, catch the error, display "Code review encountered an error (non-blocking): {error}" and proceed to gate dispatch. Review failures must never block execution.
 
-Regardless of review result, ALWAYS proceed to close_parent_artifacts → regression_gate → verify_phase_goal.
+**Execute:post gate hook dispatch.** After code review, dispatch all active gate hooks from `EXECUTE_POST_HOOKS_JSON` where `kind == "gate"`:
+
+For each active gate hook:
+```bash
+GATE_RESULT=$(gsd_run check ${hook.check.query} "${PHASE_NUMBER}" --raw)
+CHECK_EXIT=$?
+```
+
+**Gate evaluation** uses the same two-step contract as `execute:wave:post` above: **Step 1** — if the check command failed (non-zero `CHECK_EXIT`, empty/unparseable output), `onError == "halt"` stops and surfaces the error, `onError == "skip"` warns and continues to the next hook (do not read `block`). **Step 2** (command succeeded) — a blocking gate (`hook.blocking == true`) halts on `GATE_RESULT.block == true` with its message/table (never bypassed by `onError`); an advisory gate (`hook.blocking == false`) shows its `table`/summary when `block == true` or `message` is non-empty, then continues; a blocking gate with `block == false` continues silently.
+
+**TDD review escalation (overrides the advisory default for the `tdd.review-checkpoint` gate only).** The tdd `execute:post` gate is declared `blocking: false`, so by the generic contract above it displays its `message`/table and continues. There is ONE documented exception (see `~/.claude/gsd-core/references/execute-mvp-tdd.md`): when `MVP_MODE=true` AND `TDD_MODE=true` AND `GATE_RESULT.block == true` (one or more TDD plans miss a RED or GREEN gate commit), the end-of-phase TDD review escalates from advisory to **blocking under MVP+TDD** — refuse to mark the phase complete and present:
+
+```
+Phase blocked: {N} TDD plan(s) violate the RED→GREEN gate sequence under MVP+TDD.
+Resolve and re-run /gsd execute-phase, or override with /gsd execute-phase {phase} --force-mvp-gate to ship anyway.
+```
+
+(`--force-mvp-gate` is the documented, not-yet-implemented escape hatch.) Outside MVP+TDD, TDD-review violations remain advisory (table shown, execution continues).
+
+**Proceed rule:** If `MVP_MODE && TDD_MODE && GATE_RESULT.block == true` for `tdd.review-checkpoint`: STOP — do NOT proceed to `close_parent_artifacts`, `regression_gate`, `verify_phase_goal`, or `phase.complete`. Otherwise proceed normally.
 </step>
 
 <step name="close_parent_artifacts">
@@ -1322,84 +1334,7 @@ Options:
 3. Abort phase — roll back and re-plan
 ```
 
-Use AskUserQuestion to present the options.
-</step>
-
-<step name="schema_drift_gate">
-Post-execution schema drift detection. Catches false-positive verification where
-build/types pass because TypeScript types come from config, not the live database.
-
-**Run after execution completes but BEFORE verification marks success.**
-
-```bash
-SCHEMA_DRIFT=$(gsd_run query verify.schema-drift "${PHASE_NUMBER}" 2>/dev/null)
-```
-
-Parse JSON result for: `drift_detected`, `blocking`, `schema_files`, `orms`, `unpushed_orms`, `message`.
-
-**If `drift_detected` is false:** Skip to verify_phase_goal.
-
-**If `drift_detected` is true AND `blocking` is true:**
-
-Check for override:
-```bash
-SKIP_SCHEMA=$(echo "${GSD_SKIP_SCHEMA_CHECK:-false}")
-```
-
-**If `SKIP_SCHEMA` is `true`:**
-
-Display:
-```
-⚠ Schema drift detected but GSD_SKIP_SCHEMA_CHECK=true — bypassing gate.
-
-Schema files changed: {schema_files}
-ORMs requiring push: {unpushed_orms}
-
-Proceeding to verification (database may be out of sync).
-```
-→ Continue to verify_phase_goal.
-
-**If `SKIP_SCHEMA` is not `true`:**
-
-BLOCK verification. Display:
-
-```
-## BLOCKED: Schema Drift Detected
-
-Schema-relevant files changed during this phase but no database push command
-was executed. Build and type checks pass because TypeScript types come from
-config, not the live database — verification would produce a false positive.
-
-Schema files changed: {schema_files}
-ORMs requiring push: {unpushed_orms}
-
-Required push commands:
-{For each unpushed ORM, show the push command from the message}
-
-Options:
-1. Run push command now (recommended) — execute the push, then re-verify
-2. Skip schema check (GSD_SKIP_SCHEMA_CHECK=true) — bypass this gate
-3. Abort — stop execution and investigate
-```
-
-If `TEXT_MODE` is true, present as a plain-text numbered list. Otherwise use AskUserQuestion.
-
-**If user selects option 1:** Present the specific push command(s) to run. After user confirms execution, re-run the schema drift check. If it passes, continue to verify_phase_goal.
-
-**If user selects option 2:** Set override and continue to verify_phase_goal.
-
-**If user selects option 3:** Stop execution. Report partial completion.
-</step>
-
-<step name="codebase_drift_gate">
-Post-execution structural drift detection (#2003). Non-blocking by contract:
-any internal error here MUST fall through to `verify_phase_goal`. The phase
-is never failed by this gate.
-
-Load and follow the full step spec from
-`gsd-core/workflows/execute-phase/steps/codebase-drift-gate.md` —
-covers the SDK call, JSON contract, `warn` vs `auto-remap` branches, mapper
-spawn template, and the two `workflow.drift_*` config keys.
+If `TEXT_MODE` is true, present as a plain-text numbered list and ask the user to type their choice number. Otherwise, use AskUserQuestion to present the options.
 </step>
 
 <step name="verify_phase_goal">

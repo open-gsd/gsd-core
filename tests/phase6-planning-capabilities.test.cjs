@@ -49,7 +49,7 @@ describe('ADR-857 phase 6 planning capability migration', () => {
 
   test('plan-phase generic plan:pre dispatch supports skill and agent step hooks', () => {
     const content = readPlanPhase();
-    const section = extractSection(content, '## 5.6.', '## 5.7.');
+    const section = extractSection(content, '## 5.6.', '## 6.');
     assert.match(section, /ref\.skill/);
     assert.match(section, /ref\.agent/);
     assert.match(section, /Agent\(/);

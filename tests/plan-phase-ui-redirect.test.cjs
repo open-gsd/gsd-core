@@ -124,11 +124,12 @@ describe('plan-phase §5.6 UI Design Contract Gate', () => {
     );
   });
 
-  test('Branch 2: no frontend indicators → skip silently to §5.7', () => {
+  test('Branch 2: no frontend indicators → skip silently to step 6 (§5.7 removed)', () => {
     const section = extractSection56(workflowPath);
+    assert.ok(section.includes('frontend'), '§5.6 Branch 2 must reference frontend');
     assert.ok(
-      section.includes('frontend') && section.includes('5.7'),
-      '§5.6 Branch 2 must route non-frontend phases to §5.7'
+      /Branch 2[\s\S]*?step 6/.test(section),
+      '§5.6 Branch 2 must skip to step 6 (§5.7 schema-gate section was removed; schema-gate is now a capability)'
     );
   });
 
@@ -301,7 +302,7 @@ function extractSection56(workflowPath) {
   const content = fs.readFileSync(workflowPath, 'utf8');
   const start = content.indexOf('## 5.6.');
   assert.ok(start !== -1, '§5.6 heading must be present in plan-phase.md');
-  const end = content.indexOf('## 5.7.', start);
-  assert.ok(end !== -1, '§5.7 heading must follow §5.6 in plan-phase.md');
+  const end = content.indexOf('\n## 6.', start);
+  assert.ok(end !== -1, '## 6. heading must follow §5.6 in plan-phase.md (§5.7 was removed; schema-gate is now a capability)');
   return content.slice(start, end);
 }

@@ -217,7 +217,7 @@ Specialized agent definitions with frontmatter specifying:
 
 ### References (`gsd-core/references/*.md`)
 
-Shared knowledge documents that workflows and agents `@-reference` (see [`docs/INVENTORY.md`](INVENTORY.md#references-41-shipped) for the authoritative count and full roster):
+Shared knowledge documents that workflows and agents `@-reference` (see [`docs/INVENTORY.md`](INVENTORY.md#references) for the authoritative full roster):
 
 **Core references:**
 
@@ -299,7 +299,7 @@ Runtime hooks that integrate with the host AI agent:
 | `gsd-validate-commit.sh` | `PostToolUse` | Commit validation for conventional commit enforcement |
 | `gsd-phase-boundary.sh` | `PostToolUse` | Phase boundary detection for workflow transitions |
 
-See [`docs/INVENTORY.md`](INVENTORY.md#hooks-11-shipped) for the authoritative 11-hook roster.
+See [`docs/INVENTORY.md`](INVENTORY.md#hooks) for the authoritative hook roster.
 
 ### Command Routing Hub (`gsd-core/bin/lib/command-routing-hub.cjs`)
 
@@ -338,7 +338,7 @@ Agents always return a `RESEARCH.md` path, never raw fetched content. Context di
 
 ### CLI Tools (`gsd-core/bin/`)
 
-Node.js CLI utility (`gsd-tools.cjs`) with domain modules split across `gsd-core/bin/lib/` (see [`docs/INVENTORY.md`](INVENTORY.md#cli-modules-104-shipped) for the authoritative roster):
+Node.js CLI utility (`gsd-tools.cjs`) with domain modules split across `gsd-core/bin/lib/` (see [`docs/INVENTORY.md`](INVENTORY.md#cli-modules) for the authoritative roster):
 
 
 | Module                 | Responsibility                                                                                      |
@@ -409,7 +409,7 @@ Orchestrator (workflow .md)
 
 ### Primary Agent Spawn Categories
 
-Conceptual spawn-pattern taxonomy for the 21 primary agents. For the authoritative 31-agent roster (including the 10 advanced/specialized agents such as `gsd-pattern-mapper`, `gsd-code-reviewer`, `gsd-code-fixer`, `gsd-ai-researcher`, `gsd-domain-researcher`, `gsd-eval-planner`, `gsd-eval-auditor`, `gsd-framework-selector`, `gsd-debug-session-manager`, `gsd-intel-updater`), see [`docs/INVENTORY.md`](INVENTORY.md#agents-31-shipped).
+Conceptual spawn-pattern taxonomy for the primary agents. For the authoritative agent roster (including the advanced/specialized agents such as `gsd-pattern-mapper`, `gsd-code-reviewer`, `gsd-code-fixer`, `gsd-ai-researcher`, `gsd-domain-researcher`, `gsd-eval-planner`, `gsd-eval-auditor`, `gsd-framework-selector`, `gsd-debug-session-manager`, `gsd-intel-updater`), see [`docs/INVENTORY.md`](INVENTORY.md#agents).
 
 
 | Category         | Agents                                                                                  | Parallelism                                                                               |

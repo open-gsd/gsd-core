@@ -117,10 +117,10 @@ describe('descriptor-driven equivalence: defaults (no env vars, no probe hits)',
   for (const [runtime, expected] of Object.entries(GOLDEN_DEFAULTS).filter(
     ([r]) => r !== 'antigravity',
   )) {
-    test(`${runtime} default → ${expected}`, () => {
+    test(`${runtime} default resolves to its golden config dir`, () => {
       const saved = clearAllEnvKeys();
       try {
-        assert.strictEqual(getGlobalConfigDir(runtime), expected);
+        assert.strictEqual(getGlobalConfigDir(runtime), expected, `${runtime} default → ${expected}`);
       } finally {
         restoreEnvKeys(saved);
       }
@@ -693,13 +693,13 @@ describe('descriptor-driven parity: 14 non-probe registry runtimes × no-env-var
   );
 
   for (const runtime of registryRuntimes) {
-    test(`${runtime} via getGlobalConfigDir matches golden: ${GOLDEN_DEFAULTS[runtime]}`, () => {
+    test(`${runtime} via getGlobalConfigDir matches its golden default`, () => {
       const saved = clearAllEnvKeys();
       try {
         assert.strictEqual(
           getGlobalConfigDir(runtime),
           GOLDEN_DEFAULTS[runtime],
-          `getGlobalConfigDir('${runtime}') diverged from golden`,
+          `${runtime} via getGlobalConfigDir matches golden: ${GOLDEN_DEFAULTS[runtime]}`,
         );
       } finally {
         restoreEnvKeys(saved);

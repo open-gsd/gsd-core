@@ -61,7 +61,7 @@ const FAMILIES = [
 ];
 
 function buildManifest() {
-  const manifest = { generated: new Date().toISOString().slice(0, 10), families: {} };
+  const manifest = { families: {} };
   for (const { name, dir, filter, toName } of FAMILIES) {
     manifest.families[name] = fs
       .readdirSync(dir)
@@ -78,9 +78,6 @@ function main() {
   if (flag === '--check') {
     const committed = JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf8'));
     const live = buildManifest();
-    // Strip the generated date for comparison
-    delete committed.generated;
-    delete live.generated;
     const committedStr = JSON.stringify(committed, null, 2);
     const liveStr = JSON.stringify(live, null, 2);
     if (committedStr !== liveStr) {
