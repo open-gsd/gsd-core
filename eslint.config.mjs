@@ -37,6 +37,7 @@ export default tseslint.config(
       '**/*.generated.cjs',
       // ADR-457: tsc-generated runtime artifact — lint the src/*.cts source, not the emitted .cjs.
       'gsd-core/bin/lib/semver-compare.cjs',
+      'gsd-core/bin/lib/plan-drift-guard.cjs',
       'gsd-core/bin/lib/cli-exit.cjs',
       'gsd-core/bin/lib/edge-probe.cjs',
       'gsd-core/bin/lib/probe-core.cjs',
