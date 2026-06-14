@@ -3817,13 +3817,14 @@ describe('ADR-1016 phase 5a: closed-vocab set exports', () => {
 // ─── 25. ADR-857 phase 5e: closed ConverterName enum (Part B) ─────────────────
 
 describe('ADR-857 phase 5e: VALID_CONVERTER_NAMES closed enum', () => {
-  test('VALID_CONVERTER_NAMES has exactly 15 entries', () => {
+  test('VALID_CONVERTER_NAMES has exactly 24 entries (15 command/skill + 9 agent converters added in #1173)', () => {
     assert.ok(VALID_CONVERTER_NAMES instanceof Set, 'VALID_CONVERTER_NAMES must be a Set');
-    assert.strictEqual(VALID_CONVERTER_NAMES.size, 15, 'VALID_CONVERTER_NAMES must have exactly 15 entries, got: ' + VALID_CONVERTER_NAMES.size);
+    assert.strictEqual(VALID_CONVERTER_NAMES.size, 24, 'VALID_CONVERTER_NAMES must have exactly 24 entries, got: ' + VALID_CONVERTER_NAMES.size);
   });
 
   test('VALID_CONVERTER_NAMES contains all expected converter names', () => {
     const expected = [
+      // command/skill converters (pre-existing)
       'convertClaudeCommandToAntigravitySkill',
       'convertClaudeCommandToAugmentSkill',
       'convertClaudeCommandToClineSkill',
@@ -3839,6 +3840,16 @@ describe('ADR-857 phase 5e: VALID_CONVERTER_NAMES closed enum', () => {
       'convertClaudeCommandToOpencodeSkill',
       'convertClaudeCommandToTraeSkill',
       'convertClaudeCommandToWindsurfSkill',
+      // agent converters (#1173 — descriptor-driven agent conversion wiring)
+      'convertClaudeAgentToCopilotAgent',
+      'convertClaudeAgentToAntigravityAgent',
+      'convertClaudeAgentToCursorAgent',
+      'convertClaudeAgentToWindsurfAgent',
+      'convertClaudeAgentToAugmentAgent',
+      'convertClaudeAgentToTraeAgent',
+      'convertClaudeAgentToCodebuddyAgent',
+      'convertClaudeAgentToClineAgent',
+      'convertClaudeAgentToCodexAgent',
     ];
     for (const name of expected) {
       assert.ok(VALID_CONVERTER_NAMES.has(name), 'VALID_CONVERTER_NAMES must contain "' + name + '"');
