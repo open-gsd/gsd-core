@@ -178,22 +178,28 @@ describe('bug-2851: workflow files must not call bare `gsd-tools` (#2245 sweep r
     );
   });
 
-  test('plan-phase.md §13e gap-analysis uses the gsd_run launcher (resolvable invocation, #621)', () => {
+  test('plan-phase.md §13e gap-analysis dispatches via gsd_run loop render-hooks plan:post (ADR-857 capability gate, #621)', () => {
     const planPhase = fs.readFileSync(path.join(WORKFLOWS_DIR, 'plan-phase.md'), 'utf-8');
     const blocks = extractShellBlocks(planPhase);
-    let foundGapAnalysisCall = false;
+    let foundPlanPostDispatch = false;
     for (const blk of blocks) {
       for (const line of blk.lines) {
-        if (/gap-analysis/.test(line) && !/^\s*#/.test(line)) {
-          foundGapAnalysisCall = true;
-          assert.match(
-            line,
-            /\bgsd_run\s+gap-analysis\b/,
-            `gap-analysis must use the gsd_run launcher (not a hardcoded $HOME path), got: ${line.trim()}`,
-          );
+        if (/gsd_run\s+loop\s+render-hooks\s+plan:post\s+--raw/.test(line) && !/^\s*#/.test(line)) {
+          foundPlanPostDispatch = true;
         }
       }
     }
-    assert.ok(foundGapAnalysisCall, 'expected at least one gap-analysis invocation in plan-phase.md');
+    assert.ok(
+      foundPlanPostDispatch,
+      'expected plan-phase.md §13e to dispatch gsd_run loop render-hooks plan:post --raw (gap-analysis moved to capability gate plan:post in ADR-857 migration)',
+    );
+    const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
+    const planPostPoint = (registry.byLoopPoint || {})['plan:post'] || {};
+    const gates = planPostPoint.gates || [];
+    const gapAnalysisGate = gates.find((g) => g.capId === 'gap-analysis');
+    assert.ok(
+      gapAnalysisGate,
+      'gap-analysis capability must be registered as a plan:post gate in capability-registry.cjs',
+    );
   });
 });

@@ -469,17 +469,44 @@ describe('detectDrift — non-blocking guarantee', () => {
   });
 });
 
-// ─── Config validation: new keys present and restricted ──────────────────────
+// ─── Config validation: drift keys owned by the drift capability ──────────────
+//
+// After ADR-857 phase-6 migration, workflow.drift_threshold and workflow.drift_action
+// are no longer in the central config schema manifest (VALID_CONFIG_KEYS). They are
+// federated config keys owned exclusively by the `drift` capability in the registry.
+// VALID_CONFIG_KEYS covers central-only keys; capability-owned keys resolve through
+// the federated config overlay (loadConfig still returns them at their defaults).
+
+const CAPABILITY_REGISTRY_PATH = path.join(
+  __dirname,
+  '..',
+  'gsd-core',
+  'bin',
+  'lib',
+  'capability-registry.cjs',
+);
 
 describe('config-schema — drift keys', () => {
-  test('workflow.drift_threshold in VALID_CONFIG_KEYS', () => {
-    const { VALID_CONFIG_KEYS } = require(CONFIG_SCHEMA_PATH);
-    assert.ok(VALID_CONFIG_KEYS.has('workflow.drift_threshold'));
+  test('workflow.drift_threshold owned by drift capability (not central)', () => {
+    const { isCentralConfigKey } = require(CONFIG_SCHEMA_PATH);
+    const registry = require(CAPABILITY_REGISTRY_PATH);
+    // Must be owned by the drift capability
+    assert.strictEqual(registry.configKeys['workflow.drift_threshold'], 'drift',
+      'workflow.drift_threshold must be owned by the drift capability');
+    // Must NOT be in central schema (migration complete)
+    assert.strictEqual(isCentralConfigKey('workflow.drift_threshold'), false,
+      'workflow.drift_threshold must not be a central config key after capability migration');
   });
 
-  test('workflow.drift_action in VALID_CONFIG_KEYS', () => {
-    const { VALID_CONFIG_KEYS } = require(CONFIG_SCHEMA_PATH);
-    assert.ok(VALID_CONFIG_KEYS.has('workflow.drift_action'));
+  test('workflow.drift_action owned by drift capability (not central)', () => {
+    const { isCentralConfigKey } = require(CONFIG_SCHEMA_PATH);
+    const registry = require(CAPABILITY_REGISTRY_PATH);
+    // Must be owned by the drift capability
+    assert.strictEqual(registry.configKeys['workflow.drift_action'], 'drift',
+      'workflow.drift_action must be owned by the drift capability');
+    // Must NOT be in central schema (migration complete)
+    assert.strictEqual(isCentralConfigKey('workflow.drift_action'), false,
+      'workflow.drift_action must not be a central config key after capability migration');
   });
 });
 
@@ -571,9 +598,19 @@ describe('gsd-codebase-mapper --paths flag', () => {
 });
 
 // ─── Execute-phase workflow integration ──────────────────────────────────────
+//
+// After ADR-857 phase-6 migration, codebase_drift_gate is no longer an inline
+// step in execute-phase.md. Instead, it is declared as a gate in the `drift`
+// capability at the `execute:wave:post` hook point. The execute-phase.md
+// dispatches capability gates via `gsd_run loop render-hooks execute:wave:post`,
+// which fires the drift gates automatically.
 
 describe('execute-phase integrates codebase_drift_gate', () => {
   test('workflow references a codebase drift step', () => {
+    // After capability migration: the drift gate fires via execute:wave:post
+    // render-hooks dispatch. Verify two things:
+    // 1. execute-phase.md has the execute:wave:post render-hooks call site.
+    // 2. The drift capability declares a codebase-drift gate at execute:wave:post.
     const doc = fs.readFileSync(
       path.join(
         __dirname,
@@ -584,7 +621,25 @@ describe('execute-phase integrates codebase_drift_gate', () => {
       ),
       'utf8',
     );
-    assert.ok(/codebase_drift_gate|codebase-drift/.test(doc));
+    // execute-phase.md must dispatch execute:wave:post hooks (the call site that fires drift gates)
+    assert.ok(
+      /loop render-hooks execute:wave:post/.test(doc),
+      'execute-phase.md must dispatch execute:wave:post hooks (drift capability gate call site)',
+    );
+    // The drift capability must declare a codebase-drift gate at execute:wave:post
+    const registry = require(CAPABILITY_REGISTRY_PATH);
+    const driftCap = registry.capabilities['drift'];
+    assert.ok(driftCap, 'drift capability must be registered');
+    const codebaseDriftGate = (driftCap.gates || []).find(
+      (g) => g.check && /codebase.drift/i.test(g.check.query),
+    );
+    assert.ok(
+      codebaseDriftGate,
+      'drift capability must declare a codebase-drift gate at execute:wave:post',
+    );
+    assert.strictEqual(codebaseDriftGate.point, 'execute:wave:post');
+    assert.strictEqual(codebaseDriftGate.blocking, false,
+      'codebase-drift gate must be non-blocking by contract');
   });
 
   test('workflow documents non-blocking guarantee for drift', () => {

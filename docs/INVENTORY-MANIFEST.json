@@ -334,6 +334,7 @@
       "planning-workspace.cjs",
       "probe-core.cjs",
       "profile-output.cjs",
+      "profile-pipeline-command-router.cjs",
       "profile-pipeline.cjs",
       "project-root.cjs",
       "prompt-budget.cjs",

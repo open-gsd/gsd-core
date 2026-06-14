@@ -74,11 +74,10 @@ AGENT_SKILLS_RESEARCHER=$(gsd_run query agent-skills gsd-phase-researcher)
 AGENT_SKILLS_PLANNER=$(gsd_run query agent-skills gsd-planner)
 AGENT_SKILLS_CHECKER=$(gsd_run query agent-skills gsd-plan-checker)
 CONTEXT_WINDOW=$(gsd_run query config-get context_window 2>/dev/null || echo "200000")
-TDD_MODE=$(gsd_run query config-get workflow.tdd_mode 2>/dev/null || echo "false")
 MVP_MODE_CFG=$(gsd_run query config-get workflow.mvp_mode 2>/dev/null || echo "false")
 ```
 
-When `TDD_MODE` is `true`, the planner agent is instructed to apply `type: tdd` to eligible tasks using heuristics from `references/tdd.md`. The planner's `<required_reading>` is extended to include `@~/.claude/gsd-core/references/tdd.md` so gate enforcement rules are available during planning.
+When the tdd capability's `workflow.tdd_mode` is active (resolved via the plan:pre render-hooks), the planner agent is instructed to apply `type: tdd` to eligible tasks using heuristics from `references/tdd.md`. The TDD guidance is injected via the tdd capability's contribution hook at §5.6; no inline config-get is needed.
 
 When `CONTEXT_WINDOW >= 500000`, the planner prompt includes the 3 most recent prior phase CONTEXT.md and SUMMARY.md files PLUS any phases explicitly listed in the current phase's `Depends on:` field in ROADMAP.md. Explicit dependencies always load regardless of recency (e.g., Phase 7 declaring `Depends on: Phase 2` always sees Phase 2's context). Bounded recency keeps the planner's context budget focused on recent work.
 
@@ -165,7 +164,9 @@ Set `TEXT_MODE=true` if `--text` is present in $ARGUMENTS OR `text_mode` from in
 ```bash
 MVP_FLAG_ARG=""
 if [[ "$ARGUMENTS" =~ (^|[[:space:]])--mvp([[:space:]]|$) ]]; then MVP_FLAG_ARG="--cli-flag"; fi
-if [[ "$ARGUMENTS" =~ (^|[[:space:]])--tdd([[:space:]]|$) ]]; then TDD_MODE=true; fi
+if [[ "$ARGUMENTS" =~ (^|[[:space:]])--tdd([[:space:]]|$) ]]; then
+  gsd_run query config-set workflow.tdd_mode true 2>/dev/null || true
+fi
 ```
 
 Defer the `phase.mvp-mode` query until `PHASE` is finalized (after explicit argument parsing/fallback phase detection + validation). The verb returns `true|false`; full result also exposes `source` (`cli_flag` | `roadmap` | `config` | `none`) for diagnostics. Mode is **all-or-nothing per phase** (PRD decision Q1).
@@ -581,15 +582,15 @@ test -f "${PHASE_DIR}/${PADDED_PHASE}-VALIDATION.md" && echo "VALIDATION_CREATED
 
 ```bash
 PLAN_PRE_HOOKS_JSON=$(gsd_run loop render-hooks plan:pre --raw)
-SECURITY_ASVS=$(gsd_run query config-get workflow.security_asvs_level --raw 2>/dev/null || echo "1")
-SECURITY_BLOCK=$(gsd_run query config-get workflow.security_block_on --raw 2>/dev/null || echo "high")
 ```
 
 Resolve active contribution hooks from `PLAN_PRE_HOOKS_JSON` where `kind == "contribution"` and `capId == "security"`.
 
 **If no active security contribution hook exists:** Skip to step 5.6.
 
-**If an active security contribution hook exists:** Display banner:
+**If an active security contribution hook exists:** Read `SECURITY_ASVS` from the active hook's `configValues.security_asvs_level` (default: `1`) and `SECURITY_BLOCK` from `configValues.security_block_on` (default: `"high"`). These values are resolved by the capability registry from user config using the same four-level precedence as hook activation — no inline `config-get` is needed.
+
+Display banner:
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -635,7 +636,7 @@ GATE=$(gsd_run check ui-plan-gate "${PHASE}" --raw)
 
 Read `frontend`, `hasUiSpec`, and `block` from `GATE`.
 
-**Branch 2 — no frontend indicators (`frontend` is `false`):** Skip silently to step 5.7.
+**Branch 2 — no frontend indicators (`frontend` is `false`):** Skip silently to step 6.
 
 **Branch 3 — UI-SPEC already exists (`hasUiSpec` is `true`):**
 
@@ -685,68 +686,6 @@ Also available:
 ```
 
 **Exit the plan-phase workflow. Do not continue.**
-
-## 5.7. Schema Push Detection Gate
-
-> Detects schema-relevant files in the phase scope and injects a mandatory `[BLOCKING]` schema push task into the plan. Prevents false-positive verification where build/types pass because TypeScript types come from config, not the live database.
-
-Check if any files in the phase scope match schema patterns:
-
-```bash
-PHASE_SECTION=$(gsd_run query roadmap.get-phase "${PHASE}" --pick section 2>/dev/null)
-```
-
-Scan `PHASE_SECTION`, `CONTEXT.md` (if loaded), and `RESEARCH.md` (if exists) for file paths matching these ORM patterns:
-
-| ORM | File Patterns |
-|-----|--------------|
-| Payload CMS | `src/collections/**/*.ts`, `src/globals/**/*.ts` |
-| Prisma | `prisma/schema.prisma`, `prisma/schema/*.prisma` |
-| Drizzle | `drizzle/schema.ts`, `src/db/schema.ts`, `drizzle/*.ts` |
-| Supabase | `supabase/migrations/*.sql` |
-| TypeORM | `src/entities/**/*.ts`, `src/migrations/**/*.ts` |
-
-Also check if any existing PLAN.md files for this phase already reference these file patterns in `files_modified`.
-
-**If schema-relevant files detected:**
-
-Set `SCHEMA_PUSH_REQUIRED=true` and `SCHEMA_ORM={detected_orm}`.
-
-Determine the push command for the detected ORM:
-
-| ORM | Push Command | Non-TTY Workaround |
-|-----|-------------|-------------------|
-| Payload CMS | `npx payload migrate` | `CI=true PAYLOAD_MIGRATING=true npx payload migrate` |
-| Prisma | `npx prisma db push` | `npx prisma db push --accept-data-loss` (if destructive) |
-| Drizzle | `npx drizzle-kit push` | `npx drizzle-kit push` |
-| Supabase | `supabase db push` | Set `SUPABASE_ACCESS_TOKEN` env var |
-| TypeORM | `npx typeorm migration:run` | `npx typeorm migration:run -d src/data-source.ts` |
-
-Inject the following into the planner prompt (step 8) as an additional constraint:
-
-```markdown
-<schema_push_requirement>
-**[BLOCKING] Schema Push Required**
-
-This phase modifies schema-relevant files ({detected_files}). The planner MUST include
-a `[BLOCKING]` task that runs the database schema push command AFTER all schema file
-modifications are complete but BEFORE verification.
-
-- ORM detected: {SCHEMA_ORM}
-- Push command: {push_command}
-- Non-TTY workaround: {env_hint}
-- If push requires interactive prompts that cannot be suppressed, flag the task for
-  manual intervention with `autonomous: false`
-
-This task is mandatory — the phase CANNOT pass verification without it. Build and
-type checks will pass without the push (types come from config, not the live database),
-creating a false-positive verification state.
-</schema_push_requirement>
-```
-
-Display: `Schema files detected ({SCHEMA_ORM}) — [BLOCKING] push task will be injected into plans`
-
-**If no schema-relevant files detected:** Skip silently to step 6.
 
 ## 6. Check Existing Plans
 
@@ -853,15 +792,20 @@ PATTERNS_PATH="${PHASE_DIR}/${PADDED_PHASE}-PATTERNS.md"
 
 ## 7.9. Regenerate API-SURFACE.md (intel gate)
 
+> Capability-driven dispatch. Resolves active `plan:pre` step hooks via the capability registry; the intel hook's `when: intel.enabled` condition is evaluated by the registry — no inline config-get needed.
+
+Read the active intel step hook from `PLAN_PRE_HOOKS_JSON` where `kind == "step"` and `capId == "intel"`.
+
+**If no active intel step hook exists:** `API_SURFACE_PATH` stays empty; skip to step 8. The step-8 planner entry for API Surface is omitted when `API_SURFACE_PATH` is empty.
+
+**If an active intel step hook exists:**
 ```bash
-INTEL_CFG=$(gsd_run query config-get intel.enabled 2>/dev/null || echo "false")
-# false (absent = false) → API_SURFACE_PATH stays empty; step-8 planner entry omitted
-if [ "$INTEL_CFG" = "true" ]; then
-  gsd_run intel api-surface
-  API_SURFACE_PATH=".planning/intel/API-SURFACE.md"
-  echo "✓ API surface regenerated: ${API_SURFACE_PATH}"  # injected into step 8 as HINT
-fi
+gsd_run intel api-surface
+API_SURFACE_PATH=".planning/intel/API-SURFACE.md"
+echo "✓ API surface regenerated: ${API_SURFACE_PATH}"  # injected into step 8 as HINT
 ```
+
+Continue to step 8.
 
 ## 8. Spawn gsd-planner Agent
 
@@ -896,7 +840,7 @@ Planner prompt:
 - {SPEC_PATH} (Phase SPEC — carries the ## Edge Coverage section to lift covered/backstop edges from, if exists)
 - {SPIKE_FINDINGS_PATH} (Spike Findings — validated patterns, constraints, landmines from experiments, if exists)
 - {SKETCH_FINDINGS_PATH} (Sketch Findings — validated design decisions, CSS patterns, visual direction, if exists)
-- {API_SURFACE_PATH} (API Surface — HINT ONLY, if intel.enabled; see <intel_surface_hint> below)
+- {API_SURFACE_PATH} (API Surface — HINT ONLY, when intel capability is active; see <intel_surface_hint> below)
 ${CONTEXT_WINDOW >= 500000 ? `
 **Cross-phase context (1M model enrichment):**
 - CONTEXT.md files from the 3 most recent completed phases (locked decisions — maintain consistency)
@@ -928,16 +872,7 @@ Historical findings already incorporated, explicitly deferred/rejected in PLAN.m
 **Project instructions:** Read ./CLAUDE.md or ./.claude/CLAUDE.md if either exists — follow project-specific guidelines
 **Project skills:** Check .claude/skills/ or .agents/skills/ directory (if either exists) — read SKILL.md files, plans should account for project skill rules
 
-${TDD_MODE === 'true' ? `
-<tdd_mode_active>
-**TDD Mode is ENABLED.** Apply TDD heuristics from @~/.claude/gsd-core/references/tdd.md to all eligible tasks:
-- Business logic with defined I/O → type: tdd
-- API endpoints with request/response contracts → type: tdd
-- Data transformations, validation, algorithms → type: tdd
-- UI, config, glue code, CRUD → standard plan (type: execute)
-Each TDD plan gets one feature with RED/GREEN/REFACTOR gate sequence.
-</tdd_mode_active>
-` : ''}
+{For each active entry in `PLAN_PRE_HOOKS_JSON` where `kind == "contribution"` and `into == "planner"` (in array order): inject the entry's `fragment.inline` verbatim here. This delivers all planner-targeted contributions — including tdd's `<tdd_mode_active>` block (type:tdd heuristics), schema-gate's schema-push detection guidance (if active at plan:pre), and security's threat-model guidance. For the security contribution, also surface the resolved `configValues`: `security_asvs_level` (ASVS enforcement level) and `security_block_on` (severity threshold) so the planner uses the configured values when generating `<threat_model>` blocks. If no active planner contributions exist, omit this block entirely.}
 
 **MVP_MODE:** ${MVP_MODE} (when true, follow vertical-slice rules from `~/.claude/gsd-core/references/planner-mvp-mode.md`; when false, ignore MVP guidance entirely.)
 **WALKING_SKELETON:** ${WALKING_SKELETON} (when true, the first deliverable must be a Walking Skeleton — Read the template at `~/.claude/gsd-core/references/skeleton-template.md` and produce SKELETON.md alongside PLAN.md.)
@@ -1630,53 +1565,38 @@ gsd_run query commit "docs(${PADDED_PHASE}): create phase plan" --files "${PHASE
 
 This commits all PLAN.md files for the phase plus the updated STATE.md and ROADMAP.md to version-control the planning artifacts. Skip this step if `commit_docs` is false.
 
-## 13e. Post-Planning Gap Analysis
+## 13e. Post-Planning Gap Analysis (plan:post capability gate dispatch)
 
-After all plans are generated, committed, and the Requirements Coverage Gate (§13)
-has run, emit a single unified gap report covering both REQUIREMENTS.md and the
-CONTEXT.md `<decisions>` section. This is a **proactive, post-hoc report** — it
-does not block phase advancement and does not re-plan. It exists so that any
-requirement or decision that slipped through the per-plan checks is surfaced in
-one place before execution begins.
-
-**Skip if:** `workflow.post_planning_gaps` is `false`. Default is `true`.
+Proactive, non-blocking coverage report gated on `workflow.post_planning_gaps`
+(default `true`). Dispatched via the `plan:post` capability gate owned by the
+`gap-analysis` capability (ADR-857 §53). Reads REQUIREMENTS.md and CONTEXT.md
+`<decisions>` and cross-references each REQ-ID / D-ID against `${PHASE_DIR}/*-PLAN.md`.
 
 ```bash
-POST_PLANNING_GAPS=$(gsd_run query config-get workflow.post_planning_gaps --default true 2>/dev/null || echo true)
-if [ "$POST_PLANNING_GAPS" = "true" ]; then
-  # Scope to this phase's mapped REQ-IDs (#447); null/TBD skips the requirements comparison (CONTEXT.md decisions still reported), mirroring §13.
-  gsd_run gap-analysis --phase-dir "${PHASE_DIR}" --phase-req-ids "$(gsd_run query init.plan-phase "$PHASE" --pick phase_req_ids 2>/dev/null || echo TBD)"
-fi
+PLAN_POST_HOOKS_JSON=$(gsd_run loop render-hooks plan:post --raw)
+PHASE_REQ_IDS=$(gsd_run query init.plan-phase "$PHASE" --pick phase_req_ids 2>/dev/null || echo TBD)
 ```
 
-(`gsd-tools.cjs gap-analysis` reads `.planning/REQUIREMENTS.md`, `${PHASE_DIR}/CONTEXT.md`,
-and `${PHASE_DIR}/*-PLAN.md`, then prints a markdown table with one row per
-REQ-ID and D-ID. Word-boundary matching prevents `REQ-1` from being mistaken for
-`REQ-10`.)
+Read the `activeHooks` array from `PLAN_POST_HOOKS_JSON` in-context. If the
+`gap-analysis` gate hook is absent (capability inactive), skip this step.
 
-**Output format (deterministic; sorted REQUIREMENTS.md → CONTEXT.md, then natural
-sort within source):**
+**For each active entry where `kind == "gate"`** (process in array order):
 
-```
-## Post-Planning Gap Analysis
-
-| Source | Item | Status |
-|--------|------|--------|
-| REQUIREMENTS.md | REQ-01 | ✓ Covered |
-| REQUIREMENTS.md | REQ-02 | ✗ Not covered |
-| CONTEXT.md | D-01 | ✓ Covered |
-| CONTEXT.md | D-02 | ✗ Not covered |
-
-⚠ N items not covered by any plan
+```bash
+GATE_RESULT=$(gsd_run check ${hook.check.query} "${PHASE_DIR}" "${PHASE_REQ_IDS}" --raw)
+CHECK_EXIT=$?
 ```
 
-**Skip-gracefully behavior:**
-- REQUIREMENTS.md missing → CONTEXT-only report.
-- CONTEXT.md missing → REQUIREMENTS-only report.
-- Both missing or `<decisions>` block missing → "No requirements or decisions to check" line, no error.
+**Step 1 — did the CHECK COMMAND itself succeed?**
+If the check command failed (non-zero `CHECK_EXIT`, empty output, or unparseable JSON):
+- `onError == "halt"` → halt and surface command error.
+- `onError == "skip"` → log a warning and continue to the next hook.
 
-This step is non-blocking. If items are reported as not covered, the user may
-re-run `/gsd:plan-phase --gaps` to add plans, or proceed to execute-phase as-is.
+**Step 2 — read `GATE_RESULT.block` (boolean).** Only reached when command succeeded.
+
+- If `hook.blocking == true` and `GATE_RESULT.block == true`: halt. (gap-analysis is always `blocking: false` so this branch is informational only.)
+- If `hook.blocking == false` (advisory): if `GATE_RESULT.block == true` or non-empty `table`/`summary`, output the gap table and continue. Advisory gates never block phase completion.
+- If `hook.blocking == true` and `GATE_RESULT.block == false`: continue silently.
 
 ## 14. Present Final Status
 

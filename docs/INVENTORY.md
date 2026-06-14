@@ -446,6 +446,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `planning-workspace.cjs` | Planning path/workstream seam (`planningDir`, `planningPaths`, active-workstream routing, `.planning/.lock` orchestration) |
 | `project-root.cjs` | Resolves a project root from a starting directory using four heuristics (own `.planning/` guard, `sub_repos` config, `multiRepo` flag, `.git` heuristic) |
 | `profile-output.cjs` | Profile rendering, USER-PROFILE.md and dev-preferences.md generation |
+| `profile-pipeline-command-router.cjs` | ADR-959 capability command router for the profile-pipeline command family — dispatches scan-sessions, extract-messages, profile-sample (pipeline phase) and write-profile, profile-questionnaire, generate-dev-preferences, generate-claude-profile, generate-claude-md (output phase); phase 6 cutover |
 | `profile-pipeline.cjs` | User behavioral profiling data pipeline, session file scanning |
 | `prompt-budget.cjs` | Pure token-budget accounting for review prompts — estimates tokens, applies deterministic trim priority (head-shrink PROJECT.md, proportional plan truncation, drop context/research/requirements, hard-fail guard), returns structured metadata for `review.max_prompt_tokens` (#3081) |
 | `research-provider.cjs` | Research provider waterfall, confidence tiers, and planResearch (cache-hits + fetch plan) |
