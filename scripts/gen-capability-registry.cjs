@@ -546,8 +546,10 @@ function validateFeatureBody(cap) {
 }
 
 // ADR-857 phase 5e: Closed ConverterName enum — complete set used across 16 runtime descriptors,
-// all exported by bin/install.js. Any ArtifactKind with a non-null converter must use one of these.
+// all exported by bin/install.js (commands/skills) and src/runtime-artifact-conversion.cts (agents).
+// Any ArtifactKind with a non-null converter must use one of these.
 const VALID_CONVERTER_NAMES = new Set([
+  // commands / skills converters (pre-existing)
   'convertClaudeCommandToAntigravitySkill',
   'convertClaudeCommandToAugmentSkill',
   'convertClaudeCommandToClineSkill',
@@ -563,6 +565,16 @@ const VALID_CONVERTER_NAMES = new Set([
   'convertClaudeCommandToOpencodeSkill',
   'convertClaudeCommandToTraeSkill',
   'convertClaudeCommandToWindsurfSkill',
+  // agent converters (#1173 — descriptor-driven agent conversion wiring)
+  'convertClaudeAgentToCopilotAgent',
+  'convertClaudeAgentToAntigravityAgent',
+  'convertClaudeAgentToCursorAgent',
+  'convertClaudeAgentToWindsurfAgent',
+  'convertClaudeAgentToAugmentAgent',
+  'convertClaudeAgentToTraeAgent',
+  'convertClaudeAgentToCodebuddyAgent',
+  'convertClaudeAgentToClineAgent',
+  'convertClaudeAgentToCodexAgent',
 ]);
 
 // C3: Validate role:runtime body
