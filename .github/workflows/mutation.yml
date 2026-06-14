@@ -107,18 +107,20 @@ jobs:
         # MUTATION_TEST_CMD scopes the command runner to only this module's tests.
         # --mutate scopes mutation to only the changed module's built artifact.
         # --incremental reuses cached results for unchanged mutants.
-        # --break uses the per-module minScore ratchet floor from the matrix
-        #   (set by scripts/mutation-matrix.cjs; see ADR-456 / issue #1187).
-        #   This overrides stryker.config.mjs's global break (60, local backstop).
+        # MUTATION_BREAK passes the per-module minScore ratchet floor to
+        #   stryker.config.mjs (which reads process.env.MUTATION_BREAK for the
+        #   break threshold). See ADR-456 / issue #1187.
+        #   Note: Stryker 9.x has no --break CLI flag; the threshold is config-only.
         env:
           NODE_OPTIONS: '--max-old-space-size=4096'
           MUTATION_TEST_CMD: node --test ${{ matrix.tests }}
+          MUTATION_BREAK: ${{ matrix.minScore }}
         run: |
           echo "Module:   ${{ matrix.name }}"
           echo "Mutate:   ${{ matrix.mutate }}"
           echo "Tests:    ${{ matrix.tests }}"
           echo "MinScore: ${{ matrix.minScore }}"
-          npx stryker run --incremental --mutate "${{ matrix.mutate }}" --break "${{ matrix.minScore }}"
+          npx stryker run --incremental --mutate "${{ matrix.mutate }}"
 
       - name: Upload mutation report — ${{ matrix.name }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1

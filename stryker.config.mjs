@@ -84,14 +84,16 @@ export default {
   coverageAnalysis: 'off',
 
   // ── Thresholds ───────────────────────────────────────────────────────────────
-  // ADR-456 / issue #1187: CI uses per-module minScore (from scripts/mutation-matrix.cjs)
-  // passed as `--break <minScore>` per shard — that is the REAL enforcement gate.
-  // The global `break: 60` here is a LOCAL-RUN backstop only (full multi-module run).
-  // Do NOT raise `break` here; raise individual minScore values in mutation-matrix.cjs.
+  // ADR-456 / issue #1187: CI passes the per-module minScore (from
+  // scripts/mutation-matrix.cjs) via the MUTATION_BREAK environment variable.
+  // Each CI shard sets MUTATION_BREAK to its module's floor so Stryker enforces
+  // the ratchet. Local runs without MUTATION_BREAK fall back to 60 (backstop).
+  // Do NOT raise the fallback here; raise individual minScore values in
+  // mutation-matrix.cjs instead.
   thresholds: {
     high: 80,
     low: 60,
-    break: 60,
+    break: Number(process.env.MUTATION_BREAK) || 60,
   },
 
   // ── Incremental mode ─────────────────────────────────────────────────────────

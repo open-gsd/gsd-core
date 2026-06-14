@@ -174,3 +174,54 @@ describe('mutation-matrix ratchet: guard detects missing minScore', () => {
     );
   });
 });
+
+// ── (e) monotonic ratchet: minScore may only increase ────────────────────────
+// RATCHET_BASELINE captures the committed floors as of the initial #1187 measurement.
+//
+// CONTRACT: a module's minScore in COVERED must NEVER drop below its entry here.
+// Raising a floor is always allowed (no assertion fails when score goes up).
+// LOWERING a floor requires editing this baseline — that edit is the visible,
+// reviewable red flag that a deliberate regression is being introduced.
+//
+// To ADD a new module to COVERED: also add a baseline entry here before merging.
+// The assertion "every COVERED module has a baseline" enforces this.
+const RATCHET_BASELINE = {
+  'context-utilization':     80,
+  'prompt-budget':           90,
+  'frontmatter':             62,
+  'adr-parser':              68,
+  'config-schema':           68,
+  'active-workstream-store': 80,
+  'core-utils':              75,
+};
+
+describe('mutation-matrix ratchet: monotonic floor enforcement', () => {
+  const covered = matrix.COVERED || {};
+  const coveredNames = Object.keys(covered);
+
+  test('every COVERED module has a RATCHET_BASELINE entry (new modules must add one)', () => {
+    for (const name of coveredNames) {
+      assert.ok(
+        Object.prototype.hasOwnProperty.call(RATCHET_BASELINE, name),
+        `COVERED module '${name}' has no RATCHET_BASELINE entry — add one before merging`
+      );
+    }
+  });
+
+  for (const name of coveredNames) {
+    test(`${name}: minScore >= baseline (${RATCHET_BASELINE[name] ?? 'NO BASELINE'}) — never lower the floor`, () => {
+      const baseline = RATCHET_BASELINE[name];
+      if (baseline === undefined) {
+        // Already caught by the presence check above; skip the numeric compare
+        // to avoid a confusing NaN comparison error.
+        assert.fail(`no RATCHET_BASELINE for '${name}' — add it`);
+        return;
+      }
+      const actual = covered[name].minScore;
+      assert.ok(
+        actual >= baseline,
+        `COVERED['${name}'].minScore (${actual}) dropped below RATCHET_BASELINE (${baseline}) — ratchet violation`
+      );
+    });
+  }
+});
