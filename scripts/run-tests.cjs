@@ -13,6 +13,15 @@
 //   node scripts/run-tests.cjs --suite slow        # *.slow.test.cjs
 //   node scripts/run-tests.cjs --files "a.test.cjs b.test.cjs"
 //   node scripts/run-tests.cjs --files-from /tmp/selected-tests.txt
+//   node scripts/run-tests.cjs --suite unit --shard 1/3   # shard 1 of 3 (#1212)
+//
+// Sharding (issue #1212): --shard <i>/<n> runs a deterministic, balanced
+// round-robin slice of the SORTED selected file list (file index k → shard
+// k % n). i is 1-based (1..n); n >= 1; n=1 is a pure no-op (all files). The
+// CI windows full-test lane shards across N parallel runners so per-job
+// wall-clock scales as O(total/N) and stops hitting the job time cap. Sharding
+// composes with --suite (it slices the post-filter selection) and preserves
+// the existing 28K argv chunking WITHIN each shard.
 //
 // Suite grouping convention: filename suffix marker before `.test.cjs`.
 // A file named `foo.security.test.cjs` belongs to the `security` suite.
@@ -127,14 +136,75 @@ function walkTestFiles(dir, relBase) {
   return results;
 }
 
+// Parse a `--shard i/n` value into { index, total } or { error }.
+// i is 1-based and must satisfy 1 <= i <= n; n must be >= 1. Both parts must be
+// plain non-negative integers (no decimals, signs, or surrounding whitespace).
+// `n=1` is the pure no-op (every file). This is the strict-input boundary
+// (Postel's Law: be strict in what a CLI flag accepts so a typo fails loudly
+// rather than silently running the wrong slice of the suite).
+function parseShardArg(value) {
+  if (typeof value !== 'string') {
+    return { error: `--shard requires a value of the form i/n` };
+  }
+  const m = /^(\d+)\/(\d+)$/.exec(value);
+  if (!m) {
+    return { error: `--shard value "${value}" must be of the form i/n (e.g. 1/3)` };
+  }
+  const index = Number(m[1]);
+  const total = Number(m[2]);
+  if (!Number.isInteger(total) || total < 1) {
+    return { error: `--shard total n must be an integer >= 1, got "${m[2]}"` };
+  }
+  if (!Number.isInteger(index) || index < 1 || index > total) {
+    return { error: `--shard index i must be an integer in 1..${total}, got "${m[1]}"` };
+  }
+  return { index, total };
+}
+
+// Deterministic, balanced round-robin partition of an ALREADY-SORTED file list.
+// Shard `index` (1-based) receives every file whose position k in the sorted
+// list satisfies k % total === index - 1. Round-robin (not contiguous blocks)
+// spreads duration variance across shards and guarantees shard sizes differ by
+// at most 1. Selection keys off array INDEX, never off the path string, so the
+// partition is byte-identical across Windows/macOS/Linux as long as the caller
+// sorts the list with the same (locale-independent) comparator. `total=1`
+// returns the input unchanged (pure no-op). A shard with no files (total >
+// file count) returns [] and is a legitimate result, not an error.
+function selectShard(sortedFiles, { index, total }) {
+  if (total === 1) return sortedFiles;
+  return sortedFiles.filter((_, k) => k % total === index - 1);
+}
+
 function parseArgs(argv) {
   let suite = null;
   let seen = false;
   let files = null;
   let filesFrom = null;
+  let shard = null;
+  let shardSeen = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--suite') {
+    if (a === '--shard' || a.startsWith('--shard=')) {
+      if (shardSeen) {
+        return { error: 'duplicate --shard flag' };
+      }
+      shardSeen = true;
+      let v;
+      if (a === '--shard') {
+        v = argv[i + 1];
+        if (v === undefined || (typeof v === 'string' && v.startsWith('--'))) {
+          return { error: '--shard requires a value of the form i/n' };
+        }
+        i++;
+      } else {
+        v = a.slice('--shard='.length);
+      }
+      const parsed = parseShardArg(v);
+      if (parsed.error) {
+        return { error: parsed.error };
+      }
+      shard = parsed;
+    } else if (a === '--suite') {
       if (seen) {
         return { error: 'duplicate --suite flag' };
       }
@@ -197,7 +267,7 @@ function parseArgs(argv) {
   if (files !== null && filesFrom !== null) {
     return { error: '--files and --files-from cannot be combined' };
   }
-  return { suite, files, filesFrom };
+  return { suite, files, filesFrom, shard };
 }
 
 // Return the marked suite name embedded in a filename, or null if it's unmarked.
@@ -331,12 +401,43 @@ function main() {
   } else {
     selectedNames = selectFiles(allFiles, suite);
   }
+
+  // Shard partitioning (#1212): when --shard i/n is given, keep only this
+  // shard's deterministic round-robin slice of the selected list. Applied
+  // AFTER suite/explicit selection so it composes with --suite (each shard
+  // runs i/n of the post-filter selection).
+  //
+  // The partition keys off array index, so the slice is only reproducible if
+  // the input is in a stable order. --suite/default selections are already
+  // sorted (allFiles came from walkTestFiles(...).sort() and selectFiles
+  // preserves that order), but --files/--files-from preserve REQUEST order.
+  // Sort here so --shard is deterministic regardless of how the selection was
+  // produced — the runner's documented contract is a sorted partition.
+  //
+  // emptyBeforeShard distinguishes "this shard legitimately got zero files
+  // from a non-empty list" (total > file count — a valid no-op) from "the
+  // selection was already empty before sharding" (a genuinely empty suite,
+  // which must still hit the discovery hard-error below — Codex #1212 review).
+  const usingShard = parsed.shard !== null;
+  let emptyBeforeShard = false;
+  if (usingShard) {
+    emptyBeforeShard = selectedNames.length === 0;
+    selectedNames = selectShard([...selectedNames].sort(), parsed.shard);
+  }
+
   const selected = selectedNames.map(f => join(testDir, f));
 
   if (selected.length === 0) {
-    if (usingExplicitFiles) {
-      // Empty file list from --files/--files-from: allowed (e.g. CI passes an
-      // empty .ci-selected-tests.txt on docs-only/inert PRs). Exit 0 silently.
+    // A legitimately-empty shard: --shard was given, the pre-shard selection
+    // had files, but this shard index drew zero (total > file count). Exit 0.
+    const legitimatelyEmptyShard = usingShard && !emptyBeforeShard;
+    if (usingExplicitFiles || legitimatelyEmptyShard) {
+      // Empty file list from --files/--files-from (e.g. CI passes an empty
+      // .ci-selected-tests.txt on docs-only/inert PRs) OR a legitimately-empty
+      // shard: both are expected. Exit 0 silently rather than taking the
+      // "discovery broken" hard-error path below. An EMPTY suite that was
+      // empty BEFORE sharding falls through to the hard error so a broken
+      // --suite filter is still caught even with --shard present.
       console.error(`run-tests: no tests in suite "${suite || 'all'}"`);
       return 0;
     }
@@ -484,4 +585,4 @@ if (require.main === module) {
   runMain(main);
 }
 
-module.exports = { suiteOf, ensureBuiltArtifacts };
+module.exports = { suiteOf, ensureBuiltArtifacts, parseShardArg, selectShard };
