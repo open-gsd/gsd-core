@@ -16,6 +16,8 @@ Each finding is one **applicable** edge for one requirement — a boundary the p
 
 You must resolve each finding into exactly one of four states. Claude presents them as a numbered choice (or an `AskUserQuestion` menu).
 
+You may also see an **`unclassified — review manually`** finding. The relevance filter is a heuristic over prose cues, so a requirement whose wording is edge-relevant but matched no cue surfaces this single soft candidate instead of being silently dropped. Resolve it like any other finding — specify a criterion, or **dismiss it with a reason** if the requirement is genuinely edge-free (e.g. "static asset, no input"). It is a manual-review nudge, never a hard block.
+
 ---
 
 ## Specify it — write an acceptance criterion

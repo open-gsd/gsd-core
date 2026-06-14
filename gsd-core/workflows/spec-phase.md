@@ -295,6 +295,9 @@ For each Requirement gathered so far:
    - **Dismiss (reason)** → mark `dismissed` with a required non-empty reason.
    - **Backstop with a test** → mark `backstop`; note "held-out edge test" for plan-phase.
    - **Defer** → leave `unresolved`.
+   - An `unclassified` row (probe `unclassified — review manually`) means the requirement's
+     prose matched no shape cue (#1110) — treat it like any other candidate (**Specify**,
+     **Dismiss (reason)**, or **Defer**). A manual-review nudge, not a hard block.
 
 **Soft gate (after resolving):**
 - All applicable edges resolved → proceed to Step 6.
