@@ -1379,7 +1379,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
       // `previous_status: gaps_found`, producing spurious warnings even when the
       // current frontmatter status is `passed`.
       const verFm = extractFrontmatter(content) as Record<string, unknown>;
-      const verStatus = typeof verFm['status'] === 'string' ? verFm['status'].trim() : '';
+      // Normalise to lower-case so `status: Passed` (title-case) is not missed.
+      const verStatus = typeof verFm['status'] === 'string' ? verFm['status'].trim().toLowerCase() : '';
       if (verStatus === 'human_needed') warnings.push(`${file}: needs human verification`);
       if (verStatus === 'gaps_found') warnings.push(`${file}: has unresolved gaps`);
     }
@@ -1506,22 +1507,51 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           // Requirements under headings whose text contains "deferred", "backlog",
           // "future", or "v2" (case-insensitive) are explicitly out of current scope
           // and must not be flagged as missing from the Traceability table.
-          // Strategy: split the body into sections by markdown headings (# … ######),
-          // skip any section whose heading matches the deferred/future pattern, and
-          // collect IDs (**REQ-ID** bold notation) only from the remaining sections.
+          //
+          // Strategy: walk lines, track heading depth, and toggle a "deferred" flag
+          // when a heading matching the pattern is encountered.  A sub-heading (higher
+          // depth) that is ITSELF in a deferred parent remains deferred unless it
+          // opens a same-or-shallower heading that does NOT match the pattern.
+          // Lines inside fenced code blocks (``` or ~~~) are treated as content, not
+          // headings, to avoid false deferred-section detection from code examples.
           const DEFERRED_HEADING_RE = /\b(?:deferred|backlog|future|v\d+)\b/i;
           const bodyReqIds: string[] = [];
-          // Split on heading lines, keeping the delimiter so we can inspect each heading.
-          const sections = reqContent.split(/^(?=#{1,6}\s)/m);
-          for (const section of sections) {
-            const headingMatch = section.match(/^(#{1,6})\s+([^\n]+)/);
-            if (headingMatch && DEFERRED_HEADING_RE.test(headingMatch[2])) {
-              // Skip this entire section — it is explicitly deferred/out-of-scope.
+          // deferredDepth: the heading level that opened the current deferred block,
+          // or 0 when we are in an active section.
+          let deferredDepth = 0;
+          let inFence = false;
+          for (const line of reqContent.split(/\r?\n/)) {
+            // Track fenced code blocks (``` or ~~~).
+            if (/^\s*(?:```|~~~)/.test(line)) {
+              inFence = !inFence;
               continue;
             }
-            const sectionReqPattern = /\*\*([A-Z][A-Z0-9]*-\d+)\*\*/g;
+            if (inFence) continue; // ignore content inside a code fence
+
+            const headingM = line.match(/^(#{1,6})\s+(.*)/);
+            if (headingM) {
+              const depth = headingM[1].length;
+              const text = headingM[2];
+              if (deferredDepth > 0 && depth > deferredDepth) {
+                // Sub-heading inside a deferred block: stays deferred regardless of name.
+                continue;
+              }
+              // Heading at same level or shallower than current deferred opener,
+              // or no active deferred block yet.
+              if (DEFERRED_HEADING_RE.test(text)) {
+                deferredDepth = depth; // enter a deferred block
+              } else {
+                deferredDepth = 0; // back in an active section
+              }
+              continue;
+            }
+
+            if (deferredDepth > 0) continue; // skip content in deferred sections
+
+            // Collect bold REQ-ID patterns from active-section lines.
+            const reqPat = /\*\*([A-Z][A-Z0-9]*-\d+)\*\*/g;
             let bodyMatch: RegExpExecArray | null;
-            while ((bodyMatch = sectionReqPattern.exec(section)) !== null) {
+            while ((bodyMatch = reqPat.exec(line)) !== null) {
               const id = bodyMatch[1];
               if (!bodyReqIds.includes(id)) bodyReqIds.push(id);
             }

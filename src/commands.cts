@@ -115,7 +115,9 @@ function determinePhaseStatus(plans: number, summaries: number, phaseDir: string
       // Full-text regexes like /status:\s*gaps_found/ match the substring inside
       // `previous_status: gaps_found`, producing incorrect phase status labels.
       const fm = extractFrontmatter(content) as Record<string, unknown>;
-      const fmStatus = typeof fm['status'] === 'string' ? fm['status'].trim() : '';
+      // Normalise to lower-case to preserve the prior case-insensitive behaviour
+      // while reading only the frontmatter `status` key (not the full body text).
+      const fmStatus = typeof fm['status'] === 'string' ? fm['status'].trim().toLowerCase() : '';
       if (fmStatus === 'passed') return 'Complete';
       if (fmStatus === 'human_needed') return 'Needs Review';
       if (fmStatus === 'gaps_found') return 'Executed';

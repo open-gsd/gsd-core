@@ -1008,4 +1008,84 @@ describe('issue #1159 (Defect B): deferred/future requirement IDs must not trigg
       );
     },
   );
+
+  test(
+    '#1159-B-4 (subheading): IDs under sub-headings of a deferred section are also suppressed',
+    () => {
+      // Codex adversarial finding: splitting on EVERY heading failed to propagate
+      // deferred status to sub-headings (e.g. "## Future Backlog" → "### Sub").
+      // The fix uses heading-depth tracking so sub-headings inherit deferred state.
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-1159-subhead-'));
+      const planDir = path.join(tmpDir, '.planning');
+      const phasesDir = path.join(planDir, 'phases');
+      const phase01Dir = path.join(phasesDir, '01-foundation');
+      fs.mkdirSync(phase01Dir, { recursive: true });
+      fs.mkdirSync(path.join(phasesDir, '02-api'), { recursive: true });
+
+      fs.writeFileSync(path.join(planDir, 'REQUIREMENTS.md'), [
+        '# Requirements',
+        '',
+        '## Functional Requirements',
+        '',
+        '- **ACTIVE-001** Core feature.',
+        '',
+        '## Future Backlog',
+        '',
+        '### Sub-category A',
+        '',
+        '- **SUB-001** This is under a sub-heading of a deferred section.',
+        '',
+        '## Traceability',
+        '',
+        '| Requirement | Phase | Status |',
+        '|-------------|-------|--------|',
+        '| ACTIVE-001 | Phase 01 | Pending |',
+        '',
+      ].join('\n'));
+
+      fs.writeFileSync(path.join(planDir, 'ROADMAP.md'), [
+        '# Roadmap',
+        '',
+        '- [ ] Phase 01: Foundation',
+        '- [ ] Phase 02: API',
+        '',
+        '### Phase 01: Foundation',
+        '**Goal:** Build the foundation',
+        '**Requirements:** ACTIVE-001',
+        '**Plans:** 1 plans',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans Complete | Status | Completed |',
+        '|-------|----------------|--------|-----------|',
+        '| 01. Foundation | 0/1 | Not started | - |',
+        '| 02. API | 0/1 | Not started | - |',
+        '',
+      ].join('\n'));
+
+      fs.writeFileSync(path.join(planDir, 'STATE.md'), [
+        '# State',
+        '',
+        '**Current Phase:** 01',
+        '**Completed Phases:** 0',
+        '**Total Phases:** 2',
+        '**Progress:** 0%',
+        '',
+      ].join('\n'));
+
+      fs.writeFileSync(path.join(phase01Dir, '01-01-PLAN.md'), '# Plan 1\n');
+      fs.writeFileSync(path.join(phase01Dir, '01-01-SUMMARY.md'), '# Summary 1\n');
+
+      const { output } = runGsdTools(['phase', 'complete', '1'], tmpDir);
+      const parsed = JSON.parse(output);
+      const warnings = parsed.warnings || [];
+      const traceWarnings = warnings.filter((w) => /Traceability/i.test(w));
+      const mentionsSub = traceWarnings.some((w) => w.includes('SUB-001'));
+      assert.ok(
+        !mentionsSub,
+        `#1159-B-4 FAILED: SUB-001 (under sub-heading of deferred section) appeared in warning.\n` +
+        `Traceability warnings: ${JSON.stringify(traceWarnings)}`,
+      );
+    },
+  );
 });
