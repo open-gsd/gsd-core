@@ -947,6 +947,152 @@ describe('install — changeset CLI lands at scripts/changeset/cli.cjs (#935)', 
   });
 });
 
+// ─── Section N: fix-slash-commands.cjs install regression (#1223) ───────────────
+
+describe('install — fix-slash-commands.cjs lands at scripts/fix-slash-commands.cjs (#1223)', () => {
+  // Regression guard: scripts/fix-slash-commands.cjs must be copied into the runtime
+  // config dir by the installer so gsd-core/bin/lib/command-roster.cjs can require it
+  // via '../../../scripts/fix-slash-commands.cjs'. Before this fix, the file was never
+  // installed and every gsd-tools command crashed with MODULE_NOT_FOUND (#1223).
+  let tmpDir;
+  let previousCwd;
+
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-fix-slash-install-');
+    previousCwd = process.cwd();
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    process.chdir(previousCwd);
+    cleanup(tmpDir);
+  });
+
+  test('install() copies scripts/fix-slash-commands.cjs to <configDir>/scripts/fix-slash-commands.cjs', () => {
+    install(false, 'claude');
+    const claudeDir = path.join(tmpDir, '.claude');
+    const fixSlashPath = path.join(claudeDir, 'scripts', 'fix-slash-commands.cjs');
+    assert.ok(
+      fs.existsSync(fixSlashPath),
+      `scripts/fix-slash-commands.cjs must exist at ${path.relative(tmpDir, fixSlashPath)} after install (#1223)`,
+    );
+  });
+
+  test('installed gsd-tools.cjs query loads without MODULE_NOT_FOUND (#1223)', () => {
+    // End-to-end smoke: spawning gsd-tools.cjs must not crash with MODULE_NOT_FOUND.
+    // This directly exercises the command-roster → fix-slash-commands require chain.
+    install(false, 'claude');
+    const claudeDir = path.join(tmpDir, '.claude');
+    const gsdToolsPath = path.join(claudeDir, 'gsd-core', 'bin', 'gsd-tools.cjs');
+    assert.ok(fs.existsSync(gsdToolsPath), 'pre-condition: gsd-tools.cjs must be installed');
+    const { spawnSync } = require('node:child_process');
+    const result = spawnSync(
+      process.execPath,
+      [gsdToolsPath, 'query', 'init.new-project'],
+      { encoding: 'utf8', timeout: 15000 },
+    );
+    assert.ok(
+      !result.stderr.includes('MODULE_NOT_FOUND'),
+      `gsd-tools.cjs must not crash with MODULE_NOT_FOUND; stderr=${result.stderr}`,
+    );
+    assert.ok(
+      !result.stderr.includes('Cannot find module'),
+      `gsd-tools.cjs must resolve all modules; stderr=${result.stderr}`,
+    );
+  });
+
+  test('writeManifest() tracks scripts/fix-slash-commands.cjs', () => {
+    install(false, 'claude');
+    const claudeDir = path.join(tmpDir, '.claude');
+    const manifest = writeManifest(claudeDir, 'claude');
+    assert.ok(
+      'scripts/fix-slash-commands.cjs' in manifest.files,
+      'manifest must track scripts/fix-slash-commands.cjs',
+    );
+  });
+
+  test('uninstall() removes scripts/fix-slash-commands.cjs', () => {
+    install(false, 'claude');
+    const claudeDir = path.join(tmpDir, '.claude');
+    const fixSlashPath = path.join(claudeDir, 'scripts', 'fix-slash-commands.cjs');
+    assert.ok(fs.existsSync(fixSlashPath),
+      'pre-condition: fix-slash-commands.cjs must be installed before uninstall');
+    uninstall(false, 'claude');
+    assert.ok(
+      !fs.existsSync(fixSlashPath),
+      'scripts/fix-slash-commands.cjs must be removed on uninstall',
+    );
+  });
+});
+
+// ─── Section N: readCmdNames() tolerates absent commands/gsd/ dir (#1223) ────────
+
+describe('readCmdNames() — tolerates missing commands/gsd directory (#1223)', () => {
+  // Regression guard: on installs where commands/gsd/ does not exist (e.g. skill-based
+  // or global Claude installs) readCmdNames() must return [] rather than throwing ENOENT.
+  test('readCmdNames() returns an array (does not throw)', () => {
+    // Verify the guard contract: readCmdNames() must always return an array regardless
+    // of whether COMMANDS_DIR exists. The spawn-based test below covers the absent-dir
+    // scenario; this inline test asserts the basic export shape.
+    const fixSlashModule = require('../scripts/fix-slash-commands.cjs');
+    const result = fixSlashModule.readCmdNames();
+    assert.ok(Array.isArray(result), 'readCmdNames() must return an array');
+  });
+
+  test('readCmdNames() returns [] from a context where commands/gsd/ is absent', () => {
+    // Genuine absent-dir test: copy fix-slash-commands.cjs into a fresh temp directory
+    // under a scripts/ subdirectory so that __dirname inside the copy points to
+    // <tmpRoot>/scripts/ — making COMMANDS_DIR = path.join(__dirname,'..','commands','gsd')
+    // resolve to <tmpRoot>/commands/gsd, which does NOT exist. Requiring the copy (not
+    // the repo original) exercises the real ENOENT guard rather than silently hitting
+    // the repo's live 69-command registry.
+    //
+    // This test MUST fail on a pre-fix build (unguarded readdirSync throws ENOENT) and
+    // pass after (ENOENT-specific catch returns []).
+    const { spawnSync } = require('node:child_process');
+    const absScriptsSrc = path.resolve(__dirname, '..', 'scripts', 'fix-slash-commands.cjs');
+
+    // Build a clean tmpRoot: <tmpRoot>/scripts/fix-slash-commands.cjs
+    // No commands/gsd/ exists anywhere under or adjacent to tmpRoot.
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-readcmdnames-absentdir-'));
+    try {
+      const tmpScriptsDir = path.join(tmpRoot, 'scripts');
+      fs.mkdirSync(tmpScriptsDir, { recursive: true });
+      const tmpCopyPath = path.join(tmpScriptsDir, 'fix-slash-commands.cjs');
+      fs.copyFileSync(absScriptsSrc, tmpCopyPath);
+
+      // Script: require the COPY (not the repo original) so __dirname === tmpScriptsDir
+      // → COMMANDS_DIR = path.join(tmpScriptsDir, '..', 'commands', 'gsd') = <tmpRoot>/commands/gsd
+      // which does not exist → must return [] without throwing.
+      const script = [
+        `'use strict';`,
+        `const mod = require(${JSON.stringify(tmpCopyPath)});`,
+        `let result;`,
+        `try { result = mod.readCmdNames(); } catch(e) { process.stderr.write('THREW:' + e.code + ':' + e.message); process.exit(2); }`,
+        `if (!Array.isArray(result)) { process.stderr.write('NOT_ARRAY:' + JSON.stringify(result)); process.exit(3); }`,
+        `if (result.length !== 0) { process.stderr.write('EXPECTED_EMPTY:got ' + result.length + ' entries'); process.exit(4); }`,
+        `// readCmdNames() returned [] as required — success`,
+        `process.exit(0);`,
+      ].join('\n');
+
+      const spawnResult = spawnSync(process.execPath, ['-e', script], {
+        encoding: 'utf8',
+        timeout: 10000,
+        env: { ...process.env, GSD_TEST_MODE: '1' },
+      });
+      assert.ok(
+        !spawnResult.stderr.includes('THREW:'),
+        `readCmdNames() must not throw when commands/gsd/ is absent; stderr=${spawnResult.stderr}`,
+      );
+      assert.strictEqual(spawnResult.status, 0,
+        `readCmdNames() must return [] (exit 0) when commands/gsd/ is absent; ` +
+        `status=${spawnResult.status} stderr=${spawnResult.stderr}`);
+    } finally {
+      cleanup(tmpRoot);
+    }
+  });
+});
+
 // ─── Section N: Antigravity .agents canonical workspace dir (#791) ─────────────
 // allow-test-rule: runtime-contract-is-the-product
 // Reads deployed agent .md files whose text IS the product surface the
