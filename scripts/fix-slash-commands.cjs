@@ -92,7 +92,12 @@ function transformContentToHyphen(src, cmdNames) {
 }
 
 function readCmdNames() {
-  return fs.readdirSync(COMMANDS_DIR)
+  // Skill-based runtimes register GSD commands as skills and have no
+  // commands/gsd directory, so the readdir would throw ENOENT. Degrade to an
+  // empty roster — same try/catch no-op contract as processFile/processDir below.
+  let entries;
+  try { entries = fs.readdirSync(COMMANDS_DIR); } catch { return []; }
+  return entries
     .filter(f => f.endsWith('.md'))
     .map(f => f.replace(/\.md$/, ''));
 }

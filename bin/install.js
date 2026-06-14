@@ -8365,6 +8365,15 @@ function uninstall(isGlobal, runtime = 'claude') {
       console.log(`  ${green}✓${reset} Removed scripts/lib/ GSD files`);
     }
   }
+  // Remove scripts/fix-slash-commands.cjs (command-roster runtime dep, #1223)
+  const fixSlashUninstallPath = path.join(targetDir, 'scripts', 'fix-slash-commands.cjs');
+  if (fs.existsSync(fixSlashUninstallPath)) {
+    try {
+      fs.unlinkSync(fixSlashUninstallPath);
+      removedCount++;
+      console.log(`  ${green}✓${reset} Removed scripts/fix-slash-commands.cjs`);
+    } catch (_) { /* best-effort */ }
+  }
   // If scripts/ dir is now empty, remove it too
   const scriptsUninstallDir = path.join(targetDir, 'scripts');
   if (fs.existsSync(scriptsUninstallDir)) {
@@ -9078,6 +9087,11 @@ function writeManifest(configDir, runtime = 'claude', options = {}) {
         manifest.files['scripts/lib/' + file] = fileHash(path.join(scriptsLibInstallDir, file));
       }
     }
+  }
+  // Track scripts/fix-slash-commands.cjs (command-roster runtime dep, #1223)
+  const fixSlashInstallPath = path.join(configDir, 'scripts', 'fix-slash-commands.cjs');
+  if (fs.existsSync(fixSlashInstallPath)) {
+    manifest.files['scripts/fix-slash-commands.cjs'] = fileHash(fixSlashInstallPath);
   }
 
   fs.writeFileSync(path.join(configDir, MANIFEST_NAME), JSON.stringify(manifest, null, 2));
@@ -10469,6 +10483,30 @@ function install(isGlobal, runtime = 'claude', options = {}) {
       console.log(`  ${green}✓${reset} Installed scripts/changeset/ (changelog preview CLI)`);
     } else {
       failures.push('scripts/changeset/cli.cjs');
+    }
+  }
+
+  // Install scripts/fix-slash-commands.cjs into <configDir>/scripts/ (#1223).
+  //
+  // gsd-core/bin/lib/command-roster.cjs hard-requires this file at module load
+  // via require('../../../scripts/fix-slash-commands.cjs'), which resolves to
+  // <install-root>/scripts/fix-slash-commands.cjs (a sibling of gsd-core/). It
+  // ships in the npm tarball root but was never copied to the runtime config
+  // dir, so every gsd-tools invocation crashed at load with MODULE_NOT_FOUND
+  // (the entire CLI unusable — same defect class as #935 / #606). All runtimes
+  // load the roster through gsd-tools, so copy unconditionally, same scope as
+  // gsd-core/ itself.
+  const fixSlashSrc = path.join(src, 'scripts', 'fix-slash-commands.cjs');
+  if (!fs.existsSync(fixSlashSrc)) {
+    failures.push('scripts/fix-slash-commands.cjs (source missing from package — reinstall from npm)');
+  } else {
+    const scriptsDest = path.join(targetDir, 'scripts');
+    fs.mkdirSync(scriptsDest, { recursive: true });
+    fs.copyFileSync(fixSlashSrc, path.join(scriptsDest, 'fix-slash-commands.cjs'));
+    if (verifyFileInstalled(path.join(scriptsDest, 'fix-slash-commands.cjs'), 'scripts/fix-slash-commands.cjs')) {
+      console.log(`  ${green}✓${reset} Installed scripts/fix-slash-commands.cjs (command-roster runtime dep)`);
+    } else {
+      failures.push('scripts/fix-slash-commands.cjs');
     }
   }
 

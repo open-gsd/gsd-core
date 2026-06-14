@@ -947,6 +947,117 @@ describe('install — changeset CLI lands at scripts/changeset/cli.cjs (#935)', 
   });
 });
 
+// ─── Section N: fix-slash-commands.cjs install regression (#1223) ────────────
+
+describe('install — scripts/fix-slash-commands.cjs lands for command-roster (#1223)', () => {
+  // Regression guard: gsd-core/bin/lib/command-roster.cjs hard-requires
+  // ../../../scripts/fix-slash-commands.cjs at module load. The installer copied
+  // scripts/changeset/ and scripts/lib/ but never this top-level file, so every
+  // gsd-tools invocation crashed with MODULE_NOT_FOUND — the entire CLI unusable.
+  let tmpDir;
+  let previousCwd;
+
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-fix-slash-1223-');
+    previousCwd = process.cwd();
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    process.chdir(previousCwd);
+    cleanup(tmpDir);
+  });
+
+  test('install() copies scripts/fix-slash-commands.cjs to <configDir>/scripts/', () => {
+    install(false, 'claude');
+    const claudeDir = path.join(tmpDir, '.claude');
+    const filePath = path.join(claudeDir, 'scripts', 'fix-slash-commands.cjs');
+    assert.ok(
+      fs.existsSync(filePath),
+      `scripts/fix-slash-commands.cjs must exist at ${path.relative(tmpDir, filePath)} after install (#1223)`,
+    );
+  });
+
+  test('installed gsd-tools loads without MODULE_NOT_FOUND and emits JSON (#1223)', () => {
+    // End-to-end proof of the reported crash: from the installed gsd-core/, the
+    // command-roster require chain must resolve so `gsd-tools query` runs.
+    install(false, 'claude');
+    const claudeDir = path.join(tmpDir, '.claude');
+    const gsdTools = path.join(claudeDir, 'gsd-core', 'bin', 'gsd-tools.cjs');
+    assert.ok(fs.existsSync(gsdTools), 'gsd-tools.cjs must be installed under gsd-core/bin/');
+    const { spawnSync } = require('node:child_process');
+    const result = spawnSync(process.execPath, [gsdTools, 'query', 'init.new-project'], { encoding: 'utf8' });
+    assert.ok(
+      !result.stderr.includes('MODULE_NOT_FOUND') && !result.stderr.includes('Cannot find module'),
+      `gsd-tools query must resolve all modules; stderr=${result.stderr}`,
+    );
+    assert.strictEqual(result.status, 0, `gsd-tools query must exit 0; got ${result.status}; stderr=${result.stderr}`);
+    assert.doesNotThrow(() => JSON.parse(result.stdout), 'gsd-tools query must emit valid JSON');
+  });
+
+  test('command-roster require resolves from the installed layout (#1223)', () => {
+    // Direct guard against a manifest that omits the file: load command-roster
+    // from the installed gsd-core/ and confirm it does not throw at module load.
+    install(false, 'claude');
+    const claudeDir = path.join(tmpDir, '.claude');
+    const roster = path.join(claudeDir, 'gsd-core', 'bin', 'lib', 'command-roster.cjs');
+    const { spawnSync } = require('node:child_process');
+    const result = spawnSync(process.execPath, ['-e', `require(${JSON.stringify(roster)})`], { encoding: 'utf8' });
+    assert.ok(
+      !result.stderr.includes("Cannot find module '../../../scripts/fix-slash-commands.cjs'"),
+      `command-roster must resolve fix-slash-commands.cjs from the install; stderr=${result.stderr}`,
+    );
+    assert.strictEqual(result.status, 0, `requiring command-roster must not throw; stderr=${result.stderr}`);
+  });
+
+  test('readCmdNames() returns [] when commands/gsd is absent (#1223)', () => {
+    // Latent second failure: runtimes that register GSD as skills have no
+    // commands/gsd directory, so readCmdNames()'s readdirSync would throw ENOENT.
+    // Copy the shipped module into an isolated scripts/ dir with no sibling
+    // commands/gsd and confirm it degrades to [] rather than crashing.
+    const isolatedScripts = path.join(tmpDir, 'isolated', 'scripts');
+    fs.mkdirSync(isolatedScripts, { recursive: true });
+    const target = path.join(isolatedScripts, 'fix-slash-commands.cjs');
+    fs.copyFileSync(path.join(__dirname, '..', 'scripts', 'fix-slash-commands.cjs'), target);
+    assert.ok(
+      !fs.existsSync(path.join(tmpDir, 'isolated', 'commands', 'gsd')),
+      'pre-condition: isolated layout has no commands/gsd directory',
+    );
+    const { spawnSync } = require('node:child_process');
+    const result = spawnSync(
+      process.execPath,
+      ['-e', `const m=require(${JSON.stringify(target)}); process.stdout.write(JSON.stringify(m.readCmdNames()))`],
+      { encoding: 'utf8' },
+    );
+    assert.strictEqual(result.status, 0, `readCmdNames() must not throw; stderr=${result.stderr}`);
+    assert.deepStrictEqual(JSON.parse(result.stdout), [], 'readCmdNames() must return [] when commands/gsd is absent');
+  });
+
+  test('writeManifest() tracks scripts/fix-slash-commands.cjs', () => {
+    install(false, 'claude');
+    const claudeDir = path.join(tmpDir, '.claude');
+    const manifest = writeManifest(claudeDir, 'claude');
+    assert.ok(
+      Object.keys(manifest.files).includes('scripts/fix-slash-commands.cjs'),
+      'manifest must track scripts/fix-slash-commands.cjs',
+    );
+  });
+
+  test('uninstall() removes scripts/fix-slash-commands.cjs', () => {
+    install(false, 'claude');
+    const claudeDir = path.join(tmpDir, '.claude');
+    assert.ok(
+      fs.existsSync(path.join(claudeDir, 'scripts', 'fix-slash-commands.cjs')),
+      'pre-condition: fix-slash-commands.cjs must be installed before uninstall',
+    );
+    uninstall(false, 'claude');
+    assert.ok(
+      !fs.existsSync(path.join(claudeDir, 'scripts', 'fix-slash-commands.cjs')),
+      'scripts/fix-slash-commands.cjs must be removed on uninstall',
+    );
+  });
+});
+
 // ─── Section N: Antigravity .agents canonical workspace dir (#791) ─────────────
 // allow-test-rule: runtime-contract-is-the-product
 // Reads deployed agent .md files whose text IS the product surface the
