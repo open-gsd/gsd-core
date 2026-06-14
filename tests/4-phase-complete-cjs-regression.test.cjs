@@ -30,7 +30,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, runGsdTools } = require('./helpers.cjs');
 
 // ── Load cmdPhaseComplete directly from phase.cjs (bypass the SDK router) ────
 // phase-command-router.cjs delegates to SDK when available; we must test the
@@ -354,6 +354,295 @@ describe('issue #4 (CJS): cmdPhaseComplete — idempotency (blind-increment bug)
     assert.throws(
       () => capturePhaseComplete(tmpDir, '1'),
       /injected REQUIREMENTS\.md write failure[\s\S]*WARNING: rollback failed while restoring[\s\S]*injected ROADMAP\.md rollback failure/,
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Regressions: phase complete preserves completion date (#1161)
+// Tests drive the REAL handler (cmdPhaseComplete) via the CLI entry point
+// `runGsdTools('phase complete <N>')` so the fix in phase.cts is exercised
+// end-to-end rather than hitting the roadmap.cjs helper in isolation.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Extract the Completed cell from the progress table row for a given phase number.
+ * The Completed column is always the LAST cell, regardless of whether the table is
+ * 4-col (Phase | Plans | Status | Completed) or 5-col (Phase | Milestone | Plans | Status | Completed).
+ */
+function extractCompletedCell(roadmapContent, phaseNum) {
+  // Match the full progress table row whose first cell starts with the phase number.
+  // Use [^|\n] to avoid crossing line boundaries. Capture everything up to the final '|'.
+  const re = new RegExp(`^(\\|\\s*${phaseNum}[^|\\n]*(?:\\|[^|\\n]*)*)\\|\\s*$`, 'm');
+  const m = roadmapContent.match(re);
+  if (!m) return null;
+  // m[1] = '| 01. Foundation | 1/1 | Complete    | 2026-01-01 '
+  // Split on '|' → ['', ' 01. Foundation ', ' 1/1 ', ' Complete    ', ' 2026-01-01 ']
+  // Drop the leading empty string and take the last element.
+  const cells = m[1].split('|').slice(1); // drop leading ''
+  return cells[cells.length - 1].trim();
+}
+
+/**
+ * Build a minimal 4-col ROADMAP project fixture whose Phase 01 row already has
+ * the Completed cell set to `existingDate` and Status `Complete`.
+ * The phase directory has plan+summary so `phase complete 1` can run.
+ *
+ * @param {string} existingDate  - value in the Completed cell ('2026-01-01', '-', '   ', etc.)
+ * @param {boolean} [alreadyComplete] - if true the checkbox is already checked and status Complete
+ */
+function create4ColFixture(existingDate, alreadyComplete = true) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-1161-4col-'));
+  const planDir = path.join(tmpDir, '.planning');
+  const phasesDir = path.join(planDir, 'phases');
+  fs.mkdirSync(phasesDir, { recursive: true });
+
+  const checkbox = alreadyComplete ? '[x]' : '[ ]';
+  const checkboxSuffix = alreadyComplete ? ' (completed 2026-01-01)' : '';
+  const status = alreadyComplete ? 'Complete    ' : 'Not started';
+
+  const roadmap = [
+    '# Roadmap',
+    '',
+    `- ${checkbox} Phase 01: Foundation${checkboxSuffix}`,
+    '- [ ] Phase 02: API',
+    '',
+    '### Phase 01: Foundation',
+    '**Goal:** Build the foundation',
+    '**Plans:** 1/1 plans complete',
+    '',
+    '### Phase 02: API',
+    '**Goal:** Build the API',
+    '',
+    '## Progress',
+    '',
+    '| Phase | Plans Complete | Status | Completed |',
+    '|-------|----------------|--------|-----------|',
+    `| 01. Foundation | 1/1 | ${status} | ${existingDate} |`,
+    '| 02. API | 0/1 | Not started | - |',
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.join(planDir, 'ROADMAP.md'), roadmap);
+
+  const state = [
+    '# State',
+    '',
+    '**Current Phase:** 01',
+    '**Current Phase Name:** Foundation',
+    '**Status:** In progress',
+    '**Current Plan:** 01-01',
+    '**Last Activity:** 2025-01-01',
+    '**Last Activity Description:** Working on phase 1',
+    '**Completed Phases:** 0',
+    '**Total Phases:** 2',
+    '**Progress:** 0%',
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.join(planDir, 'STATE.md'), state);
+
+  const phase01Dir = path.join(phasesDir, '01-foundation');
+  fs.mkdirSync(phase01Dir, { recursive: true });
+  fs.writeFileSync(path.join(phase01Dir, '01-01-PLAN.md'), '# Plan 1\nDo the work.\n');
+  fs.writeFileSync(path.join(phase01Dir, '01-01-SUMMARY.md'), '# Summary 1\nDone.\n');
+
+  fs.mkdirSync(path.join(phasesDir, '02-api'), { recursive: true });
+
+  return tmpDir;
+}
+
+/**
+ * Build a minimal 5-col ROADMAP project fixture (Phase | Milestone | Plans | Status | Completed).
+ * Phase 01 row already has Completed cell set to `existingDate`.
+ */
+function create5ColFixture(existingDate, alreadyComplete = true) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-1161-5col-'));
+  const planDir = path.join(tmpDir, '.planning');
+  const phasesDir = path.join(planDir, 'phases');
+  fs.mkdirSync(phasesDir, { recursive: true });
+
+  const checkbox = alreadyComplete ? '[x]' : '[ ]';
+  const checkboxSuffix = alreadyComplete ? ' (completed 2026-01-01)' : '';
+  const status = alreadyComplete ? 'Complete    ' : 'Not started';
+
+  const roadmap = [
+    '# Roadmap',
+    '',
+    `- ${checkbox} Phase 01: Foundation${checkboxSuffix}`,
+    '- [ ] Phase 02: API',
+    '',
+    '### Phase 01: Foundation',
+    '**Goal:** Build the foundation',
+    '**Plans:** 1/1 plans complete',
+    '',
+    '### Phase 02: API',
+    '**Goal:** Build the API',
+    '',
+    '## Progress',
+    '',
+    '| Phase | Milestone | Plans | Status | Completed |',
+    '|-------|-----------|-------|--------|-----------|',
+    `| 01. Foundation | v1.0 | 1/1 | ${status} | ${existingDate} |`,
+    '| 02. API | v1.0 | 0/1 | Not started | - |',
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.join(planDir, 'ROADMAP.md'), roadmap);
+
+  const state = [
+    '# State',
+    '',
+    '**Current Phase:** 01',
+    '**Current Phase Name:** Foundation',
+    '**Status:** In progress',
+    '**Current Plan:** 01-01',
+    '**Last Activity:** 2025-01-01',
+    '**Last Activity Description:** Working on phase 1',
+    '**Completed Phases:** 0',
+    '**Total Phases:** 2',
+    '**Progress:** 0%',
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.join(planDir, 'STATE.md'), state);
+
+  const phase01Dir = path.join(phasesDir, '01-foundation');
+  fs.mkdirSync(phase01Dir, { recursive: true });
+  fs.writeFileSync(path.join(phase01Dir, '01-01-PLAN.md'), '# Plan 1\nDo the work.\n');
+  fs.writeFileSync(path.join(phase01Dir, '01-01-SUMMARY.md'), '# Summary 1\nDone.\n');
+
+  fs.mkdirSync(path.join(phasesDir, '02-api'), { recursive: true });
+
+  return tmpDir;
+}
+
+// Fixed historical instant — will never collide with a real today() in CI.
+const PINNED_MS_1161 = Date.parse('2021-03-22T10:00:00.000Z');
+const PINNED_DATE_1161 = '2021-03-22';
+// Env passed to runGsdTools to pin the clock in the subprocess SUT.
+const PINNED_CLOCK_ENV = {
+  GSD_TEST_MODE: '1',
+  GSD_NOW_MS: String(PINNED_MS_1161),
+};
+
+describe('regressions: phase complete preserves completion date (#1161)', () => {
+  let tmpDir;
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  // ── (a) 4-col: already Complete with a date — repeat phase complete must NOT overwrite ──
+
+  test('#1161 (a): 4-col ROADMAP — repeat `phase complete 1` preserves existing Completed date', () => {
+    // Arrange: Row is already Complete with '2026-01-01'.
+    tmpDir = create4ColFixture('2026-01-01', true);
+    const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+
+    // Act: run `phase complete 1` via the real CLI handler, clock pinned to PINNED_DATE.
+    const result = runGsdTools('phase complete 1', tmpDir, PINNED_CLOCK_ENV);
+    assert.ok(result.success, `phase complete failed: ${result.error || result.output}`);
+
+    // Assert: Completed cell must still be '2026-01-01', NOT the pinned '2021-03-22'.
+    const after = fs.readFileSync(roadmapPath, 'utf8');
+    const completedCell = extractCompletedCell(after, '01');
+    assert.strictEqual(
+      completedCell,
+      '2026-01-01',
+      `#1161 (a) FAILED: repeat phase complete on 4-col table overwrote the existing date.\n` +
+      `Expected '2026-01-01', got '${completedCell}'.\n` +
+      `Pinned clock was '${PINNED_DATE_1161}' — if that appears the date was overwritten.\n\n` +
+      `ROADMAP after:\n${after}`,
+    );
+  });
+
+  // ── (b) 5-col: already Complete with a date — repeat phase complete must NOT overwrite ──
+
+  test('#1161 (b): 5-col ROADMAP — repeat `phase complete 1` preserves existing Completed date', () => {
+    // Arrange: 5-col table row is already Complete with '2026-01-01'.
+    tmpDir = create5ColFixture('2026-01-01', true);
+    const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+
+    // Act: run `phase complete 1` via the real CLI handler, clock pinned to PINNED_DATE.
+    const result = runGsdTools('phase complete 1', tmpDir, PINNED_CLOCK_ENV);
+    assert.ok(result.success, `phase complete failed: ${result.error || result.output}`);
+
+    // Assert: Completed cell must still be '2026-01-01', NOT the pinned '2021-03-22'.
+    const after = fs.readFileSync(roadmapPath, 'utf8');
+    const completedCell5 = extractCompletedCell(after, '01');
+    assert.strictEqual(
+      completedCell5,
+      '2026-01-01',
+      `#1161 (b) FAILED: repeat phase complete on 5-col table overwrote the existing date.\n` +
+      `Expected '2026-01-01', got '${completedCell5}'.\n` +
+      `Pinned clock was '${PINNED_DATE_1161}' — if that appears the date was overwritten.\n\n` +
+      `ROADMAP after:\n${after}`,
+    );
+  });
+
+  // ── (c) First-time completion (placeholder '-') must stamp the pinned date ──
+
+  test('#1161 (c): 4-col ROADMAP — first `phase complete 1` (placeholder date) stamps pinned date', () => {
+    // Arrange: Row has '-' as Completed cell and is Not started (never completed).
+    tmpDir = create4ColFixture('-', false);
+    const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+
+    // Act: first-time phase complete.
+    const result = runGsdTools('phase complete 1', tmpDir, PINNED_CLOCK_ENV);
+    assert.ok(result.success, `phase complete failed: ${result.error || result.output}`);
+
+    // Assert: Completed cell is now the pinned date.
+    const after = fs.readFileSync(roadmapPath, 'utf8');
+    const completedCell = extractCompletedCell(after, '01');
+    assert.strictEqual(
+      completedCell,
+      PINNED_DATE_1161,
+      `#1161 (c) FAILED: first-time completion should stamp '${PINNED_DATE_1161}', got '${completedCell}'.\n\n` +
+      `ROADMAP after:\n${after}`,
+    );
+  });
+
+  // ── (d) Whitespace-only Completed cell is treated as empty and gets stamped ──
+
+  test('#1161 (d): 4-col ROADMAP — whitespace-only Completed cell treated as empty, gets stamped', () => {
+    // Arrange: Row has '   ' (spaces) as Completed cell.
+    tmpDir = create4ColFixture('   ', false);
+    const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+
+    // Act: first-time phase complete.
+    const result = runGsdTools('phase complete 1', tmpDir, PINNED_CLOCK_ENV);
+    assert.ok(result.success, `phase complete failed: ${result.error || result.output}`);
+
+    // Assert: Completed cell is now the pinned date (whitespace was treated as empty).
+    const after = fs.readFileSync(roadmapPath, 'utf8');
+    const completedCell = extractCompletedCell(after, '01');
+    assert.strictEqual(
+      completedCell,
+      PINNED_DATE_1161,
+      `#1161 (d) FAILED: whitespace-only Completed cell should be stamped '${PINNED_DATE_1161}', got '${completedCell}'.\n\n` +
+      `ROADMAP after:\n${after}`,
+    );
+  });
+
+  // ── (e) Non-date garbage in Completed cell is self-healed and gets re-stamped ──
+
+  test('#1161 (e): 5-col ROADMAP — non-date garbage Completed cell is self-healed and re-stamped', () => {
+    // Arrange: 5-col row is already Complete but the Completed cell contains 'TBD'
+    // (a non-date garbage value that the old guard would have preserved).
+    tmpDir = create5ColFixture('TBD', true);
+    const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+
+    // Act: run `phase complete 1` via the real CLI handler, clock pinned to PINNED_DATE.
+    const result = runGsdTools('phase complete 1', tmpDir, PINNED_CLOCK_ENV);
+    assert.ok(result.success, `phase complete failed: ${result.error || result.output}`);
+
+    // Assert: garbage 'TBD' must be replaced with the pinned date (self-heal).
+    // Pre-Fix 2: the old guard (existingDate && existingDate !== '-') would preserve 'TBD'.
+    // Post-Fix 2: the date-shape guard (/^\d{4}-\d{2}-\d{2}$/) rejects 'TBD' → re-stamps.
+    const after = fs.readFileSync(roadmapPath, 'utf8');
+    const completedCell = extractCompletedCell(after, '01');
+    assert.strictEqual(
+      completedCell,
+      PINNED_DATE_1161,
+      `#1161 (e) FAILED: non-date garbage 'TBD' in Completed cell should be self-healed to '${PINNED_DATE_1161}', got '${completedCell}'.\n` +
+      `Old guard (non-empty && !== '-') would preserve 'TBD'. New guard must require a date shape.\n\n` +
+      `ROADMAP after:\n${after}`,
     );
   });
 });
