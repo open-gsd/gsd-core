@@ -63,13 +63,20 @@ const TARGET_MUTATION_SCORE = 80;
 //
 // minScore is the CI break threshold for this module's shard.
 // Floors are measured scores minus 1–2 pts for run-to-run variance.
-// Measured 2026-06-13 (issue #1187):
-//   context-utilization   79.5% → floor 79
-//   prompt-budget         99.6% → floor 90   (conservative; high score is robust)
-//   frontmatter           63.5% → floor 62
-//   adr-parser            69.5% → floor 68
-//   config-schema         69.7% → floor 68
-//   active-workstream-store 81.9% → floor 80
+// Measured CI scores 2026-06-14 (issue #1187, timeout-free — source of truth):
+//   context-utilization     92.31% → floor 80  (target already met)
+//   prompt-budget           68.33% → floor 66  (local was 99.6% — TIMEOUT INFLATION; CI is the truth)
+//   frontmatter             63.35% → floor 62
+//   adr-parser              69.30% → floor 68
+//   config-schema           54.55% → floor 52  (local was 69.7% — TIMEOUT INFLATION; CI is the truth)
+//   active-workstream-store 81.91% → floor 80
+//   core-utils              77.52% → floor 75
+//
+// LESSON: floors MUST be calibrated from CI mutation runs (CI runs with
+// timeout≈0, deterministic). Local runs count timeouts as kills and
+// inflate scores significantly (prompt-budget: 99.6% local vs 68.3% CI;
+// config-schema: 69.7% local vs 54.55% CI). Never set a floor from a
+// local run without CI cross-check.
 const COVERED = {
   'context-utilization': {
     cjs: 'gsd-core/bin/lib/context-utilization.cjs',
@@ -87,7 +94,9 @@ const COVERED = {
       'tests/prompt-budget.property.test.cjs',
       'tests/prompt-budget.unit.test.cjs',
     ],
-    minScore: 90,
+    // CI 68.33% timeout-free (164 killed / 1 timeout / 240 total) 2026-06-14;
+    // local was 99.6% — timeout inflation. Floor = 68 - 2 margin.
+    minScore: 66,
   },
   frontmatter: {
     cjs: 'gsd-core/bin/lib/frontmatter.cjs',
@@ -111,7 +120,9 @@ const COVERED = {
     tests: [
       'tests/config-schema.property.test.cjs',
     ],
-    minScore: 68,
+    // CI 54.55% timeout-free (18 killed / 0 timeout / 33 total) 2026-06-14;
+    // local was 69.7% — timeout inflation. Floor = 54 - 2 margin.
+    minScore: 52,
   },
   'active-workstream-store': {
     cjs: 'gsd-core/bin/lib/active-workstream-store.cjs',
