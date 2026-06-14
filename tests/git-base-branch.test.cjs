@@ -202,6 +202,39 @@ describe('#1146: git.base-branch resolver', () => {
       `Expected 'main' as last resort default, got: '${branch}'`);
   });
 
+  test('A2. config override with flat base_branch key (legacy form) → returned immediately', (t) => {
+    const dir = createGitRepo({ prefix: 'gsd-1146-a2-', defaultBranch: 'master' });
+    t.after(() => cleanup(dir));
+    addPlanning(dir);
+    // Write flat base_branch directly to config root (legacy form, not nested under "git")
+    const cfgPath = require('node:path').join(dir, '.planning', 'config.json');
+    require('node:fs').writeFileSync(cfgPath, JSON.stringify({ base_branch: 'release' }, null, 2) + '\n');
+
+    const result = runGsdTools(['query', 'git.base-branch'], dir);
+    assert.ok(result.success, `git.base-branch with flat config key failed:\n${result.error}`);
+    const branch = result.output.trim();
+    assert.strictEqual(branch, 'release',
+      `Expected flat config override 'release', got: '${branch}'`);
+  });
+
+  test('H. No remote, both "main" and "master" local branches exist → returns "main" (main wins tie-break)', (t) => {
+    // Tier-4 tie-break: when both main and master exist locally and no remote info is available,
+    // "main" wins (documented in tryLocalBranch JSDoc — modern default).
+    const dir = createGitRepo({ prefix: 'gsd-1146-h-', defaultBranch: 'master' });
+    t.after(() => cleanup(dir));
+    addPlanning(dir);
+    // Create a "main" branch alongside the existing "master"
+    const { execSync: exec } = require('node:child_process');
+    exec('git branch main', { cwd: dir, stdio: 'pipe' });
+    // No remote configured — falls to tier-4 (local branch existence)
+
+    const result = runGsdTools(['query', 'git.base-branch'], dir);
+    assert.ok(result.success, `git.base-branch both-branches test failed:\n${result.error}`);
+    const branch = result.output.trim();
+    assert.strictEqual(branch, 'main',
+      `Expected 'main' to win when both main and master exist locally, got: '${branch}'`);
+  });
+
   test('G. Anti-regression: all five affected workflows use gsd_run query git.base-branch, not bare :-main / :-master', () => {
     // The root-cause pattern: DEFAULT_BRANCH=${DEFAULT_BRANCH:-main} or BASE_BRANCH="${BASE_BRANCH:-main}"
     // After fix: workflows call gsd_run query git.base-branch and remove the bare fallback.
