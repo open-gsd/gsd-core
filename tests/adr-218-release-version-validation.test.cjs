@@ -254,12 +254,21 @@ describe('ADR-218 — leading-zero rejection regex (behavioral)', () => {
     // Patch = 0 must be rejected (that is the minor/major form)
     assert.equal(re.test('1.2.0'), false, 'Hotfix pattern must not match X.Y.0 (Z must be >0)');
 
-    // NOTE: The hotfix regex in release.yml currently permits leading zeros on
-    // the major and minor segments (e.g. `1.01.3` and `01.2.3` both pass).
-    // This is a known gap tracked in issue #1186.  The assertions below are
-    // intentionally absent for those cases: this test documents CURRENT
-    // behavior, not ideal behavior.  Fix #1186 will harden the pattern and
-    // add leading-zero rejection assertions here.
+    // ADR-218 / #1186: hotfix pattern must also reject leading zeros on major
+    // and minor segments.  The old `[0-9]+` form allowed e.g. `01.2.3` and
+    // `1.02.3`.  The corrected pattern uses `(0|[1-9][0-9]*)` for both.
+    const shouldRejectLeadingZero = [
+      '01.2.3',   // leading zero in major
+      '1.02.3',   // leading zero in minor
+    ];
+    for (const v of shouldRejectLeadingZero) {
+      assert.equal(
+        re.test(v), false,
+        `Hotfix version "${v}" should be REJECTED (leading zero) but was accepted.\n` +
+        `Pattern: ${hotfixPatterns[0]}\n` +
+        `ADR-218 / #1186: restore (0|[1-9][0-9]*) on major and minor segments.`
+      );
+    }
   });
 
   test('extracted patterns use strict leading-zero guard, not the old [0-9]+ form', () => {
