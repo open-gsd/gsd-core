@@ -124,6 +124,454 @@ describe('acquireStateLock clock seam', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 1b. Regression #1217 — acquireStateLock ENOENT (recoverable errno) busy-spin
+//
+// Prior to the fix the recoverable-errno branch (`continue`) never called
+// clock.sleep() or checked the budget, so a permanently-failing ENOENT from
+// a deleted parent dir spun at 100% CPU forever.  With the fix every retry
+// path must (a) advance the clock via sleep() and (b) throw when the 30 000 ms
+// budget is exhausted.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('acquireStateLock recoverable errno budget + backoff (#1217)', () => {
+  let tmpDir;
+  let statePath;
+  let origOpenSync;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-clock-1217-'));
+    fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+    statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    fs.writeFileSync(statePath, '# State\n');
+    origOpenSync = fs.openSync;
+  });
+
+  afterEach(() => {
+    // Restore openSync if a test patched it
+    fs.openSync = origOpenSync;
+    try { fs.unlinkSync(statePath + '.lock'); } catch { /* ok */ }
+    cleanup(tmpDir);
+  });
+
+  test('persistent ENOENT throws budget-exceeded error (not busy-spin) — clock must advance via sleep', () => {
+    // Arrange: always-ENOENT openSync (parent dir permanently gone scenario)
+    const enoentErr = Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' });
+    fs.openSync = () => { throw enoentErr; };
+
+    const clock = makeFakeClock(0);
+
+    // Act + Assert: must throw (not hang) with budget-exceeded message
+    assert.throws(
+      () => acquireStateLock(statePath, clock),
+      /acquireStateLock.*exceeded.*30000ms budget/,
+      'must throw budget-exceeded error when ENOENT persists beyond maxWaitMs'
+    );
+
+    // The clock must have advanced by at least maxWaitMs (30 000 ms).
+    // Before the fix: no sleep() ever called → nowValue stays at 0 → spins forever.
+    // After the fix: every retry sleeps → nowValue ≥ 30 000 ms → budget throws.
+    assert.ok(
+      clock.nowValue >= 30000,
+      `clock must have advanced ≥ 30 000 ms via sleep() calls (got ${clock.nowValue}ms); a value of 0 means the errno branch never slept (busy-spin)`
+    );
+
+    // At least one sleep call must have been recorded
+    assert.ok(
+      clock.sleepCalls.length >= 1,
+      `sleep must be called at least once on recoverable errno retry (got ${clock.sleepCalls.length} calls)`
+    );
+  });
+
+  test('transient ENOENT (a few retries then success) acquires lock normally', () => {
+    // Arrange: fail twice with ENOENT, then succeed
+    const enoentErr = Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' });
+    let callCount = 0;
+    fs.openSync = (...args) => {
+      callCount++;
+      if (callCount <= 2) throw enoentErr;
+      // Restore and delegate to real openSync for the successful attempt
+      fs.openSync = origOpenSync;
+      return origOpenSync.apply(fs, args);
+    };
+
+    const clock = makeFakeClock(0);
+
+    // Act: should succeed (not throw) because ENOENT was transient
+    const lockPath = acquireStateLock(statePath, clock);
+
+    // Assert: lock file exists
+    assert.ok(fs.existsSync(lockPath), 'lock must be acquired after transient ENOENT retries');
+    // 2 retries → at least 2 sleep calls
+    assert.ok(clock.sleepCalls.length >= 2, `expected ≥2 sleep calls for 2 ENOENT retries, got ${clock.sleepCalls.length}`);
+
+    releaseStateLock(lockPath);
+    assert.ok(!fs.existsSync(lockPath), 'lock must be released after releaseStateLock');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 1c. Boundary coverage + backoff-range for the recoverable-errno retry path
+//
+// RULESET.TESTS.boundary-coverage: inputs at limit-1, limit, and limit+1
+// for the 30 000 ms maxWaitMs budget.
+//
+// Each sleep advances the clock by retryDelay (200 ms) + exactly 0 jitter
+// (achieved via a deterministic-jitter clock wrapper).  We then control how
+// much additional time to add so the budget check lands at the desired point.
+//
+// Scenario A — budget NOT yet exhausted: error clears just before limit
+// Scenario B — budget exactly at limit (>= check): must throw
+// Scenario C — budget over limit: must throw immediately
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('acquireStateLock boundary coverage — recoverable-errno budget (#1217)', () => {
+  let tmpDir;
+  let statePath;
+  let origOpenSync;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-clock-boundary-'));
+    fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+    statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    fs.writeFileSync(statePath, '# State\n');
+    origOpenSync = fs.openSync;
+  });
+
+  afterEach(() => {
+    fs.openSync = origOpenSync;
+    try { fs.unlinkSync(statePath + '.lock'); } catch { /* ok */ }
+    cleanup(tmpDir);
+  });
+
+  /**
+   * Build a fake clock where every sleep() advances time by exactly fixedSleepMs
+   * regardless of the requested delay.  This gives us deterministic elapsed-time
+   * sequences without depending on Math.random() jitter.
+   */
+  function makeFixedSleepClock(startMs, fixedSleepMs) {
+    let _now = startMs;
+    const _sleepCalls = [];
+    return {
+      now() { return _now; },
+      sleep(ms) {
+        // Record the actual ms value requested by the production code (for range checks)
+        // but advance by fixedSleepMs so total elapsed is predictable.
+        _sleepCalls.push(ms);
+        _now += fixedSleepMs;
+      },
+      get sleepCalls() { return _sleepCalls; },
+      get nowValue() { return _now; },
+    };
+  }
+
+  test('backoff-range contract: every sleep call is in [retryDelay, retryDelay + jitterMax) range', () => {
+    // Scenario: persistent ENOENT for 3 retries then succeed.
+    // retryDelay=200, jitter ∈ [0,49] → sleep value must be in [200, 249].
+    const enoentErr = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    let calls = 0;
+    fs.openSync = (...args) => {
+      calls++;
+      if (calls <= 3) throw enoentErr;
+      fs.openSync = origOpenSync;
+      return origOpenSync.apply(fs, args);
+    };
+
+    // Use real makeFakeClock (sleep advances by requested ms, so time moves at 200-249ms per sleep)
+    const clock = makeFakeClock(0);
+    const lockPath = acquireStateLock(statePath, clock);
+    releaseStateLock(lockPath);
+
+    assert.strictEqual(clock.sleepCalls.length, 3, 'must have exactly 3 sleep calls for 3 ENOENT retries');
+    for (let i = 0; i < clock.sleepCalls.length; i++) {
+      const delayMs = clock.sleepCalls[i];
+      assert.ok(
+        delayMs >= 200 && delayMs <= 249,
+        `sleep[${i}] = ${delayMs}ms must be in [200, 249] (retryDelay=200 + jitter 0..49)`
+      );
+    }
+  });
+
+  test('budget just UNDER limit: error clears at 29 999 ms elapsed — lock acquired, no throw', () => {
+    // Arrange: openSync fails with ENOENT for 30 iterations, then succeeds.
+    // Sleeps 1-29 each advance 1000 ms (total 29 000 ms after 29 sleeps).
+    // Sleep 30 advances only 999 ms (total 29 999 ms) — still under the 30 000 ms budget.
+    // openSync succeeds on the 31st attempt BEFORE elapsed reaches 30 000 ms.
+    const enoentErr = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    let calls = 0;
+    const maxFails = 30; // 30 ENOENT failures → 30 sleeps → final elapsed = 29 999 ms
+    fs.openSync = (...args) => {
+      calls++;
+      if (calls <= maxFails) throw enoentErr;
+      fs.openSync = origOpenSync;
+      return origOpenSync.apply(fs, args);
+    };
+
+    // Custom clock: first 29 sleeps advance 1000 ms each; the 30th advances 999 ms.
+    // Total elapsed at success = 29 × 1000 + 1 × 999 = 29 999 ms (< 30 000 ms).
+    let _now = 0;
+    const _sleepCalls = [];
+    const clock = {
+      now() { return _now; },
+      sleep(ms) {
+        _sleepCalls.push(ms);
+        // The 30th sleep advances by 999 ms; all others advance by 1000 ms.
+        _now += _sleepCalls.length === 30 ? 999 : 1000;
+      },
+      get sleepCalls() { return _sleepCalls; },
+      get nowValue() { return _now; },
+    };
+
+    // Should NOT throw — budget not yet exhausted at 29 999 ms
+    const lockPath = acquireStateLock(statePath, clock);
+    assert.ok(fs.existsSync(lockPath), 'lock must be acquired when error clears before budget');
+    releaseStateLock(lockPath);
+    assert.strictEqual(clock.sleepCalls.length, maxFails, `expected ${maxFails} sleep calls`);
+    assert.strictEqual(clock.nowValue, 29999, `elapsed must be exactly 29 999 ms at success (got ${clock.nowValue}ms)`);
+  });
+
+  test('budget AT limit (elapsed === 30 000 ms): must throw budget-exceeded error', () => {
+    // Arrange: openSync always fails — budget is hit exactly at 30 000 ms.
+    // fixedSleepMs=1000, after 30 sleeps elapsed=30000 → >= check fires.
+    const enoentErr = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    fs.openSync = () => { throw enoentErr; };
+
+    const clock = makeFixedSleepClock(0, 1000);
+
+    assert.throws(
+      () => acquireStateLock(statePath, clock),
+      /acquireStateLock.*exceeded.*30000ms budget/,
+      'must throw budget-exceeded when elapsed equals maxWaitMs'
+    );
+    // After 30 sleeps (30 × 1000 = 30 000 ms) the budget fires
+    assert.ok(clock.nowValue >= 30000, `clock must be at or past 30 000 ms (got ${clock.nowValue}ms)`);
+  });
+
+  test('budget OVER limit (elapsed > 30 000 ms): must throw immediately', () => {
+    // Arrange: openSync always fails.
+    // Use a clock that starts already past the budget so the first budget check
+    // on the SECOND iteration fires immediately (after one sleep).
+    const enoentErr = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    fs.openSync = () => { throw enoentErr; };
+
+    // fixedSleepMs=35000 — one sleep puts elapsed at 35000 > 30000
+    const clock = makeFixedSleepClock(0, 35000);
+
+    assert.throws(
+      () => acquireStateLock(statePath, clock),
+      /acquireStateLock.*exceeded.*30000ms budget/,
+      'must throw budget-exceeded when elapsed exceeds maxWaitMs'
+    );
+    // Only one sleep call needed to exceed the budget
+    assert.strictEqual(clock.sleepCalls.length, 1, 'budget must fire after a single over-budget sleep');
+    assert.ok(clock.nowValue > 30000, `clock must be past 30 000 ms (got ${clock.nowValue}ms)`);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 1d. Regression #1217 — statSync and unlinkSync spin paths in stale-lock branch
+//
+// Prior to the fix in this PR, two paths in the EEXIST handler were unbounded:
+//  • persistent fs.statSync failure → catch { continue; } (no sleep, no budget)
+//  • persistent fs.unlinkSync failure → catch swallowed, then continue (no sleep, no budget)
+// Both would spin at 100% CPU forever.  After the fix, both call checkBudgetAndSleep
+// before continuing, so they throw within maxWaitMs.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('acquireStateLock statSync/unlinkSync spin paths bounded (#1217)', () => {
+  let tmpDir;
+  let statePath;
+  let origStatSync;
+  let origUnlinkSync;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-clock-spin-'));
+    fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+    statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    fs.writeFileSync(statePath, '# State\n');
+    origStatSync = fs.statSync;
+    origUnlinkSync = fs.unlinkSync;
+  });
+
+  afterEach(() => {
+    fs.statSync = origStatSync;
+    fs.unlinkSync = origUnlinkSync;
+    try { fs.unlinkSync(statePath + '.lock'); } catch { /* ok */ }
+    cleanup(tmpDir);
+  });
+
+  test('persistent statSync failure throws budget-exceeded (not busy-spin)', () => {
+    // Set up EEXIST condition: pre-create lock file so openSync hits EEXIST
+    const lockPath = statePath + '.lock';
+    fs.writeFileSync(lockPath, '99999'); // non-current PID
+
+    // Make statSync always throw a transient error (e.g. NFS hiccup)
+    const statErr = Object.assign(new Error('EIO: I/O error'), { code: 'EIO' });
+    fs.statSync = (p) => {
+      if (p === lockPath) throw statErr;
+      return origStatSync(p);
+    };
+
+    // Use a fixed-sleep clock so the budget is hit predictably
+    let _now = 0;
+    const sleepCalls = [];
+    const clock = {
+      now() { return _now; },
+      sleep(ms) { sleepCalls.push(ms); _now += 1000; }, // advance 1000ms each sleep
+    };
+
+    assert.throws(
+      () => acquireStateLock(statePath, clock),
+      /acquireStateLock.*exceeded.*30000ms budget/,
+      'persistent statSync failure must throw budget-exceeded, not spin forever'
+    );
+
+    // Must have slept at least once (not a busy-spin)
+    assert.ok(sleepCalls.length >= 1, `sleep must have been called at least once (got ${sleepCalls.length}); zero means busy-spin`);
+    assert.ok(_now >= 30000, `clock must be at or past 30 000 ms after exhausting budget (got ${_now}ms)`);
+
+    // Clean up patched lock
+    fs.unlinkSync = origUnlinkSync;
+    try { origUnlinkSync(lockPath); } catch { /* ok */ }
+  });
+
+  test('persistent unlinkSync failure in stale-lock path throws budget-exceeded (not busy-spin)', () => {
+    // Set up an EEXIST condition with a STALE lock (mtime well in the past)
+    const lockPath = statePath + '.lock';
+    fs.writeFileSync(lockPath, '99999');
+    // Back-date mtime by 15 000 ms so the stale-threshold (10 000 ms) is exceeded
+    const staleMs = 15000;
+    const staledTime = new Date(Date.now() - staleMs);
+    fs.utimesSync(lockPath, staledTime, staledTime);
+
+    // Make unlinkSync always fail (e.g. EPERM — file locked by AV scanner)
+    const unlinkErr = Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+    fs.unlinkSync = (p) => {
+      if (p === lockPath) throw unlinkErr;
+      return origUnlinkSync(p);
+    };
+
+    // Clock where now() returns current real time so the stale check fires,
+    // but sleep advances a fixed 1000ms per call so budget is hit deterministically.
+    const realNow = Date.now();
+    let _elapsed = 0;
+    const sleepCalls = [];
+    const clock = {
+      // Return a time far past the stale threshold so the stale branch is taken
+      now() { return realNow + _elapsed; },
+      sleep(ms) { sleepCalls.push(ms); _elapsed += 1000; },
+    };
+
+    assert.throws(
+      () => acquireStateLock(statePath, clock),
+      /acquireStateLock.*exceeded.*30000ms budget/,
+      'persistent unlinkSync failure in stale-lock path must throw budget-exceeded, not spin forever'
+    );
+
+    assert.ok(sleepCalls.length >= 1, `sleep must have been called at least once (got ${sleepCalls.length}); zero means busy-spin`);
+    assert.ok(_elapsed >= 30000, `elapsed must reach 30 000 ms budget (got ${_elapsed}ms)`);
+
+    // Restore unlinkSync for cleanup
+    fs.unlinkSync = origUnlinkSync;
+    try { origUnlinkSync(lockPath); } catch { /* ok */ }
+  });
+
+  test('persistent unlinkSync failure error message names stale-lock-removal cause, not statSync (#1217 diagnostic)', () => {
+    // Regression guard for the misleading-error-context bug: when unlinkSync
+    // fails on the stale-lock path and checkBudgetAndSleep throws at the budget
+    // boundary, the outer statSync catch must NOT re-wrap it with
+    // "statSync failed after EEXIST".  The thrown error must contain the original
+    // context "stale lock removal failed" so operators can identify the real cause.
+    const lockPath = statePath + '.lock';
+    fs.writeFileSync(lockPath, '99999');
+    const staleMs = 15000;
+    const staledTime = new Date(Date.now() - staleMs);
+    fs.utimesSync(lockPath, staledTime, staledTime);
+
+    // unlinkSync always fails — the budget will be exhausted on the first sleep.
+    const unlinkErr = Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+    fs.unlinkSync = (p) => {
+      if (p === lockPath) throw unlinkErr;
+      return origUnlinkSync(p);
+    };
+
+    const realNow = Date.now();
+    let _elapsed = 0;
+    const clock = {
+      now() { return realNow + _elapsed; },
+      sleep(_ms) { _elapsed += 35000; }, // jump past the 30 000 ms budget on first sleep
+    };
+
+    let thrownErr;
+    try {
+      acquireStateLock(statePath, clock);
+    } catch (e) {
+      thrownErr = e;
+    }
+
+    assert.ok(thrownErr, 'must throw when unlinkSync persistently fails and budget is exhausted');
+    assert.ok(
+      /stale lock removal failed/.test(thrownErr.message),
+      `error message must contain "stale lock removal failed" (got: ${thrownErr.message})`
+    );
+    assert.ok(
+      !/statSync failed after EEXIST/.test(thrownErr.message),
+      `error message must NOT contain "statSync failed after EEXIST" (the misleading re-wrap) (got: ${thrownErr.message})`
+    );
+
+    fs.unlinkSync = origUnlinkSync;
+    try { origUnlinkSync(lockPath); } catch { /* ok */ }
+  });
+
+  test('successful stale-lock steal acquires immediately even when budget is already exhausted — no throw (#1217 regression)', () => {
+    // Regression guard: the OLD code called checkBudgetAndSleep() unconditionally
+    // after fs.unlinkSync, so a successful steal when elapsed >= maxWaitMs would
+    // throw budget-exceeded even though the lock was already freed.  The fix lets
+    // a successful steal `continue` immediately without a budget check.
+    //
+    // Arrange: stale lock with mtime well in the past.
+    const lockPath = statePath + '.lock';
+    fs.writeFileSync(lockPath, '99999');
+    const staleMs = 20000;
+    const staledTime = new Date(Date.now() - staleMs);
+    fs.utimesSync(lockPath, staledTime, staledTime);
+
+    // Clock: now() returns a time that is (a) past the stale threshold AND
+    // (b) already >= maxWaitMs ahead of startedAt.  The stale branch fires,
+    // unlinkSync SUCCEEDS (we do NOT patch it), and with the fix the lock is
+    // immediately acquired — budget-exceeded must NOT be thrown.
+    const realNow = Date.now();
+    // startedAt = realNow; clock.now() on first call = realNow (startedAt captured).
+    // After the stale branch unlinks, clock.now() is still realNow → elapsed = 0 < 30000.
+    // To prove the regression, advance the clock so that elapsed is past the budget
+    // at the moment the budget check WOULD have fired (i.e. > 30000 ms ahead of startedAt).
+    // We use a clock where now() starts at 0 (for startedAt) then jumps to 30001 after
+    // the first call, simulating 30001 ms having passed when the stale lock is found.
+    let nowCallCount = 0;
+    const sleepCalls = [];
+    const clock = {
+      now() {
+        nowCallCount++;
+        // First call (captured as startedAt) returns 0.
+        // All subsequent calls return 30001 — so elapsed = 30001 >= 30000.
+        // The stale check: clock.now() - stat.mtimeMs = 30001 - (realNow - staleMs).
+        // We need that to be > staleThresholdMs (10000).  realNow - (realNow-staleMs) = staleMs=20000 > 10000 ✓
+        // But we need the mtime in absolute terms to make the stale check fire.
+        // Use realNow-based absolute clock: startedAt=realNow, elapsed on 2nd call=30001ms.
+        return nowCallCount === 1 ? realNow : realNow + 30001;
+      },
+      sleep(ms) { sleepCalls.push(ms); },
+    };
+
+    // Should NOT throw — successful steal must continue immediately even at elapsed > maxWaitMs.
+    const acquired = acquireStateLock(statePath, clock);
+    assert.ok(fs.existsSync(acquired), 'lock must be acquired after successful stale-lock steal');
+    // No sleep calls: the steal succeeded, so the fast-path `continue` was taken.
+    assert.strictEqual(sleepCalls.length, 0, 'no sleep should occur on a successful stale-lock steal');
+    releaseStateLock(acquired);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 2. readModifyWriteStateMd — lock released on error path
 // ─────────────────────────────────────────────────────────────────────────────
 
