@@ -199,10 +199,13 @@ describe('feat-488: effort sync command', () => {
     fs.mkdirSync(gsdDir, { recursive: true });
     fs.writeFileSync(path.join(gsdDir, 'defaults.json'), JSON.stringify({ effort: { default: 'low' } }));
 
-    // Isolate HOME so readGsdEffectiveEffortConfig reads our fixture, not the
+    // Isolate HOME (and USERPROFILE for Windows parity) so
+    // readGsdEffectiveEffortConfig reads our fixture, not the
     // developer's real ~/.gsd/defaults.json.
     const origHome = process.env.HOME;
+    const origUserProfile = process.env.USERPROFILE;
     process.env.HOME = tmpHome;
+    process.env.USERPROFILE = tmpHome;
 
     const { cmdEffortSync } = require('../gsd-core/bin/lib/commands.cjs');
     let result;
@@ -211,7 +214,16 @@ describe('feat-488: effort sync command', () => {
         cmdEffortSync(tmpDir, false, { dryRun: false, configDir: tmpDir, runtime: 'claude' })
       );
     } finally {
-      process.env.HOME = origHome;
+      if (origHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = origHome;
+      }
+      if (origUserProfile === undefined) {
+        delete process.env.USERPROFILE;
+      } else {
+        process.env.USERPROFILE = origUserProfile;
+      }
     }
 
     // With home effort.default = 'low' and the agent currently at 'medium',
