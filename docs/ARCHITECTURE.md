@@ -290,6 +290,7 @@ Runtime hooks that integrate with the host AI agent:
 | `gsd-statusline.js` | `statusLine` | Displays model, task, directory, and context usage bar |
 | `gsd-context-monitor.js` | `PostToolUse` / `AfterTool` | Injects agent-facing context warnings at 35%/25% remaining |
 | `gsd-check-update.js` | `SessionStart` | Foreground trigger for the background update check |
+| `gsd-ensure-canonical-path.js` | `SessionStart` | For Claude Code plugin installs, symlinks `~/.claude/gsd-core/{bin,contexts,references,templates,workflows}` to the plugin's bundled tree so `@~/.claude/gsd-core/...` includes resolve; runs first in `SessionStart`, no-op in classic installs, self-heals after `claude plugin update` (#997) |
 | `gsd-check-update-worker.js` | (helper) | Background worker spawned by `gsd-check-update.js`; no direct event registration |
 | `gsd-prompt-guard.js` | `PreToolUse` | Scans `.planning/` writes for prompt injection patterns (advisory) |
 | `gsd-read-injection-scanner.js` | `PostToolUse` | Scans Read tool output for injected instructions in untrusted content |
@@ -735,9 +736,14 @@ Runtime Engine (Claude Code / Gemini CLI)
     │   Reads: stdin (tool event JSON), /tmp/claude-ctx-{session}.json (bridge)
     │   Writes: stdout (hookSpecificOutput with additionalContext warning)
     │
-    └── SessionStart event ──► gsd-check-update.js
-        Reads: VERSION file
-        Writes: ~/.claude/cache/gsd-update-check.json (spawns background process)
+    └── SessionStart event
+        ├──► gsd-ensure-canonical-path.js   (runs first)
+        │    Reads:  ${CLAUDE_PLUGIN_ROOT}/gsd-core/ (plugin installs only)
+        │    Writes: ~/.claude/gsd-core/{bin,contexts,references,templates,workflows} symlinks
+        │            (no-op in classic installs; preserves user files; self-heals)
+        └──► gsd-check-update.js
+             Reads:  VERSION file
+             Writes: ~/.claude/cache/gsd-update-check.json (spawns background process)
 ```
 
 ### Context Monitor Thresholds

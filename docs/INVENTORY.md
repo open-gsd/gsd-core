@@ -520,6 +520,7 @@ Full listing: `hooks/`.
 | `gsd-read-injection-scanner.js` | `PostToolUse` | Scans tool Read results for prompt-injection patterns (v1.36+, PR #2201) |
 | `gsd-worktree-path-guard.js` | `PreToolUse` | Hard-blocks Edit/Write/MultiEdit with absolute paths outside the worktree root (PR #579, #260) |
 | `gsd-config-reload.js` | `FileChanged` | Hot-reloads GSD config context when `.planning/config.json` changes mid-session (#770) |
+| `gsd-ensure-canonical-path.js` | `SessionStart` | Symlinks `~/.claude/gsd-core/{bin,contexts,references,templates,workflows}` to the plugin's bundled tree so `@~/.claude/gsd-core/...` includes resolve in marketplace plugin installs; no-op in classic installs, self-heals after `claude plugin update` (#997) |
 | `gsd-session-state.sh` | `PostToolUse` | Session-state tracking for shell-based runtimes |
 | `gsd-validate-commit.sh` | `PostToolUse` | Commit validation for conventional-commit enforcement |
 | `gsd-phase-boundary.sh` | `PostToolUse` | Phase-boundary detection for workflow transitions |
