@@ -290,6 +290,15 @@ export interface Prohibition {
   resolution: string | null;
   reason: string | null;
   statement: string;
+  // Optional flat-scalar wired-check descriptor (#1278). A resolved test-tier prohibition may carry
+  // these before projection; `projectProhibitions` emits them as the LOCKED flat scalar keys
+  // `check_kind`/`check_target`/`check_rule` that round-trip the EXISTING flat `parseMustHavesBlock`
+  // (a nested `check:{}` object is rejected per IMPL-SCOPING §3 — it flattens through the shared
+  // parser). These mirror `CheckDescriptor.kind/target/rule` (prohibition-enforcement.cts:62) MINUS
+  // the caller-attested `failFirst`, which is deliberately NOT a Prohibition field (#1279).
+  check_kind?: 'node-test' | 'lint-rule';
+  check_target?: string;
+  check_rule?: string;
 }
 
 /**
