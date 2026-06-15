@@ -14,7 +14,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import core = require('./core.cjs');
-const { output, loadConfig, resolveModelInternal, pathExistsInternal, toPosixPath, checkAgentsInstalled } = core;
+const { output, loadConfig, resolveModelInternal, pathExistsInternal, toPosixPath } = core;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import agentInstallCheck = require('./agent-install-check.cjs');
+const { checkAgentsInstalled } = agentInstallCheck;
 import { platformReadSync } from './shell-command-projection.cjs';
 
 // ─── Constants ────────────────────────────────────────────────────────────────

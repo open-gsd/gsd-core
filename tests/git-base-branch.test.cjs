@@ -260,21 +260,12 @@ describe('#1146: git.base-branch resolver', () => {
   });
 });
 
-// ─── gitWorktreeInfoInternal: relocation identity + behaviour (#1268 T0) ─────
+// ─── gitWorktreeInfoInternal: behaviour (#1268 T0, T1 #1277) ─────────────────
 
 const gitBaseBranch = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'git-base-branch.cjs'));
-const core = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'core.cjs'));
 const { createTempGitProject, createTempDir } = require('./helpers.cjs');
 
 describe('#1268 gitWorktreeInfoInternal: relocation to git-base-branch', () => {
-  test('core.gitWorktreeInfoInternal === gitBaseBranch.gitWorktreeInfoInternal (by reference)', () => {
-    assert.strictEqual(
-      core.gitWorktreeInfoInternal,
-      gitBaseBranch.gitWorktreeInfoInternal,
-      'core.gitWorktreeInfoInternal must be the same function reference as gitBaseBranch.gitWorktreeInfoInternal'
-    );
-  });
-
   test('gitWorktreeInfoInternal(createTempGitProject()) returns {inside:true, worktreeRoot:<non-empty string>}', (t) => {
     const dir = createTempGitProject('gsd-wt-info-');
     t.after(() => cleanup(dir));

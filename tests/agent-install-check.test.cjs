@@ -1,15 +1,14 @@
 'use strict';
 
 /**
- * Agent Install Check Module — relocation tests (#1268 T0)
+ * Agent Install Check Module — behaviour tests (#1268 T0, T1 #1277)
  *
  * Seam: gsd-core/bin/lib/agent-install-check.cjs
  * Interface: getAgentsDir, checkAgentsInstalled
  *
  * Verifies:
- *   1. Object identity — core re-exports by reference (not re-wrapped)
- *   2. getAgentsDir behaviour: GSD_AGENTS_DIR override, claude path, non-claude path
- *   3. checkAgentsInstalled behaviour against temp dirs via GSD_AGENTS_DIR:
+ *   1. getAgentsDir behaviour: GSD_AGENTS_DIR override, claude path, non-claude path
+ *   2. checkAgentsInstalled behaviour against temp dirs via GSD_AGENTS_DIR:
  *      - missing dir → agents_installed:false, missing_agents = all expected
  *      - existing-but-empty dir → installed_agents:[], agents_installed:false
  *      - no manifest → completeness skipped (incomplete_agents empty)
@@ -26,15 +25,11 @@ const { createTempDir, cleanup } = require('./helpers.cjs');
 const AGENT_INSTALL_CHECK_PATH = path.join(
   __dirname, '..', 'gsd-core', 'bin', 'lib', 'agent-install-check.cjs'
 );
-const CORE_PATH = path.join(
-  __dirname, '..', 'gsd-core', 'bin', 'lib', 'core.cjs'
-);
 const RUNTIME_HOMES_PATH = path.join(
   __dirname, '..', 'gsd-core', 'bin', 'lib', 'runtime-homes.cjs'
 );
 
 const agentInstallCheck = require(AGENT_INSTALL_CHECK_PATH);
-const core = require(CORE_PATH);
 const { getGlobalConfigDir } = require(RUNTIME_HOMES_PATH);
 
 // Get EXPECTED_AGENTS from model-profiles (same source of truth)
@@ -66,27 +61,7 @@ afterEach(() => {
   }
 });
 
-// ─── 1. Object identity ───────────────────────────────────────────────────────
-
-describe('agent-install-check: object identity with core re-exports', () => {
-  test('core.getAgentsDir === agentInstallCheck.getAgentsDir (by reference)', () => {
-    assert.strictEqual(
-      core.getAgentsDir,
-      agentInstallCheck.getAgentsDir,
-      'core.getAgentsDir must be the same function reference as agentInstallCheck.getAgentsDir'
-    );
-  });
-
-  test('core.checkAgentsInstalled === agentInstallCheck.checkAgentsInstalled (by reference)', () => {
-    assert.strictEqual(
-      core.checkAgentsInstalled,
-      agentInstallCheck.checkAgentsInstalled,
-      'core.checkAgentsInstalled must be the same function reference as agentInstallCheck.checkAgentsInstalled'
-    );
-  });
-});
-
-// ─── 2. getAgentsDir behaviour ────────────────────────────────────────────────
+// ─── 1. getAgentsDir behaviour ────────────────────────────────────────────────
 
 describe('getAgentsDir', () => {
   test('GSD_AGENTS_DIR override takes priority', () => {
@@ -96,10 +71,7 @@ describe('getAgentsDir', () => {
   });
 
   test('claude runtime returns __dirname-relative path', () => {
-    // getAgentsDir('claude') from both module and core must agree
     const fromModule = agentInstallCheck.getAgentsDir('claude');
-    const fromCore = core.getAgentsDir('claude');
-    assert.strictEqual(fromModule, fromCore);
     // Should end with /agents
     assert.ok(fromModule.endsWith(path.sep + 'agents') || fromModule.endsWith('/agents'),
       `Expected path to end with /agents, got: ${fromModule}`);
@@ -124,7 +96,7 @@ describe('getAgentsDir', () => {
   });
 });
 
-// ─── 3. checkAgentsInstalled behaviour ───────────────────────────────────────
+// ─── 2. checkAgentsInstalled behaviour ───────────────────────────────────────
 
 describe('checkAgentsInstalled', () => {
   let tmpDir;

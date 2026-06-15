@@ -28,6 +28,9 @@ import { PACKAGE_NAME } from './package-identity.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { detectSchemaFiles, checkSchemaDrift } from './schema-detect.cjs';
 import { isCanonicalPlanningFile } from './artifacts.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- agent-install-check.cjs is an export= CommonJS module
+import agentInstallCheck = require('./agent-install-check.cjs');
+const { checkAgentsInstalled } = agentInstallCheck;
 
 const {
   loadConfig,
@@ -40,7 +43,6 @@ const {
   extractCurrentMilestone,
   output,
   error,
-  checkAgentsInstalled,
   CONFIG_DEFAULTS,
   inspectWorktreeHealth,
 } = core;

@@ -25,6 +25,12 @@ import { validatePath, loadTrustedGlobalRoots } from './security.cjs';
 import { getGlobalSkillDir, getGlobalSkillDisplayPath, getGlobalSkillsBase } from './runtime-homes.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
 import frontmatterMod = require('./frontmatter.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- agent-install-check.cjs is an export= CommonJS module
+import agentInstallCheck = require('./agent-install-check.cjs');
+const { checkAgentsInstalled } = agentInstallCheck;
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- git-base-branch.cjs is an export= CommonJS module
+import gitBaseBranch = require('./git-base-branch.cjs');
+const { gitWorktreeInfoInternal } = gitBaseBranch;
 
 const {
   loadConfig,
@@ -34,7 +40,6 @@ const {
   findPhaseInternal,
   getRoadmapPhaseInternal,
   pathExistsInternal,
-  gitWorktreeInfoInternal,
   generateSlugInternal,
   getMilestoneInfo,
   getMilestonePhaseFilter,
@@ -44,7 +49,6 @@ const {
   toPosixPath,
   output,
   error,
-  checkAgentsInstalled,
   phaseTokenMatches,
 } = core;
 

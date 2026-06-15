@@ -51,10 +51,6 @@ const {
 import phaseLocatorModule = require('./phase-locator.cjs');
 const { searchPhaseInDir, findPhaseInternal, getArchivedPhaseDirs } = phaseLocatorModule;
 import { findProjectRoot } from './project-root.cjs';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-import agentInstallCheck = require('./agent-install-check.cjs');
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-import gitBaseBranch = require('./git-base-branch.cjs');
 
 // ─── Config Loader Module (extracted from core, ADR-857 phase 2e / #885) ─────
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -123,8 +119,7 @@ const {
 
 // ─── Agent installation validation (#1371) ───────────────────────────────────
 // getAgentsDir and checkAgentsInstalled moved to agent-install-check.cjs (T0 #1268).
-// The destructured bindings above (from agentInstallCheck) make them available to
-// core-internal callers; core.cjs re-exports both symbols by reference for back-compat.
+// Re-exports removed in T1 (#1277); callers import directly from agent-install-check.cjs.
 
 // ─── Model alias resolution ───────────────────────────────────────────────────
 // RUNTIME_OVERRIDE_TIERS, _warnedConfigKeys, _warnUnknownProfileOverrides, and
@@ -192,7 +187,6 @@ export = {
   resolveModelPolicy,
   KNOWN_PROVIDERS,
   pathExistsInternal,
-  gitWorktreeInfoInternal: gitBaseBranch.gitWorktreeInfoInternal,
   generateSlugInternal,
   getMilestoneInfo,
   getMilestonePhaseFilter,
@@ -219,8 +213,6 @@ export = {
   filterSummaryFiles,
   getPhaseFileStats,
   readSubdirectories,
-  getAgentsDir: agentInstallCheck.getAgentsDir,
-  checkAgentsInstalled: agentInstallCheck.checkAgentsInstalled,
   timeAgo,
   pruneOrphanedWorktrees: worktreeSafety.pruneOrphanedWorktrees,
   inspectWorktreeHealth,
