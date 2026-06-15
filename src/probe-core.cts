@@ -262,6 +262,179 @@ export function analyzeCoverage<V extends string>(
   return { items: merged, coverage: { applicable, resolved, unresolved, byVerification } };
 }
 
+/* ------------------------------------------------------------------------- *
+ * Prohibition adapter surface (#644 — the SECOND probe-core adapter).
+ *
+ * Unlike the edge adapter, the prohibition probe has NO deterministic propose stage: recall
+ * is an LLM prose pass (ADR-550 Decision 7b), so there is intentionally no `proposeProhibitions`
+ * here. What IS deterministic — and therefore real code that belongs in core — is (1) the
+ * injected verification validators (`test | judgment`) and (2) `projectProhibitions`, the
+ * SPEC<->`must_haves.prohibitions:` projection the DEFECT.GENERATIVE-FIX parity assertion
+ * round-trips as a FUNCTION rather than a prompt (ADR-550 Decision 5c).
+ * ------------------------------------------------------------------------- */
+
+/** The prohibition probe's verification tiers (the `verification` axis values for a resolved item). */
+export type ProhibitionVerification = 'test' | 'judgment';
+
+/**
+ * A surfaced prohibition item. Structurally a probe-core `Item` specialized to the prohibition
+ * verification vocabulary, but the load-bearing payload field is `statement` (the must-NOT
+ * sentence) rather than the edge adapter's `probe` question. Both fields are optional on the
+ * shared shape so a single `Item` type serves both adapters.
+ */
+export interface Prohibition {
+  requirement_id: string;
+  category: string;
+  status: Status;
+  verification: ProhibitionVerification | null;
+  resolution: string | null;
+  reason: string | null;
+  statement: string;
+}
+
+/**
+ * The prohibition adapter's injected runtime validators (ADR-550 #5). There is no closed
+ * category taxonomy (recall is open-vocabulary values/safety/ethics prose), so `categories`
+ * is intentionally empty — `analyzeCoverage` is not the prohibition entry point and the
+ * round-trip schema layer does not gate on category. The verification tiers are
+ * `test | judgment` (ADR-550 D7a); both require only a present `resolution`/`reason` per their
+ * lifecycle (a resolved prohibition's checkable content is the `statement`, validated by the
+ * schema layer, not a `resolution` string), so `requiredFieldsByVerification` is the minimal
+ * fail-closed set: a dismissed item still needs its reason (enforced by `validateResolution`).
+ */
+export const PROHIBITION_VALIDATORS: Validators = {
+  categories: [],
+  verification: ['test', 'judgment'],
+  // A resolved prohibition's checkable content is the `statement` (schema-layer validated), NOT a
+  // `resolution` string — the canonical fixtures and the reference doc's worked examples all carry
+  // `resolution: null`. So the per-tier required set is empty: `resolved` still requires a present
+  // verification tier (enforced in validateResolution) and `dismissed` still requires a reason
+  // (enforced unconditionally), but neither tier requires a `resolution`. This matches the corpus
+  // the docs-fixtures parity test pins; the validators.test.cjs regression keeps them aligned.
+  requiredFieldsByVerification: { test: [], judgment: [] },
+};
+
+/** Validate a prohibition resolution against the prohibition verification vocabulary. */
+export function validateProhibitionResolution(resolution: Resolution<ProhibitionVerification>): true {
+  return validateResolution(resolution, PROHIBITION_VALIDATORS);
+}
+
+/**
+ * Deterministically project resolved prohibition items into the `must_haves.prohibitions:`
+ * list shape (the SPEC<->plan projection; ADR-550 Decision 5c). This is a FUNCTION the parity
+ * assertion round-trips, never a prompt: the same input always yields the same output, and the
+ * output is the exact re-readable block shape `parseMustHavesBlock(content, 'prohibitions')`
+ * returns — `{ statement, status, verification }` plus `reason` only when present (a dismissed
+ * item's audit trail). `resolution`/`requirement_id`/`category` are recall-stage bookkeeping
+ * and are intentionally NOT projected into the plan block (which is keyed on the must-NOT
+ * statement, not the source requirement). A non-array input projects to `[]` (fail-soft on the
+ * empty/zero-prohibition case), never a throw.
+ */
+export function projectProhibitions(
+  items: unknown,
+): Array<Record<string, string>> {
+  if (!Array.isArray(items)) return [];
+  const out: Array<Record<string, string>> = [];
+  for (const item of items) {
+    if (item == null || typeof item !== 'object') continue;
+    const p = item as Partial<Prohibition>;
+    const statement = typeof p.statement === 'string' ? p.statement : '';
+    const entry: Record<string, string> = {
+      statement,
+      status: typeof p.status === 'string' ? p.status : 'unresolved',
+    };
+    if (p.verification != null) entry.verification = String(p.verification);
+    if (p.reason != null && String(p.reason).trim()) entry.reason = String(p.reason);
+    out.push(entry);
+  }
+  return out;
+}
+
+/**
+ * The structured verify-time disposition of a single prohibition (ADR-550 Decision 5d, the
+ * "B-with-guard" safety half — maintainer decision 2026-06-12). `status` is the verdict the
+ * verifier reads; `flagged` marks an item that must surface in SUMMARY/verdict rather than pass
+ * silently. `tier` echoes the verification axis so the caller can route. `reason` is human-readable.
+ */
+export interface ProhibitionDisposition {
+  status: 'green' | 'unverified';
+  flagged: boolean;
+  tier: ProhibitionVerification | null;
+  reason: string;
+}
+
+/** Optional enforcement context handed to `dispositionForProhibition`. */
+export interface ProhibitionDispositionContext {
+  /** Evidence that a resolved prohibition is actually enforced (e.g. a wired negative test). */
+  enforcementEvidence?: unknown[];
+}
+
+/**
+ * Deterministic verify-time disposition for a single prohibition — the FAIL-CLOSED default
+ * (ADR-550 Decision 5d, the safety half of the 2026-06-12 "B-with-guard" maintainer decision).
+ *
+ * This is the cheap safety guarantee: a well-formed prohibition that reaches verify-phase with NO
+ * wired enforcement evidence can NEVER be a silent pass. It is `{ status: 'unverified', flagged:
+ * true }` — never `green` — exactly like an unresolved judgment item. The HEAVY half (a real
+ * fail-first negative-test enforcement mechanism that, given evidence, would flip a test-tier item
+ * to green) is OUT of #644 scope and defers to a follow-up PR: #644's corpus is entirely
+ * judgment-tier, so wiring a contrived test-tier consumer here would be the delete-bad-tests /
+ * gold-plating failure mode. Until that follow-up lands, ANY prohibition without enforcement
+ * evidence — test- or judgment-tier — disposes as flagged-unverified.
+ *
+ * The function is pure: same input always yields the same disposition (no LLM judgment, ADR-550
+ * D5). The LLM-judge soft-gate for judgment-tier items is a verify-phase PROSE concern (the
+ * verifier records a non-authoritative verdict + the unverified-prohibition flag); this helper
+ * only owns the deterministic fail-closed default that the plan-01-01 CI safety assertion pins.
+ */
+export function dispositionForProhibition(
+  prohibition: unknown,
+  context: ProhibitionDispositionContext = {},
+): ProhibitionDisposition {
+  const p = (prohibition ?? {}) as Partial<Prohibition>;
+  const tier: ProhibitionVerification | null =
+    p.verification === 'test' || p.verification === 'judgment' ? p.verification : null;
+  const evidence = Array.isArray(context.enforcementEvidence) ? context.enforcementEvidence : [];
+  const hasEnforcement = evidence.length > 0;
+
+  // FAIL CLOSED: no wired enforcement evidence -> flagged unverified, never green. This holds for
+  // every tier today (the real enforcement mechanism that could flip a test-tier item to green is
+  // deferred to a follow-up PR). The guard the safety assertion proves: an unwired item can never
+  // be silently skipped.
+  if (!hasEnforcement) {
+    return {
+      status: 'unverified',
+      flagged: true,
+      tier,
+      reason:
+        tier === 'test'
+          ? 'test-tier prohibition has no wired enforcement evidence — flagged unverified (fail-closed; real negative-test enforcement deferred to a follow-up PR, ADR-550 D5d)'
+          : 'prohibition has no enforcement evidence — flagged unverified (fail-closed; never a silent pass, ADR-550 D5d)',
+    };
+  }
+
+  // D4 GUARD: a judgment-tier (or unknown-tier) prohibition is NEVER a silent green from this
+  // deterministic helper — it always routes to human/LLM judgment review (ADR-550 D4; verify-phase.md).
+  // Only a test-tier item with wired enforcement evidence may go green, and even that is the deferred
+  // heavy half until the real negative-test enforcement mechanism lands (no #644 caller passes evidence).
+  if (tier === 'test') {
+    return {
+      status: 'green',
+      flagged: false,
+      tier,
+      reason: 'test-tier prohibition has wired enforcement evidence',
+    };
+  }
+
+  return {
+    status: 'unverified',
+    flagged: true,
+    tier,
+    reason:
+      'judgment-tier prohibition routes to judgment review — never a silent green (ADR-550 D4)',
+  };
+}
+
 /*
  * CLI scaffold (the EP-06 invokable surface, generalized). Each probe ships one bin that
  * calls `runProbeCli` with its own `analyze` (closing over the adapter's propose + validators)

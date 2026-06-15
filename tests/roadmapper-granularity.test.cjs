@@ -1,7 +1,7 @@
-// allow-test-rule: source-text-is-the-product
-// agents/gsd-roadmapper.md is the installed agent — the Granularity Calibration
-// table IS the deployed instruction. Asserting on its text asserts what runs in
-// production. Locks the tightened phase-count buckets from #163.
+// allow-test-rule: runtime-contract-is-the-product agent .md instruction surface see #1205
+// agents/gsd-roadmapper.md is the deployed agent — the Granularity Calibration table
+// AND the phase_id_convention instructions ARE the deployed behavior. Asserting on
+// their prose asserts what runs in production (#163, #1205).
 'use strict';
 
 const { describe, test } = require('node:test');
@@ -24,6 +24,17 @@ function granularitySection(content) {
   const rest = content.slice(start + '## Granularity Calibration'.length);
   const nextHeading = rest.indexOf('\n## ');
   return nextHeading === -1 ? rest : rest.slice(0, nextHeading);
+}
+
+// Extract a named XML-tag block (e.g. <phase_identification>…</phase_identification>)
+function extractBlock(content, tag) {
+  const open = `<${tag}>`;
+  const close = `</${tag}>`;
+  const start = content.indexOf(open);
+  const end = content.indexOf(close);
+  assert.ok(start !== -1, `<${tag}> block must exist in agent`);
+  assert.ok(end !== -1, `</${tag}> must close the block`);
+  return content.slice(start + open.length, end);
 }
 
 describe('gsd-roadmapper granularity calibration (#163)', () => {
@@ -53,6 +64,54 @@ describe('gsd-roadmapper granularity calibration (#163)', () => {
     assert.ok(
       section.includes('fold it into the most-related neighbor'),
       'Key guidance must instruct folding thin phases into the most-related neighbor'
+    );
+  });
+});
+
+describe('gsd-roadmapper phase_id_convention support (#1205)', () => {
+  const content = readAgent('gsd-roadmapper');
+
+  test('phase_identification section reads phase_id_convention from config', () => {
+    const section = extractBlock(content, 'phase_identification');
+    assert.ok(
+      section.includes('phase_id_convention'),
+      'phase_identification block must reference phase_id_convention config key'
+    );
+  });
+
+  test('output_formats documents milestone-prefixed header format', () => {
+    const section = extractBlock(content, 'output_formats');
+    assert.ok(
+      section.includes('milestone-prefixed'),
+      'output_formats block must document the milestone-prefixed convention'
+    );
+  });
+
+  test('output_formats shows milestone-prefixed phase header example (e.g. ### Phase 1-01:)', () => {
+    const section = extractBlock(content, 'output_formats');
+    assert.ok(
+      /###\s+Phase\s+\d+-\d{2}:/.test(section),
+      'output_formats must show a milestone-prefixed header example like "### Phase 1-01: Name"'
+    );
+  });
+
+  test('output_formats shows both sequential and milestone-prefixed summary checklist forms', () => {
+    const section = extractBlock(content, 'output_formats');
+    assert.ok(
+      /- \[ \] \*\*Phase \d+:/.test(section),
+      'output_formats must still show sequential summary checklist form "- [ ] **Phase N:"'
+    );
+    assert.ok(
+      /- \[ \] \*\*Phase \d+-\d{2}:/.test(section),
+      'output_formats must show milestone-prefixed checklist form "- [ ] **Phase N-NN:"'
+    );
+  });
+
+  test('phase_identification section falls back to sequential when convention absent or "sequential"', () => {
+    const section = extractBlock(content, 'phase_identification');
+    assert.ok(
+      section.includes('sequential'),
+      'phase_identification block must document that sequential is the default/fallback'
     );
   });
 });

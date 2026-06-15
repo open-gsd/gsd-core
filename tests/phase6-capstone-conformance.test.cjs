@@ -9,12 +9,7 @@ const { execFileSync } = require('node:child_process');
 const { cleanup } = require('./helpers.cjs');
 
 const ROOT = path.join(__dirname, '..');
-const HOST_LOOP_FILES = [
-  'gsd-core/workflows/plan-phase.md',
-  'gsd-core/workflows/execute-phase.md',
-  'gsd-core/workflows/verify-work.md',
-  'gsd-core/workflows/ship.md',
-];
+const { HOST_LOOP_FILES, scanWiredPoints } = require('../scripts/gen-loop-host-contract.cjs');
 
 const CORE_SUBSTRATE_TERMS = [
   'Verification substrate',
@@ -131,11 +126,9 @@ describe('ADR-857 Phase 6 capstone conformance (#1139)', () => {
     // Scan only the host loop files (a `render-hooks` mention in a non-host
     // workflow must not mask a lost host call site).
     const callSites = new Set();
-    const reCall = /loop render-hooks\s+([a-z:]+)/g;
     for (const relativePath of HOST_LOOP_FILES) {
       const content = readRepoFile(relativePath);
-      let m;
-      while ((m = reCall.exec(content))) callSites.add(m[1]);
+      for (const pt of scanWiredPoints(content)) callSites.add(pt);
     }
 
     const orphaned = [...declaredPoints].sort().filter((p) => !callSites.has(p));

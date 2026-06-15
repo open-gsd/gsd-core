@@ -457,6 +457,96 @@ describe('test.yml changes job contract (#837)', () => {
   });
 });
 
+describe('test-full shard matrix parity (#1212)', () => {
+  // DEFECT.GENERATIVE-FIX: the sharded windows full-test lane has TWO surfaces
+  // that must agree — the `shard:` matrix array (how many parallel jobs run)
+  // and the `/N` denominator in `run-tests.cjs --suite unit --shard i/N` (how
+  // many slices the runner partitions the suite into). If they diverge (e.g.
+  // someone grows `shard: [1,2,3,4]` but leaves `--shard ${{ matrix.shard }}/3`),
+  // shards silently overlap and one shard errors out. This parity assertion
+  // fails the moment the two drift.
+  const yaml = require('js-yaml');
+
+  function loadTestFull() {
+    const text = fs.readFileSync(path.join(WORKFLOWS_DIR, 'test.yml'), 'utf8');
+    const doc = yaml.load(text);
+    return { text, job: doc.jobs['test-full'] };
+  }
+
+  test('distinct shard values are 1..N matching the --shard /N denominator, on every leg', () => {
+    const { job } = loadTestFull();
+    const include = job.strategy.matrix.include;
+    assert.ok(Array.isArray(include), 'test-full matrix must enumerate `include:` rows');
+    assert.ok(
+      include.every(r => Number.isInteger(r.shard)),
+      'every include row must carry an integer `shard:` key',
+    );
+
+    const distinctShards = [...new Set(include.map(r => r.shard))].sort((a, b) => a - b);
+    const n = distinctShards.length;
+
+    // Distinct shard values must be exactly 1..n (1-based, contiguous) so the
+    // runner's round-robin selection covers every file with no gaps/overlaps.
+    assert.deepStrictEqual(
+      distinctShards,
+      Array.from({ length: n }, (_, i) => i + 1),
+      `distinct shard values must be 1..${n} (1-based, contiguous), got ${JSON.stringify(distinctShards)}`,
+    );
+
+    // Every OS/node leg must appear once per shard (full cross-product) — no
+    // leg may silently skip a shard, which would drop a third of its coverage.
+    const legs = [...new Set(include.map(r => `${r.os}|${r['node-version']}`))];
+    for (const leg of legs) {
+      const [os, node] = leg.split('|');
+      const shardsForLeg = include
+        .filter(r => r.os === os && String(r['node-version']) === node)
+        .map(r => r.shard)
+        .sort((a, b) => a - b);
+      assert.deepStrictEqual(
+        shardsForLeg,
+        distinctShards,
+        `leg ${leg} must run all shards ${JSON.stringify(distinctShards)}, got ${JSON.stringify(shardsForLeg)}`,
+      );
+    }
+    // Full cross-product: every (leg, shard) pair is present exactly once, so
+    // the row count equals legs × shards with no duplicate/missing combination.
+    const pairKey = r => `${r.os}|${r['node-version']}|${r.shard}`;
+    assert.strictEqual(new Set(include.map(pairKey)).size, legs.length * n);
+    assert.strictEqual(include.length, legs.length * n);
+
+    // Find the `--shard ${{ matrix.shard }}/<N>` denominator in the unit step.
+    const unitStep = job.steps.find(
+      s => typeof s.run === 'string' && s.run.includes('run-tests.cjs') && s.run.includes('--shard'),
+    );
+    assert.ok(unitStep, 'test-full must have a step running run-tests.cjs --shard');
+    const m = /--shard\s+\$\{\{\s*matrix\.shard\s*\}\}\/(\d+)/.exec(unitStep.run);
+    assert.ok(m, `could not parse --shard i/N denominator from: ${unitStep.run}`);
+    const denominator = Number(m[1]);
+
+    assert.strictEqual(
+      denominator,
+      n,
+      `shard count (${n}) and --shard /N denominator (${denominator}) must match — ` +
+      `update both the per-row \`shard:\` values and the \`/N\` in the run command together.`,
+    );
+  });
+
+  test('required-tests fan-in still needs test-full and keeps the protected name', () => {
+    // Hyrum's Law: branch protection requires a status check literally named
+    // "Required tests". Renaming it (or dropping test-full from its needs)
+    // would silently break the gate. Pin both.
+    const text = fs.readFileSync(path.join(WORKFLOWS_DIR, 'test.yml'), 'utf8');
+    const doc = yaml.load(text);
+    const fanIn = doc.jobs['required-tests'];
+    assert.ok(fanIn, 'required-tests job must exist');
+    assert.strictEqual(fanIn.name, 'Required tests', 'the branch-protection check name must stay "Required tests"');
+    assert.ok(
+      Array.isArray(fanIn.needs) && fanIn.needs.includes('test-full'),
+      'required-tests must `needs: test-full` so all shard legs aggregate into the gate',
+    );
+  });
+});
+
 describe('code_changed=false implies clean output invariant', () => {
   // Fix 1: when code_changed is false, full_matrix, targeted_tests, windows_tests
   // must ALL be empty/false — even if a docs path coincidentally

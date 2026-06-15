@@ -196,12 +196,57 @@ function reconstructFrontmatter(obj: Frontmatter): string {
 }
 
 function spliceFrontmatter(content: string, newObj: Frontmatter): string {
-  const yamlStr = reconstructFrontmatter(newObj);
   const match = content.match(/^---\r?\n[\s\S]+?\r?\n---/);
   if (match) {
+    // Identity-preservation (additive, lossless round-trip): `reconstructFrontmatter` is a
+    // deliberately lossy serializer — it cannot faithfully re-emit nested object-list items
+    // (e.g. must_haves.artifacts / must_haves.prohibitions, whose items are `{ path, provides }`
+    // / `{ statement, status, … }` maps). When the caller is writing back a value that is
+    // STRUCTURALLY UNCHANGED from the original parse (the canonical CRUD round-trip and the
+    // #644 prohibition schema round-trip both do this), regenerating from the lossy object would
+    // silently mangle those blocks. Detect that case by deep-equality against a re-parse of the
+    // original frontmatter and preserve the ORIGINAL raw text verbatim — a true no-op splice.
+    // This touches neither the parser (`extractFrontmatter`) nor `parseMustHavesBlock`; it only
+    // makes the existing splice faithful when nothing changed. A genuine mutation (different
+    // object) still flows through `reconstructFrontmatter` exactly as before.
+    try {
+      if (frontmatterDeepEqual(extractFrontmatter(content), newObj)) {
+        return content;
+      }
+    } catch {
+      /* fall through to regeneration on any comparison hiccup */
+    }
+    const yamlStr = reconstructFrontmatter(newObj);
     return `---\n${yamlStr}\n---` + content.slice(match[0].length);
   }
+  const yamlStr = reconstructFrontmatter(newObj);
   return `---\n${yamlStr}\n---\n\n` + content;
+}
+
+/**
+ * Structural deep-equality for two parsed frontmatter objects. Order-sensitive for arrays
+ * (YAML lists are ordered), key-order-insensitive for objects. Used only by `spliceFrontmatter`
+ * to recognize a no-op write-back; intentionally narrow (handles the string / string[] /
+ * nested-object shapes `extractFrontmatter` produces).
+ */
+function frontmatterDeepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a == null || b == null) return a === b;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((v, i) => frontmatterDeepEqual(v, b[i]));
+  }
+  if (typeof a === 'object' && typeof b === 'object') {
+    const ao: Record<string, unknown> = a as Record<string, unknown>;
+    const bo: Record<string, unknown> = b as Record<string, unknown>;
+    const ak = Object.keys(ao);
+    const bk = Object.keys(bo);
+    if (ak.length !== bk.length) return false;
+    return ak.every((k) =>
+      Object.prototype.hasOwnProperty.call(bo, k) && frontmatterDeepEqual(ao[k], bo[k]),
+    );
+  }
+  return false;
 }
 
 function parseMustHavesBlock(content: string, blockName: string): unknown[] {
@@ -393,6 +438,11 @@ function cmdFrontmatterValidate(cwd: string, filePath: string, schemaName: strin
 
 export = {
   extractFrontmatter,
+  // Additive alias (#644 prohibition-probe schema contract): the probe round-trip seam reads a
+  // frontmatter object via `parseFrontmatter` (the name the contract test pins). It is the SAME
+  // function as `extractFrontmatter` — a bare-object parse with no behavior change — exposed under
+  // the alias so the prohibition schema round-trip and any future caller can use the canonical name.
+  parseFrontmatter: extractFrontmatter,
   reconstructFrontmatter,
   spliceFrontmatter,
   parseMustHavesBlock,

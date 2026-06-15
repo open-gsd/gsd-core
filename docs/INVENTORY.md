@@ -51,6 +51,7 @@ Full roster at `agents/gsd-*.md`. The "Primary doc" column flags whether [`docs/
 | gsd-intel-updater | Writes structured intel files (`.planning/intel/*.json`) used as a queryable codebase knowledge base. | `/gsd-map-codebase --query` | advanced stub |
 | gsd-doc-classifier | Classifies a single planning document as ADR, PRD, SPEC, DOC, or UNKNOWN; spawned in parallel to process the doc corpus. | `/gsd-ingest-docs` | advanced stub |
 | gsd-doc-synthesizer | Synthesizes classified planning docs into a single consolidated context with precedence rules, cycle detection, and three-bucket conflicts report. | `/gsd-ingest-docs` | advanced stub |
+| gsd-mempalace-curator | Ship-time MemPalace curation — diary entry, cross-project tunnel proposals, wing-scoped sync pruning, and extract-learnings → KG mirroring with provenance. | MemPalace capability at `ship:post` | advanced stub |
 
 **Coverage note.** `docs/AGENTS.md` gives full role cards for the primary agents plus concise stubs for the advanced agents. The Agent Tool Permissions Summary in that file covers only the primary agents; the advanced agents' tool lists are captured in their per-agent frontmatter in `agents/gsd-*.md`.
 
@@ -138,6 +139,8 @@ These six routers are descriptor-only entries that the model picks first; the bo
 | `/gsd-map-codebase` | Analyze codebase with parallel mapper agents; use `--fast` for lightweight scan or `--query` for intel queries. | [commands/gsd/map-codebase.md](../commands/gsd/map-codebase.md) |
 | `/gsd-graphify` | Build, query, and inspect the project knowledge graph in `.planning/graphs/`. | [commands/gsd/graphify.md](../commands/gsd/graphify.md) |
 | `/gsd-extract-learnings` | Extract decisions, lessons, patterns, and surprises from completed phase artifacts. | [commands/gsd/extract-learnings.md](../commands/gsd/extract-learnings.md) |
+| `/gsd-mempalace-recall` | Recall prior decisions, patterns, and surprises from MemPalace into MEMORY-RECALL.md before planning. | [commands/gsd/mempalace-recall.md](../commands/gsd/mempalace-recall.md) |
+| `/gsd-mempalace-capture` | File a phase artifact (CONTEXT/PLAN/SUMMARY) verbatim into MemPalace and mirror decision facts into its temporal KG. | [commands/gsd/mempalace-capture.md](../commands/gsd/mempalace-capture.md) |
 
 ### Review, Debug & Recovery
 
@@ -301,7 +304,9 @@ Full roster at `gsd-core/references/*.md`. References are shared knowledge docum
 | `continuation-format.md` | Session continuation/resume format. |
 | `domain-probes.md` | Domain-specific probing questions for discuss-phase. |
 | `edge-probe.md` | Spec-phase edge-completeness probe — 8-category edge taxonomy, shape classification, and the `requirements → checks → verifier` resolution model (Step 5.5). |
+| `prohibition-probe.md` | Spec-phase prohibition-completeness probe — the two-stage adversarial-recall → precision protocol that surfaces the unwritten *must-NOT* constraints (values/safety/ethics), with status×verification (`test`/`judgment`) tiering and canon-referral breadcrumbs (Step 5.6); second adapter of the `probe-core` resolution model. |
 | `gate-prompts.md` | Gate/checkpoint prompt templates. |
+| `loop-hook-dispatch.md` | Generic dispatch contract for consuming `gsd_run loop render-hooks <point> --raw` output in any host-loop workflow — envelope shape, per-kind dispatch rules (contribution/step/gate), and liveness banner. |
 | `scout-codebase.md` | Phase-type→codebase-map selection table for discuss-phase scout step (extracted via #2551). |
 | `revision-loop.md` | Plan revision iteration patterns. |
 | `universal-anti-patterns.md` | Universal anti-patterns to detect and avoid. |
@@ -387,6 +392,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `capability-activation.cjs` | Capability activation resolver shared by config validation and capability-state consumers — resolves registry-owned config keys from raw runtime config without re-centralizing migrated settings |
 | `capability-registry.cjs` | Generated central Capability Registry — role-partitioned index of all co-located capability declarations (`capabilities/<id>/capability.json`); emitted by `scripts/gen-capability-registry.cjs --write` (ADR-894 §5) |
 | `capability-state.cjs` | Unified capability-state resolver (ADR-857 phase 4b/6) — composes install profile, runtime surface, and config activation into one per-capability view consumed by workflow hook rendering; exports pure `resolveCapabilityState`, reusable `resolveCapabilityRuntimeState`, and I/O handler `cmdCapabilityState`; command surface: `gsd-tools capability state [--config-dir <path>]` emitting `{ runtimeConfigDir, capabilities[] }` |
+| `capability-writer.cjs` | Capability State Writer (ADR-1213) — write-side inverse of the resolver; projects desired per-capability enabled/gates onto surface + config substrates, then re-resolves (assert-and-report); exports `setCapabilityState` and I/O handler `cmdCapabilitySet`; command surface: `gsd-tools capability set <id> [--on\|--off] [--gate <key>=<true\|false>]` |
 | `check-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools check` |
 | `cli-exit.cjs` | `ExitError` class and `runMain()` helper — CLI entrypoints throw `ExitError` instead of calling `process.exit()`; `runMain()` translates the outcome into `process.exitCode` so output flushes cleanly |
 | `cjs-command-router-adapter.cjs` | Shared compatibility adapter for manifest-backed CJS command-family routers |
@@ -414,6 +420,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `federated-config.cjs` | Defensive merge of capability-declared config slices into the loadConfig return value — ADR-857 phase 3b; exports `mergeFederatedConfig({ configSchema, isCentralKey, userConfig })` → `{ values, validKeys, warnings }`; live for migrated Capability keys that are atomically removed from the central config schema |
 | `frontmatter.cjs` | YAML frontmatter CRUD operations |
 | `gap-checker.cjs` | Post-planning gap analysis (#2493): unified REQUIREMENTS.md + CONTEXT.md decisions vs PLAN.md coverage report (`gsd-tools gap-analysis`) |
+| `git-base-branch.cjs` | Single base-branch resolver (`gsd_run query git.base-branch`) with full precedence ladder: config override → origin/HEAD symref → `git remote show origin` → local branch presence → "main". Eliminates per-workflow duplicated bash detection (#1146) |
 | `graphify.cjs` | Knowledge-graph build/query/status/diff for `/gsd-graphify` |
 | `graphify-command-router.cjs` | ADR-959 capability command router for `gsd-tools graphify` — dispatches build/query/status/diff subcommands; first real capability command cutover (phase 4d-impl-2) |
 | `gsd2-import.cjs` | External-plan ingest for `/gsd-import --from-gsd2` |
@@ -515,6 +522,7 @@ Full listing: `hooks/`.
 | `gsd-read-injection-scanner.js` | `PostToolUse` | Scans tool Read results for prompt-injection patterns (v1.36+, PR #2201) |
 | `gsd-worktree-path-guard.js` | `PreToolUse` | Hard-blocks Edit/Write/MultiEdit with absolute paths outside the worktree root (PR #579, #260) |
 | `gsd-config-reload.js` | `FileChanged` | Hot-reloads GSD config context when `.planning/config.json` changes mid-session (#770) |
+| `gsd-ensure-canonical-path.js` | `SessionStart` | Symlinks `~/.claude/gsd-core/{bin,contexts,references,templates,workflows}` to the plugin's bundled tree so `@~/.claude/gsd-core/...` includes resolve in marketplace plugin installs; no-op in classic installs, self-heals after `claude plugin update` (#997) |
 | `gsd-session-state.sh` | `PostToolUse` | Session-state tracking for shell-based runtimes |
 | `gsd-validate-commit.sh` | `PostToolUse` | Commit validation for conventional-commit enforcement |
 | `gsd-phase-boundary.sh` | `PostToolUse` | Phase-boundary detection for workflow transitions |

@@ -106,8 +106,14 @@ function parseArgs(argv) {
       const r = requireValue(a, i);
       if (!r.ok) return { ok: false, error: r.error };
       if (a === '--type') opts.type = r.value;
-      else if (a === '--pr') opts.pr = Number(r.value);
-      else if (a === '--body') opts.body = r.value;
+      else if (a === '--pr') {
+        // Accept only decimal-integer strings (digits only, no sign, no dot,
+        // no hex prefix, no scientific notation). Non-integer input — including
+        // empty string and whitespace — is normalized to NaN so the prNaN
+        // guard below rejects it with the usage error.
+        const trimmed = r.value.trim();
+        opts.pr = /^\d+$/.test(trimmed) ? Number(trimmed) : NaN;
+      } else if (a === '--body') opts.body = r.value;
       else if (a === '--repo') opts.repo = r.value;
       i++;
       continue;
@@ -125,7 +131,15 @@ function main() {
     throw new ExitError(2);
   }
   const { opts } = parsed;
-  if (!opts.type || !opts.pr || !opts.body) {
+  // opts.pr starts as null (missing flag) and is set by parseArgs to a Number when
+  // the raw value is a pure decimal-integer string (digits only), or to NaN for any
+  // other input (empty, whitespace, floats, hex, negatives, scientific notation, etc.).
+  // Accept integer 0 (the documented pr:0 placeholder); reject a missing flag (null)
+  // and any non-decimal-integer value (NaN). The merge/lint gate separately
+  // enforces pr > 0 before a fragment can land, so 0 still cannot be merged.
+  const prMissing = opts.pr === null;
+  const prNaN = typeof opts.pr === 'number' && Number.isNaN(opts.pr);
+  if (!opts.type || prMissing || prNaN || !opts.body) {
     throw new ExitError(2, 'usage: changeset/new.cjs --type <Fixed|Added|...> --pr NNNN --body "..."');
   }
   const file = scaffoldFragment(opts);

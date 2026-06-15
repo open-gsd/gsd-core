@@ -71,6 +71,7 @@ build/
 /gsd-core/bin/lib/research-provider.cjs
 /gsd-core/bin/lib/package-legitimacy.cjs
 /gsd-core/bin/lib/semver-compare.cjs
+/gsd-core/bin/lib/plan-drift-guard.cjs
 /gsd-core/bin/lib/edge-probe.cjs
 /gsd-core/bin/lib/probe-core.cjs
 /gsd-core/bin/lib/config-types.cjs
@@ -144,6 +145,7 @@ build/
 /gsd-core/bin/lib/model-resolver.cjs
 /gsd-core/bin/lib/loop-resolver.cjs
 /gsd-core/bin/lib/capability-state.cjs
+/gsd-core/bin/lib/capability-writer.cjs
 /gsd-core/bin/lib/capability-activation.cjs
 /gsd-core/bin/lib/federated-config.cjs
 /gsd-core/bin/lib/phase-locator.cjs

@@ -168,6 +168,12 @@
         "federated-config-key-removal.test.cjs"
       ],
       "issue": "TBD"
+    },
+    "external-job": {
+      "files": [
+        "external-job-waiting.test.cjs"
+      ],
+      "issue": "#1165"
     }
   }
 }

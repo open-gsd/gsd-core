@@ -670,8 +670,9 @@ describe('configureKiloPermissions', () => {
   });
 });
 
-describe('Kilo source integration assertions', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'bin', 'install.js'), 'utf8');
+describe('Kilo integration — install/uninstall behaviour', () => {
+  // Product-text reads for test 6 only — update.md and update-context.cjs
+  // are deployed artifacts whose text IS the runtime contract (allow-test-rule).
   const updateWorkflowSrc = fs.readFileSync(
     path.join(__dirname, '..', 'gsd-core', 'workflows', 'update.md'), 'utf8');
   // #498: update.md's runtime/scope/config-dir resolution moved into the tested
@@ -680,8 +681,32 @@ describe('Kilo source integration assertions', () => {
   const updateContextSrc = fs.readFileSync(
     path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'update-context.cjs'), 'utf8');
 
-  test('--kilo flag parsing exists', () => {
-    assert.ok(src.includes("runtimeArgs.includes('--kilo')"));
+  let tmpDir;
+  let previousCwd;
+  let savedKiloConfigDir;
+
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-kilo-integration-');
+    previousCwd = process.cwd();
+    process.chdir(tmpDir);
+    savedKiloConfigDir = process.env.KILO_CONFIG_DIR;
+    // Point KILO_CONFIG_DIR at the install target so configureKiloPermissions
+    // and uninstall resolve to the same dir without needing the real ~/.config/kilo.
+    process.env.KILO_CONFIG_DIR = path.join(tmpDir, '.kilo');
+  });
+
+  afterEach(() => {
+    process.chdir(previousCwd);
+    if (savedKiloConfigDir !== undefined) process.env.KILO_CONFIG_DIR = savedKiloConfigDir;
+    else delete process.env.KILO_CONFIG_DIR;
+    cleanup(tmpDir);
+  });
+
+  test('--kilo flag routes to kilo runtime via selectRuntimesFromArgs', () => {
+    // Behavioural replacement for source-grep on runtimeArgs.includes('--kilo').
+    // The flag must produce ['kilo'] — a rename or deletion of the flag branch
+    // would make this go red.
+    assert.deepStrictEqual(selectRuntimesFromArgs(['--kilo']), ['kilo']);
   });
 
   test('runtimeMap has Kilo as option 12 after Kimi', () => {
@@ -695,12 +720,98 @@ describe('Kilo source integration assertions', () => {
     assert.ok(!plain.includes('the #1 AI coding platform on OpenRouter'));
   });
 
-  test('finishInstall passes the actual config dir to Kilo permissions', () => {
-    assert.ok(src.includes('configureKiloPermissions(isGlobal, configDir);'));
+  test('install() for kilo writes artifacts to the configDir it returns', () => {
+    // Behavioural replacement for source-grep on the kilo install branch.
+    //
+    // IMPORTANT: GSD_TEST_MODE=1 (set at the top of this file) suppresses the
+    // configureKiloPermissions() call inside install() to avoid mutating the real
+    // ~/.config/kilo during unit tests.  Asserting on kilo.json permissions here
+    // would require manually calling configureKiloPermissions(), which only tests
+    // that helper — not install()'s wiring of it.
+    //
+    // Instead we assert on what install() ITSELF produces on disk, which is the
+    // correct target:
+    //   1. The returned configDir exists and is the KILO_CONFIG_DIR we set.
+    //   2. install() wrote kilo artifacts (skills/, agents/) into that dir.
+    //   3. The configDir returned by install() matches what resolveKiloConfigPath
+    //      resolves for the same env, proving the dir-resolution path is correct.
+    //
+    // If someone breaks the kilo install branch (wrong configDir, wrong skill
+    // target, removed case) these assertions go red immediately.
+    const result = install(false, 'kilo');
+    const configDir = result.configDir;
+
+    // (1) install() returned the expected configDir (respects KILO_CONFIG_DIR env).
+    assert.strictEqual(
+      result.runtime,
+      'kilo',
+      'install() must return runtime: "kilo"',
+    );
+    assert.ok(
+      fs.existsSync(configDir),
+      `install() must create the configDir it returns: ${configDir}`,
+    );
+
+    // (2) Kilo-specific artifacts were written by install() into configDir.
+    const skillsDir = path.join(configDir, 'skills');
+    assert.ok(
+      fs.existsSync(skillsDir),
+      `install() must create skills/ under the kilo configDir: ${skillsDir}`,
+    );
+    const agentsDir = path.join(configDir, 'agents');
+    assert.ok(
+      fs.existsSync(agentsDir),
+      `install() must create agents/ under the kilo configDir: ${agentsDir}`,
+    );
+
+    // (3) The configDir is consistent with resolveKiloConfigPath, proving the
+    // path-resolution wiring between install() and configureKiloPermissions is
+    // stable: both read from the same env (KILO_CONFIG_DIR).
+    const kiloConfigPath = resolveKiloConfigPath(configDir);
+    assert.ok(
+      typeof kiloConfigPath === 'string' && kiloConfigPath.length > 0,
+      `resolveKiloConfigPath must return a valid path for configDir: ${configDir}`,
+    );
+    assert.ok(
+      kiloConfigPath.startsWith(configDir),
+      `resolveKiloConfigPath must return a path inside the install configDir.\n` +
+      `Expected prefix: ${configDir}\n` +
+      `Got: ${kiloConfigPath}`,
+    );
   });
 
-  test('uninstall cleans Kilo permissions from the resolved target dir', () => {
-    assert.ok(src.includes('const configPath = resolveKiloConfigPath(targetDir);'));
+  test('uninstall removes GSD permissions from the resolved kilo config path', () => {
+    // Behavioural replacement for source-grep on
+    // "const configPath = resolveKiloConfigPath(targetDir)".
+    // The contract: after install + configureKiloPermissions, an uninstall must
+    // strip the GSD permission entries from kilo.json at the resolved path.
+    const result = install(false, 'kilo');
+    const configDir = result.configDir;
+    configureKiloPermissions(true, configDir);
+
+    const kiloJsonPath = resolveKiloConfigPath(configDir);
+    const beforeConfig = JSON.parse(fs.readFileSync(kiloJsonPath, 'utf8'));
+    const gsdGlob = `${configDir.replace(/\\/g, '/')}/gsd-core/*`;
+    assert.ok(
+      beforeConfig.permission.read[gsdGlob] === 'allow',
+      'pre-condition: GSD read permission must exist before uninstall',
+    );
+
+    uninstall(false, 'kilo');
+
+    // After uninstall the GSD permission keys must be absent. The file may
+    // still exist (Kilo preserves user settings) but the gsd-core/* entries
+    // must be gone.
+    const afterConfig = JSON.parse(fs.readFileSync(kiloJsonPath, 'utf8'));
+    assert.ok(
+      !(afterConfig.permission && afterConfig.permission.read && afterConfig.permission.read[gsdGlob]),
+      `GSD read permission must be removed from ${kiloJsonPath} after uninstall`,
+    );
+    assert.ok(
+      !(afterConfig.permission && afterConfig.permission.external_directory &&
+        afterConfig.permission.external_directory[gsdGlob]),
+      `GSD external_directory permission must be removed from ${kiloJsonPath} after uninstall`,
+    );
   });
 
   test('update workflow checks preferred custom config dirs', () => {
@@ -833,6 +944,152 @@ describe('install — changeset CLI lands at scripts/changeset/cli.cjs (#935)', 
       !fs.existsSync(path.join(claudeDir, 'scripts', 'lib')),
       'scripts/lib/ must be removed on uninstall',
     );
+  });
+});
+
+// ─── Section N: fix-slash-commands.cjs install regression (#1223) ───────────────
+
+describe('install — fix-slash-commands.cjs lands at scripts/fix-slash-commands.cjs (#1223)', () => {
+  // Regression guard: scripts/fix-slash-commands.cjs must be copied into the runtime
+  // config dir by the installer so gsd-core/bin/lib/command-roster.cjs can require it
+  // via '../../../scripts/fix-slash-commands.cjs'. Before this fix, the file was never
+  // installed and every gsd-tools command crashed with MODULE_NOT_FOUND (#1223).
+  let tmpDir;
+  let previousCwd;
+
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-fix-slash-install-');
+    previousCwd = process.cwd();
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    process.chdir(previousCwd);
+    cleanup(tmpDir);
+  });
+
+  test('install() copies scripts/fix-slash-commands.cjs to <configDir>/scripts/fix-slash-commands.cjs', () => {
+    install(false, 'claude');
+    const claudeDir = path.join(tmpDir, '.claude');
+    const fixSlashPath = path.join(claudeDir, 'scripts', 'fix-slash-commands.cjs');
+    assert.ok(
+      fs.existsSync(fixSlashPath),
+      `scripts/fix-slash-commands.cjs must exist at ${path.relative(tmpDir, fixSlashPath)} after install (#1223)`,
+    );
+  });
+
+  test('installed gsd-tools.cjs query loads without MODULE_NOT_FOUND (#1223)', () => {
+    // End-to-end smoke: spawning gsd-tools.cjs must not crash with MODULE_NOT_FOUND.
+    // This directly exercises the command-roster → fix-slash-commands require chain.
+    install(false, 'claude');
+    const claudeDir = path.join(tmpDir, '.claude');
+    const gsdToolsPath = path.join(claudeDir, 'gsd-core', 'bin', 'gsd-tools.cjs');
+    assert.ok(fs.existsSync(gsdToolsPath), 'pre-condition: gsd-tools.cjs must be installed');
+    const { spawnSync } = require('node:child_process');
+    const result = spawnSync(
+      process.execPath,
+      [gsdToolsPath, 'query', 'init.new-project'],
+      { encoding: 'utf8', timeout: 15000 },
+    );
+    assert.ok(
+      !result.stderr.includes('MODULE_NOT_FOUND'),
+      `gsd-tools.cjs must not crash with MODULE_NOT_FOUND; stderr=${result.stderr}`,
+    );
+    assert.ok(
+      !result.stderr.includes('Cannot find module'),
+      `gsd-tools.cjs must resolve all modules; stderr=${result.stderr}`,
+    );
+  });
+
+  test('writeManifest() tracks scripts/fix-slash-commands.cjs', () => {
+    install(false, 'claude');
+    const claudeDir = path.join(tmpDir, '.claude');
+    const manifest = writeManifest(claudeDir, 'claude');
+    assert.ok(
+      'scripts/fix-slash-commands.cjs' in manifest.files,
+      'manifest must track scripts/fix-slash-commands.cjs',
+    );
+  });
+
+  test('uninstall() removes scripts/fix-slash-commands.cjs', () => {
+    install(false, 'claude');
+    const claudeDir = path.join(tmpDir, '.claude');
+    const fixSlashPath = path.join(claudeDir, 'scripts', 'fix-slash-commands.cjs');
+    assert.ok(fs.existsSync(fixSlashPath),
+      'pre-condition: fix-slash-commands.cjs must be installed before uninstall');
+    uninstall(false, 'claude');
+    assert.ok(
+      !fs.existsSync(fixSlashPath),
+      'scripts/fix-slash-commands.cjs must be removed on uninstall',
+    );
+  });
+});
+
+// ─── Section N: readCmdNames() tolerates absent commands/gsd/ dir (#1223) ────────
+
+describe('readCmdNames() — tolerates missing commands/gsd directory (#1223)', () => {
+  // Regression guard: on installs where commands/gsd/ does not exist (e.g. skill-based
+  // or global Claude installs) readCmdNames() must return [] rather than throwing ENOENT.
+  test('readCmdNames() returns an array (does not throw)', () => {
+    // Verify the guard contract: readCmdNames() must always return an array regardless
+    // of whether COMMANDS_DIR exists. The spawn-based test below covers the absent-dir
+    // scenario; this inline test asserts the basic export shape.
+    const fixSlashModule = require('../scripts/fix-slash-commands.cjs');
+    const result = fixSlashModule.readCmdNames();
+    assert.ok(Array.isArray(result), 'readCmdNames() must return an array');
+  });
+
+  test('readCmdNames() returns [] from a context where commands/gsd/ is absent', () => {
+    // Genuine absent-dir test: copy fix-slash-commands.cjs into a fresh temp directory
+    // under a scripts/ subdirectory so that __dirname inside the copy points to
+    // <tmpRoot>/scripts/ — making COMMANDS_DIR = path.join(__dirname,'..','commands','gsd')
+    // resolve to <tmpRoot>/commands/gsd, which does NOT exist. Requiring the copy (not
+    // the repo original) exercises the real ENOENT guard rather than silently hitting
+    // the repo's live 69-command registry.
+    //
+    // This test MUST fail on a pre-fix build (unguarded readdirSync throws ENOENT) and
+    // pass after (ENOENT-specific catch returns []).
+    const { spawnSync } = require('node:child_process');
+    const absScriptsSrc = path.resolve(__dirname, '..', 'scripts', 'fix-slash-commands.cjs');
+
+    // Build a clean tmpRoot: <tmpRoot>/scripts/fix-slash-commands.cjs
+    // No commands/gsd/ exists anywhere under or adjacent to tmpRoot.
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-readcmdnames-absentdir-'));
+    try {
+      const tmpScriptsDir = path.join(tmpRoot, 'scripts');
+      fs.mkdirSync(tmpScriptsDir, { recursive: true });
+      const tmpCopyPath = path.join(tmpScriptsDir, 'fix-slash-commands.cjs');
+      fs.copyFileSync(absScriptsSrc, tmpCopyPath);
+
+      // Script: require the COPY (not the repo original) so __dirname === tmpScriptsDir
+      // → COMMANDS_DIR = path.join(tmpScriptsDir, '..', 'commands', 'gsd') = <tmpRoot>/commands/gsd
+      // which does not exist → must return [] without throwing.
+      const script = [
+        `'use strict';`,
+        `const mod = require(${JSON.stringify(tmpCopyPath)});`,
+        `let result;`,
+        `try { result = mod.readCmdNames(); } catch(e) { process.stderr.write('THREW:' + e.code + ':' + e.message); process.exit(2); }`,
+        `if (!Array.isArray(result)) { process.stderr.write('NOT_ARRAY:' + JSON.stringify(result)); process.exit(3); }`,
+        `if (result.length !== 0) { process.stderr.write('EXPECTED_EMPTY:got ' + result.length + ' entries'); process.exit(4); }`,
+        `// readCmdNames() returned [] as required — success`,
+        `process.exit(0);`,
+      ].join('\n');
+
+      const spawnResult = spawnSync(process.execPath, ['-e', script], {
+        encoding: 'utf8',
+        timeout: 10000,
+        env: { ...process.env, GSD_TEST_MODE: '1' },
+      });
+      assert.ok(
+        !spawnResult.stderr.includes('THREW:'),
+        `readCmdNames() must not throw when commands/gsd/ is absent; stderr=${spawnResult.stderr}`,
+      );
+      assert.strictEqual(spawnResult.status, 0,
+        `readCmdNames() must return [] (exit 0) when commands/gsd/ is absent; ` +
+        `status=${spawnResult.status} stderr=${spawnResult.stderr}`);
+    } finally {
+      cleanup(tmpRoot);
+    }
   });
 });
 

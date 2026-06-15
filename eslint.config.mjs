@@ -13,6 +13,7 @@ import noSourceGrep from './eslint-rules/no-source-grep.cjs';
 import noMagicSleepInTests from './eslint-rules/no-magic-sleep-in-tests.cjs';
 import noElapsedAssertion from './eslint-rules/no-elapsed-assertion.cjs';
 import noRawRmsyncInTests from './eslint-rules/no-raw-rmsync-in-tests.cjs';
+import noTautologicalAssert from './eslint-rules/no-tautological-assert.cjs';
 
 const localPlugin = {
   rules: {
@@ -20,6 +21,7 @@ const localPlugin = {
     'no-magic-sleep-in-tests': noMagicSleepInTests,
     'no-elapsed-assertion': noElapsedAssertion,
     'no-raw-rmsync-in-tests': noRawRmsyncInTests,
+    'no-tautological-assert': noTautologicalAssert,
   },
 };
 
@@ -35,6 +37,7 @@ export default tseslint.config(
       '**/*.generated.cjs',
       // ADR-457: tsc-generated runtime artifact — lint the src/*.cts source, not the emitted .cjs.
       'gsd-core/bin/lib/semver-compare.cjs',
+      'gsd-core/bin/lib/plan-drift-guard.cjs',
       'gsd-core/bin/lib/cli-exit.cjs',
       'gsd-core/bin/lib/edge-probe.cjs',
       'gsd-core/bin/lib/probe-core.cjs',
@@ -150,6 +153,10 @@ export default tseslint.config(
       'gsd-core/bin/lib/research-store.cjs',
       'gsd-core/bin/lib/research-provider.cjs',
       'gsd-core/bin/lib/package-legitimacy.cjs',
+      // ADR-457: tsc-generated runtime artifact — lint the src/git-base-branch.cts source.
+      'gsd-core/bin/lib/git-base-branch.cjs',
+      // ADR-1213: tsc-generated runtime artifact — lint the src/capability-writer.cts source.
+      'gsd-core/bin/lib/capability-writer.cjs',
     ],
   },
 
@@ -228,6 +235,10 @@ export default tseslint.config(
       'local/no-elapsed-assertion': 'warn',
       // Ban raw fs.rmSync in tests — use helpers.cleanup() for Windows-EBUSY retry budget
       'local/no-raw-rmsync-in-tests': 'error',
+      // Ban tautological assertions (always-truthy arg or identical-literal equality)
+      'local/no-tautological-assert': 'error',
+      // Ban source-grep pattern in tests — use require() + behavior assertions instead
+      'local/no-source-grep': 'error',
       // Ban raw setTimeout sync + elapsed/duration-style assertions via no-restricted-syntax
       'no-restricted-syntax': [
         'error',

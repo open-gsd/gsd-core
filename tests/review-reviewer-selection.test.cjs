@@ -15,15 +15,39 @@ const {
 } = require('../gsd-core/bin/lib/review-reviewer-selection.cjs');
 
 describe('KNOWN_REVIEWER_SLUGS', () => {
-  test('is an array of strings', () => {
-    assert.ok(Array.isArray(KNOWN_REVIEWER_SLUGS));
-    assert.ok(KNOWN_REVIEWER_SLUGS.every((s) => typeof s === 'string'));
-  });
+  test('known slug appears in selected with no warning; unknown slug produces a warning and is dropped', () => {
+    const knownSlug = KNOWN_REVIEWER_SLUGS[0];
+    const unknownSlug = '__not_a_real_reviewer__';
 
-  test('includes expected slugs', () => {
-    assert.ok(KNOWN_REVIEWER_SLUGS.includes('gemini'));
-    assert.ok(KNOWN_REVIEWER_SLUGS.includes('claude'));
-    assert.ok(KNOWN_REVIEWER_SLUGS.includes('codex'));
+    const knownResult = resolveReviewerSelection({
+      detected: [knownSlug],
+      explicitFlags: [],
+      allFlag: false,
+      configuredDefaultReviewers: [knownSlug],
+    });
+    assert.ok(
+      knownResult.selected.includes(knownSlug),
+      `expected known slug "${knownSlug}" to appear in selected`,
+    );
+    assert.ok(
+      knownResult.warnings.length === 0,
+      `expected no warnings for known slug "${knownSlug}", got: ${JSON.stringify(knownResult.warnings)}`,
+    );
+
+    const unknownResult = resolveReviewerSelection({
+      detected: [unknownSlug],
+      explicitFlags: [],
+      allFlag: false,
+      configuredDefaultReviewers: [unknownSlug],
+    });
+    assert.ok(
+      !unknownResult.selected.includes(unknownSlug),
+      `expected unknown slug "${unknownSlug}" to be dropped from selected`,
+    );
+    assert.ok(
+      unknownResult.warnings.some((w) => w.includes(unknownSlug)),
+      `expected a warning mentioning "${unknownSlug}", got: ${JSON.stringify(unknownResult.warnings)}`,
+    );
   });
 });
 
@@ -112,12 +136,11 @@ describe('resolveReviewerSelection', () => {
     assert.deepStrictEqual(r.selected, [...r.selected].sort());
   });
 
-  test('result has source, selected, warnings, infos, errors', () => {
+  test('empty detected with no flags/config falls back to no_config_all_detected with empty selected, warnings, and errors', () => {
     const r = resolveReviewerSelection({ detected: [] });
-    assert.ok('source' in r);
-    assert.ok(Array.isArray(r.selected));
-    assert.ok(Array.isArray(r.warnings));
-    assert.ok(Array.isArray(r.infos));
-    assert.ok(Array.isArray(r.errors));
+    assert.equal(r.source, 'no_config_all_detected');
+    assert.deepStrictEqual(r.selected, []);
+    assert.deepStrictEqual(r.warnings, []);
+    assert.deepStrictEqual(r.errors, []);
   });
 });

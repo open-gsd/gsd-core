@@ -21,6 +21,7 @@ import installProfiles = require('./install-profiles.cjs');
 const {
   stageSkillsForProfile,
   stageAgentsForProfile,
+  stageAgentsForRuntimeWithConverter,
   stageSkillsForRuntimeAsSkills,
   stageCommandsForRuntimeFlat,
 } = installProfiles;
@@ -189,6 +190,41 @@ function agentsKind(destSubpath: string, prefix: string, configDir: string): Art
     destSubpath,
     prefix,
     stage: (resolved) => stageAgentsForProfile(findAgentsSourceRoot(configDir), resolved),
+  };
+}
+
+/**
+ * Build a converted-agents kind descriptor for runtimes whose agent `.md` files
+ * need runtime-specific frontmatter/body conversion (e.g. Copilot, Cursor, Codex).
+ *
+ * Unlike `agentsKind` (which raw-copies source files), this kind applies
+ * `converterName` from Runtime Artifact Conversion exports to each agent file
+ * during staging, writing flat `${name}.md` files to the staged directory.
+ *
+ * Agent filenames are preserved verbatim (the prefix is already embedded in the
+ * agent stem — e.g. `gsd-planner.md`).
+ *
+ * Mirrors the `convertedCommandsKind` pattern (#785).
+ *
+ * @param destSubpath   destination subpath within configDir (e.g. 'agents')
+ * @param prefix        filename prefix (informational; not applied here)
+ * @param converterName name of converter function in Runtime Artifact Conversion exports
+ * @param configDir     runtime config dir (for .gsd-source marker resolution)
+ */
+function convertedAgentsKind(
+  destSubpath: string,
+  prefix: string,
+  converterName: string,
+  configDir: string,
+): ArtifactKind {
+  return {
+    kind: 'agents',
+    destSubpath,
+    prefix,
+    stage: (resolved) => {
+      const converter = conversionExports[converterName] as (content: string) => string;
+      return stageAgentsForRuntimeWithConverter(findAgentsSourceRoot(configDir), resolved, converter);
+    },
   };
 }
 
@@ -401,7 +437,10 @@ function dispatchKindEntry(entry: ArtifactKindDescriptor, runtime: string, confi
       return convertedCommandsKind(destSubpath, prefix, converter, configDir);
 
     case 'agents':
-      return agentsKind(destSubpath, prefix, configDir);
+      if (converter == null) {
+        return agentsKind(destSubpath, prefix, configDir);
+      }
+      return convertedAgentsKind(destSubpath, prefix, converter, configDir);
 
     case 'skills':
       if (converter == null) {

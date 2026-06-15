@@ -241,6 +241,17 @@ describe('bug #376 — Suite 2: Cursor install still rewrites /gsd: → /gsd- (r
     const cursorDir = path.join(tmpDir, '.cursor');
     if (!fs.existsSync(cursorDir)) return;
 
+    // Infrastructure files whose /gsd: occurrences are intentional implementation
+    // details — NOT user-facing command references that Cursor would invoke.
+    //
+    // scripts/fix-slash-commands.cjs is the slash-command rewriter engine, required
+    // by gsd-core/bin/lib/command-roster.cjs on ALL runtimes (including Cursor).
+    // It must be installed verbatim and must NOT be content-rewritten: it needs to
+    // emit `/gsd:${cmd}` for non-Cursor runtimes, and its /gsd: strings are internal
+    // implementation/docs (transform patterns, regex literals, template literals),
+    // not commands a Cursor user would type. Rewriting it would corrupt the transformer.
+    const INFRA_BASENAMES = new Set(['fix-slash-commands.cjs']);
+
     const jsFiles = findJsFiles(cursorDir);
     // Cursor may not install any .js files depending on what agent/skill content exists;
     // if none, skip gracefully.
@@ -248,6 +259,8 @@ describe('bug #376 — Suite 2: Cursor install still rewrites /gsd: → /gsd- (r
 
     const offenders = [];
     for (const { rel, full } of jsFiles) {
+      // Skip infrastructure files whose /gsd: strings are intentional (see above).
+      if (INFRA_BASENAMES.has(path.basename(full))) continue;
       const content = fs.readFileSync(full, 'utf-8');
       const badLines = colonRefs(content);
       if (badLines.length > 0) {

@@ -63,9 +63,14 @@ for plan in "$PHASE_DIR"/*-PLAN.md; do
 done
 ```
 
-Returns JSON: `{ truths: [...], artifacts: [...], key_links: [...] }`
+Returns JSON: `{ truths: [...], artifacts: [...], key_links: [...], prohibitions: [...] }`
 
 Aggregate all must_haves across plans for phase-level verification.
+
+**Prohibitions (`must_haves.prohibitions`, ADR-550 D3 — the must-NOT sibling block):** When a plan carries `must_haves.prohibitions`, extract each `{ statement, status, verification }` item and route it by `verification` tier in verdict assembly (ADR-550 D4, "B-with-guard", 2026-06-12 maintainer decision). These are NEGATIVE checks (the must-NOT must NOT have happened), distinct from positive `truths`:
+
+- **judgment-tier → mode-dependent soft-gate.** Interactive verify defers each item to the end-of-phase human checkpoint (`human_verify_mode: end-of-phase`). Autonomous verify records a NON-AUTHORITATIVE LLM-judge verdict + a prominent `unverified-prohibition — human review recommended` flag (autonomous completion reads "complete with N flagged prohibitions"). NEVER a silent pass; NEVER a hard halt of an AFK run.
+- **test-tier → FAIL CLOSED (accept-and-flag).** Accept the `verification: test` value (the SPEC↔must_haves.prohibitions projection contract holds — no forced schema change later), but a well-formed test-tier item reaching verify with NO wired enforcement disposes as UNVERIFIED, flagged like an unresolved judgment item, NEVER green. The deterministic fail-closed default is `dispositionForProhibition()` in probe-core (`status: 'unverified'`, `flagged: true` on empty `enforcementEvidence`). The real fail-first negative-test enforcement MECHANISM defers to a follow-up PR (#644's corpus is entirely judgment-tier; a contrived test-tier fixture here would be the gold-plating failure mode).
 
 **Option B: Use Success Criteria from ROADMAP.md**
 
@@ -465,13 +470,18 @@ Classify status using this decision tree IN ORDER (most restrictive first):
 1. IF any truth FAILED, artifact MISSING/STUB, key link NOT_WIRED, blocker found, **or test quality audit found blockers (disabled requirement tests, circular tests)**:
    → **gaps_found**
 
-2. IF the previous step produced ANY human verification items:
+2. IF any `must_haves.prohibitions` item disposes as flagged-unverified (ADR-550 D4):
+   - **test-tier, fail-closed** (no wired enforcement — `dispositionForProhibition()` returns `status: 'unverified'`, `flagged: true`): → **gaps_found** (never green; the unwired test-tier item is an unverified gap).
+   - **judgment-tier, autonomous run** (non-authoritative LLM-judge verdict): emit the `unverified-prohibition — human review recommended` flag and classify → **human_needed** (autonomous completion reads "complete with N flagged prohibitions"; never a silent pass, never a hard halt).
+   - **judgment-tier, interactive run**: route to the end-of-phase human checkpoint → **human_needed**.
+
+3. IF the previous step produced ANY human verification items:
    → **human_needed** (even if all truths VERIFIED and score is N/N)
 
-3. IF all checks pass AND no human verification items:
+4. IF all checks pass AND no human verification items AND no flagged prohibitions:
    → **passed**
 
-**passed is ONLY valid when no human verification items exist.**
+**passed is ONLY valid when no human verification items AND no flagged prohibitions exist.** A prohibition (must-NOT) can never be silently absorbed into a `passed` verdict — that is the core failure mode ADR-550 D4 forbids.
 
 **Score:** `verified_truths / total_truths`
 </step>

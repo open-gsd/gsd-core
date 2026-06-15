@@ -189,7 +189,7 @@ CURRENT_PLAN_ID="{phase_number}-{plan_padded}"
 SUMMARY_PATH="{phase_dir}/{plan_padded}-SUMMARY.md"
 PLAN_COMMITS=$(git log --oneline --grep="${CURRENT_PLAN_ID}" -30)
 ```
-If production commits exist and `SUMMARY.md is missing`, stop before spawning a
+If production commits exist and `SUMMARY.md is missing` (no `.planning/async-jobs/*.json` manifest matches it: a match is a legal `external_job_waiting` deferral - reconcile per `docs/reference/planning-artifacts.md`, never re-dispatch), stop before spawning a
 new executor; continuing risks duplicate work and stale `STATE.md`/ROADMAP progress.
 Offer these recovery options:
 - `close out manually` — inspect commits, write SUMMARY.md, then update STATE/ROADMAP.
@@ -296,8 +296,9 @@ Check `branching_strategy` from init:
 Fork the new phase branch off `origin/HEAD` (the project's default branch), not the current HEAD — otherwise consecutive phases compound and stay unpushed (#2916). If `$BRANCH_NAME` already exists locally, reuse it as-is.
 
 ```bash
-DEFAULT_BRANCH=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
-DEFAULT_BRANCH=${DEFAULT_BRANCH:-main}
+DEFAULT_BRANCH=$(gsd_run query git.base-branch 2>/dev/null \
+  || git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||' \
+  || echo main)
 
 if git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
   git switch "$BRANCH_NAME" || { echo "ERROR: Could not switch to existing branch '$BRANCH_NAME'." >&2; exit 1; }

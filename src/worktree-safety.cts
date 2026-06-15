@@ -100,6 +100,8 @@ interface WorktreeDeps {
   readFileSafe?: (file: string) => string | null;
   mtimeSafe?: (file: string) => Date | null;
   reapMtimeGuardMs?: number;
+  /** Injected current time in ms since epoch for deterministic tests (#1191). */
+  nowMs?: number;
   parseWorktreePorcelain?: (porcelain: string) => WorktreeBranchEntry[];
 }
 
@@ -878,6 +880,7 @@ function reapOrphanWorktrees(repoRoot: string, deps: WorktreeDeps = {}): ReapRes
   const readFileSafe = deps.readFileSafe || defaultReadFileSafe;
   const mtimeSafe = deps.mtimeSafe || defaultMtimeSafe;
   const reapMtimeGuardMs = deps.reapMtimeGuardMs !== undefined ? deps.reapMtimeGuardMs : REAP_MTIME_GUARD_MS;
+  const nowMs = deps.nowMs ?? Date.now();
 
   const results: ReapResult[] = [];
 
@@ -982,7 +985,7 @@ function reapOrphanWorktrees(repoRoot: string, deps: WorktreeDeps = {}): ReapRes
 
     // 4a. Stale-lock guard: skip if lock is too fresh (PID recycling / race).
     const lockMtime = mtimeSafe(lockedFile);
-    if (!lockMtime || Date.now() - lockMtime.getTime() < reapMtimeGuardMs) {
+    if (!lockMtime || nowMs - lockMtime.getTime() < reapMtimeGuardMs) {
       results.push({ path: worktreePath, status: 'skipped', reason: 'lock_too_fresh' });
       continue;
     }

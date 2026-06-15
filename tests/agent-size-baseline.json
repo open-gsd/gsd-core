@@ -18,6 +18,7 @@
   "gsd-framework-selector.md": 6778,
   "gsd-integration-checker.md": 15141,
   "gsd-intel-updater.md": 18122,
+  "gsd-mempalace-curator.md": 4160,
   "gsd-nyquist-auditor.md": 7245,
   "gsd-pattern-mapper.md": 12487,
   "gsd-phase-researcher.md": 40611,
@@ -25,11 +26,11 @@
   "gsd-planner.md": 48885,
   "gsd-project-researcher.md": 21987,
   "gsd-research-synthesizer.md": 13646,
-  "gsd-roadmapper.md": 19652,
+  "gsd-roadmapper.md": 21774,
   "gsd-security-auditor.md": 6216,
   "gsd-ui-auditor.md": 17152,
   "gsd-ui-checker.md": 11081,
   "gsd-ui-researcher.md": 19265,
   "gsd-user-profiler.md": 8516,
-  "gsd-verifier.md": 41285
+  "gsd-verifier.md": 43339
 }

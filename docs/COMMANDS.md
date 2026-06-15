@@ -107,6 +107,8 @@ Clarify WHAT a phase delivers through Socratic questioning with quantitative amb
 
 **Edge Coverage (Step 5.5):** After the ambiguity gate passes, spec-phase runs an edge-completeness probe over each requirement. It raises only applicable categories from a closed 8-category taxonomy (boundary, adjacency, empty, encoding, ordering, precision, idempotency, concurrency), proposes one concrete candidate edge per category, and records each as `covered` / `dismissed` (reason required) / `backstop` / `unresolved` in a `## Edge Coverage` SPEC section. Unresolved applicable edges soft-gate the spec (Resolve / Write-anyway-flagged / Keep-probing); `covered` and `backstop` edges are later lifted into plan-phase `must_haves`. Under `--auto` the probe **never auto-dismisses** — it auto-covers where a defensible acceptance criterion exists, otherwise auto-backstops.
 
+**Prohibition Coverage (Step 5.6):** After the edge probe, spec-phase runs a prohibition-completeness probe — a two-stage prose pass (adversarial recall → precision classifier) that surfaces the unwritten *must-NOT* constraints (values/safety/ethics) the spec never forbids. Each is resolved to `resolved` (a NEGATIVE acceptance criterion, carrying a `test` or `judgment` verification tier) / `dismissed` (reason required) / `unresolved`, recorded in a `## Prohibitions (must-NOT)` SPEC section. Resolved prohibitions are lifted into plan-phase `must_haves.prohibitions`; judgment-tier items soft-gate at verify time (never silent, never hard-halt) and unwired test-tier items fail closed. Under `--auto` the probe **never auto-dismisses**; canon-bound concerns (OWASP / GDPR / fairness) are referred to `/gsd:secure-phase`.
+
 **Prerequisites:** `.planning/ROADMAP.md` exists
 **Produces:** `{phase}-SPEC.md` (with a `## Edge Coverage` section)
 
@@ -558,13 +560,17 @@ Show status, next steps, and automatically advance to the next logical workflow 
 | Flag | Description |
 |------|-------------|
 | `--next` | Automatically advance to the next logical workflow step without manual route selection |
+| `--next --auto` | Like `--next`, but chains steps automatically until milestone completion or a blocking decision |
+| `--next --converge` | When the next action is planning, route it through `/gsd-plan-review-convergence`; requires `workflow.plan_review_convergence=true` |
+| `--cross-ai` | Alias for `--converge` |
+| Reviewer flags | With `--converge`, pass through `--codex`, `--gemini`, `--claude`, `--opencode`, `--ollama`, `--lm-studio`, `--llama-cpp`, `--all`, and `--max-cycles N` |
 | `--do "task description"` | Analyze freeform intent and dispatch to the most appropriate GSD command |
 | `--forensic` | Append a 6-check integrity audit after the standard report (STATE consistency, orphaned handoffs, deferred scope drift, memory-flagged pending work, blocking todos, uncommitted code) |
 
 **Auto-routing behavior (`--next`):**
 - No project → suggests `/gsd-new-project`
 - Phase needs discussion → runs `/gsd-discuss-phase`
-- Phase needs planning → runs `/gsd-plan-phase`
+- Phase needs planning → runs `/gsd-plan-phase` (or `/gsd-plan-review-convergence` when `--converge` is set)
 - Phase needs execution → runs `/gsd-execute-phase`
 - Phase needs verification → runs `/gsd-verify-work`
 - All phases complete → suggests `/gsd-complete-milestone`
@@ -572,6 +578,8 @@ Show status, next steps, and automatically advance to the next logical workflow 
 ```bash
 /gsd-progress                       # "Where am I? What's next?" with auto-routing
 /gsd-progress --next                # Advance to next step automatically
+/gsd-progress --next --auto         # Chain steps automatically until completion
+/gsd-progress --next --auto --converge  # Hands-free run with plan-review convergence
 /gsd-progress --do "fix the auth bug"  # Dispatch freeform intent to best GSD command
 /gsd-progress --forensic            # Standard report + integrity audit
 ```
@@ -1156,6 +1164,41 @@ Build, query, and inspect the project knowledge graph stored in `.planning/graph
 ```
 
 **Programmatic access:** `node gsd-tools.cjs graphify <build|query|status|diff|snapshot>` — see [CLI Tools Reference](CLI-TOOLS.md).
+
+### `/gsd-mempalace-recall`
+
+Recall prior decisions, patterns, and surprises from MemPalace into `MEMORY-RECALL.md` before planning. Reads `CONTEXT.md` to derive a search query, runs `mempalace wake-up` + `mempalace_search` + `mempalace_kg_query`/timeline, and writes a deduped recall document. When MemPalace is unavailable the skill writes a stub and continues. Opt-in via `mempalace.enabled: true` and `mempalace.recall_on_plan: true` (see [Configuration Reference](CONFIGURATION.md#mempalace-settings)).
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `phase-slug` | No | Phase slug used to scope the search query (defaults to the active phase from CONTEXT.md) |
+
+**Produces:** `MEMORY-RECALL.md` in the active phase directory (or an "unavailable" stub when MemPalace is unreachable)
+
+```bash
+/gsd-mempalace-recall          # Recall for the current phase
+/gsd-mempalace-recall 03-auth  # Recall scoped to a specific phase slug
+```
+
+---
+
+### `/gsd-mempalace-capture`
+
+File a phase artifact (`CONTEXT.md`, `PLAN.md`, or `SUMMARY.md`) verbatim into MemPalace and mirror decision facts into its temporal knowledge graph. Uses `mempalace_check_duplicate` before filing, so re-running the same phase is idempotent. Opt-in via `mempalace.enabled: true` and `mempalace.capture_artifacts: true` (see [Configuration Reference](CONFIGURATION.md#mempalace-settings)).
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `CONTEXT.md\|PLAN.md\|SUMMARY.md` | No | Artifact to capture (defaults to `CONTEXT.md` when called at `discuss:post`) |
+
+**Produces:** A drawer in the appropriate MemPalace room (`decisions`, `planning`, or `milestones`) plus KG facts when `mempalace.mirror_kg: true`
+
+```bash
+/gsd-mempalace-capture CONTEXT.md   # File CONTEXT.md → decisions room
+/gsd-mempalace-capture PLAN.md      # File PLAN.md → planning room
+/gsd-mempalace-capture SUMMARY.md   # File SUMMARY.md → milestones room
+```
+
+---
 
 ### `gsd-tools intel api-surface`
 

@@ -293,6 +293,13 @@ Read `@~/.claude/gsd-core/references/scout-codebase.md` — it contains the phas
 3. Build internal `<codebase_context>` per the reference's output schema
 </step>
 
+<step name="dispatch_discuss_pre_hooks">
+```bash
+DISCUSS_PRE_HOOKS_JSON=$(gsd_run loop render-hooks discuss:pre --raw)
+```
+Apply each entry in `activeHooks` per @~/.claude/gsd-core/references/loop-hook-dispatch.md. Empty list → continue to `analyze_phase`.
+</step>
+
 <step name="analyze_phase">
 Analyze the phase to identify gray areas. Use both `prior_decisions` and `codebase_context` to ground the analysis.
 
@@ -403,6 +410,13 @@ The template documents variable substitutions and conditional sections. Substitu
 - The `<decisions>` section contains only implementation decisions from this discussion.
 
 Write the file.
+</step>
+
+<step name="dispatch_discuss_post_hooks">
+```bash
+DISCUSS_POST_HOOKS_JSON=$(gsd_run loop render-hooks discuss:post --raw)
+```
+Apply each entry in `activeHooks` per @~/.claude/gsd-core/references/loop-hook-dispatch.md. Empty list → continue to `confirm_creation`.
 </step>
 
 <step name="confirm_creation">

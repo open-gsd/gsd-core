@@ -531,6 +531,59 @@ function stageSkillsForRuntimeAsSkills(
 }
 
 /**
+ * Stage a converted copy of the agents directory for a given runtime.
+ *
+ * Analogous to `stageCommandsForRuntimeFlat` but for agent `.md` files. Each
+ * source `.md` is passed through `converter` and written as a flat `${name}.md`
+ * file in the staging directory. Agent filenames are kept verbatim (no prefix
+ * added here — the prefix is already embedded in agent stems, e.g. `gsd-planner.md`).
+ *
+ * This is used by the descriptor-driven `dispatchKindEntry` when an `agents` kind
+ * entry carries a non-null converter (ADR-457 / #1173). When `converter` is null,
+ * `agentsKind` falls back to the existing raw-copy path (`stageAgentsForProfile`).
+ *
+ * For the `full` profile (`skills === '*'`), all `.md` files are staged.
+ * For tiered profiles, only agents whose full stem is in `resolvedProfile.agents`
+ * are staged (mirrors `stageAgentsForProfile` behaviour).
+ *
+ * @param srcAgentsDir    source agents directory (e.g. agents/)
+ * @param resolvedProfile profile filter from resolveProfile()
+ * @param converter       (content: string) → string  pure per-file converter
+ */
+function stageAgentsForRuntimeWithConverter(
+  srcAgentsDir: string,
+  resolvedProfile: ResolvedProfile,
+  converter: (content: string) => string,
+): string {
+  if (!fs.existsSync(srcAgentsDir)) return srcAgentsDir;
+
+  const stageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-profile-runtime-agents-'));
+  try {
+    const entries = fs.readdirSync(srcAgentsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      if (!entry.name.endsWith('.md')) continue;
+      // For tiered profiles, gate by agent stem (full filename without extension).
+      if (resolvedProfile.skills !== '*') {
+        const stem = entry.name.slice(0, -3);
+        if (!(resolvedProfile.agents instanceof Set && resolvedProfile.agents.has(stem))) {
+          continue;
+        }
+      }
+      const content = fs.readFileSync(path.join(srcAgentsDir, entry.name), 'utf8');
+      const converted = converter(content);
+      fs.writeFileSync(path.join(stageDir, entry.name), converted, 'utf8');
+    }
+  } catch (err) {
+    try { fs.rmSync(stageDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+    throw err;
+  }
+  STAGED_DIRS.add(stageDir);
+  ensureExitCleanup();
+  return stageDir;
+}
+
+/**
  * Stage converted command files as flat `.md` files.
  *
  * Analogous to `stageSkillsForRuntimeAsSkills` but for runtimes that use a
@@ -757,6 +810,7 @@ export = {
   mostRestrictiveProfile,
   stageSkillsForProfile,
   stageAgentsForProfile,
+  stageAgentsForRuntimeWithConverter,
   stageSkillsForRuntimeAsSkills,
   stageCommandsForRuntimeFlat,
   STAGED_DIRS,

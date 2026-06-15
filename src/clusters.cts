@@ -132,6 +132,8 @@ export const CLUSTERS: ClusterMap = Object.freeze({
     'review-backlog',
     'debug',
     'extract-learnings',
+    'mempalace-recall',
+    'mempalace-capture',
     'surface',
   ]),
 });

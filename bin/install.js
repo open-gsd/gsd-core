@@ -930,13 +930,11 @@ function readSettings(settingsPath) {
   if (fs.existsSync(settingsPath)) {
     try {
       const raw = fs.readFileSync(settingsPath, 'utf8');
+      let parsed;
       // Try standard JSON first (fast path)
-      try {
-        return JSON.parse(raw);
-      } catch {
-        // Fall back to JSONC stripping
-        return JSON.parse(stripJsonComments(raw));
-      }
+      try { parsed = JSON.parse(raw); }
+      catch { parsed = JSON.parse(stripJsonComments(raw)); }
+      return parsed === null ? {} : parsed;   // valid JSON null = empty settings, not malformed
     } catch (e) {
       // If even JSONC stripping fails, warn instead of silently returning {}
       console.warn('  ' + yellow + '⚠' + reset + '  Warning: Could not parse ' + settingsPath + ' — file may be malformed. Existing settings preserved.');
@@ -2335,22 +2333,6 @@ const claudeToCursorTools = {
   SlashCommand: null,    // No equivalent — skills are auto-discovered
 };
 
-/**
- * Convert a Claude Code tool name to Cursor CLI format
- * @returns {string|null} Cursor tool name, or null if tool should be excluded
- */
-function convertCursorToolName(claudeTool) {
-  if (claudeTool in claudeToCursorTools) {
-    return claudeToCursorTools[claudeTool];
-  }
-  // MCP tools keep their format (Cursor supports MCP)
-  if (claudeTool.startsWith('mcp__')) {
-    return claudeTool;
-  }
-  // Most tools share the same name (Read, Write, Glob, Grep, Task, WebSearch, WebFetch, TodoWrite)
-  return claudeTool;
-}
-
 function convertSlashCommandsToCursorSkillMentions(content) {
   // Keep leading "/" for slash commands; only normalize gsd: -> gsd-.
   // This preserves rendered "next step" commands like "/gsd-execute-phase 17".
@@ -2477,22 +2459,6 @@ const claudeToWindsurfTools = {
   SlashCommand: null,    // No equivalent — skills are auto-discovered
 };
 
-/**
- * Convert a Claude Code tool name to Windsurf Cascade format
- * @returns {string|null} Windsurf tool name, or null if tool should be excluded
- */
-function convertWindsurfToolName(claudeTool) {
-  if (claudeTool in claudeToWindsurfTools) {
-    return claudeToWindsurfTools[claudeTool];
-  }
-  // MCP tools keep their format (Windsurf supports MCP)
-  if (claudeTool.startsWith('mcp__')) {
-    return claudeTool;
-  }
-  // Most tools share the same name (Read, Write, Glob, Grep, Task, WebSearch, WebFetch, TodoWrite)
-  return claudeTool;
-}
-
 function convertSlashCommandsToWindsurfSkillMentions(content) {
   // Keep leading "/" for slash commands; only normalize gsd: -> gsd-.
   return content.replace(/gsd:/gi, 'gsd-');
@@ -2604,25 +2570,6 @@ const claudeToAugmentTools = {
   SlashCommand: null,
   TodoWrite: 'add_tasks',
 };
-
-function convertAugmentToolName(claudeTool) {
-  if (claudeTool in claudeToAugmentTools) {
-    return claudeToAugmentTools[claudeTool];
-  }
-  if (claudeTool.startsWith('mcp__')) {
-    return claudeTool;
-  }
-  const toolMapping = {
-    Read: 'view',
-    Write: 'save-file',
-    Glob: 'view',
-    Grep: 'grep',
-    Task: null,
-    WebSearch: 'web-search',
-    WebFetch: 'web-fetch',
-  };
-  return toolMapping[claudeTool] || claudeTool;
-}
 
 function convertSlashCommandsToAugmentSkillMentions(content) {
   return content.replace(/gsd:/gi, 'gsd-');
@@ -8365,6 +8312,10 @@ function uninstall(isGlobal, runtime = 'claude') {
       console.log(`  ${green}✓${reset} Removed scripts/lib/ GSD files`);
     }
   }
+  // Remove scripts/fix-slash-commands.cjs (#1223) — must come before the scripts/ rmdir
+  const fixSlashUninstallPath = path.join(targetDir, 'scripts', 'fix-slash-commands.cjs');
+  try { fs.unlinkSync(fixSlashUninstallPath); } catch (_) { /* best-effort */ }
+
   // If scripts/ dir is now empty, remove it too
   const scriptsUninstallDir = path.join(targetDir, 'scripts');
   if (fs.existsSync(scriptsUninstallDir)) {
@@ -9078,6 +9029,12 @@ function writeManifest(configDir, runtime = 'claude', options = {}) {
         manifest.files['scripts/lib/' + file] = fileHash(path.join(scriptsLibInstallDir, file));
       }
     }
+  }
+
+  // Track scripts/fix-slash-commands.cjs (top-level scripts/ file, not covered by changeset/lib loops)
+  const fixSlashInstallPath = path.join(configDir, 'scripts', 'fix-slash-commands.cjs');
+  if (fs.existsSync(fixSlashInstallPath)) {
+    manifest.files['scripts/fix-slash-commands.cjs'] = fileHash(fixSlashInstallPath);
   }
 
   fs.writeFileSync(path.join(configDir, MANIFEST_NAME), JSON.stringify(manifest, null, 2));
@@ -10469,6 +10426,25 @@ function install(isGlobal, runtime = 'claude', options = {}) {
       console.log(`  ${green}✓${reset} Installed scripts/changeset/ (changelog preview CLI)`);
     } else {
       failures.push('scripts/changeset/cli.cjs');
+    }
+  }
+
+  // Copy scripts/fix-slash-commands.cjs — required by gsd-core/bin/lib/command-roster.cjs
+  // at load time via require('../../../scripts/fix-slash-commands.cjs'). Without this file
+  // every gsd-tools command crashes with MODULE_NOT_FOUND (#1223).
+  // This copy is independent of scripts/changeset/ — it must land even when the
+  // changeset CLI source is absent.
+  {
+    const fixSlashSrc = path.join(src, 'scripts', 'fix-slash-commands.cjs');
+    const fixSlashDest = path.join(targetDir, 'scripts', 'fix-slash-commands.cjs');
+    fs.mkdirSync(path.join(targetDir, 'scripts'), { recursive: true });
+    if (!fs.existsSync(fixSlashSrc)) {
+      failures.push('scripts/fix-slash-commands.cjs (source missing from package — reinstall from npm)');
+    } else {
+      fs.copyFileSync(fixSlashSrc, fixSlashDest);
+      if (!verifyFileInstalled(fixSlashDest, 'scripts/fix-slash-commands.cjs')) {
+        failures.push('scripts/fix-slash-commands.cjs');
+      }
     }
   }
 
@@ -12282,6 +12258,9 @@ module.exports = {
     parseConfigDirFromArgs,
     cleanupLegacyGsdCc,
     _applyRuntimeRewrites,
+    // #1191 — exported so tests exercise the REAL readSettings, not a replica
+    readSettings,
+    stripJsonComments,
     ...runtimeArtifactConversion,
   };
 
