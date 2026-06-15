@@ -24,7 +24,7 @@ const PROFILES = [
       'Researches domain ecosystem before roadmap creation. Produces files in .planning/research/ consumed during roadmap creation. Spawned by /gsd:new-project or /gsd:new-milestone orchestrators.',
     color: 'cyan',
     tools:
-      'Read, Write, Bash, Grep, Glob, Skill, WebSearch, WebFetch, mcp__context7__*, mcp__firecrawl__*, mcp__exa__*, mcp__tavily__*, mcp__ref__*, mcp__jina__*',
+      'Read, Write, Bash, Grep, Glob, Skill, WebSearch, WebFetch, mcp__context7__*, mcp__firecrawl__*, mcp__exa__*, mcp__tavily__*, mcp__ref__*, mcp__jina__*, mcp__perplexity__*',
     requiredIncludes: [
       '@~/.claude/gsd-core/references/research-documentation-lookup.md',
       '@~/.claude/gsd-core/references/research-philosophy.md',
@@ -46,7 +46,7 @@ const PROFILES = [
       'Researches how to implement a phase before planning. Produces RESEARCH.md consumed by gsd-planner. Spawned by /gsd:plan-phase orchestrator.',
     color: 'cyan',
     tools:
-      'Read, Write, Edit, Bash, Grep, Glob, Skill, WebSearch, WebFetch, mcp__context7__*, mcp__firecrawl__*, mcp__exa__*, mcp__tavily__*, mcp__ref__*, mcp__jina__*',
+      'Read, Write, Edit, Bash, Grep, Glob, Skill, WebSearch, WebFetch, mcp__context7__*, mcp__firecrawl__*, mcp__exa__*, mcp__tavily__*, mcp__ref__*, mcp__jina__*, mcp__perplexity__*',
     requiredIncludes: [
       '@~/.claude/gsd-core/references/research-documentation-lookup.md',
       '@~/.claude/gsd-core/references/research-philosophy.md',
