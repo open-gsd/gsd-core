@@ -51,7 +51,7 @@ describe('prohibition-probe verify-tier: test-tier fail-closed safety (PROB-12 /
     assert.ok(disposition && typeof disposition === 'object', 'disposition must be a structured object');
     assert.notEqual(disposition.status, 'green', 'an unwired test-tier item must NEVER be green (fail-closed)');
     assert.notEqual(disposition.status, 'pass', 'an unwired test-tier item must NEVER pass silently (fail-closed)');
-    assert.ok(disposition.flagged === true || /unverified|unwired|flag/i.test(String(disposition.status)),
+    assert.equal(disposition.flagged, true,
       'an unwired test-tier item must be flagged unverified — it can never be silently skipped');
   });
 });

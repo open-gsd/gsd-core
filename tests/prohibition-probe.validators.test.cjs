@@ -29,6 +29,8 @@ function loadFixtureItems() {
     const expected = path.join(FIXTURES_DIR, name, 'expected.json');
     if (!fs.existsSync(expected)) continue;
     const json = JSON.parse(fs.readFileSync(expected, 'utf8'));
+    assert.ok(json.items === undefined || Array.isArray(json.items),
+      `fixture ${name}: expected.json "items" must be an array when present (got ${typeof json.items})`);
     for (const item of json.items ?? []) out.push({ fixture: name, item });
   }
   return out;

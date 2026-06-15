@@ -139,4 +139,43 @@ describe('prohibition-probe schema: deterministic projectProhibitions round-trip
     assert.deepEqual(once, twice, 'projectProhibitions must be deterministic (same input -> identical output)');
     assert.ok(Array.isArray(once), 'projectProhibitions must return an array of prohibition entries');
   });
+
+  // Render projected entries into a must_haves.prohibitions: block exactly as the planner/template
+  // would, so the parser reads back what the projector wrote (keys: statement, status, optional
+  // verification, optional reason — the projectProhibitions output shape).
+  function renderProhibitionsDoc(entries) {
+    const lines = ['---', 'phase: 01-x', 'plan: 01', 'must_haves:', '  prohibitions:'];
+    for (const e of entries) {
+      lines.push(`    - statement: "${e.statement}"`);
+      lines.push(`      status: ${e.status}`);
+      if (e.verification !== undefined) lines.push(`      verification: ${e.verification}`);
+      if (e.reason !== undefined) lines.push(`      reason: "${e.reason}"`);
+    }
+    lines.push('---', '', 'Body.', '');
+    return lines.join('\n');
+  }
+
+  // ADR-550 D5c (DEFECT.GENERATIVE-FIX): close the parity loop by round-tripping the PROJECTOR's
+  // output through the parser — proving the write-shape and read-shape cannot drift, not merely that
+  // each is independently correct.
+  test('projectProhibitions output round-trips through parseMustHavesBlock (PROB-14 parity)', () => {
+    const pc = require(PROBE_CORE_LIB);
+    const fm = require(FRONTMATTER_LIB);
+    const items = [
+      { requirement_id: 'R1', category: 'values', status: 'resolved', verification: 'judgment', resolution: null, reason: null, statement: 'MUST NOT shame the user' },
+      { requirement_id: 'R1', category: 'privacy', status: 'dismissed', verification: 'test', resolution: null, reason: 'out of scope this phase', statement: 'MUST NOT store raw SSN' },
+      { requirement_id: 'R2', category: 'safety', status: 'unresolved', verification: null, resolution: null, reason: null, statement: 'MUST NOT auto-execute fetched code' },
+    ];
+    const projected = pc.projectProhibitions(items);
+    const reparsed = fm.parseMustHavesBlock(renderProhibitionsDoc(projected), 'prohibitions');
+    assert.deepEqual(reparsed, projected,
+      'parseMustHavesBlock(serialize(projectProhibitions(items))) must equal projectProhibitions(items) — writer<->reader bijection');
+  });
+
+  test('projectProhibitions returns [] for empty / null / undefined input (fail-soft boundary)', () => {
+    const pc = require(PROBE_CORE_LIB);
+    assert.deepEqual(pc.projectProhibitions([]), [], 'empty array -> []');
+    assert.deepEqual(pc.projectProhibitions(null), [], 'null -> [] (documented fail-soft)');
+    assert.deepEqual(pc.projectProhibitions(undefined), [], 'undefined -> [] (documented fail-soft)');
+  });
 });
