@@ -17,8 +17,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import core = require('./core.cjs');
-const { output, error, loadConfig } = core;
+import io = require('./io.cjs');
+const { output, error } = io;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import configLoader = require('./config-loader.cjs');
+const { loadConfig } = configLoader;
 import { platformReadSync as safeReadFile, platformWriteSync, platformEnsureDir } from './shell-command-projection.cjs';
 import { getGlobalSkillDir, getGlobalConfigDir } from './runtime-homes.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';

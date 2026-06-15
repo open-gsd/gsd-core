@@ -26,11 +26,9 @@
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import graphify = require('./graphify.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import core = require('./core.cjs');
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 import io = require('./io.cjs');
 
-const { ERROR_REASON } = io;
+const { output, ERROR_REASON } = io;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -73,16 +71,16 @@ function routeGraphifyCommand({ args, cwd, raw, error, _graphify }: RouteGraphif
       }
       budget = parseInt(rawBudget, 10);
     }
-    core.output(g.graphifyQuery(cwd, term, { budget }), raw);
+    output(g.graphifyQuery(cwd, term, { budget }), raw);
   } else if (subcommand === 'status') {
-    core.output(g.graphifyStatus(cwd), raw);
+    output(g.graphifyStatus(cwd), raw);
   } else if (subcommand === 'diff') {
-    core.output(g.graphifyDiff(cwd), raw);
+    output(g.graphifyDiff(cwd), raw);
   } else if (subcommand === 'build') {
     if (args[2] === 'snapshot') {
-      core.output(g.writeSnapshot(cwd), raw);
+      output(g.writeSnapshot(cwd), raw);
     } else {
-      core.output(g.graphifyBuild(cwd), raw);
+      output(g.graphifyBuild(cwd), raw);
     }
   } else {
     error(

@@ -19,8 +19,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import core = require('./core.cjs');
-const { escapeRegex, output, error } = core;
+import io = require('./io.cjs');
+const { output, error } = io;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseId = require('./phase-id.cjs');
+const { escapeRegex } = phaseId;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningPaths, planningDir, findContextMdIn } = planningWorkspace;
