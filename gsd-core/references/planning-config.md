@@ -36,6 +36,8 @@ Configuration options for `.planning/` directory behavior.
 | `git.quick_branch_template` | `null` | Optional branch template for quick-task runs |
 | `workflow.use_worktrees` | `true` | Whether executor agents run in isolated git worktrees. Set to `false` to disable worktrees — agents execute sequentially on the main working tree instead. Recommended for solo developers or when worktree merges cause issues. Note: if your branch is ahead of `origin/HEAD` (a diverged milestone or feature branch), GSD auto-degrades to sequential and prints a warning; set `worktree.baseRef:"head"` in `.claude/settings.local.json` to restore parallel execution. See the branch-divergence note below. |
 | `workflow.subagent_timeout` | `300000` | Timeout in milliseconds for parallel subagent tasks (e.g. codebase mapping). Increase for large codebases or slower models. Default: 300000 (5 minutes). |
+| `workflow.test_command` | `null` | Custom shell command run as the regression/test gate by verify-phase, execute-phase, audit-fix, and post-merge-gate. When unset, GSD auto-detects (Makefile / package.json / Cargo.toml / go.mod / pyproject.toml). Example: `npm test`. |
+| `workflow.build_command` | `null` | Custom shell command run as the build gate by the post-merge gate. When unset, the build step is skipped/auto-detected. Example: `npm run build`. |
 | `workflow.inline_plan_threshold` | `2` | Plans with this many tasks or fewer execute inline (Pattern C) instead of spawning a subagent. Avoids ~14K token spawn overhead for small plans. Set to `0` to always spawn subagents. |
 | `manager.flags.discuss` | `""` | Flags passed to `/gsd:discuss-phase` when dispatched from manager (e.g. `"--auto --analyze"`) |
 | `manager.flags.plan` | `""` | Flags passed to plan workflow when dispatched from manager |
@@ -262,6 +264,8 @@ Set via `workflow.*` namespace in config.json (e.g., `"workflow": { "research": 
 | `workflow.skip_discuss` | boolean | `false` | `true`, `false` | Skip discuss phase entirely |
 | `workflow.use_worktrees` | boolean | `true` | `true`, `false` | Run executor agents in isolated git worktrees |
 | `workflow.subagent_timeout` | number | `300000` | Any positive integer (ms) | Timeout for parallel subagent tasks (default: 5 minutes) |
+| `workflow.test_command` | string\|null | `null` | Any shell command | Regression/test gate command run by verify-phase, execute-phase, audit-fix, and post-merge-gate. Unset → GSD auto-detects (Makefile / package.json / Cargo.toml / go.mod / pyproject.toml). |
+| `workflow.build_command` | string\|null | `null` | Any shell command | Build gate command run by the post-merge gate. Unset → build step auto-detected/skipped. |
 | `workflow.inline_plan_threshold` | number | `2` | `0`–`10` | Plans with ≤N tasks execute inline instead of spawning a subagent |
 | `workflow.code_review` | boolean | `true` | `true`, `false` | Enable built-in code review step in the ship workflow |
 | `workflow.code_review_depth` | string | `"standard"` | `"light"`, `"standard"`, `"deep"` | Depth level for code review analysis in the ship workflow |

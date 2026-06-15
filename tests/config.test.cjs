@@ -1418,3 +1418,47 @@ describe('plan_review.source_grounding and plan_review.source_grounding_authorit
     );
   });
 });
+
+// ─── config-set workflow.test_command (#1216) ────────────────────────────────
+
+describe('config-set workflow.test_command (#1216)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    runGsdTools('config-ensure-section', tmpDir);
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('config-set accepts workflow.test_command', () => {
+    const result = runGsdTools(['config-set', 'workflow.test_command', 'npm test'], tmpDir);
+    assert.ok(result.success, `config-set should accept workflow.test_command: ${result.error}`);
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.workflow?.test_command, 'npm test', 'value must be persisted');
+  });
+
+  test('config-set workflow.test_command persists a custom make command', () => {
+    const result = runGsdTools(['config-set', 'workflow.test_command', 'make test'], tmpDir);
+    assert.ok(result.success, `config-set should accept workflow.test_command: ${result.error}`);
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.workflow?.test_command, 'make test', 'make test must be persisted');
+  });
+
+  test('config-get workflow.test_command returns the set value', () => {
+    runGsdTools(['config-set', 'workflow.test_command', 'cargo test'], tmpDir);
+    const result = runGsdTools('config-get workflow.test_command', tmpDir);
+    assert.ok(result.success, `config-get should return workflow.test_command: ${result.error}`);
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output, 'cargo test', 'config-get must return the persisted value');
+  });
+
+  test('config-set accepts workflow.build_command', () => {
+    const result = runGsdTools(['config-set', 'workflow.build_command', 'npm run build'], tmpDir);
+    assert.ok(result.success, `config-set should accept workflow.build_command: ${result.error}`);
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.workflow?.build_command, 'npm run build', 'value must be persisted');
+  });
+});
