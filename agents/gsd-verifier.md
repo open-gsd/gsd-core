@@ -180,21 +180,28 @@ For each truth, determine if codebase enables it.
 
 **Verification status:**
 
-- ✓ VERIFIED: All supporting artifacts pass all checks
+- ✓ VERIFIED: All supporting artifacts pass all checks — and, for a behavior-dependent truth, a behavioral test exercises the asserted behavior (see below)
+- ⚠️ PRESENT_BEHAVIOR_UNVERIFIED: Supporting artifacts are present and wired, but the truth asserts runtime behavior that no test exercises — present, not behaviorally proven. Routes to human verification (Step 8) and does NOT count toward the verified score (Step 9).
 - ✗ FAILED: One or more artifacts missing, stub, or unwired
 - ? UNCERTAIN: Can't verify programmatically (needs human)
+
+**Behavior-dependent truths.** A truth is *behavior-dependent* when its correctness hinges on runtime behavior grep/presence checks cannot see — a **state transition** or a **cancellation / cleanup / ordering invariant** (e.g. "cancels the in-flight task and bumps the generation counter", "resets the busy flag on abort", "rolls back on failure"). For these, symbol presence + wiring is *necessary but not sufficient*: the code can be present and wired yet still leak state on the very path the invariant covers.
 
 For each truth:
 
 1. Identify supporting artifacts
 2. Check artifact status (Step 4)
 3. Check wiring status (Step 5)
-4. **Before marking FAIL:** Check for override (Step 3b)
-5. Determine truth status
+4. **Before marking FAIL or PRESENT_BEHAVIOR_UNVERIFIED:** Check for override (Step 3b)
+5. **Classify behavior-dependence.** If the truth asserts a state transition or a cancellation/cleanup/ordering invariant, its status cannot be VERIFIED on presence alone:
+   - A pre-existing test exercises the transition/invariant and passes (confirm via Step 7b's single-named-test path) → ✓ VERIFIED.
+   - No such test exists, or it can't run without a server/state mutation → ⚠️ PRESENT_BEHAVIOR_UNVERIFIED. Emit a human-verification item (Step 8) and do not count it toward the verified score (Step 9).
+   - An accepted override (Step 3b) carries the truth as PASSED (override), exactly as it does for a FAILED truth.
+6. Determine truth status
 
 ## Step 3b: Check Verification Overrides
 
-Before marking any must-have as FAILED, check the VERIFICATION.md frontmatter for an `overrides:` entry that matches this must-have.
+Before marking any must-have as FAILED or ⚠️ PRESENT_BEHAVIOR_UNVERIFIED, check the VERIFICATION.md frontmatter for an `overrides:` entry that matches this must-have.
 
 **Override check procedure:**
 
@@ -204,12 +211,12 @@ Before marking any must-have as FAILED, check the VERIFICATION.md frontmatter fo
 4. Key technical terms (file paths, component names, API endpoints) have higher weight
 
 **If override found:**
-- Mark as `PASSED (override)` instead of FAIL
+- Mark as `PASSED (override)` instead of FAIL/PRESENT_BEHAVIOR_UNVERIFIED
 - Evidence: `Override: {reason} — accepted by {accepted_by} on {accepted_at}`
-- Count toward passing score, not failing score
+- Count toward passing score (`verified_truths`), not failing score
 
 **If no override found:**
-- Mark as FAILED as normal
+- Mark as FAILED (or ⚠️ PRESENT_BEHAVIOR_UNVERIFIED, per Step 3 step 5) as normal
 - Consider suggesting an override if the failure looks intentional (alternative implementation exists)
 
 **Suggesting overrides:** When a must-have FAILs but evidence shows an alternative implementation that achieves the same intent, include an override suggestion in the report:
@@ -461,6 +468,8 @@ Anti-pattern scanning (Step 7) checks for code smells. Behavioral spot-checks go
 
 **When to run:** For phases that produce runnable code (APIs, CLI tools, build scripts, data pipelines). Skip for documentation-only or config-only phases.
 
+**Behavioral evidence for behavior-dependent truths (Step 3).** When a truth asserts a state transition or a cancellation/cleanup/ordering invariant, the single named test below is what upgrades it from ⚠️ PRESENT_BEHAVIOR_UNVERIFIED to ✓ VERIFIED. Run only the one named test that exercises the transition/invariant — never the full suite (per #25/#753). If no such test exists, leave the truth ⚠️ PRESENT_BEHAVIOR_UNVERIFIED and route it to human verification (Step 8); do not mark it VERIFIED on presence.
+
 **How:**
 
 1. **Identify checkable behaviors** from must-haves truths. Select 2-4 that can be tested with a single command:
@@ -548,6 +557,8 @@ done
 
 **Needs human if uncertain:** Complex wiring grep can't trace, dynamic state behavior, edge cases.
 
+**Behavior-unverified truths (Step 3):** Every truth left ⚠️ PRESENT_BEHAVIOR_UNVERIFIED is recorded in the `behavior_unverified_items` frontmatter list (emitted whenever the count > 0, regardless of overall status, so it survives a gaps_found phase) and surfaces for human verification; when the overall status is human_needed it also appears in the human_verification section. Phrase each item around the invariant: what to trigger, what state must hold afterward, and why presence checks can't see it.
+
 **Harvest deferred items from PLAN.md (#3309 / `workflow.human_verify_mode = end-of-phase`):** Scan every PLAN file in the phase for `<verify><human-check>` blocks on `auto` tasks. These are verification items the planner deliberately deferred from `checkpoint:human-verify` to end-of-phase to avoid the executor cold-start cost. Each block has the same shape used by the planner:
 
 ```xml
@@ -579,18 +590,30 @@ Classify status using this decision tree IN ORDER (most restrictive first):
 1. IF any truth FAILED, artifact MISSING/STUB, key link NOT_WIRED, or blocker anti-pattern found:
    → **status: gaps_found**
 
-2. IF Step 8 produced ANY human verification items (section is non-empty):
+2. IF Step 8 produced ANY human verification items (section is non-empty) — this includes every ⚠️ PRESENT_BEHAVIOR_UNVERIFIED truth from Step 3:
    → **status: human_needed**
-   (Even if all truths are VERIFIED and score is N/N — human items take priority)
+   (Even if all other truths are VERIFIED — human items take priority)
 
 3. IF all truths VERIFIED, all artifacts pass, all links WIRED, no blockers, AND no human verification items:
    → **status: passed**
 
-**passed is ONLY valid when the human verification section is empty.** If you identified items requiring human testing in Step 8, status MUST be human_needed.
+**passed is ONLY valid when the human verification section is empty.** If Step 8 produced any items — including any truth left ⚠️ PRESENT_BEHAVIOR_UNVERIFIED — the status is not `passed`: it is `human_needed`, or `gaps_found` when rule 1 also fires (the ordered tree keeps gaps_found's precedence).
+
+**A ⚠️ PRESENT_BEHAVIOR_UNVERIFIED truth is never FAILED and never VERIFIED.** It does not trigger gaps_found (the code is present and wired) and is not counted as verified (behavior unexercised). On its own it routes to human_needed; when a higher-precedence gaps_found also applies, the status stays gaps_found and the item is preserved in the always-on `behavior_unverified_items` list so it is never lost. Either way it stays a *per-truth* state — the overall-status vocabulary is unchanged, with no new status value.
 
 > **Shared status seam**: the status vocabulary (`passed`, `gaps_found`, `human_needed`) and the per-status routing (next action and next command for each value) are owned by `src/verification.cts` via `gsd_run query verification.status`. This agent is the single emitter of the frontmatter status field; consumers (ship.md, execute-phase.md) read routing from that query instead of re-deriving it.
 
-**Score:** `verified_truths / total_truths`
+**Score (presence- vs behavior-verified split):**
+
+- `verified_truths` counts ✓ VERIFIED truths plus PASSED (override) truths (Step 3b). For a behavior-dependent truth, VERIFIED means a behavioral test passed, not just that symbols are present.
+- ⚠️ PRESENT_BEHAVIOR_UNVERIFIED truths are the *only* ones excluded from `verified_truths`; they are reported separately as `behavior_unverified`.
+
+```text
+score: verified_truths / total_truths        # e.g. 6/7
+behavior_unverified: P                        # truths present + wired but behavior not exercised
+```
+
+A headline N/N therefore certifies that every behavior-dependent truth had behavioral evidence — a clean score can no longer be reached on symbol presence alone.
 
 ## Step 9b: Filter Deferred Items
 
@@ -699,6 +722,7 @@ phase: XX-name
 verified: YYYY-MM-DDTHH:MM:SSZ
 status: passed | gaps_found | human_needed
 score: N/M must-haves verified
+behavior_unverified: 0 # Count of ⚠️ PRESENT_BEHAVIOR_UNVERIFIED truths (present + wired, behavior not exercised); each is detailed in behavior_unverified_items below (and in human_verification when status is human_needed)
 overrides_applied: 0 # Count of PASSED (override) items included in score
 overrides: # Only if overrides exist — carried forward or newly added
   - must_have: "Must-have text that was overridden"
@@ -725,6 +749,11 @@ deferred: # Only if deferred items exist (Step 9b)
   - truth: "Observable truth addressed in a later phase"
     addressed_in: "Phase N"
     evidence: "Matching goal or success criteria text"
+behavior_unverified_items: # Only if behavior_unverified > 0 — emitted regardless of overall status, so these survive a gaps_found phase
+  - truth: "Observable truth whose state transition or cancellation/cleanup/ordering invariant no test exercises"
+    test: "What to trigger"
+    expected: "What state must hold afterward"
+    why_human: "Why presence checks can't see it"
 human_verification: # Only if status: human_needed
   - test: "What to do"
     expected: "What should happen"
@@ -746,8 +775,9 @@ human_verification: # Only if status: human_needed
 | --- | ------- | ---------- | -------------- |
 | 1   | {truth} | ✓ VERIFIED | {evidence}     |
 | 2   | {truth} | ✗ FAILED   | {what's wrong} |
+| 3   | {truth} | ⚠️ PRESENT_BEHAVIOR_UNVERIFIED | {present + wired; no test exercises the transition/invariant — see Human Verification} |
 
-**Score:** {N}/{M} truths verified
+**Score:** {N}/{M} truths verified ({P} present, behavior-unverified)
 
 ### Deferred Items
 
@@ -834,7 +864,7 @@ Structured gaps in VERIFICATION.md frontmatter for `/gsd:plan-phase --gaps`.
 
 {If human_needed:}
 ### Human Verification Required
-{N} items need human testing:
+{N} items need human testing (including {P} present-but-behavior-unverified truths — code wired, transition/invariant not exercised by a test):
 1. **{Test name}** — {what to do}
    - Expected: {what should happen}
 
@@ -856,6 +886,8 @@ Automated checks passed. Awaiting human verification.
 **DO flag for human verification when uncertain** (visual, real-time, external service).
 
 **Keep verification fast.** Use grep/file checks, not running the app.
+
+**Presence is not behavior.** Grep/file checks prove a symbol is present and wired — they do not prove a state transition or a cancellation/cleanup/ordering invariant holds at runtime. For a behavior-dependent truth, require a passing behavioral test (Step 7b's single named test) or mark it ⚠️ PRESENT_BEHAVIOR_UNVERIFIED and route to human verification. Never let symbol presence alone produce a VERIFIED on a behavior-dependent truth.
 
 **DO NOT commit.** Leave committing to the orchestrator.
 

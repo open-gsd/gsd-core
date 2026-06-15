@@ -183,7 +183,7 @@ See [PLAN.md schema](plan-md.md) for the full field reference.
 
 | | |
 |---|---|
-| **Purpose** | Phase goal verification report. Checks `must_haves.truths`, `must_haves.artifacts`, and `must_haves.key_links` from all plans against the actual codebase after execution. Records `status: passed | gaps_found | human_needed`. |
+| **Purpose** | Phase goal verification report. Checks `must_haves.truths`, `must_haves.artifacts`, and `must_haves.key_links` from all plans against the actual codebase after execution. Records `status: passed \| gaps_found \| human_needed`. A truth whose correctness depends on runtime behaviour — a state transition or a cancellation/cleanup/ordering invariant — is marked `⚠️ PRESENT_BEHAVIOR_UNVERIFIED` (not `VERIFIED`) when no test exercises it: it is excluded from `score`, counted in the `behavior_unverified` frontmatter field, and routed to `human_needed`, so a behaviour-dependent gap can no longer count toward a clean N/N. |
 | **Produced by** | `/gsd-verify-work` (or the verify step within `/gsd-execute-phase`). |
 | **Consumed by** | `plan-phase` closed-phase gate (a `status: passed` VERIFICATION.md marks the phase `Complete` and blocks replanning without `--force`); `/gsd-progress`; human review. |
 

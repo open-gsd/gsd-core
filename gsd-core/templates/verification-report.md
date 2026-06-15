@@ -12,6 +12,12 @@ phase: XX-name
 verified: YYYY-MM-DDTHH:MM:SSZ
 status: passed | gaps_found | human_needed
 score: N/M must-haves verified
+behavior_unverified: 0 # Count of ⚠️ PRESENT_BEHAVIOR_UNVERIFIED truths (present + wired, behavior not exercised)
+behavior_unverified_items: # Only if behavior_unverified > 0 — the truths above as structured items; emitted regardless of overall status
+  - truth: "Observable truth whose state transition or cancellation/cleanup/ordering invariant no test exercises"
+    test: "What to trigger"
+    expected: "What state must hold afterward"
+    why_human: "Why presence checks can't see it"
 ---
 
 # Phase {X}: {Name} Verification Report
@@ -28,9 +34,10 @@ score: N/M must-haves verified
 |---|-------|--------|----------|
 | 1 | {truth from must_haves} | ✓ VERIFIED | {what confirmed it} |
 | 2 | {truth from must_haves} | ✗ FAILED | {what's wrong} |
-| 3 | {truth from must_haves} | ? UNCERTAIN | {why can't verify} |
+| 3 | {truth from must_haves} | ⚠️ PRESENT_BEHAVIOR_UNVERIFIED | {present + wired; transition/invariant not exercised by a test — see Human Verification} |
+| 4 | {truth from must_haves} | ? UNCERTAIN | {why can't verify} |
 
-**Score:** {N}/{M} truths verified
+**Score:** {N}/{M} truths verified ({P} present, behavior-unverified)
 
 ### Required Artifacts
 
@@ -161,10 +168,16 @@ None — all verifiable items checked programmatically.
 
 ## Guidelines
 
-**Status values:**
+**Status values (overall, frontmatter `status:`):**
 - `passed` — All must-haves verified, no blockers
 - `gaps_found` — One or more critical gaps found
 - `human_needed` — Automated checks pass but human verification required
+
+**Per-truth states (Observable Truths `Status` column):**
+- `✓ VERIFIED` — supporting artifacts pass all checks; for a behavior-dependent truth, a behavioral test exercised the asserted behavior
+- `⚠️ PRESENT_BEHAVIOR_UNVERIFIED` — present + wired, but a state transition or cancellation/cleanup/ordering invariant was not exercised by any test. Counts toward `behavior_unverified`, routes to human verification, and is *excluded* from the verified score. Per-truth only — on its own the overall `status:` becomes `human_needed` (unless a higher-precedence `gaps_found` also applies); the item is preserved in `behavior_unverified_items` regardless.
+- `✗ FAILED` — artifact missing, stub, or unwired
+- `? UNCERTAIN` — can't verify programmatically
 
 **Evidence types:**
 - For EXISTS: "File at path, exports X"
