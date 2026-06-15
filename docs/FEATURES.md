@@ -3173,6 +3173,8 @@ Each resolved prohibition carries a `verification` tier — `test` (a negative t
 
 The load-bearing wire is the `plan-phase` lift into `must_haves.prohibitions`, so the section is not merely documentation.
 
+**Deterministic prohibition-check descriptor source (#1278).** A resolved `test`-tier prohibition MAY carry an optional **`check` descriptor** — the flat-scalar keys `check_kind` (`node-test` | `lint-rule`), `check_target`, and `check_rule` (lint-rule only) — authored at spec-phase. `projectProhibitions` projects these scalars deterministically and verify-phase reads them back to locate the check handed to `check prohibition-enforcement`, so a wired, passing test closes the gap with **zero manual descriptor authoring** (previously the verify-phase LLM had to invent `{kind, target, rule}` each run, #1259). The descriptor is **optional and backward-compatible** — a descriptor-less prohibition parses and disposes byte-identically to today — and **fail-closed**: a partial, invalid, or absent descriptor falls through to the producer's existing fail-closed locate, never a silent green. `failFirst` stays a verify-time caller attestation (machine-proven fail-first is tracked in #1279).
+
 **Requirements:**
 - REQ-PROHIB-01: The prohibition pass MUST run after the edge probe and emit a `## Prohibitions (must-NOT)` SPEC section.
 - REQ-PROHIB-02: Stage 1 MUST ask the adversarial recall question; Stage 2 MUST drop routine-engineering items and keep values/safety/ethics prohibitions.

@@ -128,6 +128,34 @@ Splitting these axes keeps the lifecycle enum free of a verification fact and le
 prohibition adapter declare `test | judgment` without forking the shared lifecycle enum that
 the edge-probe's `explicit | backstop` also uses.
 
+## Optional wired-check descriptor (deterministic locate, #1278)
+
+A `resolved`/`test`-tier prohibition MAY carry an **optional `check` descriptor** that names
+the wired mechanical check, so verify-phase locates it deterministically instead of inventing
+`{kind, target, rule}` each run. The descriptor is captured at spec-phase (soft / optional —
+the author wires it when the negative test or lint rule already exists) and is represented as
+**three flat scalar keys** on the `must_haves.prohibitions` item — never a nested `check: {}`
+object:
+
+- `check_kind` — `node-test` | `lint-rule` (which producer mechanism runs the check).
+- `check_target` — the test file (`node-test`) or the file the rule runs against (`lint-rule`).
+- `check_rule` — the `ruleId` to filter on, **lint-rule only** (absent for `node-test`).
+
+The flat-scalar shape is load-bearing: the shared `parseMustHavesBlock` is a flat parser and a
+nested object would flatten/mangle the round-trip (ADR-550 2026-06-15 addendum; #644 "no parser
+rewrite" precedent). `projectProhibitions` emits these keys **only for a well-formed descriptor**
+(valid `check_kind` + non-empty `check_target`; `check_rule` only on the lint-rule path), and
+verify-phase reads them back via `descriptorFromProjection` into the `CheckDescriptor` handed to
+`check prohibition-enforcement`. A wired, passing test then closes the gap with **zero manual
+descriptor authoring**.
+
+**Fail-closed + backward-compat.** A partial descriptor (`lint-rule` missing `check_rule`), an
+unknown `check_kind`, or an **absent** descriptor on a test-tier prohibition falls through to the
+producer's existing fail-closed locate — never a silent green. A prohibition with no descriptor
+parses and disposes byte-identically to today. `failFirst` is **not** sourced from the
+descriptor — it stays a verify-time caller attestation (machine-proven fail-first is tracked in
+#1279; the `dispositionForProhibition` policy is unchanged).
+
 ## Output schema
 
 The probe emits, per kept prohibition, an item of the form:
