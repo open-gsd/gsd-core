@@ -24,6 +24,7 @@ const { getRoadmapPhaseWithFallback } = roadmapModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import gapCheckerModule = require('./gap-checker.cjs');
 const { runGapAnalysis } = gapCheckerModule;
+import { routeProhibitionEnforcement } from './prohibition-enforcement.cjs';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -887,7 +888,15 @@ function routeCheckCommand({ args, cwd, raw }: RouteCheckCommandOptions): void {
     cmdVerifyCodebaseDrift(cwd, raw);
     return;
   }
-  error('Unknown check subcommand. Available: auto-mode, decision-coverage-plan, decision-coverage-verify, gap-analysis-plan-post, tdd-review-checkpoint, ui-plan-gate, ui-safety-gate, verify-schema-drift, verify-codebase-drift', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+  if (subcommand === 'prohibition-enforcement') {
+    // The deterministic test-tier prohibition PRODUCER/gate (#1259, ADR-550 D5d). Locates the
+    // wired mechanical check (node-test or lint-rule), confirms fail-first, runs it, builds
+    // enforcementEvidence, and emits the dispositionForProhibition verdict. Invocable as
+    // `gsd_run check prohibition-enforcement <request.json>`.
+    routeProhibitionEnforcement(args, raw);
+    return;
+  }
+  error('Unknown check subcommand. Available: auto-mode, decision-coverage-plan, decision-coverage-verify, gap-analysis-plan-post, prohibition-enforcement, tdd-review-checkpoint, ui-plan-gate, ui-safety-gate, verify-schema-drift, verify-codebase-drift', ERROR_REASON.SDK_UNKNOWN_COMMAND);
 }
 
 export = {

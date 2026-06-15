@@ -3169,7 +3169,7 @@ Each surfaced prohibition is resolved to exactly one of three states:
 | `dismissed` | Not a genuine prohibition (requires a non-empty reason) | Recorded with its reason; empty dismissals are rejected |
 | `unresolved` | Deferred | Soft-gates the spec; surfaced as a planner assumption |
 
-Each resolved prohibition carries a `verification` tier — `test` (a negative test can enforce it) or `judgment` (only human/LLM judgment can). At verify time, judgment-tier prohibitions route to a never-silent / never-hard-halt soft gate (autonomous emits an `unverified-prohibition — human review recommended` flag); test-tier prohibitions fail closed when unwired (never silently green). Under `--auto`, the probe **never auto-dismisses**. Canon-bound concerns (OWASP / GDPR / fairness) are referred to `/gsd:secure-phase` rather than minting SPEC prohibitions (ADR-550 D6).
+Each resolved prohibition carries a `verification` tier — `test` (a negative test can enforce it) or `judgment` (only human/LLM judgment can). At verify time, judgment-tier prohibitions route to a never-silent / never-hard-halt soft gate (autonomous emits an `unverified-prohibition — human review recommended` flag); test-tier prohibitions are enforced via the deterministic `check prohibition-enforcement` gate — green when the wired negative test / lint rule passes, hard-gate (flagged, non-green) when missing or failing, in both interactive and autonomous modes (#1259, ADR-550 D5d). Under `--auto`, the probe **never auto-dismisses**. Canon-bound concerns (OWASP / GDPR / fairness) are referred to `/gsd:secure-phase` rather than minting SPEC prohibitions (ADR-550 D6).
 
 The load-bearing wire is the `plan-phase` lift into `must_haves.prohibitions`, so the section is not merely documentation.
 
@@ -3180,5 +3180,6 @@ The load-bearing wire is the `plan-phase` lift into `must_haves.prohibitions`, s
 - REQ-PROHIB-04: `--auto` MUST never auto-dismiss.
 - REQ-PROHIB-05: `plan-phase` MUST lift resolved prohibitions into `must_haves.prohibitions` (never `truths`).
 - REQ-PROHIB-06: A well-formed but unwired `test`-tier prohibition MUST fail closed at verify time — never a silent pass.
+- REQ-PROHIB-07: A `test`-tier prohibition with a caller-attested, genuinely-passing (non-vacuous) wired mechanical check (a `node --test` negative test OR a lint/AST rule) MUST dispose green and be satisfiable; a missing, non-attested, or non-passing check MUST hard-gate (flagged, non-green) in both interactive and autonomous modes (#1259, ADR-550 D5d — the enforcement half; machine-proven fail-first is tracked in #1279, deterministic descriptor auto-locate in #1278).
 
 **Reference:** [Prohibition Probe](../gsd-core/references/prohibition-probe.md)

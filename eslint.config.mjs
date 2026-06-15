@@ -41,6 +41,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/cli-exit.cjs',
       'gsd-core/bin/lib/edge-probe.cjs',
       'gsd-core/bin/lib/probe-core.cjs',
+      'gsd-core/bin/lib/prohibition-enforcement.cjs',
       'gsd-core/bin/lib/code-review-flags.cjs',
       'gsd-core/bin/lib/context-utilization.cjs',
       'gsd-core/bin/lib/artifacts.cjs',

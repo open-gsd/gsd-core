@@ -345,6 +345,7 @@
       "profile-output.cjs",
       "profile-pipeline-command-router.cjs",
       "profile-pipeline.cjs",
+      "prohibition-enforcement.cjs",
       "project-root.cjs",
       "prompt-budget.cjs",
       "research-provider.cjs",

@@ -21,6 +21,10 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 
 const PROBE_CORE_LIB = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'probe-core.cjs');
+// The ENFORCEMENT-half producer (#1259, ADR-550 D5d heavy half). Authored as
+// src/prohibition-enforcement.cts and compiled by `npm run build:lib` to this gitignored
+// artifact — mirroring how PROBE_CORE_LIB requires the BUILT probe-core.cjs above.
+const ENFORCEMENT_LIB = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'prohibition-enforcement.cjs');
 
 describe('prohibition-probe verify-tier: test-tier fail-closed safety (PROB-12 / ADR-550 D5d)', () => {
   test('probe-core exports a deterministic prohibition-disposition helper', () => {
@@ -53,5 +57,105 @@ describe('prohibition-probe verify-tier: test-tier fail-closed safety (PROB-12 /
     assert.notEqual(disposition.status, 'pass', 'an unwired test-tier item must NEVER pass silently (fail-closed)');
     assert.equal(disposition.flagged, true,
       'an unwired test-tier item must be flagged unverified — it can never be silently skipped');
+  });
+});
+
+// ─── ENFORCEMENT HALF (#1259, ADR-550 D5d heavy half) ──────────────────────────
+//
+// RED-first: these assertions require the BUILT gsd-core/bin/lib/prohibition-enforcement.cjs,
+// which does not exist until Task 2 authors src/prohibition-enforcement.cts and runs build:lib.
+// They prove the previously-unreachable green branch in dispositionForProhibition (probe-core
+// 420-427) becomes reachable from a real PRODUCER: a passing wired test-tier check builds
+// non-empty enforcementEvidence -> green; a missing or failing check hard-gates (flagged,
+// non-green) in BOTH interactive and autonomous modes (ADR-550 D4 / D3).
+//
+// Typed-field assertions ONLY (status / flagged / tier / evidence / located / kind / mode-block).
+// The check-runner is injected via options.runCheck so no real subprocess is spawned.
+describe('prohibition-probe verify-tier: test-tier ENFORCEMENT (REQ-PROHIB-07 / ADR-550 D5d)', () => {
+  const testTierProhibition = {
+    requirement_id: 'R1',
+    category: 'safety',
+    status: 'resolved',
+    verification: 'test',
+    resolution: null,
+    reason: null,
+    statement: 'MUST NOT read source files and text-search them in tests',
+  };
+
+  // Test A — node --test negative test that PASSES -> green + non-empty evidence.
+  test('A: wired node-test check that passes disposes green with non-empty enforcement evidence', () => {
+    const enforce = require(ENFORCEMENT_LIB);
+    const result = enforce.runProhibitionEnforcement(
+      testTierProhibition,
+      { kind: 'node-test', target: 'tests/some-negative.test.cjs', failFirst: true },
+      { runCheck: () => ({ passed: true }) },
+    );
+    assert.ok(result && typeof result === 'object', 'result must be a structured object');
+    assert.equal(result.status, 'green', 'a passing wired node-test check must dispose green');
+    assert.equal(result.flagged, false, 'a green test-tier disposition must not be flagged');
+    assert.equal(result.tier, 'test', 'tier must be preserved as test');
+    assert.equal(result.located, true, 'the wired check was locatable');
+    assert.ok(Array.isArray(result.evidence) && result.evidence.length >= 1,
+      'a passing check must build non-empty enforcementEvidence (the array dispositionForProhibition reads)');
+  });
+
+  // Test B — lint/AST-rule (no-source-grep) check that PASSES -> green (D4 dogfood anchor).
+  test('B: wired lint-rule (no-source-grep) check that passes disposes green', () => {
+    const enforce = require(ENFORCEMENT_LIB);
+    const result = enforce.runProhibitionEnforcement(
+      testTierProhibition,
+      { kind: 'lint-rule', rule: 'local/no-source-grep', target: 'tests/', failFirst: true },
+      { runCheck: () => ({ passed: true }) },
+    );
+    assert.equal(result.status, 'green', 'a passing wired lint-rule check must dispose green');
+    assert.equal(result.flagged, false, 'a green disposition must not be flagged');
+    assert.equal(result.kind, 'lint-rule', 'the located check kind must be the lint-rule kind');
+    assert.ok(Array.isArray(result.evidence) && result.evidence.length >= 1,
+      'a passing lint-rule check must build non-empty enforcementEvidence');
+  });
+
+  // Test C — MISSING check (no locatable wired check) -> hard-gate (non-green, flagged).
+  test('C: a test-tier prohibition with NO locatable wired check hard-gates (non-green, flagged)', () => {
+    const enforce = require(ENFORCEMENT_LIB);
+    const result = enforce.runProhibitionEnforcement(
+      testTierProhibition,
+      null,
+      { runCheck: () => ({ passed: true }) },
+    );
+    assert.notEqual(result.status, 'green', 'a missing wired check must NEVER be green (fail-closed)');
+    assert.equal(result.flagged, true, 'a missing wired check must be flagged unverified');
+    assert.equal(result.located, false, 'no check was locatable');
+    assert.ok(Array.isArray(result.evidence) && result.evidence.length === 0,
+      'a missing check builds no enforcement evidence');
+  });
+
+  // Test D — FAILING check -> hard-gate in BOTH modes (interactive + autonomous).
+  test('D: a wired check that FAILS hard-gates (non-green, flagged) in both modes', () => {
+    const enforce = require(ENFORCEMENT_LIB);
+    for (const mode of ['interactive', 'autonomous']) {
+      const result = enforce.runProhibitionEnforcement(
+        testTierProhibition,
+        { kind: 'node-test', target: 'tests/some-negative.test.cjs', failFirst: true },
+        { runCheck: () => ({ passed: false }), mode },
+      );
+      assert.notEqual(result.status, 'green',
+        `a failing wired check must NEVER be green (mode=${mode})`);
+      assert.equal(result.flagged, true,
+        `a failing wired check must be flagged in both modes (mode=${mode})`);
+      assert.equal(result.located, true, 'the check was located even though it failed');
+    }
+  });
+
+  // D (fail-first not satisfied) — a check that is NOT fail-first is not a valid regression proof.
+  test('D2: a wired check that is not fail-first hard-gates (non-green, flagged)', () => {
+    const enforce = require(ENFORCEMENT_LIB);
+    const result = enforce.runProhibitionEnforcement(
+      testTierProhibition,
+      { kind: 'node-test', target: 'tests/some-negative.test.cjs', failFirst: false },
+      { runCheck: () => ({ passed: true }) },
+    );
+    assert.notEqual(result.status, 'green',
+      'a check that is not fail-first is not a valid regression-must-fail-first proof — never green');
+    assert.equal(result.flagged, true, 'a non-fail-first check must be flagged');
   });
 });
