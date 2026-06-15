@@ -405,52 +405,90 @@ Inject custom skill files into GSD subagent prompts. Skills are read by agents a
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `agent_skills` | object | `{}` | Map of agent types to skill directory paths |
+| `agent_skills` | object | `{}` | Map of agent types to arrays of skill entries |
 | `agent_skills_security.trusted_global_roots` | array of strings | `[]` | Opt-in allowlist of additional trusted directories for `global:` skills. See [Trusted global skill roots](#trusted-global-skill-roots-agent_skills_securitytrusted_global_roots) |
 
 ### Configuration
 
-Add an `agent_skills` section to `.planning/config.json` mapping agent types to arrays of skill directory paths (relative to project root):
+Add an `agent_skills` section to `.planning/config.json` mapping agent types to arrays of skill entries:
 
 ```json
 {
   "agent_skills": {
-    "gsd-executor": ["skills/testing-standards", "skills/api-conventions"],
+    "gsd-executor": [
+      "skills/testing-standards",
+      "global:shared-conventions",
+      "global:coderabbit:code-review"
+    ],
     "gsd-planner": ["skills/architecture-rules"],
     "gsd-verifier": ["skills/acceptance-criteria"]
   }
 }
 ```
 
-Each path must be a directory containing a `SKILL.md` file. Paths are validated for safety (no traversal outside project root).
+### Skill Entry Forms
+
+Each element in the array is one of three forms:
+
+| Form | Example | Resolution |
+|------|---------|------------|
+| Project-relative path | `"skills/my-skill"` | Resolves to `<project>/skills/my-skill/SKILL.md`, injected as an `@`-include |
+| Global personal skill | `"global:<name>"` | Resolves to `~/.claude/skills/<name>/SKILL.md`, injected as an `@`-include |
+| Plugin-provided skill (Claude only) | `"global:<plugin>:<skill>"` | A Claude Code plugin skill, loaded by name via the Skill tool at agent spawn time |
+
+**Project-relative paths** must point to a directory containing a `SKILL.md` file. Paths are validated for safety (no traversal outside the project root).
+
+**Global personal skills** (`global:<name>`) resolve against the runtime's global skills directory (e.g. `~/.claude/skills/`). Symlink-escape protection applies unless the target is listed in `agent_skills_security.trusted_global_roots`.
+
+**Plugin-provided skills** (`global:<plugin>:<skill>`) follow the namespaced form `seg(:seg)*`, where each segment is one or more alphanumeric characters, underscores, or hyphens joined by single colons (e.g. `global:coderabbit:code-review`). This form is **Claude-only**: on the Claude runtime GSD emits a Skill-tool load directive in the agent's `<agent_skills>` block so the agent loads the skill by name via the Skill tool, and Claude Code resolves the `plugin:skill` namespace. On all other runtimes the entry is skipped with a warning — the plugin/Skill-tool model is specific to Claude Code and has no equivalent elsewhere.
+
+> **Why load by name rather than path?** Claude Code's plugin cache is versioned and ephemeral, so there is no stable filesystem path to `@`-include. Loading by namespaced name via the Skill tool lets Claude Code's own resolver locate the current version of the plugin skill at runtime.
+
+The plugin must already be installed in the user's Claude Code environment (`/plugin install …`). GSD only references the skill by its namespaced name and does not read or validate the plugin cache itself.
 
 ### Supported Agent Types
 
-Any GSD agent type can receive skills. Common types:
+Any GSD agent type can receive skills. The 22 agent types that consume `agent_skills` and carry the `Skill` tool (required to load plugin-provided skills) are:
 
-- `gsd-executor` -- executes implementation plans
-- `gsd-planner` -- creates phase plans
-- `gsd-checker` -- verifies plan quality
-- `gsd-verifier` -- post-execution verification
-- `gsd-researcher` -- phase research
-- `gsd-project-researcher` -- new-project research
-- `gsd-debugger` -- diagnostic agents
-- `gsd-codebase-mapper` -- codebase analysis
-- `gsd-advisor` -- discuss-phase advisors
-- `gsd-ui-researcher` -- UI design contract creation
-- `gsd-ui-checker` -- UI spec verification
-- `gsd-roadmapper` -- roadmap creation
-- `gsd-synthesizer` -- research synthesis
+- `gsd-executor` — executes implementation plans
+- `gsd-planner` — creates phase plans
+- `gsd-checker` — verifies plan quality
+- `gsd-verifier` — post-execution verification
+- `gsd-researcher` — phase research
+- `gsd-project-researcher` — new-project research
+- `gsd-debugger` — diagnostic agents
+- `gsd-codebase-mapper` — codebase analysis
+- `gsd-advisor` — discuss-phase advisors
+- `gsd-ui-researcher` — UI design contract creation
+- `gsd-ui-checker` — UI spec verification
+- `gsd-roadmapper` — roadmap creation
+- `gsd-synthesizer` — research synthesis
+- and other GSD agent types declared in the agents registry
+
+The `Skill` tool is granted to consumer agents deliberately and is instruction-bounded — agents use it only to load the skills listed in the `<agent_skills>` block.
 
 ### How It Works
 
-At spawn time, workflows call `gsd-tools query agent-skills <type>` (or legacy `node gsd-tools.cjs agent-skills <type>`) to load configured skills. If skills exist for the agent type, they are injected as an `<agent_skills>` block in the Task() prompt:
+At spawn time, workflows call `gsd-tools query agent-skills <type>` (or legacy `node gsd-tools.cjs agent-skills <type>`) to load configured skills. If skills exist for the agent type, they are injected as an `<agent_skills>` block in the Task() prompt.
+
+For project-relative and global personal skills, entries appear as `@`-includes:
 
 ```xml
 <agent_skills>
 Read these user-configured skills:
 - @skills/testing-standards/SKILL.md
-- @skills/api-conventions/SKILL.md
+- @/Users/you/.claude/skills/shared-conventions/SKILL.md
+</agent_skills>
+```
+
+For plugin-provided skills on the Claude runtime, entries appear as Skill-tool load directives:
+
+```xml
+<agent_skills>
+Read these user-configured skills:
+- @skills/testing-standards/SKILL.md
+Load these plugin-provided skills using the Skill tool:
+- coderabbit:code-review
 </agent_skills>
 ```
 
@@ -463,6 +501,8 @@ Set skills via the CLI:
 ```bash
 gsd-tools query config-set agent_skills.gsd-executor '["skills/my-skill"]'
 ```
+
+See [How to attach a plugin-provided skill to a GSD agent](how-to/attach-a-plugin-skill-to-a-gsd-agent.md) for a step-by-step walkthrough of the `global:plugin:skill` form.
 
 ---
 
