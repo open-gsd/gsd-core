@@ -11,8 +11,6 @@ import path from 'node:path';
 import os from 'node:os';
 import { phaseVariants, buildRoadmapPhaseVariants, buildNotStartedPhaseVariants } from './validate.cjs';
 import { phaseDirNameRe, PHASE_TOKEN_FROM_DIR_RE, MILESTONE_ARCHIVE_DIR_RE, canonicalPlanStem } from './validate.cjs';
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- core.cjs is an export= CommonJS module
-import core = require('./core.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-workspace.cjs is an export= CommonJS module
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
@@ -31,21 +29,24 @@ import { isCanonicalPlanningFile } from './artifacts.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- agent-install-check.cjs is an export= CommonJS module
 import agentInstallCheck = require('./agent-install-check.cjs');
 const { checkAgentsInstalled } = agentInstallCheck;
-
-const {
-  loadConfig,
-  normalizePhaseName,
-  phaseTokenMatches,
-  escapeRegex,
-  findPhaseInternal,
-  getMilestoneInfo,
-  stripShippedMilestones,
-  extractCurrentMilestone,
-  output,
-  error,
-  CONFIG_DEFAULTS,
-  inspectWorktreeHealth,
-} = core;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import ioMod = require('./io.cjs');
+const { output, error } = ioMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import configLoaderMod = require('./config-loader.cjs');
+const { loadConfig, CONFIG_DEFAULTS } = configLoaderMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseIdMod = require('./phase-id.cjs');
+const { normalizePhaseName, phaseTokenMatches, escapeRegex, getMilestoneFromPhaseId } = phaseIdMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseLocatorMod = require('./phase-locator.cjs');
+const { findPhaseInternal } = phaseLocatorMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import roadmapParserMod = require('./roadmap-parser.cjs');
+const { getMilestoneInfo, stripShippedMilestones, extractCurrentMilestone } = roadmapParserMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import worktreeSafetyMod = require('./worktree-safety.cjs');
+const { inspectWorktreeHealth } = worktreeSafetyMod;
 
 const { planningDir } = planningWorkspace;
 const { extractFrontmatter, parseMustHavesBlock } = frontmatterMod;
@@ -1402,7 +1403,6 @@ function cmdValidateHealth(
     if (phaseConvention === 'milestone-prefixed') {
       if (fs.existsSync(roadmapPath)) {
         const roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
-        const { getMilestoneFromPhaseId } = core;
         const mismatches = checkMilestonePrefixMismatches(roadmapContent, {
           getMilestoneFromPhaseId: getMilestoneFromPhaseId,
         });

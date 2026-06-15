@@ -9,8 +9,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import core = require('./core.cjs');
-const { output, error, ERROR_REASON } = core;
+import ioMod = require('./io.cjs');
+const { output, error, ERROR_REASON } = ioMod;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
