@@ -356,6 +356,21 @@ For each Requirement gathered so far, run the two-stage recall→precision pass:
      Criteria AND mark the prohibition `resolved` with a verification tier: `test` (a
      mechanical negative test/lint/assertion exists) or `judgment` (real but not mechanically
      checkable — routes to judgment review).
+     - **Capture the wired-check descriptor on `test`-tier (#1278, SOFT).** When a prohibition is
+       resolved `verification: test`, ALSO capture the descriptor of the wired check so
+       `verify-phase` can LOCATE it deterministically (no verifier invention at verify time).
+       Capture the flat scalars — persisted into SPEC and projected onto the
+       `must_haves.prohibitions` item by `projectProhibitions`:
+       - `check_kind` — `node-test` | `lint-rule`.
+       - `check_target` — the negative-test file path (for `node-test`), or the path to lint
+         (for `lint-rule`).
+       - `check_rule` — the eslint rule id (e.g. `local/no-source-grep`); `lint-rule` only.
+       This is a **SOFT capture (CHK-04): a `test`-tier prohibition WITHOUT a descriptor is still
+       allowed** — if the author cannot yet name the wired check, leave the descriptor empty and
+       proceed. It is NOT a hard authoring block; the item simply stays fail-closed/flagged
+       downstream (an absent/partial descriptor → `descriptorFromProjection` null/under-specified
+       → producer fail-closed locate, never green). Do NOT capture `failFirst` here — it is a
+       verify-time caller attestation, not a spec-authored field (#1279).
    - **Dismiss (reason)** → mark `dismissed` with a REQUIRED non-empty reason (PROB-05). The
      reason string is the audit trail; silence is not a valid dismissal.
    - **Defer** → leave `unresolved`.
@@ -374,7 +389,11 @@ For each Requirement gathered so far, run the two-stage recall→precision pass:
 **`--auto` mode:** auto-`resolved` where a defensible negative acceptance criterion can be
 written (test or judgment tier); otherwise leave `unresolved`. **`--auto` NEVER auto-dismisses
 a prohibition** — a wrong dismissal is the exact silent failure this probe eliminates (PROB-06,
-the load-bearing safety property). Log: `[auto] prohibitions: R resolved, U unresolved`.
+the load-bearing safety property). On a `test`-tier auto-resolution, capture the `check_kind` /
+`check_target` / `check_rule` descriptor **only when a wired check is unambiguous**; otherwise
+leave it empty — `--auto` NEVER fabricates a check path (a wrong locate is re-validated and
+fails closed at the producer, but a fabricated path is still noise to avoid). Log:
+`[auto] prohibitions: R resolved, U unresolved`.
 
 **Text mode (PROB-09):** per Step 5's text-mode rule, replace the AskUserQuestion menus above
 with plain-text numbered lists — there is NO hard AskUserQuestion dependency, so the probe
@@ -382,7 +401,11 @@ runs identically for non-Claude / text-mode hosts.
 
 Populate the `## Prohibitions` section of SPEC.md from the resolved prohibitions (each
 `resolved`/`test` row is a checkable negative acceptance criterion; `resolved`/`judgment`
-rows route to judgment review; `⚠ UNRESOLVED` rows are flagged as assumptions).
+rows route to judgment review; `⚠ UNRESOLVED` rows are flagged as assumptions). A
+`resolved`/`test` row ALSO carries its captured `check_kind` / `check_target` / `check_rule`
+descriptor when present (so the projection feeds `verify-phase`'s deterministic locate, #1278);
+a `test` row with no captured descriptor is still valid — it stays fail-closed/flagged
+downstream rather than blocking authoring.
 
 ## Step 6: Generate SPEC.md
 
