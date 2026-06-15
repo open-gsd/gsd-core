@@ -448,22 +448,23 @@ The plugin must already be installed in the user's Claude Code environment (`/pl
 
 ### Supported Agent Types
 
-Any GSD agent type can receive skills. The 22 agent types that consume `agent_skills` and carry the `Skill` tool (required to load plugin-provided skills) are:
+Any GSD agent type can receive skills. The agent types that consume `agent_skills` are the GSD sub-agents the workflows dispatch. There are 22 consumer agents in total, including:
 
 - `gsd-executor` — executes implementation plans
 - `gsd-planner` — creates phase plans
-- `gsd-checker` — verifies plan quality
+- `gsd-plan-checker` — verifies plan quality
 - `gsd-verifier` — post-execution verification
-- `gsd-researcher` — phase research
+- `gsd-phase-researcher` — phase research
 - `gsd-project-researcher` — new-project research
 - `gsd-debugger` — diagnostic agents
 - `gsd-codebase-mapper` — codebase analysis
-- `gsd-advisor` — discuss-phase advisors
+- `gsd-code-reviewer` — code review
 - `gsd-ui-researcher` — UI design contract creation
 - `gsd-ui-checker` — UI spec verification
+- `gsd-ui-auditor` — UI audit
 - `gsd-roadmapper` — roadmap creation
-- `gsd-synthesizer` — research synthesis
-- and other GSD agent types declared in the agents registry
+- `gsd-research-synthesizer` — research synthesis
+- and others (see `tests/agent-skills.test.cjs` `CONSUMER_AGENTS` list for the full 22)
 
 The `Skill` tool is granted to consumer agents deliberately and is instruction-bounded — agents use it only to load the skills listed in the `<agent_skills>` block.
 
@@ -481,14 +482,13 @@ Read these user-configured skills:
 </agent_skills>
 ```
 
-For plugin-provided skills on the Claude runtime, entries appear as Skill-tool load directives:
+For a mixed config (path-resolvable and plugin-provided skills together), entries appear interleaved in config order in a single section:
 
 ```xml
 <agent_skills>
 Read these user-configured skills:
 - @skills/testing-standards/SKILL.md
-Load these plugin-provided skills using the Skill tool:
-- coderabbit:code-review
+- Load the `coderabbit:code-review` skill via the Skill tool before proceeding (plugin-provided).
 </agent_skills>
 ```
 

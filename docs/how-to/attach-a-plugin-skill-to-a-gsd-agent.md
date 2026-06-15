@@ -72,12 +72,13 @@ Start a phase on the Claude runtime. When the target agent is spawned, its Task(
 <agent_skills>
 Read these user-configured skills:
 - @skills/project-conventions/SKILL.md
-Load these plugin-provided skills using the Skill tool:
-- coderabbit:code-review
+- Load the `coderabbit:code-review` skill via the Skill tool before proceeding (plugin-provided).
 </agent_skills>
 ```
 
-If you see `[agent-skills] WARN: skipping global:coderabbit:code-review (plugin skills not supported on this runtime)` in the logs, the entry is being skipped because the active runtime is not Claude. The configuration is still valid; no change is needed.
+Both entry types appear in the same `Read these user-configured skills:` section, interleaved in config order. There is no separate header for plugin-provided skills.
+
+If you see `[agent-skills] WARNING: Plugin-namespaced skill "global:coderabbit:code-review" requires a Skill-tool-capable runtime (claude) — skipping on runtime "<runtime>"` in the logs, the entry is being skipped because the active runtime is not Claude. The configuration is still valid; no change is needed.
 
 ---
 

@@ -1053,6 +1053,50 @@ describe('bug #1243: plugin-namespaced agent skills', () => {
     assert.strictEqual(r.ir.block, '', `missing config must produce empty block, got: ${r.ir.block}`);
   });
 
+  test('BYTE-IDENTICAL mixed-block: path-resolvable global + plugin-namespaced → single section, interleaved, exact format', () => {
+    // Regression for code-review finding: docs previously showed a bogus two-section format
+    // with a separate "Load these plugin-provided skills using the Skill tool:" header.
+    // The ACTUAL emitted block is a single <agent_skills> section where @-includes and
+    // plugin-provided directives are interleaved in config order under the same header.
+    //
+    // Config order: global:my-local-skill (path-resolvable) FIRST, then global:vendor:remote-skill (namespaced).
+    createGlobalSkill1243('my-local-skill');
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      agent_skills: {
+        'gsd-executor': ['global:my-local-skill', 'global:vendor:remote-skill'],
+      },
+    });
+
+    const r = runAgentSkillsJson(
+      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+    );
+    assert.ok(r.success, `Command failed: ${r.error}`);
+
+    // Compute the expected @-include path (absolute path to the resolved global skill)
+    const expectedInclude = path.join(fakeHome, '.claude', 'skills', 'my-local-skill', 'SKILL.md');
+
+    const expectedBlock = [
+      '<agent_skills>',
+      'Read these user-configured skills:',
+      `- @${expectedInclude}`,
+      '- Load the `vendor:remote-skill` skill via the Skill tool before proceeding (plugin-provided).',
+      '</agent_skills>',
+    ].join('\n');
+
+    assert.strictEqual(
+      r.ir.block,
+      expectedBlock,
+      `BYTE-IDENTICAL: mixed block must be a single section with @-include and directive interleaved.\nExpected: ${JSON.stringify(expectedBlock)}\nGot:      ${JSON.stringify(r.ir.block)}`
+    );
+
+    // Structural assertions: must NOT contain any secondary header
+    assert.ok(
+      !r.ir.block.includes('Load these plugin-provided skills using the Skill tool:'),
+      `block must NOT contain the bogus two-section header, got: ${r.ir.block}`
+    );
+  });
+
   // ─── grant: Skill tool in consumer agent frontmatter ─────────────────────────
 
   test('grant: all 22 agent_skills consumer agents have Skill in their tools frontmatter', () => {
