@@ -2,7 +2,8 @@
  * TypeScript type definitions for GSD project config — model_policy block.
  *
  * These types reflect the model_policy config shape consumed by
- * resolveModelPolicy in core.cjs and validated by config-schema.cjs.
+ * resolveModelPolicy in model-resolver.cjs and validated by config-schema.cjs.
+ * (core.cjs re-export spine retired in epic #1267)
  *
  * See feat #49 (model_policy presets) and config-schema.manifest.json.
  * Added under ADR-457: TS sources in src/ compile to CJS artifacts in

@@ -176,7 +176,7 @@ export function resolveBaseBranch(
 ): string {
   const execGit: ExecGitFn = deps?.execGit ?? execGitSeam;
 
-  // Derive .planning dir relative to cwd (mirrors planningDir() in core.cjs)
+  // Derive .planning dir relative to cwd (mirrors planningDir() in planning-workspace.cjs)
   const planningDir = path.join(cwd, '.planning');
 
   // 1. Config override

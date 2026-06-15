@@ -5,12 +5,10 @@
  * Owns shipped-milestone slicing, current-milestone extraction,
  * milestone/phase lookups, and milestone-phase filtering.
  * Behaviour is preserved byte-for-behaviour from the prior location;
- * only the module boundary moved. core.cjs re-exports every symbol here
- * under its own `export =` object so existing consumers are unaffected.
+ * only the module boundary moved. The core.cjs re-export spine was retired
+ * in epic #1267; callers import roadmap-parser helpers directly.
  *
- * New imports should pull roadmap-parser helpers from roadmap-parser.cjs directly.
- *
- * Dependencies (leaf modules only — no core.cjs, no loadConfig):
+ * Dependencies (leaf modules only — no loadConfig):
  *   - node:fs / node:path (stdlib)
  *   - ./phase-id.cjs        (escapeRegex, phaseMarkdownRegexSource)
  *   - ./planning-workspace.cjs (planningDir)

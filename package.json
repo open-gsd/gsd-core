@@ -92,7 +92,7 @@
     "pretest:coverage": "npm run build:lib && npm run lint:skill-deps",
     "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/",
     "lint:fix": "eslint . --fix",
-    "lint:ci": "npm run lint && npm run lint:skill-deps && node scripts/lint-test-file-count.cjs && node scripts/lint-command-contract.cjs && node scripts/lint-pr-check-project-dir.cjs && npm run lint:legacy-name && node scripts/lint-regression-test-names.cjs && node scripts/lint-windows-test-portability.cjs && node scripts/lint-allow-test-rule-refs.cjs && node scripts/lint-core-spine-imports.cjs",
+    "lint:ci": "npm run lint && npm run lint:skill-deps && node scripts/lint-test-file-count.cjs && node scripts/lint-command-contract.cjs && node scripts/lint-pr-check-project-dir.cjs && npm run lint:legacy-name && node scripts/lint-regression-test-names.cjs && node scripts/lint-windows-test-portability.cjs && node scripts/lint-allow-test-rule-refs.cjs",
     "lint:allow-test-rule-refs": "node scripts/lint-allow-test-rule-refs.cjs",
     "lint:windows-test-portability": "node scripts/lint-windows-test-portability.cjs",
     "lint:regression-names": "node scripts/lint-regression-test-names.cjs",

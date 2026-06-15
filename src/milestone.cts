@@ -138,7 +138,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   platformEnsureDir(archiveDir);
 
   // Scope stats and accomplishments to only the phases belonging to the
-  // current milestone's ROADMAP.  Uses the shared filter from core.cjs
+  // current milestone's ROADMAP.  Uses the shared filter from roadmap-parser.cjs
   // (same logic used by cmdPhasesList and other callers).
   const isDirInMilestone = getMilestonePhaseFilter(cwd, version);
   if (isDirInMilestone.missingExplicitVersion) {

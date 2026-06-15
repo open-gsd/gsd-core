@@ -6,11 +6,10 @@
  * planning granularity, reasoning effort, and fast-mode for a given agent by
  * reading project config and resolving against the model profiles and catalog.
  * Behaviour is preserved byte-for-behaviour from the prior location; only
- * the module boundary moved. core.cjs re-exports the resolvers for back-compat.
+ * the module boundary moved. The core.cjs re-export spine was retired in
+ * epic #1267; callers import resolvers from model-resolver.cjs directly.
  *
- * New imports should pull resolvers from model-resolver.cjs directly.
- *
- * Dependencies (leaf modules only — no core.cjs):
+ * Dependencies (leaf modules only):
  *   - node:fs / node:path (stdlib, not currently needed — included for future use)
  *   - ./config-loader.cjs    (loadConfig)
  *   - ./configuration.cjs    (CONFIG_DEFAULTS as CANONICAL_CONFIG_DEFAULTS)

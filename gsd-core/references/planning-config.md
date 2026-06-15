@@ -220,7 +220,7 @@ Squash merge is recommended — keeps main branch history clean while preserving
 
 ## Complete Field Reference
 
-Generated from `CONFIG_DEFAULTS` (core.cjs) and `VALID_CONFIG_KEYS` (config.cjs).
+Generated from `CONFIG_DEFAULTS` (configuration.cjs) and `VALID_CONFIG_KEYS` (config-schema.cjs).
 
 ### Core Fields
 

@@ -251,8 +251,7 @@ function executeWorktreePrunePlan(plan: WorktreePrunePlan | null, deps: Worktree
 
   const result = execGit(['worktree', 'prune'], { cwd: plan.repoRoot });
   if (result.timedOut) {
-    // AC4: surface timedOut as a first-class field so callers (e.g.
-    // pruneOrphanedWorktrees in core.cjs) can log a structured WARNING rather
+    // AC4: surface timedOut as a first-class field so callers can log a structured WARNING rather
     // than silently ignoring it (PRED.k302 — error-swallowing-empty-sentinel).
     return {
       ok: false,

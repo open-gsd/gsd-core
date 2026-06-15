@@ -4,10 +4,8 @@
  *
  * Extracted from core.cts (ADR-857 rollout phase 2a / issue #865).
  * The hand-written bodies are preserved byte-for-behaviour; only the module
- * boundary moved. core.cts re-exports every symbol here under its own
- * `export =` object so existing consumers are unaffected.
- *
- * New imports should pull phase-id helpers from phase-id.cjs directly.
+ * boundary moved. The core.cjs re-export spine was retired in epic #1267;
+ * callers import phase-id helpers from phase-id.cjs directly.
  *
  * Dependencies: none (pure string/regex, no Node built-ins required).
  */

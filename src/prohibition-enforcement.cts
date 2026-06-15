@@ -41,7 +41,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-// Import the leaf I/O module directly, not the core.cjs re-export spine (being retired, #1268).
+// Import the leaf I/O module directly (core.cjs re-export spine retired in epic #1267).
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import io = require('./io.cjs');
 const { output, error, ERROR_REASON } = io;

@@ -1,4 +1,0 @@
-{
-  "_comment": "Files allowed to import the core re-export spine during the staged retirement (issue #1268). Entries are REMOVED as each tranche migrates a leaf; the file + this lint are deleted in T-final.",
-  "allow": []
-}
