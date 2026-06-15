@@ -9,8 +9,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import core = require('./core.cjs');
-const { normalizePhaseName, findPhaseInternal, generateSlugInternal, toPosixPath, output, error } = core;
+import ioMod = require('./io.cjs');
+const { output, error } = ioMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import coreUtilsMod = require('./core-utils.cjs');
+const { toPosixPath, generateSlugInternal } = coreUtilsMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseIdMod = require('./phase-id.cjs');
+const { normalizePhaseName } = phaseIdMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseLocatorMod = require('./phase-locator.cjs');
+const { findPhaseInternal } = phaseLocatorMod;
 import { platformWriteSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');

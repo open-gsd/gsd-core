@@ -18,8 +18,24 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- core.cjs is an export= CommonJS module
-import core = require('./core.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- io.cjs is an export= CommonJS module
+import ioMod = require('./io.cjs');
+const { output, error, ERROR_REASON } = ioMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- config-loader.cjs is an export= CommonJS module
+import configLoaderMod = require('./config-loader.cjs');
+const { loadConfig } = configLoaderMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- core-utils.cjs is an export= CommonJS module
+import coreUtilsMod = require('./core-utils.cjs');
+const { toPosixPath, generateSlugInternal, readSubdirectories } = coreUtilsMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id.cjs is an export= CommonJS module
+import phaseIdMod = require('./phase-id.cjs');
+const { escapeRegex, normalizePhaseName, phaseMarkdownRegexSource, comparePhaseNum, phaseTokenMatches } = phaseIdMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
+import phaseLocatorMod = require('./phase-locator.cjs');
+const { findPhaseInternal, getArchivedPhaseDirs } = phaseLocatorMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- roadmap-parser.cjs is an export= CommonJS module
+import roadmapParserMod = require('./roadmap-parser.cjs');
+const { stripShippedMilestones, extractCurrentMilestone, getMilestonePhaseFilter } = roadmapParserMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-workspace.cjs is an export= CommonJS module
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
@@ -34,27 +50,6 @@ import { realClock } from './clock.cjs';
 import uatPredicate = require('./uat-predicate.cjs');
 const { evaluateUatPassed } = uatPredicate;
 
-const {
-  escapeRegex,
-  loadConfig,
-  normalizePhaseName,
-  phaseMarkdownRegexSource,
-  comparePhaseNum,
-  findPhaseInternal,
-  getArchivedPhaseDirs,
-  generateSlugInternal,
-  getMilestonePhaseFilter,
-  stripShippedMilestones,
-  extractCurrentMilestone,
-  replaceInCurrentMilestone,
-  toPosixPath,
-  output,
-  error,
-  readSubdirectories,
-  phaseTokenMatches,
-  ERROR_REASON,
-} = core;
-
 const { planningDir, withPlanningLock } = planningWorkspace;
 const { extractFrontmatter } = frontmatterMod;
 const {
@@ -66,11 +61,6 @@ const {
   withStateLock,
   updatePerformanceMetricsSection,
 } = stateMod;
-
-// Unused import silences TS — keep for structural parity with .cjs (stripShippedMilestones,
-// replaceInCurrentMilestone are exported from core but only used in phase.cjs as-is).
-void stripShippedMilestones;
-void replaceInCurrentMilestone;
 
 // #2893 — strict canonical filter: `{padded_phase}-{NN}-PLAN.md` or `PLAN.md`.
 const isCanonicalPlanFile = (f: string): boolean => f.endsWith('-PLAN.md') || f === 'PLAN.md';

@@ -9,8 +9,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import core = require('./core.cjs');
-const { escapeRegex, loadConfig, getMilestoneInfo, getMilestonePhaseFilter, extractCurrentMilestone, output, error } = core;
+import ioMod = require('./io.cjs');
+const { output, error } = ioMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import configLoaderMod = require('./config-loader.cjs');
+const { loadConfig } = configLoaderMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseIdMod = require('./phase-id.cjs');
+const { escapeRegex } = phaseIdMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import roadmapParserMod = require('./roadmap-parser.cjs');
+const { getMilestoneInfo, getMilestonePhaseFilter, extractCurrentMilestone } = roadmapParserMod;
 import { platformWriteSync, platformReadSync, platformEnsureDir } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');

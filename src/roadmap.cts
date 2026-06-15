@@ -10,8 +10,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { realClock } from './clock.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import core = require('./core.cjs');
-const { escapeRegex, normalizePhaseName, phaseMarkdownRegexSource, phaseMarkdownRegexSourceExact, output, error, findPhaseInternal, phaseTokenMatches } = core;
+import ioMod = require('./io.cjs');
+const { output, error } = ioMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseIdMod = require('./phase-id.cjs');
+const { escapeRegex, normalizePhaseName, phaseMarkdownRegexSource, phaseMarkdownRegexSourceExact, phaseTokenMatches } = phaseIdMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseLocatorMod = require('./phase-locator.cjs');
+const { findPhaseInternal } = phaseLocatorMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserModule = require('./roadmap-parser.cjs');
 const { stripShippedMilestones, extractCurrentMilestone, replaceInCurrentMilestone } = roadmapParserModule;
@@ -98,8 +104,7 @@ function countPhasePlansAndSummaries(phaseDir: string): PhasePlansAndSummaries {
   };
 }
 
-// `phaseMarkdownRegexSource` moved to core.cjs (#3537) so phase.cjs and
-// core.cjs itself can consume it without circular deps. Imported above.
+// `phaseMarkdownRegexSource` lives in phase-id.cjs (#3537) and is imported above.
 
 // ─── searchPhaseInContent ─────────────────────────────────────────────────────
 

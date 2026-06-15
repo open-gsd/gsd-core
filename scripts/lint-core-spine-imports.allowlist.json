@@ -4,11 +4,6 @@
     "gsd-core/bin/gsd-tools.cjs",
     "src/audit-command-router.cts",
     "src/check-command-router.cts",
-    "src/commands.cts",
-    "src/intel-command-router.cts",
-    "src/phase.cts",
-    "src/roadmap.cts",
-    "src/state.cts",
-    "src/template.cts"
+    "src/intel-command-router.cts"
   ]
 }

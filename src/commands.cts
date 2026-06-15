@@ -10,32 +10,26 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execGit, platformWriteSync, platformReadSync, platformEnsureDir } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import core = require('./core.cjs');
-const {
-  loadConfig,
-  isGitIgnored,
-  normalizePhaseName,
-  comparePhaseNum,
-  getArchivedPhaseDirs,
-  generateSlugInternal,
-  getMilestoneInfo,
-  getMilestonePhaseFilter,
-  resolveModelInternal,
-  resolveEffortInternal,
-  resolveFastModeInternal,
-  resolveEffortForTier,
-  stripShippedMilestones: _stripShippedMilestones,
-  extractCurrentMilestone,
-  toPosixPath,
-  output,
-  error,
-  findPhaseInternal,
-  extractOneLinerFromBody,
-  getRoadmapPhaseInternal,
-  extractPhaseToken,
-  resolveGranularityInternal,
-  assertValidGranularityOverride,
-} = core;
+import ioMod = require('./io.cjs');
+const { output, error } = ioMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import configLoaderMod = require('./config-loader.cjs');
+const { loadConfig, isGitIgnored } = configLoaderMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import coreUtilsMod = require('./core-utils.cjs');
+const { toPosixPath, generateSlugInternal, extractOneLinerFromBody } = coreUtilsMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseIdMod = require('./phase-id.cjs');
+const { normalizePhaseName, comparePhaseNum, extractPhaseToken } = phaseIdMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseLocatorMod = require('./phase-locator.cjs');
+const { getArchivedPhaseDirs, findPhaseInternal } = phaseLocatorMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import roadmapParserMod = require('./roadmap-parser.cjs');
+const { extractCurrentMilestone, stripShippedMilestones: _stripShippedMilestones, getMilestoneInfo, getMilestonePhaseFilter, getRoadmapPhaseInternal } = roadmapParserMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import modelResolverMod = require('./model-resolver.cjs');
+const { resolveModelInternal, resolveEffortInternal, resolveFastModeInternal, resolveEffortForTier, resolveGranularityInternal, assertValidGranularityOverride } = modelResolverMod;
 import { renderEffortForRuntime, RUNTIMES_WITH_FAST_MODE } from './model-catalog.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
