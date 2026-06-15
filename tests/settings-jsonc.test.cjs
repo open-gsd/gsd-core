@@ -16,51 +16,31 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-// ─── inline stripJsonComments (mirrors install.js logic) ─────────────────────
-
-function stripJsonComments(text) {
-  let result = '';
-  let i = 0;
-  let inString = false;
-  let stringChar = '';
-  while (i < text.length) {
-    if (inString) {
-      if (text[i] === '\\') {
-        result += text[i] + (text[i + 1] || '');
-        i += 2;
-        continue;
-      }
-      if (text[i] === stringChar) {
-        inString = false;
-      }
-      result += text[i];
-      i++;
-      continue;
-    }
-    if (text[i] === '"' || text[i] === "'") {
-      inString = true;
-      stringChar = text[i];
-      result += text[i];
-      i++;
-      continue;
-    }
-    if (text[i] === '/' && text[i + 1] === '/') {
-      while (i < text.length && text[i] !== '\n') i++;
-      continue;
-    }
-    if (text[i] === '/' && text[i + 1] === '*') {
-      i += 2;
-      while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) i++;
-      i += 2;
-      continue;
-    }
-    result += text[i];
-    i++;
+// ─── load real install.js exports once ───────────────────────────────────────
+//
+// install.js prints a banner at module-load time (outside its GSD_TEST_MODE
+// guard) — silence stdout for the duration of the require() so test output
+// stays clean.  The main-logic block IS gated on GSD_TEST_MODE, so no
+// installer side-effects run.
+//
+// Guard line (bin/install.js:12287):
+//   if (require.main === module && !process.env.GSD_TEST_MODE) {
+//
+let installExports;
+{
+  process.env.GSD_TEST_MODE = '1';
+  const _origWrite = process.stdout.write.bind(process.stdout);
+  process.stdout.write = () => true; // suppress banner
+  try {
+    installExports = require('../bin/install.js');
+  } finally {
+    process.stdout.write = _origWrite;
   }
-  return result.replace(/,\s*([}\]])/g, '$1');
 }
+const { readSettings, stripJsonComments } = installExports;
 
 // ─── tests ───────────────────────────────────────────────────────────────────
 
@@ -187,5 +167,100 @@ describe('readSettings null return on malformed files (#1461)', () => {
       content.includes('=== null') || content.includes('rawSettings === null'),
       'callers should check for null return from readSettings'
     );
+  });
+});
+
+// ─── seam-4 (#1191): real readSettings via exported function ─────────────────
+//
+// These tests exercise the REAL readSettings from bin/install.js (not a
+// replica), using real temp files.  The structural grep below is a secondary
+// belt-and-suspenders anchoring the source text; the primary assertions are
+// the behavioural ones beneath it.
+
+describe('readSettings: JSON null coalesced to empty, malformed warns (#1191)', () => {
+  test('source contains the null-coalescing guard (parsed === null ? {})', () => {
+    // Structural anchor: if someone removes the coalescing, this test catches it
+    // before the behavioural test below even runs.
+    const installPath = path.join(__dirname, '..', 'bin', 'install.js');
+    const content = fs.readFileSync(installPath, 'utf8');
+    assert.ok(
+      content.includes('parsed === null ? {}'),
+      'install.js readSettings must coalesce valid JSON null to {} (not malformed warning)'
+    );
+  });
+
+  test('valid JSON null content returns empty object with no malformed warning (real function)', () => {
+    // A settings file containing literally `null` is valid JSON.
+    // readSettings must treat it as empty settings ({}) — no warning emitted.
+    const tmpFile = path.join(os.tmpdir(), `gsd-settings-test-null-${process.pid}.json`);
+    fs.writeFileSync(tmpFile, 'null');
+    const warnCalls = [];
+    const origWarn = console.warn;
+    console.warn = (...args) => warnCalls.push(args.join(' '));
+    let result;
+    try {
+      result = readSettings(tmpFile);
+    } finally {
+      console.warn = origWarn;
+      fs.unlinkSync(tmpFile);
+    }
+    assert.deepStrictEqual(result, {}, 'JSON null must coalesce to {}');
+    const malformedWarns = warnCalls.filter(w => w.includes('malformed') || w.includes('Could not parse'));
+    assert.strictEqual(malformedWarns.length, 0, 'no malformed warning expected for valid JSON null');
+  });
+
+  test('malformed content returns null and emits malformed warning (real function)', () => {
+    // A file containing `{ broken` is not valid JSON (even after comment-stripping).
+    // readSettings must emit a malformed warning and return null.
+    const tmpFile = path.join(os.tmpdir(), `gsd-settings-test-broken-${process.pid}.json`);
+    fs.writeFileSync(tmpFile, '{ broken');
+    const warnCalls = [];
+    const origWarn = console.warn;
+    console.warn = (...args) => warnCalls.push(args.join(' '));
+    let result;
+    try {
+      result = readSettings(tmpFile);
+    } finally {
+      console.warn = origWarn;
+      fs.unlinkSync(tmpFile);
+    }
+    assert.strictEqual(result, null, 'malformed JSON must return null');
+    const malformedWarns = warnCalls.filter(w => w.includes('malformed') || w.includes('Could not parse'));
+    assert.strictEqual(malformedWarns.length, 1, 'exactly one malformed warning expected');
+  });
+
+  test('valid object content returns parsed object with no warning (real function)', () => {
+    const tmpFile = path.join(os.tmpdir(), `gsd-settings-test-valid-${process.pid}.json`);
+    fs.writeFileSync(tmpFile, '{"hooks":{}}');
+    const warnCalls = [];
+    const origWarn = console.warn;
+    console.warn = (...args) => warnCalls.push(args.join(' '));
+    let result;
+    try {
+      result = readSettings(tmpFile);
+    } finally {
+      console.warn = origWarn;
+      fs.unlinkSync(tmpFile);
+    }
+    assert.deepStrictEqual(result, { hooks: {} }, 'valid object must be returned as-is');
+    const malformedWarns = warnCalls.filter(w => w.includes('malformed') || w.includes('Could not parse'));
+    assert.strictEqual(malformedWarns.length, 0, 'no warning expected for valid JSON object');
+  });
+
+  test('absent file returns empty object with no warning (real function)', () => {
+    const tmpFile = path.join(os.tmpdir(), `gsd-settings-test-absent-${process.pid}.json`);
+    // ensure file does NOT exist
+    try { fs.unlinkSync(tmpFile); } catch { /* already absent */ }
+    const warnCalls = [];
+    const origWarn = console.warn;
+    console.warn = (...args) => warnCalls.push(args.join(' '));
+    let result;
+    try {
+      result = readSettings(tmpFile);
+    } finally {
+      console.warn = origWarn;
+    }
+    assert.deepStrictEqual(result, {}, 'absent file must return {}');
+    assert.strictEqual(warnCalls.length, 0, 'no warning expected for absent file');
   });
 });

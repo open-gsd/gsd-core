@@ -63,6 +63,13 @@
  *                                      Returns JSON { valid, errors[], slots: {role,capability,outcome} | null }
  *                                      --pick valid  Emit bare boolean (for workflow boolean checks)
  *
+ * Drift Guard (ADR-22):
+ *   drift-guard authority                Resolve effective source-grounding authority
+ *                                        (reads plan_review.source_grounding_authority + intel.enabled from config)
+ *   drift-guard severity --status <S>    Classify a symbol verdict into { severity, hardBlock }
+ *     [--authority <A>]                  Status: VERIFIED|MISSING|AMBIGUOUS|UNCHECKABLE
+ *                                        Authority: grep|intel|treesitter|lsp|scip (default: config-resolved)
+ *
  * Validation:
  *   validate consistency               Check phase numbering, disk/roadmap sync
  *   validate health [--repair]         Check .planning/ integrity, optionally repair
@@ -227,6 +234,7 @@ const { routeCheckCommand } = require('./lib/check-command-router.cjs');
 const { routeTaskCommand } = require('./lib/task-command-router.cjs');
 const { parseNamedArgs, parseMultiwordArg } = require('./lib/command-arg-projection.cjs');
 const { cmdGitBaseBranch } = require('./lib/git-base-branch.cjs');
+const { getEffectiveAuthority, classifyDriftSeverity } = require('./lib/plan-drift-guard.cjs');
 
 // ─── Bridge collapsed (Phase 4) ────────────────────────────────────────────────
 // Non-family commands now run through their CJS handlers directly. Keep the
@@ -510,7 +518,7 @@ async function main() {
   const TOP_LEVEL_USAGE = 'Usage: gsd-tools <command> [args] [--raw] [--pick <field>] [--cwd <path>] [--ws <name>] [--json-errors]\n' +
     'Commands: agent, agent-skills, audit-open, audit-uat, check, check-commit, commit, commit-to-subrepo, ' +
     'config-ensure-section, config-get, config-new-project, config-path, config-set, migrate-config, ' +
-    'current-timestamp, detect-custom-files, docs-init, effort, extract-messages, find-phase, ' +
+    'current-timestamp, detect-custom-files, docs-init, drift-guard, effort, extract-messages, find-phase, ' +
     'from-gsd2, frontmatter, gap-analysis, generate-claude-md, generate-claude-profile, ' +
     'generate-dev-preferences, generate-slug, graphify, history-digest, init, intel, ' +
     'capability, classify-confidence, git, learnings, list-todos, loop, milestone, package-legitimacy, phase, phase-plan-index, phases, profile-questionnaire, ' +
@@ -2094,6 +2102,67 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       }
 
       core.output({ valid: errors.length === 0, errors, slots }, raw);
+      break;
+    }
+
+    case 'drift-guard': {
+      // ADR-22: deterministic authority resolution + severity classification.
+      // Subcommands:
+      //   drift-guard authority                          → effective authority string
+      //   drift-guard severity --status <S> [--authority <A>]  → {severity, hardBlock}
+      const subcommand = args[1];
+
+      // Read config.json directly for both plan_review.source_grounding_authority
+      // and intel.enabled. Neither key is in the config-loader.cjs whitelist that
+      // core.loadConfig() returns; plan_review is only in config.cjs's private
+      // buildConfig(), and intel is a federated capability config key.
+      let configuredAuthority = 'grep';
+      let intelEnabled = false;
+      try {
+        const { planningDir } = require('./lib/planning-workspace.cjs');
+        const cfgPath = require('path').join(planningDir(cwd), 'config.json');
+        if (require('fs').existsSync(cfgPath)) {
+          const rawCfg = JSON.parse(require('fs').readFileSync(cfgPath, 'utf-8'));
+          if (rawCfg && rawCfg.plan_review && rawCfg.plan_review.source_grounding_authority) {
+            configuredAuthority = String(rawCfg.plan_review.source_grounding_authority);
+          }
+          if (rawCfg && rawCfg.intel && rawCfg.intel.enabled === true) {
+            intelEnabled = true;
+          }
+        }
+      } catch {
+        // not fatal — defaults apply
+      }
+
+      const effectiveAuthority = getEffectiveAuthority(configuredAuthority, intelEnabled);
+
+      if (subcommand === 'authority') {
+        // Pass rawValue as 3rd arg so --raw returns unquoted string (not JSON)
+        core.output(effectiveAuthority, raw, effectiveAuthority);
+        break;
+      }
+
+      if (subcommand === 'severity') {
+        const statusIdx = args.indexOf('--status');
+        const statusVal = statusIdx !== -1 ? args[statusIdx + 1] : undefined;
+        if (!statusVal || statusVal.startsWith('--')) {
+          error('drift-guard severity requires --status <VERIFIED|MISSING|AMBIGUOUS|UNCHECKABLE>', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+          break;
+        }
+        const authIdx = args.indexOf('--authority');
+        const authVal = authIdx !== -1 ? args[authIdx + 1] : undefined;
+        const authorityForClassify = (authVal && !authVal.startsWith('--'))
+          ? authVal
+          : effectiveAuthority;
+        const result = classifyDriftSeverity({ status: statusVal, authority: authorityForClassify });
+        core.output(result, raw);
+        break;
+      }
+
+      error(
+        `Unknown drift-guard subcommand: ${subcommand || '(none)'}. Available: authority, severity`,
+        ERROR_REASON.SDK_UNKNOWN_COMMAND,
+      );
       break;
     }
 

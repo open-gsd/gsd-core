@@ -1579,6 +1579,28 @@ function readModifyWriteStateMd(statePath: string, transformFn: (content: string
     // Snapshot the existing progress block BEFORE the transform so we can
     // restore it when resync is false.
     const preFm = resync ? null : extractFrontmatter(content) as Record<string, unknown>;
+
+    // Bug #1230: delta heuristic — snapshot pre-transform body source fields so
+    // we can detect whether THIS write changed them. syncStateFrontmatter
+    // re-derives frontmatter status/stopped_at from the body on every write;
+    // when the body's source field was NOT changed by the transform, the
+    // existing frontmatter value (e.g. a hand-set 'completed') must win over
+    // the body-derived value (e.g. 'verifying' from a stale "Status: Verifying
+    // Phase 3" line that an earlier tool wrote). We do NOT disturb `preFm`
+    // above (null when resync:true) — these are independent snapshots.
+    // Strip frontmatter before calling stateExtractField so the YAML `status:`
+    // key in the frontmatter block cannot shadow the body field we are tracking.
+    const preBody = stripFrontmatter(content);
+    const preFmSnapshot = extractFrontmatter(content) as Record<string, unknown>;
+    const preBodyStatus = stateExtractField(preBody, 'Status');
+    // Bug #1230 / Change B: scope stopped_at delta to the ## Session section,
+    // mirroring buildStateFrontmatter's sessionBodyScope logic (line ~1172).
+    // A stale "Stopped at:" in a non-Session section (e.g. Session Continuity
+    // Archive prose) must not interfere with the delta comparison.
+    const preSessionMatch = matchSessionSection(preBody);
+    const preSessionScope = preSessionMatch ? preSessionMatch[1] : preBody;
+    const preBodyStoppedAt = stateExtractField(preSessionScope, 'Stopped At') || stateExtractField(preSessionScope, 'Stopped at');
+
     const modified = transformFn(content);
 
     // Bug #948: no-op guard — if the transform produced no change, do NOT write
@@ -1594,14 +1616,63 @@ function readModifyWriteStateMd(statePath: string, transformFn: (content: string
 
     let synced = syncStateFrontmatter(modified, cwd);
 
-    if (!resync && preFm && preFm['progress']) {
+    // Compute postFm once and apply BOTH the progress-restore (when !resync)
+    // AND the status/stopped_at preservation (#1230) before reconstructing.
+    // This avoids double-wrapping the frontmatter block.
+    const needsProgressRestore = !resync && preFm && preFm['progress'];
+
+    // Post-transform body source fields used for the delta comparison (#1230).
+    // Use `modified` (not `synced`): syncStateFrontmatter only rewrites the frontmatter block, so the body is identical in both — and we need the body the transform produced.
+    // Strip frontmatter so the YAML status key cannot shadow the body field.
+    const postBody = stripFrontmatter(modified);
+    const postBodyStatus = stateExtractField(postBody, 'Status');
+    // Bug #1230 / Change B: scope stopped_at delta to the ## Session section,
+    // consistent with the pre-transform snapshot above and buildStateFrontmatter.
+    const postSessionMatch = matchSessionSection(postBody);
+    const postSessionScope = postSessionMatch ? postSessionMatch[1] : postBody;
+    const postBodyStoppedAt = stateExtractField(postSessionScope, 'Stopped At') || stateExtractField(postSessionScope, 'Stopped at');
+
+    let mutated = false;
+    const postFm = extractFrontmatter(synced) as Record<string, unknown>;
+
+    if (needsProgressRestore) {
       // Re-apply the curated progress block that syncStateFrontmatter just
       // overwrote with disk-derived values.  Only restore keys that were present
       // in the snapshot — this preserves any new non-progress frontmatter fields
       // (e.g., status, current_phase) that syncStateFrontmatter legitimately
       // derived from the updated body.
-      const postFm = extractFrontmatter(synced) as Record<string, unknown>;
       postFm['progress'] = preFm['progress'];
+      mutated = true;
+    }
+
+    // Bug #1230: preserve existing frontmatter status when this write did NOT
+    // change the body's Status field. A write that doesn't touch Status must
+    // not silently revert a hand-set frontmatter status (e.g. 'completed') to
+    // whatever the stale body Status happens to derive (e.g. 'verifying').
+    // Only apply when the existing frontmatter held a real, non-unknown status.
+    if (
+      postBodyStatus === preBodyStatus &&
+      typeof preFmSnapshot['status'] === 'string' &&
+      preFmSnapshot['status'].length > 0 &&
+      preFmSnapshot['status'] !== 'unknown' &&
+      postFm['status'] !== preFmSnapshot['status']
+    ) {
+      postFm['status'] = preFmSnapshot['status'];
+      mutated = true;
+    }
+
+    // Bug #1230: same delta heuristic for stopped_at.
+    if (
+      postBodyStoppedAt === preBodyStoppedAt &&
+      typeof preFmSnapshot['stopped_at'] === 'string' &&
+      preFmSnapshot['stopped_at'].length > 0 &&
+      postFm['stopped_at'] !== preFmSnapshot['stopped_at']
+    ) {
+      postFm['stopped_at'] = preFmSnapshot['stopped_at'];
+      mutated = true;
+    }
+
+    if (mutated) {
       const yamlStr = reconstructFrontmatter(postFm as unknown as Frontmatter);
       const body = stripFrontmatter(synced);
       synced = `---\n${yamlStr}\n---\n\n${body}`;

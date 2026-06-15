@@ -37,6 +37,7 @@ export default tseslint.config(
       '**/*.generated.cjs',
       // ADR-457: tsc-generated runtime artifact — lint the src/*.cts source, not the emitted .cjs.
       'gsd-core/bin/lib/semver-compare.cjs',
+      'gsd-core/bin/lib/plan-drift-guard.cjs',
       'gsd-core/bin/lib/cli-exit.cjs',
       'gsd-core/bin/lib/edge-probe.cjs',
       'gsd-core/bin/lib/probe-core.cjs',
@@ -236,6 +237,8 @@ export default tseslint.config(
       'local/no-raw-rmsync-in-tests': 'error',
       // Ban tautological assertions (always-truthy arg or identical-literal equality)
       'local/no-tautological-assert': 'error',
+      // Ban source-grep pattern in tests — use require() + behavior assertions instead
+      'local/no-source-grep': 'error',
       // Ban raw setTimeout sync + elapsed/duration-style assertions via no-restricted-syntax
       'no-restricted-syntax': [
         'error',

@@ -234,3 +234,17 @@ Run the Phase 6 capstone test whenever a Capability adds a `when` key or moves a
 ## Keep the docs with the slice
 
 Every Phase 6 slice that changes capability behaviour must update the relevant docs in the same PR. Use this manual for developer-facing Capability authoring facts, use how-to guides for task flows, and use ADRs only for decisions and trade-offs.
+
+## The capability ecosystem (1.6.0)
+
+From GSD 1.6.0, capabilities are versioned (the `version` field is required in `capability.json`) and can be installed directly from a URL, a git ref, an npm package, or a local path — without modifying the core repo.
+
+- **Tutorial** — [Build your first capability](../tutorials/build-your-first-capability.md): scaffold and install a declarative capability end-to-end in under ten minutes.
+- **How-to** — [Publish a capability](../how-to/publish-a-capability.md): package and distribute a capability via a URL or registry.
+- **How-to** — [Import a capability from a URL](../how-to/import-a-capability-from-a-url.md): install a third-party capability from a git URL, tarball, or npm package.
+- **How-to** — [Version and update a capability](../how-to/version-a-capability.md): manage `version`, `engines.gsd`, and `compatVersions`; use `gsd capability update`.
+- **How-to** — [Remove a capability](../how-to/remove-a-capability.md): uninstall cleanly with `gsd capability remove`, including the `--purge-data` option.
+- **Reference** — [Capability manifest](../reference/capability-manifest.md): all fields and validation rules for `capability.json`.
+- **Reference** — [Capability matrix](../reference/capability-matrix.md): which first-party capabilities exist, their extension points, and their compatibility matrix.
+- **Explanation** — [Capability trust model](../explanation/capability-trust-model.md): how declarative and executable capabilities are treated differently at install time.
+- **ADR-1244** — `docs/adr/1244-capability-ecosystem.md`: the architectural decision that introduced the installable capability ecosystem.
