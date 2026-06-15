@@ -1833,7 +1833,12 @@ function cmdStateBeginPhase(cwd: string, phaseNumber: string | number, phaseName
         if (/^Phase:/m.test(posBody)) {
           posBody = posBody.replace(/^Phase:.*$/m, newPhase);
         } else {
-          posBody = newPhase + '\n' + posBody;
+          // Pipe-table format in Current Position (#1257): update the | Phase | … |
+          // cell rather than prepending a spurious inline `Phase:` line (which left
+          // the table cell stale). Mirrors the Status/Last-activity table branches.
+          const phaseValue = `${phaseNumber}${phaseName ? ` (${phaseName})` : ''} — EXECUTING`;
+          const replaced = stateReplaceField(posBody, 'Phase', phaseValue);
+          if (replaced !== null) posBody = replaced;
         }
 
         // Update or insert Plan line
@@ -1841,7 +1846,11 @@ function cmdStateBeginPhase(cwd: string, phaseNumber: string | number, phaseName
         if (/^Plan:/m.test(posBody)) {
           posBody = posBody.replace(/^Plan:.*$/m, newPlan);
         } else {
-          posBody = posBody.replace(/^(Phase:.*$)/m, `$1\n${newPlan}`);
+          // Pipe-table format in Current Position (#1257): update the | Plan | … |
+          // cell rather than appending after a prepended inline line.
+          const planValue = `1 of ${planCount || '?'}`;
+          const replaced = stateReplaceField(posBody, 'Plan', planValue);
+          if (replaced !== null) posBody = replaced;
         }
 
         // Update Status line if present
@@ -2010,36 +2019,49 @@ function cmdStatePlannedPhase(cwd: string, phaseNumber: string | number, planCou
   // doing so tramples curated/known-good counters. Route through the body-only
   // write contract (resync:false), the same guard state.update uses. (#500 RC1)
   readModifyWriteStateMd(statePath, (content) => {
+    // Bug #1257: all body-field replacements must operate on the body only
+    // (frontmatter stripped), not on the full content. When the full content is
+    // passed to stateReplaceFieldIfTemplate the YAML `status: planning` key matches
+    // the plain-text pattern (`^Status:\s*`) before the body pipe-table row, so the
+    // pipe-table `| Status | Planning |` cell is never updated and syncStateFrontmatter
+    // re-derives 'planning' from the unchanged body — the status never advances.
+    // (Mirrors the begin/complete-phase fix from #1255/#1256.)
+    const existingFm = extractFrontmatter(content) as Record<string, unknown>;
+    const hasFrontmatter = Object.keys(existingFm).length > 0;
+    let body = stripFrontmatter(content);
+    const reassemble = (b: string) =>
+      hasFrontmatter ? `---\n${reconstructFrontmatter(existingFm as unknown as Frontmatter)}\n---\n\n${b}` : b;
+
     // Update Status — only when the existing value is a known template default
     // (Knuth invariant: preserve executor-authored values).
-    const newContent = stateReplaceFieldIfTemplate(content, 'Status', statusDefaults, 'Ready to execute');
-    if (newContent !== content) { content = newContent; updated.push('Status'); }
+    const newBody = stateReplaceFieldIfTemplate(body, 'Status', statusDefaults, 'Ready to execute');
+    if (newBody !== body) { body = newBody; updated.push('Status'); }
 
     // Update Total Plans in Phase
     if (planCount !== null && planCount !== undefined) {
-      const result = stateReplaceField(content, 'Total Plans in Phase', String(planCount));
-      if (result) { content = result; updated.push('Total Plans in Phase'); }
+      const result = stateReplaceField(body, 'Total Plans in Phase', String(planCount));
+      if (result) { body = result; updated.push('Total Plans in Phase'); }
     }
 
     // Update Last Activity — only when the existing value is a known template default
     {
-      const after = stateReplaceFieldIfTemplate(content, 'Last Activity', lastActivityDefaults, today);
-      if (after !== content) { content = after; updated.push('Last Activity'); }
+      const after = stateReplaceFieldIfTemplate(body, 'Last Activity', lastActivityDefaults, today);
+      if (after !== body) { body = after; updated.push('Last Activity'); }
     }
 
     // Update Last Activity Description
     {
-      const result = stateReplaceField(content, 'Last Activity Description', `Phase ${phaseNumber} planning complete — ${planCount || '?'} plans ready`);
-      if (result) { content = result; updated.push('Last Activity Description'); }
+      const result = stateReplaceField(body, 'Last Activity Description', `Phase ${phaseNumber} planning complete — ${planCount || '?'} plans ready`);
+      if (result) { body = result; updated.push('Last Activity Description'); }
     }
 
     // Update Current Position section
-    content = updateCurrentPositionFields(content, {
+    body = updateCurrentPositionFields(body, {
       status: 'Ready to execute',
       lastActivity: `${today} -- Phase ${phaseNumber} planning complete`,
     });
 
-    return content;
+    return reassemble(body);
   }, cwd, { resync: false });
 
   output({ updated, phase: phaseNumber, plan_count: planCount }, raw, updated.length > 0 ? 'true' : 'false');

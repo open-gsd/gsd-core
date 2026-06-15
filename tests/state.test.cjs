@@ -3960,3 +3960,209 @@ Last activity: 2026-06-01 -- Roadmap created
     }
   });
 });
+
+// #1257 — planned-phase + begin-phase pipe-table regressions
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Regression tests for bug #1257.
+ *
+ * Finding 1 (INFERRED — reproduced here empirically):
+ *   `cmdStatePlannedPhase` calls `stateReplaceFieldIfTemplate(content, 'Status', …)`
+ *   on the FULL file content (including YAML frontmatter).  The plain-text pattern
+ *   `^Status:\s*(.+)` (case-insensitive) matches the YAML frontmatter `status: planning`
+ *   line BEFORE reaching the body pipe-table row `| Status | Planning |`.  The pipe-table
+ *   cell is never updated.  `syncStateFrontmatter` re-derives from the unchanged body
+ *   and the #1230 delta heuristic preserves the original frontmatter value, so the
+ *   status never advances to 'Ready to execute'.
+ *   Smoking-gun: src/state.cts:2015 — `stateReplaceFieldIfTemplate(content, 'Status', …)`
+ *   where `content` is the full file (frontmatter + body), not stripped body.
+ *
+ * Finding 2 (OBSERVED):
+ *   `cmdStateBeginPhase`'s `## Current Position` update block only has pipe-table
+ *   else-branches for Status (#1255) and Last-activity (#1255), NOT for Phase or Plan.
+ *   For a pipe-table STATE.md, the `| Phase | … |` and `| Plan | … |` rows are silently
+ *   ignored: the else-branch instead INSERTS a new inline `Phase: N — EXECUTING` text
+ *   line prepended to the section body (leaving the old table cells stale).
+ *   Smoking-gun: src/state.cts:1833–1844 — `^Phase:` / `^Plan:` plain-text checks with
+ *   else-branches that prepend text rather than calling stateReplaceField on the table.
+ */
+
+// STATE.md fixture for #1257 — pipe-table format with frontmatter status: planning
+// After planned-phase the body Status should become 'Ready to execute' and
+// frontmatter status should advance accordingly.
+const TABLE_STATUS_PLANNING_1257 = `---
+gsd_state_version: '1.0'
+status: planning
+---
+
+# Project State
+
+## Configuration
+
+| Current Phase | 1 |
+| Current Phase Name | setup |
+| Total Plans in Phase | 3 |
+| Current Plan | 1 |
+| Status | Planning |
+| Last Activity | 2026-06-01 |
+| Last Activity Description | Roadmap created |
+
+## Current Position
+
+| Phase | 1 (setup) |
+| Plan | 1 of 3 |
+| Status | Planning |
+| Last activity | 2026-06-01 |
+`;
+
+function make1257TempProject(stateContent) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-1257-'));
+  const planningDir = path.join(dir, '.planning');
+  fs.mkdirSync(planningDir, { recursive: true });
+  // Minimal ROADMAP so phase resolution can proceed
+  fs.writeFileSync(path.join(planningDir, 'ROADMAP.md'), [
+    '# ROADMAP',
+    '',
+    '## Phase 1: setup:',
+    '- [ ] Step 1',
+    '',
+  ].join('\n'), 'utf8');
+  fs.writeFileSync(path.join(planningDir, 'STATE.md'), stateContent, 'utf8');
+  return dir;
+}
+
+describe('#1257 — planned-phase and begin-phase pipe-table regressions', () => {
+
+  // ── Finding 1 ───────────────────────────────────────────────────────────────
+
+  test('Finding 1: planned-phase advances Configuration pipe-table Status cell to Ready to execute', () => {
+    // planned-phase should update the Configuration-section body | Status | … | cell.
+    // Smoking-gun: state.cts:2015 calls stateReplaceFieldIfTemplate on full content,
+    // so the frontmatter `status:` key shadows the body table cell and the cell is
+    // never updated.  (updateCurrentPositionFields at line 2037 does correctly update
+    // the Current Position table cell — this test specifically targets the Configuration
+    // table cell, which has no pipe-table else-branch in planned-phase.)
+    const dir = make1257TempProject(TABLE_STATUS_PLANNING_1257);
+    try {
+      const result = runGsdTools(
+        ['state', 'planned-phase', '--phase', '1', '--plans', '3'],
+        dir
+      );
+      assert.ok(result.success, `planned-phase failed: ${result.error || result.output}`);
+
+      const after = fs.readFileSync(path.join(dir, '.planning', 'STATE.md'), 'utf8');
+
+      // Extract the ## Configuration section (stops before ## Current Position)
+      // to avoid false-positive from the Current Position table (which IS updated
+      // by updateCurrentPositionFields).
+      const cfgMatch = after.match(/##\s*Configuration\s*\r?\n([\s\S]*?)(?=\r?\n##|$)/i);
+      assert.ok(cfgMatch, '## Configuration section must exist');
+      const cfgSection = cfgMatch[1];
+
+      // The Configuration section's pipe-table Status cell must be updated
+      assert.ok(
+        /\|\s*Status\s*\|\s*Ready to execute\s*\|/i.test(cfgSection),
+        `Configuration pipe-table Status cell must be 'Ready to execute' after planned-phase; got Configuration:\n${cfgSection}`
+      );
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('Finding 1: planned-phase advances frontmatter status to executing when body Status is pipe-table', () => {
+    // The frontmatter status must advance after planned-phase sets Status to 'Ready to execute'.
+    // (syncStateFrontmatter maps 'ready to execute' → 'executing'.)
+    const dir = make1257TempProject(TABLE_STATUS_PLANNING_1257);
+    try {
+      runGsdTools(
+        ['state', 'planned-phase', '--phase', '1', '--plans', '3'],
+        dir
+      );
+      const after = fs.readFileSync(path.join(dir, '.planning', 'STATE.md'), 'utf8');
+
+      const fmMatch = after.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+      assert.ok(fmMatch, 'STATE.md must have YAML frontmatter after planned-phase');
+      const fm = fmMatch[1];
+      // syncStateFrontmatter maps 'Ready to execute' → 'executing' in normalizeStateStatus
+      assert.ok(
+        /^status:\s*executing\s*$/m.test(fm),
+        `frontmatter status must be 'executing' after planned-phase on pipe-table STATUS; got frontmatter:\n${fm}`
+      );
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  // ── Finding 2 ───────────────────────────────────────────────────────────────
+
+  test('Finding 2: begin-phase updates Current Position pipe-table Phase cell (not prepend inline)', () => {
+    // begin-phase must update the | Phase | … | cell in ## Current Position.
+    // Smoking-gun: state.cts:1833 checks `^Phase:` (plain-text pattern) which
+    // never matches a pipe-table row, so the else-branch at 1836 PREPENDS a new
+    // inline `Phase: N — EXECUTING` line to the section instead of updating the cell.
+    const dir = make1257TempProject(TABLE_STATUS_PLANNING_1257);
+    try {
+      const result = runGsdTools(
+        ['state', 'begin-phase', '--phase', '1', '--name', 'setup', '--plans', '3'],
+        dir
+      );
+      assert.ok(result.success, `begin-phase failed: ${result.error || result.output}`);
+
+      const after = fs.readFileSync(path.join(dir, '.planning', 'STATE.md'), 'utf8');
+
+      // Extract ## Current Position section only
+      const cpMatch = after.match(/##\s*Current Position\s*\r?\n([\s\S]*?)(?=\r?\n##|$)/i);
+      assert.ok(cpMatch, '## Current Position section must exist');
+      const cpSection = cpMatch[1];
+
+      // The pipe-table Phase cell must be updated to reflect the executing phase
+      assert.ok(
+        /\|\s*Phase\s*\|[^|]*1[^|]*EXECUTING[^|]*\|/i.test(cpSection),
+        `Current Position pipe-table Phase cell must contain phase 1 EXECUTING; got Current Position:\n${cpSection}`
+      );
+
+      // Must NOT have a spurious prepended inline `Phase: …` text line
+      assert.ok(
+        !/^Phase:\s+\d/m.test(cpSection),
+        `Current Position must NOT have a spuriously prepended inline 'Phase: N' text line; got Current Position:\n${cpSection}`
+      );
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('Finding 2: begin-phase updates Current Position pipe-table Plan cell (not prepend inline)', () => {
+    // begin-phase must update the | Plan | … | cell in ## Current Position.
+    // Smoking-gun: state.cts:1841 checks `^Plan:` which never matches a pipe-table row,
+    // so the else-branch at 1843 replaces the (newly-prepended) inline Phase line with
+    // Phase\nPlan, neither touching the existing table | Plan | cell.
+    const dir = make1257TempProject(TABLE_STATUS_PLANNING_1257);
+    try {
+      runGsdTools(
+        ['state', 'begin-phase', '--phase', '1', '--name', 'setup', '--plans', '3'],
+        dir
+      );
+      const after = fs.readFileSync(path.join(dir, '.planning', 'STATE.md'), 'utf8');
+
+      // Extract ## Current Position section only
+      const cpMatch = after.match(/##\s*Current Position\s*\r?\n([\s\S]*?)(?=\r?\n##|$)/i);
+      assert.ok(cpMatch, '## Current Position section must exist');
+      const cpSection = cpMatch[1];
+
+      // The pipe-table Plan cell must be updated to '1 of 3'
+      assert.ok(
+        /\|\s*Plan\s*\|\s*1 of 3\s*\|/i.test(cpSection),
+        `Current Position pipe-table Plan cell must be '1 of 3'; got Current Position:\n${cpSection}`
+      );
+
+      // Must NOT have a spurious prepended inline `Plan: …` text line
+      assert.ok(
+        !/^Plan:\s+\d/m.test(cpSection),
+        `Current Position must NOT have a spuriously prepended inline 'Plan: N' text line; got Current Position:\n${cpSection}`
+      );
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
