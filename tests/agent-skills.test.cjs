@@ -775,7 +775,7 @@ describe('trusted_global_roots e2e CLI (#52)', () => {
 });
 
 // ─── bug #1243: plugin-namespaced agent skills ─────────────────────────────────
-// allow-test-rule: source-text-is-the-product
+// allow-test-rule: source-text-is-the-product (#1243)
 
 describe('bug #1243: plugin-namespaced agent skills', () => {
   let tmpDir;
@@ -1033,13 +1033,13 @@ describe('bug #1243: plugin-namespaced agent skills', () => {
     const expectedBlock = [
       '<agent_skills>',
       'Read these user-configured skills:',
-      `- @${expectedGlobalPath}`,
+      `- @${expectedGlobalPath.replace(/\\/g, '/')}`,
       `- @${expectedLocalPath}`,
       '</agent_skills>',
     ].join('\n');
 
     assert.strictEqual(
-      r.ir.block,
+      r.ir.block.replace(/\\/g, '/'),
       expectedBlock,
       `HYRUM: block must be byte-identical to expected include-only format.\nExpected: ${JSON.stringify(expectedBlock)}\nGot:      ${JSON.stringify(r.ir.block)}`
     );
@@ -1079,13 +1079,13 @@ describe('bug #1243: plugin-namespaced agent skills', () => {
     const expectedBlock = [
       '<agent_skills>',
       'Read these user-configured skills:',
-      `- @${expectedInclude}`,
+      `- @${expectedInclude.replace(/\\/g, '/')}`,
       '- Load the `vendor:remote-skill` skill via the Skill tool before proceeding (plugin-provided).',
       '</agent_skills>',
     ].join('\n');
 
     assert.strictEqual(
-      r.ir.block,
+      r.ir.block.replace(/\\/g, '/'),
       expectedBlock,
       `BYTE-IDENTICAL: mixed block must be a single section with @-include and directive interleaved.\nExpected: ${JSON.stringify(expectedBlock)}\nGot:      ${JSON.stringify(r.ir.block)}`
     );
@@ -1215,7 +1215,7 @@ describe('bug #1243: plugin-namespaced agent skills', () => {
       'gsd-verifier',
     ]);
 
-    // allow-test-rule: source-text-is-the-product
+    // allow-test-rule: source-text-is-the-product (#1243)
     const AGENTS_DIR = path.join(__dirname, '..', 'agents');
     const agentFiles = fs.readdirSync(AGENTS_DIR).filter((f) => f.startsWith('gsd-') && f.endsWith('.md'));
 
