@@ -8,6 +8,7 @@ tools:
   - Bash
   - Glob
   - Grep
+  - Skill
 color: red
 ---
 
