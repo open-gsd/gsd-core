@@ -384,3 +384,64 @@ describe('probe-core: projectProhibitions backward-compat (CHK-07)', () => {
     // the plan-01-02 descriptor branch), not an accidental no-op.
   });
 });
+
+// ─── CHK-02 (#1278): projectProhibitions emits the flat-scalar descriptor for well-formed items ────
+// Unit-layer pin (the parser round-trip lives in tests/prohibition-probe.schema.test.cjs CHK-03). The
+// projection only emits check_* when the descriptor is well-formed (valid kind + non-empty target;
+// check_rule only on a lint-rule that carries one); anything under that bar emits NO check_* keys.
+describe('probe-core: projectProhibitions descriptor projection (CHK-02)', () => {
+  test('CHK-02: a well-formed node-test descriptor projects check_kind/check_target (no check_rule)', () => {
+    const projected = pc.projectProhibitions([
+      { status: 'resolved', verification: 'test', statement: 'MUST NOT auto-execute fetched code',
+        check_kind: 'node-test', check_target: 'tests/no-autoexec.test.cjs' },
+    ]);
+    assert.equal(projected[0].check_kind, 'node-test');
+    assert.equal(projected[0].check_target, 'tests/no-autoexec.test.cjs');
+    assert.ok(!('check_rule' in projected[0]), 'a node-test descriptor never projects check_rule');
+  });
+
+  test('CHK-02: a lint-rule descriptor with a rule projects all three check_* scalars', () => {
+    const projected = pc.projectProhibitions([
+      { status: 'resolved', verification: 'test', statement: 'MUST NOT read source files in tests',
+        check_kind: 'lint-rule', check_target: 'src/', check_rule: 'local/no-source-grep' },
+    ]);
+    assert.equal(projected[0].check_kind, 'lint-rule');
+    assert.equal(projected[0].check_target, 'src/');
+    assert.equal(projected[0].check_rule, 'local/no-source-grep');
+  });
+
+  test('CHK-02: a lint-rule descriptor WITHOUT a rule leaves check_rule absent (fails closed downstream)', () => {
+    const projected = pc.projectProhibitions([
+      { status: 'resolved', verification: 'test', statement: 'MUST NOT read source files in tests',
+        check_kind: 'lint-rule', check_target: 'src/' },
+    ]);
+    assert.equal(projected[0].check_kind, 'lint-rule');
+    assert.equal(projected[0].check_target, 'src/');
+    assert.ok(!('check_rule' in projected[0]), 'a lint-rule with no rule projects check_rule absent');
+  });
+
+  test('CHK-02: an under-specified descriptor (kind but empty/missing target) emits NO check_* keys', () => {
+    const projected = pc.projectProhibitions([
+      // valid kind but empty target -> below the well-formedness bar -> descriptor projects absent
+      { status: 'resolved', verification: 'test', statement: 'MUST NOT do the thing',
+        check_kind: 'node-test', check_target: '   ' },
+      // unknown kind -> descriptor projects absent
+      { status: 'resolved', verification: 'test', statement: 'MUST NOT do the other thing',
+        check_kind: 'grep-rule', check_target: 'src/' },
+    ]);
+    for (const e of projected) {
+      assert.ok(!('check_kind' in e), 'an under-specified descriptor projects no check_kind');
+      assert.ok(!('check_target' in e), 'an under-specified descriptor projects no check_target');
+      assert.ok(!('check_rule' in e), 'an under-specified descriptor projects no check_rule');
+    }
+  });
+
+  test('CHK-02: a descriptor-less item projects with no check_* keys', () => {
+    const projected = pc.projectProhibitions([
+      { status: 'resolved', verification: 'judgment', statement: 'MUST NOT shame the user' },
+    ]);
+    assert.ok(!('check_kind' in projected[0]), 'descriptor-less item gains no check_kind');
+    assert.ok(!('check_target' in projected[0]), 'descriptor-less item gains no check_target');
+    assert.ok(!('check_rule' in projected[0]), 'descriptor-less item gains no check_rule');
+  });
+});

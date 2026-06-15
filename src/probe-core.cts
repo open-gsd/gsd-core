@@ -338,6 +338,15 @@ export function validateProhibitionResolution(resolution: Resolution<Prohibition
  * and are intentionally NOT projected into the plan block (which is keyed on the must-NOT
  * statement, not the source requirement). A non-array input projects to `[]` (fail-soft on the
  * empty/zero-prohibition case), never a throw.
+ *
+ * An OPTIONAL wired-check descriptor (#1278) projects as the LOCKED flat scalar keys
+ * `check_kind`/`check_target`/`check_rule` (NEVER a nested `check:{}` object; `failFirst` is never
+ * projected). These ride the EXISTING continuation-KV path of `parseMustHavesBlock`
+ * (src/frontmatter.cts:344) with NO shared-parser rewrite (IMPL-SCOPING §3 Option 1). The keys are
+ * emitted ONLY for a well-formed descriptor (valid `check_kind` + non-empty `check_target`; plus
+ * `check_rule` only for a lint-rule that carries one); a descriptor-less or under-specified item is
+ * byte-identical to today (CHK-07), so an under-specified descriptor projects absent and fails closed
+ * at the producer downstream (CHK-06), never as a partial-but-locatable green.
  */
 export function projectProhibitions(
   items: unknown,
@@ -354,6 +363,20 @@ export function projectProhibitions(
     };
     if (p.verification != null) entry.verification = String(p.verification);
     if (p.reason != null && String(p.reason).trim()) entry.reason = String(p.reason);
+    // Optional wired-check descriptor (#1278): emit flat scalars ONLY when well-formed. A valid kind
+    // plus a non-empty target is the minimum; under that bar nothing is emitted (CHK-07 byte-identity,
+    // and the producer fails closed on the absent descriptor — CHK-06).
+    const kind = p.check_kind;
+    const targetOk = typeof p.check_target === 'string' && p.check_target.trim() !== '';
+    if ((kind === 'node-test' || kind === 'lint-rule') && targetOk) {
+      entry.check_kind = kind;
+      entry.check_target = String(p.check_target);
+      // `check_rule` rides only the lint-rule path (node-test never carries one); a lint-rule missing
+      // its rule leaves check_rule absent so the producer's fail-closed locate rejects it (CHK-06).
+      if (kind === 'lint-rule' && typeof p.check_rule === 'string' && p.check_rule.trim() !== '') {
+        entry.check_rule = String(p.check_rule);
+      }
+    }
     out.push(entry);
   }
   return out;
