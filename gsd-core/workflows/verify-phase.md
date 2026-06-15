@@ -101,9 +101,11 @@ If no must_haves in frontmatter AND no Success Criteria in ROADMAP:
 <step name="verify_truths">
 For each observable truth, determine if the codebase enables it.
 
-**Status:** ✓ VERIFIED (all supporting artifacts pass) | ✗ FAILED (artifact missing/stub/unwired) | ? UNCERTAIN (needs human)
+**Status:** ✓ VERIFIED (all supporting artifacts pass — and, for a behavior-dependent truth, a behavioral test exercises the asserted behavior) | ⚠️ PRESENT_BEHAVIOR_UNVERIFIED (present + wired, but a state transition or cancellation/cleanup/ordering invariant is exercised by no test — routes to human verification, excluded from the score) | ✗ FAILED (artifact missing/stub/unwired) | ? UNCERTAIN (needs human)
 
 For each truth: identify supporting artifacts → check artifact status → check wiring → determine truth status.
+
+**Behavior-dependent truths:** when a truth asserts a state transition or a cancellation/cleanup/ordering invariant, symbol presence + wiring is necessary but not sufficient — the code can be present and wired yet still leak state on the path the invariant covers. Mark such a truth ✓ VERIFIED only when a pre-existing test exercises the transition/invariant and passes (one named test, never the full suite); otherwise mark it ⚠️ PRESENT_BEHAVIOR_UNVERIFIED, emit a human-verification item, and exclude it from the verified score.
 
 **Example:** Truth "User can see existing messages" depends on Chat.tsx (renders), /api/chat GET (provides), Message model (schema). If Chat.tsx is a stub or API returns hardcoded [] → FAILED. If all exist, are substantive, and connected → VERIFIED.
 </step>
@@ -440,13 +442,14 @@ Infrastructure and foundation phases — code foundations, database schema, inte
 - Mark human verification as **N/A** with rationale: "Infrastructure/foundation phase — no user-facing elements to test manually."
 - Set `human_verification: []` and do **not** produce a `human_needed` status solely due to lack of user-facing features.
 - Only add human verification items if the phase goal or success criteria explicitly describe something a user would interact with (UI, CLI command output visible to end users, external service UX).
+- **Exception — behavior-unverified truths still count.** A truth marked ⚠️ PRESENT_BEHAVIOR_UNVERIFIED (a state transition or a cancellation/cleanup/ordering invariant with no test exercising it) is a behavioral-evidence gap, not an artificial user-facing step. Record it in `behavior_unverified_items` and emit a human-verification item for it **even on an infrastructure/foundation phase** — these invariants are exactly where infra phases hide runtime state leaks. Such a truth drives `human_needed`; the auto-pass-UAT shortcut applies only to the absence of user-facing UX, never to a behavior-unverified invariant.
 
 **How to determine if a phase is infrastructure/foundation:**
 - Phase goal or name contains: "foundation", "infrastructure", "schema", "database", "internal API", "data model", "scaffolding", "pipeline", "tooling", "CI", "migrations", "service layer", "backend", "core library"
 - Phase success criteria describe only technical artifacts (files exist, tests pass, schema is valid) with no user interaction required
 - There is no UI, CLI output visible to end users, or real-time behavior to observe
 
-**If the phase IS infrastructure/foundation:** auto-pass UAT — skip the human verification items list entirely. Log:
+**If the phase IS infrastructure/foundation:** auto-pass UAT — skip the human verification items list entirely, **except any ⚠️ PRESENT_BEHAVIOR_UNVERIFIED truth (see exception above), which still emits a human-verification item and drives `human_needed`.** Log:
 
 ```markdown
 ## Human Verification
@@ -475,15 +478,17 @@ Classify status using this decision tree IN ORDER (most restrictive first):
    - **judgment-tier, autonomous run** (non-authoritative LLM-judge verdict): emit the `unverified-prohibition — human review recommended` flag and classify → **human_needed** (autonomous completion reads "complete with N flagged prohibitions"; never a silent pass, never a hard halt).
    - **judgment-tier, interactive run**: route to the end-of-phase human checkpoint → **human_needed**.
 
-3. IF the previous step produced ANY human verification items:
-   → **human_needed** (even if all truths VERIFIED and score is N/N)
+3. IF the previous step produced ANY human verification items — this includes every ⚠️ PRESENT_BEHAVIOR_UNVERIFIED truth:
+   → **human_needed** (even if all other truths VERIFIED)
 
 4. IF all checks pass AND no human verification items AND no flagged prohibitions:
    → **passed**
 
 **passed is ONLY valid when no human verification items AND no flagged prohibitions exist.** A prohibition (must-NOT) can never be silently absorbed into a `passed` verdict — that is the core failure mode ADR-550 D4 forbids.
 
-**Score:** `verified_truths / total_truths`
+A ⚠️ PRESENT_BEHAVIOR_UNVERIFIED truth is never FAILED and never VERIFIED: it does not trigger gaps_found (the code is present and wired) and is not counted as verified (its runtime behavior was not exercised). It routes through the existing human_needed sink — no new overall status.
+
+**Score:** `verified_truths / total_truths` — `verified_truths` counts ✓ VERIFIED truths plus PASSED (override) truths; ⚠️ PRESENT_BEHAVIOR_UNVERIFIED truths are the only ones excluded, reported separately as the `behavior_unverified` count. A headline N/N therefore certifies behavioral evidence for every behavior-dependent truth, not merely symbol presence.
 </step>
 
 <step name="filter_deferred_items">
