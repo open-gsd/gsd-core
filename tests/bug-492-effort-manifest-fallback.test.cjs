@@ -29,7 +29,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { cleanup } = require('./helpers.cjs');
-const { resolveEffortInternal } = require('../gsd-core/bin/lib/core.cjs');
+const { resolveEffortInternal } = require('../gsd-core/bin/lib/model-resolver.cjs');
 
 /** Create a bare temp directory with no .planning/ structure */
 function createBareTmpDir(prefix = 'gsd-test-') {

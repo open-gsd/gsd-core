@@ -24,7 +24,7 @@ const fs = require('fs');
 const path = require('path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 
-const { resolveModelInternal } = require('../gsd-core/bin/lib/core.cjs');
+const { resolveModelInternal } = require('../gsd-core/bin/lib/model-resolver.cjs');
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

@@ -36,9 +36,11 @@ const {
   resolveModelInternal,
   resolveEffortInternal,
   resolveTierEntry,
+} = require('../gsd-core/bin/lib/model-resolver.cjs');
+const {
   RUNTIME_PROFILE_MAP,
   KNOWN_RUNTIMES,
-} = require('../gsd-core/bin/lib/core.cjs');
+} = require('../gsd-core/bin/lib/model-catalog.cjs');
 const { renderEffortForRuntime } = require('../gsd-core/bin/lib/model-catalog.cjs');
 const { isValidConfigKey } = require('../gsd-core/bin/lib/config-schema.cjs');
 
@@ -471,7 +473,7 @@ describe('issue #2517: VALID_CONFIG_KEYS schema', () => {
 
 // ─── loadConfig validation warnings (review findings #10, #13) ──────────────
 describe('issue #2517: loadConfig warns on unknown runtime/tier (findings #10, #13)', () => {
-  const { loadConfig } = require('../gsd-core/bin/lib/core.cjs');
+  const { loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
   let tmpDir;
   let origWrite;
   let captured;

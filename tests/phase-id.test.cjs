@@ -22,7 +22,6 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 
 const phaseId = require('../gsd-core/bin/lib/phase-id.cjs');
-const core = require('../gsd-core/bin/lib/core.cjs');
 
 // ─── escapeRegex ─────────────────────────────────────────────────────────────
 
@@ -388,42 +387,3 @@ describe('getPhaseDirFromPhaseId', () => {
   });
 });
 
-// ─── core.cjs re-export shim identity assertions ──────────────────────────────
-
-describe('core.cjs re-export shim identity (single instance)', () => {
-  test('core.escapeRegex === phaseId.escapeRegex', () => {
-    assert.strictEqual(core.escapeRegex, phaseId.escapeRegex);
-  });
-
-  test('core.normalizePhaseName === phaseId.normalizePhaseName', () => {
-    assert.strictEqual(core.normalizePhaseName, phaseId.normalizePhaseName);
-  });
-
-  test('core.comparePhaseNum === phaseId.comparePhaseNum', () => {
-    assert.strictEqual(core.comparePhaseNum, phaseId.comparePhaseNum);
-  });
-
-  test('core.extractPhaseToken === phaseId.extractPhaseToken', () => {
-    assert.strictEqual(core.extractPhaseToken, phaseId.extractPhaseToken);
-  });
-
-  test('core.phaseTokenMatches === phaseId.phaseTokenMatches', () => {
-    assert.strictEqual(core.phaseTokenMatches, phaseId.phaseTokenMatches);
-  });
-
-  test('core.phaseMarkdownRegexSource === phaseId.phaseMarkdownRegexSource', () => {
-    assert.strictEqual(core.phaseMarkdownRegexSource, phaseId.phaseMarkdownRegexSource);
-  });
-
-  test('core.phaseMarkdownRegexSourceExact === phaseId.phaseMarkdownRegexSourceExact', () => {
-    assert.strictEqual(core.phaseMarkdownRegexSourceExact, phaseId.phaseMarkdownRegexSourceExact);
-  });
-
-  test('core.getMilestoneFromPhaseId === phaseId.getMilestoneFromPhaseId', () => {
-    assert.strictEqual(core.getMilestoneFromPhaseId, phaseId.getMilestoneFromPhaseId);
-  });
-
-  test('core.getPhaseDirFromPhaseId === phaseId.getPhaseDirFromPhaseId', () => {
-    assert.strictEqual(core.getPhaseDirFromPhaseId, phaseId.getPhaseDirFromPhaseId);
-  });
-});

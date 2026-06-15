@@ -534,7 +534,7 @@ describe('dispatchCapabilityCommand — non-ExitError from router → structured
     assert.ok(msg.includes('fake.cjs'), 'message must name the module; got: ' + msg);
     assert.ok(msg.includes('boom'), 'message must include original error message; got: ' + msg);
     // Reason must be SDK_FAIL_FAST
-    const { ERROR_REASON } = require('../gsd-core/bin/lib/core.cjs');
+    const { ERROR_REASON } = require('../gsd-core/bin/lib/io.cjs');
     assert.strictEqual(reason, ERROR_REASON.SDK_FAIL_FAST, 'reason must be SDK_FAIL_FAST');
   });
 
@@ -625,7 +625,7 @@ describe('dispatchCapabilityCommand — non-ExitError from router → structured
 // ─── 10. Async router (thenable) → structured error ─────────────────────────
 
 describe('dispatchCapabilityCommand — async router returns a Promise → structured error', () => {
-  const { ERROR_REASON } = require('../gsd-core/bin/lib/core.cjs');
+  const { ERROR_REASON } = require('../gsd-core/bin/lib/io.cjs');
 
   test('router returns Promise.resolve() → error() called with "must be synchronous" + SDK_FAIL_FAST', () => {
     const errorCalls = [];

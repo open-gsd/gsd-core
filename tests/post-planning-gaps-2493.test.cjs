@@ -382,7 +382,7 @@ describe('workflow.post_planning_gaps config (#2493)', () => {
 
   test('CONFIG_DEFAULTS contains post_planning_gaps default true', () => {
     // CONFIG_DEFAULTS is exported from core.cjs
-    const { CONFIG_DEFAULTS } = require('../gsd-core/bin/lib/core.cjs');
+    const { CONFIG_DEFAULTS } = require('../gsd-core/bin/lib/config-loader.cjs');
     assert.strictEqual(CONFIG_DEFAULTS.post_planning_gaps, true);
   });
 
@@ -419,7 +419,7 @@ describe('workflow.post_planning_gaps config (#2493)', () => {
   // in its return so callers can read config.post_planning_gaps regardless of whether
   // config.json exists, has the workflow section, or sets the flat key.
   test('loadConfig() returns post_planning_gaps default true when key absent', () => {
-    const { loadConfig } = require('../gsd-core/bin/lib/core.cjs');
+    const { loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
     runGsdTools('config-ensure-section', tmpDir);
     // Remove the key to simulate older configs that pre-date the toggle
     const cfgPath = path.join(tmpDir, '.planning', 'config.json');
@@ -431,7 +431,7 @@ describe('workflow.post_planning_gaps config (#2493)', () => {
   });
 
   test('loadConfig() returns post_planning_gaps:false when workflow.post_planning_gaps=false', () => {
-    const { loadConfig } = require('../gsd-core/bin/lib/core.cjs');
+    const { loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
     runGsdTools('config-ensure-section', tmpDir);
     runGsdTools(['config-set', 'workflow.post_planning_gaps', 'false'], tmpDir);
     const config = loadConfig(tmpDir);
@@ -439,7 +439,7 @@ describe('workflow.post_planning_gaps config (#2493)', () => {
   });
 
   test('loadConfig() returns post_planning_gaps:true when workflow.post_planning_gaps=true', () => {
-    const { loadConfig } = require('../gsd-core/bin/lib/core.cjs');
+    const { loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
     runGsdTools('config-ensure-section', tmpDir);
     runGsdTools(['config-set', 'workflow.post_planning_gaps', 'true'], tmpDir);
     const config = loadConfig(tmpDir);

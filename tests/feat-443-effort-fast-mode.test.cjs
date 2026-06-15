@@ -25,7 +25,7 @@ const {
   resolveEffortInternal,
   resolveFastModeInternal,
   resolveEffortForTier,
-} = require('../gsd-core/bin/lib/core.cjs');
+} = require('../gsd-core/bin/lib/model-resolver.cjs');
 
 const {
   renderEffortForRuntime,

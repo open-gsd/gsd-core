@@ -63,8 +63,10 @@ const {
   resolveModelInternal,
   resolveModelPolicy,
   resolveModelForTier,
+} = require('../gsd-core/bin/lib/model-resolver.cjs');
+const {
   KNOWN_PROVIDERS,
-} = require('../gsd-core/bin/lib/core.cjs');
+} = require('../gsd-core/bin/lib/model-catalog.cjs');
 
 // KNOWN_PROVIDERS must also be exported directly from model-catalog.cjs
 const modelCatalog = require('../gsd-core/bin/lib/model-catalog.cjs');

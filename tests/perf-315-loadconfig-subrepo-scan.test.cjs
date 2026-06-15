@@ -28,7 +28,7 @@ const os = require('node:os');
 const { cleanup } = require('./helpers.cjs');
 
 // Import loadConfig directly (sync, no CLI subprocess needed)
-const { loadConfig } = require('../gsd-core/bin/lib/core.cjs');
+const { loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 

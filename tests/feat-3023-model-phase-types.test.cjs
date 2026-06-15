@@ -27,7 +27,7 @@ const path = require('node:path');
 
 const {
   resolveModelInternal,
-} = require('../gsd-core/bin/lib/core.cjs');
+} = require('../gsd-core/bin/lib/model-resolver.cjs');
 const {
   AGENT_TO_PHASE_TYPE,
   VALID_PHASE_TYPES,
@@ -254,7 +254,7 @@ describe('#3023 resolver: models.<phase_type> overrides profile-based tier', () 
 
 // ─── #443 Unified effort: resolveEffortInternal + renderEffortForRuntime ────
 
-const { resolveEffortInternal } = require('../gsd-core/bin/lib/core.cjs');
+const { resolveEffortInternal } = require('../gsd-core/bin/lib/model-resolver.cjs');
 const { renderEffortForRuntime } = require('../gsd-core/bin/lib/model-catalog.cjs');
 
 describe('#3023 + #443: unified effort resolver (resolveEffortInternal) for Codex', () => {

@@ -29,7 +29,6 @@ const { cleanup } = require('./helpers.cjs');
 // ─── modules under test ───────────────────────────────────────────────────────
 
 const modelResolver = require('../gsd-core/bin/lib/model-resolver.cjs');
-const coreModule = require('../gsd-core/bin/lib/core.cjs');
 
 const {
   resolveTierEntry,
@@ -60,61 +59,6 @@ function writeConfig(tmpDir, obj) {
   fs.writeFileSync(configPath, JSON.stringify(obj, null, 2), 'utf-8');
 }
 
-// ─── shim identity ────────────────────────────────────────────────────────────
-
-describe('model-resolver shim identity', () => {
-  test('core.resolveTierEntry === modelResolver.resolveTierEntry', () => {
-    assert.strictEqual(coreModule.resolveTierEntry, modelResolver.resolveTierEntry);
-  });
-
-  test('core.resolveModelPolicy === modelResolver.resolveModelPolicy', () => {
-    assert.strictEqual(coreModule.resolveModelPolicy, modelResolver.resolveModelPolicy);
-  });
-
-  test('core.resolveModelInternal === modelResolver.resolveModelInternal', () => {
-    assert.strictEqual(coreModule.resolveModelInternal, modelResolver.resolveModelInternal);
-  });
-
-  test('core.VALID_GRANULARITIES === modelResolver.VALID_GRANULARITIES (same Set object)', () => {
-    assert.strictEqual(coreModule.VALID_GRANULARITIES, modelResolver.VALID_GRANULARITIES);
-  });
-
-  test('core.resolveGranularityInternal === modelResolver.resolveGranularityInternal', () => {
-    assert.strictEqual(coreModule.resolveGranularityInternal, modelResolver.resolveGranularityInternal);
-  });
-
-  test('core.assertValidGranularityOverride === modelResolver.assertValidGranularityOverride', () => {
-    assert.strictEqual(coreModule.assertValidGranularityOverride, modelResolver.assertValidGranularityOverride);
-  });
-
-  test('core.resolveModelForTier === modelResolver.resolveModelForTier', () => {
-    assert.strictEqual(coreModule.resolveModelForTier, modelResolver.resolveModelForTier);
-  });
-
-  test('core.VALID_EFFORTS === modelResolver.VALID_EFFORTS (same Array object)', () => {
-    assert.strictEqual(coreModule.VALID_EFFORTS, modelResolver.VALID_EFFORTS);
-  });
-
-  test('core.EFFORT_SET === modelResolver.EFFORT_SET (same Set object)', () => {
-    assert.strictEqual(coreModule.EFFORT_SET, modelResolver.EFFORT_SET);
-  });
-
-  test('core.nextEffort === modelResolver.nextEffort', () => {
-    assert.strictEqual(coreModule.nextEffort, modelResolver.nextEffort);
-  });
-
-  test('core.resolveEffortInternal === modelResolver.resolveEffortInternal', () => {
-    assert.strictEqual(coreModule.resolveEffortInternal, modelResolver.resolveEffortInternal);
-  });
-
-  test('core.resolveFastModeInternal === modelResolver.resolveFastModeInternal', () => {
-    assert.strictEqual(coreModule.resolveFastModeInternal, modelResolver.resolveFastModeInternal);
-  });
-
-  test('core.resolveEffortForTier === modelResolver.resolveEffortForTier', () => {
-    assert.strictEqual(coreModule.resolveEffortForTier, modelResolver.resolveEffortForTier);
-  });
-});
 
 // ─── resolveModelInternal ─────────────────────────────────────────────────────
 

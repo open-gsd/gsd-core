@@ -30,49 +30,7 @@ const path = require('node:path');
 const os = require('node:os');
 
 const coreUtils = require('../gsd-core/bin/lib/core-utils.cjs');
-const core = require('../gsd-core/bin/lib/core.cjs');
 const { cleanup } = require('./helpers.cjs');
-
-// ─── Shim-identity assertions ─────────────────────────────────────────────────
-
-describe('core-utils: shim-identity — core.cjs re-exports same function objects', () => {
-  test('core.toPosixPath === coreUtils.toPosixPath', () => {
-    assert.strictEqual(core.toPosixPath, coreUtils.toPosixPath);
-  });
-  test('core.detectSubRepos === coreUtils.detectSubRepos', () => {
-    assert.strictEqual(core.detectSubRepos, coreUtils.detectSubRepos);
-  });
-  test('core.extractOneLinerFromBody === coreUtils.extractOneLinerFromBody', () => {
-    assert.strictEqual(core.extractOneLinerFromBody, coreUtils.extractOneLinerFromBody);
-  });
-  test('core.pathExistsInternal === coreUtils.pathExistsInternal', () => {
-    assert.strictEqual(core.pathExistsInternal, coreUtils.pathExistsInternal);
-  });
-  test('core.generateSlugInternal === coreUtils.generateSlugInternal', () => {
-    assert.strictEqual(core.generateSlugInternal, coreUtils.generateSlugInternal);
-  });
-  test('core.filterPlanFiles === coreUtils.filterPlanFiles', () => {
-    assert.strictEqual(core.filterPlanFiles, coreUtils.filterPlanFiles);
-  });
-  test('core.filterSummaryFiles === coreUtils.filterSummaryFiles', () => {
-    assert.strictEqual(core.filterSummaryFiles, coreUtils.filterSummaryFiles);
-  });
-  test('core.getPhaseFileStats === coreUtils.getPhaseFileStats', () => {
-    assert.strictEqual(core.getPhaseFileStats, coreUtils.getPhaseFileStats);
-  });
-  test('core.readSubdirectories === coreUtils.readSubdirectories', () => {
-    assert.strictEqual(core.readSubdirectories, coreUtils.readSubdirectories);
-  });
-  test('core.timeAgo === coreUtils.timeAgo', () => {
-    assert.strictEqual(core.timeAgo, coreUtils.timeAgo);
-  });
-  test('extractCanonicalPlanId is NOT re-exported from core', () => {
-    assert.strictEqual(typeof core.extractCanonicalPlanId, 'undefined');
-  });
-  test('extractCanonicalPlanId IS exported from coreUtils', () => {
-    assert.strictEqual(typeof coreUtils.extractCanonicalPlanId, 'function');
-  });
-});
 
 // ─── toPosixPath ─────────────────────────────────────────────────────────────
 

@@ -15,7 +15,7 @@ const {
   setActiveWorkstream,
 } = require('../gsd-core/bin/lib/planning-workspace.cjs');
 
-const core = require('../gsd-core/bin/lib/core.cjs');
+const planningWorkspaceDirect = require('../gsd-core/bin/lib/planning-workspace.cjs');
 
 describe('planning-workspace: planningDir/planningPaths parity', () => {
   const cwd = '/fake/repo';
@@ -147,7 +147,7 @@ describe('planning-workspace: lock seam', () => {
   });
 });
 
-describe('core compatibility adapter: planning workspace functions', () => {
+describe('planning-workspace direct: functions expose matching behavior', () => {
   let savedSession;
 
   beforeEach(() => {
@@ -160,26 +160,26 @@ describe('core compatibility adapter: planning workspace functions', () => {
     else delete process.env.GSD_SESSION_KEY;
   });
 
-  test('core and planning-workspace expose matching behavior', () => {
+  test('planning-workspace functions work consistently', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-core-compat-'));
     try {
       fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams', 'alpha'), { recursive: true });
 
-      core.setActiveWorkstream(tmpDir, 'alpha');
-      assert.strictEqual(core.getActiveWorkstream(tmpDir), 'alpha');
+      planningWorkspaceDirect.setActiveWorkstream(tmpDir, 'alpha');
+      assert.strictEqual(planningWorkspaceDirect.getActiveWorkstream(tmpDir), 'alpha');
       assert.strictEqual(getActiveWorkstream(tmpDir), 'alpha');
 
       assert.strictEqual(
-        core.planningDir(tmpDir, 'feature-x', 'my-project'),
+        planningWorkspaceDirect.planningDir(tmpDir, 'feature-x', 'my-project'),
         planningDir(tmpDir, 'feature-x', 'my-project')
       );
       assert.deepStrictEqual(
-        core.planningPaths(tmpDir, 'feature-x'),
+        planningWorkspaceDirect.planningPaths(tmpDir, 'feature-x'),
         planningPaths(tmpDir, 'feature-x')
       );
 
       setActiveWorkstream(tmpDir, null);
-      assert.strictEqual(core.getActiveWorkstream(tmpDir), null);
+      assert.strictEqual(planningWorkspaceDirect.getActiveWorkstream(tmpDir), null);
     } finally {
       cleanup(tmpDir);
     }

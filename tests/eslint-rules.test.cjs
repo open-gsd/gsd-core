@@ -120,7 +120,7 @@ describe('no-source-grep rule', () => {
       valid: [
         {
           code: `
-            const mod = require('../gsd-core/bin/lib/core.cjs');
+            const mod = require('../gsd-core/bin/lib/io.cjs');
             mod.someMethod();
           `,
           filename: 'tests/foo.test.cjs',
