@@ -97,7 +97,6 @@
     },
     "state": {
       "files": [
-        "bug-1255-state-status-pipe-table.test.cjs",
         "bug-21-state-md-template-frontmatter.test.cjs",
         "bug-2630-state-frontmatter-milestone-switch.test.cjs",
         "bug-3127-state-begin-phase-idempotent.test.cjs",
