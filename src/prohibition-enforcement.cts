@@ -67,6 +67,42 @@ export interface CheckDescriptor {
 }
 
 /**
+ * READ-BACK ADAPTER (#1278, plan 01-03): reconstruct a `CheckDescriptor` from the flat scalar keys
+ * `projectProhibitions` emits onto a prohibition item (`check_kind` / `check_target` / `check_rule`,
+ * src/probe-core.cts). This is the deterministic bridge from the projected descriptor back into the
+ * merged #1259 producer request — the verify-phase caller reads the projected scalars, this rebuilds
+ * the `{ kind, target, rule? }` request, and `runProhibitionEnforcement`'s EXISTING fail-closed LOCATE
+ * guard (validKind/validTarget/validRule, below) is the single source of fail-closed truth.
+ *
+ * Contract:
+ *   - `null`/`undefined`/non-object input -> `null`.
+ *   - `check_kind` ABSENT -> `null` (no descriptor -> producer locates nothing -> fail-closed).
+ *   - `check_kind` present -> `{ kind: check_kind, target: check_target }`, adding `rule: check_rule`
+ *     ONLY when `check_rule` is a non-empty string.
+ *   - `failFirst` is NEVER sourced from the projection — it stays a verify-time caller attestation
+ *     (#1279 machine-proves it; out of scope here). The returned descriptor carries no `failFirst`.
+ *   - The adapter does NOT strictly validate kind/target/rule: it faithfully reconstructs whatever
+ *     scalars are present (e.g. `{check_kind:'lint-rule', check_target:'src/'}` with no `check_rule`
+ *     reconstructs to `{kind:'lint-rule', target:'src/'}`), letting the existing LOCATE guard reject
+ *     an under-specified descriptor (located:false, never green). It does NOT re-implement that guard.
+ *   - Pure, deterministic, no-throw.
+ */
+export function descriptorFromProjection(
+  projected: Record<string, unknown> | null | undefined,
+): CheckDescriptor | null {
+  if (!projected || typeof projected !== 'object') return null;
+  if (!('check_kind' in projected)) return null;
+  const descriptor: CheckDescriptor = {
+    kind: projected.check_kind as CheckKind,
+    target: projected.check_target as string,
+  };
+  if (typeof projected.check_rule === 'string' && projected.check_rule.trim().length > 0) {
+    descriptor.rule = projected.check_rule;
+  }
+  return descriptor;
+}
+
+/**
  * The result a check-runner returns: whether the check genuinely, non-vacuously PASSED. The runner
  * reports only what it can OBSERVE (a real pass) — it does NOT determine fail-first. Whether the
  * check is a `regression-must-fail-first` proof is a CALLER-ATTESTED property of the descriptor
