@@ -10,8 +10,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import core = require('./core.cjs');
-const { output, error, ERROR_REASON } = core;
+import io = require('./io.cjs');
+const { output, error, ERROR_REASON } = io;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planningWorkspaceMod = require('./planning-workspace.cjs');
+const { planningDir } = planningWorkspaceMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseLocatorMod = require('./phase-locator.cjs');
+const { findPhaseInternal } = phaseLocatorMod;
 import { parseDecisions } from './decisions.cjs';
 import type { Decision } from './decisions.cjs';
 import { checkUiPresence } from './ui-safety-gate.cjs';
@@ -358,7 +364,7 @@ function cmdDecisionCoverageVerify(projectDir: string, args: string[], raw: bool
  * Invocable as: gsd_run check ui-plan-gate <phase>
  *
  * Uses checkUiPresence from ui-safety-gate.cjs — does NOT reimplement frontend detection.
- * Uses getRoadmapPhaseInternal + findPhaseInternal from core.cjs for phase data.
+ * Uses getRoadmapPhaseWithFallback + findPhaseInternal from leaf modules for phase data.
  */
 function findUiSpecInDir(phaseDir: string): string {
   if (!phaseDir || !fs.existsSync(phaseDir)) return '';
@@ -384,7 +390,7 @@ function findUiSpecInDir(phaseDir: string): string {
  *       surface the miss — we do NOT silently degrade to frontend:false if the roadmap
  *       exists but the phase header is absent.
  *   (b) Runs checkUiPresence (frontend detection) — no reimplementation.
- *   (c) Resolves the phase directory via core.findPhaseInternal; checks for *-UI-SPEC.md.
+ *   (c) Resolves the phase directory via findPhaseInternal (phase-locator.cjs); checks for *-UI-SPEC.md.
  *
  * Returns: { frontend, hasUiSpec, block, uiSpecPath, phaseLookupFailed }
  *   block = frontend && !hasUiSpec
@@ -407,10 +413,8 @@ function computeUiPlanGate(projectDir: string, phase: string): {
     const section = getRoadmapPhaseWithFallback(projectDir, phase);
     if (section === null) {
       // Distinguish: ROADMAP.md missing (no-roadmap project) vs phase not found in ROADMAP.
-      // core.planningDir(cwd) resolves the .planning/ root for workstream-aware paths.
-      const planDir: string = typeof (core as unknown as Record<string, unknown>)['planningDir'] === 'function'
-        ? (core as unknown as Record<string, (cwd: string) => string>)['planningDir'](projectDir)
-        : path.join(projectDir, '.planning');
+      // planningDir(cwd) resolves the .planning/ root for workstream-aware paths.
+      const planDir: string = planningDir(projectDir);
       const roadmapPath = path.join(planDir, 'ROADMAP.md');
       if (fs.existsSync(roadmapPath)) {
         // ROADMAP.md exists but phase was not found → surface the miss
@@ -427,22 +431,18 @@ function computeUiPlanGate(projectDir: string, phase: string): {
   const frontend = presenceResult.hasUI;
 
   // (c) Resolve phase directory via findPhaseInternal and check for *-UI-SPEC.md
-  const coreModule = core as unknown as Record<string, unknown>;
   let phaseDir = '';
   try {
-    const findPhase = coreModule['findPhaseInternal'] as ((cwd: string, phase: string) => Record<string, unknown> | string | null) | undefined;
-    if (typeof findPhase === 'function') {
-      const result = findPhase(projectDir, phase);
-      if (result && typeof result === 'object') {
-        // findPhaseInternal returns { directory: '<relative-posix-path>', ... }
-        // directory is relative to cwd — resolve it to absolute.
-        const relDir = typeof result['directory'] === 'string' ? result['directory'] : '';
-        if (relDir) {
-          phaseDir = path.resolve(projectDir, relDir);
-        }
-      } else if (typeof result === 'string') {
-        phaseDir = result;
+    const result = findPhaseInternal(projectDir, phase);
+    if (result && typeof result === 'object') {
+      // findPhaseInternal returns { directory: '<relative-posix-path>', ... }
+      // directory is relative to cwd — resolve it to absolute.
+      const relDir = typeof result['directory'] === 'string' ? result['directory'] : '';
+      if (relDir) {
+        phaseDir = path.resolve(projectDir, relDir);
       }
+    } else if (typeof result === 'string') {
+      phaseDir = result;
     }
   } catch { /* phase dir lookup failure → hasUiSpec=false */ }
 
@@ -501,7 +501,7 @@ const UI_PATH_PATTERNS_RE = /\/(components|pages|views|screens|layouts|ui|fronte
  *       same lookup as computeUiPlanGate — to determine if this is a frontend phase.
  *   (b) Runs checkUiPresence (frontend detection) — no reimplementation.
  *   (c) Checks git diff HEAD~1..HEAD for UI file changes in the current worktree.
- *   (d) Resolves the phase directory via core.findPhaseInternal; checks for *-UI-SPEC.md.
+ *   (d) Resolves the phase directory via findPhaseInternal (phase-locator.cjs); checks for *-UI-SPEC.md.
  *
  * Returns: { frontend, hasUiFiles, hasUiSpec, block, message?, phaseLookupFailed? }
  *   block = frontend && hasUiFiles && !hasUiSpec
@@ -521,9 +521,7 @@ function computeUiSafetyGate(projectDir: string, phase: string): {
   try {
     const section = getRoadmapPhaseWithFallback(projectDir, phase);
     if (section === null) {
-      const planDir: string = typeof (core as unknown as Record<string, unknown>)['planningDir'] === 'function'
-        ? (core as unknown as Record<string, (cwd: string) => string>)['planningDir'](projectDir)
-        : path.join(projectDir, '.planning');
+      const planDir: string = planningDir(projectDir);
       const roadmapPath = path.join(planDir, 'ROADMAP.md');
       if (fs.existsSync(roadmapPath)) {
         phaseLookupFailed = true;
@@ -554,20 +552,16 @@ function computeUiSafetyGate(projectDir: string, phase: string): {
   } catch { /* git unavailable or no prior commit — treat as no UI files changed */ }
 
   // (d) Resolve phase directory and check for *-UI-SPEC.md (same as computeUiPlanGate)
-  const coreModule = core as unknown as Record<string, unknown>;
   let phaseDir = '';
   try {
-    const findPhase = coreModule['findPhaseInternal'] as ((cwd: string, phase: string) => Record<string, unknown> | string | null) | undefined;
-    if (typeof findPhase === 'function') {
-      const result = findPhase(projectDir, phase);
-      if (result && typeof result === 'object') {
-        const relDir = typeof result['directory'] === 'string' ? result['directory'] : '';
-        if (relDir) {
-          phaseDir = path.resolve(projectDir, relDir);
-        }
-      } else if (typeof result === 'string') {
-        phaseDir = result;
+    const result = findPhaseInternal(projectDir, phase);
+    if (result && typeof result === 'object') {
+      const relDir = typeof result['directory'] === 'string' ? result['directory'] : '';
+      if (relDir) {
+        phaseDir = path.resolve(projectDir, relDir);
       }
+    } else if (typeof result === 'string') {
+      phaseDir = result;
     }
   } catch { /* phase dir lookup failure → hasUiSpec=false */ }
 
@@ -639,18 +633,14 @@ function cmdTddReviewCheckpoint(projectDir: string, args: string[], raw: boolean
   }
 
   // Resolve phase directory
-  const coreModule = core as unknown as Record<string, unknown>;
   let phaseDir = '';
   try {
-    const findPhase = coreModule['findPhaseInternal'] as ((cwd: string, phase: string) => Record<string, unknown> | string | null) | undefined;
-    if (typeof findPhase === 'function') {
-      const result = findPhase(projectDir, phase);
-      if (result && typeof result === 'object') {
-        const relDir = typeof result['directory'] === 'string' ? result['directory'] : '';
-        if (relDir) phaseDir = path.resolve(projectDir, relDir);
-      } else if (typeof result === 'string') {
-        phaseDir = result;
-      }
+    const result = findPhaseInternal(projectDir, phase);
+    if (result && typeof result === 'object') {
+      const relDir = typeof result['directory'] === 'string' ? result['directory'] : '';
+      if (relDir) phaseDir = path.resolve(projectDir, relDir);
+    } else if (typeof result === 'string') {
+      phaseDir = result;
     }
   } catch { /* phase dir lookup failure */ }
 

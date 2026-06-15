@@ -194,13 +194,14 @@
 const fs = require('fs');
 const path = require('path');
 const { ExitError, runMain } = require('./lib/cli-exit.cjs');
-const core = require('./lib/core.cjs');
-const { error, ERROR_REASON } = core;
+const io = require('./lib/io.cjs');
+const { error, ERROR_REASON, setJsonErrorMode, output } = io;
+const projectRoot = require('./lib/project-root.cjs');
 // Resolve findProjectRoot lazily at call time rather than binding it at module
-// load. It is a re-export from core.cjs (sourced from project-root.cjs); a
-// call-time lookup is robust against any require/load-ordering edge where the
-// re-export isn't bound yet when this entrypoint is first required (#604).
-const findProjectRoot = (...args) => core.findProjectRoot(...args);
+// load. It is sourced from project-root.cjs; a call-time lookup is robust
+// against any require/load-ordering edge where the export isn't bound yet
+// when this entrypoint is first required (#604).
+const findProjectRoot = (...args) => projectRoot.findProjectRoot(...args);
 const { getActiveWorkstream } = require('./lib/planning-workspace.cjs');
 const { resolveActiveWorkstream, applyResolvedWorkstreamEnv } = require('./lib/active-workstream-store.cjs');
 const state = require('./lib/state.cjs');
@@ -255,7 +256,7 @@ const { getEffectiveAuthority, classifyDriftSeverity } = require('./lib/plan-dri
  * @param {string} opts.cwd - project dir
  * @param {boolean} opts.raw - raw output mode
  * @param {Function} opts.error - error reporter
- * @param {Function} opts.output - output emitter (core.output)
+ * @param {Function} opts.output - output emitter (output)
  */
 function _dispatchNonFamily({ registryCommand, registryArgs, legacyCommand, legacyArgs, cwd, raw, error, output }) {
   void registryCommand;
@@ -294,7 +295,7 @@ function _dispatchNonFamily({ registryCommand, registryArgs, legacyCommand, lega
  * @param {string[]} opts.args           Remaining args passed to the router
  * @param {string}   opts.cwd            Project working directory
  * @param {boolean}  opts.raw            Raw output mode flag
- * @param {Function} opts.error          Error reporter (core.error)
+ * @param {Function} opts.error          Error reporter (io.error)
  * @param {object}   [opts.registry]     Injectable registry (for tests)
  * @param {Function} [opts.requireModule] Injectable module loader (for tests)
  * @returns {boolean} true if the command was dispatched, false otherwise
@@ -404,10 +405,10 @@ async function main() {
   // their plain-text diagnostic.
   const jsonErrorsIdx = args.indexOf('--json-errors');
   if (jsonErrorsIdx !== -1) {
-    core.setJsonErrorMode(true);
+    setJsonErrorMode(true);
     args.splice(jsonErrorsIdx, 1);
   } else if (process.env.GSD_JSON_ERRORS === '1') {
-    core.setJsonErrorMode(true);
+    setJsonErrorMode(true);
   }
 
   // Optional cwd override for sandboxed subagents running outside project root.
@@ -433,7 +434,7 @@ async function main() {
   // Resolve worktree root: in a linked worktree, .planning/ lives in the main worktree.
   // However, in monorepo worktrees where the subdirectory itself owns .planning/,
   // skip worktree resolution — the CWD is already the correct project root.
-  const { resolveWorktreeRoot } = require('./lib/core.cjs');
+  const { resolveWorktreeRoot } = require('./lib/worktree-safety.cjs');
   if (!fs.existsSync(path.join(cwd, '.planning'))) {
     const worktreeRoot = resolveWorktreeRoot(cwd);
     if (worktreeRoot !== cwd) {
@@ -596,7 +597,7 @@ async function main() {
   }
 
   // Intercept stdout to transparently resolve @file: references (#1891).
-  // core.cjs output() writes @file:<path> when JSON > 50KB. The --pick path
+  // io.cjs output() writes @file:<path> when JSON > 50KB. The --pick path
   // already resolves this, but the normal path wrote @file: to stdout, forcing
   // every workflow to have a bash-specific `if [[ "$INIT" == @file:* ]]` check
   // that breaks on PowerShell and other non-bash shells.
@@ -802,7 +803,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         cwd,
         raw,
         error,
-        output: core.output,
+        output: output,
       });
       if (!handled) phase.cmdFindPhase(cwd, args[1], raw);
       break;
@@ -895,7 +896,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
           cwd,
           raw,
           error,
-          output: core.output,
+          output: output,
         });
         if (handled) break;
       }
@@ -957,7 +958,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         cwd,
         raw,
         error,
-        output: core.output,
+        output: output,
       });
       if (!handled) commands.cmdGenerateSlug(args[1], raw);
       break;
@@ -997,7 +998,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         cwd,
         raw,
         error,
-        output: core.output,
+        output: output,
       });
       if (!handled) config.cmdConfigEnsureSection(cwd, raw);
       break;
@@ -1013,7 +1014,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         cwd,
         raw,
         error,
-        output: core.output,
+        output: output,
       });
       if (!handled) config.cmdConfigSet(cwd, args[1], args[2], raw);
       break;
@@ -1029,7 +1030,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         cwd,
         raw,
         error,
-        output: core.output,
+        output: output,
       });
       if (!handled) config.cmdConfigSetModelProfile(cwd, args[1], raw);
       break;
@@ -1054,7 +1055,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         cwd,
         raw,
         error,
-        output: core.output,
+        output: output,
       });
       if (!handled) config.cmdConfigGet(cwd, args[1], raw, defaultValue);
       break;
@@ -1070,7 +1071,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         cwd,
         raw,
         error,
-        output: core.output,
+        output: output,
       });
       if (!handled) config.cmdConfigNewProject(cwd, args[1], raw);
       break;
@@ -1183,7 +1184,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         args,
         cwd,
         raw,
-        output: core.output,
+        output: output,
         error,
       });
       break;
@@ -1255,12 +1256,12 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         const configDirIdx = args.indexOf('--config-dir');
         if (configDirEqArg) {
           const value = configDirEqArg.slice('--config-dir='.length).trim();
-          if (!value) error('Missing value for --config-dir', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+          if (!value) error('Missing value for --config-dir', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
           loopConfigDir = value;
         } else if (configDirIdx !== -1) {
           const value = args[configDirIdx + 1];
           if (!value || value.startsWith('--')) {
-            error('Missing value for --config-dir', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+            error('Missing value for --config-dir', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
           }
           loopConfigDir = value;
         }
@@ -1270,12 +1271,12 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         const activeCapIdx = args.indexOf('--active-cap');
         if (activeCapEqArg) {
           const value = activeCapEqArg.slice('--active-cap='.length).trim();
-          if (!value) error('Missing value for --active-cap (e.g. --active-cap tdd)', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+          if (!value) error('Missing value for --active-cap (e.g. --active-cap tdd)', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
           loopActiveCap = value;
         } else if (activeCapIdx !== -1) {
           const value = args[activeCapIdx + 1];
           if (!value || value.startsWith('--')) {
-            error('Missing value for --active-cap (e.g. --active-cap tdd)', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+            error('Missing value for --active-cap (e.g. --active-cap tdd)', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
           }
           loopActiveCap = value;
         }
@@ -1286,7 +1287,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       } else {
         error(
           `Unknown loop subcommand: ${loopSubcommand}. Available: render-hooks`,
-          core.ERROR_REASON ? core.ERROR_REASON.SDK_UNKNOWN_COMMAND : undefined,
+          ERROR_REASON ? ERROR_REASON.SDK_UNKNOWN_COMMAND : undefined,
         );
       }
       break;
@@ -1307,7 +1308,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
           const configDirVal = args[configDirIdx + 1];
           // Validate that --config-dir has a following non-flag value.
           if (!configDirVal || configDirVal.startsWith('--')) {
-            error('Missing value for --config-dir', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+            error('Missing value for --config-dir', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
           }
           configDir = configDirVal;
         }
@@ -1317,7 +1318,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         // capability set <id> [--on|--off|--enable|--disable] [--gate <key>=<bool>]... [--config-dir <dir>] [--runtime <r>] [--scope <s>]
         const capId = args[2];
         if (!capId || capId.startsWith('--')) {
-          error('Missing capability id for: capability set <id>', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+          error('Missing capability id for: capability set <id>', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
         }
         // Parse --config-dir
         const setConfigDirIdx = args.indexOf('--config-dir');
@@ -1325,7 +1326,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         if (setConfigDirIdx !== -1) {
           const setConfigDirVal = args[setConfigDirIdx + 1];
           if (!setConfigDirVal || setConfigDirVal.startsWith('--')) {
-            error('Missing value for --config-dir', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+            error('Missing value for --config-dir', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
           }
           setConfigDir = setConfigDirVal;
         }
@@ -1334,7 +1335,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         const hasOn = args.includes('--on') || args.includes('--enable');
         const hasOff = args.includes('--off') || args.includes('--disable');
         if (hasOn && hasOff) {
-          error('Conflicting flags: --on/--enable and --off/--disable cannot both be present', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+          error('Conflicting flags: --on/--enable and --off/--disable cannot both be present', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
         }
         let setEnabled;
         if (hasOn) {
@@ -1348,16 +1349,16 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
           if (args[gi] === '--gate') {
             const gateVal = args[gi + 1];
             if (!gateVal || gateVal.startsWith('--')) {
-              error('Missing value for --gate (expected <key>=<true|false>)', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+              error('Missing value for --gate (expected <key>=<true|false>)', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
             }
             const eqIdx = gateVal.indexOf('=');
             if (eqIdx === -1) {
-              error(`Malformed --gate value "${gateVal}": expected <key>=<true|false>`, core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+              error(`Malformed --gate value "${gateVal}": expected <key>=<true|false>`, ERROR_REASON ? ERROR_REASON.USAGE : undefined);
             }
             const gateKey = gateVal.slice(0, eqIdx);
             const gateBoolStr = gateVal.slice(eqIdx + 1);
             if (gateBoolStr !== 'true' && gateBoolStr !== 'false') {
-              error(`Malformed --gate value "${gateVal}": bool must be true or false`, core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+              error(`Malformed --gate value "${gateVal}": bool must be true or false`, ERROR_REASON ? ERROR_REASON.USAGE : undefined);
             }
             setGates[gateKey] = gateBoolStr === 'true';
             gi++; // skip consumed value
@@ -1369,7 +1370,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         if (runtimeIdx !== -1) {
           const runtimeVal = args[runtimeIdx + 1];
           if (!runtimeVal || runtimeVal.startsWith('--')) {
-            error('Missing value for --runtime', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+            error('Missing value for --runtime', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
           }
           setRuntime = runtimeVal;
         }
@@ -1378,7 +1379,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         if (scopeIdx !== -1) {
           const scopeVal = args[scopeIdx + 1];
           if (!scopeVal || scopeVal.startsWith('--')) {
-            error('Missing value for --scope', core.ERROR_REASON ? core.ERROR_REASON.USAGE : undefined);
+            error('Missing value for --scope', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
           }
           setScope = scopeVal;
         }
@@ -1392,7 +1393,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       } else {
         error(
           `Unknown capability subcommand: ${capSubcommand}. Available: state, set`,
-          core.ERROR_REASON ? core.ERROR_REASON.SDK_UNKNOWN_COMMAND : undefined,
+          ERROR_REASON ? ERROR_REASON.SDK_UNKNOWN_COMMAND : undefined,
         );
       }
       break;
@@ -1484,7 +1485,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         cwd,
         raw,
         error,
-        output: core.output,
+        output: output,
       });
       if (!handled) docs.cmdDocsInit(cwd, raw);
       break;
@@ -1810,7 +1811,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
     // ─── Research Store ────────────────────────────────────────────────────
     //
     // research-store get <key> [--kind <k>]
-    //   -> getResearch(cwd, key, { homeDir }); searches both tiers; core.output(result, raw)
+    //   -> getResearch(cwd, key, { homeDir }); searches both tiers; output(result, raw)
     //   (--kind is accepted for backward compatibility but no longer drives tier selection)
     // research-store put <key> --content <str> --source <s> --provider <p>
     //                           --confidence <c> --kind <k>
@@ -1834,7 +1835,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         }
         // --kind is accepted but no longer drives tier selection; getResearch searches both tiers
         const result = researchStore.getResearch(cwd, key, { homeDir });
-        core.output(result, raw);
+        output(result, raw);
       } else if (subcommand === 'put') {
         const key = args[2];
         if (!key || key.startsWith('--')) {
@@ -1866,7 +1867,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
           error('Usage: gsd-tools research-store put <key> --content <str> --source <s> --provider <p> --confidence <c> --kind <k>', ERROR_REASON.USAGE);
         }
         const entry = researchStore.putResearch(cwd, key, { content, source, provider, confidence, kind }, { homeDir });
-        core.output(entry, raw);
+        output(entry, raw);
       } else {
         error('Unknown research-store subcommand. Available: get, put', ERROR_REASON.SDK_UNKNOWN_COMMAND);
       }
@@ -1902,14 +1903,14 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       const { ecosystem = '', config: planConfig = {}, questions } = planInput;
       const homeDir = process.env.HOME || require('os').homedir();
       const plan = researchProvider.planResearch({ questions, ecosystem, config: planConfig, cwd, homeDir });
-      core.output(plan, raw);
+      output(plan, raw);
       break;
     }
 
     // ─── Classify Confidence ──────────────────────────────────────────────
     //
     // classify-confidence --provider <id> [--package <name> --ecosystem <npm|pypi|crates>] [--verified]
-    //   -> classifyConfidence({ provider, verifiedAgainstOfficial, legitimacyVerdict }); core.output(result, raw)
+    //   -> classifyConfidence({ provider, verifiedAgainstOfficial, legitimacyVerdict }); output(result, raw)
     //
     // legitimacyVerdict is CODE-COMPUTED via checkPackages — never caller-supplied — so an agent cannot self-assert OK→HIGH.
 
@@ -1936,7 +1937,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         legitimacyVerdict = results[0] ? results[0].verdict : null;
       }
       const confidence = researchProvider.classifyConfidence({ provider, verifiedAgainstOfficial: verified, legitimacyVerdict });
-      core.output({ provider, package: pkg || null, ecosystem: ecosystem || null, legitimacyVerdict, verified, confidence }, raw);
+      output({ provider, package: pkg || null, ecosystem: ecosystem || null, legitimacyVerdict, verified, confidence }, raw);
       break;
     }
 
@@ -1980,7 +1981,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       } catch (pkgErr) {
         error(`package-legitimacy: ${pkgErr && pkgErr.message ? pkgErr.message : String(pkgErr)}`, ERROR_REASON.UNKNOWN);
       }
-      core.output(pkgResults, raw);
+      output(pkgResults, raw);
       break;
     }
 
@@ -2101,7 +2102,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         }
       }
 
-      core.output({ valid: errors.length === 0, errors, slots }, raw);
+      output({ valid: errors.length === 0, errors, slots }, raw);
       break;
     }
 
@@ -2114,7 +2115,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
 
       // Read config.json directly for both plan_review.source_grounding_authority
       // and intel.enabled. Neither key is in the config-loader.cjs whitelist that
-      // core.loadConfig() returns; plan_review is only in config.cjs's private
+      // config-loader.cjs's loadConfig() whitelist does not return; plan_review is only in config.cjs's private
       // buildConfig(), and intel is a federated capability config key.
       let configuredAuthority = 'grep';
       let intelEnabled = false;
@@ -2138,7 +2139,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
 
       if (subcommand === 'authority') {
         // Pass rawValue as 3rd arg so --raw returns unquoted string (not JSON)
-        core.output(effectiveAuthority, raw, effectiveAuthority);
+        output(effectiveAuthority, raw, effectiveAuthority);
         break;
       }
 
@@ -2155,7 +2156,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
           ? authVal
           : effectiveAuthority;
         const result = classifyDriftSeverity({ status: statusVal, authority: authorityForClassify });
-        core.output(result, raw);
+        output(result, raw);
         break;
       }
 

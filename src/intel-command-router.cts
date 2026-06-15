@@ -39,13 +39,16 @@
  */
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import core = require('./core.cjs');
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 import io = require('./io.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import coreUtils = require('./core-utils.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import path = require('path');
 
 const { ERROR_REASON } = io;
+// Default CoreModule implementation assembled from leaf modules.
+// _core seam overrides this entirely for test injection.
+const _defaultCore = { output: io.output, timeAgo: coreUtils.timeAgo };
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -83,7 +86,7 @@ interface RouteIntelCommandOptions {
 function routeIntelCommand({ args, cwd, raw, error, _intel, _core }: RouteIntelCommandOptions): void {
   // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
   const intel: IntelModule = _intel ?? require('./intel.cjs');
-  const c: CoreModule = _core ?? core;
+  const c: CoreModule = _core ?? _defaultCore;
   const subcommand = args[1];
 
   if (subcommand === 'query') {
