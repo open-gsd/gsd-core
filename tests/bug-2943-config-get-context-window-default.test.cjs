@@ -26,7 +26,7 @@ const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 
 const GSD_TOOLS = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
-const { ERROR_REASON } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'core.cjs'));
+const { ERROR_REASON } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'io.cjs'));
 const { cleanup } = require('./helpers.cjs');
 
 describe('bug-2943: config-get returns schema default for context_window', () => {

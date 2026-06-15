@@ -359,7 +359,7 @@ describe('intel router: unit tests via recording mocks', () => {
   test('routeIntelCommand extract-exports: calls intelExtractExports(path.resolve(cwd, filePath))', () => {
     const calls = [];
     const c = makeCoreMock();
-    const FILE_ARG = 'lib/core.cjs';
+    const FILE_ARG = 'lib/io.cjs';
     const EXPECTED = path.resolve(CWD, FILE_ARG);
 
     routeIntelCommand({

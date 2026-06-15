@@ -24,7 +24,7 @@ const WORKTREE_SAFETY_PATH = path.join(
   __dirname, '..', 'gsd-core', 'bin', 'lib', 'worktree-safety.cjs'
 );
 const CORE_PATH = path.join(
-  __dirname, '..', 'gsd-core', 'bin', 'lib', 'core.cjs'
+  __dirname, '..', 'gsd-core', 'bin', 'lib', 'worktree-safety.cjs'
 );
 
 const {

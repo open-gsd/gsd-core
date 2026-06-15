@@ -619,14 +619,14 @@ describe('issue #2517: install end-to-end — per-project config reaches Codex T
     // resolver-construction time. Catches accidental relative-path drift in CI.
     const installDir = path.dirname(require.resolve('../bin/install.js'));
     const libDir = path.join(installDir, '..', 'gsd-core', 'bin', 'lib');
-    assert.ok(fs.existsSync(path.join(libDir, 'core.cjs')));
+    assert.ok(fs.existsSync(path.join(libDir, 'model-catalog.cjs')));
     assert.ok(fs.existsSync(path.join(libDir, 'model-profiles.cjs')));
   });
 });
 
 // ─── RUNTIME_PROFILE_MAP single source of truth (finding #16) ───────────────
 describe('issue #2517: RUNTIME_PROFILE_MAP single source of truth (finding #16)', () => {
-  test('install.js consumes the same map as core.cjs', () => {
+  test('install.js consumes the same map as model-catalog.cjs', () => {
     // `bin/install.js` must NOT carry its own duplicate copy of the map.
     // The shared resolver imported in install.js exposes `runtime` and the
     // entries through `resolveTierEntry`, so any future drift between the two

@@ -262,7 +262,7 @@ describe('#3023 + #443: unified effort resolver (resolveEffortInternal) for Code
   beforeEach(() => { projectDir = makeTmp('effort'); });
   afterEach(() => { rmr(projectDir); });
 
-  test('resolveEffortInternal exported from core.cjs', () => {
+  test('resolveEffortInternal exported from model-resolver.cjs', () => {
     assert.equal(typeof resolveEffortInternal, 'function');
   });
 

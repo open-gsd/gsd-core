@@ -719,11 +719,11 @@ describe('#49 isValidConfigKey: model_policy.* keys accepted/rejected', () => {
 
 // ─── KNOWN_PROVIDERS export tests ─────────────────────────────────────────────
 
-describe('#49 KNOWN_PROVIDERS exports from model-catalog.cjs and core.cjs', () => {
-  test('KNOWN_PROVIDERS exported from core.cjs includes all keys from providerPresets in catalog', () => {
-    // KNOWN_PROVIDERS must be a Set (or array) exported from core.cjs.
+describe('#49 KNOWN_PROVIDERS exports from model-catalog.cjs', () => {
+  test('KNOWN_PROVIDERS exported from model-catalog.cjs includes all keys from providerPresets in catalog', () => {
+    // KNOWN_PROVIDERS must be a Set (or array) exported from model-catalog.cjs.
     assert.ok(KNOWN_PROVIDERS != null,
-      'KNOWN_PROVIDERS must be exported from core.cjs');
+      'KNOWN_PROVIDERS must be exported from model-catalog.cjs');
     const isIterable = typeof KNOWN_PROVIDERS[Symbol.iterator] === 'function';
     assert.ok(isIterable,
       'KNOWN_PROVIDERS must be iterable (Set or array)');
@@ -741,15 +741,14 @@ describe('#49 KNOWN_PROVIDERS exports from model-catalog.cjs and core.cjs', () =
       'KNOWN_PROVIDERS must not include "generic" (it is not a catalog-backed provider)');
   });
 
-  test('KNOWN_PROVIDERS exported from model-catalog.cjs matches core.cjs re-export', () => {
-    // model-catalog.cjs must also export KNOWN_PROVIDERS (the canonical source).
-    // core.cjs re-exports it. Both must be identical.
+  test('KNOWN_PROVIDERS from model-catalog.cjs is the canonical export', () => {
+    // model-catalog.cjs is the canonical source of KNOWN_PROVIDERS.
     assert.ok(modelCatalog.KNOWN_PROVIDERS != null,
       'KNOWN_PROVIDERS must be exported from model-catalog.cjs');
     const fromCatalog = [...modelCatalog.KNOWN_PROVIDERS].sort();
-    const fromCore = [...KNOWN_PROVIDERS].sort();
-    assert.deepStrictEqual(fromCore, fromCatalog,
-      'KNOWN_PROVIDERS from core.cjs (re-export) must match model-catalog.cjs canonical export');
+    const fromImport = [...KNOWN_PROVIDERS].sort();
+    assert.deepStrictEqual(fromImport, fromCatalog,
+      'KNOWN_PROVIDERS imported from model-catalog.cjs must match the module export');
   });
 });
 
