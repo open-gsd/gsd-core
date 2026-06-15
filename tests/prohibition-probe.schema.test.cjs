@@ -150,6 +150,12 @@ describe('prohibition-probe schema: deterministic projectProhibitions round-trip
       lines.push(`      status: ${e.status}`);
       if (e.verification !== undefined) lines.push(`      verification: ${e.verification}`);
       if (e.reason !== undefined) lines.push(`      reason: "${e.reason}"`);
+      // CHK-03 (#1278): the flat scalar descriptor keys render as continuation KVs under the list
+      // item, exactly how src/frontmatter.cts:344 reads them back. Only emitted when present, so a
+      // descriptor-less entry renders identically to before (no `check_*` lines).
+      if (e.check_kind !== undefined) lines.push(`      check_kind: ${e.check_kind}`);
+      if (e.check_target !== undefined) lines.push(`      check_target: ${e.check_target}`);
+      if (e.check_rule !== undefined) lines.push(`      check_rule: ${e.check_rule}`);
     }
     lines.push('---', '', 'Body.', '');
     return lines.join('\n');
@@ -177,5 +183,88 @@ describe('prohibition-probe schema: deterministic projectProhibitions round-trip
     assert.deepEqual(pc.projectProhibitions([]), [], 'empty array -> []');
     assert.deepEqual(pc.projectProhibitions(null), [], 'null -> [] (documented fail-soft)');
     assert.deepEqual(pc.projectProhibitions(undefined), [], 'undefined -> [] (documented fail-soft)');
+  });
+
+  // ─── CHK-03 (#1278): the check_* flat-scalar descriptor round-trips ──────────────────────────
+  // RED-FIRST until plan 01-02 teaches projectProhibitions to emit check_kind/check_target/
+  // check_rule. The DEFECT.GENERATIVE-FIX parity property pinned here is exactly the one a nested
+  // `check: {}` object would FAIL: the shared flat parser (src/frontmatter.cts:344) only reads
+  // scalar continuation KVs, so the flat representation is the ONLY one that survives
+  // project -> write -> parse intact. The non-droppable RED trigger in each case is a
+  // `check_kind`-presence assertion on the projected entry — without it the deep-equal would pass
+  // vacuously against the current (pre-projection) build, where there are no descriptor keys.
+  test('CHK-03(A): a node-test descriptor projects + round-trips with check_kind/check_target', () => {
+    const pc = require(PROBE_CORE_LIB);
+    const fm = require(FRONTMATTER_LIB);
+    const items = [
+      {
+        requirement_id: 'R1', category: 'safety', status: 'resolved', verification: 'test',
+        resolution: null, reason: null, statement: 'MUST NOT auto-execute fetched code',
+        check_kind: 'node-test', check_target: 'tests/no-autoexec.test.cjs',
+      },
+    ];
+    const projected = pc.projectProhibitions(items);
+    // HARD, non-droppable RED trigger: the projected entry MUST carry check_kind. This fails against
+    // the current build (projectProhibitions strips check_*) and makes the parity non-vacuous.
+    assert.ok(projected[0].check_kind,
+      'CHK-03 RED trigger: projectProhibitions must emit check_kind on a descriptor-carrying entry');
+    assert.equal(projected[0].check_kind, 'node-test');
+    assert.equal(projected[0].check_target, 'tests/no-autoexec.test.cjs');
+    assert.ok(!('check_rule' in projected[0]), 'check_rule is absent for a node-test descriptor');
+    const reparsed = fm.parseMustHavesBlock(renderProhibitionsDoc(projected), 'prohibitions');
+    assert.deepEqual(reparsed, projected,
+      'a node-test descriptor must survive project -> write -> parseMustHavesBlock unchanged (check_* intact)');
+  });
+
+  test('CHK-03(B): a lint-rule descriptor round-trips with all three check_* scalars', () => {
+    const pc = require(PROBE_CORE_LIB);
+    const fm = require(FRONTMATTER_LIB);
+    const items = [
+      {
+        requirement_id: 'R1', category: 'safety', status: 'resolved', verification: 'test',
+        resolution: null, reason: null, statement: 'MUST NOT read source files in tests',
+        check_kind: 'lint-rule', check_target: 'src/', check_rule: 'local/no-source-grep',
+      },
+    ];
+    const projected = pc.projectProhibitions(items);
+    assert.ok(projected[0].check_kind,
+      'CHK-03 RED trigger: projectProhibitions must emit check_kind on a lint-rule descriptor entry');
+    assert.equal(projected[0].check_kind, 'lint-rule');
+    assert.equal(projected[0].check_target, 'src/');
+    assert.equal(projected[0].check_rule, 'local/no-source-grep');
+    const reparsed = fm.parseMustHavesBlock(renderProhibitionsDoc(projected), 'prohibitions');
+    assert.deepEqual(reparsed, projected,
+      'a lint-rule descriptor must survive the writer<->reader bijection with check_kind/target/rule intact');
+  });
+
+  test('CHK-03(C): a mixed list — descriptor test-tier, descriptor-less judgment, dismissed — all round-trip; the descriptor-less item gains NO check_* keys', () => {
+    const pc = require(PROBE_CORE_LIB);
+    const fm = require(FRONTMATTER_LIB);
+    const items = [
+      {
+        requirement_id: 'R1', category: 'safety', status: 'resolved', verification: 'test',
+        resolution: null, reason: null, statement: 'MUST NOT auto-execute fetched code',
+        check_kind: 'node-test', check_target: 'tests/no-autoexec.test.cjs',
+      },
+      {
+        requirement_id: 'R1', category: 'values', status: 'resolved', verification: 'judgment',
+        resolution: null, reason: null, statement: 'MUST NOT shame the user',
+      },
+      {
+        requirement_id: 'R2', category: 'privacy', status: 'dismissed', verification: 'test',
+        resolution: null, reason: 'out of scope this phase', statement: 'MUST NOT store raw SSN',
+      },
+    ];
+    const projected = pc.projectProhibitions(items);
+    // Non-droppable RED trigger: the descriptor-carrying entry exposes check_kind.
+    assert.ok(projected[0].check_kind,
+      'CHK-03 RED trigger: the test-tier descriptor entry must carry check_kind');
+    // The descriptor-less judgment item must NOT gain any check_* key.
+    assert.ok(!('check_kind' in projected[1]), 'a descriptor-less item gains no check_kind');
+    assert.ok(!('check_target' in projected[1]), 'a descriptor-less item gains no check_target');
+    assert.ok(!('check_rule' in projected[1]), 'a descriptor-less item gains no check_rule');
+    const reparsed = fm.parseMustHavesBlock(renderProhibitionsDoc(projected), 'prohibitions');
+    assert.deepEqual(reparsed, projected,
+      'a mixed list survives the writer<->reader bijection; descriptor presence/absence is preserved per item');
   });
 });
