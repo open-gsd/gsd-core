@@ -1749,63 +1749,81 @@ function cmdStateBeginPhase(cwd: string, phaseNumber: string | number, phaseName
   const updated: string[] = [];
 
   readModifyWriteStateMd(statePath, (content) => {
+    // Bug #1255: all body-field replacements must operate on the body only
+    // (frontmatter stripped), not on the full content.  When the full content is
+    // passed to stateReplaceField the YAML `status: planning` key matches the
+    // plain-text pattern (`^Status:\s*`) before the body pipe-table row, so the
+    // pipe-table `| Status | Planning |` is never updated and syncStateFrontmatter
+    // re-derives 'planning' from the unchanged body — the status never advances.
+    const existingFm = extractFrontmatter(content) as Record<string, unknown>;
+    const hasFrontmatter = Object.keys(existingFm).length > 0;
+    let body = stripFrontmatter(content);
+
+    // Helper to reassemble content for field-replacement checks; callers that
+    // only need to test/replace body fields use `body` directly, and the final
+    // return reassembles the frontmatter block with the updated body.
+    const reassemble = (b: string) =>
+      hasFrontmatter ? `---\n${reconstructFrontmatter(existingFm as unknown as Frontmatter)}\n---\n\n${b}` : b;
+
     // Idempotency guard (#3127): if the phase is already mid-flight, do NOT
     // overwrite execution-progress fields (Current Plan, plan body line,
     // Last Activity Description). Only update fields that are safe to
     // refresh on resume (Last Activity date, Status if inconsistent).
     // A phase is considered mid-flight when Status contains 'Executing Phase N'
     // for the current phase number.
-    const currentStatus = stateExtractField(content, 'Status') || '';
+    // #1255: extract from body (not full content) so the YAML `status:` key
+    // cannot shadow the body Status field.
+    const currentStatus = stateExtractField(body, 'Status') || '';
     const isAlreadyExecuting = new RegExp(`Executing Phase\\s+${escapeRegex(String(phaseNumber))}\\b`, 'i').test(currentStatus);
 
-    // Update Status field
+    // Update Status field (body only — #1255)
     const statusValue = `Executing Phase ${phaseNumber}`;
-    let result = stateReplaceField(content, 'Status', statusValue);
-    if (result) { content = result; updated.push('Status'); }
+    let result = stateReplaceField(body, 'Status', statusValue);
+    if (result) { body = result; updated.push('Status'); }
 
     // Update Last Activity (safe to update on resume — tracks when execute-phase ran)
-    result = stateReplaceField(content, 'Last Activity', today);
-    if (result) { content = result; updated.push('Last Activity'); }
+    result = stateReplaceField(body, 'Last Activity', today);
+    if (result) { body = result; updated.push('Last Activity'); }
 
     if (!isAlreadyExecuting) {
       // First-time execution: set all progress fields
 
       // Update Last Activity Description
       const activityDesc = `Phase ${phaseNumber} execution started`;
-      result = stateReplaceField(content, 'Last Activity Description', activityDesc);
-      if (result) { content = result; updated.push('Last Activity Description'); }
+      result = stateReplaceField(body, 'Last Activity Description', activityDesc);
+      if (result) { body = result; updated.push('Last Activity Description'); }
 
       // Update Current Phase
-      result = stateReplaceField(content, 'Current Phase', String(phaseNumber));
-      if (result) { content = result; updated.push('Current Phase'); }
+      result = stateReplaceField(body, 'Current Phase', String(phaseNumber));
+      if (result) { body = result; updated.push('Current Phase'); }
 
       // Update Current Phase Name
       if (phaseName) {
-        result = stateReplaceField(content, 'Current Phase Name', phaseName);
-        if (result) { content = result; updated.push('Current Phase Name'); }
+        result = stateReplaceField(body, 'Current Phase Name', phaseName);
+        if (result) { body = result; updated.push('Current Phase Name'); }
       }
 
       // Update Current Plan to 1 (starting from the first plan)
-      result = stateReplaceField(content, 'Current Plan', '1');
-      if (result) { content = result; updated.push('Current Plan'); }
+      result = stateReplaceField(body, 'Current Plan', '1');
+      if (result) { body = result; updated.push('Current Plan'); }
 
       // Update Total Plans in Phase
       if (planCount) {
-        result = stateReplaceField(content, 'Total Plans in Phase', String(planCount));
-        if (result) { content = result; updated.push('Total Plans in Phase'); }
+        result = stateReplaceField(body, 'Total Plans in Phase', String(planCount));
+        if (result) { body = result; updated.push('Total Plans in Phase'); }
       }
 
       // Update **Current focus:** body text line (#1104)
       const focusLabel = phaseName ? `Phase ${phaseNumber} — ${phaseName}` : `Phase ${phaseNumber}`;
       const focusPattern = /(\*\*Current focus:\*\*\s*).*/i;
-      if (focusPattern.test(content)) {
-        content = content.replace(focusPattern, (_match, prefix: string) => `${prefix}${focusLabel}`);
+      if (focusPattern.test(body)) {
+        body = body.replace(focusPattern, (_match, prefix: string) => `${prefix}${focusLabel}`);
         updated.push('Current focus');
       }
 
       // Update ## Current Position section (#1104, #1365)
       const positionPattern = /(##\s*Current Position\s*\n)([\s\S]*?)(?=\n##|$)/i;
-      const positionMatch = content.match(positionPattern);
+      const positionMatch = body.match(positionPattern);
       if (positionMatch) {
         const header = positionMatch[1];
         let posBody = positionMatch[2];
@@ -1830,35 +1848,55 @@ function cmdStateBeginPhase(cwd: string, phaseNumber: string | number, phaseName
         const newStatus = `Status: Executing Phase ${phaseNumber}`;
         if (/^Status:/m.test(posBody)) {
           posBody = posBody.replace(/^Status:.*$/m, newStatus);
+        } else {
+          // Pipe-table format in Current Position (#1255)
+          const replaced = stateReplaceField(posBody, 'Status', `Executing Phase ${phaseNumber}`);
+          if (replaced !== null) posBody = replaced;
         }
 
         // Update Last activity line if present
         const newActivity = `Last activity: ${today} -- Phase ${phaseNumber} execution started`;
         if (/^Last activity:/im.test(posBody)) {
           posBody = posBody.replace(/^Last activity:.*$/im, newActivity);
+        } else {
+          // Pipe-table format in Current Position (#1255)
+          // Value must match the inline branch (date + narrative), not bare date.
+          const activityValue = `${today} -- Phase ${phaseNumber} execution started`;
+          const replaced = stateReplaceField(posBody, 'Last Activity', activityValue)
+            ?? stateReplaceField(posBody, 'Last activity', activityValue);
+          if (replaced !== null) posBody = replaced;
         }
 
-        content = content.replace(positionPattern, () => `${header}${posBody}`);
+        body = body.replace(positionPattern, () => `${header}${posBody}`);
         updated.push('Current Position');
       }
     } else {
       // Resume path: only update Last activity timestamp in Current Position
       // (do not touch Plan:, stopped_at, progress.percent, or plan counter)
       const positionPattern = /(##\s*Current Position\s*\n)([\s\S]*?)(?=\n##|$)/i;
-      const positionMatch = content.match(positionPattern);
+      const positionMatch = body.match(positionPattern);
       if (positionMatch) {
         const header = positionMatch[1];
         let posBody = positionMatch[2];
         const resumeActivity = `Last activity: ${today} -- Phase ${phaseNumber} execution resumed (wave continue)`;
         if (/^Last activity:/im.test(posBody)) {
           posBody = posBody.replace(/^Last activity:.*$/im, resumeActivity);
-          content = content.replace(positionPattern, () => `${header}${posBody}`);
+          body = body.replace(positionPattern, () => `${header}${posBody}`);
           updated.push('Last activity (resume)');
+        } else {
+          // Pipe-table format in Current Position (#1255)
+          const replaced = stateReplaceField(posBody, 'Last Activity', resumeActivity)
+            ?? stateReplaceField(posBody, 'Last activity', resumeActivity);
+          if (replaced !== null) {
+            posBody = replaced;
+            body = body.replace(positionPattern, () => `${header}${posBody}`);
+            updated.push('Last activity (resume)');
+          }
         }
       }
     }
 
-    return content;
+    return reassemble(body);
   }, cwd);
 
   output({ updated, phase: phaseNumber, phase_name: phaseName || null, plan_count: planCount || null }, raw, updated.length > 0 ? 'true' : 'false');
@@ -2522,23 +2560,32 @@ function cmdStateCompletePhase(cwd: string, raw: boolean, overridePhase?: string
   readModifyWriteStateMd(statePath, (content) => {
     const currentPhase = resolvedPhase;
 
-    // Update Status field
+    // Bug #1255: operate on body only so the YAML frontmatter `status:` key
+    // cannot shadow the body Status field (pipe-table or inline).
+    const existingFm = extractFrontmatter(content) as Record<string, unknown>;
+    const hasFrontmatter = Object.keys(existingFm).length > 0;
+    let body = stripFrontmatter(content);
+
+    const reassemble = (b: string) =>
+      hasFrontmatter ? `---\n${reconstructFrontmatter(existingFm as unknown as Frontmatter)}\n---\n\n${b}` : b;
+
+    // Update Status field (body only — #1255)
     const statusValue = `Phase ${currentPhase} complete`;
-    let result = stateReplaceField(content, 'Status', statusValue);
-    if (result) { content = result; updated.push('Status'); }
+    let result = stateReplaceField(body, 'Status', statusValue);
+    if (result) { body = result; updated.push('Status'); }
 
     // Update Last Activity date
-    result = stateReplaceField(content, 'Last Activity', today);
-    if (result) { content = result; updated.push('Last Activity'); }
+    result = stateReplaceField(body, 'Last Activity', today);
+    if (result) { body = result; updated.push('Last Activity'); }
 
     // Update Last Activity Description
     const activityDesc = `Phase ${currentPhase} marked complete`;
-    result = stateReplaceField(content, 'Last Activity Description', activityDesc);
-    if (result) { content = result; updated.push('Last Activity Description'); }
+    result = stateReplaceField(body, 'Last Activity Description', activityDesc);
+    if (result) { body = result; updated.push('Last Activity Description'); }
 
     // Update ## Current Position section
     const positionPattern = /(##\s*Current Position\s*\n)([\s\S]*?)(?=\n##|$)/i;
-    const positionMatch = content.match(positionPattern);
+    const positionMatch = body.match(positionPattern);
     if (positionMatch) {
       const header = positionMatch[1];
       let posBody = positionMatch[2];
@@ -2547,25 +2594,41 @@ function cmdStateCompletePhase(cwd: string, raw: boolean, overridePhase?: string
       const newPhase = `Phase: ${currentPhase} — COMPLETE`;
       if (/^Phase:/m.test(posBody)) {
         posBody = posBody.replace(/^Phase:.*$/m, newPhase);
+      } else {
+        // Pipe-table format in Current Position (#1255)
+        // Value cell must be bare (no "Phase:" label prefix) — the column header already provides the label.
+        const replaced = stateReplaceField(posBody, 'Phase', `${currentPhase} — COMPLETE`);
+        if (replaced !== null) posBody = replaced;
       }
 
       // Update Status line if present
       const newStatus = `Status: Phase ${currentPhase} complete`;
       if (/^Status:/m.test(posBody)) {
         posBody = posBody.replace(/^Status:.*$/m, newStatus);
+      } else {
+        // Pipe-table format in Current Position (#1255)
+        const replaced = stateReplaceField(posBody, 'Status', `Phase ${currentPhase} complete`);
+        if (replaced !== null) posBody = replaced;
       }
 
       // Update Last activity line if present
       const newActivity = `Last activity: ${today} -- Phase ${currentPhase} marked complete`;
       if (/^Last activity:/im.test(posBody)) {
         posBody = posBody.replace(/^Last activity:.*$/im, newActivity);
+      } else {
+        // Pipe-table format in Current Position (#1255)
+        // Value must match the inline branch (date + narrative), not bare date.
+        const activityValue = `${today} -- Phase ${currentPhase} marked complete`;
+        const replaced = stateReplaceField(posBody, 'Last Activity', activityValue)
+          ?? stateReplaceField(posBody, 'Last activity', activityValue);
+        if (replaced !== null) posBody = replaced;
       }
 
-      content = content.replace(positionPattern, () => `${header}${posBody}`);
+      body = body.replace(positionPattern, () => `${header}${posBody}`);
       updated.push('Current Position');
     }
 
-    return content;
+    return reassemble(body);
   }, cwd);
 
   output(
