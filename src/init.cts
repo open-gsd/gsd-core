@@ -1882,7 +1882,9 @@ function buildAgentSkillsBlock(
   // occurs when the caller has actually set trusted_global_roots.
   const trustedGlobalRoots = loadTrustedGlobalRoots(config);
 
-  const validPaths: { ref: string; display: string }[] = [];
+  // Each entry is either a filesystem include ({ kind: 'include', ref, display }) or a
+  // Skill-tool directive ({ kind: 'directive', name }) for plugin-provided namespaced skills.
+  const validEntries: Array<{ kind: 'include'; ref: string; display: string } | { kind: 'directive'; name: string }> = [];
   for (const skillPath of skillPaths) {
     if (typeof skillPath !== 'string') continue;
 
@@ -1894,12 +1896,28 @@ function buildAgentSkillsBlock(
         );
         continue;
       }
-      if (!/^[a-zA-Z0-9_-]+$/.test(skillName)) {
+      // Accept: one or more [A-Za-z0-9_-]+ segments joined by single colons.
+      // Rejects: empty segments (::), leading/trailing colon, dots, slashes, backslashes.
+      if (!/^[A-Za-z0-9_-]+(:[A-Za-z0-9_-]+)*$/.test(skillName)) {
         process.stderr.write(
           `[agent-skills] WARNING: Invalid global skill name "${skillName}" — skipping\n`,
         );
         continue;
       }
+      const isNamespaced = skillName.includes(':');
+      if (isNamespaced) {
+        // Plugin-provided namespaced skill: no filesystem path exists locally.
+        if (runtime === 'claude') {
+          // Emit a natural-language Skill-tool directive (not a @-include).
+          validEntries.push({ kind: 'directive', name: skillName });
+        } else {
+          process.stderr.write(
+            `[agent-skills] WARNING: Plugin-namespaced skill "global:${skillName}" requires a Skill-tool-capable runtime (claude) — skipping on runtime "${runtime}"\n`,
+          );
+        }
+        continue;
+      }
+      // Non-namespaced bare name: attempt filesystem resolution as before.
       if (globalSkillsBase === null) {
         process.stderr.write(
           `[agent-skills] WARNING: Runtime "${runtime}" does not use a skills directory — "global:${skillName}" is not supported on this runtime\n`,
@@ -1929,7 +1947,7 @@ function buildAgentSkillsBlock(
         }
         process.stderr.write(`[agent-skills] NOTE: Global skill "${skillName}" accepted via trusted_global_roots (resolves outside the default skills dir)\n`);
       }
-      validPaths.push({ ref: `${globalSkillDir}/SKILL.md`, display: displayPath });
+      validEntries.push({ kind: 'include', ref: `${globalSkillDir}/SKILL.md`, display: displayPath });
       continue;
     }
 
@@ -1949,12 +1967,17 @@ function buildAgentSkillsBlock(
       continue;
     }
 
-    validPaths.push({ ref: `${skillPath}/SKILL.md`, display: skillPath });
+    validEntries.push({ kind: 'include', ref: `${skillPath}/SKILL.md`, display: skillPath });
   }
 
-  if (validPaths.length === 0) return '';
+  if (validEntries.length === 0) return '';
 
-  const lines = validPaths.map((p) => `- @${p.ref}`).join('\n');
+  const lines = validEntries.map((entry) => {
+    if (entry.kind === 'directive') {
+      return `- Load the \`${entry.name}\` skill via the Skill tool before proceeding (plugin-provided).`;
+    }
+    return `- @${entry.ref}`;
+  }).join('\n');
   return `<agent_skills>\nRead these user-configured skills:\n${lines}\n</agent_skills>`;
 }
 

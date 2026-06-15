@@ -24,7 +24,7 @@ const PROFILES = [
       'Researches domain ecosystem before roadmap creation. Produces files in .planning/research/ consumed during roadmap creation. Spawned by /gsd:new-project or /gsd:new-milestone orchestrators.',
     color: 'cyan',
     tools:
-      'Read, Write, Bash, Grep, Glob, WebSearch, WebFetch, mcp__context7__*, mcp__firecrawl__*, mcp__exa__*, mcp__tavily__*, mcp__ref__*, mcp__jina__*',
+      'Read, Write, Bash, Grep, Glob, Skill, WebSearch, WebFetch, mcp__context7__*, mcp__firecrawl__*, mcp__exa__*, mcp__tavily__*, mcp__ref__*, mcp__jina__*',
     requiredIncludes: [
       '@~/.claude/gsd-core/references/research-documentation-lookup.md',
       '@~/.claude/gsd-core/references/research-philosophy.md',
@@ -46,7 +46,7 @@ const PROFILES = [
       'Researches how to implement a phase before planning. Produces RESEARCH.md consumed by gsd-planner. Spawned by /gsd:plan-phase orchestrator.',
     color: 'cyan',
     tools:
-      'Read, Write, Edit, Bash, Grep, Glob, WebSearch, WebFetch, mcp__context7__*, mcp__firecrawl__*, mcp__exa__*, mcp__tavily__*, mcp__ref__*, mcp__jina__*',
+      'Read, Write, Edit, Bash, Grep, Glob, Skill, WebSearch, WebFetch, mcp__context7__*, mcp__firecrawl__*, mcp__exa__*, mcp__tavily__*, mcp__ref__*, mcp__jina__*',
     requiredIncludes: [
       '@~/.claude/gsd-core/references/research-documentation-lookup.md',
       '@~/.claude/gsd-core/references/research-philosophy.md',
@@ -68,7 +68,7 @@ const PROFILES = [
     description:
       'Researches a single gray area decision and returns a structured comparison table with rationale. Spawned by discuss-phase advisor mode.',
     color: 'cyan',
-    tools: 'Read, Bash, Grep, Glob, WebSearch, WebFetch, mcp__context7__*',
+    tools: 'Read, Bash, Grep, Glob, Skill, WebSearch, WebFetch, mcp__context7__*',
     requiredIncludes: [
       '@~/.claude/gsd-core/references/research-documentation-lookup.md',
     ],
@@ -117,7 +117,7 @@ const PROFILES = [
       'Produces UI-SPEC.md design contract for frontend phases. Reads upstream artifacts, detects design system state, asks only unanswered questions. Spawned by /gsd:ui-phase orchestrator.',
     color: 'purple',
     tools:
-      'Read, Write, Edit, Bash, Grep, Glob, WebSearch, WebFetch, mcp__context7__*, mcp__firecrawl__*, mcp__exa__*, mcp__tavily__*, mcp__ref__*, mcp__jina__*',
+      'Read, Write, Edit, Bash, Grep, Glob, Skill, WebSearch, WebFetch, mcp__context7__*, mcp__firecrawl__*, mcp__exa__*, mcp__tavily__*, mcp__ref__*, mcp__jina__*',
     requiredIncludes: [
       '@~/.claude/gsd-core/references/research-documentation-lookup.md',
     ],
@@ -134,7 +134,7 @@ const PROFILES = [
     description:
       'Synthesizes research outputs from parallel researcher agents into SUMMARY.md. Spawned by /gsd:new-project after 4 researcher agents complete.',
     color: 'purple',
-    tools: 'Read, Write, Bash',
+    tools: 'Read, Write, Bash, Skill',
     requiredIncludes: [],
     requiredSeamCalls: [
       'gsd_run query commit',
