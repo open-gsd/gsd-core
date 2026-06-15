@@ -448,6 +448,101 @@ describe('bug-3707: startup orphan sweep is wired into workflow entry points', (
   });
 });
 
+// ─── Suite 3b: nowMs clock-injection BOUNDARY tests (#1191) ──────────────────
+//
+// These tests inject both `nowMs` and `mtimeSafe` so no real clock is read.
+// The staleness guard is: nowMs - lockMtime.getTime() < reapMtimeGuardMs.
+//
+// REAP_MTIME_GUARD_MS = 5 * 60 * 1000 = 300000 ms.
+//
+// We use a fixed lockMtime of 1000 ms (epoch+1s) and compute nowMs values that
+// are exactly 1 ms inside (age = 299999 ms < 300000) vs exactly 1 ms outside
+// (age = 300000 ms, NOT < 300000) the guard boundary.
+
+const KNOWN_REAP_MTIME_GUARD_MS = 5 * 60 * 1000; // 300000 ms — mirrors SUT constant
+const FIXED_LOCK_MTIME_MS = 1000; // 1970-01-01T00:00:01.000Z
+const FIXED_LOCK_DATE = new Date(FIXED_LOCK_MTIME_MS);
+
+describe('bug-3707: reapOrphanWorktrees — nowMs clock-injection BOUNDARY tests (#1191)', () => {
+  let tmpBase;
+
+  beforeEach(() => {
+    tmpBase = fs.mkdtempSync(path.join(resolvedTmpDir(), 'gsd-3707-nowms-'));
+  });
+
+  afterEach(() => {
+    cleanup(tmpBase);
+  });
+
+  // ── Just-inside boundary: age = guard - 1 → skip (lock_too_fresh) ───────────
+  test('skips when injected nowMs places lock age just inside guard (age < guard)', () => {
+    // age = nowMs - FIXED_LOCK_MTIME_MS = (FIXED_LOCK_MTIME_MS + KNOWN_REAP_MTIME_GUARD_MS - 1) - FIXED_LOCK_MTIME_MS
+    //     = KNOWN_REAP_MTIME_GUARD_MS - 1 = 299999 ms  →  299999 < 300000 → SKIP
+    const nowMs = FIXED_LOCK_MTIME_MS + KNOWN_REAP_MTIME_GUARD_MS - 1;
+
+    const repoDir = path.join(tmpBase, 'repo-inside');
+    const wtDir = path.join(tmpBase, 'wt-inside-guard');
+    const branchName = 'worktree-boundary-inside';
+
+    initRepo(repoDir);
+    addWorktree(repoDir, wtDir, branchName);
+    commitInWorktree(wtDir, 'inside.txt');
+    mergeIntoMain(repoDir, branchName);
+
+    const metaDir = worktreeMeta(repoDir, wtDir);
+    const lockedFile = path.join(metaDir, 'locked');
+    fs.writeFileSync(lockedFile, String(deadPid()));
+
+    // Inject both nowMs and mtimeSafe — no real clock is read
+    const result = reapOrphanWorktrees(repoDir, {
+      nowMs,
+      mtimeSafe: () => FIXED_LOCK_DATE,
+    });
+
+    assert.ok(Array.isArray(result), 'must return an array');
+    const entry = result.find((r) => canonicalPath(r.path) === canonicalPath(wtDir));
+    assert.ok(entry, 'worktree must appear in results');
+    assert.equal(entry.status, 'skipped', `status must be skipped when age=${nowMs - FIXED_LOCK_MTIME_MS}ms < guard=${KNOWN_REAP_MTIME_GUARD_MS}ms`);
+    assert.equal(entry.reason, 'lock_too_fresh', 'reason must be lock_too_fresh');
+    assert.ok(fs.existsSync(wtDir), 'worktree directory must still exist (not reaped)');
+  });
+
+  // ── Just-outside boundary: age = guard → reap (age NOT < guard) ─────────────
+  test('reaps when injected nowMs places lock age exactly at guard boundary (age === guard)', () => {
+    // age = nowMs - FIXED_LOCK_MTIME_MS = (FIXED_LOCK_MTIME_MS + KNOWN_REAP_MTIME_GUARD_MS) - FIXED_LOCK_MTIME_MS
+    //     = KNOWN_REAP_MTIME_GUARD_MS = 300000 ms  →  300000 NOT < 300000 → PROCEED TO REAP
+    const nowMs = FIXED_LOCK_MTIME_MS + KNOWN_REAP_MTIME_GUARD_MS;
+
+    const repoDir = path.join(tmpBase, 'repo-outside');
+    const wtDir = path.join(tmpBase, 'wt-outside-guard');
+    const branchName = 'worktree-boundary-outside';
+
+    initRepo(repoDir);
+    addWorktree(repoDir, wtDir, branchName);
+    commitInWorktree(wtDir, 'outside.txt');
+    mergeIntoMain(repoDir, branchName);
+
+    const metaDir = worktreeMeta(repoDir, wtDir);
+    const lockedFile = path.join(metaDir, 'locked');
+    // Use deadPid() — a truly dead process — so PID check passes and reap proceeds
+    fs.writeFileSync(lockedFile, String(deadPid()));
+
+    const wtDirCanonical = canonicalPath(wtDir);
+
+    // Inject both nowMs and mtimeSafe — no real clock is read
+    const result = reapOrphanWorktrees(repoDir, {
+      nowMs,
+      mtimeSafe: () => FIXED_LOCK_DATE,
+    });
+
+    assert.ok(Array.isArray(result), 'must return an array');
+    const entry = result.find((r) => canonicalPath(r.path) === wtDirCanonical);
+    assert.ok(entry, 'worktree must appear in results');
+    assert.equal(entry.status, 'reaped', `status must be reaped when age=${nowMs - FIXED_LOCK_MTIME_MS}ms >= guard=${KNOWN_REAP_MTIME_GUARD_MS}ms`);
+    assert.ok(!fs.existsSync(wtDir), 'worktree directory must be removed after reaping');
+  });
+});
+
 // ─── Suite 4: Adversarial gap tests ──────────────────────────────────────────
 
 describe('bug-3707: reapOrphanWorktrees — adversarial edge cases', () => {
