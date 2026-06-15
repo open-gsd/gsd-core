@@ -57,6 +57,7 @@ See **[CONTRIBUTING.md — "Proposing an ADR or PRD"](../../CONTRIBUTING.md#prop
 | [58-runtime-install-policy-module.md](58-runtime-install-policy-module.md) | Runtime Install Policy Module owns the typed install-plan projection | Accepted |
 | [766-claude-code-plugin-manifest-module.md](766-claude-code-plugin-manifest-module.md) | Claude Code Plugin Manifest Module owns the projection of gsd-core surfaces onto the Claude Code plugin contract | Accepted |
 | [1016-runtime-capability-descriptor.md](1016-runtime-capability-descriptor.md) | Runtime Capability Descriptor | Proposed |
+| [1235-descriptor-driven-agent-conversion-migration.md](1235-descriptor-driven-agent-conversion-migration.md) | Migrate agent conversion to the descriptor-driven install path (parity + per-runtime cutover) | Proposed |
 
 ## Seam map
 
