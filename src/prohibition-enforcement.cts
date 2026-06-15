@@ -41,9 +41,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+// Import the leaf I/O module directly, not the core.cjs re-export spine (being retired, #1268).
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import core = require('./core.cjs');
-const { output, error, ERROR_REASON } = core;
+import io = require('./io.cjs');
+const { output, error, ERROR_REASON } = io;
 import { dispositionForProhibition } from './probe-core.cjs';
 import type { ProhibitionDisposition } from './probe-core.cjs';
 
