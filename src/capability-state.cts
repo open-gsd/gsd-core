@@ -17,9 +17,9 @@
  * pure, config-only resolution with no filesystem I/O.
  * cmdCapabilityState is the I/O handler.
  *
- * Dependencies (leaf modules only — no core.cjs circular risk):
+ * Dependencies (leaf modules only — no circular risk):
  *   - node:path
- *   - ./core.cjs               (output, error)
+ *   - ./io.cjs                 (output, error)
  *   - ./capability-activation.cjs (_resolveActivationValue)
  *   - ./install-profiles.cjs   (readActiveProfile, loadSkillsManifest, resolveProfile)
  *   - ./surface.cjs            (resolveSurface)
@@ -32,8 +32,8 @@ import path from 'node:path';
 import fs from 'node:fs';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import core = require('./core.cjs');
-const { output: coreOutput, error: coreError } = core;
+import ioMod = require('./io.cjs');
+const { output: coreOutput, error: coreError } = ioMod;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import activationMod = require('./capability-activation.cjs');
@@ -363,7 +363,7 @@ function _resolveManifest(commandsGsdDir: string, configDir: string): Map<string
 
 /**
  * Command entry point: resolve install profile, surface, and config; compute
- * capability state; emit the envelope via core.output.
+ * capability state; emit the envelope via io.output.
  *
  * Envelope: { runtimeConfigDir, warnings?: string[], capabilities: CapabilityStateEntry[] }
  *
@@ -388,7 +388,7 @@ function _resolveManifest(commandsGsdDir: string, configDir: string): Map<string
  *                         Providing a value without a next token (e.g. the flag
  *                         is last in argv with no following value) should be
  *                         caught by the caller before invoking this function.
- * @param raw              Whether to emit raw JSON (core.output raw mode)
+ * @param raw              Whether to emit raw JSON (io.output raw mode)
  * @param _options         Reserved for future use
  */
 function resolveCapabilityRuntimeState(

@@ -19,11 +19,11 @@
  * Both pure functions (resolveLoopHooks, renderLoopHooks) take explicit
  * registry/config arguments so they are trivially testable without I/O.
  *
- * Dependencies (leaf modules only — no core.cjs circular risk):
+ * Dependencies (leaf modules only — no circular risk):
  *   - node:fs / node:path  (raw config.json read for capability-key activation)
  *   - ./config-loader.cjs  (loadConfig)
  *   - ./planning-workspace.cjs  (planningDir — to locate config.json)
- *   - ./core.cjs           (output, error)
+ *   - ./io.cjs             (output, error)
  *   - loop-host-contract.cjs (CANONICAL_POINTS via LOOP_HOST_CONTRACT)
  *   - capability-registry.cjs (byLoopPoint, consumed at call time)
  */
@@ -32,8 +32,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import core = require('./core.cjs');
-const { output: coreOutput, error: coreError } = core;
+import ioMod = require('./io.cjs');
+const { output: coreOutput, error: coreError } = ioMod;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoaderModule = require('./config-loader.cjs');
@@ -284,7 +284,7 @@ interface ResolveLoopHooksResult {
  * Pure resolver: given a point, registry, and config, returns the active hooks.
  *
  * Throws if `point` is not one of the 12 canonical points (caller converts to
- * core.error). Never throws for malformed registry/hook entries — skips and
+ * io.error). Never throws for malformed registry/hook entries — skips and
  * continues.
  *
  * Ordering: steps first, then contributions, then gates. Within each array,
@@ -571,7 +571,7 @@ function renderLoopHooks(resolved: ResolveLoopHooksResult): string {
  * Command entry point: load registry + config, resolve + render, emit envelope.
  *
  * Envelope: { point, activeHooks, rendered }
- * On invalid point, emits core.error instead of throwing.
+ * On invalid point, emits io.error instead of throwing.
  *
  * Config note: FIX 1 replaced _loadMergedConfig (whole-config deep-merge) with a
  * per-hook single-key activation resolver (_resolveActivationValue). The resolver

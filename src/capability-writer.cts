@@ -13,7 +13,7 @@
  *   - re-resolve: always calls resolveCapabilityRuntimeState for the return value
  *
  * Dependencies (leaf modules only — no circular risk):
- *   - ./core.cjs               (output, error)
+ *   - ./io.cjs                 (output, error)
  *   - ./capability-state.cjs   (resolveCapabilityRuntimeState, _resolveManifest, _resolveCommandsGsdDir)
  *   - ./surface.cjs            (readSurface, writeSurface, applySurface)
  *   - ./install-profiles.cjs   (readActiveProfile)
@@ -23,8 +23,8 @@
  */
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import core = require('./core.cjs');
-const { output: coreOutput, error: coreError } = core;
+import ioMod = require('./io.cjs');
+const { output: coreOutput, error: coreError } = ioMod;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import capabilityStateMod = require('./capability-state.cjs');
