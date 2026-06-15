@@ -259,3 +259,42 @@ describe('#1146: git.base-branch resolver', () => {
     }
   });
 });
+
+// ─── gitWorktreeInfoInternal: relocation identity + behaviour (#1268 T0) ─────
+
+const gitBaseBranch = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'git-base-branch.cjs'));
+const core = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'core.cjs'));
+const { createTempGitProject, createTempDir } = require('./helpers.cjs');
+
+describe('#1268 gitWorktreeInfoInternal: relocation to git-base-branch', () => {
+  test('core.gitWorktreeInfoInternal === gitBaseBranch.gitWorktreeInfoInternal (by reference)', () => {
+    assert.strictEqual(
+      core.gitWorktreeInfoInternal,
+      gitBaseBranch.gitWorktreeInfoInternal,
+      'core.gitWorktreeInfoInternal must be the same function reference as gitBaseBranch.gitWorktreeInfoInternal'
+    );
+  });
+
+  test('gitWorktreeInfoInternal(createTempGitProject()) returns {inside:true, worktreeRoot:<non-empty string>}', (t) => {
+    const dir = createTempGitProject('gsd-wt-info-');
+    t.after(() => cleanup(dir));
+    const result = gitBaseBranch.gitWorktreeInfoInternal(dir);
+    assert.strictEqual(result.inside, true, 'inside must be true for a git project dir');
+    assert.ok(typeof result.worktreeRoot === 'string' && result.worktreeRoot.length > 0,
+      `worktreeRoot must be a non-empty string, got: ${JSON.stringify(result.worktreeRoot)}`);
+  });
+
+  test('gitWorktreeInfoInternal(createTempDir()) returns {inside:false, worktreeRoot:null} for a non-git dir', (t) => {
+    const dir = createTempDir('gsd-wt-info-nongit-');
+    t.after(() => cleanup(dir));
+    const result = gitBaseBranch.gitWorktreeInfoInternal(dir);
+    assert.strictEqual(result.inside, false, 'inside must be false for a non-git dir');
+    assert.strictEqual(result.worktreeRoot, null, 'worktreeRoot must be null for a non-git dir');
+  });
+
+  test('gitWorktreeInfoInternal never throws (non-git dir)', (t) => {
+    const dir = createTempDir('gsd-wt-info-nothrow-');
+    t.after(() => cleanup(dir));
+    assert.doesNotThrow(() => gitBaseBranch.gitWorktreeInfoInternal(dir));
+  });
+});

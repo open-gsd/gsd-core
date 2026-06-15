@@ -399,4 +399,18 @@ async function waitFor(predicate, { timeoutMs = 10000, stepMs = 25, message = 'w
   }
 }
 
-module.exports = { runGsdTools, createTempDir, createTempProject, createTempGitProject, cleanup, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, runNpm, isolatedNpmEnv, withIsolatedProcessState, delay, waitFor, TOOLS_PATH };
+/**
+ * Reset all runtime-warning caches in config-loader.cjs and model-resolver.cjs.
+ *
+ * Use this in beforeEach/afterEach hooks in tests that exercise warning-emission
+ * paths so that each test starts with a clean slate. Replaces the duplicated local
+ * `_resetRuntimeWarningCacheForTests` wrappers in individual test files.
+ */
+function resetRuntimeWarningCaches() {
+  const configLoader = require('../gsd-core/bin/lib/config-loader.cjs');
+  const modelResolver = require('../gsd-core/bin/lib/model-resolver.cjs');
+  configLoader._resetRuntimeWarningCacheForTests();
+  modelResolver._resetModelPolicyWarningCacheForTests();
+}
+
+module.exports = { runGsdTools, createTempDir, createTempProject, createTempGitProject, cleanup, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, runNpm, isolatedNpmEnv, withIsolatedProcessState, delay, waitFor, resetRuntimeWarningCaches, TOOLS_PATH };

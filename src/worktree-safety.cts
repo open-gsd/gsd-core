@@ -1105,6 +1105,48 @@ function cmdWorktreeReapOrphans(cwd: string): void {
 // Unused exports kept for API compatibility
 void parseWorktreeListPaths;
 
+// ─── Moved from core.cjs (ADR-857 T0 #1268 rehome-core-squatters) ─────────────
+
+/**
+ * Resolve the main worktree root when running inside a git worktree.
+ * In a linked worktree, .planning/ lives in the main worktree, not in the linked one.
+ * Returns the main worktree path, or cwd if not in a worktree.
+ */
+function resolveWorktreeRoot(cwd: string): string {
+  const context = resolveWorktreeContext(cwd, {
+    existsSync: fs.existsSync,
+  });
+  return context.effectiveRoot;
+}
+
+/**
+ * Clear stale worktree metadata references via `git worktree prune`.
+ *
+ * Destructive linked-worktree removal is disabled by default for safety.
+ *
+ * @param repoRoot - absolute path to the main (or any) worktree of
+ *   the repository; used as `cwd` for git commands.
+ * @returns list of worktree paths that were removed (always empty)
+ */
+function pruneOrphanedWorktrees(repoRoot: string): string[] {
+  try {
+    const plan = planWorktreePrune(
+      repoRoot,
+      { allowDestructive: false },
+      { parseWorktreePorcelain }
+    );
+    const pruneResult = executeWorktreePrunePlan(plan) as { timedOut?: boolean } | null;
+    if (pruneResult && pruneResult.timedOut) {
+      process.stderr.write(
+        '[gsd-tools] WARNING: worktree health check degraded' +
+        ' — git worktree prune timed out after 10s.' +
+        ' Orphaned worktree metadata may remain until the next successful run.\n'
+      );
+    }
+  } catch { /* never crash the caller */ }
+  return [];
+}
+
 export = {
   resolveWorktreeContext,
   parseWorktreePorcelain,
@@ -1119,4 +1161,6 @@ export = {
   cmdWorktreeCleanupWave,
   reapOrphanWorktrees,
   cmdWorktreeReapOrphans,
+  resolveWorktreeRoot,
+  pruneOrphanedWorktrees,
 };

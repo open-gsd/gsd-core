@@ -274,6 +274,7 @@
       "active-workstream-store.cjs",
       "adr-parser.cjs",
       "agent-command-router.cjs",
+      "agent-install-check.cjs",
       "artifacts.cjs",
       "audit-command-router.cjs",
       "audit.cjs",

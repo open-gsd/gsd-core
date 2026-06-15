@@ -64,14 +64,13 @@ const {
   resolveModelPolicy,
   resolveModelForTier,
   KNOWN_PROVIDERS,
-  _resetRuntimeWarningCacheForTests,
 } = require('../gsd-core/bin/lib/core.cjs');
 
 // KNOWN_PROVIDERS must also be exported directly from model-catalog.cjs
 const modelCatalog = require('../gsd-core/bin/lib/model-catalog.cjs');
 
 const { isValidConfigKey } = require('../gsd-core/bin/lib/config-schema.cjs');
-const { createTempDir, cleanup } = require('./helpers.cjs');
+const { createTempDir, cleanup, resetRuntimeWarningCaches } = require('./helpers.cjs');
 
 const makeTmp = (prefix) => createTempDir(`gsd-49-${prefix}-`);
 
@@ -277,11 +276,11 @@ describe('#49 resolveModelInternal: model_policy in the resolution chain', () =>
   let projectDir;
   beforeEach(() => {
     projectDir = makeTmp('internal');
-    _resetRuntimeWarningCacheForTests();
+    resetRuntimeWarningCaches();
   });
   afterEach(() => {
     rmr(projectDir);
-    _resetRuntimeWarningCacheForTests();
+    resetRuntimeWarningCaches();
   });
 
   test('model_policy fires before model_profile_overrides when both are set (model_policy wins)', () => {
@@ -396,7 +395,7 @@ describe('#49 resolveModelInternal: model_policy in the resolution chain', () =>
   });
 
   test('unmappable model_policy ID warns and falls back to the tier alias on claude (#1133)', () => {
-    _resetRuntimeWarningCacheForTests();
+    resetRuntimeWarningCaches();
     writeConfig(projectDir, {
       runtime: 'claude',
       model_profile: 'balanced',
@@ -527,7 +526,7 @@ describe('#49 resolveModelInternal: unknown provider warning behavior', () => {
 
   beforeEach(() => {
     projectDir = makeTmp('warnings');
-    _resetRuntimeWarningCacheForTests();
+    resetRuntimeWarningCaches();
     captured = [];
     origWrite = process.stderr.write.bind(process.stderr);
     process.stderr.write = (chunk) => { captured.push(String(chunk)); return true; };
@@ -536,7 +535,7 @@ describe('#49 resolveModelInternal: unknown provider warning behavior', () => {
   afterEach(() => {
     process.stderr.write = origWrite;
     rmr(projectDir);
-    _resetRuntimeWarningCacheForTests();
+    resetRuntimeWarningCaches();
   });
 
   test('unknown provider in model_policy → falls through to model_profile_overrides, emits stderr warning once', () => {

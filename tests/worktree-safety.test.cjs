@@ -18,9 +18,13 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const { createTempGitProject, createTempDir, cleanup } = require('./helpers.cjs');
 
 const WORKTREE_SAFETY_PATH = path.join(
   __dirname, '..', 'gsd-core', 'bin', 'lib', 'worktree-safety.cjs'
+);
+const CORE_PATH = path.join(
+  __dirname, '..', 'gsd-core', 'bin', 'lib', 'core.cjs'
 );
 
 const {
@@ -1241,5 +1245,54 @@ describe('executeWorktreeWaveCleanupPlan', () => {
     assert.equal(calls.some((call) => call.startsWith('merge worktree-agent-a1')), false);
     assert.equal(calls.some((call) => call === 'worktree remove /repo/.claude/worktrees/agent-a1 --force'), false);
     assert.equal(calls.some((call) => call === 'branch -D worktree-agent-a1'), false);
+  });
+});
+
+// ─── MOVE 2: resolveWorktreeRoot and pruneOrphanedWorktrees (#1268 T0) ────────
+
+describe('worktree-safety: resolveWorktreeRoot and pruneOrphanedWorktrees relocation identity', () => {
+  const worktreeSafety = require(WORKTREE_SAFETY_PATH);
+  const core = require(CORE_PATH);
+
+  test('core.resolveWorktreeRoot === worktreeSafety.resolveWorktreeRoot (by reference)', () => {
+    assert.strictEqual(
+      core.resolveWorktreeRoot,
+      worktreeSafety.resolveWorktreeRoot,
+      'core.resolveWorktreeRoot must be the same function reference as worktreeSafety.resolveWorktreeRoot'
+    );
+  });
+
+  test('core.pruneOrphanedWorktrees === worktreeSafety.pruneOrphanedWorktrees (by reference)', () => {
+    assert.strictEqual(
+      core.pruneOrphanedWorktrees,
+      worktreeSafety.pruneOrphanedWorktrees,
+      'core.pruneOrphanedWorktrees must be the same function reference as worktreeSafety.pruneOrphanedWorktrees'
+    );
+  });
+});
+
+describe('worktree-safety: resolveWorktreeRoot behaviour', () => {
+  const worktreeSafety = require(WORKTREE_SAFETY_PATH);
+
+  test('resolveWorktreeRoot(createTempGitProject()) returns a non-empty string', (t) => {
+    const dir = createTempGitProject('gsd-wt-root-');
+    t.after(() => cleanup(dir));
+    const result = worktreeSafety.resolveWorktreeRoot(dir);
+    assert.ok(typeof result === 'string' && result.length > 0,
+      `Expected non-empty string, got: ${JSON.stringify(result)}`);
+  });
+});
+
+describe('worktree-safety: pruneOrphanedWorktrees behaviour', () => {
+  const worktreeSafety = require(WORKTREE_SAFETY_PATH);
+
+  test('pruneOrphanedWorktrees(temp dir) returns [] and does not throw', (t) => {
+    const dir = createTempDir('gsd-prune-');
+    t.after(() => cleanup(dir));
+    let result;
+    assert.doesNotThrow(() => {
+      result = worktreeSafety.pruneOrphanedWorktrees(dir);
+    });
+    assert.deepStrictEqual(result, []);
   });
 });

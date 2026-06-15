@@ -30,7 +30,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { createTempProject, cleanup } = require('./helpers.cjs');
+const { createTempProject, cleanup, resetRuntimeWarningCaches } = require('./helpers.cjs');
 
 const {
   resolveModelInternal,
@@ -38,7 +38,6 @@ const {
   resolveTierEntry,
   RUNTIME_PROFILE_MAP,
   KNOWN_RUNTIMES,
-  _resetRuntimeWarningCacheForTests,
 } = require('../gsd-core/bin/lib/core.cjs');
 const { renderEffortForRuntime } = require('../gsd-core/bin/lib/model-catalog.cjs');
 const { isValidConfigKey } = require('../gsd-core/bin/lib/config-schema.cjs');
@@ -75,7 +74,7 @@ function restoreHome() {
 // ─── Backwards compatibility — no `runtime` set ─────────────────────────────
 describe('issue #2517: backwards compat — no runtime key set', () => {
   let tmpDir;
-  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); _resetRuntimeWarningCacheForTests(); });
+  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); resetRuntimeWarningCaches(); });
   afterEach(() => { cleanup(tmpDir); restoreHome(); });
 
   test('balanced profile returns Claude alias when runtime absent', () => {
@@ -117,7 +116,7 @@ describe('issue #2517: backwards compat — no runtime key set', () => {
 // ─── runtime: "claude" — no-op (preserves Claude-native semantics) ──────────
 describe('issue #2517: runtime "claude" is a no-op for resolution (finding #4)', () => {
   let tmpDir;
-  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); _resetRuntimeWarningCacheForTests(); });
+  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); resetRuntimeWarningCaches(); });
   afterEach(() => { cleanup(tmpDir); restoreHome(); });
 
   test('runtime:"claude" + balanced returns the alias, not the resolved Claude ID', () => {
@@ -162,7 +161,7 @@ describe('issue #2517: runtime "claude" is a no-op for resolution (finding #4)',
 // ─── runtime: "codex" — resolves tiers to Codex IDs + reasoning_effort ──────
 describe('issue #2517: runtime "codex" — Codex tier resolution', () => {
   let tmpDir;
-  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); _resetRuntimeWarningCacheForTests(); });
+  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); resetRuntimeWarningCaches(); });
   afterEach(() => { cleanup(tmpDir); restoreHome(); });
 
   test('opus tier -> gpt-5.5 model; heavy-tier agent -> xhigh effort on codex', () => {
@@ -228,7 +227,7 @@ describe('issue #2517: runtime "codex" — Codex tier resolution', () => {
 // ─── Precedence chain ───────────────────────────────────────────────────────
 describe('issue #2517: precedence chain', () => {
   let tmpDir;
-  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); _resetRuntimeWarningCacheForTests(); });
+  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); resetRuntimeWarningCaches(); });
   afterEach(() => { cleanup(tmpDir); restoreHome(); });
 
   test('per-agent model_overrides wins over runtime tier resolution', () => {
@@ -283,7 +282,7 @@ describe('issue #2517: precedence chain', () => {
 // ─── Field-merge semantics — review findings #2 ─────────────────────────────
 describe('issue #2517: field-merge of overrides with built-in defaults (finding #2)', () => {
   let tmpDir;
-  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); _resetRuntimeWarningCacheForTests(); });
+  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); resetRuntimeWarningCaches(); });
   afterEach(() => { cleanup(tmpDir); restoreHome(); });
 
   test('string-shorthand override: model is overridden; unified effort derives from routing tier', () => {
@@ -366,7 +365,7 @@ describe('issue #2517: field-merge of overrides with built-in defaults (finding 
 // ─── Unknown runtime render safety (finding #3 spirit) ──────────────────────
 describe('issue #2517: unknown runtime render param is null (effort does not leak to install path)', () => {
   let tmpDir;
-  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); _resetRuntimeWarningCacheForTests(); });
+  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); resetRuntimeWarningCaches(); });
   afterEach(() => { cleanup(tmpDir); restoreHome(); });
 
   test('unknown runtime: model resolves via override; render param is null (no wire param leaked)', () => {
@@ -402,7 +401,7 @@ describe('issue #2517: unknown runtime render param is null (effort does not lea
 // ─── Unknown runtime / unknown tier ─────────────────────────────────────────
 describe('issue #2517: unknown runtime + safe fallback', () => {
   let tmpDir;
-  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); _resetRuntimeWarningCacheForTests(); });
+  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); resetRuntimeWarningCaches(); });
   afterEach(() => { cleanup(tmpDir); restoreHome(); });
 
   test('unknown runtime falls back to Claude-alias safe default (no Codex IDs leaked)', () => {
@@ -479,7 +478,7 @@ describe('issue #2517: loadConfig warns on unknown runtime/tier (findings #10, #
   beforeEach(() => {
     isolateHome();
     tmpDir = createTempProject();
-    _resetRuntimeWarningCacheForTests();
+    resetRuntimeWarningCaches();
     captured = [];
     origWrite = process.stderr.write.bind(process.stderr);
     process.stderr.write = (chunk) => { captured.push(String(chunk)); return true; };
@@ -540,7 +539,7 @@ describe('issue #2517: install end-to-end — per-project config reaches Codex T
   const { readGsdRuntimeProfileResolver, generateCodexAgentToml } = installMod;
 
   let tmpDir;
-  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); _resetRuntimeWarningCacheForTests(); });
+  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); resetRuntimeWarningCaches(); });
   afterEach(() => { cleanup(tmpDir); restoreHome(); });
 
   test('readGsdRuntimeProfileResolver picks up runtime from .planning/config.json', () => {
@@ -640,7 +639,7 @@ describe('issue #2517: RUNTIME_PROFILE_MAP single source of truth (finding #16)'
 // ─── Issue #2612: gemini runtime tier resolution ─────────────────────────────
 describe('issue #2612: runtime "gemini" — Gemini tier resolution', () => {
   let tmpDir;
-  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); _resetRuntimeWarningCacheForTests(); });
+  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); resetRuntimeWarningCaches(); });
   afterEach(() => { cleanup(tmpDir); restoreHome(); });
 
   test('opus tier -> gemini-3.1-pro-preview', () => {
@@ -668,7 +667,7 @@ describe('issue #2612: runtime "gemini" — Gemini tier resolution', () => {
 // ─── Issue #2612: qwen runtime tier resolution ───────────────────────────────
 describe('issue #2612: runtime "qwen" — Qwen tier resolution', () => {
   let tmpDir;
-  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); _resetRuntimeWarningCacheForTests(); });
+  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); resetRuntimeWarningCaches(); });
   afterEach(() => { cleanup(tmpDir); restoreHome(); });
 
   test('opus tier -> qwen3-max-2026-01-23', () => {
@@ -696,7 +695,7 @@ describe('issue #2612: runtime "qwen" — Qwen tier resolution', () => {
 // ─── Issue #2612: opencode runtime tier resolution ───────────────────────────
 describe('issue #2612: runtime "opencode" — OpenCode tier resolution', () => {
   let tmpDir;
-  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); _resetRuntimeWarningCacheForTests(); });
+  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); resetRuntimeWarningCaches(); });
   afterEach(() => { cleanup(tmpDir); restoreHome(); });
 
   test('opus tier -> anthropic/claude-opus-4-8', () => {
@@ -724,7 +723,7 @@ describe('issue #2612: runtime "opencode" — OpenCode tier resolution', () => {
 // ─── Issue #2612: copilot runtime tier resolution ────────────────────────────
 describe('issue #2612: runtime "copilot" — Copilot tier resolution', () => {
   let tmpDir;
-  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); _resetRuntimeWarningCacheForTests(); });
+  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); resetRuntimeWarningCaches(); });
   afterEach(() => { cleanup(tmpDir); restoreHome(); });
 
   test('opus tier -> claude-opus-4-8', () => {
@@ -787,7 +786,7 @@ describe('issue #2612: Group B runtimes — no built-in map, use unknown-runtime
     const { createTempProject, cleanup } = require('./helpers.cjs');
     isolateHome();
     const tmpDir = createTempProject();
-    _resetRuntimeWarningCacheForTests();
+    resetRuntimeWarningCaches();
     try {
       writeConfig(tmpDir, { runtime: 'cursor', model_profile: 'quality' });
       // Should fall back to Claude alias, not emit a provider-specific ID
@@ -803,7 +802,7 @@ describe('issue #2612: Group B runtimes — no built-in map, use unknown-runtime
 // ─── Issue #2612: Partial override merge for new runtimes ────────────────────
 describe('issue #2612: partial override merge for new Group A runtimes', () => {
   let tmpDir;
-  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); _resetRuntimeWarningCacheForTests(); });
+  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); resetRuntimeWarningCaches(); });
   afterEach(() => { cleanup(tmpDir); restoreHome(); });
 
   test('gemini.opus override wins; sonnet and haiku use built-in defaults', () => {

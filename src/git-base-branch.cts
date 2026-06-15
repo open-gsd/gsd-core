@@ -199,6 +199,38 @@ export function resolveBaseBranch(
   return 'main';
 }
 
+// ─── gitWorktreeInfoInternal (moved from core.cjs, ADR-857 T0 #1268) ─────────
+
+export interface GitWorktreeInfo {
+  inside: boolean;
+  worktreeRoot: string | null;
+}
+
+/**
+ * Detect whether `cwd` sits inside a git worktree, and if so, return the
+ * absolute path of the worktree root.
+ */
+export function gitWorktreeInfoInternal(cwd: string): GitWorktreeInfo {
+  try {
+    const insideResult = execGitSeam(['rev-parse', '--is-inside-work-tree'], { cwd, timeout: 5000 });
+    if (insideResult.exitCode !== 0) {
+      return { inside: false, worktreeRoot: null };
+    }
+    const insideStdout = String(insideResult.stdout || '').trim();
+    if (insideStdout !== 'true') {
+      return { inside: false, worktreeRoot: null };
+    }
+    const rootResult = execGitSeam(['rev-parse', '--show-toplevel'], { cwd, timeout: 5000 });
+    if (rootResult.exitCode !== 0) {
+      return { inside: true, worktreeRoot: null };
+    }
+    const root = String(rootResult.stdout || '').trim();
+    return { inside: true, worktreeRoot: root || null };
+  } catch {
+    return { inside: false, worktreeRoot: null };
+  }
+}
+
 // ─── CLI entry point ──────────────────────────────────────────────────────────
 
 /**
