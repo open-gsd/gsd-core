@@ -12,8 +12,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import core = require('./core.cjs');
-const { output, error, getMilestonePhaseFilter, toPosixPath } = core;
+import io = require('./io.cjs');
+const { output, error } = io;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import roadmapParser = require('./roadmap-parser.cjs');
+const { getMilestonePhaseFilter } = roadmapParser;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import coreUtils = require('./core-utils.cjs');
+const { toPosixPath } = coreUtils;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir } = planningWorkspace;

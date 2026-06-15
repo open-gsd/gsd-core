@@ -10,8 +10,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execGit, platformWriteSync, platformReadSync } from './shell-command-projection.cjs';
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- core.cjs is an export= CommonJS module
-import core = require('./core.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- io.cjs is an export= CommonJS module
+import io = require('./io.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- config-loader.cjs is an export= CommonJS module
+import configLoader = require('./config-loader.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- model-resolver.cjs is an export= CommonJS module
+import modelResolver = require('./model-resolver.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
+import phaseLocator = require('./phase-locator.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- roadmap-parser.cjs is an export= CommonJS module
+import roadmapParser = require('./roadmap-parser.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- core-utils.cjs is an export= CommonJS module
+import coreUtils = require('./core-utils.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id.cjs is an export= CommonJS module
+import phaseId = require('./phase-id.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- worktree-safety.cjs is an export= CommonJS module
+import worktreeSafety = require('./worktree-safety.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-workspace.cjs is an export= CommonJS module
 import planningWorkspace = require('./planning-workspace.cjs');
 import { maskIfSecret } from './secrets.cjs';
@@ -32,25 +46,20 @@ const { checkAgentsInstalled } = agentInstallCheck;
 import gitBaseBranch = require('./git-base-branch.cjs');
 const { gitWorktreeInfoInternal } = gitBaseBranch;
 
+const { output, error } = io;
+const { loadConfig } = configLoader;
+const { resolveModelInternal, resolveGranularityInternal, assertValidGranularityOverride } = modelResolver;
+const { findPhaseInternal } = phaseLocator;
 const {
-  loadConfig,
-  resolveModelInternal,
-  resolveGranularityInternal,
-  assertValidGranularityOverride,
-  findPhaseInternal,
   getRoadmapPhaseInternal,
-  pathExistsInternal,
-  generateSlugInternal,
   getMilestoneInfo,
   getMilestonePhaseFilter,
   stripShippedMilestones,
   extractCurrentMilestone,
-  normalizePhaseName,
-  toPosixPath,
-  output,
-  error,
-  phaseTokenMatches,
-} = core;
+} = roadmapParser;
+const { pathExistsInternal, generateSlugInternal, toPosixPath } = coreUtils;
+const { normalizePhaseName, phaseTokenMatches } = phaseId;
+const { pruneOrphanedWorktrees } = worktreeSafety;
 
 const {
   planningPaths,
@@ -1517,7 +1526,6 @@ function cmdInitManager(cwd: string, raw: boolean): void {
 
 function cmdInitProgress(cwd: string, raw: boolean): void {
   try {
-    const { pruneOrphanedWorktrees } = core;
     (pruneOrphanedWorktrees as (cwd: string) => void)(cwd);
   } catch {
     /* intentionally empty */

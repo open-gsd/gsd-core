@@ -18,12 +18,15 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- core.cjs is an export= CommonJS module
-import core = require('./core.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- io.cjs is an export= CommonJS module
+import io = require('./io.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id.cjs is an export= CommonJS module
+import phaseId = require('./phase-id.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
 import frontmatterMod = require('./frontmatter.cjs');
 
-const { output, extractPhaseToken } = core;
+const { output, error } = io;
+const { extractPhaseToken } = phaseId;
 const { extractFrontmatter } = frontmatterMod;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -210,7 +213,7 @@ function readVerificationStatus(
 
 /**
  * CLI command handler: resolve phaseDir against cwd, call readVerificationStatus,
- * emit via core.output().
+ * emit via io.output().
  *
  * @param cwd         - Current working directory (used to resolve phaseDirArg).
  * @param phaseDirArg - Phase directory path (absolute or relative to cwd).
@@ -218,7 +221,7 @@ function readVerificationStatus(
  */
 function cmdVerificationStatus(cwd: string, phaseDirArg: string | undefined, raw: boolean): void {
   if (!phaseDirArg) {
-    core.error('phase directory required for verification.status');
+    error('phase directory required for verification.status');
     return;
   }
   const phaseDir = path.resolve(cwd, phaseDirArg);

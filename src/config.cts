@@ -10,8 +10,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import core = require('./core.cjs');
-const { output, error, ERROR_REASON, CONFIG_DEFAULTS } = core;
+import io = require('./io.cjs');
+const { output, error, ERROR_REASON } = io;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import configLoader = require('./config-loader.cjs');
+const { CONFIG_DEFAULTS } = configLoader;
 import { platformWriteSync, platformEnsureDir } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');

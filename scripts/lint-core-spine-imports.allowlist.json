@@ -5,19 +5,10 @@
     "src/audit-command-router.cts",
     "src/check-command-router.cts",
     "src/commands.cts",
-    "src/config.cts",
-    "src/docs.cts",
-    "src/gap-checker.cts",
-    "src/graphify-command-router.cts",
-    "src/init.cts",
     "src/intel-command-router.cts",
     "src/phase.cts",
-    "src/profile-output.cts",
     "src/roadmap.cts",
     "src/state.cts",
-    "src/template.cts",
-    "src/uat.cts",
-    "src/verification.cts",
-    "src/workstream.cts"
+    "src/template.cts"
   ]
 }
