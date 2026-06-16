@@ -92,12 +92,22 @@ export function descriptorFromProjection(
 ): CheckDescriptor | null {
   if (!projected || typeof projected !== 'object') return null;
   if (!('check_kind' in projected)) return null;
-  const descriptor: CheckDescriptor = {
-    kind: projected.check_kind as CheckKind,
-    target: projected.check_target as string,
-  };
-  if (typeof projected.check_rule === 'string' && projected.check_rule.trim().length > 0) {
-    descriptor.rule = projected.check_rule;
+  // The shared `parseMustHavesBlock` (src/frontmatter.cts) coerces /^\d+$/ scalar values to NUMBERS on
+  // round-trip, so a numeric-looking check_kind/check_target/check_rule arrives here as a number. Normalize
+  // ONLY string|number scalars back to string — a non-scalar (object/array/bool) or absent value yields ''
+  // (never an `[object Object]` stringification, no `as string` lie over a number). This keeps the
+  // descriptor honestly typed and the round-trip lossless across the full string domain; an under-specified
+  // '' target/kind is rejected by the producer's locate guard (fail-closed; never green).
+  const scalar = (v: unknown): string =>
+    typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '';
+  const kind = scalar(projected.check_kind) as CheckKind;
+  const target = scalar(projected.check_target);
+  const descriptor: CheckDescriptor = { kind, target };
+  // `rule` belongs only to the lint-rule kind; a stray check_rule on a node-test descriptor is dropped
+  // (the projector never emits one there — defense in depth). failFirst is NOT sourced here (#1279).
+  if (kind === 'lint-rule') {
+    const rule = scalar(projected.check_rule);
+    if (rule.trim().length > 0) descriptor.rule = rule;
   }
   return descriptor;
 }

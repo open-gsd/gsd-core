@@ -161,11 +161,18 @@ descriptor — it stays a verify-time caller attestation (machine-proven fail-fi
 The probe emits, per kept prohibition, an item of the form:
 
 ```
-{ requirement_id, category, status, verification, resolution, reason, statement }
+{ requirement_id, category, status, verification, resolution, reason, statement,
+  check_kind?, check_target?, check_rule? }
 ```
 
 where `statement` is the must-NOT sentence and `category` is the values/safety/ethics class
-(`values`, `fairness`, `privacy`, `transparency`, `safety`, …), plus a coverage summary:
+(`values`, `fairness`, `privacy`, `transparency`, `safety`, …). The optional **flat-scalar
+`check_*` descriptor** (#1278) is present only on a resolved `test`-tier prohibition carrying a
+wired check: `check_kind` (`node-test` | `lint-rule`), `check_target`, and `check_rule` (lint-rule
+only). `projectProhibitions` emits these into `must_haves.prohibitions` and `descriptorFromProjection`
+reads them back into a `{ kind, target, rule? }` `CheckDescriptor`; they are flat scalars (never a
+nested `check:{}` object) so they round-trip through the unchanged `parseMustHavesBlock`. Plus a
+coverage summary:
 
 ```
 coverage: { applicable, resolved, unresolved, byVerification: { test, judgment } }

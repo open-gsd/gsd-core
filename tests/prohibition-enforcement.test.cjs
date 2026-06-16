@@ -463,4 +463,34 @@ describe('prohibition-enforcement: fail-closed descriptor-from-projection (CHK-0
     assert.notEqual(result.status, 'green', 'a located check that does not genuinely pass must NEVER green');
     assert.equal(result.flagged, true);
   });
+
+  test('CHK-06(MD-01 numeric coercion): a numeric-looking check_target reconstructs as a STRING (parseMustHavesBlock coerces ^\\d+$ to number) -> located, no type-lie / silent un-locate', () => {
+    const enforce = require(ENFORCEMENT_LIB);
+    // The shared parseMustHavesBlock (src/frontmatter.cts) coerces a /^\d+$/ scalar value to a NUMBER on
+    // round-trip, so a numeric-looking check_target arrives at the adapter as a number. The adapter must
+    // String()-coerce it (not cast `as string` over a number), so the descriptor is honestly typed AND a
+    // numeric-looking target still locates instead of silently un-locating (the round-trip is lossless
+    // across the full string domain — closes review finding MD-01/LW-01).
+    const descriptor = enforce.descriptorFromProjection({
+      ...PROJECTED_TIER, check_kind: 'node-test', check_target: 12345,
+    });
+    assert.equal(typeof descriptor.target, 'string',
+      'a numeric-coerced check_target must reconstruct as a string, never a number behind an `as string` cast');
+    assert.equal(descriptor.target, '12345');
+    const result = enforce.runProhibitionEnforcement(
+      PROJECTED_TIER,
+      { ...descriptor, failFirst: true },
+      { runCheck: () => ({ passed: true }) },
+    );
+    assert.equal(result.located, true,
+      'a numeric-looking but valid target locates after String() coercion — no silent un-locate');
+  });
+
+  test('CHK-06(LW-02 stray rule): a check_rule on a node-test descriptor is dropped (rule belongs to lint-rule only)', () => {
+    const enforce = require(ENFORCEMENT_LIB);
+    const descriptor = enforce.descriptorFromProjection({
+      ...PROJECTED_TIER, check_kind: 'node-test', check_target: 'tests/x.test.cjs', check_rule: 'local/no-source-grep',
+    });
+    assert.equal(descriptor.rule, undefined, 'a node-test descriptor carries no rule even if a stray check_rule is present');
+  });
 });
