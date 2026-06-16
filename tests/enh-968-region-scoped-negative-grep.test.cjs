@@ -1,4 +1,4 @@
-// allow-test-rule: source-text-is-the-product
+// allow-test-rule: source-text-is-the-product #968
 // Enhancement #968: region-scoped negative gate detector + guidance docs.
 // Tests the pure function scanFileWideNegativeGateConflict exported from
 // verify.cjs, plus CLI integration and doc-contract assertions.
