@@ -684,6 +684,29 @@ describe('bug #3384: worktree cleanup workflow contracts', () => {
     assert.doesNotMatch(content, /done < <\(git worktree list --porcelain \| grep "\^worktree " \| grep "\\\.claude\/worktrees\/agent-"/);
   });
 
+  test('#1297 gsd-executor self-reports authoritative worktree metadata', () => {
+    const content = fs.readFileSync(EXECUTOR_AGENT_PATH, 'utf8');
+    assert.match(content, /<worktree_metadata_capture>/);
+    assert.match(content, /git rev-parse --show-toplevel/);
+    assert.match(content, /git rev-parse --abbrev-ref HEAD/);
+    assert.match(content, /GSD_WORKTREE_EXPECTED_BASE=\$\(git rev-parse HEAD\)/);
+    assert.match(content, /<worktree_metadata>/);
+    assert.match(content, /"worktree_path":/);
+    assert.match(content, /"branch":/);
+    assert.match(content, /"expected_base":/);
+  });
+
+  test('#1297 execute-phase consumes executor-returned worktree metadata before harness metadata', () => {
+    const content = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf8');
+    assert.match(content, /<worktree_metadata>/);
+    assert.match(content, /executor-returned worktree metadata/i);
+    assert.match(content, /harness metadata/i);
+    assert.ok(
+      content.indexOf('executor-returned worktree metadata') < content.indexOf('harness metadata'),
+      'execute-phase must prefer executor-returned worktree metadata before runtime harness metadata (#1297)'
+    );
+  });
+
   test('quick contract requires a cleanup manifest instead of global worktree discovery', () => {
     const content = fs.readFileSync(QUICK_PATH, 'utf8');
     assert.match(content, /WAVE_WORKTREE_MANIFEST|QUICK_WORKTREE_MANIFEST/);
