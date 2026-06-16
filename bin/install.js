@@ -9217,9 +9217,6 @@ function populatePristineDir({ packageSrc, pristineDir, modified, runtime, pathP
       topLevels.add(slash === -1 ? '' : norm.slice(0, slash));
     }
 
-    const pristinePathPrefix = runtime === 'omp' && !isGlobal
-      ? `${path.resolve(path.dirname(pristineDir)).replace(/\\/g, '/')}/`
-      : pathPrefix;
 
     function materializeOmpPristineTop(top) {
       if (runtime !== 'omp') return false;
@@ -9231,7 +9228,7 @@ function populatePristineDir({ packageSrc, pristineDir, modified, runtime, pathP
           if (!fs.existsSync(srcFile)) continue;
           let content = fs.readFileSync(srcFile, 'utf8');
           content = convertClaudeCommandToOmpCommand(content, `gsd-${match[1]}`);
-          content = _applyRuntimeRewrites(content, 'omp', pristinePathPrefix, {
+          content = _applyRuntimeRewrites(content, 'omp', pathPrefix, {
             isGlobal,
             rewriteRuntimeDir: isGlobal,
           });
@@ -9248,7 +9245,7 @@ function populatePristineDir({ packageSrc, pristineDir, modified, runtime, pathP
           if (!match || !ownedRuleNames.has(match[1])) continue;
           const srcFile = path.join(packageSrc, 'gsd-core', 'omp', 'rules', match[1]);
           if (!fs.existsSync(srcFile)) continue;
-          const content = _applyRuntimeRewrites(fs.readFileSync(srcFile, 'utf8'), 'omp', pristinePathPrefix, {
+          const content = _applyRuntimeRewrites(fs.readFileSync(srcFile, 'utf8'), 'omp', pathPrefix, {
             isGlobal,
             rewriteRuntimeDir: isGlobal,
           });
@@ -9262,7 +9259,7 @@ function populatePristineDir({ packageSrc, pristineDir, modified, runtime, pathP
         const srcDir = path.join(packageSrc, 'gsd-core', 'omp', 'extensions');
         const stageDir = path.join(stageRoot, top);
         if (fs.existsSync(srcDir)) {
-          copyWithPathReplacement(srcDir, stageDir, pristinePathPrefix, runtime, false, isGlobal);
+          copyWithPathReplacement(srcDir, stageDir, pathPrefix, runtime, false, isGlobal);
         }
         return true;
       }
@@ -9293,7 +9290,7 @@ function populatePristineDir({ packageSrc, pristineDir, modified, runtime, pathP
         : path.join(packageSrc, top);
       const stageDir = path.join(stageRoot, top);
       if (!fs.existsSync(srcDir)) continue;
-      copyWithPathReplacement(srcDir, stageDir, pristinePathPrefix, runtime, false, isGlobal);
+      copyWithPathReplacement(srcDir, stageDir, pathPrefix, runtime, false, isGlobal);
     }
 
     for (const relPath of safeModified) {
@@ -10168,9 +10165,10 @@ function install(isGlobal, runtime = 'claude', options = {}) {
       }
       // OMP: also verify commands/, agents/, and rules/ emitted by the native layout.
       if (isOmp) {
+        const ompOwnedRuleNames = getOmpOwnedRuleNames(src);
         const ompChecks = [
           ['commands', path.join(targetDir, 'commands'), e => e.isFile() && e.name.startsWith('gsd-') && e.name.endsWith('.md'), 'commands/gsd-*'],
-          ['rules', path.join(targetDir, 'rules'), e => e.isFile() && (e.name.endsWith('.md') || e.name.endsWith('.mdc')), 'rules/*.md'],
+          ['rules', path.join(targetDir, 'rules'), e => e.isFile() && ompOwnedRuleNames.has(e.name), 'rules/*.md'],
           ['extensions', path.join(targetDir, 'extensions'), e => e.isDirectory() && e.name.startsWith('gsd-'), 'extensions/gsd-*'],
         ];
         if (!isMinimalMode(_effectiveInstallMode)) {

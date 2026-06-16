@@ -282,7 +282,7 @@ describe('OMP local install and conversion', () => {
     const patches = saveLocalPatches(targetDir, {
       packageSrc: path.join(__dirname, '..'),
       runtime: 'omp',
-      pathPrefix: './.omp/',
+      pathPrefix: `${targetDir.replace(/\\/g, '/')}/`,
       isGlobal: false,
     });
 
