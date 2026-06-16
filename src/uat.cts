@@ -200,6 +200,13 @@ function parseCurrentTest(content: string): CurrentTest {
   const expectedInlineMatch = section.match(/^expected:\s*(.+)\s*$/m);
 
   if (!numberMatch || !nameMatch || (!expectedBlockMatch && !expectedInlineMatch)) {
+    if (!numberMatch && !nameMatch && !expectedBlockMatch && !expectedInlineMatch) {
+      const pendingTest = parseFirstPendingTest(content);
+      if (pendingTest) {
+        return pendingTest;
+      }
+      error('Current Test section is non-structured and no pending UAT test remains to resume');
+    }
     error('Current Test section is malformed');
   }
 
@@ -220,6 +227,63 @@ function parseCurrentTest(content: string): CurrentTest {
     name: sanitizeForDisplay(nameMatch![1].trim()),
     expected: sanitizeForDisplay(expected),
   };
+}
+
+function parseFirstPendingTest(content: string): CurrentTest | null {
+  const testsMatch = content.match(/##\s*Tests\s*\n([\s\S]*?)(?=\n##\s|$)/i);
+  if (!testsMatch) {
+    return null;
+  }
+
+  const testsSection = testsMatch[1];
+  const headingPattern = /^###\s*(\d+)\.\s*([^\n]+)\s*$/gm;
+  const headings: Array<{ index: number; number: number; name: string }> = [];
+  let headingMatch: RegExpExecArray | null;
+  while ((headingMatch = headingPattern.exec(testsSection)) !== null) {
+    headings.push({
+      index: headingMatch.index,
+      number: parseInt(headingMatch[1], 10),
+      name: headingMatch[2].trim(),
+    });
+  }
+
+  for (let i = 0; i < headings.length; i += 1) {
+    const current = headings[i];
+    const next = headings[i + 1];
+    const block = testsSection.slice(current.index, next ? next.index : undefined);
+    if (!/^result:\s*\[?pending\]?\s*$/im.test(block)) {
+      continue;
+    }
+
+    const expected = parseExpectedFromTestBlock(block);
+    if (!expected) {
+      error(`Pending UAT test ${current.number} is missing an expected field`);
+    }
+
+    return {
+      complete: false,
+      number: current.number,
+      name: sanitizeForDisplay(current.name),
+      expected: sanitizeForDisplay(expected),
+    };
+  }
+
+  return null;
+}
+
+function parseExpectedFromTestBlock(block: string): string | null {
+  const expectedBlockMatch = block.match(/^expected:\s*\|\n([\s\S]*?)(?=^\w[\w-]*:\s)/m)
+    || block.match(/^expected:\s*\|\n([\s\S]+)/m);
+  if (expectedBlockMatch) {
+    return expectedBlockMatch[1]
+      .split('\n')
+      .map((line: string) => line.replace(/^ {2}/, ''))
+      .join('\n')
+      .trim();
+  }
+
+  const expectedInlineMatch = block.match(/^expected:\s*(.+)\s*$/m);
+  return expectedInlineMatch ? expectedInlineMatch[1].trim() : null;
 }
 
 // ─── buildCheckpoint ──────────────────────────────────────────────────────────
