@@ -518,6 +518,7 @@ describe('planWorktreeWaveCleanup', () => {
           worktree_path: '/repo/.claude/worktrees/agent-a1',
           branch: 'worktree-agent-a1',
           expected_base: 'abc123',
+          allowed_bases: ['abc123', 'def456'],
         },
       ],
     });
@@ -527,11 +528,13 @@ describe('planWorktreeWaveCleanup', () => {
       worktree_path: entry.worktree_path,
       branch: entry.branch,
       expected_base: entry.expected_base,
+      allowed_bases: entry.allowed_bases,
     })), [{
       agent_id: 'a1',
       worktree_path: '/repo/.claude/worktrees/agent-a1',
       branch: 'worktree-agent-a1',
       expected_base: 'abc123',
+      allowed_bases: ['abc123', 'def456'],
     }]);
     assert.equal(plan.discovery, 'manifest');
   });
@@ -562,6 +565,84 @@ describe('planWorktreeWaveCleanup', () => {
 // ─── executeWorktreeWaveCleanupPlan ───────────────────────────────────────────
 
 describe('executeWorktreeWaveCleanupPlan', () => {
+  test('#1265 accepts a merge-base listed in allowed_bases even when expected_base is the plan commit', () => {
+    const plan = {
+      ok: true,
+      repoRoot: '/repo/main',
+      action: 'cleanup_wave',
+      discovery: 'manifest',
+      entries: [{
+        agent_id: 'a1',
+        worktree_path: '/repo/.claude/worktrees/agent-a1',
+        branch: 'worktree-agent-a1',
+        expected_base: 'plancommit',
+        allowed_bases: ['plancommit', 'parentcommit'],
+      }],
+    };
+    const result = executeWorktreeWaveCleanupPlan(plan, {
+      execGit: (args) => {
+        const key = args.join(' ');
+        if (key === '-C /repo/.claude/worktrees/agent-a1 rev-parse --abbrev-ref HEAD') {
+          return { exitCode: 0, stdout: 'worktree-agent-a1', stderr: '' };
+        }
+        if (key === 'merge-base HEAD worktree-agent-a1') {
+          return { exitCode: 0, stdout: 'parentcommit', stderr: '' };
+        }
+        if (key === 'diff --diff-filter=D --name-only HEAD...worktree-agent-a1') {
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        if (key === '-C /repo/.claude/worktrees/agent-a1 status --porcelain --untracked-files=all') {
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        if (key.startsWith('merge worktree-agent-a1')) {
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        if (key === 'worktree remove /repo/.claude/worktrees/agent-a1 --force') {
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        if (key === 'branch -D worktree-agent-a1') {
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.entries[0].status, 'merged_removed');
+  });
+
+  test('#1265 still blocks a merge-base outside expected_base and allowed_bases', () => {
+    const plan = {
+      ok: true,
+      repoRoot: '/repo/main',
+      action: 'cleanup_wave',
+      discovery: 'manifest',
+      entries: [{
+        agent_id: 'a1',
+        worktree_path: '/repo/.claude/worktrees/agent-a1',
+        branch: 'worktree-agent-a1',
+        expected_base: 'plancommit',
+        allowed_bases: ['plancommit', 'parentcommit'],
+      }],
+    };
+    const result = executeWorktreeWaveCleanupPlan(plan, {
+      execGit: (args) => {
+        const key = args.join(' ');
+        if (key === '-C /repo/.claude/worktrees/agent-a1 rev-parse --abbrev-ref HEAD') {
+          return { exitCode: 0, stdout: 'worktree-agent-a1', stderr: '' };
+        }
+        if (key === 'merge-base HEAD worktree-agent-a1') {
+          return { exitCode: 0, stdout: 'unrelatedbase', stderr: '' };
+        }
+        throw new Error(`unexpected git call after rejected base: ${key}`);
+      },
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.entries[0].status, 'blocked');
+    assert.equal(result.entries[0].reason, 'base_mismatch');
+  });
+
   test('does not delete a branch when worktree removal fails', () => {
     const calls = [];
     const plan = {

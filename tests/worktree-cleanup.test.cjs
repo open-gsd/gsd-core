@@ -689,7 +689,7 @@ describe('bug #3384: worktree cleanup workflow contracts', () => {
     assert.match(content, /WAVE_WORKTREE_MANIFEST|QUICK_WORKTREE_MANIFEST/);
     assert.match(content, /worktree\.cleanup-wave/);
     assert.match(content, /mktemp "\$\{TMPDIR:-\/tmp\}\/gsd-quick-worktree-/);
-    assert.match(content, /append its returned `\{agent_id, worktree_path, branch, expected_base\}`/);
+    assert.match(content, /append its returned `\{agent_id, worktree_path, branch, expected_base, allowed_bases\}`/);
     // After #3797 architectural fix: quick.md delegates entirely to the SDK's cleanup-wave
     // command (which handles manifest parsing internally). The shell fallback with manual
     // QUICK_WORKTREE_MANIFEST node-e code is removed — the gsd_run call with || exit 1 is the
