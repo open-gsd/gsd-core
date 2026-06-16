@@ -54,12 +54,17 @@ describe('prohibition-enforcement: deterministic test-tier producer (#1259 / ADR
     assert.equal(result.flagged, true);
   });
 
-  test('node-test check that passes -> green + non-empty typed evidence', () => {
+  test('node-test check that passes AND is machine-proven fail-first -> green + non-empty typed evidence', () => {
     const enforce = require(ENFORCEMENT_LIB);
+    // Migrated to machine proof (#1279): green now requires an injected proving prover, not
+    // attestation. `failFirstProof` is asserted on the evidence (FF-07).
     const result = enforce.runProhibitionEnforcement(
       TEST_TIER,
       { kind: 'node-test', target: 'tests/neg.test.cjs', failFirst: true },
-      { runCheck: () => ({ passed: true }) },
+      {
+        runCheck: () => ({ passed: true }),
+        proveFailFirst: () => ({ provenFailFirst: true, method: 'violation-fixture' }),
+      },
     );
     assert.equal(result.status, 'green');
     assert.equal(result.flagged, false);
@@ -72,14 +77,20 @@ describe('prohibition-enforcement: deterministic test-tier producer (#1259 / ADR
     assert.equal(ev.target, 'tests/neg.test.cjs');
     assert.equal(ev.failFirst, true);
     assert.equal(ev.passed, true);
+    assert.equal(ev.failFirstProof, 'violation-fixture',
+      'evidence records HOW fail-first was machine-proven (FF-07)');
   });
 
-  test('lint-rule (no-source-grep) check that passes -> green, evidence carries rule id', () => {
+  test('lint-rule (no-source-grep) check that passes AND is machine-proven -> green, evidence carries rule id', () => {
     const enforce = require(ENFORCEMENT_LIB);
+    // Migrated to machine proof (#1279): inject a proving prover alongside the clean runCheck.
     const result = enforce.runProhibitionEnforcement(
       TEST_TIER,
       { kind: 'lint-rule', rule: 'local/no-source-grep', target: 'tests/', failFirst: true },
-      { runCheck: () => ({ passed: true }) },
+      {
+        runCheck: () => ({ passed: true }),
+        proveFailFirst: () => ({ provenFailFirst: true, method: 'violation-fixture' }),
+      },
     );
     assert.equal(result.status, 'green');
     assert.equal(result.flagged, false);
@@ -171,10 +182,15 @@ describe('prohibition-enforcement: deterministic test-tier producer (#1259 / ADR
 
   test('passing run echoes the requested mode without changing the green verdict', () => {
     const enforce = require(ENFORCEMENT_LIB);
+    // Migrated to machine proof (#1279): inject a proving prover so green is reached via proof.
     const result = enforce.runProhibitionEnforcement(
       TEST_TIER,
       { kind: 'node-test', target: 'tests/neg.test.cjs', failFirst: true },
-      { runCheck: () => ({ passed: true }), mode: 'autonomous' },
+      {
+        runCheck: () => ({ passed: true }),
+        proveFailFirst: () => ({ provenFailFirst: true, method: 'violation-fixture' }),
+        mode: 'autonomous',
+      },
     );
     assert.equal(result.status, 'green', 'a passing wired check is green in autonomous mode too');
     assert.equal(result.mode, 'autonomous');
@@ -452,21 +468,36 @@ describe('prohibition-enforcement real-runner helpers (#1259)', () => {
 describe('prohibition-enforcement REAL runner end-to-end (#1259)', () => {
   const fs = require('node:fs');
 
-  test('a genuine non-vacuous passing node-test greens via the real runner', (t) => {
+  test('a genuine non-vacuous passing node-test proven fail-first greens via the real runner + real prover', (t) => {
     const enforce = require(ENFORCEMENT_LIB);
     const dir = createTempDir('prohib-real-pass-');
     t.after(() => cleanup(dir));
+    // Migrated to the SHIPPING prover (#1279): a REAL negative test that honors the
+    // GSD_PROHIB_SUBJECT convention — it asserts its subject is clean. The clean runCheck run reads
+    // the CLEAN subject (passes, non-vacuous); the prover runs it against a KNOWN-BAD subject so it
+    // goes RED (fail-first proven). Both directions exercised against real `node --test`.
     const tf = path.join(dir, 'neg.test.cjs');
     fs.writeFileSync(tf,
-      "const { test } = require('node:test');\nconst assert = require('node:assert');\ntest('guards the must-NOT', () => { assert.ok(true); });\n");
+      "const { test } = require('node:test');\n" +
+      "const assert = require('node:assert');\n" +
+      "const fs = require('node:fs');\n" +
+      "test('guards the must-NOT: subject is clean', () => {\n" +
+      "  const subject = fs.readFileSync(process.env.GSD_PROHIB_SUBJECT, 'utf-8');\n" +
+      "  assert.ok(!subject.includes('FORBIDDEN'), 'subject must not contain FORBIDDEN');\n" +
+      "});\n");
+    const cleanSubject = path.join(dir, 'clean-subject.txt');
+    fs.writeFileSync(cleanSubject, 'this subject is clean\n');
+    const badFixture = path.join(dir, 'bad-subject.txt');
+    fs.writeFileSync(badFixture, 'this subject contains FORBIDDEN content\n');
     const result = enforce.runProhibitionEnforcement(
       TEST_TIER,
-      { kind: 'node-test', target: tf, failFirst: true },
-      { cwd: dir },
+      { kind: 'node-test', target: tf, failFirst: true, violationFixture: badFixture },
+      { cwd: dir, runCheck: () => ({ passed: true }) },
     );
-    assert.equal(result.status, 'green', 'a real, passing, non-vacuous negative test must green');
+    assert.equal(result.status, 'green', 'a real negative test proven fail-first + clean pass must green');
     assert.equal(result.located, true);
     assert.equal(result.evidence.length, 1);
+    assert.equal(result.evidence[0].failFirstProof, 'violation-fixture');
   });
 
   test('a HANGING node-test fails closed via the bounded timeout (B2: no unbounded subprocess)', (t) => {
@@ -502,18 +533,27 @@ describe('prohibition-enforcement REAL runner end-to-end (#1259)', () => {
     assert.equal(result.evidence.length, 0);
   });
 
-  test('a clean in-tree target greens the lint-rule kind via the real eslint runner (SF-01: plugin loads)', () => {
+  test('a clean in-tree target greens the lint-rule kind via the real eslint + real prover (SF-01: plugin loads)', () => {
     const enforce = require(ENFORCEMENT_LIB);
-    // Runs real `npx eslint --format json src/clock.cts` under the project flat config (so the
-    // `local` plugin loads). src/clock.cts is a clean source with no no-source-grep violation.
+    // Migrated to the SHIPPING prover (#1279): the default real prover lints the committed
+    // `_ff_lint_violation.test.cjs` violationFixture (the rule fires -> fail-first proven) while the
+    // clean runCheck lints src/clock.cts (no violation -> non-vacuous pass). Both via real eslint.
     const result = enforce.runProhibitionEnforcement(
       TEST_TIER,
-      { kind: 'lint-rule', rule: 'local/no-source-grep', target: 'src/clock.cts', failFirst: true },
+      {
+        kind: 'lint-rule',
+        rule: 'local/no-source-grep',
+        target: 'src/clock.cts',
+        failFirst: true,
+        violationFixture: path.join('tests', '_ff_lint_violation.test.cjs'),
+      },
       { cwd: process.cwd() },
     );
-    assert.equal(result.status, 'green', 'a clean target with no no-source-grep violation must green via real eslint');
+    assert.equal(result.status, 'green', 'a clean target proven fail-first must green via real eslint');
     assert.equal(result.kind, 'lint-rule');
     assert.equal(result.evidence[0].rule, 'local/no-source-grep');
+    assert.equal(result.evidence[0].failFirstProof, 'violation-fixture',
+      'the real prover records the proof method (FF-07)');
   });
 
   test('an eslint-IGNORED target does NOT green the lint-rule kind (vacuous-green guard, NEW-BL-01)', () => {
