@@ -72,7 +72,7 @@ node -e "
   for (const r of repos) {
     try {
       const res = execFileSync('git', ['-C', path.join(root, r), 'status', '--porcelain'],
-                               { encoding: 'utf8' });
+                               { encoding: 'utf8', timeout: 10_000 });
       if (res.trim()) out.push(r);
     } catch (_) {}
   }
