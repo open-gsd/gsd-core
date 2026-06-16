@@ -89,6 +89,18 @@ interface CapabilityStateEntry {
   surfaced: boolean;
   /** True when the capability is both installed and surfaced. */
   enabled: boolean;
+  /**
+   * True when the capability is enabled AND its config activation resolves to
+   * true. Config activation is determined by resolving the capability's
+   * `activationKey` (a dotted config key, e.g. `graphify.enabled`) via
+   * `_resolveActivationValue`. When `activationKey` is absent, configActivation
+   * defaults to `true` — the capability has no config gate.
+   *
+   * active = enabled && configActivation
+   *
+   * Note: `enabled` stays exactly `installed && surfaced` (unchanged).
+   */
+  active: boolean;
   /** Resolved hook activation state across steps, gates, and contributions */
   hooks: HookEntry[];
 }
@@ -211,6 +223,20 @@ function resolveCapabilityState(input: ResolveCapabilityStateInput): ResolveCapa
 
     const enabled = installed && surfaced;
 
+    // ── per-capability config activation ──────────────────────────────────────
+    // Resolve the capability's own activationKey (if present). This is the
+    // config-level toggle that gates the whole capability — separate from the
+    // per-hook `when` keys that gate individual hooks. When activationKey is
+    // absent, configActivation defaults to true (no config gate on the cap).
+    // active = enabled && configActivation  (enabled unchanged: installed && surfaced)
+    const activationKey = typeof capObj['activationKey'] === 'string' && capObj['activationKey'].length > 0
+      ? capObj['activationKey']
+      : undefined;
+    const configActivation: boolean = activationKey !== undefined
+      ? _resolveActivationValue(activationKey, config, cwd, registry)
+      : true;
+    const active = enabled && configActivation;
+
     // ── hooks ──────────────────────────────────────────────────────────────────
     // Collect from steps, gates, contributions. Each may have a `when` key.
     // Activation semantics (mirrors loop-resolver.isActive exactly):
@@ -242,7 +268,12 @@ function resolveCapabilityState(input: ResolveCapabilityStateInput): ResolveCapa
           // (mirrors loop-resolver.isActive: `typeof when !== 'string' || when.length === 0` → false)
           configured = false;
         }
-        hooks.push({ point, kind, when: whenRaw, configured, active: enabled && configured });
+        // Hook active = capability-level active AND hook's own config gate.
+        // The capability's `active` constant (= enabled && configActivation) is
+        // used here so that a config-disabled capability (active=false) cannot
+        // produce active hooks even when the hook's own `when` is unconditional
+        // (configured=true). The capability gate cascades to all its hooks.
+        hooks.push({ point, kind, when: whenRaw, configured, active: active && configured });
       }
     }
 
@@ -254,7 +285,7 @@ function resolveCapabilityState(input: ResolveCapabilityStateInput): ResolveCapa
     processHooks(Array.isArray(gatesRaw) ? gatesRaw : [], 'gate');
     processHooks(Array.isArray(contributionsRaw) ? contributionsRaw : [], 'contribution');
 
-    results.push({ id: capId, tier, skills, installed, surfaced, enabled, hooks });
+    results.push({ id: capId, tier, skills, installed, surfaced, enabled, active, hooks });
   }
 
   // Deterministic sort by id for stable output across calls
@@ -533,9 +564,28 @@ function cmdCapabilityState(
   coreOutput(envelope, raw);
 }
 
+/**
+ * Convenience predicate: returns true if the capability identified by `capId`
+ * is active (installed && surfaced && config-enabled) in the current runtime
+ * environment at `cwd`.
+ *
+ * Internally calls `resolveCapabilityRuntimeState(cwd, undefined)` and returns
+ * the `active` field of the matching CapabilityStateEntry.
+ * Returns `false` when the capability is not found in the registry.
+ *
+ * @param capId  Capability identifier (e.g. 'graphify', 'intel')
+ * @param cwd    Project root directory for config resolution
+ */
+function isCapabilityActive(capId: string, cwd: string): boolean {
+  const result = resolveCapabilityRuntimeState(cwd, undefined);
+  const entry = result.capabilities.find((c) => c.id === capId);
+  return entry !== undefined ? entry.active : false;
+}
+
 export = {
   resolveCapabilityState,
   resolveCapabilityRuntimeState,
+  isCapabilityActive,
   cmdCapabilityState,
   // Exported for tests
   _resolveCommandsGsdDir,
