@@ -259,6 +259,61 @@ describe('prohibition-enforcement: deterministic test-tier producer (#1259 / ADR
     assert.equal(result.located, true);
   });
 
+  test('node-test with NO violationFixture fail-closes via the default prover, never falls back to attestation (FF-05)', () => {
+    const enforce = require(ENFORCEMENT_LIB);
+    // Decision-layer/default-prover guard: a node-test descriptor with no violationFixture cannot be
+    // machine-proven (a generic producer cannot synthesize a violation), so the DEFAULT real prover
+    // returns provenFailFirst:false -> hard-gate. We inject NO proveFailFirst so the default path is
+    // exercised. It must NEVER silently weaken to attestation. (Default prover lands in Plans 02-03,
+    // so this is RED now and greens with the producer change.)
+    const result = enforce.runProhibitionEnforcement(
+      TEST_TIER,
+      { kind: 'node-test', target: 'tests/neg.test.cjs', failFirst: true },
+      { runCheck: () => ({ passed: true }) },
+    );
+    assert.notEqual(result.status, 'green',
+      'a node-test with no violationFixture cannot be proven fail-first -> fail-closed (FF-05)');
+    assert.equal(result.flagged, true, 'an un-provable check is flagged');
+    assert.equal(result.located, true, 'the descriptor was located; it just could not be proven');
+  });
+
+  test('a proveFailFirst that THROWS fails closed, never propagates and never greens (FF-05 no-throw)', () => {
+    const enforce = require(ENFORCEMENT_LIB);
+    // No-throw contract on the prove seam, mirroring the runCheck-throws guard: a prover that blows up
+    // must fail closed (treated as provenFailFirst:false), never propagate and never green.
+    const result = enforce.runProhibitionEnforcement(
+      TEST_TIER,
+      { kind: 'node-test', target: 'tests/neg.test.cjs', failFirst: true },
+      {
+        runCheck: () => ({ passed: true }),
+        proveFailFirst: () => { throw new Error('prover blew up'); },
+      },
+    );
+    assert.notEqual(result.status, 'green', 'a throwing prover must never green (FF-05)');
+    assert.equal(result.flagged, true);
+    assert.equal(result.located, true);
+  });
+
+  test('an un-provable fail-first check fails closed in BOTH interactive and autonomous modes (FF-04 / ADR-550 D4)', () => {
+    const enforce = require(ENFORCEMENT_LIB);
+    // A clean pass + a prover that could not prove fail-first must hard-gate in BOTH modes, with the
+    // mode echoed for transparency. Mirrors the existing both-modes failing-check guard (:158).
+    for (const mode of ['interactive', 'autonomous']) {
+      const result = enforce.runProhibitionEnforcement(
+        TEST_TIER,
+        { kind: 'node-test', target: 'tests/neg.test.cjs', failFirst: true },
+        {
+          runCheck: () => ({ passed: true }),
+          proveFailFirst: () => ({ provenFailFirst: false }),
+          mode,
+        },
+      );
+      assert.notEqual(result.status, 'green', `un-provable check must not green in ${mode}`);
+      assert.equal(result.flagged, true, `un-provable check is flagged in ${mode}`);
+      assert.equal(result.mode, mode, 'mode echoed for transparency');
+    }
+  });
+
   test('routeProhibitionEnforcement parses a JSON request file and emits a structured result', (t) => {
     const fs = require('node:fs');
     const { execFileSync } = require('node:child_process');
