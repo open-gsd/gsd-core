@@ -187,7 +187,7 @@ Plans that contain any checkpoint task must set `autonomous: false` in frontmatt
 | `<read_first>` | Files the executor must read before touching anything — the file being modified, any source-of-truth pattern file, any file whose types or conventions must be replicated. |
 | `<action>` | Concrete instructions with exact identifiers, file paths, function signatures, and expected values. Never says "align X with Y" without specifying the target state. Never contains fenced code blocks or full implementations. |
 | `<verify>` | A runnable command or check that proves the task succeeded. Must distinguish pass from fail — `echo "done"` is not valid. |
-| `<acceptance_criteria>` | Verifiable conditions: grep-verifiable strings, command exit codes, observable behaviours. No subjective language ("looks correct", "properly configured"). |
+| `<acceptance_criteria>` | Verifiable conditions: grep-verifiable strings, command exit codes, observable behaviours. No subjective language ("looks correct", "properly configured"). Negative greps (`! grep -Eq 'PAT' file`) are file-scoped — region-scope them (`sed -n`/`awk` range, then grep) when a sibling task needs the construct elsewhere in the same file (#968). |
 | `<done>` | A short measurable statement of the completed outcome. |
 
 ---
