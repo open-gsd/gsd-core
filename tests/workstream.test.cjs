@@ -833,7 +833,7 @@ describe('path traversal rejection', () => {
   });
 
   describe('setActiveWorkstream rejects invalid names directly', () => {
-    const { setActiveWorkstream } = require('../gsd-core/bin/lib/core.cjs');
+    const { setActiveWorkstream } = require('../gsd-core/bin/lib/planning-workspace.cjs');
     for (const name of maliciousNames) {
       test(`throws for ${name}`, () => {
         assert.throws(

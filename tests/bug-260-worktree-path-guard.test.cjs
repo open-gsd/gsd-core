@@ -28,6 +28,8 @@ const { cleanup } = require('./helpers.cjs');
 
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-worktree-path-guard.js');
 const INSTALL_SRC = path.join(__dirname, '..', 'bin', 'install.js');
+// ADR-857 phase 5f-1b: settings-json hook registration moved to runtime-hooks-surface.cts.
+const HOOKS_SURFACE_SRC = path.join(__dirname, '..', 'src', 'runtime-hooks-surface.cts');
 
 /**
  * Resolve symlinks in a path so that we compare the same canonical form
@@ -321,26 +323,58 @@ describe('bug #260: gsd-worktree-path-guard.js', () => {
   // 8. Adversarial: `..` traversal is normalised before the containment check (Codex finding #1)
   describe('dot-dot traversal is blocked', () => {
     test('path with .. that escapes the worktree is blocked', () => {
-      // /worktree/src/../../../main-repo/file.ts resolves outside the worktree
-      const traversalPath = path.join(worktreeDir, 'src', '..', '..', '..', mainRepo.replace(/^\//, ''), 'file.ts');
-      const payload = {
-        cwd: worktreeDir,
-        tool_name: 'Edit',
-        tool_input: { file_path: traversalPath },
-      };
-      const result = runHook(worktreeDir, payload);
-      // After path.resolve, the path should equal something outside the worktree
-      const resolved = path.resolve(traversalPath);
-      if (resolved.startsWith(worktreeDir + path.sep) || resolved === worktreeDir) {
-        // The traversal happened to stay inside — skip this assertion
-        assert.ok(true, 'traversal resolved inside worktree (environment-dependent)');
-      } else {
+      // Construct the traversal target inside a SEPARATE tmpdir that is
+      // guaranteed to be outside the worktree on every platform (no symlink
+      // ambiguity).  We create the directory so that the hook's
+      // nearestExistingDir() walk finds it and dispatches git --show-toplevel
+      // on it — which will either fail (not a git repo → block) or return a
+      // different toplevel (different repo → block).  Either path through the
+      // hook exits 2.
+      const externalDir = realp(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-260-ext-')));
+      try {
+        // Sanity: the external directory must not be inside the worktree.
+        assert.ok(
+          !externalDir.startsWith(worktreeDir + path.sep) && externalDir !== worktreeDir,
+          `externalDir "${externalDir}" must be outside worktreeDir "${worktreeDir}"`
+        );
+
+        // Build a traversal path that uses ../ segments to climb out of the
+        // worktree and into externalDir.  path.resolve() will normalise it to
+        // externalDir/file.ts, which is outside the worktree by construction.
+        // We compute the number of segments needed to reach the filesystem root
+        // from worktreeDir so the traversal always lands at the right level
+        // regardless of how deep the worktree path is.
+        const depthFromRoot = worktreeDir.split(path.sep).filter(Boolean).length;
+        const upSegments = Array(depthFromRoot + 1).fill('..').join(path.sep);
+        // Strip the leading separator from externalDir so path.join treats it
+        // as relative segments when appended after the .. chain.
+        const externalRelative = externalDir.replace(/^[/\\]+/, '');
+        const traversalPath = path.join(worktreeDir, upSegments, externalRelative, 'file.ts');
+
+        // Confirm the resolved path is truly outside the worktree (test integrity guard).
+        const resolved = path.resolve(traversalPath);
+        assert.ok(
+          !resolved.startsWith(worktreeDir + path.sep) && resolved !== worktreeDir,
+          `Traversal resolved to "${resolved}" which is still inside worktreeDir "${worktreeDir}". ` +
+          `This means the test itself is broken, not a production bug.`
+        );
+
+        const payload = {
+          cwd: worktreeDir,
+          tool_name: 'Edit',
+          tool_input: { file_path: traversalPath },
+        };
+        const result = runHook(worktreeDir, payload);
         assert.strictEqual(result.status, 2,
           `Traversal path "${traversalPath}" resolves to "${resolved}" which is outside the worktree. ` +
-          `Must be blocked. Got exit ${result.status}. stderr: ${result.stderr}`
+          `Must be blocked (exit 2). Got exit ${result.status}. stderr: ${result.stderr}`
         );
         const parsed = JSON.parse(result.stdout);
-        assert.strictEqual(parsed.decision, 'block');
+        assert.strictEqual(parsed.decision, 'block',
+          `Expected decision:"block", got: ${JSON.stringify(parsed)}`
+        );
+      } finally {
+        cleanup(externalDir);
       }
     });
   });
@@ -384,7 +418,12 @@ describe('install.js guard for gsd-worktree-path-guard.js', () => {
   let src;
 
   before(() => {
-    src = fs.readFileSync(INSTALL_SRC, 'utf-8');
+    // ADR-857 phase 5f-1b: hook registration moved to runtime-hooks-surface.cts.
+    // Concatenate both sources so structural assertions find patterns in either file.
+    const installSrc = fs.readFileSync(INSTALL_SRC, 'utf-8');
+    let hooksSurfaceSrc = '';
+    try { hooksSurfaceSrc = fs.readFileSync(HOOKS_SURFACE_SRC, 'utf-8'); } catch { /* ok */ }
+    src = installSrc + '\n' + hooksSurfaceSrc;
   });
 
   test('install.js has hasWorktreePathGuardHook variable', () => {

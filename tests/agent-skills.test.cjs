@@ -773,3 +773,510 @@ describe('trusted_global_roots e2e CLI (#52)', () => {
     assert.strictEqual(r.ir.block, '', 'block must be empty when "/" is the trusted root (rejected as too broad)');
   });
 });
+
+// ─── bug #1243: plugin-namespaced agent skills ─────────────────────────────────
+// allow-test-rule: source-text-is-the-product (#1243)
+
+describe('bug #1243: plugin-namespaced agent skills', () => {
+  let tmpDir;
+  let fakeHome;
+  let globalSkillsDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    fakeHome = fs.mkdtempSync(path.join(require('os').tmpdir(), 'gsd-1243-home-'));
+    globalSkillsDir = path.join(fakeHome, '.claude', 'skills');
+    fs.mkdirSync(globalSkillsDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+    cleanup(fakeHome);
+  });
+
+  function createGlobalSkill1243(name) {
+    const skillDir = path.join(globalSkillsDir, name);
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), `# ${name}\nGlobal skill content.\n`);
+    return skillDir;
+  }
+
+  // ─── happy path ────────────────────────────────────────────────────────────
+
+  test('happy: global:coderabbit:code-review (claude) emits directive naming coderabbit:code-review, no @-line, no path', () => {
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      agent_skills: { 'gsd-executor': ['global:coderabbit:code-review'] },
+    });
+
+    const r = runAgentSkillsJson(
+      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+    );
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    // Must contain the namespaced name
+    assert.ok(
+      r.ir.block.includes('coderabbit:code-review'),
+      `block must contain namespaced name, got: ${r.ir.block}`
+    );
+    // Must NOT be a @-include line
+    assert.ok(
+      !r.ir.block.includes('- @'),
+      `block must not contain @-include line, got: ${r.ir.block}`
+    );
+    // Must NOT contain filesystem path or plugins/cache
+    assert.ok(
+      !r.ir.block.includes('plugins/cache'),
+      `block must not contain plugins/cache, got: ${r.ir.block}`
+    );
+    // Must have the <agent_skills> wrapper
+    assert.ok(
+      r.ir.block.includes('<agent_skills>'),
+      `block must contain <agent_skills> wrapper, got: ${r.ir.block}`
+    );
+  });
+
+  // ─── mixed: path-resolvable + namespaced ────────────────────────────────────
+
+  test('mixed: path-resolvable global + namespaced → @-include AND directive in block', () => {
+    createGlobalSkill1243('my-local-skill');
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      agent_skills: {
+        'gsd-executor': ['global:my-local-skill', 'global:vendor:remote-skill'],
+      },
+    });
+
+    const r = runAgentSkillsJson(
+      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+    );
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    // The path-resolvable one must be a @-include
+    assert.ok(
+      r.ir.block.includes('- @') && r.ir.block.includes('my-local-skill/SKILL.md'),
+      `block must contain @-include for path-resolvable skill, got: ${r.ir.block}`
+    );
+    // The namespaced one must be a directive, not a @-include
+    assert.ok(
+      r.ir.block.includes('vendor:remote-skill'),
+      `block must contain namespaced directive, got: ${r.ir.block}`
+    );
+  });
+
+  // ─── precedence: bare unresolved vs resolved ─────────────────────────────────
+
+  test('precedence: bare global:foo not-on-disk → not found/skipped, no directive', () => {
+    // foo is NOT created on disk
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      agent_skills: { 'gsd-executor': ['global:foo'] },
+    });
+
+    const r = runAgentSkillsJson(
+      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+    );
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.block, '', `bare unresolved name must produce empty block, got: ${r.ir.block}`);
+  });
+
+  test('precedence: bare global:foo that resolves → @-include (existing path behavior)', () => {
+    createGlobalSkill1243('foo');
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      agent_skills: { 'gsd-executor': ['global:foo'] },
+    });
+
+    const r = runAgentSkillsJson(
+      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+    );
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.ok(
+      r.ir.block.includes('- @') && r.ir.block.includes('foo/SKILL.md'),
+      `path-resolvable bare name must produce @-include, got: ${r.ir.block}`
+    );
+  });
+
+  // ─── negative validation ─────────────────────────────────────────────────────
+
+  test('negative: global:../evil rejected', () => {
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      agent_skills: { 'gsd-executor': ['global:../evil'] },
+    });
+    const r = runAgentSkillsJson(
+      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+    );
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.block, '', `traversal must be rejected, got: ${r.ir.block}`);
+  });
+
+  test('negative: global:a::b rejected (empty segment)', () => {
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      agent_skills: { 'gsd-executor': ['global:a::b'] },
+    });
+    const r = runAgentSkillsJson(
+      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+    );
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.block, '', `double-colon must be rejected, got: ${r.ir.block}`);
+  });
+
+  test('negative: global::x rejected (leading colon)', () => {
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      agent_skills: { 'gsd-executor': ['global::x'] },
+    });
+    const r = runAgentSkillsJson(
+      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+    );
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.block, '', `leading colon must be rejected, got: ${r.ir.block}`);
+  });
+
+  test('negative: global:x: rejected (trailing colon)', () => {
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      agent_skills: { 'gsd-executor': ['global:x:'] },
+    });
+    const r = runAgentSkillsJson(
+      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+    );
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.block, '', `trailing colon must be rejected, got: ${r.ir.block}`);
+  });
+
+  test('negative: global:a/b rejected (slash in name)', () => {
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      agent_skills: { 'gsd-executor': ['global:a/b'] },
+    });
+    const r = runAgentSkillsJson(
+      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+    );
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.block, '', `slash in name must be rejected, got: ${r.ir.block}`);
+  });
+
+  test('negative: global: (empty name) rejected', () => {
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      agent_skills: { 'gsd-executor': ['global:'] },
+    });
+    const r = runAgentSkillsJson(
+      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+    );
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.block, '', `empty name must be rejected, got: ${r.ir.block}`);
+  });
+
+  // ─── cross-runtime ──────────────────────────────────────────────────────────
+
+  test('cross-runtime: namespaced + codex runtime → no directive (skipped/warned)', () => {
+    writeConfig(tmpDir, {
+      runtime: 'codex',
+      agent_skills: { 'gsd-executor': ['global:vendor:remote-skill'] },
+    });
+
+    const r = runAgentSkillsJson(
+      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+    );
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(
+      r.ir.block,
+      '',
+      `namespaced skill on non-claude runtime must produce empty block, got: ${r.ir.block}`
+    );
+  });
+
+  test('cross-runtime: namespaced + claude runtime → directive emitted', () => {
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      agent_skills: { 'gsd-executor': ['global:vendor:remote-skill'] },
+    });
+
+    const r = runAgentSkillsJson(
+      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+    );
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.ok(
+      r.ir.block.includes('vendor:remote-skill'),
+      `claude runtime must emit directive for namespaced skill, got: ${r.ir.block}`
+    );
+  });
+
+  // ─── regression (Hyrum) ─────────────────────────────────────────────────────
+
+  test('HYRUM regression: include-only block is BYTE-IDENTICAL to expected format', () => {
+    // This test asserts the FULL block output is byte-identical for an include-only
+    // config (path-resolvable global skill + project-relative local skill).
+    // It protects the ~22 workflow consumers that depend on this exact block shape.
+    createGlobalSkill1243('shadcn');
+    const projectSkillDir = path.join(tmpDir, 'skills', 'local');
+    fs.mkdirSync(projectSkillDir, { recursive: true });
+    fs.writeFileSync(path.join(projectSkillDir, 'SKILL.md'), '# local\n');
+
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      agent_skills: { 'gsd-executor': ['global:shadcn', 'skills/local'] },
+    });
+
+    const r = runAgentSkillsJson(
+      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+    );
+    assert.ok(r.success, `Command failed: ${r.error}`);
+
+    // Compute the expected absolute path for the global skill (resolved via fakeHome)
+    const expectedGlobalPath = path.join(fakeHome, '.claude', 'skills', 'shadcn', 'SKILL.md');
+    // The local path is always project-relative (not absolute)
+    const expectedLocalPath = 'skills/local/SKILL.md';
+
+    const expectedBlock = [
+      '<agent_skills>',
+      'Read these user-configured skills:',
+      `- @${expectedGlobalPath.replace(/\\/g, '/')}`,
+      `- @${expectedLocalPath}`,
+      '</agent_skills>',
+    ].join('\n');
+
+    assert.strictEqual(
+      r.ir.block.replace(/\\/g, '/'),
+      expectedBlock,
+      `HYRUM: block must be byte-identical to expected include-only format.\nExpected: ${JSON.stringify(expectedBlock)}\nGot:      ${JSON.stringify(r.ir.block)}`
+    );
+  });
+
+  test('regression: empty/missing config → empty block', () => {
+    const r = runAgentSkillsJson(
+      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+    );
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.block, '', `missing config must produce empty block, got: ${r.ir.block}`);
+  });
+
+  test('BYTE-IDENTICAL mixed-block: path-resolvable global + plugin-namespaced → single section, interleaved, exact format', () => {
+    // Regression for code-review finding: docs previously showed a bogus two-section format
+    // with a separate "Load these plugin-provided skills using the Skill tool:" header.
+    // The ACTUAL emitted block is a single <agent_skills> section where @-includes and
+    // plugin-provided directives are interleaved in config order under the same header.
+    //
+    // Config order: global:my-local-skill (path-resolvable) FIRST, then global:vendor:remote-skill (namespaced).
+    createGlobalSkill1243('my-local-skill');
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      agent_skills: {
+        'gsd-executor': ['global:my-local-skill', 'global:vendor:remote-skill'],
+      },
+    });
+
+    const r = runAgentSkillsJson(
+      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+    );
+    assert.ok(r.success, `Command failed: ${r.error}`);
+
+    // Compute the expected @-include path (absolute path to the resolved global skill)
+    const expectedInclude = path.join(fakeHome, '.claude', 'skills', 'my-local-skill', 'SKILL.md');
+
+    const expectedBlock = [
+      '<agent_skills>',
+      'Read these user-configured skills:',
+      `- @${expectedInclude.replace(/\\/g, '/')}`,
+      '- Load the `vendor:remote-skill` skill via the Skill tool before proceeding (plugin-provided).',
+      '</agent_skills>',
+    ].join('\n');
+
+    assert.strictEqual(
+      r.ir.block.replace(/\\/g, '/'),
+      expectedBlock,
+      `BYTE-IDENTICAL: mixed block must be a single section with @-include and directive interleaved.\nExpected: ${JSON.stringify(expectedBlock)}\nGot:      ${JSON.stringify(r.ir.block)}`
+    );
+
+    // Structural assertions: must NOT contain any secondary header
+    assert.ok(
+      !r.ir.block.includes('Load these plugin-provided skills using the Skill tool:'),
+      `block must NOT contain the bogus two-section header, got: ${r.ir.block}`
+    );
+  });
+
+  // ─── grant: Skill tool in consumer agent frontmatter ─────────────────────────
+
+  test('grant: all 22 agent_skills consumer agents have Skill in their tools frontmatter', () => {
+    const CONSUMER_AGENTS = [
+      'gsd-advisor-researcher',
+      'gsd-assumptions-analyzer',
+      'gsd-code-fixer',
+      'gsd-code-reviewer',
+      'gsd-codebase-mapper',
+      'gsd-debugger',
+      'gsd-doc-writer',
+      'gsd-eval-auditor',
+      'gsd-executor',
+      'gsd-integration-checker',
+      'gsd-nyquist-auditor',
+      'gsd-phase-researcher',
+      'gsd-plan-checker',
+      'gsd-planner',
+      'gsd-project-researcher',
+      'gsd-research-synthesizer',
+      'gsd-roadmapper',
+      'gsd-security-auditor',
+      'gsd-ui-auditor',
+      'gsd-ui-checker',
+      'gsd-ui-researcher',
+      'gsd-verifier',
+    ];
+    const AGENTS_DIR = path.join(__dirname, '..', 'agents');
+
+    /**
+     * Extract tool names from an agent file's frontmatter.
+     * Handles both inline CSV format ("tools: Read, Write") and
+     * YAML block sequence format ("tools:\n  - Read\n  - Write").
+     */
+    function extractTools(content) {
+      // Parse frontmatter between first pair of --- delimiters
+      const lines = content.split('\n');
+      let fmStart = -1;
+      let fmEnd = -1;
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].trim() === '---') {
+          if (fmStart === -1) fmStart = i;
+          else { fmEnd = i; break; }
+        }
+      }
+      if (fmStart === -1 || fmEnd === -1) return [];
+      const fmLines = lines.slice(fmStart + 1, fmEnd);
+      // Find 'tools:' line
+      const toolsIdx = fmLines.findIndex((l) => /^tools:/.test(l));
+      if (toolsIdx === -1) return [];
+      const toolsLine = fmLines[toolsIdx];
+      const inlineValue = toolsLine.replace(/^tools:\s*/, '').trim();
+      if (inlineValue) {
+        // Inline CSV format: "tools: Read, Write, ..."
+        return inlineValue.split(',').map((t) => t.trim()).filter(Boolean);
+      }
+      // Block sequence format: next lines starting with "  - ..."
+      const tools = [];
+      for (let i = toolsIdx + 1; i < fmLines.length; i++) {
+        const m = fmLines[i].match(/^\s+-\s+(\S.*)/);
+        if (!m) break; // end of block list
+        tools.push(m[1].trim());
+      }
+      return tools;
+    }
+
+    const failures = [];
+    for (const agentName of CONSUMER_AGENTS) {
+      const agentPath = path.join(AGENTS_DIR, agentName + '.md');
+      assert.ok(fs.existsSync(agentPath), `Agent file not found: ${agentPath}`);
+      const content = fs.readFileSync(agentPath, 'utf8');
+      const toolsList = extractTools(content);
+      if (!toolsList.includes('Skill')) {
+        failures.push(`${agentName}: tools=[${toolsList.join(', ')}] — missing Skill`);
+      }
+    }
+    assert.deepStrictEqual(
+      failures,
+      [],
+      `These consumer agents are missing "Skill" in their tools frontmatter:\n${failures.join('\n')}`
+    );
+  });
+
+  test('grant: exact set of agents with Skill equals the 22 consumers (drift guard)', () => {
+    // This test asserts that the SET of agents declaring Skill in their frontmatter
+    // tools: field is EXACTLY the 22 known consumers — no more, no less.
+    //
+    // If a new agent legitimately needs Skill outside this set, add it to
+    // KNOWN_SKILL_AGENTS with a comment explaining why.
+    //
+    // Empirically verified 2026-06-14: no agent outside the 22 consumers declares
+    // Skill in its frontmatter tools: — KNOWN_SKILL_AGENTS is the 22 consumers only.
+    const KNOWN_SKILL_AGENTS = new Set([
+      // ── 22 agent_skills consumers (spawn child agents + inject skill context) ──
+      'gsd-advisor-researcher',
+      'gsd-assumptions-analyzer',
+      'gsd-code-fixer',
+      'gsd-code-reviewer',
+      'gsd-codebase-mapper',
+      'gsd-debugger',
+      'gsd-doc-writer',
+      'gsd-eval-auditor',
+      'gsd-executor',
+      'gsd-integration-checker',
+      'gsd-nyquist-auditor',
+      'gsd-phase-researcher',
+      'gsd-plan-checker',
+      'gsd-planner',
+      'gsd-project-researcher',
+      'gsd-research-synthesizer',
+      'gsd-roadmapper',
+      'gsd-security-auditor',
+      'gsd-ui-auditor',
+      'gsd-ui-checker',
+      'gsd-ui-researcher',
+      'gsd-verifier',
+    ]);
+
+    // allow-test-rule: source-text-is-the-product (#1243)
+    const AGENTS_DIR = path.join(__dirname, '..', 'agents');
+    const agentFiles = fs.readdirSync(AGENTS_DIR).filter((f) => f.startsWith('gsd-') && f.endsWith('.md'));
+
+    /**
+     * Extract tool names from an agent file's frontmatter (same logic as above).
+     * Handles both inline CSV and YAML block-sequence forms.
+     */
+    function extractToolsForDriftGuard(content) {
+      const lines = content.split('\n');
+      let fmStart = -1, fmEnd = -1;
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].trim() === '---') {
+          if (fmStart === -1) fmStart = i;
+          else { fmEnd = i; break; }
+        }
+      }
+      if (fmStart === -1 || fmEnd === -1) return [];
+      const fmLines = lines.slice(fmStart + 1, fmEnd);
+      const toolsIdx = fmLines.findIndex((l) => /^tools:/.test(l));
+      if (toolsIdx === -1) return [];
+      const toolsLine = fmLines[toolsIdx];
+      const inlineValue = toolsLine.replace(/^tools:\s*/, '').trim();
+      if (inlineValue) return inlineValue.split(',').map((t) => t.trim()).filter(Boolean);
+      const tools = [];
+      for (let i = toolsIdx + 1; i < fmLines.length; i++) {
+        const m = fmLines[i].match(/^\s+-\s+(\S.*)/);
+        if (!m) break;
+        tools.push(m[1].trim());
+      }
+      return tools;
+    }
+
+    // Collect actual set of agents with Skill in frontmatter
+    const actualSkillSet = new Set();
+    for (const file of agentFiles) {
+      const name = file.replace('.md', '');
+      const content = fs.readFileSync(path.join(AGENTS_DIR, file), 'utf8');
+      const tools = extractToolsForDriftGuard(content);
+      if (tools.includes('Skill')) actualSkillSet.add(name);
+    }
+
+    // 1. Every consumer MUST have Skill
+    const missingSkill = [];
+    for (const agent of KNOWN_SKILL_AGENTS) {
+      if (!actualSkillSet.has(agent)) missingSkill.push(agent);
+    }
+    assert.deepStrictEqual(
+      missingSkill,
+      [],
+      `These consumer agents are MISSING "Skill" in their tools frontmatter:\n${missingSkill.join('\n')}`
+    );
+
+    // 2. The actual skill set must EQUAL the known set exactly (no extras)
+    const unexpectedSkill = [];
+    for (const agent of actualSkillSet) {
+      if (!KNOWN_SKILL_AGENTS.has(agent)) unexpectedSkill.push(agent);
+    }
+    assert.deepStrictEqual(
+      unexpectedSkill,
+      [],
+      `These agents declare "Skill" but are NOT in KNOWN_SKILL_AGENTS:\n${unexpectedSkill.join('\n')}\nIf this is intentional, add the agent to KNOWN_SKILL_AGENTS with a comment.`
+    );
+  });
+});

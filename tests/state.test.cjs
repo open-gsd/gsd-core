@@ -9,8 +9,9 @@
 const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
-const { runGsdTools, cleanup } = require('./helpers.cjs');
+const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 
 describe('state-snapshot command', () => {
@@ -732,8 +733,20 @@ describe('stateReplaceFieldWithFallback', () => {
 
   test('returns content unchanged when neither field matches', () => {
     const content = '# State\n\n**Phase:** 3\n';
-    const result = stateReplaceFieldWithFallback(content, 'Status', 'state', 'New');
+    let warning = '';
+    const origErrWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk) => {
+      warning += String(chunk);
+      return true;
+    };
+    let result;
+    try {
+      result = stateReplaceFieldWithFallback(content, 'Status', 'state', 'New');
+    } finally {
+      process.stderr.write = origErrWrite;
+    }
     assert.strictEqual(result, content, 'content should be unchanged');
+    assert.match(warning, /STATE\.md field "Status"/, 'missing field warning should be emitted');
   });
 
   test('prefers primary over fallback when both exist', () => {
@@ -2162,6 +2175,155 @@ describe('state planned-phase command', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// bug #1070 regression: "Complete ✓" terminal status must yield to planned-phase
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('bug #1070: "Complete ✓" terminal status yields to Ready to execute on planned-phase', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createFixture();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  // Full STATE.md shape that matches the canonical fixture used across state tests.
+  // Both **Status:** frontmatter and Current Position `Status:` are set to the given value.
+  function makeStateMd(statusValue) {
+    return `# Project State
+
+**Current Phase:** 1
+**Current Phase Name:** setup
+**Total Phases:** 5
+**Current Plan:** 0
+**Total Plans in Phase:** 0
+**Status:** ${statusValue}
+**Last Activity:** 2026-03-20
+**Last Activity Description:** Phase 1 complete
+
+## Current Position
+Phase: 1 of 5 (setup)
+Plan: 0 of 5 in current phase
+Status: ${statusValue}
+Last activity: 2026-03-20 -- Phase 1 complete
+Progress: [##########] 20%
+
+## Decisions Made
+
+| Phase | Decision | Rationale |
+|-------|----------|-----------|
+`;
+  }
+
+  // Case 1: the bug — Complete ✓ blocks the state machine
+  test('case 1: Complete ✓ in both frontmatter and Current Position is overwritten by planned-phase', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      makeStateMd('Complete ✓')
+    );
+
+    const result = runGsdTools(
+      ['state', 'planned-phase', '--phase', '2', '--name', 'Core', '--plans', '5'],
+      tmpDir
+    );
+    assert.ok(result.success, `Command should succeed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+
+    // The updated array must include Status (both paths ran the replacement)
+    assert.ok(
+      Array.isArray(output.updated) && output.updated.includes('Status'),
+      `Expected output.updated to include "Status", got: ${JSON.stringify(output.updated)}`
+    );
+
+    const stateContent = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+
+    // The checkmark form must be gone
+    assert.ok(
+      !stateContent.includes('Complete ✓'),
+      'STATE.md must not contain "Complete ✓" after planned-phase'
+    );
+
+    // Frontmatter **Status:** line must now be "Ready to execute"
+    const fmStatusMatch = stateContent.match(/\*\*Status:\*\*\s*(.+)/);
+    assert.ok(fmStatusMatch, '**Status:** frontmatter line not found');
+    assert.strictEqual(
+      fmStatusMatch[1].trim(),
+      'Ready to execute',
+      `Frontmatter **Status:** should be "Ready to execute", got: "${fmStatusMatch[1].trim()}"`
+    );
+
+    // Current Position Status: line must also be "Ready to execute"
+    const posMatch = stateContent.match(/## Current Position\s*\n([\s\S]*?)(?=\n##|$)/i);
+    assert.ok(posMatch, 'Current Position section not found');
+    const posStatusMatch = posMatch[1].match(/^Status:\s*(.+)/m);
+    assert.ok(posStatusMatch, 'Status field not found in Current Position section');
+    assert.strictEqual(
+      posStatusMatch[1].trim(),
+      'Ready to execute',
+      `Current Position Status should be "Ready to execute", got: "${posStatusMatch[1].trim()}"`
+    );
+  });
+
+  // Case 2: a genuinely executor-authored non-terminal status must NOT be overwritten
+  // (frontmatter **Status:** path via stateReplaceFieldIfTemplate)
+  test('case 2: executor-authored non-terminal status is preserved by planned-phase (#397 narrowness check)', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      makeStateMd('Blocked on infra review')
+    );
+
+    const result = runGsdTools(
+      ['state', 'planned-phase', '--phase', '2', '--name', 'Core', '--plans', '5'],
+      tmpDir
+    );
+    assert.ok(result.success, `Command should succeed: ${result.error}`);
+
+    const stateContent = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+
+    // The executor-authored Status must survive in the frontmatter
+    const fmStatusMatch = stateContent.match(/\*\*Status:\*\*\s*(.+)/);
+    assert.ok(fmStatusMatch, '**Status:** frontmatter line not found');
+    assert.strictEqual(
+      fmStatusMatch[1].trim(),
+      'Blocked on infra review',
+      `Frontmatter **Status:** should be preserved as "Blocked on infra review", got: "${fmStatusMatch[1].trim()}"`
+    );
+  });
+
+  // Case 3: executor-authored non-terminal status in the Current Position section
+  // must NOT be overwritten (exercises updateCurrentPositionFields in src/state.cts,
+  // a separate code path from the frontmatter matcher).
+  test('case 3: executor-authored non-terminal status in Current Position is preserved by planned-phase', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      makeStateMd('Blocked on infra review')
+    );
+
+    const result = runGsdTools(
+      ['state', 'planned-phase', '--phase', '2', '--name', 'Core', '--plans', '5'],
+      tmpDir
+    );
+    assert.ok(result.success, `Command should succeed: ${result.error}`);
+
+    const stateContent = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+
+    // Locate the Current Position section and verify the Status line there.
+    const posMatch = stateContent.match(/## Current Position\s*\n([\s\S]*?)(?=\n##|$)/i);
+    assert.ok(posMatch, 'Current Position section not found');
+    const posStatusMatch = posMatch[1].match(/^Status:\s*(.+)/m);
+    assert.ok(posStatusMatch, 'Status field not found in Current Position section');
+    assert.strictEqual(
+      posStatusMatch[1].trim(),
+      'Blocked on infra review',
+      `Current Position Status should be preserved as "Blocked on infra review", got: "${posStatusMatch[1].trim()}"`
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // state validate (Step 4 — Gate 1)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -2715,3 +2877,1292 @@ describe('state complete-phase: decorated Phase fallback (#2761 nitpick)', () =>
 // ─────────────────────────────────────────────────────────────────────────────
 // summary-extract command
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// state add-roadmap-evolution (regression: bug #1140)
+//
+// `query state.add-roadmap-evolution` was unreachable: the CJS state router
+// listed it in its `unsupported` map with a message pointing back at the exact
+// command that just failed ("...is SDK-only. Use: gsd-tools query
+// state.add-roadmap-evolution ..."), and no CJS handler existed after the SDK
+// retirement (ADR-0174). Every `/gsd:phase insert` and `/gsd:phase --edit` run
+// hit a circular dead end. The fix re-implements `cmdStateAddRoadmapEvolution`
+// in CJS and wires it into the state router. These cases follow the CLI/parser
+// QA matrix in CONTRIBUTING.md (all invocations use argv arrays, no shell).
+// ─────────────────────────────────────────────────────────────────────────────
+describe('state add-roadmap-evolution (bug #1140)', () => {
+  let tmpDir;
+
+  const STATE_WITH_ACC_CONTEXT = `# Project State
+
+## Current Status
+
+**Current Phase:** 103.1
+
+## Accumulated Context
+
+### Decisions
+
+- Some earlier decision
+`;
+
+  const writeState = (dir, body) => fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'), body);
+  const readState = (dir) => fs.readFileSync(path.join(dir, '.planning', 'STATE.md'), 'utf-8');
+  // Body of `## Accumulated Context` bounded by the next h2 (or EOF), so
+  // placement assertions prove a subsection sits INSIDE that section.
+  const accumulatedContextBody = (state) => {
+    const m = state.match(/##\s*Accumulated Context\s*\n([\s\S]*?)(?=\n##[^#]|$)/);
+    return m ? m[1] : null;
+  };
+
+  beforeEach(() => {
+    tmpDir = createFixture();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  // The literal issue repro: negative proof the circular dead end is gone.
+  test('query state.add-roadmap-evolution no longer routes to the circular SDK-only rejection', () => {
+    writeState(tmpDir, STATE_WITH_ACC_CONTEXT);
+
+    const result = runGsdTools(
+      ['query', 'state.add-roadmap-evolution',
+        '--phase', '103.2', '--action', 'inserted', '--after', '103.1',
+        '--note', 'test', '--urgent'],
+      tmpDir
+    );
+
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.ok(
+      !/SDK-only/i.test(result.output) && !/SDK-only/i.test(result.error || ''),
+      `must not emit the circular "SDK-only" rejection; got output=${result.output} error=${result.error}`
+    );
+    const parsed = JSON.parse(result.output);
+    assert.strictEqual(parsed.added, true);
+    assert.match(parsed.entry, /\(URGENT\)$/);
+  });
+
+  test('appends an entry, creating the ### Roadmap Evolution subsection under ## Accumulated Context', () => {
+    writeState(tmpDir, STATE_WITH_ACC_CONTEXT);
+
+    const result = runGsdTools(
+      ['state', 'add-roadmap-evolution',
+        '--phase', '103.2', '--action', 'inserted', '--after', '103.1',
+        '--note', 'Add OAuth login', '--urgent'],
+      tmpDir
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const state = readState(tmpDir);
+    assert.ok(
+      state.includes('- Phase 103.2 inserted after Phase 103.1: Add OAuth login (URGENT)'),
+      `entry not found in:\n${state}`
+    );
+    assert.strictEqual((state.match(/^### Roadmap Evolution$/gm) || []).length, 1, 'subsection must not be duplicated');
+    const accBody = accumulatedContextBody(state);
+    assert.ok(accBody && accBody.includes('### Roadmap Evolution'), 'subsection must be inside Accumulated Context');
+    assert.ok(accBody.includes('- Phase 103.2 inserted after Phase 103.1: Add OAuth login (URGENT)'), 'entry must be inside Accumulated Context');
+    assert.ok(state.includes('- Some earlier decision'), 'existing content preserved');
+  });
+
+  test('omitting --urgent and --after produces a plain entry', () => {
+    writeState(tmpDir, STATE_WITH_ACC_CONTEXT);
+
+    const result = runGsdTools(
+      ['state', 'add-roadmap-evolution', '--phase', '103.2', '--action', 'edited',
+        '--note', 'edited fields: goal, depends_on'],
+      tmpDir
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const state = readState(tmpDir);
+    assert.ok(state.includes('- Phase 103.2 edited: edited fields: goal, depends_on'), `missing entry:\n${state}`);
+    assert.ok(!/\(URGENT\)/.test(state), 'no URGENT suffix when --urgent absent');
+  });
+
+  test('creates ### Roadmap Evolution when ## Accumulated Context exists without it', () => {
+    writeState(tmpDir, `# Project State
+
+## Accumulated Context
+
+### Decisions
+
+- prior decision
+
+## Next Steps
+
+- do the thing
+`);
+
+    const result = runGsdTools(
+      ['state', 'add-roadmap-evolution', '--phase', '4', '--action', 'added', '--note', 'caching layer'],
+      tmpDir
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const state = readState(tmpDir);
+    assert.ok(state.includes('### Roadmap Evolution'), 'subsection created');
+    assert.ok(state.includes('- Phase 4 added: caching layer'), 'entry appended');
+    const subIdx = state.indexOf('### Roadmap Evolution');
+    const nextIdx = state.indexOf('## Next Steps');
+    assert.ok(subIdx !== -1 && nextIdx !== -1 && subIdx < nextIdx, 'subsection must be inside Accumulated Context');
+    assert.ok(state.includes('- do the thing'), 'sibling section preserved');
+  });
+
+  test('creates both ## Accumulated Context and ### Roadmap Evolution when neither exists', () => {
+    writeState(tmpDir, `# Project State
+
+## Current Status
+
+**Current Phase:** 1
+`);
+
+    const result = runGsdTools(
+      ['state', 'add-roadmap-evolution', '--phase', '2', '--action', 'inserted', '--after', '1', '--note', 'bootstrap'],
+      tmpDir
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).added, true);
+
+    const state = readState(tmpDir);
+    assert.strictEqual((state.match(/^## Accumulated Context$/gm) || []).length, 1, 'Accumulated Context created once');
+    assert.strictEqual((state.match(/^### Roadmap Evolution$/gm) || []).length, 1, 'subsection created once');
+    assert.ok(state.includes('- Phase 2 inserted after Phase 1: bootstrap'), 'entry appended');
+  });
+
+  test('targets the subsection under Accumulated Context, never a decoy heading elsewhere', () => {
+    writeState(tmpDir, `# Project State
+
+## Accumulated Context
+
+### Decisions
+
+- prior decision
+
+## Reference Notes
+
+### Roadmap Evolution
+
+- DECOY entry that must never be touched
+`);
+
+    const result = runGsdTools(
+      ['state', 'add-roadmap-evolution', '--phase', '8', '--action', 'inserted', '--note', 'real entry'],
+      tmpDir
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const state = readState(tmpDir);
+    const accBody = accumulatedContextBody(state);
+    assert.ok(accBody && accBody.includes('- Phase 8 inserted: real entry'), 'entry must be inside Accumulated Context');
+    assert.ok(state.includes('- DECOY entry that must never be touched'), 'decoy preserved');
+    assert.ok(!accBody.includes('DECOY'), 'decoy must not be pulled into Accumulated Context');
+    assert.strictEqual((state.match(/^### Roadmap Evolution$/gm) || []).length, 2, 'a new subsection is created under Accumulated Context; decoy heading remains');
+  });
+
+  test('flattens a multiline note into a single bullet so dedupe and rendering hold', () => {
+    writeState(tmpDir, STATE_WITH_ACC_CONTEXT);
+
+    const notePath = path.join(tmpDir, 'note.txt');
+    fs.writeFileSync(notePath, 'line one\nline two\nline three\n');
+
+    const first = runGsdTools(
+      ['state', 'add-roadmap-evolution', '--phase', '9', '--action', 'edited', '--note-file', notePath],
+      tmpDir
+    );
+    assert.ok(first.success, `Command failed: ${first.error}`);
+
+    const state = readState(tmpDir);
+    assert.ok(state.includes('- Phase 9 edited: line one line two line three'), `note not flattened:\n${state}`);
+    assert.ok(!/\n\s*line two/.test(state), 'continuation lines must not spill outside the bullet');
+
+    const second = runGsdTools(
+      ['state', 'add-roadmap-evolution', '--phase', '9', '--action', 'edited', '--note-file', notePath],
+      tmpDir
+    );
+    assert.strictEqual(JSON.parse(second.output).reason, 'duplicate', 'flattened entry must dedupe on replay');
+  });
+
+  test('deduplicates an identical entry on replay', () => {
+    writeState(tmpDir, STATE_WITH_ACC_CONTEXT);
+
+    const args = ['state', 'add-roadmap-evolution', '--phase', '103.2', '--action', 'inserted',
+      '--after', '103.1', '--note', 'Add OAuth login', '--urgent'];
+
+    const first = runGsdTools(args, tmpDir);
+    assert.ok(first.success, `first call failed: ${first.error}`);
+    assert.strictEqual(JSON.parse(first.output).added, true);
+
+    const second = runGsdTools(args, tmpDir);
+    assert.ok(second.success, `second call failed: ${second.error}`);
+    const parsed = JSON.parse(second.output);
+    assert.strictEqual(parsed.added, false, 'replay must not add');
+    assert.strictEqual(parsed.reason, 'duplicate');
+
+    const state = readState(tmpDir);
+    const occurrences = (state.match(/- Phase 103\.2 inserted after Phase 103\.1: Add OAuth login \(URGENT\)/g) || []).length;
+    assert.strictEqual(occurrences, 1, 'entry must appear exactly once after replay');
+  });
+
+  test('CRLF STATE.md: appends under Accumulated Context while preserving later sections', () => {
+    const crlf = [
+      '# Project State', '',
+      '## Accumulated Context', '',
+      '### Decisions', '',
+      '- prior decision', '',
+      '## Blockers', '',
+      '- keep me', '',
+      '## History', '',
+      '- also keep me', '',
+    ].join('\r\n');
+    writeState(tmpDir, crlf);
+
+    const result = runGsdTools(
+      ['state', 'add-roadmap-evolution', '--phase', '4', '--action', 'inserted', '--note', 'crlf safe'],
+      tmpDir
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const state = readState(tmpDir);
+    assert.ok(state.includes('## Blockers'), '## Blockers must be preserved');
+    assert.strictEqual((state.match(/^## Blockers/gm) || []).length, 1, '## Blockers not duplicated/corrupted');
+    assert.ok(state.includes('- keep me'), 'Blockers content must be preserved');
+    assert.ok(state.includes('## History'), '## History must be preserved');
+    assert.ok(state.includes('- also keep me'), 'History content must be preserved');
+    assert.ok(/### Roadmap Evolution/.test(state), 'subsection created');
+    assert.ok(/- Phase 4 inserted: crlf safe/.test(state), 'entry appended');
+  });
+
+  test('missing --note is rejected without mutating STATE.md', () => {
+    writeState(tmpDir, STATE_WITH_ACC_CONTEXT);
+    const before = readState(tmpDir);
+
+    const result = runGsdTools(
+      ['state', 'add-roadmap-evolution', '--phase', '5', '--action', 'inserted'],
+      tmpDir
+    );
+    const combined = `${result.output}\n${result.error || ''}`;
+    assert.match(combined, /note required/, 'should report the missing-note error');
+    assert.ok(!/"added"\s*:\s*true/.test(result.output), 'must not report added:true');
+    assert.ok(!/\bat .*\(.*:\d+:\d+\)/.test(result.error || ''), 'no stack trace in failure output');
+    assert.strictEqual(readState(tmpDir), before, 'STATE.md not mutated on missing note');
+  });
+
+  test('empty --note "" is rejected without mutating STATE.md', () => {
+    writeState(tmpDir, STATE_WITH_ACC_CONTEXT);
+    const before = readState(tmpDir);
+
+    runGsdTools(['state', 'add-roadmap-evolution', '--phase', '5', '--action', 'inserted', '--note', ''], tmpDir);
+    assert.strictEqual(readState(tmpDir), before, 'STATE.md must be untouched for empty note');
+  });
+
+  test('whitespace-only --note is rejected without mutating STATE.md', () => {
+    writeState(tmpDir, STATE_WITH_ACC_CONTEXT);
+    const before = readState(tmpDir);
+
+    runGsdTools(['state', 'add-roadmap-evolution', '--phase', '5', '--action', 'inserted', '--note', '   '], tmpDir);
+    assert.strictEqual(readState(tmpDir), before, 'STATE.md must be untouched for whitespace-only note');
+  });
+
+  test('--note followed by a flag-shaped token is treated as missing note', () => {
+    writeState(tmpDir, STATE_WITH_ACC_CONTEXT);
+    const before = readState(tmpDir);
+
+    runGsdTools(['state', 'add-roadmap-evolution', '--phase', '5', '--note', '--weird'], tmpDir);
+    assert.strictEqual(readState(tmpDir), before, 'flag-shaped value must not be consumed as the note');
+  });
+
+  test('duplicate --phase flags do not crash; first value wins', () => {
+    writeState(tmpDir, STATE_WITH_ACC_CONTEXT);
+
+    const result = runGsdTools(
+      ['state', 'add-roadmap-evolution', '--phase', '7', '--phase', '9', '--action', 'inserted', '--note', 'dup flags'],
+      tmpDir
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const state = readState(tmpDir);
+    assert.ok(state.includes('- Phase 7 inserted: dup flags'), `expected phase 7 entry:\n${state}`);
+    assert.ok(!state.includes('Phase 9'), 'second --phase value must not be used');
+  });
+
+  test('shell metacharacters in --note are stored literally, never executed', () => {
+    writeState(tmpDir, STATE_WITH_ACC_CONTEXT);
+
+    // Probe path lives under the test's tmpDir (no hardcoded /tmp literal, which
+    // the Windows-parity guard forbids). If command substitution executed, this
+    // file would exist afterward.
+    const probe = path.join(tmpDir, 'gsd-pwn-1140');
+    const hostile = `pwn $(touch ${probe}) \`id\` ; rm -rf / && echo done`;
+    const result = runGsdTools(
+      ['state', 'add-roadmap-evolution', '--phase', '5', '--action', 'inserted', '--note', hostile],
+      tmpDir
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const state = readState(tmpDir);
+    assert.ok(state.includes(hostile), 'hostile note must be stored verbatim');
+    assert.ok(!fs.existsSync(probe), 'command substitution must not have executed');
+  });
+
+  test('Unicode note content is preserved', () => {
+    writeState(tmpDir, STATE_WITH_ACC_CONTEXT);
+
+    const note = 'café — 日本語 — 🚀 reroute';
+    const result = runGsdTools(
+      ['state', 'add-roadmap-evolution', '--phase', '5', '--action', 'edited', '--note', note],
+      tmpDir
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.ok(readState(tmpDir).includes(note), 'Unicode preserved');
+  });
+
+  test('missing STATE.md returns a structured error, not a crash', () => {
+    // Guarantee STATE.md is absent (force: no-op if the fixture didn't create one).
+    // eslint-disable-next-line local/no-raw-rmsync-in-tests -- deleting a single fixture file to simulate the missing-STATE.md case, not a temp-dir teardown
+    fs.rmSync(path.join(tmpDir, '.planning', 'STATE.md'), { force: true });
+
+    const result = runGsdTools(
+      ['state', 'add-roadmap-evolution', '--phase', '5', '--action', 'inserted', '--note', 'x'],
+      tmpDir
+    );
+    const combined = `${result.output}\n${result.error || ''}`;
+    assert.match(combined, /STATE\.md not found/, 'should report STATE.md not found');
+    assert.ok(!/\bat .*\(.*:\d+:\d+\)/.test(result.error || ''), 'no stack trace');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// regressions: table-format STATE.md (#1162)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Minimal STATE.md that uses a pipe-table for the Current Position section.
+ * This is the format that triggered the "Field not found" silent failure.
+ */
+function buildTableFormatState(opts) {
+  const {
+    status = 'Ready to plan',
+    phase = '3',
+    planCount = '4',
+    lastActivity = '2026-01-01',
+  } = opts || {};
+
+  return [
+    '---',
+    'gsd_state_version: 1.0',
+    'status: planning',
+    '---',
+    '',
+    '# GSD State',
+    '',
+    '## Current Position',
+    '',
+    '| Field | Value |',
+    '| --- | --- |',
+    `| Status | ${status} |`,
+    `| Phase | ${phase} |`,
+    `| Total Plans in Phase | ${planCount} |`,
+    `| Last Activity | ${lastActivity} |`,
+    '',
+    '## Accumulated Context',
+    '',
+    'Some context here.',
+    '',
+  ].join('\n');
+}
+
+/**
+ * STATE.md that uses bold inline format (the existing working format).
+ * Included as a control case to confirm we did not break bold-field support.
+ */
+function buildBoldFormatState(opts) {
+  const {
+    status = 'Ready to plan',
+    phase = '3',
+  } = opts || {};
+
+  return [
+    '---',
+    'gsd_state_version: 1.0',
+    'status: planning',
+    '---',
+    '',
+    '# GSD State',
+    '',
+    '## Current Position',
+    '',
+    `**Status:** ${status}`,
+    `**Phase:** ${phase}`,
+    '',
+  ].join('\n');
+}
+
+describe('regressions: table-format STATE.md (#1162)', () => {
+  let tmpDir;
+  let statePath;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-1162-');
+    statePath = path.join(tmpDir, '.planning', 'STATE.md');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  // ── Happy path: table-format field replacement ──────────────────────────
+
+  test('state update rewrites table-cell Status value', () => {
+    fs.writeFileSync(statePath, buildTableFormatState({ status: 'Ready to plan' }));
+
+    const result = runGsdTools(['state', 'update', 'Status', 'Ready to execute'], tmpDir);
+
+    // Command must report success
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const parsed = JSON.parse(result.output);
+    assert.equal(parsed.updated, true, 'expected updated:true but got: ' + JSON.stringify(parsed));
+
+    // The table cell must be rewritten on disk
+    const written = fs.readFileSync(statePath, 'utf-8');
+    assert.ok(
+      written.includes('| Status | Ready to execute |'),
+      'Table cell not rewritten. STATE.md content:\n' + written,
+    );
+    // Original value must be gone
+    assert.ok(
+      !written.includes('| Status | Ready to plan |'),
+      'Old table cell value still present in STATE.md',
+    );
+  });
+
+  test('state update rewrites table-cell value for arbitrary field', () => {
+    fs.writeFileSync(statePath, buildTableFormatState({ lastActivity: '2026-01-01' }));
+
+    const result = runGsdTools(['state', 'update', 'Last Activity', '2026-06-13'], tmpDir);
+
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const parsed = JSON.parse(result.output);
+    assert.equal(parsed.updated, true, 'expected updated:true');
+
+    const written = fs.readFileSync(statePath, 'utf-8');
+    assert.ok(
+      written.includes('| Last Activity | 2026-06-13 |'),
+      'Last Activity table cell not rewritten. Content:\n' + written,
+    );
+  });
+
+  test('state update is case-insensitive for table field names', () => {
+    // Table may have lowercase "status" in the first cell
+    const content = [
+      '---',
+      'gsd_state_version: 1.0',
+      '---',
+      '',
+      '## Current Position',
+      '',
+      '| Field | Value |',
+      '| --- | --- |',
+      '| status | Ready to plan |',
+      '',
+    ].join('\n');
+    fs.writeFileSync(statePath, content);
+
+    const result = runGsdTools(['state', 'update', 'status', 'Ready to execute'], tmpDir);
+
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const parsed = JSON.parse(result.output);
+    assert.equal(parsed.updated, true, 'case-insensitive table match failed');
+  });
+
+  // ── Negative: separator row must NOT be treated as a field ───────────────
+
+  test('separator row | --- | --- | is not matched as a field', () => {
+    // The field name "---" is rejected by the field-name validator before
+    // stateReplaceField is even called.  The command exits with a non-zero
+    // status and a plain-text error, NOT a JSON { updated: false } result.
+    // The key invariant is that the file is never corrupted.
+    const originalContent = buildTableFormatState();
+    fs.writeFileSync(statePath, originalContent);
+
+    const result = runGsdTools(['state', 'update', '---', 'injected'], tmpDir);
+
+    // The validator rejects '---' as an invalid field name — command must fail
+    // OR, if somehow the command succeeds, updated must be false.
+    if (result.success) {
+      // Unlikely path — if the validator is relaxed in future, still must not update.
+      let parsed;
+      try { parsed = JSON.parse(result.output); } catch { parsed = null; }
+      if (parsed) {
+        assert.equal(parsed.updated, false, 'separator row incorrectly matched as a field');
+      }
+    }
+    // Either way: the file must be untouched (no 'injected' value written)
+    const written = fs.readFileSync(statePath, 'utf-8');
+    assert.ok(!written.includes('injected'), 'separator row replacement leaked into file');
+  });
+
+  // ── Regression: bold-format still works after the fix ────────────────────
+
+  test('state update bold-format still works after table support added', () => {
+    fs.writeFileSync(statePath, buildBoldFormatState({ status: 'Ready to plan' }));
+
+    const result = runGsdTools(['state', 'update', 'Status', 'Ready to execute'], tmpDir);
+
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const parsed = JSON.parse(result.output);
+    assert.equal(parsed.updated, true, 'bold-format update broken after fix');
+
+    const written = fs.readFileSync(statePath, 'utf-8');
+    assert.ok(
+      written.includes('**Status:** Ready to execute'),
+      'Bold-format field not rewritten. Content:\n' + written,
+    );
+  });
+
+  // ── updateCurrentPositionFields table support ─────────────────────────────
+
+  test('state planned-phase updates table-cell Status via updateCurrentPositionFields', () => {
+    // cmdStatePlannedPhase uses updateCurrentPositionFields internally;
+    // verify it also handles the table format.
+    const content = [
+      '---',
+      'gsd_state_version: 1.0',
+      'status: planning',
+      '---',
+      '',
+      '# GSD State',
+      '',
+      '**Status:** Ready to plan',
+      '**Total Plans in Phase:** 0',
+      '**Last Activity:** 2026-01-01',
+      '**Last Activity Description:** initial',
+      '',
+      '## Current Position',
+      '',
+      '| Field | Value |',
+      '| --- | --- |',
+      '| Status | Ready to plan |',
+      '| Last Activity | 2026-01-01 |',
+      '',
+    ].join('\n');
+    fs.writeFileSync(statePath, content);
+
+    // Create a minimal phase dir so planned-phase can count plans
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '1-test-phase');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '1-01-PLAN.md'), '# Plan 1');
+
+    const result = runGsdTools(['state', 'planned-phase', '1', '--plan-count', '1'], tmpDir);
+
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const written = fs.readFileSync(statePath, 'utf-8');
+    // The Current Position table cell should now be "Ready to execute"
+    assert.ok(
+      written.includes('| Status | Ready to execute |'),
+      'planned-phase did not update table-cell Status. Content:\n' + written,
+    );
+  });
+
+  // ── Adversarial / edge cases ──────────────────────────────────────────────
+
+  test('table field with extra whitespace in cells is handled', () => {
+    const content = [
+      '---',
+      'gsd_state_version: 1.0',
+      '---',
+      '',
+      '## Current Position',
+      '',
+      '|  Status  |  Ready to plan  |',
+      '',
+    ].join('\n');
+    fs.writeFileSync(statePath, content);
+
+    const result = runGsdTools(['state', 'update', 'Status', 'Ready to execute'], tmpDir);
+
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const parsed = JSON.parse(result.output);
+    assert.equal(parsed.updated, true, 'extra-whitespace table cell not matched');
+  });
+
+  test('updating one row in a multi-row table does not corrupt adjacent rows', () => {
+    // Regression: updating `Status` must leave the `Phase` row untouched.
+    // NOTE: values containing literal '|' (e.g., "blocked | waiting") are NOT
+    // supported — the current value regex [^|\n]*? stops at the first pipe.
+    // Escaped-pipe values are out of scope for single-token status fields.
+    const content = [
+      '---',
+      'gsd_state_version: 1.0',
+      '---',
+      '',
+      '## Current Position',
+      '',
+      '| Status | Ready to plan |',
+      '| Phase | 3 |',
+      '',
+    ].join('\n');
+    fs.writeFileSync(statePath, content);
+
+    // Normal replacement — verify Phase row is untouched
+    const result = runGsdTools(['state', 'update', 'Status', 'Ready to execute'], tmpDir);
+
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const written = fs.readFileSync(statePath, 'utf-8');
+    assert.ok(written.includes('| Phase | 3 |'), 'Phase row was corrupted during Status update');
+  });
+
+  test('CRLF line endings in table format are handled', () => {
+    const content = buildTableFormatState({ status: 'Ready to plan' }).replace(/\n/g, '\r\n');
+    fs.writeFileSync(statePath, content);
+
+    const result = runGsdTools(['state', 'update', 'Status', 'Ready to execute'], tmpDir);
+
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const parsed = JSON.parse(result.output);
+    assert.equal(parsed.updated, true, 'CRLF table format not handled');
+  });
+
+  test('missing STATE.md returns updated:false gracefully', () => {
+    // No STATE.md written — verify the command does not throw
+    const missingDir = createTempProject('gsd-1162-missing-');
+    try {
+      const result = runGsdTools(['state', 'update', 'Status', 'Ready to execute'], missingDir);
+      const parsed = JSON.parse(result.output);
+      assert.equal(parsed.updated, false, 'missing STATE.md should return updated:false');
+    } finally {
+      cleanup(missingDir);
+    }
+  });
+});
+
+describe('regressions: table-format STATE.md (#1162) — updateCurrentPositionFields preserve-authored invariants', () => {
+  let tmpDir;
+  let statePath;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-1162-f2-');
+    statePath = path.join(tmpDir, '.planning', 'STATE.md');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  // Helper: a STATE.md with table-format Current Position section.
+  // We use planned-phase to exercise updateCurrentPositionFields indirectly,
+  // because that is the call-site that writes Status/Last Activity.
+  function buildMixedFormatState(opts) {
+    const {
+      status = 'Ready to plan',
+      lastActivity = '2026-01-01',
+    } = opts || {};
+    return [
+      '---',
+      'gsd_state_version: 1.0',
+      'status: planning',
+      '---',
+      '',
+      '# GSD State',
+      '',
+      '**Status:** Ready to plan',
+      '**Total Plans in Phase:** 0',
+      `**Last Activity:** ${lastActivity}`,
+      '**Last Activity Description:** initial',
+      '',
+      '## Current Position',
+      '',
+      '| Field | Value |',
+      '| --- | --- |',
+      `| Status | ${status} |`,
+      `| Last Activity | ${lastActivity} |`,
+      '',
+    ].join('\n');
+  }
+
+  // (a) Custom Status in table format must NOT be overwritten by planned-phase.
+  test('(Finding 2a) custom Status in table format is preserved by updateCurrentPositionFields', () => {
+    // "Blocked: waiting on infra" is executor-authored — not in KNOWN_TEMPLATE_DEFAULTS.
+    // planned-phase calls updateCurrentPositionFields with status="Ready to execute".
+    // The table-format branch must honour the same guard as the inline branch:
+    // only overwrite when the existing value is a known template default.
+    const content = buildMixedFormatState({ status: 'Blocked: waiting on infra', lastActivity: '2026-01-01' });
+    fs.writeFileSync(statePath, content);
+
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '2-test-phase');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '2-01-PLAN.md'), '# Plan\n');
+
+    const result = runGsdTools(['state', 'planned-phase', '2', '--plan-count', '1'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const written = fs.readFileSync(statePath, 'utf-8');
+    assert.ok(
+      written.includes('| Status | Blocked: waiting on infra |'),
+      'Custom Status was overwritten by updateCurrentPositionFields table branch.\nContent:\n' + written,
+    );
+    assert.ok(
+      !written.includes('| Status | Ready to execute |'),
+      'Custom Status replaced with Ready to execute in table branch.\nContent:\n' + written,
+    );
+  });
+
+  // (b) Narrative Last Activity in table format must NOT be overwritten.
+  test('(Finding 2b) narrative Last Activity in table format is preserved', () => {
+    // "2026-02-15 -- blocked" has trailing prose — executor-authored.
+    // planned-phase calls updateCurrentPositionFields with today's ISO date.
+    // Must be preserved.
+    const content = buildMixedFormatState({ status: 'Ready to plan', lastActivity: '2026-02-15 -- blocked' });
+    fs.writeFileSync(statePath, content);
+
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '2-test-phase');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '2-01-PLAN.md'), '# Plan\n');
+
+    const result = runGsdTools(['state', 'planned-phase', '2', '--plan-count', '1'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const written = fs.readFileSync(statePath, 'utf-8');
+    assert.ok(
+      written.includes('| Last Activity | 2026-02-15 -- blocked |'),
+      'Narrative Last Activity was overwritten in table branch.\nContent:\n' + written,
+    );
+  });
+
+  // (c) Known-default Status and bare-date Last Activity ARE updated.
+  test('(Finding 2c) known-default Status and bare-date Last Activity ARE updated in table format', () => {
+    // "Ready to plan" is a known default; "2026-01-01" is a bare ISO date.
+    // Both should be replaced by planned-phase.
+    const content = buildMixedFormatState({ status: 'Ready to plan', lastActivity: '2026-01-01' });
+    fs.writeFileSync(statePath, content);
+
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '2-test-phase');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '2-01-PLAN.md'), '# Plan\n');
+
+    const result = runGsdTools(['state', 'planned-phase', '2', '--plan-count', '1'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const written = fs.readFileSync(statePath, 'utf-8');
+    assert.ok(
+      written.includes('| Status | Ready to execute |'),
+      'Known-default Status not updated in table branch.\nContent:\n' + written,
+    );
+    // Last Activity should be today's date (not 2026-01-01)
+    assert.ok(
+      !written.includes('| Last Activity | 2026-01-01 |'),
+      'Bare-date Last Activity was NOT updated in table branch.\nContent:\n' + written,
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #1255 — begin/complete-phase advance status for pipe-table STATE.md
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Regression tests for bug #1255.
+ *
+ * `state begin-phase` / `state complete-phase` do not advance the frontmatter
+ * `status` when the body `Status` field is expressed as a pipe-table row
+ * (`| Status | Planning |`) instead of an inline key-value pair
+ * (`Status: Planning`).
+ *
+ * Root cause: `stateReplaceField(content, 'Status', ...)` is called with the
+ * full file content (frontmatter + body). The plain-text pattern
+ * (`^Status:\s*(.+)` with /im flag) matches `status: planning` in the YAML
+ * frontmatter block rather than the body pipe-table row. The pipe-table row
+ * is never updated. `syncStateFrontmatter` then re-derives from the body (which
+ * still says 'Planning') and the #1230 delta heuristic preserves the old
+ * frontmatter value ('planning'), so the status never advances to 'executing'.
+ *
+ * Fix: strip frontmatter before all body-field replacements in
+ * `cmdStateBeginPhase` and `cmdStateCompletePhase`, then reassemble.
+ *
+ * Additional bugs fixed (#1255 follow-up):
+ * 1. complete-phase Phase table cell had label-duplication: `Phase: 1 — COMPLETE`
+ *    instead of bare `1 — COMPLETE`.
+ * 2. begin-phase and complete-phase Last-activity table branches wrote bare date
+ *    instead of date + narrative (inconsistent with inline branch).
+ */
+
+function make1255TempProject(stateContent) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-1255-'));
+  const planningDir = path.join(dir, '.planning');
+  fs.mkdirSync(planningDir, { recursive: true });
+  // Minimal ROADMAP so buildStateFrontmatter can resolve phase counts
+  fs.writeFileSync(path.join(planningDir, 'ROADMAP.md'), [
+    '# ROADMAP',
+    '',
+    '## Phase 1: setup:',
+    '- [ ] Step 1',
+    '',
+  ].join('\n'), 'utf8');
+  fs.writeFileSync(path.join(planningDir, 'STATE.md'), stateContent, 'utf8');
+  return dir;
+}
+
+// STATE.md where Status lives entirely in pipe-table rows (no inline "Status: ..." anywhere)
+// This is the form a hand-edited or legacy STATE.md might use, and is a
+// supported body format (do NOT silently rewrite to inline).
+const TABLE_STATUS_PLANNING_1255 = `---
+gsd_state_version: '1.0'
+status: planning
+---
+
+# Project State
+
+## Configuration
+
+| Current Phase | 1 |
+| Current Phase Name | setup |
+| Total Plans in Phase | 3 |
+| Current Plan | 1 |
+| Status | Planning |
+| Last Activity | 2026-06-01 |
+| Last Activity Description | Roadmap created |
+
+## Current Position
+
+| Phase | 1 (setup) |
+| Plan | 1 of 3 |
+| Status | Planning |
+| Last activity | 2026-06-01 |
+`;
+
+// STATE.md with Status as pipe-table but execution already in progress (complete-phase scenario)
+const TABLE_STATUS_EXECUTING_1255 = `---
+gsd_state_version: '1.0'
+status: executing
+---
+
+# Project State
+
+## Configuration
+
+| Current Phase | 1 |
+| Current Phase Name | setup |
+| Total Plans in Phase | 3 |
+| Current Plan | 3 |
+| Status | Executing Phase 1 |
+| Last Activity | 2026-06-01 |
+| Last Activity Description | Phase 1 execution started |
+
+## Current Position
+
+| Phase | 1 (setup) |
+| Plan | 3 of 3 |
+| Status | Executing Phase 1 |
+| Last activity | 2026-06-01 |
+`;
+
+describe('#1255 — begin/complete-phase advance status for pipe-table STATE.md', () => {
+  // begin-phase: planning → executing
+  test('begin-phase advances frontmatter status planning→executing when body Status is pipe-table', () => {
+    const dir = make1255TempProject(TABLE_STATUS_PLANNING_1255);
+    try {
+      const result = runGsdTools(
+        ['state', 'begin-phase', '--phase', '1', '--name', 'setup', '--plans', '3'],
+        dir
+      );
+      assert.ok(result.success, `begin-phase failed: ${result.error || result.output}`);
+
+      const after = fs.readFileSync(path.join(dir, '.planning', 'STATE.md'), 'utf8');
+
+      // Primary assertion: frontmatter status must advance to 'executing'
+      const fmMatch = after.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+      assert.ok(fmMatch, 'STATE.md must have YAML frontmatter after begin-phase');
+      const fm = fmMatch[1];
+      assert.ok(
+        /^status:\s*executing\s*$/m.test(fm),
+        `frontmatter status must be 'executing' after begin-phase on pipe-table STATUS; got frontmatter:\n${fm}`
+      );
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  // begin-phase: body pipe-table row must also be updated
+  test('begin-phase updates body pipe-table Status cell to Executing Phase N', () => {
+    const dir = make1255TempProject(TABLE_STATUS_PLANNING_1255);
+    try {
+      runGsdTools(
+        ['state', 'begin-phase', '--phase', '1', '--name', 'setup', '--plans', '3'],
+        dir
+      );
+      const after = fs.readFileSync(path.join(dir, '.planning', 'STATE.md'), 'utf8');
+      // The pipe-table Status cell in the Configuration table must be updated
+      assert.ok(
+        /\|\s*Status\s*\|\s*Executing Phase 1\s*\|/i.test(after),
+        `body pipe-table Status cell must be updated to 'Executing Phase 1'; got:\n${after}`
+      );
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  // begin-phase: Current Position table cells — exact cell values
+  test('begin-phase updates Current Position pipe-table Status and Last activity cells correctly', () => {
+    const dir = make1255TempProject(TABLE_STATUS_PLANNING_1255);
+    try {
+      runGsdTools(
+        ['state', 'begin-phase', '--phase', '1', '--name', 'setup', '--plans', '3'],
+        dir
+      );
+      const after = fs.readFileSync(path.join(dir, '.planning', 'STATE.md'), 'utf8');
+
+      // Extract the ## Current Position section only, to avoid matching Configuration rows
+      const cpMatch = after.match(/##\s*Current Position\s*\n([\s\S]*?)(?=\n##|$)/i);
+      assert.ok(cpMatch, '## Current Position section must exist');
+      const cpSection = cpMatch[1];
+
+      // Status cell in Current Position: bare value, not prefixed
+      assert.ok(
+        /\|\s*Status\s*\|\s*Executing Phase 1\s*\|/i.test(cpSection),
+        `Current Position Status cell must be 'Executing Phase 1'; got Current Position:\n${cpSection}`
+      );
+
+      // Last activity cell must include date + narrative (not bare date)
+      assert.ok(
+        /\|\s*Last activity\s*\|[^|]*--\s*Phase 1 execution started\s*\|/i.test(cpSection),
+        `Current Position Last activity cell must include narrative '-- Phase 1 execution started'; got Current Position:\n${cpSection}`
+      );
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  // complete-phase: executing → completed
+  test('complete-phase advances frontmatter status executing→completed when body Status is pipe-table', () => {
+    const dir = make1255TempProject(TABLE_STATUS_EXECUTING_1255);
+    try {
+      const result = runGsdTools(
+        ['state', 'complete-phase', '--phase', '1'],
+        dir
+      );
+      assert.ok(result.success, `complete-phase failed: ${result.error || result.output}`);
+
+      const after = fs.readFileSync(path.join(dir, '.planning', 'STATE.md'), 'utf8');
+
+      // Primary assertion: frontmatter status must be 'completed'
+      const fmMatch = after.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+      assert.ok(fmMatch, 'STATE.md must have YAML frontmatter after complete-phase');
+      const fm = fmMatch[1];
+      assert.ok(
+        /^status:\s*completed\s*$/m.test(fm),
+        `frontmatter status must be 'completed' after complete-phase on pipe-table STATUS; got frontmatter:\n${fm}`
+      );
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  // complete-phase: body pipe-table row must also be updated
+  test('complete-phase updates body pipe-table Status cell to Phase N complete', () => {
+    const dir = make1255TempProject(TABLE_STATUS_EXECUTING_1255);
+    try {
+      runGsdTools(
+        ['state', 'complete-phase', '--phase', '1'],
+        dir
+      );
+      const after = fs.readFileSync(path.join(dir, '.planning', 'STATE.md'), 'utf8');
+      assert.ok(
+        /\|\s*Status\s*\|\s*Phase 1 complete\s*\|/i.test(after),
+        `body pipe-table Status cell must be updated to 'Phase 1 complete'; got:\n${after}`
+      );
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  // complete-phase: Current Position table cells — exact cell values (catches bugs 1 and 2)
+  test('complete-phase updates Current Position pipe-table Phase/Status/Last-activity cells correctly', () => {
+    const dir = make1255TempProject(TABLE_STATUS_EXECUTING_1255);
+    try {
+      runGsdTools(
+        ['state', 'complete-phase', '--phase', '1'],
+        dir
+      );
+      const after = fs.readFileSync(path.join(dir, '.planning', 'STATE.md'), 'utf8');
+
+      // Extract the ## Current Position section only, to avoid matching Configuration rows
+      const cpMatch = after.match(/##\s*Current Position\s*\n([\s\S]*?)(?=\n##|$)/i);
+      assert.ok(cpMatch, '## Current Position section must exist');
+      const cpSection = cpMatch[1];
+
+      // Bug 1: Phase cell must be bare '1 — COMPLETE', NOT 'Phase: 1 — COMPLETE'
+      assert.ok(
+        /\|\s*Phase\s*\|\s*1\s*—\s*COMPLETE\s*\|/.test(cpSection),
+        `Current Position Phase cell must be '1 — COMPLETE' (no 'Phase:' prefix in cell value); got Current Position:\n${cpSection}`
+      );
+      assert.ok(
+        !/\|\s*Phase\s*\|\s*Phase:\s*1/.test(cpSection),
+        `Current Position Phase cell must NOT contain 'Phase: 1' (label-duplication bug); got Current Position:\n${cpSection}`
+      );
+
+      // Status cell in Current Position: bare value
+      assert.ok(
+        /\|\s*Status\s*\|\s*Phase 1 complete\s*\|/i.test(cpSection),
+        `Current Position Status cell must be 'Phase 1 complete'; got Current Position:\n${cpSection}`
+      );
+
+      // Bug 2: Last activity cell must include date + narrative (not bare date)
+      assert.ok(
+        /\|\s*Last activity\s*\|[^|]*--\s*Phase 1 marked complete\s*\|/i.test(cpSection),
+        `Current Position Last activity cell must include narrative '-- Phase 1 marked complete'; got Current Position:\n${cpSection}`
+      );
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  // Regression guard: inline Status format must still work (existing behavior unchanged)
+  test('begin-phase still works correctly with inline Status: format (regression guard)', () => {
+    const inlineStateMd = `---
+gsd_state_version: '1.0'
+status: planning
+---
+
+# Project State
+
+Current Phase: 1
+Current Phase Name: setup
+Total Plans in Phase: 3
+Current Plan: 1
+Status: Planning
+Last Activity: 2026-06-01
+Last Activity Description: Roadmap created
+
+## Current Position
+Phase: 1 (setup)
+Plan: 1 of 3
+Status: Planning
+Last activity: 2026-06-01 -- Roadmap created
+`;
+    const dir = make1255TempProject(inlineStateMd);
+    try {
+      const result = runGsdTools(
+        ['state', 'begin-phase', '--phase', '1', '--name', 'setup', '--plans', '3'],
+        dir
+      );
+      assert.ok(result.success, `begin-phase failed on inline format: ${result.error || result.output}`);
+      const after = fs.readFileSync(path.join(dir, '.planning', 'STATE.md'), 'utf8');
+      const fmMatch = after.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+      assert.ok(fmMatch, 'must have frontmatter');
+      const fm = fmMatch[1];
+      assert.ok(
+        /^status:\s*executing\s*$/m.test(fm),
+        `inline Status: format: frontmatter status must be 'executing'; got:\n${fm}`
+      );
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
+
+// #1257 — planned-phase + begin-phase pipe-table regressions
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Regression tests for bug #1257.
+ *
+ * Finding 1 (INFERRED — reproduced here empirically):
+ *   `cmdStatePlannedPhase` calls `stateReplaceFieldIfTemplate(content, 'Status', …)`
+ *   on the FULL file content (including YAML frontmatter).  The plain-text pattern
+ *   `^Status:\s*(.+)` (case-insensitive) matches the YAML frontmatter `status: planning`
+ *   line BEFORE reaching the body pipe-table row `| Status | Planning |`.  The pipe-table
+ *   cell is never updated.  `syncStateFrontmatter` re-derives from the unchanged body
+ *   and the #1230 delta heuristic preserves the original frontmatter value, so the
+ *   status never advances to 'Ready to execute'.
+ *   Smoking-gun: src/state.cts:2015 — `stateReplaceFieldIfTemplate(content, 'Status', …)`
+ *   where `content` is the full file (frontmatter + body), not stripped body.
+ *
+ * Finding 2 (OBSERVED):
+ *   `cmdStateBeginPhase`'s `## Current Position` update block only has pipe-table
+ *   else-branches for Status (#1255) and Last-activity (#1255), NOT for Phase or Plan.
+ *   For a pipe-table STATE.md, the `| Phase | … |` and `| Plan | … |` rows are silently
+ *   ignored: the else-branch instead INSERTS a new inline `Phase: N — EXECUTING` text
+ *   line prepended to the section body (leaving the old table cells stale).
+ *   Smoking-gun: src/state.cts:1833–1844 — `^Phase:` / `^Plan:` plain-text checks with
+ *   else-branches that prepend text rather than calling stateReplaceField on the table.
+ */
+
+// STATE.md fixture for #1257 — pipe-table format with frontmatter status: planning
+// After planned-phase the body Status should become 'Ready to execute' and
+// frontmatter status should advance accordingly.
+const TABLE_STATUS_PLANNING_1257 = `---
+gsd_state_version: '1.0'
+status: planning
+---
+
+# Project State
+
+## Configuration
+
+| Current Phase | 1 |
+| Current Phase Name | setup |
+| Total Plans in Phase | 3 |
+| Current Plan | 1 |
+| Status | Planning |
+| Last Activity | 2026-06-01 |
+| Last Activity Description | Roadmap created |
+
+## Current Position
+
+| Phase | 1 (setup) |
+| Plan | 1 of 3 |
+| Status | Planning |
+| Last activity | 2026-06-01 |
+`;
+
+function make1257TempProject(stateContent) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-1257-'));
+  const planningDir = path.join(dir, '.planning');
+  fs.mkdirSync(planningDir, { recursive: true });
+  // Minimal ROADMAP so phase resolution can proceed
+  fs.writeFileSync(path.join(planningDir, 'ROADMAP.md'), [
+    '# ROADMAP',
+    '',
+    '## Phase 1: setup:',
+    '- [ ] Step 1',
+    '',
+  ].join('\n'), 'utf8');
+  fs.writeFileSync(path.join(planningDir, 'STATE.md'), stateContent, 'utf8');
+  return dir;
+}
+
+describe('#1257 — planned-phase and begin-phase pipe-table regressions', () => {
+
+  // ── Finding 1 ───────────────────────────────────────────────────────────────
+
+  test('Finding 1: planned-phase advances Configuration pipe-table Status cell to Ready to execute', () => {
+    // planned-phase should update the Configuration-section body | Status | … | cell.
+    // Smoking-gun: state.cts:2015 calls stateReplaceFieldIfTemplate on full content,
+    // so the frontmatter `status:` key shadows the body table cell and the cell is
+    // never updated.  (updateCurrentPositionFields at line 2037 does correctly update
+    // the Current Position table cell — this test specifically targets the Configuration
+    // table cell, which has no pipe-table else-branch in planned-phase.)
+    const dir = make1257TempProject(TABLE_STATUS_PLANNING_1257);
+    try {
+      const result = runGsdTools(
+        ['state', 'planned-phase', '--phase', '1', '--plans', '3'],
+        dir
+      );
+      assert.ok(result.success, `planned-phase failed: ${result.error || result.output}`);
+
+      const after = fs.readFileSync(path.join(dir, '.planning', 'STATE.md'), 'utf8');
+
+      // Extract the ## Configuration section (stops before ## Current Position)
+      // to avoid false-positive from the Current Position table (which IS updated
+      // by updateCurrentPositionFields).
+      const cfgMatch = after.match(/##\s*Configuration\s*\r?\n([\s\S]*?)(?=\r?\n##|$)/i);
+      assert.ok(cfgMatch, '## Configuration section must exist');
+      const cfgSection = cfgMatch[1];
+
+      // The Configuration section's pipe-table Status cell must be updated
+      assert.ok(
+        /\|\s*Status\s*\|\s*Ready to execute\s*\|/i.test(cfgSection),
+        `Configuration pipe-table Status cell must be 'Ready to execute' after planned-phase; got Configuration:\n${cfgSection}`
+      );
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('Finding 1: planned-phase advances frontmatter status to executing when body Status is pipe-table', () => {
+    // The frontmatter status must advance after planned-phase sets Status to 'Ready to execute'.
+    // (syncStateFrontmatter maps 'ready to execute' → 'executing'.)
+    const dir = make1257TempProject(TABLE_STATUS_PLANNING_1257);
+    try {
+      runGsdTools(
+        ['state', 'planned-phase', '--phase', '1', '--plans', '3'],
+        dir
+      );
+      const after = fs.readFileSync(path.join(dir, '.planning', 'STATE.md'), 'utf8');
+
+      const fmMatch = after.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+      assert.ok(fmMatch, 'STATE.md must have YAML frontmatter after planned-phase');
+      const fm = fmMatch[1];
+      // syncStateFrontmatter maps 'Ready to execute' → 'executing' in normalizeStateStatus
+      assert.ok(
+        /^status:\s*executing\s*$/m.test(fm),
+        `frontmatter status must be 'executing' after planned-phase on pipe-table STATUS; got frontmatter:\n${fm}`
+      );
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  // ── Finding 2 ───────────────────────────────────────────────────────────────
+
+  test('Finding 2: begin-phase updates Current Position pipe-table Phase cell (not prepend inline)', () => {
+    // begin-phase must update the | Phase | … | cell in ## Current Position.
+    // Smoking-gun: state.cts:1833 checks `^Phase:` (plain-text pattern) which
+    // never matches a pipe-table row, so the else-branch at 1836 PREPENDS a new
+    // inline `Phase: N — EXECUTING` line to the section instead of updating the cell.
+    const dir = make1257TempProject(TABLE_STATUS_PLANNING_1257);
+    try {
+      const result = runGsdTools(
+        ['state', 'begin-phase', '--phase', '1', '--name', 'setup', '--plans', '3'],
+        dir
+      );
+      assert.ok(result.success, `begin-phase failed: ${result.error || result.output}`);
+
+      const after = fs.readFileSync(path.join(dir, '.planning', 'STATE.md'), 'utf8');
+
+      // Extract ## Current Position section only
+      const cpMatch = after.match(/##\s*Current Position\s*\r?\n([\s\S]*?)(?=\r?\n##|$)/i);
+      assert.ok(cpMatch, '## Current Position section must exist');
+      const cpSection = cpMatch[1];
+
+      // The pipe-table Phase cell must be updated to reflect the executing phase
+      assert.ok(
+        /\|\s*Phase\s*\|[^|]*1[^|]*EXECUTING[^|]*\|/i.test(cpSection),
+        `Current Position pipe-table Phase cell must contain phase 1 EXECUTING; got Current Position:\n${cpSection}`
+      );
+
+      // Must NOT have a spurious prepended inline `Phase: …` text line
+      assert.ok(
+        !/^Phase:\s+\d/m.test(cpSection),
+        `Current Position must NOT have a spuriously prepended inline 'Phase: N' text line; got Current Position:\n${cpSection}`
+      );
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('Finding 2: begin-phase updates Current Position pipe-table Plan cell (not prepend inline)', () => {
+    // begin-phase must update the | Plan | … | cell in ## Current Position.
+    // Smoking-gun: state.cts:1841 checks `^Plan:` which never matches a pipe-table row,
+    // so the else-branch at 1843 replaces the (newly-prepended) inline Phase line with
+    // Phase\nPlan, neither touching the existing table | Plan | cell.
+    const dir = make1257TempProject(TABLE_STATUS_PLANNING_1257);
+    try {
+      runGsdTools(
+        ['state', 'begin-phase', '--phase', '1', '--name', 'setup', '--plans', '3'],
+        dir
+      );
+      const after = fs.readFileSync(path.join(dir, '.planning', 'STATE.md'), 'utf8');
+
+      // Extract ## Current Position section only
+      const cpMatch = after.match(/##\s*Current Position\s*\r?\n([\s\S]*?)(?=\r?\n##|$)/i);
+      assert.ok(cpMatch, '## Current Position section must exist');
+      const cpSection = cpMatch[1];
+
+      // The pipe-table Plan cell must be updated to '1 of 3'
+      assert.ok(
+        /\|\s*Plan\s*\|\s*1 of 3\s*\|/i.test(cpSection),
+        `Current Position pipe-table Plan cell must be '1 of 3'; got Current Position:\n${cpSection}`
+      );
+
+      // Must NOT have a spurious prepended inline `Plan: …` text line
+      assert.ok(
+        !/^Plan:\s+\d/m.test(cpSection),
+        `Current Position must NOT have a spuriously prepended inline 'Plan: N' text line; got Current Position:\n${cpSection}`
+      );
+    } finally {
+      cleanup(dir);
+    }
+  });
+});

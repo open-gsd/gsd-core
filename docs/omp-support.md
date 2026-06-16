@@ -13,13 +13,14 @@ Local installs write to `.omp/` in the current workspace:
 - `.omp/commands/gsd-*.md`
 - `.omp/skills/gsd-*/SKILL.md`
 - `.omp/agents/gsd-*.md`
-- `.omp/rules/gsd-*.md` for explicit safe rule mappings only
+- `.omp/rules/*.md` / `.omp/rules/*.mdc` for explicit safe rule mappings only
 - `.omp/extensions/gsd-core/` for executable GSD guardrails and status behavior
 
-Global installs write to `OMP_CONFIG_DIR` when set, otherwise `~/.omp/agent`:
+Global installs write to Oh My Pi's agent home: `PI_CODING_AGENT_DIR` when set, otherwise `$PI_CONFIG_DIR/agent` or `~/.omp/agent`. Named OMP profiles (`OMP_PROFILE`, then `PI_PROFILE`) install under `$PI_CONFIG_DIR/profiles/<profile>/agent`:
 
 ```sh
-OMP_CONFIG_DIR=~/.omp/agent node bin/install.js --global --omp
+PI_CODING_AGENT_DIR=~/.omp/agent node bin/install.js --global --omp
+OMP_PROFILE=work node bin/install.js --global --omp
 ```
 
 ## First action
@@ -41,7 +42,7 @@ node bin/install.js --local --omp --profile=core
 node bin/install.js --local --omp
 ```
 
-Reinstall replaces only GSD-managed `gsd-*` OMP artifacts and preserves user-owned OMP commands, skills, agents, rules, and non-GSD extension directories.
+Reinstall replaces only GSD-managed OMP artifacts and preserves user-owned OMP commands, skills, agents, rules, and non-GSD extension directories.
 
 For agents, OMP installs honor GSD `model_overrides` from `.planning/config.json` and `~/.gsd/defaults.json` by embedding the resolved model in each generated `.omp/agents/gsd-*.md` frontmatter. Bare OMP role names (`plan`, `task`, `smol`, `slow`, `vision`, `commit`, `designer`, `default`) are normalized to OMP `pi/<role>` aliases so they resolve through OMP `modelRoles`.
 

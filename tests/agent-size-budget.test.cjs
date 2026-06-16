@@ -4,48 +4,62 @@
 // Per CONTRIBUTING.md exception matrix.
 
 /**
- * Agent size budget.
+ * Agent size budget (measured in BYTES — see #717).
  *
- * Agent definitions in `agents/gsd-*.md` are loaded verbatim into Claude's
+ * Agent definitions in `agents/gsd-*.md` are loaded verbatim into the agent's
  * context on every subagent dispatch. Unbounded growth is paid on every call
  * across every workflow.
  *
- * Budgets are tiered to reflect the intent of each agent class:
+ * ## Enforcement model (issue #1074)
+ *
+ * Mirrors tests/workflow-size-budget.test.cjs — two complementary guards, no
+ * tier-max ceiling:
+ *
+ *   1. Per-agent baseline (the anti-creep): every agent is pinned to its exact
+ *      byte size in `tests/agent-size-baseline.json`. Any growth fails with the
+ *      file and delta; `npm run size:baseline` records a deliberate change as a
+ *      reviewable one-line diff. This replaced the tier-max tighten-only ratchet
+ *      (which only bound the single largest agent per tier).
+ *
+ *   2. Tier hard caps (the outer bound): XL/LARGE/DEFAULT absolute red lines
+ *      with real headroom, never raised in normal work. Crossing one means
+ *      extracting shared boilerplate to `gsd-core/references/`, not a +N bump.
+ *      A net-new agent is DEFAULT-tier, so the DEFAULT cap already bounds it —
+ *      no separate new-file cap is needed (DEFAULT is already small).
+ *
+ * Tiers:
  *   - XL       : top-level orchestrators that own end-to-end rubrics
  *   - LARGE    : multi-phase operators with branching workflows
  *   - DEFAULT  : focused single-purpose agents
  *
- * Raising a budget is a deliberate choice — adjust the constant, write a
- * rationale in the PR, and make sure the bloat is not duplicated content
- * that belongs in `gsd-core/references/`.
- *
- * Tighten-only invariant (issue #597): ceilings track the tier high-water mark
- * within GRACE lines. Budgets may only decrease, never silently creep upward.
- * The assertTightCeiling() call below enforces this automatically.
- *
- * See: https://github.com/open-gsd/gsd-core/issues/2361
+ * See:
+ *   - https://github.com/open-gsd/gsd-core/issues/1074 (per-file baseline + hard caps)
+ *   - https://github.com/open-gsd/gsd-core/issues/717  (bytes, not lines)
+ *   - https://github.com/open-gsd/gsd-core/issues/683  (LF-normalized byte count)
  */
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const os = require('node:os');
 const path = require('path');
-const { assertTightCeiling } = require('../scripts/lib/allowlist-ratchet.cjs');
+const { assertFileBaseline } = require('../scripts/lib/allowlist-ratchet.cjs');
+const { lfByteCount, measureMdFiles } = require('../scripts/workflow-size.cjs');
+const { cleanup } = require('./helpers.cjs');
 
 const AGENTS_DIR = path.join(__dirname, '..', 'agents');
+const BASELINE_PATH = path.join(__dirname, 'agent-size-baseline.json');
+const isGsdAgent = (f) => f.startsWith('gsd-');
 
-// Ceilings tightened to actualMax + GRACE per the ratchet-down rule (#597).
-// XL ceiling lowered from 1600 → 1512 (actualMax=1452, gsd-debugger).
-const XL_BUDGET = 1512;
-// LARGE ceiling kept at 1000 (actualMax=978, slack=22 ≤ GRACE=60).
-const LARGE_BUDGET = 1000;
-// DEFAULT ceiling kept at 500 (actualMax=495, slack=5 ≤ GRACE=60).
-const DEFAULT_BUDGET = 500;
-
-// Grace band: maximum allowed slack (ceiling − actualMax) before a ceiling is
-// considered too loose. 60 lines gives one reasonable screen of breathing room
-// without permitting gross inflation.
-const GRACE = 60;
+// Tier HARD CAPS (#1074, bytes) — absolute red lines, not high-water-hugging
+// ceilings. Day-to-day creep is caught per-agent by the baseline guard below;
+// these sit above each tier's current high-water with real headroom:
+//   XL      56 KiB — high-water gsd-debugger 51,043 → ~6.3 KB headroom
+//   LARGE   48 KiB — high-water gsd-executor 42,342 → ~6.8 KB headroom
+//   DEFAULT 24 KiB — high-water gsd-ui-researcher 19,095 → ~5.5 KB headroom
+const XL_CAP = 57344;       // 56 KiB
+const LARGE_CAP = 49152;    // 48 KiB
+const DEFAULT_CAP = 24576;  // 24 KiB
 
 const XL_AGENTS = new Set([
   'gsd-debugger',
@@ -65,64 +79,76 @@ const LARGE_AGENTS = new Set([
 ]);
 
 const ALL_AGENTS = fs.readdirSync(AGENTS_DIR)
-  .filter(f => f.startsWith('gsd-') && f.endsWith('.md'))
+  .filter(f => isGsdAgent(f) && f.endsWith('.md'))
   .map(f => f.replace('.md', ''));
 
-function budgetFor(agent) {
-  if (XL_AGENTS.has(agent)) return { tier: 'XL', limit: XL_BUDGET };
-  if (LARGE_AGENTS.has(agent)) return { tier: 'LARGE', limit: LARGE_BUDGET };
-  return { tier: 'DEFAULT', limit: DEFAULT_BUDGET };
+function capFor(agent) {
+  if (XL_AGENTS.has(agent)) return { tier: 'XL', cap: XL_CAP };
+  if (LARGE_AGENTS.has(agent)) return { tier: 'LARGE', cap: LARGE_CAP };
+  return { tier: 'DEFAULT', cap: DEFAULT_CAP };
 }
 
-function lineCount(filePath) {
-  const content = fs.readFileSync(filePath, 'utf-8');
-  if (content.length === 0) return 0;
-  const trailingNewline = content.endsWith('\n') ? 1 : 0;
-  return content.split('\n').length - trailingNewline;
-}
-
-describe('SIZE: agent line-count budget', () => {
+describe('SIZE: agent tier hard caps (issue #1074)', () => {
+  // Absolute outer bound per tier. A cap is NOT raised when an agent approaches
+  // it — crossing it means extract shared boilerplate to gsd-core/references/.
   for (const agent of ALL_AGENTS) {
-    const { tier, limit } = budgetFor(agent);
-    test(`${agent} (${tier}) stays under ${limit} lines`, () => {
-      const filePath = path.join(AGENTS_DIR, agent + '.md');
-      const lines = lineCount(filePath);
+    const { tier, cap } = capFor(agent);
+    test(`${agent} (${tier}) stays within the ${tier} hard cap (${cap} bytes)`, () => {
+      const bytes = lfByteCount(path.join(AGENTS_DIR, agent + '.md'));
       assert.ok(
-        lines <= limit,
-        `${agent}.md has ${lines} lines — exceeds ${tier} budget of ${limit}. ` +
-        `Extract shared boilerplate to gsd-core/references/ or raise the budget ` +
-        `in tests/agent-size-budget.test.cjs with a rationale.`
+        bytes <= cap,
+        `${agent}.md is ${bytes} bytes — exceeds the ${tier} hard cap of ${cap}. ` +
+        `This cap is a red line, NOT a budget to raise: extract shared boilerplate ` +
+        `to gsd-core/references/ and load it lazily.`
       );
     });
   }
 });
 
-describe('SIZE: tier anti-creep (tighten-only ceilings, issue #597)', () => {
-  // For each tier, compute the high-water mark across all files in that tier
-  // and assert the ceiling stays tight. Prevents budgets from silently drifting
-  // upward: ceiling − actualMax must not exceed GRACE.
-  test('XL tier: ceiling tracks high-water mark within GRACE', () => {
-    const values = ALL_AGENTS
-      .filter(a => XL_AGENTS.has(a))
-      .map(a => lineCount(path.join(AGENTS_DIR, a + '.md')));
-    const actualMax = Math.max(...values);
-    assertTightCeiling({ label: 'XL', actualMax, ceiling: XL_BUDGET, grace: GRACE, fail: assert.fail });
+describe('SIZE: agent hard-cap boundary fixtures (#1074 — negative proof)', () => {
+  // The per-tier loop above only iterates the real, fully-compliant agent
+  // corpus, so its `bytes <= cap` failure branch never executes. Exercise that
+  // exact comparison on synthetic files measured at cap-1 / cap / cap+1 (the
+  // limit boundary — RULESET.TESTS.boundary-coverage.fixtures) through the SAME
+  // lfByteCount path the guard uses, so a future threshold or operator edit
+  // cannot silently neuter a cap (RULESET.TESTS.regression-must-fail-first).
+  test('cap comparison fires at the limit boundary for every tier', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-size-'));
+    try {
+      // ASCII 'a' is 1 byte/char and has no CRLF, so lfByteCount == length.
+      const measureAt = (n) => {
+        const p = path.join(tmp, `fixture-${n}.md`);
+        fs.writeFileSync(p, 'a'.repeat(n));
+        return lfByteCount(p);
+      };
+      for (const cap of [DEFAULT_CAP, LARGE_CAP, XL_CAP]) {
+        assert.equal(measureAt(cap - 1) <= cap, true, `${cap - 1} must be within cap ${cap}`);
+        assert.equal(measureAt(cap) <= cap, true, `${cap} (exactly at cap) must be within cap ${cap}`);
+        assert.equal(measureAt(cap + 1) <= cap, false, `${cap + 1} must exceed cap ${cap}`);
+      }
+    } finally {
+      cleanup(tmp);
+    }
   });
+});
 
-  test('LARGE tier: ceiling tracks high-water mark within GRACE', () => {
-    const values = ALL_AGENTS
-      .filter(a => LARGE_AGENTS.has(a))
-      .map(a => lineCount(path.join(AGENTS_DIR, a + '.md')));
-    const actualMax = Math.max(...values);
-    assertTightCeiling({ label: 'LARGE', actualMax, ceiling: LARGE_BUDGET, grace: GRACE, fail: assert.fail });
-  });
-
-  test('DEFAULT tier: ceiling tracks high-water mark within GRACE', () => {
-    const values = ALL_AGENTS
-      .filter(a => !XL_AGENTS.has(a) && !LARGE_AGENTS.has(a))
-      .map(a => lineCount(path.join(AGENTS_DIR, a + '.md')));
-    const actualMax = Math.max(...values);
-    assertTightCeiling({ label: 'DEFAULT', actualMax, ceiling: DEFAULT_BUDGET, grace: GRACE, fail: assert.fail });
+describe('SIZE: per-agent baseline (issue #1074)', () => {
+  // Per-agent exact-size ratchet — the primary anti-creep guard. Guards EVERY
+  // agent by name against tests/agent-size-baseline.json. Growth fails with the
+  // file and delta; shrinkage fails as a stale snapshot. Fix: `npm run
+  // size:baseline` plus a PR justification for genuine growth (or extraction).
+  test('every agent matches its committed baseline', () => {
+    const baseline = JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf-8'));
+    const current = measureMdFiles(AGENTS_DIR, isGsdAgent);
+    assertFileBaseline({
+      label: 'agent-size',
+      current,
+      baseline,
+      fail: assert.fail,
+      updateHint:
+        'Run `npm run size:baseline` to update tests/agent-size-baseline.json, ' +
+        'then justify any growth in your PR (or extract shared boilerplate to gsd-core/references/).',
+    });
   });
 });
 

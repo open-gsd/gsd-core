@@ -24,10 +24,12 @@ function writeSkill(rootDir, name, description, body = '') {
 describe('skill-manifest', () => {
   let tmpDir;
   let homeDir;
-
+  let savedCodexHome;
   beforeEach(() => {
     tmpDir = createTempProject();
     homeDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'gsd-skill-manifest-home-'));
+    savedCodexHome = process.env.CODEX_HOME;
+    delete process.env.CODEX_HOME;
 
     writeSkill(path.join(tmpDir, '.claude', 'skills'), 'project-claude', 'Project Claude skill');
     writeSkill(path.join(tmpDir, '.claude', 'skills'), 'gsd-help', 'Installed GSD skill');
@@ -49,6 +51,11 @@ describe('skill-manifest', () => {
   afterEach(() => {
     cleanup(tmpDir);
     cleanup(homeDir);
+    if (savedCodexHome === undefined) {
+      delete process.env.CODEX_HOME;
+    } else {
+      process.env.CODEX_HOME = savedCodexHome;
+    }
   });
 
   test('returns normalized inventory across canonical roots', () => {

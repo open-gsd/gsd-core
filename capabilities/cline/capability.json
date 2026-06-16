@@ -28,6 +28,10 @@
     "commandStyle": "slash-hyphen",
     "hooksSurface": "cline-rules",
     "sandboxTier": "none",
-    "supportTier": 2
+    "supportTier": 2,
+    "installSurface": "cline-rules",
+    "writesSharedSettings": false,
+    "permissionWriter": null,
+    "extendedHookEvents": []
   }
 }

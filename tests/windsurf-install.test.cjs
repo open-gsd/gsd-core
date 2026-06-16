@@ -9,10 +9,13 @@ const { getGlobalConfigDir } = require('../gsd-core/bin/lib/runtime-homes.cjs');
 
 describe('getGlobalConfigDir (Windsurf)', () => {
   let originalWindsurfConfigDir;
+  let originalCodexHome;
 
   beforeEach(() => {
     originalWindsurfConfigDir = process.env.WINDSURF_CONFIG_DIR;
+    originalCodexHome = process.env.CODEX_HOME;
     delete process.env.WINDSURF_CONFIG_DIR;
+    delete process.env.CODEX_HOME;
   });
 
   afterEach(() => {
@@ -20,6 +23,11 @@ describe('getGlobalConfigDir (Windsurf)', () => {
       process.env.WINDSURF_CONFIG_DIR = originalWindsurfConfigDir;
     } else {
       delete process.env.WINDSURF_CONFIG_DIR;
+    }
+    if (originalCodexHome !== undefined) {
+      process.env.CODEX_HOME = originalCodexHome;
+    } else {
+      delete process.env.CODEX_HOME;
     }
   });
 

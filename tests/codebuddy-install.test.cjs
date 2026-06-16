@@ -49,9 +49,12 @@ describe('CodeBuddy runtime directory mapping', () => {
 
 describe('getGlobalConfigDir (CodeBuddy)', () => {
   let originalCodebuddyConfigDir;
+  let originalCodexHome;
 
   beforeEach(() => {
     originalCodebuddyConfigDir = process.env.CODEBUDDY_CONFIG_DIR;
+    originalCodexHome = process.env.CODEX_HOME;
+    delete process.env.CODEX_HOME;
   });
 
   afterEach(() => {
@@ -59,6 +62,11 @@ describe('getGlobalConfigDir (CodeBuddy)', () => {
       process.env.CODEBUDDY_CONFIG_DIR = originalCodebuddyConfigDir;
     } else {
       delete process.env.CODEBUDDY_CONFIG_DIR;
+    }
+    if (originalCodexHome !== undefined) {
+      process.env.CODEX_HOME = originalCodexHome;
+    } else {
+      delete process.env.CODEX_HOME;
     }
   });
 

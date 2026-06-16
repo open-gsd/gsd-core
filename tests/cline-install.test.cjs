@@ -55,9 +55,12 @@ describe('Cline runtime directory mapping', () => {
 
 describe('getGlobalConfigDir (Cline)', () => {
   let originalClineConfigDir;
+  let originalCodexHome;
 
   beforeEach(() => {
     originalClineConfigDir = process.env.CLINE_CONFIG_DIR;
+    originalCodexHome = process.env.CODEX_HOME;
+    delete process.env.CODEX_HOME;
   });
 
   afterEach(() => {
@@ -65,6 +68,11 @@ describe('getGlobalConfigDir (Cline)', () => {
       process.env.CLINE_CONFIG_DIR = originalClineConfigDir;
     } else {
       delete process.env.CLINE_CONFIG_DIR;
+    }
+    if (originalCodexHome !== undefined) {
+      process.env.CODEX_HOME = originalCodexHome;
+    } else {
+      delete process.env.CODEX_HOME;
     }
   });
 

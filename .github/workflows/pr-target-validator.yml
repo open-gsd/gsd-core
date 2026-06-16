@@ -18,6 +18,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
+  contents: read
   pull-requests: write
 
 jobs:
@@ -31,96 +32,91 @@ jobs:
       # Phase-1: warn only. Phase-2: set to 'false' to enforce.
       WARN_ONLY: 'false'
     steps:
+      - name: Checkout base branch (trusted policy source)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          persist-credentials: false
+
       - name: Validate PR target branch
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           WARN_ONLY: ${{ env.WARN_ONLY }}
         with:
           script: |
+            const { classifyPrTarget } = require(`${process.env.GITHUB_WORKSPACE}/scripts/pr-target-policy.cjs`);
+
             const pr = context.payload.pull_request;
             const base = pr.base.ref;
             const head = pr.head.ref;
             const warnOnly = process.env.WARN_ONLY === 'true';
 
-            // PRs targeting `next` are always fine.
-            if (base === 'next') {
-              core.info(`PR targets next — OK.`);
+            const { decision } = classifyPrTarget(base, head);
+
+            if (decision === 'allowed') {
+              if (base === 'next') {
+                core.info(`PR targets next — OK.`);
+              } else if (base === 'main') {
+                core.info(`PR from ${head} → main matches an allowed pattern.`);
+              } else {
+                core.info(`PR targets a release/hotfix branch — OK.`);
+              }
               return;
             }
 
-            // PRs targeting `main`: only specific branch types allowed.
-            if (base === 'main') {
-              const mainAllowed = [
-                /^release\/\d+\.\d+\.0$/,           // release branches
-                /^hotfix\/\d+\.\d+\.\d+$/,          // hotfix branches
-                /^fix\/critical-/,                  // production-down emergencies
-                /^chore\/backmerge-/,               // auto-backmerge from this workflow
-                /^revert\/critical-/,               // emergency reverts
-              ];
-              const allowed = mainAllowed.some(re => re.test(head));
-              if (allowed) {
-                core.info(`PR from ${head} → main matches an allowed pattern.`);
-                return;
-              }
+            if (decision === 'unusual') {
+              core.warning(`Unusual PR target: ${base}`);
+              return;
+            }
 
-              const msg = [
-                `### Wrong target branch`,
-                ``,
-                `This PR targets \`main\` but the source branch \`${head}\` is not a release, hotfix, critical-fix, or back-merge branch.`,
-                ``,
-                `**Most PRs should target \`next\`, not \`main\`.** See [docs/branching.md](../blob/main/docs/branching.md).`,
-                ``,
-                `**How to fix:** click "Edit" next to the PR title above and change the base branch from \`main\` to \`next\`. No need to recreate the PR.`,
-                ``,
-                `<details><summary>When IS it OK to target main?</summary>`,
-                ``,
-                `- \`release/X.Y.0\` branches (cut by \`release.yml\`)`,
-                `- \`hotfix/X.Y.Z\` branches (cut by \`hotfix.yml\`)`,
-                `- \`fix/critical-*\` branches (production-down emergencies)`,
-                `- \`chore/backmerge-*\` branches (automated back-merge from this workflow)`,
-                `- \`revert/critical-*\` branches (emergency reverts of a bad merge on main)`,
-                ``,
-                `</details>`,
-              ].join('\n');
+            // decision === 'blocked': base is main and head is not an allowed pattern.
+            const msg = [
+              `### Wrong target branch`,
+              ``,
+              `This PR targets \`main\` but the source branch \`${head}\` is not a release, hotfix, critical-fix, or back-merge branch.`,
+              ``,
+              `**Most PRs should target \`next\`, not \`main\`.** See [docs/branching.md](../blob/main/docs/branching.md).`,
+              ``,
+              `**How to fix:** click "Edit" next to the PR title above and change the base branch from \`main\` to \`next\`. No need to recreate the PR.`,
+              ``,
+              `<details><summary>When IS it OK to target main?</summary>`,
+              ``,
+              `- \`release/X.Y.0\` branches (cut by \`release.yml\`)`,
+              `- \`hotfix/X.Y.Z\` branches (cut by \`hotfix.yml\`)`,
+              `- \`fix/critical-*\` branches (production-down emergencies)`,
+              `- \`chore/backmerge-*\` branches (automated back-merge from this workflow)`,
+              `- \`revert/critical-*\` branches (emergency reverts of a bad merge on main)`,
+              ``,
+              `</details>`,
+            ].join('\n');
 
-              // Post or update a sticky comment.
-              const { data: comments } = await github.rest.issues.listComments({
+            // Post or update a sticky comment.
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+            });
+            const marker = '<!-- pr-target-validator -->';
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            const body = `${marker}\n${msg}`;
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: pr.number,
+                body,
               });
-              const marker = '<!-- pr-target-validator -->';
-              const existing = comments.find(c => c.body && c.body.includes(marker));
-              const body = `${marker}\n${msg}`;
-              if (existing) {
-                await github.rest.issues.updateComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  comment_id: existing.id,
-                  body,
-                });
-              } else {
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: pr.number,
-                  body,
-                });
-              }
-
-              if (warnOnly) {
-                core.warning(`PR target mismatch (warning-only mode): ${head} → ${base}`);
-              } else {
-                core.setFailed(`PR target mismatch: ${head} should target next, not main.`);
-              }
-              return;
             }
 
-            // PRs targeting release/X.Y.0 or hotfix/X.Y.Z are fine (stabilization PRs).
-            if (/^release\/\d+\.\d+\.0$/.test(base) || /^hotfix\/\d+\.\d+\.\d+$/.test(base)) {
-              core.info(`PR targets a release/hotfix branch — OK.`);
-              return;
+            if (warnOnly) {
+              core.warning(`PR target mismatch (warning-only mode): ${head} → ${base}`);
+            } else {
+              core.setFailed(`PR target mismatch: ${head} should target next, not main.`);
             }
-
-            // Any other target is unusual but not forbidden.
-            core.warning(`Unusual PR target: ${base}`);

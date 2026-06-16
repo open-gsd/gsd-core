@@ -1,0 +1,20 @@
+#!/usr/bin/env sh
+# gsd_run — standalone launcher so workflow bash blocks can invoke the GSD tools
+# in a fresh shell. Claude Code (and similar runtimes) runs each fenced bash block
+# in a separate process, so an inline gsd_run() function defined in an earlier
+# block is undefined in later ones (issue #381). This executable is shipped beside
+# gsd-tools.cjs in gsd-core/bin/ and exposed on PATH via the npm "bin" field and
+# the per-file preamble's CLAUDE_ENV_FILE export, so later blocks resolve it.
+# It resolves its own real location (following symlinks) and delegates to gsd-tools.cjs.
+set -e
+src="$0"
+while [ -h "$src" ]; do
+  dir="$(cd -P "$(dirname "$src")" && pwd)"
+  src="$(readlink "$src")"
+  case "$src" in
+    /*) ;;
+    *) src="$dir/$src" ;;
+  esac
+done
+dir="$(cd -P "$(dirname "$src")" && pwd)"
+exec node "$dir/gsd-tools.cjs" "$@"

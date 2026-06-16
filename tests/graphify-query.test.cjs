@@ -6,6 +6,7 @@
 const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { createTempProject, cleanup } = require('./helpers.cjs');
 
@@ -25,6 +26,55 @@ const {
   writeSnapshotJson,
   SAMPLE_GRAPH,
 } = require('./helpers/graphify.cjs');
+
+// ─── Shared fixture: surfaced-config-dir ─────────────────────────────────────
+//
+// Positive-path tests (graphifyQuery, graphifyDiff, graceful-degradation) call
+// enableGraphify() (config leg only) and assert non-disabled outcomes. With
+// the tri-state gate (isCapabilityActive), those outcomes ALSO require graphify
+// to be installed+surfaced in the runtime config dir. Without this fixture the
+// tests are ambient-dependent: they pass only on machines where the ambient
+// ~/.claude has graphify surfaced.
+//
+// Fix: before each positive-path test, point CLAUDE_CONFIG_DIR at a tmp dir
+// with a full-profile .gsd-surface.json (graphify surfaced), and clear
+// GSD_RUNTIME / GSD_WORKSTREAM / GSD_PROJECT for hermeticity.
+
+/** Create a tmp config dir with graphify surfaced (full profile, no disabled clusters). */
+function makeSurfacedConfigDir() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-graphify-qry-cfg-'));
+  fs.writeFileSync(
+    path.join(dir, '.gsd-surface.json'),
+    JSON.stringify({ baseProfile: 'full', disabledClusters: [], explicitAdds: [], explicitRemoves: [] }, null, 2) + '\n',
+    'utf8',
+  );
+  return dir;
+}
+
+/**
+ * Save the env vars the surfaced-config fixture overrides.
+ * Returns an object whose .restore() returns env to its original state.
+ */
+function saveSurfacedEnv() {
+  const saved = {
+    GSD_RUNTIME: process.env.GSD_RUNTIME,
+    CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
+    GSD_WORKSTREAM: process.env.GSD_WORKSTREAM,
+    GSD_PROJECT: process.env.GSD_PROJECT,
+  };
+  return {
+    restore() {
+      if (saved.GSD_RUNTIME === undefined) delete process.env.GSD_RUNTIME;
+      else process.env.GSD_RUNTIME = saved.GSD_RUNTIME;
+      if (saved.CLAUDE_CONFIG_DIR === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = saved.CLAUDE_CONFIG_DIR;
+      if (saved.GSD_WORKSTREAM === undefined) delete process.env.GSD_WORKSTREAM;
+      else process.env.GSD_WORKSTREAM = saved.GSD_WORKSTREAM;
+      if (saved.GSD_PROJECT === undefined) delete process.env.GSD_PROJECT;
+      else process.env.GSD_PROJECT = saved.GSD_PROJECT;
+    },
+  };
+}
 
 // ─── query describe ───────────────────────────────────────────────────────────
 
@@ -192,13 +242,25 @@ describe('query', () => {
   describe('graphifyQuery', () => {
     let tmpDir;
     let planningDir;
+    // Surfaced-config-dir fixture: makes positive-path tests deterministic.
+    // See module-level comment for rationale.
+    let surfacedConfigDir;
+    let savedEnv;
 
     beforeEach(() => {
       tmpDir = createTempProject();
       planningDir = path.join(tmpDir, '.planning');
+      surfacedConfigDir = makeSurfacedConfigDir();
+      savedEnv = saveSurfacedEnv();
+      delete process.env.GSD_RUNTIME;
+      process.env.CLAUDE_CONFIG_DIR = surfacedConfigDir;
+      delete process.env.GSD_WORKSTREAM;
+      delete process.env.GSD_PROJECT;
     });
 
     afterEach(() => {
+      savedEnv.restore();
+      cleanup(surfacedConfigDir);
       cleanup(tmpDir);
     });
 
@@ -259,13 +321,25 @@ describe('query', () => {
   describe('graphifyDiff', () => {
     let tmpDir;
     let planningDir;
+    // Surfaced-config-dir fixture: makes positive-path tests deterministic.
+    // See module-level comment for rationale.
+    let surfacedConfigDir;
+    let savedEnv;
 
     beforeEach(() => {
       tmpDir = createTempProject();
       planningDir = path.join(tmpDir, '.planning');
+      surfacedConfigDir = makeSurfacedConfigDir();
+      savedEnv = saveSurfacedEnv();
+      delete process.env.GSD_RUNTIME;
+      process.env.CLAUDE_CONFIG_DIR = surfacedConfigDir;
+      delete process.env.GSD_WORKSTREAM;
+      delete process.env.GSD_PROJECT;
     });
 
     afterEach(() => {
+      savedEnv.restore();
+      cleanup(surfacedConfigDir);
       cleanup(tmpDir);
     });
 
@@ -379,13 +453,25 @@ describe('query', () => {
   describe('graceful degradation (AGENT-03)', () => {
     let tmpDir;
     let planningDir;
+    // Surfaced-config-dir fixture: makes positive-path tests deterministic.
+    // See module-level comment for rationale.
+    let surfacedConfigDir;
+    let savedEnv;
 
     beforeEach(() => {
       tmpDir = createTempProject();
       planningDir = path.join(tmpDir, '.planning');
+      surfacedConfigDir = makeSurfacedConfigDir();
+      savedEnv = saveSurfacedEnv();
+      delete process.env.GSD_RUNTIME;
+      process.env.CLAUDE_CONFIG_DIR = surfacedConfigDir;
+      delete process.env.GSD_WORKSTREAM;
+      delete process.env.GSD_PROJECT;
     });
 
     afterEach(() => {
+      savedEnv.restore();
+      cleanup(surfacedConfigDir);
       cleanup(tmpDir);
     });
 

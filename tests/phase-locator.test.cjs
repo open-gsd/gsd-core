@@ -24,24 +24,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const phaseLocator = require('../gsd-core/bin/lib/phase-locator.cjs');
-const core = require('../gsd-core/bin/lib/core.cjs');
 const { createTempProject, cleanup } = require('./helpers.cjs');
-
-// ─── Shim-identity assertions ─────────────────────────────────────────────────
-
-describe('phase-locator: shim-identity — core.cjs re-exports same function objects', () => {
-  test('core.findPhaseInternal === phaseLocator.findPhaseInternal', () => {
-    assert.strictEqual(core.findPhaseInternal, phaseLocator.findPhaseInternal);
-  });
-
-  test('core.getArchivedPhaseDirs === phaseLocator.getArchivedPhaseDirs', () => {
-    assert.strictEqual(core.getArchivedPhaseDirs, phaseLocator.getArchivedPhaseDirs);
-  });
-
-  test('core.searchPhaseInDir === phaseLocator.searchPhaseInDir', () => {
-    assert.strictEqual(core.searchPhaseInDir, phaseLocator.searchPhaseInDir);
-  });
-});
 
 // ─── findPhaseInternal — basic active-phase lookup ────────────────────────────
 

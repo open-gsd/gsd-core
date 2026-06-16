@@ -256,11 +256,15 @@ Check project status and intelligently route to next action.
 Modes:
 - **default** — progress report + intelligent routing
 - **`--next`** — auto-advance to the next logical step (use `--next --force` to bypass safety gates)
+- **`--next --auto`** — like `--next`, but chains steps automatically until milestone completion or a blocking decision
+- **`--next --converge`** — when the next action is planning, route it through `/gsd:plan-review-convergence` instead of `/gsd:plan-phase`; requires `workflow.plan_review_convergence=true`. `--cross-ai` is an alias. Reviewer flags (`--codex`, `--gemini`, `--claude`, `--opencode`, `--ollama`, `--lm-studio`, `--llama-cpp`, `--all`) and `--max-cycles N` forward to the convergence loop.
 - **`--forensic`** — append a 6-check integrity audit after the progress report
 - **`--do "<text>"`** — smart router: dispatch freeform intent to the matching `/gsd-*` command (see *Smart Router* above)
 
 Usage: `/gsd:progress`
 Usage: `/gsd:progress --next`
+Usage: `/gsd:progress --next --auto`
+Usage: `/gsd:progress --next --auto --converge`
 Usage: `/gsd:progress --forensic`
 
 ### Session Management
@@ -606,6 +610,8 @@ The commands above cover the most common day-to-day flows. Every command listed 
 ### Knowledge & Context
 
 - **`/gsd:graphify [build|query <term>|status|diff]`** — Build, query, and inspect the project knowledge graph in `.planning/graphs/`.
+- **`/gsd:mempalace-recall`** — Recall prior decisions, patterns, and surprises from MemPalace before planning.
+- **`/gsd:mempalace-capture [artifact-type]`** — File a phase artifact into MemPalace and mirror decision facts into its temporal KG.
 - **`/gsd:thread [list [--open|--resolved] | close <slug> | status <slug> | name | description]`** — Manage persistent context threads for cross-session work.
 - **`/gsd:profile-user [--questionnaire] [--refresh]`** — Generate developer behavioral profile and create Claude-discoverable artifacts.
 - **`/gsd:stats`** — Display project statistics: phases, plans, requirements, git metrics, and timeline.
@@ -626,7 +632,7 @@ The commands above cover the most common day-to-day flows. Every command listed 
 
 These six skills exist primarily for the model to perform two-stage hierarchical routing across 60+ skills. You can invoke them directly when you want to browse a category interactively.
 
-- **`/gsd-context`** — Codebase intelligence routing (map, graphify, docs, learnings).
+- **`/gsd-context`** — Codebase intelligence routing (map, graphify, docs, learnings, mempalace).
 - **`/gsd-ideate`** — Exploration / capture routing (explore, sketch, spike, spec, capture).
 - **`/gsd-manage`** — Configuration and workspace routing (workstreams, thread, update, ship, inbox).
 - **`/gsd-project`** — Project-lifecycle routing (milestones, audits, summary).

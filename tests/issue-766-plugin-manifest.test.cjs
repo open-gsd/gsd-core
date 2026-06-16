@@ -6,11 +6,17 @@
  * Asserts structural and semantic correctness of:
  *   .claude-plugin/plugin.json  — plugin manifest
  *   hooks/hooks.json            — plugin hook wiring
+ *
+ * Section C1 validates plugin.json against the snapshotted schema fixture
+ * (tests/fixtures/plugin-manifest-schema.json) using explicit structural
+ * assertions instead of an Ajv dependency, so this gate runs unconditionally
+ * without requiring ajv in devDependencies.
  */
 
-const { test, describe } = require('node:test');
+const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
@@ -217,8 +223,138 @@ describe('B: hooks/hooks.json', () => {
   });
 });
 
-// ─── Section C: Optional CLI integration test ─────────────────────────────────
-describe('C: claude plugin validate (CLI integration)', () => {
+// ─── Section C: Unconditional JSON schema gate + opportunistic CLI integration ──
+//
+// The `claude plugin validate --strict` binary is absent on CI, so Section C was
+// previously SKIPPED there — the only full-schema gate never ran.  This section
+// replaces the skip-on-absent pattern with two tiers:
+//
+//   C1 (UNCONDITIONAL) — Validate plugin.json against a snapshotted JSON schema
+//        fixture that captures the fields `--strict` requires.  Runs on every
+//        platform, every CI job, every local run.  A bug that removes `version`
+//        or changes `name` to an invalid form goes red immediately.
+//
+//   C2 (OPPORTUNISTIC) — When the `claude` binary IS on PATH, also run
+//        `claude plugin validate . --strict` as an end-to-end smoke test.
+//        This tier provides defence-in-depth for schema changes Claude Code
+//        may introduce that the fixture hasn't yet captured.
+//
+describe('C: plugin.json schema validation', () => {
+
+  const SCHEMA_FIXTURE_PATH = path.join(__dirname, 'fixtures', 'plugin-manifest-schema.json');
+
+  // ── C1: Unconditional structural gate ────────────────────────────────────────
+  //
+  // Validates plugin.json against the required fields from the snapshotted
+  // schema fixture (tests/fixtures/plugin-manifest-schema.json) using explicit
+  // structural assertions.  This avoids a runtime dependency on `ajv` (which is
+  // only a transitive dep) while providing identical coverage for the fields that
+  // `claude plugin validate --strict` requires.
+  //
+  // Required fields and constraints are derived directly from SCHEMA_FIXTURE_PATH.
+  // If the fixture changes (new required field, new pattern), update this test too.
+
+  test('C1: plugin.json satisfies the snapshotted Claude Code plugin schema (unconditional)', () => {
+    assert.ok(
+      fs.existsSync(SCHEMA_FIXTURE_PATH),
+      `Schema fixture must exist: ${SCHEMA_FIXTURE_PATH}`
+    );
+    assert.ok(
+      fs.existsSync(PLUGIN_JSON_PATH),
+      `.claude-plugin/plugin.json must exist: ${PLUGIN_JSON_PATH}`
+    );
+
+    const manifest = JSON.parse(fs.readFileSync(PLUGIN_JSON_PATH, 'utf-8'));
+    const schema = JSON.parse(fs.readFileSync(SCHEMA_FIXTURE_PATH, 'utf-8'));
+    const errors = [];
+
+    const schemaRequired = Array.isArray(schema.required) ? schema.required : [];
+    const schemaProps = (schema.properties && typeof schema.properties === 'object') ? schema.properties : {};
+
+    // Helper: assert a required field exists with the expected type.
+    function requireField(key, type) {
+      if (!(key in manifest)) {
+        errors.push(`"${key}" is required but missing`);
+      } else if (typeof manifest[key] !== type) {
+        errors.push(`"${key}" must be a ${type}, got ${typeof manifest[key]}`);
+      }
+    }
+
+    // Derive required fields and their types directly from the schema fixture.
+    // Each required field whose "properties" entry has a primitive "type" is
+    // checked via requireField; "object"-typed fields are handled below.
+    for (const key of schemaRequired) {
+      const propDef = schemaProps[key];
+      const fieldType = propDef && propDef.type;
+      if (fieldType === 'object') {
+        // Object fields are validated with deeper checks below.
+        continue;
+      }
+      requireField(key, fieldType || 'string');
+    }
+
+    // Validate "object"-typed required fields from the schema.
+    // For each such field, check existence, type, and any nested "required" sub-fields.
+    for (const key of schemaRequired) {
+      const propDef = schemaProps[key];
+      if (!propDef || propDef.type !== 'object') continue;
+
+      if (!(key in manifest)) {
+        errors.push(`"${key}" is required but missing`);
+      } else if (typeof manifest[key] !== 'object' || manifest[key] === null) {
+        errors.push(`"${key}" must be an object`);
+      } else {
+        // Validate nested required sub-fields declared in the schema.
+        const nestedRequired = Array.isArray(propDef.required) ? propDef.required : [];
+        const nestedProps = (propDef.properties && typeof propDef.properties === 'object') ? propDef.properties : {};
+        for (const subKey of nestedRequired) {
+          const subDef = nestedProps[subKey];
+          const subType = subDef && subDef.type;
+          if (!(subKey in manifest[key])) {
+            errors.push(`"${key}.${subKey}" is required but missing`);
+          } else if (subType && typeof manifest[key][subKey] !== subType) {
+            errors.push(`"${key}.${subKey}" must be a ${subType}, got ${typeof manifest[key][subKey]}`);
+          }
+          // minLength check for nested string sub-fields
+          if (subType === 'string' && subDef.minLength !== undefined) {
+            if (typeof manifest[key][subKey] === 'string' && manifest[key][subKey].length < subDef.minLength) {
+              errors.push(`"${key}.${subKey}" must have minLength ${subDef.minLength}`);
+            }
+          }
+        }
+      }
+    }
+
+    // Derive pattern and minLength constraints from the schema fixture properties.
+    for (const key of schemaRequired) {
+      const propDef = schemaProps[key];
+      if (!propDef || propDef.type === 'object') continue;
+      const value = manifest[key];
+
+      if (propDef.pattern && typeof value === 'string') {
+        const re = new RegExp(propDef.pattern);
+        if (!re.test(value)) {
+          errors.push(`"${key}" must match ${propDef.pattern}, got "${value}"`);
+        }
+      }
+
+      if (propDef.minLength !== undefined && typeof value === 'string') {
+        if (value.length < propDef.minLength) {
+          errors.push(`"${key}" must have minLength ${propDef.minLength}, got length ${value.length}`);
+        }
+      }
+    }
+
+    if (errors.length > 0) {
+      assert.fail(
+        `plugin.json fails structural validation against ${path.relative(ROOT, SCHEMA_FIXTURE_PATH)}:\n` +
+        errors.map(e => `  - ${e}`).join('\n') +
+        `\n\nFull manifest:\n${JSON.stringify(manifest, null, 2)}`
+      );
+    }
+  });
+
+  // ── C2: Opportunistic CLI integration (skipped when claude not on PATH) ──────
 
   const claudeAvailable = (() => {
     try {
@@ -230,8 +366,8 @@ describe('C: claude plugin validate (CLI integration)', () => {
   })();
 
   test(
-    'claude plugin validate . --strict exits 0 (skip if claude not on PATH)',
-    { skip: !claudeAvailable ? 'claude binary not available on PATH' : false },
+    'C2: claude plugin validate . --strict exits 0 (opportunistic — skip when claude not on PATH)',
+    { skip: !claudeAvailable ? 'claude binary not on PATH' : false },
     () => {
       const result = spawnSync('claude', ['plugin', 'validate', '.', '--strict'], {
         cwd: ROOT,
@@ -281,19 +417,33 @@ describe('D: always-on hook contract drift guard', () => {
     return map;
   }
 
-  test('SessionStart: exactly one no-matcher group with gsd-check-update.js and no timeout', () => {
+  test('SessionStart: one no-matcher group with gsd-ensure-canonical-path.js then gsd-check-update.js', () => {
+    // #997: gsd-ensure-canonical-path.js is wired alongside gsd-check-update.js
+    // in the single SessionStart no-matcher group. It must run FIRST so the
+    // canonical ~/.claude/gsd-core path (and its @-include targets) exist before
+    // any other SessionStart logic that may read the bundled tree.
     const map = buildHookMap();
     const groups = map['SessionStart'];
     assert.ok(groups, 'SessionStart must be present in hooks.json');
     // There must be exactly one entry group (key '' = no matcher)
     const noMatcherHooks = groups[''];
     assert.ok(
-      Array.isArray(noMatcherHooks) && noMatcherHooks.length === 1,
-      `SessionStart no-matcher group must contain exactly one hook; got: ${JSON.stringify(noMatcherHooks)}`
+      Array.isArray(noMatcherHooks) && noMatcherHooks.length === 2,
+      `SessionStart no-matcher group must contain exactly two hooks; got: ${JSON.stringify(noMatcherHooks)}`
     );
-    const h = noMatcherHooks[0];
-    assert.equal(h.script, 'gsd-check-update.js', 'SessionStart hook must be gsd-check-update.js');
-    assert.equal(h.timeout, undefined, 'gsd-check-update.js must NOT have a timeout field');
+    assert.equal(
+      noMatcherHooks[0].script, 'gsd-ensure-canonical-path.js',
+      'gsd-ensure-canonical-path.js must be the FIRST SessionStart hook (#997)'
+    );
+    assert.equal(
+      noMatcherHooks[0].timeout, 5,
+      'gsd-ensure-canonical-path.js must have a small timeout (5s) — symlink setup is fast'
+    );
+    assert.equal(
+      noMatcherHooks[1].script, 'gsd-check-update.js',
+      'gsd-check-update.js must remain a SessionStart hook'
+    );
+    assert.equal(noMatcherHooks[1].timeout, undefined, 'gsd-check-update.js must NOT have a timeout field');
   });
 
   test('PreToolUse Write|Edit group: gsd-prompt-guard.js (timeout 5) + gsd-read-guard.js (timeout 5)', () => {
@@ -375,5 +525,358 @@ describe('E: config-gated (opt-in) hooks must not appear in hooks.json', () => {
         `(it is opt-in and must not run unconditionally on the plugin path)`
       );
     }
+  });
+});
+
+// ─── Section F: #997 canonical-path hook registration ────────────────────────
+//
+// gsd-ensure-canonical-path.js must be shipped + wired so plugin installs get a
+// real ~/.claude/gsd-core directory (with the immutable bundled subdirs
+// symlinked) — otherwise every `@~/.claude/gsd-core/...` include in agents /
+// commands / templates resolves to nothing and agents fail (#997).
+describe('F: #997 gsd-ensure-canonical-path.js is shipped and wired', () => {
+  const HOOK_BASENAME = 'gsd-ensure-canonical-path.js';
+
+  test('hook source file exists in hooks/', () => {
+    assert.ok(
+      fs.existsSync(path.join(ROOT, 'hooks', HOOK_BASENAME)),
+      `hooks/${HOOK_BASENAME} must exist on disk`
+    );
+  });
+
+  test('hook is listed in HOOKS_TO_COPY (build-hooks.js) so it ships to dist', () => {
+    const { HOOKS_TO_COPY } = require(path.join(ROOT, 'scripts', 'build-hooks.js'));
+    assert.ok(
+      HOOKS_TO_COPY.includes(HOOK_BASENAME),
+      `${HOOK_BASENAME} must be in HOOKS_TO_COPY or it never ships to hooks/dist`
+    );
+  });
+
+  test('hook is listed in MANAGED_HOOKS (staleness detection)', () => {
+    assert.ok(
+      MANAGED_HOOKS.includes(HOOK_BASENAME),
+      `${HOOK_BASENAME} must be in MANAGED_HOOKS so it is checked for staleness after update`
+    );
+  });
+
+  test('hook is wired in hooks.json SessionStart with ${CLAUDE_PLUGIN_ROOT}', () => {
+    const hooksConfig = JSON.parse(fs.readFileSync(HOOKS_JSON_PATH, 'utf-8'));
+    const sessionStart = hooksConfig.hooks.SessionStart || [];
+    let wired = false;
+    for (const entry of sessionStart) {
+      for (const hook of entry.hooks || []) {
+        if (hook.command && hook.command.includes(HOOK_BASENAME)) {
+          wired = true;
+          assert.ok(
+            hook.command.includes('${CLAUDE_PLUGIN_ROOT}'),
+            'canonical-path hook command must use ${CLAUDE_PLUGIN_ROOT}'
+          );
+        }
+      }
+    }
+    assert.ok(wired, `${HOOK_BASENAME} must be wired under SessionStart in hooks.json`);
+  });
+});
+
+// ─── Section G: #997 ensureCanonicalPath() behavioral regression ─────────────
+//
+// Drives the hook's exported pure core with fake home / fake plugin-root layouts
+// to prove the actual canonical-path bootstrap behaviour: creates symlinks for a
+// plugin layout, no-ops for classic installs, preserves user files, prunes stale
+// links (self-heal after `claude plugin update`), and handles boundary cases
+// (missing bundled dir, pre-existing real dir, pre-existing user file at a link
+// target). Behavioral — calls the exported function and asserts the resulting
+// filesystem state, not source text.
+describe('G: #997 ensureCanonicalPath() behavioural regression', () => {
+  const { ensureCanonicalPath, dirLinkType, MANAGED_SUBDIRS } =
+    require(path.join(ROOT, 'hooks', 'gsd-ensure-canonical-path.js'));
+
+  test('win32 uses a junction; other platforms use a dir symlink', () => {
+    // Junction correctness is an explicit requirement but real junctions can
+    // only be created on Windows. Assert the platform→fs.symlinkSync type
+    // mapping directly so the win32 branch is covered on any host.
+    assert.equal(dirLinkType('win32'), 'junction', 'win32 must use a junction');
+    assert.equal(dirLinkType('linux'), 'dir', 'POSIX must use a dir symlink');
+    assert.equal(dirLinkType('darwin'), 'dir', 'POSIX must use a dir symlink');
+  });
+
+  let tmp;
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-997-'));
+  });
+  afterEach(() => {
+    // eslint-disable-next-line local/no-raw-rmsync-in-tests -- per-test temp cleanup, swallows ENOENT
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  // Build a fake plugin layout: <tmp>/plugin/gsd-core/<subdir>/marker.md and a
+  // separate fake home <tmp>/home with an (initially absent) .claude dir.
+  function makePluginLayout(subdirs = MANAGED_SUBDIRS) {
+    const pluginRoot = path.join(tmp, 'plugin');
+    const bundled = path.join(pluginRoot, 'gsd-core');
+    for (const sub of subdirs) {
+      fs.mkdirSync(path.join(bundled, sub), { recursive: true });
+      fs.writeFileSync(path.join(bundled, sub, 'marker.md'), `bundled ${sub}`);
+    }
+    const homeDir = path.join(tmp, 'home');
+    fs.mkdirSync(path.join(homeDir, '.claude'), { recursive: true });
+    return { pluginRoot, homeDir, bundled };
+  }
+
+  test('plugin layout: creates ~/.claude/gsd-core with all subdirs symlinked to the bundle', () => {
+    const { pluginRoot, homeDir, bundled } = makePluginLayout();
+    const result = ensureCanonicalPath({ pluginRoot, homeDir, platform: 'linux', env: {} });
+
+    assert.equal(result.status, 'ensured', `expected ensured; got ${JSON.stringify(result)}`);
+    const canonical = path.join(homeDir, '.claude', 'gsd-core');
+    assert.ok(fs.existsSync(canonical), 'canonical dir must exist');
+
+    for (const sub of MANAGED_SUBDIRS) {
+      const linkPath = path.join(canonical, sub);
+      const st = fs.lstatSync(linkPath);
+      assert.ok(st.isSymbolicLink(), `${sub} must be a symlink`);
+      assert.equal(
+        fs.realpathSync(linkPath),
+        fs.realpathSync(path.join(bundled, sub)),
+        `${sub} link must resolve to the bundled subdir`
+      );
+      // The @-include target now resolves to real bundled content.
+      assert.equal(
+        fs.readFileSync(path.join(linkPath, 'marker.md'), 'utf-8'),
+        `bundled ${sub}`,
+        `@-include into ${sub} must resolve to bundled content (this is the #997 fix)`
+      );
+    }
+    assert.deepEqual(result.linked.sort(), [...MANAGED_SUBDIRS].sort());
+  });
+
+  test('idempotent: a second run with the same layout re-affirms links and changes nothing', () => {
+    const { pluginRoot, homeDir } = makePluginLayout();
+    ensureCanonicalPath({ pluginRoot, homeDir, platform: 'linux', env: {} });
+    const second = ensureCanonicalPath({ pluginRoot, homeDir, platform: 'linux', env: {} });
+    assert.equal(second.status, 'ensured');
+    assert.deepEqual(second.linked.sort(), [...MANAGED_SUBDIRS].sort());
+    assert.deepEqual(second.prunedStale, []);
+    assert.deepEqual(second.preserved, []);
+  });
+
+  test('classic install: real bundled subdirs at canonical path → no-op (never touched)', () => {
+    const { pluginRoot, homeDir } = makePluginLayout();
+    // Simulate a classic bin/install.js layout: canonical dir is a REAL dir with
+    // REAL subdirs (not symlinks).
+    const canonical = path.join(homeDir, '.claude', 'gsd-core');
+    for (const sub of MANAGED_SUBDIRS) {
+      fs.mkdirSync(path.join(canonical, sub), { recursive: true });
+      fs.writeFileSync(path.join(canonical, sub, 'real.md'), `classic ${sub}`);
+    }
+    const result = ensureCanonicalPath({ pluginRoot, homeDir, platform: 'linux', env: {} });
+    assert.equal(result.status, 'noop');
+    assert.equal(result.reason, 'classic-install');
+    for (const sub of MANAGED_SUBDIRS) {
+      const st = fs.lstatSync(path.join(canonical, sub));
+      assert.ok(st.isDirectory() && !st.isSymbolicLink(), `${sub} must stay a real dir`);
+    }
+  });
+
+  test('no plugin context: CLAUDE_PLUGIN_ROOT unset → no-op (classic/npm install path)', () => {
+    const { homeDir } = makePluginLayout();
+    const result = ensureCanonicalPath({ pluginRoot: undefined, homeDir, platform: 'linux', env: {} });
+    assert.equal(result.status, 'noop');
+    assert.equal(result.reason, 'no-plugin-bundle');
+    assert.ok(!fs.existsSync(path.join(homeDir, '.claude', 'gsd-core')), 'must not create canonical dir');
+  });
+
+  test('boundary: bundled gsd-core dir missing under plugin root → no-op', () => {
+    const pluginRoot = path.join(tmp, 'plugin-empty');
+    fs.mkdirSync(pluginRoot, { recursive: true }); // no gsd-core/ inside
+    const homeDir = path.join(tmp, 'home');
+    fs.mkdirSync(path.join(homeDir, '.claude'), { recursive: true });
+    const result = ensureCanonicalPath({ pluginRoot, homeDir, platform: 'linux', env: {} });
+    assert.equal(result.status, 'noop');
+    assert.equal(result.reason, 'no-plugin-bundle');
+  });
+
+  test('preserve: a real user file at a managed link target is never clobbered', () => {
+    const { pluginRoot, homeDir } = makePluginLayout();
+    const canonical = path.join(homeDir, '.claude', 'gsd-core');
+    fs.mkdirSync(canonical, { recursive: true });
+    // User (or partial state) put a REAL directory at 'references' with content.
+    fs.mkdirSync(path.join(canonical, 'references'), { recursive: true });
+    fs.writeFileSync(path.join(canonical, 'references', 'USER-NOTES.md'), 'precious');
+    const result = ensureCanonicalPath({ pluginRoot, homeDir, platform: 'linux', env: {} });
+    // 'references' is a real dir → classic detection kicks in and the whole op
+    // is a no-op, preserving everything. Either way, the user file survives.
+    assert.ok(
+      fs.existsSync(path.join(canonical, 'references', 'USER-NOTES.md')),
+      'user file under a managed target must survive'
+    );
+    assert.equal(
+      fs.readFileSync(path.join(canonical, 'references', 'USER-NOTES.md'), 'utf-8'),
+      'precious'
+    );
+    void result;
+  });
+
+  test('preserve user-generated top-level file (USER-PROFILE.md) while linking subdirs', () => {
+    const { pluginRoot, homeDir } = makePluginLayout();
+    const canonical = path.join(homeDir, '.claude', 'gsd-core');
+    fs.mkdirSync(canonical, { recursive: true });
+    // A user-generated file at the TOP of the canonical dir (not a managed
+    // subdir) — must never be removed. No managed subdir is real yet, so the
+    // hook proceeds to link them.
+    fs.writeFileSync(path.join(canonical, 'USER-PROFILE.md'), 'my profile');
+    const result = ensureCanonicalPath({ pluginRoot, homeDir, platform: 'linux', env: {} });
+    assert.equal(result.status, 'ensured');
+    assert.ok(
+      fs.existsSync(path.join(canonical, 'USER-PROFILE.md')),
+      'USER-PROFILE.md must survive canonical-path setup'
+    );
+    assert.equal(fs.readFileSync(path.join(canonical, 'USER-PROFILE.md'), 'utf-8'), 'my profile');
+    // And subdirs are still linked.
+    for (const sub of MANAGED_SUBDIRS) {
+      assert.ok(fs.lstatSync(path.join(canonical, sub)).isSymbolicLink(), `${sub} linked`);
+    }
+  });
+
+  test('self-heal: a stale symlink (pointing at a removed prior plugin version) is pruned and recreated', () => {
+    const { pluginRoot, homeDir } = makePluginLayout();
+    const canonical = path.join(homeDir, '.claude', 'gsd-core');
+    fs.mkdirSync(canonical, { recursive: true });
+    // Simulate a stale link left by a previous plugin version that has since
+    // been removed (claude plugin update rotated the version dir).
+    const stalePrior = path.join(tmp, 'plugin-OLD', 'gsd-core', 'references');
+    fs.mkdirSync(stalePrior, { recursive: true });
+    const linkPath = path.join(canonical, 'references');
+    fs.symlinkSync(stalePrior, linkPath, 'dir');
+    // eslint-disable-next-line local/no-raw-rmsync-in-tests -- simulate removed prior version
+    fs.rmSync(path.join(tmp, 'plugin-OLD'), { recursive: true, force: true });
+    assert.ok(!fs.existsSync(linkPath), 'precondition: link now dangles (target removed)');
+
+    const result = ensureCanonicalPath({ pluginRoot, homeDir, platform: 'linux', env: {} });
+    assert.equal(result.status, 'ensured');
+    assert.ok(result.prunedStale.includes('references'), 'stale references link must be pruned');
+    // Now resolves to the CURRENT bundle.
+    assert.equal(
+      fs.realpathSync(linkPath),
+      fs.realpathSync(path.join(pluginRoot, 'gsd-core', 'references')),
+      'references must now point at the current bundled tree'
+    );
+  });
+
+  test('self-heal: a managed symlink pointing at the wrong (but existing) target is repointed', () => {
+    const { pluginRoot, homeDir } = makePluginLayout();
+    const canonical = path.join(homeDir, '.claude', 'gsd-core');
+    fs.mkdirSync(canonical, { recursive: true });
+    // A link to some OTHER real directory (e.g. a different plugin version still
+    // on disk). It is a valid link but points at the wrong place.
+    const otherDir = path.join(tmp, 'plugin-OTHER', 'gsd-core', 'workflows');
+    fs.mkdirSync(otherDir, { recursive: true });
+    fs.symlinkSync(otherDir, path.join(canonical, 'workflows'), 'dir');
+    const result = ensureCanonicalPath({ pluginRoot, homeDir, platform: 'linux', env: {} });
+    assert.equal(result.status, 'ensured');
+    assert.equal(
+      fs.realpathSync(path.join(canonical, 'workflows')),
+      fs.realpathSync(path.join(pluginRoot, 'gsd-core', 'workflows')),
+      'workflows must be repointed to the current bundle'
+    );
+  });
+
+  test('security: bundled gsd-core that symlinks OUTSIDE the plugin root is rejected', () => {
+    const pluginRoot = path.join(tmp, 'plugin-evil');
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    // Attacker places a symlink at <pluginRoot>/gsd-core pointing outside root.
+    const outside = path.join(tmp, 'OUTSIDE');
+    fs.mkdirSync(path.join(outside, 'references'), { recursive: true });
+    fs.symlinkSync(outside, path.join(pluginRoot, 'gsd-core'), 'dir');
+    const homeDir = path.join(tmp, 'home');
+    fs.mkdirSync(path.join(homeDir, '.claude'), { recursive: true });
+    const result = ensureCanonicalPath({ pluginRoot, homeDir, platform: 'linux', env: {} });
+    assert.equal(result.status, 'noop', 'a bundled tree resolving outside the plugin root must be rejected');
+    assert.equal(result.reason, 'no-plugin-bundle');
+    assert.ok(
+      !fs.existsSync(path.join(homeDir, '.claude', 'gsd-core', 'references')),
+      'must NOT link the canonical path at content outside the plugin root'
+    );
+  });
+
+  test('CLAUDE_CONFIG_DIR honoured: canonical path is created under the custom config dir', () => {
+    const { pluginRoot, homeDir } = makePluginLayout();
+    const customCfg = path.join(tmp, 'custom-cfg');
+    fs.mkdirSync(customCfg, { recursive: true });
+    const result = ensureCanonicalPath({
+      pluginRoot, homeDir, platform: 'linux',
+      env: { CLAUDE_CONFIG_DIR: customCfg },
+    });
+    assert.equal(result.status, 'ensured');
+    assert.equal(result.canonicalDir, path.join(customCfg, 'gsd-core'));
+    assert.ok(fs.lstatSync(path.join(customCfg, 'gsd-core', 'references')).isSymbolicLink());
+  });
+
+  test('canonical path is itself a symlink → no-op (never writes links through a user-pointed symlink)', () => {
+    // A user pointed ~/.claude/gsd-core at some other directory via a symlink.
+    // The hook must NOT create managed links through it into a dir it does not
+    // own — it bails as a no-op.
+    const { pluginRoot, homeDir } = makePluginLayout();
+    const userTarget = path.join(tmp, 'user-gsd');
+    fs.mkdirSync(userTarget, { recursive: true });
+    const canonical = path.join(homeDir, '.claude', 'gsd-core');
+    fs.symlinkSync(userTarget, canonical, 'dir');
+
+    const result = ensureCanonicalPath({ pluginRoot, homeDir, platform: 'linux', env: {} });
+    assert.equal(result.status, 'noop');
+    assert.equal(result.reason, 'canonical-is-symlink');
+    // No managed links were written into the user's target directory.
+    for (const sub of MANAGED_SUBDIRS) {
+      assert.ok(
+        !fs.existsSync(path.join(userTarget, sub)),
+        `must not write ${sub} link through the user symlink`
+      );
+    }
+  });
+
+  test('uniform result contract: every status carries the four action arrays', () => {
+    const { pluginRoot, homeDir } = makePluginLayout();
+    const noop = ensureCanonicalPath({ pluginRoot: undefined, homeDir, platform: 'linux', env: {} });
+    for (const k of ['linked', 'prunedStale', 'preserved', 'skipped']) {
+      assert.ok(Array.isArray(noop[k]), `noop result.${k} must be an array, not undefined`);
+    }
+    const ensured = ensureCanonicalPath({ pluginRoot, homeDir, platform: 'linux', env: {} });
+    for (const k of ['linked', 'prunedStale', 'preserved', 'skipped']) {
+      assert.ok(Array.isArray(ensured[k]), `ensured result.${k} must be an array`);
+    }
+  });
+
+  test('security: a bundled subdir that symlinks OUTSIDE the bundle is skipped, not linked', () => {
+    // Defence-in-depth: even within a (validated) plugin root, a tampered
+    // bundle that ships <bundle>/references as a symlink escaping the bundle
+    // must NOT be exposed at the canonical path.
+    const { pluginRoot, homeDir, bundled } = makePluginLayout(['workflows']);
+    // Plant an escaping symlink at <bundle>/references → outside the bundle.
+    const outside = path.join(tmp, 'OUTSIDE-references');
+    fs.mkdirSync(outside, { recursive: true });
+    fs.writeFileSync(path.join(outside, 'evil.md'), 'evil');
+    fs.symlinkSync(outside, path.join(bundled, 'references'), 'dir');
+
+    const result = ensureCanonicalPath({ pluginRoot, homeDir, platform: 'linux', env: {} });
+    assert.equal(result.status, 'ensured');
+    assert.ok(result.linked.includes('workflows'), 'legit subdir still linked');
+    assert.ok(result.skipped.includes('references'), 'escaping subdir must be skipped');
+    assert.ok(
+      !fs.existsSync(path.join(homeDir, '.claude', 'gsd-core', 'references')),
+      'canonical path must NOT expose the escaping subdir'
+    );
+  });
+
+  test('partial bundle: only ships some subdirs → links those, skips absent ones', () => {
+    const { pluginRoot, homeDir } = makePluginLayout(['references', 'workflows']);
+    const result = ensureCanonicalPath({ pluginRoot, homeDir, platform: 'linux', env: {} });
+    assert.equal(result.status, 'ensured');
+    assert.deepEqual(result.linked.sort(), ['references', 'workflows']);
+    assert.deepEqual(
+      result.skipped.sort(),
+      ['bin', 'contexts', 'templates'].sort(),
+      'subdirs not present in the bundle must be skipped, not errored'
+    );
   });
 });

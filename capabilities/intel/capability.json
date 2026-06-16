@@ -5,8 +5,10 @@
   "description": "Code-intelligence store for codebase querying, diff, snapshot, and API-surface extraction; exposes `gsd-tools intel` subcommands (query, status, update, diff, snapshot, patch-meta, validate, extract-exports, api-surface) and backs `/gsd-map-codebase` and `gsd-intel-updater`.",
   "tier": "full",
   "requires": [],
+  "runtimeCompat": { "supported": ["*"], "unsupported": [] },
   "skills": [],
   "agents": [],
+  "activationKey": "intel.enabled",
   "config": {
     "intel.enabled": {
       "type": "boolean",
@@ -22,7 +24,16 @@
     }
   ],
   "hooks": [],
-  "steps": [],
+  "steps": [
+    {
+      "point": "plan:pre",
+      "ref": { "command": "intel api-surface" },
+      "produces": [".planning/intel/API-SURFACE.md"],
+      "consumes": [],
+      "when": "intel.enabled",
+      "onError": "skip"
+    }
+  ],
   "contributions": [],
   "gates": []
 }

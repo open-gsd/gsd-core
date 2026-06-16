@@ -195,6 +195,86 @@ describe('formatGsdSlash — runtime-aware slash command formatter', () => {
   });
 });
 
+describe('formatGsdSlash — descriptor-driven commandStyle (ADR-857 phase 5c)', () => {
+  // These three assertions are the non-vacuous equivalence anchor for the
+  // descriptor-driven branch: the formatter reads commandStyle from the
+  // capability registry instead of hardcoding `if (rt === 'codex')`.
+
+  test('codex (commandStyle=shell-var) → $gsd- with lowercased token', () => {
+    // The registry carries commandStyle=shell-var for codex. The formatter
+    // must look it up and emit the shell-var form, lowercasing only the token.
+    assert.strictEqual(formatGsdSlash('Foo', 'codex'), '$gsd-foo');
+  });
+
+  test('slash-hyphen runtime (claude) → /gsd- with case-preserved token', () => {
+    // claude descriptor has commandStyle=slash-hyphen. Token case is preserved.
+    assert.strictEqual(formatGsdSlash('Foo', 'claude'), '/gsd-Foo');
+  });
+
+  test('slash-hyphen runtime (cursor) → /gsd- with case-preserved token', () => {
+    // cursor descriptor has commandStyle=slash-hyphen.
+    assert.strictEqual(formatGsdSlash('Foo', 'cursor'), '/gsd-Foo');
+  });
+
+  test('unknown runtime (no registry entry) → /gsd- default (slash-hyphen fallback)', () => {
+    // An unknown runtime has no descriptor entry → runtimes[rt] is undefined →
+    // style is undefined → not 'shell-var' → falls through to /gsd- default.
+    assert.strictEqual(formatGsdSlash('foo', 'doesnotexist'), '/gsd-foo');
+  });
+});
+
+describe('formatGsdSlash — registry-parity: prefix and casing are a pure function of commandStyle', () => {
+  // Non-vacuous proof that the REGISTRY drives the decision, not a hardcoded
+  // `rt === 'codex'` check. For every runtime id in capability-registry.cjs we
+  // derive the expected prefix and lowercasing linkage directly from the
+  // registry's commandStyle field and assert that formatGsdSlash matches.
+  //
+  // This fails if:
+  //   (a) anyone reverts the formatter to a hardcode that diverges from the
+  //       registry (e.g. a future runtime gets commandStyle=shell-var but the
+  //       formatter still only special-cases 'codex'); or
+  //   (b) a runtime's commandStyle is changed in the registry without
+  //       formatGsdSlash following suit.
+  const { runtimes } = require(
+    path.join(ROOT, 'gsd-core', 'bin', 'lib', 'capability-registry.cjs'),
+  );
+
+  const TOKEN_MIXED = 'SomeCmd'; // mixed-case to distinguish lowercasing behaviour
+
+  for (const [id, descriptor] of Object.entries(runtimes)) {
+    const style = descriptor.runtime.commandStyle;
+
+    test(`${id}: commandStyle=${style} → formatGsdSlash prefix and casing match registry`, () => {
+      const result = formatGsdSlash(TOKEN_MIXED, id);
+
+      if (style === 'shell-var') {
+        // shell-var runtimes must emit $gsd-<lowercased-token>
+        assert.ok(
+          result.startsWith('$gsd-'),
+          `[${id}] expected $gsd- prefix (commandStyle=shell-var), got: ${result}`,
+        );
+        assert.strictEqual(
+          result,
+          `$gsd-${TOKEN_MIXED.toLowerCase()}`,
+          `[${id}] shell-var must lowercase the token`,
+        );
+      } else {
+        // slash-hyphen (or any other non-shell-var value) must emit /gsd-<token>
+        // with case preserved (no lowercasing)
+        assert.ok(
+          result.startsWith('/gsd-'),
+          `[${id}] expected /gsd- prefix (commandStyle=${style}), got: ${result}`,
+        );
+        assert.strictEqual(
+          result,
+          `/gsd-${TOKEN_MIXED}`,
+          `[${id}] slash-hyphen must preserve token case`,
+        );
+      }
+    });
+  }
+});
+
 describe('resolveRuntime — env > config > default', () => {
   test('process.env.GSD_RUNTIME wins over everything', () => {
     const saved = process.env.GSD_RUNTIME;

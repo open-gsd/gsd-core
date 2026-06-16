@@ -52,7 +52,7 @@ const {
   resolveFastModeInternal,
   resolveEffortForTier,
   VALID_EFFORTS,
-} = require('../gsd-core/bin/lib/core.cjs');
+} = require('../gsd-core/bin/lib/model-resolver.cjs');
 
 const {
   renderEffortForRuntime,

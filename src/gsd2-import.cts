@@ -24,8 +24,8 @@ import path from 'node:path';
 import { platformWriteSync } from './shell-command-projection.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import core = require('./core.cjs');
-const { output } = core;
+import ioMod = require('./io.cjs');
+const { output } = ioMod;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 

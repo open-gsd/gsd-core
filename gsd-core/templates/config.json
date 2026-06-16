@@ -58,5 +58,5 @@
   },
   "project_code": null,
   "agent_skills": {},
-  "claude_md_path": "./CLAUDE.md"
+  "claude_md_path": "./.claude/CLAUDE.md"
 }

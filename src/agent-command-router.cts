@@ -7,8 +7,8 @@
  */
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import core = require('./core.cjs');
-const { output, error, ERROR_REASON } = core;
+import io = require('./io.cjs');
+const { output, error, ERROR_REASON } = io;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

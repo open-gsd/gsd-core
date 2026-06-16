@@ -1,11 +1,11 @@
 ---
 name: gsd-context
-description: "codebase intelligence | map graphify docs learnings"
+description: "codebase intel | map graphify docs learnings mempalace"
 argument-hint: ""
 allowed-tools:
   - Read
   - Skill
-requires: [map-codebase, graphify, docs-update, extract-learnings]
+requires: [map-codebase, graphify, docs-update, extract-learnings, mempalace-recall, mempalace-capture]
 ---
 
 Route to the appropriate codebase-intelligence skill based on the user's intent.
@@ -19,5 +19,7 @@ Route to the appropriate codebase-intelligence skill based on the user's intent.
 | Generate a knowledge graph | gsd-graphify |
 | Update project documentation | gsd-docs-update |
 | Extract learnings from a completed phase | gsd-extract-learnings |
+| Recall prior decisions and patterns before planning | gsd-mempalace-recall |
+| File a phase artifact into MemPalace | gsd-mempalace-capture |
 
 Invoke the matched skill directly using the Skill tool.

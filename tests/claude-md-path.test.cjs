@@ -27,7 +27,7 @@ describe('claude_md_path config key', () => {
   test('config template includes claude_md_path', () => {
     const templatePath = path.join(__dirname, '..', 'gsd-core', 'templates', 'config.json');
     const template = JSON.parse(fs.readFileSync(templatePath, 'utf-8'));
-    assert.strictEqual(template.claude_md_path, './CLAUDE.md');
+    assert.strictEqual(template.claude_md_path, './.claude/CLAUDE.md');
   });
 
   test('config-get claude_md_path returns default value when not set', () => {
@@ -59,7 +59,7 @@ describe('claude_md_path config key', () => {
 
     const configPath = path.join(tmpDir, '.planning', 'config.json');
     const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-    assert.strictEqual(config.claude_md_path, './CLAUDE.md');
+    assert.strictEqual(config.claude_md_path, './.claude/CLAUDE.md');
   });
 });
 
@@ -186,7 +186,7 @@ describe('cmdGenerateClaudeMd reads claude_md_path from config', () => {
     assert.strictEqual(parsed.claude_md_path, path.join(realTmpDir, outputFile));
   });
 
-  test('defaults to ./CLAUDE.md when config has no claude_md_path', () => {
+  test('defaults to .claude/CLAUDE.md when config has no claude_md_path (#1098)', () => {
     // Set up config without claude_md_path
     const configPath = path.join(tmpDir, '.planning', 'config.json');
     fs.writeFileSync(configPath, JSON.stringify({ mode: 'interactive' }), 'utf-8');
@@ -196,6 +196,6 @@ describe('cmdGenerateClaudeMd reads claude_md_path from config', () => {
 
     const parsed = JSON.parse(result.output);
     const realTmpDir = fs.realpathSync(tmpDir);
-    assert.strictEqual(parsed.claude_md_path, path.join(realTmpDir, 'CLAUDE.md'));
+    assert.strictEqual(parsed.claude_md_path, path.join(realTmpDir, '.claude', 'CLAUDE.md'));
   });
 });

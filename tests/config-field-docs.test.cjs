@@ -1,4 +1,5 @@
 // allow-test-rule: docs-parity
+// allow-test-rule: source-text-is-the-product — settings-advanced.md prompt text is the deployed contract (#1216)
 // Extracts CONFIG_DEFAULTS keys from config-loader.cjs source to verify planning-config.md
 // stays in sync. The canonical list of defaults lives in source; there is no runtime
 // API to enumerate them. Source inspection is the only practical parity check here.
@@ -206,6 +207,151 @@ describe('config-field-docs', () => {
     assert.ok(
       content.includes('plan_checker'),
       'planning-config.md must mention the plan_checker flat-key alias'
+    );
+  });
+
+  test('workflow.test_command is documented in planning-config.md (#1216)', () => {
+    assert.ok(
+      content.includes('`workflow.test_command`'),
+      'planning-config.md must document workflow.test_command'
+    );
+    // Must appear specifically in the Complete Field Reference section
+    const completeRefSection = content.slice(content.indexOf('## Complete Field Reference'));
+    assert.ok(
+      completeRefSection.includes('`workflow.test_command`'),
+      'planning-config.md Complete Field Reference must include workflow.test_command'
+    );
+  });
+
+  test('workflow.build_command is documented in planning-config.md (#1216)', () => {
+    assert.ok(
+      content.includes('`workflow.build_command`'),
+      'planning-config.md must document workflow.build_command'
+    );
+    // Must appear specifically in the Complete Field Reference section
+    const completeRefSection = content.slice(content.indexOf('## Complete Field Reference'));
+    assert.ok(
+      completeRefSection.includes('`workflow.build_command`'),
+      'planning-config.md Complete Field Reference must include workflow.build_command'
+    );
+  });
+});
+
+// ─── CONFIGURATION.md parity (#1216) ────────────────────────────────────────
+
+describe('CONFIGURATION.md parity (#1216)', () => {
+  const DOCS_CONFIG_PATH = path.join(__dirname, '..', 'docs', 'CONFIGURATION.md');
+  const SETTINGS_ADVANCED_PATH = path.join(
+    __dirname,
+    '..',
+    'gsd-core',
+    'workflows',
+    'settings-advanced.md',
+  );
+
+  let docsContent;
+  let settingsAdvancedContent;
+
+  before(() => {
+    docsContent = fs.readFileSync(DOCS_CONFIG_PATH, 'utf-8');
+    settingsAdvancedContent = fs.readFileSync(SETTINGS_ADVANCED_PATH, 'utf-8');
+  });
+
+  test('CONFIGURATION.md workflow.subagent_timeout describes milliseconds, not seconds (#1216)', () => {
+    assert.ok(
+      docsContent.includes('millisecond') || docsContent.includes('milliseconds'),
+      'CONFIGURATION.md workflow.subagent_timeout must use the word "millisecond(s)"'
+    );
+    assert.ok(
+      !docsContent.match(/\|\s*`workflow\.subagent_timeout`[^|]*\|\s*`?600`?\s*\|/),
+      'CONFIGURATION.md workflow.subagent_timeout must NOT have default 600 (that was the seconds default)'
+    );
+  });
+
+  test('CONFIGURATION.md workflow.subagent_timeout default is 300000 (#1216)', () => {
+    // Row-scoped: the actual table row for workflow.subagent_timeout must contain 300000
+    assert.ok(
+      /\|\s*`workflow\.subagent_timeout`\s*\|[^|]*\|\s*`?300000`?\s*\|/.test(docsContent),
+      'CONFIGURATION.md workflow.subagent_timeout table row must have default 300000'
+    );
+  });
+
+  test('settings-advanced.md subagent_timeout prompt says milliseconds, not seconds (#1216)', () => {
+    assert.ok(
+      settingsAdvancedContent.includes('millisecond') ||
+        settingsAdvancedContent.includes('milliseconds'),
+      'settings-advanced.md subagent_timeout prompt must use "millisecond(s)"'
+    );
+    assert.ok(
+      !settingsAdvancedContent.includes('Integer number of seconds'),
+      'settings-advanced.md must NOT say "Integer number of seconds" for subagent_timeout'
+    );
+  });
+
+  test('settings-advanced.md subagent_timeout prompt default is 300000 not 600 (#1216)', () => {
+    assert.ok(
+      !settingsAdvancedContent.match(/value or 600/),
+      'settings-advanced.md must NOT show 600 as the subagent_timeout default'
+    );
+    assert.ok(
+      settingsAdvancedContent.includes('300000'),
+      'settings-advanced.md must show 300000 as the subagent_timeout default'
+    );
+  });
+
+  test('settings-advanced.md parse-default list must NOT show subagent_timeout default 600 (#1216)', () => {
+    // Line 53 regression: the parse-default list item must use 300000, not 600
+    assert.ok(
+      !(/`workflow\.subagent_timeout`[^\n]*default:[^\n]*`?600`?/.test(settingsAdvancedContent)),
+      'settings-advanced.md must NOT list subagent_timeout default as 600 (stale seconds default)'
+    );
+  });
+
+  test('settings-advanced.md confirmation table must NOT label subagent_timeout as {seconds} (#1216)', () => {
+    // Line 754 regression: the confirmation table row must say {milliseconds}, not {seconds}
+    assert.ok(
+      !(/workflow\.subagent_timeout\s*\|\s*\{seconds\}/.test(settingsAdvancedContent)),
+      'settings-advanced.md confirmation table must NOT label subagent_timeout as {seconds}'
+    );
+  });
+
+  test('settings-advanced.md bash example must NOT use subagent_timeout 900 (#1216)', () => {
+    // Line 501 regression: the bash example must not show the stale 900 value
+    assert.ok(
+      !(/subagent_timeout 900\b/.test(settingsAdvancedContent)),
+      'settings-advanced.md bash example must NOT set subagent_timeout to 900 (stale seconds value)'
+    );
+  });
+
+  test('CONFIGURATION.md review.models rows do not show shell command examples (#1216)', () => {
+    // The Integration Settings section (around line 195-202) used to have
+    // shell-command examples like "codex exec --model gpt-5". After the fix
+    // those rows must describe model ids, not full commands.
+    assert.ok(
+      !docsContent.includes('"codex exec --model'),
+      'CONFIGURATION.md must NOT contain "codex exec --model" shell command example'
+    );
+    assert.ok(
+      !docsContent.includes('"opencode run --model'),
+      'CONFIGURATION.md must NOT contain "opencode run --model" shell command example'
+    );
+    assert.ok(
+      !docsContent.includes('"gemini -m gemini'),
+      'CONFIGURATION.md must NOT contain "gemini -m gemini..." shell command example'
+    );
+  });
+
+  test('workflow.test_command is documented in CONFIGURATION.md (#1216)', () => {
+    assert.ok(
+      docsContent.includes('`workflow.test_command`'),
+      'CONFIGURATION.md must document workflow.test_command'
+    );
+  });
+
+  test('workflow.build_command is documented in CONFIGURATION.md (#1216)', () => {
+    assert.ok(
+      docsContent.includes('`workflow.build_command`'),
+      'CONFIGURATION.md must document workflow.build_command'
     );
   });
 });

@@ -1,0 +1,64 @@
+{
+  "id": "profile-pipeline",
+  "role": "feature",
+  "title": "Developer profiling pipeline",
+  "description": "Developer behavioral profiling from Claude Code session history; scans session JSONL files, extracts and samples user messages, and generates profile artifacts (USER-PROFILE.md, dev-preferences.md, CLAUDE.md sections). Exposes eight `gsd-tools` commands: scan-sessions, extract-messages, profile-sample (pipeline phase) and write-profile, profile-questionnaire, generate-dev-preferences, generate-claude-profile, generate-claude-md (output phase). Backs the /gsd-profile-user skill and gsd-user-profiler agent.",
+  "tier": "full",
+  "requires": [],
+  "runtimeCompat": { "supported": ["*"], "unsupported": [] },
+  "skills": ["profile-user"],
+  "agents": ["gsd-user-profiler"],
+  "config": {
+    "profile-pipeline.enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable the developer profiling pipeline commands (scan-sessions, extract-messages, profile-sample, write-profile, etc.)."
+    }
+  },
+  "commands": [
+    {
+      "family": "scan-sessions",
+      "module": "profile-pipeline-command-router.cjs",
+      "router": "routeScanSessions"
+    },
+    {
+      "family": "extract-messages",
+      "module": "profile-pipeline-command-router.cjs",
+      "router": "routeExtractMessages"
+    },
+    {
+      "family": "profile-sample",
+      "module": "profile-pipeline-command-router.cjs",
+      "router": "routeProfileSample"
+    },
+    {
+      "family": "write-profile",
+      "module": "profile-pipeline-command-router.cjs",
+      "router": "routeWriteProfile"
+    },
+    {
+      "family": "profile-questionnaire",
+      "module": "profile-pipeline-command-router.cjs",
+      "router": "routeProfileQuestionnaire"
+    },
+    {
+      "family": "generate-dev-preferences",
+      "module": "profile-pipeline-command-router.cjs",
+      "router": "routeGenerateDevPreferences"
+    },
+    {
+      "family": "generate-claude-profile",
+      "module": "profile-pipeline-command-router.cjs",
+      "router": "routeGenerateClaudeProfile"
+    },
+    {
+      "family": "generate-claude-md",
+      "module": "profile-pipeline-command-router.cjs",
+      "router": "routeGenerateClaudeMd"
+    }
+  ],
+  "hooks": [],
+  "steps": [],
+  "contributions": [],
+  "gates": []
+}

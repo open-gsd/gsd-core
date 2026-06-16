@@ -1,10 +1,11 @@
 {
   "name": "@opengsd/gsd-core",
-  "version": "1.3.1-dev.0",
+  "version": "1.5.0-rc.5",
   "description": "GSD Core is a meta-prompting, context engineering, and spec-driven development system for AI coding agents.",
   "bin": {
     "gsd-core": "bin/install.js",
-    "gsd-tools": "gsd-core/bin/gsd-tools.cjs"
+    "gsd-tools": "gsd-core/bin/gsd-tools.cjs",
+    "gsd_run": "gsd-core/bin/gsd_run"
   },
   "files": [
     "bin",
@@ -51,7 +52,7 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.84",
-    "ws": "8.20.1"
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
@@ -63,7 +64,7 @@
     "eslint-plugin-no-only-tests": "^3.4.0",
     "fast-check": "^4.8.0",
     "globals": "^16.5.0",
-    "js-yaml": "^4.1.1",
+    "js-yaml": "^4.2.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.60.0"
   },
@@ -93,7 +94,9 @@
     "pretest:coverage": "npm run build:lib && npm run lint:skill-deps",
     "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/",
     "lint:fix": "eslint . --fix",
-    "lint:ci": "npm run lint && npm run lint:skill-deps && node scripts/lint-test-file-count.cjs && node scripts/lint-command-contract.cjs && node scripts/lint-pr-check-project-dir.cjs && npm run lint:legacy-name && node scripts/lint-regression-test-names.cjs",
+    "lint:ci": "npm run lint && npm run lint:skill-deps && node scripts/lint-test-file-count.cjs && node scripts/lint-command-contract.cjs && node scripts/lint-pr-check-project-dir.cjs && npm run lint:legacy-name && node scripts/lint-regression-test-names.cjs && node scripts/lint-windows-test-portability.cjs && node scripts/lint-allow-test-rule-refs.cjs",
+    "lint:allow-test-rule-refs": "node scripts/lint-allow-test-rule-refs.cjs",
+    "lint:windows-test-portability": "node scripts/lint-windows-test-portability.cjs",
     "lint:regression-names": "node scripts/lint-regression-test-names.cjs",
     "lint:descriptions": "node scripts/lint-descriptions.cjs",
     "lint:skill-deps": "node scripts/lint-skill-deps.cjs",
@@ -103,6 +106,7 @@
     "lint:docs": "node scripts/lint-docs-required.cjs",
     "lint:legacy-name": "node scripts/lint-legacy-dir-name.cjs",
     "ci:test-scope": "node scripts/ci-test-scope.cjs",
+    "size:baseline": "node scripts/update-size-baseline.cjs",
     "changeset": "node scripts/changeset/new.cjs",
     "changelog:render": "node scripts/changeset/cli.cjs render",
     "test": "node scripts/run-tests.cjs",
@@ -112,9 +116,9 @@
     "test:security": "node scripts/run-tests.cjs --suite security",
     "test:slow": "node scripts/run-tests.cjs --suite slow",
     "test:affected": "node scripts/run-affected-tests.cjs",
-    "test:coverage": "c8 --check-coverage --lines 70 --reporter text --include 'gsd-core/bin/lib/*.cjs' --exclude 'tests/**' --all node scripts/run-tests.cjs",
+    "test:coverage": "c8 --check-coverage --lines 70 --branches 60 --reporter text --include 'gsd-core/bin/lib/*.cjs' --exclude 'tests/**' --all node scripts/run-tests.cjs",
     "test:coverage:scripts-floor": "c8 check-coverage --lines 55 --include 'scripts/**/*.cjs' --exclude 'tests/**' --all",
-    "test:coverage:unit": "c8 --check-coverage --lines 70 --reporter text --include 'gsd-core/bin/lib/*.cjs' --exclude 'tests/**' --all node scripts/run-tests.cjs --suite unit",
+    "test:coverage:unit": "c8 --check-coverage --lines 70 --branches 60 --reporter text --include 'gsd-core/bin/lib/*.cjs' --exclude 'tests/**' --all node scripts/run-tests.cjs --suite unit && c8 check-coverage --per-file --lines 0 --functions 0 --statements 0 --branches 70 --include 'gsd-core/bin/lib/state.cjs' --include 'gsd-core/bin/lib/phase.cjs' --include 'gsd-core/bin/lib/verify.cjs' --include 'gsd-core/bin/lib/init.cjs' --exclude 'tests/**'",
     "test:coverage:all": "npm run test:coverage",
     "test:mutation": "stryker run",
     "test:mutation:since": "stryker run --incremental --since origin/next"

@@ -62,13 +62,19 @@ describe('bug #3126: runtime-homes getGlobalConfigDir — defaults', () => {
   ];
   for (const [runtime, expected] of defaults) {
     test(`${runtime} default configDir`, () => {
-      // Clear all env vars for this runtime
-      const envKeys = ['CLAUDE_CONFIG_DIR','CURSOR_CONFIG_DIR','GEMINI_CONFIG_DIR',
-        'CODEX_HOME','COPILOT_CONFIG_DIR','COPILOT_HOME','ANTIGRAVITY_CONFIG_DIR','WINDSURF_CONFIG_DIR',
-        'AUGMENT_CONFIG_DIR','TRAE_CONFIG_DIR','QWEN_CONFIG_DIR','HERMES_HOME',
-        'CODEBUDDY_CONFIG_DIR','CLINE_CONFIG_DIR','OMP_CONFIG_DIR','OPENCODE_CONFIG_DIR','OPENCODE_CONFIG',
-        'KILO_CONFIG_DIR','KILO_CONFIG',
-        'XDG_CONFIG_HOME'];
+      // Derive env-var list from the registry so new runtimes are auto-covered.
+      // GROK_AGENTS_HOME is kept explicitly (grok has no registry entry).
+      const { runtimes: _reg3126 } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'capability-registry.cjs'));
+      const _regEnvKeys3126 = Object.values(_reg3126).flatMap((r) => {
+        const ch = r.runtime?.configHome;
+        if (!ch) return [];
+        const envs = Array.isArray(ch.env) ? ch.env : [];
+        const profileEnvs = Array.isArray(ch.profileEnv) ? ch.profileEnv : [];
+        const configRootEnvs = Array.isArray(ch.configRootEnv) ? ch.configRootEnv : [];
+        const skillsEnvs = ch.skillsHome && Array.isArray(ch.skillsHome.env) ? ch.skillsHome.env : [];
+        return [...envs, ...profileEnvs, ...configRootEnvs, ...skillsEnvs];
+      });
+      const envKeys = [...new Set([..._regEnvKeys3126, 'GROK_AGENTS_HOME', 'XDG_CONFIG_HOME'])];
       const saved = {};
       for (const k of envKeys) { saved[k] = process.env[k]; delete process.env[k]; }
       try {
@@ -124,10 +130,34 @@ describe('bug #3126: runtime-homes env-var overrides', () => {
     });
   });
 
-  test('omp respects OMP_CONFIG_DIR', () => {
-    withEnv('OMP_CONFIG_DIR', '/custom/omp-agent', () => {
+  test('omp respects PI_CODING_AGENT_DIR', () => {
+    withEnv('PI_CODING_AGENT_DIR', '/custom/omp-agent', () => {
       assert.strictEqual(getGlobalConfigDir('omp'), '/custom/omp-agent');
     });
+  });
+
+  test('omp profile env wins over PI_CODING_AGENT_DIR', () => {
+    const home = require('node:fs').mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-profile-home-'));
+    const savedHome = process.env.HOME;
+    const savedUserProfile = process.env.USERPROFILE;
+    try {
+      process.env.HOME = home;
+      process.env.USERPROFILE = home;
+      withEnv('PI_CODING_AGENT_DIR', '/custom/omp-agent', () => {
+        withEnv('OMP_PROFILE', 'work', () => {
+          assert.strictEqual(
+            getGlobalConfigDir('omp'),
+            path.join(home, '.omp', 'profiles', 'work', 'agent'),
+          );
+        });
+      });
+    } finally {
+      if (savedHome === undefined) delete process.env.HOME;
+      else process.env.HOME = savedHome;
+      if (savedUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = savedUserProfile;
+      cleanup(home);
+    }
   });
 
   test('antigravity detects 2.x IDE dir when legacy dir is absent', () => {
@@ -172,7 +202,7 @@ describe('bug #3126: runtime-homes getGlobalSkillsBase', () => {
     });
   });
   test('omp: skills at <configDir>/skills', () => {
-    withEnv('OMP_CONFIG_DIR', undefined, () => {
+    withEnv('PI_CODING_AGENT_DIR', undefined, () => {
       assert.strictEqual(
         getGlobalSkillsBase('omp'),
         path.join(os.homedir(), '.omp', 'agent', 'skills'),
@@ -207,7 +237,7 @@ describe('bug #3126: runtime-homes getGlobalSkillDir', () => {
     });
   });
   test('omp: <configDir>/skills/<skillName>', () => {
-    withEnv('OMP_CONFIG_DIR', undefined, () => {
+    withEnv('PI_CODING_AGENT_DIR', undefined, () => {
       assert.strictEqual(
         getGlobalSkillDir('omp', 'gsd-executor'),
         path.join(os.homedir(), '.omp', 'agent', 'skills', 'gsd-executor'),

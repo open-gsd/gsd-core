@@ -1,0 +1,36 @@
+{
+  "id": "ai-integration",
+  "role": "feature",
+  "title": "AI design contract",
+  "description": "AI-SPEC design contract workflow for phases that build AI systems; owns the AI integration command, agents, and workflow.ai_integration_phase activation key.",
+  "tier": "full",
+  "requires": [],
+  "runtimeCompat": { "supported": ["*"], "unsupported": [] },
+  "skills": ["ai-integration-phase"],
+  "agents": [
+    "gsd-framework-selector",
+    "gsd-ai-researcher",
+    "gsd-domain-researcher",
+    "gsd-eval-planner"
+  ],
+  "hooks": [],
+  "config": {
+    "workflow.ai_integration_phase": {
+      "type": "boolean",
+      "default": true,
+      "description": "Prompt for an AI-SPEC design contract before planning phases that involve AI systems."
+    }
+  },
+  "steps": [
+    {
+      "point": "plan:pre",
+      "ref": { "skill": "ai-integration-phase" },
+      "produces": ["AI-SPEC.md"],
+      "consumes": ["CONTEXT.md"],
+      "when": "workflow.ai_integration_phase",
+      "onError": "skip"
+    }
+  ],
+  "contributions": [],
+  "gates": []
+}

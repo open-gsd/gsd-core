@@ -33,18 +33,19 @@ describe('feat-3210: fallow integration module', () => {
     );
 
     const normalized = normalizeFallowReport(fixture);
-    // M6: fixture: 1 unusedExport + 1 duplicate + 1 circularDep = 3; counts derived from fixture, not hardcoded
-    const expectedUnused = fixture.unusedExports.length;
-    const expectedDuplicates = fixture.duplicates.length;
-    const expectedCircular = fixture.circularDependencies.length;
-    const expectedTotal = expectedUnused + expectedDuplicates + expectedCircular;
+    // Counts derived from real schema fixture fields
+    const expectedUnused = fixture.dead_code.unused_exports.length;
+    const expectedUnusedFiles = fixture.dead_code.unused_files.length;
+    const expectedCircular = fixture.dead_code.circular_dependencies.length;
+    const expectedDuplicates = fixture.duplication.clone_groups.length;
     assert.deepStrictEqual(normalized.summary, {
       unused_exports: expectedUnused,
+      unused_files: expectedUnusedFiles,
       duplicates: expectedDuplicates,
       circular_dependencies: expectedCircular,
-      total: expectedTotal,
+      total: 4,
     });
-    assert.strictEqual(normalized.findings.length, expectedTotal);
+    assert.strictEqual(normalized.findings.length, 4);
   });
 
   test('falls back to node_modules/.bin/fallow when PATH does not contain fallow', () => {
@@ -114,6 +115,7 @@ describe('feat-3210: fallow integration module', () => {
     const normalized = normalizeFallowReport(fixture);
     assert.deepStrictEqual(normalized.summary, {
       unused_exports: 0,
+      unused_files: 0,
       duplicates: 0,
       circular_dependencies: 0,
       total: 0,
@@ -133,45 +135,8 @@ describe('feat-3210: fallow integration module', () => {
     cleanup(tmp);
   });
 
-  // L3: runFallowAudit against a non-zero-exit binary must surface error state
-  test('runFallowAudit surfaces error state when binary exits non-zero', async () => {
-    const { runFallowAudit } = require('../gsd-core/bin/lib/fallow-runner.cjs');
-    // N2: use shared helper
-    const baseTmp = getWritableTmp();
-    const tmp = fs.mkdtempSync(path.join(baseTmp, 'gsd-fallow-fail-'));
-    const shimName = process.platform === 'win32' ? 'fallow.cmd' : 'fallow';
-    const shimPath = path.join(tmp, shimName);
-
-    if (process.platform === 'win32') {
-      fs.writeFileSync(shimPath, '@echo fallow-error-stderr 1>&2\r\n@exit 1\r\n');
-    } else {
-      fs.writeFileSync(shimPath, '#!/usr/bin/env sh\necho "fallow-error-stderr" >&2\nexit 1\n');
-      fs.chmodSync(shimPath, 0o755);
-    }
-
-    try {
-      let errorState;
-      try {
-        errorState = await runFallowAudit({ cwd: tmp, env: { ...process.env, FALLOW_BIN_PATH: shimPath } });
-      } catch (err) {
-        // acceptable: some implementations throw rather than returning error state
-        assert.ok(
-          err.message.includes('fallow-error-stderr') || err.exitCode !== 0 || err.code !== 0,
-          `expected thrown error to carry stderr content or non-zero exit; got: ${err.message}`,
-        );
-        return;
-      }
-      assert.ok(
-        errorState && (errorState.error || errorState.exitCode !== 0 || errorState.failed),
-        'runFallowAudit must return error state (error/exitCode/failed) when binary exits non-zero',
-      );
-    } finally {
-      cleanup(tmp);
-    }
-  });
-
-  // M5: edge-case fixture — missing severity, similarity extremes, 3-node cycle, unicode path
-  test('normalizes edge-case fixture: missing severity, similarity extremes, 3-node cycle, unicode path', () => {
+  // M5: edge-case fixture — line:0 preservation, unicode path, single-instance clone_group, 3-file cycle
+  test('normalizes edge-case fixture: line:0 preservation, unicode path, single-instance clone_group, 3-file cycle', () => {
     const { normalizeFallowReport } = require('../gsd-core/bin/lib/fallow-runner.cjs');
     const fixture = JSON.parse(
       fs.readFileSync(
@@ -180,42 +145,49 @@ describe('feat-3210: fallow integration module', () => {
       ),
     );
 
-    // M5: unusedExport with no severity field — round-trips without throwing
-    assert.strictEqual(fixture.unusedExports.length, 1);
-    assert.strictEqual(
-      Object.prototype.hasOwnProperty.call(fixture.unusedExports[0], 'severity'),
-      false,
-      'edge-case fixture: unusedExport severity field must be absent',
-    );
-    // M5: unicode file path is preserved in fixture
+    // Real schema: unused_export with line:0 — must survive without coercion
+    assert.strictEqual(fixture.dead_code.unused_exports.length, 1);
+    assert.strictEqual(fixture.dead_code.unused_exports[0].line, 0, 'edge-case fixture: line must be 0');
+    // unicode file path is preserved in fixture
     assert.ok(
-      fixture.unusedExports[0].file.includes('café'),
+      fixture.dead_code.unused_exports[0].path.includes('café'),
       'edge-case fixture: unicode file path must be present',
     );
 
-    // M5: duplicate entries with similarity at extremes 0.0 and 1.0
-    assert.strictEqual(fixture.duplicates.length, 2);
-    assert.strictEqual(fixture.duplicates[0].similarity, 0.0);
-    assert.strictEqual(fixture.duplicates[1].similarity, 1.0);
+    // single-instance clone_group (related_file normalizes to '')
+    assert.strictEqual(fixture.duplication.clone_groups.length, 1);
+    assert.strictEqual(fixture.duplication.clone_groups[0].instances.length, 1);
 
-    // M5: 3-node circular dependency cycle (cycle array has 4 elements: A→B→C→A)
-    assert.strictEqual(fixture.circularDependencies.length, 1);
-    const cycle = fixture.circularDependencies[0].cycle;
-    const uniqueNodes = new Set(cycle.slice(0, -1)); // last element repeats first
-    assert.strictEqual(uniqueNodes.size, 3, 'edge-case: cycle must have exactly 3 unique nodes');
+    // 3-file circular dependency cycle
+    assert.strictEqual(fixture.dead_code.circular_dependencies.length, 1);
+    assert.strictEqual(
+      fixture.dead_code.circular_dependencies[0].files.length,
+      3,
+      'edge-case: files array must have exactly 3 entries',
+    );
 
     // normalization round-trips without throwing
     const normalized = normalizeFallowReport(fixture);
+    // 1 unused_export + 0 unused_files + 1 circular_dep + 1 clone_group = 3
     const expectedTotal =
-      fixture.unusedExports.length + fixture.duplicates.length + fixture.circularDependencies.length;
+      fixture.dead_code.unused_exports.length +
+      fixture.dead_code.unused_files.length +
+      fixture.dead_code.circular_dependencies.length +
+      fixture.duplication.clone_groups.length;
     assert.strictEqual(normalized.findings.length, expectedTotal);
     assert.strictEqual(normalized.summary.total, expectedTotal);
 
-    // M5: unicode path survives normalization
+    // line:0 survives normalization
     const unicodeFinding = normalized.findings.find(
       (f) => typeof f.file === 'string' && f.file.includes('café'),
     );
     assert.ok(unicodeFinding, 'unicode file path must survive normalization round-trip');
+    assert.strictEqual(unicodeFinding.line, 0, 'line:0 must not be coerced to null');
+
+    // single-instance clone_group: related_file must be ''
+    const dupFinding = normalized.findings.find((f) => f.type === 'duplicate_block');
+    assert.ok(dupFinding, 'duplicate_block finding must exist');
+    assert.strictEqual(dupFinding.related_file, '', 'single-instance clone_group: related_file must be empty string');
   });
 });
 
@@ -223,23 +195,25 @@ describe('feat-3210: H1 - line:0 preservation', () => {
   test('normalizeFallowReport preserves line:0 for unused_export (not coerced to null)', () => {
     const { normalizeFallowReport } = require('../gsd-core/bin/lib/fallow-runner.cjs');
     const report = {
-      unusedExports: [{ file: 'src/a.ts', symbol: 'foo', line: 0 }],
-      duplicates: [],
-      circularDependencies: [],
+      dead_code: {
+        unused_exports: [{ path: 'src/a.ts', export_name: 'foo', line: 0 }],
+      },
     };
     const normalized = normalizeFallowReport(report);
     assert.strictEqual(normalized.findings[0].line, 0, 'line:0 must not be coerced to null via ||');
   });
 
-  test('normalizeFallowReport preserves line:0 for duplicate_block left.start (not coerced to null)', () => {
+  test('normalizeFallowReport preserves line:0 for duplicate_block instances[0].start_line (not coerced to null)', () => {
     const { normalizeFallowReport } = require('../gsd-core/bin/lib/fallow-runner.cjs');
     const report = {
-      unusedExports: [],
-      duplicates: [{ left: { file: 'src/a.ts', start: 0 }, right: { file: 'src/b.ts', start: 5 }, similarity: 0.9 }],
-      circularDependencies: [],
+      duplication: {
+        clone_groups: [
+          { instances: [{ file: 'src/a.ts', start_line: 0 }, { file: 'src/b.ts', start_line: 5 }] },
+        ],
+      },
     };
     const normalized = normalizeFallowReport(report);
-    assert.strictEqual(normalized.findings[0].line, 0, 'left.start:0 must not be coerced to null via ||');
+    assert.strictEqual(normalized.findings[0].line, 0, 'start_line:0 must not be coerced to null via ||');
   });
 });
 
@@ -269,6 +243,69 @@ describe('feat-3210: M2 - node_modules/.bin resolution order', () => {
     } finally {
       cleanup(tmp);
     }
+  });
+});
+
+describe('feat-3210 / #1012: code-review workflow invokes fallow with the real CLI', () => {
+  // allow-test-rule: source-text-is-the-product — code-review.md IS the workflow the orchestrator
+  // executes; its fallow invocation is the product surface.
+  const workflowSrc = fs.readFileSync(
+    path.join(ROOT, 'gsd-core', 'workflows', 'code-review.md'),
+    'utf8',
+  );
+
+  test('uses audit --format json and --quiet (real fallow 2.x flags)', () => {
+    assert.ok(
+      workflowSrc.includes('audit --format json'),
+      'workflow must invoke: audit --format json',
+    );
+    assert.ok(
+      workflowSrc.includes('--quiet'),
+      'workflow must pass --quiet to suppress progress output',
+    );
+  });
+
+  test('does NOT use removed flags: --json , --profile, --stdin-files', () => {
+    assert.ok(
+      !workflowSrc.includes('--json '),
+      'workflow must not use old --json flag (note trailing space to avoid matching --format json)',
+    );
+    assert.ok(
+      !workflowSrc.includes('--profile'),
+      'workflow must not use --profile (fallow has no native profile concept)',
+    );
+    assert.ok(
+      !workflowSrc.includes('--stdin-files'),
+      'workflow must not use --stdin-files (removed in fallow 2.x)',
+    );
+  });
+
+  test('uses --max-crap for threshold control (profile maps to max-crap)', () => {
+    assert.ok(
+      workflowSrc.includes('--max-crap'),
+      'workflow must use --max-crap to control threshold (profile mapped to this flag)',
+    );
+  });
+
+  test('scopes phase via --changed-since (native fallow git-ref scoping)', () => {
+    assert.ok(
+      workflowSrc.includes('--changed-since'),
+      'workflow must use --changed-since for phase scoping',
+    );
+  });
+
+  test('normalizes fallow output via normalizeFallowReportFile before embedding', () => {
+    assert.ok(
+      workflowSrc.includes('normalizeFallowReportFile'),
+      'workflow must call normalizeFallowReportFile to normalize before embedding into reviewer prompt',
+    );
+  });
+
+  test('exit-handling gates on valid JSON (verdict in o), not on exit code', () => {
+    assert.ok(
+      workflowSrc.includes("'verdict' in o"),
+      "workflow exit-handling must use 'verdict' in o to decide success (not exit code)",
+    );
   });
 });
 

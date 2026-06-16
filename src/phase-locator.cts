@@ -6,13 +6,10 @@
  * (`searchPhaseInDir`, `findPhaseInternal`) and archived-phase-dir
  * enumeration (`getArchivedPhaseDirs`), matching phase ids/tokens against
  * the filesystem. Behaviour is preserved byte-for-behaviour from the prior
- * location; only the module boundary moved. core.cjs re-exports
- * `searchPhaseInDir`, `findPhaseInternal`, and `getArchivedPhaseDirs` for back-compat.
+ * location; only the module boundary moved. The core.cjs re-export spine
+ * was retired in epic #1267; callers import phase-locator helpers directly.
  *
- * New imports should pull phase-locator helpers from phase-locator.cjs
- * directly.
- *
- * Dependencies (leaf modules only — no core.cjs, no loadConfig):
+ * Dependencies (leaf modules only — no loadConfig):
  *   - node:fs / node:path (stdlib)
  *   - ./phase-id.cjs       (normalizePhaseName, phaseTokenMatches, extractPhaseToken)
  *   - ./core-utils.cjs     (readSubdirectories, getPhaseFileStats, extractCanonicalPlanId, toPosixPath)

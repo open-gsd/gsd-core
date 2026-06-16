@@ -1,5 +1,1 @@
-{
-  "unusedExports": [],
-  "duplicates": [],
-  "circularDependencies": []
-}
+{ "schema_version": 3, "version": "2.70.0", "command": "audit", "verdict": "pass", "changed_files_count": 0, "base_ref": "main", "head_sha": "0000000", "elapsed_ms": 5, "summary": { "dead_code_issues": 0, "dead_code_has_errors": false, "complexity_findings": 0, "max_cyclomatic": null, "duplication_clone_groups": 0 }, "attribution": { "gate": "new-only", "dead_code_introduced": 0, "dead_code_inherited": 0, "complexity_introduced": 0, "complexity_inherited": 0, "duplication_introduced": 0, "duplication_inherited": 0 }, "dead_code": { "schema_version": 6, "summary": { "total_issues": 0, "unused_files": 0, "unused_exports": 0, "circular_dependencies": 0 }, "unused_files": [], "unused_exports": [], "circular_dependencies": [] }, "duplication": { "clone_groups": [], "stats": { "clone_groups": 0 } }, "complexity": { "findings": [] } }

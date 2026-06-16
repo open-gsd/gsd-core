@@ -23,12 +23,25 @@
           "converter": "convertClaudeCommandToCodexSkill"
         }
       ],
-      "local": []
+      "local": [
+        {
+          "kind": "skills",
+          "destSubpath": "skills",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeCommandToCodexSkill"
+        }
+      ]
     },
     "commandStyle": "shell-var",
     "hooksSurface": "codex-hooks-json",
     "hookEvents": "claude",
     "sandboxTier": "codex-agent-sandbox",
-    "supportTier": 1
+    "supportTier": 1,
+    "installSurface": "codex-toml",
+    "writesSharedSettings": false,
+    "permissionWriter": null,
+    "extendedHookEvents": []
   }
 }

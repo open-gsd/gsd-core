@@ -4,7 +4,10 @@
  * Covers:
  *   1. Legacy 'Phase N' ROADMAP entries still work when phase_id_convention
  *      is null (the default — no config key set).
- *   2. Deprecated warning fires for free-form roadmaps (non-fatal).
+ *   2a. Deprecated warning is SUPPRESSED when phase_id_convention is not set
+ *       (legacy/default projects must see ZERO warnings). [regression guard]
+ *   2b. Deprecated warning FIRES when phase_id_convention is explicitly
+ *       'milestone-prefixed' and the roadmap doesn't conform (non-fatal).
  *   3. No automatic migration happens when a free-form roadmap is loaded.
  *   4. isDirInMilestone still works for old-style dirs ('02-setup') against
  *      ROADMAP entries 'Phase 2:'.
@@ -13,8 +16,8 @@
  *   6. Heading regex matches both '### Phase 2-01: Setup' and
  *      '### [GSD] Phase 2-01: Setup'.
  *
- * Tests 1-3 exercise new behavior and will FAIL until implemented.
- * Tests 4-6 exercise existing/new behavior and should pass once wired.
+ * Tests 1-3 exercise new/regression behavior.
+ * Tests 4-6 exercise existing/new behavior.
  */
 
 'use strict';
@@ -25,7 +28,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { createTempProject, cleanup, captureConsole } = require('./helpers.cjs');
-const { getMilestonePhaseFilter } = require('../gsd-core/bin/lib/core.cjs');
+const { getMilestonePhaseFilter } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -73,10 +76,14 @@ describe('backwards-compat: legacy Phase N roadmap entries', () => {
     assert.strictEqual(filter('03-deploy'), false, 'unlisted phase must not match');
   });
 
-  // ── test 2: deprecated warning fires for free-form roadmaps ───────────────
+  // ── test 2a: NO warning for legacy/default projects (regression guard) ───────
+  // This is the PRIMARY regression guard: a project with no phase_id_convention
+  // must never receive the deprecation warning. Before the fix this test FAILS
+  // because the warning fires unconditionally.
 
-  test('deprecated warning fires (non-fatal) when roadmap has no versioned milestone headings', () => {
-    // A "free-form" roadmap: phase headings but no ## vX.Y milestone section.
+  test('no deprecation warning when phase_id_convention is not set (legacy default)', () => {
+    // Free-form roadmap (no versioned milestone headings) AND no config file at
+    // all — the warning must be fully suppressed.
     writeRoadmap(tmpDir, [
       '### Phase 1: Setup',
       '**Goal:** setup',
@@ -89,11 +96,35 @@ describe('backwards-compat: legacy Phase N roadmap entries', () => {
       getMilestonePhaseFilter(tmpDir);
     });
 
+    assert.strictEqual(
+      stderr,
+      '',
+      'no deprecation warning must be emitted when phase_id_convention is not set'
+    );
+  });
+
+  // ── test 2b: deprecated warning fires when convention is milestone-prefixed ──
+
+  test('deprecated warning fires (non-fatal) when phase_id_convention is milestone-prefixed and roadmap lacks versioned milestones', () => {
+    // A "free-form" roadmap (no ## vX.Y milestone section) combined with the
+    // explicit milestone-prefixed convention — the warning is actionable here.
+    writeRoadmap(tmpDir, [
+      '### Phase 1: Setup',
+      '**Goal:** setup',
+      '',
+      '### Phase 2: Build',
+      '**Goal:** build',
+    ].join('\n'));
+
+    const { stderr } = captureConsole(() => {
+      getMilestonePhaseFilter(tmpDir, null, 'milestone-prefixed');
+    });
+
     // Warning must fire but must not throw — non-fatal.
     assert.match(
       stderr,
       /deprecated|free.form|phase_id_convention/i,
-      'a deprecation warning must be emitted for free-form roadmaps'
+      'a deprecation warning must be emitted when milestone-prefixed convention is set but roadmap is free-form'
     );
   });
 
@@ -109,8 +140,11 @@ describe('backwards-compat: legacy Phase N roadmap entries', () => {
     const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
     const before = fs.readFileSync(roadmapPath, 'utf-8');
 
-    // Trigger a load — must not silently migrate the file.
-    getMilestonePhaseFilter(tmpDir);
+    // Trigger a load — must not silently migrate the file. The deprecation
+    // warning is covered by the previous test, so keep this fixture quiet.
+    captureConsole(() => {
+      getMilestonePhaseFilter(tmpDir);
+    });
 
     const after = fs.readFileSync(roadmapPath, 'utf-8');
     assert.equal(after, before, 'ROADMAP.md must not be rewritten during load');

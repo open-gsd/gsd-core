@@ -38,7 +38,7 @@ GSD Core is a context-engineering and spec-driven development framework that dri
 | Area | Upstream `open-gsd/gsd-core` | This fork `sh1ny/gsd-omp` |
 |------|-------------------------------|----------------------------|
 | OMP runtime | No in-repo native OMP runtime support. | Adds `--omp` install support. |
-| Install targets | Installs supported upstream runtime artifacts. | Also installs `.omp/{commands,skills,agents,rules,extensions}/` locally, or `$OMP_CONFIG_DIR` / `~/.omp/agent` globally. |
+| Install targets | Installs supported upstream runtime artifacts. | Also installs `.omp/{commands,skills,agents,rules,extensions}/` locally, or the Oh My Pi agent home (`$PI_CODING_AGENT_DIR`, profiled `$PI_CONFIG_DIR`, or `~/.omp/agent`) globally. |
 | OMP extension | Not shipped. | Ships `.omp/extensions/gsd-core/` for guardrails, update checks, context warnings, and status behavior. |
 | OMP rules | Not shipped. | Installs explicit safe static rules from `gsd-core/omp/rules/manifest.json`. |
 | Agent model overrides | No OMP agent frontmatter handling. | Embeds resolved OMP model overrides into generated `.omp/agents/gsd-*.md` frontmatter. |
@@ -70,10 +70,11 @@ cd gsd-omp
 node bin/install.js --local --omp
 ```
 
-For a global OMP install, set `OMP_CONFIG_DIR` or let the installer fall back to `~/.omp/agent`:
+For a global OMP install, set `PI_CODING_AGENT_DIR` or let the installer fall back to `~/.omp/agent`. Named OMP profiles use `OMP_PROFILE` or `PI_PROFILE` under `$PI_CONFIG_DIR/profiles/<profile>/agent`:
 
 ```bash
-OMP_CONFIG_DIR=~/.omp/agent node bin/install.js --global --omp
+PI_CODING_AGENT_DIR=~/.omp/agent node bin/install.js --global --omp
+OMP_PROFILE=work node bin/install.js --global --omp
 ```
 
 The upstream npm package remains `@opengsd/gsd-core`; use it for upstream GSD Core installs, not for this fork's OMP-only additions.

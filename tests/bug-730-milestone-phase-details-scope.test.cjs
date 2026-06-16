@@ -107,9 +107,9 @@ describe('bug #730 — milestone (Phase Details) section scope resolution', () =
   // directly before any phases/ dir exists
   // -------------------------------------------------------------------------
   test('getRoadmapPhaseInternal resolves the current-milestone phase directly before any dir exists', () => {
-    const core = require('../gsd-core/bin/lib/core.cjs');
+    const { getRoadmapPhaseInternal } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
 
-    const res = core.getRoadmapPhaseInternal(dir, '2');
+    const res = getRoadmapPhaseInternal(dir, '2');
     assert.ok(res !== null && res !== undefined, `getRoadmapPhaseInternal returned null/undefined for phase 2`);
     assert.strictEqual(res.found, true, `res.found should be true; got ${JSON.stringify(res)}`);
     assert.strictEqual(res.phase_name, 'Feature', `res.phase_name should be 'Feature'; got '${res.phase_name}'`);

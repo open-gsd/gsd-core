@@ -17,7 +17,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { createTempProject, cleanup } = require('./helpers.cjs');
 
-const { loadConfig } = require('../gsd-core/bin/lib/core.cjs');
+const { loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
 
 function makeSubRepo(parent, name) {
   const dir = path.join(parent, name);

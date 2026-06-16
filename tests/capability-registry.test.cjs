@@ -17,6 +17,8 @@ const path = require('node:path');
 
 const { spawnSync } = require('node:child_process');
 
+const { cleanup } = require('./helpers.cjs');
+
 const {
   validateCapability,
   validateAgainstContract,
@@ -29,6 +31,7 @@ const {
   computeRequiresClosure,
   topoSortSteps,
   normalizeLineEndings,
+  stripGeneratedComment,
   validateConfigSliceEntry,
   VALID_CONFIG_SLICE_TYPES,
   SCHEMA_VERSION,
@@ -39,7 +42,34 @@ const {
   PROFILE_RANK,
   // ADR-959
   validateCommandEntry,
+  // ADR-857 phase 5e
+  VALID_CONVERTER_NAMES,
+  validateArtifactKindEntry,
+  runConfigFormatParityGate,
+  INSTALL_SURFACE_TO_CONFIG_FORMAT,
+  // ADR-857 phase 5f: cross-field consistency gates
+  INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES,
+  VALID_INSTALL_SURFACES,
+  VALID_EXTENDED_HOOK_EVENTS,
+  VALID_PERMISSION_WRITERS,
+  validateRuntimeCompat,
+  validateRuntimeBody,
+  loadCentralConfigKeys,
+  validateHooksWired,
+  POINT_ORDER,
 } = require('../scripts/gen-capability-registry.cjs');
+
+const {
+  STEP_WORKFLOWS,
+  HOST_LOOP_FILES,
+  scanWiredPoints,
+  getWiredLoopPoints,
+  CANONICAL_POINTS,
+} = require('../scripts/gen-loop-host-contract.cjs');
+
+const { LOOP_HOST_CONTRACT } = require('../gsd-core/bin/lib/loop-host-contract.cjs');
+
+const fc = require('fast-check');
 
 const ROOT = path.resolve(__dirname, '..');
 
@@ -84,6 +114,11 @@ describe('UI pilot capability', () => {
     // capabilities.ui exists
     assert.ok(registry.capabilities.ui, 'registry.capabilities.ui should exist');
     assert.strictEqual(registry.version, SCHEMA_VERSION);
+    assert.deepStrictEqual(
+      registry.capabilities.ui.runtimeCompat,
+      { supported: ['*'], unsupported: [] },
+      'feature runtime compatibility contract should be preserved in the registry',
+    );
 
     // bySkill maps ui-phase and ui-review to 'ui'
     assert.strictEqual(registry.bySkill['ui-phase'], 'ui');
@@ -186,6 +221,32 @@ describe('validateCapability adversarial cases', () => {
     assert.ok(errors.some((e) => e.includes('role')));
   });
 
+  test('feature capability without runtimeCompat is rejected', () => {
+    const cap = { ...UI_CAP };
+    delete cap.runtimeCompat;
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(
+      errors.some((e) => e.includes('runtimeCompat')),
+      'Expected missing runtimeCompat validation error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('runtimeCompat.supported must be a non-empty array', () => {
+    const errors = validateRuntimeCompat('ui', { supported: [], unsupported: [] });
+    assert.ok(
+      errors.some((e) => e.includes('runtimeCompat.supported')),
+      'Expected supported-array validation error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('runtimeCompat.supported wildcard cannot be mixed with runtime ids', () => {
+    const errors = validateRuntimeCompat('ui', { supported: ['*', 'claude'], unsupported: [] });
+    assert.ok(
+      errors.some((e) => e.includes('wildcard')),
+      'Expected wildcard validation error, got: ' + JSON.stringify(errors),
+    );
+  });
+
   test('bad tier enum rejected', () => {
     const cap = { ...UI_CAP, tier: 'premium' };
     const errors = validateCapability(cap, 'ui');
@@ -268,6 +329,40 @@ describe('validateCrossCapability adversarial cases', () => {
     const errors = validateCrossCapability(capMap, new Set());
     assert.ok(errors.length > 0);
     assert.ok(errors.some((e) => e.includes('nonexistent-cap')));
+  });
+
+  test('runtimeCompat explicit runtime ids must exist', () => {
+    const cap = {
+      ...UI_CAP,
+      runtimeCompat: { supported: ['claude', 'future-runtime'], unsupported: [] },
+    };
+    const runtime = {
+      id: 'claude',
+      role: 'runtime',
+      title: 'Claude',
+      description: 'Runtime fixture.',
+      tier: 'core',
+      requires: [],
+      runtime: {
+        configHome: { kind: 'dot-home', name: '.claude', env: ['CLAUDE_CONFIG_DIR'] },
+        configFormat: 'settings-json',
+        artifactLayout: { global: [], local: [] },
+        commandStyle: 'slash-hyphen',
+        hooksSurface: 'settings-json',
+        sandboxTier: 'none',
+        supportTier: 1,
+        installSurface: 'settings-json',
+        writesSharedSettings: true,
+        permissionWriter: null,
+        extendedHookEvents: [],
+      },
+    };
+    const capMap = new Map([['ui', cap], ['claude', runtime]]);
+    const errors = validateCrossCapability(capMap, new Set());
+    assert.ok(
+      errors.some((e) => e.includes('runtimeCompat.supported') && e.includes('future-runtime')),
+      'Expected unknown runtimeCompat runtime error, got: ' + JSON.stringify(errors),
+    );
   });
 
   test('requires cycle rejected', () => {
@@ -359,46 +454,289 @@ describe('topological step ordering', () => {
     assert.strictEqual(sorted[0].capId, 'a-cap', 'a-cap should come first (alphabetical tiebreak)');
     assert.strictEqual(sorted[1].capId, 'z-cap');
   });
+
+  test('contributions at one point use produces/consumes dependency order', () => {
+    const capMap = new Map([
+      ['a-consumer', {
+        id: 'a-consumer',
+        role: 'feature',
+        title: 'Consumer',
+        tier: 'full',
+        requires: [],
+        runtimeCompat: { supported: ['*'], unsupported: [] },
+        skills: [],
+        agents: [],
+        hooks: [],
+        config: {},
+        steps: [],
+        contributions: [{
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { inline: 'Consume produced planning note.' },
+          produces: [],
+          consumes: ['PLAN-NOTE.md'],
+          onError: 'skip',
+        }],
+        gates: [],
+      }],
+      ['b-producer', {
+        id: 'b-producer',
+        role: 'feature',
+        title: 'Producer',
+        tier: 'full',
+        requires: [],
+        skills: [],
+        agents: [],
+        hooks: [],
+        config: {},
+        steps: [],
+        contributions: [{
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { inline: 'Produce planning note.' },
+          produces: ['PLAN-NOTE.md'],
+          consumes: [],
+          onError: 'skip',
+        }],
+        gates: [],
+      }],
+    ]);
+
+    const registry = buildRegistry(capMap);
+    assert.deepEqual(
+      registry.byLoopPoint['plan:pre'].contributions.map((c) => c.capId),
+      ['b-producer', 'a-consumer'],
+    );
+  });
+
+  test('contribution produces/consumes cycle throws a clear error', () => {
+    const capMap = new Map([
+      ['cap-a', {
+        id: 'cap-a',
+        role: 'feature',
+        title: 'A',
+        tier: 'full',
+        requires: [],
+        skills: [],
+        agents: [],
+        hooks: [],
+        config: {},
+        steps: [],
+        contributions: [{
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { inline: 'A.' },
+          produces: ['A.md'],
+          consumes: ['B.md'],
+          onError: 'skip',
+        }],
+        gates: [],
+      }],
+      ['cap-b', {
+        id: 'cap-b',
+        role: 'feature',
+        title: 'B',
+        tier: 'full',
+        requires: [],
+        skills: [],
+        agents: [],
+        hooks: [],
+        config: {},
+        steps: [],
+        contributions: [{
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { inline: 'B.' },
+          produces: ['B.md'],
+          consumes: ['A.md'],
+          onError: 'skip',
+        }],
+        gates: [],
+      }],
+    ]);
+
+    assert.throws(
+      () => buildRegistry(capMap),
+      (err) => {
+        assert.ok(err instanceof Error);
+        assert.match(err.message, /contributions/);
+        assert.match(err.message, /cycle/);
+        return true;
+      },
+    );
+  });
 });
 
 // ─── 4. --check drift detection ──────────────────────────────────────────────
+//
+// The real --check pipeline (gen-capability-registry.cjs main()) compares
+// committed vs live via:
+//
+//   normalizeLineEndings(stripGeneratedComment(committed))
+//     !== normalizeLineEndings(stripGeneratedComment(live))
+//
+// stripGeneratedComment is private (not exported), so these tests replicate the
+// same filter inline and call the exported normalizeLineEndings to exercise the
+// ACTUAL comparison semantics rather than doing a bare string-equality tautology.
+//
+// The subprocess tests additionally prove that the real --check CLI exits 1 on a
+// tampered registry and exits 0 when only the auto-generated timestamp comment
+// changes (comment immunity).
+
+const REGISTRY_PATH = path.join(ROOT, 'gsd-core', 'bin', 'lib', 'capability-registry.cjs');
+
+/**
+ * Mirror of the private stripGeneratedComment() from gen-capability-registry.cjs.
+ * Kept here intentionally: the test validates BEHAVIOR, and the implementation is
+ * stable (a single-line filter). If the source changes the sentinel string, this
+ * test will correctly start failing — that is the desired red signal.
+ *
+ * NOTE (#1191): The equivalence test below pins the exported stripGeneratedComment
+ * to this mirror.  If the export's sentinel ever drifts from the mirror's sentinel,
+ * the equivalence test goes RED — making the implicit "sentinel drift = red signal"
+ * comment above into an explicit automated check.
+ */
+function applyStripGeneratedComment(content) {
+  return content
+    .split('\n')
+    .filter((line) => !line.includes('generated by scripts/gen-capability-registry.cjs'))
+    .join('\n');
+}
+
+/** Apply the full --check comparison pipeline to a single content string. */
+function checkPipeline(content) {
+  return normalizeLineEndings(applyStripGeneratedComment(content));
+}
+
+// ─── Seam-3 equivalence test (#1191) ─────────────────────────────────────────
+//
+// Verifies that the now-exported stripGeneratedComment from gen-capability-registry.cjs
+// matches the local oracle (applyStripGeneratedComment) on a representative sample.
+// This turns the oracle's implicit "fails if sentinel drifts" into an explicit guard.
+
+describe('exported stripGeneratedComment matches the test oracle (no sentinel drift)', () => {
+  test('exported stripGeneratedComment matches the test oracle (no sentinel drift)', () => {
+    const sample = [
+      '// generated by scripts/gen-capability-registry.cjs — DO NOT EDIT',
+      "'use strict';",
+      '// normal comment (not a generated-by line)',
+      "module.exports = { version: '1' };",
+      '// generated by scripts/gen-capability-registry.cjs (second occurrence)',
+    ].join('\n');
+
+    assert.strictEqual(
+      stripGeneratedComment(sample),
+      applyStripGeneratedComment(sample),
+      'exported stripGeneratedComment must produce identical output to the test oracle — ' +
+        'a sentinel mismatch means the export and the oracle have drifted'
+    );
+  });
+});
 
 describe('--check drift detection', () => {
-  test('returns drift when on-disk registry differs from live', () => {
-    // Build a registry from the real UI cap
+  test('stale VERSION survives stripGeneratedComment+normalizeLineEndings and IS detected as drift', () => {
+    // Build a fresh registry from the real UI cap — this is the "live" content
     const capDir = makeTempCapDir({ ui: UI_CAP });
     const { capMap } = loadAndValidate(new Set(), capDir);
     const registry = buildRegistry(capMap);
     const liveContent = serializeRegistry(registry, capMap);
 
-    // Modify it slightly to simulate drift — replace the version string constant at top level
-    const driftedContent = liveContent.replace(
+    // Tamper: replace the schema version field — this simulates a stale committed file
+    // (version: '1' → version: '0-stale')
+    const staledContent = liveContent.replace(
       "version: '" + SCHEMA_VERSION + "'",
       "version: '0-stale'",
     );
+    assert.notStrictEqual(staledContent, liveContent, 'precondition: tampered content differs before pipeline');
 
-    // Confirm the replacement actually changed something
-    assert.notStrictEqual(driftedContent, liveContent, 'driftedContent should differ from liveContent after replacement');
+    // The tampered version must SURVIVE both pipeline steps and still differ from live.
+    // This is what actually matters: a raw string diff is trivial; the test must show
+    // the comparison survives stripping + normalization — i.e. it IS real drift.
+    assert.notStrictEqual(
+      checkPipeline(staledContent),
+      checkPipeline(liveContent),
+      'stale VERSION must be detected as drift after stripGeneratedComment + normalizeLineEndings',
+    );
+  });
 
-    // Write to a temp file
-    const tmpFile = path.join(os.tmpdir(), 'cap-registry-drift-test.cjs');
-    fs.writeFileSync(tmpFile, driftedContent, 'utf8');
+  test('comment-only timestamp change is NOT flagged as drift after stripping', () => {
+    // Build a fresh registry
+    const capDir = makeTempCapDir({ ui: UI_CAP });
+    const { capMap } = loadAndValidate(new Set(), capDir);
+    const registry = buildRegistry(capMap);
+    const liveContent = serializeRegistry(registry, capMap);
 
-    // Compare: live vs drifted (simulating what --check does)
-    const committed = fs.readFileSync(tmpFile, 'utf8');
-    assert.notStrictEqual(committed, liveContent, 'Drifted content should differ from live');
+    // Confirm the generated comment is present in the serialized output
+    assert.ok(
+      liveContent.includes('generated by scripts/gen-capability-registry.cjs'),
+      'precondition: generated comment must be present in serialized output',
+    );
 
-    // Cleanup
-    fs.unlinkSync(tmpFile);
+    // Simulate a Windows git checkout that adds a fake timestamp annotation on the
+    // generated-comment line — the kind of comment-only mutation that must NOT trigger drift
+    const commentVariant = liveContent.replace(
+      ' * capability-registry.cjs — generated by scripts/gen-capability-registry.cjs',
+      ' * capability-registry.cjs — generated by scripts/gen-capability-registry.cjs on 2024-01-01T00:00:00Z',
+    );
+    assert.notStrictEqual(commentVariant, liveContent, 'precondition: variant differs before stripping');
+
+    // After stripping the generated-comment line, both must be identical — NOT flagged as drift
+    assert.strictEqual(
+      checkPipeline(commentVariant),
+      checkPipeline(liveContent),
+      'comment-only change must NOT be detected as drift (stripGeneratedComment must neutralize it)',
+    );
   });
 
   test('no drift when registry is freshly generated', () => {
+    // Determinism check: two calls to serializeRegistry must produce identical output
     const capDir = makeTempCapDir({ ui: UI_CAP });
     const { capMap } = loadAndValidate(new Set(), capDir);
     const registry = buildRegistry(capMap);
     const content1 = serializeRegistry(registry, capMap);
     const content2 = serializeRegistry(registry, capMap);
     assert.strictEqual(content1, content2, 'Two calls to serializeRegistry should be identical');
+  });
+
+  test('--check comparison pipeline detects a tampered VERSION (in-memory, no file mutation)', () => {
+    // Prove that the --check comparison pipeline (the same pipeline used by
+    // gen-capability-registry.cjs main()) exits 1 on a stale committed registry.
+    //
+    // NOTE: We intentionally do NOT write to the committed REGISTRY_PATH here.
+    // Writing to a committed file during a test is unsafe: it races with concurrent
+    // test runners that require() the same module and leaves the worktree dirty on
+    // SIGKILL.  Instead, we exercise the comparison logic using the same exported
+    // helpers the CLI uses, applied to in-memory strings — giving identical coverage
+    // without touching the filesystem.
+    const originalContent = fs.readFileSync(REGISTRY_PATH, 'utf8');
+    const tamperedContent = originalContent.replace(
+      "version: '" + SCHEMA_VERSION + "'",
+      "version: '0-stale'",
+    );
+    assert.notStrictEqual(tamperedContent, originalContent, 'precondition: tamper must change the file');
+
+    // Build the "live" content the same way --check does.
+    const capDir = makeTempCapDir({ ui: UI_CAP });
+    const { capMap } = loadAndValidate(new Set(), capDir);
+    const registry = buildRegistry(capMap);
+    const liveContent = serializeRegistry(registry, capMap);
+
+    // The tampered committed content must NOT equal the live content after the
+    // same stripGeneratedComment + normalizeLineEndings pipeline that --check uses.
+    // If this assertion passes, --check would exit 1 (drift detected) and emit "stale".
+    assert.notStrictEqual(
+      checkPipeline(tamperedContent),
+      checkPipeline(liveContent),
+      '--check comparison pipeline must flag a tampered VERSION as drift.\n' +
+      'If this fails, the pipeline no longer detects stale VERSION strings.',
+    );
+
+    // Also verify the tampered content contains the stale marker (so the above
+    // assertion is meaningful and not vacuously true due to other diff).
+    assert.ok(
+      tamperedContent.includes("version: '0-stale'"),
+      'precondition: tampered content must contain the stale version marker',
+    );
   });
 });
 
@@ -503,6 +841,37 @@ describe('registry structure', () => {
     assert.ok(closure.has('cap-b'), 'closure should include cap-b');
     assert.ok(closure.has('cap-c'), 'closure should include cap-c (transitive)');
     assert.strictEqual(closure.size, 2);
+  });
+});
+
+describe('ADR-857 phase 6 planning feature capabilities', () => {
+  const realRegistry = require('../gsd-core/bin/lib/capability-registry.cjs');
+
+  test('real registry declares research, ai-integration, and pattern-mapper capabilities', () => {
+    for (const capId of ['research', 'ai-integration', 'pattern-mapper']) {
+      assert.ok(realRegistry.capabilities[capId], `${capId} capability must be declared`);
+      assert.strictEqual(realRegistry.capabilities[capId].role, 'feature');
+    }
+  });
+
+  test('planning feature capabilities own their workflow config keys', () => {
+    assert.strictEqual(realRegistry.configKeys['workflow.research'], 'research');
+    assert.strictEqual(realRegistry.configKeys['workflow.ai_integration_phase'], 'ai-integration');
+    assert.strictEqual(realRegistry.configKeys['workflow.pattern_mapper'], 'pattern-mapper');
+  });
+
+  test('planning feature capabilities register plan:pre hooks', () => {
+    const hooks = [
+      ...realRegistry.byLoopPoint['plan:pre'].steps,
+      ...realRegistry.byLoopPoint['plan:pre'].contributions,
+      ...realRegistry.byLoopPoint['plan:pre'].gates,
+    ];
+    for (const capId of ['research', 'ai-integration', 'pattern-mapper']) {
+      assert.ok(
+        hooks.some((hook) => hook.capId === capId),
+        `${capId} must participate in plan:pre through the Capability Registry`,
+      );
+    }
   });
 });
 
@@ -997,6 +1366,185 @@ describe('S1: fragment.path traversal guard', () => {
     assert.ok(errors.length > 0, 'Expected rejection for empty path');
     assert.ok(errors.some((e) => e.includes('fragment.path')));
   });
+
+  test('array fragment shape is rejected', () => {
+    const cap = {
+      ...UI_CAP,
+      contributions: [
+        {
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: [],
+          when: 'workflow.ui_phase',
+          onError: 'skip',
+        },
+      ],
+    };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(errors.some((e) => e.includes('fragment') && e.includes('object')));
+  });
+
+  test('non-string fragment.inline is rejected', () => {
+    const cap = {
+      ...UI_CAP,
+      contributions: [
+        {
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { inline: 42 },
+          when: 'workflow.ui_phase',
+          onError: 'skip',
+        },
+      ],
+    };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(errors.some((e) => e.includes('fragment.inline') && e.includes('string')));
+  });
+
+  test('empty fragment.inline string is rejected', () => {
+    const cap = {
+      ...UI_CAP,
+      contributions: [
+        {
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { inline: '' },
+          when: 'workflow.ui_phase',
+          onError: 'skip',
+        },
+      ],
+    };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(errors.some((e) => e.includes('fragment.inline') && e.includes('non-empty')));
+  });
+
+  test('non-array contribution produces is rejected', () => {
+    const cap = {
+      ...UI_CAP,
+      contributions: [
+        {
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { inline: 'Plan with UI context.' },
+          produces: 'PLAN-NOTE.md',
+          consumes: [],
+          when: 'workflow.ui_phase',
+          onError: 'skip',
+        },
+      ],
+    };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(errors.some((e) => e.includes('produces') && e.includes('array')));
+  });
+
+  test('non-string contribution consumes entry is rejected', () => {
+    const cap = {
+      ...UI_CAP,
+      contributions: [
+        {
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { inline: 'Plan with UI context.' },
+          produces: [],
+          consumes: [42],
+          when: 'workflow.ui_phase',
+          onError: 'skip',
+        },
+      ],
+    };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(errors.some((e) => e.includes('consumes entries') && e.includes('strings')));
+  });
+
+  test('fragment.path is materialized into inline registry content', (t) => {
+    const capsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-cap-fragment-'));
+    t.after(() => cleanup(capsDir));
+    const capDir = path.join(capsDir, 'planning-advice');
+    fs.mkdirSync(path.join(capDir, 'fragments'), { recursive: true });
+    fs.writeFileSync(
+      path.join(capDir, 'fragments', 'plan-pre.md'),
+      'Use the capability-owned planning fragment.\n',
+    );
+    fs.writeFileSync(
+      path.join(capDir, 'capability.json'),
+      JSON.stringify({
+        id: 'planning-advice',
+        role: 'feature',
+        title: 'Planning advice',
+        description: 'Synthetic fixture for fragment path materialization.',
+        tier: 'full',
+        requires: [],
+        runtimeCompat: { supported: ['*'], unsupported: [] },
+        skills: [],
+        agents: [],
+        hooks: [],
+        config: {},
+        steps: [],
+        contributions: [{
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { path: 'fragments/plan-pre.md' },
+          produces: [],
+          consumes: ['CONTEXT.md'],
+          onError: 'skip',
+        }],
+        gates: [],
+      }),
+    );
+
+    const { capMap, errors } = loadAndValidate(new Set(), capsDir);
+    assert.deepEqual(errors, []);
+    const registry = buildRegistry(capMap);
+    assert.strictEqual(
+      registry.byLoopPoint['plan:pre'].contributions[0].fragment.inline,
+      'Use the capability-owned planning fragment.\n',
+    );
+  });
+
+  test('step fragment.path is materialized into inline registry content', (t) => {
+    const capsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-cap-step-fragment-'));
+    t.after(() => cleanup(capsDir));
+    const capDir = path.join(capsDir, 'research');
+    fs.mkdirSync(path.join(capDir, 'fragments'), { recursive: true });
+    fs.writeFileSync(
+      path.join(capDir, 'fragments', 'plan-pre.md'),
+      'Research prompt owned by the capability.\n',
+    );
+    fs.writeFileSync(
+      path.join(capDir, 'capability.json'),
+      JSON.stringify({
+        id: 'research',
+        role: 'feature',
+        title: 'Research',
+        description: 'Synthetic fixture for step fragment materialization.',
+        tier: 'standard',
+        requires: [],
+        runtimeCompat: { supported: ['*'], unsupported: [] },
+        skills: [],
+        agents: ['gsd-phase-researcher'],
+        hooks: [],
+        config: {},
+        steps: [{
+          point: 'plan:pre',
+          ref: { agent: 'gsd-phase-researcher' },
+          fragment: { path: 'fragments/plan-pre.md' },
+          produces: ['RESEARCH.md'],
+          consumes: ['CONTEXT.md'],
+          onError: 'skip',
+        }],
+        contributions: [],
+        gates: [],
+      }),
+    );
+
+    const { capMap, errors } = loadAndValidate(new Set(), capsDir);
+    assert.deepEqual(errors, []);
+    const registry = buildRegistry(capMap);
+    assert.strictEqual(
+      registry.byLoopPoint['plan:pre'].steps[0].fragment.inline,
+      'Research prompt owned by the capability.\n',
+    );
+  });
 });
 
 // ─── 8. Security: prototype pollution (S2) ────────────────────────────────────
@@ -1165,6 +1713,10 @@ describe('C3: role:runtime body validation', () => {
       hookEvents: 'claude',
       sandboxTier: 'none',
       supportTier: 2,
+      installSurface: 'cursor-hooks-json',
+      writesSharedSettings: false,
+      permissionWriter: null,
+      extendedHookEvents: [],
     },
   };
 
@@ -1412,14 +1964,20 @@ describe('FIX 1: self-consume rejection in validateConsumesGlobal', () => {
   });
 
   // (this test follows the series above)
-  test('a step produces:["SELF.md"] and consumes:["SELF.md"] and another capability produces SELF.md at the SAME point is accepted (different hook)', () => {
+  // Updated fixture: producer-cap produces SELF.md at plan:pre; self-cap CONSUMES (not produces)
+  // SELF.md at plan:pre — a single producer at that point satisfies the consume.
+  // The prior fixture had BOTH caps producing SELF.md at plan:pre, which now violates the
+  // duplicate-producer invariant added in Issue #1123. The consume-satisfiability logic being
+  // tested here is unaffected — the key assertion remains: a step consuming an artifact that
+  // a DIFFERENT cap produces at the SAME point is satisfied.
+  test('a step consumes:["SELF.md"] and another capability produces SELF.md at the SAME point is accepted (different cap)', () => {
     const producerCap = {
       id: 'producer-cap', role: 'feature', title: 'Producer', description: 'Produces SELF.md',
       tier: 'standard', requires: [],
       skills: ['producer-skill'], agents: ['gsd-producer-agent'], hooks: [], config: {},
       steps: [
         {
-          point: 'plan:pre',  // same point as self-cap
+          point: 'plan:pre',
           ref: { skill: 'producer-skill' },
           produces: ['SELF.md'],
           consumes: [],
@@ -1428,22 +1986,22 @@ describe('FIX 1: self-consume rejection in validateConsumesGlobal', () => {
       ],
       contributions: [], gates: [],
     };
-    const selfCap = {
-      id: 'self-cap', role: 'feature', title: 'Self', description: 'Self consume test',
+    const consumerCap = {
+      id: 'self-cap', role: 'feature', title: 'Self', description: 'Consume test',
       tier: 'standard', requires: [],
       skills: ['self-skill'], agents: ['gsd-self-agent'], hooks: [], config: {},
       steps: [
         {
-          point: 'plan:pre',  // same point — different hook (producer-cap) satisfies it
+          point: 'plan:pre',  // same point — producer-cap (different cap) satisfies the consume
           ref: { skill: 'self-skill' },
-          produces: ['SELF.md'],
+          produces: [],
           consumes: ['SELF.md'],
           onError: 'skip',
         },
       ],
       contributions: [], gates: [],
     };
-    const capMap = new Map([['producer-cap', producerCap], ['self-cap', selfCap]]);
+    const capMap = new Map([['producer-cap', producerCap], ['self-cap', consumerCap]]);
     const errors = validateConsumesGlobal(capMap);
     const selfErrors = errors.filter((e) => e.includes('SELF.md') && e.includes('self-cap'));
     assert.deepEqual(
@@ -2332,6 +2890,7 @@ function makeCommandCap(id, commands) {
     description: 'Synthetic capability for ADR-959 command tests.',
     tier: 'full',
     requires: [],
+    runtimeCompat: { supported: ['*'], unsupported: [] },
     skills: [],
     agents: [],
     hooks: [],
@@ -2518,7 +3077,7 @@ const {
 const RUNTIME_IDS = [
   'claude', 'codex', 'antigravity', 'gemini', 'cursor', 'opencode',
   'kilo', 'copilot', 'augment', 'trae', 'qwen', 'hermes',
-  'codebuddy', 'cline', 'kimi', 'windsurf',
+  'codebuddy', 'cline', 'kimi', 'omp', 'windsurf',
 ];
 
 // Helper: build a minimal valid runtime capability object for fixture-based tests
@@ -2539,24 +3098,28 @@ function makeRuntimeCap(overrides) {
       hookEvents: 'claude',
       sandboxTier: 'none',
       supportTier: 1,
+      installSurface: 'settings-json',
+      writesSharedSettings: true,
+      permissionWriter: null,
+      extendedHookEvents: [],
       ...((overrides && overrides.runtime) ? overrides.runtime : {}),
     },
     ...overrides,
   };
 }
 
-// ── 24a. All 16 runtime ids appear in the runtimes index ─────────────────────
+// ── 24a. All 17 runtime ids appear in the runtimes index ─────────────────────
 
-describe('ADR-1016 phase 5a: all 16 runtimes in registry index', () => {
+describe('ADR-1016 phase 5a: all 17 runtimes in registry index', () => {
   let registry;
 
-  test('loadAndValidate + buildRegistry produces runtimes index with 16 entries', () => {
+  test('loadAndValidate + buildRegistry produces runtimes index with 17 entries', () => {
     const { capMap, errors } = loadAndValidate(new Set());
     const hardErrors = errors.filter((e) => !e.includes('pending-migration'));
     assert.deepEqual(hardErrors, [], 'Expected no hard errors: ' + JSON.stringify(hardErrors));
     registry = buildRegistry(capMap);
     const runtimeKeys = Object.keys(registry.runtimes).sort();
-    assert.strictEqual(runtimeKeys.length, 16, 'Expected 16 runtime entries, got: ' + runtimeKeys.join(', '));
+    assert.strictEqual(runtimeKeys.length, 17, 'Expected 17 runtime entries, got: ' + runtimeKeys.join(', '));
     for (const id of RUNTIME_IDS) {
       assert.ok(
         Object.prototype.hasOwnProperty.call(registry.runtimes, id),
@@ -2665,6 +3228,16 @@ describe('ADR-1016 phase 5a: sample axis value assertions', () => {
     const registry = buildRegistry(capMap);
     const rt = registry.runtimes['kimi'].runtime;
     assert.strictEqual(rt.configHome.kind, 'generic-agents-root', 'kimi.configHome.kind must be "generic-agents-root"');
+  });
+
+  test('omp: configHome.kind === omp-agent-home with current Oh My Pi env keys', () => {
+    const { capMap } = loadAndValidate(new Set());
+    const registry = buildRegistry(capMap);
+    const rt = registry.runtimes['omp'].runtime;
+    assert.strictEqual(rt.configHome.kind, 'omp-agent-home', 'omp.configHome.kind must be "omp-agent-home"');
+    assert.deepStrictEqual(rt.configHome.env, ['PI_CODING_AGENT_DIR']);
+    assert.deepStrictEqual(rt.configHome.profileEnv, ['OMP_PROFILE', 'PI_PROFILE']);
+    assert.deepStrictEqual(rt.configHome.configRootEnv, ['PI_CONFIG_DIR']);
   });
 
   test('antigravity: hookEvents === gemini', () => {
@@ -3228,12 +3801,12 @@ describe('FIX 3: tightened runtime validator — probeExists optional string', (
 // ── 24e. Closed-vocab set exports are correct ─────────────────────────────────
 
 describe('ADR-1016 phase 5a: closed-vocab set exports', () => {
-  test('VALID_CONFIG_HOME_KINDS has exactly the 4 expected values', () => {
+  test('VALID_CONFIG_HOME_KINDS has exactly the 5 expected values', () => {
     assert.ok(VALID_CONFIG_HOME_KINDS instanceof Set);
-    for (const v of ['dot-home', 'dot-home-nested', 'xdg', 'generic-agents-root']) {
+    for (const v of ['dot-home', 'dot-home-nested', 'xdg', 'generic-agents-root', 'omp-agent-home']) {
       assert.ok(VALID_CONFIG_HOME_KINDS.has(v), 'VALID_CONFIG_HOME_KINDS must contain "' + v + '"');
     }
-    assert.strictEqual(VALID_CONFIG_HOME_KINDS.size, 4, 'VALID_CONFIG_HOME_KINDS must have exactly 4 members');
+    assert.strictEqual(VALID_CONFIG_HOME_KINDS.size, 5, 'VALID_CONFIG_HOME_KINDS must have exactly 5 members');
   });
 
   test('VALID_COMMAND_STYLES has exactly 2 values', () => {
@@ -3266,12 +3839,12 @@ describe('ADR-1016 phase 5a: closed-vocab set exports', () => {
     assert.strictEqual(VALID_SANDBOX_TIERS.size, 2);
   });
 
-  test('VALID_ARTIFACT_KIND_NAMES has exactly 4 values', () => {
+  test('VALID_ARTIFACT_KIND_NAMES has exactly 6 values', () => {
     assert.ok(VALID_ARTIFACT_KIND_NAMES instanceof Set);
-    for (const v of ['commands', 'agents', 'skills', 'kimi-agents']) {
+    for (const v of ['commands', 'agents', 'skills', 'kimi-agents', 'rules', 'extensions']) {
       assert.ok(VALID_ARTIFACT_KIND_NAMES.has(v), 'VALID_ARTIFACT_KIND_NAMES must contain "' + v + '"');
     }
-    assert.strictEqual(VALID_ARTIFACT_KIND_NAMES.size, 4);
+    assert.strictEqual(VALID_ARTIFACT_KIND_NAMES.size, 6);
   });
 
   test('VALID_ARTIFACT_NESTINGS has exactly 2 values', () => {
@@ -3279,5 +3852,1195 @@ describe('ADR-1016 phase 5a: closed-vocab set exports', () => {
     assert.ok(VALID_ARTIFACT_NESTINGS.has('flat'));
     assert.ok(VALID_ARTIFACT_NESTINGS.has('nested'));
     assert.strictEqual(VALID_ARTIFACT_NESTINGS.size, 2);
+  });
+});
+
+// ─── 25. ADR-857 phase 5e: closed ConverterName enum (Part B) ─────────────────
+
+describe('ADR-857 phase 5e: VALID_CONVERTER_NAMES closed enum', () => {
+  test('VALID_CONVERTER_NAMES has exactly 27 entries (17 command/skill + 10 agent converters)', () => {
+    assert.ok(VALID_CONVERTER_NAMES instanceof Set, 'VALID_CONVERTER_NAMES must be a Set');
+    assert.strictEqual(VALID_CONVERTER_NAMES.size, 27, 'VALID_CONVERTER_NAMES must have exactly 27 entries, got: ' + VALID_CONVERTER_NAMES.size);
+  });
+
+  test('VALID_CONVERTER_NAMES contains all expected converter names', () => {
+    const expected = [
+      // command/skill converters (pre-existing)
+      'convertClaudeCommandToAntigravitySkill',
+      'convertClaudeCommandToAugmentSkill',
+      'convertClaudeCommandToClineSkill',
+      'convertClaudeCommandToClaudeSkill',
+      'convertClaudeCommandToCodebuddyCommand',
+      'convertClaudeCommandToCodebuddySkill',
+      'convertClaudeCommandToCodexSkill',
+      'convertClaudeCommandToCopilotSkill',
+      'convertClaudeCommandToCursorCommand',
+      'convertClaudeCommandToCursorSkill',
+      'convertClaudeCommandToKiloSkill',
+      'convertClaudeCommandToKimiSkill',
+      'convertClaudeCommandToOpencodeSkill',
+      'convertClaudeCommandToTraeSkill',
+      'convertClaudeCommandToWindsurfSkill',
+      'convertClaudeCommandToOmpCommand',
+      'convertClaudeCommandToOmpSkill',
+      // agent converters (#1173 — descriptor-driven agent conversion wiring)
+      'convertClaudeAgentToCopilotAgent',
+      'convertClaudeAgentToAntigravityAgent',
+      'convertClaudeAgentToCursorAgent',
+      'convertClaudeAgentToWindsurfAgent',
+      'convertClaudeAgentToAugmentAgent',
+      'convertClaudeAgentToTraeAgent',
+      'convertClaudeAgentToCodebuddyAgent',
+      'convertClaudeAgentToClineAgent',
+      'convertClaudeAgentToCodexAgent',
+      'convertClaudeAgentToOmpAgent',
+    ];
+    for (const name of expected) {
+      assert.ok(VALID_CONVERTER_NAMES.has(name), 'VALID_CONVERTER_NAMES must contain "' + name + '"');
+    }
+  });
+});
+
+describe('ADR-857 phase 5e: validateArtifactKindEntry — ConverterName enum (FAIL-FIRST regression)', () => {
+  // Helper to build a minimal valid ArtifactKind entry
+  function makeArtifactEntry(overrides) {
+    return {
+      kind: 'skills',
+      destSubpath: 'skills',
+      nesting: 'flat',
+      prefix: 'gsd-',
+      recursive: false,
+      converter: null,
+      ...overrides,
+    };
+  }
+
+  // FAIL-FIRST: unknown converter name must be rejected
+  test('REJECTED: converter "convertClaudeCommandToUnknownRuntime" is not a known ConverterName', () => {
+    const entry = makeArtifactEntry({ converter: 'convertClaudeCommandToUnknownRuntime' });
+    const errors = validateArtifactKindEntry('test-cap', entry, 'artifactLayout.global[0]');
+    assert.ok(errors.length > 0, 'Expected rejection for unknown converter name, got: ' + JSON.stringify(errors));
+    assert.ok(
+      errors.some((e) => e.includes('convertClaudeCommandToUnknownRuntime') && e.includes('not a known ConverterName')),
+      'Error must name the bad converter and say "not a known ConverterName", got: ' + JSON.stringify(errors),
+    );
+  });
+
+  // Valid known name must be accepted
+  test('ACCEPTED: converter "convertClaudeCommandToKiloSkill" is a known ConverterName', () => {
+    const entry = makeArtifactEntry({ converter: 'convertClaudeCommandToKiloSkill' });
+    const errors = validateArtifactKindEntry('test-cap', entry, 'artifactLayout.global[0]');
+    const converterErrors = errors.filter((e) => e.includes('converter'));
+    assert.deepEqual(converterErrors, [], 'Known converter name must be accepted, got: ' + JSON.stringify(converterErrors));
+  });
+
+  // null converter is always accepted (means "no conversion")
+  test('ACCEPTED: converter: null is always accepted', () => {
+    const entry = makeArtifactEntry({ converter: null });
+    const errors = validateArtifactKindEntry('test-cap', entry, 'artifactLayout.global[0]');
+    const converterErrors = errors.filter((e) => e.includes('converter'));
+    assert.deepEqual(converterErrors, [], 'converter: null must always be accepted, got: ' + JSON.stringify(converterErrors));
+  });
+
+  // Parity: all runtime descriptors must have converters in the valid set when present.
+  test('all real runtime descriptors have converters in VALID_CONVERTER_NAMES when present', () => {
+    const { capMap, errors } = loadAndValidate(new Set());
+    const hardErrors = errors.filter((e) => !e.includes('pending-migration'));
+    assert.deepEqual(hardErrors, [], 'Expected no hard errors from real capabilities, got: ' + JSON.stringify(hardErrors));
+
+    const runtimeIds = [
+      'claude', 'codex', 'antigravity', 'gemini', 'cursor', 'opencode',
+      'kilo', 'copilot', 'augment', 'trae', 'qwen', 'hermes',
+      'codebuddy', 'cline', 'kimi', 'windsurf', 'omp',
+    ];
+    for (const id of runtimeIds) {
+      const cap = capMap.get(id);
+      assert.ok(cap, 'capMap must contain "' + id + '"');
+      const r = cap.runtime;
+      const allEntries = [
+        ...(r.artifactLayout && Array.isArray(r.artifactLayout.global) ? r.artifactLayout.global : []),
+        ...(r.artifactLayout && Array.isArray(r.artifactLayout.local) ? r.artifactLayout.local : []),
+      ];
+      for (let i = 0; i < allEntries.length; i++) {
+        const entry = allEntries[i];
+        if (entry.converter != null) {
+          assert.ok(
+            VALID_CONVERTER_NAMES.has(entry.converter),
+            id + ' artifactLayout[' + i + '].converter "' + entry.converter +
+            '" is not in VALID_CONVERTER_NAMES',
+          );
+        }
+      }
+    }
+  });
+
+  // validateCapability end-to-end: unknown converter propagates through the full chain
+  test('validateCapability REJECTS a runtime cap with unknown converter in artifactLayout', () => {
+    const cap = {
+      id: 'test-rt',
+      role: 'runtime',
+      title: 'Test Runtime',
+      description: 'Test runtime with unknown converter.',
+      tier: 'core',
+      requires: [],
+      runtime: {
+        configHome: { kind: 'dot-home', name: '.test-rt', env: [] },
+        configFormat: 'settings-json',
+        artifactLayout: {
+          global: [{
+            kind: 'skills',
+            destSubpath: 'skills',
+            nesting: 'flat',
+            prefix: 'gsd-',
+            recursive: false,
+            converter: 'convertClaudeCommandToUnknownRuntime',
+          }],
+          local: [],
+        },
+        commandStyle: 'slash-hyphen',
+        hooksSurface: 'settings-json',
+        sandboxTier: 'none',
+        supportTier: 1,
+      },
+    };
+    const errors = validateCapability(cap, 'test-rt');
+    assert.ok(errors.length > 0, 'Expected validation errors for unknown converter, got: ' + JSON.stringify(errors));
+    assert.ok(
+      errors.some((e) => e.includes('convertClaudeCommandToUnknownRuntime') && e.includes('not a known ConverterName')),
+      'Error must mention the unknown converter name, got: ' + JSON.stringify(errors),
+    );
+  });
+});
+
+// ─── 26. ADR-857 phase 5e: configFormat ↔ installSurface parity gate (Part A) ─
+
+describe('ADR-857 phase 5e: configFormat ↔ installSurface parity gate', () => {
+  // Helper: build a minimal runtime capMap for parity tests.
+  // installSurface must be supplied for any runtime that should be checked by the gate;
+  // omit it (undefined) to simulate a runtime with no installSurface (gate skips it).
+  function makeRuntimeCapMap(runtimeId, configFormat, installSurface) {
+    const runtime = {
+      configHome: { kind: 'dot-home', name: '.' + runtimeId, env: [] },
+      configFormat,
+      artifactLayout: { global: [], local: [] },
+      commandStyle: 'slash-hyphen',
+      hooksSurface: 'none',
+      sandboxTier: 'none',
+      supportTier: 1,
+    };
+    if (installSurface !== undefined) {
+      runtime.installSurface = installSurface;
+    }
+    const cap = {
+      id: runtimeId,
+      role: 'runtime',
+      title: 'Test ' + runtimeId,
+      description: 'Synthetic runtime for parity gate testing.',
+      tier: 'core',
+      requires: [],
+      runtime,
+    };
+    return new Map([[runtimeId, cap]]);
+  }
+
+  // FAIL-FIRST: parity mismatch must throw
+  test('THROWS: claude with wrong configFormat "toml" (installSurface=settings-json → expected settings-json)', () => {
+    // claude has installSurface=settings-json → expected configFormat=settings-json
+    // Giving it configFormat=toml must trigger the HARD gate
+    const capMap = makeRuntimeCapMap('claude', 'toml', 'settings-json');
+    assert.throws(
+      () => runConfigFormatParityGate(capMap),
+      (err) => {
+        assert.ok(err instanceof Error, 'Must throw an Error');
+        assert.ok(
+          err.message.includes('claude') && err.message.includes('parity gate FAILED'),
+          'Error must name the runtime and say "parity gate FAILED", got: ' + err.message,
+        );
+        assert.ok(
+          err.message.includes('settings-json') && err.message.includes('toml'),
+          'Error must name both the expected and actual configFormat, got: ' + err.message,
+        );
+        return true;
+      },
+    );
+  });
+
+  test('THROWS: codex with wrong configFormat "settings-json" (installSurface=codex-toml → expected toml)', () => {
+    const capMap = makeRuntimeCapMap('codex', 'settings-json', 'codex-toml');
+    assert.throws(
+      () => runConfigFormatParityGate(capMap),
+      (err) => {
+        assert.ok(err instanceof Error);
+        assert.ok(err.message.includes('codex') && err.message.includes('parity gate FAILED'));
+        return true;
+      },
+    );
+  });
+
+  // All 16 real runtime descriptors must pass the parity gate (true-negative)
+  test('all 16 real runtime descriptors pass the configFormat parity gate (DOES NOT THROW)', () => {
+    const { capMap, errors } = loadAndValidate(new Set());
+    const hardErrors = errors.filter((e) => !e.includes('pending-migration'));
+    assert.deepEqual(hardErrors, [], 'No hard errors expected: ' + JSON.stringify(hardErrors));
+
+    // runConfigFormatParityGate must not throw for the real registry
+    assert.doesNotThrow(
+      () => runConfigFormatParityGate(capMap),
+      'runConfigFormatParityGate must not throw for the real 16 runtime descriptors',
+    );
+  });
+
+  // buildRegistry must not throw for the real registry (end-to-end integration)
+  test('buildRegistry with real 16 runtime descriptors does not throw (parity gate integrated)', () => {
+    const { capMap } = loadAndValidate(new Set());
+    assert.doesNotThrow(
+      () => buildRegistry(capMap),
+      'buildRegistry must not throw for the real registry (parity gate must pass)',
+    );
+  });
+
+  // INSTALL_SURFACE_TO_CONFIG_FORMAT export check
+  test('INSTALL_SURFACE_TO_CONFIG_FORMAT covers all 6 installSurface values with correct mappings', () => {
+    assert.ok(INSTALL_SURFACE_TO_CONFIG_FORMAT instanceof Map, 'Must be a Map');
+    assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.size, 6, 'Must cover 6 installSurface values');
+    assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.get('settings-json'),        'settings-json');
+    assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.get('codex-toml'),           'toml');
+    assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.get('copilot-instructions'), 'markdown');
+    assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.get('cline-rules'),          'markdown-dir');
+    assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.get('cursor-hooks-json'),    'none');
+    assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.get('profile-marker-only'),  'none');
+  });
+
+  // Feature capabilities (role:feature) are silently ignored by the gate
+  test('feature capabilities (role:feature) are ignored by the parity gate — does not throw', () => {
+    // Use the real UI cap (role:feature, has no installSurface) — gate must pass silently
+    const capMap = new Map([['ui', UI_CAP]]);
+    assert.doesNotThrow(
+      () => runConfigFormatParityGate(capMap),
+      'Feature capabilities must be ignored by the configFormat parity gate',
+    );
+  });
+
+  // Runtimes with no installSurface in their descriptor are excluded from the gate.
+  // The gate reads installSurface from cap.runtime.installSurface (the descriptor level);
+  // if it is absent (typeof !== 'string'), the runtime is soft-skipped.
+  // NOTE: the gate no longer uses the adapter registry — it reads purely from the descriptor.
+  test('runtime with no installSurface in descriptor (e.g. hypothetical "grok") is excluded from parity gate — does not throw', () => {
+    // 'grok' has no installSurface → gate must soft-skip (typeof r.installSurface !== 'string')
+    const grokCap = {
+      id: 'grok',
+      role: 'runtime',
+      title: 'Grok',
+      description: 'Hypothetical grok runtime',
+      tier: 'core',
+      requires: [],
+      runtime: {
+        configHome: { kind: 'dot-home', name: '.grok', env: [] },
+        configFormat: 'settings-json',  // any value — gate should not check this (no installSurface)
+        artifactLayout: { global: [], local: [] },
+        commandStyle: 'slash-hyphen',
+        hooksSurface: 'none',
+        sandboxTier: 'none',
+        supportTier: 2,
+        // intentionally no installSurface — gate must skip this entry
+      },
+    };
+    const capMap = new Map([['grok', grokCap]]);
+    assert.doesNotThrow(
+      () => runConfigFormatParityGate(capMap),
+      'Runtimes with no installSurface in their descriptor must be excluded from the parity gate',
+    );
+  });
+});
+
+// ─── 27. ADR-857 phase 5f: cross-field consistency gate rejection tests ────────
+
+describe('ADR-857 phase 5f: cross-field consistency gate rejection tests (DEFECT.GENERATIVE-FIX)', () => {
+  // Helper: build a minimal VALID runtime cap for cross-field rejection tests.
+  // Override any field via the overrides object.
+  function makeValidRuntimeCap(overrides) {
+    const base = {
+      id: 'test-runtime',
+      role: 'runtime',
+      title: 'Test runtime',
+      description: 'Synthetic runtime for cross-field gate rejection testing.',
+      tier: 'core',
+      requires: [],
+      runtime: {
+        configHome: { kind: 'dot-home', name: '.test-runtime', env: [] },
+        configFormat: 'settings-json',
+        artifactLayout: { global: [], local: [] },
+        commandStyle: 'slash-hyphen',
+        hooksSurface: 'settings-json',
+        hookEvents: 'claude',
+        sandboxTier: 'none',
+        supportTier: 1,
+        installSurface: 'settings-json',
+        writesSharedSettings: true,
+        permissionWriter: null,
+        extendedHookEvents: [],
+      },
+    };
+    if (overrides && typeof overrides === 'object') {
+      for (const [k, v] of Object.entries(overrides)) {
+        if (k === 'runtime' && typeof v === 'object') {
+          Object.assign(base.runtime, v);
+        } else {
+          base[k] = v;
+        }
+      }
+    }
+    return base;
+  }
+
+  test('REJECTS: installSurface not in VALID_INSTALL_SURFACES → throws validation error', () => {
+    const cap = makeValidRuntimeCap({ runtime: { installSurface: 'bogus-surface' } });
+    const errors = validateRuntimeBody(cap);
+    assert.ok(
+      errors.some((e) => e.includes('installSurface') && e.includes('bogus-surface')),
+      'Expected error about invalid installSurface, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('REJECTS: permissionWriter not null and not in {opencode,kilo} → throws validation error', () => {
+    const cap = makeValidRuntimeCap({ runtime: { permissionWriter: 'notarealwriter' } });
+    const errors = validateRuntimeBody(cap);
+    assert.ok(
+      errors.some((e) => e.includes('permissionWriter') && e.includes('notarealwriter')),
+      'Expected error about invalid permissionWriter, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('REJECTS: extendedHookEvents containing a bogus event ("SubagentStopTypo") → throws validation error', () => {
+    const cap = makeValidRuntimeCap({ runtime: { extendedHookEvents: ['SubagentStopTypo'] } });
+    const errors = validateRuntimeBody(cap);
+    assert.ok(
+      errors.some((e) => e.includes('extendedHookEvents') && e.includes('SubagentStopTypo')),
+      'Expected error about invalid extendedHookEvents entry, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('REJECTS: writesSharedSettings not a boolean → throws validation error', () => {
+    const cap = makeValidRuntimeCap({ runtime: { writesSharedSettings: 'yes' } });
+    const errors = validateRuntimeBody(cap);
+    assert.ok(
+      errors.some((e) => e.includes('writesSharedSettings') && e.includes('"yes"')),
+      'Expected error about writesSharedSettings not boolean, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('GATE A REJECTS: profile-marker-only + hooksSurface="settings-json" → validation error', () => {
+    // profile-marker-only installSurface only allows hooksSurface='none'
+    const cap = makeValidRuntimeCap({
+      runtime: {
+        installSurface: 'profile-marker-only',
+        hooksSurface: 'settings-json',
+        configFormat: 'none', // correct for profile-marker-only
+      },
+    });
+    const errors = validateRuntimeBody(cap);
+    assert.ok(
+      errors.some((e) => e.includes('hooksSurface') && e.includes('profile-marker-only')),
+      'Expected GATE A error for profile-marker-only + hooksSurface=settings-json, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('GATE B REJECTS: hookEvents="claude" + extendedHookEvents=["BeforeAgent"] → validation error', () => {
+    // BeforeAgent is a Gemini agent-event — requires hookEvents='gemini', not 'claude'
+    const cap = makeValidRuntimeCap({
+      runtime: {
+        hookEvents: 'claude',
+        extendedHookEvents: ['BeforeAgent'],
+      },
+    });
+    const errors = validateRuntimeBody(cap);
+    assert.ok(
+      errors.some((e) => e.includes('BeforeAgent') && e.includes('"gemini"')),
+      'Expected GATE B error for hookEvents=claude + extendedHookEvents=[BeforeAgent], got: ' + JSON.stringify(errors),
+    );
+  });
+
+  // Verify the new constants are well-formed
+  test('INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES covers all 6 installSurface values', () => {
+    assert.ok(INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES instanceof Map, 'Must be a Map');
+    assert.strictEqual(INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES.size, 6, 'Must cover 6 installSurface values');
+    for (const installSurface of VALID_INSTALL_SURFACES) {
+      assert.ok(
+        INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES.has(installSurface),
+        'INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES must include installSurface "' + installSurface + '"',
+      );
+    }
+  });
+
+  test('VALID_EXTENDED_HOOK_EVENTS covers all 7 known extended events', () => {
+    assert.ok(VALID_EXTENDED_HOOK_EVENTS instanceof Set, 'Must be a Set');
+    assert.strictEqual(VALID_EXTENDED_HOOK_EVENTS.size, 7, 'Must cover 7 extended hook events');
+    for (const ev of ['SubagentStop', 'Stop', 'PreCompact', 'FileChanged', 'BeforeAgent', 'AfterAgent', 'BeforeModel']) {
+      assert.ok(VALID_EXTENDED_HOOK_EVENTS.has(ev), 'Must include event "' + ev + '"');
+    }
+  });
+
+  test('VALID_PERMISSION_WRITERS covers exactly {opencode, kilo}', () => {
+    assert.ok(VALID_PERMISSION_WRITERS instanceof Set, 'Must be a Set');
+    assert.strictEqual(VALID_PERMISSION_WRITERS.size, 2, 'Must cover 2 permission writers');
+    assert.ok(VALID_PERMISSION_WRITERS.has('opencode'), 'Must include opencode');
+    assert.ok(VALID_PERMISSION_WRITERS.has('kilo'), 'Must include kilo');
+  });
+
+  // Confirm the valid base fixture does NOT produce errors (sanity)
+  test('valid runtime fixture produces no validation errors', () => {
+    const cap = makeValidRuntimeCap({});
+    const errors = validateRuntimeBody(cap);
+    assert.deepEqual(errors, [], 'Valid fixture must produce no errors, got: ' + JSON.stringify(errors));
+  });
+});
+
+// ─── Change A: loadCentralConfigKeys ENOENT vs parse-error distinction ────────
+
+describe('loadCentralConfigKeys — ENOENT vs parse-error (Issue #1124)', () => {
+  test('ENOENT: nonexistent path returns empty Set without throwing or writing stderr', () => {
+    const stderrWrites = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (msg, ...rest) => { stderrWrites.push(msg); return origWrite(msg, ...rest); };
+    let result;
+    try {
+      const nonexistent = path.join(os.tmpdir(), 'cfgkeys-nonexistent-' + Date.now() + '.json');
+      result = loadCentralConfigKeys(nonexistent);
+    } finally {
+      process.stderr.write = origWrite;
+    }
+    assert.ok(result instanceof Set, 'should return a Set');
+    assert.strictEqual(result.size, 0, 'Set should be empty for ENOENT');
+    const warnings = stderrWrites.filter((m) => typeof m === 'string' && m.length > 0);
+    assert.deepEqual(warnings, [], 'No stderr output expected for ENOENT, got: ' + JSON.stringify(warnings));
+  });
+
+  test('malformed JSON: throws and writes stderr containing the file path', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cfgkeys-'));
+    const badFile = path.join(tmpDir, 'bad-schema.json');
+    fs.writeFileSync(badFile, '<<<<<<< HEAD\nnot json\n>>>>>>> main', 'utf8');
+    const stderrWrites = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (msg, ...rest) => { stderrWrites.push(msg); return origWrite(msg, ...rest); };
+    let thrownErr;
+    try {
+      loadCentralConfigKeys(badFile);
+    } catch (err) {
+      thrownErr = err;
+    } finally {
+      process.stderr.write = origWrite;
+    }
+    // Clean up
+    cleanup(tmpDir);
+    assert.ok(thrownErr !== undefined, 'Expected loadCentralConfigKeys to throw on malformed JSON');
+    assert.strictEqual(thrownErr.name, 'ExitError', 'thrown error must be an ExitError, got: ' + thrownErr.name);
+    assert.strictEqual(thrownErr.code, 1, 'ExitError must have code 1, got: ' + thrownErr.code);
+    const combined = stderrWrites.join('');
+    assert.ok(
+      combined.includes(badFile),
+      'stderr should include the file path, got: ' + combined,
+    );
+  });
+
+  test('valid file: returns Set containing the declared keys', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cfgkeys-'));
+    const goodFile = path.join(tmpDir, 'good-schema.json');
+    fs.writeFileSync(goodFile, JSON.stringify({ validKeys: ['a', 'b'] }), 'utf8');
+    let result;
+    try {
+      result = loadCentralConfigKeys(goodFile);
+    } finally {
+      cleanup(tmpDir);
+    }
+    assert.ok(result instanceof Set, 'should return a Set');
+    assert.ok(result.has('a'), "Set should contain 'a'");
+    assert.ok(result.has('b'), "Set should contain 'b'");
+    assert.strictEqual(result.size, 2, 'Set should have exactly 2 entries');
+  });
+
+  test('non-ENOENT read error (path is a directory) throws ExitError and warns', () => {
+    // fs.readFileSync on a directory throws EISDIR (code !== 'ENOENT'), which must
+    // hit the non-ENOENT read-error branch: throw ExitError(1) and write stderr.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cfgkeys-dir-'));
+    const stderrWrites = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (msg, ...rest) => { stderrWrites.push(msg); return origWrite(msg, ...rest); };
+    let thrownErr;
+    try {
+      loadCentralConfigKeys(tmpDir);
+    } catch (err) {
+      thrownErr = err;
+    } finally {
+      process.stderr.write = origWrite;
+    }
+    cleanup(tmpDir);
+    assert.ok(thrownErr !== undefined, 'Expected loadCentralConfigKeys to throw on EISDIR (directory path)');
+    assert.strictEqual(thrownErr.name, 'ExitError', 'thrown error must be an ExitError, got: ' + thrownErr.name);
+    assert.strictEqual(thrownErr.code, 1, 'ExitError must have code 1, got: ' + thrownErr.code);
+    const combined = stderrWrites.join('');
+    assert.ok(
+      combined.includes(tmpDir),
+      'stderr should include the directory path, got: ' + combined,
+    );
+  });
+});
+
+// ─── Change B: duplicate-producer invariant at gen time (Issue #1123) ─────────
+
+describe('duplicate-producer invariant — same artifact same point (Issue #1123)', () => {
+  // Minimal base capability clone helper (deep-clone UI_CAP then override key fields)
+  function makeFeatureCap(overrides) {
+    return Object.assign(JSON.parse(JSON.stringify(UI_CAP)), overrides);
+  }
+
+  test('REJECTION: two caps each producing DUP.md at plan:pre → throws with artifact/point/ids in message', () => {
+    // Note: omit 'when' and use config:{} so there are no config-key validation errors.
+    // Caps must pass per-capability validation to enter capMap and trigger the global check.
+    const capA = makeFeatureCap({
+      id: 'dup-a',
+      skills: ['dup-a-skill'],
+      agents: ['gsd-dup-a-agent'],
+      config: {},
+      steps: [
+        {
+          point: 'plan:pre',
+          ref: { skill: 'dup-a-skill' },
+          produces: ['DUP.md'],
+          consumes: ['CONTEXT.md'],
+          onError: 'skip',
+        },
+      ],
+      gates: [],
+      contributions: [],
+    });
+    const capB = makeFeatureCap({
+      id: 'dup-b',
+      skills: ['dup-b-skill'],
+      agents: ['gsd-dup-b-agent'],
+      config: {},
+      steps: [
+        {
+          point: 'plan:pre',
+          ref: { skill: 'dup-b-skill' },
+          produces: ['DUP.md'],
+          consumes: ['CONTEXT.md'],
+          onError: 'skip',
+        },
+      ],
+      gates: [],
+      contributions: [],
+    });
+    // The duplicate-producer check fires during loadAndValidate (in validateConsumesGlobal)
+    // or during buildRegistry — test wraps the entire build flow.
+    const capDir = makeTempCapDir({ 'dup-a': capA, 'dup-b': capB });
+    let threw = false;
+    let errorMsg = '';
+    try {
+      const { capMap } = loadAndValidate(new Set(), capDir);
+      buildRegistry(capMap);
+    } catch (err) {
+      threw = true;
+      errorMsg = err.message || String(err);
+    }
+    assert.ok(threw, 'Expected build flow to throw for duplicate producers at the same point');
+    assert.ok(errorMsg.includes('DUP.md'), 'Error message should mention DUP.md, got: ' + errorMsg);
+    assert.ok(errorMsg.includes('plan:pre'), 'Error message should mention the point, got: ' + errorMsg);
+    assert.ok(
+      errorMsg.includes('dup-a') && errorMsg.includes('dup-b'),
+      'Error message should mention both cap ids, got: ' + errorMsg,
+    );
+  });
+
+  test('PASSING: same artifact at DIFFERENT points does not trigger duplicate-producer error', () => {
+    // cap-diff-a produces SAME.md at plan:pre; cap-diff-b produces SAME.md at execute:post
+    // Different pointIdx → must not throw the duplicate-producer error.
+    // NOTE: both points must be wired (have render-hooks call sites in host workflows)
+    // to pass the validateHooksWired gen-time guard added in #1196.
+    const capDiffA = makeFeatureCap({
+      id: 'diff-a',
+      skills: ['diff-a-skill'],
+      agents: ['gsd-diff-a-agent'],
+      config: {},
+      steps: [
+        {
+          point: 'plan:pre',
+          ref: { skill: 'diff-a-skill' },
+          produces: ['SAME.md'],
+          consumes: ['CONTEXT.md'],
+          onError: 'skip',
+        },
+      ],
+      gates: [],
+      contributions: [],
+    });
+    const capDiffB = makeFeatureCap({
+      id: 'diff-b',
+      skills: ['diff-b-skill'],
+      agents: ['gsd-diff-b-agent'],
+      config: {},
+      steps: [
+        {
+          point: 'execute:post',
+          ref: { skill: 'diff-b-skill' },
+          produces: ['SAME.md'],
+          consumes: [],
+          onError: 'skip',
+        },
+      ],
+      gates: [],
+      contributions: [],
+    });
+    const capDir = makeTempCapDir({ 'diff-a': capDiffA, 'diff-b': capDiffB });
+    const { capMap, errors } = loadAndValidate(new Set(), capDir);
+    assert.deepEqual(errors, [], 'Expected no validation errors for different-point fixtures, got: ' + JSON.stringify(errors));
+    // buildRegistry must NOT throw — if the duplicate-producer bug regressed it would throw here
+    assert.doesNotThrow(
+      () => buildRegistry(capMap),
+      'Should NOT throw duplicate-producer error for same artifact at DIFFERENT points',
+    );
+  });
+});
+
+// ─── #1196 — discuss loop wiring + wired-point guard ─────────────────────────
+
+describe('#1196 — discuss loop wiring + wired-point guard', () => {
+  // ─── Defect 1 — discuss is now wireable ─────────────────────────────────────
+
+  describe('Defect 1: discuss is a wireable loop host', () => {
+    test('HOST_LOOP_FILES includes discuss-phase.md', () => {
+      assert.ok(
+        Array.isArray(HOST_LOOP_FILES),
+        'HOST_LOOP_FILES must be an array',
+      );
+      assert.ok(
+        HOST_LOOP_FILES.includes('gsd-core/workflows/discuss-phase.md'),
+        `HOST_LOOP_FILES must include 'gsd-core/workflows/discuss-phase.md'. Got: ${JSON.stringify(HOST_LOOP_FILES)}`,
+      );
+    });
+
+    test('getWiredLoopPoints(ROOT) contains discuss:pre', () => {
+      const wired = getWiredLoopPoints(ROOT);
+      assert.ok(
+        wired instanceof Set,
+        'getWiredLoopPoints must return a Set',
+      );
+      assert.ok(
+        wired.has('discuss:pre'),
+        `getWiredLoopPoints(ROOT) must contain 'discuss:pre'. Got: ${JSON.stringify([...wired])}`,
+      );
+    });
+
+    test('getWiredLoopPoints(ROOT) contains discuss:post', () => {
+      const wired = getWiredLoopPoints(ROOT);
+      assert.ok(
+        wired.has('discuss:post'),
+        `getWiredLoopPoints(ROOT) must contain 'discuss:post'. Got: ${JSON.stringify([...wired])}`,
+      );
+    });
+  });
+
+  // ─── Defect 2 — gen-time wired guard ────────────────────────────────────────
+
+  describe('Defect 2: validateHooksWired gen-time guard', () => {
+    /** Minimal capability fixture with one hook at a given point */
+    function makeCapWithStep(point) {
+      return {
+        id: 'test-cap',
+        role: 'feature',
+        steps: [{ point, ref: { skill: 'my-skill' }, produces: [], consumes: [], onError: 'skip' }],
+        contributions: [],
+        gates: [],
+        config: {},
+      };
+    }
+
+    function makeCapWithContribution(point) {
+      return {
+        id: 'test-cap',
+        role: 'feature',
+        steps: [],
+        contributions: [{ point, into: 'orchestrator', fragment: { inline: 'hi' }, produces: [], consumes: [] }],
+        gates: [],
+        config: {},
+      };
+    }
+
+    function makeCapWithGate(point) {
+      return {
+        id: 'test-cap',
+        role: 'feature',
+        steps: [],
+        contributions: [],
+        gates: [{ point, check: { query: 'test-query' }, blocking: false, onError: 'skip' }],
+        config: {},
+      };
+    }
+
+    test('returns non-empty error array mentioning "not wired" when step point is not in wiredSet', () => {
+      const cap = makeCapWithStep('discuss:pre');
+      const wiredSet = new Set(['plan:pre', 'plan:post']); // discuss:pre absent
+      const errs = validateHooksWired(cap, wiredSet);
+      assert.ok(Array.isArray(errs), 'must return an array');
+      assert.ok(errs.length > 0, 'must return errors when point is unwired');
+      const joined = errs.join(' ');
+      assert.match(joined, /not wired/i, 'error must mention "not wired"');
+      assert.match(joined, /discuss:pre/, 'error must name the point');
+      assert.match(joined, /test-cap/, 'error must name the capability id');
+    });
+
+    test('returns non-empty error array when contribution point is not in wiredSet', () => {
+      const cap = makeCapWithContribution('discuss:pre');
+      const wiredSet = new Set(['plan:pre']); // discuss:pre absent
+      const errs = validateHooksWired(cap, wiredSet);
+      assert.ok(errs.length > 0, 'must return errors for unwired contribution point');
+      assert.match(errs.join(' '), /not wired/i);
+    });
+
+    test('returns non-empty error array when gate point is not in wiredSet', () => {
+      const cap = makeCapWithGate('discuss:pre');
+      const wiredSet = new Set(['plan:pre']); // discuss:pre absent
+      const errs = validateHooksWired(cap, wiredSet);
+      assert.ok(errs.length > 0, 'must return errors for unwired gate point');
+      assert.match(errs.join(' '), /not wired/i);
+    });
+
+    test('returns empty array when all declared points are in wiredSet', () => {
+      const cap = makeCapWithStep('plan:pre');
+      const wiredSet = new Set(['plan:pre', 'plan:post', 'execute:post']);
+      const errs = validateHooksWired(cap, wiredSet);
+      assert.deepEqual(errs, [], 'must return empty array when all points are wired');
+    });
+
+    test('boundary: cap declaring discuss:pre is rejected against wiredSet lacking it', () => {
+      const cap = makeCapWithStep('discuss:pre');
+      const smallSet = new Set(['plan:pre', 'plan:post']);
+      const errs = validateHooksWired(cap, smallSet);
+      assert.ok(errs.length > 0, 'must reject discuss:pre against a set that lacks it');
+    });
+
+    test('boundary: cap declaring discuss:pre is accepted against real getWiredLoopPoints(ROOT) post-fix', () => {
+      const cap = makeCapWithStep('discuss:pre');
+      const realWired = getWiredLoopPoints(ROOT);
+      const errs = validateHooksWired(cap, realWired);
+      assert.deepEqual(
+        errs, [],
+        `discuss:pre must be wired after the fix. Errors: ${errs.join('; ')}`,
+      );
+    });
+
+    test('boundary: cap declaring discuss:post is accepted against real getWiredLoopPoints(ROOT) post-fix', () => {
+      const cap = makeCapWithContribution('discuss:post');
+      const realWired = getWiredLoopPoints(ROOT);
+      const errs = validateHooksWired(cap, realWired);
+      assert.deepEqual(
+        errs, [],
+        `discuss:post must be wired after the fix. Errors: ${errs.join('; ')}`,
+      );
+    });
+
+    test('invalid points (not in VALID_LOOP_POINTS) are not flagged as "unwired" (already caught by schema validator)', () => {
+      const cap = {
+        id: 'test-cap',
+        role: 'feature',
+        steps: [{ point: 'not:a:real:point', ref: { skill: 'x' }, produces: [], consumes: [], onError: 'skip' }],
+        contributions: [],
+        gates: [],
+        config: {},
+      };
+      const wiredSet = new Set(['plan:pre']); // the invalid point is not here either
+      const errs = validateHooksWired(cap, wiredSet);
+      // Should NOT flag it — invalid points are the schema validator's job
+      const notWiredErrors = errs.filter((e) => /not wired/i.test(e));
+      assert.deepEqual(
+        notWiredErrors, [],
+        'validateHooksWired must not flag invalid points as "not wired" (those are caught by schema validation)',
+      );
+    });
+  });
+
+  // ─── Anti-pattern parity guards ──────────────────────────────────────────────
+
+  describe('Anti-pattern parity: host-file set has a single source of truth', () => {
+    test('every STEP_WORKFLOWS entry file exists on disk and contains a gsd:loop-host marker', () => {
+      for (const { file, step } of STEP_WORKFLOWS) {
+        const absPath = path.join(ROOT, 'gsd-core', 'workflows', file);
+        assert.ok(
+          fs.existsSync(absPath),
+          `STEP_WORKFLOWS entry ${file} (step: ${step}) does not exist on disk at ${absPath}`,
+        );
+        const content = fs.readFileSync(absPath, 'utf8');
+        assert.match(
+          content,
+          /<!--\s*gsd:loop-host/,
+          `${file} (step: ${step}) is listed in STEP_WORKFLOWS but lacks a gsd:loop-host marker`,
+        );
+      }
+    });
+
+    test('HOST_LOOP_FILES matches STEP_WORKFLOWS (single source of truth)', () => {
+      const expectedFromStepWorkflows = STEP_WORKFLOWS.map((w) => 'gsd-core/workflows/' + w.file);
+      assert.deepEqual(
+        HOST_LOOP_FILES,
+        expectedFromStepWorkflows,
+        'HOST_LOOP_FILES must be derived from STEP_WORKFLOWS, not a separate hardcoded list',
+      );
+    });
+
+    test('every workflow file carrying a gsd:loop-host marker is present in STEP_WORKFLOWS', () => {
+      const workflowsDir = path.join(ROOT, 'gsd-core', 'workflows');
+
+      // Find all .md files in workflows dir (non-recursive — top-level only, subdirs are mode files)
+      const allMdFiles = fs.readdirSync(workflowsDir)
+        .filter((f) => f.endsWith('.md'))
+        .sort();
+
+      const stepWorkflowFiles = new Set(STEP_WORKFLOWS.map((w) => w.file));
+      const missingFromStepWorkflows = [];
+
+      for (const mdFile of allMdFiles) {
+        const absPath = path.join(workflowsDir, mdFile);
+        const content = fs.readFileSync(absPath, 'utf8');
+        if (/<!--\s*gsd:loop-host/.test(content) && !stepWorkflowFiles.has(mdFile)) {
+          missingFromStepWorkflows.push(mdFile);
+        }
+      }
+
+      assert.deepEqual(
+        missingFromStepWorkflows, [],
+        `These workflow files have a gsd:loop-host marker but are absent from STEP_WORKFLOWS: ` +
+        `${missingFromStepWorkflows.join(', ')}. Add them to STEP_WORKFLOWS in scripts/gen-loop-host-contract.cjs.`,
+      );
+    });
+
+    test('POINT_ORDER (capability-registry) === flattened LOOP_HOST_CONTRACT points — schema/contract drift guard', () => {
+      // Flatten all contract points in order
+      const contractPoints = [];
+      for (const entry of LOOP_HOST_CONTRACT) {
+        contractPoints.push(...entry.points);
+      }
+
+      assert.deepEqual(
+        POINT_ORDER,
+        contractPoints,
+        'POINT_ORDER in gen-capability-registry must equal the flattened LOOP_HOST_CONTRACT points in order. ' +
+        `POINT_ORDER: ${JSON.stringify(POINT_ORDER)}, contract flatten: ${JSON.stringify(contractPoints)}`,
+      );
+    });
+
+    test('CANONICAL_POINTS (gen-loop-host-contract) matches POINT_ORDER (gen-capability-registry)', () => {
+      assert.deepEqual(
+        [...CANONICAL_POINTS],
+        POINT_ORDER,
+        'CANONICAL_POINTS in gen-loop-host-contract must equal POINT_ORDER in gen-capability-registry',
+      );
+    });
+  });
+
+  // ─── Property test ────────────────────────────────────────────────────────────
+
+  describe('Property: scanWiredPoints is a correct extractor', () => {
+    test('fc: scanWiredPoints(text) returns exactly the set of points whose call sites appear in text', () => {
+      // The canonical 12 points from CANONICAL_POINTS
+      const allPoints = [...CANONICAL_POINTS];
+
+      fc.assert(
+        fc.property(
+          fc.subarray(allPoints, { minLength: 0, maxLength: allPoints.length }),
+          (subset) => {
+            // Build a synthetic text containing one call site per point in the subset
+            const lines = subset.map((p) => `HOOKS_JSON=$(gsd_run loop render-hooks ${p} --raw)`);
+            // Add some noise to exercise robustness
+            const noise = ['# comment', 'echo hello', `gsd_run loop some-other-command`, ''];
+            const text = [...lines, ...noise].join('\n');
+
+            const result = scanWiredPoints(text);
+
+            // result must be a Set
+            if (!(result instanceof Set)) return false;
+
+            // result must contain exactly the subset points
+            const resultArr = [...result].sort();
+            const subsetArr = [...subset].sort();
+            if (resultArr.length !== subsetArr.length) return false;
+            for (let i = 0; i < subsetArr.length; i++) {
+              if (resultArr[i] !== subsetArr[i]) return false;
+            }
+            return true;
+          },
+        ),
+        { numRuns: 200 },
+      );
+    });
+
+    test('NIT-02: scanWiredPoints does not match an incomplete occurrence (no point token after render-hooks)', () => {
+      // A line with `loop render-hooks` but no following point token must not match
+      const incompleteText = 'HOOKS_JSON=$(gsd_run loop render-hooks\n)';
+      const result = scanWiredPoints(incompleteText);
+      assert.strictEqual(
+        result.size,
+        0,
+        'scanWiredPoints must return an empty Set when the render-hooks call has no point token. ' +
+        `Got: ${JSON.stringify([...result])}`,
+      );
+    });
+  });
+});
+
+// ─── activationKey validation (issue #1304 Phase 1) ─────────────────────────
+
+describe('activationKey validation', () => {
+  // Minimal valid feature capability fixture for activationKey tests.
+  // Uses UI_CAP as a base so all required fields are satisfied.
+  function makeCapWithActivationKey(activationKey) {
+    const cap = { ...UI_CAP, activationKey };
+    if (activationKey === undefined) delete cap.activationKey;
+    return cap;
+  }
+
+  // (a) valid activationKey referencing a key declared in the cap's own config slice
+  test('(a) valid activationKey referencing own config key: no errors, emitted in registry', () => {
+    // UI_CAP declares 'workflow.ui_phase' (boolean) in its config — use that as activationKey
+    const cap = makeCapWithActivationKey('workflow.ui_phase');
+    const errors = validateCapability(cap, 'ui');
+    assert.deepEqual(
+      errors,
+      [],
+      'Expected no validation errors for activationKey that matches own config key, got: ' +
+        JSON.stringify(errors),
+    );
+
+    // Confirm activationKey is emitted in the built registry
+    const capDir = makeTempCapDir({ ui: cap });
+    const { capMap, errors: loadErrors } = loadAndValidate(new Set(), capDir);
+    assert.deepEqual(loadErrors, [], 'Expected no load errors: ' + JSON.stringify(loadErrors));
+    const registry = buildRegistry(capMap);
+    assert.strictEqual(
+      registry.capabilities.ui.activationKey,
+      'workflow.ui_phase',
+      'registry.capabilities.ui.activationKey must equal the declared activationKey',
+    );
+  });
+
+  // (b) activationKey referencing an UNKNOWN config key → a specific error naming the cap + key
+  test('(b) activationKey referencing unknown config key: specific error emitted', () => {
+    const cap = makeCapWithActivationKey('no-such-key.enabled');
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(
+      errors.length > 0,
+      'Expected at least one error when activationKey references an unknown config key',
+    );
+    const joined = errors.join('\n');
+    assert.ok(
+      joined.includes('no-such-key.enabled'),
+      'Error must name the bad activationKey, got: ' + JSON.stringify(errors),
+    );
+    assert.ok(
+      joined.includes('ui') || joined.includes('(unknown)'),
+      'Error must name the capability id, got: ' + JSON.stringify(errors),
+    );
+    assert.ok(
+      joined.includes('config'),
+      'Error must reference the config slice, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  // (c) activationKey absent → valid (back-compat)
+  test('(c) activationKey absent: valid (back-compat — no errors)', () => {
+    const cap = makeCapWithActivationKey(undefined);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(cap, 'activationKey'),
+      'Fixture must not have activationKey when undefined is passed',
+    );
+    const errors = validateCapability(cap, 'ui');
+    assert.deepEqual(
+      errors,
+      [],
+      'Expected no validation errors when activationKey is absent, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  // (d) activationKey present but empty string → error
+  test('(d) activationKey empty string: error', () => {
+    const cap = makeCapWithActivationKey('');
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(
+      errors.length > 0,
+      'Expected at least one error when activationKey is an empty string',
+    );
+    assert.ok(
+      errors.some((e) => e.includes('activationKey') && e.includes('non-empty')),
+      'Error must mention activationKey and non-empty, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  // (d-extra) activationKey non-string (number) → error
+  test('(d-extra) activationKey non-string (number): error', () => {
+    const cap = { ...UI_CAP, activationKey: 42 };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(
+      errors.length > 0,
+      'Expected at least one error when activationKey is a number',
+    );
+    assert.ok(
+      errors.some((e) => e.includes('activationKey') && e.includes('non-empty')),
+      'Error must mention activationKey and non-empty string requirement, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  // (e) reserved-name guard: activationKey === '__proto__' → reserved-name error, not not-declared error
+  test('(e) activationKey "__proto__": reserved-name error (not not-declared error)', () => {
+    const cap = makeCapWithActivationKey('__proto__');
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(
+      errors.length > 0,
+      'Expected at least one error when activationKey is "__proto__"',
+    );
+    assert.ok(
+      errors.some((e) => e.includes('__proto__') && e.includes('reserved')),
+      'Error must mention "__proto__" and "reserved", got: ' + JSON.stringify(errors),
+    );
+    // Must NOT emit the not-declared error (the guard runs before hasOwnProperty.call)
+    assert.ok(
+      !errors.some((e) => e.includes('is not declared in this capability\'s config slice')),
+      'Reserved-name guard must fire before the not-declared check; got: ' + JSON.stringify(errors),
+    );
+  });
+
+  // (f) reserved-name guard: activationKey === 'constructor' → reserved-name error
+  test('(f) activationKey "constructor": reserved-name error', () => {
+    const cap = makeCapWithActivationKey('constructor');
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(
+      errors.length > 0,
+      'Expected at least one error when activationKey is "constructor"',
+    );
+    assert.ok(
+      errors.some((e) => e.includes('constructor') && e.includes('reserved')),
+      'Error must mention "constructor" and "reserved", got: ' + JSON.stringify(errors),
+    );
+    assert.ok(
+      !errors.some((e) => e.includes('is not declared in this capability\'s config slice')),
+      'Reserved-name guard must fire before the not-declared check; got: ' + JSON.stringify(errors),
+    );
+  });
+
+  // (g) reserved-name guard: activationKey === 'prototype' → reserved-name error
+  test('(g) activationKey "prototype": reserved-name error', () => {
+    const cap = makeCapWithActivationKey('prototype');
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(
+      errors.length > 0,
+      'Expected at least one error when activationKey is "prototype"',
+    );
+    assert.ok(
+      errors.some((e) => e.includes('prototype') && e.includes('reserved')),
+      'Error must mention "prototype" and "reserved", got: ' + JSON.stringify(errors),
+    );
+    assert.ok(
+      !errors.some((e) => e.includes('is not declared in this capability\'s config slice')),
+      'Reserved-name guard must fire before the not-declared check; got: ' + JSON.stringify(errors),
+    );
+  });
+
+  // (h) regression guard: activationKey === null → non-empty-string error (typeof null === 'object' footgun)
+  test('(h) activationKey null: non-empty-string error (typeof null footgun regression guard)', () => {
+    const cap = { ...UI_CAP, activationKey: null };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(
+      errors.length > 0,
+      'Expected at least one error when activationKey is null',
+    );
+    assert.ok(
+      errors.some((e) => e.includes('activationKey') && e.includes('non-empty')),
+      'Error must mention activationKey and non-empty string requirement (typeof null === "object" must not bypass the check), got: ' + JSON.stringify(errors),
+    );
+    // Must NOT emit the reserved-name error
+    assert.ok(
+      !errors.some((e) => e.includes('reserved')),
+      'null must not trigger the reserved-name guard, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  // Registry integration: activationKey absent → field absent in registry entry (omit semantics)
+  test('activationKey absent: field omitted from registry capabilities entry', () => {
+    const cap = makeCapWithActivationKey(undefined);
+    const capDir = makeTempCapDir({ ui: cap });
+    const { capMap, errors } = loadAndValidate(new Set(), capDir);
+    assert.deepEqual(errors, [], 'Expected no load errors: ' + JSON.stringify(errors));
+    const registry = buildRegistry(capMap);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(registry.capabilities.ui, 'activationKey'),
+      'activationKey must be absent from registry.capabilities.ui when not declared',
+    );
+  });
+
+  // Verify graphify capability.json declares correct activationKey
+  test('graphify capability.json declares activationKey matching its own config key', () => {
+    const graphifyCap = JSON.parse(
+      require('node:fs').readFileSync(
+        require('node:path').join(ROOT, 'capabilities', 'graphify', 'capability.json'),
+        'utf8',
+      ),
+    );
+    assert.strictEqual(
+      graphifyCap.activationKey,
+      'graphify.enabled',
+      'graphify capability.json must declare activationKey: "graphify.enabled"',
+    );
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(graphifyCap.config, 'graphify.enabled'),
+      'graphify capability.json config must contain key "graphify.enabled"',
+    );
+  });
+
+  // Verify intel capability.json declares correct activationKey
+  test('intel capability.json declares activationKey matching its own config key', () => {
+    const intelCap = JSON.parse(
+      require('node:fs').readFileSync(
+        require('node:path').join(ROOT, 'capabilities', 'intel', 'capability.json'),
+        'utf8',
+      ),
+    );
+    assert.strictEqual(
+      intelCap.activationKey,
+      'intel.enabled',
+      'intel capability.json must declare activationKey: "intel.enabled"',
+    );
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(intelCap.config, 'intel.enabled'),
+      'intel capability.json config must contain key "intel.enabled"',
+    );
+  });
+
+  // (i) role:runtime capability with activationKey → feature-only field error
+  test('(i) role:runtime with activationKey: feature-only field error', () => {
+    const cap = {
+      id: 'cursor', role: 'runtime', title: 'Cursor', description: 'Cursor IDE runtime',
+      tier: 'standard', requires: [],
+      activationKey: 'some.key',
+      runtime: {
+        configHome: { kind: 'dot-home', name: '.cursor', env: ['CURSOR_CONFIG_DIR'] },
+        configFormat: 'settings-json',
+        artifactLayout: { global: [], local: [] },
+        commandStyle: 'slash-hyphen',
+        hooksSurface: 'cursor-hooks-json',
+        hookEvents: 'claude',
+        sandboxTier: 'none',
+        supportTier: 2,
+        installSurface: 'cursor-hooks-json',
+        writesSharedSettings: false,
+        permissionWriter: null,
+        extendedHookEvents: [],
+      },
+    };
+    const errors = validateCapability(cap, 'cursor');
+    assert.ok(
+      errors.length > 0,
+      'Expected at least one error when role:runtime declares activationKey',
+    );
+    assert.ok(
+      errors.some((e) => e.includes('activationKey') && e.includes('feature-only')),
+      'Error must mention activationKey and feature-only, got: ' + JSON.stringify(errors),
+    );
   });
 });

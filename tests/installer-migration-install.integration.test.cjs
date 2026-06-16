@@ -248,7 +248,7 @@ function assertFreshInstallContract(runtime, targetDir) {
     );
     assertHasGsdDirectory(targetDir, 'skills');
     assert.ok(
-      listDirNames(targetDir, 'rules').some((name) => name.startsWith('gsd-') && name.endsWith('.md')),
+      listDirNames(targetDir, 'rules').some((name) => (name.endsWith('.md') || name.endsWith('.mdc'))),
       'omp should install mapped rule markdown files'
     );
   } else if (contract.surface === 'kimi-skills-agents') {
@@ -264,7 +264,6 @@ function assertFreshInstallContract(runtime, targetDir) {
     assert.ok(
       fs.existsSync(path.join(targetDir, 'agents', 'subagents', 'gsd-executor.yaml')),
       'Kimi should install GSD subagent YAML'
-    );
     );
   } else if (contract.surface === 'clinerules') {
     // #787: Cline now uses the .clinerules/ directory form (rules at gsd.md).

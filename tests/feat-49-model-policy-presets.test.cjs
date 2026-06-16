@@ -63,15 +63,16 @@ const {
   resolveModelInternal,
   resolveModelPolicy,
   resolveModelForTier,
+} = require('../gsd-core/bin/lib/model-resolver.cjs');
+const {
   KNOWN_PROVIDERS,
-  _resetRuntimeWarningCacheForTests,
-} = require('../gsd-core/bin/lib/core.cjs');
+} = require('../gsd-core/bin/lib/model-catalog.cjs');
 
 // KNOWN_PROVIDERS must also be exported directly from model-catalog.cjs
 const modelCatalog = require('../gsd-core/bin/lib/model-catalog.cjs');
 
 const { isValidConfigKey } = require('../gsd-core/bin/lib/config-schema.cjs');
-const { createTempDir, cleanup } = require('./helpers.cjs');
+const { createTempDir, cleanup, resetRuntimeWarningCaches } = require('./helpers.cjs');
 
 const makeTmp = (prefix) => createTempDir(`gsd-49-${prefix}-`);
 
@@ -277,11 +278,11 @@ describe('#49 resolveModelInternal: model_policy in the resolution chain', () =>
   let projectDir;
   beforeEach(() => {
     projectDir = makeTmp('internal');
-    _resetRuntimeWarningCacheForTests();
+    resetRuntimeWarningCaches();
   });
   afterEach(() => {
     rmr(projectDir);
-    _resetRuntimeWarningCacheForTests();
+    resetRuntimeWarningCaches();
   });
 
   test('model_policy fires before model_profile_overrides when both are set (model_policy wins)', () => {
@@ -376,34 +377,72 @@ describe('#49 resolveModelInternal: model_policy in the resolution chain', () =>
       'runtime_tiers must not fire when config.runtime is absent');
   });
 
-  test('model_policy is skipped when runtime:"claude" (no-op gate)', () => {
-    // runtime:"claude" is the implicit default and is treated as a no-op
-    // for model_policy resolution (same as the no-op gate in the existing
-    // runtime-aware resolution step). model_policy provider preset
-    // for anthropic may still fire — but runtime_tiers for claude is a no-op
-    // because claude-native resolution already handles that path.
+  test('model_policy provider preset resolves to a Claude alias on runtime:"claude" (#1133)', () => {
     writeConfig(projectDir, {
       runtime: 'claude',
-      model_profile: 'quality',
+      model_profile: 'balanced',
+      model_policy: { provider: 'anthropic-fable', budget: 'high' },
+    });
+    // gsd-planner -> opus tier; anthropic-fable opus/high = claude-fable-5 -> alias "fable"
+    assert.strictEqual(resolveModelInternal(projectDir, 'gsd-planner'), 'fable');
+  });
+
+  test('model_policy works with implicit claude runtime (no runtime key) (#1133)', () => {
+    writeConfig(projectDir, {
+      model_profile: 'balanced',
+      model_policy: { provider: 'anthropic-fable', budget: 'high' },
+    });
+    // gsd-executor -> sonnet tier; anthropic-fable sonnet/high = claude-fable-5 -> "fable"
+    assert.strictEqual(resolveModelInternal(projectDir, 'gsd-executor'), 'fable');
+  });
+
+  test('unmappable model_policy ID warns and falls back to the tier alias on claude (#1133)', () => {
+    resetRuntimeWarningCaches();
+    writeConfig(projectDir, {
+      runtime: 'claude',
+      model_profile: 'balanced',
+      model_policy: { provider: 'anthropic-fable', budget: 'low' },
+    });
+    // gsd-planner -> opus tier; anthropic-fable opus/low = claude-opus-4-5 (no alias) -> fall back to "opus"
+    assert.strictEqual(resolveModelInternal(projectDir, 'gsd-planner'), 'opus');
+  });
+
+  test('model_policy.runtime_tiers applies on runtime:"claude", mapped to alias (#1133)', () => {
+    writeConfig(projectDir, {
+      runtime: 'claude',
+      model_profile: 'balanced',
       model_policy: {
         provider: 'anthropic',
         budget: 'high',
-        runtime_tiers: {
-          claude: {
-            opus: { model: 'claude-runtime-tiers-should-not-appear' },
-          },
-        },
+        runtime_tiers: { claude: { opus: { model: 'claude-fable-5' } } },
       },
     });
-    let result;
-    assert.doesNotThrow(() => {
-      result = resolveModelInternal(projectDir, 'gsd-planner');
+    // gsd-planner -> opus tier; runtime_tiers.claude.opus = claude-fable-5 -> "fable" (was a no-op pre-#1133)
+    assert.strictEqual(resolveModelInternal(projectDir, 'gsd-planner'), 'fable');
+  });
+
+  test('model_policy maps a built-in catalog model ID to its Claude alias via MODEL_ALIAS_MAP (#1133)', () => {
+    writeConfig(projectDir, {
+      runtime: 'claude',
+      model_profile: 'balanced',
+      model_policy: {
+        provider: 'anthropic',
+        budget: 'high',
+        runtime_tiers: { claude: { opus: { model: 'claude-opus-4-8' } } },
+      },
     });
-    assert.ok(typeof result === 'string', 'must return a string');
-    // The claude runtime_tiers entry must not appear — model_policy runtime_tiers
-    // is a no-op for runtime:"claude"
-    assert.notStrictEqual(result, 'claude-runtime-tiers-should-not-appear',
-      'model_policy.runtime_tiers must be a no-op when runtime is "claude"');
+    // gsd-planner -> opus tier; runtime_tiers.claude.opus = claude-opus-4-8 ->
+    // reverse of MODEL_ALIAS_MAP -> "opus" (exercises the non-fable reverse-map path)
+    assert.strictEqual(resolveModelInternal(projectDir, 'gsd-planner'), 'opus');
+  });
+
+  test('model_policy still returns full IDs on non-claude runtimes (#1133 regression)', () => {
+    writeConfig(projectDir, {
+      runtime: 'opencode',
+      model_profile: 'balanced',
+      model_policy: { provider: 'anthropic-fable', budget: 'high' },
+    });
+    assert.strictEqual(resolveModelInternal(projectDir, 'gsd-planner'), 'claude-fable-5');
   });
 
   test('model_policy is skipped when tier:"inherit"', () => {
@@ -489,7 +528,7 @@ describe('#49 resolveModelInternal: unknown provider warning behavior', () => {
 
   beforeEach(() => {
     projectDir = makeTmp('warnings');
-    _resetRuntimeWarningCacheForTests();
+    resetRuntimeWarningCaches();
     captured = [];
     origWrite = process.stderr.write.bind(process.stderr);
     process.stderr.write = (chunk) => { captured.push(String(chunk)); return true; };
@@ -498,7 +537,7 @@ describe('#49 resolveModelInternal: unknown provider warning behavior', () => {
   afterEach(() => {
     process.stderr.write = origWrite;
     rmr(projectDir);
-    _resetRuntimeWarningCacheForTests();
+    resetRuntimeWarningCaches();
   });
 
   test('unknown provider in model_policy → falls through to model_profile_overrides, emits stderr warning once', () => {
@@ -680,11 +719,11 @@ describe('#49 isValidConfigKey: model_policy.* keys accepted/rejected', () => {
 
 // ─── KNOWN_PROVIDERS export tests ─────────────────────────────────────────────
 
-describe('#49 KNOWN_PROVIDERS exports from model-catalog.cjs and core.cjs', () => {
-  test('KNOWN_PROVIDERS exported from core.cjs includes all keys from providerPresets in catalog', () => {
-    // KNOWN_PROVIDERS must be a Set (or array) exported from core.cjs.
+describe('#49 KNOWN_PROVIDERS exports from model-catalog.cjs', () => {
+  test('KNOWN_PROVIDERS exported from model-catalog.cjs includes all keys from providerPresets in catalog', () => {
+    // KNOWN_PROVIDERS must be a Set (or array) exported from model-catalog.cjs.
     assert.ok(KNOWN_PROVIDERS != null,
-      'KNOWN_PROVIDERS must be exported from core.cjs');
+      'KNOWN_PROVIDERS must be exported from model-catalog.cjs');
     const isIterable = typeof KNOWN_PROVIDERS[Symbol.iterator] === 'function';
     assert.ok(isIterable,
       'KNOWN_PROVIDERS must be iterable (Set or array)');
@@ -702,15 +741,14 @@ describe('#49 KNOWN_PROVIDERS exports from model-catalog.cjs and core.cjs', () =
       'KNOWN_PROVIDERS must not include "generic" (it is not a catalog-backed provider)');
   });
 
-  test('KNOWN_PROVIDERS exported from model-catalog.cjs matches core.cjs re-export', () => {
-    // model-catalog.cjs must also export KNOWN_PROVIDERS (the canonical source).
-    // core.cjs re-exports it. Both must be identical.
+  test('KNOWN_PROVIDERS from model-catalog.cjs is the canonical export', () => {
+    // model-catalog.cjs is the canonical source of KNOWN_PROVIDERS.
     assert.ok(modelCatalog.KNOWN_PROVIDERS != null,
       'KNOWN_PROVIDERS must be exported from model-catalog.cjs');
     const fromCatalog = [...modelCatalog.KNOWN_PROVIDERS].sort();
-    const fromCore = [...KNOWN_PROVIDERS].sort();
-    assert.deepStrictEqual(fromCore, fromCatalog,
-      'KNOWN_PROVIDERS from core.cjs (re-export) must match model-catalog.cjs canonical export');
+    const fromImport = [...KNOWN_PROVIDERS].sort();
+    assert.deepStrictEqual(fromImport, fromCatalog,
+      'KNOWN_PROVIDERS imported from model-catalog.cjs must match the module export');
   });
 });
 
@@ -816,5 +854,19 @@ describe('#49 resolveModelForTier: model_policy beats dynamic_routing', () => {
       },
     });
     assert.strictEqual(resolveModelForTier(tmpDir, 'gsd-executor', 0), 'my-sonnet');
+  });
+
+  test('model_policy value that is already a bare Claude alias is returned as-is on claude (#1133)', () => {
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      model_profile: 'balanced',
+      model_policy: {
+        provider: 'anthropic',
+        budget: 'high',
+        runtime_tiers: { claude: { opus: { model: 'fable' } } },
+      },
+    });
+    // gsd-planner → opus tier; runtime_tiers.claude.opus = "fable" is already a valid alias → "fable"
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'fable');
   });
 });

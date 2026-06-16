@@ -164,6 +164,11 @@
   - [Statusline Context Position](#140-statusline-context-position)
   - [Milestone Tag Creation Toggle](#141-milestone-tag-creation-toggle)
   - [Structured JSON Error Mode](#142-structured-json-error-mode)
+  - [UAT-Passed Predicate](#143-uat-passed-predicate)
+  - [Spec-Phase Edge-Completeness Probe](#144-spec-phase-edge-completeness-probe)
+- [v1.43.0 Features](#v1430-features)
+  - [MemPalace Memory Capability](#145-mempalace-memory-capability)
+  - [Spec-Phase Prohibition Probe](#146-spec-phase-prohibition-probe)
 
 ---
 
@@ -2505,9 +2510,10 @@ Users who run a memory / knowledge-base MCP server (for example, ExoCortex-style
 **Purpose:** Allow projects to store their CLAUDE.md in a non-root location. The `claude_md_path` config key controls where `/gsd-profile-user` and related commands write the generated CLAUDE.md file.
 
 **Requirements:**
-- REQ-CMDPATH-01: `claude_md_path` defaults to `./CLAUDE.md`
+- REQ-CMDPATH-01: `claude_md_path` defaults to `./.claude/CLAUDE.md` (a valid project-scoped memory location; changed from `./CLAUDE.md` in v1.5 per [#1098](https://github.com/open-gsd/gsd-core/issues/1098) so generated content does not pollute a hand-crafted repo-root `CLAUDE.md`)
 - REQ-CMDPATH-02: Profile generation commands read the path from config and write to the specified location
 - REQ-CMDPATH-03: Relative paths are resolved from the project root
+- REQ-CMDPATH-04: `generate-claude-md` never overwrites an existing instruction file that lacks GSD section markers (a hand-crafted file) unless `--force` is passed
 
 **Configuration:** `claude_md_path`
 
@@ -3046,6 +3052,38 @@ explicit reviewer flags -> --all -> review.default_reviewers -> all detected rev
 
 ---
 
+### 143. UAT-Passed Predicate
+
+**CLI:** `node gsd-tools.cjs phase uat-passed <N> [--require-verification]`
+
+**Purpose:** Provide a runtime-neutral, automatable predicate that evaluates HUMAN-UAT results for a phase and returns a structured pass/fail verdict with full diagnostic detail.
+
+**Behavior:** Locates `*-UAT.md` and optionally `*-VERIFICATION.md` files for the given phase, parses UAT test blocks (heading-block parser, column-0 result lines) with a markdown-aware stripper that removes false-positive contexts (YAML frontmatter, fenced code blocks, HTML comments, and blockquotes). Returns `passed: true` only when at least one check exists AND all checks pass AND no blockers — fail-closed, no vacuous pass. The `--require-verification` flag requires at least one `*-VERIFICATION.md` with an allowlisted passing status; the command fails without one.
+
+**Output envelope:** `{ passed, uat_files[], verification_files[], checks[], blockers[], no_uat_artifacts, policy: { require_verification } }`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `passed` | `boolean` | `true` only when ≥1 check exists AND all passing AND no blockers |
+| `uat_files` | `string[]` | Filenames of `*-UAT.md` files evaluated |
+| `verification_files` | `string[]` | Filenames of `*-VERIFICATION.md` files evaluated |
+| `checks[]` | `{ file, test, name, result, passing }[]` | Per-item results from heading blocks |
+| `blockers[]` | `string[]` | Human-readable failure reasons (frontmatter, failing/missing items, policy, malformed markdown) |
+| `no_uat_artifacts` | `boolean` | `true` when no test items were parsed; `passed` is always `false` when `true` |
+| `policy.require_verification` | `boolean` | Whether `--require-verification` was active |
+
+**Requirements:**
+- REQ-UAT-PRED-01: The predicate MUST ignore result lines inside YAML frontmatter, fenced code blocks, HTML comments, and blockquotes.
+- REQ-UAT-PRED-02: `passed: true` MUST require at least one check AND all checks passing AND no blockers (fail-closed, no vacuous pass).
+- REQ-UAT-PRED-03: `--require-verification` MUST cause the command to fail when no `*-VERIFICATION.md` file with an allowlisted passing status is found.
+- REQ-UAT-PRED-04: `blockers[]` contains all human-readable failure reasons including frontmatter issues, policy violations, and malformed markdown — NOT limited to a subset of `checks[]`.
+- REQ-UAT-PRED-05: The module MUST be runtime-neutral (no runtime-specific env checks or exit shortcuts).
+- REQ-UAT-PRED-06: A heading block with no column-0 `result:` line emits `result:'missing'` (blocker); test items are never silently dropped.
+
+**Reference:** [Phase Management Commands](COMMANDS.md#phase-uat-passed-n---require-verification)
+
+---
+
 ## Related
 
 - [Commands](COMMANDS.md)
@@ -3053,3 +3091,97 @@ explicit reviewer flags -> --all -> review.default_reviewers -> all detected rev
 - [docs index](README.md)
 
 **Reference:** [JSON Error Mode](json-errors.md)
+
+---
+
+### 144. Spec-Phase Edge-Completeness Probe
+
+**Command:** `/gsd-spec-phase`
+
+**Purpose:** Surface the omitted domain-boundary edges that silently invalidate a requirement — touching intervals, empty inputs, rounding ties, grapheme truncation — before they become production defects. Runs as `Step 5.5` of spec-phase, after the ambiguity gate.
+
+**Behavior:** For each SPEC requirement the probe classifies its data/behavior shape, then raises only the *applicable* categories from a closed 8-category taxonomy (boundary, adjacency, empty, encoding, ordering, precision, idempotency, concurrency) via a relevance filter. Each raised category proposes one concrete candidate edge, which the author resolves to exactly one of four states:
+
+| State | Meaning | Downstream effect |
+|-------|---------|-------------------|
+| `covered` | An acceptance criterion handles the edge | Pass/fail line written into the SPEC Acceptance Criteria block; lifted into `plan-phase` `must_haves.truths` |
+| `dismissed` | The edge cannot occur (requires a non-empty reason) | Recorded with its reason; empty dismissals are rejected |
+| `backstop` | Intent recorded, needs a held-out/property-based test | Lifted into `must_haves.truths` as a non-inferable check |
+| `unresolved` | Deferred | Soft-gates the spec; row stamped `⚠ Edge unresolved — planner must treat as assumption` |
+
+When a requirement's prose matches **no** shape cue, the probe does not silently drop it (#1110): it emits a single `unclassified — review manually` candidate so the zero-cue requirement is surfaced for the author to resolve like any other (specify / dismiss-with-reason / defer) — a manual-review nudge, not a hard block.
+
+The resolved edges populate a `## Edge Coverage` section in `SPEC.md`. Unresolved *applicable* edges trigger a soft gate (Resolve / Write-anyway-flagged / Keep-probing) rather than a hard block. Under `--auto`, the probe **never auto-dismisses** — it auto-covers where a defensible criterion exists, otherwise auto-backstops, and logs `[auto] edge coverage: C covered, B backstop, U unresolved`. The one exception is an `unclassified` candidate: `--auto` leaves it **`unresolved`** (surfaced as a flagged assumption), never auto-`backstop` — a missing shape is not evidence an edge exists, so minting a held-out edge obligation would be a false claim.
+
+The load-bearing wire is the `plan-phase` lift: `covered` and `backstop` edges become `must_haves.truths` the verifier can check, so the section is not merely documentation.
+
+**Requirements:**
+- REQ-EDGE-01: The edge pass MUST run after the ambiguity gate and emit a `## Edge Coverage` SPEC section.
+- REQ-EDGE-02: The relevance filter MUST raise only applicable categories; each raised edge resolves to exactly one of covered/dismissed/backstop/unresolved.
+- REQ-EDGE-03: A `dismissed` resolution MUST require a non-empty reason.
+- REQ-EDGE-04: An unresolved applicable edge MUST trigger the soft gate; write-anyway stamps the row as a planner assumption.
+- REQ-EDGE-05: `--auto` MUST never auto-dismiss — auto-cover or auto-backstop only.
+- REQ-EDGE-06: `plan-phase` MUST lift `covered` criteria and `backstop` notes into `must_haves.truths`.
+- REQ-EDGE-07: A requirement whose prose matches no shape cue MUST surface an `unclassified — review manually` candidate (never silently dropped); `--auto` MUST leave it `unresolved`, never auto-`backstop`.
+
+**Reference:** [Edge Probe](../gsd-core/references/edge-probe.md)
+
+---
+
+## v1.43.0 Features
+
+### 145. MemPalace Memory Capability
+
+**Purpose:** Opt-in cross-session and cross-project memory via the [MemPalace](https://github.com/MemPalace/mempalace) external service (local-first, MCP + CLI). Wires deliberate recall before discuss/plan and verbatim capture + temporal-KG sync at phase boundaries through the ADR-857 capability mechanism. Default-resilient: disabled by default, every hook is `onError: skip`, and an absent MemPalace installation leaves the loop unchanged.
+
+**Commands:** `/gsd-mempalace-recall`, `/gsd-mempalace-capture`
+
+**Requirements:**
+- REQ-MP-01: Opt-in via `mempalace.enabled: true`. Default `false` — the loop is unchanged when unset.
+- REQ-MP-02: At `plan:pre`, skill `mempalace-recall` produces `MEMORY-RECALL.md` from prior decisions, patterns, and surprises retrieved via wake-up + semantic search + KG timeline. When MemPalace is unreachable, writes an "unavailable" stub and continues.
+- REQ-MP-03: At `discuss:post`, `plan:post`, and `verify:post`, skill `mempalace-capture` files the phase artifact verbatim into the appropriate MemPalace room (`decisions`, `planning`, `milestones`). Capture is idempotent via `mempalace_check_duplicate`.
+- REQ-MP-04: At `ship:post`, agent `gsd-mempalace-curator` writes a diary entry, proposes cross-project tunnels (when `mempalace.cross_project_tunnels: true`), and runs wing-scoped sync pruning.
+- REQ-MP-05: `mempalace.memory_mode` declares three values: `augment` (default, **implemented** — palace is an additional recall layer alongside GSD native memory), `kg_backend` (**forward-declared; routing seam not yet implemented** — selecting this today behaves identically to `augment`), `replace` (**forward-declared; not yet functional** — selecting this today behaves identically to `augment`). Only `augment` has effect in the current release.
+- REQ-MP-06: Every hook is `onError: skip`. No hook carries `blocking: true`. Memory never halts or fails a phase.
+- REQ-MP-07: Interactive runs prefer MCP tools; headless/cron runs prefer the MemPalace CLI (`mempalace wake-up`, `mempalace search`, `mempalace mine`, `mempalace sync`).
+- REQ-MP-08: `mempalace.auto_capture_hooks` is **forward-declared and not yet functional**. No native Claude Code hooks (`stop`, `precompact`, `session-start`) are installed by this key; the capability's hooks array is empty. This key is reserved for the future "Connected Capability" phase. Default `false`.
+
+**Configuration:** `mempalace.enabled`, `mempalace.memory_mode`, `mempalace.wing`, `mempalace.recall_on_discuss`, `mempalace.recall_on_plan`, `mempalace.capture_artifacts`, `mempalace.mirror_kg`, `mempalace.cross_project_tunnels`, `mempalace.diary_journal`, `mempalace.auto_capture_hooks`
+
+See [Configuration Reference](CONFIGURATION.md#mempalace-settings) for full schema and [How to enable cross-session memory with MemPalace](how-to/enable-cross-session-memory-with-mempalace.md) for a setup walkthrough.
+
+### 146. Spec-Phase Prohibition Probe
+
+**Command:** `/gsd-spec-phase`
+
+**Purpose:** Surface the unwritten *must-NOT* constraints — the values/safety/ethics interpretations a feature could silently become that the author would never want but the spec does not forbid — before any code is written. The edge probe reaches data-shape edges; it structurally cannot reach prohibitions. This is the missing instrument, running as `Step 5.6` of spec-phase, after the edge probe.
+
+**Behavior:** A two-stage, prose-orchestrated pass per requirement (no compiled recall engine — recall is inherently model-driven, ADR-550 D7b):
+
+1. **Recall (adversarial probe):** *"What could this feature silently become that the author would NOT want, but the spec does not forbid?"* — model-robust open-vocabulary elicitation across values/safety/ethics.
+2. **Precision (one-pass classifier):** drop routine-engineering items, keep genuine values/safety/ethics prohibitions — collapses the raw list to the load-bearing few.
+
+Each surfaced prohibition is resolved to exactly one of three states:
+
+| State | Meaning | Downstream effect |
+|-------|---------|-------------------|
+| `resolved` | Confirmed a real must-NOT | NEGATIVE acceptance criterion written into the SPEC `## Prohibitions (must-NOT)` section; lifted into `plan-phase` `must_haves.prohibitions` (its own sibling block, never `truths`) |
+| `dismissed` | Not a genuine prohibition (requires a non-empty reason) | Recorded with its reason; empty dismissals are rejected |
+| `unresolved` | Deferred | Soft-gates the spec; surfaced as a planner assumption |
+
+Each resolved prohibition carries a `verification` tier — `test` (a negative test can enforce it) or `judgment` (only human/LLM judgment can). At verify time, judgment-tier prohibitions route to a never-silent / never-hard-halt soft gate (autonomous emits an `unverified-prohibition — human review recommended` flag); test-tier prohibitions are enforced via the deterministic `check prohibition-enforcement` gate — green when the wired negative test / lint rule passes, hard-gate (flagged, non-green) when missing or failing, in both interactive and autonomous modes (#1259, ADR-550 D5d). Under `--auto`, the probe **never auto-dismisses**. Canon-bound concerns (OWASP / GDPR / fairness) are referred to `/gsd:secure-phase` rather than minting SPEC prohibitions (ADR-550 D6).
+
+The load-bearing wire is the `plan-phase` lift into `must_haves.prohibitions`, so the section is not merely documentation.
+
+**Deterministic prohibition-check descriptor source (#1278).** A resolved `test`-tier prohibition MAY carry an optional **`check` descriptor** — the flat-scalar keys `check_kind` (`node-test` | `lint-rule`), `check_target`, and `check_rule` (lint-rule only) — authored at spec-phase. `projectProhibitions` projects these scalars deterministically and verify-phase reads them back to locate the check handed to `check prohibition-enforcement`, so a wired, passing test closes the gap with **zero manual descriptor authoring** (previously the verify-phase LLM had to invent `{kind, target, rule}` each run, #1259). The descriptor is **optional and backward-compatible** — a descriptor-less prohibition parses and disposes byte-identically to today — and **fail-closed**: a partial, invalid, or absent descriptor falls through to the producer's existing fail-closed locate, never a silent green. `failFirst` stays a verify-time caller attestation (machine-proven fail-first is tracked in #1279).
+
+**Requirements:**
+- REQ-PROHIB-01: The prohibition pass MUST run after the edge probe and emit a `## Prohibitions (must-NOT)` SPEC section.
+- REQ-PROHIB-02: Stage 1 MUST ask the adversarial recall question; Stage 2 MUST drop routine-engineering items and keep values/safety/ethics prohibitions.
+- REQ-PROHIB-03: A `dismissed` resolution MUST require a non-empty reason.
+- REQ-PROHIB-04: `--auto` MUST never auto-dismiss.
+- REQ-PROHIB-05: `plan-phase` MUST lift resolved prohibitions into `must_haves.prohibitions` (never `truths`).
+- REQ-PROHIB-06: A well-formed but unwired `test`-tier prohibition MUST fail closed at verify time — never a silent pass.
+- REQ-PROHIB-07: A `test`-tier prohibition with a caller-attested, genuinely-passing (non-vacuous) wired mechanical check (a `node --test` negative test OR a lint/AST rule) MUST dispose green and be satisfiable; a missing, non-attested, or non-passing check MUST hard-gate (flagged, non-green) in both interactive and autonomous modes (#1259, ADR-550 D5d — the enforcement half; machine-proven fail-first is tracked in #1279, deterministic descriptor auto-locate in #1278).
+
+**Reference:** [Prohibition Probe](../gsd-core/references/prohibition-probe.md)

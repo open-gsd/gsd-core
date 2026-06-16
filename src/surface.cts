@@ -478,6 +478,19 @@ function _syncGsdDir(stagedDir: string, destDir: string, kind: ArtifactKind | st
       if (stagedDestNames.has(entry.name)) continue;
       try { fs.rmSync(path.join(destDir, entry.name), { recursive: true, force: true }); } catch { /* ignore */ }
     }
+  } else if (kindName === 'rules') {
+    const stagedFiles = fs.readdirSync(stagedDir).filter(f => f.endsWith('.md') || f.endsWith('.mdc'));
+    const stagedDestNames = new Set<string>();
+    for (const file of stagedFiles) {
+      fs.copyFileSync(path.join(stagedDir, file), path.join(destDir, file));
+      stagedDestNames.add(file);
+    }
+
+    for (const file of fs.readdirSync(destDir).filter(f => f.endsWith('.md') || f.endsWith('.mdc'))) {
+      if (!stagedDestNames.has(file)) {
+        try { fs.unlinkSync(path.join(destDir, file)); } catch { /* ignore */ }
+      }
+    }
   } else {
     // commands / agents / rules kind: mirror installRuntimeArtifacts (_copyStaged /
     // _removeGsdEntries in bin/install.js) so surface produces the SAME files as a

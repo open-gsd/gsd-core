@@ -8,8 +8,6 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- core.cjs is an export= CommonJS module
-import core = require('./core.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-workspace.cjs is an export= CommonJS module
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
@@ -18,16 +16,18 @@ import frontmatterMod = require('./frontmatter.cjs');
 import stateMod = require('./state.cjs');
 import { platformWriteSync, platformEnsureDir } from './shell-command-projection.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
-
-const {
-  escapeRegex,
-  getMilestonePhaseFilter,
-  extractOneLinerFromBody,
-  normalizePhaseName,
-  phaseTokenMatches,
-  output,
-  error,
-} = core;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import ioMod = require('./io.cjs');
+const { output, error } = ioMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseIdMod = require('./phase-id.cjs');
+const { escapeRegex, normalizePhaseName, phaseTokenMatches } = phaseIdMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import roadmapParserMod = require('./roadmap-parser.cjs');
+const { getMilestonePhaseFilter, extractCurrentMilestone } = roadmapParserMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import coreUtilsMod = require('./core-utils.cjs');
+const { extractOneLinerFromBody } = coreUtilsMod;
 const { planningPaths } = planningWorkspace;
 const { extractFrontmatter } = frontmatterMod;
 const { writeStateMd, stateReplaceFieldWithFallback } = stateMod;
@@ -138,7 +138,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   platformEnsureDir(archiveDir);
 
   // Scope stats and accomplishments to only the phases belonging to the
-  // current milestone's ROADMAP.  Uses the shared filter from core.cjs
+  // current milestone's ROADMAP.  Uses the shared filter from roadmap-parser.cjs
   // (same logic used by cmdPhasesList and other callers).
   const isDirInMilestone = getMilestonePhaseFilter(cwd, version);
   if (isDirInMilestone.missingExplicitVersion) {
@@ -167,7 +167,6 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
       }
 
       if (stateVersion && stateVersion === version) {
-        const { extractCurrentMilestone } = core;
         const roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
         const scopedContent = extractCurrentMilestone(roadmapContent, cwd);
         const phasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:\s*([^\n]+)/gi;

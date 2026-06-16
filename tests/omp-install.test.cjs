@@ -57,29 +57,42 @@ function readManifest(targetDir) {
 }
 
 describe('OMP runtime directory mapping', () => {
-  let savedOmpConfigDir;
+  let savedEnv;
 
   beforeEach(() => {
-    savedOmpConfigDir = process.env.OMP_CONFIG_DIR;
+    savedEnv = {
+      PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
+      PI_CONFIG_DIR: process.env.PI_CONFIG_DIR,
+      OMP_PROFILE: process.env.OMP_PROFILE,
+      PI_PROFILE: process.env.PI_PROFILE,
+    };
+    for (const key of Object.keys(savedEnv)) delete process.env[key];
   });
 
   afterEach(() => {
-    if (savedOmpConfigDir === undefined) delete process.env.OMP_CONFIG_DIR;
-    else process.env.OMP_CONFIG_DIR = savedOmpConfigDir;
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   });
 
   test('maps OMP local and global locations', () => {
-    delete process.env.OMP_CONFIG_DIR;
     assert.strictEqual(getDirName('omp'), '.omp');
     assert.strictEqual(getConfigDirFromHome('omp', false), "'.omp'");
     assert.strictEqual(getConfigDirFromHome('omp', true), "'.omp', 'agent'");
     assert.strictEqual(getGlobalConfigDir('omp'), path.join(require('node:os').homedir(), '.omp', 'agent'));
   });
 
-  test('respects OMP_CONFIG_DIR and explicit global override', () => {
-    process.env.OMP_CONFIG_DIR = '~/custom-omp-agent';
+  test('respects PI_CODING_AGENT_DIR and explicit global override', () => {
+    process.env.PI_CODING_AGENT_DIR = '~/custom-omp-agent';
     assert.strictEqual(getGlobalConfigDir('omp'), path.join(require('node:os').homedir(), 'custom-omp-agent'));
     assert.strictEqual(getGlobalConfigDir('omp', '/explicit/omp'), '/explicit/omp');
+  });
+
+  test('respects OMP_PROFILE over PI_CODING_AGENT_DIR', () => {
+    process.env.PI_CODING_AGENT_DIR = '/ignored/omp-agent';
+    process.env.OMP_PROFILE = 'work';
+    assert.strictEqual(getGlobalConfigDir('omp'), path.join(require('node:os').homedir(), '.omp', 'profiles', 'work', 'agent'));
   });
 });
 
@@ -111,7 +124,7 @@ describe('OMP local install and conversion', () => {
     assert.ok(!fs.existsSync(path.join(targetDir, 'skills', 'gsd-plan-phase', 'SKILL.md')), 'plan-phase must not exist as a top-level skill dir');
     assert.ok(fs.existsSync(path.join(targetDir, 'skills', 'gsd-ns-workflow', 'skills', 'plan-phase', 'SKILL.md')), 'plan-phase must be nested under gsd-ns-workflow');
     assert.ok(fs.existsSync(path.join(targetDir, 'agents', 'gsd-planner.md')));
-    assert.ok(fs.existsSync(path.join(targetDir, 'rules', 'gsd-planning-artifacts.md')));
+    assert.ok(fs.existsSync(path.join(targetDir, 'rules', 'planning-artifacts.md')));
     assert.ok(fs.existsSync(path.join(targetDir, 'extensions', 'gsd-core', 'index.js')));
     assert.ok(fs.existsSync(path.join(targetDir, 'extensions', 'gsd-core', 'package.json')));
     assert.ok(fs.existsSync(path.join(targetDir, 'extensions', 'gsd-core', 'update-worker.js')));
@@ -126,7 +139,7 @@ describe('OMP local install and conversion', () => {
     assert.ok(Object.keys(manifest.files).some(file => file.startsWith('commands/gsd-help.md')));
     assert.ok(Object.keys(manifest.files).some(file => file.startsWith('skills/gsd-ns-workflow/skills/plan-phase/SKILL.md')));
     assert.ok(Object.keys(manifest.files).some(file => file.startsWith('agents/gsd-planner.md')));
-    assert.ok(Object.keys(manifest.files).some(file => file.startsWith('rules/gsd-planning-artifacts.md')));
+    assert.ok(Object.keys(manifest.files).some(file => file.startsWith('rules/planning-artifacts.md')));
     assert.ok(Object.keys(manifest.files).includes('extensions/gsd-core/index.js'));
     assert.ok(Object.keys(manifest.files).every(file => !file.startsWith('hooks/')));
 
@@ -244,7 +257,7 @@ describe('OMP local install and conversion', () => {
     const keys = Object.keys(manifest.files);
     assert.ok(keys.some(file => file.startsWith('commands/gsd-help.md')));
     assert.ok(keys.some(file => file.startsWith('skills/gsd-ns-workflow/skills/plan-phase/SKILL.md')), 'manifest must track nested plan-phase skill');
-    assert.ok(keys.some(file => file.startsWith('rules/gsd-planning-artifacts.md')));
+    assert.ok(keys.some(file => file.startsWith('rules/planning-artifacts.md')));
     assert.ok(keys.includes('extensions/gsd-core/index.js'));
     assert.ok(keys.includes('extensions/gsd-core/package.json'));
     assert.ok(keys.includes('extensions/gsd-core/update-worker.js'));
@@ -263,9 +276,9 @@ describe('OMP global install', () => {
     cleanup(tmpDir);
   });
 
-  test('uses OMP_CONFIG_DIR for global CLI install target', () => {
+  test('uses PI_CODING_AGENT_DIR for global CLI install target', () => {
     const target = path.join(tmpDir, 'omp-agent-home');
-    const output = runInstallerCli(tmpDir, ['--global', '--omp'], { OMP_CONFIG_DIR: target });
+    const output = runInstallerCli(tmpDir, ['--global', '--omp'], { PI_CODING_AGENT_DIR: target });
     assert.ok(fs.existsSync(path.join(target, 'commands', 'gsd-help.md')));
     assert.ok(fs.existsSync(path.join(target, 'skills', 'gsd-ns-workflow', 'skills', 'plan-phase', 'SKILL.md')));
     assert.ok(fs.existsSync(path.join(target, 'agents', 'gsd-planner.md')));
@@ -292,5 +305,13 @@ describe('OMP global install', () => {
     assert.ok(!workflow.includes('./.omp/gsd-core'), 'global OMP payloads must not point at project-local .omp');
     assert.ok(workflow.includes(`${normalizedTarget}/gsd-core/USER-PROFILE.md`));
     assert.ok(workflow.includes(`${normalizedTarget}/skills/spike-findings-`));
+  });
+
+  test('uses OMP_PROFILE for global CLI install target', () => {
+    const home = path.join(tmpDir, 'home');
+    const target = path.join(home, '.omp', 'profiles', 'work', 'agent');
+    runInstallerCli(tmpDir, ['--global', '--omp'], { HOME: home, USERPROFILE: home, OMP_PROFILE: 'work' });
+    assert.ok(fs.existsSync(path.join(target, 'extensions', 'gsd-core', 'index.js')));
+    assert.ok(fs.existsSync(path.join(target, 'extensions', 'gsd-core', 'package.json')));
   });
 });

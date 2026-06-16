@@ -696,3 +696,203 @@ describe('#944 adversarial: existing ## Session heading must be updated in place
     );
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bug #1101: record-session on a `## Session Continuity` bootstrap section must
+// update IN PLACE, not append a duplicate `## Session` block.
+//
+// The reported symptom (recorded:false + frontmatter still mutated) is already
+// fixed by #944/#948. The residual: the DWIM auto-create recognised only the
+// canonical `## Session` heading, so a bootstrap `## Session Continuity` section
+// (workstream.cts, gsd2-import.cts, templates/state.md) fell through to the
+// append branch and produced a SECOND `## Session` block. The fix inserts the
+// missing canonical fields into the existing `## Session Continuity` section,
+// preserving the heading and any prose, and teaches the snapshot / frontmatter
+// readers to recognise that heading.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('#1101: record-session updates ## Session Continuity in place (no duplicate block)', () => {
+  let tmpDir;
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  /** Workstream bootstrap shape: bold Stopped At/Resume File, no Last session. */
+  function buildWorkstreamContinuity() {
+    return [
+      '---',
+      'gsd_state_version: 1.0',
+      'milestone: v1.0',
+      'milestone_name: Foundation',
+      'status: executing',
+      'last_updated: 2026-01-01T00:00:00.000Z',
+      '---',
+      '',
+      '# State: example',
+      '',
+      '## Session Continuity',
+      '**Stopped At:** N/A',
+      '**Resume File:** None',
+      '',
+    ].join('\n');
+  }
+
+  test('workstream Session Continuity is updated in place — no duplicate ## Session appended', () => {
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    fs.writeFileSync(statePath, buildWorkstreamContinuity());
+
+    const PINNED_MS = Date.parse('2026-06-12T12:00:00.000Z');
+    const result = runGsdTools(
+      'state record-session --stopped-at "Phase 1 context gathered" --resume-file ".planning/phases/01/01-CONTEXT.md"',
+      tmpDir,
+      { GSD_TEST_MODE: '1', GSD_NOW_MS: String(PINNED_MS) },
+    );
+    assert.ok(result.success, `record-session should exit 0: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.recorded, true, 'recorded must be true when values are supplied');
+
+    const after = fs.readFileSync(statePath, 'utf-8');
+    // No duplicate bare `## Session` heading appended (the only heading stays
+    // `## Session Continuity`).
+    assert.ok(!/^## Session[ \t]*$/m.test(after),
+      `must not append a duplicate bare "## Session" block; got:\n${after}`);
+    assert.strictEqual((after.match(/^## Session\b/gm) || []).length, 1,
+      `exactly one Session-family heading must remain; got:\n${after}`);
+    // Missing canonical field inserted; supplied values present.
+    assert.ok(after.includes('**Last session:**'), 'Last session field must be inserted');
+    assert.ok(after.includes('Phase 1 context gathered'), '--stopped-at value must be present');
+    assert.ok(after.includes('.planning/phases/01/01-CONTEXT.md'), '--resume-file value must be present');
+    // The frontmatter reader recognises `## Session Continuity` and derives stopped_at.
+    const fm = parseFrontmatter(after);
+    assert.strictEqual(fm.stopped_at, 'Phase 1 context gathered',
+      'frontmatter stopped_at must be derived from the ## Session Continuity section');
+    // The cmdStateSnapshot reader (separate code path) must also resolve it.
+    const snap = runGsdTools('state-snapshot', tmpDir);
+    assert.ok(snap.success, `state-snapshot should exit 0: ${snap.error}`);
+    const snapshot = JSON.parse(snap.output);
+    assert.strictEqual(snapshot.session.stopped_at, 'Phase 1 context gathered',
+      'state-snapshot must read stopped_at from the ## Session Continuity section');
+  });
+
+  test('prose under ## Session Continuity is preserved (no data loss)', () => {
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    const withProse = [
+      '---',
+      'gsd_state_version: 1.0',
+      'milestone: v1.0',
+      'milestone_name: Foundation',
+      'status: executing',
+      'last_updated: 2026-01-01T00:00:00.000Z',
+      '---',
+      '',
+      '# State: example',
+      '',
+      '## Session Continuity',
+      '',
+      '**Next recommended action:** keep-me-intact',
+      '',
+    ].join('\n');
+    fs.writeFileSync(statePath, withProse);
+
+    const PINNED_MS = Date.parse('2026-06-12T13:00:00.000Z');
+    const result = runGsdTools(
+      'state record-session --stopped-at "Phase 2 done" --resume-file "none.md"',
+      tmpDir,
+      { GSD_TEST_MODE: '1', GSD_NOW_MS: String(PINNED_MS) },
+    );
+    assert.ok(result.success, `record-session should exit 0: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.recorded, true, 'recorded must be true');
+
+    const after = fs.readFileSync(statePath, 'utf-8');
+    assert.ok(after.includes('**Next recommended action:** keep-me-intact'),
+      `existing prose must be preserved (no data loss); got:\n${after}`);
+    assert.ok(!/^## Session[ \t]*$/m.test(after),
+      'must not append a duplicate bare "## Session" block');
+    assert.ok(after.includes('Phase 2 done'), '--stopped-at value must be present');
+    const fm = parseFrontmatter(after);
+    assert.strictEqual(fm.stopped_at, 'Phase 2 done',
+      'frontmatter stopped_at must be derived from the ## Session Continuity section');
+  });
+
+  test('canonical ## Session block path is unchanged (no regression)', () => {
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    fs.writeFileSync(statePath, buildStateMdWithCanonicalSessionSection());
+
+    const PINNED_MS = Date.parse('2026-06-12T14:00:00.000Z');
+    const result = runGsdTools(
+      'state record-session --stopped-at "Phase 9, Plan 9" --resume-file "r.md"',
+      tmpDir,
+      { GSD_TEST_MODE: '1', GSD_NOW_MS: String(PINNED_MS) },
+    );
+    assert.ok(result.success, `record-session should exit 0: ${result.error}`);
+    const after = fs.readFileSync(statePath, 'utf-8');
+    assert.strictEqual((after.match(/^## Session\b/gm) || []).length, 1,
+      'canonical ## Session block must remain single');
+    assert.ok(after.includes('Phase 9, Plan 9'), 'stopped-at value updated in canonical block');
+  });
+
+  test('legacy duplicate file: reader PREFERS canonical ## Session over ## Session Continuity (F1)', () => {
+    // A file created by the OLD bug: a stale `## Session Continuity` first, then an
+    // appended fresh `## Session`. The snapshot reader must read the canonical
+    // `## Session` (fresh), matching the writer, not the stale Continuity block.
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    const duplicate = [
+      '---',
+      'gsd_state_version: 1.0',
+      'milestone: v1.0',
+      'milestone_name: Foundation',
+      'status: executing',
+      'last_updated: 2026-01-01T00:00:00.000Z',
+      '---',
+      '',
+      '# State: example',
+      '',
+      '## Session Continuity',
+      '**Stopped At:** STALE-continuity-value',
+      '**Resume File:** None',
+      '',
+      '## Session',
+      '',
+      '**Last session:** 2026-06-12T10:00:00.000Z',
+      '**Stopped at:** FRESH-canonical-value',
+      '**Resume file:** r.md',
+      '',
+    ].join('\n');
+    fs.writeFileSync(statePath, duplicate);
+
+    const snap = runGsdTools('state-snapshot', tmpDir);
+    assert.ok(snap.success, `state-snapshot should exit 0: ${snap.error}`);
+    const snapshot = JSON.parse(snap.output);
+    assert.strictEqual(snapshot.session.stopped_at, 'FRESH-canonical-value',
+      'reader must prefer the canonical ## Session block over the stale ## Session Continuity');
+  });
+
+  test('h3 ### Session Continuity is NOT read as the session section (F4)', () => {
+    // The reader is line-anchored to `^## `, so an h3 subsection must not be picked
+    // up as the session section.
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    const h3Only = [
+      '---',
+      'gsd_state_version: 1.0',
+      'milestone: v1.0',
+      'milestone_name: Foundation',
+      'status: executing',
+      'last_updated: 2026-01-01T00:00:00.000Z',
+      '---',
+      '',
+      '# State: example',
+      '',
+      '### Session Continuity',
+      '**Last session:** 2026-06-12T10:00:00.000Z',
+      '**Stopped at:** h3-should-not-be-session',
+      '',
+    ].join('\n');
+    fs.writeFileSync(statePath, h3Only);
+
+    const snap = runGsdTools('state-snapshot', tmpDir);
+    assert.ok(snap.success, `state-snapshot should exit 0: ${snap.error}`);
+    const snapshot = JSON.parse(snap.output);
+    assert.strictEqual(snapshot.session.last_date, null,
+      'an h3 ### Session Continuity must not be treated as the ## Session section');
+  });
+});

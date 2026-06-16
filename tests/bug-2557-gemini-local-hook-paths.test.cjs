@@ -26,7 +26,7 @@ describe('bug #2557: Gemini/Antigravity local hooks use relative paths (not $CLA
   });
 
   test('Antigravity local prefix is bare dirName', () => {
-    assert.equal(projectLocalHookPrefix({ runtime: 'antigravity', dirName: '.agent' }), '.agent');
+    assert.equal(projectLocalHookPrefix({ runtime: 'antigravity', dirName: '.agents' }), '.agents');
   });
 
   test('non-Gemini local prefix remains $CLAUDE_PROJECT_DIR anchored', () => {

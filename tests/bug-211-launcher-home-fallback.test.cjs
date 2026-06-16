@@ -30,6 +30,30 @@ const SNIPPET_FILE = path.join(WORKFLOWS_DIR, '_runtime-launcher.snippet.sh');
 const REPRESENTATIVE_FILE = path.join(WORKFLOWS_DIR, 'add-backlog.md');
 
 const CLAUDE_HOME_PROBE = '.claude/gsd-core/bin/';
+function cleanLauncherEnv(overrides) {
+  const env = { ...process.env, ...overrides };
+  for (const key of [
+    'CODEX_HOME',
+    'CODEX_CONFIG_DIR',
+    'CURSOR_CONFIG_DIR',
+    'HERMES_HOME',
+    'GEMINI_CONFIG_DIR',
+    'COPILOT_CONFIG_DIR',
+    'WINDSURF_CONFIG_DIR',
+    'AUGMENT_CONFIG_DIR',
+    'TRAE_CONFIG_DIR',
+    'QWEN_CONFIG_DIR',
+    'CODEBUDDY_CONFIG_DIR',
+    'CLINE_CONFIG_DIR',
+    'GROK_AGENTS_HOME',
+    'ANTIGRAVITY_CONFIG_DIR',
+    'OPENCODE_CONFIG_DIR',
+    'KILO_CONFIG_DIR',
+  ]) {
+    delete env[key];
+  }
+  return env;
+}
 
 describe('bug-211: launcher ~/.claude home fallback', () => {
   // --- (A) Snippet contains the arm ----------------------------------------
@@ -111,7 +135,7 @@ describe('bug-211: launcher ~/.claude home fallback', () => {
 
       const stdout = execFileSync('bash', [scriptPath], {
         encoding: 'utf8',
-        env: { ...process.env, PATH: systemPaths.join(path.delimiter), HOME: fakeHome },
+        env: cleanLauncherEnv({ PATH: systemPaths.join(path.delimiter), HOME: fakeHome }),
       });
 
       // GSD_TOOLS must point into the fake ~/.claude dir
@@ -169,7 +193,7 @@ describe('bug-211: launcher ~/.claude home fallback', () => {
         execFileSync('bash', [scriptPath], {
           encoding: 'utf8',
           stdio: ['pipe', 'pipe', 'pipe'],
-          env: { ...process.env, PATH: isolatedPath, HOME: fakeHome },
+          env: cleanLauncherEnv({ PATH: isolatedPath, HOME: fakeHome }),
         });
       } catch (err) {
         threw = true;

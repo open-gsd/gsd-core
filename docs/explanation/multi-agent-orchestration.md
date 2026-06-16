@@ -81,7 +81,7 @@ and write a single output document gets exactly those permissions — no Bash
 execution, no access to broader state. That constraint is intentional: it
 keeps the blast radius small if an agent behaves unexpectedly.
 
-For the complete 31-agent roster, see [Inventory](../INVENTORY.md#agents-31-shipped).
+For the complete agent roster, see [Inventory](../INVENTORY.md#agents).
 
 ---
 

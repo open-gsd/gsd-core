@@ -19,7 +19,6 @@ const os = require('node:os');
 const fs = require('node:fs');
 
 const io = require('../gsd-core/bin/lib/io.cjs');
-const core = require('../gsd-core/bin/lib/core.cjs');
 
 // ─── ERROR_REASON constants ───────────────────────────────────────────────────
 
@@ -308,37 +307,6 @@ describe('reapStaleTempFiles (via io)', () => {
   });
 });
 
-// ─── core.cjs re-export shim parity ──────────────────────────────────────────
-
-describe('core.cjs re-export shims', () => {
-  test('core.output is the same function as io.output', () => {
-    assert.strictEqual(core.output, io.output);
-  });
-
-  test('core.error is the same function as io.error', () => {
-    assert.strictEqual(core.error, io.error);
-  });
-
-  test('core.ERROR_REASON is the same object as io.ERROR_REASON', () => {
-    assert.strictEqual(core.ERROR_REASON, io.ERROR_REASON);
-  });
-
-  test('core.setJsonErrorMode is the same function as io.setJsonErrorMode', () => {
-    assert.strictEqual(core.setJsonErrorMode, io.setJsonErrorMode);
-  });
-
-  test('core.getJsonErrorMode is the same function as io.getJsonErrorMode', () => {
-    assert.strictEqual(core.getJsonErrorMode, io.getJsonErrorMode);
-  });
-
-  test('core.reapStaleTempFiles is the same function as io.reapStaleTempFiles', () => {
-    assert.strictEqual(core.reapStaleTempFiles, io.reapStaleTempFiles);
-  });
-
-  test('core.GSD_TEMP_DIR is the same value as io.GSD_TEMP_DIR', () => {
-    assert.strictEqual(core.GSD_TEMP_DIR, io.GSD_TEMP_DIR);
-  });
-});
 
 // ─── bug #1008: output()/error() tolerate a full / slow non-blocking pipe ─────
 //

@@ -1,0 +1,37 @@
+{
+  "id": "code-review",
+  "role": "feature",
+  "title": "Code review",
+  "description": "Source-file code review and review-fix workflow support for completed execution work.",
+  "tier": "full",
+  "requires": [],
+  "runtimeCompat": { "supported": ["*"], "unsupported": [] },
+  "skills": ["code-review"],
+  "agents": ["gsd-code-reviewer", "gsd-code-fixer"],
+  "hooks": [],
+  "config": {
+    "workflow.code_review": {
+      "type": "boolean",
+      "default": true,
+      "description": "Enable code-review participation in post-execution review flows."
+    },
+    "workflow.code_review_depth": {
+      "type": "enum",
+      "values": ["quick", "standard", "deep"],
+      "default": "standard",
+      "description": "Default depth for code review when no --depth override is supplied."
+    }
+  },
+  "steps": [
+    {
+      "point": "execute:post",
+      "ref": { "skill": "code-review" },
+      "produces": ["REVIEW.md"],
+      "consumes": ["SUMMARY.md"],
+      "when": "workflow.code_review",
+      "onError": "skip"
+    }
+  ],
+  "contributions": [],
+  "gates": []
+}

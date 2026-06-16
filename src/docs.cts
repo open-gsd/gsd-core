@@ -13,8 +13,20 @@
 import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import core = require('./core.cjs');
-const { output, loadConfig, resolveModelInternal, pathExistsInternal, toPosixPath, checkAgentsInstalled } = core;
+import io = require('./io.cjs');
+const { output } = io;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import configLoader = require('./config-loader.cjs');
+const { loadConfig } = configLoader;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import modelResolver = require('./model-resolver.cjs');
+const { resolveModelInternal } = modelResolver;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import coreUtils = require('./core-utils.cjs');
+const { pathExistsInternal, toPosixPath } = coreUtils;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import agentInstallCheck = require('./agent-install-check.cjs');
+const { checkAgentsInstalled } = agentInstallCheck;
 import { platformReadSync } from './shell-command-projection.cjs';
 
 // ─── Constants ────────────────────────────────────────────────────────────────

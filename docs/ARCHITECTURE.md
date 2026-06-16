@@ -217,7 +217,7 @@ Specialized agent definitions with frontmatter specifying:
 
 ### References (`gsd-core/references/*.md`)
 
-Shared knowledge documents that workflows and agents `@-reference` (see [`docs/INVENTORY.md`](INVENTORY.md#references-41-shipped) for the authoritative count and full roster):
+Shared knowledge documents that workflows and agents `@-reference` (see [`docs/INVENTORY.md`](INVENTORY.md#references) for the authoritative full roster):
 
 **Core references:**
 
@@ -290,6 +290,7 @@ Runtime hooks that integrate with the host AI agent:
 | `gsd-statusline.js` | `statusLine` | Displays model, task, directory, and context usage bar |
 | `gsd-context-monitor.js` | `PostToolUse` / `AfterTool` | Injects agent-facing context warnings at 35%/25% remaining |
 | `gsd-check-update.js` | `SessionStart` | Foreground trigger for the background update check |
+| `gsd-ensure-canonical-path.js` | `SessionStart` | For Claude Code plugin installs, symlinks `~/.claude/gsd-core/{bin,contexts,references,templates,workflows}` to the plugin's bundled tree so `@~/.claude/gsd-core/...` includes resolve; runs first in `SessionStart`, no-op in classic installs, self-heals after `claude plugin update` (#997) |
 | `gsd-check-update-worker.js` | (helper) | Background worker spawned by `gsd-check-update.js`; no direct event registration |
 | `gsd-prompt-guard.js` | `PreToolUse` | Scans `.planning/` writes for prompt injection patterns (advisory) |
 | `gsd-read-injection-scanner.js` | `PostToolUse` | Scans Read tool output for injected instructions in untrusted content |
@@ -299,7 +300,7 @@ Runtime hooks that integrate with the host AI agent:
 | `gsd-validate-commit.sh` | `PostToolUse` | Commit validation for conventional commit enforcement |
 | `gsd-phase-boundary.sh` | `PostToolUse` | Phase boundary detection for workflow transitions |
 
-See [`docs/INVENTORY.md`](INVENTORY.md#hooks-11-shipped) for the authoritative 11-hook roster.
+See [`docs/INVENTORY.md`](INVENTORY.md#hooks) for the authoritative hook roster.
 
 ### Command Routing Hub (`gsd-core/bin/lib/command-routing-hub.cjs`)
 
@@ -338,13 +339,13 @@ Agents always return a `RESEARCH.md` path, never raw fetched content. Context di
 
 ### CLI Tools (`gsd-core/bin/`)
 
-Node.js CLI utility (`gsd-tools.cjs`) with domain modules split across `gsd-core/bin/lib/` (see [`docs/INVENTORY.md`](INVENTORY.md#cli-modules-104-shipped) for the authoritative roster):
+Node.js CLI utility (`gsd-tools.cjs`) with domain modules split across `gsd-core/bin/lib/` (see [`docs/INVENTORY.md`](INVENTORY.md#cli-modules) for the authoritative roster):
 
 
 | Module                 | Responsibility                                                                                      |
 | ---------------------- | --------------------------------------------------------------------------------------------------- |
 | `config-loader.cjs`    | Project config loading — defaults merge, legacy-key migration, workstream overlay, unknown-key/profile-override validation, and federated config overlay (ADR-857 phase 3b) (extracted from `core.cjs`, ADR-857) |
-| `federated-config.cjs` | Defensive merge of capability-declared config slices (ADR-857 phase 3b); exports `mergeFederatedConfig`; no-op until capability keys are removed from the central config-schema at cutover |
+| `federated-config.cjs` | Defensive merge of capability-declared config slices (ADR-857 phase 3b); exports `mergeFederatedConfig`; live for migrated Capability keys that are absent from the central config schema |
 | `core-utils.cjs`       | Shared low-level utility primitives — POSIX path normalization, sub-repo/subdirectory scanning, phase file stats, slug/one-liner/plan-id helpers, time-ago (extracted from `core.cjs`, ADR-857) |
 | `core.cjs`             | Shared utilities; compatibility re-exports for planning, I/O (`io.cjs`), and phase-id helpers       |
 | `io.cjs`               | CLI I/O primitives — output/error emission, JSON-error mode, large-payload temp-file spillover     |
@@ -373,11 +374,12 @@ Node.js CLI utility (`gsd-tools.cjs`) with domain modules split across `gsd-core
 | `profile-output.cjs`       | Profile rendering, USER-PROFILE.md and dev-preferences.md generation                                |
 | `loop-host-contract.cjs`   | Generated Loop Host Contract — 12 loop points, per-step agent roles, and core artifacts; emitted by `scripts/gen-loop-host-contract.cjs` from workflow markers (ADR-894 §3); consumed by `gen-capability-registry.cjs` |
 | `capability-registry.cjs`  | Generated central Capability Registry — role-partitioned index of all co-located capability declarations; emitted by `scripts/gen-capability-registry.cjs` (ADR-894 §5) |
-| `loop-resolver.cjs`        | Loop Extension Point resolver — ADR-857 phase 3c registry-consuming query; filters `byLoopPoint` by config activation, renders active hooks as markdown, emits `{ point, activeHooks, rendered }` envelope; `gsd-tools loop render-hooks <point>` |
-| `capability-state.cjs`     | Unified capability-state resolver — ADR-857 phase 4b; composes install profile, runtime surface, and config activation into one per-capability view; pure `resolveCapabilityState` + I/O `cmdCapabilityState`; `gsd-tools capability state [--config-dir <path>]` |
+| `loop-resolver.cjs`        | Loop Extension Point resolver — ADR-857 phase 3c registry-consuming query; consumes resolved Capability State, filters `byLoopPoint` by capability enablement plus config activation, renders active hooks as markdown, emits `{ point, activeHooks, rendered }` envelope; `gsd-tools loop render-hooks <point> [--config-dir <path>]` |
+| `capability-state.cjs`     | Unified capability-state resolver — ADR-857 phase 4b/6; composes install profile, runtime surface, and config activation into one per-capability view consumed by workflow hook rendering; pure `resolveCapabilityState`, reusable `resolveCapabilityRuntimeState`, I/O `cmdCapabilityState`, and convenience predicate `isCapabilityActive(capId, cwd)`; `gsd-tools capability state [--config-dir <path>]` emits `{ runtimeConfigDir, capabilities[] }` where each entry carries `enabled` (installed && surfaced) and `active` (enabled && configActivation via the capability's `activationKey`; absent key → active===enabled) |
 | `graphify-command-router.cjs` | ADR-959 capability command router — first real capability command cutover (phase 4d-impl-2); extracted from the `case 'graphify':` arm in `gsd-tools.cjs`; dispatches build/query/status/diff subcommands; discovered via `commandFamilies` in the capability registry |
 | `audit-command-router.cjs` | ADR-959 capability command router (phase 4d-impl-3); extracted from the `case 'audit-uat':` and `case 'audit-open':` arms in `gsd-tools.cjs`; `routeAuditUat` → `uat.cjs:cmdAuditUat`, `routeAuditOpen` → `audit.cjs:{auditOpenArtifacts,formatAuditReport}`; discovered via `commandFamilies` in the capability registry |
 | `intel-command-router.cjs` | ADR-959 capability command router (phase 4d-impl-4, last first-party cutover); extracted from the `case 'intel':` arm in `gsd-tools.cjs`; `routeIntelCommand` → all 9 intel subcommands via lazy `require('./intel.cjs')`; preserves non-raw `timeAgo` transform on `status.files[*].updated_at`; discovered via `commandFamilies` in the capability registry |
+| `runtime-hooks-surface.cjs` | Standalone hook-surface writer module (ADR-857 phase 5f-1); owns Cline rules/agents-md/pre-tool-use hook generation, Cursor `hooks.json` reconciliation, Copilot session-hook config, and Codex hook-block management; extracted verbatim from `bin/install.js` with no logic change. |
 
 
 ---
@@ -408,7 +410,7 @@ Orchestrator (workflow .md)
 
 ### Primary Agent Spawn Categories
 
-Conceptual spawn-pattern taxonomy for the 21 primary agents. For the authoritative 31-agent roster (including the 10 advanced/specialized agents such as `gsd-pattern-mapper`, `gsd-code-reviewer`, `gsd-code-fixer`, `gsd-ai-researcher`, `gsd-domain-researcher`, `gsd-eval-planner`, `gsd-eval-auditor`, `gsd-framework-selector`, `gsd-debug-session-manager`, `gsd-intel-updater`), see [`docs/INVENTORY.md`](INVENTORY.md#agents-31-shipped).
+Conceptual spawn-pattern taxonomy for the primary agents. For the authoritative agent roster (including the advanced/specialized agents such as `gsd-pattern-mapper`, `gsd-code-reviewer`, `gsd-code-fixer`, `gsd-ai-researcher`, `gsd-domain-researcher`, `gsd-eval-planner`, `gsd-eval-auditor`, `gsd-framework-selector`, `gsd-debug-session-manager`, `gsd-intel-updater`), see [`docs/INVENTORY.md`](INVENTORY.md#agents).
 
 
 | Category         | Agents                                                                                  | Parallelism                                                                               |
@@ -585,7 +587,7 @@ Equivalent paths for other runtimes:
 - **Copilot:** `~/.copilot/` global or `./.github/` local
 - **Antigravity:** auto-detected global root (`~/.gemini/antigravity/`, `~/.gemini/antigravity-ide/`, or `~/.gemini/antigravity-cli/`) or `./.agent/` local
 - **Cursor:** `~/.cursor/` global or `./.cursor/` local
-- **Windsurf:** `~/.codeium/windsurf/` global or `./.windsurf/` local
+- **Windsurf/Devin Desktop:** `~/.codeium/windsurf/` global or `./.devin/` local (canonical, #1085); `./.windsurf/` local is still recognized as legacy
 - **Augment Code:** `~/.augment/` global or `./.augment/` local
 - **Trae:** `~/.trae/` global or `./.trae/` local
 - **Qwen Code:** `~/.qwen/` global or `./.qwen/` local
@@ -734,9 +736,14 @@ Runtime Engine (Claude Code / Gemini CLI)
     │   Reads: stdin (tool event JSON), /tmp/claude-ctx-{session}.json (bridge)
     │   Writes: stdout (hookSpecificOutput with additionalContext warning)
     │
-    └── SessionStart event ──► gsd-check-update.js
-        Reads: VERSION file
-        Writes: ~/.claude/cache/gsd-update-check.json (spawns background process)
+    └── SessionStart event
+        ├──► gsd-ensure-canonical-path.js   (runs first)
+        │    Reads:  ${CLAUDE_PLUGIN_ROOT}/gsd-core/ (plugin installs only)
+        │    Writes: ~/.claude/gsd-core/{bin,contexts,references,templates,workflows} symlinks
+        │            (no-op in classic installs; preserves user files; self-heals)
+        └──► gsd-check-update.js
+             Reads:  VERSION file
+             Writes: ~/.claude/cache/gsd-update-check.json (spawns background process)
 ```
 
 ### Context Monitor Thresholds
@@ -824,7 +831,7 @@ The migration-specific ownership and source snapshots live in
 | GitHub Copilot | `~/.copilot` | `./.github` | `skills/gsd-*/SKILL.md` (flat), `copilot-instructions.md`, and `AGENTS.md` (repo root, local) | `.agent.md` files | Self-contained `sessionStart` hook (`hooks/gsd-session.json`, inline `command` type); no statusline |
 | Antigravity | auto-detected: `~/.gemini/antigravity`, `~/.gemini/antigravity-ide`, or `~/.gemini/antigravity-cli` | `./.agent` | `skills/gsd-ns-*/SKILL.md` (6 routers) + `skills/gsd-ns-*/skills/<name>/SKILL.md` (nested concretes) | `agents/gsd-*.md` | Gemini-style `settings.json` hook entries when installed by GSD |
 | Cursor | `~/.cursor` | `./.cursor` | `skills/gsd-*/SKILL.md` (flat) | `agents/gsd-*.md` | Rule references under `rules/`; `hooks.json` with sessionStart context injection and postToolUse STATE.md monitor (#777) |
-| Windsurf | `~/.codeium/windsurf` | `./.windsurf` | `skills/gsd-*/SKILL.md` (flat) | `agents/gsd-*.md` | Rule references under `rules/`; no GSD hooks |
+| Windsurf | `~/.codeium/windsurf` | `./.devin` (canonical, #1085); `./.windsurf` legacy recognized | `skills/gsd-*/SKILL.md` (flat) | `agents/gsd-*.md` | Rule references under `rules/`; no GSD hooks |
 | Augment Code | `~/.augment` | `./.augment` | `skills/gsd-ns-*/SKILL.md` (6 routers) + `skills/gsd-ns-*/skills/<name>/SKILL.md` (nested concretes) | `agents/gsd-*.md` | No GSD hooks or statusline |
 | Trae | `~/.trae` | `./.trae` | `skills/gsd-ns-*/SKILL.md` (6 routers) + `skills/gsd-ns-*/skills/<name>/SKILL.md` (nested concretes) | `agents/gsd-*.md` | Rule references under `rules/`; no GSD hooks |
 | Qwen Code | `~/.qwen` | `./.qwen` | `skills/gsd-ns-*/SKILL.md` (6 routers) + `skills/gsd-ns-*/skills/<name>/SKILL.md` (nested concretes) | `agents/gsd-*.md` | Common GSD settings and hook entries where supported |

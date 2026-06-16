@@ -32,7 +32,32 @@ const { execFileSync } = require('node:child_process');
 const { cleanup } = require('./helpers.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
+const AGENTS_DIR = path.join(__dirname, '..', 'agents');
 const SNIPPET_FILE = path.join(WORKFLOWS_DIR, '_runtime-launcher.snippet.sh');
+function cleanLauncherEnv(overrides) {
+  const env = { ...process.env, ...overrides };
+  for (const key of [
+    'CODEX_HOME',
+    'CODEX_CONFIG_DIR',
+    'CURSOR_CONFIG_DIR',
+    'HERMES_HOME',
+    'GEMINI_CONFIG_DIR',
+    'COPILOT_CONFIG_DIR',
+    'WINDSURF_CONFIG_DIR',
+    'AUGMENT_CONFIG_DIR',
+    'TRAE_CONFIG_DIR',
+    'QWEN_CONFIG_DIR',
+    'CODEBUDDY_CONFIG_DIR',
+    'CLINE_CONFIG_DIR',
+    'GROK_AGENTS_HOME',
+    'ANTIGRAVITY_CONFIG_DIR',
+    'OPENCODE_CONFIG_DIR',
+    'KILO_CONFIG_DIR',
+  ]) {
+    delete env[key];
+  }
+  return env;
+}
 
 /**
  * Read the canonical preamble from the snippet file (all lines, no trailing newline).
@@ -112,6 +137,26 @@ function collectWorkflowFiles() {
     }
   }
   walk(WORKFLOWS_DIR);
+  return results;
+}
+
+/**
+ * Collect all agent .md files under AGENTS_DIR (non-recursive — agents/ has no subdirs,
+ * but collectFiles in the sync script is recursive-safe; we mirror that here).
+ */
+function collectAgentFiles() {
+  const results = [];
+  function walk(dir) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.isFile() && entry.name.endsWith('.md')) {
+        results.push(full);
+      }
+    }
+  }
+  walk(AGENTS_DIR);
   return results;
 }
 
@@ -275,7 +320,7 @@ describe('runtime-launcher-parity (#373)', () => {
         execFileSync('bash', [scriptPath], {
           encoding: 'utf8',
           stdio: ['pipe', 'pipe', 'pipe'],
-          env: { ...process.env, PATH: isolatedPath, HOME: base },
+          env: cleanLauncherEnv({ PATH: isolatedPath, HOME: base }),
         });
       } catch (err) {
         threw = true;
@@ -470,7 +515,7 @@ describe('runtime-launcher-parity (#373)', () => {
 
       const stdout = execFileSync('bash', [scriptPath], {
         encoding: 'utf8',
-        env: { ...process.env, PATH: systemPaths.join(path.delimiter), HOME: fakeHome },
+        env: cleanLauncherEnv({ PATH: systemPaths.join(path.delimiter), HOME: fakeHome }),
       });
 
       const normStdout = stdout.replace(/\\/g, '/');
@@ -521,6 +566,184 @@ describe('runtime-launcher-parity (#373)', () => {
         `scanner (bug-2954) misreads as a slash-command stub. Use \${_GSD_SHIM_NAME} indirection. ` +
         `Offending lines:\n` +
         offendingLines.join('\n'),
+    );
+  });
+});
+
+// ─── Issue #381: standalone gsd_run executable + CLAUDE_ENV_FILE persistence ──
+describe('runtime-launcher-parity — standalone executable (#381)', () => {
+  const BIN_DIR = path.join(__dirname, '..', 'gsd-core', 'bin');
+  const GSD_RUN_SRC = path.join(BIN_DIR, 'gsd_run');
+
+  // ─── (I) gsd_run executable delegates to gsd-tools.cjs beside it ──────────
+  test('(I) gsd_run executable delegates to gsd-tools.cjs beside it', () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-381-I-'));
+    try {
+      const binDir = path.join(base, 'gsd-core', 'bin');
+      fs.mkdirSync(binDir, { recursive: true });
+
+      // Copy the real gsd_run executable into the temp bin dir
+      fs.copyFileSync(GSD_RUN_SRC, path.join(binDir, 'gsd_run'));
+      fs.chmodSync(path.join(binDir, 'gsd_run'), 0o755);
+
+      // Write a stub gsd-tools.cjs that echoes its args
+      fs.writeFileSync(
+        path.join(binDir, 'gsd-tools.cjs'),
+        `console.log('GSD_TOOLS_STUB:' + process.argv.slice(2).join(' '))`,
+      );
+
+      const stdout = execFileSync('sh', [path.join(binDir, 'gsd_run'), 'query', 'x'], {
+        encoding: 'utf8',
+      });
+      assert.ok(
+        stdout.includes('GSD_TOOLS_STUB:query x'),
+        `Expected stdout to contain "GSD_TOOLS_STUB:query x", got: ${stdout.trim()}`,
+      );
+    } finally {
+      cleanup(base);
+    }
+  });
+
+  // ─── (J) preamble persists bin dir to CLAUDE_ENV_FILE ─────────────────────
+  test('(J) preamble persists bin dir to CLAUDE_ENV_FILE so a fresh shell resolves gsd_run', () => {
+    // Use a RUNTIME_DIR whose path contains a SPACE to prove single-quote safety.
+    const baseParent = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-381-J-'));
+    const base = path.join(baseParent, 'has space');
+    try {
+      const binDir = path.join(base, 'gsd-core', 'bin');
+      fs.mkdirSync(binDir, { recursive: true });
+
+      // gsd_run stub that prints GSD_RUN_STUB:<args>
+      const gsdRunStub = path.join(binDir, 'gsd_run');
+      fs.writeFileSync(gsdRunStub, '#!/bin/sh\necho "GSD_RUN_STUB:$*"\n');
+      fs.chmodSync(gsdRunStub, 0o755);
+
+      // gsd-tools.cjs stub (must exist for preamble first arm to win)
+      fs.writeFileSync(path.join(binDir, 'gsd-tools.cjs'), '// stub');
+
+      const envFile = path.join(baseParent, 'envfile');
+      const snippet = fs.readFileSync(SNIPPET_FILE, 'utf8');
+
+      // Script: just source the preamble with RUNTIME_DIR + CLAUDE_ENV_FILE set
+      const preambleScript = path.join(baseParent, 'run-preamble.sh');
+      fs.writeFileSync(preambleScript, snippet);
+
+      execFileSync('bash', [preambleScript], {
+        encoding: 'utf8',
+        env: {
+          RUNTIME_DIR: base,
+          CLAUDE_ENV_FILE: envFile,
+          PATH: process.env.PATH,
+        },
+      });
+
+      // Assert envfile exists and the persisted line is single-quoted
+      assert.ok(fs.existsSync(envFile), `Expected CLAUDE_ENV_FILE (${envFile}) to be created after preamble runs`);
+      const envFileContent = fs.readFileSync(envFile, 'utf8');
+      // The persisted line must single-quote the directory (neutralising $, spaces, etc.)
+      // and keep "$PATH" expanding at source time.
+      // Expected form: export PATH='<dir>':"$PATH"
+      assert.ok(
+        envFileContent.includes("export PATH='"),
+        `Expected envfile to contain single-quoted export PATH line, got: ${envFileContent.trim()}`,
+      );
+      assert.ok(
+        envFileContent.includes('has space/gsd-core/bin'),
+        `Expected envfile to contain the spaced bin dir, got: ${envFileContent.trim()}`,
+      );
+      assert.ok(
+        envFileContent.includes(':"$PATH"'),
+        `Expected envfile to contain :"$PATH" (double-quoted, expands at source time), got: ${envFileContent.trim()}`,
+      );
+
+      // Windows Git Bash (msys2) does not honor Node's chmod exec bit for PATH-executing
+      // extension-less scripts; the env-file persistence above is the cross-platform proof.
+      // Global installs on Windows are covered by npm's generated bin shim.
+      if (process.platform !== 'win32') {
+        // Simulate a LATER fresh block that SOURCES the env file to get gsd_run on PATH.
+        // The later shell does NOT have the bin dir on PATH beforehand — it only gets it
+        // by sourcing the env file.  We use a minimal PATH (no temp bin dir pre-injected).
+        const stdout = execFileSync('bash', ['-c', '. "$CLAUDE_ENV_FILE"; gsd_run hello'], {
+          encoding: 'utf8',
+          env: {
+            CLAUDE_ENV_FILE: envFile,
+            PATH: process.env.PATH,
+          },
+        });
+        assert.ok(
+          stdout.includes('GSD_RUN_STUB:hello'),
+          `Expected stdout to contain "GSD_RUN_STUB:hello" after sourcing env file, got: ${stdout.trim()}`,
+        );
+      }
+    } finally {
+      cleanup(baseParent);
+    }
+  });
+});
+
+// ─── Agent parity — runtime-launcher-parity — agents (#1041) ─────────────────
+describe('runtime-launcher-parity — agents (#1041)', () => {
+  // ─── (B-agents) Exactly ONE canonical preamble per using agent file ────────
+  test('(B-agents) each agent .md using gsd_run contains exactly ONE canonical preamble, before the first gsd_run call', () => {
+    const preamble = expectedPreamble();
+    const preambleStr = preamble.join('\n');
+    const files = collectAgentFiles();
+    assert.ok(files.length > 0, 'expected at least one agent .md file');
+
+    const violations = [];
+
+    for (const f of files) {
+      const rel = path.relative(AGENTS_DIR, f);
+      const content = fs.readFileSync(f, 'utf8');
+      const blocks = extractShellBlocks(content);
+
+      // Collect all block lines in document order for flat analysis
+      const allBlockLines = [];
+      for (const blk of blocks) {
+        allBlockLines.push(...blk.lines);
+      }
+
+      // Does this file use gsd_run at all?
+      const fileHasGsdRun = allBlockLines.some((l) => /\bgsd_run\b/.test(l));
+      if (!fileHasGsdRun) continue; // agents without gsd_run are not checked
+
+      // Count preamble occurrences across all shell content of this file
+      const allContent = allBlockLines.join('\n');
+      let preambleCount = 0;
+      let searchPos = 0;
+      while (true) {
+        const idx = allContent.indexOf(preambleStr, searchPos);
+        if (idx === -1) break;
+        preambleCount++;
+        searchPos = idx + preambleStr.length;
+      }
+
+      if (preambleCount !== 1) {
+        violations.push(
+          `${rel}: expected exactly 1 canonical preamble occurrence in bash blocks, found ${preambleCount}. ` +
+            `Run \`node scripts/sync-runtime-launcher.cjs\` to fix.`,
+        );
+        continue;
+      }
+
+      // Verify preamble appears BEFORE the first gsd_run call (in document order)
+      const preamblePos = allContent.indexOf(preambleStr);
+      const firstGsdRunPos = allContent.search(/\bgsd_run\b/);
+
+      // The first gsd_run WITHIN the preamble itself (the function definition) is fine.
+      // Simple check: preamble starts at or before the first gsd_run occurrence.
+      if (preamblePos > firstGsdRunPos) {
+        violations.push(
+          `${rel}: preamble appears AFTER the first gsd_run reference — it must precede all gsd_run calls.`,
+        );
+      }
+    }
+
+    assert.deepStrictEqual(
+      violations,
+      [],
+      'Agent files with gsd_run calls have wrong preamble count or ordering:\n' +
+        violations.join('\n---\n'),
     );
   });
 });

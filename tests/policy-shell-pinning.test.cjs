@@ -492,24 +492,20 @@ jobs:
 });
 
 // ---------------------------------------------------------------------------
-// Test 8a — Counter-test: Cartesian matrix os × shell — dedup must not collapse rows by runner alone
+// Test 8a — Cartesian matrix os × shell — full cross-product expansion resolves
+//            matrix.shell per realization
 // (mechanism: matrix.os: [macos-latest, macos-latest] with matrix.shell: [zsh, bash]
 //  and runs-on: ${{ matrix.os }}, step shell: ${{ matrix.shell }}.
-//  The base-list path in expandRunsOn previously deduped by runner alone, collapsing
-//  both macos-latest rows into one. Post-fix: each entry is pushed unconditionally,
-//  producing 2 realizations from the base-list os array.
+//  GitHub Actions realizes a 2×2 grid (4 jobs). After the Cartesian-product fix,
+//  expandRunsOn must produce 4 realizations, each carrying BOTH os AND shell in
+//  context so that ${{ matrix.shell }} resolves per realization.
 //
-//  NOTE: Cartesian cross-product expansion (expanding the full os × shell grid so
-//  that each realization carries BOTH os and shell in its context) is not yet
-//  implemented in expandRunsOn. The base-list path only records { os: runner } in
-//  context, so ${{ matrix.shell }} on the step cannot be resolved and the linter
-//  emits UNRESOLVABLE_MATRIX. The ideal post-Cartesian-expansion behavior would be
-//  2 WRONG_SHELL_FOR_OS violations (the bash rows). That is a separate follow-up bug.
-//
-//  This test validates the dedupe fix only: 2 violations must be produced (not 1),
-//  proving the base-list path no longer collapses duplicate runner values.
+//  Expected post-fix behavior:
+//    - 4 total step-results (2 os × 2 shell)
+//    - exactly 2 WRONG_SHELL_FOR_OS violations — the two bash cells on macos-latest
+//    - ZERO UNRESOLVABLE_MATRIX violations (matrix.shell is now fully resolved)
 // ---------------------------------------------------------------------------
-describe('Cartesian matrix os × shell — dedup must not collapse rows by runner alone', () => {
+describe('Cartesian matrix os × shell — full cross-product expansion resolves matrix.shell per realization', () => {
   const CARTESIAN_MATRIX_YAML = `
 name: Cartesian Matrix
 jobs:
@@ -525,41 +521,157 @@ jobs:
         run: echo hi
 `;
 
-  test('Cartesian matrix os × shell — dedup must not collapse rows by runner alone', () => {
+  test('2×2 Cartesian product yields 4 step-results, 2 WRONG_SHELL_FOR_OS violations, 0 UNRESOLVABLE_MATRIX', () => {
     const result = inspectWorkflow(CARTESIAN_MATRIX_YAML, { filePath: '<synthetic-cartesian-matrix>' });
 
-    const violations = result.jobs
-      .flatMap(j => j.steps)
-      .filter(s => s.violation !== null);
+    const allSteps = result.jobs.flatMap(j => j.steps);
+    const violations = allSteps.filter(s => s.violation !== null);
+    const unresolvable = violations.filter(s => s.violation === VIOLATION.UNRESOLVABLE_MATRIX);
+    const wrongShell = violations.filter(s => s.violation === VIOLATION.WRONG_SHELL_FOR_OS);
 
-    // The dedupe fix ensures both macos-latest entries in matrix.os are expanded
-    // independently, yielding 2 realizations — not 1 (as the old dedup-by-runner
-    // guard would produce). Each realization's ${{ matrix.shell }} is currently
-    // UNRESOLVABLE_MATRIX because the base-list path doesn't yet carry shell context
-    // (Cartesian cross-product is a separate follow-up fix).
+    // 4 step-results: 2 os values × 2 shell values = 4 realizations, each with 1 step
     assert.strictEqual(
-      violations.length,
+      allSteps.length,
+      4,
+      `Expected 4 step-results (2×2 Cartesian product) but got ${allSteps.length}. All steps: ` +
+      allSteps.map(s => `runner=${s.runner} shell=${s.effectiveShell} violation=${s.violation}`).join(', ')
+    );
+
+    // Core regression proof: ZERO UNRESOLVABLE_MATRIX (matrix.shell now resolves)
+    assert.strictEqual(
+      unresolvable.length,
+      0,
+      `Expected 0 UNRESOLVABLE_MATRIX violations but got ${unresolvable.length}: ` +
+      unresolvable.map(v => `runner=${v.runner} shell=${v.effectiveShell} type=${v.violation}`).join(', ')
+    );
+
+    // Exactly 2 WRONG_SHELL_FOR_OS: the two bash cells on macos-latest
+    assert.strictEqual(
+      wrongShell.length,
       2,
-      `Expected exactly 2 violations (dedup fix: both macos-latest rows preserved) but got ${violations.length}: ` +
+      `Expected exactly 2 WRONG_SHELL_FOR_OS violations (bash on macos-latest) but got ${wrongShell.length}: ` +
       violations.map(v => `runner=${v.runner} shell=${v.effectiveShell} type=${v.violation}`).join(', ')
     );
 
-    for (const v of violations) {
+    for (const v of wrongShell) {
       assert.strictEqual(
         v.runner,
         'macos-latest',
         `Expected violation runner to be macos-latest but got ${v.runner}`
       );
-      // UNRESOLVABLE_MATRIX because Cartesian cross-product expansion is not yet
-      // implemented; ${{ matrix.shell }} cannot be resolved from base-list context.
-      // When Cartesian expansion is added, these will become WRONG_SHELL_FOR_OS
-      // (for the bash rows) and compliant (for the zsh rows).
       assert.strictEqual(
-        v.violation,
-        VIOLATION.UNRESOLVABLE_MATRIX,
-        `Expected UNRESOLVABLE_MATRIX (shell key absent from base-list context) but got ${v.violation}`
+        v.effectiveShell,
+        'bash',
+        `Expected effectiveShell to be bash (the violating cell) but got ${v.effectiveShell}`
       );
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test 8b — Cartesian matrix os × node-version — compliant cross-product carries
+//            extra axis without violations
+// (mechanism: matrix.os: [ubuntu-latest, ubuntu-latest] with
+//  matrix.node-version: [22, 24], step shell: bash (literal).
+//  The cross-product yields 4 realizations. ubuntu-latest + bash = compliant.
+//  Pre-fix: only os is expanded → 2 step-results. Post-fix: 4 step-results.
+//  This is the fail-first signal for the Cartesian expansion fix.
+// ---------------------------------------------------------------------------
+describe('Cartesian matrix os × node-version — compliant cross-product yields 4 step-results with 0 violations', () => {
+  const CARTESIAN_COMPLIANT_YAML = `
+name: Cartesian Compliant
+jobs:
+  build:
+    runs-on: \${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-latest]
+        node-version: [22, 24]
+    steps:
+      - name: Run tests
+        shell: bash
+        run: npm test
+`;
+
+  test('2×2 Cartesian product yields 4 step-results (fail-first signal pre-fix: 2) and 0 violations', () => {
+    const result = inspectWorkflow(CARTESIAN_COMPLIANT_YAML, { filePath: '<synthetic-cartesian-compliant>' });
+
+    const allSteps = result.jobs.flatMap(j => j.steps);
+    const violations = allSteps.filter(s => s.violation !== null);
+
+    // Pre-fix: only os is expanded → 2 step-results; post-fix: 4
+    assert.strictEqual(
+      allSteps.length,
+      4,
+      `Expected 4 step-results (2 os × 2 node-version Cartesian product) but got ${allSteps.length}. ` +
+      `If you see 2, the Cartesian expansion fix is not yet applied. All steps: ` +
+      allSteps.map(s => `runner=${s.runner} shell=${s.effectiveShell} violation=${s.violation}`).join(', ')
+    );
+
+    // ubuntu-latest + literal bash = compliant; no violations expected
+    assert.strictEqual(
+      violations.length,
+      0,
+      `Expected 0 violations (ubuntu-latest + bash is compliant) but got ${violations.length}: ` +
+      violations.map(v => `runner=${v.runner} shell=${v.effectiveShell} type=${v.violation}`).join(', ')
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test 8c — Property-based: for any 1–3 base-list axes with 1–3 values each,
+//            step count === Cartesian product of axis lengths
+// (fast-check is a devDependency: fast-check ^4.8.0)
+// ---------------------------------------------------------------------------
+const fc = require('fast-check');
+
+describe('property-based: step count equals product of all axis lengths for arbitrary base-list matrices', () => {
+  test('step count === product(axisLengths) for 1–3 axes with 1–3 values each', () => {
+    // Axis keys named k0, k1, k2; values restricted to [A-Za-z0-9-] to keep YAML well-formed.
+    // runs-on references ${{ matrix.k0 }}; the single step's shell references the
+    // LAST matrix axis key (${{ matrix.kLast }}) so that a dropped axis key would
+    // surface as UNRESOLVABLE_MATRIX rather than silently resolving.
+    const axisValueArb = fc.stringMatching(/^[A-Za-z][A-Za-z0-9-]{0,7}$/);
+    const axisArb = fc.array(axisValueArb, { minLength: 1, maxLength: 3 });
+    const matrixArb = fc.array(axisArb, { minLength: 1, maxLength: 3 });
+
+    fc.assert(
+      fc.property(matrixArb, (axes) => {
+        // Build YAML matrix block
+        const keys = axes.map((_, i) => `k${i}`);
+        const lastKey = keys[keys.length - 1];
+        const matrixLines = keys.map((k, i) => `        ${k}: [${axes[i].join(', ')}]`);
+
+        const yaml = [
+          'name: PropertyTest',
+          'jobs:',
+          '  build:',
+          '    runs-on: ${{ matrix.k0 }}',
+          '    strategy:',
+          '      matrix:',
+          ...matrixLines,
+          '    steps:',
+          '      - name: Run tests',
+          `        shell: \${{ matrix.${lastKey} }}`,
+          '        run: echo hi',
+        ].join('\n');
+
+        const result = inspectWorkflow(yaml, { filePath: '<property-test>' });
+        const allSteps = result.jobs.flatMap(j => j.steps);
+        const actualSteps = allSteps.length;
+        const expectedSteps = axes.reduce((acc, axis) => acc * axis.length, 1);
+
+        // Every realization must carry the last axis key in context so that
+        // ${{ matrix.kLast }} resolves. If the key is absent from any
+        // realization's context, effectiveShell fires UNRESOLVABLE_MATRIX.
+        const noUnresolvable = allSteps.every(
+          s => s.violation !== VIOLATION.UNRESOLVABLE_MATRIX,
+        );
+
+        return actualSteps === expectedSteps && noUnresolvable;
+      }),
+      { seed: 42, numRuns: 100 }
+    );
   });
 });
 

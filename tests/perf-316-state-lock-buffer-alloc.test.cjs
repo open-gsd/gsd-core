@@ -139,6 +139,7 @@ describe('perf #316: acquireStateLock hoists sleep buffer — exactly one SAB pe
   let tmpDir;
   let statePath;
   let lockPath;
+  let holderWorker;
 
   beforeEach(() => {
     tmpDir = makeTempDir();
@@ -147,7 +148,9 @@ describe('perf #316: acquireStateLock hoists sleep buffer — exactly one SAB pe
     fs.writeFileSync(statePath, MINIMAL_STATE_MD, 'utf-8');
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await holderWorker?.terminate();
+    holderWorker = null;
     try { fs.unlinkSync(lockPath); } catch { /* already gone */ }
     removeTempDir(tmpDir);
   });
@@ -162,7 +165,6 @@ describe('perf #316: acquireStateLock hoists sleep buffer — exactly one SAB pe
       // intervals ~1000ms ≈ hold duration). The lockAttempts assertion below
       // proves the retry path was exercised end-to-end.
       const holdMs = 1000;
-      let holderWorker;
       let resolveLockWritten;
       const lockWritten = new Promise((resolve) => { resolveLockWritten = resolve; });
       const holderDone = new Promise((resolve, reject) => {
@@ -210,22 +212,28 @@ describe('perf #316: acquireStateLock hoists sleep buffer — exactly one SAB pe
       assert.ok(fs.existsSync(lockPath), 'Worker A must have written the lock file');
 
       // ── Worker B: call writeStateMd, measure SAB allocations ───────────────
-      const writeResult = await new Promise((resolve, reject) => {
-        const writer = new Worker(WRITER_WORKER_CODE, {
-          eval: true,
-          workerData: {
-            stateCjsPath: STATE_CJS_PATH,
-            statePath,
-            content: MINIMAL_STATE_MD,
-            tmpDir,
-          },
+      let writerWorker;
+      let writeResult;
+      try {
+        writeResult = await new Promise((resolve, reject) => {
+          writerWorker = new Worker(WRITER_WORKER_CODE, {
+            eval: true,
+            workerData: {
+              stateCjsPath: STATE_CJS_PATH,
+              statePath,
+              content: MINIMAL_STATE_MD,
+              tmpDir,
+            },
+          });
+          writerWorker.on('message', resolve);
+          writerWorker.on('error', reject);
+          writerWorker.on('exit', (code) => {
+            if (code !== 0) reject(new Error('Writer worker exit code: ' + code));
+          });
         });
-        writer.on('message', resolve);
-        writer.on('error', reject);
-        writer.on('exit', (code) => {
-          if (code !== 0) reject(new Error('Writer worker exit code: ' + code));
-        });
-      });
+      } finally {
+        await writerWorker?.terminate();
+      }
 
       // Wait for Worker A to finish releasing
       await holderDone;

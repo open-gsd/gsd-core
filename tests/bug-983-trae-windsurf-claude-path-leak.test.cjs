@@ -29,24 +29,24 @@ const {
 // ─── Windsurf converter bare-form tests ─────────────────────────────────────
 
 describe('convertClaudeToWindsurfMarkdown — bare ~/.claude and CLAUDE_CONFIG_DIR (#983)', () => {
-  test('bare ~/.claude rewritten to ~/.windsurf', () => {
+  test('bare ~/.claude rewritten to ~/.devin (#1085: workspace dir is now .devin)', () => {
     const input = 'Config dir: (~/.claude), skills at ~/.claude/skills';
     const result = convertClaudeToWindsurfMarkdown(input);
     assert.ok(
       !/~\/\.claude(?![\w-])/.test(result),
       `bare ~/.claude must be rewritten; got: ${result}`,
     );
-    assert.ok(result.includes('~/.windsurf'), 'must rewrite to ~/.windsurf');
+    assert.ok(result.includes('~/.devin'), 'must rewrite to ~/.devin');
   });
 
-  test('$HOME/.claude rewritten to $HOME/.windsurf', () => {
+  test('$HOME/.claude rewritten to $HOME/.devin (#1085: workspace dir is now .devin)', () => {
     const input = 'RUNTIME_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"';
     const result = convertClaudeToWindsurfMarkdown(input);
     assert.ok(
       !/\$HOME\/\.claude(?![\w-])/.test(result),
       `bare $HOME/.claude must be rewritten; got: ${result}`,
     );
-    assert.ok(result.includes('$HOME/.windsurf'), 'must rewrite to $HOME/.windsurf');
+    assert.ok(result.includes('$HOME/.devin'), 'must rewrite to $HOME/.devin');
   });
 
   test('CLAUDE_CONFIG_DIR rewritten to WINDSURF_CONFIG_DIR', () => {

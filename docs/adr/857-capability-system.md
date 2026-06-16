@@ -5,6 +5,7 @@
 - **Issue:** #857
 - **Supersedes (generalizes):** Skill Surface Budget Module (ADR-0011), Runtime Install Policy Module (ADR-0058)
 - **Builds on:** CommandRoutingHub (ADR-0012), Runtime Artifact Layout Module (ADR-3660), generated-cjs single source (ADR-457)
+- **Amended:** 2026-06-12 — phase-6 boundary settled before the Migrate phase freezes it: the **verifier↔predicate contract** is classified as core verification substrate (not an off-by-default Feature Capability). See *Verification substrate vs. plug-in tier (the predicate boundary)* below. Prompted by @davesienkowski's boundary analysis on #857; coordinates with ADR-550 (spec-phase probe contract).
 
 ## Context
 
@@ -21,7 +22,7 @@ The healthier news from the architecture review: the lower seams are already in 
 
 ## Decision
 
-Introduce a **Capability** system. The five-step loop plus shared-infrastructure skills (`phase`, `config`, `help`, `update`, `surface`, `progress`) are the **privileged host/core**. Every other feature is a **Capability** — a plug-in selectable at install and toggleable after restart.
+Introduce a **Capability** system. The five-step loop plus shared-infrastructure skills (`phase`, `config`, `help`, `update`, `surface`, `progress`) are the **privileged host/core**. Every other feature is a **Capability** — a plug-in selectable at install and toggleable after restart. **One settled exception** (2026-06-12): the verifier↔predicate contract is **core verification substrate**, not a Capability — the predicates that set the verifier's reach cannot live in an off-by-default plug-in. See *Verification substrate vs. plug-in tier (the predicate boundary)*.
 
 The design was resolved across seven decisions:
 
@@ -49,7 +50,22 @@ These were grilled to resolution after the initial eight decisions.
 
 ### Loop Extension Points (the 12)
 
-`discuss:pre`, `discuss:post`, `plan:pre`, `plan:post`, `execute:pre`, `execute:wave:pre`, `execute:wave:post`, `execute:post`, `verify:pre`, `verify:post`, `ship:pre`, `ship:post`. The planner/checker loop, the verifier, and the verify-work gap-closure loop remain **core** (not hooks). Today's `§`-point features map on as: research / ui-spec / ai-spec / pattern-mapper (`step`) and security / schema-gate / tdd (`contribution`) at `plan:pre`; nyquist / gap-analysis (`gate`) at `plan:post`; build+test / code-review / drift (`gate`/`step`) at `execute:wave:post`; `verification.status` preflight (`gate`) at `ship:pre`; PR-body sections (`contribution`) at `ship:post`. The names are a stability contract — additive-only across versions.
+`discuss:pre`, `discuss:post`, `plan:pre`, `plan:post`, `execute:pre`, `execute:wave:pre`, `execute:wave:post`, `execute:post`, `verify:pre`, `verify:post`, `ship:pre`, `ship:post`. The planner/checker loop, the verifier, the verify-work gap-closure loop, **and the verifier↔predicate contract** (the spec-reach substrate — see *Verification substrate vs. plug-in tier* below) remain **core** (not hooks). Today's `§`-point features map on as: research / ui-spec / ai-spec / pattern-mapper (`step`) and security / schema-gate / tdd (`contribution`) at `plan:pre`; nyquist / gap-analysis (`gate`) at `plan:post`; build+test / code-review / drift (`gate`/`step`) at `execute:wave:post`; `verification.status` preflight (`gate`) at `ship:pre`; PR-body sections (`contribution`) at `ship:post`. The names are a stability contract — additive-only across versions.
+
+### Verification substrate vs. plug-in tier (the predicate boundary)
+
+Settled before phase 6 (Migrate) freezes the core/plug-in line. **The probe family that generates must-NOT-have and edge predicates is core verification substrate, not an off-by-default Feature Capability** — split into a non-toggleable contract and a core-default generator.
+
+**The load-bearing finding:** *verifier reach = spec reach.* The verifier can only catch what the spec concretely names; the must-NOT-have / edge predicates **are** the reach of the spec the verifier verifies. Placing the verifier in core (already exempted above) while leaving the input that sets its reach in an off-by-default Capability would make the core's reliability a function of an optional plug-in — the exact blast-radius leak decision #6 exists to prevent. (The live case: prose-drift and a self-graded review rationalizing a defect away — both reproduced on #664 — are why grading must be **exogenous**, i.e. against externally-supplied predicates rather than the verifier's own restated understanding.)
+
+**Altitude rule (where the line falls).** A `gate` runs *against* the spec at a point and may block (hook). Predicate-generation defines *what the verifier is allowed to see* — it is upstream of and constitutive of verification, not a check within it. So: **gates run against the spec (hook); predicate-generation defines the spec's reach (core).** This is why nyquist / gap-analysis remain `gate` hooks while the predicate contract does not.
+
+**Decomposition** (keeps the fallible part out of the core blast radius without making "off" silently shrink the verifier's reach):
+
+- **Core, non-negotiable — the contract.** The verifier always expects must-NOT-have predicates and grades **exogenously** against them. This substrate is **not toggleable**; no `capabilities/edge-probe/` Feature Capability may remove it. The decision-#6 `produces`/`consumes` wire is the **internal rail** from predicate-generation to the core verifier (file-artifact data flow surviving `/clear`), not a Loop Extension Point a plug-in can detach. The contract is a **stability contract** alongside the Loop Extension Point names (Hyrum's Law: once relied on, it is a depended-upon interface — name it and keep it compatible).
+- **Core-default but independently versionable — the generator.** The **probe adapters** — the taxonomy + classifier that *propose* predicates (edge-probe's `classifyShape`/`proposeEdges`, the prohibition probe's adversarial LLM-propose), governed by ADR-550 — are the generator. They keep their own module precisely because the classifier has a measured recall gap (the prose→shape classifier under-fires on terse prose without erroring) and must keep improving without churning the contract. The generator is **default-on and non-removable**, but versioned separately (Gall's Law: the minimal core rail evolves slowly; the complex fallible generator evolves on its own cadence). Its fallibility is contained the same way the federated-config merge is — a generator miss is a recall gap to improve, never a core-load break. (Note: ADR-550's `probe-core` deterministic resolution/validation engine is *not* the generator — per Decision 7b it ingests already-proposed items; its validators are the **contract**'s CI-testable surface, Decision 5.)
+
+The ownership seam is clean (Conway's Law): the **contract** is owned by the core verifier plus `probe-core`'s deterministic validation/rollup engine; the **generator** is owned by the probe adapters; the `produces`/`consumes` artifact rail (decision #6) joins them. Consequently, **phase 6 does not migrate predicate-generation to an off-by-default Capability** — it wires the existing edge-probe/prohibition-probe modules onto the core predicate rail as core-default substrate. (Attribution: boundary analysis by @davesienkowski on #857, accepted by the maintainer; cross-referenced from ADR-550.)
 
 ### Contribution merge
 
@@ -87,6 +103,8 @@ Made light by the closed vocabulary: (1) validate the descriptor against its JSO
 | Runtime interface | Code adapter, third-party loadable | Ships the trust/load/security surface prematurely; not needed at launch |
 | Runtime interface | Code adapter, first-party only | Forces a later retrofit to a descriptor format — the exact rework ADR-857 is unwinding for features |
 | Runtime scope | Drop the 12 non-tier-1 runtimes | Regresses working runtime support for current users |
+| Predicate boundary | Predicate-generation as an off-by-default `capabilities/edge-probe/` Feature Capability | Makes the core verifier's reach (and thus its reliability) a function of an optional plug-in — the blast-radius leak decision #6 forbids; *verifier reach = spec reach* |
+| Predicate boundary | Promote the whole probe (taxonomy + classifier) into core wholesale | The classifier has a measured recall gap and must keep improving; folding it into the slow core rail grows core complexity and couples contract churn to generator iteration (Gall's Law) — decompose into core contract + core-default generator instead |
 
 ## Consequences
 
@@ -117,7 +135,7 @@ Phased; `next` stays green at each step. (Maps to the candidate sequence from th
 3. **Define** — land the Capability Registry generation, the federated config loader, and the Loop Extension Point resolver (`loop.render-hooks`, extending `init.*`). Define the ~12 stable points.
 4. **Wire** — collapse `.gsd-profile` + `.gsd-surface.json` + `config.json workflow.*` into one resolved capability state; open the `gsd-tools.cjs:runCommand` entrypoint (registry) so first-party code modules register as Capabilities.
 5. **Runtime seam** — finish the InstallPlan adapter registry (ADR-0058) as a declarative descriptor over a primitive vocabulary; re-author the 15 runtimes as descriptors (tier-1: Claude/Codex/Antigravity); registry loads in-tree descriptors only (third-party loader deferred).
-6. **Migrate** — convert existing optional features (UI, AI/eval, research, security, nyquist, code-review, graphify, …) to Capabilities; shrink the loop workflow bodies.
+6. **Migrate** — convert existing optional features (UI, AI/eval, research, security, nyquist, code-review, graphify, …) to Capabilities; shrink the loop workflow bodies. **Exception (settled 2026-06-12):** the edge-probe / prohibition-probe predicate-generation (ADR-550) is **not** migrated to an off-by-default Feature Capability — the verifier↔predicate contract is core substrate and the generator is a core-default module (see *Verification substrate vs. plug-in tier*). Phase 6 wires these modules onto the core predicate rail rather than relabeling them as plug-ins. (#999's Impeccable migration is unaffected — it is a genuine Feature Capability.)
 
 Each phase is its own `approved-*` issue under #857 (an approved epic does not approve its children).
 
@@ -125,3 +143,5 @@ Each phase is its own `approved-*` issue under #857 (an approved epic does not a
 
 - Migration ordering among features with cross-dependencies (e.g. UI-spec → plan, code-review → execute) under the default-resilient failure model.
 - Whether tier-1 (Claude Code / Codex / Antigravity) implies an automated cross-runtime test matrix as a merge gate.
+- ~~Whether predicate-generation (edge/prohibition probes) is core substrate or a Feature Capability~~ — **resolved 2026-06-12**: core substrate (contract) + core-default generator; not an off-by-default Capability. See *Verification substrate vs. plug-in tier*.
+- Whether the verifier↔predicate **contract** warrants a deterministic CI conformance test (a core-default generator producing a contract-shaped predicate set the verifier consumes), extending ADR-550 Decision 5's "test the contract, not the classifier" rule to the core rail — likely yes; deferred to the phase-3/phase-6 implementation issue.

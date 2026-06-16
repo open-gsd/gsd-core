@@ -42,9 +42,12 @@ describe('install.js --skills-root', () => {
 
   for (const { runtime, expected } of CASES) {
     test(`resolves correct skills root for ${runtime}`, () => {
+      const env = { ...process.env, GSD_TEST_MODE: undefined };
+      delete env.CODEX_HOME;
+      delete env.CODEX_CONFIG_DIR;
       const result = spawnSync(process.execPath, [INSTALL_JS, '--skills-root', runtime], {
         encoding: 'utf-8',
-        env: { ...process.env, GSD_TEST_MODE: undefined }, // ensure not in test mode
+        env,
       });
       // Strip trailing newline
       const actual = result.stdout.trim();

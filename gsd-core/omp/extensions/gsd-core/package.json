@@ -3,6 +3,6 @@
   "private": true,
   "type": "commonjs",
   "omp": {
-    "extensions": ["./index.js"]
+    "extensions": ["./index.mjs"]
   }
 }

@@ -45,14 +45,19 @@ describe('bug #3571: configuration generated manifests resolve in install layout
   let savedHome;
   let savedUserProfile;
   let savedExplicitConfigDir;
-
+  let savedCodexHome;
+  let savedCodexConfigDir;
   beforeEach(() => {
     tmpRoot = makeTmpDir();
     savedHome = process.env.HOME;
     // On Windows, os.homedir() reads USERPROFILE; install() resolves via it.
     savedUserProfile = process.env.USERPROFILE;
     savedExplicitConfigDir = process.env.GSD_EXPLICIT_CONFIG_DIR;
+    savedCodexHome = process.env.CODEX_HOME;
+    savedCodexConfigDir = process.env.CODEX_CONFIG_DIR;
     delete process.env.GSD_EXPLICIT_CONFIG_DIR;
+    delete process.env.CODEX_HOME;
+    delete process.env.CODEX_CONFIG_DIR;
   });
 
   afterEach(() => {
@@ -63,6 +68,16 @@ describe('bug #3571: configuration generated manifests resolve in install layout
       delete process.env.GSD_EXPLICIT_CONFIG_DIR;
     } else {
       process.env.GSD_EXPLICIT_CONFIG_DIR = savedExplicitConfigDir;
+    }
+    if (savedCodexHome === undefined) {
+      delete process.env.CODEX_HOME;
+    } else {
+      process.env.CODEX_HOME = savedCodexHome;
+    }
+    if (savedCodexConfigDir === undefined) {
+      delete process.env.CODEX_CONFIG_DIR;
+    } else {
+      process.env.CODEX_CONFIG_DIR = savedCodexConfigDir;
     }
     cleanup(tmpRoot);
   });

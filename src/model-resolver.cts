@@ -6,11 +6,10 @@
  * planning granularity, reasoning effort, and fast-mode for a given agent by
  * reading project config and resolving against the model profiles and catalog.
  * Behaviour is preserved byte-for-behaviour from the prior location; only
- * the module boundary moved. core.cjs re-exports the resolvers for back-compat.
+ * the module boundary moved. The core.cjs re-export spine was retired in
+ * epic #1267; callers import resolvers from model-resolver.cjs directly.
  *
- * New imports should pull resolvers from model-resolver.cjs directly.
- *
- * Dependencies (leaf modules only — no core.cjs):
+ * Dependencies (leaf modules only):
  *   - node:fs / node:path (stdlib, not currently needed — included for future use)
  *   - ./config-loader.cjs    (loadConfig)
  *   - ./configuration.cjs    (CONFIG_DEFAULTS as CANONICAL_CONFIG_DEFAULTS)
@@ -74,6 +73,36 @@ function _resolveRuntimeTier(config: Record<string, unknown>, tier: string): Tie
     tier,
     overrides: config['model_profile_overrides'] as Record<string, unknown> | null | undefined,
   });
+}
+
+// Reverse of the Claude tier-default IDs, plus the Fable alias which Claude
+// Code's Agent tool accepts but which is not a GSD model-profile tier (#1133).
+const CLAUDE_POLICY_ID_TO_ALIAS: Record<string, string> = {
+  ...Object.fromEntries(
+    Object.entries(MODEL_ALIAS_MAP)
+      .filter((e): e is [string, string] => typeof e[1] === 'string')
+      .map(([aliasName, id]) => [id, aliasName]),
+  ),
+  'claude-fable-5': 'fable',
+};
+const CLAUDE_AGENT_ALIASES = new Set(['opus', 'sonnet', 'haiku', 'fable']);
+
+// Dedupe stderr warnings so repeated agent resolutions don't spam (#1133).
+const _modelPolicyUnmappableWarned = new Set<string>();
+function warnModelPolicyUnmappable(agentType: string, policyModel: string, tier: string): void {
+  const key = `${agentType}::${policyModel}::${tier}`;
+  if (_modelPolicyUnmappableWarned.has(key)) return;
+  _modelPolicyUnmappableWarned.add(key);
+  // MUST go to stderr — resolve-model's JSON result is parsed from stdout.
+  process.stderr.write(
+    `gsd: warning — model_policy resolved "${policyModel}" for ${agentType}, ` +
+    `but it has no Claude agent alias; using "${tier}" instead.\n`,
+  );
+}
+
+// Test-only: reset the model_policy warn-dedupe cache between cases (#1133).
+function _resetModelPolicyWarningCacheForTests(): void {
+  _modelPolicyUnmappableWarned.clear();
 }
 
 /**
@@ -153,14 +182,29 @@ function resolveModelInternal(cwd: string, agentType: string): string {
       ? 'inherit'
       : (agentModels ? (agentModels[profile] || agentModels['balanced']) : null));
 
-  // 2.5. model_policy preset (#49)
+  // 2.5. model_policy preset (#49, #1133)
   const configRuntime = config['runtime'] as string | null | undefined;
-  if (configRuntime && configRuntime !== 'claude' && tier && tier !== 'inherit') {
+  if (tier && tier !== 'inherit') {
+    const onClaude = !configRuntime || configRuntime === 'claude';
+    const effectiveRuntime = configRuntime || 'claude';
     const mergedPolicy = config['model_policy']
-      ? { ...(config['model_policy'] as Record<string, unknown>), runtime: configRuntime }
+      ? { ...(config['model_policy'] as Record<string, unknown>), runtime: effectiveRuntime }
       : null;
     const policyModel = resolveModelPolicy(mergedPolicy, tier);
-    if (policyModel) return policyModel;
+    if (policyModel) {
+      // Non-Claude runtimes take full model IDs verbatim (unchanged behavior).
+      if (!onClaude) return policyModel;
+      // Claude Code's Agent tool takes tier aliases (opus/sonnet/haiku/fable),
+      // not full model IDs — map the policy-resolved ID back to an alias (#1133).
+      const aliasForId = CLAUDE_POLICY_ID_TO_ALIAS[policyModel];
+      if (aliasForId) return aliasForId;
+      // The policy value may already be a bare Claude agent alias (e.g. "fable").
+      if (CLAUDE_AGENT_ALIASES.has(policyModel)) return policyModel;
+      // No Claude alias for this ID (e.g. a pinned minor version like
+      // claude-opus-4-5). Warn once and fall through to the tier alias rather
+      // than returning an ID Claude Code cannot spawn.
+      warnModelPolicyUnmappable(agentType, policyModel, tier);
+    }
   }
 
   // 3. Runtime-aware resolution (#2517)
@@ -463,6 +507,7 @@ export = {
   resolveTierEntry,
   resolveModelPolicy,
   resolveModelInternal,
+  _resetModelPolicyWarningCacheForTests,
   VALID_GRANULARITIES,
   resolveGranularityInternal,
   assertValidGranularityOverride,

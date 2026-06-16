@@ -60,7 +60,6 @@ function gsdCoreOmpExtension(pi) {
   pi.on('tool_call', onToolCall);
   pi.on('tool_result', onToolResult);
   pi.on('turn_end', onTurnEnd);
-  pi.on('goal_updated', onGoalUpdated);
   pi.on('context', onContext);
   pi.on('session_shutdown', onSessionShutdown);
 }
@@ -211,10 +210,6 @@ function onToolResult(event, ctx = {}) {
 function onTurnEnd(_event, ctx = {}) {
   try { maybeQueueContextWarning(ctx.cwd || process.cwd(), ctx); } catch {}
   try { refreshStatus(ctx); } catch {}
-}
-
-function onGoalUpdated(_event, ctx = {}) {
-  refreshStatus(ctx);
 }
 
 function onSessionShutdown() {

@@ -19,8 +19,8 @@ import roadmapUpgrade = require('./roadmap-upgrade.cjs');
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir } = planningWorkspace;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import core = require('./core.cjs');
-const { loadConfig } = core;
+import configLoaderMod = require('./config-loader.cjs');
+const { loadConfig } = configLoaderMod;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

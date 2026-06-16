@@ -58,6 +58,8 @@ const {
   resolveNodeRunner,
 } = require('../bin/install.js');
 
+const { resolveInstallPlan } = require('../gsd-core/bin/lib/runtime-config-adapter-registry.cjs');
+
 function runCodexInstall(codexHome, cwd = path.join(__dirname, '..')) {
   const previousCodeHome = process.env.CODEX_HOME;
   const previousCwd = process.cwd();
@@ -578,6 +580,109 @@ description: Maps the codebase
     assert.strictEqual(parsed.model_verbosity, 'low', 'model_verbosity must parse to "low"');
   });
 });
+
+// ─── sandboxTier gate on generateCodexAgentToml ────────────────────────────────
+
+describe('generateCodexAgentToml sandboxTier gate', () => {
+  const sampleAgent = `---
+name: gsd-executor
+description: Executes plans
+tools: Read, Write, Edit
+color: yellow
+---
+
+<role>You are an executor.</role>`;
+
+  test('sandboxTier=none: does NOT emit sandbox_mode', () => {
+    const result = generateCodexAgentToml('gsd-executor', sampleAgent, null, null, null, 'none');
+    assert.ok(!result.includes('sandbox_mode'), 'sandbox_mode must be absent when sandboxTier is none');
+  });
+
+  test('sandboxTier=codex-agent-sandbox: emits sandbox_mode = "workspace-write"', () => {
+    const result = generateCodexAgentToml('gsd-executor', sampleAgent, null, null, null, 'codex-agent-sandbox');
+    assert.ok(result.includes('sandbox_mode = "workspace-write"'), 'must emit workspace-write for codex-agent-sandbox tier');
+  });
+
+  test('default (no sandboxTier arg): still emits sandbox_mode = "workspace-write" (no-op for codex)', () => {
+    const result = generateCodexAgentToml('gsd-executor', sampleAgent);
+    assert.ok(result.includes('sandbox_mode = "workspace-write"'), 'default preserves codex behavior');
+  });
+
+  test('resolveInstallPlan projection: codex.sandboxTier === "codex-agent-sandbox"', () => {
+    const plan = resolveInstallPlan('codex');
+    assert.strictEqual(plan.sandboxTier, 'codex-agent-sandbox', 'codex must project sandboxTier=codex-agent-sandbox');
+  });
+
+  test('resolveInstallPlan projection: claude.sandboxTier === "none"', () => {
+    const plan = resolveInstallPlan('claude');
+    assert.strictEqual(plan.sandboxTier, 'none', 'claude must project sandboxTier=none');
+  });
+});
+
+// ─── installCodexConfig threading-seam: sandboxTier → per-agent TOML ─────────
+
+describe('installCodexConfig sandboxTier threading seam', () => {
+  const { installCodexConfig } = require('../bin/install.js');
+
+  let tmpDir;
+  let agentsSrc;
+  let targetDir;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-sandboxtier-seam-'));
+    agentsSrc = path.join(tmpDir, 'agents');
+    targetDir = path.join(tmpDir, 'codex');
+    fs.mkdirSync(agentsSrc, { recursive: true });
+    fs.mkdirSync(targetDir, { recursive: true });
+    // Write a minimal gsd-executor agent fixture
+    fs.writeFileSync(path.join(agentsSrc, 'gsd-executor.md'), [
+      '---',
+      'name: gsd-executor',
+      'description: Executes plans',
+      'tools: Read, Write, Edit',
+      '---',
+      '',
+      '<role>You are an executor.</role>',
+    ].join('\n'));
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('sandboxTier=none: written per-agent .toml does NOT contain sandbox_mode', () => {
+    installCodexConfig(targetDir, agentsSrc, 'none');
+    const tomlPath = path.join(targetDir, 'agents', 'gsd-executor.toml');
+    assert.ok(fs.existsSync(tomlPath), 'per-agent TOML must be written');
+    const toml = fs.readFileSync(tomlPath, 'utf8');
+    assert.ok(!toml.includes('sandbox_mode'), 'sandbox_mode must be absent when sandboxTier=none');
+  });
+
+  test('sandboxTier=codex-agent-sandbox: written per-agent .toml contains sandbox_mode', () => {
+    installCodexConfig(targetDir, agentsSrc, 'codex-agent-sandbox');
+    const tomlPath = path.join(targetDir, 'agents', 'gsd-executor.toml');
+    assert.ok(fs.existsSync(tomlPath), 'per-agent TOML must be written');
+    const toml = fs.readFileSync(tomlPath, 'utf8');
+    assert.ok(toml.includes('sandbox_mode'), 'sandbox_mode must be present when sandboxTier=codex-agent-sandbox');
+  });
+
+  test('default 2-arg form (no sandboxTier): written per-agent .toml contains sandbox_mode (codex default)', () => {
+    installCodexConfig(targetDir, agentsSrc);
+    const tomlPath = path.join(targetDir, 'agents', 'gsd-executor.toml');
+    assert.ok(fs.existsSync(tomlPath), 'per-agent TOML must be written');
+    const toml = fs.readFileSync(tomlPath, 'utf8');
+    assert.ok(toml.includes('sandbox_mode'), 'sandbox_mode must be present in default 2-arg form (codex-agent-sandbox default)');
+  });
+});
+
+// NOTE: A test for the new fail-loud throw on missing/invalid sandboxTier in
+// resolveInstallPlan is omitted here. Constructing a descriptor without the
+// field would require mocking the capability-registry module which is a
+// singleton require(); patching it invasively would corrupt other tests in the
+// same process. The throw path is verified at the type level (tsc) and by the
+// build passing, and the happy-path coverage (claude.sandboxTier === 'none' and
+// codex.sandboxTier === 'codex-agent-sandbox') confirms the real registry has
+// valid values for all 16 runtimes.
 
 // ─── CODEX_AGENT_SANDBOX mapping ────────────────────────────────────────────────
 

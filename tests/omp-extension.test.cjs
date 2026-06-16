@@ -37,9 +37,20 @@ describe('OMP extension', () => {
   test('registers GSD Core event handlers', () => {
     const { handlers, capturedLabel } = registerExtension();
     assert.strictEqual(capturedLabel, 'GSD Core');
-    for (const event of ['session_start', 'tool_call', 'tool_result', 'turn_end', 'goal_updated', 'context', 'session_shutdown']) {
+    for (const event of ['session_start', 'tool_call', 'tool_result', 'turn_end', 'context', 'session_shutdown']) {
       assert.ok(handlers.has(event), `${event} handler must be registered`);
     }
+  });
+
+  test('registers only current Oh My Pi extension events', () => {
+    const allowed = new Set(['session_start', 'session_shutdown', 'tool_call', 'tool_result', 'input', 'context', 'turn_end']);
+    const pi = {
+      setLabel() {},
+      on(event) {
+        if (!allowed.has(event)) throw new Error(`unsupported extension event: ${event}`);
+      },
+    };
+    assert.doesNotThrow(() => extension(pi));
   });
 
   test('queues prompt injection warning and flushes it through context', (t) => {
@@ -141,7 +152,7 @@ describe('OMP extension', () => {
     const { handlers, capturedLabel } = registerExtension(installed);
 
     assert.strictEqual(capturedLabel, 'GSD Core');
-    for (const event of ['session_start', 'tool_call', 'tool_result', 'turn_end', 'goal_updated', 'context', 'session_shutdown']) {
+    for (const event of ['session_start', 'tool_call', 'tool_result', 'turn_end', 'context', 'session_shutdown']) {
       assert.ok(handlers.has(event), `${event} handler must be registered`);
     }
   });

@@ -49,8 +49,26 @@ function fakeFs(files) {
   };
 }
 
-describe('/gsd:update detects local Antigravity (.agent) installs (#503)', () => {
-  test('projection resolves a LOCAL ./.agent install to the antigravity runtime', () => {
+describe('/gsd:update detects local Antigravity (.agent / .agents) installs (#503 / #791)', () => {
+  test('projection resolves a LOCAL ./.agents install to the antigravity runtime (#791 canonical)', () => {
+    const HOME = '/home/u';
+    const CWD = '/work/proj';
+    const agentsDir = `${CWD}/.agents`;
+    const ffs = fakeFs({
+      [`${agentsDir}/gsd-core/VERSION`]: '1.50.0\n',
+      [`${agentsDir}/gsd-core/workflows/update.md`]: 'x',
+    });
+    const r = resolveUpdateContext({ home: HOME, cwd: CWD, env: {}, fs: ffs });
+    assert.equal(
+      r.runtime,
+      'antigravity',
+      `a local .agents install must map to the antigravity runtime, got "${r.runtime}"`,
+    );
+    assert.equal(r.scope, 'LOCAL');
+    assert.equal(r.installedVersion, '1.50.0');
+  });
+
+  test('projection resolves a LOCAL ./.agent install to the antigravity runtime (#503 backward-compat)', () => {
     const HOME = '/home/u';
     const CWD = '/work/proj';
     const agentDir = `${CWD}/.agent`;
@@ -62,26 +80,33 @@ describe('/gsd:update detects local Antigravity (.agent) installs (#503)', () =>
     assert.equal(
       r.runtime,
       'antigravity',
-      `a local .agent install must map to the antigravity runtime, got "${r.runtime}"`,
+      `a legacy .agent install must still map to the antigravity runtime, got "${r.runtime}"`,
     );
     assert.equal(r.scope, 'LOCAL');
     assert.equal(r.installedVersion, '1.40.0');
   });
 
-  test('execution_context classifier maps a /.agent/ path to antigravity (update.md)', () => {
+  test('execution_context classifier maps /.agents/ and /.agent/ paths to antigravity (update.md)', () => {
+    const hasAgentsClassifierRule =
+      /\/\.agents\/[^\n]*->[^\n]*antigravity/.test(UPDATE_MD);
+    assert.ok(
+      hasAgentsClassifierRule,
+      'update.md classifier must map a `/.agents/` path to the `antigravity` runtime',
+    );
     const hasAgentClassifierRule =
       /\/\.agent\/[^\n]*->[^\n]*antigravity/.test(UPDATE_MD);
     assert.ok(
       hasAgentClassifierRule,
-      'update.md classifier must map a `/.agent/` path to the `antigravity` runtime',
+      'update.md classifier must still map a `/.agent/` path to the `antigravity` runtime (backward-compat)',
     );
   });
 
-  test('every runtime-dir `for dir in` loop in update.md includes .agent', () => {
+  test('every runtime-dir `for dir in` loop in update.md includes .agents and .agent', () => {
     // The LOCAL-scope discovery loop moved into the projection (#498); the
     // post-update cache-clear loop remains inline and still enumerates the
     // runtime config dirs as a literal `.claude ... .codex` list, so it must
-    // include .agent or a local Antigravity install keeps a stale indicator.
+    // include both .agents (canonical, #791) and .agent (legacy, #503) or
+    // stale indicators could linger.
     const runtimeDirLoops = UPDATE_MD
       .split('\n')
       .filter((l) => /for dir in .*\.claude.*\.codex/.test(l));
@@ -91,8 +116,12 @@ describe('/gsd:update detects local Antigravity (.agent) installs (#503)', () =>
     );
     for (const loop of runtimeDirLoops) {
       assert.ok(
+        /(^|\s)\.agents(\s|$)/.test(loop),
+        `every runtime-dir loop must include .agents (canonical), got: ${loop.trim()}`,
+      );
+      assert.ok(
         /(^|\s)\.agent(\s|$)/.test(loop),
-        `every runtime-dir loop must include .agent, got: ${loop.trim()}`,
+        `every runtime-dir loop must include .agent (legacy backward-compat), got: ${loop.trim()}`,
       );
     }
   });

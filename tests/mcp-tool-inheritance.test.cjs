@@ -116,3 +116,56 @@ describe('Researcher agent MCP tool set parity: new tools match exa/firecrawl pa
     });
   }
 });
+
+// --- Regression (#1284): every MCP-backed provider named in the Step-C
+// dispatch table must be granted in the agent's frontmatter `tools:` line.
+// Guards against a provider being added to the waterfall + dispatch table
+// without the matching mcp__<server>__* grant (the perplexity drift). ---
+describe('researcher Step-C dispatch ↔ tools frontmatter parity (#1284)', () => {
+  const RESEARCHERS = ['gsd-phase-researcher', 'gsd-project-researcher'];
+
+  function mcpServersIn(text) {
+    const servers = new Set();
+    const re = /mcp__([a-z0-9]+)__/gi;
+    let m;
+    while ((m = re.exec(text)) !== null) servers.add(m[1].toLowerCase());
+    return servers;
+  }
+  function readAgent(name) {
+    return fs.readFileSync(path.join(__dirname, '..', 'agents', `${name}.md`), 'utf8');
+  }
+  function toolsLine(content) {
+    const m = content.match(/^tools:\s*(.+)$/m);
+    assert.ok(m, 'agent frontmatter must have a tools: line');
+    return m[1];
+  }
+  function stepCTableRows(content) {
+    const start = content.indexOf('### Step C');
+    assert.ok(start !== -1, 'agent must have a "### Step C" dispatch section');
+    const rest = content.slice(start + 1);
+    const nextHeading = rest.indexOf('\n### ');
+    const section = nextHeading === -1 ? rest : rest.slice(0, nextHeading);
+    // Only the markdown dispatch-table rows (| provider | mcp tool |) define
+    // provider->tool mappings. Generic fallback prose (e.g. `mcp__<provider>__*`)
+    // is intentionally excluded so it cannot create false positives.
+    return section
+      .split('\n')
+      .filter((line) => line.trimStart().startsWith('|'))
+      .join('\n');
+  }
+
+  for (const name of RESEARCHERS) {
+    test(`${name}: grants mcp__<server>__* for every MCP provider in its Step-C table`, () => {
+      const content = readAgent(name);
+      const granted = mcpServersIn(toolsLine(content));
+      const referenced = mcpServersIn(stepCTableRows(content));
+      assert.ok(referenced.size > 0,
+        `${name} Step-C table should reference at least one mcp__ provider`);
+      const missing = [...referenced].filter((srv) => !granted.has(srv));
+      assert.deepStrictEqual(missing, [],
+        `${name}: Step-C references MCP provider(s) not granted in tools: frontmatter: ` +
+        `${missing.join(', ')}. Add mcp__<server>__* to the profile in ` +
+        `scripts/research-profiles.cjs and regenerate.`);
+    });
+  }
+});

@@ -65,7 +65,7 @@ jobs:
             if echo "$VERSION" | grep -qE '^(0|[1-9][0-9]*)\.0\.0$'; then
               IS_MAJOR="true"
             fi
-          elif echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[1-9][0-9]*$'; then
+          elif echo "$VERSION" | grep -qE '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.[1-9][0-9]*$'; then
             # Patch / hotfix release (X.Y.Z, Z>0)
             IS_HOTFIX="true"
             if [ "$ACTION" = "rc" ]; then
@@ -462,6 +462,14 @@ jobs:
         env:
           PRE_VERSION: ${{ steps.prerelease.outputs.pre_version }}
         run: node scripts/verify-npm-publish.cjs --package @opengsd/gsd-core --version "$PRE_VERSION" --dist-tag next
+
+      - name: Sync next branch to the published pre-release
+        if: ${{ !inputs.dry_run }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          PRE_VERSION: ${{ steps.prerelease.outputs.pre_version }}
+        run: node scripts/sync-next-version.cjs "$PRE_VERSION"
 
       - name: Summary
         env:

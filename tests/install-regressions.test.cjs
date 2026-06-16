@@ -770,3 +770,103 @@ describe('#976 regression: installer does not duplicate managed hooks when regis
     );
   });
 });
+
+// ─── #1004 — http-form hook presence detection ────────────────────────────────
+//
+// Claude Code hooks support a type:"http" form where the hook identity lives
+// in h.url (no command, no args).  Pre-fix, referencesHook() only inspected
+// h.command and h.args, so an http-form entry was invisible and a stock
+// string-command entry was appended on every install, running the hook twice.
+// This is the same duplicate-append failure as #976 (args-form), one shape further.
+
+describe('#1004 regression: installer does not duplicate managed hooks when registered in http form', () => {
+  let tmpDir;
+  let previousCwd;
+
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-1004-http-form-');
+    previousCwd = process.cwd();
+    process.chdir(tmpDir);
+
+    assert.strictEqual(typeof install, 'function',
+      'install must be exported from bin/install.js');
+  });
+
+  afterEach(() => {
+    process.chdir(previousCwd);
+    cleanup(tmpDir);
+  });
+
+  test('does not add a second SessionStart entry when gsd-check-update is already in http form', () => {
+    const targetDir = path.join(tmpDir, '.claude');
+    fs.mkdirSync(targetDir, { recursive: true });
+
+    // Pass 1: run install with no pre-existing settings to create the
+    // gsd-file-manifest.json that the installer migration uses to decide
+    // whether a hook file is managed (kept) or foreign (removed).
+    // Without a manifest, migration removes any hook stubs as "unrecognized
+    // GSD-looking files", making fs.existsSync(checkUpdateFile) return false
+    // and skipping the duplicate-adding path.
+    install(false, 'claude');
+
+    // Now stub the hook files so fs.existsSync guards pass on pass 2.
+    // The manifest now exists, so migration classifies the stubs as
+    // manifest-managed and leaves them alone.
+    stubHooksIntoDir(targetDir, ['gsd-check-update.js']);
+
+    // Local Claude installs read/write settings.local.json (not settings.json).
+    // Overwrite settings.local.json with the hook in http form.
+    // The GSD hook name appears only in h.url — no command, no args.
+    const hookUrl = 'http://127.0.0.1:18923/hooks/gsd-check-update';
+    const preExistingSettings = {
+      hooks: {
+        SessionStart: [
+          {
+            hooks: [
+              {
+                type: 'http',
+                url: hookUrl,
+                timeout: 5,
+              },
+            ],
+          },
+        ],
+      },
+    };
+    fs.writeFileSync(
+      path.join(targetDir, 'settings.local.json'),
+      JSON.stringify(preExistingSettings, null, 2) + '\n',
+    );
+
+    // Pass 2: run install again — the pre-existing http-form entry must
+    // suppress the duplicate stock string-command registration.
+    const result = install(false, 'claude');
+    const settings = result && result.settings;
+
+    assert.ok(settings && settings.hooks && Array.isArray(settings.hooks.SessionStart),
+      'settings.hooks.SessionStart must be an array after install');
+
+    // Count all hook entries (at any nesting level) that reference gsd-check-update,
+    // including the url arm so http-form entries are visible.
+    const allEntries = settings.hooks.SessionStart.flatMap(entry =>
+      Array.isArray(entry && entry.hooks) ? entry.hooks : []
+    );
+    const matching = allEntries.filter(h =>
+      (typeof h.command === 'string' && h.command.includes('gsd-check-update')) ||
+      (Array.isArray(h.args) && h.args.some(a => typeof a === 'string' && a.includes('gsd-check-update'))) ||
+      (typeof h.url === 'string' && h.url.includes('gsd-check-update'))
+    );
+
+    assert.strictEqual(
+      matching.length,
+      1,
+      [
+        'Expected exactly 1 hook entry referencing gsd-check-update after install,',
+        `got ${matching.length}.`,
+        'The installer added a duplicate because it could not detect the http-form registration.',
+        'referencesHook() must check h.url in addition to h.command and h.args. (#1004)',
+        `All matching entries: ${JSON.stringify(matching)}`,
+      ].join(' '),
+    );
+  });
+});

@@ -73,6 +73,10 @@ build/
 /gsd-core/bin/lib/research-provider.cjs
 /gsd-core/bin/lib/package-legitimacy.cjs
 /gsd-core/bin/lib/semver-compare.cjs
+/gsd-core/bin/lib/plan-drift-guard.cjs
+/gsd-core/bin/lib/edge-probe.cjs
+/gsd-core/bin/lib/probe-core.cjs
+/gsd-core/bin/lib/prohibition-enforcement.cjs
 /gsd-core/bin/lib/config-types.cjs
 /gsd-core/bin/lib/cli-exit.cjs
 /gsd-core/bin/lib/code-review-flags.cjs
@@ -130,10 +134,12 @@ build/
 /gsd-core/bin/lib/worktree-base-ref.cjs
 /gsd-core/bin/lib/worktree-safety.cjs
 /gsd-core/bin/lib/planning-workspace.cjs
+/gsd-core/bin/lib/command-roster.cjs
+/gsd-core/bin/lib/runtime-artifact-conversion.cjs
 /gsd-core/bin/lib/runtime-artifact-layout.cjs
 /gsd-core/bin/lib/runtime-config-adapter-registry.cjs
+/gsd-core/bin/lib/runtime-hooks-surface.cjs
 /gsd-core/bin/lib/command-routing-hub.cjs
-/gsd-core/bin/lib/core.cjs
 /gsd-core/bin/lib/core-utils.cjs
 /gsd-core/bin/lib/io.cjs
 /gsd-core/bin/lib/phase-id.cjs
@@ -141,6 +147,8 @@ build/
 /gsd-core/bin/lib/model-resolver.cjs
 /gsd-core/bin/lib/loop-resolver.cjs
 /gsd-core/bin/lib/capability-state.cjs
+/gsd-core/bin/lib/capability-writer.cjs
+/gsd-core/bin/lib/capability-activation.cjs
 /gsd-core/bin/lib/federated-config.cjs
 /gsd-core/bin/lib/phase-locator.cjs
 /gsd-core/bin/lib/roadmap-parser.cjs
@@ -160,6 +168,7 @@ build/
 /gsd-core/bin/lib/verify-command-router.cjs
 /gsd-core/bin/lib/init-command-router.cjs
 /gsd-core/bin/lib/agent-command-router.cjs
+/gsd-core/bin/lib/agent-install-check.cjs
 /gsd-core/bin/lib/task-command-router.cjs
 /gsd-core/bin/lib/validate-command-router.cjs
 /gsd-core/bin/lib/workstream-inventory.cjs
@@ -175,9 +184,11 @@ build/
 /gsd-core/bin/lib/verify.cjs
 /gsd-core/bin/lib/init.cjs
 /gsd-core/bin/lib/uat.cjs
+/gsd-core/bin/lib/uat-predicate.cjs
 /gsd-core/bin/lib/workstream.cjs
 /gsd-core/bin/lib/roadmap.cjs
 /gsd-core/bin/lib/audit.cjs
+/gsd-core/bin/lib/git-base-branch.cjs
 __pycache__/
 *.pyc
 .venv/

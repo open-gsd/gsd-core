@@ -10,6 +10,8 @@ const path = require('node:path');
 const ROOT = path.join(__dirname, '..');
 const {
   resolveRuntimeConfigIntent,
+  resolveInstallPlan,
+  resolveInstallPlanFromRuntimes,
   ALLOWED_CONFIG_RUNTIMES,
   INSTALL_SURFACES,
 } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'runtime-config-adapter-registry.cjs'));
@@ -178,6 +180,10 @@ describe('installSurface correctness', () => {
     assert.strictEqual(resolveRuntimeConfigIntent('kimi').installSurface, 'profile-marker-only');
   });
 
+  test('omp -> "profile-marker-only"', () => {
+    assert.strictEqual(resolveRuntimeConfigIntent('omp').installSurface, 'profile-marker-only');
+  });
+
   test('the 7 passthroughs + opencode + kilo -> "settings-json"', () => {
     const settingsJsonRuntimes = ['claude', 'gemini', 'antigravity', 'augment', 'qwen', 'hermes', 'codebuddy', 'opencode', 'kilo'];
     for (const runtime of settingsJsonRuntimes) {
@@ -187,6 +193,21 @@ describe('installSurface correctness', () => {
         `${runtime} should have installSurface "settings-json"`,
       );
     }
+  });
+});
+
+describe('resolveInstallPlan — OMP descriptor-backed axes', () => {
+  test('omp has no hook surface, no sandbox, and no extended hook events', () => {
+    assert.deepStrictEqual(resolveRuntimeConfigIntent('omp'), {
+      runtime: 'omp',
+      installSurface: 'profile-marker-only',
+      writesSharedSettings: false,
+      finishPermissionWriter: null,
+    });
+    const plan = resolveInstallPlan('omp');
+    assert.strictEqual(plan.hooksSurface, 'none');
+    assert.strictEqual(plan.sandboxTier, 'none');
+    assert.deepStrictEqual(plan.extendedHookEvents, []);
   });
 });
 
@@ -249,5 +270,57 @@ describe('INSTALL_SURFACES export', () => {
 
   test('INSTALL_SURFACES contains exactly the 6 surface strings', () => {
     assert.deepStrictEqual(new Set(INSTALL_SURFACES), EXPECTED_SURFACES);
+  });
+});
+
+describe('resolveInstallPlan — hooksSurface is descriptor-owned', () => {
+  test('real descriptor-owned none surface is preserved for opencode and kilo', () => {
+    assert.strictEqual(resolveInstallPlan('opencode').hooksSurface, 'none');
+    assert.strictEqual(resolveInstallPlan('kilo').hooksSurface, 'none');
+  });
+
+  test('synthetic descriptor resolves hooksSurface without runtime-name fallback', () => {
+    const runtimes = {
+      futurecli: {
+        runtime: {
+          installSurface: 'settings-json',
+          writesSharedSettings: true,
+          permissionWriter: null,
+          hookEvents: 'claude',
+          extendedHookEvents: ['Stop'],
+          hooksSurface: 'settings-json',
+          sandboxTier: 'none',
+        },
+      },
+    };
+
+    assert.deepStrictEqual(resolveInstallPlanFromRuntimes(runtimes, 'futurecli'), {
+      runtime: 'futurecli',
+      installSurface: 'settings-json',
+      writesSharedSettings: true,
+      finishPermissionWriter: null,
+      hookEvents: 'claude',
+      extendedHookEvents: ['Stop'],
+      hooksSurface: 'settings-json',
+      sandboxTier: 'none',
+    });
+  });
+
+  test('missing hooksSurface fails loudly instead of falling back from runtime name', () => {
+    const runtimes = {
+      opencode: {
+        runtime: {
+          installSurface: 'settings-json',
+          writesSharedSettings: true,
+          permissionWriter: 'opencode',
+          extendedHookEvents: [],
+        },
+      },
+    };
+
+    assert.throws(
+      () => resolveInstallPlanFromRuntimes(runtimes, 'opencode'),
+      /runtime\.hooksSurface/,
+    );
   });
 });

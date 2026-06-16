@@ -40,6 +40,7 @@ interface StateModule {
   cmdStateUpdateProgress(cwd: string, raw: boolean): void;
   cmdStateAddDecision(cwd: string, opts: Record<string, string | null | undefined>, raw: boolean): void;
   cmdStateAddBlocker(cwd: string, opts: Record<string, string | null | undefined>, raw: boolean): void;
+  cmdStateAddRoadmapEvolution(cwd: string, opts: Record<string, string | boolean | null | undefined>, raw: boolean): void;
   cmdStateResolveBlocker(cwd: string, text: string | null | undefined, raw: boolean): void;
   cmdStateRecordSession(cwd: string, opts: Record<string, string | null | undefined>, raw: boolean): void;
   cmdStateBeginPhase(cwd: string, phase: string | null | undefined, name: string | null | undefined, plans: number | null, raw: boolean): void;
@@ -78,9 +79,10 @@ function routeStateCommand({ state, args, cwd, raw, error }: RouteStateCommandOp
     args,
     subcommands: ['load', 'complete-phase', ...STATE_SUBCOMMANDS.filter((s) => s !== 'load')],
     defaultSubcommand: 'load',
-    unsupported: {
-      'add-roadmap-evolution': 'state add-roadmap-evolution is SDK-only. Use: gsd-tools query state.add-roadmap-evolution ...',
-    },
+    // No SDK-only state subcommands remain: add-roadmap-evolution was the last
+    // holdout after the SDK retirement (ADR-0174) and is now implemented in CJS
+    // (handler below). See #1140.
+    unsupported: {},
     error,
     cwd,
     raw,
@@ -146,6 +148,17 @@ function routeStateCommand({ state, args, cwd, raw, error }: RouteStateCommandOp
       'add-blocker': () => {
         const a = parseNamedArgs(args, ['text', 'text-file']);
         state.cmdStateAddBlocker(cwd, { text: strArg(a, 'text'), text_file: strArg(a, 'text-file') }, raw);
+      },
+      'add-roadmap-evolution': () => {
+        const a = parseNamedArgs(args, ['phase', 'action', 'after', 'note', 'note-file'], ['urgent']);
+        state.cmdStateAddRoadmapEvolution(cwd, {
+          phase: strArg(a, 'phase'),
+          action: strArg(a, 'action'),
+          after: strArg(a, 'after'),
+          note: strArg(a, 'note'),
+          note_file: strArg(a, 'note-file'),
+          urgent: a['urgent'] === true,
+        }, raw);
       },
       'resolve-blocker': () => state.cmdStateResolveBlocker(cwd, strArg(parseNamedArgs(args, ['text']), 'text'), raw),
       'record-session': () => {

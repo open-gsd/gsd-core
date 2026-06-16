@@ -11,8 +11,6 @@ import path from 'node:path';
 import os from 'node:os';
 import { phaseVariants, buildRoadmapPhaseVariants, buildNotStartedPhaseVariants } from './validate.cjs';
 import { phaseDirNameRe, PHASE_TOKEN_FROM_DIR_RE, MILESTONE_ARCHIVE_DIR_RE, canonicalPlanStem } from './validate.cjs';
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- core.cjs is an export= CommonJS module
-import core = require('./core.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-workspace.cjs is an export= CommonJS module
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
@@ -21,27 +19,34 @@ import frontmatterMod = require('./frontmatter.cjs');
 import stateMod = require('./state.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- model-profiles.cjs is an export= CommonJS module
 import modelProfilesMod = require('./model-profiles.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- plan-scan.cjs is an export= CommonJS module
+import planScanMod = require('./plan-scan.cjs');
 import { execGit, platformReadSync as safeReadFile, platformWriteSync } from './shell-command-projection.cjs';
 import { PACKAGE_NAME } from './package-identity.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { detectSchemaFiles, checkSchemaDrift } from './schema-detect.cjs';
 import { isCanonicalPlanningFile } from './artifacts.cjs';
-
-const {
-  loadConfig,
-  normalizePhaseName,
-  phaseTokenMatches,
-  escapeRegex,
-  findPhaseInternal,
-  getMilestoneInfo,
-  stripShippedMilestones,
-  extractCurrentMilestone,
-  output,
-  error,
-  checkAgentsInstalled,
-  CONFIG_DEFAULTS,
-  inspectWorktreeHealth,
-} = core;
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- agent-install-check.cjs is an export= CommonJS module
+import agentInstallCheck = require('./agent-install-check.cjs');
+const { checkAgentsInstalled } = agentInstallCheck;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import ioMod = require('./io.cjs');
+const { output, error } = ioMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import configLoaderMod = require('./config-loader.cjs');
+const { loadConfig, CONFIG_DEFAULTS } = configLoaderMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseIdMod = require('./phase-id.cjs');
+const { normalizePhaseName, phaseTokenMatches, escapeRegex, getMilestoneFromPhaseId } = phaseIdMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseLocatorMod = require('./phase-locator.cjs');
+const { findPhaseInternal } = phaseLocatorMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import roadmapParserMod = require('./roadmap-parser.cjs');
+const { getMilestoneInfo, stripShippedMilestones, extractCurrentMilestone } = roadmapParserMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import worktreeSafetyMod = require('./worktree-safety.cjs');
+const { inspectWorktreeHealth } = worktreeSafetyMod;
 
 const { planningDir } = planningWorkspace;
 const { extractFrontmatter, parseMustHavesBlock } = frontmatterMod;
@@ -150,6 +155,408 @@ function cmdVerifySummary(
   output(result, raw, passed ? 'passed' : 'failed');
 }
 
+/**
+ * Issue #429 — negative-grep comment-text echo gate.
+ * A literal that an acceptance criterion negative-greps for (grep -c 'LIT' file == 0)
+ * must not also appear verbatim inside an <action> body, or the executor's commit-time
+ * verify gate fails on the comment echo rather than a real regression. Conservative:
+ * errors only on a confidently-extracted QUOTED literal; ambiguous (bareword) → warning.
+ */
+function scanNegativeGrepCommentEcho(content: string): { errors: string[]; warnings: string[] } {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  // Normalize newlines; join backslash line-continuations so a verify command wrapped
+  // across lines (grep ... \ <newline> == 0) is still seen as one segment.
+  const text = (content || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/\\\n/g, ' ');
+
+  // 1. Allowlisted literals: <!-- planner-discipline-allow: LIT -->
+  const allow = new Set<string>();
+  const allowRe = /<!--\s*planner-discipline-allow:\s*(.+?)\s*-->/g;
+  let am: RegExpExecArray | null;
+  while ((am = allowRe.exec(text)) !== null) allow.add(am[1]);
+
+  // Zero-equality comparison (the negative grep). The required leading whitespace
+  // before the operator distinguishes a shell comparison (`[ $c == 0 ]`, `... == 0`,
+  // always spaced) from an assignment (`VAR=0`, never spaced) and naturally excludes
+  // `>= 0`, `<= 0`, `!= 0`, `!== 0`, `=== 0`.
+  const zeroCmp = (s: string): boolean =>
+    /\s==?\s*0\b/.test(s) || /-eq\s+0\b/.test(s) || /\bequals\s+0\b/.test(s);
+
+  // A grep invocation using a count flag (-c / -cF / -Fc / --count), capturing the
+  // search pattern (first quoted token, else first bareword) after a run of options.
+  // The options run lets `grep -c -F 'LIT'`, `grep -F -c 'LIT'`, `grep -c -e 'LIT'`
+  // and `grep --count 'LIT'` all resolve to the LIT pattern.
+  const countGrepRe =
+    /grep((?:\s+-{1,2}[A-Za-z][A-Za-z-]*)+)\s+(?:'([^']*)'|"([^"]*)"|([^\s'"|>&;]+))/g;
+  const optsHaveCount = (opts: string): boolean =>
+    /(?:^|\s)-[A-Za-z]*c[A-Za-z]*(?=\s|$)/.test(opts) || /--count\b/.test(opts);
+  // `grep -cv 'pat' == 0` counts NON-matching lines, so == 0 there asserts "all lines
+  // match" — a POSITIVE gate, not our negative gate. Skip inverted greps.
+  const optsHaveInvert = (opts: string): boolean =>
+    /(?:^|\s)-[A-Za-z]*v[A-Za-z]*(?=\s|$)/.test(opts) || /--invert-match\b/.test(opts);
+  // Bareword sanity: a real grep target, not a stray operator/number/flag.
+  const plausibleBare = (s: string): boolean => /[A-Za-z0-9_]/.test(s) && !/^[-=!<>0-9]+$/.test(s);
+
+  // 2. <action> text to scan, with negative-grep COMMAND SPANS removed (only the
+  //    command, not the whole line) so a pasted verify command does not self-flag
+  //    while a prose echo on the same line is still caught.
+  const cmdSpanRe =
+    /grep(?:\s+-{1,2}[A-Za-z][A-Za-z-]*)+\s+(?:'[^']*'|"[^"]*"|[^\s'"|>&;]+)[^\n]*?(?:==|-eq|=)\s*0\b/g;
+  const actionZones: string[] = [];
+  const actionRe = /<action>([\s\S]*?)<\/action>/g;
+  let acm: RegExpExecArray | null;
+  while ((acm = actionRe.exec(text)) !== null) actionZones.push(acm[1]);
+  const scannableActionText = actionZones.map((zone) => zone.replace(cmdSpanRe, ' ')).join('\n');
+
+  // 3. Per shell SEGMENT (split lines on && / ||) extract count-grep literals and
+  //    check echoes. Per-segment splitting keeps a positive gate (`== 1`) from
+  //    poisoning a negative gate (`== 0`) sharing the same physical line.
+  const seenErr = new Set<string>();
+  const seenWarn = new Set<string>();
+  const segments = text.split('\n').flatMap((line) => line.split(/\s*(?:&&|\|\|)\s*/));
+  for (const seg of segments) {
+    if (!/grep(?:\s+-{1,2}[A-Za-z])/.test(seg) || !zeroCmp(seg)) continue;
+    countGrepRe.lastIndex = 0;
+    const quotedLits: string[] = [];
+    const bareLits: string[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = countGrepRe.exec(seg)) !== null) {
+      if (!optsHaveCount(m[1]) || optsHaveInvert(m[1])) continue; // need count, not invert (-cv is positive)
+      if (m[2] !== undefined) quotedLits.push(m[2]);
+      else if (m[3] !== undefined) quotedLits.push(m[3]);
+      else if (m[4] !== undefined && plausibleBare(m[4])) bareLits.push(m[4]);
+    }
+    for (const quoted of quotedLits) {
+      if (!quoted || allow.has(quoted) || seenErr.has(quoted)) continue;
+      if (scannableActionText.includes(quoted)) {
+        seenErr.add(quoted);
+        errors.push(
+          `Plan body contains forbidden literal "${quoted}" in an <action> block, but an acceptance criterion negative-greps for it (grep -c ... == 0). Rephrase the literal by concept, remove it from the plan body, or add <!-- planner-discipline-allow: ${quoted} --> if it must legitimately appear.`,
+        );
+      }
+    }
+    if (quotedLits.length === 0) {
+      for (const bare of bareLits) {
+        if (allow.has(bare) || seenWarn.has(bare)) continue;
+        if (scannableActionText.includes(bare)) {
+          seenWarn.add(bare);
+          warnings.push(
+            `Possible comment-text echo (#429): negative-grep target "${bare}" is unquoted so its literal could not be extracted unambiguously, but it appears in an <action> block. Quote the grep literal and add an allowlist marker if the echo is intended, or rephrase by concept.`,
+          );
+        }
+      }
+    }
+  }
+  return { errors, warnings };
+}
+
+/**
+ * Issue #968 — file-wide negative-grep sibling conflict detector.
+ * A file-wide negative grep gate (! grep -Eq 'PAT' FILE or grep -c 'PAT' FILE == 0)
+ * bans a construct across the WHOLE file. When a sibling task in the same plan
+ * legitimately requires the same construct in the same file, the two gates are
+ * mutually unsatisfiable. This is a WARN-only check (never changes valid:false).
+ */
+function scanFileWideNegativeGateConflict(content: string): { warnings: string[]; valid: true } {
+  const warnings: string[] = [];
+
+  // Normalize newlines; join backslash line-continuations (same as #429).
+  const text = (content || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/\\\n/g, ' ');
+
+  // Allowlisted patterns: <!-- planner-region-allow: PAT -->
+  const allow = new Set<string>();
+  const allowRe = /<!--\s*planner-region-allow:\s*(.+?)\s*-->/g;
+  let am: RegExpExecArray | null;
+  while ((am = allowRe.exec(text)) !== null) allow.add(am[1]);
+
+  // Helper predicates (reused from #429 style).
+  // Zero-equality comparison: spaced == 0 or -eq 0.
+  const zeroCmp = (s: string): boolean =>
+    /\s==?\s*0\b/.test(s) || /-eq\s+0\b/.test(s) || /\bequals\s+0\b/.test(s);
+
+  // grep options include -c / --count
+  const optsHaveCount = (opts: string): boolean =>
+    /(?:^|\s)-[A-Za-z]*c[A-Za-z]*(?=\s|$)/.test(opts) || /--count\b/.test(opts);
+
+  // grep options include -v / --invert-match (inverted count is NOT a negative gate)
+  const optsHaveInvert = (opts: string): boolean =>
+    /(?:^|\s)-[A-Za-z]*v[A-Za-z]*(?=\s|$)/.test(opts) || /--invert-match\b/.test(opts);
+
+  // A bareword that is a plausible grep pattern (not a stray flag/number).
+  const plausibleBare = (s: string): boolean => /[A-Za-z0-9_]/.test(s) && !/^[-=!<>0-9]+$/.test(s);
+
+  // Regex to extract grep arguments: opts run then PAT (quoted or bare).
+  const grepArgRe =
+    /grep((?:\s+-{1,2}[A-Za-z][A-Za-z-]*)+)\s+(?:'([^']*)'|"([^"]*)"|([^\s'"|>&;$()\[\]]+))/g;
+
+  // FIX 1 (ReDoS): Linear-time "does reqText satisfy the grep pattern" — no RegExp execution.
+  // Never calls new RegExp, so no catastrophic backtracking is possible.
+  //
+  // Handles literal patterns and `.`/`.*/`.+`/`\s`-style wildcard gaps and `^`/`$` anchors.
+  // Patterns using character classes (`[…]`), alternation (`a|b`), or other regex constructs
+  // fall back to a conservative literal-substring check, so the detector may NOT warn on those
+  // (false-negative is the safe direction for a warn-only advisory).
+  const patternRequiredIn = (pat: string, reqText: string): boolean => {
+    const hay = (reqText || '').slice(0, 8000); // bound the haystack
+    if (!pat) return false;
+    // Strip ERE anchors — position constraints don't change whether the construct is required.
+    pat = pat.replace(/^\^/, '').replace(/\$$/, '');
+    if (!pat) return false;
+    // Pure literal (no regex metacharacters): direct substring.
+    if (!/[.*+?^${}()|[\]\\]/.test(pat)) return hay.includes(pat);
+    const SENT = ' ';
+    // Replace simple wildcard gaps (\s* \w+ .* .+ .? bare .) with a sentinel.
+    let work = pat
+      .replace(/\\[sSwWdD][*+?]?/g, SENT)
+      .replace(/\.[*+?]/g, SENT)
+      .replace(/\./g, SENT);
+    work = work.replace(/\\(.)/g, '$1'); // de-escape \( \. etc → literal char
+    const joined = work.split(SENT).join('');
+    // Unhandled regex constructs remain → safe literal-substring fallback on the raw pattern.
+    if (/[*+?^${}()|[\]]/.test(joined)) return hay.includes(pat);
+    const frags = work.split(SENT).filter(Boolean);
+    if (!frags.length) return false; // all-wildcard pattern → no meaningful requirement
+    let pos = 0;
+    for (const f of frags) {
+      const idx = hay.indexOf(f, pos);
+      if (idx === -1) return false;
+      pos = idx + f.length;
+    }
+    return true;
+  };
+
+  // FIX 2 (file basename over-match): exact normalized match; basename fallback ONLY for
+  // unqualified gate files (no path separator).
+  const normPath = (p: string): string => p.replace(/^\.\//, '').trim();
+
+  // File-wide discriminator: a token AFTER PAT that looks like a path.
+  // Paths have /, a file extension, or match a known task <files> entry.
+  // Globs (containing *) are excluded (unresolvable — no warn).
+  const looksLikePath = (token: string): boolean =>
+    !token.includes('*') &&
+    (token.includes('/') || /\.[a-zA-Z]{1,6}$/.test(token));
+
+  // FIX 5 (hasLeadingNot): collapse to one command-boundary-anchored regex.
+  // Negation at a command boundary: start of segment, or after ; & | ( newline / then / do.
+
+  // FIX 4 (isRegionScoped tightened): return true ONLY when grep is downstream of a
+  // sed line-range or awk range producer. Other pipe sources (cat, tac, etc.) are file-wide.
+  const isRegionScoped = (seg: string): boolean => {
+    if (!seg.includes('|')) return false;
+    const before = seg.slice(0, seg.lastIndexOf('|'));
+    // sed -n line/range extraction, e.g. sed -n '12,40p' FILE  or  sed -n '/a/,/b/p' FILE
+    if (/\bsed\s+-n\b/.test(before)) return true;
+    // awk range pattern, e.g. awk '/start/,/end/' FILE
+    if (/\bawk\b[^|]*\/[^/]*\/\s*,\s*\/[^/]*\//.test(before)) return true;
+    return false;
+  };
+
+  // Parse all <task> blocks.
+  interface TaskInfo {
+    name: string;
+    files: string[];   // entries from <files>
+    gateText: string;  // <verify>+<automated>+<acceptance_criteria> text
+    reqText: string;   // <action>+<acceptance_criteria> text (requirement side)
+  }
+  const taskRe = /<task[^>]*>([\s\S]*?)<\/task>/g;
+  const tasks: TaskInfo[] = [];
+  let tm: RegExpExecArray | null;
+  while ((tm = taskRe.exec(text)) !== null) {
+    const tc = tm[1];
+    // Extract task name.
+    const namem = tc.match(/<name>([\s\S]*?)<\/name>/);
+    const name = namem ? namem[1].trim() : 'unnamed';
+    // Extract <files> entries.
+    const filesm = tc.match(/<files>([\s\S]*?)<\/files>/);
+    const filesText = filesm ? filesm[1] : '';
+    const files = filesText.split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
+    // Gate text: <verify>/<automated>/<acceptance_criteria>.
+    const gateFragments: string[] = [];
+    for (const tag of ['verify', 'automated', 'acceptance_criteria']) {
+      const re = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'g');
+      let mm: RegExpExecArray | null;
+      while ((mm = re.exec(tc)) !== null) gateFragments.push(mm[1]);
+    }
+    // Requirement text: <action>/<acceptance_criteria>.
+    const reqFragments: string[] = [];
+    for (const tag of ['action', 'acceptance_criteria']) {
+      const re = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'g');
+      let mm: RegExpExecArray | null;
+      while ((mm = re.exec(tc)) !== null) reqFragments.push(mm[1]);
+    }
+    // Strip XML tags from gate text so segments containing embedded
+    // XML closing tags (e.g. <automated>cmd</automated> nested inside <verify>)
+    // don't bleed into the file-path token extraction.
+    const rawGateText = gateFragments.join('\n');
+    const gateText = rawGateText.replace(/<[^>]+>/g, ' ');
+    tasks.push({
+      name,
+      files,
+      gateText,
+      reqText: reqFragments.join('\n'),
+    });
+  }
+
+  if (tasks.length < 2) return { warnings, valid: true };
+
+  // FIX 3 (extensionless known files): build a normalized set of ALL tasks' <files> entries
+  // so that extensionless filenames like Dockerfile are also recognized as valid file tokens.
+  const knownFiles = new Set<string>();
+  for (const t of tasks) {
+    for (const f of t.files) knownFiles.add(normPath(f));
+  }
+
+  // Extended looksLikePath: accepts known <files> entries even without an extension.
+  const isFileLike = (token: string): boolean => {
+    if (token.includes('*')) return false; // exclude globs
+    if (looksLikePath(token)) return true;
+    return knownFiles.has(normPath(token));
+  };
+
+  // Dedup key: (taskAIdx, taskBIdx, pat, file)
+  const seen = new Set<string>();
+
+  // For each task A, scan gate text for file-wide negative grep bans.
+  for (let ai = 0; ai < tasks.length; ai++) {
+    const taskA = tasks[ai];
+
+    // Split gate text into shell segments (split on && / || within lines).
+    const segments = taskA.gateText.split('\n').flatMap(line =>
+      line.split(/\s*(?:&&|\|\|)\s*/),
+    );
+
+    for (const seg of segments) {
+      if (!/grep/.test(seg)) continue;
+
+      // FIX 5: Negation at a command boundary: start of segment, or after ; & | ( newline / then / do.
+      // Also handles ! negating an entire pipeline (e.g. ! cat FILE | grep ...).
+      const hasLeadingNot =
+        // Direct ! grep: negation immediately before grep keyword
+        /(?:^|[\n;&|(]|\bthen\b|\bdo\b)\s*!\s*grep/.test(seg) ||
+        // Pipeline negation: ! at command boundary, grep appears in pipeline after |
+        (/(?:^|[\n;&|(]|\bthen\b|\bdo\b)\s*!\s*\w/.test(seg) && /\|\s*grep\b/.test(seg));
+
+      const hasCountZero = zeroCmp(seg);
+
+      // Extract grep invocation and check for count.
+      grepArgRe.lastIndex = 0;
+      let pat: string | null = null;
+      let file: string | null = null;
+      let isBan = false;
+
+      // FIX 4 helper: given a segment and the grep match end position, find the
+      // file argument. First try the token immediately after PAT; if none qualifies,
+      // try a cat/tac producer or < FILE redirect from the full segment.
+      const resolveFileArg = (segment: string, afterPatStr: string): string | null => {
+        // Primary: token immediately after PAT in the grep command
+        const fileM = afterPatStr.match(/^\s+([^\s'"|>&;$()\[\]]+)/);
+        const rawFile = fileM ? fileM[1] : null;
+        if (rawFile && isFileLike(rawFile)) return rawFile;
+        // FIX 4: For NON-region segments, also look for cat/tac producer or < FILE redirect
+        const catM = segment.match(/\b(?:cat|tac)\s+([^\s'"|>&;()]+)/);
+        if (catM && isFileLike(catM[1])) return catM[1];
+        const redirM = segment.match(/<\s*([^\s'"|>&;()]+)/);
+        if (redirM && isFileLike(redirM[1])) return redirM[1];
+        return null;
+      };
+
+      // If leading !, it might be a count or a direct !grep
+      if (hasLeadingNot && !hasCountZero) {
+        // Direct ! grep PAT FILE form: grep opts PAT FILE
+        // Extract PAT and FILE from the grep invocation
+        grepArgRe.lastIndex = 0;
+        let gm: RegExpExecArray | null;
+        while ((gm = grepArgRe.exec(seg)) !== null) {
+          const opts = gm[1];
+          if (optsHaveInvert(opts)) continue; // -v form: not a ban
+          // PAT
+          const rawPat = gm[2] !== undefined ? gm[2] :
+                         gm[3] !== undefined ? gm[3] :
+                         gm[4] !== undefined && plausibleBare(gm[4]) ? gm[4] : null;
+          if (!rawPat) continue;
+          // FILE: next non-option token after PAT (or cat/tac/redirect in segment)
+          const afterPat = seg.slice((gm.index || 0) + gm[0].length);
+          const rawFile = resolveFileArg(seg, afterPat);
+          if (rawFile) {
+            pat = rawPat;
+            file = rawFile;
+            isBan = true;
+          }
+        }
+      }
+
+      if (!isBan && hasCountZero) {
+        // count grep form: grep -c PAT FILE == 0 or [ $(grep -c PAT FILE) -eq 0 ]
+        grepArgRe.lastIndex = 0;
+        let gm: RegExpExecArray | null;
+        while ((gm = grepArgRe.exec(seg)) !== null) {
+          const opts = gm[1];
+          if (!optsHaveCount(opts) || optsHaveInvert(opts)) continue;
+          const rawPat = gm[2] !== undefined ? gm[2] :
+                         gm[3] !== undefined ? gm[3] :
+                         gm[4] !== undefined && plausibleBare(gm[4]) ? gm[4] : null;
+          if (!rawPat) continue;
+          const afterPat = seg.slice((gm.index || 0) + gm[0].length);
+          const rawFile = resolveFileArg(seg, afterPat);
+          if (rawFile) {
+            pat = rawPat;
+            file = rawFile;
+            isBan = true;
+          }
+        }
+      }
+
+      if (!isBan || !pat || !file) continue;
+      if (allow.has(pat)) continue;
+      // Skip if region-scoped (grep downstream of a sed/awk pipe — region extracted)
+      if (isRegionScoped(seg)) continue;
+
+      // For each other task B: check if B's <files> includes FILE AND B's reqText contains PAT
+      for (let bi = 0; bi < tasks.length; bi++) {
+        if (bi === ai) continue;
+        const taskB = tasks[bi];
+
+        // FIX 2: Exact normalized match; basename fallback ONLY for unqualified gate files.
+        const gateFile = normPath(file);
+        const bMatchesFile = taskB.files.some((bf) => {
+          const nbf = normPath(bf);
+          if (nbf === gateFile) return true;
+          // basename fallback only when the gate file is an unqualified bare filename (no dir separator)
+          if (!gateFile.includes('/') && path.basename(nbf) === gateFile) return true;
+          return false;
+        });
+        if (!bMatchesFile) continue;
+
+        // FIX 1: Use linear-time patternRequiredIn instead of new RegExp (ReDoS-safe).
+        const bRequiresPat = patternRequiredIn(pat, taskB.reqText);
+        if (!bRequiresPat) continue;
+
+        const dedupeKey = `${ai}:${bi}:${pat}:${file}`;
+        if (seen.has(dedupeKey)) continue;
+        seen.add(dedupeKey);
+
+        warnings.push(
+          `Region-scope conflict (#968): task "${taskA.name}" negative-greps "${pat}" file-wide on ${file}, ` +
+          `but sibling task "${taskB.name}" requires it in the same file. ` +
+          `A file-wide ban is unsatisfiable when a sibling needs the construct elsewhere — ` +
+          `region-scope task "${taskA.name}"'s gate (sed -n/awk range then grep) or use an AST/test check. ` +
+          `See planner-antipatterns.md "Region-Scoped Negative Gates", or add ` +
+          `<!-- planner-region-allow: ${pat} --> if intentional.`,
+        );
+      }
+    }
+  }
+
+  // This detector is warn-only: it never sets valid=false.
+  return { warnings, valid: true as const };
+}
+
 function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): void {
   if (!filePath) {
     error('file path required');
@@ -207,6 +614,13 @@ function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): vo
   if (hasCheckpoints && fm['autonomous'] !== 'false' && String(fm['autonomous']) !== 'false') {
     errors.push('Has checkpoint tasks but autonomous is not false');
   }
+
+  const echoScan = scanNegativeGrepCommentEcho(content);
+  errors.push(...echoScan.errors);
+  warnings.push(...echoScan.warnings);
+
+  const conflictScan = scanFileWideNegativeGateConflict(content);
+  warnings.push(...conflictScan.warnings);
 
   output(
     {
@@ -423,6 +837,36 @@ function cmdVerifyArtifacts(cwd: string, planFilePath: string, raw: boolean): vo
   );
 }
 
+/**
+ * Returns a Set of file paths (relative to cwd) that are promised by plans in
+ * the same phase directory at a wave number >= minWave.
+ *
+ * Used by cmdVerifyKeyLinks to avoid hard-failing a missing `from:` file that
+ * is a planned future artifact (fix #1202).
+ */
+function collectPromisedFilesAtOrAfterWave(phaseDir: string, minWave: number): Set<string> {
+  const promised = new Set<string>();
+  const { planFiles } = planScanMod.scanPhasePlans(phaseDir);
+  for (const planFile of planFiles) {
+    const planFullPath = path.join(phaseDir, planFile);
+    const planContent = safeReadFile(planFullPath);
+    if (!planContent) continue;
+    const fm = extractFrontmatter(planContent);
+    const waveRaw = fm['wave'];
+    const wave = typeof waveRaw === 'string' ? parseInt(waveRaw, 10) : (typeof waveRaw === 'number' ? waveRaw : NaN);
+    if (isNaN(wave) || wave < minWave) continue;
+    const filesModified = fm['files_modified'];
+    if (!filesModified) continue;
+    const files: unknown[] = Array.isArray(filesModified)
+      ? filesModified
+      : (typeof filesModified === 'string' ? [filesModified] : []);
+    for (const f of files) {
+      if (typeof f === 'string' && f.trim()) promised.add(f.trim());
+    }
+  }
+  return promised;
+}
+
 function cmdVerifyKeyLinks(cwd: string, planFilePath: string, raw: boolean): void {
   if (!planFilePath) {
     error('plan file path required');
@@ -440,7 +884,27 @@ function cmdVerifyKeyLinks(cwd: string, planFilePath: string, raw: boolean): voi
     return;
   }
 
+  // Derive the current plan's wave number and phase directory for wave-aware
+  // missing-file handling (fix #1202).
+  const currentFm = extractFrontmatter(content);
+  const currentWaveRaw = currentFm['wave'];
+  const currentWave = typeof currentWaveRaw === 'string'
+    ? parseInt(currentWaveRaw, 10)
+    : (typeof currentWaveRaw === 'number' ? currentWaveRaw : 1);
+  const phaseDir = path.dirname(fullPath);
+
+  // Collect files promised by plans at wave >= currentWave (lazy: computed once
+  // the first time a missing source is encountered).
+  let promisedFiles: Set<string> | null = null;
+  function getPromisedFiles(): Set<string> {
+    if (promisedFiles === null) {
+      promisedFiles = collectPromisedFilesAtOrAfterWave(phaseDir, isNaN(currentWave) ? 1 : currentWave);
+    }
+    return promisedFiles;
+  }
+
   const results: Record<string, unknown>[] = [];
+  let pendingCount = 0;
   for (const link of keyLinks) {
     if (typeof link === 'string') continue;
     const check: Record<string, unknown> = {
@@ -451,9 +915,19 @@ function cmdVerifyKeyLinks(cwd: string, planFilePath: string, raw: boolean): voi
       detail: '',
     };
 
-    const sourceContent = safeReadFile(path.join(cwd, (link['from'] as string) || ''));
+    const fromPath = (link['from'] as string) || '';
+    const sourceContent = safeReadFile(path.join(cwd, fromPath));
     if (!sourceContent) {
-      check['detail'] = 'Source file not found (from: must be a relative file path; describe components/endpoints in via:)';
+      // Check if the missing file is promised by a plan at the same or later wave.
+      const promised = getPromisedFiles();
+      const isPromised = fromPath.trim() !== '' && promised.has(fromPath.trim());
+      if (isPromised) {
+        check['pending'] = true;
+        check['detail'] = 'Source file not yet created — declared in files_modified of a same-or-later-wave plan';
+        pendingCount++;
+      } else {
+        check['detail'] = 'Source file not found (from: must be a relative file path; describe components/endpoints in via:)';
+      }
     } else if (link['pattern']) {
       try {
         const regex = new RegExp(link['pattern'] as string);
@@ -485,15 +959,20 @@ function cmdVerifyKeyLinks(cwd: string, planFilePath: string, raw: boolean): voi
   }
 
   const verified = results.filter((r) => r['verified']).length;
+  // A pending link (from: file promised by a same-or-later-wave plan) is not a
+  // hard failure — it should not count against the all_verified gate (#1202).
+  const hardFailed = results.filter((r) => !r['verified'] && !r['pending']).length;
+  const allVerified = hardFailed === 0;
   output(
     {
-      all_verified: verified === results.length,
+      all_verified: allVerified,
       verified,
+      pending: pendingCount,
       total: results.length,
       links: results,
     },
     raw,
-    verified === results.length ? 'valid' : 'invalid',
+    allVerified ? 'valid' : 'invalid',
   );
 }
 
@@ -1005,6 +1484,20 @@ function cmdValidateHealth(
           `No GSD agents found in ${agentStatus.agents_dir} — Task(subagent_type="gsd-*") will fall back to general-purpose`,
           `Run the GSD installer: npx ${PACKAGE_NAME}@latest`,
         );
+      } else if ((agentStatus.incomplete_agents).length > 0 && (agentStatus.missing_agents).length === 0) {
+        addIssue(
+          'warning',
+          'W010',
+          `Incomplete agent installs (missing generated file): ${(agentStatus.incomplete_agents).join(', ')} — affected workflows may fall back to general-purpose`,
+          `Re-run the GSD installer to complete the install: npx ${PACKAGE_NAME}@latest`,
+        );
+      } else if ((agentStatus.incomplete_agents).length > 0) {
+        addIssue(
+          'warning',
+          'W010',
+          `Missing ${(agentStatus.missing_agents).length} GSD agents: ${(agentStatus.missing_agents).join(', ')}; incomplete agent installs (missing generated file): ${(agentStatus.incomplete_agents).join(', ')} — affected workflows will fall back to general-purpose`,
+          `Run the GSD installer: npx ${PACKAGE_NAME}@latest`,
+        );
       } else {
         addIssue(
           'warning',
@@ -1217,7 +1710,6 @@ function cmdValidateHealth(
     if (phaseConvention === 'milestone-prefixed') {
       if (fs.existsSync(roadmapPath)) {
         const roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
-        const { getMilestoneFromPhaseId } = core;
         const mismatches = checkMilestonePrefixMismatches(roadmapContent, {
           getMilestoneFromPhaseId: getMilestoneFromPhaseId,
         });
@@ -1522,6 +2014,7 @@ function cmdValidateAgents(cwd: string, raw: boolean): void {
       agents_found: agentStatus.agents_installed,
       installed: agentStatus.installed_agents,
       missing: agentStatus.missing_agents,
+      incomplete: agentStatus.incomplete_agents,
       expected,
     },
     raw,
@@ -1542,7 +2035,7 @@ function cmdVerifySchemaDrift(
   const pDir = planningDir(cwd);
   const phasesDir = path.join(pDir, 'phases');
   if (!fs.existsSync(phasesDir)) {
-    output({ drift_detected: false, blocking: false, message: 'No phases directory' }, raw);
+    output({ block: false, drift_detected: false, blocking: false, message: 'No phases directory' }, raw);
     return;
   }
 
@@ -1562,7 +2055,7 @@ function cmdVerifySchemaDrift(
 
   if (!phaseDir) {
     output(
-      { drift_detected: false, blocking: false, message: `Phase directory not found: ${phaseArg}` },
+      { block: false, drift_detected: false, blocking: false, message: `Phase directory not found: ${phaseArg}` },
       raw,
     );
     return;
@@ -1592,15 +2085,21 @@ function cmdVerifySchemaDrift(
 
   const result = checkSchemaDrift(allFiles, executionLog, { skipCheck: !!skipFlag }) as unknown as Record<string, unknown>;
 
+  const isSkipped = !!result['skipped'];
   output(
     {
+      // Uniform gate contract: `block` = true means "this gate's bad condition is met".
+      // When skipCheck is true (GSD_SKIP_SCHEMA_CHECK=true), the gate is bypassed —
+      // block must be false regardless of whether drift was detected.
+      // drift_detected and blocking are kept for compatibility.
+      block: isSkipped ? false : !!result['driftDetected'],
       drift_detected: result['driftDetected'],
       blocking: result['blocking'],
       schema_files: result['schemaFiles'],
       orms: result['orms'],
       unpushed_orms: result['unpushedOrms'],
       message: result['message'],
-      skipped: result['skipped'] || false,
+      skipped: isSkipped,
     },
     raw,
   );
@@ -1618,6 +2117,8 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
     const structurePath = path.join(codebaseDir, 'STRUCTURE.md');
     if (!fs.existsSync(structurePath)) {
       emit({
+        // Uniform gate contract: block = action_required (false when skipped).
+        block: false,
         skipped: true,
         reason: 'no-structure-md',
         action_required: false,
@@ -1632,6 +2133,7 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
       structureMd = fs.readFileSync(structurePath, 'utf-8');
     } catch (err) {
       emit({
+        block: false,
         skipped: true,
         reason: 'cannot-read-structure-md: ' + (err instanceof Error ? err.message : String(err)),
         action_required: false,
@@ -1646,6 +2148,7 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
     const revProbe = execGit(['rev-parse', 'HEAD'], { cwd }) as unknown as { exitCode: number; stdout: string };
     if (revProbe.exitCode !== 0) {
       emit({
+        block: false,
         skipped: true,
         reason: 'not-a-git-repo',
         action_required: false,
@@ -1667,6 +2170,7 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
     const diff = execGit(['diff', '--name-status', base, 'HEAD'], { cwd }) as unknown as { exitCode: number; stdout: string };
     if (diff.exitCode !== 0) {
       emit({
+        block: false,
         skipped: true,
         reason: 'git-diff-failed',
         action_required: false,
@@ -1708,10 +2212,13 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
       runtime: resolveRuntime(cwd),
     });
 
+    const actionRequired = !!driftResult['actionRequired'];
     emit({
+      // Uniform gate contract: block = action_required.
+      block: actionRequired,
       skipped: !!driftResult['skipped'],
       reason: driftResult['reason'] || null,
-      action_required: !!driftResult['actionRequired'],
+      action_required: actionRequired,
       directive: driftResult['directive'],
       spawn_mapper: !!driftResult['spawnMapper'],
       affected_paths: driftResult['affectedPaths'] || [],
@@ -1723,6 +2230,7 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
     });
   } catch (err) {
     emit({
+      block: false,
       skipped: true,
       reason: 'exception: ' + (err && err instanceof Error ? err.message : String(err)),
       action_required: false,
@@ -1733,6 +2241,8 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
 }
 
 export = {
+  scanNegativeGrepCommentEcho,
+  scanFileWideNegativeGateConflict,
   cmdVerifySummary,
   cmdVerifyPlanStructure,
   cmdVerifyPhaseCompleteness,

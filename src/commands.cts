@@ -10,32 +10,26 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execGit, platformWriteSync, platformReadSync, platformEnsureDir } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import core = require('./core.cjs');
-const {
-  loadConfig,
-  isGitIgnored,
-  normalizePhaseName,
-  comparePhaseNum,
-  getArchivedPhaseDirs,
-  generateSlugInternal,
-  getMilestoneInfo,
-  getMilestonePhaseFilter,
-  resolveModelInternal,
-  resolveEffortInternal,
-  resolveFastModeInternal,
-  resolveEffortForTier,
-  stripShippedMilestones: _stripShippedMilestones,
-  extractCurrentMilestone,
-  toPosixPath,
-  output,
-  error,
-  findPhaseInternal,
-  extractOneLinerFromBody,
-  getRoadmapPhaseInternal,
-  extractPhaseToken,
-  resolveGranularityInternal,
-  assertValidGranularityOverride,
-} = core;
+import ioMod = require('./io.cjs');
+const { output, error } = ioMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import configLoaderMod = require('./config-loader.cjs');
+const { loadConfig, isGitIgnored } = configLoaderMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import coreUtilsMod = require('./core-utils.cjs');
+const { toPosixPath, generateSlugInternal, extractOneLinerFromBody } = coreUtilsMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseIdMod = require('./phase-id.cjs');
+const { normalizePhaseName, comparePhaseNum, extractPhaseToken } = phaseIdMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseLocatorMod = require('./phase-locator.cjs');
+const { getArchivedPhaseDirs, findPhaseInternal } = phaseLocatorMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import roadmapParserMod = require('./roadmap-parser.cjs');
+const { extractCurrentMilestone, stripShippedMilestones: _stripShippedMilestones, getMilestoneInfo, getMilestonePhaseFilter, getRoadmapPhaseInternal } = roadmapParserMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import modelResolverMod = require('./model-resolver.cjs');
+const { resolveModelInternal, resolveEffortInternal, resolveFastModeInternal, resolveEffortForTier, resolveGranularityInternal, assertValidGranularityOverride } = modelResolverMod;
 import { renderEffortForRuntime, RUNTIMES_WITH_FAST_MODE } from './model-catalog.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
@@ -110,9 +104,17 @@ function determinePhaseStatus(plans: number, summaries: number, phaseDir: string
     const verificationFile = files.find(f => f === 'VERIFICATION.md' || f.endsWith('-VERIFICATION.md'));
     if (verificationFile) {
       const content = platformReadSync(path.join(phaseDir, verificationFile)) || '';
-      if (/status:\s*passed/i.test(content)) return 'Complete';
-      if (/status:\s*human_needed/i.test(content)) return 'Needs Review';
-      if (/status:\s*gaps_found/i.test(content)) return 'Executed';
+      // #1159 (Defect A): read ONLY the frontmatter `status` key to avoid false
+      // matches from historical body metadata such as `previous_status: gaps_found`.
+      // Full-text regexes like /status:\s*gaps_found/ match the substring inside
+      // `previous_status: gaps_found`, producing incorrect phase status labels.
+      const fm = extractFrontmatter(content) as Record<string, unknown>;
+      // Normalise to lower-case to preserve the prior case-insensitive behaviour
+      // while reading only the frontmatter `status` key (not the full body text).
+      const fmStatus = typeof fm['status'] === 'string' ? fm['status'].trim().toLowerCase() : '';
+      if (fmStatus === 'passed') return 'Complete';
+      if (fmStatus === 'human_needed') return 'Needs Review';
+      if (fmStatus === 'gaps_found') return 'Executed';
       // Verification exists but unrecognized status — treat as executed
       return 'Executed';
     }
@@ -621,13 +623,12 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
 /**
  * Route a list of changed files to their sub-repo prefixes.
  *
- * Bucket sub-repos by their first path segment. Any file that matches a
+ * Bucket sub-repos by their first path segment (#311). Any file that matches a
  * sub-repo prefix must share that sub-repo's first segment, so we only scan
- * the (small) bucket for the file's first segment instead of all sub-repos
- * — O(F + R) expected vs the prior O(F*R) find-in-loop. Candidates stay in
- * sub-repo array order, preserving the original first-match semantics
- * (incl. multi-segment sub-repos like "vendor/pkg", which resolve via the
- * inner startsWith). (#311)
+ * the (small) same-first-segment bucket instead of all sub-repos. Within that
+ * bucket all candidates are scanned to find the longest (most-specific)
+ * matching prefix, so nested sub_repos (e.g. ['packages', 'packages/core'])
+ * route to the deepest match regardless of sub_repos array order (#391).
  *
  * @param files    - changed file paths (relative to project root)
  * @param subRepos - sub-repo path prefixes from config.sub_repos
@@ -644,7 +645,23 @@ function groupFilesBySubrepo(files: string[], subRepos: string[]): GroupFilesByS
   const unmatched: string[] = [];
   for (const file of files) {
     const candidates = reposByFirstSeg.get(file.split('/')[0]);
-    const match = candidates ? candidates.find(repo => file.startsWith(repo + '/')) : undefined;
+    // Select the longest (most-specific) matching sub-repo prefix so nested
+    // sub_repos (e.g. ['packages', 'packages/core']) route correctly regardless
+    // of array order. (#391) String() guards the length read so non-string
+    // entries never throw, matching the tolerance of the prior `.find` path.
+    let match: string | undefined;
+    let matchLen = -1;
+    if (candidates) {
+      for (const repo of candidates) {
+        if (file.startsWith(repo + '/')) {
+          const repoLen = String(repo).length;
+          if (repoLen > matchLen) {
+            match = repo;
+            matchLen = repoLen;
+          }
+        }
+      }
+    }
     if (match) {
       (grouped[match] ||= []).push(file);
     } else {

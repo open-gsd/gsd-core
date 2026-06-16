@@ -100,7 +100,7 @@ function enableIntel(tmpDir) {
   const config = fs.existsSync(configPath)
     ? JSON.parse(fs.readFileSync(configPath, 'utf8'))
     : {};
-  // isIntelEnabled() requires the NESTED form { intel: { enabled: true } }.
+  // isIntelCapabilityActive() / isCapabilityActive('intel', cwd) requires the NESTED form { intel: { enabled: true } }.
   // A flat dotted key like config['intel.enabled'] = true is NOT recognised.
   config.intel = { ...(config.intel ?? {}), enabled: true };
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
@@ -359,7 +359,7 @@ describe('intel router: unit tests via recording mocks', () => {
   test('routeIntelCommand extract-exports: calls intelExtractExports(path.resolve(cwd, filePath))', () => {
     const calls = [];
     const c = makeCoreMock();
-    const FILE_ARG = 'lib/core.cjs';
+    const FILE_ARG = 'lib/io.cjs';
     const EXPECTED = path.resolve(CWD, FILE_ARG);
 
     routeIntelCommand({

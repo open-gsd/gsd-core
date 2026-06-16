@@ -20,6 +20,8 @@ const fs = require('fs');
 const path = require('path');
 
 const INSTALL_SRC = path.join(__dirname, '..', 'bin', 'install.js');
+// ADR-857 phase 5f-1b: settings-json hook registration moved to runtime-hooks-surface.cts.
+const HOOKS_SURFACE_SRC = path.join(__dirname, '..', 'src', 'runtime-hooks-surface.cts');
 
 const SH_HOOKS = [
   { name: 'gsd-validate-commit.sh', settingsVar: 'validateCommitCommand' },
@@ -31,8 +33,13 @@ describe('bug #1817: .sh hook registration guards', () => {
   let src;
 
   // Read once — all tests in this suite share the same source snapshot.
+  // ADR-857 phase 5f-1b: hook registration moved to runtime-hooks-surface.cts.
+  // Concatenate both sources so structural assertions find patterns in either file.
   try {
-    src = fs.readFileSync(INSTALL_SRC, 'utf-8');
+    const installSrc = fs.readFileSync(INSTALL_SRC, 'utf-8');
+    let hooksSurfaceSrc = '';
+    try { hooksSurfaceSrc = fs.readFileSync(HOOKS_SURFACE_SRC, 'utf-8'); } catch { /* ok */ }
+    src = installSrc + '\n' + hooksSurfaceSrc;
   } catch {
     src = '';
   }

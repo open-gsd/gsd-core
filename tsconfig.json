@@ -1,4 +1,8 @@
 {
-  "files": [],
-  "references": []
+  "//": "Default editor/CI typecheck config. The emitting publish build stays in tsconfig.build.json.",
+  "extends": "./tsconfig.build.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["src/**/*.cts"]
 }

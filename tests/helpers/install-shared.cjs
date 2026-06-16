@@ -28,6 +28,8 @@ const EXPECTED_ALL_HOOKS = [
   'gsd-check-update.js',
   'gsd-config-reload.js',
   'gsd-context-monitor.js',
+  // #997: SessionStart canonical-path bootstrap for plugin installs.
+  'gsd-ensure-canonical-path.js',
   'gsd-prompt-guard.js',
   'gsd-read-guard.js',
   'gsd-read-injection-scanner.js',
@@ -40,7 +42,7 @@ const EXPECTED_ALL_HOOKS = [
 
 const RUNTIME_META = {
   claude:       { localDir: '.claude',           globalSuffix: '.claude' },
-  antigravity:  { localDir: '.agent',            globalSuffix: path.join('.gemini', 'antigravity') },
+  antigravity:  { localDir: '.agents',           globalSuffix: path.join('.gemini', 'antigravity') },
   augment:      { localDir: '.augment',          globalSuffix: '.augment' },
   cline:        { localDir: '.cline',            globalSuffix: '.cline' },
   codebuddy:    { localDir: '.codebuddy',        globalSuffix: '.codebuddy' },
@@ -55,7 +57,7 @@ const RUNTIME_META = {
   opencode:     { localDir: '.opencode',         globalSuffix: path.join('.config', 'opencode') },
   qwen:         { localDir: '.qwen',             globalSuffix: '.qwen' },
   trae:         { localDir: '.trae',             globalSuffix: '.trae' },
-  windsurf:     { localDir: '.windsurf',         globalSuffix: path.join('.codeium', 'windsurf') },
+  windsurf:     { localDir: '.devin',             globalSuffix: path.join('.codeium', 'windsurf') },
 };
 
 // Runtimes that emit per-skill files under skills/ (not rules-based or commands-based)
@@ -112,8 +114,8 @@ function runMinimalInstall({ runtime, scope, extraArgs = [] }) {
   try {
     const LOCAL_DIR_NAME = {
       claude: '.claude', opencode: '.opencode', gemini: '.gemini', kilo: '.kilo',
-      codex: '.codex', copilot: '.github', antigravity: '.agent', cursor: '.cursor',
-      windsurf: '.windsurf', augment: '.augment', trae: '.trae', qwen: '.qwen',
+      codex: '.codex', copilot: '.github', antigravity: '.agents', cursor: '.cursor',
+      windsurf: '.devin', augment: '.augment', trae: '.trae', qwen: '.qwen',
       codebuddy: '.codebuddy', cline: '.', omp: '.omp',
     };
     let configDir;

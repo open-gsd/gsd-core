@@ -4,9 +4,9 @@
  * Runtime artifact layout module — resolves the artifact directory shapes
  * (commands, agents, skills, rules) for each supported runtime.
  *
- * grok is intentionally absent: it is in runtime-homes.cjs but not wired
- * here. The TypeError on unknown runtime is the loud-fail signal that a
- * runtime was added to the homes list without a layout entry.
+ * grok is intentionally absent: it is in runtime-homes.cjs but has no runtime
+ * capability descriptor. The TypeError on unknown runtime is the loud-fail
+ * signal that a runtime was added without an artifact layout descriptor.
  *
  * ADR-457 build-at-publish: the hand-written bin/lib/runtime-artifact-layout.cjs
  * collapsed to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
@@ -24,6 +24,11 @@ const {
   stageSkillsForRuntimeAsSkills,
   stageCommandsForRuntimeFlat,
 } = installProfiles;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import runtimeArtifactConversion = require('./runtime-artifact-conversion.cjs');
+const conversionExports = runtimeArtifactConversion as Record<string, unknown> & {
+  readGsdCommandNames?: () => string[];
+};
 
 // In .cts (CommonJS output) files, `require` is available as a global.
 const _require: NodeRequire = require;
@@ -33,7 +38,6 @@ const _require: NodeRequire = require;
 // ---------------------------------------------------------------------------
 
 interface InstallExports {
-  readGsdCommandNames: () => string[];
   computePathPrefix: (opts: { isGlobal: boolean; isOpencode: boolean; isWindowsHost: boolean; resolvedTarget: string; homeDir: string }) => string;
   applyRuntimeContentRewritesInPlace: (stagedDir: string, runtime: string, pathPrefix: string, options?: { allMarkdown?: boolean; rewriteRuntimeDir?: boolean }) => void;
   [converterName: string]: unknown;
@@ -168,16 +172,7 @@ function findAgentsSourceRoot(runtimeConfigDir?: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Allowlisted runtimes
-// ---------------------------------------------------------------------------
 
-const ALLOWED_RUNTIMES = new Set([
-  'claude', 'cursor', 'gemini', 'codex', 'copilot', 'antigravity',
-  'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy',
-  'cline', 'kimi', 'opencode', 'kilo', 'omp',
-]);
-
-// ---------------------------------------------------------------------------
 // Layout table builders
 // ---------------------------------------------------------------------------
 
@@ -211,8 +206,7 @@ function kimiAgentsKind(destSubpath: string, prefix: string, configDir: string):
     destSubpath,
     prefix,
     stage: (resolved) => {
-      const installExports = getInstallExports();
-      const buildKimiAgentArtifacts = installExports['buildKimiAgentArtifacts'] as (opts: {
+      const buildKimiAgentArtifacts = conversionExports['buildKimiAgentArtifacts'] as (opts: {
         rootAgent?: string;
         subagents?: Array<{ path: string; content: string }>;
       }) => {
@@ -254,10 +248,14 @@ function kimiAgentsKind(destSubpath: string, prefix: string, configDir: string):
  *
  * @param destSubpath
  * @param prefix
- * @param converterName  name of converter function in bin/install.js exports
+ * @param converterName  name of converter function in Runtime Artifact Conversion exports
  * @param runtime        canonical runtime ID (gates Hermes/Qwen branding in converter)
  * @param configDir      runtime config dir (for .gsd-source marker resolution)
  * @param nested         if true, nest concrete skills under their ns-* routers (#69)
+ * @param scope          install scope; converted to isGlobal and passed as 5th positional
+ *                       arg so scope-aware converters (antigravity, copilot) can choose
+ *                       between global home paths and workspace-relative paths without
+ *                       colliding with the `runtime` string at position 3.
  */
 function skillsKind(
   destSubpath: string,
@@ -266,19 +264,26 @@ function skillsKind(
   runtime: string,
   configDir: string,
   nested = false,
+  scope: 'local' | 'global' = 'global',
 ): ArtifactKind {
   return {
     kind: 'skills',
     destSubpath,
     prefix,
     stage: (resolved) => {
-      const installExports = getInstallExports();
-      const realConverter = installExports[converterName] as (content: string, skillName: string, runtime: string, cmdNames: string[]) => string;
+      const realConverter = conversionExports[converterName] as (content: string, skillName: string, runtime: string, cmdNames: string[], isGlobal: boolean) => string;
       // Compute cmdNames once per stage call for performance (#3583).
-      // Extra args are ignored by converters that don't need runtime/cmdNames.
-      const cmdNames = installExports.readGsdCommandNames();
+      // Extra trailing args are ignored by converters that don't need them. The
+      // isGlobal flag is the 5th positional (NOT the 3rd): the 3rd positional is
+      // `runtime` for the claude/kimi/cline converters, so the scope-aware
+      // converters (antigravity, copilot) read isGlobal from position 5 to avoid
+      // colliding with `runtime` and always taking the global branch.
+      const cmdNames = conversionExports.readGsdCommandNames
+        ? conversionExports.readGsdCommandNames()
+        : [];
+      const isGlobal = scope === 'global';
       const wrappedConverter = (content: string, skillName: string): string =>
-        realConverter(content, skillName, runtime, cmdNames);
+        realConverter(content, skillName, runtime, cmdNames, isGlobal);
       return stageSkillsForRuntimeAsSkills(findInstallSourceRoot(configDir), resolved, wrappedConverter, prefix, nested);
     },
   };
@@ -289,7 +294,7 @@ function skillsKind(
  * commands directory with per-file conversion (e.g. Cursor 1.6 slash commands).
  *
  * Unlike `commandsKind` (which passes raw source files through), this kind
- * applies `converterName` from bin/install.js exports to each file during
+ * applies `converterName` from Runtime Artifact Conversion exports to each file during
  * staging, writing flat `${prefix}${stem}.md` files to the staged directory.
  *
  * The staged files are then written by `_copyStaged` (commands branch) which
@@ -297,7 +302,7 @@ function skillsKind(
  *
  * @param destSubpath   destination subpath within configDir (e.g. 'commands')
  * @param prefix        filename prefix, e.g. 'gsd-'
- * @param converterName name of converter function in bin/install.js exports
+ * @param converterName name of converter function in Runtime Artifact Conversion exports
  * @param configDir     runtime config dir (for .gsd-source marker resolution)
  */
 function convertedCommandsKind(
@@ -311,8 +316,7 @@ function convertedCommandsKind(
     destSubpath,
     prefix,
     stage: (resolved) => {
-      const installExports = getInstallExports();
-      const converter = installExports[converterName] as (content: string, commandName: string) => string;
+      const converter = conversionExports[converterName] as (content: string, commandName: string) => string;
       return stageCommandsForRuntimeFlat(findInstallSourceRoot(configDir), resolved, converter, prefix);
     },
   };
@@ -325,14 +329,13 @@ function convertedAgentsKind(destSubpath: string, prefix: string, converterName:
     destSubpath,
     prefix,
     stage: (resolved) => {
-      const installExports = getInstallExports();
-      const converter = installExports[converterName] as (content: string, options?: { modelOverride?: string }) => string;
-      const readOverrides = installExports.readGsdEffectiveModelOverrides as ((configDir: string) => Record<string, string>) | undefined;
+      const converter = conversionExports[converterName] as (content: string, options?: { modelOverride?: string }) => string;
+      const readOverrides = getInstallExports().readGsdEffectiveModelOverrides as ((configDir: string) => Record<string, string>) | undefined;
       const modelOverrides = converterName === 'convertClaudeAgentToOmpAgent' && typeof readOverrides === 'function'
         ? readOverrides(configDir)
         : null;
       const src = stageAgentsForProfile(findAgentsSourceRoot(configDir), resolved);
-      const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-agents-'));
+      const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-runtime-agents-'));
       if (!fs.existsSync(src)) return dest;
       for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
         if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
@@ -354,10 +357,10 @@ function rulesKind(destSubpath: string, prefix: string, configDir: string): Arti
     prefix,
     stage: () => {
       const rulesDir = path.resolve(findInstallSourceRoot(configDir), '..', '..', 'gsd-core', 'omp', 'rules');
+      if (!fs.existsSync(rulesDir)) throw new Error(`resolveRuntimeArtifactLayout: missing OMP rules source directory: ${rulesDir}`);
       const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-rules-'));
-      if (!fs.existsSync(rulesDir)) return dest;
       for (const entry of fs.readdirSync(rulesDir, { withFileTypes: true })) {
-        if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+        if (!entry.isFile() || (!entry.name.endsWith('.md') && !entry.name.endsWith('.mdc'))) continue;
         fs.copyFileSync(path.join(rulesDir, entry.name), path.join(dest, entry.name));
       }
       return dest;
@@ -373,8 +376,8 @@ function extensionsKind(destSubpath: string, prefix: string, configDir: string):
     prefix,
     stage: () => {
       const extensionsDir = path.resolve(findInstallSourceRoot(configDir), '..', '..', 'gsd-core', 'omp', 'extensions');
+      if (!fs.existsSync(extensionsDir)) throw new Error(`resolveRuntimeArtifactLayout: missing OMP extensions source directory: ${extensionsDir}`);
       const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-extensions-'));
-      if (!fs.existsSync(extensionsDir)) return dest;
       for (const entry of fs.readdirSync(extensionsDir, { withFileTypes: true })) {
         if (!entry.isDirectory() || entry.name.startsWith('.') || !entry.name.startsWith(prefix)) continue;
         fs.cpSync(path.join(extensionsDir, entry.name), path.join(dest, entry.name), { recursive: true });
@@ -408,6 +411,7 @@ function extensionsKind(destSubpath: string, prefix: string, configDir: string):
 //                  (single-level subdir probe of the tap path)
 //     augment    — https://docs.augmentcode.com/cli/skills (flat single-level)
 //     trae       — docs.trae.ai/ide/skills + Trae-AI/TRAE#2253 (flat; nesting errors)
+//                  Trae IDE (trae.ai), not trae-agent — see runtime-homes.cts header note
 //     antigravity— discuss.ai.google.dev/t/more-antigravity-issues/145875 ("will not recursive scan")
 //
 //   FLAT (recursive loader → nesting gives no saving):
@@ -427,147 +431,112 @@ function extensionsKind(destSubpath: string, prefix: string, configDir: string):
 //     windsurf   — docs.devin.ai/desktop/cascade/skills
 //     codebuddy  — codebuddy.ai/docs/cli/skills
 
+// ---------------------------------------------------------------------------
+// Descriptor-driven dispatch helpers (ADR-857 phase 5d)
+// ---------------------------------------------------------------------------
+
+interface ArtifactKindDescriptor {
+  kind: string;
+  destSubpath: string;
+  prefix: string;
+  nesting?: 'flat' | 'nested';
+  recursive?: boolean;
+  converter?: string | null;
+}
+
+interface ArtifactLayoutDescriptor {
+  global: ArtifactKindDescriptor[];
+  local: ArtifactKindDescriptor[];
+}
+
+/** Lazy registry accessor — mirrors pattern from 5b/5c (runtime-homes.cts). */
+interface RegistryLike {
+  runtimes: Record<string, { runtime?: { artifactLayout?: ArtifactLayoutDescriptor } }>;
+}
+
+function getRegistry(): RegistryLike {
+  return _require('./capability-registry.cjs') as {
+    runtimes: Record<string, { runtime?: { artifactLayout?: ArtifactLayoutDescriptor } }>;
+  };
+}
+
+/**
+ * Map a single ArtifactKindDescriptor entry to an ArtifactKind using the
+ * matching builder function. Mirrors the hand-built calls in the old switch.
+ */
+function dispatchKindEntry(entry: ArtifactKindDescriptor, runtime: string, configDir: string, scope: 'local' | 'global'): ArtifactKind {
+  const { kind, destSubpath, prefix, converter } = entry;
+  const nested = entry.nesting === 'nested';
+
+  switch (kind) {
+    case 'commands':
+      if (converter == null) {
+        return commandsKind(destSubpath, prefix, configDir);
+      }
+      return convertedCommandsKind(destSubpath, prefix, converter, configDir);
+
+    case 'agents':
+      if (converter == null) {
+        return agentsKind(destSubpath, prefix, configDir);
+      }
+      return convertedAgentsKind(destSubpath, prefix, converter, configDir);
+
+    case 'skills':
+      if (converter == null) {
+        throw new TypeError(
+          `resolveRuntimeArtifactLayout: skills entry for '${runtime}' has converter=null (converter is required for skills)`,
+        );
+      }
+      return skillsKind(destSubpath, prefix, converter, runtime, configDir, nested, scope);
+
+    case 'kimi-agents':
+      return kimiAgentsKind(destSubpath, prefix, configDir);
+
+    case 'rules':
+      return rulesKind(destSubpath, prefix, configDir);
+
+    case 'extensions':
+      return extensionsKind(destSubpath, prefix, configDir);
+
+    default:
+      throw new TypeError(
+        `resolveRuntimeArtifactLayout: unknown kind '${kind}' in descriptor for runtime '${runtime}'`,
+      );
+  }
+}
+
 /**
  * Resolve the artifact layout for a given runtime and config directory.
+ *
+ * ADR-857 phase 5d: driven by the capability-registry artifactLayout descriptor
+ * instead of a hardcoded switch statement.
  */
 function resolveRuntimeArtifactLayout(runtime: string, configDir: string, scope: 'local' | 'global' = 'global'): Layout {
+  return resolveRuntimeArtifactLayoutFromRegistry(getRegistry(), runtime, configDir, scope);
+}
+
+function resolveRuntimeArtifactLayoutFromRegistry(
+  registry: RegistryLike,
+  runtime: string,
+  configDir: string,
+  scope: 'local' | 'global' = 'global',
+): Layout {
   if (typeof configDir !== 'string' || configDir === '') {
     throw new TypeError('configDir must be a non-empty string');
   }
   if (scope !== 'local' && scope !== 'global') {
     throw new TypeError('scope must be "local" or "global"');
   }
-  if (!ALLOWED_RUNTIMES.has(runtime)) {
+
+  const desc = registry.runtimes[runtime]?.runtime?.artifactLayout;
+  if (!desc) {
     throw new TypeError(`Unknown runtime: '${runtime}' — add to runtime-artifact-layout.cjs table`);
   }
 
-  let kinds: ArtifactKind[];
-  switch (runtime) {
-    case 'claude':
-      if (scope === 'local') {
-        kinds = [
-          commandsKind('commands/gsd', 'gsd-', configDir),
-          agentsKind('agents', 'gsd-', configDir),
-        ];
-      } else {
-        kinds = [skillsKind('skills', 'gsd-', 'convertClaudeCommandToClaudeSkill', 'claude', configDir)];
-      }
-      break;
-
-    case 'cursor':
-      // Cursor 1.6+ supports two artifact surfaces:
-      //   1. skills/gsd-<name>/SKILL.md  — rich skills with frontmatter + adapter header
-      //   2. commands/gsd-<name>.md      — plain markdown slash commands (no frontmatter)
-      //      accessed via '/' in the Agent input (#785)
-      kinds = [
-        skillsKind('skills', 'gsd-', 'convertClaudeCommandToCursorSkill', 'cursor', configDir),
-        convertedCommandsKind('commands', 'gsd-', 'convertClaudeCommandToCursorCommand', configDir),
-      ];
-      break;
-
-    case 'gemini':
-      kinds = [commandsKind('commands/gsd', 'gsd-', configDir)];
-      break;
-
-    case 'codex':
-      kinds = [skillsKind('skills', 'gsd-', 'convertClaudeCommandToCodexSkill', 'codex', configDir)];
-      break;
-
-    case 'copilot':
-      kinds = [skillsKind('skills', 'gsd-', 'convertClaudeCommandToCopilotSkill', 'copilot', configDir)];
-      break;
-
-    case 'antigravity':
-      kinds = [skillsKind('skills', 'gsd-', 'convertClaudeCommandToAntigravitySkill', 'antigravity', configDir, true /* #69 nested */)];
-      break;
-
-    case 'windsurf':
-      kinds = [skillsKind('skills', 'gsd-', 'convertClaudeCommandToWindsurfSkill', 'windsurf', configDir)];
-      break;
-
-    case 'augment':
-      kinds = [
-        commandsKind('commands', 'gsd-', configDir),
-        skillsKind('skills', 'gsd-', 'convertClaudeCommandToAugmentSkill', 'augment', configDir, true /* #69 nested */),
-      ];
-      break;
-
-    case 'trae':
-      kinds = [skillsKind('skills', 'gsd-', 'convertClaudeCommandToTraeSkill', 'trae', configDir, true /* #69 nested */)];
-      break;
-
-    case 'qwen':
-      kinds = [skillsKind('skills', 'gsd-', 'convertClaudeCommandToClaudeSkill', 'qwen', configDir, true /* #69 nested */)];
-      break;
-
-    case 'hermes':
-      // #947: restore canonical gsd- prefix — skills land at skills/gsd/gsd-<stem>/SKILL.md
-      // and dispatch as /gsd-<stem>, consistent with every other runtime.
-      // The skills/gsd/ category bucket (introduced by #2841) is retained.
-      // Prior bare-stem layout (prefix='') used by #3664 is reversed here.
-      kinds = [skillsKind('skills/gsd', 'gsd-', 'convertClaudeCommandToClaudeSkill', 'hermes', configDir, true /* #69 nested */)];
-      break;
-
-    case 'codebuddy':
-      // CodeBuddy (Tencent) reads two user-level surfaces (codebuddy.ai/docs/cli):
-      //   1. commands/gsd-<name>.md      — slash commands shown in the '/' menu (#789)
-      //   2. skills/gsd-<name>/SKILL.md  — model-invocable skills, emitted with
-      //      user-invocable:false so they stay OUT of '/' (the commands surface is
-      //      the sole '/' entry point) — avoids a duplicated /gsd-* per workflow.
-      // Subagents (~/.codebuddy/agents/) are already emitted by the generic agents
-      // block in bin/install.js; MCP is excluded (gsd ships no MCP server).
-      kinds = [
-        convertedCommandsKind('commands', 'gsd-', 'convertClaudeCommandToCodebuddyCommand', configDir),
-        skillsKind('skills', 'gsd-', 'convertClaudeCommandToCodebuddySkill', 'codebuddy', configDir),
-      ];
-      break;
-
-    case 'cline':
-      kinds = scope === 'global' ? [skillsKind('skills', 'gsd-', 'convertClaudeCommandToClineSkill', 'cline', configDir, true /* #69 nested */)] : [];
-      break;
-
-    case 'kimi':
-      kinds = scope === 'global'
-        ? [
-            skillsKind('skills', 'gsd-', 'convertClaudeCommandToKimiSkill', 'kimi', configDir),
-            kimiAgentsKind('agents', 'gsd', configDir),
-          ]
-        : [];
-      break;
-
-    case 'omp':
-      kinds = [
-        convertedCommandsKind('commands', 'gsd-', 'convertClaudeCommandToOmpCommand', configDir),
-        skillsKind('skills', 'gsd-', 'convertClaudeCommandToOmpSkill', 'omp', configDir, true /* #69 nested */),
-        convertedAgentsKind('agents', 'gsd-', 'convertClaudeAgentToOmpAgent', configDir),
-        rulesKind('rules', 'gsd-', configDir),
-        extensionsKind('extensions', 'gsd-', configDir),
-      ];
-      break;
-
-    case 'opencode':
-      // OpenCode reads flat slash commands from command/ and on-demand skills
-      // from skills/<name>/SKILL.md (https://opencode.ai/docs/skills). Emit both.
-      kinds = [
-        commandsKind('command', 'gsd-', configDir),
-        skillsKind('skills', 'gsd-', 'convertClaudeCommandToOpencodeSkill', 'opencode', configDir),
-      ];
-      break;
-
-    case 'kilo':
-      // Kilo derives from OpenCode and shares the skills/<name>/SKILL.md layout
-      // (https://kilo.ai/docs/customize/skills). Emit flat commands + skills.
-      kinds = [
-        commandsKind('command', 'gsd-', configDir),
-        skillsKind('skills', 'gsd-', 'convertClaudeCommandToKiloSkill', 'kilo', configDir),
-      ];
-      break;
-
-    default:
-      throw new TypeError(`Unknown runtime: '${runtime}' — add to runtime-artifact-layout.cjs table`);
-  }
+  const entries: ArtifactKindDescriptor[] = desc[scope] ?? [];
+  const kinds: ArtifactKind[] = entries.map((entry) => dispatchKindEntry(entry, runtime, configDir, scope));
 
   return { runtime, configDir, scope, kinds };
 }
 
-export = { resolveRuntimeArtifactLayout, findInstallSourceRoot, getInstallExports };
+export = { resolveRuntimeArtifactLayout, resolveRuntimeArtifactLayoutFromRegistry, findInstallSourceRoot, getInstallExports };

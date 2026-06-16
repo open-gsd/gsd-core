@@ -34,6 +34,9 @@ const SCHEMA_VERSION = '1';
 // registry generator and the loop-host-contract generator share one source of truth.
 const { LOOP_HOST_CONTRACT } = require('../gsd-core/bin/lib/loop-host-contract.cjs');
 
+// Wired-points helper — tells us which points actually have render-hooks call sites.
+const { getWiredLoopPoints } = require('./gen-loop-host-contract.cjs');
+
 // Canonical point order — explicit constant (do NOT rely on Set insertion order).
 // Used for point-ordering semantics in consumes-satisfiability validation and topo-sort.
 const POINT_ORDER = [
@@ -93,16 +96,42 @@ for (const entry of LOOP_HOST_CONTRACT) {
  * Loads the set of keys from the central config-schema manifest.
  * Returns a Set<string>. Used for collision detection.
  *
- * TODO: distinguish file-not-found (ok, return empty Set) from JSON-parse-error
- * (should warn — a parse error means the schema is broken, not just absent).
+ * Contract:
+ *   - ENOENT (file not found): returns empty Set silently — legitimate absent case.
+ *   - Any other read error OR JSON parse error: writes a prominent warning to stderr
+ *     naming the schema path and the underlying error, then throws ExitError(1).
+ *     A parse error clearly states the schema is broken (not merely absent).
+ *
+ * @param {string} [schemaPath]  Path to the config-schema manifest. Defaults to
+ *                               CONFIG_SCHEMA_PATH (the real production path).
+ *                               Overridable for unit testing with fixture paths.
+ * @returns {Set<string>}
  */
-function loadCentralConfigKeys() {
+function loadCentralConfigKeys(schemaPath = CONFIG_SCHEMA_PATH) {
+  let raw;
   try {
-    const manifest = JSON.parse(fs.readFileSync(CONFIG_SCHEMA_PATH, 'utf8'));
-    return new Set(Array.isArray(manifest.validKeys) ? manifest.validKeys : []);
-  } catch (_) {
-    return new Set();
+    raw = fs.readFileSync(schemaPath, 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      return new Set();
+    }
+    process.stderr.write(
+      '  ERROR  Failed to read config-schema manifest at ' + schemaPath + ': ' + err.message + '\n',
+    );
+    throw new ExitError(1, 'could not read config-schema manifest');
   }
+
+  let manifest;
+  try {
+    manifest = JSON.parse(raw);
+  } catch (err) {
+    process.stderr.write(
+      '  ERROR  Config-schema manifest at ' + schemaPath + ' is broken (JSON parse error): ' + err.message + '\n',
+    );
+    throw new ExitError(1, 'config-schema manifest JSON is malformed');
+  }
+
+  return new Set(Array.isArray(manifest.validKeys) ? manifest.validKeys : []);
 }
 
 // ─── Config-slice validation ──────────────────────────────────────────────────
@@ -205,6 +234,7 @@ const KEBAB_RE = /^[a-z][a-z0-9-]*$/;
 const VALID_ROLES = new Set(['feature', 'runtime']);
 const VALID_TIERS = new Set(['core', 'standard', 'full']);
 const VALID_ON_ERROR = new Set(['skip', 'halt']);
+const RUNTIME_COMPAT_WILDCARD = '*';
 
 /**
  * Validate a single capability declaration.
@@ -337,8 +367,73 @@ function validateCommandEntry(capId, entry, prefix) {
   return errors;
 }
 
+function validateRuntimeCompat(capId, runtimeCompat) {
+  const errors = [];
+  const ctx = 'capability "' + capId + '" runtimeCompat';
+
+  if (typeof runtimeCompat !== 'object' || runtimeCompat === null || Array.isArray(runtimeCompat)) {
+    errors.push(ctx + ' must be an object with supported and unsupported arrays');
+    return errors;
+  }
+
+  const validateRuntimeArray = (field, { allowWildcard }) => {
+    const value = runtimeCompat[field];
+    if (!Array.isArray(value)) {
+      errors.push(ctx + '.' + field + ' must be an array of runtime ids' + (allowWildcard ? ' or ["*"]' : ''));
+      return;
+    }
+    if (field === 'supported' && value.length === 0) {
+      errors.push(ctx + '.supported must be a non-empty array');
+    }
+    let hasWildcard = false;
+    for (let i = 0; i < value.length; i++) {
+      const entry = value[i];
+      if (typeof entry !== 'string' || entry.length === 0) {
+        errors.push(ctx + '.' + field + '[' + i + '] must be a non-empty string');
+        continue;
+      }
+      if (entry === '__proto__' || entry === 'constructor' || entry === 'prototype') {
+        errors.push(ctx + '.' + field + '[' + i + '] "' + entry + '" is a reserved name');
+      }
+      if (entry === RUNTIME_COMPAT_WILDCARD) {
+        if (!allowWildcard) {
+          errors.push(ctx + '.' + field + ' must not include wildcard "*"');
+        }
+        hasWildcard = true;
+      } else if (!KEBAB_RE.test(entry)) {
+        errors.push(ctx + '.' + field + '[' + i + '] must be a kebab-case runtime id or "*"');
+      }
+    }
+    if (hasWildcard && value.length > 1) {
+      errors.push(ctx + '.' + field + ' wildcard "*" cannot be mixed with runtime ids');
+    }
+  };
+
+  validateRuntimeArray('supported', { allowWildcard: true });
+  validateRuntimeArray('unsupported', { allowWildcard: false });
+
+  if (runtimeCompat.notes !== undefined) {
+    if (typeof runtimeCompat.notes !== 'object' || runtimeCompat.notes === null || Array.isArray(runtimeCompat.notes)) {
+      errors.push(ctx + '.notes must be an object of runtime id to string if present');
+    } else {
+      for (const [key, value] of Object.entries(runtimeCompat.notes)) {
+        if (key !== RUNTIME_COMPAT_WILDCARD && !KEBAB_RE.test(key)) {
+          errors.push(ctx + '.notes key "' + key + '" must be a kebab-case runtime id or "*"');
+        }
+        if (typeof value !== 'string' || value.length === 0) {
+          errors.push(ctx + '.notes["' + key + '"] must be a non-empty string');
+        }
+      }
+    }
+  }
+
+  return errors;
+}
+
 function validateFeatureBody(cap) {
   const errors = [];
+
+  errors.push(...validateRuntimeCompat(cap.id || '(unknown)', cap.runtimeCompat));
 
   if (!Array.isArray(cap.skills)) {
     errors.push('skills must be an array of strings');
@@ -447,19 +542,99 @@ function validateFeatureBody(cap) {
     }
   }
 
+  // activationKey: optional string naming the dotted config key that gates this capability.
+  // If present: must be a non-empty string that is declared in this capability's own config slice.
+  if (cap.activationKey !== undefined) {
+    if (typeof cap.activationKey !== 'string' || cap.activationKey.length === 0) {
+      errors.push(
+        'capability "' + (cap.id || '(unknown)') + '" activationKey must be a non-empty string (got: ' +
+        JSON.stringify(cap.activationKey) + ')',
+      );
+    } else if (cap.activationKey === '__proto__' || cap.activationKey === 'constructor' || cap.activationKey === 'prototype') {
+      // Prototype-pollution guard (inline literal, CodeQL barrier)
+      errors.push(
+        'capability "' + (cap.id || '(unknown)') + '" activationKey "' + cap.activationKey +
+        '" is a reserved JavaScript property name and cannot be used as an activationKey',
+      );
+    } else if (
+      typeof cap.config !== 'object' ||
+      cap.config === null ||
+      !Object.prototype.hasOwnProperty.call(cap.config, cap.activationKey)
+    ) {
+      errors.push(
+        'capability "' + (cap.id || '(unknown)') + '" activationKey "' + cap.activationKey +
+        '" is not declared in this capability\'s config slice — add it to the "config" object or use a key that is declared there',
+      );
+    }
+  }
+
   return errors;
 }
 
+// ADR-857 phase 5e: Closed ConverterName enum — complete set used across 16 runtime descriptors,
+// all exported by bin/install.js (commands/skills) and src/runtime-artifact-conversion.cts (agents).
+// Any ArtifactKind with a non-null converter must use one of these.
+const VALID_CONVERTER_NAMES = new Set([
+  // commands / skills converters (pre-existing)
+  'convertClaudeCommandToAntigravitySkill',
+  'convertClaudeCommandToAugmentSkill',
+  'convertClaudeCommandToClineSkill',
+  'convertClaudeCommandToClaudeSkill',
+  'convertClaudeCommandToCodebuddyCommand',
+  'convertClaudeCommandToCodebuddySkill',
+  'convertClaudeCommandToCodexSkill',
+  'convertClaudeCommandToCopilotSkill',
+  'convertClaudeCommandToCursorCommand',
+  'convertClaudeCommandToCursorSkill',
+  'convertClaudeCommandToKiloSkill',
+  'convertClaudeCommandToKimiSkill',
+  'convertClaudeCommandToOpencodeSkill',
+  'convertClaudeCommandToTraeSkill',
+  'convertClaudeCommandToWindsurfSkill',
+  'convertClaudeCommandToOmpCommand',
+  'convertClaudeCommandToOmpSkill',
+  // agent converters (#1173 — descriptor-driven agent conversion wiring)
+  'convertClaudeAgentToCopilotAgent',
+  'convertClaudeAgentToAntigravityAgent',
+  'convertClaudeAgentToCursorAgent',
+  'convertClaudeAgentToWindsurfAgent',
+  'convertClaudeAgentToAugmentAgent',
+  'convertClaudeAgentToTraeAgent',
+  'convertClaudeAgentToCodebuddyAgent',
+  'convertClaudeAgentToClineAgent',
+  'convertClaudeAgentToCodexAgent',
+  'convertClaudeAgentToOmpAgent',
+]);
+
 // C3: Validate role:runtime body
 const VALID_CONFIG_FORMATS = new Set(['settings-json', 'toml', 'markdown', 'markdown-dir', 'none']);
-const VALID_CONFIG_HOME_KINDS = new Set(['dot-home', 'dot-home-nested', 'xdg', 'generic-agents-root']);
+const VALID_CONFIG_HOME_KINDS = new Set(['dot-home', 'dot-home-nested', 'xdg', 'generic-agents-root', 'omp-agent-home']);
 const VALID_COMMAND_STYLES = new Set(['slash-hyphen', 'shell-var']);
 const VALID_HOOKS_SURFACES = new Set(['settings-json', 'codex-hooks-json', 'cursor-hooks-json', 'copilot-inline', 'cline-rules', 'none']);
 const VALID_HOOK_EVENTS = new Set(['claude', 'gemini', 'opencode-subset']);
 const VALID_SANDBOX_TIERS = new Set(['none', 'codex-agent-sandbox']);
-const VALID_ARTIFACT_KIND_NAMES = new Set(['commands', 'agents', 'skills', 'kimi-agents']);
+const VALID_ARTIFACT_KIND_NAMES = new Set(['commands', 'agents', 'skills', 'kimi-agents', 'rules', 'extensions']);
 const VALID_ARTIFACT_NESTINGS = new Set(['flat', 'nested']);
-const FEATURE_FIELDS_FORBIDDEN_ON_RUNTIME = ['skills', 'agents', 'steps', 'contributions', 'gates', 'hooks'];
+const FEATURE_FIELDS_FORBIDDEN_ON_RUNTIME = ['skills', 'agents', 'steps', 'contributions', 'gates', 'hooks', 'activationKey'];
+const VALID_INSTALL_SURFACES = new Set(['settings-json', 'codex-toml', 'copilot-instructions', 'cline-rules', 'cursor-hooks-json', 'profile-marker-only']);
+const VALID_PERMISSION_WRITERS = new Set(['opencode', 'kilo']);
+const VALID_EXTENDED_HOOK_EVENTS = new Set(['SubagentStop', 'Stop', 'PreCompact', 'FileChanged', 'BeforeAgent', 'AfterAgent', 'BeforeModel']);
+
+// GATE A: installSurface → allowed hooksSurface values (DEFECT.GENERATIVE-FIX: parity invariant)
+// Derived from the actual pairings in the 16 real runtime descriptors.
+const INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES = new Map([
+  ['settings-json',        new Set(['settings-json', 'none'])],
+  ['codex-toml',           new Set(['codex-hooks-json'])],
+  ['copilot-instructions', new Set(['copilot-inline'])],
+  ['cline-rules',          new Set(['cline-rules'])],
+  ['cursor-hooks-json',    new Set(['cursor-hooks-json'])],
+  ['profile-marker-only',  new Set(['none'])],
+]);
+
+// GATE B: extended hook event families → required hookEvents value
+// Gemini agent-events require hookEvents='gemini'; Claude-family events require hookEvents='claude'.
+const GEMINI_AGENT_EVENTS = new Set(['BeforeAgent', 'AfterAgent', 'BeforeModel']);
+const CLAUDE_FAMILY_EVENTS = new Set(['SubagentStop', 'Stop', 'PreCompact', 'FileChanged']);
 
 /**
  * Validate a runtime.configHome object per ADR-1016 Decision 1.
@@ -488,8 +663,9 @@ function validateConfigHome(capId, ch) {
     );
   }
 
-  // name — required string
-  if (typeof ch.name !== 'string' || ch.name.length === 0) {
+  // name — required string except for custom resolver descriptors that carry
+  // their own env/profile semantics.
+  if (ch.kind !== 'omp-agent-home' && (typeof ch.name !== 'string' || ch.name.length === 0)) {
     errors.push(ctx + '.name must be a non-empty string');
   }
 
@@ -507,6 +683,20 @@ function validateConfigHome(capId, ch) {
     for (let i = 0; i < ch.env.length; i++) {
       if (typeof ch.env[i] !== 'string') {
         errors.push(ctx + '.env[' + i + '] must be a string');
+      }
+    }
+  }
+
+  for (const field of ['profileEnv', 'configRootEnv']) {
+    if (ch[field] !== undefined) {
+      if (!Array.isArray(ch[field])) {
+        errors.push(ctx + '.' + field + ' must be an array of strings if present');
+      } else {
+        for (let i = 0; i < ch[field].length; i++) {
+          if (typeof ch[field][i] !== 'string') {
+            errors.push(ctx + '.' + field + '[' + i + '] must be a string');
+          }
+        }
       }
     }
   }
@@ -581,21 +771,20 @@ function validateArtifactKindEntry(capId, entry, prefix) {
     errors.push(ctx + '.destSubpath must be a non-empty string');
   }
 
-  // nesting — optional; if present must be in closed vocab
-  if (entry.nesting !== undefined) {
-    if (!VALID_ARTIFACT_NESTINGS.has(entry.nesting)) {
-      errors.push(
-        ctx + '.nesting must be one of: ' + [...VALID_ARTIFACT_NESTINGS].join(', ') +
-        ' (got: ' + JSON.stringify(entry.nesting) + ')',
-      );
-    }
+  // nesting — optional for flat artifact kinds; when provided it must be in
+  // the closed vocabulary used by the descriptor-driven installer.
+  if (entry.nesting !== undefined && entry.nesting !== null && !VALID_ARTIFACT_NESTINGS.has(entry.nesting)) {
+    errors.push(
+      ctx + '.nesting must be one of: ' + [...VALID_ARTIFACT_NESTINGS].join(', ') +
+      ' (got: ' + JSON.stringify(entry.nesting) + ')',
+    );
   }
 
-  // prefix — optional; if present must be a string
-  if (entry.prefix !== undefined) {
-    if (typeof entry.prefix !== 'string') {
-      errors.push(ctx + '.prefix must be a string if present (got: ' + typeof entry.prefix + ')');
-    }
+  // prefix — required; must be a string (may be empty string '')
+  if (entry.prefix === undefined || entry.prefix === null) {
+    errors.push(ctx + '.prefix is required (must be a string, may be empty)');
+  } else if (typeof entry.prefix !== 'string') {
+    errors.push(ctx + '.prefix must be a string (got: ' + typeof entry.prefix + ')');
   }
 
   // recursive — optional; if present must be a boolean
@@ -605,11 +794,14 @@ function validateArtifactKindEntry(capId, entry, prefix) {
     }
   }
 
-  // converter — optional; if present must be a string or null (closed ConverterName enum in phase 5e)
-  if (entry.converter !== undefined) {
-    if (entry.converter !== null && typeof entry.converter !== 'string') {
-      errors.push(ctx + '.converter must be a string or null if present (got: ' + typeof entry.converter + ')');
-    }
+  // converter — optional for raw-copy artifact kinds; when present it must be
+  // null or a known converter name.
+  if (entry.converter !== undefined && entry.converter !== null && typeof entry.converter !== 'string') {
+    errors.push(ctx + '.converter must be a string or null (got: ' + typeof entry.converter + ')');
+  } else if (entry.converter !== null && typeof entry.converter === 'string' &&
+             !VALID_CONVERTER_NAMES.has(entry.converter)) {
+    // Closed ConverterName enum (ADR-857 phase 5e): reject unknown converter names
+    errors.push(ctx + '.converter "' + entry.converter + '" is not a known ConverterName');
   }
 
   return errors;
@@ -723,6 +915,156 @@ function validateRuntimeBody(cap) {
     errors.push('runtime.supportTier must be 1 or 2 (got: ' + r.supportTier + ')');
   }
 
+  // installSurface — required string in closed enum
+  if (!VALID_INSTALL_SURFACES.has(r.installSurface)) {
+    errors.push(
+      'runtime.installSurface must be one of: ' + [...VALID_INSTALL_SURFACES].join(', ') +
+      ' (got: ' + JSON.stringify(r.installSurface) + ')',
+    );
+  }
+
+  // writesSharedSettings — required boolean
+  if (typeof r.writesSharedSettings !== 'boolean') {
+    errors.push(
+      'runtime.writesSharedSettings must be a boolean (got: ' + JSON.stringify(r.writesSharedSettings) + ')',
+    );
+  }
+
+  // permissionWriter — required key; value must be null or a string in VALID_PERMISSION_WRITERS
+  if (!Object.prototype.hasOwnProperty.call(r, 'permissionWriter')) {
+    errors.push('runtime.permissionWriter is required (must be null or one of: ' + [...VALID_PERMISSION_WRITERS].join(', ') + ')');
+  } else if (r.permissionWriter !== null && !VALID_PERMISSION_WRITERS.has(r.permissionWriter)) {
+    errors.push(
+      'runtime.permissionWriter must be null or one of: ' + [...VALID_PERMISSION_WRITERS].join(', ') +
+      ' (got: ' + JSON.stringify(r.permissionWriter) + ')',
+    );
+  }
+
+  // extendedHookEvents — required array; every element must be in closed enum
+  if (!Array.isArray(r.extendedHookEvents)) {
+    errors.push(
+      'runtime.extendedHookEvents must be an array (got: ' + JSON.stringify(r.extendedHookEvents) + ')',
+    );
+  } else {
+    for (let i = 0; i < r.extendedHookEvents.length; i++) {
+      const ev = r.extendedHookEvents[i];
+      if (typeof ev !== 'string' || !VALID_EXTENDED_HOOK_EVENTS.has(ev)) {
+        errors.push(
+          'runtime.extendedHookEvents[' + i + '] must be one of: ' + [...VALID_EXTENDED_HOOK_EVENTS].join(', ') +
+          ' (got: ' + JSON.stringify(ev) + ')',
+        );
+      }
+    }
+  }
+
+  // GATE A: installSurface ↔ hooksSurface consistency (DEFECT.GENERATIVE-FIX)
+  // Only check if both fields are valid strings (individual field validators above report type errors).
+  if (typeof r.installSurface === 'string' && typeof r.hooksSurface === 'string') {
+    const allowedHooksSurfaces = INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES.get(r.installSurface);
+    if (allowedHooksSurfaces !== undefined && !allowedHooksSurfaces.has(r.hooksSurface)) {
+      errors.push(
+        'runtime.hooksSurface "' + r.hooksSurface + '" is not valid for installSurface "' + r.installSurface + '"' +
+        ' — allowed: ' + [...allowedHooksSurfaces].join(', ') +
+        ' (src: INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES in scripts/gen-capability-registry.cjs)',
+      );
+    }
+  }
+
+  // GATE B: extendedHookEvents ↔ hookEvents consistency (DEFECT.GENERATIVE-FIX)
+  // If extendedHookEvents contains Gemini agent-events, hookEvents must be 'gemini'.
+  // If it contains Claude-family events, hookEvents must be 'claude'.
+  // Empty extendedHookEvents imposes no constraint.
+  if (Array.isArray(r.extendedHookEvents) && r.extendedHookEvents.length > 0) {
+    const hasGeminiEvents = r.extendedHookEvents.some((ev) => GEMINI_AGENT_EVENTS.has(ev));
+    const hasClaudeEvents = r.extendedHookEvents.some((ev) => CLAUDE_FAMILY_EVENTS.has(ev));
+    if (hasGeminiEvents && r.hookEvents !== 'gemini') {
+      errors.push(
+        'runtime.extendedHookEvents contains Gemini agent-events (' +
+        r.extendedHookEvents.filter((ev) => GEMINI_AGENT_EVENTS.has(ev)).join(', ') +
+        ') but runtime.hookEvents is "' + r.hookEvents + '" — must be "gemini"',
+      );
+    }
+    if (hasClaudeEvents && r.hookEvents !== 'claude') {
+      errors.push(
+        'runtime.extendedHookEvents contains Claude-family events (' +
+        r.extendedHookEvents.filter((ev) => CLAUDE_FAMILY_EVENTS.has(ev)).join(', ') +
+        ') but runtime.hookEvents is "' + r.hookEvents + '" — must be "claude"',
+      );
+    }
+  }
+
+  return errors;
+}
+
+function materializeHookFragments(cap, capDir) {
+  const errors = [];
+  const hookGroups = [
+    ['steps', Array.isArray(cap.steps) ? cap.steps : []],
+    ['contributions', Array.isArray(cap.contributions) ? cap.contributions : []],
+  ];
+
+  for (const [groupName, hooks] of hookGroups) {
+    for (let i = 0; i < hooks.length; i++) {
+      const hook = hooks[i];
+      if (!hook || typeof hook !== 'object' || Array.isArray(hook)) continue;
+      const fragment = hook.fragment;
+      if (!fragment || typeof fragment !== 'object' || Array.isArray(fragment)) continue;
+      if (typeof fragment.inline === 'string') continue;
+      if (typeof fragment.path !== 'string') continue;
+
+      const abs = path.resolve(capDir, fragment.path);
+      const capRoot = path.resolve(capDir);
+      if (abs !== capRoot && !abs.startsWith(capRoot + path.sep)) {
+        errors.push(
+          cap.id + '/' + groupName + '[' + i + '].fragment.path escapes capability directory: ' +
+          fragment.path,
+        );
+        continue;
+      }
+
+      try {
+        fragment.inline = fs.readFileSync(abs, 'utf8');
+      } catch (err) {
+        errors.push(
+          cap.id + '/' + groupName + '[' + i + '].fragment.path could not be read: ' +
+          fragment.path + ' (' + err.message + ')',
+        );
+      }
+    }
+  }
+
+  return errors;
+}
+
+function validateFragment(fragment, prefix) {
+  const errors = [];
+
+  if (typeof fragment !== 'object' || fragment === null || Array.isArray(fragment)) {
+    errors.push(prefix + ' must be an object with path or inline key');
+    return errors;
+  }
+
+  const hasPath = Object.prototype.hasOwnProperty.call(fragment, 'path');
+  const hasInline = Object.prototype.hasOwnProperty.call(fragment, 'inline');
+  if (!hasPath && !hasInline) {
+    errors.push(prefix + ' must have a "path" or "inline" key');
+  }
+  if (hasInline) {
+    const inline = fragment.inline;
+    if (typeof inline !== 'string') {
+      errors.push(prefix + '.inline must be a string');
+    } else if (inline === '') {
+      errors.push(prefix + '.inline must be a non-empty string');
+    }
+  }
+  // S1: fragment.path traversal guard — must be a relative path with no ".." segments
+  if (hasPath) {
+    const p = fragment.path;
+    if (typeof p !== 'string' || p === '' || path.isAbsolute(p) || p.split(/[\\/]/).includes('..')) {
+      errors.push(prefix + '.path must be a relative path with no ".." segments');
+    }
+  }
+
   return errors;
 }
 
@@ -745,15 +1087,17 @@ function validateStep(step, prefix, declaredSkills, declaredAgents) {
   }
 
   if (typeof step.ref !== 'object' || step.ref === null) {
-    errors.push(prefix + '.ref must be an object with skill or agent key');
+    errors.push(prefix + '.ref must be an object with skill, agent, or command key');
   } else {
     const hasSkill = Object.prototype.hasOwnProperty.call(step.ref, 'skill');
     const hasAgent = Object.prototype.hasOwnProperty.call(step.ref, 'agent');
-    if (!hasSkill && !hasAgent) {
-      errors.push(prefix + '.ref must have a "skill" or "agent" key');
-    } else if (hasSkill && hasAgent) {
-      // Fix #4: ref must be exclusive {skill} XOR {agent}
-      errors.push(prefix + '.ref must have exactly one of "skill" or "agent", not both');
+    const hasCommand = Object.prototype.hasOwnProperty.call(step.ref, 'command');
+    const dispatchCount = [hasSkill, hasAgent, hasCommand].filter(Boolean).length;
+    if (dispatchCount === 0) {
+      errors.push(prefix + '.ref must have a "skill", "agent", or "command" key');
+    } else if (dispatchCount > 1) {
+      // ref must be exclusive: skill XOR agent XOR command
+      errors.push(prefix + '.ref must have exactly one of "skill", "agent", or "command", not multiple');
     }
     if (hasSkill && typeof step.ref.skill !== 'string') {
       errors.push(prefix + '.ref.skill must be a string');
@@ -783,6 +1127,9 @@ function validateStep(step, prefix, declaredSkills, declaredAgents) {
         [...declaredAgents].join(', ') + ']',
       );
     }
+    if (hasCommand && typeof step.ref.command !== 'string') {
+      errors.push(prefix + '.ref.command must be a string');
+    }
   }
 
   if (!Array.isArray(step.produces)) {
@@ -805,6 +1152,10 @@ function validateStep(step, prefix, declaredSkills, declaredAgents) {
     errors.push(prefix + '.when must be a string if present');
   }
 
+  if (step.fragment !== undefined) {
+    errors.push(...validateFragment(step.fragment, prefix + '.fragment'));
+  }
+
   if (!VALID_ON_ERROR.has(step.onError)) {
     errors.push(prefix + '.onError must be "skip" or "halt" (got: ' + step.onError + ')');
   }
@@ -823,22 +1174,23 @@ function validateContribution(contrib, prefix) {
     errors.push(prefix + '.into must be a string (agent role name)');
   }
 
-  if (typeof contrib.fragment !== 'object' || contrib.fragment === null) {
-    errors.push(prefix + '.fragment must be an object with path or inline key');
+  if (!Array.isArray(contrib.produces)) {
+    errors.push(prefix + '.produces must be an array');
   } else {
-    const hasPath = Object.prototype.hasOwnProperty.call(contrib.fragment, 'path');
-    const hasInline = Object.prototype.hasOwnProperty.call(contrib.fragment, 'inline');
-    if (!hasPath && !hasInline) {
-      errors.push(prefix + '.fragment must have a "path" or "inline" key');
-    }
-    // S1: fragment.path traversal guard — must be a relative path with no ".." segments
-    if (hasPath) {
-      const p = contrib.fragment.path;
-      if (typeof p !== 'string' || p === '' || path.isAbsolute(p) || p.split(/[\\/]/).includes('..')) {
-        errors.push(prefix + '.fragment.path must be a relative path with no ".." segments');
-      }
+    for (const p of contrib.produces) {
+      if (typeof p !== 'string') errors.push(prefix + '.produces entries must be strings');
     }
   }
+
+  if (!Array.isArray(contrib.consumes)) {
+    errors.push(prefix + '.consumes must be an array');
+  } else {
+    for (const c of contrib.consumes) {
+      if (typeof c !== 'string') errors.push(prefix + '.consumes entries must be strings');
+    }
+  }
+
+  errors.push(...validateFragment(contrib.fragment, prefix + '.fragment'));
 
   if (contrib.when !== undefined && typeof contrib.when !== 'string') {
     errors.push(prefix + '.when must be a string if present');
@@ -1025,8 +1377,38 @@ function validateConsumesGlobal(capMap) {
     }
   }
 
-  // TODO: duplicate-producer invariant — if two capability steps produce the same artifact
-  // at the same point, that's ambiguous. Detect and reject as a follow-up.
+  // Duplicate-producer invariant: two capability steps may not produce the same artifact
+  // at the same Loop Extension Point. Same-point dual production makes data-flow resolution
+  // ambiguous and is rejected at gen time (Decision #6).
+  for (const artifact of Object.keys(capHookProducers)) {
+    if (artifact === '__proto__' || artifact === 'constructor' || artifact === 'prototype') continue;
+    const producers = capHookProducers[artifact];
+    // Group by pointIdx
+    const byPoint = Object.create(null);
+    for (const entry of producers) {
+      if (!byPoint[entry.pointIdx]) byPoint[entry.pointIdx] = [];
+      byPoint[entry.pointIdx].push(entry);
+    }
+    for (const pointIdxStr of Object.keys(byPoint)) {
+      const group = byPoint[pointIdxStr];
+      // Count distinct (capId, stepIdx) producer steps — a single step listing the same
+      // artifact twice in its produces array pushes duplicate entries but represents only
+      // ONE producer step and must not false-positive the cross-step gate.
+      const distinctProducers = new Set(group.map((e) => e.capId + ' ' + e.stepIdx));
+      if (distinctProducers.size >= 2) {
+        const pointIdx = Number(pointIdxStr);
+        const pointName = POINT_ORDER[pointIdx];
+        const capIds = [...new Set(group.map((e) => e.capId))].sort().join(', ');
+        throw new Error(
+          'duplicate-producer invariant violated: artifact "' + artifact + '" is produced by ' +
+          'two or more capability steps at the same Loop Extension Point "' + pointName + '" ' +
+          '(capabilities: ' + capIds + '). ' +
+          'Two capability steps producing the same artifact at the same Loop Extension Point ' +
+          'makes data-flow resolution ambiguous and is rejected at gen time.',
+        );
+      }
+    }
+  }
 
   // Now check every hook step's consumes.
   // Self-consume rule: a step H cannot satisfy its own consumes[A] from its own produces[A].
@@ -1176,6 +1558,39 @@ function validateCrossCapability(capMap, centralKeys) {
     }
   }
 
+  // runtimeCompat: explicit runtime ids must reference runtime capabilities.
+  // The wildcard "*" means descriptor-backed runtimes are supported by default.
+  const runtimeIds = new Set();
+  for (const [id, cap] of capMap) {
+    if (cap.role === 'runtime') runtimeIds.add(id);
+  }
+  for (const [capId, cap] of capMap) {
+    if (cap.role !== 'feature' || typeof cap.runtimeCompat !== 'object' || cap.runtimeCompat === null) continue;
+    for (const field of ['supported', 'unsupported']) {
+      const entries = Array.isArray(cap.runtimeCompat[field]) ? cap.runtimeCompat[field] : [];
+      for (const runtimeId of entries) {
+        if (runtimeId === RUNTIME_COMPAT_WILDCARD) continue;
+        if (typeof runtimeId !== 'string' || runtimeId.length === 0) continue;
+        if (!runtimeIds.has(runtimeId)) {
+          errors.push(
+            'capability "' + capId + '" runtimeCompat.' + field +
+            ' references unknown runtime "' + runtimeId + '"',
+          );
+        }
+      }
+    }
+    if (cap.runtimeCompat.notes && typeof cap.runtimeCompat.notes === 'object') {
+      for (const runtimeId of Object.keys(cap.runtimeCompat.notes)) {
+        if (runtimeId === RUNTIME_COMPAT_WILDCARD) continue;
+        if (!runtimeIds.has(runtimeId)) {
+          errors.push(
+            'capability "' + capId + '" runtimeCompat.notes references unknown runtime "' + runtimeId + '"',
+          );
+        }
+      }
+    }
+  }
+
   // requires: acyclic
   const cycleErrors = detectRequiresCycles(capMap);
   errors.push(...cycleErrors);
@@ -1263,14 +1678,7 @@ function computeRequiresClosure(id, capMap) {
 
 // ─── Topological ordering ─────────────────────────────────────────────────────
 
-/**
- * Topologically sort steps at a given point by produces/consumes.
- * Capability-id tiebreak for determinism.
- *
- * @param {{ capId: string, step: object }[]} entries
- * @returns {{ capId: string, step: object }[]}
- */
-function topoSortSteps(entries) {
+function topoSortHookEntries(entries, hookKey, hookKind) {
   if (entries.length <= 1) return entries;
 
   // Build adjacency: entry A must come before entry B if B consumes something A produces
@@ -1279,10 +1687,10 @@ function topoSortSteps(entries) {
   const adj = Array.from({ length: n }, () => []);
 
   for (let i = 0; i < n; i++) {
-    const producesI = new Set(entries[i].step.produces || []);
+    const producesI = new Set(entries[i][hookKey].produces || []);
     for (let j = 0; j < n; j++) {
       if (i === j) continue;
-      const consumesJ = entries[j].step.consumes || [];
+      const consumesJ = entries[j][hookKey].consumes || [];
       for (const artifact of consumesJ) {
         if (producesI.has(artifact)) {
           adj[i].push(j);
@@ -1320,13 +1728,28 @@ function topoSortSteps(entries) {
   if (result.length < n) {
     const sortedIds = entries.map((e) => e.capId).join(', ');
     throw new Error(
-      'produces/consumes cycle detected in steps at point "' +
-      (entries[0] && entries[0].step ? entries[0].step.point : '?') +
+      'produces/consumes cycle detected in ' + hookKind + ' at point "' +
+      (entries[0] && entries[0][hookKey] ? entries[0][hookKey].point : '?') +
       '" among capabilities [' + sortedIds + ']: ' +
       'a cycle in hook produces/consumes prevents deterministic ordering',
     );
   }
   return result;
+}
+
+/**
+ * Topologically sort steps at a given point by produces/consumes.
+ * Capability-id tiebreak for determinism.
+ *
+ * @param {{ capId: string, step: object }[]} entries
+ * @returns {{ capId: string, step: object }[]}
+ */
+function topoSortSteps(entries) {
+  return topoSortHookEntries(entries, 'step', 'steps');
+}
+
+function topoSortContributions(entries) {
+  return topoSortHookEntries(entries, 'contrib', 'contributions');
 }
 
 // ─── ADR-857 Phase 4a: Derived views ─────────────────────────────────────────
@@ -1525,6 +1948,124 @@ function runConsistencyGate(capabilityClusters, profileMembership, capMap) {
   return warnings;
 }
 
+// ─── ADR-857 phase 5e: configFormat ↔ installSurface parity gate ─────────────
+
+// Map: installSurface → expected configFormat
+// Derived from the pairing of capability.json descriptors (installSurface)
+// and capability.json descriptors (configFormat). DEFECT.GENERATIVE-FIX: this map
+// is the single parity contract between the two generated surfaces.
+// NOTE: both values come from the descriptor bodies in capMap — no dependency on
+// runtime-config-adapter-registry.cjs, which now requires capability-registry.cjs
+// (the file this gen-script produces), and thus must not be required here.
+const INSTALL_SURFACE_TO_CONFIG_FORMAT = new Map([
+  ['settings-json',        'settings-json'],
+  ['codex-toml',           'toml'],
+  ['copilot-instructions', 'markdown'],
+  ['cline-rules',          'markdown-dir'],
+  ['cursor-hooks-json',    'none'],
+  ['profile-marker-only',  'none'],
+]);
+
+/**
+ * ADR-857 phase 5e: configFormat ↔ installSurface parity gate.
+ *
+ * For each runtime capability that has an installSurface in its descriptor,
+ * assert that its configFormat matches the expected value derived from its
+ * installSurface.  Both values are read directly from the capMap descriptor
+ * bodies — no dependency on runtime-config-adapter-registry.cjs.
+ *
+ * HARD gate — throws on mismatch (DEFECT.GENERATIVE-FIX: this invariant is
+ * derived from two parallel generated surfaces and must fail loudly).
+ *
+ * @param {Map<string, object>} capMap  Fully-validated capability map.
+ * @returns {void}  Throws on mismatch; returns normally on success.
+ */
+function runConfigFormatParityGate(capMap) {
+  // Read installSurface directly from the descriptor bodies already loaded into
+  // capMap — eliminates the require cycle introduced when adapter-registry was
+  // changed to require capability-registry.cjs (ADR-857 phase 5g drive 2).
+  for (const [capId, cap] of capMap) {
+    if (cap.role !== 'runtime') continue;
+
+    const r = cap.runtime;
+    if (!r || typeof r.configFormat !== 'string') continue; // already validated above
+
+    // Only check runtimes that have an installSurface (i.e. are config-adapter runtimes)
+    if (typeof r.installSurface !== 'string') continue; // grok etc. excluded — no installSurface
+
+    const installSurface = r.installSurface;
+    const expectedConfigFormat = INSTALL_SURFACE_TO_CONFIG_FORMAT.get(installSurface);
+
+    if (expectedConfigFormat === undefined) {
+      // Unknown installSurface — the mapping needs to be updated
+      throw new Error(
+        'configFormat parity gate: runtime "' + capId + '" has installSurface "' + installSurface +
+        '" which is not in the INSTALL_SURFACE_TO_CONFIG_FORMAT mapping — ' +
+        'update the mapping in scripts/gen-capability-registry.cjs',
+      );
+    }
+
+    if (r.configFormat !== expectedConfigFormat) {
+      throw new Error(
+        'configFormat parity gate FAILED for runtime "' + capId + '":\n' +
+        '  installSurface:       ' + installSurface + '\n' +
+        '  expected configFormat: ' + expectedConfigFormat + '\n' +
+        '  actual configFormat:   ' + r.configFormat + '\n' +
+        'The capability.json configFormat must match the value derived from installSurface ' +
+        '(src: scripts/gen-capability-registry.cjs INSTALL_SURFACE_TO_CONFIG_FORMAT)',
+      );
+    }
+  }
+}
+
+// ─── Gen-time wired guard ─────────────────────────────────────────────────────
+
+/**
+ * Validate that every hook point declared by a capability has a corresponding
+ * `loop render-hooks <point>` call site in one of the host-loop workflow files.
+ *
+ * Only valid loop points (in VALID_LOOP_POINTS) are checked here. Invalid points
+ * are already caught by validateStep/validateContribution/validateGate — do not
+ * double-report.
+ *
+ * @param {object}   cap       Validated capability object.
+ * @param {Set<string>} wiredSet  Set of points that have call sites in host workflows.
+ * @returns {string[]}          Array of error strings; empty means all points are wired.
+ */
+function validateHooksWired(cap, wiredSet) {
+  const errors = [];
+  const capId = cap.id || '(unknown)';
+
+  function checkPoint(point, groupName, idx) {
+    // Only flag valid points that are unwired — invalid points are schema-validator's job.
+    if (!VALID_LOOP_POINTS.has(point)) return;
+    if (!wiredSet.has(point)) {
+      errors.push(
+        'capability "' + capId + '" ' + groupName + '[' + idx + '].point "' + point +
+        '" is declared but not wired in any host-loop workflow ' +
+        '(no `loop render-hooks ' + point + '` call site). ' +
+        'Wire the call site in the host workflow ' +
+        '(see scripts/gen-loop-host-contract.cjs STEP_WORKFLOWS) or remove the hook.',
+      );
+    }
+  }
+
+  for (let i = 0; i < (cap.steps || []).length; i++) {
+    const hook = cap.steps[i];
+    if (hook.point !== undefined) checkPoint(hook.point, 'steps', i);
+  }
+  for (let i = 0; i < (cap.contributions || []).length; i++) {
+    const hook = cap.contributions[i];
+    if (hook.point !== undefined) checkPoint(hook.point, 'contributions', i);
+  }
+  for (let i = 0; i < (cap.gates || []).length; i++) {
+    const hook = cap.gates[i];
+    if (hook.point !== undefined) checkPoint(hook.point, 'gates', i);
+  }
+
+  return errors;
+}
+
 // ─── Registry builder ─────────────────────────────────────────────────────────
 
 /**
@@ -1545,6 +2086,10 @@ function loadAndValidate(centralKeys, capabilitiesDir) {
   if (!fs.existsSync(resolvedCapDir)) {
     return { capMap, errors };
   }
+
+  // Compute wired points ONCE before iterating capabilities so the filesystem
+  // scan is not repeated per-capability. ROOT is the repo root (defined at top of file).
+  const wiredSet = getWiredLoopPoints(ROOT);
 
   const folderEntries = fs.readdirSync(resolvedCapDir, { withFileTypes: true })
     .filter((e) => e.isDirectory())
@@ -1574,6 +2119,19 @@ function loadAndValidate(centralKeys, capabilitiesDir) {
       for (const e of contractErrors) errors.push(folderId + '/capability.json: ' + e);
       // Fix #6: do NOT add contract-invalid caps to capMap — validateCrossCapability should
       // only see fully-valid capabilities so its invariants are meaningful.
+      continue;
+    }
+
+    // Gen-time wired guard: reject hooks that declare a valid point with no call site.
+    const wiredErrors = validateHooksWired(cap, wiredSet);
+    if (wiredErrors.length > 0) {
+      for (const e of wiredErrors) errors.push(folderId + '/capability.json: ' + e);
+      continue;
+    }
+
+    const fragmentErrors = materializeHookFragments(cap, path.dirname(capPath));
+    if (fragmentErrors.length > 0) {
+      for (const e of fragmentErrors) errors.push(folderId + '/capability.json: ' + e);
       continue;
     }
 
@@ -1701,14 +2259,9 @@ function buildRegistry(capMap) {
       ...e.step,
     }));
 
-    // Contributions: group by into, then capability-id order within group
-    const contribs = pointContribs.get(point);
-    contribs.sort((a, b) => {
-      const intoCompare = a.contrib.into.localeCompare(b.contrib.into);
-      if (intoCompare !== 0) return intoCompare;
-      return a.capId.localeCompare(b.capId);
-    });
-    byLoopPoint[point].contributions = contribs.map((e) => ({
+    // Contributions: topological sort by produces/consumes, cap-id tiebreak
+    const sortedContribs = topoSortContributions(pointContribs.get(point));
+    byLoopPoint[point].contributions = sortedContribs.map((e) => ({
       capId: e.capId,
       ...e.contrib,
     }));
@@ -1747,6 +2300,10 @@ function buildRegistry(capMap) {
   // Warnings are returned in the registry object so callers can emit them to stderr
   // without affecting the serialized file content (determinism gate stays clean).
   const reconciliationWarnings = runConsistencyGate(capabilityClusters, profileMembership, capMap);
+
+  // ADR-857 phase 5e: configFormat ↔ installSurface parity gate.
+  // HARD gate — throws on mismatch; SOFT skip if adapter module not loadable.
+  runConfigFormatParityGate(capMap);
 
   return {
     version: SCHEMA_VERSION,
@@ -2043,12 +2600,14 @@ module.exports = {
   validateConsumesGlobal,
   validateCrossCapability,
   classifyCrossErrors,
+  loadCentralConfigKeys,
   loadAndValidate,
   buildRegistry,
   serializeRegistry,
   computeRequiresClosure,
   topoSortSteps,
   normalizeLineEndings,
+  stripGeneratedComment,
   validateConfigSliceEntry,
   VALID_CONFIG_SLICE_TYPES,
   LOOP_HOST_CONTRACT,
@@ -2057,12 +2616,14 @@ module.exports = {
   POINT_TO_CONTRACT,
   HOST_ARTIFACT_EARLIEST_POINT_IDX,
   SCHEMA_VERSION,
+  validateHooksWired,
   // ADR-857 phase 4a: derived views + gates
   deriveCapabilityClusters,
   deriveProfileMembership,
   runConsistencyGate,
   // ADR-959: command entry validation
   validateCommandEntry,
+  validateRuntimeCompat,
   // ADR-1016 phase 5a: runtime body validators + closed-vocab sets
   validateConfigHome,
   validateArtifactLayout,
@@ -2074,6 +2635,17 @@ module.exports = {
   VALID_SANDBOX_TIERS,
   VALID_ARTIFACT_KIND_NAMES,
   VALID_ARTIFACT_NESTINGS,
+  // ADR-857 phase 5e: closed ConverterName enum
+  VALID_CONVERTER_NAMES,
+  // ADR-857 phase 5e: configFormat ↔ installSurface parity gate
+  runConfigFormatParityGate,
+  INSTALL_SURFACE_TO_CONFIG_FORMAT,
+  // ADR-857 phase 5f: cross-field consistency gates
+  INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES,
+  VALID_INSTALL_SURFACES,
+  VALID_EXTENDED_HOOK_EVENTS,
+  VALID_PERMISSION_WRITERS,
+  validateRuntimeBody,
   // FIX 5 (lazy): PROFILE_RANK and CLUSTERS are loaded on first access via getters
   // so importing the generator on a fresh/unbuilt worktree doesn't fail at module load.
   get PROFILE_RANK() { return getInstallProfiles().PROFILE_RANK; },

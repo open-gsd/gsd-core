@@ -641,16 +641,15 @@ describe('FIX 6c: N-level nested write and prototype-pollution via dotted keys',
   });
 });
 
-// ─── 8. Real registry — all UI keys are central (no-op guarantee) ────────────
+// ─── 8. Real registry — capability-owned keys are live ───────────────────────
 
-describe('real registry: all UI keys are central → no-op channel', () => {
-  test('with real capability-registry, all configSchema keys are skipped (pending-migration)', () => {
+describe('real registry: capability config keys are federated', () => {
+  test('with real capability-registry, configSchema keys are accepted through the federated channel', () => {
     const capRegistry = require('../gsd-core/bin/lib/capability-registry.cjs');
     const configSchemaFromRegistry = capRegistry.configSchema;
 
-    // Import the real isValidConfigKey
     const configSchemaModule = require('../gsd-core/bin/lib/config-schema.cjs');
-    const { isValidConfigKey } = configSchemaModule;
+    const { isCentralConfigKey } = configSchemaModule;
 
     if (!configSchemaFromRegistry || Object.keys(configSchemaFromRegistry).length === 0) {
       // Registry has no configSchema keys — no-op by definition
@@ -659,22 +658,17 @@ describe('real registry: all UI keys are central → no-op channel', () => {
 
     const result = mergeFederatedConfig({
       configSchema: configSchemaFromRegistry,
-      isCentralKey: isValidConfigKey,
+      isCentralKey: isCentralConfigKey,
       userConfig: {},
     });
 
-    // Every key should be skipped (pending-migration) because UI keys are still in central schema
-    assert.strictEqual(Object.keys(result.values).length, 0, 'values must be empty — all keys are central (pending-migration)');
-    assert.deepEqual(result.validKeys, [], 'validKeys must be empty');
-    assert.ok(result.warnings.length > 0, 'Should have pending-migration warnings');
+    assert.ok(Object.keys(result.values).length > 0, 'values must include capability-owned defaults');
+    assert.ok(result.validKeys.includes('workflow.ui_phase'), 'workflow.ui_phase must flow through federated config');
+    assert.strictEqual(result.values['workflow.ui_phase'], true);
 
-    // Confirm each UI key specifically
     const uiKeys = ['workflow.ui_phase', 'workflow.ui_review', 'workflow.ui_safety_gate'];
     for (const key of uiKeys) {
-      assert.ok(
-        result.warnings.some((w) => w.includes(key)),
-        'Should have a warning for ' + key + ', got: ' + JSON.stringify(result.warnings),
-      );
+      assert.ok(result.validKeys.includes(key), 'Expected ' + key + ' in validKeys');
     }
   });
 });

@@ -387,3 +387,121 @@ describe('review fix F4 — adversarial test gaps', () => {
       'wave assignment must resolve correctly from planData for bare-bold variant');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Bug #1103 — leading newline dropped in replace, fusing adjacent lines
+//
+// On the SUCCESSFUL mutation path, the block matcher anchors with `(?:^|\n)`.
+// On a mid-string match (a `**Plans:** N plans` bold summary line directly above
+// a bare `Plans:` block) `plansBlockMatch[0]` begins with the consumed `\n`. The
+// replacement did not re-emit it, fusing the summary line onto the header →
+// `**Plans:** 3 plansPlans:`. Distinct from #3691's silent-no-op detection bugs;
+// #3691's Bug 1 fix is what let this two-line layout be matched and exposed it.
+// ---------------------------------------------------------------------------
+
+describe('bug #1103 — annotate-dependencies preserves newline before Plans: header', () => {
+  let tmpDir;
+  afterEach(() => cleanup(tmpDir));
+
+  test('bold **Plans:** summary line followed by bare Plans: header are not fused', (_t) => {
+    const roadmap = [
+      '# Roadmap',
+      '',
+      '### Phase 1: Foundation',
+      '',
+      '**Goal:** Set up project',
+      '',
+      '**Plans:** 3 plans',
+      'Plans:',
+      '- [ ] 01-01-PLAN.md — Task A',
+      '- [ ] 01-02-PLAN.md — Task B',
+      '- [ ] 01-03-PLAN.md — Task C',
+      '',
+    ].join('\n');
+
+    tmpDir = makePlanProject({
+      '.planning/ROADMAP.md': roadmap,
+      '.planning/phases/01-foundation/01-01-PLAN.md': makePlan({ phase: '1', plan: '01-01', wave: 1 }),
+      '.planning/phases/01-foundation/01-02-PLAN.md': makePlan({ phase: '1', plan: '01-02', wave: 1 }),
+      '.planning/phases/01-foundation/01-03-PLAN.md': makePlan({ phase: '1', plan: '01-03', wave: 2, dependsOn: ['01-01'] }),
+    });
+
+    const result = runGsdTools('roadmap annotate-dependencies 1', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.updated, true, 'annotation must succeed and write back');
+
+    const written = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+
+    // Core assertion: the malformed fusion string must NOT appear.
+    assert.ok(
+      !written.includes('plansPlans:'),
+      `ROADMAP must not contain the fused string "plansPlans:"; got:\n${written}`
+    );
+    // The bold summary line must keep its line boundary before Plans:.
+    assert.ok(
+      written.includes('**Plans:** 3 plans\nPlans:'),
+      `**Plans:** 3 plans must be followed by a newline before Plans:; got:\n${written}`
+    );
+    assert.ok(written.includes('Wave'), 'wave annotation must appear in ROADMAP.md');
+  });
+
+  test('inline Plans: header (no bold summary prefix) still annotates after fix', (_t) => {
+    const roadmap = [
+      '# Roadmap',
+      '',
+      '### Phase 1: Foundation',
+      '',
+      'Plans: 2 plans',
+      '- [ ] 01-01-PLAN.md — Task A',
+      '- [ ] 01-02-PLAN.md — Task B',
+      '',
+    ].join('\n');
+
+    tmpDir = makePlanProject({
+      '.planning/ROADMAP.md': roadmap,
+      '.planning/phases/01-foundation/01-01-PLAN.md': makePlan({ phase: '1', plan: '01-01', wave: 1 }),
+      '.planning/phases/01-foundation/01-02-PLAN.md': makePlan({ phase: '1', plan: '01-02', wave: 2, dependsOn: ['01-01'] }),
+    });
+
+    const result = runGsdTools('roadmap annotate-dependencies 1', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.updated, true, 'inline Plans: header must still be annotated after fix');
+  });
+
+  test('mid-string Plans: header keeps exact heading→header spacing (no extra newline)', (_t) => {
+    // `phaseSection` always begins with the `### Phase` heading, so the `Plans:`
+    // match is always mid-string and `(?:^|\n)` matches a `\n` (the start-of-string
+    // `^` branch is unreachable through the handler). This guards the inverse of the
+    // bug: the re-emitted newline must restore EXACTLY the one `\n` the regex
+    // consumed — not a doubled blank line and not a fusion.
+    const roadmap = [
+      '### Phase 1: Foundation',
+      '',
+      'Plans:',
+      '- [ ] 01-01-PLAN.md — Task A',
+      '- [ ] 01-02-PLAN.md — Task B',
+      '',
+    ].join('\n');
+
+    tmpDir = makePlanProject({
+      '.planning/ROADMAP.md': roadmap,
+      '.planning/phases/01-foundation/01-01-PLAN.md': makePlan({ phase: '1', plan: '01-01', wave: 1 }),
+      '.planning/phases/01-foundation/01-02-PLAN.md': makePlan({ phase: '1', plan: '01-02', wave: 2, dependsOn: ['01-01'] }),
+    });
+
+    const result = runGsdTools('roadmap annotate-dependencies 1', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.updated, true, 'Plans: must still be detected and annotated');
+
+    const written = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(
+      written.includes('### Phase 1: Foundation\n\nPlans:'),
+      `heading→Plans spacing must be preserved exactly; got:\n${written}`
+    );
+    assert.ok(!written.includes('FoundationPlans:'), 'heading must not fuse onto Plans:');
+    assert.ok(!written.includes('Foundation\n\n\nPlans:'), 'no doubled blank line before Plans:');
+  });
+});

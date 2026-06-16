@@ -1,0 +1,41 @@
+{
+  "id": "omp",
+  "role": "runtime",
+  "title": "Oh My Pi",
+  "description": "Oh My Pi native runtime for GSD commands, nested skills, agents, rules, and extensions.",
+  "tier": "core",
+  "requires": [],
+  "runtime": {
+    "configHome": {
+      "kind": "omp-agent-home",
+      "env": ["PI_CODING_AGENT_DIR"],
+      "profileEnv": ["OMP_PROFILE", "PI_PROFILE"],
+      "configRootEnv": ["PI_CONFIG_DIR"]
+    },
+    "configFormat": "none",
+    "artifactLayout": {
+      "global": [
+        { "kind": "commands", "destSubpath": "commands", "prefix": "gsd-", "recursive": false, "converter": "convertClaudeCommandToOmpCommand" },
+        { "kind": "skills", "destSubpath": "skills", "prefix": "gsd-", "nesting": "nested", "recursive": true, "converter": "convertClaudeCommandToOmpSkill" },
+        { "kind": "agents", "destSubpath": "agents", "prefix": "gsd-", "recursive": false, "converter": "convertClaudeAgentToOmpAgent" },
+        { "kind": "rules", "destSubpath": "rules", "prefix": "gsd-", "recursive": false },
+        { "kind": "extensions", "destSubpath": "extensions", "prefix": "gsd-", "recursive": true }
+      ],
+      "local": [
+        { "kind": "commands", "destSubpath": "commands", "prefix": "gsd-", "recursive": false, "converter": "convertClaudeCommandToOmpCommand" },
+        { "kind": "skills", "destSubpath": "skills", "prefix": "gsd-", "nesting": "nested", "recursive": true, "converter": "convertClaudeCommandToOmpSkill" },
+        { "kind": "agents", "destSubpath": "agents", "prefix": "gsd-", "recursive": false, "converter": "convertClaudeAgentToOmpAgent" },
+        { "kind": "rules", "destSubpath": "rules", "prefix": "gsd-", "recursive": false },
+        { "kind": "extensions", "destSubpath": "extensions", "prefix": "gsd-", "recursive": true }
+      ]
+    },
+    "commandStyle": "slash-hyphen",
+    "hooksSurface": "none",
+    "sandboxTier": "none",
+    "supportTier": 2,
+    "installSurface": "profile-marker-only",
+    "writesSharedSettings": false,
+    "permissionWriter": null,
+    "extendedHookEvents": []
+  }
+}

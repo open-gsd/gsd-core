@@ -20,8 +20,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import os from 'node:os';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import core = require('./core.cjs');
-const { output, error: coreError } = core;
+import ioMod = require('./io.cjs');
+const { output, error: coreError } = ioMod;
 import { platformWriteSync } from './shell-command-projection.cjs';
 
 // ─── Types ───────────────────────────────────────────────────────────────────

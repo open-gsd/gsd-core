@@ -132,6 +132,7 @@ Two generated artifacts, both following `gen-inventory-manifest`'s `--write`/`--
    - `requires` exist, acyclic, **tier-monotone**;
    - hooks valid against the host contract (§3);
    - config-key ownership **exclusive AND complete** — a federated key must be owned by exactly one capability *and absent from the central `config-schema`* (presence in both = collision = a mid-flight migration; finish the move);
+   - artifact-production **unique per Loop Extension Point** — no two capability steps may `produce` the same artifact at the same Loop Extension Point (ambiguous data-flow resolution per Decision #6 — rejected at gen time);
    - emits the registry (§5).
 
 **`tier` is the source of profile/cluster membership.** Install profiles (`core`/`standard`/`full`) and surface clusters are **generated** from capability `tier` + the requires-closure — collapsing ADR-857's dual/triple toggle systems. `/gsd:surface` will operate on capabilities. (This generation lands in the phase-4 install integration; ADR-894 fixes the contract.)

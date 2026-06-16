@@ -262,6 +262,10 @@ The discuss-phase captures implementation decisions in CONTEXT.md under a `<deci
                └── FAIL -> Issues logged for /gsd-verify-work
 ```
 
+### Isolated-run Recovery (fail-safe)
+
+When a worktree-isolated run is rejected — the user declines to merge it, or the run over-reached the requested scope, or the orchestrator surfaces recovery guidance for a blocked plan — GSD halts safely and offers two options: (a) re-attempt in a fresh, narrowly-scoped worktree, or (b) inspect or discard the rejected worktree without merging. GSD never defaults recovery to editing the primary checkout (`main`). Any path that edits the primary checkout requires explicit, clearly-labeled confirmation from the user first. This behavior is unconditional and applies to both `/gsd-execute-phase` (worktree executor waves) and `/gsd-quick` (quick-mode isolated runs).
+
 ---
 
 ## UI Design Contract
@@ -454,6 +458,26 @@ The review step slots in after execution and before UAT:
 - **Command Reference:** see [`docs/COMMANDS.md`](COMMANDS.md) for every stable command's flags, subcommands, and examples.
 - **Configuration Reference:** see [`docs/CONFIGURATION.md`](CONFIGURATION.md) for the full `config.json` schema, model-profile table, git branching strategies, and security settings.
 - **Discuss Mode:** see [`docs/workflow-discuss-mode.md`](workflow-discuss-mode.md) for interview vs assumptions mode.
+
+### Graphify capability gate (tri-state, v1.43+)
+
+Graphify commands (`graphify status`, `graphify build`, `graphify query`, `graphify diff`) now respect the **full tri-state capability gate**:
+
+1. **Installed** — the `gsd-graphify-*` skills are present in the active install profile.
+2. **Surfaced** — those skills appear on the current runtime surface (e.g., in `~/.claude/commands/gsd/`).
+3. **Config-enabled** — `graphify.enabled: true` is set in `.planning/config.json`.
+
+All three conditions must be true. Setting `graphify.enabled: true` alone is no longer sufficient if graphify has not been installed and surfaced. If graphify commands return `{ disabled: true }` after upgrading, verify that the install profile includes graphify skills (`gsd-tools capability state`) and re-run the installer to surface them.
+
+### Intel capability gate (tri-state, v1.44+)
+
+Intel commands (`intel status`, `intel query`, `intel diff`, `intel snapshot`, `intel validate`, `intel api-surface`) now respect the **full tri-state capability gate** (same resolver as graphify above):
+
+1. **Installed** — the intel capability is present in the active install profile (intel has no skill files, so this is vacuously true for all profiles).
+2. **Surfaced** — the intel capability is on the current runtime surface (vacuously true for all surfaces since intel registers no skill stems).
+3. **Config-enabled** — `intel.enabled: true` is set in `.planning/config.json`.
+
+For intel, conditions 1 and 2 are always satisfied (intel has no skill files). The effective gate is `intel.enabled` in config — the same behaviour as before, but now enforced through the shared `isCapabilityActive('intel', cwd)` resolver rather than a direct config read. This means intel honours the full capability-state pipeline, including any future install-profile or surface restrictions. If intel commands return `{ disabled: true }`, ensure `intel.enabled: true` is set in `.planning/config.json` and verify `gsd-tools capability state` shows intel as active.
 
 ---
 
@@ -826,7 +850,7 @@ WINDSURF_CONFIG_DIR=~/.codeium/windsurf-next npx @opengsd/gsd-core@latest --wind
 | Codex | (per Codex CLI) | `--config-dir` flag |
 | Copilot | `~/.copilot` | `COPILOT_CONFIG_DIR` (or `COPILOT_HOME`) |
 | Cursor | `~/.cursor` | `CURSOR_CONFIG_DIR` |
-| Windsurf | `~/.codeium/windsurf` | `WINDSURF_CONFIG_DIR` |
+| Windsurf / Devin Desktop | `~/.codeium/windsurf` | `WINDSURF_CONFIG_DIR` |
 | Antigravity | auto-detected | `ANTIGRAVITY_CONFIG_DIR` |
 | Augment | `~/.augment` | `AUGMENT_CONFIG_DIR` |
 | Trae | `~/.trae` | `TRAE_CONFIG_DIR` |
