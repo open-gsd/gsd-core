@@ -80,10 +80,10 @@ export interface CheckDescriptor {
 
 /**
  * The result a check-runner returns: whether the check genuinely, non-vacuously PASSED. The runner
- * reports only what it can OBSERVE (a real pass) — it does NOT determine fail-first. Whether the
- * check is a `regression-must-fail-first` proof is a CALLER-ATTESTED property of the descriptor
- * (`CheckDescriptor.failFirst`); the producer cannot independently confirm it at verify time without
- * a violation fixture (a tracked follow-up — see the module docstring).
+ * reports only what it can OBSERVE (a real clean pass) — it does NOT determine fail-first. Whether the
+ * check is a `regression-must-fail-first` proof is now MACHINE-PROVEN by the separate `proveFailFirst`
+ * seam (#1279), which runs the check against the descriptor's `violationFixture` and observes it go
+ * red — not the caller's word (`CheckDescriptor.failFirst` is a demoted, non-authoritative hint).
  */
 export interface CheckRunResult {
   passed: boolean;
@@ -310,7 +310,8 @@ export function eslintJsonHasRule(jsonText: string, rule: string): boolean {
 /**
  * The default REAL check runner (used when no `runCheck` is injected). Reports only an OBSERVED,
  * genuinely-non-vacuous pass; guarded so a missing tool / non-zero exit yields a non-passing result,
- * NEVER an uncaught throw (the no-throw contract). It does NOT determine fail-first (caller-attested).
+ * NEVER an uncaught throw (the no-throw contract). It does NOT determine fail-first — that is the
+ * separate `proveFailFirst` seam's job (machine-proven against the violation fixture, #1279).
  *   - node-test: runs `node --test` (TAP) and requires a NON-VACUOUS pass (>=1 test, >=1 pass, 0 fail
  *     AND a reported test named distinctly from the file). A bare exit 0 for an empty/zero-test file
  *     — which `node --test` counts as one passing "test" named after the file — is NOT a pass (the
