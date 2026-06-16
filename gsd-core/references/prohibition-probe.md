@@ -112,15 +112,38 @@ lifecycle is identical to the edge-probe, the verification tiers differ):
 
   At verify time these tiers are routed differently (ADR-550 D4):
   - A **test**-tier prohibition is enforced + hard-gates via the deterministic
-    `check prohibition-enforcement` sub-command (#1259, ADR-550 D5d): it locates the wired
+    `check prohibition-enforcement` sub-command (#1259 + #1279, ADR-550 D5d): it locates the wired
     mechanical check (a `node --test` negative test OR a lint/AST rule run as
-    `eslint --format json` and filtered by `ruleId`), requires the caller-attested `failFirst`
-    marker, runs it for a genuine **non-vacuous** pass, and emits the
-    `dispositionForProhibition()` verdict. A passing wired check disposes **green** (satisfiable
-    → can reach `passed`); a missing, non-attested, or genuinely-non-passing check **hard-gates**
-    (flagged, never green → `gaps_found`) in BOTH interactive and autonomous modes — never a
-    silent pass. (`failFirst` is caller-attested, not yet machine-proven against a violation
-    fixture — a tracked follow-up; see ADR-550 D5d.)
+    `eslint --format json` and filtered by `ruleId`), **machine-proves it is fail-first** against a
+    known violation, runs it for a genuine **non-vacuous** pass, and emits the
+    `dispositionForProhibition()` verdict. A passing, fail-first-proven wired check disposes **green**
+    (satisfiable → can reach `passed`); a missing, un-provable, or genuinely-non-passing check
+    **hard-gates** (flagged, never green → `gaps_found`) in BOTH interactive and autonomous modes —
+    never a silent pass.
+
+    **Machine-proven fail-first (#1279).** `failFirst` is now **machine-proven, not caller-attested**:
+    before a clean pass greens, the producer independently runs the wired check against a KNOWN
+    VIOLATION and confirms it goes RED (any other outcome — passes-on-violation, can't-prove, throws,
+    times out, no violation source — hard-gates). The violation is sourced from a descriptor field:
+    - **`violationFixture`** — an author-supplied path to a KNOWN-BAD subject. For `lint-rule`: a file
+      whose content violates `rule`; the prover lints it and requires the rule id to appear in the
+      JSON report (the rule must have teeth). For `node-test`: a subject the negative test exercises,
+      expected to drive it RED.
+    - **`GSD_PROHIB_SUBJECT`** — the node-test subject-injection convention: the producer spawns the
+      negative test with `GSD_PROHIB_SUBJECT=<violationFixture>` in the child env; the test reads that
+      env var to locate its subject-under-test and is expected to go red against the violating subject.
+    - **lint-fixture authoring gotcha** — the violating fixture must actually trigger the rule. For the
+      `local/no-source-grep` dogfood anchor specifically, use the `path.join('lib','foo.cjs')` form
+      (a standalone quoted dir token); a single string literal like `'src/x.cjs'` does NOT trigger the
+      rule, so a mis-authored fixture makes the prover report "not proven" and hard-gate a legitimately
+      wired check. (`no-source-grep` has no filename guard — any `.cjs` with the pattern fires.)
+
+    > **PROPOSED, renamable conventions (zero live consumers).** Both `GSD_PROHIB_SUBJECT` and
+    > `violationFixture` are net-new surface with **no live in-tree consumer yet** — there is no
+    > in-tree `node --test` prohibition; node-test fail-first proof is exercised only by SYNTHETIC
+    > temp fixtures in the tests, and the real dogfood remains the LINT-rule `local/no-source-grep`.
+    > They are therefore **open to maintainer adjustment (rename, or replacing the env var with an
+    > argv) at PR review with zero migration cost.** See the ADR-550 2026-06-15 addendum (#1279).
   - A **judgment**-tier prohibition routes to a never-silent / never-hard-halt soft gate
     (autonomous emits an `unverified-prohibition — human review recommended` flag).
 
