@@ -8,6 +8,7 @@
   "runtimeCompat": { "supported": ["*"], "unsupported": [] },
   "skills": ["graphify"],
   "agents": [],
+  "activationKey": "graphify.enabled",
   "config": {
     "graphify.enabled": {
       "type": "boolean",

@@ -542,6 +542,32 @@ function validateFeatureBody(cap) {
     }
   }
 
+  // activationKey: optional string naming the dotted config key that gates this capability.
+  // If present: must be a non-empty string that is declared in this capability's own config slice.
+  if (cap.activationKey !== undefined) {
+    if (typeof cap.activationKey !== 'string' || cap.activationKey.length === 0) {
+      errors.push(
+        'capability "' + (cap.id || '(unknown)') + '" activationKey must be a non-empty string (got: ' +
+        JSON.stringify(cap.activationKey) + ')',
+      );
+    } else if (cap.activationKey === '__proto__' || cap.activationKey === 'constructor' || cap.activationKey === 'prototype') {
+      // Prototype-pollution guard (inline literal, CodeQL barrier)
+      errors.push(
+        'capability "' + (cap.id || '(unknown)') + '" activationKey "' + cap.activationKey +
+        '" is a reserved JavaScript property name and cannot be used as an activationKey',
+      );
+    } else if (
+      typeof cap.config !== 'object' ||
+      cap.config === null ||
+      !Object.prototype.hasOwnProperty.call(cap.config, cap.activationKey)
+    ) {
+      errors.push(
+        'capability "' + (cap.id || '(unknown)') + '" activationKey "' + cap.activationKey +
+        '" is not declared in this capability\'s config slice — add it to the "config" object or use a key that is declared there',
+      );
+    }
+  }
+
   return errors;
 }
 
@@ -586,7 +612,7 @@ const VALID_HOOK_EVENTS = new Set(['claude', 'gemini', 'opencode-subset']);
 const VALID_SANDBOX_TIERS = new Set(['none', 'codex-agent-sandbox']);
 const VALID_ARTIFACT_KIND_NAMES = new Set(['commands', 'agents', 'skills', 'kimi-agents']);
 const VALID_ARTIFACT_NESTINGS = new Set(['flat', 'nested']);
-const FEATURE_FIELDS_FORBIDDEN_ON_RUNTIME = ['skills', 'agents', 'steps', 'contributions', 'gates', 'hooks'];
+const FEATURE_FIELDS_FORBIDDEN_ON_RUNTIME = ['skills', 'agents', 'steps', 'contributions', 'gates', 'hooks', 'activationKey'];
 const VALID_INSTALL_SURFACES = new Set(['settings-json', 'codex-toml', 'copilot-instructions', 'cline-rules', 'cursor-hooks-json', 'profile-marker-only']);
 const VALID_PERMISSION_WRITERS = new Set(['opencode', 'kilo']);
 const VALID_EXTENDED_HOOK_EVENTS = new Set(['SubagentStop', 'Stop', 'PreCompact', 'FileChanged', 'BeforeAgent', 'AfterAgent', 'BeforeModel']);

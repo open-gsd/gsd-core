@@ -8,6 +8,7 @@
   "runtimeCompat": { "supported": ["*"], "unsupported": [] },
   "skills": [],
   "agents": [],
+  "activationKey": "intel.enabled",
   "config": {
     "intel.enabled": {
       "type": "boolean",
