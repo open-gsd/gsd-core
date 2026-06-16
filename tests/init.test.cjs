@@ -325,6 +325,142 @@ describe('init commands', () => {
     const output = JSON.parse(result.output);
     assert.strictEqual(output.phase_req_ids, null);
   });
+
+  test('init plan-phase resolves phase_req_ids from flat Phase Details after active milestone heading', () => {
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '11-second-active-phase'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), [
+      '---',
+      'milestone: v0.4.0',
+      'current_phase: 11',
+      '---',
+      '',
+    ].join('\n'));
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), [
+      '# Roadmap: Example',
+      '',
+      '## Milestones',
+      '',
+      '- ✅ **v0.3.0 Foundations** - Phases 1-9 (shipped 2026-01-01)',
+      '- 🚧 **v0.4.0 Feature Work** - Phases 10-11 (in progress)',
+      '',
+      '## Phases',
+      '',
+      '<details>',
+      '<summary>✅ v0.3.0 Foundations (Phases 1-9) - SHIPPED 2026-01-01</summary>',
+      '',
+      '- [x] **Phase 1: Bootstrap**',
+      '',
+      '</details>',
+      '',
+      '### 🚧 v0.4.0 Feature Work (Active)',
+      '',
+      '**Milestone Goal:** Deliver the feature set.',
+      '',
+      '- [ ] **Phase 10: First Active Phase**',
+      '- [ ] **Phase 11: Second Active Phase**',
+      '',
+      '### 📋 v0.5+ (Planned)',
+      '',
+      '## Phase Details',
+      '',
+      '### Phase 10: First Active Phase',
+      '**Goal**: Build the first piece.',
+      '**Requirements**: REQ-01',
+      '',
+      '### Phase 11: Second Active Phase',
+      '**Goal**: Build the second piece.',
+      '**Requirements**: REQ-02, REQ-03',
+      '',
+      '## Progress',
+      '',
+    ].join('\n'));
+
+    const result = runGsdTools('init plan-phase 11', tmpDir);
+    assert.ok(result.success, `init plan-phase failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_found, true);
+    assert.strictEqual(output.phase_req_ids, 'REQ-02, REQ-03');
+  });
+
+  test('init execute-phase resolves phase_req_ids from flat Phase Details after active milestone heading', () => {
+    seedPhase(tmpDir, '11-second-active-phase', {
+      '11-01-PLAN.md': '# Plan',
+    });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), [
+      '---',
+      'milestone: v0.4.0',
+      'current_phase: 11',
+      '---',
+      '',
+    ].join('\n'));
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), [
+      '# Roadmap: Example',
+      '',
+      '## Phases',
+      '',
+      '### 🚧 v0.4.0 Feature Work (Active)',
+      '',
+      '- [ ] **Phase 10: First Active Phase**',
+      '- [ ] **Phase 11: Second Active Phase**',
+      '',
+      '### 📋 v0.5+ (Planned)',
+      '',
+      '## Phase Details',
+      '',
+      '### Phase 10: First Active Phase',
+      '**Goal**: Build the first piece.',
+      '**Requirements**: REQ-01',
+      '',
+      '### Phase 11: Second Active Phase',
+      '**Goal**: Build the second piece.',
+      '**Requirements**: REQ-02, REQ-03',
+      '',
+    ].join('\n'));
+
+    const result = runGsdTools('init execute-phase 11', tmpDir);
+    assert.ok(result.success, `init execute-phase failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_found, true);
+    assert.strictEqual(output.phase_req_ids, 'REQ-02, REQ-03');
+  });
+
+  test('init phase-op resolves a details-summary milestone phase from later flat Phase Details', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), [
+      'milestone: v1.11',
+      'current_phase: 86',
+      '',
+    ].join('\n'));
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), [
+      '# Roadmap',
+      '',
+      '## Phases',
+      '<details open>',
+      '<summary>🔄 v1.11 A06 (Phases 86-91) — IN PROGRESS</summary>',
+      '',
+      '- [ ] **Phase 86: Details Block Regression** — Parser should resolve this (DATA-01)',
+      '- [ ] **Phase 87: Other Work** — Later phase',
+      '</details>',
+      '',
+      '## Phase Details',
+      '',
+      '### Phase 86: Details Block Regression',
+      '**Goal**: Resolve phase details after collapsed milestone block',
+      '**Requirements**: DATA-01',
+      '',
+      '### Phase 87: Other Work',
+      '**Goal**: Not relevant',
+      '',
+    ].join('\n'));
+
+    const result = runGsdTools('init phase-op 86', tmpDir);
+    assert.ok(result.success, `init phase-op failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_found, true);
+    assert.strictEqual(output.phase_name, 'Details Block Regression');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
