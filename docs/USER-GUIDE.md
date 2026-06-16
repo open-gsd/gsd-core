@@ -262,6 +262,10 @@ The discuss-phase captures implementation decisions in CONTEXT.md under a `<deci
                └── FAIL -> Issues logged for /gsd-verify-work
 ```
 
+### Isolated-run Recovery (fail-safe)
+
+When a worktree-isolated run is rejected — the user declines to merge it, or the run over-reached the requested scope, or the orchestrator surfaces recovery guidance for a blocked plan — GSD halts safely and offers two options: (a) re-attempt in a fresh, narrowly-scoped worktree, or (b) inspect or discard the rejected worktree without merging. GSD never defaults recovery to editing the primary checkout (`main`). Any path that edits the primary checkout requires explicit, clearly-labeled confirmation from the user first. This behavior is unconditional and applies to both `/gsd-execute-phase` (worktree executor waves) and `/gsd-quick` (quick-mode isolated runs).
+
 ---
 
 ## UI Design Contract
