@@ -269,8 +269,16 @@ interface ResolveLoopHooksInput {
   config: Record<string, unknown>;
   /** Optional cwd — enables raw config.json fallback reads (FIX 1 precedence level 2). */
   cwd?: string;
-  /** Optional capability-state map; when present, disabled capabilities do not render hooks. */
-  capabilityStatesById?: Map<string, { enabled?: boolean }> | Record<string, { enabled?: boolean }>;
+  /**
+   * Optional capability-state map; when present, inactive capabilities do not render hooks.
+   * Each entry carries both `enabled` (installed+surfaced) and `active` (enabled+configActivation).
+   * The resolver gates on `active` so that the config activation key (activationKey) is
+   * honoured even when no per-hook `when` guard is present (Phase 4 tri-state alignment).
+   *
+   * `active` is REQUIRED (not optional) so the gate is fail-closed: a missing or undefined
+   * `active` field is a compile error, never silently treated as truthy.
+   */
+  capabilityStatesById?: Map<string, { enabled?: boolean; active: boolean }> | Record<string, { enabled?: boolean; active: boolean }>;
 }
 
 interface ResolveLoopHooksResult {
@@ -330,13 +338,18 @@ function resolveLoopHooks(input: ResolveLoopHooksInput): ResolveLoopHooksResult 
     return _resolveActivationValue(when, config, cwd, registry);
   }
 
-  function isCapabilityEnabled(capId: string): boolean {
+  function isCapabilityActive(capId: string): boolean {
     if (!capabilityStatesById) return true;
     const state = capabilityStatesById instanceof Map
       ? capabilityStatesById.get(capId)
       : capabilityStatesById[capId];
     if (!state) return false;
-    return state.enabled !== false;
+    // Fail-closed gate: only render the hook when active is explicitly true.
+    // A capability can be installed and surfaced (enabled=true) but config-disabled
+    // (active=false); in that case the hook must not render.
+    // Phase 4 tri-state alignment: `active` is now required (not optional), so
+    // `=== true` is the correct fail-closed check (not `!== false`).
+    return state.active === true;
   }
 
   // Helper: safe string array
@@ -401,7 +414,7 @@ function resolveLoopHooks(input: ResolveLoopHooksInput): ResolveLoopHooksResult 
   for (const hook of steps) {
     if (!hook || typeof hook !== 'object') continue;
     const capId = typeof hook['capId'] === 'string' ? hook['capId'] : '';
-    if (!isCapabilityEnabled(capId)) continue;
+    if (!isCapabilityActive(capId)) continue;
     if (!isActive(hook)) continue;
     const ref = (typeof hook['ref'] === 'object' && hook['ref'] !== null)
       ? (hook['ref'] as HookRef)
@@ -427,7 +440,7 @@ function resolveLoopHooks(input: ResolveLoopHooksInput): ResolveLoopHooksResult 
   for (const hook of contributions) {
     if (!hook || typeof hook !== 'object') continue;
     const capId = typeof hook['capId'] === 'string' ? hook['capId'] : '';
-    if (!isCapabilityEnabled(capId)) continue;
+    if (!isCapabilityActive(capId)) continue;
     if (!isActive(hook)) continue;
     const into = typeof hook['into'] === 'string' ? hook['into'] : undefined;
     const fragment = toFragment(hook['fragment']);
@@ -453,7 +466,7 @@ function resolveLoopHooks(input: ResolveLoopHooksInput): ResolveLoopHooksResult 
   for (const hook of gates) {
     if (!hook || typeof hook !== 'object') continue;
     const capId = typeof hook['capId'] === 'string' ? hook['capId'] : '';
-    if (!isCapabilityEnabled(capId)) continue;
+    if (!isCapabilityActive(capId)) continue;
     if (!isActive(hook)) continue;
     const when = typeof hook['when'] === 'string' ? hook['when'] : undefined;
     const check = hook['check'] !== undefined ? hook['check'] : undefined;
@@ -613,11 +626,11 @@ function cmdLoopRenderHooks(
     warnings?: string[];
     registry: Record<string, unknown>;
     config: Record<string, unknown>;
-    capabilities: Array<{ id: string; enabled?: boolean }>;
+    capabilities: Array<{ id: string; enabled?: boolean; active: boolean }>;
   };
   const registry = state.registry;
   const config = state.config || loadConfig(cwd);
-  const capabilityStatesById = new Map<string, { enabled?: boolean }>();
+  const capabilityStatesById = new Map<string, { enabled?: boolean; active: boolean }>();
   for (const cap of state.capabilities || []) {
     capabilityStatesById.set(cap.id, cap);
   }

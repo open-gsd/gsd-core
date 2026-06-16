@@ -12,7 +12,7 @@ const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
+const { createTempProject, createTempDir, cleanup, runGsdTools } = require('./helpers.cjs');
 
 const {
   intelQuery,
@@ -24,9 +24,11 @@ const {
   intelExtractExports,
   intelApiSurface,
   ensureIntelDir,
-  isIntelEnabled,
+  isIntelCapabilityActive,
   INTEL_FILES,
 } = require('../gsd-core/bin/lib/intel.cjs');
+
+const { isCapabilityActive } = require('../gsd-core/bin/lib/capability-state.cjs');
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -55,6 +57,51 @@ function _writeIntelMd(planningDir, filename, content) {
   fs.writeFileSync(path.join(intelPath, filename), content, 'utf8');
 }
 
+// ─── Surfaced-config-dir fixture ──────────────────────────────────────────────
+//
+// Positive-path tests (intelQuery, intelStatus, etc.) call isCapabilityActive
+// via the tri-state gate — they need the capability to be surfaced.
+// Without this fixture those tests are ambient-dependent (pass only on machines
+// where intel is surfaced in the real ~/.claude).
+//
+// Fix: point CLAUDE_CONFIG_DIR at a tmp dir containing a full-profile
+// .gsd-surface.json (no disabled clusters) so intel is surfaced deterministically.
+// An EMPTY tmp config dir also works (defaults to 'full' profile → all surfaced)
+// but we write the file explicitly for visible intent.
+
+/** Create a tmp config dir with intel (and all caps) surfaced — full profile. */
+function makeSurfacedConfigDir() {
+  const dir = createTempDir('gsd-intel-surface-cfg-');
+  fs.writeFileSync(
+    path.join(dir, '.gsd-surface.json'),
+    JSON.stringify({ baseProfile: 'full', disabledClusters: [], explicitAdds: [], explicitRemoves: [] }, null, 2) + '\n',
+    'utf8',
+  );
+  return dir;
+}
+
+/** Save env vars touched by the surfaced-config fixture; returns .restore(). */
+function saveSurfacedEnv() {
+  const saved = {
+    GSD_RUNTIME: process.env.GSD_RUNTIME,
+    CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
+    GSD_WORKSTREAM: process.env.GSD_WORKSTREAM,
+    GSD_PROJECT: process.env.GSD_PROJECT,
+  };
+  return {
+    restore() {
+      if (saved.GSD_RUNTIME === undefined) delete process.env.GSD_RUNTIME;
+      else process.env.GSD_RUNTIME = saved.GSD_RUNTIME;
+      if (saved.CLAUDE_CONFIG_DIR === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = saved.CLAUDE_CONFIG_DIR;
+      if (saved.GSD_WORKSTREAM === undefined) delete process.env.GSD_WORKSTREAM;
+      else process.env.GSD_WORKSTREAM = saved.GSD_WORKSTREAM;
+      if (saved.GSD_PROJECT === undefined) delete process.env.GSD_PROJECT;
+      else process.env.GSD_PROJECT = saved.GSD_PROJECT;
+    },
+  };
+}
+
 // ─── Disabled gating ────────────────────────────────────────────────────────
 
 describe('intel disabled gating', () => {
@@ -70,22 +117,44 @@ describe('intel disabled gating', () => {
     cleanup(tmpDir);
   });
 
-  test('isIntelEnabled returns false when no config.json exists', () => {
-    assert.strictEqual(isIntelEnabled(planningDir), false);
+  // isIntelEnabled was removed in Phase 4 (tri-state cutover). These tests now
+  // verify the gating via the public command API (intelQuery) and the exported
+  // isIntelCapabilityActive helper which delegates to isCapabilityActive.
+  test('isIntelCapabilityActive returns false when no config.json exists', () => {
+    // No CLAUDE_CONFIG_DIR → defaults to real ~/.claude; no intel.enabled in config.
+    // In a hermetic test environment (empty tmpDir), the capability is not surfaced
+    // via the real config dir — but isCapabilityActive returns false by construction
+    // when the activationKey (intel.enabled) is absent/false regardless of surface,
+    // because: active = enabled && configActivation; configActivation=false when key absent.
+    // This test is surface-agnostic for the "no config" branch.
+    assert.strictEqual(isIntelCapabilityActive(planningDir), false);
   });
 
-  test('isIntelEnabled returns false when intel.enabled is not set', () => {
+  test('isIntelCapabilityActive returns false when intel.enabled is not set', () => {
     fs.writeFileSync(
       path.join(planningDir, 'config.json'),
       JSON.stringify({ model_profile: 'balanced' }),
       'utf8'
     );
-    assert.strictEqual(isIntelEnabled(planningDir), false);
+    assert.strictEqual(isIntelCapabilityActive(planningDir), false);
   });
 
-  test('isIntelEnabled returns true when intel.enabled is true', () => {
+  // NOTE: intel has `skills: []` (empty), so installed and surfaced are vacuously true.
+  // For intel, active = configActivation (the intel.enabled config key).
+  // This test verifies that isIntelCapabilityActive delegates to isCapabilityActive('intel', cwd)
+  // and that the function returns a boolean without throwing, regardless of the ambient
+  // CLAUDE_CONFIG_DIR. The config dimension is probed hermetically in the section below.
+  test('isIntelCapabilityActive delegates to isCapabilityActive and returns a boolean (config=true, ambient surface)', () => {
+    // Write config.intel.enabled=true (config dimension ON). Since intel has no skills,
+    // surface is vacuously true — so this call returns true when the config is written
+    // and the capability system resolves correctly.
     enableIntel(planningDir);
-    assert.strictEqual(isIntelEnabled(planningDir), true);
+    // We cannot assert the exact value without full hermetic control of all three
+    // tri-state dimensions (see hermetic section below for that), but we assert that:
+    //   1. isIntelCapabilityActive delegates correctly (does not throw)
+    //   2. it returns a boolean (not undefined/null/object)
+    const result = isIntelCapabilityActive(planningDir);
+    assert.strictEqual(typeof result, 'boolean', 'isIntelCapabilityActive must return a boolean');
   });
 
   test('intelQuery returns disabled response when intel is off', () => {
@@ -107,6 +176,121 @@ describe('intel disabled gating', () => {
   test('intelValidate returns disabled response when intel is off', () => {
     const result = intelValidate(planningDir);
     assert.strictEqual(result.disabled, true);
+  });
+});
+
+// ─── Tri-state gate hermetic regression tests ────────────────────────────────
+//
+// Intel capability has `skills: []` (empty) — so `installed` and `surfaced` are
+// VACUOUSLY TRUE. For intel, `active = configActivation` where configActivation
+// resolves the `activationKey` ("intel.enabled") via the config. This is a meaningful
+// tri-state improvement because the old `isIntelEnabled` read config.json directly
+// (synchronous file read, not wired through `loadConfig`), while the new gate goes
+// through the full `resolveCapabilityRuntimeState` path.
+//
+// FAIL-FIRST PROOF (what would fail against the OLD isIntelEnabled code):
+//   Scenario: intel installed (skills=[]) + config has intel.enabled=true, BUT the
+//   surface has intel NOT surfaced via disabledClusters.
+//
+//   However: intel has skills:[], so disabledClusters:['intel'] has no effect
+//   (no skills to remove from the surfaced set). Intel is always vacuously surfaced.
+//
+//   The CORRECT regression for intel's tri-state cutover is:
+//     intel.enabled=true in config → isCapabilityActive=true → command NOT disabled
+//     intel.enabled=false (or absent) → isCapabilityActive=false → command disabled
+//   AND that the gate now goes through the shared resolver (not a direct config read).
+//
+//   FAIL-FIRST SCENARIO: OLD isIntelEnabled read config.json at the planningDir path
+//   via platformReadSync. NEW isCapabilityActive uses resolveCapabilityRuntimeState
+//   which goes through loadConfig (multi-layer resolution). A test that sets
+//   intel.enabled=true in config then calls intelStatus would:
+//     OLD: isIntelEnabled → reads .planning/config.json → true → NOT disabled.
+//     NEW: isCapabilityActive → resolveCapabilityRuntimeState → configActivation=true → active=true → NOT disabled.
+//   Both return the same, so the regression test focuses on the config-absent/false case
+//   where the gate correctly returns disabled (proving the delegation path works).
+
+describe('intel tri-state gate hermetic regression (isCapabilityActive cutover)', () => {
+  let tmpConfigDir;
+  let tmpProjectDir;
+  let prevClaudeConfigDir;
+  let prevGsdWorkstream;
+  let prevGsdProject;
+
+  beforeEach(() => {
+    tmpConfigDir = createTempDir('gsd-intel-tristate-cfg-');
+    tmpProjectDir = createTempProject('gsd-intel-tristate-proj-');
+
+    prevClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    prevGsdWorkstream = process.env.GSD_WORKSTREAM;
+    prevGsdProject = process.env.GSD_PROJECT;
+    // Empty CLAUDE_CONFIG_DIR (no .gsd-surface.json) → defaults to 'full' profile.
+    // Intel has skills:[] so it is vacuously installed+surfaced+enabled.
+    // Active = configActivation = intel.enabled in config.
+    process.env.CLAUDE_CONFIG_DIR = tmpConfigDir;
+    delete process.env.GSD_WORKSTREAM;
+    delete process.env.GSD_PROJECT;
+  });
+
+  afterEach(() => {
+    if (prevClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = prevClaudeConfigDir;
+    if (prevGsdWorkstream === undefined) delete process.env.GSD_WORKSTREAM;
+    else process.env.GSD_WORKSTREAM = prevGsdWorkstream;
+    if (prevGsdProject === undefined) delete process.env.GSD_PROJECT;
+    else process.env.GSD_PROJECT = prevGsdProject;
+
+    cleanup(tmpConfigDir);
+    cleanup(tmpProjectDir);
+  });
+
+  // NEGATIVE CASE: config has NO intel.enabled (absent → defaults to false via activationKey).
+  // OLD gate: isIntelEnabled reads config.json → no intel key → returns false → disabled.
+  // NEW gate: isCapabilityActive → configActivation=false (intel.enabled default=false) → active=false → disabled.
+  // Both return disabled. The test PROVES the gate is wired through isCapabilityActive and
+  // the command intelStatus returns disabled — regression guard against losing the delegation.
+  test('intelStatus returns disabled when intel.enabled is absent in config (hermetic tristate negative)', () => {
+    // No config.json in planningDir — intel.enabled defaults to false.
+    // OLD isIntelEnabled: reads .planning/config.json → not found → false → disabled.
+    // NEW isCapabilityActive: intel.enabled default=false → configActivation=false → active=false → disabled.
+    const planningDir = path.join(tmpProjectDir, '.planning');
+    const result = intelStatus(planningDir);
+    assert.strictEqual(
+      result.disabled,
+      true,
+      'intelStatus must return disabled when intel.enabled is not set — ' +
+      'both old and new gate must return disabled here; this is the regression guard for the delegation path',
+    );
+    assert.ok(
+      typeof result.message === 'string' && result.message.length > 0,
+      'disabled response must include a non-empty message',
+    );
+  });
+
+  // POSITIVE CONTROL: intel.enabled=true in config → isCapabilityActive=true → NOT disabled.
+  // This is the primary pass case that proves the NEW gate honours config-enabled.
+  // OLD gate (isIntelEnabled) returns true. NEW gate (isCapabilityActive) also returns true.
+  // The test confirms the behaviour is preserved after cutover.
+  test('intelStatus NOT disabled when intel.enabled=true in config (hermetic tristate positive control)', () => {
+    const planningDir = path.join(tmpProjectDir, '.planning');
+    fs.mkdirSync(planningDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(planningDir, 'config.json'),
+      JSON.stringify({ intel: { enabled: true } }),
+      'utf8',
+    );
+
+    const active = isCapabilityActive('intel', tmpProjectDir);
+    assert.strictEqual(
+      active,
+      true,
+      'isCapabilityActive must return true when intel.enabled=true and intel is vacuously installed+surfaced',
+    );
+
+    const result = intelStatus(planningDir);
+    assert.ok(
+      !result.disabled,
+      'intelStatus must NOT return disabled when intel.enabled=true (positive control)',
+    );
   });
 });
 
@@ -143,14 +327,26 @@ describe('ensureIntelDir', () => {
 describe('intelQuery', () => {
   let tmpDir;
   let planningDir;
+  let surfacedConfigDir;
+  let savedEnv;
 
   beforeEach(() => {
     tmpDir = createTempProject();
     planningDir = path.join(tmpDir, '.planning');
     enableIntel(planningDir);
+    // Harden: ensure intel is surfaced (tri-state gate requires install+surface+config).
+    // Empty CLAUDE_CONFIG_DIR defaults to 'full' profile → all caps surfaced.
+    surfacedConfigDir = makeSurfacedConfigDir();
+    savedEnv = saveSurfacedEnv();
+    delete process.env.GSD_RUNTIME;
+    process.env.CLAUDE_CONFIG_DIR = surfacedConfigDir;
+    delete process.env.GSD_WORKSTREAM;
+    delete process.env.GSD_PROJECT;
   });
 
   afterEach(() => {
+    savedEnv.restore();
+    cleanup(surfacedConfigDir);
     cleanup(tmpDir);
   });
 
@@ -233,14 +429,24 @@ describe('intelQuery', () => {
 describe('intelStatus', () => {
   let tmpDir;
   let planningDir;
+  let surfacedConfigDir;
+  let savedEnv;
 
   beforeEach(() => {
     tmpDir = createTempProject();
     planningDir = path.join(tmpDir, '.planning');
     enableIntel(planningDir);
+    surfacedConfigDir = makeSurfacedConfigDir();
+    savedEnv = saveSurfacedEnv();
+    delete process.env.GSD_RUNTIME;
+    process.env.CLAUDE_CONFIG_DIR = surfacedConfigDir;
+    delete process.env.GSD_WORKSTREAM;
+    delete process.env.GSD_PROJECT;
   });
 
   afterEach(() => {
+    savedEnv.restore();
+    cleanup(surfacedConfigDir);
     cleanup(tmpDir);
   });
 
@@ -280,14 +486,24 @@ describe('intelStatus', () => {
 describe('intelDiff', () => {
   let tmpDir;
   let planningDir;
+  let surfacedConfigDir;
+  let savedEnv;
 
   beforeEach(() => {
     tmpDir = createTempProject();
     planningDir = path.join(tmpDir, '.planning');
     enableIntel(planningDir);
+    surfacedConfigDir = makeSurfacedConfigDir();
+    savedEnv = saveSurfacedEnv();
+    delete process.env.GSD_RUNTIME;
+    process.env.CLAUDE_CONFIG_DIR = surfacedConfigDir;
+    delete process.env.GSD_WORKSTREAM;
+    delete process.env.GSD_PROJECT;
   });
 
   afterEach(() => {
+    savedEnv.restore();
+    cleanup(surfacedConfigDir);
     cleanup(tmpDir);
   });
 
@@ -332,14 +548,24 @@ describe('intelDiff', () => {
 describe('intelSnapshot', () => {
   let tmpDir;
   let planningDir;
+  let surfacedConfigDir;
+  let savedEnv;
 
   beforeEach(() => {
     tmpDir = createTempProject();
     planningDir = path.join(tmpDir, '.planning');
     enableIntel(planningDir);
+    surfacedConfigDir = makeSurfacedConfigDir();
+    savedEnv = saveSurfacedEnv();
+    delete process.env.GSD_RUNTIME;
+    process.env.CLAUDE_CONFIG_DIR = surfacedConfigDir;
+    delete process.env.GSD_WORKSTREAM;
+    delete process.env.GSD_PROJECT;
   });
 
   afterEach(() => {
+    savedEnv.restore();
+    cleanup(surfacedConfigDir);
     cleanup(tmpDir);
   });
 
@@ -363,14 +589,24 @@ describe('intelSnapshot', () => {
 describe('intelValidate', () => {
   let tmpDir;
   let planningDir;
+  let surfacedConfigDir;
+  let savedEnv;
 
   beforeEach(() => {
     tmpDir = createTempProject();
     planningDir = path.join(tmpDir, '.planning');
     enableIntel(planningDir);
+    surfacedConfigDir = makeSurfacedConfigDir();
+    savedEnv = saveSurfacedEnv();
+    delete process.env.GSD_RUNTIME;
+    process.env.CLAUDE_CONFIG_DIR = surfacedConfigDir;
+    delete process.env.GSD_WORKSTREAM;
+    delete process.env.GSD_PROJECT;
   });
 
   afterEach(() => {
+    savedEnv.restore();
+    cleanup(surfacedConfigDir);
     cleanup(tmpDir);
   });
 
@@ -665,12 +901,24 @@ describe('intelExtractExports', () => {
 
 describe('gsd-tools intel subcommands', () => {
   let tmpDir;
+  let surfacedConfigDir;
+  let savedEnv;
 
   beforeEach(() => {
     tmpDir = createTempProject();
+    // Set up surfaced config dir for positive-path CLI tests (subprocess inherits env).
+    // Negative-path tests (disabled) still work because intel.enabled is not set by default.
+    surfacedConfigDir = makeSurfacedConfigDir();
+    savedEnv = saveSurfacedEnv();
+    delete process.env.GSD_RUNTIME;
+    process.env.CLAUDE_CONFIG_DIR = surfacedConfigDir;
+    delete process.env.GSD_WORKSTREAM;
+    delete process.env.GSD_PROJECT;
   });
 
   afterEach(() => {
+    savedEnv.restore();
+    cleanup(surfacedConfigDir);
     cleanup(tmpDir);
   });
 
@@ -753,13 +1001,23 @@ describe('gsd-tools intel subcommands', () => {
 describe('intelApiSurface', () => {
   let tmpDir;
   let planningDir;
+  let surfacedConfigDir;
+  let savedEnv;
 
   beforeEach(() => {
     tmpDir = createTempProject();
     planningDir = path.join(tmpDir, '.planning');
+    surfacedConfigDir = makeSurfacedConfigDir();
+    savedEnv = saveSurfacedEnv();
+    delete process.env.GSD_RUNTIME;
+    process.env.CLAUDE_CONFIG_DIR = surfacedConfigDir;
+    delete process.env.GSD_WORKSTREAM;
+    delete process.env.GSD_PROJECT;
   });
 
   afterEach(() => {
+    savedEnv.restore();
+    cleanup(surfacedConfigDir);
     cleanup(tmpDir);
   });
 

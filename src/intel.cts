@@ -5,7 +5,8 @@
  * Intel files live in .planning/intel/ and store structured data about
  * the project's files, APIs, dependencies, architecture, and tech stack.
  *
- * All public functions gate on intel.enabled config (no-op when false).
+ * All public functions gate on isCapabilityActive('intel', cwd) — the shared
+ * tri-state resolver (installed + surfaced + intel.enabled config key).
  *
  * ADR-457 build-at-publish: the hand-written bin/lib/intel.cjs collapsed
  * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
@@ -16,6 +17,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { platformWriteSync, platformReadSync, platformEnsureDir } from './shell-command-projection.cjs';
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import capabilityStateMod = require('./capability-state.cjs');
+const { isCapabilityActive } = capabilityStateMod;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -41,29 +46,20 @@ function ensureIntelDir(planningDir: string): string {
 }
 
 /**
- * Check whether intel is enabled in the project config.
- * Reads config.json directly via fs. Returns false by default
- * (when no config, no intel key, or on error).
+ * Check whether intel is active (installed, surfaced, and config-enabled) for the project at cwd.
+ * Delegates to the shared tri-state capability resolver (isCapabilityActive) which honours the
+ * install profile, runtime surface, and activationKey (intel.enabled config gate).
+ *
+ * NOTE: planningDir is the legacy entry-point; cwd is derived as path.dirname(planningDir).
+ * Callers that have cwd directly may call isCapabilityActive('intel', cwd) themselves.
+ *
+ * INVARIANT: planningDir is always `<cwd>/.planning` (i.e. path.join(cwd, '.planning')).
+ * The intel-command-router always constructs planningDir as path.join(cwd, '.planning'),
+ * so path.dirname(planningDir) === cwd is guaranteed. If a workstream-aware planningDir
+ * were ever passed here, the dirname would be wrong — but no caller does that.
  */
-function isIntelEnabled(planningDir: string): boolean {
-  try {
-    const configPath = path.join(planningDir, 'config.json');
-    const raw = platformReadSync(configPath);
-    if (raw === null) return false;
-    const config: unknown = JSON.parse(raw);
-    if (
-      config &&
-      typeof config === 'object' &&
-      'intel' in config &&
-      config.intel &&
-      typeof config.intel === 'object' &&
-      'enabled' in config.intel &&
-      (config.intel as Record<string, unknown>).enabled === true
-    ) return true;
-    return false;
-  } catch {
-    return false;
-  }
+function isIntelCapabilityActive(planningDir: string): boolean {
+  return isCapabilityActive('intel', path.dirname(planningDir));
 }
 
 interface DisabledResponse {
@@ -188,7 +184,7 @@ interface IntelQueryResult {
  * Searches across all JSON intel files in INTEL_FILES (keys and values), including arch-decisions.json (parsed as JSON, not as text).
  */
 function intelQuery(term: string, planningDir: string): IntelQueryResult | DisabledResponse {
-  if (!isIntelEnabled(planningDir)) return disabledResponse();
+  if (!isIntelCapabilityActive(planningDir)) return disabledResponse();
 
   const matches: Array<{ source: string; entries: SearchMatch[] }> = [];
   let total = 0;
@@ -225,7 +221,7 @@ interface IntelStatusResult {
  * A file is considered stale if its updated_at is older than 24 hours.
  */
 function intelStatus(planningDir: string): IntelStatusResult | DisabledResponse {
-  if (!isIntelEnabled(planningDir)) return disabledResponse();
+  if (!isIntelCapabilityActive(planningDir)) return disabledResponse();
 
   const STALE_MS = 24 * 60 * 60 * 1000; // 24 hours
   const now = Date.now();
@@ -273,7 +269,7 @@ interface IntelDiffResult {
  * Show changes since the last full refresh by comparing file hashes.
  */
 function intelDiff(planningDir: string): IntelDiffResult | { no_baseline: true } | DisabledResponse {
-  if (!isIntelEnabled(planningDir)) return disabledResponse();
+  if (!isIntelCapabilityActive(planningDir)) return disabledResponse();
 
   const snapshotPath = intelFilePath(planningDir, '.last-refresh.json');
   const snapshot = safeReadJson(snapshotPath);
@@ -309,7 +305,7 @@ function intelDiff(planningDir: string): IntelDiffResult | { no_baseline: true }
  * The actual update is performed by the intel-updater agent (PLAN-02).
  */
 function intelUpdate(planningDir: string): { action: string; message: string } | DisabledResponse {
-  if (!isIntelEnabled(planningDir)) return disabledResponse();
+  if (!isIntelCapabilityActive(planningDir)) return disabledResponse();
 
   return {
     action: 'spawn_agent',
@@ -359,7 +355,7 @@ function saveRefreshSnapshot(planningDir: string): SaveRefreshResult {
  * Writes .last-refresh.json with accurate timestamps and hashes.
  */
 function intelSnapshot(planningDir: string): SaveRefreshResult | DisabledResponse {
-  if (!isIntelEnabled(planningDir)) return disabledResponse();
+  if (!isIntelCapabilityActive(planningDir)) return disabledResponse();
   return saveRefreshSnapshot(planningDir);
 }
 
@@ -373,7 +369,7 @@ interface IntelValidateResult {
  * Validate all intel files for correctness and freshness.
  */
 function intelValidate(planningDir: string): IntelValidateResult | DisabledResponse {
-  if (!isIntelEnabled(planningDir)) return disabledResponse();
+  if (!isIntelCapabilityActive(planningDir)) return disabledResponse();
 
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -470,7 +466,7 @@ interface IntelApiSurfaceResult {
  * mistake silence for "nothing exists".
  */
 function intelApiSurface(planningDir: string): IntelApiSurfaceResult | DisabledResponse {
-  if (!isIntelEnabled(planningDir)) return disabledResponse();
+  if (!isIntelCapabilityActive(planningDir)) return disabledResponse();
 
   const intelPath = ensureIntelDir(planningDir);
   const apiMapPath = path.join(intelPath, INTEL_FILES.apis);
@@ -535,7 +531,7 @@ interface IntelPatchMetaResult {
  * Patch _meta.updated_at in a JSON intel file to the current timestamp.
  * Reads the file, updates _meta.updated_at, increments version, writes back.
  *
- * NOTE: Does not gate on isIntelEnabled — operates on arbitrary file paths
+ * NOTE: Does not gate on isCapabilityActive — operates on arbitrary file paths
  * for use by agents patching individual files outside the intel store.
  */
 function intelPatchMeta(filePath: string): IntelPatchMetaResult {
@@ -576,7 +572,7 @@ interface IntelExtractExportsResult {
 /**
  * Extract exports from a JS/CJS file by parsing module.exports or exports.X patterns.
  *
- * NOTE: Does not gate on isIntelEnabled — operates on arbitrary source files
+ * NOTE: Does not gate on isCapabilityActive — operates on arbitrary source files
  * for use by agents building intel data from project files.
  */
 function intelExtractExports(filePath: string): IntelExtractExportsResult {
@@ -711,7 +707,7 @@ export = {
 
   // Utilities
   ensureIntelDir,
-  isIntelEnabled,
+  isIntelCapabilityActive,
 
   // Constants
   INTEL_FILES,

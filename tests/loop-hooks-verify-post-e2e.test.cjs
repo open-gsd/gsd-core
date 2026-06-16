@@ -315,11 +315,15 @@ describe('verify:post — per-key BVA: each false excludes only that single step
 // ─── 5. Surface-disable via capabilityStatesById (pure resolver) ──────────────
 
 describe('verify:post — surface-disable: capabilityStatesById filters hooks', () => {
-  test('[negative] ui disabled via capabilityStatesById→enabled:false excludes ui step; nyquist+security remain', () => {
+  // Phase 4 note: the resolver now gates on `active` (not `enabled`), so
+  // capabilityStatesById entries must carry active:false to suppress a hook.
+  // Real CapabilityStateEntry objects from resolveCapabilityRuntimeState carry both
+  // enabled and active; fixtures here mirror that shape.
+  test('[negative] ui disabled via capabilityStatesById→active:false excludes ui step; nyquist+security remain', () => {
     const capabilityStatesById = new Map([
-      ['nyquist', { enabled: true }],
-      ['security', { enabled: true }],
-      ['ui', { enabled: false }],
+      ['nyquist', { enabled: true, active: true }],
+      ['security', { enabled: true, active: true }],
+      ['ui', { enabled: false, active: false }],
     ]);
     const resolved = resolveLoopHooks({
       point: 'verify:post',
@@ -340,9 +344,9 @@ describe('verify:post — surface-disable: capabilityStatesById filters hooks', 
 
   test('[negative] security disabled via capabilityStatesById excludes security step; nyquist+ui remain', () => {
     const capabilityStatesById = new Map([
-      ['nyquist', { enabled: true }],
-      ['security', { enabled: false }],
-      ['ui', { enabled: true }],
+      ['nyquist', { enabled: true, active: true }],
+      ['security', { enabled: false, active: false }],
+      ['ui', { enabled: true, active: true }],
     ]);
     const resolved = resolveLoopHooks({
       point: 'verify:post',
@@ -363,9 +367,9 @@ describe('verify:post — surface-disable: capabilityStatesById filters hooks', 
 
   test('[empty-resolution] all three disabled via capabilityStatesById returns empty activeHooks with valid envelope', () => {
     const capabilityStatesById = new Map([
-      ['nyquist', { enabled: false }],
-      ['security', { enabled: false }],
-      ['ui', { enabled: false }],
+      ['nyquist', { enabled: false, active: false }],
+      ['security', { enabled: false, active: false }],
+      ['ui', { enabled: false, active: false }],
     ]);
     const resolved = resolveLoopHooks({
       point: 'verify:post',

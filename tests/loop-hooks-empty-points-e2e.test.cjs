@@ -237,7 +237,7 @@ describe('discuss:post — E2E empty envelope + synthetic resolver mechanics', (
     assert.strictEqual(resolvedB.activeHooks.length, 0, 'explicit config=false must override schema default=true');
   });
 
-  it('[bva] discuss:post with synthetic capability, capabilityStatesById enabled=false → hook absent even when config=true', () => {
+  it('[bva] discuss:post with synthetic capability, capabilityStatesById active=false → hook absent even when config=true', () => {
     const reg = buildSyntheticRegistry({
       targetPoint: 'discuss:post',
       when: 'workflow.testcap_on',
@@ -247,9 +247,10 @@ describe('discuss:post — E2E empty envelope + synthetic resolver mechanics', (
       point: 'discuss:post',
       registry: reg,
       config: { workflow: { testcap_on: true } },
-      capabilityStatesById: new Map([['future-cap', { enabled: false }]]),
+      // Phase 4: resolver gates on `active` (not `enabled`); pass active:false to suppress.
+      capabilityStatesById: new Map([['future-cap', { enabled: false, active: false }]]),
     });
-    assert.strictEqual(resolved.activeHooks.length, 0, 'capabilityStatesById enabled=false must suppress hook even when config=true');
+    assert.strictEqual(resolved.activeHooks.length, 0, 'capabilityStatesById active=false must suppress hook even when config=true');
   });
 
   it('[negative] discuss:post with invalid point name "discuss:past" exits non-zero and lists valid points', () => {
@@ -372,7 +373,8 @@ describe('execute:pre — real registry empty-resolution + synthetic resolver me
       point: 'execute:pre',
       registry: syntheticReg,
       config: {},
-      capabilityStatesById: new Map([['future-cap', { enabled: false }]]),
+      // Phase 4: resolver gates on `active` (not `enabled`); pass active:false to suppress.
+      capabilityStatesById: new Map([['future-cap', { enabled: false, active: false }]]),
     });
     assert.strictEqual(resolved.activeHooks.length, 0, 'capabilityStatesById disabled must filter unconditional hook');
   });

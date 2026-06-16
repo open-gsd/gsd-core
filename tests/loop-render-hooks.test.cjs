@@ -963,3 +963,78 @@ describe('--active-cap flag (loop render-hooks)', () => {
     );
   });
 });
+
+// ─── Phase 4 regression: loop-resolver gates on state.active (not state.enabled) ─────
+//
+// FAIL-FIRST PROOF (what would fail against the OLD state.enabled check):
+//   Scenario: capability has activationKey set; it is installed + surfaced (enabled=true)
+//   but the activationKey resolves to false (active=false). The capability has a hook
+//   WITHOUT a `when` guard (unconditional). With old state.enabled check:
+//     state.enabled=true → state.enabled !== false → true → hook IS rendered (BUG).
+//   With new state.active check:
+//     state.active=false → state.active === true → false → hook NOT rendered (CORRECT).
+//
+// This test uses resolveLoopHooks directly with a synthetic registry and a
+// capabilityStatesById map that models the above scenario: enabled=true, active=false.
+// It would FAIL against the OLD `state.enabled !== false` code and PASS against the
+// NEW `state.active === true` code.
+
+describe('Phase 4 regression: capabilityStatesById gates on active (not enabled) for config-disabled capability', () => {
+  test('[regression] enabled=true active=false + no `when` guard → hook NOT rendered (state.active gate)', () => {
+    // Fail-first: with OLD `state.enabled !== false`, enabled=true → hook IS rendered (BUG).
+    // With NEW `state.active === true`, active=false → hook NOT rendered (CORRECT).
+    const registry = makeRegistry({
+      point: 'plan:pre',
+      steps: [{ capId: 'test-cap', ref: { skill: 'gsd-test-skill' } }],
+      // No `when` → unconditional hook (no per-hook config gate to fall back on)
+    });
+
+    const capabilityStatesById = new Map([
+      // enabled=true (installed+surfaced), active=false (activationKey resolved to false)
+      // This models a capability like intel/graphify that is surfaced but config-disabled.
+      ['test-cap', { enabled: true, active: false }],
+    ]);
+
+    const result = resolveLoopHooks({
+      point: 'plan:pre',
+      registry,
+      config: {},  // config doesn't matter — capability already resolved active=false
+      capabilityStatesById,
+    });
+
+    assert.strictEqual(
+      result.activeHooks.length,
+      0,
+      'Hook must NOT be rendered when state.active=false, even if enabled=true and no `when` guard — ' +
+      'OLD state.enabled check would include this hook (BUG: enabled=true passes enabled!==false); ' +
+      'NEW state.active check correctly suppresses it (active=false fails active===true)',
+    );
+  });
+
+  test('[positive control] enabled=true active=true + no `when` guard → hook IS rendered', () => {
+    // Confirms the fixture is sound: same hook, same registry, but active=true → rendered.
+    // This test must PASS against BOTH old and new code (it's the unbroken branch).
+    const registry = makeRegistry({
+      point: 'plan:pre',
+      steps: [{ capId: 'test-cap', ref: { skill: 'gsd-test-skill' } }],
+    });
+
+    const capabilityStatesById = new Map([
+      ['test-cap', { enabled: true, active: true }],
+    ]);
+
+    const result = resolveLoopHooks({
+      point: 'plan:pre',
+      registry,
+      config: {},
+      capabilityStatesById,
+    });
+
+    assert.strictEqual(
+      result.activeHooks.length,
+      1,
+      'Hook MUST be rendered when state.active=true and no `when` guard (positive control)',
+    );
+    assert.strictEqual(result.activeHooks[0].capId, 'test-cap');
+  });
+});

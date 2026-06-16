@@ -100,7 +100,7 @@ function enableIntel(tmpDir) {
   const config = fs.existsSync(configPath)
     ? JSON.parse(fs.readFileSync(configPath, 'utf8'))
     : {};
-  // isIntelEnabled() requires the NESTED form { intel: { enabled: true } }.
+  // isIntelCapabilityActive() / isCapabilityActive('intel', cwd) requires the NESTED form { intel: { enabled: true } }.
   // A flat dotted key like config['intel.enabled'] = true is NOT recognised.
   config.intel = { ...(config.intel ?? {}), enabled: true };
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
