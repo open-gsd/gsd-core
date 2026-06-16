@@ -128,8 +128,6 @@ interface ResolveCapabilityStateResult {
 interface ResolveCapabilityRuntimeStateResult {
   runtimeConfigDir: string;
   warnings: string[];
-  registry: Record<string, unknown>;
-  config: Record<string, unknown>;
   capabilities: CapabilityStateEntry[];
 }
 
@@ -430,6 +428,7 @@ function _resolveManifest(commandsGsdDir: string, configDir: string): Map<string
 function resolveCapabilityRuntimeState(
   cwd: string,
   runtimeConfigDir: string | undefined | null,
+  configOverride?: Record<string, unknown>,
 ): ResolveCapabilityRuntimeStateResult {
   const warnings: string[] = [];
 
@@ -520,11 +519,18 @@ function resolveCapabilityRuntimeState(
   }
 
   // ── Load config ───────────────────────────────────────────────────────────────
+  // When the caller already holds a loadConfig snapshot (e.g. cmdLoopRenderHooks),
+  // accept it via configOverride so capability `active` and hook resolution
+  // share the SAME config object — single snapshot, no TOCTOU window.
   let config: Record<string, unknown>;
-  try {
-    config = loadConfig(cwd);
-  } catch {
-    config = {};
+  if (configOverride !== undefined) {
+    config = configOverride;
+  } else {
+    try {
+      config = loadConfig(cwd);
+    } catch {
+      config = {};
+    }
   }
 
   // ── Resolve state ────────────────────────────────────────────────────────────
@@ -540,8 +546,6 @@ function resolveCapabilityRuntimeState(
   return {
     runtimeConfigDir: resolvedConfigDir,
     warnings,
-    registry,
-    config,
     capabilities: result.capabilities,
   };
 }

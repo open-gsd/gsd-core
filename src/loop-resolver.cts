@@ -20,16 +20,13 @@
  * registry/config arguments so they are trivially testable without I/O.
  *
  * Dependencies (leaf modules only — no circular risk):
- *   - node:fs / node:path  (raw config.json read for capability-key activation)
  *   - ./config-loader.cjs  (loadConfig)
- *   - ./planning-workspace.cjs  (planningDir — to locate config.json)
  *   - ./io.cjs             (output, error)
+ *   - ./capability-activation.cjs (resolveConfigKey, _resolveActivationValue, _getNestedConfigValue, _readRawConfigKey)
  *   - loop-host-contract.cjs (CANONICAL_POINTS via LOOP_HOST_CONTRACT)
  *   - capability-registry.cjs (byLoopPoint, consumed at call time)
+ *   - capability-state.cjs (resolveCapabilityRuntimeState — for capabilities list)
  */
-
-import fs from 'node:fs';
-import path from 'node:path';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
@@ -43,9 +40,10 @@ const { loadConfig } = configLoaderModule;
 import capabilityStateModule = require('./capability-state.cjs');
 const { resolveCapabilityRuntimeState } = capabilityStateModule;
 
+// ─── Capability-activation engine (single owner for config-key precedence) ────
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import planningWorkspaceMod = require('./planning-workspace.cjs');
-const { planningDir, planningRoot } = planningWorkspaceMod;
+import capabilityActivationModule = require('./capability-activation.cjs');
+const { _getNestedConfigValue, _readRawConfigKey, _resolveActivationValue, resolveConfigKey } = capabilityActivationModule;
 
 // ─── Canonical points (derived from LOOP_HOST_CONTRACT — authoritative 12) ───
 
@@ -95,133 +93,7 @@ function _getCanonicalPoints(_registry: Record<string, unknown>): ReadonlyArray<
   return CANONICAL_POINTS;
 }
 
-// ─── Prototype-pollution guard (inline literal, CodeQL barrier) ───────────────
-
-/**
- * Traverse a dotted config key through a nested config object.
- * E.g. "workflow.ui_phase" in { workflow: { ui_phase: true } } → { found: true, value: true }
- * Returns { found: false } if any segment is a forbidden key or not an own property.
- */
-function _getNestedConfigValue(
-  config: Record<string, unknown>,
-  dotKey: string,
-): { found: boolean; value: unknown } {
-  const segments = dotKey.split('.');
-  let current: unknown = config;
-  for (const seg of segments) {
-    // Inline literal prototype-pollution guard (CodeQL barrier)
-    if (seg === '__proto__' || seg === 'constructor' || seg === 'prototype') {
-      return { found: false, value: undefined };
-    }
-    if (typeof current !== 'object' || current === null) {
-      return { found: false, value: undefined };
-    }
-    const cur = current as Record<string, unknown>;
-    if (!Object.prototype.hasOwnProperty.call(cur, seg)) {
-      return { found: false, value: undefined };
-    }
-    current = cur[seg];
-  }
-  return { found: true, value: current };
-}
-
-// ─── Single-key activation resolver (FIX 1) ───────────────────────────────────
-
-/**
- * Warn-once set for raw config.json parse errors.
- * Avoids noisy per-call stderr from a single malformed file.
- */
-const _warnedRawConfigPaths = new Set<string>();
-
-/**
- * Read a raw config.json file and perform a guarded nested-lookup of a single
- * dotted key. Returns { found: false } if the file is missing (ENOENT) or if
- * the key is absent/forbidden. On a genuine JSON parse error: warns once to
- * stderr and returns { found: false } — never throws.
- */
-function _readRawConfigKey(
-  filePath: string,
-  dotKey: string,
-): { found: boolean; value: unknown } {
-  try {
-    const raw = fs.readFileSync(filePath, 'utf8');
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(raw) as Record<string, unknown>;
-    } catch {
-      if (!_warnedRawConfigPaths.has(filePath)) {
-        _warnedRawConfigPaths.add(filePath);
-        try {
-          process.stderr.write(
-            `gsd-tools: warning: failed to parse ${filePath} as JSON — skipping for activation resolution\n`,
-          );
-        } catch { /* stderr might be closed */ }
-      }
-      return { found: false, value: undefined };
-    }
-    return _getNestedConfigValue(parsed, dotKey);
-  } catch {
-    // ENOENT (missing file) is expected → skip silently. All other errors → also skip (defensive).
-    return { found: false, value: undefined };
-  }
-}
-
-/**
- * FIX 1: Resolve the effective value for a hook's `when` key using the
- * four-level precedence:
- *
- * 1. loadConfig result (`config` arg) — guarded nested-lookup of the dotted key.
- *    This is the post-cutover federated path (covers keys that loadConfig now exposes).
- * 2. Raw workstream `.planning/.../config.json` — guarded single-key lookup.
- *    Workstream wins over root (mirrors loadConfig inheritance).
- * 3. Raw root `.planning/config.json` — guarded single-key lookup.
- * 4. `registry.configSchema[when]?.default` — schema default.
- *    A `default: true` hook is active out-of-the-box without any config.
- * 5. Absent → inactive (return false).
- *
- * Never constructs a merged object from raw JSON keys — only reads the single
- * leaf value at the guarded dotted path.  Prototype-pollution sink is eliminated.
- */
-function _resolveActivationValue(
-  dotKey: string,
-  config: Record<string, unknown>,
-  cwd: string | undefined,
-  registry: Record<string, unknown>,
-): boolean {
-  // Level 1: loadConfig result
-  const fromConfig = _getNestedConfigValue(config, dotKey);
-  if (fromConfig.found) return Boolean(fromConfig.value);
-
-  // Level 2 + 3: raw config.json files (only when cwd is available)
-  if (cwd) {
-    // Level 2: workstream config (planningDir respects GSD_WORKSTREAM env)
-    const wsConfigPath = path.join(planningDir(cwd), 'config.json');
-    // Level 3: root config (planningRoot = cwd/.planning always)
-    const rootConfigPath = path.join(planningRoot(cwd), 'config.json');
-
-    // Workstream wins over root (mirroring loadConfig root→workstream precedence:
-    // workstream overlays root, so workstream value takes precedence).
-    const fromWs = _readRawConfigKey(wsConfigPath, dotKey);
-    if (fromWs.found) return Boolean(fromWs.value);
-
-    // Only read root if it differs from the workstream path (avoids double-read
-    // when no workstream is active and both paths resolve to the same file).
-    if (wsConfigPath !== rootConfigPath) {
-      const fromRoot = _readRawConfigKey(rootConfigPath, dotKey);
-      if (fromRoot.found) return Boolean(fromRoot.value);
-    }
-  }
-
-  // Level 4: registry configSchema default
-  const schemaEntry = (registry['configSchema'] as Record<string, unknown> | undefined)?.[dotKey];
-  if (schemaEntry && typeof schemaEntry === 'object' && schemaEntry !== null) {
-    const def = (schemaEntry as Record<string, unknown>)['default'];
-    if (def !== undefined) return Boolean(def);
-  }
-
-  // Level 5: absent → inactive
-  return false;
-}
+// ─── (Precedence engine imported from capability-activation.cjs above) ────────
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -383,27 +255,8 @@ function resolveLoopHooks(input: ResolveLoopHooksInput): ResolveLoopHooksResult 
       // Prototype-pollution guard (inline literal, CodeQL barrier)
       if (alias === '__proto__' || alias === 'constructor' || alias === 'prototype') continue;
       if (typeof dotKey !== 'string') continue;
-      // Level 1: loadConfig result
-      const fromConfig = _getNestedConfigValue(config, dotKey);
-      if (fromConfig.found) { resolved[alias] = fromConfig.value; continue; }
-      // Level 2 + 3: raw config.json files
-      if (cwd) {
-        const wsConfigPath = path.join(planningDir(cwd), 'config.json');
-        const rootConfigPath = path.join(planningRoot(cwd), 'config.json');
-        const fromWs = _readRawConfigKey(wsConfigPath, dotKey);
-        if (fromWs.found) { resolved[alias] = fromWs.value; continue; }
-        if (wsConfigPath !== rootConfigPath) {
-          const fromRoot = _readRawConfigKey(rootConfigPath, dotKey);
-          if (fromRoot.found) { resolved[alias] = fromRoot.value; continue; }
-        }
-      }
-      // Level 4: registry configSchema default
-      const schemaEntry = (registry['configSchema'] as Record<string, unknown> | undefined)?.[dotKey];
-      if (schemaEntry && typeof schemaEntry === 'object' && schemaEntry !== null) {
-        const def = (schemaEntry as Record<string, unknown>)['default'];
-        if (def !== undefined) { resolved[alias] = def; continue; }
-      }
-      // Level 5: absent → undefined (omit from resolved map)
+      const r = resolveConfigKey(dotKey, { config, cwd, registry });
+      if (r.found) resolved[alias] = r.value;
     }
     return Object.keys(resolved).length > 0 ? resolved : undefined;
   }
@@ -622,14 +475,26 @@ function cmdLoopRenderHooks(
   const runtimeConfigDir = typeof options['configDir'] === 'string'
     ? options['configDir']
     : undefined;
-  const state = resolveCapabilityRuntimeState(cwd, runtimeConfigDir) as {
+  // Load the config snapshot ONCE and share it with both the capability-state
+  // resolver (via configOverride) and loop-hook resolution, so federated keys
+  // present in loadConfig resolve identically for `active` and for hook when/
+  // configValues — eliminating the previous double loadConfig() call. Note: keys
+  // absent from loadConfig still fall through to raw .planning/config.json reads
+  // (precedence levels 2-3) in each pass; that residual re-read window is
+  // pre-existing (unchanged by this consolidation), not introduced here.
+  let config: Record<string, unknown>;
+  try {
+    config = loadConfig(cwd);
+  } catch {
+    config = {};
+  }
+  const state = resolveCapabilityRuntimeState(cwd, runtimeConfigDir, config) as {
     warnings?: string[];
-    registry: Record<string, unknown>;
-    config: Record<string, unknown>;
     capabilities: Array<{ id: string; enabled?: boolean; active: boolean }>;
   };
-  const registry = state.registry;
-  const config = state.config || loadConfig(cwd);
+  // Registry is the static generated module — same object capability-state uses internally.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const registry = require('./capability-registry.cjs') as Record<string, unknown>;
   const capabilityStatesById = new Map<string, { enabled?: boolean; active: boolean }>();
   for (const cap of state.capabilities || []) {
     capabilityStatesById.set(cap.id, cap);
@@ -677,6 +542,9 @@ export = {
   _getNestedConfigValue,
   _resolveActivationValue,
   _readRawConfigKey,
+  // Re-exported for identity parity guard (FIX 2: resolveConfigValues in this module
+  // calls resolveConfigKey; exporting it here makes the single-owner contract testable).
+  resolveConfigKey,
   CANONICAL_POINTS_FALLBACK,
   CANONICAL_POINTS,
 };

@@ -1,9 +1,17 @@
 name: Auto Back-Merge main → next
 
 # Keep `next` at-or-ahead of `main` automatically. Every push to `main`
-# (release finalize, hotfix finalize, occasional emergency fix) opens — or
-# updates — a PR titled "chore: back-merge main → next". CI gates the merge;
-# auto-merge is enabled so it lands as soon as it's green.
+# (release finalize, hotfix finalize, occasional emergency fix) opens a PR
+# titled "chore: back-merge main → next" and admin-merges it when it is safe.
+#
+# Resolution model (see #1336 / #1339): `next` is the integration branch and
+# already contains every CODE change on `main` (fixes flow next -> release ->
+# main). So the back-merge keeps `next`'s tree wholesale (`-s ours`, which never
+# conflicts) and overlays only `main`'s release-engineering: the rendered
+# CHANGELOG.md and the `.changeset` fragments `main` consumed at release. A
+# safety net detects the rare case of a change that exists ONLY on `main` (an
+# emergency fix pushed straight to `main`) and routes that PR to human review
+# instead of auto-merging.
 #
 # Phase 1 of the next-branch migration: this workflow runs but is a no-op
 # (`if: false` on the job) until `next` exists in the repo. Once Phase 2
@@ -59,51 +67,57 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Create or update back-merge branch
+      - name: Create back-merge branch (reconcile main → next)
         if: steps.check.outputs.next_exists == 'true'
         id: branch
-        env:
-          GH_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          SHORT_SHA=$(git rev-parse --short HEAD)
+          git fetch --no-tags origin main next
+          SHORT_SHA=$(git rev-parse --short origin/main)
           BR="chore/backmerge-main-to-next-${SHORT_SHA}"
           echo "branch=$BR" >> "$GITHUB_OUTPUT"
 
-          # If there's already an open back-merge PR, reuse its branch by
-          # updating it with the new main HEAD via a merge. Otherwise create
-          # a fresh branch.
-          EXISTING_PR=$(gh pr list --base next --label automation --label backmerge --state open \
-            --json number,headRefName --jq '.[0]' 2>/dev/null || echo "")
-          EXISTING_BR=$(echo "$EXISTING_PR" | jq -r '.headRefName // empty')
+          git checkout -B "$BR" origin/next
+          BASE=$(git merge-base HEAD origin/main)
 
-          if [ -n "$EXISTING_BR" ]; then
-            case "$EXISTING_BR" in
-              chore/backmerge-main-to-next-*) ;;
-              *) echo "::error::refusing to operate on non-backmerge branch: $EXISTING_BR"; exit 1 ;;
+          # Keep next's tree wholesale and record main as a second parent so main
+          # becomes an ancestor of next (stops the back-merge backlog recurring).
+          # -s ours never conflicts; next already has main's code.
+          git merge -s ours --no-commit --no-ff origin/main
+
+          # Overlay main's rendered CHANGELOG.md (the release promotions).
+          if git cat-file -e "origin/main:CHANGELOG.md" 2>/dev/null; then
+            git checkout origin/main -- CHANGELOG.md
+            git add CHANGELOG.md
+          fi
+
+          # Replay main's .changeset changes vs the merge-base: prune fragments
+          # main consumed at release (D); bring any main-authored fragment (A/M).
+          while IFS="$(printf '\t')" read -r status file; do
+            [ -n "${file:-}" ] || continue
+            case "$status" in
+              D)   git rm --quiet --ignore-unmatch -- "$file" ;;
+              A|M) git checkout origin/main -- "$file" && git add -- "$file" ;;
             esac
-            echo "Updating existing back-merge branch: $EXISTING_BR"
-            git fetch origin "$EXISTING_BR":"$EXISTING_BR" || true
-            git checkout "$EXISTING_BR"
-            # Fast-forward to current main if possible; otherwise merge.
-            git merge --no-edit origin/main || {
-              echo "::warning::Merge conflict back-merging main into existing back-merge branch. Human resolution required."
-              exit 1
-            }
-            git push --force origin "$EXISTING_BR"
-            echo "branch=$EXISTING_BR" >> "$GITHUB_OUTPUT"
-            echo "reused=true" >> "$GITHUB_OUTPUT"
+          done < <(git diff --name-status "$BASE" origin/main -- .changeset)
+
+          # Safety net: -s ours silently drops anything existing ONLY on main.
+          # List code files (excluding CHANGELOG/.changeset) that main changed
+          # since the merge-base but next did not — a rare straight-to-main fix.
+          MAIN_CODE=$(git diff --name-only "$BASE" origin/main -- . ':(exclude)CHANGELOG.md' ':(exclude).changeset' | sort)
+          NEXT_CODE=$(git diff --name-only "$BASE" origin/next -- . ':(exclude)CHANGELOG.md' ':(exclude).changeset' | sort)
+          DROPPED=$(comm -23 <(printf '%s\n' "$MAIN_CODE") <(printf '%s\n' "$NEXT_CODE") | grep -v '^$' || true)
+
+          git commit -m "chore: back-merge main into next (${SHORT_SHA})"
+          git push --force origin "$BR"
+
+          if [ -n "$DROPPED" ]; then
+            echo "needs_review=true" >> "$GITHUB_OUTPUT"
+            echo "dropped_oneline=$(printf '%s' "$DROPPED" | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+            echo "::warning::Back-merge auto-resolved in favor of next and dropped main-only change(s) in: $(printf '%s' "$DROPPED" | tr '\n' ' '). PR left open for manual review."
           else
-            git fetch origin next:next
-            git checkout -b "$BR" next
-            # Bring main's commits onto next via a merge commit (preserves tag history).
-            if ! git merge --no-edit -m "chore: back-merge main into next" origin/main; then
-              echo "::error::Cannot auto-back-merge main into next: merge conflict. A maintainer must back-merge manually (git checkout next; git merge origin/main; resolve; push)."
-              git merge --abort || true
-              exit 1
-            fi
-            git push --force origin "$BR"
-            echo "reused=false" >> "$GITHUB_OUTPUT"
+            echo "needs_review=false" >> "$GITHUB_OUTPUT"
+            echo "dropped_oneline=" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Sync next's version to main's released version
@@ -115,10 +129,26 @@ jobs:
             [0-9]*.[0-9]*.[0-9]*) : ;;
             *) echo "refusing to sync next: unexpected version '$VERSION' from origin/main" >&2; exit 1 ;;
           esac
-          node scripts/sync-next-version.cjs "$VERSION" --in-place
-          git add -u
-          git diff --cached --quiet || git commit -m "chore: sync next package version to ${VERSION}"
-          git push origin HEAD
+          NEXT_VERSION=$(node -pe "require('./package.json').version")
+          # Never downgrade an ahead next (e.g. next on 1.5.0-rc.N while main is
+          # 1.4.5). Only sync when main's version is strictly higher; a release
+          # (no prerelease) outranks a prerelease at the same X.Y.Z base.
+          if node -e '
+            const split = v => { const [b, pre] = String(v).split("-"); return [b.split(".").map(Number), pre]; };
+            const [a, ap] = split(process.argv[1]);
+            const [b, bp] = split(process.argv[2]);
+            let c = 0;
+            for (let i = 0; i < 3; i++) { if (a[i] !== b[i]) { c = a[i] - b[i]; break; } }
+            if (c === 0 && !!ap !== !!bp) c = ap ? -1 : 1; // release > prerelease
+            process.exit(c > 0 ? 0 : 1);
+          ' "$VERSION" "$NEXT_VERSION"; then
+            node scripts/sync-next-version.cjs "$VERSION" --in-place
+            git add -u
+            git diff --cached --quiet || git commit -m "chore: sync next package version to ${VERSION}"
+            git push origin HEAD
+          else
+            echo "next ($NEXT_VERSION) is at or ahead of main ($VERSION); leaving next version unchanged."
+          fi
 
       - name: Open or update PR
         if: steps.check.outputs.next_exists == 'true'
@@ -126,16 +156,24 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN || secrets.GITHUB_TOKEN }}
           BR: ${{ steps.branch.outputs.branch }}
+          NEEDS_REVIEW: ${{ steps.branch.outputs.needs_review }}
+          DROPPED_ONELINE: ${{ steps.branch.outputs.dropped_oneline }}
         run: |
           set -euo pipefail
-          SHORT_SHA=$(git rev-parse --short HEAD)
+          SHORT_SHA=$(git rev-parse --short origin/main)
+          REVIEW_NOTE=""
+          if [ "${NEEDS_REVIEW:-false}" = "true" ]; then
+            REVIEW_NOTE="
+          REVIEW REQUIRED: this back-merge auto-resolved in favor of next and dropped main-only change(s) in: ${DROPPED_ONELINE}. A maintainer must verify these are not emergency fixes that need re-applying to next. Do not merge until verified."
+          fi
           BODY=$(cat <<EOF
           Automated back-merge of \`main\` (\`${SHORT_SHA}\`) into \`next\`.
 
-          This PR keeps \`next\` at-or-ahead of \`main\` after a release, hotfix,
-          or emergency fix on \`main\`. CI must pass; auto-merge is enabled so
-          this should land without manual review unless CI flags a regression.
-
+          The next tree is authoritative for code (next already contains the
+          fixes from main); the CHANGELOG.md and consumed \`.changeset\`
+          fragments from main are brought over. Merge with a **merge commit**
+          (not squash) to keep main an ancestor of next.
+          ${REVIEW_NOTE}
           Generated by \`.github/workflows/auto-backmerge.yml\`.
           EOF
           )
@@ -153,13 +191,18 @@ jobs:
             exit 1
           fi
           gh pr edit "$PR" --add-label automation --add-label backmerge || true
+          if [ "${NEEDS_REVIEW:-false}" = "true" ]; then
+            gh pr edit "$PR" --add-label needs-manual-review || true
+          fi
           echo "pr=$PR" >> "$GITHUB_OUTPUT"
 
       - name: Admin-merge the back-merge PR
-        if: steps.check.outputs.next_exists == 'true'
+        # Skip auto-merge when the back-merge dropped main-only changes — a human
+        # must review those before this lands.
+        if: steps.check.outputs.next_exists == 'true' && steps.branch.outputs.needs_review != 'true'
         env:
           GH_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN || secrets.GITHUB_TOKEN }}
           PR: ${{ steps.openpr.outputs.pr }}
         run: |
-          # Squash would lose the merge-commit context; use merge commit.
+          # Merge commit (not squash) preserves main as an ancestor of next.
           gh pr merge --admin --merge "$PR"

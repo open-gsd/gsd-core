@@ -216,6 +216,33 @@ interface RoadmapPhaseResult {
   section: string;
 }
 
+function findRoadmapPhaseInContent(content: string, phaseNum: unknown): RoadmapPhaseResult | null {
+  const phasePattern = new RegExp(
+    `#{2,4}\\s*(?:\\[[^\\]]+\\]\\s*)?Phase\\s+${phaseMarkdownRegexSource(phaseNum)}:\\s*([^\\n]+)`,
+    'i'
+  );
+  const headerMatch = content.match(phasePattern);
+  if (!headerMatch) return null;
+
+  const phaseName = headerMatch[1].trim();
+  const headerIndex = headerMatch.index!;
+  const restOfContent = content.slice(headerIndex);
+  const nextHeaderMatch = restOfContent.match(/\n#{2,4}\s+(?:\[[^\]]+\]\s*)?Phase\s+[\w]/i);
+  const sectionEnd = nextHeaderMatch ? headerIndex + nextHeaderMatch.index! : content.length;
+  const section = content.slice(headerIndex, sectionEnd).trim();
+
+  const goalMatch = section.match(/\*\*Goal(?:\*\*:|\*?\*?:\*\*)\s*([^\n]+)/i);
+  const goal = goalMatch ? goalMatch[1].trim() : null;
+
+  return {
+    found: true,
+    phase_number: String(phaseNum),
+    phase_name: phaseName,
+    goal,
+    section,
+  };
+}
+
 function getRoadmapPhaseInternal(cwd: string, phaseNum: unknown): RoadmapPhaseResult | null {
   if (!phaseNum) return null;
   const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
@@ -225,31 +252,10 @@ function getRoadmapPhaseInternal(cwd: string, phaseNum: unknown): RoadmapPhaseRe
     const roadmapRaw = platformReadSync(roadmapPath);
     if (roadmapRaw === null) throw new Error('missing');
     const content = extractCurrentMilestone(roadmapRaw, cwd);
-    const phasePattern = new RegExp(
-      `#{2,4}\\s*(?:\\[[^\\]]+\\]\\s*)?Phase\\s+${phaseMarkdownRegexSource(phaseNum)}:\\s*([^\\n]+)`,
-      'i'
-    );
-    const headerMatch = content.match(phasePattern);
-    if (!headerMatch) return null;
+    const scopedResult = findRoadmapPhaseInContent(content, phaseNum);
+    if (scopedResult) return scopedResult;
 
-    const phaseName = headerMatch[1].trim();
-    const headerIndex = headerMatch.index!;
-    const restOfContent = content.slice(headerIndex);
-    const nextHeaderMatch = restOfContent.match(/\n#{2,4}\s+(?:\[[^\]]+\]\s*)?Phase\s+[\w]/i);
-    const sectionEnd = nextHeaderMatch ? headerIndex + nextHeaderMatch.index! : content.length;
-    const section = content.slice(headerIndex, sectionEnd).trim();
-
-    const goalMatch = section.match(/\*\*Goal(?:\*\*:|\*?\*?:\*\*)\s*([^\n]+)/i);
-    const goal = goalMatch ? goalMatch[1].trim() : null;
-
-    return {
-      found: true,
-      // eslint-disable-next-line @typescript-eslint/no-base-to-string
-      phase_number: String(phaseNum),
-      phase_name: phaseName,
-      goal,
-      section,
-    };
+    return findRoadmapPhaseInContent(stripShippedMilestones(roadmapRaw), phaseNum);
   } catch {
     return null;
   }
