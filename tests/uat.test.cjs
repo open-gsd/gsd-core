@@ -533,6 +533,99 @@ expected: |
     assert.ok(result.output.includes('It ends at the section boundary.'));
   });
 
+  test('resumes paused Current Test placeholder from first pending test (#1300)', () => {
+    fs.writeFileSync(uatPath, [
+      '---',
+      'status: partial',
+      'phase: 01-test-phase',
+      'started: 2026-06-15T00:00:00Z',
+      'updated: 2026-06-15T00:00:00Z',
+      '---',
+      '',
+      '## Current Test',
+      '',
+      '[testing paused — 2 items outstanding]',
+      '',
+      '## Tests',
+      '',
+      '### 1. First test',
+      'expected: something observable',
+      'result: pass',
+      '',
+      '### 2. Second test',
+      'expected: another observable thing',
+      'result: [pending]',
+      '',
+      '## Summary',
+      '',
+      'total: 2',
+      'passed: 1',
+      'issues: 0',
+      'pending: 1',
+      'skipped: 0',
+      'blocked: 0',
+      '',
+      '## Gaps',
+      '',
+      '[none yet]',
+    ].join('\n'));
+
+    const result = runGsdTools(['uat', 'render-checkpoint', '--file', '.planning/phases/01-test-phase/01-UAT.md'], tmpDir);
+    assert.strictEqual(result.success, true, `render-checkpoint failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.test_number, 2);
+    assert.strictEqual(output.test_name, 'Second test');
+    assert.strictEqual(output.file_path, '.planning/phases/01-test-phase/01-UAT.md');
+  });
+
+  test('raw checkpoint mode accepts paused Current Test placeholder (#1300)', () => {
+    fs.writeFileSync(uatPath, [
+      '---',
+      'status: partial',
+      'phase: 01-test-phase',
+      '---',
+      '',
+      '## Current Test',
+      '',
+      '[testing paused — 1 item outstanding]',
+      '',
+      '## Tests',
+      '',
+      '### 1. First pending test',
+      'expected: raw mode checkpoint is available',
+      'result: [pending]',
+    ].join('\n'));
+
+    const result = runGsdTools(['uat', 'render-checkpoint', '--file', '.planning/phases/01-test-phase/01-UAT.md', '--raw'], tmpDir);
+    assert.strictEqual(result.success, true, `render-checkpoint failed: ${result.error}`);
+    assert.ok(result.output.length > 0, 'raw mode must emit a checkpoint');
+  });
+
+  test('non-structured Current Test with no pending tests reports actionable resume error (#1300)', () => {
+    fs.writeFileSync(uatPath, [
+      '---',
+      'status: partial',
+      'phase: 01-test-phase',
+      '---',
+      '',
+      '## Current Test',
+      '',
+      '[testing paused — 0 items outstanding]',
+      '',
+      '## Tests',
+      '',
+      '### 1. Already handled test',
+      'expected: completed behavior',
+      'result: pass',
+    ].join('\n'));
+
+    const result = runGsdTools(['uat', 'render-checkpoint', '--file', '.planning/phases/01-test-phase/01-UAT.md'], tmpDir);
+    assert.strictEqual(result.success, false, 'Should fail when a paused placeholder has no pending test to resume');
+    assert.ok(result.error.includes('no pending UAT test remains'));
+    assert.ok(!result.error.includes('Current Test section is malformed'));
+  });
+
   test('fails when testing is already complete', () => {
     fs.writeFileSync(uatPath, `---
 status: complete
