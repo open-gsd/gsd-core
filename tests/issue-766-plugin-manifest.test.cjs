@@ -24,6 +24,7 @@ const ROOT = path.resolve(__dirname, '..');
 const identity = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'package-identity.cjs'));
 const pkg = require(path.join(ROOT, 'package.json'));
 const { MANAGED_HOOKS } = require(path.join(ROOT, 'hooks', 'managed-hooks-registry.cjs'));
+const { cleanup } = require('./helpers.cjs');
 
 const PLUGIN_JSON_PATH = path.join(ROOT, '.claude-plugin', 'plugin.json');
 const HOOKS_JSON_PATH  = path.join(ROOT, 'hooks', 'hooks.json');
@@ -235,9 +236,9 @@ describe('B: hooks/hooks.json', () => {
 //        or changes `name` to an invalid form goes red immediately.
 //
 //   C2 (OPPORTUNISTIC) — When the `claude` binary IS on PATH, also run
-//        `claude plugin validate . --strict` as an end-to-end smoke test.
-//        This tier provides defence-in-depth for schema changes Claude Code
-//        may introduce that the fixture hasn't yet captured.
+//        `claude plugin validate <temp-plugin-root> --strict` as an end-to-end
+//        smoke test. This tier provides defence-in-depth for schema changes
+//        Claude Code may introduce that the fixture hasn't yet captured.
 //
 describe('C: plugin.json schema validation', () => {
 
@@ -366,19 +367,29 @@ describe('C: plugin.json schema validation', () => {
   })();
 
   test(
-    'C2: claude plugin validate . --strict exits 0 (opportunistic — skip when claude not on PATH)',
+    'C2: claude plugin validate --strict exits 0 (opportunistic — skip when claude not on PATH)',
     { skip: !claudeAvailable ? 'claude binary not on PATH' : false },
     () => {
-      const result = spawnSync('claude', ['plugin', 'validate', '.', '--strict'], {
-        cwd: ROOT,
-        encoding: 'utf-8',
-        timeout: 15000,
-      });
-      assert.equal(
-        result.status,
-        0,
-        `claude plugin validate . --strict exited with ${result.status}.\nstdout: ${result.stdout}\nstderr: ${result.stderr}`
-      );
+      const pluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-plugin-validate-'));
+      try {
+        fs.mkdirSync(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+        fs.copyFileSync(PLUGIN_JSON_PATH, path.join(pluginRoot, '.claude-plugin', 'plugin.json'));
+        fs.symlinkSync(path.join(ROOT, 'commands'), path.join(pluginRoot, 'commands'), 'dir');
+        fs.symlinkSync(path.join(ROOT, 'hooks'), path.join(pluginRoot, 'hooks'), 'dir');
+
+        const result = spawnSync('claude', ['plugin', 'validate', pluginRoot, '--strict'], {
+          cwd: ROOT,
+          encoding: 'utf-8',
+          timeout: 15000,
+        });
+        assert.equal(
+          result.status,
+          0,
+          `claude plugin validate ${pluginRoot} --strict exited with ${result.status}.\nstdout: ${result.stdout}\nstderr: ${result.stderr}`
+        );
+      } finally {
+        cleanup(pluginRoot);
+      }
     }
   );
 });
