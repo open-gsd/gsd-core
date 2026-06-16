@@ -114,6 +114,21 @@ interface PrunedSection {
   lines: string[];
 }
 
+const STATE_PROGRESS_RESYNC_FIELDS = new Set([
+  'Progress',
+  'Total Plans in Phase',
+  'Total Phases',
+]);
+
+function shouldResyncStateProgress(fields: Iterable<string>): boolean {
+  for (const field of fields) {
+    if (STATE_PROGRESS_RESYNC_FIELDS.has(field)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // ─── Cache ────────────────────────────────────────────────────────────────────
 
 // Cache disk scan results from buildStateFrontmatter per cwd per process (#1967).
@@ -258,6 +273,7 @@ function cmdStatePatch(cwd: string, patches: Record<string, string>, raw: boolea
   const statePath = planningPaths(cwd).state;
   try {
     const results: { updated: string[]; failed: string[] } = { updated: [], failed: [] };
+    const shouldResync = shouldResyncStateProgress(Object.keys(patches));
 
     // Use atomic read-modify-write to prevent lost updates from concurrent agents
     readModifyWriteStateMd(statePath, (content) => {
@@ -271,7 +287,7 @@ function cmdStatePatch(cwd: string, patches: Record<string, string>, raw: boolea
         }
       }
       return content;
-    }, cwd);
+    }, cwd, { resync: shouldResync });
 
     output(results, raw, results.updated.length > 0 ? 'true' : 'false');
   } catch {
@@ -295,7 +311,7 @@ function cmdStateUpdate(cwd: string, field: string | undefined, value: string | 
   const statePath = planningPaths(cwd).state;
   try {
     let updated = false;
-    const shouldResync = ['Progress', 'Total Plans in Phase', 'Total Phases'].includes(field as string);
+    const shouldResync = shouldResyncStateProgress([field as string]);
     // Preserve curated progress for body-only updates, but allow fields that
     // directly project into progress.* frontmatter to rebuild after mutation.
     readModifyWriteStateMd(statePath, (content) => {
