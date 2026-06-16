@@ -92,7 +92,7 @@ Requiring a `/clear` to pick up a config edit would destroy the very continuity 
 
 ### Effort signals for heavy and light skills
 
-Beyond passive monitoring, GSD uses `effort:` frontmatter to signal the token budget appropriate for each skill. Heavy orchestrator skills (`plan-phase`, `execute-phase`, `autonomous`) declare `effort: xhigh`; quick-status skills (`progress`, `stats`) declare `effort: low`.
+Beyond passive monitoring, GSD uses `effort:` frontmatter to signal the token budget appropriate for each skill. Heavy orchestrator skills (`plan-phase`, `execute-phase`, `autonomous`) declare `effort: max`; quick-status skills (`progress`, `stats`) declare `effort: low`.
 
 Note: an earlier version of GSD also applied `context: fork` to these three heavy skills to protect the main session's context budget. This was removed (#921) because `plan-phase`, `execute-phase`, and `autonomous` are **spawning orchestrators** — their core function is to spawn subagents (`gsd-planner`, `gsd-executor`, etc.), and a forked subagent context does not have the `Agent` tool. Context isolation for these skills comes from the subagents they spawn, not from forking the orchestrator itself.
 

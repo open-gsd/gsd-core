@@ -309,6 +309,10 @@ function skillFrontmatterName(skillDirName) {
   return skillDirName;
 }
 
+function normalizeClaudeSkillEffort(effort) {
+  return effort === 'xhigh' ? 'max' : effort;
+}
+
 /**
  * Qwen Code skills accept an optional numeric `priority` frontmatter field.
  * Per the Qwen skills spec (qwen-code/docs/users/features/skills.md, verified
@@ -405,7 +409,7 @@ function convertClaudeCommandToClaudeSkill(content, skillName, runtime = null, c
   // token-budget tier). Fields are Claude-specific; unknown frontmatter
   // fields are silently ignored by other runtimes (backward-compatible).
   if (context) fm += `context: ${context}\n`;
-  if (effort) fm += `effort: ${effort}\n`;
+  if (effort) fm += `effort: ${normalizeClaudeSkillEffort(effort)}\n`;
   if (toolsBlock) fm += toolsBlock;
   fm += '---';
 
