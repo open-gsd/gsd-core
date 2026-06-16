@@ -11,32 +11,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execTool, execGit, platformWriteSync } from './shell-command-projection.cjs';
 
-// ─── Config Gate ─────────────────────────────────────────────────────────────
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import capabilityStateMod = require('./capability-state.cjs');
+const { isCapabilityActive } = capabilityStateMod;
 
-/**
- * Check whether graphify is enabled in the project config.
- * Reads config.json directly via fs. Returns false by default
- * (when no config, no graphify key, or on error).
- */
-function isGraphifyEnabled(planningDir: string): boolean {
-  try {
-    const configPath = path.join(planningDir, 'config.json');
-    if (!fs.existsSync(configPath)) return false;
-    const config: unknown = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    if (
-      config &&
-      typeof config === 'object' &&
-      'graphify' in config &&
-      config.graphify &&
-      typeof config.graphify === 'object' &&
-      'enabled' in config.graphify &&
-      (config.graphify as Record<string, unknown>).enabled === true
-    ) return true;
-    return false;
-  } catch {
-    return false;
-  }
-}
+// ─── Config Gate ─────────────────────────────────────────────────────────────
 
 interface DisabledResponse {
   disabled: true;
@@ -396,7 +375,7 @@ function countCommitsBetween(cwd: string, from: string, to: string): number | nu
  */
 function graphifyQuery(cwd: string, term: string, options: { budget?: number | null } = {}): unknown {
   const planningDir = path.join(cwd, '.planning');
-  if (!isGraphifyEnabled(planningDir)) return disabledResponse();
+  if (!isCapabilityActive('graphify', cwd)) return disabledResponse();
 
   const graphPath = path.join(planningDir, 'graphs', 'graph.json');
   if (!fs.existsSync(graphPath)) {
@@ -435,7 +414,7 @@ function graphifyQuery(cwd: string, term: string, options: { budget?: number | n
  */
 function graphifyStatus(cwd: string): unknown {
   const planningDir = path.join(cwd, '.planning');
-  if (!isGraphifyEnabled(planningDir)) return disabledResponse();
+  if (!isCapabilityActive('graphify', cwd)) return disabledResponse();
 
   const graphPath = path.join(planningDir, 'graphs', 'graph.json');
   if (!fs.existsSync(graphPath)) {
@@ -498,7 +477,7 @@ function graphifyStatus(cwd: string): unknown {
  */
 function graphifyDiff(cwd: string): unknown {
   const planningDir = path.join(cwd, '.planning');
-  if (!isGraphifyEnabled(planningDir)) return disabledResponse();
+  if (!isCapabilityActive('graphify', cwd)) return disabledResponse();
 
   const snapshotPath = path.join(planningDir, 'graphs', '.last-build-snapshot.json');
   const graphPath = path.join(planningDir, 'graphs', 'graph.json');
@@ -554,7 +533,7 @@ function graphifyDiff(cwd: string): unknown {
  */
 function graphifyBuild(cwd: string): unknown {
   const planningDir = path.join(cwd, '.planning');
-  if (!isGraphifyEnabled(planningDir)) return disabledResponse();
+  if (!isCapabilityActive('graphify', cwd)) return disabledResponse();
 
   const installed = checkGraphifyInstalled();
   if (!installed.installed) return { error: installed.message };
@@ -619,7 +598,6 @@ function writeSnapshot(cwd: string): SnapshotResult | { error: string } {
 
 export = {
   // Config gate
-  isGraphifyEnabled,
   disabledResponse,
   // Subprocess
   execGraphify,

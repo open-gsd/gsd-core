@@ -1460,3 +1460,132 @@ describe('isCapabilityActive — convenience predicate (Phase 2)', () => {
     assert.strictEqual(isCapabilityActive('__no_such_cap__', nonExistentCwd), false);
   });
 });
+
+// ─── Cross-runtime runtime detection (HIGH fix — GSD_RUNTIME → config.runtime → 'claude') ──────
+
+describe('isCapabilityActive cross-runtime detection (GSD_RUNTIME → config.runtime → claude)', () => {
+  // Verifies the HIGH bug fix: when GSD_RUNTIME='codex', resolveCapabilityRuntimeState
+  // must consult the CODEX config dir (via CODEX_HOME), not ~/.claude.
+  //
+  // Fixture layout:
+  //   CODEX_HOME        → tmpCodexDir/   ← .gsd-surface.json: full profile, graphify SURFACED
+  //   CLAUDE_CONFIG_DIR → tmpClaudeDir/ ← .gsd-surface.json: full profile, graphify NOT surfaced
+  //   GSD_RUNTIME=codex
+  //   project cwd       → tmpProjectDir/ ← config.json: graphify.enabled=true
+  //                       (config leg must pass; SURFACE leg is what we are isolating)
+  //
+  // Expected: isCapabilityActive('graphify', cwd) === true
+  //   (codex dir has graphify surfaced, so the codex surface should win)
+  //
+  // Pre-fix (hardcoded 'claude'): would read tmpClaudeDir → graphify NOT surfaced → false (BUG).
+  // Post-fix (detects 'codex' via GSD_RUNTIME): reads tmpCodexDir → surfaced → true (CORRECT).
+
+  let tmpCodexDir;
+  let tmpClaudeDir;
+  let tmpProjectDir;
+  let prevGsdRuntime;
+  let prevCodexHome;
+  let prevClaudeConfigDir;
+  let prevGsdWorkstream;
+  let prevGsdProject;
+
+  before(() => {
+    tmpCodexDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-state-codex-cfg-'));
+    tmpClaudeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-state-claude-cfg-'));
+    tmpProjectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-state-xrt-project-'));
+
+    // Codex config dir: full profile + graphify SURFACED (disabledClusters empty)
+    fs.writeFileSync(
+      path.join(tmpCodexDir, '.gsd-surface.json'),
+      JSON.stringify({ baseProfile: 'full', disabledClusters: [], explicitAdds: [], explicitRemoves: [] }, null, 2) + '\n',
+      'utf8',
+    );
+
+    // Claude config dir: full profile + graphify NOT surfaced
+    fs.writeFileSync(
+      path.join(tmpClaudeDir, '.gsd-surface.json'),
+      JSON.stringify({ baseProfile: 'full', disabledClusters: ['graphify'], explicitAdds: [], explicitRemoves: [] }, null, 2) + '\n',
+      'utf8',
+    );
+
+    // Project: config with graphify.enabled=true so the config leg passes.
+    // The SURFACE leg (install+surfaced) is what we are testing — it must read
+    // the CODEX config dir (via CODEX_HOME), not the CLAUDE config dir.
+    fs.mkdirSync(path.join(tmpProjectDir, '.planning'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpProjectDir, '.planning', 'config.json'),
+      JSON.stringify({ graphify: { enabled: true } }),
+      'utf8',
+    );
+  });
+
+  after(() => {
+    cleanup(tmpCodexDir);
+    cleanup(tmpClaudeDir);
+    cleanup(tmpProjectDir);
+  });
+
+  test('GSD_RUNTIME=codex → resolver consults CODEX_HOME, not CLAUDE_CONFIG_DIR (HIGH cross-runtime fix)', () => {
+    prevGsdRuntime = process.env.GSD_RUNTIME;
+    prevCodexHome = process.env.CODEX_HOME;
+    prevClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    prevGsdWorkstream = process.env.GSD_WORKSTREAM;
+    prevGsdProject = process.env.GSD_PROJECT;
+
+    try {
+      process.env.GSD_RUNTIME = 'codex';
+      process.env.CODEX_HOME = tmpCodexDir;       // codex dir: graphify SURFACED
+      process.env.CLAUDE_CONFIG_DIR = tmpClaudeDir; // claude dir: graphify NOT surfaced
+      delete process.env.GSD_WORKSTREAM;
+      delete process.env.GSD_PROJECT;
+
+      // With GSD_RUNTIME=codex, the resolver must look at CODEX_HOME (graphify surfaced)
+      // and return true. Pre-fix it would look at CLAUDE_CONFIG_DIR (not surfaced) → false.
+      const active = isCapabilityActive('graphify', tmpProjectDir);
+      assert.strictEqual(
+        active,
+        true,
+        'isCapabilityActive must return true when GSD_RUNTIME=codex and graphify is surfaced in CODEX_HOME — ' +
+        'the pre-fix code hardcoded getGlobalConfigDir("claude") regardless of GSD_RUNTIME, returning false (BUG)',
+      );
+
+      // Also verify: if we swap surfaces (codex NOT surfaced, claude surfaced), still uses codex dir → false
+      fs.writeFileSync(
+        path.join(tmpCodexDir, '.gsd-surface.json'),
+        JSON.stringify({ baseProfile: 'full', disabledClusters: ['graphify'], explicitAdds: [], explicitRemoves: [] }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(tmpClaudeDir, '.gsd-surface.json'),
+        JSON.stringify({ baseProfile: 'full', disabledClusters: [], explicitAdds: [], explicitRemoves: [] }, null, 2) + '\n',
+        'utf8',
+      );
+      const activeSwapped = isCapabilityActive('graphify', tmpProjectDir);
+      assert.strictEqual(
+        activeSwapped,
+        false,
+        'isCapabilityActive must return false when GSD_RUNTIME=codex and graphify is NOT surfaced in CODEX_HOME — ' +
+        'even though claude dir has graphify surfaced, the codex dir is the authoritative surface',
+      );
+    } finally {
+      // Restore env vars
+      if (prevGsdRuntime === undefined) delete process.env.GSD_RUNTIME;
+      else process.env.GSD_RUNTIME = prevGsdRuntime;
+      if (prevCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = prevCodexHome;
+      if (prevClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = prevClaudeConfigDir;
+      if (prevGsdWorkstream === undefined) delete process.env.GSD_WORKSTREAM;
+      else process.env.GSD_WORKSTREAM = prevGsdWorkstream;
+      if (prevGsdProject === undefined) delete process.env.GSD_PROJECT;
+      else process.env.GSD_PROJECT = prevGsdProject;
+
+      // Restore codex dir surface fixture for cleanup consistency
+      fs.writeFileSync(
+        path.join(tmpCodexDir, '.gsd-surface.json'),
+        JSON.stringify({ baseProfile: 'full', disabledClusters: [], explicitAdds: [], explicitRemoves: [] }, null, 2) + '\n',
+        'utf8',
+      );
+    }
+  });
+});
