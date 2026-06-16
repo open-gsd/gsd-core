@@ -12,6 +12,7 @@ const { execSync, execFileSync } = require('node:child_process');
 const fs = require('fs');
 const path = require('path');
 const { runGsdTools, createTempProject, createTempDir, cleanup } = require('./helpers.cjs');
+const fc = require('./helpers/fast-check-setup.cjs');
 
 describe('history-digest command', () => {
   let tmpDir;
@@ -2546,6 +2547,69 @@ describe('pr-subrepo', () => {
         res.error.includes('unsafe') || res.error.includes('escape'),
         `Got: ${res.error}`
       );
+    });
+
+    test('pr-subrepo porcelain: staged rename — both old and new paths in result.files', () => {
+      // git mv produces "R  old -> new" in porcelain v1; both paths must be staged.
+      execFileSync('git', ['mv', 'feature.js', 'renamed-feature.js'], { cwd: subDir, stdio: 'pipe' });
+
+      const res = runGsdTools(
+        ['query', 'pr-subrepo', 'fix(backend): rename',
+         '--repo', 'backend', '--branch', 'fix-666-rename-pr'],
+        rootDir
+      );
+      assert.ok(res.success, `pr-subrepo failed: ${res.error}`);
+      const result = JSON.parse(res.output);
+      assert.ok(result.files.includes('feature.js'), `old path missing: ${JSON.stringify(result.files)}`);
+      assert.ok(result.files.includes('renamed-feature.js'), `new path missing: ${JSON.stringify(result.files)}`);
+    });
+
+    test('pr-subrepo porcelain: non-ASCII filename (core.quotePath=false)', () => {
+      // Without -c core.quotePath=false, "café.js" is C-escaped → slice(2) parse breaks.
+      fs.writeFileSync(path.join(subDir, 'café.js'), '// initial\n');
+      execFileSync('git', ['add', 'café.js'], { cwd: subDir, stdio: 'pipe' });
+      execFileSync('git', ['commit', '-m', 'chore: add café.js'], { cwd: subDir, stdio: 'pipe' });
+      fs.writeFileSync(path.join(subDir, 'café.js'), 'updated\n');
+
+      const res = runGsdTools(
+        ['query', 'pr-subrepo', 'fix(backend): non-ascii',
+         '--repo', 'backend', '--branch', 'fix-666-nonascii-pr'],
+        rootDir
+      );
+      assert.ok(res.success, `pr-subrepo failed: ${res.error}`);
+      const result = JSON.parse(res.output);
+      assert.ok(result.files.includes('café.js'), `non-ASCII file missing: ${JSON.stringify(result.files)}`);
+    });
+
+    test('pr-subrepo porcelain: fc property — parsed filenames are always non-empty strings', () => {
+      // Local mirror of cmdPrSubrepo's porcelain line-parsing logic (commands.cts).
+      // Tests the transformation contract without needing a real git repo.
+      function parsePorcelainLine(line) {
+        const normalized = line.trimStart();
+        const file = normalized.slice(2).trim();
+        const arrowIdx = file.indexOf(' -> ');
+        return arrowIdx !== -1
+          ? [file.slice(0, arrowIdx).trim(), file.slice(arrowIdx + 4).trim()]
+          : [file];
+      }
+
+      const safeFilename = fc.stringMatching(/^[a-zA-Z0-9._-]+$/);
+      const xyChar = fc.constantFrom('M', 'A', 'D', 'R', 'C', 'U');
+      const normalLine = fc.tuple(xyChar, xyChar, safeFilename)
+        .map(([x, y, f]) => `${x}${y} ${f}`);
+      const renameLine = fc.tuple(xyChar, safeFilename, safeFilename)
+        .map(([x, o, n]) => `${x}  ${o} -> ${n}`);
+      // First-line trim edge case: leading space stripped by execGit global trim
+      const trimmedLine = fc.tuple(xyChar, safeFilename)
+        .map(([y, f]) => ` ${y} ${f}`);
+
+      fc.assert(fc.property(
+        fc.oneof(normalLine, renameLine, trimmedLine),
+        (line) => {
+          const files = parsePorcelainLine(line);
+          return files.length > 0 && files.every(f => typeof f === 'string' && f.length > 0);
+        }
+      ));
     });
   });
 

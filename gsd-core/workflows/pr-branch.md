@@ -73,7 +73,9 @@ node -e "
     try {
       const res = execFileSync('git', ['-C', path.join(root, r), 'status', '--porcelain'],
                                { encoding: 'utf8', timeout: 10_000 });
-      if (res.trim()) out.push(r);
+      // Exclude untracked-only repos: seam filters ?? lines, so detection must match.
+      const tracked = res.split('\n').filter(l => l.length > 0 && !l.startsWith('??'));
+      if (tracked.length > 0) out.push(r);
     } catch (_) {}
   }
   fs.writeFileSync(process.argv[3], out.join('\n'));
