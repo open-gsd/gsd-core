@@ -632,7 +632,10 @@ When `USE_WORKTREES !== "false"`, commit PLAN.md to the current branch **before*
 Skip this step entirely if `USE_WORKTREES === "false"` (non-worktree mode: PLAN.md is committed in Step 8 as usual).
 
 ```bash
+QUICK_PLAN_PARENT=""
+QUICK_PLAN_COMMIT=""
 if [ "${USE_WORKTREES}" != "false" ]; then
+  QUICK_PLAN_PARENT=$(git rev-parse HEAD)
   COMMIT_DOCS=$(gsd_run query config-get commit_docs 2>/dev/null || echo "true")
   if [ "$COMMIT_DOCS" != "false" ]; then
     git add "${QUICK_DIR}/${quick_id}-PLAN.md"
@@ -650,7 +653,11 @@ if [ "${USE_WORKTREES}" != "false" ]; then
         git commit -m "docs(${quick_id}): pre-dispatch plan for ${DESCRIPTION}" -- "${QUICK_DIR}/${quick_id}-PLAN.md" \
           || { echo "ERROR: pre-dispatch PLAN.md commit failed — likely a pre-commit hook failure. Fix the hook output above (or set workflow.worktree_skip_hooks=true to bypass) and re-run." >&2; exit 1; }
       fi
+      QUICK_PLAN_COMMIT=$(git rev-parse HEAD)
     fi
+  fi
+  if [ -z "$QUICK_PLAN_COMMIT" ]; then
+    QUICK_PLAN_COMMIT=$(git rev-parse HEAD)
   fi
 fi
 ```
@@ -678,8 +685,22 @@ Execute quick task ${quick_id}.
 
 ${USE_WORKTREES !== "false" ? `
 <worktree_branch_check>
-ORCHESTRATOR build-time embed (NOT a sub-agent runtime step): before this dispatch, read \`gsd-core/references/worktree-branch-check.md\`, substitute \`{EXPECTED_BASE}\` with the base SHA captured above (${EXPECTED_BASE}), and replace this note with that fragment's \`<worktree_branch_check>\` block so the dispatched prompt carries the runnable guard verbatim — do not pass this instruction through in its place.
+ORCHESTRATOR build-time embed (NOT a sub-agent runtime step): before this dispatch, read \`gsd-core/references/worktree-branch-check.md\`, substitute \`{EXPECTED_BASE}\` with the base SHA captured above (${EXPECTED_BASE}), substitute \`{EXPECTED_BASE_ALTERNATE}\` with \`${QUICK_PLAN_PARENT}\` when it differs from \`${EXPECTED_BASE}\` (otherwise empty), and replace this note with that fragment's \`<worktree_branch_check>\` block so the dispatched prompt carries the runnable guard verbatim — do not pass this instruction through in its place.
 </worktree_branch_check>
+
+FIRST ACTION after the worktree branch check: ensure the quick PLAN.md exists at a worktree-rooted relative path before any Read/Edit/Write path can be primed. If \`${QUICK_DIR}/${quick_id}-PLAN.md\` is absent, materialize it from the shared git object store:
+
+\`\`\`bash
+QUICK_PLAN_COMMIT="${QUICK_PLAN_COMMIT}"
+QUICK_PLAN_PATH="${QUICK_DIR}/${quick_id}-PLAN.md"
+if [ ! -f "$QUICK_PLAN_PATH" ]; then
+  mkdir -p "$(dirname "$QUICK_PLAN_PATH")"
+  git show "${QUICK_PLAN_COMMIT}:${QUICK_PLAN_PATH}" > "$QUICK_PLAN_PATH" || {
+    echo "FATAL: unable to materialize quick plan from ${QUICK_PLAN_COMMIT}:${QUICK_PLAN_PATH}; refusing to continue." >&2
+    exit 42
+  }
+fi
+\`\`\`
 ` : ''}
 
 <files_to_read>
@@ -743,7 +764,7 @@ SUMMARY.md and stop — the user must rerun with worktrees disabled.
 
 > **ORCHESTRATOR RULE — CODEX RUNTIME**: After calling Agent() above, stop working on this task immediately. Do not read more files, edit code, or run tests related to this task while the subagent is active. Wait for the subagent to return its result. This prevents duplicate work, conflicting edits, and wasted context. Only resume when the subagent result is available.
 
-If the executor ran with `isolation="worktree"`, append its returned `{agent_id, worktree_path, branch, expected_base}` metadata to `QUICK_WORKTREE_MANIFEST` before cleanup. If any field is unavailable, stop and ask for recovery; do not discover global worktrees.
+If the executor ran with `isolation="worktree"`, append its returned `{agent_id, worktree_path, branch, expected_base, allowed_bases}` metadata to `QUICK_WORKTREE_MANIFEST` before cleanup. Set `expected_base` to `${EXPECTED_BASE}` and `allowed_bases` to `["${EXPECTED_BASE}", "${QUICK_PLAN_PARENT}"]` with duplicates removed. If any required field is unavailable, stop and ask for recovery; do not discover global worktrees.
 
 After executor returns:
 1. **Worktree cleanup:** If the executor ran with `isolation="worktree"`, merge the worktree branch back and clean up:

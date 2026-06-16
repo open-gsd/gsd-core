@@ -176,8 +176,9 @@ describe('canonical worktree-branch-check fragment is the single source of truth
     assert.ok(block.includes('update-ref'), 'fragment block must reference update-ref prohibition');
   });
 
-  test('fragment block asserts exact base and fails closed with exit 42 (#48)', () => {
-    assert.ok(block.includes('git rev-parse HEAD') && block.includes('{EXPECTED_BASE}'), 'fragment must assert HEAD equals {EXPECTED_BASE} exactly (#48)');
+  test('fragment block asserts an allowed base set and fails closed with exit 42 (#48, #1265)', () => {
+    assert.ok(block.includes('git rev-parse HEAD') && block.includes('{EXPECTED_BASE}'), 'fragment must assert HEAD against {EXPECTED_BASE} (#48)');
+    assert.ok(block.includes('{EXPECTED_BASE_ALTERNATE}'), 'fragment must support one orchestrator-approved alternate base for quick parent/plan forks (#1265)');
     assert.ok(/exit 42/.test(block), 'fragment must fail closed with exit 42 on mismatch (#48)');
   });
 });
@@ -848,4 +849,3 @@ done < <(${DISCOVERY_PIPELINE})
     });
   });
 });
-
