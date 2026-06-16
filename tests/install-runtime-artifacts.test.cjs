@@ -396,6 +396,9 @@ describe('uninstallRuntimeArtifacts — removes gsd-owned entries, preserves for
           fs.writeFileSync(path.join(destDir, 'subagents', 'gsd-executor.md'), '# executor\n');
           fs.writeFileSync(path.join(destDir, 'user-agent.yaml'), 'version: 1\n');
           fs.writeFileSync(path.join(destDir, 'subagents', 'user-agent.yaml'), 'version: 1\n');
+        } else if (kind.kind === 'rules') {
+          fs.writeFileSync(path.join(destDir, 'planning-artifacts.md'), '# planning\n');
+          fs.writeFileSync(path.join(destDir, 'user-custom.md'), '# user\n');
         } else {
           writeCommandEntry(destDir, kind.prefix, 'help');
           writeCommandEntry(destDir, kind.prefix, 'phase');
@@ -418,6 +421,9 @@ describe('uninstallRuntimeArtifacts — removes gsd-owned entries, preserves for
           assert.ok(!fs.existsSync(path.join(destDir, 'subagents', 'gsd-executor.md')));
           assert.ok(fs.existsSync(path.join(destDir, 'user-agent.yaml')));
           assert.ok(fs.existsSync(path.join(destDir, 'subagents', 'user-agent.yaml')));
+        } else if (kind.kind === 'rules') {
+          assert.ok(!fs.existsSync(path.join(destDir, 'planning-artifacts.md')));
+          assert.ok(fs.existsSync(path.join(destDir, 'user-custom.md')));
         } else {
           assert.ok(!fs.existsSync(path.join(destDir, `${kind.prefix}help.md`)));
           assert.ok(!fs.existsSync(path.join(destDir, `${kind.prefix}phase.md`)));

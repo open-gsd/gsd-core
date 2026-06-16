@@ -773,11 +773,13 @@ function validateArtifactKindEntry(capId, entry, prefix) {
 
   // nesting — optional for flat artifact kinds; when provided it must be in
   // the closed vocabulary used by the descriptor-driven installer.
-  if (entry.nesting !== undefined && entry.nesting !== null && !VALID_ARTIFACT_NESTINGS.has(entry.nesting)) {
-    errors.push(
-      ctx + '.nesting must be one of: ' + [...VALID_ARTIFACT_NESTINGS].join(', ') +
-      ' (got: ' + JSON.stringify(entry.nesting) + ')',
-    );
+  if (entry.nesting !== undefined) {
+    if (typeof entry.nesting !== 'string' || !VALID_ARTIFACT_NESTINGS.has(entry.nesting)) {
+      errors.push(
+        ctx + '.nesting must be one of: ' + [...VALID_ARTIFACT_NESTINGS].join(', ') +
+        ' (got: ' + JSON.stringify(entry.nesting) + ')',
+      );
+    }
   }
 
   // prefix — required; must be a string (may be empty string '')

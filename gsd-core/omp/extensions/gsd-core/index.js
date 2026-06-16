@@ -51,6 +51,18 @@ const UPDATE_RATE_LIMIT_SECONDS = 24 * 60 * 60;
 const queuedContext = [];
 let configWatchers = [];
 const contextWarningState = { callsSinceWarn: 0, lastLevel: null, criticalRecorded: false };
+
+function resetSessionState() {
+  queuedContext.length = 0;
+  contextWarningState.callsSinceWarn = 0;
+  contextWarningState.lastLevel = null;
+  contextWarningState.criticalRecorded = false;
+}
+
+const SENSITIVE_CONFIG_KEY_RE = /(?:token|secret|password|passwd|api[_-]?key|apikey|credential|private[_-]?key)/i;
+function redactConfigValue(key, value) {
+  return SENSITIVE_CONFIG_KEY_RE.test(String(key)) ? '[REDACTED]' : value;
+}
 let updateCheckSpawned = false;
 let configReloadTimer = null;
 
@@ -173,6 +185,7 @@ function onContext(event) {
 }
 
 function onSessionStart(event, ctx = {}) {
+  resetSessionState();
   queueSessionStateReminder(ctx.cwd || process.cwd());
   queueUpdateBannerAndSpawnWorker();
   startConfigWatcher(ctx.cwd || process.cwd());
@@ -217,6 +230,7 @@ function onSessionShutdown() {
     try { watcher.close(); } catch {}
   }
   configWatchers = [];
+  resetSessionState();
   if (configReloadTimer) clearTimeout(configReloadTimer);
   configReloadTimer = null;
 }
@@ -726,7 +740,9 @@ function conventionalCommitGuard(event, cwd) {
   const command = String(event.input?.command || '');
   if (!isGitSubcommand(command, 'commit')) return null;
   const msg = firstCommitMessage(command);
-  if (!msg) return null;
+  if (!msg) {
+    return { block: true, reason: 'Commit message validation requires an explicit subject via -m "<type>(<scope>): <subject>" for guarded sessions.' };
+  }
   const subject = msg.split(/\r?\n/)[0];
   if (!/^(feat|fix|docs|style|refactor|perf|test|build|ci|chore)(\(.+\))?:\s.+/.test(subject)) {
     return { block: true, reason: 'Commit message must follow Conventional Commits: <type>(<scope>): <subject>. Valid types: feat, fix, docs, style, refactor, perf, test, build, ci, chore. Subject must be <=72 chars, lowercase, imperative mood, no trailing period.' };
@@ -912,7 +928,7 @@ function scheduleConfigReload(cwd) {
     if (config.mode) lines.push(`  mode: ${config.mode}`);
     for (const [key, label] of [['hooks', 'hooks'], ['workflow', 'workflow'], ['models', 'models']]) {
       if (config[key] && typeof config[key] === 'object') {
-        const values = Object.entries(config[key]).filter(([, v]) => v !== undefined).map(([k, v]) => `${k}=${v}`).join(', ');
+        const values = Object.entries(config[key]).filter(([, v]) => v !== undefined).map(([k, v]) => `${k}=${redactConfigValue(k, v)}`).join(', ');
         if (values) lines.push(`  ${label}: { ${values} }`);
       }
     }
@@ -933,6 +949,7 @@ module.exports._test = {
   gsdCoreDirFromExtension,
   buildUpdateBannerOutput,
   tokenize,
+  redactConfigValue,
   isGitSubcommand,
   forceGitAddCwds,
   findExecutableOnPath,

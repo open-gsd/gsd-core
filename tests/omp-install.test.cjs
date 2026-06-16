@@ -1,4 +1,4 @@
-// allow-test-rule: cli-output-is-the-product
+// allow-test-rule: cli-output-is-the-product #3
 // OMP readiness and install summaries are the user-facing CLI contract for native extension support.
 process.env.GSD_TEST_MODE = '1';
 
@@ -24,6 +24,7 @@ const {
   writeManifest,
   detectGsdWorkspaceState,
   getOmpReadinessSummary,
+  saveLocalPatches,
 } = require('../bin/install.js');
 
 const INSTALLER = path.join(__dirname, '..', 'bin', 'install.js');
@@ -205,6 +206,9 @@ describe('OMP local install and conversion', () => {
     fs.writeFileSync(path.join(targetDir, 'extensions', 'user-extension', 'index.js'), 'module.exports = () => {};\\n');
 
     install(false, 'omp');
+    const manifest = JSON.parse(fs.readFileSync(path.join(targetDir, 'gsd-file-manifest.json'), 'utf8'));
+    assert.strictEqual(manifest.files['rules/user-rule.md'], undefined);
+    assert.ok(manifest.files['rules/planning-artifacts.md']);
     assert.ok(fs.existsSync(path.join(targetDir, 'commands', 'user-command.md')));
     assert.ok(fs.existsSync(path.join(targetDir, 'skills', 'user-skill', 'SKILL.md')));
     assert.ok(fs.existsSync(path.join(targetDir, 'agents', 'user-agent.md')));
@@ -217,12 +221,16 @@ describe('OMP local install and conversion', () => {
     assert.ok(fs.existsSync(path.join(targetDir, 'skills', 'user-skill', 'SKILL.md')));
     assert.ok(fs.existsSync(path.join(targetDir, 'agents', 'user-agent.md')));
     assert.ok(fs.existsSync(path.join(targetDir, 'rules', 'user-rule.md')));
+    assert.ok(!fs.existsSync(path.join(targetDir, 'rules', 'planning-artifacts.md')));
     assert.ok(fs.existsSync(path.join(targetDir, 'extensions', 'user-extension', 'index.js')));
     assert.ok(!fs.existsSync(path.join(targetDir, 'extensions', 'gsd-core', 'index.js')));
     assert.ok(!fs.existsSync(path.join(targetDir, 'commands', 'gsd-help.md')));
   });
 
   test('detects existing Spec Kit workspace state and exposes next action', () => {
+    fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+    assert.deepStrictEqual(detectGsdWorkspaceState(tmpDir), { state: 'planning-workspace', nextAction: '/gsd-plan-phase' });
+    cleanup(path.join(tmpDir, '.planning'));
     fs.mkdirSync(path.join(tmpDir, 'specs', '001-demo'), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, 'specs', '001-demo', 'spec.md'), '# Spec\n');
     assert.deepStrictEqual(detectGsdWorkspaceState(tmpDir), { state: 'spec-ready', nextAction: '/speckit.plan' });
@@ -253,6 +261,7 @@ describe('OMP local install and conversion', () => {
   test('writeManifest tracks OMP artifacts without hooks', () => {
     install(false, 'omp');
     const targetDir = path.join(tmpDir, '.omp');
+    fs.writeFileSync(path.join(targetDir, 'rules', 'user-rule.md'), '# User rule\n');
     const manifest = writeManifest(targetDir, 'omp');
     const keys = Object.keys(manifest.files);
     assert.ok(keys.some(file => file.startsWith('commands/gsd-help.md')));
@@ -261,7 +270,28 @@ describe('OMP local install and conversion', () => {
     assert.ok(keys.includes('extensions/gsd-core/index.js'));
     assert.ok(keys.includes('extensions/gsd-core/package.json'));
     assert.ok(keys.includes('extensions/gsd-core/update-worker.js'));
-    assert.ok(keys.every(file => !file.startsWith('hooks/')));
+    assert.ok(keys.every(file => file !== 'rules/user-rule.md'));
+  });
+
+  test('saveLocalPatches populates OMP pristine command and rule baselines', () => {
+    install(false, 'omp');
+    const targetDir = path.join(tmpDir, '.omp');
+    fs.writeFileSync(path.join(targetDir, 'commands', 'gsd-help.md'), '# Locally modified command\n');
+    fs.writeFileSync(path.join(targetDir, 'rules', 'planning-artifacts.md'), '# Locally modified rule\n');
+
+    const patches = saveLocalPatches(targetDir, {
+      packageSrc: path.join(__dirname, '..'),
+      runtime: 'omp',
+      pathPrefix: './.omp/',
+      isGlobal: false,
+    });
+
+    assert.ok(patches.includes('commands/gsd-help.md'));
+    assert.ok(patches.includes('rules/planning-artifacts.md'));
+    const pristineCommand = fs.readFileSync(path.join(targetDir, 'gsd-pristine', 'commands', 'gsd-help.md'), 'utf8');
+    assert.match(pristineCommand, /^name: gsd-help$/m);
+    assert.ok(!pristineCommand.includes('AskUserQuestion'));
+    assert.ok(fs.existsSync(path.join(targetDir, 'gsd-pristine', 'rules', 'planning-artifacts.md')));
   });
 });
 
@@ -298,9 +328,9 @@ describe('OMP global install', () => {
     ).replace(/\\/g, '/');
     assert.ok(workflow.includes('After every Ask call'));
     assert.ok(!workflow.includes('AskUserQuestion'));
-    assert.ok(!workflow.includes('~/.claude/'));
-    assert.ok(!workflow.includes('$HOME/.claude/'));
-    assert.ok(!workflow.includes('./.claude/'));
+    assert.ok(!workflow.includes('~/.claude'));
+    assert.ok(!workflow.includes('$HOME/.claude'));
+    assert.ok(!workflow.includes('./.claude'));
     assert.ok(!workflow.includes('.claude/'));
     assert.ok(!workflow.includes('./.omp/gsd-core'), 'global OMP payloads must not point at project-local .omp');
     assert.ok(workflow.includes(`${normalizedTarget}/gsd-core/USER-PROFILE.md`));

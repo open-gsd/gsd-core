@@ -29,35 +29,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, cleanLauncherEnv } = require('./helpers.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
 const AGENTS_DIR = path.join(__dirname, '..', 'agents');
 const SNIPPET_FILE = path.join(WORKFLOWS_DIR, '_runtime-launcher.snippet.sh');
-function cleanLauncherEnv(overrides) {
-  const env = { ...process.env, ...overrides };
-  for (const key of [
-    'CODEX_HOME',
-    'CODEX_CONFIG_DIR',
-    'CURSOR_CONFIG_DIR',
-    'HERMES_HOME',
-    'GEMINI_CONFIG_DIR',
-    'COPILOT_CONFIG_DIR',
-    'WINDSURF_CONFIG_DIR',
-    'AUGMENT_CONFIG_DIR',
-    'TRAE_CONFIG_DIR',
-    'QWEN_CONFIG_DIR',
-    'CODEBUDDY_CONFIG_DIR',
-    'CLINE_CONFIG_DIR',
-    'GROK_AGENTS_HOME',
-    'ANTIGRAVITY_CONFIG_DIR',
-    'OPENCODE_CONFIG_DIR',
-    'KILO_CONFIG_DIR',
-  ]) {
-    delete env[key];
-  }
-  return env;
-}
 
 /**
  * Read the canonical preamble from the snippet file (all lines, no trailing newline).

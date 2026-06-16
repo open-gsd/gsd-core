@@ -20,6 +20,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const os = require('node:os');
+const { cleanLauncherEnv } = require('./helpers.cjs');
 
 const INSTALL_JS = path.join(__dirname, '../bin/install.js');
 const WORKFLOW = path.join(__dirname, '../gsd-core/workflows/sync-skills.md');
@@ -42,9 +43,7 @@ describe('install.js --skills-root', () => {
 
   for (const { runtime, expected } of CASES) {
     test(`resolves correct skills root for ${runtime}`, () => {
-      const env = { ...process.env, GSD_TEST_MODE: undefined };
-      delete env.CODEX_HOME;
-      delete env.CODEX_CONFIG_DIR;
+      const env = cleanLauncherEnv({ GSD_TEST_MODE: undefined });
       const result = spawnSync(process.execPath, [INSTALL_JS, '--skills-root', runtime], {
         encoding: 'utf-8',
         env,

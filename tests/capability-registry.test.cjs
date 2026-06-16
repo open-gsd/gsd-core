@@ -3562,6 +3562,14 @@ describe('ADR-1016 phase 5a: validateArtifactLayout unit tests', () => {
     assert.ok(errors.some((e) => e.includes('nesting')));
   });
 
+  test('null nesting in global[0] → error', () => {
+    const errors = validateArtifactLayout('test', {
+      global: [{ kind: 'skills', destSubpath: 'x', prefix: '', nesting: null, recursive: false, converter: null }],
+      local: [],
+    });
+    assert.ok(errors.some((e) => e.includes('nesting')));
+  });
+
   test('kimi-agents kind → no errors', () => {
     const errors = validateArtifactLayout('test', {
       global: [{ kind: 'kimi-agents', destSubpath: 'agents', prefix: 'gsd', nesting: 'flat', recursive: false, converter: null }],

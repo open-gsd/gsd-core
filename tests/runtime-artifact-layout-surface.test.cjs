@@ -324,6 +324,9 @@ describe('applySurface', () => {
       explicitRemoves: [],
     });
 
+    const staleGsdExtensionDir = path.join(base, 'extensions', 'gsd-core');
+    fs.mkdirSync(staleGsdExtensionDir, { recursive: true });
+    fs.writeFileSync(path.join(staleGsdExtensionDir, 'stale.js'), 'module.exports = "stale";\n');
     const userExtensionDir = path.join(base, 'extensions', 'user-extension');
     fs.mkdirSync(userExtensionDir, { recursive: true });
     fs.writeFileSync(path.join(userExtensionDir, 'index.js'), 'module.exports = () => {};\\n');
@@ -337,6 +340,7 @@ describe('applySurface', () => {
     assert.ok(fs.existsSync(path.join(base, 'rules', 'planning-artifacts.md')));
     assert.ok(!fs.existsSync(path.join(base, 'rules', 'gsd-planning-artifacts.md')), 'OMP rules must keep source filenames');
     assert.ok(fs.existsSync(path.join(base, 'extensions', 'gsd-core', 'index.js')));
+    assert.ok(!fs.existsSync(path.join(base, 'extensions', 'gsd-core', 'stale.js')), 'stale GSD extension files must be removed before sync');
     assert.ok(fs.existsSync(path.join(userExtensionDir, 'index.js')), 'non-GSD OMP extension dir must be preserved');
   });
 

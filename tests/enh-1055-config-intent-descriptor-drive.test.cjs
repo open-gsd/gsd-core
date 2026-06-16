@@ -6,7 +6,7 @@
  * hand-kept REGISTRY const.
  *
  * This golden-master test pins the observable contract: the return shape and
- * values must be identical to the pre-change behavior for all 16 runtimes.
+ * values must be identical to the pre-change behavior for all supported runtimes.
  * Purely behavioral — no source-grep.
  */
 
@@ -41,10 +41,11 @@ const EXPECTED = [
   { runtime: 'windsurf',     installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null        },
   { runtime: 'trae',         installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null        },
   { runtime: 'kimi',         installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null        },
+  { runtime: 'omp',          installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null        },
 ];
 
 // ---------------------------------------------------------------------------
-// Test 1: Golden master — all 16 runtimes resolve to expected values
+// Test 1: Golden master — all supported runtimes resolve to expected values
 // ---------------------------------------------------------------------------
 
 describe('enh-1055 descriptor-drive: resolveRuntimeConfigIntent golden master', () => {

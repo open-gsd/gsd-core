@@ -6799,7 +6799,7 @@ function applyRuntimeContentRewritesForCommandsInPlace(stagedDir, runtime, pathP
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-cmd-rewrites-'));
   try {
     for (const entry of fs.readdirSync(stagedDir, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+      if (!entry.isFile() || (!entry.name.endsWith('.md') && !entry.name.endsWith('.mdc'))) continue;
       let content = fs.readFileSync(path.join(stagedDir, entry.name), 'utf8');
       content = _applyRuntimeRewrites(content, runtime, pathPrefix, options);
       // For augment commands, apply the markdown conversion so tool references
@@ -6919,16 +6919,16 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix, options = {}) {
       content = content.replace(/~\/\.claude\//g, pathPrefix);
       content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
       content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
-      content = content.replace(/~\/\.claude/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.claude/g, normalizedPathPrefix);
-      content = content.replace(/\.\/\.claude/g, `./${dirName}`);
+      content = content.replace(/~\/\.claude\b/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.claude\b/g, normalizedPathPrefix);
+      content = content.replace(/\.\/\.claude\b/g, `./${dirName}`);
       content = content.replace(/~\/\.omp\/agent\//g, pathPrefix);
       content = content.replace(/\$HOME\/\.omp\/agent\//g, pathPrefix);
       if (options.rewriteRuntimeDir === true) {
         content = content.replace(/\.\/\.omp\//g, pathPrefix);
         content = content.replace(/(?<![A-Za-z0-9_.\-/~$])\.omp\//g, pathPrefix);
-        content = content.replace(/\.\/\.omp/g, normalizedPathPrefix);
-        content = content.replace(/(?<![A-Za-z0-9_.\-/~$])\.omp/g, normalizedPathPrefix);
+        content = content.replace(/\.\/\.omp\b/g, normalizedPathPrefix);
+        content = content.replace(/(?<![A-Za-z0-9_.\-/~$])\.omp\b/g, normalizedPathPrefix);
       }
       content = processAttribution(content, getCommitAttribution(runtime));
       break;
@@ -7031,6 +7031,24 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix, options = {}) {
   return content;
 }
 
+function getOmpOwnedRuleNames(packageSrc = path.join(__dirname, '..')) {
+  const manifestPath = path.join(packageSrc, 'gsd-core', 'omp', 'rules', 'manifest.json');
+  const names = new Set();
+  try {
+    const parsed = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    if (Array.isArray(parsed.rules)) {
+      for (const rule of parsed.rules) {
+        if (rule && typeof rule.source === 'string' && (rule.source.endsWith('.md') || rule.source.endsWith('.mdc'))) {
+          names.add(rule.source);
+        }
+      }
+    }
+  } catch {
+    // Missing or invalid manifest means no rules are considered GSD-owned.
+  }
+  return names;
+}
+
 /**
  * Copy a staged directory's contents into destDir.
  * Additive — does not prune (surface.cjs handles pruning).
@@ -7070,9 +7088,11 @@ function _copyStaged(stagedDir, destDir, kind) {
   }
 
   if (kind.kind === 'rules') {
+    const ownedRuleNames = getOmpOwnedRuleNames();
     for (const entry of fs.readdirSync(stagedDir, { withFileTypes: true })) {
       if (!entry.isFile()) continue;
       if (!entry.name.endsWith('.md') && !entry.name.endsWith('.mdc')) continue;
+      if (!ownedRuleNames.has(entry.name)) continue;
       fs.copyFileSync(path.join(stagedDir, entry.name), path.join(destDir, entry.name));
     }
     return;
@@ -7132,6 +7152,12 @@ function _removeGsdEntries(destDir, kind) {
         if (!entry.name.endsWith('.yaml') && !entry.name.endsWith('.md')) continue;
         fs.rmSync(path.join(subagentsDir, entry.name), { force: true });
       }
+    }
+    return;
+  }
+  if (kind.kind === 'rules') {
+    for (const fileName of getOmpOwnedRuleNames()) {
+      fs.rmSync(path.join(destDir, fileName), { force: true });
     }
     return;
   }
@@ -9044,9 +9070,10 @@ function writeManifest(configDir, runtime = 'claude', options = {}) {
     }
   }
   if (isOmp && fs.existsSync(rulesDir)) {
-    for (const file of fs.readdirSync(rulesDir)) {
-      if (file.endsWith('.md') || file.endsWith('.mdc')) {
-        manifest.files['rules/' + file] = fileHash(path.join(rulesDir, file));
+    for (const file of getOmpOwnedRuleNames()) {
+      const rulePath = path.join(rulesDir, file);
+      if (fs.existsSync(rulePath)) {
+        manifest.files['rules/' + file] = fileHash(rulePath);
       }
     }
   }
@@ -9190,6 +9217,58 @@ function populatePristineDir({ packageSrc, pristineDir, modified, runtime, pathP
       topLevels.add(slash === -1 ? '' : norm.slice(0, slash));
     }
 
+    const pristinePathPrefix = runtime === 'omp' && !isGlobal
+      ? `${path.resolve(path.dirname(pristineDir)).replace(/\\/g, '/')}/`
+      : pathPrefix;
+
+    function materializeOmpPristineTop(top) {
+      if (runtime !== 'omp') return false;
+      if (top === 'commands') {
+        for (const relPath of safeModified) {
+          const match = /^commands\/gsd-([^/]+)\.md$/.exec(relPath);
+          if (!match) continue;
+          const srcFile = path.join(packageSrc, 'commands', 'gsd', `${match[1]}.md`);
+          if (!fs.existsSync(srcFile)) continue;
+          let content = fs.readFileSync(srcFile, 'utf8');
+          content = convertClaudeCommandToOmpCommand(content, `gsd-${match[1]}`);
+          content = _applyRuntimeRewrites(content, 'omp', pristinePathPrefix, {
+            isGlobal,
+            rewriteRuntimeDir: isGlobal,
+          });
+          const stagedFile = path.join(stageRoot, relPath);
+          fs.mkdirSync(path.dirname(stagedFile), { recursive: true });
+          fs.writeFileSync(stagedFile, content);
+        }
+        return true;
+      }
+      if (top === 'rules') {
+        const ownedRuleNames = getOmpOwnedRuleNames(packageSrc);
+        for (const relPath of safeModified) {
+          const match = /^rules\/([^/]+\.(?:md|mdc))$/.exec(relPath);
+          if (!match || !ownedRuleNames.has(match[1])) continue;
+          const srcFile = path.join(packageSrc, 'gsd-core', 'omp', 'rules', match[1]);
+          if (!fs.existsSync(srcFile)) continue;
+          const content = _applyRuntimeRewrites(fs.readFileSync(srcFile, 'utf8'), 'omp', pristinePathPrefix, {
+            isGlobal,
+            rewriteRuntimeDir: isGlobal,
+          });
+          const stagedFile = path.join(stageRoot, relPath);
+          fs.mkdirSync(path.dirname(stagedFile), { recursive: true });
+          fs.writeFileSync(stagedFile, content);
+        }
+        return true;
+      }
+      if (top === 'extensions') {
+        const srcDir = path.join(packageSrc, 'gsd-core', 'omp', 'extensions');
+        const stageDir = path.join(stageRoot, top);
+        if (fs.existsSync(srcDir)) {
+          copyWithPathReplacement(srcDir, stageDir, pristinePathPrefix, runtime, false, isGlobal);
+        }
+        return true;
+      }
+      return false;
+    }
+
     for (const top of topLevels) {
       if (top === '') {
         // Root-level files — copy directly from package source. The transform
@@ -9208,12 +9287,13 @@ function populatePristineDir({ packageSrc, pristineDir, modified, runtime, pathP
         }
         continue;
       }
+      if (materializeOmpPristineTop(top)) continue;
       const srcDir = runtime === 'omp' && top === 'extensions'
         ? path.join(packageSrc, 'gsd-core', 'omp', 'extensions')
         : path.join(packageSrc, top);
       const stageDir = path.join(stageRoot, top);
       if (!fs.existsSync(srcDir)) continue;
-      copyWithPathReplacement(srcDir, stageDir, pathPrefix, runtime, false, isGlobal);
+      copyWithPathReplacement(srcDir, stageDir, pristinePathPrefix, runtime, false, isGlobal);
     }
 
     for (const relPath of safeModified) {
@@ -9474,7 +9554,7 @@ function reportInstallerMigrationResult(result) {
 function detectGsdWorkspaceState(workspaceRoot = process.cwd()) {
   const specsDir = path.join(workspaceRoot, 'specs');
   if (fs.existsSync(path.join(workspaceRoot, '.planning'))) {
-    return { state: 'planning-workspace', nextAction: '/gsd-plan' };
+    return { state: 'planning-workspace', nextAction: '/gsd-plan-phase' };
   }
   if (fs.existsSync(specsDir)) {
     for (const entry of fs.readdirSync(specsDir, { withFileTypes: true })) {
@@ -10091,6 +10171,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
         const ompChecks = [
           ['commands', path.join(targetDir, 'commands'), e => e.isFile() && e.name.startsWith('gsd-') && e.name.endsWith('.md'), 'commands/gsd-*'],
           ['rules', path.join(targetDir, 'rules'), e => e.isFile() && (e.name.endsWith('.md') || e.name.endsWith('.mdc')), 'rules/*.md'],
+          ['extensions', path.join(targetDir, 'extensions'), e => e.isDirectory() && e.name.startsWith('gsd-'), 'extensions/gsd-*'],
         ];
         if (!isMinimalMode(_effectiveInstallMode)) {
           ompChecks.push(['agents', path.join(targetDir, 'agents'), e => e.isFile() && e.name.startsWith('gsd-') && e.name.endsWith('.md'), 'agents/gsd-*']);
@@ -11632,6 +11713,7 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   if (runtime === 'qwen') program = 'Qwen Code';
   if (runtime === 'hermes') program = 'Hermes Agent';
   if (runtime === 'kimi') program = 'Kimi CLI';
+  if (runtime === 'omp') program = 'OMP';
 
   let command = '/gsd-new-project';
   if (runtime === 'opencode') command = '/gsd-new-project';

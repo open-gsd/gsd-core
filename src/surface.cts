@@ -468,6 +468,7 @@ function _syncGsdDir(stagedDir: string, destDir: string, kind: ArtifactKind | st
     for (const entry of fs.readdirSync(stagedDir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       const destSubDir = path.join(destDir, entry.name);
+      try { fs.rmSync(destSubDir, { recursive: true, force: true }); } catch { /* ignore */ }
       fs.cpSync(path.join(stagedDir, entry.name), destSubDir, { recursive: true });
       stagedDestNames.add(entry.name);
     }
