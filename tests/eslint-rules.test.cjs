@@ -68,7 +68,7 @@ describe('no-source-grep rule', () => {
           code: `
             const fs = require('fs');
             const path = require('path');
-            const src = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'core.cjs'), 'utf-8');
+            const src = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'io.cjs'), 'utf-8');
             src.includes('someFunction');
           `,
           filename: 'tests/foo.test.cjs',
@@ -105,7 +105,7 @@ describe('no-source-grep rule', () => {
             // allow-test-rule: pending migration
             const fs = require('fs');
             const path = require('path');
-            const src = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'core.cjs'), 'utf-8');
+            const src = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'io.cjs'), 'utf-8');
             src.includes('someFunction');
           `,
           filename: 'tests/foo.test.cjs',
@@ -120,7 +120,7 @@ describe('no-source-grep rule', () => {
       valid: [
         {
           code: `
-            const mod = require('../gsd-core/bin/lib/core.cjs');
+            const mod = require('../gsd-core/bin/lib/io.cjs');
             mod.someMethod();
           `,
           filename: 'tests/foo.test.cjs',

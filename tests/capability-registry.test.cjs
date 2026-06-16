@@ -4772,3 +4772,262 @@ describe('#1196 — discuss loop wiring + wired-point guard', () => {
     });
   });
 });
+
+// ─── activationKey validation (issue #1304 Phase 1) ─────────────────────────
+
+describe('activationKey validation', () => {
+  // Minimal valid feature capability fixture for activationKey tests.
+  // Uses UI_CAP as a base so all required fields are satisfied.
+  function makeCapWithActivationKey(activationKey) {
+    const cap = { ...UI_CAP, activationKey };
+    if (activationKey === undefined) delete cap.activationKey;
+    return cap;
+  }
+
+  // (a) valid activationKey referencing a key declared in the cap's own config slice
+  test('(a) valid activationKey referencing own config key: no errors, emitted in registry', () => {
+    // UI_CAP declares 'workflow.ui_phase' (boolean) in its config — use that as activationKey
+    const cap = makeCapWithActivationKey('workflow.ui_phase');
+    const errors = validateCapability(cap, 'ui');
+    assert.deepEqual(
+      errors,
+      [],
+      'Expected no validation errors for activationKey that matches own config key, got: ' +
+        JSON.stringify(errors),
+    );
+
+    // Confirm activationKey is emitted in the built registry
+    const capDir = makeTempCapDir({ ui: cap });
+    const { capMap, errors: loadErrors } = loadAndValidate(new Set(), capDir);
+    assert.deepEqual(loadErrors, [], 'Expected no load errors: ' + JSON.stringify(loadErrors));
+    const registry = buildRegistry(capMap);
+    assert.strictEqual(
+      registry.capabilities.ui.activationKey,
+      'workflow.ui_phase',
+      'registry.capabilities.ui.activationKey must equal the declared activationKey',
+    );
+  });
+
+  // (b) activationKey referencing an UNKNOWN config key → a specific error naming the cap + key
+  test('(b) activationKey referencing unknown config key: specific error emitted', () => {
+    const cap = makeCapWithActivationKey('no-such-key.enabled');
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(
+      errors.length > 0,
+      'Expected at least one error when activationKey references an unknown config key',
+    );
+    const joined = errors.join('\n');
+    assert.ok(
+      joined.includes('no-such-key.enabled'),
+      'Error must name the bad activationKey, got: ' + JSON.stringify(errors),
+    );
+    assert.ok(
+      joined.includes('ui') || joined.includes('(unknown)'),
+      'Error must name the capability id, got: ' + JSON.stringify(errors),
+    );
+    assert.ok(
+      joined.includes('config'),
+      'Error must reference the config slice, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  // (c) activationKey absent → valid (back-compat)
+  test('(c) activationKey absent: valid (back-compat — no errors)', () => {
+    const cap = makeCapWithActivationKey(undefined);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(cap, 'activationKey'),
+      'Fixture must not have activationKey when undefined is passed',
+    );
+    const errors = validateCapability(cap, 'ui');
+    assert.deepEqual(
+      errors,
+      [],
+      'Expected no validation errors when activationKey is absent, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  // (d) activationKey present but empty string → error
+  test('(d) activationKey empty string: error', () => {
+    const cap = makeCapWithActivationKey('');
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(
+      errors.length > 0,
+      'Expected at least one error when activationKey is an empty string',
+    );
+    assert.ok(
+      errors.some((e) => e.includes('activationKey') && e.includes('non-empty')),
+      'Error must mention activationKey and non-empty, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  // (d-extra) activationKey non-string (number) → error
+  test('(d-extra) activationKey non-string (number): error', () => {
+    const cap = { ...UI_CAP, activationKey: 42 };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(
+      errors.length > 0,
+      'Expected at least one error when activationKey is a number',
+    );
+    assert.ok(
+      errors.some((e) => e.includes('activationKey') && e.includes('non-empty')),
+      'Error must mention activationKey and non-empty string requirement, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  // (e) reserved-name guard: activationKey === '__proto__' → reserved-name error, not not-declared error
+  test('(e) activationKey "__proto__": reserved-name error (not not-declared error)', () => {
+    const cap = makeCapWithActivationKey('__proto__');
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(
+      errors.length > 0,
+      'Expected at least one error when activationKey is "__proto__"',
+    );
+    assert.ok(
+      errors.some((e) => e.includes('__proto__') && e.includes('reserved')),
+      'Error must mention "__proto__" and "reserved", got: ' + JSON.stringify(errors),
+    );
+    // Must NOT emit the not-declared error (the guard runs before hasOwnProperty.call)
+    assert.ok(
+      !errors.some((e) => e.includes('is not declared in this capability\'s config slice')),
+      'Reserved-name guard must fire before the not-declared check; got: ' + JSON.stringify(errors),
+    );
+  });
+
+  // (f) reserved-name guard: activationKey === 'constructor' → reserved-name error
+  test('(f) activationKey "constructor": reserved-name error', () => {
+    const cap = makeCapWithActivationKey('constructor');
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(
+      errors.length > 0,
+      'Expected at least one error when activationKey is "constructor"',
+    );
+    assert.ok(
+      errors.some((e) => e.includes('constructor') && e.includes('reserved')),
+      'Error must mention "constructor" and "reserved", got: ' + JSON.stringify(errors),
+    );
+    assert.ok(
+      !errors.some((e) => e.includes('is not declared in this capability\'s config slice')),
+      'Reserved-name guard must fire before the not-declared check; got: ' + JSON.stringify(errors),
+    );
+  });
+
+  // (g) reserved-name guard: activationKey === 'prototype' → reserved-name error
+  test('(g) activationKey "prototype": reserved-name error', () => {
+    const cap = makeCapWithActivationKey('prototype');
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(
+      errors.length > 0,
+      'Expected at least one error when activationKey is "prototype"',
+    );
+    assert.ok(
+      errors.some((e) => e.includes('prototype') && e.includes('reserved')),
+      'Error must mention "prototype" and "reserved", got: ' + JSON.stringify(errors),
+    );
+    assert.ok(
+      !errors.some((e) => e.includes('is not declared in this capability\'s config slice')),
+      'Reserved-name guard must fire before the not-declared check; got: ' + JSON.stringify(errors),
+    );
+  });
+
+  // (h) regression guard: activationKey === null → non-empty-string error (typeof null === 'object' footgun)
+  test('(h) activationKey null: non-empty-string error (typeof null footgun regression guard)', () => {
+    const cap = { ...UI_CAP, activationKey: null };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(
+      errors.length > 0,
+      'Expected at least one error when activationKey is null',
+    );
+    assert.ok(
+      errors.some((e) => e.includes('activationKey') && e.includes('non-empty')),
+      'Error must mention activationKey and non-empty string requirement (typeof null === "object" must not bypass the check), got: ' + JSON.stringify(errors),
+    );
+    // Must NOT emit the reserved-name error
+    assert.ok(
+      !errors.some((e) => e.includes('reserved')),
+      'null must not trigger the reserved-name guard, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  // Registry integration: activationKey absent → field absent in registry entry (omit semantics)
+  test('activationKey absent: field omitted from registry capabilities entry', () => {
+    const cap = makeCapWithActivationKey(undefined);
+    const capDir = makeTempCapDir({ ui: cap });
+    const { capMap, errors } = loadAndValidate(new Set(), capDir);
+    assert.deepEqual(errors, [], 'Expected no load errors: ' + JSON.stringify(errors));
+    const registry = buildRegistry(capMap);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(registry.capabilities.ui, 'activationKey'),
+      'activationKey must be absent from registry.capabilities.ui when not declared',
+    );
+  });
+
+  // Verify graphify capability.json declares correct activationKey
+  test('graphify capability.json declares activationKey matching its own config key', () => {
+    const graphifyCap = JSON.parse(
+      require('node:fs').readFileSync(
+        require('node:path').join(ROOT, 'capabilities', 'graphify', 'capability.json'),
+        'utf8',
+      ),
+    );
+    assert.strictEqual(
+      graphifyCap.activationKey,
+      'graphify.enabled',
+      'graphify capability.json must declare activationKey: "graphify.enabled"',
+    );
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(graphifyCap.config, 'graphify.enabled'),
+      'graphify capability.json config must contain key "graphify.enabled"',
+    );
+  });
+
+  // Verify intel capability.json declares correct activationKey
+  test('intel capability.json declares activationKey matching its own config key', () => {
+    const intelCap = JSON.parse(
+      require('node:fs').readFileSync(
+        require('node:path').join(ROOT, 'capabilities', 'intel', 'capability.json'),
+        'utf8',
+      ),
+    );
+    assert.strictEqual(
+      intelCap.activationKey,
+      'intel.enabled',
+      'intel capability.json must declare activationKey: "intel.enabled"',
+    );
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(intelCap.config, 'intel.enabled'),
+      'intel capability.json config must contain key "intel.enabled"',
+    );
+  });
+
+  // (i) role:runtime capability with activationKey → feature-only field error
+  test('(i) role:runtime with activationKey: feature-only field error', () => {
+    const cap = {
+      id: 'cursor', role: 'runtime', title: 'Cursor', description: 'Cursor IDE runtime',
+      tier: 'standard', requires: [],
+      activationKey: 'some.key',
+      runtime: {
+        configHome: { kind: 'dot-home', name: '.cursor', env: ['CURSOR_CONFIG_DIR'] },
+        configFormat: 'settings-json',
+        artifactLayout: { global: [], local: [] },
+        commandStyle: 'slash-hyphen',
+        hooksSurface: 'cursor-hooks-json',
+        hookEvents: 'claude',
+        sandboxTier: 'none',
+        supportTier: 2,
+        installSurface: 'cursor-hooks-json',
+        writesSharedSettings: false,
+        permissionWriter: null,
+        extendedHookEvents: [],
+      },
+    };
+    const errors = validateCapability(cap, 'cursor');
+    assert.ok(
+      errors.length > 0,
+      'Expected at least one error when role:runtime declares activationKey',
+    );
+    assert.ok(
+      errors.some((e) => e.includes('activationKey') && e.includes('feature-only')),
+      'Error must mention activationKey and feature-only, got: ' + JSON.stringify(errors),
+    );
+  });
+});

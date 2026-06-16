@@ -13,7 +13,7 @@ const assert = require('node:assert/strict');
 const path = require('path');
 
 const { extractOneLinerFromBody } = require(
-  path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'core.cjs')
+  path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'core-utils.cjs')
 );
 
 describe('bug #2660: extractOneLinerFromBody', () => {

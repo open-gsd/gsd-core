@@ -7,11 +7,10 @@
  * normalizes legacy keys, applies the active-workstream overlay, validates
  * against the config schema, and warns on unknown keys/profile overrides.
  * Behaviour is preserved byte-for-behaviour from the prior location; only
- * the module boundary moved. core.cjs re-exports `loadConfig` for back-compat.
+ * the module boundary moved. The core.cjs re-export spine was retired in
+ * epic #1267; callers import loadConfig from config-loader.cjs directly.
  *
- * New imports should pull loadConfig from config-loader.cjs directly.
- *
- * Dependencies (leaf modules only — no core.cjs):
+ * Dependencies (leaf modules only):
  *   - node:fs / node:os / node:path (stdlib)
  *   - ./configuration.cjs    (normalizeLegacyKeys, CONFIG_DEFAULTS as CANONICAL_CONFIG_DEFAULTS)
  *   - ./config-schema.cjs    (VALID_CONFIG_KEYS, DYNAMIC_KEY_PATTERNS)

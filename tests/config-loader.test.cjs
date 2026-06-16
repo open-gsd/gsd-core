@@ -27,7 +27,6 @@ const { cleanup } = require('./helpers.cjs');
 // ─── module under test ────────────────────────────────────────────────────────
 
 const configLoader = require('../gsd-core/bin/lib/config-loader.cjs');
-const coreModule = require('../gsd-core/bin/lib/core.cjs');
 
 const { loadConfig, _resetRuntimeWarningCacheForTests } = configLoader;
 
@@ -50,25 +49,6 @@ function writeWorkstreamConfig(tmpDir, wsName, obj) {
   fs.writeFileSync(path.join(wsDir, 'config.json'), JSON.stringify(obj, null, 2), 'utf-8');
 }
 
-// ─── shim identity ────────────────────────────────────────────────────────────
-
-describe('config-loader shim identity', () => {
-  test('core.loadConfig === configLoader.loadConfig (same function object)', () => {
-    assert.strictEqual(
-      coreModule.loadConfig,
-      configLoader.loadConfig,
-      'core.cjs must re-export the same loadConfig function as config-loader.cjs'
-    );
-  });
-
-  test('core.isGitIgnored === configLoader.isGitIgnored (same function object)', () => {
-    assert.strictEqual(
-      coreModule.isGitIgnored,
-      configLoader.isGitIgnored,
-      'core.cjs must re-export the same isGitIgnored function as config-loader.cjs'
-    );
-  });
-});
 
 // ─── defaults when no config.json ────────────────────────────────────────────
 

@@ -265,9 +265,11 @@ const _gsdLibDir = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib');
 const { MODEL_PROFILES: GSD_MODEL_PROFILES } = require(path.join(_gsdLibDir, 'model-profiles.cjs'));
 const {
   RUNTIME_PROFILE_MAP: GSD_RUNTIME_PROFILE_MAP,
+} = require(path.join(_gsdLibDir, 'model-catalog.cjs'));
+const {
   resolveTierEntry: gsdResolveTierEntry,
   EFFORT_SET: GSD_EFFORT_SET,
-} = require(path.join(_gsdLibDir, 'core.cjs'));
+} = require(path.join(_gsdLibDir, 'model-resolver.cjs'));
 
 // #443 — model-catalog and config-defaults.manifest.json exports needed only
 // by effort-resolution code paths (resolveInstallTimeEffort /

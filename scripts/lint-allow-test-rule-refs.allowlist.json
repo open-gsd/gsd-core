@@ -152,8 +152,6 @@
   "tests/context-enrichment.test.cjs :: source-text-is-the-product",
   "tests/contributor-standards.test.cjs :: source-text-is-the-product",
   "tests/copilot-install.test.cjs :: integration-test-input",
-  "tests/core.test.cjs :: architectural-invariant",
-  "tests/core.test.cjs :: structural-regression-guard",
   "tests/cursor-hooks.test.cjs :: source-text-is-the-product",
   "tests/cursor-reviewer.test.cjs :: source-text-is-the-product",
   "tests/debug-session-management.test.cjs :: source-text-is-the-product",

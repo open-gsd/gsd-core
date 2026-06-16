@@ -30,7 +30,7 @@ const path = require('node:path');
 const {
   resolveGranularityInternal,
   VALID_GRANULARITIES,
-} = require('../gsd-core/bin/lib/core.cjs');
+} = require('../gsd-core/bin/lib/model-resolver.cjs');
 const commands = require('../gsd-core/bin/lib/commands.cjs');
 const {
   VALID_PHASE_TYPES,

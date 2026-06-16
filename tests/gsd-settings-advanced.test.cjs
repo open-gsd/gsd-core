@@ -41,7 +41,7 @@ const SPEC_FIELDS = {
     { key: 'workflow.plan_bounce',           default: 'false' },
     { key: 'workflow.plan_bounce_passes',    default: '2' },
     { key: 'workflow.plan_bounce_script',    default: 'null' },
-    { key: 'workflow.subagent_timeout',      default: '600' },
+    { key: 'workflow.subagent_timeout',      default: '300000' },
     { key: 'workflow.inline_plan_threshold', default: '3' },
   ],
   execution: [

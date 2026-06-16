@@ -684,7 +684,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
    Immediately after each worktree `Agent()` spawn returns metadata, atomically append `{agent_id, worktree_path, branch, expected_base}` to `WAVE_WORKTREE_MANIFEST`. If any field is missing, stop and ask for recovery instead of scanning all agent worktrees.
 
-   > **ORCHESTRATOR FAIL-CLOSED RULE (#48):** `worktree_branch_check` is verify-only — an executor that hits a base/HEAD-namespace mismatch prints `FATAL:` and exits **42** instead of self-recovering. If any executor result reports a `FATAL:`/`exit 42` (or its commits never appear because it halted at the check), mark that plan **blocked**: do NOT merge or clean up its worktree (preserve it for inspection), do NOT count the wave as successful, and surface the mismatch with recovery guidance to the user. The orchestrator — the worktree lifecycle owner — performs any base correction (e.g. recreate the worktree on `{EXPECTED_BASE}`); the sub-agent never does. Never proceed past a halted executor on the assumption it succeeded.
+   > **Worktree recovery policy (#48 + #1292):** See `execute-phase/steps/worktree-recovery-policy.md` — FAIL-CLOSED rule for base/HEAD-namespace mismatches AND isolated-run fail-safe recovery.
 
    > **ORCHESTRATOR RULE — CODEX RUNTIME**: After calling Agent() above to spawn executor agent(s), stop working on this task immediately. Do not read more files, edit code, or run tests related to this task while the subagent is active. Wait for the subagent to return its result. This prevents duplicate work, conflicting edits, and wasted context. Only resume when the subagent result is available.
 
@@ -752,6 +752,8 @@ increases monotonically across waves. `{status}` is `complete` (success),
    commits appear for `${EXECUTOR_STALL_THRESHOLD_MINUTES}` minutes, pause and
    ask for one recovery path: `continue waiting`, `kill and retry`, or
    `kill and switch to inline execution`.
+
+   If the stalled executor ran in an isolated worktree, `kill and switch to inline execution` edits the primary checkout — see worktree recovery policy (`execute-phase/steps/worktree-recovery-policy.md`). Prefer `kill and retry` in a fresh worktree; inline execution requires explicit confirmation, never the default.
 
    **This fallback applies automatically to all runtimes.** Claude Code's Agent() normally
    returns synchronously, but the fallback ensures resilience if it doesn't.
@@ -854,6 +856,8 @@ increases monotonically across waves. `{status}` is `complete` (success),
    **If at least one plan used worktrees but others did not:** still run this cleanup — it iterates over actual `git worktree list` output and only merges back the worktrees that were created, leaving sequential plans' commits on the main tree untouched.
 
    **If no worktrees found at runtime:** Skip silently — agents may have been spawned without worktree isolation, or the orchestrator already cleaned them up.
+
+   If the user declines to merge a worktree or a worktree over-reached scope, apply the worktree recovery policy (`execute-phase/steps/worktree-recovery-policy.md`) — never default to editing `main`.
 
 5.6. **Post-merge build & test gate:**
 

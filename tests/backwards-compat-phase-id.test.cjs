@@ -28,7 +28,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { createTempProject, cleanup, captureConsole } = require('./helpers.cjs');
-const { getMilestonePhaseFilter } = require('../gsd-core/bin/lib/core.cjs');
+const { getMilestonePhaseFilter } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 

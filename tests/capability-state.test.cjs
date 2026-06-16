@@ -19,6 +19,7 @@ const { cleanup } = require('./helpers.cjs');
 
 const {
   resolveCapabilityState,
+  isCapabilityActive,
   _isSafePropKey,
   _loadInstalledSkillsManifest,
   _resolveManifest,
@@ -31,7 +32,7 @@ const realRegistry = require('../gsd-core/bin/lib/capability-registry.cjs');
 
 /**
  * Build a minimal synthetic registry for a single capability with the given
- * skills, steps, gates, contributions, and configSchema entries.
+ * skills, steps, gates, contributions, configSchema, and optional activationKey.
  */
 function makeRegistry({
   id = 'test-cap',
@@ -41,18 +42,23 @@ function makeRegistry({
   gates = [],
   contributions = [],
   configSchema = {},
+  activationKey = undefined,
 } = {}) {
+  const capEntry = {
+    id,
+    tier,
+    skills,
+    steps,
+    gates,
+    contributions,
+    config: {},
+  };
+  if (activationKey !== undefined) {
+    capEntry.activationKey = activationKey;
+  }
   return {
     capabilities: {
-      [id]: {
-        id,
-        tier,
-        skills,
-        steps,
-        gates,
-        contributions,
-        config: {},
-      },
+      [id]: capEntry,
     },
     configSchema,
   };
@@ -534,6 +540,64 @@ describe('resolveCapabilityState — hook activation details', () => {
     assert.ok(hook, 'step hook should be present');
     assert.strictEqual(hook.when, 42, 'original non-string when value must be preserved');
     assert.strictEqual(hook.active, false, 'non-string when → inactive');
+  });
+
+  // ── configActivation cascade to hooks ────────────────────────────────────────
+  // Bug: a config-disabled capability (active=false) with an unconditional hook
+  // (no `when`, configured=true) was wrongly yielding hook.active=true because
+  // the hook loop used `enabled && configured` instead of `active && configured`.
+  // Fix: hook.active = active(capability) && configured.
+
+  test('config-disabled capability with unconditional hook → hook.active=false, configured=true', () => {
+    // The capability activationKey resolves false → capability active=false.
+    // The hook has no `when` → configured=true (unconditional).
+    // Before the fix: hook.active = enabled(true) && configured(true) = true  ← BUG
+    // After the fix:  hook.active = active(false) && configured(true)  = false ← correct
+    const registry = makeRegistry({
+      id: 'test-cap',
+      skills: ['my-skill'],
+      activationKey: 'myfeature.enabled',
+      steps: [{ point: 'plan:pre', ref: { skill: 'my-skill' } }], // no `when` → unconditional
+    });
+    const result = resolveCapabilityState({
+      registry,
+      installedSkills: new Set(['my-skill']),
+      surfacedSkills: new Set(['my-skill']),
+      config: { myfeature: { enabled: false } }, // capability's configActivation = false
+    });
+    const cap = result.capabilities[0];
+    assert.ok(cap, 'capability must be present');
+    assert.strictEqual(cap.enabled, true, 'enabled stays true: installed && surfaced');
+    assert.strictEqual(cap.active, false, 'capability active=false: configActivation off');
+    const hook = cap.hooks.find((h) => h.kind === 'step');
+    assert.ok(hook, 'unconditional step hook must be present');
+    assert.strictEqual(hook.when, undefined, 'hook has no when field (unconditional)');
+    assert.strictEqual(hook.configured, true, 'hook configured=true: hook own gate is open');
+    assert.strictEqual(hook.active, false, 'hook active=false: capability configActivation cascades to hook');
+  });
+
+  test('config-ENABLED capability with unconditional hook → hook.active=true (control)', () => {
+    // Same setup as above but activationKey resolves true → capability active=true.
+    // hook.active should follow configured as before.
+    const registry = makeRegistry({
+      id: 'test-cap',
+      skills: ['my-skill'],
+      activationKey: 'myfeature.enabled',
+      steps: [{ point: 'plan:pre', ref: { skill: 'my-skill' } }], // no `when`
+    });
+    const result = resolveCapabilityState({
+      registry,
+      installedSkills: new Set(['my-skill']),
+      surfacedSkills: new Set(['my-skill']),
+      config: { myfeature: { enabled: true } }, // capability's configActivation = true
+    });
+    const cap = result.capabilities[0];
+    assert.ok(cap, 'capability must be present');
+    assert.strictEqual(cap.active, true, 'capability active=true: configActivation on');
+    const hook = cap.hooks.find((h) => h.kind === 'step');
+    assert.ok(hook, 'unconditional step hook must be present');
+    assert.strictEqual(hook.configured, true, 'hook configured=true');
+    assert.strictEqual(hook.active, true, 'hook active=true: both capability and hook gate open');
   });
 });
 
@@ -1176,4 +1240,352 @@ describe('regressions: installed-runtime capability surface (#1160)', () => {
     });
   });
 
+});
+
+// ─── resolveCapabilityState — per-capability active field ────────────────────
+
+describe('resolveCapabilityState — per-capability active (Phase 2)', () => {
+  // Boundary: installed && surfaced && config-enabled → active=true
+  test('active=true when installed && surfaced && activationKey resolves true', () => {
+    const registry = makeRegistry({
+      skills: ['my-skill'],
+      activationKey: 'myfeature.enabled',
+      configSchema: { 'myfeature.enabled': { default: false } },
+    });
+    const result = resolveCapabilityState({
+      registry,
+      installedSkills: new Set(['my-skill']),
+      surfacedSkills: new Set(['my-skill']),
+      config: { myfeature: { enabled: true } },
+    });
+    const cap = result.capabilities[0];
+    assert.ok(cap, 'capability must be present');
+    assert.strictEqual(cap.installed, true);
+    assert.strictEqual(cap.surfaced, true);
+    assert.strictEqual(cap.enabled, true, 'enabled = installed && surfaced (unchanged)');
+    assert.strictEqual(cap.active, true, 'active = enabled && config-enabled');
+  });
+
+  // Boundary: installed && surfaced && config-DISABLED → active=false (the key case)
+  test('active=false when installed && surfaced but activationKey resolves false', () => {
+    const registry = makeRegistry({
+      skills: ['my-skill'],
+      activationKey: 'myfeature.enabled',
+      configSchema: { 'myfeature.enabled': { default: false } },
+    });
+    const result = resolveCapabilityState({
+      registry,
+      installedSkills: new Set(['my-skill']),
+      surfacedSkills: new Set(['my-skill']),
+      config: { myfeature: { enabled: false } },
+    });
+    const cap = result.capabilities[0];
+    assert.ok(cap);
+    assert.strictEqual(cap.enabled, true, 'enabled still true: installed && surfaced unchanged');
+    assert.strictEqual(cap.active, false, 'active=false: config gate is off');
+  });
+
+  // Boundary: config-enabled but NOT surfaced → active=false
+  test('active=false when config-enabled but not surfaced (enabled=false)', () => {
+    const registry = makeRegistry({
+      skills: ['my-skill'],
+      activationKey: 'myfeature.enabled',
+    });
+    const result = resolveCapabilityState({
+      registry,
+      installedSkills: new Set(['my-skill']),
+      surfacedSkills: new Set(), // NOT surfaced
+      config: { myfeature: { enabled: true } },
+    });
+    const cap = result.capabilities[0];
+    assert.ok(cap);
+    assert.strictEqual(cap.surfaced, false);
+    assert.strictEqual(cap.enabled, false, 'enabled=false: not surfaced');
+    assert.strictEqual(cap.active, false, 'active=false: enabled is false');
+  });
+
+  // Boundary: NOT installed → active=false regardless of config
+  test('active=false when not installed (installed=false)', () => {
+    const registry = makeRegistry({
+      skills: ['my-skill'],
+      activationKey: 'myfeature.enabled',
+    });
+    const result = resolveCapabilityState({
+      registry,
+      installedSkills: new Set(), // NOT installed
+      surfacedSkills: new Set(['my-skill']),
+      config: { myfeature: { enabled: true } },
+    });
+    const cap = result.capabilities[0];
+    assert.ok(cap);
+    assert.strictEqual(cap.installed, false);
+    assert.strictEqual(cap.enabled, false);
+    assert.strictEqual(cap.active, false, 'active=false: not installed');
+  });
+
+  // Boundary: no activationKey → active === enabled (no config gate)
+  test('active=enabled when capability has no activationKey', () => {
+    // No activationKey: configActivation defaults to true so active = enabled
+    const registry = makeRegistry({
+      skills: ['my-skill'],
+      // No activationKey
+    });
+    // installed && surfaced → enabled=true → active=true
+    const resultEnabled = resolveCapabilityState({
+      registry,
+      installedSkills: new Set(['my-skill']),
+      surfacedSkills: new Set(['my-skill']),
+      config: {},
+    });
+    const capEnabled = resultEnabled.capabilities[0];
+    assert.ok(capEnabled);
+    assert.strictEqual(capEnabled.enabled, true);
+    assert.strictEqual(capEnabled.active, true, 'active=true when no activationKey and enabled');
+
+    // NOT surfaced → enabled=false → active=false
+    const resultDisabled = resolveCapabilityState({
+      registry,
+      installedSkills: new Set(['my-skill']),
+      surfacedSkills: new Set(), // not surfaced
+      config: {},
+    });
+    const capDisabled = resultDisabled.capabilities[0];
+    assert.ok(capDisabled);
+    assert.strictEqual(capDisabled.enabled, false);
+    assert.strictEqual(capDisabled.active, false, 'active=false when no activationKey and not enabled');
+  });
+
+  // enabled field semantics unchanged: still installed && surfaced only
+  test('enabled stays installed && surfaced regardless of activationKey', () => {
+    const registry = makeRegistry({
+      skills: ['my-skill'],
+      activationKey: 'myfeature.enabled',
+    });
+    // installed && surfaced but config disables it
+    const result = resolveCapabilityState({
+      registry,
+      installedSkills: new Set(['my-skill']),
+      surfacedSkills: new Set(['my-skill']),
+      config: { myfeature: { enabled: false } },
+    });
+    const cap = result.capabilities[0];
+    assert.ok(cap);
+    // enabled must still be true (installed && surfaced — config doesn't affect it)
+    assert.strictEqual(cap.enabled, true, 'enabled = installed && surfaced (config does not affect enabled)');
+    assert.strictEqual(cap.active, false, 'active reflects config gate');
+  });
+
+  // activationKey defaults to schema default when key absent from config
+  test('active uses schema default when activationKey not in config', () => {
+    // schema default = true → active=true when enabled
+    const registryDefaultTrue = makeRegistry({
+      skills: ['my-skill'],
+      activationKey: 'myfeature.enabled',
+      configSchema: { 'myfeature.enabled': { default: true } },
+    });
+    const resultTrue = resolveCapabilityState({
+      registry: registryDefaultTrue,
+      installedSkills: new Set(['my-skill']),
+      surfacedSkills: new Set(['my-skill']),
+      config: {}, // no explicit key
+    });
+    assert.strictEqual(resultTrue.capabilities[0].active, true, 'active=true when schema default=true');
+
+    // schema default = false → active=false when enabled
+    const registryDefaultFalse = makeRegistry({
+      skills: ['my-skill'],
+      activationKey: 'myfeature.enabled',
+      configSchema: { 'myfeature.enabled': { default: false } },
+    });
+    const resultFalse = resolveCapabilityState({
+      registry: registryDefaultFalse,
+      installedSkills: new Set(['my-skill']),
+      surfacedSkills: new Set(['my-skill']),
+      config: {}, // no explicit key
+    });
+    assert.strictEqual(resultFalse.capabilities[0].active, false, 'active=false when schema default=false');
+  });
+});
+
+// ─── isCapabilityActive convenience predicate ─────────────────────────────────
+
+describe('isCapabilityActive — convenience predicate (Phase 2)', () => {
+  // isCapabilityActive delegates to resolveCapabilityRuntimeState which does I/O.
+  // We test it via the CLI+tmpDir path used by the existing e2e tests above, and
+  // a pure-function boundary test that forces a known-missing capability id.
+
+  test('returns false for unknown capId (not in registry)', () => {
+    // We can't easily inject the registry into resolveCapabilityRuntimeState
+    // without a cwd that has been set up. Instead, probe a capability id that
+    // is guaranteed to never appear in the real registry.
+    // We use a non-existent cwd so resolveCapabilityRuntimeState degrades
+    // gracefully (installedSkills/surfacedSkills → empty → all disabled) but
+    // still returns a capabilities array from the real registry.
+    // Any truly-unknown capId must return false regardless.
+    const nonExistentCwd = path.join(os.tmpdir(), 'cap-active-nonexistent-' + Date.now());
+    const result = isCapabilityActive('__definitely_not_a_capability__', nonExistentCwd);
+    assert.strictEqual(result, false, 'unknown capId must return false');
+  });
+
+  test('isCapabilityActive returns same value as the entry active field (e2e)', () => {
+    // Use a non-existent cwd so resolveCapabilityRuntimeState degrades gracefully.
+    // resolveCapabilityRuntimeState and isCapabilityActive both resolve against
+    // the SAME runtime environment: we compare isCapabilityActive(capId, cwd)
+    // to the matching entry's .active from resolveCapabilityRuntimeState(cwd, undefined)
+    // called on the identical cwd. This guarantees a real equality check — not typeof.
+    //
+    // We need resolveCapabilityRuntimeState for the comparison; require it here
+    // since it is exported from the same module.
+    const { resolveCapabilityRuntimeState } = require('../gsd-core/bin/lib/capability-state.cjs');
+
+    const nonExistentCwd = path.join(os.tmpdir(), 'cap-active-eq-' + Date.now());
+
+    // Pick a capability that exists in the real registry ('ui' is always present).
+    const capId = 'ui';
+
+    // resolveCapabilityRuntimeState resolves state from the real environment.
+    const runtimeResult = resolveCapabilityRuntimeState(nonExistentCwd, undefined);
+    const entry = runtimeResult.capabilities.find((c) => c.id === capId);
+    assert.ok(entry, `'${capId}' must be present in the real registry`);
+
+    // isCapabilityActive must return exactly the same boolean as the resolved entry.
+    const actual = isCapabilityActive(capId, nonExistentCwd);
+    assert.strictEqual(
+      actual,
+      entry.active,
+      `isCapabilityActive('${capId}') must equal entry.active=${entry.active} from resolveCapabilityRuntimeState`,
+    );
+
+    // Also verify the already-covered false case for unknown capId:
+    assert.strictEqual(isCapabilityActive('__no_such_cap__', nonExistentCwd), false);
+  });
+});
+
+// ─── Cross-runtime runtime detection (HIGH fix — GSD_RUNTIME → config.runtime → 'claude') ──────
+
+describe('isCapabilityActive cross-runtime detection (GSD_RUNTIME → config.runtime → claude)', () => {
+  // Verifies the HIGH bug fix: when GSD_RUNTIME='codex', resolveCapabilityRuntimeState
+  // must consult the CODEX config dir (via CODEX_HOME), not ~/.claude.
+  //
+  // Fixture layout:
+  //   CODEX_HOME        → tmpCodexDir/   ← .gsd-surface.json: full profile, graphify SURFACED
+  //   CLAUDE_CONFIG_DIR → tmpClaudeDir/ ← .gsd-surface.json: full profile, graphify NOT surfaced
+  //   GSD_RUNTIME=codex
+  //   project cwd       → tmpProjectDir/ ← config.json: graphify.enabled=true
+  //                       (config leg must pass; SURFACE leg is what we are isolating)
+  //
+  // Expected: isCapabilityActive('graphify', cwd) === true
+  //   (codex dir has graphify surfaced, so the codex surface should win)
+  //
+  // Pre-fix (hardcoded 'claude'): would read tmpClaudeDir → graphify NOT surfaced → false (BUG).
+  // Post-fix (detects 'codex' via GSD_RUNTIME): reads tmpCodexDir → surfaced → true (CORRECT).
+
+  let tmpCodexDir;
+  let tmpClaudeDir;
+  let tmpProjectDir;
+  let prevGsdRuntime;
+  let prevCodexHome;
+  let prevClaudeConfigDir;
+  let prevGsdWorkstream;
+  let prevGsdProject;
+
+  before(() => {
+    tmpCodexDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-state-codex-cfg-'));
+    tmpClaudeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-state-claude-cfg-'));
+    tmpProjectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-state-xrt-project-'));
+
+    // Codex config dir: full profile + graphify SURFACED (disabledClusters empty)
+    fs.writeFileSync(
+      path.join(tmpCodexDir, '.gsd-surface.json'),
+      JSON.stringify({ baseProfile: 'full', disabledClusters: [], explicitAdds: [], explicitRemoves: [] }, null, 2) + '\n',
+      'utf8',
+    );
+
+    // Claude config dir: full profile + graphify NOT surfaced
+    fs.writeFileSync(
+      path.join(tmpClaudeDir, '.gsd-surface.json'),
+      JSON.stringify({ baseProfile: 'full', disabledClusters: ['graphify'], explicitAdds: [], explicitRemoves: [] }, null, 2) + '\n',
+      'utf8',
+    );
+
+    // Project: config with graphify.enabled=true so the config leg passes.
+    // The SURFACE leg (install+surfaced) is what we are testing — it must read
+    // the CODEX config dir (via CODEX_HOME), not the CLAUDE config dir.
+    fs.mkdirSync(path.join(tmpProjectDir, '.planning'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpProjectDir, '.planning', 'config.json'),
+      JSON.stringify({ graphify: { enabled: true } }),
+      'utf8',
+    );
+  });
+
+  after(() => {
+    cleanup(tmpCodexDir);
+    cleanup(tmpClaudeDir);
+    cleanup(tmpProjectDir);
+  });
+
+  test('GSD_RUNTIME=codex → resolver consults CODEX_HOME, not CLAUDE_CONFIG_DIR (HIGH cross-runtime fix)', () => {
+    prevGsdRuntime = process.env.GSD_RUNTIME;
+    prevCodexHome = process.env.CODEX_HOME;
+    prevClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    prevGsdWorkstream = process.env.GSD_WORKSTREAM;
+    prevGsdProject = process.env.GSD_PROJECT;
+
+    try {
+      process.env.GSD_RUNTIME = 'codex';
+      process.env.CODEX_HOME = tmpCodexDir;       // codex dir: graphify SURFACED
+      process.env.CLAUDE_CONFIG_DIR = tmpClaudeDir; // claude dir: graphify NOT surfaced
+      delete process.env.GSD_WORKSTREAM;
+      delete process.env.GSD_PROJECT;
+
+      // With GSD_RUNTIME=codex, the resolver must look at CODEX_HOME (graphify surfaced)
+      // and return true. Pre-fix it would look at CLAUDE_CONFIG_DIR (not surfaced) → false.
+      const active = isCapabilityActive('graphify', tmpProjectDir);
+      assert.strictEqual(
+        active,
+        true,
+        'isCapabilityActive must return true when GSD_RUNTIME=codex and graphify is surfaced in CODEX_HOME — ' +
+        'the pre-fix code hardcoded getGlobalConfigDir("claude") regardless of GSD_RUNTIME, returning false (BUG)',
+      );
+
+      // Also verify: if we swap surfaces (codex NOT surfaced, claude surfaced), still uses codex dir → false
+      fs.writeFileSync(
+        path.join(tmpCodexDir, '.gsd-surface.json'),
+        JSON.stringify({ baseProfile: 'full', disabledClusters: ['graphify'], explicitAdds: [], explicitRemoves: [] }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(tmpClaudeDir, '.gsd-surface.json'),
+        JSON.stringify({ baseProfile: 'full', disabledClusters: [], explicitAdds: [], explicitRemoves: [] }, null, 2) + '\n',
+        'utf8',
+      );
+      const activeSwapped = isCapabilityActive('graphify', tmpProjectDir);
+      assert.strictEqual(
+        activeSwapped,
+        false,
+        'isCapabilityActive must return false when GSD_RUNTIME=codex and graphify is NOT surfaced in CODEX_HOME — ' +
+        'even though claude dir has graphify surfaced, the codex dir is the authoritative surface',
+      );
+    } finally {
+      // Restore env vars
+      if (prevGsdRuntime === undefined) delete process.env.GSD_RUNTIME;
+      else process.env.GSD_RUNTIME = prevGsdRuntime;
+      if (prevCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = prevCodexHome;
+      if (prevClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = prevClaudeConfigDir;
+      if (prevGsdWorkstream === undefined) delete process.env.GSD_WORKSTREAM;
+      else process.env.GSD_WORKSTREAM = prevGsdWorkstream;
+      if (prevGsdProject === undefined) delete process.env.GSD_PROJECT;
+      else process.env.GSD_PROJECT = prevGsdProject;
+
+      // Restore codex dir surface fixture for cleanup consistency
+      fs.writeFileSync(
+        path.join(tmpCodexDir, '.gsd-surface.json'),
+        JSON.stringify({ baseProfile: 'full', disabledClusters: [], explicitAdds: [], explicitRemoves: [] }, null, 2) + '\n',
+        'utf8',
+      );
+    }
+  });
 });

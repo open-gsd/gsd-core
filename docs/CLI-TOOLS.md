@@ -549,12 +549,12 @@ User-facing entry point: `/gsd-graphify` (see [Command Reference](COMMANDS.md#gs
 
 ## Reviewer CLI Routing
 
-`review.models.<cli>` maps a reviewer flavor to a shell command invoked by the code-review workflow. Set via [`/gsd-config --integrations`](COMMANDS.md#gsd-config) or directly:
+`review.models.<cli>` maps a reviewer flavor to a bare model id injected into the CLI's `--model` (or `-m`) flag by the code-review workflow. Set via [`/gsd-config --integrations`](COMMANDS.md#gsd-config) or directly:
 
 ```bash
-node gsd-tools.cjs config-set review.models.codex    "codex exec --model gpt-5"
-node gsd-tools.cjs config-set review.models.gemini   "gemini -m gemini-2.5-pro"
-node gsd-tools.cjs config-set review.models.opencode "opencode run --model claude-sonnet-4"
+node gsd-tools.cjs config-set review.models.codex    "gpt-5"
+node gsd-tools.cjs config-set review.models.gemini   "gemini-2.5-pro"
+node gsd-tools.cjs config-set review.models.opencode "claude-sonnet-4"
 node gsd-tools.cjs config-set review.models.claude   ""   # clear — fall back to session model
 ```
 

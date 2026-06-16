@@ -20,6 +20,16 @@ const fs = require('fs');
 const path = require('path');
 
 const WORKFLOW_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md');
+const QUICK_WORKFLOW_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'quick.md');
+const RECOVERY_POLICY_PATH = path.join(
+  __dirname,
+  '..',
+  'gsd-core',
+  'workflows',
+  'execute-phase',
+  'steps',
+  'worktree-recovery-policy.md'
+);
 
 describe('execute-phase worktree: shared artifact ownership (#1571)', () => {
   test('workflow file exists', () => {
@@ -127,6 +137,123 @@ describe('execute-phase worktree: shared artifact ownership (#1571)', () => {
     assert.ok(
       criteria.includes('ROADMAP.md'),
       'sequential executor success_criteria should still require ROADMAP.md update (no conflict risk)'
+    );
+  });
+});
+
+describe('isolated-run recovery fail-safe (#1292)', () => {
+  test('worktree-recovery-policy.md fragment exists', () => {
+    assert.ok(
+      fs.existsSync(RECOVERY_POLICY_PATH),
+      'execute-phase/steps/worktree-recovery-policy.md must exist (ADR-857 extraction pattern)'
+    );
+  });
+
+  test('execute-phase.md references the worktree-recovery-policy.md fragment', () => {
+    const content = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
+    assert.ok(
+      content.includes('execute-phase/steps/worktree-recovery-policy.md'),
+      'execute-phase.md must reference the extracted worktree-recovery-policy.md fragment'
+    );
+    assert.ok(
+      content.includes('#1292'),
+      'execute-phase.md must reference #1292 in the worktree recovery policy pointer'
+    );
+  });
+
+  test('worktree-recovery-policy.md fragment contains ISOLATED-RUN RECOVERY guardrail referencing #1292', () => {
+    const content = fs.readFileSync(RECOVERY_POLICY_PATH, 'utf-8');
+    assert.ok(
+      content.includes('ISOLATED-RUN RECOVERY'),
+      'worktree-recovery-policy.md must contain the ISOLATED-RUN RECOVERY guardrail label'
+    );
+    assert.ok(
+      content.includes('#1292'),
+      'worktree-recovery-policy.md ISOLATED-RUN RECOVERY guardrail must reference #1292'
+    );
+  });
+
+  test('worktree-recovery-policy.md fragment forbids defaulting recovery to main/primary checkout', () => {
+    const content = fs.readFileSync(RECOVERY_POLICY_PATH, 'utf-8');
+    assert.ok(
+      content.includes('never the proposed or default'),
+      'worktree-recovery-policy.md guardrail must state editing main is "never the proposed or default" option'
+    );
+  });
+
+  test('worktree-recovery-policy.md fragment offers fresh narrowly-scoped worktree as recovery path', () => {
+    const content = fs.readFileSync(RECOVERY_POLICY_PATH, 'utf-8');
+    assert.ok(
+      content.includes('fresh, narrowly-scoped worktree'),
+      'worktree-recovery-policy.md guardrail must offer a "fresh, narrowly-scoped worktree" as recovery path'
+    );
+  });
+
+  test('worktree-recovery-policy.md fragment requires explicit confirmation before editing primary checkout', () => {
+    const content = fs.readFileSync(RECOVERY_POLICY_PATH, 'utf-8');
+    assert.ok(
+      content.includes('explicit, clearly-labeled confirmation'),
+      'worktree-recovery-policy.md guardrail must require "explicit, clearly-labeled confirmation" before editing the primary checkout'
+    );
+  });
+
+  test('worktree-recovery-policy.md fragment contains FAIL-CLOSED rule (#48) with exit-42 content', () => {
+    const content = fs.readFileSync(RECOVERY_POLICY_PATH, 'utf-8');
+    assert.ok(
+      content.includes('worktree_branch_check'),
+      'worktree-recovery-policy.md must contain "worktree_branch_check" from the FAIL-CLOSED rule (#48)'
+    );
+    assert.ok(
+      content.includes('42'),
+      'worktree-recovery-policy.md must contain "42" (exit 42) from the FAIL-CLOSED rule (#48)'
+    );
+  });
+
+  test('execute-phase.md step 5.5 decline/over-reach sentence references fragment and forbids main-default', () => {
+    const content = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
+    assert.ok(
+      content.includes('declines to merge a worktree'),
+      'execute-phase.md step 5.5 pointer must mention "declines to merge a worktree" as the trigger for fail-safe policy'
+    );
+    assert.ok(
+      content.includes('never default to editing'),
+      'execute-phase.md step 5.5 pointer must state "never default to editing" main'
+    );
+  });
+
+  test('quick.md contains ISOLATED-RUN RECOVERY guardrail referencing #1292', () => {
+    const content = fs.readFileSync(QUICK_WORKFLOW_PATH, 'utf-8');
+    assert.ok(
+      content.includes('ISOLATED-RUN RECOVERY'),
+      'quick.md must contain the ISOLATED-RUN RECOVERY guardrail label'
+    );
+    assert.ok(
+      content.includes('#1292'),
+      'quick.md ISOLATED-RUN RECOVERY guardrail must reference #1292'
+    );
+  });
+
+  test('quick.md guardrail forbids defaulting recovery to main/primary checkout', () => {
+    const content = fs.readFileSync(QUICK_WORKFLOW_PATH, 'utf-8');
+    assert.ok(
+      content.includes('never the proposed or default'),
+      'quick.md guardrail must state editing main is "never the proposed or default" option'
+    );
+  });
+
+  test('quick.md guardrail offers fresh narrowly-scoped worktree as recovery path', () => {
+    const content = fs.readFileSync(QUICK_WORKFLOW_PATH, 'utf-8');
+    assert.ok(
+      content.includes('fresh, narrowly-scoped worktree'),
+      'quick.md guardrail must offer a "fresh, narrowly-scoped worktree" as recovery path'
+    );
+  });
+
+  test('quick.md guardrail requires explicit confirmation before editing primary checkout', () => {
+    const content = fs.readFileSync(QUICK_WORKFLOW_PATH, 'utf-8');
+    assert.ok(
+      content.includes('explicit, clearly-labeled confirmation'),
+      'quick.md guardrail must require "explicit, clearly-labeled confirmation" before editing the primary checkout'
     );
   });
 });

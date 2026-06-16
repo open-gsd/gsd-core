@@ -761,6 +761,9 @@ After executor returns:
    gsd_run query worktree.cleanup-wave --manifest "$QUICK_WORKTREE_MANIFEST" || exit 1
    ```
    If `workflow.use_worktrees` is `false`, skip this step.
+
+   > **ISOLATED-RUN RECOVERY — FAIL SAFE (#1292):** When an isolated (worktree) run is *rejected* — the user declines to merge it, the orchestrator surfaces recovery guidance for a blocked/halted plan, or the run over-reached the requested scope — the worktree-isolation contract MUST hold through recovery. Do **NOT** propose continuing on `main`/the primary checkout as the default or recommended recovery path. Default to a **safe halt** and offer: (a) re-attempt in a **fresh, narrowly-scoped worktree**, or (b) inspect or discard the rejected worktree without merging. Any path that edits the primary checkout requires an **explicit, clearly-labeled confirmation** from the user first — editing `main` directly is never the proposed or default option for a run the user configured to be isolated.
+
 2. Verify summary exists at `${QUICK_DIR}/${quick_id}-SUMMARY.md`
 3. Extract commit hash from executor output
 4. Report completion status

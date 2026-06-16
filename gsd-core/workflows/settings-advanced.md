@@ -50,7 +50,7 @@ Planning Tuning:
 - `workflow.plan_bounce` (default: `false`)
 - `workflow.plan_bounce_passes` (default: `2`)
 - `workflow.plan_bounce_script` (default: `null`)
-- `workflow.subagent_timeout` (default: `600`)
+- `workflow.subagent_timeout` (default: `300000`)
 - `workflow.inline_plan_threshold` (default: `3`)
 
 Execution Tuning:
@@ -155,12 +155,12 @@ AskUserQuestion([
     ]
   },
   {
-    question: "Subagent timeout (seconds)? (current: <value or 600>)",
+    question: "Subagent timeout (milliseconds)? (current: <value or 300000>)",
     header: "Subagent Timeout",
     multiSelect: false,
     options: [
       { label: "Keep current", description: "Leave timeout unchanged." },
-      { label: "Enter seconds", description: "Integer number of seconds. Non-numeric rejected. Default: 600" }
+      { label: "Enter milliseconds", description: "Integer number of milliseconds. Non-numeric rejected. Default: 300000 (5 minutes)." }
     ]
   },
   {
@@ -498,7 +498,7 @@ keys and sibling sub-objects.
 ```bash
 # Example — only write keys the user changed. "Keep current" selections are skipped.
 gsd_run query config-set workflow.plan_bounce_passes 5
-gsd_run query config-set workflow.subagent_timeout 900
+gsd_run query config-set workflow.subagent_timeout 300000
 gsd_run query config-set git.base_branch main
 gsd_run query config-set context_window 1000000
 # Runtime model tier examples:
@@ -751,7 +751,7 @@ Display:
 | workflow.plan_bounce                       | {on/off} |
 | workflow.plan_bounce_passes                | {n} |
 | workflow.plan_bounce_script                | {path/null} |
-| workflow.subagent_timeout                  | {seconds} |
+| workflow.subagent_timeout                  | {milliseconds} |
 | workflow.inline_plan_threshold             | {n} |
 | workflow.node_repair                       | {on/off} |
 | workflow.node_repair_budget                | {n} |

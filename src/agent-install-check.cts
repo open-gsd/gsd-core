@@ -5,8 +5,8 @@
  *   - getAgentsDir(runtime?): string
  *   - checkAgentsInstalled(runtime?): AgentsInstalledResult
  *
- * Consumers that previously imported these via core.cjs continue to work:
- * core.cjs re-exports both symbols BY REFERENCE from this module.
+ * The core.cjs re-export spine was retired in epic #1267; callers import
+ * these symbols from agent-install-check.cjs directly.
  */
 
 import fs from 'node:fs';

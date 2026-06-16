@@ -10,7 +10,7 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { MODEL_ALIAS_MAP } = require('../gsd-core/bin/lib/core.cjs');
+const { MODEL_ALIAS_MAP } = require('../gsd-core/bin/lib/model-catalog.cjs');
 
 describe('MODEL_ALIAS_MAP (#1690 regression)', () => {
   test('opus maps to claude-opus-4-8', () => {

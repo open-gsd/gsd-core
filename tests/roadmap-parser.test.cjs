@@ -23,7 +23,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const roadmapParser = require('../gsd-core/bin/lib/roadmap-parser.cjs');
-const core = require('../gsd-core/bin/lib/core.cjs');
 const { createTempProject, cleanup } = require('./helpers.cjs');
 
 const {
@@ -46,28 +45,6 @@ function writeState(tmpDir, fields) {
   fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), lines.join('\n') + '\n');
 }
 
-// ─── Shim-identity assertions ─────────────────────────────────────────────────
-
-describe('roadmap-parser: shim-identity — core.cjs re-exports same function objects', () => {
-  test('core.extractCurrentMilestone === roadmapParser.extractCurrentMilestone', () => {
-    assert.strictEqual(core.extractCurrentMilestone, roadmapParser.extractCurrentMilestone);
-  });
-  test('core.stripShippedMilestones === roadmapParser.stripShippedMilestones', () => {
-    assert.strictEqual(core.stripShippedMilestones, roadmapParser.stripShippedMilestones);
-  });
-  test('core.replaceInCurrentMilestone === roadmapParser.replaceInCurrentMilestone', () => {
-    assert.strictEqual(core.replaceInCurrentMilestone, roadmapParser.replaceInCurrentMilestone);
-  });
-  test('core.getRoadmapPhaseInternal === roadmapParser.getRoadmapPhaseInternal', () => {
-    assert.strictEqual(core.getRoadmapPhaseInternal, roadmapParser.getRoadmapPhaseInternal);
-  });
-  test('core.getMilestoneInfo === roadmapParser.getMilestoneInfo', () => {
-    assert.strictEqual(core.getMilestoneInfo, roadmapParser.getMilestoneInfo);
-  });
-  test('core.getMilestonePhaseFilter === roadmapParser.getMilestonePhaseFilter', () => {
-    assert.strictEqual(core.getMilestonePhaseFilter, roadmapParser.getMilestonePhaseFilter);
-  });
-});
 
 // ─── stripShippedMilestones ───────────────────────────────────────────────────
 

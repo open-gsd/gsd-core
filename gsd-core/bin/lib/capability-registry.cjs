@@ -762,6 +762,7 @@ const capabilities = {
       "graphify"
     ],
     "agents": [],
+    "activationKey": "graphify.enabled",
     "config": {
       "graphify.enabled": {
         "type": "boolean",
@@ -845,6 +846,7 @@ const capabilities = {
     },
     "skills": [],
     "agents": [],
+    "activationKey": "intel.enabled",
     "config": {
       "intel.enabled": {
         "type": "boolean",

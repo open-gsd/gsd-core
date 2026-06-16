@@ -173,20 +173,20 @@ AskUserQuestion([
     multiSelect: false,
     options: [
       { label: "Claude", description: "review.models.claude — defaults to session model when unset" },
-      { label: "Codex", description: "review.models.codex — e.g. 'codex exec --model gpt-5'" },
-      { label: "Gemini", description: "review.models.gemini — e.g. 'gemini -m gemini-2.5-pro'" },
-      { label: "OpenCode", description: "review.models.opencode — e.g. 'opencode run --model claude-sonnet-4'" }
+      { label: "Codex", description: "review.models.codex — bare model id injected into --model, e.g. 'gpt-5'" },
+      { label: "Gemini", description: "review.models.gemini — bare model id injected into -m, e.g. 'gemini-2.5-pro'" },
+      { label: "OpenCode", description: "review.models.opencode — bare model id injected into --model, e.g. 'claude-sonnet-4'" }
     ]
   }
 ])
 ```
 
 For the selected CLI, show the current value (or `(unset)`) and offer
-Leave / Replace / Clear, followed by a text-input prompt for the new command
+Leave / Replace / Clear, followed by a text-input prompt for the model id
 string. Write via:
 
 ```bash
-gsd_run query config-set review.models.<cli> "<command string>"
+gsd_run query config-set review.models.<cli> "<model id>"
 ```
 
 After each update, return to the "Review model CLI mapping — what next?" question.

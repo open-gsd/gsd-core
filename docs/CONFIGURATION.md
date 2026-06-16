@@ -192,14 +192,14 @@ API key fields accept a string value (the key itself). They can also be set to t
 
 ### Code-review CLI routing
 
-`review.models.<cli>` maps a reviewer flavor to a shell command. The code-review workflow shells out using this command when a matching flavor is requested.
+`review.models.<cli>` maps a reviewer flavor to a bare model id. The code-review workflow injects this value into the CLI's `--model` (or `-m`) flag when invoking the reviewer.
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `review.models.claude` | string | (session model) | Command for Claude-flavored review. Defaults to the session model when unset |
-| `review.models.codex` | string | `null` | Command for Codex review, e.g. `"codex exec --model gpt-5"` |
-| `review.models.gemini` | string | `null` | Command for Gemini review, e.g. `"gemini -m gemini-2.5-pro"` |
-| `review.models.opencode` | string | `null` | Command for OpenCode review, e.g. `"opencode run --model claude-sonnet-4"` |
+| `review.models.claude` | string | (session model) | Model id for Claude-flavored review. Defaults to the session model when unset |
+| `review.models.codex` | string | `null` | Model id for Codex review (injected into --model), e.g. `"gpt-5"` |
+| `review.models.gemini` | string | `null` | Model id for Gemini review (injected into -m), e.g. `"gemini-2.5-pro"` |
+| `review.models.opencode` | string | `null` | Model id for OpenCode review (injected into --model), e.g. `"claude-sonnet-4"` |
 
 The `<cli>` slug is validated against `[a-zA-Z0-9_-]+`. Empty or path-containing slugs are rejected by `config-set`.
 
@@ -267,7 +267,7 @@ All workflow toggles follow the **absent = enabled** pattern. If a key is missin
 | `workflow.ai_integration_phase` | boolean | `true` | Enable the `/gsd-ai-integration-phase` command. When `false`, the command exits with a configuration gate message |
 | `workflow.auto_prune_state` | boolean | `false` | When `true`, automatically prune stale entries from STATE.md at phase boundaries instead of prompting |
 | `workflow.pattern_mapper` | boolean | `true` | Run the `gsd-pattern-mapper` agent between research and planning to map new files to existing codebase analogs |
-| `workflow.subagent_timeout` | number | `600` | Timeout in seconds for individual subagent invocations. Increase for long-running research or execution phases |
+| `workflow.subagent_timeout` | number | `300000` | Timeout in milliseconds for parallel subagent tasks (e.g. codebase mapping). Increase for large codebases or slower models. Default: 300000 (5 minutes) |
 | `executor.stall_detect_interval_minutes` | number | `5` | Minutes between executor stall checks while an executor agent is active. The execute-phase orchestrator uses this cadence to inspect recent commits and avoid waiting forever on a silent agent. |
 | `executor.stall_threshold_minutes` | number | `10` | Minutes without executor completion or expected-branch commit activity before execute-phase offers recovery choices for a possible stalled executor. |
 | `workflow.inline_plan_threshold` | number | `3` | Maximum number of tasks in a phase before the planner generates a separate PLAN.md file instead of inlining tasks in the prompt |

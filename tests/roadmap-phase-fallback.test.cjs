@@ -231,7 +231,7 @@ describe('roadmap get-phase fallback to full ROADMAP.md (#1634)', () => {
     // Regression: phase heading like "### Phase 12: v1.0 Tech-Debt Closure"
     // was incorrectly treated as a milestone boundary because the greedy
     // `.*v\d+\.\d+` subpattern in nextMilestonePattern matched it.
-    const core = require('../gsd-core/bin/lib/core.cjs');
+    const core = require('../gsd-core/bin/lib/roadmap-parser.cjs');
     writeState(tmpDir, 'v1.1');
     const roadmap = `# Roadmap
 
@@ -262,7 +262,7 @@ describe('roadmap get-phase fallback to full ROADMAP.md (#1634)', () => {
   test('extractCurrentMilestone handles PHASE/phase (case-insensitive) containing vX.Y (#2619 follow-up)', () => {
     // CodeRabbit follow-up: the negative lookahead `(?!Phase\s+\S)` must be
     // case-insensitive so PHASE/phase variants are also excluded.
-    const core = require('../gsd-core/bin/lib/core.cjs');
+    const core = require('../gsd-core/bin/lib/roadmap-parser.cjs');
     writeState(tmpDir, 'v1.1');
     const roadmap = `# Roadmap
 
@@ -333,7 +333,7 @@ This phase covers:
 
 describe('extractCurrentMilestone — closed-sibling heading selection (#145)', () => {
   let tmpDir;
-  const core = require('../gsd-core/bin/lib/core.cjs');
+  const core = require('../gsd-core/bin/lib/roadmap-parser.cjs');
 
   beforeEach(() => {
     tmpDir = createTempProject();
@@ -656,7 +656,7 @@ This is the only milestone.
 
 describe('extractCurrentMilestone — boundary / active-override hardening (#145 follow-up)', () => {
   let tmpDir;
-  const core = require('../gsd-core/bin/lib/core.cjs');
+  const core = require('../gsd-core/bin/lib/roadmap-parser.cjs');
 
   beforeEach(() => {
     tmpDir = createTempProject();
