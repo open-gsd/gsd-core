@@ -459,6 +459,16 @@ The review step slots in after execution and before UAT:
 - **Configuration Reference:** see [`docs/CONFIGURATION.md`](CONFIGURATION.md) for the full `config.json` schema, model-profile table, git branching strategies, and security settings.
 - **Discuss Mode:** see [`docs/workflow-discuss-mode.md`](workflow-discuss-mode.md) for interview vs assumptions mode.
 
+### Graphify capability gate (tri-state, v1.43+)
+
+Graphify commands (`graphify status`, `graphify build`, `graphify query`, `graphify diff`) now respect the **full tri-state capability gate**:
+
+1. **Installed** — the `gsd-graphify-*` skills are present in the active install profile.
+2. **Surfaced** — those skills appear on the current runtime surface (e.g., in `~/.claude/commands/gsd/`).
+3. **Config-enabled** — `graphify.enabled: true` is set in `.planning/config.json`.
+
+All three conditions must be true. Setting `graphify.enabled: true` alone is no longer sufficient if graphify has not been installed and surfaced. If graphify commands return `{ disabled: true }` after upgrading, verify that the install profile includes graphify skills (`gsd-tools capability state`) and re-run the installer to surface them.
+
 ---
 
 ## Usage Examples

@@ -25,6 +25,7 @@
  *   - ./surface.cjs            (resolveSurface)
  *   - ./config-loader.cjs      (loadConfig)
  *   - ./runtime-homes.cjs      (getGlobalConfigDir — for runtimeConfigDir auto-detection)
+ *   - ./runtime-slash.cjs      (resolveRuntime — GSD_RUNTIME > config.runtime > 'claude' precedence)
  *   - capability-registry.cjs  (loaded at call time)
  */
 
@@ -399,11 +400,15 @@ function _resolveManifest(commandsGsdDir: string, configDir: string): Map<string
  * Envelope: { runtimeConfigDir, warnings?: string[], capabilities: CapabilityStateEntry[] }
  *
  * runtimeConfigDir resolution (when not provided or empty):
- *   Uses the canonical getGlobalConfigDir from runtime-homes.cjs to detect the
- *   active runtime's config dir — the same resolver used by install.js. This
- *   correctly handles all supported runtimes (claude, codex, cursor, gemini,
- *   opencode, grok, etc.) and their env-var overrides. Defaults to claude
- *   (falls back to ~/.claude) if the resolver throws.
+ *   Detects the active runtime via the canonical precedence:
+ *     process.env.GSD_RUNTIME → config.runtime → 'claude'
+ *   (using resolveRuntime() from runtime-slash.cjs, the same precedence used
+ *   by profile-output.cjs and the rest of the runtime resolution chain).
+ *   Then calls getGlobalConfigDir(detectedRuntime) from runtime-homes.cjs —
+ *   the same resolver used by install.js. This correctly handles all supported
+ *   runtimes (claude, codex, cursor, gemini, opencode, grok, etc.) and their
+ *   env-var overrides (CLAUDE_CONFIG_DIR, CODEX_HOME, CURSOR_CONFIG_DIR, …).
+ *   Defaults to ~/.claude if either resolver throws.
  *
  * Failure surfacing: genuine resolution failures (manifest/profile/surface
  * errors) are reported in the `warnings` array in the envelope. The output
@@ -429,9 +434,12 @@ function resolveCapabilityRuntimeState(
   const warnings: string[] = [];
 
   // Resolve runtimeConfigDir using the canonical runtime-homes resolver.
-  // When not provided, getGlobalConfigDir(runtime) is called with 'claude'
-  // as the default runtime — the same fallback as install.js. The canonical
-  // resolver handles all env-var overrides (CLAUDE_CONFIG_DIR, CODEX_HOME,
+  // When not provided, the active runtime is detected via the canonical
+  // precedence:  process.env.GSD_RUNTIME → config.runtime → 'claude'
+  // (mirrors resolveRuntime() from runtime-slash.cjs and the precedence used
+  // by profile-output.cjs and the rest of the runtime resolution chain).
+  // getGlobalConfigDir(detectedRuntime) is then called, which honours the
+  // runtime-specific env-var override (CLAUDE_CONFIG_DIR, CODEX_HOME,
   // CURSOR_CONFIG_DIR, GROK_AGENTS_HOME, etc.) correctly and without
   // fabricating env vars that don't exist upstream.
   let resolvedConfigDir: string = runtimeConfigDir || '';
@@ -441,13 +449,15 @@ function resolveCapabilityRuntimeState(
       const runtimeHomes = require('./runtime-homes.cjs') as {
         getGlobalConfigDir: (runtime: string) => string;
       };
-      // Delegate runtime detection entirely to getGlobalConfigDir: calling it
-      // with 'claude' causes it to check CLAUDE_CONFIG_DIR first, falling back
-      // to ~/.claude. The canonical resolver already encodes the correct env-var
-      // precedence for each runtime — we do not re-implement that logic here.
-      // For non-claude runtimes, the caller should pass --config-dir explicitly
-      // (or set the runtime-specific env var, which getGlobalConfigDir honors).
-      resolvedConfigDir = runtimeHomes.getGlobalConfigDir('claude');
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const runtimeSlash = require('./runtime-slash.cjs') as {
+        resolveRuntime: (projectDir: string | null | undefined) => string;
+      };
+      // Detect the active runtime via GSD_RUNTIME → config.runtime → 'claude'.
+      // resolveRuntime reads config.json directly (no side effects) and returns
+      // a lowercased canonical runtime name.
+      const detectedRuntime = runtimeSlash.resolveRuntime(cwd);
+      resolvedConfigDir = runtimeHomes.getGlobalConfigDir(detectedRuntime);
     } catch {
       // Defensive fallback: use ~/.claude if the canonical resolver throws.
       // eslint-disable-next-line @typescript-eslint/no-require-imports
