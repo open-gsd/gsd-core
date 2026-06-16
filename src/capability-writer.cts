@@ -129,7 +129,8 @@ function setCapabilityState(
   const resolvedConfigDir = before.runtimeConfigDir;
 
   // ── Load registry ─────────────────────────────────────────────────────────
-  const registry = before.registry;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const registry = require('./capability-registry.cjs') as Record<string, unknown>;
   const capabilitiesMap = (
     registry['capabilities'] && typeof registry['capabilities'] === 'object' && !Array.isArray(registry['capabilities'])
       ? registry['capabilities']

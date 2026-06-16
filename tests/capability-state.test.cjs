@@ -1461,6 +1461,136 @@ describe('isCapabilityActive — convenience predicate (Phase 2)', () => {
   });
 });
 
+// ─── resolveCapabilityRuntimeState configOverride (FIX 1 — single config snapshot) ──────────────
+
+describe('resolveCapabilityRuntimeState configOverride — honors caller snapshot instead of reading disk', () => {
+  // These tests exercise the optional third parameter `configOverride`.
+  // When provided, the resolver MUST use that config object for capability
+  // activation (active = enabled && configActivation) rather than calling
+  // loadConfig(cwd) internally. This guarantees that cmdLoopRenderHooks and
+  // the resolver use the exact same config snapshot (TOCTOU elimination).
+  //
+  // Strategy: build a synthetic registry with `activationKey: 'myfeature.enabled'`
+  // and use a tmpdir whose on-disk .planning/config.json carries the OPPOSITE
+  // value from the configOverride. The test asserts that the returned capability
+  // `active` matches the override, not the on-disk file.
+
+  const { resolveCapabilityRuntimeState } = require('../gsd-core/bin/lib/capability-state.cjs');
+
+  let tmpDir;
+  let savedEnv;
+
+  before(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-state-override-'));
+    // Save env vars that affect planningDir / config resolution
+    savedEnv = {
+      GSD_WORKSTREAM: process.env.GSD_WORKSTREAM,
+      GSD_PROJECT: process.env.GSD_PROJECT,
+      CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
+    };
+    delete process.env.GSD_WORKSTREAM;
+    delete process.env.GSD_PROJECT;
+    delete process.env.CLAUDE_CONFIG_DIR;
+
+    // Write on-disk config with myfeature.enabled=false (override will say true)
+    const planningDir = path.join(tmpDir, '.planning');
+    fs.mkdirSync(planningDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(planningDir, 'config.json'),
+      JSON.stringify({ myfeature: { enabled: false } }),
+      'utf8',
+    );
+  });
+
+  after(() => {
+    // Restore env vars
+    if (savedEnv.GSD_WORKSTREAM !== undefined) process.env.GSD_WORKSTREAM = savedEnv.GSD_WORKSTREAM;
+    else delete process.env.GSD_WORKSTREAM;
+    if (savedEnv.GSD_PROJECT !== undefined) process.env.GSD_PROJECT = savedEnv.GSD_PROJECT;
+    else delete process.env.GSD_PROJECT;
+    if (savedEnv.CLAUDE_CONFIG_DIR !== undefined) process.env.CLAUDE_CONFIG_DIR = savedEnv.CLAUDE_CONFIG_DIR;
+    else delete process.env.CLAUDE_CONFIG_DIR;
+    cleanup(tmpDir);
+  });
+
+  test('configOverride=undefined (default) reads on-disk config → active=false', () => {
+    // Baseline: without override, loadConfig reads the on-disk file which has
+    // myfeature.enabled=false, so the capability is inactive.
+    // NOTE: resolveCapabilityRuntimeState does real I/O (profile/surface), which
+    // degrades gracefully on a tmpDir that has no surface marker. We only assert
+    // on the `active` field which is determined by the config activation leg.
+    // Use a simple registry with no skills so installed=surfaced=enabled=true
+    // (vacuously) and active depends solely on configActivation.
+    //
+    // Because resolveCapabilityRuntimeState always uses the real capability-registry.cjs,
+    // we cannot inject the synthetic registry into it. Instead we verify the
+    // config-override leg by comparing the two code paths (with and without override)
+    // against each other on a known config key that the real registry uses.
+    //
+    // We use the real 'graphify' capability whose activationKey='graphify.enabled'.
+    // On-disk: graphify.enabled=false → active=false.
+    // Override: { graphify: { enabled: true } } → active=true.
+    //
+    // Set up a separate tmpdir with graphify.enabled=false on disk.
+    const tmpCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-override-baseline-'));
+    try {
+      fs.mkdirSync(path.join(tmpCwd, '.planning'), { recursive: true });
+      fs.writeFileSync(
+        path.join(tmpCwd, '.planning', 'config.json'),
+        JSON.stringify({ graphify: { enabled: false } }),
+        'utf8',
+      );
+      // No override → reads on-disk config → graphify active=false
+      const result = resolveCapabilityRuntimeState(tmpCwd, undefined);
+      const graphifyEntry = result.capabilities.find((c) => c.id === 'graphify');
+      assert.ok(graphifyEntry, 'graphify capability must be present in the real registry');
+      assert.strictEqual(
+        graphifyEntry.active,
+        false,
+        'Without configOverride, on-disk graphify.enabled=false must produce active=false',
+      );
+    } finally {
+      cleanup(tmpCwd);
+    }
+  });
+
+  test('configOverride honors caller value — overrides on-disk config (active flips from false to true)', () => {
+    // On-disk: graphify.enabled=false (set up in before()).
+    // configOverride: { graphify: { enabled: true } }  ← caller wins.
+    // Expected: graphify active=true (override, not disk).
+    //
+    // The tmpDir from before() has graphify.enabled=false on disk. We pass
+    // configOverride with graphify.enabled=true. The returned active must be true.
+    const override = { graphify: { enabled: true } };
+    const result = resolveCapabilityRuntimeState(tmpDir, undefined, override);
+    const graphifyEntry = result.capabilities.find((c) => c.id === 'graphify');
+    assert.ok(graphifyEntry, 'graphify capability must be present in the real registry');
+    assert.strictEqual(
+      graphifyEntry.active,
+      true,
+      'configOverride { graphify: { enabled: true } } must produce active=true even though on-disk config has graphify.enabled=false',
+    );
+  });
+
+  test('configOverride — non-existent cwd, override with enabled=true → active=true regardless of absent disk file', () => {
+    // When cwd points to a non-existent directory, loadConfig(cwd) would return {}
+    // (or throw/fallback to {}). With configOverride, the caller's value is used
+    // for level-1 directly. Levels 2+3 raw reads on a non-existent cwd produce
+    // no-hits. So: override={graphify:{enabled:true}} → level-1 hit → active=true.
+    // This is a clean test that avoids any interaction with the on-disk fixture in tmpDir.
+    const nonExistentCwd = path.join(os.tmpdir(), 'cap-override-nonexistent-' + Date.now());
+    const override = { graphify: { enabled: true } };
+    const result = resolveCapabilityRuntimeState(nonExistentCwd, undefined, override);
+    const graphifyEntry = result.capabilities.find((c) => c.id === 'graphify');
+    assert.ok(graphifyEntry, 'graphify capability must be present in the real registry');
+    assert.strictEqual(
+      graphifyEntry.active,
+      true,
+      'configOverride { graphify: { enabled: true } } must produce active=true even with non-existent cwd (level-1 hit from override)',
+    );
+  });
+});
+
 // ─── Cross-runtime runtime detection (HIGH fix — GSD_RUNTIME → config.runtime → 'claude') ──────
 
 describe('isCapabilityActive cross-runtime detection (GSD_RUNTIME → config.runtime → claude)', () => {

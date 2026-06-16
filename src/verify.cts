@@ -253,6 +253,310 @@ function scanNegativeGrepCommentEcho(content: string): { errors: string[]; warni
   return { errors, warnings };
 }
 
+/**
+ * Issue #968 — file-wide negative-grep sibling conflict detector.
+ * A file-wide negative grep gate (! grep -Eq 'PAT' FILE or grep -c 'PAT' FILE == 0)
+ * bans a construct across the WHOLE file. When a sibling task in the same plan
+ * legitimately requires the same construct in the same file, the two gates are
+ * mutually unsatisfiable. This is a WARN-only check (never changes valid:false).
+ */
+function scanFileWideNegativeGateConflict(content: string): { warnings: string[]; valid: true } {
+  const warnings: string[] = [];
+
+  // Normalize newlines; join backslash line-continuations (same as #429).
+  const text = (content || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/\\\n/g, ' ');
+
+  // Allowlisted patterns: <!-- planner-region-allow: PAT -->
+  const allow = new Set<string>();
+  const allowRe = /<!--\s*planner-region-allow:\s*(.+?)\s*-->/g;
+  let am: RegExpExecArray | null;
+  while ((am = allowRe.exec(text)) !== null) allow.add(am[1]);
+
+  // Helper predicates (reused from #429 style).
+  // Zero-equality comparison: spaced == 0 or -eq 0.
+  const zeroCmp = (s: string): boolean =>
+    /\s==?\s*0\b/.test(s) || /-eq\s+0\b/.test(s) || /\bequals\s+0\b/.test(s);
+
+  // grep options include -c / --count
+  const optsHaveCount = (opts: string): boolean =>
+    /(?:^|\s)-[A-Za-z]*c[A-Za-z]*(?=\s|$)/.test(opts) || /--count\b/.test(opts);
+
+  // grep options include -v / --invert-match (inverted count is NOT a negative gate)
+  const optsHaveInvert = (opts: string): boolean =>
+    /(?:^|\s)-[A-Za-z]*v[A-Za-z]*(?=\s|$)/.test(opts) || /--invert-match\b/.test(opts);
+
+  // A bareword that is a plausible grep pattern (not a stray flag/number).
+  const plausibleBare = (s: string): boolean => /[A-Za-z0-9_]/.test(s) && !/^[-=!<>0-9]+$/.test(s);
+
+  // Regex to extract grep arguments: opts run then PAT (quoted or bare).
+  const grepArgRe =
+    /grep((?:\s+-{1,2}[A-Za-z][A-Za-z-]*)+)\s+(?:'([^']*)'|"([^"]*)"|([^\s'"|>&;$()\[\]]+))/g;
+
+  // FIX 1 (ReDoS): Linear-time "does reqText satisfy the grep pattern" — no RegExp execution.
+  // Never calls new RegExp, so no catastrophic backtracking is possible.
+  //
+  // Handles literal patterns and `.`/`.*/`.+`/`\s`-style wildcard gaps and `^`/`$` anchors.
+  // Patterns using character classes (`[…]`), alternation (`a|b`), or other regex constructs
+  // fall back to a conservative literal-substring check, so the detector may NOT warn on those
+  // (false-negative is the safe direction for a warn-only advisory).
+  const patternRequiredIn = (pat: string, reqText: string): boolean => {
+    const hay = (reqText || '').slice(0, 8000); // bound the haystack
+    if (!pat) return false;
+    // Strip ERE anchors — position constraints don't change whether the construct is required.
+    pat = pat.replace(/^\^/, '').replace(/\$$/, '');
+    if (!pat) return false;
+    // Pure literal (no regex metacharacters): direct substring.
+    if (!/[.*+?^${}()|[\]\\]/.test(pat)) return hay.includes(pat);
+    const SENT = ' ';
+    // Replace simple wildcard gaps (\s* \w+ .* .+ .? bare .) with a sentinel.
+    let work = pat
+      .replace(/\\[sSwWdD][*+?]?/g, SENT)
+      .replace(/\.[*+?]/g, SENT)
+      .replace(/\./g, SENT);
+    work = work.replace(/\\(.)/g, '$1'); // de-escape \( \. etc → literal char
+    const joined = work.split(SENT).join('');
+    // Unhandled regex constructs remain → safe literal-substring fallback on the raw pattern.
+    if (/[*+?^${}()|[\]]/.test(joined)) return hay.includes(pat);
+    const frags = work.split(SENT).filter(Boolean);
+    if (!frags.length) return false; // all-wildcard pattern → no meaningful requirement
+    let pos = 0;
+    for (const f of frags) {
+      const idx = hay.indexOf(f, pos);
+      if (idx === -1) return false;
+      pos = idx + f.length;
+    }
+    return true;
+  };
+
+  // FIX 2 (file basename over-match): exact normalized match; basename fallback ONLY for
+  // unqualified gate files (no path separator).
+  const normPath = (p: string): string => p.replace(/^\.\//, '').trim();
+
+  // File-wide discriminator: a token AFTER PAT that looks like a path.
+  // Paths have /, a file extension, or match a known task <files> entry.
+  // Globs (containing *) are excluded (unresolvable — no warn).
+  const looksLikePath = (token: string): boolean =>
+    !token.includes('*') &&
+    (token.includes('/') || /\.[a-zA-Z]{1,6}$/.test(token));
+
+  // FIX 5 (hasLeadingNot): collapse to one command-boundary-anchored regex.
+  // Negation at a command boundary: start of segment, or after ; & | ( newline / then / do.
+
+  // FIX 4 (isRegionScoped tightened): return true ONLY when grep is downstream of a
+  // sed line-range or awk range producer. Other pipe sources (cat, tac, etc.) are file-wide.
+  const isRegionScoped = (seg: string): boolean => {
+    if (!seg.includes('|')) return false;
+    const before = seg.slice(0, seg.lastIndexOf('|'));
+    // sed -n line/range extraction, e.g. sed -n '12,40p' FILE  or  sed -n '/a/,/b/p' FILE
+    if (/\bsed\s+-n\b/.test(before)) return true;
+    // awk range pattern, e.g. awk '/start/,/end/' FILE
+    if (/\bawk\b[^|]*\/[^/]*\/\s*,\s*\/[^/]*\//.test(before)) return true;
+    return false;
+  };
+
+  // Parse all <task> blocks.
+  interface TaskInfo {
+    name: string;
+    files: string[];   // entries from <files>
+    gateText: string;  // <verify>+<automated>+<acceptance_criteria> text
+    reqText: string;   // <action>+<acceptance_criteria> text (requirement side)
+  }
+  const taskRe = /<task[^>]*>([\s\S]*?)<\/task>/g;
+  const tasks: TaskInfo[] = [];
+  let tm: RegExpExecArray | null;
+  while ((tm = taskRe.exec(text)) !== null) {
+    const tc = tm[1];
+    // Extract task name.
+    const namem = tc.match(/<name>([\s\S]*?)<\/name>/);
+    const name = namem ? namem[1].trim() : 'unnamed';
+    // Extract <files> entries.
+    const filesm = tc.match(/<files>([\s\S]*?)<\/files>/);
+    const filesText = filesm ? filesm[1] : '';
+    const files = filesText.split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
+    // Gate text: <verify>/<automated>/<acceptance_criteria>.
+    const gateFragments: string[] = [];
+    for (const tag of ['verify', 'automated', 'acceptance_criteria']) {
+      const re = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'g');
+      let mm: RegExpExecArray | null;
+      while ((mm = re.exec(tc)) !== null) gateFragments.push(mm[1]);
+    }
+    // Requirement text: <action>/<acceptance_criteria>.
+    const reqFragments: string[] = [];
+    for (const tag of ['action', 'acceptance_criteria']) {
+      const re = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'g');
+      let mm: RegExpExecArray | null;
+      while ((mm = re.exec(tc)) !== null) reqFragments.push(mm[1]);
+    }
+    // Strip XML tags from gate text so segments containing embedded
+    // XML closing tags (e.g. <automated>cmd</automated> nested inside <verify>)
+    // don't bleed into the file-path token extraction.
+    const rawGateText = gateFragments.join('\n');
+    const gateText = rawGateText.replace(/<[^>]+>/g, ' ');
+    tasks.push({
+      name,
+      files,
+      gateText,
+      reqText: reqFragments.join('\n'),
+    });
+  }
+
+  if (tasks.length < 2) return { warnings, valid: true };
+
+  // FIX 3 (extensionless known files): build a normalized set of ALL tasks' <files> entries
+  // so that extensionless filenames like Dockerfile are also recognized as valid file tokens.
+  const knownFiles = new Set<string>();
+  for (const t of tasks) {
+    for (const f of t.files) knownFiles.add(normPath(f));
+  }
+
+  // Extended looksLikePath: accepts known <files> entries even without an extension.
+  const isFileLike = (token: string): boolean => {
+    if (token.includes('*')) return false; // exclude globs
+    if (looksLikePath(token)) return true;
+    return knownFiles.has(normPath(token));
+  };
+
+  // Dedup key: (taskAIdx, taskBIdx, pat, file)
+  const seen = new Set<string>();
+
+  // For each task A, scan gate text for file-wide negative grep bans.
+  for (let ai = 0; ai < tasks.length; ai++) {
+    const taskA = tasks[ai];
+
+    // Split gate text into shell segments (split on && / || within lines).
+    const segments = taskA.gateText.split('\n').flatMap(line =>
+      line.split(/\s*(?:&&|\|\|)\s*/),
+    );
+
+    for (const seg of segments) {
+      if (!/grep/.test(seg)) continue;
+
+      // FIX 5: Negation at a command boundary: start of segment, or after ; & | ( newline / then / do.
+      // Also handles ! negating an entire pipeline (e.g. ! cat FILE | grep ...).
+      const hasLeadingNot =
+        // Direct ! grep: negation immediately before grep keyword
+        /(?:^|[\n;&|(]|\bthen\b|\bdo\b)\s*!\s*grep/.test(seg) ||
+        // Pipeline negation: ! at command boundary, grep appears in pipeline after |
+        (/(?:^|[\n;&|(]|\bthen\b|\bdo\b)\s*!\s*\w/.test(seg) && /\|\s*grep\b/.test(seg));
+
+      const hasCountZero = zeroCmp(seg);
+
+      // Extract grep invocation and check for count.
+      grepArgRe.lastIndex = 0;
+      let pat: string | null = null;
+      let file: string | null = null;
+      let isBan = false;
+
+      // FIX 4 helper: given a segment and the grep match end position, find the
+      // file argument. First try the token immediately after PAT; if none qualifies,
+      // try a cat/tac producer or < FILE redirect from the full segment.
+      const resolveFileArg = (segment: string, afterPatStr: string): string | null => {
+        // Primary: token immediately after PAT in the grep command
+        const fileM = afterPatStr.match(/^\s+([^\s'"|>&;$()\[\]]+)/);
+        const rawFile = fileM ? fileM[1] : null;
+        if (rawFile && isFileLike(rawFile)) return rawFile;
+        // FIX 4: For NON-region segments, also look for cat/tac producer or < FILE redirect
+        const catM = segment.match(/\b(?:cat|tac)\s+([^\s'"|>&;()]+)/);
+        if (catM && isFileLike(catM[1])) return catM[1];
+        const redirM = segment.match(/<\s*([^\s'"|>&;()]+)/);
+        if (redirM && isFileLike(redirM[1])) return redirM[1];
+        return null;
+      };
+
+      // If leading !, it might be a count or a direct !grep
+      if (hasLeadingNot && !hasCountZero) {
+        // Direct ! grep PAT FILE form: grep opts PAT FILE
+        // Extract PAT and FILE from the grep invocation
+        grepArgRe.lastIndex = 0;
+        let gm: RegExpExecArray | null;
+        while ((gm = grepArgRe.exec(seg)) !== null) {
+          const opts = gm[1];
+          if (optsHaveInvert(opts)) continue; // -v form: not a ban
+          // PAT
+          const rawPat = gm[2] !== undefined ? gm[2] :
+                         gm[3] !== undefined ? gm[3] :
+                         gm[4] !== undefined && plausibleBare(gm[4]) ? gm[4] : null;
+          if (!rawPat) continue;
+          // FILE: next non-option token after PAT (or cat/tac/redirect in segment)
+          const afterPat = seg.slice((gm.index || 0) + gm[0].length);
+          const rawFile = resolveFileArg(seg, afterPat);
+          if (rawFile) {
+            pat = rawPat;
+            file = rawFile;
+            isBan = true;
+          }
+        }
+      }
+
+      if (!isBan && hasCountZero) {
+        // count grep form: grep -c PAT FILE == 0 or [ $(grep -c PAT FILE) -eq 0 ]
+        grepArgRe.lastIndex = 0;
+        let gm: RegExpExecArray | null;
+        while ((gm = grepArgRe.exec(seg)) !== null) {
+          const opts = gm[1];
+          if (!optsHaveCount(opts) || optsHaveInvert(opts)) continue;
+          const rawPat = gm[2] !== undefined ? gm[2] :
+                         gm[3] !== undefined ? gm[3] :
+                         gm[4] !== undefined && plausibleBare(gm[4]) ? gm[4] : null;
+          if (!rawPat) continue;
+          const afterPat = seg.slice((gm.index || 0) + gm[0].length);
+          const rawFile = resolveFileArg(seg, afterPat);
+          if (rawFile) {
+            pat = rawPat;
+            file = rawFile;
+            isBan = true;
+          }
+        }
+      }
+
+      if (!isBan || !pat || !file) continue;
+      if (allow.has(pat)) continue;
+      // Skip if region-scoped (grep downstream of a sed/awk pipe — region extracted)
+      if (isRegionScoped(seg)) continue;
+
+      // For each other task B: check if B's <files> includes FILE AND B's reqText contains PAT
+      for (let bi = 0; bi < tasks.length; bi++) {
+        if (bi === ai) continue;
+        const taskB = tasks[bi];
+
+        // FIX 2: Exact normalized match; basename fallback ONLY for unqualified gate files.
+        const gateFile = normPath(file);
+        const bMatchesFile = taskB.files.some((bf) => {
+          const nbf = normPath(bf);
+          if (nbf === gateFile) return true;
+          // basename fallback only when the gate file is an unqualified bare filename (no dir separator)
+          if (!gateFile.includes('/') && path.basename(nbf) === gateFile) return true;
+          return false;
+        });
+        if (!bMatchesFile) continue;
+
+        // FIX 1: Use linear-time patternRequiredIn instead of new RegExp (ReDoS-safe).
+        const bRequiresPat = patternRequiredIn(pat, taskB.reqText);
+        if (!bRequiresPat) continue;
+
+        const dedupeKey = `${ai}:${bi}:${pat}:${file}`;
+        if (seen.has(dedupeKey)) continue;
+        seen.add(dedupeKey);
+
+        warnings.push(
+          `Region-scope conflict (#968): task "${taskA.name}" negative-greps "${pat}" file-wide on ${file}, ` +
+          `but sibling task "${taskB.name}" requires it in the same file. ` +
+          `A file-wide ban is unsatisfiable when a sibling needs the construct elsewhere — ` +
+          `region-scope task "${taskA.name}"'s gate (sed -n/awk range then grep) or use an AST/test check. ` +
+          `See planner-antipatterns.md "Region-Scoped Negative Gates", or add ` +
+          `<!-- planner-region-allow: ${pat} --> if intentional.`,
+        );
+      }
+    }
+  }
+
+  // This detector is warn-only: it never sets valid=false.
+  return { warnings, valid: true as const };
+}
+
 function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): void {
   if (!filePath) {
     error('file path required');
@@ -314,6 +618,9 @@ function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): vo
   const echoScan = scanNegativeGrepCommentEcho(content);
   errors.push(...echoScan.errors);
   warnings.push(...echoScan.warnings);
+
+  const conflictScan = scanFileWideNegativeGateConflict(content);
+  warnings.push(...conflictScan.warnings);
 
   output(
     {
@@ -1935,6 +2242,7 @@ function cmdVerifyCodebaseDrift(cwd: string, raw: boolean): void {
 
 export = {
   scanNegativeGrepCommentEcho,
+  scanFileWideNegativeGateConflict,
   cmdVerifySummary,
   cmdVerifyPlanStructure,
   cmdVerifyPhaseCompleteness,

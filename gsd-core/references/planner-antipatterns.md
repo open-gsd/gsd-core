@@ -128,3 +128,49 @@ When the literal MUST appear in the plan body verbatim — e.g. the plan documen
 ```
 
 One marker per literal. The marker exempts only the exact literal it names.
+
+## Region-Scoped Negative Gates
+
+> Surfaced at plan-write time by `verify.plan-structure` (the `validate_plan` step), WARN-level. Issue #968.
+
+A **negative grep** — `! grep -Eq 'PAT' file` or `grep -c 'PAT' file == 0` — asserts a construct is absent. `grep` is file-scoped by nature: it has no notion of function or region. This breaks down when a phase splits one file across parallel tasks with legitimately opposite needs for the same construct in different regions:
+
+- **Task A** bans the construct file-wide — a synchronous factory must not block on a refresh: `! grep -Eq 'await .*refresh' app/page.py`.
+- **Task B** legitimately requires it elsewhere in the same file — a post-reindex handler must `await bridge.refresh()` to repopulate state.
+
+Both occurrences are real, correct production code in different functions of one file. A file-wide negative grep cannot say "absent in function X, present in function Y", so the two gates are mutually unsatisfiable with a direct call — the executor is pushed into an indirection whose only purpose is to relocate the matched string out of the file (pure gate-appeasement, zero behaviour change). This is distinct from Comment-Text Discipline (#429): there is no comment echo and no allowlist helps — the construct must genuinely be present in one region and absent in another.
+
+**The fix:** region-scope the negative gate so "absent in region X" stops implying "absent file-wide."
+
+### Bad — file-wide ban unsatisfiable against a sibling's real code
+
+```xml
+<!-- Task A -->
+<verify><automated>! grep -Eq 'await .*refresh' app/page.py</automated></verify>
+<!-- Task B (same file, different function) -->
+<action>Add a post-reindex handler in app/page.py that awaits bridge.refresh().</action>
+<files>app/page.py</files>
+```
+
+Task B writing `await bridge.refresh()` trips Task A's file-wide gate, though both are correct.
+
+### Good — scope the gate to the factory region
+
+```xml
+<!-- Task A: ban only inside the synchronous factory, not the whole file -->
+<verify><automated>! awk '/^def make_page/,/^def /' app/page.py | grep -Eq 'await .*refresh'</automated></verify>
+<!-- or a fixed line range -->
+<verify><automated>! sed -n '12,40p' app/page.py | grep -Eq 'await .*refresh'</automated></verify>
+```
+
+The factory region is asserted clean; the reindex handler elsewhere in the same file keeps its required `await bridge.refresh()`. Both gates pass with no code restructuring. Prefer an AST/structural check or a focused unit test where region extraction is fragile.
+
+### When the split is intentional and unavoidable
+
+If region-scoping is genuinely impractical and the file split is intentional, suppress the warning with a marker naming the pattern:
+
+```
+<!-- planner-region-allow: await .*refresh -->
+```
+
+One marker per pattern. The marker exempts only the exact pattern it names. Prefer region-scoping over suppression.
