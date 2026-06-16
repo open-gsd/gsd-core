@@ -2549,6 +2549,46 @@ describe('pr-subrepo', () => {
       );
     });
 
+    test('pr-subrepo push failure: branch+commit survive when push is rejected (no data loss)', () => {
+      // Reproduce the data-loss scenario flagged in review: a rejecting remote must leave
+      // the local branch+commit intact so the user can retry git push manually.
+      const branch = 'fix-666-push-fail-pr';
+
+      // Wire a bare remote with a pre-receive hook that rejects all pushes.
+      const rejectingBare = path.join(rootDir, '_rejecting-bare.git');
+      fs.mkdirSync(rejectingBare, { recursive: true });
+      execFileSync('git', ['init', '--bare'], { cwd: rejectingBare, stdio: 'pipe' });
+      const hookPath = path.join(rejectingBare, 'hooks', 'pre-receive');
+      fs.writeFileSync(hookPath, '#!/bin/sh\nexit 1\n');
+      fs.chmodSync(hookPath, 0o755);
+
+      // Point origin at the rejecting bare (overwrite the working one wired in beforeEach).
+      execFileSync('git', ['remote', 'set-url', 'origin', rejectingBare], { cwd: subDir, stdio: 'pipe' });
+
+      fs.writeFileSync(path.join(subDir, 'feature.js'), 'IMPORTANT USER WORK\n');
+
+      const res = runGsdTools(
+        ['query', 'pr-subrepo', 'fix(backend): push-fail test',
+         '--repo', 'backend', '--branch', branch],
+        rootDir
+      );
+
+      // Command must fail because push was rejected.
+      assert.ok(!res.success, `Expected failure on rejected push, got success: ${res.output}`);
+
+      // The local branch must still exist — work must not be lost.
+      const branches = execFileSync('git', ['branch', '--list', branch], {
+        cwd: subDir, encoding: 'utf8',
+      });
+      assert.ok(branches.trim().length > 0, `Branch ${branch} was deleted after push failure — user work lost`);
+
+      // The commit on that branch must contain the user's changes.
+      const log = execFileSync('git', ['log', branch, '--oneline', '-1'], {
+        cwd: subDir, encoding: 'utf8',
+      });
+      assert.ok(log.trim().length > 0, `No commit on ${branch} — staged work was lost`);
+    });
+
     test('pr-subrepo porcelain: staged rename — both old and new paths in result.files', () => {
       // git mv produces "R  old -> new" in porcelain v1; both paths must be staged.
       execFileSync('git', ['mv', 'feature.js', 'renamed-feature.js'], { cwd: subDir, stdio: 'pipe' });

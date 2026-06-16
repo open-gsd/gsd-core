@@ -871,10 +871,12 @@ function cmdPrSubrepo(
 
   // 8. Push with --set-upstream so gh pr create can find the branch.
   //    Network operation — use a longer timeout than the default 10 s.
+  //    Do NOT rollback on push failure — the commit already exists on the local branch.
+  //    Deleting the branch here would destroy the only ref holding the user's work.
+  //    Leave the branch in place so the user can retry the push.
   const pushResult = execGit(['push', '--set-upstream', 'origin', branch as string], { cwd: repoCwd, timeout: 60_000 });
   if (pushResult.exitCode !== 0) {
-    rollback();
-    error(`Failed to push ${branch} in ${repo}: ${pushResult.stderr}`);
+    error(`Failed to push ${branch} in ${repo}: ${pushResult.stderr}\nBranch ${branch} was created locally — retry with: git -C ${repo} push --set-upstream origin ${branch}`);
   }
 
   const result = {
