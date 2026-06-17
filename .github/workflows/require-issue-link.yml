@@ -29,7 +29,16 @@ jobs:
           fi
 
       - name: Comment and fail if no issue link
-        if: steps.check.outputs.found == 'false'
+        # Exempt auto-backmerge PRs (chore/backmerge-main-to-next-*): they map to
+        # no issue and a `Closes #N` would pollute the released CHANGELOG. Keyed on
+        # the workflow-authored branch name AND same-repo identity so a fork PR
+        # cannot forge the exemption. Step-level (not job-level) so the required
+        # "Issue link required" check still reports SUCCESS rather than a
+        # branch-protection-blocking "skipped". See #1389.
+        if: >-
+          steps.check.outputs.found == 'false' &&
+          !(startsWith(github.head_ref, 'chore/backmerge-main-to-next-') &&
+            github.event.pull_request.head.repo.full_name == github.repository)
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           # Uses GitHub API SDK — no shell string interpolation of untrusted input

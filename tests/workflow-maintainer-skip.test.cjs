@@ -79,3 +79,27 @@ describe('PR policy workflow maintainer carve-outs', () => {
     assert.match(workflow, /CONTRIBUTING\.md#pull-request-guidelines/);
   });
 });
+
+describe('Require Issue Link back-merge automation carve-out', () => {
+  test('the fail step is skipped for same-repo auto-backmerge PRs', () => {
+    const workflow = readWorkflow('.github/workflows/require-issue-link.yml');
+
+    // Auto-backmerge PRs (chore/backmerge-main-to-next-*) map to no issue, and a
+    // `Closes #N` would pollute the released CHANGELOG. The fail step must carve
+    // them out — keyed on the workflow-authored branch name AND same-repo
+    // identity so a fork PR cannot forge the exemption (#1389).
+    assert.match(
+      workflow,
+      /startsWith\(github\.head_ref, 'chore\/backmerge-main-to-next-'\)/
+    );
+    assert.match(
+      workflow,
+      /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/
+    );
+
+    // The carve-out must live on the failing step's `if:` alongside the
+    // found=='false' check (step-level, so the required check still reports
+    // SUCCESS rather than a branch-protection-blocking "skipped").
+    assert.match(workflow, /steps\.check\.outputs\.found == 'false'/);
+  });
+});
