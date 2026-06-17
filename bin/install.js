@@ -6792,6 +6792,12 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false) {
       content = content.replace(/~\/\.claude\//g, pathPrefix);
       content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
       content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
+      // Bare forms (no trailing slash) — use (?![\w-]) instead of \b so that
+      // .claude-plugin / .claudeignore are NOT corrupted (the \b word-boundary
+      // fires between 'e' and '-', which rewrites .claude-plugin → .cursor-plugin).
+      content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
+      content = content.replace(/\.\/\.claude(?![\w-])/g, `./${dirName}`);
       content = content.replace(/~\/\.cursor\//g, pathPrefix);
       content = processAttribution(content, getCommitAttribution(runtime));
       break;
