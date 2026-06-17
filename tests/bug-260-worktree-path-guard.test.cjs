@@ -66,11 +66,14 @@ function makeMainRepo() {
 /**
  * Create a worktree off mainRepo and return its path.
  * In the worktree, .git is a FILE (the gitdir pointer).
+ * @param {string} mainRepo - path to the main repo
+ * @param {string} [branchName] - branch name to use (default: 'worktree-agent-test')
  */
-function makeWorktree(mainRepo) {
+function makeWorktree(mainRepo, branchName) {
+  const branch = branchName || 'worktree-agent-test';
   const wtDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-260-wt-'));
   fs.rmdirSync(wtDir); // git worktree add creates the dir itself
-  git(mainRepo, ['worktree', 'add', '-q', '-b', 'wt-test-branch', wtDir]);
+  git(mainRepo, ['worktree', 'add', '-q', '-b', branch, wtDir]);
   return wtDir;
 }
 
@@ -261,25 +264,67 @@ describe('bug #260: gsd-worktree-path-guard.js', () => {
     });
   });
 
-  // 6. Sibling directory path is BLOCKED (validates the '/' boundary check)
+  // 6. Sibling directory path is BLOCKED (validates the '/' boundary check AND prefix-overlap)
   describe('sibling path is blocked', () => {
     test('path that shares prefix with worktree root but is a sibling exits 2', () => {
-      // e.g. worktreeDir = /tmp/gsd-260-wt-XXXXX
-      // sibling       = /tmp/gsd-260-wt-XXXXXsibling/file.ts
-      // This would pass a naive startsWith(wtRoot) check without the '/' suffix.
-      const siblingPath = worktreeDir + '-sibling/file.ts';
-      const payload = {
-        cwd: worktreeDir,
-        tool_name: 'Edit',
-        tool_input: { file_path: siblingPath },
-      };
-      const result = runHook(worktreeDir, payload);
-      assert.strictEqual(result.status, 2,
-        `Sibling path "${siblingPath}" must be blocked (exit 2), got ${result.status}. ` +
-        `This validates the '/' boundary check in startsWith(wtRoot + '/'). stderr: ${result.stderr}`
-      );
-      const parsed = JSON.parse(result.stdout);
-      assert.strictEqual(parsed.decision, 'block');
+      // This test exercises BOTH the prefix-overlap boundary check AND the different-git-root block:
+      //   worktree  = <base>/wt
+      //   sibling   = <base>/wt-sibling   ← shares "wt" prefix with the worktree root
+      //   target    = <base>/wt-sibling/file.ts
+      //
+      // A naive startsWith(wtRoot) check would wrongly classify "<base>/wt-sibling/..." as inside
+      // the worktree (it doesn't include the '/' boundary). The hook resolves the sibling's git
+      // toplevel (a different repo) so the different-git-root block fires regardless.
+      // (#1342: paths outside all git repos now fail open; only different-git-root blocks.)
+      const base = realp(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-260-sib-base-')));
+      const wtDir = path.join(base, 'wt');
+      const siblingRepoDir = path.join(base, 'wt-sibling');
+      // We need a genuine linked worktree at <base>/wt and a separate git repo at <base>/wt-sibling.
+      // Create a fresh main repo to host this worktree (the fixture worktree is already allocated).
+      const sibMainRepo = realp(makeMainRepo());
+      try {
+        fs.mkdirSync(base, { recursive: true });
+        // Create linked worktree at <base>/wt (using sibMainRepo as its host).
+        git(sibMainRepo, ['worktree', 'add', '-q', '-b', 'worktree-agent-sib-test', wtDir]);
+        // Create a separate git repo at <base>/wt-sibling (shares "wt" prefix).
+        fs.mkdirSync(siblingRepoDir, { recursive: true });
+        git(siblingRepoDir, ['init', '-q']);
+        git(siblingRepoDir, ['config', 'user.email', 'test@example.com']);
+        git(siblingRepoDir, ['config', 'user.name', 'Test User']);
+        git(siblingRepoDir, ['config', 'commit.gpgsign', 'false']);
+        fs.writeFileSync(path.join(siblingRepoDir, 'README.md'), '# sibling\n');
+        git(siblingRepoDir, ['add', 'README.md']);
+        git(siblingRepoDir, ['commit', '-q', '-m', 'chore: sibling init']);
+
+        // Confirm prefix-overlap: siblingRepoDir starts with wtDir (without trailing sep).
+        assert.ok(
+          siblingRepoDir.startsWith(wtDir),
+          `Sibling "${siblingRepoDir}" must share a string prefix with worktree "${wtDir}" for this test to be meaningful`
+        );
+        // Confirm they are genuinely distinct (different toplevel).
+        assert.notStrictEqual(
+          realp(siblingRepoDir), realp(wtDir),
+          'sibling and worktree must be different directories'
+        );
+
+        const siblingPath = path.join(realp(siblingRepoDir), 'file.ts');
+        const payload = {
+          cwd: realp(wtDir),
+          tool_name: 'Edit',
+          tool_input: { file_path: siblingPath },
+        };
+        const result = runHook(realp(wtDir), payload);
+        assert.strictEqual(result.status, 2,
+          `Path inside a prefix-sibling git repo "${siblingPath}" must be blocked (exit 2), got ${result.status}. ` +
+          `This validates both the prefix-overlap boundary and the different-git-root block. stderr: ${result.stderr}`
+        );
+        const parsed = JSON.parse(result.stdout);
+        assert.strictEqual(parsed.decision, 'block');
+      } finally {
+        try { git(sibMainRepo, ['worktree', 'remove', '--force', wtDir]); } catch { /* ignore */ }
+        cleanup(sibMainRepo);
+        cleanup(base);
+      }
     });
   });
 
@@ -323,14 +368,13 @@ describe('bug #260: gsd-worktree-path-guard.js', () => {
   // 8. Adversarial: `..` traversal is normalised before the containment check (Codex finding #1)
   describe('dot-dot traversal is blocked', () => {
     test('path with .. that escapes the worktree is blocked', () => {
-      // Construct the traversal target inside a SEPARATE tmpdir that is
+      // Construct the traversal target inside a SEPARATE git repo that is
       // guaranteed to be outside the worktree on every platform (no symlink
-      // ambiguity).  We create the directory so that the hook's
-      // nearestExistingDir() walk finds it and dispatches git --show-toplevel
-      // on it — which will either fail (not a git repo → block) or return a
-      // different toplevel (different repo → block).  Either path through the
-      // hook exits 2.
-      const externalDir = realp(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-260-ext-')));
+      // ambiguity).  The hook finds the external dir's git toplevel (a different
+      // repo → different-git-root block).
+      // (#1342: paths outside all git repos now fail open; only different-git-root blocks,
+      // so externalDir must be inside a real different git repo to exercise the block.)
+      const externalDir = realp(makeMainRepo());
       try {
         // Sanity: the external directory must not be inside the worktree.
         assert.ok(
@@ -348,6 +392,9 @@ describe('bug #260: gsd-worktree-path-guard.js', () => {
         const upSegments = Array(depthFromRoot + 1).fill('..').join(path.sep);
         // Strip the leading separator from externalDir so path.join treats it
         // as relative segments when appended after the .. chain.
+        // Note: externalDir is the root of a different git repo, so path.resolve()
+        // normalises the traversal to externalDir/file.ts, which hits the
+        // different-git-root block (the genuine #260 hard block).
         const externalRelative = externalDir.replace(/^[/\\]+/, '');
         const traversalPath = path.join(worktreeDir, upSegments, externalRelative, 'file.ts');
 
@@ -408,6 +455,156 @@ describe('bug #260: gsd-worktree-path-guard.js', () => {
     });
   });
 
+});
+
+// ---------------------------------------------------------------------------
+// #1342 — GSD-activity gate + fail-open for no-repo targets
+// ---------------------------------------------------------------------------
+
+describe('#1342 — GSD-activity gate + fail-open for no-repo targets', () => {
+  // Fixtures: one non-agent linked worktree (plain user branch) + one agent worktree
+  let mainRepo1342;
+  let nonAgentWorktree;   // on branch 'feature-x' — non-GSD
+  let agentWorktree;       // on branch 'worktree-agent-foo' — GSD-managed
+
+  before(() => {
+    mainRepo1342 = realp(makeMainRepo());
+    nonAgentWorktree = realp(makeWorktree(mainRepo1342, 'feature-x'));
+    agentWorktree    = realp(makeWorktree(mainRepo1342, 'worktree-agent-foo'));
+  });
+
+  after(() => {
+    try { git(mainRepo1342, ['worktree', 'remove', '--force', nonAgentWorktree]); } catch { /* ignore */ }
+    try { git(mainRepo1342, ['worktree', 'remove', '--force', agentWorktree]); } catch { /* ignore */ }
+    cleanup(mainRepo1342);
+    cleanup(nonAgentWorktree);
+    cleanup(agentWorktree);
+  });
+
+  // Test 1 — reporter repro: non-agent worktree writing outside all git repos → exit 0
+  test('(1) non-agent linked worktree: Write to a path outside all git repos exits 0 (no block)', () => {
+    // Simulates Claude Code plan-mode writing ~/.claude/plans/<slug>.md from a
+    // manually-created linked worktree that is NOT on a worktree-agent-* branch.
+    const plansDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-1342-plans-'));
+    try {
+      const targetPath = path.join(plansDir, 'my-plan.md');
+      const payload = {
+        cwd: nonAgentWorktree,
+        tool_name: 'Write',
+        tool_input: { file_path: targetPath },
+      };
+      const result = runHook(nonAgentWorktree, payload);
+      assert.strictEqual(result.status, 0,
+        `Non-agent linked worktree writing outside git repos must exit 0 (reporter repro). ` +
+        `Got exit ${result.status}. stderr: ${result.stderr}`
+      );
+      assert.strictEqual(result.stdout, '', 'Expected no block output');
+    } finally {
+      cleanup(plansDir);
+    }
+  });
+
+  // Test 2 — non-agent linked worktree: Edit targeting MAIN repo root → exit 0 (gate no-op)
+  test('(2) non-agent linked worktree: Edit targeting main repo root exits 0 (gate no-op, not #260 block)', () => {
+    const payload = {
+      cwd: nonAgentWorktree,
+      tool_name: 'Edit',
+      tool_input: { file_path: path.join(mainRepo1342, 'src', 'index.ts') },
+    };
+    const result = runHook(nonAgentWorktree, payload);
+    assert.strictEqual(result.status, 0,
+      `Non-agent linked worktree must exit 0 (GSD-activity gate fires before #260 check). ` +
+      `Got exit ${result.status}. stderr: ${result.stderr}`
+    );
+    assert.strictEqual(result.stdout, '', 'Expected no block output');
+  });
+
+  // Test 3 — GSD-managed worktree (worktree-agent-foo): Edit targeting main repo root → exit 2 (block)
+  test('(3) GSD-managed worktree: Edit targeting main repo root exits 2 with block decision', () => {
+    const payload = {
+      cwd: agentWorktree,
+      tool_name: 'Edit',
+      tool_input: { file_path: path.join(mainRepo1342, 'src', 'index.ts') },
+    };
+    const result = runHook(agentWorktree, payload);
+    assert.strictEqual(result.status, 2,
+      `GSD-managed worktree targeting main repo root must be blocked (exit 2). ` +
+      `Got exit ${result.status}. stderr: ${result.stderr}`
+    );
+    let parsed;
+    assert.doesNotThrow(() => { parsed = JSON.parse(result.stdout); }, 'stdout must be valid JSON');
+    assert.strictEqual(parsed.decision, 'block', 'Expected decision:"block" in output');
+  });
+
+  // Test 4 — GSD-managed worktree: absolute target INSIDE the active worktree → exit 0
+  test('(4) GSD-managed worktree: absolute target inside the active worktree exits 0', () => {
+    const payload = {
+      cwd: agentWorktree,
+      tool_name: 'Edit',
+      tool_input: { file_path: path.join(agentWorktree, 'src', 'foo.ts') },
+    };
+    const result = runHook(agentWorktree, payload);
+    assert.strictEqual(result.status, 0,
+      `GSD-managed worktree targeting its own subtree must pass. ` +
+      `Got exit ${result.status}. stderr: ${result.stderr}`
+    );
+    assert.strictEqual(result.stdout, '', 'Expected no block output');
+  });
+
+  // Test 5 — GSD-managed worktree: target OUTSIDE all git repos (tmpdir) → exit 0 (fail open)
+  test('(5) GSD-managed worktree: target outside all git repos exits 0 (fail open, not #260 vector)', () => {
+    // Create a temp dir that is NOT a git repository (no .git).
+    // This is the ~/.claude/plans/ scenario — a path that has a real ancestor
+    // directory but is outside every git repo.
+    // IMPORTANT: this dir must NOT be inside any .git directory — it must be a plain tempdir
+    // so the fail-open path (truly outside all repos) is exercised, not the .git-internals block.
+    const externalDir = realp(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-1342-ext-')));
+    try {
+      const targetPath = path.join(externalDir, 'notes.md');
+      const payload = {
+        cwd: agentWorktree,
+        tool_name: 'Write',
+        tool_input: { file_path: targetPath },
+      };
+      const result = runHook(agentWorktree, payload);
+      assert.strictEqual(result.status, 0,
+        `GSD-managed worktree writing to a path outside all git repos must fail open (exit 0). ` +
+        `Only the different-git-root vector (#260) blocks; no-repo targets are not that vector. ` +
+        `Got exit ${result.status}. stderr: ${result.stderr}`
+      );
+      assert.strictEqual(result.stdout, '', 'Expected no block output');
+    } finally {
+      cleanup(externalDir);
+    }
+  });
+
+  // Test 6 — GSD-managed worktree: Write to .git/config of the MAIN repo → exit 2 (block)
+  test('(6) blocks absolute writes into the main repo .git internals from a GSD worktree (#1342)', () => {
+    // A target like /main-repo/.git/config or /main-repo/.git/hooks/pre-commit causes
+    // `git rev-parse --show-toplevel` to FAIL (a .git dir is not a work tree), so the
+    // "file not in any git repo" branch fires. Previously that branch failed open — but
+    // writing into repository internals via an absolute path is still a #260-class escape
+    // (and dangerous, e.g. injecting a git hook). The fix checks --is-inside-git-dir and
+    // blocks when true.
+    const gitConfigPath = path.join(mainRepo1342, '.git', 'config');
+    const payload = {
+      cwd: agentWorktree,
+      tool_name: 'Write',
+      tool_input: { file_path: gitConfigPath },
+    };
+    const result = runHook(agentWorktree, payload);
+    assert.strictEqual(result.status, 2,
+      `GSD-managed worktree targeting .git/config of another repo must be blocked (exit 2). ` +
+      `Got exit ${result.status}. stderr: ${result.stderr}`
+    );
+    let parsed;
+    assert.doesNotThrow(() => { parsed = JSON.parse(result.stdout); }, 'stdout must be valid JSON');
+    assert.strictEqual(parsed.decision, 'block', 'Expected decision:"block" in output');
+    assert.ok(
+      parsed.reason && parsed.reason.includes('.git'),
+      `Block reason should mention .git internals. Got: ${parsed.reason}`
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------

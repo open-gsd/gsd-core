@@ -71,6 +71,17 @@ process.stdin.on('end', () => {
       process.exit(0); // main repo, submodule, or separate-git-dir — no-op
     }
 
+    // #1342: Only enforce inside a GSD-managed isolated executor worktree. Those
+    // are always on a `worktree-agent-*` branch (the positive allow-list enforced
+    // by worktree-branch-check.md, #2924). A manually-created linked worktree (plain
+    // non-GSD work, e.g. Claude Code plan-mode) is on the user's own branch, so the
+    // guard must be a no-op there. Detached HEAD / error → not GSD-managed → no-op.
+    const branchResult = git(['symbolic-ref', '--short', 'HEAD'], cwd);
+    const branch = branchResult.status === 0 && branchResult.stdout ? branchResult.stdout.trim() : '';
+    if (!/^worktree-agent-[A-Za-z0-9._/-]+$/.test(branch)) {
+      process.exit(0); // not a GSD-managed executor worktree — no-op
+    }
+
     // Get the raw --show-toplevel output for the worktree (cwd).
     // We keep it raw (not path.resolve'd) to compare directly with the
     // file's toplevel — same git binary, same format, no normalization needed.
@@ -110,15 +121,9 @@ process.stdin.on('end', () => {
 
     if (!checkDir) {
       // Walked to root without finding any directory — path is synthetic.
-      // Block conservatively.
-      const output = {
-        decision: 'block',
-        reason:
-          `Worktree path guard: '${filePath}' has no existing ancestor directory — ` +
-          `cannot verify it is inside the worktree '${wtTopRaw}'. Use a relative path instead.`,
-      };
-      process.stdout.write(JSON.stringify(output));
-      process.exit(2);
+      // A path with no existing ancestor is not the #260 main-repo vector;
+      // #260 is caught by the different-git-root branch below. Fail open. (#1342)
+      process.exit(0);
     }
 
     // Ask git for the toplevel of the file's location.
@@ -130,15 +135,26 @@ process.stdin.on('end', () => {
     const fileTopResult = git(['rev-parse', '--show-toplevel'], checkDir);
 
     if (fileTopResult.status !== 0 || !fileTopResult.stdout) {
-      // checkDir is not inside any git repo → cannot be inside the worktree.
-      const output = {
-        decision: 'block',
-        reason:
-          `Worktree path guard: '${filePath}' is not inside any git repository — ` +
-          `it cannot be inside the worktree at '${wtTopRaw}'. Use a relative path instead.`,
-      };
-      process.stdout.write(JSON.stringify(output));
-      process.exit(2);
+      // The target's location is not a git work tree. Two sub-cases:
+      //  - Inside a .git directory (e.g. /main-repo/.git/config or .git/hooks/*)
+      //    → an absolute write into a repository's internals; still a #260-class
+      //    escape (and dangerous) → BLOCK.
+      //  - Truly outside all git repositories (e.g. ~/.claude/plans/) → not the
+      //    main-repo vector → fail open. (#1342)
+      const insideGitDir = git(['rev-parse', '--is-inside-git-dir'], checkDir);
+      if (insideGitDir.status === 0 && insideGitDir.stdout && insideGitDir.stdout.trim() === 'true') {
+        const output = {
+          decision: 'block',
+          reason:
+            `Worktree path guard: '${filePath}' is inside a git internal (.git) directory, ` +
+            `not the active worktree at '${wtTopRaw}'. Writing to repository internals via an ` +
+            `absolute path is not permitted from an isolated executor worktree. Use a relative path.`,
+        };
+        process.stdout.write(JSON.stringify(output));
+        process.exit(2);
+      }
+      // Outside all git repositories — fail open (#1342).
+      process.exit(0);
     }
 
     const fileTopRaw = fileTopResult.stdout.trim();
