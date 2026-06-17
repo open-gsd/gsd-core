@@ -457,26 +457,22 @@ Continue to collect_wave_1.
 <step name="collect_wave_1">
 **Read the work manifest first:** `Read .planning/tmp/docs-work-manifest.json` — update `status` to `"completed"` or `"failed"` for each Wave 1 item after collection. Write the updated manifest back to disk.
 
-Wait for all 3 Wave 1 agents to complete using the TaskOutput tool.
+Wait for all 3 Wave 1 background agents to finish, then read each agent's output file to collect confirmations.
 
-Call TaskOutput for all 3 agents in parallel (single message with 3 TaskOutput calls):
+Each `Agent(...)` call above with `run_in_background=true` returns an `async_launched` result that carries an `outputFile` path (and `canReadOutputFile: true`). Each agent's completion arrives as a message in this conversation when it finishes — do NOT issue a separate blocking call to wait. Once all 3 agents have reported completion, read their output files in parallel (single message with 3 Read calls):
 
 ```
-TaskOutput tool:
-  task_id: "{task_id from README agent result}"
-  block: true
-  timeout: 300000
+Read tool:
+  file_path: "{outputFile from README agent result}"
 
-TaskOutput tool:
-  task_id: "{task_id from ARCHITECTURE agent result}"
-  block: true
-  timeout: 300000
+Read tool:
+  file_path: "{outputFile from ARCHITECTURE agent result}"
 
-TaskOutput tool:
-  task_id: "{task_id from CONFIGURATION agent result}"
-  block: true
-  timeout: 300000
+Read tool:
+  file_path: "{outputFile from CONFIGURATION agent result}"
 ```
+
+> Allow up to 5 minutes (300000 ms) for the slowest agent to finish before treating it as failed.
 
 **Expected confirmation format from each agent:**
 ```
@@ -676,28 +672,24 @@ Continue to collect_wave_2.
 <step name="collect_wave_2">
 **Read the work manifest first:** `Read .planning/tmp/docs-work-manifest.json` — update `status` to `"completed"` or `"failed"` for each Wave 2 item after collection. Write the updated manifest back to disk.
 
-Wait for all Wave 2 agents to complete using the TaskOutput tool.
+Wait for all Wave 2 background agents to finish, then read each agent's output file to collect confirmations.
 
-Call TaskOutput for all Wave 2 agents in parallel (single message with N TaskOutput calls — one per spawned Wave 2 agent):
+Each `Agent(...)` call above with `run_in_background=true` returns an `async_launched` result that carries an `outputFile` path (and `canReadOutputFile: true`). Each agent's completion arrives as a message in this conversation when it finishes — do NOT issue a separate blocking call to wait. Once all Wave 2 agents have reported completion, read their output files in parallel (single message with N Read calls — one per spawned Wave 2 agent):
 
 ```
-TaskOutput tool:
-  task_id: "{task_id from GETTING-STARTED agent result}"
-  block: true
-  timeout: 300000
+Read tool:
+  file_path: "{outputFile from GETTING-STARTED agent result}"
 
-TaskOutput tool:
-  task_id: "{task_id from DEVELOPMENT agent result}"
-  block: true
-  timeout: 300000
+Read tool:
+  file_path: "{outputFile from DEVELOPMENT agent result}"
 
-TaskOutput tool:
-  task_id: "{task_id from TESTING agent result}"
-  block: true
-  timeout: 300000
+Read tool:
+  file_path: "{outputFile from TESTING agent result}"
 
-# Add one TaskOutput call per conditional agent spawned (API, DEPLOYMENT, CONTRIBUTING)
+# Add one Read call per conditional agent spawned (API, DEPLOYMENT, CONTRIBUTING)
 ```
+
+> Allow up to 5 minutes (300000 ms) for the slowest agent to finish before treating it as failed.
 
 **After collection, verify all Wave 2 files exist on disk** using the `resolved_path` from each manifest entry:
 ```bash
@@ -752,9 +744,9 @@ Write {package_dir}/README.md directly. Return confirmation only — do not retu
 )
 ```
 
-> **ORCHESTRATOR RULE — CODEX RUNTIME**: After calling all per-package Agent() calls above with `run_in_background=true`, do NOT generate any package READMEs independently while the subagents are active. Wait for all agents to complete via TaskOutput before proceeding. This prevents duplicate work and wasted context.
+> **ORCHESTRATOR RULE — CODEX RUNTIME**: After calling all per-package Agent() calls above with `run_in_background=true`, do NOT generate any package READMEs independently while the subagents are active. Wait for all agents to complete before proceeding. This prevents duplicate work and wasted context.
 
-Collect confirmations via TaskOutput for all package agents. Note failures in the final report.
+Collect confirmations by reading each package agent's `outputFile` once it reports completion — each `run_in_background=true` Agent call returns an `async_launched` result carrying an `outputFile` path (with `canReadOutputFile: true`). Note failures in the final report.
 
 **Fallback when Task tool is unavailable:** Generate per-package READMEs sequentially inline after the `sequential_generation` step. For each package directory with a `package.json`, construct the equivalent `doc_assignment` block and generate the README following gsd-doc-writer instructions.
 
