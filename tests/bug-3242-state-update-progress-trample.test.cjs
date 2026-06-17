@@ -18,6 +18,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { extractFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -86,6 +87,32 @@ function createPhaseDirs(phasesDir, count) {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, `01-PLAN.md`), `# Plan\n`);
     fs.writeFileSync(path.join(dir, `01-SUMMARY.md`), `# Summary\n`);
+  }
+}
+
+function createPhasePlanOnlyDirs(phasesDir, count) {
+  for (let i = 1; i <= count; i++) {
+    const dir = path.join(phasesDir, String(i).padStart(2, '0'));
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `01-PLAN.md`), `# Plan\n`);
+  }
+}
+
+function readPersistedProgress(statePath) {
+  const fm = extractFrontmatter(fs.readFileSync(statePath, 'utf-8'));
+  assert.ok(fm.progress, 'persisted frontmatter must have a progress block');
+  return Object.fromEntries(
+    Object.entries(fm.progress).map(([key, value]) => [key, Number(value)]),
+  );
+}
+
+function assertProgressEquals(actual, expected) {
+  for (const [key, value] of Object.entries(expected)) {
+    assert.strictEqual(
+      actual[key],
+      value,
+      `persisted progress.${key} expected ${value}, got ${actual[key]}`,
+    );
   }
 }
 
@@ -202,6 +229,88 @@ describe('#3242 Bug A: body-only state.update preserves curated progress frontma
     assert.ok(jsonResult.success, `state json failed: ${jsonResult.error}`);
     const fm = JSON.parse(jsonResult.output);
     assert.strictEqual(fm.progress.percent, 80);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #1264: state.patch must apply the same progress preservation policy
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('#1264: state.patch preserves curated progress frontmatter for non-progress fields', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('query state.patch of Current Phase preserves persisted progress.* values', () => {
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    const curatedProgress = {
+      total_phases: 4,
+      completed_phases: 3,
+      total_plans: 11,
+      completed_plans: 11,
+      percent: 75,
+    };
+    fs.writeFileSync(statePath, buildStateWithCuratedProgress({
+      completedPlans: curatedProgress.completed_plans,
+      totalPlans: curatedProgress.total_plans,
+      completedPhases: curatedProgress.completed_phases,
+      totalPhases: curatedProgress.total_phases,
+      percent: curatedProgress.percent,
+    }));
+
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      buildRoadmap(5),
+    );
+    createPhasePlanOnlyDirs(path.join(tmpDir, '.planning', 'phases'), 5);
+
+    const patchResult = runGsdTools([
+      'query',
+      'state.patch',
+      JSON.stringify({ 'Current Phase': '08.2' }),
+    ], tmpDir);
+    assert.ok(patchResult.success, `state patch failed: ${patchResult.error}`);
+
+    const output = JSON.parse(patchResult.output);
+    assert.deepEqual(output.updated, ['Current Phase']);
+
+    const progress = readPersistedProgress(statePath);
+    assertProgressEquals(progress, curatedProgress);
+  });
+
+  test('query state.patch of Total Plans in Phase still resyncs persisted progress.* from the updated body', () => {
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    fs.writeFileSync(statePath, buildStateWithCuratedProgress({
+      completedPlans: 22,
+      totalPlans: 22,
+      completedPhases: 6,
+      totalPhases: 12,
+      percent: 50,
+    }));
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      buildRoadmap(8),
+    );
+    createPhasePlanOnlyDirs(path.join(tmpDir, '.planning', 'phases'), 8);
+
+    const patchResult = runGsdTools([
+      'query',
+      'state.patch',
+      JSON.stringify({ 'Total Plans in Phase': '8' }),
+    ], tmpDir);
+    assert.ok(patchResult.success, `state patch failed: ${patchResult.error}`);
+
+    const output = JSON.parse(patchResult.output);
+    assert.deepEqual(output.updated, ['Total Plans in Phase']);
+
+    const progress = readPersistedProgress(statePath);
+    assert.strictEqual(progress.total_plans, 8);
   });
 });
 

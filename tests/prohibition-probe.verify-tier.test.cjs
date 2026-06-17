@@ -70,7 +70,9 @@ describe('prohibition-probe verify-tier: test-tier fail-closed safety (PROB-12 /
 // non-green) in BOTH interactive and autonomous modes (ADR-550 D4 / D3).
 //
 // Typed-field assertions ONLY (status / flagged / tier / evidence / located / kind / mode-block).
-// The check-runner is injected via options.runCheck so no real subprocess is spawned.
+// The check-runner is injected via options.runCheck so no real subprocess is spawned; the GREEN
+// cases (A/B) ALSO inject options.proveFailFirst since #1279 (FF-08) requires fail-first to be
+// MACHINE-PROVEN — caller attestation (failFirst:true) alone no longer greens.
 describe('prohibition-probe verify-tier: test-tier ENFORCEMENT (REQ-PROHIB-07 / ADR-550 D5d)', () => {
   const testTierProhibition = {
     requirement_id: 'R1',
@@ -83,12 +85,15 @@ describe('prohibition-probe verify-tier: test-tier ENFORCEMENT (REQ-PROHIB-07 / 
   };
 
   // Test A — node --test negative test that PASSES -> green + non-empty evidence.
+  // #1279 (FF-08): attestation alone no longer greens — the producer requires the fail-first to be
+  // MACHINE-PROVEN. With injected runCheck (no real subprocess) we also inject a proving prover so
+  // the GREEN direction is exercised; the hard-gate directions (C/D/D2 below) need no prover.
   test('A: wired node-test check that passes disposes green with non-empty enforcement evidence', () => {
     const enforce = require(ENFORCEMENT_LIB);
     const result = enforce.runProhibitionEnforcement(
       testTierProhibition,
       { kind: 'node-test', target: 'tests/some-negative.test.cjs', failFirst: true },
-      { runCheck: () => ({ passed: true }) },
+      { runCheck: () => ({ passed: true }), proveFailFirst: () => ({ provenFailFirst: true }) },
     );
     assert.ok(result && typeof result === 'object', 'result must be a structured object');
     assert.equal(result.status, 'green', 'a passing wired node-test check must dispose green');
@@ -105,7 +110,7 @@ describe('prohibition-probe verify-tier: test-tier ENFORCEMENT (REQ-PROHIB-07 / 
     const result = enforce.runProhibitionEnforcement(
       testTierProhibition,
       { kind: 'lint-rule', rule: 'local/no-source-grep', target: 'tests/', failFirst: true },
-      { runCheck: () => ({ passed: true }) },
+      { runCheck: () => ({ passed: true }), proveFailFirst: () => ({ provenFailFirst: true }) },
     );
     assert.equal(result.status, 'green', 'a passing wired lint-rule check must dispose green');
     assert.equal(result.flagged, false, 'a green disposition must not be flagged');

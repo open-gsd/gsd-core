@@ -299,6 +299,10 @@ export interface Prohibition {
   check_kind?: 'node-test' | 'lint-rule';
   check_target?: string;
   check_rule?: string;
+  // Optional 4th flat scalar (#1346): the path to a KNOWN-BAD subject the #1279 prover runs the check
+  // against to MACHINE-PROVE fail-first. Projected only alongside a well-formed descriptor; absent ->
+  // the producer hard-gates (green requires a fixture). Mirrors `CheckDescriptor.violationFixture`.
+  check_violation_fixture?: string;
 }
 
 /**
@@ -375,6 +379,13 @@ export function projectProhibitions(
       // its rule leaves check_rule absent so the producer's fail-closed locate rejects it (CHK-06).
       if (kind === 'lint-rule' && typeof p.check_rule === 'string' && p.check_rule.trim() !== '') {
         entry.check_rule = String(p.check_rule);
+      }
+      // `check_violation_fixture` (#1346) rides BOTH kinds — it's what the #1279 prover machine-proves
+      // fail-first against. Emit ONLY a non-empty fixture (a blank one projects absent so green still
+      // hard-gates downstream — never a partial green); meaningless without the descriptor, so it lives
+      // inside this well-formed-descriptor branch.
+      if (typeof p.check_violation_fixture === 'string' && p.check_violation_fixture.trim() !== '') {
+        entry.check_violation_fixture = String(p.check_violation_fixture);
       }
     }
     out.push(entry);

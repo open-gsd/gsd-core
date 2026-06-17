@@ -57,4 +57,42 @@ describe('prohibition-enforcement properties (#1259)', () => {
       assert.ok(Number.isInteger(n) && n >= 0);
     }));
   });
+
+  // ─── #1279 isNodeTestRed (FF-03 / FF-06) ───
+  test('isNodeTestRed agrees with parseNodeTestSummary().fail >= 1 and never throws', () => {
+    const enforce = require(ENFORCEMENT_LIB);
+    fc.assert(fc.property(fc.string(), (s) => {
+      const red = enforce.isNodeTestRed(s);
+      assert.equal(red, enforce.parseNodeTestSummary(s).fail >= 1,
+        'isNodeTestRed(s) === (parseNodeTestSummary(s).fail >= 1)');
+    }));
+  });
+
+  // ─── #1279 proven-fail-first is NECESSARY for green (FF-08 necessity invariant) ───
+  test('NO clean pass greens when the prover did not prove fail-first — proof is necessary for green (FF-08)', () => {
+    const enforce = require(ENFORCEMENT_LIB);
+    const TEST_TIER = Object.freeze({
+      requirement_id: 'R1', category: 'safety', status: 'resolved', verification: 'test',
+      resolution: null, reason: null, statement: 'MUST NOT do the forbidden thing',
+    });
+    fc.assert(fc.property(
+      fc.constantFrom('node-test', 'lint-rule'),
+      fc.string({ minLength: 1 }).filter((s) => s.trim().length > 0),
+      fc.boolean(),
+      fc.string({ minLength: 1 }).filter((s) => s.trim().length > 0),
+      (kind, target, attest, rule) => {
+        // ANY well-formed descriptor + a CLEAN pass + a prover that did NOT prove fail-first must
+        // NEVER green, regardless of the caller's `failFirst` attestation. Proof is necessary for green.
+        const descriptor = kind === 'lint-rule'
+          ? { kind, target, rule, failFirst: attest }
+          : { kind, target, failFirst: attest };
+        const result = enforce.runProhibitionEnforcement(TEST_TIER, descriptor, {
+          runCheck: () => ({ passed: true }),
+          proveFailFirst: () => ({ provenFailFirst: false }),
+        });
+        assert.notEqual(result.status, 'green',
+          'an un-proven-fail-first check must never green even on a clean pass (FF-08 necessity)');
+      },
+    ));
+  });
 });

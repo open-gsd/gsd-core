@@ -185,9 +185,17 @@ describe('extractPhaseToken', () => {
     assert.strictEqual(phaseId.extractPhaseToken('PROJ-12-feature'), 'PROJ-12');
   });
 
+  test('extracts glued letter-prefix phase tokens (#1324)', () => {
+    assert.strictEqual(phaseId.extractPhaseToken('P0.3-tenant-primitives'), 'P0.3');
+    assert.strictEqual(phaseId.extractPhaseToken('P0.0-foundation'), 'P0.0');
+    assert.strictEqual(phaseId.extractPhaseToken('P0.16-gate'), 'P0.16');
+    assert.strictEqual(phaseId.extractPhaseToken('M1-2-brain'), 'M1-2');
+  });
+
   test('returns the full dirName when no numeric token found', () => {
     assert.strictEqual(phaseId.extractPhaseToken('no-numeric'), 'no-numeric');
     assert.strictEqual(phaseId.extractPhaseToken('alpha'), 'alpha');
+    assert.strictEqual(phaseId.extractPhaseToken('phase-name-01'), 'phase-name-01');
   });
 
   test('stops at first non-numeric-starting segment', () => {
@@ -207,6 +215,12 @@ describe('phaseTokenMatches', () => {
   test('matches with project_code prefix stripped', () => {
     assert.ok(phaseId.phaseTokenMatches('CK-01-phase', '01'));
     assert.ok(phaseId.phaseTokenMatches('PROJ-12-feature', '12'));
+  });
+
+  test('matches glued letter-prefix phase dirs (#1324)', () => {
+    assert.ok(phaseId.phaseTokenMatches('P0.3-tenant-primitives', 'P0.3'));
+    assert.ok(phaseId.phaseTokenMatches('M1-2-brain', 'M1-2'));
+    assert.ok(!phaseId.phaseTokenMatches('P0.3-tenant-primitives', 'P0.4'));
   });
 
   test('does not match when token differs', () => {
@@ -386,4 +400,3 @@ describe('getPhaseDirFromPhaseId', () => {
     assert.ok(!result.endsWith('-'));
   });
 });
-

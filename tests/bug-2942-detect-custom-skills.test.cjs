@@ -2,9 +2,9 @@
  * GSD Tools Tests — detect-custom-files misses skills/ directory (#2942)
  *
  * After v1.39.0 skill consolidation (#2790), skills/ became a GSD-managed root.
- * GSD_MANAGED_DIRS was missing 'skills', so user-added skill directories like
- * skills/custom-skill/SKILL.md were never walked and got silently destroyed
- * during /gsd-update.
+ * GSD_MANAGED_DIRS was missing 'skills', so user-added GSD-prefixed skill
+ * directories like skills/gsd-custom-skill/SKILL.md were never walked and got
+ * silently destroyed during /gsd-update.
  */
 
 'use strict';
@@ -62,14 +62,14 @@ describe('detect-custom-files — skills/ directory missing from GSD_MANAGED_DIR
     cleanup(tmpDir);
   });
 
-  // Test 1: detects custom skill in skills/<name>/SKILL.md
-  test('detects custom skill file at skills/<name>/SKILL.md', () => {
+  // Test 1: detects custom GSD-prefixed skill in skills/gsd-<name>/SKILL.md
+  test('detects custom skill file at skills/gsd-<name>/SKILL.md', () => {
     writeManifest(tmpDir, {
       'skills/gsd-planner/SKILL.md': '# GSD Planner Skill\n',
     });
 
-    // User-added custom skill — NOT in manifest
-    writeCustomFile(tmpDir, 'skills/test-custom/SKILL.md', '# My Custom Skill\n');
+    // User-added custom GSD-prefixed skill — NOT in manifest
+    writeCustomFile(tmpDir, 'skills/gsd-test-custom/SKILL.md', '# My Custom Skill\n');
 
     const result = runGsdTools(
       ['detect-custom-files', '--config-dir', tmpDir],
@@ -82,8 +82,30 @@ describe('detect-custom-files — skills/ directory missing from GSD_MANAGED_DIR
     assert.ok(Array.isArray(json.custom_files), 'custom_files should be an array');
     assert.ok(json.custom_count >= 1, `custom_count should be >= 1, got ${json.custom_count}`);
     assert.ok(
-      json.custom_files.includes('skills/test-custom/SKILL.md'),
-      `skills/test-custom/SKILL.md should be in custom_files; got: ${JSON.stringify(json.custom_files)}`
+      json.custom_files.includes('skills/gsd-test-custom/SKILL.md'),
+      `skills/gsd-test-custom/SKILL.md should be in custom_files; got: ${JSON.stringify(json.custom_files)}`
+    );
+  });
+
+  test('does not detect non-gsd shared skills preserved by installer (#1325)', () => {
+    writeManifest(tmpDir, {
+      'skills/gsd-planner/SKILL.md': '# GSD Planner Skill\n',
+    });
+
+    writeCustomFile(tmpDir, 'skills/test-custom/SKILL.md', '# My Custom Skill\n');
+
+    const result = runGsdTools(
+      ['detect-custom-files', '--config-dir', tmpDir],
+      tmpDir
+    );
+
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const json = JSON.parse(result.output);
+    assert.ok(Array.isArray(json.custom_files), 'custom_files should be an array');
+    assert.ok(
+      !json.custom_files.includes('skills/test-custom/SKILL.md'),
+      `non-gsd shared skill should not be in custom_files; got: ${JSON.stringify(json.custom_files)}`
     );
   });
 
@@ -134,13 +156,13 @@ describe('detect-custom-files — skills/ directory missing from GSD_MANAGED_DIR
   });
 
   // Test 4: custom_count matches custom_files.length
-  test('custom_count matches custom_files.length when multiple custom skills exist', () => {
+  test('custom_count matches custom_files.length when multiple custom gsd-prefixed skills exist', () => {
     writeManifest(tmpDir, {
       'skills/gsd-planner/SKILL.md': '# GSD Planner Skill\n',
     });
 
-    writeCustomFile(tmpDir, 'skills/test-custom/SKILL.md', '# Custom Skill One\n');
-    writeCustomFile(tmpDir, 'skills/another-custom/SKILL.md', '# Custom Skill Two\n');
+    writeCustomFile(tmpDir, 'skills/gsd-test-custom/SKILL.md', '# Custom Skill One\n');
+    writeCustomFile(tmpDir, 'skills/gsd-another-custom/SKILL.md', '# Custom Skill Two\n');
 
     const result = runGsdTools(
       ['detect-custom-files', '--config-dir', tmpDir],

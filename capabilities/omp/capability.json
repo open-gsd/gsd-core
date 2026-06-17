@@ -15,18 +15,18 @@
     "configFormat": "none",
     "artifactLayout": {
       "global": [
-        { "kind": "commands", "destSubpath": "commands", "prefix": "gsd-", "recursive": false, "converter": "convertClaudeCommandToOmpCommand" },
+        { "kind": "commands", "destSubpath": "commands", "prefix": "gsd-", "nesting": "flat", "recursive": false, "converter": "convertClaudeCommandToOmpCommand" },
         { "kind": "skills", "destSubpath": "skills", "prefix": "gsd-", "nesting": "nested", "recursive": true, "converter": "convertClaudeCommandToOmpSkill" },
-        { "kind": "agents", "destSubpath": "agents", "prefix": "gsd-", "recursive": false, "converter": "convertClaudeAgentToOmpAgent" },
-        { "kind": "rules", "destSubpath": "rules", "prefix": "gsd-", "recursive": false },
-        { "kind": "extensions", "destSubpath": "extensions", "prefix": "gsd-", "recursive": true }
+        { "kind": "agents", "destSubpath": "agents", "prefix": "gsd-", "nesting": "flat", "recursive": false, "converter": "convertClaudeAgentToOmpAgent" },
+        { "kind": "rules", "destSubpath": "rules", "prefix": "gsd-", "nesting": "flat", "recursive": false, "converter": null },
+        { "kind": "extensions", "destSubpath": "extensions", "prefix": "gsd-", "nesting": "flat", "recursive": true, "converter": null }
       ],
       "local": [
-        { "kind": "commands", "destSubpath": "commands", "prefix": "gsd-", "recursive": false, "converter": "convertClaudeCommandToOmpCommand" },
+        { "kind": "commands", "destSubpath": "commands", "prefix": "gsd-", "nesting": "flat", "recursive": false, "converter": "convertClaudeCommandToOmpCommand" },
         { "kind": "skills", "destSubpath": "skills", "prefix": "gsd-", "nesting": "nested", "recursive": true, "converter": "convertClaudeCommandToOmpSkill" },
-        { "kind": "agents", "destSubpath": "agents", "prefix": "gsd-", "recursive": false, "converter": "convertClaudeAgentToOmpAgent" },
-        { "kind": "rules", "destSubpath": "rules", "prefix": "gsd-", "recursive": false },
-        { "kind": "extensions", "destSubpath": "extensions", "prefix": "gsd-", "recursive": true }
+        { "kind": "agents", "destSubpath": "agents", "prefix": "gsd-", "nesting": "flat", "recursive": false, "converter": "convertClaudeAgentToOmpAgent" },
+        { "kind": "rules", "destSubpath": "rules", "prefix": "gsd-", "nesting": "flat", "recursive": false, "converter": null },
+        { "kind": "extensions", "destSubpath": "extensions", "prefix": "gsd-", "nesting": "flat", "recursive": true, "converter": null }
       ]
     },
     "commandStyle": "slash-hyphen",

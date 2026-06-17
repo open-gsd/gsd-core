@@ -1053,7 +1053,7 @@ fix(03-01): correct auth token expiry
 - **Copilot:** `sessionStart`
 
 **Runtime-specific enrichments (1.4.0):**
-- Codex emits `service_tier: flex` for light-tier agents and an `agents/openai.yaml` chip so GSD skills appear in the Codex `/skills` picker
+- Codex emits `service_tier: flex` for light-tier agents; GSD skills appear in the Codex `/skills` picker via `SKILL.md` (no `agents/openai.yaml` sidecar is emitted — doing so caused duplicate autocomplete entries, #1326)
 - Gemini commands use native `{{args}}` interpolation
 
 **Native packaging:**
@@ -3182,6 +3182,6 @@ The load-bearing wire is the `plan-phase` lift into `must_haves.prohibitions`, s
 - REQ-PROHIB-04: `--auto` MUST never auto-dismiss.
 - REQ-PROHIB-05: `plan-phase` MUST lift resolved prohibitions into `must_haves.prohibitions` (never `truths`).
 - REQ-PROHIB-06: A well-formed but unwired `test`-tier prohibition MUST fail closed at verify time — never a silent pass.
-- REQ-PROHIB-07: A `test`-tier prohibition with a caller-attested, genuinely-passing (non-vacuous) wired mechanical check (a `node --test` negative test OR a lint/AST rule) MUST dispose green and be satisfiable; a missing, non-attested, or non-passing check MUST hard-gate (flagged, non-green) in both interactive and autonomous modes (#1259, ADR-550 D5d — the enforcement half; machine-proven fail-first is tracked in #1279, deterministic descriptor auto-locate in #1278).
+- REQ-PROHIB-07: A `test`-tier prohibition with a **machine-proven-fail-first**, genuinely-passing (non-vacuous) wired mechanical check (a `node --test` negative test OR a lint/AST rule) MUST dispose green and be satisfiable; a missing, un-provable, or non-passing check MUST hard-gate (flagged, non-green) in both interactive and autonomous modes. Fail-first is **machine-proven, not caller-attested** (#1279, ADR-550 D5d): before a clean pass greens, the producer independently runs the wired check against a known violation (the descriptor's `violationFixture`) and confirms it goes RED — a lint rule via the violating fixture, a node test via the violating subject injected through the `GSD_PROHIB_SUBJECT` convention; absent a violation source it fails closed, never falling back to attestation. (Enforcement half shipped #1259; deterministic descriptor auto-locate in #1278.)
 
 **Reference:** [Prohibition Probe](../gsd-core/references/prohibition-probe.md)

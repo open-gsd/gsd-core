@@ -99,4 +99,41 @@ describe('quick.md pre-dispatch PLAN.md commit (#2432)', () => {
       'executor files_to_read must NOT contain hardcoded absolute paths'
     );
   });
+
+  test('#1265 records both parent base and plan commit for worktree dispatch', () => {
+    const step56Start = content.indexOf('Step 5.6');
+    const step6Start = content.indexOf('Step 6:', step56Start);
+    const step56Block = content.slice(step56Start, step6Start);
+    const step6Block = content.slice(step6Start, content.indexOf('After executor returns:', step6Start));
+
+    assert.ok(
+      step56Block.includes('QUICK_PLAN_PARENT'),
+      'quick worktree mode must record the pre-dispatch parent SHA before committing PLAN.md (#1265)'
+    );
+    assert.ok(
+      step56Block.includes('QUICK_PLAN_COMMIT'),
+      'quick worktree mode must record the PLAN.md commit SHA after the pre-dispatch commit (#1265)'
+    );
+    assert.ok(
+      step6Block.includes('EXPECTED_BASE_ALTERNATE'),
+      'executor guard embed must carry the alternate accepted base for parent-vs-plan worktree forks (#1265)'
+    );
+  });
+
+  test('#1265 executor materializes PLAN.md from the plan commit when worktree starts at parent', () => {
+    const executorTask = content.indexOf('subagent_type="gsd-executor"');
+    assert.ok(executorTask !== -1, 'executor Task() spawn must exist');
+    const promptStart = content.lastIndexOf('prompt="', executorTask);
+    const promptEnd = content.indexOf('subagent_type="gsd-executor"', promptStart);
+    const executorPrompt = content.slice(promptStart, promptEnd);
+
+    assert.ok(
+      executorPrompt.includes('git show') && executorPrompt.includes('QUICK_PLAN_COMMIT'),
+      'executor prompt must materialize PLAN.md from git show <plan-commit>:<plan-path> when absent (#1265)'
+    );
+    assert.ok(
+      executorPrompt.indexOf('git show') < executorPrompt.indexOf('<files_to_read>'),
+      'PLAN.md materialization must be a first action before files_to_read can prime paths (#1265)'
+    );
+  });
 });

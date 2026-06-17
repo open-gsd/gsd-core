@@ -265,4 +265,19 @@ export default tseslint.config(
       'no-irregular-whitespace': 'warn',
     },
   },
+
+  // ── #1279 lint-rule fail-first fixture ──────────────────────────────────────
+  // `tests/_ff_lint_violation.cjs` is a PLAIN `.cjs` (NOT `*.test.cjs`) on purpose: it is a KNOWN
+  // `local/no-source-grep` violation that `defaultProveFailFirst` lints to machine-prove the rule
+  // has teeth, and it must stay OFF the `node --test` runner glob (executing it ENOENTs on the
+  // intentional `lib/foo.cjs` path). It still needs the `local` plugin registered so its inline
+  // `/* eslint-disable local/no-source-grep */` resolves (otherwise `eslint .` errors "rule not
+  // found") and the violation lands in `suppressedMessages` (which the prover reads), keeping the
+  // project's own `eslint .` green. (#1279)
+  {
+    files: ['tests/_ff_lint_violation.cjs'],
+    plugins: { local: localPlugin },
+    languageOptions: { sourceType: 'commonjs', globals: { ...globals.node } },
+    rules: { 'local/no-source-grep': 'error' },
+  },
 );

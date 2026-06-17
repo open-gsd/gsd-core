@@ -1566,18 +1566,30 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
 
       const manifestKeys = new Set(Object.keys(manifest.files || {}));
 
-      // GSD-managed directories to scan for user-added files.
-      // These are the directories the installer wipes on update.
-      const GSD_MANAGED_DIRS = [
+      // GSD-managed directories to scan for user-added files. Whole-owned
+      // roots are wiped recursively; shared runtime roots are pruned by the
+      // same gsd-* top-level prefix used by install.js _removeGsdEntries.
+      const GSD_WHOLE_MANAGED_DIRS = [
         'gsd-core',
-        'agents',
         path.join('commands', 'gsd'),
+      ];
+      const GSD_PREFIX_MANAGED_DIRS = [
+        'agents',
         'hooks',
         'skills',
       ];
 
       function collectCustomFiles(dir, baseDir, manifestKeys, out) {
         if (!fs.existsSync(dir)) return;
+        const stat = fs.statSync(dir);
+        if (stat.isFile()) {
+          const relPath = path.relative(baseDir, dir).replace(/\\/g, '/');
+          if (!manifestKeys.has(relPath)) {
+            out.push(relPath);
+          }
+          return;
+        }
+        if (!stat.isDirectory()) return;
         for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
           const fullPath = path.join(dir, entry.name);
           if (entry.isDirectory()) {
@@ -1593,10 +1605,18 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       }
 
       const customFiles = [];
-      for (const managedDir of GSD_MANAGED_DIRS) {
+      for (const managedDir of GSD_WHOLE_MANAGED_DIRS) {
         const absDir = path.join(resolvedConfigDir, managedDir);
         if (!fs.existsSync(absDir)) continue;
         collectCustomFiles(absDir, resolvedConfigDir, manifestKeys, customFiles);
+      }
+      for (const managedDir of GSD_PREFIX_MANAGED_DIRS) {
+        const absDir = path.join(resolvedConfigDir, managedDir);
+        if (!fs.existsSync(absDir)) continue;
+        for (const entry of fs.readdirSync(absDir, { withFileTypes: true })) {
+          if (!entry.name.startsWith('gsd-')) continue;
+          collectCustomFiles(path.join(absDir, entry.name), resolvedConfigDir, manifestKeys, customFiles);
+        }
       }
 
       const out = {
