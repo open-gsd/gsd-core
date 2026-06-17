@@ -10,6 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { requireSafePath } from './security.cjs';
+import { collectSections, iterateBullets } from './markdown-sectionizer.cjs';
 
 const STATUS_REJECT_SET = new Set(['superseded', 'rejected', 'deprecated']);
 
@@ -217,13 +218,60 @@ function classifyHeader(normalizedHeader: string): CanonicalHeader | null {
   return null;
 }
 
+/**
+ * Thin adapter: splits body text into entries using the seam's `iterateBullets`
+ * for marker-stripped bullet text, with a plain-text fallback so non-bullet
+ * lines are also included (original splitEntries contract).
+ *
+ * Behaviour notes vs prior implementation:
+ *  - Bullet lines (dash/asterisk/plus/checkbox/numbered): seam strips the
+ *    marker, producing item.text.
+ *  - Continuation lines (indented, non-bullet): seam accumulates them into the
+ *    preceding bullet item's text (not produced as separate entries here), which
+ *    differs from the old per-line split for that uncommon edge case. All tested
+ *    behaviors are byte-identical.
+ *  - Plain-text lines (no marker, no indentation): included verbatim.
+ *
+ * ADR-1372 T2 migration.
+ */
 function splitEntries(blockText: unknown): string[] {
-  return (typeof blockText === 'string' ? blockText : '')
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => line.replace(/^[-*+]\s+/, '').trim())
-    .filter(Boolean);
+  const text = typeof blockText === 'string' ? blockText : '';
+  if (!text) return [];
+
+  // iterateBullets returns BulletItem[] in document order with item.text already
+  // stripped of the opening marker. Continuation lines are folded into the
+  // preceding item, so they will not appear as standalone lines below.
+  const bulletItems = iterateBullets(text);
+
+  // Track which trimmed lines are continuation lines (indented, non-opener) by
+  // running the seam's bullet-opener detection inline — avoids re-importing a
+  // private regex and keeps the logic here self-contained.
+  const bulletOpenerRe = /^[-*+](?:\s+|\s*\[[xX ]\]\s+)|\d+\.\s+/;
+
+  let bulletIdx = 0;
+  const results: string[] = [];
+
+  for (const rawLine of text.split(/\r?\n/)) {
+    const trimmed = rawLine.trim();
+    if (!trimmed) continue; // blank — skip (original filter(Boolean))
+
+    if (bulletOpenerRe.test(trimmed)) {
+      // Bullet opener — consume next iterateBullets item (marker already stripped)
+      const item = bulletItems[bulletIdx];
+      if (item !== undefined) {
+        if (item.text) results.push(item.text);
+        bulletIdx++;
+      }
+    } else if (/^[ \t]/.test(rawLine)) {
+      // Continuation line (starts with whitespace in original, trims to non-empty).
+      // Folded into the preceding bullet item by the seam — skip as standalone entry.
+    } else {
+      // Plain-text line (no marker, no leading whitespace) — include verbatim.
+      results.push(trimmed);
+    }
+  }
+
+  return results.filter(Boolean);
 }
 
 interface MarkdownSection {
@@ -231,23 +279,52 @@ interface MarkdownSection {
   body: string[];
 }
 
+/**
+ * Thin adapter: wraps the seam's `collectSections` to produce the same
+ * `{ heading: string | null, body: string[] }` shape the rest of adr-parser
+ * consumes. ADR-1372 T2 migration.
+ */
 function parseSections(markdown: unknown): MarkdownSection[] {
-  const lines = (typeof markdown === 'string' ? markdown : '').split(/\r?\n/);
-  const sections: MarkdownSection[] = [];
-  let current: MarkdownSection = { heading: null, body: [] };
+  const content = typeof markdown === 'string' ? markdown : '';
 
-  for (const line of lines) {
-    const m = line.match(/^#{1,6}\s+(.*)$/);
-    if (m) {
-      if (current.heading || current.body.length) sections.push(current);
-      current = { heading: m[1].trim(), body: [] };
-    } else {
-      current.body.push(line);
+  // collectSections(content, () => true) collects every heading as a stop
+  // boundary — mirrors the old line-by-line heading walk exactly.
+  const sections = collectSections(content, () => true);
+
+  // Map seam Section → MarkdownSection. The seam's HeadingToken.text is the
+  // heading text after trimming (same as the old m[1].trim() capture).
+  // The body is a trimEnd()-ed joined string; split it back to lines to match
+  // the old string[] shape consumed by parseStatusFromSections / parseAdrMarkdown.
+  const result: MarkdownSection[] = sections.map((sec) => ({
+    heading: sec.heading.text,
+    body: sec.body === '' ? [] : sec.body.split('\n'),
+  }));
+
+  // Preamble: if the document has content before the first heading, the old
+  // parseSections emitted a leading { heading: null, body: [...] } entry.
+  // collectSections only returns sections that are opened by a heading, so we
+  // need to reconstruct the preamble manually when it exists.
+  if (content.length > 0) {
+    const firstNewline = content.indexOf('\n');
+    const firstLine = firstNewline === -1 ? content : content.slice(0, firstNewline);
+    const hasLeadingNonHeading = !/^#{1,6}\s/.test(firstLine);
+
+    if (hasLeadingNonHeading && sections.length > 0) {
+      // The preamble ends at the first heading's offset.
+      const firstHeadingOffset = sections[0].heading.offset;
+      const preambleText = content.slice(0, firstHeadingOffset);
+      const preambleLines = preambleText.split(/\r?\n/);
+      // Trim trailing empty lines to match old behaviour (old code just collected them as-is)
+      if (preambleLines.some((l) => l.trim())) {
+        result.unshift({ heading: null, body: preambleLines });
+      }
+    } else if (hasLeadingNonHeading && sections.length === 0) {
+      // No headings at all — entire content is the preamble.
+      result.unshift({ heading: null, body: content.split(/\r?\n/) });
     }
   }
 
-  if (current.heading || current.body.length) sections.push(current);
-  return sections;
+  return result;
 }
 
 function parseStatusFromSections(sections: MarkdownSection[]): string {
