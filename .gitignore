@@ -93,6 +93,7 @@ build/
 /gsd-core/bin/lib/phase-lifecycle.cjs
 /gsd-core/bin/lib/workstream-name-policy.cjs
 /gsd-core/bin/lib/decisions.cjs
+/gsd-core/bin/lib/teams-status.cjs
 /gsd-core/bin/lib/validate.cjs
 /gsd-core/bin/lib/schema-detect.cjs
 /gsd-core/bin/lib/runtime-name-policy.cjs

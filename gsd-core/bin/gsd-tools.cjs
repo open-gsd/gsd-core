@@ -1519,6 +1519,17 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       break;
     }
 
+    // ─── teams-status ──────────────────────────────────────────────────────
+    // Read-only detector for claude-code's experimental agent-teams feature.
+    // issue #1355: stop gsd-core hanging silently under claude-code agent-teams.
+    // No capability registration needed — this is a diagnostic query command,
+    // not a feature capability.
+    case 'teams-status': {
+      const teamsStatus = require('./lib/teams-status.cjs');
+      teamsStatus.cmdTeamsStatus(cwd, { active: args.includes('--active') });
+      break;
+    }
+
     // ─── detect-custom-files ───────────────────────────────────────────────
     // CJS-native: no SDK counterpart exists in the command registry.
     // detect-custom-files reads a gsd-file-manifest.json against the

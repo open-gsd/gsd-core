@@ -461,6 +461,7 @@ function main() {
   // them so the local runner matches CI; tests that need them set them explicitly.
   delete process.env.GSD_PROJECT;
   delete process.env.GSD_WORKSTREAM;
+  delete process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS;
 
   // Log selected files to stderr for CI / harness-test visibility.
   // node:test default reporter doesn't echo filenames, so this gives

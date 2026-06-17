@@ -206,6 +206,48 @@ node gsd-tools.cjs capability set code-review --gate workflow.code_review=false
 
 ---
 
+## Teams Status
+
+### `query teams-status`
+
+```bash
+node gsd-tools.cjs query teams-status [--active]
+```
+
+Read-only detector for claude-code's experimental agent-teams feature (issue #1355). Resolves the runtime via the canonical `GSD_RUNTIME` → `config.runtime` → `'claude'` precedence, then checks `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`.
+
+**Default (no flags):** prints a JSON object and exits 0:
+
+```json
+{
+  "active": false,
+  "runtime": "claude",
+  "env_present": false,
+  "source": "off: flag absent"
+}
+```
+
+Fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `active` | boolean | `true` only when `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` is strictly truthy (`"1"` or `"true"`, case-insensitive) **and** the resolved runtime is `"claude"` |
+| `runtime` | string | The resolved runtime name (e.g. `"claude"`, `"codex"`) |
+| `env_present` | boolean | `true` when the env flag is set to a strictly-truthy value |
+| `source` | string | One of: `"on: env"`, `"off: flag absent"`, `"off: non-claude"` |
+
+**`--active` flag:** exits 0 if `active` is true, exits 1 otherwise. Prints nothing. Useful in bash conditionals:
+
+```bash
+if gsd_run query teams-status --active >/dev/null 2>&1; then
+  echo "agent-teams is on"
+fi
+```
+
+This command is strictly read-only — no config writes, no disk mutation.
+
+---
+
 ## Model Resolution
 
 ```bash

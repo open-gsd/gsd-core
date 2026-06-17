@@ -500,6 +500,12 @@ Display banner:
 ### Spawn gsd-phase-researcher
 
 ```bash
+if gsd_run query teams-status --active >/dev/null 2>&1; then
+  echo "⚠️  CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS detected. GSD's multi-agent orchestration is not validated under claude-code agent-teams and may stall (a subagent's completion can fail to route to the orchestrator). Recommend disabling agent-teams for GSD workflows. See https://github.com/open-gsd/gsd-core/issues/1355" >&2
+fi
+```
+
+```bash
 PHASE_DESC=$(gsd_run query roadmap.get-phase "${PHASE}" --pick section)
 if [ -z "${PLAN_PRE_HOOKS_JSON:-}" ]; then
   PLAN_PRE_HOOKS_JSON=$(gsd_run loop render-hooks plan:pre --raw)
