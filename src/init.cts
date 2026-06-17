@@ -1876,7 +1876,13 @@ function buildAgentSkillsBlock(
   config: Record<string, unknown>,
   agentType: string,
   projectRoot: string,
+  diagnostics?: { warnings: string[] },
 ): string {
+  const warn = (message: string): void => {
+    process.stderr.write(message);
+    if (diagnostics) diagnostics.warnings.push(message.replace(/\n+$/, ''));
+  };
+
   const runtime = (config && (config['runtime'] as string)) || 'claude';
   const globalSkillsBase = getGlobalSkillsBase(runtime);
 
@@ -1886,7 +1892,13 @@ function buildAgentSkillsBlock(
   if (!skillPaths) return '';
 
   if (typeof skillPaths === 'string') skillPaths = [skillPaths];
-  if (!Array.isArray(skillPaths) || skillPaths.length === 0) return '';
+  if (!Array.isArray(skillPaths)) {
+    warn(
+      `[agent-skills] WARNING: Agent "${agentType}" has a malformed agent_skills value (expected string or array, got ${typeof skillPaths}) — ignoring\n`,
+    );
+    return '';
+  }
+  if (skillPaths.length === 0) return '';
 
   // Hoist trusted roots computation before the loop: loadTrustedGlobalRoots does
   // realpathSync I/O and should run at most once per call, not once per failing skill.
@@ -1898,12 +1910,15 @@ function buildAgentSkillsBlock(
   // Skill-tool directive ({ kind: 'directive', name }) for plugin-provided namespaced skills.
   const validEntries: Array<{ kind: 'include'; ref: string; display: string } | { kind: 'directive'; name: string }> = [];
   for (const skillPath of skillPaths) {
-    if (typeof skillPath !== 'string') continue;
+    if (typeof skillPath !== 'string') {
+      warn(`[agent-skills] WARNING: Ignoring non-string skill entry (${typeof skillPath}) — skipping\n`);
+      continue;
+    }
 
     if (skillPath.startsWith('global:')) {
       const skillName = skillPath.slice(7);
       if (!skillName) {
-        process.stderr.write(
+        warn(
           `[agent-skills] WARNING: "global:" prefix with empty skill name — skipping\n`,
         );
         continue;
@@ -1911,7 +1926,7 @@ function buildAgentSkillsBlock(
       // Accept: one or more [A-Za-z0-9_-]+ segments joined by single colons.
       // Rejects: empty segments (::), leading/trailing colon, dots, slashes, backslashes.
       if (!/^[A-Za-z0-9_-]+(:[A-Za-z0-9_-]+)*$/.test(skillName)) {
-        process.stderr.write(
+        warn(
           `[agent-skills] WARNING: Invalid global skill name "${skillName}" — skipping\n`,
         );
         continue;
@@ -1923,7 +1938,7 @@ function buildAgentSkillsBlock(
           // Emit a natural-language Skill-tool directive (not a @-include).
           validEntries.push({ kind: 'directive', name: skillName });
         } else {
-          process.stderr.write(
+          warn(
             `[agent-skills] WARNING: Plugin-namespaced skill "global:${skillName}" requires a Skill-tool-capable runtime (claude) — skipping on runtime "${runtime}"\n`,
           );
         }
@@ -1931,7 +1946,7 @@ function buildAgentSkillsBlock(
       }
       // Non-namespaced bare name: attempt filesystem resolution as before.
       if (globalSkillsBase === null) {
-        process.stderr.write(
+        warn(
           `[agent-skills] WARNING: Runtime "${runtime}" does not use a skills directory — "global:${skillName}" is not supported on this runtime\n`,
         );
         continue;
@@ -1940,7 +1955,7 @@ function buildAgentSkillsBlock(
       const globalSkillMd = path.join(globalSkillDir, 'SKILL.md');
       const displayPath = getGlobalSkillDisplayPath(runtime, skillName);
       if (!fs.existsSync(globalSkillMd)) {
-        process.stderr.write(
+        warn(
           `[agent-skills] WARNING: Global skill not found at "${displayPath}/SKILL.md" — skipping\n`,
         );
         continue;
@@ -1952,11 +1967,13 @@ function buildAgentSkillsBlock(
           return Boolean(rootCheck['safe']);
         });
         if (!acceptedViaTrustedRoot) {
-          process.stderr.write(
+          warn(
             `[agent-skills] WARNING: Global skill "${skillName}" failed path check (symlink escape?) — skipping\n`,
           );
           continue;
         }
+        // Intentionally a direct stderr write, NOT warn(): this is an acceptance
+        // trace, not a skip, so it must not land in the diagnostics warnings[].
         process.stderr.write(`[agent-skills] NOTE: Global skill "${skillName}" accepted via trusted_global_roots (resolves outside the default skills dir)\n`);
       }
       validEntries.push({ kind: 'include', ref: `${globalSkillDir}/SKILL.md`, display: displayPath });
@@ -1965,7 +1982,7 @@ function buildAgentSkillsBlock(
 
     const pathCheck = validatePath(skillPath, projectRoot) as unknown as Record<string, unknown>;
     if (!pathCheck['safe']) {
-      process.stderr.write(
+      warn(
         `[agent-skills] WARNING: Skipping unsafe path "${skillPath}": ${pathCheck['error'] as string}\n`,
       );
       continue;
@@ -1973,7 +1990,7 @@ function buildAgentSkillsBlock(
 
     const skillMdPath = path.join(projectRoot, skillPath, 'SKILL.md');
     if (!fs.existsSync(skillMdPath)) {
-      process.stderr.write(
+      warn(
         `[agent-skills] WARNING: Skill not found at "${skillPath}/SKILL.md" — skipping\n`,
       );
       continue;
@@ -1982,7 +1999,12 @@ function buildAgentSkillsBlock(
     validEntries.push({ kind: 'include', ref: `${skillPath}/SKILL.md`, display: skillPath });
   }
 
-  if (validEntries.length === 0) return '';
+  if (validEntries.length === 0) {
+    warn(
+      `[agent-skills] WARNING: Agent "${agentType}" has ${skillPaths.length} configured skill path(s) but none resolved to a valid skill — all were skipped (see warnings above)\n`,
+    );
+    return '';
+  }
 
   const lines = validEntries.map((entry) => {
     if (entry.kind === 'directive') {
@@ -2005,10 +2027,12 @@ function cmdAgentSkills(
   }
 
   const config = loadConfig(cwd);
+  const diagnostics = { warnings: [] as string[] };
   const block = buildAgentSkillsBlock(
     config,
     agentType,
     cwd,
+    diagnostics,
   );
 
   if (jsonMode) {
@@ -2019,7 +2043,7 @@ function cmdAgentSkills(
       : skillPaths
         ? [skillPaths]
         : [];
-    output({ agent_type: agentType, block: block || '', skills_count: normalizedPaths.length }, raw);
+    output({ agent_type: agentType, block: block || '', skills_count: normalizedPaths.length, warnings: diagnostics.warnings }, raw);
     return;
   }
 

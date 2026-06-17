@@ -234,6 +234,140 @@ describe('agent-skills command', () => {
   });
 });
 
+// ─── empty-resolution diagnostics (silent-drop visibility) ────────────────────
+//
+// When an agent is CONFIGURED with skill paths but every path fails to resolve
+// (missing SKILL.md, unsafe path, invalid global name), buildAgentSkillsBlock
+// previously returned '' with only per-path stderr warnings and no aggregate
+// signal — so `query agent-skills --json` reported skills_count > 0 with an
+// empty block and no indication the configured skills were dropped.
+//
+// Fix: emit an aggregate stderr WARNING when configured paths all resolve to
+// zero skills, and surface every skip reason in a `warnings[]` field on the
+// --json IR.
+describe('agent-skills empty-resolution diagnostics', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('configured agent whose only skill is missing → warnings[] names the path and the aggregate drop', () => {
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-phase-researcher': ['references/other-skill'] },
+    });
+
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-phase-researcher'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.block, '', 'block must be empty when the only configured skill is missing');
+    assert.strictEqual(r.ir.skills_count, 1, 'skills_count still reflects the configured path count');
+    assert.ok(Array.isArray(r.ir.warnings), 'IR must include a warnings array');
+    assert.ok(r.ir.warnings.length >= 1, `warnings must be non-empty, got: ${JSON.stringify(r.ir.warnings)}`);
+    assert.ok(
+      r.ir.warnings.some((w) => w.includes('references/other-skill')),
+      `warnings must name the skipped path, got: ${JSON.stringify(r.ir.warnings)}`,
+    );
+    assert.ok(
+      r.ir.warnings.some((w) => /none resolved to a valid skill/.test(w)),
+      `warnings must include the aggregate empty-resolution diagnostic, got: ${JSON.stringify(r.ir.warnings)}`,
+    );
+  });
+
+  test('configured agent with all skills missing → aggregate WARNING on stderr naming the agent', () => {
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-planner': ['references/a', 'references/b'] },
+    });
+
+    const r = runGsdToolsWithStderr(['agent-skills', '--json', 'gsd-planner'], tmpDir, {
+      HOME: tmpDir,
+      USERPROFILE: tmpDir,
+    });
+    assert.ok(r.success, `Command failed (exit ${r.exitCode}): ${r.stderr}`);
+    assert.ok(
+      r.stderr.includes('[agent-skills] WARNING') &&
+        r.stderr.includes('gsd-planner') &&
+        r.stderr.includes('none resolved to a valid skill'),
+      `stderr must carry the aggregate empty-resolution warning naming the agent, got: ${r.stderr}`,
+    );
+    const ir = JSON.parse(r.stdout);
+    assert.strictEqual(ir.block, '');
+    assert.ok(ir.warnings.length >= 2, `warnings must list both skipped paths, got: ${JSON.stringify(ir.warnings)}`);
+  });
+
+  test('partial resolution: one valid + one missing → block present, NO aggregate warning, skipped path still listed', () => {
+    const skillDir = path.join(tmpDir, 'skills', 'present');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# present\n');
+
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-executor': ['skills/present', 'skills/absent'] },
+    });
+
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.ok(r.ir.block.includes('skills/present/SKILL.md'), 'block must include the resolvable skill');
+    assert.strictEqual(r.ir.skills_count, 2, 'skills_count reflects both configured paths');
+    assert.ok(Array.isArray(r.ir.warnings), 'IR must include a warnings array');
+    assert.ok(
+      r.ir.warnings.some((w) => w.includes('skills/absent')),
+      `warnings must list the one skipped path, got: ${JSON.stringify(r.ir.warnings)}`,
+    );
+    assert.ok(
+      !r.ir.warnings.some((w) => /none resolved to a valid skill/.test(w)),
+      `aggregate empty-resolution warning must NOT fire when at least one skill resolved, got: ${JSON.stringify(r.ir.warnings)}`,
+    );
+  });
+
+  test('all skills resolve → warnings[] is empty', () => {
+    const skillDir = path.join(tmpDir, 'skills', 'only');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# only\n');
+
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-executor': ['skills/only'] },
+    });
+
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.ok(r.ir.block.includes('skills/only/SKILL.md'), 'block must include the resolved skill');
+    assert.ok(Array.isArray(r.ir.warnings), 'IR must include a warnings array');
+    assert.strictEqual(r.ir.warnings.length, 0, `warnings must be empty when all skills resolve, got: ${JSON.stringify(r.ir.warnings)}`);
+  });
+
+  test('unconfigured agent → warnings[] empty (no skills configured is not a drop)', () => {
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-executor': ['skills/whatever'] },
+    });
+
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-planner'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.block, '');
+    assert.ok(Array.isArray(r.ir.warnings), 'IR must include a warnings array');
+    assert.strictEqual(r.ir.warnings.length, 0, 'an agent with no configured skills is not a drop — warnings must be empty');
+  });
+
+  test('malformed (non-array, non-string) configured value → flagged in warnings[], not a silent drop', () => {
+    // A hand-edited config.json could carry a scalar instead of an array.
+    // cmdAgentSkills still counts it as a configured path, so it must be surfaced.
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-executor': 42 },
+    });
+
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.block, '', 'block must be empty for a malformed value');
+    assert.ok(Array.isArray(r.ir.warnings), 'IR must include a warnings array');
+    assert.ok(
+      r.ir.warnings.some((w) => /malformed agent_skills value/.test(w)),
+      `malformed scalar config must be flagged in warnings[], got: ${JSON.stringify(r.ir.warnings)}`,
+    );
+  });
+});
+
 // ─── config-ensure-section includes agent_skills ────────────────────────────
 
 describe('config-ensure-section with agent_skills', () => {

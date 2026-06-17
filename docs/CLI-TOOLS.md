@@ -425,11 +425,11 @@ Emit the skill block for a given agent type.
 # Emit raw XML skill block (default — safe for shell expansion)
 node gsd-tools.cjs agent-skills <agent-type>
 
-# Emit typed JSON surface (#455) — { agent_type, block, skills_count }
+# Emit typed JSON surface (#455) — { agent_type, block, skills_count, warnings }
 node gsd-tools.cjs agent-skills <agent-type> --json
 ```
 
-The `--json` flag returns a typed IR object suitable for structured consumption and test assertions, while the default (no flag) preserves the raw XML output that workflow shell expansions rely on.
+The `--json` flag returns a typed IR object suitable for structured consumption and test assertions, while the default (no flag) preserves the raw XML output that workflow shell expansions rely on. The IR also includes a `warnings` array naming any configured skill paths that were skipped (for example a missing `SKILL.md`); it is empty when every configured skill resolved.
 
 ---
 
