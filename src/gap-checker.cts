@@ -253,19 +253,43 @@ function runGapAnalysis(cwd: string, phaseDir: string, options: RunGapAnalysisOp
     }
   } catch { /* unreadable */ }
 
-  // #1365: if decisions were expected but 0 extracted, surface as format mismatch
-  // rather than "No requirements or decisions to check" (misleading silent skip).
-  if (items.length === 0) {
-    if (ctxExtraction.outcome === 'could-not-parse') {
-      const mismatchMsg = '## Post-Planning Gap Analysis\n\nextracted 0 of N — possible format mismatch in CONTEXT.md decisions block.\n';
+  // FIX D (#1365): surface decision could-not-parse independently of whether
+  // requirements items exist. Without this, a could-not-parse on decisions is
+  // silently masked whenever REQUIREMENTS.md has ≥1 item — the mismatch must
+  // appear in the report regardless of the requirements row count.
+  if (ctxExtraction.outcome === 'could-not-parse') {
+    const mismatchMsg = '## Post-Planning Gap Analysis\n\nextracted 0 of N — possible format mismatch in CONTEXT.md decisions block.\n';
+    // If there are also requirement items, include them in the return with the
+    // mismatch summary appended, so the caller still sees requirement coverage.
+    if (items.length > 0) {
+      const rows = sortRows([
+        ...detectCoverage(items, planText),
+        ...ghostReqIds.map(id => ({ source: 'REQUIREMENTS.md', item: id, status: 'Missing from REQUIREMENTS.md' })),
+      ]);
+      const covered = rows.filter(r => r.status === 'Covered').length;
+      const uncovered = rows.length - covered;
+      const coverageSummary = uncovered === 0
+        ? `✓ All ${rows.length} items covered by plans`
+        : `⚠ ${uncovered} of ${rows.length} items not covered by any plan`;
       return {
         enabled: true,
-        rows: [],
-        table: mismatchMsg,
-        summary: 'extracted 0 of N — possible format mismatch',
-        counts: { total: 0, covered: 0, uncovered: 0 },
+        rows,
+        table: formatGapTable(rows) + '\n' + coverageSummary + '\n\n' + mismatchMsg,
+        summary: coverageSummary + '; extracted 0 of N — possible format mismatch',
+        counts: { total: rows.length, covered, uncovered },
       };
     }
+    return {
+      enabled: true,
+      rows: [],
+      table: mismatchMsg,
+      summary: 'extracted 0 of N — possible format mismatch',
+      counts: { total: 0, covered: 0, uncovered: 0 },
+    };
+  }
+
+  // #1365: if no items at all, surface a clean no-check message.
+  if (items.length === 0) {
     return {
       enabled: true,
       rows: [],

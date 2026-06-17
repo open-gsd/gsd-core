@@ -71,16 +71,27 @@ const bulletColonRe = /^\s*-\s+\*\*D-([A-Za-z0-9][A-Za-z0-9_-]*)(?:\s*\[([^\]]+)
  */
 const bulletEmDashRe = /^\s*-\s+\*\*D-([A-Za-z0-9][A-Za-z0-9_-]*)(?:\s*\[([^\]]+)\])?[^*]*[—–][^*]*\*\*\s*(.*)$/;
 
+interface ParseDecisionLinesResult {
+  decisions: Decision[];
+  parseMisses: number;
+}
+
 /**
  * Parse decision lines from a block of text (the inner text of a <decisions>
- * or markdown-header section body). Returns the extracted decisions.
+ * or markdown-header section body). Returns the extracted decisions and a count
+ * of parse-misses (lines that looked like D-NN bullets but failed both regexes).
+ *
+ * FIX B (#1365): parseMisses > 0 means the caller must treat the result as
+ * could-not-parse even when some decisions were extracted — a silent drop is
+ * worse than a fail-loud signal.
  */
-function parseDecisionLines(block: string): Decision[] {
+function parseDecisionLines(block: string): ParseDecisionLinesResult {
   const lines = block.split(/\r?\n/);
   const out: Decision[] = [];
   let category = '';
   let inDiscretion = false;
   let current: Decision | null = null;
+  let parseMisses = 0;
 
   const flush = (): void => {
     if (current) {
@@ -99,12 +110,12 @@ function parseDecisionLines(block: string): Decision[] {
       flush();
       category = headingMatch[1];
       // Strip the full unicode-quote family so any rendering of "Claude's
-      // Discretion" (ASCII apostrophe, curly U+2019, U+2018, U+201A, U+201B,
-      // double-quote variants U+201C/D/E/F, etc.) collapses to the same key
-      // (review F20).
+      // Discretion" (ASCII apostrophe, curly U+2019 ’, U+2018 ‘,
+      // U+201A, U+201B, double-quote variants U+201C/D/E/F, etc.) collapses
+      // to the same key (FIX C + review F20).
       const normalized = category
         .toLowerCase()
-        .replace(/[''‚‛""„‟'"`]/g, '')
+        .replace(/[‘’‚‛“”„‟''"`]/g, '')
         .trim();
       inDiscretion = DISCRETION_HEADINGS.has(normalized);
       continue;
@@ -139,10 +150,12 @@ function parseDecisionLines(block: string): Decision[] {
       continue;
     }
 
-    // Parse-miss guard (#1343): a line that looks like a `D-NN` decision bullet
-    // but failed both patterns must NOT be silently dropped — flush before warning.
+    // Parse-miss guard (FIX B + #1343): a line that looks like a `D-NN` decision
+    // bullet but failed both patterns — flush, warn, and record the miss.
+    // parseMisses > 0 forces could-not-parse even when other decisions parsed.
     if (/^\s*-\s+\*\*D-/.test(line)) {
       flush();
+      parseMisses += 1;
       console.warn(`parseDecisions: ignored unparseable decision bullet: ${trimmed}`);
       continue;
     }
@@ -160,7 +173,7 @@ function parseDecisionLines(block: string): Decision[] {
     }
   }
   flush();
-  return out;
+  return { decisions: out, parseMisses };
 }
 
 // ─── Primary entry point: extractDecisions ────────────────────────────────────
@@ -189,12 +202,24 @@ export function extractDecisions(content: unknown): DecisionExtraction {
   const taggedBlocks = extractTaggedBlocks(stripped, 'decisions');
   if (taggedBlocks.length > 0) {
     const combined = taggedBlocks.join('\n\n');
-    const decisions = parseDecisionLines(combined);
-    if (decisions.length > 0) {
+    const { decisions, parseMisses } = parseDecisionLines(combined);
+    if (decisions.length > 0 && parseMisses === 0) {
       return { decisions, outcome: 'parsed' };
     }
-    // Block present but 0 extracted → could-not-parse (format mismatch)
-    return { decisions: [], outcome: 'could-not-parse' };
+    // FIX B: parse-misses present — could-not-parse even if some decisions extracted.
+    if (parseMisses > 0) {
+      return { decisions, outcome: 'could-not-parse' };
+    }
+    // FIX A: Block present but 0 extracted and no parse-misses.
+    // Only report could-not-parse when there is genuine evidence of real decisions
+    // that failed to parse: a \bD- token in the block text, or an unterminated fence.
+    // An empty scaffold (<decisions></decisions>) or an all-prose block has no such
+    // evidence — treat as none-present so the gate passes cleanly.
+    const hasDecisionTokenInBlock = /\bD-[A-Za-z0-9]/m.test(combined);
+    if (hasDecisionTokenInBlock || unterminatedFence) {
+      return { decisions: [], outcome: 'could-not-parse' };
+    }
+    return { decisions: [], outcome: 'none-present' };
   }
 
   // ── Path 2: markdown-header fallback (#1364 fix) ─────────────────────────────
@@ -208,12 +233,23 @@ export function extractDecisions(content: unknown): DecisionExtraction {
   );
 
   if (section !== null) {
-    const decisions = parseDecisionLines(section.body);
-    if (decisions.length > 0) {
+    const { decisions, parseMisses } = parseDecisionLines(section.body);
+    if (decisions.length > 0 && parseMisses === 0) {
       return { decisions, outcome: 'parsed' };
     }
-    // Heading found but 0 extracted → could-not-parse
-    return { decisions: [], outcome: 'could-not-parse' };
+    // FIX B: parse-misses present — could-not-parse even if some decisions extracted.
+    if (parseMisses > 0) {
+      return { decisions, outcome: 'could-not-parse' };
+    }
+    // FIX A: Heading found but 0 extracted and no parse-misses.
+    // Only report could-not-parse when the section body contains a D- token.
+    // A heading with only prose, sub-headings, or all-discretion content
+    // (no trackable D- tokens) is a legitimate empty/discretion section → none-present.
+    const hasDecisionTokenInSection = /\bD-[A-Za-z0-9]/m.test(section.body);
+    if (hasDecisionTokenInSection) {
+      return { decisions: [], outcome: 'could-not-parse' };
+    }
+    return { decisions: [], outcome: 'none-present' };
   }
 
   // ── Path 3: no blocks, no heading ────────────────────────────────────────────

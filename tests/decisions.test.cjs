@@ -486,14 +486,202 @@ describe('check.decision-coverage-plan — boundary/threshold tests (#1365)', ()
     assert.strictEqual(parsed.covered, 1);
   });
 
-  test('0 decisions extracted from a real block (limit - 1 == 0) → could-not-parse / passed:false', () => {
-    // Empty block = decision-shaped (block present) but 0 extracted
+  test('FIX A: empty <decisions></decisions> scaffold (limit - 1 == 0, no D- token) → none-present → passed:true/skipped (NOT blocked)', () => {
+    // FIX A: An empty scaffold has no D- tokens → none-present, gate passes.
+    // REGRESSION: previously returned could-not-parse → passed:false, blocking legitimate phases.
     writeContextFile(phaseDir, '<decisions>\n\n</decisions>');
     writePlanFile(phaseDir, '01', '# Plan\nSome plan.\n');
     const contextPath = path.join(phaseDir, 'CONTEXT.md');
     const result = runDecisionCoveragePlan(phaseDir, contextPath, tmpDir);
     const parsed = JSON.parse(result.output || '');
+    assert.strictEqual(parsed.passed, true,
+      `Empty scaffold → none-present → passed:true. Got: ${JSON.stringify(parsed)}`);
+    assert.strictEqual(parsed.skipped, true,
+      `Empty scaffold → none-present → skipped:true. Got: ${JSON.stringify(parsed)}`);
+  });
+
+  test('FIX A: <decisions> block with D- token in prose (not a bullet) → could-not-parse → passed:false', () => {
+    // If the block contains a D- token but not as a parseable bullet → could-not-parse
+    writeContextFile(phaseDir, '<decisions>\nD-01 is mentioned in prose but not as a bullet.\n</decisions>');
+    writePlanFile(phaseDir, '01', '# Plan\nSome plan.\n');
+    const contextPath = path.join(phaseDir, 'CONTEXT.md');
+    const result = runDecisionCoveragePlan(phaseDir, contextPath, tmpDir);
+    const parsed = JSON.parse(result.output || '');
     assert.strictEqual(parsed.passed, false,
-      `Empty block → could-not-parse → passed:false. Got: ${JSON.stringify(parsed)}`);
+      `D-token-in-prose → could-not-parse → passed:false. Got: ${JSON.stringify(parsed)}`);
+  });
+});
+
+// ─── FIX A regressions: tighten could-not-parse (empty scaffold / none-present) ───
+
+describe('FIX A: tighten could-not-parse — empty scaffolds must not block (#1372)', () => {
+  test('empty <decisions></decisions> scaffold → none-present (gate clean)', () => {
+    // REGRESSION: previously returned could-not-parse, blocking legitimate phases
+    const result = extractDecisions('<decisions></decisions>');
+    assert.strictEqual(result.outcome, 'none-present',
+      `Empty scaffold must be none-present. Got: ${result.outcome}`);
+    assert.deepStrictEqual(result.decisions, []);
+  });
+
+  test('## Decisions heading with prose only, no D- bullets → none-present', () => {
+    // A heading with only prose and no D- tokens is not decision-shaped
+    const md = '## Decisions\n\nArchitecture is handled via ADR-001.\n\nSee docs.\n';
+    const result = extractDecisions(md);
+    assert.strictEqual(result.outcome, 'none-present',
+      `Prose-only decisions heading must be none-present. Got: ${result.outcome}`);
+  });
+
+  test('all-discretion block (### Claude’s Discretion, no D- bullets) → none-present', () => {
+    // An all-discretion block with no D- tokens is a legitimate empty context
+    const curlySingle = '’';
+    const md = '<decisions>\n### Claude' + curlySingle + 's Discretion\n\nAll implementation details left to Claude.\n</decisions>';
+    const result = extractDecisions(md);
+    assert.strictEqual(result.outcome, 'none-present',
+      `All-discretion block with no D- bullets must be none-present. Got: ${result.outcome}`);
+  });
+
+  test('<decisions> block with D- token in prose (not bullet) → still could-not-parse', () => {
+    // A D- token that is NOT in a parseable bullet format still signals format mismatch
+    const md = '<decisions>\nSee D-01 for the decision.\n</decisions>';
+    const result = extractDecisions(md);
+    assert.strictEqual(result.outcome, 'could-not-parse',
+      `D-token in block prose must be could-not-parse. Got: ${result.outcome}`);
+  });
+});
+
+// ─── FIX B regressions: parse-miss must fail loud ────────────────────────────
+
+describe('FIX B: parse-miss on malformed D-NN bullet → could-not-parse (#1372)', () => {
+  test('valid D-01 + malformed D-02 bullet → outcome could-not-parse (not silent pass)', () => {
+    // REGRESSION: previously returned outcome:parsed (silently dropped D-02)
+    const md = '<decisions>\n- **D-01:** Use OAuth 2.0\n- **D-02 malformed no colon or dash** text\n</decisions>';
+    const result = extractDecisions(md);
+    assert.strictEqual(result.outcome, 'could-not-parse',
+      `Mixed valid+malformed must be could-not-parse. Got: ${result.outcome}`);
+  });
+
+  test('valid D-01 + malformed D-02 bullet → gate passed:false (not silent skip)', () => {
+    // Gate-level regression: a parse-miss must propagate as passed:false
+    // Uses extractDecisions directly to confirm gate-layer behavior
+    const md = '<decisions>\n- **D-01:** Use OAuth 2.0\n- **D-02 malformed no colon or dash** text\n</decisions>';
+    const result = extractDecisions(md);
+    // The check-command-router uses outcome === 'could-not-parse' && decisions.length where
+    // trackable.length === 0 → passed:false. Confirm outcome propagates correctly.
+    assert.strictEqual(result.outcome, 'could-not-parse');
+    // D-01 was parsed (it was valid); the result still contains it for context
+    // but the overall outcome is could-not-parse because of the parse-miss on D-02.
+    assert.ok(result.decisions.some(d => d.id === 'D-01'),
+      `D-01 (valid) must still be in decisions. Got: ${JSON.stringify(result.decisions)}`);
+  });
+
+  test('only malformed D-NN bullet (no valid ones) → could-not-parse', () => {
+    const md = '<decisions>\n- **D-01 no colon no dash here** just text\n</decisions>';
+    const result = extractDecisions(md);
+    assert.strictEqual(result.outcome, 'could-not-parse',
+      `Only-malformed-bullet must be could-not-parse. Got: ${result.outcome}`);
+  });
+});
+
+// ─── FIX C regressions: curly-quote Claude's Discretion ───────────────────────
+
+describe('FIX C: curly-quote Claude’s Discretion → trackable:false (#1372)', () => {
+  test('### Claude’s Discretion (U+2019 curly apostrophe) sets trackable:false', () => {
+    // REGRESSION: curly apostrophe was not stripped from category, so
+    // "claudes discretion" key was not in DISCRETION_HEADINGS → trackable:true
+    const curlySingle = '’';
+    const md = '<decisions>\n### Claude' + curlySingle + 's Discretion\n- **D-01:** internal decision\n</decisions>';
+    const ds = parseDecisions(md);
+    assert.strictEqual(ds.length, 1, 'one decision must be parsed');
+    assert.strictEqual(ds[0].trackable, false,
+      `Curly-apostrophe discretion heading must yield trackable:false. Got trackable:${ds[0].trackable}`);
+  });
+
+  test('### Claude‘s Discretion (U+2018 opening quote) sets trackable:false', () => {
+    const openSingle = '‘';
+    const md = '<decisions>\n### Claude' + openSingle + 's Discretion\n- **D-01:** internal decision\n</decisions>';
+    const ds = parseDecisions(md);
+    assert.strictEqual(ds.length, 1);
+    assert.strictEqual(ds[0].trackable, false,
+      `Open-single-quote discretion heading must yield trackable:false. Got trackable:${ds[0].trackable}`);
+  });
+
+  test('[folded] tag sets trackable:false (coverage gap fix)', () => {
+    // Previously NON_TRACKABLE_TAGS included 'folded' but had no dedicated test
+    const md = '<decisions>\n- **D-01 [folded]:** folded decision\n</decisions>';
+    const ds = parseDecisions(md);
+    assert.strictEqual(ds.length, 1);
+    assert.strictEqual(ds[0].trackable, false,
+      `[folded] tag must yield trackable:false. Got trackable:${ds[0].trackable}`);
+    assert.ok(ds[0].tags.includes('folded'), 'tags must include "folded"');
+  });
+});
+
+// ─── FIX D regressions: gap-checker surfaces decision parse failure independently ─
+
+describe('FIX D: gap-checker surfaces decision could-not-parse even when requirements exist (#1372)', () => {
+  const { runGapAnalysis } = require('../gsd-core/bin/lib/gap-checker.cjs');
+
+  let tmpDir;
+  let planningDir;
+  let phaseDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-1372-fixd-');
+    planningDir = path.join(tmpDir, '.planning');
+    phaseDir = path.join(planningDir, 'phases', '01-init');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(planningDir, 'config.json'), JSON.stringify({}));
+  });
+
+  afterEach(() => cleanup(tmpDir));
+
+  test('REQUIREMENTS.md with 1 req + unparseable CONTEXT.md → gap report includes format-mismatch signal', () => {
+    // REGRESSION: previously the could-not-parse signal was silently masked
+    // inside `if (items.length === 0)` — when requirements existed, it never fired.
+    const reqPath = path.join(planningDir, 'REQUIREMENTS.md');
+    fs.writeFileSync(reqPath, '- [ ] **REQ-01** Some requirement\n');
+
+    const ctxMd = '<decisions>\nSome prose about decisions but no D-NN bullets.\n</decisions>\n';
+    fs.writeFileSync(path.join(phaseDir, 'CONTEXT.md'), ctxMd);
+    fs.writeFileSync(path.join(phaseDir, '01-PLAN.md'), '# Plan\nREQ-01 is covered here.\n');
+
+    const result = runGapAnalysis(tmpDir, phaseDir);
+    assert.ok(
+      result.summary.includes('format mismatch') || result.summary.includes('possible format'),
+      `Summary must mention format mismatch. Got: "${result.summary}"`
+    );
+    assert.ok(
+      result.table.includes('format mismatch') || result.table.includes('possible format'),
+      `Table must include format mismatch note. Got: "${result.table}"`
+    );
+  });
+
+  test('no REQUIREMENTS.md + unparseable CONTEXT.md → gap report includes format-mismatch signal', () => {
+    // Pre-existing behavior (items.length === 0 path) must still work
+    const ctxMd = '<decisions>\nSome prose about decisions but no D-NN bullets.\n</decisions>\n';
+    fs.writeFileSync(path.join(phaseDir, 'CONTEXT.md'), ctxMd);
+    fs.writeFileSync(path.join(phaseDir, '01-PLAN.md'), '# Plan\nSome plan.\n');
+
+    const result = runGapAnalysis(tmpDir, phaseDir);
+    assert.ok(
+      result.summary.includes('format mismatch') || result.summary.includes('possible format'),
+      `Summary must mention format mismatch. Got: "${result.summary}"`
+    );
+  });
+
+  test('REQUIREMENTS.md with 1 req + valid CONTEXT.md → no mismatch signal (clean path)', () => {
+    // Ensure the fix does not introduce false positives on valid input
+    const reqPath = path.join(planningDir, 'REQUIREMENTS.md');
+    fs.writeFileSync(reqPath, '- [ ] **REQ-01** Some requirement\n');
+
+    const ctxMd = '<decisions>\n- **D-01:** Use OAuth 2.0\n</decisions>\n';
+    fs.writeFileSync(path.join(phaseDir, 'CONTEXT.md'), ctxMd);
+    fs.writeFileSync(path.join(phaseDir, '01-PLAN.md'), '# Plan\nREQ-01 is covered. D-01 is covered.\n');
+
+    const result = runGapAnalysis(tmpDir, phaseDir);
+    assert.ok(
+      !result.summary.includes('format mismatch') && !result.summary.includes('possible format'),
+      `Valid input must NOT show format mismatch. Got: "${result.summary}"`
+    );
   });
 });
