@@ -162,7 +162,7 @@ function scanDebugSessions(planDir: string): DebugSessionItem[] {
 
     // Extract hypothesis from "Current Focus" block if parseable
     let hypothesis = '';
-    const focusMatch = content.match(/##\s*Current Focus[^\n]*\n([\s\S]*?)(?=\n##\s|$)/i);
+    const focusMatch = content.match(/##\s*Current Focus[^\n]*\n([\s\S]*?)(?=\n##\s|$)/i); // allow-adhoc-markdown: pre-seam read-only section extract in audit.cts; pending migration #1372
     if (focusMatch) {
       const focusText = focusMatch[1].trim().split('\n')[0].trim();
       hypothesis = sanitizeForDisplay(focusText.slice(0, 100));
@@ -649,7 +649,7 @@ function scanContextQuestions(planDir: string): ContextQuestionItem[] {
 
       // Also check for ## Open Questions section in body
       if (questions.length === 0) {
-        const oqMatch = content.match(/##\s*Open Questions[^\n]*\n([\s\S]*?)(?=\n##\s|$)/i);
+        const oqMatch = content.match(/##\s*Open Questions[^\n]*\n([\s\S]*?)(?=\n##\s|$)/i); // allow-adhoc-markdown: pre-seam read-only section extract in audit.cts; pending migration #1372
         if (oqMatch) {
           const oqBody = oqMatch[1].trim();
           if (oqBody && oqBody.length > 0 && !/^\s*none\s*$/i.test(oqBody)) {

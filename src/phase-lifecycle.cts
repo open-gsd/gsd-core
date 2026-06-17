@@ -49,6 +49,7 @@ export function deriveProgressFromRoadmap(roadmapContent: string): RoadmapProgre
     // Count total phase rows in the progress table.
     // Identify the table by looking for Phase|...|Status|...|Completed header.
     const progressTableMatch = roadmapContent.match(
+      // allow-adhoc-markdown: table-scoped regex with heading lookahead as stop; table parsing, out of seam scope; pending #1372
       /\|\s*Phase\s*\|[^|]*\|[^|]*Status[^|]*\|[^|]*Completed[^|]*\|[\s\S]*?(?=\n\n|\n##|$)/i,
     );
     if (progressTableMatch) {

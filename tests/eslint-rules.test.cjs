@@ -8,6 +8,7 @@
  *   - local/no-magic-sleep-in-tests
  *   - local/no-elapsed-assertion
  *   - local/no-raw-rmsync-in-tests
+ *   - local/no-adhoc-markdown-parsing
  */
 
 const { test, describe } = require('node:test');
@@ -19,6 +20,7 @@ const noMagicSleepInTests = require('../eslint-rules/no-magic-sleep-in-tests.cjs
 const noElapsedAssertion = require('../eslint-rules/no-elapsed-assertion.cjs');
 const noRawRmsyncInTests = require('../eslint-rules/no-raw-rmsync-in-tests.cjs');
 const noTautologicalAssert = require('../eslint-rules/no-tautological-assert.cjs');
+const noAdhocMarkdownParsing = require('../eslint-rules/no-adhoc-markdown-parsing.cjs');
 
 const ruleTester = new RuleTester({
   languageOptions: {
@@ -806,6 +808,170 @@ describe('no-tautological-assert rule', () => {
             assert.deepStrictEqual(got, expected);
           `,
           filename: 'tests/foo.test.cjs',
+        },
+      ],
+      invalid: [],
+    });
+  });
+});
+
+// ─── no-adhoc-markdown-parsing ───────────────────────────────────────────────
+
+describe('no-adhoc-markdown-parsing rule', () => {
+  test('rule module exports a create function', () => {
+    assert.strictEqual(typeof noAdhocMarkdownParsing.create, 'function');
+  });
+
+  // ── POSITIVE cases: flag fence-block-strip and section-collect ────────────
+
+  test('invalid: fence-block-strip regex with triple-backtick and multiline body', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [],
+      invalid: [
+        {
+          // /```[\s\S]*?```/ — triple-backtick + [\s\S] body → flagged as fenceRegex
+          code: String.raw`const stripFences = /` + '```' + String.raw`[\s\S]*?` + '```' + '/;',
+          filename: 'src/some-module.cts',
+          errors: [{ messageId: 'fenceRegex' }],
+        },
+      ],
+    });
+  });
+
+  test('invalid: fence-block-strip regex with triple-tilde and multiline body', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [],
+      invalid: [
+        {
+          // /~~~[\s\S]*?~~~/ — triple-tilde + [\s\S] body → flagged as fenceRegex
+          code: String.raw`const stripTildes = /~~~[\s\S]*?~~~/;`,
+          filename: 'src/some-module.cts',
+          errors: [{ messageId: 'fenceRegex' }],
+        },
+      ],
+    });
+  });
+
+  test('invalid: section-collect regex with heading capture, multiline body, heading lookahead', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [],
+      invalid: [
+        {
+          // /(##\s*X\n)([\s\S]*?)(?=\n##|$)/ — the classic section-collect fingerprint
+          code: String.raw`const pat = /(##\s*X\n)([\s\S]*?)(?=\n##|$)/;`,
+          filename: 'src/some-module.cts',
+          errors: [{ messageId: 'sectionCollect' }],
+        },
+      ],
+    });
+  });
+
+  // ── NEGATIVE cases: single-line fence tests and heading matches NOT flagged ─
+
+  test('valid: bare single-line fence-opener /^```/ is NOT flagged', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: 'const fenceRegex = /^' + '```' + '/;',
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: /^\\s*(?:```|~~~)/ fence-line test is NOT flagged', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: String.raw`const isFenceLine = /^\s*(?:` + '```' + String.raw`|~~~)/;`,
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: /^#\\s+/ single-line title-find is NOT flagged', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: String.raw`const titleRe = /^#\s+/;`,
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: /^###\\s+(.+?)\\s*$/ single-line heading-category match is NOT flagged', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: String.raw`const headingRe = /^###\s+(.+?)\s*$/;`,
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: /^(#{1,6})\\s+(.*)/ single-line heading match is NOT flagged', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: String.raw`const headingM = line.match(/^(#{1,6})\s+(.*)/);`,
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: seam usage (no regex, just an import reference) is NOT flagged', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: `
+            const { collectSection } = require('./markdown-sectionizer');
+            const result = collectSection(content, 'Introduction');
+          `,
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: annotated fence-block-strip with allow-adhoc-markdown is NOT flagged', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          // Trailing annotation on the same line suppresses the finding
+          code:
+            'const stripFences = /```' +
+            String.raw`[\s\S]*?` +
+            '`' +
+            '``/; // allow-adhoc-markdown: pre-seam write path; pending migration #1372',
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: rule is inert outside src/*.cts files', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          // Same fence-block-strip regex in a test file → rule does not apply
+          code: String.raw`const stripFences = /~~~[\s\S]*?~~~/;`,
+          filename: 'tests/some.test.cjs',
+        },
+        {
+          // Same regex in a scripts file → rule does not apply
+          code: String.raw`const p = /(##\s*X\n)([\s\S]*?)(?=\n##|$)/;`,
+          filename: 'scripts/helper.cjs',
         },
       ],
       invalid: [],

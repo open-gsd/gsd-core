@@ -319,7 +319,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
 
     // Reset Current Position narrative so resume/progress flows do not keep
     // pointing at closed-phase execution instructions.
-    const positionPattern = /(##\s*Current Position\s*\n)([\s\S]*?)(?=\n##|$)/i;
+    const positionPattern = /(##\s*Current Position\s*\n)([\s\S]*?)(?=\n##|$)/i; // allow-adhoc-markdown: pre-seam section write-modify in milestone.cts; pending collectSection migration #1372
     const closedPositionBody =
       `\nPhase: Milestone ${version} complete\n` +
       `Plan: —\n` +
@@ -332,7 +332,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
     }
 
     // Normalize operator-next-step tails that can become stale after close.
-    const operatorPattern = /(##\s*Operator Next Steps\s*\n)([\s\S]*?)(?=\n##|$)/i;
+    const operatorPattern = /(##\s*Operator Next Steps\s*\n)([\s\S]*?)(?=\n##|$)/i; // allow-adhoc-markdown: pre-seam section write-modify in milestone.cts; pending collectSection migration #1372
     if (operatorPattern.test(stateContent)) {
       stateContent = stateContent.replace(
         operatorPattern,

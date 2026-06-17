@@ -568,7 +568,7 @@ function cmdStateRecordMetric(cwd: string, options: StateRecordMetricOptions, ra
   let created = false;
   readModifyWriteStateMd(statePath, (content) => {
     // Find Performance Metrics section and its table
-    const metricsPattern = /(##\s*Performance Metrics[\s\S]*?\n\|[^\n]+\n\|[-|\s]+\n)([\s\S]*?)(?=\n##|\n$|$)/i;
+    const metricsPattern = /(##\s*Performance Metrics[\s\S]*?\n\|[^\n]+\n\|[-|\s]+\n)([\s\S]*?)(?=\n##|\n$|$)/i; // allow-adhoc-markdown: metrics-table write-path section-collect in state.cts; pending collectSection migration #1372
     const metricsMatch = content.match(metricsPattern);
 
     const newRow = `| Phase ${phase} P${plan} | ${duration} | ${tasks || '-'} tasks | ${files || '-'} files |`;
@@ -1138,8 +1138,8 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
  * Returns the match whose group 1 is the section body, or null.
  */
 function matchSessionSection(body: string): RegExpMatchArray | null {
-  return body.match(/(?:^|\n)##[ \t]*Session[ \t]*\n([\s\S]*?)(?=\n##|$)/i)
-    || body.match(/(?:^|\n)##[ \t]*Session Continuity[ \t]*\n([\s\S]*?)(?=\n##|$)/i);
+  return body.match(/(?:^|\n)##[ \t]*Session[ \t]*\n([\s\S]*?)(?=\n##|$)/i) // allow-adhoc-markdown: read-only session-section extract in state.cts; pending collectSection migration #1372
+    || body.match(/(?:^|\n)##[ \t]*Session Continuity[ \t]*\n([\s\S]*?)(?=\n##|$)/i); // allow-adhoc-markdown: read-only session-continuity section extract in state.cts; pending collectSection migration #1372
 }
 
 function parseProsePhaseField(value: string | null): { phase: string | null; name: string | null } {
@@ -1218,7 +1218,7 @@ function cmdStateSnapshot(cwd: string, raw: boolean): void {
 
   // Extract decisions table
   const decisions: Array<{ phase: string; summary: string; rationale: string }> = [];
-  const decisionsMatch = body.match(/##\s*Decisions Made[\s\S]*?\n\|[^\n]+\n\|[-|\s]+\n([\s\S]*?)(?=\n##|\n$|$)/i);
+  const decisionsMatch = body.match(/##\s*Decisions Made[\s\S]*?\n\|[^\n]+\n\|[-|\s]+\n([\s\S]*?)(?=\n##|\n$|$)/i); // allow-adhoc-markdown: read-only decisions-table section-collect in state.cts; pending collectSection migration #1372
   if (decisionsMatch) {
     const tableBody = decisionsMatch[1];
     const rows = tableBody.trim().split('\n').filter(r => r.includes('|'));
@@ -1236,7 +1236,7 @@ function cmdStateSnapshot(cwd: string, raw: boolean): void {
 
   // Extract blockers list
   const blockers: string[] = [];
-  const blockersMatch = body.match(/##\s*Blockers\s*\n([\s\S]*?)(?=\n##|$)/i);
+  const blockersMatch = body.match(/##\s*Blockers\s*\n([\s\S]*?)(?=\n##|$)/i); // allow-adhoc-markdown: read-only blockers section-collect in state.cts; pending collectSection migration #1372
   if (blockersMatch) {
     const blockersSection = blockersMatch[1];
     const items = blockersSection.match(/^-\s+(.+)$/gm) || [];

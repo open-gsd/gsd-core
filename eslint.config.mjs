@@ -14,6 +14,7 @@ import noMagicSleepInTests from './eslint-rules/no-magic-sleep-in-tests.cjs';
 import noElapsedAssertion from './eslint-rules/no-elapsed-assertion.cjs';
 import noRawRmsyncInTests from './eslint-rules/no-raw-rmsync-in-tests.cjs';
 import noTautologicalAssert from './eslint-rules/no-tautological-assert.cjs';
+import noAdhocMarkdownParsing from './eslint-rules/no-adhoc-markdown-parsing.cjs';
 
 const localPlugin = {
   rules: {
@@ -22,6 +23,7 @@ const localPlugin = {
     'no-elapsed-assertion': noElapsedAssertion,
     'no-raw-rmsync-in-tests': noRawRmsyncInTests,
     'no-tautological-assert': noTautologicalAssert,
+    'no-adhoc-markdown-parsing': noAdhocMarkdownParsing,
   },
 };
 
@@ -171,6 +173,9 @@ export default tseslint.config(
   // these rules add lint-level coverage. warn-first per the harness convention.
   {
     files: ['src/**/*.cts'],
+    plugins: {
+      local: localPlugin,
+    },
     extends: [tseslint.configs.recommendedTypeChecked],
     languageOptions: {
       parserOptions: {
@@ -180,6 +185,9 @@ export default tseslint.config(
     },
     rules: {
       '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+      // ADR-1372 T7: enforce use of the markdown-sectionizer seam; grandfather
+      // pre-migration sites with // allow-adhoc-markdown: <reason>
+      'local/no-adhoc-markdown-parsing': 'error',
     },
   },
 
