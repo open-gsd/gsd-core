@@ -1417,3 +1417,115 @@ describe('parseAdrMarkdown: full document integration', () => {
     assert.deepEqual(out.unmapped_headers, ['ADR-0001: Switch to PostgreSQL']);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Targeted mutation-killing tests (T2 adapter seam)
+// Each test is annotated with the mutant it kills.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('targeted: pushUnique intra-values deduplication', () => {
+  // Kills: `seen.add(value)` removal mutant — without it, values-internal dups pass through.
+  test('duplicate entries within the same section body are deduplicated', () => {
+    const md = '## Decision\n- Same entry.\n- Same entry.\n- Different entry.';
+    const out = parseAdrMarkdown(md);
+    assert.deepEqual(out.decisions, ['Same entry.', 'Different entry.']);
+  });
+});
+
+describe('targeted: parseSections body-split round-trip', () => {
+  // Kills: body split/join mutations — each body line must be its own array element.
+  // The adapter does sec.body.split('\n'); parseAdrMarkdown does section.body.join('\n').
+  // A mutant replacing '\n' with ' ' in either call would break this.
+  test('multi-line goal body has each line preserved with internal newlines in prose', () => {
+    const md = '## Context\nLine one.\nLine two.\nLine three.';
+    const out = parseAdrMarkdown(md);
+    // prose = section.body.join('\n').trim() — must include all three lines separated by \n
+    assert.ok(out.context.includes('Line one.'), `context missing line one: ${out.context}`);
+    assert.ok(out.context.includes('Line two.'), `context missing line two: ${out.context}`);
+    assert.ok(out.context.includes('Line three.'), `context missing line three: ${out.context}`);
+    assert.ok(out.context.includes('\n'), 'context must retain internal newlines');
+  });
+
+  test('multi-line decision body produces one entry per non-blank line', () => {
+    // entries = splitEntries(section.body.join('\n')) — join must be '\n' not ' '
+    const md = '## Decision\n- Alpha.\n- Beta.\n- Gamma.';
+    const out = parseAdrMarkdown(md);
+    assert.deepEqual(out.decisions, ['Alpha.', 'Beta.', 'Gamma.']);
+  });
+});
+
+describe('targeted: parseStatusFromSections uses first entry only', () => {
+  // Kills: mutants that remove [0] indexing or change `splitEntries(...)[0]` to return all.
+  test('only the first non-blank line of the status body determines status', () => {
+    // Second line "rejected" must NOT influence the result.
+    const md = '# ADR\n\n## Status\naccepted\nrejected\n';
+    const out = parseAdrMarkdown(md);
+    assert.equal(out.status, 'accepted');
+  });
+});
+
+describe('targeted: classifyHeader exact-match vs prefix-match boundary', () => {
+  // Kills: mutants that remove the trailing space from startsWith check, or remove
+  // the equality check.
+
+  // Case 1: exact match — heading IS the synonym (no trailing content)
+  test('heading exactly equal to synonym matches (equality branch)', () => {
+    const out = parseAdrMarkdown('## Status\naccepted\n');
+    assert.equal(out.status, 'accepted');
+  });
+
+  // Case 2: prefix match — heading starts with synonym + space + more text
+  test('heading starting with synonym + space matches (prefix branch)', () => {
+    // "status of the adr" → starts with "status " → classified as status
+    const out = parseAdrMarkdown('## Status of the ADR\naccepted\n');
+    assert.equal(out.status, 'accepted');
+  });
+
+  // Case 3: heading IS synonym but no trailing space should NOT match via startsWith
+  // (it matches via equality instead) — this verifies the equality check fires
+  test('heading that exactly equals a synonym is classified without trailing space', () => {
+    // "context" equals the synonym exactly — must be classified as goal
+    const out = parseAdrMarkdown('## Context\nExact match context.');
+    assert.equal(out.context.trim(), 'Exact match context.');
+  });
+
+  // Case 4: heading with wrong suffix (synonym+letter, no space) must NOT match prefix
+  test('heading that is synonym + letter (no space) does NOT match prefix', () => {
+    // "statuses" → normalizes to "statuses", not "status " prefix — unclassified
+    const out = parseAdrMarkdown('## Statuses\naccepted\n');
+    assert.ok(out.unmapped_headers.includes('Statuses'));
+    // status should fall back to 'accepted' default (no status section found)
+    assert.equal(out.status, 'accepted');
+  });
+});
+
+describe('targeted: goal section prose vs entries distinction', () => {
+  // The goal/context case uses `prose` (joined + trimmed multi-line text), not `entries`
+  // (bullet-stripped list). Killing the `prose` variable or swapping it for `entries`
+  // would strip bullet markers from context text.
+  test('goal section body with bullet markers is preserved verbatim in context (prose, not entries)', () => {
+    // If parser used entries instead of prose, "- with a dash" would become "with a dash".
+    const md = '## Context\nThis is context.\n- with a dash item.\nMore prose.';
+    const out = parseAdrMarkdown(md);
+    assert.ok(out.context.includes('- with a dash item.'),
+      `context should preserve bullet markers in prose: ${out.context}`);
+  });
+});
+
+describe('targeted: normalizeAdrHeader non-word char removal', () => {
+  // Kills: regex mutation in the [^\w\s] replacement — e.g. inverting the class
+  // or changing the replacement target.
+  test('parentheses in heading are stripped by non-word removal', () => {
+    // "Context (v2)" normalizes to "context v2" — still matches "context" via prefix "context "
+    const out = parseAdrMarkdown('## Context (v2)\nSome context here.');
+    assert.equal(out.context.trim(), 'Some context here.');
+  });
+
+  test('non-word chars adjacent to word chars are stripped without inserting a space', () => {
+    // "Context/Background" → [^\w\s] removes '/' → "contextbackground" (no space)
+    // So it does NOT classify as goal (exact "contextbackground" ≠ any synonym).
+    const out = parseAdrMarkdown('## Context/Background\nSlash context.');
+    // Does not classify as goal — goes to unmapped_headers
+    assert.ok(out.unmapped_headers.includes('Context/Background'));
+    assert.equal(out.context, '');
+  });
+});

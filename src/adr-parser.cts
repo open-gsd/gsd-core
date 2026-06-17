@@ -248,36 +248,16 @@ function parseSections(markdown: unknown): MarkdownSection[] {
   // heading text after trimming (same as the old m[1].trim() capture).
   // The body is a trimEnd()-ed joined string; split it back to lines to match
   // the old string[] shape consumed by parseStatusFromSections / parseAdrMarkdown.
-  const result: MarkdownSection[] = sections.map((sec) => ({
+  //
+  // Note: the old parseSections emitted a leading { heading: null, body: [...] }
+  // entry for preamble text before the first heading.  Both consumers skip it
+  // immediately (parseAdrMarkdown: `if (!heading) continue`; parseStatusFromSections:
+  // `classifyHeader(normalizeAdrHeader(null))` → null ≠ 'status' → continue), so
+  // the preamble entry was dead code and is not reconstructed here.
+  return sections.map((sec) => ({
     heading: sec.heading.text,
     body: sec.body === '' ? [] : sec.body.split('\n'),
   }));
-
-  // Preamble: if the document has content before the first heading, the old
-  // parseSections emitted a leading { heading: null, body: [...] } entry.
-  // collectSections only returns sections that are opened by a heading, so we
-  // need to reconstruct the preamble manually when it exists.
-  if (content.length > 0) {
-    const firstNewline = content.indexOf('\n');
-    const firstLine = firstNewline === -1 ? content : content.slice(0, firstNewline);
-    const hasLeadingNonHeading = !/^#{1,6}\s/.test(firstLine);
-
-    if (hasLeadingNonHeading && sections.length > 0) {
-      // The preamble ends at the first heading's offset.
-      const firstHeadingOffset = sections[0].heading.offset;
-      const preambleText = content.slice(0, firstHeadingOffset);
-      const preambleLines = preambleText.split(/\r?\n/);
-      // Trim trailing empty lines to match old behaviour (old code just collected them as-is)
-      if (preambleLines.some((l) => l.trim())) {
-        result.unshift({ heading: null, body: preambleLines });
-      }
-    } else if (hasLeadingNonHeading && sections.length === 0) {
-      // No headings at all — entire content is the preamble.
-      result.unshift({ heading: null, body: content.split(/\r?\n/) });
-    }
-  }
-
-  return result;
 }
 
 function parseStatusFromSections(sections: MarkdownSection[]): string {
