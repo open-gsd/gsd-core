@@ -388,15 +388,15 @@ describe('bug #260: gsd-worktree-path-guard.js', () => {
         // We compute the number of segments needed to reach the filesystem root
         // from worktreeDir so the traversal always lands at the right level
         // regardless of how deep the worktree path is.
-        const depthFromRoot = worktreeDir.split(path.sep).filter(Boolean).length;
-        const upSegments = Array(depthFromRoot + 1).fill('..').join(path.sep);
-        // Strip the leading separator from externalDir so path.join treats it
-        // as relative segments when appended after the .. chain.
-        // Note: externalDir is the root of a different git repo, so path.resolve()
-        // normalises the traversal to externalDir/file.ts, which hits the
-        // different-git-root block (the genuine #260 hard block).
-        const externalRelative = externalDir.replace(/^[/\\]+/, '');
-        const traversalPath = path.join(worktreeDir, upSegments, externalRelative, 'file.ts');
+        // Build a file_path containing literal `..` segments that climb out of the
+        // worktree into externalDir. path.relative() yields a ..-laden relative path
+        // between two same-drive absolute paths (both live under os.tmpdir()); we
+        // re-anchor it at worktreeDir via STRING CONCAT (NOT path.join, which would
+        // normalise the `..` away) so the hook's path.resolve() must collapse it.
+        // Windows-safe: avoids the drive-letter doubling that
+        // path.join(worktreeDir, '..', absolutePath) produces on win32 (#1342).
+        const externalTarget = path.join(externalDir, 'file.ts');
+        const traversalPath = worktreeDir + path.sep + path.relative(worktreeDir, externalTarget);
 
         // Confirm the resolved path is truly outside the worktree (test integrity guard).
         const resolved = path.resolve(traversalPath);
