@@ -238,7 +238,7 @@ export function collectSections(
 
   // Build a byte-offset table: lineOffsets[i] = byte offset of the start of line i+1 (1-based: i=0 → line 1)
   // The body of a section starts at the byte after the heading line's trailing '\n'.
-  const lineOffsets: number[] = new Array(lines.length);
+  const lineOffsets: number[] = new Array<number>(lines.length);
   let acc = 0;
   for (let i = 0; i < lines.length; i++) {
     lineOffsets[i] = acc;
@@ -334,7 +334,7 @@ export function collectSection(
 
   // Compute byte offsets for bodyStart and bodyEnd.
   // lineOffsets[i] = byte offset of line (i+1) in content (1-based).
-  const lineOffsets: number[] = new Array(lines.length);
+  const lineOffsets: number[] = new Array<number>(lines.length);
   let acc = 0;
   for (let i = 0; i < lines.length; i++) {
     lineOffsets[i] = acc;

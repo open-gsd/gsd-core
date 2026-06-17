@@ -745,7 +745,7 @@ describe('extractTaggedBlocks', () => {
 
   test('content with tag text appearing outside any block is not extracted', () => {
     // The tag appears as inline text, not as an XML block
-    const content = 'This is about <decisions> but no closing tag in same element sense\n\nNot a block.';
+    const _content = 'This is about <decisions> but no closing tag in same element sense\n\nNot a block.';
     // Actually we need to use content that has the opening tag on the same line as text
     // but no matching close tag — result should be empty or the inner text is everything after.
     // Since the regex is non-greedy, an unclosed tag won't match.
