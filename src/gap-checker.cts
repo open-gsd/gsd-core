@@ -27,7 +27,7 @@ const { escapeRegex } = phaseId;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningPaths, planningDir, findContextMdIn } = planningWorkspace;
-import { parseDecisions } from './decisions.cjs';
+import { parseDecisions, extractDecisions } from './decisions.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -235,7 +235,10 @@ function runGapAnalysis(cwd: string, phaseDir: string, options: RunGapAnalysisOp
   const ctxFile = findContextMdIn(phaseDirFiles);
   const ctxPath = ctxFile ? path.join(absPhaseDir, ctxFile) : null;
   const ctxMd = ctxPath ? fs.readFileSync(ctxPath, 'utf-8') : '';
-  const dItems: DecisionItem[] = parseDecisions(ctxMd).map(d => ({ ...d, source: 'CONTEXT.md' }));
+
+  // Use extractDecisions so gap-checker can distinguish could-not-parse from none-present.
+  const ctxExtraction = extractDecisions(ctxMd);
+  const dItems: DecisionItem[] = ctxExtraction.decisions.map(d => ({ ...d, source: 'CONTEXT.md' }));
 
   const items: Item[] = [...reqItems, ...dItems];
 
@@ -250,7 +253,19 @@ function runGapAnalysis(cwd: string, phaseDir: string, options: RunGapAnalysisOp
     }
   } catch { /* unreadable */ }
 
+  // #1365: if decisions were expected but 0 extracted, surface as format mismatch
+  // rather than "No requirements or decisions to check" (misleading silent skip).
   if (items.length === 0) {
+    if (ctxExtraction.outcome === 'could-not-parse') {
+      const mismatchMsg = '## Post-Planning Gap Analysis\n\nextracted 0 of N — possible format mismatch in CONTEXT.md decisions block.\n';
+      return {
+        enabled: true,
+        rows: [],
+        table: mismatchMsg,
+        summary: 'extracted 0 of N — possible format mismatch',
+        counts: { total: 0, covered: 0, uncovered: 0 },
+      };
+    }
     return {
       enabled: true,
       rows: [],
