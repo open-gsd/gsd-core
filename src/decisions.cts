@@ -70,7 +70,13 @@ export function parseDecisions(content: unknown): Decision[] {
   // in addition to numeric-only IDs (D-42). The first character after `D-` must
   // be alphanumeric, so malformed shapes like `D--foo` or `D-_bar` are rejected.
   // CJS callers consume {id, text} and ignore the optional extras.
-  const bulletRe = /^\s*-\s+\*\*D-([A-Za-z0-9][A-Za-z0-9_-]*)(?:\s*\[([^\]]+)\])?\s*:\*\*\s*(.*)$/;
+  // #1343: `[^:*]*` replaces the old `\s*` before `:**` so that a freeform run
+  // such as `(parenthetical)`, an em-dash, or other prose between the optional
+  // bracket-tag group and the closing `:**` is tolerated rather than silently
+  // dropping the whole decision. `[^:*]*` subsumes plain whitespace and stops
+  // correctly at `:**`. Capture groups 1 (id), 2 (bracket tags), 3 (text) are
+  // unchanged.
+  const bulletRe = /^\s*-\s+\*\*D-([A-Za-z0-9][A-Za-z0-9_-]*)(?:\s*\[([^\]]+)\])?[^:*]*:\*\*\s*(.*)$/;
   let current: Decision | null = null;
   const flush = (): void => {
     if (current) {
@@ -109,6 +115,18 @@ export function parseDecisions(content: unknown): Decision[] {
         : [];
       const trackable = !inDiscretion && !tags.some((t) => NON_TRACKABLE_TAGS.has(t));
       current = { id, text: bulletMatch[3], category, tags, trackable };
+      continue;
+    }
+    // Parse-miss guard (#1343): a line that looks like a `D-NN` decision bullet
+    // but failed `bulletRe` (e.g. a `:` or `*` inside the pre-colon run) must NOT
+    // be silently dropped — a narrowed trackable set lets a blocking coverage gate
+    // report a false pass. Surface it loudly instead.
+    if (/^\s*-\s+\*\*D-/.test(line)) {
+      // A malformed D-bullet still starts a (failed) new decision, so it ends the
+      // previous one — flush before warning so a following continuation line cannot
+      // be mis-appended to the prior valid decision.
+      flush();
+      console.warn(`parseDecisions: ignored unparseable decision bullet: ${trimmed}`);
       continue;
     }
     // Continuation line for current decision (indented with space OR tab,
