@@ -39,7 +39,46 @@ const README_FILES = [
   'docs/README.md',
 ].filter(f => fs.existsSync(path.join(ROOT, f)));
 
+// Detect "ProductName (description)" parentheticals in arbitrary prose, skipping
+// version references like "Claude Code (v1.32.0)" / "Claude (1.5.0)". Returns the
+// matched substrings so callers can report them. Shared by the CHANGELOG and the
+// changeset-fragment scans so both apply identical rules.
+function findProductParentheticals(content) {
+  const found = [];
+  for (const product of PRODUCTS) {
+    // Match "ProductName (something)" but not "ProductName (v1.2.3)" (version refs are ok)
+    const pattern = new RegExp(
+      product.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +
+      '\\s*\\([^)]*(?!v?\\d+\\.\\d)[^)]*\\)',
+      'g'
+    );
+    const matches = content.match(pattern);
+    if (!matches) continue;
+    for (const m of matches) {
+      // Skip version references like "Claude Code (v1.32.0)"
+      if (/\(v?\d+\.\d+/.test(m)) continue;
+      found.push(m);
+    }
+  }
+  return found;
+}
+
 describe('product name purity (#1777)', () => {
+  // Pin the shared detector's contract so neither the CHANGELOG nor the
+  // fragment scan can pass vacuously: a silently-broken helper that always
+  // returned [] would otherwise go undetected whenever the scanned files
+  // happen to be clean.
+  test('findProductParentheticals catches a real violation and allows version refs', () => {
+    assert.deepEqual(
+      findProductParentheticals('see Claude Code (the Anthropic CLI) for details'),
+      ['Claude Code (the Anthropic CLI)'],
+    );
+    assert.deepEqual(
+      findProductParentheticals('upgraded to Claude Code (v1.32.0)'),
+      [],
+    );
+  });
+
   test('no README install-block comments contain parenthetical descriptions', () => {
     const violations = [];
 
@@ -84,30 +123,43 @@ describe('product name purity (#1777)', () => {
     if (!fs.existsSync(changelog)) return;
 
     const content = fs.readFileSync(changelog, 'utf-8');
-    const violations = [];
-
-    for (const product of PRODUCTS) {
-      // Match "ProductName (something)" but not "ProductName (v1.2.3)" (version refs are ok)
-      const pattern = new RegExp(
-        product.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +
-        '\\s*\\([^)]*(?!v?\\d+\\.\\d)[^)]*\\)',
-        'g'
-      );
-      const matches = content.match(pattern);
-      if (matches) {
-        for (const m of matches) {
-          // Skip version references like "Claude Code (v1.32.0)"
-          if (/\(v?\d+\.\d+/.test(m)) continue;
-          violations.push(m);
-        }
-      }
-    }
+    const violations = findProductParentheticals(content);
 
     assert.strictEqual(
       violations.length, 0,
       [
         'CHANGELOG must not include parenthetical product descriptions.',
         'Found:',
+        ...violations.map(v => '  ' + v),
+      ].join('\n')
+    );
+  });
+
+  test('live changeset fragments do not include parenthetical product descriptions', () => {
+    const changesetDir = path.join(ROOT, '.changeset');
+    if (!fs.existsSync(changesetDir)) return;
+
+    // Only LIVE fragments (.changeset/*.md) render into CHANGELOG.md at release
+    // time, so an impure fragment silently re-introduces a #1777 violation at the
+    // next release / back-merge even after CHANGELOG.md itself was hand-fixed.
+    // Archived fragments (.changeset/archived/) never re-render and are out of scope.
+    const fragments = fs.readdirSync(changesetDir, { withFileTypes: true })
+      .filter(d => d.isFile() && d.name.endsWith('.md') && d.name !== 'README.md')
+      .map(d => d.name);
+
+    const violations = [];
+    for (const frag of fragments) {
+      const content = fs.readFileSync(path.join(changesetDir, frag), 'utf-8');
+      for (const m of findProductParentheticals(content)) {
+        violations.push(frag + ' — ' + m);
+      }
+    }
+
+    assert.strictEqual(
+      violations.length, 0,
+      [
+        'Changeset fragments must not include parenthetical product descriptions',
+        '(fragment prose renders verbatim into CHANGELOG.md at release time):',
         ...violations.map(v => '  ' + v),
       ].join('\n')
     );
