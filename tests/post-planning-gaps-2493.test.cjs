@@ -623,3 +623,93 @@ describe('#1343 — parseDecisions tolerates freeform text before the colon (reg
     assert.strictEqual(ds[1].trackable, false);
   });
 });
+
+describe('#1364 — parseDecisions falls back to markdown decision headers (regressions)', () => {
+  // A CONTEXT.md that records its decisions under markdown headers (no
+  // `<decisions>` XML wrapper) used to extract nothing, so the BLOCKING
+  // `check.decision-coverage-plan` gate reported a vacuous `covered 0/0,
+  // passed: true` and never coverage-checked decisions that were present.
+
+  test('bullets under a `## Locked decisions` header are extracted', () => {
+    const md =
+      '# Phase Context\n\n' +
+      '## Locked decisions\n' +
+      '- **D-1:** first decision\n' +
+      '- **D-2:** second decision\n';
+    const ds = parseDecisions(md);
+    assert.deepStrictEqual(
+      ds.map(d => d.id),
+      ['D-1', 'D-2'],
+      'markdown-header decisions must be extracted, not silently dropped'
+    );
+  });
+
+  test('singular `### Decision` heading is recognized', () => {
+    const ds = parseDecisions('### Implementation decision\n- **D-7:** only one\n');
+    assert.deepStrictEqual(ds.map(d => d.id), ['D-7']);
+  });
+
+  test('a following non-decision heading bounds the section', () => {
+    const md =
+      '### Implementation decisions\n' +
+      '- **D-7:** kept\n' +
+      '## Next steps\n' +
+      '- **D-99:** outside the decisions section\n';
+    const ds = parseDecisions(md);
+    assert.deepStrictEqual(
+      ds.map(d => d.id),
+      ['D-7'],
+      'D-99 lives under a non-decision heading and must not be captured'
+    );
+  });
+
+  test('nested category sub-heading inside a decisions section still drives trackability', () => {
+    const md =
+      '## Locked decisions\n' +
+      '- **D-1:** tracked\n' +
+      "### Claude's Discretion\n" +
+      '- **D-2:** discretionary\n';
+    const ds = parseDecisions(md);
+    const d1 = ds.find(d => d.id === 'D-1');
+    const d2 = ds.find(d => d.id === 'D-2');
+    assert.ok(d1 && d1.trackable === true, 'D-1 must be trackable');
+    assert.ok(d2 && d2.trackable === false, 'D-2 under Claude\'s Discretion must be non-trackable');
+  });
+
+  test('an explicit `<decisions>` block still takes precedence over markdown headers', () => {
+    const md =
+      '## Decisions\n' +
+      '- **D-1:** markdown copy (must be ignored)\n' +
+      '<decisions>\n- **D-9:** canonical xml\n</decisions>\n';
+    const ds = parseDecisions(md);
+    assert.deepStrictEqual(
+      ds.map(d => d.id),
+      ['D-9'],
+      'when both shapes exist the `<decisions>` block wins (existing behavior)'
+    );
+  });
+
+  test('a D-bullet NOT under a decisions heading is not captured', () => {
+    const ds = parseDecisions('## Summary\n- **D-1:** prose that is not a decisions section\n');
+    assert.deepStrictEqual(ds, [], 'only sections under a decisions heading are parsed');
+  });
+
+  test('a malformed bullet under a decisions heading warns rather than silently passing', () => {
+    // No `:**` terminator → bulletRe fails → the parse-miss guard must surface it
+    // loudly instead of letting the blocking gate report a vacuous 0/0 pass.
+    const md = '## Locked decisions\n- **D-1 — missing the closing colon** body\n';
+    const warnMessages = [];
+    const origWarn = console.warn;
+    try {
+      console.warn = (...args) => { warnMessages.push(args.join(' ')); };
+      const ds = parseDecisions(md);
+      assert.strictEqual(ds.length, 0, 'unparseable bullet must be excluded');
+    } finally {
+      console.warn = origWarn;
+    }
+    assert.ok(
+      warnMessages.some(m => m.includes('D-1')),
+      `expected a console.warn mentioning D-1, got: ${JSON.stringify(warnMessages)}`
+    );
+  });
+});

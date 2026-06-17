@@ -33,8 +33,65 @@ function stripFencedCode(content: string): string {
 }
 
 /**
+ * #1364: Fallback for a CONTEXT.md that records its decisions under markdown
+ * headers (`## Locked decisions`, `## Implementation decisions`,
+ * `### Decisions`, …) instead of a `<decisions>...</decisions>` wrapper.
+ *
+ * Without this, `extractDecisionsBlock` returned null for such a file, so
+ * `parseDecisions` yielded `[]` and `check.decision-coverage-plan` — a BLOCKING
+ * gate — reported a vacuous `covered 0/0, passed: true`, never coverage-checking
+ * decisions that were actually present.
+ *
+ * Returns the body under every markdown heading whose title contains the word
+ * "decision"/"decisions", joined by `\n\n`, or null when none is found. A
+ * section runs from its heading to the next heading of equal-or-higher level,
+ * so nested category sub-headings (e.g. `### Claude's Discretion`) inside a
+ * `## … decisions` block are preserved for the bullet parser.
+ */
+function extractMarkdownDecisionSections(content: string): string | null {
+  const lines = content.split(/\r?\n/);
+  const sections: string[] = [];
+  let buf: string[] = [];
+  let capturing = false;
+  let headerLevel = 0;
+  const flush = (): void => {
+    if (buf.length > 0) {
+      sections.push(buf.join('\n'));
+      buf = [];
+    }
+  };
+  for (const line of lines) {
+    const heading = line.match(/^(#{1,6})\s+(.*\S)\s*$/);
+    if (heading) {
+      const level = heading[1].length;
+      const isDecisionHeading = /\bdecisions?\b/i.test(heading[2]);
+      // A heading at the same or higher level closes the active section.
+      if (capturing && level <= headerLevel) {
+        flush();
+        capturing = false;
+      }
+      // Start (or restart) capture at a decision heading; the heading line
+      // itself is not part of the body. Deeper headings inside an active
+      // section fall through below and are kept as category sub-headings.
+      if (!capturing && isDecisionHeading) {
+        capturing = true;
+        headerLevel = level;
+        continue;
+      }
+    }
+    if (capturing)
+      buf.push(line);
+  }
+  flush();
+  return sections.length > 0 ? sections.join('\n\n') : null;
+}
+
+/**
  * Extract the inner text of EVERY `<decisions>...</decisions>` block in
- * order, concatenated by `\n\n`. Returns null when no block is present.
+ * order, concatenated by `\n\n`. When no `<decisions>` wrapper exists, fall
+ * back to markdown decision-header sections (#1364) so a CONTEXT.md that
+ * records decisions under `## … decisions` headings is still parsed. Returns
+ * null when neither shape is present.
  *
  * CONTEXT.md may legitimately contain more than one block (for example, a
  * "current decisions" block plus a "carry-over from prior phase" block);
@@ -44,7 +101,7 @@ function extractDecisionsBlock(content: string): string | null {
   const cleaned = stripFencedCode(content);
   const matches = [...cleaned.matchAll(/<decisions>([\s\S]*?)<\/decisions>/g)];
   if (matches.length === 0)
-    return null;
+    return extractMarkdownDecisionSections(cleaned);
   return matches.map((m) => m[1]).join('\n\n');
 }
 
