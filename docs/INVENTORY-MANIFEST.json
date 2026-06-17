@@ -371,6 +371,7 @@
       "state.cjs",
       "surface.cjs",
       "task-command-router.cjs",
+      "teams-status.cjs",
       "template.cjs",
       "uat-predicate.cjs",
       "uat.cjs",
