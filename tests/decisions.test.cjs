@@ -582,6 +582,112 @@ describe('FIX B: parse-miss on malformed D-NN bullet → could-not-parse (#1372)
   });
 });
 
+// ─── FIX B gate-level: parse-miss silently swallowed when covered decision exists ─
+
+describe('FIX B gate-level: parse-miss → passed:false regardless of covered decisions (#1365)', () => {
+  let tmpDir;
+  let planningDir;
+  let phaseDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-1365-fixb-');
+    planningDir = path.join(tmpDir, '.planning');
+    phaseDir = path.join(planningDir, 'phases', '01-init');
+    fs.mkdirSync(phaseDir, { recursive: true });
+  });
+
+  afterEach(() => cleanup(tmpDir));
+
+  test('FAIL-FIRST: valid D-01 covered + malformed D-02 → gate must return passed:false (parse-miss wins)', () => {
+    // CONTEXT.md: D-01 is valid colon-form; D-02 has no colon and no em-dash → parse-miss
+    // PLAN.md: covers D-01 via ## Must Haves so coverage of D-01 would pass on its own.
+    // Before fix: decisions.length === 1 (D-01), outcome === 'could-not-parse' →
+    //   guard `decisions.length === 0 && outcome === 'could-not-parse'` is FALSE →
+    //   gate proceeds to coverage → D-01 is covered → passed:true  [BUG]
+    // After fix: outcome === 'could-not-parse' fires regardless of decisions.length →
+    //   gate returns passed:false with reason:'could-not-parse'     [CORRECT]
+    writeContextFile(phaseDir, [
+      '# Phase 1 Context',
+      '',
+      '<decisions>',
+      '### Implementation',
+      '- **D-01:** use JWT tokens',
+      '- **D-02** ratio 3:1',
+      '</decisions>',
+    ].join('\n'));
+    // D-02 bullet has no colon and no em-dash → parse-miss → outcome:'could-not-parse'
+    // but D-01 is in decisions with trackable:true
+
+    // Plan covers D-01 explicitly via ## Must Haves (DESIGNATED_HEADINGS_RE match)
+    writePlanFile(phaseDir, '01', [
+      '# Plan',
+      '',
+      '## Must Haves',
+      '',
+      '- D-01: implement JWT token issuance and validation',
+    ].join('\n'));
+
+    // Pre-check: confirm extractDecisions outcome so we know what the gate is receiving
+    const extraction = extractDecisions([
+      '<decisions>',
+      '### Implementation',
+      '- **D-01:** use JWT tokens',
+      '- **D-02** ratio 3:1',
+      '</decisions>',
+    ].join('\n'));
+    assert.strictEqual(extraction.outcome, 'could-not-parse',
+      `Pre-check: extractDecisions must return could-not-parse. Got: ${extraction.outcome}`);
+    assert.ok(extraction.decisions.some(d => d.id === 'D-01'),
+      `Pre-check: D-01 must be in decisions (coverage would pass for D-01 alone). Got: ${JSON.stringify(extraction.decisions)}`);
+    assert.strictEqual(extraction.decisions.filter(d => d.trackable).length, 1,
+      'Pre-check: exactly 1 trackable decision (D-01) — confirms decisions.length === 1 path');
+
+    // Gate call: with the old guard `decisions.length === 0 && outcome === 'could-not-parse'`
+    // this would be skipped (length is 1) and coverage would find D-01 covered → passed:true.
+    // With the fix this must return passed:false.
+    const contextPath = path.join(phaseDir, 'CONTEXT.md');
+    const result = runDecisionCoveragePlan(phaseDir, contextPath, tmpDir);
+    const parsed = JSON.parse(result.output || '');
+    assert.strictEqual(parsed.passed, false,
+      `Gate must return passed:false when parse-miss present, even if covered decisions exist. Got: ${JSON.stringify(parsed)}`);
+    assert.strictEqual(parsed.reason, 'could-not-parse',
+      `Gate must report reason:'could-not-parse'. Got: ${JSON.stringify(parsed)}`);
+    // Message must indicate a format/parse problem (not a coverage gap on D-01)
+    const msg = (parsed.message || '').toLowerCase();
+    assert.ok(
+      msg.includes('could not') || msg.includes('format') || msg.includes('mismatch') || msg.includes('parse'),
+      `Message must indicate parse/format issue, not D-01 coverage gap. Got: "${parsed.message}"`
+    );
+    // Confirm D-01 is NOT in uncovered[] — the failure is parse-miss, not a coverage gap
+    assert.deepStrictEqual(parsed.uncovered, [],
+      `uncovered must be empty (D-01 is covered; failure is parse-miss). Got: ${JSON.stringify(parsed.uncovered)}`);
+  });
+
+  test('verify-side: valid D-01 covered + malformed D-02 → verify advisory surfaces could-not-parse', () => {
+    // Same scenario but via decision-coverage-verify (non-blocking advisory)
+    writeContextFile(phaseDir, [
+      '# Phase 1 Context',
+      '',
+      '<decisions>',
+      '- **D-01:** use JWT tokens',
+      '- **D-02** ratio 3:1',
+      '</decisions>',
+    ].join('\n'));
+    writePlanFile(phaseDir, '01', '# Plan\n\n## Must Haves\n\n- D-01: implement JWT\n');
+
+    const contextPath = path.join(phaseDir, 'CONTEXT.md');
+    const result = runGsdTools(
+      ['query', 'check.decision-coverage-verify', phaseDir, contextPath],
+      tmpDir
+    );
+    const parsed = JSON.parse(result.output || '');
+    assert.strictEqual(parsed.reason, 'could-not-parse',
+      `Verify must surface could-not-parse reason. Got: ${JSON.stringify(parsed)}`);
+    assert.strictEqual(parsed.blocking, false,
+      `Verify is always non-blocking. Got: ${JSON.stringify(parsed)}`);
+  });
+});
+
 // ─── FIX C regressions: curly-quote Claude's Discretion ───────────────────────
 
 describe('FIX C: curly-quote Claude’s Discretion → trackable:false (#1372)', () => {
