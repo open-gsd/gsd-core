@@ -1053,7 +1053,7 @@ fix(03-01): correct auth token expiry
 - **Copilot:** `sessionStart`
 
 **Runtime-specific enrichments (1.4.0):**
-- Codex emits `service_tier: flex` for light-tier agents and an `agents/openai.yaml` chip so GSD skills appear in the Codex `/skills` picker
+- Codex emits `service_tier: flex` for light-tier agents; GSD skills appear in the Codex `/skills` picker via `SKILL.md` (no `agents/openai.yaml` sidecar is emitted — doing so caused duplicate autocomplete entries, #1326)
 - Gemini commands use native `{{args}}` interpolation
 
 **Native packaging:**

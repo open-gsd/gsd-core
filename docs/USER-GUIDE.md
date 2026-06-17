@@ -731,13 +731,13 @@ To assign different models on a non-Claude runtime:
 
 #### Codex skill picker and agent scheduling (#774)
 
-GSD enriches each Codex install with two additional artifacts:
-
-- **Skill TUI chip** — each installed `gsd-*` skill directory contains an `agents/openai.yaml` file that populates the Codex `/skills` picker with a human-readable display name and a short description, so you can browse and invoke GSD skills from the Codex TUI without typing the full skill name.
+GSD enriches each Codex install with an additional artifact:
 
 - **Flex-tier scheduling** — light-tier agents (haiku-equivalent) emit `service_tier = "flex"` and `model_verbosity = "low"` in their agent TOML. The Codex scheduler routes these agents to the flex tier (lower cost, background processing) and suppresses verbose token output.
 
-Both enrichments are written automatically at install time and require no manual configuration. Requires Codex CLI ≥ 0.130.0.
+GSD skills appear in the Codex `/skills` picker via their `SKILL.md` file, which Codex discovers automatically. No `agents/openai.yaml` sidecar is emitted — doing so caused duplicate autocomplete entries (#1326).
+
+This enrichment is written automatically at install time and requires no manual configuration. Requires Codex CLI ≥ 0.130.0.
 
 #### Switching from Claude to Codex with one config change (#2517)
 

@@ -3198,110 +3198,55 @@ function generateCodexAgentToml(agentName, agentContent, modelOverrides = null, 
 }
 
 /**
- * Generate the agents/openai.yaml TUI chip metadata content for a Codex skill.
+ * Remove stale agents/openai.yaml sidecar files from GSD-managed Codex skill dirs.
  *
- * This file is written alongside SKILL.md as <skill-dir>/agents/openai.yaml.
- * Codex loads it as a SkillMetadataFile (codex-rs/core-skills/src/loader.rs),
- * making the skill discoverable in the /skills TUI popup with a display name
- * and short description. If the file is absent, Codex silently skips it (fails open).
+ * Prior to #1326, GSD's Codex install path wrote an agents/openai.yaml file
+ * alongside each gsd-* SKILL.md. Recent Codex builds index BOTH SKILL.md and
+ * the sidecar, causing each GSD skill to appear twice in autocomplete. This
+ * function removes those stale sidecars and — if the agents/ subdirectory is
+ * now empty — prunes it too.
  *
- * Schema (interface section):
- *   display_name: short human-readable skill name (strip gsd- prefix)
- *   short_description: 1-2 sentence description for TUI chip, ≤180 chars
- *
- * @param {string} skillName - Full skill name e.g. "gsd-plan-phase"
- * @param {string} shortDescription - Description text (already truncated by caller)
- * @returns {string} YAML content for agents/openai.yaml
- */
-function generateCodexSkillMetadataYaml(skillName, shortDescription) {
-  // Display name: strip "gsd-" prefix and convert hyphens to spaces for readability.
-  const displayName = skillName.replace(/^gsd-/, '').replace(/-/g, ' ');
-  // yamlQuote (= JSON.stringify) handles all YAML-unsafe chars: backslashes,
-  // quotes, newlines, control characters, and Unicode escapes.
-  return [
-    'interface:',
-    `  display_name: ${yamlQuote(displayName)}`,
-    `  short_description: ${yamlQuote(shortDescription)}`,
-    '',
-  ].join('\n');
-}
-
-/**
- * Write agents/openai.yaml TUI chip metadata for each gsd-* skill directory.
- *
- * Called after layout-driven skill install for Codex. Iterates every gsd-*
- * skill directory in skillsDir, reads the SKILL.md frontmatter to extract the
- * short-description already emitted by convertClaudeCommandToCodexSkill, then
- * writes <skill-dir>/agents/openai.yaml using generateCodexSkillMetadataYaml.
- *
- * Fails open: individual skill directories that cannot be processed are silently
- * skipped so a single malformed SKILL.md cannot block the whole install.
- *
- * User-owned skill directories (e.g. gsd-dev-preferences) are explicitly
- * skipped so existing user-authored agents/openai.yaml files are never
- * overwritten. These dirs are listed in the same USER_OWNED_SKILL_DIRS
- * constant used by installOpencodeFamilySkills.
- *
- * The YAML-quoted description value is unescaped before embedding so that
- * YAML escape sequences (e.g. \" in a double-quoted scalar) become the
- * literal characters they represent rather than being double-escaped in the
- * output.
+ * Behaviour:
+ *   - Returns immediately if skillsDir does not exist (fails open).
+ *   - Only touches directories whose names start with "gsd-".
+ *   - Skips user-owned dirs (gsd-dev-preferences) — their agents/ content is
+ *     never modified, mirroring the same USER_OWNED_SKILL_DIRS guard used by
+ *     installOpencodeFamilySkills.
+ *   - For each managed gsd-* dir, if agents/openai.yaml exists, deletes it.
+ *   - If agents/ is now empty, removes the directory; if it still contains
+ *     other files (e.g. user-added content), leaves it in place.
+ *   - Non-gsd-* dirs and their agents/ content are never touched.
+ *   - Individual failures are caught and swallowed so a single bad dir cannot
+ *     block the install (fail-open, matching the original design).
  *
  * @param {string} skillsDir - Path to the skills/ directory (e.g. ~/.codex/skills)
  */
-function writeCodexSkillMetadataFiles(skillsDir) {
+function cleanupCodexSkillMetadataSidecars(skillsDir) {
   if (!fs.existsSync(skillsDir)) return;
   // Mirror the user-owned list from installOpencodeFamilySkills (#2973).
   // We MUST skip these dirs — their contents are user-generated and must
-  // never be overwritten by GSD's install path.
+  // never be modified by GSD's install path.
   const _userOwnedSkillDirs = new Set(['gsd-dev-preferences']);
   for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true })) {
     if (!entry.isDirectory() || !entry.name.startsWith('gsd-')) continue;
     if (_userOwnedSkillDirs.has(entry.name)) continue; // preserve user content
-    const skillDir = path.join(skillsDir, entry.name);
-    const skillMdPath = path.join(skillDir, 'SKILL.md');
+    const agentsSubdir = path.join(skillsDir, entry.name, 'agents');
+    const sidecarPath = path.join(agentsSubdir, 'openai.yaml');
     try {
-      const content = fs.readFileSync(skillMdPath, 'utf8');
-      const { frontmatter } = extractFrontmatterAndBody(content);
-      // Prefer the short-description field emitted by convertClaudeCommandToCodexSkill;
-      // fall back to description, then a synthetic label from the skill name.
-      let shortDesc = '';
-      if (frontmatter) {
-        // SKILL.md uses YAML frontmatter with a nested metadata.short-description key.
-        // extractFrontmatterField handles only top-level keys; parse the metadata block
-        // by looking for "  short-description:" directly.
-        const metaMatch = frontmatter.match(/^[ \t]*metadata\s*:\s*\n((?:[ \t]+.*\n?)*)/m);
-        if (metaMatch) {
-          const metaBlock = metaMatch[1];
-          const sdMatch = metaBlock.match(/^[ \t]+short-description\s*:\s*(.+)$/m);
-          if (sdMatch) {
-            // Unescape YAML double-quoted scalar escapes before embedding.
-            // convertClaudeCommandToCodexSkill always emits a double-quoted
-            // value (via yamlQuote) so only double-quote unescaping is needed.
-            let raw = sdMatch[1].trim();
-            if (raw.startsWith('"') && raw.endsWith('"')) {
-              // Strip outer double-quotes and decode \" → " and \\ → \
-              raw = raw.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-            } else {
-              // Single-quoted or unquoted: strip surrounding quotes/whitespace
-              raw = raw.replace(/^["']|["']$/g, '');
-            }
-            shortDesc = raw;
-          }
-        }
-        if (!shortDesc) {
-          shortDesc = extractFrontmatterField(frontmatter, 'description') || '';
-        }
+      // Symlink guard: if agents/ is a symlink pointing outside the skills tree,
+      // deleting through it could escape the tree. Skip this dir entirely.
+      let agentsStat;
+      try { agentsStat = fs.lstatSync(agentsSubdir); } catch (_e) { continue; }
+      if (agentsStat.isSymbolicLink()) continue;
+      if (fs.existsSync(sidecarPath)) {
+        fs.rmSync(sidecarPath);
       }
-      if (!shortDesc) {
-        shortDesc = `Run GSD workflow ${entry.name}.`;
+      // Prune the agents/ dir only if it is now empty (leave it if other files remain).
+      if (fs.existsSync(agentsSubdir) && fs.readdirSync(agentsSubdir).length === 0) {
+        fs.rmdirSync(agentsSubdir);
       }
-      const yamlContent = generateCodexSkillMetadataYaml(entry.name, shortDesc);
-      const agentsSubdir = path.join(skillDir, 'agents');
-      fs.mkdirSync(agentsSubdir, { recursive: true });
-      fs.writeFileSync(path.join(agentsSubdir, 'openai.yaml'), yamlContent);
     } catch (_err) {
-      // Fail open — missing or unreadable SKILL.md must not block the install.
+      // Fail open — a single bad dir must not block the install.
     }
   }
 }
@@ -9841,14 +9786,14 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     const scope = isGlobal ? 'global' : 'local';
     installRuntimeArtifacts(runtime, targetDir, scope, _resolvedProfile);
 
-    // #774 — Codex only: write agents/openai.yaml TUI chip metadata alongside each
-    // installed skill so the /skills popup shows name + description for each gsd-* skill.
-    // The SkillMetadataFile is loaded by codex-rs/core-skills/src/loader.rs from
-    // <skill-dir>/agents/openai.yaml; absence is silently tolerated (fails open).
-    // We parse the SKILL.md frontmatter to extract short-description already emitted
-    // by convertClaudeCommandToCodexSkill and use it as the TUI chip description.
+    // #1326 — Codex only: remove stale agents/openai.yaml sidecars from managed
+    // gsd-* skill dirs. Prior installs wrote these files so Codex would show a
+    // display name and description in the /skills TUI popup. Recent Codex builds
+    // index BOTH SKILL.md and the sidecar, causing each GSD skill to appear twice
+    // in autocomplete. Cleaning them up fixes the duplication; SKILL.md alone is
+    // sufficient for Codex discovery. User-owned dirs are never touched.
     if (isCodex) {
-      writeCodexSkillMetadataFiles(path.join(targetDir, 'skills'));
+      cleanupCodexSkillMetadataSidecars(path.join(targetDir, 'skills'));
     }
 
     // Hermes only: write DESCRIPTION.md for the gsd/ category after layout install
@@ -12130,8 +12075,7 @@ module.exports = {
     convertClaudeToGeminiAgent,
     convertClaudeAgentToCodexAgent,
     generateCodexAgentToml,
-    generateCodexSkillMetadataYaml,
-    writeCodexSkillMetadataFiles,
+    cleanupCodexSkillMetadataSidecars,
     generateCodexConfigBlock,
     stripGsdFromCodexConfig,
     migrateCodexHooksMapFormat,
