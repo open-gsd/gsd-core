@@ -4166,3 +4166,794 @@ describe('#1257 — planned-phase and begin-phase pipe-table regressions', () =>
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T6 section-splice characterization tests (ADR-1372 / #1398)
+//
+// Covers the migrated cmdState* write-ops across a matrix of fixture variants:
+//   inline (standard frontmatter + inline section text)
+//   trailing-blanks (sections with extra blank lines)
+//   CRLF (Windows line endings)
+//   no-frontmatter (bare body only)
+//   nested-acc (Accumulated Context with Session Notes subsection)
+//   no-current-pos (absent Current Position section)
+//   post-milestone (fresh milestone, prior progress=100%)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('T6 section-splice characterization — record-session', () => {
+  // Fixtures used across these tests
+  const STATE_WITH_SESSION = [
+    '---',
+    "gsd_state_version: '1.0'",
+    'milestone: v1.0',
+    'milestone_name: TestMilestone',
+    'status: executing',
+    "last_updated: '2026-01-01T00:00:00.000Z'",
+    "last_activity: '2026-01-01'",
+    '---',
+    '',
+    '# Project State',
+    '',
+    '## Session',
+    '',
+    '**Last session:** 2026-01-01T00:00:00.000Z',
+    '**Stopped at:** None',
+    '**Resume file:** None',
+    '',
+  ].join('\n');
+
+  const STATE_NO_SESSION_LABELS = [
+    '# Project State',
+    '',
+    '**Current focus:** Phase 2',
+    '',
+    '## Current Position',
+    '',
+    'Phase: 2',
+    'Plan: 1 of 4',
+    'Status: Executing Phase 2',
+    'Last Activity: 2026-01-01',
+    '',
+    '## Decisions Made',
+    '',
+    '- [Phase 1]: Chose PostgreSQL',
+    '',
+  ].join('\n');
+
+  test('record-session no-op: no session fields → recorded:false, STATE.md byte-unchanged', () => {
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_NO_SESSION_LABELS);
+      const result = runGsdTools(['state', 'record-session'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.recorded, false, 'recorded must be false when no session fields exist');
+      // milestone_name must NOT be trampled (#952 no-op guard)
+      const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
+      assert.strictEqual(after, STATE_NO_SESSION_LABELS, 'STATE.md must be byte-unchanged on no-op');
+    } finally {
+      cleanup(d);
+    }
+  });
+
+  test('record-session --stopped-at updates Stopped at field in Session section', () => {
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_WITH_SESSION);
+      const result = runGsdTools(['state', 'record-session', '--stopped-at', '14.3'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.recorded, true, 'recorded must be true when session fields found');
+      assert.ok(Array.isArray(output.updated), 'updated must be an array');
+      const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
+      assert.ok(after.includes('**Stopped at:** 14.3'), 'Stopped at field must be updated to 14.3');
+      // milestone_name must be preserved (not trampled)
+      assert.ok(after.includes('milestone_name: TestMilestone'), 'milestone_name must be preserved');
+    } finally {
+      cleanup(d);
+    }
+  });
+
+  test('record-session --resume-file updates Resume file field in Session section', () => {
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_WITH_SESSION);
+      const result = runGsdTools(['state', 'record-session', '--resume-file', 'plan-3.md'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.recorded, true, 'recorded must be true');
+      const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
+      assert.ok(after.includes('**Resume file:** plan-3.md'), 'Resume file field must be updated to plan-3.md');
+    } finally {
+      cleanup(d);
+    }
+  });
+});
+
+describe('T6 section-splice characterization — add-decision', () => {
+  const STATE_INLINE = [
+    '---',
+    "gsd_state_version: '1.0'",
+    'milestone: v1.0',
+    'milestone_name: TestMilestone',
+    'status: executing',
+    '---',
+    '',
+    '# Project State',
+    '',
+    '## Decisions Made',
+    '',
+    '- [Phase 1]: Use Node.js for tooling',
+    '',
+    '### Blockers',
+    '',
+    'None yet.',
+    '',
+  ].join('\n');
+
+  const STATE_TRAILING_BLANKS = [
+    '---',
+    "gsd_state_version: '1.0'",
+    'status: planning',
+    '---',
+    '',
+    '# Project State',
+    '',
+    '## Current Position',
+    '',
+    'Phase: 1',
+    '',
+    'Status: Executing Phase 1',
+    'Last Activity: 2026-01-01',
+    '',
+    '',
+    '## Decisions Made',
+    '',
+    '- [Phase 1]: First decision',
+    '',
+    '',
+    '### Blockers',
+    '',
+    '- Bug in auth service',
+    '',
+  ].join('\n');
+
+  const STATE_NO_DECISIONS = [
+    '---',
+    "gsd_state_version: '1.0'",
+    'status: planning',
+    '---',
+    '',
+    '# Project State',
+    '',
+    '### Blockers',
+    '',
+    'None.',
+    '',
+  ].join('\n');
+
+  test('add-decision appends to existing Decisions Made section (inline fixture)', () => {
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_INLINE);
+      const result = runGsdTools(['state', 'add-decision', '--phase', '2', '--summary', 'Use Docker for builds'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.added, true, 'added must be true');
+      const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
+      assert.ok(after.includes('- [Phase 2]: Use Docker for builds'), 'new decision entry must be present');
+      assert.ok(after.includes('- [Phase 1]: Use Node.js for tooling'), 'existing decision must be preserved');
+    } finally {
+      cleanup(d);
+    }
+  });
+
+  test('add-decision appends to Decisions Made section with trailing blank lines (trailing-blanks fixture)', () => {
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_TRAILING_BLANKS);
+      const result = runGsdTools(['state', 'add-decision', '--phase', '3', '--summary', 'Add monitoring'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.added, true, 'added must be true');
+      const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
+      assert.ok(after.includes('- [Phase 3]: Add monitoring'), 'new decision must be present');
+      assert.ok(after.includes('- [Phase 1]: First decision'), 'original decision must be preserved');
+    } finally {
+      cleanup(d);
+    }
+  });
+
+  test('add-decision creates Decisions section when absent (DWIM)', () => {
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_NO_DECISIONS);
+      const result = runGsdTools(['state', 'add-decision', '--phase', '1', '--summary', 'Use Node.js'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.added, true, 'added must be true');
+      const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
+      assert.ok(after.includes('- [Phase 1]: Use Node.js'), 'decision must be present even when section was absent');
+    } finally {
+      cleanup(d);
+    }
+  });
+});
+
+describe('T6 section-splice characterization — add-blocker', () => {
+  const STATE_INLINE_WITH_BLOCKERS = [
+    '---',
+    "gsd_state_version: '1.0'",
+    'status: executing',
+    '---',
+    '',
+    '# Project State',
+    '',
+    '## Decisions Made',
+    '',
+    '- [Phase 1]: Use Node.js for tooling',
+    '',
+    '### Blockers',
+    '',
+    'None yet.',
+    '',
+  ].join('\n');
+
+  const STATE_CRLF = '---\r\ngsd_state_version: 1.0\r\nstatus: executing\r\n---\r\n\r\n# Project State\r\n\r\n## Current Position\r\n\r\nStatus: Executing Phase 2\r\nLast Activity: 2026-01-01\r\n\r\n### Blockers\r\n\r\nNone.\r\n';
+
+  const STATE_NO_BLOCKERS_SECTION = [
+    '# Project State',
+    '',
+    '## Current Position',
+    '',
+    'Phase: 2',
+    '',
+  ].join('\n');
+
+  test('add-blocker appends to existing Blockers section (inline fixture)', () => {
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_INLINE_WITH_BLOCKERS);
+      const result = runGsdTools(['state', 'add-blocker', '--text', 'Flaky CI on Windows'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.added, true, 'added must be true');
+      assert.strictEqual(output.blocker, 'Flaky CI on Windows', 'blocker text must match');
+      const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
+      assert.ok(after.includes('- Flaky CI on Windows'), 'blocker entry must be present');
+    } finally {
+      cleanup(d);
+    }
+  });
+
+  test('add-blocker appends to existing Blockers section (CRLF fixture)', () => {
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_CRLF);
+      const result = runGsdTools(['state', 'add-blocker', '--text', 'NFS mount issue'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.added, true, 'added must be true');
+      const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
+      assert.ok(after.includes('NFS mount issue'), 'blocker entry must be present in CRLF file');
+    } finally {
+      cleanup(d);
+    }
+  });
+
+  test('add-blocker creates Blockers section when absent (DWIM)', () => {
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_NO_BLOCKERS_SECTION);
+      const result = runGsdTools(['state', 'add-blocker', '--text', 'Build pipeline broken'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.added, true, 'added must be true');
+      const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
+      assert.ok(after.includes('Build pipeline broken'), 'blocker must be present even when section was absent');
+    } finally {
+      cleanup(d);
+    }
+  });
+});
+
+describe('T6 section-splice characterization — resolve-blocker', () => {
+  const STATE_WITH_BLOCKERS = [
+    '---',
+    "gsd_state_version: '1.0'",
+    'status: planning',
+    '---',
+    '',
+    '# Project State',
+    '',
+    '## Decisions Made',
+    '',
+    '- [Phase 1]: First decision',
+    '',
+    '',
+    '### Blockers',
+    '',
+    '- Bug in auth service',
+    '- Another blocker',
+    '',
+    '### Recently Completed',
+    '',
+    '- Phase 1 Plan 1',
+    '',
+  ].join('\n');
+
+  test('resolve-blocker removes target blocker, preserves others (trailing-blanks fixture)', () => {
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_WITH_BLOCKERS);
+      const result = runGsdTools(['state', 'resolve-blocker', '--text', 'Bug in auth service'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.resolved, true, 'resolved must be true');
+      assert.strictEqual(output.blocker, 'Bug in auth service', 'resolved blocker text must match');
+      const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
+      assert.ok(!after.includes('- Bug in auth service'), 'resolved blocker must be removed');
+      assert.ok(after.includes('Another blocker'), 'unrelated blocker must be preserved');
+    } finally {
+      cleanup(d);
+    }
+  });
+});
+
+describe('T6 section-splice characterization — add-roadmap-evolution', () => {
+  const STATE_NESTED_ACC = [
+    '---',
+    "gsd_state_version: '1.0'",
+    'status: executing',
+    '---',
+    '',
+    '# Project State',
+    '',
+    '## Current Position',
+    '',
+    'Phase: 3',
+    'Status: Executing Phase 3',
+    '',
+    '## Decisions Made',
+    '',
+    '- [Phase 1]: Use TypeScript',
+    '- [Phase 2]: Use Jest',
+    '',
+    '### Blockers',
+    '',
+    'None.',
+    '',
+    '## Accumulated Context',
+    '',
+    'Some context text here.',
+    '',
+    '### Roadmap Evolution',
+    '',
+    '- Phase 1 added: Initial planning',
+    '- Phase 2 changed: Scope updated',
+    '',
+    '### Session Notes',
+    '',
+    'Some notes.',
+    '',
+    '## Session',
+    '',
+    '**Last session:** 2026-01-01T00:00:00.000Z',
+    '**Stopped at:** None',
+    '**Resume file:** None',
+    '',
+  ].join('\n');
+
+  const STATE_INLINE_WITH_ROAD_EVO = [
+    '---',
+    "gsd_state_version: '1.0'",
+    'status: executing',
+    '---',
+    '',
+    '# Project State',
+    '',
+    '## Accumulated Context',
+    '',
+    '### Roadmap Evolution',
+    '',
+    'None yet.',
+    '',
+  ].join('\n');
+
+  const STATE_NO_ACC_SECTION = [
+    '---',
+    "gsd_state_version: '1.0'",
+    'status: planning',
+    '---',
+    '',
+    '# Project State',
+    '',
+    '### Blockers',
+    '',
+    'None.',
+    '',
+  ].join('\n');
+
+  const STATE_CRLF_ROAD = '---\r\ngsd_state_version: 1.0\r\nstatus: executing\r\n---\r\n\r\n# Project State\r\n\r\n## Accumulated Context\r\n\r\n### Roadmap Evolution\r\n\r\n- Phase 1 added: Initial migration\r\n';
+
+  const STATE_POST_MILESTONE = [
+    '---',
+    "gsd_state_version: '1.0'",
+    'milestone: v2.0',
+    'milestone_name: NextMilestone',
+    'status: planning',
+    'progress:',
+    '  total_phases: 4',
+    '  completed_phases: 4',
+    '  total_plans: 12',
+    '  completed_plans: 12',
+    '  percent: 100',
+    '---',
+    '',
+    '# Project State',
+    '',
+    '## Current Position',
+    '',
+    'Phase: Not started (defining requirements)',
+    'Plan: —',
+    'Status: Defining requirements',
+    'Last activity: 2026-01-15 — Milestone v2.0 started',
+    '',
+    '## Accumulated Context',
+    '',
+    '### Roadmap Evolution',
+    '',
+    '- Phase 1 complete after Phase 1: Migration done',
+    '',
+  ].join('\n');
+
+  test('add-roadmap-evolution appends to existing Roadmap Evolution subsection (nested-acc fixture)', () => {
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_NESTED_ACC);
+      const result = runGsdTools(['state', 'add-roadmap-evolution', '--phase', '4', '--action', 'added', '--note', 'New API endpoint'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.added, true, 'added must be true');
+      assert.ok(output.entry.includes('Phase 4 added'), 'entry must reference phase 4 added');
+      const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
+      assert.ok(after.includes('- Phase 4 added: New API endpoint'), 'new entry must be present');
+      assert.ok(after.includes('- Phase 1 added: Initial planning'), 'existing entries must be preserved');
+      assert.ok(after.includes('- Phase 2 changed: Scope updated'), 'second existing entry must be preserved');
+      // Session Notes subsection must be preserved (not consumed by splice)
+      assert.ok(after.includes('### Session Notes'), 'Session Notes subsection must be preserved');
+    } finally {
+      cleanup(d);
+    }
+  });
+
+  test('add-roadmap-evolution creates Roadmap Evolution subsection when absent but acc section present', () => {
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_INLINE_WITH_ROAD_EVO);
+      const result = runGsdTools(['state', 'add-roadmap-evolution', '--phase', '3', '--action', 'changed', '--note', 'Scope updated significantly'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.added, true, 'added must be true');
+      const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
+      assert.ok(after.includes('- Phase 3 changed: Scope updated significantly'), 'new entry must be present');
+    } finally {
+      cleanup(d);
+    }
+  });
+
+  test('add-roadmap-evolution creates Accumulated Context and subsection when both absent (DWIM)', () => {
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_NO_ACC_SECTION);
+      const result = runGsdTools(['state', 'add-roadmap-evolution', '--phase', '1', '--action', 'added', '--note', 'Initial setup'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.added, true, 'added must be true');
+      const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
+      assert.ok(after.includes('- Phase 1 added: Initial setup'), 'new entry must be present');
+      assert.ok(after.includes('### Roadmap Evolution'), 'Roadmap Evolution subsection must be created');
+    } finally {
+      cleanup(d);
+    }
+  });
+
+  test('add-roadmap-evolution appends to Roadmap Evolution in CRLF file', () => {
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_CRLF_ROAD);
+      const result = runGsdTools(['state', 'add-roadmap-evolution', '--phase', '2', '--action', 'changed', '--note', 'CRLF test case'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.added, true, 'added must be true');
+      const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
+      assert.ok(after.includes('- Phase 2 changed: CRLF test case'), 'new CRLF entry must be present');
+      assert.ok(after.includes('- Phase 1 added: Initial migration'), 'existing CRLF entry must be preserved');
+    } finally {
+      cleanup(d);
+    }
+  });
+
+  test('add-roadmap-evolution appends to Roadmap Evolution in post-milestone STATE.md', () => {
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_POST_MILESTONE);
+      const result = runGsdTools(['state', 'add-roadmap-evolution', '--phase', '2', '--action', 'added', '--note', 'New phase inserted'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.added, true, 'added must be true');
+      const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
+      assert.ok(after.includes('- Phase 2 added: New phase inserted'), 'new entry must be present');
+      assert.ok(after.includes('- Phase 1 complete after Phase 1: Migration done'), 'prior entry must be preserved');
+      // Frontmatter milestone_name must NOT be trampled
+      assert.ok(after.includes('milestone_name: NextMilestone'), 'milestone_name must be preserved');
+    } finally {
+      cleanup(d);
+    }
+  });
+});
+
+describe('T6 section-splice characterization — begin-phase', () => {
+  const STATE_INLINE_POS = [
+    '---',
+    "gsd_state_version: '1.0'",
+    'milestone: v1.0',
+    'milestone_name: TestMilestone',
+    'status: executing',
+    '---',
+    '',
+    '# Project State',
+    '',
+    '## Current Position',
+    '',
+    'Phase: 1 (Setup)',
+    'Plan: 2 of 3',
+    'Status: Executing Phase 1',
+    'Last Activity: 2026-01-01',
+    'Last activity: 2026-01-01',
+    '',
+  ].join('\n');
+
+  const STATE_NO_FRONTMATTER_POS = [
+    '# Project State',
+    '',
+    '## Current Position',
+    '',
+    'Phase: 2',
+    'Plan: 1 of 4',
+    'Status: Executing Phase 2',
+    'Last Activity: 2026-01-01',
+    '',
+  ].join('\n');
+
+  const STATE_NO_CURRENT_POS = [
+    '---',
+    "gsd_state_version: '1.0'",
+    'status: planning',
+    '---',
+    '',
+    '# Project State',
+    '',
+    '## Decisions Made',
+    '',
+    '- [Phase 1]: First decision',
+    '',
+    '### Blockers',
+    '',
+    'None.',
+    '',
+  ].join('\n');
+
+  test('begin-phase updates Current Position and status (inline fixture)', () => {
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_INLINE_POS);
+      const result = runGsdTools(['state', 'begin-phase', '--phase', '2', '--name', 'Build', '--plans', '4'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+      assert.ok(Array.isArray(output.updated), 'updated must be an array');
+      const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
+      // Phase line must reflect new phase
+      assert.ok(/Phase:\s+2/.test(after), 'Phase line must reference phase 2');
+      // Plan counter must reset to 1 of 4
+      assert.ok(/Plan:\s+1 of 4/.test(after), 'Plan line must be reset to 1 of 4');
+      // Frontmatter status must be executing
+      assert.ok(/^status:\s+executing/m.test(after), 'frontmatter status must be executing');
+    } finally {
+      cleanup(d);
+    }
+  });
+
+  test('begin-phase updates Current Position without frontmatter (no-frontmatter fixture)', () => {
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_NO_FRONTMATTER_POS);
+      const result = runGsdTools(['state', 'begin-phase', '--phase', '3', '--plans', '2'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+      assert.ok(Array.isArray(output.updated), 'updated must be an array');
+      const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
+      assert.ok(/Phase:\s+3/.test(after), 'Phase line must reference phase 3');
+    } finally {
+      cleanup(d);
+    }
+  });
+
+  test('begin-phase handles absent Current Position section gracefully', () => {
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_NO_CURRENT_POS);
+      const result = runGsdTools(['state', 'begin-phase', '--phase', '1', '--name', 'Setup', '--plans', '3'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+      // Expect phase, phase_name and plan_count in response even if fields weren't updated
+      assert.strictEqual(output.phase, '1', 'phase must be reported in response');
+      assert.strictEqual(output.plan_count, 3, 'plan_count must be reported in response');
+    } finally {
+      cleanup(d);
+    }
+  });
+});
+
+describe('T6 section-splice characterization — complete-phase', () => {
+  const STATE_INLINE_EXEC = [
+    '---',
+    "gsd_state_version: '1.0'",
+    'status: executing',
+    '---',
+    '',
+    '# Project State',
+    '',
+    '## Current Position',
+    '',
+    'Phase: 1 (Setup)',
+    'Plan: 2 of 3',
+    'Status: Executing Phase 1',
+    'Last Activity: 2026-01-01',
+    '',
+  ].join('\n');
+
+  const STATE_TRAILING_BLANKS_EXEC = [
+    '---',
+    "gsd_state_version: '1.0'",
+    'status: planning',
+    '---',
+    '',
+    '# Project State',
+    '',
+    '## Current Position',
+    '',
+    'Phase: 1',
+    '',
+    'Status: Executing Phase 1',
+    'Last Activity: 2026-01-01',
+    '',
+    '',
+    '## Decisions Made',
+    '',
+    '- [Phase 1]: First decision',
+    '',
+  ].join('\n');
+
+  const STATE_CRLF_EXEC = '---\r\ngsd_state_version: 1.0\r\nstatus: executing\r\n---\r\n\r\n# Project State\r\n\r\n## Current Position\r\n\r\nStatus: Executing Phase 2\r\nLast Activity: 2026-01-01\r\n';
+
+  test('complete-phase marks current phase complete and sets frontmatter status (inline fixture)', () => {
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_INLINE_EXEC);
+      const result = runGsdTools(['state', 'complete-phase'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+      assert.ok(Array.isArray(output.updated), 'updated must be an array');
+      assert.ok(output.updated.includes('Status'), 'Status must be in updated list');
+      const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
+      assert.ok(/^status:\s+completed/m.test(after), 'frontmatter status must be completed');
+      assert.ok(/Status:\s+Phase\s+1\s+complete/i.test(after), 'body Status field must reflect phase complete');
+    } finally {
+      cleanup(d);
+    }
+  });
+
+  test('complete-phase works correctly with trailing blank lines in Current Position (trailing-blanks fixture)', () => {
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_TRAILING_BLANKS_EXEC);
+      const result = runGsdTools(['state', 'complete-phase'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+      assert.ok(Array.isArray(output.updated), 'updated must be an array');
+      const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
+      assert.ok(/^status:\s+completed/m.test(after), 'frontmatter status must be completed');
+    } finally {
+      cleanup(d);
+    }
+  });
+
+  test('complete-phase works correctly on CRLF STATE.md', () => {
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_CRLF_EXEC);
+      const result = runGsdTools(['state', 'complete-phase', '--phase', '2'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+      assert.ok(Array.isArray(output.updated), 'updated must be an array');
+      const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
+      assert.ok(/^status:\s+completed/m.test(after), 'frontmatter status must be completed after CRLF complete-phase');
+    } finally {
+      cleanup(d);
+    }
+  });
+});
+
+describe('T6 section-splice characterization — milestone-switch', () => {
+  const STATE_INLINE_MS = [
+    '---',
+    "gsd_state_version: '1.0'",
+    'milestone: v1.0',
+    'milestone_name: OldMilestone',
+    'status: executing',
+    '---',
+    '',
+    '# Project State',
+    '',
+    '## Current Position',
+    '',
+    'Phase: 1 (Setup)',
+    'Plan: 1 of 3',
+    'Status: Executing Phase 1',
+    '',
+  ].join('\n');
+
+  const STATE_NO_POSITION_MS = [
+    '---',
+    "gsd_state_version: '1.0'",
+    'milestone: v1.0',
+    'milestone_name: OldMilestone',
+    'status: planning',
+    '---',
+    '',
+    '# Project State',
+    '',
+    '## Decisions Made',
+    '',
+    '- [Phase 1]: First decision',
+    '',
+    '### Blockers',
+    '',
+    'None.',
+    '',
+  ].join('\n');
+
+  test('milestone-switch updates milestone and milestone_name in frontmatter (position present)', () => {
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_INLINE_MS);
+      const result = runGsdTools(['state', 'milestone-switch', '--milestone', 'v2.0', '--name', 'NextMilestone'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.switched, true, 'switched must be true');
+      assert.strictEqual(output.version, 'v2.0', 'version must be v2.0');
+      const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
+      assert.ok(/^milestone:\s+v2\.0/m.test(after), 'frontmatter milestone must be v2.0');
+      assert.ok(/^milestone_name:\s+NextMilestone/m.test(after), 'frontmatter milestone_name must be NextMilestone');
+      assert.ok(/^status:\s+planning/m.test(after), 'frontmatter status must be reset to planning on milestone switch');
+    } finally {
+      cleanup(d);
+    }
+  });
+
+  test('milestone-switch updates frontmatter when Current Position is absent', () => {
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_NO_POSITION_MS);
+      const result = runGsdTools(['state', 'milestone-switch', '--milestone', 'v3.0'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.switched, true, 'switched must be true');
+      const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
+      assert.ok(/^milestone:\s+v3\.0/m.test(after), 'frontmatter milestone must be v3.0');
+    } finally {
+      cleanup(d);
+    }
+  });
+});

@@ -41,6 +41,7 @@ import {
   KNOWN_STATUS_PATTERNS,
   stateReplaceFieldIfTemplate,
 } from './state-document.cjs';
+import { tokenizeHeadings } from './markdown-sectionizer.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -153,6 +154,16 @@ process.on('exit', () => {
 
 // Hoisted to module scope — compiled once, not per call (#320). Stateless (/i, used with .match).
 const byPhaseTablePattern = /(\|\s*Phase\s*\|\s*Plans\s*\|\s*Total\s*\|\s*Avg\/Plan\s*\|[ \t]*\n\|(?:[- :\t]+\|)+[ \t]*\n)((?:[ \t]*\|[^\n]*\n)*)(?=\n|$)/i;
+
+// ─── ADR-1372 T6: seam-based section splice helper ───────────────────────────
+
+// Shared stop predicates corresponding to the regex lookaheads used in state.cts:
+//   STOP_H2_PLUS : (?=\n##|$)            — stops at any heading with level ≥ 2
+//   STOP_H2_H3   : (?=\n###?|\n##[^#]|$) — stops at level 2 or 3
+//   STOP_H2_ONLY : (?=\n##[^#]|$)        — stops at level 2 only
+const STOP_H2_PLUS = (lv: number): boolean => lv >= 2;
+const STOP_H2_H3 = (lv: number): boolean => lv === 2 || lv === 3;
+const STOP_H2_ONLY = (lv: number): boolean => lv === 2;
 
 function cmdStateLoad(cwd: string, raw: boolean): void {
   const config = loadConfig(cwd);
@@ -368,11 +379,26 @@ function stateReplaceFieldWithFallback(content: string, primary: string, fallbac
  * Fixes #1365: advance-plan could not update Status/Last activity after begin-phase.
  */
 function updateCurrentPositionFields(content: string, fields: { status?: string; lastActivity?: string; plan?: string }): string {
-  const posPattern = /(##\s*Current Position\s*\n)([\s\S]*?)(?=\n##|$)/i;
-  const posMatch = content.match(posPattern);
-  if (!posMatch) return content;
+  // ADR-1372 T6: locate ## Current Position using tokenizeHeadings, extract the
+  // untrimmed body span, apply field edits, then splice the modified body back in.
+  // Stop predicate mirrors (?=\n##|$): any heading with level ≥ 2.
+  const headings = tokenizeHeadings(content);
+  const posIdx = headings.findIndex(h => h.level === 2 && /^current\s+position$/i.test(h.text));
+  if (posIdx === -1) return content;
 
-  let posBody = posMatch[2];
+  const posHeading = headings[posIdx];
+  const lines = content.split('\n');
+  const posHeadingLine = lines[posHeading.line - 1];
+  const posBodyStart = posHeading.offset + posHeadingLine.length + 1;
+  let posBodyEnd = content.length;
+  for (let j = posIdx + 1; j < headings.length; j++) {
+    if (STOP_H2_PLUS(headings[j].level)) {
+      posBodyEnd = headings[j].offset - 1;
+      break;
+    }
+  }
+
+  let posBody = content.slice(posBodyStart, posBodyEnd);
   const statusDefaults = KNOWN_TEMPLATE_DEFAULTS['Status'];
   const lastActivityDefaults = KNOWN_TEMPLATE_DEFAULTS['Last Activity'];
 
@@ -442,7 +468,8 @@ function updateCurrentPositionFields(content: string, fields: { status?: string;
     }
   }
 
-  return content.replace(posPattern, () => `${posMatch[1]}${posBody}`);
+  // Splice the modified body back in place of the original untrimmed span.
+  return content.slice(0, posBodyStart) + posBody + content.slice(posBodyEnd);
 }
 
 function cmdStateAdvancePlan(cwd: string, raw: boolean): void {
@@ -656,17 +683,32 @@ function cmdStateAddDecision(cwd: string, options: StateAddDecisionOptions, raw:
   let created = false;
 
   readModifyWriteStateMd(statePath, (content) => {
-    // Find Decisions section (various heading patterns)
-    const sectionPattern = /(###?\s*(?:Decisions|Decisions Made|Accumulated.*Decisions)\s*\n)([\s\S]*?)(?=\n###?|\n##[^#]|$)/i;
-    const match = content.match(sectionPattern);
+    // ADR-1372 T6: find Decisions section via tokenizeHeadings; stop at level 2 or 3.
+    // Mirrors /(###?\s*(?:Decisions|Decisions Made|Accumulated.*Decisions)\s*\n)([\s\S]*?)(?=\n###?|\n##[^#]|$)/i
+    const decisionsPred = (lv: number, text: string): boolean =>
+      (lv === 2 || lv === 3) && /^(?:Decisions|Decisions Made|Accumulated.*Decisions)$/i.test(text);
+    const sectionBody = (() => {
+      const hs = tokenizeHeadings(content);
+      const i = hs.findIndex(h => decisionsPred(h.level, h.text));
+      if (i === -1) return null;
+      const h = hs[i];
+      const ls = content.split('\n');
+      const hl = ls[h.line - 1];
+      const bs = h.offset + hl.length + 1;
+      let se = content.length;
+      for (let j = i + 1; j < hs.length; j++) {
+        if (STOP_H2_H3(hs[j].level)) { se = hs[j].offset - 1; break; }
+      }
+      return { bodyStart: bs, bodyEnd: se, body: content.slice(bs, se) };
+    })();
 
-    if (match) {
-      let sectionBody = match[2];
+    if (sectionBody !== null) {
+      let newBody = sectionBody.body;
       // Remove placeholders
-      sectionBody = sectionBody.replace(/None yet\.?\s*\n?/gi, '').replace(/No decisions yet\.?\s*\n?/gi, '');
-      sectionBody = sectionBody.trimEnd() + '\n' + entry + '\n';
+      newBody = newBody.replace(/None yet\.?\s*\n?/gi, '').replace(/No decisions yet\.?\s*\n?/gi, '');
+      newBody = newBody.trimEnd() + '\n' + entry + '\n';
       _added = true;
-      return content.replace(sectionPattern, (_match, header: string) => `${header}${sectionBody}`);
+      return content.slice(0, sectionBody.bodyStart) + newBody + content.slice(sectionBody.bodyEnd);
     }
 
     // Section absent — DWIM: auto-create canonical ## Decisions scaffold,
@@ -709,15 +751,31 @@ function cmdStateAddBlocker(cwd: string, text: string | StateAddBlockerOptions, 
   let created = false;
 
   readModifyWriteStateMd(statePath, (content) => {
-    const sectionPattern = /(###?\s*(?:Blockers|Blockers\/Concerns|Concerns)\s*\n)([\s\S]*?)(?=\n###?|\n##[^#]|$)/i;
-    const match = content.match(sectionPattern);
+    // ADR-1372 T6: find Blockers/Concerns section via tokenizeHeadings; stop at level 2 or 3.
+    // Mirrors /(###?\s*(?:Blockers|Blockers\/Concerns|Concerns)\s*\n)([\s\S]*?)(?=\n###?|\n##[^#]|$)/i
+    const blockersPred = (lv: number, text: string): boolean =>
+      (lv === 2 || lv === 3) && /^(?:Blockers|Blockers\/Concerns|Concerns)$/i.test(text);
+    const sectionSpan = (() => {
+      const hs = tokenizeHeadings(content);
+      const i = hs.findIndex(h => blockersPred(h.level, h.text));
+      if (i === -1) return null;
+      const h = hs[i];
+      const ls = content.split('\n');
+      const hl = ls[h.line - 1];
+      const bs = h.offset + hl.length + 1;
+      let se = content.length;
+      for (let j = i + 1; j < hs.length; j++) {
+        if (STOP_H2_H3(hs[j].level)) { se = hs[j].offset - 1; break; }
+      }
+      return { bodyStart: bs, bodyEnd: se, body: content.slice(bs, se) };
+    })();
 
-    if (match) {
-      let sectionBody = match[2];
+    if (sectionSpan !== null) {
+      let sectionBody = sectionSpan.body;
       sectionBody = sectionBody.replace(/None\.?\s*\n?/gi, '').replace(/None yet\.?\s*\n?/gi, '');
       sectionBody = sectionBody.trimEnd() + '\n' + entry + '\n';
       _added = true;
-      return content.replace(sectionPattern, (_match, header: string) => `${header}${sectionBody}`);
+      return content.slice(0, sectionSpan.bodyStart) + sectionBody + content.slice(sectionSpan.bodyEnd);
     }
 
     // Section absent — DWIM: auto-create canonical ### Blockers scaffold.
@@ -777,20 +835,45 @@ function cmdStateAddRoadmapEvolution(cwd: string, options: StateAddRoadmapEvolut
   // Section boundaries mirror the sibling handlers (add-decision/add-blocker):
   // a trailing CR on a CRLF STATE.md is absorbed by the lazy body and trimmed,
   // so following sections are preserved without data loss (see the CRLF test).
+  //
+  // ADR-1372 T6: accPattern and subPattern migrated to tokenizeHeadings.
+  // accPattern  = /(##\s*Accumulated Context\s*\n)([\s\S]*?)(?=\n##[^#]|$)/i
+  //               → stop at level 2 only (STOP_H2_ONLY)
+  // subPattern  = /(###\s*Roadmap Evolution\s*\n)([\s\S]*?)(?=\n###?|$)/i
+  //               → applied to accBody; stop at level 2 or 3 (STOP_H2_H3)
   readModifyWriteStateMd(statePath, (content) => {
-    const accPattern = /(##\s*Accumulated Context\s*\n)([\s\S]*?)(?=\n##[^#]|$)/i;
-    const accMatch = content.match(accPattern);
+    // Locate ## Accumulated Context and extract its untrimmed body span.
+    const accHs = tokenizeHeadings(content);
+    const accIdx = accHs.findIndex(h => h.level === 2 && /^accumulated\s+context$/i.test(h.text));
 
-    if (accMatch) {
-      const accHeader = accMatch[1];
-      const accBody = accMatch[2];
+    if (accIdx !== -1) {
+      const accH = accHs[accIdx];
+      const contentLines = content.split('\n');
+      const accHL = contentLines[accH.line - 1];
+      const accBodyStart = accH.offset + accHL.length + 1;
+      let accBodyEnd = content.length;
+      for (let j = accIdx + 1; j < accHs.length; j++) {
+        if (STOP_H2_ONLY(accHs[j].level)) { accBodyEnd = accHs[j].offset - 1; break; }
+      }
+      const accBody = content.slice(accBodyStart, accBodyEnd);
+
       // Find `### Roadmap Evolution` WITHIN the Accumulated Context body only.
-      // Bounded by the next h3/h2 or the end of the section body.
-      const subPattern = /(###\s*Roadmap Evolution\s*\n)([\s\S]*?)(?=\n###?|$)/i;
-      const subMatch = accBody.match(subPattern);
+      // tokenizeHeadings is applied to accBody to scope the search.
+      // Stop predicate mirrors (?=\n###?|$): level 2 or 3.
+      const subHs = tokenizeHeadings(accBody);
+      const subIdx = subHs.findIndex(h => h.level === 3 && /^roadmap\s+evolution$/i.test(h.text));
 
-      if (subMatch) {
-        let subBody = subMatch[2];
+      if (subIdx !== -1) {
+        const subH = subHs[subIdx];
+        const accLines = accBody.split('\n');
+        const subHL = accLines[subH.line - 1];
+        const subBodyStart = subH.offset + subHL.length + 1;
+        let subBodyEnd = accBody.length;
+        for (let j = subIdx + 1; j < subHs.length; j++) {
+          if (STOP_H2_H3(subHs[j].level)) { subBodyEnd = subHs[j].offset - 1; break; }
+        }
+        let subBody = accBody.slice(subBodyStart, subBodyEnd);
+
         // Dedupe: exact (trimmed) line already present is a no-op replay.
         if (subBody.split('\n').some((line) => line.trim() === entry.trim())) {
           duplicate = true;
@@ -798,15 +881,16 @@ function cmdStateAddRoadmapEvolution(cwd: string, options: StateAddRoadmapEvolut
         }
         subBody = subBody.replace(/None yet\.?\s*\n?/gi, '');
         subBody = subBody.trimEnd() + '\n' + entry + '\n';
-        const newAccBody = accBody.replace(subPattern, (_m, header: string) => `${header}${subBody}`);
-        return content.replace(accPattern, () => `${accHeader}${newAccBody}`);
+        // Splice subBody into accBody, then splice newAccBody into content.
+        const newAccBody = accBody.slice(0, subBodyStart) + subBody + accBody.slice(subBodyEnd);
+        return content.slice(0, accBodyStart) + newAccBody + content.slice(accBodyEnd);
       }
 
       // Subsection missing — append it at the end of the Accumulated Context body.
       subsectionCreated = true;
       const trimmedAcc = accBody.trimEnd();
       const block = `${trimmedAcc ? `${trimmedAcc}\n\n` : ''}### Roadmap Evolution\n\n${entry}\n`;
-      return content.replace(accPattern, () => `${accHeader}${block}`);
+      return content.slice(0, accBodyStart) + block + content.slice(accBodyEnd);
     }
 
     // No `## Accumulated Context` — DWIM: create both at end of file.
@@ -843,27 +927,35 @@ function cmdStateResolveBlocker(cwd: string, text: string, raw: boolean): void {
   let resolved = false;
 
   readModifyWriteStateMd(statePath, (content) => {
-    const sectionPattern = /(###?\s*(?:Blockers|Blockers\/Concerns|Concerns)\s*\n)([\s\S]*?)(?=\n###?|\n##[^#]|$)/i;
-    const match = content.match(sectionPattern);
+    // ADR-1372 T6: find Blockers/Concerns section via tokenizeHeadings; stop at level 2 or 3.
+    // Mirrors /(###?\s*(?:Blockers|Blockers\/Concerns|Concerns)\s*\n)([\s\S]*?)(?=\n###?|\n##[^#]|$)/i
+    const hs = tokenizeHeadings(content);
+    const i = hs.findIndex(h => (h.level === 2 || h.level === 3) && /^(?:Blockers|Blockers\/Concerns|Concerns)$/i.test(h.text));
+    if (i === -1) return content;
 
-    if (match) {
-      const sectionBody = match[2];
-      const lines = sectionBody.split('\n');
-      const filtered = lines.filter(line => {
-        if (!line.startsWith('- ')) return true;
-        return !line.toLowerCase().includes(text.toLowerCase());
-      });
-
-      let newBody = filtered.join('\n');
-      // If section is now empty, add placeholder
-      if (!newBody.trim() || !newBody.includes('- ')) {
-        newBody = 'None\n';
-      }
-
-      resolved = true;
-      return content.replace(sectionPattern, (_match, header: string) => `${header}${newBody}`);
+    const h = hs[i];
+    const ls = content.split('\n');
+    const hl = ls[h.line - 1];
+    const bs = h.offset + hl.length + 1;
+    let se = content.length;
+    for (let j = i + 1; j < hs.length; j++) {
+      if (STOP_H2_H3(hs[j].level)) { se = hs[j].offset - 1; break; }
     }
-    return content;
+    const sectionBody = content.slice(bs, se);
+    const lines = sectionBody.split('\n');
+    const filtered = lines.filter(line => {
+      if (!line.startsWith('- ')) return true;
+      return !line.toLowerCase().includes(text.toLowerCase());
+    });
+
+    let newBody = filtered.join('\n');
+    // If section is now empty, add placeholder
+    if (!newBody.trim() || !newBody.includes('- ')) {
+      newBody = 'None\n';
+    }
+
+    resolved = true;
+    return content.slice(0, bs) + newBody + content.slice(se);
   }, cwd);
 
   if (resolved) {
@@ -1880,11 +1972,20 @@ function cmdStateBeginPhase(cwd: string, phaseNumber: string | number, phaseName
       }
 
       // Update ## Current Position section (#1104, #1365)
-      const positionPattern = /(##\s*Current Position\s*\n)([\s\S]*?)(?=\n##|$)/i;
-      const positionMatch = body.match(positionPattern);
-      if (positionMatch) {
-        const header = positionMatch[1];
-        let posBody = positionMatch[2];
+      // ADR-1372 T6: positionPattern → tokenizeHeadings + spliceStateSection.
+      // Mirrors /(##\s*Current Position\s*\n)([\s\S]*?)(?=\n##|$)/i; stop at level ≥ 2.
+      const posHs = tokenizeHeadings(body);
+      const posIdx = posHs.findIndex(h => h.level === 2 && /^current\s+position$/i.test(h.text));
+      if (posIdx !== -1) {
+        const posH = posHs[posIdx];
+        const bodyLines = body.split('\n');
+        const posHL = bodyLines[posH.line - 1];
+        const posBodyStart = posH.offset + posHL.length + 1;
+        let posBodyEnd = body.length;
+        for (let j = posIdx + 1; j < posHs.length; j++) {
+          if (STOP_H2_PLUS(posHs[j].level)) { posBodyEnd = posHs[j].offset - 1; break; }
+        }
+        let posBody = body.slice(posBodyStart, posBodyEnd);
 
         // Update or insert Phase line
         const newPhase = `Phase: ${phaseNumber}${phaseName ? ` (${phaseName})` : ''} — EXECUTING`;
@@ -1934,21 +2035,29 @@ function cmdStateBeginPhase(cwd: string, phaseNumber: string | number, phaseName
           if (replaced !== null) posBody = replaced;
         }
 
-        body = body.replace(positionPattern, () => `${header}${posBody}`);
+        body = body.slice(0, posBodyStart) + posBody + body.slice(posBodyEnd);
         updated.push('Current Position');
       }
     } else {
       // Resume path: only update Last activity timestamp in Current Position
       // (do not touch Plan:, stopped_at, progress.percent, or plan counter)
-      const positionPattern = /(##\s*Current Position\s*\n)([\s\S]*?)(?=\n##|$)/i;
-      const positionMatch = body.match(positionPattern);
-      if (positionMatch) {
-        const header = positionMatch[1];
-        let posBody = positionMatch[2];
+      // ADR-1372 T6: positionPattern → tokenizeHeadings; stop at level ≥ 2.
+      const posHsR = tokenizeHeadings(body);
+      const posIdxR = posHsR.findIndex(h => h.level === 2 && /^current\s+position$/i.test(h.text));
+      if (posIdxR !== -1) {
+        const posHR = posHsR[posIdxR];
+        const bodyLinesR = body.split('\n');
+        const posHLR = bodyLinesR[posHR.line - 1];
+        const posBodyStartR = posHR.offset + posHLR.length + 1;
+        let posBodyEndR = body.length;
+        for (let j = posIdxR + 1; j < posHsR.length; j++) {
+          if (STOP_H2_PLUS(posHsR[j].level)) { posBodyEndR = posHsR[j].offset - 1; break; }
+        }
+        let posBody = body.slice(posBodyStartR, posBodyEndR);
         const resumeActivity = `Last activity: ${today} — Phase ${phaseNumber} execution resumed (wave continue)`;
         if (/^Last activity:/im.test(posBody)) {
           posBody = posBody.replace(/^Last activity:.*$/im, resumeActivity);
-          body = body.replace(positionPattern, () => `${header}${posBody}`);
+          body = body.slice(0, posBodyStartR) + posBody + body.slice(posBodyEndR);
           updated.push('Last activity (resume)');
         } else {
           // Pipe-table format in Current Position (#1255)
@@ -1956,7 +2065,7 @@ function cmdStateBeginPhase(cwd: string, phaseNumber: string | number, phaseName
             ?? stateReplaceField(posBody, 'Last activity', resumeActivity);
           if (replaced !== null) {
             posBody = replaced;
-            body = body.replace(positionPattern, () => `${header}${posBody}`);
+            body = body.slice(0, posBodyStartR) + posBody + body.slice(posBodyEndR);
             updated.push('Last activity (resume)');
           }
         }
@@ -2146,15 +2255,26 @@ function cmdStateMilestoneSwitch(cwd: string, version: string | undefined, name:
     const existingFm = extractFrontmatter(content) as Record<string, unknown>;
     const body = stripFrontmatter(content);
 
-    const positionPattern = /(##\s*Current Position\s*\n)([\s\S]*?)(?=\n##|$)/i;
+    // ADR-1372 T6: positionPattern → tokenizeHeadings + spliceStateSection.
+    // Mirrors /(##\s*Current Position\s*\n)([\s\S]*?)(?=\n##|$)/i; stop at level ≥ 2.
     const resetPositionBody =
       `\nPhase: Not started (defining requirements)\n` +
       `Plan: —\n` +
       `Status: Defining requirements\n` +
       `Last activity: ${today} — Milestone ${version} started\n\n`;
     let newBody: string;
-    if (positionPattern.test(body)) {
-      newBody = body.replace(positionPattern, (_m, header: string) => `${header}${resetPositionBody}`);
+    const msPosHs = tokenizeHeadings(body);
+    const msPosIdx = msPosHs.findIndex(h => h.level === 2 && /^current\s+position$/i.test(h.text));
+    if (msPosIdx !== -1) {
+      const msPosH = msPosHs[msPosIdx];
+      const msBodyLines = body.split('\n');
+      const msPosHL = msBodyLines[msPosH.line - 1];
+      const msPosBodyStart = msPosH.offset + msPosHL.length + 1;
+      let msPosBodyEnd = body.length;
+      for (let j = msPosIdx + 1; j < msPosHs.length; j++) {
+        if (STOP_H2_PLUS(msPosHs[j].level)) { msPosBodyEnd = msPosHs[j].offset - 1; break; }
+      }
+      newBody = body.slice(0, msPosBodyStart) + resetPositionBody + body.slice(msPosBodyEnd);
     } else {
       const preface = body.trim().length > 0 ? body : '# Project State\n';
       newBody = `${preface.trimEnd()}\n\n## Current Position\n${resetPositionBody}`;
@@ -2434,102 +2554,109 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): v
 
   // Shared pruning logic applied to both dry-run and real passes.
   // Returns { newContent, archivedSections }.
+  // ADR-1372 T6: all four inline section-collect regexes replaced with
+  // tokenizeHeadings + untrimmed-span splicing for byte-identical writes.
   function prunePass(content: string): { newContent: string; archivedSections: PrunedSection[] } {
     const sections: PrunedSection[] = [];
 
-    // Prune Decisions section: entries like "- [Phase N]: ..."
-    const decisionPattern = /(###?\s*(?:Decisions|Decisions Made|Accumulated.*Decisions)\s*\n)([\s\S]*?)(?=\n###?|\n##[^#]|$)/i;
-    const decMatch = content.match(decisionPattern);
-    if (decMatch) {
-      const lines = decMatch[2].split('\n');
-      const keep: string[] = [];
-      const archive: string[] = [];
-      for (const line of lines) {
-        const phaseMatch = line.match(/^\s*-\s*\[Phase\s+(\d+)/i);
-        if (phaseMatch && parseInt(phaseMatch[1], 10) <= cutoff) {
-          archive.push(line);
-        } else {
-          keep.push(line);
-        }
+    // Helper: locate a heading matching pred, extract untrimmed body [bs, se),
+    // apply transform, and splice back. Returns updated content.
+    // All prune-section patterns stop at level 2 or 3 (STOP_H2_H3).
+    function pruneSectionSpan(
+      c: string,
+      pred: (lv: number, text: string) => boolean,
+      transform: (body: string) => { keep: string[]; archive: string[] },
+      sectionName: string,
+    ): string {
+      const hs = tokenizeHeadings(c);
+      const i = hs.findIndex(h => pred(h.level, h.text));
+      if (i === -1) return c;
+      const h = hs[i];
+      const ls = c.split('\n');
+      const hl = ls[h.line - 1];
+      const bs = h.offset + hl.length + 1;
+      let se = c.length;
+      for (let j = i + 1; j < hs.length; j++) {
+        if (STOP_H2_H3(hs[j].level)) { se = hs[j].offset - 1; break; }
       }
+      const body = c.slice(bs, se);
+      const { keep, archive } = transform(body);
       if (archive.length > 0) {
-        sections.push({ section: 'Decisions', count: archive.length, lines: archive });
-        content = content.replace(decisionPattern, (_m, header: string) => `${header}${keep.join('\n')}`);
+        sections.push({ section: sectionName, count: archive.length, lines: archive });
+        return c.slice(0, bs) + keep.join('\n') + c.slice(se);
       }
+      return c;
     }
 
-    // Prune Recently Completed section: entries mentioning phase numbers
-    const recentPattern = /(###?\s*Recently Completed\s*\n)([\s\S]*?)(?=\n###?|\n##[^#]|$)/i;
-    const recMatch = content.match(recentPattern);
-    if (recMatch) {
-      const lines = recMatch[2].split('\n');
-      const keep: string[] = [];
-      const archive: string[] = [];
-      for (const line of lines) {
-        const phaseMatch = line.match(/Phase\s+(\d+)/i);
-        if (phaseMatch && parseInt(phaseMatch[1], 10) <= cutoff) {
-          archive.push(line);
-        } else {
-          keep.push(line);
+    // Prune Decisions section: entries like "- [Phase N]: ..."
+    content = pruneSectionSpan(
+      content,
+      (lv, text) => (lv === 2 || lv === 3) && /^(?:Decisions|Decisions Made|Accumulated.*Decisions)$/i.test(text),
+      (body) => {
+        const keep: string[] = [], archive: string[] = [];
+        for (const line of body.split('\n')) {
+          const phaseMatch = line.match(/^\s*-\s*\[Phase\s+(\d+)/i);
+          if (phaseMatch && parseInt(phaseMatch[1], 10) <= cutoff) { archive.push(line); } else { keep.push(line); }
         }
-      }
-      if (archive.length > 0) {
-        sections.push({ section: 'Recently Completed', count: archive.length, lines: archive });
-        content = content.replace(recentPattern, (_m, header: string) => `${header}${keep.join('\n')}`);
-      }
-    }
+        return { keep, archive };
+      },
+      'Decisions',
+    );
+
+    // Prune Recently Completed section: entries mentioning phase numbers
+    content = pruneSectionSpan(
+      content,
+      (lv, text) => (lv === 2 || lv === 3) && /^recently\s+completed$/i.test(text),
+      (body) => {
+        const keep: string[] = [], archive: string[] = [];
+        for (const line of body.split('\n')) {
+          const phaseMatch = line.match(/Phase\s+(\d+)/i);
+          if (phaseMatch && parseInt(phaseMatch[1], 10) <= cutoff) { archive.push(line); } else { keep.push(line); }
+        }
+        return { keep, archive };
+      },
+      'Recently Completed',
+    );
 
     // Prune resolved blockers: lines marked as resolved (strikethrough ~~text~~
     // or "[RESOLVED]" prefix) with a phase reference older than cutoff
-    const blockersPattern = /(###?\s*(?:Blockers|Blockers\/Concerns|Blockers\s*&\s*Concerns)\s*\n)([\s\S]*?)(?=\n###?|\n##[^#]|$)/i;
-    const blockersMatch = content.match(blockersPattern);
-    if (blockersMatch) {
-      const lines = blockersMatch[2].split('\n');
-      const keep: string[] = [];
-      const archive: string[] = [];
-      for (const line of lines) {
-        const isResolved = /~~.*~~|\[RESOLVED\]/i.test(line);
-        const phaseMatch = line.match(/Phase\s+(\d+)/i);
-        if (isResolved && phaseMatch && parseInt(phaseMatch[1], 10) <= cutoff) {
-          archive.push(line);
-        } else {
-          keep.push(line);
+    content = pruneSectionSpan(
+      content,
+      (lv, text) => (lv === 2 || lv === 3) && /^(?:Blockers|Blockers\/Concerns|Blockers\s*&\s*Concerns)$/i.test(text),
+      (body) => {
+        const keep: string[] = [], archive: string[] = [];
+        for (const line of body.split('\n')) {
+          const isResolved = /~~.*~~|\[RESOLVED\]/i.test(line);
+          const phaseMatch = line.match(/Phase\s+(\d+)/i);
+          if (isResolved && phaseMatch && parseInt(phaseMatch[1], 10) <= cutoff) { archive.push(line); } else { keep.push(line); }
         }
-      }
-      if (archive.length > 0) {
-        sections.push({ section: 'Blockers (resolved)', count: archive.length, lines: archive });
-        content = content.replace(blockersPattern, (_m, header: string) => `${header}${keep.join('\n')}`);
-      }
-    }
+        return { keep, archive };
+      },
+      'Blockers (resolved)',
+    );
 
     // Prune Performance Metrics table rows: keep only rows for phases > cutoff.
     // Preserves header rows (| Phase | ... and |---|...) and any prose around the table.
-    const metricsPattern = /(###?\s*Performance Metrics\s*\n)([\s\S]*?)(?=\n###?|\n##[^#]|$)/i;
-    const metricsMatch = content.match(metricsPattern);
-    if (metricsMatch) {
-      const sectionLines = metricsMatch[2].split('\n');
-      const keep: string[] = [];
-      const archive: string[] = [];
-      for (const line of sectionLines) {
-        // Table data row: starts with | followed by a number (phase)
-        const tableRowMatch = line.match(/^\|\s*(\d+)\s*\|/);
-        if (tableRowMatch) {
-          const rowPhase = parseInt(tableRowMatch[1], 10);
-          if (rowPhase <= cutoff) {
-            archive.push(line);
+    content = pruneSectionSpan(
+      content,
+      (lv, text) => (lv === 2 || lv === 3) && /^performance\s+metrics$/i.test(text),
+      (body) => {
+        const keep: string[] = [], archive: string[] = [];
+        for (const line of body.split('\n')) {
+          // Table data row: starts with | followed by a number (phase)
+          const tableRowMatch = line.match(/^\|\s*(\d+)\s*\|/);
+          if (tableRowMatch) {
+            const rowPhase = parseInt(tableRowMatch[1], 10);
+            if (rowPhase <= cutoff) { archive.push(line); } else { keep.push(line); }
           } else {
+            // Header row, separator row, or prose — always keep
             keep.push(line);
           }
-        } else {
-          // Header row, separator row, or prose — always keep
-          keep.push(line);
         }
-      }
-      if (archive.length > 0) {
-        sections.push({ section: 'Performance Metrics', count: archive.length, lines: archive });
-        content = content.replace(metricsPattern, (_m, header: string) => `${header}${keep.join('\n')}`);
-      }
-    }
+        return { keep, archive };
+      },
+      'Performance Metrics',
+    );
 
     return { newContent: content, archivedSections: sections };
   }
@@ -2664,48 +2791,59 @@ function cmdStateCompletePhase(cwd: string, raw: boolean, overridePhase?: string
     if (result) { body = result; updated.push('Last Activity Description'); }
 
     // Update ## Current Position section
-    const positionPattern = /(##\s*Current Position\s*\n)([\s\S]*?)(?=\n##|$)/i;
-    const positionMatch = body.match(positionPattern);
-    if (positionMatch) {
-      const header = positionMatch[1];
-      let posBody = positionMatch[2];
+    // ADR-1372 T6: positionPattern → tokenizeHeadings; stop at level ≥ 2.
+    // Mirrors /(##\s*Current Position\s*\n)([\s\S]*?)(?=\n##|$)/i
+    {
+      const cpHs = tokenizeHeadings(body);
+      const cpIdx = cpHs.findIndex(h => h.level === 2 && /^current\s+position$/i.test(h.text));
+      if (cpIdx !== -1) {
+        const cpH = cpHs[cpIdx];
+        const cpBodyLines = body.split('\n');
+        const cpHL = cpBodyLines[cpH.line - 1];
+        const cpBodyStart = cpH.offset + cpHL.length + 1;
+        let cpBodyEnd = body.length;
+        for (let j = cpIdx + 1; j < cpHs.length; j++) {
+          if (STOP_H2_PLUS(cpHs[j].level)) { cpBodyEnd = cpHs[j].offset - 1; break; }
+        }
+        let posBody = body.slice(cpBodyStart, cpBodyEnd);
 
-      // Update Phase line to show COMPLETE
-      const newPhase = `Phase: ${currentPhase} — COMPLETE`;
-      if (/^Phase:/m.test(posBody)) {
-        posBody = posBody.replace(/^Phase:.*$/m, newPhase);
-      } else {
-        // Pipe-table format in Current Position (#1255)
-        // Value cell must be bare (no "Phase:" label prefix) — the column header already provides the label.
-        const replaced = stateReplaceField(posBody, 'Phase', `${currentPhase} — COMPLETE`);
-        if (replaced !== null) posBody = replaced;
+        // Update Phase line to show COMPLETE
+        const newPhase = `Phase: ${currentPhase} — COMPLETE`;
+        if (/^Phase:/m.test(posBody)) {
+          posBody = posBody.replace(/^Phase:.*$/m, newPhase);
+        } else {
+          // Pipe-table format in Current Position (#1255)
+          // Value cell must be bare (no "Phase:" label prefix) — the column header already provides the label.
+          const replaced = stateReplaceField(posBody, 'Phase', `${currentPhase} — COMPLETE`);
+          if (replaced !== null) posBody = replaced;
+        }
+
+        // Update Status line if present
+        const newStatus = `Status: Phase ${currentPhase} complete`;
+        if (/^Status:/m.test(posBody)) {
+          posBody = posBody.replace(/^Status:.*$/m, newStatus);
+        } else {
+          // Pipe-table format in Current Position (#1255)
+          const replaced = stateReplaceField(posBody, 'Status', `Phase ${currentPhase} complete`);
+          if (replaced !== null) posBody = replaced;
+        }
+
+        // Update Last activity line if present
+        const newActivity = `Last activity: ${today} — Phase ${currentPhase} marked complete`;
+        if (/^Last activity:/im.test(posBody)) {
+          posBody = posBody.replace(/^Last activity:.*$/im, newActivity);
+        } else {
+          // Pipe-table format in Current Position (#1255)
+          // Value must match the inline branch (date + narrative), not bare date.
+          const activityValue = `${today} — Phase ${currentPhase} marked complete`;
+          const replaced = stateReplaceField(posBody, 'Last Activity', activityValue)
+            ?? stateReplaceField(posBody, 'Last activity', activityValue);
+          if (replaced !== null) posBody = replaced;
+        }
+
+        body = body.slice(0, cpBodyStart) + posBody + body.slice(cpBodyEnd);
+        updated.push('Current Position');
       }
-
-      // Update Status line if present
-      const newStatus = `Status: Phase ${currentPhase} complete`;
-      if (/^Status:/m.test(posBody)) {
-        posBody = posBody.replace(/^Status:.*$/m, newStatus);
-      } else {
-        // Pipe-table format in Current Position (#1255)
-        const replaced = stateReplaceField(posBody, 'Status', `Phase ${currentPhase} complete`);
-        if (replaced !== null) posBody = replaced;
-      }
-
-      // Update Last activity line if present
-      const newActivity = `Last activity: ${today} — Phase ${currentPhase} marked complete`;
-      if (/^Last activity:/im.test(posBody)) {
-        posBody = posBody.replace(/^Last activity:.*$/im, newActivity);
-      } else {
-        // Pipe-table format in Current Position (#1255)
-        // Value must match the inline branch (date + narrative), not bare date.
-        const activityValue = `${today} — Phase ${currentPhase} marked complete`;
-        const replaced = stateReplaceField(posBody, 'Last Activity', activityValue)
-          ?? stateReplaceField(posBody, 'Last activity', activityValue);
-        if (replaced !== null) posBody = replaced;
-      }
-
-      body = body.replace(positionPattern, () => `${header}${posBody}`);
-      updated.push('Current Position');
     }
 
     return reassemble(body);
