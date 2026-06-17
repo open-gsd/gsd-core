@@ -325,6 +325,7 @@
       "legacy-cleanup.cjs",
       "loop-host-contract.cjs",
       "loop-resolver.cjs",
+      "markdown-sectionizer.cjs",
       "milestone.cjs",
       "model-catalog.cjs",
       "model-profiles.cjs",

@@ -4,7 +4,8 @@
  * Behavioral tests for markdown-sectionizer.cjs
  *
  * Module: gsd-core/bin/lib/markdown-sectionizer.cjs
- * Exports: stripFencedCode, tokenizeHeadings, collectSections, collectSection, iterateBullets
+ * Exports: stripFencedCode, tokenizeHeadings, collectSections, collectSection,
+ *          iterateBullets, extractTaggedBlocks, replaceSection
  *
  * Covers the parser QA matrix from CONTRIBUTING.md §'Parser and project-file inputs':
  *   - LF vs CRLF line endings
@@ -16,6 +17,8 @@
  *   - Empty/whitespace/non-string input
  *
  * Includes a fast-check property test (stripFencedCode idempotence invariant).
+ * Includes a parity guard for the tracked duplication between stripFencedCode
+ * and uat-predicate's _stripFencedBlocks (DEFECT.GENERATIVE-FIX — removed in T5).
  */
 
 const { test, describe } = require('node:test');
@@ -28,7 +31,20 @@ const {
   collectSections,
   collectSection,
   iterateBullets,
+  extractTaggedBlocks,
+  replaceSection,
 } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+
+// uat-predicate's _stripFencedBlocks is not directly exported.
+// The closest public surface is stripFalsePositiveContexts, which applies:
+//   (a) frontmatter strip, (b) HTML comment strip, (c) _stripFencedBlocks, (d) blockquote strip.
+// For the parity corpus we use inputs with NO frontmatter, NO HTML comments, and NO blockquotes,
+// so the only transformation applied is the fence stripping in step (c).
+// We also use analyzeMarkdown, which calls _stripFencedBlocks directly for unterminatedFence.
+const {
+  stripFalsePositiveContexts,
+  analyzeMarkdown,
+} = require('../gsd-core/bin/lib/uat-predicate.cjs');
 
 // ─── stripFencedCode ──────────────────────────────────────────────────────────
 
@@ -651,4 +667,253 @@ describe('stripFencedCode: property-based tests', () => {
       ),
     );
   });
+});
+
+// ─── extractTaggedBlocks ──────────────────────────────────────────────────────
+
+describe('extractTaggedBlocks', () => {
+  test('returns empty array for empty/non-string content', () => {
+    assert.deepEqual(extractTaggedBlocks('', 'decisions'), []);
+    assert.deepEqual(extractTaggedBlocks(null, 'decisions'), []);
+    assert.deepEqual(extractTaggedBlocks(undefined, 'decisions'), []);
+  });
+
+  test('returns empty array when tag is empty/non-string', () => {
+    assert.deepEqual(extractTaggedBlocks('<decisions>body</decisions>', ''), []);
+    assert.deepEqual(extractTaggedBlocks('<decisions>body</decisions>', null), []);
+  });
+
+  test('returns empty array when tag is not present', () => {
+    const content = 'Some prose without any matching block.\n## Heading\n- bullet';
+    assert.deepEqual(extractTaggedBlocks(content, 'decisions'), []);
+  });
+
+  test('extracts inner text of a single block', () => {
+    const content = 'before\n<decisions>\nD-01: Foo\n</decisions>\nafter';
+    const result = extractTaggedBlocks(content, 'decisions');
+    assert.equal(result.length, 1);
+    assert.ok(result[0].includes('D-01: Foo'), 'inner text should be returned');
+  });
+
+  test('extracts multiple blocks in document order', () => {
+    const content = [
+      '<decisions>',
+      'D-01: First',
+      '</decisions>',
+      'some text',
+      '<decisions>',
+      'D-02: Second',
+      '</decisions>',
+    ].join('\n');
+    const result = extractTaggedBlocks(content, 'decisions');
+    assert.equal(result.length, 2);
+    assert.ok(result[0].includes('D-01: First'));
+    assert.ok(result[1].includes('D-02: Second'));
+  });
+
+  test('preserves document order of multiple blocks', () => {
+    const content = '<tag>alpha</tag> middle <tag>beta</tag> end <tag>gamma</tag>';
+    const result = extractTaggedBlocks(content, 'tag');
+    assert.deepEqual(result, ['alpha', 'beta', 'gamma']);
+  });
+
+  test('handles CRLF content inside a block', () => {
+    const content = '<decisions>\r\nD-01: CRLF test\r\n</decisions>';
+    const result = extractTaggedBlocks(content, 'decisions');
+    assert.equal(result.length, 1);
+    assert.ok(result[0].includes('D-01: CRLF test'));
+  });
+
+  test('tag name that needs regex-escaping: dot in tag name is matched literally', () => {
+    // A tag name with a dot (e.g. 'my.tag') must be matched literally, not as
+    // a regex wildcard. So '<my.tag>' should match only the exact literal tag.
+    const content = '<my.tag>inner</my.tag>';
+    const result = extractTaggedBlocks(content, 'my.tag');
+    assert.equal(result.length, 1);
+    assert.equal(result[0], 'inner');
+    // Crucially, 'myXtag' (dot as wildcard) should NOT match the literal block
+    const result2 = extractTaggedBlocks('<myXtag>other</myXtag>', 'my.tag');
+    assert.equal(result2.length, 0, 'dot in tagName must be treated as literal, not wildcard');
+  });
+
+  test('tag name with + character is escaped and matched literally', () => {
+    const content = '<my+tag>inner</my+tag>';
+    const result = extractTaggedBlocks(content, 'my+tag');
+    assert.equal(result.length, 1);
+    assert.equal(result[0], 'inner');
+  });
+
+  test('content with tag text appearing outside any block is not extracted', () => {
+    // The tag appears as inline text, not as an XML block
+    const content = 'This is about <decisions> but no closing tag in same element sense\n\nNot a block.';
+    // Actually we need to use content that has the opening tag on the same line as text
+    // but no matching close tag — result should be empty or the inner text is everything after.
+    // Since the regex is non-greedy, an unclosed tag won't match.
+    const content2 = 'Text with <decisions> but tag is unclosed.';
+    const result = extractTaggedBlocks(content2, 'decisions');
+    assert.equal(result.length, 0, 'unclosed tag should not produce a match');
+  });
+});
+
+// ─── replaceSection ───────────────────────────────────────────────────────────
+
+describe('replaceSection', () => {
+  test('replaces section body and preserves heading and surrounding sections', () => {
+    const content = '## Intro\nIntro body.\n## Name\nOld name body.\n## Footer\nFooter body.\n';
+    const section = collectSection(content, (h) => h.text === 'Name');
+    assert.ok(section !== null, 'section must be found');
+    const newContent = replaceSection(content, section, 'New name body.\n');
+    assert.ok(newContent.includes('## Intro'), 'Intro heading preserved');
+    assert.ok(newContent.includes('Intro body.'), 'Intro body preserved');
+    assert.ok(newContent.includes('## Name'), 'Name heading preserved');
+    assert.ok(newContent.includes('New name body.'), 'new body present');
+    assert.ok(!newContent.includes('Old name body.'), 'old body removed');
+    assert.ok(newContent.includes('## Footer'), 'Footer heading preserved');
+    assert.ok(newContent.includes('Footer body.'), 'Footer body preserved');
+  });
+
+  test('replaces section body in a multi-section document', () => {
+    const content = [
+      '## Alpha',
+      'Alpha content.',
+      '## Beta',
+      'Beta old content.',
+      '## Gamma',
+      'Gamma content.',
+    ].join('\n') + '\n';
+    const section = collectSection(content, (h) => h.text === 'Beta');
+    assert.ok(section !== null);
+    const updated = replaceSection(content, section, 'Beta new content.\n');
+    assert.ok(updated.includes('Alpha content.'), 'Alpha preserved');
+    assert.ok(updated.includes('Beta new content.'), 'Beta updated');
+    assert.ok(!updated.includes('Beta old content.'), 'Beta old removed');
+    assert.ok(updated.includes('Gamma content.'), 'Gamma preserved');
+  });
+
+  test('round-trip: collectSection → replaceSection with same body → content unchanged', () => {
+    const content = '## Section A\nLine one.\nLine two.\n## Section B\nB body.\n';
+    const section = collectSection(content, (h) => h.text === 'Section A');
+    assert.ok(section !== null);
+    // Re-supply the body as stored, plus the trailing content that bodyEnd includes.
+    // The raw slice from bodyStart to bodyEnd is what we supply back.
+    const rawBodySlice = content.slice(section.bodyStart, section.bodyEnd);
+    const roundTripped = replaceSection(content, section, rawBodySlice);
+    assert.equal(roundTripped, content, 'round-trip must produce identical content');
+  });
+
+  test('CRLF content is handled without corruption', () => {
+    const content = '## Title\r\nOld body.\r\n## Next\r\nNext body.\r\n';
+    const section = collectSection(content, (h) => h.text === 'Title');
+    assert.ok(section !== null);
+    const updated = replaceSection(content, section, 'New body.\r\n');
+    assert.ok(updated.includes('## Title\r\n'), 'heading with CRLF preserved');
+    assert.ok(updated.includes('New body.'), 'new body present');
+    assert.ok(!updated.includes('Old body.'), 'old body removed');
+    assert.ok(updated.includes('## Next\r\n'), 'next section heading preserved');
+    assert.ok(updated.includes('Next body.'), 'next section body preserved');
+  });
+
+  test('non-string arguments return content unchanged', () => {
+    const content = '## Sec\nbody\n';
+    const section = collectSection(content, (h) => h.text === 'Sec');
+    assert.ok(section !== null);
+    assert.equal(replaceSection(null, section, 'x'), null);
+    assert.equal(replaceSection(content, section, null), content);
+  });
+});
+
+// ─── Parity guard: stripFencedCode vs uat-predicate _stripFencedBlocks ────────
+//
+// DEFECT.GENERATIVE-FIX: stripFencedCode in the seam is a tracked duplication of
+// _stripFencedBlocks in uat-predicate.cts until tier T5 deduplicates them.
+// This test MUST FAIL if the two implementations diverge on any corpus input.
+// Remove this describe block in T5 when uat-predicate imports the seam directly.
+//
+// Approach: feed a shared fence-input corpus through:
+//   (A) stripFencedCode  (seam — direct export)
+//   (B) stripFalsePositiveContexts  (uat-predicate public surface)
+//       Input must have NO frontmatter (not starting with ---), NO HTML comments,
+//       and NO blockquote lines, so that steps (a)(b)(d) in stripFalsePositiveContexts
+//       are no-ops and only the fence-stripping step (c) differs between them.
+//   (C) analyzeMarkdown.unterminatedFence  (uat-predicate — calls _stripFencedBlocks directly)
+//
+// Limitation: _stripFencedBlocks is not directly exported from uat-predicate.cjs,
+// so we test through the closest public surface and document the boundary.
+
+describe('parity guard: stripFencedCode vs uat-predicate fence-stripping', () => {
+  // Shared corpus of fence inputs for parity testing.
+  // All inputs have no frontmatter, no HTML comments, no blockquotes — only fences.
+  const FENCE_CORPUS = [
+    {
+      label: 'no fences',
+      input: '## Heading\n\nSome text.\n\n- bullet',
+    },
+    {
+      label: 'backtick fence',
+      input: 'before\n```js\nconst x = 1;\n```\nafter',
+    },
+    {
+      label: 'tilde fence',
+      input: 'before\n~~~\nsome code\n~~~\nafter',
+    },
+    {
+      label: 'CRLF fence',
+      input: 'before\r\n```\r\ncode\r\n```\r\nafter',
+    },
+    {
+      label: 'unterminated fence',
+      input: 'before\n```\nsome code without closing fence',
+    },
+    {
+      label: 'tilde inside backtick fence (mismatched delimiter)',
+      input: '```\n~~~\nstill inside\n```\noutside',
+    },
+    {
+      label: 'backtick inside tilde fence (mismatched delimiter)',
+      input: '~~~\n```\nstill inside\n~~~\noutside',
+    },
+    {
+      label: 'longer closing fence run',
+      input: 'text\n```\nbody\n`````\nafter',
+    },
+    {
+      label: 'multiple successive fenced blocks',
+      input: 'a\n```\ncode1\n```\nb\n```\ncode2\n```\nc',
+    },
+    // NOTE: '4-space indent' case is intentionally excluded from the parity corpus.
+    // The seam uses /^( {0,3})/ (CommonMark §4.5: ≤3 leading spaces tolerated),
+    // while uat-predicate._stripFencedBlocks uses /^(\s*)/ (any whitespace).
+    // A 4-space-indented ``` is NOT a fence opener per CommonMark but IS treated
+    // as one by uat-predicate. This is a known pre-existing divergence; the seam
+    // is the more-correct implementation. The divergence is documented here so that
+    // T5 (which will remove uat-predicate's local copy) is aware of the fix needed.
+  ];
+
+  for (const { label, input } of FENCE_CORPUS) {
+    test(`text output parity: ${label}`, () => {
+      const seamResult = stripFencedCode(input).text;
+      // stripFalsePositiveContexts with no-frontmatter/no-comment/no-blockquote input
+      // reduces to exactly _stripFencedBlocks (step c only).
+      const uatResult = stripFalsePositiveContexts(input);
+      assert.equal(
+        seamResult,
+        uatResult,
+        `stripFencedCode and uat-predicate _stripFencedBlocks diverged on: ${JSON.stringify(label)}\n` +
+        `seam:    ${JSON.stringify(seamResult.slice(0, 120))}\n` +
+        `uat:     ${JSON.stringify(uatResult.slice(0, 120))}`,
+      );
+    });
+
+    test(`unterminatedFence parity: ${label}`, () => {
+      const seamUnterminated = stripFencedCode(input).unterminatedFence;
+      // analyzeMarkdown calls _stripFencedBlocks directly for unterminatedFence.
+      const uatUnterminated = analyzeMarkdown(input).unterminatedFence;
+      assert.equal(
+        seamUnterminated,
+        uatUnterminated,
+        `unterminatedFence diverged on: ${JSON.stringify(label)}\n` +
+        `seam: ${seamUnterminated}, uat: ${uatUnterminated}`,
+      );
+    });
+  }
 });

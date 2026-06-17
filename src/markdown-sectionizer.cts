@@ -41,6 +41,20 @@ export interface Section {
   heading: HeadingToken;
   /** All lines between this heading and the next stop, joined by `\n`. */
   body: string;
+  /**
+   * Byte offset in the ORIGINAL content string where the section body begins
+   * (first character after the heading line's trailing newline).
+   * Populated by `collectSections` and `collectSection`.
+   * Used by `replaceSection` for a clean pure splice.
+   */
+  bodyStart: number;
+  /**
+   * Byte offset in the ORIGINAL content string where the section body ends
+   * (exclusive — i.e. `content.slice(bodyStart, bodyEnd)` gives the body
+   * text BEFORE `trimEnd()` is applied, so round-trips are exact when the
+   * caller re-supplies the original body).
+   */
+  bodyEnd: number;
 }
 
 /** Recognised bullet markers. */
@@ -222,12 +236,33 @@ export function collectSections(
     headingsByLine.set(h.line, h);
   }
 
+  // Build a byte-offset table: lineOffsets[i] = byte offset of the start of line i+1 (1-based: i=0 → line 1)
+  // The body of a section starts at the byte after the heading line's trailing '\n'.
+  const lineOffsets: number[] = new Array(lines.length);
+  let acc = 0;
+  for (let i = 0; i < lines.length; i++) {
+    lineOffsets[i] = acc;
+    acc += lines[i].length + 1; // +1 for the '\n' we split on
+  }
+  // lineOffsets[i] is the byte offset of line (i+1) (1-based). EOF sentinel:
+  const eofOffset = acc; // === content.length + (content.endsWith('\n') ? 0 : 0) ≈ content.length
+
   let currentHeading: HeadingToken | null = null;
+  let currentBodyStart = 0;
   let bodyLines: string[] = [];
 
-  const flush = (): void => {
+  const flush = (bodyEndOffset: number): void => {
     if (currentHeading !== null) {
-      sections.push({ heading: currentHeading, body: bodyLines.join('\n').trimEnd() });
+      const rawBody = bodyLines.join('\n');
+      const trimmedBody = rawBody.trimEnd();
+      // bodyEnd is the raw end (before trimEnd) — callers using replaceSection
+      // can re-trim or supply the pre-trimmed body.
+      sections.push({
+        heading: currentHeading,
+        body: trimmedBody,
+        bodyStart: currentBodyStart,
+        bodyEnd: bodyEndOffset,
+      });
       currentHeading = null;
       bodyLines = [];
     }
@@ -237,14 +272,18 @@ export function collectSections(
     const lineNo = i + 1; // 1-based
     const h = headingsByLine.get(lineNo);
     if (h !== undefined && stopPredicate(h)) {
-      // This heading is a stop boundary — flush current section, start new one
-      flush();
+      // This heading is a stop boundary — flush current section, start new one.
+      // The body ends at the start of this heading line.
+      flush(lineOffsets[i]);
       currentHeading = h;
+      // Body starts at the beginning of the line AFTER the heading line
+      const headingLineIdx = h.line - 1; // 0-based
+      currentBodyStart = lineOffsets[headingLineIdx] + lines[headingLineIdx].length + 1;
     } else if (currentHeading !== null) {
       bodyLines.push(lines[i]);
     }
   }
-  flush();
+  flush(eofOffset);
 
   return sections;
 }
@@ -281,23 +320,38 @@ export function collectSection(
   const lines = content.split('\n');
 
   // Determine which headings act as stops after the target
-  const bodyStartLine = target.line + 1; // 1-based, exclusive
-  let bodyEndLine = lines.length + 1; // 1-based, exclusive (default: EOF)
+  const bodyStartLine = target.line + 1; // 1-based, first line of body
+  let bodyEndLine = lines.length + 1; // 1-based, exclusive (default: EOF+1)
 
   for (let j = targetIdx + 1; j < headings.length; j++) {
     const next = headings[j];
     const isStop = levelBounded ? next.level <= target.level : true;
     if (isStop) {
-      bodyEndLine = next.line; // stop before this line
+      bodyEndLine = next.line; // stop before this line (1-based)
       break;
     }
   }
+
+  // Compute byte offsets for bodyStart and bodyEnd.
+  // lineOffsets[i] = byte offset of line (i+1) in content (1-based).
+  const lineOffsets: number[] = new Array(lines.length);
+  let acc = 0;
+  for (let i = 0; i < lines.length; i++) {
+    lineOffsets[i] = acc;
+    acc += lines[i].length + 1; // +1 for the '\n' separator
+  }
+  const eofOffset = acc; // byte offset past the last line
+
+  // bodyStart: byte offset of first line of body (bodyStartLine is 1-based)
+  const bodyStartOffset = bodyStartLine <= lines.length ? lineOffsets[bodyStartLine - 1] : eofOffset;
+  // bodyEnd: byte offset of the stop line (exclusive) — the line we stop BEFORE
+  const bodyEndOffset = bodyEndLine <= lines.length ? lineOffsets[bodyEndLine - 1] : eofOffset;
 
   // Slice body lines (0-based array: bodyStartLine-1 to bodyEndLine-2 inclusive)
   const bodyRaw = lines.slice(bodyStartLine - 1, bodyEndLine - 1).join('\n').trimEnd();
   const body = stripFences ? stripFencedCode(bodyRaw).text : bodyRaw;
 
-  return { heading: target, body };
+  return { heading: target, body, bodyStart: bodyStartOffset, bodyEnd: bodyEndOffset };
 }
 
 // ─── iterateBullets ───────────────────────────────────────────────────────────
@@ -406,6 +460,77 @@ export function iterateBullets(sectionText: string): BulletItem[] {
   flush();
 
   return items;
+}
+
+// ─── extractTaggedBlocks ──────────────────────────────────────────────────────
+
+/**
+ * Return the inner text of every `<tagName>…</tagName>` block in `content`,
+ * in document order.
+ *
+ * Designed for extracting structured XML-like annotation blocks that live in
+ * markdown prose (e.g. `<decisions>…</decisions>`, `<requirements>…</requirements>`).
+ * Returns `[]` when no matching blocks are found.
+ *
+ * The `tagName` argument is regex-escaped, so names that contain regex
+ * metacharacters (e.g. `foo.bar`, `my+tag`) are matched literally.
+ *
+ * **Input contract:** the caller decides whether to pass raw or fence-stripped
+ * content. `extractTaggedBlocks` is a pure block extractor — it does NOT strip
+ * fenced code blocks itself. If a `<tagName>` block appears inside a fenced code
+ * block and should be excluded, the caller should apply `stripFencedCode` first.
+ *
+ * Generalises `decisions.cts`'s bespoke `matchAll(/<decisions>([\s\S]*?)<\/decisions>/g)`
+ * so tier T1 can drop its own copy (tracked duplication until T1 lands).
+ */
+export function extractTaggedBlocks(content: string, tagName: string): string[] {
+  if (typeof content !== 'string' || content.length === 0) return [];
+  if (typeof tagName !== 'string' || tagName.length === 0) return [];
+
+  // Escape the tag name for safe interpolation into a RegExp.
+  const escapedTag = tagName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(`<${escapedTag}>([\\s\\S]*?)</${escapedTag}>`, 'g');
+
+  const results: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(content)) !== null) {
+    results.push(match[1]);
+  }
+  return results;
+}
+
+// ─── replaceSection ───────────────────────────────────────────────────────────
+
+/**
+ * Splice `newBody` in place of a section's body and return the resulting
+ * full content string.
+ *
+ * Uses the `bodyStart`/`bodyEnd` character offsets carried by the `Section`
+ * type to perform a pure string splice — no regex, no line-counting. The
+ * heading is preserved verbatim; only the bytes between `bodyStart` and
+ * `bodyEnd` are replaced.
+ *
+ * The `newBody` is inserted as-is between `content.slice(0, bodyStart)` and
+ * `content.slice(bodyEnd)`. If `newBody` should end with a trailing newline
+ * before the next section's heading, the caller is responsible for including
+ * it (consistent with how `trimEnd()` is applied to collected bodies — see
+ * `collectSections`/`collectSection`).
+ *
+ * Typical read-modify-write pattern (T6 state.cts use case):
+ * ```
+ * const section = collectSection(content, h => h.text === 'Name');
+ * if (section) {
+ *   content = replaceSection(content, section, newBody);
+ * }
+ * ```
+ *
+ * CRLF-safe: the splice is purely character-offset-based, so CRLF sequences
+ * are preserved in the surrounding content unchanged.
+ */
+export function replaceSection(content: string, section: Section, newBody: string): string {
+  if (typeof content !== 'string') return content;
+  if (typeof newBody !== 'string') return content;
+  return content.slice(0, section.bodyStart) + newBody + content.slice(section.bodyEnd);
 }
 
 // Consumers: require('../gsd-core/bin/lib/markdown-sectionizer.cjs')

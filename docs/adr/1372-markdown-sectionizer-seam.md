@@ -32,8 +32,10 @@ No external markdown library (the "no external dependencies in core" rule stands
 
 - `stripFencedCode(content) → { text, unterminatedFence }` — the CommonMark-correct state machine promoted from `uat-predicate.cts` `_stripFencedBlocks` (CRLF-safe; ≤3-space indent tolerated; closes only on a same-or-longer fence run). `unterminatedFence` is a reusable malformed-input diagnostic.
 - `tokenizeHeadings(content) → HeadingToken[]` — ATX headings `{ level, text, line, offset }` in document order.
-- `collectSections(content, stopPredicate)` and `collectSection(content, headingPredicate, { levelBounded, stripFences })` — line-by-line (not greedy-regex) section collection; `levelBounded` encodes the dominant "stop at same-or-higher-level heading" pattern.
+- `collectSections(content, stopPredicate)` and `collectSection(content, headingPredicate, { levelBounded, stripFences })` — line-by-line (not greedy-regex) section collection; `levelBounded` encodes the dominant "stop at same-or-higher-level heading" pattern. Both populate `bodyStart`/`bodyEnd` character offsets on the returned `Section` for use by `replaceSection`.
 - `iterateBullets(sectionText) → BulletItem[]` — dash/asterisk/plus, checkbox (`- [ ]`/`- [x]`), and numbered markers, with indented continuation-line accumulation.
+- `extractTaggedBlocks(content, tagName) → string[]` — returns the inner text of every `<tagName>…</tagName>` block in document order; `tagName` is regex-escaped; the caller decides ordering (does not strip fences). Generalises `decisions.cts`'s bespoke `<decisions>` extractor for T1 adoption.
+- `replaceSection(content, section, newBody) → string` — pure character-offset splice using `section.bodyStart`/`bodyEnd`; replaces a section body in a read-modify-write workflow (e.g. `state.cts`'s 7× inline `content.replace(/(##\s*Name\s*\n)([\s\S]*?)(?=\n##|$)/, ...)` pattern). CRLF-safe.
 
 The seam is fully tested against the parser QA matrix (CRLF, Unicode headings, headings-inside-fences, unterminated fences, nested levels, malformed bullets) **once**, so every adopter inherits that correctness instead of re-deriving it.
 
