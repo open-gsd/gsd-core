@@ -20,6 +20,7 @@ import phaseLocatorMod = require('./phase-locator.cjs');
 const { findPhaseInternal } = phaseLocatorMod;
 import { extractDecisions } from './decisions.cjs';
 import type { Decision } from './decisions.cjs';
+import { stripFencedCode, collectSections } from './markdown-sectionizer.cjs';
 import { checkUiPresence } from './ui-safety-gate.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import verifyModule = require('./verify.cjs');
@@ -134,10 +135,11 @@ const DESIGNATED_HEADINGS_RE = /^#{1,6}\s+(?:must[_ ]haves?|truths?|tasks?|objec
 const XML_DECISION_TAGS_RE = /<(?:objective|tasks?|action)(?:\s[^>]*)?>([\s\S]*?)<\/(?:objective|tasks?|action)>/gi;
 
 function stripCommentsAndFences(text: string): string {
-  return text
-    .replace(/<!--[\s\S]*?-->/g, ' ')
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/~~~[\s\S]*?~~~/g, ' ');
+  // HTML-comment stripping stays caller-side (the seam does not strip HTML comments).
+  const htmlStripped = text.replace(/<!--[\s\S]*?-->/g, ' ');
+  // Fenced-code stripping: delegate to the canonical CommonMark-correct seam.
+  // replaces the prior independent regex copy (```` ``` ``` ````  + `~~~ ~~~`).
+  return stripFencedCode(htmlStripped).text;
 }
 
 function extractYamlBlock(frontmatter: string, key: string): string {
@@ -174,16 +176,18 @@ function extractPlanDesignatedSections(planContent: string | null | undefined): 
     if (block) parts.push(block);
   }
 
+  // Replace hand-rolled split(/\r?\n/) + heading walk with the seam's collectSections.
+  // stopPredicate fires on EVERY heading (collectSections needs to start a section at
+  // each heading), then we filter to designated ones — same semantics as the prior
+  // inDesignated flag: emit the heading line + body only when DESIGNATED_HEADINGS_RE matches.
+  const sections = collectSections(body, () => true);
   const bodyParts: string[] = [];
-  let inDesignated = false;
-  for (const line of body.split(/\r?\n/)) {
-    const heading = /^#{1,6}\s+/.test(line);
-    if (heading) {
-      inDesignated = DESIGNATED_HEADINGS_RE.test(line);
-      if (inDesignated) bodyParts.push(line);
-      continue;
+  for (const section of sections) {
+    const headingLine = '#'.repeat(section.heading.level) + ' ' + section.heading.text;
+    if (DESIGNATED_HEADINGS_RE.test(headingLine)) {
+      bodyParts.push(headingLine);
+      if (section.body) bodyParts.push(section.body);
     }
-    if (inDesignated) bodyParts.push(line);
   }
   parts.push(bodyParts.join('\n'));
   parts.push(extractXmlTagBodies(cleaned));

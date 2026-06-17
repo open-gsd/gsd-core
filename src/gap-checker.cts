@@ -28,6 +28,7 @@ const { escapeRegex } = phaseId;
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningPaths, planningDir, findContextMdIn } = planningWorkspace;
 import { parseDecisions, extractDecisions } from './decisions.cjs';
+import { iterateBullets } from './markdown-sectionizer.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -81,18 +82,26 @@ function parseRequirements(reqMd: unknown): ReqItem[] {
 
   // Prefix-agnostic ID format: REQ-01, TST-01, BACK-07, INSP-04, etc.
   const ID_PATTERN = '[A-Z][A-Z0-9]*-[A-Za-z0-9_-]+';
+  const idRe = new RegExp(`^(${ID_PATTERN})$`);
 
-  const checkboxRe = new RegExp(`^\\s*-\\s*\\[[x ]\\]\\s*\\*\\*(${ID_PATTERN})\\*\\*\\s*(.*)$`, 'gm');
-  let cm = checkboxRe.exec(reqMd);
-  while (cm !== null) {
-    const id = cm[1];
+  // Checkbox-bullet path: migrate to seam's iterateBullets (checkbox markers).
+  // The **ID** is extracted from the bullet text caller-side — the seam provides
+  // the raw text; we parse the bold-ID prefix from it here.
+  const boldIdRe = new RegExp(`^\\*\\*(${ID_PATTERN})\\*\\*\\s*(.*)$`);
+  for (const bullet of iterateBullets(reqMd)) {
+    if (bullet.marker !== 'checkbox-unchecked' && bullet.marker !== 'checkbox-checked') continue;
+    const m = boldIdRe.exec(bullet.text);
+    if (!m) continue;
+    const id = m[1];
+    if (!idRe.test(id)) continue;
     if (!seen.has(id)) {
       seen.add(id);
-      out.push({ id, text: (cm[2] || '').trim() });
+      out.push({ id, text: (m[2] || '').trim() });
     }
-    cm = checkboxRe.exec(reqMd);
   }
 
+  // Pipe-table-row path and separator-row skip stay caller-side
+  // (table parsing is out of seam scope per ADR-1372 T3 spec).
   const tableFirstCellRe = new RegExp(`^\\s*\\|\\s*(${ID_PATTERN})\\s*\\|`);
   const separatorRowRe = /^\s*\|[\s:|-]+\|\s*$/;
   const lines = reqMd.split(/\r?\n/);
