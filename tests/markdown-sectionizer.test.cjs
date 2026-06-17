@@ -17,8 +17,9 @@
  *   - Empty/whitespace/non-string input
  *
  * Includes a fast-check property test (stripFencedCode idempotence invariant).
- * Includes a parity guard for the tracked duplication between stripFencedCode
- * and uat-predicate's _stripFencedBlocks (DEFECT.GENERATIVE-FIX — removed in T5).
+ * The parity guard for the T0-era tracked duplication (stripFencedCode vs
+ * uat-predicate _stripFencedBlocks) was removed in T5: uat-predicate now imports
+ * the seam directly, so the guard would compare the seam to itself.
  */
 
 const { test, describe } = require('node:test');
@@ -34,17 +35,6 @@ const {
   extractTaggedBlocks,
   replaceSection,
 } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
-
-// uat-predicate's _stripFencedBlocks is not directly exported.
-// The closest public surface is stripFalsePositiveContexts, which applies:
-//   (a) frontmatter strip, (b) HTML comment strip, (c) _stripFencedBlocks, (d) blockquote strip.
-// For the parity corpus we use inputs with NO frontmatter, NO HTML comments, and NO blockquotes,
-// so the only transformation applied is the fence stripping in step (c).
-// We also use analyzeMarkdown, which calls _stripFencedBlocks directly for unterminatedFence.
-const {
-  stripFalsePositiveContexts,
-  analyzeMarkdown,
-} = require('../gsd-core/bin/lib/uat-predicate.cjs');
 
 // ─── stripFencedCode ──────────────────────────────────────────────────────────
 
@@ -1045,98 +1035,6 @@ describe('extractTaggedBlocks: nested same-name tag behavior (non-greedy limitat
   });
 });
 
-// ─── Parity guard: stripFencedCode vs uat-predicate _stripFencedBlocks ────────
-//
-// DEFECT.GENERATIVE-FIX: stripFencedCode in the seam is a tracked duplication of
-// _stripFencedBlocks in uat-predicate.cts until tier T5 deduplicates them.
-// This test MUST FAIL if the two implementations diverge on any corpus input.
-// Remove this describe block in T5 when uat-predicate imports the seam directly.
-//
-// Approach: feed a shared fence-input corpus through:
-//   (A) stripFencedCode  (seam — direct export)
-//   (B) stripFalsePositiveContexts  (uat-predicate public surface)
-//       Input must have NO frontmatter (not starting with ---), NO HTML comments,
-//       and NO blockquote lines, so that steps (a)(b)(d) in stripFalsePositiveContexts
-//       are no-ops and only the fence-stripping step (c) differs between them.
-//   (C) analyzeMarkdown.unterminatedFence  (uat-predicate — calls _stripFencedBlocks directly)
-//
-// Limitation: _stripFencedBlocks is not directly exported from uat-predicate.cjs,
-// so we test through the closest public surface and document the boundary.
-
-describe('parity guard: stripFencedCode vs uat-predicate fence-stripping', () => {
-  // Shared corpus of fence inputs for parity testing.
-  // All inputs have no frontmatter, no HTML comments, no blockquotes — only fences.
-  const FENCE_CORPUS = [
-    {
-      label: 'no fences',
-      input: '## Heading\n\nSome text.\n\n- bullet',
-    },
-    {
-      label: 'backtick fence',
-      input: 'before\n```js\nconst x = 1;\n```\nafter',
-    },
-    {
-      label: 'tilde fence',
-      input: 'before\n~~~\nsome code\n~~~\nafter',
-    },
-    {
-      label: 'CRLF fence',
-      input: 'before\r\n```\r\ncode\r\n```\r\nafter',
-    },
-    {
-      label: 'unterminated fence',
-      input: 'before\n```\nsome code without closing fence',
-    },
-    {
-      label: 'tilde inside backtick fence (mismatched delimiter)',
-      input: '```\n~~~\nstill inside\n```\noutside',
-    },
-    {
-      label: 'backtick inside tilde fence (mismatched delimiter)',
-      input: '~~~\n```\nstill inside\n~~~\noutside',
-    },
-    {
-      label: 'longer closing fence run',
-      input: 'text\n```\nbody\n`````\nafter',
-    },
-    {
-      label: 'multiple successive fenced blocks',
-      input: 'a\n```\ncode1\n```\nb\n```\ncode2\n```\nc',
-    },
-    // NOTE: '4-space indent' case is intentionally excluded from the parity corpus.
-    // The seam uses /^( {0,3})/ (CommonMark §4.5: ≤3 leading spaces tolerated),
-    // while uat-predicate._stripFencedBlocks uses /^(\s*)/ (any whitespace).
-    // A 4-space-indented ``` is NOT a fence opener per CommonMark but IS treated
-    // as one by uat-predicate. This is a known pre-existing divergence; the seam
-    // is the more-correct implementation. The divergence is documented here so that
-    // T5 (which will remove uat-predicate's local copy) is aware of the fix needed.
-  ];
-
-  for (const { label, input } of FENCE_CORPUS) {
-    test(`text output parity: ${label}`, () => {
-      const seamResult = stripFencedCode(input).text;
-      // stripFalsePositiveContexts with no-frontmatter/no-comment/no-blockquote input
-      // reduces to exactly _stripFencedBlocks (step c only).
-      const uatResult = stripFalsePositiveContexts(input);
-      assert.equal(
-        seamResult,
-        uatResult,
-        `stripFencedCode and uat-predicate _stripFencedBlocks diverged on: ${JSON.stringify(label)}\n` +
-        `seam:    ${JSON.stringify(seamResult.slice(0, 120))}\n` +
-        `uat:     ${JSON.stringify(uatResult.slice(0, 120))}`,
-      );
-    });
-
-    test(`unterminatedFence parity: ${label}`, () => {
-      const seamUnterminated = stripFencedCode(input).unterminatedFence;
-      // analyzeMarkdown calls _stripFencedBlocks directly for unterminatedFence.
-      const uatUnterminated = analyzeMarkdown(input).unterminatedFence;
-      assert.equal(
-        seamUnterminated,
-        uatUnterminated,
-        `unterminatedFence diverged on: ${JSON.stringify(label)}\n` +
-        `seam: ${seamUnterminated}, uat: ${uatUnterminated}`,
-      );
-    });
-  }
-});
+// Parity guard removed in T5 (ADR-1372): uat-predicate now imports stripFencedCode
+// from the seam directly, so comparing the seam to itself is tautological.
+// The seam's stripFencedCode correctness is already covered by the tests above.

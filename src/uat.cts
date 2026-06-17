@@ -15,6 +15,9 @@ import path from 'node:path';
 import io = require('./io.cjs');
 const { output, error } = io;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+import markdownSectionizer = require('./markdown-sectionizer.cjs');
+const { collectSection, tokenizeHeadings } = markdownSectionizer;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParser = require('./roadmap-parser.cjs');
 const { getMilestonePhaseFilter } = roadmapParser;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -179,12 +182,21 @@ function cmdRenderCheckpoint(cwd: string, options: { file?: string } = {}, raw: 
 // ─── parseCurrentTest ─────────────────────────────────────────────────────────
 
 function parseCurrentTest(content: string): CurrentTest {
-  const currentTestMatch = content.match(/##\s*Current Test\s*(?:\n<!--[\s\S]*?-->)?\n([\s\S]*?)(?=\n##\s|$)/i);
-  if (!currentTestMatch) {
+  // Use the seam to locate the ## Current Test section (ADR-1372 T5).
+  // HTML-comment stripping within the section body is UAT-specific, so we keep
+  // the comment removal caller-side after extracting the body.
+  const currentTestSection = collectSection(
+    content,
+    (h) => /^current\s+test$/i.test(h.text) && h.level === 2,
+    { levelBounded: true },
+  );
+  if (!currentTestSection) {
     error('UAT file is missing a Current Test section');
   }
 
-  const section = currentTestMatch![1].trimEnd();
+  // Remove any leading HTML comment block (UAT-specific document structure)
+  const rawBody = currentTestSection!.body.replace(/^<!--[\s\S]*?-->\s*\n?/, '');
+  const section = rawBody.trimEnd();
   if (!section.trim()) {
     error('Current Test section is empty');
   }
@@ -230,40 +242,53 @@ function parseCurrentTest(content: string): CurrentTest {
 }
 
 function parseFirstPendingTest(content: string): CurrentTest | null {
-  const testsMatch = content.match(/##\s*Tests\s*\n([\s\S]*?)(?=\n##\s|$)/i);
-  if (!testsMatch) {
+  // Use the seam to locate the ## Tests section (ADR-1372 T5).
+  const testsSection = collectSection(
+    content,
+    (h) => /^tests$/i.test(h.text) && h.level === 2,
+    { levelBounded: true },
+  );
+  if (!testsSection) {
     return null;
   }
 
-  const testsSection = testsMatch[1];
-  const headingPattern = /^###\s*(\d+)\.\s*([^\n]+)\s*$/gm;
-  const headings: Array<{ index: number; number: number; name: string }> = [];
-  let headingMatch: RegExpExecArray | null;
-  while ((headingMatch = headingPattern.exec(testsSection)) !== null) {
-    headings.push({
-      index: headingMatch.index,
-      number: parseInt(headingMatch[1], 10),
-      name: headingMatch[2].trim(),
-    });
-  }
+  const sectionBody = testsSection.body;
 
-  for (let i = 0; i < headings.length; i += 1) {
-    const current = headings[i];
-    const next = headings[i + 1];
-    const block = testsSection.slice(current.index, next ? next.index : undefined);
+  // Within the Tests section body, find ### N. Name sub-headings.
+  // tokenizeHeadings operates on the section body as a standalone document,
+  // filtering to level-3 headings matching the UAT-specific "N. Name" pattern.
+  // The UAT-specific item parsing (number extraction, result parsing) stays caller-side.
+  const subHeadings = tokenizeHeadings(sectionBody).filter(
+    (h) => h.level === 3 && /^\d+\.\s+/.test(h.text),
+  );
+
+  for (let i = 0; i < subHeadings.length; i += 1) {
+    const current = subHeadings[i];
+    const next = subHeadings[i + 1];
+    // Slice the block for this sub-test from the section body text
+    const block = next
+      ? sectionBody.slice(current.offset, next.offset)
+      : sectionBody.slice(current.offset);
+
     if (!/^result:\s*\[?pending\]?\s*$/im.test(block)) {
       continue;
     }
 
+    // Extract the UAT-specific number and name from the heading text
+    const headingParts = current.text.match(/^(\d+)\.\s+(.+)$/);
+    if (!headingParts) continue;
+    const testNumber = parseInt(headingParts[1], 10);
+    const testName = headingParts[2].trim();
+
     const expected = parseExpectedFromTestBlock(block);
     if (!expected) {
-      error(`Pending UAT test ${current.number} is missing an expected field`);
+      error(`Pending UAT test ${testNumber} is missing an expected field`);
     }
 
     return {
       complete: false,
-      number: current.number,
-      name: sanitizeForDisplay(current.name),
+      number: testNumber,
+      name: sanitizeForDisplay(testName),
       expected: sanitizeForDisplay(expected),
     };
   }
@@ -342,10 +367,14 @@ function parseUatItems(content: string): UatItem[] {
 function parseVerificationItems(content: string, status: string): UatItem[] {
   const items: UatItem[] = [];
   if (status === 'human_needed') {
-    // Extract from human_verification section — look for numbered items or table rows
-    const hvSection = content.match(/##\s*Human Verification.*?\n([\s\S]*?)(?=\n##\s|\n---\s|$)/i);
+    // Use the seam to locate the ## Human Verification section (ADR-1372 T5).
+    const hvSection = collectSection(
+      content,
+      (h) => /^human\s+verification/i.test(h.text) && h.level === 2,
+      { levelBounded: true },
+    );
     if (hvSection) {
-      const lines = hvSection[1].split('\n');
+      const lines = hvSection.body.split('\n');
       for (const line of lines) {
         // Match table rows: | N | description | ... |
         const tableMatch = line.match(/\|\s*(\d+)\s*\|\s*([^|]+)/);
