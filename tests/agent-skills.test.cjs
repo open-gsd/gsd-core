@@ -211,6 +211,14 @@ describe('agent-skills command', () => {
     const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
     assert.ok(r.success, 'Command should succeed even with missing skill paths');
     assert.strictEqual(r.ir.block, '', 'block must be empty when all skill paths are missing');
+    // The --json IR carries a warnings[] field (#1374): a skipped path must not
+    // be dropped silently. Assert it names the missing path so this test guards
+    // the silent-drop regression, not merely the empty block.
+    assert.ok(Array.isArray(r.ir.warnings), 'IR must include a warnings array');
+    assert.ok(
+      r.ir.warnings.some((w) => w.includes('skills/nonexistent')),
+      `warnings must name the skipped path, got: ${JSON.stringify(r.ir.warnings)}`,
+    );
   });
 
   test('validates path safety — rejects traversal attempts', () => {
@@ -226,11 +234,12 @@ describe('agent-skills command', () => {
 
   test('returns typed empty IR when no agent type argument provided', () => {
     const r = runAgentSkillsJson(['agent-skills'], tmpDir);
-    // With --json and no agent type, the command outputs the empty-string IR
     assert.ok(r.success, 'Command should succeed');
-    // Output is JSON, either empty string or empty object
-    const parsed = JSON.parse(r.success ? JSON.stringify(r.ir) : '""');
-    assert.ok(parsed === '' || (typeof parsed === 'object'), 'Should return empty or empty-agent IR');
+    // With --json and no agent type, cmdAgentSkills calls output('', raw, ''),
+    // so the IR is the JSON-encoded empty string "" which parses to ''. Pin that
+    // exact contract: the old assertion (=== '' || typeof === 'object') passed
+    // even for a null IR because typeof null === 'object', so it guarded nothing.
+    assert.strictEqual(r.ir, '', 'empty IR must be the empty string when no agent type is provided');
   });
 });
 
