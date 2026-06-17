@@ -79,6 +79,18 @@ OMP_PROFILE=work node bin/install.js --global --omp
 
 The upstream npm package remains `@opengsd/gsd-core`; use it for upstream GSD Core installs, not for this fork's OMP-only additions.
 
+To install this fork from GitHub with `npm exec --package=github:...`, npm lifecycle scripts must be allowed so the package can prepare its generated runtime files. If you disable scripts globally, enable them only for that install. Only use `--ignore-scripts=false` for a GitHub package you trust; if your policy forbids lifecycle scripts, clone and audit the repo or use a published release instead.
+
+```bash
+npm exec --yes --ignore-scripts=false --package=github:sh1ny/gsd-omp#next -- gsd-core --omp --local
+```
+
+If npm keeps reusing a failed npx sandbox, delete npm's `_npx` cache or pass `--cache` with a temporary directory. For macOS/Linux:
+
+```bash
+npm exec --cache "$(mktemp -d)" --yes --ignore-scripts=false --package=github:sh1ny/gsd-omp#next -- gsd-core --omp --local
+```
+
 For non-OMP runtime details inherited from upstream, see [Install on your runtime](docs/how-to/install-on-your-runtime.md).
 
 Once installed, start your first project:

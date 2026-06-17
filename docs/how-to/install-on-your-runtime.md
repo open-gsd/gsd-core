@@ -24,6 +24,18 @@ npx @opengsd/gsd-core@latest
 
 That is the only command you need for a fresh install or to re-run the installer after switching runtimes.
 
+Installing from a GitHub branch or commit with `npm exec --package=github:...` requires npm lifecycle scripts so the package can prepare its generated runtime files. If you disable scripts globally, enable them only for that install. Only use `--ignore-scripts=false` for a GitHub package you trust; if your policy forbids lifecycle scripts, clone and audit the repo or use a published release instead.
+
+```bash
+npm exec --yes --ignore-scripts=false --package=github:open-gsd/gsd-core#next -- gsd-core
+```
+
+If npm keeps reusing a failed npx sandbox, delete npm's `_npx` cache or pass `--cache` with a temporary directory. For macOS/Linux:
+
+```bash
+npm exec --cache "$(mktemp -d)" --yes --ignore-scripts=false --package=github:open-gsd/gsd-core#next -- gsd-core
+```
+
 ---
 
 ## Per-runtime instructions
