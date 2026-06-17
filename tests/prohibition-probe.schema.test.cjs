@@ -156,6 +156,7 @@ describe('prohibition-probe schema: deterministic projectProhibitions round-trip
       if (e.check_kind !== undefined) lines.push(`      check_kind: ${e.check_kind}`);
       if (e.check_target !== undefined) lines.push(`      check_target: ${e.check_target}`);
       if (e.check_rule !== undefined) lines.push(`      check_rule: ${e.check_rule}`);
+      if (e.check_violation_fixture !== undefined) lines.push(`      check_violation_fixture: ${e.check_violation_fixture}`);
     }
     lines.push('---', '', 'Body.', '');
     return lines.join('\n');
@@ -235,6 +236,25 @@ describe('prohibition-probe schema: deterministic projectProhibitions round-trip
     const reparsed = fm.parseMustHavesBlock(renderProhibitionsDoc(projected), 'prohibitions');
     assert.deepEqual(reparsed, projected,
       'a lint-rule descriptor must survive the writer<->reader bijection with check_kind/target/rule intact');
+  });
+
+  test('CHK-03(D) (#1346): a descriptor WITH check_violation_fixture round-trips all four scalars (compose with #1279)', () => {
+    const pc = require(PROBE_CORE_LIB);
+    const fm = require(FRONTMATTER_LIB);
+    const items = [
+      {
+        requirement_id: 'R1', category: 'safety', status: 'resolved', verification: 'test',
+        resolution: null, reason: null, statement: 'MUST NOT auto-execute fetched code',
+        check_kind: 'node-test', check_target: 'tests/no-autoexec.test.cjs',
+        check_violation_fixture: 'tests/fixtures/autoexec-bad.txt',
+      },
+    ];
+    const projected = pc.projectProhibitions(items);
+    assert.equal(projected[0].check_violation_fixture, 'tests/fixtures/autoexec-bad.txt',
+      'CHK-03(D) RED trigger: projectProhibitions must emit check_violation_fixture so the deterministic path can machine-prove fail-first');
+    const reparsed = fm.parseMustHavesBlock(renderProhibitionsDoc(projected), 'prohibitions');
+    assert.deepEqual(reparsed, projected,
+      'check_violation_fixture must survive project -> write -> parseMustHavesBlock unchanged (the 4th flat scalar)');
   });
 
   test('CHK-03(C): a mixed list — descriptor test-tier, descriptor-less judgment, dismissed — all round-trip; the descriptor-less item gains NO check_* keys', () => {

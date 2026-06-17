@@ -113,6 +113,104 @@ describe('map-codebase workflow references configurable timeout (#1472)', () => 
   });
 });
 
+// ─── #1359: background-subagent collection migrated off deprecated TaskOutput ──
+// Anthropic deprecated the Claude Code `TaskOutput` tool (prefer `Read` on the
+// task's output file) and `TaskOutput(block=true)` has a confirmed main-session
+// hang (anthropics/claude-code#20236). The collect steps must spawn with
+// `run_in_background=true` then `Read` each agent's `outputFile` (from the
+// `async_launched` result). The non-Claude runtime fallbacks must be preserved
+// and must not reference TaskOutput either.
+
+describe('#1359: workflows collect background subagents via Read(outputFile), not TaskOutput', () => {
+  const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
+
+  function readWorkflow(name) {
+    return fs.readFileSync(path.join(WORKFLOWS_DIR, name), 'utf8');
+  }
+
+  function stepBlock(content, stepName) {
+    const start = content.indexOf(`<step name="${stepName}"`);
+    assert.ok(start !== -1, `step "${stepName}" must exist`);
+    const end = content.indexOf('</step>', start);
+    assert.ok(end !== -1, `step "${stepName}" must be closed`);
+    return content.slice(start, end);
+  }
+
+  describe('map-codebase.md', () => {
+    const content = readWorkflow('map-codebase.md');
+
+    test('contains no deprecated TaskOutput tool references', () => {
+      assert.ok(
+        !content.includes('TaskOutput'),
+        'map-codebase.md must not reference the deprecated TaskOutput tool (claude-code#20236 hang)'
+      );
+    });
+
+    test('collect_confirmations reads each agent outputFile', () => {
+      const block = stepBlock(content, 'collect_confirmations');
+      assert.ok(block.includes('outputFile'), 'collect_confirmations must read each agent outputFile');
+      assert.ok(/Read tool:/.test(block), 'collect_confirmations must instruct a Read tool call');
+      assert.ok(block.includes('async_launched'), 'collect_confirmations must reference the async_launched result');
+      assert.ok(!/block:\s*true/.test(block), 'collect_confirmations must not use a blocking collect call');
+    });
+
+    test('still spawns mappers with run_in_background=true', () => {
+      assert.ok(content.includes('run_in_background=true'), 'background spawn must be preserved');
+    });
+
+    test('preserves the non-Agent runtime fallback (sequential_mapping)', () => {
+      assert.ok(content.includes('<step name="sequential_mapping"'), 'sequential_mapping fallback must be preserved');
+      assert.ok(content.includes('<step name="detect_runtime_capabilities"'), 'runtime capability detection must be preserved');
+      assert.ok(!stepBlock(content, 'sequential_mapping').includes('TaskOutput'), 'sequential_mapping fallback must not reference TaskOutput');
+    });
+
+    test('keeps the mapper completion marker contract', () => {
+      assert.ok(content.includes('## Mapping Complete'), 'mapper completion marker must remain documented');
+    });
+  });
+
+  describe('docs-update.md', () => {
+    const content = readWorkflow('docs-update.md');
+
+    test('contains no deprecated TaskOutput tool references', () => {
+      assert.ok(
+        !content.includes('TaskOutput'),
+        'docs-update.md must not reference the deprecated TaskOutput tool (claude-code#20236 hang)'
+      );
+    });
+
+    for (const step of ['collect_wave_1', 'collect_wave_2']) {
+      test(`${step} reads each agent outputFile`, () => {
+        const block = stepBlock(content, step);
+        assert.ok(block.includes('outputFile'), `${step} must read each agent outputFile`);
+        assert.ok(block.includes('async_launched'), `${step} must reference the async_launched result`);
+        assert.ok(/Read tool:/.test(block), `${step} must instruct a Read tool call`);
+        assert.ok(!/block:\s*true/.test(block), `${step} must not use a blocking collect call`);
+      });
+    }
+
+    test('dispatch_monorepo_packages collects per-package READMEs via outputFile', () => {
+      const block = stepBlock(content, 'dispatch_monorepo_packages');
+      assert.ok(block.includes('outputFile'), 'per-package collection must read each agent outputFile');
+      assert.ok(block.includes('async_launched'), 'per-package collection must reference the async_launched result');
+      assert.ok(!/block:\s*true/.test(block), 'per-package collection must not use a blocking collect call');
+    });
+
+    test('still spawns doc-writers with run_in_background=true', () => {
+      assert.ok(content.includes('run_in_background=true'), 'background spawn must be preserved');
+    });
+
+    test('preserves the non-Task runtime fallback (sequential_generation)', () => {
+      assert.ok(content.includes('<step name="sequential_generation"'), 'sequential_generation fallback must be preserved');
+      assert.ok(!stepBlock(content, 'sequential_generation').includes('TaskOutput'), 'sequential_generation fallback must not reference TaskOutput');
+    });
+
+    test('keeps the doc-writer completion marker contract', () => {
+      assert.ok(content.includes('## Doc Generation Complete'), 'doc-writer completion marker must remain documented');
+    });
+  });
+});
+
 describe('planning-config.md documents subagent_timeout (#1472)', () => {
   test('reference doc includes subagent_timeout entry', () => {
     const refPath = path.join(__dirname, '..', 'gsd-core', 'references', 'planning-config.md');

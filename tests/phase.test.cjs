@@ -19,7 +19,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const os = require('node:os');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 
 const GSD_TOOLS_BIN = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
@@ -4279,6 +4279,71 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
     return { planningDir, phase5Dir };
   }
 
+  function setupPhase1316Project(tmpDir) {
+    const planningDir = path.join(tmpDir, '.planning');
+    const phasesDir = path.join(planningDir, 'phases');
+    fs.mkdirSync(planningDir, { recursive: true });
+    fs.mkdirSync(phasesDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(planningDir, 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## Current Milestone: v3.0',
+        '',
+        '- [ ] Phase 32: Backlog-Closeout Lib Extraction',
+        '- [ ] Phase 33: Follow Up Implementation',
+        '',
+        '### Phase 32: Backlog-Closeout Lib Extraction',
+        '**Goal:** Complete closeout extraction',
+        '**Plans:** 1 plans',
+        '',
+        '### Phase 33: Follow Up Implementation',
+        '**Goal:** Continue implementation',
+      ].join('\n'),
+    );
+
+    fs.writeFileSync(
+      path.join(planningDir, 'STATE.md'),
+      [
+        '---',
+        'gsd_state_version: 1.0',
+        'status: executing',
+        'current_phase: "32"',
+        'last_activity: "2026-06-14"',
+        'progress:',
+        '  total_phases: 2',
+        '  completed_phases: 0',
+        '  total_plans: 1',
+        '  completed_plans: 0',
+        '  percent: 0',
+        '---',
+        '',
+        '# Project State',
+        '',
+        '## Current Position',
+        '',
+        'Phase: 32 — Backlog-Closeout Lib Extraction',
+        'Plan: 1 of 1',
+        'Status: Executing Phase 32',
+        'Last activity: 2026-06-14 — recorded planning complete',
+        '',
+        '## Session',
+        '',
+        'Last session: 2026-06-14T00:00:00.000Z',
+      ].join('\n'),
+    );
+
+    const phase32Dir = path.join(phasesDir, '32-backlog-closeout-lib-extraction');
+    fs.mkdirSync(phase32Dir, { recursive: true });
+    fs.writeFileSync(path.join(phase32Dir, '32-01-PLAN.md'), '# Plan', 'utf8');
+    fs.writeFileSync(path.join(phase32Dir, '32-01-SUMMARY.md'), '# Summary', 'utf8');
+    fs.mkdirSync(path.join(phasesDir, '33-follow-up-implementation'), { recursive: true });
+
+    return { planningDir };
+  }
+
   describe('bug #3517: phase.complete leaves STATE.md with stale fields', () => {
     let tmpDir;
 
@@ -4432,6 +4497,39 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
       const state = fs.readFileSync(statePath, 'utf8');
       assert.match(state, /completed_phases:\s*2/, 'completed_phases must be updated in frontmatter');
       assert.match(state, /Phase:\s*0?6\b/, 'numeric Phase line should advance to phase 6');
+    });
+
+    test('prose-block STATE keeps next phase name without field-miss warnings (#1316)', () => {
+      const { planningDir } = setupPhase1316Project(tmpDir);
+
+      const result = spawnSync(process.execPath, [GSD_TOOLS_BIN, 'phase', 'complete', '32'], {
+        cwd: tmpDir,
+        encoding: 'utf8',
+        env: process.env,
+      });
+
+      assert.strictEqual(result.status, 0, `phase complete failed: ${result.stderr || result.stdout}`);
+      assert.ok(
+        !result.stderr.includes('Current Phase Name'),
+        `phase.complete must not warn about missing Current Phase Name on prose-block STATE.md; stderr:\n${result.stderr}`,
+      );
+      assert.ok(
+        !result.stderr.includes('Last Activity Description'),
+        `phase.complete must not warn about missing Last Activity Description on prose-block STATE.md; stderr:\n${result.stderr}`,
+      );
+
+      const state = fs.readFileSync(path.join(planningDir, 'STATE.md'), 'utf8');
+      assert.match(state, /current_phase:\s*"?33"?/, 'current_phase frontmatter must advance to 33');
+      assert.match(
+        state,
+        /^Phase:\s*33\s+—\s+Follow Up Implementation\b/m,
+        `Current Position Phase line must keep the next phase name; state:\n${state}`,
+      );
+      assert.match(
+        state,
+        /^Last activity:\s*\d{4}-\d{2}-\d{2}\s+—\s+Phase 32 complete/m,
+        `Last activity line must use the template em-dash delimiter with narrative; state:\n${state}`,
+      );
     });
 
     test('body By Phase table row for completed phase shows correct plan count', () => {

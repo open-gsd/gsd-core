@@ -1342,6 +1342,21 @@ function writePlanningFileSet(writes: WriteSpec[]): void {
   }
 }
 
+function phaseDisplayNameFromRoadmap(roadmapContent: string | null, phaseNum: string | null): string | null {
+  if (!roadmapContent || !phaseNum) return null;
+  const phaseEscaped = phaseMarkdownRegexSource(phaseNum);
+  const heading = roadmapContent.match(new RegExp(`^#{2,4}\\s*Phase\\s+${phaseEscaped}\\s*:\\s*([^\\n]+)`, 'im'));
+  if (!heading) return null;
+  const name = heading[1].replace(/\(INSERTED\)/i, '').trim();
+  return name || null;
+}
+
+function phaseDisplayNameFromSlug(slug: string | null): string | null {
+  if (!slug) return null;
+  const name = slug.replace(/-/g, ' ').trim();
+  return name || null;
+}
+
 function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
   if (!phaseNum) {
     error('phase number required for phase complete');
@@ -1642,6 +1657,9 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         let stateContent = originalStateContent;
 
         const phaseValue = nextPhaseNum || phaseNum;
+        const nextPhaseDisplayName =
+          phaseDisplayNameFromRoadmap(roadmapContent, nextPhaseNum) ??
+          phaseDisplayNameFromSlug(nextPhaseName);
         const existingPhaseField =
           stateExtractField(stateContent, 'Current Phase') ||
           stateExtractField(stateContent, 'Phase');
@@ -1651,12 +1669,14 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           const nameMatch = existingPhaseField.match(/\(([^)]+)\)/);
           if (totalMatch) {
             const total = totalMatch[1];
-            const nameStr = nextPhaseName
-              ? ` (${nextPhaseName.replace(/-/g, ' ')})`
+            const nameStr = nextPhaseDisplayName
+              ? ` (${nextPhaseDisplayName})`
               : nameMatch
                 ? ` (${nameMatch[1]})`
                 : '';
             newPhaseValue = `${phaseValue} of ${total}${nameStr}`;
+          } else if (nextPhaseDisplayName) {
+            newPhaseValue = `${phaseValue} — ${nextPhaseDisplayName}`;
           }
         }
         stateContent = stateReplaceFieldWithFallback(
@@ -1666,13 +1686,10 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           newPhaseValue,
         );
 
-        if (nextPhaseName) {
-          stateContent = stateReplaceFieldWithFallback(
-            stateContent,
-            'Current Phase Name',
-            null,
-            nextPhaseName.replace(/-/g, ' '),
-          );
+        if (nextPhaseDisplayName) {
+          stateContent =
+            stateReplaceField(stateContent, 'Current Phase Name', nextPhaseDisplayName) ||
+            stateContent;
         }
 
         stateContent = stateReplaceFieldWithFallback(
@@ -1689,19 +1706,20 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           'Not started',
         );
 
-        stateContent = stateReplaceFieldWithFallback(
-          stateContent,
-          'Last Activity',
-          'Last activity',
-          today,
-        );
+        const lastActivityDescription = `Phase ${phaseNum} complete${nextPhaseNum ? `, transitioned to Phase ${nextPhaseNum}` : ''}`;
+        if (/^Last activity:/m.test(stateContent)) {
+          stateContent =
+            stateReplaceField(stateContent, 'Last activity', `${today} — ${lastActivityDescription}`) ||
+            stateContent;
+        } else {
+          stateContent =
+            stateReplaceField(stateContent, 'Last Activity', today) ||
+            stateContent;
+        }
 
-        stateContent = stateReplaceFieldWithFallback(
-          stateContent,
-          'Last Activity Description',
-          null,
-          `Phase ${phaseNum} complete${nextPhaseNum ? `, transitioned to Phase ${nextPhaseNum}` : ''}`,
-        );
+        stateContent =
+          stateReplaceField(stateContent, 'Last Activity Description', lastActivityDescription) ||
+          stateContent;
 
         const completedRaw = stateExtractField(stateContent, 'Completed Phases');
         if (completedRaw !== null) {

@@ -85,13 +85,13 @@ describe('detect-custom-files — update workflow backup detection (#1997)', () 
     );
   });
 
-  test('detects custom files added inside agents/', () => {
+  test('detects custom gsd-prefixed files added inside agents/', () => {
     writeManifest(tmpDir, {
       'agents/gsd-executor.md': '# GSD Executor\n',
     });
 
-    // Add a user's custom agent (not prefixed with gsd-)
-    const customAgent = path.join(tmpDir, 'agents/my-custom-agent.md');
+    // Add a user's custom GSD-prefixed agent that the installer would prune.
+    const customAgent = path.join(tmpDir, 'agents/gsd-my-custom-agent.md');
     fs.mkdirSync(path.dirname(customAgent), { recursive: true });
     fs.writeFileSync(customAgent, '# My Custom Agent\n');
 
@@ -103,7 +103,7 @@ describe('detect-custom-files — update workflow backup detection (#1997)', () 
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const json = JSON.parse(result.output);
-    assert.ok(json.custom_files.includes('agents/my-custom-agent.md'),
+    assert.ok(json.custom_files.includes('agents/gsd-my-custom-agent.md'),
       `custom agent should be detected; got: ${JSON.stringify(json.custom_files)}`);
   });
 
@@ -226,18 +226,16 @@ describe('detect-custom-files — update workflow backup detection (#1997)', () 
     );
   });
 
-  // After v1.39.0 skill consolidation (#2790), the installer wipes skills/ on
-  // update. skills/ is now a GSD-managed directory and must be scanned so that
-  // user-added skill directories are backed up before the wipe (#2942).
-  // GSD-owned skills (tracked in manifest) must NOT be flagged as custom.
-  test('scans skills/ directory and detects user-added skills not in manifest (#2942)', () => {
+  // skills/ is prefix-selective: the installer prunes gsd-* entries, not every
+  // skill directory under the shared runtime skill root.
+  test('scans skills/ directory and detects custom gsd-prefixed skills not in manifest (#2942, #1325)', () => {
     writeManifest(tmpDir, {
       'gsd-core/workflows/execute-phase.md': '# Execute Phase\n',
       'skills/gsd-planner/SKILL.md': '# GSD Planner\n',
     });
 
-    // Simulate user having a custom skill installed — NOT in manifest
-    const customSkillDir = path.join(tmpDir, 'skills', 'my-custom-skill');
+    // Simulate user having a custom GSD-prefixed skill installed — NOT in manifest
+    const customSkillDir = path.join(tmpDir, 'skills', 'gsd-my-custom-skill');
     fs.mkdirSync(customSkillDir, { recursive: true });
     fs.writeFileSync(path.join(customSkillDir, 'SKILL.md'), '# My Custom Skill\n');
 
@@ -250,9 +248,9 @@ describe('detect-custom-files — update workflow backup detection (#1997)', () 
 
     const json = JSON.parse(result.output);
 
-    // The user's custom skill should be detected
+    // The user's custom GSD-prefixed skill should be detected
     assert.ok(
-      json.custom_files.includes('skills/my-custom-skill/SKILL.md'),
+      json.custom_files.includes('skills/gsd-my-custom-skill/SKILL.md'),
       `custom skill should be detected; got: ${JSON.stringify(json.custom_files)}`
     );
 
@@ -260,6 +258,42 @@ describe('detect-custom-files — update workflow backup detection (#1997)', () 
     assert.ok(
       !json.custom_files.includes('skills/gsd-planner/SKILL.md'),
       `GSD-owned skill should not be flagged as custom; got: ${JSON.stringify(json.custom_files)}`
+    );
+  });
+
+  test('does not report non-gsd shared skills, hooks, or prior backups (#1325)', () => {
+    writeManifest(tmpDir, {
+      'skills/gsd-planner/SKILL.md': '# GSD Planner\n',
+      'hooks/gsd-check-update.js': 'console.log("managed");\n',
+    });
+
+    fs.mkdirSync(path.join(tmpDir, 'skills', 'gstack-one'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'skills', 'gstack-one', 'SKILL.md'), '# GStack\n');
+    fs.mkdirSync(path.join(tmpDir, 'hooks', 'user'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'hooks', 'user', 'custom.js'), 'console.log("user");\n');
+    fs.mkdirSync(path.join(tmpDir, 'gsd-user-files-backup', 'skills', 'gsd-old'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'gsd-user-files-backup', 'skills', 'gsd-old', 'SKILL.md'), '# Old backup\n');
+
+    const result = runGsdTools(
+      ['detect-custom-files', '--config-dir', tmpDir],
+      tmpDir
+    );
+
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const json = JSON.parse(result.output);
+    assert.ok(
+      !json.custom_files.includes('skills/gstack-one/SKILL.md'),
+      `non-gsd skill should not be detected; got: ${JSON.stringify(json.custom_files)}`
+    );
+    assert.ok(
+      !json.custom_files.includes('hooks/user/custom.js'),
+      `non-gsd hook should not be detected; got: ${JSON.stringify(json.custom_files)}`
+    );
+    assert.strictEqual(
+      json.custom_files.filter(f => f.startsWith('gsd-user-files-backup/')).length,
+      0,
+      `prior backups should not be detected; got: ${JSON.stringify(json.custom_files)}`
     );
   });
 

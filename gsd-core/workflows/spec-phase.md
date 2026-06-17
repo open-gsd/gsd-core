@@ -365,11 +365,16 @@ For each Requirement gathered so far, run the two-stage recall→precision pass:
        - `check_target` — the negative-test file path (for `node-test`), or the path to lint
          (for `lint-rule`).
        - `check_rule` — the eslint rule id (e.g. `local/no-source-grep`); `lint-rule` only.
+       - `check_violation_fixture` (#1346) — path to a KNOWN-BAD subject the wired check is run
+         against to **machine-prove fail-first**; rides BOTH kinds. Capture it to let the item green
+         end-to-end with zero hand-authoring at verify time; for `node-test` the negative test should
+         read its subject from the `GSD_PROHIB_SUBJECT` env var so the prover can inject this fixture.
        This is a **SOFT capture (CHK-04): a `test`-tier prohibition WITHOUT a descriptor is still
        allowed** — if the author cannot yet name the wired check, leave the descriptor empty and
        proceed. It is NOT a hard authoring block; the item simply stays fail-closed/flagged
-       downstream (an absent/partial descriptor → `descriptorFromProjection` null/under-specified
-       → producer fail-closed locate, never green). Do NOT capture `failFirst` here — it is a
+       downstream (an absent/partial descriptor — or one with no `check_violation_fixture` —
+       → `descriptorFromProjection` null/under-specified/fixture-less → producer fail-closed
+       locate-or-unprovable, never green). Do NOT capture `failFirst` here — it is a
        verify-time caller attestation, not a spec-authored field (#1279).
    - **Dismiss (reason)** → mark `dismissed` with a REQUIRED non-empty reason (PROB-05). The
      reason string is the audit trail; silence is not a valid dismissal.
@@ -390,8 +395,8 @@ For each Requirement gathered so far, run the two-stage recall→precision pass:
 written (test or judgment tier); otherwise leave `unresolved`. **`--auto` NEVER auto-dismisses
 a prohibition** — a wrong dismissal is the exact silent failure this probe eliminates (PROB-06,
 the load-bearing safety property). On a `test`-tier auto-resolution, capture the `check_kind` /
-`check_target` / `check_rule` descriptor **only when a wired check is unambiguous**; otherwise
-leave it empty — `--auto` NEVER fabricates a check path (a wrong locate is re-validated and
+`check_target` / `check_rule` / `check_violation_fixture` descriptor **only when a wired check is unambiguous**; otherwise
+leave it empty — `--auto` NEVER fabricates a check path or fixture (a wrong locate is re-validated and
 fails closed at the producer, but a fabricated path is still noise to avoid). Log:
 `[auto] prohibitions: R resolved, U unresolved`.
 
@@ -402,8 +407,8 @@ runs identically for non-Claude / text-mode hosts.
 Populate the `## Prohibitions` section of SPEC.md from the resolved prohibitions (each
 `resolved`/`test` row is a checkable negative acceptance criterion; `resolved`/`judgment`
 rows route to judgment review; `⚠ UNRESOLVED` rows are flagged as assumptions). A
-`resolved`/`test` row ALSO carries its captured `check_kind` / `check_target` / `check_rule`
-descriptor when present (so the projection feeds `verify-phase`'s deterministic locate, #1278);
+`resolved`/`test` row ALSO carries its captured `check_kind` / `check_target` / `check_rule` /
+`check_violation_fixture` descriptor when present (so the projection feeds `verify-phase`'s deterministic locate + machine-proof, #1278 + #1346);
 a `test` row with no captured descriptor is still valid — it stays fail-closed/flagged
 downstream rather than blocking authoring.
 

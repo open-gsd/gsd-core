@@ -315,6 +315,10 @@ function skillFrontmatterName(skillDirName) {
   return skillDirName;
 }
 
+function normalizeClaudeSkillEffort(effort) {
+  return effort === 'xhigh' ? 'max' : effort;
+}
+
 /**
  * Qwen Code skills accept an optional numeric `priority` frontmatter field.
  * Per the Qwen skills spec (qwen-code/docs/users/features/skills.md, verified
@@ -411,7 +415,7 @@ function convertClaudeCommandToClaudeSkill(content, skillName, runtime = null, c
   // token-budget tier). Fields are Claude-specific; unknown frontmatter
   // fields are silently ignored by other runtimes (backward-compatible).
   if (context) fm += `context: ${context}\n`;
-  if (effort) fm += `effort: ${effort}\n`;
+  if (effort) fm += `effort: ${normalizeClaudeSkillEffort(effort)}\n`;
   if (toolsBlock) fm += toolsBlock;
   fm += '---';
 
@@ -1227,9 +1231,11 @@ function convertClaudeCommandToOmpCommand(content, commandName) {
 
   const description = extractFrontmatterField(frontmatter, 'description') || `Run GSD workflow ${commandName}.`;
   const argumentHint = extractFrontmatterField(frontmatter, 'argument-hint');
+  const effort = extractFrontmatterField(frontmatter, 'effort');
 
   let fm = `---\nname: ${yamlIdentifier(commandName)}\ndescription: ${yamlQuote(toSingleLine(description))}\n`;
   if (argumentHint) fm += `argument-hint: ${yamlQuote(argumentHint)}\n`;
+  if (effort) fm += `effort: ${normalizeClaudeSkillEffort(effort)}\n`;
   fm += '---';
   return `${fm}\n${body}`;
 }
@@ -1241,9 +1247,11 @@ function convertClaudeCommandToOmpSkill(content, skillName) {
 
   const description = extractFrontmatterField(frontmatter, 'description') || `Run GSD workflow ${skillName}.`;
   const argumentHint = extractFrontmatterField(frontmatter, 'argument-hint');
+  const effort = extractFrontmatterField(frontmatter, 'effort');
 
   let fm = `---\nname: ${yamlIdentifier(skillName)}\ndescription: ${yamlQuote(toSingleLine(description))}\n`;
   if (argumentHint) fm += `argument-hint: ${yamlQuote(argumentHint)}\n`;
+  if (effort) fm += `effort: ${normalizeClaudeSkillEffort(effort)}\n`;
   fm += '---';
   return `${fm}\n${body}`;
 }
@@ -2242,4 +2250,5 @@ export = {
   convertClaudeAgentToClineAgent,
   convertClaudeAgentToCodexAgent,
   convertClaudeAgentToOmpAgent,
+  normalizeOmpModelOverride,
 };

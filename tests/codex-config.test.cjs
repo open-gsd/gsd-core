@@ -20,7 +20,6 @@ const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
 const { cleanup } = require('./helpers.cjs');
-const jsYaml = require('js-yaml');
 
 // #2153 follow-up: ensure hooks/dist/ exists before any install integration
 // test runs. The Codex install path copies hook files from hooks/dist/, which
@@ -45,8 +44,7 @@ const {
   convertClaudeAgentToCodexAgent,
   convertClaudeCommandToCodexSkill,
   generateCodexAgentToml,
-  generateCodexSkillMetadataYaml,
-  writeCodexSkillMetadataFiles,
+  cleanupCodexSkillMetadataSidecars,
   generateCodexConfigBlock,
   stripGsdFromCodexConfig,
   migrateCodexHooksMapFormat,
@@ -2599,214 +2597,135 @@ describe('Codex uninstall symmetry for hook-enabled configs', () => {
   });
 });
 
-// ─── #774: generateCodexSkillMetadataYaml ────────────────────────────────────────
+// ─── #1326: cleanupCodexSkillMetadataSidecars (replaces #774 writeCodexSkillMetadataFiles) ──
 
-describe('generateCodexSkillMetadataYaml', () => {
-  test('emits valid parseable YAML with interface section (#774)', () => {
-    const yaml = generateCodexSkillMetadataYaml('gsd-plan-phase', 'Plan and structure the next development phase.');
-    // Must start with interface: and be parseable YAML
-    assert.ok(yaml.startsWith('interface:'), 'must start with interface: key');
-    const parsed = jsYaml.load(yaml);
-    assert.ok(parsed && typeof parsed === 'object', 'must be parseable YAML object');
-    assert.ok(parsed.interface, 'must have interface key');
-    assert.ok('display_name' in parsed.interface, 'must include display_name');
-    assert.ok('short_description' in parsed.interface, 'must include short_description');
-  });
-
-  test('strips gsd- prefix from display_name and converts hyphens to spaces (#774)', () => {
-    const yaml = generateCodexSkillMetadataYaml('gsd-plan-phase', 'Plan and structure the next development phase.');
-    const parsed = jsYaml.load(yaml);
-    assert.strictEqual(parsed.interface.display_name, 'plan phase',
-      'display_name must be "plan phase" (gsd- stripped, hyphens→spaces)');
-  });
-
-  test('embeds the short_description text as decoded string (#774)', () => {
-    const desc = 'Run GSD workflow gsd-test.';
-    const yaml = generateCodexSkillMetadataYaml('gsd-test', desc);
-    const parsed = jsYaml.load(yaml);
-    assert.strictEqual(parsed.interface.short_description, desc,
-      'short_description must round-trip through YAML correctly');
-  });
-
-  test('escapes double-quotes in description so parsed value is correct (#774)', () => {
-    const desc = 'Run "special" workflow.';
-    const yaml = generateCodexSkillMetadataYaml('gsd-test', desc);
-    const parsed = jsYaml.load(yaml);
-    assert.strictEqual(parsed.interface.short_description, desc,
-      'double-quotes in description must round-trip correctly through YAML');
-  });
-
-  test('escapes backslashes in description so parsed value is correct (#774)', () => {
-    const desc = 'Run C:\\path\\to workflow.';
-    const yaml = generateCodexSkillMetadataYaml('gsd-test', desc);
-    const parsed = jsYaml.load(yaml);
-    assert.strictEqual(parsed.interface.short_description, desc,
-      'backslashes in description must round-trip correctly through YAML');
-  });
-
-  test('output ends with a newline (#774)', () => {
-    const yaml = generateCodexSkillMetadataYaml('gsd-test', 'Test skill.');
-    assert.ok(yaml.endsWith('\n'), 'output must end with a newline');
-  });
-
-  test('works for skill without gsd- prefix (#774)', () => {
-    const yaml = generateCodexSkillMetadataYaml('my-skill', 'A custom skill.');
-    const parsed = jsYaml.load(yaml);
-    assert.strictEqual(parsed.interface.display_name, 'my skill',
-      'display_name must convert hyphens to spaces even without gsd- prefix');
-  });
-});
-
-// ─── #774: writeCodexSkillMetadataFiles ─────────────────────────────────────────
-
-describe('writeCodexSkillMetadataFiles', () => {
+describe('cleanupCodexSkillMetadataSidecars (#1326)', () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-test-skill-meta-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-test-sidecar-cleanup-'));
   });
 
   afterEach(() => {
     cleanup(tmpDir);
   });
 
-  test('writes agents/openai.yaml for each gsd-* skill directory (#774)', () => {
-    // Set up a synthetic skills directory with two gsd-* skill dirs
-    const skills = [
-      { name: 'gsd-plan-phase', desc: 'Plan and structure the next development phase.' },
-      { name: 'gsd-execute-phase', desc: 'Execute the current phase.' },
-    ];
-    for (const { name, desc } of skills) {
-      const skillDir = path.join(tmpDir, name);
-      fs.mkdirSync(skillDir, { recursive: true });
-      const skillMd = `---\nname: ${name}\ndescription: "${desc}"\nmetadata:\n  short-description: "${desc}"\n---\n\nBody text.\n`;
-      fs.writeFileSync(path.join(skillDir, 'SKILL.md'), skillMd);
-    }
+  test('Codex install does not emit managed agents/openai.yaml sidecars and removes stale ones (#1326)', () => {
+    // gsd-foo: managed skill with stale sidecar → sidecar removed, empty agents/ pruned
+    const fooAgents = path.join(tmpDir, 'gsd-foo', 'agents');
+    fs.mkdirSync(fooAgents, { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'gsd-foo', 'SKILL.md'), '---\nname: gsd-foo\n---\nBody.\n');
+    fs.writeFileSync(path.join(fooAgents, 'openai.yaml'), 'interface:\n  display_name: "foo"\n');
 
-    writeCodexSkillMetadataFiles(tmpDir);
+    // gsd-dev-preferences: user-owned → sidecar PRESERVED
+    const prefAgents = path.join(tmpDir, 'gsd-dev-preferences', 'agents');
+    fs.mkdirSync(prefAgents, { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'gsd-dev-preferences', 'SKILL.md'), '---\nname: gsd-dev-preferences\n---\nBody.\n');
+    const userYaml = 'interface:\n  display_name: "my prefs"\n  short_description: "User-authored"\n';
+    fs.writeFileSync(path.join(prefAgents, 'openai.yaml'), userYaml);
 
-    for (const { name, desc } of skills) {
-      const yamlPath = path.join(tmpDir, name, 'agents', 'openai.yaml');
-      assert.ok(fs.existsSync(yamlPath), `agents/openai.yaml must exist for ${name}`);
-      const content = fs.readFileSync(yamlPath, 'utf8');
-      // Verify it's parseable YAML with the correct structure
-      const parsed = jsYaml.load(content);
-      assert.ok(parsed && parsed.interface, `${name}/agents/openai.yaml must parse to object with interface:`);
-      assert.ok('display_name' in parsed.interface, `${name}/agents/openai.yaml must have display_name`);
-      assert.strictEqual(parsed.interface.short_description, desc,
-        `${name}/agents/openai.yaml short_description must match source description`);
-    }
+    // gsd-bar: managed skill with sidecar + another file in agents/ → sidecar removed, agents/ kept (has other.txt)
+    const barAgents = path.join(tmpDir, 'gsd-bar', 'agents');
+    fs.mkdirSync(barAgents, { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'gsd-bar', 'SKILL.md'), '---\nname: gsd-bar\n---\nBody.\n');
+    fs.writeFileSync(path.join(barAgents, 'openai.yaml'), 'interface:\n  display_name: "bar"\n');
+    fs.writeFileSync(path.join(barAgents, 'other.txt'), 'some other content\n');
+
+    // helper: non-gsd dir with openai.yaml → UNTOUCHED
+    const helperAgents = path.join(tmpDir, 'helper', 'agents');
+    fs.mkdirSync(helperAgents, { recursive: true });
+    fs.writeFileSync(path.join(helperAgents, 'openai.yaml'), 'interface:\n  display_name: "helper"\n');
+
+    cleanupCodexSkillMetadataSidecars(tmpDir);
+
+    // gsd-foo: sidecar removed and empty agents/ pruned
+    assert.ok(!fs.existsSync(path.join(fooAgents, 'openai.yaml')),
+      'gsd-foo/agents/openai.yaml must be removed (managed stale sidecar)');
+    assert.ok(!fs.existsSync(fooAgents),
+      'gsd-foo/agents/ must be pruned when empty after sidecar removal');
+
+    // gsd-dev-preferences: user-owned, sidecar preserved
+    assert.ok(fs.existsSync(path.join(prefAgents, 'openai.yaml')),
+      'gsd-dev-preferences/agents/openai.yaml must be preserved (user-owned)');
+    assert.strictEqual(fs.readFileSync(path.join(prefAgents, 'openai.yaml'), 'utf8'), userYaml,
+      'gsd-dev-preferences/agents/openai.yaml content must be unchanged');
+
+    // gsd-bar: sidecar removed but agents/ kept (still has other.txt)
+    assert.ok(!fs.existsSync(path.join(barAgents, 'openai.yaml')),
+      'gsd-bar/agents/openai.yaml must be removed');
+    assert.ok(fs.existsSync(barAgents),
+      'gsd-bar/agents/ must NOT be pruned (still contains other.txt)');
+    assert.ok(fs.existsSync(path.join(barAgents, 'other.txt')),
+      'gsd-bar/agents/other.txt must be preserved');
+
+    // helper: non-gsd dir untouched
+    assert.ok(fs.existsSync(path.join(helperAgents, 'openai.yaml')),
+      'helper/agents/openai.yaml must be untouched (non-gsd dir)');
   });
 
-  test('ignores non-gsd directories (#774)', () => {
-    // Non-gsd-* dir should not get agents/openai.yaml
-    const nonGsdDir = path.join(tmpDir, 'custom-skill');
-    fs.mkdirSync(nonGsdDir, { recursive: true });
-    fs.writeFileSync(path.join(nonGsdDir, 'SKILL.md'), '---\nname: custom\n---\nBody.\n');
-
-    writeCodexSkillMetadataFiles(tmpDir);
-
-    assert.ok(!fs.existsSync(path.join(nonGsdDir, 'agents', 'openai.yaml')),
-      'non-gsd-* dirs must not get agents/openai.yaml');
-  });
-
-  test('does not overwrite user-owned gsd-dev-preferences/agents/openai.yaml (#774)', () => {
-    // gsd-dev-preferences is user-owned and must never be modified by GSD install
-    const userOwnedDir = path.join(tmpDir, 'gsd-dev-preferences');
-    const agentsSubdir = path.join(userOwnedDir, 'agents');
-    fs.mkdirSync(agentsSubdir, { recursive: true });
-    fs.writeFileSync(path.join(userOwnedDir, 'SKILL.md'), '---\nname: gsd-dev-preferences\ndescription: "User pref"\n---\nBody.\n');
-    const userYaml = 'interface:\n  display_name: "my preferences"\n  short_description: "User-authored"\n';
-    fs.writeFileSync(path.join(agentsSubdir, 'openai.yaml'), userYaml);
-
-    writeCodexSkillMetadataFiles(tmpDir);
-
-    // User-authored file must remain unchanged
-    const after = fs.readFileSync(path.join(agentsSubdir, 'openai.yaml'), 'utf8');
-    assert.strictEqual(after, userYaml, 'user-owned gsd-dev-preferences/agents/openai.yaml must not be overwritten');
-  });
-
-  test('does not create agents/openai.yaml for gsd-dev-preferences if absent (#774)', () => {
-    // Even if gsd-dev-preferences exists without an openai.yaml, we must not create one
-    const userOwnedDir = path.join(tmpDir, 'gsd-dev-preferences');
-    fs.mkdirSync(userOwnedDir, { recursive: true });
-    fs.writeFileSync(path.join(userOwnedDir, 'SKILL.md'), '---\nname: gsd-dev-preferences\n---\nBody.\n');
-
-    writeCodexSkillMetadataFiles(tmpDir);
-
-    assert.ok(!fs.existsSync(path.join(userOwnedDir, 'agents', 'openai.yaml')),
-      'gsd-dev-preferences must not get agents/openai.yaml even if it was absent');
-  });
-
-  test('is a no-op when skillsDir does not exist (#774)', () => {
-    // Should not throw when the directory doesn't exist
+  test('is a no-op when skillsDir does not exist (#1326)', () => {
     assert.doesNotThrow(() => {
-      writeCodexSkillMetadataFiles(path.join(tmpDir, 'nonexistent'));
+      cleanupCodexSkillMetadataSidecars(path.join(tmpDir, 'nonexistent'));
     }, 'must not throw when skillsDir does not exist');
   });
 
-  test('skips skill dirs with missing SKILL.md without throwing (#774)', () => {
-    // Create a gsd-* dir with no SKILL.md — should fail open
-    const emptySkillDir = path.join(tmpDir, 'gsd-empty');
-    fs.mkdirSync(emptySkillDir, { recursive: true });
+  test('is a no-op for managed gsd-* dirs with no agents/openai.yaml (#1326)', () => {
+    // No sidecar present — should not throw, should not create anything
+    const skillDir = path.join(tmpDir, 'gsd-baz');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '---\nname: gsd-baz\n---\nBody.\n');
 
     assert.doesNotThrow(() => {
-      writeCodexSkillMetadataFiles(tmpDir);
-    }, 'must not throw when SKILL.md is missing');
+      cleanupCodexSkillMetadataSidecars(tmpDir);
+    }, 'must not throw when no sidecar exists');
+    assert.ok(!fs.existsSync(path.join(skillDir, 'agents')),
+      'must not create agents/ dir when no sidecar was present');
   });
 
-  test('display_name in agents/openai.yaml has gsd- prefix stripped (#774)', () => {
-    const skillDir = path.join(tmpDir, 'gsd-plan-phase');
-    fs.mkdirSync(skillDir, { recursive: true });
-    const skillMd = `---\nname: gsd-plan-phase\ndescription: "Plan the phase."\nmetadata:\n  short-description: "Plan the phase."\n---\n\nBody.\n`;
-    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), skillMd);
+  test('does not delete through a symlinked agents/ directory (#1326)', { skip: process.platform === 'win32' }, () => {
+    // Setup: a skills dir with gsd-foo/ whose agents/ is a SYMLINK to an external dir.
+    // The cleanup must not delete files through the symlink.
+    const externalDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-test-symlink-ext-'));
+    try {
+      // Place openai.yaml and a sentinel in the external dir.
+      fs.writeFileSync(path.join(externalDir, 'openai.yaml'), 'interface:\n  display_name: "external"\n');
+      fs.writeFileSync(path.join(externalDir, 'keep.txt'), 'sentinel\n');
 
-    writeCodexSkillMetadataFiles(tmpDir);
+      // Create gsd-foo/ in the skills dir and make agents/ a symlink to externalDir.
+      const skillDir = path.join(tmpDir, 'gsd-foo');
+      fs.mkdirSync(skillDir, { recursive: true });
+      const agentsLink = path.join(skillDir, 'agents');
+      fs.symlinkSync(externalDir, agentsLink, 'dir');
 
-    const yamlContent = fs.readFileSync(path.join(tmpDir, 'gsd-plan-phase', 'agents', 'openai.yaml'), 'utf8');
-    const parsed = jsYaml.load(yamlContent);
-    assert.strictEqual(parsed.interface.display_name, 'plan phase',
-      'display_name must have gsd- stripped and hyphens→spaces');
+      cleanupCodexSkillMetadataSidecars(tmpDir);
+
+      // Nothing in the external dir must have been deleted.
+      assert.ok(fs.existsSync(path.join(externalDir, 'openai.yaml')),
+        'external/openai.yaml must still exist — cleanup must not delete through a symlinked agents/ dir');
+      assert.ok(fs.existsSync(path.join(externalDir, 'keep.txt')),
+        'external/keep.txt must still exist — cleanup must not delete through a symlinked agents/ dir');
+      // The symlink itself must still be present.
+      assert.ok(fs.existsSync(agentsLink),
+        'gsd-foo/agents symlink must still exist');
+    } finally {
+      cleanup(externalDir);
+    }
   });
 
-  test('correctly unescapes YAML-quoted short-description from SKILL.md (#774)', () => {
-    // convertClaudeCommandToCodexSkill emits double-quoted YAML for descriptions.
-    // Verify that escape sequences like \" in the YAML source round-trip to literal " in output.
-    const skillDir = path.join(tmpDir, 'gsd-test-esc');
-    fs.mkdirSync(skillDir, { recursive: true });
-    // SKILL.md has a YAML-escaped double-quote in short-description
-    const skillMd = '---\nname: gsd-test-esc\ndescription: "Normal"\nmetadata:\n  short-description: "Run \\"special\\" workflow."\n---\n\nBody.\n';
-    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), skillMd);
-
-    writeCodexSkillMetadataFiles(tmpDir);
-
-    const yamlContent = fs.readFileSync(path.join(tmpDir, 'gsd-test-esc', 'agents', 'openai.yaml'), 'utf8');
-    const parsed = jsYaml.load(yamlContent);
-    assert.strictEqual(parsed.interface.short_description, 'Run "special" workflow.',
-      'YAML-escaped quotes in SKILL.md must round-trip to literal quotes in agents/openai.yaml');
-  });
-
-  test('Codex install emits agents/openai.yaml for each skill (#774)', () => {
-    // Integration test: run a full Codex install and verify agents/openai.yaml is written.
-    // Use runCodexInstall so CODEX_HOME is saved and restored correctly even if it was
-    // already set in the environment before this test ran.
+  test('Codex install does not create agents/openai.yaml sidecars for any managed skill (#1326)', () => {
+    // Integration test: full Codex install must NOT produce any managed gsd-*/agents/openai.yaml
     const codexHome = path.join(tmpDir, 'codex-home');
     fs.mkdirSync(codexHome, { recursive: true });
     runCodexInstall(codexHome);
     const skillsDir = path.join(codexHome, 'skills');
-    // Assert that the install actually created a skills directory
     assert.ok(fs.existsSync(skillsDir), 'Codex install must create a skills/ directory');
     const gsdSkillDirs = fs.readdirSync(skillsDir, { withFileTypes: true })
-      .filter(e => e.isDirectory() && e.name.startsWith('gsd-'));
-    // At least some skills should be present
-    assert.ok(gsdSkillDirs.length > 0, 'install must create at least one gsd-* skill directory');
-    // Each skill directory must have agents/openai.yaml with valid YAML
+      .filter(e => e.isDirectory() && e.name.startsWith('gsd-') && e.name !== 'gsd-dev-preferences');
+    assert.ok(gsdSkillDirs.length > 0, 'install must create at least one managed gsd-* skill directory');
     for (const skillEntry of gsdSkillDirs) {
       const yamlPath = path.join(skillsDir, skillEntry.name, 'agents', 'openai.yaml');
-      assert.ok(fs.existsSync(yamlPath), `${skillEntry.name}/agents/openai.yaml must exist after install`);
-      const content = fs.readFileSync(yamlPath, 'utf8');
-      const parsed = jsYaml.load(content);
-      assert.ok(parsed && parsed.interface, `${skillEntry.name}/agents/openai.yaml must parse to object with interface:`);
+      assert.ok(!fs.existsSync(yamlPath),
+        `${skillEntry.name}/agents/openai.yaml must NOT exist after install (#1326 sidecar dedup)`);
     }
   });
 });

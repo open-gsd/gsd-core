@@ -3825,8 +3825,8 @@ describe('#1255 — begin/complete-phase advance status for pipe-table STATE.md'
 
       // Last activity cell must include date + narrative (not bare date)
       assert.ok(
-        /\|\s*Last activity\s*\|[^|]*--\s*Phase 1 execution started\s*\|/i.test(cpSection),
-        `Current Position Last activity cell must include narrative '-- Phase 1 execution started'; got Current Position:\n${cpSection}`
+        /\|\s*Last activity\s*\|[^|]*—\s*Phase 1 execution started\s*\|/i.test(cpSection),
+        `Current Position Last activity cell must include narrative '— Phase 1 execution started'; got Current Position:\n${cpSection}`
       );
     } finally {
       cleanup(dir);
@@ -3909,8 +3909,8 @@ describe('#1255 — begin/complete-phase advance status for pipe-table STATE.md'
 
       // Bug 2: Last activity cell must include date + narrative (not bare date)
       assert.ok(
-        /\|\s*Last activity\s*\|[^|]*--\s*Phase 1 marked complete\s*\|/i.test(cpSection),
-        `Current Position Last activity cell must include narrative '-- Phase 1 marked complete'; got Current Position:\n${cpSection}`
+        /\|\s*Last activity\s*\|[^|]*—\s*Phase 1 marked complete\s*\|/i.test(cpSection),
+        `Current Position Last activity cell must include narrative '— Phase 1 marked complete'; got Current Position:\n${cpSection}`
       );
     } finally {
       cleanup(dir);

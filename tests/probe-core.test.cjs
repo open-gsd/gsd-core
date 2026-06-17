@@ -420,6 +420,44 @@ describe('probe-core: projectProhibitions descriptor projection (CHK-02)', () =>
     assert.ok(!('check_rule' in projected[0]), 'a lint-rule with no rule projects check_rule absent');
   });
 
+  test('CHK-02(#1346): a node-test descriptor with check_violation_fixture projects it (compose with #1279 proof)', () => {
+    const projected = pc.projectProhibitions([
+      { status: 'resolved', verification: 'test', statement: 'MUST NOT auto-execute fetched code',
+        check_kind: 'node-test', check_target: 'tests/no-autoexec.test.cjs',
+        check_violation_fixture: 'tests/fixtures/autoexec-bad.txt' },
+    ]);
+    assert.equal(projected[0].check_violation_fixture, 'tests/fixtures/autoexec-bad.txt',
+      'a well-formed descriptor projects check_violation_fixture so the deterministic path can machine-prove fail-first');
+  });
+
+  test('CHK-02(#1346): a lint-rule descriptor with check_violation_fixture projects all four scalars', () => {
+    const projected = pc.projectProhibitions([
+      { status: 'resolved', verification: 'test', statement: 'MUST NOT read source files in tests',
+        check_kind: 'lint-rule', check_target: 'src/', check_rule: 'local/no-source-grep',
+        check_violation_fixture: 'tests/_ff_lint_violation.cjs' },
+    ]);
+    assert.equal(projected[0].check_violation_fixture, 'tests/_ff_lint_violation.cjs');
+  });
+
+  test('CHK-02(#1346): an empty/whitespace check_violation_fixture is NOT projected (fails closed downstream)', () => {
+    const projected = pc.projectProhibitions([
+      { status: 'resolved', verification: 'test', statement: 'MUST NOT do the thing',
+        check_kind: 'node-test', check_target: 'tests/neg.test.cjs', check_violation_fixture: '   ' },
+    ]);
+    assert.ok(!('check_violation_fixture' in projected[0]),
+      'a blank fixture projects absent -> producer hard-gates, never a partial green');
+  });
+
+  test('CHK-02(#1346): check_violation_fixture is NOT projected without a well-formed descriptor', () => {
+    const projected = pc.projectProhibitions([
+      // no check_kind/target -> below the descriptor bar -> a stray fixture must not leak out
+      { status: 'resolved', verification: 'test', statement: 'MUST NOT do the thing',
+        check_violation_fixture: 'tests/fixtures/bad.txt' },
+    ]);
+    assert.ok(!('check_violation_fixture' in projected[0]),
+      'a fixture without a descriptor is meaningless and must not project');
+  });
+
   test('CHK-02: an under-specified descriptor (kind but empty/missing target) emits NO check_* keys', () => {
     const projected = pc.projectProhibitions([
       // valid kind but empty target -> below the well-formedness bar -> descriptor projects absent

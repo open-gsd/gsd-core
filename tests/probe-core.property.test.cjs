@@ -193,6 +193,7 @@ function renderProhibitionsDoc(entries) {
     if (e.check_kind !== undefined) lines.push(`      check_kind: ${e.check_kind}`);
     if (e.check_target !== undefined) lines.push(`      check_target: ${e.check_target}`);
     if (e.check_rule !== undefined) lines.push(`      check_rule: ${e.check_rule}`);
+    if (e.check_violation_fixture !== undefined) lines.push(`      check_violation_fixture: ${e.check_violation_fixture}`);
   }
   lines.push('---', '', 'Body.', '');
   return lines.join('\n');
@@ -216,19 +217,20 @@ const pathScalarArb = fc.array(fc.constantFrom(...PATH_CHARS), { minLength: 1, m
 const numericScalarArb = fc.nat({ max: 9999999 }).map(String);
 const targetArb = fc.oneof(pathScalarArb, numericScalarArb);
 
-// A fully well-formed descriptor item (resolved test-tier); node-test carries no rule.
+// A fully well-formed descriptor item (resolved test-tier); node-test carries no rule. The
+// violation fixture (#1346) rides BOTH kinds and exercises the numeric-coercion path too.
 const wellFormedArb = KIND_ARB.chain((kind) =>
-  fc.record({ target: targetArb, rule: pathScalarArb }).map(({ target, rule }) => {
-    const item = { ...BASE_TIER, check_kind: kind, check_target: target };
+  fc.record({ target: targetArb, rule: pathScalarArb, fixture: targetArb }).map(({ target, rule, fixture }) => {
+    const item = { ...BASE_TIER, check_kind: kind, check_target: target, check_violation_fixture: fixture };
     if (kind === 'lint-rule') item.check_rule = rule;
-    return { item, kind, target, rule: kind === 'lint-rule' ? rule : undefined };
+    return { item, kind, target, rule: kind === 'lint-rule' ? rule : undefined, fixture };
   }),
 );
 
 describe('probe-core property: #1278 check-descriptor round-trip is deterministic across the full string domain', () => {
   test('a well-formed descriptor survives project -> render -> parse -> descriptorFromProjection (incl. numeric coercion); target/rule reconstruct as strings', () => {
     fc.assert(
-      fc.property(wellFormedArb, ({ item, kind, target, rule }) => {
+      fc.property(wellFormedArb, ({ item, kind, target, rule, fixture }) => {
         const projected = pc.projectProhibitions([item]);
         if (projected[0].check_kind !== kind) return false; // projector emits the descriptor
         const reparsed = fm.parseMustHavesBlock(renderProhibitionsDoc(projected), 'prohibitions');
@@ -236,6 +238,8 @@ describe('probe-core property: #1278 check-descriptor round-trip is deterministi
         if (!d || d.kind !== kind) return false;
         // target is string-normalized even when parseMustHavesBlock numerically coerced it.
         if (typeof d.target !== 'string' || d.target !== target) return false;
+        // violationFixture (#1346) survives the round-trip as a string (numeric-coercion normalized).
+        if (typeof d.violationFixture !== 'string' || d.violationFixture !== fixture) return false;
         if (kind === 'lint-rule') {
           return typeof d.rule === 'string' && d.rule === rule;
         }

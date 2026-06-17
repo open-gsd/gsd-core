@@ -255,21 +255,19 @@ Continue to collect_confirmations.
 </step>
 
 <step name="collect_confirmations">
-Wait for all 4 agents to complete using TaskOutput tool.
+Wait for all 4 background agents to finish, then read each agent's output file to collect confirmations.
 
-**For each agent task_id returned by the Agent tool calls above:**
+Each `Agent(...)` call above with `run_in_background=true` returns an `async_launched` result that carries an `outputFile` path (and `canReadOutputFile: true`). The 4 agents run concurrently and each one's completion arrives as a message in this conversation when it finishes — do NOT issue a separate blocking call to wait for them.
+
+**Once all 4 agents have reported completion, read each agent's output file (single message with 4 Read calls):**
 ```
-TaskOutput tool:
-  task_id: "{task_id from Agent result}"
-  block: true
-  timeout: {subagent_timeout from init context, default 300000}
+Read tool:
+  file_path: "{outputFile from that agent's async_launched result}"
 ```
 
-> The timeout is configurable via `workflow.subagent_timeout` in `.planning/config.json` (milliseconds). Default: 300000 (5 minutes). Increase for large codebases or slower models.
+> Allow up to `workflow.subagent_timeout` for the slowest agent to finish before treating it as failed. The timeout is configurable via `workflow.subagent_timeout` in `.planning/config.json` (milliseconds). Default: 300000 (5 minutes). Increase for large codebases or slower models.
 
-Call TaskOutput for all 4 agents in parallel (single message with 4 TaskOutput calls).
-
-Once all TaskOutput calls return, read each agent's output file to collect confirmations.
+Each output file contains that agent's completion confirmation. Parse the confirmation marker (see below) from the file contents.
 
 **Expected confirmation format from each agent:**
 ```
