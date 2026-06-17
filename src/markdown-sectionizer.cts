@@ -31,7 +31,7 @@ export interface HeadingToken {
   text: string;
   /** 1-based line number of the heading in the original content. */
   line: number;
-  /** Byte offset of the `#` character in the original content string. */
+  /** Character (string-index) offset of the `#` character in the original content string. */
   offset: number;
 }
 
@@ -42,17 +42,22 @@ export interface Section {
   /** All lines between this heading and the next stop, joined by `\n`. */
   body: string;
   /**
-   * Byte offset in the ORIGINAL content string where the section body begins
-   * (first character after the heading line's trailing newline).
+   * Character (string-index) offset in the ORIGINAL content string where the
+   * section body begins (first character after the heading line's trailing newline).
    * Populated by `collectSections` and `collectSection`.
    * Used by `replaceSection` for a clean pure splice.
+   *
+   * INVARIANT: `content.slice(bodyStart, bodyEnd) === body` for every Section
+   * returned by `collectSection` and `collectSections`.
    */
   bodyStart: number;
   /**
-   * Byte offset in the ORIGINAL content string where the section body ends
-   * (exclusive — i.e. `content.slice(bodyStart, bodyEnd)` gives the body
-   * text BEFORE `trimEnd()` is applied, so round-trips are exact when the
-   * caller re-supplies the original body).
+   * Character (string-index) offset in the ORIGINAL content string where the
+   * section body ends (exclusive). Because `body` is `trimEnd()`-ed, this equals
+   * `bodyStart + body.length` — NOT the start of the next heading line.
+   *
+   * INVARIANT: `content.slice(bodyStart, bodyEnd) === body`.
+   * This guarantees `replaceSection(content, section, section.body) === content`.
    */
   bodyEnd: number;
 }
@@ -120,6 +125,12 @@ export function stripFencedCode(content: string): StripFencedResult {
       const len = m[2].length;
       const trailing = m[3];
       if (openFence === null) {
+        // CommonMark §4.5: backtick fence info string must not contain a backtick.
+        // If it does, this line is NOT a valid fence opener (treat as ordinary content).
+        if (char === '`' && trailing.includes('`')) {
+          kept.push(rawLine);
+          continue;
+        }
         // Opening delimiter — record fence state, drop this line
         openFence = { char, len };
       } else if (char === openFence.char && len >= openFence.len && /^\s*$/.test(trailing)) {
@@ -165,8 +176,8 @@ export function tokenizeHeadings(content: string): HeadingToken[] {
   const delimRe = /^( {0,3})(`{3,}|~{3,})(.*)$/;
   let openFence: FenceState | null = null;
 
-  // Accumulate byte offset as we iterate lines
-  let byteOffset = 0;
+  // Accumulate character offset as we iterate lines
+  let charOffset = 0;
 
   for (let i = 0; i < originalLines.length; i++) {
     const rawLine = originalLines[i];
@@ -178,28 +189,45 @@ export function tokenizeHeadings(content: string): HeadingToken[] {
       const len = dm[2].length;
       const trailing = dm[3];
       if (openFence === null) {
-        openFence = { char, len };
+        // CommonMark §4.5: backtick fence info string must not contain a backtick.
+        if (char === '`' && trailing.includes('`')) {
+          // Not a valid fence opener — check for heading on this line (will fall through)
+        } else {
+          openFence = { char, len };
+          charOffset += rawLine.length + 1;
+          continue;
+        }
       } else if (char === openFence.char && len >= openFence.len && /^\s*$/.test(trailing)) {
         openFence = null;
+        charOffset += rawLine.length + 1;
+        continue;
+      } else {
+        // Mismatched/invalid delimiter inside fence — treat as content (still inside fence), skip heading check
+        charOffset += rawLine.length + 1;
+        continue;
       }
-      byteOffset += rawLine.length + 1; // +1 for the '\n' we split on
-      continue;
     }
 
     if (openFence === null) {
-      // This line is outside any fence — check for ATX heading
-      const headingMatch = /^(#{1,6})[ \t]+(.+?)(?:[ \t]+#+[ \t]*)?$/.exec(line);
+      // This line is outside any fence — check for ATX heading.
+      // CommonMark: ≤3 leading spaces, then 1–6 `#`, then either EOF (empty heading)
+      // or at least one space/tab followed by optional text, with optional closing `#` sequence.
+      const headingMatch = /^( {0,3})(#{1,6})([ \t]+.*|[ \t]*)?$/.exec(line);
       if (headingMatch) {
+        const hashes = headingMatch[2];
+        const rest = headingMatch[3] ?? '';
+        // Strip optional closing `#` sequence: trailing whitespace + one or more `#` + optional whitespace
+        const rawText = rest.replace(/^[ \t]+/, '').replace(/[ \t]+#+[ \t]*$/, '').replace(/^#+[ \t]*$/, '');
         tokens.push({
-          level: headingMatch[1].length,
-          text: headingMatch[2].trim(),
+          level: hashes.length,
+          text: rawText.trim(),
           line: i + 1, // 1-based
-          offset: byteOffset,
+          offset: charOffset,
         });
       }
     }
 
-    byteOffset += rawLine.length + 1;
+    charOffset += rawLine.length + 1;
   }
 
   return tokens;
@@ -251,17 +279,18 @@ export function collectSections(
   let currentBodyStart = 0;
   let bodyLines: string[] = [];
 
-  const flush = (bodyEndOffset: number): void => {
+  const flush = (_bodyEndOffset: number): void => {
     if (currentHeading !== null) {
       const rawBody = bodyLines.join('\n');
-      const trimmedBody = rawBody.trimEnd();
-      // bodyEnd is the raw end (before trimEnd) — callers using replaceSection
-      // can re-trim or supply the pre-trimmed body.
+      const body = rawBody.trimEnd();
+      // INVARIANT: content.slice(bodyStart, bodyEnd) === body
+      // bodyEnd is derived from body.length, NOT from the raw separator offset,
+      // so round-trips via replaceSection(content, section, section.body) are exact.
       sections.push({
         heading: currentHeading,
-        body: trimmedBody,
+        body,
         bodyStart: currentBodyStart,
-        bodyEnd: bodyEndOffset,
+        bodyEnd: currentBodyStart + body.length,
       });
       currentHeading = null;
       bodyLines = [];
@@ -297,6 +326,11 @@ export function collectSections(
  * - `levelBounded` (default: `true`): the section ends at the next heading of
  *   the same or higher level (lower level number = higher in the hierarchy).
  *   When `false`, the section body runs until any heading or EOF.
+ *   Ignored when `stopAtLevel` is provided.
+ * - `stopAtLevel` (optional): when provided, the section ends at the next heading
+ *   whose `level <= stopAtLevel`, regardless of the opener's level. This enables
+ *   modeling sections like a `##`-opened section that also stops at `###`
+ *   (pass `stopAtLevel: 3`). Takes precedence over `levelBounded` when set.
  * - `stripFences` (default: `false`): apply `stripFencedCode` to the body
  *   before returning. The `heading` in the result always refers to the original
  *   heading (pre-strip).
@@ -306,11 +340,11 @@ export function collectSections(
 export function collectSection(
   content: string,
   headingPredicate: (heading: HeadingToken) => boolean,
-  opts: { levelBounded?: boolean; stripFences?: boolean } = {},
+  opts: { levelBounded?: boolean; stopAtLevel?: number; stripFences?: boolean } = {},
 ): Section | null {
   if (typeof content !== 'string' || content.length === 0) return null;
 
-  const { levelBounded = true, stripFences = false } = opts;
+  const { levelBounded = true, stopAtLevel, stripFences = false } = opts;
 
   const headings = tokenizeHeadings(content);
   const targetIdx = headings.findIndex(headingPredicate);
@@ -325,15 +359,21 @@ export function collectSection(
 
   for (let j = targetIdx + 1; j < headings.length; j++) {
     const next = headings[j];
-    const isStop = levelBounded ? next.level <= target.level : true;
+    let isStop: boolean;
+    if (stopAtLevel !== undefined) {
+      // stopAtLevel: stop at the next heading whose level <= stopAtLevel
+      isStop = next.level <= stopAtLevel;
+    } else {
+      isStop = levelBounded ? next.level <= target.level : true;
+    }
     if (isStop) {
       bodyEndLine = next.line; // stop before this line (1-based)
       break;
     }
   }
 
-  // Compute byte offsets for bodyStart and bodyEnd.
-  // lineOffsets[i] = byte offset of line (i+1) in content (1-based).
+  // Compute character offsets for bodyStart.
+  // lineOffsets[i] = character offset of line (i+1) in content (1-based).
   const lineOffsets: number[] = new Array<number>(lines.length);
   let acc = 0;
   for (let i = 0; i < lines.length; i++) {
@@ -342,16 +382,16 @@ export function collectSection(
   }
   const eofOffset = acc; // byte offset past the last line
 
-  // bodyStart: byte offset of first line of body (bodyStartLine is 1-based)
+  // bodyStart: character offset of first line of body (bodyStartLine is 1-based)
   const bodyStartOffset = bodyStartLine <= lines.length ? lineOffsets[bodyStartLine - 1] : eofOffset;
-  // bodyEnd: byte offset of the stop line (exclusive) — the line we stop BEFORE
-  const bodyEndOffset = bodyEndLine <= lines.length ? lineOffsets[bodyEndLine - 1] : eofOffset;
 
   // Slice body lines (0-based array: bodyStartLine-1 to bodyEndLine-2 inclusive)
   const bodyRaw = lines.slice(bodyStartLine - 1, bodyEndLine - 1).join('\n').trimEnd();
   const body = stripFences ? stripFencedCode(bodyRaw).text : bodyRaw;
 
-  return { heading: target, body, bodyStart: bodyStartOffset, bodyEnd: bodyEndOffset };
+  // INVARIANT: content.slice(bodyStart, bodyEnd) === body
+  // bodyEnd is derived from body.length so that replaceSection(content, section, section.body) === content.
+  return { heading: target, body, bodyStart: bodyStartOffset, bodyEnd: bodyStartOffset + body.length };
 }
 
 // ─── iterateBullets ───────────────────────────────────────────────────────────
@@ -479,6 +519,14 @@ export function iterateBullets(sectionText: string): BulletItem[] {
  * content. `extractTaggedBlocks` is a pure block extractor — it does NOT strip
  * fenced code blocks itself. If a `<tagName>` block appears inside a fenced code
  * block and should be excluded, the caller should apply `stripFencedCode` first.
+ *
+ * **Nested tags are NOT supported.** The underlying regex uses a non-greedy
+ * `[\s\S]*?` match, which means it closes at the FIRST `</tagName>` encountered.
+ * Given `<x><x>inner</x></x>`, `extractTaggedBlocks(content, 'x')` returns
+ * `['<x>inner']` — the inner `<x>` is captured as literal text, and the second
+ * `</x>` is left unmatched (or matched as a second block with empty inner text
+ * if another `<x>` follows). Callers that need to handle nested tags must
+ * pre-process the input or use a proper XML/HTML parser.
  *
  * Generalises `decisions.cts`'s bespoke `matchAll(/<decisions>([\s\S]*?)<\/decisions>/g)`
  * so tier T1 can drop its own copy (tracked duplication until T1 lands).

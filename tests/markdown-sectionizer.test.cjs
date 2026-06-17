@@ -790,14 +790,20 @@ describe('replaceSection', () => {
     assert.ok(updated.includes('Gamma content.'), 'Gamma preserved');
   });
 
-  test('round-trip: collectSection → replaceSection with same body → content unchanged', () => {
+  test('round-trip: collectSection → replaceSection with section.body → content unchanged', () => {
+    // INVARIANT: content.slice(bodyStart, bodyEnd) === body
+    // so replaceSection(content, section, section.body) must equal content exactly.
     const content = '## Section A\nLine one.\nLine two.\n## Section B\nB body.\n';
     const section = collectSection(content, (h) => h.text === 'Section A');
     assert.ok(section !== null);
-    // Re-supply the body as stored, plus the trailing content that bodyEnd includes.
-    // The raw slice from bodyStart to bodyEnd is what we supply back.
-    const rawBodySlice = content.slice(section.bodyStart, section.bodyEnd);
-    const roundTripped = replaceSection(content, section, rawBodySlice);
+    // Verify the slice invariant directly
+    assert.equal(
+      content.slice(section.bodyStart, section.bodyEnd),
+      section.body,
+      'content.slice(bodyStart, bodyEnd) must equal section.body (invariant)',
+    );
+    // True round-trip: supply section.body (not a re-sliced value)
+    const roundTripped = replaceSection(content, section, section.body);
     assert.equal(roundTripped, content, 'round-trip must produce identical content');
   });
 
@@ -819,6 +825,223 @@ describe('replaceSection', () => {
     assert.ok(section !== null);
     assert.equal(replaceSection(null, section, 'x'), null);
     assert.equal(replaceSection(content, section, null), content);
+  });
+});
+
+// ─── FIX 1: Section offset invariant tests ────────────────────────────────────
+
+describe('Section offset invariant: content.slice(bodyStart, bodyEnd) === body', () => {
+  test('invariant holds for a mid-document section (LF, trailing newline)', () => {
+    const content = '## A\nBody A\n## B\nBody B\n';
+    const s = collectSection(content, (h) => h.text === 'A');
+    assert.ok(s !== null);
+    assert.equal(
+      content.slice(s.bodyStart, s.bodyEnd),
+      s.body,
+      'invariant: content.slice(bodyStart, bodyEnd) === body',
+    );
+    assert.equal(
+      replaceSection(content, s, s.body),
+      content,
+      'true round-trip with section.body must be identity',
+    );
+  });
+
+  test('invariant holds at EOF with no trailing newline', () => {
+    const content = '## Only\nLast line';
+    const s = collectSection(content, (h) => h.text === 'Only');
+    assert.ok(s !== null);
+    assert.equal(content.slice(s.bodyStart, s.bodyEnd), s.body, 'EOF no-trailing-newline invariant');
+    assert.equal(replaceSection(content, s, s.body), content, 'round-trip EOF no-trailing-newline');
+  });
+
+  test('invariant holds with CRLF line endings', () => {
+    const content = '## Title\r\nBody line.\r\n## Next\r\nNext body.\r\n';
+    const s = collectSection(content, (h) => h.text === 'Title');
+    assert.ok(s !== null);
+    assert.equal(content.slice(s.bodyStart, s.bodyEnd), s.body, 'CRLF invariant');
+    assert.equal(replaceSection(content, s, s.body), content, 'CRLF round-trip');
+  });
+
+  test('invariant holds for an empty body (adjacent headings)', () => {
+    const content = '## A\n## B\nB body\n';
+    const s = collectSection(content, (h) => h.text === 'A');
+    assert.ok(s !== null);
+    assert.equal(s.body, '', 'empty body expected');
+    assert.equal(content.slice(s.bodyStart, s.bodyEnd), s.body, 'empty body invariant');
+    assert.equal(replaceSection(content, s, s.body), content, 'empty body round-trip');
+  });
+
+  test('collectSections: invariant holds for every returned section', () => {
+    const content = '## Alpha\nAlpha body.\n## Beta\nBeta body.\n## Gamma\nGamma body\n';
+    const sections = collectSections(content, () => true);
+    assert.equal(sections.length, 3);
+    for (const s of sections) {
+      assert.equal(
+        content.slice(s.bodyStart, s.bodyEnd),
+        s.body,
+        `collectSections invariant for section "${s.heading.text}"`,
+      );
+      assert.equal(
+        replaceSection(content, s, s.body),
+        content,
+        `collectSections round-trip for section "${s.heading.text}"`,
+      );
+    }
+  });
+});
+
+// ─── FIX 2: tokenizeHeadings CommonMark indented and empty headings ──────────
+
+describe('tokenizeHeadings: CommonMark ≤3-space indent and empty headings', () => {
+  test('1-space indent is a valid heading', () => {
+    const src = ' # One space heading\n';
+    const tokens = tokenizeHeadings(src);
+    assert.equal(tokens.length, 1);
+    assert.equal(tokens[0].level, 1);
+    assert.equal(tokens[0].text, 'One space heading');
+  });
+
+  test('2-space indent is a valid heading', () => {
+    const src = '  ## Two space heading\n';
+    const tokens = tokenizeHeadings(src);
+    assert.equal(tokens.length, 1);
+    assert.equal(tokens[0].level, 2);
+    assert.equal(tokens[0].text, 'Two space heading');
+  });
+
+  test('3-space indent is a valid heading', () => {
+    const src = '   ### Three space heading\n';
+    const tokens = tokenizeHeadings(src);
+    assert.equal(tokens.length, 1);
+    assert.equal(tokens[0].level, 3);
+    assert.equal(tokens[0].text, 'Three space heading');
+  });
+
+  test('4-space indent is NOT a heading (indented code block per CommonMark)', () => {
+    const src = '    ## Four space — not a heading\n## Real heading\n';
+    const tokens = tokenizeHeadings(src);
+    assert.equal(tokens.length, 1, 'only the non-indented heading should be found');
+    assert.equal(tokens[0].text, 'Real heading');
+  });
+
+  test('## with no following text is an empty heading (text === "")', () => {
+    const src = '##\n';
+    const tokens = tokenizeHeadings(src);
+    assert.equal(tokens.length, 1);
+    assert.equal(tokens[0].level, 2);
+    assert.equal(tokens[0].text, '');
+  });
+
+  test('##   (only whitespace after hashes) is an empty heading (text === "")', () => {
+    const src = '##   \n';
+    const tokens = tokenizeHeadings(src);
+    assert.equal(tokens.length, 1);
+    assert.equal(tokens[0].level, 2);
+    assert.equal(tokens[0].text, '');
+  });
+});
+
+// ─── FIX 3: collectSection stopAtLevel option ─────────────────────────────────
+
+describe('collectSection: stopAtLevel option', () => {
+  test('stopAtLevel:3 stops a ##-opened section at the following ###', () => {
+    const src = [
+      '## Parent',
+      'Parent body',
+      '### Child',
+      'Child body',
+      '## Sibling',
+      'Sibling body',
+    ].join('\n');
+    const s = collectSection(src, (h) => h.text === 'Parent', { stopAtLevel: 3 });
+    assert.ok(s !== null);
+    assert.ok(s.body.includes('Parent body'), 'parent body included');
+    assert.ok(!s.body.includes('Child body'), 'section should stop at ### with stopAtLevel:3');
+    assert.ok(!s.body.includes('Sibling body'), 'sibling body not included');
+  });
+
+  test('default levelBounded:true does NOT stop a ##-opened section at ###', () => {
+    const src = [
+      '## Parent',
+      'Parent body',
+      '### Child',
+      'Child body',
+      '## Sibling',
+      'Sibling body',
+    ].join('\n');
+    const s = collectSection(src, (h) => h.text === 'Parent', { levelBounded: true });
+    assert.ok(s !== null);
+    assert.ok(s.body.includes('Child body'), 'child body is inside the ## section with levelBounded');
+    assert.ok(!s.body.includes('Sibling body'), 'sibling body not included');
+  });
+
+  test('stopAtLevel:2 stops at the next ## (same as levelBounded default for ## opener)', () => {
+    const src = '## A\nA body\n## B\nB body\n';
+    const s = collectSection(src, (h) => h.text === 'A', { stopAtLevel: 2 });
+    assert.ok(s !== null);
+    assert.ok(s.body.includes('A body'));
+    assert.ok(!s.body.includes('B body'));
+  });
+
+  test('stopAtLevel round-trip invariant holds', () => {
+    const src = '## Parent\nParent body\n### Child\nChild body\n## Sibling\nSibling body\n';
+    const s = collectSection(src, (h) => h.text === 'Parent', { stopAtLevel: 3 });
+    assert.ok(s !== null);
+    assert.equal(src.slice(s.bodyStart, s.bodyEnd), s.body, 'offset invariant with stopAtLevel');
+    assert.equal(replaceSection(src, s, s.body), src, 'round-trip with stopAtLevel');
+  });
+});
+
+// ─── FIX 4: backtick fence — info string with backtick is not a fence opener ─
+
+describe('stripFencedCode and tokenizeHeadings: backtick info string with backtick', () => {
+  test('stripFencedCode: backtick in info string does not open a backtick fence', () => {
+    // The line "``` ` info" has a backtick in the info string → NOT a fence opener.
+    const src = '``` ` not-a-fence\n## Heading\n';
+    const r = stripFencedCode(src);
+    // Both lines should be kept (no fence was opened)
+    assert.ok(r.text.includes('## Heading'), 'heading line must be kept since no fence opened');
+    assert.ok(r.text.includes('``` ` not-a-fence'), 'the non-fence line must be kept');
+    assert.equal(r.unterminatedFence, false, 'no fence was opened, so unterminated must be false');
+  });
+
+  test('tokenizeHeadings: heading after a backtick-in-info line is still tokenized', () => {
+    // ``` ` info-with-backtick is NOT a fence opener, so ## Heading below it is visible.
+    const src = '``` ` not-a-fence\n## Heading\nprose\n```\n';
+    const tokens = tokenizeHeadings(src);
+    assert.ok(tokens.some((t) => t.text === 'Heading'), '## Heading must be tokenized when "opener" has backtick in info');
+  });
+
+  test('tilde fence info string WITH backtick IS still a valid fence opener (tildes unaffected)', () => {
+    // Only backtick fences have the "no backtick in info" restriction.
+    const src = '~~~ ` this-is-fine\n## Inside tilde fence\n~~~\n## Outside\n';
+    const tokens = tokenizeHeadings(src);
+    // ## Inside tilde fence should be ignored (inside a real fence)
+    assert.ok(!tokens.some((t) => t.text === 'Inside tilde fence'), 'tilde fence with backtick in info is still a valid fence');
+    assert.ok(tokens.some((t) => t.text === 'Outside'), 'heading after tilde fence close is tokenized');
+  });
+});
+
+// ─── FIX 6: extractTaggedBlocks — nested tag behavior ─────────────────────────
+
+describe('extractTaggedBlocks: nested same-name tag behavior (non-greedy limitation)', () => {
+  test('nested <x><x>…</x></x> closes at first </x> (non-greedy; nested tags not supported)', () => {
+    // Non-greedy match: <x>([\s\S]*?)</x> closes at the FIRST </x>.
+    // So <x><x>inner</x></x> → first block captures "<x>inner", second </x> is unmatched.
+    const content = '<x><x>inner</x></x>';
+    const result = extractTaggedBlocks(content, 'x');
+    // The first match closes at the first </x>, capturing "<x>inner"
+    assert.equal(result.length, 1, 'non-greedy match produces exactly one result from nested input');
+    assert.equal(result[0], '<x>inner', 'inner capture is the content up to the first closing tag');
+  });
+
+  test('back-to-back blocks (not nested) are both extracted', () => {
+    const content = '<x>first</x><x>second</x>';
+    const result = extractTaggedBlocks(content, 'x');
+    assert.equal(result.length, 2);
+    assert.equal(result[0], 'first');
+    assert.equal(result[1], 'second');
   });
 });
 
