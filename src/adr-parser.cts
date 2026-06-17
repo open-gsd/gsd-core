@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { requireSafePath } from './security.cjs';
-import { collectSections, iterateBullets } from './markdown-sectionizer.cjs';
+import { collectSections } from './markdown-sectionizer.cjs';
 
 const STATUS_REJECT_SET = new Set(['superseded', 'rejected', 'deprecated']);
 
@@ -218,60 +218,13 @@ function classifyHeader(normalizedHeader: string): CanonicalHeader | null {
   return null;
 }
 
-/**
- * Thin adapter: splits body text into entries using the seam's `iterateBullets`
- * for marker-stripped bullet text, with a plain-text fallback so non-bullet
- * lines are also included (original splitEntries contract).
- *
- * Behaviour notes vs prior implementation:
- *  - Bullet lines (dash/asterisk/plus/checkbox/numbered): seam strips the
- *    marker, producing item.text.
- *  - Continuation lines (indented, non-bullet): seam accumulates them into the
- *    preceding bullet item's text (not produced as separate entries here), which
- *    differs from the old per-line split for that uncommon edge case. All tested
- *    behaviors are byte-identical.
- *  - Plain-text lines (no marker, no indentation): included verbatim.
- *
- * ADR-1372 T2 migration.
- */
 function splitEntries(blockText: unknown): string[] {
-  const text = typeof blockText === 'string' ? blockText : '';
-  if (!text) return [];
-
-  // iterateBullets returns BulletItem[] in document order with item.text already
-  // stripped of the opening marker. Continuation lines are folded into the
-  // preceding item, so they will not appear as standalone lines below.
-  const bulletItems = iterateBullets(text);
-
-  // Track which trimmed lines are continuation lines (indented, non-opener) by
-  // running the seam's bullet-opener detection inline — avoids re-importing a
-  // private regex and keeps the logic here self-contained.
-  const bulletOpenerRe = /^[-*+](?:\s+|\s*\[[xX ]\]\s+)|\d+\.\s+/;
-
-  let bulletIdx = 0;
-  const results: string[] = [];
-
-  for (const rawLine of text.split(/\r?\n/)) {
-    const trimmed = rawLine.trim();
-    if (!trimmed) continue; // blank — skip (original filter(Boolean))
-
-    if (bulletOpenerRe.test(trimmed)) {
-      // Bullet opener — consume next iterateBullets item (marker already stripped)
-      const item = bulletItems[bulletIdx];
-      if (item !== undefined) {
-        if (item.text) results.push(item.text);
-        bulletIdx++;
-      }
-    } else if (/^[ \t]/.test(rawLine)) {
-      // Continuation line (starts with whitespace in original, trims to non-empty).
-      // Folded into the preceding bullet item by the seam — skip as standalone entry.
-    } else {
-      // Plain-text line (no marker, no leading whitespace) — include verbatim.
-      results.push(trimmed);
-    }
-  }
-
-  return results.filter(Boolean);
+  return (typeof blockText === 'string' ? blockText : '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^[-*+]\s+/, '').trim())
+    .filter(Boolean);
 }
 
 interface MarkdownSection {

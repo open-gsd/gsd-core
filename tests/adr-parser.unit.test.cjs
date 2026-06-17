@@ -1322,6 +1322,22 @@ describe('splitEntries (via parseAdrMarkdown decisions)', () => {
     const out = parseAdrMarkdown('## Decision\n   \n- Real entry.\n  ');
     assert.deepEqual(out.decisions, ['Real entry.']);
   });
+
+  // Regression guard for ADR-1372 T2: iterateBullets folded indented non-bullet
+  // lines into the preceding bullet — the flat splitEntries must keep them.
+  test('indented non-bullet line (4-space) kept verbatim as its own entry', () => {
+    const md = '## Decision\n- Bullet entry\n    indented non-bullet line\n- Another bullet';
+    const out = parseAdrMarkdown(md);
+    assert.deepEqual(out.decisions, ['Bullet entry', 'indented non-bullet line', 'Another bullet']);
+  });
+
+  // Regression guard for ADR-1372 T2: iterateBullets stripped numbered markers
+  // ("1. Foo" → "Foo") — the flat splitEntries only strips [-*+], not numbers.
+  test('numbered list item kept verbatim (not stripped to bare text)', () => {
+    const md = '## Decision\n1. First\n2. Second';
+    const out = parseAdrMarkdown(md);
+    assert.deepEqual(out.decisions, ['1. First', '2. Second']);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
