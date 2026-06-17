@@ -482,7 +482,24 @@ function reconcileCodexHooksJsonEvent(targetDir: string, eventName: string, opts
 
   const usesNestedHooksObject =
     parsed['hooks'] && typeof parsed['hooks'] === 'object' && !Array.isArray(parsed['hooks']);
-  const hookTable = usesNestedHooksObject ? (parsed['hooks'] as Record<string, unknown>) : parsed;
+  // #1348: canonicalize every write to the nested { hooks: { <Event>: [...] } }
+  // shape. Lift ANY top-level event array (legacy, empty, OR mixed nested+top-level)
+  // into the nested table — merging when the same event exists in both — so
+  // user/legacy entries are preserved under `hooks` and no stray top-level event
+  // key survives (Codex deny_unknown_fields rejects them). Mirrors reconcileCursorHooksJson.
+  const hookTable: Record<string, unknown> = usesNestedHooksObject
+    ? (parsed['hooks'] as Record<string, unknown>)
+    : {};
+  for (const key of Object.keys(parsed)) {
+    if (key === 'hooks') continue;
+    if (Array.isArray(parsed[key])) {
+      const lifted = parsed[key] as unknown[];
+      const existing = Array.isArray(hookTable[key]) ? (hookTable[key] as unknown[]) : [];
+      hookTable[key] = [...lifted, ...existing];
+      delete parsed[key];
+    }
+  }
+  parsed['hooks'] = hookTable;
   const eventEntries = Array.isArray(hookTable[eventName]) ? (hookTable[eventName] as unknown[]) : [];
 
   let removedLegacy = false;
@@ -524,7 +541,11 @@ function reconcileCodexHooksJsonEvent(targetDir: string, eventName: string, opts
   } else {
     delete hookTable[eventName];
   }
-  if (usesNestedHooksObject) parsed['hooks'] = hookTable;
+
+  // Avoid writing an empty `{ "hooks": {} }` artifact (e.g. removal on an absent
+  // file): collapse an empty hook table back to `{}` so the existing
+  // shouldWrite/no-write-on-empty behavior is preserved.
+  if (Object.keys(hookTable).length === 0) delete parsed['hooks'];
 
   const nextContent = `${JSON.stringify(parsed, null, 2)}\n`;
   const changed = currentContent !== nextContent;

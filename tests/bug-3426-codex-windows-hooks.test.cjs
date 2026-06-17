@@ -57,6 +57,21 @@ const {
 
 const { projectManagedHookCommand } = PROJECTION;
 
+/**
+ * Extract hook handler objects for `eventName` from a hooks.json object.
+ * Handles both the legacy top-level shape { SessionStart: [...] } and the
+ * canonical nested shape { hooks: { SessionStart: [...] } } (bug #1348).
+ */
+function hookHandlersForEvent(hooksJson, eventName) {
+  if (!hooksJson || typeof hooksJson !== 'object') return [];
+  const table =
+    hooksJson.hooks && typeof hooksJson.hooks === 'object' && !Array.isArray(hooksJson.hooks)
+      ? hooksJson.hooks
+      : hooksJson;
+  if (!Array.isArray(table[eventName])) return [];
+  return table[eventName].flatMap((e) => Array.isArray(e && e.hooks) ? e.hooks : []);
+}
+
 // ─── Step 1: Export surface check ────────────────────────────────────────────
 
 describe('#3426 — export surface: buildCodexHookWindowsShimIR must be exported', () => {
@@ -255,8 +270,8 @@ describe('#3426 integration: ensureCodexHooksJsonSessionStart on win32 writes .c
     assert.ok(fs.existsSync(hooksJsonPath), 'hooks.json must exist after install');
 
     const hooksJson = JSON.parse(fs.readFileSync(hooksJsonPath, 'utf8'));
-    const commands = (hooksJson.SessionStart || [])
-      .flatMap((e) => (Array.isArray(e.hooks) ? e.hooks : []))
+    // #1348: hooks.json is now always written in nested { hooks: { ... } } shape
+    const commands = hookHandlersForEvent(hooksJson, 'SessionStart')
       .map((h) => h && h.command)
       .filter((c) => typeof c === 'string');
 
@@ -307,8 +322,8 @@ describe('#3426 integration: ensureCodexHooksJsonSessionStart on win32 writes .c
     const hooksJson = JSON.parse(
       fs.readFileSync(path.join(tmpDir, 'hooks.json'), 'utf8'),
     );
-    const commands = (hooksJson.SessionStart || [])
-      .flatMap((e) => (Array.isArray(e.hooks) ? e.hooks : []))
+    // #1348: hooks.json is now always written in nested { hooks: { ... } } shape
+    const commands = hookHandlersForEvent(hooksJson, 'SessionStart')
       .map((h) => h && h.command)
       .filter((c) => typeof c === 'string');
 
@@ -344,8 +359,8 @@ describe('#3426 integration: ensureCodexHooksJsonSessionStart on win32 writes .c
     const hooksJson = JSON.parse(
       fs.readFileSync(path.join(tmpDir, 'hooks.json'), 'utf8'),
     );
-    const commands = (hooksJson.SessionStart || [])
-      .flatMap((e) => (Array.isArray(e.hooks) ? e.hooks : []))
+    // #1348: hooks.json is now always written in nested { hooks: { ... } } shape
+    const commands = hookHandlersForEvent(hooksJson, 'SessionStart')
       .map((h) => h && h.command)
       .filter((c) => typeof c === 'string');
 
@@ -440,8 +455,8 @@ describe('#3426 upgrade: reinstall on win32 migrates existing "node script.js" t
     });
 
     const hooksJson = JSON.parse(fs.readFileSync(path.join(tmpDir, 'hooks.json'), 'utf8'));
-    const commands = (hooksJson.SessionStart || [])
-      .flatMap((e) => (Array.isArray(e.hooks) ? e.hooks : []))
+    // #1348: hooks.json is now always written in nested { hooks: { ... } } shape
+    const commands = hookHandlersForEvent(hooksJson, 'SessionStart')
       .map((h) => h && h.command)
       .filter((c) => typeof c === 'string');
 
