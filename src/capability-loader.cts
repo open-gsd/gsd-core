@@ -159,6 +159,27 @@ function overlayRoots(cwd: string, gsdHome?: string): Array<{ dir: string; scope
   return roots;
 }
 
+/**
+ * Read the per-scope ledger co-located with an overlay root (the root is `<scope>/.gsd/capabilities`,
+ * so its ledger is `<scope>/.gsd-capabilities.json`) and return the ids carrying an in-flight
+ * `_pending` intent — i.e. crashed/uncommitted installs or upgrades that must not be activated until
+ * reconciliation completes. Never throws: a missing/invalid ledger yields an empty set.
+ */
+function pendingOverlayIds(rootDir: string): Set<string> {
+  const out = new Set<string>();
+  try {
+    const ledgerPath = path.join(rootDir, '..', '..', '.gsd-capabilities.json');
+    const parsed: unknown = JSON.parse(fs.readFileSync(ledgerPath, 'utf8'));
+    if (!parsed || typeof parsed !== 'object') return out;
+    const entries = (parsed as Record<string, unknown>)['entries'];
+    if (!entries || typeof entries !== 'object' || Array.isArray(entries)) return out;
+    for (const [id, entry] of Object.entries(entries as Record<string, unknown>)) {
+      if (entry && typeof entry === 'object' && (entry as Record<string, unknown>)['_pending']) out.add(id);
+    }
+  } catch { /* missing/invalid ledger — nothing pending */ }
+  return out;
+}
+
 /** Shallow-attach overlay diagnostics WITHOUT mutating the frozen registry module. */
 function withOverlayMeta(reg: Registry, meta: OverlayMeta): Registry {
   return Object.assign({}, reg, { _overlay: meta });
@@ -240,11 +261,21 @@ export function loadRegistry(options: LoadRegistryOptions = {}): Registry {
     } catch {
       continue; // no overlay dir at this scope — normal
     }
+    // Ids whose ledger entry carries an in-flight `_pending` intent (a crashed/uncommitted
+    // install or upgrade). They are NOT yet committed, so they must not be activated — reconcile
+    // will roll them forward or back. Fail OPEN (skip without a gate block): an uncommitted gate
+    // is not a real installed gate. See capability-lifecycle.cts (ADR-1244 Phase 4).
+    const pendingIds = pendingOverlayIds(root.dir);
     for (const ent of entries) {
       if (!ent.isDirectory()) continue;
       const id = ent.name;
       const capDir = path.join(root.dir, id);
       const manifestPath = path.join(capDir, 'capability.json');
+
+      if (pendingIds.has(id)) {
+        warnings.push({ id, scope: root.scope, reason: 'install/upgrade in progress (uncommitted) — deferred until reconciliation' });
+        continue;
+      }
 
       let cap: CapManifest;
       try {

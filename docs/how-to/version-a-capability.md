@@ -44,19 +44,19 @@ When you do raise the lower bound:
 
 ### Maintain `compatVersions`
 
-`compatVersions` is a capability-version → minimum-GSD-version table that lets GSD offer older consumers a downgrade instead of a hard block:
+`compatVersions` is a capability-version → GSD-version-**range** table that lets GSD offer older consumers a downgrade instead of a hard block. Each value is a semver range (the same grammar as `engines.gsd`), evaluated against the running GSD version:
 
 ```jsonc
 {
   "version": "2.0.0",
   "engines": { "gsd": ">=1.7.0 <3.0.0" },
   "compatVersions": {
-    "1.2.0": "1.6.0"
+    "1.2.0": ">=1.6.0 <1.7.0"
   }
 }
 ```
 
-This entry tells GSD: "version 1.2.0 of this capability requires at least GSD 1.6.0." When a consumer's GSD is older than 1.7.0, GSD uses `compatVersions` to offer them version 1.2.0 instead of failing outright.
+This entry tells GSD: "version 1.2.0 of this capability is compatible with GSD versions `>=1.6.0 <1.7.0`." When a consumer's GSD is older than the current `engines.gsd` floor (1.7.0), GSD consults `compatVersions`, picks the **newest** capability version whose range the host satisfies, and offers that instead of failing outright.
 
 Add a new entry **only when you change `engines.gsd`** — that is the only moment an older GSD version and a specific capability version become correlated. A `compatVersions` entry is not meaningful for a capability distributed as a bare tarball URL (a tarball exposes a single version and cannot be auto-selected from a table); it is only actionable for sources that enumerate versions: git tags, a registry, or npm.
 

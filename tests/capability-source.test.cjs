@@ -194,6 +194,33 @@ describe('local adapter — happy path', () => {
     assert.strictEqual(result.stagedDir, expectedDir);
     assert.ok(fs.existsSync(expectedDir));
   });
+
+  test('skipEnginesGate:true stages an engines-incompatible capability without throwing', async () => {
+    const cap = featureCap('test-cap-local');
+    cap.engines = { gsd: '>=99.0.0' };
+    const incompatDir = makeLocalCap(cap);
+    // Default: the engines gate throws.
+    await assert.rejects(
+      () => resolveCapabilitySource(incompatDir, { gsdHome, hostVersion: '1.6.0' }),
+      /engines\.gsd/,
+    );
+    // skipEnginesGate: the resolver stages it (copy-only) and leaves the gate to the caller.
+    const r = await resolveCapabilitySource(incompatDir, { gsdHome, hostVersion: '1.6.0', skipEnginesGate: true, promote: false });
+    assert.strictEqual(r.id, 'test-cap-local');
+    assert.ok(fs.existsSync(path.join(r.stagedDir, 'capability.json')));
+    cleanup(incompatDir);
+    cleanup(r.stagedDir);
+  });
+
+  test('promote:false validates but does NOT promote — returns the staging dir, final dir absent', async () => {
+    const result = await resolveCapabilitySource(capDir, { gsdHome, hostVersion: '1.5.0', promote: false });
+    const finalDir = path.join(gsdHome, '.gsd', 'capabilities', 'test-cap-local');
+    const stagingRoot = path.join(gsdHome, '.gsd', 'capabilities', '.staging');
+    assert.notStrictEqual(result.stagedDir, finalDir, 'must not be the final dir');
+    assert.ok(result.stagedDir.startsWith(stagingRoot), 'staged dir is under .staging');
+    assert.ok(fs.existsSync(path.join(result.stagedDir, 'capability.json')), 'staged manifest present');
+    assert.ok(!fs.existsSync(finalDir), 'final dir must NOT be created when promote:false');
+  });
 });
 
 describe('local adapter — invalid manifest', () => {

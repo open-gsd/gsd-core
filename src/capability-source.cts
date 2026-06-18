@@ -87,6 +87,21 @@ interface ResolveOptions {
   /** Expected integrity string (`sha512-<base64>`). When provided, integrity is verified
    *  before any bytes are committed to the final location. */
   integrity?: string;
+  /**
+   * When false, stop after validation and return the staging dir WITHOUT promoting it to the
+   * final capabilities location. The caller then owns the atomic stage-then-swap + ledger
+   * commit ordering (ADR-1244 Phase 4 / D6 upgrade path). Defaults to true (promote in place),
+   * preserving the original install behavior.
+   */
+  promote?: boolean;
+  /**
+   * When true, SKIP the resolver's `engines.gsd` hard-throw during staging. The caller becomes
+   * responsible for the engines gate. Used by capability-lifecycle so its own `checkEngines` can
+   * gate the install AND surface a `compatVersions` downgrade hint (the resolver throw would
+   * pre-empt that). Staging remains copy-only and is never promoted by the lifecycle when the
+   * engines check fails, so nothing incompatible is ever activated. Defaults to false (throw).
+   */
+  skipEnginesGate?: boolean;
   /** Injectable exec overrides for tests — keys match the shell-seam functions. */
   execOverrides?: {
     git?: (args: string[], opts?: { cwd?: string; timeout?: number }) => SpawnResult;
@@ -302,8 +317,11 @@ function stageValidated(opts: {
   hostVersion: string;
   source: string;
   integrity: string | null;
+  promote?: boolean;
+  skipEnginesGate?: boolean;
 }): ResolveResult {
   const { sourceDir, id, gsdHome, hostVersion, source, integrity } = opts;
+  const promote = opts.promote !== false;
 
   // Safety: validate id before using it in a path.
   assertSafeId(id);
@@ -343,9 +361,9 @@ function stageValidated(opts: {
       throw new Error('capability.json must be a JSON object');
     }
 
-    // engines.gsd pre-check — reject before staging finalizes.
+    // engines.gsd pre-check — reject before staging finalizes (unless the caller owns the gate).
     const engines = cap['engines'];
-    if (engines && typeof engines === 'object' && !Array.isArray(engines)) {
+    if (!opts.skipEnginesGate && engines && typeof engines === 'object' && !Array.isArray(engines)) {
       const gsdRange = (engines as Record<string, unknown>)['gsd'];
       if (typeof gsdRange === 'string' && gsdRange) {
         if (!semverMod.semverSatisfies(hostVersion, gsdRange)) {
@@ -380,11 +398,19 @@ function stageValidated(opts: {
       throw new Error(`Cross-capability validation failed: ${crossErrs.join('; ')}`);
     }
 
+    // When promote === false the caller owns the swap (ADR-1244 Phase 4 upgrade path):
+    // return the validated staging dir as-is, leaving it on disk for the caller to rename.
+    if (!promote) {
+      const version = typeof cap['version'] === 'string' ? cap['version'] : '';
+      return { id, version, stagedDir: stagingDir, integrity, source };
+    }
+
     // All validation passed — promote staging to final.
     // Replacement is move-aside-then-rename (not rm-then-rename): rename the old
     // bundle aside (atomic), move the new one in, restore the old one if the second
     // rename fails. This avoids leaving the capability missing on a failed swap.
-    // (Fully-atomic stage-then-swap for upgrades is finished in Phase 4 / ADR-1244 D6.)
+    // (The fully-atomic stage-then-swap with the ledger as commit point — for upgrades —
+    // lives in capability-lifecycle.cjs and uses promote:false above.)
     if (fs.existsSync(finalDir)) {
       const backupDir = `${finalDir}.old-${process.pid}-${Date.now()}`;
       fs.renameSync(finalDir, backupDir);
@@ -501,7 +527,7 @@ function resolveLocal(
   const id = typeof cap['id'] === 'string' ? cap['id'] : '';
   if (!id) throw new Error('capability.json missing "id" field');
 
-  return stageValidated({ sourceDir: absPath, id, gsdHome, hostVersion, source: parsed.raw, integrity: null });
+  return stageValidated({ sourceDir: absPath, id, gsdHome, hostVersion, source: parsed.raw, integrity: null, promote: opts.promote, skipEnginesGate: opts.skipEnginesGate });
 }
 
 function resolveGit(
@@ -543,7 +569,7 @@ function resolveGit(
     const id = typeof cap['id'] === 'string' ? cap['id'] : '';
     if (!id) throw new Error('capability.json missing "id" field');
 
-    return stageValidated({ sourceDir: cloneDir, id, gsdHome, hostVersion, source: parsed.raw, integrity: null });
+    return stageValidated({ sourceDir: cloneDir, id, gsdHome, hostVersion, source: parsed.raw, integrity: null, promote: opts.promote, skipEnginesGate: opts.skipEnginesGate });
   } finally {
     try { fs.rmSync(cloneDir, { recursive: true, force: true }); } catch { /* best-effort */ }
   }
@@ -605,7 +631,7 @@ function resolveNpm(
     const id = typeof cap['id'] === 'string' ? cap['id'] : '';
     if (!id) throw new Error('capability.json missing "id" field');
 
-    return stageValidated({ sourceDir, id, gsdHome, hostVersion, source: parsed.raw, integrity: null });
+    return stageValidated({ sourceDir, id, gsdHome, hostVersion, source: parsed.raw, integrity: null, promote: opts.promote, skipEnginesGate: opts.skipEnginesGate });
   } finally {
     try { fs.rmSync(tmpPackDir, { recursive: true, force: true }); } catch { /* best-effort */ }
     try { fs.rmSync(extractDir, { recursive: true, force: true }); } catch { /* best-effort */ }
@@ -659,7 +685,7 @@ async function resolveTarball(
     const id = typeof cap['id'] === 'string' ? cap['id'] : '';
     if (!id) throw new Error('capability.json missing "id" field');
 
-    return stageValidated({ sourceDir, id, gsdHome, hostVersion, source: parsed.raw, integrity: computedIntegrity });
+    return stageValidated({ sourceDir, id, gsdHome, hostVersion, source: parsed.raw, integrity: computedIntegrity, promote: opts.promote, skipEnginesGate: opts.skipEnginesGate });
   } finally {
     try { fs.rmSync(extractDir, { recursive: true, force: true }); } catch { /* best-effort */ }
   }

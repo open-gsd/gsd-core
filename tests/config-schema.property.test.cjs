@@ -226,3 +226,25 @@ describe('config-schema: cwd-aware overlay federation (ADR-1244 D2)', () => {
     assert.equal(isCapabilityConfigKey(42, withOverlay), false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// ADR-1244 Phase 4 — capability trust config keys
+// ---------------------------------------------------------------------------
+
+describe('capability trust config keys (ADR-1244 Phase 4)', () => {
+  const { CONFIG_DEFAULTS } = require('../gsd-core/bin/lib/configuration.cjs');
+
+  test('capabilities.strict_known_registries and capabilities.auto_update are valid central keys', () => {
+    assert.equal(isValidConfigKey('capabilities.strict_known_registries'), true);
+    assert.equal(isValidConfigKey('capabilities.auto_update'), true);
+  });
+
+  test('there is no capabilities.* wildcard — an unknown capabilities key is invalid', () => {
+    assert.equal(isValidConfigKey('capabilities.something_else'), false);
+  });
+
+  test('defaults: strict_known_registries is permissive (null) and auto_update is OFF (false)', () => {
+    assert.equal(CONFIG_DEFAULTS.capabilities.strict_known_registries, null);
+    assert.equal(CONFIG_DEFAULTS.capabilities.auto_update, false);
+  });
+});

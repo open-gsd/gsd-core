@@ -112,6 +112,40 @@ describe('loadRegistry — accepting valid overlays', () => {
   });
 });
 
+describe('loadRegistry — uncommitted (_pending) overlay is not activated (ADR-1244 Phase 4)', () => {
+  test('a capability dir whose ledger entry has a _pending intent is skipped with a warning', (t) => {
+    const home = makeOverlayHome([featureCap('pendingcap', { skills: ['pending-skill'] })]);
+    t.after(() => cleanup(home));
+    // Co-located ledger marks the cap as an in-flight (uncommitted) install.
+    fs.writeFileSync(
+      path.join(home, '.gsd-capabilities.json'),
+      JSON.stringify({
+        version: '1', updatedAt: '2026-01-01T00:00:00Z',
+        entries: { pendingcap: { id: 'pendingcap', version: '1.0.0', source: 's', integrity: '', files: [], sharedEdits: [], _pending: { kind: 'install', backupName: null, sharedFiles: [] } } },
+      }),
+      'utf8',
+    );
+    const reg = load(home);
+    assert.ok(!reg.capabilities['pendingcap'], 'uncommitted cap not activated');
+    assert.ok(reg._overlay.warnings.some((w) => w.id === 'pendingcap' && /in progress/.test(w.reason)), 'skip warning recorded');
+  });
+
+  test('once the ledger entry is committed (no _pending) the same dir activates normally', (t) => {
+    const home = makeOverlayHome([featureCap('committedcap', { skills: ['committed-skill'] })]);
+    t.after(() => cleanup(home));
+    fs.writeFileSync(
+      path.join(home, '.gsd-capabilities.json'),
+      JSON.stringify({
+        version: '1', updatedAt: '2026-01-01T00:00:00Z',
+        entries: { committedcap: { id: 'committedcap', version: '1.0.0', source: 's', integrity: '', files: [], sharedEdits: [] } },
+      }),
+      'utf8',
+    );
+    const reg = load(home);
+    assert.ok(reg.capabilities['committedcap'], 'committed cap activates');
+  });
+});
+
 describe('loadRegistry — first-party always wins', () => {
   test('overlay whose id collides with a first-party id is rejected; first-party preserved', (t) => {
     const home = makeOverlayHome([featureCap('ui', { skills: ['hijacked'] })]);

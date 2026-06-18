@@ -37,7 +37,7 @@ gsd capability remove <id>
 GSD uses the **ledger** — a per-runtime record written at install time (for example, `~/.claude/.gsd-capabilities.json`) — as the authoritative list of what the install owns. Removal acts precisely on that record:
 
 - **Owned files** — every file the capability wrote at install (skills, agents, referenced assets) is deleted.
-- **Shared configuration fragments** — entries the capability injected into shared files such as `settings.json` (hooks) and `hooks.json` (MCP server registrations) are stripped. Only the capability's own entries are removed; no other capability's hooks or MCP server entries are touched.
+- **Shared configuration fragments** — entries the capability injected into shared files such as `settings.json` (hooks, MCP server registrations) are stripped. Each capability-added entry is stamped at install with a `_gsdCapability` marker naming the owning capability, and removal strips **only** entries carrying that marker. No other capability's entries — and nothing you added by hand — is touched: if you hand-edited `settings.json` between install and remove (added your own hook, your own MCP server, or any other field), those edits are preserved exactly.
 - **Federated config keys** — configuration keys that belong to the capability's declared config slice are dropped from the merged config.
 
 ### What is NOT removed
@@ -108,4 +108,4 @@ gsd capability remove <id> --scope project
 - [How to version and upgrade a capability](version-a-capability.md)
 - [Develop a Capability for GSD 1.5+](develop-a-capability.md)
 - [Turn a capability off (and keep it off)](turn-a-capability-off.md)
-- [Trust model explanation](../adr/1244-capability-ecosystem.md#d5----trust-model-artifact-parity-is-full-trust-posture-is-tiered)
+- [The capability trust model](../explanation/the-capability-trust-model.md) — why removal is surgical and reversible
