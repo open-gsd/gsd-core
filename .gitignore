@@ -68,6 +68,8 @@ build/
 # Published via prepublishOnly; built before test via pretest. Grows as modules migrate.
 /tsconfig.build.tsbuildinfo
 /gsd-core/bin/lib/capability-loader.cjs
+/gsd-core/bin/lib/capability-source.cjs
+/gsd-core/bin/lib/capability-ledger.cjs
 /gsd-core/bin/lib/markdown-sectionizer.cjs
 /gsd-core/bin/lib/resolution.cjs
 /gsd-core/bin/lib/research-store.cjs
