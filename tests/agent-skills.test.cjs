@@ -1570,4 +1570,53 @@ describe('agent-skills — Resolution Provenance (#1415)', () => {
       `Should emit WARNING for empty-string configured_empty, got stderr: ${r.stderr}`,
     );
   });
+
+  // ─── Resolution Convention P3 (#1416) ────────────────────────────────────────
+  // The --json IR gains an additive `value: { block, skills_count }` field
+  // (Resolution<AgentSkillsValue> envelope). All existing flat fields are retained
+  // for back-compat. RED: value field absent before build; GREEN: after build:lib.
+
+  test('P3 (#1416): --json IR includes value.block and value.skills_count matching flat fields (back-compat)', () => {
+    const skillDir = path.join(tmpDir, 'skills', 'p3-skill');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# P3 Skill\n');
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-executor': ['skills/p3-skill'] },
+    });
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+
+    // value field must exist and be an object
+    assert.ok(r.ir.value !== undefined && r.ir.value !== null, 'ir.value must be present (Resolution<AgentSkillsValue>)');
+    assert.strictEqual(typeof r.ir.value, 'object', 'ir.value must be an object');
+
+    // value.block must match flat block
+    assert.strictEqual(r.ir.value.block, r.ir.block, 'value.block must match flat block field');
+    assert.ok(r.ir.value.block.includes('<agent_skills>'), 'value.block must contain <agent_skills>');
+
+    // value.skills_count must match flat skills_count
+    assert.strictEqual(r.ir.value.skills_count, r.ir.skills_count, 'value.skills_count must match flat skills_count field');
+    assert.strictEqual(r.ir.value.skills_count, 1, 'value.skills_count must be 1 for one configured path');
+
+    // All existing flat fields must still be present (back-compat)
+    assert.strictEqual(typeof r.ir.agent_type, 'string', 'flat agent_type must still be present');
+    assert.strictEqual(typeof r.ir.block, 'string', 'flat block must still be present');
+    assert.strictEqual(typeof r.ir.skills_count, 'number', 'flat skills_count must still be present');
+    assert.ok(Array.isArray(r.ir.warnings), 'flat warnings must still be present');
+    assert.strictEqual(typeof r.ir.configured, 'boolean', 'flat configured must still be present');
+    assert.strictEqual(typeof r.ir.reason, 'string', 'flat reason must still be present');
+    assert.ok('source' in r.ir, 'flat source must still be present');
+    assert.ok('degraded' in r.ir, 'flat degraded must still be present');
+  });
+
+  test('P3 (#1416): value.block and value.skills_count are consistent when unconfigured', () => {
+    // No config → not_configured; value must still be present with empty block and 0 count
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.ok(r.ir.value !== undefined, 'ir.value must be present even when unconfigured');
+    assert.strictEqual(r.ir.value.block, r.ir.block, 'value.block must match flat block (empty)');
+    assert.strictEqual(r.ir.value.skills_count, r.ir.skills_count, 'value.skills_count must match flat skills_count (0)');
+    assert.strictEqual(r.ir.value.block, '', 'value.block must be empty when unconfigured');
+    assert.strictEqual(r.ir.value.skills_count, 0, 'value.skills_count must be 0 when unconfigured');
+  });
 });

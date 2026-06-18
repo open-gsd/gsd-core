@@ -350,6 +350,7 @@
       "prompt-budget.cjs",
       "research-provider.cjs",
       "research-store.cjs",
+      "resolution.cjs",
       "review-reviewer-selection.cjs",
       "roadmap-command-router.cjs",
       "roadmap-parser.cjs",

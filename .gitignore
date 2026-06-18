@@ -68,6 +68,7 @@ build/
 # Published via prepublishOnly; built before test via pretest. Grows as modules migrate.
 /tsconfig.build.tsbuildinfo
 /gsd-core/bin/lib/markdown-sectionizer.cjs
+/gsd-core/bin/lib/resolution.cjs
 /gsd-core/bin/lib/research-store.cjs
 /gsd-core/bin/lib/research-provider.cjs
 /gsd-core/bin/lib/package-legitimacy.cjs

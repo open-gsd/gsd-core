@@ -75,3 +75,15 @@ Rejected. Fixing cwd/workstream drift removes the most common trigger but leaves
 - **Supersedes** the tactical fix in PR #1408 (closed) — its `resolvePlanningCwd` and local `AgentSkillsReason`/`AgentSkillsDiagnostics` are redelivered through the seams above in P1–P3.
 - **Builds on:** ADR-227 (input validation shape), ADR-0004 (Planning Workspace Module), ADR-0006 (Planning Path Projection Module).
 - **Prior recurrences of this class:** #1374/#1376, #1683, #991, #2714, #2638, #3523, #2652, #2791, #2555, #2623, #3196.
+
+## Amendment — 2026-06-18: P3 narrowed (the shared envelope is not a real seam)
+
+The original P3 plan was a single `Resolution<T> { value, configured, reason, warnings }` envelope adopted by `agent-skills`, `capability-state`, and `capability-writer`. An adversarial fit-analysis showed this fails the deletion test: `configured`/`reason` are meaningless for the capability read/mutation verbs, and `capability-writer`'s `errors[]` (operation-not-applied) is load-bearing and cannot fold into `warnings[]` (advisory). The only genuinely shared seam across the three is `warnings: string[]`.
+
+P3 is therefore narrowed to an honest convention rather than a forced generic:
+
+- `Resolution<T> { value, configured, reason, warnings }` (`src/resolution.cts`) is the canonical shape for **config-interpreting read verbs**. `agent-skills` is the first adopter — the `value` field is added additively to its `--json` IR with the flat fields retained for back-compat; `source`/`degraded` remain config-provenance extras.
+- Capability verbs keep their existing shapes, named explicitly: read = `{ runtimeConfigDir, capabilities, warnings? }`; mutation = `{ capabilities, warnings, errors }`.
+- The shared contract is documented, not forced: read verbs expose `warnings[]`; mutation verbs expose `warnings[]` + `errors[]`; `configured`/`reason` appear only on config-interpreting read verbs.
+
+Recurrence prevention does not depend on a shared envelope — it is delivered by P4's CI guard (a configured input resolving empty must carry a `reason`). (#1416)

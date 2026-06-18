@@ -46,6 +46,7 @@ const { checkAgentsInstalled } = agentInstallCheck;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- git-base-branch.cjs is an export= CommonJS module
 import gitBaseBranch = require('./git-base-branch.cjs');
 const { gitWorktreeInfoInternal } = gitBaseBranch;
+import { makeResolution } from './resolution.cjs';
 
 const { output, error } = io;
 const { loadConfig, loadConfigResolved } = configLoader;
@@ -2081,6 +2082,14 @@ function cmdAgentSkills(
   const normalizedPaths = Array.isArray(skillPaths) ? skillPaths : [];
 
   if (jsonMode) {
+    // Build the Resolution<AgentSkillsValue> envelope and embed .value additively.
+    // Flat fields are retained unchanged for back-compat; value formalises the
+    // Resolution convention (ADR-1411 P3, #1416). source/degraded remain
+    // config-provenance extras, outside the Resolution<T> envelope.
+    const resolution = makeResolution(
+      { block: block || '', skills_count: normalizedPaths.length },
+      { configured, reason, warnings: diagnostics.warnings },
+    );
     output({
       agent_type: agentType,
       block: block || '',
@@ -2090,6 +2099,7 @@ function cmdAgentSkills(
       reason,
       source,
       degraded,
+      value: resolution.value,
     }, raw);
     return;
   }
