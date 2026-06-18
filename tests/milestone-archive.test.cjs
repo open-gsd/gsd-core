@@ -497,4 +497,23 @@ describe('bug #3600: milestone phase filter understands project-code-prefixed di
     assert.strictEqual(JSON.parse(r.output).phase_dir_count, 1,
       'only CK-01-first should match Phase 1; CK-99 and CK-100 must be excluded');
   });
+
+  test('CK-999.x backlog dirs are excluded even with project-code prefix', () => {
+    writeConfig(tmpDir, { project_code: 'CK' });
+    writeState(tmpDir, 'v1.0.0');
+    writeRoadmap(tmpDir, [
+      '# Roadmap', '',
+      '## Current Milestone: v1.0.0 - Test', '',
+      '### Phase 1: First', '**Goal:** g', '',
+      '## Backlog', '',
+      '### Phase 999.1: Idea', '**Goal:** later', '',
+    ].join('\n'));
+    ensurePhaseDir(tmpDir, 'CK-01-first');
+    ensurePhaseDir(tmpDir, 'CK-999.1-idea');
+
+    const r = runGsdTools(['init', 'new-milestone', '--json'], tmpDir);
+    assert.ok(r.success);
+    assert.strictEqual(JSON.parse(r.output).phase_dir_count, 1,
+      'only CK-01-first should count; CK-999.1-idea must be excluded as backlog');
+  });
 });

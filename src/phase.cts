@@ -29,7 +29,7 @@ import coreUtilsMod = require('./core-utils.cjs');
 const { toPosixPath, generateSlugInternal, readSubdirectories } = coreUtilsMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id.cjs is an export= CommonJS module
 import phaseIdMod = require('./phase-id.cjs');
-const { escapeRegex, normalizePhaseName, phaseMarkdownRegexSource, comparePhaseNum, phaseTokenMatches } = phaseIdMod;
+const { escapeRegex, normalizePhaseName, phaseMarkdownRegexSource, comparePhaseNum, phaseTokenMatches, isBacklogPhaseToken } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
 import phaseLocatorMod = require('./phase-locator.cjs');
 const { findPhaseInternal, getArchivedPhaseDirs } = phaseLocatorMod;
@@ -1612,12 +1612,12 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           .filter((e) => e.isDirectory())
           .map((e) => e.name)
           .filter(isDirInMilestone)
+          .filter((dir) => !isBacklogPhaseToken(dir))
           .sort((a, b) => comparePhaseNum(a, b));
 
         for (const dir of dirs) {
           const dm = dir.match(/^(\d+[A-Z]?(?:\.\d+)*)-?(.*)/i);
           if (dm) {
-            if (/^999(?:\.|$)/.test(dm[1])) continue;
             if (comparePhaseNum(dm[1], phaseNum) > 0) {
               nextPhaseNum = dm[1];
               nextPhaseName = dm[2] || null;

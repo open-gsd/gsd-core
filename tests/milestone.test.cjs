@@ -125,6 +125,7 @@ describe('milestone complete command', () => {
     writeRoadmap(tmpDir, `# Roadmap v1.0\n`);
     writeState(tmpDir);
     mkPhaseDir(tmpDir, '01-foundation', { oneLiner: 'Set up project infrastructure' });
+    mkPhaseDir(tmpDir, 'CK-999.1-idea', { oneLiner: 'Backlog idea' });
 
     const result = runGsdTools('milestone complete v1.0 --name MVP --archive-phases', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
@@ -133,6 +134,87 @@ describe('milestone complete command', () => {
     assert.strictEqual(output.archived.phases, true, 'phases should be archived');
     assert.ok(fs.existsSync(path.join(tmpDir, '.planning', 'milestones', 'v1.0-phases', '01-foundation')));
     assert.ok(!fs.existsSync(path.join(tmpDir, '.planning', 'phases', '01-foundation')));
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, '.planning', 'phases', 'CK-999.1-idea')),
+      'backlog CK-999.1-idea should remain active',
+    );
+    assert.ok(
+      !fs.existsSync(path.join(tmpDir, '.planning', 'milestones', 'v1.0-phases', 'CK-999.1-idea')),
+      'backlog CK-999.1-idea should not be archived',
+    );
+  });
+
+  test('normalizes version without leading v and phases clear finds archive', () => {
+    writeRoadmap(tmpDir, `# Roadmap v1.0\n`);
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      `---\nmilestone: 1.0\n---\n# State\n\n**Status:** In progress\n`,
+    );
+    const p1 = path.join(tmpDir, '.planning', 'phases', '01-foundation');
+    fs.mkdirSync(p1, { recursive: true });
+    fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan\n');
+
+    const result = runGsdTools('milestone complete 1.0 --name MVP --archive-phases', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.version, 'v1.0');
+    assert.ok(output.archived.phases, 'phases should be archived');
+    assert.ok(output.archived.roadmap, 'roadmap should be archived');
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, '.planning', 'milestones', 'v1.0-phases', '01-foundation')),
+      'archive uses v1.0 prefix',
+    );
+    assert.ok(
+      fs.readFileSync(path.join(tmpDir, '.planning', 'MILESTONES.md'), 'utf-8').includes('## v1.0 MVP'),
+      'MILESTONES entry uses v1.0',
+    );
+
+    // Restore active dir and verify parity clear uses normalized v1.0 archive
+    fs.mkdirSync(p1, { recursive: true });
+    fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan\n');
+    const clearResult = runGsdTools('phases clear --confirm', tmpDir);
+    assert.ok(clearResult.success, `phases clear should succeed: ${clearResult.error}`);
+    assert.strictEqual(JSON.parse(clearResult.output).cleared, 1);
+  });
+  test('fails --archive-phases when archive target already differs', () => {
+    writeRoadmap(tmpDir, `# Roadmap v1.0\n`);
+    writeState(tmpDir);
+    const p1 = path.join(tmpDir, '.planning', 'phases', '01-foundation');
+    fs.mkdirSync(p1, { recursive: true });
+    fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Active Plan\n');
+
+    const archived = path.join(tmpDir, '.planning', 'milestones', 'v1.0-phases', '01-foundation');
+    fs.mkdirSync(archived, { recursive: true });
+    fs.writeFileSync(path.join(archived, '01-01-PLAN.md'), '# Different Plan\n');
+
+    const result = runGsdTools('milestone complete v1.0 --name MVP --archive-phases', tmpDir);
+    assert.ok(!result.success, 'should fail when archive target differs');
+    assert.ok(result.error.includes('Cannot archive phases for v1.0'), `error should mention archive conflict; got: ${result.error}`);
+    assert.ok(fs.existsSync(p1), 'source phase should remain untouched');
+    assert.ok(!fs.existsSync(path.join(tmpDir, '.planning', 'MILESTONES.md')), 'MILESTONES.md should not be created/appended');
+    assert.strictEqual(
+      fs.readFileSync(path.join(archived, '01-01-PLAN.md'), 'utf-8'),
+      '# Different Plan\n',
+      'existing archive content should remain unchanged',
+    );
+  });
+
+  test('stats exclude backlog phase directories', () => {
+    writeRoadmap(tmpDir,
+      `# Roadmap v1.0\n\n### Phase 1: Foundation\n**Goal:** Setup\n\n## Backlog\n\n### Phase 999.1: Idea\n**Goal:** Later\n`,
+    );
+    writeState(tmpDir);
+    mkPhaseDir(tmpDir, '01-foundation', { plan: true, oneLiner: 'Foundation work' });
+    mkPhaseDir(tmpDir, 'CK-999.1-idea', { plan: true, oneLiner: 'Backlog idea' });
+
+    const result = runGsdTools('milestone complete v1.0 --name MVP', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phases, 1, 'should count only phase 1');
+    assert.ok(output.accomplishments.includes('Foundation work'));
+    assert.ok(!output.accomplishments.includes('Backlog idea'));
   });
 
   test('archived REQUIREMENTS.md contains archive header', () => {
@@ -371,12 +453,12 @@ describe('phases clear command', () => {
   beforeEach(() => { tmpDir = createTempProject(); });
   afterEach(() => { cleanup(tmpDir); });
 
-  test('deletes normal phase directories when --confirm is passed', () => {
+  test('deletes normal phase directories with --confirm --force', () => {
     const p1 = path.join(tmpDir, '.planning', 'phases', '01-setup');
     fs.mkdirSync(p1, { recursive: true });
     fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan\n');
 
-    const result = runGsdTools('phases clear --confirm', tmpDir);
+    const result = runGsdTools(['phases', 'clear', '--confirm', '--force'], tmpDir);
     assert.ok(result.success);
     assert.strictEqual(JSON.parse(result.output).cleared, 1);
     assert.ok(!fs.existsSync(p1));
@@ -388,16 +470,26 @@ describe('phases clear command', () => {
     assert.ok(!runGsdTools('phases clear', tmpDir).success);
   });
 
-  test('preserves 999.x backlog phase directories during clear (#1853)', () => {
+  test('preserves 999.x and CK-999.x backlog phase directories during parity clear (#1853)', () => {
     const p1 = path.join(tmpDir, '.planning', 'phases', '01-setup');
     const p999a = path.join(tmpDir, '.planning', 'phases', '999.1-some-idea');
-    const p999b = path.join(tmpDir, '.planning', 'phases', '999.2-another-idea');
+    const p999b = path.join(tmpDir, '.planning', 'phases', 'CK-999.1-some-idea');
     fs.mkdirSync(p1, { recursive: true });
     fs.mkdirSync(p999a, { recursive: true });
     fs.mkdirSync(p999b, { recursive: true });
     fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan\n');
     fs.writeFileSync(path.join(p999a, 'PLAN.md'), '# Backlog\n');
-    fs.writeFileSync(path.join(p999b, 'PLAN.md'), '# Backlog 2\n');
+    fs.writeFileSync(path.join(p999b, 'PLAN.md'), '# Backlog CK\n');
+
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'MILESTONES.md'),
+      '# Milestones\n\n## v1.0 Release (Shipped: 2025-01-01)\n\n---\n\n',
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'milestones', 'v1.0-phases', '01-setup'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'milestones', 'v1.0-phases', '01-setup', '01-01-PLAN.md'),
+      '# Plan\n',
+    );
 
     const result = runGsdTools('phases clear --confirm', tmpDir);
     assert.ok(result.success);
@@ -407,14 +499,36 @@ describe('phases clear command', () => {
     assert.ok(fs.existsSync(p999b));
   });
 
+  test('preserves 999.x and CK-999.x backlog phase directories during forced clear (#1853)', () => {
+    const p1 = path.join(tmpDir, '.planning', 'phases', '01-setup');
+    const p999a = path.join(tmpDir, '.planning', 'phases', '999.1-some-idea');
+    const p999b = path.join(tmpDir, '.planning', 'phases', 'CK-999.1-some-idea');
+    fs.mkdirSync(p1, { recursive: true });
+    fs.mkdirSync(p999a, { recursive: true });
+    fs.mkdirSync(p999b, { recursive: true });
+    fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(p999a, 'PLAN.md'), '# Backlog\n');
+    fs.writeFileSync(path.join(p999b, 'PLAN.md'), '# Backlog CK\n');
+
+    const result = runGsdTools(['phases', 'clear', '--confirm', '--force'], tmpDir);
+    assert.ok(result.success);
+    assert.strictEqual(JSON.parse(result.output).cleared, 1);
+    assert.ok(!fs.existsSync(p1));
+    assert.ok(fs.existsSync(p999a));
+    assert.ok(fs.existsSync(p999b));
+  });
+
   test('reports 0 cleared when only backlog phases exist', () => {
     const p999a = path.join(tmpDir, '.planning', 'phases', '999.1-idea');
+    const p999b = path.join(tmpDir, '.planning', 'phases', 'CK-999.1-idea');
     fs.mkdirSync(p999a, { recursive: true });
+    fs.mkdirSync(p999b, { recursive: true });
 
     const result = runGsdTools('phases clear --confirm', tmpDir);
     assert.ok(result.success);
     assert.strictEqual(JSON.parse(result.output).cleared, 0);
     assert.ok(fs.existsSync(p999a));
+    assert.ok(fs.existsSync(p999b));
   });
 });
 

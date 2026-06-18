@@ -1575,6 +1575,27 @@ describe('cmdInitNewMilestone', () => {
     assert.strictEqual(output.phase_dir_count, 0);
     assert.strictEqual(output.phase_archive_path, null);
   });
+
+  test('no-ROADMAP pass-all only counts non-backlog dirs for reset flow', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'MILESTONES.md'),
+      '# Milestones\n\n## v1.0 Release (Shipped: 2026-02-18)\n\n---\n',
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', 'CK-999.1-idea'), { recursive: true });
+    // Ensure there is no ROADMAP so the filter falls back to pass-all.
+    const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+    if (fs.existsSync(roadmapPath)) {
+      fs.unlinkSync(roadmapPath);
+    }
+
+    const result = runGsdTools('init new-milestone', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.roadmap_exists, false, 'fixture must have no ROADMAP');
+    assert.strictEqual(output.phase_dir_count, 0, 'backlog-only dir must not count');
+    assert.strictEqual(output.phase_archive_path, '.planning/milestones/v1.0-phases');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
