@@ -108,6 +108,27 @@ jobs:
           NEXT_CODE=$(git diff --name-only "$BASE" origin/next -- . ':(exclude)CHANGELOG.md' ':(exclude).changeset' | sort)
           DROPPED=$(comm -23 <(printf '%s\n' "$MAIN_CODE") <(printf '%s\n' "$NEXT_CODE") | grep -v '^$' || true)
 
+          # The version-bearing manifests diverge every release by design (next
+          # runs a -dev version). A drop whose main-vs-base diff touches ONLY
+          # "version" lines is just the release stamp, not a straight-to-main
+          # fix — parking on it is what lets the back-merge sit and go stale, so
+          # filter those out. A substantive change still parks: it leaves
+          # non-"version" lines (deps in package.json; resolved/integrity in the
+          # lockfile when a dependency actually changes).
+          VERSION_STAMP_MANIFESTS='package.json package-lock.json .claude-plugin/plugin.json gemini-extension.json'
+          DROPPED=$(printf '%s\n' "$DROPPED" | while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            case " $VERSION_STAMP_MANIFESTS " in
+              *" $f "*)
+                changed=$(git diff "$BASE" origin/main -- "$f" | grep -E '^[+-]' | grep -vE '^[+-]{3} ' || true)
+                if [ -z "$(printf '%s\n' "$changed" | grep -vE '^[+-][[:space:]]*"version":' || true)" ]; then
+                  continue
+                fi
+                ;;
+            esac
+            printf '%s\n' "$f"
+          done | grep -v '^$' || true)
+
           git commit -m "chore: back-merge main into next (${SHORT_SHA})"
           git push --force origin "$BR"
 

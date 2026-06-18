@@ -103,3 +103,33 @@ describe('Require Issue Link back-merge automation carve-out', () => {
     assert.match(workflow, /steps\.check\.outputs\.found == 'false'/);
   });
 });
+
+describe('Auto-backmerge needs_review version-manifest carve-out (#1404)', () => {
+  const workflow = readWorkflow('.github/workflows/auto-backmerge.yml');
+
+  test('all four version manifests are filtered via version-only detection', () => {
+    // package.json / package-lock.json / plugin.json / gemini-extension.json
+    // diverge every release; a drop that is ONLY "version" lines must not park
+    // (parking is what lets the back-merge go stale). A substantive change still
+    // parks. (#1404)
+    assert.ok(
+      workflow.includes("VERSION_STAMP_MANIFESTS='package.json package-lock.json .claude-plugin/plugin.json gemini-extension.json'"),
+      'auto-backmerge.yml must version-only-filter all four version manifests'
+    );
+    assert.ok(
+      workflow.includes(`grep -vE '^[+-][[:space:]]*"version":'`),
+      'auto-backmerge.yml must filter version-only diffs via the "version" grep'
+    );
+  });
+
+  test('package-lock.json is NOT blindly excluded (lockfile-only changes still park)', () => {
+    // A lockfile-only substantive change (e.g. npm audit fix) rewrites
+    // resolved/integrity lines, so version-only filtering lets it through to
+    // review rather than dropping it silently. Guard against regression to a
+    // blanket exclude. (#1404)
+    assert.ok(
+      !workflow.includes(":(exclude)package-lock.json"),
+      'package-lock.json must not be globally excluded; rely on version-only filtering'
+    );
+  });
+});
