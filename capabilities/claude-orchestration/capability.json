@@ -1,0 +1,36 @@
+{
+  "id": "claude-orchestration",
+  "role": "feature",
+  "title": "Claude workflow orchestration",
+  "description": "Runtime-gated Claude Code workflow orchestration policy for execution waves. Default-off; blocks known-unsafe manual background-agent dispatch when Claude Code agent teams are active.",
+  "tier": "full",
+  "requires": [],
+  "runtimeCompat": { "supported": ["claude"], "unsupported": [] },
+  "skills": [],
+  "agents": [],
+  "hooks": [],
+  "config": {
+    "workflow.claude_orchestration": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable Claude Code orchestration policy during execute waves."
+    },
+    "workflow.claude_orchestration_backend": {
+      "type": "enum",
+      "values": ["auto", "inline", "workflow"],
+      "default": "auto",
+      "description": "Backend selected when Claude orchestration is enabled: auto and inline use the current inline dispatch preflight slice; workflow is reserved and fail-closed until the generated Workflow executor is implemented."
+    }
+  },
+  "steps": [],
+  "contributions": [],
+  "gates": [
+    {
+      "point": "execute:wave:pre",
+      "check": { "query": "claude-orchestration.preflight" },
+      "when": "workflow.claude_orchestration",
+      "blocking": true,
+      "onError": "halt"
+    }
+  ]
+}

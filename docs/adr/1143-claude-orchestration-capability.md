@@ -1,11 +1,10 @@
-# ADR-1143: Claude orchestration capability — Workflow tool (ultracode) as a runtime-gated loop execution backend [Proposed]
+# ADR-1143: Claude orchestration capability - Workflow tool as a runtime-gated loop execution backend
 
-- **Status:** Proposed
-- **Date:** 2026-06-12
+- **Status:** Accepted for incremental implementation
+- **Date:** 2026-06-18
 - **Issue:** [#1143](https://github.com/open-gsd/gsd-core/issues/1143)
 - **Builds on:** [ADR-857](857-capability-system.md) — host/core vs plug-in split, loop extension points, `runtimeCompat`, federated config
-- **Blocked by:** [#857](https://github.com/open-gsd/gsd-core/issues/857) being **released** (Proposed → Accepted + capability infrastructure shipped). Not actionable until then.
-- **Relates to:** [#853](https://github.com/open-gsd/gsd-core/issues/853) (Claude Code backgrounded agents cannot nest subagents), existing BETA skill `gsd-ultraplan-phase`
+- **Relates to:** [#853](https://github.com/open-gsd/gsd-core/issues/853), [anthropics/claude-code#68950](https://github.com/anthropics/claude-code/issues/68950), [anthropics/claude-code#68065](https://github.com/anthropics/claude-code/issues/68065), existing BETA skill `gsd-ultraplan-phase`
 
 ## Context
 
@@ -27,7 +26,16 @@ Post ADR-857, GSD now has a home for exactly this kind of runtime-specific, prev
 
 ## Decision
 
-Introduce a **Claude orchestration Capability** — `capabilities/claude-orchestration/`, `role: feature`, `runtimeCompat: claude`, **default-off, BETA** — that adopts Claude Code's orchestration primitives as optional, runtime-gated GSD surfaces. It is **blocked on #857 being released** and ships only after the capability infrastructure is Accepted.
+Introduce a **Claude orchestration Capability** — `capabilities/claude-orchestration/`, `role: feature`, `runtimeCompat: claude`, **default-off, BETA** — that adopts Claude Code's orchestration primitives as optional, runtime-gated GSD surfaces.
+
+The first shipped slice is deliberately smaller than the full Workflow-script emitter:
+
+- Registers the capability with federated config keys `workflow.claude_orchestration` and `workflow.claude_orchestration_backend`.
+- Adds a pure policy module, `claude-orchestration.cjs`, that resolves runtime, backend, workflow availability, and Claude agent-teams safety.
+- Wires a blocking `execute:wave:pre` gate, `check claude-orchestration.preflight`, before manual executor-agent dispatch.
+- Leaves the existing inline executor path as the default and as the fallback path when the capability is disabled.
+
+This slice creates the safe integration seam before adding generated Workflow scripts.
 
 ### 1. Workflow tool as an optional loop execution backend (primary, NEW)
 
@@ -48,10 +56,15 @@ Net effect on Claude Code: **wave parallelism, the plan-checker, and the verifie
 
 The capability registers hooks at `execute:wave:pre`, `execute:wave:post`, and `execute:post`, resolved through `gsd_run loop render-hooks <point>`. Activation is gated by:
 
-- **Runtime/tool detection** — the active runtime must actually expose the Workflow tool (Claude Code / Agent SDK ≥ the pinned minimum). Detection miss → no-op.
-- **Federated config** — a `claude_orchestration.*` slice with `execution_backend: auto | workflow | inline` (default `auto`, which selects `workflow` only when the tool is present, else `inline`).
+- **Runtime/tool detection** — the active runtime must be Claude before Claude-only orchestration policy applies.
+- **Federated config** — `workflow.claude_orchestration` (default `false`) and `workflow.claude_orchestration_backend: auto | workflow | inline` (default `auto`). In the first shipped slice, `auto` and `inline` both use the existing inline executor dispatch; `workflow` is reserved and fail-closed until the generated Workflow executor is implemented.
+- **Safety preflight** — if `workflow` is explicitly requested before the generated Workflow executor exists, or the selected backend is `inline` while Claude agent teams are active, the pre-wave gate blocks before spawning executor agents. Malformed config or invalid backend values also fail closed.
 
-When neither gate passes, the loop runs exactly as it does today. This is the central safety property: **the inline/manual path remains the default and the only path on non-Claude runtimes and on Claude versions without the Workflow tool.**
+When the capability is disabled, the loop runs exactly as it does today. This is the central safety property: **the inline/manual path remains the default and the only path on non-Claude runtimes and on Claude versions without the Workflow tool.**
+
+### Upstream safety note
+
+As of this decision, upstream Claude Code issues [#68950](https://github.com/anthropics/claude-code/issues/68950) and [#68065](https://github.com/anthropics/claude-code/issues/68065) document agent-teams misrouting/hanging behaviour under sequential nested/background agent launches. GSD treats those reports as compatibility risk, not as instructions. The `execute:wave:pre` gate therefore blocks manual inline dispatch when `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` is active and the capability is enabled.
 
 ### 3. Fold `ultraplan` under the same capability
 
@@ -85,4 +98,4 @@ These existing multi-model features (`execute-phase` `cross_ai_delegation`, the 
 - **Negative / cost:** another preview surface to track; a Workflow-script emitter and runtime/tool detection to maintain; BETA-grade until the upstream tool stabilizes.
 - **Neutral:** no effect on non-Claude runtimes by construction; no behavior change until explicitly enabled.
 
-> **Governance note:** This ADR is a *draft design* accompanying feature request #1143. Per CONTRIBUTING, it is PR'd only after the issue receives `approved-feature`, and the capability is implemented only after #857 is released.
+> **Governance note:** #1143 has `approved-feature`; implementation targets `next` and uses the canonical ADR location under `docs/adr/`.

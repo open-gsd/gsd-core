@@ -28,6 +28,9 @@
  *   - capability-state.cjs (resolveCapabilityRuntimeState — for capabilities list)
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
+
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
 const { output: coreOutput, error: coreError } = ioMod;
@@ -35,6 +38,10 @@ const { output: coreOutput, error: coreError } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoaderModule = require('./config-loader.cjs');
 const { loadConfig } = configLoaderModule;
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planningWorkspace = require('./planning-workspace.cjs');
+const { planningDir } = planningWorkspace;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import capabilityStateModule = require('./capability-state.cjs');
@@ -82,6 +89,18 @@ const CANONICAL_POINTS: ReadonlyArray<string> = (() => {
     'ship:post',
   ];
 })();
+
+function projectConfigParseError(cwd: string): string | null {
+  const configPath = path.join(planningDir(cwd), 'config.json');
+  if (!fs.existsSync(configPath)) return null;
+  try {
+    JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    return null;
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return `.planning/config.json is malformed (${detail})`;
+  }
+}
 
 // Alias for backward compatibility (tests import this name)
 const CANONICAL_POINTS_FALLBACK: ReadonlyArray<string> = CANONICAL_POINTS;
@@ -475,6 +494,13 @@ function cmdLoopRenderHooks(
   const runtimeConfigDir = typeof options['configDir'] === 'string'
     ? options['configDir']
     : undefined;
+  if (point === 'execute:wave:pre') {
+    const parseError = projectConfigParseError(cwd);
+    if (parseError) {
+      coreError(`loop render-hooks execute:wave:pre cannot safely resolve blocking preflight gates: ${parseError}`);
+      return;
+    }
+  }
   // Load the config snapshot ONCE and share it with both the capability-state
   // resolver (via configOverride) and loop-hook resolution, so federated keys
   // present in loadConfig resolve identically for `active` and for hook when/

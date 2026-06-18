@@ -55,6 +55,8 @@ GSD stores project settings in `.planning/config.json`. Created during `/gsd-new
     "cross_ai_execution": false,
     "cross_ai_command": null,
     "cross_ai_timeout": 300,
+    "claude_orchestration": false,
+    "claude_orchestration_backend": "auto",
     "security_enforcement": true,
     "security_asvs_level": 1,
     "security_block_on": "high",
@@ -264,6 +266,8 @@ All workflow toggles follow the **absent = enabled** pattern. If a key is missin
 | `workflow.cross_ai_execution` | boolean | `false` | Delegate phase execution to an external AI CLI instead of spawning local executor agents. Useful for leveraging a different model's strengths for specific phases. Added in v1.36 |
 | `workflow.cross_ai_command` | string | (none) | Shell command template for cross-AI execution. Receives the phase prompt via stdin. Must produce SUMMARY.md-compatible output. Required when `cross_ai_execution` is `true`. Added in v1.36 |
 | `workflow.cross_ai_timeout` | number | `300` | Timeout in seconds for cross-AI execution commands. Prevents runaway external processes. Added in v1.36 |
+| `workflow.claude_orchestration` | boolean | `false` | Enables the Claude orchestration capability's execute-wave preflight. Default-off; when enabled, `/gsd-execute-phase` blocks known-unsafe Claude manual background-agent dispatch states before spawning wave agents. See [Use Claude orchestration for execute waves](how-to/use-claude-orchestration.md). Added in #1143 |
+| `workflow.claude_orchestration_backend` | enum | `auto` | Backend policy for the Claude orchestration capability: `auto` and `inline` use the current inline dispatch preflight slice, while `workflow` is reserved and fail-closed until the generated Workflow executor is implemented. Added in #1143 |
 | `workflow.ai_integration_phase` | boolean | `true` | Enable the `/gsd-ai-integration-phase` command. When `false`, the command exits with a configuration gate message |
 | `workflow.auto_prune_state` | boolean | `false` | When `true`, automatically prune stale entries from STATE.md at phase boundaries instead of prompting |
 | `workflow.pattern_mapper` | boolean | `true` | Run the `gsd-pattern-mapper` agent between research and planning to map new files to existing codebase analogs |

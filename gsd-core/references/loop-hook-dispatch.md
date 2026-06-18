@@ -53,7 +53,13 @@ Evaluate `check` (one of `query`, `predicate`, or `agentVerdict`). Then honor `b
 - `blocking: false` → advisory only; surface the message but continue regardless of outcome.
 
 Honor `onError` if the check itself errors: `skip` means treat as non-blocking and continue;
-`fail` means surface the error and stop.
+`halt` means surface the error and stop.
+
+Point-specific advisory addenda still apply after the generic gate rule. For
+`execute:wave:post` `verify.codebase-drift`, if the advisory result includes
+`spawn_mapper: true` and `directive: "auto-remap"`, run the non-blocking
+auto-remap procedure in `gsd-core/workflows/execute-phase/steps/codebase-drift-gate.md`.
+Otherwise, surface the advisory message and continue.
 
 ## Empty / absent `activeHooks`
 

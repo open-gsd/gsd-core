@@ -284,6 +284,7 @@
       "capability-writer.cjs",
       "check-command-router.cjs",
       "cjs-command-router-adapter.cjs",
+      "claude-orchestration.cjs",
       "cli-exit.cjs",
       "clock.cjs",
       "clusters.cjs",

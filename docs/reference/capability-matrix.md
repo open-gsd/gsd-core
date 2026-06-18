@@ -54,6 +54,7 @@ research, planning, execution, verification, or ship artefacts.
 | `graphify` | feature | full | 1.6.0 | `>=1.6.0` | see capability.json | step | first-party |
 | `intel` | feature | standard | 1.6.0 | `>=1.6.0` | see capability.json | step, contribution | first-party |
 | `audit` | feature | standard | 1.6.0 | `>=1.6.0` | see capability.json | step, gate | first-party |
+| `claude-orchestration` | feature | full | 1.6.0 | `>=1.6.0` | `execute:wave:pre` | gate | first-party |
 
 > **Note:** version `1.6.0` is the placeholder the generator replaces with the
 > actual per-capability `version` field from each `capability.json`. The 12

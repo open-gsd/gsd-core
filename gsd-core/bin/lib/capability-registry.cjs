@@ -271,6 +271,53 @@ const capabilities = {
       ]
     }
   },
+  "claude-orchestration": {
+    "id": "claude-orchestration",
+    "role": "feature",
+    "title": "Claude workflow orchestration",
+    "description": "Runtime-gated Claude Code workflow orchestration policy for execution waves. Default-off; blocks known-unsafe manual background-agent dispatch when Claude Code agent teams are active.",
+    "tier": "full",
+    "requires": [],
+    "runtimeCompat": {
+      "supported": [
+        "claude"
+      ],
+      "unsupported": []
+    },
+    "skills": [],
+    "agents": [],
+    "hooks": [],
+    "config": {
+      "workflow.claude_orchestration": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable Claude Code orchestration policy during execute waves."
+      },
+      "workflow.claude_orchestration_backend": {
+        "type": "enum",
+        "values": [
+          "auto",
+          "inline",
+          "workflow"
+        ],
+        "default": "auto",
+        "description": "Backend selected when Claude orchestration is enabled: auto and inline use the current inline dispatch preflight slice; workflow is reserved and fail-closed until the generated Workflow executor is implemented."
+      }
+    },
+    "steps": [],
+    "contributions": [],
+    "gates": [
+      {
+        "point": "execute:wave:pre",
+        "check": {
+          "query": "claude-orchestration.preflight"
+        },
+        "when": "workflow.claude_orchestration",
+        "blocking": true,
+        "onError": "halt"
+      }
+    ]
+  },
   "cline": {
     "id": "cline",
     "role": "runtime",
@@ -2149,7 +2196,18 @@ const byLoopPoint = {
   "execute:wave:pre": {
     "steps": [],
     "contributions": [],
-    "gates": []
+    "gates": [
+      {
+        "capId": "claude-orchestration",
+        "point": "execute:wave:pre",
+        "check": {
+          "query": "claude-orchestration.preflight"
+        },
+        "when": "workflow.claude_orchestration",
+        "blocking": true,
+        "onError": "halt"
+      }
+    ]
   },
   "execute:wave:post": {
     "steps": [],
@@ -2346,6 +2404,8 @@ const byLoopPoint = {
 
 const configKeys = {
   "workflow.ai_integration_phase": "ai-integration",
+  "workflow.claude_orchestration": "claude-orchestration",
+  "workflow.claude_orchestration_backend": "claude-orchestration",
   "workflow.code_review": "code-review",
   "workflow.code_review_depth": "code-review",
   "workflow.drift_threshold": "drift",
@@ -2384,6 +2444,23 @@ const configSchema = {
     "type": "boolean",
     "default": true,
     "description": "Prompt for an AI-SPEC design contract before planning phases that involve AI systems."
+  },
+  "workflow.claude_orchestration": {
+    "owner": "claude-orchestration",
+    "type": "boolean",
+    "default": false,
+    "description": "Enable Claude Code orchestration policy during execute waves."
+  },
+  "workflow.claude_orchestration_backend": {
+    "owner": "claude-orchestration",
+    "type": "enum",
+    "default": "auto",
+    "description": "Backend selected when Claude orchestration is enabled: auto and inline use the current inline dispatch preflight slice; workflow is reserved and fail-closed until the generated Workflow executor is implemented.",
+    "values": [
+      "auto",
+      "inline",
+      "workflow"
+    ]
   },
   "workflow.code_review": {
     "owner": "code-review",
@@ -3630,6 +3707,7 @@ const _requiresGraph = {
   "audit": [],
   "augment": [],
   "claude": [],
+  "claude-orchestration": [],
   "cline": [],
   "code-review": [],
   "codebuddy": [],

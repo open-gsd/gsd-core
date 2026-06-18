@@ -186,6 +186,9 @@
  *                                           Returns JSON envelope { runtimeConfigDir, capabilities[] }
  *                                           --config-dir: runtime config dir (default: auto-detect current runtime)
  *
+ * Claude Orchestration:
+ *   claude-orchestration status             Resolve Claude workflow/inline orchestration policy
+ *
  * GSD-2 Migration:
  *   from-gsd2 [--path <dir>] [--force] [--dry-run]
  *             Import a GSD-2 (.gsd/) project back to GSD v1 (.planning/) format
@@ -522,7 +525,7 @@ async function main() {
     'current-timestamp, detect-custom-files, docs-init, drift-guard, effort, extract-messages, find-phase, ' +
     'from-gsd2, frontmatter, gap-analysis, generate-claude-md, generate-claude-profile, ' +
     'generate-dev-preferences, generate-slug, graphify, history-digest, init, intel, ' +
-    'capability, classify-confidence, git, learnings, list-todos, loop, milestone, package-legitimacy, phase, phase-plan-index, phases, profile-questionnaire, ' +
+    'capability, claude-orchestration, classify-confidence, git, learnings, list-todos, loop, milestone, package-legitimacy, phase, phase-plan-index, phases, profile-questionnaire, ' +
     'profile-sample, progress, prompt-budget, requirements, research-plan, research-store, resolve-granularity, resolve-model, roadmap, scaffold, state, ' +
     'task, template, user-story, validate, verify, verify-path-exists, verify-summary, workstream, worktree\n\n' +
     'Global flags:\n' +
@@ -1393,6 +1396,20 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       } else {
         error(
           `Unknown capability subcommand: ${capSubcommand}. Available: state, set`,
+          ERROR_REASON ? ERROR_REASON.SDK_UNKNOWN_COMMAND : undefined,
+        );
+      }
+      break;
+    }
+
+    case 'claude-orchestration': {
+      const subcommand = args[1] || 'status';
+      const claudeOrchestration = require('./lib/claude-orchestration.cjs');
+      if (subcommand === 'status') {
+        claudeOrchestration.cmdClaudeOrchestrationStatus(cwd, raw);
+      } else {
+        error(
+          `Unknown claude-orchestration subcommand: ${subcommand}. Available: status`,
           ERROR_REASON ? ERROR_REASON.SDK_UNKNOWN_COMMAND : undefined,
         );
       }

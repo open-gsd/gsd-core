@@ -22,6 +22,7 @@ import { extractDecisions } from './decisions.cjs';
 import type { Decision } from './decisions.cjs';
 import { stripFencedCode, collectSections } from './markdown-sectionizer.cjs';
 import { checkUiPresence } from './ui-safety-gate.cjs';
+import { cmdClaudeOrchestrationPreflight } from './claude-orchestration.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import verifyModule = require('./verify.cjs');
 const { cmdVerifySchemaDrift, cmdVerifyCodebaseDrift } = verifyModule;
@@ -895,6 +896,10 @@ function routeCheckCommand({ args, cwd, raw }: RouteCheckCommandOptions): void {
     cmdAutoMode(cwd, raw);
     return;
   }
+  if (subcommand === 'claude-orchestration-preflight') {
+    cmdClaudeOrchestrationPreflight(cwd, raw);
+    return;
+  }
   if (subcommand === 'decision-coverage-plan') {
     cmdDecisionCoveragePlan(cwd, args, raw);
     return;
@@ -942,7 +947,7 @@ function routeCheckCommand({ args, cwd, raw }: RouteCheckCommandOptions): void {
     routeProhibitionEnforcement(args, raw);
     return;
   }
-  error('Unknown check subcommand. Available: auto-mode, decision-coverage-plan, decision-coverage-verify, gap-analysis-plan-post, prohibition-enforcement, tdd-review-checkpoint, ui-plan-gate, ui-safety-gate, verify-schema-drift, verify-codebase-drift', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+  error('Unknown check subcommand. Available: auto-mode, claude-orchestration-preflight, decision-coverage-plan, decision-coverage-verify, gap-analysis-plan-post, prohibition-enforcement, tdd-review-checkpoint, ui-plan-gate, ui-safety-gate, verify-schema-drift, verify-codebase-drift', ERROR_REASON.SDK_UNKNOWN_COMMAND);
 }
 
 export = {

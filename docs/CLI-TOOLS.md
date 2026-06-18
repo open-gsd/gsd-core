@@ -206,6 +206,78 @@ node gsd-tools.cjs capability set code-review --gate workflow.code_review=false
 
 ---
 
+## Claude Orchestration
+
+### `query claude-orchestration.status`
+
+```bash
+node gsd-tools.cjs query claude-orchestration.status [--raw]
+```
+
+Resolves the default-off Claude orchestration policy for the current project.
+The command reads `runtime` with the same precedence as other runtime-aware
+tools (`GSD_RUNTIME` -> `config.runtime` -> `claude`), reads the
+capability-owned `workflow.claude_orchestration*` keys, and checks the relevant
+Claude Code environment flags.
+
+The command is read-only. It does not start a workflow or mutate config.
+
+Example output:
+
+```json
+{
+  "enabled": true,
+  "active": true,
+  "runtime": "claude",
+  "requested_backend": "auto",
+  "selected_backend": "inline",
+  "workflow_available": true,
+  "workflows_disabled": false,
+  "teams_active": false,
+  "manual_dispatch_safe": true,
+  "config_error": null,
+  "block": false,
+  "passed": true,
+  "reason": "inline-ready",
+  "message": "Claude orchestration will use inline executor dispatch."
+}
+```
+
+Fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `enabled` | boolean | `true` when `workflow.claude_orchestration` is enabled |
+| `active` | boolean | `true` when the feature is enabled and the resolved runtime is `claude` |
+| `requested_backend` | string | Configured backend: `auto`, `inline`, or `workflow` |
+| `selected_backend` | string | Effective backend for this run. This slice selects `inline`; `workflow` is reserved for the future generated Workflow executor |
+| `workflow_available` | boolean | `true` when runtime is `claude` and workflows are not disabled by `CLAUDE_CODE_DISABLE_WORKFLOWS`; this is telemetry, not proof that GSD selected a workflow executor |
+| `teams_active` | boolean | Mirrors the strict Claude agent-teams detector |
+| `manual_dispatch_safe` | boolean | `false` when manual background-agent dispatch is known unsafe |
+| `config_error` | string or null | Config validation problem that caused the gate to fail closed |
+| `block` | boolean | Uniform gate field; `true` means execution should stop before spawning wave agents |
+| `reason` | string | Machine-readable policy outcome |
+| `message` | string | Human-readable explanation for the outcome |
+
+### `check claude-orchestration.preflight`
+
+```bash
+node gsd-tools.cjs check claude-orchestration.preflight <phase> --raw
+```
+
+Capability gate used by `/gsd-execute-phase` at `execute:wave:pre`. The `<phase>`
+argument is accepted for the generic gate contract; the current implementation
+does not need phase-specific data.
+
+The check returns the same JSON shape as `query claude-orchestration.status`.
+When the capability is enabled, it blocks two unsafe states:
+
+- `.planning/config.json` is malformed, unreadable, or contains an invalid `workflow.claude_orchestration_backend` value.
+- `workflow.claude_orchestration_backend = "workflow"` before the generated Workflow executor is implemented.
+- `selected_backend = "inline"` while `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` is active.
+
+---
+
 ## Teams Status
 
 ### `query teams-status`
