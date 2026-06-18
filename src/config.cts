@@ -560,7 +560,7 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
 
   validateKnownConfigKeyPath(kp);
 
-  if (!isValidConfigKey(kp)) {
+  if (!isValidConfigKey(kp, cwd)) {
     error(`Unknown config key: "${kp}". Valid keys: ${[...VALID_CONFIG_KEYS].sort().join(', ')}, agent_skills.<agent-type>, features.<feature_name>`, ERROR_REASON.CONFIG_INVALID_KEY);
   }
 

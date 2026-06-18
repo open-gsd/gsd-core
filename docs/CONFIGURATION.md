@@ -657,6 +657,41 @@ The `features.*` namespace is a dynamic key pattern — new feature flags can be
 
 ---
 
+## Capability Overlay (installed third-party capabilities)
+
+GSD supports an **installed overlay** of third-party capability manifests that are composed with the frozen first-party registry at runtime via `loadRegistry({ includeInstalled: true })` (ADR-1244; see [`docs/reference/capability-manifest.md`](reference/capability-manifest.md) and [`docs/how-to/import-a-capability-from-a-url.md`](how-to/import-a-capability-from-a-url.md)).
+
+### Install roots
+
+Capability manifests (`capability.json`) are discovered from two scoped roots:
+
+| Scope | Path |
+|-------|------|
+| Global | `$GSD_HOME/.gsd/capabilities/<id>/capability.json` |
+| Project | `<projectRoot>/.gsd/capabilities/<id>/capability.json` |
+
+`GSD_HOME` defaults to your home directory (`~`) when unset. Both roots are scanned on every `loadRegistry` call; neither requires config changes to activate.
+
+### Composition and first-party-wins invariant
+
+Installed overlay capabilities are merged via the same `buildRegistry` pipeline as first-party capabilities, so all derived views (`bySkill`, `byAgent`, `byLoopPoint`, `configKeys`) cover first-party and overlay entries identically. **First-party always wins**: an overlay entry is rejected at load time if its `id`, any owned skill or agent stem, or any federated config key collides with a first-party entry, or if its `id` uses a reserved prefix (`gsd-`, `gsd-core-`, `anthropic-`). Rejected entries emit a warning and are skipped; they never crash the load loop.
+
+### Load-time `engines.gsd` compatibility gate
+
+Each overlay manifest may declare an `engines.gsd` semver range. At load time GSD evaluates this range against the running GSD version. An overlay that does not satisfy the range is **skipped with a warning** — it is never loaded and never crashes the loop. Manifests without an `engines.gsd` field are accepted unconditionally.
+
+### Gate-kind fail-closed policy
+
+If a skipped overlay capability declared a `gate`-kind loop hook, the loop resolver **injects a blocking gate** at that hook point (fail CLOSED). Skipped capabilities whose hooks are `step` or `contribution` kind skip open — the loop proceeds without them.
+
+### Overlay config federation
+
+Config keys declared in an overlay capability's `.config` slice federate into the `loadConfig` return value via the same Federated Config channel as first-party capability keys. They appear as valid keys in `config-schema.cjs` (`isValidConfigKey`) and in the runtime config schema, so overlay capabilities can declare project-local config toggles without editing the central config schema.
+
+> **See also:** [`docs/reference/capability-manifest.md`](reference/capability-manifest.md) for the full `capability.json` schema, [`docs/how-to/import-a-capability-from-a-url.md`](how-to/import-a-capability-from-a-url.md) for installation steps, and [ADR-1244](adr/1244-runtime-capability-registry-overlay.md) for the design record.
+
+---
+
 ## Parallelization Settings
 
 | Setting | Type | Default | Description |

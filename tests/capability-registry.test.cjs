@@ -69,6 +69,11 @@ const {
 
 const { LOOP_HOST_CONTRACT } = require('../gsd-core/bin/lib/loop-host-contract.cjs');
 
+// ADR-1244 D2: the validator was extracted to a shared runtime-callable module.
+// The generator must re-export it verbatim — the parity suite below proves no drift.
+const capValidatorModule = require('../gsd-core/bin/lib/capability-validator.cjs');
+const generatorModule = require('../scripts/gen-capability-registry.cjs');
+
 const fc = require('fast-check');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -5033,5 +5038,63 @@ describe('activationKey validation', () => {
       errors.some((e) => e.includes('activationKey') && e.includes('feature-only')),
       'Error must mention activationKey and feature-only, got: ' + JSON.stringify(errors),
     );
+  });
+});
+
+// ─── ADR-1244 D2: validator extraction generative parity ──────────────────────
+//
+// The validator now lives in gsd-core/bin/lib/capability-validator.cjs and is
+// re-exported by the generator. These assertions guarantee the build-time
+// generator and the runtime overlay share ONE validator implementation — no
+// divergent copy can drift between them, because the generator re-exports the
+// very same object references.
+describe('ADR-1244 D2: validator extraction generative parity', () => {
+  const CORE = [
+    'validateCapability', 'validateCrossCapability', 'validateVersionEnvelope',
+    'validateConsumesGlobal', 'validateAgainstContract', 'validateConfigSliceEntry',
+    'validateRuntimeBody', 'classifyCrossErrors',
+  ];
+
+  test('the runtime validator module exposes the full validator surface', () => {
+    for (const sym of [...CORE, 'SEMVER_RE', 'SEMVER_RANGE_RE', 'POINT_ORDER', 'VALID_LOOP_POINTS', 'VALID_TIERS']) {
+      assert.ok(sym in capValidatorModule, `validator module must export ${sym}`);
+    }
+    assert.strictEqual(typeof capValidatorModule.validateCapability, 'function');
+    assert.ok(capValidatorModule.SEMVER_RE instanceof RegExp);
+  });
+
+  test('every generator-re-exported validator symbol is the SAME object as the validator module (no drift)', () => {
+    const shared = Object.keys(capValidatorModule).filter((k) => Object.prototype.hasOwnProperty.call(generatorModule, k));
+    assert.ok(shared.length >= 20, `expected the generator to re-export the validator surface, got ${shared.length}`);
+    for (const k of shared) {
+      assert.strictEqual(
+        generatorModule[k],
+        capValidatorModule[k],
+        `generator export "${k}" must be the SAME reference as the validator module's (drift detected)`,
+      );
+    }
+  });
+
+  test('core validators are re-exported identically by the generator', () => {
+    for (const sym of CORE) {
+      assert.strictEqual(
+        generatorModule[sym], capValidatorModule[sym],
+        `${sym} must be re-exported by the generator as the validator module's reference`,
+      );
+    }
+  });
+
+  test('the extracted validator runs standalone (no generator/build-time deps required)', () => {
+    // Proves the module is genuinely runtime-callable: a clean require + validate
+    // with no install-profiles/clusters/config-schema machinery present.
+    const { validateCapability } = capValidatorModule;
+    const cap = {
+      id: 'demo', role: 'feature', version: '1.0.0', title: 'Demo', description: 'demo',
+      tier: 'standard', requires: [], runtimeCompat: { supported: ['*'], unsupported: [] },
+      skills: [], agents: [], hooks: [], config: {}, steps: [], contributions: [], gates: [],
+    };
+    assert.deepEqual(validateCapability(cap, 'demo'), []);
+    const { version: _v, ...noVersion } = cap;
+    assert.ok(validateCapability(noVersion, 'demo').some((e) => e.includes('version')));
   });
 });

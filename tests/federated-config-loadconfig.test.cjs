@@ -423,3 +423,59 @@ describe('MALFORMED registry: loadConfig does not throw', () => {
     assert.ok(Object.prototype.hasOwnProperty.call(result, 'model_profile'), 'model_profile must be present');
   });
 });
+
+// ─── 5. ADR-1244 D2: overlay config-key federation is cwd-aware (REAL loader, no seam) ──
+//
+// Proves "toggable via config" for installed third-party capabilities AND that it
+// is cwd-correct: an overlay capability's config key is valid + federates ONLY in
+// the project where the overlay is installed — never globally, never for the wrong
+// project, never from a bare require (no seam used here — the real loadRegistry path).
+describe('ADR-1244 D2: overlay config-key federation (cwd-aware, real loader)', () => {
+  const configSchema = require('../gsd-core/bin/lib/config-schema.cjs');
+  const KEY = 'workflow.overlay_demo_gate';
+  const overlayCap = {
+    id: 'overlay-demo', role: 'feature', version: '1.0.0', title: 'Overlay demo', description: 'overlay',
+    tier: 'standard', requires: [], engines: { gsd: '>=1.0.0' },
+    runtimeCompat: { supported: ['*'], unsupported: [] },
+    skills: ['overlay-demo-skill'], agents: [], hooks: [],
+    config: { [KEY]: { type: 'boolean', default: true, description: 'overlay-owned federated key' } },
+    steps: [], contributions: [], gates: [],
+  };
+
+  let sandboxHome, withOverlay, withoutOverlay, savedHome;
+  beforeEach(() => {
+    _resetFederatedRegistryForTests(); // NO seam override — exercise the real cwd-aware path
+    savedHome = process.env.GSD_HOME;
+    sandboxHome = makeTempProject();
+    process.env.GSD_HOME = sandboxHome; // empty global overlay root
+    withOverlay = mkTemp();
+    const capDir = path.join(withOverlay, '.gsd', 'capabilities', 'overlay-demo');
+    fs.mkdirSync(capDir, { recursive: true });
+    fs.writeFileSync(path.join(capDir, 'capability.json'), JSON.stringify(overlayCap), 'utf-8');
+    withoutOverlay = mkTemp();
+  });
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.GSD_HOME; else process.env.GSD_HOME = savedHome;
+    try { cleanup(sandboxHome); } catch { /* ignore */ }
+  });
+
+  test('overlay config key is valid in its own project, unknown elsewhere and with no cwd', () => {
+    assert.equal(configSchema.isValidConfigKey(KEY, withOverlay), true, 'valid in the project that installs the overlay');
+    assert.equal(configSchema.isValidConfigKey(KEY, withoutOverlay), false, 'unknown in a project without the overlay (cwd-correct)');
+    assert.equal(configSchema.isValidConfigKey(KEY), false, 'unknown with no cwd (first-party only)');
+  });
+
+  test('loadConfig federates the overlay key default only for the installing project', () => {
+    writeConfig(withOverlay, {});
+    const cfg = loadConfig(withOverlay);
+    assert.strictEqual(cfg.workflow && cfg.workflow.overlay_demo_gate, true, 'overlay default federates in its project');
+
+    writeConfig(withoutOverlay, {});
+    const other = loadConfig(withoutOverlay);
+    assert.strictEqual(
+      other.workflow ? other.workflow.overlay_demo_gate : undefined,
+      undefined,
+      'overlay key does NOT federate into an unrelated project',
+    );
+  });
+});
