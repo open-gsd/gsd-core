@@ -180,12 +180,74 @@ function readGate(cwd: string): boolean {
 }
 
 /**
+ * Same-prefix ascending numeric range, e.g. `SEL-01..SEL-03`. Both sides must
+ * share an identical prefix and a numeric suffix. Captures are:
+ *   1 prefix, 2 low digits, 3 prefix (compared for equality), 4 high digits.
+ */
+const PHASE_REQ_RANGE_RE = /^(.+-)(\d+)\.\.(.+-)(\d+)$/;
+
+/**
+ * Maximum number of IDs a single range token may expand to. A range whose span
+ * exceeds this cap stays literal (fail-closed) rather than expanding, guarding
+ * against pathological input like `X-1..X-100000` ballooning the comparison set.
+ */
+const MAX_PHASE_REQ_RANGE = 1000;
+
+/**
+ * Expand a single `--phase-req-ids` token in place. If it is a valid ascending
+ * same-prefix numeric range (`<PREFIX>-NN..<PREFIX>-MM`, identical prefix both
+ * sides, numeric NN ≤ MM), return the individual IDs `<PREFIX>-NN … <PREFIX>-MM`
+ * preserving the bounds' zero-pad width. Anything that does NOT cleanly match a
+ * valid range stays literal (fail-closed) — returned as a single-element array.
+ *
+ * The two numeric bounds must share the same digit width; a range with
+ * differing widths (e.g. `SEL-9..SEL-11`) is ambiguous (padding to the wider
+ * width could invent IDs like `SEL-09` that never appear unpadded in
+ * REQUIREMENTS) and is left literal. A range spanning more than
+ * MAX_PHASE_REQ_RANGE IDs also stays literal.
+ */
+function expandPhaseReqIdToken(token: string): string[] {
+  const m = PHASE_REQ_RANGE_RE.exec(token);
+  if (!m) return [token];
+  const [, prefixLow, lowDigits, prefixHigh, highDigits] = m;
+  // Fail closed unless the prefixes are identical.
+  if (prefixLow !== prefixHigh) return [token];
+  // Fail closed unless the bounds share an identical digit width. Differing
+  // widths are ambiguous: padding to the wider width could invent IDs that
+  // never appear unpadded in REQUIREMENTS.
+  if (lowDigits.length !== highDigits.length) return [token];
+  const low = Number(lowDigits);
+  const high = Number(highDigits);
+  // Fail closed on descending ranges (NN > MM). NN == MM is a valid single-element range.
+  if (!Number.isFinite(low) || !Number.isFinite(high) || low > high) return [token];
+  // Fail closed (DoS guard) on ranges spanning more than the cap.
+  if (high - low + 1 > MAX_PHASE_REQ_RANGE) return [token];
+  // Preserve the bounds' (shared) zero-pad width.
+  const width = lowDigits.length;
+  const out: string[] = [];
+  for (let n = low; n <= high; n++) {
+    out.push(`${prefixLow}${String(n).padStart(width, '0')}`);
+  }
+  return out;
+}
+
+/**
  * Normalize a raw `--phase-req-ids` argument into the scoping signal used by
  * runGapAnalysis (#447). Mirrors §13's null/TBD skip semantics.
  *
- *   undefined           → flag absent: compare the whole REQUIREMENTS.md (back-compat)
- *   null | '' | TBD     → no requirements mapped to this phase: skip the comparison
- *   "REQ-01,REQ-02"     → restrict the comparison to these IDs
+ *   undefined                  → flag absent: compare the whole REQUIREMENTS.md (back-compat)
+ *   null | '' | TBD            → no requirements mapped to this phase: skip the comparison
+ *   "REQ-01,REQ-02"            → restrict the comparison to these IDs
+ *   "SEL-01..SEL-03"           → range form: expands in place to SEL-01, SEL-02, SEL-03 (#1269)
+ *
+ * Range form (#1269): a list element of the shape `<PREFIX>-NN..<PREFIX>-MM`
+ * (identical prefix both sides, identical bound digit width, ascending numeric
+ * NN ≤ MM) is expanded in place to the individual IDs, preserving the bounds'
+ * zero-pad width; mixed lists expand in input order. Any element that does not
+ * cleanly match a valid ascending same-prefix numeric range (mismatched
+ * prefix, differing bound width, descending, non-numeric, missing bound, or
+ * spanning more than MAX_PHASE_REQ_RANGE IDs) stays literal — no partial
+ * expansion, no guessing.
  *
  * Tolerates JSON-array-ish input (`["REQ-01","REQ-02"]`) since callers may pass
  * the roadmap value through verbatim.
@@ -199,7 +261,9 @@ function normalizePhaseReqIds(rawVal: unknown): string[] | null | undefined {
   // Tolerate comma-, space-, or newline-separated lists (callers may pass the
   // roadmap value verbatim, whose serialization is not guaranteed).
   const ids = v.split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
-  return ids.length === 0 ? null : ids;
+  // Expand range tokens (#1269) per-token AFTER the split, preserving input order.
+  const expanded = ids.flatMap(expandPhaseReqIdToken);
+  return expanded.length === 0 ? null : expanded;
 }
 
 function runGapAnalysis(cwd: string, phaseDir: string, options: RunGapAnalysisOptions = {}): GapResult {
