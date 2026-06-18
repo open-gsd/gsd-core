@@ -88,6 +88,21 @@ interface SetCapabilityStateOptions {
   materialize?: { runtime: string; scope: string };
 }
 
+/**
+ * Canonical **mutation-verb result** for the capability-writer seam (ADR-1411 P3 / #1416).
+ *
+ * Shape: `{ capabilities, warnings, errors }`
+ *
+ * - `warnings` — advisory messages (the verb still succeeded)
+ * - `errors`   — operation-not-applied messages; the write was not performed
+ *
+ * The shared contract with read-verb shapes is `warnings: string[]`.
+ * Mutation verbs also carry `errors[]` (operation-not-applied), which is
+ * load-bearing and distinct from `warnings[]` (advisory). This is why a single
+ * generic `Resolution<T>` across read+write verbs was rejected by the deletion
+ * test (ADR-1411 P3 amendment). Do NOT change the emitted JSON shape; this
+ * comment names the convention, it does not alter the contract.
+ */
 interface SetCapabilityStateResult {
   capabilities: CapabilityStateEntry[];
   warnings: string[];

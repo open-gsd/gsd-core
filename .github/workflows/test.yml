@@ -108,7 +108,7 @@ jobs:
       # eslint invocation home; the --cache flag inside it is a no-op in CI
       # (node_modules/.cache is never restored) but still speeds local runs.
       # Each sub-lint prints its own banner, so a failure identifies itself.
-      - name: Lint — all (ESLint, skill deps, test-file count, command contract, PR checks, legacy name, regression-test names)
+      - name: Lint — all (ESLint, skill deps, test-file count, command contract, PR checks, legacy name, regression-test names, resolution-provenance)
         run: npm run lint:ci
 
   test:

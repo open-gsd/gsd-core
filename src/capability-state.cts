@@ -125,6 +125,18 @@ interface ResolveCapabilityStateResult {
   capabilities: CapabilityStateEntry[];
 }
 
+/**
+ * Canonical **read-verb envelope** for the capability-state seam (ADR-1411 P3 / #1416).
+ *
+ * This is the shape emitted by the capability-state read verb:
+ *   `{ runtimeConfigDir, capabilities, warnings? }`
+ *
+ * The shared contract with other diagnostic shapes is `warnings: string[]`.
+ * Unlike `Resolution<T>` (src/resolution.cts, for config-interpreting read verbs),
+ * this read verb does not carry `configured`/`reason` — those fields are meaningful
+ * only for config-interpreting verbs such as agent-skills. Do NOT change the emitted
+ * JSON shape; this comment names the convention, it does not alter the contract.
+ */
 interface ResolveCapabilityRuntimeStateResult {
   runtimeConfigDir: string;
   warnings: string[];

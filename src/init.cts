@@ -14,6 +14,7 @@ import { execGit, platformWriteSync, platformReadSync } from './shell-command-pr
 import io = require('./io.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-loader.cjs is an export= CommonJS module
 import configLoader = require('./config-loader.cjs');
+import { findProjectRoot } from './project-root.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- model-resolver.cjs is an export= CommonJS module
 import modelResolver = require('./model-resolver.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
@@ -45,9 +46,10 @@ const { checkAgentsInstalled } = agentInstallCheck;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- git-base-branch.cjs is an export= CommonJS module
 import gitBaseBranch = require('./git-base-branch.cjs');
 const { gitWorktreeInfoInternal } = gitBaseBranch;
+import { makeResolution } from './resolution.cjs';
 
 const { output, error } = io;
-const { loadConfig } = configLoader;
+const { loadConfig, loadConfigResolved } = configLoader;
 const { resolveModelInternal, resolveGranularityInternal, assertValidGranularityOverride } = modelResolver;
 const { findPhaseInternal } = phaseLocator;
 const {
@@ -2015,6 +2017,9 @@ function buildAgentSkillsBlock(
   return `<agent_skills>\nRead these user-configured skills:\n${lines}\n</agent_skills>`;
 }
 
+/** Reason enum for agent-skills diagnostic (#1415, ADR-1411 P2). */
+type AgentSkillsReason = 'resolved' | 'not_configured' | 'configured_empty' | 'configured_unresolved';
+
 function cmdAgentSkills(
   cwd: string,
   agentType: string | undefined,
@@ -2026,24 +2031,76 @@ function cmdAgentSkills(
     return;
   }
 
-  const config = loadConfig(cwd);
+  // Anchor to project root before loading config (#1415/#1366 cwd-drift fix).
+  const projectRoot = findProjectRoot(cwd);
+  const { config, source, degraded } = loadConfigResolved(projectRoot);
   const diagnostics = { warnings: [] as string[] };
   const block = buildAgentSkillsBlock(
     config,
     agentType,
-    cwd,
+    projectRoot,
     diagnostics,
   );
 
+  // Compute configured + reason for diagnostic output.
+  const agentSkillsMap = (config && config['agent_skills'] && typeof config['agent_skills'] === 'object')
+    ? config['agent_skills'] as Record<string, unknown>
+    : {};
+  const configured = Object.prototype.hasOwnProperty.call(agentSkillsMap, agentType);
+
+  let reason: AgentSkillsReason;
+  let skillPaths: unknown = configured ? agentSkillsMap[agentType] : [];
+  if (!configured) {
+    reason = 'not_configured';
+    skillPaths = [];
+  } else {
+    // Normalize paths to array
+    if (typeof skillPaths === 'string') skillPaths = [skillPaths];
+    if (!Array.isArray(skillPaths)) skillPaths = [];
+    const pathsArr = skillPaths as unknown[];
+    // Fix 3: treat "" (empty string) as configured_empty — all-blank entries = no meaningful paths.
+    // An array of all empty/blank strings has length > 0 but zero meaningful paths.
+    const nonBlankPaths = pathsArr.filter(p => typeof p === 'string' && p.trim().length > 0);
+    if (pathsArr.length === 0 || nonBlankPaths.length === 0) {
+      // configured with empty array / "" / all-blank entries
+      reason = 'configured_empty';
+      // Reflect zero meaningful paths in the normalized array used for skills_count
+      skillPaths = [];
+      try {
+        process.stderr.write(
+          `[agent-skills] WARNING: Agent "${agentType}" is configured in agent_skills but has no skill paths — skills_count will be 0\n`
+        );
+      } catch { /* stderr might be closed */ }
+    } else if (!block) {
+      // configured with paths but all failed to resolve (warnings already emitted by buildAgentSkillsBlock)
+      reason = 'configured_unresolved';
+    } else {
+      reason = 'resolved';
+    }
+  }
+
+  const normalizedPaths = Array.isArray(skillPaths) ? skillPaths : [];
+
   if (jsonMode) {
-    const skillPaths =
-      (config && config.agent_skills && (config.agent_skills as Record<string, unknown>)[agentType]) || [];
-    const normalizedPaths = Array.isArray(skillPaths)
-      ? skillPaths
-      : skillPaths
-        ? [skillPaths]
-        : [];
-    output({ agent_type: agentType, block: block || '', skills_count: normalizedPaths.length, warnings: diagnostics.warnings }, raw);
+    // Build the Resolution<AgentSkillsValue> envelope and embed .value additively.
+    // Flat fields are retained unchanged for back-compat; value formalises the
+    // Resolution convention (ADR-1411 P3, #1416). source/degraded remain
+    // config-provenance extras, outside the Resolution<T> envelope.
+    const resolution = makeResolution(
+      { block: block || '', skills_count: normalizedPaths.length },
+      { configured, reason, warnings: diagnostics.warnings },
+    );
+    output({
+      agent_type: agentType,
+      block: block || '',
+      skills_count: normalizedPaths.length,
+      warnings: diagnostics.warnings,
+      configured,
+      reason,
+      source,
+      degraded,
+      value: resolution.value,
+    }, raw);
     return;
   }
 

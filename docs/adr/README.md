@@ -58,6 +58,7 @@ See **[CONTRIBUTING.md — "Proposing an ADR or PRD"](../../CONTRIBUTING.md#prop
 | [766-claude-code-plugin-manifest-module.md](766-claude-code-plugin-manifest-module.md) | Claude Code Plugin Manifest Module owns the projection of gsd-core surfaces onto the Claude Code plugin contract | Accepted |
 | [1016-runtime-capability-descriptor.md](1016-runtime-capability-descriptor.md) | Runtime Capability Descriptor | Proposed |
 | [1235-descriptor-driven-agent-conversion-migration.md](1235-descriptor-driven-agent-conversion-migration.md) | Migrate agent conversion to the descriptor-driven install path (parity + per-runtime cutover) | Proposed |
+| [1411-resolution-provenance.md](1411-resolution-provenance.md) | Resolution must report provenance, not fall open silently | Accepted |
 
 ## Seam map
 
@@ -78,3 +79,10 @@ ADR 0011 documents the Skill Surface Budget Module for install-time skill/agent
 profile staging (`--profile=<name>`, `.gsd-profile` marker, `requires:` closure)
 and the Phase 2 runtime `/gsd:surface` command for cluster-level enable/disable
 without reinstall.
+
+ADR 1411 establishes the Resolution Provenance principle: context resolution
+(config loading, project-root anchoring, workstream resolution) must report its
+provenance rather than fall open silently to defaults. It is the resolution-side
+analog of ADR 227 (input-validation shape), binds the Config Loader Module,
+Project-Root Resolution Module, and I/O Module, and is the decision record for
+epic #1411 (phases P1–P4).

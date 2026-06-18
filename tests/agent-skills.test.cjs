@@ -1423,3 +1423,200 @@ describe('bug #1243: plugin-namespaced agent skills', () => {
     );
   });
 });
+
+// ─── Resolution Provenance diagnostics (#1415 / #1366) ────────────────────────
+//
+// Verifies that cmdAgentSkills uses findProjectRoot (cwd-drift anchor) and
+// loadConfigResolved (provenance-aware config loading), and that the --json IR
+// includes the new fields: configured, reason, source, degraded.
+
+describe('agent-skills — Resolution Provenance (#1415)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('--json IR includes configured, reason, source, degraded fields', () => {
+    // Minimal smoke: just the field presence
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.ok('configured' in r.ir, 'IR must include "configured" field');
+    assert.ok('reason' in r.ir, 'IR must include "reason" field');
+    assert.ok('source' in r.ir, 'IR must include "source" field');
+    assert.ok('degraded' in r.ir, 'IR must include "degraded" field');
+  });
+
+  test('not_configured: agent not in map → configured:false, reason:not_configured, no stderr warning', () => {
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-executor': ['skills/foo'] },
+    });
+    const r = runGsdToolsWithStderr(['agent-skills', '--json', 'gsd-planner'], tmpDir, {
+      HOME: tmpDir,
+      USERPROFILE: tmpDir,
+    });
+    assert.ok(r.success, `Command failed: ${r.stderr}`);
+    const ir = JSON.parse(r.stdout);
+    assert.strictEqual(ir.configured, false);
+    assert.strictEqual(ir.reason, 'not_configured');
+    // No warning on stderr for not_configured
+    assert.ok(
+      !r.stderr.includes('WARNING'),
+      `Should NOT emit WARNING for not_configured agent, got stderr: ${r.stderr}`,
+    );
+  });
+
+  test('configured_empty: agent_skills[X]=[] → configured:true, reason:configured_empty, stderr WARNING, skills_count:0', () => {
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-executor': [] },
+    });
+    const r = runGsdToolsWithStderr(['agent-skills', '--json', 'gsd-executor'], tmpDir, {
+      HOME: tmpDir,
+      USERPROFILE: tmpDir,
+    });
+    assert.ok(r.success, `Command failed: ${r.stderr}`);
+    const ir = JSON.parse(r.stdout);
+    assert.strictEqual(ir.configured, true);
+    assert.strictEqual(ir.reason, 'configured_empty');
+    assert.strictEqual(ir.skills_count, 0);
+    assert.strictEqual(ir.block, '');
+    assert.ok(
+      r.stderr.includes('WARNING') || r.stderr.toLowerCase().includes('warning'),
+      `Should emit WARNING for configured_empty, got stderr: ${r.stderr}`,
+    );
+  });
+
+  test('configured_unresolved: configured path that does not exist → reason:configured_unresolved, stderr WARNING', () => {
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-executor': ['skills/nonexistent-1415'] },
+    });
+    const r = runGsdToolsWithStderr(['agent-skills', '--json', 'gsd-executor'], tmpDir, {
+      HOME: tmpDir,
+      USERPROFILE: tmpDir,
+    });
+    assert.ok(r.success, `Command failed: ${r.stderr}`);
+    const ir = JSON.parse(r.stdout);
+    assert.strictEqual(ir.configured, true);
+    assert.strictEqual(ir.reason, 'configured_unresolved');
+    assert.strictEqual(ir.block, '');
+    assert.ok(
+      r.stderr.includes('WARNING') || r.stderr.toLowerCase().includes('warning'),
+      `Should emit WARNING for configured_unresolved, got stderr: ${r.stderr}`,
+    );
+  });
+
+  test('resolved: valid configured path → configured:true, reason:resolved, block non-empty', () => {
+    const skillDir = path.join(tmpDir, 'skills', 'my-skill-1415');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# My Skill\n');
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-executor': ['skills/my-skill-1415'] },
+    });
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.configured, true);
+    assert.strictEqual(r.ir.reason, 'resolved');
+    assert.ok(r.ir.block.includes('<agent_skills>'), 'block must be non-empty for resolved');
+  });
+
+  test('cwd-drift: invoking from descendant subdir resolves config from project root', () => {
+    const skillDir = path.join(tmpDir, 'skills', 'drift-skill');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# Drift Skill\n');
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-executor': ['skills/drift-skill'] },
+    });
+    // Invoke from a descendant subdirectory
+    const deepDir = path.join(tmpDir, 'src', 'feature');
+    fs.mkdirSync(deepDir, { recursive: true });
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], deepDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.configured, true);
+    assert.strictEqual(r.ir.reason, 'resolved');
+    assert.ok(r.ir.block.includes('<agent_skills>'), `block must be non-empty for drift test, got: ${r.ir.block}`);
+  });
+
+  test('source field matches config provenance (root when config.json present)', () => {
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-executor': [] },
+    });
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.source, 'root');
+    assert.strictEqual(r.ir.degraded, false);
+  });
+
+  test('Fix 3: agent_skills[X]="" (empty string) → configured_empty, skills_count:0, stderr WARNING', () => {
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-executor': '' },
+    });
+    const r = runGsdToolsWithStderr(['agent-skills', '--json', 'gsd-executor'], tmpDir, {
+      HOME: tmpDir,
+      USERPROFILE: tmpDir,
+    });
+    assert.ok(r.success, `Command failed: ${r.stderr}`);
+    const ir = JSON.parse(r.stdout);
+    assert.strictEqual(ir.configured, true, 'should be configured');
+    assert.strictEqual(ir.reason, 'configured_empty',
+      `empty string must yield configured_empty, got: ${ir.reason}`);
+    assert.strictEqual(ir.skills_count, 0, 'skills_count must be 0 for empty string');
+    assert.strictEqual(ir.block, '', 'block must be empty');
+    assert.ok(
+      r.stderr.includes('WARNING') || r.stderr.toLowerCase().includes('warning'),
+      `Should emit WARNING for empty-string configured_empty, got stderr: ${r.stderr}`,
+    );
+  });
+
+  // ─── Resolution Convention P3 (#1416) ────────────────────────────────────────
+  // The --json IR gains an additive `value: { block, skills_count }` field
+  // (Resolution<AgentSkillsValue> envelope). All existing flat fields are retained
+  // for back-compat. RED: value field absent before build; GREEN: after build:lib.
+
+  test('P3 (#1416): --json IR includes value.block and value.skills_count matching flat fields (back-compat)', () => {
+    const skillDir = path.join(tmpDir, 'skills', 'p3-skill');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# P3 Skill\n');
+    writeConfig(tmpDir, {
+      agent_skills: { 'gsd-executor': ['skills/p3-skill'] },
+    });
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+
+    // value field must exist and be an object
+    assert.ok(r.ir.value !== undefined && r.ir.value !== null, 'ir.value must be present (Resolution<AgentSkillsValue>)');
+    assert.strictEqual(typeof r.ir.value, 'object', 'ir.value must be an object');
+
+    // value.block must match flat block
+    assert.strictEqual(r.ir.value.block, r.ir.block, 'value.block must match flat block field');
+    assert.ok(r.ir.value.block.includes('<agent_skills>'), 'value.block must contain <agent_skills>');
+
+    // value.skills_count must match flat skills_count
+    assert.strictEqual(r.ir.value.skills_count, r.ir.skills_count, 'value.skills_count must match flat skills_count field');
+    assert.strictEqual(r.ir.value.skills_count, 1, 'value.skills_count must be 1 for one configured path');
+
+    // All existing flat fields must still be present (back-compat)
+    assert.strictEqual(typeof r.ir.agent_type, 'string', 'flat agent_type must still be present');
+    assert.strictEqual(typeof r.ir.block, 'string', 'flat block must still be present');
+    assert.strictEqual(typeof r.ir.skills_count, 'number', 'flat skills_count must still be present');
+    assert.ok(Array.isArray(r.ir.warnings), 'flat warnings must still be present');
+    assert.strictEqual(typeof r.ir.configured, 'boolean', 'flat configured must still be present');
+    assert.strictEqual(typeof r.ir.reason, 'string', 'flat reason must still be present');
+    assert.ok('source' in r.ir, 'flat source must still be present');
+    assert.ok('degraded' in r.ir, 'flat degraded must still be present');
+  });
+
+  test('P3 (#1416): value.block and value.skills_count are consistent when unconfigured', () => {
+    // No config → not_configured; value must still be present with empty block and 0 count
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.ok(r.ir.value !== undefined, 'ir.value must be present even when unconfigured');
+    assert.strictEqual(r.ir.value.block, r.ir.block, 'value.block must match flat block (empty)');
+    assert.strictEqual(r.ir.value.skills_count, r.ir.skills_count, 'value.skills_count must match flat skills_count (0)');
+    assert.strictEqual(r.ir.value.block, '', 'value.block must be empty when unconfigured');
+    assert.strictEqual(r.ir.value.skills_count, 0, 'value.skills_count must be 0 when unconfigured');
+  });
+});

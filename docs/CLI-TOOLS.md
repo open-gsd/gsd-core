@@ -425,11 +425,26 @@ Emit the skill block for a given agent type.
 # Emit raw XML skill block (default — safe for shell expansion)
 node gsd-tools.cjs agent-skills <agent-type>
 
-# Emit typed JSON surface (#455) — { agent_type, block, skills_count, warnings }
+# Emit typed JSON surface (#455) — { agent_type, block, skills_count, warnings, configured, reason, source, degraded }
 node gsd-tools.cjs agent-skills <agent-type> --json
 ```
 
-The `--json` flag returns a typed IR object suitable for structured consumption and test assertions, while the default (no flag) preserves the raw XML output that workflow shell expansions rely on. The IR also includes a `warnings` array naming any configured skill paths that were skipped (for example a missing `SKILL.md`); it is empty when every configured skill resolved.
+The `--json` flag returns a typed IR object suitable for structured consumption and test assertions, while the default (no flag) preserves the raw XML output that workflow shell expansions rely on.
+
+**`--json` field reference** (as of #1415, Resolution Provenance P2):
+
+| Field | Type | Description |
+|---|---|---|
+| `agent_type` | `string` | The agent type that was queried. |
+| `block` | `string` | The `<agent_skills>` XML block, or `""` when empty. |
+| `skills_count` | `number` | Number of skill paths configured for this agent type. |
+| `warnings` | `string[]` | Per-path warnings for skills that were skipped (missing `SKILL.md`, unsafe path, etc.). Empty when all configured paths resolved. |
+| `configured` | `boolean` | `true` when the agent type appears in `agent_skills` in the config; `false` when the key is absent entirely. |
+| `reason` | `string` | Resolution reason: `"resolved"` (block non-empty), `"not_configured"` (agent not in `agent_skills` — silent), `"configured_empty"` (configured but paths list is empty — emits stderr WARNING), `"configured_unresolved"` (configured with paths but all failed to resolve — emits stderr WARNING). |
+| `source` | `string` | Config provenance: `"root"` (`.planning/config.json`), `"workstream"` (workstream-scoped config), `"global-defaults"` (`~/.gsd/defaults.json`), `"builtin-defaults"` (no project config). |
+| `degraded` | `boolean` | `true` when a workstream was requested but its config.json was absent and the command fell back to root config; `false` otherwise. |
+
+The command anchors to the project root via `findProjectRoot` before loading config, so invoking it from a descendant subdirectory resolves the same config as the project root.
 
 ---
 
