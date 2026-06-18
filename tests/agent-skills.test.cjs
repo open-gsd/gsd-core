@@ -377,6 +377,166 @@ describe('agent-skills empty-resolution diagnostics', () => {
   });
 });
 
+// ─── #1366: deterministic cwd/workstream resolution ─────────────────────────
+// `query agent-skills` resolved config relative to the invoking process's cwd
+// and active GSD_WORKSTREAM. Two invocation-context drifts made a CONFIGURED
+// agent fall open to an EMPTY block with no signal:
+//   (1) invoked from a descendant subdirectory with no .planning/ → config fell
+//       through to bare defaults → agent_skills = {} → empty block.
+//   (2) GSD_WORKSTREAM pointing at a workstream with no scoped config → same
+//       fall-through to defaults → empty block.
+// The fix anchors resolution to the nearest ancestor .planning/ (project root)
+// and falls back to the project-root config when the workstream is absent, and
+// makes "configured but resolved empty" distinguishable from "not configured".
+
+describe('agent-skills cwd/workstream resolution determinism (#1366)', () => {
+  let tmpDir;
+
+  // Parse the --json IR from an explicit cwd (the helper runAgentSkillsJson
+  // always runs at the project root, which cannot exercise the cwd-drift vector).
+  function agentSkillsJsonFromCwd(agentType, cwd, env) {
+    const r = runGsdTools(
+      ['agent-skills', '--json', agentType],
+      cwd,
+      env || { HOME: tmpDir, USERPROFILE: tmpDir },
+    );
+    if (!r.success) return { success: false, error: r.error, ir: null };
+    try {
+      return { success: true, ir: JSON.parse(r.output) };
+    } catch (e) {
+      return { success: false, error: `JSON parse failed: ${e.message} output=${r.output}`, ir: null };
+    }
+  }
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    const skillDir = path.join(tmpDir, 'skills', 'shared-skill');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# Shared Skill\n');
+    // Identical project-root mapping for all three plan-phase agents.
+    writeConfig(tmpDir, {
+      agent_skills: {
+        'gsd-phase-researcher': ['skills/shared-skill'],
+        'gsd-planner': ['skills/shared-skill'],
+        'gsd-plan-checker': ['skills/shared-skill'],
+      },
+    });
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  // ── Vector 1: cwd drift ──────────────────────────────────────────────────
+  test('CWD-DRIFT: resolves the configured block from a descendant subdirectory with no .planning/', () => {
+    const nested = path.join(tmpDir, 'src', 'deep', 'nested');
+    fs.mkdirSync(nested, { recursive: true });
+
+    for (const agent of ['gsd-phase-researcher', 'gsd-planner', 'gsd-plan-checker']) {
+      const r = agentSkillsJsonFromCwd(agent, nested);
+      assert.ok(r.success, `Command failed for ${agent}: ${r.error}`);
+      assert.ok(
+        r.ir.block.includes('<agent_skills>') && r.ir.block.includes('shared-skill/SKILL.md'),
+        `${agent} must resolve the configured block from a descendant cwd, got: ${JSON.stringify(r.ir.block)}`,
+      );
+      assert.strictEqual(r.ir.skills_count, 1, `${agent} skills_count must be 1 from a descendant cwd`);
+      assert.strictEqual(r.ir.configured, true, `${agent} must report configured=true`);
+      assert.strictEqual(r.ir.reason, 'resolved', `${agent} reason must be 'resolved'`);
+    }
+  });
+
+  test('CWD-DRIFT: resolution is identical whether invoked from the project root or a descendant', () => {
+    const nested = path.join(tmpDir, 'packages', 'inner');
+    fs.mkdirSync(nested, { recursive: true });
+    const atRoot = agentSkillsJsonFromCwd('gsd-planner', tmpDir);
+    const atNested = agentSkillsJsonFromCwd('gsd-planner', nested);
+    assert.ok(atRoot.success && atNested.success, 'both invocations must succeed');
+    assert.strictEqual(
+      atNested.ir.block,
+      atRoot.ir.block,
+      'descendant-cwd resolution must be byte-identical to root-cwd resolution (deterministic)',
+    );
+  });
+
+  // ── Vector 2: workstream drift ───────────────────────────────────────────
+  test('WORKSTREAM: an unset GSD_WORKSTREAM resolves the configured block', () => {
+    const r = agentSkillsJsonFromCwd('gsd-plan-checker', tmpDir, {
+      HOME: tmpDir,
+      USERPROFILE: tmpDir,
+      GSD_WORKSTREAM: '',
+    });
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.strictEqual(r.ir.configured, true);
+    assert.strictEqual(r.ir.reason, 'resolved');
+    assert.ok(r.ir.block.includes('shared-skill/SKILL.md'), 'unset workstream must resolve the project-root mapping');
+  });
+
+  test('WORKSTREAM: a nonexistent GSD_WORKSTREAM no longer drops a configured agent to an empty block', () => {
+    for (const agent of ['gsd-planner', 'gsd-plan-checker']) {
+      const r = agentSkillsJsonFromCwd(agent, tmpDir, {
+        HOME: tmpDir,
+        USERPROFILE: tmpDir,
+        GSD_WORKSTREAM: 'does-not-exist',
+      });
+      assert.ok(r.success, `Command failed for ${agent}: ${r.error}`);
+      assert.ok(
+        r.ir.block.includes('shared-skill/SKILL.md'),
+        `${agent} must fall back to the project-root config for a missing workstream, got: ${JSON.stringify(r.ir.block)}`,
+      );
+      assert.strictEqual(r.ir.skills_count, 1, `${agent} skills_count must be 1 under a missing workstream`);
+      assert.strictEqual(r.ir.configured, true);
+      assert.strictEqual(r.ir.reason, 'resolved');
+    }
+  });
+
+  test('WORKSTREAM + CWD-DRIFT combined: descendant cwd AND nonexistent workstream still resolves', () => {
+    const nested = path.join(tmpDir, 'a', 'b', 'c');
+    fs.mkdirSync(nested, { recursive: true });
+    const r = agentSkillsJsonFromCwd('gsd-planner', nested, {
+      HOME: tmpDir,
+      USERPROFILE: tmpDir,
+      GSD_WORKSTREAM: 'ghost',
+    });
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.ok(r.ir.block.includes('shared-skill/SKILL.md'), 'combined drift must still resolve the configured block');
+    assert.strictEqual(r.ir.reason, 'resolved');
+  });
+
+  // ── Diagnostic visibility: configured-but-empty vs not-configured ─────────
+  test('DIAGNOSTIC: a configured agent that resolves empty is distinguishable from an unconfigured one', () => {
+    writeConfig(tmpDir, {
+      agent_skills: {
+        'gsd-planner': [], // configured, but empty → must be visible, not silent
+      },
+    });
+
+    const configuredEmpty = runGsdToolsWithStderr(['agent-skills', '--json', 'gsd-planner'], tmpDir, {
+      HOME: tmpDir,
+      USERPROFILE: tmpDir,
+    });
+    assert.ok(configuredEmpty.success, `Command failed: ${configuredEmpty.stderr}`);
+    const emptyIr = JSON.parse(configuredEmpty.stdout);
+    assert.strictEqual(emptyIr.block, '', 'configured-but-empty still yields an empty block');
+    assert.strictEqual(emptyIr.configured, true, 'configured-but-empty must report configured=true');
+    assert.strictEqual(emptyIr.reason, 'configured_empty', "reason must be 'configured_empty'");
+    assert.ok(
+      configuredEmpty.stderr.includes('[agent-skills] WARNING') && configuredEmpty.stderr.includes('gsd-planner'),
+      `configured-but-empty must emit a visible stderr diagnostic, got: ${configuredEmpty.stderr}`,
+    );
+
+    // Contrast: an agent with no mapping at all stays silent and reports not_configured.
+    const notConfigured = runGsdToolsWithStderr(['agent-skills', '--json', 'gsd-executor'], tmpDir, {
+      HOME: tmpDir,
+      USERPROFILE: tmpDir,
+    });
+    assert.ok(notConfigured.success, `Command failed: ${notConfigured.stderr}`);
+    const ncIr = JSON.parse(notConfigured.stdout);
+    assert.strictEqual(ncIr.configured, false, 'unconfigured agent must report configured=false');
+    assert.strictEqual(ncIr.reason, 'not_configured', "reason must be 'not_configured'");
+    assert.strictEqual(ncIr.warnings.length, 0, 'not-configured must stay silent (no warnings)');
+  });
+});
+
 // ─── config-ensure-section includes agent_skills ────────────────────────────
 
 describe('config-ensure-section with agent_skills', () => {

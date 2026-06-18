@@ -1872,33 +1872,116 @@ function cmdInitRemoveWorkspace(cwd: string, name: string | undefined, raw: bool
   output(result, raw);
 }
 
+// #1366 — why an empty agent-skills block was returned. Lets the verb's output
+// contract distinguish "no mapping configured" (silent, expected) from "mapping
+// configured but resolved to nothing" (a misconfiguration that must be visible).
+type AgentSkillsReason =
+  | 'resolved'
+  | 'not_configured'
+  | 'configured_empty'
+  | 'configured_unresolved';
+
+interface AgentSkillsDiagnostics {
+  warnings: string[];
+  configured?: boolean;
+  reason?: AgentSkillsReason;
+}
+
+/**
+ * Resolve the project root for `agent-skills` config resolution by walking
+ * upward from `cwd` to the nearest ancestor that contains a `.planning/`
+ * directory (#1366).
+ *
+ * The verb is frequently invoked from a descendant subdirectory (e.g. a
+ * subagent running inside its own worktree or a nested package). Anchoring to
+ * the nearest `.planning/` makes resolution deterministic w.r.t. the invoking
+ * cwd instead of silently degrading to bare defaults when the immediate cwd has
+ * no `.planning/`. Falls back to the original `cwd` when no ancestor qualifies,
+ * preserving the pre-existing behaviour for genuinely project-less contexts.
+ */
+function resolvePlanningCwd(cwd: string): string {
+  let dir: string;
+  try {
+    dir = path.resolve(cwd);
+  } catch {
+    return cwd;
+  }
+  const fsRoot = path.parse(dir).root;
+  // Bound the walk so a pathological symlink loop or deep tree can't spin.
+  for (let depth = 0; depth < 40; depth += 1) {
+    try {
+      const planning = path.join(dir, '.planning');
+      if (fs.existsSync(planning) && fs.statSync(planning).isDirectory()) return dir;
+    } catch {
+      // Unreadable ancestor — keep walking upward.
+    }
+    if (dir === fsRoot) break;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return cwd;
+}
+
 function buildAgentSkillsBlock(
   config: Record<string, unknown>,
   agentType: string,
   projectRoot: string,
-  diagnostics?: { warnings: string[] },
+  diagnostics?: AgentSkillsDiagnostics,
 ): string {
   const warn = (message: string): void => {
     process.stderr.write(message);
     if (diagnostics) diagnostics.warnings.push(message.replace(/\n+$/, ''));
   };
+  const setReason = (reason: AgentSkillsReason): void => {
+    if (diagnostics) diagnostics.reason = reason;
+  };
 
   const runtime = (config && (config['runtime'] as string)) || 'claude';
   const globalSkillsBase = getGlobalSkillsBase(runtime);
 
-  if (!config || !config['agent_skills'] || !agentType) return '';
+  const agentSkills =
+    config && typeof config['agent_skills'] === 'object' && config['agent_skills'] !== null
+      ? (config['agent_skills'] as Record<string, unknown>)
+      : null;
+  // "Configured" = this agent has an explicit key in agent_skills, regardless of
+  // whether that entry resolves to any valid skill. Surfacing this lets callers
+  // tell "not configured" apart from "configured but resolved empty" (#1366).
+  const isConfigured =
+    !!agentSkills && !!agentType && Object.prototype.hasOwnProperty.call(agentSkills, agentType);
+  if (diagnostics) diagnostics.configured = isConfigured;
 
-  let skillPaths = (config['agent_skills'] as Record<string, unknown>)[agentType];
-  if (!skillPaths) return '';
+  if (!agentSkills || !agentType) {
+    setReason('not_configured');
+    return '';
+  }
+
+  let skillPaths = agentSkills[agentType];
+  if (skillPaths === undefined || skillPaths === null) {
+    setReason(isConfigured ? 'configured_empty' : 'not_configured');
+    if (isConfigured) {
+      warn(
+        `[agent-skills] WARNING: Agent "${agentType}" is configured in agent_skills but its value is empty (${skillPaths === null ? 'null' : 'undefined'}) — resolved to no skills\n`,
+      );
+    }
+    return '';
+  }
 
   if (typeof skillPaths === 'string') skillPaths = [skillPaths];
   if (!Array.isArray(skillPaths)) {
+    setReason('configured_empty');
     warn(
       `[agent-skills] WARNING: Agent "${agentType}" has a malformed agent_skills value (expected string or array, got ${typeof skillPaths}) — ignoring\n`,
     );
     return '';
   }
-  if (skillPaths.length === 0) return '';
+  if (skillPaths.length === 0) {
+    setReason('configured_empty');
+    warn(
+      `[agent-skills] WARNING: Agent "${agentType}" is configured with an empty skill list — resolved to no skills\n`,
+    );
+    return '';
+  }
 
   // Hoist trusted roots computation before the loop: loadTrustedGlobalRoots does
   // realpathSync I/O and should run at most once per call, not once per failing skill.
@@ -2000,12 +2083,14 @@ function buildAgentSkillsBlock(
   }
 
   if (validEntries.length === 0) {
+    setReason('configured_unresolved');
     warn(
       `[agent-skills] WARNING: Agent "${agentType}" has ${skillPaths.length} configured skill path(s) but none resolved to a valid skill — all were skipped (see warnings above)\n`,
     );
     return '';
   }
 
+  setReason('resolved');
   const lines = validEntries.map((entry) => {
     if (entry.kind === 'directive') {
       return `- Load the \`${entry.name}\` skill via the Skill tool before proceeding (plugin-provided).`;
@@ -2026,12 +2111,21 @@ function cmdAgentSkills(
     return;
   }
 
-  const config = loadConfig(cwd);
-  const diagnostics = { warnings: [] as string[] };
+  // #1366 — anchor config resolution to the project root (nearest ancestor with
+  // a .planning/) so resolution is deterministic regardless of which descendant
+  // subdirectory the verb was invoked from. loadConfig additionally falls back
+  // to the project-root config when GSD_WORKSTREAM points at a missing workstream.
+  const projectRoot = resolvePlanningCwd(cwd);
+  const config = loadConfig(projectRoot);
+  const diagnostics: AgentSkillsDiagnostics = {
+    warnings: [],
+    configured: false,
+    reason: 'not_configured',
+  };
   const block = buildAgentSkillsBlock(
     config,
     agentType,
-    cwd,
+    projectRoot,
     diagnostics,
   );
 
@@ -2043,7 +2137,16 @@ function cmdAgentSkills(
       : skillPaths
         ? [skillPaths]
         : [];
-    output({ agent_type: agentType, block: block || '', skills_count: normalizedPaths.length, warnings: diagnostics.warnings }, raw);
+    output({
+      agent_type: agentType,
+      block: block || '',
+      skills_count: normalizedPaths.length,
+      // #1366 — output contract: distinguish "no mapping configured" from
+      // "mapping configured but resolved empty" so callers can detect a silent drop.
+      configured: diagnostics.configured === true,
+      reason: diagnostics.reason,
+      warnings: diagnostics.warnings,
+    }, raw);
     return;
   }
 

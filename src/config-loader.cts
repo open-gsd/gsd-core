@@ -645,13 +645,19 @@ function loadConfig(cwd: string, options: Record<string, unknown> = {}): Record<
     }
     return _baseConfig;
   } catch {
+    // #1366 — a workstream was requested (CLI --ws / GSD_WORKSTREAM env /
+    // stored pointer) but its scoped config.json is absent or unreadable.
+    // Whether or not the workstream directory itself exists, fall back to the
+    // project-root config we already loaded above instead of silently degrading
+    // to bare defaults — that fall-through dropped agent_skills and every other
+    // root-level mapping, so configured agents resolved EMPTY with no signal.
+    if (rootParsed) {
+      // Re-parse with the workstream cleared so the project-root config.json is
+      // the sole source. (The federated overlay is applied in the re-entrant call.)
+      return loadConfig(cwd, { workstream: null });
+    }
     // Fall back to ~/.gsd/defaults.json only for truly pre-project contexts (#1683)
     if (fs.existsSync(planningDir(cwd, ws))) {
-      if (rootParsed) {
-        // Workstream has no config.json: re-parse using root config as the sole source.
-        // (FIX 2: overlay is applied recursively in the re-entrant loadConfig call)
-        return loadConfig(cwd, { workstream: null });
-      }
       // FIX 2: Apply the federated overlay on the no-config path.
       // Migrated Capability keys are surfaced from the generated registry even
       // when the project has no config.json, so schema defaults still apply.
