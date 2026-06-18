@@ -24,6 +24,8 @@ npx @opengsd/gsd-core@latest
 
 That is the only command you need for a fresh install or to re-run the installer after switching runtimes.
 
+> **PATH suggestion (POSIX shells).** If the npm global bin directory is not on your `PATH`, the installer prints a copy-paste command to add it. Alongside the `zsh` and `bash` lines it now offers a fish-native `fish_add_path …` command. fish users whose `fish_user_paths` (or `config.fish`) already covers the directory no longer see a spurious "not on your PATH" warning — the installer detects fish's universal-variable store and tells you to reopen your shell instead.
+
 ---
 
 ## Per-runtime instructions

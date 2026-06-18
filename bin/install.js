@@ -11808,6 +11808,200 @@ function homePathCoveredByRc(globalBin, homeDir, rcFileNames) {
 }
 
 /**
+ * Detect whether fish already has globalBin on PATH. Fish persists PATH
+ * additions outside the sh-style rc files homePathCoveredByRc scans, so a fish
+ * user whose npm global bin is already covered would otherwise see a spurious
+ * "not on your PATH" warning on every install (#323). Two detection routes:
+ *
+ *   1. The universal-variable store ~/.config/fish/fish_variables — a
+ *      `SETUVAR [--flags] fish_user_paths:<dir>\x1e<dir>…` line. fish serializes
+ *      the list separator and special bytes as escaped TEXT, not raw bytes:
+ *      entries are delimited by the literal four characters `\x1e` and bytes
+ *      such as space appear as `\x20` (verified against fish 4.x output), so the
+ *      value must be split on the `\x1e` text and then fish-unescaped. Values
+ *      are stored absolute (fish does NOT expand HOME in this format).
+ *   2. ~/.config/fish/config.fish — `fish_add_path <dir>…`, `set … PATH <dir>…`,
+ *      or `set … fish_user_paths <dir>…` lines, after $HOME / ~ expansion.
+ *      Arguments are tokenized honoring single/double quotes, backslash escapes,
+ *      and start-of-word `#` comments, so quoted/escaped paths containing spaces
+ *      are matched (the same quoted form the installer itself suggests) while a
+ *      trailing inline comment is ignored. For the colon-joined path-list
+ *      variables (`PATH` / `fish_user_paths`), tokens are split on `:` so
+ *      `set -gx PATH /dir:$PATH` is recognized.
+ *
+ * Mirrors homePathCoveredByRc's normalise/expand/compare contract so write and
+ * read agree; relative or still-unexpanded entries are skipped (no false match).
+ *
+ * @param {string} globalBin  Absolute path to npm's global bin directory.
+ * @param {string} homeDir    Absolute HOME path.
+ * @returns {boolean} true when fish already has globalBin on PATH.
+ */
+function homePathCoveredByFishConfig(globalBin, homeDir) {
+  if (!globalBin || !homeDir) return false;
+  const path = require('path');
+  const fs = require('fs');
+
+  const normalise = (p) => {
+    if (!p) return '';
+    let n = p.replace(/[\\/]+$/g, '');
+    if (n === '') n = p.startsWith('/') ? '/' : p;
+    return n;
+  };
+
+  const homeAbs = path.resolve(homeDir);
+  const targetAbs = normalise(path.resolve(globalBin));
+  const fishDir = path.join(homeAbs, '.config', 'fish');
+
+  const matchesTarget = (raw) => {
+    if (!raw) return false;
+    let s = raw.replace(/\$\{HOME\}/g, homeAbs).replace(/\$HOME/g, homeAbs);
+    if (s === '~') s = homeAbs;
+    else if (s.startsWith('~/')) s = path.join(homeAbs, s.slice(2));
+    if (s.includes('$')) return false;        // unresolved variable — skip
+    if (!path.isAbsolute(s)) return false;     // relative entry: cwd-dependent
+    try {
+      return normalise(path.resolve(s)) === targetAbs;
+    } catch {
+      return false;
+    }
+  };
+
+  // Decode fish's escaped serialization. fish's full_escape emits `\xHH` for
+  // bytes < 0x80 (e.g. space -> `\x20`), `\uHHHH` for codepoints <= 0xFFFF
+  // (e.g. café -> `café`), and `\UHHHHHHHH` for higher codepoints (e.g.
+  // 😀 -> `\U0001f600`) — all verified against fish 4.x output. `\xHH` is a raw
+  // byte; `\u`/`\U` are codepoints (their UTF-8 bytes are pushed). Bytes are
+  // assembled then UTF-8 decoded so multi-byte sequences round-trip correctly.
+  const pushCodePoint = (bytes, cp) => {
+    if (cp <= 0x10ffff) bytes.push(...Buffer.from(String.fromCodePoint(cp), 'utf8'));
+  };
+  const fishUnescape = (v) => {
+    const bytes = [];
+    const named = { n: 0x0a, r: 0x0d, t: 0x09, e: 0x1b, f: 0x0c, v: 0x0b, a: 0x07, '\\': 0x5c };
+    for (let i = 0; i < v.length; i += 1) {
+      if (v[i] === '\\' && i + 1 < v.length) {
+        const n = v[i + 1];
+        if ((n === 'x' || n === 'X') && /^[0-9A-Fa-f]{2}$/.test(v.slice(i + 2, i + 4))) {
+          bytes.push(parseInt(v.slice(i + 2, i + 4), 16));
+          i += 3;
+          continue;
+        }
+        if (n === 'u' && /^[0-9A-Fa-f]{4}$/.test(v.slice(i + 2, i + 6))) {
+          pushCodePoint(bytes, parseInt(v.slice(i + 2, i + 6), 16));
+          i += 5;
+          continue;
+        }
+        if (n === 'U' && /^[0-9A-Fa-f]{8}$/.test(v.slice(i + 2, i + 10))) {
+          pushCodePoint(bytes, parseInt(v.slice(i + 2, i + 10), 16));
+          i += 9;
+          continue;
+        }
+        if (Object.prototype.hasOwnProperty.call(named, n)) {
+          bytes.push(named[n]);
+          i += 1;
+          continue;
+        }
+        bytes.push(...Buffer.from(n, 'utf8')); // `\<char>` -> literal char
+        i += 1;
+        continue;
+      }
+      bytes.push(...Buffer.from(v[i], 'utf8'));
+    }
+    return Buffer.from(bytes).toString('utf8');
+  };
+
+  // Tokenize a fish argument list, honoring single/double quotes and backslash
+  // escapes so quoted/escaped paths containing spaces survive as one token.
+  const tokenizeFishArgs = (input) => {
+    const out = [];
+    let cur = '';
+    let has = false;
+    let i = 0;
+    while (i < input.length) {
+      const c = input[i];
+      if (c === ' ' || c === '\t') {
+        if (has) { out.push(cur); cur = ''; has = false; }
+        i += 1;
+      } else if (c === '#' && !has) {
+        break; // a `#` at the start of a word begins a fish comment
+      } else if (c === "'") {
+        has = true; i += 1;
+        while (i < input.length && input[i] !== "'") {
+          if (input[i] === '\\' && (input[i + 1] === "'" || input[i + 1] === '\\')) {
+            cur += input[i + 1]; i += 2;
+          } else { cur += input[i]; i += 1; }
+        }
+        i += 1; // skip closing quote
+      } else if (c === '"') {
+        has = true; i += 1;
+        while (i < input.length && input[i] !== '"') {
+          if (input[i] === '\\' && '"\\$'.includes(input[i + 1])) {
+            cur += input[i + 1]; i += 2;
+          } else { cur += input[i]; i += 1; }
+        }
+        i += 1;
+      } else if (c === '\\') {
+        has = true;
+        if (i + 1 < input.length) { cur += input[i + 1]; i += 2; } else { i += 1; }
+      } else {
+        has = true; cur += c; i += 1;
+      }
+    }
+    if (has) out.push(cur);
+    return out;
+  };
+
+  // Route 1: universal-variable store (fish_user_paths is stored absolute).
+  try {
+    const content = fs.readFileSync(path.join(fishDir, 'fish_variables'), 'utf8');
+    for (const line of content.split(/\r?\n/)) {
+      const m = /^SETUVAR\s+(?:--\S+\s+)*fish_user_paths:(.*)$/.exec(line.trim());
+      if (!m) continue;
+      for (const rawEntry of m[1].split('\\x1e')) {
+        if (matchesTarget(fishUnescape(rawEntry))) return true;
+      }
+    }
+  } catch {
+    // no fish_variables — fall through to config.fish
+  }
+
+  // Route 2: config.fish (fish_add_path / set -gx PATH / set -Ux fish_user_paths).
+  try {
+    const content = fs.readFileSync(path.join(fishDir, 'config.fish'), 'utf8');
+    for (const rawLine of content.split(/\r?\n/)) {
+      const line = rawLine.replace(/^\s+/, '');
+      if (line.startsWith('#')) continue;
+      let m;
+      let argText = null;
+      // PATH and fish_user_paths are path-list variables: fish colon-splits
+      // their values, so `set -gx PATH /x:$PATH` puts `/x` on PATH as its own
+      // entry (verified against fish 4.x). fish_add_path takes literal directory
+      // arguments and does NOT colon-split, so leave those tokens intact.
+      let colonSplit = false;
+      if ((m = /^fish_add_path\s+(.+)$/.exec(line))) {
+        argText = m[1];
+      } else if ((m = /^set\s+(?:-\S+\s+)*PATH\s+(.+)$/.exec(line))) {
+        argText = m[1];
+        colonSplit = true;
+      } else if ((m = /^set\s+(?:-\S+\s+)*fish_user_paths\s+(.+)$/.exec(line))) {
+        argText = m[1];
+        colonSplit = true;
+      }
+      if (!argText) continue;
+      for (const tok of tokenizeFishArgs(argText)) {
+        for (const seg of (colonSplit ? tok.split(':') : [tok])) {
+          if (matchesTarget(seg)) return true;
+        }
+      }
+    }
+  } catch {
+    // no config.fish — fall through
+  }
+
+  return false;
+}
+
+/**
  * Emit a PATH-export suggestion if globalBin is not already on PATH AND
  * the user's shell rc files do not already cover it via a HOME-relative
  * entry (#2620).
@@ -11839,12 +12033,15 @@ function maybeSuggestPathExport(globalBin, homeDir) {
   });
   if (onPath) return;
 
-  // Already added to PATH via an rc file, but the current shell predates that
+  // Already added to PATH via a shell config (sh-style rc file, or fish's
+  // fish_user_paths / config.fish #323), but the current shell predates that
   // edit — tell the user to reopen rather than (wrongly) suggesting they add it
   // again. Applies to whatever bin dir we install into (retained shim-agnostic).
-  if (homePathCoveredByRc(globalBin, homeDir)) {
+  const coveredByRc = homePathCoveredByRc(globalBin, homeDir);
+  if (coveredByRc || homePathCoveredByFishConfig(globalBin, homeDir)) {
+    const sourceHint = coveredByRc ? ` (or ${cyan}source ~/.zshrc${reset})` : '';
     console.log('');
-    console.log(`  ${yellow}⚠${reset} ${bold}${globalBin}${reset}'s directory is already on your PATH via an rc file entry — try reopening your shell (or ${cyan}source ~/.zshrc${reset}).`);
+    console.log(`  ${yellow}⚠${reset} ${bold}${globalBin}${reset}'s directory is already on your PATH via a shell config entry — try reopening your shell${sourceHint}.`);
     console.log('');
     return;
   }
@@ -12184,6 +12381,7 @@ module.exports = {
     USER_OWNED_ARTIFACTS,
     finishInstall,
     homePathCoveredByRc,
+    homePathCoveredByFishConfig,
     maybeSuggestPathExport,
     runtimeMap,
     allRuntimes,

@@ -376,6 +376,17 @@ export function projectPathActionProjection({
         shell: 'bash',
         command: `echo 'export PATH="${bashTargetDir}:$PATH"' >> ~/.bashrc`,
       },
+      {
+        // fish has no `export` and uses `$PATH` differently in list contexts,
+        // so the zsh/bash echo line is invalid fish syntax. `fish_add_path`
+        // (fish >= 3.2, 2021) is the fish-native persistent API; it writes to
+        // the universal-variable store. Single-quoted for parity with the
+        // zsh/bash siblings — fish treats the POSIX `'\''` idiom as a literal
+        // single quote, so escapeSingleQuotedShellLiteral stays correct here.
+        label: 'fish',
+        shell: 'fish',
+        command: `fish_add_path '${bashTargetDir}'`,
+      },
     ];
   } else {
     const posixTargetDir = escapePosixDoubleQuoted(targetDir);

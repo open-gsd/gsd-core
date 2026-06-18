@@ -39,11 +39,17 @@ describe('bug #3441: PATH guidance is projected from typed shell action IR', () 
       platform: 'linux',
     });
     assert.ok(Array.isArray(posix.shellActions));
-    assert.equal(posix.shellActions.length, 2);
+    assert.equal(posix.shellActions.length, 3);
     assert.equal(posix.shellActions[0].label, 'zsh');
     assert.equal(posix.shellActions[1].label, 'bash');
+    assert.equal(posix.shellActions[2].label, 'fish');
     assert.ok(posix.shellActions[0].command.includes('~/.zshrc'));
     assert.ok(posix.shellActions[1].command.includes('~/.bashrc'));
+    // #323: fish gets a fish-native command (no `export`/`>> rc`), not the
+    // invalid zsh/bash echo line.
+    assert.ok(posix.shellActions[2].command.startsWith('fish_add_path '));
+    assert.ok(!posix.shellActions[2].command.includes('export PATH'));
+    assert.ok(!posix.shellActions[2].command.includes('>>'));
   });
 
   test('POSIX repair mode escapes double-quoted shell metacharacters', () => {
@@ -67,6 +73,12 @@ describe('bug #3441: PATH guidance is projected from typed shell action IR', () 
     });
     assert.equal(projected.shellActions[0].command.includes("/tmp/O'\\''Neil/bin"), true);
     assert.equal(projected.shellActions[1].command.includes("/tmp/O'\\''Neil/bin"), true);
+    // #323: the fish entry single-quotes the same escaped literal — fish reads
+    // the POSIX `'\''` idiom as a literal single quote, so the path round-trips.
+    assert.equal(
+      projected.shellActions[2].command,
+      "fish_add_path '/tmp/O'\\''Neil/bin'",
+    );
   });
 
   test('maybeSuggestPathExport renders commands projected by path-action seam', () => {
