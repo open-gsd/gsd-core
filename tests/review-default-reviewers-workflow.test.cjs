@@ -63,6 +63,8 @@ describe('review workflow source-grounding requirement in build_prompt (#1318)',
   // that heading up to the next `## ` heading inside the same fenced block.
   function buildPromptReviewInstructions(src) {
     // Locate the build_prompt step, then its first fenced ```markdown block.
+    // NOTE: '<step name="build_prompt">' is a literal anchor — update it if the
+    // step is ever renamed or gains/reorders attributes.
     const stepIdx = src.indexOf('<step name="build_prompt">');
     assert.ok(stepIdx !== -1, 'build_prompt step must exist');
     const fenceOpen = src.indexOf('```markdown', stepIdx);
