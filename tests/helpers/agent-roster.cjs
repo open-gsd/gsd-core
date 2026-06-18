@@ -35,6 +35,8 @@ function listAgentFiles(agentsDir = AGENTS_DIR) {
 }
 
 module.exports = {
+  // AGENTS_DIR is exported (not yet consumed by a call site) so future tests that
+  // need the canonical source agents path can reuse it instead of rediscovering it.
   AGENTS_DIR,
   listAgentFiles,
 };
