@@ -67,14 +67,25 @@ function setGsdConfig(dir, key, value) {
   const cfgPath = path.join(cfgDir, 'config.json');
   let cfg = {};
   try { cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8')); } catch (_) { /* new file */ }
-  // Set nested key (dot notation)
+  // Set nested key (dot notation). Guard every segment against prototype
+  // pollution with inline literal checks at each write site — mirrors the
+  // production guard in src/config.cts. A Set/pre-loop guard is NOT recognised
+  // by CodeQL's js/prototype-pollution-utility query (see PR #752 / alert #40).
   const parts = key.split('.');
   let obj = cfg;
   for (let i = 0; i < parts.length - 1; i++) {
-    if (typeof obj[parts[i]] !== 'object' || obj[parts[i]] === null) obj[parts[i]] = {};
-    obj = obj[parts[i]];
+    const k = parts[i];
+    if (k === '__proto__' || k === 'prototype' || k === 'constructor') {
+      throw new Error(`setGsdConfig: unsafe config key segment '${k}'`);
+    }
+    if (typeof obj[k] !== 'object' || obj[k] === null) obj[k] = {};
+    obj = obj[k];
   }
-  obj[parts[parts.length - 1]] = value;
+  const lastKey = parts[parts.length - 1];
+  if (lastKey === '__proto__' || lastKey === 'prototype' || lastKey === 'constructor') {
+    throw new Error(`setGsdConfig: unsafe config key segment '${lastKey}'`);
+  }
+  obj[lastKey] = value;
   fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
 }
 
@@ -287,5 +298,43 @@ describe('#1268 gitWorktreeInfoInternal: relocation to git-base-branch', () => {
     const dir = createTempDir('gsd-wt-info-nothrow-');
     t.after(() => cleanup(dir));
     assert.doesNotThrow(() => gitBaseBranch.gitWorktreeInfoInternal(dir));
+  });
+});
+
+// ─── setGsdConfig prototype-pollution guard (#1406) ───────────────────────────
+
+describe('#1406: setGsdConfig prototype-pollution guard', () => {
+  test('rejects __proto__ as a key segment', (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-1406-'));
+    t.after(() => cleanup(dir));
+    assert.throws(() => setGsdConfig(dir, '__proto__', 'x'), /unsafe config key segment/);
+    assert.throws(() => setGsdConfig(dir, '__proto__.polluted', true), /unsafe config key segment/);
+  });
+
+  test('rejects constructor / prototype chain segments', (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-1406-'));
+    t.after(() => cleanup(dir));
+    assert.throws(() => setGsdConfig(dir, 'constructor.prototype.polluted', true), /unsafe config key segment/);
+    assert.throws(() => setGsdConfig(dir, 'safe.__proto__', true), /unsafe config key segment/);
+    assert.throws(() => setGsdConfig(dir, 'a.prototype.b', true), /unsafe config key segment/);
+  });
+
+  test('does not pollute Object.prototype after rejected attempts', (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-1406-'));
+    t.after(() => cleanup(dir));
+    try { setGsdConfig(dir, '__proto__.polluted', true); } catch (_) { /* expected */ }
+    try { setGsdConfig(dir, 'constructor.prototype.polluted', true); } catch (_) { /* expected */ }
+    try { setGsdConfig(dir, 'a.__proto__.polluted', true); } catch (_) { /* expected */ }
+    assert.strictEqual(({}).polluted, undefined);
+    assert.strictEqual(Object.prototype.polluted, undefined);
+  });
+
+  test('still writes a normal nested key', (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-1406-'));
+    t.after(() => cleanup(dir));
+    setGsdConfig(dir, 'git.base_branch', 'develop');
+    const cfgPath = path.join(dir, '.planning', 'config.json');
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    assert.strictEqual(cfg.git.base_branch, 'develop');
   });
 });
