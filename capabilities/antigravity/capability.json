@@ -21,7 +21,8 @@
         "antigravity",
         "antigravity-ide",
         "antigravity-cli"
-      ]
+      ],
+      "probeExists": "gsd-core/VERSION"
     },
     "configFormat": "settings-json",
     "artifactLayout": {

@@ -83,7 +83,8 @@ const capabilities = {
           "antigravity",
           "antigravity-ide",
           "antigravity-cli"
-        ]
+        ],
+        "probeExists": "gsd-core/VERSION"
       },
       "configFormat": "settings-json",
       "artifactLayout": {
@@ -2740,7 +2741,8 @@ const runtimes = {
           "antigravity",
           "antigravity-ide",
           "antigravity-cli"
-        ]
+        ],
+        "probeExists": "gsd-core/VERSION"
       },
       "configFormat": "settings-json",
       "artifactLayout": {

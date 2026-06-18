@@ -159,6 +159,46 @@ describe('getGlobalConfigDir/getConfigDirFromHome — antigravity 2.x layout det
       cleanup(home);
     }
   });
+
+  // #213/#217 coexistence regression (end-to-end through the registry descriptor).
+  // A CLI user who ALSO has the Antigravity-IDE's ~/.gemini/antigravity dir was
+  // previously shadowed to the legacy dir because it is probed first. The
+  // The probeExists marker (gsd-core/VERSION) makes the dir GSD installed into win.
+  test('coexistence: legacy antigravity + GSD-marked antigravity-cli both present → resolves to antigravity-cli', (t) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-antigravity-coexist-'));
+    t.after(() => cleanup(home));
+    // Both dirs exist on disk...
+    fs.mkdirSync(path.join(home, '.gemini', 'antigravity'), { recursive: true });
+    fs.mkdirSync(path.join(home, '.gemini', 'antigravity-cli', 'gsd-core'), { recursive: true });
+    // ...but only the cli dir carries the GSD marker.
+    fs.writeFileSync(path.join(home, '.gemini', 'antigravity-cli', 'gsd-core', 'VERSION'), '1.6.0\n');
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    assert.strictEqual(
+      getGlobalConfigDir('antigravity'),
+      path.join(home, '.gemini', 'antigravity-cli'),
+      'GSD-marked antigravity-cli must win over the bare-existing legacy antigravity dir',
+    );
+    assert.strictEqual(
+      getConfigDirFromHome('antigravity', true),
+      "'.gemini', 'antigravity-cli'",
+    );
+  });
+
+  test('coexistence: legacy antigravity carries the GSD marker (real 1.x install) → resolves to legacy even when cli dir exists bare', (t) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-antigravity-legacy-marked-'));
+    t.after(() => cleanup(home));
+    fs.mkdirSync(path.join(home, '.gemini', 'antigravity', 'gsd-core'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.gemini', 'antigravity', 'gsd-core', 'VERSION'), '1.5.0\n');
+    fs.mkdirSync(path.join(home, '.gemini', 'antigravity-cli'), { recursive: true });
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    assert.strictEqual(
+      getGlobalConfigDir('antigravity'),
+      path.join(home, '.gemini', 'antigravity'),
+      'a genuine GSD install in the legacy dir must not be abandoned for a bare sibling',
+    );
+  });
 });
 
 describe('getGlobalConfigDir — explicit configDir overrides env for all runtimes', () => {

@@ -34,7 +34,7 @@ configHome: {
   parent?: string,              // for dot-home-nested: e.g. '.gemini' (antigravity), '.codeium' (windsurf)
   env: string[],                // ordered override env vars, e.g. ['CLAUDE_CONFIG_DIR'] (required; may be empty)
   probe?: string[],             // ordered candidate subpaths; first existing wins (antigravity, kimi)
-  probeExists?: string,         // if set, select the first probe candidate where <candidate>/<probeExists> exists (kimi: 'skills')
+  probeExists?: string,         // marker sub-path on a probe candidate. generic-agents-root: hard filter (kimi: 'skills'). dot-home-nested: marker-priority preference, then bare-existence fallback (antigravity: 'gsd-core/VERSION', #213/#217) — see amendment below
   skillsHome?: { kind, name, ... }  // override when the skills dir ≠ config dir (kilo only)
 }
 ```
@@ -47,6 +47,10 @@ configHome: {
 This absorbs kilo (`skillsHome` split), kimi & antigravity (`probe`), windsurf (`dot-home-nested`). `runtime-homes.cts` becomes a pure interpreter of this value.
 
 `configHome` resolution is **pure and read-only** (a first-existing probe; no `mkdirSync` — verified in `runtime-homes.cts`). Any directory creation at install time is the `configFormat` permissions-writer's responsibility (opencode/kilo), never the descriptor-resolution step — so `configHome` carries no `createIfMissing` flag.
+
+#### Amendment — `probeExists` on `dot-home-nested` (#1441, 2026-06-18)
+
+`probeExists` was originally honoured only by `generic-agents-root` (kimi), as a *hard filter*. It is now also honoured by `dot-home-nested`, where it acts as a *preference*: probing first returns the candidate whose `<candidate>/<probeExists>` exists (the dir GSD installed into, marked by `gsd-core/VERSION`), then falls back to the legacy first-bare-existing pass, then `probe[0]`. When `probeExists` is absent the behaviour is byte-identical to the original first-bare-existing probe, so other `dot-home-nested` runtimes (e.g. windsurf, which has no `probe`) are unaffected. This fixes silent misresolution where an active sibling dir (the Antigravity-IDE `~/.gemini/antigravity`) shadowed a CLI install in `~/.gemini/antigravity-cli` — a regression introduced by #217. The existing `probeExists` field name is reused rather than introducing a parallel `probeMarker`, keeping the `configHome` vocabulary closed.
 
 ### 2. `configFormat` — the existing closed enum (unchanged)
 

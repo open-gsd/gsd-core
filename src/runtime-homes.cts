@@ -76,6 +76,20 @@ interface DotHomeNestedDescriptor {
   parent: string;
   env: string[];
   probe?: string[];
+  /**
+   * Optional sub-path that qualifies which probe candidate GSD actually owns
+   * (e.g. `gsd-core/VERSION`). The same field name and check used by the
+   * generic-agents-root descriptor — unified vocabulary per ADR-1016. The
+   * resolution *strength* differs per kind: generic-agents-root treats it as a
+   * hard filter (a candidate only qualifies if `<candidate>/<probeExists>`
+   * exists), whereas dot-home-nested treats it as a *preference* — probing runs
+   * in two passes: first the candidate whose `<candidate>/<probeExists>` exists
+   * wins (the dir GSD installed into), then a bare-existence pass, then
+   * `probe[0]`. Without it, behaviour is the legacy first-bare-existing-wins
+   * probe, so other dot-home-nested runtimes (e.g. windsurf, which has no probe)
+   * are unaffected. See ADR-1016 and #213/#217 (antigravity split).
+   */
+  probeExists?: string;
   skillsHome?: ConfigHomeDescriptor;
 }
 
@@ -163,7 +177,20 @@ export function resolveConfigHomeFromDescriptor(
       }
       const base = path.join(home, configHome.parent);
       if (configHome.probe && configHome.probe.length > 0) {
-        // probe each candidate under base; return first that exists
+        // Pass 1 (marker-priority): when probeExists is declared, prefer the
+        // candidate GSD actually owns (its `<candidate>/<probeExists>` exists).
+        // This disambiguates an active-but-shadowing sibling dir (e.g. the
+        // Antigravity-IDE `~/.gemini/antigravity` dir) from the dir GSD was
+        // installed into, instead of blindly taking the first dir that exists.
+        if (configHome.probeExists) {
+          for (const candidate of configHome.probe) {
+            const resolved = path.join(base, candidate);
+            if (existsSyncFn(path.join(resolved, configHome.probeExists))) {
+              return resolved;
+            }
+          }
+        }
+        // Pass 2 (legacy bare-existence): first candidate dir that exists.
         for (const candidate of configHome.probe) {
           const resolved = path.join(base, candidate);
           if (existsSyncFn(resolved)) return resolved;
@@ -239,9 +266,70 @@ export function resolveAntigravityGlobalDir(opts: ResolveAntigravityOpts = {}): 
       parent: '.gemini',
       env: ['ANTIGRAVITY_CONFIG_DIR'],
       probe: ['antigravity', 'antigravity-ide', 'antigravity-cli'],
+      // Prefer the candidate GSD installed into (carries gsd-core/VERSION) over
+      // a bare-existing sibling. Without this, a CLI user (antigravity-cli) who
+      // also has the IDE's ~/.gemini/antigravity dir is shadowed to the legacy
+      // dir because it is probed first. See #213/#217. The posix-slash literal
+      // matches capabilities/antigravity/capability.json; both normalize via
+      // path.join at the check site, so Windows backslash handling is covered.
+      probeExists: 'gsd-core/VERSION',
     },
     { env, home, existsSync: existsSyncFn },
   );
+}
+
+export interface AntigravityAmbiguity {
+  /** True when more than one ~/.gemini/antigravity{,-ide,-cli} dir is present. */
+  ambiguous: boolean;
+  /** The dir GSD currently resolves to (where install/update will write). */
+  resolved: string;
+  /** All probe candidate dirs that exist on disk (absolute paths). */
+  presentDirs: string[];
+  /**
+   * Candidate dirs that carry the GSD marker (gsd-core/VERSION). When this has
+   * exactly one entry, resolution is unambiguous. Zero or >1 entries (or a
+   * marker in a dir other than the one a CLI/IDE user expects) is the #213/#217
+   * misinstall surface: a prior install may have landed in the wrong sibling dir.
+   */
+  gsdMarkedDirs: string[];
+  /** ANTIGRAVITY_CONFIG_DIR is the operator escape hatch; true when already set. */
+  envOverridden: boolean;
+}
+
+/**
+ * Detect whether the Antigravity config-dir resolution is ambiguous — i.e. more
+ * than one of ~/.gemini/{antigravity,antigravity-ide,antigravity-cli} exists, so
+ * a user upgrading from a pre-#217 install may have had GSD written into the
+ * wrong sibling dir (the legacy/IDE dir shadowing an active CLI dir).
+ *
+ * This is a pure, side-effect-free probe intended for the installer and
+ * /gsd-update to surface operator guidance (set ANTIGRAVITY_CONFIG_DIR or move
+ * gsd-core/ into the intended dir). The migration framework cannot relocate an
+ * install across sibling config dirs (it is bounded to a single configDir and
+ * has no cross-dir move primitive — see installer-migrations 004), so existing
+ * misinstalls are corrected by re-detection + operator guidance, not an
+ * automatic move.
+ */
+export function detectAntigravityDirAmbiguity(
+  opts: ResolveAntigravityOpts = {},
+): AntigravityAmbiguity {
+  const env: Record<string, string | undefined> = opts.env ?? process.env;
+  const home = opts.home ?? os.homedir();
+  const existsSyncFn = opts.existsSync ?? fs.existsSync;
+  const marker = path.join('gsd-core', 'VERSION');
+  const base = path.join(home, '.gemini');
+  const candidates = ['antigravity', 'antigravity-ide', 'antigravity-cli'].map((c) =>
+    path.join(base, c),
+  );
+  const presentDirs = candidates.filter((dir) => existsSyncFn(dir));
+  const gsdMarkedDirs = candidates.filter((dir) => existsSyncFn(path.join(dir, marker)));
+  return {
+    ambiguous: presentDirs.length > 1,
+    resolved: resolveAntigravityGlobalDir({ env, home, existsSync: existsSyncFn }),
+    presentDirs,
+    gsdMarkedDirs,
+    envOverridden: Boolean(env['ANTIGRAVITY_CONFIG_DIR']),
+  };
 }
 
 /**

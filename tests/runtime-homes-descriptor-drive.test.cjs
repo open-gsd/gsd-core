@@ -29,6 +29,7 @@ const {
   resolveKimiGlobalDir,
   resolveConfigHomeFromDescriptor,
   resolveSkillsBaseFromDescriptor,
+  detectAntigravityDirAmbiguity,
 } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'runtime-homes.cjs'));
 
 const HOME = os.homedir();
@@ -393,6 +394,109 @@ describe('descriptor-driven equivalence: dot-home-nested antigravity probe hit/m
     }
   });
 
+  // ── #213/#217 coexistence regression: probeExists disambiguation ──────────
+  // Before probeExists on dot-home-nested, first-bare-existing-wins meant a CLI
+  // user (antigravity-cli) who also had the IDE's ~/.gemini/antigravity dir
+  // present was shadowed to the legacy dir (probed first). probeExists =
+  // 'gsd-core/VERSION' makes the dir GSD actually owns win, regardless of order.
+  const AG_PROBE = ['antigravity', 'antigravity-ide', 'antigravity-cli'];
+  const AG_MARKER = path.join('gsd-core', 'VERSION');
+
+  function antigravityDescriptor(withMarker) {
+    const d = {
+      kind: 'dot-home-nested',
+      name: 'antigravity',
+      parent: '.gemini',
+      env: ['ANTIGRAVITY_CONFIG_DIR'],
+      probe: AG_PROBE,
+    };
+    if (withMarker) d.probeExists = AG_MARKER;
+    return d;
+  }
+
+  test('coexistence: legacy antigravity + antigravity-cli both exist, only cli is GSD-marked → returns antigravity-cli', () => {
+    const home = '/home/u';
+    const cliDir = path.join(home, '.gemini', 'antigravity-cli');
+    const legacyDir = path.join(home, '.gemini', 'antigravity');
+    const markerPath = path.join(cliDir, AG_MARKER);
+    // Both dirs exist on disk; only the cli dir carries gsd-core/VERSION.
+    const existsSync = (p) =>
+      p === markerPath || p === cliDir || p === legacyDir;
+    const result = resolveConfigHomeFromDescriptor(antigravityDescriptor(true), {
+      env: {},
+      home,
+      existsSync,
+    });
+    assert.strictEqual(result, cliDir, 'GSD-marked cli dir must win over bare-existing legacy dir');
+  });
+
+  test('coexistence WITHOUT probeExists still shadows to legacy (documents the pre-fix behavior)', () => {
+    const home = '/home/u';
+    const cliDir = path.join(home, '.gemini', 'antigravity-cli');
+    const legacyDir = path.join(home, '.gemini', 'antigravity');
+    const existsSync = (p) => p === cliDir || p === legacyDir;
+    const result = resolveConfigHomeFromDescriptor(antigravityDescriptor(false), {
+      env: {},
+      home,
+      existsSync,
+    });
+    // No marker → legacy first-bare-existing wins. This is exactly the #217 bug
+    // and proves probeExists is the load-bearing fix.
+    assert.strictEqual(result, legacyDir);
+  });
+
+  test('coexistence: legacy + ide both exist, only ide is GSD-marked → returns antigravity-ide', () => {
+    const home = '/home/u';
+    const ideDir = path.join(home, '.gemini', 'antigravity-ide');
+    const legacyDir = path.join(home, '.gemini', 'antigravity');
+    const markerPath = path.join(ideDir, AG_MARKER);
+    const existsSync = (p) => p === markerPath || p === ideDir || p === legacyDir;
+    const result = resolveConfigHomeFromDescriptor(antigravityDescriptor(true), {
+      env: {},
+      home,
+      existsSync,
+    });
+    assert.strictEqual(result, ideDir);
+  });
+
+  test('marker on legacy dir: GSD lives in legacy antigravity (a real 1.x install) → returns legacy even when cli dir exists bare', () => {
+    const home = '/home/u';
+    const legacyDir = path.join(home, '.gemini', 'antigravity');
+    const cliDir = path.join(home, '.gemini', 'antigravity-cli');
+    const markerPath = path.join(legacyDir, AG_MARKER);
+    // Legacy carries the marker; cli dir exists but is not GSD's. Legacy wins.
+    const existsSync = (p) => p === markerPath || p === legacyDir || p === cliDir;
+    const result = resolveConfigHomeFromDescriptor(antigravityDescriptor(true), {
+      env: {},
+      home,
+      existsSync,
+    });
+    assert.strictEqual(result, legacyDir);
+  });
+
+  test('no marker anywhere (dirs exist but no GSD installed yet): falls back to bare-existence first match', () => {
+    const home = '/home/u';
+    const ideDir = path.join(home, '.gemini', 'antigravity-ide');
+    // Only ide dir exists, no gsd-core/VERSION anywhere → pass 2 returns ide.
+    const existsSync = (p) => p === ideDir;
+    const result = resolveConfigHomeFromDescriptor(antigravityDescriptor(true), {
+      env: {},
+      home,
+      existsSync,
+    });
+    assert.strictEqual(result, ideDir, 'with no marker, bare-existence pass still resolves the single existing 2.x dir');
+  });
+
+  test('probeExists present but nothing exists → fallback to probe[0] (legacy default preserved)', () => {
+    const home = '/home/u';
+    const result = resolveConfigHomeFromDescriptor(antigravityDescriptor(true), {
+      env: {},
+      home,
+      existsSync: () => false,
+    });
+    assert.strictEqual(result, path.join(home, '.gemini', 'antigravity'));
+  });
+
   test('antigravity: ANTIGRAVITY_CONFIG_DIR env override wins over any probe', () => {
     const result = resolveConfigHomeFromDescriptor(
       {
@@ -418,6 +522,67 @@ describe('descriptor-driven equivalence: dot-home-nested antigravity probe hit/m
       { env: {}, home: '/home/u', existsSync: () => true },
     );
     assert.strictEqual(result, path.join('/home/u', '.codeium', 'windsurf'));
+  });
+});
+
+// ── #213/#217 thread-4: existing-install ambiguity detector ───────────────────
+describe('detectAntigravityDirAmbiguity (migration/operator-guidance signal)', () => {
+  const HOMEU = '/home/u';
+  const dir = (name) => path.join(HOMEU, '.gemini', name);
+  const markerOf = (name) => path.join(dir(name), 'gsd-core', 'VERSION');
+
+  test('single dir present → not ambiguous', () => {
+    const cli = dir('antigravity-cli');
+    const r = detectAntigravityDirAmbiguity({
+      env: {},
+      home: HOMEU,
+      existsSync: (p) => p === cli || p === markerOf('antigravity-cli'),
+    });
+    assert.strictEqual(r.ambiguous, false);
+    assert.strictEqual(r.resolved, cli);
+    assert.deepStrictEqual(r.presentDirs, [cli]);
+    assert.deepStrictEqual(r.gsdMarkedDirs, [cli]);
+    assert.strictEqual(r.envOverridden, false);
+  });
+
+  test('legacy + cli both present, GSD marked in cli → ambiguous, resolves to cli', () => {
+    const legacy = dir('antigravity');
+    const cli = dir('antigravity-cli');
+    const r = detectAntigravityDirAmbiguity({
+      env: {},
+      home: HOMEU,
+      existsSync: (p) => p === legacy || p === cli || p === markerOf('antigravity-cli'),
+    });
+    assert.strictEqual(r.ambiguous, true, 'two probe dirs present must flag ambiguity');
+    assert.strictEqual(r.resolved, cli, 'marker disambiguates resolution to cli');
+    assert.deepStrictEqual(r.presentDirs.sort(), [legacy, cli].sort());
+    assert.deepStrictEqual(r.gsdMarkedDirs, [cli]);
+  });
+
+  test('misinstall surface: legacy + cli present but GSD marked ONLY in legacy → ambiguous, resolves to legacy', () => {
+    // This is exactly the #217 victim: GSD was written into the legacy/IDE dir,
+    // so the marker is in legacy and the resolver keeps it there. The detector
+    // flags ambiguity so the installer/update can prompt the operator.
+    const legacy = dir('antigravity');
+    const cli = dir('antigravity-cli');
+    const r = detectAntigravityDirAmbiguity({
+      env: {},
+      home: HOMEU,
+      existsSync: (p) => p === legacy || p === cli || p === markerOf('antigravity'),
+    });
+    assert.strictEqual(r.ambiguous, true);
+    assert.strictEqual(r.resolved, legacy);
+    assert.deepStrictEqual(r.gsdMarkedDirs, [legacy]);
+  });
+
+  test('env override short-circuits: envOverridden flag set when ANTIGRAVITY_CONFIG_DIR present', () => {
+    const r = detectAntigravityDirAmbiguity({
+      env: { ANTIGRAVITY_CONFIG_DIR: '/custom/ag' },
+      home: HOMEU,
+      existsSync: () => true,
+    });
+    assert.strictEqual(r.envOverridden, true);
+    assert.strictEqual(r.resolved, '/custom/ag', 'env override wins over probe entirely');
   });
 });
 
