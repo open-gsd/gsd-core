@@ -311,8 +311,10 @@ describe('#1269 — normalizePhaseReqIds range expansion', () => {
   });
 
   test('AC4: a range exceeding MAX_PHASE_REQ_RANGE stays literal (DoS guard)', () => {
-    // span = 100000 - 1 + 1 = 100000 > 1000 → must not expand or throw.
-    const token = `REQ-1..REQ${'-'}100000`;
+    // Same-width bounds (both 4 digits) so the differing-width guard does NOT fire
+    // first; span = 1001 - 1 + 1 = 1001 > MAX_PHASE_REQ_RANGE (1000) → the DoS cap
+    // is what keeps this literal. Isolates the cap branch from the width check.
+    const token = 'REQ-0001..REQ-1001';
     assert.deepStrictEqual(normalizePhaseReqIds(token), [token]);
   });
 

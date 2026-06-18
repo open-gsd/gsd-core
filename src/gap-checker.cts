@@ -182,7 +182,7 @@ function readGate(cwd: string): boolean {
 /**
  * Same-prefix ascending numeric range, e.g. `SEL-01..SEL-03`. Both sides must
  * share an identical prefix and a numeric suffix. Captures are:
- *   1 prefix, 2 low digits, 3 prefix (compared for equality), 4 high digits.
+ *   1 low prefix, 2 low digits, 3 high prefix (compared to group 1 for equality), 4 high digits.
  */
 const PHASE_REQ_RANGE_RE = /^(.+-)(\d+)\.\.(.+-)(\d+)$/;
 

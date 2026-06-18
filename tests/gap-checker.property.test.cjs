@@ -157,6 +157,9 @@ describe('#1269 normalizePhaseReqIds — range expansion properties', () => {
         const nStr = pad(n, w);
         const token = `${prefix}${nStr}..${prefix}${nStr}`;
         const result = normalizePhaseReqIds(token);
+        // Expected width is nStr.length, not w: when n has more digits than w
+        // (e.g. n=99, w=1), pad() returns the un-truncated "99", so the emitted
+        // ID preserves the bound's actual width — which is what the range parser does.
         assert.deepStrictEqual(result, [`${prefix}${pad(n, nStr.length)}`]);
       },
     ));
