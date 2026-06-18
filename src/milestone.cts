@@ -281,7 +281,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
         if (normalizedStateVersion === milestoneVersion) {
           const roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
           const scopedContent = extractCurrentMilestone(roadmapContent, cwd);
-          const phasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:\s*([^\n]+)/gi;
+          const phasePattern = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*)\s*:\s*([^\n]+)/gi;
           const noDirectoryPhases: string[] = [];
           let pm: RegExpExecArray | null;
           const phaseDirEntries = ((): string[] => {
@@ -296,6 +296,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
           })();
           while ((pm = phasePattern.exec(scopedContent)) !== null) {
             const phaseNum = pm[1];
+            if (!/\d/.test(phaseNum)) continue;
             if (isBacklogPhaseToken(phaseNum)) continue;
             const normalized = normalizePhaseName(phaseNum);
             const hasDirectory = phaseDirEntries.some((d) => phaseTokenMatches(d, normalized));

@@ -84,6 +84,20 @@ describe('milestone complete command', () => {
     assert.ok(milestones.includes('v1.0 MVP Foundation'));
     assert.ok(milestones.includes('Set up project infrastructure'));
   });
+  test('fails when decomposed phase heading has no directory unless forced', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      `---\nmilestone: v1.0\n---\n# State\n\n**Status:** In progress\n`,
+    );
+    writeRoadmap(tmpDir, `# Roadmap v1.0\n\n### Phase 1-2: Decomposed\n**Goal:** needs dir\n`);
+
+    const result = runGsdTools('milestone complete v1.0 --name MVP', tmpDir);
+    assert.ok(!result.success, 'should fail when decomposed phase has no directory');
+    assert.ok(result.error.includes('unstarted phase'), `error should mention unstarted phase; got: ${result.error}`);
+
+    const forced = runGsdTools('milestone complete v1.0 --name MVP --force', tmpDir);
+    assert.ok(forced.success, `should succeed with --force: ${forced.error}`);
+  });
 
   test('prepends to existing MILESTONES.md (reverse chronological)', () => {
     fs.writeFileSync(

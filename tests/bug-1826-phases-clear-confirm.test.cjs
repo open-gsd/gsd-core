@@ -6,9 +6,10 @@
  * wipes the entire .planning/phases/ tree with no warning.
  *
  * Rules:
- *   - Phase dirs present + no --confirm → non-zero exit, clear error message
- *   - Phase dirs present + --confirm    → deletes, exits 0, reports count
- *   - No phase dirs + no --confirm      → exits 0, cleared=0 (nothing to guard)
+ *   - Phase dirs present + no --confirm          → non-zero exit, clear error message
+ *   - Phase dirs present + --confirm --force     → deletes, exits 0, reports count
+ *   - Phase dirs present + --confirm only        → deletes only when archive parity passes
+ *   - No phase dirs + no --confirm               → exits 0, cleared=0 (nothing to guard)
  */
 
 'use strict';
