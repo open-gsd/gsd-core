@@ -28,7 +28,7 @@ const { cleanup } = require('./helpers.cjs');
 
 const configLoader = require('../gsd-core/bin/lib/config-loader.cjs');
 
-const { loadConfig, _resetRuntimeWarningCacheForTests } = configLoader;
+const { loadConfig, loadConfigResolved, _resetRuntimeWarningCacheForTests } = configLoader;
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -331,5 +331,164 @@ describe('loadConfig — adversarial fixtures', () => {
     writeConfig(tmpDir, { completly_unknown_a: 1, completly_unknown_b: 2 });
     const config = loadConfig(tmpDir);
     assert.equal(config.model_profile, 'balanced');
+  });
+});
+
+// ─── loadConfigResolved — provenance ──────────────────────────────────────────
+
+describe('loadConfigResolved — provenance', () => {
+  let tmpDir;
+
+  beforeEach(() => { tmpDir = makeTempProject(); });
+  afterEach(() => { if (tmpDir) cleanup(tmpDir); tmpDir = null; });
+
+  test('source is "root" when config.json exists and no workstream requested', () => {
+    writeConfig(tmpDir, { model_profile: 'quality' });
+    const result = loadConfigResolved(tmpDir);
+    assert.equal(result.source, 'root');
+    assert.equal(result.degraded, false);
+    assert.ok(typeof result.config === 'object', 'config must be an object');
+    assert.equal(result.config.model_profile, 'quality');
+  });
+
+  test('source is "workstream", degraded:false when workstream config.json present', () => {
+    writeConfig(tmpDir, { model_profile: 'balanced' });
+    writeWorkstreamConfig(tmpDir, 'ws-a', { model_profile: 'quality' });
+    const result = loadConfigResolved(tmpDir, { workstream: 'ws-a' });
+    assert.equal(result.source, 'workstream');
+    assert.equal(result.degraded, false);
+    assert.equal(result.config.model_profile, 'quality');
+  });
+
+  test('source is "root", degraded:true when workstream requested but ws config.json absent', () => {
+    writeConfig(tmpDir, { model_profile: 'budget' });
+    // Create ws directory without config.json
+    const wsDir = path.join(tmpDir, '.planning', 'workstreams', 'ws-no-config');
+    fs.mkdirSync(path.join(wsDir, 'phases'), { recursive: true });
+    const result = loadConfigResolved(tmpDir, { workstream: 'ws-no-config' });
+    assert.equal(result.source, 'root');
+    assert.equal(result.degraded, true);
+    assert.equal(result.config.model_profile, 'budget');
+  });
+
+  test('source is "builtin-defaults" when .planning exists but config.json is absent', () => {
+    // tmpDir already has .planning/ but no config.json
+    const result = loadConfigResolved(tmpDir);
+    assert.equal(result.source, 'builtin-defaults');
+    assert.equal(result.degraded, false);
+    assert.ok('model_profile' in result.config);
+  });
+
+  test('source is "global-defaults" when no .planning exists but ~/.gsd/defaults.json readable', () => {
+    const homeTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-home-test-'));
+    const origGsdHome = process.env['GSD_HOME'];
+    try {
+      const gsdDir = path.join(homeTmp, '.gsd');
+      fs.mkdirSync(gsdDir, { recursive: true });
+      fs.writeFileSync(path.join(gsdDir, 'defaults.json'), JSON.stringify({ model_profile: 'home-defaults' }), 'utf-8');
+      process.env['GSD_HOME'] = homeTmp;
+      const noPlanning = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-noplanning-'));
+      try {
+        const result = loadConfigResolved(noPlanning);
+        assert.equal(result.source, 'global-defaults');
+        assert.equal(result.degraded, false);
+        assert.equal(result.config.model_profile, 'home-defaults');
+      } finally {
+        cleanup(noPlanning);
+      }
+    } finally {
+      if (origGsdHome === undefined) delete process.env['GSD_HOME'];
+      else process.env['GSD_HOME'] = origGsdHome;
+      cleanup(homeTmp);
+    }
+  });
+
+  test('source is "builtin-defaults" when no .planning and no global defaults', () => {
+    const noPlanning = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-noplanning2-'));
+    const homeTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-nohome-'));
+    const origGsdHome = process.env['GSD_HOME'];
+    try {
+      // Point GSD_HOME to a directory with no .gsd/defaults.json
+      process.env['GSD_HOME'] = homeTmp;
+      const result = loadConfigResolved(noPlanning);
+      assert.equal(result.source, 'builtin-defaults');
+      assert.equal(result.degraded, false);
+      assert.ok('model_profile' in result.config);
+    } finally {
+      if (origGsdHome === undefined) delete process.env['GSD_HOME'];
+      else process.env['GSD_HOME'] = origGsdHome;
+      cleanup(noPlanning);
+      cleanup(homeTmp);
+    }
+  });
+
+  test('back-compat: loadConfig(tmp) deepEquals loadConfigResolved(tmp).config', () => {
+    writeConfig(tmpDir, { model_profile: 'quality', research: 'minimal' });
+    const fromLoadConfig = loadConfig(tmpDir);
+    const { config: fromResolved } = loadConfigResolved(tmpDir);
+    assert.deepEqual(fromLoadConfig, fromResolved);
+  });
+
+  test('back-compat: loadConfigResolved(descendant) does NOT walk up — returns defaults, not ancestor config', () => {
+    // Fix 1: loadConfigResolved must NOT call findProjectRoot internally.
+    // Calling from a descendant that has no .planning/ of its own must return
+    // defaults (builtin-defaults source), NOT the ancestor's config value.
+    writeConfig(tmpDir, { model_profile: 'ancestor-config-should-not-appear' });
+    const deepDir = path.join(tmpDir, 'src', 'deep');
+    fs.mkdirSync(deepDir, { recursive: true });
+    const result = loadConfigResolved(deepDir);
+    // No .planning/ in deepDir → must fall back to defaults, NOT walk up to tmpDir.
+    assert.notEqual(result.config.model_profile, 'ancestor-config-should-not-appear',
+      'loadConfigResolved must NOT walk up to find ancestor config');
+    // The source must be a defaults source (builtin-defaults or global-defaults),
+    // NOT "root" (which would imply a config.json was found).
+    assert.ok(
+      result.source === 'builtin-defaults' || result.source === 'global-defaults',
+      `Expected a defaults source, got: ${result.source}`,
+    );
+  });
+
+  test('Fix 4: loadConfigResolved(tmp, { workstream: "" }) → source:"root"', () => {
+    writeConfig(tmpDir, { model_profile: 'quality' });
+    // empty-string ws resolves the root path → source must be "root"
+    const result = loadConfigResolved(tmpDir, { workstream: '' });
+    assert.equal(result.source, 'root', 'empty-string workstream should yield source:"root"');
+    assert.equal(result.degraded, false);
+  });
+
+  test('Fix 2a: GSD_WORKSTREAM set to nonexistent workstream (dir absent) → source:"root", degraded:true', () => {
+    writeConfig(tmpDir, { model_profile: 'root-value' });
+    const origWs = process.env['GSD_WORKSTREAM'];
+    try {
+      process.env['GSD_WORKSTREAM'] = 'nonexistent-ws';
+      // Do NOT create the workstream directory
+      const result = loadConfigResolved(tmpDir);
+      assert.equal(result.source, 'root', 'nonexistent workstream should fall back to source:"root"');
+      assert.equal(result.degraded, true, 'should be degraded when workstream dir is absent');
+      assert.equal(result.config.model_profile, 'root-value', 'config should equal root config');
+    } finally {
+      if (origWs === undefined) delete process.env['GSD_WORKSTREAM'];
+      else process.env['GSD_WORKSTREAM'] = origWs;
+    }
+  });
+
+  test('Fix 2b: options.workstream missing dir → source:"root", degraded:true', () => {
+    writeConfig(tmpDir, { model_profile: 'root-val' });
+    // workstream dir NOT created
+    const result = loadConfigResolved(tmpDir, { workstream: 'missing-ws' });
+    assert.equal(result.source, 'root');
+    assert.equal(result.degraded, true);
+    assert.equal(result.config.model_profile, 'root-val');
+  });
+
+  test('Fix 2c: workstream dir exists but no config.json → source:"root", degraded:true (existing case still works)', () => {
+    writeConfig(tmpDir, { model_profile: 'root-val-c' });
+    // Create ws dir but no config.json
+    const wsDir = path.join(tmpDir, '.planning', 'workstreams', 'ws-no-cfg');
+    fs.mkdirSync(path.join(wsDir, 'phases'), { recursive: true });
+    const result = loadConfigResolved(tmpDir, { workstream: 'ws-no-cfg' });
+    assert.equal(result.source, 'root');
+    assert.equal(result.degraded, true);
+    assert.equal(result.config.model_profile, 'root-val-c');
   });
 });
