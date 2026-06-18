@@ -10,10 +10,14 @@ const capabilities = {
   "ai-integration": {
     "id": "ai-integration",
     "role": "feature",
+    "version": "1.5.1-dev.0",
     "title": "AI design contract",
     "description": "AI-SPEC design contract workflow for phases that build AI systems; owns the AI integration command, agents, and workflow.ai_integration_phase activation key.",
     "tier": "full",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtimeCompat": {
       "supported": [
         "*"
@@ -59,10 +63,14 @@ const capabilities = {
   "antigravity": {
     "id": "antigravity",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "Antigravity",
     "description": "Google Antigravity IDE — nested under ~/.gemini/antigravity; probed across 1.x and 2.x layouts; Gemini hook event dialect; nested skill layout; tier-1 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "dot-home-nested",
@@ -114,10 +122,14 @@ const capabilities = {
   "audit": {
     "id": "audit",
     "role": "feature",
+    "version": "1.5.1-dev.0",
     "title": "Audit",
     "description": "Open-artifact audit and UAT-gap audit for milestone close gates; exposes `gsd-tools audit-uat` (cross-phase UAT outstanding items) and `gsd-tools audit-open` (structured open-artifact scan across debug, tasks, threads, todos, seeds, UAT, verification, context-questions).",
     "tier": "full",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtimeCompat": {
       "supported": [
         "*"
@@ -147,10 +159,14 @@ const capabilities = {
   "augment": {
     "id": "augment",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "Augment Code",
     "description": "Augment Code CLI — commands + nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "dot-home",
@@ -212,10 +228,14 @@ const capabilities = {
   "claude": {
     "id": "claude",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "Claude Code",
     "description": "Anthropic Claude Code — primary development runtime; tier-1 support with full hook surface and skills-based global install.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "dot-home",
@@ -274,10 +294,14 @@ const capabilities = {
   "cline": {
     "id": "cline",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "Cline",
     "description": "Cline (VS Code extension) — global-only nested-skill layout; cline-rules hook surface (.clinerules); no hook events emitted; tier-2 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "dot-home",
@@ -313,10 +337,14 @@ const capabilities = {
   "code-review": {
     "id": "code-review",
     "role": "feature",
+    "version": "1.5.1-dev.0",
     "title": "Code review",
     "description": "Source-file code review and review-fix workflow support for completed execution work.",
     "tier": "full",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtimeCompat": {
       "supported": [
         "*"
@@ -370,10 +398,14 @@ const capabilities = {
   "codebuddy": {
     "id": "codebuddy",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "CodeBuddy",
     "description": "CodeBuddy (Tencent) — converted commands + skills artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "dot-home",
@@ -435,10 +467,14 @@ const capabilities = {
   "codex": {
     "id": "codex",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "OpenAI Codex CLI",
     "description": "OpenAI Codex CLI — shell-var command style; per-agent sandbox tiers; config.toml + hooks.json hook surface; tier-1 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "dot-home",
@@ -484,10 +520,14 @@ const capabilities = {
   "copilot": {
     "id": "copilot",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "GitHub Copilot",
     "description": "GitHub Copilot (VS Code) — markdown config format; copilot-inline hook surface; no hook events emitted; flat skill nesting (unconfirmed recursive loader); tier-2 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "dot-home",
@@ -533,10 +573,14 @@ const capabilities = {
   "cursor": {
     "id": "cursor",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "Cursor",
     "description": "Cursor IDE — skills + converted commands artifact layout; hooks.json surface; Claude hook event dialect; recursive skill loader (flat nesting); tier-2 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "dot-home",
@@ -598,10 +642,14 @@ const capabilities = {
   "drift": {
     "id": "drift",
     "role": "feature",
+    "version": "1.5.1-dev.0",
     "title": "Drift detection gates",
     "description": "Post-execution drift detection gates that run after each wave completes. Provides two gates at execute:wave:post: a blocking schema drift gate (detects schema files changed without a database push) and a non-blocking codebase drift gate (detects structural additions not reflected in STRUCTURE.md).",
     "tier": "full",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtimeCompat": {
       "supported": [
         "*"
@@ -658,10 +706,14 @@ const capabilities = {
   "gap-analysis": {
     "id": "gap-analysis",
     "role": "feature",
+    "version": "1.5.1-dev.0",
     "title": "Post-planning gap analysis",
     "description": "Proactive, non-blocking post-planning coverage report. After all PLAN.md files are generated, cross-references every REQ-ID and D-ID from REQUIREMENTS.md and CONTEXT.md against plan bodies. Emits a Source | Item | Status table. Does not block phase advancement.",
     "tier": "standard",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtimeCompat": {
       "supported": [
         "*"
@@ -695,10 +747,14 @@ const capabilities = {
   "gemini": {
     "id": "gemini",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "Gemini CLI",
     "description": "Google Gemini CLI — commands-only artifact layout (TOML); Gemini hook event dialect; settings-json hook surface; tier-2 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "dot-home",
@@ -748,10 +804,14 @@ const capabilities = {
   "graphify": {
     "id": "graphify",
     "role": "feature",
+    "version": "1.5.1-dev.0",
     "title": "Knowledge graph",
     "description": "Build, query, and inspect the project knowledge graph in `.planning/graphs/`; exposes graphify CLI subcommands (build, query, status, diff) and the /gsd-graphify skill.",
     "tier": "full",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtimeCompat": {
       "supported": [
         "*"
@@ -785,10 +845,14 @@ const capabilities = {
   "hermes": {
     "id": "hermes",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "Hermes Agent",
     "description": "Hermes Agent (NousResearch) — skills nest under skills/gsd/ category bucket; nested skill layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "dot-home",
@@ -834,10 +898,14 @@ const capabilities = {
   "intel": {
     "id": "intel",
     "role": "feature",
+    "version": "1.5.1-dev.0",
     "title": "Codebase intelligence",
     "description": "Code-intelligence store for codebase querying, diff, snapshot, and API-surface extraction; exposes `gsd-tools intel` subcommands (query, status, update, diff, snapshot, patch-meta, validate, extract-exports, api-surface) and backs `/gsd-map-codebase` and `gsd-intel-updater`.",
     "tier": "full",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtimeCompat": {
       "supported": [
         "*"
@@ -882,10 +950,14 @@ const capabilities = {
   "kilo": {
     "id": "kilo",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "Kilo Code",
     "description": "Kilo Code — XDG-based config dir; global skills at ~/.kilo/skills (separate from XDG config); flat command/ + skills artifact layout; no lifecycle hook registration; tier-2 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "xdg",
@@ -953,10 +1025,14 @@ const capabilities = {
   "kimi": {
     "id": "kimi",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "Kimi CLI",
     "description": "Kimi CLI (Moonshot AI) — generic agents root at ~/.config/agents; skills + kimi-agents artifact layout; no hook surface; no hook events; tier-2 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "generic-agents-root",
@@ -1005,10 +1081,14 @@ const capabilities = {
   "mempalace": {
     "id": "mempalace",
     "role": "feature",
+    "version": "1.5.1-dev.0",
     "title": "MemPalace memory",
     "description": "Cross-session, cross-project memory: deliberate recall before discuss/plan and verbatim capture + temporal-KG sync at phase boundaries, via the MemPalace MCP server and CLI.",
     "tier": "full",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtimeCompat": {
       "supported": [
         "*"
@@ -1175,10 +1255,14 @@ const capabilities = {
   "nyquist": {
     "id": "nyquist",
     "role": "feature",
+    "version": "1.5.1-dev.0",
     "title": "Nyquist validation",
     "description": "Validation coverage audit that maps executed work back to tests and manual-only evidence.",
     "tier": "full",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtimeCompat": {
       "supported": [
         "*"
@@ -1221,10 +1305,14 @@ const capabilities = {
   "opencode": {
     "id": "opencode",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "OpenCode",
     "description": "OpenCode — XDG-based config dir; flat command/ + skills artifact layout; settings-json config format; no lifecycle hook registration; tier-2 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "xdg",
@@ -1287,12 +1375,16 @@ const capabilities = {
   "pattern-mapper": {
     "id": "pattern-mapper",
     "role": "feature",
+    "version": "1.5.1-dev.0",
     "title": "Pattern mapping",
     "description": "Optional codebase-pattern mapping before planning; owns the pattern mapper agent and workflow.pattern_mapper activation key.",
     "tier": "full",
     "requires": [
       "research"
     ],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtimeCompat": {
       "supported": [
         "*"
@@ -1337,10 +1429,14 @@ const capabilities = {
   "profile-pipeline": {
     "id": "profile-pipeline",
     "role": "feature",
+    "version": "1.5.1-dev.0",
     "title": "Developer profiling pipeline",
     "description": "Developer behavioral profiling from Claude Code session history; scans session JSONL files, extracts and samples user messages, and generates profile artifacts (USER-PROFILE.md, dev-preferences.md, CLAUDE.md sections). Exposes eight `gsd-tools` commands: scan-sessions, extract-messages, profile-sample (pipeline phase) and write-profile, profile-questionnaire, generate-dev-preferences, generate-claude-profile, generate-claude-md (output phase). Backs the /gsd-profile-user skill and gsd-user-profiler agent.",
     "tier": "full",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtimeCompat": {
       "supported": [
         "*"
@@ -1410,10 +1506,14 @@ const capabilities = {
   "qwen": {
     "id": "qwen",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "Qwen Code",
     "description": "Qwen Code (Alibaba) — nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "dot-home",
@@ -1463,10 +1563,14 @@ const capabilities = {
   "research": {
     "id": "research",
     "role": "feature",
+    "version": "1.5.1-dev.0",
     "title": "Phase research",
     "description": "Optional phase research before planning; owns the phase researcher agent and workflow.research activation key.",
     "tier": "standard",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtimeCompat": {
       "supported": [
         "*"
@@ -1511,10 +1615,14 @@ const capabilities = {
   "schema-gate": {
     "id": "schema-gate",
     "role": "feature",
+    "version": "1.5.1-dev.0",
     "title": "Schema push detection gate",
     "description": "Detects ORM schema-relevant files in the phase scope during planning and injects a mandatory [BLOCKING] schema push task into the plan. Prevents false-positive verification where build/types pass because TypeScript types come from config, not the live database.",
     "tier": "full",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtimeCompat": {
       "supported": [
         "*"
@@ -1553,10 +1661,14 @@ const capabilities = {
   "security": {
     "id": "security",
     "role": "feature",
+    "version": "1.5.1-dev.0",
     "title": "Security enforcement",
     "description": "Threat mitigation verification and ship-time security blocking for phases with security enforcement enabled.",
     "tier": "full",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtimeCompat": {
       "supported": [
         "*"
@@ -1648,10 +1760,14 @@ const capabilities = {
   "tdd": {
     "id": "tdd",
     "role": "feature",
+    "version": "1.5.1-dev.0",
     "title": "Test-driven development",
     "description": "Injects TDD heuristics into the planner and enforces RED/GREEN gate compliance on type:tdd plans after execution. Owns workflow.tdd_mode; the --tdd CLI flag is the ephemeral override.",
     "tier": "full",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtimeCompat": {
       "supported": [
         "*"
@@ -1697,10 +1813,14 @@ const capabilities = {
   "trae": {
     "id": "trae",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "Trae IDE",
     "description": "Trae IDE — nested-skill artifact layout; no hook surface (profile-marker-only config); tier-2 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "dot-home",
@@ -1745,10 +1865,14 @@ const capabilities = {
   "ui": {
     "id": "ui",
     "role": "feature",
+    "version": "1.5.1-dev.0",
     "title": "UI design contracts",
     "description": "UI-SPEC design contract + retrospective UI audit for frontend phases.",
     "tier": "full",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtimeCompat": {
       "supported": [
         "*"
@@ -1836,10 +1960,14 @@ const capabilities = {
   "windsurf": {
     "id": "windsurf",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "Windsurf",
     "description": "Windsurf (Codeium) — nested under ~/.codeium/windsurf; skills-only artifact layout; no hook surface; no hook events; tier-2 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "dot-home-nested",
@@ -2592,10 +2720,14 @@ const runtimes = {
   "antigravity": {
     "id": "antigravity",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "Antigravity",
     "description": "Google Antigravity IDE — nested under ~/.gemini/antigravity; probed across 1.x and 2.x layouts; Gemini hook event dialect; nested skill layout; tier-1 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "dot-home-nested",
@@ -2647,10 +2779,14 @@ const runtimes = {
   "augment": {
     "id": "augment",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "Augment Code",
     "description": "Augment Code CLI — commands + nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "dot-home",
@@ -2712,10 +2848,14 @@ const runtimes = {
   "claude": {
     "id": "claude",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "Claude Code",
     "description": "Anthropic Claude Code — primary development runtime; tier-1 support with full hook surface and skills-based global install.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "dot-home",
@@ -2774,10 +2914,14 @@ const runtimes = {
   "cline": {
     "id": "cline",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "Cline",
     "description": "Cline (VS Code extension) — global-only nested-skill layout; cline-rules hook surface (.clinerules); no hook events emitted; tier-2 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "dot-home",
@@ -2813,10 +2957,14 @@ const runtimes = {
   "codebuddy": {
     "id": "codebuddy",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "CodeBuddy",
     "description": "CodeBuddy (Tencent) — converted commands + skills artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "dot-home",
@@ -2878,10 +3026,14 @@ const runtimes = {
   "codex": {
     "id": "codex",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "OpenAI Codex CLI",
     "description": "OpenAI Codex CLI — shell-var command style; per-agent sandbox tiers; config.toml + hooks.json hook surface; tier-1 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "dot-home",
@@ -2927,10 +3079,14 @@ const runtimes = {
   "copilot": {
     "id": "copilot",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "GitHub Copilot",
     "description": "GitHub Copilot (VS Code) — markdown config format; copilot-inline hook surface; no hook events emitted; flat skill nesting (unconfirmed recursive loader); tier-2 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "dot-home",
@@ -2976,10 +3132,14 @@ const runtimes = {
   "cursor": {
     "id": "cursor",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "Cursor",
     "description": "Cursor IDE — skills + converted commands artifact layout; hooks.json surface; Claude hook event dialect; recursive skill loader (flat nesting); tier-2 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "dot-home",
@@ -3041,10 +3201,14 @@ const runtimes = {
   "gemini": {
     "id": "gemini",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "Gemini CLI",
     "description": "Google Gemini CLI — commands-only artifact layout (TOML); Gemini hook event dialect; settings-json hook surface; tier-2 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "dot-home",
@@ -3094,10 +3258,14 @@ const runtimes = {
   "hermes": {
     "id": "hermes",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "Hermes Agent",
     "description": "Hermes Agent (NousResearch) — skills nest under skills/gsd/ category bucket; nested skill layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "dot-home",
@@ -3143,10 +3311,14 @@ const runtimes = {
   "kilo": {
     "id": "kilo",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "Kilo Code",
     "description": "Kilo Code — XDG-based config dir; global skills at ~/.kilo/skills (separate from XDG config); flat command/ + skills artifact layout; no lifecycle hook registration; tier-2 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "xdg",
@@ -3214,10 +3386,14 @@ const runtimes = {
   "kimi": {
     "id": "kimi",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "Kimi CLI",
     "description": "Kimi CLI (Moonshot AI) — generic agents root at ~/.config/agents; skills + kimi-agents artifact layout; no hook surface; no hook events; tier-2 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "generic-agents-root",
@@ -3266,10 +3442,14 @@ const runtimes = {
   "opencode": {
     "id": "opencode",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "OpenCode",
     "description": "OpenCode — XDG-based config dir; flat command/ + skills artifact layout; settings-json config format; no lifecycle hook registration; tier-2 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "xdg",
@@ -3332,10 +3512,14 @@ const runtimes = {
   "qwen": {
     "id": "qwen",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "Qwen Code",
     "description": "Qwen Code (Alibaba) — nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "dot-home",
@@ -3385,10 +3569,14 @@ const runtimes = {
   "trae": {
     "id": "trae",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "Trae IDE",
     "description": "Trae IDE — nested-skill artifact layout; no hook surface (profile-marker-only config); tier-2 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "dot-home",
@@ -3433,10 +3621,14 @@ const runtimes = {
   "windsurf": {
     "id": "windsurf",
     "role": "runtime",
+    "version": "1.5.1-dev.0",
     "title": "Windsurf",
     "description": "Windsurf (Codeium) — nested under ~/.codeium/windsurf; skills-only artifact layout; no hook surface; no hook events; tier-2 support.",
     "tier": "core",
     "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
     "runtime": {
       "configHome": {
         "kind": "dot-home-nested",

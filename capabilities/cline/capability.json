@@ -1,15 +1,21 @@
 {
   "id": "cline",
   "role": "runtime",
+  "version": "1.5.1-dev.0",
   "title": "Cline",
   "description": "Cline (VS Code extension) — global-only nested-skill layout; cline-rules hook surface (.clinerules); no hook events emitted; tier-2 support.",
   "tier": "core",
   "requires": [],
+  "engines": {
+    "gsd": ">=1.6.0"
+  },
   "runtime": {
     "configHome": {
       "kind": "dot-home",
       "name": ".cline",
-      "env": ["CLINE_CONFIG_DIR"]
+      "env": [
+        "CLINE_CONFIG_DIR"
+      ]
     },
     "configFormat": "markdown-dir",
     "artifactLayout": {

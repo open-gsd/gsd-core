@@ -1,11 +1,20 @@
 {
   "id": "drift",
   "role": "feature",
+  "version": "1.5.1-dev.0",
   "title": "Drift detection gates",
   "description": "Post-execution drift detection gates that run after each wave completes. Provides two gates at execute:wave:post: a blocking schema drift gate (detects schema files changed without a database push) and a non-blocking codebase drift gate (detects structural additions not reflected in STRUCTURE.md).",
   "tier": "full",
   "requires": [],
-  "runtimeCompat": { "supported": ["*"], "unsupported": [] },
+  "engines": {
+    "gsd": ">=1.6.0"
+  },
+  "runtimeCompat": {
+    "supported": [
+      "*"
+    ],
+    "unsupported": []
+  },
   "skills": [],
   "agents": [],
   "hooks": [],
@@ -17,7 +26,10 @@
     },
     "workflow.drift_action": {
       "type": "enum",
-      "values": ["warn", "auto-remap"],
+      "values": [
+        "warn",
+        "auto-remap"
+      ],
       "default": "warn",
       "description": "Action taken by the codebase drift gate when the threshold is exceeded: warn (advisory message) or auto-remap (spawn gsd-codebase-mapper agent to refresh STRUCTURE.md)."
     },
@@ -32,14 +44,18 @@
   "gates": [
     {
       "point": "execute:wave:post",
-      "check": { "query": "verify.schema-drift" },
+      "check": {
+        "query": "verify.schema-drift"
+      },
       "when": "workflow.schema_drift_gate",
       "blocking": true,
       "onError": "skip"
     },
     {
       "point": "execute:wave:post",
-      "check": { "query": "verify.codebase-drift" },
+      "check": {
+        "query": "verify.codebase-drift"
+      },
       "when": "workflow.schema_drift_gate",
       "blocking": false,
       "onError": "skip"

@@ -1,13 +1,26 @@
 {
   "id": "security",
   "role": "feature",
+  "version": "1.5.1-dev.0",
   "title": "Security enforcement",
   "description": "Threat mitigation verification and ship-time security blocking for phases with security enforcement enabled.",
   "tier": "full",
   "requires": [],
-  "runtimeCompat": { "supported": ["*"], "unsupported": [] },
-  "skills": ["secure-phase"],
-  "agents": ["gsd-security-auditor"],
+  "engines": {
+    "gsd": ">=1.6.0"
+  },
+  "runtimeCompat": {
+    "supported": [
+      "*"
+    ],
+    "unsupported": []
+  },
+  "skills": [
+    "secure-phase"
+  ],
+  "agents": [
+    "gsd-security-auditor"
+  ],
   "hooks": [],
   "config": {
     "workflow.security_enforcement": {
@@ -22,7 +35,13 @@
     },
     "workflow.security_block_on": {
       "type": "enum",
-      "values": ["critical", "high", "medium", "low", "none"],
+      "values": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "none"
+      ],
       "default": "high",
       "description": "Minimum open threat severity that blocks advancement."
     }
@@ -30,9 +49,15 @@
   "steps": [
     {
       "point": "verify:post",
-      "ref": { "skill": "secure-phase" },
-      "produces": ["SECURITY.md"],
-      "consumes": ["SUMMARY.md"],
+      "ref": {
+        "skill": "secure-phase"
+      },
+      "produces": [
+        "SECURITY.md"
+      ],
+      "consumes": [
+        "SUMMARY.md"
+      ],
       "when": "workflow.security_enforcement",
       "onError": "halt"
     }
@@ -49,7 +74,9 @@
         "security_block_on": "workflow.security_block_on"
       },
       "produces": [],
-      "consumes": ["CONTEXT.md"],
+      "consumes": [
+        "CONTEXT.md"
+      ],
       "when": "workflow.security_enforcement"
     }
   ],

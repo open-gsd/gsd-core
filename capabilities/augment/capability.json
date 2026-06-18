@@ -1,15 +1,21 @@
 {
   "id": "augment",
   "role": "runtime",
+  "version": "1.5.1-dev.0",
   "title": "Augment Code",
   "description": "Augment Code CLI — commands + nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
   "tier": "core",
   "requires": [],
+  "engines": {
+    "gsd": ">=1.6.0"
+  },
   "runtime": {
     "configHome": {
       "kind": "dot-home",
       "name": ".augment",
-      "env": ["AUGMENT_CONFIG_DIR"]
+      "env": [
+        "AUGMENT_CONFIG_DIR"
+      ]
     },
     "configFormat": "settings-json",
     "artifactLayout": {

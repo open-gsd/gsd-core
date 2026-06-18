@@ -236,6 +236,96 @@ const VALID_TIERS = new Set(['core', 'standard', 'full']);
 const VALID_ON_ERROR = new Set(['skip', 'halt']);
 const RUNTIME_COMPAT_WILDCARD = '*';
 
+// ── ADR-1244 D1: versioned-manifest envelope ─────────────────────────────────
+// Official strict SemVer 2.0.0 grammar (https://semver.org). Rejects partials
+// ("1.0"), prefixes ("v1.0.0"), leading-zero segments ("01.2.3"), numeric
+// prerelease identifiers with leading zeros ("1.2.3-01"), empty identifiers
+// ("1.2.3-..") and — critically — prerelease/build identifiers containing
+// anything outside [0-9A-Za-z-] (so a version can never smuggle shell
+// metacharacters, spaces or unicode into a downstream `git tag v<version>` or
+// path). Accepts "1.2.3-dev.0", "1.2.3-rc.1", "1.2.3+build.5".
+const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
+// Permissive *shape* check for a semver range (engines.gsd / compatVersions
+// values). Range SATISFACTION is enforced by the runtime overlay (ADR-1244 D2);
+// here we only reject empty/garbage and shell metacharacters.
+const SEMVER_RANGE_RE = /^[0-9A-Za-z.\-+ |<>=~^*()]+$/;
+// Subresource-integrity hash: "sha512-" + base64 of a 64-byte digest (86 base64
+// chars + "==" padding). Exact length so malformed pins ("sha512-abc") fail.
+const SHA512_INTEGRITY_RE = /^sha512-[A-Za-z0-9+/]{86}==$/;
+
+// A syntactically plausible semver range (shape-only — see SEMVER_RANGE_RE).
+// Requires a digit or a bare wildcard so pure-alpha garbage ("abcx", "()x") is
+// rejected; full range satisfaction is the runtime overlay's job (ADR-1244 D2).
+function isPlausibleRange(s) {
+  if (typeof s !== 'string') return false;
+  const t = s.trim();
+  if (t.length === 0 || !SEMVER_RANGE_RE.test(s)) return false;
+  return /\d/.test(t) || t === '*' || t === 'x' || t === 'X';
+}
+
+/**
+ * ADR-1244 D1: validate the versioned-manifest envelope.
+ *   - version        REQUIRED semver string (the registry rejects a manifest
+ *                    without one).
+ *   - engines        optional object; engines.gsd optional semver-range string.
+ *   - compatVersions optional object mapping a capability version (semver) to a
+ *                    gsd version range.
+ *   - integrity      optional "sha512-<base64>" string.
+ *   - provenance     optional { sourceRepo, commit } strings.
+ *
+ * Shape only — range satisfaction and integrity verification are enforced by
+ * the source resolver / runtime overlay (ADR-1244 D2/D3).
+ *
+ * @param {object} cap   The parsed JSON object.
+ * @returns {string[]}   Array of error strings; empty = valid.
+ */
+function validateVersionEnvelope(cap) {
+  const errors = [];
+
+  if (typeof cap.version !== 'string' || !SEMVER_RE.test(cap.version)) {
+    errors.push('version must be a semver string (e.g. "1.2.3"); got: ' + JSON.stringify(cap.version));
+  }
+
+  if (cap.engines !== undefined) {
+    if (typeof cap.engines !== 'object' || cap.engines === null || Array.isArray(cap.engines)) {
+      errors.push('engines must be an object (e.g. { "gsd": ">=1.6.0" })');
+    } else if (cap.engines.gsd !== undefined && !isPlausibleRange(cap.engines.gsd)) {
+      errors.push('engines.gsd must be a semver range string; got: ' + JSON.stringify(cap.engines.gsd));
+    }
+  }
+
+  if (cap.compatVersions !== undefined) {
+    if (typeof cap.compatVersions !== 'object' || cap.compatVersions === null || Array.isArray(cap.compatVersions)) {
+      errors.push('compatVersions must be an object mapping capability versions to gsd version ranges');
+    } else {
+      for (const [k, v] of Object.entries(cap.compatVersions)) {
+        if (!SEMVER_RE.test(k)) errors.push('compatVersions key "' + k + '" must be a semver string');
+        if (!isPlausibleRange(v)) errors.push('compatVersions["' + k + '"] must be a semver range string');
+      }
+    }
+  }
+
+  if (cap.integrity !== undefined && (typeof cap.integrity !== 'string' || !SHA512_INTEGRITY_RE.test(cap.integrity))) {
+    errors.push('integrity must be a "sha512-<base64>" string');
+  }
+
+  if (cap.provenance !== undefined) {
+    const p = cap.provenance;
+    if (typeof p !== 'object' || p === null || Array.isArray(p)) {
+      errors.push('provenance must be an object { sourceRepo, commit }');
+    } else {
+      if (typeof p.sourceRepo !== 'string' || p.sourceRepo.length === 0) {
+        errors.push('provenance.sourceRepo must be a non-empty string');
+      }
+      if (typeof p.commit !== 'string' || p.commit.length === 0) {
+        errors.push('provenance.commit must be a non-empty string');
+      }
+    }
+  }
+
+  return errors;
+}
+
 /**
  * Validate a single capability declaration.
  *
@@ -284,6 +374,9 @@ function validateCapability(cap, folderId) {
       }
     }
   }
+
+  // ── Versioned-manifest envelope (ADR-1244 D1) ──────────────────────────────
+  errors.push(...validateVersionEnvelope(cap));
 
   // ── Role-specific body ────────────────────────────────────────────────────
 
@@ -2580,6 +2673,11 @@ function main() {
 
 module.exports = {
   validateCapability,
+  // ADR-1244 D1: versioned-manifest envelope validation (reused by the runtime overlay, D2)
+  validateVersionEnvelope,
+  SEMVER_RE,
+  SEMVER_RANGE_RE,
+  SHA512_INTEGRITY_RE,
   validateAgainstContract,
   validateConsumesGlobal,
   validateCrossCapability,

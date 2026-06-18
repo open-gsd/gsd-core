@@ -27,6 +27,8 @@ const {
   syncManifestVersions,
   getPackageVersion,
   stageManifests,
+  listCapabilityManifests,
+  syncCapabilityVersions,
 } = require(path.join(ROOT, 'scripts', 'sync-manifest-versions.cjs'));
 
 // ─── A: RED→GREEN repro via temp fixture ─────────────────────────────────────
@@ -172,12 +174,91 @@ describe('B: real manifests match package.json version', () => {
   }
 });
 
+// ─── B2: native capability manifests track package.json version (ADR-1244 D6) ─
+describe('B2: native capability manifests match package.json version', () => {
+
+  const pkgVersion = getPackageVersion(ROOT);
+  const capManifests = listCapabilityManifests({ root: ROOT });
+
+  test('there is at least one native capability manifest', () => {
+    assert.ok(capManifests.length >= 30, `expected the native capability set, found ${capManifests.length}`);
+  });
+
+  for (const rel of capManifests) {
+    test(`${rel} version === ${pkgVersion}`, () => {
+      const m = JSON.parse(fs.readFileSync(path.join(ROOT, rel), 'utf8'));
+      assert.equal(
+        m.version,
+        pkgVersion,
+        `${rel} version (${m.version}) must match package.json version (${pkgVersion}). ` +
+        'Run `node scripts/sync-manifest-versions.cjs` to fix.'
+      );
+    });
+  }
+});
+
+// ─── B3: syncCapabilityVersions stamps + is idempotent (temp fixture) ─────────
+describe('B3: syncCapabilityVersions — temp fixture', () => {
+
+  test('stamps stale capability manifests to package version, then is idempotent', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-844-cap-'));
+    try {
+      fs.writeFileSync(
+        path.join(tmpRoot, 'package.json'),
+        JSON.stringify({ name: 'x', version: '9.9.9-test.0' }, null, 2) + '\n'
+      );
+      // Two stale capability manifests.
+      for (const id of ['alpha', 'beta']) {
+        const dir = path.join(tmpRoot, 'capabilities', id);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(
+          path.join(dir, 'capability.json'),
+          JSON.stringify({ id, role: 'feature', version: '0.0.0', title: id }, null, 2) + '\n'
+        );
+      }
+
+      const found = listCapabilityManifests({ root: tmpRoot });
+      assert.equal(found.length, 2, 'should discover both capability manifests');
+
+      const changed = syncCapabilityVersions({ root: tmpRoot });
+      assert.equal(changed.length, 2, 'both manifests should be stamped on first run');
+      for (const rel of found) {
+        const m = JSON.parse(fs.readFileSync(path.join(tmpRoot, rel), 'utf8'));
+        assert.equal(m.version, '9.9.9-test.0', `${rel} should be stamped`);
+        assert.equal(m.title, m.id, `${rel} non-version fields preserved`);
+      }
+
+      // Idempotent second run.
+      assert.deepEqual(syncCapabilityVersions({ root: tmpRoot }), [], 'second run is a no-op');
+    } finally {
+      helpers.cleanup(tmpRoot);
+    }
+  });
+
+  test('listCapabilityManifests returns [] when there is no capabilities/ dir', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-844-nocaps-'));
+    try {
+      assert.deepEqual(listCapabilityManifests({ root: tmpRoot }), []);
+    } finally {
+      helpers.cleanup(tmpRoot);
+    }
+  });
+});
+
 // ─── C: Regression guard — all version-bearing JSON files are registered ──────
 describe('C: regression guard — version-bearing JSON files must be registered', () => {
 
   // package.json is the version source; package-lock.json is npm-managed.
   // Both inherently track the version without the sync script.
-  const ALLOWED = new Set([...VERSIONED_MANIFESTS, 'package.json', 'package-lock.json']);
+  // Native capability manifests (capabilities/<id>/capability.json) are
+  // version-swept by syncCapabilityVersions (ADR-1244 D6) — discovered by glob,
+  // so every one is "registered" without an explicit entry here.
+  const ALLOWED = new Set([
+    ...VERSIONED_MANIFESTS,
+    ...listCapabilityManifests({ root: ROOT }),
+    'package.json',
+    'package-lock.json',
+  ]);
 
   // Semver-ish: matches X.Y.Z with optional pre-release/build metadata.
   const SEMVER = /^\d+\.\d+\.\d+(?:[-+].+)?$/;

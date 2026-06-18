@@ -1,15 +1,22 @@
 {
   "id": "copilot",
   "role": "runtime",
+  "version": "1.5.1-dev.0",
   "title": "GitHub Copilot",
   "description": "GitHub Copilot (VS Code) — markdown config format; copilot-inline hook surface; no hook events emitted; flat skill nesting (unconfirmed recursive loader); tier-2 support.",
   "tier": "core",
   "requires": [],
+  "engines": {
+    "gsd": ">=1.6.0"
+  },
   "runtime": {
     "configHome": {
       "kind": "dot-home",
       "name": ".copilot",
-      "env": ["COPILOT_CONFIG_DIR", "COPILOT_HOME"]
+      "env": [
+        "COPILOT_CONFIG_DIR",
+        "COPILOT_HOME"
+      ]
     },
     "configFormat": "markdown",
     "artifactLayout": {

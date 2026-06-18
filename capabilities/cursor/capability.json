@@ -1,15 +1,21 @@
 {
   "id": "cursor",
   "role": "runtime",
+  "version": "1.5.1-dev.0",
   "title": "Cursor",
   "description": "Cursor IDE — skills + converted commands artifact layout; hooks.json surface; Claude hook event dialect; recursive skill loader (flat nesting); tier-2 support.",
   "tier": "core",
   "requires": [],
+  "engines": {
+    "gsd": ">=1.6.0"
+  },
   "runtime": {
     "configHome": {
       "kind": "dot-home",
       "name": ".cursor",
-      "env": ["CURSOR_CONFIG_DIR"]
+      "env": [
+        "CURSOR_CONFIG_DIR"
+      ]
     },
     "configFormat": "none",
     "artifactLayout": {

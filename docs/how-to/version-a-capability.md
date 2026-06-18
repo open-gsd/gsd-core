@@ -28,6 +28,8 @@ Set the version in your manifest before every release:
 }
 ```
 
+> **First-party capabilities are versioned automatically.** The native capabilities shipped inside GSD (`capabilities/<id>/capability.json`) are stamped in lockstep with the GSD package version at release time by `scripts/sync-manifest-versions.cjs` — their `version` always equals the GSD version, so per-capability semver and `compatVersions` only carry independent signal for **third-party** capabilities. As an author of a third-party capability, you own your own version line; the lockstep rule does not apply to you.
+
 ### Decide when to raise `engines.gsd`
 
 The `engines.gsd` range expresses which GSD host versions your capability is compatible with. GSD enforces this as a hard gate at install time and again at load time.
@@ -137,5 +139,5 @@ If the new version of a capability requires a GSD version newer than what you ha
 
 - [How to remove or disable a capability](remove-a-capability.md)
 - [Develop a Capability for GSD 1.5+](develop-a-capability.md)
-- [Capability manifest reference](../reference/capability-matrix.md)
+- [Capability manifest reference](../reference/capability-manifest.md)
 - [Turn a capability off (and keep it off)](turn-a-capability-off.md)

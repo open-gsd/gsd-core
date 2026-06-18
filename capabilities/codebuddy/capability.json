@@ -1,15 +1,21 @@
 {
   "id": "codebuddy",
   "role": "runtime",
+  "version": "1.5.1-dev.0",
   "title": "CodeBuddy",
   "description": "CodeBuddy (Tencent) — converted commands + skills artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
   "tier": "core",
   "requires": [],
+  "engines": {
+    "gsd": ">=1.6.0"
+  },
   "runtime": {
     "configHome": {
       "kind": "dot-home",
       "name": ".codebuddy",
-      "env": ["CODEBUDDY_CONFIG_DIR"]
+      "env": [
+        "CODEBUDDY_CONFIG_DIR"
+      ]
     },
     "configFormat": "settings-json",
     "artifactLayout": {

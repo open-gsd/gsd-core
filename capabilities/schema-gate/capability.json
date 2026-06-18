@@ -1,11 +1,20 @@
 {
   "id": "schema-gate",
   "role": "feature",
+  "version": "1.5.1-dev.0",
   "title": "Schema push detection gate",
   "description": "Detects ORM schema-relevant files in the phase scope during planning and injects a mandatory [BLOCKING] schema push task into the plan. Prevents false-positive verification where build/types pass because TypeScript types come from config, not the live database.",
   "tier": "full",
   "requires": [],
-  "runtimeCompat": { "supported": ["*"], "unsupported": [] },
+  "engines": {
+    "gsd": ">=1.6.0"
+  },
+  "runtimeCompat": {
+    "supported": [
+      "*"
+    ],
+    "unsupported": []
+  },
   "skills": [],
   "agents": [],
   "hooks": [],
@@ -21,9 +30,13 @@
     {
       "point": "plan:pre",
       "into": "planner",
-      "fragment": { "path": "fragments/plan-pre.md" },
+      "fragment": {
+        "path": "fragments/plan-pre.md"
+      },
       "produces": [],
-      "consumes": ["CONTEXT.md"],
+      "consumes": [
+        "CONTEXT.md"
+      ],
       "when": "workflow.schema_push_detection",
       "onError": "skip"
     }

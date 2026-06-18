@@ -1470,6 +1470,7 @@ describe('S1: fragment.path traversal guard', () => {
       JSON.stringify({
         id: 'planning-advice',
         role: 'feature',
+        version: '1.0.0',
         title: 'Planning advice',
         description: 'Synthetic fixture for fragment path materialization.',
         tier: 'full',
@@ -1515,6 +1516,7 @@ describe('S1: fragment.path traversal guard', () => {
       JSON.stringify({
         id: 'research',
         role: 'feature',
+        version: '1.0.0',
         title: 'Research',
         description: 'Synthetic fixture for step fragment materialization.',
         tier: 'standard',
@@ -1702,7 +1704,7 @@ describe('C3: role:runtime body validation', () => {
   // configHome is now an object (Decision 1), artifactLayout is { global, local } (Decision 3),
   // commandStyle is closed enum (Decision 4), hooksSurface is closed enum (Decision 5).
   const VALID_RUNTIME_CAP = {
-    id: 'cursor', role: 'runtime', title: 'Cursor', description: 'Cursor IDE runtime',
+    id: 'cursor', role: 'runtime', version: '1.0.0', title: 'Cursor', description: 'Cursor IDE runtime',
     tier: 'standard', requires: [],
     runtime: {
       configHome: { kind: 'dot-home', name: '.cursor', env: ['CURSOR_CONFIG_DIR'] },
@@ -2886,6 +2888,7 @@ function makeCommandCap(id, commands) {
   return {
     id,
     role: 'feature',
+    version: '1.0.0',
     title: 'Test cap ' + id,
     description: 'Synthetic capability for ADR-959 command tests.',
     tier: 'full',
@@ -3085,6 +3088,7 @@ function makeRuntimeCap(overrides) {
   return {
     id: 'test-rt',
     role: 'runtime',
+    version: '1.0.0',
     title: 'Test Runtime',
     description: 'A synthetic runtime capability for testing.',
     tier: 'core',

@@ -1,17 +1,27 @@
 {
   "id": "antigravity",
   "role": "runtime",
+  "version": "1.5.1-dev.0",
   "title": "Antigravity",
   "description": "Google Antigravity IDE — nested under ~/.gemini/antigravity; probed across 1.x and 2.x layouts; Gemini hook event dialect; nested skill layout; tier-1 support.",
   "tier": "core",
   "requires": [],
+  "engines": {
+    "gsd": ">=1.6.0"
+  },
   "runtime": {
     "configHome": {
       "kind": "dot-home-nested",
       "name": "antigravity",
       "parent": ".gemini",
-      "env": ["ANTIGRAVITY_CONFIG_DIR"],
-      "probe": ["antigravity", "antigravity-ide", "antigravity-cli"]
+      "env": [
+        "ANTIGRAVITY_CONFIG_DIR"
+      ],
+      "probe": [
+        "antigravity",
+        "antigravity-ide",
+        "antigravity-cli"
+      ]
     },
     "configFormat": "settings-json",
     "artifactLayout": {
