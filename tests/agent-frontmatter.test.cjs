@@ -16,14 +16,14 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const { listAgentFiles } = require('./helpers/agent-roster.cjs');
 
 const AGENTS_DIR = path.join(__dirname, '..', 'agents');
 const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
 const COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');
 
-const ALL_AGENTS = fs.readdirSync(AGENTS_DIR)
-  .filter(f => f.startsWith('gsd-') && f.endsWith('.md'))
-  .map(f => f.replace('.md', ''));
+// Sorted basenames (without `.md`); reads below re-add `.md` via `name + '.md'`.
+const ALL_AGENTS = listAgentFiles(AGENTS_DIR);
 
 const FILE_WRITING_AGENTS = ALL_AGENTS.filter(name => {
   const content = fs.readFileSync(path.join(AGENTS_DIR, name + '.md'), 'utf-8');

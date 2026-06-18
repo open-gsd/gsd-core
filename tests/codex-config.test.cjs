@@ -1644,7 +1644,9 @@ describe('installCodexConfig (integration)', () => {
     const { installCodexConfig } = require('../bin/install.js');
     installCodexConfig(tmpTarget, agentsSrc);
 
-    // Collect all .toml files: per-agent files in agents/ plus top-level config.toml
+    // Collect all .toml files: per-agent files in agents/ plus top-level config.toml.
+    // Not the shared listAgentFiles() helper: reads the INSTALLED target dir and
+    // collects generated .toml (absolute paths), not the source .md roster.
     const agentsDir = path.join(tmpTarget, 'agents');
     const tomlFiles = fs.readdirSync(agentsDir)
       .filter(f => f.endsWith('.toml'))
@@ -1669,6 +1671,8 @@ describe('installCodexConfig (integration)', () => {
     const { installCodexConfig } = require('../bin/install.js');
     installCodexConfig(tmpTarget, agentsSrc);
 
+    // Not the shared listAgentFiles() helper: reads the INSTALLED target dir and
+    // filters generated gsd-*.toml output, not the source .md roster.
     const agentsDir = path.join(tmpTarget, 'agents');
     const tomlFiles = fs.readdirSync(agentsDir)
       .filter((file) => file.startsWith('gsd-') && file.endsWith('.toml'));

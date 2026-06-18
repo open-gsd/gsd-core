@@ -15,12 +15,14 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const { listAgentFiles } = require('./helpers/agent-roster.cjs');
 
 const AGENTS_DIR = path.join(__dirname, '..', 'agents');
 
-const ALL_AGENTS = fs.readdirSync(AGENTS_DIR)
-  .filter(f => f.startsWith('gsd-') && f.endsWith('.md'))
-  .map(f => f.replace('.md', ''));
+// Sorted basenames (without `.md`). Every use below generates an independent
+// per-agent test and reads each file via `agent + '.md'`; nothing here depends
+// on registration order, so the sorted helper roster is behaviorally identical.
+const ALL_AGENTS = listAgentFiles(AGENTS_DIR);
 
 // ─── No Legacy files_to_read Blocks ────────────────────────────────────────
 

@@ -202,6 +202,8 @@ describe('bug #3677 — agent body colon-namespace leak (Claude / Qwen / Hermes)
     test('E1: every agents/gsd-*.md transforms clean — no roster colon refs survive', () => {
       const agentsDir = path.join(REPO_ROOT, 'agents');
       const offenders = [];
+      // Not the shared listAgentFiles() helper: this needs full `.md` filenames
+      // (not stripped basenames) to readFileSync + transform each agent body.
       for (const f of fs.readdirSync(agentsDir)) {
         if (!f.startsWith('gsd-') || !f.endsWith('.md')) continue;
         const src = fs.readFileSync(path.join(agentsDir, f), 'utf-8');

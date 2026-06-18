@@ -605,6 +605,8 @@ for (const runtime of ['hermes', 'qwen']) {
     });
 
     test('agents contain no CLAUDE.md or Claude Code references', () => {
+      // Not the shared listAgentFiles() helper: walks the INSTALLED dest dir
+      // and returns absolute paths (for leak scanning), not the source roster.
       const agentsDir = path.join(tmpDir, getDirName(runtime), 'agents');
       assert.ok(fs.existsSync(agentsDir));
 

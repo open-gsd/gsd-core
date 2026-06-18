@@ -21,6 +21,7 @@ const {
 
 const { resolveModelInternal } = require('../gsd-core/bin/lib/model-resolver.cjs');
 const { createTempProject, cleanup } = require('./helpers.cjs');
+const { listAgentFiles } = require('./helpers/agent-roster.cjs');
 
 // ─── temp-project helpers ──────────────────────────────────────────────────────
 
@@ -32,18 +33,12 @@ function writeConfig(tmpDir, obj) {
   );
 }
 
-function agentFilesOnDisk() {
-  return fs.readdirSync(path.join(__dirname, '..', 'agents'))
-    .filter((f) => /^gsd-.*\.md$/.test(f))
-    .map((f) => f.replace(/\.md$/, ''))
-    .sort();
-}
-
 // ─── MODEL_PROFILES data integrity ────────────────────────────────────────────
 
 describe('MODEL_PROFILES', () => {
   test('contains every shipped gsd agent file on disk (#3229)', () => {
-    const expectedAgents = agentFilesOnDisk();
+    // Canonical source roster (sorted gsd-* basenames without .md) — shared helper.
+    const expectedAgents = listAgentFiles();
     const actualAgents = Object.keys(MODEL_PROFILES).sort();
     assert.deepStrictEqual(actualAgents, expectedAgents);
   });
