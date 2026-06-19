@@ -868,6 +868,211 @@ function cmdWorktreeCleanupWave(cwd: string, args: string[] = []): void {
   }
 }
 
+interface RecordAgentFields {
+  agentId: string;
+  worktreePath: string;
+  branch: string;
+  base: string;
+}
+
+interface RecordAgentPlan {
+  ok: boolean;
+  reason: string;
+  hint?: string;
+  entry: CleanupManifestEntry | null;
+  /** Serialized manifest to write back (with trailing newline); null when ok === false. */
+  manifest: string | null;
+}
+
+/**
+ * Pure planner for the per-agent wave-manifest append.
+ *
+ * Validates the candidate entry at write time using the SAME rules the
+ * cleanup-wave reader enforces (via `normalizeCleanupManifestEntry`), so an
+ * entry that `record-agent` accepts is guaranteed to survive
+ * `normalizeCleanupManifest` on read — a field that would be silently dropped
+ * at cleanup time fails loudly here instead.
+ *
+ * `agent_id` is treated write-strict (required) even though the reader is
+ * lenient (nullable): the whole point of this verb is to catch an
+ * under-populated entry at write time, and an entry whose author cannot be
+ * identified defeats that. The on-disk shape stays the existing 4-field entry
+ * (`agent_id`, `worktree_path`, `branch`, `expected_base`) — no schema change;
+ * the reader re-derives `allowed_bases`.
+ */
+function planWorktreeRecordAgent(manifestRaw: string, fields: RecordAgentFields): RecordAgentPlan {
+  // 1. Write-strict required-field check (loud, with which flag is missing).
+  const missing: string[] = [];
+  if (!fields.agentId) missing.push('--agent-id');
+  if (!fields.worktreePath) missing.push('--path');
+  if (!fields.branch) missing.push('--branch');
+  if (!fields.base) missing.push('--base');
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      reason: 'missing_field',
+      hint: `record-agent requires ${missing.join(', ')}. Re-run with all of --agent-id, --path, --branch, --base set to non-empty values.`,
+      entry: null,
+      manifest: null,
+    };
+  }
+
+  // 2. Shared validation: run the candidate through the reader's normalizer.
+  //    If it returns null the reader would drop this entry on read — reject now.
+  const candidate = {
+    agent_id: fields.agentId,
+    worktree_path: fields.worktreePath,
+    branch: fields.branch,
+    expected_base: fields.base,
+  };
+  const entry = normalizeCleanupManifestEntry(candidate);
+  if (!entry) {
+    return {
+      ok: false,
+      reason: 'invalid_entry',
+      hint: `Entry failed cleanup-manifest validation: --path/--branch/--base must be non-empty and --branch must match ^worktree-agent-[A-Za-z0-9._/-]+$ (got branch="${fields.branch}"). Fix the field and re-run.`,
+      entry: null,
+      manifest: null,
+    };
+  }
+
+  // 3. Parse the existing manifest. The init shell ({orchestrator_root, worktrees: []})
+  //    is written inline by the orchestrator before any agent spawns; a missing or
+  //    malformed manifest is a loud failure here, not a silent under-populated write.
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(manifestRaw);
+  } catch {
+    return {
+      ok: false,
+      reason: 'invalid_manifest_json',
+      hint: 'Manifest is not valid JSON. The orchestrator must initialize it as {"orchestrator_root": "...", "worktrees": []} before recording agents.',
+      entry: null,
+      manifest: null,
+    };
+  }
+
+  // Accept the canonical {worktrees: []} shell or a bare top-level array (both
+  // are read by normalizeCleanupManifest); preserve any other top-level keys.
+  let worktrees: unknown[];
+  let writeBack: unknown;
+  if (Array.isArray(parsed)) {
+    worktrees = parsed;
+    writeBack = worktrees;
+  } else if (parsed && typeof parsed === 'object') {
+    const container = parsed as Record<string, unknown>;
+    if (container.worktrees === undefined) container.worktrees = [];
+    if (!Array.isArray(container.worktrees)) {
+      return {
+        ok: false,
+        reason: 'manifest_shape_invalid',
+        hint: 'Manifest "worktrees" must be an array. Re-initialize as {"orchestrator_root": "...", "worktrees": []}.',
+        entry: null,
+        manifest: null,
+      };
+    }
+    worktrees = container.worktrees;
+    writeBack = container;
+  } else {
+    return {
+      ok: false,
+      reason: 'manifest_shape_invalid',
+      hint: 'Manifest must be a JSON object {"worktrees": []} or a top-level array.',
+      entry: null,
+      manifest: null,
+    };
+  }
+
+  // 4. Append the minimal 4-field entry, matching the existing on-disk format.
+  //    Append-only (behavior-preserving): the reader dedups by worktree_path+branch.
+  const recorded: CleanupManifestEntry = {
+    agent_id: entry.agent_id,
+    worktree_path: entry.worktree_path,
+    branch: entry.branch,
+    expected_base: entry.expected_base,
+  };
+  worktrees.push(recorded);
+
+  return {
+    ok: true,
+    reason: 'ok',
+    entry: recorded,
+    manifest: `${JSON.stringify(writeBack, null, 2)}\n`,
+  };
+}
+
+interface RecordAgentCmdDeps {
+  readFile?: (p: string) => string;
+  writeFile?: (p: string, content: string) => void;
+  write?: (s: string) => void;
+  writeErr?: (s: string) => void;
+}
+
+interface RecordAgentCmdResult {
+  ok: boolean;
+  reason: string;
+  hint?: string;
+  entry: CleanupManifestEntry | null;
+  manifest_path?: string;
+}
+
+/**
+ * CLI command: append a validated per-agent entry to a wave cleanup manifest.
+ *
+ * Usage: worktree record-agent --manifest <path> --agent-id <id> --path <worktree> --branch <branch> --base <sha>
+ *
+ * Fails loudly (non-zero exit + recovery hint on stderr) when a field is
+ * missing/garbled or the manifest is absent/malformed, rather than appending an
+ * under-populated entry that the cleanup reader would silently drop.
+ */
+function cmdWorktreeRecordAgent(cwd: string, args: string[] = [], deps: RecordAgentCmdDeps = {}): RecordAgentCmdResult {
+  const flag = (name: string): string => {
+    const i = args.indexOf(name);
+    return i >= 0 && i + 1 < args.length ? args[i + 1] : '';
+  };
+  const write = deps.write || ((s: string) => process.stdout.write(s));
+  const writeErr = deps.writeErr || ((s: string) => process.stderr.write(s));
+
+  const manifestPath = flag('--manifest');
+  if (!manifestPath) {
+    writeErr('Usage: worktree record-agent --manifest <path> --agent-id <id> --path <worktree> --branch <branch> --base <sha>\n');
+    process.exitCode = 2;
+    return { ok: false, reason: 'usage', entry: null };
+  }
+
+  const resolved = path.resolve(cwd, manifestPath);
+  const readFile = deps.readFile || ((p: string) => fs.readFileSync(p, 'utf8'));
+  let manifestRaw: string;
+  try {
+    manifestRaw = readFile(resolved);
+  } catch (err) {
+    const hint = `Manifest not found or unreadable at ${manifestPath}. The orchestrator must initialize it ({"orchestrator_root": "...", "worktrees": []}) before recording agents.`;
+    writeErr(`[gsd] worktree.record-agent: manifest_read_failed — ${hint}\n`);
+    write(`${JSON.stringify({ ok: false, reason: 'manifest_read_failed', hint, error: (err as Error).message }, null, 2)}\n`);
+    process.exitCode = 1;
+    return { ok: false, reason: 'manifest_read_failed', hint, entry: null };
+  }
+
+  const plan = planWorktreeRecordAgent(manifestRaw, {
+    agentId: flag('--agent-id'),
+    worktreePath: flag('--path'),
+    branch: flag('--branch'),
+    base: flag('--base'),
+  });
+
+  if (!plan.ok || plan.manifest === null) {
+    writeErr(`[gsd] worktree.record-agent: ${plan.reason} — ${plan.hint || ''}\n`);
+    write(`${JSON.stringify({ ok: false, reason: plan.reason, hint: plan.hint }, null, 2)}\n`);
+    process.exitCode = 1;
+    return { ok: false, reason: plan.reason, hint: plan.hint, entry: null };
+  }
+
+  const writeFile = deps.writeFile || ((p: string, content: string) => fs.writeFileSync(p, content, 'utf8'));
+  writeFile(resolved, plan.manifest);
+  write(`${JSON.stringify({ ok: true, reason: 'ok', entry: plan.entry, manifest_path: resolved }, null, 2)}\n`);
+  return { ok: true, reason: 'ok', entry: plan.entry, manifest_path: resolved };
+}
+
 /**
  * Reap orphaned linked worktrees whose lock owner process is dead, whose
  * branch tip is fully merged into the default branch, and whose lock file
@@ -1167,6 +1372,8 @@ export = {
   planWorktreeWaveCleanup,
   executeWorktreeWaveCleanupPlan,
   cmdWorktreeCleanupWave,
+  planWorktreeRecordAgent,
+  cmdWorktreeRecordAgent,
   reapOrphanWorktrees,
   cmdWorktreeReapOrphans,
   resolveWorktreeRoot,
