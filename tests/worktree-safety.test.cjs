@@ -18,6 +18,7 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const fc = require('fast-check');
 const { createTempGitProject, createTempDir, cleanup } = require('./helpers.cjs');
 
 const WORKTREE_SAFETY_PATH = path.join(
@@ -673,6 +674,117 @@ describe('planWorktreeRecordAgent', () => {
     assert.equal(plan.ok, false);
     assert.equal(plan.reason, 'manifest_shape_invalid');
     assert.equal(plan.manifest, null);
+  });
+
+  // The reader dedups on (worktree_path, branch); a re-record would be silently
+  // dropped at cleanup — exactly the failure mode the verb exists to eliminate —
+  // so the writer must reject it loudly rather than swallow it.
+  test('rejects a duplicate (worktree_path, branch) loudly instead of writing a droppable entry', () => {
+    const existing = JSON.stringify({
+      worktrees: [{
+        agent_id: 'a1',
+        worktree_path: '/repo/.claude/worktrees/agent-a1',
+        branch: 'worktree-agent-a1',
+        expected_base: 'abc123',
+      }],
+    });
+    // Same path+branch, different agent_id/base — still a duplicate by the reader's key.
+    const plan = planWorktreeRecordAgent(existing, { ...VALID, agentId: 'a1-retry', base: 'deadbee' });
+    assert.equal(plan.ok, false);
+    assert.equal(plan.reason, 'duplicate_entry');
+    assert.match(plan.hint, /worktree-agent-a1/);
+    assert.equal(plan.manifest, null);
+  });
+
+  test('detects a duplicate stored under the legacy `path` field too', () => {
+    const existing = JSON.stringify({
+      worktrees: [{ path: '/repo/.claude/worktrees/agent-a1', branch: 'worktree-agent-a1', expected_base: 'abc123' }],
+    });
+    const plan = planWorktreeRecordAgent(existing, VALID);
+    assert.equal(plan.reason, 'duplicate_entry');
+  });
+
+  // Reader-alignment: the cleanup reader dedups only over entries that normalize
+  // successfully, so a malformed same-key entry it would DROP must not block a
+  // valid recording — otherwise the writer is stricter than the reader and
+  // blocks legitimate recovery.
+  test('a malformed same-key existing entry does not block recording a valid one', () => {
+    const existing = JSON.stringify({
+      // Same path+branch as VALID but no expected_base — the reader drops this.
+      worktrees: [{ worktree_path: '/repo/.claude/worktrees/agent-a1', branch: 'worktree-agent-a1' }],
+    });
+    const plan = planWorktreeRecordAgent(existing, VALID);
+    assert.equal(plan.ok, true);
+    const readBack = planWorktreeWaveCleanup('/repo/main', JSON.parse(plan.manifest));
+    assert.equal(readBack.ok, true);
+    assert.equal(readBack.entries.length, 1); // reader keeps only the valid one
+    assert.equal(readBack.entries[0].expected_base, 'abc123');
+  });
+
+  test('rejects whitespace-only --path/--base (values are trimmed)', () => {
+    const wsPath = planWorktreeRecordAgent('{"worktrees":[]}', { ...VALID, worktreePath: '   ' });
+    assert.equal(wsPath.reason, 'missing_field');
+    assert.match(wsPath.hint, /--path/);
+    const wsBase = planWorktreeRecordAgent('{"worktrees":[]}', { ...VALID, base: '  \t ' });
+    assert.equal(wsBase.reason, 'missing_field');
+    assert.match(wsBase.hint, /--base/);
+  });
+
+  test('trims incidental surrounding whitespace on accepted values', () => {
+    const plan = planWorktreeRecordAgent('{"worktrees":[]}', {
+      agentId: ' a1 ', worktreePath: ' /repo/wt-a1 ', branch: ' worktree-agent-a1 ', base: ' abc123 ',
+    });
+    assert.equal(plan.ok, true);
+    assert.deepEqual(plan.entry, {
+      agent_id: 'a1', worktree_path: '/repo/wt-a1', branch: 'worktree-agent-a1', expected_base: 'abc123',
+    });
+  });
+});
+
+// ─── planWorktreeRecordAgent — property-based write/read parity (#1298) ────────
+// The verb's reason for existing is the write→read parity invariant, so it must
+// carry a fast-check property test (RULESET.TESTS.property-based-testing): an
+// entry the writer ACCEPTS must survive the cleanup reader unchanged, and an
+// entry with an invalid branch must be REJECTED symmetrically.
+
+describe('planWorktreeRecordAgent — fast-check parity invariant (#1298)', () => {
+  const seg = fc.stringMatching(/^[A-Za-z0-9._/-]+$/); // include '/' — the namespace allows it
+  const agentBranch = seg.map((s) => `worktree-agent-${s}`);
+  const nonEmpty = fc.stringMatching(/^\S[\S ]*$/); // no leading whitespace, not blank
+
+  test('any writer-accepted entry round-trips through the cleanup reader unchanged', () => {
+    fc.assert(fc.property(
+      fc.record({ agentId: nonEmpty, worktreePath: nonEmpty, branch: agentBranch, base: nonEmpty }),
+      (fields) => {
+        const plan = planWorktreeRecordAgent('{"worktrees":[]}', fields);
+        if (!plan.ok) return; // rejection is fine; this property is about accepted entries
+        const readBack = planWorktreeWaveCleanup('/repo/main', JSON.parse(plan.manifest));
+        assert.equal(readBack.ok, true);
+        assert.equal(readBack.entries.length, 1);
+        const e = readBack.entries[0];
+        assert.equal(e.worktree_path, fields.worktreePath.trim());
+        assert.equal(e.branch, fields.branch.trim());
+        assert.equal(e.expected_base, fields.base.trim());
+        assert.equal(e.agent_id, fields.agentId.trim());
+      },
+    ));
+  });
+
+  test('an entry with a branch outside the worktree-agent-* namespace is always rejected', () => {
+    fc.assert(fc.property(
+      fc.record({
+        agentId: nonEmpty,
+        worktreePath: nonEmpty,
+        // Any branch that does NOT match the disposable namespace.
+        branch: fc.string({ minLength: 1 }).filter((b) => !/^worktree-agent-[A-Za-z0-9._/-]+$/.test(b.trim())),
+        base: nonEmpty,
+      }),
+      (fields) => {
+        const plan = planWorktreeRecordAgent('{"worktrees":[]}', fields);
+        assert.equal(plan.ok, false);
+        assert.equal(plan.manifest, null);
+      },
+    ));
   });
 });
 

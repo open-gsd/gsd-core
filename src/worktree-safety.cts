@@ -896,22 +896,31 @@ interface RecordAgentPlan {
  * `agent_id` is treated write-strict (required) even though the reader is
  * lenient (nullable): the whole point of this verb is to catch an
  * under-populated entry at write time, and an entry whose author cannot be
- * identified defeats that. The on-disk shape stays the existing 4-field entry
- * (`agent_id`, `worktree_path`, `branch`, `expected_base`) — no schema change;
- * the reader re-derives `allowed_bases`.
+ * identified defeats that. A duplicate `(worktree_path, branch)` is also
+ * rejected loudly — the reader dedups on that key, so a re-record would be
+ * silently dropped (the failure mode this verb exists to eliminate). The
+ * on-disk shape stays the existing 4-field entry (`agent_id`, `worktree_path`,
+ * `branch`, `expected_base`) — no schema change; the reader re-derives
+ * `allowed_bases`.
  */
 function planWorktreeRecordAgent(manifestRaw: string, fields: RecordAgentFields): RecordAgentPlan {
   // 1. Write-strict required-field check (loud, with which flag is missing).
+  //    Trim first so a whitespace-only value ("   ") is rejected here rather
+  //    than deferred to a guaranteed `git worktree remove` failure at cleanup.
+  const agentId = (fields.agentId || '').trim();
+  const worktreePath = (fields.worktreePath || '').trim();
+  const branch = (fields.branch || '').trim();
+  const base = (fields.base || '').trim();
   const missing: string[] = [];
-  if (!fields.agentId) missing.push('--agent-id');
-  if (!fields.worktreePath) missing.push('--path');
-  if (!fields.branch) missing.push('--branch');
-  if (!fields.base) missing.push('--base');
+  if (!agentId) missing.push('--agent-id');
+  if (!worktreePath) missing.push('--path');
+  if (!branch) missing.push('--branch');
+  if (!base) missing.push('--base');
   if (missing.length > 0) {
     return {
       ok: false,
       reason: 'missing_field',
-      hint: `record-agent requires ${missing.join(', ')}. Re-run with all of --agent-id, --path, --branch, --base set to non-empty values.`,
+      hint: `record-agent requires ${missing.join(', ')}. Re-run with all of --agent-id, --path, --branch, --base set to non-empty (non-whitespace) values.`,
       entry: null,
       manifest: null,
     };
@@ -920,17 +929,17 @@ function planWorktreeRecordAgent(manifestRaw: string, fields: RecordAgentFields)
   // 2. Shared validation: run the candidate through the reader's normalizer.
   //    If it returns null the reader would drop this entry on read — reject now.
   const candidate = {
-    agent_id: fields.agentId,
-    worktree_path: fields.worktreePath,
-    branch: fields.branch,
-    expected_base: fields.base,
+    agent_id: agentId,
+    worktree_path: worktreePath,
+    branch,
+    expected_base: base,
   };
   const entry = normalizeCleanupManifestEntry(candidate);
   if (!entry) {
     return {
       ok: false,
       reason: 'invalid_entry',
-      hint: `Entry failed cleanup-manifest validation: --path/--branch/--base must be non-empty and --branch must match ^worktree-agent-[A-Za-z0-9._/-]+$ (got branch="${fields.branch}"). Fix the field and re-run.`,
+      hint: `Entry failed cleanup-manifest validation: --path/--branch/--base must be non-empty and --branch must match ^worktree-agent-[A-Za-z0-9._/-]+$ (got branch="${branch}"). Fix the field and re-run.`,
       entry: null,
       manifest: null,
     };
@@ -983,8 +992,29 @@ function planWorktreeRecordAgent(manifestRaw: string, fields: RecordAgentFields)
     };
   }
 
-  // 4. Append the minimal 4-field entry, matching the existing on-disk format.
-  //    Append-only (behavior-preserving): the reader dedups by worktree_path+branch.
+  // 4. Reject a duplicate (worktree_path, branch). The reader dedups on this
+  //    exact key, but only over entries that NORMALIZE successfully — so an
+  //    existing malformed same-key entry (which the reader would drop) must NOT
+  //    block recording a valid one. Run each existing entry through the reader's
+  //    own normalizer and compare only the entries the reader would keep; this
+  //    matches its dedup behavior exactly. A real duplicate signals an upstream
+  //    double-spawn — surface it loudly instead of silently dropping it.
+  const dupKey = `${entry.worktree_path}\0${entry.branch}`;
+  const isDuplicate = worktrees.some((existing) => {
+    const normalized = normalizeCleanupManifestEntry(existing);
+    return normalized !== null && `${normalized.worktree_path}\0${normalized.branch}` === dupKey;
+  });
+  if (isDuplicate) {
+    return {
+      ok: false,
+      reason: 'duplicate_entry',
+      hint: `The manifest already records worktree_path="${entry.worktree_path}" branch="${entry.branch}". The cleanup reader dedups on (worktree_path, branch), so re-recording would be silently dropped — this usually signals an upstream double-spawn. Investigate rather than re-record.`,
+      entry: null,
+      manifest: null,
+    };
+  }
+
+  // 5. Append the minimal 4-field entry, matching the existing on-disk format.
   const recorded: CleanupManifestEntry = {
     agent_id: entry.agent_id,
     worktree_path: entry.worktree_path,
