@@ -2716,6 +2716,13 @@ describe('pr-subrepo', () => {
       execFileSync('git', ['init'], { cwd: outsideDir, stdio: 'pipe' });
       execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: outsideDir, stdio: 'pipe' });
       execFileSync('git', ['config', 'user.name', 'Test'], { cwd: outsideDir, stdio: 'pipe' });
+      // Leave a TRACKED dirty change (commit then modify) — an untracked file would be
+      // filtered by the ?? exclusion and the repo would look clean even without the guard,
+      // making the traversal assertion vacuous. A tracked modification ensures that WITHOUT
+      // the guard this repo WOULD be reported dirty, so the test genuinely fails-first.
+      fs.writeFileSync(path.join(outsideDir, 'secret.txt'), 'committed\n');
+      execFileSync('git', ['add', 'secret.txt'], { cwd: outsideDir, stdio: 'pipe' });
+      execFileSync('git', ['-c', 'commit.gpgsign=false', 'commit', '-m', 'init'], { cwd: outsideDir, stdio: 'pipe' });
       fs.writeFileSync(path.join(outsideDir, 'secret.txt'), 'leaked\n');
 
       const traversalEntry = path.relative(scanRoot, outsideDir); // e.g. "../gsd-666-scan-outside-XXXX"
