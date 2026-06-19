@@ -170,23 +170,32 @@ function overlayRoots(cwd: string, gsdHome?: string): Array<{ dir: string; scope
 
 /**
  * Read the per-scope ledger co-located with an overlay root (the root is `<scope>/.gsd/capabilities`,
- * so its ledger is `<scope>/.gsd-capabilities.json`) and return the ids carrying an in-flight
- * `_pending` intent — i.e. crashed/uncommitted installs or upgrades that must not be activated until
- * reconciliation completes. Never throws: a missing/invalid ledger yields an empty set.
+ * so its ledger is `<scope>/.gsd-capabilities.json`) and classify its ids:
+ *   - `pending`:   ids carrying an in-flight `_pending` intent (crashed/uncommitted install/upgrade)
+ *                  — must not be activated until reconciliation completes.
+ *   - `committed`: ids with a ledger entry and NO `_pending` — i.e. an install the user actually
+ *                  completed (and, for executable surfaces, CONSENTED to). This is the authoritative
+ *                  consent signal required before dispatching a capability's CLI COMMANDS (ADR-1244
+ *                  Phase 5 / D7): a bundle merely dropped on disk with no ledger entry is NOT
+ *                  consented and its command family must not be dispatchable.
+ * Never throws: a missing/invalid ledger yields empty sets.
  */
-function pendingOverlayIds(rootDir: string): Set<string> {
-  const out = new Set<string>();
+function ledgerOverlayIds(rootDir: string): { pending: Set<string>; committed: Set<string> } {
+  const pending = new Set<string>();
+  const committed = new Set<string>();
   try {
     const ledgerPath = path.join(rootDir, '..', '..', '.gsd-capabilities.json');
     const parsed: unknown = JSON.parse(fs.readFileSync(ledgerPath, 'utf8'));
-    if (!parsed || typeof parsed !== 'object') return out;
+    if (!parsed || typeof parsed !== 'object') return { pending, committed };
     const entries = (parsed as Record<string, unknown>)['entries'];
-    if (!entries || typeof entries !== 'object' || Array.isArray(entries)) return out;
+    if (!entries || typeof entries !== 'object' || Array.isArray(entries)) return { pending, committed };
     for (const [id, entry] of Object.entries(entries as Record<string, unknown>)) {
-      if (entry && typeof entry === 'object' && (entry as Record<string, unknown>)['_pending']) out.add(id);
+      if (!entry || typeof entry !== 'object') continue;
+      if ((entry as Record<string, unknown>)['_pending']) pending.add(id);
+      else committed.add(id);
     }
-  } catch { /* missing/invalid ledger — nothing pending */ }
-  return out;
+  } catch { /* missing/invalid ledger — no pending, no committed */ }
+  return { pending, committed };
 }
 
 /** Shallow-attach overlay diagnostics WITHOUT mutating the frozen registry module. */
@@ -275,7 +284,7 @@ export function loadRegistry(options: LoadRegistryOptions = {}): Registry {
     // install or upgrade). They are NOT yet committed, so they must not be activated — reconcile
     // will roll them forward or back. Fail OPEN (skip without a gate block): an uncommitted gate
     // is not a real installed gate. See capability-lifecycle.cts (ADR-1244 Phase 4).
-    const pendingIds = pendingOverlayIds(root.dir);
+    const { pending: pendingIds, committed: committedIds } = ledgerOverlayIds(root.dir);
     for (const ent of entries) {
       if (!ent.isDirectory()) continue;
       const id = ent.name;
@@ -388,9 +397,13 @@ export function loadRegistry(options: LoadRegistryOptions = {}): Registry {
       for (const k of cfgKeys) claimedConfig.add(k);
       for (const f of families) claimedFamilies.add(f);
       // Record the install root for a third-party cap that ships command modules, so a runtime
-      // dispatcher can require() the router FROM the install root (ADR-1244 Phase 5 / D7). Only
-      // committed (non-_pending) caps reach this point, so presence here is the consent signal.
-      if (families.length > 0) commandRoots[id] = capDir;
+      // dispatcher can require() the router FROM the install root (ADR-1244 Phase 5 / D7). Gated on
+      // a COMMITTED ledger entry (committedIds): executable CLI commands run only for a capability
+      // the user actually installed+consented to via the lifecycle — a bundle merely dropped on
+      // disk with no ledger entry provides declarative surfaces (Phase 2) but is NOT command-
+      // dispatchable. (Project-scope ledgers live in the repo tree and are thus only as trustworthy
+      // as the repo — see docs/explanation/the-capability-trust-model.md.)
+      if (families.length > 0 && committedIds.has(id)) commandRoots[id] = capDir;
     }
   }
 

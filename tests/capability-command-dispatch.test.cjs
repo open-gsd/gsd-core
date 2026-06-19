@@ -929,3 +929,59 @@ describe('defaultRequireFromInstallRoot — install-root confinement (Phase 5)',
     assert.throws(() => defaultRequireFromInstallRoot(root, 'router.cjs'), /outside its install root/);
   });
 });
+
+// ─── End-to-end: real loadRegistry + real require + real ledger (consent + confinement) ───
+
+describe('dispatchOverlayCapabilityCommand — end-to-end (real loadRegistry, real require, real ledger)', () => {
+  const homes = [];
+  let savedGsdHome;
+  const mkhome = () => { const h = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-e2e-')); homes.push(h); return h; };
+
+  function validCap(id, family) {
+    return {
+      id, role: 'feature', version: '1.0.0', title: id, description: 'e2e cap', tier: 'standard',
+      requires: [], engines: { gsd: '>=1.0.0' }, runtimeCompat: { supported: ['*'], unsupported: [] },
+      skills: [], agents: [], hooks: [], config: {}, steps: [], contributions: [], gates: [],
+      commands: [{ family, module: 'router.cjs', router: 'run' }],
+    };
+  }
+  // The router writes a marker file so "did it execute?" is a filesystem fact (negative proof).
+  const ROUTER_BODY = "module.exports = { run: (ctx) => { require('fs').writeFileSync(require('path').join(ctx.cwd, 'RAN.txt'), String((ctx.args||[]).join(','))); } };";
+
+  function placeBundle(home, id, family, { committed }) {
+    const dir = path.join(home, '.gsd', 'capabilities', id);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'capability.json'), JSON.stringify(validCap(id, family)), 'utf8');
+    fs.writeFileSync(path.join(dir, 'router.cjs'), ROUTER_BODY, 'utf8');
+    if (committed) {
+      fs.writeFileSync(
+        path.join(home, '.gsd-capabilities.json'),
+        JSON.stringify({ version: '1', updatedAt: 'x', entries: { [id]: { id, version: '1.0.0', source: 's', integrity: '', files: [], sharedEdits: [] } } }),
+        'utf8',
+      );
+    }
+  }
+
+  test.beforeEach(() => { savedGsdHome = process.env.GSD_HOME; });
+  test.afterEach(() => { if (savedGsdHome === undefined) delete process.env.GSD_HOME; else process.env.GSD_HOME = savedGsdHome; });
+  test.after(() => { for (const h of homes) cleanup(h); });
+
+  test('a COMMITTED (consented) third-party command runs, from its install root', () => {
+    const home = mkhome();
+    placeBundle(home, 'e2ecap', 'e2e-cmd', { committed: true });
+    process.env.GSD_HOME = home; // global overlay scope = home/.gsd/capabilities
+    const errs = [];
+    const result = dispatchOverlayCapabilityCommand({ command: 'e2e-cmd', args: ['hello'], cwd: home, raw: false, error: (m) => errs.push(m) });
+    assert.strictEqual(result, true, 'consented command consumed: ' + JSON.stringify(errs));
+    assert.strictEqual(fs.readFileSync(path.join(home, 'RAN.txt'), 'utf8'), 'hello', 'router executed with forwarded args');
+  });
+
+  test('NEGATIVE PROOF: a dropped bundle with NO ledger entry is never dispatched / never executes', () => {
+    const home = mkhome();
+    placeBundle(home, 'evilcap', 'evil-cmd', { committed: false }); // bundle on disk, NO ledger
+    process.env.GSD_HOME = home;
+    const result = dispatchOverlayCapabilityCommand({ command: 'evil-cmd', args: ['x'], cwd: home, raw: false, error: () => {} });
+    assert.strictEqual(result, false, 'unconsented family must fall through to Unknown');
+    assert.strictEqual(fs.existsSync(path.join(home, 'RAN.txt')), false, 'the dropped module must NEVER execute');
+  });
+});

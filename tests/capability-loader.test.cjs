@@ -147,13 +147,32 @@ describe('loadRegistry — uncommitted (_pending) overlay is not activated (ADR-
 });
 
 describe('loadRegistry — _overlay.commandRoots (ADR-1244 Phase 5 dispatch)', () => {
-  test('an accepted overlay cap that declares commands records its absolute install root', (t) => {
+  // commandRoots requires a COMMITTED ledger entry (the consent signal). Write one.
+  function writeCommittedLedger(home, ids) {
+    const entries = {};
+    for (const id of ids) entries[id] = { id, version: '1.0.0', source: 's', integrity: '', files: [], sharedEdits: [] };
+    fs.writeFileSync(path.join(home, '.gsd-capabilities.json'), JSON.stringify({ version: '1', updatedAt: '2026-01-01T00:00:00Z', entries }), 'utf8');
+  }
+
+  test('a COMMITTED overlay cap that declares commands records its absolute install root', (t) => {
     const home = makeOverlayHome([featureCap('tpcap', { commands: [{ family: 'tp-cmd', module: 'router.cjs', router: 'run' }] })]);
     t.after(() => cleanup(home));
+    writeCommittedLedger(home, ['tpcap']);
     const reg = load(home);
     assert.ok(reg.capabilities['tpcap'], 'overlay cap accepted');
     assert.ok(reg._overlay && reg._overlay.commandRoots, '_overlay.commandRoots present');
     assert.strictEqual(reg._overlay.commandRoots['tpcap'], path.join(home, '.gsd', 'capabilities', 'tpcap'), 'install root recorded');
+  });
+
+  test('CONSENT NEGATIVE PROOF: a cap with commands but NO ledger entry (bundle dropped on disk) is NOT in commandRoots', (t) => {
+    // No ledger written at all — models a repo that ships .gsd/capabilities/<id> without an install.
+    const home = makeOverlayHome([featureCap('dropped', { commands: [{ family: 'dropped-cmd', module: 'router.cjs', router: 'run' }] })]);
+    t.after(() => cleanup(home));
+    const reg = load(home);
+    const roots = (reg._overlay && reg._overlay.commandRoots) || {};
+    assert.ok(!('dropped' in roots), 'an uninstalled (no-ledger) cap must not be command-dispatchable');
+    // Declarative surfaces still load (Phase 2 behavior unchanged) — only command dispatch is gated.
+    assert.ok(reg.capabilities['dropped'], 'declarative surfaces still compose');
   });
 
   test('an overlay cap WITHOUT commands is not in commandRoots, and first-party families are absent too', (t) => {
@@ -162,6 +181,7 @@ describe('loadRegistry — _overlay.commandRoots (ADR-1244 Phase 5 dispatch)', (
       featureCap('tpcap', { commands: [{ family: 'tp-cmd', module: 'router.cjs', router: 'run' }] }),
     ]);
     t.after(() => cleanup(home));
+    writeCommittedLedger(home, ['tpcap']);
     const reg = load(home);
     const roots = reg._overlay.commandRoots;
     assert.ok(!('nocmd' in roots), 'declarative overlay cap not in commandRoots');
