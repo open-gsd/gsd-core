@@ -737,8 +737,10 @@ function cmdCommitToSubrepo(cwd: string, message: string | undefined, files: str
  * and pushes with --set-upstream. Returns a structured result the workflow uses
  * to call `gh pr create`.
  *
- * On any failure after the branch has been created, the branch is deleted and
- * the caller is returned to the original HEAD so the repo is left clean.
+ * On a stage/commit failure (nothing committed yet), the branch is deleted and
+ * the caller is returned to the original HEAD so the repo is left clean. On a
+ * push failure, the commit already exists — the branch is left in place instead
+ * so the user's work is not lost; the error includes a retry instruction.
  */
 function cmdPrSubrepo(
   cwd: string,

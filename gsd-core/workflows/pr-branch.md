@@ -70,8 +70,15 @@ node -e "
   const fs = require('fs');
   const out = [];
   for (const r of repos) {
+    // Reject before any git invocation: this scan runs on raw config values,
+    // ahead of the pr-subrepo seam's own validatePath guard. A traversal or
+    // embedded-newline entry here would run git outside the workspace, or
+    // inject a spurious record into the newline-joined dirty-file output.
+    if (typeof r !== 'string' || !/^[A-Za-z0-9._\/-]+$/.test(r)) continue;
+    const resolved = path.resolve(root, r);
+    if (resolved !== root && !resolved.startsWith(root + path.sep)) continue;
     try {
-      const res = execFileSync('git', ['-C', path.join(root, r), 'status', '--porcelain'],
+      const res = execFileSync('git', ['-C', resolved, 'status', '--porcelain'],
                                { encoding: 'utf8', timeout: 10_000 });
       // Exclude untracked-only repos: seam filters ?? lines, so detection must match.
       const tracked = res.split('\n').filter(l => l.length > 0 && !l.startsWith('??'));
@@ -126,16 +133,28 @@ REMOTE_SLUG=$(node -e "
 " "$RESULT")
 
 if [ -n "$REMOTE_SLUG" ]; then
-  # Resolve base branch: use $TARGET if it exists in sub-repo, else fall back to
-  # the sub-repo's own default branch
-  if git -C "$ROOT/$REPO_REL" ls-remote --exit-code --heads origin "$TARGET" \
-       > /dev/null 2>&1; then
-    SUB_TARGET="$TARGET"
-  else
-    SUB_TARGET=$(git -C "$ROOT/$REPO_REL" remote show origin 2>/dev/null \
-      | awk '/HEAD branch/ {print $NF}')
-    SUB_TARGET="${SUB_TARGET:-main}"
-  fi
+  # Defense-in-depth: $REPO_REL was already validated by the dirty-scan filter
+  # above and by the pr-subrepo seam's validatePath, but this is a second,
+  # independent shell invocation of git -C on the same value — reject any
+  # traversal or absolute path before it reaches git.
+  case "$REPO_REL" in
+    *..*|/*)
+      echo "Refusing unsafe sub-repo path: $REPO_REL" >&2
+      SUB_TARGET="$TARGET"
+      ;;
+    *)
+      # Resolve base branch: use $TARGET if it exists in sub-repo, else fall back to
+      # the sub-repo's own default branch
+      if git -C "$ROOT/$REPO_REL" ls-remote --exit-code --heads origin "$TARGET" \
+           > /dev/null 2>&1; then
+        SUB_TARGET="$TARGET"
+      else
+        SUB_TARGET=$(git -C "$ROOT/$REPO_REL" remote show origin 2>/dev/null \
+          | awk '/HEAD branch/ {print $NF}')
+        SUB_TARGET="${SUB_TARGET:-main}"
+      fi
+      ;;
+  esac
 
   gh pr create \
     --repo "$REMOTE_SLUG" \
