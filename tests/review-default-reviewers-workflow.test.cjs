@@ -67,12 +67,30 @@ describe('review workflow source-grounding requirement in build_prompt (#1318)',
     // step is ever renamed or gains/reorders attributes.
     const stepIdx = src.indexOf('<step name="build_prompt">');
     assert.ok(stepIdx !== -1, 'build_prompt step must exist');
-    const fenceOpen = src.indexOf('```markdown', stepIdx);
-    assert.ok(fenceOpen !== -1, 'build_prompt must contain a ```markdown prompt block');
-    const fenceBodyStart = src.indexOf('\n', fenceOpen) + 1;
-    const fenceClose = src.indexOf('\n```', fenceBodyStart);
-    assert.ok(fenceClose !== -1, 'build_prompt markdown fence must be closed');
-    const fenced = src.slice(fenceBodyStart, fenceClose);
+
+    // Fence-run-aware extraction (CommonMark): a naive `indexOf('\n```')` would
+    // terminate at the FIRST triple-backtick line, truncating the prompt if its
+    // body embeds a fenced code example. Mirror the close rule used by
+    // src/markdown-sectionizer.cts stripFencedCode: the closing fence is a line
+    // of the SAME char and >= the opener's run length, with no trailing content,
+    // so a shorter nested fence inside the block is treated as content (#1318).
+    // Backtick-fenced only by design — the build_prompt block is ```markdown.
+    const lines = src.slice(stepIdx).split('\n');
+    const openRe = /^ {0,3}(`{3,})markdown\s*$/;
+    let openLen = 0;
+    let bodyStart = -1;
+    for (let i = 0; i < lines.length; i++) {
+      const m = openRe.exec(lines[i].replace(/\r$/, ''));
+      if (m) { openLen = m[1].length; bodyStart = i + 1; break; }
+    }
+    assert.ok(bodyStart !== -1, 'build_prompt must contain a ```markdown prompt block');
+    const closeRe = new RegExp(`^ {0,3}\`{${openLen},}\\s*$`);
+    let bodyEnd = -1;
+    for (let i = bodyStart; i < lines.length; i++) {
+      if (closeRe.test(lines[i].replace(/\r$/, ''))) { bodyEnd = i; break; }
+    }
+    assert.ok(bodyEnd !== -1, 'build_prompt markdown fence must be closed');
+    const fenced = lines.slice(bodyStart, bodyEnd).join('\n');
 
     const hdr = fenced.indexOf('## Review Instructions');
     assert.ok(hdr !== -1, 'fenced prompt must contain a ## Review Instructions section');
@@ -105,5 +123,30 @@ describe('review workflow source-grounding requirement in build_prompt (#1318)',
       reviewInstructions.includes('downgrade that finding to an open question'),
       'build_prompt Review Instructions region must degrade gracefully for prompt-only reviewers'
     );
+  });
+
+  test('#1318: prompt extraction is fence-run-aware — a nested code fence does not truncate it', () => {
+    // Regression guard for the fenceClose hardening. The feature feeds source/plan
+    // content (which routinely contains code fences) into the prompt; a naive
+    // first-`\n```` close scan would stop at a nested fence and drop everything
+    // after it — including the `## Review Instructions` section — yielding a
+    // spurious failure or false pass. A 4-backtick outer fence must extract in
+    // full past a nested 3-backtick block.
+    const synthetic = [
+      '<step name="build_prompt">',
+      '````markdown',
+      '# Prompt',
+      'Example for reviewers:',
+      '```bash',
+      'echo hi',
+      '```',
+      '## Review Instructions',
+      '- Verify against source and cite `path/to/file:line`.',
+      '````',
+      '</step>',
+    ].join('\n');
+    const extracted = buildPromptReviewInstructions(synthetic);
+    assert.match(extracted, /## Review Instructions/);
+    assert.match(extracted, /cite `path\/to\/file:line`/);
   });
 });
