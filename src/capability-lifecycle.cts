@@ -110,6 +110,12 @@ interface LifecycleOptions {
   /** Also delete CAPABILITY_DATA on remove (default false — data is preserved/prompted). */
   removeData?: boolean;
   /**
+   * When set, the resolved capability id MUST equal this or the operation is refused with NO writes.
+   * `gsd capability update <id>` passes the requested id so a source that has been retargeted or
+   * hand-edited to a different manifest id cannot silently act on (and overwrite) another capability.
+   */
+  expectedId?: string;
+  /**
    * Test seam: override the source resolver. Must honor promote:false semantics — return a
    * staged dir (left on disk for the caller to promote/clean). Defaults to the real resolver.
    */
@@ -276,6 +282,34 @@ function safeRmUnder(runtimeDir: string, rel: string): boolean {
   }
 }
 
+/**
+ * Resolve a shared-config file path RELATIVE to runtimeDir, confined to the scope root by realpath
+ * (mirrors safeRmUnder). Rejects absolute paths, `..`, and any relFile whose existing parent
+ * directory is a symlink escaping runtimeDir — so `--shared-file evil/x.json`, where `evil` is a
+ * pre-planted symlink pointing outside the scope, can never write outside it. Returns the safe
+ * absolute path, or null when the path is unsafe.
+ */
+function confinedSharedFile(runtimeDir: string, relFile: unknown): string | null {
+  if (typeof relFile !== 'string' || !relFile || path.isAbsolute(relFile) || relFile.split(/[/\\]/).includes('..')) {
+    return null;
+  }
+  let realRoot: string;
+  try { realRoot = fs.realpathSync(runtimeDir); } catch { return null; }
+  const target = path.resolve(realRoot, relFile);
+  const parentDir = path.dirname(target);
+  let realParent: string;
+  try {
+    realParent = fs.realpathSync(parentDir);
+  } catch {
+    // Parent does not exist yet (created inside the scope on write): a non-existent path cannot be a
+    // symlink escaping the root, so a lexical containment check is sufficient.
+    if (parentDir !== realRoot && !parentDir.startsWith(realRoot + path.sep)) return null;
+    return target;
+  }
+  if (realParent !== realRoot && !realParent.startsWith(realRoot + path.sep)) return null;
+  return path.join(realParent, path.basename(target));
+}
+
 // ---------------------------------------------------------------------------
 // Atomic directory promotion (stage -> swap, backup retained for the caller)
 // ---------------------------------------------------------------------------
@@ -393,10 +427,8 @@ function applyCapabilitySharedEdits(args: {
   if (hooks.length === 0 && mcpEntries.length === 0) return records;
 
   for (const relFile of sharedFiles) {
-    if (typeof relFile !== 'string' || !relFile || path.isAbsolute(relFile) || relFile.split(/[/\\]/).includes('..')) {
-      continue;
-    }
-    const file = path.join(runtimeDir, relFile);
+    const file = confinedSharedFile(runtimeDir, relFile);
+    if (file === null) continue; // unsafe path (absolute / .. / symlink escaping the scope root)
     const settings = readJsonFile(file) ?? {};
     let touched = false;
 
@@ -427,6 +459,14 @@ function applyCapabilitySharedEdits(args: {
         : {};
       for (const { name, config } of mcpEntries) {
         if (!name || isUnsafeKey(name)) continue;
+        // Marker isolation for the map-keyed mcpServers shape: only (re)write an entry we already own
+        // or a brand-new name. A collision with an UNOWNED entry (the user's, or another capability's)
+        // is SKIPPED so user config is never clobbered — hooks are arrays and append, but mcpServers is
+        // keyed by name, so a blind overwrite would silently destroy the existing server config.
+        const existing = mcpObj[name];
+        const ownedByUs = typeof existing === 'object' && existing !== null
+          && (existing as Record<string, unknown>)[CAP_MARKER] === capId;
+        if (existing !== undefined && !ownedByUs) continue;
         const stamped = (typeof config === 'object' && config !== null && !Array.isArray(config))
           ? { ...(config as Record<string, unknown>), [CAP_MARKER]: capId }
           : { value: config, [CAP_MARKER]: capId };
@@ -458,8 +498,8 @@ function stripCapabilitySharedEdits(args: {
   let stripped = 0;
   for (const edit of sharedEdits) {
     const relFile = edit && typeof edit.file === 'string' ? edit.file : '';
-    if (!relFile || path.isAbsolute(relFile) || relFile.split(/[/\\]/).includes('..')) continue;
-    const file = path.join(runtimeDir, relFile);
+    const file = confinedSharedFile(runtimeDir, relFile);
+    if (file === null) continue; // unsafe path (absolute / .. / symlink escaping the scope root)
     const settings = readJsonFile(file);
     if (settings === null) continue; // missing/unparseable — nothing to strip
     let changed = false;
@@ -500,6 +540,22 @@ function stripCapabilitySharedEdits(args: {
     if (changed) writeJsonFileAtomic(file, settings);
   }
   return stripped;
+}
+
+/**
+ * Is `id` a first-party capability id (present in the committed registry)? First-party always wins,
+ * so an overlay reusing one of these ids — even a non-reserved name like "ui" — must be refused at
+ * install (the loader would skip it at load anyway; rejecting here avoids writing an inert, shadowing
+ * bundle). Fail-open to `false` if the registry cannot be read (the reserved-prefix gate still applies).
+ */
+function isFirstPartyCapabilityId(id: string): boolean {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const reg = require('./capability-registry.cjs') as { capabilities?: Record<string, unknown> };
+    return !!(reg && reg.capabilities && Object.prototype.hasOwnProperty.call(reg.capabilities, id));
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -558,6 +614,12 @@ async function installCapability(spec: string, opts: LifecycleOptions): Promise<
     const manifest = readManifest(stagedDir);
     if (manifest === null) {
       return { status: 'blocked', blockReasons: ['staged capability.json is missing or invalid'] };
+    }
+    if (opts.expectedId && resolved.id !== opts.expectedId) {
+      return { status: 'blocked', id: resolved.id, blockReasons: [`source resolved to capability id "${resolved.id}" but "${opts.expectedId}" was expected; refusing`] };
+    }
+    if (isFirstPartyCapabilityId(resolved.id)) {
+      return { status: 'blocked', id: resolved.id, blockReasons: [`"${resolved.id}" is a first-party capability id and cannot be overridden by a third-party overlay`] };
     }
 
     const verdict = trustMod.evaluateInstallTrust({
@@ -696,6 +758,9 @@ async function upgradeCapability(spec: string, opts: LifecycleOptions): Promise<
   try {
     if (!lock) {
       return { status: 'blocked', id: resolved.id, blockReasons: ['another capability operation is in progress'] };
+    }
+    if (opts.expectedId && resolved.id !== opts.expectedId) {
+      return { status: 'blocked', id: resolved.id, blockReasons: [`source for "${opts.expectedId}" now resolves to a different capability id "${resolved.id}"; refusing to upgrade`] };
     }
     const existing = ledgerMod.readLedger(runtimeDir);
     const prior = existing && Object.prototype.hasOwnProperty.call(existing.entries, resolved.id)

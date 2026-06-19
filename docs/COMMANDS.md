@@ -1115,6 +1115,30 @@ Toggle which skills are surfaced — apply a profile, list, or disable a cluster
 /gsd-surface reset                  # Restore install-time profile
 ```
 
+### `gsd capability`
+
+Manage GSD capabilities — first-party (shipped) and third-party overlays. CLI form `gsd capability <subcommand>` (slash form `gsd:capability` on slash-command runtimes). See the [`gsd capability` command reference](reference/gsd-capability-command.md) for the full contract, source-spec forms, and install layout.
+
+| Subcommand | Description |
+|------------|-------------|
+| `install <spec> [--integrity …] [--scope global\|project] [--yes] [--shared-file <rel>]…` | Resolve, verify, consent-gate, and install a capability from a registry / git / npm / tarball / local source |
+| `update [<id> \| --all] [--scope …] [--yes]` | Re-resolve a capability's recorded source and upgrade it (atomic stage-then-swap) |
+| `remove <id> [--purge-data] [--scope …]` | Remove an installed overlay capability's files + marker-isolated shared edits (first-party cannot be removed here) |
+| `list [--json]` | List first-party + installed overlay capabilities as a JSON array |
+| `disable <id>` / `enable <id>` | Toggle a capability's activation state (same as `capability set <id> --off`/`--on`) |
+| `state` / `set <id> …` | Inspect resolved capability state / set activation + per-hook gates |
+
+```bash
+gsd capability list --json                           # All capabilities as JSON
+gsd capability install ./my-cap --scope project      # Install a local capability into the project
+gsd capability install npm:@org/gsd-cap-x@^1 --yes   # Install from npm, granting executable-surface consent
+gsd capability update my-cap                          # Upgrade from its recorded source
+gsd capability disable my-cap                         # Turn it off without removing it
+gsd capability remove my-cap                          # Remove the overlay capability
+```
+
+**Programmatic access:** `node gsd-tools.cjs capability <subcommand>` — see [CLI Tools Reference](CLI-TOOLS.md).
+
 ---
 
 ## Brownfield Commands
