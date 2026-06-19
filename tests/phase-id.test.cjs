@@ -107,8 +107,7 @@ describe('normalizePhaseName', () => {
   });
 
   test('custom phase IDs: project_code prefix is stripped, then numeric part is normalized', () => {
-    // The project-code prefix is stripped, leaving a numeric token to normalize.
-    // which is then normalized to '42' (no leading zero needed for 2+ digits)
+    // The project-code prefix is stripped, leaving a numeric token that normalizes to '42' (no leading zero needed for 2+ digits).
     assert.strictEqual(phaseId.normalizePhaseName('PROJ-42'), '42');
     assert.strictEqual(phaseId.normalizePhaseName('AUTH-101'), '101');
     assert.strictEqual(phaseId.normalizePhaseName('MANIFOLD-117'), '117');
