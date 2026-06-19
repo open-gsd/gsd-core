@@ -19,7 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdModule = require('./phase-id.cjs');
-const { escapeRegex, phaseMarkdownRegexSource } = phaseIdModule;
+const { escapeRegex, phaseMarkdownRegexSource, stripProjectCodePrefix } = phaseIdModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir } = planningWorkspace;
@@ -437,7 +437,7 @@ function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null, p
     if (m2 && normalized.has(normalizePhaseIdSegments(m2[1]).toLowerCase())) return true;
     const customMatch = dirName.match(/^([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*)/);
     if (customMatch && normalized.has(customMatch[1].toLowerCase())) return true;
-    const stripped = dirName.replace(/^[A-Z]{1,6}-(?=\d)/i, '');
+    const stripped = stripProjectCodePrefix(dirName);
     if (stripped !== dirName) {
       const sm = stripped.match(numericRe);
       if (sm && normalized.has(normalizePhaseIdSegments(sm[1]).toLowerCase())) return true;

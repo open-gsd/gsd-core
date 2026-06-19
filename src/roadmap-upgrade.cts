@@ -12,7 +12,10 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseIdMod = require('./phase-id.cjs');
 const { planningDir } = planningWorkspace;
+const { stripProjectCodePrefix } = phaseIdMod;
 
 // ─── Regex helpers ────────────────────────────────────────────────────────────
 
@@ -165,7 +168,7 @@ function assignSubIndices(phaseEntries: ParsedPhaseEntry[]): Map<number, Assigne
  */
 function extractPhaseNumFromDir(dirName: string): string | null {
   // Strip optional project_code prefix: "GSD-01-setup" → "01-setup"
-  const stripped = dirName.replace(/^[A-Z]{1,6}-(?=\d)/i, '');
+  const stripped = stripProjectCodePrefix(dirName);
   // Matches: digits + optional letter + optional decimal suffix, followed by '-' or end.
   // e.g. "02.1-hotfix" → "02.1", "01-setup" → "01"
   const m = stripped.match(/^(\d+[A-Z]?(?:\.\d+)*)(?:-|$)/i);
@@ -181,7 +184,7 @@ function extractPhaseNumFromDir(dirName: string): string | null {
  */
 function buildNewDirName(oldDirName: string, newId: string, projectCode: string | null): string {
   // Strip existing project_code prefix
-  const stripped = oldDirName.replace(/^[A-Z]{1,6}-(?=\d)/i, '');
+  const stripped = stripProjectCodePrefix(oldDirName);
 
   // Extract slug: everything after "NN-" (the old phase num, including decimal like 02.1)
   const slugMatch = stripped.match(/^\d+[A-Z]?(?:\.\d+)*-(.*)/i);
