@@ -214,7 +214,7 @@ The `install` subcommand accepts the following source specification forms.
 | Tarball URL | `https://host/path/cap-x.y.z.tgz` | Tarball — fetches over HTTPS, verifies SHA-512 when `--integrity` is supplied. |
 | Local path | `./local/path` (or an absolute path) | Local — copies from the filesystem path. Auto-update detection is not available for this form. |
 
-Which source forms are *permitted* is governed by the `capabilities.strict_known_registries` policy (see [Configuration](../CONFIGURATION.md) and [the capability trust model](../explanation/capability-trust-model.md)): `null`/absent is permissive, `[]` is lockdown (no third-party sources), and a host allowlist permits only matching registries.
+Which source forms are *permitted* is governed by the `capabilities.strict_known_registries` policy (see [Configuration](../CONFIGURATION.md) and [the capability trust model](../explanation/capability-trust-model.md)): `null`/absent is permissive, `[]` is lockdown (no third-party sources), and a host allowlist permits only matching registries. This policy is **project-scoped** — it is read from the current project's `.planning/config.json` and applied to installs run in that project regardless of `--scope`; there is no machine-wide source allowlist. (A present-but-unparseable config fails **closed** — external installs are blocked until it is fixed.)
 
 All permitted forms pass through the same pipeline: fetch → verify integrity or SHA pin → check `engines.gsd` → obtain consent → validate → extract → record ledger.
 

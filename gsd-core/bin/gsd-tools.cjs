@@ -1452,7 +1452,11 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       };
       // Resolve a --scope value to the lifecycle runtimeDir — the scope ROOT that holds
       // .gsd/capabilities/<id> and the .gsd-capabilities.json ledger, matching capability-loader's
-      // read paths exactly (global → $GSD_HOME||home; project → the resolved project root === cwd).
+      // read paths exactly (global → $GSD_HOME||home; project → the resolved project root). For the
+      // project scope this is just `cwd`: the outer dispatch already resolved cwd to the project root
+      // via findProjectRoot (capability is NOT in SKIP_ROOT_RESOLUTION), so no second resolve is needed.
+      // Note: the strict_known_registries policy (capReadStrict) is read from the PROJECT config
+      // regardless of --scope — it is a project-scoped policy; there is no machine-wide source allowlist.
       const capResolveScope = (scope) => {
         const s = scope || 'global';
         if (s !== 'global' && s !== 'project') {
@@ -1614,7 +1618,10 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
             scope,
             disclosure: trust.summarizeDisclosure(res.disclosure || {}),
           }, raw);
-        } else if (res.status === 'aborted' && res.requiresConsent) {
+        } else if (res.status === 'aborted') {
+          // 'aborted' always means "executable surface needs consent" in the lifecycle contract —
+          // match it regardless of the requiresConsent flag so a future aborted path can't fall
+          // through to the generic "blocked: unknown reason" arm with a misleading message.
           error(
             ['This capability declares executable surfaces and needs your consent before install:']
               .concat(trust.summarizeDisclosure(res.disclosure || {}).map((l) => '  ' + l))
@@ -1692,7 +1699,9 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
             output({ status: 'upgraded', id: r.id, fromVersion: r.fromVersion, toVersion: r.toVersion, scope, disclosure: r.disclosure }, raw);
           } else if (r.status === 'not_installed') {
             error(`capability "${id}" is not installed in ${scope} scope; use: capability install`, ERROR_REASON ? ERROR_REASON.USAGE : undefined);
-          } else if (r.status === 'aborted' && r.requiresConsent) {
+          } else if (r.status === 'aborted') {
+            // 'aborted' always means "needs consent" (see install) — handle it independently of the
+            // requiresConsent flag so it never falls through to the generic blocked arm.
             error(
               [`capability update for "${id}" changes its executable surface and needs your consent:`]
                 .concat((r.disclosure || []).map((l) => '  ' + l))

@@ -454,3 +454,22 @@ describe('capability install (config policy fail-closed)', () => {
     assert.match(`${r.error}\n${r.output}`, /external capability installs are disabled|blocked|array/i);
   });
 });
+
+// ─── code-review coverage gaps ──────────────────────────────────────────────
+
+describe('capability (argument + empty-state handling)', () => {
+  test('update --all over an empty ledger succeeds with an empty result set', () => {
+    const r = runGsdTools(['capability', 'update', '--all', '--scope', 'global', '--raw'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
+    assert.equal(r.success, true, `update --all failed: ${r.error || r.output}`);
+    const o = parse(r.output);
+    assert.deepEqual(o.updated, [], 'no installed capabilities → empty updated list');
+  });
+
+  test('a flag value that looks like another flag is rejected (no value swallowing)', () => {
+    const src = writeCapSource('flagcap');
+    // `--integrity --scope` — the value after --integrity is itself a flag, which must error, not be consumed.
+    const r = runGsdTools(['capability', 'install', src, '--integrity', '--scope', 'global'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
+    assert.equal(r.success, false);
+    assert.match(`${r.error}\n${r.output}`, /Missing value for --integrity/i);
+  });
+});
