@@ -21,16 +21,33 @@ import {
   DYNAMIC_KEY_PATTERNS,
 } from './configuration.cjs';
 
+// Frozen first-party capability config-schema — the fallback when no project cwd
+// is available (cwd-agnostic call sites).
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const capabilityRegistry = require('./capability-registry.cjs') as {
   configSchema?: Record<string, unknown>;
 };
 
-function isCapabilityConfigKey(keyPath: string): boolean {
+// Resolve the capability config-schema for a project (ADR-1244 D2). When a cwd is
+// supplied, compose installed overlay capabilities for THAT project — LAZILY (never
+// at module load: a bare require of this module never scans the filesystem) —
+// falling back to the frozen first-party schema. Without a cwd, first-party only.
+function _capabilityConfigSchema(cwd?: string): Record<string, unknown> {
+  if (typeof cwd === 'string' && cwd) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
+      const loaderMod: { loadRegistry: (o?: Record<string, unknown>) => { configSchema?: Record<string, unknown> } } = require('./capability-loader.cjs');
+      const schema = loaderMod.loadRegistry({ includeInstalled: true, cwd }).configSchema;
+      if (schema && typeof schema === 'object') return schema;
+    } catch { /* fall back to first-party */ }
+  }
+  const fp = capabilityRegistry.configSchema;
+  return fp && typeof fp === 'object' ? fp : {};
+}
+
+function isCapabilityConfigKey(keyPath: string, cwd?: string): boolean {
   if (typeof keyPath !== 'string') return false;
-  const schema = capabilityRegistry.configSchema;
-  if (!schema || typeof schema !== 'object') return false;
-  return Object.prototype.hasOwnProperty.call(schema, keyPath);
+  return Object.prototype.hasOwnProperty.call(_capabilityConfigSchema(cwd), keyPath);
 }
 
 /**
@@ -48,9 +65,9 @@ function isCentralConfigKey(keyPath: string): boolean {
  * Returns true if keyPath is a valid central, runtime-state, dynamic, or
  * federated Capability config key.
  */
-function isValidConfigKey(keyPath: string): boolean {
+function isValidConfigKey(keyPath: string, cwd?: string): boolean {
   if (isCentralConfigKey(keyPath)) return true;
-  return isCapabilityConfigKey(keyPath);
+  return isCapabilityConfigKey(keyPath, cwd);
 }
 
 export = {

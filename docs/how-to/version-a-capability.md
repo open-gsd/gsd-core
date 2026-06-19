@@ -28,6 +28,8 @@ Set the version in your manifest before every release:
 }
 ```
 
+> **First-party capabilities are versioned automatically.** The native capabilities shipped inside GSD (`capabilities/<id>/capability.json`) are stamped in lockstep with the GSD package version at release time by `scripts/sync-manifest-versions.cjs` — their `version` always equals the GSD version, so per-capability semver and `compatVersions` only carry independent signal for **third-party** capabilities. As an author of a third-party capability, you own your own version line; the lockstep rule does not apply to you.
+
 ### Decide when to raise `engines.gsd`
 
 The `engines.gsd` range expresses which GSD host versions your capability is compatible with. GSD enforces this as a hard gate at install time and again at load time.
@@ -42,19 +44,19 @@ When you do raise the lower bound:
 
 ### Maintain `compatVersions`
 
-`compatVersions` is a capability-version → minimum-GSD-version table that lets GSD offer older consumers a downgrade instead of a hard block:
+`compatVersions` is a capability-version → GSD-version-**range** table that lets GSD offer older consumers a downgrade instead of a hard block. Each value is a semver range (the same grammar as `engines.gsd`), evaluated against the running GSD version:
 
 ```jsonc
 {
   "version": "2.0.0",
   "engines": { "gsd": ">=1.7.0 <3.0.0" },
   "compatVersions": {
-    "1.2.0": "1.6.0"
+    "1.2.0": ">=1.6.0 <1.7.0"
   }
 }
 ```
 
-This entry tells GSD: "version 1.2.0 of this capability requires at least GSD 1.6.0." When a consumer's GSD is older than 1.7.0, GSD uses `compatVersions` to offer them version 1.2.0 instead of failing outright.
+This entry tells GSD: "version 1.2.0 of this capability is compatible with GSD versions `>=1.6.0 <1.7.0`." When a consumer's GSD is older than the current `engines.gsd` floor (1.7.0), GSD consults `compatVersions`, picks the **newest** capability version whose range the host satisfies, and offers that instead of failing outright.
 
 Add a new entry **only when you change `engines.gsd`** — that is the only moment an older GSD version and a specific capability version become correlated. A `compatVersions` entry is not meaningful for a capability distributed as a bare tarball URL (a tarball exposes a single version and cannot be auto-selected from a table); it is only actionable for sources that enumerate versions: git tags, a registry, or npm.
 
@@ -137,5 +139,5 @@ If the new version of a capability requires a GSD version newer than what you ha
 
 - [How to remove or disable a capability](remove-a-capability.md)
 - [Develop a Capability for GSD 1.5+](develop-a-capability.md)
-- [Capability manifest reference](../reference/capability-matrix.md)
+- [Capability manifest reference](../reference/capability-manifest.md)
 - [Turn a capability off (and keep it off)](turn-a-capability-off.md)

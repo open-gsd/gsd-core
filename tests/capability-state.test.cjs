@@ -1719,3 +1719,53 @@ describe('isCapabilityActive cross-runtime detection (GSD_RUNTIME → config.run
     }
   });
 });
+
+// ─── ADR-1244 D2 overlay wiring — capability-state sees installed overlays ───
+
+describe('ADR-1244 D2: overlay-aware registry wiring in capability-state', () => {
+  // Verifies that resolveCapabilityRuntimeState uses loadRegistry({includeInstalled:true})
+  // so a valid installed overlay capability appears in the capabilities list.
+  // The overlay cap has no activationKey so it activates freely.
+  const { resolveCapabilityRuntimeState } = require('../gsd-core/bin/lib/capability-state.cjs');
+
+  test('valid overlay capability appears in runtime state capabilities list', () => {
+    const overlayHome = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-state-overlay-'));
+    const prevGsdHome = process.env.GSD_HOME;
+    try {
+      // Write a valid overlay capability manifest
+      const capDir = path.join(overlayHome, '.gsd', 'capabilities', 'my-overlay-cap');
+      fs.mkdirSync(capDir, { recursive: true });
+      const capManifest = {
+        id: 'my-overlay-cap',
+        role: 'feature',
+        version: '1.0.0',
+        title: 'My Overlay Cap',
+        description: 'ADR-1244 D2 wiring test overlay',
+        tier: 'standard',
+        requires: [],
+        engines: { gsd: '>=0.0.0' },
+        runtimeCompat: { supported: ['*'], unsupported: [] },
+        skills: [], agents: [], hooks: [], config: {}, steps: [], contributions: [], gates: [],
+      };
+      fs.writeFileSync(path.join(capDir, 'capability.json'), JSON.stringify(capManifest), 'utf8');
+
+      // Point GSD_HOME to the overlay home so loadRegistry finds it
+      process.env.GSD_HOME = overlayHome;
+
+      // Use a non-existent cwd so no project-scope overlay is scanned — pure global
+      const nonExistentCwd = path.join(os.tmpdir(), 'cap-state-overlay-cwd-' + Date.now());
+      const result = resolveCapabilityRuntimeState(nonExistentCwd, undefined);
+
+      const overlayEntry = result.capabilities.find((c) => c.id === 'my-overlay-cap');
+      assert.ok(
+        overlayEntry !== undefined,
+        'overlay capability "my-overlay-cap" must appear in resolveCapabilityRuntimeState results ' +
+        '(ADR-1244 D2: capability-state must use overlay-aware loadRegistry)',
+      );
+    } finally {
+      if (prevGsdHome === undefined) delete process.env.GSD_HOME;
+      else process.env.GSD_HOME = prevGsdHome;
+      cleanup(overlayHome);
+    }
+  });
+});

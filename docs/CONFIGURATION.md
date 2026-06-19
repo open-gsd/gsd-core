@@ -550,6 +550,27 @@ Setting the parent object (`agent_skills_security`) directly is not supported; u
 
 ---
 
+## Capability Trust (`capabilities.*`)
+
+Policy for installing and updating third-party capabilities (ADR-1244). These keys govern the trust gate; they have no effect if you only ever use the native first-party capabilities shipped with GSD. They are **policy inputs** read by the `gsd capability` command flow, which passes the resulting decision into the capability lifecycle — `strict_known_registries` gates whether a source may be installed at all; `auto_update` is consulted by the `update`/`outdated` flow (which always re-prompts when a new version's executable surface set changes). The full rationale — including why there is no sandbox — is in [The capability trust model](explanation/the-capability-trust-model.md).
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `capabilities.strict_known_registries` | array \| null | `null` | Allowlist gating **which sources** third-party capabilities may be installed from. `null` (default) is permissive: external installs (git / npm / tarball) are allowed and each still passes the consent + integrity gate. `[]` (explicit empty array) is lockdown: **all external installs are blocked** — only local-filesystem installs are permitted (managed/enterprise mode). A non-empty list is a **host-based allowlist**: only sources whose host matches an entry (exact host or a subdomain of it — `github.com` matches `api.github.com` but never `evilgithub.com`) are permitted; add the literal token `npm` to permit the npm source kind. Local installs are never "external" and are always allowed. |
+| `capabilities.auto_update` | boolean | `false` | Whether installed third-party capabilities may auto-update. **Off by default.** Even when enabled, GSD re-prompts for explicit consent whenever a new version's executable surface set (hooks / command modules / MCP servers) differs from the installed one — the consent you gave was for a specific surface, not a blank cheque. |
+
+```bash
+# Lock the machine down to local-only capability installs:
+gsd config-set capabilities.strict_known_registries '[]'
+
+# Allow only your org's GitHub + npm:
+gsd config-set capabilities.strict_known_registries '["github.com", "npm"]'
+```
+
+> **Security note:** `strict_known_registries` matching is **host-based, not substring** — a lookalike host like `evilgithub.com` is rejected even when `github.com` is allowed. `integrity` (sha512) pins only the top-level fetched artifact, not an npm package's transitive dependency tree; see the trust-model explanation for that boundary.
+
+---
+
 ## Feature Flags
 
 Toggle optional capabilities via the `features.*` config namespace. Feature flags default to `false` (disabled) — enabling a flag opts into new behavior without affecting existing workflows.
@@ -654,6 +675,41 @@ gsd-tools query config-set features.thinking_partner false
 ```
 
 The `features.*` namespace is a dynamic key pattern — new feature flags can be added without modifying `VALID_CONFIG_KEYS`. Any key matching `features.<name>` is accepted by the config system.
+
+---
+
+## Capability Overlay (installed third-party capabilities)
+
+GSD supports an **installed overlay** of third-party capability manifests that are composed with the frozen first-party registry at runtime via `loadRegistry({ includeInstalled: true })` (ADR-1244; see [`docs/reference/capability-manifest.md`](reference/capability-manifest.md) and [`docs/how-to/import-a-capability-from-a-url.md`](how-to/import-a-capability-from-a-url.md)).
+
+### Install roots
+
+Capability manifests (`capability.json`) are discovered from two scoped roots:
+
+| Scope | Path |
+|-------|------|
+| Global | `$GSD_HOME/.gsd/capabilities/<id>/capability.json` |
+| Project | `<projectRoot>/.gsd/capabilities/<id>/capability.json` |
+
+`GSD_HOME` defaults to your home directory (`~`) when unset. Both roots are scanned on every `loadRegistry` call; neither requires config changes to activate.
+
+### Composition and first-party-wins invariant
+
+Installed overlay capabilities are merged via the same `buildRegistry` pipeline as first-party capabilities, so all derived views (`bySkill`, `byAgent`, `byLoopPoint`, `configKeys`) cover first-party and overlay entries identically. **First-party always wins**: an overlay entry is rejected at load time if its `id`, any owned skill or agent stem, or any federated config key collides with a first-party entry, or if its `id` uses a reserved prefix (`gsd-`, `gsd-core-`, `anthropic-`). Rejected entries emit a warning and are skipped; they never crash the load loop.
+
+### Load-time `engines.gsd` compatibility gate
+
+Each overlay manifest may declare an `engines.gsd` semver range. At load time GSD evaluates this range against the running GSD version. An overlay that does not satisfy the range is **skipped with a warning** — it is never loaded and never crashes the loop. Manifests without an `engines.gsd` field are accepted unconditionally.
+
+### Gate-kind fail-closed policy
+
+If a skipped overlay capability declared a `gate`-kind loop hook, the loop resolver **injects a blocking gate** at that hook point (fail CLOSED). Skipped capabilities whose hooks are `step` or `contribution` kind skip open — the loop proceeds without them.
+
+### Overlay config federation
+
+Config keys declared in an overlay capability's `.config` slice federate into the `loadConfig` return value via the same Federated Config channel as first-party capability keys. They appear as valid keys in `config-schema.cjs` (`isValidConfigKey`) and in the runtime config schema, so overlay capabilities can declare project-local config toggles without editing the central config schema.
+
+> **See also:** [`docs/reference/capability-manifest.md`](reference/capability-manifest.md) for the full `capability.json` schema, [`docs/how-to/import-a-capability-from-a-url.md`](how-to/import-a-capability-from-a-url.md) for installation steps, and [ADR-1244](adr/1244-runtime-capability-registry-overlay.md) for the design record.
 
 ---
 

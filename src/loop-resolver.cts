@@ -492,9 +492,11 @@ function cmdLoopRenderHooks(
     warnings?: string[];
     capabilities: Array<{ id: string; enabled?: boolean; active: boolean }>;
   };
-  // Registry is the static generated module — same object capability-state uses internally.
+  // Load overlay-aware registry (ADR-1244 D2 wiring) so installed third-party
+  // capabilities are visible to loop rendering exactly like first-party ones.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const registry = require('./capability-registry.cjs') as Record<string, unknown>;
+  const { loadRegistry } = require('./capability-loader.cjs') as { loadRegistry: (opts?: Record<string, unknown>) => Record<string, unknown> };
+  const registry = loadRegistry({ includeInstalled: true, cwd });
   const capabilityStatesById = new Map<string, { enabled?: boolean; active: boolean }>();
   for (const cap of state.capabilities || []) {
     capabilityStatesById.set(cap.id, cap);
@@ -507,6 +509,27 @@ function cmdLoopRenderHooks(
     const msg = (err instanceof Error) ? err.message : String(err);
     coreError(msg);
     return;
+  }
+
+  // ── ADR-1244 D2 fail-closed gate injection ────────────────────────────────────
+  // For every skipped overlay capability that declared a gate at this point,
+  // inject a synthetic BLOCKING gate into the resolved output so the loop HALTS
+  // rather than silently proceeding as if the gate had passed. step/contribution
+  // overlays that were skipped are left open (skip-open is correct for them).
+  const overlayMeta = (registry as { _overlay?: { blockedGates?: Array<{ point: string; capId: string; reason: string }> } })['_overlay'];
+  if (overlayMeta && Array.isArray(overlayMeta.blockedGates)) {
+    for (const blocked of overlayMeta.blockedGates) {
+      if (blocked.point === point) {
+        const syntheticGate: ActiveHook = {
+          capId: blocked.capId,
+          kind: 'gate',
+          blocking: true,
+          onError: 'halt',
+          check: `capability "${blocked.capId}" was skipped at load (${blocked.reason}); its gate at ${point} cannot be evaluated — failing closed`,
+        };
+        resolved.activeHooks.push(syntheticGate);
+      }
+    }
   }
 
   // --active-cap mode: print exactly 'true' or 'false' with no envelope

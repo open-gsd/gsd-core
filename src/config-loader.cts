@@ -42,6 +42,10 @@ import federatedConfigModule = require('./federated-config.cjs');
 const { mergeFederatedConfig } = federatedConfigModule;
 // The capability-registry.cjs is generated and lives in the same gsd-core/bin/lib/ output dir.
 // Both config-loader.cjs and capability-registry.cjs land in gsd-core/bin/lib/ at build time.
+// This is the FROZEN first-party registry — used as the test-seam default and the
+// fallback. Overlay (installed third-party) config-key federation is cwd-dependent
+// and composed PER loadConfig CALL by _federatedConfigSchema(cwd) below (ADR-1244 D2),
+// never eagerly at module load.
 // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
 const _capabilityRegistryReal: { configSchema?: Record<string, unknown> } = require('./capability-registry.cjs');
 
@@ -349,11 +353,33 @@ function _applyFederatedValues(
  * When validKeys is non-empty, applies values into a shallow clone to avoid
  * mutating shared CONFIG_DEFAULTS/module constants.
  */
+// Resolve the federated capability config-schema for a project (ADR-1244 D2).
+// A test override (via _setFederatedRegistryForTests) wins; otherwise, when a
+// project cwd is available, compose the installed overlay for THAT project —
+// LAZILY (never at module load, so a bare require never scans the filesystem and
+// the result is never cached for the wrong cwd) — falling back to the frozen
+// first-party schema when there is no cwd or the loader is unavailable.
+function _federatedConfigSchema(cwd?: string): Record<string, unknown> | undefined {
+  if (_capabilityRegistry !== _capabilityRegistryReal) {
+    return _capabilityRegistry.configSchema; // explicit test override
+  }
+  if (typeof cwd === 'string' && cwd) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
+      const loaderMod: { loadRegistry: (o?: Record<string, unknown>) => { configSchema?: Record<string, unknown> } } = require('./capability-loader.cjs');
+      const schema = loaderMod.loadRegistry({ includeInstalled: true, cwd }).configSchema;
+      if (schema && typeof schema === 'object') return schema;
+    } catch { /* fall back to first-party */ }
+  }
+  return _capabilityRegistryReal.configSchema;
+}
+
 function _applyFederatedOverlay(
   baseConfig: Record<string, unknown>,
   userConfig: Record<string, unknown>,
+  cwd?: string,
 ): Record<string, unknown> {
-  const _fedRegistrySchema = _capabilityRegistry.configSchema;
+  const _fedRegistrySchema = _federatedConfigSchema(cwd);
   if (!_fedRegistrySchema || typeof _fedRegistrySchema !== 'object') return baseConfig;
   const _fedOverlay = mergeFederatedConfig({
     configSchema: _fedRegistrySchema,
@@ -508,7 +534,7 @@ function loadConfigResolved(cwd: string, options: Record<string, unknown> = {}):
 
     let _preWarningFedValidKeys: string[] = [];
     try {
-      const _fedRegistrySchemaEarly = _capabilityRegistry.configSchema;
+      const _fedRegistrySchemaEarly = _federatedConfigSchema(cwd);
       if (_fedRegistrySchemaEarly && typeof _fedRegistrySchemaEarly === 'object') {
         const _earlyOverlay = mergeFederatedConfig({
           configSchema: _fedRegistrySchemaEarly,
@@ -613,7 +639,7 @@ function loadConfigResolved(cwd: string, options: Record<string, unknown> = {}):
     // ADR-857 phase 3b: federated config overlay
     try {
       if (_preWarningFedValidKeys.length > 0) {
-        const _fedRegistrySchema = _capabilityRegistry.configSchema;
+        const _fedRegistrySchema = _federatedConfigSchema(cwd);
         if (_fedRegistrySchema && typeof _fedRegistrySchema === 'object') {
           const _fedOverlay = mergeFederatedConfig({
             configSchema: _fedRegistrySchema,
@@ -651,7 +677,7 @@ function loadConfigResolved(cwd: string, options: Record<string, unknown> = {}):
       }
       // Branch C: .planning/ exists but no config.json and no root config — federated/builtin defaults
       try {
-        return { config: _applyFederatedOverlay(defaults, {}), source: 'builtin-defaults', degraded: false };
+        return { config: _applyFederatedOverlay(defaults, {}, cwd), source: 'builtin-defaults', degraded: false };
       } catch {
         return { config: defaults, source: 'builtin-defaults', degraded: false };
       }
@@ -692,14 +718,14 @@ function loadConfigResolved(cwd: string, options: Record<string, unknown> = {}):
       };
       // Branch D: global-defaults
       try {
-        return { config: _applyFederatedOverlay(_globalBaseCfg, globalDefaults), source: 'global-defaults', degraded: false };
+        return { config: _applyFederatedOverlay(_globalBaseCfg, globalDefaults, cwd), source: 'global-defaults', degraded: false };
       } catch {
         return { config: _globalBaseCfg, source: 'global-defaults', degraded: false };
       }
     } catch {
       // Branch E: no global defaults
       try {
-        return { config: _applyFederatedOverlay(defaults, {}), source: 'builtin-defaults', degraded: false };
+        return { config: _applyFederatedOverlay(defaults, {}, cwd), source: 'builtin-defaults', degraded: false };
       } catch {
         return { config: defaults, source: 'builtin-defaults', degraded: false };
       }

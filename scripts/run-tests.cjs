@@ -462,6 +462,20 @@ function main() {
   delete process.env.GSD_PROJECT;
   delete process.env.GSD_WORKSTREAM;
   delete process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS;
+  // Sandbox the overlay home so the loader's global scan ($GSD_HOME/.gsd/capabilities)
+  // cannot read a developer's real installed capabilities during tests (ADR-1244 D2).
+  // IDEMPOTENT: a nested run-tests spawn (e.g. tests/run-tests-harness.test.cjs)
+  // inherits this sandbox via env — it must REUSE it, never mkdtemp a fresh dir per
+  // invocation (that churned ~20+ temp dirs per harness run and amplified Docker load).
+  {
+    const { mkdtempSync } = require('fs');
+    const { join: _join, basename: _basename } = require('path');
+    const { tmpdir } = require('os');
+    const _gh = process.env.GSD_HOME;
+    if (!_gh || !_basename(_gh).startsWith('gsd-test-home-')) {
+      process.env.GSD_HOME = mkdtempSync(_join(tmpdir(), 'gsd-test-home-'));
+    }
+  }
 
   // Log selected files to stderr for CI / harness-test visibility.
   // node:test default reporter doesn't echo filenames, so this gives

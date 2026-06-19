@@ -138,7 +138,7 @@ Runtime capabilities describe how GSD projects its artefacts onto one host CLI. 
 
 | Axis | Field | Type summary |
 |---|---|---|
-| Config home | `runtime.configHome` | Structured object with `kind` (`dot-home` \| `dot-home-nested` \| `xdg` \| `generic-agents-root`), `name`, optional `parent`, `env[]`, `probe[]`, `probeExists`, `skillsHome`. |
+| Config home | `runtime.configHome` | Structured object with `kind` (`dot-home` \| `dot-home-nested` \| `xdg` \| `generic-agents-root`), `name`, optional `parent`, `env[]`, `probe[]`, `probeExists`, `skillsHome`. `probeExists` is an optional sub-path applied to probe candidates: for `generic-agents-root` it is a hard filter (a candidate qualifies only if `<candidate>/<probeExists>` exists); for `dot-home-nested` it is a preference that makes probing pick the candidate GSD owns (e.g. `gsd-core/VERSION`) over a bare-existing sibling before falling back — see ADR-1016 and #213/#217. |
 | Config format | `runtime.configFormat` | Closed enum: `settings-json` \| `toml` \| `markdown` \| `markdown-dir` \| `none`. |
 | Artefact layout | `runtime.artifactLayout` | Object with `global` and `local` arrays of `ArtifactKind` (`kind`, `destSubpath`, `prefix`, `nesting`, `recursive`, `stage`). |
 | Command style | `runtime.commandStyle` | Closed enum: `slash-hyphen` \| `shell-var`. |

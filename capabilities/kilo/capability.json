@@ -1,15 +1,23 @@
 {
   "id": "kilo",
   "role": "runtime",
+  "version": "1.5.1-dev.0",
   "title": "Kilo Code",
   "description": "Kilo Code — XDG-based config dir; global skills at ~/.kilo/skills (separate from XDG config); flat command/ + skills artifact layout; no lifecycle hook registration; tier-2 support.",
   "tier": "core",
   "requires": [],
+  "engines": {
+    "gsd": ">=1.6.0"
+  },
   "runtime": {
     "configHome": {
       "kind": "xdg",
       "name": "kilo",
-      "env": ["KILO_CONFIG_DIR", "KILO_CONFIG", "XDG_CONFIG_HOME"],
+      "env": [
+        "KILO_CONFIG_DIR",
+        "KILO_CONFIG",
+        "XDG_CONFIG_HOME"
+      ],
       "skillsHome": {
         "kind": "dot-home",
         "name": ".kilo",

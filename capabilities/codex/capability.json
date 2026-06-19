@@ -1,15 +1,21 @@
 {
   "id": "codex",
   "role": "runtime",
+  "version": "1.5.1-dev.0",
   "title": "OpenAI Codex CLI",
   "description": "OpenAI Codex CLI — shell-var command style; per-agent sandbox tiers; config.toml + hooks.json hook surface; tier-1 support.",
   "tier": "core",
   "requires": [],
+  "engines": {
+    "gsd": ">=1.6.0"
+  },
   "runtime": {
     "configHome": {
       "kind": "dot-home",
       "name": ".codex",
-      "env": ["CODEX_HOME"]
+      "env": [
+        "CODEX_HOME"
+      ]
     },
     "configFormat": "toml",
     "artifactLayout": {

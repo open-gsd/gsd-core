@@ -1,12 +1,23 @@
 {
   "id": "graphify",
   "role": "feature",
+  "version": "1.5.1-dev.0",
   "title": "Knowledge graph",
   "description": "Build, query, and inspect the project knowledge graph in `.planning/graphs/`; exposes graphify CLI subcommands (build, query, status, diff) and the /gsd-graphify skill.",
   "tier": "full",
   "requires": [],
-  "runtimeCompat": { "supported": ["*"], "unsupported": [] },
-  "skills": ["graphify"],
+  "engines": {
+    "gsd": ">=1.6.0"
+  },
+  "runtimeCompat": {
+    "supported": [
+      "*"
+    ],
+    "unsupported": []
+  },
+  "skills": [
+    "graphify"
+  ],
   "agents": [],
   "activationKey": "graphify.enabled",
   "config": {

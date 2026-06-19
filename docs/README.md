@@ -65,6 +65,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [The phase loop](explanation/the-phase-loop.md) — design rationale for the Discuss → Plan → Execute → Verify → Ship cycle
 - [Multi-agent orchestration](explanation/multi-agent-orchestration.md) — how subagents are spawned, scoped, and coordinated
 - [Security model](explanation/security-model.md) — trust boundaries, permissions, and safe automation
+- [The capability trust model](explanation/the-capability-trust-model.md) — why third-party capabilities are gated by consent + integrity + reversibility, not a sandbox
 - [Architecture](ARCHITECTURE.md) — system architecture, agent model, and data flow
 - [Discuss modes](workflow-discuss-mode.md) — assumptions mode vs interview mode for `/gsd-discuss-phase`
 - [Context monitoring](context-monitor.md) — context window monitoring hook architecture
