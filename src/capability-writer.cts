@@ -24,7 +24,14 @@
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
-const { output: coreOutput, error: coreError } = ioMod;
+const { output: coreOutput } = ioMod;
+
+// ExitError (NOT process.exit) is how every gsd-tools command signals a non-zero exit: runMain
+// translates it to process.exitCode so buffered stdout flushes first. Calling process.exit() here
+// truncates a just-written --raw JSON payload before the reader sees it (a real silent-output bug).
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import cliExitMod = require('./cli-exit.cjs');
+const { ExitError } = cliExitMod;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import capabilityStateMod = require('./capability-state.cjs');
@@ -444,7 +451,8 @@ function cmdCapabilitySet(
     // Do NOT print human stderr lines — raw consumers parse the JSON.
     coreOutput({ capabilities: result.capabilities, warnings: result.warnings, errors: result.errors }, true);
     if (result.errors.length > 0) {
-      process.exit(1);
+      // Throw (don't process.exit) so the JSON written just above flushes before the process ends.
+      throw new ExitError(1);
     }
     return;
   }
@@ -457,10 +465,12 @@ function cmdCapabilitySet(
     process.stderr.write(`capability set: error: ${e}\n`);
   }
 
-  // Exit non-zero if any errors (hard failures — requested action was not realized).
+  // Exit non-zero if any errors (hard failures — requested action was not realized). The per-error
+  // lines were already written to stderr above; signal the exit code via ExitError (not process.exit)
+  // so any pending stdout/stderr flushes — runMain maps it to process.exitCode.
   if (result.errors.length > 0) {
-    coreError(`capability set: ${String(result.errors.length)} error(s) — see above`);
-    return; // unreachable — coreError calls process.exit(1)
+    process.stderr.write(`Error: capability set: ${String(result.errors.length)} error(s) — see above\n`);
+    throw new ExitError(1);
   }
 
   // Human-readable summary: focus on the target capability

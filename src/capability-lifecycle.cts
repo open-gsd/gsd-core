@@ -110,6 +110,12 @@ interface LifecycleOptions {
   /** Also delete CAPABILITY_DATA on remove (default false — data is preserved/prompted). */
   removeData?: boolean;
   /**
+   * When set, the resolved capability id MUST equal this or the operation is refused with NO writes.
+   * `gsd capability update <id>` passes the requested id so a source that has been retargeted or
+   * hand-edited to a different manifest id cannot silently act on (and overwrite) another capability.
+   */
+  expectedId?: string;
+  /**
    * Test seam: override the source resolver. Must honor promote:false semantics — return a
    * staged dir (left on disk for the caller to promote/clean). Defaults to the real resolver.
    */
@@ -502,6 +508,22 @@ function stripCapabilitySharedEdits(args: {
   return stripped;
 }
 
+/**
+ * Is `id` a first-party capability id (present in the committed registry)? First-party always wins,
+ * so an overlay reusing one of these ids — even a non-reserved name like "ui" — must be refused at
+ * install (the loader would skip it at load anyway; rejecting here avoids writing an inert, shadowing
+ * bundle). Fail-open to `false` if the registry cannot be read (the reserved-prefix gate still applies).
+ */
+function isFirstPartyCapabilityId(id: string): boolean {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const reg = require('./capability-registry.cjs') as { capabilities?: Record<string, unknown> };
+    return !!(reg && reg.capabilities && Object.prototype.hasOwnProperty.call(reg.capabilities, id));
+  } catch {
+    return false;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Install
 // ---------------------------------------------------------------------------
@@ -558,6 +580,12 @@ async function installCapability(spec: string, opts: LifecycleOptions): Promise<
     const manifest = readManifest(stagedDir);
     if (manifest === null) {
       return { status: 'blocked', blockReasons: ['staged capability.json is missing or invalid'] };
+    }
+    if (opts.expectedId && resolved.id !== opts.expectedId) {
+      return { status: 'blocked', id: resolved.id, blockReasons: [`source resolved to capability id "${resolved.id}" but "${opts.expectedId}" was expected; refusing`] };
+    }
+    if (isFirstPartyCapabilityId(resolved.id)) {
+      return { status: 'blocked', id: resolved.id, blockReasons: [`"${resolved.id}" is a first-party capability id and cannot be overridden by a third-party overlay`] };
     }
 
     const verdict = trustMod.evaluateInstallTrust({
@@ -696,6 +724,9 @@ async function upgradeCapability(spec: string, opts: LifecycleOptions): Promise<
   try {
     if (!lock) {
       return { status: 'blocked', id: resolved.id, blockReasons: ['another capability operation is in progress'] };
+    }
+    if (opts.expectedId && resolved.id !== opts.expectedId) {
+      return { status: 'blocked', id: resolved.id, blockReasons: [`source for "${opts.expectedId}" now resolves to a different capability id "${resolved.id}"; refusing to upgrade`] };
     }
     const existing = ledgerMod.readLedger(runtimeDir);
     const prior = existing && Object.prototype.hasOwnProperty.call(existing.entries, resolved.id)

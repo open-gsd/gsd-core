@@ -751,6 +751,14 @@ function captureStdoutSyncWrites(run) {
       return captured;
     }, (err) => {
       restore();
+      // The wrapped command may have written to stdout BEFORE it threw — e.g. a --raw
+      // command that emits a JSON result/error envelope and THEN throws ExitError to set a
+      // non-zero exit code (capability set/disable on an unknown id). Without this flush that
+      // captured output is silently discarded (the success-path flush at the call site never
+      // runs on a throw). Emit it now; the error still propagates so the exit code is preserved.
+      if (captured) {
+        try { originalWriteSync.call(fs, 1, resolveAtFileOutput(captured)); } catch { /* best-effort flush */ }
+      }
       throw err;
     });
 }
@@ -1456,7 +1464,9 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       };
       // capabilities.strict_known_registries policy (null=permissive, []=lockdown, [hosts]=allowlist).
       // loadConfig's whitelist does not surface this key, so read config.json directly (drift-guard pattern);
-      // undefined => the lifecycle's permissive default.
+      // undefined => the lifecycle's permissive default. The raw value is passed THROUGH verbatim — a
+      // malformed (non-array, non-null) value must reach the trust gate so it can fail CLOSED, not be
+      // silently downgraded to permissive here.
       const capReadStrict = () => {
         try {
           const { planningDir } = require('./lib/planning-workspace.cjs');
@@ -1464,8 +1474,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
           if (fs.existsSync(cfgPath)) {
             const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
             if (cfg && cfg.capabilities && Object.prototype.hasOwnProperty.call(cfg.capabilities, 'strict_known_registries')) {
-              const v = cfg.capabilities.strict_known_registries;
-              if (v === null || Array.isArray(v)) return v;
+              return cfg.capabilities.strict_known_registries;
             }
           }
         } catch { /* unreadable/missing config — permissive default */ }
@@ -1622,18 +1631,22 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         const { scope, runtimeDir } = capResolveScope(capFlagValue('--scope'));
         const lifecycle = require('./lib/capability-lifecycle.cjs');
         const ledgerMod = require('./lib/capability-ledger.cjs');
+        const trust = require('./lib/capability-trust.cjs');
         try { lifecycle.reconcileCapabilities({ runtimeDir }); } catch { /* best-effort crash recovery */ }
         const ledger = ledgerMod.readLedger(runtimeDir);
         const entries = (ledger && ledger.entries) || {};
         const upgradeOne = async (capId) => {
           const entry = entries[capId];
           if (!entry) return { id: capId, status: 'not_installed' };
+          // expectedId pins the op to the requested id: a retargeted/edited source that now resolves
+          // to a different manifest id is refused by the lifecycle rather than upgrading the wrong cap.
           const r = await lifecycle.upgradeCapability(entry.source, {
             runtimeDir,
             hostVersion: capHostVersion(),
             consentGranted: capHasFlag('--yes'),
             sharedFiles: capRepeatedFlag('--shared-file'),
             strictKnownRegistries: capReadStrict(),
+            expectedId: capId,
           });
           return {
             id: capId,
@@ -1642,6 +1655,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
             toVersion: r.toVersion,
             requiresConsent: r.requiresConsent,
             blockReasons: r.blockReasons,
+            disclosure: r.disclosure ? trust.summarizeDisclosure(r.disclosure) : undefined,
           };
         };
         if (all) {
@@ -1651,15 +1665,31 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
           for (const capId of Object.keys(entries)) {
             results.push(await upgradeOne(capId));
           }
+          const failed = results.filter((x) => x.status !== 'upgraded');
+          if (failed.length > 0) {
+            // Some entries did not upgrade (aborted / blocked) — surface as a non-zero exit so
+            // automation never reads a partial `--all` run as a clean success.
+            error(
+              `capability update --all: ${failed.length} of ${results.length} did not upgrade.\n` +
+                JSON.stringify({ scope, updated: results }, null, 2),
+              ERROR_REASON ? ERROR_REASON.SDK_FAIL_FAST : undefined,
+            );
+          }
           output({ scope, updated: results }, raw);
         } else {
           const r = await upgradeOne(id);
           if (r.status === 'upgraded') {
-            output({ status: 'upgraded', id: r.id, fromVersion: r.fromVersion, toVersion: r.toVersion, scope }, raw);
+            output({ status: 'upgraded', id: r.id, fromVersion: r.fromVersion, toVersion: r.toVersion, scope, disclosure: r.disclosure }, raw);
           } else if (r.status === 'not_installed') {
             error(`capability "${id}" is not installed in ${scope} scope; use: capability install`, ERROR_REASON ? ERROR_REASON.USAGE : undefined);
           } else if (r.status === 'aborted' && r.requiresConsent) {
-            error(`capability update for "${id}" changes its executable surface and needs consent; re-run with --yes`, ERROR_REASON ? ERROR_REASON.USAGE : undefined);
+            error(
+              [`capability update for "${id}" changes its executable surface and needs your consent:`]
+                .concat((r.disclosure || []).map((l) => '  ' + l))
+                .concat(['Re-run with --yes to grant consent and update.'])
+                .join('\n'),
+              ERROR_REASON ? ERROR_REASON.USAGE : undefined,
+            );
           } else {
             error(`capability update blocked: ${(r.blockReasons || ['unknown reason']).join('; ')}`, ERROR_REASON ? ERROR_REASON.SDK_FAIL_FAST : undefined);
           }
@@ -1671,13 +1701,19 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
           error('Missing <id> for: capability remove <id>', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
         }
         const { scope, runtimeDir } = capResolveScope(capFlagValue('--scope'));
-        const loader = require('./lib/capability-loader.cjs');
-        const base = loader.loadRegistry();
-        if (base && base.capabilities && Object.prototype.hasOwnProperty.call(base.capabilities, id)) {
-          error(`"${id}" is a first-party capability and cannot be removed here; use the product uninstaller (gsd --uninstall)`, ERROR_REASON ? ERROR_REASON.USAGE : undefined);
-        }
         const lifecycle = require('./lib/capability-lifecycle.cjs');
+        const ledgerMod = require('./lib/capability-ledger.cjs');
         try { lifecycle.reconcileCapabilities({ runtimeDir }); } catch { /* best-effort crash recovery */ }
+        // Ledger first: an installed overlay is removable even if its id shadows a first-party name.
+        // Only when the id is NOT an installed overlay do we reject a first-party id (vs. a typo).
+        const removeLedger = ledgerMod.readLedger(runtimeDir);
+        const inLedger = !!(removeLedger && removeLedger.entries && Object.prototype.hasOwnProperty.call(removeLedger.entries, id));
+        if (!inLedger) {
+          const base = require('./lib/capability-loader.cjs').loadRegistry();
+          if (base && base.capabilities && Object.prototype.hasOwnProperty.call(base.capabilities, id)) {
+            error(`"${id}" is a first-party capability and cannot be removed here; use the product uninstaller (gsd --uninstall)`, ERROR_REASON ? ERROR_REASON.USAGE : undefined);
+          }
+        }
         const res = lifecycle.removeCapability(id, { runtimeDir, removeData: capHasFlag('--purge-data') });
         if (res.status === 'removed') {
           output({

@@ -128,7 +128,7 @@ gsd capability disable <id> [--config-dir <path>] [--runtime <r>] [--scope <s>]
 
 **Behaviour**
 
-Marks the capability **inactive** in the runtime activation state — identical to `gsd capability set <id> --off`. A disabled capability stays on disk; it is excluded from the active surface and contributes no hooks, config keys, or loop extension registrations until re-enabled. This toggles the capability-state layer (the runtime config), not the install ledger, so it applies to first-party and overlay capabilities alike. `enable` reverses it without re-fetching.
+Marks the capability **inactive** in the runtime activation state — identical to `gsd capability set <id> --off`. A disabled capability stays on disk; it is excluded from the active surface and contributes no hooks, config keys, or loop extension registrations until re-enabled. This toggles the capability-state layer (the runtime config), not the install ledger. The id must be a capability known to the registry; activation toggling of an installed **third-party overlay** by id is not yet wired through this path — remove an overlay with `gsd capability remove`. `enable` reverses a disable without re-fetching.
 
 ---
 

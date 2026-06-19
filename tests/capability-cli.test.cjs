@@ -42,6 +42,17 @@ function makeCwd() {
   return cwd;
 }
 
+/** A project cwd whose config carries a given capabilities.strict_known_registries value. */
+function makeCwdWithStrict(strictValue) {
+  const cwd = tmpDir('cap-cli-cwd-');
+  fs.mkdirSync(path.join(cwd, '.planning'), { recursive: true });
+  fs.writeFileSync(
+    path.join(cwd, '.planning', 'config.json'),
+    JSON.stringify({ capabilities: { strict_known_registries: strictValue } }),
+  );
+  return cwd;
+}
+
 /**
  * Write a conformant local capability source dir and return its absolute path
  * (usable directly as an install <spec>). Declarative by default; pass `hooks`
@@ -286,5 +297,110 @@ describe('capability (unknown)', () => {
     const r = runGsdTools(['capability', 'bogus'], makeCwd());
     assert.equal(r.success, false);
     assert.match(`${r.error}\n${r.output}`, /install, update, remove, list, disable, enable, state, set/);
+  });
+});
+
+// ─── review-hardening (adversarial-review fixes) ────────────────────────────
+
+describe('capability install (trust hardening)', () => {
+  test('an overlay reusing a first-party capability id is blocked', () => {
+    // Pick a real first-party id and try to install an overlay that shadows it.
+    const reg = require('../gsd-core/bin/lib/capability-registry.cjs');
+    const firstParty = Object.keys(reg.capabilities)[0];
+    const home = tmpDir('cap-cli-home-');
+    const src = writeCapSource(firstParty);
+    const r = runGsdTools(['capability', 'install', src, '--scope', 'global'], makeCwd(), scopeEnv(home));
+    assert.equal(r.success, false);
+    assert.match(`${r.error}\n${r.output}`, /first-party capability id/i);
+    assert.equal(readLedgerEntry(home, firstParty), null);
+  });
+
+  test('a malformed strict_known_registries value fails closed (does not downgrade to permissive)', () => {
+    // A hand-edited string instead of an array must BLOCK an external source, not be ignored.
+    const cwd = makeCwdWithStrict('github.com');
+    const r = runGsdTools(['capability', 'install', 'https://github.com/x/y.git', '--scope', 'project'], cwd, { GSD_WORKSTREAM: '', GSD_PROJECT: '' });
+    assert.equal(r.success, false);
+    assert.match(`${r.error}\n${r.output}`, /must be an array|blocked/i);
+  });
+
+  test('strict_known_registries: [] (lockdown) blocks an external source', () => {
+    const cwd = makeCwdWithStrict([]);
+    const r = runGsdTools(['capability', 'install', 'https://github.com/x/y.git', '--scope', 'project'], cwd, { GSD_WORKSTREAM: '', GSD_PROJECT: '' });
+    assert.equal(r.success, false);
+    assert.match(`${r.error}\n${r.output}`, /external capability installs are disabled|blocked/i);
+  });
+});
+
+describe('capability update (id-pinning + reporting)', () => {
+  test('update refuses when the recorded source now resolves to a different id', () => {
+    const home = tmpDir('cap-cli-home-');
+    const src = writeCapSource('orig');
+    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home)).success, true);
+    // Retarget the source to a different manifest id.
+    const cap = JSON.parse(fs.readFileSync(path.join(src, 'capability.json'), 'utf8'));
+    cap.id = 'switched';
+    cap.version = '2.0.0';
+    fs.writeFileSync(path.join(src, 'capability.json'), JSON.stringify(cap, null, 2));
+    const r = runGsdTools(['capability', 'update', 'orig', '--scope', 'global'], makeCwd(), scopeEnv(home));
+    assert.equal(r.success, false);
+    assert.match(`${r.error}\n${r.output}`, /different capability id|refusing/i);
+    // The original is untouched; nothing named 'switched' got installed.
+    assert.equal(readLedgerEntry(home, 'orig').version, '1.0.0');
+    assert.equal(readLedgerEntry(home, 'switched'), null);
+  });
+
+  test('update --all exits non-zero when any entry fails to upgrade', () => {
+    const home = tmpDir('cap-cli-home-');
+    const src = writeCapSource('exupd', { hooks: [{ event: 'PostToolUse', script: 'hooks/a.js' }] });
+    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'global', '--yes', '--raw'], makeCwd(), scopeEnv(home)).success, true);
+    // Change the executable surface (new hook script) so the update needs re-consent.
+    const cap = JSON.parse(fs.readFileSync(path.join(src, 'capability.json'), 'utf8'));
+    cap.version = '2.0.0';
+    cap.hooks = [{ event: 'PostToolUse', script: 'hooks/b.js' }];
+    fs.writeFileSync(path.join(src, 'capability.json'), JSON.stringify(cap, null, 2));
+    fs.writeFileSync(path.join(src, 'hooks', 'b.js'), '// artifact');
+    const r = runGsdTools(['capability', 'update', '--all', '--scope', 'global'], makeCwd(), scopeEnv(home));
+    assert.equal(r.success, false, 'partial --all failure must be non-zero');
+    assert.match(`${r.error}\n${r.output}`, /did not upgrade/i);
+    // The aborted update left the old version intact.
+    assert.equal(readLedgerEntry(home, 'exupd').version, '1.0.0');
+  });
+
+  test('a successful executable update reports the consented disclosure', () => {
+    const home = tmpDir('cap-cli-home-');
+    const src = writeCapSource('discl', { hooks: [{ event: 'PostToolUse', script: 'hooks/run.js' }] });
+    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'global', '--yes', '--raw'], makeCwd(), scopeEnv(home)).success, true);
+    const cap = JSON.parse(fs.readFileSync(path.join(src, 'capability.json'), 'utf8'));
+    cap.version = '2.0.0'; // same hook script => same exec set, no re-consent needed
+    fs.writeFileSync(path.join(src, 'capability.json'), JSON.stringify(cap, null, 2));
+    const r = runGsdTools(['capability', 'update', 'discl', '--scope', 'global', '--yes', '--raw'], makeCwd(), scopeEnv(home));
+    assert.equal(r.success, true, `update failed: ${r.error || r.output}`);
+    const o = parse(r.output);
+    assert.equal(o.status, 'upgraded');
+    assert.ok(Array.isArray(o.disclosure) && o.disclosure.length > 0, 'disclosure reported');
+  });
+});
+
+describe('capability disable (overlay boundary)', () => {
+  test('disabling an unknown id (non-raw) reports the error on stderr and exits non-zero', () => {
+    const rcd = tmpDir('cap-cli-rcd-');
+    const r = runGsdTools(['capability', 'disable', 'totally-unknown-xyz', '--config-dir', rcd], makeCwd());
+    assert.equal(r.success, false);
+    assert.match(`${r.error}\n${r.output}`, /unknown capability/i);
+  });
+
+  // Regression for the silent-stdout bug: a --raw command that writes a result/error envelope and
+  // then throws (to set a non-zero exit) used to lose ALL of stdout — captureStdoutSyncWrites
+  // buffered fd-1 output and discarded it on the throw path, and cmdCapabilitySet exited via
+  // process.exit() (bypassing the wrapper). On the old code stdout was 0 bytes; now the JSON
+  // error envelope is flushed to stdout AND the exit code stays non-zero.
+  test('disabling an unknown id in --raw mode emits the JSON error envelope on stdout (not silent)', () => {
+    const rcd = tmpDir('cap-cli-rcd-');
+    const r = runGsdTools(['capability', 'disable', 'totally-unknown-xyz', '--config-dir', rcd, '--raw'], makeCwd());
+    assert.equal(r.success, false, 'must exit non-zero');
+    assert.ok(r.output && r.output.length > 0, 'stdout must NOT be empty in raw error mode');
+    const out = JSON.parse(r.output);
+    assert.ok(Array.isArray(out.errors), 'JSON error envelope present on stdout');
+    assert.match(out.errors.join(' '), /unknown capability/i);
   });
 });
