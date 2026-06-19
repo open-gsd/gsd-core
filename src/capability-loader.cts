@@ -180,6 +180,27 @@ function overlayRoots(cwd: string, gsdHome?: string): Array<{ dir: string; scope
  *                  consented and its command family must not be dispatchable.
  * Never throws: a missing/invalid ledger yields empty sets.
  */
+/**
+ * Is `e` a structurally-valid COMMITTED ledger entry for `id`? Mirrors the required shape that
+ * capability-ledger's readLedger enforces (id/version/source/integrity strings + files/sharedEdits
+ * arrays), and requires the key to equal `entry.id` and the entry to carry NO `_pending` marker.
+ * A malformed or tampered entry fails this check and is therefore NOT treated as consent — fail
+ * closed (Codex R2 low): only a genuine lifecycle-written commit authorizes command dispatch.
+ */
+function isCommittedLedgerEntry(id: string, e: unknown): boolean {
+  if (!e || typeof e !== 'object' || Array.isArray(e)) return false;
+  const r = e as Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(r, '_pending')) return false; // committed entries carry no intent
+  return (
+    r['id'] === id &&
+    typeof r['version'] === 'string' &&
+    typeof r['source'] === 'string' &&
+    typeof r['integrity'] === 'string' &&
+    Array.isArray(r['files']) &&
+    Array.isArray(r['sharedEdits'])
+  );
+}
+
 function ledgerOverlayIds(rootDir: string): { pending: Set<string>; committed: Set<string> } {
   const pending = new Set<string>();
   const committed = new Set<string>();
@@ -191,8 +212,12 @@ function ledgerOverlayIds(rootDir: string): { pending: Set<string>; committed: S
     if (!entries || typeof entries !== 'object' || Array.isArray(entries)) return { pending, committed };
     for (const [id, entry] of Object.entries(entries as Record<string, unknown>)) {
       if (!entry || typeof entry !== 'object') continue;
-      if ((entry as Record<string, unknown>)['_pending']) pending.add(id);
-      else committed.add(id);
+      if ((entry as Record<string, unknown>)['_pending']) {
+        pending.add(id); // a truthy in-flight intent — defer/skip until reconciliation
+      } else if (isCommittedLedgerEntry(id, entry)) {
+        committed.add(id); // a genuine, structurally-valid commit — the consent signal
+      }
+      // else: malformed / tampered / falsy-_pending → neither (fail closed: declarative-only)
     }
   } catch { /* missing/invalid ledger — no pending, no committed */ }
   return { pending, committed };

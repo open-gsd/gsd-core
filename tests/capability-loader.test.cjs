@@ -204,6 +204,32 @@ describe('loadRegistry — _overlay.commandRoots (ADR-1244 Phase 5 dispatch)', (
     assert.ok(!('pendcmd' in roots), 'an unconsented capability must not expose a dispatchable command root');
     assert.ok(!reg.capabilities['pendcmd'], 'unconsented cap not activated');
   });
+
+  test('FAIL CLOSED: a malformed/tampered committed-looking entry is NOT treated as consent', (t) => {
+    const home = makeOverlayHome([
+      featureCap('mal1', { commands: [{ family: 'mal1-cmd', module: 'router.cjs', router: 'run' }] }),
+      featureCap('mal2', { commands: [{ family: 'mal2-cmd', module: 'router.cjs', router: 'run' }] }),
+      featureCap('mal3', { commands: [{ family: 'mal3-cmd', module: 'router.cjs', router: 'run' }] }),
+    ]);
+    t.after(() => cleanup(home));
+    fs.writeFileSync(
+      path.join(home, '.gsd-capabilities.json'),
+      JSON.stringify({
+        version: '1', updatedAt: '2026-01-01T00:00:00Z',
+        entries: {
+          mal1: { id: 'mal1', version: '1.0.0', source: 's', integrity: '', files: [], sharedEdits: [], _pending: null }, // falsy-but-present intent → not committed
+          mal2: { id: 'WRONG', version: '1.0.0', source: 's', integrity: '', files: [], sharedEdits: [] }, // id mismatch
+          mal3: { id: 'mal3', version: '1.0.0' }, // missing required fields
+        },
+      }),
+      'utf8',
+    );
+    const reg = load(home);
+    const roots = (reg._overlay && reg._overlay.commandRoots) || {};
+    assert.ok(!('mal1' in roots), '_pending:null (own-property intent) is not consent');
+    assert.ok(!('mal2' in roots), 'entry.id mismatch is not consent');
+    assert.ok(!('mal3' in roots), 'missing required fields is not consent');
+  });
 });
 
 describe('loadRegistry — first-party always wins', () => {

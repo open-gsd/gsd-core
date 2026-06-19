@@ -985,3 +985,35 @@ describe('dispatchOverlayCapabilityCommand — end-to-end (real loadRegistry, re
     assert.strictEqual(fs.existsSync(path.join(home, 'RAN.txt')), false, 'the dropped module must NEVER execute');
   });
 });
+
+// ─── Overlay router error semantics (parity with the first-party path) ───
+
+describe('dispatchOverlayCapabilityCommand — router error semantics', () => {
+  function overlayReg() {
+    return { commandFamilies: { x: { capId: 'tp', module: 'm.cjs', router: 'run' } }, _overlay: { warnings: [], incompatibleGateCapIds: [], blockedGates: [], commandRoots: { tp: '/root' } } };
+  }
+
+  test('overlay router throwing an ExitError → propagates unchanged, error() NOT called', () => {
+    const thrown = new ExitError(1, 'intentional-exit');
+    const errs = [];
+    let caught;
+    try {
+      dispatchOverlayCapabilityCommand({
+        command: 'x', args: [], cwd: '/p', raw: false, error: (m) => errs.push(m),
+        loadRegistry: overlayReg, requireModule: () => ({ run: () => { throw thrown; } }),
+      });
+    } catch (e) { caught = e; }
+    assert.strictEqual(caught, thrown, 'the original ExitError must propagate unchanged');
+    assert.strictEqual(errs.length, 0, 'error() must not be called when an ExitError propagates');
+  });
+
+  test('overlay router throwing a generic Error → attributed error() + consumed (true)', () => {
+    const errs = [];
+    const result = dispatchOverlayCapabilityCommand({
+      command: 'x', args: [], cwd: '/p', raw: false, error: (m, reason) => errs.push({ m, reason }),
+      loadRegistry: overlayReg, requireModule: () => ({ run: () => { throw new Error('kaboom'); } }),
+    });
+    assert.strictEqual(result, true, 'consumed');
+    assert.ok(errs.some((e) => /threw: kaboom/.test(e.m)), 'router throw attributed to the command');
+  });
+});
