@@ -83,7 +83,7 @@ A per-runtime install manifest, e.g. `~/.claude/.gsd-capabilities.json`, recordi
     "source": "https://github.com/org/cap.git#sha:…",
     "integrity": "sha512-…",
     "files": ["skills/…", "agents/…"],          // owned files written
-    "sharedEdits": [{ "file": "settings.json", "path": "hooks.PostToolUse[…]" }]
+    "sharedEdits": [{ "file": "settings.json", "marker": "<id>" }]
   }
 }
 ```

@@ -231,6 +231,36 @@ describe('capability update', () => {
     assert.equal(o.toVersion, '2.0.0');
     assert.equal(readLedgerEntry(home, 'upcap').version, '2.0.0');
   });
+
+  // Finding 4 (MEDIUM): `capability update --shared-file` over-cap previously ran the pre-op
+  // reconcile (and re-parsed --shared-file per entry) BEFORE rejecting; install already had the early
+  // guard, update did not. The count must now be enforced BEFORE capRunReconcile.
+  //
+  // To PROVE reconcile did not run, the ledger is intentionally CORRUPT: a reconcile sweep would
+  // surface a "capability reconcile:" warning on stderr. The over-cap update must be rejected with a
+  // count error and that reconcile prefix must be ABSENT (reconcile never executed).
+  // Revert-fails: move the count check back below capRunReconcile (or drop it) → the corrupt-ledger
+  // reconcile runs first and emits "capability reconcile:" on stderr, so the "prefix absent"
+  // assertion fails (and/or the count error is missing).
+  test('finding-4: an OVER-CAP --shared-file update is rejected BEFORE the pre-op reconcile runs', () => {
+    const home = tmpDir('cap-cli-home-f4-');
+    fs.mkdirSync(home, { recursive: true });
+    // A corrupt ledger: if the pre-op reconcile RAN, it would emit a "capability reconcile:" warning.
+    fs.writeFileSync(ledgerPath(home), '{ broken json ---');
+
+    const sharedArgs = [];
+    for (let i = 0; i < 300; i++) { sharedArgs.push('--shared-file', `f${i}.json`); } // over the 256 cap
+    const r = runGsdTools(
+      ['capability', 'update', '--all', '--scope', 'global', ...sharedArgs, '--raw'],
+      makeCwd(), scopeEnv(home),
+    );
+    assert.equal(r.success, false, 'an over-cap --shared-file update must be rejected');
+    const combined = `${r.error}\n${r.output}`;
+    assert.match(combined, /shared.?file|count|too many|256/i,
+      'the failure must clearly name the shared-file count problem');
+    assert.doesNotMatch(combined, /capability reconcile:/i,
+      'the pre-op reconcile must NOT have run — the count check precedes it (finding 4)');
+  });
 });
 
 // ─── remove ─────────────────────────────────────────────────────────────────
@@ -425,6 +455,36 @@ describe('capability install (--shared-file confinement)', () => {
     assert.ok(!fs.existsSync(path.join(outside, 'settings.json')), 'must NOT write through the escaping symlink');
   });
 
+  // Finding 5(b) (MEDIUM): the --shared-file COUNT must be bounded EARLY — at the CLI/lifecycle
+  // entry, BEFORE source resolution / staging / shared-config writes — so an over-cap install fails
+  // fast with a clear count error instead of writing files + leaving a _pending to reconcile.
+  // Revert-fails: remove the early count check in installCapability/gsd-tools → the install proceeds
+  // to staging (a .gsd/capabilities/.staging dir is created) before any cap is enforced, so the
+  // "no staging created" assertion fails (and there is no clear count error).
+  test('finding-5b: an install with OVER-CAP --shared-file count is rejected BEFORE any staging dir is created', () => {
+    const home = tmpDir('cap-cli-home-');
+    fs.mkdirSync(home, { recursive: true });
+    const src = writeCapSource('overcap', { hooks: [{ event: 'PostToolUse', script: 'hooks/run.js' }] });
+    // Build 300 --shared-file args (over the 256 generous cap).
+    const sharedArgs = [];
+    for (let i = 0; i < 300; i++) { sharedArgs.push('--shared-file', `f${i}.json`); }
+    const r = runGsdTools(
+      ['capability', 'install', src, '--scope', 'global', '--yes', ...sharedArgs, '--raw'],
+      makeCwd(), scopeEnv(home),
+    );
+    assert.equal(r.success, false, 'an over-cap --shared-file install must be rejected');
+    assert.match(`${r.error}\n${r.output}`, /shared.?file|count|too many|256/i,
+      'the failure must clearly name the shared-file count problem');
+    // NO staging dir may have been created — the bound is enforced before resolution/staging.
+    const staging = path.join(home, '.gsd', 'capabilities', '.staging');
+    assert.equal(fs.existsSync(staging) && fs.readdirSync(staging).length > 0, false,
+      'no staging dir may be created when the over-cap install is rejected early');
+    // NO ledger entry / _pending must be left behind.
+    assert.equal(readLedgerEntry(home, 'overcap'), null, 'no ledger entry / _pending may be left');
+    // NO shared-config file may have been written.
+    assert.equal(fs.existsSync(path.join(home, 'f0.json')), false, 'no shared-config file may be written');
+  });
+
   test('install does not clobber a user mcpServers entry whose name collides with the capability', () => {
     const home = tmpDir('cap-cli-home-');
     fs.mkdirSync(home, { recursive: true });
@@ -471,5 +531,228 @@ describe('capability (argument + empty-state handling)', () => {
     const r = runGsdTools(['capability', 'install', src, '--integrity', '--scope', 'global'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
     assert.equal(r.success, false);
     assert.match(`${r.error}\n${r.output}`, /Missing value for --integrity/i);
+  });
+});
+
+// ─── corrupt-ledger fail-closed — list + remove (sites A and C) ─────────────
+
+describe('capability list (corrupt ledger fail-closed — site A)', () => {
+  test('capability list on a corrupt ledger exits non-zero with a blocked/corrupt error (finding-19)', () => {
+    const home = tmpDir('cap-cli-home-list-corrupt-');
+    fs.mkdirSync(home, { recursive: true });
+    // Write a corrupt (unparseable) ledger file in the global scope location.
+    fs.writeFileSync(ledgerPath(home), '{ broken json ---');
+    const r = runGsdTools(['capability', 'list', '--json', '--scope', 'global'], makeCwd(), scopeEnv(home));
+    // Must exit non-zero (fail-closed — finding 19). A silent exit-0 is not acceptable.
+    assert.equal(r.success, false, 'capability list must exit non-zero when the ledger is corrupt (fail-closed)');
+    const combined = `${r.error}\n${r.output}`;
+    assert.match(combined, /corrupt|blocked/i,
+      'must mention corruption or blocked, not silently fail');
+  });
+
+  test('capability list --scope global: healthy global + corrupt project → exits zero (finding-8)', () => {
+    // When --scope global is given, only the global ledger is read.
+    // A corrupt project ledger must not block a global-only list.
+    // Project scope runtimeDir = cwd (where .gsd-capabilities.json would live).
+    const home = tmpDir('cap-cli-home-list-scoped-');
+    fs.mkdirSync(home, { recursive: true });
+    const cwd = makeCwd();
+    // Write a corrupt ledger at the project scope location (cwd/.gsd-capabilities.json).
+    fs.writeFileSync(path.join(cwd, '.gsd-capabilities.json'), '{ broken project ledger ---');
+    const r = runGsdTools(['capability', 'list', '--json', '--scope', 'global'], cwd, scopeEnv(home));
+    // Global scope is healthy (no ledger = null = fine). Only the global scope is read.
+    assert.equal(r.success, true, `list --scope global must succeed when only the project ledger is corrupt; got: ${r.error || r.output}`);
+    const rows = parse(r.output);
+    assert.ok(Array.isArray(rows), 'output must be a JSON array');
+    // First-party capabilities must appear (they are always included).
+    assert.ok(rows.some((x) => x.source === 'first-party'), 'first-party entries must appear');
+  });
+
+  test('capability list --scope project: corrupt project ledger exits non-zero (finding-8)', () => {
+    const home = tmpDir('cap-cli-home-list-proj-corrupt-');
+    fs.mkdirSync(home, { recursive: true });
+    const cwd = makeCwd();
+    // Project scope runtimeDir = cwd, so corrupt ledger goes at cwd/.gsd-capabilities.json.
+    fs.writeFileSync(path.join(cwd, '.gsd-capabilities.json'), '{ broken project ledger ---');
+    const r = runGsdTools(['capability', 'list', '--json', '--scope', 'project'], cwd, scopeEnv(home));
+    assert.equal(r.success, false, 'list --scope project must fail when the project ledger is corrupt');
+    assert.match(`${r.error}\n${r.output}`, /corrupt|blocked/i, 'must mention corruption');
+  });
+});
+
+describe('capability remove (corrupt ledger fail-closed — site C)', () => {
+  test('capability remove on a corrupt global ledger exits non-zero with a blocked/corrupt error, NOT not_installed or silent success', () => {
+    const home = tmpDir('cap-cli-home-remove-corrupt-');
+    fs.mkdirSync(home, { recursive: true });
+    // Write a corrupt (unparseable) ledger file so the scope has one.
+    fs.writeFileSync(ledgerPath(home), '{ broken json ---');
+    const r = runGsdTools(['capability', 'remove', 'some-cap', '--scope', 'global'], makeCwd(), scopeEnv(home));
+    assert.equal(r.success, false, 'must exit non-zero on corrupt ledger');
+    // Must NOT silently report "not installed" — that would hide the corruption.
+    assert.doesNotMatch(`${r.error}\n${r.output}`, /not installed/i,
+      'corrupt ledger must NOT produce "not installed" — must produce a blocked/corrupt error');
+    assert.match(`${r.error}\n${r.output}`, /corrupt|blocked/i,
+      'must mention corruption or blocked');
+  });
+
+  test('capability remove first-party id on corrupt ledger surfaces corruption, not first-party error (finding-7)', () => {
+    // Finding 7: with readLedger (old), a corrupt ledger + first-party id reports "first-party cannot be removed"
+    // (hiding the corruption). With readLedgerStrict, corruption is surfaced first.
+    const reg = require('../gsd-core/bin/lib/capability-registry.cjs');
+    const firstParty = Object.keys(reg.capabilities)[0];
+    const home = tmpDir('cap-cli-home-f7-');
+    fs.mkdirSync(home, { recursive: true });
+    // Corrupt the ledger.
+    fs.writeFileSync(ledgerPath(home), '{ broken json ---');
+    const r = runGsdTools(['capability', 'remove', firstParty, '--scope', 'global'], makeCwd(), scopeEnv(home));
+    assert.equal(r.success, false, 'must exit non-zero on corrupt ledger');
+    // Must NOT report "first-party" (which would hide the corruption).
+    assert.doesNotMatch(`${r.error}\n${r.output}`, /first-party/i,
+      'corrupt ledger must surface corruption, not first-party gate');
+    assert.match(`${r.error}\n${r.output}`, /corrupt|blocked/i,
+      'must mention corruption or blocked');
+  });
+
+  test('capability remove on a corrupt project-scope ledger exits non-zero (finding-20)', () => {
+    const home = tmpDir('cap-cli-home-remove-proj-corrupt-');
+    fs.mkdirSync(home, { recursive: true });
+    const cwd = makeCwd();
+    // Project scope runtimeDir = cwd, so corrupt ledger goes at cwd/.gsd-capabilities.json.
+    fs.writeFileSync(path.join(cwd, '.gsd-capabilities.json'), '{ broken project json ---');
+    const r = runGsdTools(['capability', 'remove', 'some-cap', '--scope', 'project'], cwd, scopeEnv(home));
+    assert.equal(r.success, false, 'must exit non-zero on corrupt project ledger');
+    assert.match(`${r.error}\n${r.output}`, /corrupt|blocked/i, 'must mention corruption or blocked');
+  });
+});
+
+// ─── corrupt-ledger fail-closed (Codex pass 3 — medium #2) ──────────────────
+
+describe('capability update (corrupt ledger fail-closed)', () => {
+  test('capability update <id> on a corrupt ledger exits non-zero with a blocked/corrupt error, NOT not_installed', () => {
+    const home = tmpDir('cap-cli-home-corrupt-');
+    fs.mkdirSync(home, { recursive: true });
+    // Write a corrupt (unparseable) ledger file.
+    fs.writeFileSync(ledgerPath(home), '{ broken json ---');
+    const r = runGsdTools(['capability', 'update', 'some-cap', '--scope', 'global'], makeCwd(), scopeEnv(home));
+    assert.equal(r.success, false, 'must exit non-zero on corrupt ledger');
+    // Must NOT report "not installed" — that would hide the corruption silently.
+    assert.doesNotMatch(`${r.error}\n${r.output}`, /not installed/i,
+      'corrupt ledger must NOT produce "not installed" — must produce a blocked/corrupt error');
+    assert.match(`${r.error}\n${r.output}`, /corrupt|blocked/i,
+      'must mention corruption or blocked');
+  });
+
+  test('capability update --all on a corrupt ledger exits non-zero, does NOT silently succeed with an empty list', () => {
+    const home = tmpDir('cap-cli-home-corrupt-all-');
+    fs.mkdirSync(home, { recursive: true });
+    // Write a corrupt (unparseable) ledger file.
+    fs.writeFileSync(ledgerPath(home), '{ broken json ---');
+    const r = runGsdTools(['capability', 'update', '--all', '--scope', 'global'], makeCwd(), scopeEnv(home));
+    assert.equal(r.success, false, 'must exit non-zero on corrupt ledger for --all');
+    assert.match(`${r.error}\n${r.output}`, /corrupt|blocked/i,
+      'must mention corruption or blocked; not silently succeed');
+  });
+});
+
+// ─── orthogonal adversarial review (#1462): UX / observability ──────────────
+
+describe('capability update --all (UX-1: structured stdout on partial failure)', () => {
+  test('UX-1: a partial --all failure emits {scope, updated:[...]} JSON on STDOUT and exits non-zero', () => {
+    const home = tmpDir('cap-cli-home-ux1-');
+    // Install an executable capability, then change its exec surface so the update needs re-consent
+    // and (without --yes) ABORTS — a partial-failure --all run.
+    const src = writeCapSource('ux1cap', { hooks: [{ event: 'PostToolUse', script: 'hooks/a.js' }] });
+    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'global', '--yes', '--raw'], makeCwd(), scopeEnv(home)).success, true);
+    const cap = JSON.parse(fs.readFileSync(path.join(src, 'capability.json'), 'utf8'));
+    cap.version = '2.0.0';
+    cap.hooks = [{ event: 'PostToolUse', script: 'hooks/b.js' }];
+    fs.writeFileSync(path.join(src, 'capability.json'), JSON.stringify(cap, null, 2));
+    fs.writeFileSync(path.join(src, 'hooks', 'b.js'), '// artifact');
+
+    const r = runGsdTools(['capability', 'update', '--all', '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
+    // Non-zero exit (partial failure).
+    assert.equal(r.success, false, 'a partial --all failure must exit non-zero');
+    // STRUCTURED data on STDOUT (not embedded in the error string) — UX-1.
+    assert.ok(r.output && r.output.length > 0, 'structured result must be emitted on stdout');
+    const parsed = JSON.parse(r.output);
+    assert.equal(parsed.scope, 'global', 'stdout JSON must carry the scope');
+    assert.ok(Array.isArray(parsed.updated), 'stdout JSON must carry the updated[] array');
+    assert.ok(parsed.updated.some((x) => x.id === 'ux1cap' && x.status !== 'upgraded'),
+      `updated[] must include the failed entry; got: ${JSON.stringify(parsed.updated)}`);
+  });
+});
+
+describe('capability list (UX-3: corrupt-scope error names the scope)', () => {
+  test('UX-3: a corrupt project-scope ledger error names the scope', () => {
+    const home = tmpDir('cap-cli-home-ux3-');
+    fs.mkdirSync(home, { recursive: true });
+    const cwd = makeCwd();
+    fs.writeFileSync(path.join(cwd, '.gsd-capabilities.json'), '{ broken project ledger ---');
+    const r = runGsdTools(['capability', 'list', '--json', '--scope', 'project'], cwd, scopeEnv(home));
+    assert.equal(r.success, false, 'list --scope project must fail when the project ledger is corrupt');
+    assert.match(`${r.error}\n${r.output}`, /\bproject\b/,
+      `the corrupt-scope error must name the scope ("project"); got: ${r.error}\n${r.output}`);
+  });
+});
+
+describe('capability install (UX-5: structured aborted/requiresConsent on stdout)', () => {
+  test('UX-5: an executable install WITHOUT --yes in --raw mode emits a structured aborted envelope on stdout', () => {
+    const home = tmpDir('cap-cli-home-ux5-');
+    const src = writeCapSource('ux5cap', { hooks: [{ event: 'PostToolUse', script: 'hooks/run.js' }] });
+    const r = runGsdTools(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
+    assert.equal(r.success, false, 'an executable install without --yes must exit non-zero');
+    assert.ok(r.output && r.output.length > 0, 'stdout must NOT be empty in raw aborted mode (UX-5)');
+    const out = JSON.parse(r.output);
+    assert.equal(out.status, 'aborted', 'structured stdout must carry status=aborted');
+    assert.equal(out.requiresConsent, true, 'structured stdout must carry requiresConsent=true');
+    assert.ok(Array.isArray(out.disclosure), 'structured stdout must carry the disclosure list');
+  });
+});
+
+describe('capability update (UX-6: normalized per-entry fields)', () => {
+  test('UX-6: a not_installed entry in --all output has explicit null fields (not undefined)', () => {
+    // Seed a ledger with an entry whose recorded source resolves to a DIFFERENT id, so upgradeOne
+    // reports a non-upgraded status with no fromVersion/toVersion — those must serialize as null.
+    const home = tmpDir('cap-cli-home-ux6-');
+    fs.mkdirSync(home, { recursive: true });
+    // Hand-write a ledger entry pointing at a non-existent source so the update blocks.
+    const ledger = {
+      version: '1', updatedAt: new Date().toISOString(),
+      entries: {
+        'ux6cap': { id: 'ux6cap', version: '1.0.0', source: '/nonexistent/path/that/does/not/resolve', integrity: '', files: [], sharedEdits: [] },
+      },
+    };
+    fs.writeFileSync(ledgerPath(home), JSON.stringify(ledger, null, 2));
+    const r = runGsdTools(['capability', 'update', '--all', '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
+    // Partial failure (the blocked entry) → non-zero, structured stdout.
+    assert.equal(r.success, false, 'a blocked --all entry must exit non-zero');
+    const parsed = JSON.parse(r.output);
+    const row = parsed.updated.find((x) => x.id === 'ux6cap');
+    assert.ok(row, `updated[] must include ux6cap; got: ${JSON.stringify(parsed.updated)}`);
+    // JSON.stringify omits undefined keys; explicit null is preserved. The fields must be present
+    // as null (normalized), not absent.
+    assert.ok('fromVersion' in row, 'fromVersion must be an explicit field (null), not omitted (UX-6)');
+    assert.strictEqual(row.fromVersion, null, 'fromVersion must be null for a blocked entry (UX-6)');
+    assert.ok('toVersion' in row, 'toVersion must be an explicit field (null), not omitted (UX-6)');
+    assert.strictEqual(row.toVersion, null, 'toVersion must be null for a blocked entry (UX-6)');
+  });
+});
+
+describe('capability install (UX-2: reconcile warnings surfaced on stderr)', () => {
+  // Revert-fails: restore the bare `try{reconcile}catch{}` that discards the report → the distinctive
+  // "capability reconcile:" warning prefix is never emitted to stderr, so this assertion fails. (The
+  // install block reason references "corrupt" but NOT the reconcile-warning prefix, so the prefix
+  // assertion is non-vacuous.)
+  test('UX-2: a corrupt ledger detected by the pre-op reconcile is surfaced on stderr (not swallowed)', () => {
+    const home = tmpDir('cap-cli-home-ux2-');
+    fs.mkdirSync(home, { recursive: true });
+    fs.writeFileSync(ledgerPath(home), '{ broken json ---');
+    const src = writeCapSource('ux2cap');
+    const r = runGsdTools(['capability', 'install', src, '--scope', 'global'], makeCwd(), scopeEnv(home));
+    assert.equal(r.success, false, 'install on a corrupt ledger must exit non-zero');
+    // The reconcile report's warning must be surfaced with its distinctive prefix on stderr — proving
+    // the report was captured and emitted, not discarded in a bare try/catch.
+    assert.match(`${r.error}\n${r.output}`, /capability reconcile:/i,
+      'the pre-op reconcile warning must be surfaced on stderr with its prefix (UX-2)');
   });
 });

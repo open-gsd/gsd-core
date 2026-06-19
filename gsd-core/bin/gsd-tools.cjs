@@ -1503,6 +1503,21 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
           return '0.0.0';
         }
       };
+      // UX-2: run the best-effort pre-op crash-recovery sweep AND surface any warnings it reports
+      // (e.g. a corrupt-present ledger, or a rollback that could not complete) on stderr. The previous
+      // bare `try { reconcile } catch {}` discarded the report entirely, so corruption detected during
+      // reconcile was invisible. We never abort on a reconcile warning here — the mutating op that
+      // follows runs its own fail-closed checks — but the warning must be OBSERVABLE.
+      const capRunReconcile = (runtimeDir, lifecycle) => {
+        try {
+          const report = lifecycle.reconcileCapabilities({ runtimeDir });
+          if (report && Array.isArray(report.warnings)) {
+            for (const w of report.warnings) {
+              try { process.stderr.write(`capability reconcile: ${w}\n`); } catch { /* best-effort */ }
+            }
+          }
+        } catch { /* best-effort crash recovery — never block the op on a reconcile failure */ }
+      };
       if (capSubcommand === 'state') {
         const configDirIdx = args.indexOf('--config-dir');
         let configDir = null;
@@ -1601,13 +1616,26 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         const { scope, runtimeDir } = capResolveScope(capFlagValue('--scope'));
         const lifecycle = require('./lib/capability-lifecycle.cjs');
         const trust = require('./lib/capability-trust.cjs');
-        try { lifecycle.reconcileCapabilities({ runtimeDir }); } catch { /* best-effort crash recovery */ }
+        // Finding 5(b): bound the --shared-file COUNT EARLY — before reconcile, source resolution,
+        // staging, or any shared-config write — so an over-cap install fails fast with a clear count
+        // error and leaves NO staging dir / _pending behind. The lifecycle re-checks (defense in
+        // depth); this CLI-side guard short-circuits before even the pre-op reconcile runs.
+        const installSharedFiles = capRepeatedFlag('--shared-file');
+        const ledgerModInstall = require('./lib/capability-ledger.cjs');
+        if (installSharedFiles.length > ledgerModInstall.MAX_SHARED_FILES) {
+          error(
+            `capability install blocked: too many --shared-file entries: ${installSharedFiles.length} ` +
+            `exceeds the maximum of ${ledgerModInstall.MAX_SHARED_FILES}.`,
+            ERROR_REASON ? ERROR_REASON.USAGE : undefined,
+          );
+        }
+        capRunReconcile(runtimeDir, lifecycle); // UX-2: surface reconcile warnings on stderr
         const res = await lifecycle.installCapability(spec, {
           runtimeDir,
           hostVersion: capHostVersion(),
           consentGranted: capHasFlag('--yes'),
           integrity: capFlagValue('--integrity'),
-          sharedFiles: capRepeatedFlag('--shared-file'),
+          sharedFiles: installSharedFiles,
           strictKnownRegistries: capReadStrict(),
         });
         if (res.status === 'installed') {
@@ -1622,12 +1650,18 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
           // 'aborted' always means "executable surface needs consent" in the lifecycle contract —
           // match it regardless of the requiresConsent flag so a future aborted path can't fall
           // through to the generic "blocked: unknown reason" arm with a misleading message.
-          error(
-            ['This capability declares executable surfaces and needs your consent before install:']
-              .concat(trust.summarizeDisclosure(res.disclosure || {}).map((l) => '  ' + l))
+          const disclosure = trust.summarizeDisclosure(res.disclosure || {});
+          // UX-5: emit a structured aborted envelope on STDOUT before the non-zero exit so automation
+          // can detect the consent requirement programmatically. We throw ExitError (not error(),
+          // which calls process.exit and would bypass the stdout-capture flush) so the buffered stdout
+          // is flushed before exit; the human-readable guidance still lands on stderr.
+          output({ status: 'aborted', requiresConsent: true, scope, disclosure }, raw);
+          throw new ExitError(
+            1,
+            ['Error: This capability declares executable surfaces and needs your consent before install:']
+              .concat(disclosure.map((l) => '  ' + l))
               .concat(['Re-run with --yes to grant consent and install.'])
               .join('\n'),
-            ERROR_REASON ? ERROR_REASON.USAGE : undefined,
           );
         } else {
           error(
@@ -1649,8 +1683,29 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         const lifecycle = require('./lib/capability-lifecycle.cjs');
         const ledgerMod = require('./lib/capability-ledger.cjs');
         const trust = require('./lib/capability-trust.cjs');
-        try { lifecycle.reconcileCapabilities({ runtimeDir }); } catch { /* best-effort crash recovery */ }
-        const ledger = ledgerMod.readLedger(runtimeDir);
+        // Finding 4 (MEDIUM): parse the --shared-file list ONCE and enforce MAX_SHARED_FILES BEFORE
+        // the pre-op reconcile (install has this early guard; update did not — it ran reconcile, then
+        // re-parsed --shared-file per entry inside upgradeOne). An over-cap update now fails fast with
+        // a clear count error and leaves no reconcile side-effects, mirroring the install dispatch.
+        const updateSharedFiles = capRepeatedFlag('--shared-file');
+        if (updateSharedFiles.length > ledgerMod.MAX_SHARED_FILES) {
+          error(
+            `capability update blocked: too many --shared-file entries: ${updateSharedFiles.length} ` +
+            `exceeds the maximum of ${ledgerMod.MAX_SHARED_FILES}.`,
+            ERROR_REASON ? ERROR_REASON.USAGE : undefined,
+          );
+        }
+        capRunReconcile(runtimeDir, lifecycle); // UX-2: surface reconcile warnings on stderr
+        // readLedgerStrict: returns null when MISSING (no installs yet), throws CorruptLedgerError
+        // when the ledger FILE EXISTS but is unparseable. Using the strict variant ensures a
+        // corrupt-but-present ledger fails closed rather than silently reporting not_installed (<id>)
+        // or succeeding with an empty list (--all), both of which bypass fail-closed (Codex pass 3 M2).
+        let ledger;
+        try {
+          ledger = ledgerMod.readLedgerStrict(runtimeDir);
+        } catch (err) {
+          error(`capability update blocked: ${err.message}`, ERROR_REASON ? ERROR_REASON.SDK_FAIL_FAST : undefined);
+        }
         const entries = (ledger && ledger.entries) || {};
         const upgradeOne = async (capId) => {
           const entry = entries[capId];
@@ -1661,18 +1716,21 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
             runtimeDir,
             hostVersion: capHostVersion(),
             consentGranted: capHasFlag('--yes'),
-            sharedFiles: capRepeatedFlag('--shared-file'),
+            sharedFiles: updateSharedFiles, // finding 4: parsed once, count-checked before reconcile
             strictKnownRegistries: capReadStrict(),
             expectedId: capId,
           });
+          // UX-6: normalize absent fields to explicit null so a not_installed/blocked row serializes
+          // them as null rather than omitting them (JSON.stringify drops undefined keys), giving a
+          // stable per-entry shape for `--all` consumers.
           return {
             id: capId,
             status: r.status,
-            fromVersion: r.fromVersion,
-            toVersion: r.toVersion,
-            requiresConsent: r.requiresConsent,
-            blockReasons: r.blockReasons,
-            disclosure: r.disclosure ? trust.summarizeDisclosure(r.disclosure) : undefined,
+            fromVersion: r.fromVersion ?? null,
+            toVersion: r.toVersion ?? null,
+            requiresConsent: r.requiresConsent ?? null,
+            blockReasons: r.blockReasons ?? null,
+            disclosure: r.disclosure ? trust.summarizeDisclosure(r.disclosure) : null,
           };
         };
         if (all) {
@@ -1684,12 +1742,17 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
           }
           const failed = results.filter((x) => x.status !== 'upgraded');
           if (failed.length > 0) {
-            // Some entries did not upgrade (aborted / blocked) — surface as a non-zero exit so
-            // automation never reads a partial `--all` run as a clean success.
-            error(
-              `capability update --all: ${failed.length} of ${results.length} did not upgrade.\n` +
-                JSON.stringify({ scope, updated: results }, null, 2),
-              ERROR_REASON ? ERROR_REASON.SDK_FAIL_FAST : undefined,
+            // UX-1: emit the FULL structured result on STDOUT first (success and partial-failure
+            // alike), then set a non-zero exit. Previously the results JSON was embedded inside the
+            // error STRING on stderr, so automation could not parse a partial-failure run as
+            // structured data. We throw ExitError (not error(), which calls process.exit and would
+            // bypass the stdout-capture flush) so the buffered stdout is flushed before exit and a
+            // concise reason still lands on stderr.
+            output({ scope, updated: results }, raw);
+            throw new ExitError(
+              1,
+              `Error: capability update --all: ${failed.length} of ${results.length} did not upgrade ` +
+                `(see the JSON result on stdout for per-capability status).`,
             );
           }
           output({ scope, updated: results }, raw);
@@ -1722,10 +1785,17 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         const { scope, runtimeDir } = capResolveScope(capFlagValue('--scope'));
         const lifecycle = require('./lib/capability-lifecycle.cjs');
         const ledgerMod = require('./lib/capability-ledger.cjs');
-        try { lifecycle.reconcileCapabilities({ runtimeDir }); } catch { /* best-effort crash recovery */ }
+        capRunReconcile(runtimeDir, lifecycle); // UX-2: surface reconcile warnings on stderr
         // Ledger first: an installed overlay is removable even if its id shadows a first-party name.
         // Only when the id is NOT an installed overlay do we reject a first-party id (vs. a typo).
-        const removeLedger = ledgerMod.readLedger(runtimeDir);
+        // Use readLedgerStrict so a corrupt-but-present ledger surfaces corruption here rather than
+        // silently reporting "first-party cannot be removed" for any id (finding 7).
+        let removeLedger;
+        try {
+          removeLedger = ledgerMod.readLedgerStrict(runtimeDir);
+        } catch (err) {
+          error(`capability remove blocked: ${err.message}`, ERROR_REASON ? ERROR_REASON.SDK_FAIL_FAST : undefined);
+        }
         const inLedger = !!(removeLedger && removeLedger.entries && Object.prototype.hasOwnProperty.call(removeLedger.entries, id));
         if (!inLedger) {
           const base = require('./lib/capability-loader.cjs').loadRegistry();
@@ -1749,12 +1819,20 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
           error(`capability remove blocked: ${(res.blockReasons || ['unknown reason']).join('; ')}`, ERROR_REASON ? ERROR_REASON.SDK_FAIL_FAST : undefined);
         }
       } else if (capSubcommand === 'list') {
-        // capability list [--json] — emits a JSON array of capability descriptors (first-party + overlay).
+        // capability list [--json] [--scope global|project] — emits a JSON array of capability descriptors.
+        // When --scope is given, only that scope's overlay ledger is read (finding 8: honor --scope so a
+        // corrupt unrelated ledger in another scope does not block a scoped list).
         const loader = require('./lib/capability-loader.cjs');
         const ledgerMod = require('./lib/capability-ledger.cjs');
         const semver = require('./lib/semver-compare.cjs');
         const host = capHostVersion();
         const rows = [];
+        const listScopeArg = capFlagValue('--scope');
+        // Validate --scope if provided.
+        if (listScopeArg && listScopeArg !== 'global' && listScopeArg !== 'project') {
+          error(`Invalid --scope "${listScopeArg}": must be "global" or "project"`, ERROR_REASON ? ERROR_REASON.USAGE : undefined);
+        }
+        // First-party capabilities are always included (they have no scope concept).
         const base = loader.loadRegistry();
         const fp = (base && base.capabilities) || {};
         for (const capId of Object.keys(fp)) {
@@ -1770,9 +1848,21 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
             title: cap.title || null,
           });
         }
-        for (const sc of ['global', 'project']) {
+        // Overlay scopes: honor --scope to read only the requested scope (finding 8).
+        const overlayScopes = listScopeArg ? [listScopeArg] : ['global', 'project'];
+        for (const sc of overlayScopes) {
           const { runtimeDir } = capResolveScope(sc);
-          const ledger = ledgerMod.readLedger(runtimeDir);
+          // readLedgerStrict: returns null when MISSING (no overlays yet), throws CorruptLedgerError
+          // when the ledger FILE EXISTS but is unparseable. Using the strict variant ensures a
+          // corrupt-but-present ledger is visible to the user (blocked/error) rather than silently
+          // dropping overlay entries and returning a first-party-only list (site A fix, #1462).
+          let ledger;
+          try {
+            ledger = ledgerMod.readLedgerStrict(runtimeDir);
+          } catch (err) {
+            // UX-3: name the offending scope so the user knows WHICH ledger to fix.
+            error(`capability list blocked (${sc} scope): ${err.message}`, ERROR_REASON ? ERROR_REASON.SDK_FAIL_FAST : undefined);
+          }
           if (!ledger || !ledger.entries) continue;
           for (const capId of Object.keys(ledger.entries)) {
             const entry = ledger.entries[capId];

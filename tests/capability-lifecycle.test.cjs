@@ -11,6 +11,7 @@
  */
 
 const test = require('node:test');
+const { mock } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -24,6 +25,14 @@ const { CAP_MARKER } = lifecycle;
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+const cp = require('node:child_process');
+/** POSIX-only: make a FIFO at `p` (returns false where mkfifo is unavailable). */
+function tryMkfifoLife(p) {
+  if (process.platform === 'win32') return false;
+  const res = cp.spawnSync('mkfifo', [p], { stdio: 'ignore' });
+  return res.status === 0;
+}
 
 const cleanups = [];
 function runtime() {
@@ -212,18 +221,21 @@ test('install: re-installing over an existing capability (via install, not upgra
   assert.strictEqual(readSettings(dir).hooks.PostToolUse.length, 1, 'exactly one stamped hook');
 });
 
-test('install: a stale lock is stolen so a crashed prior holder does not block forever', async () => {
+test('install: a deadman-stale lock is stolen so a crashed prior holder does not block forever', async () => {
   const dir = runtime();
   const lockPath = path.join(dir, '.gsd', 'capabilities', '.lock');
   fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  // A legacy no-pid body: liveness cannot be verified, so (finding 1) it is reclaimable ONLY by the
+  // HARD deadman timeout — backdate it past LOCK_DEADMAN_MS (10 min) to simulate a crashed holder the
+  // deadman must eventually free. (An under-deadman no-pid lock is intentionally NOT stolen; that case
+  // is covered in the finding-1 lock suite.)
   fs.writeFileSync(lockPath, 'dead-holder-token', 'utf8');
-  // Backdate the lock well past the stale threshold (simulate a crashed holder).
-  const old = new Date(Date.now() - 5 * 60 * 1000);
+  const old = new Date(Date.now() - 11 * 60 * 1000);
   fs.utimesSync(lockPath, old, old);
   const res = await lifecycle.installCapability('./x', {
     runtimeDir: dir, hostVersion: '1.6.0', _resolve: fakeResolve(declarativeCap('x')),
   });
-  assert.strictEqual(res.status, 'installed', 'stale lock stolen, install proceeds');
+  assert.strictEqual(res.status, 'installed', 'deadman-stale lock stolen, install proceeds');
 });
 
 test('install: a resolver failure (e.g. integrity mismatch) is reported as blocked', async () => {
@@ -422,12 +434,24 @@ test('reconcile M5: a tampered ledger key (non-kebab id) is skipped, never used 
   const dir = runtime();
   // A precious file under runtimeDir the traversal id would resolve to.
   fs.writeFileSync(path.join(dir, 'precious.txt'), 'keep', 'utf8');
-  // Tamper: a ledger entry keyed by a traversal id with a fresh-install intent.
-  ledgerMod.recordInstall(dir, {
-    id: '../../precious', version: '1.0.0', source: 's', integrity: '',
-    files: ['.gsd/capabilities/x'], sharedEdits: [],
-    _pending: { kind: 'install', backupName: null, sharedFiles: [] },
-  });
+  // Tamper: write a ledger file directly (bypassing recordInstall's id validation, which now
+  // correctly rejects non-kebab ids — finding 7) to simulate an externally tampered ledger.
+  // The tampered entry uses a traversal id that reconcile must not act on.
+  const LEDGER_FILE_NAME = ledgerMod.LEDGER_FILE_NAME;
+  fs.writeFileSync(
+    path.join(dir, LEDGER_FILE_NAME),
+    JSON.stringify({
+      version: '1',
+      updatedAt: new Date().toISOString(),
+      entries: {
+        '../../precious': {
+          id: '../../precious', version: '1.0.0', source: 's', integrity: '',
+          files: ['.gsd/capabilities/x'], sharedEdits: [],
+          _pending: { kind: 'install', backupName: null, sharedFiles: [] },
+        },
+      },
+    }),
+  );
   const report = lifecycle.reconcileCapabilities({ runtimeDir: dir });
   assert.ok(!report.rolledBack.includes('../../precious'), 'tampered id not acted upon');
   assert.ok(fs.existsSync(path.join(dir, 'precious.txt')), 'no delete via the tampered id');
@@ -588,6 +612,187 @@ test('remove: CAPABILITY_DATA is preserved by default and deleted only on remove
 });
 
 // ---------------------------------------------------------------------------
+// Finding 1: upgrade + remove with a corrupt-present ledger must fail closed
+// (throw/quarantine), NOT silently return not_installed.
+// ---------------------------------------------------------------------------
+
+test('upgrade: a corrupt-present ledger fails closed with status=blocked — must NOT throw or return not_installed (issue-4)', async () => {
+  const dir = runtime();
+  // Write a corrupt ledger file (present but unparseable).
+  const ledgerPath = path.join(dir, ledgerMod.LEDGER_FILE_NAME);
+  fs.mkdirSync(dir, { recursive: true });
+  const corruptContent = '{ broken json ---';
+  fs.writeFileSync(ledgerPath, corruptContent);
+
+  // upgradeCapability must NOT throw — it must return a blocked result.
+  let result;
+  await assert.doesNotReject(
+    async () => {
+      result = await lifecycle.upgradeCapability('./x', {
+        runtimeDir: dir, hostVersion: '1.6.0',
+        _resolve: fakeResolve(declarativeCap('x', '2.0.0')),
+      });
+    },
+    'upgradeCapability must not throw on a corrupt ledger — must return a blocked result',
+  );
+
+  assert.strictEqual(result.status, 'blocked',
+    `upgradeCapability must return status='blocked' on corrupt ledger; got: ${result?.status}`);
+  assert.ok(
+    result.blockReasons && result.blockReasons.some((r) => /corrupt/i.test(r)),
+    `blockReasons must mention corruption; got: ${JSON.stringify(result?.blockReasons)}`,
+  );
+
+  // The corrupt file must still be at its ORIGINAL PATH (non-destructive — finding 1).
+  assert.ok(fs.existsSync(ledgerPath), 'corrupt file must remain in place after blocked upgrade');
+  assert.strictEqual(fs.readFileSync(ledgerPath, 'utf8'), corruptContent, 'corrupt content unchanged');
+  // No quarantine files must exist.
+  const quarantines = fs.readdirSync(dir).filter((n) => n.includes(ledgerMod.LEDGER_FILE_NAME) && n.includes('.corrupt.'));
+  assert.strictEqual(quarantines.length, 0, 'no quarantine files must exist — non-destructive behavior');
+});
+
+test('remove: a corrupt-present ledger fails closed with status=blocked — must NOT throw or return not_installed (issue-4)', () => {
+  const dir = runtime();
+  const ledgerPath = path.join(dir, ledgerMod.LEDGER_FILE_NAME);
+  fs.mkdirSync(dir, { recursive: true });
+  const corruptContent = '{ broken json ---';
+  fs.writeFileSync(ledgerPath, corruptContent);
+
+  // removeCapability must NOT throw — it must return a blocked result.
+  let result;
+  assert.doesNotThrow(
+    () => {
+      result = lifecycle.removeCapability('some-cap', { runtimeDir: dir });
+    },
+    'removeCapability must not throw on a corrupt ledger — must return a blocked result',
+  );
+
+  assert.strictEqual(result.status, 'blocked',
+    `removeCapability must return status='blocked' on corrupt ledger; got: ${result?.status}`);
+  assert.ok(
+    result.blockReasons && result.blockReasons.some((r) => /corrupt/i.test(r)),
+    `blockReasons must mention corruption; got: ${JSON.stringify(result?.blockReasons)}`,
+  );
+
+  // The corrupt file must still be at its ORIGINAL PATH (non-destructive — finding 1).
+  assert.ok(fs.existsSync(ledgerPath), 'corrupt file must remain in place after blocked remove');
+  assert.strictEqual(fs.readFileSync(ledgerPath, 'utf8'), corruptContent, 'corrupt content unchanged');
+  // No quarantine files must exist.
+  const quarantines = fs.readdirSync(dir).filter((n) => n.includes(ledgerMod.LEDGER_FILE_NAME) && n.includes('.corrupt.'));
+  assert.strictEqual(quarantines.length, 0, 'no quarantine files must exist — non-destructive behavior');
+});
+
+// ---------------------------------------------------------------------------
+// Finding 2 (HIGH): remove must run a READ-ONLY corruption preflight BEFORE acquireLock.
+// On a corrupt ledger it must NOT create .gsd/capabilities and must NOT create a .lock.
+// ---------------------------------------------------------------------------
+
+test('finding-2: removeCapability on a corrupt ledger does NOT acquire a lock or create .gsd/capabilities (preflight precedes acquireLock)', () => {
+  const dir = runtime();
+  const ledgerPath = path.join(dir, ledgerMod.LEDGER_FILE_NAME);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(ledgerPath, '{ broken json ---');
+
+  const capsRoot = path.join(dir, '.gsd', 'capabilities');
+  assert.ok(!fs.existsSync(capsRoot), 'precondition: .gsd/capabilities must not exist yet');
+
+  const result = lifecycle.removeCapability('some-cap', { runtimeDir: dir });
+
+  assert.strictEqual(result.status, 'blocked',
+    `removeCapability must be blocked on corrupt ledger; got: ${result?.status}`);
+  assert.ok(result.blockReasons && /corrupt|invalid/i.test(result.blockReasons.join(' ')),
+    `block reason must name corruption; got: "${(result.blockReasons || []).join(' ')}"`);
+
+  // UNCONDITIONAL: the read-only preflight failed BEFORE acquireLock, so no lock dir/file exists.
+  assert.ok(!fs.existsSync(capsRoot),
+    '.gsd/capabilities must NOT be created by acquireLock when the corruption preflight blocks first');
+  assert.ok(!fs.existsSync(path.join(capsRoot, '.lock')),
+    'no .lock file may be created when the corruption preflight blocks before acquireLock');
+});
+
+// ---------------------------------------------------------------------------
+// Issue 1 (HIGH): wrong-shape sharedEdits/files member → readLedgerStrict quarantines
+// → upgradeCapability/removeCapability return 'blocked', not a thrown error.
+// ---------------------------------------------------------------------------
+
+test('upgrade: wrong-shape sharedEdits member is treated as corrupt → status=blocked, not a thrown error (issue-1)', async () => {
+  const dir = runtime();
+  fs.mkdirSync(dir, { recursive: true });
+
+  // Write a ledger whose sharedEdits contains null — must fail deep validation.
+  const badLedger = {
+    version: '1',
+    updatedAt: new Date().toISOString(),
+    entries: {
+      x: {
+        id: 'x', version: '1.0.0', source: 'registry:test', integrity: 'sha256-abc',
+        files: [],
+        sharedEdits: [null],  // null member — must fail deep validation
+      },
+    },
+  };
+  const ledgerFilePath = path.join(dir, ledgerMod.LEDGER_FILE_NAME);
+  const badContent = JSON.stringify(badLedger, null, 2);
+  fs.writeFileSync(ledgerFilePath, badContent);
+
+  let result;
+  await assert.doesNotReject(
+    async () => {
+      result = await lifecycle.upgradeCapability('./x', {
+        runtimeDir: dir, hostVersion: '1.6.0',
+        _resolve: fakeResolve(declarativeCap('x', '2.0.0')),
+      });
+    },
+    'upgradeCapability must not throw on wrong-shape sharedEdits — must return blocked',
+  );
+
+  assert.strictEqual(result.status, 'blocked',
+    `must return status='blocked' for wrong-shape sharedEdits; got: ${result?.status}`);
+
+  // The corrupt file must still be in place (non-destructive — finding 1).
+  assert.ok(fs.existsSync(ledgerFilePath), 'malformed ledger must remain in place');
+  // No quarantine files must exist.
+  const quarantines = fs.readdirSync(dir).filter((n) => n.includes(ledgerMod.LEDGER_FILE_NAME) && n.includes('.corrupt.'));
+  assert.strictEqual(quarantines.length, 0, 'no quarantine files — non-destructive');
+});
+
+test('remove: wrong-shape files member is treated as corrupt → status=blocked, not a thrown error (issue-1)', () => {
+  const dir = runtime();
+  fs.mkdirSync(dir, { recursive: true });
+
+  // Write a ledger whose files[] contains a number — must fail deep validation.
+  const badLedger = {
+    version: '1',
+    updatedAt: new Date().toISOString(),
+    entries: {
+      'some-cap': {
+        id: 'some-cap', version: '1.0.0', source: 'registry:test', integrity: 'sha256-abc',
+        files: [123],  // non-string — must fail deep validation
+        sharedEdits: [],
+      },
+    },
+  };
+  const ledgerFilePath = path.join(dir, ledgerMod.LEDGER_FILE_NAME);
+  fs.writeFileSync(ledgerFilePath, JSON.stringify(badLedger, null, 2));
+
+  let result;
+  assert.doesNotThrow(
+    () => {
+      result = lifecycle.removeCapability('some-cap', { runtimeDir: dir });
+    },
+    'removeCapability must not throw on wrong-shape files[] — must return blocked',
+  );
+
+  assert.strictEqual(result.status, 'blocked',
+    `must return status='blocked' for wrong-shape files[]; got: ${result?.status}`);
+
+  // The malformed ledger must remain in place (non-destructive — finding 1).
+  assert.ok(fs.existsSync(ledgerFilePath), 'malformed ledger must remain in place');
+  const quarantines = fs.readdirSync(dir).filter((n) => n.includes(ledgerMod.LEDGER_FILE_NAME) && n.includes('.corrupt.'));
+  assert.strictEqual(quarantines.length, 0, 'no quarantine files — non-destructive');
+});
+
+// ---------------------------------------------------------------------------
 // Shared-edit helpers (direct) — prototype-pollution guard
 // ---------------------------------------------------------------------------
 
@@ -609,6 +814,180 @@ test('applyCapabilitySharedEdits: __proto__ event/name is skipped (no pollution)
 });
 
 // ---------------------------------------------------------------------------
+// Site B: reconcileCapabilities on a corrupt-present ledger must surface a
+// warning in its report, not silently do nothing (#1462).
+// ---------------------------------------------------------------------------
+
+test('reconcileCapabilities: a corrupt-present ledger surfaces a warning in report.warnings (site B)', () => {
+  const dir = runtime();
+  fs.mkdirSync(dir, { recursive: true });
+  // Write a corrupt (unparseable) ledger file.
+  fs.writeFileSync(path.join(dir, ledgerMod.LEDGER_FILE_NAME), '{ broken json ---');
+
+  let report;
+  assert.doesNotThrow(
+    () => { report = lifecycle.reconcileCapabilities({ runtimeDir: dir }); },
+    'reconcileCapabilities must not throw on a corrupt ledger',
+  );
+
+  assert.ok(report, 'must return a report object');
+  // The warning must be in the top-level report.warnings[] field (not only nested
+  // under report.ledger.warnings which is typed as unknown and callers miss it).
+  assert.ok(Array.isArray(report.warnings),
+    `report.warnings must be an array; got: ${typeof report.warnings}`);
+  assert.ok(
+    report.warnings.some((w) => /corrupt|could not be parsed/i.test(w)),
+    `report.warnings must contain a warning mentioning corruption; got: ${JSON.stringify(report.warnings)}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Finding 2 (HIGH): reconcile must run a READ-ONLY corruption preflight BEFORE acquireLock.
+// On a corrupt ledger it must warn WITHOUT creating .gsd/capabilities or a .lock.
+// ---------------------------------------------------------------------------
+
+test('finding-2: reconcileCapabilities on a corrupt ledger does NOT acquire a lock or create .gsd/capabilities (preflight precedes acquireLock)', () => {
+  const dir = runtime();
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, ledgerMod.LEDGER_FILE_NAME), '{ broken json ---');
+
+  const capsRoot = path.join(dir, '.gsd', 'capabilities');
+  assert.ok(!fs.existsSync(capsRoot), 'precondition: .gsd/capabilities must not exist yet');
+
+  const report = lifecycle.reconcileCapabilities({ runtimeDir: dir });
+
+  assert.ok(report.warnings.some((w) => /corrupt|could not be parsed/i.test(w)),
+    `report.warnings must mention corruption; got: ${JSON.stringify(report.warnings)}`);
+
+  // UNCONDITIONAL: the read-only preflight warned BEFORE acquireLock, so no lock dir/file exists.
+  assert.ok(!fs.existsSync(capsRoot),
+    '.gsd/capabilities must NOT be created by acquireLock when the corruption preflight warns first');
+  assert.ok(!fs.existsSync(path.join(capsRoot, '.lock')),
+    'no .lock file may be created when the corruption preflight warns before acquireLock');
+});
+
+// ---------------------------------------------------------------------------
+// Issue HIGH: installCapability corrupt-ledger fail-closed (Codex pass 3)
+// Prior-entry readLedger (non-strict) + uncaught recordInstall CorruptLedgerError
+// — both paths must return blocked, never throw.
+// ---------------------------------------------------------------------------
+
+test('install: a corrupt-present ledger fails closed with status=blocked — must NOT throw or return not_installed (codex-p3-h1)', async () => {
+  const dir = runtime();
+  const ledgerPath = path.join(dir, ledgerMod.LEDGER_FILE_NAME);
+  fs.mkdirSync(dir, { recursive: true });
+  const corruptContent = '{ broken json ---';
+  fs.writeFileSync(ledgerPath, corruptContent);
+
+  // installCapability must NOT throw — it must return a blocked result.
+  let result;
+  await assert.doesNotReject(
+    async () => {
+      result = await lifecycle.installCapability('./newcap', {
+        runtimeDir: dir, hostVersion: '1.6.0',
+        _resolve: fakeResolve(declarativeCap('newcap', '1.0.0')),
+      });
+    },
+    'installCapability must not throw on a corrupt ledger — must return a blocked result',
+  );
+
+  assert.strictEqual(result.status, 'blocked',
+    `installCapability must return status='blocked' on corrupt ledger; got: ${result?.status}`);
+  assert.ok(
+    result.blockReasons && result.blockReasons.some((r) => /corrupt/i.test(r)),
+    `blockReasons must mention corruption; got: ${JSON.stringify(result?.blockReasons)}`,
+  );
+
+  // The corrupt file must still be at its ORIGINAL PATH (non-destructive — finding 1).
+  assert.ok(fs.existsSync(ledgerPath), 'corrupt file must remain in place after blocked install');
+  assert.strictEqual(fs.readFileSync(ledgerPath, 'utf8'), corruptContent, 'corrupt content unchanged');
+  // No quarantine files must exist.
+  const quarantines = fs.readdirSync(dir).filter((n) => n.includes(ledgerMod.LEDGER_FILE_NAME) && n.includes('.corrupt.'));
+  assert.strictEqual(quarantines.length, 0, 'no quarantine files must exist — non-destructive behavior');
+});
+
+// ---------------------------------------------------------------------------
+// Finding 3: removeCapability ledger-write failure after files deleted → blocked result,
+// no unhandled throw. Coherent state: files gone, ledger still references them (retry-able).
+// ---------------------------------------------------------------------------
+
+test('remove: ledger commit failure after files are deleted returns blocked (finding-3)', async (t) => {
+  const dir = runtime();
+
+  // Install a capability.
+  await lifecycle.installCapability('./e', {
+    runtimeDir: dir, hostVersion: '1.6.0', consentGranted: true,
+    _resolve: fakeResolve(declarativeCap('e')),
+  });
+  assert.ok(ledgerMod.readLedger(dir)?.entries['e'], 'e must be installed');
+
+  // Mock renameSync to fail (ledger write = tmp+rename; make the rename fail).
+  const { mock } = require('node:test');
+  const renameMock = mock.method(require('node:fs'), 'renameSync', (_src, _dest) => {
+    const err = new Error('EXDEV: cross-device rename not permitted');
+    err.code = 'EXDEV';
+    throw err;
+  });
+  t.after(() => renameMock.mock.restore());
+
+  // removeCapability must NOT throw — must return a blocked result.
+  let result;
+  assert.doesNotThrow(
+    () => { result = lifecycle.removeCapability('e', { runtimeDir: dir }); },
+    'removeCapability must not throw when ledger commit fails',
+  );
+
+  assert.strictEqual(result.status, 'blocked',
+    `must return blocked when ledger write fails; got: ${result?.status}`);
+  assert.ok(
+    result.blockReasons && result.blockReasons.some((r) => /ledger commit failed|EXDEV/i.test(r)),
+    `blockReasons must mention ledger commit failure; got: ${JSON.stringify(result?.blockReasons)}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Finding 4: upgradeCapability intent-write failure → blocked result, no unhandled throw.
+// ---------------------------------------------------------------------------
+
+test('upgrade: intent recordInstall failure returns blocked (finding-4)', async (t) => {
+  const dir = runtime();
+
+  // Install first.
+  await lifecycle.installCapability('./e', {
+    runtimeDir: dir, hostVersion: '1.6.0', consentGranted: true,
+    _resolve: fakeResolve(declarativeCap('e', '1.0.0')),
+  });
+
+  // Mock renameSync to fail (writeLedger uses tmp+rename; the intent write will fail).
+  const { mock } = require('node:test');
+  const renameMock = mock.method(require('node:fs'), 'renameSync', (_src, _dest) => {
+    const err = new Error('EXDEV: cross-device rename not permitted');
+    err.code = 'EXDEV';
+    throw err;
+  });
+  t.after(() => renameMock.mock.restore());
+
+  // upgradeCapability must NOT throw — must return blocked.
+  let result;
+  await assert.doesNotReject(
+    async () => {
+      result = await lifecycle.upgradeCapability('./e', {
+        runtimeDir: dir, hostVersion: '1.6.0',
+        _resolve: fakeResolve(declarativeCap('e', '2.0.0')),
+      });
+    },
+    'upgradeCapability must not throw when intent write fails',
+  );
+
+  assert.strictEqual(result.status, 'blocked',
+    `must return blocked when upgrade intent write fails; got: ${result?.status}`);
+  assert.ok(
+    result.blockReasons && result.blockReasons.length > 0,
+    `must have blockReasons; got: ${JSON.stringify(result?.blockReasons)}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
 // Real-resolver integration (no _resolve seam)
 // ---------------------------------------------------------------------------
 
@@ -624,4 +1003,1554 @@ test('integration: install a real, valid, declarative local capability through t
   assert.strictEqual(res.id, 'realcap');
   assert.ok(fs.existsSync(path.join(dir, '.gsd', 'capabilities', 'realcap', 'capability.json')));
   assert.ok(readLedgerEntry(dir, 'realcap'), 'ledger entry recorded via real path');
+});
+
+// ---------------------------------------------------------------------------
+// Finding 3 (HIGH): removeCapability must commit from the ALREADY-read in-memory
+// ledger — not re-read via removeEntry's non-strict readLedger. A ledger corrupted
+// between the strict pre-read and the commit must not produce a silent 'removed'
+// result with dangling refs.
+// ---------------------------------------------------------------------------
+
+test('remove: finding-3 — removeCapability NEVER calls ledgerMod.removeEntry (uses in-memory writeLedger, not a re-read path)', async (t) => {
+  const dir = runtime();
+
+  // Install a capability so it exists in the ledger.
+  await lifecycle.installCapability('./rf3', {
+    runtimeDir: dir, hostVersion: '1.6.0', consentGranted: true,
+    _resolve: fakeResolve(declarativeCap('rf3')),
+  });
+  assert.ok(readLedgerEntry(dir, 'rf3'), 'rf3 must be installed before remove test');
+
+  // Spy on ledgerMod.removeEntry — removeCapability must NEVER call it.
+  // (removeCapability commits by mutating the in-memory ledger + writeLedger directly,
+  // never via removeEntry whose re-read is non-strict and would silently swallow corruption.)
+  const { mock } = require('node:test');
+  let removeEntryCalls = 0;
+  const removeEntryMock = mock.method(ledgerMod, 'removeEntry', function (...args) {
+    removeEntryCalls++;
+    // Still call through so ledger stays consistent if the code ever uses it.
+    return ledgerMod.removeEntry.__origFn ? ledgerMod.removeEntry.__origFn(...args) : undefined;
+  });
+  t.after(() => removeEntryMock.mock.restore());
+
+  const result = lifecycle.removeCapability('rf3', { runtimeDir: dir });
+  assert.strictEqual(result.status, 'removed',
+    'removeCapability must succeed using the in-memory writeLedger path');
+  assert.strictEqual(removeEntryCalls, 0,
+    'removeCapability must NEVER call ledgerMod.removeEntry — it must commit via the in-memory writeLedger path');
+  assert.strictEqual(readLedgerEntry(dir, 'rf3'), null, 'entry must be gone after remove');
+});
+
+test('remove: finding-3 — mid-remove corruption blocks coherently: capability files gone but ledger write fails → blocked (not silent removed with dangling refs)', async (t) => {
+  const dir = runtime();
+
+  // Install a capability.
+  await lifecycle.installCapability('./rf3b', {
+    runtimeDir: dir, hostVersion: '1.6.0', consentGranted: true,
+    _resolve: fakeResolve(declarativeCap('rf3b')),
+  });
+  assert.ok(readLedgerEntry(dir, 'rf3b'), 'rf3b must be installed');
+
+  // After strict pre-read, corrupt the ledger on disk so the writeLedger commit fails.
+  // We do this by intercepting the SECOND renameSync call (the atomic ledger write's rename)
+  // with an EXDEV error, simulating a commit failure after files are already deleted.
+  const { mock } = require('node:test');
+  const realRename = fs.renameSync.bind(fs);
+  let renameCount = 0;
+  const renameMock = mock.method(fs, 'renameSync', function (src, dst) {
+    renameCount++;
+    // The first rename may be for staging during install setup; skip it.
+    // The ledger commit rename will be for a .tmp.<pid>-<nonce> → .gsd-capabilities.json path.
+    if (typeof dst === 'string' && dst.includes('.gsd-capabilities.json') && renameCount >= 1) {
+      const err = new Error('EXDEV: cross-device link not permitted');
+      err.code = 'EXDEV';
+      throw err;
+    }
+    return realRename(src, dst);
+  });
+  t.after(() => renameMock.mock.restore());
+
+  const result = lifecycle.removeCapability('rf3b', { runtimeDir: dir });
+
+  // The result must be 'blocked' — not 'removed' — because the ledger commit failed.
+  // Returning 'removed' when the ledger write failed would be a "silent removed with dangling refs".
+  assert.strictEqual(result.status, 'blocked',
+    `removeCapability must return blocked when the ledger commit fails; got: ${result?.status}`);
+  assert.ok(
+    result.blockReasons && result.blockReasons.length > 0,
+    'must include blockReasons explaining the failure',
+  );
+  // The error message must NOT reference a non-existent CLI command ('gsd capability reconcile').
+  const reason = result.blockReasons[0] || '';
+  assert.ok(
+    !reason.includes('gsd capability reconcile'),
+    `blockReasons must not reference non-existent CLI subcommand 'gsd capability reconcile'; got: "${reason}"`,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// ROOT FIX 2: preflight strict-read BEFORE source resolution + staging.
+// A corrupt ledger must block install/upgrade BEFORE any staging dir is created.
+// ---------------------------------------------------------------------------
+
+test('root-fix-2: install on a corrupt-present ledger blocks BEFORE resolving source / creating staging', async (_t) => {
+  const dir = runtime();
+
+  // Write a corrupt ledger before attempting install.
+  const ledgerPath = path.join(dir, '.gsd-capabilities.json');
+  fs.writeFileSync(ledgerPath, '{ broken json ---', 'utf8');
+
+  let resolveCalled = false;
+  const trackingResolve = async (spec, opts) => {
+    resolveCalled = true;
+    // Materialize a staging dir so a regression (resolve before strict read) is observable.
+    const root = path.join(opts.gsdHome, '.gsd', 'capabilities', '.staging');
+    fs.mkdirSync(root, { recursive: true });
+    const staged = path.join(root, 'preflight-test');
+    fs.mkdirSync(staged, { recursive: true });
+    fs.writeFileSync(path.join(staged, 'capability.json'), JSON.stringify(
+      { id: 'pf', role: 'feature', version: '1.0.0', title: 'pf', description: 'x',
+        tier: 'standard', requires: [], engines: { gsd: '>=1.0.0' },
+        runtimeCompat: { supported: ['*'], unsupported: [] },
+        skills: [], agents: [], hooks: [], config: {}, steps: [], contributions: [], gates: [] }
+    ), 'utf8');
+    return { id: 'pf', version: '1.0.0', stagedDir: staged, integrity: null, source: spec };
+  };
+
+  const result = await lifecycle.installCapability('./pf', {
+    runtimeDir: dir, hostVersion: '1.6.0',
+    _resolve: trackingResolve,
+  });
+
+  assert.strictEqual(result.status, 'blocked',
+    'installCapability must be blocked by a corrupt ledger');
+  assert.ok(result.blockReasons && result.blockReasons.length > 0, 'must have blockReasons');
+  // The block reason must be the CORRUPTION (not some downstream staging/consent message).
+  assert.ok(
+    /corrupt|invalid/i.test(result.blockReasons.join(' ')),
+    `block reason must name ledger corruption; got: "${result.blockReasons.join(' ')}"`,
+  );
+
+  // UNCONDITIONAL invariant: the strict read precedes source resolution, so the resolver is
+  // NEVER invoked when the ledger is corrupt. (Was gated behind `if (!resolveCalled)` — vacuous.)
+  assert.strictEqual(resolveCalled, false,
+    'resolver must NOT be called when the ledger is corrupt (strict read precedes _resolve)');
+
+  // And because resolve never ran, NO staging dir was created.
+  const stagingRoot = path.join(dir, '.gsd', 'capabilities', '.staging');
+  assert.ok(
+    !fs.existsSync(stagingRoot),
+    'no .staging dir may be created when the ledger is corrupt (preflight precedes staging)',
+  );
+});
+
+test('root-fix-2: upgrade on a corrupt-present ledger blocks BEFORE resolving source / creating staging', async (_t) => {
+  const dir = runtime();
+
+  // First install successfully.
+  await lifecycle.installCapability('./u2', {
+    runtimeDir: dir, hostVersion: '1.6.0',
+    _resolve: fakeResolve(declarativeCap('u2', '1.0.0')),
+  });
+
+  // Then corrupt the ledger.
+  const ledgerPath = path.join(dir, '.gsd-capabilities.json');
+  fs.writeFileSync(ledgerPath, '{ broken json ---', 'utf8');
+
+  let resolveCalled = false;
+  const trackingResolve = async (spec, opts) => {
+    resolveCalled = true;
+    const root = path.join(opts.gsdHome, '.gsd', 'capabilities', '.staging');
+    fs.mkdirSync(root, { recursive: true });
+    const staged = path.join(root, 'preflight-upgrade-test');
+    fs.mkdirSync(staged, { recursive: true });
+    fs.writeFileSync(path.join(staged, 'capability.json'), JSON.stringify(
+      { id: 'u2', role: 'feature', version: '2.0.0', title: 'u2', description: 'x',
+        tier: 'standard', requires: [], engines: { gsd: '>=1.0.0' },
+        runtimeCompat: { supported: ['*'], unsupported: [] },
+        skills: [], agents: [], hooks: [], config: {}, steps: [], contributions: [], gates: [] }
+    ), 'utf8');
+    return { id: 'u2', version: '2.0.0', stagedDir: staged, integrity: null, source: spec };
+  };
+
+  // Snapshot the .staging dir's prior contents (the successful install above may have left none,
+  // but be precise): the corrupt-upgrade attempt must add NOTHING.
+  const stagingRoot = path.join(dir, '.gsd', 'capabilities', '.staging');
+  const before = fs.existsSync(stagingRoot) ? fs.readdirSync(stagingRoot).sort() : [];
+
+  const result = await lifecycle.upgradeCapability('./u2-v2', {
+    runtimeDir: dir, hostVersion: '1.6.0',
+    _resolve: trackingResolve,
+  });
+
+  assert.strictEqual(result.status, 'blocked',
+    'upgradeCapability must be blocked by a corrupt ledger');
+  assert.ok(result.blockReasons && result.blockReasons.length > 0, 'must have blockReasons');
+  assert.ok(
+    /corrupt|invalid/i.test(result.blockReasons.join(' ')),
+    `block reason must name ledger corruption; got: "${result.blockReasons.join(' ')}"`,
+  );
+
+  // UNCONDITIONAL: strict read precedes resolution, so the resolver is never invoked.
+  assert.strictEqual(resolveCalled, false,
+    'resolver must NOT be called when the ledger is corrupt (strict read precedes _resolve)');
+
+  // No NEW staging entry was created by the corrupt-upgrade attempt.
+  const after = fs.existsSync(stagingRoot) ? fs.readdirSync(stagingRoot).sort() : [];
+  assert.deepStrictEqual(after, before,
+    'no new .staging entry may be created when the ledger is corrupt (preflight precedes staging)');
+});
+
+test('root-fix-2: corrupt-ledger EXECUTABLE install WITHOUT --yes blocks on CORRUPTION (not aborts on consent)', async (_t) => {
+  const dir = runtime();
+
+  // Write a corrupt ledger before attempting install.
+  const ledgerPath = path.join(dir, '.gsd-capabilities.json');
+  fs.writeFileSync(ledgerPath, '{ broken json ---', 'utf8');
+
+  let resolveCalled = false;
+  const trackingResolve = async (spec, opts) => {
+    resolveCalled = true;
+    const root = path.join(opts.gsdHome, '.gsd', 'capabilities', '.staging');
+    fs.mkdirSync(root, { recursive: true });
+    const staged = path.join(root, 'exec-corrupt-test');
+    fs.mkdirSync(staged, { recursive: true });
+    // An EXECUTABLE capability (declares a hook) — would normally require consent.
+    const manifest = execCap('execcap', '1.0.0', { script: 'hooks/run.js' });
+    fs.writeFileSync(path.join(staged, 'capability.json'), JSON.stringify(manifest), 'utf8');
+    materialize(staged, 'hooks/run.js');
+    return { id: 'execcap', version: '1.0.0', stagedDir: staged, integrity: null, source: spec };
+  };
+
+  // No consentGranted (i.e. no --yes). Pre-fix order returned 'aborted' (consent) BEFORE the
+  // strict read at ~660 ever ran, masking the corruption. Post-fix: corruption is detected FIRST.
+  const result = await lifecycle.installCapability('./execcap', {
+    runtimeDir: dir, hostVersion: '1.6.0',
+    _resolve: trackingResolve,
+    // consentGranted intentionally omitted (falsy) — this is the WITHOUT --yes case.
+  });
+
+  assert.strictEqual(result.status, 'blocked',
+    `corrupt-ledger executable install without --yes must be 'blocked' on corruption, ` +
+    `not 'aborted' on consent; got: ${result.status}`);
+  assert.notStrictEqual(result.status, 'aborted',
+    'must NOT report aborted-on-consent before the corruption is reported');
+  assert.ok(result.blockReasons && /corrupt|invalid/i.test(result.blockReasons.join(' ')),
+    `block reason must name ledger corruption; got: "${(result.blockReasons || []).join(' ')}"`);
+  assert.strictEqual(resolveCalled, false,
+    'resolver must NOT be called — corruption is detected before resolution/consent');
+});
+
+// ---------------------------------------------------------------------------
+// ROOT FIX 3: unsafe capability ids rejected at install/upgrade before staging.
+// A __proto__/constructor/prototype bundle must never be promoted.
+// ---------------------------------------------------------------------------
+
+test('root-fix-3: installCapability rejects unsafe id (constructor) before staging/promotion', async (_t) => {
+  const dir = runtime();
+
+  const result = await lifecycle.installCapability('./evil', {
+    runtimeDir: dir, hostVersion: '1.6.0',
+    _resolve: async (spec, opts) => {
+      const root = path.join(opts.gsdHome, '.gsd', 'capabilities', '.staging');
+      fs.mkdirSync(root, { recursive: true });
+      const staged = path.join(root, 'unsafe-id-test');
+      fs.mkdirSync(staged, { recursive: true });
+      fs.writeFileSync(path.join(staged, 'capability.json'), JSON.stringify(
+        { id: 'constructor', role: 'feature', version: '1.0.0', title: 'evil',
+          description: 'evil', tier: 'standard', requires: [], engines: { gsd: '>=1.0.0' },
+          runtimeCompat: { supported: ['*'], unsupported: [] },
+          skills: [], agents: [], hooks: [], config: {}, steps: [], contributions: [], gates: [] }
+      ), 'utf8');
+      return { id: 'constructor', version: '1.0.0', stagedDir: staged, integrity: null, source: spec };
+    },
+  });
+
+  assert.strictEqual(result.status, 'blocked',
+    `installCapability must block a capability with id='constructor'; got: ${result.status}`);
+  assert.ok(result.blockReasons && result.blockReasons.length > 0, 'must have blockReasons');
+  // Must NOT have installed a bundle at .gsd/capabilities/constructor
+  assert.ok(
+    !fs.existsSync(path.join(dir, '.gsd', 'capabilities', 'constructor')),
+    'no .gsd/capabilities/constructor bundle must be promoted',
+  );
+  // Must NOT have a ledger entry for 'constructor'
+  const l = ledgerMod.readLedger(dir);
+  assert.ok(!l || !Object.prototype.hasOwnProperty.call(l.entries, 'constructor'),
+    'no ledger entry for id=constructor must exist');
+});
+
+test('root-fix-3: installCapability rejects __proto__ and prototype ids', async (_t) => {
+  const dir = runtime();
+
+  for (const unsafeId of ['__proto__', 'prototype']) {
+    const res = await lifecycle.installCapability('./evil', {
+      runtimeDir: dir, hostVersion: '1.6.0',
+      _resolve: async (spec, opts) => {
+        const root = path.join(opts.gsdHome, '.gsd', 'capabilities', '.staging');
+        fs.mkdirSync(root, { recursive: true });
+        const staged = path.join(root, `unsafe-${unsafeId}`);
+        fs.mkdirSync(staged, { recursive: true });
+        fs.writeFileSync(path.join(staged, 'capability.json'), JSON.stringify(
+          { id: unsafeId, role: 'feature', version: '1.0.0', title: 'evil',
+            description: 'evil', tier: 'standard', requires: [], engines: { gsd: '>=1.0.0' },
+            runtimeCompat: { supported: ['*'], unsupported: [] },
+            skills: [], agents: [], hooks: [], config: {}, steps: [], contributions: [], gates: [] }
+        ), 'utf8');
+        return { id: unsafeId, version: '1.0.0', stagedDir: staged, integrity: null, source: spec };
+      },
+    });
+    assert.strictEqual(res.status, 'blocked',
+      `installCapability must block id='${unsafeId}'; got: ${res.status}`);
+  }
+});
+
+test('root-fix-3: upgradeCapability rejects unsafe id (constructor) before staging/promotion', async (_t) => {
+  const dir = runtime();
+
+  // Install a safe version first.
+  await lifecycle.installCapability('./safe', {
+    runtimeDir: dir, hostVersion: '1.6.0',
+    _resolve: fakeResolve(declarativeCap('safe-cap', '1.0.0')),
+  });
+
+  // Attempt an upgrade where the resolved id is 'constructor' (source retargeted to unsafe id).
+  const result = await lifecycle.upgradeCapability('./evil-upgrade', {
+    runtimeDir: dir, hostVersion: '1.6.0',
+    _resolve: async (spec, opts) => {
+      const root = path.join(opts.gsdHome, '.gsd', 'capabilities', '.staging');
+      fs.mkdirSync(root, { recursive: true });
+      const staged = path.join(root, 'unsafe-upgrade-test');
+      fs.mkdirSync(staged, { recursive: true });
+      fs.writeFileSync(path.join(staged, 'capability.json'), JSON.stringify(
+        { id: 'constructor', role: 'feature', version: '2.0.0', title: 'evil',
+          description: 'evil', tier: 'standard', requires: [], engines: { gsd: '>=1.0.0' },
+          runtimeCompat: { supported: ['*'], unsupported: [] },
+          skills: [], agents: [], hooks: [], config: {}, steps: [], contributions: [], gates: [] }
+      ), 'utf8');
+      return { id: 'constructor', version: '2.0.0', stagedDir: staged, integrity: null, source: spec };
+    },
+  });
+
+  assert.strictEqual(result.status, 'blocked',
+    `upgradeCapability must block unsafe id='constructor'; got: ${result.status}`);
+  assert.ok(!fs.existsSync(path.join(dir, '.gsd', 'capabilities', 'constructor')),
+    'no .gsd/capabilities/constructor bundle must be promoted on upgrade');
+});
+
+// ---------------------------------------------------------------------------
+// FIX 5: removeCapability failure guidance must NOT reference 'gsd capability reconcile'
+// (a non-existent CLI subcommand).
+// ---------------------------------------------------------------------------
+
+test('fix-5: removeCapability commit-fail guidance does not reference nonexistent "gsd capability reconcile" subcommand', async (t) => {
+  const dir = runtime();
+
+  // Install a capability.
+  await lifecycle.installCapability('./fix5cap', {
+    runtimeDir: dir, hostVersion: '1.6.0',
+    _resolve: fakeResolve(declarativeCap('fix5cap')),
+  });
+
+  // Simulate commit failure by making the ledger write's renameSync throw.
+  const { mock } = require('node:test');
+  const realRename = fs.renameSync.bind(fs);
+  const renameMock = mock.method(fs, 'renameSync', function (src, dst) {
+    if (typeof dst === 'string' && dst.includes('.gsd-capabilities.json')) {
+      const err = new Error('EXDEV: cross-device link not permitted');
+      err.code = 'EXDEV';
+      throw err;
+    }
+    return realRename(src, dst);
+  });
+  t.after(() => renameMock.mock.restore());
+
+  const result = lifecycle.removeCapability('fix5cap', { runtimeDir: dir });
+  assert.strictEqual(result.status, 'blocked');
+
+  const reason = (result.blockReasons || []).join(' ');
+  assert.ok(
+    !reason.includes('gsd capability reconcile'),
+    `Failure guidance must not reference non-existent "gsd capability reconcile"; got: "${reason}"`,
+  );
+  // Must still mention a useful recovery action (inspect/restore the ledger file).
+  assert.ok(
+    reason.includes('ledger') || reason.includes('.gsd-capabilities.json') || reason.includes('remove'),
+    `Failure guidance must mention the ledger or re-run remove; got: "${reason}"`,
+  );
+});
+
+// ===========================================================================
+// Orthogonal adversarial review (#1462) — durability / concurrency / Windows /
+// DoS / UX cross-cutting findings. TDD red-first.
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Finding 1 (HIGH): lock liveness via PROCESS START-TIME. The lock has oscillated
+// (age-based→lost-update; pid-liveness→pid-reuse-deadlock; deadman→live-steal).
+// The convergent design records THIS process's start-time in the lock body and,
+// on the steal-decision path, treats a SAME-host holder as live ONLY if its pid
+// is alive AND the pid's CURRENT start-time matches the recorded one. That pair
+// (pid, start-time) identifies a process INSTANCE, so pid-reuse is detected as a
+// start-time MISMATCH and stolen, while a verified-live holder is NEVER stolen
+// (even past the deadman). A DIFFERENT host / unparseable-or-no-pid body can't be
+// verified locally → stolen only by the deadman fallback. A fresh lock is never
+// stolen.
+//
+// Tests inject DETERMINISTIC isPidAlive / getProcessStartTime via the exported
+// _setLockProbes seam so the start-time branches are exercised without depending on
+// real OS pids beyond the current process. Every test resets the probes in t.after.
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a JSON lock body matching the new lockfile shape. `startTime` is included by default; pass
+ * `startTime: null` to simulate a body that did not record one (legacy-ish / unverifiable).
+ */
+function lockBody({ pid = process.pid, host = os.hostname(), ts = Date.now(), startTime = 'START-A' } = {}) {
+  // First `-`-segment is still the pid (legacy token compatibility); the JSON body carries host + startTime.
+  return JSON.stringify({ token: `${pid}-${ts}-1`, pid, hostname: host, startTime, ts });
+}
+
+function writeLock(dir, body, ageMs) {
+  const lockPath = path.join(dir, '.gsd', 'capabilities', '.lock');
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  // Finding 1: age now binds to the BODY's own `ts` for a JSON body (not the file mtime). So a lock
+  // that is `ageMs` old must carry a `ts` that is `ageMs` in the past — backdate BOTH the body ts (for
+  // JSON bodies) AND the file mtime (for legacy/no-ts bodies, which still use the mtime fallback).
+  let written = body;
+  if (typeof body === 'string' && body.trim().startsWith('{')) {
+    try {
+      const obj = JSON.parse(body);
+      if (obj && typeof obj === 'object' && 'ts' in obj) {
+        obj.ts = Date.now() - ageMs; // backdate the body's own timestamp to the intended age.
+        written = JSON.stringify(obj);
+      }
+    } catch { /* not JSON after all — write verbatim */ }
+  }
+  fs.writeFileSync(lockPath, written, 'utf8');
+  const t = new Date(Date.now() - ageMs);
+  fs.utimesSync(lockPath, t, t);
+  return lockPath;
+}
+
+/** Install deterministic lock probes and auto-reset them after the test. */
+function withLockProbes(t, { alive, startTime }) {
+  lifecycle._setLockProbes({ isPidAlive: () => alive, getProcessStartTime: () => startTime });
+  t.after(() => lifecycle._resetLockProbes());
+}
+
+test('finding-1: acquireLock is exported (used by lock unit tests)', () => {
+  assert.ok(typeof lifecycle.acquireLock === 'function', 'acquireLock must be exported for testing');
+  assert.ok(typeof lifecycle._setLockProbes === 'function', '_setLockProbes seam must be exported');
+  assert.ok(typeof lifecycle.getProcessStartTime === 'function', 'getProcessStartTime must be exported');
+});
+
+// Revert-fails: drop the start-time match from holderVerifiedLive (treat any live pid as live) →
+// the verified-live SAME-host holder past the deadman is no longer protected and gets stolen, so
+// acquireLock returns a handle and this strictEqual(null) assertion fails.
+test('finding-1: a SAME-host VERIFIED-LIVE holder (pid alive + start-time MATCH) is NOT stolen — even past the deadman', (t) => {
+  const dir = runtime();
+  // pid alive AND its observed start-time equals the recorded one → verified-live → sacrosanct.
+  withLockProbes(t, { alive: true, startTime: 'START-A' });
+  const lockPath = writeLock(dir, lockBody({ pid: process.pid, host: os.hostname(), startTime: 'START-A' }), 11 * 60 * 1000);
+  const original = fs.readFileSync(lockPath, 'utf8');
+  const handle = lifecycle.acquireLock(dir);
+  assert.strictEqual(handle, null,
+    'a verified-live same-host holder must NEVER be stolen, even past the deadman');
+  assert.strictEqual(fs.readFileSync(lockPath, 'utf8'), original, 'the verified-live lock body must be untouched');
+});
+
+// Same protection must hold UNDER the deadman too (the older deadman-only design would also block
+// here, but this guards the explicit "verified-live → blocked" branch under the stale window).
+// Revert-fails: same as above — drop the start-time match → stolen → handle non-null → fails.
+test('finding-1: a SAME-host VERIFIED-LIVE holder (start-time MATCH), stale but under the deadman, is NOT stolen', (t) => {
+  const dir = runtime();
+  withLockProbes(t, { alive: true, startTime: 'START-A' });
+  const lockPath = writeLock(dir, lockBody({ pid: process.pid, host: os.hostname(), startTime: 'START-A' }), 2 * 60 * 1000);
+  const original = fs.readFileSync(lockPath, 'utf8');
+  const handle = lifecycle.acquireLock(dir);
+  assert.strictEqual(handle, null, 'a stale-but-verified-live same-host holder must NOT be stolen');
+  assert.strictEqual(fs.readFileSync(lockPath, 'utf8'), original, 'the verified-live lock body must be untouched');
+});
+
+// Revert-fails: drop the start-time MISMATCH check in holderVerifiedLive (return true on any live
+// pid) → the pid-reuse lock (alive pid, but a DIFFERENT current start-time) is treated as live and
+// NOT stolen, so acquireLock returns null and this "must be stolen" assertion fails — the permanent
+// pid-reuse deadlock the whole design exists to defeat.
+test('finding-1: a SAME-host pid-reuse holder (pid alive but start-time MISMATCH) IS stolen after stale', (t) => {
+  const dir = runtime();
+  // pid is "alive" but its CURRENT start-time differs from the recorded one → reuse → steal-eligible.
+  withLockProbes(t, { alive: true, startTime: 'NEW-START-after-reuse' });
+  const lockPath = writeLock(dir, lockBody({ pid: process.pid, host: os.hostname(), startTime: 'OLD-START-before-crash' }), 2 * 60 * 1000);
+  const handle = lifecycle.acquireLock(dir);
+  assert.ok(handle && handle.token,
+    'a same-host lock whose pid is alive but whose start-time no longer matches (pid-reuse) must be stolen');
+  assert.strictEqual(JSON.parse(fs.readFileSync(lockPath, 'utf8')).token, handle.token,
+    'the stolen lock body must now carry OUR token');
+  lifecycle.releaseLock(handle);
+});
+
+// Revert-fails: drop the dead-pid steal (require the deadman for same-host) → a demonstrably-dead
+// local holder past the stale window but under the deadman is never stolen, so acquireLock returns
+// null and this "must be stolen" assertion fails.
+test('finding-1: a SAME-host stale (>60s, <deadman) lock with a DEAD pid is stolen (fast local recovery)', (t) => {
+  const dir = runtime();
+  withLockProbes(t, { alive: false, startTime: 'START-A' }); // pid dead → not verified-live
+  writeLock(dir, lockBody({ pid: process.pid, host: os.hostname(), startTime: 'START-A' }), 2 * 60 * 1000);
+  const handle = lifecycle.acquireLock(dir);
+  assert.ok(handle && handle.token,
+    'a same-host stale lock whose pid is dead must be stolen before the deadman timeout');
+  lifecycle.releaseLock(handle);
+});
+
+// Revert-fails: drop the "recorded.startTime != null" requirement (treat a live pid with no recorded
+// start-time as verified-live) → a same-host live-pid lock that recorded NO start-time would be
+// blocked and never stolen, so this "must be stolen" assertion fails. A start-time we cannot verify
+// is NOT verified-live.
+test('finding-1: a SAME-host live-pid lock with NO recorded start-time is stolen after stale (unverifiable liveness)', (t) => {
+  const dir = runtime();
+  withLockProbes(t, { alive: true, startTime: 'START-A' }); // pid "alive" but body recorded no start-time
+  writeLock(dir, lockBody({ pid: process.pid, host: os.hostname(), startTime: null }), 2 * 60 * 1000);
+  const handle = lifecycle.acquireLock(dir);
+  assert.ok(handle && handle.token,
+    'a same-host live-pid lock whose body recorded no start-time cannot be verified-live → stolen after stale');
+  lifecycle.releaseLock(handle);
+});
+
+// Revert-fails: drop the "observed start-time unobtainable → not live" handling (return true when
+// getProcessStartTime is null) → a live-pid lock whose CURRENT start-time can't be read would be
+// blocked and never stolen, so this "must be stolen" assertion fails.
+test('finding-1: a SAME-host live-pid lock whose CURRENT start-time is unobtainable is stolen after stale', (t) => {
+  const dir = runtime();
+  withLockProbes(t, { alive: true, startTime: null }); // can't observe a current start-time
+  writeLock(dir, lockBody({ pid: process.pid, host: os.hostname(), startTime: 'START-A' }), 2 * 60 * 1000);
+  const handle = lifecycle.acquireLock(dir);
+  assert.ok(handle && handle.token,
+    'a same-host live-pid lock whose current start-time is unobtainable cannot be verified-live → stolen');
+  lifecycle.releaseLock(handle);
+});
+
+// Revert-fails: route a legacy (no-pid) body into the same-host-pid branch (or steal it before the
+// deadman) → a legacy lock under the deadman would be stolen, so this strictEqual(null) fails.
+// A no-pid body is unverifiable → only the deadman may reclaim it.
+test('finding-1: a stale legacy (no parseable pid) lock UNDER the deadman is NOT stolen (deadman-only)', (t) => {
+  const dir = runtime();
+  withLockProbes(t, { alive: true, startTime: 'START-A' });
+  const lockPath = writeLock(dir, 'legacy-token-no-pid', 2 * 60 * 1000); // non-JSON, no pid
+  const original = fs.readFileSync(lockPath, 'utf8');
+  const handle = lifecycle.acquireLock(dir);
+  assert.strictEqual(handle, null,
+    'a no-pid legacy lock under the deadman cannot be verified and must NOT be stolen yet');
+  assert.strictEqual(fs.readFileSync(lockPath, 'utf8'), original, 'the legacy lock body must be untouched');
+});
+
+// Revert-fails: drop the deadman fallback for the no-pid branch → a legacy lock past the deadman is
+// never reclaimed (permanent deadlock), so acquireLock returns null and this "must be stolen" fails.
+test('finding-1: a stale legacy (no parseable pid) lock OLDER than the deadman IS stolen (deadman defeats deadlock)', (t) => {
+  const dir = runtime();
+  withLockProbes(t, { alive: true, startTime: 'START-A' });
+  writeLock(dir, 'legacy-token-no-pid', 11 * 60 * 1000);
+  const handle = lifecycle.acquireLock(dir);
+  assert.ok(handle && handle.token, 'a no-pid legacy lock past the deadman must be stolen');
+  lifecycle.releaseLock(handle);
+});
+
+// Revert-fails: drop the DIFFERENT-host handling (judge any host by local pid liveness) → a remote
+// lock under the deadman gets stolen via a local pid that happens to be alive, so this
+// strictEqual(null) assertion fails. Local pid liveness is meaningless cross-host.
+test('finding-1: a DIFFERENT-host stale (<deadman) lock is NOT stolen (local pid is meaningless cross-host)', (t) => {
+  const dir = runtime();
+  withLockProbes(t, { alive: true, startTime: 'START-A' });
+  const lockPath = writeLock(dir, lockBody({ pid: process.pid, host: os.hostname() + '-OTHER-HOST' }), 2 * 60 * 1000);
+  const original = fs.readFileSync(lockPath, 'utf8');
+  const handle = lifecycle.acquireLock(dir);
+  assert.strictEqual(handle, null,
+    'a different-host lock under the deadman must NOT be stolen (local pid liveness is meaningless cross-host)');
+  assert.strictEqual(fs.readFileSync(lockPath, 'utf8'), original, 'the cross-host lock body must be untouched');
+});
+
+// Revert-fails: drop the deadman branch for the different-host case → a remote lock past the deadman
+// is never reclaimed, so acquireLock returns null and this "must be stolen" assertion fails.
+test('finding-1: a DIFFERENT-host lock OLDER than the deadman timeout IS stolen', (t) => {
+  const dir = runtime();
+  withLockProbes(t, { alive: true, startTime: 'START-A' });
+  writeLock(dir, lockBody({ pid: process.pid, host: os.hostname() + '-OTHER-HOST' }), 11 * 60 * 1000);
+  const handle = lifecycle.acquireLock(dir);
+  assert.ok(handle && handle.token,
+    'a different-host lock older than LOCK_DEADMAN_MS must be stolen (deadman defeats cross-host deadlock)');
+  lifecycle.releaseLock(handle);
+});
+
+// Revert-fails: remove the fresh-lock short-circuit (age <= LOCK_STALE_MS) → a 1-second-old lock
+// would be evaluated for stealing and (with a dead pid) stolen, so this strictEqual(null) fails.
+test('finding-1: a FRESH lock (under the stale window) is never stolen regardless of host/pid', (t) => {
+  const dir = runtime();
+  withLockProbes(t, { alive: false, startTime: 'START-A' }); // even a dead pid must not matter while fresh
+  const lockPath = writeLock(dir, lockBody({ pid: process.pid, host: os.hostname() }), 1000);
+  const original = fs.readFileSync(lockPath, 'utf8');
+  const handle = lifecycle.acquireLock(dir);
+  assert.strictEqual(handle, null, 'a fresh lock must never be stolen');
+  assert.strictEqual(fs.readFileSync(lockPath, 'utf8'), original, 'fresh lock body untouched');
+});
+
+// Finding 2 (MEDIUM): the lock body is untrusted. An OVERSIZED lock body must NOT be read whole; it
+// is treated as unparseable (no pid/host) → routed to the deadman policy.
+//
+// The oversized body is crafted so that, IF it were (wrongly) read, it would parse as a SAME-host,
+// alive-pid holder with a MISMATCHED start-time (pid-reuse) → which is steal-eligible after stale. So
+// WITHOUT the size cap the lock would be STOLEN (handle non-null); WITH the cap it is treated as
+// no-pid → NOT stolen under the deadman (handle null). The `strictEqual(null)` assertion therefore
+// holds ONLY when the cap is in effect — a true discriminator, not a vacuous pass.
+//
+// Revert-fails: drop the statSync size-cap in readParsedLockBounded (read the whole body) → the body
+// parses as an alive same-host holder with a mismatched start-time and is STOLEN, so acquireLock
+// returns a handle and this strictEqual(null) assertion fails.
+test('finding-2: an OVERSIZED lock body is treated as unparseable (no pid) and NOT stolen under the deadman', (t) => {
+  const dir = runtime();
+  // pid "alive" but the OBSERVED start-time differs from the recorded one → if the body were read it
+  // would look like steal-eligible pid-reuse. The size cap must prevent that read entirely.
+  withLockProbes(t, { alive: true, startTime: 'OBSERVED-NEW' });
+  const huge = JSON.stringify({ token: 't', pid: process.pid, hostname: os.hostname(), startTime: 'RECORDED-OLD', ts: Date.now(), pad: 'x'.repeat(70 * 1024) });
+  assert.ok(huge.length > 64 * 1024, 'test body must exceed the 64 KiB cap');
+  const lockPath = writeLock(dir, huge, 2 * 60 * 1000); // stale, under the deadman
+  const handle = lifecycle.acquireLock(dir);
+  assert.strictEqual(handle, null,
+    'an oversized lock body must be treated as unverifiable (no pid) → NOT stolen under the deadman');
+  assert.ok(fs.existsSync(lockPath), 'the oversized lock must remain in place (not read/stolen)');
+});
+
+// Revert-fails: drop the startTime field from the lock body written by acquireLock → the body has no
+// `startTime` key, so this assertion (startTime present + equals the cached self start-time when
+// obtainable, else null) fails on the missing key.
+test('finding-1: acquireLock records hostname + pid + token + startTime in the lockfile body', () => {
+  const dir = runtime();
+  const handle = lifecycle.acquireLock(dir);
+  assert.ok(handle, 'acquireLock must succeed on a fresh dir');
+  const raw = fs.readFileSync(handle.path, 'utf8');
+  let parsed;
+  assert.doesNotThrow(() => { parsed = JSON.parse(raw); }, 'lock body must be JSON');
+  assert.strictEqual(parsed.hostname, os.hostname(), 'lock body must record the hostname');
+  assert.strictEqual(parsed.pid, process.pid, 'lock body must record the pid');
+  assert.strictEqual(typeof parsed.token, 'string', 'lock body must record the owner token');
+  assert.strictEqual(parsed.token, handle.token, 'the recorded token must equal the handle token');
+  // startTime must be PRESENT as a key (string when obtainable on this OS, null otherwise) — and must
+  // equal what getProcessStartTime reports for THIS process (the cached self start-time).
+  assert.ok('startTime' in parsed, 'lock body must record a startTime key');
+  const selfStart = lifecycle.getProcessStartTime(process.pid);
+  assert.strictEqual(parsed.startTime, selfStart === null ? null : selfStart,
+    'recorded startTime must equal this process\'s observed start-time');
+  lifecycle.releaseLock(handle);
+});
+
+// ---------------------------------------------------------------------------
+// Finding 1 (HIGH): lock-steal TOCTOU — stale `mtime` age applied to a REPLACEMENT
+// lock body. A acquirer must bind its age decision to the SAME body instance it acts
+// on: for a JSON body the age comes from the body's own `ts` field (now - body.ts),
+// NOT the file `mtime` (a fresh replacement body carries a fresh `ts` → small age →
+// not stolen). And immediately BEFORE the atomic rename-steal it must re-stat and
+// confirm dev/ino (and, for JSON, body `ts`) are UNCHANGED; if changed → do NOT
+// steal, retry the bounded loop (B's fresh lock must not be rename-stolen).
+// ---------------------------------------------------------------------------
+
+// Revert-fails: derive age from `mtime` instead of the body `ts` → the body carries a RECENT ts but
+// the file mtime is backdated 2 min, so a mtime-age would read it as STALE and (pid dead) STEAL it,
+// making handle non-null. With ts-bound age the lock is FRESH → NOT stolen, so this strictEqual(null)
+// holds only when age is bound to the body instance.
+test('finding-1: a JSON lock with a RECENT body `ts` but an artificially-OLD mtime is NOT stolen (age binds to the body, not mtime)', (t) => {
+  const dir = runtime();
+  // pid "dead" so a mtime-derived STALE age would steal it; only ts-bound freshness can protect it.
+  withLockProbes(t, { alive: false, startTime: 'START-A' });
+  const lockPath = path.join(dir, '.gsd', 'capabilities', '.lock');
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  // Body `ts` is NOW (fresh replacement); file mtime is backdated 2 minutes (would look stale).
+  const freshBody = JSON.stringify({ token: `${process.pid}-${Date.now()}-1`, pid: process.pid, hostname: os.hostname(), startTime: 'START-A', ts: Date.now() });
+  fs.writeFileSync(lockPath, freshBody, 'utf8');
+  const old = new Date(Date.now() - 2 * 60 * 1000);
+  fs.utimesSync(lockPath, old, old);
+
+  const handle = lifecycle.acquireLock(dir);
+  assert.strictEqual(handle, null,
+    'a JSON lock whose BODY ts is fresh must be treated as FRESH (not stolen) even with an old mtime');
+  assert.strictEqual(fs.readFileSync(lockPath, 'utf8'), freshBody, 'the fresh-ts lock body must be untouched');
+});
+
+// A legacy/no-`ts` body still uses the mtime age (fallback). Revert-fails: if the fallback to mtime
+// for a no-ts body is dropped (e.g. treat missing ts as age 0 = fresh), a stale dead-pid legacy lock
+// past the deadman would never be stolen and this "must be stolen" assertion fails.
+test('finding-1: a legacy/no-`ts` body falls back to mtime age (stale past deadman → stolen)', (t) => {
+  const dir = runtime();
+  withLockProbes(t, { alive: true, startTime: 'START-A' });
+  writeLock(dir, 'legacy-token-no-pid', 11 * 60 * 1000); // no ts → mtime age → past deadman
+  const handle = lifecycle.acquireLock(dir);
+  assert.ok(handle && handle.token, 'a no-ts legacy lock past the deadman (mtime age) must be stolen');
+  lifecycle.releaseLock(handle);
+});
+
+// Revert-fails: drop the pre-rename dev/ino recheck → when B replaces the lock inode between A's
+// steal-decision and A's rename, A rename-steals B's FRESH lock (concurrent mutation). With the
+// recheck, the changed inode makes A `continue` (no steal), so the on-disk lock is never renamed —
+// this test forces a DIFFERENT ino on every recheck stat and asserts A never steals (returns null,
+// body untouched).
+test('finding-1: an inode change between the steal-decision and the rename causes a RETRY, not a steal', (t) => {
+  const dir = runtime();
+  const { mock } = require('node:test');
+  withLockProbes(t, { alive: false, startTime: 'START-A' }); // dead pid → otherwise steal-eligible
+  const lockPath = path.join(dir, '.gsd', 'capabilities', '.lock');
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  // Stale legacy body (no ts → mtime age), backdated past the deadman so the steal branch is reached.
+  const body = 'legacy-token-no-pid';
+  fs.writeFileSync(lockPath, body, 'utf8');
+  const old = new Date(Date.now() - 11 * 60 * 1000);
+  fs.utimesSync(lockPath, old, old);
+
+  // openSync('wx') always reports the lock held; renameSync would (without the recheck) "succeed".
+  const realOpen = fs.openSync.bind(fs);
+  const openMock = mock.method(fs, 'openSync', function (p, flags, ...rest) {
+    if (typeof p === 'string' && p.endsWith('.lock') && flags === 'wx') {
+      const err = new Error('EEXIST'); err.code = 'EEXIST'; throw err;
+    }
+    return realOpen(p, flags, ...rest);
+  });
+  // Alternate the reported inode: the DECISION stat sees ino=1, the pre-rename RECHECK stat sees
+  // ino=2 (B swapped the inode). Every recheck therefore observes a changed inode → A must retry.
+  let statCalls = 0;
+  const realStat = fs.statSync.bind(fs);
+  const statMock = mock.method(fs, 'statSync', function (p, ...rest) {
+    if (typeof p === 'string' && p.endsWith('.lock')) {
+      statCalls += 1;
+      const ino = (statCalls % 2 === 1) ? 1 : 2; // decision: 1, recheck: 2 (changed)
+      return { mtimeMs: Date.now() - 11 * 60 * 1000, dev: 1, ino, size: body.length, isFile: () => true };
+    }
+    return realStat(p, ...rest);
+  });
+  // If the recheck were absent, rename would fire and steal; track whether it was ever called on .lock.
+  let renamedLock = false;
+  const renameMock = mock.method(fs, 'renameSync', function (from, ...rest) {
+    if (typeof from === 'string' && from.endsWith('.lock')) { renamedLock = true; return; }
+    return require('node:fs').renameSync.wrappedMethod
+      ? require('node:fs').renameSync.wrappedMethod(from, ...rest)
+      : undefined;
+  });
+  t.after(() => { openMock.mock.restore(); statMock.mock.restore(); renameMock.mock.restore(); });
+
+  const handle = lifecycle.acquireLock(dir);
+  assert.strictEqual(handle, null, 'A must NOT acquire (every recheck saw a changed inode → retry, never steal)');
+  assert.strictEqual(renamedLock, false, 'A must NEVER rename-steal a lock whose inode changed under it');
+  assert.ok(statCalls >= 2, 'both a decision-stat and a pre-rename recheck-stat must have run');
+});
+
+// Revert-fails: drop the pre-rename body `ts` recheck for JSON bodies → when B replaces the JSON body
+// with a fresh `ts` (same inode) between A's decision and rename, A still steals. With the ts recheck,
+// the changed ts makes A `continue`. Here the DECISION read sees an OLD ts (steal-eligible) but the
+// RECHECK read sees a NEW ts → A must NOT steal.
+test('finding-1: a body `ts` change between the steal-decision and the rename causes a RETRY, not a steal', (t) => {
+  const dir = runtime();
+  const { mock } = require('node:test');
+  withLockProbes(t, { alive: false, startTime: 'START-A' }); // dead pid → steal-eligible if stale
+  const lockPath = path.join(dir, '.gsd', 'capabilities', '.lock');
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  // DECISION body: OLD ts (stale → steal-eligible with a dead pid). RECHECK body: fresh ts (B's swap).
+  const oldTs = Date.now() - 2 * 60 * 1000;
+  const oldBody = JSON.stringify({ token: 't-old', pid: process.pid, hostname: os.hostname(), startTime: 'START-A', ts: oldTs });
+  const newBody = JSON.stringify({ token: 't-new', pid: process.pid, hostname: os.hostname(), startTime: 'START-A', ts: Date.now() });
+  fs.writeFileSync(lockPath, oldBody, 'utf8');
+
+  // Track which fds belong to the .lock so fstat/readSync can be steered for them only. A 'wx' create
+  // throws EEXIST (held); an O_RDONLY|O_NONBLOCK read open returns the real fd and is registered.
+  const lockFds = new Set();
+  const realOpen = fs.openSync.bind(fs);
+  const openMock = mock.method(fs, 'openSync', function (p, flags, ...rest) {
+    if (typeof p === 'string' && p.endsWith('.lock') && flags === 'wx') {
+      const err = new Error('EEXIST'); err.code = 'EEXIST'; throw err;
+    }
+    const fd = realOpen(p, flags, ...rest);
+    if (typeof p === 'string' && p.endsWith('.lock')) lockFds.add(fd);
+    return fd;
+  });
+  // Same dev/ino across stats (so the body TS — not the inode — is the discriminator under test).
+  const realStat = fs.statSync.bind(fs);
+  const statMock = mock.method(fs, 'statSync', function (p, ...rest) {
+    if (typeof p === 'string' && p.endsWith('.lock')) {
+      return { mtimeMs: oldTs, dev: 7, ino: 7, size: oldBody.length, isFile: () => true };
+    }
+    return realStat(p, ...rest);
+  });
+  // The body is read via the fd-based reader (fstatSync + readSync). The DECISION read (the 1st
+  // readSmallRegularFile of the .lock) returns oldBody; every later RECHECK read returns newBody.
+  // Count fstatSync calls on .lock fds — one per readSmallRegularFile — to alternate the body.
+  const realFstat = fs.fstatSync.bind(fs);
+  let bodyReads = 0;
+  let activeBody = oldBody;
+  const fstatMock = mock.method(fs, 'fstatSync', function (fd, ...rest) {
+    if (lockFds.has(fd)) {
+      bodyReads += 1;
+      activeBody = bodyReads === 1 ? oldBody : newBody; // decision: old, recheck(s): new
+      return { isFile: () => true, isDirectory: () => false, size: activeBody.length };
+    }
+    return realFstat(fd, ...rest);
+  });
+  const realReadSync = fs.readSync.bind(fs);
+  const readMock = mock.method(fs, 'readSync', function (fd, buffer, offset, length, position, ...rest) {
+    if (lockFds.has(fd)) {
+      const bytes = Buffer.from(activeBody, 'utf8');
+      const n = Math.min(length, bytes.length - (position || 0));
+      if (n <= 0) return 0;
+      bytes.copy(buffer, offset, position || 0, (position || 0) + n);
+      return n;
+    }
+    return realReadSync(fd, buffer, offset, length, position, ...rest);
+  });
+  let renamedLock = false;
+  const renameMock = mock.method(fs, 'renameSync', function (from) {
+    if (typeof from === 'string' && from.endsWith('.lock')) { renamedLock = true; return; }
+    return undefined;
+  });
+  t.after(() => { openMock.mock.restore(); statMock.mock.restore(); fstatMock.mock.restore(); readMock.mock.restore(); renameMock.mock.restore(); });
+
+  const handle = lifecycle.acquireLock(dir);
+  assert.strictEqual(handle, null, 'A must NOT steal a JSON lock whose body ts changed (B replaced it) before the rename');
+  assert.strictEqual(renamedLock, false, 'A must NEVER rename-steal a lock whose body ts changed under it');
+  assert.ok(bodyReads >= 2, 'both a decision body-read and a pre-rename recheck body-read must have run');
+});
+
+// Finding 3 (LOW): sameLockInstance must reject a DISAPPEARING ts, not just a ts mismatch. If the
+// DECISION body had a non-null JSON ts but the RECHECK body (same inode) is now no-ts/garbage, the
+// "ts re-confirmed before steal" invariant is broken — the body changed under us, so A must retry,
+// NOT steal. (The prior code only rejected when BOTH ts were non-null and differed; a null recheck ts
+// slipped through as "same".)
+// Revert-fails: keep the old `a.ts !== null && b.ts !== null && a.ts !== b.ts` guard → a decision ts
+// that goes null on recheck is treated as the SAME instance, so A rename-steals it; this
+// strictEqual(null)/renamedLock===false pair fails.
+test('finding-3: a body `ts` going NULL between the steal-decision and the rename causes a RETRY, not a steal', (t) => {
+  const dir = runtime();
+  const { mock } = require('node:test');
+  withLockProbes(t, { alive: false, startTime: 'START-A' }); // dead pid → steal-eligible if stale
+  const lockPath = path.join(dir, '.gsd', 'capabilities', '.lock');
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  // DECISION body: a JSON body with a non-null OLD ts (stale → steal-eligible with a dead pid).
+  // RECHECK body: a no-`ts` legacy/garbage body on the SAME inode (B replaced the body content).
+  const oldTs = Date.now() - 2 * 60 * 1000;
+  const oldBody = JSON.stringify({ token: 't-old', pid: process.pid, hostname: os.hostname(), startTime: 'START-A', ts: oldTs });
+  const recheckBody = 'legacy-no-ts-garbage';
+  fs.writeFileSync(lockPath, oldBody, 'utf8');
+
+  const lockFds = new Set();
+  const realOpen = fs.openSync.bind(fs);
+  const openMock = mock.method(fs, 'openSync', function (p, flags, ...rest) {
+    if (typeof p === 'string' && p.endsWith('.lock') && flags === 'wx') {
+      const err = new Error('EEXIST'); err.code = 'EEXIST'; throw err;
+    }
+    const fd = realOpen(p, flags, ...rest);
+    if (typeof p === 'string' && p.endsWith('.lock')) lockFds.add(fd);
+    return fd;
+  });
+  // Same dev/ino across stats (so the body ts disappearing — not the inode — is the discriminator).
+  const realStat = fs.statSync.bind(fs);
+  const statMock = mock.method(fs, 'statSync', function (p, ...rest) {
+    if (typeof p === 'string' && p.endsWith('.lock')) {
+      return { mtimeMs: oldTs, dev: 9, ino: 9, size: oldBody.length, isFile: () => true };
+    }
+    return realStat(p, ...rest);
+  });
+  // fd-based reader (fstatSync + readSync): 1st .lock body read = oldBody (has ts); later reads =
+  // recheckBody (no ts). Alternate on the fstatSync call count (one per readSmallRegularFile).
+  const realFstat = fs.fstatSync.bind(fs);
+  let bodyReads = 0;
+  let activeBody = oldBody;
+  const fstatMock = mock.method(fs, 'fstatSync', function (fd, ...rest) {
+    if (lockFds.has(fd)) {
+      bodyReads += 1;
+      activeBody = bodyReads === 1 ? oldBody : recheckBody; // decision: has-ts, recheck(s): no-ts
+      return { isFile: () => true, isDirectory: () => false, size: activeBody.length };
+    }
+    return realFstat(fd, ...rest);
+  });
+  const realReadSync = fs.readSync.bind(fs);
+  const readMock = mock.method(fs, 'readSync', function (fd, buffer, offset, length, position, ...rest) {
+    if (lockFds.has(fd)) {
+      const bytes = Buffer.from(activeBody, 'utf8');
+      const n = Math.min(length, bytes.length - (position || 0));
+      if (n <= 0) return 0;
+      bytes.copy(buffer, offset, position || 0, (position || 0) + n);
+      return n;
+    }
+    return realReadSync(fd, buffer, offset, length, position, ...rest);
+  });
+  let renamedLock = false;
+  const renameMock = mock.method(fs, 'renameSync', function (from) {
+    if (typeof from === 'string' && from.endsWith('.lock')) { renamedLock = true; return; }
+    return undefined;
+  });
+  t.after(() => { openMock.mock.restore(); statMock.mock.restore(); fstatMock.mock.restore(); readMock.mock.restore(); renameMock.mock.restore(); });
+
+  const handle = lifecycle.acquireLock(dir);
+  assert.strictEqual(handle, null, 'A must NOT steal a lock whose decision ts went NULL on recheck (body changed)');
+  assert.strictEqual(renamedLock, false, 'A must NEVER rename-steal a lock whose body ts disappeared under it');
+  assert.ok(bodyReads >= 2, 'both a decision body-read and a pre-rename recheck body-read must have run');
+});
+
+// ---------------------------------------------------------------------------
+// Finding 2 (HIGH): the lock body is untrusted — its bounded read must go through the
+// shared fd-based regular-file reader (reject FIFO/device/non-regular, cap size) so a
+// FIFO/device/symlink lock cannot block or read unbounded. A non-regular lock body is
+// treated as unparseable (no pid/host) → deadman policy (not stolen under the deadman).
+// ---------------------------------------------------------------------------
+
+// Revert-fails: read the lock body via statSync(path)+readFileSync(path) → a FIFO lock body blocks
+// acquireLock forever (no writer). With the fd-based regular-file reader the FIFO body is rejected as
+// non-regular → unparseable (no pid) → NOT stolen under the deadman, so acquireLock returns promptly.
+test('finding-2: a FIFO lock body does NOT hang acquireLock — treated as unparseable (deadman policy)', (t) => {
+  const dir = runtime();
+  withLockProbes(t, { alive: true, startTime: 'START-A' });
+  const lockPath = path.join(dir, '.gsd', 'capabilities', '.lock');
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  if (!tryMkfifoLife(lockPath)) { t.skip('mkfifo unavailable on this platform'); return; }
+  const old = new Date(Date.now() - 2 * 60 * 1000); // stale, under the deadman
+  try { fs.utimesSync(lockPath, old, old); } catch { /* FIFO utimes best-effort */ }
+
+  let handle;
+  assert.doesNotThrow(() => { handle = lifecycle.acquireLock(dir); },
+    'acquireLock must not hang/throw on a FIFO lock body');
+  assert.strictEqual(handle, null,
+    'a FIFO (non-regular) lock body is unparseable (no pid) → NOT stolen under the deadman');
+});
+
+// ---------------------------------------------------------------------------
+// Finding 3 (LOW): partial lock orphan. After openSync(lockPath,'wx') succeeds, a
+// body-write/closeSync failure must unlink the just-created (empty) .lock so it does
+// not self-block until the deadman. Revert-fails: drop the cleanup-unlink → the
+// orphan .lock remains and this "no .lock left behind" assertion fails.
+//
+// Finding 2 (MEDIUM): the lock body is written with fs.writeFileSync(fd, …) (full-buffer write, no
+// short-writes), NOT a bare fs.writeSync(fd, …). Mocking fs.writeFileSync to fail proves the body
+// write goes through writeFileSync — if the code regressed to a bare writeSync this mock would NOT
+// fire, the write would succeed, and acquireLock would return a handle (this strictEqual(null) fails).
+// ---------------------------------------------------------------------------
+
+test('finding-3/2: a body-write (writeFileSync) failure after the exclusive create leaves NO orphan .lock behind', (t) => {
+  const dir = runtime();
+  const { mock } = require('node:test');
+  const lockPath = path.join(dir, '.gsd', 'capabilities', '.lock');
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+
+  // Let the exclusive create succeed (real openSync), then force the body write to fail. The body MUST
+  // be written via writeFileSync (finding 2), so mocking writeFileSync to throw is what trips it; if
+  // the code used a bare writeSync this would never fire (proving writeFileSync is the write path).
+  let writeFileFired = false;
+  const writeFileMock = mock.method(fs, 'writeFileSync', function (fd) {
+    // Only fail the fd-targeted lock body write (a numeric fd), not any path-based writes.
+    if (typeof fd === 'number') {
+      writeFileFired = true;
+      const err = new Error('ENOSPC: no space left on device'); err.code = 'ENOSPC'; throw err;
+    }
+    return undefined;
+  });
+  t.after(() => { writeFileMock.mock.restore(); });
+
+  const handle = lifecycle.acquireLock(dir);
+  assert.ok(writeFileFired, 'the lock body must be written via fs.writeFileSync(fd, …) (finding 2 short-write fix)');
+  assert.strictEqual(handle, null, 'acquireLock must return null when the lock body write fails');
+  assert.ok(!fs.existsSync(lockPath),
+    'the empty .lock created before the failed write must be unlinked (no self-blocking orphan)');
+});
+
+// Finding 5(c): the closeSync-failure variant. After openSync(lockPath,'wx') succeeds and the body
+// write succeeds, a closeSync failure must ALSO unlink the just-created .lock (the body may be
+// unflushed/partial) so no self-blocking orphan remains until the deadman.
+// Revert-fails: drop the closeSync-error cleanup-unlink in acquireLock → the .lock written before the
+// failed close is left behind and this "no .lock left behind" assertion fails.
+test('finding-3: a closeSync failure after the exclusive create+write leaves NO orphan .lock behind', (t) => {
+  const dir = runtime();
+  const { mock } = require('node:test');
+  const lockPath = path.join(dir, '.gsd', 'capabilities', '.lock');
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+
+  // Let the exclusive create AND the body write succeed; force ONLY the .lock fd's closeSync to fail.
+  // Track which fds belong to the .lock so unrelated closeSync calls (dir fsync, etc.) are untouched.
+  const realOpen = fs.openSync.bind(fs);
+  const lockFds = new Set();
+  const openMock = mock.method(fs, 'openSync', function (p, flags, ...rest) {
+    const fd = realOpen(p, flags, ...rest);
+    if (typeof p === 'string' && p.endsWith('.lock') && flags === 'wx') lockFds.add(fd);
+    return fd;
+  });
+  const realClose = fs.closeSync.bind(fs);
+  const closeMock = mock.method(fs, 'closeSync', function (fd, ...rest) {
+    if (lockFds.has(fd)) {
+      lockFds.delete(fd);
+      const err = new Error('EIO: delayed-writeback failure on close'); err.code = 'EIO'; throw err;
+    }
+    return realClose(fd, ...rest);
+  });
+  t.after(() => { openMock.mock.restore(); closeMock.mock.restore(); });
+
+  const handle = lifecycle.acquireLock(dir);
+  assert.strictEqual(handle, null, 'acquireLock must return null when the lock fd close fails');
+  assert.ok(!fs.existsSync(lockPath),
+    'the .lock created before the failed close must be unlinked (no self-blocking orphan)');
+});
+
+// ---------------------------------------------------------------------------
+// Finding 1 (HIGH): a FUTURE / implausibly-far-future body `ts` must NOT deadlock the
+// lock forever. age = now - ts goes negative (or stays tiny) for a future ts, keeping
+// age <= LOCK_STALE_MS so the lock is NEVER stale/deadman/steal-eligible → permanent
+// block. The fix distrusts a future ts and falls back to the file `mtime` for the age,
+// so stale/deadman recovery still bounds the lock.
+// ---------------------------------------------------------------------------
+
+// Revert-fails: drop the future-ts guard (use `now - ts` even when ts is in the future) → the
+// far-future body ts makes age negative (<= LOCK_STALE_MS) forever, so the lock is never stolen and
+// acquireLock returns null — this "must be stolen" assertion fails (the permanent deadlock).
+test('finding-1: a lock whose JSON body `ts` is far in the FUTURE is still reclaimed (mtime fallback), not blocked forever', (t) => {
+  const dir = runtime();
+  // Different host + past the deadman by MTIME so the deadman branch reclaims it once the future ts is
+  // distrusted. (A future ts under the trusting code would compute a negative age → never stale.)
+  withLockProbes(t, { alive: true, startTime: 'START-A' });
+  const lockPath = path.join(dir, '.gsd', 'capabilities', '.lock');
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  // Body ts is 1 hour in the FUTURE; file mtime is backdated 11 min (past the deadman).
+  const futureBody = JSON.stringify({
+    token: 't-future', pid: process.pid, hostname: os.hostname() + '-OTHER-HOST',
+    startTime: 'START-A', ts: Date.now() + 60 * 60 * 1000,
+  });
+  fs.writeFileSync(lockPath, futureBody, 'utf8');
+  const old = new Date(Date.now() - 11 * 60 * 1000);
+  fs.utimesSync(lockPath, old, old);
+
+  const handle = lifecycle.acquireLock(dir);
+  assert.ok(handle && handle.token,
+    'a lock with a far-FUTURE body ts must distrust the ts and fall back to mtime age → reclaimed past the deadman');
+  lifecycle.releaseLock(handle);
+});
+
+// ---------------------------------------------------------------------------
+// Finding 4 (LOW): releaseLock check-then-unlink TOCTOU minimization. The original
+// holder must rmSync ONLY when its OWN owner token is still in the lock body. A
+// SUCCESSOR lock (a new acquirer's lock at the same path, with a DIFFERENT token)
+// must NOT be deleted by the original holder's stale release.
+//
+// The PRIMARY, portable discriminator is the TOKEN re-check: a real successor wrote a
+// different token, so releaseLock reads a non-matching token and refuses to delete.
+// (The dev/ino recheck in releaseLock is a best-effort SECONDARY guard that may be
+// defeated by inode reuse on some filesystems — e.g. Linux ext4/overlay reusing the
+// freed inode after unlink+recreate — so this test does NOT rely on it: it asserts the
+// token mechanism, which holds on macOS AND Linux.)
+// ---------------------------------------------------------------------------
+
+// Revert-fails: drop the token re-check in releaseLock (delete on inode-match-only, or unconditionally)
+// → the original holder rmSyncs the successor's lock at the same path even though the body now carries a
+// DIFFERENT token, so the successor .lock is deleted and this "successor survives" assertion fails. The
+// token re-check (body token != handle.token) is what prevents the delete.
+test('finding-4: releaseLock does NOT delete a SUCCESSOR lock (different token) at the same path', () => {
+  const dir = runtime();
+  const lockPath = path.join(dir, '.gsd', 'capabilities', '.lock');
+
+  // The original holder acquires (captures its token + dev/ino in the handle).
+  const handle = lifecycle.acquireLock(dir);
+  assert.ok(handle && handle.path === lockPath, 'original holder must acquire the lock');
+
+  // Simulate the lock being stale-stolen then re-created by a SUCCESSOR at the same path with a
+  // DIFFERENT token. We do NOT mock the body read — releaseLock reads the REAL successor token below.
+  // (We deliberately do not assert anything about the inode: Linux may reuse the freed inode after
+  // unlink+recreate, so inode-distinctness is non-portable and is NOT the mechanism under test.)
+  fs.unlinkSync(lockPath);
+  const successorBody = JSON.stringify({
+    token: 'successor-token', pid: process.pid, hostname: os.hostname(), startTime: 'START-A', ts: Date.now(),
+  });
+  fs.writeFileSync(lockPath, successorBody, 'utf8');
+  assert.notStrictEqual(handle.token, 'successor-token', 'the successor token must differ from the original holder token');
+
+  lifecycle.releaseLock(handle);
+
+  assert.ok(fs.existsSync(lockPath), 'the SUCCESSOR lock at the same path must NOT be deleted by the original holder');
+  assert.strictEqual(fs.readFileSync(lockPath, 'utf8'), successorBody,
+    'the successor lock body must be untouched (original holder read a non-matching token and did not rmSync it)');
+});
+
+// Sanity companion: the NORMAL case (same inode + our token) still releases (so the inode guard does
+// not break legitimate release). Revert this would not be a fix-revert; it pins that the guard is not
+// over-strict (the dev/ino captured at acquire matches the unchanged on-disk lock → rmSync runs).
+test('finding-4: releaseLock STILL deletes our own unchanged lock (inode guard is not over-strict)', () => {
+  const dir = runtime();
+  const lockPath = path.join(dir, '.gsd', 'capabilities', '.lock');
+  const handle = lifecycle.acquireLock(dir);
+  assert.ok(handle, 'must acquire');
+  assert.ok(fs.existsSync(lockPath), 'lock present before release');
+  lifecycle.releaseLock(handle);
+  assert.ok(!fs.existsSync(lockPath), 'our own unchanged lock (matching token + inode) must be released');
+});
+
+// ---------------------------------------------------------------------------
+// CONC-2 / DOS-1 (LOW): acquireLock must be a BOUNDED iterative loop, not
+// unbounded recursion. A pathological never-acquirable lock must return null
+// without a stack overflow.
+// Revert-fails: restore the recursive `return acquireLock(runtimeDir)` calls →
+// the forced infinite contention recurses until RangeError (stack overflow),
+// so this test throws instead of returning null within the attempt cap.
+// ---------------------------------------------------------------------------
+
+test('CONC-2: acquireLock returns null on contention exhaustion WITHOUT a stack overflow (bounded loop)', (t) => {
+  const dir = runtime();
+  const { mock } = require('node:test');
+  fs.mkdirSync(path.join(dir, '.gsd', 'capabilities'), { recursive: true });
+
+  // Force every open to look "held" (EEXIST) and every stat to look STALE with a DEAD pid,
+  // so the steal path is always taken — but the rename never actually frees the lock (we make
+  // the lockfile re-appear). This exercises the retry loop to exhaustion.
+  const realOpen = fs.openSync.bind(fs);
+  const openMock = mock.method(fs, 'openSync', function (p, flags, ...rest) {
+    if (typeof p === 'string' && p.endsWith('.lock') && flags === 'wx') {
+      const err = new Error('EEXIST: file already exists');
+      err.code = 'EEXIST';
+      throw err;
+    }
+    return realOpen(p, flags, ...rest);
+  });
+  // statSync: present + stale (old mtime) so the steal branch is taken every time.
+  const statMock = mock.method(fs, 'statSync', function (p, ...rest) {
+    if (typeof p === 'string' && p.endsWith('.lock')) {
+      return { mtimeMs: Date.now() - 10 * 60 * 1000, isFile: () => true };
+    }
+    return require('node:fs').statSync.wrappedMethod
+      ? require('node:fs').statSync.wrappedMethod(p, ...rest)
+      : p;
+  });
+  // The lockfile reads as a dead-pid token so the steal is "allowed" but never succeeds in
+  // freeing the path (open keeps throwing EEXIST).
+  const realReadFile = fs.readFileSync.bind(fs);
+  const readMock = mock.method(fs, 'readFileSync', function (p, ...rest) {
+    if (typeof p === 'string' && p.endsWith('.lock')) return '999999999-1-1';
+    return realReadFile(p, ...rest);
+  });
+  // rename "succeeds" (so we proceed to retry) but the next open still throws EEXIST.
+  const renameMock = mock.method(fs, 'renameSync', function () { /* no-op: lock stays held */ });
+  const rmMock = mock.method(fs, 'rmSync', function () { /* no-op */ });
+  t.after(() => { openMock.mock.restore(); statMock.mock.restore(); readMock.mock.restore(); renameMock.mock.restore(); rmMock.mock.restore(); });
+
+  let handle;
+  assert.doesNotThrow(
+    () => { handle = lifecycle.acquireLock(dir); },
+    'acquireLock must not throw (no stack overflow) under pathological contention',
+  );
+  assert.strictEqual(handle, null, 'acquireLock must return null on attempt exhaustion');
+});
+
+// ---------------------------------------------------------------------------
+// MEDIUM finding — future mtime can deadlock lock recovery.
+//
+// `lockAgeMs` already distrusts a future body `ts` and falls back to `mtime`.
+// But if `mtime` is ALSO in the future (planted lock, or system clock stepped
+// backward after the lock was written), `Date.now() - mtimeMs` is negative →
+// `age <= LOCK_STALE_MS` stays true → the lock is treated as "fresh" forever →
+// permanent block of all capability mutations.
+//
+// Fix: when the mtime fallback also yields a negative age (untrustworthy source),
+// return `Number.MAX_SAFE_INTEGER` so the lock routes into the normal steal
+// decision tree. The verified-live guard (same-host + pid alive + start-time
+// match) is age-independent and still prevents false steals.
+// ---------------------------------------------------------------------------
+
+// Revert-fails: revert the `Number.MAX_SAFE_INTEGER` clamp in lockAgeMs (leave the
+// raw `Date.now() - mtimeMs` when it is negative) → age stays negative →
+// `age <= LOCK_STALE_MS` is always true → acquireLock returns null instead of a
+// handle, so this `assert.ok(handle && handle.token)` fails.
+test('MEDIUM: future mtime + DEAD pid → lock IS stolen (negative mtime age must not deadlock recovery)', (t) => {
+  const dir = runtime();
+  // Probe: pid is dead AND no start-time → definitely not verified-live.
+  withLockProbes(t, { alive: false, startTime: 'START-A' });
+  // Write a lock with FUTURE body ts AND future mtime (negative ageMs = future).
+  // writeLock(dir, body, ageMs) sets both `obj.ts = Date.now() - ageMs` and
+  // `utimesSync` to `Date.now() - ageMs`; negative ageMs pushes both into the future.
+  const FUTURE_MS = -5 * 60 * 1000; // 5 minutes in the future
+  writeLock(dir, lockBody({ pid: process.pid, host: os.hostname(), startTime: 'START-A' }), FUTURE_MS);
+  const handle = lifecycle.acquireLock(dir);
+  assert.ok(handle && handle.token,
+    'a future-mtime lock with a dead pid must be stolen (negative age must clamp to MAX_SAFE_INTEGER, not block forever)');
+  lifecycle.releaseLock(handle);
+});
+
+// Revert-fails: revert the clamp → age stays negative → acquireLock returns null
+// (permanent block), so this `ok(handle)` fails.
+test('MEDIUM: future body ts + future mtime + dead/unverifiable pid → lock IS stolen (both sources untrustworthy)', (t) => {
+  const dir = runtime();
+  withLockProbes(t, { alive: true, startTime: null }); // alive but start-time unobservable → unverifiable
+  const FUTURE_MS = -10 * 60 * 1000; // 10 minutes in the future
+  writeLock(dir, lockBody({ pid: process.pid, host: os.hostname(), startTime: 'START-A' }), FUTURE_MS);
+  const handle = lifecycle.acquireLock(dir);
+  assert.ok(handle && handle.token,
+    'a lock with both future body-ts and future mtime, held by an unverifiable pid, must be stolen');
+  lifecycle.releaseLock(handle);
+});
+
+// Revert-fails: NOT a fix-revert; pins that the clamp does NOT break the verified-live
+// protection. A future-mtime lock whose holder is SAME-host + pid alive + start-time
+// MATCH must NOT be stolen even after the age clamp kicks in (clamping to MAX_SAFE_INTEGER
+// makes it steal-eligible by age, but the verified-live check is age-independent and still
+// blocks the steal). If the clamp incorrectly bypasses verified-live, acquireLock returns a
+// handle here instead of null, and the `strictEqual(null)` fails.
+test('MEDIUM: future mtime + VERIFIED-LIVE same-host holder → lock is NOT stolen (clamp does not break liveness guard)', (t) => {
+  const dir = runtime();
+  // Probe: pid alive AND observed start-time MATCHES the recorded one → verified-live.
+  withLockProbes(t, { alive: true, startTime: 'START-A' });
+  const FUTURE_MS = -5 * 60 * 1000;
+  const lockPath = writeLock(dir, lockBody({ pid: process.pid, host: os.hostname(), startTime: 'START-A' }), FUTURE_MS);
+  const original = fs.readFileSync(lockPath, 'utf8');
+  const handle = lifecycle.acquireLock(dir);
+  assert.strictEqual(handle, null,
+    'a future-mtime lock held by a verified-live same-host process must NOT be stolen');
+  assert.strictEqual(fs.readFileSync(lockPath, 'utf8'), original, 'the verified-live lock body must be untouched');
+});
+
+// ---------------------------------------------------------------------------
+// CONC-3 (LOW): backup names must carry a crypto nonce so two processes upgrading
+// at the same millisecond cannot collide.
+// Revert-fails: drop the randomBytes nonce from the upgrade backupName → with
+// Date.now and pid stubbed equal the second upgrade's backupName equals the
+// first's, so the captured backup names are identical and the inequality fails.
+// ---------------------------------------------------------------------------
+
+test('CONC-3: upgrade backupName includes a random nonce (collision-resistant across same-ms processes)', async (t) => {
+  const dir = runtime();
+  await lifecycle.installCapability('./e', {
+    runtimeDir: dir, hostVersion: '1.6.0', consentGranted: true,
+    _resolve: fakeResolve(execCap('e', '1.0.0', { script: 'hooks/a.js' })),
+  });
+
+  // Capture the backupName the upgrade records into the _pending intent by spying on
+  // ledgerMod.recordInstall and reading the _pending.backupName.
+  const { mock } = require('node:test');
+  const capturedBackupNames = [];
+  const realRecord = ledgerMod.recordInstall.bind(ledgerMod);
+  const recordMock = mock.method(ledgerMod, 'recordInstall', function (rd, entry) {
+    if (entry && entry._pending && typeof entry._pending.backupName === 'string') {
+      capturedBackupNames.push(entry._pending.backupName);
+    }
+    return realRecord(rd, entry);
+  });
+  // Freeze Date.now so the timestamp portion is identical between two upgrades — only the
+  // nonce can differ.
+  const realNow = Date.now;
+  Date.now = () => 1700000000000;
+  t.after(() => { recordMock.mock.restore(); Date.now = realNow; });
+
+  await lifecycle.upgradeCapability('./e', {
+    runtimeDir: dir, hostVersion: '1.6.0', consentGranted: true,
+    _resolve: fakeResolve(execCap('e', '2.0.0', { script: 'hooks/a.js' })),
+  });
+  await lifecycle.upgradeCapability('./e', {
+    runtimeDir: dir, hostVersion: '1.6.0', consentGranted: true,
+    _resolve: fakeResolve(execCap('e', '3.0.0', { script: 'hooks/a.js' })),
+  });
+
+  assert.ok(capturedBackupNames.length >= 2,
+    `must capture at least two upgrade backupNames; got: ${JSON.stringify(capturedBackupNames)}`);
+  assert.notStrictEqual(capturedBackupNames[0], capturedBackupNames[1],
+    `same-ms upgrade backup names must differ via the random nonce; got both: ${capturedBackupNames[0]}`);
+});
+
+// ---------------------------------------------------------------------------
+// DUR-3 (HIGH): promoteStagingToFinal must fsync the parent directory after BOTH
+// renames (old→backup AND staging→final) so a crash between them cannot lose the
+// backup → reconcile silent-uninstall. The upgrade/reinstall path does exactly
+// two renames, so it must produce exactly TWO parent-dir fsyncs.
+// Revert-fails: drop EITHER fsyncDir(parent) in promoteStagingToFinal → the count
+// drops to 1 (or 0) and the `=== 2` assertion fails (a one-fsync regression that the
+// prior `>= 1` assertion would have silently passed).
+//
+// Note: the fd-tracking set REMOVES fds on close, because once a capsRoot dir fd is
+// closed the OS may reuse the SAME fd number for an unrelated open (e.g. the ledger
+// write's containing-dir fsync of runtimeDir), which must NOT be miscounted. Without
+// close-tracking the count is noisy (observed 4) and would mask a regression to 2/3.
+// ---------------------------------------------------------------------------
+
+test('DUR-3: promoteStagingToFinal fsyncs the parent directory after BOTH renames (exactly two, durable backup swap)', async (t) => {
+  const dir = runtime();
+  // First install so a prior bundle exists (so the upgrade path renames old→backup).
+  await lifecycle.installCapability('./e', {
+    runtimeDir: dir, hostVersion: '1.6.0', consentGranted: true,
+    _resolve: fakeResolve(declarativeCap('e', '1.0.0')),
+  });
+
+  const capsRoot = path.join(dir, '.gsd', 'capabilities');
+  const { mock } = require('node:test');
+  const realOpen = fs.openSync.bind(fs);
+  const realFsync = fs.fsyncSync.bind(fs);
+  const realClose = fs.closeSync.bind(fs);
+  const dirFds = new Set();
+  let parentDirFsyncs = 0;
+  const openMock = mock.method(fs, 'openSync', function (p, flags, ...rest) {
+    const fd = realOpen(p, flags, ...rest);
+    if (typeof p === 'string' && path.resolve(p) === path.resolve(capsRoot) && flags === 'r') dirFds.add(fd);
+    return fd;
+  });
+  const fsyncMock = mock.method(fs, 'fsyncSync', function (fd, ...rest) {
+    if (dirFds.has(fd)) parentDirFsyncs++;
+    return realFsync(fd, ...rest);
+  });
+  const closeMock = mock.method(fs, 'closeSync', function (fd, ...rest) {
+    // Drop the fd from the tracked set BEFORE closing: a reused fd number for a later non-capsRoot
+    // open must not be counted as a capsRoot dir fsync.
+    if (dirFds.has(fd)) dirFds.delete(fd);
+    return realClose(fd, ...rest);
+  });
+  t.after(() => { openMock.mock.restore(); fsyncMock.mock.restore(); closeMock.mock.restore(); });
+
+  // Reinstall over the existing bundle (upgrade-like path → old→backup, staging→final = two renames).
+  const res = await lifecycle.installCapability('./e', {
+    runtimeDir: dir, hostVersion: '1.6.0', consentGranted: true,
+    _resolve: fakeResolve(declarativeCap('e', '2.0.0')),
+  });
+  assert.strictEqual(res.status, 'installed');
+  assert.strictEqual(parentDirFsyncs, 2,
+    `promoteStagingToFinal must fsync the parent dir after BOTH renames (exactly 2); fsync count=${parentDirFsyncs}`);
+});
+
+// ---------------------------------------------------------------------------
+// Finding 4 (MEDIUM): the directory fsync in the lifecycle (fsyncDir, used by
+// promoteStagingToFinal) must NOT swallow ALL errors. It tolerates ONLY
+// EISDIR/EPERM/EINVAL/EBADF; any other errno (e.g. EIO) RETHROWS (durability
+// could not be confirmed). The dir fd must still be closed.
+// ---------------------------------------------------------------------------
+
+/** Mock fs.fsyncSync to throw `errno` ONLY for the capabilities-root dir fd (opened 'r'). */
+function withLifecycleDirFsyncError(t, capsRoot, errno) {
+  const dirFds = new Set();
+  const closed = [];
+  const realOpen = fs.openSync.bind(fs);
+  const openMock = mock.method(fs, 'openSync', function (p, flags, ...rest) {
+    const fd = realOpen(p, flags, ...rest);
+    if (typeof p === 'string' && path.resolve(p) === path.resolve(capsRoot) && flags === 'r') dirFds.add(fd);
+    return fd;
+  });
+  const realClose = fs.closeSync.bind(fs);
+  const closeMock = mock.method(fs, 'closeSync', function (fd) {
+    // Remove the fd from the tracked set BEFORE closing: once closed the OS may reuse the same
+    // fd NUMBER for an unrelated open (e.g. writeLedger's temp file), which must NOT be treated
+    // as the capabilities-root dir fd.
+    if (dirFds.has(fd)) { closed.push(fd); dirFds.delete(fd); }
+    return realClose(fd);
+  });
+  const realFsync = fs.fsyncSync.bind(fs);
+  const fsyncMock = mock.method(fs, 'fsyncSync', function (fd) {
+    if (dirFds.has(fd)) { const e = new Error(`${errno}: injected`); e.code = errno; throw e; }
+    return realFsync(fd);
+  });
+  t.after(() => { openMock.mock.restore(); closeMock.mock.restore(); fsyncMock.mock.restore(); });
+  return { closed };
+}
+
+// Revert-fails: restore the swallow-all `catch {}` in fsyncDir → the EIO dir-fsync
+// during promotion is swallowed, the install COMMITS and returns 'installed', so
+// this "must be blocked" assertion fails.
+test('finding-4: a NON-tolerated dir-fsync errno (EIO) during install promotion surfaces as blocked (durability not silently claimed)', async (t) => {
+  const dir = runtime();
+  const capsRoot = path.join(dir, '.gsd', 'capabilities');
+  fs.mkdirSync(capsRoot, { recursive: true });
+  const { closed } = withLifecycleDirFsyncError(t, capsRoot, 'EIO');
+
+  const res = await lifecycle.installCapability('./d', {
+    runtimeDir: dir, hostVersion: '1.6.0',
+    _resolve: fakeResolve(declarativeCap('d', '1.0.0')),
+  });
+  assert.strictEqual(res.status, 'blocked',
+    'an EIO directory-fsync error during promotion must NOT be swallowed (install blocked)');
+  assert.ok((res.blockReasons || []).some((r) => /durab/i.test(r)),
+    `block reason must indicate durability could not be confirmed; got ${JSON.stringify(res.blockReasons)}`);
+  assert.ok(closed.length >= 1, 'the directory fd must still be closed (finally)');
+});
+
+// Revert-fails: remove the tolerated-errno allowlist (rethrow EVERYTHING) → EISDIR
+// would block the install, so this 'installed' assertion fails.
+test('finding-4: a TOLERATED dir-fsync errno (EISDIR) during install promotion is ignored (install succeeds)', async (t) => {
+  const dir = runtime();
+  const capsRoot = path.join(dir, '.gsd', 'capabilities');
+  fs.mkdirSync(capsRoot, { recursive: true });
+  const { closed } = withLifecycleDirFsyncError(t, capsRoot, 'EISDIR');
+
+  const res = await lifecycle.installCapability('./d', {
+    runtimeDir: dir, hostVersion: '1.6.0',
+    _resolve: fakeResolve(declarativeCap('d', '1.0.0')),
+  });
+  assert.strictEqual(res.status, 'installed',
+    'an EISDIR directory-fsync error must be tolerated (best-effort) — install succeeds');
+  assert.ok(closed.length >= 1, 'the directory fd must still be closed (finally)');
+});
+
+// ---------------------------------------------------------------------------
+// DUR-6 (LOW): reconcile upgrade-rollback must renameSync(backup→final) FIRST
+// (atomic replace), not rmSync(final) before the rename — a crash between the
+// two leaves both gone.
+// Revert-fails: restore `rmSync(finalDir)` BEFORE `renameSync(backupDir, finalDir)`
+// → if we make ONLY the post-rmSync rename fail, the old rmSync-first order has
+// already destroyed finalDir, so the bundle is lost; the new order renames first
+// (no rmSync of finalDir) so the bundle survives. This test injects a crash right
+// after a (hypothetical) rmSync of finalDir and asserts the final bundle survives.
+// ---------------------------------------------------------------------------
+
+test('DUR-6: reconcile upgrade-rollback renames backup→final atomically (no rmSync-before-rename data loss)', (t) => {
+  const dir = runtime();
+  // Seed an in-flight upgrade: a NEW (uncommitted) bundle live + the OLD backup set aside,
+  // with a pending upgrade intent naming the backup.
+  const backupName = 'c.upgrading-111-222';
+  seedCapDir(dir, 'c', declarativeCap('c', '2.0.0'));           // new/uncommitted live dir
+  seedCapDir(dir, backupName, declarativeCap('c', '1.0.0'));    // old backup to restore
+  recordPending(dir, 'c', '2.0.0', { kind: 'upgrade', backupName, sharedFiles: [] });
+
+  // Spy: assert reconcile NEVER rmSyncs the finalDir before the backup rename. If the buggy
+  // order is restored, finalDir is rmSync'd first; the new order must rename the backup over
+  // finalDir directly (renameSync replaces atomically), so no rmSync of finalDir occurs.
+  const { mock } = require('node:test');
+  const finalDir = path.join(dir, '.gsd', 'capabilities', 'c');
+  const realRm = fs.rmSync.bind(fs);
+  const realRename = fs.renameSync.bind(fs); // capture BEFORE mocking
+  let finalDirRmBeforeRename = false;
+  let backupRenamedToFinal = false;
+  const renameMock = mock.method(fs, 'renameSync', function (src, dst, ...rest) {
+    if (typeof src === 'string' && typeof dst === 'string'
+      && path.resolve(src) === path.resolve(path.join(dir, '.gsd', 'capabilities', backupName))
+      && path.resolve(dst) === path.resolve(finalDir)) {
+      backupRenamedToFinal = true;
+    }
+    return realRename(src, dst, ...rest);
+  });
+  const rmMock = mock.method(fs, 'rmSync', function (p, ...rest) {
+    if (typeof p === 'string' && path.resolve(p) === path.resolve(finalDir) && !backupRenamedToFinal) {
+      finalDirRmBeforeRename = true;
+    }
+    return realRm(p, ...rest);
+  });
+  t.after(() => { renameMock.mock.restore(); rmMock.mock.restore(); });
+
+  const report = lifecycle.reconcileCapabilities({ runtimeDir: dir });
+  assert.ok(report.rolledBack.includes('c'), 'upgrade rollback must roll back c');
+  assert.strictEqual(finalDirRmBeforeRename, false,
+    'reconcile must NOT rmSync(finalDir) before renaming the backup over it (DUR-6 ordering)');
+  assert.ok(backupRenamedToFinal, 'reconcile must renameSync(backup→final) to restore the old bundle');
+  // The restored bundle is the OLD version.
+  assert.strictEqual(capManifestVersion(dir, 'c'), '1.0.0', 'rolled-back bundle must be the old version');
+});
+
+// ---------------------------------------------------------------------------
+// DOS-2 (MED): reconcile step-1 must accumulate mutations and write the ledger
+// ONCE at the end of step 1, not once per pending entry.
+// Revert-fails: restore per-entry recordInstall/removeEntry/writeLedger calls in
+// step 1 → with N pending entries the ledger is written N times, so the spied
+// writeLedger call count exceeds 1 for step-1 mutations and the "<= a small
+// bound" assertion fails.
+// ---------------------------------------------------------------------------
+
+test('DOS-2: reconcile with N pending entries writes the ledger at most once for step-1 mutations', (t) => {
+  const dir = runtime();
+  // Seed several uncommitted FRESH installs (kind 'install') — each would, in the buggy
+  // version, trigger its own removeEntry → writeLedger.
+  const ids = ['a-cap', 'b-cap', 'c-cap', 'd-cap'];
+  for (const id of ids) {
+    recordPending(dir, id, '1.0.0', { kind: 'install', backupName: null, sharedFiles: [] });
+    // Do NOT create the on-disk dir → safeRmUnder returns true (already gone) → entry rolled back.
+  }
+
+  const { mock } = require('node:test');
+  let ledgerWrites = 0;
+  const realWrite = ledgerMod.writeLedger.bind(ledgerMod);
+  const writeMock = mock.method(ledgerMod, 'writeLedger', function (rd, ledger) {
+    ledgerWrites++;
+    return realWrite(rd, ledger);
+  });
+  // removeEntry also writes the ledger internally; spy it too so any per-entry path is visible.
+  let removeEntryCalls = 0;
+  const realRemove = ledgerMod.removeEntry.bind(ledgerMod);
+  const removeMock = mock.method(ledgerMod, 'removeEntry', function (rd, id) {
+    removeEntryCalls++;
+    return realRemove(rd, id);
+  });
+  t.after(() => { writeMock.mock.restore(); removeMock.mock.restore(); });
+
+  const report = lifecycle.reconcileCapabilities({ runtimeDir: dir });
+  // All N entries must be rolled back.
+  for (const id of ids) {
+    assert.ok(report.rolledBack.includes(id), `${id} must be rolled back`);
+    assert.strictEqual(readLedgerEntry(dir, id), null, `${id} entry must be removed`);
+  }
+  // Step-1 must batch: at most ONE ledger write for the step-1 mutations (plus possibly
+  // the read-only reconcile() at the end does no write). It must be far below N.
+  assert.ok(ledgerWrites <= 1,
+    `step-1 must write the ledger at most once for N=${ids.length} pending entries; writes=${ledgerWrites}`);
+  assert.strictEqual(removeEntryCalls, 0,
+    `step-1 batching must not call removeEntry per entry; calls=${removeEntryCalls}`);
+});
+
+// ---------------------------------------------------------------------------
+// W-6 (NIT): reconcile's removeEntry/recordInstall calls can now throw (strict).
+// One bad entry must NOT abort the whole reconcile — it must warn and continue.
+// Revert-fails: remove the per-entry try/catch around the rollback mutations →
+// a throw on the first entry propagates out of the loop, so the SECOND (good)
+// entry is never rolled back and a warning is never recorded; the test's
+// "good entry still rolled back" + "warning recorded" assertions fail.
+// ---------------------------------------------------------------------------
+
+test('W-6: a throwing per-entry mutation does not abort reconcile (warns and continues)', (t) => {
+  const dir = runtime();
+  // 'bad-cap' is an uncommitted UPGRADE with a backup; we make a per-entry filesystem call throw
+  // for ITS backup path only. 'good-cap' is an uncommitted FRESH install that must still roll back.
+  const badBackup = 'bad-cap.upgrading-111-222';
+  seedCapDir(dir, badBackup, declarativeCap('bad-cap', '1.0.0'));
+  recordPending(dir, 'bad-cap', '1.0.0', { kind: 'upgrade', backupName: badBackup, sharedFiles: [] });
+  recordPending(dir, 'good-cap', '1.0.0', { kind: 'install', backupName: null, sharedFiles: [] });
+
+  const { mock } = require('node:test');
+  const realExists = fs.existsSync.bind(fs);
+  const badBackupPath = path.join(dir, '.gsd', 'capabilities', badBackup);
+  // existsSync(backupDir) is a direct per-entry call in reconcile's step-1 loop (outside the inner
+  // restore try/catch) — making it throw for bad-cap exercises the W-6 per-entry catch.
+  const existsMock = mock.method(fs, 'existsSync', function (p) {
+    if (typeof p === 'string' && path.resolve(p) === path.resolve(badBackupPath)) {
+      throw new Error('simulated per-entry IO failure for bad-cap');
+    }
+    return realExists(p);
+  });
+  t.after(() => existsMock.mock.restore());
+
+  let report;
+  assert.doesNotThrow(
+    () => { report = lifecycle.reconcileCapabilities({ runtimeDir: dir }); },
+    'a throwing per-entry mutation must not abort the whole reconcile',
+  );
+
+  // The GOOD entry must still be rolled back despite the bad one throwing.
+  assert.ok(report.rolledBack.includes('good-cap'),
+    `good-cap must still be rolled back after bad-cap threw; rolledBack=${JSON.stringify(report.rolledBack)}`);
+  assert.strictEqual(readLedgerEntry(dir, 'good-cap'), null, 'good-cap entry removed');
+  // The bad entry must be LEFT in place (not silently committed) for a later retry.
+  assert.ok(readLedgerEntry(dir, 'bad-cap'), 'bad-cap entry must remain (not silently dropped)');
+  // A warning must record the bad entry.
+  assert.ok(Array.isArray(report.warnings) && report.warnings.some((w) => /bad-cap/.test(w)),
+    `a warning must name the failed entry; warnings=${JSON.stringify(report.warnings)}`);
+});
+
+// ---------------------------------------------------------------------------
+// W-3 / DUR-5 (LOW): reconcile step-2 must sweep stale `.gsd-capabilities.json.tmp.*`
+// orphan temp files (older than a threshold) from the runtime dir.
+// Revert-fails: remove the stale-temp sweep → the old orphan temp file remains
+// after reconcile, so the "orphan removed" assertion fails.
+// ---------------------------------------------------------------------------
+
+test('W-3/DUR-5: reconcile sweeps a stale .gsd-capabilities.json.tmp.* orphan from the runtime dir', () => {
+  const dir = runtime();
+  fs.mkdirSync(dir, { recursive: true });
+  // A committed, valid ledger so reconcile proceeds past the corruption preflight.
+  ledgerMod.recordInstall(dir, { id: 'z', version: '1.0.0', source: 's', integrity: '', files: [], sharedEdits: [] });
+
+  // Plant a STALE orphan temp (older than the 5-min threshold) and a FRESH one (must be kept).
+  const staleTmp = path.join(dir, `${ledgerMod.LEDGER_FILE_NAME}.tmp.99999-deadbeef`);
+  const freshTmp = path.join(dir, `${ledgerMod.LEDGER_FILE_NAME}.tmp.99998-cafef00d`);
+  fs.writeFileSync(staleTmp, 'orphan');
+  fs.writeFileSync(freshTmp, 'fresh');
+  const old = new Date(Date.now() - 10 * 60 * 1000);
+  fs.utimesSync(staleTmp, old, old);
+
+  lifecycle.reconcileCapabilities({ runtimeDir: dir });
+
+  assert.ok(!fs.existsSync(staleTmp), 'stale orphan tmp file must be swept by reconcile (W-3/DUR-5)');
+  assert.ok(fs.existsSync(freshTmp), 'a fresh tmp file (possible in-flight write) must NOT be swept');
 });

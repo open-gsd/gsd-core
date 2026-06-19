@@ -158,7 +158,7 @@ gsd capability list [--json]
 
 | Flag | Description |
 |---|---|
-| `--json` | Emit the JSON array explicitly. (In 1.6.0 `list` always emits JSON; a formatted table is planned.) |
+| `--json` | Currently a **no-op**: `list` always emits the JSON array regardless of this flag. The flag is accepted for forward compatibility — a formatted human-readable table is planned, at which point `--json` will select the JSON form. Do not rely on omitting `--json` to get non-JSON output today. |
 
 **Behaviour**
 
