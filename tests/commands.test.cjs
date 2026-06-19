@@ -2736,13 +2736,18 @@ describe('pr-subrepo', () => {
       initDirtyRepo(backendDir, 'app.js');
 
       // Symlink escape: an in-tree name with no ".." and no "/" that points outside root.
-      // path.resolve would keep it "inside"; only realpathSync catches it.
-      fs.symlinkSync(outsideDir, path.join(scanRoot, 'evil'));
+      // path.resolve would keep it "inside"; only realpathSync catches it. Symlink
+      // creation needs privileges on Windows — skip just this vector if it throws.
+      let symlinked = true;
+      try { fs.symlinkSync(outsideDir, path.join(scanRoot, 'evil')); } catch { symlinked = false; }
 
       const traversalEntry = path.relative(scanRoot, outsideDir); // e.g. "../gsd-666-scan-outside-XXXX"
       const newlineEntry = 'good\nbad'; // record-separator injection attempt
       const dirtyFile = path.join(scanRoot, '_dirty');
-      const subReposJson = JSON.stringify(['evil', traversalEntry, newlineEntry, 'backend']);
+      const entries = symlinked
+        ? ['evil', traversalEntry, newlineEntry, 'backend']
+        : [traversalEntry, newlineEntry, 'backend'];
+      const subReposJson = JSON.stringify(entries);
 
       try {
         execFileSync('node', ['-e', script, subReposJson, scanRoot, dirtyFile], { stdio: 'pipe' });
@@ -2752,10 +2757,12 @@ describe('pr-subrepo', () => {
           !dirty.includes(path.basename(outsideDir)),
           `Path traversal reached git outside the workspace: ${JSON.stringify(dirty)}`
         );
-        assert.ok(
-          !lines.includes('evil'),
-          `Symlink entry reached git outside the workspace: ${JSON.stringify(dirty)}`
-        );
+        if (symlinked) {
+          assert.ok(
+            !lines.includes('evil'),
+            `Symlink entry reached git outside the workspace: ${JSON.stringify(dirty)}`
+          );
+        }
         assert.ok(
           !lines.includes('bad'),
           `Embedded-newline entry injected a spurious record: ${JSON.stringify(dirty)}`

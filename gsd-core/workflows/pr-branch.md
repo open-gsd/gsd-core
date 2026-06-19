@@ -132,19 +132,20 @@ RESULT=$(gsd_run query pr-subrepo "$COMMIT_MSG" \
 SUBREPO_EXIT=$?
 ```
 
-If the seam exited non-zero (stage/commit/push failure), report its error and move to
-the next sub-repo — do not fall through to the companion-PR step, whose "branch pushed"
-message would otherwise contradict the actual failure:
+If the seam exited non-zero (stage/commit/push failure), report its error and move on to
+the next selected sub-repo. **Do not run the companion-PR step below for this repo** —
+the seam's stderr already explains the failure, and the "branch pushed" path would
+otherwise contradict it:
 
 ```bash
 if [ "$SUBREPO_EXIT" -ne 0 ]; then
   echo "pr-subrepo failed for $REPO_REL — see error above; skipping companion PR." >&2
-  continue
 fi
 ```
 
-Parse the structured result with node and open the companion PR. If `remote_slug` is null
-(non-GitHub remote), skip `gh pr create` and show the push URL instead:
+Only when `$SUBREPO_EXIT` is `0`, parse the structured result with node and open the
+companion PR. If `remote_slug` is null (non-GitHub remote), skip `gh pr create` and show
+the push URL instead:
 
 ```bash
 REMOTE_SLUG=$(node -e "
