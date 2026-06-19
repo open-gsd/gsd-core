@@ -11,8 +11,16 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
-const { dispatchCapabilityCommand } = require('../gsd-core/bin/gsd-tools.cjs');
+const {
+  dispatchCapabilityCommand,
+  dispatchOverlayCapabilityCommand,
+  defaultRequireFromInstallRoot,
+} = require('../gsd-core/bin/gsd-tools.cjs');
+const { cleanup } = require('./helpers.cjs');
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -774,5 +782,150 @@ describe('dispatchCapabilityCommand — real registry behavior-preservation', ()
     });
 
     assert.strictEqual(result, false, 'unknown command against real registry must return false');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADR-1244 Phase 5 (D7) — third-party overlay command dispatch
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Synthetic overlay registry: commandFamilies + _overlay.commandRoots (capId → install dir). */
+function makeOverlayRegistry(families, commandRoots) {
+  return { commandFamilies: families, _overlay: { warnings: [], incompatibleGateCapIds: [], blockedGates: [], commandRoots } };
+}
+
+describe('dispatchOverlayCapabilityCommand — third-party overlay (Phase 5)', () => {
+  test('happy path: a third-party family (capId in commandRoots) dispatches from its install root', () => {
+    const calls = [];
+    const loadRegistry = () => makeOverlayRegistry(
+      { mycmd: { capId: 'thirdparty', module: 'router.cjs', router: 'run' } },
+      { thirdparty: '/install/root/thirdparty' },
+    );
+    const requireModule = (installRoot, m) => {
+      assert.strictEqual(installRoot, '/install/root/thirdparty', 'module required FROM the install root');
+      assert.strictEqual(m, 'router.cjs');
+      return { run: (ctx) => calls.push(ctx) };
+    };
+    const result = dispatchOverlayCapabilityCommand({
+      command: 'mycmd', args: ['a'], cwd: '/p', raw: false, error: () => {}, loadRegistry, requireModule,
+    });
+    assert.strictEqual(result, true);
+    assert.strictEqual(calls.length, 1);
+    assert.deepEqual(calls[0].args, ['a']);
+  });
+
+  test('a FIRST-PARTY family (capId NOT in commandRoots) falls through (handled by frozen-registry dispatch)', () => {
+    let required = false;
+    const loadRegistry = () => makeOverlayRegistry(
+      { graphify: { capId: 'graphify', module: 'graphify-command-router.cjs', router: 'routeGraphifyCommand' } },
+      {}, // graphify is first-party → not in commandRoots
+    );
+    const result = dispatchOverlayCapabilityCommand({
+      command: 'graphify', args: [], cwd: '/p', raw: false, error: () => {},
+      loadRegistry, requireModule: () => { required = true; return {}; },
+    });
+    assert.strictEqual(result, false, 'first-party must fall through, not be dispatched as overlay');
+    assert.strictEqual(required, false, 'first-party module must NOT be required from an install root');
+  });
+
+  test('unknown family → false', () => {
+    const loadRegistry = () => makeOverlayRegistry({}, {});
+    assert.strictEqual(dispatchOverlayCapabilityCommand({ command: 'nope', args: [], cwd: '/p', raw: false, error: () => {}, loadRegistry, requireModule: () => ({}) }), false);
+  });
+
+  test('no _overlay / no commandRoots on the registry → false', () => {
+    assert.strictEqual(dispatchOverlayCapabilityCommand({ command: 'x', args: [], cwd: '/p', raw: false, error: () => {}, loadRegistry: () => ({ commandFamilies: { x: { capId: 'x', module: 'm.cjs', router: 'r' } } }), requireModule: () => ({}) }), false);
+  });
+
+  test('loadRegistry throwing → false (falls through to Unknown)', () => {
+    assert.strictEqual(dispatchOverlayCapabilityCommand({ command: 'x', args: [], cwd: '/p', raw: false, error: () => {}, loadRegistry: () => { throw new Error('overlay scan failed'); }, requireModule: () => ({}) }), false);
+  });
+
+  test('prototype-pollution command keys → false (never reach the registry)', () => {
+    for (const command of ['__proto__', 'constructor', 'prototype']) {
+      let loaded = false;
+      const r = dispatchOverlayCapabilityCommand({ command, args: [], cwd: '/p', raw: false, error: () => {}, loadRegistry: () => { loaded = true; return makeOverlayRegistry({}, {}); }, requireModule: () => ({}) });
+      assert.strictEqual(r, false);
+      assert.strictEqual(loaded, false, command + ' must short-circuit before loadRegistry');
+    }
+  });
+
+  test('CONSENT NEGATIVE PROOF: a family whose capId is absent from commandRoots is never require()d', () => {
+    // Models an unconsented/_pending cap: the loader excludes it from commandRoots, so even though
+    // the (synthetic) commandFamilies names it, dispatch must NOT load its module.
+    let required = false;
+    const loadRegistry = () => makeOverlayRegistry(
+      { evil: { capId: 'evil', module: 'evil.cjs', router: 'run' } },
+      {}, // 'evil' NOT consented → absent from commandRoots
+    );
+    const result = dispatchOverlayCapabilityCommand({ command: 'evil', args: [], cwd: '/p', raw: false, error: () => {}, loadRegistry, requireModule: () => { required = true; return { run() {} }; } });
+    assert.strictEqual(result, false);
+    assert.strictEqual(required, false, 'an unconsented capability module must never be required');
+  });
+
+  test('module load failure → error diagnostic + consumed (true)', () => {
+    const errs = [];
+    const loadRegistry = () => makeOverlayRegistry({ x: { capId: 'tp', module: 'm.cjs', router: 'r' } }, { tp: '/root' });
+    const result = dispatchOverlayCapabilityCommand({ command: 'x', args: [], cwd: '/p', raw: false, error: (m) => errs.push(m), loadRegistry, requireModule: () => { throw new Error('boom'); } });
+    assert.strictEqual(result, true);
+    assert.ok(errs.some((e) => /failed to load from its install root/.test(e)));
+  });
+
+  test('router not an own export → error + consumed', () => {
+    const errs = [];
+    const loadRegistry = () => makeOverlayRegistry({ x: { capId: 'tp', module: 'm.cjs', router: 'toString' } }, { tp: '/root' });
+    const result = dispatchOverlayCapabilityCommand({ command: 'x', args: [], cwd: '/p', raw: false, error: (m) => errs.push(m), loadRegistry, requireModule: () => ({}) });
+    assert.strictEqual(result, true);
+    assert.ok(errs.some((e) => /is not an own export/.test(e)));
+  });
+
+  test('router not a function → error + consumed', () => {
+    const errs = [];
+    const loadRegistry = () => makeOverlayRegistry({ x: { capId: 'tp', module: 'm.cjs', router: 'r' } }, { tp: '/root' });
+    const result = dispatchOverlayCapabilityCommand({ command: 'x', args: [], cwd: '/p', raw: false, error: (m) => errs.push(m), loadRegistry, requireModule: () => ({ r: 42 }) });
+    assert.strictEqual(result, true);
+    assert.ok(errs.some((e) => /is not a function/.test(e)));
+  });
+
+  test('async router (returns a Promise) → SDK fail-fast diagnostic', () => {
+    const errs = [];
+    const loadRegistry = () => makeOverlayRegistry({ x: { capId: 'tp', module: 'm.cjs', router: 'r' } }, { tp: '/root' });
+    dispatchOverlayCapabilityCommand({ command: 'x', args: [], cwd: '/p', raw: false, error: (m) => errs.push(m), loadRegistry, requireModule: () => ({ r: () => Promise.resolve() }) });
+    assert.ok(errs.some((e) => /must be synchronous/.test(e)));
+  });
+});
+
+// ─── defaultRequireFromInstallRoot — real-filesystem confinement (negative proof) ───
+
+describe('defaultRequireFromInstallRoot — install-root confinement (Phase 5)', () => {
+  const dirs = [];
+  const mkroot = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-disp-')); dirs.push(d); return d; };
+  test.after(() => { for (const d of dirs) cleanup(d); });
+
+  test('loads a bare .cjs module that lives inside the install root', () => {
+    const root = mkroot();
+    fs.writeFileSync(path.join(root, 'router.cjs'), 'module.exports = { run: () => 7 };', 'utf8');
+    const mod = defaultRequireFromInstallRoot(root, 'router.cjs');
+    assert.strictEqual(mod.run(), 7);
+  });
+
+  test('rejects a non-.cjs / path-separator / .. module name', () => {
+    const root = mkroot();
+    assert.throws(() => defaultRequireFromInstallRoot(root, 'router.js'), /bare \.cjs basename/);
+    assert.throws(() => defaultRequireFromInstallRoot(root, '../escape.cjs'), /bare \.cjs basename/);
+    assert.throws(() => defaultRequireFromInstallRoot(root, 'sub/router.cjs'), /bare \.cjs basename/);
+    assert.throws(() => defaultRequireFromInstallRoot(root, '/abs/router.cjs'), /bare \.cjs basename/);
+  });
+
+  test('NEGATIVE PROOF: a symlinked module pointing OUTSIDE the install root is not loaded', () => {
+    const root = mkroot();
+    const outside = mkroot();
+    const secret = path.join(outside, 'secret.cjs');
+    fs.writeFileSync(secret, 'module.exports = { run: () => "PWNED" };', 'utf8');
+    // A bare-basename symlink inside the root whose real target escapes the root.
+    let linked = true;
+    try { fs.symlinkSync(secret, path.join(root, 'router.cjs')); } catch { linked = false; }
+    if (!linked) return; // platform without symlink perms — skip
+    assert.throws(() => defaultRequireFromInstallRoot(root, 'router.cjs'), /outside its install root/);
   });
 });

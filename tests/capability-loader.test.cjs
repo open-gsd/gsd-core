@@ -146,6 +146,46 @@ describe('loadRegistry — uncommitted (_pending) overlay is not activated (ADR-
   });
 });
 
+describe('loadRegistry — _overlay.commandRoots (ADR-1244 Phase 5 dispatch)', () => {
+  test('an accepted overlay cap that declares commands records its absolute install root', (t) => {
+    const home = makeOverlayHome([featureCap('tpcap', { commands: [{ family: 'tp-cmd', module: 'router.cjs', router: 'run' }] })]);
+    t.after(() => cleanup(home));
+    const reg = load(home);
+    assert.ok(reg.capabilities['tpcap'], 'overlay cap accepted');
+    assert.ok(reg._overlay && reg._overlay.commandRoots, '_overlay.commandRoots present');
+    assert.strictEqual(reg._overlay.commandRoots['tpcap'], path.join(home, '.gsd', 'capabilities', 'tpcap'), 'install root recorded');
+  });
+
+  test('an overlay cap WITHOUT commands is not in commandRoots, and first-party families are absent too', (t) => {
+    const home = makeOverlayHome([
+      featureCap('nocmd', { skills: ['nocmd-skill'] }),
+      featureCap('tpcap', { commands: [{ family: 'tp-cmd', module: 'router.cjs', router: 'run' }] }),
+    ]);
+    t.after(() => cleanup(home));
+    const reg = load(home);
+    const roots = reg._overlay.commandRoots;
+    assert.ok(!('nocmd' in roots), 'declarative overlay cap not in commandRoots');
+    assert.ok(!('graphify' in roots) && !('intel' in roots), 'first-party families never appear in commandRoots');
+  });
+
+  test('CONSENT NEGATIVE PROOF: a _pending (uncommitted) overlay cap with commands is NOT in commandRoots', (t) => {
+    const home = makeOverlayHome([featureCap('pendcmd', { commands: [{ family: 'pend-cmd', module: 'router.cjs', router: 'run' }] })]);
+    t.after(() => cleanup(home));
+    fs.writeFileSync(
+      path.join(home, '.gsd-capabilities.json'),
+      JSON.stringify({
+        version: '1', updatedAt: '2026-01-01T00:00:00Z',
+        entries: { pendcmd: { id: 'pendcmd', version: '1.0.0', source: 's', integrity: '', files: [], sharedEdits: [], _pending: { kind: 'install', backupName: null, sharedFiles: [] } } },
+      }),
+      'utf8',
+    );
+    const reg = load(home);
+    const roots = (reg._overlay && reg._overlay.commandRoots) || {};
+    assert.ok(!('pendcmd' in roots), 'an unconsented capability must not expose a dispatchable command root');
+    assert.ok(!reg.capabilities['pendcmd'], 'unconsented cap not activated');
+  });
+});
+
 describe('loadRegistry — first-party always wins', () => {
   test('overlay whose id collides with a first-party id is rejected; first-party preserved', (t) => {
     const home = makeOverlayHome([featureCap('ui', { skills: ['hijacked'] })]);

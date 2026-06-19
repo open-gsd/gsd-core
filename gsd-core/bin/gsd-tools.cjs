@@ -386,6 +386,120 @@ function dispatchCapabilityCommand({ command, args, cwd, raw, error, registry, r
   return true;
 }
 
+/**
+ * Require a THIRD-PARTY capability's router module from its install root, confined to that root.
+ * The module name must be a bare `.cjs` basename (same conservative pattern the generator enforces).
+ * The install root is realpath-resolved (defeating symlinked path components) and the resolved
+ * module must live strictly inside it; the module file is then realpath-checked so a symlinked file
+ * cannot escape the root either. ADR-1244 Phase 5 (D7).
+ *
+ * @param {string} installRoot Absolute install-root dir of the owning capability
+ * @param {string} m           Bare `.cjs` module basename from the capability manifest
+ * @returns {*} the required module
+ */
+function defaultRequireFromInstallRoot(installRoot, m) {
+  if (typeof m !== 'string' || !/^[A-Za-z0-9._-]+\.cjs$/.test(m)) {
+    throw new Error('capability module must be a bare .cjs basename: ' + JSON.stringify(m));
+  }
+  // Realpath the root so a symlinked ancestor can't widen confinement.
+  const realRoot = fs.realpathSync(installRoot);
+  const resolved = path.resolve(realRoot, m);
+  if (resolved === realRoot || !resolved.startsWith(realRoot + path.sep)) {
+    throw new Error('capability module path escapes its install root: ' + JSON.stringify(m));
+  }
+  // The module file itself must not be a symlink pointing outside the root.
+  const realResolved = fs.realpathSync(resolved);
+  if (realResolved !== realRoot && !realResolved.startsWith(realRoot + path.sep)) {
+    throw new Error('capability module resolves outside its install root (symlink): ' + JSON.stringify(m));
+  }
+  return require(realResolved);
+}
+
+/**
+ * Dispatch a THIRD-PARTY (installed overlay) capability command family — ADR-1244 Phase 5 (D7).
+ * This is where third-party code executes, so it is doubly gated:
+ *   - CONSENT: `loadRegistry({ includeInstalled })` excludes `_pending` (unconsented) capabilities,
+ *     and only third-party caps that declared `commands` appear in `_overlay.commandRoots`. A capId
+ *     absent from `commandRoots` is first-party (handled by dispatchCapabilityCommand) or not an
+ *     installed overlay — we fall through.
+ *   - CONFINEMENT: the router module is `require()`'d FROM the capability's install root, confined to
+ *     that root (basename validation + realpath containment), so a manifest can never reach code
+ *     outside its own bundle.
+ * Returns true when consumed (suppress "Unknown command"), false to fall through.
+ *
+ * @param {object} opts
+ * @param {Function} [opts.loadRegistry]  Injectable overlay loader (for tests)
+ * @param {Function} [opts.requireModule] Injectable (installRoot, module) loader (for tests)
+ */
+function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, loadRegistry, requireModule }) {
+  if (command === '__proto__' || command === 'constructor' || command === 'prototype') {
+    return false;
+  }
+
+  let reg;
+  try {
+    const load = loadRegistry !== undefined ? loadRegistry : require('./lib/capability-loader.cjs').loadRegistry;
+    reg = load({ includeInstalled: true, cwd });
+  } catch (_) {
+    return false; // overlay load failed — fall through to "Unknown command"
+  }
+
+  const families = reg && reg.commandFamilies;
+  const commandRoots = reg && reg._overlay && reg._overlay.commandRoots;
+  if (!families || typeof families !== 'object' || !commandRoots || typeof commandRoots !== 'object') {
+    return false; // no installed overlay command families
+  }
+
+  const entry = families[command];
+  if (!entry || typeof entry !== 'object') return false;
+
+  // Only THIRD-PARTY overlay caps are dispatched here. A capId present in commandRoots is an
+  // accepted, committed (consented) overlay cap; a capId absent is first-party or not an overlay.
+  const capId = entry.capId;
+  if (typeof capId !== 'string' || !Object.prototype.hasOwnProperty.call(commandRoots, capId)) {
+    return false;
+  }
+  const installRoot = commandRoots[capId];
+  if (typeof installRoot !== 'string' || !installRoot) return false;
+
+  const loadModule = requireModule !== undefined ? requireModule : defaultRequireFromInstallRoot;
+  let mod;
+  try {
+    mod = loadModule(installRoot, entry.module);
+  } catch (_) {
+    error('capability command "' + command + '" module "' + entry.module + '" failed to load from its install root');
+    return true; // consumed — don't emit "Unknown command"
+  }
+
+  if (!mod || !Object.prototype.hasOwnProperty.call(mod, entry.router)) {
+    error('capability command "' + command + '" router "' + entry.router + '" is not an own export of module "' + entry.module + '"');
+    return true;
+  }
+  const fn = mod[entry.router];
+  if (typeof fn !== 'function') {
+    error('capability command "' + command + '" router "' + entry.router + '" is not a function in module "' + entry.module + '"');
+    return true;
+  }
+
+  let _result;
+  try {
+    _result = fn({ args, cwd, raw, error });
+  } catch (e) {
+    if (e instanceof ExitError) throw e;
+    error(
+      'capability command "' + command + '" router "' + entry.router + '" in module "' + entry.module + '" threw: ' + (e && e.message ? e.message : String(e)),
+      ERROR_REASON.SDK_FAIL_FAST,
+    );
+  }
+  if (_result && typeof _result.then === 'function') {
+    error(
+      'capability command "' + command + '" router "' + entry.router + '" in module "' + entry.module + '" must be synchronous (returned a Promise); async capability routers are not supported.',
+      ERROR_REASON.SDK_FAIL_FAST,
+    );
+  }
+  return true;
+}
+
 // ─── Arg parsing helpers ──────────────────────────────────────────────────────
 
 // ─── CLI Router ───────────────────────────────────────────────────────────────
@@ -2207,6 +2321,11 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       // this returns true when a registered capability owns the command, false otherwise.
       if (dispatchCapabilityCommand({ command, args, cwd, raw, error })) break;
 
+      // ADR-1244 Phase 5 (D7): if no first-party family owns the command, try an INSTALLED
+      // THIRD-PARTY (overlay) capability — dispatched only if committed/consented and only by
+      // require()-ing its router FROM the capability's install root (confined to that root).
+      if (dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error })) break;
+
       // #3243: if the caller passed a dotted form (e.g. "foo.bar"), the shim
       // above split it so `command` here is the head ("foo"). Use
       // originalCommand to reconstruct the original dotted form and suggest
@@ -2236,4 +2355,6 @@ if (require.main === module) {
 // ─── Exports (for tests) ──────────────────────────────────────────────────────
 // ADR-959: export dispatchCapabilityCommand so tests can exercise it with
 // synthetic registry + requireModule injections.
-module.exports = { dispatchCapabilityCommand };
+// ADR-1244 Phase 5: export dispatchOverlayCapabilityCommand + defaultRequireFromInstallRoot for
+// the third-party overlay dispatch + install-root confinement tests.
+module.exports = { dispatchCapabilityCommand, dispatchOverlayCapabilityCommand, defaultRequireFromInstallRoot };

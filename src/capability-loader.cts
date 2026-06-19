@@ -107,6 +107,15 @@ export interface OverlayMeta {
    * point rather than proceeding as if the gate had passed.
    */
   blockedGates: BlockedGate[];
+  /**
+   * Absolute install-root directory for each ACCEPTED OVERLAY (third-party) capability that
+   * declares `commands` — `capId → <scope>/.gsd/capabilities/<capId>`. First-party capabilities
+   * are NOT listed here (their command modules ship in `bin/lib/`). ADR-1244 Phase 5 (D7) uses this
+   * to dispatch a third-party command family by `require()`-ing its router module FROM the install
+   * root, confined to that root. Only committed (non-`_pending`) capabilities reach this map, so its
+   * presence is the consent+commit signal a runtime dispatcher needs.
+   */
+  commandRoots: Record<string, string>;
 }
 
 const RESERVED_ID_PREFIX = /^(gsd-|gsd-core-|anthropic-)/;
@@ -209,6 +218,7 @@ export function loadRegistry(options: LoadRegistryOptions = {}): Registry {
   const warnings: OverlaySkip[] = [];
   const incompatibleGateCapIds: string[] = [];
   const blockedGates: BlockedGate[] = [];
+  const commandRoots: Record<string, string> = {};
   const overlayCaps: CapManifest[] = [];
 
   // First-party reservations — first-party always wins.
@@ -377,10 +387,14 @@ export function loadRegistry(options: LoadRegistryOptions = {}): Registry {
       for (const a of agents) claimedAgents.add(a);
       for (const k of cfgKeys) claimedConfig.add(k);
       for (const f of families) claimedFamilies.add(f);
+      // Record the install root for a third-party cap that ships command modules, so a runtime
+      // dispatcher can require() the router FROM the install root (ADR-1244 Phase 5 / D7). Only
+      // committed (non-_pending) caps reach this point, so presence here is the consent signal.
+      if (families.length > 0) commandRoots[id] = capDir;
     }
   }
 
-  const meta: OverlayMeta = { warnings, incompatibleGateCapIds, blockedGates };
+  const meta: OverlayMeta = { warnings, incompatibleGateCapIds, blockedGates, commandRoots };
 
   if (overlayCaps.length === 0) {
     // Nothing to compose. Return the frozen registry unchanged when there is
