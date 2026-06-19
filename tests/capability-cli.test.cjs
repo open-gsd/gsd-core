@@ -1,0 +1,290 @@
+'use strict';
+
+/**
+ * capability-cli.test.cjs — behavioral tests for the `gsd capability` MANAGEMENT CLI
+ * (ADR-1244 D5/D6): install / update / remove / list / disable / enable wired in
+ * gsd-tools.cjs `case 'capability'` to the Phase-4 lifecycle + Phase-3 ledger.
+ *
+ * These exercise the REAL CLI end-to-end via runGsdTools (subprocess), the REAL
+ * source resolver (local-path kind — no network), and a GSD_HOME-sandboxed global
+ * scope so no developer state is touched. They are the contract the reference doc
+ * (docs/reference/gsd-capability-command.md) is verified against.
+ */
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const { runGsdTools, cleanup } = require('./helpers.cjs');
+
+// ─── Fixtures ───────────────────────────────────────────────────────────────
+
+const tmps = [];
+function tmpDir(prefix) {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tmps.push(d);
+  return d;
+}
+test.after(() => { for (const d of tmps) cleanup(d); });
+
+/** A GSD_HOME-sandboxed env that also neutralizes ambient GSD_ vars (test hermeticity). */
+function scopeEnv(home) {
+  return { GSD_HOME: home, GSD_WORKSTREAM: '', GSD_PROJECT: '' };
+}
+
+/** A cwd with a .planning/ root so findProjectRoot resolves cleanly. */
+function makeCwd() {
+  const cwd = tmpDir('cap-cli-cwd-');
+  fs.mkdirSync(path.join(cwd, '.planning'), { recursive: true });
+  fs.writeFileSync(path.join(cwd, '.planning', 'config.json'), '{}');
+  return cwd;
+}
+
+/**
+ * Write a conformant local capability source dir and return its absolute path
+ * (usable directly as an install <spec>). Declarative by default; pass `hooks`
+ * (with materialized scripts) to make it an executable surface requiring consent.
+ */
+function writeCapSource(id, { version = '1.0.0', hooks = [], engines } = {}) {
+  const src = tmpDir(`cap-cli-src-${id}-`);
+  const cap = {
+    id,
+    role: 'feature',
+    version,
+    title: id,
+    description: 'test capability',
+    tier: 'standard',
+    requires: [],
+    runtimeCompat: { supported: ['*'], unsupported: [] },
+    skills: [],
+    agents: [],
+    hooks,
+    config: {},
+    steps: [],
+    contributions: [],
+    gates: [],
+  };
+  if (engines) cap.engines = engines;
+  fs.writeFileSync(path.join(src, 'capability.json'), JSON.stringify(cap, null, 2));
+  for (const h of hooks) {
+    if (h && h.script) {
+      const p = path.join(src, h.script);
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      fs.writeFileSync(p, '// artifact', 'utf8');
+    }
+  }
+  return src;
+}
+
+function ledgerPath(home) { return path.join(home, '.gsd-capabilities.json'); }
+function capDir(home, id) { return path.join(home, '.gsd', 'capabilities', id); }
+function readLedgerEntry(home, id) {
+  try {
+    const l = JSON.parse(fs.readFileSync(ledgerPath(home), 'utf8'));
+    return l && l.entries && l.entries[id] ? l.entries[id] : null;
+  } catch { return null; }
+}
+function parse(out) { return JSON.parse(out); }
+
+// ─── install ────────────────────────────────────────────────────────────────
+
+describe('capability install', () => {
+  test('declarative local capability installs to the global scope and records the ledger', () => {
+    const home = tmpDir('cap-cli-home-');
+    const src = writeCapSource('declcap');
+    const r = runGsdTools(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
+    assert.equal(r.success, true, `install failed: ${r.error || r.output}`);
+    const o = parse(r.output);
+    assert.equal(o.status, 'installed');
+    assert.equal(o.id, 'declcap');
+    assert.equal(o.scope, 'global');
+    assert.ok(readLedgerEntry(home, 'declcap'), 'ledger entry recorded');
+    assert.ok(fs.existsSync(path.join(capDir(home, 'declcap'), 'capability.json')), 'bundle extracted');
+  });
+
+  test('executable capability WITHOUT --yes aborts for consent and writes nothing', () => {
+    const home = tmpDir('cap-cli-home-');
+    const src = writeCapSource('execcap', { hooks: [{ event: 'PostToolUse', script: 'hooks/run.js' }] });
+    const r = runGsdTools(['capability', 'install', src, '--scope', 'global'], makeCwd(), scopeEnv(home));
+    assert.equal(r.success, false, 'unconsented executable install must fail');
+    assert.match(`${r.error}\n${r.output}`, /consent/i);
+    assert.equal(readLedgerEntry(home, 'execcap'), null, 'no ledger entry');
+    assert.ok(!fs.existsSync(capDir(home, 'execcap')), 'no install dir');
+  });
+
+  test('executable capability WITH --yes installs', () => {
+    const home = tmpDir('cap-cli-home-');
+    const src = writeCapSource('execyes', { hooks: [{ event: 'PostToolUse', script: 'hooks/run.js' }] });
+    const r = runGsdTools(['capability', 'install', src, '--scope', 'global', '--yes', '--raw'], makeCwd(), scopeEnv(home));
+    assert.equal(r.success, true, `install failed: ${r.error || r.output}`);
+    assert.equal(parse(r.output).status, 'installed');
+    assert.ok(readLedgerEntry(home, 'execyes'), 'ledger entry recorded');
+  });
+
+  test('a reserved-namespace id is blocked', () => {
+    const home = tmpDir('cap-cli-home-');
+    const src = writeCapSource('gsd-evil');
+    const r = runGsdTools(['capability', 'install', src, '--scope', 'global'], makeCwd(), scopeEnv(home));
+    assert.equal(r.success, false);
+    assert.match(`${r.error}\n${r.output}`, /blocked|reserved/i);
+    assert.ok(!fs.existsSync(capDir(home, 'gsd-evil')));
+  });
+
+  test('an engines-incompatible capability is blocked', () => {
+    const home = tmpDir('cap-cli-home-');
+    const src = writeCapSource('engcap', { engines: { gsd: '>=99.0.0' } });
+    const r = runGsdTools(['capability', 'install', src, '--scope', 'global'], makeCwd(), scopeEnv(home));
+    assert.equal(r.success, false);
+    assert.match(`${r.error}\n${r.output}`, /blocked/i);
+    assert.equal(readLedgerEntry(home, 'engcap'), null);
+  });
+
+  test('missing <spec> is a usage error', () => {
+    const r = runGsdTools(['capability', 'install'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
+    assert.equal(r.success, false);
+    assert.match(`${r.error}\n${r.output}`, /Missing <spec>/i);
+  });
+
+  test('an invalid --scope is rejected', () => {
+    const src = writeCapSource('scopecap');
+    const r = runGsdTools(['capability', 'install', src, '--scope', 'bogus'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
+    assert.equal(r.success, false);
+    assert.match(`${r.error}\n${r.output}`, /Invalid --scope/i);
+  });
+});
+
+// ─── list ─────────────────────────────────────────────────────────────────
+
+describe('capability list', () => {
+  test('--json emits an array including first-party capabilities', () => {
+    const r = runGsdTools(['capability', 'list', '--json'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
+    assert.equal(r.success, true, `list failed: ${r.error || r.output}`);
+    const rows = parse(r.output);
+    assert.ok(Array.isArray(rows), 'list is an array');
+    const fp = rows.filter((x) => x.source === 'first-party');
+    assert.ok(fp.length > 0, 'first-party capabilities present');
+    assert.ok(fp.every((x) => typeof x.id === 'string' && x.scope === 'first-party'));
+  });
+
+  test('an installed overlay capability appears with its scope', () => {
+    const home = tmpDir('cap-cli-home-');
+    const src = writeCapSource('listcap');
+    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home)).success, true);
+    const r = runGsdTools(['capability', 'list', '--json'], makeCwd(), scopeEnv(home));
+    assert.equal(r.success, true, `list failed: ${r.error || r.output}`);
+    const row = parse(r.output).find((x) => x.id === 'listcap');
+    assert.ok(row, 'installed capability listed');
+    assert.equal(row.scope, 'global');
+    assert.equal(row.source, src);
+    assert.equal(row.version, '1.0.0');
+  });
+});
+
+// ─── update ─────────────────────────────────────────────────────────────────
+
+describe('capability update', () => {
+  test('a not-installed id errors', () => {
+    const r = runGsdTools(['capability', 'update', 'nope', '--scope', 'global'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
+    assert.equal(r.success, false);
+    assert.match(`${r.error}\n${r.output}`, /not installed/i);
+  });
+
+  test('requires <id> or --all', () => {
+    const r = runGsdTools(['capability', 'update', '--scope', 'global'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
+    assert.equal(r.success, false);
+    assert.match(`${r.error}\n${r.output}`, /requires <id> or --all/i);
+  });
+
+  test('<id> and --all are mutually exclusive', () => {
+    const r = runGsdTools(['capability', 'update', 'foo', '--all', '--scope', 'global'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
+    assert.equal(r.success, false);
+    assert.match(`${r.error}\n${r.output}`, /not both/i);
+  });
+
+  test('an installed capability upgrades to a newer version from its recorded source', () => {
+    const home = tmpDir('cap-cli-home-');
+    const src = writeCapSource('upcap', { version: '1.0.0' });
+    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home)).success, true);
+    // Bump the recorded source to a newer version, then update by id.
+    const cap = JSON.parse(fs.readFileSync(path.join(src, 'capability.json'), 'utf8'));
+    cap.version = '2.0.0';
+    fs.writeFileSync(path.join(src, 'capability.json'), JSON.stringify(cap, null, 2));
+    const r = runGsdTools(['capability', 'update', 'upcap', '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
+    assert.equal(r.success, true, `update failed: ${r.error || r.output}`);
+    const o = parse(r.output);
+    assert.equal(o.status, 'upgraded');
+    assert.equal(o.fromVersion, '1.0.0');
+    assert.equal(o.toVersion, '2.0.0');
+    assert.equal(readLedgerEntry(home, 'upcap').version, '2.0.0');
+  });
+});
+
+// ─── remove ─────────────────────────────────────────────────────────────────
+
+describe('capability remove', () => {
+  test('an installed overlay capability is removed (ledger + bundle gone)', () => {
+    const home = tmpDir('cap-cli-home-');
+    const src = writeCapSource('rmcap');
+    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home)).success, true);
+    const r = runGsdTools(['capability', 'remove', 'rmcap', '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
+    assert.equal(r.success, true, `remove failed: ${r.error || r.output}`);
+    assert.equal(parse(r.output).status, 'removed');
+    assert.equal(readLedgerEntry(home, 'rmcap'), null, 'ledger entry gone');
+    assert.ok(!fs.existsSync(capDir(home, 'rmcap')), 'bundle gone');
+  });
+
+  test('a not-installed id errors', () => {
+    const r = runGsdTools(['capability', 'remove', 'nope', '--scope', 'global'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
+    assert.equal(r.success, false);
+    assert.match(`${r.error}\n${r.output}`, /not installed/i);
+  });
+
+  test('a first-party capability cannot be removed here', () => {
+    // Pick a real first-party id from the registry.
+    const reg = require('../gsd-core/bin/lib/capability-registry.cjs');
+    const firstParty = Object.keys(reg.capabilities)[0];
+    const r = runGsdTools(['capability', 'remove', firstParty, '--scope', 'global'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
+    assert.equal(r.success, false);
+    assert.match(`${r.error}\n${r.output}`, /first-party/i);
+  });
+
+  test('missing <id> is a usage error', () => {
+    const r = runGsdTools(['capability', 'remove'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
+    assert.equal(r.success, false);
+    assert.match(`${r.error}\n${r.output}`, /Missing <id>/i);
+  });
+});
+
+// ─── disable / enable ─────────────────────────────────────────────────────────
+
+describe('capability disable / enable', () => {
+  test('disable then enable a first-party capability toggles its activation state', () => {
+    const cwd = makeCwd();
+    const rcd = tmpDir('cap-cli-rcd-');
+    const off = runGsdTools(['capability', 'disable', 'ui', '--config-dir', rcd, '--raw'], cwd);
+    assert.equal(off.success, true, `disable failed: ${off.error || off.output}`);
+    const ui = parse(off.output).capabilities.find((c) => c.id === 'ui');
+    assert.equal(ui.enabled, false, 'ui disabled');
+    const on = runGsdTools(['capability', 'enable', 'ui', '--config-dir', rcd, '--raw'], cwd);
+    assert.equal(on.success, true, `enable failed: ${on.error || on.output}`);
+    assert.equal(parse(on.output).capabilities.find((c) => c.id === 'ui').enabled, true, 'ui re-enabled');
+  });
+
+  test('disable without <id> is a usage error', () => {
+    const r = runGsdTools(['capability', 'disable'], makeCwd());
+    assert.equal(r.success, false);
+    assert.match(`${r.error}\n${r.output}`, /Missing <id>/i);
+  });
+});
+
+// ─── unknown subcommand ───────────────────────────────────────────────────────
+
+describe('capability (unknown)', () => {
+  test('an unknown subcommand lists the full available set', () => {
+    const r = runGsdTools(['capability', 'bogus'], makeCwd());
+    assert.equal(r.success, false);
+    assert.match(`${r.error}\n${r.output}`, /install, update, remove, list, disable, enable, state, set/);
+  });
+});
