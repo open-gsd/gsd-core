@@ -19,7 +19,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdModule = require('./phase-id.cjs');
-const { escapeRegex, phaseMarkdownRegexSource, stripProjectCodePrefix } = phaseIdModule;
+const {
+  escapeRegex,
+  phaseMarkdownRegexSource,
+  phaseMarkdownRegexSourceExact,
+  stripProjectCodePrefix,
+  OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
+} = phaseIdModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir } = planningWorkspace;
@@ -202,9 +208,9 @@ interface RoadmapPhaseResult {
   section: string;
 }
 
-function findRoadmapPhaseInContent(content: string, phaseNum: unknown): RoadmapPhaseResult | null {
+function findRoadmapPhaseInContent(content: string, phaseNum: unknown, phaseSource?: string): RoadmapPhaseResult | null {
   const phasePattern = new RegExp(
-    `#{2,4}\\s*(?:\\[[^\\]]+\\]\\s*)?Phase\\s+${phaseMarkdownRegexSource(phaseNum)}:\\s*([^\\n]+)`,
+    `#{2,4}\\s*(?:\\[[^\\]]+\\]\\s*)?Phase\\s+${phaseSource ?? phaseMarkdownRegexSource(phaseNum)}:\\s*([^\\n]+)`,
     'i'
   );
   const headerMatch = content.match(phasePattern);
@@ -229,6 +235,18 @@ function findRoadmapPhaseInContent(content: string, phaseNum: unknown): RoadmapP
   };
 }
 
+function roadmapPhaseLookupSources(phaseNum: unknown): string[] {
+  const sources: string[] = [];
+  const exactSource = phaseMarkdownRegexSourceExact(phaseNum);
+  if (exactSource) sources.push(exactSource);
+
+  const numericSource = phaseMarkdownRegexSource(phaseNum);
+  sources.push(numericSource);
+  sources.push(`${OPTIONAL_PROJECT_CODE_PREFIX_SOURCE}${numericSource}`);
+
+  return [...new Set(sources)];
+}
+
 function getRoadmapPhaseInternal(cwd: string, phaseNum: unknown): RoadmapPhaseResult | null {
   if (!phaseNum) return null;
   const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
@@ -238,10 +256,17 @@ function getRoadmapPhaseInternal(cwd: string, phaseNum: unknown): RoadmapPhaseRe
     const roadmapRaw = platformReadSync(roadmapPath);
     if (roadmapRaw === null) throw new Error('missing');
     const content = extractCurrentMilestone(roadmapRaw, cwd);
-    const scopedResult = findRoadmapPhaseInContent(content, phaseNum);
-    if (scopedResult) return scopedResult;
+    const fullContent = stripShippedMilestones(roadmapRaw);
 
-    return findRoadmapPhaseInContent(stripShippedMilestones(roadmapRaw), phaseNum);
+    for (const source of roadmapPhaseLookupSources(phaseNum)) {
+      const scopedResult = findRoadmapPhaseInContent(content, phaseNum, source);
+      if (scopedResult) return scopedResult;
+
+      const fullResult = findRoadmapPhaseInContent(fullContent, phaseNum, source);
+      if (fullResult) return fullResult;
+    }
+
+    return null;
   } catch {
     return null;
   }

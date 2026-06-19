@@ -114,4 +114,19 @@ describe('gsd-roadmapper phase_id_convention support (#1205)', () => {
       'phase_identification block must document that sequential is the default/fallback'
     );
   });
+
+  test('phase headings and checklists must not include project_code (#1455)', () => {
+    const phaseIdentification = extractBlock(content, 'phase_identification');
+    const outputFormats = extractBlock(content, 'output_formats');
+    const combined = `${phaseIdentification}\n${outputFormats}`;
+
+    assert.ok(
+      combined.includes('project_code'),
+      'roadmapper instructions must explicitly mention project_code'
+    );
+    assert.ok(
+      /project_code[\s\S]{0,120}Never include|Do not include `project_code`/.test(combined),
+      'roadmapper must state that project_code is not part of phase headings/checklists'
+    );
+  });
 });
