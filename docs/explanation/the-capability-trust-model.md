@@ -87,3 +87,40 @@ one you pinned," **not** "every line of code that will run is the code you revie
 who want a stronger guarantee should vendor their dependencies into the capability or ship a
 lockfile; the consent prompt always discloses when a capability ships command modules, which is
 the surface through which transitive code reaches your process.
+
+## Where third-party code runs: command dispatch (Phase 5 / D7)
+
+A capability may declare a **command family** (`commands: [{ family, module, router }]`). When you
+run `gsd-tools <family> …`, GSD dispatches it by `require()`-ing the named module's router function.
+This is the one place a third-party capability's own code executes in the GSD CLI process, so it is
+gated twice:
+
+1. **Consent.** A third-party family is dispatchable only if its capability has a **committed
+   ledger entry** — i.e. you installed it through the lifecycle (and, for executable surfaces,
+   consented). The loader records a dispatchable "command root" only for committed (non-`_pending`)
+   capabilities; a bundle merely *present* on disk with no ledger entry still contributes its
+   declarative surfaces (skills/agents/config) but is **not** command-dispatchable.
+2. **Confinement.** The router module is loaded **from the capability's own install root** — a bare
+   `.cjs` basename, `realpath`-confined to that directory, rejecting `..` traversal and symlink
+   escape. A capability can never reach code outside its own bundle, and a first-party command
+   (`graphify`/`intel`/`audit`, which ship in `bin/lib/`) can never be shadowed by a third-party one.
+
+### The project-scope trust boundary (be honest about it)
+
+Capabilities can be installed **globally** (under your home, `$GSD_HOME/.gsd/capabilities/`) or
+**project-scoped** (under a repository, `<projectRoot>/.gsd/capabilities/`). The consent signal is
+the ledger, and the project-scope ledger (`<projectRoot>/.gsd-capabilities.json`) lives **inside the
+repository**. A repository you check out can therefore ship both a capability bundle *and* a
+ledger that marks it "committed." Running `gsd-tools <that-family>` inside such a repo will execute
+its code.
+
+This is the same trust boundary that already applies to a repository's build scripts, npm
+`postinstall`, or a project-scoped capability's hooks (which GSD has loaded since Phase 2) — and it
+is **narrower** than those, because a command never fires on its own: you have to type it. GSD does
+not (and with plain files cannot) cryptographically distinguish a genuine project-local install from
+a forged project ledger. The honest guidance:
+
+- A **global** install's consent record lives outside any repo and is trustworthy.
+- A **project-scoped** capability is only as trustworthy as the repository it ships in — treat
+  running its commands like running that repo's other code. Review repos before running `gsd`
+  commands in them, and prefer global installs for capabilities you want to trust across projects.

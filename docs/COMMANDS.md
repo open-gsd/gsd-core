@@ -1644,6 +1644,14 @@ The check is also run as part of `npm test` via `tests/enh-2789-description-budg
 
 ---
 
+## Capability commands (third-party)
+
+A capability can ship its own command family by declaring `commands: [{ family, module, router }]` in its `capability.json` (ADR-1244 D7). Once the capability is **installed and consented** (a committed entry exists in the per-runtime `.gsd-capabilities.json` ledger), running `gsd-tools <family> …` (equivalently the `gsd <family>` wrapper) dispatches to the capability's router. The first-party families `graphify`, `intel`, and `audit-uat`/`audit-open` use exactly this registry-driven seam.
+
+Dispatch is gated for safety: the router module is loaded **only from the capability's own install root** (a bare `.cjs` basename, traversal- and symlink-confined), and a capability that is merely present on disk **without** a committed ledger entry is **not** command-dispatchable (its declarative skills/agents/config still load). A project-scoped capability's commands are only as trustworthy as the repository they ship in — see [The capability trust model](explanation/the-capability-trust-model.md).
+
+---
+
 ## Related
 
 - [Configuration Reference](CONFIGURATION.md)
