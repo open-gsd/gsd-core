@@ -2703,7 +2703,7 @@ describe('pr-subrepo', () => {
       assert.ok(a !== -1 && b !== -1 && a < b);
     });
 
-    test('dirty-scan rejects path traversal and embedded-newline entries before invoking git (security)', () => {
+    test('dirty-scan rejects traversal, newline, and symlink entries before invoking git (security)', () => {
       // Extracts and executes the ACTUAL node -e script shipped in pr-branch.md — not a
       // mirror — so this test fails if the real script regresses, not just a copy of it.
       wfContent = wfContent || fs.readFileSync(workflowPath, 'utf-8');
@@ -2711,35 +2711,58 @@ describe('pr-subrepo', () => {
       assert.ok(match, 'could not extract dirty-scan node script from pr-branch.md');
       const script = match[1];
 
+      // Helper: init a git repo with a TRACKED dirty change. An untracked file would be
+      // filtered by the ?? exclusion and the repo would look clean even without the guard,
+      // making the assertions vacuous. A tracked modification ensures that WITHOUT the
+      // guard the repo WOULD be reported dirty, so the test genuinely fails-first.
+      const initDirtyRepo = (dir, file) => {
+        execFileSync('git', ['init'], { cwd: dir, stdio: 'pipe' });
+        execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir, stdio: 'pipe' });
+        execFileSync('git', ['config', 'user.name', 'Test'], { cwd: dir, stdio: 'pipe' });
+        fs.writeFileSync(path.join(dir, file), 'committed\n');
+        execFileSync('git', ['add', file], { cwd: dir, stdio: 'pipe' });
+        execFileSync('git', ['-c', 'commit.gpgsign=false', 'commit', '-m', 'init'], { cwd: dir, stdio: 'pipe' });
+        fs.writeFileSync(path.join(dir, file), 'modified\n');
+      };
+
       const scanRoot = createTempDir('gsd-666-scan-root-');
       const outsideDir = createTempDir('gsd-666-scan-outside-');
-      execFileSync('git', ['init'], { cwd: outsideDir, stdio: 'pipe' });
-      execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: outsideDir, stdio: 'pipe' });
-      execFileSync('git', ['config', 'user.name', 'Test'], { cwd: outsideDir, stdio: 'pipe' });
-      // Leave a TRACKED dirty change (commit then modify) — an untracked file would be
-      // filtered by the ?? exclusion and the repo would look clean even without the guard,
-      // making the traversal assertion vacuous. A tracked modification ensures that WITHOUT
-      // the guard this repo WOULD be reported dirty, so the test genuinely fails-first.
-      fs.writeFileSync(path.join(outsideDir, 'secret.txt'), 'committed\n');
-      execFileSync('git', ['add', 'secret.txt'], { cwd: outsideDir, stdio: 'pipe' });
-      execFileSync('git', ['-c', 'commit.gpgsign=false', 'commit', '-m', 'init'], { cwd: outsideDir, stdio: 'pipe' });
-      fs.writeFileSync(path.join(outsideDir, 'secret.txt'), 'leaked\n');
+      initDirtyRepo(outsideDir, 'secret.txt');
+
+      // Positive control: a legit dirty sub-repo INSIDE the workspace must still be reported,
+      // so the test can't pass by a guard that simply rejects everything.
+      const backendDir = path.join(scanRoot, 'backend');
+      fs.mkdirSync(backendDir, { recursive: true });
+      initDirtyRepo(backendDir, 'app.js');
+
+      // Symlink escape: an in-tree name with no ".." and no "/" that points outside root.
+      // path.resolve would keep it "inside"; only realpathSync catches it.
+      fs.symlinkSync(outsideDir, path.join(scanRoot, 'evil'));
 
       const traversalEntry = path.relative(scanRoot, outsideDir); // e.g. "../gsd-666-scan-outside-XXXX"
       const newlineEntry = 'good\nbad'; // record-separator injection attempt
       const dirtyFile = path.join(scanRoot, '_dirty');
-      const subReposJson = JSON.stringify([traversalEntry, newlineEntry]);
+      const subReposJson = JSON.stringify(['evil', traversalEntry, newlineEntry, 'backend']);
 
       try {
         execFileSync('node', ['-e', script, subReposJson, scanRoot, dirtyFile], { stdio: 'pipe' });
         const dirty = fs.existsSync(dirtyFile) ? fs.readFileSync(dirtyFile, 'utf-8') : '';
+        const lines = dirty.split('\n').filter(Boolean);
         assert.ok(
           !dirty.includes(path.basename(outsideDir)),
           `Path traversal reached git outside the workspace: ${JSON.stringify(dirty)}`
         );
         assert.ok(
-          !dirty.split('\n').includes('bad'),
+          !lines.includes('evil'),
+          `Symlink entry reached git outside the workspace: ${JSON.stringify(dirty)}`
+        );
+        assert.ok(
+          !lines.includes('bad'),
           `Embedded-newline entry injected a spurious record: ${JSON.stringify(dirty)}`
+        );
+        assert.deepStrictEqual(
+          lines, ['backend'],
+          `Positive control failed — expected only 'backend', got: ${JSON.stringify(lines)}`
         );
       } finally {
         cleanup(scanRoot);

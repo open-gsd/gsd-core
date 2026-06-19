@@ -66,17 +66,24 @@ node -e "
   const repos = JSON.parse(process.argv[1]);
   const { execFileSync } = require('child_process');
   const path = require('path');
-  const root = process.argv[2];
   const fs = require('fs');
+  const root = process.argv[2];
+  // realpath parity with the pr-subrepo seam's validatePath: resolve $ROOT through
+  // symlinks once so the containment check below compares real paths, not text.
+  let realRoot;
+  try { realRoot = fs.realpathSync(root); } catch (_) { realRoot = path.resolve(root); }
   const out = [];
   for (const r of repos) {
     // Reject before any git invocation: this scan runs on raw config values,
-    // ahead of the pr-subrepo seam's own validatePath guard. A traversal or
-    // embedded-newline entry here would run git outside the workspace, or
-    // inject a spurious record into the newline-joined dirty-file output.
+    // ahead of the pr-subrepo seam's own validatePath guard. A traversal,
+    // embedded-newline, or symlink entry here would run git outside the
+    // workspace, or inject a spurious record into the dirty-file output.
     if (typeof r !== 'string' || !/^[A-Za-z0-9._\/-]+$/.test(r)) continue;
-    const resolved = path.resolve(root, r);
-    if (resolved !== root && !resolved.startsWith(root + path.sep)) continue;
+    // realpathSync follows symlinks — path.resolve only normalizes '..' textually,
+    // so an in-tree symlink pointing outside root would otherwise smuggle git out.
+    let resolved;
+    try { resolved = fs.realpathSync(path.resolve(realRoot, r)); } catch (_) { continue; }
+    if (resolved !== realRoot && !resolved.startsWith(realRoot + path.sep)) continue;
     try {
       const res = execFileSync('git', ['-C', resolved, 'status', '--porcelain'],
                                { encoding: 'utf8', timeout: 10_000 });
@@ -122,6 +129,18 @@ COMMIT_MSG="fix(${REPO_REL}): sync uncommitted changes for PR"
 RESULT=$(gsd_run query pr-subrepo "$COMMIT_MSG" \
   --repo "$REPO_REL" \
   --branch "$SUB_BRANCH")
+SUBREPO_EXIT=$?
+```
+
+If the seam exited non-zero (stage/commit/push failure), report its error and move to
+the next sub-repo — do not fall through to the companion-PR step, whose "branch pushed"
+message would otherwise contradict the actual failure:
+
+```bash
+if [ "$SUBREPO_EXIT" -ne 0 ]; then
+  echo "pr-subrepo failed for $REPO_REL — see error above; skipping companion PR." >&2
+  continue
+fi
 ```
 
 Parse the structured result with node and open the companion PR. If `remote_slug` is null
@@ -133,28 +152,36 @@ REMOTE_SLUG=$(node -e "
 " "$RESULT")
 
 if [ -n "$REMOTE_SLUG" ]; then
-  # Defense-in-depth: $REPO_REL was already validated by the dirty-scan filter
-  # above and by the pr-subrepo seam's validatePath, but this is a second,
-  # independent shell invocation of git -C on the same value — reject any
-  # traversal or absolute path before it reaches git.
-  case "$REPO_REL" in
-    *..*|/*)
-      echo "Refusing unsafe sub-repo path: $REPO_REL" >&2
+  # Defense-in-depth: $REPO_REL was already validated by the dirty-scan filter and
+  # the pr-subrepo seam's validatePath, but these are separate, independent git -C
+  # invocations on the same value. Resolve it through symlinks with the SAME realpath
+  # containment the seam uses (path.resolve alone would not catch a symlink escape),
+  # and run git against the validated absolute path rather than re-concatenating.
+  SUB_REPO_DIR=$(node -e "
+    const fs = require('fs'), path = require('path');
+    try {
+      const realRoot = fs.realpathSync(process.argv[1]);
+      const resolved = fs.realpathSync(path.resolve(realRoot, process.argv[2]));
+      if (resolved !== realRoot && !resolved.startsWith(realRoot + path.sep)) process.exit(1);
+      process.stdout.write(resolved);
+    } catch (_) { process.exit(1); }
+  " "$ROOT" "$REPO_REL" 2>/dev/null)
+
+  if [ -z "$SUB_REPO_DIR" ]; then
+    echo "Refusing unsafe sub-repo path: $REPO_REL" >&2
+    SUB_TARGET="$TARGET"
+  else
+    # Resolve base branch: use $TARGET if it exists in sub-repo, else fall back to
+    # the sub-repo's own default branch
+    if git -C "$SUB_REPO_DIR" ls-remote --exit-code --heads origin "$TARGET" \
+         > /dev/null 2>&1; then
       SUB_TARGET="$TARGET"
-      ;;
-    *)
-      # Resolve base branch: use $TARGET if it exists in sub-repo, else fall back to
-      # the sub-repo's own default branch
-      if git -C "$ROOT/$REPO_REL" ls-remote --exit-code --heads origin "$TARGET" \
-           > /dev/null 2>&1; then
-        SUB_TARGET="$TARGET"
-      else
-        SUB_TARGET=$(git -C "$ROOT/$REPO_REL" remote show origin 2>/dev/null \
-          | awk '/HEAD branch/ {print $NF}')
-        SUB_TARGET="${SUB_TARGET:-main}"
-      fi
-      ;;
-  esac
+    else
+      SUB_TARGET=$(git -C "$SUB_REPO_DIR" remote show origin 2>/dev/null \
+        | awk '/HEAD branch/ {print $NF}')
+      SUB_TARGET="${SUB_TARGET:-main}"
+    fi
+  fi
 
   gh pr create \
     --repo "$REMOTE_SLUG" \
