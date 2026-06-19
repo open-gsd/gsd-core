@@ -108,4 +108,4 @@ gsd capability remove <id> --scope project
 - [How to version and upgrade a capability](version-a-capability.md)
 - [Develop a Capability for GSD 1.5+](develop-a-capability.md)
 - [Turn a capability off (and keep it off)](turn-a-capability-off.md)
-- [The capability trust model](../explanation/the-capability-trust-model.md) — why removal is surgical and reversible
+- [The capability trust model](../explanation/capability-trust-model.md) — why removal is surgical and reversible

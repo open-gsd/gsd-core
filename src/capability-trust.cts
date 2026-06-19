@@ -5,7 +5,7 @@
  * never mutates the filesystem and never performs I/O beyond reading staged files to confirm
  * declared executable artifacts exist. The actual consent decision (yes/no) is passed in by the
  * caller — GSD has no interactive-prompt layer in lib (the runtime/CLI edge owns that), so the
- * gate stays testable and side-effect-free. See docs/explanation/the-capability-trust-model.md.
+ * gate stays testable and side-effect-free. See docs/explanation/capability-trust-model.md.
  *
  * LEAF MODULE — imports ONLY: node:fs, node:path, and ./semver-compare.cjs.
  *

@@ -6,7 +6,7 @@
  * from a crash mid-upgrade. The LEDGER WRITE is the commit point for every operation: a crash
  * before it leaves the prior state fully intact; a crash after it is a completed operation.
  *
- * Trust invariants enforced here (see docs/explanation/the-capability-trust-model.md):
+ * Trust invariants enforced here (see docs/explanation/capability-trust-model.md):
  *   - install/upgrade never execute capability code (resolver stages copy-only; we only swap
  *     directories and edit JSON);
  *   - executable surfaces are disclosed and consent is required before anything is promoted

@@ -427,7 +427,7 @@ export function loadRegistry(options: LoadRegistryOptions = {}): Registry {
       // the user actually installed+consented to via the lifecycle — a bundle merely dropped on
       // disk with no ledger entry provides declarative surfaces (Phase 2) but is NOT command-
       // dispatchable. (Project-scope ledgers live in the repo tree and are thus only as trustworthy
-      // as the repo — see docs/explanation/the-capability-trust-model.md.)
+      // as the repo — see docs/explanation/capability-trust-model.md.)
       if (families.length > 0 && committedIds.has(id)) commandRoots[id] = capDir;
     }
   }

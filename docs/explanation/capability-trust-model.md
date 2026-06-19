@@ -172,6 +172,15 @@ What it does not defend against: a malicious capability where the author
 themselves publishes a bad bundle. The SHA is honest about what you are
 installing; it says nothing about whether what you are installing is safe.
 
+It also pins **only the top-level bundle**, not an `npm`-sourced capability's
+resolved dependency graph. `--ignore-scripts` and copy-only staging stop
+install-time execution, but when a command module is later `require()`'d, Node
+resolves and runs its transitive dependencies — which the bundle SHA does not
+cover (the Wiz / VS Code lesson). For the `npm` source kind, a green integrity
+check means "the package tarball is the one you pinned," not "every line of code
+that will run is the code you reviewed." Authors who want a stronger guarantee
+should vendor their dependencies or ship a lockfile.
+
 ### Auto-update off by default, re-consent on executable-set change
 
 When auto-update is enabled for a third-party capability, each update is
@@ -200,13 +209,54 @@ rejected at the conformance gate. This prevents impersonation: a malicious
 actor cannot publish a capability called `gsd-security` and exploit a user's
 implicit trust in the GSD namespace.
 
-### `strictKnownRegistries` for managed environments
+### `capabilities.strict_known_registries` for managed environments
 
 Teams or enterprises that want to constrain which capability sources are
-permissible can set `strictKnownRegistries` in managed or project config to an
-explicit allowlist of URLs or registry names. Setting it to `[]` blocks all
-external installs. This gives an administrator a policy lever that operates
-before the user even sees a consent prompt.
+permissible set `capabilities.strict_known_registries` in config. Its semantics:
+
+- **unset / `null`** *(default)* — permissive: external installs (git / npm /
+  tarball) are allowed, each still passing the consent + integrity gate. Local
+  filesystem installs are always allowed.
+- **`[]`** *(explicit empty array)* — lockdown: **all external installs are
+  blocked**; local-only.
+- **non-empty list** — a **host-based** allowlist: only sources whose host
+  matches an entry (exact host or a subdomain of it — `github.com` matches
+  `api.github.com` but never `evilgithub.com`; the literal token `npm` permits
+  the npm source kind). A malformed (non-array) value **fails closed**.
+
+This gives an administrator a policy lever that operates before the user even
+sees a consent prompt. The default is permissive-with-consent (not Obsidian-style
+restricted-by-default), because the epic deliberately chose decentralised import
+with the consent prompt as the default barrier and lockdown one config key away.
+
+### Command dispatch: where third-party code runs (1.6.0)
+
+A capability may declare a **command family** (`commands: [{ family, module,
+router }]`); `gsd-tools <family>` dispatches it by `require()`-ing the router.
+This is the one place a third-party capability's own code executes, so it is
+gated twice. **Consent:** a third-party family is dispatchable only if its
+capability has a **committed ledger entry** — i.e. you installed it through the
+lifecycle and consented. A bundle merely present on disk with no install record
+still contributes its declarative surfaces but is **not** command-dispatchable.
+**Confinement:** the router module loads only from the capability's own install
+root (bare-`.cjs` basename, `realpath`-confined, rejecting `..` traversal and
+symlink escape); a first-party command can never be shadowed by a third-party one.
+
+#### The project-scope trust boundary
+
+Capabilities install **globally** (`$GSD_HOME/.gsd/capabilities/`) or
+**project-scoped** (`<projectRoot>/.gsd/capabilities/`). The consent record is
+the ledger — and a project-scope ledger lives **inside the repository**. A repo
+you check out can therefore ship a capability bundle *and* a ledger that marks
+it committed; running `gsd-tools <its-family>` in that repo executes its code.
+This is the same boundary that already applies to a repo's build scripts or a
+project-scoped capability's hooks, and it is **narrower** — a command never fires
+on its own; you have to type it. GSD cannot cryptographically distinguish a
+genuine project-local install from a forged project ledger, so: a **global**
+install's consent record lives outside any repo and is trustworthy; a
+**project-scoped** capability is only as trustworthy as the repository it ships
+in. Review repos before running `gsd` commands in them, and prefer global
+installs for capabilities you want to trust across projects.
 
 ---
 
