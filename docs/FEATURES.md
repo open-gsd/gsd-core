@@ -169,6 +169,7 @@
 - [v1.43.0 Features](#v1430-features)
   - [MemPalace Memory Capability](#145-mempalace-memory-capability)
   - [Spec-Phase Prohibition Probe](#146-spec-phase-prohibition-probe)
+  - [Capability Management Command](#147-capability-management-command)
 
 ---
 
@@ -3185,3 +3186,20 @@ The load-bearing wire is the `plan-phase` lift into `must_haves.prohibitions`, s
 - REQ-PROHIB-07: A `test`-tier prohibition with a **machine-proven-fail-first**, genuinely-passing (non-vacuous) wired mechanical check (a `node --test` negative test OR a lint/AST rule) MUST dispose green and be satisfiable; a missing, un-provable, or non-passing check MUST hard-gate (flagged, non-green) in both interactive and autonomous modes. Fail-first is **machine-proven, not caller-attested** (#1279, ADR-550 D5d): before a clean pass greens, the producer independently runs the wired check against a known violation (the descriptor's `violationFixture`) and confirms it goes RED — a lint rule via the violating fixture, a node test via the violating subject injected through the `GSD_PROHIB_SUBJECT` convention; absent a violation source it fails closed, never falling back to attestation. (Enforcement half shipped #1259; deterministic descriptor auto-locate in #1278.)
 
 **Reference:** [Prohibition Probe](../gsd-core/references/prohibition-probe.md)
+
+### 147. Capability Management Command
+
+**Command:** `gsd capability install | update | remove | list | disable | enable`
+
+**Purpose:** The user-facing CLI for the ADR-1244 capability ecosystem — install, upgrade, remove, list, and toggle GSD capabilities (first-party and third-party overlays) from a registry / git / npm / tarball / local source. Wires the Phase-3/4 lifecycle library (source resolver, install ledger, trust gate) to a command users actually run.
+
+**Behavior:**
+- `install <spec> [--integrity sha512-…] [--scope global|project] [--yes] [--shared-file <rel>]…` — resolve (copy-only) → verify integrity / SHA pin → `engines.gsd` gate → disclose executable surfaces → consent (`--yes` grants; without it an executable install aborts after printing the disclosure and writes nothing) → validate → extract → record the ledger.
+- `update [<id> | --all] [--scope] [--yes]` — re-resolve the capability's recorded source and upgrade via atomic stage-then-swap; re-consent when the executable set changed; `--all` reports a per-capability outcome and exits non-zero on any partial failure.
+- `remove <id> [--purge-data] [--scope]` — strip the ledger-recorded files + marker-isolated shared edits; first-party capabilities are rejected (use the product uninstaller).
+- `list [--json]` — first-party + installed overlay capabilities (both scopes) as a JSON array.
+- `disable | enable <id>` — toggle activation state (equivalent to `gsd capability set <id> --off` / `--on`).
+
+**Trust boundary:** install never executes capability code (copy-only staging); executable surfaces require explicit consent; sources are gated by the **project-scoped** `capabilities.strict_known_registries` policy (fail-closed on a malformed/unparseable value); every shared-config write/delete is realpath-confined to the scope root, and a name collision with a user's `mcpServers` entry is never clobbered.
+
+**Reference:** [`gsd capability` command reference](reference/gsd-capability-command.md) · [ADR-1244](adr/1244-capability-ecosystem.md)
