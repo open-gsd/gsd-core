@@ -45,15 +45,47 @@ interface InstallExports {
 }
 
 /**
+ * Resolve the install package root implied by a .gsd-source marker, if present.
+ *
+ * The marker (written by callers that relocate the runtime away from the install
+ * source, e.g. a runtime mirror) points at <root>/commands/gsd; the package root
+ * is its grandparent. This mirrors the marker derivation in findAgentsSourceRoot,
+ * keeping all three source-locating paths (commands, agents, install.js) consistent.
+ *
+ * @returns the package root, or null when no usable marker is found.
+ */
+function resolveMarkerInstallRoot(runtimeConfigDir?: string): string | null {
+  if (!runtimeConfigDir) return null;
+  const markerPath = path.join(runtimeConfigDir, '.gsd-source');
+  if (!fs.existsSync(markerPath)) return null;
+  try {
+    const src = fs.readFileSync(markerPath, 'utf8').trim();
+    // Marker points to commands/gsd; the package root is dirname(commands)/.. .
+    if (src && fs.existsSync(src)) return path.resolve(path.dirname(src), '..');
+  } catch { /* fall through */ }
+  return null;
+}
+
+/**
  * Load bin/install.js exports in a test-safe way.
  * Sets GSD_TEST_MODE only for the duration of the require() call and only if
  * it was not already set, restoring the original value in a finally block so
  * the module-level environment is never permanently mutated.
+ *
+ * Resolution order for install.js, mirroring findInstallSourceRoot/findAgentsSourceRoot:
+ * 1. If a usable <runtimeConfigDir>/.gsd-source marker exists, load
+ *    <markerRoot>/bin/install.js (relocated / runtime-mirror installs).
+ * 2. Otherwise fall back to the package-relative path (normal npm install).
  */
-function loadInstallExports(): InstallExports {
+function loadInstallExports(runtimeConfigDir?: string): InstallExports {
   const savedTestMode = process.env['GSD_TEST_MODE'];
   if (savedTestMode === undefined) process.env['GSD_TEST_MODE'] = '1';
   try {
+    const markerRoot = resolveMarkerInstallRoot(runtimeConfigDir);
+    if (markerRoot) {
+      const candidate = path.join(markerRoot, 'bin', 'install.js');
+      if (fs.existsSync(candidate)) return _require(candidate) as InstallExports;
+    }
     return _require('../../../bin/install.js') as InstallExports;
   } finally {
     if (savedTestMode === undefined) delete process.env['GSD_TEST_MODE'];
@@ -63,8 +95,8 @@ function loadInstallExports(): InstallExports {
 
 /** Cache after first successful load. */
 let _installExports: InstallExports | null = null;
-function getInstallExports(): InstallExports {
-  if (!_installExports) _installExports = loadInstallExports();
+function getInstallExports(runtimeConfigDir?: string): InstallExports {
+  if (!_installExports) _installExports = loadInstallExports(runtimeConfigDir);
   return _installExports;
 }
 
@@ -494,4 +526,4 @@ function resolveRuntimeArtifactLayoutFromRegistry(
   return { runtime, configDir, scope, kinds };
 }
 
-export = { resolveRuntimeArtifactLayout, resolveRuntimeArtifactLayoutFromRegistry, findInstallSourceRoot, getInstallExports };
+export = { resolveRuntimeArtifactLayout, resolveRuntimeArtifactLayoutFromRegistry, findInstallSourceRoot, getInstallExports, loadInstallExports };
