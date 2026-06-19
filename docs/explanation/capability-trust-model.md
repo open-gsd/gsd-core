@@ -3,8 +3,8 @@
 > **Explanation** — This document describes *why* GSD draws its trust
 > boundaries where it does, and *what the trade-offs are*. It is not a
 > step-by-step guide to installing capabilities; for that, see the how-to
-> guides for [importing a capability](../how-to/) and
-> [version management](../how-to/). For the decision record, see
+> guides for [importing a capability](../how-to/import-a-capability-from-a-url.md) and
+> [version management](../how-to/version-a-capability.md). For the decision record, see
 > [ADR-1244 D5](../adr/1244-capability-ecosystem.md#d5--trust-model-artifact-parity-is-full-trust-posture-is-tiered).
 > For the capability field reference, see the
 > [capability matrix](../reference/capability-matrix.md).

@@ -68,6 +68,14 @@ function extensionsByCapability(registry) {
 
 function fmtPoints(set) {
   if (!set || set.size === 0) return '—';
+  for (const p of set) {
+    // Surface a typo'd/unknown loop point at generation time rather than silently sorting it last.
+    // The registry validates point names at load, so this should never fire — but if it does, the
+    // generator (not a confused reader) is where it must be caught.
+    if (!POINT_ORDER.has(p)) {
+      process.stderr.write(`gen-capability-matrix: WARNING — unknown loop point "${p}" (not one of the ${LOOP_POINTS.length} canonical points)\n`);
+    }
+  }
   return [...set]
     .sort((a, b) => (POINT_ORDER.has(a) ? POINT_ORDER.get(a) : 99) - (POINT_ORDER.has(b) ? POINT_ORDER.get(b) : 99) || a.localeCompare(b))
     .map((p) => '`' + p + '`')
@@ -80,7 +88,7 @@ function fmtKinds(set) {
   return [...set].sort((a, b) => (order[a] ?? 9) - (order[b] ?? 9)).join(', ');
 }
 
-function enginesOf(cap) {
+function fmtEngines(cap) {
   const g = cap && cap.engines && cap.engines.gsd;
   return typeof g === 'string' && g ? '`' + g + '`' : '—';
 }
@@ -92,7 +100,7 @@ function renderTable(caps, role, extByCap) {
     .sort((a, b) => a.id.localeCompare(b.id))
     .map((c) => {
       const ext = extByCap.get(c.id) || { points: null, kinds: null };
-      return `| \`${c.id}\` | ${c.role} | ${c.tier || '—'} | ${enginesOf(c)} | ${fmtPoints(ext.points)} | ${fmtKinds(ext.kinds)} | first-party |`;
+      return `| \`${c.id}\` | ${c.role} | ${c.tier || '—'} | ${fmtEngines(c)} | ${fmtPoints(ext.points)} | ${fmtKinds(ext.kinds)} | first-party |`;
     });
   return [
     '| id | role | tier | engines.gsd | extension points | hook kinds | source |',

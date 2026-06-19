@@ -48,10 +48,12 @@ describe('capability-matrix drift guard (ADR-1244 Phase 6)', () => {
     const md = fs.readFileSync(MATRIX, 'utf8');
     // The stub used "see capability.json" placeholders — the generated matrix must not.
     assert.ok(!md.includes('see capability.json'), 'matrix must show real extension points, not placeholders');
-    // A capability that registers a known hook must show its real point. `security` registers a gate at ship:pre.
-    if (registry.byLoopPoint['ship:pre'] && (registry.byLoopPoint['ship:pre'].gates || []).some((g) => g.capId === 'security')) {
-      const securityRow = md.split('\n').find((l) => l.includes('`security`') && l.includes('|'));
-      assert.ok(securityRow && securityRow.includes('`ship:pre`'), 'security row must list its real ship:pre extension point');
-    }
+    // `security` registers a gate at ship:pre — a hard architectural invariant. Assert the precondition
+    // UNCONDITIONALLY (so this never degrades to a vacuous pass if the registry changes), then assert the
+    // rendered row reflects it.
+    const shipPreGates = (registry.byLoopPoint['ship:pre'] && registry.byLoopPoint['ship:pre'].gates) || [];
+    assert.ok(shipPreGates.some((g) => g.capId === 'security'), 'precondition: security registers a ship:pre gate in the registry');
+    const securityRow = md.split('\n').find((l) => l.includes('`security`') && l.includes('|'));
+    assert.ok(securityRow && securityRow.includes('`ship:pre`'), 'security row must list its real ship:pre extension point');
   });
 });
