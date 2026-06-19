@@ -367,7 +367,7 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
       if (!match) continue;
 
       const dirMatch =
-        match.match(/^(?:[A-Z]+-)(\d+[A-Z]?(?:\.\d+)*)-?(.*)/i) ||
+        match.match(new RegExp(`^${OPTIONAL_PROJECT_CODE_PREFIX_SOURCE}(\\d+[A-Z]?(?:\\.\\d+)*)-?(.*)`, 'i')) ||
         match.match(/^(\d+[A-Z]?(?:\.\d+)*)-?(.*)/i);
       const phaseNumber = dirMatch ? dirMatch[1] : normalized;
       const phaseName = dirMatch && dirMatch[2] ? dirMatch[2] : null;

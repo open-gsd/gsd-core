@@ -86,6 +86,8 @@ describe('normalizePhaseName', () => {
     assert.strictEqual(phaseId.normalizePhaseName('PROJ-3'), '03');
     assert.strictEqual(phaseId.normalizePhaseName('AB-12'), '12');
     assert.strictEqual(phaseId.normalizePhaseName('MANIFOLD-7'), '07');
+    assert.strictEqual(phaseId.normalizePhaseName('APP1-7'), '07');
+    assert.strictEqual(phaseId.normalizePhaseName('APP_1-7'), '07');
   });
 
   test('handles letter suffix (preserves original case per #1962)', () => {
@@ -161,6 +163,8 @@ describe('comparePhaseNum', () => {
     assert.strictEqual(phaseId.comparePhaseNum('CK-01', '01'), 0);
     assert.ok(phaseId.comparePhaseNum('CK-01', 'CK-02') < 0);
     assert.strictEqual(phaseId.comparePhaseNum('MANIFOLD-117', '117'), 0);
+    assert.strictEqual(phaseId.comparePhaseNum('APP1-117', '117'), 0);
+    assert.strictEqual(phaseId.comparePhaseNum('APP_1-117', '117'), 0);
   });
 
   test('handles non-parseable phase IDs via localeCompare fallback', () => {
@@ -187,6 +191,8 @@ describe('extractPhaseToken', () => {
     assert.strictEqual(phaseId.extractPhaseToken('CK-01-some-phase'), 'CK-01');
     assert.strictEqual(phaseId.extractPhaseToken('PROJ-12-feature'), 'PROJ-12');
     assert.strictEqual(phaseId.extractPhaseToken('MANIFOLD-117-feature'), 'MANIFOLD-117');
+    assert.strictEqual(phaseId.extractPhaseToken('APP1-117-feature'), 'APP1-117');
+    assert.strictEqual(phaseId.extractPhaseToken('APP_1-117-feature'), 'APP_1-117');
   });
 
   test('extracts glued letter-prefix phase tokens (#1324)', () => {
@@ -220,6 +226,8 @@ describe('phaseTokenMatches', () => {
     assert.ok(phaseId.phaseTokenMatches('CK-01-phase', '01'));
     assert.ok(phaseId.phaseTokenMatches('PROJ-12-feature', '12'));
     assert.ok(phaseId.phaseTokenMatches('MANIFOLD-117-feature', '117'));
+    assert.ok(phaseId.phaseTokenMatches('APP1-117-feature', '117'));
+    assert.ok(phaseId.phaseTokenMatches('APP_1-117-feature', '117'));
   });
 
   test('matches glued letter-prefix phase dirs (#1324)', () => {
@@ -314,6 +322,8 @@ describe('phaseMarkdownRegexSourceExact', () => {
     // The result is a valid regex source
     assert.doesNotThrow(() => new RegExp(result));
     assert.strictEqual(phaseId.phaseMarkdownRegexSourceExact('MANIFOLD-117'), 'MANIFOLD-117');
+    assert.strictEqual(phaseId.phaseMarkdownRegexSourceExact('APP1-117'), 'APP1-117');
+    assert.strictEqual(phaseId.phaseMarkdownRegexSourceExact('APP_1-117'), 'APP_1-117');
   });
 
   test('returns null for non-prefixed IDs', () => {
@@ -358,6 +368,8 @@ describe('getMilestoneFromPhaseId', () => {
   test('strips project_code prefix before parsing', () => {
     assert.strictEqual(phaseId.getMilestoneFromPhaseId('CK-2-01'), 'v2.0');
     assert.strictEqual(phaseId.getMilestoneFromPhaseId('MANIFOLD-2-01'), 'v2.0');
+    assert.strictEqual(phaseId.getMilestoneFromPhaseId('APP1-2-01'), 'v2.0');
+    assert.strictEqual(phaseId.getMilestoneFromPhaseId('APP_1-2-01'), 'v2.0');
   });
 
   test('coerces non-string values', () => {
@@ -393,6 +405,8 @@ describe('getPhaseDirFromPhaseId', () => {
     const result = phaseId.getPhaseDirFromPhaseId('CK-1-2', null, null);
     assert.strictEqual(result, '01-02');
     assert.strictEqual(phaseId.getPhaseDirFromPhaseId('MANIFOLD-1-2', null, null), '01-02');
+    assert.strictEqual(phaseId.getPhaseDirFromPhaseId('APP1-1-2', null, null), '01-02');
+    assert.strictEqual(phaseId.getPhaseDirFromPhaseId('APP_1-1-2', null, null), '01-02');
   });
 
   test('handles deep decomposition IDs (M-N-N)', () => {
