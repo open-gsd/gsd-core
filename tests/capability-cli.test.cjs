@@ -58,7 +58,7 @@ function makeCwdWithStrict(strictValue) {
  * (usable directly as an install <spec>). Declarative by default; pass `hooks`
  * (with materialized scripts) to make it an executable surface requiring consent.
  */
-function writeCapSource(id, { version = '1.0.0', hooks = [], engines } = {}) {
+function writeCapSource(id, { version = '1.0.0', hooks = [], engines, mcp } = {}) {
   const src = tmpDir(`cap-cli-src-${id}-`);
   const cap = {
     id,
@@ -78,6 +78,7 @@ function writeCapSource(id, { version = '1.0.0', hooks = [], engines } = {}) {
     gates: [],
   };
   if (engines) cap.engines = engines;
+  if (mcp) cap.mcpServers = mcp; // object map { name: {command, ...} } — an executable surface
   fs.writeFileSync(path.join(src, 'capability.json'), JSON.stringify(cap, null, 2));
   for (const h of hooks) {
     if (h && h.script) {
@@ -402,5 +403,54 @@ describe('capability disable (overlay boundary)', () => {
     const out = JSON.parse(r.output);
     assert.ok(Array.isArray(out.errors), 'JSON error envelope present on stdout');
     assert.match(out.errors.join(' '), /unknown capability/i);
+  });
+});
+
+// ─── --shared-file safety + config fail-closed (adversarial-review R2) ──────
+
+describe('capability install (--shared-file confinement)', () => {
+  test('a --shared-file whose parent is a symlink escaping the scope writes NOTHING outside it', () => {
+    const home = tmpDir('cap-cli-home-');
+    fs.mkdirSync(home, { recursive: true });
+    const outside = tmpDir('cap-cli-outside-');
+    // Plant a symlink inside the scope root pointing outside it.
+    fs.symlinkSync(outside, path.join(home, 'evil'));
+    const src = writeCapSource('symcap', { hooks: [{ event: 'PostToolUse', script: 'hooks/run.js' }] });
+    const r = runGsdTools(
+      ['capability', 'install', src, '--scope', 'global', '--yes', '--shared-file', 'evil/settings.json', '--raw'],
+      makeCwd(), scopeEnv(home),
+    );
+    // Install still succeeds (the bundle installs); the unsafe shared-file edit is skipped.
+    assert.equal(r.success, true, `install failed: ${r.error || r.output}`);
+    assert.ok(!fs.existsSync(path.join(outside, 'settings.json')), 'must NOT write through the escaping symlink');
+  });
+
+  test('install does not clobber a user mcpServers entry whose name collides with the capability', () => {
+    const home = tmpDir('cap-cli-home-');
+    fs.mkdirSync(home, { recursive: true });
+    // Pre-existing user settings with an mcpServers entry the capability will also declare.
+    fs.writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ mcpServers: { shared: { command: 'user-server' } } }));
+    const src = writeCapSource('mcpcap', { mcp: { shared: { command: 'cap-server' } } });
+    const r = runGsdTools(
+      ['capability', 'install', src, '--scope', 'global', '--yes', '--shared-file', 'settings.json', '--raw'],
+      makeCwd(), scopeEnv(home),
+    );
+    assert.equal(r.success, true, `install failed: ${r.error || r.output}`);
+    const settings = JSON.parse(fs.readFileSync(path.join(home, 'settings.json'), 'utf8'));
+    assert.equal(settings.mcpServers.shared.command, 'user-server', 'user mcpServers entry must be preserved, not clobbered');
+  });
+});
+
+describe('capability install (config policy fail-closed)', () => {
+  test('an unparseable project config fails CLOSED — an external source is blocked, not silently permitted', () => {
+    const cwd = tmpDir('cap-cli-cwd-');
+    fs.mkdirSync(path.join(cwd, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(cwd, '.planning', 'config.json'), '{ this is not valid json');
+    const r = runGsdTools(
+      ['capability', 'install', 'https://github.com/x/y.git', '--scope', 'project'],
+      cwd, { GSD_WORKSTREAM: '', GSD_PROJECT: '' },
+    );
+    assert.equal(r.success, false, 'broken config must not silently permit an external install');
+    assert.match(`${r.error}\n${r.output}`, /external capability installs are disabled|blocked|array/i);
   });
 });

@@ -1468,16 +1468,26 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       // malformed (non-array, non-null) value must reach the trust gate so it can fail CLOSED, not be
       // silently downgraded to permissive here.
       const capReadStrict = () => {
+        let cfgPath;
         try {
           const { planningDir } = require('./lib/planning-workspace.cjs');
-          const cfgPath = path.join(planningDir(cwd), 'config.json');
-          if (fs.existsSync(cfgPath)) {
-            const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
-            if (cfg && cfg.capabilities && Object.prototype.hasOwnProperty.call(cfg.capabilities, 'strict_known_registries')) {
-              return cfg.capabilities.strict_known_registries;
-            }
-          }
-        } catch { /* unreadable/missing config — permissive default */ }
+          cfgPath = path.join(planningDir(cwd), 'config.json');
+        } catch {
+          return undefined; // cannot even resolve the project config dir — permissive default
+        }
+        if (!fs.existsSync(cfgPath)) return undefined; // no project config — permissive default
+        let cfg;
+        try {
+          cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
+        } catch {
+          // Config is PRESENT but unreadable/unparseable: a security policy must not silently
+          // downgrade to permissive. Fail CLOSED — lockdown ([]) blocks external installs (local
+          // still allowed) until the config is fixed.
+          return [];
+        }
+        if (cfg && cfg.capabilities && Object.prototype.hasOwnProperty.call(cfg.capabilities, 'strict_known_registries')) {
+          return cfg.capabilities.strict_known_registries;
+        }
         return undefined;
       };
       // Running GSD version (hard gate for engines.gsd at install/load); fail-closed to 0.0.0.
