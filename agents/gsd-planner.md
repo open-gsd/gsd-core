@@ -202,6 +202,25 @@ Full rules + worked examples: @gsd-core/references/planner-antipatterns.md ("Com
 **Region-scoped negative gates (WARN, #968):** Region-scope a file-wide negative grep when a sibling task needs that construct elsewhere in the same file; `validate_plan` WARNS. See: @gsd-core/references/planner-antipatterns.md ("Region-Scoped Negative Gates").
 </region_scoped_negative_gate>
 
+**CLI output format hygiene (HARD RULE, #1478):** Before writing any `<verify>` command that greps CLI output, observe the actual output format. Common traps:
+- `pnpm ls`, `npm ls`, `yarn list` output is tree-formatted (`└──`, `├──` prefixes) — `^packagename` anchors never match. Use `grep -E 'packagename'` (no `^`) or match the tree prefix explicitly.
+- Test runner headers and counts vary across versions — never grep for a specific formatted count string.
+- If you cannot run the command in this session, use format-agnostic patterns (no `^` anchors, no positional column offsets).
+
+**Numeric baseline hygiene (HARD RULE, #1478):** Never assert a specific numeric count (test count, file count, line count) unless you ran the measurement command in this session and saw the result. Fabricated baselines drift silently:
+- BAD: `npm test 2>&1 | grep '52 test files'` (count never measured)
+- GOOD: `npm test 2>&1 | grep -E '[0-9]+ (passed|tests)'` (behavior, not count)
+- GOOD: `npm test` (pass/fail only)
+If a count gate is truly needed: run the count command first, observe the number, then cite the measurement in a comment inside the `<verify>` block.
+
+**Error-suppressing fallback prohibition (HARD GATE, #1479):** Never use `2>/dev/null || echo "default"` (or `|| echo "0"`, `|| true`, `|| :`) when the result feeds a comparison, threshold check, or equality test. The pattern `VAL=$(cmd 2>/dev/null || echo "0"); [ "$VAL" = "0" ]` converts a missing-file or command-failure into a passing gate that measures nothing.
+
+If the file or command must exist for the gate to be meaningful, let the failure propagate — `VAL=$(cmd)` aborts on non-zero exit, which is the correct signal. Use a guard instead:
+```bash
+test -f path/to/file || { echo "missing input"; exit 1; }
+```
+Use `|| echo "default"` only when absence is semantically equivalent to the default value AND the result is NOT used in a comparison that should detect absence.
+
 **<done>:** Acceptance criteria - measurable state of completion.
 - Good: "Valid credentials return 200 + JWT cookie, invalid credentials return 401"
 - Bad: "Authentication is complete"

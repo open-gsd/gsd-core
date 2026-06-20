@@ -174,3 +174,51 @@ If region-scoping is genuinely impractical and the file split is intentional, su
 ```
 
 One marker per pattern. The marker exempts only the exact pattern it names. Prefer region-scoping over suppression.
+
+## CLI Output Format Anchor Mismatch (#1478)
+
+`pnpm ls vite | grep -E '^vite@7\.'` looks correct but silently fails. `pnpm ls` uses tree characters as line prefixes:
+```
+my-project@1.0.0
+└── vite@7.3.5
+```
+Lines begin with `└──`, not `vite`. The `^` anchor matches line start, which is a tree character — the grep finds nothing.
+
+**Bad:** `pnpm ls vite | grep -E '^vite@7\.'`
+**Good:** `pnpm ls vite | grep -E 'vite@7\.'`
+**Good (strict):** `pnpm ls vite | grep -E '(└|├)── vite@7\.'`
+
+Same trap: `npm ls`, `yarn list`, `docker ps` column output, `kubectl get` table output.
+
+## Fabricated Numeric Baselines (#1478)
+
+Never emit `grep '714 tests'` or `grep '52 test files'` unless you ran the count command in this session. Model-recalled counts are stale from training.
+
+**Bad:** `npm test 2>&1 | grep '714 passed'`
+**Good:** `npm test 2>&1 | grep -E '[0-9]+ passed'` or just `npm test`
+
+## Error-Suppressing Fallbacks in Verify Gates (#1479)
+
+`2>/dev/null || echo "0"` in an assignment that feeds a comparison converts any failure into a passing gate that measures nothing.
+
+**Bad — both sides default to "0" when files are missing:**
+```bash
+EN_KEYS=$(jq 'keys | length' i18n/en.json 2>/dev/null || echo "0")
+DE_KEYS=$(jq 'keys | length' i18n/de.json 2>/dev/null || echo "0")
+[ "$EN_KEYS" = "$DE_KEYS" ] && echo "ok"
+```
+If files don't exist (wrong path, etc.), both sides become `"0"`. Comparison passes. Gate certifies parity while measuring nothing.
+
+**Good — let failure propagate:**
+```bash
+EN_KEYS=$(jq 'keys | length' src/i18n/en.json)
+DE_KEYS=$(jq 'keys | length' src/i18n/de.json)
+[ "$EN_KEYS" = "$DE_KEYS" ] && echo "ok"
+```
+
+**Good — explicit guard:**
+```bash
+test -f src/i18n/en.json && test -f src/i18n/de.json || { echo "missing input files"; exit 1; }
+```
+
+**When `|| echo "default"` is acceptable:** only when absence is semantically the default AND the result is NOT used in a comparison that should detect absence.

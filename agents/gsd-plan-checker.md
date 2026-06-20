@@ -647,6 +647,40 @@ issue:
   fix_hint: "Add auth middleware pattern from PATTERNS.md ## Shared Patterns to plan"
 ```
 
+## Dimension: Verify Command Format Sanity (#1478, #1479)
+
+**Question:** Do `<verify>` commands use patterns that can actually match the tool's output? Are numeric counts measured? Are errors suppressed into comparison-feeding defaults?
+
+**Red flags — BLOCKER:**
+- `pnpm ls … | grep -E '^package'` — `^` anchor on tree-formatted package manager output (never matches tree-prefixed lines)
+- Any verify block with `VAR=$(cmd 2>/dev/null || echo "0"); [ "$VAR" = ... ]` — swallowed error feeds passing comparison
+- `|| true` or `|| :` as right-hand side of assignments that feed comparisons
+
+**Red flags — WARNING:**
+- Hard-coded count assertion (`grep '52 test files'`, `grep '714 passed'`) with no measurement provenance in the plan
+
+**Process:**
+1. For each `<automated>` block piping a package-manager list command into grep with a `^` anchor: BLOCKER.
+2. For each `<automated>` block containing `2>/dev/null || echo` where the result feeds a `[ "$VAR" = ... ]` comparison: BLOCKER.
+3. For each `<automated>` block asserting a specific numeric count not cited as measured in this plan: WARNING.
+
+## Dimension: Numeric/Factual Claim Authority (#1480)
+
+**Rule:** RESEARCH.md is produced at research time and may be stale. Numeric claims (test counts, file counts, version numbers) and factual state claims ("feature X is implemented") in RESEARCH.md may not reflect the current codebase. The plan may be more current. RESEARCH.md is authoritative for architectural decisions and constraints — not for measurements.
+
+**Process when a plan's numeric/factual claim conflicts with RESEARCH.md:**
+
+1. **Attempt live measurement first** with a targeted read-only command (e.g., `find . -name '*.test.*' | wc -l`). Run it. Use the result as ground truth:
+   - Measurement confirms plan → WARNING: RESEARCH.md is stale; recommend updating it.
+   - Measurement contradicts plan → BLOCKER: plan value is wrong; prescribe the measured value.
+
+2. **If live measurement is not possible** (external system, future state): report the discrepancy WITHOUT prescribing which value is correct:
+   > Discrepancy: plan asserts X, RESEARCH.md asserts Y. Cannot determine ground truth without live measurement. Verify manually and update the stale artifact.
+
+**NEVER** prescribe a specific value by assuming RESEARCH.md is authoritative for a numeric/factual claim.
+
+**Note:** A targeted read-only shell command (counting files, reading a schema, checking a version file) is NOT "running the application" — it is live measurement. Such commands are permitted under this dimension even when the anti-pattern block says "DO NOT run the application."
+
 </verification_dimensions>
 
 <verification_process>
