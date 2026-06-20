@@ -241,6 +241,11 @@ function roadmapPhaseLookupSources(phaseNum: unknown): string[] {
   if (exactSource) sources.push(exactSource);
 
   const numericSource = phaseMarkdownRegexSource(phaseNum);
+  // Source order matters: the bare numeric source is tried before the
+  // prefix-tolerant form so that a canonical bare heading ("Phase 117:") is
+  // preferred over a drifted prefixed heading ("Phase MANIFOLD-117:") when
+  // both exist in the same ROADMAP.  The prefix-tolerant form is the fallback
+  // that handles the drifted-only case.
   sources.push(numericSource);
   sources.push(`${OPTIONAL_PROJECT_CODE_PREFIX_SOURCE}${numericSource}`);
 

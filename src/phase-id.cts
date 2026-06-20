@@ -16,10 +16,12 @@ function escapeRegex(value: unknown): string {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-const PROJECT_CODE_PREFIX_STRIP_RE = /^[A-Z_][A-Z0-9_]*-(?=\d)/;
-const PROJECT_CODE_PREFIX_STRIP_RE_I = /^[A-Z_][A-Z0-9_]*-(?=\d)/i;
-const PROJECT_CODE_PREFIX_CAPTURE_RE_I = /^([A-Z_][A-Z0-9_]*)-(\d.*)/i;
-const OPTIONAL_PROJECT_CODE_PREFIX_SOURCE = '(?:[A-Z_][A-Z0-9_]*-)?';
+// project_code values start with an uppercase letter (e.g. PROJ, APP_CODE);
+// leading underscores are not valid project codes per .planning/config.json.
+const PROJECT_CODE_PREFIX_STRIP_RE = /^[A-Z][A-Z0-9_]*-(?=\d)/;
+const PROJECT_CODE_PREFIX_STRIP_RE_I = /^[A-Z][A-Z0-9_]*-(?=\d)/i;
+const PROJECT_CODE_PREFIX_CAPTURE_RE_I = /^([A-Z][A-Z0-9_]*)-(\d.*)/i;
+const OPTIONAL_PROJECT_CODE_PREFIX_SOURCE = '(?:[A-Z][A-Z0-9_]*-)?';
 
 function stripProjectCodePrefix(value: unknown, caseInsensitive = true): string {
   const input = String(value);

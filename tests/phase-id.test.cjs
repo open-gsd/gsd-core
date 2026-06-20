@@ -90,6 +90,13 @@ describe('normalizePhaseName', () => {
     assert.strictEqual(phaseId.normalizePhaseName('APP_1-7'), '07');
   });
 
+  test('does not strip leading-underscore pseudo-prefix (#1455)', () => {
+    // Valid project_code values must start with [A-Z]; leading underscores
+    // (_FOO-7, _-7) are not valid codes and must not be stripped.
+    assert.strictEqual(phaseId.normalizePhaseName('_FOO-7'), '_FOO-7');
+    assert.strictEqual(phaseId.normalizePhaseName('_-7'), '_-7');
+  });
+
   test('handles letter suffix (preserves original case per #1962)', () => {
     assert.strictEqual(phaseId.normalizePhaseName('12A'), '12A');
     assert.strictEqual(phaseId.normalizePhaseName('3b'), '03b');
