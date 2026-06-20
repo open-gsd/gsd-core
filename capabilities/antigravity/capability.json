@@ -1,7 +1,7 @@
 {
   "id": "antigravity",
   "role": "runtime",
-  "version": "1.5.1-dev.0",
+  "version": "1.6.0-rc.1",
   "title": "Antigravity",
   "description": "Google Antigravity IDE — nested under ~/.gemini/antigravity; probed across 1.x and 2.x layouts; Gemini hook event dialect; nested skill layout; tier-1 support.",
   "tier": "core",
