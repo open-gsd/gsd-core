@@ -345,6 +345,42 @@ function readManifestBounded(
 }
 
 /**
+ * #1460 CS-1: read a locally-produced `npm pack` `.tgz` as RAW BYTES via a bounded fd read so a
+ * supplied `--integrity` can be verified over the tarball (same SRI sha512 domain as the tarball
+ * adapter) before extraction/staging. `readSmallRegularFile` decodes utf8 (corrupting binary), so
+ * this reads the Buffer directly while keeping the same fail-closed discipline: open → fstat →
+ * require a regular file (a FIFO/device cannot BLOCK or be misread) → size-cap (MAX_RESPONSE_BYTES,
+ * the same ceiling the HTTP fetch enforces) → read exactly fstat.size bytes.
+ */
+function readPackTarball(tgzPath: string): Buffer {
+  let fd: number;
+  try {
+    fd = fs.openSync(tgzPath, 'r');
+  } catch (err) {
+    throw new Error(`Cannot read npm pack tarball: ${tgzPath}: ${(err as Error).message}`);
+  }
+  try {
+    const st = fs.fstatSync(fd);
+    if (!st.isFile()) {
+      throw new Error(`Refusing to read non-regular npm pack tarball: ${tgzPath}`);
+    }
+    if (st.size > MAX_RESPONSE_BYTES) {
+      throw new Error(`npm pack tarball exceeds ${MAX_RESPONSE_BYTES} bytes: ${tgzPath}`);
+    }
+    const buf = Buffer.allocUnsafe(st.size);
+    let read = 0;
+    while (read < st.size) {
+      const n = fs.readSync(fd, buf, read, st.size - read, read);
+      if (n === 0) break;
+      read += n;
+    }
+    return read === st.size ? buf : buf.subarray(0, read);
+  } finally {
+    try { fs.closeSync(fd); } catch { /* best-effort */ }
+  }
+}
+
+/**
  * Reject spec/id values containing path separators or `..`.
  * Throws if the id is unsafe.
  */
@@ -813,6 +849,14 @@ function resolveLocal(
   gsdHome: string,
   hostVersion: string
 ): ResolveResult {
+  // #1460 CS-1: a local path is a directory tree, not a single downloadable artifact, so there is
+  // no stable byte stream to verify a sha512 SRI pin against. A supplied `--integrity` is therefore
+  // REJECTED with an actionable error rather than being silently dropped (the prior behaviour staged
+  // with integrity:null, so the user believed content was pinned when it was not).
+  if (opts.integrity) {
+    throw new Error('integrity pinning is not supported for local sources');
+  }
+
   const absPath = path.resolve(parsed.target);
   if (!fs.existsSync(absPath)) {
     throw new Error(`Local capability path does not exist: ${absPath}`);
@@ -837,6 +881,14 @@ function resolveGit(
   hostVersion: string
 ): ResolveResult {
   const execGit = opts.execOverrides?.git ?? shellSeam.execGit;
+
+  // #1460 CS-1: a git working tree has no single downloadable artifact to verify a sha512 SRI pin
+  // against (a clone is a directory tree, and the digest would vary with pack/checkout details). A
+  // supplied `--integrity` is therefore REJECTED with an actionable error rather than silently
+  // dropped (the prior behaviour staged with integrity:null). Pin a git source by COMMIT instead.
+  if (opts.integrity) {
+    throw new Error('integrity pinning is not supported for git sources; pin the commit with #sha:<commit>');
+  }
 
   const cloneDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-cap-git-'));
   try {
@@ -906,6 +958,17 @@ function resolveNpm(
     }
     const tgzPath = path.join(tmpPackDir, tarballs[0]);
 
+    // #1460 CS-1: a supplied `--integrity` is verified over the `.tgz` BYTES (same SRI sha512
+    // domain as the tarball adapter) BEFORE anything is staged or promoted — never silently
+    // dropped. The recorded integrity is always the computed digest of the produced tarball.
+    // `npm pack --ignore-scripts` (above) ran no capability code, so reading these bytes is
+    // copy-only. A mismatch throws here, before assertSafeTarMembers / extraction / staging.
+    const tgzBytes = readPackTarball(tgzPath);
+    const computedIntegrity = computeIntegrity(tgzBytes);
+    if (opts.integrity) {
+      verifyIntegrity(tgzBytes, opts.integrity);
+    }
+
     // Reject tar-slip member paths before extracting.
     assertSafeTarMembers(execTar, tgzPath);
 
@@ -929,7 +992,7 @@ function resolveNpm(
     const id = typeof cap['id'] === 'string' ? cap['id'] : '';
     if (!id) throw new Error('capability.json missing "id" field');
 
-    return stageValidated({ sourceDir, id, gsdHome, hostVersion, source: parsed.raw, integrity: null, promote: opts.promote, skipEnginesGate: opts.skipEnginesGate });
+    return stageValidated({ sourceDir, id, gsdHome, hostVersion, source: parsed.raw, integrity: computedIntegrity, promote: opts.promote, skipEnginesGate: opts.skipEnginesGate });
   } finally {
     try { fs.rmSync(tmpPackDir, { recursive: true, force: true }); } catch { /* best-effort */ }
     try { fs.rmSync(extractDir, { recursive: true, force: true }); } catch { /* best-effort */ }

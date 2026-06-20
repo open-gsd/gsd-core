@@ -375,6 +375,88 @@ function confinedSharedFile(runtimeDir: string, relFile: unknown): string | null
   return path.join(realParent, path.basename(target));
 }
 
+// #1460 (R) HIGH — shell-safe hook-script allowlist (mirrors capability-validator.cjs
+// isSafeHookScriptPath; see confinedBundleScript for why). Only [A-Za-z0-9._/-], no leading
+// `-` segment, no `..`, not absolute.
+const SAFE_HOOK_SCRIPT_RE = /^[A-Za-z0-9._/-]+$/;
+function isSafeHookScriptPath(script: string): boolean {
+  if (typeof script !== 'string' || script.length === 0) return false;
+  if (!SAFE_HOOK_SCRIPT_RE.test(script)) return false;
+  if (path.isAbsolute(script)) return false;
+  const segments = script.split(/[/\\]/);
+  if (segments.includes('..')) return false;
+  for (const seg of segments) {
+    if (seg.startsWith('-')) return false;
+  }
+  return true;
+}
+
+/**
+ * #1460 (R) HIGH: POSIX single-quote an arbitrary string for safe inclusion in a shell command.
+ * The emitted hook `command` is the ABSOLUTE confined script path, which begins with the
+ * (non-manifest) install-prefix — commonly a home dir containing spaces/special chars (e.g.
+ * "/Users/Bob Smith/.claude/..."). Written unquoted it would word-split (and, with a hostile
+ * prefix, could inject). Wrapping in single quotes — with each embedded `'` escaped as `'\''` —
+ * makes the whole path a single shell token that no metacharacter inside it can break.
+ */
+function shellSingleQuote(value: string): string {
+  return "'" + value.replace(/'/g, "'\\''") + "'";
+}
+
+/**
+ * #1460 CONF-1: resolve a hook `script` (declared RELATIVE to the bundle) against the capability's
+ * own install dir and CONFINE it via realpath, returning the ABSOLUTE confined path or null when it
+ * escapes the bundle. Mirrors confinedSharedFile (realpath the FULL existing ancestor chain so an
+ * ancestor symlink at any depth cannot escape) and capability-validator's materializeHookFragments
+ * (resolve-against-capDir containment), but rooted at capDir rather than runtimeDir.
+ *
+ * Why this matters: the prior code wrote the RAW relative `script` as the hook command. At hook-exec
+ * time a relative command resolves against the CWD, not the bundle — so it could execute an arbitrary
+ * file, and a crafted relative path (or a symlinked subdir) could escape the bundle. Writing the
+ * absolute confined path makes the hook always run the bundle's own file regardless of CWD.
+ */
+function confinedBundleScript(capDirPath: string, script: string): string | null {
+  // Absolute paths and `..` segments are invalid script inputs (and rejected by the caller too).
+  if (path.isAbsolute(script) || script.split(/[/\\]/).includes('..')) return null;
+
+  // #1460 (R) HIGH (defense-in-depth): the confined ABSOLUTE path is written verbatim as a hook
+  // `command` string that a host runtime consumes through a shell. A manifest-controlled script
+  // name containing a shell metacharacter / whitespace / control char / leading "-" would inject a
+  // second command — even though the file genuinely exists inside the bundle and so passes the
+  // realpath confinement below. The validator already rejects such scripts at install/load time
+  // (capability-validator.cjs isSafeHookScriptPath); we MIRROR the same conservative allowlist here
+  // so applyCapabilitySharedEdits skips an unsafe script even if validation were somehow bypassed.
+  if (!isSafeHookScriptPath(script)) return null;
+
+  let realCapRoot: string;
+  try {
+    realCapRoot = fs.realpathSync(capDirPath);
+  } catch {
+    // capDir does not exist yet (e.g. applyCapabilitySharedEdits called before the bundle is on
+    // disk): a non-existent root cannot be a symlink escaping itself, so confine lexically.
+    realCapRoot = path.resolve(capDirPath);
+    const targetLex = path.resolve(realCapRoot, script);
+    if (targetLex !== realCapRoot && !targetLex.startsWith(realCapRoot + path.sep)) return null;
+    return targetLex;
+  }
+
+  const target = path.resolve(realCapRoot, script);
+  const parentDir = path.dirname(target);
+  let realParent: string;
+  try {
+    realParent = fs.realpathSync(parentDir);
+  } catch {
+    // Parent does not exist yet (created inside the bundle): lexical containment is sufficient
+    // because a non-existent path cannot be a symlink escaping the root.
+    if (parentDir !== realCapRoot && !parentDir.startsWith(realCapRoot + path.sep)) return null;
+    return target;
+  }
+  // The realpath'd parent chain must remain inside the bundle — an ancestor symlink escaping the
+  // bundle is refused here (the symlink is followed by realpathSync, so its real location is checked).
+  if (realParent !== realCapRoot && !realParent.startsWith(realCapRoot + path.sep)) return null;
+  return path.join(realParent, path.basename(target));
+}
+
 // ---------------------------------------------------------------------------
 // Atomic directory promotion (stage -> swap, backup retained for the caller)
 // ---------------------------------------------------------------------------
@@ -516,11 +598,21 @@ function applyCapabilitySharedEdits(args: {
         const event = typeof rec['event'] === 'string' ? rec['event'] : '';
         const script = typeof rec['script'] === 'string' ? rec['script'] : '';
         if (!event || !script || isUnsafeKey(event)) continue;
-        // Never write a hook command pointing outside the capability's own bundle (the trust gate
-        // already blocks such manifests at install; this is defense-in-depth for any other caller).
-        if (path.isAbsolute(script) || script.split(/[/\\]/).includes('..')) continue;
+        // #1460 CONF-1: resolve the declared (relative) script against the capability's OWN install
+        // dir and CONFINE via realpath, then write the ABSOLUTE confined path as the hook command —
+        // never the raw relative path (which would resolve against the CWD at hook-exec time and could
+        // execute an arbitrary file). Absolute/`..` inputs and any script escaping the bundle (e.g.
+        // through a symlinked subdir) return null and are SKIPPED, exactly as before.
+        const absScript = confinedBundleScript(capDir(runtimeDir, capId), script);
+        if (absScript === null) continue;
+        // #1460 (R) HIGH: the hook `command` is consumed by a shell (first-party hooks emit
+        // `node "${CLAUDE_PLUGIN_ROOT}/hooks/x.js"`). The absolute path begins with the
+        // (non-manifest) install-prefix, which commonly contains spaces — emit it POSIX
+        // single-quoted so the prefix cannot word-split or inject. The script BASENAME is
+        // already restricted to a shell-safe allowlist by isSafeHookScriptPath above.
+        const command = shellSingleQuote(absScript);
         const arr = Array.isArray(hooksObj[event]) ? (hooksObj[event] as unknown[]) : [];
-        arr.push({ [CAP_MARKER]: capId, hooks: [{ type: 'command', command: script }] });
+        arr.push({ [CAP_MARKER]: capId, hooks: [{ type: 'command', command }] });
         hooksObj[event] = arr;
         touched = true;
       }
@@ -1545,6 +1637,11 @@ export = {
   reconcileCapabilities,
   applyCapabilitySharedEdits,
   stripCapabilitySharedEdits,
+  // #1460 CONF-2: exported so the ancestor-symlink confinement is locked in by a regression test.
+  confinedSharedFile,
+  // #1460 (R) HIGH: exported so the shell-unsafe-script defense-in-depth (returns null for an
+  // unsafe-char script even when the file exists in the bundle) is locked in by a regression test.
+  confinedBundleScript,
   CAP_MARKER,
   // Exported for cross-process-lock unit tests (CONC-1/CONC-2/finding-1). Not part of the public CLI
   // surface. #1459 finding 4: the lock primitive now lives in the shared capability-lock module; these

@@ -108,6 +108,18 @@ function capManifestVersion(dir, id) {
     return JSON.parse(fs.readFileSync(path.join(dir, '.gsd', 'capabilities', id, 'capability.json'), 'utf8')).version;
   } catch { return null; }
 }
+/**
+ * #1460 CONF-1: the expected absolute hook command — `script` resolved against the
+ * capability install dir and confined via realpath of the existing ancestor chain
+ * (so an ancestor symlink cannot escape). Mirrors confinedBundleScript in the source.
+ */
+function expectedBundleCommand(dir, id, script) {
+  const capDir = path.join(dir, '.gsd', 'capabilities', id);
+  const target = path.resolve(capDir, script);
+  let parent = path.dirname(target);
+  try { parent = fs.realpathSync(parent); } catch { /* lexical fallback below */ }
+  return path.join(parent, path.basename(target));
+}
 
 // ---------------------------------------------------------------------------
 // Install
@@ -294,7 +306,8 @@ test('upgrade: a changed executable set without consent aborts and leaves the OL
   assert.strictEqual(res.requiresConsent, true);
   assert.strictEqual(capManifestVersion(dir, 'e'), '1.0.0', 'old bundle untouched');
   assert.strictEqual(readLedgerEntry(dir, 'e').version, '1.0.0', 'old ledger untouched');
-  assert.strictEqual(readSettings(dir).hooks.PostToolUse[0].hooks[0].command, 'hooks/a.js');
+  // #1460 CONF-1/(R): command is the ABSOLUTE confined path inside the bundle (POSIX single-quoted), not the raw relative form.
+  assert.strictEqual(readSettings(dir).hooks.PostToolUse[0].hooks[0].command, shQuote(expectedBundleCommand(dir, 'e', 'hooks/a.js')));
 });
 
 test('upgrade: a changed executable set WITH consent upgrades and re-derives shared edits', async () => {
@@ -310,7 +323,110 @@ test('upgrade: a changed executable set WITH consent upgrades and re-derives sha
   assert.strictEqual(res.status, 'upgraded');
   const hooks = readSettings(dir).hooks.PostToolUse;
   assert.strictEqual(hooks.length, 1);
-  assert.strictEqual(hooks[0].hooks[0].command, 'hooks/b.js', 'old shared edit stripped, new applied');
+  // #1460 CONF-1/(R): re-derived command is the ABSOLUTE confined path inside the bundle (POSIX single-quoted).
+  assert.strictEqual(hooks[0].hooks[0].command, shQuote(expectedBundleCommand(dir, 'e', 'hooks/b.js')), 'old shared edit stripped, new applied (quoted absolute confined path)');
+});
+
+// ---------------------------------------------------------------------------
+// #1460 (R) HIGH: the emitted hook `command` must be shell-safe
+// ---------------------------------------------------------------------------
+// A hook `command` string is consumed by a shell (first-party hooks emit
+// `node "${CLAUDE_PLUGIN_ROOT}/hooks/x.js"`). The non-manifest install-prefix
+// (the home/runtime dir) commonly contains spaces (e.g. "/Users/Bob Smith/...")
+// — written unquoted it word-splits and breaks (or, with a hostile prefix,
+// could inject). The emitted absolute command must be POSIX single-quoted.
+
+/** A runtime dir whose absolute path contains a SPACE (mirrors "/Users/Bob Smith/.claude"). */
+function runtimeWithSpace() {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'cap life-'));
+  cleanups.push(base);
+  const dir = path.join(base, 'Bob Smith', '.claude');
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+/** POSIX single-quote a string the way applyCapabilitySharedEdits must. */
+function shQuote(s) {
+  return "'" + String(s).replace(/'/g, "'\\''") + "'";
+}
+
+test('#1460 (R): emitted hook command is single-quoted when the install prefix contains a space', async () => {
+  const dir = runtimeWithSpace();
+  assert.ok(dir.includes(' '), 'precondition: install prefix contains a space');
+  const res = await lifecycle.installCapability('./e', {
+    runtimeDir: dir, hostVersion: '1.6.0', consentGranted: true, sharedFiles: ['settings.json'],
+    _resolve: fakeResolve(execCap('e', '1.0.0', { script: 'hooks/format.sh' })),
+  });
+  assert.strictEqual(res.status, 'installed', JSON.stringify(res));
+  const command = readSettings(dir).hooks.PostToolUse[0].hooks[0].command;
+  const expectedAbs = expectedBundleCommand(dir, 'e', 'hooks/format.sh');
+  // revert-fails: without quoting the command is the bare space-containing absolute path,
+  // which a shell would word-split (the second token would be executed as a command).
+  assert.strictEqual(command, shQuote(expectedAbs), 'command must be POSIX single-quoted');
+  // Defense-in-depth: emulate POSIX word-splitting — single-quoted runs are atomic (whitespace
+  // inside them does NOT split). The quoted command must collapse to exactly ONE word (the path).
+  const words = command.match(/'[^']*'|[^\s']+/g) || [];
+  assert.strictEqual(words.length, 1, 'quoting must keep the space-containing path as a single shell word');
+  assert.strictEqual(words[0], command, 'the single word IS the entire quoted command');
+  // Negative control: the UNQUOTED path would split into >1 word at the space (the bug this prevents).
+  assert.ok((expectedAbs.match(/'[^']*'|[^\s']+/g) || []).length > 1, 'precondition: the bare path word-splits');
+});
+
+test('#1460 (R): a normal script under a normal prefix emits the quoted absolute command and stays strippable by CAP_MARKER', async () => {
+  const dir = runtime();
+  await lifecycle.installCapability('./e', {
+    runtimeDir: dir, hostVersion: '1.6.0', consentGranted: true, sharedFiles: ['settings.json'],
+    _resolve: fakeResolve(execCap('e', '1.0.0', { script: 'hooks/run.js' })),
+  });
+  const before = readSettings(dir).hooks.PostToolUse;
+  assert.strictEqual(before.length, 1);
+  assert.strictEqual(before[0][CAP_MARKER], 'e');
+  // revert-fails: without quoting the control command is the bare absolute path.
+  assert.strictEqual(before[0].hooks[0].command, shQuote(expectedBundleCommand(dir, 'e', 'hooks/run.js')));
+  // Strip is keyed on CAP_MARKER===capId, NOT the command string — quoting does not break it.
+  const rem = await lifecycle.removeCapability('e', {
+    runtimeDir: dir, hostVersion: '1.6.0', sharedFiles: ['settings.json'],
+  });
+  assert.strictEqual(rem.status, 'removed', JSON.stringify(rem));
+  const after = readSettings(dir);
+  assert.ok(!after || !after.hooks || !after.hooks.PostToolUse || after.hooks.PostToolUse.length === 0,
+    'the stamped hook is stripped by CAP_MARKER regardless of quoting');
+});
+
+test('#1460 (R): idempotent strip-then-reapply yields the identical quoted command', () => {
+  const dir = runtime();
+  const capId = 'e';
+  const capDirPath = path.join(dir, '.gsd', 'capabilities', capId);
+  fs.mkdirSync(path.join(capDirPath, 'hooks'), { recursive: true });
+  fs.writeFileSync(path.join(capDirPath, 'hooks', 'run.js'), '// x', 'utf8');
+  const manifest = execCap(capId, '1.0.0', { script: 'hooks/run.js' });
+  const apply = () => lifecycle.applyCapabilitySharedEdits({
+    runtimeDir: dir, capId, manifest, sharedFiles: ['settings.json'],
+  });
+  const edits = apply();
+  const first = readSettings(dir).hooks.PostToolUse;
+  // The real install/upgrade transition is strip-then-apply; re-running it must converge.
+  lifecycle.stripCapabilitySharedEdits({ runtimeDir: dir, capId, sharedEdits: edits });
+  apply();
+  const second = readSettings(dir).hooks.PostToolUse;
+  assert.strictEqual(second.length, 1, 'idempotent: still exactly one stamped hook after strip+reapply');
+  assert.strictEqual(second[0].hooks[0].command, first[0].hooks[0].command, 'identical quoted command on re-apply');
+  assert.strictEqual(second[0].hooks[0].command, shQuote(expectedBundleCommand(dir, capId, 'hooks/run.js')));
+});
+
+test('#1460 (R): confinedBundleScript returns null for an unsafe-char script (defense-in-depth)', () => {
+  const dir = runtime();
+  const capDirPath = path.join(dir, '.gsd', 'capabilities', 'e');
+  fs.mkdirSync(capDirPath, { recursive: true });
+  // Even when the file literally exists on disk inside the bundle, an unsafe-char script
+  // name must be refused — so applyCapabilitySharedEdits skips it even if validation were
+  // bypassed. revert-fails: without the allowlist guard this returns the absolute path.
+  fs.writeFileSync(path.join(capDirPath, 'run.sh; touch pwn'), '// x', 'utf8');
+  assert.strictEqual(lifecycle.confinedBundleScript(capDirPath, 'run.sh; touch pwn'), null);
+  // A normal script still resolves to its confined absolute path.
+  fs.writeFileSync(path.join(capDirPath, 'ok.sh'), '// x', 'utf8');
+  const ok = lifecycle.confinedBundleScript(capDirPath, 'ok.sh');
+  assert.ok(typeof ok === 'string' && ok.endsWith(path.join('e', 'ok.sh')), 'normal script resolves: ' + ok);
 });
 
 // ---------------------------------------------------------------------------
@@ -811,6 +927,98 @@ test('applyCapabilitySharedEdits: __proto__ event/name is skipped (no pollution)
   assert.ok(s.mcpServers.ok);
   // The global prototype was not polluted.
   assert.strictEqual({}.command, undefined);
+});
+
+// ---------------------------------------------------------------------------
+// #1460 CONF-1 — a hook command is written as the ABSOLUTE path inside the
+// capability's own install dir, confined via realpath; a script that resolves
+// OUTSIDE the bundle is NOT written.
+// revert-fails: with the raw `command: script` restored (pre-fix), the absolute
+// assertion fails and a bundle-escaping script would be written.
+// ---------------------------------------------------------------------------
+
+test('#1460 CONF-1: a relative hook script is emitted as the absolute path inside capDir', () => {
+  const dir = runtime();
+  const capId = 'conf1';
+  // Make the install dir real so realpath confinement resolves a concrete chain.
+  const capDir = path.join(dir, '.gsd', 'capabilities', capId);
+  fs.mkdirSync(path.join(capDir, 'subdir'), { recursive: true });
+  fs.writeFileSync(path.join(capDir, 'subdir', 'run.js'), '// hook', 'utf8');
+
+  lifecycle.applyCapabilitySharedEdits({
+    runtimeDir: dir,
+    capId,
+    manifest: { hooks: [{ event: 'PostToolUse', script: 'subdir/run.js' }] },
+    sharedFiles: ['settings.json'],
+  });
+
+  const s = readSettings(dir);
+  const command = s.hooks.PostToolUse[0].hooks[0].command;
+  const expectedAbs = path.join(fs.realpathSync(path.join(capDir, 'subdir')), 'run.js');
+  // #1460 (R): the emitted command is the absolute confined path, POSIX single-quoted.
+  assert.strictEqual(command, shQuote(expectedAbs), 'command must be the quoted absolute confined path inside capDir');
+  const unquoted = command.slice(1, -1); // strip the wrapping single quotes for the path-shape checks
+  assert.ok(path.isAbsolute(unquoted), 'command must be absolute (CWD-independent)');
+  assert.ok(unquoted.startsWith(fs.realpathSync(capDir) + path.sep), 'command must live inside the bundle');
+});
+
+test('#1460 CONF-1: a script resolving OUTSIDE capDir via a symlinked subdir is NOT written (skipped)', (t) => {
+  const dir = runtime();
+  const capId = 'conf1-escape';
+  const capDir = path.join(dir, '.gsd', 'capabilities', capId);
+  fs.mkdirSync(capDir, { recursive: true });
+
+  // Plant a victim file outside the bundle and a symlinked subdir inside the bundle
+  // that points at the victim's parent. A relative script "evil/run.js" would then
+  // resolve to the victim through the symlink — confinement must refuse it.
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'conf1-outside-'));
+  cleanups.push(outside);
+  fs.writeFileSync(path.join(outside, 'run.js'), '// victim', 'utf8');
+  try {
+    fs.symlinkSync(outside, path.join(capDir, 'evil'));
+  } catch {
+    t.skip('symlink not supported on this platform');
+    return;
+  }
+
+  lifecycle.applyCapabilitySharedEdits({
+    runtimeDir: dir,
+    capId,
+    manifest: { hooks: [{ event: 'PostToolUse', script: 'evil/run.js' }] },
+    sharedFiles: ['settings.json'],
+  });
+
+  const s = readSettings(dir);
+  // The escaping hook is skipped → no settings written at all (no touched edits).
+  assert.strictEqual(s, null, 'no shared-config edit must be written for a bundle-escaping script');
+});
+
+// ---------------------------------------------------------------------------
+// #1460 CONF-2 — REGRESSION GUARD: confinedSharedFile realpaths the FULL ancestor
+// chain, so an ANCESTOR symlink (not just the final component) cannot escape.
+// revert-fails: if confinedSharedFile were changed to realpath only the final
+// component, a path through a symlinked ancestor would resolve OUTSIDE runtimeDir
+// and this test (asserting null) would fail.
+// ---------------------------------------------------------------------------
+
+test('#1460 CONF-2: confinedSharedFile refuses a path through a symlinked ANCESTOR directory', (t) => {
+  const dir = runtime();
+  // Build runtimeDir/inner where `inner` is a symlink to a directory OUTSIDE runtimeDir.
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'conf2-outside-'));
+  cleanups.push(outside);
+  fs.mkdirSync(path.join(outside, 'deep'), { recursive: true });
+  try {
+    fs.symlinkSync(outside, path.join(dir, 'inner'));
+  } catch {
+    t.skip('symlink not supported on this platform');
+    return;
+  }
+
+  // A path whose ANCESTOR ("inner") is the escaping symlink — the final component
+  // ("settings.json") is not itself a link, so a final-component-only realpath would
+  // miss the escape. confinedSharedFile realpaths the parent chain and must return null.
+  const result = lifecycle.confinedSharedFile(dir, path.join('inner', 'deep', 'settings.json'));
+  assert.strictEqual(result, null, 'a path through a symlinked ancestor must be refused (null)');
 });
 
 // ---------------------------------------------------------------------------

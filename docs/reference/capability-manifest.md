@@ -51,7 +51,7 @@ Non-loop lifecycle hooks.
 | Sub-field | Type | Description |
 |---|---|---|
 | `event` | string | Hook event name (host-runtime specific). |
-| `script` | string | Path to the hook script, relative to the capability root. |
+| `script` | string | Path to the hook script, **relative** to the capability root. The hook `command` written into the host settings is the realpath-confined **absolute** path to this script (so it always runs the bundle's own file regardless of the working directory) and is POSIX single-quoted (so an install prefix containing spaces cannot break it). For shell safety the path must contain only `[A-Za-z0-9._/-]` — no whitespace, no shell metacharacters (`; \| & $ ` `` ` `` `( ) < > * ? [ ] { } ! ~ # ' " \` newline), no leading `-`, no absolute path, and no `..` segment. A script outside this allowlist fails validation and the capability is rejected. |
 
 ### `config` — federated config-key schema slice
 

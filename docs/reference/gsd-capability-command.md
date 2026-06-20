@@ -31,7 +31,7 @@ gsd capability install <spec> [--integrity sha512-<hash>] [--scope global|projec
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
-| `--integrity` | `sha512-<base64>` | — | SHA-512 bundle hash to verify before extraction. When supplied, a mismatch aborts the install. When the source registry or `capability.json` already carries an `integrity` field, both must agree. |
+| `--integrity` | `sha512-<base64>` | — | SHA-512 hash of the downloaded artifact, verified before extraction. When supplied, a mismatch aborts the install. **Per-source semantics (a supplied value is never silently ignored):** for **tarball** and **npm** sources it is verified over the downloaded artifact bytes (the fetched `.tgz` for tarball; the `npm pack` `.tgz` for npm — both the same SRI sha512 domain); for **git** and **local** sources there is no single downloadable artifact to hash, so a supplied `--integrity` is **rejected** with an actionable error (git: pin the commit with `#sha:<commit>` instead; local: not supported). When the source registry or `capability.json` already carries an `integrity` field, both must agree. |
 | `--scope` | `global` \| `project` | `global` | Installation root (see [Install layout](#install-layout)). |
 | `--yes` | flag | off | Grant consent for the capability's executable surfaces non-interactively. The disclosure is still printed. Without it, an install that declares executable surfaces is **aborted** after printing the disclosure (the CLI is non-interactive — there is no prompt to answer). |
 | `--shared-file` | path (repeatable) | — | A file, **relative to the scope root**, into which the capability's disclosed hooks / MCP servers should be spliced (e.g. a runtime's `settings.json`). Each fragment is marker-isolated so `remove` can strip exactly it. When omitted, the bundle still installs (declaratively); no shared-file edits are made. |
@@ -241,13 +241,13 @@ These appear in ADR-1244's command surface but are **not implemented in 1.6.0**.
 
 The `install` subcommand accepts the following source specification forms.
 
-| Form | Example | Adapter |
-|---|---|---|
-| Registry name | `my-cap@gsd-registry` | Registry — fetches the capability bundle from the named registry; `integrity` is populated from the registry catalogue. |
-| Git URL with tag | `https://github.com/org/repo.git#v1.2.0` | Git — clones/fetches at the specified tag; `#sha:<40-hex>` pins a specific commit. |
-| npm package | `npm:@org/gsd-capability-foo@^1.0.0` | npm — resolves via `npm dist-tags` / semver range; installs with `--ignore-scripts`. |
-| Tarball URL | `https://host/path/cap-x.y.z.tgz` | Tarball — fetches over HTTPS, verifies SHA-512 when `--integrity` is supplied. |
-| Local path | `./local/path` (or an absolute path) | Local — copies from the filesystem path. Auto-update detection is not available for this form. |
+| Form | Example | Adapter | `--integrity` |
+|---|---|---|---|
+| Registry name | `my-cap@gsd-registry` | Registry — fetches the capability bundle from the named registry; `integrity` is populated from the registry catalogue. | Verified over the fetched bundle. |
+| Git URL with tag | `https://github.com/org/repo.git#v1.2.0` | Git — clones/fetches at the specified tag; `#sha:<40-hex>` pins a specific commit. | **Rejected** — a clone is a directory tree, not a single hashable artifact. Pin the commit with `#sha:<commit>` instead. |
+| npm package | `npm:@org/gsd-capability-foo@^1.0.0` | npm — resolves via `npm dist-tags` / semver range; installs with `--ignore-scripts`. | Verified over the `npm pack` `.tgz` bytes (same SRI sha512 domain as a tarball). |
+| Tarball URL | `https://host/path/cap-x.y.z.tgz` | Tarball — fetches over HTTPS. | Verified over the downloaded `.tgz` bytes. |
+| Local path | `./local/path` (or an absolute path) | Local — copies from the filesystem path. Auto-update detection is not available for this form. | **Rejected** — a local directory has no single hashable artifact; integrity pinning is not supported for local sources. |
 
 Which source forms are *permitted* is governed by the `capabilities.strict_known_registries` policy (see [Configuration](../CONFIGURATION.md) and [the capability trust model](../explanation/capability-trust-model.md)): `null`/absent is permissive, `[]` is lockdown (no third-party sources), and a host allowlist permits only matching registries. This policy is **project-scoped** — it is read from the current project's `.planning/config.json` and applied to installs run in that project regardless of `--scope`; there is no machine-wide source allowlist. (A present-but-unparseable config fails **closed** — external installs are blocked until it is fixed.)
 

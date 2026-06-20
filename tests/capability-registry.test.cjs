@@ -1819,6 +1819,62 @@ describe('C4: description and hooks validation', () => {
     assert.deepEqual(hookErrors, [], 'Expected no hook errors for valid hooks entry, got: ' + JSON.stringify(hookErrors));
   });
 
+  // ─── #1460 (R) HIGH: hook script path must be shell-safe ──────────────────
+  // The hook `script` is resolved to an absolute path and written verbatim as the hook
+  // `command` STRING in settings.json (consumed by a shell). A manifest-controlled script
+  // name containing shell metacharacters (`;`, `|`, `$`, backtick, whitespace, …) would
+  // inject a second command at hook-exec time. Fail closed at the validator: reject any
+  // script path outside the conservative [A-Za-z0-9._/-] allowlist. revert-fails: without
+  // the allowlist these all pass the non-empty-string check and validate OK.
+  for (const [label, script] of [
+    ['command-injection via `;`', 'run.sh; touch /tmp/pwn'],
+    ['embedded space', 'my hook.sh'],
+    ['command substitution `$( )`', 'run-$(whoami).sh'],
+    ['backtick substitution', 'run-`id`.sh'],
+    ['pipe metacharacter', 'a.sh|b.sh'],
+    ['newline injection', 'a.sh\ntouch /tmp/pwn'],
+    ['ampersand background', 'a.sh & evil'],
+    ['shell glob', 'hooks/*.sh'],
+    ['redirect', 'a.sh > /tmp/pwn'],
+    ['leading dash (option injection)', '-rf'],
+    ['single quote', "a'.sh"],
+    ['double quote', 'a".sh'],
+    ['NUL/control char', 'a\u0000.sh'],
+  ]) {
+    test(`hook script with unsafe chars is rejected (${label})`, () => {
+      const cap = { ...UI_CAP, hooks: [{ event: 'PostToolUse', script }] };
+      const errors = validateCapability(cap, 'ui');
+      const hookErrors = errors.filter((e) => e.includes('hooks[0].script'));
+      assert.ok(
+        hookErrors.length > 0,
+        `Expected a hooks[0].script rejection for ${label} (script=${JSON.stringify(script)}), got: ` + JSON.stringify(errors),
+      );
+      assert.ok(
+        hookErrors.some((e) => /unsafe character/.test(e)),
+        'Error should mention unsafe characters, got: ' + JSON.stringify(hookErrors),
+      );
+    });
+  }
+
+  test('hook script with absolute path is rejected', () => {
+    const cap = { ...UI_CAP, hooks: [{ event: 'PostToolUse', script: '/etc/evil.sh' }] };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(errors.some((e) => e.includes('hooks[0].script')), 'absolute script must be rejected: ' + JSON.stringify(errors));
+  });
+
+  test('hook script with .. traversal is rejected', () => {
+    const cap = { ...UI_CAP, hooks: [{ event: 'PostToolUse', script: '../../etc/evil.sh' }] };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(errors.some((e) => e.includes('hooks[0].script')), '.. script must be rejected: ' + JSON.stringify(errors));
+  });
+
+  test('hook script with a normal nested relative path is still accepted', () => {
+    const cap = { ...UI_CAP, hooks: [{ event: 'PostToolUse', script: 'hooks/sub-dir/format_v2.sh' }] };
+    const errors = validateCapability(cap, 'ui');
+    const hookErrors = errors.filter((e) => e.includes('hooks[0].script'));
+    assert.deepEqual(hookErrors, [], 'Expected a normal nested relative script to be accepted, got: ' + JSON.stringify(hookErrors));
+  });
+
   test('description present in UI_CAP passes validation', () => {
     const errors = validateCapability(UI_CAP, 'ui');
     const descErrors = errors.filter((e) => e.includes('description'));

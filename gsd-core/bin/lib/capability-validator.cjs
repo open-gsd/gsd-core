@@ -195,6 +195,36 @@ const SEMVER_RANGE_RE = /^[0-9A-Za-z.\-+ |<>=~^*()]+$/;
 // chars + "==" padding). Exact length so malformed pins ("sha512-abc") fail.
 const SHA512_INTEGRITY_RE = /^sha512-[A-Za-z0-9+/]{86}==$/;
 
+// #1460 (R) HIGH — shell-safe hook-script allowlist. A hook `script` is resolved to an
+// ABSOLUTE path and written verbatim as the hook `command` STRING in settings.json, which a
+// host runtime consumes through a shell (first-party hooks emit `node "${...}/hooks/x.js"`).
+// A manifest-controlled name like `run.sh; touch /tmp/pwn` (filenames may legally contain
+// `;`, spaces, `$`, backtick, `|`, newline on POSIX) would inject a second command — even
+// though the file genuinely exists inside the bundle and so passes path-confinement. We
+// therefore restrict the relative script path to a CONSERVATIVE allowlist: only
+// [A-Za-z0-9._/-], with no leading `-` on any segment (option-injection), no `..` segment,
+// and not absolute. Anything else (whitespace, any shell metacharacter, control/NUL) is a
+// hard validation error — fail closed so the capability install/load is rejected loudly.
+const SAFE_HOOK_SCRIPT_RE = /^[A-Za-z0-9._/-]+$/;
+
+/**
+ * #1460 (R): true when a relative hook-script path is shell-safe (see SAFE_HOOK_SCRIPT_RE).
+ * Rejects absolute paths, `..` segments, a leading `-` on any path segment, and any char
+ * outside the allowlist (whitespace / shell metacharacters / control / NUL).
+ */
+function isSafeHookScriptPath(script) {
+  if (typeof script !== 'string' || script.length === 0) return false;
+  if (!SAFE_HOOK_SCRIPT_RE.test(script)) return false;
+  if (path.isAbsolute(script)) return false;
+  const segments = script.split(/[/\\]/);
+  if (segments.includes('..')) return false;
+  // A leading '-' on any segment would be parsed as an option by the shell/`node`.
+  for (const seg of segments) {
+    if (seg.startsWith('-')) return false;
+  }
+  return true;
+}
+
 // A syntactically plausible semver range (shape-only — see SEMVER_RANGE_RE).
 // Requires a digit or a bare wildcard so pure-alpha garbage ("abcx", "()x") is
 // rejected; full range satisfaction is the runtime overlay's job (ADR-1244 D2).
@@ -542,6 +572,15 @@ function validateFeatureBody(cap) {
           }
           if (typeof h.script !== 'string' || h.script.length === 0) {
             errors.push('hooks[' + i + '].script must be a non-empty string');
+          } else if (!isSafeHookScriptPath(h.script)) {
+            // #1460 (R) HIGH: the script becomes an absolute hook `command` consumed by a shell;
+            // reject any unsafe character (shell metacharacters/whitespace/control), a leading `-`,
+            // an absolute path, or a `..` segment so a manifest can never inject a second command.
+            errors.push(
+              'hooks[' + i + '].script must be a relative path containing only [A-Za-z0-9._/-] ' +
+              '(no whitespace, shell metacharacters (e.g. ; | & $ ` ( ) < > * ? newline), leading "-", ' +
+              'absolute path, or ".." segment) — it contains unsafe characters: ' + JSON.stringify(h.script),
+            );
           }
         }
       }

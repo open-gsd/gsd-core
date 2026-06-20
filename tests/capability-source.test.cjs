@@ -404,6 +404,7 @@ describe('tarball adapter — integrity via _setCapabilitySourceHttpGet', () => 
 
     _setCapabilitySourceHttpGet(() => Promise.resolve({ statusCode: 200, body: tgzBuf }));
 
+    let tarCalls = 0;
     await assert.rejects(
       () =>
         resolveCapabilitySource('https://example.com/tarball-mismatch.tgz', {
@@ -412,7 +413,8 @@ describe('tarball adapter — integrity via _setCapabilitySourceHttpGet', () => 
           integrity: badIntegrity,
           execOverrides: {
             tar: (_prog, args, _opts) => {
-              // Should never be reached — integrity check fires first.
+              // Must never be reached — integrity check fires before any tar invocation.
+              tarCalls++;
               const extractDir = args[args.indexOf('-C') + 1];
               fs.writeFileSync(
                 path.join(extractDir, 'capability.json'),
@@ -426,9 +428,143 @@ describe('tarball adapter — integrity via _setCapabilitySourceHttpGet', () => 
       /integrity mismatch|mismatch/i
     );
 
+    // Integrity is verified over the raw .tgz bytes BEFORE any tar call — ordering invariant.
+    assert.strictEqual(tarCalls, 0, 'tar must NOT be invoked — integrity verified over the .tgz bytes before extraction');
+
     // No staged directory must exist.
     const finalDir = path.join(gsdHome, '.gsd', 'capabilities', 'tarball-mismatch');
     assert.ok(!fs.existsSync(finalDir), 'staged dir must NOT exist after integrity mismatch');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #1460 CS-1 — a supplied --integrity is NEVER silently ignored.
+//   - npm: verified over the produced .tgz bytes (same SRI sha512 domain as tarball).
+//   - git / local: REJECTED with an actionable error (no single byte-SRI artifact).
+// revert-fails: with stageValidated's `integrity: null` restored on these adapters
+// (the pre-fix behaviour), the npm-mismatch case would silently resolve and the
+// git/local cases would silently resolve with integrity:null — every assert below
+// would then fail.
+// ---------------------------------------------------------------------------
+
+describe('#1460 CS-1 — supplied --integrity is verified or rejected per source (never silently dropped)', () => {
+  let gsdHome = '';
+  beforeEach(() => { gsdHome = createTempDir('gsd-home-'); });
+  afterEach(() => { cleanup(gsdHome); });
+
+  /** Build a fake `npm pack` that writes a real .tgz of `tgzBytes` to the --pack-destination. */
+  function fakeNpmPack(tgzBytes) {
+    return (args) => {
+      const destIdx = args.indexOf('--pack-destination');
+      const dest = destIdx >= 0 ? args[destIdx + 1] : '';
+      fs.writeFileSync(path.join(dest, 'cap.tgz'), tgzBytes);
+      return { exitCode: 0, stdout: 'cap.tgz\n', stderr: '', signal: null, error: null };
+    };
+  }
+
+  /** A tar override that lists safe members and writes `cap`'s capability.json on extract. */
+  function fakeTar(cap) {
+    return (_prog, args) => {
+      if (args[0] === '-tzf') {
+        return { exitCode: 0, stdout: 'package/capability.json\n', stderr: '', signal: null, error: null };
+      }
+      if (args[0] === '-tvzf') {
+        return { exitCode: 0, stdout: '-rw-r--r-- 0 user group 10 Jan  1 2020 package/capability.json\n', stderr: '', signal: null, error: null };
+      }
+      const extractDir = args[args.indexOf('-C') + 1];
+      const pkgDir = path.join(extractDir, 'package');
+      fs.mkdirSync(pkgDir, { recursive: true });
+      fs.writeFileSync(path.join(pkgDir, 'capability.json'), JSON.stringify(cap), 'utf8');
+      return { exitCode: 0, stdout: '', stderr: '', signal: null, error: null };
+    };
+  }
+
+  test('npm + matching --integrity (over the .tgz bytes) → resolves', async () => {
+    const cap = featureCap('npm-int-ok');
+    const tgzBytes = Buffer.from('a deterministic npm tarball payload for integrity', 'utf8');
+    const integrity = sha512b64(tgzBytes);
+
+    const result = await resolveCapabilitySource('npm:@org/npm-int-ok@^1.0.0', {
+      gsdHome,
+      hostVersion: '1.5.0',
+      integrity,
+      execOverrides: { npm: fakeNpmPack(tgzBytes), tar: fakeTar(cap) },
+    });
+
+    assert.strictEqual(result.id, 'npm-int-ok');
+    assert.ok(result.integrity && result.integrity.startsWith('sha512-'), 'integrity must be recorded');
+    assert.ok(fs.existsSync(result.stagedDir), 'staged dir must exist');
+  });
+
+  test('npm + MISMATCHING --integrity → throws BEFORE promote/staging (no final dir)', async () => {
+    const cap = featureCap('npm-int-bad');
+    const tgzBytes = Buffer.from('the real npm tarball bytes', 'utf8');
+    const badIntegrity = 'sha512-' + Buffer.from('not-the-real-hash').toString('base64');
+
+    let tarCalls = 0;
+    const instrumentedTar = (_prog, args) => {
+      // Must never be reached — integrity is verified over the .tgz bytes before any tar call.
+      tarCalls++;
+      return fakeTar(cap)(_prog, args);
+    };
+
+    await assert.rejects(
+      () => resolveCapabilitySource('npm:@org/npm-int-bad@^1.0.0', {
+        gsdHome,
+        hostVersion: '1.5.0',
+        integrity: badIntegrity,
+        execOverrides: { npm: fakeNpmPack(tgzBytes), tar: instrumentedTar },
+      }),
+      /integrity mismatch|mismatch/i,
+    );
+
+    // Integrity is verified over the raw .tgz bytes BEFORE any tar call — ordering invariant.
+    assert.strictEqual(tarCalls, 0, 'tar extraction must NOT run — integrity verified over the .tgz bytes before extraction');
+
+    const finalDir = path.join(gsdHome, '.gsd', 'capabilities', 'npm-int-bad');
+    assert.ok(!fs.existsSync(finalDir), 'no final dir after integrity mismatch');
+  });
+
+  test('git + any --integrity → throws an actionable error (no silent resolve)', async () => {
+    // The integrity reject must fire BEFORE the clone — so execGit is never called.
+    const gitCalls = [];
+    const fakeGit = (...callArgs) => {
+      gitCalls.push(callArgs);
+      return { exitCode: 0, stdout: '', stderr: '', signal: null, error: null };
+    };
+
+    await assert.rejects(
+      () => resolveCapabilitySource('https://github.com/org/repo.git#v1.0.0', {
+        gsdHome,
+        hostVersion: '1.5.0',
+        integrity: 'sha512-' + Buffer.from('anything').toString('base64'),
+        execOverrides: { git: fakeGit },
+      }),
+      /integrity pinning is not supported for git sources|#sha:/i,
+    );
+
+    assert.strictEqual(gitCalls.length, 0, 'execGit must NOT run — rejection fires before the clone');
+    const finalDir = path.join(gsdHome, '.gsd', 'capabilities', 'repo');
+    assert.ok(!fs.existsSync(finalDir), 'no final dir after git integrity rejection');
+  });
+
+  test('local + --integrity → throws an actionable error (no silent resolve)', async () => {
+    const capDir = makeLocalCap(featureCap('local-int-cap'));
+    try {
+      await assert.rejects(
+        () => resolveCapabilitySource(capDir, {
+          gsdHome,
+          hostVersion: '1.5.0',
+          integrity: 'sha512-' + Buffer.from('anything').toString('base64'),
+        }),
+        /integrity pinning is not supported for local sources/i,
+      );
+    } finally {
+      cleanup(capDir);
+    }
+
+    const finalDir = path.join(gsdHome, '.gsd', 'capabilities', 'local-int-cap');
+    assert.ok(!fs.existsSync(finalDir), 'no final dir after local integrity rejection');
   });
 });
 
