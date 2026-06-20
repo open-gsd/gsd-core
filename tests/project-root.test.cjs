@@ -175,20 +175,19 @@ describe('findProjectRoot nearest-.planning resolution (#1414)', () => {
     }
   });
 
-  // REGRESSION (pre-existing heuristic-3 behavior, orthogonal to heuristic 4):
+  // REGRESSION (#1422): sub_repos explicit config wins over .git implicit signal.
   // A sub_repos workspace where the child has BOTH its own .planning/ AND its own
-  // .git/ — invoked from inside the child — RESOLVES TO THE CHILD (not the parent).
-  // Pre-existing heuristic-3 precedence: a sub-repo that is itself a full project
-  // (.git + .planning) resolves to itself; this is orthogonal to heuristic 4 and
-  // tracked separately. Documents current behavior.
-  test('sub_repos child with BOTH .planning/ and .git/ resolves to child itself (heuristic-3 precedence)', () => {
+  // .git/ — invoked from inside the child — MUST resolve to the PARENT workspace
+  // because the parent's config.json explicitly lists the child in sub_repos.
+  // The implicit .git heuristic (heuristic-3) must not override explicit sub_repos.
+  test('sub_repos child with BOTH .planning/ and .git/ resolves to PARENT workspace (sub_repos wins, #1422)', () => {
     // Layout:
     //   workspaceRoot/
     //     .planning/
     //       config.json   ← sub_repos: ['child']
     //     child/
     //       .planning/   ← child has own .planning/
-    //       .git/        ← child ALSO has own .git/ → heuristic-3 makes it self-resolving
+    //       .git/        ← child ALSO has own .git/ → was triggering heuristic-3 prematurely
     //       src/         ← startDir
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-pr-subrepos-git-'));
     try {
@@ -203,10 +202,33 @@ describe('findProjectRoot nearest-.planning resolution (#1414)', () => {
       const childSrc = mkDeep(childDir, 'src');
 
       const result = findProjectRoot(childSrc);
-      // Pre-existing heuristic-3 precedence: child is a full project (.git + .planning)
-      // → resolves to the child, not the workspace root.
-      assert.strictEqual(result, childDir,
-        'A sub-repo with both .planning/ and .git/ should resolve to itself (heuristic-3 precedence)');
+      // Explicit sub_repos config in the ancestor workspace must take precedence
+      // over the implicit .git heuristic — resolves to the workspace root.
+      assert.strictEqual(result, workspaceRoot,
+        'sub_repos config in parent workspace must win over child .git: should resolve to workspaceRoot (#1422)');
+    } finally {
+      cleanup(workspaceRoot);
+    }
+  });
+
+  // REGRESSION (#1422): sub_repos child with .git resolves to parent even when
+  // startDir is nested more than one level inside the child.
+  test('sub_repos child with .git: startDir nested 2+ levels inside child still resolves to parent (#1422)', () => {
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-pr-subrepos-nested-'));
+    try {
+      fs.mkdirSync(path.join(workspaceRoot, '.planning'), { recursive: true });
+      fs.writeFileSync(
+        path.join(workspaceRoot, '.planning', 'config.json'),
+        JSON.stringify({ sub_repos: ['child'] })
+      );
+      const childDir = path.join(workspaceRoot, 'child');
+      fs.mkdirSync(path.join(childDir, '.planning'), { recursive: true });
+      fs.mkdirSync(path.join(childDir, '.git'), { recursive: true });
+      const deepChild = mkDeep(childDir, 'src', 'lib', 'utils');
+
+      const result = findProjectRoot(deepChild);
+      assert.strictEqual(result, workspaceRoot,
+        'sub_repos config must win over .git even when startDir is deeply nested inside the child (#1422)');
     } finally {
       cleanup(workspaceRoot);
     }
