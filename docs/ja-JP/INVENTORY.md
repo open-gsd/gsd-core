@@ -298,7 +298,7 @@
 | `continuation-format.md` | セッション継続/再開フォーマット。 |
 | `domain-probes.md` | discuss-phase 向けのドメイン固有のプロービング質問。 |
 | `gate-prompts.md` | ゲート/チェックポイントのプロンプトテンプレート。 |
-| `scout-codebase.md` | discuss-phase スカウトステップ向けのフェーズタイプ→コードベースマップ選択テーブル（#2551 で抽出）。 |
+| `scout-codebase.md` | discuss-phase スカウトステップ向けのフェーズタイプ→コードベースマップ選択テーブル（discuss-phase/modes プログレッシブディスクロージャー分割により抽出、#717）。 |
 | `revision-loop.md` | プラン修正の反復パターン。 |
 | `universal-anti-patterns.md` | 検出して避けるべきユニバーサルアンチパターン。 |
 | `worktree-path-safety.md` | ワークツリーガードスイート: HEAD アサーション、cwd ドリフトセンチネル（ステップ 0a、#3097）、絶対パスガード（ステップ 0b、#3099）— `<execution_context>` 経由でエグゼキュータースポーンプロンプトに読み込まれる。 |

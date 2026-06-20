@@ -298,7 +298,7 @@ Registro completo em `get-shit-done/references/*.md`. Referências são document
 | `continuation-format.md` | Formato de continuação/retomada de sessão. |
 | `domain-probes.md` | Perguntas de sondagem específicas de domínio para a discuss-phase. |
 | `gate-prompts.md` | Templates de prompt de portão/checkpoint. |
-| `scout-codebase.md` | Tabela de seleção de tipo de fase → mapa de base de código para a etapa de scout da discuss-phase (extraída via #2551). |
+| `scout-codebase.md` | Tabela de seleção de tipo de fase → mapa de base de código para a etapa de scout da discuss-phase (extraída via a divisão progressiva discuss-phase/modes, #717). |
 | `revision-loop.md` | Padrões de iteração de revisão de plano. |
 | `universal-anti-patterns.md` | Antipadrões universais a detectar e evitar. |
 | `worktree-path-safety.md` | Suite de guarda do worktree: asserção de HEAD, sentinela de drift de cwd (etapa 0a, #3097) e guarda de caminho absoluto (etapa 0b, #3099) — carregados nos prompts de spawn do executor via `<execution_context>`. |

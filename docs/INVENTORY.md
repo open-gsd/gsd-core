@@ -307,7 +307,7 @@ Full roster at `gsd-core/references/*.md`. References are shared knowledge docum
 | `prohibition-probe.md` | Spec-phase prohibition-completeness probe — the two-stage adversarial-recall → precision protocol that surfaces the unwritten *must-NOT* constraints (values/safety/ethics), with status×verification (`test`/`judgment`) tiering and canon-referral breadcrumbs (Step 5.6); second adapter of the `probe-core` resolution model. |
 | `gate-prompts.md` | Gate/checkpoint prompt templates. |
 | `loop-hook-dispatch.md` | Generic dispatch contract for consuming `gsd_run loop render-hooks <point> --raw` output in any host-loop workflow — envelope shape, per-kind dispatch rules (contribution/step/gate), and liveness banner. |
-| `scout-codebase.md` | Phase-type→codebase-map selection table for discuss-phase scout step (extracted via #2551). |
+| `scout-codebase.md` | Phase-type→codebase-map selection table for discuss-phase scout step (extracted via the discuss-phase/modes progressive-disclosure split, #717). |
 | `revision-loop.md` | Plan revision iteration patterns. |
 | `universal-anti-patterns.md` | Universal anti-patterns to detect and avoid. |
 | `worktree-branch-check.md` | Canonical spawn-time worktree HEAD/base guard (worktree_branch_check): verify-only and fail-closed — per-agent-branch assertion, protected-ref refusal (#2924), and an exact-base assertion that halts with `exit 42` on mismatch so the orchestrator (worktree lifecycle owner) performs recovery (#48). Embedded into worktree sub-agent prompts at dispatch. |

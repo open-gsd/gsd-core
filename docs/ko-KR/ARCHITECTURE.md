@@ -144,7 +144,7 @@ GSD Core는 사용자와 AI 코딩 에이전트(Claude Code, Gemini CLI, OpenCod
 
 #### 워크플로우를 위한 점진적 공개
 
-워크플로우 파일은 해당 `/gsd-*` 명령어가 호출될 때마다 Claude의 컨텍스트에 그대로 로드된다. 이 비용을 제한하기 위해 `tests/workflow-size-budget.test.cjs`가 시행하는 워크플로우 크기 예산은 #2361의 에이전트 예산을 반영한다:
+워크플로우 파일은 해당 `/gsd-*` 명령어가 호출될 때마다 Claude의 컨텍스트에 그대로 로드된다. 이 비용을 제한하기 위해 `tests/workflow-size-budget.test.cjs`가 시행하는 워크플로우 크기 예산은 에이전트 크기 예산 관례를 반영한다:
 
 | 등급      | 파일당 줄 제한 |
 |-----------|--------------------|
@@ -152,7 +152,7 @@ GSD Core는 사용자와 AI 코딩 에이전트(Claude Code, Gemini CLI, OpenCod
 | `LARGE`   | 1500 — 다단계 플래너 및 대형 기능 워크플로우 |
 | `DEFAULT` | 1000 — 집중된 단일 목적 워크플로우 (목표 등급) |
 
-`workflows/discuss-phase.md`는 이슈 #2551에 따라 더 엄격한 <500줄 상한을 유지한다. 워크플로우가 등급을 초과하면 모드별 본문은 `workflows/<workflow>/modes/<mode>.md`로, 템플릿은 `workflows/<workflow>/templates/`로, 공유 지식은 `get-shit-done/references/`로 추출한다. 부모 파일은 현재 호출에 필요한 모드 및 템플릿 파일만 읽는 얇은 디스패처가 된다.
+`workflows/discuss-phase.md`는 discuss-phase 바이트 예산(#717; discuss-phase/modes 분할로 ≈32000 바이트 유지)에 따라 더 엄격한 상한을 유지한다. 워크플로우가 등급을 초과하면 모드별 본문은 `workflows/<workflow>/modes/<mode>.md`로, 템플릿은 `workflows/<workflow>/templates/`로, 공유 지식은 `get-shit-done/references/`로 추출한다. 부모 파일은 현재 호출에 필요한 모드 및 템플릿 파일만 읽는 얇은 디스패처가 된다.
 
 `workflows/discuss-phase/`가 이 패턴의 정규 예시이다 — 부모는 디스패치하고, modes/는 플래그별 동작(`power.md`, `all.md`, `auto.md`, `chain.md`, `text.md`, `batch.md`, `analyze.md`, `default.md`, `advisor.md`)을 담으며, templates/는 해당 출력 파일이 작성될 때만 읽히는 CONTEXT.md, DISCUSSION-LOG.md, checkpoint.json 스키마를 담는다.
 

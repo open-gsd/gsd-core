@@ -847,7 +847,7 @@ gsd-core/
                           pattern: workflows/<name>/modes/*.md +
                           workflows/<name>/templates/*. Parent dispatches
                           to mode files. See workflows/discuss-phase/ as
-                          the canonical example (#2551). New modes for
+                          the canonical example (the discuss-phase/modes split, #717). New modes for
                           discuss-phase land in
                           workflows/discuss-phase/modes/<mode>.md.
                           Per-file sizes are pinned by a committed baseline

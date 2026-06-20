@@ -42,7 +42,7 @@ describe('discuss-phase power user mode (#1513)', () => {
 
   describe('main workflow file (discuss-phase.md)', () => {
     test('has power_user_mode section or references discuss-phase-power.md', () => {
-      // After #2551, the power dispatch lives in discuss-phase/modes/power.md and
+      // After the discuss-phase/modes split (#717), the power dispatch lives in discuss-phase/modes/power.md and
       // the parent references it via the dispatch table.
       const parentContent = fs.readFileSync(workflowPath, 'utf8');
       const powerModePath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'discuss-phase', 'modes', 'power.md');
@@ -52,7 +52,7 @@ describe('discuss-phase power user mode (#1513)', () => {
       const hasReference = content.includes('discuss-phase-power');
       assert.ok(
         hasPowerSection || hasReference,
-        'discuss-phase.md (or modes/power.md after #2551) should have power_user_mode section or reference discuss-phase-power.md'
+        'discuss-phase.md (or modes/power.md after the discuss-phase/modes split) should have power_user_mode section or reference discuss-phase-power.md'
       );
     });
 

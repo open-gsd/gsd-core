@@ -19,8 +19,7 @@ You are a thinking partner, not an interviewer. The user is the visionary — yo
 
 <progressive_disclosure>
 **Per-mode bodies, templates, and the advisor flow are lazy-loaded** to keep
-this file under the 500-line workflow budget (#2551, mirrors #2361's agent
-budget). Read only the files needed for the current invocation:
+this file under the discuss-phase byte budget (32000 bytes, #717; mirrors the agent size-budget convention). Read only the files needed for the current invocation:
 
 | When | Read |
 |---|---|
