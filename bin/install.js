@@ -9792,6 +9792,20 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     const scope = isGlobal ? 'global' : 'local';
     installRuntimeArtifacts(runtime, targetDir, scope, _resolvedProfile);
 
+    // #1477 — Claude global only: write .gsd-source marker so findInstallSourceRoot
+    // can locate commands/gsd/ at runtime without requiring a repo checkout.
+    // The marker lives at <runtimeConfigDir>/.gsd-source and points at the
+    // canonical commands/gsd/ source tree inside the package (src/, not deployed).
+    if (runtime === 'claude' && isGlobal) {
+      const gsdSourcePath = path.join(src, 'commands', 'gsd');
+      fs.writeFileSync(
+        path.join(targetDir, '.gsd-source'),
+        gsdSourcePath + '\n',
+        'utf8',
+      );
+      console.log(`  ${green}✓${reset} Wrote .gsd-source marker`);
+    }
+
     // #1326 — Codex only: remove stale agents/openai.yaml sidecars from managed
     // gsd-* skill dirs. Prior installs wrote these files so Codex would show a
     // display name and description in the /skills TUI popup. Recent Codex builds
@@ -10223,6 +10237,24 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     console.log(`  ${green}✓${reset} Wrote VERSION (${pkg.version})`);
   } else {
     failures.push('VERSION');
+  }
+
+  // #1477 — Claude global only: copy bin/install.js into gsd-core/bin/install.js so that
+  // loadInstallExports() in runtime-artifact-layout.cjs resolves correctly when called
+  // from the deployed skill tree (~/.claude/gsd-core/bin/lib/).
+  // Resolution order (see loadInstallExports in runtime-artifact-layout.cts):
+  //   1. co-located: ~/.claude/gsd-core/bin/install.js  ← shipped here
+  //   2. repo fallback: ../../../bin/install.js (gsd-core checkout, tests)
+  if (runtime === 'claude' && isGlobal) {
+    const installJsSrc = path.join(src, 'bin', 'install.js');
+    const installJsDest = path.join(targetDir, 'gsd-core', 'bin', 'install.js');
+    fs.mkdirSync(path.dirname(installJsDest), { recursive: true });
+    fs.copyFileSync(installJsSrc, installJsDest);
+    if (verifyFileInstalled(installJsDest, 'gsd-core/bin/install.js')) {
+      console.log(`  ${green}✓${reset} Installed gsd-core/bin/install.js`);
+    } else {
+      failures.push('gsd-core/bin/install.js');
+    }
   }
 
   if (!isCodex && !isCopilot && !isCursor && !isWindsurf && !isTrae && !isCline && !isKimi) {

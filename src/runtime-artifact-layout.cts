@@ -54,7 +54,14 @@ function loadInstallExports(): InstallExports {
   const savedTestMode = process.env['GSD_TEST_MODE'];
   if (savedTestMode === undefined) process.env['GSD_TEST_MODE'] = '1';
   try {
-    return _require('../../../bin/install.js') as InstallExports;
+    // #1477: Try the co-located copy first (gsd-core/bin/install.js — shipped by the
+    // installer into the deployed skill tree at ~/.claude/gsd-core/bin/install.js).
+    // Fall back to the repo-root path (../../../bin/install.js) which works when
+    // running inside the gsd-core package checkout (tests, local development).
+    const coLocated = path.join(__dirname, '..', 'install.js');
+    const repoRoot = path.join(__dirname, '..', '..', '..', 'bin', 'install.js');
+    const resolved = fs.existsSync(coLocated) ? coLocated : repoRoot;
+    return _require(resolved) as InstallExports;
   } finally {
     if (savedTestMode === undefined) delete process.env['GSD_TEST_MODE'];
     else process.env['GSD_TEST_MODE'] = savedTestMode;
