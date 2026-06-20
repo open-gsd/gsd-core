@@ -19,7 +19,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdModule = require('./phase-id.cjs');
-const { escapeRegex, phaseMarkdownRegexSource } = phaseIdModule;
+const {
+  escapeRegex,
+  phaseMarkdownRegexSource,
+  phaseMarkdownRegexSourceExact,
+  stripProjectCodePrefix,
+  OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
+} = phaseIdModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir } = planningWorkspace;
@@ -202,9 +208,9 @@ interface RoadmapPhaseResult {
   section: string;
 }
 
-function findRoadmapPhaseInContent(content: string, phaseNum: unknown): RoadmapPhaseResult | null {
+function findRoadmapPhaseInContent(content: string, phaseNum: unknown, phaseSource?: string): RoadmapPhaseResult | null {
   const phasePattern = new RegExp(
-    `#{2,4}\\s*(?:\\[[^\\]]+\\]\\s*)?Phase\\s+${phaseMarkdownRegexSource(phaseNum)}:\\s*([^\\n]+)`,
+    `#{2,4}\\s*(?:\\[[^\\]]+\\]\\s*)?Phase\\s+${phaseSource ?? phaseMarkdownRegexSource(phaseNum)}:\\s*([^\\n]+)`,
     'i'
   );
   const headerMatch = content.match(phasePattern);
@@ -229,6 +235,23 @@ function findRoadmapPhaseInContent(content: string, phaseNum: unknown): RoadmapP
   };
 }
 
+function roadmapPhaseLookupSources(phaseNum: unknown): string[] {
+  const sources: string[] = [];
+  const exactSource = phaseMarkdownRegexSourceExact(phaseNum);
+  if (exactSource) sources.push(exactSource);
+
+  const numericSource = phaseMarkdownRegexSource(phaseNum);
+  // Source order matters: the bare numeric source is tried before the
+  // prefix-tolerant form so that a canonical bare heading ("Phase 117:") is
+  // preferred over a drifted prefixed heading ("Phase MANIFOLD-117:") when
+  // both exist in the same ROADMAP.  The prefix-tolerant form is the fallback
+  // that handles the drifted-only case.
+  sources.push(numericSource);
+  sources.push(`${OPTIONAL_PROJECT_CODE_PREFIX_SOURCE}${numericSource}`);
+
+  return [...new Set(sources)];
+}
+
 function getRoadmapPhaseInternal(cwd: string, phaseNum: unknown): RoadmapPhaseResult | null {
   if (!phaseNum) return null;
   const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
@@ -238,10 +261,17 @@ function getRoadmapPhaseInternal(cwd: string, phaseNum: unknown): RoadmapPhaseRe
     const roadmapRaw = platformReadSync(roadmapPath);
     if (roadmapRaw === null) throw new Error('missing');
     const content = extractCurrentMilestone(roadmapRaw, cwd);
-    const scopedResult = findRoadmapPhaseInContent(content, phaseNum);
-    if (scopedResult) return scopedResult;
+    const fullContent = stripShippedMilestones(roadmapRaw);
 
-    return findRoadmapPhaseInContent(stripShippedMilestones(roadmapRaw), phaseNum);
+    for (const source of roadmapPhaseLookupSources(phaseNum)) {
+      const scopedResult = findRoadmapPhaseInContent(content, phaseNum, source);
+      if (scopedResult) return scopedResult;
+
+      const fullResult = findRoadmapPhaseInContent(fullContent, phaseNum, source);
+      if (fullResult) return fullResult;
+    }
+
+    return null;
   } catch {
     return null;
   }
@@ -438,7 +468,7 @@ function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null, p
     if (m2 && normalized.has(normalizePhaseIdSegments(m2[1]).toLowerCase())) return true;
     const customMatch = dirName.match(/^([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*)/);
     if (customMatch && normalized.has(customMatch[1].toLowerCase())) return true;
-    const stripped = dirName.replace(/^[A-Z]{1,6}-(?=\d)/i, '');
+    const stripped = stripProjectCodePrefix(dirName);
     if (stripped !== dirName) {
       const sm = stripped.match(numericRe);
       if (sm && normalized.has(normalizePhaseIdSegments(sm[1]).toLowerCase())) return true;

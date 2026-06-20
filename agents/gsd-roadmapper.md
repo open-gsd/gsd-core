@@ -226,6 +226,10 @@ current milestone number and a two-digit phase index within that milestone
 active milestone context (default: `1` for new projects). This ensures downstream tools that
 parse `### Phase N-NN:` headers for milestone-scoped workflows receive correctly prefixed IDs.
 
+`project_code` is only a phase-directory prefix. Never include `project_code` in ROADMAP phase
+checklist entries or detail headers. For example, even when `project_code: "PROJ"` is configured,
+write `Phase 7` for `sequential` and `Phase 1-07` for `milestone-prefixed`, not `Phase PROJ-7`.
+
 ## Granularity Calibration
 
 Read granularity from config.json. Granularity controls compression tolerance.
@@ -328,6 +332,7 @@ After roadmap creation, REQUIREMENTS.md gets updated with phase mappings:
 ### 1. Summary Checklist (under `## Phases`)
 
 Use the form matching `phase_id_convention` from config.
+Do not include `project_code` in checklist phase IDs.
 
 **Sequential (default — when absent or `"sequential"`):**
 
@@ -348,6 +353,7 @@ Use the form matching `phase_id_convention` from config.
 ### 2. Detail Sections (under `## Phase Details`)
 
 Use the header form matching `phase_id_convention` from config.
+Do not include `project_code` in detail header phase IDs.
 
 **Sequential (default):**
 

@@ -85,6 +85,16 @@ describe('normalizePhaseName', () => {
     assert.strictEqual(phaseId.normalizePhaseName('CK-01'), '01');
     assert.strictEqual(phaseId.normalizePhaseName('PROJ-3'), '03');
     assert.strictEqual(phaseId.normalizePhaseName('AB-12'), '12');
+    assert.strictEqual(phaseId.normalizePhaseName('MANIFOLD-7'), '07');
+    assert.strictEqual(phaseId.normalizePhaseName('APP1-7'), '07');
+    assert.strictEqual(phaseId.normalizePhaseName('APP_1-7'), '07');
+  });
+
+  test('does not strip leading-underscore pseudo-prefix (#1455)', () => {
+    // Valid project_code values must start with [A-Z]; leading underscores
+    // (_FOO-7, _-7) are not valid codes and must not be stripped.
+    assert.strictEqual(phaseId.normalizePhaseName('_FOO-7'), '_FOO-7');
+    assert.strictEqual(phaseId.normalizePhaseName('_-7'), '_-7');
   });
 
   test('handles letter suffix (preserves original case per #1962)', () => {
@@ -104,10 +114,10 @@ describe('normalizePhaseName', () => {
   });
 
   test('custom phase IDs: project_code prefix is stripped, then numeric part is normalized', () => {
-    // The regex /^[A-Z]{1,6}-(?=\d)/ matches 'PROJ-' and strips it, leaving '42'
-    // which is then normalized to '42' (no leading zero needed for 2+ digits)
+    // The project-code prefix is stripped, leaving a numeric token that normalizes to '42' (no leading zero needed for 2+ digits).
     assert.strictEqual(phaseId.normalizePhaseName('PROJ-42'), '42');
     assert.strictEqual(phaseId.normalizePhaseName('AUTH-101'), '101');
+    assert.strictEqual(phaseId.normalizePhaseName('MANIFOLD-117'), '117');
   });
 
   test('custom phase IDs with non-numeric remainder pass through as-is', () => {
@@ -158,6 +168,9 @@ describe('comparePhaseNum', () => {
   test('strips project_code prefix before comparing', () => {
     assert.strictEqual(phaseId.comparePhaseNum('CK-01', '01'), 0);
     assert.ok(phaseId.comparePhaseNum('CK-01', 'CK-02') < 0);
+    assert.strictEqual(phaseId.comparePhaseNum('MANIFOLD-117', '117'), 0);
+    assert.strictEqual(phaseId.comparePhaseNum('APP1-117', '117'), 0);
+    assert.strictEqual(phaseId.comparePhaseNum('APP_1-117', '117'), 0);
   });
 
   test('handles non-parseable phase IDs via localeCompare fallback', () => {
@@ -183,6 +196,9 @@ describe('extractPhaseToken', () => {
   test('extracts token with project_code prefix', () => {
     assert.strictEqual(phaseId.extractPhaseToken('CK-01-some-phase'), 'CK-01');
     assert.strictEqual(phaseId.extractPhaseToken('PROJ-12-feature'), 'PROJ-12');
+    assert.strictEqual(phaseId.extractPhaseToken('MANIFOLD-117-feature'), 'MANIFOLD-117');
+    assert.strictEqual(phaseId.extractPhaseToken('APP1-117-feature'), 'APP1-117');
+    assert.strictEqual(phaseId.extractPhaseToken('APP_1-117-feature'), 'APP_1-117');
   });
 
   test('extracts glued letter-prefix phase tokens (#1324)', () => {
@@ -215,6 +231,9 @@ describe('phaseTokenMatches', () => {
   test('matches with project_code prefix stripped', () => {
     assert.ok(phaseId.phaseTokenMatches('CK-01-phase', '01'));
     assert.ok(phaseId.phaseTokenMatches('PROJ-12-feature', '12'));
+    assert.ok(phaseId.phaseTokenMatches('MANIFOLD-117-feature', '117'));
+    assert.ok(phaseId.phaseTokenMatches('APP1-117-feature', '117'));
+    assert.ok(phaseId.phaseTokenMatches('APP_1-117-feature', '117'));
   });
 
   test('matches glued letter-prefix phase dirs (#1324)', () => {
@@ -281,6 +300,7 @@ describe('phaseMarkdownRegexSource', () => {
     const withPrefix = phaseId.phaseMarkdownRegexSource('CK-01');
     const withoutPrefix = phaseId.phaseMarkdownRegexSource('01');
     assert.strictEqual(withPrefix, withoutPrefix);
+    assert.strictEqual(phaseId.phaseMarkdownRegexSource('MANIFOLD-117'), phaseId.phaseMarkdownRegexSource('117'));
   });
 
   test('falls back to escaped literal for unparseable input', () => {
@@ -307,6 +327,9 @@ describe('phaseMarkdownRegexSourceExact', () => {
     assert.strictEqual(result, 'PROJ-42');
     // The result is a valid regex source
     assert.doesNotThrow(() => new RegExp(result));
+    assert.strictEqual(phaseId.phaseMarkdownRegexSourceExact('MANIFOLD-117'), 'MANIFOLD-117');
+    assert.strictEqual(phaseId.phaseMarkdownRegexSourceExact('APP1-117'), 'APP1-117');
+    assert.strictEqual(phaseId.phaseMarkdownRegexSourceExact('APP_1-117'), 'APP_1-117');
   });
 
   test('returns null for non-prefixed IDs', () => {
@@ -350,6 +373,9 @@ describe('getMilestoneFromPhaseId', () => {
 
   test('strips project_code prefix before parsing', () => {
     assert.strictEqual(phaseId.getMilestoneFromPhaseId('CK-2-01'), 'v2.0');
+    assert.strictEqual(phaseId.getMilestoneFromPhaseId('MANIFOLD-2-01'), 'v2.0');
+    assert.strictEqual(phaseId.getMilestoneFromPhaseId('APP1-2-01'), 'v2.0');
+    assert.strictEqual(phaseId.getMilestoneFromPhaseId('APP_1-2-01'), 'v2.0');
   });
 
   test('coerces non-string values', () => {
@@ -384,6 +410,9 @@ describe('getPhaseDirFromPhaseId', () => {
   test('strips project_code from phaseId before parsing', () => {
     const result = phaseId.getPhaseDirFromPhaseId('CK-1-2', null, null);
     assert.strictEqual(result, '01-02');
+    assert.strictEqual(phaseId.getPhaseDirFromPhaseId('MANIFOLD-1-2', null, null), '01-02');
+    assert.strictEqual(phaseId.getPhaseDirFromPhaseId('APP1-1-2', null, null), '01-02');
+    assert.strictEqual(phaseId.getPhaseDirFromPhaseId('APP_1-1-2', null, null), '01-02');
   });
 
   test('handles deep decomposition IDs (M-N-N)', () => {

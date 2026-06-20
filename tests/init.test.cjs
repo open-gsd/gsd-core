@@ -981,6 +981,40 @@ describe('cmdInitPhaseOp fallback', () => {
     assert.strictEqual(output.has_plans, false);
   });
 
+  test('fallback resolves drifted project-code-prefixed roadmap heading by bare number (#1455)', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n### Phase MANIFOLD-117: Prefixed Heading\n**Goal:** Build prefixed phase\n**Plans:** TBD\n'
+    );
+
+    const result = runGsdTools('init phase-op 117', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_found, true);
+    assert.strictEqual(output.phase_dir, null);
+    assert.strictEqual(output.phase_number, '117');
+    assert.strictEqual(output.phase_name, 'Prefixed Heading');
+    assert.strictEqual(output.phase_slug, 'prefixed-heading');
+  });
+
+  test('fallback resolves drifted project-code-prefixed roadmap heading by prefixed ID (#1455)', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n### Phase MANIFOLD-117: Prefixed Heading\n**Goal:** Build prefixed phase\n**Plans:** TBD\n'
+    );
+
+    const result = runGsdTools('init phase-op MANIFOLD-117', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_found, true);
+    assert.strictEqual(output.phase_dir, null);
+    assert.strictEqual(output.phase_number, 'MANIFOLD-117');
+    assert.strictEqual(output.phase_name, 'Prefixed Heading');
+    assert.strictEqual(output.phase_slug, 'prefixed-heading');
+  });
+
   test('prefers current milestone roadmap entry over archived phase with same number', () => {
     const archiveDir = path.join(
       tmpDir,
