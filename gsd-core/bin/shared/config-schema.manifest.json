@@ -55,6 +55,7 @@
     "workflow.subagent_timeout",
     "workflow.test_command",
     "workflow.build_command",
+    "workflow.mvp_mode",
     "executor.stall_detect_interval_minutes",
     "executor.stall_threshold_minutes",
     "workflow.inline_plan_threshold",

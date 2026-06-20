@@ -720,3 +720,77 @@ describe('verify codebase-drift CLI', () => {
     }
   });
 });
+
+// ─── Regression #1493 — workflow.drift_action / drift_threshold read from nested config shape ───
+//
+// loadConfig() returns a flattened object; config?.workflow was always undefined,
+// making drift_action permanently 'warn' and drift_threshold always 3 regardless
+// of .planning/config.json contents. Fix reads the raw nested JSON directly.
+
+describe('verify codebase-drift — workflow config read from nested shape (#1493)', () => {
+  let tmp;
+  beforeEach(() => {
+    tmp = createTempGitProject('gsd-drift-1493-');
+    fs.mkdirSync(path.join(tmp, '.planning', 'codebase'), { recursive: true });
+  });
+  afterEach(() => cleanup(tmp));
+
+  test('workflow.drift_action=auto-remap in config.json is honored (not always warn) (#1493)', () => {
+    // Write config with nested workflow shape — the flat loadConfig() path would
+    // have silently dropped this, leaving action === 'warn'.
+    fs.writeFileSync(
+      path.join(tmp, '.planning', 'config.json'),
+      JSON.stringify({ workflow: { drift_action: 'auto-remap', drift_threshold: 1 } }, null, 2),
+    );
+
+    // Map codebase to current HEAD so anything committed next is "new" drift.
+    const structure = path.join(tmp, '.planning', 'codebase', 'STRUCTURE.md');
+    fs.writeFileSync(structure, '# Codebase Structure\n\n- `src/`\n');
+    writeMappedCommit(structure, git(tmp, 'rev-parse', 'HEAD'), '2026-04-22');
+    git(tmp, 'add', '-A');
+    git(tmp, 'commit', '-m', 'map codebase');
+
+    // Add one structural barrel file — enough to exceed drift_threshold of 1.
+    const dir = path.join(tmp, 'packages', 'ui', 'src');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'index.ts'), 'export {};\n');
+    git(tmp, 'add', '-A');
+    git(tmp, 'commit', '-m', 'add package barrel');
+
+    const r = runGsdTools(['verify', 'codebase-drift'], tmp);
+    assert.strictEqual(r.success, true, r.error);
+    const data = JSON.parse(r.output);
+    assert.strictEqual(
+      data.action, 'auto-remap',
+      'workflow.drift_action=auto-remap must flow through from nested config; "warn" means the flat-shape bug is still active',
+    );
+  });
+
+  test('workflow.drift_threshold in config.json gates triggering (#1493)', () => {
+    // Threshold of 100 — 1 structural file should not trigger action_required.
+    fs.writeFileSync(
+      path.join(tmp, '.planning', 'config.json'),
+      JSON.stringify({ workflow: { drift_action: 'auto-remap', drift_threshold: 100 } }, null, 2),
+    );
+
+    const structure = path.join(tmp, '.planning', 'codebase', 'STRUCTURE.md');
+    fs.writeFileSync(structure, '# Codebase Structure\n\n- `src/`\n');
+    writeMappedCommit(structure, git(tmp, 'rev-parse', 'HEAD'), '2026-04-22');
+    git(tmp, 'add', '-A');
+    git(tmp, 'commit', '-m', 'map codebase');
+
+    const dir = path.join(tmp, 'packages', 'ui', 'src');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'index.ts'), 'export {};\n');
+    git(tmp, 'add', '-A');
+    git(tmp, 'commit', '-m', 'add one package barrel');
+
+    const r = runGsdTools(['verify', 'codebase-drift'], tmp);
+    assert.strictEqual(r.success, true, r.error);
+    const data = JSON.parse(r.output);
+    assert.strictEqual(data.threshold, 100,
+      'workflow.drift_threshold=100 must be read from nested config; 3 means the flat-shape bug is still active');
+    assert.strictEqual(data.action_required, false,
+      '1 structural file must not exceed threshold of 100');
+  });
+});
