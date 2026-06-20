@@ -60,6 +60,7 @@
     },
     "phase": {
       "files": [
+        "bug-1437-phase-list-plans.test.cjs",
         "bug-214-phase-researcher-write-truncation-contract.test.cjs",
         "phase-dependency-levels.test.cjs",
         "phase.test.cjs"
