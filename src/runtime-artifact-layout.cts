@@ -93,11 +93,25 @@ function loadInstallExports(runtimeConfigDir?: string): InstallExports {
   }
 }
 
-/** Cache after first successful load. */
-let _installExports: InstallExports | null = null;
+/**
+ * Cache of loaded install exports, keyed by the resolved install source.
+ *
+ * Keying matters: the cache must not let a no-marker (package-relative) load
+ * mask a later marker-aware load, or vice-versa. The key is the .gsd-source
+ * marker root when one resolves, else a fixed sentinel for the package-relative
+ * path. Marker roots and the sentinel never collide, so each distinct source
+ * memoizes independently — a fallback is never cached as if it were the marker
+ * resolution.
+ */
+const _installExportsCache = new Map<string, InstallExports>();
 function getInstallExports(runtimeConfigDir?: string): InstallExports {
-  if (!_installExports) _installExports = loadInstallExports(runtimeConfigDir);
-  return _installExports;
+  const cacheKey = resolveMarkerInstallRoot(runtimeConfigDir) ?? '__package_relative__';
+  let exports = _installExportsCache.get(cacheKey);
+  if (!exports) {
+    exports = loadInstallExports(runtimeConfigDir);
+    _installExportsCache.set(cacheKey, exports);
+  }
+  return exports;
 }
 
 // ---------------------------------------------------------------------------

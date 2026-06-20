@@ -20,7 +20,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const { loadInstallExports } = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
+const { loadInstallExports, getInstallExports } = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
 // A stub bin/install.js carrying a sentinel so we can prove WHICH install.js was loaded.
@@ -100,6 +100,48 @@ describe('loadInstallExports — .gsd-source marker resolution', () => {
       assert.equal(exp.__sentinel, undefined, 'stale marker must not break resolution');
     } finally {
       cleanup(configDir);
+    }
+  });
+});
+
+describe('getInstallExports — keyed memoization (no-marker must not mask marker-aware)', () => {
+  // Regression for the memoized accessor: getInstallExports caches the loaded
+  // exports. With a single unkeyed slot, the FIRST call wins and a no-marker
+  // (package-relative) load would mask a later marker-aware load — the exact
+  // poisoning the surface write path (applySurface -> getInstallExports) hits
+  // when an earlier call already primed the cache. The cache is keyed by the
+  // resolved install source so the two memoize independently.
+  test('a no-marker call does not poison a later marker-aware call', () => {
+    // Prime the cache with the package-relative (no-marker) resolution first.
+    const pkg = getInstallExports();
+    assert.equal(pkg.__sentinel, undefined, 'no-arg call resolves the real package-relative install.js');
+
+    // A subsequent marker-aware call MUST resolve the marker root, not return
+    // the cached package-relative exports.
+    const { configDir, pkgRoot } = makeRelocatedInstall('from-marker-memo');
+    try {
+      const viaMarker = getInstallExports(configDir);
+      assert.equal(
+        viaMarker.__sentinel,
+        'from-marker-memo',
+        'marker-aware getInstallExports must not be masked by an earlier no-marker load',
+      );
+    } finally {
+      cleanup(configDir);
+      cleanup(pkgRoot);
+    }
+  });
+
+  test('marker resolution is memoized per source (same configDir returns the cached instance)', () => {
+    const { configDir, pkgRoot } = makeRelocatedInstall('memoized-marker');
+    try {
+      const first = getInstallExports(configDir);
+      const second = getInstallExports(configDir);
+      assert.equal(first.__sentinel, 'memoized-marker');
+      assert.equal(second, first, 'second call with the same source returns the cached instance');
+    } finally {
+      cleanup(configDir);
+      cleanup(pkgRoot);
     }
   });
 });
