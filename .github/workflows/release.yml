@@ -107,7 +107,7 @@ jobs:
     needs: validate-version
     if: inputs.action == 'create'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
@@ -118,6 +118,10 @@ jobs:
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f  # v6.3.0
         with:
           node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies and build
+        run: npm ci --silent && npm run build:lib
 
       - name: Check branch doesn't already exist
         env:
@@ -358,6 +362,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+      - name: Install dependencies and build
+        run: npm ci --silent && npm run build:lib
+
       - name: Bump to pre-release version
         env:
           PRE_VERSION: ${{ steps.prerelease.outputs.pre_version }}
@@ -522,6 +529,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Install dependencies and build
+        run: npm ci --silent && npm run build:lib
 
       - name: Set final version
         env:
