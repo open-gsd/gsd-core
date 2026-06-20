@@ -341,3 +341,33 @@ describe('D: CLI --check exits 0 when manifests are in sync', () => {
     );
   });
 });
+
+// ─── F: version script includes capability-registry regen (#1498) ─────────────
+//
+// Regression guard for #1498: the `npm version` lifecycle script must regenerate
+// capability-registry.cjs after stamping capability manifests. Without this,
+// `npm version X.Y.Z` leaves the committed registry stale (capability JSONs get
+// new version strings but the registry still has the old ones), causing the
+// `gen-capability-registry.cjs --check` test to fail in the RC workflow.
+describe('F: npm version script includes gen-capability-registry --write (#1498)', () => {
+
+  test('package.json "version" script regenerates capability-registry.cjs after syncing manifests', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+    const versionScript = pkg.scripts && pkg.scripts.version;
+    assert.ok(
+      typeof versionScript === 'string',
+      'package.json must have a "version" script',
+    );
+    assert.ok(
+      versionScript.includes('gen-capability-registry.cjs --write'),
+      'package.json "version" script must include "gen-capability-registry.cjs --write" to keep the registry in sync after npm version bumps capability manifests. ' +
+      'Got: ' + JSON.stringify(versionScript),
+    );
+    assert.ok(
+      versionScript.includes('git add') && versionScript.includes('capability-registry.cjs'),
+      'package.json "version" script must stage capability-registry.cjs with "git add" so it is included in the version-bump commit. ' +
+      'Got: ' + JSON.stringify(versionScript),
+    );
+  });
+
+});
