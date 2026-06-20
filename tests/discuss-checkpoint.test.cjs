@@ -19,7 +19,7 @@ const path = require('path');
 
 describe('discuss-phase incremental checkpoint saves (#1485)', () => {
   const workflowPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'discuss-phase.md');
-  // After #2551 progressive-disclosure refactor, checkpoint logic lives in the
+  // After the discuss-phase progressive-disclosure split (#717), checkpoint logic lives in the
   // default mode file and the JSON schema lives in the templates directory.
   const defaultModePath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'discuss-phase', 'modes', 'default.md');
   const checkpointTplPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'discuss-phase', 'templates', 'checkpoint.json');

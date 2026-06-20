@@ -80,7 +80,7 @@ npm version 1.2.0
 npm publish
 ```
 
-**New tarball.** Upload the new archive at a URL and communicate the URL to consumers. GSD cannot auto-detect updates for tarball sources — consumers must run `gsd capability update <id> <new-url>` manually after you announce the new URL. If you anticipate frequent updates, consider switching to a git or npm source.
+**New tarball.** Upload the new archive at a URL and communicate the URL to consumers. GSD cannot auto-detect updates for tarball sources, and `gsd capability update` only ever re-resolves the URL **already recorded** in the ledger — it takes no new-URL argument. To move a tarball install to a new URL, the consumer **re-installs from the new URL** (`gsd capability install <new-url> …`), which overwrites the recorded source. If you anticipate frequent updates, consider switching to a git or npm source so `gsd capability update <id>` can pick up new versions automatically.
 
 ---
 
@@ -99,11 +99,11 @@ GSD contacts the source of each installed capability and reports which ones have
 | Source | Auto-detectable? |
 |---|---|
 | Git (tags / manifest) | Yes — GSD fetches available tags. |
-| Registry | Yes — GSD queries the catalogue. |
 | npm | Yes — GSD checks `dist-tags`. |
-| Tarball URL | **No** — a tarball exposes one version; updates must be applied manually when the author announces a new URL. |
+| Tarball URL | **No** — a tarball exposes one version; updates must be applied manually by re-installing from a new URL. |
+| Registry (`<name>@<registry>`) | **Not yet** — the registry source kind is reserved but unimplemented today; `outdated` reports `status: unknown` for it and `update` cannot re-resolve it. |
 
-If a capability is installed from a tarball and the author publishes a new version at a different URL, you will need to run `gsd capability update <id> <new-url>` yourself once the author communicates the new address.
+If a capability is installed from a tarball and the author publishes a new version at a different URL, `gsd capability update <id>` will not help — it only re-resolves the URL already recorded at install time, and takes no new-URL argument. Once the author communicates the new address, **re-install from it** with `gsd capability install <new-url> …`; that overwrites the recorded source with the new version.
 
 ### Apply an update
 
@@ -123,11 +123,13 @@ Updates are **atomic**: GSD fully fetches and validates the new version before s
 
 ### Consent when the executable surface changes
 
-If the new version adds or removes hooks, MCP server entries, or command modules compared to the version you have installed, GSD will pause and present a summary of the changes before proceeding. You must confirm explicitly; declining leaves the current version in place.
+The CLI is **non-interactive** — it never stops to ask a question. If the new version adds or removes hooks, MCP server entries, or command modules compared to the version you have installed, `gsd capability update <id>` **aborts** rather than swapping: it prints the disclosed surface change and instructs you to re-run with `--yes`, leaving the current version fully in place. Re-running with `--yes` grants consent for the new surface and completes the swap:
 
-This re-prompt applies even if you previously consented to auto-update. The consent mechanism is scoped to the declared executable surface of a specific version, so a changed surface is always a fresh decision.
+```bash
+gsd capability update <id> --yes
+```
 
-Auto-update is **off by default** for third-party capabilities. If you enable it, the re-prompt on executable-surface change still applies.
+This re-consent is required every time the surface changes, scoped to the declared executable surface of a specific version, so a changed surface is always a fresh `--yes`. (A version whose executable surface is unchanged updates without `--yes`.)
 
 ### When `engines.gsd` no longer matches
 

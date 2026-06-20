@@ -7118,18 +7118,23 @@ function _runLegacyInstallMigrations(runtime, configDir, scope = 'global') {
  * @param {'global'|'local'} [scope]
  */
 function _runLegacyUninstallCleanup(runtime, configDir, scope = 'global') {
-  // Claude global / Qwen: commands/gsd/ is a legacy location (global Claude
-  // uses skills/ now; Qwen always uses skills/). Remove whole directory.
-  // Claude local: commands/gsd/ is the primary current location — skip here,
-  // let layout's _removeGsdEntries handle gsd-prefixed file removal.
+  // commands/gsd/ is a legacy location for Qwen, Hermes, and all Claude installs.
+  // Prior to #1367 fix, Claude-local used commands/gsd/<cmd>.md (colon-namespaced).
+  // After #1367, Claude-local uses flat commands/gsd-<cmd>.md. The inline uninstall
+  // block (1c) handles removal of flat files; this function handles the legacy
+  // commands/gsd/ directory for all Claude scopes (global was already included,
+  // local is now added since that layout is also legacy post-#1367).
   // #2973 / Codex review (bd1f06c9): preserve user-owned dev-preferences.md
   // before destructive wipe. Migration to skills/gsd-dev-preferences/SKILL.md
   // is deferred and returned so the caller can apply it AFTER layout-driven
   // removal — this prevents the layout's gsd-* prefix removal from wiping the
   // freshly created skill dir (same pattern as _runLegacyInstallMigrations).
   let savedLegacyArtifacts = null;
-  // commands/gsd/ is a legacy location for Qwen, Hermes, and Claude-global.
-  // Claude-local commands/gsd/ is the primary current location — skip here.
+  // commands/gsd/ is a legacy location for Qwen, Hermes, and Claude global.
+  // Claude local is intentionally excluded: the inline uninstall block (1c) handles
+  // commands/gsd/ for claude local, preserving dev-preferences.md by restoring it
+  // to the same location (#1423). Using migrateLegacyDevPreferencesToSkill here
+  // (which would redirect to skills/) conflicts with the test contract for local installs.
   const isLegacyCommandsGsd = runtime === 'qwen' || runtime === 'hermes' || (runtime === 'claude' && scope === 'global');
   if (isLegacyCommandsGsd) {
     const legacyCommandsGsd = path.join(configDir, 'commands', 'gsd');
@@ -8066,23 +8071,37 @@ function uninstall(isGlobal, runtime = 'claude') {
     } catch { /* best-effort */ }
   }
 
-  // 1c. Claude local: remove commands/gsd/ (primary local install location).
-  //     The layout's _removeGsdEntries uses the 'gsd-' prefix which applies to
-  //     flat command dirs (OpenCode/Kilo). Claude local files use no prefix inside
-  //     the namespaced directory, so layout does not remove them. Handle inline.
-  //     Preserve dev-preferences.md across the wipe (#1423).
+  // 1c. Claude local: remove flat gsd-*.md commands from commands/ (current layout,
+  //     #1367 fix). Also remove legacy commands/gsd/ subdirectory from prior installs.
   if (!isGlobal && runtime === 'claude') {
-    const gsdCommandsDir = path.join(targetDir, 'commands', 'gsd');
-    if (fs.existsSync(gsdCommandsDir)) {
-      const devPrefsPath = path.join(gsdCommandsDir, 'dev-preferences.md');
-      const preservedDevPrefs = fs.existsSync(devPrefsPath) ? fs.readFileSync(devPrefsPath, 'utf-8') : null;
-      fs.rmSync(gsdCommandsDir, { recursive: true });
+    const commandsDir = path.join(targetDir, 'commands');
+    // Remove flat gsd-*.md files (current layout after #1367 fix)
+    if (fs.existsSync(commandsDir)) {
+      let removed = 0;
+      for (const f of fs.readdirSync(commandsDir)) {
+        if (f.startsWith('gsd-') && f.endsWith('.md')) {
+          fs.rmSync(path.join(commandsDir, f), { force: true });
+          removed++;
+        }
+      }
+      if (removed > 0) {
+        removedCount++;
+        console.log(`  ${green}✓${reset} Removed ${removed} flat gsd-*.md commands from commands/`);
+      }
+    }
+    // Remove legacy commands/gsd/ subdirectory if it still exists (pre-#1367 layout).
+    // Preserve user-owned dev-preferences.md if present (#1423 parity).
+    const legacyGsdCommandsDir = path.join(targetDir, 'commands', 'gsd');
+    if (fs.existsSync(legacyGsdCommandsDir)) {
+      const legacyDevPrefsPath = path.join(legacyGsdCommandsDir, 'dev-preferences.md');
+      const savedDevPrefs = fs.existsSync(legacyDevPrefsPath) ? fs.readFileSync(legacyDevPrefsPath, 'utf-8') : null;
+      fs.rmSync(legacyGsdCommandsDir, { recursive: true });
       removedCount++;
-      console.log(`  ${green}✓${reset} Removed commands/gsd/`);
-      if (preservedDevPrefs) {
+      console.log(`  ${green}✓${reset} Removed legacy commands/gsd/`);
+      if (savedDevPrefs) {
         try {
-          fs.mkdirSync(gsdCommandsDir, { recursive: true });
-          fs.writeFileSync(devPrefsPath, preservedDevPrefs);
+          fs.mkdirSync(legacyGsdCommandsDir, { recursive: true });
+          fs.writeFileSync(legacyDevPrefsPath, savedDevPrefs);
           console.log(`  ${green}✓${reset} Preserved commands/gsd/dev-preferences.md`);
         } catch (err) {
           console.error(`  ${red}✗${reset} Failed to restore dev-preferences.md: ${err.message}`);
@@ -8849,7 +8868,11 @@ function writeManifest(configDir, runtime = 'claude', options = {}) {
   const isKimi = runtime === 'kimi';
   const isHermes = runtime === 'hermes';
   const gsdDir = path.join(configDir, 'gsd-core');
+  // #1367: Claude local now writes flat gsd-*.md files at commands/ (not commands/gsd/).
+  // commandsDir points to the old location for Gemini (which still uses commands/gsd/).
+  // Claude local uses flatCommandsDir instead for manifest recording.
   const commandsDir = path.join(configDir, 'commands', 'gsd');
+  const flatCommandsDir = path.join(configDir, 'commands');
   const opencodeCommandDir = path.join(configDir, 'command');
   // Hermes nests GSD skills under skills/gsd/ as a single category (#2841).
   // All other runtimes that use the Codex-style skills layout use a flat skills/ root.
@@ -8875,15 +8898,25 @@ function writeManifest(configDir, runtime = 'claude', options = {}) {
     if (USER_OWNED_ARTIFACTS.includes(rel)) continue;
     manifest.files['gsd-core/' + rel] = hash;
   }
-  // Record commands/gsd/ for any runtime that emits it (Gemini globally,
-  // Claude Code locally — see #2923). Manifest must reflect everything on
-  // disk so saveLocalPatches() can detect user edits and so per-runtime
-  // assertions about minimal-mode emit can read manifest.files instead of
-  // re-walking the dir.
-  if (fs.existsSync(commandsDir)) {
+  // Record commands surface for runtimes that emit it:
+  //   Gemini: commands/gsd/<cmd>.toml (nested, colon-namespaced)
+  //   Claude local (#1367 fix): flat gsd-<cmd>.md at commands/ level
+  // Manifest must reflect everything on disk so saveLocalPatches() can detect
+  // user edits and per-runtime minimal-mode assertions can read manifest.files.
+  if (isGemini && fs.existsSync(commandsDir)) {
     const cmdHashes = generateManifest(commandsDir);
     for (const [rel, hash] of Object.entries(cmdHashes)) {
       manifest.files['commands/gsd/' + rel] = hash;
+    }
+  }
+  // Claude local (#1367): flat gsd-*.md files at commands/ level.
+  // Only claude local writes gsd-*.md here; global installs don't emit commands,
+  // so this branch is a no-op for global (no matching files to find).
+  if (runtime === 'claude' && fs.existsSync(flatCommandsDir)) {
+    for (const file of fs.readdirSync(flatCommandsDir)) {
+      if (file.startsWith('gsd-') && file.endsWith('.md')) {
+        manifest.files['commands/' + file] = fileHash(path.join(flatCommandsDir, file));
+      }
     }
   }
   if ((isOpencode || isKilo) && fs.existsSync(opencodeCommandDir)) {
@@ -9985,18 +10018,59 @@ function install(isGlobal, runtime = 'claude', options = {}) {
       }
     }
   } else {
-    // Claude Code local: commands/gsd/ format — Claude Code reads local project
-    // commands from .claude/commands/gsd/, not .claude/skills/
+    // Claude Code local: flat gsd-<cmd>.md layout — Claude Code registers
+    // commands from .claude/commands/ using the filename stem as the command
+    // name, so gsd-<cmd>.md produces the /gsd-<cmd> hyphen form used everywhere
+    // in the framework. The old commands/gsd/<cmd>.md subdirectory layout caused
+    // Claude Code to namespace commands as /gsd:<cmd> (colon form). (#1367)
     const commandsDir = path.join(targetDir, 'commands');
     fs.mkdirSync(commandsDir, { recursive: true });
     const gsdSrc = _stageSkills(_commandsDir);
-    const gsdDest = path.join(commandsDir, 'gsd');
-    copyWithPathReplacement(gsdSrc, gsdDest, pathPrefix, runtime, true, isGlobal);
-    if (verifyInstalled(gsdDest, 'commands/gsd')) {
-      const count = fs.readdirSync(gsdDest).filter(f => f.endsWith('.md')).length;
-      console.log(`  ${green}✓${reset} Installed ${count} commands to commands/gsd/`);
+    const cmdNames = readGsdCommandNames();
+
+    // Remove stale gsd-*.md files before writing new ones (clean install)
+    if (fs.existsSync(commandsDir)) {
+      for (const f of fs.readdirSync(commandsDir)) {
+        if (f.startsWith('gsd-') && f.endsWith('.md')) {
+          fs.unlinkSync(path.join(commandsDir, f));
+        }
+      }
+    }
+
+    // Write each command as gsd-<stem>.md (flat, hyphen-prefixed)
+    let cmdCount = 0;
+    if (fs.existsSync(gsdSrc)) {
+      for (const entry of fs.readdirSync(gsdSrc, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+        const stem = entry.name.slice(0, -3);
+        let content = fs.readFileSync(path.join(gsdSrc, entry.name), 'utf8');
+        content = _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal);
+        content = normalizeAgentBodyForRuntime(content, runtime, cmdNames);
+        fs.writeFileSync(path.join(commandsDir, `gsd-${stem}.md`), content);
+        cmdCount++;
+      }
+    }
+
+    if (cmdCount > 0) {
+      console.log(`  ${green}✓${reset} Installed ${cmdCount} commands to commands/ (gsd-<cmd>.md flat form)`);
     } else {
-      failures.push('commands/gsd');
+      failures.push('commands/gsd-*');
+    }
+
+    // Legacy cleanup: remove old commands/gsd/ subdirectory from prior installs
+    // that used the namespaced layout (wrote bare-name files under commands/gsd/).
+    const legacyGsdDir = path.join(commandsDir, 'gsd');
+    if (fs.existsSync(legacyGsdDir)) {
+      // Preserve user-owned dev-preferences.md before wiping
+      const devPrefsPath = path.join(legacyGsdDir, 'dev-preferences.md');
+      const preservedDevPrefs = fs.existsSync(devPrefsPath) ? fs.readFileSync(devPrefsPath, 'utf-8') : null;
+      fs.rmSync(legacyGsdDir, { recursive: true });
+      console.log(`  ${green}✓${reset} Removed legacy commands/gsd/ (migrated to flat gsd-<cmd>.md layout)`);
+      if (preservedDevPrefs) {
+        // Migrate dev-preferences to the new flat form
+        fs.writeFileSync(path.join(commandsDir, 'gsd-dev-preferences.md'), preservedDevPrefs);
+        console.log(`  ${green}✓${reset} Migrated dev-preferences.md to commands/gsd-dev-preferences.md`);
+      }
     }
 
     // Clean up any stale skills/ from a previous local install

@@ -298,7 +298,7 @@
 | `continuation-format.md` | 세션 연속/재개 포맷. |
 | `domain-probes.md` | discuss-phase를 위한 도메인별 탐색 질문. |
 | `gate-prompts.md` | 게이트/체크포인트 프롬프트 템플릿. |
-| `scout-codebase.md` | discuss-phase 스카우트 단계를 위한 단계 유형→코드베이스 맵 선택 테이블(#2551로 추출). |
+| `scout-codebase.md` | discuss-phase 스카우트 단계를 위한 단계 유형→코드베이스 맵 선택 테이블(discuss-phase/modes 프로그레시브 디스클로저 분할을 통해 추출, #717). |
 | `revision-loop.md` | 계획 수정 반복 패턴. |
 | `universal-anti-patterns.md` | 감지하고 피해야 할 보편적인 안티패턴. |
 | `worktree-path-safety.md` | 워크트리 가드 스위트: HEAD 어설션, cwd-드리프트 센티널(0a단계, #3097), 절대 경로 가드(0b단계, #3099) — `<execution_context>`를 통해 executor 스폰 프롬프트에 로드됨. |

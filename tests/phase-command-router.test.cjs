@@ -45,6 +45,7 @@ function makePhase(overrides = {}) {
     cmdPhaseInsert: () => {},
     cmdPhaseRemove: () => {},
     cmdPhaseComplete: () => {},
+    cmdPhaseListPlans: () => {},
     ...overrides,
   };
 }
@@ -280,26 +281,27 @@ describe('phase-command-router — result translation (error path)', () => {
     assert.ok(msg !== null);
     assert.ok(msg.includes('exactly one phase number'));
   });
+
+  // #1437 — phase.list-plans routing
+  test('routes phase list-plans: passes cwd, phaseNum, raw to handler', () => {
+    const calls = [];
+    const phase = makePhase({
+      cmdPhaseListPlans: (cwd, phaseNum, raw) => calls.push({ cwd, phaseNum, raw }),
+    });
+
+    routePhaseCommand({ phase, args: ['phase', 'list-plans', '03'], cwd: '/proj', raw: false, error: (m) => { throw new Error(m); } });
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].cwd, '/proj');
+    assert.equal(calls[0].phaseNum, '03');
+    assert.equal(calls[0].raw, false);
+  });
 });
 
 // ─── 3. Unsupported subcommands ────────────────────────────────────────────────
 
 describe('phase-command-router — unsupported subcommands', () => {
-  test('phase list-plans resolves as unknown subcommand', () => {
-    let msg = null;
-    routePhaseCommand({
-      phase: makePhase(),
-      args: ['phase', 'list-plans'],
-      cwd: '/p',
-      raw: false,
-      error: (m) => { msg = m; },
-    });
-
-    assert.ok(msg !== null);
-    assert.ok(msg.includes('Unknown phase subcommand'));
-    assert.ok(msg.includes('Available:'), `expected "Available:" in: ${msg}`);
-  });
-
+  // #1437: phase list-plans is now a supported subcommand — routing test in § 1.
   test('phase list-artifacts resolves as unknown subcommand', () => {
     let msg = null;
     routePhaseCommand({
@@ -363,7 +365,8 @@ describe('phase-command-router — unknown subcommand', () => {
 
     assert.ok(msg.includes('add'), `expected add in available list: ${msg}`);
     assert.ok(msg.includes('complete'), `expected complete in available list: ${msg}`);
-    assert.ok(!msg.includes('list-plans'), `list-plans must not appear in available list: ${msg}`);
+    // #1437: list-plans is now a supported command and appears in the available list
+    assert.ok(msg.includes('list-plans'), `list-plans must appear in available list: ${msg}`);
   });
 });
 

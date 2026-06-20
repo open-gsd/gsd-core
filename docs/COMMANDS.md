@@ -1135,8 +1135,8 @@ gsd capability install ./my-cap --scope project      # Install a local capabilit
 gsd capability install npm:@org/gsd-cap-x@^1 --yes   # Install from npm, granting executable-surface consent
 gsd capability update my-cap                          # Upgrade from its recorded source
 gsd capability outdated --json                         # Which installed overlays have a newer version?
-gsd capability disable my-cap                         # Turn it off without removing it
-gsd capability remove my-cap                          # Remove the overlay capability
+gsd capability disable ui                             # Turn a FIRST-PARTY capability off (disable/enable/set are first-party only)
+gsd capability remove my-cap --scope project          # Turn the installed overlay off — remove it from the scope it was installed in
 ```
 
 **Programmatic access:** `node gsd-tools.cjs capability <subcommand>` — see [CLI Tools Reference](CLI-TOOLS.md).
@@ -1675,9 +1675,11 @@ The check is also run as part of `npm test` via `tests/enh-2789-description-budg
 
 ## Capability commands (third-party)
 
-A capability can ship its own command family by declaring `commands: [{ family, module, router }]` in its `capability.json` (ADR-1244 D7). Once the capability is **installed and consented** (a committed entry exists in the per-runtime `.gsd-capabilities.json` ledger), running `gsd-tools <family> …` (equivalently the `gsd <family>` wrapper) dispatches to the capability's router. The first-party families `graphify`, `intel`, and `audit-uat`/`audit-open` use exactly this registry-driven seam.
+A capability can ship its own command family by declaring `commands: [{ family, module, router }]` in its `capability.json` (ADR-1244 D7). Once the capability is **active**, running `gsd-tools <family> …` (equivalently the `gsd <family>` wrapper) dispatches to the capability's router. The first-party families `graphify`, `intel`, and `audit-uat`/`audit-open` use exactly this registry-driven seam.
 
-Dispatch is gated for safety: the router module is loaded **only from the capability's own install root** (a bare `.cjs` basename, traversal- and symlink-confined), and a capability that is merely present on disk **without** a committed ledger entry is **not** command-dispatchable (its declarative skills/agents/config still load). A project-scoped capability's commands are only as trustworthy as the repository they ship in — see [The capability trust model](explanation/capability-trust-model.md).
+For a **project-scoped** third-party capability, "active" is decided by the **user-owned consent store** (`${GSD_HOME:-~}/.gsd/consent.json`), not by the in-repo ledger. Since #1459, the authoritative project-scope activation gate is a consent record on **this machine**, bound to the project root and the exact bundle content; a forged or cloned in-repo `.gsd-capabilities.json` ledger that *looks* committed activates nothing on its own — see [The capability trust model](explanation/capability-trust-model.md#the-project-scope-trust-boundary). A **global** capability (under your own home) is trusted without a per-project record.
+
+Command dispatch is then gated **twice**. Beyond that primary activation gate, the router module is loaded **only from the capability's own install root** (a bare `.cjs` basename, traversal- and symlink-confined), and dispatch additionally requires a **committed** (non-`_pending`) entry in the per-runtime `.gsd-capabilities.json` ledger — a *secondary* signal that the install actually completed. A capability that is merely present on disk without a committed ledger entry is not command-dispatchable; a project-scoped one is not even *active* without the consent record. (A project ledger lives in the repo tree and is only as trustworthy as the repository — which is precisely why the consent store, not the ledger, is the project-scope activation gate.)
 
 ---
 

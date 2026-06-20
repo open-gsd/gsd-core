@@ -2,6 +2,7 @@
   "bug-10-semver-policy-consolidation.test.cjs",
   "bug-130-finishinstall-opencode-testmode.test.cjs",
   "bug-131-release-tarball-smoke-explicit-home.test.cjs",
+  "bug-1367-claude-local-flat-command-layout.test.cjs",
   "bug-14-progress-auto-flag-dropped.test.cjs",
   "bug-167-query-meta-command.test.cjs",
   "bug-17-askuserquestion-option-cap.test.cjs",

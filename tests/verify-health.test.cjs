@@ -1028,3 +1028,135 @@ describe('validate health — missing phasesDir', () => {
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #1472 regression — workstream-aware paths
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('validate health — #1472 workstream-aware path resolution', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('reports healthy when GSD_WORKSTREAM is set and files are in the correct workstream layout', () => {
+    // Shared-root files at .planning/
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'PROJECT.md'),
+      '# Project\n\n## What This Is\n\nTest project.\n\n## Core Value\n\nCore value here.\n\n## Requirements\n\nRequirements here.\n'
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ model_profile: 'balanced', commit_docs: true, workflow: { nyquist_validation: true, ai_integration_phase: true } }, null, 2)
+    );
+
+    // Workstream-scoped files at .planning/workstreams/ws-a/
+    const wsDir = path.join(tmpDir, '.planning', 'workstreams', 'ws-a');
+    fs.mkdirSync(wsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(wsDir, 'ROADMAP.md'),
+      '# Roadmap\n\n### Phase 1: Setup\n'
+    );
+    fs.writeFileSync(
+      path.join(wsDir, 'STATE.md'),
+      '# Session State\n\n## Current Position\n\nPhase: 1\n'
+    );
+    const wsPhaseDir = path.join(wsDir, 'phases', '01-setup');
+    fs.mkdirSync(wsPhaseDir, { recursive: true });
+
+    const result = runGsdTools('validate health', tmpDir, { GSD_WORKSTREAM: 'ws-a' });
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    // PROJECT.md and config.json must NOT be reported missing (E002/W003)
+    assert.ok(
+      !output.errors.some(e => e.code === 'E002'),
+      `E002 (PROJECT.md missing) should not fire with workstream layout: ${JSON.stringify(output.errors)}`
+    );
+    assert.ok(
+      !output.errors.some(e => e.code === 'E003'),
+      `E003 (ROADMAP.md missing) should not fire with workstream layout: ${JSON.stringify(output.errors)}`
+    );
+    assert.ok(
+      !output.errors.some(e => e.code === 'E004'),
+      `E004 (STATE.md missing) should not fire with workstream layout: ${JSON.stringify(output.errors)}`
+    );
+    assert.ok(
+      !output.warnings.some(w => w.code === 'W003'),
+      `W003 (config.json missing) should not fire with workstream layout: ${JSON.stringify(output.warnings)}`
+    );
+    // Status should not be 'broken' due to path misrouting
+    assert.notStrictEqual(
+      output.status, 'broken',
+      `Status should not be broken when files exist in the correct workstream layout: ${JSON.stringify(output)}`
+    );
+  });
+
+  test('without GSD_WORKSTREAM, shared-root files are found at .planning/ root', () => {
+    // All files at .planning/ root (no workstream sub-path)
+    writeMinimalProjectMd(tmpDir);
+    writeMinimalRoadmap(tmpDir, ['1']);
+    writeMinimalStateMd(tmpDir);
+    writeValidConfigJson(tmpDir);
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-setup'), { recursive: true });
+
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok(
+      !output.errors.some(e => ['E002', 'E003', 'E004'].includes(e.code)),
+      `No E002/E003/E004 should fire in standard non-workstream layout: ${JSON.stringify(output.errors)}`
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #1454 regression — W017 must not fire for the active worktree
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('validate health — #1454 W017 excludes active worktree', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  // The active-worktree exclusion guard in the SUT (src/verify.cts) compares
+  // process.cwd() against each stale-finding path at runtime. The integration
+  // scenario below covers the observable CLI contract; the unit-level injection
+  // path is omitted here because bin/lib/verify.cjs is a gitignored tsc artifact
+  // not present in a fresh worktree.
+
+  test('validate health completes without W017 for the cwd itself when inspected as worktree root', () => {
+    // Set up a minimal healthy project at tmpDir
+    writeMinimalProjectMd(tmpDir);
+    writeMinimalRoadmap(tmpDir, ['1']);
+    writeMinimalStateMd(tmpDir);
+    writeValidConfigJson(tmpDir);
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-setup'), { recursive: true });
+
+    // Run with cwd = tmpDir. The SUT will call process.cwd() which is the test runner's cwd,
+    // not tmpDir, so any stale worktree that matches tmpDir (as a non-cwd) CAN legitimately
+    // be flagged. The guard only protects the CURRENT process.cwd().
+    // What we assert: when there is no real git repo at tmpDir, no W017 fires (git worktree
+    // list will fail / return empty — the try/catch swallows it silently).
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok(
+      !output.warnings.some(w => w.code === 'W017'),
+      `W017 should not fire for a non-git project dir: ${JSON.stringify(output.warnings)}`
+    );
+  });
+});

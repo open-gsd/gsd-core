@@ -33,6 +33,7 @@ interface PhaseHandlers {
   cmdPhaseRemove: (cwd: string, phaseNum: string, opts: { force: boolean }, raw: boolean) => void;
   cmdPhaseComplete: (cwd: string, phaseNum: string | undefined, raw: boolean) => void;
   cmdPhaseUatPassed: (cwd: string, phaseNum: string | undefined, raw: boolean, opts?: { policy?: { requireVerification?: boolean } }) => void;
+  cmdPhaseListPlans: (cwd: string, phaseNum: string | undefined, raw: boolean) => void;
 }
 
 interface RoutePhaseCommandOptions {
@@ -180,6 +181,11 @@ function routePhaseCommand({ phase, args, cwd, raw, error }: RoutePhaseCommandOp
           }
         }
         phase.cmdPhaseUatPassed(cwd, positional[0], raw, { policy: { requireVerification } });
+        return { ok: true as const, data: null };
+      },
+      // #1437 — list plan files for a phase
+      'list-plans': (_ctx: Record<string, unknown>): { ok: true; data: null } => {
+        phase.cmdPhaseListPlans(cwd, args[2], raw);
         return { ok: true as const, data: null };
       },
     },

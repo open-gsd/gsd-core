@@ -200,6 +200,8 @@ Full rules + worked examples: @gsd-core/references/planner-antipatterns.md ("Com
 
 <region_scoped_negative_gate>
 **Region-scoped negative gates (WARN, #968):** Region-scope a file-wide negative grep when a sibling task needs that construct elsewhere in the same file; `validate_plan` WARNS. See: @gsd-core/references/planner-antipatterns.md ("Region-Scoped Negative Gates").
+
+**Verify-gate hygiene (#1478/#1479):** See @gsd-core/references/planner-antipatterns.md.
 </region_scoped_negative_gate>
 
 **<done>:** Acceptance criteria - measurable state of completion.

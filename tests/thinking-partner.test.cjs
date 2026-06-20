@@ -93,7 +93,7 @@ describe('Thinking Partner Integration (#1726)', () => {
   });
 
   // Workflow integration tests
-  // After #2551 progressive-disclosure refactor, the thinking-partner block
+  // After the discuss-phase progressive-disclosure split (#717), the thinking-partner block
   // moved into the per-mode files (default.md, advisor.md) since the prompt
   // is mode-specific (only fires inside discuss_areas, after a user answer).
   describe('Discuss-phase integration', () => {

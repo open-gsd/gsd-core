@@ -4,7 +4,7 @@
 > `workflows/discuss-phase.md`, immediately before writing
 > `${phase_dir}/${padded_phase}-CONTEXT.md`. Do not put a reference to this
 > file in `<required_reading>` — that defeats the progressive-disclosure
-> savings introduced by issue #2551.
+> savings from the discuss-phase/modes split (#717).
 
 ## Variable substitutions
 

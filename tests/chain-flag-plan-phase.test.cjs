@@ -21,13 +21,13 @@ const path = require('path');
 describe('plan-phase chain flag preservation (#1620)', () => {
   const planPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-phase.md');
   const discussPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'discuss-phase.md');
-  // After #2551, discuss-phase chain logic moved to modes/chain.md.
+  // After the discuss-phase/modes split (#717), discuss-phase chain logic moved to modes/chain.md.
   const discussChainPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'discuss-phase', 'modes', 'chain.md');
   const readDiscuss = () => {
     // Fail loudly if either source is missing — silent filtering would let a
     // regression that deletes modes/chain.md pass this whole suite.
     assert.ok(fs.existsSync(discussPath), `discuss-phase.md missing: ${discussPath}`);
-    assert.ok(fs.existsSync(discussChainPath), `discuss-phase/modes/chain.md missing after #2551 split: ${discussChainPath}`);
+    assert.ok(fs.existsSync(discussChainPath), `discuss-phase/modes/chain.md missing after discuss-phase/modes split: ${discussChainPath}`);
     return [discussPath, discussChainPath].map(p => fs.readFileSync(p, 'utf8')).join('\n');
   };
 
@@ -61,7 +61,7 @@ describe('plan-phase chain flag preservation (#1620)', () => {
     );
     assert.ok(
       discussContent.includes(guardPattern),
-      'discuss-phase (or discuss-phase/modes/chain.md after #2551 split) should use the dual-flag guard pattern'
+      'discuss-phase (or discuss-phase/modes/chain.md after the discuss-phase/modes split) should use the dual-flag guard pattern'
     );
   });
 

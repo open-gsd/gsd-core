@@ -458,6 +458,14 @@ export const PHASE_COMMAND_ALIASES: CommandAlias[] = [
     ],
     "subcommand": "scaffold",
     "mutation": true
+  },
+  {
+    "canonical": "phase.list-plans",
+    "aliases": [
+      "phase list-plans"
+    ],
+    "subcommand": "list-plans",
+    "mutation": false
   }
 ];
 

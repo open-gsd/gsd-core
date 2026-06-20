@@ -21,14 +21,14 @@ const path = require('node:path');
 const DISCUSS_PHASE = path.join(
   __dirname, '..', 'gsd-core', 'workflows', 'discuss-phase.md',
 );
-// After #2551 progressive-disclosure refactor, the scout_codebase phase-type
+// After the discuss-phase progressive-disclosure split (#717), the scout_codebase phase-type
 // table and split-reads warning live in references/scout-codebase.md.
 const SCOUT_REF = path.join(
   __dirname, '..', 'gsd-core', 'references', 'scout-codebase.md',
 );
 
 function readDiscussContext() {
-  // Both files are required after #2551 — fail loudly if either is missing
+  // Both files are required after the discuss-phase/modes split — fail loudly if either is missing
   // rather than silently weakening the regression coverage.
   for (const p of [DISCUSS_PHASE, SCOUT_REF]) {
     assert.ok(fs.existsSync(p), `Required discuss-phase context source missing: ${p}`);
@@ -42,7 +42,7 @@ describe('discuss-phase context fixes (#2549, #2550, #2552)', () => {
     assert.ok(fs.existsSync(DISCUSS_PHASE), 'discuss-phase.md must exist');
     assert.ok(
       fs.existsSync(SCOUT_REF),
-      'references/scout-codebase.md must exist after #2551 extraction',
+      'references/scout-codebase.md must exist after the discuss-phase/modes progressive-disclosure split',
     );
     src = readDiscussContext();
   });

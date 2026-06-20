@@ -4,7 +4,7 @@ In this tutorial you will build a tiny, fully declarative GSD capability from sc
 
 No code is required. Declarative capabilities — those that own only prompt fragments and hook declarations, with no executable hook scripts or MCP servers — require no trust prompt at install time.
 
-We will build a capability called `hello-note`. It registers a `step` at the `plan:pre` extension point that injects a short greeting fragment into the planner's context and declares that it produces a file called `HELLO.md`.
+We will build a capability called `hello-note`. It registers a `contribution` at the `plan:pre` extension point that injects a short greeting fragment into the planner's prompt and declares that it produces a file called `HELLO.md`.
 
 ---
 
@@ -46,7 +46,7 @@ Your project tree now looks like this:
 
 ## Step 2 — Write the prompt fragment
 
-The fragment is a short Markdown file that will be injected into the planner's context when the `plan:pre` hook fires. Create it:
+The fragment is a short Markdown file that will be injected into the planner's prompt when the `plan:pre` hook fires. Create it:
 
 ```bash
 cat > capabilities/hello-note/fragments/plan-pre.md << 'EOF'
@@ -57,7 +57,7 @@ Record a brief note in HELLO.md summarising the plan goal in one sentence.
 EOF
 ```
 
-Notice that the fragment is plain prose. The capability system inlines it into the agent prompt at dispatch time.
+Notice that the fragment is plain prose. The capability system reads this file and inlines its text when the capability is loaded, then renders it into the planner's prompt when the loop reaches `plan:pre`.
 
 ---
 
@@ -71,7 +71,7 @@ Create the manifest at `capabilities/hello-note/capability.json`:
   "role": "feature",
   "version": "0.1.0",
   "title": "Hello Note",
-  "description": "Injects a greeting note step at plan:pre and produces HELLO.md.",
+  "description": "Injects a greeting note at plan:pre and produces HELLO.md.",
   "tier": "standard",
   "requires": [],
   "engines": { "gsd": ">=1.6.0" },
@@ -79,16 +79,17 @@ Create the manifest at `capabilities/hello-note/capability.json`:
   "skills": [],
   "agents": [],
   "config": {},
-  "steps": [
+  "steps": [],
+  "contributions": [
     {
       "point": "plan:pre",
+      "into": "planner",
       "fragment": { "path": "fragments/plan-pre.md" },
       "produces": ["HELLO.md"],
       "consumes": [],
       "onError": "skip"
     }
   ],
-  "contributions": [],
   "gates": []
 }
 ```
@@ -97,11 +98,13 @@ A few things to notice:
 
 - `version` is required in 1.6.0. Use semver.
 - `engines.gsd` is a hard gate: GSD will refuse to install or load this capability on any version older than 1.6.0.
-- `role: "feature"` means this capability adds optional behaviour to the loop — it is not a runtime descriptor.
-- The single entry in `steps` attaches at `plan:pre`. `produces` tells the registry that this step writes `HELLO.md`, which lets the registry order hooks and detect unsatisfied dependencies in more complex setups.
-- `onError: "skip"` means the loop continues even if this step fails. For a first capability that is the safe choice.
+- `role: "feature"` means this capability adds optional behaviour to the loop — it is not a runtime descriptor. A `feature` capability must declare `runtimeCompat`; `{ "supported": ["*"] }` means "every runtime".
+- This is a **contribution**, not a **step**. A contribution injects a prompt fragment into a named agent role (`into`) and needs no dispatch target. A step, by contrast, *must* carry a `ref` with exactly one of `skill`, `agent`, or `command` — so a fragment-only injection is always a contribution. That is why `steps` is left empty here.
+- `into: "planner"` names the agent role that receives the fragment. `planner` is one of the roles published by the `plan:pre` extension point (alongside `researcher` and `checker`); the value must be a role that point publishes or the manifest fails validation.
+- `produces` tells the registry that this contribution writes `HELLO.md`, which lets the registry order hooks and detect unsatisfied dependencies in more complex setups.
+- `onError: "skip"` means the loop continues even if this contribution fails. For a first capability that is the safe choice.
 
-No `ref.agent` or `ref.skill` is declared here because this is a fragment-only step: the planner receives the fragment text inline and acts on it. This keeps the capability completely declarative.
+The fragment is referenced by `path`. At load time GSD reads the file and inlines its text into the registry, so the contribution carries the materialised content wherever the loop renders it. This keeps the capability completely declarative — no executable code is involved.
 
 ---
 
@@ -113,18 +116,21 @@ Install from the local path with `--scope project` so it is scoped only to this 
 gsd capability install ./capabilities/hello-note --scope project
 ```
 
-You will see output similar to:
+The command emits a JSON result:
 
-```
-Installing hello-note 0.1.0 …
-  Role      : feature
-  Scope     : project
-  Hooks     : 1 (plan:pre step)
-  Executable surfaces : none
-✔ hello-note installed.
+```json
+{
+  "status": "installed",
+  "id": "hello-note",
+  "version": "0.1.0",
+  "scope": "project",
+  "disclosure": [
+    "This capability ships no executable surfaces (declarative only)."
+  ]
+}
 ```
 
-Because `hello-note` declares no executable surfaces (no hook scripts, no MCP servers, no command modules) GSD copies the files to the project capability ledger without displaying a consent prompt. That is intentional — declarative capabilities are safe to install without reviewing runnable code.
+GSD copies the bundle into `.gsd/capabilities/hello-note/` and records it in the project ledger at `.gsd-capabilities.json`. Because `hello-note` declares no executable surfaces (no hook scripts, no MCP servers, no command modules) it installs without a consent prompt — the `disclosure` line confirms there was no runnable code to review. That is intentional: declarative capabilities are safe to install without reviewing executable code.
 
 ---
 
@@ -134,78 +140,102 @@ Because `hello-note` declares no executable surfaces (no hook scripts, no MCP se
 gsd capability list
 ```
 
-You will see at least one row for `hello-note`:
-
-```
-id           version  role     scope    status
-hello-note   0.1.0    feature  project  enabled
-```
-
-You can also query the active hook set for the `plan:pre` point:
-
-```bash
-gsd capability hooks plan:pre
-```
-
-Expected output (abbreviated):
+`list` emits a JSON array of every capability GSD can see — the first-party ones that ship with GSD, plus any you have installed. Your `hello-note` entry appears at the end:
 
 ```json
-[
-  {
-    "capability": "hello-note",
-    "point": "plan:pre",
-    "kind": "step",
-    "produces": ["HELLO.md"],
-    "fragment": { "inline": "## Hello from hello-note\n…" }
-  }
-]
+{
+  "id": "hello-note",
+  "role": "feature",
+  "version": "0.1.0",
+  "tier": "standard",
+  "source": "./capabilities/hello-note",
+  "scope": "project",
+  "status": "active",
+  "reason": null,
+  "title": "Hello Note"
+}
 ```
 
-Notice that `fragment.inline` now contains the materialised text from `fragments/plan-pre.md`. The capability system inlined it at install time.
+`status` is `active` — the capability is installed, compatible with your GSD version, and will fire. (The other status values are `incompatible`, when the host GSD version is outside the capability's `engines.gsd` range, and `inactive`, when a project-scoped capability has not been consented on this machine.)
 
----
-
-## Step 6 — Trigger the loop step
-
-Start a planning session. The planner will receive the `hello-note` fragment as part of its context:
-
-```bash
-gsd plan
-```
-
-Watch the planner output. You will see a line noting that `hello-note` contributed a `plan:pre` step. The planner will produce `HELLO.md` in your project's planning directory as directed by the fragment.
-
-If you are running in an environment where the planner agent is not configured, you can inspect what the resolver would dispatch without running the full agent:
+You can also query the active hook set for the `plan:pre` point:
 
 ```bash
 gsd loop render-hooks plan:pre --raw
 ```
 
-The JSON output will include your `hello-note` step with its inlined fragment, confirming that the capability is wired into the loop.
+The envelope is `{ point, activeHooks, rendered }`. Your contribution appears in `activeHooks` (alongside any first-party hooks active at this point):
+
+```json
+{
+  "capId": "hello-note",
+  "kind": "contribution",
+  "into": "planner",
+  "fragment": {
+    "inline": "## Hello from hello-note\n\nThis planning session was started with the hello-note capability active.\nRecord a brief note in HELLO.md summarising the plan goal in one sentence.\n",
+    "path": "fragments/plan-pre.md"
+  },
+  "produces": ["HELLO.md"],
+  "onError": "skip"
+}
+```
+
+Notice that `fragment.inline` now holds the materialised text from `fragments/plan-pre.md` — GSD inlined it at load time, while keeping the original `path` for reference. The top-level `rendered` field of the envelope contains the same fragment formatted as a `<contribution from="hello-note" into="planner">…</contribution>` block, which is what the planner actually receives.
 
 ---
 
-## Step 7 — Disable the capability
+## Step 6 — See the contribution reach the planner
 
-When you want to stop the step from firing, disable the capability:
+Planning is driven by a slash command, not a `gsd` subcommand. In your AI assistant, start a planning session for a phase with:
 
-```bash
-gsd capability disable hello-note
+```text
+/gsd:plan-phase
 ```
 
-Run `gsd capability list` again. The `status` column will now show `disabled`. Run `gsd loop render-hooks plan:pre --raw` and you will see that `hello-note` is absent from the active hook set. Disabled capabilities are removed from the resolver output by construction — there is nothing feature-specific for the loop to run.
+When the planner runs, the `plan:pre` hook set is rendered into its prompt, so it receives the `hello-note` contribution and, following the fragment's instruction, records a one-line note in `HELLO.md`.
 
-To re-enable it:
+You do not need to run a full planning session to confirm the wiring, though. The `loop render-hooks` command shows exactly what the loop would hand the planner — the same output you saw in Step 5:
 
 ```bash
-gsd capability enable hello-note
+gsd loop render-hooks plan:pre --raw
 ```
+
+Find `hello-note` in `activeHooks` and read the `rendered` field: the `<contribution from="hello-note" into="planner">` block is the literal text the planner receives. That confirms the capability is wired into the loop, without dispatching a single agent.
+
+---
+
+## Step 7 — Remove the capability
+
+When you want to stop the contribution from firing, remove the capability from the project:
+
+```bash
+gsd capability remove hello-note --scope project
+```
+
+This emits a JSON result describing what was removed:
+
+```json
+{
+  "status": "removed",
+  "id": "hello-note",
+  "scope": "project",
+  "removedFiles": [
+    ".gsd/capabilities/hello-note"
+  ],
+  "strippedEdits": 0,
+  "dataPreserved": true
+}
+```
+
+Run `gsd capability list` again and `hello-note` is gone from the array. Run `gsd loop render-hooks plan:pre --raw` and you will see it is absent from `activeHooks`: a removed capability contributes nothing to the loop.
+
+Removing the installed bundle does not touch the source folder you authored under `capabilities/hello-note/` — that is your copy. To reinstall, just run the Step 4 command again.
 
 ---
 
 ## You have built your first capability
 
-You scaffolded a capability folder, wrote a manifest with a single `plan:pre` step, installed it into a project-scoped ledger without a trust prompt, confirmed it in the active hook set, watched it contribute to the planning loop, and disabled it cleanly.
+You scaffolded a capability folder, wrote a manifest with a single `plan:pre` contribution, installed it into a project-scoped ledger without a trust prompt, confirmed it in the active hook set, saw it reach the planning loop, and removed it cleanly.
 
 The capability you built is fully declarative: it owns a prompt fragment and a hook declaration, and no executable code was involved at any point.
 

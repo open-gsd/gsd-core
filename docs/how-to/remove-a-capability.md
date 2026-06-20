@@ -2,17 +2,21 @@
 
 This guide covers two distinct operations: **removing** a capability (deletes its files and cleans up all shared configuration it wrote) and **disabling** a capability (toggles it off without touching any files). Choose the one that fits your intent.
 
+> **Which one applies depends on where the capability came from.** `disable`/`enable` work **only** on first-party capabilities shipped inside GSD. An **installed third-party overlay** (added with `gsd capability install …`) cannot be disabled — its only off-switch is `remove` (re-install to restore it).
+
 ---
 
-## Disable a capability (reversible, files kept)
+## Disable a first-party capability (reversible, files kept)
 
-If you want to stop a capability from participating in the loop but may want it back later, disable it:
+`disable`/`enable`/`set` are for **first-party** capabilities only — the ones that ship inside GSD (for example `ui`, `code-review`, `research`). They validate `<id>` against GSD's **build-time** capability registry, so an **installed third-party overlay** (anything you added with `gsd capability install …`) is **not** in that registry and is rejected with `unknown capability: "<id>"`. For an installed overlay there is no `disable`; the off-switch is `remove` (and you re-install to bring it back) — see [Remove a capability](#remove-a-capability) below.
+
+If you want to stop a **first-party** capability from participating in the loop but may want it back later, disable it:
 
 ```bash
 gsd capability disable <id>
 ```
 
-Disabling is a toggle: no files are deleted, no shared configuration is modified. The capability's hooks stop firing, its skills leave the active surface, and its command modules stop responding. To re-activate it:
+Disabling is a toggle: no files are deleted, no shared configuration is modified. It acts on the **runtime surface and hook activation** of a skill-owning first-party capability: the capability's hooks stop firing and its skills leave the active surface. Disabling does **not** unregister first-party command families — those are dispatched from the generated capability registry, which `disable` does not consult, so any commands the capability owns continue to respond. To re-activate the surface and hooks:
 
 ```bash
 gsd capability enable <id>
@@ -43,7 +47,7 @@ GSD uses the **ledger** — a per-runtime record written at install time (for ex
 ### What is NOT removed
 
 - **Shared files themselves.** Files such as `settings.json` and `hooks.json` are edited in place, not deleted. Only the capability's specific entries are excised.
-- **Persistent capability data.** Any data the capability wrote during use (databases, caches, runtime artefacts stored outside the install root) is **not** auto-deleted. You must pass `--purge-data` to remove it, and GSD will prompt for confirmation before doing so:
+- **Persistent capability data.** Any data the capability wrote during use (databases, caches, runtime artefacts stored outside the install root) is **not** auto-deleted by default. Pass `--purge-data` to delete it as part of the removal:
 
   ```bash
   gsd capability remove <id> --purge-data
@@ -51,15 +55,13 @@ GSD uses the **ledger** — a per-runtime record written at install time (for ex
 
   If you want to keep your data, omit `--purge-data`. The capability's runtime data will remain on disk even after the capability itself is removed.
 
-### Prompts and confirmation
+### No prompt — `remove` is non-interactive
 
-`gsd capability remove` will ask you to confirm before proceeding. Pass `--yes` to skip the prompt in scripts or non-interactive contexts:
+`gsd capability remove` is **non-interactive**: it does not prompt, and there is no `--yes` flag. It acts immediately on the scope you give it. `--purge-data` likewise deletes the capability's data directly, with no confirmation step — so be sure before you pass it. The full contract is:
 
 ```bash
-gsd capability remove <id> --yes
+gsd capability remove <id> [--purge-data] [--scope global|project]
 ```
-
-If the capability also ships persistent data and you pass `--purge-data`, GSD prompts once more specifically for the data deletion, regardless of `--yes`, because that action is irreversible.
 
 ---
 
@@ -94,10 +96,11 @@ gsd capability remove <id> --scope project
 
 | | `disable` | `remove` |
 |---|---|---|
+| Applies to | First-party only | Installed overlays (and reconcile of orphaned first-party state) |
 | Files deleted | No | Yes (ledger-recorded files only) |
 | Shared config entries removed | No | Yes (capability's entries only) |
 | Federated config keys dropped | No | Yes |
-| Persistent data deleted | No | Only with `--purge-data` + prompt |
+| Persistent data deleted | No | Only with `--purge-data` (deleted directly, no prompt) |
 | Reversible without reinstall | Yes (`enable`) | No |
 | Use when | You want it back later | You no longer need it |
 

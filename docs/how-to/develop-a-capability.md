@@ -53,6 +53,7 @@ At minimum, a feature Capability declares:
 {
   "id": "example",
   "role": "feature",
+  "version": "0.1.0",
   "title": "Example",
   "description": "Adds an example planning step.",
   "tier": "standard",

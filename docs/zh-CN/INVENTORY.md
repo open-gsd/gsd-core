@@ -298,7 +298,7 @@
 | `continuation-format.md` | 会话续传/恢复格式。 |
 | `domain-probes.md` | discuss-phase 的领域特定探究问题。 |
 | `gate-prompts.md` | 关卡/检查点提示模板。 |
-| `scout-codebase.md` | discuss-phase 侦察步骤的阶段类型→代码库映射选择表（通过 #2551 提取）。 |
+| `scout-codebase.md` | discuss-phase 侦察步骤的阶段类型→代码库映射选择表（通过 discuss-phase/modes 渐进式披露分割提取，#717）。 |
 | `revision-loop.md` | 计划修订迭代模式。 |
 | `universal-anti-patterns.md` | 需要检测和避免的通用反模式。 |
 | `worktree-path-safety.md` | Worktree 守卫套件：HEAD 断言、cwd 漂移哨兵（步骤 0a，#3097）和绝对路径守卫（步骤 0b，#3099）— 通过 `<execution_context>` 加载到执行器生成提示中。 |

@@ -138,7 +138,14 @@ describe('bug #3683 — command body colon-namespace leak (Claude local install)
   // ---------------------------------------------------------------------------
   // E — Integration: real local claude install produces clean command bodies
   // ---------------------------------------------------------------------------
-  describe('E — integration: staged commands/gsd/*.md files contain no colon-namespace refs', () => {
+  // E — integration: flat gsd-*.md layout + clean bodies (#1367 fix)
+  //
+  // Prior to #1367: commands wrote to commands/gsd/<cmd>.md (bare names in a
+  // subdir), causing Claude Code to namespace them as /gsd:<cmd> (colon form).
+  // After #1367: commands write flat gsd-<cmd>.md at commands/ level so Claude
+  // Code registers them as /gsd-<cmd> (hyphen form, matching all framework refs).
+  // ---------------------------------------------------------------------------
+  describe('E — integration: staged gsd-*.md flat commands contain no colon-namespace refs', () => {
     let tmpDir;
     const cmdNames = readCmdNames();
     const rosterRegex = buildRosterRegex(cmdNames);
@@ -152,36 +159,45 @@ describe('bug #3683 — command body colon-namespace leak (Claude local install)
       cleanup(tmpDir);
     });
 
-    test('E0: staged commands/gsd/ directory exists after install', () => {
-      const commandsDir = path.join(tmpDir, '.claude', 'commands', 'gsd');
+    test('E0: staged commands/ directory has flat gsd-*.md files after install (#1367)', () => {
+      // After #1367 fix: commands land at .claude/commands/gsd-<cmd>.md (flat,
+      // hyphen-prefixed). The old .claude/commands/gsd/<cmd>.md subdirectory
+      // layout must NOT be created.
+      const commandsDir = path.join(tmpDir, '.claude', 'commands');
       assert.ok(
         fs.existsSync(commandsDir),
-        `commands/gsd/ must be created by local claude install at ${commandsDir}`,
+        `commands/ must be created by local claude install at ${commandsDir}`,
+      );
+      const flatFiles = fs.readdirSync(commandsDir).filter(f => f.startsWith('gsd-') && f.endsWith('.md'));
+      assert.ok(
+        flatFiles.length > 0,
+        `commands/ must contain flat gsd-*.md files (e.g. gsd-help.md). ` +
+        `Found none — install may still be using the old commands/gsd/<cmd>.md subdirectory layout.`,
+      );
+      // The old subdirectory must NOT exist (it caused /gsd:<cmd> colon namespace)
+      const oldSubdir = path.join(commandsDir, 'gsd');
+      assert.ok(
+        !fs.existsSync(oldSubdir),
+        `commands/gsd/ subdir must NOT exist after install (it causes /gsd:<cmd> colon namespace in Claude Code). ` +
+        `#1367 fix: use flat gsd-<cmd>.md at commands/ level instead.`,
       );
     });
 
     test('E1: no staged command body contains /gsd:<known-cmd> colon refs', () => {
-      const commandsDir = path.join(tmpDir, '.claude', 'commands', 'gsd');
-      assert.ok(fs.existsSync(commandsDir), 'commands/gsd/ must exist for this check to be meaningful');
+      const commandsDir = path.join(tmpDir, '.claude', 'commands');
+      assert.ok(fs.existsSync(commandsDir), 'commands/ must exist for this check to be meaningful');
 
       const offenders = [];
 
-      const walk = (dir) => {
-        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-          const fullPath = path.join(dir, entry.name);
-          if (entry.isDirectory()) {
-            walk(fullPath);
-          } else if (entry.name.endsWith('.md')) {
-            const content = fs.readFileSync(fullPath, 'utf-8');
-            if (rosterRegex.test(content)) {
-              const rel = path.relative(tmpDir, fullPath);
-              offenders.push(rel);
-            }
-          }
+      for (const entry of fs.readdirSync(commandsDir, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+        if (!entry.name.startsWith('gsd-')) continue;
+        const fullPath = path.join(commandsDir, entry.name);
+        const content = fs.readFileSync(fullPath, 'utf-8');
+        if (rosterRegex.test(content)) {
+          offenders.push(path.relative(tmpDir, fullPath));
         }
-      };
-
-      walk(commandsDir);
+      }
 
       assert.deepEqual(
         offenders,
@@ -193,29 +209,22 @@ describe('bug #3683 — command body colon-namespace leak (Claude local install)
 
     test('E2: idempotent — re-running install does not double-mangle already-hyphenated refs', () => {
       // Run install a second time; if the normalizer double-applies it would
-      // produce garbled output like /gsd--execute-phase. Verify the directory
-      // still passes the same cleanliness check after a second install.
+      // produce garbled output like /gsd--execute-phase. Verify the commands
+      // still pass the same cleanliness check after a second install.
       runClaudeLocalInstall(tmpDir);
 
-      const commandsDir = path.join(tmpDir, '.claude', 'commands', 'gsd');
+      const commandsDir = path.join(tmpDir, '.claude', 'commands');
       const doubleRewriteRegex = /\/gsd--[a-z]/;
       const garbled = [];
 
-      const walk = (dir) => {
-        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-          const fullPath = path.join(dir, entry.name);
-          if (entry.isDirectory()) {
-            walk(fullPath);
-          } else if (entry.name.endsWith('.md')) {
-            const content = fs.readFileSync(fullPath, 'utf-8');
-            if (doubleRewriteRegex.test(content)) {
-              garbled.push(path.relative(tmpDir, fullPath));
-            }
-          }
+      for (const entry of fs.readdirSync(commandsDir, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+        if (!entry.name.startsWith('gsd-')) continue;
+        const content = fs.readFileSync(path.join(commandsDir, entry.name), 'utf-8');
+        if (doubleRewriteRegex.test(content)) {
+          garbled.push(entry.name);
         }
-      };
-
-      walk(commandsDir);
+      }
 
       assert.deepEqual(
         garbled,

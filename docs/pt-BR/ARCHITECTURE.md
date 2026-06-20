@@ -149,7 +149,7 @@ Lógica de orquestração que os comandos referenciam. Contém o processo passo 
 Os arquivos de workflow são carregados verbatim no contexto do Claude cada vez que o
 comando `/gsd-*` correspondente é invocado. Para manter esse custo limitado, o
 orçamento de tamanho de workflow aplicado por `tests/workflow-size-budget.test.cjs`
-espelha o orçamento de agentes de #2361:
+espelha a convenção de orçamento de tamanho de agentes:
 
 | Tier      | Limite de linhas por arquivo |
 |-----------|------------------------------|
@@ -157,8 +157,8 @@ espelha o orçamento de agentes de #2361:
 | `LARGE`   | 1500 — planejadores com múltiplas etapas e workflows de funcionalidades grandes |
 | `DEFAULT` | 1000 — workflows simples e de propósito único (o tier alvo) |
 
-`workflows/discuss-phase.md` é mantido em um teto mais restrito de <500 linhas conforme
-a issue #2551. Quando um workflow cresce além de seu tier, extraia os corpos por modo
+`workflows/discuss-phase.md` é mantido em um teto mais restrito conforme
+o orçamento de bytes do discuss-phase (#717; a divisão discuss-phase/modes mantém ≈32000 bytes). Quando um workflow cresce além de seu tier, extraia os corpos por modo
 em `workflows/<workflow>/modes/<mode>.md`, templates em
 `workflows/<workflow>/templates/`, e conhecimento compartilhado em
 `get-shit-done/references/`. O arquivo pai se torna um despachante leve que

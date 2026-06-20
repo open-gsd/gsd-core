@@ -1402,7 +1402,8 @@ function buildStateFrontmatter(bodyContent: string, cwd: string | undefined): Re
                 // Only count tokens that contain at least one digit — excludes
                 // pure-word section headings (Overview, Details) while keeping
                 // numeric phases (01, 05.1) and project-code IDs (PROJ-42).
-                if (/\d/.test(m[1])) roadmapPhaseCount++;
+                // Also exclude 999.x backlog phases. Mirrors init.cts filter.
+                if (/\d/.test(m[1]) && !/^999\b/.test(m[1])) roadmapPhaseCount++;
               }
             }
           } catch { /* fall through: phaseDirs.length used as sole count */ }

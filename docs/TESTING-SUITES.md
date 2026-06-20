@@ -82,7 +82,7 @@ from day-to-day to last-resort:
 | **New-file cap** | A workflow not yet in the baseline must stay under `32768` bytes (the Codex `project_doc_max_bytes` anchor) unless explicitly tiered into `XL_WORKFLOWS`/`LARGE_WORKFLOWS` in the same PR. Keeps net-new orchestrators from being born oversized. | `NEW_FILE_CAP` |
 
 `discuss-phase.md` additionally has a thin-dispatcher target of `< 32000` bytes
-(issue [#2551](https://github.com/open-gsd/gsd-core/issues/2551)).
+(the discuss-phase progressive-disclosure split, #717).
 
 **Agents** (`tests/agent-size-budget.test.cjs`) use the same per-agent baseline
 (`tests/agent-size-baseline.json`) + loose tier hard caps — `XL ≤ 57344` /

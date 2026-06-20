@@ -102,8 +102,43 @@ export function findProjectRoot(startDir: string): string {
         // config.json missing or unparseable — fall through to .git heuristic.
       }
       if (matched) return parent;
-      // Heuristic: parent has .planning/ and we're inside a git repo.
+      // Heuristic (3): parent has .planning/ and we're inside a git repo.
+      // Before returning, check if any further ancestor has sub_repos that explicitly
+      // claims our startDir — explicit sub_repos config takes precedence over the
+      // implicit .git signal. (#1422)
       if (isInsideGitRepo(parent)) {
+        // Lookahead: walk ancestors above `parent` to find a sub_repos claim.
+        let ancestor = path.dirname(parent);
+        let ancestorDepth = 0;
+        while (ancestor !== fsRoot && ancestor !== home && ancestorDepth < FIND_PROJECT_ROOT_MAX_DEPTH) {
+          const ancestorPlanning = ancestor + path.sep + '.planning';
+          try {
+            if (fs.existsSync(ancestorPlanning) && fs.statSync(ancestorPlanning).isDirectory()) {
+              const ancestorConfig = ancestor + path.sep + '.planning' + path.sep + 'config.json';
+              const rawA = fs.readFileSync(ancestorConfig, 'utf-8');
+              const cfgA = JSON.parse(rawA) as Record<string, unknown>;
+              const subReposValueA =
+                cfgA['sub_repos'] ??
+                (cfgA['planning'] && typeof cfgA['planning'] === 'object'
+                  ? (cfgA['planning'] as Record<string, unknown>)['sub_repos']
+                  : undefined);
+              const subReposA = Array.isArray(subReposValueA) ? (subReposValueA as unknown[]) : [];
+              if (subReposA.length > 0) {
+                const relPathA = path.relative(ancestor, resolvedStart);
+                const topSegmentA = relPathA.split(path.sep)[0];
+                if (subReposA.includes(topSegmentA)) {
+                  return ancestor;
+                }
+              }
+            }
+          } catch {
+            // ignore — config missing or unparseable, keep walking
+          }
+          const nextAncestor = path.dirname(ancestor);
+          if (nextAncestor === ancestor) break;
+          ancestor = nextAncestor;
+          ancestorDepth += 1;
+        }
         return parent;
       }
     }

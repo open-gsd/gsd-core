@@ -17,11 +17,12 @@ These fields are present for both `role: "feature"` and `role: "runtime"` capabi
 | `id` | string (kebab-case) | Yes | Unique identifier; **must equal the folder name**. The prefix `gsd-`, `gsd-core-`, and `anthropic-` are reserved for first-party use. |
 | `role` | `"feature"` \| `"runtime"` | Yes | Discriminator that selects the body schema. |
 | `version` | semver string | Yes (1.6.0+) | Semantic version of this capability. The registry rejects a manifest without one. |
-| `title` | string | No | Short human-readable label. |
-| `description` | string | No | Longer summary sentence. |
+| `title` | string | Yes | Short human-readable label. Must be a non-empty string. |
+| `description` | string | Yes | Longer summary sentence. Must be a non-empty string. |
 | `tier` | `"core"` \| `"standard"` \| `"full"` | Yes | **Source of truth** for install-profile membership and surface cluster assignment. `tier` propagates via the `requires`-closure; install profiles are generated from it. |
-| `requires` | string[] | No | Capability `id` values this capability depends on. Must exist in the registry, be acyclic, and be tier-monotone (a `core` capability may not require a `standard` or `full` capability; a `standard` capability may not require a `full` capability). |
+| `requires` | string[] | Yes | Capability `id` values this capability depends on. Must be present as an array (use `[]` when there are no dependencies). Each entry must exist in the registry, be acyclic, and be tier-monotone (a `core` capability may not require a `standard` or `full` capability; a `standard` capability may not require a `full` capability). |
 | `engines` | object | No | Host-compatibility constraint. Sub-field: `gsd` — semver range string (e.g. `">=1.6.0 <3.0.0"`). Acts as a hard gate at install **and** at load; a mismatch blocks installation and causes the overlay to be skipped with a warning at load time. |
+| `runtimeCompat` | object | Yes (`role: "feature"`) | Declares which host runtimes this capability can surface through. Validated for every `role: "feature"` capability (a feature manifest without it fails validation). Sub-fields: `supported` — a **non-empty** array of kebab-case runtime ids, or the single wildcard `["*"]` for a runtime-agnostic capability; `unsupported` — an array of kebab-case runtime ids (the wildcard is **not** permitted here); `notes` — optional object mapping a runtime id (or `"*"`) to a non-empty explanatory string. The wildcard `"*"` may not be mixed with concrete ids in the same array, and the reserved names `__proto__`/`constructor`/`prototype` are rejected. |
 | `compatVersions` | object | No | Graceful-downgrade table mapping `"<capVersion>"` to `"<min gsd version>"`. Only meaningful for sources that enumerate versions (git tags, registry, npm); a bare tarball URL carries one version and simply blocks on incompatibility. |
 | `integrity` | string | No | `sha512-<base64>` hash of the capability bundle. Verified before extraction when present; mismatch aborts install. |
 | `provenance` | object | No | `{ sourceRepo: string, commit: string }`. Emitted in CI for first-party and curated capabilities. |
@@ -68,38 +69,41 @@ The `config` field is an object whose keys are federated configuration keys cont
 
 Steps run at a loop extension point as independent units. Ordering within a point is derived from `produces`/`consumes` (topological sort; capability-id is the tiebreak).
 
-| Sub-field | Type | Description |
-|---|---|---|
-| `point` | string | One of the 12 valid loop extension point identifiers (see table below). |
-| `ref` | object | Either `{ "skill": "<stem>" }` or `{ "agent": "<stem>" }`. |
-| `produces` | string[] | Artefact names this step produces. No two capability steps may produce the same artefact at the same point. |
-| `consumes` | string[] | Artefact names this step consumes. |
-| `when` | string | Dotted config key; the step is active only when the key is truthy. Evaluated deterministically at render time; phase-context applicability is the skill's own responsibility. |
-| `onError` | `"skip"` \| `"halt"` | Behaviour on failure. `"skip"` is the default. Steps are purely additive — they never halt or redirect the host workflow on their own; a blocking precondition is expressed as a `gate`. |
+| Sub-field | Type | Required | Description |
+|---|---|---|---|
+| `point` | string | Yes | One of the 12 valid loop extension point identifiers (see table below). |
+| `ref` | object | Yes | The dispatch target. Exactly one of `{ "skill": "<stem>" }`, `{ "agent": "<stem>" }`, or `{ "command": "<name>" }` (the three are mutually exclusive). A `skill`/`agent` stem must be declared in this capability's `skills`/`agents` array. |
+| `produces` | string[] | Yes | Artefact names this step produces. Must be present as an array (use `[]` when it produces none); an omitted `produces` fails validation. No two capability steps may produce the same artefact at the same point. |
+| `consumes` | string[] | Yes | Artefact names this step consumes. Must be present as an array (use `[]` when it consumes none); an omitted `consumes` fails validation. |
+| `onError` | `"skip"` \| `"halt"` | Yes | Behaviour on failure; must be present and one of `"skip"` or `"halt"` (an omitted `onError` fails validation). Steps are purely additive — they never halt or redirect the host workflow on their own; a blocking precondition is expressed as a `gate`. |
+| `when` | string | No | Dotted config key; the step is active only when the key is truthy. Evaluated deterministically at render time; phase-context applicability is the skill's own responsibility. |
+| `fragment` | object | No | Optional inline-or-file prompt fragment attached to the step, with the **same** `{ "path": "<relative path>" }` or `{ "inline": "<string>" }` semantics as a contribution's `fragment`. A `path` is materialised (read and inlined) at load time, resolved against the capability directory and confined to it (`..` traversal is rejected). |
 
 ### `contributions`
 
 Contributions inject a fragment into a named agent role's prompt at a loop extension point. Multiple contributions into the same agent role render as ordered labelled blocks (`<contribution from="<id>">…</contribution>`).
 
-| Sub-field | Type | Description |
-|---|---|---|
-| `point` | string | One of the 12 valid loop extension point identifiers. |
-| `into` | string | Agent role name. Must be a role published by that loop extension point in the host contract. |
-| `fragment` | object | Either `{ "path": "<relative path>" }` (file content) or `{ "inline": "<string>" }` (literal text). |
-| `when` | string | Dotted config key; activates the contribution conditionally. |
-| `onError` | `"skip"` \| `"halt"` | Behaviour on failure. |
+| Sub-field | Type | Required | Description |
+|---|---|---|---|
+| `point` | string | Yes | One of the 12 valid loop extension point identifiers. |
+| `into` | string | Yes | Agent role name. Must be a role published by that loop extension point in the host contract. |
+| `produces` | string[] | Yes | Artefact names this contribution produces. Use `[]` when it produces none. |
+| `consumes` | string[] | Yes | Artefact names this contribution reads. Use `[]` when it reads none. |
+| `fragment` | object | Yes | Either `{ "path": "<relative path>" }` (file content) or `{ "inline": "<string>" }` (literal text). |
+| `when` | string | No | Dotted config key; activates the contribution conditionally. |
+| `onError` | `"skip"` \| `"halt"` | No | Behaviour on failure. |
 
 ### `gates`
 
 Gates check a condition at a loop extension point and optionally block progression.
 
-| Sub-field | Type | Description |
-|---|---|---|
-| `point` | string | One of the 12 valid loop extension point identifiers. |
-| `check` | object | One of three forms (see table below). |
-| `when` | string | Dotted config key; activates the gate conditionally. |
-| `blocking` | boolean | When `true`, a failed check halts the loop at this point. |
-| `onError` | `"skip"` \| `"halt"` | Behaviour when the check itself errors. |
+| Sub-field | Type | Required | Description |
+|---|---|---|---|
+| `point` | string | Yes | One of the 12 valid loop extension point identifiers. |
+| `check` | object | Yes | One of three forms (see table below). Must be present as an object; an omitted `check` fails validation. |
+| `blocking` | boolean | Yes | Must be present and a boolean; an omitted `blocking` fails validation. When `true`, a failed check halts the loop at this point. |
+| `onError` | `"skip"` \| `"halt"` | Yes | Behaviour when the check itself errors; must be present and one of `"skip"` or `"halt"` (an omitted `onError` fails validation). |
+| `when` | string | No | Dotted config key; activates the gate conditionally. |
 
 **`check` forms:**
 
@@ -187,6 +191,7 @@ The following is the canonical UI design-contract capability from ADR-894. It il
   "tier": "standard",
   "requires": [],
   "engines": { "gsd": ">=1.6.0" },
+  "runtimeCompat": { "supported": ["*"], "unsupported": [] },
   "skills": ["ui-phase", "ui-review"],
   "agents": ["gsd-ui-checker", "gsd-ui-auditor"],
   "hooks": [],
@@ -241,4 +246,4 @@ The following is the canonical UI design-contract capability from ADR-894. It il
 Notes on this example:
 - `when` on each hook references its own config key; whether the phase is actually a frontend phase is decided inside `ui-phase` (self-gate).
 - The `plan:pre` step self-skips on non-frontend phases, producing no `UI-SPEC.md`; the `execute:wave:post` gate's `ui.safety-gate` query passes gracefully when no `UI-SPEC.md` exists.
-- A `contribution` follows this shape: `{ "point": "plan:pre", "into": "planner", "fragment": { "path": "loop/threat-model.md" }, "when": "workflow.security_enforcement" }`.
+- A `contribution` follows this shape: `{ "point": "plan:pre", "into": "planner", "produces": [], "consumes": [], "fragment": { "path": "loop/threat-model.md" }, "when": "workflow.security_enforcement" }` (`produces` and `consumes` are required arrays — use `[]` when empty).

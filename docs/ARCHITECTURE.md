@@ -148,7 +148,7 @@ Orchestration logic that commands reference. Contains the step-by-step process i
 Workflow files are loaded verbatim into Claude's context every time the
 corresponding `/gsd-*` command is invoked. The workflow size budget enforced by
 `tests/workflow-size-budget.test.cjs` keeps each file bounded, mirroring the
-agent budget from #2361. The budget is measured in **bytes** (#717), not lines:
+the agent size-budget convention. The budget is measured in **bytes** (#717), not lines:
 line count over-penalizes prose and under-catches token-dense tables and code
 blocks, whereas bytes are deterministic and match the unit our vendors bound on
 — Codex truncates instruction docs past 32,768 bytes (`project_doc_max_bytes`).
@@ -180,7 +180,7 @@ that is still eagerly `@`-imported shrinks the measured file without shrinking
 loaded context, which games the proxy rather than serving the goal.
 
 `workflows/discuss-phase.md` is held to a stricter <30,000-byte ceiling per
-issue #2551 (originally <500 lines; re-based to bytes for #717). When a workflow grows
+the discuss-phase byte budget (#717; the discuss-phase/modes split keeps it ≈32000 bytes). When a workflow grows
 beyond its tier, extract per-mode bodies into
 `workflows/<workflow>/modes/<mode>.md`, templates into
 `workflows/<workflow>/templates/`, and shared knowledge into

@@ -144,7 +144,7 @@ GSD Core 是一个**元提示框架**，位于用户与 AI 编码 Agent（Claude
 
 #### 工作流的渐进式披露
 
-工作流文件在每次调用对应的 `/gsd-*` 命令时会被完整加载到 Claude 的上下文中。为控制该成本，`tests/workflow-size-budget.test.cjs` 强制执行的工作流大小预算与 #2361 中的 Agent 预算保持一致：
+工作流文件在每次调用对应的 `/gsd-*` 命令时会被完整加载到 Claude 的上下文中。为控制该成本，`tests/workflow-size-budget.test.cjs` 强制执行的工作流大小预算与 Agent 大小预算惯例保持一致：
 
 | 层级      | 每文件行数限制 |
 |-----------|--------------------|
@@ -152,7 +152,7 @@ GSD Core 是一个**元提示框架**，位于用户与 AI 编码 Agent（Claude
 | `LARGE`   | 1500 — 多步骤规划器和大型功能工作流 |
 | `DEFAULT` | 1000 — 聚焦于单一目的的工作流（目标层级） |
 
-根据 issue #2551，`workflows/discuss-phase.md` 须严格遵守 <500 行上限。当工作流超出其层级时，应将各模式的主体提取到 `workflows/<workflow>/modes/<mode>.md`，将模板提取到 `workflows/<workflow>/templates/`，将共享知识提取到 `get-shit-done/references/`。父文件成为轻量级调度器，仅读取当前调用所需的模式和模板文件。
+根据 discuss-phase 字节预算（#717；discuss-phase/modes 分割使其保持在 ≈32000 字节），`workflows/discuss-phase.md` 须严格遵守更严格的上限。当工作流超出其层级时，应将各模式的主体提取到 `workflows/<workflow>/modes/<mode>.md`，将模板提取到 `workflows/<workflow>/templates/`，将共享知识提取到 `get-shit-done/references/`。父文件成为轻量级调度器，仅读取当前调用所需的模式和模板文件。
 
 `workflows/discuss-phase/` 是该模式的典型示例——父文件负责调度，`modes/` 存放各标志的行为（`power.md`、`all.md`、`auto.md`、`chain.md`、`text.md`、`batch.md`、`analyze.md`、`default.md`、`advisor.md`），`templates/` 存放 CONTEXT.md、DISCUSSION-LOG.md 以及仅在写入对应输出文件时才读取的 checkpoint.json schema。
 
