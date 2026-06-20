@@ -1,4 +1,4 @@
-// allow-test-rule: source-text-is-the-product
+// allow-test-rule: source-text-is-the-product #1369
 // Workflow .md files are the installed AI instructions — their text IS what the runtime
 // loads. Testing text content tests the deployed contract. Per CONTRIBUTING.md exception matrix.
 
