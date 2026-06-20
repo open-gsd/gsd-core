@@ -14,7 +14,7 @@ import planningWorkspace = require('./planning-workspace.cjs');
 import frontmatterMod = require('./frontmatter.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- state.cjs is an export= CommonJS module
 import stateMod = require('./state.cjs');
-import { platformWriteSync, platformEnsureDir } from './shell-command-projection.cjs';
+import { platformWriteSync, platformEnsureDir, execGit } from './shell-command-projection.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
@@ -390,6 +390,9 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
 function cmdPhasesClear(cwd: string, raw: boolean, args: string[]): void {
   const phasesDir = planningPaths(cwd).phases;
   const confirm = Array.isArray(args) && args.includes('--confirm');
+  // --force bypasses the uncommitted-changes guard. Only use when the caller
+  // has already archived or explicitly accepts loss of uncommitted work. (#1447)
+  const force = Array.isArray(args) && args.includes('--force');
   let cleared = 0;
 
   if (fs.existsSync(phasesDir)) {
@@ -401,6 +404,45 @@ function cmdPhasesClear(cwd: string, raw: boolean, args: string[]): void {
         `phases clear would delete ${dirs.length} phase director${dirs.length === 1 ? 'y' : 'ies'}. ` +
           `Pass --confirm to proceed.`,
       );
+    }
+
+    // Guard (#1447): refuse to hard-delete phase directories that contain
+    // uncommitted changes. This prevents data loss when `new-milestone` runs
+    // `phases.clear --confirm` before the operator has archived or committed
+    // phase work from the outgoing milestone.
+    // Use `--force` to bypass this guard only when you have verified that
+    // archive or commit of the outgoing phases is already done.
+    if (dirs.length > 0 && !force) {
+      // Compute the path relative to cwd for git status
+      let relPhasesDir: string;
+      try {
+        relPhasesDir = path.relative(cwd, phasesDir);
+      } catch {
+        relPhasesDir = phasesDir;
+      }
+
+      let gitStatusOutput = '';
+      try {
+        const gitResult = execGit(['status', '--porcelain', relPhasesDir], { cwd, timeout: 10_000 });
+        if (gitResult.exitCode === 0) {
+          gitStatusOutput = gitResult.stdout ?? '';
+        }
+        // If git is not available or this is not a git repo, skip the guard
+        // (gitResult.exitCode non-zero → not a git repo → no uncommitted changes to protect).
+      } catch {
+        // git unavailable — skip guard
+      }
+
+      const uncommittedLines = gitStatusOutput
+        .split('\n')
+        .filter((line) => line.trim().length > 0);
+      if (uncommittedLines.length > 0) {
+        error(
+          `phases clear aborted: ${uncommittedLines.length} uncommitted change${uncommittedLines.length === 1 ? '' : 's'} detected in phase directories. ` +
+            `Archive or commit outgoing phase work before running this command, ` +
+            `or pass --force to skip this check and permanently delete the phase directories. (#1447)`,
+        );
+      }
     }
 
     try {
