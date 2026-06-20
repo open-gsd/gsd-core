@@ -1,6 +1,6 @@
 ---
 type: Fixed
-pr: 0
+pr: 1484
 ---
 **`findProjectRoot` now respects explicit `sub_repos` config over implicit `.git`** — when a parent workspace's `.planning/config.json` lists a child directory in `sub_repos`, that declaration takes precedence over the child's own `.git/` directory. Previously, if the child had both `.planning/` and `.git/`, the `.git` heuristic fired first and resolved to the child rather than the parent workspace, making the `sub_repos` declaration ineffective. (#1422)
 
